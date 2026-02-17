@@ -9,7 +9,7 @@ import (
 )
 
 func TestStockTool_NameAndDescription(t *testing.T) {
-	tool := YFinanceStockTool()
+	tool := NewStockTool()
 
 	if tool.Name() != "get_stock_price" {
 		t.Errorf("Expected name 'get_stock_price', got '%s'", tool.Name())
@@ -21,7 +21,7 @@ func TestStockTool_NameAndDescription(t *testing.T) {
 }
 
 func TestStockTool_Parameters(t *testing.T) {
-	tool := YFinanceStockTool()
+	tool := NewStockTool()
 	params := tool.Parameters()
 
 	if params["type"] != "object" {
@@ -35,7 +35,7 @@ func TestStockTool_Parameters(t *testing.T) {
 }
 
 func TestStockTool_MissingTicker(t *testing.T) {
-	tool := YFinanceStockTool()
+	tool := NewStockTool()
 	ctx := context.Background()
 
 	// We pass empty args
