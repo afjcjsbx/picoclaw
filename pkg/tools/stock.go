@@ -13,7 +13,7 @@ type StockTool struct {
 	baseURL string
 }
 
-func YFinanceStockTool() *StockTool {
+func NewStockTool() *StockTool {
 	return &StockTool{
 		baseURL: "https://query1.finance.yahoo.com", // Default URL
 	}
