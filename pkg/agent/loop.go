@@ -104,6 +104,9 @@ func createToolRegistry(workspace string, restrict bool, cfg *config.Config, msg
 	})
 	registry.Register(messageTool)
 
+	// Stock price tool
+	registry.Register(tools.NewStockTool())
+
 	return registry
 }
 
