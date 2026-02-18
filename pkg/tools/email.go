@@ -436,7 +436,12 @@ func (t *EmailTool) fetchMessages(c IMAPClient, seqSet *imap.SeqSet, limit int) 
 
 	done := make(chan error, 1)
 	go func() {
-		defer close(messages)
+		defer func() {
+			if r := recover(); r != nil {
+				done <- fmt.Errorf("PANIC recovered in fetchMessages: %v", r)
+			}
+		}()
+
 		done <- c.Fetch(seqSet, items, messages)
 	}()
 
