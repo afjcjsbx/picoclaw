@@ -192,6 +192,8 @@ func (cs *CronService) executeJobByID(jobID string) {
 		return
 	}
 
+	log.Printf("[cron] executing job %q (id: %s)", callbackJob.Name, jobID)
+
 	var err error
 	if cs.onJob != nil {
 		_, err = cs.onJob(callbackJob)
@@ -217,9 +219,11 @@ func (cs *CronService) executeJobByID(jobID string) {
 	job.UpdatedAtMS = time.Now().UnixMilli()
 
 	if err != nil {
+		log.Printf("[cron] job %q failed: %v", job.Name, err)
 		job.State.LastStatus = "error"
 		job.State.LastError = err.Error()
 	} else {
+		log.Printf("[cron] job %q completed successfully", job.Name)
 		job.State.LastStatus = "ok"
 		job.State.LastError = ""
 	}
