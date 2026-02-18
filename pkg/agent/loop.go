@@ -117,6 +117,11 @@ func registerSharedTools(cfg *config.Config, msgBus *bus.MessageBus, registry *A
 		})
 		agent.Tools.Register(messageTool)
 
+		// Email tool
+		if cfg.Tools.Email.Enabled {
+			agent.Tools.Register(tools.NewEmailTool(cfg.Tools.Email))
+		}
+
 		// Spawn tool with allowlist checker
 		subagentManager := tools.NewSubagentManager(provider, agent.Model, agent.Workspace, msgBus)
 		spawnTool := tools.NewSpawnTool(subagentManager)

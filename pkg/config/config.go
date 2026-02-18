@@ -315,10 +315,26 @@ type ExecConfig struct {
 	CustomDenyPatterns []string `json:"custom_deny_patterns" env:"PICOCLAW_TOOLS_EXEC_CUSTOM_DENY_PATTERNS"`
 }
 
+type EmailAccountConfig struct {
+	SMTPServer string `json:"smtp_server"`
+	SMTPPort   int    `json:"smtp_port"`
+	IMAPServer string `json:"imap_server"`
+	IMAPPort   int    `json:"imap_port"`
+	Username   string `json:"username"`
+	Password   string `json:"password"` // App Password recommended
+	From       string `json:"from"`     // Display name (optional)
+}
+
+type EmailToolConfig struct {
+	Enabled  bool                          `json:"enabled" env:"PICOCLAW_TOOLS_EMAIL_ENABLED"`
+	Accounts map[string]EmailAccountConfig `json:"accounts"`
+}
+
 type ToolsConfig struct {
-	Web  WebToolsConfig  `json:"web"`
-	Cron CronToolsConfig `json:"cron"`
-	Exec ExecConfig      `json:"exec"`
+	Web   WebToolsConfig  `json:"web"`
+	Cron  CronToolsConfig `json:"cron"`
+	Email EmailToolConfig `json:"email"`
+	Exec  ExecConfig      `json:"exec"`
 }
 
 func DefaultConfig() *Config {
