@@ -108,9 +108,6 @@ func registerSharedTools(cfg *config.Config, msgBus *bus.MessageBus, registry *A
 		// Stock tool
 		agent.Tools.Register(tools.YFinanceStockTool())
 
-		// Stock tool
-		agent.Tools.Register(tools.YFinanceStockTool())
-
 		// Message tool
 		messageTool := tools.NewMessageTool()
 		messageTool.SetSendCallback(func(channel, chatID, content string) error {
@@ -608,7 +605,6 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, agent *AgentInstance, 
 					Name:      tc.Name,
 					Arguments: string(argumentsJSON),
 				},
-				Name: tc.Name,
 			})
 		}
 		messages = append(messages, assistantMsg)
