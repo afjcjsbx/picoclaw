@@ -107,6 +107,8 @@ func registerSharedTools(cfg *config.Config, msgBus *bus.MessageBus, registry *A
 
 		// Stock tool
 		agent.Tools.Register(tools.YFinanceStockTool())
+		// Android Debug Bridge tool
+		agent.Tools.Register(tools.NewADBTool())
 
 		// Message tool
 		messageTool := tools.NewMessageTool()
