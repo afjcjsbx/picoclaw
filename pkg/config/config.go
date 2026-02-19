@@ -365,7 +365,7 @@ func DefaultConfig() *Config {
 		},
 		Logging: LoggingConfig{
 			EnableFile: false,
-			FilePath:   "~/.picoclaw/workspace/picoclaw_audit.log",
+			FilePath:   "picoclaw_audit.log",
 			Level:      "info",
 		},
 	}
