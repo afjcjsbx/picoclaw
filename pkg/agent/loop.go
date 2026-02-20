@@ -119,9 +119,6 @@ func registerSharedTools(
 		// Stock tool
 		agent.Tools.Register(tools.YFinanceStockTool())
 
-		// Stock tool
-		agent.Tools.Register(tools.YFinanceStockTool())
-
 		// Message tool
 		messageTool := tools.NewMessageTool()
 		messageTool.SetSendCallback(func(channel, chatID, content string) error {
