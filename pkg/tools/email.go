@@ -445,6 +445,22 @@ func (t *EmailTool) fetchMessages(c IMAPClient, seqSet *imap.SeqSet, limit int) 
 		done <- c.Fetch(seqSet, items, messages)
 	}()
 
+	var fetchedMsgs []*imap.Message
+	for msg := range messages {
+		if msg != nil {
+			fetchedMsgs = append(fetchedMsgs, msg)
+		}
+	}
+
+	if err := <-done; err != nil {
+		return "", err
+	}
+
+	// sort the messages by descending UID (from newest to oldest)
+	sort.Slice(fetchedMsgs, func(i, j int) bool {
+		return fetchedMsgs[i].Uid > fetchedMsgs[j].Uid
+	})
+
 	var sb strings.Builder
 	for msg := range messages {
 		if msg == nil {
