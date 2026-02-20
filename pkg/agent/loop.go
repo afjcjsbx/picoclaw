@@ -23,7 +23,6 @@ import (
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/routing"
-	"github.com/sipeed/picoclaw/pkg/skills"
 	"github.com/sipeed/picoclaw/pkg/state"
 	"github.com/sipeed/picoclaw/pkg/tools"
 	"github.com/sipeed/picoclaw/pkg/utils"
@@ -121,18 +120,8 @@ func registerSharedTools(cfg *config.Config, msgBus *bus.MessageBus, registry *A
 		})
 		agent.Tools.Register(messageTool)
 
-		// Skill discovery and installation tools
-		registryMgr := skills.NewRegistryManagerFromConfig(skills.RegistryConfig{
-			MaxConcurrentSearches: cfg.Tools.Skills.MaxConcurrentSearches,
-			ClawHub:               skills.ClawHubConfig(cfg.Tools.Skills.Registries.ClawHub),
-		})
-		searchCache := skills.NewSearchCache(cfg.Tools.Skills.SearchCache.MaxSize, time.Duration(cfg.Tools.Skills.SearchCache.TTLSeconds)*time.Second)
-		agent.Tools.Register(tools.NewFindSkillsTool(registryMgr, searchCache))
-		agent.Tools.Register(tools.NewInstallSkillTool(registryMgr, agent.Workspace))
-
 		// Spawn tool with allowlist checker
 		subagentManager := tools.NewSubagentManager(provider, agent.Model, agent.Workspace, msgBus)
-		subagentManager.SetLLMOptions(agent.MaxTokens, agent.Temperature)
 		spawnTool := tools.NewSpawnTool(subagentManager)
 		currentAgentID := agentID
 		spawnTool.SetAllowlistChecker(func(targetAgentID string) bool {
@@ -484,8 +473,8 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, agent *AgentInstance, 
 				"model":             agent.Model,
 				"messages_count":    len(messages),
 				"tools_count":       len(providerToolDefs),
-				"max_tokens":        agent.MaxTokens,
-				"temperature":       agent.Temperature,
+				"max_tokens":        8192,
+				"temperature":       0.7,
 				"system_prompt_len": len(messages[0].Content),
 			})
 
@@ -506,8 +495,8 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, agent *AgentInstance, 
 				fbResult, fbErr := al.fallback.Execute(ctx, agent.Candidates,
 					func(ctx context.Context, provider, model string) (*providers.LLMResponse, error) {
 						return agent.Provider.Chat(ctx, messages, providerToolDefs, model, map[string]interface{}{
-							"max_tokens":  agent.MaxTokens,
-							"temperature": agent.Temperature,
+							"max_tokens":  8192,
+							"temperature": 0.7,
 						})
 					},
 				)
@@ -522,8 +511,8 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, agent *AgentInstance, 
 				return fbResult.Response, nil
 			}
 			return agent.Provider.Chat(ctx, messages, providerToolDefs, agent.Model, map[string]interface{}{
-				"max_tokens":  agent.MaxTokens,
-				"temperature": agent.Temperature,
+				"max_tokens":  8192,
+				"temperature": 0.7,
 			})
 		}
 
@@ -589,21 +578,16 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, agent *AgentInstance, 
 			break
 		}
 
-		normalizedToolCalls := make([]providers.ToolCall, 0, len(response.ToolCalls))
-		for _, tc := range response.ToolCalls {
-			normalizedToolCalls = append(normalizedToolCalls, providers.NormalizeToolCall(tc))
-		}
-
 		// Log tool calls
-		toolNames := make([]string, 0, len(normalizedToolCalls))
-		for _, tc := range normalizedToolCalls {
+		toolNames := make([]string, 0, len(response.ToolCalls))
+		for _, tc := range response.ToolCalls {
 			toolNames = append(toolNames, tc.Name)
 		}
 		logger.InfoCF("agent", "LLM requested tool calls",
 			map[string]interface{}{
 				"agent_id":  agent.ID,
 				"tools":     toolNames,
-				"count":     len(normalizedToolCalls),
+				"count":     len(response.ToolCalls),
 				"iteration": iteration,
 			})
 
@@ -612,26 +596,15 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, agent *AgentInstance, 
 			Role:    "assistant",
 			Content: response.Content,
 		}
-		for _, tc := range normalizedToolCalls {
+		for _, tc := range response.ToolCalls {
 			argumentsJSON, _ := json.Marshal(tc.Arguments)
-			// Copy ExtraContent to ensure thought_signature is persisted for Gemini 3
-			extraContent := tc.ExtraContent
-			thoughtSignature := ""
-			if tc.Function != nil {
-				thoughtSignature = tc.Function.ThoughtSignature
-			}
-
 			assistantMsg.ToolCalls = append(assistantMsg.ToolCalls, providers.ToolCall{
 				ID:   tc.ID,
 				Type: "function",
-				Name: tc.Name,
 				Function: &providers.FunctionCall{
-					Name:             tc.Name,
-					Arguments:        string(argumentsJSON),
-					ThoughtSignature: thoughtSignature,
+					Name:      tc.Name,
+					Arguments: string(argumentsJSON),
 				},
-				ExtraContent:     extraContent,
-				ThoughtSignature: thoughtSignature,
 			})
 		}
 		messages = append(messages, assistantMsg)
@@ -640,7 +613,7 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, agent *AgentInstance, 
 		agent.Sessions.AddFullMessage(opts.SessionKey, assistantMsg)
 
 		// Execute tool calls
-		for _, tc := range normalizedToolCalls {
+		for _, tc := range response.ToolCalls {
 			argsJSON, _ := json.Marshal(tc.Arguments)
 			argsPreview := utils.Truncate(string(argsJSON), 200)
 			logger.InfoCF("agent", fmt.Sprintf("Tool call: %s(%s)", tc.Name, argsPreview),
@@ -767,21 +740,31 @@ func (al *AgentLoop) forceCompression(agent *AgentInstance, sessionKey string) {
 	mid := len(conversation) / 2
 
 	// New history structure:
-	// 1. System Prompt (with compression note appended)
-	// 2. Second half of conversation
-	// 3. Last message
+	// 1. System Prompt
+	// 2. [Summary of dropped part] - synthesized
+	// 3. Second half of conversation
+	// 4. Last message
+
+	// Simplified approach for emergency: Drop first half of conversation
+	// and rely on existing summary if present, or create a placeholder.
 
 	droppedCount := mid
 	keptConversation := conversation[mid:]
 
 	newHistory := make([]providers.Message, 0)
+	newHistory = append(newHistory, history[0]) // System prompt
 
-	// Append compression note to the original system prompt instead of adding a new system message
-	// This avoids having two consecutive system messages which some APIs (like Zhipu) reject
-	compressionNote := fmt.Sprintf("\n\n[System Note: Emergency compression dropped %d oldest messages due to context limit]", droppedCount)
-	enhancedSystemPrompt := history[0]
-	enhancedSystemPrompt.Content = enhancedSystemPrompt.Content + compressionNote
-	newHistory = append(newHistory, enhancedSystemPrompt)
+	// Add a note about compression
+	compressionNote := fmt.Sprintf("[System: Emergency compression dropped %d oldest messages due to context limit]", droppedCount)
+	// If there was an existing summary, we might lose it if it was in the dropped part (which is just messages).
+	// The summary is stored separately in session.Summary, so it persists!
+	// We just need to ensure the user knows there's a gap.
+
+	// We only modify the messages list here
+	newHistory = append(newHistory, providers.Message{
+		Role:    "system",
+		Content: compressionNote,
+	})
 
 	newHistory = append(newHistory, keptConversation...)
 	newHistory = append(newHistory, history[len(history)-1]) // Last message
@@ -831,49 +814,49 @@ func formatMessagesForLog(messages []providers.Message) string {
 		return "[]"
 	}
 
-	var sb strings.Builder
-	sb.WriteString("[\n")
+	var result string
+	result += "[\n"
 	for i, msg := range messages {
-		fmt.Fprintf(&sb, "  [%d] Role: %s\n", i, msg.Role)
+		result += fmt.Sprintf("  [%d] Role: %s\n", i, msg.Role)
 		if len(msg.ToolCalls) > 0 {
-			sb.WriteString("  ToolCalls:\n")
+			result += "  ToolCalls:\n"
 			for _, tc := range msg.ToolCalls {
-				fmt.Fprintf(&sb, "    - ID: %s, Type: %s, Name: %s\n", tc.ID, tc.Type, tc.Name)
+				result += fmt.Sprintf("    - ID: %s, Type: %s, Name: %s\n", tc.ID, tc.Type, tc.Name)
 				if tc.Function != nil {
-					fmt.Fprintf(&sb, "      Arguments: %s\n", utils.Truncate(tc.Function.Arguments, 200))
+					result += fmt.Sprintf("      Arguments: %s\n", utils.Truncate(tc.Function.Arguments, 200))
 				}
 			}
 		}
 		if msg.Content != "" {
 			content := utils.Truncate(msg.Content, 200)
-			fmt.Fprintf(&sb, "  Content: %s\n", content)
+			result += fmt.Sprintf("  Content: %s\n", content)
 		}
 		if msg.ToolCallID != "" {
-			fmt.Fprintf(&sb, "  ToolCallID: %s\n", msg.ToolCallID)
+			result += fmt.Sprintf("  ToolCallID: %s\n", msg.ToolCallID)
 		}
-		sb.WriteString("\n")
+		result += "\n"
 	}
-	sb.WriteString("]")
-	return sb.String()
+	result += "]"
+	return result
 }
 
 // formatToolsForLog formats tool definitions for logging
-func formatToolsForLog(toolDefs []providers.ToolDefinition) string {
-	if len(toolDefs) == 0 {
+func formatToolsForLog(tools []providers.ToolDefinition) string {
+	if len(tools) == 0 {
 		return "[]"
 	}
 
-	var sb strings.Builder
-	sb.WriteString("[\n")
-	for i, tool := range toolDefs {
-		fmt.Fprintf(&sb, "  [%d] Type: %s, Name: %s\n", i, tool.Type, tool.Function.Name)
-		fmt.Fprintf(&sb, "      Description: %s\n", tool.Function.Description)
+	var result string
+	result += "[\n"
+	for i, tool := range tools {
+		result += fmt.Sprintf("  [%d] Type: %s, Name: %s\n", i, tool.Type, tool.Function.Name)
+		result += fmt.Sprintf("      Description: %s\n", tool.Function.Description)
 		if len(tool.Function.Parameters) > 0 {
-			fmt.Fprintf(&sb, "      Parameters: %s\n", utils.Truncate(fmt.Sprintf("%v", tool.Function.Parameters), 200))
+			result += fmt.Sprintf("      Parameters: %s\n", utils.Truncate(fmt.Sprintf("%v", tool.Function.Parameters), 200))
 		}
 	}
-	sb.WriteString("]")
-	return sb.String()
+	result += "]"
+	return result
 }
 
 // summarizeSession summarizes the conversation history for a session.
@@ -949,18 +932,14 @@ func (al *AgentLoop) summarizeSession(agent *AgentInstance, sessionKey string) {
 
 // summarizeBatch summarizes a batch of messages.
 func (al *AgentLoop) summarizeBatch(ctx context.Context, agent *AgentInstance, batch []providers.Message, existingSummary string) (string, error) {
-	var sb strings.Builder
-	sb.WriteString("Provide a concise summary of this conversation segment, preserving core context and key points.\n")
+	prompt := "Provide a concise summary of this conversation segment, preserving core context and key points.\n"
 	if existingSummary != "" {
-		sb.WriteString("Existing context: ")
-		sb.WriteString(existingSummary)
-		sb.WriteString("\n")
+		prompt += "Existing context: " + existingSummary + "\n"
 	}
-	sb.WriteString("\nCONVERSATION:\n")
+	prompt += "\nCONVERSATION:\n"
 	for _, m := range batch {
-		fmt.Fprintf(&sb, "%s: %s\n", m.Role, m.Content)
+		prompt += fmt.Sprintf("%s: %s\n", m.Role, m.Content)
 	}
-	prompt := sb.String()
 
 	response, err := agent.Provider.Chat(ctx, []providers.Message{{Role: "user", Content: prompt}}, nil, agent.Model, map[string]interface{}{
 		"max_tokens":  1024,
