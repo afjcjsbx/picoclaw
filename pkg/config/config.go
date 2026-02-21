@@ -444,17 +444,37 @@ type ExecConfig struct {
 	CustomDenyPatterns []string `json:"custom_deny_patterns" env:"PICOCLAW_TOOLS_EXEC_CUSTOM_DENY_PATTERNS"`
 }
 
+type EmailAccountConfig struct {
+	SMTPServer string `json:"smtp_server"`
+	SMTPPort   int    `json:"smtp_port"`
+	IMAPServer string `json:"imap_server"`
+	IMAPPort   int    `json:"imap_port"`
+	Username   string `json:"username"`
+	Password   string `json:"password"` // App Password recommended
+	From       string `json:"from"`     // Display name (optional)
+}
+
+type EmailToolConfig struct {
+	Enabled  bool                          `json:"enabled" env:"PICOCLAW_TOOLS_EMAIL_ENABLED"`
+	Accounts map[string]EmailAccountConfig `json:"accounts"`
+}
+
 type ToolsConfig struct {
 	Web    WebToolsConfig    `json:"web"`
 	Cron   CronToolsConfig   `json:"cron"`
 	Exec   ExecConfig        `json:"exec"`
 	Skills SkillsToolsConfig `json:"skills"`
+	Email EmailToolConfig `json:"email"`
 }
 
 type SkillsToolsConfig struct {
 	Registries            SkillsRegistriesConfig `json:"registries"`
 	MaxConcurrentSearches int                    `json:"max_concurrent_searches" env:"PICOCLAW_SKILLS_MAX_CONCURRENT_SEARCHES"`
 	SearchCache           SearchCacheConfig      `json:"search_cache"`
+	Web   WebToolsConfig  `json:"web"`
+	Cron  CronToolsConfig `json:"cron"`
+	Email EmailToolConfig `json:"email"`
+	Exec  ExecConfig      `json:"exec"`
 }
 
 type SearchCacheConfig struct {
