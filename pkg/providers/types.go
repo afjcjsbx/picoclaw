@@ -22,6 +22,22 @@ type LLMProvider interface {
 	GetDefaultModel() string
 }
 
+type VisionProvider interface {
+	AnalyzeImage(ctx context.Context, model string, imagePath string, prompt string) (string, error)
+}
+
+type AudioProvider interface {
+	TranscribeAudio(ctx context.Context, model string, audioPath string) (string, error)
+}
+
+type ImageGenerationProvider interface {
+	GenerateImage(ctx context.Context, model string, prompt string) (string, error)
+}
+
+type CodingProvider interface {
+	GenerateCode(ctx context.Context, model string, prompt string, existingCode string) (string, error)
+}
+
 // FailoverReason classifies why an LLM request failed for fallback decisions.
 type FailoverReason string
 

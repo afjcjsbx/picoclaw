@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/skills"
@@ -19,6 +20,7 @@ type ContextBuilder struct {
 	skillsLoader *skills.SkillsLoader
 	memory       *MemoryStore
 	tools        *tools.ToolRegistry // Direct reference to tool registry
+	models       []config.ModelConfig
 }
 
 func getGlobalConfigDir() string {
@@ -48,6 +50,10 @@ func (cb *ContextBuilder) SetToolsRegistry(registry *tools.ToolRegistry) {
 	cb.tools = registry
 }
 
+func (cb *ContextBuilder) SetModels(models []config.ModelConfig) {
+	cb.models = models
+}
+
 func (cb *ContextBuilder) getIdentity() string {
 	now := time.Now().Format("2006-01-02 15:04 (Monday)")
 	workspacePath, _ := filepath.Abs(filepath.Join(cb.workspace))
@@ -55,6 +61,7 @@ func (cb *ContextBuilder) getIdentity() string {
 
 	// Build tools section dynamically
 	toolsSection := cb.buildToolsSection()
+	capsSection := cb.buildCapabilitiesSection()
 
 	return fmt.Sprintf(`# picoclaw 🦞
 
@@ -74,14 +81,49 @@ Your workspace is at: %s
 
 %s
 
-## Important Rules
+%s ## Important Rules
 
 1. **ALWAYS use tools** - When you need to perform an action (schedule reminders, send messages, execute commands, etc.), you MUST call the appropriate tool. Do NOT just say you'll do it or pretend to do it.
 
 2. **Be helpful and accurate** - When using tools, briefly explain what you're doing.
 
 3. **Memory** - When remembering something, write to %s/memory/MEMORY.md`,
-		now, runtime, workspacePath, workspacePath, workspacePath, workspacePath, toolsSection, workspacePath)
+		now, runtime, workspacePath, workspacePath, workspacePath, workspacePath, capsSection, toolsSection, workspacePath)
+}
+
+func (cb *ContextBuilder) buildCapabilitiesSection() string {
+	if len(cb.models) == 0 {
+		return ""
+	}
+
+	// extraction capabilities
+	capMap := make(map[string]bool)
+	for _, m := range cb.models {
+		for _, c := range m.Capabilities {
+			capMap[c] = true
+		}
+	}
+
+	if len(capMap) == 0 {
+		return ""
+	}
+
+	var uniqueCaps []string
+	for c := range capMap {
+		uniqueCaps = append(uniqueCaps, c)
+	}
+
+	// System Prompt block generation
+	var sb strings.Builder
+
+	sb.WriteString("## Multimodal Capabilities (Delegation)\n")
+	sb.WriteString("You are a textual orchestrator agent. However, your cluster has access to specialized models with the following capabilities:\n")
+	sb.WriteString("[ ")
+	sb.WriteString(strings.Join(uniqueCaps, ", "))
+	sb.WriteString(" ]\n\n")
+	sb.WriteString("**FUNDAMENTAL RULE**: If the user asks you to perform a task that requires one of these skills (e.g., analyzing an image for 'vision', transcribing for 'audio', or complex code for 'coding'), you MUST use the 'delegate_task' tool by passing the correct capability. The system will automatically choose the best model.")
+
+	return sb.String()
 }
 
 func (cb *ContextBuilder) buildToolsSection() string {
@@ -177,8 +219,8 @@ func (cb *ContextBuilder) BuildMessages(history []providers.Message, summary str
 
 	// Log preview of system prompt (avoid logging huge content)
 	preview := systemPrompt
-	if len(preview) > 500 {
-		preview = preview[:500] + "... (truncated)"
+	if len(preview) > 50000 {
+		preview = preview[:50000] + "... (truncated)"
 	}
 	logger.DebugCF("agent", "System prompt preview",
 		map[string]interface{}{

@@ -32,6 +32,10 @@ func (p *HTTPProvider) Chat(ctx context.Context, messages []Message, tools []Too
 	return p.delegate.Chat(ctx, messages, tools, model, options)
 }
 
+func (p *HTTPProvider) AnalyzeImage(ctx context.Context, model string, imagePath string, prompt string) (string, error) {
+	return p.delegate.AnalyzeImage(ctx, model, imagePath, prompt)
+}
+
 func (p *HTTPProvider) GetDefaultModel() string {
 	return ""
 }

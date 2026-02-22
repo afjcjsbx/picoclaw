@@ -118,6 +118,9 @@ func registerSharedTools(cfg *config.Config, msgBus *bus.MessageBus, registry *A
 		})
 		agent.Tools.Register(messageTool)
 
+		// List models and capabilities tool
+		agent.Tools.Register(tools.NewDelegateTaskTool(cfg.ModelList, agent.Workspace))
+
 		// Skill discovery and installation tools
 		registryMgr := skills.NewRegistryManagerFromConfig(skills.RegistryConfig{
 			MaxConcurrentSearches: cfg.Tools.Skills.MaxConcurrentSearches,
@@ -136,6 +139,9 @@ func registerSharedTools(cfg *config.Config, msgBus *bus.MessageBus, registry *A
 			return registry.CanSpawnSubagent(currentAgentID, targetAgentID)
 		})
 		agent.Tools.Register(spawnTool)
+
+		// Update context builder with the lis of models
+		agent.ContextBuilder.SetModels(cfg.ModelList)
 
 		// Update context builder with the complete tools registry
 		agent.ContextBuilder.SetToolsRegistry(agent.Tools)

@@ -3,12 +3,14 @@ package openai_compat
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -58,6 +60,85 @@ func NewProviderWithMaxTokensField(apiKey, apiBase, proxy, maxTokensField string
 		maxTokensField: maxTokensField,
 		httpClient:     client,
 	}
+}
+
+func (p *Provider) AnalyzeImage(ctx context.Context, model string, imagePath string, prompt string) (string, error) {
+	if p.apiBase == "" {
+		return "", fmt.Errorf("API base not configured")
+	}
+
+	actualModel := model
+	if parts := strings.SplitN(model, "/", 2); len(parts) == 2 {
+		actualModel = parts[1]
+	}
+
+	imgData, err := os.ReadFile(imagePath)
+	if err != nil {
+		return "", fmt.Errorf("impossible to read the image: %w", err)
+	}
+
+	mimeType := http.DetectContentType(imgData)
+	base64Encoded := base64.StdEncoding.EncodeToString(imgData)
+	dataURI := fmt.Sprintf("data:%s;base64,%s", mimeType, base64Encoded)
+
+	requestBody := map[string]interface{}{
+		"model": actualModel,
+		"messages": []interface{}{
+			map[string]interface{}{
+				"role": "user",
+				"content": []interface{}{
+					map[string]interface{}{
+						"type": "text",
+						"text": prompt,
+					},
+					map[string]interface{}{
+						"type": "image_url",
+						"image_url": map[string]interface{}{
+							"url": dataURI,
+						},
+					},
+				},
+			},
+		},
+		"max_tokens": 4096,
+	}
+
+	jsonData, err := json.Marshal(requestBody)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", p.apiBase+"/chat/completions", bytes.NewReader(jsonData))
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	if p.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+p.apiKey)
+	}
+
+	resp, err := p.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("OpenAI Vision API failed:\n  Status: %d\n  Body: %s", resp.StatusCode, string(body))
+	}
+
+	llmResp, err := parseResponse(body)
+	if err != nil {
+		return "", err
+	}
+
+	return llmResp.Content, nil
 }
 
 func (p *Provider) Chat(ctx context.Context, messages []Message, tools []ToolDefinition, model string, options map[string]interface{}) (*LLMResponse, error) {
