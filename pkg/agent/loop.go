@@ -465,7 +465,7 @@ func (al *AgentLoop) runAgentLoop(ctx context.Context, agent *AgentInstance, opt
 	}
 
 	// 9. Log response
-	responsePreview := utils.Truncate(finalContent, 120)
+	responsePreview := utils.Truncate(finalContent, 120000)
 	logger.InfoCF("agent", fmt.Sprintf("Response: %s", responsePreview),
 		map[string]any{
 			"agent_id":     agent.ID,
@@ -559,23 +559,6 @@ func (al *AgentLoop) runLLMIteration(
 			response, err = callLLM()
 			if err == nil {
 				break
-			}
-
-			if response != nil {
-				respString := func() string {
-					b, err := json.MarshalIndent(response, "", "  ")
-					if err != nil {
-						return fmt.Sprintf("[Error in parsing response: %v]", err)
-					}
-					return string(b)
-				}()
-
-				logger.DebugCF("agent", "Full LLM response",
-					map[string]interface{}{
-						"agent_id":  agent.ID,
-						"iteration": iteration,
-						"content":   respString,
-					})
 			}
 
 			errMsg := strings.ToLower(err.Error())
