@@ -119,8 +119,10 @@ func registerSharedTools(
 		// Stock tool
 		agent.Tools.Register(tools.YFinanceStockTool())
 
-		// Stock tool
-		agent.Tools.Register(tools.YFinanceStockTool())
+		// Email tool
+		if cfg.Tools.Email.Enabled {
+			agent.Tools.Register(tools.NewEmailTool(cfg.Tools.Email))
+		}
 
 		// Stock tool
 		agent.Tools.Register(tools.YFinanceStockTool())
