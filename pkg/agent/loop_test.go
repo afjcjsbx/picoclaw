@@ -304,8 +304,8 @@ func TestAgentLoop_GetStartupInfo(t *testing.T) {
 	}
 
 	// Should have default tools registered
-	if count.(int) == 0 {
-		t.Error("Expected at least some tools to be registered")
+	if count.(int) != 0 {
+		t.Error("registered tools that have not been enabled")
 	}
 }
 
