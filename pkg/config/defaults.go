@@ -276,6 +276,15 @@ func DefaultConfig() *Config {
 			Port: 18790,
 		},
 		Tools: ToolsConfig{
+			Core: CoreToolsConfig{
+				EnableWebFetch: true,
+				EnableMessage:  true,
+				EnableSpawn:    true,
+			},
+			Hardware: HardwareToolsConfig{
+				EnableI2C: true,
+				EnableSPI: true,
+			},
 			Web: WebToolsConfig{
 				Brave: BraveConfig{
 					Enabled:    false,
@@ -296,9 +305,18 @@ func DefaultConfig() *Config {
 				ExecTimeoutMinutes: 5,
 			},
 			Exec: ExecConfig{
+				Enabled:            true,
 				EnableDenyPatterns: true,
 			},
+			Filesystem: FilesystemConfig{
+				EnableRead:   true,
+				EnableWrite:  true,
+				EnableList:   true,
+				EnableEdit:   true,
+				EnableAppend: true,
+			},
 			Skills: SkillsToolsConfig{
+				Enabled: true,
 				Registries: SkillsRegistriesConfig{
 					ClawHub: ClawHubRegistryConfig{
 						Enabled: true,

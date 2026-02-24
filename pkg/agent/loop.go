@@ -109,45 +109,57 @@ func registerSharedTools(
 		}); searchTool != nil {
 			agent.Tools.Register(searchTool)
 		}
-		agent.Tools.Register(tools.NewWebFetchTool(50000))
+		if cfg.Tools.Core.EnableWebFetch {
+			agent.Tools.Register(tools.NewWebFetchTool(50000))
+		}
 
 		// Hardware tools (I2C, SPI) - Linux only, returns error on other platforms
-		agent.Tools.Register(tools.NewI2CTool())
-		agent.Tools.Register(tools.NewSPITool())
+		if cfg.Tools.Hardware.EnableI2C {
+			agent.Tools.Register(tools.NewI2CTool())
+		}
+		if cfg.Tools.Hardware.EnableSPI {
+			agent.Tools.Register(tools.NewSPITool())
+		}
 
 		// Message tool
-		messageTool := tools.NewMessageTool()
-		messageTool.SetSendCallback(func(channel, chatID, content string) error {
-			msgBus.PublishOutbound(bus.OutboundMessage{
-				Channel: channel,
-				ChatID:  chatID,
-				Content: content,
+		if cfg.Tools.Core.EnableMessage {
+			messageTool := tools.NewMessageTool()
+			messageTool.SetSendCallback(func(channel, chatID, content string) error {
+				msgBus.PublishOutbound(bus.OutboundMessage{
+					Channel: channel,
+					ChatID:  chatID,
+					Content: content,
+				})
+				return nil
 			})
-			return nil
-		})
-		agent.Tools.Register(messageTool)
+			agent.Tools.Register(messageTool)
+		}
 
 		// Skill discovery and installation tools
-		registryMgr := skills.NewRegistryManagerFromConfig(skills.RegistryConfig{
-			MaxConcurrentSearches: cfg.Tools.Skills.MaxConcurrentSearches,
-			ClawHub:               skills.ClawHubConfig(cfg.Tools.Skills.Registries.ClawHub),
-		})
-		searchCache := skills.NewSearchCache(
-			cfg.Tools.Skills.SearchCache.MaxSize,
-			time.Duration(cfg.Tools.Skills.SearchCache.TTLSeconds)*time.Second,
-		)
-		agent.Tools.Register(tools.NewFindSkillsTool(registryMgr, searchCache))
-		agent.Tools.Register(tools.NewInstallSkillTool(registryMgr, agent.Workspace))
+		if cfg.Tools.Skills.Enabled {
+			registryMgr := skills.NewRegistryManagerFromConfig(skills.RegistryConfig{
+				MaxConcurrentSearches: cfg.Tools.Skills.MaxConcurrentSearches,
+				ClawHub:               skills.ClawHubConfig(cfg.Tools.Skills.Registries.ClawHub),
+			})
+			searchCache := skills.NewSearchCache(
+				cfg.Tools.Skills.SearchCache.MaxSize,
+				time.Duration(cfg.Tools.Skills.SearchCache.TTLSeconds)*time.Second,
+			)
+			agent.Tools.Register(tools.NewFindSkillsTool(registryMgr, searchCache))
+			agent.Tools.Register(tools.NewInstallSkillTool(registryMgr, agent.Workspace))
+		}
 
 		// Spawn tool with allowlist checker
-		subagentManager := tools.NewSubagentManager(provider, agent.Model, agent.Workspace, msgBus)
-		subagentManager.SetLLMOptions(agent.MaxTokens, agent.Temperature)
-		spawnTool := tools.NewSpawnTool(subagentManager)
-		currentAgentID := agentID
-		spawnTool.SetAllowlistChecker(func(targetAgentID string) bool {
-			return registry.CanSpawnSubagent(currentAgentID, targetAgentID)
-		})
-		agent.Tools.Register(spawnTool)
+		if cfg.Tools.Core.EnableSpawn {
+			subagentManager := tools.NewSubagentManager(provider, agent.Model, agent.Workspace, msgBus)
+			subagentManager.SetLLMOptions(agent.MaxTokens, agent.Temperature)
+			spawnTool := tools.NewSpawnTool(subagentManager)
+			currentAgentID := agentID
+			spawnTool.SetAllowlistChecker(func(targetAgentID string) bool {
+				return registry.CanSpawnSubagent(currentAgentID, targetAgentID)
+			})
+			agent.Tools.Register(spawnTool)
+		}
 
 		// Update context builder with the complete tools registry
 		agent.ContextBuilder.SetToolsRegistry(agent.Tools)

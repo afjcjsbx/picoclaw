@@ -48,12 +48,24 @@ func NewAgentInstance(
 
 	restrict := defaults.RestrictToWorkspace
 	toolsRegistry := tools.NewToolRegistry()
-	toolsRegistry.Register(tools.NewReadFileTool(workspace, restrict))
-	toolsRegistry.Register(tools.NewWriteFileTool(workspace, restrict))
-	toolsRegistry.Register(tools.NewListDirTool(workspace, restrict))
-	toolsRegistry.Register(tools.NewExecToolWithConfig(workspace, restrict, cfg))
-	toolsRegistry.Register(tools.NewEditFileTool(workspace, restrict))
-	toolsRegistry.Register(tools.NewAppendFileTool(workspace, restrict))
+	if cfg.Tools.Filesystem.EnableRead {
+		toolsRegistry.Register(tools.NewReadFileTool(workspace, restrict))
+	}
+	if cfg.Tools.Filesystem.EnableWrite {
+		toolsRegistry.Register(tools.NewWriteFileTool(workspace, restrict))
+	}
+	if cfg.Tools.Filesystem.EnableList {
+		toolsRegistry.Register(tools.NewListDirTool(workspace, restrict))
+	}
+	if cfg.Tools.Filesystem.EnableEdit {
+		toolsRegistry.Register(tools.NewEditFileTool(workspace, restrict))
+	}
+	if cfg.Tools.Filesystem.EnableAppend {
+		toolsRegistry.Register(tools.NewAppendFileTool(workspace, restrict))
+	}
+	if cfg.Tools.Exec.Enabled {
+		toolsRegistry.Register(tools.NewExecToolWithConfig(workspace, restrict, cfg))
+	}
 
 	sessionsDir := filepath.Join(workspace, "sessions")
 	sessionsManager := session.NewSessionManager(sessionsDir)

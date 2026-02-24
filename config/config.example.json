@@ -203,6 +203,15 @@
     }
   },
   "tools": {
+    "core": {
+      "enable_web_fetch": true,
+      "enable_message": true,
+      "enable_spawn": true
+    },
+    "hardware": {
+      "enable_i2c": false,
+      "enable_spi": false
+    },
     "web": {
       "brave": {
         "enabled": false,
@@ -223,10 +232,19 @@
       "exec_timeout_minutes": 5
     },
     "exec": {
+      "enabled": true,
       "enable_deny_patterns": false,
       "custom_deny_patterns": []
     },
+    "filesystem": {
+      "enable_read": true,
+      "enable_write": true,
+      "enable_list": true,
+      "enable_edit": true,
+      "enable_append": true
+    },
     "skills": {
+      "enabled": true,
       "registries": {
         "clawhub": {
           "enabled": true,

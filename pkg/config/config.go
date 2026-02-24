@@ -456,22 +456,47 @@ type WebToolsConfig struct {
 }
 
 type CronToolsConfig struct {
-	ExecTimeoutMinutes int `json:"exec_timeout_minutes" env:"PICOCLAW_TOOLS_CRON_EXEC_TIMEOUT_MINUTES"` // 0 means no timeout
+	Enabled            bool `json:"enabled" env:"PICOCLAW_TOOLS_CRON_ENABLED"`
+	ExecTimeoutMinutes int  `json:"exec_timeout_minutes" env:"PICOCLAW_TOOLS_CRON_EXEC_TIMEOUT_MINUTES"` // 0 means no timeout
+}
+
+type HardwareToolsConfig struct {
+	EnableI2C bool `json:"enable_i2c" env:"PICOCLAW_TOOLS_HW_ENABLE_I2C"`
+	EnableSPI bool `json:"enable_spi" env:"PICOCLAW_TOOLS_HW_ENABLE_SPI"`
+}
+
+type CoreToolsConfig struct {
+	EnableWebFetch bool `json:"enable_web_fetch" env:"PICOCLAW_TOOLS_CORE_ENABLE_WEB_FETCH"`
+	EnableMessage  bool `json:"enable_message" env:"PICOCLAW_TOOLS_CORE_ENABLE_MESSAGE"`
+	EnableSpawn    bool `json:"enable_spawn" env:"PICOCLAW_TOOLS_CORE_ENABLE_SPAWN"`
+}
+
+type FilesystemConfig struct {
+	EnableRead   bool `json:"enable_read" env:"PICOCLAW_TOOLS_FS_ENABLE_READ"`
+	EnableWrite  bool `json:"enable_write" env:"PICOCLAW_TOOLS_FS_ENABLE_WRITE"`
+	EnableList   bool `json:"enable_list" env:"PICOCLAW_TOOLS_FS_ENABLE_LIST"`
+	EnableEdit   bool `json:"enable_edit" env:"PICOCLAW_TOOLS_FS_ENABLE_EDIT"`
+	EnableAppend bool `json:"enable_append" env:"PICOCLAW_TOOLS_FS_ENABLE_APPEND"`
 }
 
 type ExecConfig struct {
+	Enabled            bool     `json:"enabled" env:"PICOCLAW_TOOLS_EXEC_ENABLED"`
 	EnableDenyPatterns bool     `json:"enable_deny_patterns" env:"PICOCLAW_TOOLS_EXEC_ENABLE_DENY_PATTERNS"`
 	CustomDenyPatterns []string `json:"custom_deny_patterns" env:"PICOCLAW_TOOLS_EXEC_CUSTOM_DENY_PATTERNS"`
 }
 
 type ToolsConfig struct {
-	Web    WebToolsConfig    `json:"web"`
-	Cron   CronToolsConfig   `json:"cron"`
-	Exec   ExecConfig        `json:"exec"`
-	Skills SkillsToolsConfig `json:"skills"`
+	Web        WebToolsConfig      `json:"web"`
+	Cron       CronToolsConfig     `json:"cron"`
+	Exec       ExecConfig          `json:"exec"`
+	Skills     SkillsToolsConfig   `json:"skills"`
+	Filesystem FilesystemConfig    `json:"filesystem"`
+	Hardware   HardwareToolsConfig `json:"hardware"`
+	Core       CoreToolsConfig     `json:"core"`
 }
 
 type SkillsToolsConfig struct {
+	Enabled               bool                   `json:"enabled" env:"PICOCLAW_TOOLS_SKILLS_ENABLED"`
 	Registries            SkillsRegistriesConfig `json:"registries"`
 	MaxConcurrentSearches int                    `json:"max_concurrent_searches" env:"PICOCLAW_SKILLS_MAX_CONCURRENT_SEARCHES"`
 	SearchCache           SearchCacheConfig      `json:"search_cache"`
