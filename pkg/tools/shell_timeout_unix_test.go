@@ -22,7 +22,7 @@ func processExists(pid int) bool {
 }
 
 func TestShellTool_TimeoutKillsChildProcess(t *testing.T) {
-	tool := NewExecTool(t.TempDir(), false)
+	tool, err := NewExecTool(t.TempDir(), false)
 	tool.SetTimeout(500 * time.Millisecond)
 
 	args := map[string]any{
