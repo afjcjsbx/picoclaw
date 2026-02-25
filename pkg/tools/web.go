@@ -471,6 +471,13 @@ func (t *WebSearchTool) Parameters() map[string]any {
 	}
 }
 
+func (t *WebSearchTool) FormatNotification(args map[string]any) string {
+	if query, ok := args["query"].(string); ok {
+		return fmt.Sprintf("🛠️ Web search: \"%s\"", query)
+	}
+	return "🛠️ Web search in progress"
+}
+
 func (t *WebSearchTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
 	query, ok := args["query"].(string)
 	if !ok {
@@ -651,6 +658,13 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		),
 		ForUser: string(resultJSON),
 	}
+}
+
+func (t *WebFetchTool) FormatNotification(args map[string]any) string {
+	if u, ok := args["url"].(string); ok {
+		return fmt.Sprintf("🛠️ Fetching page: \"%s\"", u)
+	}
+	return "🛠️ Fetching web page in progress"
 }
 
 func (t *WebFetchTool) extractText(htmlContent string) string {
