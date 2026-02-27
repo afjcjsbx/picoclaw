@@ -3,7 +3,9 @@ package tools
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -12,14 +14,29 @@ import (
 )
 
 type ToolRegistry struct {
-	tools map[string]Tool
-	mu    sync.RWMutex
+	tools    map[string]Tool
+	promoted map[string]int
+	mu       sync.RWMutex
+}
+
+type ToolSearchResult struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	Parameters  map[string]any `json:"parameters"`
 }
 
 func NewToolRegistry() *ToolRegistry {
 	return &ToolRegistry{
-		tools: make(map[string]Tool),
+		tools:    make(map[string]Tool),
+		promoted: make(map[string]int),
 	}
+}
+
+// PromoteTool temporarily unlocks a hidden tool for N iterations.
+func (r *ToolRegistry) PromoteTool(name string, iterations int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.promoted[name] = iterations
 }
 
 func (r *ToolRegistry) Register(tool Tool) {
@@ -136,34 +153,59 @@ func (r *ToolRegistry) GetDefinitions() []map[string]any {
 // ToProviderDefs converts tool definitions to provider-compatible format.
 // This is the format expected by LLM provider APIs.
 func (r *ToolRegistry) ToProviderDefs() []providers.ToolDefinition {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
 	sorted := r.sortedToolNames()
 	definitions := make([]providers.ToolDefinition, 0, len(sorted))
+
 	for _, name := range sorted {
 		tool := r.tools[name]
-		schema := ToolToSchema(tool)
 
-		// Safely extract nested values with type checks
+		isDeferred := false
+		if dt, ok := tool.(DeferredTool); ok {
+			isDeferred = dt.IsDeferred()
+		}
+
+		// If the tool is hidden
+		if isDeferred {
+			if remaining, promoted := r.promoted[name]; promoted && remaining > 0 {
+				// Temporarily becomes a native tool
+				isDeferred = false
+				// Scale an iteration
+				r.promoted[name] = remaining - 1
+
+				if r.promoted[name] <= 0 {
+					// When the TTL expires, the tool is detached
+					delete(r.promoted, name)
+				}
+
+				logger.DebugCF(
+					"tool_search",
+					"Tool temporarily promoted as native",
+					map[string]any{"tool": name, "ttl_left": remaining - 1},
+				)
+			} else {
+				continue
+			}
+		}
+
+		schema := ToolToSchema(tool)
 		fn, ok := schema["function"].(map[string]any)
 		if !ok {
 			continue
 		}
 
-		name, _ := fn["name"].(string)
-		desc, _ := fn["description"].(string)
-		params, _ := fn["parameters"].(map[string]any)
-
 		definitions = append(definitions, providers.ToolDefinition{
 			Type: "function",
-			Function: providers.ToolFunctionDefinition{
-				Name:        name,
-				Description: desc,
-				Parameters:  params,
+			Function: &providers.ToolFunctionDefinition{
+				Name:        fn["name"].(string),
+				Description: fn["description"].(string),
+				Parameters:  fn["parameters"].(map[string]any),
 			},
 		})
 	}
+
 	return definitions
 }
 
@@ -195,4 +237,99 @@ func (r *ToolRegistry) GetSummaries() []string {
 		summaries = append(summaries, fmt.Sprintf("- `%s` - %s", tool.Name(), tool.Description()))
 	}
 	return summaries
+}
+
+func (r *ToolRegistry) SearchRegex(pattern string) ([]ToolSearchResult, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	regex, err := regexp.Compile("(?i)" + pattern)
+	if err != nil {
+		return nil, err
+	}
+
+	var results []ToolSearchResult
+	for name, tool := range r.tools {
+		if dt, ok := tool.(DeferredTool); ok && dt.IsDeferred() {
+			schema := ToolToSchema(tool)
+			fn, ok := schema["function"].(map[string]any)
+			if !ok {
+				continue
+			}
+
+			desc, _ := fn["description"].(string)
+
+			if regex.MatchString(name) || regex.MatchString(desc) {
+				results = append(results, ToolSearchResult{
+					Name:        name,
+					Description: desc,
+					Parameters:  fn["parameters"].(map[string]any),
+				})
+			}
+		}
+	}
+	return limitResults(results, 5), nil
+}
+
+func (r *ToolRegistry) SearchBM25(query string) []ToolSearchResult {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	terms := strings.Fields(strings.ToLower(query))
+
+	type scoredTool struct {
+		result ToolSearchResult
+		score  int
+	}
+	var scored []scoredTool
+
+	for name, tool := range r.tools {
+		if dt, ok := tool.(DeferredTool); ok && dt.IsDeferred() {
+			schema := ToolToSchema(tool)
+			fn, ok := schema["function"].(map[string]any)
+			if !ok {
+				continue
+			}
+
+			desc, _ := fn["description"].(string)
+
+			searchSpace := strings.ToLower(name + " " + desc)
+			score := 0
+
+			for _, term := range terms {
+				if strings.Contains(searchSpace, term) {
+					score++
+				}
+			}
+
+			if score > 0 {
+				scored = append(scored, scoredTool{
+					result: ToolSearchResult{
+						Name:        name,
+						Description: desc,
+						Parameters:  fn["parameters"].(map[string]any),
+					},
+					score: score,
+				})
+			}
+		}
+	}
+
+	sort.Slice(scored, func(i, j int) bool { return scored[i].score > scored[j].score })
+
+	var results []ToolSearchResult
+	for i, st := range scored {
+		if i >= 5 {
+			break
+		}
+		results = append(results, st.result)
+	}
+	return results
+}
+
+func limitResults(results []ToolSearchResult, max int) []ToolSearchResult {
+	if len(results) > max {
+		return results[:max]
+	}
+	return results
 }

@@ -232,7 +232,7 @@ func TestToolRegistry_ToProviderDefs(t *testing.T) {
 
 	want := providers.ToolDefinition{
 		Type: "function",
-		Function: providers.ToolFunctionDefinition{
+		Function: &providers.ToolFunctionDefinition{
 			Name:        "beta",
 			Description: "tool B",
 			Parameters:  params,

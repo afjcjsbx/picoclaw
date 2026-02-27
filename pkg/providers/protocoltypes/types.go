@@ -72,8 +72,8 @@ type Message struct {
 }
 
 type ToolDefinition struct {
-	Type     string                 `json:"type"`
-	Function ToolFunctionDefinition `json:"function"`
+	Type     string                  `json:"type"`
+	Function *ToolFunctionDefinition `json:"function,omitempty"`
 }
 
 type ToolFunctionDefinition struct {

@@ -58,6 +58,7 @@ type Config struct {
 	Tools     ToolsConfig     `json:"tools"`
 	Heartbeat HeartbeatConfig `json:"heartbeat"`
 	Devices   DevicesConfig   `json:"devices"`
+	MCP       MCPConfig       `json:"mcp,omitempty"`
 }
 
 // MarshalJSON implements custom JSON marshaling for Config
@@ -382,6 +383,24 @@ type DevicesConfig struct {
 	MonitorUSB bool `json:"monitor_usb" env:"PICOCLAW_DEVICES_MONITOR_USB"`
 }
 
+type MCPConfig struct {
+	Servers map[string]MCPServerConfig `json:"servers,omitempty"`
+}
+
+type MCPServerConfig struct {
+	Type    string            `json:"type,omitempty"`
+	URL     string            `json:"url,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
+	Command string            `json:"command,omitempty"`
+	Args    []string          `json:"args,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
+}
+
+type ToolSearchConfig struct {
+	EnableRegex bool `json:"enable_regex"`
+	EnableBM25  bool `json:"enable_bm25"`
+}
+
 type ProvidersConfig struct {
 	Anthropic     ProviderConfig       `json:"anthropic"`
 	OpenAI        OpenAIProviderConfig `json:"openai"`
@@ -542,6 +561,7 @@ type MediaCleanupConfig struct {
 }
 
 type ToolsConfig struct {
+	ToolSearch   ToolSearchConfig   `json:"tool_search"`
 	Web          WebToolsConfig     `json:"web"`
 	Cron         CronToolsConfig    `json:"cron"`
 	Exec         ExecConfig         `json:"exec"`

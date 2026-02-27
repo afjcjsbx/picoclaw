@@ -81,7 +81,7 @@ func TestBuildParams_WithTools(t *testing.T) {
 	tools := []ToolDefinition{
 		{
 			Type: "function",
-			Function: ToolFunctionDefinition{
+			Function: &ToolFunctionDefinition{
 				Name:        "get_weather",
 				Description: "Get weather for a city",
 				Parameters: map[string]any{

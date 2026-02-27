@@ -22,6 +22,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/constants"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/mcp"
 	"github.com/sipeed/picoclaw/pkg/media"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/routing"
@@ -40,6 +41,7 @@ type AgentLoop struct {
 	summarizing    sync.Map
 	fallback       *providers.FallbackChain
 	channelManager *channels.Manager
+	mcpManager     *mcp.Manager
 	mediaStore     media.MediaStore
 }
 
@@ -74,6 +76,13 @@ func NewAgentLoop(cfg *config.Config, msgBus *bus.MessageBus, provider providers
 		stateManager = state.NewManager(defaultAgent.Workspace)
 	}
 
+	var mcpMgr *mcp.Manager
+
+	if defaultAgent != nil {
+		stateManager = state.NewManager(defaultAgent.Workspace)
+		mcpMgr = mcp.NewManager(defaultAgent.Tools)
+	}
+
 	return &AgentLoop{
 		bus:         msgBus,
 		cfg:         cfg,
@@ -81,6 +90,7 @@ func NewAgentLoop(cfg *config.Config, msgBus *bus.MessageBus, provider providers
 		state:       stateManager,
 		summarizing: sync.Map{},
 		fallback:    fallbackChain,
+		mcpManager:  mcpMgr,
 	}
 }
 
@@ -160,6 +170,47 @@ func registerSharedTools(
 
 func (al *AgentLoop) Run(ctx context.Context) error {
 	al.running.Store(true)
+
+	// Inizializza i server MCP configurati
+	if al.mcpManager != nil && al.cfg != nil && len(al.cfg.MCP.Servers) > 0 {
+		al.mcpManager.InitFromConfig(ctx, al.cfg.MCP)
+
+		// Condividi SOLO i tool MCP con gli altri agenti registrati
+		defaultAgent := al.registry.GetDefaultAgent()
+		if defaultAgent != nil {
+			for _, toolName := range defaultAgent.Tools.List() {
+
+				// Verifica se il tool appartiene a un server MCP controllando il prefisso
+				isMCPTool := false
+				for serverName := range al.cfg.MCP.Servers {
+					if strings.HasPrefix(toolName, serverName+"_") {
+						isMCPTool = true
+						break
+					}
+				}
+
+				// Se è un tool MCP, copialo negli altri agenti
+				if isMCPTool {
+					tool, _ := defaultAgent.Tools.Get(toolName)
+					for _, agentID := range al.registry.ListAgentIDs() {
+						if agentID != defaultAgent.ID {
+							if agent, ok := al.registry.GetAgent(agentID); ok {
+								agent.Tools.Register(tool)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Assicura lo spegnimento pulito dei server MCP quando il contesto principale si chiude
+	go func() {
+		<-ctx.Done()
+		if al.mcpManager != nil {
+			al.mcpManager.Shutdown()
+		}
+	}()
 
 	for al.running.Load() {
 		select {

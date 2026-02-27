@@ -616,7 +616,7 @@ func TestBuildSystemPrompt_WithTools(t *testing.T) {
 	tools := []ToolDefinition{
 		{
 			Type: "function",
-			Function: ToolFunctionDefinition{
+			Function: &ToolFunctionDefinition{
 				Name:        "get_weather",
 				Description: "Get weather for a location",
 				Parameters: map[string]any{
@@ -645,7 +645,7 @@ func TestBuildSystemPrompt_ToolsOnlyNoSystem(t *testing.T) {
 	tools := []ToolDefinition{
 		{
 			Type: "function",
-			Function: ToolFunctionDefinition{
+			Function: &ToolFunctionDefinition{
 				Name:        "test_tool",
 				Description: "A test tool",
 			},
@@ -662,8 +662,8 @@ func TestBuildSystemPrompt_ToolsOnlyNoSystem(t *testing.T) {
 func TestBuildToolsPrompt_SkipsNonFunction(t *testing.T) {
 	p := NewClaudeCliProvider("/workspace")
 	tools := []ToolDefinition{
-		{Type: "other", Function: ToolFunctionDefinition{Name: "skip_me"}},
-		{Type: "function", Function: ToolFunctionDefinition{Name: "include_me", Description: "Included"}},
+		{Type: "other", Function: &ToolFunctionDefinition{Name: "skip_me"}},
+		{Type: "function", Function: &ToolFunctionDefinition{Name: "include_me", Description: "Included"}},
 	}
 	got := p.buildToolsPrompt(tools)
 	if strings.Contains(got, "skip_me") {
@@ -677,7 +677,7 @@ func TestBuildToolsPrompt_SkipsNonFunction(t *testing.T) {
 func TestBuildToolsPrompt_NoDescription(t *testing.T) {
 	p := NewClaudeCliProvider("/workspace")
 	tools := []ToolDefinition{
-		{Type: "function", Function: ToolFunctionDefinition{Name: "bare_tool"}},
+		{Type: "function", Function: &ToolFunctionDefinition{Name: "bare_tool"}},
 	}
 	got := p.buildToolsPrompt(tools)
 	if !strings.Contains(got, "bare_tool") {
@@ -691,7 +691,7 @@ func TestBuildToolsPrompt_NoDescription(t *testing.T) {
 func TestBuildToolsPrompt_NoParameters(t *testing.T) {
 	p := NewClaudeCliProvider("/workspace")
 	tools := []ToolDefinition{
-		{Type: "function", Function: ToolFunctionDefinition{
+		{Type: "function", Function: &ToolFunctionDefinition{
 			Name:        "no_params_tool",
 			Description: "A tool with no parameters",
 		}},

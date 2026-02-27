@@ -55,6 +55,23 @@ func NewAgentInstance(
 	toolsRegistry.Register(tools.NewEditFileTool(workspace, restrict))
 	toolsRegistry.Register(tools.NewAppendFileTool(workspace, restrict))
 
+	toolsRegistry.Register(tools.NewAppendFileTool(workspace, restrict))
+
+	if cfg != nil {
+		hasSearchTool := false
+		if cfg.Tools.ToolSearch.EnableRegex {
+			toolsRegistry.Register(tools.NewRegexSearchTool(toolsRegistry))
+			hasSearchTool = true
+		}
+		if cfg.Tools.ToolSearch.EnableBM25 {
+			toolsRegistry.Register(tools.NewBM25SearchTool(toolsRegistry))
+			hasSearchTool = true
+		}
+		if hasSearchTool {
+			toolsRegistry.Register(tools.NewCallDiscoveredTool(toolsRegistry))
+		}
+	}
+
 	sessionsDir := filepath.Join(workspace, "sessions")
 	sessionsManager := session.NewSessionManager(sessionsDir)
 

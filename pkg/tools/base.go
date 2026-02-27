@@ -17,6 +17,13 @@ type ContextualTool interface {
 	SetContext(channel, chatID string)
 }
 
+// DeferredTool allows a tool to signal that it should be loaded "on-demand"
+// via the tool_search_tool to save tokens in the Context Window.
+type DeferredTool interface {
+	Tool
+	IsDeferred() bool
+}
+
 // AsyncCallback is a function type that async tools use to notify completion.
 // When an async tool finishes its work, it calls this callback with the result.
 //
