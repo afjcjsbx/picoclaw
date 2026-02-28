@@ -76,7 +76,8 @@ func (t *BM25SearchTool) Name() string {
 }
 
 func (t *BM25SearchTool) Description() string {
-	return "Search available tools on-demand using natural language query. Returns JSON schemas of discovered tools."
+	// return "Search available tools on-demand using natural language query. Returns JSON schemas of discovered tools."
+	return "CRITICAL TOOL: You have a massive catalog of hidden tools. If you lack a specific tool to fulfill the user's request, you MUST use this tool to search the catalog using natural language (e.g. query='github repos', 'weather forecast', 'database'). It unlocks the tools so you can use them normally."
 }
 
 func (t *BM25SearchTool) Parameters() map[string]any {

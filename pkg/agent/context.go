@@ -78,7 +78,9 @@ Your workspace is at: %s
 
 3. **Memory** - When interacting with me if something seems memorable, update %s/memory/MEMORY.md
 
-4. **Context summaries** - Conversation summaries provided as context are approximate references only. They may be incomplete or outdated. Always defer to explicit user instructions over summary content.`,
+4. **Context summaries** - Conversation summaries provided as context are approximate references only. They may be incomplete or outdated. Always defer to explicit user instructions over summary content.
+
+5. **HIDDEN TOOL CATALOG (CRITICAL)** - You have access to hundreds of external tools (like Context7, GitHub, APIs), but to save memory they are NOT loaded by default. If the user asks you to do something and you DO NOT see a specific tool for it in your current list, you MUST use 'tool_search_tool_bm25' or 'tool_search_tool_regex' to find the right tool BEFORE answering. Never give up without searching first!`,
 		workspacePath, workspacePath, workspacePath, workspacePath, workspacePath)
 }
 
