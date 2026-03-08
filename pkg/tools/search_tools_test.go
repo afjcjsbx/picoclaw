@@ -138,57 +138,6 @@ func TestBM25SearchTool_Execute(t *testing.T) {
 	})
 }
 
-func TestCallDiscoveredTool_Execute(t *testing.T) {
-	reg := setupPopulatedRegistry()
-	tool := NewCallDiscoveredTool(reg, 8)
-	ctx := context.Background()
-
-	t.Run("Missing Name", func(t *testing.T) {
-		res := tool.Execute(ctx, map[string]any{"arguments": map[string]any{}})
-		if !res.IsError {
-			t.Error("Expected error for missing tool_name")
-		}
-	})
-
-	t.Run("Invalid Arguments Type Fallback", func(t *testing.T) {
-		// If the LLM hallucinates and passes a string instead of an object/map,
-		// does a graceful fallback to empty map.
-		res := tool.Execute(ctx, map[string]any{
-			"tool_name": "mcp_read_file",
-			"arguments": "invalid-string-instead-of-object",
-		})
-		// It must be an error
-		if !res.IsError {
-			t.Fatalf("Expected an error for invalid argument type, but got success: %v", res.ForLLM)
-		}
-		// The error message should contain the explanation that we have added
-		if !strings.Contains(res.ForLLM, "Invalid 'arguments' format") {
-			t.Errorf("Expected instructional error message, got: %v", res.ForLLM)
-		}
-	})
-
-	t.Run("Successful Passthrough", func(t *testing.T) {
-		res := tool.Execute(ctx, map[string]any{
-			"tool_name": "mcp_read_file",
-			"arguments": map[string]any{"path": "/tmp/test.txt"},
-		})
-
-		if res.IsError {
-			t.Fatalf("Unexpected error: %v", res.ForLLM)
-		}
-		if !strings.Contains(res.ForLLM, "mock executed: mcp_read_file") {
-			t.Errorf("Expected underlying tool to be executed, got: %v", res.ForLLM)
-		}
-
-		// The tool should renew the TTL of the tool called
-		reg.mu.RLock()
-		defer reg.mu.RUnlock()
-		if reg.tools["mcp_read_file"].TTL != 8 {
-			t.Errorf("Expected TTL to be renewed to 8")
-		}
-	})
-}
-
 func TestToolRegistry_SearchLimitsAndCoreFiltering(t *testing.T) {
 	reg := NewToolRegistry()
 

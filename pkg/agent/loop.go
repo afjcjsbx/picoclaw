@@ -341,9 +341,6 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 					if useBM25 {
 						agent.Tools.Register(tools.NewBM25SearchTool(agent.Tools, ttl, maxSearchResults))
 					}
-
-					// Always record the fallback
-					agent.Tools.Register(tools.NewCallDiscoveredTool(agent.Tools, ttl))
 				}
 			}
 		}

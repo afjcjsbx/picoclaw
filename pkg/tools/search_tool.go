@@ -99,69 +99,6 @@ func (t *BM25SearchTool) Execute(ctx context.Context, args map[string]any) *Tool
 	return formatDiscoveryResponse(t.registry, t.registry.SearchBM25(query, t.maxSearchResults), t.ttl)
 }
 
-type CallDiscoveredTool struct {
-	registry *ToolRegistry
-	ttl      int
-}
-
-func NewCallDiscoveredTool(r *ToolRegistry, ttl int) *CallDiscoveredTool {
-	return &CallDiscoveredTool{registry: r, ttl: ttl}
-}
-
-func (t *CallDiscoveredTool) Name() string {
-	return "call_discovered_tool"
-}
-
-func (t *CallDiscoveredTool) Description() string {
-	return "Fallback tool. Execute a tool found via search by passing its required arguments as a JSON object."
-}
-
-func (t *CallDiscoveredTool) Parameters() map[string]any {
-	return map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"tool_name": map[string]any{
-				"type": "string",
-			},
-			"arguments": map[string]any{
-				"type":        "object",
-				"description": "Arguments to pass to the tool",
-			},
-		},
-		"required": []string{"tool_name"},
-	}
-}
-
-func (t *CallDiscoveredTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
-	name, ok := args["tool_name"].(string)
-	if !ok || name == "" {
-		return ErrorResult("Missing or invalid 'tool_name' argument")
-	}
-
-	parsedArgs := make(map[string]any)
-
-	// Check whether the key "arguments" exists in the payload
-	if argVal, exists := args["arguments"]; exists && argVal != nil {
-		// If it exists, we try to map cast it
-		var valid bool
-		parsedArgs, valid = argVal.(map[string]any)
-		if !valid {
-			// The LLM has passed something, but it is NOT a JSON object!
-			// We have to tell him clearly to get him to correct.
-			return ErrorResult(fmt.Sprintf(
-				"Invalid 'arguments' format for tool '%s'. Expected a JSON object, but got %T. Please fix and try again.",
-				name,
-				argVal,
-			))
-		}
-	}
-
-	// Renew the TTL to keep it visible if it is actively used
-	t.registry.PromoteTool(name, t.ttl)
-
-	return t.registry.Execute(ctx, name, parsedArgs)
-}
-
 // ToolSearchResult represents the result returned to the LLM.
 type ToolSearchResult struct {
 	Name        string         `json:"name"`
@@ -217,7 +154,7 @@ func formatDiscoveryResponse(registry *ToolRegistry, results []ToolSearchResult,
 	}
 
 	msg := fmt.Sprintf(
-		"Found %d tools:\n%s\n\nSUCCESS: These tools have been temporarily UNLOCKED as native tools! In your next response, you can call them directly just like any normal tool, without needing 'call_discovered_tool'.",
+		"Found %d tools:\n%s\n\nSUCCESS: These tools have been temporarily UNLOCKED as native tools! In your next response, you can call them directly just like any normal tool",
 		len(results),
 		string(b),
 	)
