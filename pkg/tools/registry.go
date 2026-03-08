@@ -44,6 +44,7 @@ func (r *ToolRegistry) Register(tool Tool) {
 		TTL:    0, // Core tools do not use TTL
 	}
 	r.version.Add(1)
+	logger.DebugCF("tools", "Registered core tool", map[string]any{"name": name})
 }
 
 // RegisterHidden saves hidden tools (visible only via TTL)
@@ -61,6 +62,7 @@ func (r *ToolRegistry) RegisterHidden(tool Tool) {
 		TTL:    0,
 	}
 	r.version.Add(1)
+	logger.DebugCF("tools", "Registered hidden tool", map[string]any{"name": name})
 }
 
 // PromoteTools atomically sets the TTL for multiple non-core tools.
@@ -68,13 +70,20 @@ func (r *ToolRegistry) RegisterHidden(tool Tool) {
 func (r *ToolRegistry) PromoteTools(names []string, ttl int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	promoted := 0
 	for _, name := range names {
 		if entry, exists := r.tools[name]; exists {
 			if !entry.IsCore {
 				entry.TTL = ttl
+				promoted++
 			}
 		}
 	}
+	logger.DebugCF(
+		"tools",
+		"PromoteTools completed",
+		map[string]any{"requested": len(names), "promoted": promoted, "ttl": ttl},
+	)
 }
 
 // TickTTL decreases TTL only for non-core tools

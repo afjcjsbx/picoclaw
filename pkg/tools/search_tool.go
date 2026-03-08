@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
@@ -55,15 +56,19 @@ func (t *RegexSearchTool) Execute(ctx context.Context, args map[string]any) *Too
 	}
 
 	if len(pattern) > MaxRegexPatternLength {
-		// Limit on length to avoid catastrophic patterns
+		logger.WarnCF("discovery", "Regex pattern rejected (too long)", map[string]any{"len": len(pattern)})
 		return ErrorResult(fmt.Sprintf("Pattern too long: max %d characters allowed", MaxRegexPatternLength))
 	}
 
+	logger.DebugCF("discovery", "Regex search", map[string]any{"pattern": pattern})
+
 	res, err := t.registry.SearchRegex(pattern, t.maxSearchResults)
 	if err != nil {
+		logger.WarnCF("discovery", "Invalid regex pattern", map[string]any{"pattern": pattern, "error": err.Error()})
 		return ErrorResult(fmt.Sprintf("Invalid regex pattern syntax: %v. Please fix your regex and try again.", err))
 	}
 
+	logger.InfoCF("discovery", "Regex search completed", map[string]any{"pattern": pattern, "results": len(res)})
 	return formatDiscoveryResponse(t.registry, res, t.ttl)
 }
 
@@ -111,13 +116,17 @@ func (t *BM25SearchTool) Execute(ctx context.Context, args map[string]any) *Tool
 		return ErrorResult("Missing or invalid 'query' argument. Must be a non-empty string.")
 	}
 
+	logger.DebugCF("discovery", "BM25 search", map[string]any{"query": query})
+
 	cached := t.getOrBuildEngine()
 	if cached == nil {
+		logger.DebugCF("discovery", "BM25 search: no hidden tools available", nil)
 		return SilentResult("No tools found matching the query.")
 	}
 
 	ranked := cached.engine.Search(query, t.maxSearchResults)
 	if len(ranked) == 0 {
+		logger.DebugCF("discovery", "BM25 search: no matches", map[string]any{"query": query})
 		return SilentResult("No tools found matching the query.")
 	}
 
@@ -129,6 +138,7 @@ func (t *BM25SearchTool) Execute(ctx context.Context, args map[string]any) *Tool
 		}
 	}
 
+	logger.InfoCF("discovery", "BM25 search completed", map[string]any{"query": query, "results": len(results)})
 	return formatDiscoveryResponse(t.registry, results, t.ttl)
 }
 
@@ -188,6 +198,7 @@ func formatDiscoveryResponse(registry *ToolRegistry, results []ToolSearchResult,
 		names[i] = r.Name
 	}
 	registry.PromoteTools(names, ttl)
+	logger.InfoCF("discovery", "Promoted tools", map[string]any{"tools": names, "ttl": ttl})
 
 	b, err := json.Marshal(results)
 	if err != nil {
@@ -263,6 +274,7 @@ func (t *BM25SearchTool) getOrBuildEngine() *bm25CachedEngine {
 	cached := &bm25CachedEngine{engine: buildBM25Engine(docs)}
 	t.cachedEngine = cached
 	t.cacheVersion = snap.Version
+	logger.DebugCF("discovery", "BM25 engine rebuilt", map[string]any{"docs": len(docs), "version": snap.Version})
 	return cached
 }
 

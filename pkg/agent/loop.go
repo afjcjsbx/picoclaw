@@ -331,6 +331,10 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 					maxSearchResults = 5 // Default value
 				}
 
+				logger.InfoCF("agent", "Initializing tool discovery", map[string]any{
+					"bm25": useBM25, "regex": useRegex, "ttl": ttl, "max_results": maxSearchResults,
+				})
+
 				for _, agentID := range agentIDs {
 					agent, ok := al.registry.GetAgent(agentID)
 					if !ok {
@@ -1306,6 +1310,9 @@ func (al *AgentLoop) runLLMIteration(
 		// If per-agent concurrency is added, TTL consistency between
 		// ToProviderDefs and Get must be re-evaluated.
 		agent.Tools.TickTTL()
+		logger.DebugCF("agent", "TTL tick after tool execution", map[string]any{
+			"agent_id": agent.ID, "iteration": iteration,
+		})
 	}
 
 	return finalContent, iteration, nil
