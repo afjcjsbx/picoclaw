@@ -100,7 +100,12 @@ Score guidelines:
 - 0.2-0.4: Poor, barely addresses the request
 - 0.0-0.1: Failed, does not address the request at all`
 
-func (v *LLMValidator) Validate(ctx context.Context, resp *protocoltypes.LLMResponse, err error, userMessage string) ValidationResult {
+func (v *LLMValidator) Validate(
+	ctx context.Context,
+	resp *protocoltypes.LLMResponse,
+	err error,
+	userMessage string,
+) ValidationResult {
 	// Provider/runtime error: automatic fail without calling the validator.
 	if err != nil {
 		return ValidationResult{

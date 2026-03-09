@@ -66,14 +66,17 @@ func TestRun_LocalSuccess_NoEscalation(t *testing.T) {
 	)
 
 	calls := 0
-	result, err := r.Run(context.Background(), "hello", func(candidates []providers.FallbackCandidate, model string) (string, int, error) {
-		calls++
-		if model != "ollama/qwen" {
-			t.Errorf("expected local model on first call, got %s", model)
-		}
-		return "Hello from local!", 1, nil
-	})
-
+	result, err := r.Run(
+		context.Background(),
+		"hello",
+		func(candidates []providers.FallbackCandidate, model string) (string, int, error) {
+			calls++
+			if model != "ollama/qwen" {
+				t.Errorf("expected local model on first call, got %s", model)
+			}
+			return "Hello from local!", 1, nil
+		},
+	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -99,19 +102,22 @@ func TestRun_LocalFails_EscalatesToCloud(t *testing.T) {
 	)
 
 	calls := 0
-	result, err := r.Run(context.Background(), "hello", func(candidates []providers.FallbackCandidate, model string) (string, int, error) {
-		calls++
-		if calls == 1 {
-			// Local model fails with error
-			return "", 0, errors.New("connection refused")
-		}
-		// Cloud model succeeds
-		if model != "openai/gpt-4" {
-			t.Errorf("expected cloud model on second call, got %s", model)
-		}
-		return "Hello from cloud!", 1, nil
-	})
-
+	result, err := r.Run(
+		context.Background(),
+		"hello",
+		func(candidates []providers.FallbackCandidate, model string) (string, int, error) {
+			calls++
+			if calls == 1 {
+				// Local model fails with error
+				return "", 0, errors.New("connection refused")
+			}
+			// Cloud model succeeds
+			if model != "openai/gpt-4" {
+				t.Errorf("expected cloud model on second call, got %s", model)
+			}
+			return "Hello from cloud!", 1, nil
+		},
+	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -137,15 +143,18 @@ func TestRun_LocalEmptyResponse_EscalatesToCloud(t *testing.T) {
 	)
 
 	calls := 0
-	result, err := r.Run(context.Background(), "hello", func(candidates []providers.FallbackCandidate, model string) (string, int, error) {
-		calls++
-		if calls == 1 {
-			// Local model returns empty
-			return "", 1, nil
-		}
-		return "Cloud response", 1, nil
-	})
-
+	result, err := r.Run(
+		context.Background(),
+		"hello",
+		func(candidates []providers.FallbackCandidate, model string) (string, int, error) {
+			calls++
+			if calls == 1 {
+				// Local model returns empty
+				return "", 1, nil
+			}
+			return "Cloud response", 1, nil
+		},
+	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -165,10 +174,14 @@ func TestRun_BothFail_ReturnsError(t *testing.T) {
 	)
 
 	calls := 0
-	_, err := r.Run(context.Background(), "hello", func(candidates []providers.FallbackCandidate, model string) (string, int, error) {
-		calls++
-		return "", 0, errors.New("all providers down")
-	})
+	_, err := r.Run(
+		context.Background(),
+		"hello",
+		func(candidates []providers.FallbackCandidate, model string) (string, int, error) {
+			calls++
+			return "", 0, errors.New("all providers down")
+		},
+	)
 
 	if err == nil {
 		t.Fatal("expected error when both local and cloud fail")
@@ -191,20 +204,23 @@ func TestRun_PassesCandidatesCorrectly(t *testing.T) {
 	r := NewRunner(localCands, cloudCands, "ollama/qwen", "openai/gpt-4", defaultAdaptiveCfg(), nil)
 
 	calls := 0
-	_, err := r.Run(context.Background(), "hello", func(candidates []providers.FallbackCandidate, model string) (string, int, error) {
-		calls++
-		if calls == 1 {
-			if len(candidates) != 2 || candidates[0].Provider != "ollama" {
-				t.Errorf("local candidates mismatch: %+v", candidates)
+	_, err := r.Run(
+		context.Background(),
+		"hello",
+		func(candidates []providers.FallbackCandidate, model string) (string, int, error) {
+			calls++
+			if calls == 1 {
+				if len(candidates) != 2 || candidates[0].Provider != "ollama" {
+					t.Errorf("local candidates mismatch: %+v", candidates)
+				}
+				return "", 0, errors.New("local fail")
 			}
-			return "", 0, errors.New("local fail")
-		}
-		if len(candidates) != 2 || candidates[0].Provider != "openai" {
-			t.Errorf("cloud candidates mismatch: %+v", candidates)
-		}
-		return "ok", 1, nil
-	})
-
+			if len(candidates) != 2 || candidates[0].Provider != "openai" {
+				t.Errorf("cloud candidates mismatch: %+v", candidates)
+			}
+			return "ok", 1, nil
+		},
+	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -221,9 +237,13 @@ func TestRun_LLMValidationModeFallsBackToHeuristic(t *testing.T) {
 	)
 
 	// Should still work (falls back to heuristic because no provider/validator_model)
-	result, err := r.Run(context.Background(), "hello", func(candidates []providers.FallbackCandidate, model string) (string, int, error) {
-		return "Hello!", 1, nil
-	})
+	result, err := r.Run(
+		context.Background(),
+		"hello",
+		func(candidates []providers.FallbackCandidate, model string) (string, int, error) {
+			return "Hello!", 1, nil
+		},
+	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

@@ -221,18 +221,26 @@ func NewAgentInstance(
 	// Adaptive routing setup: pre-resolve local and cloud model candidates
 	// at creation time to avoid repeated model_list lookups at runtime.
 	var adaptiveRunner *adaptive.Runner
-	if arc := defaults.AdaptiveRouting; arc != nil && arc.Enabled && arc.LocalFirstModel != "" &&
-		arc.CloudEscalationModel != "" {
-		localModelCfg := providers.ModelConfig{Primary: arc.LocalFirstModel}
+	if arc := defaults.AdaptiveRouting; arc != nil && arc.Enabled && arc.CloudEscalationModel != "" {
+
+		localModelName := cfg.Agents.Defaults.ModelName
+		if fullModel, ok := resolveFromModelList(localModelName); ok {
+			localModelName = fullModel
+		}
+		localModelCfg := providers.ModelConfig{Primary: localModelName}
 		localResolved := providers.ResolveCandidatesWithLookup(localModelCfg, defaults.Provider, resolveFromModelList)
 
-		cloudModelCfg := providers.ModelConfig{Primary: arc.CloudEscalationModel}
+		cloudModelName := arc.CloudEscalationModel
+		if fullModel, ok := resolveFromModelList(cloudModelName); ok {
+			cloudModelName = fullModel
+		}
+		cloudModelCfg := providers.ModelConfig{Primary: cloudModelName}
 		cloudResolved := providers.ResolveCandidatesWithLookup(cloudModelCfg, defaults.Provider, resolveFromModelList)
 
 		adaptiveRunner = adaptive.NewRunner(
 			localResolved,
 			cloudResolved,
-			arc.LocalFirstModel,
+			cfg.Agents.Defaults.ModelName,
 			arc.CloudEscalationModel,
 			arc,
 			provider,
@@ -240,7 +248,7 @@ func NewAgentInstance(
 		if adaptiveRunner == nil {
 			log.Printf(
 				"adaptive: local_first_model %q or cloud_escalation_model %q not found in model_list — adaptive routing disabled for agent %q",
-				arc.LocalFirstModel,
+				cfg.Agents.Defaults.ModelName,
 				arc.CloudEscalationModel,
 				agentID,
 			)

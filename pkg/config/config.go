@@ -186,7 +186,6 @@ type RoutingConfig struct {
 // and from RoutingConfig (which pre-routes based on message complexity).
 type AdaptiveRoutingConfig struct {
 	Enabled                  bool                     `json:"enabled"`
-	LocalFirstModel          string                   `json:"local_first_model"`
 	CloudEscalationModel     string                   `json:"cloud_escalation_model"`
 	MaxEscalations           int                      `json:"max_escalations,omitempty"`
 	BypassOnExplicitOverride bool                     `json:"bypass_on_explicit_override,omitempty"`

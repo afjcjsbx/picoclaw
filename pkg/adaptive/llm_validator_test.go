@@ -449,9 +449,13 @@ func TestRunWithLLMValidator_EndToEnd(t *testing.T) {
 		t.Fatal("expected non-nil runner")
 	}
 
-	result, err := r.Run(context.Background(), "hello", func(candidates []providers.FallbackCandidate, model string) (string, int, error) {
-		return "Hello from local!", 1, nil
-	})
+	result, err := r.Run(
+		context.Background(),
+		"hello",
+		func(candidates []providers.FallbackCandidate, model string) (string, int, error) {
+			return "Hello from local!", 1, nil
+		},
+	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -489,13 +493,17 @@ func TestRunWithLLMValidator_FailTriggersEscalation(t *testing.T) {
 	)
 
 	calls := 0
-	result, err := r.Run(context.Background(), "explain quantum computing", func(candidates []providers.FallbackCandidate, model string) (string, int, error) {
-		calls++
-		if calls == 1 {
-			return "idk", 1, nil
-		}
-		return "Quantum computing uses qubits...", 1, nil
-	})
+	result, err := r.Run(
+		context.Background(),
+		"explain quantum computing",
+		func(candidates []providers.FallbackCandidate, model string) (string, int, error) {
+			calls++
+			if calls == 1 {
+				return "idk", 1, nil
+			}
+			return "Quantum computing uses qubits...", 1, nil
+		},
+	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

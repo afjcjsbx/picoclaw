@@ -45,7 +45,12 @@ const (
 	penaltyTruncation   = 0.3
 )
 
-func (h *HeuristicValidator) Validate(_ context.Context, resp *protocoltypes.LLMResponse, err error, _ string) ValidationResult {
+func (h *HeuristicValidator) Validate(
+	_ context.Context,
+	resp *protocoltypes.LLMResponse,
+	err error,
+	_ string,
+) ValidationResult {
 	// Provider/runtime error: automatic fail.
 	if err != nil {
 		return ValidationResult{

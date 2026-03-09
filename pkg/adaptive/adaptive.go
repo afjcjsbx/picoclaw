@@ -94,7 +94,11 @@ func newValidator(cfg *config.AdaptiveRoutingConfig, provider providers.LLMProvi
 		}
 		llmVal := NewLLMValidator(provider, cfg.Validation.ValidatorModel, cfg.Validation)
 		if llmVal == nil {
-			logger.WarnCF("adaptive", "LLM validator could not be created (nil provider?), falling back to heuristic", nil)
+			logger.WarnCF(
+				"adaptive",
+				"LLM validator could not be created (nil provider?), falling back to heuristic",
+				nil,
+			)
 			return NewHeuristicValidator(minScore)
 		}
 		logger.InfoCF("adaptive", "LLM validation mode enabled", map[string]any{
