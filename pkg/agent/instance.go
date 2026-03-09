@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/sipeed/picoclaw/pkg/adaptive"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/routing"
@@ -45,6 +46,16 @@ type AgentInstance struct {
 	// LightCandidates holds the resolved provider candidates for the light model.
 	// Pre-computed at agent creation to avoid repeated model_list lookups at runtime.
 	LightCandidates []providers.FallbackCandidate
+
+	// AdaptiveRunner is non-nil when adaptive model routing is configured.
+	// It wraps LLM execution to first try a local/cheap model, validate the
+	// outcome, and escalate to a cloud model if validation fails.
+	AdaptiveRunner *adaptive.Runner
+
+	// ModelSwitched is set to true when the user explicitly switches the model
+	// via /switch command. When true and bypassOnExplicitOverride is configured,
+	// adaptive routing is bypassed for this agent instance.
+	ModelSwitched bool
 }
 
 // NewAgentInstance creates an agent instance from config.
@@ -207,6 +218,35 @@ func NewAgentInstance(
 		}
 	}
 
+	// Adaptive routing setup: pre-resolve local and cloud model candidates
+	// at creation time to avoid repeated model_list lookups at runtime.
+	var adaptiveRunner *adaptive.Runner
+	if arc := defaults.AdaptiveRouting; arc != nil && arc.Enabled && arc.LocalFirstModel != "" &&
+		arc.CloudEscalationModel != "" {
+		localModelCfg := providers.ModelConfig{Primary: arc.LocalFirstModel}
+		localResolved := providers.ResolveCandidatesWithLookup(localModelCfg, defaults.Provider, resolveFromModelList)
+
+		cloudModelCfg := providers.ModelConfig{Primary: arc.CloudEscalationModel}
+		cloudResolved := providers.ResolveCandidatesWithLookup(cloudModelCfg, defaults.Provider, resolveFromModelList)
+
+		adaptiveRunner = adaptive.NewRunner(
+			localResolved,
+			cloudResolved,
+			arc.LocalFirstModel,
+			arc.CloudEscalationModel,
+			arc,
+			provider,
+		)
+		if adaptiveRunner == nil {
+			log.Printf(
+				"adaptive: local_first_model %q or cloud_escalation_model %q not found in model_list — adaptive routing disabled for agent %q",
+				arc.LocalFirstModel,
+				arc.CloudEscalationModel,
+				agentID,
+			)
+		}
+	}
+
 	return &AgentInstance{
 		ID:                        agentID,
 		Name:                      agentName,
@@ -229,6 +269,7 @@ func NewAgentInstance(
 		Candidates:                candidates,
 		Router:                    router,
 		LightCandidates:           lightCandidates,
+		AdaptiveRunner:            adaptiveRunner,
 	}
 }
 

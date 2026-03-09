@@ -19,6 +19,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/sipeed/picoclaw/pkg/adaptive"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/channels"
 	"github.com/sipeed/picoclaw/pkg/commands"
@@ -61,6 +62,10 @@ type processOptions struct {
 	EnableSummary   bool     // Whether to trigger summarization
 	SendResponse    bool     // Whether to send response via bus
 	NoHistory       bool     // If true, don't load session history (for heartbeat)
+
+	// Adaptive routing overrides: when set, these bypass selectCandidates.
+	overrideCandidates []providers.FallbackCandidate
+	overrideModel      string
 }
 
 const (
@@ -762,8 +767,16 @@ func (al *AgentLoop) runAgentLoop(
 	// 2. Save user message to session
 	agent.Sessions.AddMessage(opts.SessionKey, "user", opts.UserMessage)
 
-	// 3. Run LLM iteration loop
-	finalContent, iteration, err := al.runLLMIteration(ctx, agent, messages, opts)
+	// 3. Run LLM iteration loop (with optional adaptive routing)
+	var finalContent string
+	var iteration int
+	var err error
+
+	if ar := al.resolveAdaptiveRunner(agent); ar != nil {
+		finalContent, iteration, err = al.runWithAdaptiveRouting(ctx, agent, messages, opts, ar)
+	} else {
+		finalContent, iteration, err = al.runLLMIteration(ctx, agent, messages, opts)
+	}
 	if err != nil {
 		return "", err
 	}
@@ -874,10 +887,18 @@ func (al *AgentLoop) runLLMIteration(
 	var finalContent string
 
 	// Determine effective model tier for this conversation turn.
-	// selectCandidates evaluates routing once and the decision is sticky for
-	// all tool-follow-up iterations within the same turn so that a multi-step
-	// tool chain doesn't switch models mid-way through.
-	activeCandidates, activeModel := al.selectCandidates(agent, opts.UserMessage, messages)
+	// When adaptive routing provides overrides, use those directly.
+	// Otherwise, selectCandidates evaluates routing once and the decision is
+	// sticky for all tool-follow-up iterations within the same turn so that
+	// a multi-step tool chain doesn't switch models mid-way through.
+	var activeCandidates []providers.FallbackCandidate
+	var activeModel string
+	if len(opts.overrideCandidates) > 0 && opts.overrideModel != "" {
+		activeCandidates = opts.overrideCandidates
+		activeModel = opts.overrideModel
+	} else {
+		activeCandidates, activeModel = al.selectCandidates(agent, opts.UserMessage, messages)
+	}
 
 	for iteration < agent.MaxIterations {
 		iteration++
@@ -1295,6 +1316,93 @@ func (al *AgentLoop) selectCandidates(
 			"threshold":   agent.Router.Threshold(),
 		})
 	return agent.LightCandidates, agent.Router.LightModel()
+}
+
+// resolveAdaptiveRunner returns the adaptive runner for the agent if adaptive
+// routing is enabled and should not be bypassed.
+// Returns nil when adaptive routing should be skipped.
+func (al *AgentLoop) resolveAdaptiveRunner(agent *AgentInstance) *adaptive.Runner {
+	if agent.AdaptiveRunner == nil {
+		return nil
+	}
+
+	// If the user explicitly switched the model and bypassOnExplicitOverride
+	// is configured, skip adaptive routing.
+	if agent.ModelSwitched {
+		if arc := al.cfg.Agents.Defaults.AdaptiveRouting; arc != nil && arc.BypassOnExplicitOverride {
+			logger.DebugCF("agent", "Adaptive routing bypassed: user explicitly switched model",
+				map[string]any{"agent_id": agent.ID, "model": agent.Model})
+			return nil
+		}
+	}
+
+	return agent.AdaptiveRunner
+}
+
+// runWithAdaptiveRouting wraps runLLMIteration with adaptive model routing.
+// It tries the local model first, validates the outcome, and escalates to the
+// cloud model if validation fails. The local attempt's session changes are
+// rolled back before re-running with the cloud model.
+func (al *AgentLoop) runWithAdaptiveRouting(
+	ctx context.Context,
+	agent *AgentInstance,
+	messages []providers.Message,
+	opts processOptions,
+	ar *adaptive.Runner,
+) (string, int, error) {
+	// Snapshot session state before each attempt so we can restore it
+	// if escalation is needed (spec: "Rerun from scratch, local attempt not appended").
+	savedHistory := agent.Sessions.GetHistory(opts.SessionKey)
+
+	result, err := ar.Run(
+		ctx,
+		opts.UserMessage,
+		func(candidates []providers.FallbackCandidate, model string) (string, int, error) {
+			// Restore session to the pre-attempt snapshot before each run.
+			// This ensures the cloud escalation starts from scratch, not from
+			// a session polluted by the local attempt's tool call history.
+			agent.Sessions.SetHistory(opts.SessionKey, savedHistory)
+
+			overrideOpts := opts
+			overrideOpts.overrideCandidates = candidates
+			overrideOpts.overrideModel = model
+
+			content, iter, runErr := al.runLLMIteration(ctx, agent, cloneMessages(messages), overrideOpts)
+			return content, iter, runErr
+		},
+	)
+	if err != nil {
+		// Both attempts failed — restore session to pre-attempt state.
+		agent.Sessions.SetHistory(opts.SessionKey, savedHistory)
+		return "", 0, err
+	}
+
+	if result.Escalated {
+		logger.InfoCF("agent", "Adaptive routing: escalated to cloud model",
+			map[string]any{
+				"agent_id":    agent.ID,
+				"local_model": result.LocalModel,
+				"cloud_model": result.CloudModel,
+				"reason":      result.ValidationInfo,
+			})
+	} else {
+		logger.InfoCF("agent", "Adaptive routing: local model succeeded",
+			map[string]any{
+				"agent_id":    agent.ID,
+				"local_model": result.LocalModel,
+				"reason":      result.ValidationInfo,
+			})
+	}
+
+	return result.Content, result.Iterations, nil
+}
+
+// cloneMessages creates a shallow copy of the messages slice so that appends
+// during one adaptive attempt don't pollute the input for the next attempt.
+func cloneMessages(msgs []providers.Message) []providers.Message {
+	clone := make([]providers.Message, len(msgs))
+	copy(clone, msgs)
+	return clone
 }
 
 // maybeSummarize triggers summarization if the session history exceeds thresholds.
@@ -1748,6 +1856,7 @@ func (al *AgentLoop) buildCommandsRuntime(agent *AgentInstance, opts *processOpt
 		rt.SwitchModel = func(value string) (string, error) {
 			oldModel := agent.Model
 			agent.Model = value
+			agent.ModelSwitched = true
 			return oldModel, nil
 		}
 
