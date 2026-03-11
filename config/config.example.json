@@ -478,7 +478,16 @@
     "monitor_usb": true
   },
   "voice": {
-    "echo_transcription": false
+    "transcriber": "",
+    "transcriber_model": "",
+    "api_key": "",
+    "api_base": "",
+    "echo_transcription": false,
+    "fallback": {
+      "elevenlabs": { "api_key": "", "api_base": "", "model": "" },
+      "groq":       { "api_key": "", "api_base": "", "model": "" },
+      "openai":     { "api_key": "", "api_base": "", "model": "" }
+    }
   },
   "gateway": {
     "host": "127.0.0.1",

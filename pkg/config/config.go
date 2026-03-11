@@ -475,7 +475,25 @@ type DevicesConfig struct {
 }
 
 type VoiceConfig struct {
-	EchoTranscription bool `json:"echo_transcription" env:"PICOCLAW_VOICE_ECHO_TRANSCRIPTION"`
+	// Transcriber is the provider name or a comma-separated fallback chain
+	// (e.g. "elevenlabs,groq,openai"). When multiple providers are listed,
+	// they are tried in order until one succeeds.
+	Transcriber       string `json:"transcriber"        env:"PICOCLAW_VOICE_TRANSCRIBER"`
+	TranscriberModel  string `json:"transcriber_model"  env:"PICOCLAW_VOICE_TRANSCRIBER_MODEL"`
+	APIKey            string `json:"api_key"            env:"PICOCLAW_VOICE_API_KEY"`
+	APIBase           string `json:"api_base"           env:"PICOCLAW_VOICE_API_BASE"`
+	EchoTranscription bool   `json:"echo_transcription" env:"PICOCLAW_VOICE_ECHO_TRANSCRIPTION"`
+	// Fallback holds per-provider overrides for API key, base URL, and model
+	// when using a fallback chain. Keyed by provider name.
+	Fallback map[string]VoiceProviderConfig `json:"fallback,omitempty"`
+}
+
+// VoiceProviderConfig holds per-provider overrides for transcription settings
+// used in fallback chains.
+type VoiceProviderConfig struct {
+	APIKey  string `json:"api_key"`
+	APIBase string `json:"api_base"`
+	Model   string `json:"model"`
 }
 
 type ProvidersConfig struct {

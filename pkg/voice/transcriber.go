@@ -1,179 +1,149 @@
 package voice
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"fmt"
-	"io"
-	"mime/multipart"
-	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
-	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
+// Transcriber is the interface that all voice transcription backends must
+// implement.
 type Transcriber interface {
 	Name() string
 	Transcribe(ctx context.Context, audioFilePath string) (*TranscriptionResponse, error)
 }
 
-type GroqTranscriber struct {
-	apiKey     string
-	apiBase    string
-	httpClient *http.Client
-}
-
+// TranscriptionResponse is the result returned by any Transcriber.
 type TranscriptionResponse struct {
 	Text     string  `json:"text"`
 	Language string  `json:"language,omitempty"`
 	Duration float64 `json:"duration,omitempty"`
 }
 
-func NewGroqTranscriber(apiKey string) *GroqTranscriber {
-	logger.DebugCF("voice", "Creating Groq transcriber", map[string]any{"has_api_key": apiKey != ""})
-
-	apiBase := "https://api.groq.com/openai/v1"
-	return &GroqTranscriber{
-		apiKey:  apiKey,
-		apiBase: apiBase,
-		httpClient: &http.Client{
-			Timeout: 60 * time.Second,
-		},
-	}
-}
-
-func (t *GroqTranscriber) Transcribe(ctx context.Context, audioFilePath string) (*TranscriptionResponse, error) {
-	logger.InfoCF("voice", "Starting transcription", map[string]any{"audio_file": audioFilePath})
-
-	audioFile, err := os.Open(audioFilePath)
-	if err != nil {
-		logger.ErrorCF("voice", "Failed to open audio file", map[string]any{"path": audioFilePath, "error": err})
-		return nil, fmt.Errorf("failed to open audio file: %w", err)
-	}
-	defer audioFile.Close()
-
-	fileInfo, err := audioFile.Stat()
-	if err != nil {
-		logger.ErrorCF("voice", "Failed to get file info", map[string]any{"path": audioFilePath, "error": err})
-		return nil, fmt.Errorf("failed to get file info: %w", err)
-	}
-
-	logger.DebugCF("voice", "Audio file details", map[string]any{
-		"size_bytes": fileInfo.Size(),
-		"file_name":  filepath.Base(audioFilePath),
-	})
-
-	var requestBody bytes.Buffer
-	writer := multipart.NewWriter(&requestBody)
-
-	part, err := writer.CreateFormFile("file", filepath.Base(audioFilePath))
-	if err != nil {
-		logger.ErrorCF("voice", "Failed to create form file", map[string]any{"error": err})
-		return nil, fmt.Errorf("failed to create form file: %w", err)
-	}
-
-	copied, err := io.Copy(part, audioFile)
-	if err != nil {
-		logger.ErrorCF("voice", "Failed to copy file content", map[string]any{"error": err})
-		return nil, fmt.Errorf("failed to copy file content: %w", err)
-	}
-
-	logger.DebugCF("voice", "File copied to request", map[string]any{"bytes_copied": copied})
-
-	if err = writer.WriteField("model", "whisper-large-v3"); err != nil {
-		logger.ErrorCF("voice", "Failed to write model field", map[string]any{"error": err})
-		return nil, fmt.Errorf("failed to write model field: %w", err)
-	}
-
-	if err = writer.WriteField("response_format", "json"); err != nil {
-		logger.ErrorCF("voice", "Failed to write response_format field", map[string]any{"error": err})
-		return nil, fmt.Errorf("failed to write response_format field: %w", err)
-	}
-
-	if err = writer.Close(); err != nil {
-		logger.ErrorCF("voice", "Failed to close multipart writer", map[string]any{"error": err})
-		return nil, fmt.Errorf("failed to close multipart writer: %w", err)
-	}
-
-	url := t.apiBase + "/audio/transcriptions"
-	req, err := http.NewRequestWithContext(ctx, "POST", url, &requestBody)
-	if err != nil {
-		logger.ErrorCF("voice", "Failed to create request", map[string]any{"error": err})
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-	req.Header.Set("Authorization", "Bearer "+t.apiKey)
-
-	logger.DebugCF("voice", "Sending transcription request to Groq API", map[string]any{
-		"url":                url,
-		"request_size_bytes": requestBody.Len(),
-		"file_size_bytes":    fileInfo.Size(),
-	})
-
-	resp, err := t.httpClient.Do(req)
-	if err != nil {
-		logger.ErrorCF("voice", "Failed to send request", map[string]any{"error": err})
-		return nil, fmt.Errorf("failed to send request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		logger.ErrorCF("voice", "Failed to read response", map[string]any{"error": err})
-		return nil, fmt.Errorf("failed to read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		logger.ErrorCF("voice", "API error", map[string]any{
-			"status_code": resp.StatusCode,
-			"response":    string(body),
-		})
-		return nil, fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(body))
-	}
-
-	logger.DebugCF("voice", "Received response from Groq API", map[string]any{
-		"status_code":         resp.StatusCode,
-		"response_size_bytes": len(body),
-	})
-
-	var result TranscriptionResponse
-	if err := json.Unmarshal(body, &result); err != nil {
-		logger.ErrorCF("voice", "Failed to unmarshal response", map[string]any{"error": err})
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
-	}
-
-	logger.InfoCF("voice", "Transcription completed successfully", map[string]any{
-		"text_length":           len(result.Text),
-		"language":              result.Language,
-		"duration_seconds":      result.Duration,
-		"transcription_preview": utils.Truncate(result.Text, 50),
-	})
-
-	return &result, nil
-}
-
-func (t *GroqTranscriber) Name() string {
-	return "groq"
-}
-
 // DetectTranscriber inspects cfg and returns the appropriate Transcriber, or
 // nil if no supported transcription provider is configured.
+//
+// Resolution order:
+//  1. If voice.transcriber contains a comma-separated list (e.g.
+//     "elevenlabs,groq,openai"), build a FallbackTranscriber chain.
+//  2. If voice.transcriber is a single name, use the matching factory.
+//  3. Otherwise, auto-detect (try groq first, then others).
 func DetectTranscriber(cfg *config.Config) Transcriber {
-	// Direct Groq provider config takes priority.
-	if key := cfg.Providers.Groq.APIKey; key != "" {
-		return NewGroqTranscriber(key)
+	voiceCfg := cfg.Voice
+
+	raw := strings.TrimSpace(voiceCfg.Transcriber)
+	if raw == "" {
+		return autoDetect(voiceCfg, cfg)
 	}
-	// Fall back to any model-list entry that uses the groq/ protocol.
-	for _, mc := range cfg.ModelList {
-		if strings.HasPrefix(mc.Model, "groq/") && mc.APIKey != "" {
-			return NewGroqTranscriber(mc.APIKey)
+
+	names := splitNames(raw)
+
+	if len(names) == 1 {
+		return buildSingle(names[0], voiceCfg, cfg)
+	}
+
+	// Build a fallback chain.
+	var chain []Transcriber
+	for _, name := range names {
+		t := buildForChain(name, voiceCfg, cfg)
+		if t != nil {
+			chain = append(chain, t)
+		}
+	}
+
+	switch len(chain) {
+	case 0:
+		logger.WarnCF("voice", "No transcribers could be built from chain", map[string]any{"requested": names})
+		return nil
+	case 1:
+		return chain[0]
+	default:
+		logger.InfoCF("voice", "Transcription fallback chain configured", map[string]any{
+			"chain": NewFallbackTranscriber(chain).Name(),
+		})
+		return NewFallbackTranscriber(chain)
+	}
+}
+
+// splitNames parses a comma-separated list of provider names.
+func splitNames(raw string) []string {
+	parts := strings.Split(raw, ",")
+	names := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if n := strings.TrimSpace(p); n != "" {
+			names = append(names, n)
+		}
+	}
+	return names
+}
+
+// buildSingle creates a single transcriber by name using the top-level voice config.
+func buildSingle(name string, voiceCfg config.VoiceConfig, cfg *config.Config) Transcriber {
+	factory, ok := getTranscriberFactory(name)
+	if !ok {
+		logger.WarnCF("voice", "Unknown transcriber provider", map[string]any{
+			"requested":  name,
+			"registered": registeredTranscriberNames(),
+		})
+		return nil
+	}
+	t := factory(voiceCfg, cfg)
+	if t == nil {
+		logger.WarnCF("voice", "Transcriber factory returned nil (missing credentials?)", map[string]any{"provider": name})
+	}
+	return t
+}
+
+// buildForChain creates a transcriber for one link in the fallback chain.
+// It merges per-provider overrides from voice.fallback.<name> over the
+// top-level voice config values.
+func buildForChain(name string, voiceCfg config.VoiceConfig, cfg *config.Config) Transcriber {
+	factory, ok := getTranscriberFactory(name)
+	if !ok {
+		logger.WarnCF("voice", "Unknown transcriber in chain, skipping", map[string]any{
+			"provider":   name,
+			"registered": registeredTranscriberNames(),
+		})
+		return nil
+	}
+
+	// Build a per-provider VoiceConfig with overrides.
+	merged := voiceCfg
+	if override, ok := voiceCfg.Fallback[name]; ok {
+		if override.APIKey != "" {
+			merged.APIKey = override.APIKey
+		}
+		if override.APIBase != "" {
+			merged.APIBase = override.APIBase
+		}
+		if override.Model != "" {
+			merged.TranscriberModel = override.Model
+		}
+	}
+
+	t := factory(merged, cfg)
+	if t == nil {
+		logger.WarnCF("voice", "Transcriber factory returned nil in chain, skipping", map[string]any{"provider": name})
+	}
+	return t
+}
+
+// autoDetect tries groq first (legacy default), then all other registered
+// factories. Used when voice.transcriber is empty.
+func autoDetect(voiceCfg config.VoiceConfig, cfg *config.Config) Transcriber {
+	if factory, ok := getTranscriberFactory("groq"); ok {
+		if t := factory(voiceCfg, cfg); t != nil {
+			return t
+		}
+	}
+	for name, factory := range registry {
+		if name == "groq" {
+			continue
+		}
+		if t := factory(voiceCfg, cfg); t != nil {
+			return t
 		}
 	}
 	return nil
