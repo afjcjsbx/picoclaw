@@ -320,6 +320,7 @@ func (t *slowTool) Parameters() map[string]any {
 		"properties": map[string]any{},
 	}
 }
+
 func (t *slowTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	if t.execCh != nil {
 		close(t.execCh)
