@@ -19,28 +19,60 @@ The user's intent reaches the model **as soon as the current tool finishes**, no
 ```mermaid
 graph TD
     subgraph External Callers
-        CH[Channel Handler]
-        API[HTTP API]
-        WS[WebSocket]
+        TG[Telegram]
+        DC[Discord]
+        SL[Slack]
     end
 
     subgraph AgentLoop
+        BUS[MessageBus]
+        DRAIN[drainBusToSteering goroutine]
         SQ[steeringQueue]
         RLI[runLLMIteration]
         TE[Tool Execution Loop]
         LLM[LLM Call]
     end
 
-    CH -->|Steer| SQ
-    API -->|Steer| SQ
-    WS -->|Steer| SQ
+    TG -->|PublishInbound| BUS
+    DC -->|PublishInbound| BUS
+    SL -->|PublishInbound| BUS
+
+    BUS -->|ConsumeInbound while busy| DRAIN
+    DRAIN -->|Steer| SQ
 
     RLI -->|1. initial poll| SQ
     TE -->|2. poll after each tool| SQ
-    TE -->|3. poll after last tool| SQ
 
     SQ -->|pendingMessages| RLI
     RLI -->|inject into context| LLM
+```
+
+### Bus drain mechanism
+
+Channels (Telegram, Discord, etc.) publish messages to the `MessageBus` via `PublishInbound`. Without additional wiring, these messages would sit in the bus buffer until the current `processMessage` finishes — meaning steering would never work for real users.
+
+The solution: when `Run()` starts processing a message, it spawns a **drain goroutine** (`drainBusToSteering`) that keeps consuming from the bus and calling `Steer()`. When `processMessage` returns, the drain is canceled and normal consumption resumes.
+
+```mermaid
+sequenceDiagram
+    participant Bus
+    participant Run
+    participant Drain
+    participant AgentLoop
+
+    Run->>Bus: ConsumeInbound() → msg
+    Run->>Drain: spawn drainBusToSteering(ctx)
+    Run->>Run: processMessage(msg)
+
+    Note over Drain: running concurrently
+
+    Bus-->>Drain: ConsumeInbound() → newMsg
+    Drain->>AgentLoop: al.transcribeAudioInMessage(ctx, newMsg)
+    Drain->>AgentLoop: Steer(providers.Message{Content: newMsg.Content})
+
+    Run->>Run: processMessage returns
+    Run->>Drain: cancel context
+    Note over Drain: exits
 ```
 
 ## Data Structures
@@ -59,7 +91,7 @@ A thread-safe FIFO queue, private to the `agent` package.
 
 | Method | Description |
 |--------|-------------|
-| `push(msg)` | Appends a message to the queue |
+| `push(msg) error` | Appends a message to the queue. Returns an error if the queue is full (`MaxQueueSize`) |
 | `dequeue() []Message` | Removes and returns messages according to `mode`. Returns `nil` if empty |
 | `len() int` | Returns the current queue length |
 | `setMode(mode)` | Updates the dequeue strategy |
@@ -86,7 +118,7 @@ A new field was added to `processOptions`:
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `Steer` | `Steer(msg providers.Message)` | Enqueues a steering message. Thread-safe, can be called from any goroutine. |
+| `Steer` | `Steer(msg providers.Message) error` | Enqueues a steering message. Returns an error if the queue is full or not initialized. Thread-safe, can be called from any goroutine. |
 | `SteeringMode` | `SteeringMode() SteeringMode` | Returns the current dequeue mode. |
 | `SetSteeringMode` | `SetSteeringMode(mode SteeringMode)` | Changes the dequeue mode at runtime. |
 | `Continue` | `Continue(ctx, sessionKey, channel, chatID) (string, error)` | Resumes an idle agent using pending steering messages. Returns `""` if queue is empty. |
@@ -134,24 +166,18 @@ sequenceDiagram
     LLM-->>runLLMIteration: response with toolCalls[0..N]
 
     loop for each tool call (sequential)
-        alt i > 0
-            ToolExecution->>AgentLoop: dequeueSteeringMessages()
-            AgentLoop-->>ToolExecution: steeringMessages
-
-            alt steering found
-                Note over ToolExecution: Mark tool[i..N] as<br/>"Skipped due to queued user message."
-                ToolExecution-->>runLLMIteration: steeringAfterTools = steeringMessages
-                Note over ToolExecution: break out of tool loop
-            end
-        end
-
         ToolExecution->>ToolExecution: execute tool[i]
         ToolExecution->>ToolExecution: process result,<br/>append to messages[]
 
-        alt last tool (i == N-1)
-            ToolExecution->>AgentLoop: dequeueSteeringMessages()
-            AgentLoop-->>ToolExecution: steeringMessages (may be empty)
+        ToolExecution->>AgentLoop: dequeueSteeringMessages()
+        AgentLoop-->>ToolExecution: steeringMessages
+
+        alt steering found
+            opt remaining tools > 0
+                Note over ToolExecution: Mark tool[i+1..N-1] as<br/>"Skipped due to queued user message."
+            end
             Note over ToolExecution: steeringAfterTools = steeringMessages
+            Note over ToolExecution: break out of tool loop
         end
     end
 
@@ -168,12 +194,11 @@ sequenceDiagram
 | # | Location | When | Purpose |
 |---|----------|------|---------|
 | 1 | Top of `runLLMIteration`, before first LLM call | Once, at loop entry | Catch messages enqueued while the agent was still setting up context |
-| 2 | Between tool calls, before tool `[i]` where `i > 0` | After each tool finishes | Interrupt mid-batch if the user sent a steering message |
-| 3 | After the last tool in the batch | After tool `[N-1]` finishes | Catch messages that arrived during the last tool's execution |
+| 2 | After every tool completes (including the first and the last) | Immediately after each tool's result is processed | Interrupt the batch as early as possible — if steering is found and there are remaining tools, they are all skipped |
 
 ### What happens to skipped tools
 
-When steering interrupts a tool batch at index `i`, all tools from `i` to `N-1` are **not executed**. Instead, a tool result message is generated for each:
+When steering interrupts a tool batch after tool `[i]` completes, all tools from `[i+1]` to `[N-1]` are **not executed**. Instead, a tool result message is generated for each:
 
 ```json
 {
@@ -212,6 +237,27 @@ This allows **one extra iteration** when steering arrives right at the max itera
 **After steering:** tool calls execute **sequentially**. This is required because steering must be polled between individual tool completions. A parallel execution model would not allow interrupting mid-batch.
 
 > **Trade-off:** This introduces latency when the LLM requests multiple independent tools in a single turn. In practice, most batches contain 1-2 tools, so the impact is minimal. The benefit of being able to interrupt outweighs the cost.
+
+### Why skip remaining tools (instead of letting them finish)
+
+Two strategies were considered when a steering message is detected mid-batch:
+
+1. **Skip remaining tools** (chosen) — stop executing, mark the rest as skipped, inject steering
+2. **Finish all tools, then inject** — let everything run, append steering afterwards
+
+Strategy 2 was rejected for three reasons:
+
+**Irreversible side effects.** Tools can send emails, write files, spawn subagents, or call external APIs. If the user says "stop" or "change direction", those actions have already happened and cannot be undone.
+
+| Tool batch | Steering | Skip (1) | Finish (2) |
+|---|---|---|---|
+| `[search, send_email]` | "don't send it" | Email not sent | Email sent |
+| `[query, write_file, spawn]` | "wrong database" | Only query runs | File + subagent wasted |
+| `[fetch₁, fetch₂, fetch₃, write]` | topic change | 1 fetch | 3 fetches + write, all discarded |
+
+**Wasted latency.** Tools like web fetches and API calls take seconds each. In a 3-tool batch averaging 3-4s per tool, the user would wait 10+ seconds for work that gets thrown away.
+
+**The LLM retains full awareness.** Skipped tools receive an explicit `"Skipped due to queued user message."` result, so the model knows what was not done and can decide whether to re-execute with the new context or take a different path.
 
 ## The Continue() method
 
@@ -255,3 +301,6 @@ flowchart TD
 | Skipped tools get explicit error results | The LLM protocol requires a tool result for every tool call in the assistant message. Omitting them would cause API errors. The skip message also informs the model about what was not done. |
 | `Continue()` uses `SkipInitialSteeringPoll` | Prevents race conditions and double-dequeuing when resuming an idle agent. |
 | Queue stored on `AgentLoop`, not `AgentInstance` | Steering is a loop-level concern (it affects the iteration flow), not a per-agent concern. All agents share the same steering queue since `processMessage` is sequential. |
+| Bus drain goroutine in `Run()` | Channels (Telegram, Discord, etc.) publish to the bus via `PublishInbound`. Without the drain, messages would queue in the bus channel buffer and only be consumed after `processMessage` returns — defeating the purpose of steering. The drain goroutine bridges the gap by consuming new bus messages and calling `Steer()` while the agent is busy. |
+| Audio transcription before steering | The drain goroutine calls `al.transcribeAudioInMessage(ctx, msg)` before steering, so voice messages are converted to text before the agent sees them. If transcription fails, the error is silently discarded and the original message is steered as-is. |
+| `MaxQueueSize = 10` | Prevents unbounded memory growth if a user sends many messages while the agent is busy. Excess messages are dropped with a warning. |

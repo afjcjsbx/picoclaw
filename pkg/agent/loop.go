@@ -260,6 +260,13 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 				continue
 			}
 
+			// Start a goroutine that drains the bus while processMessage is
+			// running. Any inbound messages that arrive during processing are
+			// redirected into the steering queue so the agent loop can pick
+			// them up between tool calls.
+			drainCtx, drainCancel := context.WithCancel(ctx)
+			go al.drainBusToSteering(drainCtx)
+
 			// Process message
 			func() {
 				// TODO: Re-enable media cleanup after inbound media is properly consumed by the agent.
@@ -274,6 +281,8 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 				// 		}
 				// 	}
 				// }()
+
+				defer drainCancel()
 
 				response, err := al.processMessage(ctx, msg)
 				if err != nil {
@@ -319,6 +328,39 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// drainBusToSteering continuously consumes inbound messages and redirects
+// them into the steering queue. It runs in a goroutine while processMessage
+// is active and stops when drainCtx is canceled (i.e., processMessage returns).
+func (al *AgentLoop) drainBusToSteering(ctx context.Context) {
+	for {
+		msg, ok := al.bus.ConsumeInbound(ctx)
+		if !ok {
+			return
+		}
+
+		// Transcribe audio if needed before steering, so the agent sees text.
+		msg, _ = al.transcribeAudioInMessage(ctx, msg)
+
+		logger.InfoCF("agent", "Redirecting inbound message to steering queue",
+			map[string]any{
+				"channel":     msg.Channel,
+				"sender_id":   msg.SenderID,
+				"content_len": len(msg.Content),
+			})
+
+		if err := al.Steer(providers.Message{
+			Role:    "user",
+			Content: msg.Content,
+		}); err != nil {
+			logger.WarnCF("agent", "Failed to steer message, will be lost",
+				map[string]any{
+					"error":   err.Error(),
+					"channel": msg.Channel,
+				})
+		}
+	}
 }
 
 func (al *AgentLoop) Stop() {
@@ -1285,33 +1327,6 @@ func (al *AgentLoop) runLLMIteration(
 		var steeringAfterTools []providers.Message
 
 		for i, tc := range normalizedToolCalls {
-			// Check for steering before executing (except for the first tool)
-			if i > 0 {
-				if steerMsgs := al.dequeueSteeringMessages(); len(steerMsgs) > 0 {
-					steeringAfterTools = steerMsgs
-					logger.InfoCF("agent", "Steering interrupt: skipping remaining tools",
-						map[string]any{
-							"agent_id":       agent.ID,
-							"skipped_from":   i,
-							"total_tools":    len(normalizedToolCalls),
-							"steering_count": len(steerMsgs),
-						})
-
-					// Mark remaining tool calls as skipped
-					for j := i; j < len(normalizedToolCalls); j++ {
-						skippedTC := normalizedToolCalls[j]
-						toolResultMsg := providers.Message{
-							Role:       "tool",
-							Content:    "Skipped due to queued user message.",
-							ToolCallID: skippedTC.ID,
-						}
-						messages = append(messages, toolResultMsg)
-						agent.Sessions.AddFullMessage(opts.SessionKey, toolResultMsg)
-					}
-					break
-				}
-			}
-
 			argsJSON, _ := json.Marshal(tc.Arguments)
 			argsPreview := utils.Truncate(string(argsJSON), 200)
 			logger.InfoCF("agent", fmt.Sprintf("Tool call: %s(%s)", tc.Name, argsPreview),
@@ -1414,11 +1429,35 @@ func (al *AgentLoop) runLLMIteration(
 			messages = append(messages, toolResultMsg)
 			agent.Sessions.AddFullMessage(opts.SessionKey, toolResultMsg)
 
-			// After the last tool, also check for steering messages.
-			if i == len(normalizedToolCalls)-1 {
-				if steerMsgs := al.dequeueSteeringMessages(); len(steerMsgs) > 0 {
-					steeringAfterTools = steerMsgs
+			// After EVERY tool (including the first and last), check for
+			// steering messages. If found and there are remaining tools,
+			// skip them all.
+			if steerMsgs := al.dequeueSteeringMessages(); len(steerMsgs) > 0 {
+				remaining := len(normalizedToolCalls) - i - 1
+				if remaining > 0 {
+					logger.InfoCF("agent", "Steering interrupt: skipping remaining tools",
+						map[string]any{
+							"agent_id":       agent.ID,
+							"completed":      i + 1,
+							"skipped":        remaining,
+							"total_tools":    len(normalizedToolCalls),
+							"steering_count": len(steerMsgs),
+						})
+
+					// Mark remaining tool calls as skipped
+					for j := i + 1; j < len(normalizedToolCalls); j++ {
+						skippedTC := normalizedToolCalls[j]
+						toolResultMsg := providers.Message{
+							Role:       "tool",
+							Content:    "Skipped due to queued user message.",
+							ToolCallID: skippedTC.ID,
+						}
+						messages = append(messages, toolResultMsg)
+						agent.Sessions.AddFullMessage(opts.SessionKey, toolResultMsg)
+					}
 				}
+				steeringAfterTools = steerMsgs
+				break
 			}
 		}
 

@@ -49,13 +49,16 @@ The environment variable `PICOCLAW_AGENTS_DEFAULTS_STEERING_MODE` can be used as
 ### Steer — Send a steering message
 
 ```go
-agentLoop.Steer(providers.Message{
+err := agentLoop.Steer(providers.Message{
     Role:    "user",
     Content: "change direction, focus on X instead",
 })
+if err != nil {
+    // Queue is full (MaxQueueSize=10) or not initialized
+}
 ```
 
-The message is enqueued in a thread-safe manner. It will be picked up at the next polling point (after the current tool finishes).
+The message is enqueued in a thread-safe manner. Returns an error if the queue is full or not initialized. It will be picked up at the next polling point (after the current tool finishes).
 
 ### SteeringMode / SetSteeringMode
 
@@ -73,6 +76,9 @@ When the agent is idle (it has finished processing and its last message was from
 
 ```go
 response, err := agentLoop.Continue(ctx, sessionKey, channel, chatID)
+if err != nil {
+    // Error (e.g. "no default agent available")
+}
 if response == "" {
     // No steering messages in queue, the agent stays idle
 }
@@ -82,21 +88,48 @@ if response == "" {
 
 ## Polling points in the loop
 
-Steering is checked at **three points** in the agent cycle:
+Steering is checked at **two points** in the agent cycle:
 
 1. **At loop start** — before the first LLM call, to catch messages enqueued during setup
-2. **After each tool** — between tool calls within the same batch
-3. **After the last tool** — to catch messages that arrived while the last tool was executing
+2. **After every tool completes** — including the first and the last. If steering is found and there are remaining tools, they are all skipped immediately
 
-## Skipped tool behavior
+## Why remaining tools are skipped
 
-When steering interrupts a batch of tool calls, the tools that were not yet executed receive a `tool` result with:
+When a steering message is detected, all remaining tools in the batch are skipped rather than executed. The alternative — let all tools finish and inject the steering message afterwards — was considered and rejected. Here is why.
+
+### Preventing unwanted side effects
+
+Tools can have **irreversible side effects**. If the user says "no, wait" while the agent is mid-batch, executing the remaining tools means those side effects happen anyway:
+
+| Tool batch | Steering message | With skip | Without skip |
+|---|---|---|---|
+| `[web_search, send_email]` | "don't send it" | Email **not** sent | Email sent, damage done |
+| `[query_db, write_file, spawn_agent]` | "use another database" | Only the query runs | File written + subagent spawned, all wasted |
+| `[search₁, search₂, search₃, write_file]` | user changes topic entirely | 1 search | 3 searches + file write, all irrelevant |
+
+### Avoiding wasted time
+
+Tools that take seconds (web fetches, API calls, database queries) would all run to completion before the agent sees the user's correction. In a batch of 3 tools each taking 3-4 seconds, that's 10+ seconds of work that will be discarded.
+
+With skipping, the agent reacts as soon as the current tool finishes — typically within a few seconds instead of waiting for the entire batch.
+
+### The LLM gets full context
+
+Skipped tools receive an explicit error result (`"Skipped due to queued user message."`), so the model knows exactly which actions were not performed. It can then decide whether to re-execute them with the new context, or take a different path entirely.
+
+### Trade-off: sequential execution
+
+Skipping requires tools to run **sequentially** (the previous implementation ran them in parallel). This introduces latency when the LLM requests multiple independent tools in a single turn. In practice, most batches contain 1-2 tools, so the impact is minimal compared to the benefit of being able to stop unwanted actions.
+
+## Skipped tool result format
+
+When steering interrupts a batch, each tool that was not executed receives a `tool` result with:
 
 ```
 Content: "Skipped due to queued user message."
 ```
 
-This is saved to the session and sent to the model, so it is aware that some requested actions were not performed.
+This is saved to the session via `AddFullMessage` and sent to the model, so it is aware that some requested actions were not performed.
 
 ## Full flow example
 
@@ -117,8 +150,17 @@ This is saved to the session and sent to the model, so it is aware that some req
 7. LLM receives the full updated context and responds accordingly
 ```
 
+## Automatic bus drain
+
+When the agent loop (`Run()`) starts processing a message, it spawns a background goroutine that keeps consuming new inbound messages from the bus. These messages are automatically redirected into the steering queue via `Steer()`. This means:
+
+- Users on any channel (Telegram, Discord, etc.) don't need to do anything special — their messages are automatically captured as steering when the agent is busy
+- Audio messages are transcribed before being steered, so the agent receives text. If transcription fails, the original (non-transcribed) message is steered as-is
+- When `processMessage` finishes, the drain goroutine is canceled and normal message consumption resumes
+
 ## Notes
 
 - Steering **does not interrupt** a tool that is currently executing. It waits for the current tool to finish, then checks the queue.
 - With `one-at-a-time` mode, if multiple messages are enqueued rapidly, they will be processed one per iteration. This gives the model the opportunity to react to each message individually.
 - With `all` mode, all pending messages are combined into a single injection. Useful when you want the agent to receive all the context at once.
+- The steering queue has a maximum capacity of 10 messages (`MaxQueueSize`). `Steer()` returns an error when the queue is full. In the bus drain path, the error is logged as a warning and the message is effectively dropped.
