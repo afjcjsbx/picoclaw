@@ -202,8 +202,18 @@ func TestParseSteeringMode(t *testing.T) {
 // --- AgentLoop steering integration tests ---
 
 func TestAgentLoop_Steer_Enqueues(t *testing.T) {
-	al, _, _, _, cleanup := newTestAgentLoop(t)
+	al, cfg, msgBus, provider, cleanup := newTestAgentLoop(t)
 	defer cleanup()
+
+	if cfg == nil {
+		t.Fatal("expected config to be initialized")
+	}
+	if msgBus == nil {
+		t.Fatal("expected message bus to be initialized")
+	}
+	if provider == nil {
+		t.Fatal("expected provider to be initialized")
+	}
 
 	al.Steer(providers.Message{Role: "user", Content: "interrupt me"})
 
@@ -218,8 +228,18 @@ func TestAgentLoop_Steer_Enqueues(t *testing.T) {
 }
 
 func TestAgentLoop_SteeringMode_GetSet(t *testing.T) {
-	al, _, _, _, cleanup := newTestAgentLoop(t)
+	al, cfg, msgBus, provider, cleanup := newTestAgentLoop(t)
 	defer cleanup()
+
+	if cfg == nil {
+		t.Fatal("expected config to be initialized")
+	}
+	if msgBus == nil {
+		t.Fatal("expected message bus to be initialized")
+	}
+	if provider == nil {
+		t.Fatal("expected provider to be initialized")
+	}
 
 	if al.SteeringMode() != SteeringOneAtATime {
 		t.Fatalf("expected default mode one-at-a-time, got %v", al.SteeringMode())
@@ -260,8 +280,18 @@ func TestAgentLoop_SteeringMode_ConfiguredFromConfig(t *testing.T) {
 }
 
 func TestAgentLoop_Continue_NoMessages(t *testing.T) {
-	al, _, _, _, cleanup := newTestAgentLoop(t)
+	al, cfg, msgBus, provider, cleanup := newTestAgentLoop(t)
 	defer cleanup()
+
+	if cfg == nil {
+		t.Fatal("expected config to be initialized")
+	}
+	if msgBus == nil {
+		t.Fatal("expected message bus to be initialized")
+	}
+	if provider == nil {
+		t.Fatal("expected provider to be initialized")
+	}
 
 	resp, err := al.Continue(context.Background(), "test-session", "test", "chat1")
 	if err != nil {
