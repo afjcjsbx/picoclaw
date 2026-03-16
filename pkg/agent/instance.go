@@ -14,6 +14,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/routing"
 	"github.com/sipeed/picoclaw/pkg/session"
+	"github.com/sipeed/picoclaw/pkg/session/tree"
 	"github.com/sipeed/picoclaw/pkg/tools"
 )
 
@@ -291,10 +292,26 @@ func (a *AgentInstance) Close() error {
 }
 
 // initSessionStore creates the session persistence backend.
-// It uses the JSONL store by default and auto-migrates legacy JSON sessions.
-// Falls back to SessionManager if the JSONL store cannot be initialized or
-// if migration fails (which indicates the store cannot write reliably).
+// It uses the tree-based JSONL store by default, which provides tree-structured
+// sessions with branching, compaction, labels, and custom entries (inspired by pi-mono).
+// Legacy flat sessions (JSON and JSONL) are auto-migrated to the tree format.
+// Falls back to the legacy SessionManager if tree init or migration fails.
 func initSessionStore(dir string) session.SessionStore {
+	treeDir := filepath.Join(dir, "tree")
+
+	// Auto-migrate legacy sessions to tree format
+	if n, merr := tree.MigrateFromLinear(context.Background(), dir, treeDir); merr != nil {
+		log.Printf("session: tree migration failed: %v; falling back to legacy store", merr)
+		return initLegacyStore(dir)
+	} else if n > 0 {
+		log.Printf("session: migrated %d session(s) to tree format", n)
+	}
+
+	return tree.NewAdapter(treeDir)
+}
+
+// initLegacyStore creates a legacy flat session store as fallback.
+func initLegacyStore(dir string) session.SessionStore {
 	store, err := memory.NewJSONLStore(dir)
 	if err != nil {
 		log.Printf("memory: init store: %v; using json sessions", err)
@@ -302,9 +319,6 @@ func initSessionStore(dir string) session.SessionStore {
 	}
 
 	if n, merr := memory.MigrateFromJSON(context.Background(), dir, store); merr != nil {
-		// Migration failure means the store could not write data.
-		// Fall back to SessionManager to avoid a split state where
-		// some sessions are in JSONL and others remain in JSON.
 		log.Printf("memory: migration failed: %v; falling back to json sessions", merr)
 		store.Close()
 		return session.NewSessionManager(dir)

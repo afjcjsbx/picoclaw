@@ -1,0 +1,426 @@
+# Tree Session Format Specification
+
+Version: **3** (current)
+
+---
+
+## 1. File format
+
+Session files use the [JSON Lines](https://jsonlines.org/) format (`.jsonl`). Each line is a self-contained JSON object terminated by `\n`.
+
+```
+<SessionHeader>\n
+<SessionEntry>\n
+<SessionEntry>\n
+...
+```
+
+The file is **append-only** during normal operation. Full rewrites occur only during version migration or `CreateBranchedSession`.
+
+### File location
+
+```
+<sessionDir>/<sanitized_key>/<timestamp>_<uuid>.jsonl
+```
+
+Where:
+- `<sessionDir>` is the configured session directory (default: `~/.picoclaw/workspace/sessions/tree/`)
+- `<sanitized_key>` is the session key with `:`, `/`, `\` replaced by `_`
+- `<timestamp>` is ISO 8601 with `:` and `.` replaced by `-`
+- `<uuid>` is a v4 UUID
+
+---
+
+## 2. SessionHeader
+
+The first line of every session file. **Not** a tree entry (no `id`/`parentId`).
+
+```typescript
+{
+  "type": "session",          // always "session"
+  "version": 3,               // format version (integer)
+  "id": "<uuid>",             // session UUID (v4)
+  "timestamp": "<iso8601>",   // creation time
+  "cwd": "<path>",            // working directory at creation
+  "parentSession": "<path>"   // optional: path to parent session file
+}
+```
+
+### Fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"session"` | yes | Discriminator |
+| `version` | int | yes | Format version. Current: `3`. v1 sessions may omit this field. |
+| `id` | string | yes | UUID v4 |
+| `timestamp` | string | yes | ISO 8601 (RFC 3339 Nano) |
+| `cwd` | string | yes | Absolute path to working directory |
+| `parentSession` | string | no | Absolute path to parent session file (for forked/branched sessions) |
+
+---
+
+## 3. SessionEntryBase
+
+All entries (except the header) share these fields:
+
+```typescript
+{
+  "type": "<entry_type>",
+  "id": "<hex8>",              // 8 hex characters, unique within file
+  "parentId": "<hex8>" | null, // null for root entries
+  "timestamp": "<iso8601>"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | string | yes | One of the entry types below |
+| `id` | string | yes | 8 hex chars (`[0-9a-f]{8}`), cryptographically random |
+| `parentId` | string\|null | yes | Parent entry ID, or `null` for root entries |
+| `timestamp` | string | yes | ISO 8601 (RFC 3339 Nano) |
+
+---
+
+## 4. Entry types
+
+### 4.1 `message`
+
+Conversation message.
+
+```json
+{
+  "type": "message",
+  "id": "a1b2c3d4",
+  "parentId": "prev1234",
+  "timestamp": "2026-03-14T10:00:01.000000000Z",
+  "message": {
+    "role": "user",
+    "content": "Hello, how are you?"
+  }
+}
+```
+
+The `message` field is an `AgentMessage`:
+
+```typescript
+{
+  "role": string,                    // "user" | "assistant" | "tool" | "system" | "custom" | "branchSummary" | "compactionSummary"
+  "content": string,                 // message text
+  "provider": string,                // LLM provider (assistant messages)
+  "model": string,                   // model ID (assistant messages)
+  "tool_calls": ToolCall[],          // tool calls (assistant messages)
+  "tool_call_id": string,            // tool result reference (tool messages)
+  "toolName": string,                // tool name (tool messages)
+  "isError": boolean,                // whether tool result is an error
+  "media": string[],                 // media:// refs
+  "timestamp": number                // Unix milliseconds
+}
+```
+
+### 4.2 `thinking_level_change`
+
+```json
+{
+  "type": "thinking_level_change",
+  "id": "...",
+  "parentId": "...",
+  "timestamp": "...",
+  "thinkingLevel": "high"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `thinkingLevel` | string | New thinking level (e.g. `"off"`, `"low"`, `"medium"`, `"high"`) |
+
+### 4.3 `model_change`
+
+```json
+{
+  "type": "model_change",
+  "id": "...",
+  "parentId": "...",
+  "timestamp": "...",
+  "provider": "anthropic",
+  "modelId": "claude-sonnet-4-5"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `provider` | string | LLM provider identifier |
+| `modelId` | string | Model identifier |
+
+### 4.4 `compaction`
+
+Context compaction marker. When present on the leaf-to-root path, `BuildSessionContext` uses the summary instead of messages before `firstKeptEntryId`.
+
+```json
+{
+  "type": "compaction",
+  "id": "...",
+  "parentId": "...",
+  "timestamp": "...",
+  "summary": "User discussed X, Y, Z. Assistant implemented feature A.",
+  "firstKeptEntryId": "c3d4e5f6",
+  "tokensBefore": 50000,
+  "details": {"readFiles": ["main.go"]},
+  "fromHook": false
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `summary` | string | yes | Text summary of compacted context |
+| `firstKeptEntryId` | string | yes | ID of the first entry retained after compaction |
+| `tokensBefore` | int | yes | Token count before compaction |
+| `details` | JSON | no | Extension-specific metadata |
+| `fromHook` | bool | no | `true` if generated by an extension |
+
+### 4.5 `branch_summary`
+
+Summary of an abandoned conversation branch. Created by `BranchWithSummary()`.
+
+```json
+{
+  "type": "branch_summary",
+  "id": "...",
+  "parentId": "a1b2c3d4",
+  "timestamp": "...",
+  "fromId": "a1b2c3d4",
+  "summary": "Previous branch explored approach A using library X...",
+  "details": {"readFiles": ["pkg/foo.go"]},
+  "fromHook": false
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `fromId` | string | yes | Entry ID where the branch was created (or `"root"`) |
+| `summary` | string | yes | Summary of the abandoned branch |
+| `details` | JSON | no | Extension-specific metadata |
+| `fromHook` | bool | no | `true` if generated by an extension |
+
+### 4.6 `custom`
+
+Extension-specific data. Does **not** participate in LLM context.
+
+```json
+{
+  "type": "custom",
+  "id": "...",
+  "parentId": "...",
+  "timestamp": "...",
+  "customType": "my-extension",
+  "data": {"count": 42, "state": "ready"}
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `customType` | string | yes | Extension identifier |
+| `data` | JSON | no | Extension-specific payload |
+
+### 4.7 `custom_message`
+
+Extension-injected message that **does** participate in LLM context. Converted to a user-role message by `BuildSessionContext`.
+
+```json
+{
+  "type": "custom_message",
+  "id": "...",
+  "parentId": "...",
+  "timestamp": "...",
+  "customType": "my-extension",
+  "content": "Additional context injected by extension...",
+  "display": true,
+  "details": {"source": "web-search"}
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `customType` | string | yes | Extension identifier |
+| `content` | string | yes | Message content sent to LLM |
+| `display` | bool | yes | `true` = show in UI with distinct styling, `false` = hidden |
+| `details` | JSON | no | Extension metadata (not sent to LLM) |
+
+### 4.8 `label`
+
+User-defined bookmark/marker on another entry.
+
+```json
+{
+  "type": "label",
+  "id": "...",
+  "parentId": "...",
+  "timestamp": "...",
+  "targetId": "a1b2c3d4",
+  "label": "checkpoint-1"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `targetId` | string | yes | ID of the entry being labeled |
+| `label` | string\|null | yes | Label text, or `null`/`""` to clear |
+
+Labels are resolved at load time into a `labelsById` map. The latest label entry for a target wins.
+
+### 4.9 `session_info`
+
+Session metadata.
+
+```json
+{
+  "type": "session_info",
+  "id": "...",
+  "parentId": "...",
+  "timestamp": "...",
+  "name": "Refactor auth module"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | no | Display name for the session |
+
+The latest `session_info` entry with a non-empty `name` is used by `GetSessionName()`.
+
+---
+
+## 5. Tree structure
+
+Entries form a directed tree via `parentId` references:
+- The first entry has `parentId: null` (root)
+- Each subsequent entry points to its parent
+- Branching creates multiple children from the same parent
+- The "leaf" is the current position, tracked in memory (not persisted)
+
+```
+[SessionHeader]          <- first line, not an entry
+[entry parentId=null]    <- root
+[entry parentId=root]    <- linear continuation
+[entry parentId=root]    <- branch (second child of root)
+[entry parentId=branch]  <- continuation of branch
+```
+
+### Leaf tracking
+
+The leaf pointer is not persisted. On load, it defaults to the last entry in the file. When branching, it is updated in memory.
+
+### Orphan handling
+
+If an entry's `parentId` references a non-existent ID, the entry is treated as a root.
+
+---
+
+## 6. Context building algorithm
+
+`BuildSessionContext(entries, leafId, byId)`:
+
+1. **Find the leaf.** If `leafId` is nil, return empty context. If the referenced entry doesn't exist, fall back to the last entry.
+
+2. **Walk from leaf to root** following `parentId` links. Collect the path.
+
+3. **Extract settings** from the path:
+   - `thinkingLevel`: latest `thinking_level_change` entry
+   - `model`: latest `model_change` entry, or latest assistant message with provider info
+
+4. **Find the latest compaction** entry on the path.
+
+5. **Build message list:**
+
+   **Without compaction:**
+   - Emit all `message`, `custom_message`, and `branch_summary` entries in path order
+
+   **With compaction:**
+   - Emit `CompactionSummaryMessage` (role: `"compactionSummary"`)
+   - Emit messages from `firstKeptEntryId` up to the compaction entry
+   - Emit messages after the compaction entry
+
+6. **Return** `SessionContext{Messages, ThinkingLevel, Model}`.
+
+### Entry-to-message mapping
+
+| Entry type | Emitted as | LLM context? |
+|------------|-----------|--------------|
+| `message` | `AgentMessage` (as-is) | yes |
+| `custom_message` | `AgentMessage{role: "custom", ...}` | yes |
+| `branch_summary` | `AgentMessage{role: "branchSummary", ...}` | yes |
+| `compaction` | `AgentMessage{role: "compactionSummary", ...}` | yes (summary only) |
+| `thinking_level_change` | (settings only) | no |
+| `model_change` | (settings only) | no |
+| `custom` | (ignored) | no |
+| `label` | (ignored) | no |
+| `session_info` | (ignored) | no |
+
+---
+
+## 7. Version history
+
+| Version | Changes |
+|---------|---------|
+| 1 | Original flat format. No `id`/`parentId`. No `version` field in header. |
+| 2 | Added `id`/`parentId` tree structure. Added `version` field to header. |
+| 3 | Renamed `hookMessage` role to `custom`. Current version. |
+
+### Migration rules
+
+- v1 -> v2: assign sequential IDs, chain entries linearly via `parentId`. Convert `firstKeptEntryIndex` (integer) to `firstKeptEntryId` (string) in compaction entries.
+- v2 -> v3: rename `hookMessage` role to `custom` in message entries.
+
+Migrations are applied automatically on file load and trigger a full file rewrite.
+
+---
+
+## 8. Persistence guarantees
+
+| Operation | Guarantee |
+|-----------|-----------|
+| Append entry | Append + `fsync` on every write |
+| Lazy creation | File not created until first assistant message |
+| Crash during append | Partial last line silently skipped on next load |
+| Version migration | Full rewrite (atomic within single write + fsync) |
+| `CreateBranchedSession` | New file written atomically |
+
+---
+
+## 9. Adapter behavior
+
+The `Adapter` maps `session.SessionStore` methods to tree operations:
+
+| SessionStore method | Tree operation |
+|---------------------|----------------|
+| `AddMessage(key, role, content)` | `AppendMessage(AgentMessage{...})` |
+| `AddFullMessage(key, msg)` | `AppendProviderMessage(msg)` |
+| `GetHistory(key)` | `BuildSessionContext()` -> convert to `[]providers.Message` |
+| `GetSummary(key)` | Find latest `compaction` entry, return its summary |
+| `SetSummary(key, summary)` | `AppendCompaction(summary, leafId, 0, nil, false)` |
+| `SetHistory(key, history)` | Create new session, append all messages linearly |
+| `TruncateHistory(key, keepLast)` | `AppendCompaction(...)` with `firstKeptEntryId` |
+| `Save(key)` | No-op (tree sessions auto-persist) |
+| `Close()` | Release all managers |
+
+### GetHistory conversion
+
+`BuildSessionContext` returns `AgentMessage` values with extended roles. The adapter converts these to `providers.Message`:
+
+| AgentMessage role | providers.Message |
+|-------------------|-------------------|
+| `user`, `assistant`, `tool`, `system` | Passed through |
+| `compactionSummary` | `{role: "user", content: "CONTEXT_SUMMARY: ..."}` |
+| `branchSummary` | `{role: "user", content: "BRANCH_CONTEXT: ..."}` |
+| `custom` | `{role: "user", content: <content>}` |
+| Other roles | Dropped |
+
+---
+
+## 10. Limits
+
+| Limit | Value | Source |
+|-------|-------|--------|
+| Max JSON line size | 10 MB | `maxLineSize` constant |
+| Entry ID length | 8 hex chars (4 bytes) | `generateID()` |
+| Scanner initial buffer | 64 KB | `bufio.NewScanner` allocation |
+| Lock shards (adapter) | Per-key (one `SessionManager` per key) | `Adapter.getOrCreate()` |
