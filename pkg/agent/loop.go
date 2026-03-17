@@ -58,6 +58,8 @@ type processOptions struct {
 	SessionKey              string   // Session identifier for history/context
 	Channel                 string   // Target channel for tool execution
 	ChatID                  string   // Target chat ID for tool execution
+	SenderID                string   // Current sender ID for dynamic context
+	SenderDisplayName       string   // Current sender display name for dynamic contextUserMessage
 	UserMessage             string   // User message content (may include prefix)
 	Media                   []string // media:// refs from inbound message
 	DefaultResponse         string   // Response when LLM returns empty
@@ -119,6 +121,8 @@ func registerSharedTools(
 	registry *AgentRegistry,
 	provider providers.LLMProvider,
 ) {
+	allowReadPaths := buildAllowReadPatterns(cfg)
+
 	for _, agentID := range registry.ListAgentIDs() {
 		agent, ok := registry.GetAgent(agentID)
 		if !ok {
@@ -159,7 +163,12 @@ func registerSharedTools(
 			}
 		}
 		if cfg.Tools.IsToolEnabled("web_fetch") {
-			fetchTool, err := tools.NewWebFetchToolWithProxy(50000, cfg.Tools.Web.Proxy, cfg.Tools.Web.FetchLimitBytes)
+			fetchTool, err := tools.NewWebFetchToolWithConfig(
+				50000,
+				cfg.Tools.Web.Proxy,
+				cfg.Tools.Web.FetchLimitBytes,
+				cfg.Tools.Web.PrivateHostWhitelist,
+			)
 			if err != nil {
 				logger.ErrorCF("agent", "Failed to create web fetch tool", map[string]any{"error": err.Error()})
 			} else {
@@ -197,6 +206,7 @@ func registerSharedTools(
 				cfg.Agents.Defaults.RestrictToWorkspace,
 				cfg.Agents.Defaults.GetMaxMediaSize(),
 				nil,
+				allowReadPaths,
 			)
 			agent.Tools.Register(sendFileTool)
 		}
@@ -224,20 +234,26 @@ func registerSharedTools(
 			}
 		}
 
-		// Spawn tool with allowlist checker
-		if cfg.Tools.IsToolEnabled("spawn") {
-			if cfg.Tools.IsToolEnabled("subagent") {
-				subagentManager := tools.NewSubagentManager(provider, agent.Model, agent.Workspace)
-				subagentManager.SetLLMOptions(agent.MaxTokens, agent.Temperature)
+		// Spawn and spawn_status tools share a SubagentManager.
+		// Construct it when either tool is enabled (both require subagent).
+		spawnEnabled := cfg.Tools.IsToolEnabled("spawn")
+		spawnStatusEnabled := cfg.Tools.IsToolEnabled("spawn_status")
+		if (spawnEnabled || spawnStatusEnabled) && cfg.Tools.IsToolEnabled("subagent") {
+			subagentManager := tools.NewSubagentManager(provider, agent.Model, agent.Workspace)
+			subagentManager.SetLLMOptions(agent.MaxTokens, agent.Temperature)
+			if spawnEnabled {
 				spawnTool := tools.NewSpawnTool(subagentManager)
 				currentAgentID := agentID
 				spawnTool.SetAllowlistChecker(func(targetAgentID string) bool {
 					return registry.CanSpawnSubagent(currentAgentID, targetAgentID)
 				})
 				agent.Tools.Register(spawnTool)
-			} else {
-				logger.WarnCF("agent", "spawn tool requires subagent to be enabled", nil)
 			}
+			if spawnStatusEnabled {
+				agent.Tools.Register(tools.NewSpawnStatusTool(subagentManager))
+			}
+		} else if (spawnEnabled || spawnStatusEnabled) && !cfg.Tools.IsToolEnabled("subagent") {
+			logger.WarnCF("agent", "spawn/spawn_status tools require subagent to be enabled", nil)
 		}
 	}
 }
@@ -253,10 +269,9 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return nil
-		default:
-			msg, ok := al.bus.ConsumeInbound(ctx)
+		case msg, ok := <-al.bus.InboundChan():
 			if !ok {
-				continue
+				return nil
 			}
 
 			// Start a goroutine that drains the bus while processMessage is
@@ -323,6 +338,8 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 					}
 				}
 			}()
+		default:
+			time.Sleep(time.Microsecond * 200)
 		}
 	}
 
@@ -334,8 +351,15 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 // is active and stops when drainCtx is canceled (i.e., processMessage returns).
 func (al *AgentLoop) drainBusToSteering(ctx context.Context) {
 	for {
-		msg, ok := al.bus.ConsumeInbound(ctx)
-		if !ok {
+		var msg bus.InboundMessage
+		var ok bool
+		select {
+		case msg, ok = <-al.bus.InboundChan():
+			// got message
+			if !ok {
+				return
+			}
+		case <-ctx.Done():
 			return
 		}
 
@@ -776,14 +800,16 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		})
 
 	opts := processOptions{
-		SessionKey:      sessionKey,
-		Channel:         msg.Channel,
-		ChatID:          msg.ChatID,
-		UserMessage:     msg.Content,
-		Media:           msg.Media,
-		DefaultResponse: defaultResponse,
-		EnableSummary:   true,
-		SendResponse:    false,
+		SessionKey:        sessionKey,
+		Channel:           msg.Channel,
+		ChatID:            msg.ChatID,
+		SenderID:          msg.SenderID,
+		SenderDisplayName: msg.Sender.DisplayName,
+		UserMessage:       msg.Content,
+		Media:             msg.Media,
+		DefaultResponse:   defaultResponse,
+		EnableSummary:     true,
+		SendResponse:      false,
 	}
 
 	// context-dependent commands check their own Runtime fields and report
@@ -923,6 +949,8 @@ func (al *AgentLoop) runAgentLoop(
 		opts.Media,
 		opts.Channel,
 		opts.ChatID,
+		opts.SenderID,
+		opts.SenderDisplayName,
 	)
 
 	// Resolve media:// refs: images→base64 data URLs, non-images→local paths in content
@@ -942,7 +970,7 @@ func (al *AgentLoop) runAgentLoop(
 			newSummary := agent.Sessions.GetSummary(opts.SessionKey)
 			messages = agent.ContextBuilder.BuildMessages(
 				newHistory, newSummary, opts.UserMessage,
-				opts.Media, opts.Channel, opts.ChatID,
+				opts.Media, opts.Channel, opts.ChatID, opts.SenderID, opts.SenderDisplayName,
 			)
 			messages = resolveMediaRefs(messages, al.mediaStore, maxMediaSize)
 		}
@@ -1238,7 +1266,7 @@ func (al *AgentLoop) runLLMIteration(
 				newSummary := agent.Sessions.GetSummary(opts.SessionKey)
 				messages = agent.ContextBuilder.BuildMessages(
 					newHistory, newSummary, "",
-					nil, opts.Channel, opts.ChatID,
+					nil, opts.Channel, opts.ChatID, opts.SenderID, opts.SenderDisplayName,
 				)
 				continue
 			}

@@ -26,7 +26,9 @@
 
 ---
 
-🦐 PicoClaw は [nanobot](https://github.com/HKUDS/nanobot) にインスパイアされた超軽量パーソナル AI アシスタントです。Go でゼロからリファクタリングされ、AI エージェント自身がアーキテクチャの移行とコード最適化を推進するセルフブートストラッピングプロセスで構築されました。
+> **PicoClaw** は [Sipeed](https://sipeed.com) が立ち上げた独立したオープンソースプロジェクトです。完全に **Go 言語**で一から書かれており、OpenClaw、NanoBot、その他のプロジェクトのフォークではありません。
+
+🦐 PicoClaw は [NanoBot](https://github.com/HKUDS/nanobot) にインスパイアされた超軽量パーソナル AI アシスタントです。Go でゼロからリファクタリングされ、AI エージェント自身がアーキテクチャの移行とコード最適化を推進するセルフブートストラッピングプロセスで構築されました。
 
 ⚡️ $10 のハードウェアで 10MB 未満の RAM で動作：OpenClaw より 99% 少ないメモリ、Mac mini より 98% 安い！
 
@@ -935,6 +937,7 @@ HEARTBEAT_OK 応答         ユーザーが直接結果を受け取る
 | **BytePlus**        | `byteplus/`       | `https://ark.ap-southeast.bytepluses.com/api/v3`    | OpenAI    | [キーを取得](https://www.byteplus.com)                     |
 | **LongCat**         | `longcat/`        | `https://api.longcat.chat/openai`                   | OpenAI    | [キーを取得](https://longcat.chat/platform)                      |
 | **ModelScope (魔搭)**| `modelscope/`    | `https://api-inference.modelscope.cn/v1`            | OpenAI    | [トークンを取得](https://modelscope.cn/my/tokens)                 |
+| **Azure OpenAI**    | `azure/`          | `https://{resource}.openai.azure.com`               | Azure     | [キーを取得](https://portal.azure.com)                            |
 | **Antigravity** | `antigravity/` | Google Cloud | カスタム | OAuthのみ |
 | **GitHub Copilot** | `github-copilot/` | `localhost:4321` | gRPC | - |
 
