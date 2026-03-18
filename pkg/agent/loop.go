@@ -1317,28 +1317,28 @@ func (al *AgentLoop) runLLMIteration(
 					})
 
 				// notify tool use on channel
-			if al.cfg.Tools.EnableNotifications && !constants.IsInternalChannel(opts.Channel) {
-				var notification string
+				if al.cfg.Tools.EnableNotifications && !constants.IsInternalChannel(opts.Channel) {
+					var notification string
 
-				if tool, ok := agent.Tools.Get(tc.Name); ok {
-					// check the tool implements the interface
-					if notifier, isNotifier := tool.(tools.NotificationFormatter); isNotifier {
-						notification = notifier.FormatNotification(tc.Arguments)
-					} else if tc.Name != "message" {
-						notification = fmt.Sprintf("🛠️ Tool use: `%s`", tc.Name)
+					if tool, ok := agent.Tools.Get(tc.Name); ok {
+						// check the tool implements the interface
+						if notifier, isNotifier := tool.(tools.NotificationFormatter); isNotifier {
+							notification = notifier.FormatNotification(tc.Arguments)
+						} else if tc.Name != "message" {
+							notification = fmt.Sprintf("🛠️ Tool use: `%s`", tc.Name)
+						}
+					}
+
+					if notification != "" {
+						al.bus.PublishOutbound(ctx, bus.OutboundMessage{
+							Channel: opts.Channel,
+							ChatID:  opts.ChatID,
+							Content: notification,
+						})
 					}
 				}
 
-				if notification != "" {
-					al.bus.PublishOutbound(bus.OutboundMessage{
-						Channel: opts.Channel,
-						ChatID:  opts.ChatID,
-						Content: notification,
-					})
-				}
-			}
-
-			// Create async callback for tools that implement AsyncExecutor.
+				// Create async callback for tools that implement AsyncExecutor.
 				// When the background work completes, this publishes the result
 				// as an inbound system message so processSystemMessage routes it
 				// back to the user via the normal agent loop.
