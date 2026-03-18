@@ -82,7 +82,7 @@ func TestSingleSystemMessage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			msgs := cb.BuildMessages(tt.history, tt.summary, tt.message, nil, "test", "chat1")
+			msgs := cb.BuildMessages(tt.history, tt.summary, tt.message, nil, "test", "chat1", "", "")
 
 			systemCount := 0
 			for _, m := range msgs {
@@ -121,6 +121,68 @@ func TestSingleSystemMessage(t *testing.T) {
 				if strings.Contains(sys, "CONTEXT_SUMMARY:") {
 					t.Error("CONTEXT_SUMMARY should not appear without summary")
 				}
+			}
+		})
+	}
+}
+
+func TestBuildMessages_CurrentSenderDynamicContext(t *testing.T) {
+	tmpDir := setupWorkspace(t, map[string]string{
+		"IDENTITY.md": "# Identity\nTest agent.",
+	})
+	defer os.RemoveAll(tmpDir)
+
+	cb := NewContextBuilder(tmpDir)
+
+	tests := []struct {
+		name              string
+		senderID          string
+		senderDisplayName string
+		wantLine          string
+		wantSection       bool
+	}{
+		{
+			name:              "both id and display name",
+			senderID:          "feishu:ou_xxx",
+			senderDisplayName: "Zhang San",
+			wantLine:          "Current sender: Zhang San (ID: feishu:ou_xxx)",
+			wantSection:       true,
+		},
+		{
+			name:              "display name only",
+			senderDisplayName: "Alice",
+			wantLine:          "Current sender: Alice",
+			wantSection:       true,
+		},
+		{
+			name:        "id only",
+			senderID:    "discord:123",
+			wantLine:    "Current sender: discord:123",
+			wantSection: true,
+		},
+		{
+			name:        "no sender info",
+			wantSection: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msgs := cb.BuildMessages(nil, "", "hello", nil, "discord", "chat1", tt.senderID, tt.senderDisplayName)
+			sys := msgs[0].Content
+
+			if tt.wantSection {
+				if !strings.Contains(sys, "## Current Sender") {
+					t.Fatalf("system prompt missing Current Sender section:\n%s", sys)
+				}
+				if !strings.Contains(sys, tt.wantLine) {
+					t.Fatalf("system prompt missing sender line %q:\n%s", tt.wantLine, sys)
+				}
+				return
+			}
+
+			if strings.Contains(sys, "## Current Sender") {
+				t.Fatalf("system prompt should omit Current Sender section:\n%s", sys)
 			}
 		})
 	}
@@ -383,6 +445,162 @@ Updated content.`
 	}
 }
 
+// TestGlobalSkillFileContentChange verifies that modifying a global skill
+// (~/.picoclaw/skills) invalidates the cached system prompt.
+func TestGlobalSkillFileContentChange(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	tmpDir := setupWorkspace(t, nil)
+	defer os.RemoveAll(tmpDir)
+
+	globalSkillPath := filepath.Join(tmpHome, ".picoclaw", "skills", "global-skill", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(globalSkillPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	v1 := `---
+name: global-skill
+description: global-v1
+---
+# Global Skill v1`
+	if err := os.WriteFile(globalSkillPath, []byte(v1), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cb := NewContextBuilder(tmpDir)
+	sp1 := cb.BuildSystemPromptWithCache()
+	if !strings.Contains(sp1, "global-v1") {
+		t.Fatal("expected initial prompt to contain global skill description")
+	}
+
+	v2 := `---
+name: global-skill
+description: global-v2
+---
+# Global Skill v2`
+	if err := os.WriteFile(globalSkillPath, []byte(v2), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(globalSkillPath, future, future); err != nil {
+		t.Fatalf("failed to update mtime for %s: %v", globalSkillPath, err)
+	}
+
+	cb.systemPromptMutex.RLock()
+	changed := cb.sourceFilesChangedLocked()
+	cb.systemPromptMutex.RUnlock()
+	if !changed {
+		t.Fatal("sourceFilesChangedLocked() should detect global skill file content change")
+	}
+
+	sp2 := cb.BuildSystemPromptWithCache()
+	if !strings.Contains(sp2, "global-v2") {
+		t.Error("rebuilt prompt should contain updated global skill description")
+	}
+	if sp1 == sp2 {
+		t.Error("cache should be invalidated when global skill file content changes")
+	}
+}
+
+// TestBuiltinSkillFileContentChange verifies that modifying a builtin skill
+// invalidates the cached system prompt.
+func TestBuiltinSkillFileContentChange(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	tmpDir := setupWorkspace(t, nil)
+	defer os.RemoveAll(tmpDir)
+
+	builtinRoot := t.TempDir()
+	t.Setenv("PICOCLAW_BUILTIN_SKILLS", builtinRoot)
+
+	builtinSkillPath := filepath.Join(builtinRoot, "builtin-skill", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(builtinSkillPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	v1 := `---
+name: builtin-skill
+description: builtin-v1
+---
+# Builtin Skill v1`
+	if err := os.WriteFile(builtinSkillPath, []byte(v1), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cb := NewContextBuilder(tmpDir)
+	sp1 := cb.BuildSystemPromptWithCache()
+	if !strings.Contains(sp1, "builtin-v1") {
+		t.Fatal("expected initial prompt to contain builtin skill description")
+	}
+
+	v2 := `---
+name: builtin-skill
+description: builtin-v2
+---
+# Builtin Skill v2`
+	if err := os.WriteFile(builtinSkillPath, []byte(v2), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(builtinSkillPath, future, future); err != nil {
+		t.Fatalf("failed to update mtime for %s: %v", builtinSkillPath, err)
+	}
+
+	cb.systemPromptMutex.RLock()
+	changed := cb.sourceFilesChangedLocked()
+	cb.systemPromptMutex.RUnlock()
+	if !changed {
+		t.Fatal("sourceFilesChangedLocked() should detect builtin skill file content change")
+	}
+
+	sp2 := cb.BuildSystemPromptWithCache()
+	if !strings.Contains(sp2, "builtin-v2") {
+		t.Error("rebuilt prompt should contain updated builtin skill description")
+	}
+	if sp1 == sp2 {
+		t.Error("cache should be invalidated when builtin skill file content changes")
+	}
+}
+
+// TestSkillFileDeletionInvalidatesCache verifies that deleting a nested skill
+// file invalidates the cached system prompt.
+func TestSkillFileDeletionInvalidatesCache(t *testing.T) {
+	tmpDir := setupWorkspace(t, map[string]string{
+		"skills/delete-me/SKILL.md": `---
+name: delete-me
+description: delete-me-v1
+---
+# Delete Me`,
+	})
+	defer os.RemoveAll(tmpDir)
+
+	cb := NewContextBuilder(tmpDir)
+	sp1 := cb.BuildSystemPromptWithCache()
+	if !strings.Contains(sp1, "delete-me-v1") {
+		t.Fatal("expected initial prompt to contain skill description")
+	}
+
+	skillPath := filepath.Join(tmpDir, "skills", "delete-me", "SKILL.md")
+	if err := os.Remove(skillPath); err != nil {
+		t.Fatal(err)
+	}
+
+	cb.systemPromptMutex.RLock()
+	changed := cb.sourceFilesChangedLocked()
+	cb.systemPromptMutex.RUnlock()
+	if !changed {
+		t.Fatal("sourceFilesChangedLocked() should detect deleted skill file")
+	}
+
+	sp2 := cb.BuildSystemPromptWithCache()
+	if strings.Contains(sp2, "delete-me-v1") {
+		t.Error("rebuilt prompt should not contain deleted skill description")
+	}
+	if sp1 == sp2 {
+		t.Error("cache should be invalidated when skill file is deleted")
+	}
+}
+
 // TestConcurrentBuildSystemPromptWithCache verifies that multiple goroutines
 // can safely call BuildSystemPromptWithCache concurrently without producing
 // empty results, panics, or data races.
@@ -404,11 +622,11 @@ func TestConcurrentBuildSystemPromptWithCache(t *testing.T) {
 	var wg sync.WaitGroup
 	errs := make(chan string, goroutines*iterations)
 
-	for g := 0; g < goroutines; g++ {
+	for g := range goroutines {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			for i := 0; i < iterations; i++ {
+			for i := range iterations {
 				result := cb.BuildSystemPromptWithCache()
 				if result == "" {
 					errs <- "empty prompt returned"
@@ -420,7 +638,7 @@ func TestConcurrentBuildSystemPromptWithCache(t *testing.T) {
 				}
 
 				// Also exercise BuildMessages concurrently
-				msgs := cb.BuildMessages(nil, "", "hello", nil, "test", "chat")
+				msgs := cb.BuildMessages(nil, "", "hello", nil, "test", "chat", "", "")
 				if len(msgs) < 2 {
 					errs <- "BuildMessages returned fewer than 2 messages"
 					return
@@ -508,6 +726,6 @@ func BenchmarkBuildMessagesWithCache(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = cb.BuildMessages(history, "summary", "new message", nil, "cli", "test")
+		_ = cb.BuildMessages(history, "summary", "new message", nil, "cli", "test", "", "")
 	}
 }

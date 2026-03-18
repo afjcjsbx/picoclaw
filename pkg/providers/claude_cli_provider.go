@@ -50,10 +50,18 @@ func (p *ClaudeCliProvider) Chat(
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		if stderrStr := stderr.String(); stderrStr != "" {
+		stderrStr := strings.TrimSpace(stderr.String())
+		stdoutStr := strings.TrimSpace(stdout.String())
+		switch {
+		case stderrStr != "" && stdoutStr != "":
+			return nil, fmt.Errorf("claude cli error: %w\nstderr: %s\nstdout: %s", err, stderrStr, stdoutStr)
+		case stderrStr != "":
 			return nil, fmt.Errorf("claude cli error: %s", stderrStr)
+		case stdoutStr != "":
+			return nil, fmt.Errorf("claude cli error: %w\noutput: %s", err, stdoutStr)
+		default:
+			return nil, fmt.Errorf("claude cli error: %w", err)
 		}
-		return nil, fmt.Errorf("claude cli error: %w", err)
 	}
 
 	return p.parseClaudeCliResponse(stdout.String())
@@ -100,42 +108,10 @@ func (p *ClaudeCliProvider) buildSystemPrompt(messages []Message, tools []ToolDe
 	}
 
 	if len(tools) > 0 {
-		parts = append(parts, p.buildToolsPrompt(tools))
+		parts = append(parts, buildCLIToolsPrompt(tools))
 	}
 
 	return strings.Join(parts, "\n\n")
-}
-
-// buildToolsPrompt creates the tool definitions section for the system prompt.
-func (p *ClaudeCliProvider) buildToolsPrompt(tools []ToolDefinition) string {
-	var sb strings.Builder
-
-	sb.WriteString("## Available Tools\n\n")
-	sb.WriteString("When you need to use a tool, respond with ONLY a JSON object:\n\n")
-	sb.WriteString("```json\n")
-	sb.WriteString(
-		`{"tool_calls":[{"id":"call_xxx","type":"function","function":{"name":"tool_name","arguments":"{...}"}}]}`,
-	)
-	sb.WriteString("\n```\n\n")
-	sb.WriteString("CRITICAL: The 'arguments' field MUST be a JSON-encoded STRING.\n\n")
-	sb.WriteString("### Tool Definitions:\n\n")
-
-	for _, tool := range tools {
-		if tool.Type != "function" {
-			continue
-		}
-		sb.WriteString(fmt.Sprintf("#### %s\n", tool.Function.Name))
-		if tool.Function.Description != "" {
-			sb.WriteString(fmt.Sprintf("Description: %s\n", tool.Function.Description))
-		}
-		if len(tool.Function.Parameters) > 0 {
-			paramsJSON, _ := json.Marshal(tool.Function.Parameters)
-			sb.WriteString(fmt.Sprintf("Parameters:\n```json\n%s\n```\n", string(paramsJSON)))
-		}
-		sb.WriteString("\n")
-	}
-
-	return sb.String()
 }
 
 // parseClaudeCliResponse parses the JSON output from the claude CLI.

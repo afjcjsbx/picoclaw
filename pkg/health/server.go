@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 )
@@ -28,6 +30,7 @@ type StatusResponse struct {
 	Status string           `json:"status"`
 	Uptime string           `json:"uptime"`
 	Checks map[string]Check `json:"checks,omitempty"`
+	Pid    int              `json:"pid"`
 }
 
 func NewServer(host string, port int) *Server {
@@ -111,6 +114,7 @@ func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
 	resp := StatusResponse{
 		Status: "ok",
 		Uptime: uptime.String(),
+		Pid:    os.Getpid(),
 	}
 
 	json.NewEncoder(w).Encode(resp)
@@ -122,9 +126,7 @@ func (s *Server) readyHandler(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	ready := s.ready
 	checks := make(map[string]Check)
-	for k, v := range s.checks {
-		checks[k] = v
-	}
+	maps.Copy(checks, s.checks)
 	s.mu.RUnlock()
 
 	if !ready {
@@ -154,6 +156,13 @@ func (s *Server) readyHandler(w http.ResponseWriter, r *http.Request) {
 		Uptime: uptime.String(),
 		Checks: checks,
 	})
+}
+
+// RegisterOnMux registers /health and /ready handlers onto the given mux.
+// This allows the health endpoints to be served by a shared HTTP server.
+func (s *Server) RegisterOnMux(mux *http.ServeMux) {
+	mux.HandleFunc("/health", s.healthHandler)
+	mux.HandleFunc("/ready", s.readyHandler)
 }
 
 func statusString(ok bool) string {

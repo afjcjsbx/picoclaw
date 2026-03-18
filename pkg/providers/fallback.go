@@ -43,11 +43,26 @@ func NewFallbackChain(cooldown *CooldownTracker) *FallbackChain {
 
 // ResolveCandidates parses model config into a deduplicated candidate list.
 func ResolveCandidates(cfg ModelConfig, defaultProvider string) []FallbackCandidate {
+	return ResolveCandidatesWithLookup(cfg, defaultProvider, nil)
+}
+
+func ResolveCandidatesWithLookup(
+	cfg ModelConfig,
+	defaultProvider string,
+	lookup func(raw string) (resolved string, ok bool),
+) []FallbackCandidate {
 	seen := make(map[string]bool)
 	var candidates []FallbackCandidate
 
 	addCandidate := func(raw string) {
-		ref := ParseModelRef(raw, defaultProvider)
+		candidateRaw := strings.TrimSpace(raw)
+		if lookup != nil {
+			if resolved, ok := lookup(candidateRaw); ok {
+				candidateRaw = resolved
+			}
+		}
+
+		ref := ParseModelRef(candidateRaw, defaultProvider)
 		if ref == nil {
 			return
 		}
@@ -102,17 +117,19 @@ func (fc *FallbackChain) Execute(
 			return nil, context.Canceled
 		}
 
-		// Check cooldown.
-		if !fc.cooldown.IsAvailable(candidate.Provider) {
-			remaining := fc.cooldown.CooldownRemaining(candidate.Provider)
+		// Check cooldown (per provider/model, not just provider).
+		// This allows multi-key failover where different keys use different model names.
+		cooldownKey := ModelKey(candidate.Provider, candidate.Model)
+		if !fc.cooldown.IsAvailable(cooldownKey) {
+			remaining := fc.cooldown.CooldownRemaining(cooldownKey)
 			result.Attempts = append(result.Attempts, FallbackAttempt{
 				Provider: candidate.Provider,
 				Model:    candidate.Model,
 				Skipped:  true,
 				Reason:   FailoverRateLimit,
 				Error: fmt.Errorf(
-					"provider %s in cooldown (%s remaining)",
-					candidate.Provider,
+					"%s in cooldown (%s remaining)",
+					cooldownKey,
 					remaining.Round(time.Second),
 				),
 			})
@@ -126,7 +143,7 @@ func (fc *FallbackChain) Execute(
 
 		if err == nil {
 			// Success.
-			fc.cooldown.MarkSuccess(candidate.Provider)
+			fc.cooldown.MarkSuccess(cooldownKey)
 			result.Response = resp
 			result.Provider = candidate.Provider
 			result.Model = candidate.Model
@@ -172,7 +189,7 @@ func (fc *FallbackChain) Execute(
 		}
 
 		// Retriable error: mark failure and continue to next candidate.
-		fc.cooldown.MarkFailure(candidate.Provider, failErr.Reason)
+		fc.cooldown.MarkFailure(cooldownKey, failErr.Reason)
 		result.Attempts = append(result.Attempts, FallbackAttempt{
 			Provider: candidate.Provider,
 			Model:    candidate.Model,

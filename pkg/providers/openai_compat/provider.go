@@ -5,13 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/providers/common"
 	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
 )
 
@@ -25,6 +24,7 @@ type (
 	ToolFunctionDefinition = protocoltypes.ToolFunctionDefinition
 	ExtraContent           = protocoltypes.ExtraContent
 	GoogleExtra            = protocoltypes.GoogleExtra
+	ReasoningDetail        = protocoltypes.ReasoningDetail
 )
 
 type Provider struct {
@@ -34,32 +34,55 @@ type Provider struct {
 	httpClient     *http.Client
 }
 
-func NewProvider(apiKey, apiBase, proxy string) *Provider {
-	return NewProviderWithMaxTokensField(apiKey, apiBase, proxy, "")
+type Option func(*Provider)
+
+const defaultRequestTimeout = common.DefaultRequestTimeout
+
+func WithMaxTokensField(maxTokensField string) Option {
+	return func(p *Provider) {
+		p.maxTokensField = maxTokensField
+	}
 }
 
-func NewProviderWithMaxTokensField(apiKey, apiBase, proxy, maxTokensField string) *Provider {
-	client := &http.Client{
-		Timeout: 120 * time.Second,
+func WithRequestTimeout(timeout time.Duration) Option {
+	return func(p *Provider) {
+		if timeout > 0 {
+			p.httpClient.Timeout = timeout
+		}
+	}
+}
+
+func NewProvider(apiKey, apiBase, proxy string, opts ...Option) *Provider {
+	p := &Provider{
+		apiKey:     apiKey,
+		apiBase:    strings.TrimRight(apiBase, "/"),
+		httpClient: common.NewHTTPClient(proxy),
 	}
 
-	if proxy != "" {
-		parsed, err := url.Parse(proxy)
-		if err == nil {
-			client.Transport = &http.Transport{
-				Proxy: http.ProxyURL(parsed),
-			}
-		} else {
-			log.Printf("openai_compat: invalid proxy URL %q: %v", proxy, err)
+	for _, opt := range opts {
+		if opt != nil {
+			opt(p)
 		}
 	}
 
-	return &Provider{
-		apiKey:         apiKey,
-		apiBase:        strings.TrimRight(apiBase, "/"),
-		maxTokensField: maxTokensField,
-		httpClient:     client,
-	}
+	return p
+}
+
+func NewProviderWithMaxTokensField(apiKey, apiBase, proxy, maxTokensField string) *Provider {
+	return NewProvider(apiKey, apiBase, proxy, WithMaxTokensField(maxTokensField))
+}
+
+func NewProviderWithMaxTokensFieldAndTimeout(
+	apiKey, apiBase, proxy, maxTokensField string,
+	requestTimeoutSeconds int,
+) *Provider {
+	return NewProvider(
+		apiKey,
+		apiBase,
+		proxy,
+		WithMaxTokensField(maxTokensField),
+		WithRequestTimeout(time.Duration(requestTimeoutSeconds)*time.Second),
+	)
 }
 
 func (p *Provider) Chat(
@@ -77,15 +100,18 @@ func (p *Provider) Chat(
 
 	requestBody := map[string]any{
 		"model":    model,
-		"messages": stripSystemParts(messages),
+		"messages": common.SerializeMessages(messages),
 	}
 
-	if len(tools) > 0 {
-		requestBody["tools"] = tools
+	// When fallback uses a different provider (e.g. DeepSeek), that provider must not inject web_search_preview.
+	nativeSearch, _ := options["native_search"].(bool)
+	nativeSearch = nativeSearch && isNativeSearchHost(p.apiBase)
+	if len(tools) > 0 || nativeSearch {
+		requestBody["tools"] = buildToolsList(tools, nativeSearch)
 		requestBody["tool_choice"] = "auto"
 	}
 
-	if maxTokens, ok := asInt(options["max_tokens"]); ok {
+	if maxTokens, ok := common.AsInt(options["max_tokens"]); ok {
 		// Use configured maxTokensField if specified, otherwise fallback to model-based detection
 		fieldName := p.maxTokensField
 		if fieldName == "" {
@@ -101,7 +127,7 @@ func (p *Provider) Chat(
 		requestBody[fieldName] = maxTokens
 	}
 
-	if temperature, ok := asFloat(options["temperature"]); ok {
+	if temperature, ok := common.AsFloat(options["temperature"]); ok {
 		lowerModel := strings.ToLower(model)
 		// Kimi k2 models only support temperature=1.
 		if strings.Contains(lowerModel, "kimi") && strings.Contains(lowerModel, "k2") {
@@ -115,8 +141,13 @@ func (p *Provider) Chat(
 	// with the same key and reuse prefix KV cache across calls.
 	// The key is typically the agent ID — stable per agent, shared across requests.
 	// See: https://platform.openai.com/docs/guides/prompt-caching
+	// Prompt caching is only supported by OpenAI-native endpoints.
+	// Non-OpenAI providers (Mistral, Gemini, DeepSeek, etc.) reject unknown
+	// fields with 422 errors, so only include it for OpenAI APIs.
 	if cacheKey, ok := options["prompt_cache_key"].(string); ok && cacheKey != "" {
-		requestBody["prompt_cache_key"] = cacheKey
+		if supportsPromptCacheKey(p.apiBase) {
+			requestBody["prompt_cache_key"] = cacheKey
+		}
 	}
 
 	jsonData, err := json.Marshal(requestBody)
@@ -140,133 +171,16 @@ func (p *Provider) Chat(
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
-	}
-
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API request failed:\n  Status: %d\n  Body:   %s", resp.StatusCode, string(body))
+		return nil, common.HandleErrorResponse(resp, p.apiBase)
 	}
 
-	return parseResponse(body)
-}
-
-func parseResponse(body []byte) (*LLMResponse, error) {
-	var apiResponse struct {
-		Choices []struct {
-			Message struct {
-				Content          string `json:"content"`
-				ReasoningContent string `json:"reasoning_content"`
-				ToolCalls        []struct {
-					ID       string `json:"id"`
-					Type     string `json:"type"`
-					Function *struct {
-						Name      string `json:"name"`
-						Arguments string `json:"arguments"`
-					} `json:"function"`
-					ExtraContent *struct {
-						Google *struct {
-							ThoughtSignature string `json:"thought_signature"`
-						} `json:"google"`
-					} `json:"extra_content"`
-				} `json:"tool_calls"`
-			} `json:"message"`
-			FinishReason string `json:"finish_reason"`
-		} `json:"choices"`
-		Usage *UsageInfo `json:"usage"`
-	}
-
-	if err := json.Unmarshal(body, &apiResponse); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
-	}
-
-	if len(apiResponse.Choices) == 0 {
-		return &LLMResponse{
-			Content:      "",
-			FinishReason: "stop",
-		}, nil
-	}
-
-	choice := apiResponse.Choices[0]
-	toolCalls := make([]ToolCall, 0, len(choice.Message.ToolCalls))
-	for _, tc := range choice.Message.ToolCalls {
-		arguments := make(map[string]any)
-		name := ""
-
-		// Extract thought_signature from Gemini/Google-specific extra content
-		thoughtSignature := ""
-		if tc.ExtraContent != nil && tc.ExtraContent.Google != nil {
-			thoughtSignature = tc.ExtraContent.Google.ThoughtSignature
-		}
-
-		if tc.Function != nil {
-			name = tc.Function.Name
-			if tc.Function.Arguments != "" {
-				if err := json.Unmarshal([]byte(tc.Function.Arguments), &arguments); err != nil {
-					log.Printf("openai_compat: failed to decode tool call arguments for %q: %v", name, err)
-					arguments["raw"] = tc.Function.Arguments
-				}
-			}
-		}
-
-		// Build ToolCall with ExtraContent for Gemini 3 thought_signature persistence
-		toolCall := ToolCall{
-			ID:               tc.ID,
-			Name:             name,
-			Arguments:        arguments,
-			ThoughtSignature: thoughtSignature,
-		}
-
-		if thoughtSignature != "" {
-			toolCall.ExtraContent = &ExtraContent{
-				Google: &GoogleExtra{
-					ThoughtSignature: thoughtSignature,
-				},
-			}
-		}
-
-		toolCalls = append(toolCalls, toolCall)
-	}
-
-	return &LLMResponse{
-		Content:          choice.Message.Content,
-		ReasoningContent: choice.Message.ReasoningContent,
-		ToolCalls:        toolCalls,
-		FinishReason:     choice.FinishReason,
-		Usage:            apiResponse.Usage,
-	}, nil
-}
-
-// openaiMessage is the wire-format message for OpenAI-compatible APIs.
-// It mirrors protocoltypes.Message but omits SystemParts, which is an
-// internal field that would be unknown to third-party endpoints.
-type openaiMessage struct {
-	Role       string     `json:"role"`
-	Content    string     `json:"content"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
-}
-
-// stripSystemParts converts []Message to []openaiMessage, dropping the
-// SystemParts field so it doesn't leak into the JSON payload sent to
-// OpenAI-compatible APIs (some strict endpoints reject unknown fields).
-func stripSystemParts(messages []Message) []openaiMessage {
-	out := make([]openaiMessage, len(messages))
-	for i, m := range messages {
-		out[i] = openaiMessage{
-			Role:       m.Role,
-			Content:    m.Content,
-			ToolCalls:  m.ToolCalls,
-			ToolCallID: m.ToolCallID,
-		}
-	}
-	return out
+	return common.ReadAndParseResponse(resp, p.apiBase)
 }
 
 func normalizeModel(model, apiBase string) string {
-	idx := strings.Index(model, "/")
-	if idx == -1 {
+	before, after, ok := strings.Cut(model, "/")
+	if !ok {
 		return model
 	}
 
@@ -274,41 +188,52 @@ func normalizeModel(model, apiBase string) string {
 		return model
 	}
 
-	prefix := strings.ToLower(model[:idx])
+	prefix := strings.ToLower(before)
 	switch prefix {
-	case "moonshot", "nvidia", "groq", "ollama", "deepseek", "google", "openrouter", "zhipu", "mistral":
-		return model[idx+1:]
+	case "litellm", "moonshot", "nvidia", "groq", "ollama", "deepseek", "google",
+		"openrouter", "zhipu", "mistral", "vivgrid", "minimax", "novita":
+		return after
 	default:
 		return model
 	}
 }
 
-func asInt(v any) (int, bool) {
-	switch val := v.(type) {
-	case int:
-		return val, true
-	case int64:
-		return int(val), true
-	case float64:
-		return int(val), true
-	case float32:
-		return int(val), true
-	default:
-		return 0, false
+func buildToolsList(tools []ToolDefinition, nativeSearch bool) []any {
+	result := make([]any, 0, len(tools)+1)
+	for _, t := range tools {
+		if nativeSearch && strings.EqualFold(t.Function.Name, "web_search") {
+			continue
+		}
+		result = append(result, t)
 	}
+	if nativeSearch {
+		result = append(result, map[string]any{"type": "web_search_preview"})
+	}
+	return result
 }
 
-func asFloat(v any) (float64, bool) {
-	switch val := v.(type) {
-	case float64:
-		return val, true
-	case float32:
-		return float64(val), true
-	case int:
-		return float64(val), true
-	case int64:
-		return float64(val), true
-	default:
-		return 0, false
+func (p *Provider) SupportsNativeSearch() bool {
+	return isNativeSearchHost(p.apiBase)
+}
+
+func isNativeSearchHost(apiBase string) bool {
+	u, err := url.Parse(apiBase)
+	if err != nil {
+		return false
 	}
+	host := u.Hostname()
+	return host == "api.openai.com" || strings.HasSuffix(host, ".openai.azure.com")
+}
+
+// supportsPromptCacheKey reports whether the given API base is known to
+// support the prompt_cache_key request field. Currently only OpenAI's own
+// API and Azure OpenAI support this. All other OpenAI-compatible providers
+// (Mistral, Gemini, DeepSeek, Groq, etc.) reject unknown fields with 422 errors.
+func supportsPromptCacheKey(apiBase string) bool {
+	u, err := url.Parse(apiBase)
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	return host == "api.openai.com" || strings.HasSuffix(host, ".openai.azure.com")
 }

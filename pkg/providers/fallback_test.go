@@ -157,8 +157,8 @@ func TestFallback_CooldownSkip(t *testing.T) {
 	ct, _ := newTestTracker(now)
 	fc := NewFallbackChain(ct)
 
-	// Put openai in cooldown
-	ct.MarkFailure("openai", FailoverRateLimit)
+	// Put openai/gpt-4 in cooldown (using ModelKey now)
+	ct.MarkFailure(ModelKey("openai", "gpt-4"), FailoverRateLimit)
 
 	candidates := []FallbackCandidate{
 		makeCandidate("openai", "gpt-4"),
@@ -195,9 +195,9 @@ func TestFallback_AllInCooldown(t *testing.T) {
 	ct := NewCooldownTracker()
 	fc := NewFallbackChain(ct)
 
-	// Put all providers in cooldown
-	ct.MarkFailure("openai", FailoverRateLimit)
-	ct.MarkFailure("anthropic", FailoverBilling)
+	// Put all models in cooldown (using ModelKey now)
+	ct.MarkFailure(ModelKey("openai", "gpt-4"), FailoverRateLimit)
+	ct.MarkFailure(ModelKey("anthropic", "claude"), FailoverBilling)
 
 	candidates := []FallbackCandidate{
 		makeCandidate("openai", "gpt-4"),
@@ -273,12 +273,13 @@ func TestFallback_SuccessResetsCooldown(t *testing.T) {
 	fc := NewFallbackChain(ct)
 
 	candidates := []FallbackCandidate{makeCandidate("openai", "gpt-4")}
+	modelKey := ModelKey("openai", "gpt-4")
 
 	attempt := 0
 	run := func(ctx context.Context, provider, model string) (*LLMResponse, error) {
 		attempt++
 		if attempt == 1 {
-			ct.MarkFailure("openai", FailoverRateLimit) // simulate failure tracked elsewhere
+			ct.MarkFailure(modelKey, FailoverRateLimit) // simulate failure tracked elsewhere
 		}
 		return &LLMResponse{Content: "ok", FinishReason: "stop"}, nil
 	}
@@ -287,7 +288,7 @@ func TestFallback_SuccessResetsCooldown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !ct.IsAvailable("openai") {
+	if !ct.IsAvailable(modelKey) {
 		t.Error("success should reset cooldown")
 	}
 }
@@ -450,6 +451,75 @@ func TestResolveCandidates_EmptyPrimary(t *testing.T) {
 	candidates := ResolveCandidates(cfg, "openai")
 	if len(candidates) != 1 {
 		t.Errorf("candidates = %d, want 1", len(candidates))
+	}
+}
+
+func TestResolveCandidatesWithLookup_AliasResolvesToNestedModel(t *testing.T) {
+	cfg := ModelConfig{
+		Primary:   "step-3.5-flash",
+		Fallbacks: nil,
+	}
+
+	lookup := func(raw string) (string, bool) {
+		if raw == "step-3.5-flash" {
+			return "openrouter/stepfun/step-3.5-flash:free", true
+		}
+		return "", false
+	}
+
+	candidates := ResolveCandidatesWithLookup(cfg, "", lookup)
+	if len(candidates) != 1 {
+		t.Fatalf("candidates = %d, want 1", len(candidates))
+	}
+	if candidates[0].Provider != "openrouter" {
+		t.Fatalf("provider = %q, want openrouter", candidates[0].Provider)
+	}
+	if candidates[0].Model != "stepfun/step-3.5-flash:free" {
+		t.Fatalf("model = %q, want stepfun/step-3.5-flash:free", candidates[0].Model)
+	}
+}
+
+func TestResolveCandidatesWithLookup_DeduplicateAfterLookup(t *testing.T) {
+	cfg := ModelConfig{
+		Primary:   "step-3.5-flash",
+		Fallbacks: []string{"openrouter/stepfun/step-3.5-flash:free"},
+	}
+
+	lookup := func(raw string) (string, bool) {
+		if raw == "step-3.5-flash" {
+			return "openrouter/stepfun/step-3.5-flash:free", true
+		}
+		return "", false
+	}
+
+	candidates := ResolveCandidatesWithLookup(cfg, "", lookup)
+	if len(candidates) != 1 {
+		t.Fatalf("candidates = %d, want 1", len(candidates))
+	}
+}
+
+func TestResolveCandidatesWithLookup_AliasWithoutProtocolUsesDefaultProvider(t *testing.T) {
+	cfg := ModelConfig{
+		Primary:   "glm-5",
+		Fallbacks: nil,
+	}
+
+	lookup := func(raw string) (string, bool) {
+		if raw == "glm-5" {
+			return "glm-5", true
+		}
+		return "", false
+	}
+
+	candidates := ResolveCandidatesWithLookup(cfg, "openai", lookup)
+	if len(candidates) != 1 {
+		t.Fatalf("candidates = %d, want 1", len(candidates))
+	}
+	if candidates[0].Provider != "openai" {
+		t.Fatalf("provider = %q, want openai", candidates[0].Provider)
+	}
+	if candidates[0].Model != "glm-5" {
+		t.Fatalf("model = %q, want glm-5", candidates[0].Model)
 	}
 }
 
