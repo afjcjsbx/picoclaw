@@ -319,12 +319,12 @@ Text-oriented behavior, optimized for source files, markdown, logs, and configs.
 Parameters:
 
 * `path` (required): File path
-* `start_line` (optional): Starting line number, 1-indexed and inclusive, default `0`
+* `start_line` (optional): Starting line number, 1-indexed and inclusive, default `1`
 * `max_lines` (optional): Maximum number of lines to read, default = all remaining lines until EOF or byte budget
 
 Behavior notes:
 
-* Binary-looking files are rejected with guidance to use `read_file`
+* Binary-looking files are rejected with guidance to switch `read_file` to `mode = bytes`
 * Extremely long single lines are truncated rather than skipped
 
 Use `mode = lines` when:

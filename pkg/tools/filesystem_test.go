@@ -1135,11 +1135,11 @@ func TestReadFileLinesTool_BinaryFileRejected(t *testing.T) {
 	if !result.IsError {
 		t.Fatalf("expected binary file rejection in line mode, got: %s", result.ForLLM)
 	}
-	if !strings.Contains(result.ForLLM, "file appears to be binary") {
+	if !strings.Contains(result.ForLLM, "switch read_file mode to 'bytes'") {
 		t.Fatalf("expected binary file rejection message, got: %s", result.ForLLM)
 	}
-	if !strings.Contains(result.ForLLM, "use read_file") {
-		t.Fatalf("expected suggestion to use read_file, got: %s", result.ForLLM)
+	if !strings.Contains(result.ForLLM, "mode to 'bytes'") {
+		t.Fatalf("expected suggestion to switch read_file mode, got: %s", result.ForLLM)
 	}
 }
 
@@ -1190,7 +1190,10 @@ func TestReadFileLinesTool_NoTrailingNewline(t *testing.T) {
 		t.Fatalf("Execute() error = %s", result.ForLLM)
 	}
 	if !strings.Contains(result.ForLLM, "1|line 1\n2|line 2") {
-		t.Fatalf("expected final line without trailing newline to be preserved, got: %s", result.ForLLM)
+		t.Fatalf(
+			"expected final line without trailing newline to be preserved, got: %s",
+			result.ForLLM,
+		)
 	}
 	if !strings.Contains(result.ForLLM, "[END OF FILE - no further content.]") {
 		t.Fatalf("expected EOF marker, got: %s", result.ForLLM)
@@ -1215,10 +1218,16 @@ func TestReadFileLinesTool_ExactByteBudgetBoundaryIncludesPrefix(t *testing.T) {
 		t.Fatalf("Execute() error = %s", result.ForLLM)
 	}
 	if !strings.Contains(result.ForLLM, "1|1234567\n") {
-		t.Fatalf("expected first line to fit exactly in the byte budget with its prefix, got: %s", result.ForLLM)
+		t.Fatalf(
+			"expected first line to fit exactly in the byte budget with its prefix, got: %s",
+			result.ForLLM,
+		)
 	}
 	if strings.Contains(result.ForLLM, "2|") {
-		t.Fatalf("expected second line to be excluded once the exact output byte budget was reached, got: %s", result.ForLLM)
+		t.Fatalf(
+			"expected second line to be excluded once the exact output byte budget was reached, got: %s",
+			result.ForLLM,
+		)
 	}
 	if !strings.Contains(result.ForLLM, "file_bytes: 8 | output_bytes: 10") {
 		t.Fatalf("expected separate file/output byte counters, got: %s", result.ForLLM)

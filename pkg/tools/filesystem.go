@@ -572,7 +572,7 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 	}
 	sample = sample[:sampleN]
 	if isBinaryReadFileData(sample) {
-		return ErrorResult("file appears to be binary; use read_file for byte-based inspection")
+		return ErrorResult("file appears to be binary; switch read_file mode to 'bytes' for byte-based inspection")
 	}
 
 	reader := bufio.NewReaderSize(io.MultiReader(bytes.NewReader(sample), file), 32*1024)
