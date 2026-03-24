@@ -125,6 +125,68 @@ Anche con `restrict_to_workspace: false`, lo strumento `exec` blocca questi coma
 | `tools.allow_read_paths` | string[] | `[]` | Percorsi aggiuntivi consentiti per la lettura al di fuori del workspace |
 | `tools.allow_write_paths` | string[] | `[]` | Percorsi aggiuntivi consentiti per la scrittura al di fuori del workspace |
 
+### Modalità Read File
+
+`read_file` ha due implementazioni mutuamente esclusive, selezionate via configurazione. PicoClaw ne registra esattamente una all'avvio:
+
+| Chiave di configurazione | Tipo | Predefinito | Descrizione |
+|--------------------------|------|-------------|-------------|
+| `tools.read_file.mode` | string | `bytes` | Seleziona l'implementazione di `read_file`: `bytes` oppure `lines` |
+| `tools.read_file.max_read_file_size` | int | `65536` | Numero massimo di byte restituiti in modalità `bytes` e base del budget di output per la truncation in modalità `lines` |
+
+#### Modalità: `bytes`
+
+Comportamento legacy, ottimizzato per file arbitrari e paginazione byte-safe.
+
+Parametri:
+
+* `path` (obbligatorio): percorso del file
+* `offset` (opzionale): offset iniziale in byte, default `0`
+* `length` (opzionale): numero massimo di byte da leggere, default `max_read_file_size`
+
+Usa `bytes` quando:
+
+* Ti serve retrocompatibilità con prompt o agent esistenti
+* Potresti leggere file binari
+* Vuoi una paginazione deterministica a byte
+
+#### Modalità: `lines`
+
+Comportamento orientato al testo, ottimizzato per sorgenti, markdown, log e file di configurazione.
+
+Parametri:
+
+* `path` (obbligatorio): percorso del file
+* `offset` (opzionale): numero di riga iniziale, 1-indexed, default `1`
+* `limit` (opzionale): numero massimo di righe da leggere, default = tutte le righe rimanenti
+
+Quando il contenuto supera il budget token stimato, PicoClaw applica una truncation intelligente:
+
+* Stima il numero di token in modo euristico
+* Mantiene testa e coda del testo selezionato
+* Tronca, quando possibile, sui boundary di newline
+* Inserisce al centro un avviso esplicito di contenuto troncato
+
+Usa `lines` quando:
+
+* L'agent legge soprattutto file testuali
+* Vuoi paginazione a righe nei prompt e nei tool call
+* Vuoi chunk più leggibili per code review, log e documentazione
+
+#### Esempio
+
+```json
+{
+  "tools": {
+    "read_file": {
+      "enabled": true,
+      "mode": "lines",
+      "max_read_file_size": 65536
+    }
+  }
+}
+```
+
 ### Sicurezza Exec
 
 | Chiave di configurazione | Tipo | Predefinito | Descrizione |

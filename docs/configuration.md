@@ -287,6 +287,68 @@ Even with `restrict_to_workspace: false`, the `exec` tool blocks these dangerous
 | `tools.allow_read_paths` | string[] | `[]` | Additional paths allowed for reading outside workspace |
 | `tools.allow_write_paths` | string[] | `[]` | Additional paths allowed for writing outside workspace |
 
+### Read File Mode
+
+`read_file` has two mutually exclusive implementations selected by config. PicoClaw registers exactly one of them at startup:
+
+| Config Key | Type | Default | Description |
+|------------|------|---------|-------------|
+| `tools.read_file.mode` | string | `bytes` | Selects the `read_file` implementation: `bytes` or `lines` |
+| `tools.read_file.max_read_file_size` | int | `65536` | Maximum bytes returned in `bytes` mode and the output budget source for `lines` mode truncation |
+
+#### Mode: `bytes`
+
+Legacy behavior, optimized for arbitrary files and binary-safe pagination.
+
+Parameters:
+
+* `path` (required): File path
+* `offset` (optional): Starting byte offset, default `0`
+* `length` (optional): Maximum number of bytes to read, default `max_read_file_size`
+
+Use `bytes` when:
+
+* You need backward compatibility with older prompts and agents
+* You may read binary files
+* You want deterministic byte-range pagination
+
+#### Mode: `lines`
+
+Text-oriented behavior, optimized for source files, markdown, logs, and configs.
+
+Parameters:
+
+* `path` (required): File path
+* `offset` (optional): Starting line number, 1-indexed, default `1`
+* `limit` (optional): Maximum number of lines to read, default = all remaining lines
+
+When content exceeds the estimated token budget, PicoClaw truncates it intelligently:
+
+* Estimates the token count heuristically
+* Keeps the head and tail of the selected text
+* Cuts on newline boundaries when possible
+* Inserts an explicit truncation notice in the middle
+
+Use `lines` when:
+
+* The agent mostly reads text files
+* You want line-based pagination in prompts and tool calls
+* You want cleaner chunks for code review, logs, and documentation
+
+#### Example
+
+```json
+{
+  "tools": {
+    "read_file": {
+      "enabled": true,
+      "mode": "lines",
+      "max_read_file_size": 65536
+    }
+  }
+}
+```
+
 ### Exec Security
 
 | Config Key | Type | Default | Description |

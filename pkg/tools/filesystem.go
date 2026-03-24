@@ -1,24 +1,29 @@
 package tools
 
 import (
+	"bufio"
+	"bytes"
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"math"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/sipeed/picoclaw/pkg/fileutil"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/routing"
 )
 
 const MaxReadFileSize = 64 * 1024 // 64KB limit to avoid context overflow
+
+const readFileTruncationSafetyMargin = 0.95
 
 func validatePathWithAllowPaths(path, workspace string, restrict bool, patterns []*regexp.Regexp) (string, error) {
 	if workspace == "" {
@@ -249,11 +254,28 @@ func isWithinWorkspace(candidate, workspace string) bool {
 }
 
 type ReadFileTool struct {
+	readFileBase
+}
+
+type ReadFileLinesTool struct {
+	readFileBase
+}
+
+type readFileBase struct {
 	fs      fileSystem
 	maxSize int64
 }
 
 func NewReadFileTool(
+	workspace string,
+	restrict bool,
+	maxReadFileSize int,
+	allowPaths ...[]*regexp.Regexp,
+) *ReadFileTool {
+	return NewReadFileBytesTool(workspace, restrict, maxReadFileSize, allowPaths...)
+}
+
+func NewReadFileBytesTool(
 	workspace string,
 	restrict bool,
 	maxReadFileSize int,
@@ -270,8 +292,34 @@ func NewReadFileTool(
 	}
 
 	return &ReadFileTool{
-		fs:      buildFs(workspace, restrict, patterns),
-		maxSize: maxSize,
+		readFileBase: readFileBase{
+			fs:      buildFs(workspace, restrict, patterns),
+			maxSize: maxSize,
+		},
+	}
+}
+
+func NewReadFileLinesTool(
+	workspace string,
+	restrict bool,
+	maxReadFileSize int,
+	allowPaths ...[]*regexp.Regexp,
+) *ReadFileLinesTool {
+	var patterns []*regexp.Regexp
+	if len(allowPaths) > 0 {
+		patterns = allowPaths[0]
+	}
+
+	maxSize := int64(maxReadFileSize)
+	if maxSize <= 0 {
+		maxSize = MaxReadFileSize
+	}
+
+	return &ReadFileLinesTool{
+		readFileBase: readFileBase{
+			fs:      buildFs(workspace, restrict, patterns),
+			maxSize: maxSize,
+		},
 	}
 }
 
@@ -279,8 +327,16 @@ func (t *ReadFileTool) Name() string {
 	return "read_file"
 }
 
+func (t *ReadFileLinesTool) Name() string {
+	return "read_file"
+}
+
 func (t *ReadFileTool) Description() string {
-	return "Read the contents of a file. Supports pagination via `offset` and `length`."
+	return "Read the contents of a file using byte-based pagination via `offset` and `length`."
+}
+
+func (t *ReadFileLinesTool) Description() string {
+	return "Read file contents from the filesystem. Output always includes line numbers in the format `LINE_NUMBER|LINE_CONTENT` (1-indexed). Supports partial reads via `offset` and `limit` for large text files."
 }
 
 func (t *ReadFileTool) Parameters() map[string]any {
@@ -306,13 +362,142 @@ func (t *ReadFileTool) Parameters() map[string]any {
 	}
 }
 
+func (t *ReadFileLinesTool) Parameters() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"path": map[string]any{
+				"type":        "string",
+				"description": "Path to the file to read.",
+			},
+			"offset": map[string]any{
+				"type":        "integer",
+				"description": "Starting line number (1-indexed). Use for large files to read from a specific line.",
+				"default":     1,
+			},
+			"limit": map[string]any{
+				"type":        "integer",
+				"description": "Number of lines to read. Use with offset for large files to read in chunks.",
+			},
+		},
+		"required": []string{"path"},
+	}
+}
+
 func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
 	path, ok := args["path"].(string)
 	if !ok {
 		return ErrorResult("path is required")
 	}
 
-	// offset (optional, default 0)
+	data, err := t.fs.ReadFile(path)
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
+
+	return t.executeByteRead(path, data, args)
+}
+
+func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	path, ok := args["path"].(string)
+	if !ok {
+		return ErrorResult("path is required")
+	}
+
+	data, err := t.fs.ReadFile(path)
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
+	if isBinaryReadFileData(data) {
+		return ErrorResult(`file appears to be binary`)
+	}
+
+	return t.executeLineRead(path, data, args)
+}
+
+func (t *readFileBase) executeLineRead(path string, data []byte, args map[string]any) *ToolResult {
+	offset, err := getInt64Arg(args, "offset", 1)
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
+	if offset < 1 {
+		return ErrorResult("offset must be >= 1")
+	}
+
+	limit := int64(-1)
+	if _, exists := args["limit"]; exists {
+		limit, err = getInt64Arg(args, "limit", -1)
+		if err != nil {
+			return ErrorResult(err.Error())
+		}
+		if limit <= 0 {
+			return ErrorResult("limit must be > 0")
+		}
+	}
+
+	lines := splitLinesPreserveNewlines(string(data))
+	totalLines := int64(len(lines))
+	if totalLines == 0 {
+		return NewToolResult("[END OF FILE - no content at this offset]")
+	}
+
+	startIdx := offset - 1
+	if startIdx >= totalLines {
+		return NewToolResult("[END OF FILE - no content at this offset]")
+	}
+
+	endExclusive := totalLines
+	if limit > 0 {
+		endExclusive = startIdx + limit
+		if endExclusive > totalLines {
+			endExclusive = totalLines
+		}
+	}
+
+	selectedLines := lines[startIdx:endExclusive]
+	if len(selectedLines) == 0 {
+		return NewToolResult("[END OF FILE - no content at this offset]")
+	}
+
+	formatted := make([]string, 0, len(lines))
+	for _, line := range lines {
+		// Remove only final carriage returns to normalize
+		lineContent := strings.TrimRight(line, "\r\n")
+		formatted = append(formatted, lineContent)
+	}
+
+	content := strings.Join(formatted, "\n")
+	maxTokens := t.maxTokenBudget()
+	content = truncateReadFileContent(content, maxTokens)
+
+	readEndLine := startIdx + int64(len(selectedLines))
+	readRange := fmt.Sprintf("lines %d-%d", offset, readEndLine)
+
+	displayPath := filepath.Base(path)
+	header := fmt.Sprintf(
+		"[file: %s | total: %d lines | read: %s]",
+		displayPath, totalLines, readRange,
+	)
+
+	hasMore := endExclusive < totalLines
+	if hasMore {
+		header += fmt.Sprintf(
+			"\n[TRUNCATED - file has more content. Call read_file again with offset=%d to continue.]",
+			readEndLine+1,
+		)
+	}
+
+	logger.DebugCF("tool", "ReadFileTool execution completed successfully",
+		map[string]any{
+			"path":       path,
+			"lines_read": len(selectedLines),
+			"has_more":   hasMore,
+		})
+
+	return NewToolResult(header + "\n\n" + content)
+}
+
+func (t *readFileBase) executeByteRead(path string, data []byte, args map[string]any) *ToolResult {
 	offset, err := getInt64Arg(args, "offset", 0)
 	if err != nil {
 		return ErrorResult(err.Error())
@@ -321,7 +506,6 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult("offset must be >= 0")
 	}
 
-	// length (optional, capped at MaxReadFileSize)
 	length, err := getInt64Arg(args, "length", t.maxSize)
 	if err != nil {
 		return ErrorResult(err.Error())
@@ -333,105 +517,28 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		length = t.maxSize
 	}
 
-	file, err := t.fs.Open(path)
-	if err != nil {
-		return ErrorResult(err.Error())
-	}
-	defer file.Close()
-
-	// measure total size
-	totalSize := int64(-1) // -1 means unknown
-	if info, statErr := file.Stat(); statErr == nil {
-		totalSize = info.Size()
-	}
-
-	// sniff the first 512 bytes to detect binary content before loading
-	// it into the LLM context. Seeking back to 0 afterwards restores state.
-	sniff := make([]byte, 512)
-	sniffN, _ := file.Read(sniff)
-
-	// Reset read position to beginning before applying the caller's offset.
-	if seeker, ok := file.(io.Seeker); ok {
-		_, err = seeker.Seek(0, io.SeekStart)
-		if err != nil {
-			return ErrorResult(fmt.Sprintf("failed to reset file position after sniff: %v", err))
-		}
-	} else {
-		// Non-seekable: we consumed sniffN bytes above; account for them when
-		// discarding to reach the requested offset below.
-		// If offset < sniffN the data we already read covers it, which we
-		// cannot replay on a non-seekable stream — return a clear error.
-		if offset < int64(sniffN) && offset > 0 {
-			return ErrorResult(
-				"non-seekable file: cannot seek to an offset within the first 512 bytes after binary detection",
-			)
-		}
-	}
-
-	// Seek to the requested offset.
-	if seeker, ok := file.(io.Seeker); ok {
-		_, err = seeker.Seek(offset, io.SeekStart)
-		if err != nil {
-			return ErrorResult(fmt.Sprintf("failed to seek to offset %d: %v", offset, err))
-		}
-	} else if offset > 0 {
-		// Fallback for non-seekable streams: discard leading bytes.
-		// sniffN bytes were already consumed above, so subtract them.
-		remaining := offset - int64(sniffN)
-		if remaining > 0 {
-			_, err = io.CopyN(io.Discard, file, remaining)
-			if err != nil {
-				return ErrorResult(fmt.Sprintf("failed to advance to offset %d: %v", offset, err))
-			}
-		}
-	}
-
-	// read length+1 bytes to reliably detect whether more content exists
-	// without relying on totalSize (which may be -1 for non-seekable streams).
-	// This avoids the false-positive TRUNCATED message on the last page.
-	probe := make([]byte, length+1)
-	n, err := io.ReadFull(file, probe)
-	// FIX: io.ReadFull returns io.ErrUnexpectedEOF for partial reads (0 < n < len),
-	// and io.EOF only when n == 0. Both are normal terminal conditions — only
-	// other errors are genuine failures.
-	if err != nil && err != io.EOF && !errors.Is(err, io.ErrUnexpectedEOF) {
-		return ErrorResult(fmt.Sprintf("failed to read file content: %v", err))
-	}
-
-	// hasMore is true only when we actually got the extra probe byte.
-	hasMore := int64(n) > length
-	data := probe[:min(int64(n), length)]
-
-	if len(data) == 0 {
+	totalSize := int64(len(data))
+	if offset >= totalSize {
 		return NewToolResult("[END OF FILE - no content at this offset]")
 	}
 
-	// Build metadata header.
-	// use filepath.Base(path) instead of the raw path to avoid leaking
-	// internal filesystem structure into the LLM context.
-	readEnd := offset + int64(len(data))
-	// use ASCII hyphen-minus instead of en-dash (U+2013) to keep the
-	// header parseable by downstream tools and log processors.
-	readRange := fmt.Sprintf("bytes %d-%d", offset, readEnd-1)
-
-	displayPath := filepath.Base(path)
-	var header string
-	if totalSize >= 0 {
-		header = fmt.Sprintf(
-			"[file: %s | total: %d bytes | read: %s]",
-			displayPath, totalSize, readRange,
-		)
-	} else {
-		header = fmt.Sprintf(
-			"[file: %s | read: %s | total size unknown]",
-			displayPath, readRange,
-		)
+	end := offset + length
+	if end > totalSize {
+		end = totalSize
 	}
+	chunk := data[offset:end]
+	readRange := fmt.Sprintf("bytes %d-%d", offset, end-1)
+	displayPath := filepath.Base(path)
+	header := fmt.Sprintf(
+		"[file: %s | total: %d bytes | read: %s]",
+		displayPath, totalSize, readRange,
+	)
 
+	hasMore := end < totalSize
 	if hasMore {
 		header += fmt.Sprintf(
 			"\n[TRUNCATED - file has more content. Call read_file again with offset=%d to continue.]",
-			readEnd,
+			end,
 		)
 	} else {
 		header += "\n[END OF FILE - no further content.]"
@@ -440,11 +547,191 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	logger.DebugCF("tool", "ReadFileTool execution completed successfully",
 		map[string]any{
 			"path":       path,
-			"bytes_read": len(data),
+			"bytes_read": len(chunk),
 			"has_more":   hasMore,
+			"mode":       "bytes",
 		})
 
-	return NewToolResult(header + "\n\n" + string(data))
+	return NewToolResult(header + "\n\n" + string(chunk))
+}
+
+func (t *readFileBase) maxTokenBudget() int {
+	if t.maxSize <= 0 {
+		return MaxReadFileSize / 4
+	}
+
+	budget := int(t.maxSize / 4)
+	if budget <= 0 {
+		return 1
+	}
+	return budget
+}
+
+func splitLinesPreserveNewlines(text string) []string {
+	if text == "" {
+		return nil
+	}
+
+	lines := strings.SplitAfter(text, "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return lines
+}
+
+func isBinaryReadFileData(data []byte) bool {
+	if len(data) == 0 {
+		return false
+	}
+
+	sample := data
+	if len(sample) > 512 {
+		sample = sample[:512]
+	}
+
+	if bytes.IndexByte(sample, 0) >= 0 {
+		return true
+	}
+
+	contentType := http.DetectContentType(sample)
+	if strings.HasPrefix(contentType, "text/") {
+		return false
+	}
+	if strings.HasSuffix(contentType, "/json") ||
+		strings.HasSuffix(contentType, "+json") ||
+		strings.HasSuffix(contentType, "/xml") ||
+		strings.HasSuffix(contentType, "+xml") ||
+		strings.Contains(contentType, "javascript") {
+		return false
+	}
+
+	if !utf8.Valid(sample) {
+		return true
+	}
+
+	controlChars := 0
+	for _, b := range sample {
+		if b < 0x20 && b != '\n' && b != '\r' && b != '\t' && b != '\f' && b != '\b' {
+			controlChars++
+		}
+	}
+
+	return float64(controlChars)/float64(len(sample)) > 0.1
+}
+
+func truncateReadFileContent(text string, maxTokens int) string {
+	if strings.TrimSpace(text) == "" || maxTokens <= 0 {
+		return text
+	}
+
+	tokenCount := routing.EstimateTokens(text)
+	if tokenCount <= maxTokens {
+		return text
+	}
+
+	totalChars := utf8.RuneCountInString(text)
+	if totalChars == 0 {
+		return text
+	}
+
+	tokenPerChar := float64(tokenCount) / float64(totalChars)
+	if tokenPerChar <= 0 {
+		return text
+	}
+
+	allowedChars := int(float64(maxTokens)/tokenPerChar*readFileTruncationSafetyMargin + 0.5)
+	if allowedChars < 2 {
+		allowedChars = 2
+	}
+	if allowedChars >= totalChars {
+		return text
+	}
+
+	headChars := allowedChars / 2
+	tailChars := allowedChars - headChars
+
+	headRaw := firstNRunes(text, headChars)
+	tailRaw := lastNRunes(text, tailChars)
+
+	head := trimHeadToLineBoundary(headRaw)
+	tail := trimTailToLineBoundary(tailRaw)
+	if head == "" {
+		head = strings.TrimRight(headRaw, "\n")
+	}
+	if tail == "" {
+		tail = strings.TrimLeft(tailRaw, "\n")
+	}
+
+	notice := fmt.Sprintf(
+		"\n\n... [Content truncated: %d tokens -> ~%d tokens limit] ...\n\n",
+		tokenCount,
+		maxTokens,
+	)
+
+	switch {
+	case head == "" && tail == "":
+		return notice
+	case head == "":
+		return notice + tail
+	case tail == "":
+		return head + notice
+	default:
+		return head + notice + tail
+	}
+}
+
+func firstNRunes(text string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	if utf8.RuneCountInString(text) <= n {
+		return text
+	}
+
+	var builder strings.Builder
+	builder.Grow(n)
+
+	count := 0
+	reader := bufio.NewReader(strings.NewReader(text))
+	for count < n {
+		r, _, err := reader.ReadRune()
+		if err != nil {
+			break
+		}
+		builder.WriteRune(r)
+		count++
+	}
+
+	return builder.String()
+}
+
+func lastNRunes(text string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+
+	runes := []rune(text)
+	if len(runes) <= n {
+		return text
+	}
+
+	return string(runes[len(runes)-n:])
+}
+
+func trimHeadToLineBoundary(text string) string {
+	idx := strings.LastIndex(text, "\n")
+	if idx < 0 {
+		return strings.TrimRight(text, "\n")
+	}
+	return strings.TrimRight(text[:idx], "\n")
+}
+
+func trimTailToLineBoundary(text string) string {
+	idx := strings.Index(text, "\n")
+	if idx < 0 {
+		return strings.TrimLeft(text, "\n")
+	}
+	return strings.TrimLeft(text[idx+1:], "\n")
 }
 
 // getInt64Arg extracts an integer argument from the args map, returning the

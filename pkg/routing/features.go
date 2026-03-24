@@ -42,7 +42,7 @@ type Features struct {
 // the returned struct.
 func ExtractFeatures(msg string, history []providers.Message) Features {
 	return Features{
-		TokenEstimate:     estimateTokens(msg),
+		TokenEstimate:     EstimateTokens(msg),
 		CodeBlockCount:    countCodeBlocks(msg),
 		RecentToolCalls:   countRecentToolCalls(history),
 		ConversationDepth: len(history),
@@ -50,12 +50,12 @@ func ExtractFeatures(msg string, history []providers.Message) Features {
 	}
 }
 
-// estimateTokens returns a token count proxy that handles both CJK and Latin text.
+// EstimateTokens returns a token count proxy that handles both CJK and Latin text.
 // CJK runes (U+2E80–U+9FFF, U+F900–U+FAFF, U+AC00–U+D7AF) map to roughly one
 // token each, while non-CJK runes average ~0.25 tokens/rune (≈4 chars per token
 // for English). Splitting the count this way avoids the 3x underestimation that a
 // flat rune_count/3 would produce for Chinese, Japanese, and Korean text.
-func estimateTokens(msg string) int {
+func EstimateTokens(msg string) int {
 	total := utf8.RuneCountInString(msg)
 	if total == 0 {
 		return 0
