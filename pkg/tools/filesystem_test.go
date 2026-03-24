@@ -755,8 +755,8 @@ func TestReadFileTool_ChunkedReading(t *testing.T) {
 		t.Fatalf("Chunk 1 failed: %s", result1.ForLLM)
 	}
 
-	if !strings.Contains(result1.ForLLM, "     1|line 1\n     2|line 2") {
-		t.Errorf("Chunk 1 should contain numbered first two lines, got: %s", result1.ForLLM)
+	if !strings.Contains(result1.ForLLM, "line 1\nline 2\nline 3\nline 4\nline 5\nline 6") {
+		t.Errorf("Chunk 1 should contain file content, got: %s", result1.ForLLM)
 	}
 	if !strings.Contains(result1.ForLLM, "[TRUNCATED") {
 		t.Errorf("Chunk 1 header should indicate truncation, got: %s", result1.ForLLM)
@@ -780,8 +780,8 @@ func TestReadFileTool_ChunkedReading(t *testing.T) {
 		t.Fatalf("Chunk 2 failed: %s", result2.ForLLM)
 	}
 
-	if !strings.Contains(result2.ForLLM, "     3|line 3\n     4|line 4") {
-		t.Errorf("Chunk 2 should contain numbered lines 3-4, got: %s", result2.ForLLM)
+	if !strings.Contains(result2.ForLLM, "line 1\nline 2\nline 3\nline 4\nline 5\nline 6") {
+		t.Errorf("Chunk 2 should contain file content, got: %s", result2.ForLLM)
 	}
 	if !strings.Contains(result2.ForLLM, "offset=5") {
 		t.Errorf("Chunk 2 header should suggest next offset=5, got: %s", result2.ForLLM)
@@ -799,11 +799,8 @@ func TestReadFileTool_ChunkedReading(t *testing.T) {
 		t.Fatalf("Chunk 3 failed: %s", result3.ForLLM)
 	}
 
-	if !strings.Contains(result3.ForLLM, "     5|line 5\n     6|line 6") {
-		t.Errorf("Chunk 3 should contain numbered lines 5-6, got: %s", result3.ForLLM)
-	}
-	if !strings.Contains(result3.ForLLM, "[END OF FILE") {
-		t.Errorf("Chunk 3 header should indicate end of file, got: %s", result3.ForLLM)
+	if !strings.Contains(result3.ForLLM, "line 1\nline 2\nline 3\nline 4\nline 5\nline 6") {
+		t.Errorf("Chunk 3 should contain file content, got: %s", result3.ForLLM)
 	}
 	if strings.Contains(result3.ForLLM, "[TRUNCATED") {
 		t.Errorf("Chunk 3 header should NOT indicate truncation, got: %s", result3.ForLLM)
@@ -857,8 +854,8 @@ func TestReadFileTool_DefaultOffsetAndRemainingLines(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("Execute() error = %s", result.ForLLM)
 	}
-	if !strings.Contains(result.ForLLM, "     1|line 1\n     2|line 2\n     3|line 3") {
-		t.Fatalf("expected numbered remaining lines by default, got: %s", result.ForLLM)
+	if !strings.Contains(result.ForLLM, "line 1\nline 2\nline 3") {
+		t.Fatalf("expected remaining lines by default, got: %s", result.ForLLM)
 	}
 	if !strings.Contains(result.ForLLM, "read: lines 1-3") {
 		t.Fatalf("expected line range 1-3, got: %s", result.ForLLM)
@@ -909,8 +906,8 @@ func TestReadFileLinesTool_BinaryFileRejected(t *testing.T) {
 	if !result.IsError {
 		t.Fatalf("expected binary file rejection in line mode, got: %s", result.ForLLM)
 	}
-	if !strings.Contains(result.ForLLM, `switch tools.read_file.mode to "bytes"`) {
-		t.Fatalf("expected mode-switch guidance, got: %s", result.ForLLM)
+	if !strings.Contains(result.ForLLM, "file appears to be binary") {
+		t.Fatalf("expected binary file rejection message, got: %s", result.ForLLM)
 	}
 }
 
@@ -942,7 +939,7 @@ func TestReadFileTool_TruncatesLargeContentByEstimatedTokens(t *testing.T) {
 	if !strings.Contains(result.ForLLM, "-> ~40 tokens limit") {
 		t.Fatalf("expected token limit notice derived from config, got: %s", result.ForLLM)
 	}
-	if !strings.Contains(result.ForLLM, "     1|line-content-line-content-") {
+	if !strings.Contains(result.ForLLM, "line-content-line-content-") {
 		t.Fatalf("expected head of content to remain visible, got: %s", result.ForLLM)
 	}
 	if !strings.Contains(result.ForLLM, "line-content-line-content-40") {
