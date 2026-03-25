@@ -204,8 +204,13 @@ func (h *Handler) handleUpdateModel(w http.ResponseWriter, r *http.Request) {
 	} else {
 		mc.ModelConfig.SetAPIKey(mc.APIKey)
 	}
+	// Preserve existing ExtraBody when omitted (nil), but clear it when
+	// the frontend sends an empty object {} to indicate the field should
+	// be removed.
 	if mc.ExtraBody == nil {
 		mc.ExtraBody = cfg.ModelList[idx].ExtraBody
+	} else if len(mc.ExtraBody) == 0 {
+		mc.ExtraBody = nil
 	}
 
 	cfg.ModelList[idx] = &mc.ModelConfig

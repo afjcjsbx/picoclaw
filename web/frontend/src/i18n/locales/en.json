@@ -209,7 +209,9 @@
       "thinkingLevel": "Thinking Level",
       "thinkingLevelHint": "Extended thinking budget: off, low, medium, high, xhigh, adaptive.",
       "maxTokensField": "Max Tokens Field",
-      "maxTokensFieldHint": "Override the request field name for max tokens, e.g. max_completion_tokens."
+      "maxTokensFieldHint": "Override the request field name for max tokens, e.g. max_completion_tokens.",
+      "extraBody": "Extra Body",
+      "extraBodyHint": "Additional JSON fields to inject into the request body, e.g. {\"reasoning_split\": true}."
     },
     "edit": {
       "title": "Configure {{name}}",
