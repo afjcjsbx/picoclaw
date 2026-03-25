@@ -1394,6 +1394,294 @@ func TestWebTool_GLMSearch_APIError(t *testing.T) {
 	}
 }
 
+// TestWebTool_WebSearch_BatchQueries verifies batch query execution
+func TestWebTool_WebSearch_BatchQueries(t *testing.T) {
+	var receivedQueries []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		json.NewDecoder(r.Body).Decode(&payload)
+		query := payload["query"].(string)
+		receivedQueries = append(receivedQueries, query)
+
+		response := map[string]any{
+			"results": []map[string]any{
+				{
+					"title":   fmt.Sprintf("Result for: %s", query),
+					"url":     "https://example.com/1",
+					"content": "content",
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	tool, err := NewWebSearchTool(WebSearchToolOptions{
+		TavilyEnabled:    true,
+		TavilyAPIKeys:    []string{"test-key"},
+		TavilyBaseURL:    server.URL,
+		TavilyMaxResults: 5,
+	})
+	if err != nil {
+		t.Fatalf("NewWebSearchTool() error: %v", err)
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"brief": "Testing batch queries",
+		"queries": []any{
+			map[string]any{"query": "first query", "num_results": float64(3)},
+			map[string]any{"query": "second query", "num_results": float64(5)},
+			map[string]any{"query": "third query"},
+		},
+	})
+
+	if result.IsError {
+		t.Fatalf("Expected success, got error: %s", result.ForLLM)
+	}
+
+	if len(receivedQueries) != 3 {
+		t.Fatalf("Expected 3 queries, got %d", len(receivedQueries))
+	}
+	if receivedQueries[0] != "first query" || receivedQueries[1] != "second query" || receivedQueries[2] != "third query" {
+		t.Errorf("Unexpected queries: %v", receivedQueries)
+	}
+
+	// Should contain brief
+	if !strings.Contains(result.ForLLM, "Testing batch queries") {
+		t.Errorf("Expected brief in output, got: %s", result.ForLLM)
+	}
+
+	// Should contain results from all queries
+	if !strings.Contains(result.ForLLM, "Result for: first query") ||
+		!strings.Contains(result.ForLLM, "Result for: second query") ||
+		!strings.Contains(result.ForLLM, "Result for: third query") {
+		t.Errorf("Expected all query results in output, got: %s", result.ForLLM)
+	}
+}
+
+// TestWebTool_WebSearch_BatchQueries_EmptyArray verifies error for empty queries array
+func TestWebTool_WebSearch_BatchQueries_EmptyArray(t *testing.T) {
+	tool, err := NewWebSearchTool(WebSearchToolOptions{
+		DuckDuckGoEnabled:    true,
+		DuckDuckGoMaxResults: 5,
+	})
+	if err != nil {
+		t.Fatalf("NewWebSearchTool() error: %v", err)
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"brief":   "test",
+		"queries": []any{},
+	})
+
+	if !result.IsError {
+		t.Errorf("Expected error for empty queries array")
+	}
+	if !strings.Contains(result.ForLLM, "empty") {
+		t.Errorf("Expected 'empty' in error, got: %s", result.ForLLM)
+	}
+}
+
+// TestWebTool_WebSearch_BatchQueries_TooMany verifies error for >10 queries
+func TestWebTool_WebSearch_BatchQueries_TooMany(t *testing.T) {
+	tool, err := NewWebSearchTool(WebSearchToolOptions{
+		DuckDuckGoEnabled:    true,
+		DuckDuckGoMaxResults: 5,
+	})
+	if err != nil {
+		t.Fatalf("NewWebSearchTool() error: %v", err)
+	}
+
+	queries := make([]any, 11)
+	for i := range queries {
+		queries[i] = map[string]any{"query": fmt.Sprintf("query %d", i)}
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"brief":   "test",
+		"queries": queries,
+	})
+
+	if !result.IsError {
+		t.Errorf("Expected error for >10 queries")
+	}
+	if !strings.Contains(result.ForLLM, "exceeds maximum") {
+		t.Errorf("Expected 'exceeds maximum' in error, got: %s", result.ForLLM)
+	}
+}
+
+// TestWebTool_WebSearch_BatchQueries_MissingQueryField verifies error for missing query in item
+func TestWebTool_WebSearch_BatchQueries_MissingQueryField(t *testing.T) {
+	tool, err := NewWebSearchTool(WebSearchToolOptions{
+		DuckDuckGoEnabled:    true,
+		DuckDuckGoMaxResults: 5,
+	})
+	if err != nil {
+		t.Fatalf("NewWebSearchTool() error: %v", err)
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"brief": "test",
+		"queries": []any{
+			map[string]any{"num_results": float64(5)}, // missing "query"
+		},
+	})
+
+	if !result.IsError {
+		t.Errorf("Expected error for missing query field")
+	}
+	if !strings.Contains(result.ForLLM, "query is required") {
+		t.Errorf("Expected 'query is required' in error, got: %s", result.ForLLM)
+	}
+}
+
+// TestWebTool_WebSearch_NoQueryOrQueries verifies error when neither query nor queries provided
+func TestWebTool_WebSearch_NoQueryOrQueries(t *testing.T) {
+	tool, err := NewWebSearchTool(WebSearchToolOptions{
+		DuckDuckGoEnabled:    true,
+		DuckDuckGoMaxResults: 5,
+	})
+	if err != nil {
+		t.Fatalf("NewWebSearchTool() error: %v", err)
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"brief": "test",
+	})
+
+	if !result.IsError {
+		t.Errorf("Expected error when neither query nor queries is provided")
+	}
+	if !strings.Contains(result.ForLLM, "either") {
+		t.Errorf("Expected either message in error, got: %s", result.ForLLM)
+	}
+}
+
+// TestWebTool_WebSearch_SearchType verifies search_type is passed through
+func TestWebTool_WebSearch_SearchType(t *testing.T) {
+	var receivedCategories string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedCategories = r.URL.Query().Get("categories")
+		response := map[string]any{
+			"results": []map[string]any{
+				{"title": "News Result", "url": "https://example.com/news", "content": "news content"},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	tool, err := NewWebSearchTool(WebSearchToolOptions{
+		SearXNGEnabled:    true,
+		SearXNGBaseURL:    server.URL,
+		SearXNGMaxResults: 5,
+	})
+	if err != nil {
+		t.Fatalf("NewWebSearchTool() error: %v", err)
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"brief":       "Looking for news",
+		"search_type": "news",
+		"query":       "test news",
+	})
+
+	if result.IsError {
+		t.Fatalf("Expected success, got error: %s", result.ForLLM)
+	}
+	if receivedCategories != "news" {
+		t.Errorf("Expected categories=news, got %q", receivedCategories)
+	}
+}
+
+// TestWebTool_WebSearch_DataRange verifies data_range is passed per query
+func TestWebTool_WebSearch_DataRange(t *testing.T) {
+	var receivedFreshness string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedFreshness = r.URL.Query().Get("freshness")
+		response := struct {
+			Web struct {
+				Results []struct {
+					Title       string `json:"title"`
+					URL         string `json:"url"`
+					Description string `json:"description"`
+				} `json:"results"`
+			} `json:"web"`
+		}{}
+		response.Web.Results = append(response.Web.Results, struct {
+			Title       string `json:"title"`
+			URL         string `json:"url"`
+			Description string `json:"description"`
+		}{"Result", "https://example.com", "desc"})
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	tool, err := NewWebSearchTool(WebSearchToolOptions{
+		BraveEnabled:    true,
+		BraveAPIKeys:    []string{"test-key"},
+		BraveMaxResults: 5,
+		Proxy:           "",
+	})
+	if err != nil {
+		t.Fatalf("NewWebSearchTool() error: %v", err)
+	}
+
+	// Override provider's client to point at our test server
+	bp := tool.provider.(*BraveSearchProvider)
+	bp.client = server.Client()
+
+	// We need to override the URL construction to use our test server.
+	// Instead, let's test via the SearXNG provider which is simpler.
+	// Actually let's just verify the Brave provider builds the right URL.
+	// We'll test via batch query with data_range.
+
+	// Use SearXNG for a cleaner test of data_range pass-through
+	var receivedTimeRange string
+	server2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedTimeRange = r.URL.Query().Get("time_range")
+		response := map[string]any{
+			"results": []map[string]any{
+				{"title": "Recent Result", "url": "https://example.com/recent", "content": "content"},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server2.Close()
+	_ = receivedFreshness // unused from first server
+
+	tool2, err := NewWebSearchTool(WebSearchToolOptions{
+		SearXNGEnabled:    true,
+		SearXNGBaseURL:    server2.URL,
+		SearXNGMaxResults: 5,
+	})
+	if err != nil {
+		t.Fatalf("NewWebSearchTool() error: %v", err)
+	}
+
+	result := tool2.Execute(context.Background(), map[string]any{
+		"brief": "Recent results only",
+		"queries": []any{
+			map[string]any{"query": "test query", "data_range": "w"},
+		},
+	})
+
+	if result.IsError {
+		t.Fatalf("Expected success, got error: %s", result.ForLLM)
+	}
+	if receivedTimeRange != "w" {
+		t.Errorf("Expected time_range=w, got %q", receivedTimeRange)
+	}
+}
+
 func TestWebTool_GLMSearch_Priority(t *testing.T) {
 	// GLM Search should only be selected when all other providers are disabled
 	tool, err := NewWebSearchTool(WebSearchToolOptions{

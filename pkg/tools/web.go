@@ -85,8 +85,15 @@ func (it *APIKeyIterator) Next() (string, bool) {
 	return key, true
 }
 
+// SearchOptions carries optional parameters for a single search query.
+type SearchOptions struct {
+	SearchType string // "search" (default), "news", "videos", "images", "places", "shopping"
+	DataRange  string // "h", "d", "w", "m", "y", or "" (no limit)
+	Cursor     int    // pagination page (default 1)
+}
+
 type SearchProvider interface {
-	Search(ctx context.Context, query string, count int) (string, error)
+	Search(ctx context.Context, query string, count int, opts SearchOptions) (string, error)
 }
 
 type BraveSearchProvider struct {
@@ -95,9 +102,15 @@ type BraveSearchProvider struct {
 	client  *http.Client
 }
 
-func (p *BraveSearchProvider) Search(ctx context.Context, query string, count int) (string, error) {
+func (p *BraveSearchProvider) Search(ctx context.Context, query string, count int, opts SearchOptions) (string, error) {
 	searchURL := fmt.Sprintf("https://api.search.brave.com/res/v1/web/search?q=%s&count=%d",
 		url.QueryEscape(query), count)
+	if opts.DataRange != "" {
+		searchURL += "&freshness=" + url.QueryEscape(opts.DataRange)
+	}
+	if opts.Cursor > 1 {
+		searchURL += fmt.Sprintf("&offset=%d", (opts.Cursor-1)*count)
+	}
 
 	var lastErr error
 	iter := p.keyPool.NewIterator()
@@ -186,7 +199,7 @@ type TavilySearchProvider struct {
 	client  *http.Client
 }
 
-func (p *TavilySearchProvider) Search(ctx context.Context, query string, count int) (string, error) {
+func (p *TavilySearchProvider) Search(ctx context.Context, query string, count int, opts SearchOptions) (string, error) {
 	searchURL := p.baseURL
 	if searchURL == "" {
 		searchURL = "https://api.tavily.com/search"
@@ -289,8 +302,11 @@ type DuckDuckGoSearchProvider struct {
 	client *http.Client
 }
 
-func (p *DuckDuckGoSearchProvider) Search(ctx context.Context, query string, count int) (string, error) {
+func (p *DuckDuckGoSearchProvider) Search(ctx context.Context, query string, count int, opts SearchOptions) (string, error) {
 	searchURL := fmt.Sprintf("https://html.duckduckgo.com/html/?q=%s", url.QueryEscape(query))
+	if opts.DataRange != "" {
+		searchURL += "&df=" + url.QueryEscape(opts.DataRange)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", searchURL, nil)
 	if err != nil {
@@ -381,7 +397,7 @@ type PerplexitySearchProvider struct {
 	client  *http.Client
 }
 
-func (p *PerplexitySearchProvider) Search(ctx context.Context, query string, count int) (string, error) {
+func (p *PerplexitySearchProvider) Search(ctx context.Context, query string, count int, opts SearchOptions) (string, error) {
 	searchURL := "https://api.perplexity.ai/chat/completions"
 
 	var lastErr error
@@ -473,10 +489,21 @@ type SearXNGSearchProvider struct {
 	baseURL string
 }
 
-func (p *SearXNGSearchProvider) Search(ctx context.Context, query string, count int) (string, error) {
-	searchURL := fmt.Sprintf("%s/search?q=%s&format=json&categories=general",
+func (p *SearXNGSearchProvider) Search(ctx context.Context, query string, count int, opts SearchOptions) (string, error) {
+	categories := "general"
+	if opts.SearchType != "" && opts.SearchType != "search" {
+		categories = opts.SearchType
+	}
+	searchURL := fmt.Sprintf("%s/search?q=%s&format=json&categories=%s",
 		strings.TrimSuffix(p.baseURL, "/"),
-		url.QueryEscape(query))
+		url.QueryEscape(query),
+		url.QueryEscape(categories))
+	if opts.DataRange != "" {
+		searchURL += "&time_range=" + url.QueryEscape(opts.DataRange)
+	}
+	if opts.Cursor > 1 {
+		searchURL += fmt.Sprintf("&pageno=%d", opts.Cursor)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", searchURL, nil)
 	if err != nil {
@@ -539,7 +566,7 @@ type GLMSearchProvider struct {
 	client       *http.Client
 }
 
-func (p *GLMSearchProvider) Search(ctx context.Context, query string, count int) (string, error) {
+func (p *GLMSearchProvider) Search(ctx context.Context, query string, count int, opts SearchOptions) (string, error) {
 	searchURL := p.baseURL
 	if searchURL == "" {
 		searchURL = "https://open.bigmodel.cn/api/paas/v4/web_search"
@@ -620,7 +647,7 @@ type BaiduSearchProvider struct {
 	client  *http.Client
 }
 
-func (p *BaiduSearchProvider) Search(ctx context.Context, query string, count int) (string, error) {
+func (p *BaiduSearchProvider) Search(ctx context.Context, query string, count int, opts SearchOptions) (string, error) {
 	searchURL := p.baseURL
 	if searchURL == "" {
 		searchURL = "https://qianfan.baidubce.com/v2/ai_search/web_search"
@@ -829,49 +856,171 @@ func (t *WebSearchTool) Name() string {
 }
 
 func (t *WebSearchTool) Description() string {
-	return "Search the web for current information. Returns titles, URLs, and snippets from search results."
+	return "Search the web for current information. Supports batch queries (up to 10), search type filtering, and temporal filtering. Returns titles, URLs, and snippets from search results."
 }
 
 func (t *WebSearchTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
+			// Legacy single-query parameter (still supported for backward compat)
 			"query": map[string]any{
 				"type":        "string",
-				"description": "Search query",
+				"description": "Single search query (use 'queries' for batch search)",
 			},
 			"count": map[string]any{
 				"type":        "integer",
-				"description": "Number of results (1-10)",
+				"description": "Number of results per query (1-10)",
 				"minimum":     1.0,
 				"maximum":     10.0,
 			},
+			// Batch queries
+			"queries": map[string]any{
+				"type":        "array",
+				"description": "List of search queries (max 10 per call). Each item has: query (string, required), num_results (integer, optional), cursor (integer, optional page number), data_range (string, optional: h/d/w/m/y)",
+				"maxItems":    10.0,
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"query": map[string]any{
+							"type":        "string",
+							"description": "Search query string (use 3-5 keywords)",
+						},
+						"num_results": map[string]any{
+							"type":        "integer",
+							"description": "Number of results for this query (default: 10)",
+							"minimum":     1.0,
+							"maximum":     10.0,
+						},
+						"cursor": map[string]any{
+							"type":        "integer",
+							"description": "Page number of results (default: 1)",
+							"minimum":     1.0,
+						},
+						"data_range": map[string]any{
+							"type":        "string",
+							"description": "Time filter: h (hour), d (day), w (week), m (month), y (year)",
+							"enum":        []string{"h", "d", "w", "m", "y"},
+						},
+					},
+					"required": []string{"query"},
+				},
+			},
+			"search_type": map[string]any{
+				"type":        "string",
+				"description": "Type of search: search (default), news, videos, images, places, shopping",
+				"enum":        []string{"search", "news", "videos", "images", "places", "shopping"},
+			},
+			"brief": map[string]any{
+				"type":        "string",
+				"description": "Brief description of the search intent, to help maintain focus on the objective",
+			},
 		},
-		"required": []string{"query"},
+		"required": []string{"brief"},
 	}
 }
 
 func (t *WebSearchTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
-	query, ok := args["query"].(string)
-	if !ok {
-		return ErrorResult("query is required")
+	brief, _ := args["brief"].(string)
+	searchType, _ := args["search_type"].(string)
+	if searchType == "" {
+		searchType = "search"
 	}
 
-	count := t.maxResults
-	if c, ok := args["count"].(float64); ok {
-		if int(c) > 0 && int(c) <= 10 {
+	// Build the list of queries to execute
+	type queryItem struct {
+		Query      string
+		NumResults int
+		Cursor     int
+		DataRange  string
+	}
+
+	var items []queryItem
+
+	// Check for batch "queries" parameter first
+	if queriesRaw, ok := args["queries"]; ok {
+		queriesSlice, ok := queriesRaw.([]any)
+		if !ok {
+			return ErrorResult("queries must be an array")
+		}
+		if len(queriesSlice) == 0 {
+			return ErrorResult("queries array is empty")
+		}
+		if len(queriesSlice) > 10 {
+			return ErrorResult("queries array exceeds maximum of 10")
+		}
+		for i, qRaw := range queriesSlice {
+			qMap, ok := qRaw.(map[string]any)
+			if !ok {
+				return ErrorResult(fmt.Sprintf("queries[%d] must be an object", i))
+			}
+			q, ok := qMap["query"].(string)
+			if !ok || q == "" {
+				return ErrorResult(fmt.Sprintf("queries[%d].query is required", i))
+			}
+			numResults := t.maxResults
+			if nr, ok := qMap["num_results"].(float64); ok && int(nr) > 0 && int(nr) <= 10 {
+				numResults = int(nr)
+			}
+			cursor := 1
+			if c, ok := qMap["cursor"].(float64); ok && int(c) > 0 {
+				cursor = int(c)
+			}
+			dataRange, _ := qMap["data_range"].(string)
+			items = append(items, queryItem{
+				Query:      q,
+				NumResults: numResults,
+				Cursor:     cursor,
+				DataRange:  dataRange,
+			})
+		}
+	} else if query, ok := args["query"].(string); ok && query != "" {
+		// Legacy single-query mode
+		count := t.maxResults
+		if c, ok := args["count"].(float64); ok && int(c) > 0 && int(c) <= 10 {
 			count = int(c)
 		}
+		items = append(items, queryItem{
+			Query:      query,
+			NumResults: count,
+			Cursor:     1,
+		})
+	} else {
+		return ErrorResult("either 'query' or 'queries' is required")
 	}
 
-	result, err := t.provider.Search(ctx, query, count)
-	if err != nil {
-		return ErrorResult(fmt.Sprintf("search failed: %v", err))
+	// Execute all queries and aggregate results
+	var allResults []string
+	var lastErr error
+	if brief != "" {
+		allResults = append(allResults, fmt.Sprintf("[Search intent: %s]", brief))
+	}
+
+	for _, item := range items {
+		opts := SearchOptions{
+			SearchType: searchType,
+			DataRange:  item.DataRange,
+			Cursor:     item.Cursor,
+		}
+		result, err := t.provider.Search(ctx, item.Query, item.NumResults, opts)
+		if err != nil {
+			lastErr = err
+			allResults = append(allResults, fmt.Sprintf("Error for query '%s': %v", item.Query, err))
+			continue
+		}
+		allResults = append(allResults, result)
+	}
+
+	combined := strings.Join(allResults, "\n\n---\n\n")
+
+	// For single-query mode, preserve legacy error behavior
+	if len(items) == 1 && lastErr != nil {
+		return ErrorResult(fmt.Sprintf("search failed: %v", lastErr))
 	}
 
 	return &ToolResult{
-		ForLLM:  result,
-		ForUser: result,
+		ForLLM:  combined,
+		ForUser: combined,
 	}
 }
 
