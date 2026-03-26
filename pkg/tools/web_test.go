@@ -169,6 +169,242 @@ func TestWebTool_WebFetch_MissingURL(t *testing.T) {
 	}
 }
 
+func TestWebTool_WebFetch_TaskBatch_Success(t *testing.T) {
+	withPrivateWebFetchHostsAllowed(t)
+
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusOK)
+		switch r.URL.Path {
+		case "/article":
+			w.Write([]byte("<html><body><h1>Main Article</h1><p>Article summary</p></body></html>"))
+		case "/about":
+			w.Write([]byte("<html><body><h1>Company</h1><p>Founded by Alice and Bob</p></body></html>"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	tool, err := NewWebFetchTool(50000, format, testFetchLimit)
+	if err != nil {
+		t.Fatalf("Failed to create web fetch tool: %v", err)
+	}
+	tool.client = server.Client()
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"brief": "Extract structured page details",
+		"tasks": []any{
+			map[string]any{
+				"url":       server.URL + "/article",
+				"prompt":    "Extract the title and article summary",
+				"task_name": "main_article",
+			},
+			map[string]any{
+				"url":       server.URL + "/about",
+				"prompt":    "Extract the company history and founders",
+				"task_name": "company_info",
+			},
+		},
+	})
+
+	if result.IsError {
+		t.Fatalf("expected success, got error: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForUser, "2 succeeded, 0 failed") {
+		t.Fatalf("expected batch summary in ForUser, got: %s", result.ForUser)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(result.ForLLM), &payload); err != nil {
+		t.Fatalf("failed to decode batch result JSON: %v", err)
+	}
+
+	if payload["brief"] != "Extract structured page details" {
+		t.Fatalf("unexpected brief: %#v", payload["brief"])
+	}
+	results, ok := payload["results"].([]any)
+	if !ok || len(results) != 2 {
+		t.Fatalf("expected 2 task results, got %#v", payload["results"])
+	}
+
+	first, ok := results[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected first result object, got %#v", results[0])
+	}
+	if first["task_name"] != "main_article" {
+		t.Fatalf("unexpected first task_name: %#v", first["task_name"])
+	}
+	if first["prompt"] != "Extract the title and article summary" {
+		t.Fatalf("unexpected first prompt: %#v", first["prompt"])
+	}
+	if text, _ := first["text"].(string); !strings.Contains(text, "Main Article") {
+		t.Fatalf("expected extracted page text in first result, got: %#v", first["text"])
+	}
+}
+
+func TestWebTool_WebFetch_TaskBatch_UsesPerTaskMaxChars(t *testing.T) {
+	withPrivateWebFetchHostsAllowed(t)
+
+	longText := strings.Repeat("x", 2000)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(longText))
+	}))
+	defer server.Close()
+
+	tool, err := NewWebFetchTool(50000, format, testFetchLimit)
+	if err != nil {
+		t.Fatalf("Failed to create web fetch tool: %v", err)
+	}
+	tool.client = server.Client()
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"brief": "Extract web content",
+		"tasks": []any{
+			map[string]any{
+				"url":      server.URL + "/article",
+				"maxChars": 1200.0,
+				"prompt":   "Extract the text",
+			},
+		},
+	})
+
+	if result.IsError {
+		t.Fatalf("expected success, got error: %s", result.ForLLM)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(result.ForLLM), &payload); err != nil {
+		t.Fatalf("failed to decode batch result JSON: %v", err)
+	}
+	results, ok := payload["results"].([]any)
+	if !ok || len(results) != 1 {
+		t.Fatalf("expected 1 task result, got %#v", payload["results"])
+	}
+	first, ok := results[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected first result object, got %#v", results[0])
+	}
+	text, _ := first["text"].(string)
+	if len(text) > 1300 {
+		t.Fatalf("expected task maxChars truncation to apply, got len=%d", len(text))
+	}
+	if !strings.Contains(text, "[Content truncated due to size limit]") {
+		t.Fatalf("expected truncation notice with per-task maxChars, got: %q", text)
+	}
+}
+
+func TestWebTool_WebFetch_TaskBatch_RequiresBrief(t *testing.T) {
+	tool, err := NewWebFetchTool(50000, format, testFetchLimit)
+	if err != nil {
+		t.Fatalf("Failed to create web fetch tool: %v", err)
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"tasks": []any{
+			map[string]any{
+				"url":    "https://example.com/article",
+				"prompt": "Extract the title",
+			},
+		},
+	})
+
+	if !result.IsError {
+		t.Fatal("expected error for missing brief")
+	}
+	if !strings.Contains(result.ForLLM, "brief is required") {
+		t.Fatalf("expected brief validation error, got: %s", result.ForLLM)
+	}
+}
+
+func TestWebTool_WebFetch_TaskBatch_RejectsNonHTTPS(t *testing.T) {
+	tool, err := NewWebFetchTool(50000, format, testFetchLimit)
+	if err != nil {
+		t.Fatalf("Failed to create web fetch tool: %v", err)
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"brief": "Extract web content",
+		"tasks": []any{
+			map[string]any{
+				"url":    "http://example.com/article",
+				"prompt": "Extract the title",
+			},
+		},
+	})
+
+	if result.IsError {
+		t.Fatal("expected structured batch result, not top-level error")
+	}
+	if !strings.Contains(result.ForLLM, "must start with https://") {
+		t.Fatalf("expected https validation error in batch result, got: %s", result.ForLLM)
+	}
+}
+
+func TestWebTool_WebFetch_TaskBatch_RejectsPDF(t *testing.T) {
+	withPrivateWebFetchHostsAllowed(t)
+
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/pdf")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("%PDF-1.7"))
+	}))
+	defer server.Close()
+
+	tool, err := NewWebFetchTool(50000, format, testFetchLimit)
+	if err != nil {
+		t.Fatalf("Failed to create web fetch tool: %v", err)
+	}
+	tool.client = server.Client()
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"brief": "Extract web content",
+		"tasks": []any{
+			map[string]any{
+				"url":       server.URL + "/report",
+				"prompt":    "Extract the executive summary",
+				"task_name": "report",
+			},
+		},
+	})
+
+	if result.IsError {
+		t.Fatal("expected structured batch result, not top-level error")
+	}
+	if !strings.Contains(result.ForLLM, "PDF responses are not supported by web_fetch") {
+		t.Fatalf("expected PDF rejection in batch result, got: %s", result.ForLLM)
+	}
+}
+
+func TestWebTool_WebFetch_TaskBatch_MaxTasksExceeded(t *testing.T) {
+	tool, err := NewWebFetchTool(50000, format, testFetchLimit)
+	if err != nil {
+		t.Fatalf("Failed to create web fetch tool: %v", err)
+	}
+
+	tasks := make([]any, 0, 11)
+	for i := 0; i < 11; i++ {
+		tasks = append(tasks, map[string]any{
+			"url":    fmt.Sprintf("https://example.com/%d", i),
+			"prompt": "Extract the main content",
+		})
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"brief": "Extract content",
+		"tasks": tasks,
+	})
+
+	if !result.IsError {
+		t.Fatal("expected error when tasks exceed maximum")
+	}
+	if !strings.Contains(result.ForLLM, "tasks array exceeds maximum of 10") {
+		t.Fatalf("expected max-tasks validation error, got: %s", result.ForLLM)
+	}
+}
+
 // TestWebTool_WebFetch_Truncation verifies content truncation
 func TestWebTool_WebFetch_Truncation(t *testing.T) {
 	withPrivateWebFetchHostsAllowed(t)
@@ -1448,11 +1684,6 @@ func TestWebTool_WebSearch_BatchQueries(t *testing.T) {
 		t.Errorf("Unexpected queries: %v", receivedQueries)
 	}
 
-	// Should contain brief
-	if !strings.Contains(result.ForLLM, "Testing batch queries") {
-		t.Errorf("Expected brief in output, got: %s", result.ForLLM)
-	}
-
 	// Should contain results from all queries
 	if !strings.Contains(result.ForLLM, "Result for: first query") ||
 		!strings.Contains(result.ForLLM, "Result for: second query") ||
@@ -1554,47 +1785,8 @@ func TestWebTool_WebSearch_NoQueryOrQueries(t *testing.T) {
 	if !result.IsError {
 		t.Errorf("Expected error when neither query nor queries is provided")
 	}
-	if !strings.Contains(result.ForLLM, "either") {
-		t.Errorf("Expected either message in error, got: %s", result.ForLLM)
-	}
-}
-
-// TestWebTool_WebSearch_SearchType verifies search_type is passed through
-func TestWebTool_WebSearch_SearchType(t *testing.T) {
-	var receivedCategories string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		receivedCategories = r.URL.Query().Get("categories")
-		response := map[string]any{
-			"results": []map[string]any{
-				{"title": "News Result", "url": "https://example.com/news", "content": "news content"},
-			},
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(response)
-	}))
-	defer server.Close()
-
-	tool, err := NewWebSearchTool(WebSearchToolOptions{
-		SearXNGEnabled:    true,
-		SearXNGBaseURL:    server.URL,
-		SearXNGMaxResults: 5,
-	})
-	if err != nil {
-		t.Fatalf("NewWebSearchTool() error: %v", err)
-	}
-
-	result := tool.Execute(context.Background(), map[string]any{
-		"brief":       "Looking for news",
-		"search_type": "news",
-		"query":       "test news",
-	})
-
-	if result.IsError {
-		t.Fatalf("Expected success, got error: %s", result.ForLLM)
-	}
-	if receivedCategories != "news" {
-		t.Errorf("Expected categories=news, got %q", receivedCategories)
+	if !strings.Contains(result.ForLLM, "'queries' is required") {
+		t.Errorf("Expected queries-required message in error, got: %s", result.ForLLM)
 	}
 }
 

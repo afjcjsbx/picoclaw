@@ -87,9 +87,8 @@ func (it *APIKeyIterator) Next() (string, bool) {
 
 // SearchOptions carries optional parameters for a single search query.
 type SearchOptions struct {
-	SearchType string // "search" (default), "news", "videos", "images", "places", "shopping"
-	DataRange  string // "h", "d", "w", "m", "y", or "" (no limit)
-	Cursor     int    // pagination page (default 1)
+	DataRange string // "h", "d", "w", "m", "y", or "" (no limit)
+	Cursor    int    // pagination page (default 1)
 }
 
 type SearchProvider interface {
@@ -490,14 +489,10 @@ type SearXNGSearchProvider struct {
 }
 
 func (p *SearXNGSearchProvider) Search(ctx context.Context, query string, count int, opts SearchOptions) (string, error) {
-	categories := "general"
-	if opts.SearchType != "" && opts.SearchType != "search" {
-		categories = opts.SearchType
-	}
 	searchURL := fmt.Sprintf("%s/search?q=%s&format=json&categories=%s",
 		strings.TrimSuffix(p.baseURL, "/"),
 		url.QueryEscape(query),
-		url.QueryEscape(categories))
+		url.QueryEscape("general"))
 	if opts.DataRange != "" {
 		searchURL += "&time_range=" + url.QueryEscape(opts.DataRange)
 	}
@@ -856,24 +851,13 @@ func (t *WebSearchTool) Name() string {
 }
 
 func (t *WebSearchTool) Description() string {
-	return "Search the web for current information. Supports batch queries (up to 10), search type filtering, and temporal filtering. Returns titles, URLs, and snippets from search results."
+	return "Search the web for current information. Supports batch queries (up to 10) and temporal filtering. Returns titles, URLs, and snippets from search results."
 }
 
 func (t *WebSearchTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			// Legacy single-query parameter (still supported for backward compat)
-			"query": map[string]any{
-				"type":        "string",
-				"description": "Single search query (use 'queries' for batch search)",
-			},
-			"count": map[string]any{
-				"type":        "integer",
-				"description": "Number of results per query (1-10)",
-				"minimum":     1.0,
-				"maximum":     10.0,
-			},
 			// Batch queries
 			"queries": map[string]any{
 				"type":        "array",
@@ -906,27 +890,12 @@ func (t *WebSearchTool) Parameters() map[string]any {
 					"required": []string{"query"},
 				},
 			},
-			"search_type": map[string]any{
-				"type":        "string",
-				"description": "Type of search: search (default), news, videos, images, places, shopping",
-				"enum":        []string{"search", "news", "videos", "images", "places", "shopping"},
-			},
-			"brief": map[string]any{
-				"type":        "string",
-				"description": "Brief description of the search intent, to help maintain focus on the objective",
-			},
 		},
-		"required": []string{"brief"},
+		"required": []string{"queries"},
 	}
 }
 
 func (t *WebSearchTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
-	brief, _ := args["brief"].(string)
-	searchType, _ := args["search_type"].(string)
-	if searchType == "" {
-		searchType = "search"
-	}
-
 	// Build the list of queries to execute
 	type queryItem struct {
 		Query      string
@@ -974,33 +943,18 @@ func (t *WebSearchTool) Execute(ctx context.Context, args map[string]any) *ToolR
 				DataRange:  dataRange,
 			})
 		}
-	} else if query, ok := args["query"].(string); ok && query != "" {
-		// Legacy single-query mode
-		count := t.maxResults
-		if c, ok := args["count"].(float64); ok && int(c) > 0 && int(c) <= 10 {
-			count = int(c)
-		}
-		items = append(items, queryItem{
-			Query:      query,
-			NumResults: count,
-			Cursor:     1,
-		})
 	} else {
-		return ErrorResult("either 'query' or 'queries' is required")
+		return ErrorResult("'queries' is required")
 	}
 
 	// Execute all queries and aggregate results
 	var allResults []string
 	var lastErr error
-	if brief != "" {
-		allResults = append(allResults, fmt.Sprintf("[Search intent: %s]", brief))
-	}
 
 	for _, item := range items {
 		opts := SearchOptions{
-			SearchType: searchType,
-			DataRange:  item.DataRange,
-			Cursor:     item.Cursor,
+			DataRange: item.DataRange,
+			Cursor:    item.Cursor,
 		}
 		result, err := t.provider.Search(ctx, item.Query, item.NumResults, opts)
 		if err != nil {
@@ -1031,6 +985,22 @@ type WebFetchTool struct {
 	format          string
 	fetchLimitBytes int64
 	whitelist       *privateHostWhitelist
+}
+
+type webFetchTask struct {
+	URL      string
+	MaxChars int
+}
+
+type webFetchResult struct {
+	URL       string `json:"url"`
+	Status    int    `json:"status,omitempty"`
+	Extractor string `json:"extractor,omitempty"`
+	Truncated bool   `json:"truncated,omitempty"`
+	Length    int    `json:"length,omitempty"`
+	Text      string `json:"text,omitempty"`
+	OK        bool   `json:"ok"`
+	Error     string `json:"error,omitempty"`
 }
 
 type privateHostWhitelist struct {
@@ -1109,112 +1079,189 @@ func (t *WebFetchTool) Name() string {
 }
 
 func (t *WebFetchTool) Description() string {
-	return "Fetch a URL and extract readable content (HTML to text). Use this to get weather info, news, articles, or any web content."
+	return "Fetch web pages and extract readable content. When you already know 2 or more web URLs to inspect, prefer a single web_fetch call with multiple tasks. Do not split into multiple one-task calls unless later fetches depend on earlier results."
 }
 
 func (t *WebFetchTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"url": map[string]any{
-				"type":        "string",
-				"description": "URL to fetch",
-			},
-			"maxChars": map[string]any{
-				"type":        "integer",
-				"description": "Maximum characters to extract",
-				"minimum":     100.0,
+			"tasks": map[string]any{
+				"type":        "array",
+				"description": "List of extraction tasks. Each task requires https URL and a prompt describing what to extract.",
+				"maxItems":    10.0,
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"url": map[string]any{
+							"type":        "string",
+							"description": "HTTPS URL to fetch for this task",
+						},
+						"maxChars": map[string]any{
+							"type":        "integer",
+							"description": "Maximum characters to extract per fetched page",
+							"minimum":     100.0,
+						},
+					},
+					"required": []string{"url"},
+				},
 			},
 		},
-		"required": []string{"url"},
 	}
 }
 
 func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	if tasksRaw, hasTasks := args["tasks"]; hasTasks {
+		tasksSlice, ok := tasksRaw.([]any)
+		if !ok {
+			return ErrorResult("tasks must be an array")
+		}
+		if len(tasksSlice) == 0 {
+			return ErrorResult("tasks array is empty")
+		}
+		if len(tasksSlice) > 10 {
+			return ErrorResult("tasks array exceeds maximum of 10")
+		}
+
+		tasks := make([]webFetchTask, 0, len(tasksSlice))
+		for i, raw := range tasksSlice {
+			taskMap, ok := raw.(map[string]any)
+			if !ok {
+				return ErrorResult(fmt.Sprintf("tasks[%d] must be an object", i))
+			}
+
+			urlStr, _ := taskMap["url"].(string)
+			if strings.TrimSpace(urlStr) == "" {
+				return ErrorResult(fmt.Sprintf("tasks[%d].url is required", i))
+			}
+
+			taskMaxChars := t.maxChars
+			if rawMaxChars, ok := taskMap["maxChars"].(float64); ok {
+				if int(rawMaxChars) >= 1000 {
+					taskMaxChars = int(rawMaxChars)
+				}
+			}
+
+			tasks = append(tasks, webFetchTask{
+				URL:      urlStr,
+				MaxChars: taskMaxChars,
+			})
+		}
+
+		results := make([]webFetchResult, 0, len(tasks))
+		successCount := 0
+		for _, task := range tasks {
+			result, err := t.fetchURL(ctx, task.URL, task.MaxChars, true)
+			if err != nil {
+				results = append(results, webFetchResult{
+					URL:   task.URL,
+					OK:    false,
+					Error: err.Error(),
+				})
+				continue
+			}
+			result.OK = true
+			results = append(results, *result)
+			successCount++
+		}
+
+		payload := map[string]any{
+			"results": results,
+		}
+		resultJSON, _ := json.MarshalIndent(payload, "", "  ")
+		failureCount := len(results) - successCount
+
+		return &ToolResult{
+			ForLLM: string(resultJSON),
+			ForUser: fmt.Sprintf(
+				"Fetched %d web task(s): %d succeeded, %d failed",
+				len(results),
+				successCount,
+				failureCount,
+			),
+		}
+	}
+
 	urlStr, ok := args["url"].(string)
 	if !ok {
 		return ErrorResult("url is required")
 	}
-
-	parsedURL, err := url.Parse(urlStr)
-	if err != nil {
-		return ErrorResult(fmt.Sprintf("invalid URL: %v", err))
+	maxChars := t.maxChars
+	if rawMaxChars, ok := args["maxChars"].(float64); ok {
+		if int(rawMaxChars) >= 100 {
+			maxChars = int(rawMaxChars)
+		}
 	}
 
-	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
-		return ErrorResult("only http/https URLs are allowed")
+	result, err := t.fetchURL(ctx, urlStr, maxChars, false)
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
+	resultJSON, _ := json.MarshalIndent(result, "", "  ")
+
+	return &ToolResult{
+		ForLLM: string(resultJSON),
+		ForUser: fmt.Sprintf(
+			"Fetched %d bytes from %s (extractor: %s, truncated: %v)",
+			len(result.Text),
+			urlStr,
+			result.Extractor,
+			result.Truncated,
+		),
+	}
+}
+
+func (t *WebFetchTool) fetchURL(
+	ctx context.Context,
+	urlStr string,
+	maxChars int,
+	requireHTTPS bool,
+) (*webFetchResult, error) {
+	parsedURL, err := url.Parse(urlStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid URL: %v", err)
+	}
+
+	if requireHTTPS {
+		if parsedURL.Scheme != "https" {
+			return nil, fmt.Errorf("task URL must start with https://")
+		}
+	} else if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
+		return nil, fmt.Errorf("only http/https URLs are allowed")
 	}
 
 	if parsedURL.Host == "" {
-		return ErrorResult("missing domain in URL")
+		return nil, fmt.Errorf("missing domain in URL")
+	}
+	if isPDFURL(parsedURL) {
+		return nil, fmt.Errorf("PDF URLs are not supported by web_fetch; download and analyze the PDF with another tool")
 	}
 
-	// Lightweight pre-flight: block obvious localhost/literal-IP without DNS resolution.
-	// The real SSRF guard is newSafeDialContext at connect time.
 	hostname := parsedURL.Hostname()
 	if isObviousPrivateHost(hostname, t.whitelist) {
-		return ErrorResult("fetching private or local network hosts is not allowed")
+		return nil, fmt.Errorf("fetching private or local network hosts is not allowed")
 	}
 
-	maxChars := t.maxChars
-	if mc, ok := args["maxChars"].(float64); ok {
-		if int(mc) > 100 {
-			maxChars = int(mc)
-		}
-	}
-
-	doFetch := func(ua string) (*http.Response, []byte, error) {
-		req, reqErr := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
-		if reqErr != nil {
-			return nil, nil, fmt.Errorf("failed to create request: %w", reqErr)
-		}
-		req.Header.Set("User-Agent", ua)
-		resp, doErr := t.client.Do(req)
-		if doErr != nil {
-			return nil, nil, fmt.Errorf("request failed: %w", doErr)
-		}
-		resp.Body = http.MaxBytesReader(nil, resp.Body, t.fetchLimitBytes)
-
-		b, readErr := io.ReadAll(resp.Body)
-		return resp, b, readErr
-	}
-
-	resp, body, err := doFetch(userAgent)
+	resp, body, err := t.doFetch(ctx, urlStr, userAgent)
 	if resp != nil && resp.Body != nil {
 		defer resp.Body.Close()
 	}
-
 	if err != nil {
-		var maxBytesErr *http.MaxBytesError
-		if errors.As(err, &maxBytesErr) {
-			return ErrorResult(fmt.Sprintf("failed to read response: size exceeded %d bytes limit", t.fetchLimitBytes))
-		}
-		return ErrorResult(err.Error())
+		return nil, err
 	}
 
-	// Cloudflare (and similar WAFs) signal bot challenges with 403 + cf-mitigated: challenge.
-	// Retry once with an honest User-Agent that identifies picoclaw, which some
-	// operators explicitly allow-list for AI assistants.
 	if resp.StatusCode == http.StatusForbidden && resp.Header.Get("Cf-Mitigated") == "challenge" {
 		logger.DebugCF("tool", "Cloudflare challenge detected, retrying with honest User-Agent",
 			map[string]any{"url": urlStr})
 		honestUA := fmt.Sprintf(userAgentHonest, config.Version)
-		resp2, body2, err2 := doFetch(honestUA)
+		resp2, body2, err2 := t.doFetch(ctx, urlStr, honestUA)
 		if resp2 != nil && resp2.Body != nil {
 			defer resp2.Body.Close()
 		}
-
-		if err2 == nil {
-			resp, body = resp2, body2
-		} else {
-			var maxBytesErr *http.MaxBytesError
-			if errors.As(err2, &maxBytesErr) {
-				return ErrorResult(
-					fmt.Sprintf("failed to read response: size exceeded %d bytes limit", t.fetchLimitBytes),
-				)
-			}
-			return ErrorResult(err2.Error())
+		if err2 != nil {
+			return nil, err2
 		}
+		resp, body = resp2, body2
 	}
 
 	bodyStr := string(body)
@@ -1222,23 +1269,18 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 
 	mediaType, params, err := mime.ParseMediaType(contentType)
 	if err != nil {
-		// The most common error here is "mime: no media type" if the header is empty.
 		logger.WarnCF("tool", "Failed to parse Content-Type", map[string]any{
 			"raw_header": contentType,
 			"error":      err.Error(),
 		})
-
-		// security fallback
 		mediaType = "application/octet-stream"
 	}
+	if mediaType == "application/pdf" {
+		return nil, fmt.Errorf("PDF responses are not supported by web_fetch; download and analyze the PDF with another tool")
+	}
 
-	charset, hasCharset := params["charset"]
-	if hasCharset {
-		// If the charset is not utf-8, we might have to convert the bodyStr
-		// before passing it to the HTML/Markdown parser
-		if strings.ToLower(charset) != "utf-8" {
-			logger.WarnCF("tool", "Note: the content is not in UTF-8", map[string]any{"charset": charset})
-		}
+	if charset, hasCharset := params["charset"]; hasCharset && strings.ToLower(charset) != "utf-8" {
+		logger.WarnCF("tool", "Note: the content is not in UTF-8", map[string]any{"charset": charset})
 	}
 
 	var text, extractor string
@@ -1265,10 +1307,9 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	case mediaType == "text/html" || looksLikeHTML(bodyStr):
 		switch strings.ToLower(t.format) {
 		case "markdown":
-			var err error
 			text, err = utils.HtmlToMarkdown(bodyStr)
 			if err != nil {
-				return ErrorResult(fmt.Sprintf("failed to HTML to markdown: %v", err))
+				return nil, fmt.Errorf("failed to HTML to markdown: %v", err)
 			}
 			extractor = "markdown"
 
@@ -1287,27 +1328,47 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		text = text[:maxChars] + "\n[Content truncated due to size limit]"
 	}
 
-	result := map[string]any{
-		"url":       urlStr,
-		"status":    resp.StatusCode,
-		"extractor": extractor,
-		"truncated": truncated,
-		"length":    len(text),
-		"text":      text,
+	return &webFetchResult{
+		URL:       urlStr,
+		Status:    resp.StatusCode,
+		Extractor: extractor,
+		Truncated: truncated,
+		Length:    len(text),
+		Text:      text,
+		OK:        true,
+	}, nil
+}
+
+func (t *WebFetchTool) doFetch(ctx context.Context, urlStr string, ua string) (*http.Response, []byte, error) {
+	req, reqErr := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
+	if reqErr != nil {
+		return nil, nil, fmt.Errorf("failed to create request: %w", reqErr)
+	}
+	req.Header.Set("User-Agent", ua)
+	resp, doErr := t.client.Do(req)
+	if doErr != nil {
+		return nil, nil, fmt.Errorf("request failed: %w", doErr)
+	}
+	resp.Body = http.MaxBytesReader(nil, resp.Body, t.fetchLimitBytes)
+
+	body, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(readErr, &maxBytesErr) {
+			return resp, nil, fmt.Errorf("failed to read response: size exceeded %d bytes limit", t.fetchLimitBytes)
+		}
+		return resp, nil, fmt.Errorf("failed to read response: %w", readErr)
 	}
 
-	resultJSON, _ := json.MarshalIndent(result, "", "  ")
+	return resp, body, nil
+}
 
-	return &ToolResult{
-		ForLLM: string(resultJSON),
-		ForUser: fmt.Sprintf(
-			"Fetched %d bytes from %s (extractor: %s, truncated: %v)",
-			len(text),
-			urlStr,
-			extractor,
-			truncated,
-		),
+func isPDFURL(parsedURL *url.URL) bool {
+	if parsedURL == nil {
+		return false
 	}
+	path := strings.ToLower(strings.TrimSpace(parsedURL.Path))
+	return strings.HasSuffix(path, ".pdf")
 }
 
 func looksLikeHTML(body string) bool {
