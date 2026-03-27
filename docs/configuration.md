@@ -295,12 +295,11 @@ Even with `restrict_to_workspace: false`, the `exec` tool blocks these dangerous
 |------------|------|---------|-------------|
 | `tools.read_file.enabled` | bool | `true` | Enables the `read_file` tool |
 | `tools.read_file.mode` | string | `bytes` | Selects the `read_file` implementation: `bytes` or `lines` |
-| `tools.read_file.max_read_file_size` | int | `65536` | Maximum bytes returned by `read_file` and byte budget used by `read_file` |
-| `tools.read_file.enabled` | bool | `false` | Enables the separate line-oriented `read_file` tool |
+| `tools.read_file.max_read_file_size` | int | `65536` | Maximum bytes returned by `read_file` |
 
 #### Mode: `bytes`
 
-Legacy behavior, optimized for arbitrary files and binary-safe pagination.
+Optimized for arbitrary files and binary-safe pagination.
 
 Parameters:
 
@@ -310,7 +309,6 @@ Parameters:
 
 Use `bytes` when:
 
-* You need backward compatibility with older prompts and agents
 * You may read binary files
 * You want deterministic byte-range pagination
 
@@ -321,8 +319,8 @@ Text-oriented behavior, optimized for source files, markdown, logs, and configs.
 Parameters:
 
 * `path` (required): File path
-* `offset` (optional): Starting line number, 1-indexed and inclusive, default `0`
-* `limit` (optional): Maximum number of lines to read, default = all remaining lines until EOF or byte budget
+* `start_line` (optional): Starting line number, 1-indexed and inclusive, default `0`
+* `max_lines` (optional): Maximum number of lines to read, default = all remaining lines until EOF or byte budget
 
 Behavior notes:
 
@@ -342,11 +340,9 @@ Use `mode = lines` when:
   "tools": {
     "read_file": {
       "enabled": true,
+       "mode": "lines",
       "max_read_file_size": 65536
-    },
-    "read_file_lines": {
-      "enabled": true
-    }    
+    }
   }
 }
 ```
