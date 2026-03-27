@@ -532,7 +532,7 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 		return ErrorResult(err.Error())
 	}
 	if startLine < 1 {
-		return ErrorResult("offset must be >= 1")
+		return ErrorResult("start_line must be >= 1")
 	}
 
 	limit := int64(-1)
@@ -635,7 +635,7 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 	endLine := startLine + linesRead - 1
 	displayPath := filepath.Base(path)
 	header := fmt.Sprintf(
-		"[file: %s | read: lines %d-%d (0-indexed) | bytes: %d]",
+		"[file: %s | read: lines %d-%d (1-indexed) | bytes: %d]",
 		displayPath, start, endLine, bytesRead,
 	)
 
