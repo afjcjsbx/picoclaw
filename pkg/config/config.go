@@ -118,6 +118,7 @@ type Config struct {
 	Heartbeat HeartbeatConfig `json:"heartbeat"`
 	Devices   DevicesConfig   `json:"devices"`
 	Voice     VoiceConfig     `json:"voice"`
+	Memory    MemoryConfig    `json:"memory,omitempty"`
 	// BuildInfo contains build-time version information
 	BuildInfo BuildInfo `json:"build_info,omitempty"`
 
@@ -1283,6 +1284,74 @@ type MCPConfig struct {
 	Discovery  ToolDiscoveryConfig `                                json:"discovery"`
 	// Servers is a map of server name to server configuration
 	Servers map[string]MCPServerConfig `json:"servers,omitempty"`
+}
+
+// MemoryConfig holds configuration for the memory indexing system.
+type MemoryConfig struct {
+	Provider   MemoryProviderConfig `json:"provider,omitempty"`
+	Storage    MemoryStorageConfig  `json:"storage,omitempty"`
+	Chunking   MemoryChunkingConfig `json:"chunking,omitempty"`
+	Sync       MemorySyncConfig     `json:"sync,omitempty"`
+	Query      MemoryQueryConfig    `json:"query,omitempty"`
+	Cache      MemoryCacheConfig    `json:"cache,omitempty"`
+	Sources    []string             `json:"sources,omitempty"`
+	ExtraPaths []string             `json:"extraPaths,omitempty"`
+}
+
+// MemoryProviderConfig configures the embedding provider.
+type MemoryProviderConfig struct {
+	Provider             string              `json:"provider,omitempty"`
+	Model                string              `json:"model,omitempty"`
+	OutputDimensionality int                 `json:"outputDimensionality,omitempty"`
+	Fallback             string              `json:"fallback,omitempty"`
+	Remote               *MemoryRemoteConfig `json:"remote,omitempty"`
+	Local                *MemoryLocalConfig  `json:"local,omitempty"`
+}
+
+// MemoryRemoteConfig holds settings for remote embedding providers.
+type MemoryRemoteConfig struct {
+	BaseURL string            `json:"baseUrl,omitempty"`
+	APIKey  string            `json:"apiKey,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
+}
+
+// MemoryLocalConfig holds settings for local embedding models.
+type MemoryLocalConfig struct {
+	ModelPath     string `json:"modelPath,omitempty"`
+	ModelCacheDir string `json:"modelCacheDir,omitempty"`
+}
+
+// MemoryStorageConfig configures the SQLite storage backend.
+type MemoryStorageConfig struct {
+	Driver string `json:"driver,omitempty"`
+	Path   string `json:"path,omitempty"`
+}
+
+// MemoryChunkingConfig controls text chunking behavior.
+type MemoryChunkingConfig struct {
+	Tokens  int `json:"tokens,omitempty"`
+	Overlap int `json:"overlap,omitempty"`
+}
+
+// MemorySyncConfig configures synchronization behavior.
+type MemorySyncConfig struct {
+	OnSessionStart  bool `json:"onSessionStart,omitempty"`
+	OnSearch        bool `json:"onSearch,omitempty"`
+	Watch           bool `json:"watch,omitempty"`
+	WatchDebounceMs int  `json:"watchDebounceMs,omitempty"`
+	IntervalMinutes int  `json:"intervalMinutes,omitempty"`
+}
+
+// MemoryQueryConfig configures search query behavior.
+type MemoryQueryConfig struct {
+	MaxResults int     `json:"maxResults,omitempty"`
+	MinScore   float64 `json:"minScore,omitempty"`
+}
+
+// MemoryCacheConfig configures the embedding cache.
+type MemoryCacheConfig struct {
+	Enabled    bool `json:"enabled,omitempty"`
+	MaxEntries int  `json:"maxEntries,omitempty"`
 }
 
 func LoadConfig(path string) (*Config, error) {
