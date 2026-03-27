@@ -883,7 +883,7 @@ func TestReadFileLinesTool_ChunkedReading(t *testing.T) {
 	result1 := tool.Execute(context.Background(), map[string]any{
 		"path":       testFile,
 		"start_line": 1,
-		"limit":      2,
+		"max_lines":  2,
 	})
 	if result1.IsError {
 		t.Fatalf("Chunk 1 failed: %s", result1.ForLLM)
@@ -901,7 +901,7 @@ func TestReadFileLinesTool_ChunkedReading(t *testing.T) {
 	result2 := tool.Execute(context.Background(), map[string]any{
 		"path":       testFile,
 		"start_line": 3,
-		"limit":      2,
+		"max_lines":  2,
 	})
 	if result2.IsError {
 		t.Fatalf("Chunk 2 failed: %s", result2.ForLLM)
@@ -916,7 +916,7 @@ func TestReadFileLinesTool_ChunkedReading(t *testing.T) {
 	result3 := tool.Execute(context.Background(), map[string]any{
 		"path":       testFile,
 		"start_line": 5,
-		"limit":      2,
+		"max_lines":  2,
 	})
 	if result3.IsError {
 		t.Fatalf("Chunk 3 failed: %s", result3.ForLLM)
@@ -1000,8 +1000,68 @@ func TestReadFileLinesTool_OffsetBeyondEOF(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("unexpected error: %s", result.ForLLM)
 	}
-	if result.ForLLM != "[END OF FILE - no content at this offset]" {
+	if result.ForLLM != "[END OF FILE - no content at or after start_line=100]" {
 		t.Fatalf("unexpected EOF message: %q", result.ForLLM)
+	}
+}
+
+func TestReadFileLinesTool_RegistryValidationSupportsMaxLinesAndRejectsLimit(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "registry_lines.txt")
+
+	err := os.WriteFile(testFile, []byte("line 1\nline 2\nline 3\n"), 0o644)
+	if err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	reg := NewToolRegistry()
+	reg.Register(NewReadFileLinesTool(tmpDir, false, MaxReadFileSize))
+
+	result := reg.Execute(context.Background(), "read_file", map[string]any{
+		"path":       testFile,
+		"start_line": 1,
+		"max_lines":  1,
+	})
+	if result.IsError {
+		t.Fatalf("expected max_lines to pass registry validation, got: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "1|line 1\n") {
+		t.Fatalf("expected first line via max_lines, got: %s", result.ForLLM)
+	}
+
+	result = reg.Execute(context.Background(), "read_file", map[string]any{
+		"path":       testFile,
+		"start_line": 2,
+		"limit":      1,
+	})
+	if !result.IsError {
+		t.Fatalf("expected limit to be rejected, got success: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "unexpected property \"limit\"") {
+		t.Fatalf("expected registry validation error for limit, got: %s", result.ForLLM)
+	}
+}
+
+func TestReadFileLinesTool_RejectsLegacyLimit(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "legacy_limit.txt")
+
+	err := os.WriteFile(testFile, []byte("line 1\nline 2\n"), 0o644)
+	if err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	tool := NewReadFileLinesTool(tmpDir, false, MaxReadFileSize)
+	result := tool.Execute(context.Background(), map[string]any{
+		"path":       testFile,
+		"start_line": 1,
+		"limit":      1,
+	})
+	if !result.IsError {
+		t.Fatalf("expected limit to be rejected, got success: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "limit is no longer supported; use max_lines") {
+		t.Fatalf("unexpected error for legacy limit: %s", result.ForLLM)
 	}
 }
 

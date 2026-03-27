@@ -536,13 +536,13 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 	}
 
 	limit := int64(-1)
-	if raw, exists := args["limit"]; exists && raw != nil {
-		limit, err = getInt64Arg(args, "limit", -1)
+	if raw, exists := args["max_lines"]; exists && raw != nil {
+		limit, err = getInt64Arg(args, "max_lines", -1)
 		if err != nil {
 			return ErrorResult(err.Error())
 		}
 		if limit <= 0 {
-			return ErrorResult("limit, if provided, must be > 0")
+			return ErrorResult("max_lines, if provided, must be > 0")
 		}
 	}
 
@@ -630,7 +630,7 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 	}
 
 	if linesRead == 0 && content.Len() == 0 {
-		return NewToolResult("[END OF FILE - no content at this offset]")
+		return NewToolResult(fmt.Sprintf("[END OF FILE - no content at or after start_line=%d]", startLine))
 	}
 
 	start := startLine
