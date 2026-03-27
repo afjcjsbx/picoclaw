@@ -9,7 +9,7 @@ func TestExpandMultiKeyModels_SingleKey(t *testing.T) {
 		{
 			ModelName: "gpt-4",
 			Model:     "openai/gpt-4o",
-			apiKeys:   []string{"single-key"},
+			APIKeys:   SimpleSecureStrings("single-key"),
 		},
 	}
 
@@ -38,7 +38,7 @@ func TestExpandMultiKeyModels_APIKeysOnly(t *testing.T) {
 			ModelName: "glm-4.7",
 			Model:     "zhipu/glm-4.7",
 			APIBase:   "https://api.example.com",
-			apiKeys:   []string{"key1", "key2", "key3"},
+			APIKeys:   SimpleSecureStrings("key1", "key2", "key3"),
 		},
 	}
 
@@ -91,7 +91,7 @@ func TestExpandMultiKeyModels_APIKeyAndAPIKeys(t *testing.T) {
 		{
 			ModelName: "gpt-4",
 			Model:     "openai/gpt-4o",
-			apiKeys:   []string{"key0", "key1", "key2"},
+			APIKeys:   SimpleSecureStrings("key0", "key1", "key2"),
 		},
 	}
 
@@ -117,7 +117,7 @@ func TestExpandMultiKeyModels_WithExistingFallbacks(t *testing.T) {
 		ModelName: "gpt-4",
 		Model:     "openai/gpt-4o",
 	}
-	modelCfg.apiKeys = []string{"key0", "key1"} // Use internal field for multi-key testing
+	modelCfg.APIKeys = SimpleSecureStrings("key0", "key1") // Use internal field for multi-key testing
 	modelCfg.Fallbacks = []string{"claude-3"}
 	models := []*ModelConfig{modelCfg}
 
@@ -143,7 +143,7 @@ func TestExpandMultiKeyModels_EmptyAPIKeys(t *testing.T) {
 		{
 			ModelName: "gpt-4",
 			Model:     "openai/gpt-4o",
-			apiKeys:   []string{},
+			APIKeys:   SimpleSecureStrings(),
 		},
 	}
 
@@ -164,7 +164,7 @@ func TestExpandMultiKeyModels_Deduplication(t *testing.T) {
 		{
 			ModelName: "gpt-4",
 			Model:     "openai/gpt-4o",
-			apiKeys:   []string{"key1", "key2", "key1"}, // Duplicate key1
+			APIKeys:   SimpleSecureStrings("key1", "key2", "key1"), // Duplicate key1
 		},
 	}
 
@@ -196,7 +196,7 @@ func TestExpandMultiKeyModels_PreservesOtherFields(t *testing.T) {
 		RequestTimeout: 30,
 		ThinkingLevel:  "high",
 	}
-	modelCfg.apiKeys = []string{"key0", "key1"} // Use internal field for multi-key testing
+	modelCfg.APIKeys = SimpleSecureStrings("key0", "key1") // Use internal field for multi-key testing
 	models := []*ModelConfig{modelCfg}
 
 	result := expandMultiKeyModels(models)
@@ -229,6 +229,78 @@ func TestExpandMultiKeyModels_PreservesOtherFields(t *testing.T) {
 	}
 	if additional.RPM != 60 {
 		t.Errorf("expected additional rpm preserved, got %d", additional.RPM)
+	}
+}
+
+func TestExpandMultiKeyModels_IsVirtualFlag(t *testing.T) {
+	models := []*ModelConfig{
+		{
+			ModelName: "gpt-4",
+			Model:     "openai/gpt-4o",
+			APIKeys:   SimpleSecureStrings("key1", "key2", "key3"),
+		},
+	}
+
+	result := expandMultiKeyModels(models)
+
+	// Should expand to 3 models
+	if len(result) != 3 {
+		t.Fatalf("expected 3 models, got %d", len(result))
+	}
+
+	// Primary model should NOT be virtual
+	primary := result[2]
+	if primary.isVirtual {
+		t.Errorf("primary model should not be virtual")
+	}
+	if primary.ModelName != "gpt-4" {
+		t.Errorf("expected primary model_name 'gpt-4', got %q", primary.ModelName)
+	}
+
+	// Virtual models should have isVirtual = true
+	virtual1 := result[0]
+	if !virtual1.isVirtual {
+		t.Errorf("gpt-4__key_1 should be virtual")
+	}
+	if virtual1.ModelName != "gpt-4__key_1" {
+		t.Errorf("expected virtual model_name 'gpt-4__key_1', got %q", virtual1.ModelName)
+	}
+
+	virtual2 := result[1]
+	if !virtual2.isVirtual {
+		t.Errorf("gpt-4__key_2 should be virtual")
+	}
+	if virtual2.ModelName != "gpt-4__key_2" {
+		t.Errorf("expected virtual model_name 'gpt-4__key_2', got %q", virtual2.ModelName)
+	}
+
+	// IsVirtual() method should work
+	if !virtual1.IsVirtual() {
+		t.Errorf("IsVirtual() should return true for virtual model")
+	}
+	if primary.IsVirtual() {
+		t.Errorf("IsVirtual() should return false for primary model")
+	}
+}
+
+func TestExpandMultiKeyModels_SingleKey_NotVirtual(t *testing.T) {
+	models := []*ModelConfig{
+		{
+			ModelName: "gpt-4",
+			Model:     "openai/gpt-4o",
+			APIKeys:   SimpleSecureStrings("single-key"),
+		},
+	}
+
+	result := expandMultiKeyModels(models)
+
+	if len(result) != 1 {
+		t.Fatalf("expected 1 model, got %d", len(result))
+	}
+
+	// Single key model should NOT be virtual
+	if result[0].isVirtual {
+		t.Errorf("single key model should not be virtual")
 	}
 }
 

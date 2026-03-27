@@ -322,14 +322,17 @@ This creates `~/.picoclaw/config.json` and the workspace directory.
   "model_list": [
     {
       "model_name": "gpt-5.4",
-      "model": "openai/gpt-5.4",
-      "api_key": "sk-your-api-key"
+      "model": "openai/gpt-5.4"
+      // api_key is now loaded from .security.yml
     }
   ]
 }
 ```
 
 > See `config/config.example.json` in the repo for a complete configuration template with all available options.
+> 
+> Please note: config.example.json format is version 0, with sensitive codes in it, and will be auto migrated to version 1+, then, the config.json will only store insensitive data, the sensitive codes will be stored in .security.yml, if you need manually modify the codes, please see `docs/security_configuration.md` for more details.
+
 
 **3. Chat**
 
@@ -523,7 +526,7 @@ Connect PicoClaw to the Agent Social Network simply by sending a single message 
 | Command                   | Description                      |
 | ------------------------- | -------------------------------- |
 | `picoclaw onboard`        | Initialize config & workspace    |
-| `picoclaw onboard weixin` | Connect WeChat account via QR |
+| `picoclaw auth weixin` | Connect WeChat account via QR |
 | `picoclaw agent -m "..."` | Chat with the agent              |
 | `picoclaw agent`          | Interactive chat mode            |
 | `picoclaw gateway`        | Start the gateway                |

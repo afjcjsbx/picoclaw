@@ -53,7 +53,7 @@ func NewDiscordChannel(cfg config.DiscordConfig, bus *bus.MessageBus) (*DiscordC
 			discordgo.LogDebug:         logger.DEBUG,
 		}).Log
 
-	session, err := discordgo.New("Bot " + cfg.Token())
+	session, err := discordgo.New("Bot " + cfg.Token.String())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create discord session: %w", err)
 	}
@@ -254,10 +254,7 @@ func (c *DiscordChannel) SendPlaceholder(ctx context.Context, chatID string) (st
 		return "", nil
 	}
 
-	text := c.config.Placeholder.Text
-	if text == "" {
-		text = "Thinking... 💭"
-	}
+	text := c.config.Placeholder.GetRandomText()
 
 	msg, err := c.session.ChannelMessageSend(chatID, text)
 	if err != nil {
