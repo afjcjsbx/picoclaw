@@ -527,7 +527,7 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 		return ErrorResult("path is required")
 	}
 
-	startLine, err := getInt64Arg(args, "start_line", 0)
+	startLine, err := getInt64Arg(args, "start_line", 1)
 	if err != nil {
 		return ErrorResult(err.Error())
 	}
