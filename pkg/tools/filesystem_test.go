@@ -1094,6 +1094,29 @@ func TestReadFileLinesTool_RejectsLength(t *testing.T) {
 	}
 }
 
+func TestReadFileLinesTool_RejectsLimit(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "legacy_limit.txt")
+
+	err := os.WriteFile(testFile, []byte("line 1\nline 2\n"), 0o644)
+	if err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	tool := NewReadFileLinesTool(tmpDir, false, MaxReadFileSize)
+	result := tool.Execute(context.Background(), map[string]any{
+		"path":       testFile,
+		"start_line": 1,
+		"limit":      1,
+	})
+	if !result.IsError {
+		t.Fatalf("expected limit to be rejected, got success: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "limit is not supported in line mode; use max_lines") {
+		t.Fatalf("unexpected error for limit in line mode: %s", result.ForLLM)
+	}
+}
+
 func TestReadFileLinesTool_BinaryFileRejected(t *testing.T) {
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "binary.dat")
@@ -1146,5 +1169,61 @@ func TestReadFileLinesTool_TruncatesSingleLongLineAtByteBudget(t *testing.T) {
 	}
 	if !strings.Contains(result.ForLLM, "2|") {
 		t.Fatalf("expected line prefix for the truncated line, got: %s", result.ForLLM)
+	}
+}
+
+func TestReadFileLinesTool_NoTrailingNewline(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "no_trailing_newline.txt")
+
+	err := os.WriteFile(testFile, []byte("line 1\nline 2"), 0o644)
+	if err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	tool := NewReadFileLinesTool(tmpDir, false, MaxReadFileSize)
+	result := tool.Execute(context.Background(), map[string]any{
+		"path":       testFile,
+		"start_line": 1,
+	})
+	if result.IsError {
+		t.Fatalf("Execute() error = %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "1|line 1\n2|line 2") {
+		t.Fatalf("expected final line without trailing newline to be preserved, got: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "[END OF FILE - no further content.]") {
+		t.Fatalf("expected EOF marker, got: %s", result.ForLLM)
+	}
+}
+
+func TestReadFileLinesTool_ExactByteBudgetBoundaryIncludesPrefix(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "exact_boundary.txt")
+
+	err := os.WriteFile(testFile, []byte("1234567\nsecond line\n"), 0o644)
+	if err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	tool := NewReadFileLinesTool(tmpDir, false, 10)
+	result := tool.Execute(context.Background(), map[string]any{
+		"path":       testFile,
+		"start_line": 1,
+	})
+	if result.IsError {
+		t.Fatalf("Execute() error = %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "1|1234567\n") {
+		t.Fatalf("expected first line to fit exactly in the byte budget with its prefix, got: %s", result.ForLLM)
+	}
+	if strings.Contains(result.ForLLM, "2|") {
+		t.Fatalf("expected second line to be excluded once the exact output byte budget was reached, got: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "file_bytes: 8 | output_bytes: 10") {
+		t.Fatalf("expected separate file/output byte counters, got: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "start_line=2") {
+		t.Fatalf("expected continuation at line 2, got: %s", result.ForLLM)
 	}
 }

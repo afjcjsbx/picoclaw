@@ -540,6 +540,9 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 	if _, exists := args["length"]; exists {
 		return ErrorResult("length is not supported in line mode; use max_lines")
 	}
+	if _, exists := args["limit"]; exists {
+		return ErrorResult("limit is not supported in line mode; use max_lines")
+	}
 
 	limit := int64(-1)
 	if raw, exists := args["max_lines"]; exists && raw != nil {
@@ -577,7 +580,8 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 	var content strings.Builder
 	lineIndex := int64(1)
 	var linesRead int64
-	var bytesRead int64
+	var fileBytesRead int64
+	var outputBytesRead int64
 	var reachedEOF bool
 	var byteBudgetTruncated bool
 	var lineTruncated bool
@@ -596,7 +600,7 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 
 	for !reachedEOF && (limit < 0 || linesRead < limit) {
 		prefix := formatReadFileLinePrefix(lineIndex)
-		remaining := t.maxSize - bytesRead - int64(len(prefix))
+		remaining := t.maxSize - outputBytesRead - int64(len(prefix))
 		if remaining <= 0 {
 			byteBudgetTruncated = true
 			break
@@ -613,7 +617,8 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 
 		content.WriteString(prefix)
 		content.Write(line)
-		bytesRead += int64(len(prefix) + len(line))
+		fileBytesRead += int64(len(line))
+		outputBytesRead += int64(len(prefix) + len(line))
 		linesRead++
 		lineIndex++
 
@@ -643,8 +648,8 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 	endLine := startLine + linesRead - 1
 	displayPath := filepath.Base(path)
 	header := fmt.Sprintf(
-		"[file: %s | read: lines %d-%d (1-indexed) | bytes: %d]",
-		displayPath, start, endLine, bytesRead,
+		"[file: %s | read: lines %d-%d (1-indexed) | file_bytes: %d | output_bytes: %d]",
+		displayPath, start, endLine, fileBytesRead, outputBytesRead,
 	)
 
 	switch {
@@ -679,11 +684,12 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 
 	logger.DebugCF("tool", "ReadFileTool execution completed successfully",
 		map[string]any{
-			"path":       path,
-			"lines_read": linesRead,
-			"bytes_read": bytesRead,
-			"truncated":  byteBudgetTruncated,
-			"tool":       t.Name(),
+			"path":              path,
+			"lines_read":        linesRead,
+			"file_bytes_read":   fileBytesRead,
+			"output_bytes_read": outputBytesRead,
+			"truncated":         byteBudgetTruncated,
+			"tool":              t.Name(),
 		})
 
 	return NewToolResult(header + "\n\n" + content.String())
