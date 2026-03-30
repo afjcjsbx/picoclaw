@@ -38,8 +38,8 @@ func newRateLimiter(rpm int) *RateLimiter {
 	}
 }
 
-// Wait blocks until a token is available or ctx is cancelled.
-// Returns ctx.Err() if cancelled while waiting.
+// Wait blocks until a token is available or ctx is canceled.
+// Returns ctx.Err() if canceled while waiting.
 func (rl *RateLimiter) Wait(ctx context.Context) error {
 	for {
 		rl.mu.Lock()
