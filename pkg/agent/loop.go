@@ -2775,6 +2775,7 @@ turnLoop:
 			if ts.opts.EnableSummary {
 				al.contextManager.Compact(turnCtx, &CompactRequest{SessionKey: ts.sessionKey, Reason: ContextCompressReasonSummarize})
 			}
+			al.persistTurnMemoryForTurn(ts)
 
 			ts.setPhase(TurnPhaseCompleted)
 			ts.setFinalContent("")
@@ -2852,6 +2853,7 @@ turnLoop:
 			},
 		)
 	}
+	al.persistTurnMemoryForTurn(ts)
 
 	ts.setPhase(TurnPhaseCompleted)
 	return turnResult{

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/fileutil"
@@ -20,9 +21,12 @@ import (
 // - Long-term memory: memory/MEMORY.md
 // - Daily notes: memory/YYYYMM/YYYYMMDD.md
 type MemoryStore struct {
-	workspace  string
-	memoryDir  string
-	memoryFile string
+	mu             sync.Mutex
+	workspace      string
+	memoryDir      string
+	memoryFile     string
+	recordsDir     string
+	indexStateFile string
 }
 
 // NewMemoryStore creates a new MemoryStore with the given workspace path.
@@ -30,14 +34,19 @@ type MemoryStore struct {
 func NewMemoryStore(workspace string) *MemoryStore {
 	memoryDir := filepath.Join(workspace, "memory")
 	memoryFile := filepath.Join(memoryDir, "MEMORY.md")
+	recordsDir := filepath.Join(memoryDir, "records")
+	indexStateFile := filepath.Join(memoryDir, ".memory_index.json")
 
 	// Ensure memory directory exists
 	os.MkdirAll(memoryDir, 0o755)
+	os.MkdirAll(recordsDir, 0o755)
 
 	return &MemoryStore{
-		workspace:  workspace,
-		memoryDir:  memoryDir,
-		memoryFile: memoryFile,
+		workspace:      workspace,
+		memoryDir:      memoryDir,
+		memoryFile:     memoryFile,
+		recordsDir:     recordsDir,
+		indexStateFile: indexStateFile,
 	}
 }
 

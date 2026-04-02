@@ -76,6 +76,9 @@ func (m *scriptedToolProvider) Chat(
 	model string,
 	opts map[string]any,
 ) (*providers.LLMResponse, error) {
+	if isMemorySynthesisTestRequest(messages) {
+		return memorySynthesisTestResponse(), nil
+	}
 	m.calls++
 	if m.calls == 1 {
 		return &providers.LLMResponse{

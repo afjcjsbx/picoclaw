@@ -92,6 +92,9 @@ func (p *llmHookTestProvider) Chat(
 	model string,
 	opts map[string]any,
 ) (*providers.LLMResponse, error) {
+	if isMemorySynthesisTestRequest(messages) {
+		return memorySynthesisTestResponse(), nil
+	}
 	p.mu.Lock()
 	p.lastModel = model
 	p.mu.Unlock()
@@ -192,6 +195,9 @@ func (p *toolHookProvider) Chat(
 	model string,
 	opts map[string]any,
 ) (*providers.LLMResponse, error) {
+	if isMemorySynthesisTestRequest(messages) {
+		return memorySynthesisTestResponse(), nil
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 

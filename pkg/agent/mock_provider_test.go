@@ -15,6 +15,9 @@ func (m *mockProvider) Chat(
 	model string,
 	opts map[string]any,
 ) (*providers.LLMResponse, error) {
+	if isMemorySynthesisTestRequest(messages) {
+		return memorySynthesisTestResponse(), nil
+	}
 	return &providers.LLMResponse{
 		Content:   "Mock response",
 		ToolCalls: []providers.ToolCall{},

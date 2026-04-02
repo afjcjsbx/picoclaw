@@ -108,6 +108,9 @@ func (p *blockedToolProvider) Chat(
 	model string,
 	opts map[string]any,
 ) (*providers.LLMResponse, error) {
+	if isMemorySynthesisTestRequest(messages) {
+		return memorySynthesisTestResponse(), nil
+	}
 	p.calls++
 	if p.calls == 1 {
 		return &providers.LLMResponse{

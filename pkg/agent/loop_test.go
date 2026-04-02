@@ -82,7 +82,12 @@ func (r *recordingProvider) Chat(
 	model string,
 	opts map[string]any,
 ) (*providers.LLMResponse, error) {
-	r.lastMessages = append([]providers.Message(nil), messages...)
+	if isMemorySynthesisTestRequest(messages) {
+		return memorySynthesisTestResponse(), nil
+	}
+	if len(messages) > 0 {
+		r.lastMessages = append([]providers.Message(nil), messages...)
+	}
 	return &providers.LLMResponse{
 		Content:   "Mock response",
 		ToolCalls: []providers.ToolCall{},
@@ -887,6 +892,9 @@ func (m *simpleMockProvider) Chat(
 	model string,
 	opts map[string]any,
 ) (*providers.LLMResponse, error) {
+	if isMemorySynthesisTestRequest(messages) {
+		return memorySynthesisTestResponse(), nil
+	}
 	return &providers.LLMResponse{
 		Content:   m.response,
 		ToolCalls: []providers.ToolCall{},
@@ -909,6 +917,9 @@ func (m *reasoningContentProvider) Chat(
 	model string,
 	opts map[string]any,
 ) (*providers.LLMResponse, error) {
+	if isMemorySynthesisTestRequest(messages) {
+		return memorySynthesisTestResponse(), nil
+	}
 	return &providers.LLMResponse{
 		Content:          m.response,
 		ReasoningContent: m.reasoningContent,
@@ -932,6 +943,9 @@ func (m *countingMockProvider) Chat(
 	model string,
 	opts map[string]any,
 ) (*providers.LLMResponse, error) {
+	if isMemorySynthesisTestRequest(messages) {
+		return memorySynthesisTestResponse(), nil
+	}
 	m.calls++
 	return &providers.LLMResponse{
 		Content:   m.response,
@@ -955,6 +969,9 @@ func (m *handledMediaProvider) Chat(
 	model string,
 	opts map[string]any,
 ) (*providers.LLMResponse, error) {
+	if isMemorySynthesisTestRequest(messages) {
+		return memorySynthesisTestResponse(), nil
+	}
 	m.calls++
 	m.toolCounts = append(m.toolCounts, len(tools))
 	if m.calls == 1 {
@@ -986,6 +1003,9 @@ func (m *artifactThenSendProvider) Chat(
 	model string,
 	opts map[string]any,
 ) (*providers.LLMResponse, error) {
+	if isMemorySynthesisTestRequest(messages) {
+		return memorySynthesisTestResponse(), nil
+	}
 	m.calls++
 	if m.calls == 1 {
 		return &providers.LLMResponse{
@@ -1047,6 +1067,9 @@ func (m *toolFeedbackProvider) Chat(
 	model string,
 	opts map[string]any,
 ) (*providers.LLMResponse, error) {
+	if isMemorySynthesisTestRequest(messages) {
+		return memorySynthesisTestResponse(), nil
+	}
 	m.calls++
 	if m.calls == 1 {
 		return &providers.LLMResponse{
@@ -1078,6 +1101,9 @@ func (m *toolLimitOnlyProvider) Chat(
 	model string,
 	opts map[string]any,
 ) (*providers.LLMResponse, error) {
+	if isMemorySynthesisTestRequest(messages) {
+		return memorySynthesisTestResponse(), nil
+	}
 	return &providers.LLMResponse{
 		ToolCalls: []providers.ToolCall{{
 			ID:        "call_tool_limit_test",
@@ -1155,6 +1181,9 @@ func (m *handledMediaWithSteeringProvider) Chat(
 	model string,
 	opts map[string]any,
 ) (*providers.LLMResponse, error) {
+	if isMemorySynthesisTestRequest(messages) {
+		return memorySynthesisTestResponse(), nil
+	}
 	m.calls++
 	if m.calls == 1 {
 		return &providers.LLMResponse{
@@ -1938,6 +1967,9 @@ func (m *failFirstMockProvider) Chat(
 	model string,
 	opts map[string]any,
 ) (*providers.LLMResponse, error) {
+	if isMemorySynthesisTestRequest(messages) {
+		return memorySynthesisTestResponse(), nil
+	}
 	m.currentCall++
 	if m.currentCall <= m.failures {
 		return nil, m.failError
@@ -2868,6 +2900,9 @@ func (p *nativeSearchProvider) Chat(
 	ctx context.Context, msgs []providers.Message, tools []providers.ToolDefinition,
 	model string, opts map[string]any,
 ) (*providers.LLMResponse, error) {
+	if isMemorySynthesisTestRequest(msgs) {
+		return memorySynthesisTestResponse(), nil
+	}
 	return &providers.LLMResponse{Content: "ok"}, nil
 }
 
@@ -2881,6 +2916,9 @@ func (p *plainProvider) Chat(
 	ctx context.Context, msgs []providers.Message, tools []providers.ToolDefinition,
 	model string, opts map[string]any,
 ) (*providers.LLMResponse, error) {
+	if isMemorySynthesisTestRequest(msgs) {
+		return memorySynthesisTestResponse(), nil
+	}
 	return &providers.LLMResponse{Content: "ok"}, nil
 }
 
@@ -2952,6 +2990,9 @@ func (p *overflowProvider) Chat(
 	model string,
 	opts map[string]any,
 ) (*providers.LLMResponse, error) {
+	if isMemorySynthesisTestRequest(messages) {
+		return memorySynthesisTestResponse(), nil
+	}
 	p.calls++
 	p.lastMessages = append([]providers.Message(nil), messages...)
 

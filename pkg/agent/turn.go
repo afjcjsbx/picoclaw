@@ -324,6 +324,12 @@ func (ts *turnState) recordPersistedMessage(msg providers.Message) {
 	ts.persistedMessages = append(ts.persistedMessages, msg)
 }
 
+func (ts *turnState) persistedMessagesSnapshot() []providers.Message {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return append([]providers.Message(nil), ts.persistedMessages...)
+}
+
 func (ts *turnState) refreshRestorePointFromSession(agent *AgentInstance) {
 	history := agent.Sessions.GetHistory(ts.sessionKey)
 	summary := agent.Sessions.GetSummary(ts.sessionKey)
