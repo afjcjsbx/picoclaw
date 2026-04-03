@@ -362,6 +362,7 @@ func (t *MCPTool) persistLargeTextArtifact(text string) *ToolResult {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return t.largeTextArtifactFallback(text, err)
 	}
+	// TODO: Add lifecycle cleanup/retention for MCP artifact files.
 
 	pattern := fmt.Sprintf(
 		"%s_%s_*.txt",

@@ -783,3 +783,28 @@ func TestMCPTool_Execute_LargeTextArtifactFailureStillOmitsContext(t *testing.T)
 		t.Fatalf("expected no artifact tags on persistence failure, got %+v", result.ArtifactTags)
 	}
 }
+
+func TestMCPTool_Execute_WhitespaceWorkspaceDisablesArtifactPersistence(t *testing.T) {
+	largeText := strings.Repeat("This is a large MCP text payload.\n", 800)
+	manager := &MockMCPManager{
+		callToolFunc: func(ctx context.Context, serverName, toolName string, arguments map[string]any) (*mcp.CallToolResult, error) {
+			return &mcp.CallToolResult{
+				Content: []mcp.Content{
+					&mcp.TextContent{Text: largeText},
+				},
+			}, nil
+		},
+	}
+
+	mcpTool := NewMCPTool(manager, "test_server", &mcp.Tool{Name: "dump_payload"})
+	mcpTool.SetWorkspace(" \n\t ")
+
+	result := mcpTool.Execute(context.Background(), nil)
+
+	if len(result.ArtifactTags) != 0 {
+		t.Fatalf("expected no artifact tags for whitespace workspace, got %+v", result.ArtifactTags)
+	}
+	if !strings.Contains(result.ForLLM, "This is a large MCP text payload") {
+		t.Fatalf("expected large text to remain inline when workspace is blank, got %q", result.ForLLM)
+	}
+}
