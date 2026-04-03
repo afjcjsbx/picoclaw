@@ -749,3 +749,37 @@ func TestMCPTool_Execute_CustomInlineTextThreshold(t *testing.T) {
 		t.Fatalf("expected text to be omitted from ForLLM, got %q", result.ForLLM)
 	}
 }
+
+func TestMCPTool_Execute_LargeTextArtifactFailureStillOmitsContext(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	workspaceFile := filepath.Join(workspaceRoot, "not-a-directory")
+	if err := os.WriteFile(workspaceFile, []byte("x"), 0o600); err != nil {
+		t.Fatalf("failed to create workspace file: %v", err)
+	}
+
+	largeText := strings.Repeat("This is a large MCP text payload.\n", 800)
+	manager := &MockMCPManager{
+		callToolFunc: func(ctx context.Context, serverName, toolName string, arguments map[string]any) (*mcp.CallToolResult, error) {
+			return &mcp.CallToolResult{
+				Content: []mcp.Content{
+					&mcp.TextContent{Text: largeText},
+				},
+			}, nil
+		},
+	}
+
+	mcpTool := NewMCPTool(manager, "test_server", &mcp.Tool{Name: "dump_payload"})
+	mcpTool.SetWorkspace(workspaceFile)
+
+	result := mcpTool.Execute(context.Background(), nil)
+
+	if strings.Contains(result.ForLLM, "This is a large MCP text payload") {
+		t.Fatalf("expected large MCP text to be omitted from ForLLM, got %q", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "artifact persistence failed") {
+		t.Fatalf("expected persistence failure note, got %q", result.ForLLM)
+	}
+	if len(result.ArtifactTags) != 0 {
+		t.Fatalf("expected no artifact tags on persistence failure, got %+v", result.ArtifactTags)
+	}
+}

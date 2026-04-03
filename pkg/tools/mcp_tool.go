@@ -13,6 +13,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/media"
 )
 
@@ -352,13 +353,14 @@ func (t *MCPTool) persistLargeTextArtifact(text string) *ToolResult {
 	if limit <= 0 {
 		limit = maxMCPInlineTextRunes
 	}
-	if text == "" || utf8.RuneCountInString(text) <= limit || t.workspace == "" {
+	size := utf8.RuneCountInString(text)
+	if text == "" || size <= limit || t.workspace == "" {
 		return nil
 	}
 
 	dir := filepath.Join(t.workspace, ".artifacts", "mcp")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil
+		return t.largeTextArtifactFallback(text, err)
 	}
 
 	pattern := fmt.Sprintf(
@@ -368,25 +370,41 @@ func (t *MCPTool) persistLargeTextArtifact(text string) *ToolResult {
 	)
 	tmpFile, err := os.CreateTemp(dir, pattern)
 	if err != nil {
-		return nil
+		return t.largeTextArtifactFallback(text, err)
 	}
 	path := tmpFile.Name()
 	if _, err = tmpFile.WriteString(text); err != nil {
 		_ = tmpFile.Close()
 		_ = os.Remove(path)
-		return nil
+		return t.largeTextArtifactFallback(text, err)
 	}
 	if err = tmpFile.Close(); err != nil {
 		_ = os.Remove(path)
-		return nil
+		return t.largeTextArtifactFallback(text, err)
 	}
 
 	return &ToolResult{
 		ForLLM: fmt.Sprintf(
 			"[MCP returned a large text result (%d chars); omitted from model context and saved as a local artifact.]",
-			utf8.RuneCountInString(text),
+			size,
 		),
 		ArtifactTags: []string{"[file:" + path + "]"},
+	}
+}
+
+func (t *MCPTool) largeTextArtifactFallback(text string, err error) *ToolResult {
+	size := utf8.RuneCountInString(text)
+	logger.WarnCF("tool", "Failed to persist large MCP text artifact", map[string]any{
+		"server": t.serverName,
+		"tool":   t.tool.Name,
+		"chars":  size,
+		"error":  err.Error(),
+	})
+	return &ToolResult{
+		ForLLM: fmt.Sprintf(
+			"[MCP returned a large text result (%d chars); omitted from model context because artifact persistence failed.]",
+			size,
+		),
 	}
 }
 
