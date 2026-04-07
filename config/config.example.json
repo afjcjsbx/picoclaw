@@ -257,6 +257,8 @@
       "prefer_native": true,
       "fetch_limit_bytes": 10485760,
       "format": "plaintext",
+      "fetch_use_llm_processing": false,
+      "fetch_llm_processing_min_chars": 5000,
       "brave": {
         "enabled": false,
         "api_key": "YOUR_BRAVE_API_KEY",

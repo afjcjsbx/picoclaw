@@ -32,6 +32,9 @@ const (
 
 	defaultMaxChars = 50000
 	maxRedirects    = 5
+
+	defaultWebFetchLLMProcessingMinChars = 5000
+	webFetchLLMProcessingMaxRetries      = 2
 )
 
 // Pre-compiled regexes for HTML text extraction
@@ -1089,13 +1092,24 @@ func (t *WebSearchTool) Execute(ctx context.Context, args map[string]any) *ToolR
 }
 
 type WebFetchTool struct {
-	maxChars        int
-	proxy           string
-	client          *http.Client
-	format          string
-	fetchLimitBytes int64
-	whitelist       *privateHostWhitelist
+	maxChars         int
+	proxy            string
+	client           *http.Client
+	format           string
+	fetchLimitBytes  int64
+	whitelist        *privateHostWhitelist
+	useLLMProcessing bool
+	llmProcessor     WebFetchLLMProcessor
+	llmMinChars      int
 }
+
+type WebFetchLLMProcessor func(
+	ctx context.Context,
+	systemPrompt string,
+	userPrompt string,
+	maxOutputChars int,
+	maxRetries int,
+) (string, error)
 
 type privateHostWhitelist struct {
 	exact map[string]struct{}
@@ -1165,7 +1179,19 @@ func NewWebFetchToolWithConfig(
 		format:          format,
 		fetchLimitBytes: fetchLimitBytes,
 		whitelist:       whitelist,
+		llmMinChars:     defaultWebFetchLLMProcessingMinChars,
 	}, nil
+}
+
+func (t *WebFetchTool) SetLLMProcessor(processor WebFetchLLMProcessor) {
+	t.llmProcessor = processor
+}
+
+func (t *WebFetchTool) SetLLMProcessingConfig(enabled bool, minChars int) {
+	t.useLLMProcessing = enabled
+	if minChars > 0 {
+		t.llmMinChars = minChars
+	}
 }
 
 func (t *WebFetchTool) Name() string {
@@ -1173,7 +1199,7 @@ func (t *WebFetchTool) Name() string {
 }
 
 func (t *WebFetchTool) Description() string {
-	return "Fetch a URL and extract readable content (HTML to text). Use this to get weather info, news, articles, or any web content."
+	return "Fetch a URL and extract readable content (HTML to text). Use this to get weather info, news, articles, or any web content. Large pages can optionally be condensed into dense markdown when enabled in config."
 }
 
 func (t *WebFetchTool) Parameters() map[string]any {
@@ -1226,7 +1252,6 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 			maxChars = int(mc)
 		}
 	}
-
 	doFetch := func(ua string) (*http.Response, []byte, error) {
 		req, reqErr := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
 		if reqErr != nil {
@@ -1355,18 +1380,52 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		extractor = "raw"
 	}
 
+	originalLength := len(text)
+	llmProcessingApplied := false
+	llmProcessingAttempted := false
+	llmProcessingError := ""
+	if t.useLLMProcessing && originalLength >= t.llmProcessingThreshold() {
+		llmProcessingAttempted = true
+		processedText, processErr := t.processContentWithLLM(
+			ctx,
+			urlStr,
+			mediaType,
+			extractor,
+			text,
+			maxChars,
+		)
+		if processErr != nil {
+			llmProcessingError = processErr.Error()
+			logger.WarnCF("tool", "web_fetch LLM processing failed; falling back to extracted content", map[string]any{
+				"url":            urlStr,
+				"error":          processErr.Error(),
+				"extractor":      extractor,
+				"original_chars": originalLength,
+			})
+		} else if strings.TrimSpace(processedText) != "" {
+			text = processedText
+			llmProcessingApplied = true
+		}
+	}
+
 	truncated := len(text) > maxChars
 	if truncated {
 		text = text[:maxChars] + "\n[Content truncated due to size limit]"
 	}
 
 	result := map[string]any{
-		"url":       urlStr,
-		"status":    resp.StatusCode,
-		"extractor": extractor,
-		"truncated": truncated,
-		"length":    len(text),
-		"text":      text,
+		"url":                      urlStr,
+		"status":                   resp.StatusCode,
+		"extractor":                extractor,
+		"truncated":                truncated,
+		"length":                   len(text),
+		"original_length":          originalLength,
+		"llm_processing_enabled":   t.useLLMProcessing,
+		"llm_processing_applied":   llmProcessingApplied,
+		"llm_processing_attempted": llmProcessingAttempted,
+		"llm_processing_threshold": t.llmProcessingThreshold(),
+		"llm_processing_error":     llmProcessingError,
+		"text":                     text,
 	}
 
 	resultJSON, _ := json.MarshalIndent(result, "", "  ")
@@ -1374,13 +1433,68 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	return &ToolResult{
 		ForLLM: string(resultJSON),
 		ForUser: fmt.Sprintf(
-			"Fetched %d bytes from %s (extractor: %s, truncated: %v)",
+			"Fetched %d bytes from %s (extractor: %s, truncated: %v, llm_processed: %v)",
 			len(text),
 			urlStr,
 			extractor,
 			truncated,
+			llmProcessingApplied,
 		),
 	}
+}
+
+func (t *WebFetchTool) llmProcessingThreshold() int {
+	if t.llmMinChars <= 0 {
+		return defaultWebFetchLLMProcessingMinChars
+	}
+	return t.llmMinChars
+}
+
+func (t *WebFetchTool) processContentWithLLM(
+	ctx context.Context,
+	urlStr string,
+	mediaType string,
+	extractor string,
+	content string,
+	maxOutputChars int,
+) (string, error) {
+	if t.llmProcessor == nil {
+		return "", fmt.Errorf("LLM processor is not configured")
+	}
+
+	var contextBuilder strings.Builder
+	fmt.Fprintf(&contextBuilder, "URL: %s\n", urlStr)
+	if mediaType != "" {
+		fmt.Fprintf(&contextBuilder, "Content type: %s\n", mediaType)
+	}
+	if extractor != "" {
+		fmt.Fprintf(&contextBuilder, "Extractor: %s\n", extractor)
+	}
+	fmt.Fprintf(&contextBuilder, "Original length: %d characters\n\n", len(content))
+
+	systemPrompt := `You are an expert content analyst. Your job is to process web content and create a comprehensive yet concise summary that preserves all important information while dramatically reducing bulk.
+
+Create a well-structured markdown summary that includes:
+1. Key excerpts (quotes, code snippets, important facts) in their original format
+2. Comprehensive summary of all other important information
+3. Proper markdown formatting with headers, bullets, and emphasis
+
+Your goal is to preserve ALL important information while reducing length. Never lose key facts, figures, insights, or actionable information. Make it scannable and well-organized.`
+
+	userPrompt := fmt.Sprintf(`Please process this web content and create a comprehensive markdown summary:
+
+%sCONTENT TO PROCESS:
+%s
+
+Create a markdown summary that captures all key information in a well-organized, scannable format. Include important quotes and code snippets in their original formatting. Focus on actionable information, specific details, and unique insights.`, contextBuilder.String(), content)
+
+	return t.llmProcessor(
+		ctx,
+		systemPrompt,
+		userPrompt,
+		maxOutputChars,
+		webFetchLLMProcessingMaxRetries,
+	)
 }
 
 func looksLikeHTML(body string) bool {

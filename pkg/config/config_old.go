@@ -809,19 +809,21 @@ func (cfg *configV1) migrateChannelConfigs() {
 }
 
 type webToolsConfigV0 struct {
-	ToolConfig           `                    envPrefix:"PICOCLAW_TOOLS_WEB_"`
-	Brave                braveConfigV0       `                                json:"brave"`
-	Tavily               tavilyConfigV0      `                                json:"tavily"`
-	DuckDuckGo           DuckDuckGoConfig    `                                json:"duckduckgo"`
-	Perplexity           perplexityConfigV0  `                                json:"perplexity"`
-	SearXNG              SearXNGConfig       `                                json:"searxng"`
-	GLMSearch            glmSearchConfigV0   `                                json:"glm_search"`
-	BaiduSearch          baiduSearchConfigV0 `                                json:"baidu_search"`
-	PreferNative         bool                `                                json:"prefer_native"                    env:"PICOCLAW_TOOLS_WEB_PREFER_NATIVE"`
-	Proxy                string              `                                json:"proxy,omitempty"                  env:"PICOCLAW_TOOLS_WEB_PROXY"`
-	FetchLimitBytes      int64               `                                json:"fetch_limit_bytes,omitempty"      env:"PICOCLAW_TOOLS_WEB_FETCH_LIMIT_BYTES"`
-	Format               string              `                                json:"format,omitempty"                 env:"PICOCLAW_TOOLS_WEB_FORMAT"`
-	PrivateHostWhitelist FlexibleStringSlice `                                json:"private_host_whitelist,omitempty" env:"PICOCLAW_TOOLS_WEB_PRIVATE_HOST_WHITELIST"`
+	ToolConfig                 `                    envPrefix:"PICOCLAW_TOOLS_WEB_"`
+	Brave                      braveConfigV0       `                                json:"brave"`
+	Tavily                     tavilyConfigV0      `                                json:"tavily"`
+	DuckDuckGo                 DuckDuckGoConfig    `                                json:"duckduckgo"`
+	Perplexity                 perplexityConfigV0  `                                json:"perplexity"`
+	SearXNG                    SearXNGConfig       `                                json:"searxng"`
+	GLMSearch                  glmSearchConfigV0   `                                json:"glm_search"`
+	BaiduSearch                baiduSearchConfigV0 `                                json:"baidu_search"`
+	PreferNative               bool                `                                json:"prefer_native"                    env:"PICOCLAW_TOOLS_WEB_PREFER_NATIVE"`
+	Proxy                      string              `                                json:"proxy,omitempty"                  env:"PICOCLAW_TOOLS_WEB_PROXY"`
+	FetchLimitBytes            int64               `                                json:"fetch_limit_bytes,omitempty"      env:"PICOCLAW_TOOLS_WEB_FETCH_LIMIT_BYTES"`
+	Format                     string              `                                json:"format,omitempty"                 env:"PICOCLAW_TOOLS_WEB_FORMAT"`
+	PrivateHostWhitelist       FlexibleStringSlice `                                json:"private_host_whitelist,omitempty" env:"PICOCLAW_TOOLS_WEB_PRIVATE_HOST_WHITELIST"`
+	FetchUseLLMProcessing      bool                `                                json:"fetch_use_llm_processing,omitempty"      env:"PICOCLAW_TOOLS_WEB_FETCH_USE_LLM_PROCESSING"`
+	FetchLLMProcessingMinChars int                 `                                json:"fetch_llm_processing_min_chars,omitempty" env:"PICOCLAW_TOOLS_WEB_FETCH_LLM_PROCESSING_MIN_CHARS"`
 }
 
 type braveConfigV0 struct {
@@ -919,19 +921,21 @@ func (v *webToolsConfigV0) ToWebToolsConfig() WebToolsConfig {
 	baiduSearch := v.BaiduSearch.ToBaiduSearchConfig()
 
 	return WebToolsConfig{
-		ToolConfig:           v.ToolConfig,
-		Brave:                brave,
-		Tavily:               tavily,
-		DuckDuckGo:           v.DuckDuckGo,
-		Perplexity:           perplexity,
-		SearXNG:              v.SearXNG,
-		GLMSearch:            glmSearch,
-		PreferNative:         v.PreferNative,
-		Proxy:                v.Proxy,
-		FetchLimitBytes:      v.FetchLimitBytes,
-		Format:               v.Format,
-		PrivateHostWhitelist: v.PrivateHostWhitelist,
-		BaiduSearch:          baiduSearch,
+		ToolConfig:                 v.ToolConfig,
+		Brave:                      brave,
+		Tavily:                     tavily,
+		DuckDuckGo:                 v.DuckDuckGo,
+		Perplexity:                 perplexity,
+		SearXNG:                    v.SearXNG,
+		GLMSearch:                  glmSearch,
+		PreferNative:               v.PreferNative,
+		Proxy:                      v.Proxy,
+		FetchLimitBytes:            v.FetchLimitBytes,
+		Format:                     v.Format,
+		PrivateHostWhitelist:       v.PrivateHostWhitelist,
+		FetchUseLLMProcessing:      v.FetchUseLLMProcessing,
+		FetchLLMProcessingMinChars: v.FetchLLMProcessingMinChars,
+		BaiduSearch:                baiduSearch,
 	}
 }
 

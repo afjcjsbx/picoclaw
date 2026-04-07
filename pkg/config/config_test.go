@@ -529,6 +529,16 @@ func TestDefaultConfig_WebPreferNativeEnabled(t *testing.T) {
 	}
 }
 
+func TestDefaultConfig_WebFetchLLMProcessingDisabled(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.Tools.Web.FetchUseLLMProcessing {
+		t.Fatal("DefaultConfig().Tools.Web.FetchUseLLMProcessing should be false")
+	}
+	if cfg.Tools.Web.FetchLLMProcessingMinChars != 5000 {
+		t.Fatalf("DefaultConfig().Tools.Web.FetchLLMProcessingMinChars = %d, want 5000", cfg.Tools.Web.FetchLLMProcessingMinChars)
+	}
+}
+
 func TestDefaultConfig_ToolFeedbackDisabled(t *testing.T) {
 	cfg := DefaultConfig()
 	if cfg.Agents.Defaults.ToolFeedback.Enabled {
@@ -585,6 +595,29 @@ func TestLoadConfig_WebPreferNativeCanBeDisabled(t *testing.T) {
 	}
 	if cfg.Tools.Web.PreferNative {
 		t.Fatal("PreferNative should be false when disabled in config file")
+	}
+}
+
+func TestLoadConfig_WebFetchLLMProcessingCanBeEnabled(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(
+		configPath,
+		[]byte(`{"tools":{"web":{"fetch_use_llm_processing":true,"fetch_llm_processing_min_chars":7000}}}`),
+		0o600,
+	); err != nil {
+		t.Fatalf("WriteFile() error: %v", err)
+	}
+
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error: %v", err)
+	}
+	if !cfg.Tools.Web.FetchUseLLMProcessing {
+		t.Fatal("FetchUseLLMProcessing should be true when enabled in config file")
+	}
+	if cfg.Tools.Web.FetchLLMProcessingMinChars != 7000 {
+		t.Fatalf("FetchLLMProcessingMinChars = %d, want 7000", cfg.Tools.Web.FetchLLMProcessingMinChars)
 	}
 }
 

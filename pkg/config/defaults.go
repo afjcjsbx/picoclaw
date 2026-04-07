@@ -377,10 +377,12 @@ func DefaultConfig() *Config {
 				ToolConfig: ToolConfig{
 					Enabled: true,
 				},
-				PreferNative:    true,
-				Proxy:           "",
-				FetchLimitBytes: 10 * 1024 * 1024, // 10MB by default
-				Format:          "plaintext",
+				PreferNative:               true,
+				Proxy:                      "",
+				FetchLimitBytes:            10 * 1024 * 1024, // 10MB by default
+				Format:                     "plaintext",
+				FetchUseLLMProcessing:      false,
+				FetchLLMProcessingMinChars: 5000,
 				Brave: BraveConfig{
 					Enabled:    false,
 					MaxResults: 5,

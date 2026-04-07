@@ -5,20 +5,30 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/media"
 )
 
 const (
 	testFetchLimit = int64(10 * 1024 * 1024)
 	format         = "plaintext"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
 
 // TestWebTool_WebFetch_Success verifies successful URL fetching
 func TestWebTool_WebFetch_Success(t *testing.T) {
@@ -556,6 +566,258 @@ func TestWebTool_WebFetch_HTMLExtraction(t *testing.T) {
 	// Should NOT contain script or style tags in ForLLM
 	if strings.Contains(result.ForLLM, "<script>") || strings.Contains(result.ForLLM, "<style>") {
 		t.Errorf("Expected script/style tags to be removed, got: %s", result.ForLLM)
+	}
+}
+
+func TestWebTool_WebFetch_MarkdownBase64Image_RegistrySanitizesInlineMedia(t *testing.T) {
+	body := `<html><body><p>before</p><img src="data:image/png;base64,aGVsbG8=" alt="inline"><p>after</p></body></html>`
+	tool := &WebFetchTool{
+		maxChars: 50000,
+		client: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/html; charset=utf-8"}},
+				Body:       io.NopCloser(strings.NewReader(body)),
+				Request:    req,
+			}, nil
+		})},
+		format:          "markdown",
+		fetchLimitBytes: testFetchLimit,
+	}
+
+	registry := NewToolRegistry()
+	store := media.NewFileMediaStore()
+	registry.SetMediaStore(store)
+	registry.Register(tool)
+
+	result := registry.ExecuteWithContext(
+		context.Background(),
+		tool.Name(),
+		map[string]any{"url": "https://example.com/article"},
+		"telegram",
+		"chat-42",
+		nil,
+	)
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.ForLLM)
+	}
+
+	if len(result.Media) != 1 {
+		t.Fatalf("expected 1 media ref, got %d", len(result.Media))
+	}
+	if strings.Contains(result.ForLLM, "data:image/png;base64") {
+		t.Fatalf("expected inline data URL to be stripped from ForLLM, got %q", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "before") || !strings.Contains(result.ForLLM, "after") {
+		t.Fatalf("expected surrounding page content to remain visible, got %q", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "registered as a media attachment") {
+		t.Fatalf("expected media attachment note, got %q", result.ForLLM)
+	}
+
+	path, err := store.Resolve(result.Media[0])
+	if err != nil {
+		t.Fatalf("expected stored media ref to resolve: %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("expected stored media file to exist: %v", err)
+	}
+	if filepath.Ext(path) != ".png" {
+		t.Fatalf("expected stored inline media to use png extension, got %q", path)
+	}
+}
+
+func TestWebTool_WebFetch_UsesLLMProcessingWhenEnabledAndAboveThreshold(t *testing.T) {
+	body := strings.Repeat("important content ", 40)
+	processorCalls := 0
+	tool := &WebFetchTool{
+		maxChars: 50000,
+		client: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/plain; charset=utf-8"}},
+				Body:       io.NopCloser(strings.NewReader(body)),
+				Request:    req,
+			}, nil
+		})},
+		format:           "plaintext",
+		fetchLimitBytes:  testFetchLimit,
+		useLLMProcessing: true,
+		llmMinChars:      100,
+		llmProcessor: func(
+			ctx context.Context,
+			systemPrompt string,
+			userPrompt string,
+			maxOutputChars int,
+			maxRetries int,
+		) (string, error) {
+			processorCalls++
+			if maxRetries != 2 {
+				t.Fatalf("maxRetries = %d, want 2", maxRetries)
+			}
+			if !strings.Contains(systemPrompt, "expert content analyst") {
+				t.Fatalf("unexpected system prompt: %q", systemPrompt)
+			}
+			if !strings.Contains(userPrompt, "CONTENT TO PROCESS:") {
+				t.Fatalf("unexpected user prompt: %q", userPrompt)
+			}
+			return "## Dense Summary\n\n- Useful detail", nil
+		},
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"url": "https://example.com/article",
+	})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.ForLLM)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(result.ForLLM), &payload); err != nil {
+		t.Fatalf("failed to decode tool result: %v", err)
+	}
+
+	if processorCalls != 1 {
+		t.Fatalf("processor calls = %d, want 1", processorCalls)
+	}
+	if applied, _ := payload["llm_processing_applied"].(bool); !applied {
+		t.Fatalf("expected llm_processing_applied=true, got %v", payload["llm_processing_applied"])
+	}
+	if text, _ := payload["text"].(string); !strings.Contains(text, "Dense Summary") {
+		t.Fatalf("expected processed text in payload, got %q", text)
+	}
+}
+
+func TestWebTool_WebFetch_SkipsLLMProcessingBelowThreshold(t *testing.T) {
+	body := "short content"
+	processorCalls := 0
+	tool := &WebFetchTool{
+		maxChars: 50000,
+		client: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/plain; charset=utf-8"}},
+				Body:       io.NopCloser(strings.NewReader(body)),
+				Request:    req,
+			}, nil
+		})},
+		format:           "plaintext",
+		fetchLimitBytes:  testFetchLimit,
+		useLLMProcessing: true,
+		llmMinChars:      100,
+		llmProcessor: func(
+			ctx context.Context,
+			systemPrompt string,
+			userPrompt string,
+			maxOutputChars int,
+			maxRetries int,
+		) (string, error) {
+			processorCalls++
+			return "should not be used", nil
+		},
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"url": "https://example.com/article",
+	})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.ForLLM)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(result.ForLLM), &payload); err != nil {
+		t.Fatalf("failed to decode tool result: %v", err)
+	}
+
+	if processorCalls != 0 {
+		t.Fatalf("processor calls = %d, want 0", processorCalls)
+	}
+	if attempted, _ := payload["llm_processing_attempted"].(bool); attempted {
+		t.Fatalf("expected llm_processing_attempted=false, got %v", payload["llm_processing_attempted"])
+	}
+	if text, _ := payload["text"].(string); text != body {
+		t.Fatalf("expected raw extracted text, got %q", text)
+	}
+}
+
+func TestWebTool_WebFetch_FallsBackWhenLLMProcessingFails(t *testing.T) {
+	body := strings.Repeat("keep raw content ", 30)
+	tool := &WebFetchTool{
+		maxChars: 50000,
+		client: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/plain; charset=utf-8"}},
+				Body:       io.NopCloser(strings.NewReader(body)),
+				Request:    req,
+			}, nil
+		})},
+		format:           "plaintext",
+		fetchLimitBytes:  testFetchLimit,
+		useLLMProcessing: true,
+		llmMinChars:      100,
+		llmProcessor: func(
+			ctx context.Context,
+			systemPrompt string,
+			userPrompt string,
+			maxOutputChars int,
+			maxRetries int,
+		) (string, error) {
+			return "", fmt.Errorf("summary backend unavailable")
+		},
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"url": "https://example.com/article",
+	})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.ForLLM)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(result.ForLLM), &payload); err != nil {
+		t.Fatalf("failed to decode tool result: %v", err)
+	}
+
+	if applied, _ := payload["llm_processing_applied"].(bool); applied {
+		t.Fatalf("expected llm_processing_applied=false, got %v", payload["llm_processing_applied"])
+	}
+	if errText, _ := payload["llm_processing_error"].(string); !strings.Contains(errText, "summary backend unavailable") {
+		t.Fatalf("expected llm processing error to be reported, got %q", errText)
+	}
+	if text, _ := payload["text"].(string); text != body {
+		t.Fatalf("expected raw text fallback, got %q", text)
+	}
+}
+
+func TestWebTool_WebFetch_RegistryRejectsUseLLMProcessingArgument(t *testing.T) {
+	tool := &WebFetchTool{
+		maxChars:        50000,
+		client:          &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) { return nil, nil })},
+		format:          "plaintext",
+		fetchLimitBytes: testFetchLimit,
+	}
+
+	registry := NewToolRegistry()
+	registry.Register(tool)
+
+	result := registry.ExecuteWithContext(
+		context.Background(),
+		tool.Name(),
+		map[string]any{
+			"url":                "https://example.com/article",
+			"use_llm_processing": true,
+		},
+		"",
+		"",
+		nil,
+	)
+
+	if !result.IsError {
+		t.Fatalf("expected validation error, got success: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "unexpected property") {
+		t.Fatalf("expected unexpected property validation error, got %q", result.ForLLM)
 	}
 }
 

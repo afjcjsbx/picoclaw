@@ -49,6 +49,8 @@ General settings for fetching and processing webpage content.
 | `enabled`           | bool   | true          | Enable the webpage fetching capability.                                                       |
 | `fetch_limit_bytes` | int    | 10485760      | Maximum size of the webpage payload to fetch, in bytes (default is 10MB).                     |
 | `format`            | string | "plaintext"   | Output format of the fetched content. Options: `plaintext` or `markdown` (recommended).       |
+| `fetch_use_llm_processing` | bool | false   | When enabled, large fetched pages are post-processed by an auxiliary LLM into dense markdown. |
+| `fetch_llm_processing_min_chars` | int | 5000 | Minimum extracted content length required before LLM post-processing is attempted.            |
 
 ### Brave
 

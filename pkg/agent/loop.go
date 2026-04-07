@@ -227,6 +227,76 @@ func registerSharedTools(
 			if err != nil {
 				logger.ErrorCF("agent", "Failed to create web fetch tool", map[string]any{"error": err.Error()})
 			} else {
+				fetchTool.SetLLMProcessingConfig(
+					cfg.Tools.Web.FetchUseLLMProcessing,
+					cfg.Tools.Web.FetchLLMProcessingMinChars,
+				)
+				fetchTool.SetLLMProcessor(func(
+					ctx context.Context,
+					systemPrompt string,
+					userPrompt string,
+					maxOutputChars int,
+					maxRetries int,
+				) (string, error) {
+					if agent == nil || agent.Provider == nil {
+						return "", fmt.Errorf("agent provider not configured")
+					}
+
+					messages := []providers.Message{
+						{Role: "system", Content: systemPrompt},
+						{Role: "user", Content: userPrompt},
+					}
+					activeCandidates, activeModel, usedLight := al.selectCandidates(agent, userPrompt, messages)
+					activeProvider := agent.Provider
+					if usedLight && agent.LightProvider != nil {
+						activeProvider = agent.LightProvider
+					}
+
+					maxTokens := max(256, min(agent.MaxTokens, maxOutputChars/4))
+					llmOpts := map[string]any{
+						"max_tokens":       maxTokens,
+						"temperature":      0.2,
+						"prompt_cache_key": agent.ID,
+					}
+
+					var lastErr error
+					for attempt := 0; attempt <= maxRetries; attempt++ {
+						response, err := al.executeLLMCall(
+							ctx,
+							agent,
+							activeProvider,
+							activeCandidates,
+							activeModel,
+							messages,
+							nil,
+							llmOpts,
+							0,
+						)
+						if err == nil {
+							content := strings.TrimSpace(response.Content)
+							if content == "" && response.ReasoningContent != "" {
+								content = strings.TrimSpace(response.ReasoningContent)
+							}
+							if content != "" {
+								return content, nil
+							}
+							lastErr = fmt.Errorf("LLM returned empty content")
+						} else {
+							lastErr = err
+						}
+
+						if attempt < maxRetries {
+							backoff := time.Duration(attempt+1) * 100 * time.Millisecond
+							if sleepErr := sleepWithContext(ctx, backoff); sleepErr != nil {
+								return "", sleepErr
+							}
+						}
+					}
+					if lastErr == nil {
+						lastErr = fmt.Errorf("LLM returned empty content")
+					}
+					return "", lastErr
+				})
 				agent.Tools.Register(fetchTool)
 			}
 		}
@@ -2004,50 +2074,21 @@ turnLoop:
 				"tools_json":    formatToolsForLog(providerToolDefs),
 			})
 
-		callLLM := func(messagesForCall []providers.Message, toolDefsForCall []providers.ToolDefinition) (*providers.LLMResponse, error) {
-			providerCtx, providerCancel := context.WithCancel(turnCtx)
-			ts.setProviderCancel(providerCancel)
-			defer func() {
-				providerCancel()
-				ts.clearProviderCancel(providerCancel)
-			}()
-
-			al.activeRequests.Add(1)
-			defer al.activeRequests.Done()
-
-			if len(activeCandidates) > 1 && al.fallback != nil {
-				fbResult, fbErr := al.fallback.Execute(
-					providerCtx,
-					activeCandidates,
-					func(ctx context.Context, provider, model string) (*providers.LLMResponse, error) {
-						candidateProvider := activeProvider
-						if cp, ok := ts.agent.CandidateProviders[providers.ModelKey(provider, model)]; ok {
-							candidateProvider = cp
-						}
-						return candidateProvider.Chat(ctx, messagesForCall, toolDefsForCall, model, llmOpts)
-					},
-				)
-				if fbErr != nil {
-					return nil, fbErr
-				}
-				if fbResult.Provider != "" && len(fbResult.Attempts) > 0 {
-					logger.InfoCF(
-						"agent",
-						fmt.Sprintf("Fallback: succeeded with %s/%s after %d attempts",
-							fbResult.Provider, fbResult.Model, len(fbResult.Attempts)+1),
-						map[string]any{"agent_id": ts.agent.ID, "iteration": iteration},
-					)
-				}
-				return fbResult.Response, nil
-			}
-			return activeProvider.Chat(providerCtx, messagesForCall, toolDefsForCall, llmModel, llmOpts)
-		}
-
 		var response *providers.LLMResponse
 		var err error
 		maxRetries := 2
 		for retry := 0; retry <= maxRetries; retry++ {
-			response, err = callLLM(callMessages, providerToolDefs)
+			response, err = al.executeLLMCall(
+				turnCtx,
+				ts.agent,
+				activeProvider,
+				activeCandidates,
+				llmModel,
+				callMessages,
+				providerToolDefs,
+				llmOpts,
+				iteration,
+			)
 			if err == nil {
 				break
 			}
@@ -3047,6 +3088,56 @@ func formatToolsForLog(toolDefs []providers.ToolDefinition) string {
 	}
 	sb.WriteString("]")
 	return sb.String()
+}
+
+func (al *AgentLoop) executeLLMCall(
+	ctx context.Context,
+	agent *AgentInstance,
+	activeProvider providers.LLMProvider,
+	activeCandidates []providers.FallbackCandidate,
+	model string,
+	messages []providers.Message,
+	toolDefs []providers.ToolDefinition,
+	llmOpts map[string]any,
+	iteration int,
+) (*providers.LLMResponse, error) {
+	providerCtx, providerCancel := context.WithCancel(ctx)
+	if ts := turnStateFromContext(ctx); ts != nil {
+		ts.setProviderCancel(providerCancel)
+		defer ts.clearProviderCancel(providerCancel)
+	}
+	defer providerCancel()
+
+	al.activeRequests.Add(1)
+	defer al.activeRequests.Done()
+
+	if len(activeCandidates) > 1 && al.fallback != nil {
+		fbResult, fbErr := al.fallback.Execute(
+			providerCtx,
+			activeCandidates,
+			func(callCtx context.Context, provider, candidateModel string) (*providers.LLMResponse, error) {
+				candidateProvider := activeProvider
+				if cp, ok := agent.CandidateProviders[providers.ModelKey(provider, candidateModel)]; ok {
+					candidateProvider = cp
+				}
+				return candidateProvider.Chat(callCtx, messages, toolDefs, candidateModel, llmOpts)
+			},
+		)
+		if fbErr != nil {
+			return nil, fbErr
+		}
+		if fbResult.Provider != "" && len(fbResult.Attempts) > 0 {
+			logger.InfoCF(
+				"agent",
+				fmt.Sprintf("Fallback: succeeded with %s/%s after %d attempts",
+					fbResult.Provider, fbResult.Model, len(fbResult.Attempts)+1),
+				map[string]any{"agent_id": agent.ID, "iteration": iteration},
+			)
+		}
+		return fbResult.Response, nil
+	}
+
+	return activeProvider.Chat(providerCtx, messages, toolDefs, model, llmOpts)
 }
 
 // summarizeSession summarizes the conversation history for a session.
