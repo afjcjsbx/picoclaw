@@ -450,6 +450,17 @@ func picoInferAttachmentType(filename, contentType string) string {
 	}
 }
 
+func picoAllowsInlineDisplay(filename, contentType string) bool {
+	contentType = strings.ToLower(strings.TrimSpace(contentType))
+	filename = strings.ToLower(strings.TrimSpace(filename))
+
+	if strings.Contains(contentType, "svg") || filepath.Ext(filename) == ".svg" {
+		return false
+	}
+
+	return picoInferAttachmentType(filename, contentType) == "image"
+}
+
 func (c *PicoChannel) handleMediaDownload(w http.ResponseWriter, r *http.Request) {
 	if !c.IsRunning() {
 		http.Error(w, "channel not running", http.StatusServiceUnavailable)
@@ -501,7 +512,7 @@ func (c *PicoChannel) handleMediaDownload(w http.ResponseWriter, r *http.Request
 	}
 
 	dispositionType := "attachment"
-	if picoInferAttachmentType(filename, contentType) == "image" {
+	if picoAllowsInlineDisplay(filename, contentType) {
 		dispositionType = "inline"
 	}
 
