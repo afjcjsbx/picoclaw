@@ -17,11 +17,15 @@ type sentTarget struct {
 type MessageTool struct {
 	sendCallback SendCallbackWithContext
 	mu           sync.Mutex
-	sentTargets  []sentTarget // Tracks all targets sent to in the current round
+	// sentTargets tracks targets sent to in the current round, keyed by session key
+	// to support parallel turns for different sessions.
+	sentTargets map[string][]sentTarget
 }
 
 func NewMessageTool() *MessageTool {
-	return &MessageTool{}
+	return &MessageTool{
+		sentTargets: make(map[string][]sentTarget),
+	}
 }
 
 func (t *MessageTool) Name() string {
@@ -57,28 +61,31 @@ func (t *MessageTool) Parameters() map[string]any {
 	}
 }
 
-// ResetSentInRound resets the per-round send tracker.
+// ResetSentInRound resets the per-round send tracker for the given session key.
 // Called by the agent loop at the start of each inbound message processing round.
-func (t *MessageTool) ResetSentInRound() {
+func (t *MessageTool) ResetSentInRound(sessionKey string) {
 	t.mu.Lock()
-	t.sentTargets = t.sentTargets[:0]
-	t.mu.Unlock()
+	defer t.mu.Unlock()
+
+	// Delete the key entirely to prevent unbounded map growth over time
+	// with many unique sessions. Truncating the slice keeps the key alive.
+	delete(t.sentTargets, sessionKey)
 }
 
 // HasSentInRound returns true if the message tool sent a message during the current round.
-func (t *MessageTool) HasSentInRound() bool {
+func (t *MessageTool) HasSentInRound(sessionKey string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return len(t.sentTargets) > 0
+	return len(t.sentTargets[sessionKey]) > 0
 }
 
 // HasSentTo returns true if the message tool sent to the specific channel+chatID
 // during the current round. Used by PublishResponseIfNeeded to avoid suppressing
 // the final response when the message tool only sent to a different conversation.
-func (t *MessageTool) HasSentTo(channel, chatID string) bool {
+func (t *MessageTool) HasSentTo(sessionKey, channel, chatID string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	for _, st := range t.sentTargets {
+	for _, st := range t.sentTargets[sessionKey] {
 		if st.Channel == channel && st.ChatID == chatID {
 			return true
 		}
@@ -123,8 +130,9 @@ func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		}
 	}
 
+	sessionKey := ToolSessionKey(ctx)
 	t.mu.Lock()
-	t.sentTargets = append(t.sentTargets, sentTarget{Channel: channel, ChatID: chatID})
+	t.sentTargets[sessionKey] = append(t.sentTargets[sessionKey], sentTarget{Channel: channel, ChatID: chatID})
 	t.mu.Unlock()
 
 	// Silent: user already received the message directly
