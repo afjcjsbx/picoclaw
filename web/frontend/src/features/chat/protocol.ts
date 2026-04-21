@@ -4,6 +4,7 @@ import { normalizeUnixTimestamp } from "@/features/chat/state"
 import {
   type AssistantMessageKind,
   type ChatAttachment,
+  type ContextUsage,
   updateChatStore,
 } from "@/store/chat"
 
@@ -25,7 +26,9 @@ function hasAssistantKindPayload(payload: Record<string, unknown>): boolean {
   return typeof payload.thought === "boolean"
 }
 
-function parseAttachments(payload: Record<string, unknown>): ChatAttachment[] | undefined {
+function parseAttachments(
+  payload: Record<string, unknown>,
+): ChatAttachment[] | undefined {
   const raw = payload.attachments
   if (!Array.isArray(raw)) {
     return undefined
@@ -69,6 +72,24 @@ function parseAttachments(payload: Record<string, unknown>): ChatAttachment[] | 
   return attachments.length > 0 ? attachments : undefined
 }
 
+function parseContextUsage(
+  payload: Record<string, unknown>,
+): ContextUsage | undefined {
+  const raw = payload.context_usage
+  if (!raw || typeof raw !== "object") return undefined
+  const obj = raw as Record<string, unknown>
+  const used = Number(obj.used_tokens)
+  const total = Number(obj.total_tokens)
+  if (!Number.isFinite(used) || !Number.isFinite(total) || total <= 0)
+    return undefined
+  return {
+    used_tokens: used,
+    total_tokens: total,
+    compress_at_tokens: Number(obj.compress_at_tokens) || 0,
+    used_percent: Number(obj.used_percent) || 0,
+  }
+}
+
 export function handlePicoMessage(
   message: PicoMessage,
   expectedSessionId: string,
@@ -86,6 +107,7 @@ export function handlePicoMessage(
       const messageId = (payload.message_id as string) || `pico-${Date.now()}`
       const kind = parseAssistantMessageKind(payload)
       const attachments = parseAttachments(payload)
+      const contextUsage = parseContextUsage(payload)
       const timestamp =
         message.timestamp !== undefined &&
         Number.isFinite(Number(message.timestamp))
@@ -105,6 +127,7 @@ export function handlePicoMessage(
           },
         ],
         isTyping: false,
+        ...(contextUsage ? { contextUsage } : {}),
       }))
       break
     }

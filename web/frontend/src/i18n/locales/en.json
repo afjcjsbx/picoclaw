@@ -38,7 +38,7 @@
   "chat": {
     "welcome": "How can I help you today?",
     "welcomeDesc": "Ask me about weather, settings, or any other tasks. I'm here to assist you.",
-    "placeholder": "Start a new message...\nPress Enter to send, Shift + Enter for a new line",
+    "placeholder": "Start a new message...",
     "disabledPlaceholder": {
       "gatewayUnknown": "Unable to chat: Gateway status is still being checked. Please wait, then refresh the page or restart Launcher if needed.",
       "gatewayStarting": "Unable to chat: Gateway is starting. Wait for startup to complete, then try again.",
@@ -60,6 +60,7 @@
       "step4": "Almost there..."
     },
     "reasoningLabel": "Reasoning",
+    "toolLabel": "Tool",
     "history": "History",
     "noHistory": "No chat history yet",
     "historyLoadFailed": "Failed to load chat history",
@@ -72,6 +73,10 @@
       "notConnected": "Gateway is not running. Start it to chat.",
       "noModel": "No default model configured. Go to Models page to set one."
     },
+    "sendMessage": "Send message",
+    "sendHint": "Press Enter to send\nShift + Enter for a new line",
+    "contextTitle": "Context",
+    "contextDetail": "View Details",
     "attachImage": "Add images",
     "removeImage": "Remove image",
     "uploadedImage": "Uploaded image",
@@ -359,6 +364,7 @@
       "allowFromPlaceholder": "e.g. 123456, 789012",
       "allowOrigins": "Allow Origins",
       "allowOriginsPlaceholder": "e.g. https://example.com, http://localhost:5173",
+      "removeListItem": "Remove {{value}}",
       "secretPlaceholder": "Enter secret",
       "secretHintSet": "A value is already set. Leave blank to keep it unchanged."
     },
@@ -386,10 +392,10 @@
         "typingEnabled": "Display typing status while the assistant is generating a response.",
         "placeholderEnabled": "Enable temporary placeholder messages before the final reply is sent.",
         "groupTriggerMentionOnly": "In group chats, respond only when the bot is mentioned.",
-        "groupTriggerPrefixes": "Custom group-chat trigger prefixes, separated by commas.",
+        "groupTriggerPrefixes": "Custom group-chat trigger prefixes. Add items one by one, or paste multiple values at once.",
         "isLark": "Use Lark international domain (open.larksuite.com) instead of Feishu domain (open.feishu.cn).",
-        "allowFrom": "Allowed user or group IDs, separated by commas.",
-        "allowOrigins": "Allowed origin domains, separated by commas.",
+        "allowFrom": "Allowed user or group IDs. Add items one by one, or paste multiple values at once.",
+        "allowOrigins": "Allowed origin domains. Add items one by one, or paste multiple values at once.",
         "wsUrl": "WebSocket service URL.",
         "reconnectInterval": "Reconnect interval after disconnection (seconds).",
         "bridgeUrl": "Bridge service URL.",
