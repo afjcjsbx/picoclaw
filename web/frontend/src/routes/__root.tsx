@@ -33,7 +33,6 @@ const RootLayout = () => {
   const [authError, setAuthError] = useState<string | null>(null)
 
   // Session guard: proactively check auth status on every page load.
-  // This catches the case where ?token= auto-login bypassed the login/setup UI.
   useEffect(() => {
     if (isAuthPage) return
     void getLauncherAuthStatus()
@@ -53,7 +52,9 @@ const RootLayout = () => {
           globalThis.location.assign("/launcher-login")
         } else {
           setAuthError(
-            err instanceof Error ? err.message : "Auth service unavailable, please try to delete the launcher-auth.db at picoclaw home directory and restart the application.",
+            err instanceof Error
+              ? err.message
+              : "Auth service unavailable. Reset dashboard password storage and restart the application.",
           )
         }
       })

@@ -12,13 +12,17 @@ const (
 	// TypeMessageCreate is sent from server to client.
 	TypeMessageCreate = "message.create"
 	TypeMessageUpdate = "message.update"
+	TypeMessageDelete = "message.delete"
 	TypeMediaCreate   = "media.create"
 	TypeTypingStart   = "typing.start"
 	TypeTypingStop    = "typing.stop"
 	TypeError         = "error"
 	TypePong          = "pong"
 
-	PicoTokenPrefix = "pico-"
+	PayloadKeyContent = "content"
+	PayloadKeyThought = "thought"
+
+	MessageKindThought = "thought"
 )
 
 // PicoMessage is the wire format for all Pico Protocol messages.
@@ -37,6 +41,11 @@ func newMessage(msgType string, payload map[string]any) PicoMessage {
 		Timestamp: time.Now().UnixMilli(),
 		Payload:   payload,
 	}
+}
+
+func isThoughtPayload(payload map[string]any) bool {
+	thought, _ := payload[PayloadKeyThought].(bool)
+	return thought
 }
 
 func newErrorWithPayload(code, message string, extra map[string]any) PicoMessage {

@@ -33,6 +33,11 @@ func Test_markdownToTelegramHTML(t *testing.T) {
 			expected: `<a href="https://example.com/path">click here</a>`,
 		},
 		{
+			name:     "raw oauth url with underscores survives",
+			input:    "Apri https://accounts.google.com/o/oauth2/auth?response_type=code&client_id=test-client&redirect_uri=http%3A%2F%2Flocalhost%3A8001%2Foauth2callback&code_challenge=abc_def&code_challenge_method=S256",
+			expected: `Apri <a href="https://accounts.google.com/o/oauth2/auth?response_type=code&amp;client_id=test-client&amp;redirect_uri=http%3A%2F%2Flocalhost%3A8001%2Foauth2callback&amp;code_challenge=abc_def&amp;code_challenge_method=S256">https://accounts.google.com/o/oauth2/auth?response_type=code&amp;client_id=test-client&amp;redirect_uri=http%3A%2F%2Flocalhost%3A8001%2Foauth2callback&amp;code_challenge=abc_def&amp;code_challenge_method=S256</a>`,
+		},
+		{
 			name: "link with underscores in URL is not corrupted by italic regex",
 			// Google Flights URLs use URL-safe base64 with underscores in the tfs param.
 			// Previously reItalic ran after reLink, matching _text_ inside href and injecting
@@ -44,6 +49,11 @@ func Test_markdownToTelegramHTML(t *testing.T) {
 			name:     "multiple links all survive",
 			input:    "[first](https://a.com/path_one) and [second](https://b.com/path_two_x)",
 			expected: `<a href="https://a.com/path_one">first</a> and <a href="https://b.com/path_two_x">second</a>`,
+		},
+		{
+			name:     "markdown link query params are escaped in href",
+			input:    "[oauth](https://example.com/cb?response_type=code&client_id=test-client)",
+			expected: `<a href="https://example.com/cb?response_type=code&amp;client_id=test-client">oauth</a>`,
 		},
 		{
 			name:     "link label with HTML special chars is escaped",

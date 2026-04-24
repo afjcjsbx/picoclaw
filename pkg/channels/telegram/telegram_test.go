@@ -98,8 +98,12 @@ func (s *multipartRecordingConstructor) MultipartRequest(
 
 // successResponse returns a ta.Response that telego will treat as a successful SendMessage.
 func successResponse(t *testing.T) *ta.Response {
+	return successResponseWithMessageID(t, 1)
+}
+
+func successResponseWithMessageID(t *testing.T, messageID int) *ta.Response {
 	t.Helper()
-	msg := &telego.Message{MessageID: 1}
+	msg := &telego.Message{MessageID: messageID}
 	b, err := json.Marshal(msg)
 	require.NoError(t, err)
 	return &ta.Response{Ok: true, Result: b}
@@ -140,7 +144,9 @@ func newTestChannelWithConstructor(
 		BaseChannel: base,
 		bot:         bot,
 		chatIDs:     make(map[string]int64),
-		config:      config.DefaultConfig(),
+		bc:          &config.Channel{Type: config.ChannelTelegram, Enabled: true},
+		tgCfg:       &config.TelegramSettings{},
+		progress:    channels.NewToolFeedbackAnimator(nil),
 	}
 }
 
@@ -263,6 +269,176 @@ func TestSend_ShortMessage_SingleCall(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Len(t, caller.calls, 1, "short message should result in exactly one SendMessage call")
+}
+
+func TestSend_NonToolFeedbackDeletesTrackedProgressMessage(t *testing.T) {
+	caller := &stubCaller{
+		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
+			switch {
+			case strings.Contains(url, "editMessageText"):
+				return successResponseWithMessageID(t, 1), nil
+			default:
+				t.Fatalf("unexpected API call: %s", url)
+				return nil, nil
+			}
+		},
+	}
+	ch := newTestChannel(t, caller)
+	ch.RecordToolFeedbackMessage("12345", "1", "🔧 `read_file`")
+
+	ids, err := ch.Send(context.Background(), bus.OutboundMessage{
+		ChatID:  "12345",
+		Content: "final reply",
+	})
+
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"1"}, ids)
+	require.Len(t, caller.calls, 1)
+	assert.Contains(t, caller.calls[0].URL, "editMessageText")
+	_, ok := ch.currentToolFeedbackMessage("12345")
+	assert.False(t, ok, "tracked tool feedback should be cleared after final reply")
+}
+
+func TestSend_ToolFeedbackTrackingIsTopicScoped(t *testing.T) {
+	nextMessageID := 0
+	caller := &stubCaller{
+		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
+			nextMessageID++
+			return successResponseWithMessageID(t, nextMessageID), nil
+		},
+	}
+	ch := newTestChannel(t, caller)
+
+	_, err := ch.Send(context.Background(), bus.OutboundMessage{
+		ChatID:  "-1001234567890",
+		Content: "🔧 `read_file`",
+		Context: bus.InboundContext{
+			Channel: "telegram",
+			ChatID:  "-1001234567890",
+			TopicID: "42",
+			Raw: map[string]string{
+				"message_kind": "tool_feedback",
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	_, ok := ch.currentToolFeedbackMessage("-1001234567890")
+	assert.False(t, ok, "base chat should not track topic-specific tool feedback")
+
+	msgID, ok := ch.currentToolFeedbackMessage("-1001234567890/42")
+	require.True(t, ok, "topic chat should track tool feedback")
+	assert.Equal(t, "1", msgID)
+}
+
+func TestSend_TopicReplyDoesNotFinalizeDifferentTopicToolFeedback(t *testing.T) {
+	nextMessageID := 0
+	caller := &stubCaller{
+		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
+			nextMessageID++
+			return successResponseWithMessageID(t, nextMessageID), nil
+		},
+	}
+	ch := newTestChannel(t, caller)
+
+	_, err := ch.Send(context.Background(), bus.OutboundMessage{
+		ChatID:  "-1001234567890",
+		Content: "🔧 `read_file`",
+		Context: bus.InboundContext{
+			Channel: "telegram",
+			ChatID:  "-1001234567890",
+			TopicID: "42",
+			Raw: map[string]string{
+				"message_kind": "tool_feedback",
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	ids, err := ch.Send(context.Background(), bus.OutboundMessage{
+		ChatID:  "-1001234567890",
+		Content: "final reply in another topic",
+		Context: bus.InboundContext{
+			Channel: "telegram",
+			ChatID:  "-1001234567890",
+			TopicID: "43",
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, caller.calls, 2)
+	assert.Equal(t, []string{"2"}, ids)
+	assert.Contains(t, caller.calls[1].URL, "sendMessage")
+	assert.NotContains(t, caller.calls[1].URL, "editMessageText")
+
+	_, ok := ch.currentToolFeedbackMessage("-1001234567890/42")
+	assert.True(t, ok, "tool feedback in the original topic should remain tracked")
+}
+
+func TestFinalizeTrackedToolFeedbackMessage_StopsTrackingBeforeEdit(t *testing.T) {
+	ch := newTestChannel(t, &stubCaller{
+		callFn: func(context.Context, string, *ta.RequestData) (*ta.Response, error) {
+			t.Fatal("unexpected API call")
+			return nil, nil
+		},
+	})
+	ch.RecordToolFeedbackMessage("12345", "1", "🔧 `read_file`")
+
+	msgIDs, handled := ch.finalizeTrackedToolFeedbackMessage(
+		context.Background(),
+		"12345",
+		"final reply",
+		func(_ context.Context, chatID, messageID, content string) error {
+			_, ok := ch.currentToolFeedbackMessage(chatID)
+			assert.False(t, ok, "tracked tool feedback should be stopped before edit")
+			assert.Equal(t, "12345", chatID)
+			assert.Equal(t, "1", messageID)
+			assert.Equal(t, "final reply", content)
+			return nil
+		},
+	)
+
+	assert.True(t, handled)
+	assert.Equal(t, []string{"1"}, msgIDs)
+}
+
+func TestSend_ToolFeedbackStaysSingleMessageAfterHTMLExpansion(t *testing.T) {
+	caller := &stubCaller{
+		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
+			return successResponse(t), nil
+		},
+	}
+	ch := newTestChannel(t, caller)
+
+	_, err := ch.Send(context.Background(), bus.OutboundMessage{
+		ChatID:  "12345",
+		Content: "🔧 `read_file`\n" + strings.Repeat("<", 2000),
+		Context: bus.InboundContext{
+			Channel: "telegram",
+			ChatID:  "12345",
+			Raw: map[string]string{
+				"message_kind": "tool_feedback",
+			},
+		},
+	})
+
+	assert.NoError(t, err)
+	assert.Len(t, caller.calls, 1, "tool feedback should stay a single Telegram message after HTML escaping")
+}
+
+func TestFitToolFeedbackForTelegram_ReservesAnimationFrame(t *testing.T) {
+	content := "🔧 `read_file`\n" + strings.Repeat("a", 4096)
+
+	fitted := fitToolFeedbackForTelegram(content, false, 4096)
+	animated := strings.Replace(
+		fitted,
+		"`\n",
+		strings.Repeat(".", channels.MaxToolFeedbackAnimationFrameLength())+"`\n",
+		1,
+	)
+
+	if got := len([]rune(parseContent(animated, false))); got > 4096 {
+		t.Fatalf("animated parsed length = %d, want <= 4096", got)
+	}
 }
 
 func TestSend_LongMessage_SingleCall(t *testing.T) {
@@ -527,6 +703,90 @@ func TestSend_WithForumThreadID(t *testing.T) {
 	assert.Len(t, caller.calls, 1)
 }
 
+func TestSend_UsesContextTopicIDWhenChatIDDoesNotIncludeThread(t *testing.T) {
+	caller := &stubCaller{
+		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
+			return successResponse(t), nil
+		},
+	}
+	ch := newTestChannel(t, caller)
+
+	_, err := ch.Send(context.Background(), bus.OutboundMessage{
+		ChatID:  "-1001234567890",
+		Content: "Hello from topic context",
+		Context: bus.InboundContext{
+			Channel: "telegram",
+			ChatID:  "-1001234567890",
+			TopicID: "42",
+		},
+	})
+
+	require.NoError(t, err)
+	require.Len(t, caller.calls, 1)
+
+	var params struct {
+		ChatID          int64  `json:"chat_id"`
+		MessageThreadID int    `json:"message_thread_id"`
+		Text            string `json:"text"`
+	}
+	require.NoError(t, json.Unmarshal(caller.calls[0].Data.BodyRaw, &params))
+	assert.Equal(t, int64(-1001234567890), params.ChatID)
+	assert.Equal(t, 42, params.MessageThreadID)
+	assert.Equal(t, "Hello from topic context", params.Text)
+}
+
+func TestBeginStream_UpdateUsesForumThreadID(t *testing.T) {
+	caller := &stubCaller{
+		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
+			return &ta.Response{Ok: true, Result: []byte("true")}, nil
+		},
+	}
+	ch := newTestChannel(t, caller)
+	ch.tgCfg.Streaming.Enabled = true
+
+	streamer, err := ch.BeginStream(context.Background(), "-1001234567890/42")
+	require.NoError(t, err)
+	require.NoError(t, streamer.Update(context.Background(), "partial"))
+	require.Len(t, caller.calls, 1)
+	assert.Contains(t, caller.calls[0].URL, "sendMessageDraft")
+
+	var params struct {
+		ChatID          int64  `json:"chat_id"`
+		MessageThreadID int    `json:"message_thread_id"`
+		Text            string `json:"text"`
+	}
+	require.NoError(t, json.Unmarshal(caller.calls[0].Data.BodyRaw, &params))
+	assert.Equal(t, int64(-1001234567890), params.ChatID)
+	assert.Equal(t, 42, params.MessageThreadID)
+	assert.Equal(t, "partial", params.Text)
+}
+
+func TestBeginStream_FinalizeUsesForumThreadID(t *testing.T) {
+	caller := &stubCaller{
+		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
+			return successResponse(t), nil
+		},
+	}
+	ch := newTestChannel(t, caller)
+	ch.tgCfg.Streaming.Enabled = true
+
+	streamer, err := ch.BeginStream(context.Background(), "-1001234567890/42")
+	require.NoError(t, err)
+	require.NoError(t, streamer.Finalize(context.Background(), "final"))
+	require.Len(t, caller.calls, 1)
+	assert.Contains(t, caller.calls[0].URL, "sendMessage")
+
+	var params struct {
+		ChatID          int64  `json:"chat_id"`
+		MessageThreadID int    `json:"message_thread_id"`
+		Text            string `json:"text"`
+	}
+	require.NoError(t, json.Unmarshal(caller.calls[0].Data.BodyRaw, &params))
+	assert.Equal(t, int64(-1001234567890), params.ChatID)
+	assert.Equal(t, 42, params.MessageThreadID)
+	assert.Equal(t, "final", params.Text)
+}
+
 func TestHandleMessage_ForumTopic_SetsMetadata(t *testing.T) {
 	messageBus := bus.NewMessageBus()
 	ch := &TelegramChannel{
@@ -556,16 +816,10 @@ func TestHandleMessage_ForumTopic_SetsMetadata(t *testing.T) {
 	inbound, ok := <-messageBus.InboundChan()
 	require.True(t, ok, "expected inbound message")
 
-	// Composite chatID should include thread ID
-	assert.Equal(t, "-1001234567890/42", inbound.ChatID)
-
-	// Peer ID should include thread ID for session key isolation
-	assert.Equal(t, "group", inbound.Peer.Kind)
-	assert.Equal(t, "-1001234567890/42", inbound.Peer.ID)
-
-	// Parent peer metadata should be set for agent binding
-	assert.Equal(t, "topic", inbound.Metadata["parent_peer_kind"])
-	assert.Equal(t, "42", inbound.Metadata["parent_peer_id"])
+	// ChatID remains the parent chat; TopicID isolates the sub-conversation.
+	assert.Equal(t, "-1001234567890", inbound.ChatID)
+	assert.Equal(t, "group", inbound.Context.ChatType)
+	assert.Equal(t, "42", inbound.Context.TopicID)
 }
 
 func TestHandleMessage_NoForum_NoThreadMetadata(t *testing.T) {
@@ -598,13 +852,8 @@ func TestHandleMessage_NoForum_NoThreadMetadata(t *testing.T) {
 	// Plain chatID without thread suffix
 	assert.Equal(t, "-100999", inbound.ChatID)
 
-	// Peer ID should be raw chat ID (no thread suffix)
-	assert.Equal(t, "group", inbound.Peer.Kind)
-	assert.Equal(t, "-100999", inbound.Peer.ID)
-
-	// No parent peer metadata
-	assert.Empty(t, inbound.Metadata["parent_peer_kind"])
-	assert.Empty(t, inbound.Metadata["parent_peer_id"])
+	assert.Equal(t, "group", inbound.Context.ChatType)
+	assert.Empty(t, inbound.Context.TopicID)
 }
 
 func TestHandleMessage_ReplyThread_NonForum_NoIsolation(t *testing.T) {
@@ -641,13 +890,8 @@ func TestHandleMessage_ReplyThread_NonForum_NoIsolation(t *testing.T) {
 	// chatID should NOT include thread suffix for non-forum groups
 	assert.Equal(t, "-100999", inbound.ChatID)
 
-	// Peer ID should be raw chat ID (shared session for whole group)
-	assert.Equal(t, "group", inbound.Peer.Kind)
-	assert.Equal(t, "-100999", inbound.Peer.ID)
-
-	// No parent peer metadata
-	assert.Empty(t, inbound.Metadata["parent_peer_kind"])
-	assert.Empty(t, inbound.Metadata["parent_peer_id"])
+	assert.Equal(t, "group", inbound.Context.ChatType)
+	assert.Empty(t, inbound.Context.TopicID)
 }
 
 func assertHandleMessageQuotedUserReply(
@@ -700,7 +944,7 @@ func assertHandleMessageQuotedUserReply(
 
 	inbound, ok := <-messageBus.InboundChan()
 	require.True(t, ok)
-	assert.Equal(t, strconv.Itoa(replyMessageID), inbound.Metadata["reply_to_message_id"])
+	assert.Equal(t, strconv.Itoa(replyMessageID), inbound.Context.ReplyToMessageID)
 	assert.Equal(t, expectedContent, inbound.Content)
 }
 
@@ -786,7 +1030,7 @@ func TestHandleMessage_ReplyToOwnBotMessage_UsesAssistantRole(t *testing.T) {
 
 	inbound, ok := <-messageBus.InboundChan()
 	require.True(t, ok)
-	assert.Equal(t, "101", inbound.Metadata["reply_to_message_id"])
+	assert.Equal(t, "101", inbound.Context.ReplyToMessageID)
 	assert.Equal(
 		t,
 		"[quoted assistant message from afjcjsbx_picoclaw_bot]: Fatto! Ho creato il file notizie_2026_03_28.md\n\nti ricordi questo file?",

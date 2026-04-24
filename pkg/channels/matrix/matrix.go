@@ -46,6 +46,13 @@ const (
 
 var matrixMentionHrefRegexp = regexp.MustCompile(`(?i)<a[^>]+href=["']([^"']+)["']`)
 
+func outboundMessageIsToolFeedback(msg bus.OutboundMessage) bool {
+	if len(msg.Context.Raw) == 0 {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(msg.Context.Raw["message_kind"]), "tool_feedback")
+}
+
 type roomKindCacheEntry struct {
 	isGroup   bool
 	expiresAt time.Time
@@ -174,9 +181,10 @@ func (s *typingSession) stop() {
 // MatrixChannel implements the Channel interface for Matrix.
 type MatrixChannel struct {
 	*channels.BaseChannel
+	bc *config.Channel
 
 	client *mautrix.Client
-	config config.MatrixConfig
+	config *config.MatrixSettings
 	syncer *mautrix.DefaultSyncer
 
 	ctx       context.Context
@@ -191,10 +199,12 @@ type MatrixChannel struct {
 
 	cryptoHelper *cryptohelper.CryptoHelper
 	cryptoDbPath string
+	progress     *channels.ToolFeedbackAnimator
 }
 
 func NewMatrixChannel(
-	cfg config.MatrixConfig,
+	bc *config.Channel,
+	cfg *config.MatrixSettings,
 	messageBus *bus.MessageBus,
 	cryptoDatabasePath string,
 ) (*MatrixChannel, error) {
@@ -228,14 +238,15 @@ func NewMatrixChannel(
 		"matrix",
 		cfg,
 		messageBus,
-		cfg.AllowFrom,
+		bc.AllowFrom,
 		channels.WithMaxMessageLength(65536),
-		channels.WithGroupTrigger(cfg.GroupTrigger),
-		channels.WithReasoningChannelID(cfg.ReasoningChannelID),
+		channels.WithGroupTrigger(bc.GroupTrigger),
+		channels.WithReasoningChannelID(bc.ReasoningChannelID),
 	)
 
-	return &MatrixChannel{
+	ch := &MatrixChannel{
 		BaseChannel:       base,
+		bc:                bc,
 		client:            client,
 		config:            cfg,
 		syncer:            syncer,
@@ -245,7 +256,9 @@ func NewMatrixChannel(
 		localpartMentionR: localpartMentionRegexp(matrixLocalpart(client.UserID)),
 		typingMu:          sync.Mutex{},
 		cryptoDbPath:      cryptoDatabasePath,
-	}, nil
+	}
+	ch.progress = channels.NewToolFeedbackAnimator(ch.EditMessage)
+	return ch, nil
 }
 
 func (c *MatrixChannel) Start(ctx context.Context) error {
@@ -294,6 +307,9 @@ func (c *MatrixChannel) Stop(ctx context.Context) error {
 		c.cancel()
 	}
 	c.stopTypingSessions(ctx)
+	if c.progress != nil {
+		c.progress.StopAll()
+	}
 
 	// Close crypto helper if initialized
 	if c.cryptoHelper != nil {
@@ -395,11 +411,36 @@ func (c *MatrixChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]st
 		return nil, nil
 	}
 
+	isToolFeedback := outboundMessageIsToolFeedback(msg)
+	if isToolFeedback {
+		if msgID, handled, err := c.progress.Update(ctx, msg.ChatID, content); handled {
+			if err != nil {
+				return nil, err
+			}
+			return []string{msgID}, nil
+		}
+	}
+	trackedMsgID, hasTrackedMsg := c.currentToolFeedbackMessage(msg.ChatID)
+	if !isToolFeedback {
+		if msgIDs, handled := c.FinalizeToolFeedbackMessage(ctx, msg); handled {
+			return msgIDs, nil
+		}
+	}
+	if isToolFeedback {
+		content = channels.InitialAnimatedToolFeedbackContent(content)
+	}
+
 	resp, err := c.client.SendMessageEvent(ctx, roomID, event.EventMessage, c.messageContent(content))
 	if err != nil {
 		return nil, fmt.Errorf("matrix send: %w", channels.ErrTemporary)
 	}
-	return []string{resp.EventID.String()}, nil
+	msgID := resp.EventID.String()
+	if isToolFeedback {
+		c.RecordToolFeedbackMessage(msg.ChatID, msgID, msg.Content)
+	} else if hasTrackedMsg {
+		c.dismissTrackedToolFeedbackMessage(ctx, msg.ChatID, trackedMsgID)
+	}
+	return []string{msgID}, nil
 }
 
 func (c *MatrixChannel) messageContent(text string) *event.MessageEventContent {
@@ -416,6 +457,8 @@ func (c *MatrixChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMess
 	if !c.IsRunning() {
 		return nil, channels.ErrNotRunning
 	}
+	trackedMsgID, hasTrackedMsg := c.currentToolFeedbackMessage(msg.ChatID)
+
 	sendCtx := ctx
 	if sendCtx == nil {
 		sendCtx = context.Background()
@@ -526,6 +569,10 @@ func (c *MatrixChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMess
 		}
 	}
 
+	if hasTrackedMsg {
+		c.dismissTrackedToolFeedbackMessage(ctx, msg.ChatID, trackedMsgID)
+	}
+
 	return eventIDs, nil
 }
 
@@ -570,7 +617,7 @@ func (c *MatrixChannel) StartTyping(ctx context.Context, chatID string) (func(),
 
 // SendPlaceholder implements channels.PlaceholderCapable.
 func (c *MatrixChannel) SendPlaceholder(ctx context.Context, chatID string) (string, error) {
-	if !c.config.Placeholder.Enabled {
+	if !c.bc.Placeholder.Enabled {
 		return "", nil
 	}
 
@@ -579,7 +626,7 @@ func (c *MatrixChannel) SendPlaceholder(ctx context.Context, chatID string) (str
 		return "", fmt.Errorf("matrix room ID is empty")
 	}
 
-	text := c.config.Placeholder.GetRandomText()
+	text := c.bc.Placeholder.GetRandomText()
 
 	resp, err := c.client.SendMessageEvent(ctx, roomID, event.EventMessage, &event.MessageEventContent{
 		MsgType: event.MsgNotice,
@@ -607,6 +654,89 @@ func (c *MatrixChannel) EditMessage(ctx context.Context, chatID string, messageI
 
 	_, err := c.client.SendMessageEvent(ctx, roomID, event.EventMessage, editContent)
 	return err
+}
+
+// DeleteMessage implements channels.MessageDeleter.
+func (c *MatrixChannel) DeleteMessage(ctx context.Context, chatID string, messageID string) error {
+	roomID := id.RoomID(strings.TrimSpace(chatID))
+	if roomID == "" {
+		return fmt.Errorf("matrix room ID is empty")
+	}
+	eventID := id.EventID(strings.TrimSpace(messageID))
+	if eventID == "" {
+		return fmt.Errorf("matrix message ID is empty")
+	}
+
+	_, err := c.client.RedactEvent(ctx, roomID, eventID)
+	return err
+}
+
+func (c *MatrixChannel) currentToolFeedbackMessage(chatID string) (string, bool) {
+	if c.progress == nil {
+		return "", false
+	}
+	return c.progress.Current(chatID)
+}
+
+func (c *MatrixChannel) takeToolFeedbackMessage(chatID string) (string, string, bool) {
+	if c.progress == nil {
+		return "", "", false
+	}
+	return c.progress.Take(chatID)
+}
+
+func (c *MatrixChannel) RecordToolFeedbackMessage(chatID, messageID, content string) {
+	if c.progress == nil {
+		return
+	}
+	c.progress.Record(chatID, messageID, content)
+}
+
+func (c *MatrixChannel) ClearToolFeedbackMessage(chatID string) {
+	if c.progress == nil {
+		return
+	}
+	c.progress.Clear(chatID)
+}
+
+func (c *MatrixChannel) DismissToolFeedbackMessage(ctx context.Context, chatID string) {
+	msgID, ok := c.currentToolFeedbackMessage(chatID)
+	if !ok {
+		return
+	}
+	c.dismissTrackedToolFeedbackMessage(ctx, chatID, msgID)
+}
+
+func (c *MatrixChannel) dismissTrackedToolFeedbackMessage(ctx context.Context, chatID, messageID string) {
+	if strings.TrimSpace(chatID) == "" || strings.TrimSpace(messageID) == "" {
+		return
+	}
+	c.ClearToolFeedbackMessage(chatID)
+	_ = c.DeleteMessage(ctx, chatID, messageID)
+}
+
+func (c *MatrixChannel) finalizeTrackedToolFeedbackMessage(
+	ctx context.Context,
+	chatID string,
+	content string,
+	editFn func(context.Context, string, string, string) error,
+) ([]string, bool) {
+	msgID, baseContent, ok := c.takeToolFeedbackMessage(chatID)
+	if !ok || editFn == nil {
+		return nil, false
+	}
+	if err := editFn(ctx, chatID, msgID, content); err != nil {
+		c.RecordToolFeedbackMessage(chatID, msgID, baseContent)
+		return nil, false
+	}
+	return []string{msgID}, true
+}
+
+func (c *MatrixChannel) FinalizeToolFeedbackMessage(ctx context.Context, msg bus.OutboundMessage) ([]string, bool) {
+	if outboundMessageIsToolFeedback(msg) {
+		return nil, false
+	}
+	return c.finalizeTrackedToolFeedbackMessage(ctx, msg.ChatID, msg.Content, c.EditMessage)
 }
 
 func (c *MatrixChannel) handleMemberEvent(ctx context.Context, evt *event.Event) {
@@ -720,8 +850,8 @@ func (c *MatrixChannel) handleMessageEvent(ctx context.Context, evt *event.Event
 			logger.DebugCF("matrix", "Ignoring group message by trigger rules", map[string]any{
 				"room_id":      roomID,
 				"is_mentioned": isMentioned,
-				"mention_only": c.config.GroupTrigger.MentionOnly,
-				"prefixes":     c.config.GroupTrigger.Prefixes,
+				"mention_only": c.bc.GroupTrigger.MentionOnly,
+				"prefixes":     c.bc.GroupTrigger.Prefixes,
 			})
 			return
 		}
@@ -736,10 +866,8 @@ func (c *MatrixChannel) handleMessageEvent(ctx context.Context, evt *event.Event
 	}
 
 	peerKind := "direct"
-	peerID := senderID
 	if isGroup {
 		peerKind = "group"
-		peerID = roomID
 	}
 
 	metadata := map[string]string{
@@ -752,17 +880,19 @@ func (c *MatrixChannel) handleMessageEvent(ctx context.Context, evt *event.Event
 		metadata["reply_to_msg_id"] = replyTo.String()
 	}
 
-	c.HandleMessage(
-		c.baseContext(),
-		bus.Peer{Kind: peerKind, ID: peerID},
-		evt.ID.String(),
-		senderID,
-		roomID,
-		content,
-		mediaPaths,
-		metadata,
-		sender,
-	)
+	inboundCtx := bus.InboundContext{
+		Channel:   "matrix",
+		ChatID:    roomID,
+		ChatType:  peerKind,
+		SenderID:  senderID,
+		MessageID: evt.ID.String(),
+		Raw:       metadata,
+	}
+	if replyTo := msgEvt.GetRelatesTo().GetReplyTo(); replyTo != "" {
+		inboundCtx.ReplyToMessageID = replyTo.String()
+	}
+
+	c.HandleInboundContext(c.baseContext(), roomID, content, mediaPaths, inboundCtx, sender)
 }
 
 // decryptEvent decrypts an encrypted event and returns the decrypted message event content.

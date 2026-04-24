@@ -2,16 +2,26 @@
  * Dashboard launcher auth API.
  * Uses plain fetch (not launcherFetch) to avoid redirect loops on auth pages.
  */
+export type LoginResult =
+  | { ok: true }
+  | { ok: false; status: number; error: string }
+
 export async function postLauncherDashboardLogin(
   password: string,
-): Promise<boolean> {
+): Promise<LoginResult> {
   const res = await fetch("/api/auth/login", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "same-origin",
     body: JSON.stringify({ password: password.trim() }),
   })
-  return res.ok
+  if (res.ok) return { ok: true }
+
+  return {
+    ok: false,
+    status: res.status,
+    error: await readLauncherAuthError(res),
+  }
 }
 
 export type LauncherAuthStatus = {
@@ -41,9 +51,7 @@ export async function postLauncherDashboardLogout(): Promise<boolean> {
   return res.ok
 }
 
-export type SetupResult =
-  | { ok: true }
-  | { ok: false; error: string }
+export type SetupResult = { ok: true } | { ok: false; error: string }
 
 export async function postLauncherDashboardSetup(
   password: string,
@@ -53,15 +61,22 @@ export async function postLauncherDashboardSetup(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "same-origin",
-    body: JSON.stringify({ password: password.trim(), confirm: confirm.trim() }),
+    body: JSON.stringify({
+      password: password.trim(),
+      confirm: confirm.trim(),
+    }),
   })
   if (res.ok) return { ok: true }
-  let msg = "Unknown error"
+  return { ok: false, error: await readLauncherAuthError(res) }
+}
+
+async function readLauncherAuthError(res: Response): Promise<string> {
+  let msg = `Request failed with status ${res.status}`
   try {
     const j = (await res.json()) as { error?: string }
     if (j.error) msg = j.error
   } catch {
     /* ignore */
   }
-  return { ok: false, error: msg }
+  return msg
 }

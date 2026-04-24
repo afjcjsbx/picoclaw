@@ -3,7 +3,10 @@ import { createFileRoute } from "@tanstack/react-router"
 import * as React from "react"
 import { useTranslation } from "react-i18next"
 
-import { postLauncherDashboardLogin, getLauncherAuthStatus } from "@/api/launcher-auth"
+import {
+  getLauncherAuthStatus,
+  postLauncherDashboardLogin,
+} from "@/api/launcher-auth"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -25,7 +28,7 @@ import { useTheme } from "@/hooks/use-theme"
 function LauncherLoginPage() {
   const { t, i18n } = useTranslation()
   const { theme, toggleTheme } = useTheme()
-  const [token, setToken] = React.useState("")
+  const [password, setPassword] = React.useState("")
   const [submitting, setSubmitting] = React.useState(false)
   const [error, setError] = React.useState("")
 
@@ -37,20 +40,30 @@ function LauncherLoginPage() {
           globalThis.location.assign("/launcher-setup")
         }
       })
-      .catch(() => { /* network error — stay on login page */ })
+      .catch(() => {
+        /* network error — stay on login page */
+      })
   }, [])
 
-  const loginWithToken = React.useCallback(
-    async (tokenValue: string) => {
+  const loginWithPassword = React.useCallback(
+    async (passwordValue: string) => {
       setError("")
       setSubmitting(true)
       try {
-        const ok = await postLauncherDashboardLogin(tokenValue)
-        if (ok) {
+        const result = await postLauncherDashboardLogin(passwordValue)
+        if (result.ok) {
           globalThis.location.assign("/")
           return
         }
-        setError(t("launcherLogin.errorInvalid"))
+        if (result.status === 409) {
+          globalThis.location.assign("/launcher-setup")
+          return
+        }
+        if (result.status === 401) {
+          setError(t("launcherLogin.errorInvalid"))
+          return
+        }
+        setError(result.error)
       } catch {
         setError(t("launcherLogin.errorNetwork"))
       } finally {
@@ -62,7 +75,7 @@ function LauncherLoginPage() {
 
   const onSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
-    await loginWithToken(token)
+    await loginWithPassword(password)
   }
 
   return (
@@ -107,17 +120,17 @@ function LauncherLoginPage() {
           <CardContent>
             <form className="flex flex-col gap-4" onSubmit={onSubmit}>
               <div className="flex flex-col gap-2">
-                <Label htmlFor="launcher-token">
+                <Label htmlFor="launcher-password">
                   {t("launcherLogin.passwordLabel")}
                 </Label>
                 <Input
-                  id="launcher-token"
+                  id="launcher-password"
                   name="password"
                   type="password"
                   autoComplete="current-password"
                   required
-                  value={token}
-                  onChange={(e) => setToken(e.target.value)}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
                   placeholder={t("launcherLogin.passwordPlaceholder")}
                 />
               </div>

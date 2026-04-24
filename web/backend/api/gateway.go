@@ -17,10 +17,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/sipeed/picoclaw/pkg/channels/pico"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/health"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/netbind"
 	ppid "github.com/sipeed/picoclaw/pkg/pid"
 	"github.com/sipeed/picoclaw/web/backend/utils"
 )
@@ -36,17 +36,10 @@ var gateway = struct {
 	startupDeadline     time.Time
 	logs                *LogBuffer
 	pidData             *ppid.PidFileData // pid file data read from picoclaw.pid.json
-	picoToken           string            // cached pico token from config (for proxy auth validation)
+	picoToken           string            // cached raw pico token for upstream gateway proxy injection
 }{
 	runtimeStatus: "stopped",
 	logs:          NewLogBuffer(200),
-}
-
-// refreshPicoToken updates gateway.picoToken from cfg
-func refreshPicoToken(cfg *config.Config) {
-	gateway.mu.Lock()
-	defer gateway.mu.Unlock()
-	gateway.picoToken = cfg.Channels.Pico.Token.String()
 }
 
 // refreshPicoTokensLocked reads the pico token from config and caches it.
@@ -56,7 +49,16 @@ func refreshPicoTokensLocked(configPath string) {
 	if err != nil {
 		return
 	}
-	gateway.picoToken = cfg.Channels.Pico.Token.String()
+	var picoCfg config.PicoSettings
+	if bc := cfg.Channels.GetByType(config.ChannelPico); bc != nil {
+		decoded, err := bc.GetDecoded()
+		if err == nil && decoded != nil {
+			if p, ok := decoded.(*config.PicoSettings); ok {
+				picoCfg = *p
+			}
+		}
+	}
+	gateway.picoToken = picoCfg.Token.String()
 }
 
 // ensurePicoTokenCachedLocked lazily fills the in-memory pico token cache when
@@ -82,18 +84,15 @@ const (
 	tokenPrefix = "token."
 )
 
-// picoComposedToken returns "pico-"+pidToken+picoToken for gateway auth.
-func picoComposedToken(token string) string {
+// picoGatewayProtocol returns the gateway-facing pico subprotocol that the
+// launcher should inject when proxying browser traffic upstream.
+func picoGatewayProtocol() string {
 	gateway.mu.Lock()
 	defer gateway.mu.Unlock()
-	// if not initial pico token, don't allow gateway auth
-	if gateway.picoToken == "" || gateway.pidData == nil {
+	if gateway.picoToken == "" {
 		return ""
 	}
-	if tokenPrefix+gateway.picoToken != token {
-		return ""
-	}
-	return pico.PicoTokenPrefix + gateway.pidData.Token + gateway.picoToken
+	return tokenPrefix + gateway.picoToken
 }
 
 var (
@@ -101,6 +100,7 @@ var (
 	gatewayRestartGracePeriod     = 5 * time.Second
 	gatewayRestartForceKillWindow = 3 * time.Second
 	gatewayRestartPollInterval    = 100 * time.Millisecond
+	gatewayExecCommand            = exec.Command
 )
 
 var gatewayHealthGet = func(url string, timeout time.Duration) (*http.Response, error) {
@@ -244,7 +244,7 @@ func (h *Handler) getGatewayHealthForPidData(
 		host = gatewayProbeHost(h.effectiveGatewayBindHost(cfg))
 	}
 	if host == "" {
-		host = "127.0.0.1"
+		host = netbind.ResolveAdaptiveLoopbackHost()
 	}
 
 	url := "http://" + net.JoinHostPort(host, strconv.Itoa(port)) + "/health"
@@ -705,7 +705,7 @@ func (h *Handler) startGatewayLocked(initialStatus string, existingPid int) (int
 	execPath := utils.FindPicoclawBinary()
 	logger.InfoC("gateway", fmt.Sprintf("Starting gateway process (%s)", execPath))
 
-	cmd = exec.Command(execPath, h.gatewayCommandArgs()...)
+	cmd = gatewayExecCommand(execPath, h.gatewayCommandArgs()...)
 	cmd.Env = os.Environ()
 	// Forward the launcher's config path via the environment variable that
 	// GetConfigPath() already reads, so the gateway sub-process uses the same
@@ -713,8 +713,9 @@ func (h *Handler) startGatewayLocked(initialStatus string, existingPid int) (int
 	if h.configPath != "" {
 		cmd.Env = append(cmd.Env, config.EnvConfig+"="+h.configPath)
 	}
-	if host := h.gatewayHostOverride(); host != "" {
-		cmd.Env = append(cmd.Env, config.EnvGatewayHost+"="+host)
+	gatewayHostOverride := h.gatewayHostOverride()
+	if gatewayHostOverride != "" {
+		cmd.Env = append(cmd.Env, config.EnvGatewayHost+"="+gatewayHostOverride)
 	}
 
 	stdoutPipe, err := cmd.StdoutPipe()
@@ -731,7 +732,7 @@ func (h *Handler) startGatewayLocked(initialStatus string, existingPid int) (int
 	gateway.logs.Reset()
 
 	// Ensure Pico Channel is configured before starting gateway
-	changed, err := h.EnsurePicoChannel("")
+	changed, err := h.EnsurePicoChannel()
 	if err != nil {
 		logger.ErrorC("gateway", fmt.Sprintf("Warning: failed to ensure pico channel: %v", err))
 		// Non-fatal: gateway can still start without pico channel
@@ -795,7 +796,16 @@ func (h *Handler) startGatewayLocked(initialStatus string, existingPid int) (int
 				gateway.mu.Lock()
 				if gateway.cmd == cmd {
 					gateway.pidData = pd
-					gateway.picoToken = cfg.Channels.Pico.Token.String()
+					var picoCfg config.PicoSettings
+					if bc := cfg.Channels.GetByType(config.ChannelPico); bc != nil {
+						decoded, err := bc.GetDecoded()
+						if err == nil && decoded != nil {
+							if p, ok := decoded.(*config.PicoSettings); ok {
+								picoCfg = *p
+							}
+						}
+					}
+					gateway.picoToken = picoCfg.Token.String()
 					setGatewayRuntimeStatusLocked("running")
 				}
 				gateway.mu.Unlock()

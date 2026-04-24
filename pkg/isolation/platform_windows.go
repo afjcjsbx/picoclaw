@@ -76,7 +76,7 @@ func postStartPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig,
 
 	info := windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION{}
 	info.BasicLimitInformation.LimitFlags = windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-	if _, err := windows.SetInformationJobObject(
+	if _, err = windows.SetInformationJobObject(
 		job,
 		windows.JobObjectExtendedLimitInformation,
 		uintptr(unsafe.Pointer(&info)),
@@ -102,7 +102,7 @@ func postStartPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig,
 		return fmt.Errorf("open process for job assignment: %w", err)
 	}
 
-	if err := windows.AssignProcessToJobObject(job, proc); err != nil {
+	if err = windows.AssignProcessToJobObject(job, proc); err != nil {
 		_ = windows.CloseHandle(proc)
 		_ = windows.CloseHandle(job)
 		if resources.token != 0 {

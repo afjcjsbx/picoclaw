@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/routing"
+	"github.com/sipeed/picoclaw/pkg/session"
 	"github.com/sipeed/picoclaw/pkg/tools"
 )
 
@@ -108,7 +110,10 @@ func (p *llmHookTestProvider) GetDefaultModel() string {
 }
 
 type llmObserverHook struct {
-	eventCh chan Event
+	eventCh     chan Event
+	lastInbound *bus.InboundContext
+	lastRoute   *routing.ResolvedRoute
+	lastScope   *session.SessionScope
 }
 
 func (h *llmObserverHook) OnEvent(ctx context.Context, evt Event) error {
@@ -125,6 +130,11 @@ func (h *llmObserverHook) BeforeLLM(
 	ctx context.Context,
 	req *LLMHookRequest,
 ) (*LLMHookRequest, HookDecision, error) {
+	if req.Context != nil {
+		h.lastInbound = cloneInboundContext(req.Context.Inbound)
+		h.lastRoute = cloneResolvedRoute(req.Context.Route)
+		h.lastScope = session.CloneScope(req.Context.Scope)
+	}
 	next := req.Clone()
 	next.Model = "hook-model"
 	return next, HookDecision{Action: HookActionModify}, nil
@@ -157,6 +167,31 @@ func TestAgentLoop_Hooks_ObserverAndLLMInterceptor(t *testing.T) {
 		DefaultResponse: defaultResponse,
 		EnableSummary:   false,
 		SendResponse:    false,
+		InboundContext: &bus.InboundContext{
+			Channel:  "cli",
+			ChatID:   "direct",
+			ChatType: "direct",
+			SenderID: "hook-user",
+		},
+		RouteResult: &routing.ResolvedRoute{
+			AgentID:   "main",
+			Channel:   "cli",
+			AccountID: routing.DefaultAccountID,
+			SessionPolicy: routing.SessionPolicy{
+				Dimensions: []string{"sender"},
+			},
+			MatchedBy: "default",
+		},
+		SessionScope: &session.SessionScope{
+			Version:    session.ScopeVersionV1,
+			AgentID:    "main",
+			Channel:    "cli",
+			Account:    routing.DefaultAccountID,
+			Dimensions: []string{"sender"},
+			Values: map[string]string{
+				"sender": "hook-user",
+			},
+		},
 	})
 	if err != nil {
 		t.Fatalf("runAgentLoop failed: %v", err)
@@ -171,14 +206,117 @@ func TestAgentLoop_Hooks_ObserverAndLLMInterceptor(t *testing.T) {
 	if lastModel != "hook-model" {
 		t.Fatalf("expected model hook-model, got %q", lastModel)
 	}
+	if hook.lastInbound == nil {
+		t.Fatal("expected hook to receive inbound context")
+	}
+	if hook.lastInbound.Channel != "cli" || hook.lastInbound.SenderID != "hook-user" {
+		t.Fatalf("hook inbound context = %+v", hook.lastInbound)
+	}
+	if hook.lastInbound != nil && hook.lastInbound.ChatID != "direct" {
+		t.Fatalf("hook inbound chat ID = %q, want direct", hook.lastInbound.ChatID)
+	}
 
 	select {
 	case evt := <-hook.eventCh:
 		if evt.Kind != EventKindTurnEnd {
 			t.Fatalf("expected turn end event, got %v", evt.Kind)
 		}
+		if evt.Context == nil || evt.Context.Inbound == nil {
+			t.Fatal("expected observer event to carry inbound context")
+		}
+		if evt.Context.Route == nil || evt.Context.Route.AgentID != "main" {
+			t.Fatalf("expected observer event to carry route context, got %+v", evt.Context.Route)
+		}
+		if evt.Context.Scope == nil || evt.Context.Scope.Values["sender"] != "hook-user" {
+			t.Fatalf("expected observer event to carry session scope, got %+v", evt.Context.Scope)
+		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for hook observer event")
+	}
+}
+
+func TestAgentLoop_BtwCommand_UsesLLMHooks(t *testing.T) {
+	provider := &llmHookTestProvider{}
+	al, agent, cleanup := newHookTestLoop(t, provider)
+	defer cleanup()
+	useTestSideQuestionProvider(al, provider)
+
+	hook := &llmObserverHook{eventCh: make(chan Event, 1)}
+	if err := al.MountHook(NamedHook("llm-observer", hook)); err != nil {
+		t.Fatalf("MountHook failed: %v", err)
+	}
+
+	response, handled := al.handleCommand(context.Background(), bus.InboundMessage{
+		Context: bus.InboundContext{
+			Channel:  "cli",
+			ChatID:   "direct",
+			ChatType: "direct",
+			SenderID: "hook-user",
+		},
+		Content: "/btw hello",
+	}, agent, &processOptions{
+		Dispatch: DispatchRequest{
+			SessionKey: "session-1",
+			InboundContext: &bus.InboundContext{
+				Channel:  "cli",
+				ChatID:   "direct",
+				ChatType: "direct",
+				SenderID: "hook-user",
+			},
+			RouteResult: &routing.ResolvedRoute{
+				AgentID:   "main",
+				Channel:   "cli",
+				AccountID: routing.DefaultAccountID,
+				SessionPolicy: routing.SessionPolicy{
+					Dimensions: []string{"sender"},
+				},
+				MatchedBy: "default",
+			},
+			SessionScope: &session.SessionScope{
+				Version:    session.ScopeVersionV1,
+				AgentID:    "main",
+				Channel:    "cli",
+				Account:    routing.DefaultAccountID,
+				Dimensions: []string{"sender"},
+				Values: map[string]string{
+					"sender": "hook-user",
+				},
+			},
+			UserMessage: "/btw hello",
+		},
+		SessionKey:        "session-1",
+		Channel:           "cli",
+		ChatID:            "direct",
+		SenderID:          "hook-user",
+		SenderDisplayName: "Hook User",
+	})
+	if !handled {
+		t.Fatal("expected /btw command to be handled")
+	}
+	if response != "hooked content" {
+		t.Fatalf("expected hooked content, got %q", response)
+	}
+
+	provider.mu.Lock()
+	lastModel := provider.lastModel
+	provider.mu.Unlock()
+	if lastModel != "hook-model" {
+		t.Fatalf("expected model hook-model, got %q", lastModel)
+	}
+	if hook.lastInbound == nil {
+		t.Fatal("expected hook to receive inbound context")
+	}
+	if hook.lastInbound.Channel != "cli" || hook.lastInbound.SenderID != "hook-user" {
+		t.Fatalf("hook inbound context = %+v", hook.lastInbound)
+	}
+	if hook.lastInbound.ChatID != "direct" {
+		t.Fatalf("hook inbound chat ID = %q, want direct", hook.lastInbound.ChatID)
+	}
+	if hook.lastRoute == nil || hook.lastRoute.AgentID != "main" {
+		t.Fatalf("expected hook route context for /btw, got %+v", hook.lastRoute)
+	}
+	if hook.lastScope == nil || hook.lastScope.Values["sender"] != "hook-user" {
+		t.Fatalf("expected hook session scope for /btw, got %+v", hook.lastScope)
 	}
 }
 
@@ -266,6 +404,24 @@ func (h *toolRewriteHook) AfterTool(
 	return next, HookDecision{Action: HookActionModify}, nil
 }
 
+type toolRenameHook struct{}
+
+func (h *toolRenameHook) BeforeTool(
+	ctx context.Context,
+	call *ToolCallHookRequest,
+) (*ToolCallHookRequest, HookDecision, error) {
+	next := call.Clone()
+	next.Tool = "echo_text_rewritten"
+	return next, HookDecision{Action: HookActionModify}, nil
+}
+
+func (h *toolRenameHook) AfterTool(
+	ctx context.Context,
+	result *ToolResultHookResponse,
+) (*ToolResultHookResponse, HookDecision, error) {
+	return result.Clone(), HookDecision{Action: HookActionContinue}, nil
+}
+
 func TestAgentLoop_Hooks_ToolInterceptorCanRewrite(t *testing.T) {
 	provider := &toolHookProvider{}
 	al, agent, cleanup := newHookTestLoop(t, provider)
@@ -290,6 +446,75 @@ func TestAgentLoop_Hooks_ToolInterceptorCanRewrite(t *testing.T) {
 	}
 	if resp != "after:modified" {
 		t.Fatalf("expected rewritten tool result, got %q", resp)
+	}
+}
+
+type echoTextRewrittenTool struct{}
+
+func (t *echoTextRewrittenTool) Name() string {
+	return "echo_text_rewritten"
+}
+
+func (t *echoTextRewrittenTool) Description() string {
+	return "echo a rewritten text argument"
+}
+
+func (t *echoTextRewrittenTool) Parameters() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"text": map[string]any{
+				"type": "string",
+			},
+		},
+	}
+}
+
+func (t *echoTextRewrittenTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
+	text, _ := args["text"].(string)
+	return tools.SilentResult("rewritten:" + text)
+}
+
+func TestAgentLoop_Hooks_ToolFeedbackUsesRewrittenToolName(t *testing.T) {
+	provider := &toolHookProvider{}
+	al, agent, cleanup := newHookTestLoop(t, provider)
+	defer cleanup()
+
+	al.cfg.Agents.Defaults.ToolFeedback.Enabled = true
+	al.RegisterTool(&echoTextTool{})
+	al.RegisterTool(&echoTextRewrittenTool{})
+	if err := al.MountHook(NamedHook("tool-rename", &toolRenameHook{})); err != nil {
+		t.Fatalf("MountHook failed: %v", err)
+	}
+
+	_, err := al.runAgentLoop(context.Background(), agent, processOptions{
+		SessionKey:      "session-1",
+		Channel:         "cli",
+		ChatID:          "direct",
+		UserMessage:     "run tool",
+		DefaultResponse: defaultResponse,
+		EnableSummary:   false,
+		SendResponse:    false,
+	})
+	if err != nil {
+		t.Fatalf("runAgentLoop failed: %v", err)
+	}
+
+	msgBus, ok := al.bus.(*bus.MessageBus)
+	if !ok {
+		t.Fatalf("expected concrete MessageBus, got %T", al.bus)
+	}
+
+	select {
+	case outbound := <-msgBus.OutboundChan():
+		if !strings.Contains(outbound.Content, "`echo_text_rewritten`") {
+			t.Fatalf("tool feedback content = %q, want rewritten tool name", outbound.Content)
+		}
+		if strings.Contains(outbound.Content, "`echo_text`") {
+			t.Fatalf("tool feedback content = %q, want no original tool name", outbound.Content)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected outbound tool feedback")
 	}
 }
 
@@ -572,9 +797,10 @@ func TestAgentLoop_HookRespond_MediaError(t *testing.T) {
 		t.Fatalf("MountHook failed: %v", err)
 	}
 
-	al.channelManager = newStartedTestChannelManager(t, al.bus, al.mediaStore, "discord", &errorMediaChannel{
-		sendErr: errors.New("channel unavailable"),
-	})
+	al.channelManager = newStartedTestChannelManager(t,
+		al.bus.(*bus.MessageBus), al.mediaStore, "discord", &errorMediaChannel{
+			sendErr: errors.New("channel unavailable"),
+		})
 
 	sub := al.SubscribeEvents(16)
 	defer al.UnsubscribeEvents(sub.ID)
@@ -666,6 +892,77 @@ func TestAgentLoop_HookRespond_BusFallback(t *testing.T) {
 	}
 }
 
+func TestAgentLoop_HookRespond_ResponseHandledMediaPreservesOutboundContext(t *testing.T) {
+	provider := &multiToolProvider{
+		toolCalls: []providers.ToolCall{
+			{ID: "call-1", Name: "media_tool", Arguments: map[string]any{}},
+		},
+		finalContent: "done",
+	}
+	al, agent, cleanup := newHookTestLoop(t, provider)
+	defer cleanup()
+
+	hook := &respondWithMediaHook{
+		respondTools:    map[string]bool{"media_tool": true},
+		media:           []string{"media://test/image.png"},
+		responseHandled: true,
+		forLLM:          "media sent successfully",
+	}
+	if err := al.MountHook(NamedHook("media-hook", hook)); err != nil {
+		t.Fatalf("MountHook failed: %v", err)
+	}
+
+	telegramChannel := &fakeMediaChannel{fakeChannel: fakeChannel{id: "rid-telegram"}}
+	al.channelManager = newStartedTestChannelManager(t,
+		al.bus.(*bus.MessageBus), al.mediaStore, "telegram", telegramChannel)
+
+	_, err := al.runAgentLoop(context.Background(), agent, processOptions{
+		Dispatch: DispatchRequest{
+			SessionKey: "session-topic-media",
+			SessionScope: &session.SessionScope{
+				Version:    session.ScopeVersionV1,
+				AgentID:    agent.ID,
+				Channel:    "telegram",
+				Dimensions: []string{"chat"},
+				Values: map[string]string{
+					"chat": "forum:-100123/42",
+				},
+			},
+			InboundContext: &bus.InboundContext{
+				Channel:  "telegram",
+				ChatID:   "-100123",
+				TopicID:  "42",
+				ChatType: "group",
+				SenderID: "user1",
+			},
+			UserMessage: "send media",
+		},
+		DefaultResponse: defaultResponse,
+		EnableSummary:   false,
+		SendResponse:    false,
+	})
+	if err != nil {
+		t.Fatalf("runAgentLoop failed: %v", err)
+	}
+
+	if len(telegramChannel.sentMedia) != 1 {
+		t.Fatalf("expected exactly 1 sent media message, got %d", len(telegramChannel.sentMedia))
+	}
+	sent := telegramChannel.sentMedia[0]
+	if sent.Context.Channel != "telegram" || sent.Context.ChatID != "-100123" || sent.Context.TopicID != "42" {
+		t.Fatalf("unexpected media context: %+v", sent.Context)
+	}
+	if sent.AgentID != agent.ID {
+		t.Fatalf("sent media agent_id = %q, want %q", sent.AgentID, agent.ID)
+	}
+	if sent.SessionKey != "session-topic-media" {
+		t.Fatalf("sent media session_key = %q, want session-topic-media", sent.SessionKey)
+	}
+	if sent.Scope == nil || sent.Scope.Values["chat"] != "forum:-100123/42" {
+		t.Fatalf("unexpected sent media scope: %+v", sent.Scope)
+	}
+}
+
 type multiToolProvider struct {
 	mu           sync.Mutex
 	callCount    int
@@ -725,7 +1022,7 @@ func TestAgentLoop_HookRespond_InterruptSkipsRemaining(t *testing.T) {
 	sub := al.SubscribeEvents(32)
 	defer al.UnsubscribeEvents(sub.ID)
 
-	sessionKey := routing.BuildAgentMainSessionKey(routing.DefaultAgentID)
+	sessionKey := session.BuildMainSessionKey(routing.DefaultAgentID)
 
 	type result struct {
 		resp string
@@ -743,7 +1040,11 @@ func TestAgentLoop_HookRespond_InterruptSkipsRemaining(t *testing.T) {
 		resultCh <- result{resp: resp, err: err}
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-tool1ExecCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for tool execution to start")
+	}
 
 	if err := al.InterruptGraceful("stop now"); err != nil {
 		t.Fatalf("InterruptGraceful failed: %v", err)
@@ -801,7 +1102,7 @@ func TestAgentLoop_HookRespond_SteeringSkipsRemaining(t *testing.T) {
 	sub := al.SubscribeEvents(32)
 	defer al.UnsubscribeEvents(sub.ID)
 
-	sessionKey := routing.BuildAgentMainSessionKey(routing.DefaultAgentID)
+	sessionKey := session.BuildMainSessionKey(routing.DefaultAgentID)
 
 	type result struct {
 		resp string
@@ -819,9 +1120,26 @@ func TestAgentLoop_HookRespond_SteeringSkipsRemaining(t *testing.T) {
 		resultCh <- result{resp: resp, err: err}
 	}()
 
-	time.Sleep(50 * time.Millisecond)
-
-	al.Steer(providers.Message{Role: "user", Content: "change direction"})
+	collectedEvents := make([]Event, 0, 8)
+	steered := false
+	deadline := time.After(3 * time.Second)
+	for !steered {
+		select {
+		case evt := <-sub.C:
+			collectedEvents = append(collectedEvents, evt)
+			if evt.Kind != EventKindToolExecEnd {
+				continue
+			}
+			payload, ok := evt.Payload.(ToolExecEndPayload)
+			if !ok || payload.Tool != "tool_one" {
+				continue
+			}
+			al.Steer(providers.Message{Role: "user", Content: "change direction"})
+			steered = true
+		case <-deadline:
+			t.Fatal("timeout waiting for tool_one to finish before steering")
+		}
+	}
 
 	select {
 	case r := <-resultCh:
@@ -832,7 +1150,7 @@ func TestAgentLoop_HookRespond_SteeringSkipsRemaining(t *testing.T) {
 		t.Fatal("timeout waiting for result")
 	}
 
-	events := collectEventStream(sub.C)
+	events := append(collectedEvents, collectEventStream(sub.C)...)
 
 	skippedEvts := filterEvents(events, EventKindToolExecSkipped)
 	if len(skippedEvts) < 1 {

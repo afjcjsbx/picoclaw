@@ -13,7 +13,9 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/memory"
 	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/sipeed/picoclaw/pkg/session"
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
@@ -44,31 +46,25 @@ type sessionListItem struct {
 }
 
 type sessionChatMessage struct {
-	Role    string   `json:"role"`
-	Content string   `json:"content"`
-	Media   []string `json:"media,omitempty"`
+	Role        string                  `json:"role"`
+	Content     string                  `json:"content"`
+	Media       []string                `json:"media,omitempty"`
+	Attachments []sessionChatAttachment `json:"attachments,omitempty"`
 }
 
-type sessionMetaFile struct {
-	Key       string    `json:"key"`
-	Summary   string    `json:"summary"`
-	Skip      int       `json:"skip"`
-	Count     int       `json:"count"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+type sessionChatAttachment struct {
+	Type        string `json:"type,omitempty"`
+	URL         string `json:"url,omitempty"`
+	Filename    string `json:"filename,omitempty"`
+	ContentType string `json:"content_type,omitempty"`
 }
 
-// picoSessionPrefix is the key prefix used by the gateway's routing for Pico
-// channel sessions. The full key format is:
-//
-//	agent:main:pico:direct:pico:<session-uuid>
-//
-// The sanitized filename replaces ':' with '_', so on disk it becomes:
-//
-//	agent_main_pico_direct_pico_<session-uuid>.json
+// legacyPicoSessionPrefix is the legacy key prefix used by older Pico JSON/JSONL
+// sessions before structured scope metadata existed.
 const (
-	picoSessionPrefix          = "agent:main:pico:direct:pico:"
-	sanitizedPicoSessionPrefix = "agent_main_pico_direct_pico_"
+	legacyPicoSessionPrefix = "agent:main:pico:direct:pico:"
+	picoSessionPrefix       = legacyPicoSessionPrefix
+
 	// Keep the session API aligned with the shared JSONL store reader limit in
 	// pkg/memory/jsonl.go so oversized lines fail consistently everywhere.
 	maxSessionJSONLLineSize = 10 * 1024 * 1024
@@ -82,28 +78,23 @@ func defaultToolFeedbackMaxArgsLength() int {
 	return defaults.GetToolFeedbackMaxArgsLength()
 }
 
-// extractPicoSessionID extracts the session UUID from a full session key.
+// extractLegacyPicoSessionID extracts the session UUID from an old Pico key.
 // Returns the UUID and true if the key matches the Pico session pattern.
-func extractPicoSessionID(key string) (string, bool) {
-	if strings.HasPrefix(key, picoSessionPrefix) {
-		return strings.TrimPrefix(key, picoSessionPrefix), true
-	}
-	return "", false
-}
-
-func extractPicoSessionIDFromSanitizedKey(key string) (string, bool) {
-	if strings.HasPrefix(key, sanitizedPicoSessionPrefix) {
-		return strings.TrimPrefix(key, sanitizedPicoSessionPrefix), true
+func extractLegacyPicoSessionID(key string) (string, bool) {
+	if strings.HasPrefix(key, legacyPicoSessionPrefix) {
+		return strings.TrimPrefix(key, legacyPicoSessionPrefix), true
 	}
 	return "", false
 }
 
 func sanitizeSessionKey(key string) string {
-	return strings.ReplaceAll(key, ":", "_")
+	key = strings.ReplaceAll(key, ":", "_")
+	key = strings.ReplaceAll(key, "/", "_")
+	key = strings.ReplaceAll(key, "\\", "_")
+	return key
 }
 
-func (h *Handler) readLegacySession(dir, sessionID string) (sessionFile, error) {
-	path := filepath.Join(dir, sanitizeSessionKey(picoSessionPrefix+sessionID)+".json")
+func (h *Handler) readLegacySession(path string) (sessionFile, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return sessionFile{}, err
@@ -116,18 +107,18 @@ func (h *Handler) readLegacySession(dir, sessionID string) (sessionFile, error) 
 	return sess, nil
 }
 
-func (h *Handler) readSessionMeta(path, sessionKey string) (sessionMetaFile, error) {
+func (h *Handler) readSessionMeta(path, sessionKey string) (memory.SessionMeta, error) {
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
-		return sessionMetaFile{Key: sessionKey}, nil
+		return memory.SessionMeta{Key: sessionKey}, nil
 	}
 	if err != nil {
-		return sessionMetaFile{}, err
+		return memory.SessionMeta{}, err
 	}
 
-	var meta sessionMetaFile
+	var meta memory.SessionMeta
 	if err := json.Unmarshal(data, &meta); err != nil {
-		return sessionMetaFile{}, err
+		return memory.SessionMeta{}, err
 	}
 	if meta.Key == "" {
 		meta.Key = sessionKey
@@ -170,8 +161,7 @@ func (h *Handler) readSessionMessages(path string, skip int) ([]providers.Messag
 	return msgs, nil
 }
 
-func (h *Handler) readJSONLSession(dir, sessionID string) (sessionFile, error) {
-	sessionKey := picoSessionPrefix + sessionID
+func (h *Handler) readJSONLSession(dir, sessionKey string) (sessionFile, error) {
 	base := filepath.Join(dir, sanitizeSessionKey(sessionKey))
 	jsonlPath := base + ".jsonl"
 	metaPath := base + ".meta.json"
@@ -208,11 +198,220 @@ func (h *Handler) readJSONLSession(dir, sessionID string) (sessionFile, error) {
 	}, nil
 }
 
+type picoJSONLSessionRef struct {
+	ID  string
+	Key string
+}
+
+type picoLegacySessionRef struct {
+	ID   string
+	Path string
+}
+
+func extractPicoSessionIDFromScope(scope session.SessionScope) (string, bool) {
+	if !strings.EqualFold(strings.TrimSpace(scope.Channel), "pico") {
+		return "", false
+	}
+
+	candidates := []string{
+		strings.TrimSpace(scope.Values["sender"]),
+		strings.TrimSpace(scope.Values["chat"]),
+	}
+	for _, candidate := range candidates {
+		if candidate == "" {
+			continue
+		}
+		if idx := strings.Index(candidate, "pico:"); idx >= 0 {
+			sessionID := strings.TrimSpace(candidate[idx+len("pico:"):])
+			if sessionID != "" {
+				return sessionID, true
+			}
+		}
+	}
+	return "", false
+}
+
+func sessionRefFromMeta(meta memory.SessionMeta) (picoJSONLSessionRef, bool) {
+	if len(meta.Scope) == 0 {
+		if sessionID, ok := extractLegacyPicoSessionID(meta.Key); ok {
+			return picoJSONLSessionRef{ID: sessionID, Key: meta.Key}, true
+		}
+		for _, alias := range meta.Aliases {
+			if sessionID, ok := extractLegacyPicoSessionID(alias); ok {
+				return picoJSONLSessionRef{ID: sessionID, Key: meta.Key}, true
+			}
+		}
+		return picoJSONLSessionRef{}, false
+	}
+	var scope session.SessionScope
+	if err := json.Unmarshal(meta.Scope, &scope); err != nil {
+		return picoJSONLSessionRef{}, false
+	}
+	sessionID, ok := extractPicoSessionIDFromScope(scope)
+	if !ok {
+		if legacySessionID, ok := extractLegacyPicoSessionID(meta.Key); ok {
+			return picoJSONLSessionRef{ID: legacySessionID, Key: meta.Key}, true
+		}
+		for _, alias := range meta.Aliases {
+			if legacySessionID, ok := extractLegacyPicoSessionID(alias); ok {
+				return picoJSONLSessionRef{ID: legacySessionID, Key: meta.Key}, true
+			}
+		}
+		return picoJSONLSessionRef{}, false
+	}
+	return picoJSONLSessionRef{ID: sessionID, Key: meta.Key}, true
+}
+
+func (h *Handler) findPicoJSONLSessions(dir string) ([]picoJSONLSessionRef, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	refs := make([]picoJSONLSessionRef, 0)
+	seen := make(map[string]struct{})
+	metaBackedBases := make(map[string]struct{})
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".meta.json") {
+			continue
+		}
+		name := entry.Name()
+		metaPath := filepath.Join(dir, name)
+		meta, err := h.readSessionMeta(metaPath, "")
+		if err != nil {
+			continue
+		}
+		ref, ok := sessionRefFromMeta(meta)
+		if !ok || ref.Key == "" || ref.ID == "" {
+			continue
+		}
+		metaBackedBases[strings.TrimSuffix(name, ".meta.json")] = struct{}{}
+		if _, exists := seen[ref.ID]; exists {
+			continue
+		}
+		seen[ref.ID] = struct{}{}
+		refs = append(refs, ref)
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
+			continue
+		}
+		name := entry.Name()
+		base := strings.TrimSuffix(name, ".jsonl")
+		if _, ok := metaBackedBases[base]; ok {
+			continue
+		}
+		ref, ok := jsonlSessionRefFromFilename(name)
+		if !ok || ref.Key == "" || ref.ID == "" {
+			continue
+		}
+		if _, exists := seen[ref.ID]; exists {
+			continue
+		}
+		seen[ref.ID] = struct{}{}
+		refs = append(refs, ref)
+	}
+	return refs, nil
+}
+
+func (h *Handler) findPicoJSONLSession(dir, sessionID string) (picoJSONLSessionRef, error) {
+	refs, err := h.findPicoJSONLSessions(dir)
+	if err != nil {
+		return picoJSONLSessionRef{}, err
+	}
+	for _, ref := range refs {
+		if ref.ID == sessionID {
+			return ref, nil
+		}
+	}
+	return picoJSONLSessionRef{}, os.ErrNotExist
+}
+
+func (h *Handler) findLegacyPicoSessions(dir string) ([]picoLegacySessionRef, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	refs := make([]picoLegacySessionRef, 0)
+	seen := make(map[string]struct{})
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || filepath.Ext(name) != ".json" || strings.HasSuffix(name, ".meta.json") {
+			continue
+		}
+
+		path := filepath.Join(dir, entry.Name())
+		sess, err := h.readLegacySession(path)
+		if err != nil || isEmptySession(sess) {
+			continue
+		}
+
+		sessionID, ok := extractLegacyPicoSessionID(sess.Key)
+		if !ok || sessionID == "" {
+			continue
+		}
+		if _, exists := seen[sessionID]; exists {
+			continue
+		}
+		seen[sessionID] = struct{}{}
+		refs = append(refs, picoLegacySessionRef{ID: sessionID, Path: path})
+	}
+	return refs, nil
+}
+
+func jsonlSessionRefFromFilename(name string) (picoJSONLSessionRef, bool) {
+	if !strings.HasSuffix(name, ".jsonl") {
+		return picoJSONLSessionRef{}, false
+	}
+	base := strings.TrimSuffix(name, ".jsonl")
+	if base == "" {
+		return picoJSONLSessionRef{}, false
+	}
+
+	legacyPrefix := sanitizeSessionKey(legacyPicoSessionPrefix)
+	if strings.HasPrefix(base, legacyPrefix) {
+		sessionID := strings.TrimPrefix(base, legacyPrefix)
+		if sessionID == "" {
+			return picoJSONLSessionRef{}, false
+		}
+		return picoJSONLSessionRef{
+			ID:  sessionID,
+			Key: legacyPicoSessionPrefix + sessionID,
+		}, true
+	}
+
+	if session.IsOpaqueSessionKey(base) {
+		return picoJSONLSessionRef{
+			ID:  base,
+			Key: base,
+		}, true
+	}
+
+	return picoJSONLSessionRef{}, false
+}
+
+func (h *Handler) findLegacyPicoSession(dir, sessionID string) (picoLegacySessionRef, error) {
+	refs, err := h.findLegacyPicoSessions(dir)
+	if err != nil {
+		return picoLegacySessionRef{}, err
+	}
+	for _, ref := range refs {
+		if ref.ID == sessionID {
+			return ref, nil
+		}
+	}
+	return picoLegacySessionRef{}, os.ErrNotExist
+}
+
 func buildSessionListItem(sessionID string, sess sessionFile, toolFeedbackMaxArgsLength int) sessionListItem {
+	transcript := visibleSessionMessages(sess.Messages, toolFeedbackMaxArgsLength)
+
 	preview := ""
-	for _, msg := range sess.Messages {
+	for _, msg := range transcript {
 		if msg.Role == "user" {
-			preview = sessionMessagePreview(msg)
+			preview = sessionChatMessagePreview(msg)
 		}
 		if preview != "" {
 			break
@@ -225,13 +424,11 @@ func buildSessionListItem(sessionID string, sess sessionFile, toolFeedbackMaxArg
 	}
 	title := preview
 
-	validMessageCount := len(visibleSessionMessages(sess.Messages, toolFeedbackMaxArgsLength))
-
 	return sessionListItem{
 		ID:           sessionID,
 		Title:        title,
 		Preview:      preview,
-		MessageCount: validMessageCount,
+		MessageCount: len(transcript),
 		Created:      sess.Created.Format(time.RFC3339),
 		Updated:      sess.Updated.Format(time.RFC3339),
 	}
@@ -252,16 +449,25 @@ func truncateRunes(s string, maxLen int) string {
 	return string(runes[:maxLen]) + "..."
 }
 
-func sessionMessageVisible(msg providers.Message) bool {
-	return strings.TrimSpace(msg.Content) != "" || len(msg.Media) > 0
+func sessionChatMessageVisible(msg sessionChatMessage) bool {
+	return strings.TrimSpace(msg.Content) != "" || len(msg.Media) > 0 || len(msg.Attachments) > 0
 }
 
-func sessionMessagePreview(msg providers.Message) string {
+func sessionChatMessagePreview(msg sessionChatMessage) string {
 	if content := strings.TrimSpace(msg.Content); content != "" {
 		return content
 	}
+	if len(msg.Attachments) > 0 {
+		if strings.EqualFold(strings.TrimSpace(msg.Attachments[0].Type), "image") {
+			return "[image]"
+		}
+		return "[attachment]"
+	}
 	if len(msg.Media) > 0 {
-		return "[image]"
+		if strings.HasPrefix(strings.TrimSpace(msg.Media[0]), "data:image/") {
+			return "[image]"
+		}
+		return "[attachment]"
 	}
 	return ""
 }
@@ -270,17 +476,30 @@ func visibleSessionMessages(messages []providers.Message, toolFeedbackMaxArgsLen
 	transcript := make([]sessionChatMessage, 0, len(messages))
 
 	for _, msg := range messages {
+		attachments := sessionAttachments(msg)
+
 		switch msg.Role {
+		case "tool":
+			continue
+
 		case "user":
-			if sessionMessageVisible(msg) {
-				transcript = append(transcript, sessionChatMessage{
-					Role:    "user",
-					Content: msg.Content,
-					Media:   append([]string(nil), msg.Media...),
-				})
+			chatMsg := sessionChatMessage{
+				Role:        "user",
+				Content:     msg.Content,
+				Media:       append([]string(nil), msg.Media...),
+				Attachments: attachments,
+			}
+			if sessionChatMessageVisible(chatMsg) {
+				transcript = append(transcript, chatMsg)
 			}
 
 		case "assistant":
+			// Reasoning-only assistant messages are transient display artifacts and
+			// should not be restored from session history.
+			if assistantMessageTransientThought(msg) {
+				continue
+			}
+
 			toolSummaryMessages := visibleAssistantToolSummaryMessages(msg.ToolCalls, toolFeedbackMaxArgsLength)
 			if len(toolSummaryMessages) > 0 {
 				transcript = append(transcript, toolSummaryMessages...)
@@ -291,22 +510,174 @@ func visibleSessionMessages(messages []providers.Message, toolFeedbackMaxArgsLen
 				transcript = append(transcript, visibleToolMessages...)
 			}
 
-			// Pico web chat can persist both visible `message` tool output and a
-			// later plain assistant reply in the same turn. Hide only the fixed
-			// internal summary that marks handled tool delivery.
-			if !sessionMessageVisible(msg) || assistantMessageInternalOnly(msg) {
+			// When assistant content exactly matches the rendered tool summary or
+			// tool-delivered message, skip it to avoid duplicates. Distinct content
+			// must remain visible in restored session history.
+			if len(msg.ToolCalls) > 0 &&
+				len(msg.Media) == 0 &&
+				len(attachments) == 0 &&
+				assistantToolCallContentDuplicated(msg.Content, toolSummaryMessages, visibleToolMessages) {
 				continue
 			}
 
-			transcript = append(transcript, sessionChatMessage{
-				Role:    "assistant",
-				Content: msg.Content,
-				Media:   append([]string(nil), msg.Media...),
-			})
+			// Pico web chat can persist both visible `message` tool output and a
+			// later plain assistant reply in the same turn. Hide only the fixed
+			// internal summary that marks handled tool delivery.
+			content := msg.Content
+			if assistantMessageInternalOnly(msg) {
+				if len(attachments) == 0 {
+					continue
+				}
+				content = ""
+			}
+
+			chatMsg := sessionChatMessage{
+				Role:        "assistant",
+				Content:     content,
+				Media:       append([]string(nil), msg.Media...),
+				Attachments: attachments,
+			}
+			if !sessionChatMessageVisible(chatMsg) {
+				continue
+			}
+
+			transcript = append(transcript, chatMsg)
 		}
 	}
 
-	return transcript
+	return filterSessionChatMessages(transcript)
+}
+
+func filterSessionChatMessages(messages []sessionChatMessage) []sessionChatMessage {
+	filtered := messages[:0]
+	for _, msg := range messages {
+		if msg.Role != "user" && msg.Role != "assistant" {
+			continue
+		}
+		filtered = append(filtered, msg)
+	}
+	return filtered
+}
+
+func assistantToolCallContentDuplicated(
+	content string,
+	toolSummaryMessages []sessionChatMessage,
+	visibleToolMessages []sessionChatMessage,
+) bool {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return false
+	}
+
+	for _, msg := range toolSummaryMessages {
+		if toolSummaryContainsContent(msg.Content, content) {
+			return true
+		}
+	}
+	for _, msg := range visibleToolMessages {
+		if strings.TrimSpace(msg.Content) == content {
+			return true
+		}
+	}
+	return false
+}
+
+func toolSummaryContainsContent(summary, content string) bool {
+	summary = strings.TrimSpace(summary)
+	content = strings.TrimSpace(content)
+	if summary == "" || content == "" {
+		return false
+	}
+	if summary == content {
+		return true
+	}
+
+	_, body, hasBody := strings.Cut(summary, "\n")
+	return hasBody && strings.TrimSpace(body) == content
+}
+
+func sessionAttachments(msg providers.Message) []sessionChatAttachment {
+	if len(msg.Attachments) == 0 {
+		return nil
+	}
+
+	attachments := make([]sessionChatAttachment, 0, len(msg.Attachments))
+	for _, attachment := range msg.Attachments {
+		urlValue, ok := sessionAttachmentURL(attachment)
+		if !ok {
+			continue
+		}
+		attachmentType := strings.TrimSpace(attachment.Type)
+		if attachmentType == "" {
+			attachmentType = sessionAttachmentType(attachment)
+		}
+		attachments = append(attachments, sessionChatAttachment{
+			Type:        attachmentType,
+			URL:         urlValue,
+			Filename:    strings.TrimSpace(attachment.Filename),
+			ContentType: strings.TrimSpace(attachment.ContentType),
+		})
+	}
+
+	if len(attachments) == 0 {
+		return nil
+	}
+	return attachments
+}
+
+func sessionAttachmentURL(attachment providers.Attachment) (string, bool) {
+	if rawURL := strings.TrimSpace(attachment.URL); rawURL != "" {
+		return rawURL, true
+	}
+
+	ref := strings.TrimSpace(attachment.Ref)
+	if ref == "" {
+		return "", false
+	}
+	if strings.HasPrefix(ref, "media://") {
+		// Persisted session history must only expose durable attachment locations.
+		// media:// refs depend on the live in-memory MediaStore and may stop
+		// resolving after a restart or cleanup, so omit them from reopened history.
+		return "", false
+	}
+	return ref, true
+}
+
+func sessionAttachmentType(attachment providers.Attachment) string {
+	contentType := strings.ToLower(strings.TrimSpace(attachment.ContentType))
+	filename := strings.ToLower(strings.TrimSpace(attachment.Filename))
+	rawRef := strings.ToLower(strings.TrimSpace(attachment.Ref))
+	rawURL := strings.ToLower(strings.TrimSpace(attachment.URL))
+
+	switch {
+	case strings.HasPrefix(contentType, "image/"),
+		strings.HasPrefix(rawRef, "data:image/"),
+		strings.HasPrefix(rawURL, "data:image/"):
+		return "image"
+	case strings.HasPrefix(contentType, "audio/"):
+		return "audio"
+	case strings.HasPrefix(contentType, "video/"):
+		return "video"
+	}
+
+	switch ext := filepath.Ext(filename); ext {
+	case ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg":
+		return "image"
+	case ".mp3", ".wav", ".ogg", ".m4a", ".flac", ".aac", ".wma", ".opus":
+		return "audio"
+	case ".mp4", ".avi", ".mov", ".webm", ".mkv":
+		return "video"
+	default:
+		return "file"
+	}
+}
+
+func assistantMessageTransientThought(msg providers.Message) bool {
+	return strings.TrimSpace(msg.Content) == "" &&
+		strings.TrimSpace(msg.ReasoningContent) != "" &&
+		len(msg.ToolCalls) == 0 &&
+		len(msg.Media) == 0 &&
+		len(msg.Attachments) == 0
 }
 
 func assistantMessageInternalOnly(msg providers.Message) bool {
@@ -326,37 +697,52 @@ func visibleAssistantToolSummaryMessages(
 
 	messages := make([]sessionChatMessage, 0, len(toolCalls))
 	for _, tc := range toolCalls {
-		name := tc.Name
-		argsJSON := ""
-		if tc.Function != nil {
-			if name == "" {
-				name = tc.Function.Name
-			}
-			argsJSON = tc.Function.Arguments
-		}
-
+		name, argsJSON := toolCallNameAndArguments(tc)
 		if strings.TrimSpace(name) == "" {
 			continue
 		}
-
-		if strings.TrimSpace(argsJSON) == "" && len(tc.Arguments) > 0 {
-			if encodedArgs, err := json.Marshal(tc.Arguments); err == nil {
-				argsJSON = string(encodedArgs)
+		if name == "web_search" || name == "web_fetch" {
+			continue
+		}
+		if name == "message" {
+			if _, ok := parseMessageToolContent(argsJSON); ok {
+				continue
 			}
 		}
 
-		argsPreview := strings.TrimSpace(argsJSON)
-		if argsPreview == "" {
-			argsPreview = "{}"
-		}
-
 		messages = append(messages, sessionChatMessage{
-			Role:    "assistant",
-			Content: utils.FormatToolFeedbackMessage(name, utils.Truncate(argsPreview, toolFeedbackMaxArgsLength)),
+			Role: "assistant",
+			Content: utils.FormatToolFeedbackMessage(
+				name,
+				visibleAssistantToolSummaryText(tc, toolFeedbackMaxArgsLength),
+			),
 		})
 	}
 
 	return messages
+}
+
+func visibleAssistantToolSummaryText(
+	tc providers.ToolCall,
+	toolFeedbackMaxArgsLength int,
+) string {
+	if tc.ExtraContent != nil {
+		if explanation := strings.TrimSpace(tc.ExtraContent.ToolFeedbackExplanation); explanation != "" {
+			return utils.Truncate(explanation, toolFeedbackMaxArgsLength)
+		}
+	}
+
+	argsJSON := ""
+	if tc.Function != nil {
+		argsJSON = tc.Function.Arguments
+	}
+	if strings.TrimSpace(argsJSON) == "" && len(tc.Arguments) > 0 {
+		if encodedArgs, err := json.Marshal(tc.Arguments); err == nil {
+			argsJSON = string(encodedArgs)
+		}
+	}
+
+	return utils.Truncate(strings.TrimSpace(argsJSON), toolFeedbackMaxArgsLength)
 }
 
 func visibleAssistantToolMessages(toolCalls []providers.ToolCall) []sessionChatMessage {
@@ -366,34 +752,51 @@ func visibleAssistantToolMessages(toolCalls []providers.ToolCall) []sessionChatM
 
 	messages := make([]sessionChatMessage, 0, len(toolCalls))
 	for _, tc := range toolCalls {
-		name := tc.Name
-		argsJSON := ""
-		if tc.Function != nil {
-			if name == "" {
-				name = tc.Function.Name
-			}
-			argsJSON = tc.Function.Arguments
+		name, argsJSON := toolCallNameAndArguments(tc)
+		if name != "message" {
+			continue
 		}
-
-		switch name {
-		case "message":
-			var args struct {
-				Content string `json:"content"`
-			}
-			if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-				continue
-			}
-			if strings.TrimSpace(args.Content) == "" {
-				continue
-			}
-			messages = append(messages, sessionChatMessage{
-				Role:    "assistant",
-				Content: args.Content,
-			})
+		content, ok := parseMessageToolContent(argsJSON)
+		if !ok {
+			continue
 		}
+		messages = append(messages, sessionChatMessage{
+			Role:    "assistant",
+			Content: content,
+		})
 	}
 
 	return messages
+}
+
+func toolCallNameAndArguments(tc providers.ToolCall) (string, string) {
+	name := tc.Name
+	argsJSON := ""
+	if tc.Function != nil {
+		if name == "" {
+			name = tc.Function.Name
+		}
+		argsJSON = tc.Function.Arguments
+	}
+	if strings.TrimSpace(argsJSON) == "" && len(tc.Arguments) > 0 {
+		if encodedArgs, err := json.Marshal(tc.Arguments); err == nil {
+			argsJSON = string(encodedArgs)
+		}
+	}
+	return name, argsJSON
+}
+
+func parseMessageToolContent(argsJSON string) (string, bool) {
+	var args struct {
+		Content string `json:"content"`
+	}
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return "", false
+	}
+	if strings.TrimSpace(args.Content) == "" {
+		return "", false
+	}
+	return args.Content, true
 }
 
 // sessionsDir resolves the path to the gateway's session storage directory.
@@ -445,8 +848,7 @@ func (h *Handler) handleListSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	entries, err := os.ReadDir(dir)
-	if err != nil {
+	if _, err := os.ReadDir(dir); err != nil {
 		// Directory doesn't exist yet = no sessions
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode([]sessionListItem{})
@@ -456,74 +858,29 @@ func (h *Handler) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	items := []sessionListItem{}
 	seen := make(map[string]struct{})
 
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
+	if refs, findErr := h.findPicoJSONLSessions(dir); findErr == nil {
+		for _, ref := range refs {
+			sess, loadErr := h.readJSONLSession(dir, ref.Key)
+			if loadErr != nil || isEmptySession(sess) {
+				continue
+			}
+			seen[ref.ID] = struct{}{}
+			items = append(items, buildSessionListItem(ref.ID, sess, toolFeedbackMaxArgsLength))
 		}
+	}
 
-		name := entry.Name()
-		var (
-			sessionID string
-			sess      sessionFile
-			loadErr   error
-			ok        bool
-		)
-
-		switch {
-		case strings.HasSuffix(name, ".jsonl"):
-			sessionID, ok = extractPicoSessionIDFromSanitizedKey(strings.TrimSuffix(name, ".jsonl"))
-			if !ok {
+	if legacyRefs, findErr := h.findLegacyPicoSessions(dir); findErr == nil {
+		for _, ref := range legacyRefs {
+			if _, exists := seen[ref.ID]; exists {
 				continue
 			}
-			sess, loadErr = h.readJSONLSession(dir, sessionID)
-			if loadErr == nil && isEmptySession(sess) {
+			sess, loadErr := h.readLegacySession(ref.Path)
+			if loadErr != nil || isEmptySession(sess) {
 				continue
 			}
-		case strings.HasSuffix(name, ".meta.json"):
-			continue
-		case filepath.Ext(name) == ".json":
-			base := strings.TrimSuffix(name, ".json")
-			if _, statErr := os.Stat(filepath.Join(dir, base+".jsonl")); statErr == nil {
-				if jsonlSessionID, found := extractPicoSessionIDFromSanitizedKey(base); found {
-					if jsonlSess, jsonlErr := h.readJSONLSession(
-						dir,
-						jsonlSessionID,
-					); jsonlErr == nil &&
-						!isEmptySession(jsonlSess) {
-						continue
-					}
-				}
-			}
-			data, err := os.ReadFile(filepath.Join(dir, name))
-			if err != nil {
-				continue
-			}
-			if err := json.Unmarshal(data, &sess); err != nil {
-				continue
-			}
-			if isEmptySession(sess) {
-				continue
-			}
-			sessionID, ok = extractPicoSessionID(sess.Key)
-			if !ok {
-				continue
-			}
-			if _, exists := seen[sessionID]; exists {
-				continue
-			}
-		default:
-			continue
+			seen[ref.ID] = struct{}{}
+			items = append(items, buildSessionListItem(ref.ID, sess, toolFeedbackMaxArgsLength))
 		}
-
-		if loadErr != nil {
-			continue
-		}
-		if _, exists := seen[sessionID]; exists {
-			continue
-		}
-
-		seen[sessionID] = struct{}{}
-		items = append(items, buildSessionListItem(sessionID, sess, toolFeedbackMaxArgsLength))
 	}
 
 	// Sort by updated descending (most recent first)
@@ -577,13 +934,20 @@ func (h *Handler) handleGetSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sess, err := h.readJSONLSession(dir, sessionID)
+	ref, refErr := h.findPicoJSONLSession(dir, sessionID)
+	var sess sessionFile
+	err = refErr
+	if refErr == nil {
+		sess, err = h.readJSONLSession(dir, ref.Key)
+	}
 	if err == nil && isEmptySession(sess) {
 		err = os.ErrNotExist
 	}
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			sess, err = h.readLegacySession(dir, sessionID)
+			if legacyRef, legacyErr := h.findLegacyPicoSession(dir, sessionID); legacyErr == nil {
+				sess, err = h.readLegacySession(legacyRef.Path)
+			}
 			if err == nil && isEmptySession(sess) {
 				err = os.ErrNotExist
 			}
@@ -626,21 +990,30 @@ func (h *Handler) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	base := filepath.Join(dir, sanitizeSessionKey(picoSessionPrefix+sessionID))
-	jsonlPath := base + ".jsonl"
-	metaPath := base + ".meta.json"
-	legacyPath := base + ".json"
-
 	removed := false
-	for _, path := range []string{jsonlPath, metaPath, legacyPath} {
-		if err := os.Remove(path); err != nil {
-			if os.IsNotExist(err) {
-				continue
+	if ref, err := h.findPicoJSONLSession(dir, sessionID); err == nil {
+		base := filepath.Join(dir, sanitizeSessionKey(ref.Key))
+		for _, path := range []string{base + ".jsonl", base + ".meta.json"} {
+			if err := os.Remove(path); err != nil {
+				if os.IsNotExist(err) {
+					continue
+				}
+				http.Error(w, "failed to delete session", http.StatusInternalServerError)
+				return
 			}
-			http.Error(w, "failed to delete session", http.StatusInternalServerError)
-			return
+			removed = true
 		}
-		removed = true
+	}
+
+	if legacyRef, err := h.findLegacyPicoSession(dir, sessionID); err == nil {
+		if err := os.Remove(legacyRef.Path); err != nil {
+			if !os.IsNotExist(err) {
+				http.Error(w, "failed to delete session", http.StatusInternalServerError)
+				return
+			}
+		} else {
+			removed = true
+		}
 	}
 
 	if !removed {

@@ -6,6 +6,7 @@ export interface CoreConfigForm {
   splitOnMarker: boolean
   toolFeedbackEnabled: boolean
   toolFeedbackMaxArgsLength: string
+  toolFeedbackSeparateMessages: boolean
   execEnabled: boolean
   allowRemote: boolean
   enableDenyPatterns: boolean
@@ -30,7 +31,8 @@ export interface LauncherForm {
   port: string
   publicAccess: boolean
   allowedCIDRsText: string
-  launcherToken: string
+  dashboardPassword: string
+  dashboardPasswordConfirm: string
 }
 
 export const DM_SCOPE_OPTIONS = [
@@ -70,6 +72,7 @@ export const EMPTY_FORM: CoreConfigForm = {
   splitOnMarker: false,
   toolFeedbackEnabled: false,
   toolFeedbackMaxArgsLength: "300",
+  toolFeedbackSeparateMessages: false,
   execEnabled: true,
   allowRemote: true,
   enableDenyPatterns: true,
@@ -94,7 +97,8 @@ export const EMPTY_LAUNCHER_FORM: LauncherForm = {
   port: "18800",
   publicAccess: false,
   allowedCIDRsText: "",
-  launcherToken: "",
+  dashboardPassword: "",
+  dashboardPasswordConfirm: "",
 }
 
 function asRecord(value: unknown): JsonRecord {
@@ -152,6 +156,10 @@ export function buildFormFromConfig(config: unknown): CoreConfigForm {
       toolFeedback.max_args_length,
       EMPTY_FORM.toolFeedbackMaxArgsLength,
     ),
+    toolFeedbackSeparateMessages:
+      toolFeedback.separate_messages === undefined
+        ? EMPTY_FORM.toolFeedbackSeparateMessages
+        : asBool(toolFeedback.separate_messages),
     execEnabled:
       exec.enabled === undefined
         ? EMPTY_FORM.execEnabled
