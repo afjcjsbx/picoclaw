@@ -692,7 +692,7 @@ func TestHandleUpdateModel_ToolSchemaTransformPreserveAndClear(t *testing.T) {
 		ModelName:           "editable",
 		Model:               "openai/gpt-4o-mini",
 		APIKeys:             config.SimpleSecureStrings("sk-existing"),
-		ToolSchemaTransform: "google",
+		ToolSchemaTransform: "simple",
 	}}
 	err = config.SaveConfig(configPath, cfg)
 	if err != nil {
@@ -718,8 +718,8 @@ func TestHandleUpdateModel_ToolSchemaTransformPreserveAndClear(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig() after preserve error = %v", err)
 	}
-	if got := afterPreserve.ModelList[0].ToolSchemaTransform; got != "google" {
-		t.Fatalf("preserved tool_schema_transform = %q, want %q", got, "google")
+	if got := afterPreserve.ModelList[0].ToolSchemaTransform; got != "simple" {
+		t.Fatalf("preserved tool_schema_transform = %q, want %q", got, "simple")
 	}
 
 	recClear := httptest.NewRecorder()
