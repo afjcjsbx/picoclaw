@@ -54,6 +54,9 @@ func runtimeSeverityForAgentEvent(kind runtimeevents.Kind, payload any) runtimee
 		if !ok {
 			return runtimeevents.SeverityInfo
 		}
+		if payload.Reason == TurnEndReasonMaxToolIterations {
+			return runtimeevents.SeverityWarn
+		}
 		switch payload.Status {
 		case TurnEndStatusError:
 			return runtimeevents.SeverityError

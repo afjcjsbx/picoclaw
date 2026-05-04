@@ -87,7 +87,7 @@ The table below lists the current runtime event kinds, when they are emitted, an
 | Event | Trigger | Details |
 | ----- | ------- | ------- |
 | `agent.turn.start` | An agent starts processing one user or system input after the turn scope has been created. | `user_len`, `media_count`; scope usually includes `agent_id`, `session_key`, `turn_id`, `channel`, `chat_id`, `message_id` |
-| `agent.turn.end` | A turn exits, whether it completed, errored, or was hard-aborted. | `status` (`completed`/`error`/`aborted`), `iterations_total`, `duration_ms`, `final_len` |
+| `agent.turn.end` | A turn exits, whether it completed, errored, or was hard-aborted. | `status` (`completed`/`error`/`aborted`), optional `reason` (for example `max_tool_iterations`), `iterations_total`, `duration_ms`, `final_len` |
 | `agent.llm.request` | Before each LLM provider request. | `model`, `messages`, `tools`, `max_tokens` |
 | `agent.llm.delta` | Reserved for streaming LLM deltas; the kind is defined, but the current implementation has no natural emit site. | `content_delta_len`, `reasoning_delta_len` |
 | `agent.llm.response` | After the LLM provider returns a complete response. | `content_len`, `tool_calls`, `has_reasoning` |
@@ -184,7 +184,7 @@ Agent events add safe payload summaries:
 | Event | Summary fields |
 | ----- | -------------- |
 | `agent.turn.start` | `user_len`, `media_count` |
-| `agent.turn.end` | `status`, `iterations_total`, `duration_ms`, `final_len` |
+| `agent.turn.end` | `status`, optional `reason`, `iterations_total`, `duration_ms`, `final_len` |
 | `agent.llm.request` | `model`, `messages`, `tools`, `max_tokens` |
 | `agent.llm.delta` | `content_delta_len`, `reasoning_delta_len` |
 | `agent.llm.response` | `content_len`, `tool_calls`, `has_reasoning` |

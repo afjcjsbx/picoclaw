@@ -2148,6 +2148,37 @@ func (m *toolLimitOnlyProvider) GetDefaultModel() string {
 	return "tool-limit-only-model"
 }
 
+type resumeAfterToolLimitProvider struct {
+	calls        int
+	lastMessages []providers.Message
+}
+
+func (m *resumeAfterToolLimitProvider) Chat(
+	ctx context.Context,
+	messages []providers.Message,
+	tools []providers.ToolDefinition,
+	model string,
+	opts map[string]any,
+) (*providers.LLMResponse, error) {
+	m.calls++
+	m.lastMessages = append([]providers.Message(nil), messages...)
+	if m.calls == 1 {
+		return &providers.LLMResponse{
+			ToolCalls: []providers.ToolCall{{
+				ID:        "call_tool_limit_resume",
+				Type:      "function",
+				Name:      "tool_limit_test_tool",
+				Arguments: map[string]any{"value": "x"},
+			}},
+		}, nil
+	}
+	return &providers.LLMResponse{Content: "resumed final response"}, nil
+}
+
+func (m *resumeAfterToolLimitProvider) GetDefaultModel() string {
+	return "resume-after-tool-limit-model"
+}
+
 // mockCustomTool is a simple mock tool for registration testing
 type mockCustomTool struct{}
 
@@ -3515,8 +3546,15 @@ func TestAgentLoop_ToolLimitUsesDedicatedFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ProcessDirectWithChannel failed: %v", err)
 	}
-	if response != toolLimitResponse {
-		t.Fatalf("response = %q, want %q", response, toolLimitResponse)
+	want := maxToolIterationsReachedResponse(1)
+	if response != want {
+		t.Fatalf("response = %q, want %q", response, want)
+	}
+	if !strings.Contains(response, "/resume") {
+		t.Fatalf("response = %q, want resume operator hint", response)
+	}
+	if !strings.Contains(response, "at least 2") {
+		t.Fatalf("response = %q, want suggested max_tool_iterations increment", response)
 	}
 
 	defaultAgent := al.registry.GetDefaultAgent()
@@ -3537,8 +3575,81 @@ func TestAgentLoop_ToolLimitUsesDedicatedFallback(t *testing.T) {
 		t.Fatalf("history len = %d, want 4", len(history))
 	}
 	assertRoles(t, history, "user", "assistant", "tool", "assistant")
-	if history[3].Content != toolLimitResponse {
-		t.Fatalf("final assistant content = %q, want %q", history[3].Content, toolLimitResponse)
+	if history[3].Content != want {
+		t.Fatalf("final assistant content = %q, want %q", history[3].Content, want)
+	}
+}
+
+func TestAgentLoop_ResumeCommandContinuesAfterToolLimit(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "agent-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				ModelName:         "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 1,
+			},
+		},
+	}
+
+	msgBus := bus.NewMessageBus()
+	provider := &resumeAfterToolLimitProvider{}
+	al := NewAgentLoop(cfg, msgBus, provider)
+	al.RegisterTool(&toolLimitTestTool{})
+
+	first, err := al.processMessage(context.Background(), testInboundMessage(bus.InboundMessage{
+		Channel:  "test",
+		SenderID: "cron",
+		ChatID:   "chat1",
+		Content:  "start a long task",
+	}))
+	if err != nil {
+		t.Fatalf("initial processMessage failed: %v", err)
+	}
+	if !strings.Contains(first, toolLimitResponseIntro) {
+		t.Fatalf("initial response = %q, want max_tool_iterations notice", first)
+	}
+
+	resumed, err := al.processMessage(context.Background(), testInboundMessage(bus.InboundMessage{
+		Channel:  "test",
+		SenderID: "cron",
+		ChatID:   "chat1",
+		Content:  "/resume",
+	}))
+	if err != nil {
+		t.Fatalf("/resume processMessage failed: %v", err)
+	}
+	if resumed != "resumed final response" {
+		t.Fatalf("/resume response = %q, want resumed final response", resumed)
+	}
+
+	foundToolResult := false
+	foundLimitNotice := false
+	foundResumePrompt := false
+	for _, msg := range provider.lastMessages {
+		switch {
+		case msg.Role == "tool" && strings.Contains(msg.Content, "tool limit test result"):
+			foundToolResult = true
+		case msg.Role == "assistant" && strings.Contains(msg.Content, toolLimitResponseIntro):
+			foundLimitNotice = true
+		case msg.Role == "user" && msg.Content == resumeOperatorPrompt:
+			foundResumePrompt = true
+		}
+	}
+	if !foundToolResult {
+		t.Fatal("/resume provider request did not include previous tool result")
+	}
+	if !foundLimitNotice {
+		t.Fatal("/resume provider request did not include max_tool_iterations notice")
+	}
+	if !foundResumePrompt {
+		t.Fatal("/resume provider request did not include resume operator prompt")
 	}
 }
 

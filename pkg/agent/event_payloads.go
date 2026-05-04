@@ -14,6 +14,15 @@ const (
 	TurnEndStatusAborted TurnEndStatus = "aborted"
 )
 
+// TurnEndReason explains why an otherwise completed turn stopped early.
+type TurnEndReason string
+
+const (
+	// TurnEndReasonMaxToolIterations means the turn exhausted the configured
+	// tool-call loop budget before the model produced a final answer.
+	TurnEndReasonMaxToolIterations TurnEndReason = "max_tool_iterations"
+)
+
 // TurnStartPayload describes the start of a turn.
 type TurnStartPayload struct {
 	UserMessage string
@@ -23,6 +32,7 @@ type TurnStartPayload struct {
 // TurnEndPayload describes the completion of a turn.
 type TurnEndPayload struct {
 	Status          TurnEndStatus
+	Reason          TurnEndReason
 	Iterations      int
 	Duration        time.Duration
 	FinalContentLen int

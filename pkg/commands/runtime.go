@@ -53,6 +53,7 @@ type Runtime struct {
 	GetContextStats    func() *ContextStats
 	SwitchModel        func(value string) (oldModel string, err error)
 	SwitchChannel      func(value string) error
+	ResumeSession      func(ctx context.Context) (string, error)
 	ClearHistory       func() error
 	ReloadConfig       func() error
 }

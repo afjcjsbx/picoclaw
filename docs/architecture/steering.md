@@ -102,6 +102,14 @@ if response == "" {
 agent-scoped sessions continue on the correct agent instead of always using
 the default one.
 
+### /resume — User-facing resume operator
+
+When a turn stops because `max_tool_iterations` was reached, the final assistant
+message tells the user that the task may be incomplete and offers `/resume`.
+The `/resume` command starts a continuation turn in the same session with the
+existing conversation history, so the model can continue from the last completed
+tool result instead of starting over.
+
 ## Polling points in the loop
 
 Steering is checked at the following points in the agent cycle:

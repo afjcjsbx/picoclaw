@@ -256,6 +256,9 @@ func appendRuntimeEventPayloadSummary(fields map[string]any, payload any) {
 		fields["media_count"] = payload.MediaCount
 	case TurnEndPayload:
 		fields["status"] = payload.Status
+		if payload.Reason != "" {
+			fields["reason"] = payload.Reason
+		}
 		fields["iterations_total"] = payload.Iterations
 		fields["duration_ms"] = payload.Duration.Milliseconds()
 		fields["final_len"] = payload.FinalContentLen

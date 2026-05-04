@@ -174,6 +174,36 @@ func TestBuiltinListSkills_UsesRuntimeSkillNames(t *testing.T) {
 	}
 }
 
+func TestBuiltinResume_UsesRuntimeResumeSession(t *testing.T) {
+	called := false
+	rt := &Runtime{
+		ResumeSession: func(context.Context) (string, error) {
+			called = true
+			return "resumed response", nil
+		},
+	}
+	defs := BuiltinDefinitions()
+	ex := NewExecutor(NewRegistry(defs), rt)
+
+	var reply string
+	res := ex.Execute(context.Background(), Request{
+		Text: "/resume",
+		Reply: func(text string) error {
+			reply = text
+			return nil
+		},
+	})
+	if res.Outcome != OutcomeHandled {
+		t.Fatalf("/resume: outcome=%v, want=%v", res.Outcome, OutcomeHandled)
+	}
+	if !called {
+		t.Fatal("/resume did not call Runtime.ResumeSession")
+	}
+	if reply != "resumed response" {
+		t.Fatalf("/resume reply=%q, want resumed response", reply)
+	}
+}
+
 func TestBuiltinListMCP_UsesRuntimeServerStatus(t *testing.T) {
 	rt := &Runtime{
 		ListMCPServers: func(context.Context) []MCPServerInfo {

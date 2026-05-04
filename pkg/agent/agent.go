@@ -111,7 +111,8 @@ type continuationTarget struct {
 
 const (
 	defaultResponse            = "The model returned an empty response. This may indicate a provider error or token limit."
-	toolLimitResponse          = "I've reached `max_tool_iterations` without a final response. Increase `max_tool_iterations` in config.json if this task needs more tool steps."
+	toolLimitResponseIntro     = "I've reached `max_tool_iterations`"
+	resumeOperatorPrompt       = "Continue the previous task from the current conversation context without repeating completed work. Finish the original request if possible."
 	handledToolResponseSummary = "Requested output delivered via tool attachment."
 	sessionKeyAgentPrefix      = "agent:"
 	pendingTurnPrefix          = "pending-"
@@ -127,6 +128,23 @@ const (
 	metadataKeyParentPeerKind  = "parent_peer_kind"
 	metadataKeyParentPeerID    = "parent_peer_id"
 )
+
+func suggestedMaxToolIterations(limit int) int {
+	if limit <= 0 {
+		return 1
+	}
+	return limit * 2
+}
+
+func maxToolIterationsReachedResponse(limit int) string {
+	suggested := suggestedMaxToolIterations(limit)
+	return fmt.Sprintf(
+		"%s (%d) without a final response, so this task may be incomplete.\n\nUse the `/resume` operator to continue from the current conversation context without starting over. If this happens often, increase `agents.defaults.max_tool_iterations` to at least %d in config.json.",
+		toolLimitResponseIntro,
+		limit,
+		suggested,
+	)
+}
 
 // registerSharedTools registers tools that are shared across all agents (web, message, spawn).
 

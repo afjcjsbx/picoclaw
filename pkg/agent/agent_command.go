@@ -350,6 +350,31 @@ func (al *AgentLoop) buildCommandsRuntime(
 				MessageCount:     len(history),
 			}
 		}
+
+		rt.ResumeSession = func(ctx context.Context) (string, error) {
+			if opts == nil {
+				return "", fmt.Errorf("process options not available")
+			}
+			sessionKey := strings.TrimSpace(opts.Dispatch.SessionKey)
+			if sessionKey == "" {
+				return "", fmt.Errorf("session key not available")
+			}
+			if agent.Sessions != nil && len(agent.Sessions.GetHistory(sessionKey)) == 0 {
+				return "", nil
+			}
+			return al.continueWithSteeringMessages(
+				ctx,
+				agent,
+				sessionKey,
+				opts.Dispatch.Channel(),
+				opts.Dispatch.ChatID(),
+				opts.Dispatch.SessionScope,
+				[]providers.Message{{
+					Role:    "user",
+					Content: resumeOperatorPrompt,
+				}},
+			)
+		}
 	}
 	return rt
 }

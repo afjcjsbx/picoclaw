@@ -27,12 +27,14 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 	defer al.clearActiveTurn(ts)
 
 	turnStatus := TurnEndStatusCompleted
+	turnEndReason := TurnEndReason("")
 	defer func() {
 		al.emitEvent(
 			runtimeevents.KindAgentTurnEnd,
 			ts.eventMeta("runTurn", "turn.end"),
 			TurnEndPayload{
 				Status:          turnStatus,
+				Reason:          turnEndReason,
 				Iterations:      ts.currentIteration(),
 				Duration:        time.Since(ts.startedAt),
 				FinalContentLen: ts.finalContentLen(),
@@ -230,7 +232,16 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 
 	if finalContent == "" {
 		if ts.currentIteration() >= ts.agent.MaxIterations && ts.agent.MaxIterations > 0 {
-			finalContent = toolLimitResponse
+			turnEndReason = TurnEndReasonMaxToolIterations
+			finalContent = maxToolIterationsReachedResponse(ts.agent.MaxIterations)
+			logger.WarnCF("agent", "Max tool iterations reached before final response", map[string]any{
+				"agent_id":                ts.agent.ID,
+				"session_key":             ts.sessionKey,
+				"max_tool_iterations":     ts.agent.MaxIterations,
+				"suggested_next_minimum":  suggestedMaxToolIterations(ts.agent.MaxIterations),
+				"resume_operator":         "/resume",
+				"current_iteration_count": ts.currentIteration(),
+			})
 		} else {
 			finalContent = ts.opts.DefaultResponse
 		}
