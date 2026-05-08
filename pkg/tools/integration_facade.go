@@ -11,6 +11,7 @@ import (
 )
 
 type (
+	AskUserTool              = integrationtools.AskUserTool
 	SendCallbackWithContext  = integrationtools.SendCallbackWithContext
 	ReactionCallback         = integrationtools.ReactionCallback
 	MCPManager               = integrationtools.MCPManager
@@ -36,6 +37,12 @@ type (
 	WebSearchToolOptions     = integrationtools.WebSearchToolOptions
 	WebFetchTool             = integrationtools.WebFetchTool
 )
+
+const AskUserToolName = integrationtools.AskUserToolName
+
+func NewAskUserTool() *AskUserTool {
+	return integrationtools.NewAskUserTool()
+}
 
 func NewMCPTool(manager MCPManager, serverName string, tool *mcp.Tool) *MCPTool {
 	return integrationtools.NewMCPTool(manager, serverName, tool)

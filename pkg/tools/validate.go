@@ -3,6 +3,7 @@ package tools
 import (
 	"fmt"
 	"math"
+	"reflect"
 )
 
 // validateToolArgs validates args against a JSON Schema-like map.
@@ -135,7 +136,7 @@ func checkType(key string, val any, propSchema map[string]any) error {
 			return fmt.Errorf("property %q: expected boolean, got %T", key, val)
 		}
 	case "array":
-		arr, ok := val.([]any)
+		arr, ok := toAnySlice(val)
 		if !ok {
 			return fmt.Errorf("property %q: expected array, got %T", key, val)
 		}
@@ -143,7 +144,7 @@ func checkType(key string, val any, propSchema map[string]any) error {
 			return err
 		}
 	case "object":
-		obj, ok := val.(map[string]any)
+		obj, ok := toStringAnyMap(val)
 		if !ok {
 			return fmt.Errorf("property %q: expected object, got %T", key, val)
 		}
@@ -206,4 +207,47 @@ func checkEnum(key string, val any, propSchema map[string]any) error {
 	}
 
 	return fmt.Errorf("property %q: value %v is not in enum", key, val)
+}
+
+func toAnySlice(val any) ([]any, bool) {
+	if val == nil {
+		return nil, false
+	}
+
+	if arr, ok := val.([]any); ok {
+		return arr, true
+	}
+
+	rv := reflect.ValueOf(val)
+	if rv.Kind() != reflect.Slice && rv.Kind() != reflect.Array {
+		return nil, false
+	}
+
+	out := make([]any, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		out[i] = rv.Index(i).Interface()
+	}
+	return out, true
+}
+
+func toStringAnyMap(val any) (map[string]any, bool) {
+	if val == nil {
+		return nil, false
+	}
+
+	if obj, ok := val.(map[string]any); ok {
+		return obj, true
+	}
+
+	rv := reflect.ValueOf(val)
+	if rv.Kind() != reflect.Map || rv.Type().Key().Kind() != reflect.String {
+		return nil, false
+	}
+
+	out := make(map[string]any, rv.Len())
+	iter := rv.MapRange()
+	for iter.Next() {
+		out[iter.Key().String()] = iter.Value().Interface()
+	}
+	return out, true
 }

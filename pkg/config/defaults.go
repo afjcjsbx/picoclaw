@@ -417,6 +417,9 @@ func DefaultConfig() *Config {
 			AppendFile: ToolConfig{
 				Enabled: true,
 			},
+			AskUser: ToolConfig{
+				Enabled: true,
+			},
 			EditFile: ToolConfig{
 				Enabled: true,
 			},

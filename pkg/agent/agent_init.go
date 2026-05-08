@@ -168,6 +168,9 @@ func registerSharedTools(
 			})
 			agent.Tools.Register(messageTool)
 		}
+		if cfg.Tools.IsToolEnabled("ask_user") {
+			agent.Tools.Register(tools.NewAskUserTool())
+		}
 		if cfg.Tools.IsToolEnabled("reaction") {
 			reactionTool := tools.NewReactionTool()
 			reactionTool.SetReactionCallback(func(ctx context.Context, channel, chatID, messageID string) error {

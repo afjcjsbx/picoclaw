@@ -484,6 +484,57 @@ toolLoop:
 			toolResult = tools.ErrorResult("hook returned nil tool result")
 		}
 
+		if toolResult.AwaitUserInput {
+			switch {
+			case ts.opts.NoHistory:
+				toolResult = tools.ErrorResult("ask_user cannot be used when session history is disabled")
+			case len(normalizedToolCalls) != 1:
+				toolResult = tools.ErrorResult("ask_user must be the only tool call in its batch")
+			default:
+				if err := ts.agent.Sessions.Save(ts.sessionKey); err != nil {
+					toolResult = tools.ErrorResult(
+						fmt.Sprintf("failed to save session while waiting for user input: %v", err),
+					).WithError(err)
+				} else {
+					outbound := outboundMessageForTurnWithKind(ts, toolResult.ForUser, messageKindAskUser)
+					if len(toolResult.InputOptions) > 0 {
+						if outbound.Context.Raw == nil {
+							outbound.Context.Raw = make(map[string]string, 2)
+						}
+						if rawOptions, err := json.Marshal(toolResult.InputOptions); err == nil {
+							outbound.Context.Raw[metadataKeyAskUserOptions] = string(rawOptions)
+						}
+					}
+					al.bus.PublishOutbound(ctx, outbound)
+					al.emitEvent(
+						runtimeevents.KindAgentToolExecEnd,
+						ts.eventMeta("runTurn", "turn.tool.end"),
+						ToolExecEndPayload{
+							Tool:       toolName,
+							Duration:   toolDuration,
+							ForLLMLen:  len(toolResult.ForLLM),
+							ForUserLen: len(toolResult.ForUser),
+							IsError:    toolResult.IsError,
+							Async:      toolResult.Async,
+						},
+					)
+					exec.messages = messages
+					exec.allResponsesHandled = true
+					if al.channelManager != nil && ts.channel != "" {
+						al.channelManager.DismissToolFeedback(ctx, ts.channel, ts.chatID, ts.opts.InboundContext)
+					}
+					logger.InfoCF("agent", "ask_user tool is waiting for user input",
+						map[string]any{
+							"agent_id":     ts.agent.ID,
+							"session_key":  ts.sessionKey,
+							"tool_call_id": toolCallID,
+							"options":      len(toolResult.InputOptions),
+						})
+					return ToolControlBreak
+				}
+			}
+		}
+
 		if len(toolResult.Media) > 0 && toolResult.ResponseHandled {
 			parts := make([]bus.MediaPart, 0, len(toolResult.Media))
 			for _, ref := range toolResult.Media {

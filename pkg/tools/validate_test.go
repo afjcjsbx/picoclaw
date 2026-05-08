@@ -253,6 +253,19 @@ func TestValidateToolArgs(t *testing.T) {
 			args: map[string]any{"tags": []any{"a", "b", "c"}},
 		},
 		{
+			name: "array with typed string slice",
+			schema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"tags": map[string]any{
+						"type":  "array",
+						"items": map[string]any{"type": "string"},
+					},
+				},
+			},
+			args: map[string]any{"tags": []string{"a", "b", "c"}},
+		},
+		{
 			name: "array with wrong element types",
 			schema: map[string]any{
 				"type": "object",
@@ -265,6 +278,24 @@ func TestValidateToolArgs(t *testing.T) {
 			},
 			args:    map[string]any{"tags": []any{"a", float64(2)}},
 			wantErr: "expected string",
+		},
+		{
+			name: "nested object typed map accepted",
+			schema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"address": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"city": map[string]any{"type": "string"},
+						},
+						"required": []string{"city"},
+					},
+				},
+			},
+			args: map[string]any{
+				"address": map[string]string{"city": "Berlin"},
+			},
 		},
 		{
 			name: "schema with no properties key accepts any args",

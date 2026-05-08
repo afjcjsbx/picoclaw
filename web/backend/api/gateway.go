@@ -448,6 +448,9 @@ func computeConfigSignature(cfg *config.Config) string {
 	if cfg.Tools.Message.Enabled {
 		toolSignatures = append(toolSignatures, "message")
 	}
+	if cfg.Tools.AskUser.Enabled {
+		toolSignatures = append(toolSignatures, "ask_user")
+	}
 	if cfg.Tools.SendFile.Enabled {
 		toolSignatures = append(toolSignatures, "send_file")
 	}

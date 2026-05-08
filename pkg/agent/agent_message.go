@@ -200,6 +200,10 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 			})
 	}
 
+	if pendingAskUser := findPendingAskUserCall(agent.Sessions.GetHistory(sessionKey)); pendingAskUser != nil {
+		return al.resumePendingAskUser(ctx, agent, msg, &opts, pendingAskUser)
+	}
+
 	return al.runAgentLoop(ctx, agent, opts)
 }
 

@@ -37,6 +37,14 @@ type ToolResult struct {
 	// When true, the tool will complete later and notify via callback.
 	Async bool `json:"async"`
 
+	// AwaitUserInput pauses the current turn and waits for the next inbound user
+	// message to complete this tool call as a deferred tool result.
+	AwaitUserInput bool `json:"await_user_input,omitempty"`
+
+	// InputOptions are the suggested reply labels shown to the user while the
+	// tool is waiting for input.
+	InputOptions []string `json:"input_options,omitempty"`
+
 	// Err is the underlying error (not JSON serialized).
 	// Used for internal error handling and logging.
 	Err error `json:"-"`
