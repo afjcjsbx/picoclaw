@@ -105,9 +105,10 @@ func TestTurnProfile_DisabledPreservesDefaultHistoryAndPrompt(t *testing.T) {
 	al := newTurnProfileAgentLoop(t, cfg, provider)
 	agent := al.GetRegistry().GetDefaultAgent()
 	sessionKey := "agent:default:test-default"
+	ts := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
 	initialHistory := []providers.Message{
-		{Role: "user", Content: "old user"},
-		{Role: "assistant", Content: "old assistant"},
+		{Role: "user", Content: "old user", CreatedAt: &ts},
+		{Role: "assistant", Content: "old assistant", CreatedAt: &ts},
 	}
 	agent.Sessions.SetHistory(sessionKey, initialHistory)
 	agent.Sessions.SetSummary(sessionKey, "old summary")
@@ -154,9 +155,10 @@ func TestTurnProfile_HistoryOffSuppressesHistoryAndPersistence(t *testing.T) {
 	al := newTurnProfileAgentLoop(t, cfg, provider)
 	agent := al.GetRegistry().GetDefaultAgent()
 	sessionKey := "agent:default:test-history-off"
+	ts := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
 	initialHistory := []providers.Message{
-		{Role: "user", Content: "old user"},
-		{Role: "assistant", Content: "old assistant"},
+		{Role: "user", Content: "old user", CreatedAt: &ts},
+		{Role: "assistant", Content: "old assistant", CreatedAt: &ts},
 	}
 	agent.Sessions.SetHistory(sessionKey, initialHistory)
 	agent.Sessions.SetSummary(sessionKey, "old summary")

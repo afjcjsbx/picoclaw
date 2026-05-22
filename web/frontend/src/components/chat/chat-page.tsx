@@ -384,6 +384,7 @@ export function ChatPage() {
                   <UserMessage
                     content={msg.content}
                     attachments={msg.attachments}
+                    timestamp={msg.timestamp}
                   />
                 )}
               </div>
