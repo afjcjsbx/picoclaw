@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/sipeed/picoclaw/pkg/collab"
 	"github.com/sipeed/picoclaw/pkg/routing"
 )
 
@@ -14,6 +15,7 @@ import (
 // agent's own workspace, model, and tools.
 type DelegateTool struct {
 	spawner        SubTurnSpawner
+	runtime        AgentCollaborationRuntime
 	allowlistCheck func(targetAgentID string) bool
 	selfAgentID    string
 }
@@ -24,6 +26,10 @@ func NewDelegateTool() *DelegateTool {
 
 func (t *DelegateTool) SetSpawner(spawner SubTurnSpawner) {
 	t.spawner = spawner
+}
+
+func (t *DelegateTool) SetRuntime(runtime AgentCollaborationRuntime) {
+	t.runtime = runtime
 }
 
 func (t *DelegateTool) SetAllowlistChecker(check func(targetAgentID string) bool) {
@@ -83,7 +89,27 @@ func (t *DelegateTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	}
 
 	if t.spawner == nil {
-		return ErrorResult("delegate tool not configured")
+		if t.runtime == nil {
+			return ErrorResult("delegate tool not configured")
+		}
+	}
+
+	if t.runtime != nil {
+		reply, err := t.runtime.Request(ctx, AgentRequestParams{
+			ToAgentID:     agentID,
+			Content:       task,
+			ContextPolicy: collab.ContextPolicyTaskOnly,
+			Wait:          true,
+		})
+		if err != nil {
+			return ErrorResult(fmt.Sprintf("delegation to agent %q failed: %v", agentID, err)).WithError(err)
+		}
+		result := &ToolResult{
+			ForLLM:  reply.Content,
+			ForUser: reply.Content,
+		}
+		result.ForLLM = fmt.Sprintf("[Response from agent %q]\n%s", agentID, result.ForLLM)
+		return result
 	}
 
 	result, err := t.spawner.SpawnSubTurn(ctx, SubTurnConfig{

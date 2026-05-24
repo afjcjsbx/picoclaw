@@ -5,6 +5,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/agent/interfaces"
@@ -96,6 +97,19 @@ func NewAgentLoop(
 	al.hooks = NewHookManager(al.runtimeEvents.Channel())
 	configureHookManagerFromConfig(al.hooks, cfg)
 	al.contextManager = al.resolveContextManager()
+	if defaultAgent != nil {
+		collabBus, err := NewAgentCollaborationBus(
+			al,
+			filepath.Join(defaultAgent.Workspace, ".collaboration"),
+		)
+		if err != nil {
+			logger.WarnCF("agent", "Failed to initialize collaboration bus", map[string]any{
+				"error": err.Error(),
+			})
+		} else {
+			al.collaboration = collabBus
+		}
+	}
 
 	// Register shared tools to all agents (now that al is created)
 	registerSharedTools(al, cfg, msgBus, registry, provider)
@@ -361,12 +375,29 @@ func registerSharedTools(
 		if len(registry.ListAgentIDs()) > 1 {
 			delegateTool := tools.NewDelegateTool()
 			delegateTool.SetSpawner(NewSubTurnSpawner(al))
+			if al.collaboration != nil {
+				delegateTool.SetRuntime(al.collaboration)
+			}
 			currentAgentID := agentID
 			delegateTool.SetSelfAgentID(currentAgentID)
 			delegateTool.SetAllowlistChecker(func(targetAgentID string) bool {
 				return registry.CanSpawnSubagent(currentAgentID, targetAgentID)
 			})
 			agent.Tools.Register(delegateTool)
+
+			if al.collaboration != nil {
+				requestTool := tools.NewAgentRequestTool()
+				requestTool.SetRuntime(al.collaboration)
+				agent.Tools.Register(requestTool)
+
+				replyTool := tools.NewAgentReplyTool()
+				replyTool.SetRuntime(al.collaboration)
+				agent.Tools.Register(replyTool)
+
+				inboxTool := tools.NewAgentInboxTool()
+				inboxTool.SetRuntime(al.collaboration)
+				agent.Tools.Register(inboxTool)
+			}
 		}
 
 		warnOnUnknownAgentToolDeclarations(agentID, agent.Workspace, agent.Definition, agent.Tools)
