@@ -499,13 +499,14 @@ func (b *AgentCollaborationBus) processQueuedRequest(
 	if finalContent == "" {
 		finalContent = "No reply was produced for this collaboration request."
 	}
-	return b.synthesizeReply(requestEnv, targetAgentID, finalContent, collab.KindReply)
+	return b.synthesizeReply(requestEnv, targetAgentID, finalContent, collab.KindReply, true)
 }
 
 func (b *AgentCollaborationBus) synthesizeReply(
 	requestEnv collab.Envelope,
 	fromAgentID, content string,
 	kind collab.MessageKind,
+	markRequestReplied bool,
 ) error {
 	replyEnv := collab.Envelope{
 		ID:           "msg_" + uuid.New().String(),
@@ -524,12 +525,14 @@ func (b *AgentCollaborationBus) synthesizeReply(
 	if _, err := b.store.AddMessage(replyEnv); err != nil {
 		return err
 	}
-	if _, err := b.store.UpdateMessageStatus(requestEnv.ID, collab.StatusReplied, ""); err != nil {
-		logger.WarnCF("agent", "Failed to mark synthesized collaboration reply", map[string]any{
-			"thread_id":  requestEnv.ThreadID,
-			"message_id": requestEnv.ID,
-			"error":      err.Error(),
-		})
+	if markRequestReplied {
+		if _, err := b.store.UpdateMessageStatus(requestEnv.ID, collab.StatusReplied, ""); err != nil {
+			logger.WarnCF("agent", "Failed to mark synthesized collaboration reply", map[string]any{
+				"thread_id":  requestEnv.ThreadID,
+				"message_id": requestEnv.ID,
+				"error":      err.Error(),
+			})
+		}
 	}
 	b.emitCollaborationEvent(runtimeevents.KindAgentMessageReply, replyEnv, requestEnv.FromAgentID)
 	b.notifyWaiters(requestEnv.ID, replyEnv)
@@ -549,6 +552,7 @@ func (b *AgentCollaborationBus) recordRequestFailure(requestEnv collab.Envelope,
 		firstRecipient(requestEnv.ToAgentIDs),
 		fmt.Sprintf("Collaboration request failed: %v", err),
 		collab.KindStatus,
+		false,
 	); synthErr != nil {
 		return synthErr
 	}

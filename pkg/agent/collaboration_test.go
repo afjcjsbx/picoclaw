@@ -24,6 +24,8 @@ type collaborationDeadlineProvider struct {
 	remaining time.Duration
 }
 
+type collaborationFailProvider struct{}
+
 var (
 	threadIDPattern  = regexp.MustCompile(`Thread ID:\s*([^\n]+)`)
 	messageIDPattern = regexp.MustCompile(`Message ID:\s*([^\n]+)`)
@@ -100,6 +102,20 @@ func (p *collaborationDeadlineProvider) snapshot() (bool, time.Duration) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.sawCtxTTL, p.remaining
+}
+
+func (p *collaborationFailProvider) Chat(
+	_ context.Context,
+	_ []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	return nil, fmt.Errorf("forced collaboration failure")
+}
+
+func (p *collaborationFailProvider) GetDefaultModel() string {
+	return "collaboration-fail-model"
 }
 
 func TestCollaborationBus_RequestWaitTrue_ExplicitReplyAndHistory(t *testing.T) {
@@ -346,6 +362,62 @@ func TestCollaborationBus_RequestRejectsOversizedSummaryContext(t *testing.T) {
 	if !strings.Contains(err.Error(), "max_message_chars=20") {
 		t.Fatalf("err = %v", err)
 	}
+}
+
+func TestCollaborationBus_RequestFailurePreservesErrorStatus(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := collaborationTestConfig(tmpDir)
+	al := NewAgentLoop(cfg, nil, &collaborationFailProvider{})
+	defer al.Close()
+
+	plannerScope := &session.SessionScope{
+		Version:    session.ScopeVersionV1,
+		AgentID:    "planner",
+		Channel:    "cli",
+		Account:    "default",
+		Dimensions: []string{"chat"},
+		Values:     map[string]string{"chat": "direct:tester"},
+	}
+	plannerSessionKey := session.BuildSessionKey(*plannerScope)
+	ctx := tools.WithToolSessionContext(context.Background(), "planner", plannerSessionKey, plannerScope)
+
+	resp, err := al.collaboration.Request(ctx, tools.AgentRequestParams{
+		ToAgentID:     "research",
+		Content:       "Trigger a collaboration failure.",
+		ContextPolicy: collab.ContextPolicyTaskOnly,
+		Wait:          true,
+	})
+	if err != nil {
+		t.Fatalf("Request() error = %v", err)
+	}
+	if !strings.Contains(resp.Content, "Collaboration request failed:") ||
+		!strings.Contains(resp.Content, "forced collaboration failure") {
+		t.Fatalf("resp.Content = %q", resp.Content)
+	}
+
+	requestMsg, ok := al.collaboration.store.GetMessage(resp.MessageID)
+	if !ok {
+		t.Fatalf("expected stored request message %s", resp.MessageID)
+	}
+	if requestMsg.Status != collab.StatusError {
+		t.Fatalf("requestMsg.Status = %q, want error", requestMsg.Status)
+	}
+	if !strings.Contains(requestMsg.ErrorSummary, "forced collaboration failure") {
+		t.Fatalf("requestMsg.ErrorSummary = %q", requestMsg.ErrorSummary)
+	}
+
+	statusMsg, ok := al.collaboration.store.GetMessage(resp.ReplyMessageID)
+	if !ok {
+		t.Fatalf("expected stored status reply %s", resp.ReplyMessageID)
+	}
+	if statusMsg.Kind != collab.KindStatus {
+		t.Fatalf("statusMsg.Kind = %q, want status", statusMsg.Kind)
+	}
+	if !strings.Contains(statusMsg.Content, "Collaboration request failed:") ||
+		!strings.Contains(statusMsg.Content, "forced collaboration failure") {
+		t.Fatalf("statusMsg.Content = %q", statusMsg.Content)
+	}
+	waitForCollaborationIdle(t, al, resp.ThreadID, "research")
 }
 
 func TestCollaborationBus_RequestBlockedByCommunicationPolicy(t *testing.T) {
