@@ -376,15 +376,15 @@ func encodeBytesToDataURL(mime string, data []byte) string {
 	return buf.String()
 }
 
-func clampCoord(v, max int) int {
-	if max <= 0 {
+func clampCoord(v, limit int) int {
+	if limit <= 0 {
 		return 0
 	}
 	if v < 0 {
 		return 0
 	}
-	if v >= max {
-		return max - 1
+	if v >= limit {
+		return limit - 1
 	}
 	return v
 }
