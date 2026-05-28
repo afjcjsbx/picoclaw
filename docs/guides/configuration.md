@@ -143,6 +143,59 @@ Example clean web policy:
 }
 ```
 
+### Inbound Image Compression
+
+`agents.defaults.image_input` controls how user-supplied images are prepared before PicoClaw sends them to vision-capable providers.
+
+PicoClaw always preserves the local path tag form such as `[image:/path/to/file]` in the prompt context. When `attach_user_images` is enabled, PicoClaw also tries to attach the same image as a compressed inline `data:image/...` payload, bounded by your configured limits. This helps avoid oversized multimodal requests while keeping the existing file-based workflow intact.
+
+If the source image exceeds `agents.defaults.max_media_size`, or if the optimized inline payload still cannot fit under `max_inline_bytes`, PicoClaw skips the inline attachment and falls back to the path tag only.
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "max_media_size": 20971520,
+      "image_input": {
+        "attach_user_images": true,
+        "compression_level": "balanced",
+        "max_inline_bytes": 2097152,
+        "max_width": 1600,
+        "max_height": 1600,
+        "jpeg_quality": 82,
+        "target_format": "auto"
+      }
+    }
+  }
+}
+```
+
+| Field | Default | Description |
+| --- | --- | --- |
+| `attach_user_images` | `true` | When `true`, inbound user images are attached to vision-capable providers as inline media when they fit the configured budget. When `false`, PicoClaw keeps path tags only for user images. |
+| `compression_level` | `balanced` | Compression preset: `off`, `low`, `balanced`, `aggressive`, `extreme`. |
+| `max_inline_bytes` | `2097152` | Maximum allowed size of the final inline `data:image/...` payload after base64 encoding. |
+| `max_width` | `1600` | Maximum width used during image downscaling. |
+| `max_height` | `1600` | Maximum height used during image downscaling. |
+| `jpeg_quality` | `82` | JPEG quality used when PicoClaw re-encodes raster images. |
+| `target_format` | `auto` | Output format for compressed images: `auto`, `jpeg`, or `png`. `auto` prefers PNG for images with transparency and JPEG otherwise. |
+
+Preset behavior:
+
+| Preset | Inline budget | Resize target | JPEG quality |
+| --- | --- | --- | --- |
+| `off` | keep original bytes when possible | no preset resize | original bytes, or quality `92` if you also force re-encoding |
+| `low` | `4 MiB` | `2048x2048` | `90` |
+| `balanced` | `2 MiB` | `1600x1600` | `82` |
+| `aggressive` | `1 MiB` | `1280x1280` | `70` |
+| `extreme` | `512 KiB` | `1024x1024` | `60` |
+
+Notes:
+
+- These settings affect inbound user images from channels and other `media://` references that resolve into user-role image inputs.
+- Tool-returned images continue to use the same optimized inline path automatically for the follow-up LLM turn.
+- `max_media_size` remains the hard cap for the original file before any optimization begins.
+
 ### Web launcher dashboard
 
 **picoclaw-launcher** serves a browser UI that requires password sign-in first. On first run, open `/launcher-setup` to create the dashboard password. Later manual sign-ins use `/launcher-login`.
