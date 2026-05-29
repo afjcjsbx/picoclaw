@@ -376,7 +376,7 @@ type ToolFeedbackConfig struct {
 }
 
 type ImageInputConfig struct {
-	AttachUserImages bool   `json:"attach_user_images,omitempty" env:"PICOCLAW_AGENTS_DEFAULTS_IMAGE_INPUT_ATTACH_USER_IMAGES"`
+	AttachUserImages bool   `json:"attach_user_images"           env:"PICOCLAW_AGENTS_DEFAULTS_IMAGE_INPUT_ATTACH_USER_IMAGES"`
 	CompressionLevel string `json:"compression_level,omitempty"  env:"PICOCLAW_AGENTS_DEFAULTS_IMAGE_INPUT_COMPRESSION_LEVEL"`
 	MaxInlineBytes   int    `json:"max_inline_bytes,omitempty"   env:"PICOCLAW_AGENTS_DEFAULTS_IMAGE_INPUT_MAX_INLINE_BYTES"`
 	MaxWidth         int    `json:"max_width,omitempty"          env:"PICOCLAW_AGENTS_DEFAULTS_IMAGE_INPUT_MAX_WIDTH"`
