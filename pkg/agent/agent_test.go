@@ -6295,12 +6295,12 @@ func TestResolveMediaRefs_CompressesOversizedSourceImageWithinConfiguredBudget(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.Write(make([]byte, config.DefaultMaxMediaSize+1024)); err != nil {
+	if _, writeErr := f.Write(make([]byte, config.DefaultMaxMediaSize+1024)); writeErr != nil {
 		_ = f.Close()
-		t.Fatal(err)
+		t.Fatal(writeErr)
 	}
-	if err := f.Close(); err != nil {
-		t.Fatal(err)
+	if closeErr := f.Close(); closeErr != nil {
+		t.Fatal(closeErr)
 	}
 
 	info, err := os.Stat(pngPath)

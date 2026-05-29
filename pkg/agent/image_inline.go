@@ -87,8 +87,8 @@ func buildInlineImageCandidate(
 		}
 		return inlineImageCandidate{}, fmt.Errorf("decode inline image config: %w", err)
 	}
-	if err := validateInlineDecodeConfig(cfg); err != nil {
-		return inlineImageCandidate{}, err
+	if validationErr := validateInlineDecodeConfig(cfg); validationErr != nil {
+		return inlineImageCandidate{}, validationErr
 	}
 	if shouldPreserveOriginalInlineInAutoMode(mime, info, cfg, policy) {
 		return buildRawInlineImageCandidate(localPath, normalizeInlineSourceMIME(mime), info, opts)
