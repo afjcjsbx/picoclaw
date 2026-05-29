@@ -6257,6 +6257,33 @@ func TestResolveMediaRefs_CompressesLargeUserImagesWithinConfiguredBudget(t *tes
 	}
 }
 
+func TestResolveMediaRefs_PreservesSmallPNGWithinBudgetInAutoMode(t *testing.T) {
+	store := media.NewFileMediaStore()
+	dir := t.TempDir()
+
+	pngPath := filepath.Join(dir, "small.png")
+	writeSolidPNG(t, pngPath, 48, 48)
+	ref, err := store.Store(pngPath, media.MediaMeta{ContentType: "image/png"}, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defaults := config.DefaultConfig().Agents.Defaults
+	result := resolveMediaRefsWithAgentDefaults([]providers.Message{
+		{Role: "user", Content: "preserve this", Media: []string{ref}},
+	}, store, defaults)
+
+	assertSingleInlineImage(t, result[0].Media)
+	rawData, err := os.ReadFile(pngPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := encodeBytesToDataURL("image/png", rawData)
+	if result[0].Media[0] != want {
+		t.Fatal("expected auto mode to preserve original PNG inline payload when already within budget")
+	}
+}
+
 func TestResolveMediaRefs_CompressesOversizedSourceImageWithinConfiguredBudget(t *testing.T) {
 	store := media.NewFileMediaStore()
 	dir := t.TempDir()

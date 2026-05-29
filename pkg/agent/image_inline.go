@@ -90,6 +90,9 @@ func buildInlineImageCandidate(
 	if err := validateInlineDecodeConfig(cfg); err != nil {
 		return inlineImageCandidate{}, err
 	}
+	if shouldPreserveOriginalInlineInAutoMode(mime, info, cfg, policy) {
+		return buildRawInlineImageCandidate(localPath, normalizeInlineSourceMIME(mime), info, opts)
+	}
 
 	img, err := decodeInlineImage(localPath)
 	if err != nil {
@@ -161,6 +164,40 @@ func shouldAllowRawInlineFallback(localPath, mime string) bool {
 		return detectRawImageMIME(localPath) == "image/webp"
 	default:
 		return false
+	}
+}
+
+func shouldPreserveOriginalInlineInAutoMode(
+	mime string,
+	info os.FileInfo,
+	cfg image.Config,
+	policy config.ResolvedImageInputConfig,
+) bool {
+	if strings.ToLower(strings.TrimSpace(policy.TargetFormat)) != "auto" {
+		return false
+	}
+
+	normalizedMIME := normalizeInlineSourceMIME(mime)
+	switch normalizedMIME {
+	case "image/png", "image/jpeg":
+	default:
+		return false
+	}
+
+	if policy.MaxInlineBytes > 0 && inlinePayloadSize(normalizedMIME, int(info.Size())) > policy.MaxInlineBytes {
+		return false
+	}
+
+	width, height := fitWithin(cfg.Width, cfg.Height, policy.MaxWidth, policy.MaxHeight)
+	return width == cfg.Width && height == cfg.Height
+}
+
+func normalizeInlineSourceMIME(mime string) string {
+	switch strings.ToLower(strings.TrimSpace(mime)) {
+	case "image/jpg":
+		return "image/jpeg"
+	default:
+		return strings.ToLower(strings.TrimSpace(mime))
 	}
 }
 
