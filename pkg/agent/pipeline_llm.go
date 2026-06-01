@@ -240,7 +240,8 @@ func (p *Pipeline) CallLLM(
 	}
 	for retry := 0; retry <= maxRetries; retry++ {
 		exec.response, err = callLLM(exec.callMessages, exec.providerToolDefs)
-		if err == nil && emptyLLMResponse(exec.response) {
+		if err == nil && emptyLLMResponse(exec.response) &&
+			!messageToolSentToCurrentChat(ts.agent, ts.sessionKey, ts.channel, ts.chatID) {
 			exec.response = nil
 			err = errEmptyLLMResponse
 		}
