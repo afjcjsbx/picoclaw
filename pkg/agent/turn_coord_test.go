@@ -11,6 +11,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/providers"
+	providerscommon "github.com/sipeed/picoclaw/pkg/providers/common"
 	"github.com/sipeed/picoclaw/pkg/routing"
 	"github.com/sipeed/picoclaw/pkg/session"
 )
@@ -648,8 +649,11 @@ func TestPipeline_CallLLM_NetworkErrorRetry(t *testing.T) {
 
 func TestPipeline_CallLLM_EmptyResponseRetry(t *testing.T) {
 	provider := &sequenceProvider{
+		errors: []error{
+			providerscommon.ErrNullAssistantContent,
+		},
 		responses: []*providers.LLMResponse{
-			{FinishReason: "stop"},
+			nil,
 			{Content: "Recovered after retry", FinishReason: "stop"},
 		},
 	}

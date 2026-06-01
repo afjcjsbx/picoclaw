@@ -14,9 +14,8 @@ import (
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
+	providerscommon "github.com/sipeed/picoclaw/pkg/providers/common"
 )
-
-var errEmptyLLMResponse = errors.New("llm provider returned an empty response")
 
 // CallLLM performs an LLM call with fallback support, hook invocation, and retry logic.
 // It handles PreLLM setup, the actual LLM invocation with retry, and AfterLLM processing.
@@ -240,11 +239,6 @@ func (p *Pipeline) CallLLM(
 	}
 	for retry := 0; retry <= maxRetries; retry++ {
 		exec.response, err = callLLM(exec.callMessages, exec.providerToolDefs)
-		if err == nil && emptyLLMResponse(exec.response) &&
-			!messageToolSentToCurrentChat(ts.agent, ts.sessionKey, ts.channel, ts.chatID) {
-			exec.response = nil
-			err = errEmptyLLMResponse
-		}
 		if err == nil {
 			break
 		}
@@ -287,7 +281,7 @@ func (p *Pipeline) CallLLM(
 		}
 
 		errMsg := strings.ToLower(err.Error())
-		isEmptyResponseError := errors.Is(err, errEmptyLLMResponse)
+		isEmptyResponseError := errors.Is(err, providerscommon.ErrNullAssistantContent)
 		isTimeoutError := errors.Is(err, context.DeadlineExceeded) ||
 			strings.Contains(errMsg, "deadline exceeded") ||
 			strings.Contains(errMsg, "client.timeout") ||

@@ -15,7 +15,6 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/session"
-	"github.com/sipeed/picoclaw/pkg/tools"
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
@@ -540,43 +539,6 @@ func responseReasoningContent(response *providers.LLMResponse) string {
 		return response.ReasoningContent
 	}
 	return ""
-}
-
-func responseHasReasoningDetailText(response *providers.LLMResponse) bool {
-	if response == nil {
-		return false
-	}
-	for _, detail := range response.ReasoningDetails {
-		if strings.TrimSpace(detail.Text) != "" {
-			return true
-		}
-	}
-	return false
-}
-
-func emptyLLMResponse(response *providers.LLMResponse) bool {
-	if response == nil {
-		return true
-	}
-	return strings.TrimSpace(response.Content) == "" &&
-		strings.TrimSpace(responseReasoningContent(response)) == "" &&
-		!responseHasReasoningDetailText(response) &&
-		len(response.ToolCalls) == 0
-}
-
-func messageToolSentToCurrentChat(agent *AgentInstance, sessionKey, channel, chatID string) bool {
-	if agent == nil || strings.TrimSpace(sessionKey) == "" || strings.TrimSpace(channel) == "" || strings.TrimSpace(chatID) == "" {
-		return false
-	}
-	tool, ok := agent.Tools.Get("message")
-	if !ok {
-		return false
-	}
-	mt, ok := tool.(*tools.MessageTool)
-	if !ok {
-		return false
-	}
-	return mt.HasSentTo(sessionKey, channel, chatID)
 }
 
 func shallowCloneLLMOptions(opts map[string]any) map[string]any {
