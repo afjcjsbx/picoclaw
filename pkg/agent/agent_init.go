@@ -263,6 +263,11 @@ func registerSharedTools(
 			agent.Tools.Register(loadImageTool)
 		}
 
+		// Local skill inspection tools
+		if cfg.Tools.IsToolEnabled("skills") {
+			agent.Tools.Register(tools.NewSkillViewTool(agent.Workspace))
+		}
+
 		// Skill discovery and installation tools
 		skills_enabled := cfg.Tools.IsToolEnabled("skills")
 		find_skills_enable := cfg.Tools.IsToolEnabled("find_skills")

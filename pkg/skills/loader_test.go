@@ -417,3 +417,90 @@ func TestGetSkillMetadata_IgnoresHTMLCommentBlocks(t *testing.T) {
 	assert.Equal(t, "biomed-skill", meta.Name)
 	assert.Equal(t, "Summarize biomedical papers.", meta.Description)
 }
+
+func TestLoadSkill_ResolvesMetadataNameAcrossDirectoryName(t *testing.T) {
+	tmp := t.TempDir()
+	workspace := filepath.Join(tmp, "workspace")
+	skillDir := filepath.Join(workspace, "skills", "dir-name")
+	require.NoError(t, os.MkdirAll(skillDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(skillDir, "SKILL.md"),
+		[]byte("---\nname: metadata-name\ndescription: Uses frontmatter name\n---\n\n# Metadata Name\n\nBody."),
+		0o644,
+	))
+
+	sl := NewSkillsLoader(workspace, "", "")
+	content, ok := sl.LoadSkill("metadata-name")
+	require.True(t, ok)
+	assert.Contains(t, content, "# Metadata Name")
+}
+
+func TestLoadSkillFile_LoadsSupportingFile(t *testing.T) {
+	tmp := t.TempDir()
+	workspace := filepath.Join(tmp, "workspace")
+	skillDir := filepath.Join(workspace, "skills", "shell")
+	require.NoError(t, os.MkdirAll(filepath.Join(skillDir, "references"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(skillDir, "SKILL.md"),
+		[]byte("# shell\n\nSkill body."),
+		0o644,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(skillDir, "references", "cheatsheet.md"),
+		[]byte("ls -la"),
+		0o644,
+	))
+
+	sl := NewSkillsLoader(workspace, "", "")
+	content, ok, err := sl.LoadSkillFile("shell", "references/cheatsheet.md")
+	require.True(t, ok)
+	require.NoError(t, err)
+	assert.Equal(t, "ls -la", content)
+}
+
+func TestLoadSkillFile_RejectsTraversal(t *testing.T) {
+	tmp := t.TempDir()
+	workspace := filepath.Join(tmp, "workspace")
+	skillDir := filepath.Join(workspace, "skills", "shell")
+	require.NoError(t, os.MkdirAll(skillDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(skillDir, "SKILL.md"),
+		[]byte("# shell\n\nSkill body."),
+		0o644,
+	))
+
+	sl := NewSkillsLoader(workspace, "", "")
+	_, ok, err := sl.LoadSkillFile("shell", "../secret.txt")
+	require.True(t, ok)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "invalid")
+}
+
+func TestListSkillFiles_SkipsSkillManifestAndHiddenFiles(t *testing.T) {
+	tmp := t.TempDir()
+	workspace := filepath.Join(tmp, "workspace")
+	skillDir := filepath.Join(workspace, "skills", "shell")
+	require.NoError(t, os.MkdirAll(filepath.Join(skillDir, "references"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(skillDir, ".private"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(skillDir, "SKILL.md"),
+		[]byte("# shell\n\nSkill body."),
+		0o644,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(skillDir, "references", "cheatsheet.md"),
+		[]byte("ls -la"),
+		0o644,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(skillDir, ".private", "secret.txt"),
+		[]byte("secret"),
+		0o644,
+	))
+
+	sl := NewSkillsLoader(workspace, "", "")
+	files, ok, err := sl.ListSkillFiles("shell")
+	require.True(t, ok)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"references/cheatsheet.md"}, files)
+}

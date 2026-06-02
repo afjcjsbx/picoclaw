@@ -276,11 +276,17 @@ func (cb *ContextBuilder) buildSystemPromptParts(opts systemPromptBuildOptions) 
 	}
 	if skillsSummary != "" {
 		skillIntro := "The following skills extend your capabilities."
+		skillViewAllowed := promptAllowsTool(
+			PromptBuildRequest{AllowedTools: opts.AllowedTools},
+			"skill_view",
+		)
 		readFileAllowed := promptAllowsTool(
 			PromptBuildRequest{AllowedTools: opts.AllowedTools},
 			"read_file",
 		)
-		if opts.IncludeToolUseRule && readFileAllowed {
+		if opts.IncludeToolUseRule && skillViewAllowed {
+			skillIntro += " Load a skill on demand with the skill_view tool. Use file_path when you need one of the skill's supporting files."
+		} else if opts.IncludeToolUseRule && readFileAllowed {
 			skillIntro += " To use a skill, read its SKILL.md file using the read_file tool."
 		}
 		add(PromptPart{

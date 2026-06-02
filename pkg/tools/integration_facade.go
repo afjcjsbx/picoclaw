@@ -17,6 +17,7 @@ type (
 	MCPTool                  = integrationtools.MCPTool
 	FindSkillsTool           = integrationtools.FindSkillsTool
 	InstallSkillTool         = integrationtools.InstallSkillTool
+	SkillViewTool            = integrationtools.SkillViewTool
 	MessageTool              = integrationtools.MessageTool
 	ReactionTool             = integrationtools.ReactionTool
 	SendTTSTool              = integrationtools.SendTTSTool
@@ -48,6 +49,10 @@ func NewFindSkillsTool(registryMgr *skills.RegistryManager, cache *skills.Search
 
 func NewInstallSkillTool(registryMgr *skills.RegistryManager, workspace string) *InstallSkillTool {
 	return integrationtools.NewInstallSkillTool(registryMgr, workspace)
+}
+
+func NewSkillViewTool(workspace string) *SkillViewTool {
+	return integrationtools.NewSkillViewTool(workspace)
 }
 
 func NewMessageTool() *MessageTool {

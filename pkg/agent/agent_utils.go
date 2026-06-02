@@ -610,7 +610,7 @@ func buildUseCommandHelp(agent *AgentInstance) string {
 	}
 
 	return fmt.Sprintf(
-		"Usage: /use <skill> [message]\n\nInstalled Skills:\n- %s\n\nUse /use <skill> to apply a skill to your next message, or /use <skill> <message> to force it immediately.",
+		"Usage: /use <skill> [message]\n\nInstalled Skills:\n- %s\n\nUse /<skill-name> to arm a skill for your next message, /<skill-name> <message> to invoke it immediately, or /use <skill> if you want the explicit form.",
 		strings.Join(names, "\n- "),
 	)
 }

@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/gomarkdown/markdown"
@@ -145,35 +147,110 @@ func (sl *SkillsLoader) ListSkills() []SkillInfo {
 }
 
 func (sl *SkillsLoader) LoadSkill(name string) (string, bool) {
-	if err := ValidateSkillName(name); err != nil {
+	skill, ok := sl.FindSkill(name)
+	if !ok {
 		return "", false
 	}
 
-	// 1. load from workspace skills first (project-level)
-	if sl.workspaceSkills != "" {
-		skillFile := filepath.Join(sl.workspaceSkills, name, "SKILL.md")
-		if content, err := os.ReadFile(skillFile); err == nil {
-			return sl.stripFrontmatter(string(content)), true
+	content, err := os.ReadFile(skill.Path)
+	if err != nil {
+		return "", false
+	}
+	return sl.stripFrontmatter(string(content)), true
+}
+
+func (sl *SkillsLoader) FindSkill(name string) (SkillInfo, bool) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return SkillInfo{}, false
+	}
+	for _, skill := range sl.ListSkills() {
+		if strings.EqualFold(skill.Name, name) {
+			return skill, true
 		}
 	}
+	return SkillInfo{}, false
+}
 
-	// 2. then load from global skills (~/.picoclaw/skills)
-	if sl.globalSkills != "" {
-		skillFile := filepath.Join(sl.globalSkills, name, "SKILL.md")
-		if content, err := os.ReadFile(skillFile); err == nil {
-			return sl.stripFrontmatter(string(content)), true
-		}
+func (sl *SkillsLoader) LoadSkillFile(name, filePath string) (string, bool, error) {
+	skill, ok := sl.FindSkill(name)
+	if !ok {
+		return "", false, nil
 	}
 
-	// 3. finally load from builtin skills
-	if sl.builtinSkills != "" {
-		skillFile := filepath.Join(sl.builtinSkills, name, "SKILL.md")
-		if content, err := os.ReadFile(skillFile); err == nil {
-			return sl.stripFrontmatter(string(content)), true
+	trimmedPath := strings.TrimSpace(filePath)
+	if trimmedPath == "" || strings.EqualFold(filepath.Base(trimmedPath), "SKILL.md") {
+		content, err := os.ReadFile(skill.Path)
+		if err != nil {
+			return "", true, err
 		}
+		return sl.stripFrontmatter(string(content)), true, nil
 	}
 
-	return "", false
+	cleanPath, err := sanitizeSkillRelativePath(trimmedPath)
+	if err != nil {
+		return "", true, err
+	}
+
+	skillDir := filepath.Dir(skill.Path)
+	targetPath := filepath.Join(skillDir, cleanPath)
+	rel, relErr := filepath.Rel(skillDir, targetPath)
+	if relErr != nil ||
+		rel == ".." ||
+		strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", true, fmt.Errorf("file path %q escapes the skill directory", filePath)
+	}
+
+	data, err := os.ReadFile(targetPath)
+	if err != nil {
+		return "", true, err
+	}
+	return string(data), true, nil
+}
+
+func (sl *SkillsLoader) ListSkillFiles(name string) ([]string, bool, error) {
+	skill, ok := sl.FindSkill(name)
+	if !ok {
+		return nil, false, nil
+	}
+
+	skillDir := filepath.Dir(skill.Path)
+	files := make([]string, 0)
+	err := filepath.WalkDir(skillDir, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if path == skillDir {
+			return nil
+		}
+
+		base := d.Name()
+		if strings.HasPrefix(base, ".") {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.IsDir() {
+			return nil
+		}
+
+		rel, err := filepath.Rel(skillDir, path)
+		if err != nil {
+			return err
+		}
+		if strings.EqualFold(rel, "SKILL.md") {
+			return nil
+		}
+		files = append(files, filepath.ToSlash(rel))
+		return nil
+	})
+	if err != nil {
+		return nil, true, err
+	}
+
+	sort.Strings(files)
+	return files, true, nil
 }
 
 func (sl *SkillsLoader) LoadSkillsForContext(skillNames []string) string {
@@ -384,4 +461,23 @@ func escapeXML(s string) string {
 	s = strings.ReplaceAll(s, "<", "&lt;")
 	s = strings.ReplaceAll(s, ">", "&gt;")
 	return s
+}
+
+func sanitizeSkillRelativePath(filePath string) (string, error) {
+	filePath = strings.TrimSpace(filePath)
+	if filePath == "" {
+		return "", fmt.Errorf("file path is required")
+	}
+	if filepath.IsAbs(filePath) {
+		return "", fmt.Errorf("file path must be relative")
+	}
+
+	clean := filepath.Clean(filePath)
+	if clean == "." || clean == ".." {
+		return "", fmt.Errorf("file path %q is invalid", filePath)
+	}
+	if strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("file path %q is invalid", filePath)
+	}
+	return clean, nil
 }

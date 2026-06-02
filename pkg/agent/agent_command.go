@@ -72,34 +72,75 @@ func (al *AgentLoop) applyExplicitSkillCommand(
 ) (matched bool, handled bool, reply string) {
 	normalizeProcessOptionsInPlace(opts)
 
-	cmdName, ok := commands.CommandName(raw)
-	if !ok || cmdName != "use" {
+	cmdName, isCommand := commands.CommandName(raw)
+	if !isCommand {
 		return false, false, ""
 	}
 
 	if agent == nil || agent.ContextBuilder == nil {
-		return true, true, commandsUnavailableSkillMessage()
+		if cmdName == "use" {
+			return true, true, commandsUnavailableSkillMessage()
+		}
+		return false, false, ""
+	}
+
+	if cmdName == "use" {
+		parts := strings.Fields(strings.TrimSpace(raw))
+		if len(parts) < 2 {
+			return true, true, buildUseCommandHelp(agent)
+		}
+
+		arg := strings.TrimSpace(parts[1])
+		if strings.EqualFold(arg, "clear") || strings.EqualFold(arg, "off") {
+			if opts != nil {
+				al.clearPendingSkills(opts.Dispatch.SessionKey)
+			}
+			return true, true, "Cleared pending skill override."
+		}
+
+		skillName, ok := agent.ContextBuilder.ResolveSkillName(arg)
+		if !ok {
+			return true, true, fmt.Sprintf("Unknown skill: %s\nUse /skills to see installed skills.", arg)
+		}
+
+		if len(parts) < 3 {
+			if opts == nil || strings.TrimSpace(opts.Dispatch.SessionKey) == "" {
+				return true, true, commandsUnavailableSkillMessage()
+			}
+			al.setPendingSkills(opts.Dispatch.SessionKey, []string{skillName})
+			return true, true, fmt.Sprintf(
+				"Skill %q is armed for your next message. Send your next prompt normally, or use /use clear to cancel.",
+				skillName,
+			)
+		}
+
+		message := strings.TrimSpace(strings.Join(parts[2:], " "))
+		if message == "" {
+			return true, true, buildUseCommandHelp(agent)
+		}
+
+		if opts != nil {
+			opts.ForcedSkills = append(opts.ForcedSkills, skillName)
+			opts.Dispatch.UserMessage = message
+			opts.UserMessage = message
+		}
+
+		return true, false, ""
+	}
+
+	if al != nil && al.cmdRegistry != nil {
+		if _, found := al.cmdRegistry.Lookup(cmdName); found {
+			return false, false, ""
+		}
+	}
+
+	skillName, ok := agent.ContextBuilder.ResolveSkillName(cmdName)
+	if !ok {
+		return false, false, ""
 	}
 
 	parts := strings.Fields(strings.TrimSpace(raw))
 	if len(parts) < 2 {
-		return true, true, buildUseCommandHelp(agent)
-	}
-
-	arg := strings.TrimSpace(parts[1])
-	if strings.EqualFold(arg, "clear") || strings.EqualFold(arg, "off") {
-		if opts != nil {
-			al.clearPendingSkills(opts.Dispatch.SessionKey)
-		}
-		return true, true, "Cleared pending skill override."
-	}
-
-	skillName, ok := agent.ContextBuilder.ResolveSkillName(arg)
-	if !ok {
-		return true, true, fmt.Sprintf("Unknown skill: %s\nUse /list skills to see installed skills.", arg)
-	}
-
-	if len(parts) < 3 {
 		if opts == nil || strings.TrimSpace(opts.Dispatch.SessionKey) == "" {
 			return true, true, commandsUnavailableSkillMessage()
 		}
@@ -110,7 +151,7 @@ func (al *AgentLoop) applyExplicitSkillCommand(
 		)
 	}
 
-	message := strings.TrimSpace(strings.Join(parts[2:], " "))
+	message := strings.TrimSpace(strings.Join(parts[1:], " "))
 	if message == "" {
 		return true, true, buildUseCommandHelp(agent)
 	}

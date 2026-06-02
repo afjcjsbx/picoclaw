@@ -1114,6 +1114,9 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 		if err != nil {
 			return ""
 		}
+		if resolvedCWD, err := filepath.EvalSymlinks(cwdPath); err == nil {
+			cwdPath = resolvedCWD
+		}
 
 		// Web URL schemes whose path components (starting with //) should be exempt
 		// from workspace sandbox checks. file: is intentionally excluded so that

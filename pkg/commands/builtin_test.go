@@ -50,6 +50,9 @@ func TestBuiltinHelpHandler_ReturnsFormattedMessage(t *testing.T) {
 			t.Fatalf("/help reply missing /use usage, got %q", reply)
 		}
 	}
+	if !strings.Contains(reply, "/skills") {
+		t.Fatalf("/help reply missing /skills usage, got %q", reply)
+	}
 }
 
 func TestBuiltinStop_UsesRuntimeStopper(t *testing.T) {
@@ -227,6 +230,31 @@ func TestBuiltinListSkills_UsesRuntimeSkillNames(t *testing.T) {
 	}
 	if !strings.Contains(reply, "shell") || !strings.Contains(reply, "git") {
 		t.Fatalf("/list skills reply=%q, want installed skill names", reply)
+	}
+}
+
+func TestBuiltinSkillsCommand_UsesRuntimeSkillNames(t *testing.T) {
+	rt := &Runtime{
+		ListSkillNames: func() []string {
+			return []string{"shell", "git"}
+		},
+	}
+	defs := BuiltinDefinitions()
+	ex := NewExecutor(NewRegistry(defs), rt)
+
+	var reply string
+	res := ex.Execute(context.Background(), Request{
+		Text: "/skills",
+		Reply: func(text string) error {
+			reply = text
+			return nil
+		},
+	})
+	if res.Outcome != OutcomeHandled {
+		t.Fatalf("/skills: outcome=%v, want=%v", res.Outcome, OutcomeHandled)
+	}
+	if !strings.Contains(reply, "shell") || !strings.Contains(reply, "/<skill-name> <message>") {
+		t.Fatalf("/skills reply=%q, want installed skill names and usage", reply)
 	}
 }
 
