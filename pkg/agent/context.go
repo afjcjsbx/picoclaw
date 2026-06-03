@@ -115,6 +115,15 @@ func NewContextBuilder(workspace string) *ContextBuilder {
 	}
 }
 
+func (cb *ContextBuilder) WithExtraSkills(extra []skills.SkillInfo) *ContextBuilder {
+	if cb == nil || cb.skillsLoader == nil {
+		return cb
+	}
+	cb.skillsLoader.WithExtraSkills(extra)
+	cb.InvalidateCache()
+	return cb
+}
+
 func (cb *ContextBuilder) RegisterPromptSource(desc PromptSourceDescriptor) error {
 	err := cb.promptRegistryOrDefault().RegisterSource(desc)
 	if err == nil {

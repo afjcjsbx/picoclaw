@@ -24,6 +24,7 @@ import (
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/media"
+	pluginpkg "github.com/sipeed/picoclaw/pkg/plugins"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/routing"
 	"github.com/sipeed/picoclaw/pkg/session"
@@ -54,6 +55,7 @@ type AgentLoop struct {
 	mediaStore     media.MediaStore
 	transcriber    asr.Transcriber
 	cmdRegistry    *commands.Registry
+	pluginRuntime  *pluginpkg.Runtime
 	mcp            mcpRuntime
 	evolution      *evolutionBridge
 	hookRuntime    hookRuntime
@@ -366,6 +368,9 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 		return fmt.Errorf("config cannot be nil")
 	}
 
+	pluginRuntime := pluginpkg.LoadRuntime(cfg)
+	cfg = pluginRuntime.ConfigWithPlugins(cfg)
+
 	// Create new registry with updated config and provider
 	// Wrap in defer/recover to handle any panics gracefully
 	var registry *AgentRegistry
@@ -405,6 +410,7 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	}
 
 	// Ensure shared tools are re-registered on the new registry
+	applyPluginSkillsToRegistry(registry, pluginRuntime)
 	registerSharedTools(al, cfg, al.bus, registry, provider)
 
 	newEvolution, evolutionErr := newEvolutionBridge(registry, cfg, provider)
@@ -430,6 +436,11 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	al.cfg = cfg
 	al.registry = registry
 	al.evolution = newEvolution
+	al.pluginRuntime = pluginRuntime
+	al.cmdRegistry = commands.NewRegistry(pluginpkg.MergeCommandDefinitions(
+		commands.BuiltinDefinitions(),
+		pluginRuntime.CommandDefinitions(),
+	))
 
 	// Also update fallback chain with new config; rebuild rate limiter registry.
 	newRL := providers.NewRateLimiterRegistry()

@@ -417,3 +417,29 @@ func TestGetSkillMetadata_IgnoresHTMLCommentBlocks(t *testing.T) {
 	assert.Equal(t, "biomed-skill", meta.Name)
 	assert.Equal(t, "Summarize biomedical papers.", meta.Description)
 }
+
+func TestLoaderExtraQualifiedSkill(t *testing.T) {
+	ws := t.TempDir()
+	extraDir := t.TempDir()
+	skillFile := filepath.Join(extraDir, "SKILL.md")
+	require.NoError(t, os.WriteFile(skillFile, []byte("# Weather\n\nUse weather data."), 0o644))
+
+	loader := NewSkillsLoader(ws, "", "").WithExtraSkills([]SkillInfo{
+		{
+			Name:   "weather:forecast",
+			Path:   skillFile,
+			Source: "plugin:weather",
+		},
+	})
+
+	listed := loader.ListSkills()
+	require.Len(t, listed, 1)
+	assert.Equal(t, "weather:forecast", listed[0].Name)
+	assert.Equal(t, "plugin:weather", listed[0].Source)
+	assert.NotEmpty(t, listed[0].Description)
+
+	content, ok := loader.LoadSkill("weather:forecast")
+	require.True(t, ok)
+	assert.Contains(t, content, "Use weather data.")
+	assert.Contains(t, loader.SkillRoots(), extraDir)
+}

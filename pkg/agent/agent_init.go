@@ -15,6 +15,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	pluginpkg "github.com/sipeed/picoclaw/pkg/plugins"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/skills"
 	"github.com/sipeed/picoclaw/pkg/state"
@@ -27,6 +28,9 @@ func NewAgentLoop(
 	provider providers.LLMProvider,
 	opts ...AgentLoopOption,
 ) *AgentLoop {
+	pluginRuntime := pluginpkg.LoadRuntime(cfg)
+	cfg = pluginRuntime.ConfigWithPlugins(cfg)
+
 	registry := NewAgentRegistry(cfg, provider)
 
 	// Set up shared fallback chain with rate limiting.
@@ -63,12 +67,16 @@ func NewAgentLoop(
 	}
 
 	al := &AgentLoop{
-		bus:               msgBus,
-		cfg:               cfg,
-		registry:          registry,
-		state:             stateManager,
-		fallback:          fallbackChain,
-		cmdRegistry:       commands.NewRegistry(commands.BuiltinDefinitions()),
+		bus:      msgBus,
+		cfg:      cfg,
+		registry: registry,
+		state:    stateManager,
+		fallback: fallbackChain,
+		cmdRegistry: commands.NewRegistry(pluginpkg.MergeCommandDefinitions(
+			commands.BuiltinDefinitions(),
+			pluginRuntime.CommandDefinitions(),
+		)),
+		pluginRuntime:     pluginRuntime,
 		evolution:         bridge,
 		steering:          newSteeringQueue(parseSteeringMode(cfg.Agents.Defaults.SteeringMode)),
 		workerSem:         make(chan struct{}, workerPoolSize),
@@ -98,9 +106,27 @@ func NewAgentLoop(
 	al.contextManager = al.resolveContextManager()
 
 	// Register shared tools to all agents (now that al is created)
+	applyPluginSkillsToRegistry(registry, pluginRuntime)
 	registerSharedTools(al, cfg, msgBus, registry, provider)
 
 	return al
+}
+
+func applyPluginSkillsToRegistry(registry *AgentRegistry, runtime *pluginpkg.Runtime) {
+	if registry == nil || runtime == nil {
+		return
+	}
+	extraSkills := runtime.SkillInfos()
+	if len(extraSkills) == 0 {
+		return
+	}
+	for _, agentID := range registry.ListAgentIDs() {
+		agent, ok := registry.GetAgent(agentID)
+		if !ok || agent.ContextBuilder == nil {
+			continue
+		}
+		agent.ContextBuilder.WithExtraSkills(extraSkills)
+	}
 }
 
 func registerSharedTools(
@@ -280,6 +306,12 @@ func registerSharedTools(
 
 			if install_skills_enable {
 				agent.Tools.Register(tools.NewInstallSkillTool(registryMgr, agent.Workspace))
+			}
+		}
+
+		if al.pluginRuntime != nil {
+			for _, pluginTool := range al.pluginRuntime.ToolInstances() {
+				agent.Tools.Register(pluginTool)
 			}
 		}
 

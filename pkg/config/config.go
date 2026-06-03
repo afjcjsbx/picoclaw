@@ -43,6 +43,7 @@ type Config struct {
 	Gateway   GatewayConfig   `json:"gateway"             yaml:"-"`
 	Events    EventsConfig    `json:"events,omitempty"    yaml:"-"`
 	Hooks     HooksConfig     `json:"hooks,omitempty"     yaml:"-"`
+	Plugins   PluginsConfig   `json:"plugins,omitempty"   yaml:"-"`
 	Tools     ToolsConfig     `json:"tools"               yaml:",inline"`
 	Heartbeat HeartbeatConfig `json:"heartbeat"           yaml:"-"`
 	Devices   DevicesConfig   `json:"devices"             yaml:"-"`
@@ -233,6 +234,13 @@ type ProcessHookConfig struct {
 	Env       map[string]string `json:"env,omitempty"`
 	Observe   []string          `json:"observe,omitempty"`
 	Intercept []string          `json:"intercept,omitempty"`
+}
+
+type PluginsConfig struct {
+	Enabled        []string `json:"enabled,omitempty"`
+	Disabled       []string `json:"disabled,omitempty"`
+	ProjectEnabled bool     `json:"project_enabled,omitempty" env:"PICOCLAW_ENABLE_PROJECT_PLUGINS"`
+	Directories    []string `json:"directories,omitempty"`
 }
 
 // BuildInfo contains build-time version information

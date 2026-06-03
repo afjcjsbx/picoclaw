@@ -42,7 +42,7 @@ func (info SkillInfo) validate() error {
 	if info.Name == "" {
 		errs = errors.Join(errs, errors.New("name is required"))
 	} else {
-		if err := ValidateSkillName(info.Name); err != nil {
+		if err := ValidateSkillReference(info.Name); err != nil {
 			errs = errors.Join(errs, err)
 		}
 	}
@@ -60,12 +60,18 @@ type SkillsLoader struct {
 	workspaceSkills string // workspace skills (project-level)
 	globalSkills    string // global skills (~/.picoclaw/skills)
 	builtinSkills   string // builtin skills
+	extraSkills     []SkillInfo
 }
 
 // SkillRoots returns all unique skill root directories used by this loader.
 // The order follows resolution priority: workspace > global > builtin.
 func (sl *SkillsLoader) SkillRoots() []string {
 	roots := []string{sl.workspaceSkills, sl.globalSkills, sl.builtinSkills}
+	for _, skill := range sl.extraSkills {
+		if skill.Path != "" {
+			roots = append(roots, filepath.Dir(skill.Path))
+		}
+	}
 	seen := make(map[string]struct{}, len(roots))
 	out := make([]string, 0, len(roots))
 
@@ -92,6 +98,14 @@ func NewSkillsLoader(workspace string, globalSkills string, builtinSkills string
 		globalSkills:    globalSkills, // ~/.picoclaw/skills
 		builtinSkills:   builtinSkills,
 	}
+}
+
+func (sl *SkillsLoader) WithExtraSkills(extra []SkillInfo) *SkillsLoader {
+	if sl == nil {
+		return sl
+	}
+	sl.extraSkills = append([]SkillInfo(nil), extra...)
+	return sl
 }
 
 func (sl *SkillsLoader) ListSkills() []SkillInfo {
@@ -140,13 +154,37 @@ func (sl *SkillsLoader) ListSkills() []SkillInfo {
 	addSkills(sl.workspaceSkills, "workspace")
 	addSkills(sl.globalSkills, "global")
 	addSkills(sl.builtinSkills, "builtin")
+	for _, info := range sl.extraSkills {
+		if info.Path == "" || seen[info.Name] {
+			continue
+		}
+		if metadata := sl.getSkillMetadata(info.Path); metadata != nil {
+			if info.Description == "" {
+				info.Description = metadata.Description
+			}
+		}
+		if err := info.validate(); err != nil {
+			slog.Warn("invalid skill from "+info.Source, "name", info.Name, "error", err)
+			continue
+		}
+		seen[info.Name] = true
+		skills = append(skills, info)
+	}
 
 	return skills
 }
 
 func (sl *SkillsLoader) LoadSkill(name string) (string, bool) {
-	if err := ValidateSkillName(name); err != nil {
+	if err := ValidateSkillReference(name); err != nil {
 		return "", false
+	}
+
+	for _, info := range sl.extraSkills {
+		if strings.EqualFold(info.Name, name) && info.Path != "" {
+			if content, err := os.ReadFile(info.Path); err == nil {
+				return sl.stripFrontmatter(string(content)), true
+			}
+		}
 	}
 
 	// 1. load from workspace skills first (project-level)

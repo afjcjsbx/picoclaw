@@ -27,3 +27,27 @@ func ValidateSkillName(name string) error {
 	}
 	return nil
 }
+
+func ValidateSkillReference(name string) error {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return fmt.Errorf("skill name is required")
+	}
+	parts := strings.Split(trimmed, ":")
+	if len(parts) == 1 {
+		return ValidateSkillName(trimmed)
+	}
+	if len(parts) != 2 {
+		return fmt.Errorf("skill reference must be <skill> or <namespace>:<skill>")
+	}
+	if err := ValidateSkillName(parts[0]); err != nil {
+		return fmt.Errorf("skill namespace is invalid: %w", err)
+	}
+	if err := ValidateSkillName(parts[1]); err != nil {
+		return err
+	}
+	if len(trimmed) > MaxNameLength*2+1 {
+		return fmt.Errorf("skill reference exceeds %d characters", MaxNameLength*2+1)
+	}
+	return nil
+}

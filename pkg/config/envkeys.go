@@ -33,6 +33,20 @@ const (
 	// Default: <cwd>/skills
 	EnvBuiltinSkills = "PICOCLAW_BUILTIN_SKILLS"
 
+	// EnvBuiltinPlugins overrides the directory from which bundled
+	// plugins are discovered.
+	// Default: <cwd>/plugins
+	EnvBuiltinPlugins = "PICOCLAW_BUILTIN_PLUGINS"
+
+	// EnvEnableProjectPlugins enables plugin discovery from project-local
+	// .picoclaw/plugins directories. Keep this opt-in because project
+	// plugins can execute local code.
+	EnvEnableProjectPlugins = "PICOCLAW_ENABLE_PROJECT_PLUGINS"
+
+	// EnvPluginDirs adds extra plugin roots, separated by the platform path
+	// list separator.
+	EnvPluginDirs = "PICOCLAW_PLUGIN_DIRS"
+
 	// EnvBinary overrides the path to the picoclaw executable.
 	// Used by the web launcher when spawning the gateway subprocess.
 	// Default: resolved from the same directory as the current executable.
