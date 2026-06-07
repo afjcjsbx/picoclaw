@@ -191,12 +191,17 @@ func TestMCPAddSupportsEnvFileForStdio(t *testing.T) {
 }
 
 func TestParseAddArgsRejectsUnknownFlagBeforePositionals(t *testing.T) {
-	_, _, _, _, _, err := parseAddArgs([]string{
+	opts, name, target, targetArgs, showHelp, err := parseAddArgs([]string{
 		"--bogus",
 		"context7",
 		"https://mcp.context7.com/mcp",
 	})
 	require.Error(t, err)
+	assert.Equal(t, addOptions{}, opts)
+	assert.Empty(t, name)
+	assert.Empty(t, target)
+	assert.Nil(t, targetArgs)
+	assert.False(t, showHelp)
 	assert.Equal(t, `unknown flag "--bogus" for mcp add`, err.Error())
 }
 
