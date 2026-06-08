@@ -2419,8 +2419,8 @@ func allowConfiguredProxyFirstHop(req *http.Request, rt http.RoundTripper) {
 }
 
 func isAllowedFirstHopHost(ctx context.Context, host string) bool {
-	allowed, _ := ctx.Value(webFetchAllowedFirstHopHostKey{}).(string)
-	if allowed == "" {
+	allowed, ok := ctx.Value(webFetchAllowedFirstHopHostKey{}).(string)
+	if !ok || allowed == "" {
 		return false
 	}
 	return allowed == normalizeAllowedFirstHopHost(host)
