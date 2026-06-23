@@ -1970,3 +1970,20 @@ func TestShellTool_CustomAllowStillPermitsSafeMatch(t *testing.T) {
 		t.Fatalf("safe custom-allowed command should pass guard, got: %q", got)
 	}
 }
+
+func TestShellTool_CustomAllowDoesNotBecomeStrictAllowlist(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Tools.Exec.EnableDenyPatterns = true
+	cfg.Tools.Exec.CustomAllowPatterns = []string{`^jq\b`}
+	cfg.Tools.Exec.CustomDenyPatterns = []string{`\$env\b`, `(^|[^.$a-z0-9_])env([^a-z0-9_]|$)`}
+
+	tool, err := NewExecToolWithConfig(t.TempDir(), false, cfg)
+	if err != nil {
+		t.Fatalf("NewExecToolWithConfig() error: %v", err)
+	}
+
+	got := tool.guardCommand("ls", t.TempDir())
+	if got != "" {
+		t.Fatalf("custom allow patterns should not become a strict allowlist, got: %q", got)
+	}
+}
