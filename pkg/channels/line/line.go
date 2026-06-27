@@ -481,11 +481,11 @@ func (c *LINEChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]stri
 				ReplyToken: tokenEntry.token,
 				Messages:   []messaging_api.MessageInterface{&textMsg},
 			})
-			if resp != nil && resp.Body != nil {
-				resp.Body.Close()
-			}
-			if err == nil {
-				logger.DebugCF("line", "Message sent via Reply API", map[string]any{
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+		if err == nil {
+			logger.DebugCF("line", "Message sent via Reply API", map[string]any{
 					"chat_id": msg.ChatID,
 					"quoted":  quoteToken != "",
 				})
@@ -588,7 +588,7 @@ func (c *LINEChannel) StartTyping(ctx context.Context, chatID string) (func(), e
 // classifySDKError maps an SDK HTTP response to the project's sentinel errors.
 func classifySDKError(resp *http.Response, err error) error {
 	if resp != nil && resp.Body != nil {
-		resp.Body.Close()
+		_ = resp.Body.Close()
 	}
 	if err == nil {
 		return nil
