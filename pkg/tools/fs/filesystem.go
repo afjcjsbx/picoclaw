@@ -910,7 +910,10 @@ func (t *WriteFileTool) Name() string {
 func (t *WriteFileTool) Description() string {
 	desc := "Write content to a file, replacing any existing content. Content is written byte-for-byte after argument decoding. Standard JSON escaping applies: \\n for newline and \\\\n for a literal backslash-n sequence. If the file already exists you must set overwrite=true, which replaces the ENTIRE file."
 	if phrase := t.altToolsPhrase(); phrase != "" {
-		desc += fmt.Sprintf(" To add to or change part of an existing file without losing its current contents, use %s instead.", phrase)
+		desc += fmt.Sprintf(
+			" To add to or change part of an existing file without losing its current contents, use %s instead.",
+			phrase,
+		)
 	}
 	return desc
 }
