@@ -1,7 +1,7 @@
 # ============================================================
 # Stage 1: Build frontend assets (Node.js + pnpm)
 # ============================================================
-FROM node:24-alpine3.23 AS frontend
+FROM node:26-alpine3.23 AS frontend
 
 RUN corepack enable && corepack prepare pnpm@latest --activate
 
