@@ -1,27 +1,49 @@
 version: 2
 
 updates:
-
-  # Go dependencies (entire repo)
+  # Go module dependencies.
   - package-ecosystem: "gomod"
     directory: "/"
     schedule:
       interval: "weekly"
-    labels:
-      - "dependencies"
-      - "go"
+    open-pull-requests-limit: 5
 
-  # Frontend dependencies
+  # Frontend dependencies managed by pnpm.
   - package-ecosystem: "npm"
     directory: "/web/frontend"
     schedule:
       interval: "weekly"
-    labels:
-      - "dependencies"
-      - "frontend"
+    open-pull-requests-limit: 5
 
-  # GitHub Actions
+  # GitHub Actions used by CI and release workflows.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+    open-pull-requests-limit: 5
+
+  # Application images and Docker Compose files.
+  - package-ecosystem: "docker"
+    directory: "/docker"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  # Docker-backed integration tests.
+  - package-ecosystem: "docker"
+    directory: "/integration"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "docker"
+    directory: "/integration/fixtures/mcp-streamable-server"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "docker"
+    directory: "/integration/suites/mcp-streamable"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
