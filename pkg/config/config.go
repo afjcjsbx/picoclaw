@@ -1161,6 +1161,7 @@ type SearchCacheConfig struct {
 	TTLSeconds int `json:"ttl_seconds" env:"PICOCLAW_SKILLS_SEARCH_CACHE_TTL_SECONDS"`
 }
 
+//nolint:recvcheck // Marshaling uses value receivers; unmarshaling mutates the configuration.
 type SkillsRegistriesConfig []*SkillRegistryConfig
 
 func (c *SkillsRegistriesConfig) Get(name string) (SkillRegistryConfig, bool) {
@@ -1205,6 +1206,7 @@ type SkillsGithubConfig struct {
 	Proxy   string       `json:"proxy,omitempty"    yaml:"-"               env:"PICOCLAW_TOOLS_SKILLS_GITHUB_PROXY"`
 }
 
+//nolint:recvcheck // Marshaling uses value receivers; unmarshaling mutates the configuration.
 type SkillRegistryConfig struct {
 	Name      string         `json:"name,omitempty"      yaml:"-"                    env:"-"`
 	Enabled   bool           `json:"enabled"             yaml:"-"                    env:"-"`

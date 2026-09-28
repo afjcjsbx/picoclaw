@@ -10,8 +10,10 @@ linters:
     - dupword
     - err113
     - exhaustruct
+    - exhaustruct_v5
     - funcorder
     - gochecknoglobals
+    - gomodguard # Replaced by gomodguard_v2, enabled through default: all.
     - gosmopolitan  # Project legitimately uses CJK text in tests (FTS5, token counting)
     - godot
     - intrange

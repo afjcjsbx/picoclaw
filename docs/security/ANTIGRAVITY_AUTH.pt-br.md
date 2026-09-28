@@ -440,7 +440,7 @@ type ProviderAuthResult = {
 
 ### 1. Ambiente/Dependências Necessários
 
-- Go ≥ 1.25
+- Go ≥ 1.27.1
 - Base de código do PicoClaw (`pkg/providers/` e `pkg/auth/`)
 - Pacotes da biblioteca padrão `crypto` e `net/http`
 
