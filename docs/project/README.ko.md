@@ -5,7 +5,7 @@
 
 <h3>$10 하드웨어 · 10MB RAM · ms 부팅 · Let's Go, PicoClaw!</h3>
   <p>
-    <img src="https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat&logo=go&logoColor=white" alt="Go">
+    <img src="https://img.shields.io/badge/Go-1.27.1+-00ADD8?style=flat&logo=go&logoColor=white" alt="Go">
     <img src="https://img.shields.io/badge/Arch-x86__64%2C%20ARM64%2C%20MIPS%2C%20RISC--V%2C%20LoongArch-blue" alt="Hardware">
     <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
     <br>
@@ -174,7 +174,7 @@ PicoClaw는 사실상 거의 모든 Linux 장치에 배포할 수 있습니다!
 
 필수 사항:
 
-- Go 1.25+
+- Go 1.27.1+
 - Web UI / launcher 빌드에는 Node.js 22+와 pnpm 10.33.0+가 필요합니다
 
 ```bash

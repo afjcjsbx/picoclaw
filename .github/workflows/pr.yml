@@ -22,7 +22,7 @@ jobs:
       - name: Golangci Lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.10.1
+          version: v2.14.0
           args: --build-tags=goolm,stdjson
 
   vuln_check:
@@ -42,7 +42,7 @@ jobs:
           go-version-file: go.mod
 
       - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
 
       - name: Run Govulncheck
         run: govulncheck -C . -format text ./...
