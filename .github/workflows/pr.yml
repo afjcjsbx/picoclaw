@@ -22,7 +22,7 @@ jobs:
       - name: Golangci Lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.10.1
+          version: v2.14.0
           args: --build-tags=goolm,stdjson
 
   vuln_check:

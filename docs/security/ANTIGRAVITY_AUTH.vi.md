@@ -440,7 +440,7 @@ type ProviderAuthResult = {
 
 ### 1. Môi trường/Phụ thuộc cần thiết
 
-- Go ≥ 1.25
+- Go ≥ 1.27.1
 - Mã nguồn PicoClaw (`pkg/providers/` và `pkg/auth/`)
 - Các gói thư viện chuẩn `crypto` và `net/http`
 
