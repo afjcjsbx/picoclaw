@@ -11,7 +11,7 @@ func testProviderWorkspace(t *testing.T, provider any) string {
 	t.Helper()
 
 	v := reflect.ValueOf(provider)
-	if v.Kind() != reflect.Ptr || v.IsNil() {
+	if v.Kind() != reflect.Pointer || v.IsNil() {
 		t.Fatalf("provider = %T, want non-nil pointer", provider)
 	}
 

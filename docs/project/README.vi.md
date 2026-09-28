@@ -5,7 +5,7 @@
 
 <h3>Phần cứng $10 · RAM 10MB · Khởi động ms · Let's Go, PicoClaw!</h3>
   <p>
-    <img src="https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat&logo=go&logoColor=white" alt="Go">
+    <img src="https://img.shields.io/badge/Go-1.27.1+-00ADD8?style=flat&logo=go&logoColor=white" alt="Go">
     <img src="https://img.shields.io/badge/Arch-x86__64%2C%20ARM64%2C%20MIPS%2C%20RISC--V%2C%20LoongArch-blue" alt="Hardware">
     <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
     <br>
@@ -174,7 +174,7 @@ Ngoài ra, tải binary cho nền tảng của bạn từ trang [GitHub Releases
 
 Yêu cầu:
 
-- Go 1.25+
+- Go 1.27.1+
 - Node.js 22+ và pnpm 10.33.0+ cho các bản build Web UI / launcher
 
 ```bash
