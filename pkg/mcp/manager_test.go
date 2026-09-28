@@ -695,6 +695,22 @@ func (t *scriptedTransport) Write(ctx context.Context, msg jsonrpc.Message) erro
 	}
 
 	switch req.Method {
+	case "server/discover":
+		// Simulate a legacy server so newer clients fall back to initialize
+		// without treating the unsupported method as a transport failure.
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case t.incoming <- &jsonrpc.Response{
+			ID: req.ID,
+			Error: &jsonrpc.Error{
+				Code:    jsonrpc.CodeMethodNotFound,
+				Message: "method not found",
+			},
+		}:
+			return nil
+		}
+
 	case "initialize":
 		payload, err := json.Marshal(&sdkmcp.InitializeResult{
 			ProtocolVersion: "2025-11-25",
