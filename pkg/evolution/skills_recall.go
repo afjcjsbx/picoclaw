@@ -139,7 +139,7 @@ func scoreSkillMatch(rule LearningRecord, skill skills.SkillInfo) int {
 }
 
 func scoreSkillBody(rule LearningRecord, body string) int {
-	return minInt(tokenOverlap(ruleTokens(rule), tokenizeForEvolution(body)), 3)
+	return min(tokenOverlap(ruleTokens(rule), tokenizeForEvolution(body)), 3)
 }
 
 func skillSourceRank(source string) int {
@@ -210,11 +210,4 @@ func tokenizeForEvolution(text string) []string {
 		out = append(out, field)
 	}
 	return out
-}
-
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

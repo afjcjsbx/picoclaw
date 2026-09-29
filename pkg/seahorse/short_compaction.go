@@ -580,7 +580,7 @@ func (e *CompactionEngine) generateLeafSummary(
 
 	sourceText := formatMessagesForSummary(messages)
 	inputTokens := sumMessageTokens(messages)
-	targetTokens := minInt(LeafTargetTokens, int(float64(inputTokens)*0.35))
+	targetTokens := min(LeafTargetTokens, int(float64(inputTokens)*0.35))
 
 	// Level 1: normal prompt
 	prompt := buildLeafSummaryPrompt(sourceText, previousSummary, targetTokens)
@@ -608,7 +608,7 @@ func (e *CompactionEngine) generateLeafSummary(
 	}
 
 	// Level 2: aggressive prompt
-	aggressiveTarget := minInt(640, int(float64(inputTokens)*0.20))
+	aggressiveTarget := min(640, int(float64(inputTokens)*0.20))
 	aggressivePrompt := buildAggressiveLeafSummaryPrompt(sourceText, previousSummary, aggressiveTarget)
 	content, err = e.complete(ctx, aggressivePrompt, CompleteOptions{
 		MaxTokens:   aggressiveTarget * 2,
@@ -643,7 +643,7 @@ func (e *CompactionEngine) generateCondensedSummary(ctx context.Context, summari
 
 	sourceText := formatSummariesForCondensation(summaries)
 	inputTokens := sumSummaryTokens(summaries)
-	targetTokens := minInt(CondensedTargetTokens, int(float64(inputTokens)*0.35))
+	targetTokens := min(CondensedTargetTokens, int(float64(inputTokens)*0.35))
 
 	// Level 1: normal prompt
 	prompt := buildCondensedSummaryPrompt(sourceText, targetTokens)
@@ -668,7 +668,7 @@ func (e *CompactionEngine) generateCondensedSummary(ctx context.Context, summari
 	}
 
 	// Level 2: aggressive prompt
-	aggressiveTarget := minInt(640, int(float64(inputTokens)*0.20))
+	aggressiveTarget := min(640, int(float64(inputTokens)*0.20))
 	aggressivePrompt := buildCondensedSummaryPrompt(sourceText, aggressiveTarget)
 	content, err = e.complete(ctx, aggressivePrompt, CompleteOptions{
 		MaxTokens:   aggressiveTarget * 2,
@@ -888,11 +888,4 @@ func sumSummaryTokens(summaries []Summary) int {
 		total += s.TokenCount
 	}
 	return total
-}
-
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
