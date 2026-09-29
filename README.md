@@ -62,6 +62,9 @@ This repository is an actively maintained fork of the [original PicoClaw project
 
 2026-09-28 🌱 **Project revived!** Development has resumed and will continue to be actively maintained in this fork.
 
+<details>
+<summary>Earlier news...</summary>
+
 2026-05-11 🛒 **LicheeRV-Claw on AliExpress!** You can now purchase LicheeRV-Claw from [AliExpress](https://www.aliexpress.com/item/1005006519668532.html), making it easier to try PicoClaw on compact RISC-V hardware.
 
 <p align="center">
@@ -89,9 +92,6 @@ This repository is an actively maintained fork of the [original PicoClaw project
 2026-03-09 🎉 **v0.2.1 — Biggest update yet!** MCP protocol support, 4 new channels (Matrix/IRC/WeCom/Discord Proxy), 3 new providers (Kimi/Minimax/Avian), vision pipeline, JSONL memory store, model routing.
 
 2026-02-28 📦 **v0.2.0** released with Docker Compose and Web UI Launcher support.
-
-<details>
-<summary>Earlier news...</summary>
 
 2026-02-26 🎉 PicoClaw hits **20K Stars** in just 17 days! Channel auto-orchestration and capability interfaces are live.
 
