@@ -571,20 +571,32 @@ func (e *Engine) Bootstrap(ctx context.Context, sessionKey string, messages []Me
 	return nil
 }
 
-func (e *Engine) repairBootstrapReasoningContent(ctx context.Context, dbMsgs, messages []Message) (bool, error) {
+type bootstrapFieldRepair[T comparable] struct {
+	want          func(Message) T
+	have          func(Message) T
+	equal         func(T, T) bool
+	onlyIfMissing bool
+	// created_at requires a timestamp on every overlapping message before applying any updates.
+	rejectZeroBeforeEqual bool
+	apply                 func(context.Context, int64, T) error
+	set                   func(*Message, T)
+	logKind               string
+}
+
+func repairBootstrapField[T comparable](ctx context.Context, dbMsgs, messages []Message, r bootstrapFieldRepair[T]) (bool, error) {
 	if len(dbMsgs) == 0 || len(messages) == 0 {
 		return false, nil
 	}
 
-	overlap := min(len(messages), len(dbMsgs))
-
-	var updates []struct {
-		index            int
-		messageID        int64
-		reasoningContent string
+	type update struct {
+		index     int
+		messageID int64
+		value     T
 	}
+	var updates []update
+	var zero T
 
-	for i := range overlap {
+	for i := range min(len(messages), len(dbMsgs)) {
 		if !messagesMatch(dbMsgs[i], messages[i], messageMatchOptions{
 			IgnoreReasoningContent: true,
 			IgnoreModelName:        true,
@@ -592,151 +604,71 @@ func (e *Engine) repairBootstrapReasoningContent(ctx context.Context, dbMsgs, me
 		}) {
 			return false, nil
 		}
-		if dbMsgs[i].ReasoningContent == messages[i].ReasoningContent {
-			continue
-		}
-		if dbMsgs[i].ReasoningContent != "" || messages[i].ReasoningContent == "" {
+
+		want, have := r.want(messages[i]), r.have(dbMsgs[i])
+		if r.rejectZeroBeforeEqual && want == zero {
 			return false, nil
 		}
-		updates = append(updates, struct {
-			index            int
-			messageID        int64
-			reasoningContent string
-		}{
-			index:            i,
-			messageID:        dbMsgs[i].ID,
-			reasoningContent: messages[i].ReasoningContent,
-		})
+		if r.equal != nil {
+			if r.equal(have, want) {
+				continue
+			}
+		} else if have == want {
+			continue
+		}
+		if want == zero || (r.onlyIfMissing && have != zero) {
+			return false, nil
+		}
+		updates = append(updates, update{index: i, messageID: dbMsgs[i].ID, value: want})
 	}
 
 	if len(updates) == 0 {
 		return false, nil
 	}
-
 	for _, update := range updates {
-		if err := e.store.UpdateMessageReasoningContent(ctx, update.messageID, update.reasoningContent); err != nil {
+		if err := r.apply(ctx, update.messageID, update.value); err != nil {
 			return false, err
 		}
-		dbMsgs[update.index].ReasoningContent = update.reasoningContent
+		r.set(&dbMsgs[update.index], update.value)
 	}
 
-	logger.InfoCF("seahorse", "bootstrap: repaired missing reasoning_content", map[string]any{
+	logger.InfoCF("seahorse", "bootstrap: repaired "+r.logKind, map[string]any{
 		"messages": len(updates),
 	})
 	return true, nil
+}
+
+func (e *Engine) repairBootstrapReasoningContent(ctx context.Context, dbMsgs, messages []Message) (bool, error) {
+	return repairBootstrapField(ctx, dbMsgs, messages, bootstrapFieldRepair[string]{
+		want:          func(m Message) string { return m.ReasoningContent },
+		have:          func(m Message) string { return m.ReasoningContent },
+		onlyIfMissing: true,
+		apply:         e.store.UpdateMessageReasoningContent,
+		set:           func(m *Message, v string) { m.ReasoningContent = v },
+		logKind:       "missing reasoning_content",
+	})
 }
 
 func (e *Engine) repairBootstrapModelName(ctx context.Context, dbMsgs, messages []Message) (bool, error) {
-	if len(dbMsgs) == 0 || len(messages) == 0 {
-		return false, nil
-	}
-
-	overlap := min(len(messages), len(dbMsgs))
-
-	var updates []struct {
-		index     int
-		messageID int64
-		modelName string
-	}
-
-	for i := range overlap {
-		if !messagesMatch(dbMsgs[i], messages[i], messageMatchOptions{
-			IgnoreReasoningContent: true,
-			IgnoreModelName:        true,
-			IgnoreCreatedAt:        true,
-		}) {
-			return false, nil
-		}
-		if dbMsgs[i].ModelName == messages[i].ModelName {
-			continue
-		}
-		if messages[i].ModelName == "" {
-			return false, nil
-		}
-		updates = append(updates, struct {
-			index     int
-			messageID int64
-			modelName string
-		}{
-			index:     i,
-			messageID: dbMsgs[i].ID,
-			modelName: messages[i].ModelName,
-		})
-	}
-
-	if len(updates) == 0 {
-		return false, nil
-	}
-
-	for _, update := range updates {
-		if err := e.store.UpdateMessageModelName(ctx, update.messageID, update.modelName); err != nil {
-			return false, err
-		}
-		dbMsgs[update.index].ModelName = update.modelName
-	}
-
-	logger.InfoCF("seahorse", "bootstrap: repaired missing model_name", map[string]any{
-		"messages": len(updates),
+	return repairBootstrapField(ctx, dbMsgs, messages, bootstrapFieldRepair[string]{
+		want:    func(m Message) string { return m.ModelName },
+		have:    func(m Message) string { return m.ModelName },
+		apply:   e.store.UpdateMessageModelName,
+		set:     func(m *Message, v string) { m.ModelName = v },
+		logKind: "missing model_name",
 	})
-	return true, nil
 }
 
 func (e *Engine) repairBootstrapCreatedAt(ctx context.Context, dbMsgs, messages []Message) (bool, error) {
-	if len(dbMsgs) == 0 || len(messages) == 0 {
-		return false, nil
-	}
-
-	overlap := min(len(messages), len(dbMsgs))
-
-	var updates []struct {
-		index     int
-		messageID int64
-		createdAt time.Time
-	}
-
-	for i := range overlap {
-		if !messagesMatch(dbMsgs[i], messages[i], messageMatchOptions{
-			IgnoreReasoningContent: true,
-			IgnoreModelName:        true,
-			IgnoreCreatedAt:        true,
-		}) {
-			return false, nil
-		}
-
-		wantCreatedAt := normalizeMessageCreatedAt(messages[i].CreatedAt)
-		if wantCreatedAt.IsZero() {
-			return false, nil
-		}
-		if dbMsgs[i].CreatedAt.Equal(wantCreatedAt) {
-			continue
-		}
-
-		updates = append(updates, struct {
-			index     int
-			messageID int64
-			createdAt time.Time
-		}{
-			index:     i,
-			messageID: dbMsgs[i].ID,
-			createdAt: wantCreatedAt,
-		})
-	}
-
-	if len(updates) == 0 {
-		return false, nil
-	}
-
-	for _, update := range updates {
-		if err := e.store.UpdateMessageCreatedAt(ctx, update.messageID, update.createdAt); err != nil {
-			return false, err
-		}
-		dbMsgs[update.index].CreatedAt = update.createdAt
-	}
-
-	logger.InfoCF("seahorse", "bootstrap: repaired message created_at", map[string]any{
-		"messages": len(updates),
+	return repairBootstrapField(ctx, dbMsgs, messages, bootstrapFieldRepair[time.Time]{
+		want:                  func(m Message) time.Time { return normalizeMessageCreatedAt(m.CreatedAt) },
+		have:                  func(m Message) time.Time { return m.CreatedAt },
+		equal:                 time.Time.Equal,
+		rejectZeroBeforeEqual: true,
+		apply:                 e.store.UpdateMessageCreatedAt,
+		set:                   func(m *Message, v time.Time) { m.CreatedAt = v },
+		logKind:               "message created_at",
 	})
-	return true, nil
 }
 
 // truncate shortens a string for logging.
