@@ -186,15 +186,16 @@ for metric in metrics:
         f"{display(metric, head['mean'])} ± {display(metric, head['stdev'])} |"
     )
 
+regression_factor = 1.5
 regressions = [
     metric for metric in metrics
     if summary["base"][metric]["median"] > 0
-    and summary["head"][metric]["median"] >= 2 * summary["base"][metric]["median"]
+    and summary["head"][metric]["median"] >= regression_factor * summary["base"][metric]["median"]
 ]
 lines.extend([
     "",
     "The gateway uses the same minimal configuration for both revisions, starts without a model, and is measured until `GET /ready` succeeds. Measured starts alternate base/PR order to balance cache effects. CPU is process execution time from Linux `schedstat`; memory is Linux peak RSS. Binary size is the compiled executable size.",
-    "The CI gate fails when a PR metric is at least 2x its non-zero base metric; sampled runtime metrics use their median.",
+    "The CI gate fails when a PR metric is at least 1.5x its non-zero base metric (a 50% regression); sampled runtime metrics use their median.",
     "",
 ])
 (output_dir / "summary.md").write_text("\n".join(lines))
