@@ -13,9 +13,7 @@
     <a href="https://docs.picoclaw.io/"><img src="https://img.shields.io/badge/Docs-Official-007acc?style=flat&logo=read-the-docs&logoColor=white" alt="Docs"></a>
     <a href="https://deepwiki.com/sipeed/picoclaw"><img src="https://img.shields.io/badge/Wiki-DeepWiki-FFA500?style=flat&logo=wikipedia&logoColor=white" alt="Wiki"></a>
     <br>
-    <a href="https://x.com/SipeedIO"><img src="https://img.shields.io/badge/X_(Twitter)-SipeedIO-black?style=flat&logo=x&logoColor=white" alt="Twitter"></a>
-    <a href="./assets/wechat.png"><img src="https://img.shields.io/badge/WeChat-Group-41d56b?style=flat&logo=wechat&logoColor=white"></a>
-    <a href="https://discord.gg/V4sAZ9XWpN"><img src="https://img.shields.io/badge/Discord-Community-4c60eb?style=flat&logo=discord&logoColor=white" alt="Discord"></a>
+
   </p>
 
 [中文](docs/project/README.zh.md) | [日本語](docs/project/README.ja.md) | [한국어](docs/project/README.ko.md) | [Português](docs/project/README.pt-br.md) | [Tiếng Việt](docs/project/README.vi.md) | [Français](docs/project/README.fr.md) | [Italiano](docs/project/README.it.md) | [Bahasa Indonesia](docs/project/README.id.md) | [Malay](docs/project/README.ms.md) | **English**
@@ -262,7 +260,7 @@ For detailed WebUI documentation, see [docs.picoclaw.io](https://docs.picoclaw.i
 
 ```bash
 # 1. Clone this repo
-git clone https://github.com/sipeed/picoclaw.git
+git clone https://github.com/afjcjsbx/picoclaw.git
 cd picoclaw
 
 # 2. First run — auto-generates docker/data/config.json then exits
@@ -349,7 +347,7 @@ For a full command-line setup checklist, see the [Android Termux Guide](docs/gui
 
 ```bash
 # Download the latest release
-wget https://github.com/sipeed/picoclaw/releases/latest/download/picoclaw_Linux_arm64.tar.gz
+wget https://github.com/afjcjsbx/picoclaw/releases/latest/download/picoclaw_Linux_arm64.tar.gz
 tar xzf picoclaw_Linux_arm64.tar.gz
 pkg install proot
 termux-chroot ./picoclaw onboard   # chroot provides a standard Linux filesystem layout
@@ -670,13 +668,4 @@ For detailed guides beyond this README:
 
 PRs welcome! The codebase is intentionally small and readable.
 
-See our [Community Roadmap](https://github.com/sipeed/picoclaw/issues/988) and [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-Developer group building, join after your first merged PR!
-
-User Groups:
-
-Discord: <https://discord.gg/V4sAZ9XWpN>
-
-WeChat:
-<img src="assets/wechat.png" alt="WeChat group QR code" width="512">
+See our [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
