@@ -192,9 +192,9 @@ func GetReleaseAPIURL(owner string) string {
 	return fmt.Sprintf("https://api.github.com/repos/%s/picoclaw/releases/latest", owner)
 }
 
-// GetProdReleaseAPIURL returns the production release API URL (upstream).
+// GetProdReleaseAPIURL returns the release API URL used for self-updates.
 func GetProdReleaseAPIURL() string {
-	return GetReleaseAPIURL("sipeed")
+	return GetReleaseAPIURL("afjcjsbx")
 }
 
 // GetReleaseTagAPIURL returns the GitHub Releases API URL for a specific tag.

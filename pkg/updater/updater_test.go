@@ -52,7 +52,7 @@ type testReleasePayload struct {
 	Assets  []testReleaseAsset `json:"assets"`
 }
 
-const testReleaseAPIPath = "/api.github.com/repos/sipeed/picoclaw/releases/latest"
+const testReleaseAPIPath = "/api.github.com/repos/afjcjsbx/picoclaw/releases/latest"
 
 // TestDownloadAndExtractRelease_IntegrationLatestRelease downloads the latest
 // public release for a single platform as an opt-in smoke test.
@@ -303,7 +303,7 @@ func TestDownloadAndExtractRelease_RetriesTransientAssetFailure(t *testing.T) {
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/api.github.com/repos/sipeed/picoclaw/releases/latest":
+		case "/api.github.com/repos/afjcjsbx/picoclaw/releases/latest":
 			w.Header().Set("Content-Type", "application/json")
 			fmt.Fprintf(
 				w,
@@ -328,7 +328,7 @@ func TestDownloadAndExtractRelease_RetriesTransientAssetFailure(t *testing.T) {
 	withTestHTTPClient(t, server.Client())
 
 	dir, err := DownloadAndExtractRelease(
-		server.URL+"/api.github.com/repos/sipeed/picoclaw/releases/latest",
+		server.URL+"/api.github.com/repos/afjcjsbx/picoclaw/releases/latest",
 		"windows",
 		"amd64",
 	)
