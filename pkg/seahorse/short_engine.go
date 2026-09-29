@@ -583,7 +583,11 @@ type bootstrapFieldRepair[T comparable] struct {
 	logKind               string
 }
 
-func repairBootstrapField[T comparable](ctx context.Context, dbMsgs, messages []Message, r bootstrapFieldRepair[T]) (bool, error) {
+func repairBootstrapField[T comparable](
+	ctx context.Context,
+	dbMsgs, messages []Message,
+	r bootstrapFieldRepair[T],
+) (bool, error) {
 	if len(dbMsgs) == 0 || len(messages) == 0 {
 		return false, nil
 	}
