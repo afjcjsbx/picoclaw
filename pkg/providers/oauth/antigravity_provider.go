@@ -15,6 +15,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/auth"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers/common"
+	"github.com/sipeed/picoclaw/pkg/textutil"
 )
 
 const (
@@ -580,7 +581,7 @@ func FetchAntigravityModels(accessToken, projectID string) ([]AntigravityModelIn
 		return nil, fmt.Errorf(
 			"fetchAvailableModels failed (HTTP %d): %s",
 			resp.StatusCode,
-			truncateString(string(body), 200),
+			textutil.TruncateRunes(string(body), 200),
 		)
 	}
 
@@ -642,13 +643,6 @@ type AntigravityModelInfo struct {
 
 // --- Helpers ---
 
-func truncateString(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
-}
-
 func randomString(n int) string {
 	const letters = "abcdefghijklmnopqrstuvwxyz0123456789"
 	b := make([]byte, n)
@@ -669,7 +663,7 @@ func (p *AntigravityProvider) parseAntigravityError(statusCode int, body []byte)
 	}
 
 	if err := json.Unmarshal(body, &errResp); err != nil {
-		return fmt.Errorf("antigravity API error (HTTP %d): %s", statusCode, truncateString(string(body), 500))
+		return fmt.Errorf("antigravity API error (HTTP %d): %s", statusCode, textutil.TruncateRunes(string(body), 500))
 	}
 
 	msg := errResp.Error.Message

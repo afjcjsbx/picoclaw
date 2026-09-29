@@ -13,6 +13,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/fileutil"
 	"github.com/sipeed/picoclaw/pkg/media"
 )
 
@@ -150,8 +151,8 @@ func TestExpandHome(t *testing.T) {
 		{"relative", "relative"},
 	}
 	for _, tt := range tests {
-		if got := expandHome(tt.in); got != tt.want {
-			t.Errorf("expandHome(%q) = %q, want %q", tt.in, got, tt.want)
+		if got := fileutil.ExpandHome(tt.in); got != tt.want {
+			t.Errorf("ExpandHome(%q) = %q, want %q", tt.in, got, tt.want)
 		}
 	}
 }

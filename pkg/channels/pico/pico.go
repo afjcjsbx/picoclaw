@@ -23,6 +23,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/identity"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/textutil"
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
@@ -1228,7 +1229,7 @@ func (c *PicoChannel) handleMessageSend(pc *picoConn, msg PicoMessage) {
 
 	logger.DebugCF("pico", "Received message", map[string]any{
 		"session_id": sessionID,
-		"preview":    truncate(content, 50),
+		"preview":    textutil.TruncateRunes(content, 50),
 		"media":      len(media),
 	})
 
@@ -1252,15 +1253,6 @@ func (c *PicoChannel) handleMessageSend(pc *picoConn, msg PicoMessage) {
 	}
 
 	c.HandleInboundContext(c.ctx, chatID, content, media, inboundCtx, sender)
-}
-
-// truncate truncates a string to maxLen runes.
-func truncate(s string, maxLen int) string {
-	runes := []rune(s)
-	if len(runes) <= maxLen {
-		return s
-	}
-	return string(runes[:maxLen]) + "..."
 }
 
 func parseInlineImageMedia(payload map[string]any) ([]string, error) {

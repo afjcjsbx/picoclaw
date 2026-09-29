@@ -14,6 +14,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/textutil"
 )
 
 // Config holds engine configuration.
@@ -492,11 +493,11 @@ func (e *Engine) Bootstrap(ctx context.Context, sessionKey string, messages []Me
 				"conv_id":        conv.ConversationID,
 				"index":          i,
 				"db_role":        dbMsgs[i].Role,
-				"db_content":     truncate(dbMsgs[i].Content, 50),
+				"db_content":     textutil.TruncateRunes(dbMsgs[i].Content, 50),
 				"db_parts":       len(dbMsgs[i].Parts),
 				"db_model_name":  dbMsgs[i].ModelName,
 				"msg_role":       messages[i].Role,
-				"msg_content":    truncate(messages[i].Content, 50),
+				"msg_content":    textutil.TruncateRunes(messages[i].Content, 50),
 				"msg_parts":      len(messages[i].Parts),
 				"msg_model_name": messages[i].ModelName,
 			})
@@ -737,14 +738,6 @@ func (e *Engine) repairBootstrapCreatedAt(ctx context.Context, dbMsgs, messages 
 		"messages": len(updates),
 	})
 	return true, nil
-}
-
-// truncate shortens a string for logging.
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
 }
 
 type messageMatchOptions struct {

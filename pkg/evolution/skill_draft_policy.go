@@ -131,7 +131,7 @@ func trimAtReadableBoundary(content string, maxLen int) string {
 	}
 
 	cut := maxLen
-	searchStart := maxLen - minInt(maxLen/2, 240)
+	searchStart := maxLen - min(maxLen/2, 240)
 	if searchStart < 0 {
 		searchStart = 0
 	}

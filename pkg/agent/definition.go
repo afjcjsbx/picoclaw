@@ -9,6 +9,7 @@ import (
 	"github.com/gomarkdown/markdown/parser"
 	"gopkg.in/yaml.v3"
 
+	"github.com/sipeed/picoclaw/pkg/fileutil"
 	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
@@ -106,7 +107,7 @@ func loadAgentDefinition(workspace string) AgentContextDefinition {
 	}
 
 	defaultSoulPath := filepath.Join(workspace, "SOUL.md")
-	if definition.Source != "" || fileExists(defaultSoulPath) {
+	if definition.Source != "" || fileutil.Exists(defaultSoulPath) {
 		if content, err := os.ReadFile(defaultSoulPath); err == nil {
 			definition.Soul = &SoulDefinition{
 				Path:    defaultSoulPath,
@@ -250,11 +251,6 @@ func uniquePaths(paths []string) []string {
 		result = append(result, cleaned)
 	}
 	return result
-}
-
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
 }
 
 func errorString(err error) string {

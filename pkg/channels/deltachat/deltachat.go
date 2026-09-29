@@ -24,6 +24,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/channels"
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/fileutil"
 	"github.com/sipeed/picoclaw/pkg/identity"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/media"
@@ -1126,8 +1127,8 @@ func (c *DeltaChatChannel) applyProfileConfig(ctx context.Context, accountID int
 		cfgMap["displayname"] = accountConfigString(name)
 	}
 	if avatar := strings.TrimSpace(c.config.AvatarImage); avatar != "" {
-		avatar = expandHome(avatar)
-		if !fileExists(avatar) {
+		avatar = fileutil.ExpandHome(avatar)
+		if !fileutil.Exists(avatar) {
 			logger.WarnCF("deltachat", "avatar_image not found; leaving current avatar unchanged", map[string]any{
 				"avatar_image": avatar,
 			})
@@ -1284,8 +1285,8 @@ func resolveServerPath(configured string) (string, error) {
 		}
 		return p, nil
 	}
-	p := expandHome(configured)
-	if !fileExists(p) {
+	p := fileutil.ExpandHome(configured)
+	if !fileutil.Exists(p) {
 		return "", fmt.Errorf("deltachat: rpc_server_path %q not found", p)
 	}
 	return p, nil
@@ -1294,7 +1295,7 @@ func resolveServerPath(configured string) (string, error) {
 // resolveDataDir picks where the account database lives.
 func resolveDataDir(configured, channelName string) string {
 	if configured != "" {
-		return expandHome(configured)
+		return fileutil.ExpandHome(configured)
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -1305,26 +1306,4 @@ func resolveDataDir(configured, channelName string) string {
 		name = config.ChannelDeltaChat
 	}
 	return filepath.Join(home, ".picoclaw", "deltachat", name)
-}
-
-func expandHome(path string) string {
-	if path == "" || path[0] != '~' {
-		return path
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return path
-	}
-	if len(path) == 1 {
-		return home
-	}
-	if path[1] == '/' {
-		return filepath.Join(home, path[2:])
-	}
-	return path
-}
-
-func fileExists(p string) bool {
-	info, err := os.Stat(p)
-	return err == nil && !info.IsDir()
 }
