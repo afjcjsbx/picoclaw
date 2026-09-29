@@ -1139,6 +1139,7 @@ type ToolsConfig struct {
 	SpawnStatus     ToolConfig         `json:"spawn_status"      yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_SPAWN_STATUS_"`
 	SPI             ToolConfig         `json:"spi"               yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_SPI_"`
 	Subagent        ToolConfig         `json:"subagent"          yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_SUBAGENT_"`
+	Todo            ToolConfig         `json:"todo" yaml:"-" envPrefix:"PICOCLAW_TOOLS_TODO_"`
 	WebFetch        ToolConfig         `json:"web_fetch"         yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_WEB_FETCH_"`
 	WriteFile       ToolConfig         `json:"write_file"        yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_WRITE_FILE_"`
 }
@@ -1863,6 +1864,8 @@ func expandMultiKeyModels(models []*ModelConfig) []*ModelConfig {
 
 func (t *ToolsConfig) IsToolEnabled(name string) bool {
 	switch name {
+	case "todo":
+		return t.Todo.Enabled
 	case "web":
 		return t.Web.Enabled
 	case "cron":

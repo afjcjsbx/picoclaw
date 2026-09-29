@@ -522,6 +522,9 @@
     "send_tts": {
       "enabled": false
     },
+    "todo": {
+      "enabled": true
+    },
     "spawn": {
       "enabled": true
     },

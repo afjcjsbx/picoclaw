@@ -120,6 +120,10 @@ func NewAgentInstance(
 	toolsRegistry := tools.NewToolRegistry()
 	toolsRegistry.SetAllowlist(agentToolAllowlist)
 
+	if cfg.Tools.IsToolEnabled("todo") {
+		toolsRegistry.Register(tools.NewTodoTool())
+	}
+
 	if cfg.Tools.IsToolEnabled("read_file") {
 		maxReadFileSize := cfg.Tools.ReadFile.MaxReadFileSize
 		switch cfg.Tools.ReadFile.EffectiveMode() {

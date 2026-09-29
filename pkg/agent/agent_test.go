@@ -3421,6 +3421,7 @@ func TestProcessMessage_ClearCommandClearsRoutedAgentSession(t *testing.T) {
 		},
 	}
 
+	cfg.Tools.Todo.Enabled = true
 	al := NewAgentLoop(cfg, bus.NewMessageBus(), &countingMockProvider{response: "LLM reply"})
 	mainAgent, ok := al.registry.GetAgent("main")
 	if !ok {
@@ -3456,12 +3457,33 @@ func TestProcessMessage_ClearCommandClearsRoutedAgentSession(t *testing.T) {
 	supportAgent.Sessions.SetHistory(sessionKey, supportHistory)
 	supportAgent.Sessions.SetSummary(sessionKey, "support summary")
 
+	for _, a := range []*AgentInstance{mainAgent, supportAgent} {
+		tool, _ := a.Tools.Get("todo")
+		r := tool.Execute(tools.WithToolSessionContext(context.Background(), a.ID, sessionKey, nil),
+			map[string]any{"action": "write", "todos": []any{map[string]any{"id": "1", "content": "keep working"}}})
+		if r.IsError {
+			t.Fatal(r.ForLLM)
+		}
+	}
+
 	response, err := al.processMessage(context.Background(), msg)
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
 	}
 	if response != "Chat history cleared!" {
 		t.Fatalf("response = %q, want clear confirmation", response)
+	}
+
+	for _, a := range []*AgentInstance{mainAgent, supportAgent} {
+		tool, _ := a.Tools.Get("todo")
+		r := tool.Execute(tools.WithToolSessionContext(context.Background(), a.ID, sessionKey, nil), map[string]any{"action": "read"})
+		want := `"total_count":1`
+		if a == supportAgent {
+			want = `"total_count":0`
+		}
+		if r.IsError || !strings.Contains(r.ForLLM, want) {
+			t.Fatalf("%s todo: %+v", a.ID, r)
+		}
 	}
 
 	if got := supportAgent.Sessions.GetHistory(sessionKey); len(got) != 0 {

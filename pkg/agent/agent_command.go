@@ -14,6 +14,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/sipeed/picoclaw/pkg/tools"
 )
 
 func (al *AgentLoop) handleCommand(
@@ -390,7 +391,15 @@ func (al *AgentLoop) buildCommandsRuntime(
 				opts.Dispatch.SessionScope,
 				opts.Dispatch.SessionAliases,
 			)
-			return al.contextManager.Clear(ctx, opts.SessionKey)
+			if err := al.contextManager.Clear(ctx, opts.SessionKey); err != nil {
+				return err
+			}
+			if tool, ok := agent.Tools.Get("todo"); ok {
+				if todo, ok := tool.(*tools.TodoTool); ok {
+					todo.ClearSession(agent.ID, opts.SessionKey)
+				}
+			}
+			return nil
 		}
 
 		rt.AskSideQuestion = func(ctx context.Context, question string) (string, error) {
