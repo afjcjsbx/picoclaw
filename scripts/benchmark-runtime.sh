@@ -3,8 +3,10 @@
 #
 # The benchmark starts a minimal, model-free gateway repeatedly and measures the
 # time until its /ready endpoint responds, peak RSS, and CPU time used during
-# startup. It is intentionally dependency-free except for bash, curl, Python 3,
-# and Linux /proc, which are available on GitHub's Ubuntu runners.
+# startup. Warm-up starts are excluded and measured starts alternate between
+# revisions to balance filesystem cache effects. It is intentionally
+# dependency-free except for bash, curl, Python 3, and Linux /proc, which are
+# available on GitHub's Ubuntu runners.
 
 set -euo pipefail
 
@@ -16,7 +18,7 @@ usage() {
 base_binary=""
 head_binary=""
 output_dir=""
-runs=5
+runs=10
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -36,7 +38,7 @@ command -v python3 >/dev/null
 
 mkdir -p "$output_dir"
 results_file="$output_dir/results.tsv"
-printf 'revision\trun\tstartup_ms\tpeak_rss_kib\tstartup_cpu_ms\n' > "$results_file"
+printf 'revision\trun\tstartup_ms\tpeak_rss_kib\tstartup_cpu_us\n' > "$results_file"
 
 free_port() {
   python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'
@@ -44,15 +46,14 @@ free_port() {
 
 read_proc_metrics() {
   local pid=$1
-  local rss_kib cpu_ticks hz
+  local rss_kib cpu_ns
   rss_kib=$(awk '/^VmHWM:/ { print $2; exit }' "/proc/$pid/status")
-  hz=$(getconf CLK_TCK)
-  cpu_ticks=$(awk '{ print $14 + $15 }' "/proc/$pid/stat")
-  printf '%s\t%s' "$rss_kib" "$((cpu_ticks * 1000 / hz))"
+  cpu_ns=$(awk '{ print $1; exit }' "/proc/$pid/schedstat")
+  printf '%s\t%s' "$rss_kib" "$((cpu_ns / 1000))"
 }
 
 run_once() {
-  local revision=$1 binary=$2 run=$3
+  local revision=$1 binary=$2 run=$3 record_result=$4
   local run_dir port pid started_ns now_ns elapsed_ms metrics ready=false
   run_dir=$(mktemp -d "$output_dir/${revision}-${run}.XXXXXX")
   port=$(free_port)
@@ -88,20 +89,28 @@ EOF
   now_ns=$(date +%s%N)
   elapsed_ms=$(((now_ns - started_ns) / 1000000))
   metrics=$(read_proc_metrics "$pid")
-  printf '%s\t%s\t%s\t%s\n' "$revision" "$run" "$elapsed_ms" "$metrics" >> "$results_file"
-  printf '%s run %s: startup=%sms, peak RSS=%s KiB, startup CPU=%sms\n' \
-    "$revision" "$run" "$elapsed_ms" "${metrics%%$'\t'*}" "${metrics##*$'\t'}"
+  if [[ "$record_result" == true ]]; then
+    printf '%s\t%s\t%s\t%s\n' "$revision" "$run" "$elapsed_ms" "$metrics" >> "$results_file"
+  fi
+  printf '%s run %s: startup=%sms, peak RSS=%s KiB, startup CPU=%sµs%s\n' \
+    "$revision" "$run" "$elapsed_ms" "${metrics%%$'\t'*}" "${metrics##*$'\t'}" \
+    "$([[ "$record_result" == true ]] && printf '' || printf ' (warm-up)')"
 
   kill -TERM "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
 }
 
-for revision in base head; do
-  binary=$base_binary
-  [[ "$revision" == head ]] && binary=$head_binary
-  for run in $(seq 1 "$runs"); do
-    run_once "$revision" "$binary" "$run"
-  done
+run_once base "$base_binary" warmup false
+run_once head "$head_binary" warmup false
+
+for run in $(seq 1 "$runs"); do
+  if (( run % 2 )); then
+    run_once base "$base_binary" "$run" true
+    run_once head "$head_binary" "$run" true
+  else
+    run_once head "$head_binary" "$run" true
+    run_once base "$base_binary" "$run" true
+  fi
 done
 
 python3 - "$results_file" "$output_dir" "$runs" <<'PY'
@@ -114,11 +123,11 @@ from pathlib import Path
 results_path = Path(sys.argv[1])
 output_dir = Path(sys.argv[2])
 runs = int(sys.argv[3])
-metrics = ("startup_ms", "peak_rss_kib", "startup_cpu_ms")
+metrics = ("startup_ms", "peak_rss_kib", "startup_cpu_us")
 labels = {
     "startup_ms": "Startup to /ready (ms)",
     "peak_rss_kib": "Peak resident memory (KiB)",
-    "startup_cpu_ms": "CPU time during startup (ms)",
+    "startup_cpu_us": "CPU time during startup (ms)",
 }
 
 values = {"base": {m: [] for m in metrics}, "head": {m: [] for m in metrics}}
@@ -127,38 +136,57 @@ with results_path.open(newline="") as f:
         for metric in metrics:
             values[row["revision"]][metric].append(int(row[metric]))
 
-summary = {
-    revision: {metric: statistics.median(samples) for metric, samples in data.items()}
-    for revision, data in values.items()
-}
+def describe(samples):
+    return {
+        "median": statistics.median(samples),
+        "mean": statistics.mean(samples),
+        "stdev": statistics.stdev(samples) if len(samples) > 1 else 0,
+    }
+
+summary = {revision: {metric: describe(samples) for metric, samples in data.items()} for revision, data in values.items()}
 (output_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
 
-def delta(base, head):
+def display(metric, value):
+    if metric == "startup_cpu_us":
+        return f"{value / 1000:.2f}"
+    return f"{value:g}"
+
+def signed_display(metric, value):
+    sign = "+" if value > 0 else "-" if value < 0 else ""
+    return sign + display(metric, abs(value))
+
+def delta(metric, base, head):
     absolute = head - base
     if base == 0:
-        return f"{absolute:+g}"
-    return f"{absolute:+g} ({absolute / base:+.1%})"
+        return signed_display(metric, absolute)
+    return f"{signed_display(metric, absolute)} ({absolute / base:+.1%})"
 
 lines = [
     "## PicoClaw runtime footprint",
     "",
-    f"Median of {runs} cold starts on this GitHub Actions runner.",
+    f"{runs} measured process starts per revision on this GitHub Actions runner; one warm-up start per revision is excluded.",
     "",
-    "| Metric | Base | PR | Delta |",
-    "| --- | ---: | ---: | ---: |",
+    "| Metric | Base median | PR median | Delta | Base mean ± σ | PR mean ± σ |",
+    "| --- | ---: | ---: | ---: | ---: | ---: |",
 ]
 for metric in metrics:
     base = summary["base"][metric]
     head = summary["head"][metric]
-    lines.append(f"| {labels[metric]} | {base:g} | {head:g} | {delta(base, head)} |")
+    lines.append(
+        f"| {labels[metric]} | {display(metric, base['median'])} | {display(metric, head['median'])} | "
+        f"{delta(metric, base['median'], head['median'])} | "
+        f"{display(metric, base['mean'])} ± {display(metric, base['stdev'])} | "
+        f"{display(metric, head['mean'])} ± {display(metric, head['stdev'])} |"
+    )
 
 regressions = [
     metric for metric in metrics
-    if summary["base"][metric] > 0 and summary["head"][metric] >= 2 * summary["base"][metric]
+    if summary["base"][metric]["median"] > 0
+    and summary["head"][metric]["median"] >= 2 * summary["base"][metric]["median"]
 ]
 lines.extend([
     "",
-    "The gateway uses the same minimal configuration for both revisions, starts without a model, and is measured until `GET /ready` succeeds. CPU is process CPU time (user + system); memory is Linux peak RSS. Results are informational because shared CI runners can vary.",
+    "The gateway uses the same minimal configuration for both revisions, starts without a model, and is measured until `GET /ready` succeeds. Measured starts alternate base/PR order to balance cache effects. CPU is process execution time from Linux `schedstat`; memory is Linux peak RSS.",
     "The CI gate fails when a PR median is at least 2x its non-zero base median.",
     "",
 ])
