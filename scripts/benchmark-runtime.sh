@@ -113,7 +113,7 @@ for run in $(seq 1 "$runs"); do
   fi
 done
 
-python3 - "$results_file" "$output_dir" "$runs" <<'PY'
+python3 - "$results_file" "$output_dir" "$runs" "$base_binary" "$head_binary" <<'PY'
 import csv
 import json
 import statistics
@@ -123,18 +123,23 @@ from pathlib import Path
 results_path = Path(sys.argv[1])
 output_dir = Path(sys.argv[2])
 runs = int(sys.argv[3])
-metrics = ("startup_ms", "peak_rss_kib", "startup_cpu_us")
+base_binary = Path(sys.argv[4])
+head_binary = Path(sys.argv[5])
+metrics = ("startup_ms", "peak_rss_kib", "startup_cpu_us", "binary_size_bytes")
 labels = {
     "startup_ms": "Startup to /ready (ms)",
     "peak_rss_kib": "Peak resident memory (KiB)",
     "startup_cpu_us": "CPU time during startup (ms)",
+    "binary_size_bytes": "Binary size (KiB)",
 }
 
 values = {"base": {m: [] for m in metrics}, "head": {m: [] for m in metrics}}
 with results_path.open(newline="") as f:
     for row in csv.DictReader(f, delimiter="\t"):
-        for metric in metrics:
+        for metric in metrics[:-1]:
             values[row["revision"]][metric].append(int(row[metric]))
+values["base"]["binary_size_bytes"].append(base_binary.stat().st_size)
+values["head"]["binary_size_bytes"].append(head_binary.stat().st_size)
 
 def describe(samples):
     return {
@@ -149,6 +154,8 @@ summary = {revision: {metric: describe(samples) for metric, samples in data.item
 def display(metric, value):
     if metric == "startup_cpu_us":
         return f"{value / 1000:.2f}"
+    if metric == "binary_size_bytes":
+        return f"{value / 1024:.2f}"
     return f"{value:g}"
 
 def signed_display(metric, value):
@@ -186,8 +193,8 @@ regressions = [
 ]
 lines.extend([
     "",
-    "The gateway uses the same minimal configuration for both revisions, starts without a model, and is measured until `GET /ready` succeeds. Measured starts alternate base/PR order to balance cache effects. CPU is process execution time from Linux `schedstat`; memory is Linux peak RSS.",
-    "The CI gate fails when a PR median is at least 2x its non-zero base median.",
+    "The gateway uses the same minimal configuration for both revisions, starts without a model, and is measured until `GET /ready` succeeds. Measured starts alternate base/PR order to balance cache effects. CPU is process execution time from Linux `schedstat`; memory is Linux peak RSS. Binary size is the compiled executable size.",
+    "The CI gate fails when a PR metric is at least 2x its non-zero base metric; sampled runtime metrics use their median.",
     "",
 ])
 (output_dir / "summary.md").write_text("\n".join(lines))
