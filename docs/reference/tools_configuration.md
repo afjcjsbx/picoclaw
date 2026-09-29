@@ -664,7 +664,7 @@ Replace it with a complete list (retain IDs across updates):
 
 Each item requires a unique, nonblank `id` (at most 128 UTF-8 bytes) and nonblank
 `content` (at most 1024 UTF-8 bytes). Status defaults to `pending` and accepts
-`pending`, `in_progress`, `completed`, `cancelled`. Priority defaults to `medium`
+`pending`, `in_progress`, `completed`, `canceled`. Priority defaults to `medium`
 and accepts `low`, `medium`, `high`. There may be at most 100 items per plan.
 Use `{"action":"write","todos":[]}` to clear a plan. Missing/null `todos` on a
 write is an error, preventing accidental deletion. Invalid replacements leave

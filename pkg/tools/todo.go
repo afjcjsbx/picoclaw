@@ -44,9 +44,10 @@ func (t *TodoTool) Name() string { return "todo" }
 func (t *TodoTool) Description() string {
 	return "Track a short plan for complex, multi-step work in the current session. Skip simple requests. " +
 		"Read before resuming or updating an existing plan; write replaces the entire list, so preserve stable IDs and unfinished steps. " +
-		"Mark steps in_progress when starting and completed only after verifying the work; use cancelled for abandoned steps. " +
+		"Mark steps in_progress when starting and completed only after verifying the work; use canceled for abandoned steps. " +
 		"Clear obsolete plans with write and todos: []. Plans are in memory only, lost on restart/reload; this tool does not execute or schedule tasks."
 }
+
 func (t *TodoTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object", "additionalProperties": false,
@@ -58,10 +59,18 @@ func (t *TodoTool) Parameters() map[string]any {
 				"items": map[string]any{
 					"type": "object", "additionalProperties": false,
 					"properties": map[string]any{
-						"id":       map[string]any{"type": "string", "minLength": 1, "maxLength": 128},
-						"content":  map[string]any{"type": "string", "minLength": 1, "maxLength": 1024},
-						"status":   map[string]any{"type": "string", "enum": []string{"pending", "in_progress", "completed", "cancelled"}, "default": "pending"},
-						"priority": map[string]any{"type": "string", "enum": []string{"low", "medium", "high"}, "default": "medium"},
+						"id":      map[string]any{"type": "string", "minLength": 1, "maxLength": 128},
+						"content": map[string]any{"type": "string", "minLength": 1, "maxLength": 1024},
+						"status": map[string]any{
+							"type":    "string",
+							"enum":    []string{"pending", "in_progress", "completed", "canceled"},
+							"default": "pending",
+						},
+						"priority": map[string]any{
+							"type":    "string",
+							"enum":    []string{"low", "medium", "high"},
+							"default": "medium",
+						},
 					},
 					"required": []string{"id", "content"},
 				},
@@ -136,7 +145,7 @@ func (t *TodoTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 				item.Priority = "medium"
 			}
 			switch item.Status {
-			case "pending", "in_progress", "completed", "cancelled":
+			case "pending", "in_progress", "completed", "canceled":
 			default:
 				return ErrorResult("invalid todo status")
 			}

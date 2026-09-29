@@ -14,9 +14,11 @@ import (
 func todoContext(agent, session string) context.Context {
 	return WithToolSessionContext(context.Background(), agent, session, nil)
 }
+
 func todoArgs(content string) map[string]any {
 	return map[string]any{"action": "write", "todos": []any{map[string]any{"id": "step-1", "content": content}}}
 }
+
 func readTodo(t *testing.T, tool *TodoTool, ctx context.Context) []TodoItem {
 	t.Helper()
 	result := tool.Execute(ctx, map[string]any{"action": "read"})
@@ -35,6 +37,7 @@ func readTodo(t *testing.T, tool *TodoTool, ctx context.Context) []TodoItem {
 	}
 	return data.Todos
 }
+
 func TestTodoLifecycleAndIsolation(t *testing.T) {
 	tool := NewTodoTool()
 	ctx := todoContext("main", "chat")
@@ -56,8 +59,11 @@ func TestTodoLifecycleAndIsolation(t *testing.T) {
 			t.Fatal("cross-session leak")
 		}
 	}
-	for _, status := range []string{"in_progress", "completed", "cancelled"} {
-		r := tool.Execute(ctx, map[string]any{"action": "write", "todos": []TodoItem{{"step-1", "implement", status, "high"}}})
+	for _, status := range []string{"in_progress", "completed", "canceled"} {
+		r := tool.Execute(
+			ctx,
+			map[string]any{"action": "write", "todos": []TodoItem{{"step-1", "implement", status, "high"}}},
+		)
 		if r.IsError {
 			t.Fatal(r.ForLLM)
 		}
@@ -72,6 +78,7 @@ func TestTodoLifecycleAndIsolation(t *testing.T) {
 		t.Fatal("clear failed")
 	}
 }
+
 func TestTodoInvalidWritesAreAtomic(t *testing.T) {
 	tool := NewTodoTool()
 	ctx := todoContext("main", "chat")
@@ -110,12 +117,13 @@ func TestTodoInvalidWritesAreAtomic(t *testing.T) {
 	if r := tool.Execute(context.Background(), todoArgs("x")); !r.IsError {
 		t.Fatal("missing context accepted")
 	}
-	cancelled, cancel := context.WithCancel(ctx)
+	canceled, cancel := context.WithCancel(ctx)
 	cancel()
-	if r := tool.Execute(cancelled, todoArgs("x")); !r.IsError {
-		t.Fatal("cancelled write accepted")
+	if r := tool.Execute(canceled, todoArgs("x")); !r.IsError {
+		t.Fatal("canceled write accepted")
 	}
 }
+
 func TestTodoConcurrentSessionsAndCapacity(t *testing.T) {
 	tool := NewTodoTool()
 	var wg sync.WaitGroup
@@ -150,17 +158,29 @@ type todoLegacyProvider struct {
 	calls int
 }
 
-func (p *todoLegacyProvider) Chat(ctx context.Context, messages []providers.Message, defs []providers.ToolDefinition, model string, options map[string]any) (*providers.LLMResponse, error) {
+func (p *todoLegacyProvider) Chat(
+	ctx context.Context,
+	messages []providers.Message,
+	defs []providers.ToolDefinition,
+	model string,
+	options map[string]any,
+) (*providers.LLMResponse, error) {
 	p.calls++
 	switch p.calls {
 	case 1:
-		return &providers.LLMResponse{ToolCalls: []providers.ToolCall{{ID: "read-plan", Name: "todo", Arguments: map[string]any{"action": "read"}}}}, nil
+		return &providers.LLMResponse{
+			ToolCalls: []providers.ToolCall{
+				{ID: "read-plan", Name: "todo", Arguments: map[string]any{"action": "read"}},
+			},
+		}, nil
 	case 2:
 		last := messages[len(messages)-1]
 		if last.Role != "tool" || !strings.Contains(last.Content, `"total_count":0`) {
 			p.t.Fatalf("child inherited parent plan: %+v", last)
 		}
-		return &providers.LLMResponse{ToolCalls: []providers.ToolCall{{ID: "write-plan", Name: "todo", Arguments: todoArgs("child plan")}}}, nil
+		return &providers.LLMResponse{
+			ToolCalls: []providers.ToolCall{{ID: "write-plan", Name: "todo", Arguments: todoArgs("child plan")}},
+		}, nil
 	default:
 		if !strings.Contains(messages[len(messages)-1].Content, "child plan") {
 			p.t.Fatal("child write failed")
@@ -168,6 +188,7 @@ func (p *todoLegacyProvider) Chat(ctx context.Context, messages []providers.Mess
 		return &providers.LLMResponse{Content: "done"}, nil
 	}
 }
+
 func TestTodoLegacySubagentIsolation(t *testing.T) {
 	tool := NewTodoTool()
 	ctx := todoContext("main", "parent")

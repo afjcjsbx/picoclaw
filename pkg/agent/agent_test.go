@@ -3476,7 +3476,10 @@ func TestProcessMessage_ClearCommandClearsRoutedAgentSession(t *testing.T) {
 
 	for _, a := range []*AgentInstance{mainAgent, supportAgent} {
 		tool, _ := a.Tools.Get("todo")
-		r := tool.Execute(tools.WithToolSessionContext(context.Background(), a.ID, sessionKey, nil), map[string]any{"action": "read"})
+		r := tool.Execute(
+			tools.WithToolSessionContext(context.Background(), a.ID, sessionKey, nil),
+			map[string]any{"action": "read"},
+		)
 		want := `"total_count":1`
 		if a == supportAgent {
 			want = `"total_count":0`
