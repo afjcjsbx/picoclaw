@@ -420,45 +420,11 @@ func (s *Store) GetMessageByID(ctx context.Context, messageID int64) (*Message, 
 
 // UpdateMessageReasoningContent updates reasoning_content for an existing message.
 func (s *Store) UpdateMessageReasoningContent(ctx context.Context, messageID int64, reasoningContent string) error {
-	result, err := s.db.ExecContext(
-		ctx,
-		"UPDATE messages SET reasoning_content = ? WHERE message_id = ?",
-		reasoningContent,
-		messageID,
-	)
-	if err != nil {
-		return fmt.Errorf("update message reasoning_content: %w", err)
-	}
-
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("update message reasoning_content rows affected: %w", err)
-	}
-	if rowsAffected == 0 {
-		return fmt.Errorf("message %d not found", messageID)
-	}
-	return nil
+	return s.updateMessageColumn(ctx, messageReasoningContentColumn, reasoningContent, messageID, messageReasoningContentColumn)
 }
 
 func (s *Store) UpdateMessageModelName(ctx context.Context, messageID int64, modelName string) error {
-	result, err := s.db.ExecContext(
-		ctx,
-		"UPDATE messages SET model_name = ? WHERE message_id = ?",
-		modelName,
-		messageID,
-	)
-	if err != nil {
-		return fmt.Errorf("update message model_name: %w", err)
-	}
-
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("update message model_name rows affected: %w", err)
-	}
-	if rowsAffected == 0 {
-		return fmt.Errorf("message %d not found", messageID)
-	}
-	return nil
+	return s.updateMessageColumn(ctx, messageModelNameColumn, modelName, messageID, messageModelNameColumn)
 }
 
 func (s *Store) UpdateMessageCreatedAt(ctx context.Context, messageID int64, createdAt time.Time) error {
@@ -467,21 +433,27 @@ func (s *Store) UpdateMessageCreatedAt(ctx context.Context, messageID int64, cre
 		return fmt.Errorf("message %d created_at cannot be zero", messageID)
 	}
 
-	result, err := s.db.ExecContext(
-		ctx,
-		"UPDATE messages SET created_at = ? WHERE message_id = ?",
-		formatSQLiteTime(storedCreatedAt),
-		messageID,
-	)
+	return s.updateMessageColumn(ctx, messageCreatedAtColumn, formatSQLiteTime(storedCreatedAt), messageID, messageCreatedAtColumn)
+}
+
+const (
+	messageReasoningContentColumn = "reasoning_content"
+	messageModelNameColumn        = "model_name"
+	messageCreatedAtColumn        = "created_at"
+)
+
+func (s *Store) updateMessageColumn(ctx context.Context, column string, value any, messageID int64, op string) error {
+	result, err := s.db.ExecContext(ctx,
+		"UPDATE messages SET "+column+" = ? WHERE message_id = ?", value, messageID)
 	if err != nil {
-		return fmt.Errorf("update message created_at: %w", err)
+		return fmt.Errorf("update message %s: %w", op, err)
 	}
 
-	rowsAffected, err := result.RowsAffected()
+	rows, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("update message created_at rows affected: %w", err)
+		return fmt.Errorf("update message %s rows affected: %w", op, err)
 	}
-	if rowsAffected == 0 {
+	if rows == 0 {
 		return fmt.Errorf("message %d not found", messageID)
 	}
 	return nil
