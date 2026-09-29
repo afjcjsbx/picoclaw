@@ -670,7 +670,7 @@ func (p *KeenableSearchProvider) Search(
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("X-Keenable-Title", keenableAppTitle)
 		if apiKey != "" {
-			req.Header.Set("X-API-Key", apiKey)
+			req.Header.Set("X-Api-Key", apiKey)
 		}
 
 		resp, err := p.client.Do(req)

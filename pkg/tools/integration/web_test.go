@@ -2504,7 +2504,7 @@ func TestWebTool_KeenableSearch_Endpoints(t *testing.T) {
 			wantTitle: "picoclaw",
 		},
 		{
-			name:      "keyed uses X-API-Key on the keyed endpoint",
+			name:      "keyed uses X-Api-Key on the keyed endpoint",
 			apiKeys:   []string{"kn-test-key"},
 			wantPath:  "/v1/search",
 			wantKey:   "kn-test-key",
@@ -2520,8 +2520,8 @@ func TestWebTool_KeenableSearch_Endpoints(t *testing.T) {
 				if r.URL.Path != tt.wantPath {
 					t.Errorf("path = %s, want %s", r.URL.Path, tt.wantPath)
 				}
-				if got := r.Header.Get("X-API-Key"); got != tt.wantKey {
-					t.Errorf("X-API-Key = %q, want %q", got, tt.wantKey)
+				if got := r.Header.Get("X-Api-Key"); got != tt.wantKey {
+					t.Errorf("X-Api-Key = %q, want %q", got, tt.wantKey)
 				}
 				if got := r.Header.Get("X-Keenable-Title"); got != tt.wantTitle {
 					t.Errorf("X-Keenable-Title = %q, want %q", got, tt.wantTitle)
@@ -2706,7 +2706,7 @@ func TestWebTool_KeenableSearch_Errors(t *testing.T) {
 func TestWebTool_KeenableSearch_KeyFailover(t *testing.T) {
 	var seen []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		key := r.Header.Get("X-API-Key")
+		key := r.Header.Get("X-Api-Key")
 		seen = append(seen, key)
 		w.Header().Set("Content-Type", "application/json")
 		if key == "key1" {
