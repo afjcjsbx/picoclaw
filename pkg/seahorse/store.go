@@ -420,7 +420,13 @@ func (s *Store) GetMessageByID(ctx context.Context, messageID int64) (*Message, 
 
 // UpdateMessageReasoningContent updates reasoning_content for an existing message.
 func (s *Store) UpdateMessageReasoningContent(ctx context.Context, messageID int64, reasoningContent string) error {
-	return s.updateMessageColumn(ctx, messageReasoningContentColumn, reasoningContent, messageID, messageReasoningContentColumn)
+	return s.updateMessageColumn(
+		ctx,
+		messageReasoningContentColumn,
+		reasoningContent,
+		messageID,
+		messageReasoningContentColumn,
+	)
 }
 
 func (s *Store) UpdateMessageModelName(ctx context.Context, messageID int64, modelName string) error {
@@ -433,7 +439,13 @@ func (s *Store) UpdateMessageCreatedAt(ctx context.Context, messageID int64, cre
 		return fmt.Errorf("message %d created_at cannot be zero", messageID)
 	}
 
-	return s.updateMessageColumn(ctx, messageCreatedAtColumn, formatSQLiteTime(storedCreatedAt), messageID, messageCreatedAtColumn)
+	return s.updateMessageColumn(
+		ctx,
+		messageCreatedAtColumn,
+		formatSQLiteTime(storedCreatedAt),
+		messageID,
+		messageCreatedAtColumn,
+	)
 }
 
 const (
