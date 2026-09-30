@@ -926,6 +926,40 @@ func TestSend_AliasRecipientResolvesForAdmin(t *testing.T) {
 	}
 }
 
+func TestResolveAliasChatID_RejectsAmbiguousContactsBeforeChatLookup(t *testing.T) {
+	ch := newTestChannel(t)
+	chatLookup := make(chan struct{}, 1)
+	rpc, cleanup := newMockRPC(t, func(req rpcRequest) string {
+		switch req.Method {
+		case "get_contacts":
+			return rpcResult(req, []dcContact{
+				{ID: 12, Address: "alice@example.org", DisplayName: "Alice"},
+				{ID: 13, Address: "other-alice@example.org", DisplayName: "Alice"},
+			})
+		case "get_chatlist_entries":
+			chatLookup <- struct{}{}
+			return rpcResult(req, []int64{88})
+		case "get_full_chat_by_id":
+			return rpcResult(req, dcChat{ID: 88, Name: "Alice"})
+		default:
+			return rpcUnexpectedMethod(req)
+		}
+	})
+	defer cleanup()
+	ch.rpc = rpc
+	ch.accountID = 7
+
+	_, err := ch.resolveAliasChatID(context.Background(), "Alice")
+	if err == nil || !strings.Contains(err.Error(), "ambiguous recipient") {
+		t.Fatalf("resolveAliasChatID error = %v, want ambiguous recipient", err)
+	}
+	select {
+	case <-chatLookup:
+		t.Fatal("resolveAliasChatID looked up chats despite ambiguous contacts")
+	default:
+	}
+}
+
 // TestSendMedia verifies SendMedia resolves a media ref to a local path and
 // drives send_msg with the expected MessageData, returning the new message id.
 func TestSendMedia(t *testing.T) {
