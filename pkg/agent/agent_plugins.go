@@ -55,9 +55,13 @@ func (al *AgentLoop) startPlugins() *plugins.Manager {
 		return nil
 	}
 	binding := &pluginBinding{}
-	binding.manager = plugins.NewManager(cfg.Plugins, cfg.WorkspacePath(), func(ctx context.Context, cap plugins.Capabilities) []plugins.Diagnostic {
-		return al.publishPlugin(ctx, binding, registry, cfg, cap)
-	})
+	binding.manager = plugins.NewManager(
+		cfg.Plugins,
+		cfg.WorkspacePath(),
+		func(ctx context.Context, capabilities plugins.Capabilities) []plugins.Diagnostic {
+			return al.publishPlugin(ctx, binding, registry, cfg, capabilities)
+		},
+	)
 	al.plugins.binding = binding
 	binding.manager.Start()
 	return binding.manager
@@ -78,10 +82,19 @@ func (al *AgentLoop) waitPlugins(ctx context.Context) {
 	}
 }
 
-func (al *AgentLoop) publishPlugin(ctx context.Context, binding *pluginBinding, registry *AgentRegistry, cfg *config.Config, cap plugins.Capabilities) []plugins.Diagnostic {
+func (al *AgentLoop) publishPlugin(
+	ctx context.Context,
+	binding *pluginBinding,
+	registry *AgentRegistry,
+	cfg *config.Config,
+	capabilities plugins.Capabilities,
+) []plugins.Diagnostic {
 	var diagnostics []plugins.Diagnostic
 	report := func(component string, err error) {
-		diagnostics = append(diagnostics, plugins.Diagnostic{Plugin: cap.ID, Component: component, Message: err.Error()})
+		diagnostics = append(
+			diagnostics,
+			plugins.Diagnostic{Plugin: capabilities.ID, Component: component, Message: err.Error()},
+		)
 	}
 	if ctx.Err() != nil {
 		return nil
@@ -89,7 +102,7 @@ func (al *AgentLoop) publishPlugin(ctx context.Context, binding *pluginBinding, 
 	binding.mu.Lock()
 	defer binding.mu.Unlock()
 	for _, id := range registry.ListAgentIDs() {
-		if !pluginAllowsAgent(cap.Entry, id) {
+		if !pluginAllowsAgent(capabilities.Entry, id) {
 			continue
 		}
 		agent, ok := registry.GetAgent(id)
@@ -106,25 +119,34 @@ func (al *AgentLoop) publishPlugin(ctx context.Context, binding *pluginBinding, 
 			}
 			return added
 		}
-		if len(cap.Skills) > 0 {
-			resource := &plugins.ResourceTool{ID: cap.ID, Root: cap.Root, Lifetime: ctx}
+		if len(capabilities.Skills) > 0 {
+			resource := &plugins.ResourceTool{ID: capabilities.ID, Root: capabilities.Root, Lifetime: ctx}
 			register(resource, false)
-			entries := append([]skills.PluginSkill(nil), cap.Skills...)
+			entries := append([]skills.PluginSkill(nil), capabilities.Skills...)
 			for i := range entries {
-				entries[i].Body = fmt.Sprintf("Plugin root: %s\nRead bundled references with `%s` using a plugin-relative path.\n\n%s", cap.Root, resource.Name(), entries[i].Body)
+				entries[i].Body = fmt.Sprintf(
+					"Plugin root: %s\nRead bundled references with `%s` using a plugin-relative path.\n\n%s",
+					capabilities.Root,
+					resource.Name(),
+					entries[i].Body,
+				)
 			}
-			agent.ContextBuilder.skillsLoader.SetPluginSkills(cap.ID, entries)
+			agent.ContextBuilder.skillsLoader.SetPluginSkills(capabilities.ID, entries)
 			agent.ContextBuilder.InvalidateCache()
-			binding.skills = append(binding.skills, pluginSkillRegistration{agent.ContextBuilder, cap.ID})
+			binding.skills = append(binding.skills, pluginSkillRegistration{agent.ContextBuilder, capabilities.ID})
 		}
 		registeredMCP := false
-		for _, tool := range cap.Tools {
+		for _, tool := range capabilities.Tools {
 			// Agent mcpServers declarations use the installation-qualified server.
-			if !agent.AllowsMCPServer(cap.ID + ":" + tool.Server) {
+			if !agent.AllowsMCPServer(capabilities.ID + ":" + tool.Server) {
 				continue
 			}
-			hidden := cfg.Tools.MCP.Discovery.Enabled && (cfg.Tools.MCP.Discovery.UseBM25 || cfg.Tools.MCP.Discovery.UseRegex)
-			if register(tool.ForAgent(agent.Workspace, cfg.Tools.MCP.GetMaxInlineTextChars(), al.runtimeEvents), hidden) {
+			hidden := cfg.Tools.MCP.Discovery.Enabled &&
+				(cfg.Tools.MCP.Discovery.UseBM25 || cfg.Tools.MCP.Discovery.UseRegex)
+			if register(
+				tool.ForAgent(agent.Workspace, cfg.Tools.MCP.GetMaxInlineTextChars(), al.runtimeEvents),
+				hidden,
+			) {
 				registeredMCP = true
 			}
 		}
@@ -147,23 +169,32 @@ func (al *AgentLoop) publishPlugin(ctx context.Context, binding *pluginBinding, 
 			}
 		}
 	}
-	for _, hook := range cap.Hooks {
+	for _, hook := range capabilities.Hooks {
 		if ctx.Err() != nil {
 			break
 		}
 		initCtx, cancel := context.WithTimeout(ctx, cfg.Plugins.InitTimeout())
-		opts := ProcessHookOptions{Command: hook.Command, Dir: hook.Dir, Env: hook.Env, ExactEnv: true, Config: hook.Config,
-			Observe: len(hook.Observe) > 0, ObserveKinds: hook.Observe,
-			InterceptLLM:  slices.Contains(hook.Intercept, "before_llm") || slices.Contains(hook.Intercept, "after_llm"),
-			InterceptTool: slices.Contains(hook.Intercept, "before_tool") || slices.Contains(hook.Intercept, "after_tool"),
-			ApproveTool:   slices.Contains(hook.Intercept, "approve_tool")}
+		opts := ProcessHookOptions{
+			Command:      hook.Command,
+			Dir:          hook.Dir,
+			Env:          hook.Env,
+			ExactEnv:     true,
+			Config:       hook.Config,
+			Observe:      len(hook.Observe) > 0,
+			ObserveKinds: hook.Observe,
+			InterceptLLM: slices.Contains(hook.Intercept, "before_llm") ||
+				slices.Contains(hook.Intercept, "after_llm"),
+			InterceptTool: slices.Contains(hook.Intercept, "before_tool") ||
+				slices.Contains(hook.Intercept, "after_tool"),
+			ApproveTool: slices.Contains(hook.Intercept, "approve_tool"),
+		}
 		process, err := NewProcessHook(initCtx, "plugin:"+hook.Name, opts)
 		cancel()
 		if err != nil {
 			report("hook:"+hook.Name, err)
 			continue
 		}
-		scoped := &pluginHook{ProcessHook: process, agents: cap.Entry.Agents, stages: hook.Intercept}
+		scoped := &pluginHook{ProcessHook: process, agents: capabilities.Entry.Agents, stages: hook.Intercept}
 		name := "plugin:" + hook.Name
 		if err := al.MountHook(HookRegistration{Name: name, Source: HookSourceProcess, Hook: scoped}); err != nil {
 			_ = process.Close()

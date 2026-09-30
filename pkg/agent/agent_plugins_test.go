@@ -13,6 +13,7 @@ import (
 	"time"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
+
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/plugins"
 	"github.com/sipeed/picoclaw/pkg/providers"
@@ -27,30 +28,53 @@ func agentPluginFixture(t *testing.T, cfg *config.Config, url string) string {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(root, path), data, 0600); err != nil {
+		if err := os.WriteFile(filepath.Join(root, path), data, 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
 	write("plugin.json", map[string]any{"$schema": plugins.ManifestSchema, "name": "test-plugin"})
 	if url != "" {
-		write("mcp.json", map[string]any{"$schema": plugins.MCPSchema, "mcpServers": map[string]any{"server": map[string]string{"type": "streamable-http", "url": url}}})
+		write(
+			"mcp.json",
+			map[string]any{
+				"$schema":    plugins.MCPSchema,
+				"mcpServers": map[string]any{"server": map[string]string{"type": "streamable-http", "url": url}},
+			},
+		)
 	}
-	if err := os.MkdirAll(filepath.Join(root, "skills", "greet"), 0700); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, "skills", "greet"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "skills", "greet", "SKILL.md"), []byte("---\nname: greet\ndescription: Greeting skill\n---\nSay hello."), 0600); err != nil {
+	if err := os.WriteFile(
+		filepath.Join(root, "skills", "greet", "SKILL.md"),
+		[]byte("---\nname: greet\ndescription: Greeting skill\n---\nSay hello."),
+		0o600,
+	); err != nil {
 		t.Fatal(err)
 	}
-	cfg.Plugins = config.PluginsConfig{Enabled: true, Directories: []string{filepath.Join(root, "none")}, DataDir: t.TempDir(), InitTimeoutMS: 2000, StartupWaitMS: 3000, Entries: map[string]config.PluginEntryConfig{"test-plugin": {Enabled: true, Path: root}}}
+	cfg.Plugins = config.PluginsConfig{
+		Enabled:       true,
+		Directories:   []string{filepath.Join(root, "none")},
+		DataDir:       t.TempDir(),
+		InitTimeoutMS: 2000,
+		StartupWaitMS: 3000,
+		Entries:       map[string]config.PluginEntryConfig{"test-plugin": {Enabled: true, Path: root}},
+	}
 	return root
 }
 
 func TestAgentPluginsLoadExecuteAndReload(t *testing.T) {
 	server := sdk.NewServer(&sdk.Implementation{Name: "agent-plugin", Version: "1"}, nil)
-	sdk.AddTool(server, &sdk.Tool{Name: "hello", Description: "Say hello"}, func(context.Context, *sdk.CallToolRequest, map[string]any) (*sdk.CallToolResult, any, error) {
-		return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: "plugin says hello"}}}, nil, nil
-	})
-	httpServer := httptest.NewServer(sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, nil))
+	sdk.AddTool(
+		server,
+		&sdk.Tool{Name: "hello", Description: "Say hello"},
+		func(context.Context, *sdk.CallToolRequest, map[string]any) (*sdk.CallToolResult, any, error) {
+			return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: "plugin says hello"}}}, nil, nil
+		},
+	)
+	httpServer := httptest.NewServer(
+		sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, nil),
+	)
 	defer httpServer.Close()
 	al, cfg, _, _, cleanup := newTestAgentLoop(t)
 	defer cleanup()
@@ -113,12 +137,23 @@ func TestAgentPluginsAllowlist(t *testing.T) {
 func TestPluginHookScope(t *testing.T) {
 	// A nil ProcessHook would panic if a denied event or stage reached it.
 	h := &pluginHook{agents: []string{"allowed"}, stages: []string{"after_llm"}}
-	request := &LLMHookRequest{Meta: HookMeta{AgentID: "allowed"}, Messages: []providers.Message{{Role: "user", Content: "hi"}}}
-	if _, decision, err := h.BeforeLLM(context.Background(), request); err != nil || decision.Action != HookActionContinue {
+	request := &LLMHookRequest{
+		Meta:     HookMeta{AgentID: "allowed"},
+		Messages: []providers.Message{{Role: "user", Content: "hi"}},
+	}
+	if _, decision, err := h.BeforeLLM(
+		context.Background(),
+		request,
+	); err != nil ||
+		decision.Action != HookActionContinue {
 		t.Fatalf("%+v %v", decision, err)
 	}
 	response := &LLMHookResponse{Meta: HookMeta{AgentID: "denied"}}
-	if _, decision, err := h.AfterLLM(context.Background(), response); err != nil || decision.Action != HookActionContinue {
+	if _, decision, err := h.AfterLLM(
+		context.Background(),
+		response,
+	); err != nil ||
+		decision.Action != HookActionContinue {
 		t.Fatalf("%+v %v", decision, err)
 	}
 }
@@ -137,7 +172,7 @@ func TestAgentPluginsHookLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer source.Close()
-	destination, err := os.OpenFile(filepath.Join(root, "hook-helper.exe"), os.O_CREATE|os.O_WRONLY, 0700)
+	destination, err := os.OpenFile(filepath.Join(root, "hook-helper.exe"), os.O_CREATE|os.O_WRONLY, 0o700)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,15 +184,25 @@ func TestAgentPluginsHookLifecycle(t *testing.T) {
 	if closeErr != nil {
 		t.Fatal(closeErr)
 	}
-	extension := map[string]any{"hooks": []any{map[string]any{"name": "rewrite", "command": "./hook-helper.exe", "args": []string{"-test.run=^TestProcessHook_HelperProcess$"}, "env": map[string]string{"PICOCLAW_HOOK_HELPER": "1", "PICOCLAW_HOOK_MODE": "rewrite"}, "intercept": []string{"after_llm"}}}}
+	extension := map[string]any{
+		"hooks": []any{
+			map[string]any{
+				"name":      "rewrite",
+				"command":   "./hook-helper.exe",
+				"args":      []string{"-test.run=^TestProcessHook_HelperProcess$"},
+				"env":       map[string]string{"PICOCLAW_HOOK_HELPER": "1", "PICOCLAW_HOOK_MODE": "rewrite"},
+				"intercept": []string{"after_llm"},
+			},
+		},
+	}
 	data, err := json.Marshal(extension)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Mkdir(filepath.Join(root, plugins.ExtensionNamespace), 0700); err != nil {
+	if err := os.Mkdir(filepath.Join(root, plugins.ExtensionNamespace), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, plugins.ExtensionNamespace, "hooks.json"), data, 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, plugins.ExtensionNamespace, "hooks.json"), data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	entry := cfg.Plugins.Entries["test-plugin"]
@@ -165,20 +210,35 @@ func TestAgentPluginsHookLifecycle(t *testing.T) {
 	entry.Agents = []string{al.registry.GetDefaultAgent().ID}
 	cfg.Plugins.Entries["test-plugin"] = entry
 	al.waitPlugins(context.Background())
-	request, _ := al.hooks.BeforeLLM(context.Background(), &LLMHookRequest{Meta: HookMeta{AgentID: al.registry.GetDefaultAgent().ID}, Model: "original"})
+	request, _ := al.hooks.BeforeLLM(
+		context.Background(),
+		&LLMHookRequest{Meta: HookMeta{AgentID: al.registry.GetDefaultAgent().ID}, Model: "original"},
+	)
 	if request.Model != "original" {
 		t.Fatal("undeclared hook stage was invoked")
 	}
-	denied, _ := al.hooks.AfterLLM(context.Background(), &LLMHookResponse{Meta: HookMeta{AgentID: "other-agent"}, Response: &providers.LLMResponse{Content: "hello"}})
+	denied, _ := al.hooks.AfterLLM(
+		context.Background(),
+		&LLMHookResponse{Meta: HookMeta{AgentID: "other-agent"}, Response: &providers.LLMResponse{Content: "hello"}},
+	)
 	if denied.Response.Content != "hello" {
 		t.Fatal("hook agent scope was ignored")
 	}
-	response, decision := al.hooks.AfterLLM(context.Background(), &LLMHookResponse{Meta: HookMeta{AgentID: al.registry.GetDefaultAgent().ID}, Response: &providers.LLMResponse{Content: "hello"}})
+	response, decision := al.hooks.AfterLLM(
+		context.Background(),
+		&LLMHookResponse{
+			Meta:     HookMeta{AgentID: al.registry.GetDefaultAgent().ID},
+			Response: &providers.LLMResponse{Content: "hello"},
+		},
+	)
 	if decision.Action != HookActionContinue || response.Response.Content != "hello|ipc" {
 		t.Fatalf("response=%+v diagnostics=%+v", response, al.PluginStatuses())
 	}
 	al.closePlugins(false)
-	response, _ = al.hooks.AfterLLM(context.Background(), &LLMHookResponse{Response: &providers.LLMResponse{Content: "hello"}})
+	response, _ = al.hooks.AfterLLM(
+		context.Background(),
+		&LLMHookResponse{Response: &providers.LLMResponse{Content: "hello"}},
+	)
 	if response.Response.Content != "hello" {
 		t.Fatal("hook survived unload")
 	}

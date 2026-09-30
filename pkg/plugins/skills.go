@@ -38,7 +38,7 @@ func discoverSkills(id, root string) ([]skills.PluginSkill, []Diagnostic) {
 		if err != nil || !info.IsDir() {
 			continue
 		}
-		if _, err := os.Lstat(path); os.IsNotExist(err) {
+		if _, statErr := os.Lstat(path); os.IsNotExist(statErr) {
 			continue
 		}
 		content, err := ReadPackageFile(root, path)

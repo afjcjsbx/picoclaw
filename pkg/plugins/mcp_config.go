@@ -9,8 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/sipeed/picoclaw/pkg/config"
 	"golang.org/x/net/http/httpguts"
+
+	"github.com/sipeed/picoclaw/pkg/config"
 )
 
 type ServerSpec struct {
@@ -34,7 +35,7 @@ func ParseMCP(data []byte) (map[string]ServerSpec, []Diagnostic, error) {
 		}
 	}
 	var schema string
-	if err := decodeField(fields["$schema"], &schema); err != nil || schema != MCPSchema {
+	if err = decodeField(fields["$schema"], &schema); err != nil || schema != MCPSchema {
 		return nil, nil, fmt.Errorf("missing or unsupported MCP $schema")
 	}
 	entries, err := object(fields["mcpServers"])
@@ -152,7 +153,8 @@ func validateCommand(command string) error {
 
 func validateEndpoint(endpoint string) error {
 	u, err := url.Parse(endpoint)
-	if err != nil || u == nil || u.Host == "" || u.User != nil || u.Fragment != "" || strings.Contains(endpoint, "#") || (u.Scheme != "https" && u.Scheme != "http") {
+	if err != nil || u == nil || u.Host == "" || u.User != nil || u.Fragment != "" || strings.Contains(endpoint, "#") ||
+		(u.Scheme != "https" && u.Scheme != "http") {
 		return fmt.Errorf("invalid MCP endpoint")
 	}
 	if u.Scheme == "http" && u.Hostname() != "localhost" {

@@ -46,8 +46,8 @@ func Environment(root, data string, configured map[string]string) []string {
 }
 
 func prepareDataDirectory(base, id string) (string, error) {
-	if err := os.MkdirAll(base, 0o700); err != nil {
-		return "", err
+	if mkdirErr := os.MkdirAll(base, 0o700); mkdirErr != nil {
+		return "", mkdirErr
 	}
 	base, err := canonicalRoot(base)
 	if err != nil {
@@ -58,8 +58,8 @@ func prepareDataDirectory(base, id string) (string, error) {
 		return "", err
 	}
 	defer root.Close()
-	if err := root.MkdirAll(id, 0o700); err != nil {
-		return "", err
+	if mkdirErr := root.MkdirAll(id, 0o700); mkdirErr != nil {
+		return "", mkdirErr
 	}
 	info, err := root.Lstat(id)
 	if err != nil {

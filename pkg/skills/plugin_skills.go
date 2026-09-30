@@ -67,7 +67,12 @@ func ParsePluginSkill(pluginID, path string, content []byte) (PluginSkill, error
 			}
 		}
 	}
-	result.Info = SkillInfo{Name: pluginID + ":" + name, Path: path, Source: "plugin:" + pluginID, Description: description}
+	result.Info = SkillInfo{
+		Name:        pluginID + ":" + name,
+		Path:        path,
+		Source:      "plugin:" + pluginID,
+		Description: description,
+	}
 	result.Body = body
 	return result, nil
 }

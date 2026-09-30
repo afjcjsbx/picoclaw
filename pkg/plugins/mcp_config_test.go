@@ -7,7 +7,8 @@ import (
 
 func TestMCPServerBoundaries(t *testing.T) {
 	for _, invalid := range []any{
-		nil, map[string]any{"type": "http", "url": "https://example.org"},
+		nil,
+		map[string]any{"type": "http", "url": "https://example.org"},
 		map[string]any{"type": "stdio", "command": "/bin/sh"},
 		map[string]any{"type": "stdio", "command": "echo", "url": "https://example.org"},
 		map[string]any{"type": "stdio", "command": "echo", "env": map[string]any{"PLUGIN_ROOT": "/tmp"}},
@@ -18,7 +19,15 @@ func TestMCPServerBoundaries(t *testing.T) {
 		map[string]any{"type": "sse", "url": "https://example.org", "headers": map[string]string{"X-Test": "a", "x-test": "b"}},
 		map[string]any{"type": "sse", "url": "https://example.org", "headers": map[string]string{"X-Test": "a\r\nb"}},
 	} {
-		data, _ := json.Marshal(map[string]any{"$schema": MCPSchema, "mcpServers": map[string]any{"bad": invalid, "good": map[string]any{"type": "stdio", "command": "echo"}}})
+		data, _ := json.Marshal(
+			map[string]any{
+				"$schema": MCPSchema,
+				"mcpServers": map[string]any{
+					"bad":  invalid,
+					"good": map[string]any{"type": "stdio", "command": "echo"},
+				},
+			},
+		)
 		servers, diagnostics, err := ParseMCP(data)
 		if err != nil || len(servers) != 1 || len(diagnostics) != 1 {
 			t.Fatalf("%s: servers=%v diagnostics=%v err=%v", data, servers, diagnostics, err)

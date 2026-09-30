@@ -65,9 +65,11 @@ func pluginDuration(ms int, fallback time.Duration) time.Duration {
 func (c PluginsConfig) InitTimeout() time.Duration {
 	return pluginDuration(c.InitTimeoutMS, 15*time.Second)
 }
+
 func (c PluginsConfig) CallTimeout() time.Duration {
 	return pluginDuration(c.CallTimeoutMS, 60*time.Second)
 }
+
 func (c PluginsConfig) StartupWait() time.Duration {
 	return pluginDuration(c.StartupWaitMS, 15*time.Second)
 }

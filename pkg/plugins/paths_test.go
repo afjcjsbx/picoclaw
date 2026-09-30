@@ -13,10 +13,10 @@ func TestPackageContainment(t *testing.T) {
 		t.Fatal(err)
 	}
 	outside := filepath.Join(t.TempDir(), "secret")
-	if err := os.WriteFile(outside, []byte("secret"), 0600); err != nil {
+	if err := os.WriteFile(outside, []byte("secret"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "inside"), []byte("safe"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "inside"), []byte("safe"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
@@ -46,8 +46,12 @@ func TestEnvironmentAndCWD(t *testing.T) {
 	if value != "/root/${PLUGIN_DATA}//data/${HOME}" {
 		t.Fatal(value)
 	}
-	env := strings.Join(Environment(root, data, map[string]string{"VALUE": "${PLUGIN_ROOT}", "PLUGIN_ROOT": "bad"}), "\n")
-	if strings.Contains(env, "PRIVATE_TEST_TOKEN") || !strings.Contains(env, "PLUGIN_ROOT="+root) || !strings.Contains(env, "VALUE="+root) {
+	env := strings.Join(
+		Environment(root, data, map[string]string{"VALUE": "${PLUGIN_ROOT}", "PLUGIN_ROOT": "bad"}),
+		"\n",
+	)
+	if strings.Contains(env, "PRIVATE_TEST_TOKEN") || !strings.Contains(env, "PLUGIN_ROOT="+root) ||
+		!strings.Contains(env, "VALUE="+root) {
 		t.Fatal(env)
 	}
 	for _, value := range []string{"./", "${PLUGIN_ROOT}", "${PLUGIN_DATA}"} {

@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
+
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/mcp"
 	"github.com/sipeed/picoclaw/pkg/tools"
@@ -43,9 +44,23 @@ func capabilityName(id, server, tool string) string {
 	return fmt.Sprintf("%s_%x", base, hash[:8])
 }
 
-func newPluginTool(id, server string, definition *sdk.Tool, manager *mcp.Manager, lifetime context.Context, timeout time.Duration) *PluginTool {
-	return &PluginTool{MCPTool: tools.NewMCPTool(manager, server, definition), ID: id, Server: server,
-		definition: definition, manager: manager, lifetime: lifetime, timeout: timeout, name: capabilityName(id, server, definition.Name)}
+func newPluginTool(
+	id, server string,
+	definition *sdk.Tool,
+	manager *mcp.Manager,
+	lifetime context.Context,
+	timeout time.Duration,
+) *PluginTool {
+	return &PluginTool{
+		MCPTool:    tools.NewMCPTool(manager, server, definition),
+		ID:         id,
+		Server:     server,
+		definition: definition,
+		manager:    manager,
+		lifetime:   lifetime,
+		timeout:    timeout,
+		name:       capabilityName(id, server, definition.Name),
+	}
 }
 
 func (t *PluginTool) Name() string { return t.name }
@@ -88,12 +103,19 @@ func (t *ResourceTool) Name() string {
 	// server/tool tuple, including a server literally named "package".
 	return strings.TrimPrefix(capabilityName(t.ID, "package", "read_resource"), "mcp_")
 }
+
 func (t *ResourceTool) Description() string {
 	return "Read a UTF-8 resource bundled in plugin " + t.ID + "; provide a path relative to its root (for example skills/greet/references/help.md)."
 }
+
 func (t *ResourceTool) Parameters() map[string]any {
-	return map[string]any{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}}, "required": []string{"path"}}
+	return map[string]any{
+		"type":       "object",
+		"properties": map[string]any{"path": map[string]any{"type": "string"}},
+		"required":   []string{"path"},
+	}
 }
+
 func (t *ResourceTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	if t.Lifetime != nil && t.Lifetime.Err() != nil {
 		return tools.ErrorResult("plugin is closed")

@@ -14,7 +14,12 @@ import (
 func TestDiscoveryRequiresActivationAndRejectsAmbiguity(t *testing.T) {
 	workspace := t.TempDir()
 	for _, folder := range []string{"one", "two"} {
-		writeTestFile(t, workspace, filepath.Join("plugins", folder, "plugin.json"), manifestJSON(map[string]any{"name": "demo"}))
+		writeTestFile(
+			t,
+			workspace,
+			filepath.Join("plugins", folder, "plugin.json"),
+			manifestJSON(map[string]any{"name": "demo"}),
+		)
 	}
 	cfg := config.PluginsConfig{Enabled: true, Directories: []string{"plugins"}, DataDir: t.TempDir()}
 	if items, _ := discover(cfg, workspace); len(items) != 0 {
@@ -42,12 +47,24 @@ func TestComponentPathFailuresPreserveOtherCapabilities(t *testing.T) {
 	writeTestFile(t, root, "plugin.json", manifestJSON(nil))
 	writeTestFile(t, root, "skills/good/SKILL.md", []byte("---\nname: good\ndescription: Good skill\n---\nGood."))
 	writeTestFile(t, root, "skills/bad/SKILL.md", []byte("---\nname: other\ndescription: Invalid\n---\nBad."))
-	writeTestFile(t, root, "skills/nested/deeper/SKILL.md", []byte("---\nname: deeper\ndescription: Not discovered\n---\nNested."))
-	if err := os.Mkdir(filepath.Join(root, "mcp.json"), 0700); err != nil {
+	writeTestFile(
+		t,
+		root,
+		"skills/nested/deeper/SKILL.md",
+		[]byte("---\nname: deeper\ndescription: Not discovered\n---\nNested."),
+	)
+	if err := os.Mkdir(filepath.Join(root, "mcp.json"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	count := 0
-	m := NewManager(testConfig(root, t.TempDir()), root, func(_ context.Context, cap Capabilities) []Diagnostic { count += len(cap.Skills); return nil })
+	m := NewManager(
+		testConfig(root, t.TempDir()),
+		root,
+		func(_ context.Context, capabilities Capabilities) []Diagnostic {
+			count += len(capabilities.Skills)
+			return nil
+		},
+	)
 	defer m.Close()
 	if err := m.Wait(context.Background()); err != nil {
 		t.Fatal(err)
@@ -66,10 +83,13 @@ func TestPluginLoadsIndependentlyOfHungSibling(t *testing.T) {
 	cfg := testConfig(hung, t.TempDir())
 	cfg.InitTimeoutMS = 3000
 	cfg.Concurrency = 2
-	cfg.Entries = map[string]config.PluginEntryConfig{"a-hung": {Enabled: true, Path: hung}, "b-healthy": {Enabled: true, Path: healthy}}
+	cfg.Entries = map[string]config.PluginEntryConfig{
+		"a-hung":    {Enabled: true, Path: hung},
+		"b-healthy": {Enabled: true, Path: healthy},
+	}
 	ready := make(chan struct{}, 1)
-	m := NewManager(cfg, hung, func(_ context.Context, cap Capabilities) []Diagnostic {
-		if cap.ID == "b-healthy" {
+	m := NewManager(cfg, hung, func(_ context.Context, capabilities Capabilities) []Diagnostic {
+		if capabilities.ID == "b-healthy" {
 			ready <- struct{}{}
 		}
 		return nil
@@ -85,7 +105,14 @@ func TestPluginLoadsIndependentlyOfHungSibling(t *testing.T) {
 
 func TestHookExtensionValidationAndOptIn(t *testing.T) {
 	root := fixturePlugin(t)
-	raw, _ := json.Marshal(map[string]any{"hooks": []any{map[string]any{"name": "good", "command": "./helper.exe", "intercept": []string{"after_llm"}}, map[string]any{"name": "bad", "command": "../escape"}}})
+	raw, _ := json.Marshal(
+		map[string]any{
+			"hooks": []any{
+				map[string]any{"name": "good", "command": "./helper.exe", "intercept": []string{"after_llm"}},
+				map[string]any{"name": "bad", "command": "../escape"},
+			},
+		},
+	)
 	manifest := PluginManifest{Extensions: map[string]json.RawMessage{ExtensionNamespace: raw}}
 	pc := PluginContext{ID: "demo", Root: root, DataDir: root}
 	if hooks, diagnostics := discoverHooks(manifest, pc); len(hooks) != 0 || len(diagnostics) != 0 {
@@ -113,7 +140,14 @@ func TestUnavailableDataPreservesSkills(t *testing.T) {
 	writeTestFile(t, root, "not-a-directory", []byte("file"))
 	cfg := testConfig(root, filepath.Join(root, "not-a-directory"))
 	count := 0
-	m := NewManager(cfg, root, func(_ context.Context, cap Capabilities) []Diagnostic { count += len(cap.Skills); return nil })
+	m := NewManager(
+		cfg,
+		root,
+		func(_ context.Context, capabilities Capabilities) []Diagnostic {
+			count += len(capabilities.Skills)
+			return nil
+		},
+	)
 	defer m.Close()
 	if err := m.Wait(context.Background()); err != nil {
 		t.Fatal(err)

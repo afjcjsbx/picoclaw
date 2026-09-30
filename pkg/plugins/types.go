@@ -12,9 +12,11 @@ import (
 	"github.com/sipeed/picoclaw/pkg/skills"
 )
 
-const ManifestSchema = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"
-const MCPSchema = "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json"
-const ExtensionNamespace = "com.sipeed.picoclaw"
+const (
+	ManifestSchema     = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"
+	MCPSchema          = "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json"
+	ExtensionNamespace = "com.sipeed.picoclaw"
+)
 
 type PluginManifest struct {
 	Schema      string                     `json:"$schema"`
@@ -75,7 +77,7 @@ type PluginContext struct {
 
 type Plugin interface {
 	Manifest() PluginManifest
-	Initialize(PluginContext) error
+	Initialize(context PluginContext) error
 	Close() error
 }
 

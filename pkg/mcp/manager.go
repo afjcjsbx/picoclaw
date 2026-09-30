@@ -694,7 +694,8 @@ func (m *Manager) Close() error {
 			// Plugin shutdown cancels process lifetime before joining sessions.
 			// A terminated child is expected here, not a new component failure.
 			var exitErr *exec.ExitError
-			if conn.plugin && (errors.As(err, &exitErr) || errors.Is(err, os.ErrClosed) || errors.Is(err, context.Canceled)) {
+			if conn.plugin &&
+				(errors.As(err, &exitErr) || errors.Is(err, os.ErrClosed) || errors.Is(err, context.Canceled)) {
 				continue
 			}
 			logger.ErrorCF("mcp", "Failed to close server connection",

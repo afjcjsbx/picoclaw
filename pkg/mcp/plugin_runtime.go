@@ -11,6 +11,7 @@ import (
 	"time"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
+
 	"github.com/sipeed/picoclaw/pkg/config"
 )
 
@@ -69,7 +70,12 @@ func (t *pluginHTTPTransport) RoundTrip(req *http.Request) (*http.Response, erro
 
 // ConnectPluginServer uses portable transport meanings, without changing the
 // historical meaning of "sse" in PicoClaw's native MCP configuration.
-func (m *Manager) ConnectPluginServer(ctx context.Context, name string, cfg config.MCPServerConfig, opts PluginRuntimeOptions) error {
+func (m *Manager) ConnectPluginServer(
+	ctx context.Context,
+	name string,
+	cfg config.MCPServerConfig,
+	opts PluginRuntimeOptions,
+) error {
 	if opts.Lifetime == nil {
 		return fmt.Errorf("plugin lifetime context is required")
 	}
@@ -146,7 +152,15 @@ func (m *Manager) ConnectPluginServer(ctx context.Context, name string, cfg conf
 		_ = session.Close()
 		return fmt.Errorf("plugin initialization canceled or timed out")
 	}
-	m.servers[name] = &ServerConnection{Name: name, Config: cfg, Client: client, Session: session, Tools: serverTools, plugin: true, cancel: cancel}
+	m.servers[name] = &ServerConnection{
+		Name:    name,
+		Config:  cfg,
+		Client:  client,
+		Session: session,
+		Tools:   serverTools,
+		plugin:  true,
+		cancel:  cancel,
+	}
 	connected = true
 	return nil
 }

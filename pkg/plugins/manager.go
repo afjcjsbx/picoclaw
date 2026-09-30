@@ -33,7 +33,16 @@ type Manager struct {
 
 func NewManager(cfg config.PluginsConfig, workspace string, publish Publish) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Manager{cfg: cfg, workspace: workspace, publish: publish, statuses: map[string]Status{}, packages: map[string]*packagePlugin{}, ctx: ctx, cancel: cancel, done: make(chan struct{})}
+	return &Manager{
+		cfg:       cfg,
+		workspace: workspace,
+		publish:   publish,
+		statuses:  map[string]Status{},
+		packages:  map[string]*packagePlugin{},
+		ctx:       ctx,
+		cancel:    cancel,
+		done:      make(chan struct{}),
+	}
 }
 
 func (m *Manager) Start() { m.startOnce.Do(func() { go m.run() }) }
@@ -46,6 +55,7 @@ func (m *Manager) Wait(ctx context.Context) error {
 		return ctx.Err()
 	}
 }
+
 func (m *Manager) Statuses() []Status {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -57,6 +67,7 @@ func (m *Manager) Statuses() []Status {
 	}
 	return result
 }
+
 func (m *Manager) diagnostic(d Diagnostic) {
 	m.mu.Lock()
 	s := m.statuses[d.Plugin]
@@ -66,6 +77,7 @@ func (m *Manager) diagnostic(d Diagnostic) {
 	m.mu.Unlock()
 	logger.WarnCF("plugins", d.Message, map[string]any{"plugin": d.Plugin, "component": d.Component})
 }
+
 func (m *Manager) setState(id string, state State) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -73,6 +85,7 @@ func (m *Manager) setState(id string, state State) {
 	s.State = state
 	m.statuses[id] = s
 }
+
 func (m *Manager) run() {
 	defer close(m.done)
 	defer func() {
@@ -109,6 +122,7 @@ func (m *Manager) run() {
 	}
 	wg.Wait()
 }
+
 func (m *Manager) load(item installation) {
 	defer func() {
 		if p := recover(); p != nil {
@@ -154,7 +168,17 @@ func (m *Manager) load(item installation) {
 		// or remote MCP servers.
 		m.diagnostic(Diagnostic{Plugin: item.id, Component: "data", Message: err.Error()})
 	}
-	pc := PluginContext{Context: m.ctx, ID: item.id, Root: item.root, DataDir: dataDir, Logger: slog.Default().With("plugin", item.id), Config: maps.Clone(item.entry.Config), AllowHooks: item.entry.AllowHooks, InitTimeout: m.cfg.InitTimeout(), CallTimeout: m.cfg.CallTimeout()}
+	pc := PluginContext{
+		Context:     m.ctx,
+		ID:          item.id,
+		Root:        item.root,
+		DataDir:     dataDir,
+		Logger:      slog.Default().With("plugin", item.id),
+		Config:      maps.Clone(item.entry.Config),
+		AllowHooks:  item.entry.AllowHooks,
+		InitTimeout: m.cfg.InitTimeout(),
+		CallTimeout: m.cfg.CallTimeout(),
+	}
 	p := &packagePlugin{manifest: manifest, manager: mcp.NewManager(), host: m, entry: item.entry}
 	m.mu.Lock()
 	m.packages[item.id] = p
@@ -203,12 +227,12 @@ func (p *packagePlugin) Initialize(pc PluginContext) error {
 	report := func(component string, err error) {
 		p.host.diagnostic(Diagnostic{Plugin: pc.ID, Component: component, Message: err.Error()})
 	}
-	publish := func(cap Capabilities) {
+	publish := func(capabilities Capabilities) {
 		if pc.Context.Err() != nil || p.host.publish == nil {
 			return
 		}
-		cap.ID, cap.Root, cap.Entry = pc.ID, pc.Root, p.entry
-		for _, d := range p.host.publish(pc.Context, cap) {
+		capabilities.ID, capabilities.Root, capabilities.Entry = pc.ID, pc.Root, p.entry
+		for _, d := range p.host.publish(pc.Context, capabilities) {
 			d.Plugin = pc.ID
 			p.host.diagnostic(d)
 		}
@@ -266,7 +290,18 @@ func (p *packagePlugin) loadServer(pc PluginContext, name string, spec ServerSpe
 		report(err)
 		return
 	}
-	if err := p.manager.ConnectPluginServer(pc.Context, name, cfg, mcp.PluginRuntimeOptions{Lifetime: pc.Context, Directory: dir, Environment: env, Timeout: pc.InitTimeout, Stderr: stderrLogger{plugin: pc.ID, server: name}}); err != nil {
+	if err := p.manager.ConnectPluginServer(
+		pc.Context,
+		name,
+		cfg,
+		mcp.PluginRuntimeOptions{
+			Lifetime:    pc.Context,
+			Directory:   dir,
+			Environment: env,
+			Timeout:     pc.InitTimeout,
+			Stderr:      stderrLogger{plugin: pc.ID, server: name},
+		},
+	); err != nil {
 		report(err)
 		return
 	}

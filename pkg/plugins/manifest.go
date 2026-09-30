@@ -82,7 +82,11 @@ func ParseManifest(data []byte) (PluginManifest, []Diagnostic, error) {
 			}
 			manifest.Author = &Author{}
 			for name, value := range author {
-				targets := map[string]*string{"name": &manifest.Author.Name, "email": &manifest.Author.Email, "url": &manifest.Author.URL}
+				targets := map[string]*string{
+					"name":  &manifest.Author.Name,
+					"email": &manifest.Author.Email,
+					"url":   &manifest.Author.URL,
+				}
 				target, ok := targets[name]
 				if !ok {
 					return manifest, diagnostics, fmt.Errorf("unknown author field %q", name)
@@ -106,12 +110,18 @@ func ParseManifest(data []byte) (PluginManifest, []Diagnostic, error) {
 		case "extensions":
 			extensions, err := object(raw)
 			if err != nil {
-				diagnostics = append(diagnostics, Diagnostic{Component: "manifest", Message: "ignored non-object extensions"})
+				diagnostics = append(
+					diagnostics,
+					Diagnostic{Component: "manifest", Message: "ignored non-object extensions"},
+				)
 			} else {
 				manifest.Extensions = extensions
 			}
 		default:
-			diagnostics = append(diagnostics, Diagnostic{Component: "manifest", Message: fmt.Sprintf("ignored unknown field %q", key)})
+			diagnostics = append(
+				diagnostics,
+				Diagnostic{Component: "manifest", Message: fmt.Sprintf("ignored unknown field %q", key)},
+			)
 		}
 	}
 	if manifest.Schema != ManifestSchema {

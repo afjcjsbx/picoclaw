@@ -87,7 +87,7 @@ func discoverHooks(manifest PluginManifest, pc PluginContext) ([]Hook, []Diagnos
 		if bad {
 			continue
 		}
-		if err := json.Unmarshal(entry, &spec); err != nil {
+		if err = json.Unmarshal(entry, &spec); err != nil {
 			report(err)
 			continue
 		}
@@ -129,7 +129,18 @@ func discoverHooks(manifest PluginManifest, pc PluginContext) ([]Hook, []Diagnos
 			report(err)
 			continue
 		}
-		result = append(result, Hook{Name: pc.ID + ":" + spec.Name, Command: append([]string{cfg.Command}, cfg.Args...), Dir: dir, Env: env, Observe: spec.Observe, Intercept: spec.Intercept, Config: pc.Config})
+		result = append(
+			result,
+			Hook{
+				Name:      pc.ID + ":" + spec.Name,
+				Command:   append([]string{cfg.Command}, cfg.Args...),
+				Dir:       dir,
+				Env:       env,
+				Observe:   spec.Observe,
+				Intercept: spec.Intercept,
+				Config:    pc.Config,
+			},
+		)
 	}
 	return result, diagnostics
 }

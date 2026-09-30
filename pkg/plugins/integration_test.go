@@ -12,6 +12,7 @@ import (
 	"time"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
+
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/tools"
 )
@@ -31,18 +32,30 @@ func TestPluginHelper(t *testing.T) {
 		Name string `json:"name"`
 		Mode string `json:"mode,omitempty"`
 	}
-	sdk.AddTool(server, &sdk.Tool{Name: "greet", Description: "Greet a person"}, func(ctx context.Context, _ *sdk.CallToolRequest, in input) (*sdk.CallToolResult, any, error) {
-		if in.Mode == "crash" {
-			os.Exit(7)
-		}
-		if in.Mode == "wait" {
-			<-ctx.Done()
-			return nil, nil, ctx.Err()
-		}
-		cwd, _ := os.Getwd()
-		text := "Hello, " + in.Name + "!\nroot=" + os.Getenv("PLUGIN_ROOT") + "\ndata=" + os.Getenv("PLUGIN_DATA") + "\ncwd=" + cwd + "\nvalue=" + os.Getenv("VALUE") + "\nsecret=" + os.Getenv("PLUGIN_TEST_PRIVATE_SECRET")
-		return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: text}}}, nil, nil
-	})
+	sdk.AddTool(
+		server,
+		&sdk.Tool{Name: "greet", Description: "Greet a person"},
+		func(ctx context.Context, _ *sdk.CallToolRequest, in input) (*sdk.CallToolResult, any, error) {
+			if in.Mode == "crash" {
+				os.Exit(7)
+			}
+			if in.Mode == "wait" {
+				<-ctx.Done()
+				return nil, nil, ctx.Err()
+			}
+			cwd, _ := os.Getwd()
+			text := "Hello, " + in.Name + "!\nroot=" + os.Getenv(
+				"PLUGIN_ROOT",
+			) + "\ndata=" + os.Getenv(
+				"PLUGIN_DATA",
+			) + "\ncwd=" + cwd + "\nvalue=" + os.Getenv(
+				"VALUE",
+			) + "\nsecret=" + os.Getenv(
+				"PLUGIN_TEST_PRIVATE_SECRET",
+			)
+			return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: text}}}, nil, nil
+		},
+	)
 	if err := server.Run(context.Background(), &sdk.StdioTransport{}); err != nil {
 		os.Exit(2)
 	}
@@ -52,10 +65,10 @@ func TestPluginHelper(t *testing.T) {
 func writeTestFile(t *testing.T, root, path string, data []byte) {
 	t.Helper()
 	full := filepath.Join(root, path)
-	if err := os.MkdirAll(filepath.Dir(full), 0700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(full), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(full, data, 0600); err != nil {
+	if err := os.WriteFile(full, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -64,7 +77,12 @@ func fixturePlugin(t *testing.T) string {
 	t.Helper()
 	root, _ := canonicalRoot(t.TempDir())
 	writeTestFile(t, root, "plugin.json", manifestJSON(nil))
-	writeTestFile(t, root, "skills/greet/SKILL.md", []byte("---\nname: greet\ndescription: Say hello\n---\nGreet the user.\n"))
+	writeTestFile(
+		t,
+		root,
+		"skills/greet/SKILL.md",
+		[]byte("---\nname: greet\ndescription: Say hello\n---\nGreet the user.\n"),
+	)
 	source, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -74,7 +92,7 @@ func fixturePlugin(t *testing.T) string {
 		t.Fatal(err)
 	}
 	defer in.Close()
-	out, err := os.OpenFile(filepath.Join(root, "helper.exe"), os.O_CREATE|os.O_WRONLY, 0700)
+	out, err := os.OpenFile(filepath.Join(root, "helper.exe"), os.O_CREATE|os.O_WRONLY, 0o700)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +112,12 @@ func serverFixture(extra map[string]string) map[string]any {
 	for key, value := range extra {
 		env[key] = value
 	}
-	return map[string]any{"type": "stdio", "command": "./helper.exe", "args": []string{"-test.run=^TestPluginHelper$"}, "env": env}
+	return map[string]any{
+		"type":    "stdio",
+		"command": "./helper.exe",
+		"args":    []string{"-test.run=^TestPluginHelper$"},
+		"env":     env,
+	}
 }
 
 func writeServers(t *testing.T, root string, servers map[string]any) {
@@ -107,27 +130,44 @@ func writeServers(t *testing.T, root string, servers map[string]any) {
 }
 
 func testConfig(root, data string) config.PluginsConfig {
-	return config.PluginsConfig{Enabled: true, Directories: []string{filepath.Join(root, "absent")}, DataDir: data, InitTimeoutMS: 3000, CallTimeoutMS: 1000,
-		Entries: map[string]config.PluginEntryConfig{"demo": {Enabled: true, Path: root}}}
+	return config.PluginsConfig{
+		Enabled:       true,
+		Directories:   []string{filepath.Join(root, "absent")},
+		DataDir:       data,
+		InitTimeoutMS: 3000,
+		CallTimeoutMS: 1000,
+		Entries:       map[string]config.PluginEntryConfig{"demo": {Enabled: true, Path: root}},
+	}
 }
 
 func TestPluginLoadAndExecuteIntegration(t *testing.T) {
 	t.Setenv("PLUGIN_TEST_PRIVATE_SECRET", "must not leak")
 	root := fixturePlugin(t)
-	writeServers(t, root, map[string]any{"good": serverFixture(nil), "bad": map[string]any{"type": "stdio", "command": "does-not-exist-picoclaw-plugin"}})
+	writeServers(
+		t,
+		root,
+		map[string]any{
+			"good": serverFixture(nil),
+			"bad":  map[string]any{"type": "stdio", "command": "does-not-exist-picoclaw-plugin"},
+		},
+	)
 	registry := tools.NewToolRegistry()
 	var names []string
 	var skillCount int
-	m := NewManager(testConfig(root, t.TempDir()), root, func(_ context.Context, cap Capabilities) []Diagnostic {
-		skillCount += len(cap.Skills)
-		for _, tool := range cap.Tools {
-			if _, err := registry.RegisterUnique(tool, false); err != nil {
-				t.Error(err)
+	m := NewManager(
+		testConfig(root, t.TempDir()),
+		root,
+		func(_ context.Context, capabilities Capabilities) []Diagnostic {
+			skillCount += len(capabilities.Skills)
+			for _, tool := range capabilities.Tools {
+				if _, err := registry.RegisterUnique(tool, false); err != nil {
+					t.Error(err)
+				}
+				names = append(names, tool.Name())
 			}
-			names = append(names, tool.Name())
-		}
-		return nil
-	})
+			return nil
+		},
+	)
 	defer m.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -142,7 +182,10 @@ func TestPluginLoadAndExecuteIntegration(t *testing.T) {
 		t.Fatalf("status=%+v", status)
 	}
 	result := registry.Execute(ctx, names[0], map[string]any{"name": "Ada"})
-	if result.IsError || !strings.Contains(result.ForLLM, "Hello, Ada!") || !strings.Contains(result.ForLLM, "cwd="+root) || strings.Contains(result.ForLLM, "must not leak") || !strings.Contains(result.ForLLM, "/${UNKNOWN}") {
+	if result.IsError || !strings.Contains(result.ForLLM, "Hello, Ada!") ||
+		!strings.Contains(result.ForLLM, "cwd="+root) ||
+		strings.Contains(result.ForLLM, "must not leak") ||
+		!strings.Contains(result.ForLLM, "/${UNKNOWN}") {
 		t.Fatalf("result=%+v", result)
 	}
 	if got := registry.Execute(ctx, names[0], map[string]any{}); !got.IsError {
@@ -173,7 +216,14 @@ func TestPluginFailureBoundariesAndPersistence(t *testing.T) {
 	cfg := testConfig(root, data)
 	for round := range 2 {
 		count := 0
-		m := NewManager(cfg, root, func(_ context.Context, cap Capabilities) []Diagnostic { count += len(cap.Skills); return nil })
+		m := NewManager(
+			cfg,
+			root,
+			func(_ context.Context, capabilities Capabilities) []Diagnostic {
+				count += len(capabilities.Skills)
+				return nil
+			},
+		)
 		if err := m.Wait(context.Background()); err != nil {
 			t.Fatal(err)
 		}
@@ -182,7 +232,7 @@ func TestPluginFailureBoundariesAndPersistence(t *testing.T) {
 		}
 		state := filepath.Join(data, "demo", "persist.txt")
 		if round == 0 {
-			if err := os.WriteFile(state, []byte("preserved"), 0600); err != nil {
+			if err := os.WriteFile(state, []byte("preserved"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 		} else if bytes, err := os.ReadFile(state); err != nil || string(bytes) != "preserved" {
@@ -204,12 +254,19 @@ func TestPluginFailureBoundariesAndPersistence(t *testing.T) {
 
 func TestPluginInitializationTimeout(t *testing.T) {
 	root := fixturePlugin(t)
-	writeServers(t, root, map[string]any{"a-hung": serverFixture(map[string]string{"PLUGIN_TEST_HANG": "1"}), "b-good": serverFixture(nil)})
+	writeServers(
+		t,
+		root,
+		map[string]any{
+			"a-hung": serverFixture(map[string]string{"PLUGIN_TEST_HANG": "1"}),
+			"b-good": serverFixture(nil),
+		},
+	)
 	cfg := testConfig(root, t.TempDir())
 	cfg.InitTimeoutMS = 200
 	var names []string
-	m := NewManager(cfg, root, func(_ context.Context, cap Capabilities) []Diagnostic {
-		for _, tool := range cap.Tools {
+	m := NewManager(cfg, root, func(_ context.Context, capabilities Capabilities) []Diagnostic {
+		for _, tool := range capabilities.Tools {
 			names = append(names, tool.Name())
 		}
 		return nil
