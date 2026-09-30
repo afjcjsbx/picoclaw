@@ -44,6 +44,7 @@ type Config struct {
 	Gateway   GatewayConfig   `json:"gateway"             yaml:"-"`
 	Events    EventsConfig    `json:"events,omitempty"    yaml:"-"`
 	Hooks     HooksConfig     `json:"hooks,omitempty"     yaml:"-"`
+	Plugins   PluginsConfig   `json:"plugins,omitempty"   yaml:"-"`
 	Tools     ToolsConfig     `json:"tools"               yaml:",inline"`
 	Heartbeat HeartbeatConfig `json:"heartbeat"           yaml:"-"`
 	Devices   DevicesConfig   `json:"devices"             yaml:"-"`

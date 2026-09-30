@@ -1,5 +1,13 @@
 {
   "version": 3,
+  "plugins": {
+    "enabled": false,
+    "concurrency": 4,
+    "init_timeout_ms": 15000,
+    "call_timeout_ms": 60000,
+    "startup_wait_ms": 15000,
+    "entries": {}
+  },
   "agents": {
     "defaults": {
       "workspace": "~/.picoclaw/workspace",

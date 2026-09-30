@@ -38,6 +38,36 @@ func NewToolRegistry() *ToolRegistry {
 	}
 }
 
+// RegisterUnique is the external-capability registration boundary. Unlike
+// Register it never replaces an existing tool. A filtered tool returns false.
+func (r *ToolRegistry) RegisterUnique(tool Tool, hidden bool) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	name := tool.Name()
+	if !r.toolAllowedLocked(name) {
+		return false, nil
+	}
+	if _, exists := r.tools[name]; exists {
+		return false, fmt.Errorf("tool %q already registered", name)
+	}
+	r.tools[name] = &ToolEntry{Tool: tool, IsCore: !hidden}
+	if aware, ok := tool.(mediaStoreAware); ok && r.mediaStore != nil {
+		aware.SetMediaStore(r.mediaStore)
+	}
+	r.version.Add(1)
+	return true, nil
+}
+
+// UnregisterOwned removes only the exact tool instance originally registered.
+func (r *ToolRegistry) UnregisterOwned(tool Tool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if entry, ok := r.tools[tool.Name()]; ok && entry.Tool == tool {
+		delete(r.tools, tool.Name())
+		r.version.Add(1)
+	}
+}
+
 // SetAllowlist restricts registrations to the provided runtime tool names.
 // A nil slice means "allow all". An empty-but-non-nil slice means "allow none".
 func (r *ToolRegistry) SetAllowlist(names []string) {

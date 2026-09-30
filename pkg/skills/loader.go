@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/gomarkdown/markdown"
 	"github.com/gomarkdown/markdown/ast"
@@ -56,6 +57,8 @@ func (info SkillInfo) validate() error {
 }
 
 type SkillsLoader struct {
+	pluginMu        sync.RWMutex
+	pluginSkills    map[string][]PluginSkill
 	workspace       string
 	workspaceSkills string // workspace skills (project-level)
 	globalSkills    string // global skills (~/.picoclaw/skills)
@@ -140,11 +143,19 @@ func (sl *SkillsLoader) ListSkills() []SkillInfo {
 	addSkills(sl.workspaceSkills, "workspace")
 	addSkills(sl.globalSkills, "global")
 	addSkills(sl.builtinSkills, "builtin")
+	for _, entry := range sl.listPluginSkills() {
+		skills = append(skills, entry.Info)
+	}
 
 	return skills
 }
 
 func (sl *SkillsLoader) LoadSkill(name string) (string, bool) {
+	for _, entry := range sl.listPluginSkills() {
+		if entry.Info.Name == name {
+			return entry.Body, true
+		}
+	}
 	if err := ValidateSkillName(name); err != nil {
 		return "", false
 	}

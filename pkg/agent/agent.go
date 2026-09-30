@@ -55,6 +55,7 @@ type AgentLoop struct {
 	transcriber    asr.Transcriber
 	cmdRegistry    *commands.Registry
 	mcp            mcpRuntime
+	plugins        pluginRuntime
 	evolution      *evolutionBridge
 	hookRuntime    hookRuntime
 	steering       *steeringQueue
@@ -144,6 +145,7 @@ const (
 
 func (al *AgentLoop) Run(ctx context.Context) error {
 	al.running.Store(true)
+	al.startPlugins()
 
 	if err := al.ensureHooksInitialized(ctx); err != nil {
 		return err
@@ -324,6 +326,7 @@ func (al *AgentLoop) Stop() {
 
 // Close releases resources held by agent session stores. Call after Stop.
 func (al *AgentLoop) Close() {
+	al.closePlugins(true)
 	mcpManager := al.mcp.takeManager()
 
 	if mcpManager != nil {
@@ -451,6 +454,7 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	al.refreshRuntimeEventLogger(cfg)
 
 	oldMCPManager := al.mcp.reset()
+	al.closePlugins(false)
 	al.hookRuntime.reset(al)
 	configureHookManagerFromConfig(al.hooks, cfg)
 	if err := al.ensureHooksInitialized(ctx); err != nil {
@@ -473,6 +477,7 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 		logger.WarnCF("agent", "MCP failed to reinitialize after reload",
 			map[string]any{"error": err.Error()})
 	}
+	al.startPlugins()
 
 	// Close old provider after releasing the lock
 	// This prevents blocking readers while closing
