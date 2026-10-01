@@ -529,6 +529,8 @@ Thêm vào `config.json` của bạn:
 
 PicoClaw hỗ trợ [MCP](https://modelcontextprotocol.io/) gốc — kết nối bất kỳ MCP server nào để mở rộng khả năng Agent của bạn với các tool và nguồn dữ liệu bên ngoài.
 
+PicoClaw là trợ lý nhẹ, vì vậy nên ưu tiên dùng MCP server từ xa. Với server cục bộ, hãy chọn binary được biên dịch native và tránh `npx`, `uvx` hoặc các trình quản lý dependency nặng khác.
+
 ```json
 {
   "tools": {

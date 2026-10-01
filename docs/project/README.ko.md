@@ -533,6 +533,8 @@ picoclaw skills install <skill-name>
 
 PicoClaw는 [MCP](https://modelcontextprotocol.io/)를 기본 지원합니다. 어떤 MCP 서버든 연결하여 외부 도구와 데이터 소스로 에이전트 기능을 확장할 수 있습니다.
 
+PicoClaw는 가벼운 어시스턴트이므로 원격 MCP 서버를 사용하는 것이 가장 좋습니다. 로컬 서버는 네이티브로 컴파일된 바이너리를 우선하고 `npx`, `uvx` 등 무거운 종속성 관리 도구는 피하세요.
+
 ```json
 {
   "tools": {

@@ -529,6 +529,8 @@ picoclaw skills install <skill-name>
 
 PicoClaw は [MCP](https://modelcontextprotocol.io/) をネイティブサポートしています — 任意の MCP サーバーに接続して、外部ツールやデータソースで Agent の機能を拡張できます。
 
+PicoClaw は軽量なアシスタントなので、リモート MCP サーバーの利用が最適です。ローカルサーバーを使う場合はネイティブにコンパイルされたバイナリを優先し、`npx`、`uvx` などの重い依存関係管理ツールは避けてください。
+
 ```json
 {
   "tools": {

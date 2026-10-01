@@ -570,6 +570,8 @@ For more details, see [Tools Configuration - Skills](docs/reference/tools_config
 
 PicoClaw natively supports [MCP](https://modelcontextprotocol.io/) — connect any MCP server to extend your Agent's capabilities with external tools and data sources.
 
+PicoClaw is a lightweight assistant, so remote MCP servers are the best choice. For local servers, prefer natively compiled server binaries and avoid `npx`, `uvx`, or other heavyweight dependency managers.
+
 ```json
 {
   "tools": {

@@ -537,6 +537,8 @@ picoclaw skills install <skill-name>
 
 PicoClaw 原生支持 [MCP](https://modelcontextprotocol.io/) — 连接任意 MCP 服务器，通过外部工具和数据源扩展 Agent 能力。
 
+PicoClaw 是轻量级助手，因此最适合使用远程 MCP 服务器。本地服务器请优先使用原生编译的二进制文件，避免使用 `npx`、`uvx` 或其他重量级依赖管理器。
+
 ```json
 {
   "tools": {

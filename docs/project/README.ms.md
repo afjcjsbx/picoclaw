@@ -527,6 +527,8 @@ Untuk butiran lanjut, lihat [Konfigurasi Alat - Kemahiran](../reference/tools_co
 
 PicoClaw menyokong [MCP](https://modelcontextprotocol.io/) secara natif — sambungkan mana-mana pelayan MCP untuk melanjutkan keupayaan Agent anda dengan alat dan sumber data luaran.
 
+PicoClaw ialah pembantu yang ringan, jadi pilihan terbaik ialah menggunakan pelayan MCP jauh. Untuk pelayan setempat, utamakan binari yang dikompil secara natif dan elakkan `npx`, `uvx` atau pengurus kebergantungan berat yang lain.
+
 ```json
 {
   "tools": {
