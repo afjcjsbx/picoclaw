@@ -26,7 +26,7 @@
 
 ## 🌱 Active Fork
 
-This repository is an actively maintained fork of the [original PicoClaw project](https://github.com/sipeed/picoclaw), which no longer appears to be maintained. Development continues here, with ongoing fixes, dependency updates, and new features.
+This repository is an actively maintained fork of PicoClaw. Development continues here, with ongoing fixes, dependency updates, and new features.
 
 **PicoClaw** is an ultra-lightweight personal AI assistant inspired by [NanoBot](https://github.com/HKUDS/nanobot). It was rebuilt from the ground up in **Go** through a "self-bootstrapping" process — the AI Agent itself drove the architecture migration and code optimization.
 
@@ -62,6 +62,9 @@ This repository is an actively maintained fork of the [original PicoClaw project
 
 2026-09-28 🌱 **Project revived!** Development has resumed and will continue to be actively maintained in this fork.
 
+<details>
+<summary>Earlier news...</summary>
+
 2026-05-11 🛒 **LicheeRV-Claw on AliExpress!** You can now purchase LicheeRV-Claw from [AliExpress](https://www.aliexpress.com/item/1005006519668532.html), making it easier to try PicoClaw on compact RISC-V hardware.
 
 <p align="center">
@@ -80,7 +83,7 @@ This repository is an actively maintained fork of the [original PicoClaw project
 
 2026-04-11 🚀 **v0.2.5 Released!** Zoneinfo from TZ/ZONEINFO env, Matrix CommonMark rendering alignment, `read_file` by lines.
 
-2026-03-31 📱 **Android Support!** PicoClaw now runs on Android! Download the APK at [picoclaw.io](https://picoclaw.io/download)
+2026-03-31 📱 **Android Support!** PicoClaw now runs on Android! Download the APK at [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases)
 
 2026-03-25 🚀 **v0.2.4 Released!** Agent architecture overhaul (SubTurn, Hooks, Steering, EventBus), WeChat/WeCom integration, security hardening (.security.yml, sensitive data filtering), new providers (AWS Bedrock, Azure, Xiaomi MiMo), and 35 bug fixes. PicoClaw has reached **26K Stars**!
 
@@ -89,9 +92,6 @@ This repository is an actively maintained fork of the [original PicoClaw project
 2026-03-09 🎉 **v0.2.1 — Biggest update yet!** MCP protocol support, 4 new channels (Matrix/IRC/WeCom/Discord Proxy), 3 new providers (Kimi/Minimax/Avian), vision pipeline, JSONL memory store, model routing.
 
 2026-02-28 📦 **v0.2.0** released with Docker Compose and Web UI Launcher support.
-
-<details>
-<summary>Earlier news...</summary>
 
 2026-02-26 🎉 PicoClaw hits **20K Stars** in just 17 days! Channel auto-orchestration and capability interfaces are live.
 
@@ -178,13 +178,9 @@ PicoClaw can be deployed on virtually any Linux device!
 
 ## 📦 Install
 
-### Download from picoclaw.io (Recommended)
-
-Visit **[picoclaw.io](https://picoclaw.io)** — the official website auto-detects your platform and provides one-click download. No need to manually pick an architecture.
-
 ### Download precompiled binary
 
-Alternatively, download the binary for your platform from the [GitHub Releases](https://github.com/sipeed/picoclaw/releases) page.
+Download the binary for your platform from this repository's [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases).
 
 ### Build from source (for development)
 
@@ -194,7 +190,7 @@ Prerequisites:
 - Node.js 22+ and pnpm 10.33.0+ for Web UI / launcher builds
 
 ```bash
-git clone https://github.com/sipeed/picoclaw.git
+git clone https://github.com/afjcjsbx/picoclaw.git
 
 cd picoclaw
 make deps
@@ -230,7 +226,7 @@ The WebUI Launcher provides a browser-based interface for configuration and chat
 
 **Option 1: Double-click (Desktop)**
 
-After downloading from [picoclaw.io](https://picoclaw.io), double-click `picoclaw-launcher` (or `picoclaw-launcher.exe` on Windows). Your browser will open automatically at `http://localhost:18800`.
+After downloading from [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases), double-click `picoclaw-launcher` (or `picoclaw-launcher.exe` on Windows). Your browser will open automatically at `http://localhost:18800`.
 
 **Option 2: Command line**
 
@@ -333,7 +329,7 @@ Preview:
   </tr>
 </table>
 
-Download the APK from [picoclaw.io](https://picoclaw.io/download/) and install directly. No Termux required!
+Download the APK from [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases) and install directly. No Termux required!
 
 **Option 2: Termux**
 
@@ -570,16 +566,23 @@ For more details, see [Tools Configuration - Skills](docs/reference/tools_config
 
 PicoClaw natively supports [MCP](https://modelcontextprotocol.io/) — connect any MCP server to extend your Agent's capabilities with external tools and data sources.
 
+PicoClaw is a lightweight assistant, so remote MCP servers are the best choice. For local servers, prefer natively compiled server binaries and avoid `npx`, `uvx`, or other heavyweight dependency managers.
+
 ```json
 {
   "tools": {
     "mcp": {
       "enabled": true,
       "servers": {
-        "filesystem": {
+        "browserbase": {
           "enabled": true,
-          "command": "npx",
-          "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+          "deferred": false,
+          "command": "",
+          "type": "http",
+          "url": "https://mcp.browserbase.com/mcp?browserbaseApiKey=API_KEY",
+          "headers": {
+            "BROWSERBASE_PROJECT_ID": "********"
+          }
         }
       }
     }
@@ -590,9 +593,8 @@ PicoClaw natively supports [MCP](https://modelcontextprotocol.io/) — connect a
 You can manage common MCP setups directly from the CLI instead of editing JSON by hand:
 
 ```bash
-picoclaw mcp add filesystem -- npx -y @modelcontextprotocol/server-filesystem /tmp
 picoclaw mcp list
-picoclaw mcp test filesystem
+picoclaw mcp test browserbase
 ```
 
 `picoclaw mcp` is a configuration manager: it updates `config.json` under `tools.mcp.servers`, but it does not keep the server process running itself.

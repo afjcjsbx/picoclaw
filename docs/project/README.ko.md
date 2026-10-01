@@ -56,6 +56,13 @@
 
 ## 📢 뉴스
 
+2026-09-29 🚀 **[v0.4.0 Released!](https://github.com/afjcjsbx/picoclaw/releases/tag/v0.4.0)** This substantial release adds MCP CLI management and Web UI configuration, native Anthropic Messages API support, configurable web search (including Keenable and Kagi), configurable logging and virtual models, cross-platform serial-tool support, enhanced hooks and isolation, plus numerous channel, provider, security, and build fixes.
+
+2026-09-28 🌱 **Project revived!** Development has resumed and will continue to be actively maintained in this fork.
+
+<details>
+<summary>Earlier news...</summary>
+
 2026-05-11 🛒 **LicheeRV-Claw를 AliExpress에서 구매할 수 있습니다!** 이제 [AliExpress](https://www.aliexpress.com/item/1005006519668532.html)에서 LicheeRV-Claw를 구매해 소형 RISC-V 하드웨어에서 PicoClaw를 더 쉽게 사용해 볼 수 있습니다.
 
 <p align="center">
@@ -64,7 +71,7 @@
   </a>
 </p>
 
-2026-03-31 📱 **Android 지원!** PicoClaw가 이제 Android에서 실행됩니다! APK는 [picoclaw.io](https://picoclaw.io/download)에서 다운로드하세요.
+2026-03-31 📱 **Android 지원!** PicoClaw가 이제 Android에서 실행됩니다! APK는 [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases)에서 다운로드하세요.
 
 2026-03-25 🚀 **v0.2.4 출시!** 에이전트 아키텍처 전면 개편(SubTurn, Hooks, Steering, EventBus), WeChat/WeCom 통합, 보안 강화(`.security.yml`, 민감 정보 필터링), 새 프로바이더(AWS Bedrock, Azure, Xiaomi MiMo), 그리고 35건의 버그 수정이 포함되었습니다. PicoClaw는 **26K 스타**를 달성했습니다!
 
@@ -73,9 +80,6 @@
 2026-03-09 🎉 **v0.2.1 — 역대 최대 업데이트!** MCP 프로토콜 지원, 4개의 새 채널(Matrix/IRC/WeCom/Discord Proxy), 3개의 새 프로바이더(Kimi/Minimax/Avian), 비전 파이프라인, JSONL 메모리 저장소, 모델 라우팅이 추가되었습니다.
 
 2026-02-28 📦 **v0.2.0** 이 Docker Compose 및 WebUI 런처 지원과 함께 출시되었습니다.
-
-<details>
-<summary>이전 뉴스...</summary>
 
 2026-02-26 🎉 PicoClaw가 단 17일 만에 **20K 스타**를 달성했습니다! 채널 자동 오케스트레이션과 기능 인터페이스가 적용되었습니다.
 
@@ -162,13 +166,9 @@ PicoClaw는 사실상 거의 모든 Linux 장치에 배포할 수 있습니다!
 
 ## 📦 설치
 
-### picoclaw.io에서 다운로드(권장)
-
-**[picoclaw.io](https://picoclaw.io)** 를 방문하세요. 공식 웹사이트가 플랫폼을 자동 감지하고 원클릭 다운로드를 제공합니다. 아키텍처를 직접 고를 필요가 없습니다.
-
 ### 사전 컴파일된 바이너리 다운로드
 
-또는 [GitHub Releases](https://github.com/sipeed/picoclaw/releases) 페이지에서 플랫폼에 맞는 바이너리를 다운로드할 수 있습니다.
+또는 [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases) 페이지에서 플랫폼에 맞는 바이너리를 다운로드할 수 있습니다.
 
 ### 소스에서 빌드(개발용)
 
@@ -178,7 +178,7 @@ PicoClaw는 사실상 거의 모든 Linux 장치에 배포할 수 있습니다!
 - Web UI / launcher 빌드에는 Node.js 22+와 pnpm 10.33.0+가 필요합니다
 
 ```bash
-git clone https://github.com/sipeed/picoclaw.git
+git clone https://github.com/afjcjsbx/picoclaw.git
 
 cd picoclaw
 make deps
@@ -212,7 +212,7 @@ WebUI Launcher는 설정과 채팅을 위한 브라우저 기반 인터페이스
 
 **옵션 1: 더블클릭(데스크톱)**
 
-[picoclaw.io](https://picoclaw.io)에서 다운로드한 뒤 `picoclaw-launcher`를 더블클릭하세요(Windows에서는 `picoclaw-launcher.exe`). 브라우저가 자동으로 `http://localhost:18800`을 엽니다.
+[GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases)에서 다운로드한 뒤 `picoclaw-launcher`를 더블클릭하세요(Windows에서는 `picoclaw-launcher.exe`). 브라우저가 자동으로 `http://localhost:18800`을 엽니다.
 
 **옵션 2: 명령줄**
 
@@ -242,7 +242,7 @@ WebUI를 연 뒤 다음 순서로 진행하세요. **1)** 프로바이더 설정
 
 ```bash
 # 1. 이 저장소를 클론
-git clone https://github.com/sipeed/picoclaw.git
+git clone https://github.com/afjcjsbx/picoclaw.git
 cd picoclaw
 
 # 2. 첫 실행 - docker/data/config.json을 자동 생성한 뒤 종료
@@ -314,7 +314,7 @@ macOS에서는 인터넷에서 다운로드한 앱이고 Mac App Store 공증을
   </tr>
 </table>
 
-[picoclaw.io](https://picoclaw.io/download/)에서 APK를 다운로드해 바로 설치하세요. Termux가 필요 없습니다!
+[GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases)에서 APK를 다운로드해 바로 설치하세요. Termux가 필요 없습니다!
 
 **옵션 2: Termux**
 
@@ -326,7 +326,7 @@ macOS에서는 인터넷에서 다운로드한 앱이고 Mac App Store 공증을
 
 ```bash
 # 최신 릴리스 다운로드
-wget https://github.com/sipeed/picoclaw/releases/latest/download/picoclaw_Linux_arm64.tar.gz
+wget https://github.com/afjcjsbx/picoclaw/releases/latest/download/picoclaw_Linux_arm64.tar.gz
 tar xzf picoclaw_Linux_arm64.tar.gz
 pkg install proot
 termux-chroot ./picoclaw onboard   # chroot가 표준 Linux 파일시스템 레이아웃을 제공합니다
@@ -533,16 +533,23 @@ picoclaw skills install <skill-name>
 
 PicoClaw는 [MCP](https://modelcontextprotocol.io/)를 기본 지원합니다. 어떤 MCP 서버든 연결하여 외부 도구와 데이터 소스로 에이전트 기능을 확장할 수 있습니다.
 
+PicoClaw는 가벼운 어시스턴트이므로 원격 MCP 서버를 사용하는 것이 가장 좋습니다. 로컬 서버는 네이티브로 컴파일된 바이너리를 우선하고 `npx`, `uvx` 등 무거운 종속성 관리 도구는 피하세요.
+
 ```json
 {
   "tools": {
     "mcp": {
       "enabled": true,
       "servers": {
-        "filesystem": {
+        "browserbase": {
           "enabled": true,
-          "command": "npx",
-          "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+          "deferred": false,
+          "command": "",
+          "type": "http",
+          "url": "https://mcp.browserbase.com/mcp?browserbaseApiKey=API_KEY",
+          "headers": {
+            "BROWSERBASE_PROJECT_ID": "********"
+          }
         }
       }
     }
@@ -612,7 +619,7 @@ PicoClaw는 `cron` 도구를 통해 예약 리마인더와 반복 작업을 지�
 
 PR은 언제든 환영합니다! 코드베이스는 의도적으로 작고 읽기 쉽게 유지하고 있습니다.
 
-가이드라인은 [커뮤니티 로드맵](https://github.com/sipeed/picoclaw/issues/988)과 [CONTRIBUTING.md](../../CONTRIBUTING.md)를 참고하세요.
+가이드라인은 [커뮤니티 로드맵](https://github.com/afjcjsbx/picoclaw/issues/988)과 [CONTRIBUTING.md](../../CONTRIBUTING.md)를 참고하세요.
 
 개발자 그룹도 준비 중입니다. 첫 PR이 머지되면 함께할 수 있습니다!
 
