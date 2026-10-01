@@ -64,7 +64,7 @@
   </a>
 </p>
 
-2026-03-31 📱 **Suporte Android!** PicoClaw agora roda no Android! Baixe o APK em [picoclaw.io](https://picoclaw.io/download)
+2026-03-31 📱 **Suporte Android!** PicoClaw agora roda no Android! Baixe o APK em [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases)
 
 2026-03-25 🚀 **v0.2.4 Lançada!** Reformulação da arquitetura Agent (SubTurn, Hooks, Steering, EventBus), integração WeChat/WeCom, fortalecimento de segurança (.security.yml, filtragem de dados sensíveis), novos providers (AWS Bedrock, Azure, Xiaomi MiMo) e 35 correções de bugs. O PicoClaw atingiu **26K Stars**!
 
@@ -162,10 +162,6 @@ O PicoClaw pode ser implantado em praticamente qualquer dispositivo Linux!
 
 ## 📦 Instalação
 
-### Download pelo picoclaw.io (Recomendado)
-
-Acesse **[picoclaw.io](https://picoclaw.io)** — o site oficial detecta automaticamente sua plataforma e fornece download com um clique. Não é necessário selecionar a arquitetura manualmente.
-
 ### Download do binário pré-compilado
 
 Alternativamente, baixe o binário para sua plataforma na página de [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases).
@@ -212,7 +208,7 @@ O WebUI Launcher fornece uma interface baseada em navegador para configuração 
 
 **Opção 1: Duplo clique (Desktop)**
 
-Após baixar de [picoclaw.io](https://picoclaw.io), dê duplo clique em `picoclaw-launcher` (ou `picoclaw-launcher.exe` no Windows). Seu navegador abrirá automaticamente em `http://localhost:18800`.
+Após baixar de [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases), dê duplo clique em `picoclaw-launcher` (ou `picoclaw-launcher.exe` no Windows). Seu navegador abrirá automaticamente em `http://localhost:18800`.
 
 **Opção 2: Linha de comando**
 
@@ -315,7 +311,7 @@ Pré-visualização:
   </tr>
 </table>
 
-Baixe o APK de [picoclaw.io](https://picoclaw.io/download/) e instale diretamente. Sem necessidade de Termux!
+Baixe o APK de [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases) e instale diretamente. Sem necessidade de Termux!
 
 **Opção 2: Termux**
 

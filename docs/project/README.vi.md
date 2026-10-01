@@ -64,7 +64,7 @@
   </a>
 </p>
 
-2026-03-31 📱 **Hỗ trợ Android!** PicoClaw giờ chạy trên Android! Tải APK tại [picoclaw.io](https://picoclaw.io/download)
+2026-03-31 📱 **Hỗ trợ Android!** PicoClaw giờ chạy trên Android! Tải APK tại [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases)
 
 2026-03-25 🚀 **v0.2.4 đã phát hành!** Tái cấu trúc kiến trúc Agent (SubTurn, Hooks, Steering, EventBus), tích hợp WeChat/WeCom, tăng cường bảo mật (.security.yml, lọc dữ liệu nhạy cảm), provider mới (AWS Bedrock, Azure, Xiaomi MiMo) và 35 bản vá lỗi. PicoClaw đã đạt **26K Stars**!
 
@@ -162,10 +162,6 @@ PicoClaw có thể được triển khai trên hầu hết mọi thiết bị Li
 
 ## 📦 Cài đặt
 
-### Tải xuống từ picoclaw.io (Khuyến nghị)
-
-Truy cập **[picoclaw.io](https://picoclaw.io)** — website chính thức tự động phát hiện nền tảng của bạn và cung cấp tải xuống một cú nhấp. Không cần chọn kiến trúc thủ công.
-
 ### Tải xuống binary đã biên dịch sẵn
 
 Ngoài ra, tải binary cho nền tảng của bạn từ trang [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases).
@@ -212,7 +208,7 @@ WebUI Launcher cung cấp giao diện dựa trên trình duyệt để cấu hì
 
 **Tùy chọn 1: Nhấp đúp (Desktop)**
 
-Sau khi tải xuống từ [picoclaw.io](https://picoclaw.io), nhấp đúp vào `picoclaw-launcher` (hoặc `picoclaw-launcher.exe` trên Windows). Trình duyệt của bạn sẽ tự động mở tại `http://localhost:18800`.
+Sau khi tải xuống từ [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases), nhấp đúp vào `picoclaw-launcher` (hoặc `picoclaw-launcher.exe` trên Windows). Trình duyệt của bạn sẽ tự động mở tại `http://localhost:18800`.
 
 **Tùy chọn 2: Dòng lệnh**
 
@@ -315,7 +311,7 @@ Xem trước:
   </tr>
 </table>
 
-Tải APK từ [picoclaw.io](https://picoclaw.io/download/) và cài đặt trực tiếp. Không cần Termux!
+Tải APK từ [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases) và cài đặt trực tiếp. Không cần Termux!
 
 **Tùy chọn 2: Termux**
 

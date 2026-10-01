@@ -64,7 +64,7 @@
   </a>
 </p>
 
-2026-03-31 📱 **Android サポート！** PicoClawがAndroidで動作！APKは[picoclaw.io](https://picoclaw.io/download)からダウンロード
+2026-03-31 📱 **Android サポート！** PicoClawがAndroidで動作！APKは[GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases)からダウンロード
 
 2026-03-25 🚀 **v0.2.4 リリース！** Agent アーキテクチャ全面刷新（SubTurn、Hooks、Steering、EventBus）、WeChat/WeCom 統合、セキュリティ強化（.security.yml、機密データフィルタリング）、新プロバイダー（AWS Bedrock、Azure、Xiaomi MiMo）、35 件のバグ修正。PicoClaw **26K ⭐** 達成！
 
@@ -162,10 +162,6 @@ PicoClaw はほぼすべての Linux デバイスにデプロイできます！
 
 ## 📦 インストール
 
-### picoclaw.io からダウンロード（推奨）
-
-**[picoclaw.io](https://picoclaw.io)** にアクセス — 公式サイトがプラットフォームを自動検出し、ワンクリックでダウンロードできます。アーキテクチャを手動で選ぶ必要はありません。
-
 ### プリコンパイル済みバイナリをダウンロード
 
 または、[GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases) ページからプラットフォームに合ったバイナリをダウンロードしてください。
@@ -212,7 +208,7 @@ WebUI Launcher はブラウザベースの設定・チャットインターフ�
 
 **オプション 1: ダブルクリック（デスクトップ）**
 
-[picoclaw.io](https://picoclaw.io) からダウンロード後、`picoclaw-launcher`（Windows では `picoclaw-launcher.exe`）をダブルクリックしてください。ブラウザが自動的に `http://localhost:18800` を開きます。
+[GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases) からダウンロード後、`picoclaw-launcher`（Windows では `picoclaw-launcher.exe`）をダブルクリックしてください。ブラウザが自動的に `http://localhost:18800` を開きます。
 
 **オプション 2: コマンドライン**
 
@@ -315,7 +311,7 @@ docker compose -f docker/docker-compose.yml --profile launcher up -d
   </tr>
 </table>
 
-[picoclaw.io](https://picoclaw.io/download/) から APK をダウンロードして直接インストール。Termux 不要！
+[GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases) から APK をダウンロードして直接インストール。Termux 不要！
 
 **オプション 2: Termux**
 

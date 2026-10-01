@@ -64,7 +64,7 @@
   </a>
 </p>
 
-2026-03-31 📱 **Android 支持！** PicoClaw 现可在 Android 上运行！APK 下载地址：[picoclaw.io](https://picoclaw.io/download)
+2026-03-31 📱 **Android 支持！** PicoClaw 现可在 Android 上运行！APK 下载地址：[GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases)
 
 2026-03-25 🚀 **v0.2.4 发布！** Agent 架构全面重构（SubTurn、Hook、Steering、EventBus）、微信/企业微信深度集成、安全体系升级（.security.yml、敏感数据过滤）、新增 Provider（AWS Bedrock、Azure、小米 MiMo），以及 35 项 Bug 修复。PicoClaw 已达 **26K ⭐**！
 
@@ -162,10 +162,6 @@ PicoClaw 几乎可以部署在任何 Linux 设备上！
 
 ## 📦 安装
 
-### 从 picoclaw.io 下载（推荐）
-
-访问 **[picoclaw.io](https://picoclaw.io)** — 官网自动检测你的平台，提供一键下载，无需手动选择架构。
-
 ### 下载预编译二进制文件
 
 也可以从 [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases) 页面手动下载对应平台的二进制文件。
@@ -212,7 +208,7 @@ WebUI Launcher 提供基于浏览器的配置与聊天界面，是最简单的�
 
 **方式一：双击启动（桌面）**
 
-从 [picoclaw.io](https://picoclaw.io) 下载后，双击 `picoclaw-launcher`（Windows 上为 `picoclaw-launcher.exe`），浏览器将自动打开 `http://localhost:18800`。
+从 [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases) 下载后，双击 `picoclaw-launcher`（Windows 上为 `picoclaw-launcher.exe`），浏览器将自动打开 `http://localhost:18800`。
 
 **方式二：命令行**
 
@@ -315,7 +311,7 @@ macOS 可能会在首次启动时拦截 `picoclaw-launcher`，因为它从互联
   </tr>
 </table>
 
-从 [picoclaw.io](https://picoclaw.io/download/) 下载 APK 并直接安装，无需 Termux！
+从 [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases) 下载 APK 并直接安装，无需 Termux！
 
 **方式二：Termux**
 

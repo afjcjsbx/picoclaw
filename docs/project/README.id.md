@@ -64,7 +64,7 @@
   </a>
 </p>
 
-2026-03-31 📱 **Dukungan Android!** PicoClaw sekarang berjalan di Android! Unduh APK di [picoclaw.io](https://picoclaw.io/download)
+2026-03-31 📱 **Dukungan Android!** PicoClaw sekarang berjalan di Android! Unduh APK di [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases)
 
 2026-03-25 🚀 **v0.2.4 Dirilis!** Perombakan arsitektur Agent (SubTurn, Hooks, Steering, EventBus), integrasi WeChat/WeCom, penguatan keamanan (.security.yml, penyaringan data sensitif), provider baru (AWS Bedrock, Azure, Xiaomi MiMo), dan 35 perbaikan bug. PicoClaw telah mencapai **26K Stars**!
 
@@ -162,10 +162,6 @@ PicoClaw dapat di-deploy di hampir semua perangkat Linux!
 
 ## 📦 Instalasi
 
-### Unduh dari picoclaw.io (Direkomendasikan)
-
-Kunjungi **[picoclaw.io](https://picoclaw.io)** — website resmi mendeteksi platform Anda secara otomatis dan menyediakan unduhan satu klik. Tidak perlu memilih arsitektur secara manual.
-
 ### Unduh binary yang sudah dikompilasi
 
 Atau, unduh binary untuk platform Anda dari halaman [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases).
@@ -212,7 +208,7 @@ WebUI Launcher menyediakan antarmuka berbasis browser untuk konfigurasi dan chat
 
 **Opsi 1: Klik dua kali (Desktop)**
 
-Setelah mengunduh dari [picoclaw.io](https://picoclaw.io), klik dua kali `picoclaw-launcher` (atau `picoclaw-launcher.exe` di Windows). Browser Anda akan terbuka otomatis di `http://localhost:18800`.
+Setelah mengunduh dari [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases), klik dua kali `picoclaw-launcher` (atau `picoclaw-launcher.exe` di Windows). Browser Anda akan terbuka otomatis di `http://localhost:18800`.
 
 **Opsi 2: Command line**
 
@@ -314,7 +310,7 @@ Pratinjau:
   </tr>
 </table>
 
-Unduh APK dari [picoclaw.io](https://picoclaw.io/download/) dan instal langsung. Tanpa Termux!
+Unduh APK dari [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases) dan instal langsung. Tanpa Termux!
 
 **Opsi 2: Termux**
 

@@ -64,7 +64,7 @@
   </a>
 </p>
 
-2026-03-31 📱 **Sokongan Android!** PicoClaw sekarang berjalan di Android! Muat turun APK di [picoclaw.io](https://picoclaw.io/download)
+2026-03-31 📱 **Sokongan Android!** PicoClaw sekarang berjalan di Android! Muat turun APK di [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases)
 
 2026-03-25 🚀 **v0.2.4 Dikeluarkan!** Penstrukturan semula seni bina Agent (SubTurn, Hooks, Steering, EventBus), integrasi WeChat/WeCom, penguatan keselamatan (.security.yml, penapisan data sensitif), penyedia baharu (AWS Bedrock, Azure, Xiaomi MiMo), dan 35 pembetulan pepijat. PicoClaw mencapai **26K Stars**!
 
@@ -163,10 +163,6 @@ PicoClaw boleh digunakan pada hampir mana-mana peranti Linux!
 
 ## 📦 Pemasangan
 
-### Muat turun dari picoclaw.io (Disyorkan)
-
-Lawati **[picoclaw.io](https://picoclaw.io)** — laman web rasmi mengesan platform anda secara automatik dan menyediakan muat turun satu klik.
-
 ### Muat turun binari pra-kompil
 
 Muat turun binari untuk platform anda dari halaman [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases).
@@ -212,7 +208,7 @@ Pelancar WebUI menyediakan antara muka berasaskan pelayar untuk konfigurasi dan 
 
 **Pilihan 1: Klik dua kali (Desktop)**
 
-Selepas memuat turun dari [picoclaw.io](https://picoclaw.io), klik dua kali `picoclaw-launcher` (atau `picoclaw-launcher.exe` pada Windows). Pelayar anda akan dibuka secara automatik di `http://localhost:18800`.
+Selepas memuat turun dari [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases), klik dua kali `picoclaw-launcher` (atau `picoclaw-launcher.exe` pada Windows). Pelayar anda akan dibuka secara automatik di `http://localhost:18800`.
 
 **Pilihan 2: Baris arahan**
 
@@ -311,7 +307,7 @@ Pratonton:
   </tr>
 </table>
 
-Muat turun APK dari [picoclaw.io](https://picoclaw.io/download/) dan pasang secara langsung. Tiada Termux diperlukan!
+Muat turun APK dari [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases) dan pasang secara langsung. Tiada Termux diperlukan!
 
 **Pilihan 2: Termux**
 

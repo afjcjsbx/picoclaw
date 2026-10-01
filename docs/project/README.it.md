@@ -64,7 +64,7 @@
   </a>
 </p>
 
-2026-03-31 📱 **Supporto Android!** PicoClaw ora funziona su Android! Scarica l'APK su [picoclaw.io](https://picoclaw.io/download)
+2026-03-31 📱 **Supporto Android!** PicoClaw ora funziona su Android! Scarica l'APK su [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases)
 
 2026-03-25 🚀 **v0.2.4 rilasciata!** Revisione dell'architettura Agent (SubTurn, Hooks, Steering, EventBus), integrazione WeChat/WeCom, rafforzamento della sicurezza (.security.yml, filtraggio dati sensibili), nuovi provider (AWS Bedrock, Azure, Xiaomi MiMo) e 35 correzioni di bug. PicoClaw raggiunge **26K Stars**!
 
@@ -162,10 +162,6 @@ PicoClaw può essere distribuito su quasi qualsiasi dispositivo Linux!
 
 ## 📦 Installazione
 
-### Scarica da picoclaw.io (Consigliato)
-
-Visita **[picoclaw.io](https://picoclaw.io)** — il sito ufficiale rileva automaticamente la tua piattaforma e fornisce il download con un clic. Non è necessario scegliere manualmente l'architettura.
-
 ### Scarica il binario precompilato
 
 In alternativa, scarica il binario per la tua piattaforma dalla pagina delle [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases).
@@ -212,7 +208,7 @@ Il WebUI Launcher fornisce un'interfaccia basata su browser per la configurazion
 
 **Opzione 1: Doppio clic (Desktop)**
 
-Dopo aver scaricato da [picoclaw.io](https://picoclaw.io), fai doppio clic su `picoclaw-launcher` (o `picoclaw-launcher.exe` su Windows). Il browser si aprirà automaticamente su `http://localhost:18800`.
+Dopo aver scaricato da [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases), fai doppio clic su `picoclaw-launcher` (o `picoclaw-launcher.exe` su Windows). Il browser si aprirà automaticamente su `http://localhost:18800`.
 
 **Opzione 2: Riga di comando**
 
@@ -314,7 +310,7 @@ Anteprima:
   </tr>
 </table>
 
-Scarica l'APK da [picoclaw.io](https://picoclaw.io/download/) e installa direttamente. Senza Termux!
+Scarica l'APK da [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases) e installa direttamente. Senza Termux!
 
 **Opzione 2: Termux**
 

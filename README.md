@@ -80,7 +80,7 @@ This repository is an actively maintained fork of PicoClaw. Development continue
 
 2026-04-11 🚀 **v0.2.5 Released!** Zoneinfo from TZ/ZONEINFO env, Matrix CommonMark rendering alignment, `read_file` by lines.
 
-2026-03-31 📱 **Android Support!** PicoClaw now runs on Android! Download the APK at [picoclaw.io](https://picoclaw.io/download)
+2026-03-31 📱 **Android Support!** PicoClaw now runs on Android! Download the APK at [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases)
 
 2026-03-25 🚀 **v0.2.4 Released!** Agent architecture overhaul (SubTurn, Hooks, Steering, EventBus), WeChat/WeCom integration, security hardening (.security.yml, sensitive data filtering), new providers (AWS Bedrock, Azure, Xiaomi MiMo), and 35 bug fixes. PicoClaw has reached **26K Stars**!
 
@@ -178,13 +178,9 @@ PicoClaw can be deployed on virtually any Linux device!
 
 ## 📦 Install
 
-### Download from picoclaw.io (Recommended)
-
-Visit **[picoclaw.io](https://picoclaw.io)** — the official website auto-detects your platform and provides one-click download. No need to manually pick an architecture.
-
 ### Download precompiled binary
 
-Alternatively, download the binary for your platform from the [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases) page.
+Download the binary for your platform from this repository's [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases).
 
 ### Build from source (for development)
 
@@ -230,7 +226,7 @@ The WebUI Launcher provides a browser-based interface for configuration and chat
 
 **Option 1: Double-click (Desktop)**
 
-After downloading from [picoclaw.io](https://picoclaw.io), double-click `picoclaw-launcher` (or `picoclaw-launcher.exe` on Windows). Your browser will open automatically at `http://localhost:18800`.
+After downloading from [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases), double-click `picoclaw-launcher` (or `picoclaw-launcher.exe` on Windows). Your browser will open automatically at `http://localhost:18800`.
 
 **Option 2: Command line**
 
@@ -333,7 +329,7 @@ Preview:
   </tr>
 </table>
 
-Download the APK from [picoclaw.io](https://picoclaw.io/download/) and install directly. No Termux required!
+Download the APK from [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases) and install directly. No Termux required!
 
 **Option 2: Termux**
 
