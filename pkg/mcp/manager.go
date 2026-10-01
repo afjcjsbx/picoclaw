@@ -700,7 +700,13 @@ func (m *Manager) reconnectServer(
 		m.watchWG.Add(1)
 		staleToClose := staleConn
 		m.mu.Unlock()
-		m.publishServerEvent(runtimeevents.KindMCPServerConnected, serverName, freshConn.Config, len(freshConn.Tools), nil)
+		m.publishServerEvent(
+			runtimeevents.KindMCPServerConnected,
+			serverName,
+			freshConn.Config,
+			len(freshConn.Tools),
+			nil,
+		)
 		go m.watchServerConnection(serverName, freshConn)
 		_ = staleToClose.Session.Close()
 		return freshConn, nil

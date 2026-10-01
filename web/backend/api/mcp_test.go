@@ -40,7 +40,8 @@ func TestHandleGetMCPStatusFallbackRedactsSecrets(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	if response.RuntimeAvailable || len(response.Servers) != 1 || response.Servers[0].Status != picomcp.ConnectionDisconnected {
+	if response.RuntimeAvailable || len(response.Servers) != 1 ||
+		response.Servers[0].Status != picomcp.ConnectionDisconnected {
 		t.Fatalf("unexpected fallback response: %#v", response)
 	}
 }
@@ -123,7 +124,10 @@ func TestConfigAPIRedactsAndPreservesMCPSecrets(t *testing.T) {
 		t.Fatal(err)
 	}
 	putRecorder := httptest.NewRecorder()
-	mux.ServeHTTP(putRecorder, httptest.NewRequest(http.MethodPut, "/api/config", strings.NewReader(getRecorder.Body.String())))
+	mux.ServeHTTP(
+		putRecorder,
+		httptest.NewRequest(http.MethodPut, "/api/config", strings.NewReader(getRecorder.Body.String())),
+	)
 	if putRecorder.Code != http.StatusOK {
 		t.Fatalf("PUT status = %d, body=%s", putRecorder.Code, putRecorder.Body.String())
 	}
@@ -246,7 +250,9 @@ func TestConfigAPIPatchCreatesMCPServer(t *testing.T) {
 	mux.ServeHTTP(recorder, httptest.NewRequest(
 		http.MethodPatch,
 		"/api/config",
-		strings.NewReader(`{"tools":{"mcp":{"servers":{"new-server":{"enabled":true,"deferred":true,"type":"stdio","command":"npx","args":["-y","example-server"]}}}}}`),
+		strings.NewReader(
+			`{"tools":{"mcp":{"servers":{"new-server":{"enabled":true,"deferred":true,"type":"stdio","command":"npx","args":["-y","example-server"]}}}}}`,
+		),
 	))
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("PATCH status = %d, body=%s", recorder.Code, recorder.Body.String())
@@ -257,7 +263,8 @@ func TestConfigAPIPatchCreatesMCPServer(t *testing.T) {
 		t.Fatal(err)
 	}
 	server, ok := stored.Tools.MCP.Servers["new-server"]
-	if !ok || !server.Enabled || server.Deferred == nil || !*server.Deferred || server.Command != "npx" || strings.Join(server.Args, " ") != "-y example-server" {
+	if !ok || !server.Enabled || server.Deferred == nil || !*server.Deferred || server.Command != "npx" ||
+		strings.Join(server.Args, " ") != "-y example-server" {
 		t.Fatalf("new MCP server was not stored: %#v", server)
 	}
 }
@@ -269,7 +276,8 @@ func assertStoredMCPSecrets(t *testing.T, configPath, name string) {
 		t.Fatal(err)
 	}
 	server := stored.Tools.MCP.Servers[name]
-	if server.Env["OPENAI_API_KEY"] != "environment-secret" || server.Headers["Authorization"] != "header-secret" || server.Args[1] != "--token=argument-secret" {
+	if server.Env["OPENAI_API_KEY"] != "environment-secret" || server.Headers["Authorization"] != "header-secret" ||
+		server.Args[1] != "--token=argument-secret" {
 		t.Fatalf("stored MCP secrets changed: %#v", server)
 	}
 }

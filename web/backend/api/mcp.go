@@ -63,7 +63,10 @@ func reconcileMCPDashboardResponse(upstream picomcp.DashboardResponse, cfg *conf
 	return configured
 }
 
-func (h *Handler) fetchGatewayMCPStatus(ctxRequest *http.Request, cfg *config.Config) (picomcp.DashboardResponse, bool) {
+func (h *Handler) fetchGatewayMCPStatus(
+	ctxRequest *http.Request,
+	cfg *config.Config,
+) (picomcp.DashboardResponse, bool) {
 	if !h.gatewayAvailableForProxy() {
 		return picomcp.DashboardResponse{}, false
 	}
@@ -154,7 +157,10 @@ func preserveMCPConfigRedactions(incoming, existing *config.Config) {
 	}
 }
 
-func matchingRedactedMCPServer(incoming config.MCPServerConfig, servers map[string]config.MCPServerConfig) (config.MCPServerConfig, bool) {
+func matchingRedactedMCPServer(
+	incoming config.MCPServerConfig,
+	servers map[string]config.MCPServerConfig,
+) (config.MCPServerConfig, bool) {
 	var match config.MCPServerConfig
 	found := false
 	for _, candidate := range servers {

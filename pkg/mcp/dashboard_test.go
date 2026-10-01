@@ -117,7 +117,9 @@ func TestRedactAndRestoreServerConfig(t *testing.T) {
 		t.Fatalf("headers were not fully redacted: %#v", redacted.Headers)
 	}
 	restored := RestoreServerConfigRedactions(redacted, original)
-	if restored.Command != original.Command || restored.URL != original.URL || restored.Headers["Authorization"] != original.Headers["Authorization"] || restored.Headers["X-Custom"] != original.Headers["X-Custom"] {
+	if restored.Command != original.Command || restored.URL != original.URL ||
+		restored.Headers["Authorization"] != original.Headers["Authorization"] ||
+		restored.Headers["X-Custom"] != original.Headers["X-Custom"] {
 		t.Fatalf("redacted values were not restored: %#v", restored)
 	}
 }

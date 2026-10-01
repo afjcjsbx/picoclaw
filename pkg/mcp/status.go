@@ -47,7 +47,13 @@ func cloneStringMap(input map[string]string) map[string]string {
 	return result
 }
 
-func (m *Manager) setServerStatus(name string, cfg config.MCPServerConfig, state ConnectionState, err error, tools []*sdkmcp.Tool) {
+func (m *Manager) setServerStatus(
+	name string,
+	cfg config.MCPServerConfig,
+	state ConnectionState,
+	err error,
+	tools []*sdkmcp.Tool,
+) {
 	if m == nil {
 		return
 	}
@@ -65,7 +71,13 @@ func (m *Manager) setServerStatus(name string, cfg config.MCPServerConfig, state
 	m.mu.Unlock()
 }
 
-func (m *Manager) setServerStatusLocked(name string, cfg config.MCPServerConfig, state ConnectionState, err error, tools []*sdkmcp.Tool) {
+func (m *Manager) setServerStatusLocked(
+	name string,
+	cfg config.MCPServerConfig,
+	state ConnectionState,
+	err error,
+	tools []*sdkmcp.Tool,
+) {
 	status := ServerStatus{
 		Name:   name,
 		Config: cfg,

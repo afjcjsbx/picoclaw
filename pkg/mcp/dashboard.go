@@ -14,11 +14,21 @@ import (
 const RedactedValue = "********"
 
 var (
-	sensitiveNamePattern = regexp.MustCompile(`(?i)(key|token|secret|auth|pass|pwd|credential|dsn|database[_-]?url|db[_-]?(?:url|uri)|connection[_-]?(?:string|uri)|postgres(?:ql)?[_-]?url|mongo(?:db)?[_-]?uri|redis[_-]?url)`)
-	sensitivePairPattern = regexp.MustCompile(`(?i)((?:api[_-]?key|token|secret|auth(?:orization)?|pass(?:word)?|pwd|credential|dsn|database[_-]?url|db[_-]?(?:url|uri)|connection[_-]?(?:string|uri)|postgres(?:ql)?[_-]?url|mongo(?:db)?[_-]?uri|redis[_-]?url)\s*[=:]\s*)([^\s,;&]+)`)
-	sensitiveFlagPattern = regexp.MustCompile(`(?i)(--[^\s=]*(?:key|token|secret|auth|pass|pwd|credential|dsn|database[_-]?url|db[_-]?(?:url|uri)|connection[_-]?(?:string|uri)|postgres(?:ql)?[_-]?url|mongo(?:db)?[_-]?uri|redis[_-]?url)[^\s=]*(?:=|\s+))([^\s]+)`)
-	knownTokenPattern    = regexp.MustCompile(`(?i)\b(?:sk-[a-z0-9_-]{4,}|gh[pousr]_[a-z0-9_]{8,}|bearer\s+[a-z0-9._~+/=-]{8,})\b`)
-	databaseURLPattern   = regexp.MustCompile(`(?i)(?:jdbc:)?(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|redis|rediss|mssql|sqlserver)://[^\s]+`)
+	sensitiveNamePattern = regexp.MustCompile(
+		`(?i)(key|token|secret|auth|pass|pwd|credential|dsn|database[_-]?url|db[_-]?(?:url|uri)|connection[_-]?(?:string|uri)|postgres(?:ql)?[_-]?url|mongo(?:db)?[_-]?uri|redis[_-]?url)`,
+	)
+	sensitivePairPattern = regexp.MustCompile(
+		`(?i)((?:api[_-]?key|token|secret|auth(?:orization)?|pass(?:word)?|pwd|credential|dsn|database[_-]?url|db[_-]?(?:url|uri)|connection[_-]?(?:string|uri)|postgres(?:ql)?[_-]?url|mongo(?:db)?[_-]?uri|redis[_-]?url)\s*[=:]\s*)([^\s,;&]+)`,
+	)
+	sensitiveFlagPattern = regexp.MustCompile(
+		`(?i)(--[^\s=]*(?:key|token|secret|auth|pass|pwd|credential|dsn|database[_-]?url|db[_-]?(?:url|uri)|connection[_-]?(?:string|uri)|postgres(?:ql)?[_-]?url|mongo(?:db)?[_-]?uri|redis[_-]?url)[^\s=]*(?:=|\s+))([^\s]+)`,
+	)
+	knownTokenPattern = regexp.MustCompile(
+		`(?i)\b(?:sk-[a-z0-9_-]{4,}|gh[pousr]_[a-z0-9_]{8,}|bearer\s+[a-z0-9._~+/=-]{8,})\b`,
+	)
+	databaseURLPattern = regexp.MustCompile(
+		`(?i)(?:jdbc:)?(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|redis|rediss|mssql|sqlserver)://[^\s]+`,
+	)
 )
 
 type DashboardResponse struct {
@@ -56,7 +66,10 @@ type DashboardParameter struct {
 }
 
 // BuildDashboardResponse converts raw runtime state into a browser-safe API model.
-func BuildDashboardResponse(globalEnabled, discoveryEnabled, runtimeAvailable bool, statuses map[string]ServerStatus) DashboardResponse {
+func BuildDashboardResponse(
+	globalEnabled, discoveryEnabled, runtimeAvailable bool,
+	statuses map[string]ServerStatus,
+) DashboardResponse {
 	response := DashboardResponse{
 		Enabled:          globalEnabled,
 		RuntimeAvailable: runtimeAvailable,
@@ -169,7 +182,8 @@ func RestoreServerConfigRedactions(incoming, existing config.MCPServerConfig) co
 		incoming.URL = existing.URL
 	}
 	for i := range incoming.Args {
-		if i < len(existing.Args) && i < len(redactedExisting.Args) && incoming.Args[i] == redactedExisting.Args[i] && incoming.Args[i] != existing.Args[i] {
+		if i < len(existing.Args) && i < len(redactedExisting.Args) && incoming.Args[i] == redactedExisting.Args[i] &&
+			incoming.Args[i] != existing.Args[i] {
 			incoming.Args[i] = existing.Args[i]
 		}
 	}
@@ -225,7 +239,8 @@ func newServerRedactor(cfg config.MCPServerConfig) serverRedactor {
 }
 
 func isSensitiveStandaloneFlag(value string) bool {
-	return strings.HasPrefix(value, "-") && !strings.Contains(value, "=") && sensitiveNamePattern.MatchString(strings.TrimLeft(value, "-"))
+	return strings.HasPrefix(value, "-") && !strings.Contains(value, "=") &&
+		sensitiveNamePattern.MatchString(strings.TrimLeft(value, "-"))
 }
 
 func (r serverRedactor) Redact(value string) string {
@@ -358,7 +373,10 @@ func shellDisplayArg(value string) string {
 	if value == "" {
 		return `""`
 	}
-	if strings.IndexFunc(value, func(r rune) bool { return r == ' ' || r == '\t' || r == '\n' || r == '"' || r == '\'' }) >= 0 {
+	if strings.IndexFunc(
+		value,
+		func(r rune) bool { return r == ' ' || r == '\t' || r == '\n' || r == '"' || r == '\'' },
+	) >= 0 {
 		return strconv.Quote(value)
 	}
 	return value
