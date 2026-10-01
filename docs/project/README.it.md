@@ -536,10 +536,15 @@ Dato che PicoClaw è un assistente leggero, la scelta migliore è usare server M
     "mcp": {
       "enabled": true,
       "servers": {
-        "filesystem": {
+        "browserbase": {
           "enabled": true,
-          "command": "npx",
-          "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+          "deferred": false,
+          "command": "",
+          "type": "http",
+          "url": "https://mcp.browserbase.com/mcp?browserbaseApiKey=API_KEY",
+          "headers": {
+            "BROWSERBASE_PROJECT_ID": "********"
+          }
         }
       }
     }
@@ -550,9 +555,8 @@ Dato che PicoClaw è un assistente leggero, la scelta migliore è usare server M
 Puoi gestire i casi MCP più comuni direttamente dalla CLI senza modificare a mano il JSON:
 
 ```bash
-picoclaw mcp add filesystem -- npx -y @modelcontextprotocol/server-filesystem /tmp
 picoclaw mcp list
-picoclaw mcp test filesystem
+picoclaw mcp test browserbase
 ```
 
 `picoclaw mcp` agisce come configuration manager: aggiorna `config.json` sotto `tools.mcp.servers`, ma non mantiene in esecuzione il processo del server.

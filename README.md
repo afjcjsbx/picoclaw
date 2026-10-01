@@ -578,10 +578,15 @@ PicoClaw is a lightweight assistant, so remote MCP servers are the best choice. 
     "mcp": {
       "enabled": true,
       "servers": {
-        "filesystem": {
+        "browserbase": {
           "enabled": true,
-          "command": "npx",
-          "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+          "deferred": false,
+          "command": "",
+          "type": "http",
+          "url": "https://mcp.browserbase.com/mcp?browserbaseApiKey=API_KEY",
+          "headers": {
+            "BROWSERBASE_PROJECT_ID": "********"
+          }
         }
       }
     }
@@ -592,9 +597,8 @@ PicoClaw is a lightweight assistant, so remote MCP servers are the best choice. 
 You can manage common MCP setups directly from the CLI instead of editing JSON by hand:
 
 ```bash
-picoclaw mcp add filesystem -- npx -y @modelcontextprotocol/server-filesystem /tmp
 picoclaw mcp list
-picoclaw mcp test filesystem
+picoclaw mcp test browserbase
 ```
 
 `picoclaw mcp` is a configuration manager: it updates `config.json` under `tools.mcp.servers`, but it does not keep the server process running itself.
