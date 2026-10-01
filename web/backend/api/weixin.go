@@ -1,3 +1,5 @@
+//go:build !custom_channels || channel_weixin
+
 package api
 
 import (

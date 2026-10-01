@@ -1,6 +1,6 @@
-//go:build !mipsle && !netbsd && !(freebsd && arm) && !android
+//go:build !custom_channels && !mipsle && !netbsd && !(freebsd && arm) && !android
 
-package gateway
+package builtin
 
 import (
 	// Matrix currently pulls in mautrix crypto and modernc sqlite transitively.

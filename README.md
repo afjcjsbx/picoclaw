@@ -218,6 +218,25 @@ make install
 
 **Raspberry Pi Zero 2 W:** Use the binary that matches your OS: 32-bit Raspberry Pi OS -> `make build-linux-arm`; 64-bit -> `make build-linux-arm64`. Or run `make build-pi-zero` to build both.
 
+### Custom channel builds
+
+The normal build includes every channel. To build a smaller custom binary, add
+`custom_channels` and one `channel_<name>` tag for each channel to keep. For
+example, this builds with Telegram and Discord only:
+
+```bash
+make build GO_BUILD_TAGS='goolm,stdjson,custom_channels,channel_telegram,channel_discord'
+```
+
+Available channel tags are `channel_deltachat`, `channel_dingtalk`,
+`channel_discord`, `channel_feishu`, `channel_irc`, `channel_line`,
+`channel_matrix`, `channel_maixcam`, `channel_mqtt`, `channel_onebot`,
+`channel_pico`, `channel_qq`, `channel_slack`, `channel_slack_webhook`,
+`channel_teams_webhook`, `channel_telegram`, `channel_vk`, `channel_wecom`,
+`channel_weixin`, `channel_whatsapp`, and `channel_whatsapp_native`. Matrix is
+unavailable on the same unsupported targets as the normal build. WhatsApp's
+native implementation also needs the existing `whatsapp_native` tag.
+
 ## 🚀 Quick Start Guide
 
 ### 🌐 WebUI Launcher (Recommended for Desktop)
