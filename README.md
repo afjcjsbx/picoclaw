@@ -220,22 +220,18 @@ make install
 
 ### Custom channel builds
 
-The normal build includes every channel. To build a smaller custom binary, add
-`custom_channels` and one `channel_<name>` tag for each channel to keep. For
-example, this builds with Telegram and Discord only:
+The normal build includes every channel. Custom channel selection, optional
+Seahorse builds, SQLite caveats, and measured binary sizes are documented in
+the [Custom Builds Guide](docs/guides/custom-builds.md). For example, this
+builds with Telegram and Discord only:
 
 ```bash
 make build GO_BUILD_TAGS='goolm,stdjson,custom_channels,channel_telegram,channel_discord'
 ```
 
-Available channel tags are `channel_deltachat`, `channel_dingtalk`,
-`channel_discord`, `channel_feishu`, `channel_irc`, `channel_line`,
-`channel_matrix`, `channel_maixcam`, `channel_mqtt`, `channel_onebot`,
-`channel_pico`, `channel_qq`, `channel_slack`, `channel_slack_webhook`,
-`channel_teams_webhook`, `channel_telegram`, `channel_vk`, `channel_wecom`,
-`channel_weixin`, `channel_whatsapp`, and `channel_whatsapp_native`. Matrix is
-unavailable on the same unsupported targets as the normal build. WhatsApp's
-native implementation also needs the existing `whatsapp_native` tag.
+In the measured macOS ARM64 Telegram-only build, adding `no_seahorse` reduced
+the binary by 3.92 MiB (14.3%). See the guide for the full measurement details
+and the cases where Matrix or WhatsApp Native still require SQLite.
 
 ## 🚀 Quick Start Guide
 
