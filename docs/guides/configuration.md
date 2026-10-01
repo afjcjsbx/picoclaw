@@ -1145,6 +1145,27 @@ This keeps the runtime lightweight while making new OpenAI-compatible backends m
 
 </details>
 
+### Tool Loop Detection
+
+Loop detection is an optional guard against consecutive identical tool calls within one turn:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "loop_detection": {
+        "enabled": true,
+        "repeat_threshold": 3,
+        "critical_threshold": 6,
+        "window_size": 20
+      }
+    }
+  }
+}
+```
+
+At `repeat_threshold`, PicoClaw adds a turn-local warning for the model. At `critical_threshold`, it stops the loop with a final response. `window_size` bounds the per-turn hash history and must cover the critical threshold. Calls are compared using the tool name and complete arguments, so legitimate pagination and different paths or IDs remain distinct. The feature is disabled by default and complements, rather than replaces, `max_tool_iterations`.
+
 ### Scheduled Tasks / Reminders
 
 PicoClaw supports cron-style scheduled tasks via the `cron` tool. The agent can set, list, and cancel reminders or recurring jobs that trigger at specified times.

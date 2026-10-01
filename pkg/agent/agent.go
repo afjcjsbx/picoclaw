@@ -121,6 +121,7 @@ type continuationTarget struct {
 const (
 	defaultResponse            = "The model returned an empty response. This may indicate a provider error or token limit."
 	toolLimitResponse          = "I've reached `max_tool_iterations` without a final response. Increase `max_tool_iterations` in config.json if this task needs more tool steps."
+	loopDetectionResponse      = "I stopped because the same tool call was repeated too many times without making progress. Try refining the request or adjusting `loop_detection` in config.json."
 	handledToolResponseSummary = "Requested output delivered via tool attachment."
 	sessionKeyAgentPrefix      = "agent:"
 	pendingTurnPrefix          = "pending-"

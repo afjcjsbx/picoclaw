@@ -38,6 +38,7 @@ type AgentInstance struct {
 	ContextWindow             int
 	SummarizeMessageThreshold int
 	SummarizeTokenPercent     int
+	LoopDetection             config.LoopDetectionConfig
 	Provider                  providers.LLMProvider
 	Sessions                  session.SessionStore
 	ContextBuilder            *ContextBuilder
@@ -336,6 +337,7 @@ func NewAgentInstance(
 		ContextWindow:             contextWindow,
 		SummarizeMessageThreshold: summarizeMessageThreshold,
 		SummarizeTokenPercent:     summarizeTokenPercent,
+		LoopDetection:             defaults.LoopDetection.Normalized(),
 		Provider:                  provider,
 		Sessions:                  sessions,
 		ContextBuilder:            contextBuilder,

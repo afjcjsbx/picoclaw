@@ -39,6 +39,12 @@ func DefaultConfig() *Config {
 					MaxArgsLength:    300,
 					SeparateMessages: false,
 				},
+				LoopDetection: LoopDetectionConfig{
+					Enabled:           false,
+					RepeatThreshold:   DefaultLoopDetectionRepeatThreshold,
+					CriticalThreshold: DefaultLoopDetectionCriticalThreshold,
+					WindowSize:        DefaultLoopDetectionWindowSize,
+				},
 				SplitOnMarker:       false,
 				MaxLLMRetries:       2,
 				LLMRetryBackoffSecs: 2,

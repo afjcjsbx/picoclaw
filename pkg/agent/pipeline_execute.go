@@ -121,6 +121,39 @@ func (p *Pipeline) ExecuteTools(
 	ts.setPhase(TurnPhaseTools)
 	messages := exec.messages
 	handledAttachments := make([]providers.Attachment, 0)
+	loopDetectionStatus := loopStatusNone
+	loopDetectionCount := 0
+	loopDetectionTool := ""
+	recordLoopCall := func(toolName string, toolArgs map[string]any) bool {
+		status, count := ts.recordToolCall(toolName, toolArgs)
+		if status > loopDetectionStatus {
+			loopDetectionStatus = status
+			loopDetectionCount = count
+			loopDetectionTool = toolName
+		}
+		return status == loopStatusCritical
+	}
+	skipRemainingForLoop := func(start int) {
+		for j := start; j < len(normalizedToolCalls); j++ {
+			skippedTC := normalizedToolCalls[j]
+			const reason = "critical repeated tool-call loop detected"
+			al.emitEvent(
+				runtimeevents.KindAgentToolExecSkipped,
+				ts.eventMeta("runTurn", "turn.tool.skipped"),
+				ToolExecSkippedPayload{Tool: skippedTC.Name, Reason: reason},
+			)
+			skippedMsg := providers.Message{
+				Role:       "tool",
+				Content:    "Skipped because a repeated tool-call loop was detected.",
+				ToolCallID: skippedTC.ID,
+			}
+			messages = append(messages, skippedMsg)
+			if !ts.opts.NoHistory {
+				ts.agent.Sessions.AddFullMessage(ts.sessionKey, skippedMsg)
+				ts.recordPersistedMessage(skippedMsg)
+			}
+		}
+	}
 
 toolLoop:
 	for i, tc := range normalizedToolCalls {
@@ -330,6 +363,10 @@ toolLoop:
 						ts.agent.Sessions.AddFullMessage(ts.sessionKey, toolResultMsg)
 						ts.recordPersistedMessage(toolResultMsg)
 						ts.ingestMessage(turnCtx, al, toolResultMsg)
+					}
+					if recordLoopCall(toolName, toolArgs) {
+						skipRemainingForLoop(i + 1)
+						break toolLoop
 					}
 
 					if steerMsgs := al.dequeueSteeringMessagesForScope(ts.sessionKey); len(steerMsgs) > 0 {
@@ -554,6 +591,8 @@ toolLoop:
 		}
 
 		toolStart := time.Now()
+		executedToolName := toolName
+		executedToolArgs := cloneStringAnyMap(toolArgs)
 		execCtx := tools.WithToolInboundContext(
 			turnCtx,
 			ts.channel,
@@ -719,6 +758,10 @@ toolLoop:
 			ts.recordPersistedMessage(toolResultMsg)
 			ts.ingestMessage(turnCtx, al, toolResultMsg)
 		}
+		if recordLoopCall(executedToolName, executedToolArgs) {
+			skipRemainingForLoop(i + 1)
+			break toolLoop
+		}
 
 		if steerMsgs := al.dequeueSteeringMessagesForScope(ts.sessionKey); len(steerMsgs) > 0 {
 			exec.pendingMessages = append(exec.pendingMessages, steerMsgs...)
@@ -786,6 +829,32 @@ toolLoop:
 	}
 
 	exec.messages = messages
+	if loopDetectionStatus == loopStatusCritical {
+		logger.WarnCF("agent", "Critical repeated tool-call loop detected; stopping turn",
+			map[string]any{
+				"agent_id": ts.agent.ID,
+				"turn_id":  ts.turnID,
+				"tool":     loopDetectionTool,
+				"repeats":  loopDetectionCount,
+			})
+		exec.allResponsesHandled = false
+		exec.finalContent = loopDetectionResponse
+		return ToolControlBreak
+	}
+	if loopDetectionStatus == loopStatusWarning {
+		warning := providers.Message{
+			Role: "system",
+			Content: fmt.Sprintf(
+				"[Loop Warning] Tool %q was called %d consecutive times with identical arguments. If you are stuck, try a different approach.",
+				loopDetectionTool,
+				loopDetectionCount,
+			),
+		}
+		// The warning is deliberately turn-local: it guides the next LLM call but
+		// is not persisted into session history after the loop has been resolved.
+		messages = append(messages, warning)
+		exec.messages = messages
+	}
 
 	// Continue if pending steering exists (regardless of allResponsesHandled).
 	// This covers the case where tools were partially executed and skipped due to steering,
