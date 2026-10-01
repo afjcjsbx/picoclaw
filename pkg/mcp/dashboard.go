@@ -113,7 +113,7 @@ func SanitizeDashboardResponse(response *DashboardResponse) {
 // with access to configured values, so even an unexpected raw upstream payload
 // cannot echo a configured credential into the browser response.
 func SanitizeDashboardResponseWithServers(response *DashboardResponse, servers map[string]config.MCPServerConfig) {
-	knownValues := make([]string, 0)
+	knownValues := make([]string, 0, len(servers))
 	for _, cfg := range servers {
 		knownValues = append(knownValues, newServerRedactor(cfg).knownValues...)
 	}
