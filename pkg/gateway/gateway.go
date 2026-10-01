@@ -484,6 +484,7 @@ func setupAndStartServices(
 
 	runningServices.authToken = authToken
 	runningServices.HealthServer = health.NewServer(listenResult.ProbeHost, cfg.Gateway.Port, authToken)
+	runningServices.HealthServer.RegisterProtectedHandler(mcpStatusPath, mcpStatusHandler(agentLoop))
 
 	var listenAddr string
 	if len(listenResult.Listeners) > 0 {

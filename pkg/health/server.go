@@ -15,12 +15,14 @@ import (
 
 type Server struct {
 	server     *http.Server
+	mux        *http.ServeMux
 	mu         sync.RWMutex
 	ready      bool
 	checks     map[string]Check
 	startTime  time.Time
 	reloadFunc func() error
 	authToken  string // optional bearer token for protected endpoints
+	protected  map[string]http.Handler
 }
 
 type Check struct {
@@ -44,6 +46,8 @@ func NewServer(host string, port int, token string) *Server {
 		checks:    make(map[string]Check),
 		startTime: time.Now(),
 		authToken: token,
+		mux:       mux,
+		protected: make(map[string]http.Handler),
 	}
 
 	mux.HandleFunc("/health", s.healthHandler)
@@ -59,6 +63,44 @@ func NewServer(host string, port int, token string) *Server {
 	}
 
 	return s
+}
+
+// RegisterProtectedHandler registers an internal endpoint protected by the
+// gateway bearer token. It is mounted both on the standalone health mux and on
+// any shared mux later passed to RegisterOnMux.
+func (s *Server) RegisterProtectedHandler(pattern string, handler http.Handler) {
+	if s == nil || handler == nil {
+		return
+	}
+	wrapped := s.protectedHandler(handler)
+	s.mu.Lock()
+	if s.protected == nil {
+		s.protected = make(map[string]http.Handler)
+	}
+	s.protected[pattern] = wrapped
+	mux := s.mux
+	s.mu.Unlock()
+	if mux != nil {
+		mux.Handle(pattern, wrapped)
+	}
+}
+
+func (s *Server) protectedHandler(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.mu.RLock()
+		requiredToken := s.authToken
+		s.mu.RUnlock()
+		if requiredToken != "" {
+			given := extractBearerToken(r.Header.Get("Authorization"))
+			if given == "" || subtle.ConstantTimeCompare([]byte(given), []byte(requiredToken)) != 1 {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnauthorized)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) Start() error {
@@ -231,6 +273,13 @@ func (s *Server) RegisterOnMux(mux HandlerMux) {
 	mux.HandleFunc("/health", s.healthHandler)
 	mux.HandleFunc("/ready", s.readyHandler)
 	mux.HandleFunc("/reload", s.reloadHandler)
+	s.mu.RLock()
+	protected := make(map[string]http.Handler, len(s.protected))
+	maps.Copy(protected, s.protected)
+	s.mu.RUnlock()
+	for pattern, handler := range protected {
+		mux.Handle(pattern, handler)
+	}
 }
 
 func statusString(ok bool) string {
