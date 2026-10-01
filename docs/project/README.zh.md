@@ -168,7 +168,7 @@ PicoClaw 几乎可以部署在任何 Linux 设备上！
 
 ### 下载预编译二进制文件
 
-也可以从 [GitHub Releases](https://github.com/sipeed/picoclaw/releases) 页面手动下载对应平台的二进制文件。
+也可以从 [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases) 页面手动下载对应平台的二进制文件。
 
 ### 从源码构建（开发用）
 
@@ -178,7 +178,7 @@ PicoClaw 几乎可以部署在任何 Linux 设备上！
 - Node.js 22+ 和 pnpm 10.33.0+（用于 Web UI / launcher 构建）
 
 ```bash
-git clone https://github.com/sipeed/picoclaw.git
+git clone https://github.com/afjcjsbx/picoclaw.git
 
 cd picoclaw
 make deps
@@ -242,7 +242,7 @@ picoclaw-launcher
 
 ```bash
 # 1. 克隆本仓库
-git clone https://github.com/sipeed/picoclaw.git
+git clone https://github.com/afjcjsbx/picoclaw.git
 cd picoclaw
 
 # 2. 首次运行——自动生成 docker/data/config.json 后退出
@@ -327,7 +327,7 @@ macOS 可能会在首次启动时拦截 `picoclaw-launcher`，因为它从互联
 
 ```bash
 # 从 Release 页面下载最新版本
-wget https://github.com/sipeed/picoclaw/releases/latest/download/picoclaw_Linux_arm64.tar.gz
+wget https://github.com/afjcjsbx/picoclaw/releases/latest/download/picoclaw_Linux_arm64.tar.gz
 tar xzf picoclaw_Linux_arm64.tar.gz
 pkg install proot
 termux-chroot ./picoclaw onboard   # chroot 提供标准 Linux 文件系统布局
@@ -620,7 +620,7 @@ PicoClaw 通过 `cron` 工具支持定时提醒和重复任务：
 
 欢迎提交 PR！代码库刻意保持小巧和可读。🤗
 
-查看完整的 [社区路线图](https://github.com/sipeed/picoclaw/issues/988) 和 [CONTRIBUTING.md](../../CONTRIBUTING.md)。
+查看完整的 [社区路线图](https://github.com/afjcjsbx/picoclaw/issues/988) 和 [CONTRIBUTING.md](../../CONTRIBUTING.md)。
 
 开发者群组正在组建中，入群门槛：至少合并过 1 个 PR。
 

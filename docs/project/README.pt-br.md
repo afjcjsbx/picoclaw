@@ -168,7 +168,7 @@ Acesse **[picoclaw.io](https://picoclaw.io)** — o site oficial detecta automat
 
 ### Download do binário pré-compilado
 
-Alternativamente, baixe o binário para sua plataforma na página de [GitHub Releases](https://github.com/sipeed/picoclaw/releases).
+Alternativamente, baixe o binário para sua plataforma na página de [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases).
 
 ### Compilar a partir do código-fonte (para desenvolvimento)
 
@@ -178,7 +178,7 @@ Pré-requisitos:
 - Node.js 22+ e pnpm 10.33.0+ para builds do Web UI / launcher
 
 ```bash
-git clone https://github.com/sipeed/picoclaw.git
+git clone https://github.com/afjcjsbx/picoclaw.git
 
 cd picoclaw
 make deps
@@ -242,7 +242,7 @@ Para documentação detalhada do WebUI, veja [docs.picoclaw.io](https://docs.pic
 
 ```bash
 # 1. Clone este repositório
-git clone https://github.com/sipeed/picoclaw.git
+git clone https://github.com/afjcjsbx/picoclaw.git
 cd picoclaw
 
 # 2. Primeira execução — gera automaticamente docker/data/config.json e encerra
@@ -327,7 +327,7 @@ Baixe o APK de [picoclaw.io](https://picoclaw.io/download/) e instale diretament
 
 ```bash
 # Baixar a versão mais recente
-wget https://github.com/sipeed/picoclaw/releases/latest/download/picoclaw_Linux_arm64.tar.gz
+wget https://github.com/afjcjsbx/picoclaw/releases/latest/download/picoclaw_Linux_arm64.tar.gz
 tar xzf picoclaw_Linux_arm64.tar.gz
 pkg install proot
 termux-chroot ./picoclaw onboard   # chroot fornece um layout padrão de sistema de arquivos Linux
@@ -612,7 +612,7 @@ Para guias detalhados além deste README:
 
 PRs são bem-vindos! O código-fonte é intencionalmente pequeno e legível.
 
-Veja nosso [Roadmap da Comunidade](https://github.com/sipeed/picoclaw/issues/988) e [CONTRIBUTING.md](../../CONTRIBUTING.md) para diretrizes.
+Veja nosso [Roadmap da Comunidade](https://github.com/afjcjsbx/picoclaw/issues/988) e [CONTRIBUTING.md](../../CONTRIBUTING.md) para diretrizes.
 
 Grupo de desenvolvedores em formação, entre após seu primeiro PR mesclado!
 

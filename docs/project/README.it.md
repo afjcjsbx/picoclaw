@@ -168,7 +168,7 @@ Visita **[picoclaw.io](https://picoclaw.io)** — il sito ufficiale rileva autom
 
 ### Scarica il binario precompilato
 
-In alternativa, scarica il binario per la tua piattaforma dalla pagina delle [GitHub Releases](https://github.com/sipeed/picoclaw/releases).
+In alternativa, scarica il binario per la tua piattaforma dalla pagina delle [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases).
 
 ### Compila dai sorgenti (per lo sviluppo)
 
@@ -178,7 +178,7 @@ Prerequisiti:
 - Node.js 22+ e pnpm 10.33.0+ per le build Web UI / launcher
 
 ```bash
-git clone https://github.com/sipeed/picoclaw.git
+git clone https://github.com/afjcjsbx/picoclaw.git
 
 cd picoclaw
 make deps
@@ -242,7 +242,7 @@ Per la documentazione dettagliata del WebUI, vedi [docs.picoclaw.io](https://doc
 
 ```bash
 # 1. Clona questo repo
-git clone https://github.com/sipeed/picoclaw.git
+git clone https://github.com/afjcjsbx/picoclaw.git
 cd picoclaw
 
 # 2. Prima esecuzione — genera automaticamente docker/data/config.json poi si ferma
@@ -326,7 +326,7 @@ Scarica l'APK da [picoclaw.io](https://picoclaw.io/download/) e installa diretta
 
 ```bash
 # Scarica l'ultima release
-wget https://github.com/sipeed/picoclaw/releases/latest/download/picoclaw_Linux_arm64.tar.gz
+wget https://github.com/afjcjsbx/picoclaw/releases/latest/download/picoclaw_Linux_arm64.tar.gz
 tar xzf picoclaw_Linux_arm64.tar.gz
 pkg install proot
 termux-chroot ./picoclaw onboard   # chroot fornisce un layout standard del filesystem Linux
@@ -629,7 +629,7 @@ Per guide dettagliate oltre questo README:
 
 Le PR sono benvenute! Il codice è volutamente piccolo e leggibile.
 
-Consulta la nostra [Roadmap della Community](https://github.com/sipeed/picoclaw/issues/988) e [CONTRIBUTING.md](../../CONTRIBUTING.md) per le linee guida.
+Consulta la nostra [Roadmap della Community](https://github.com/afjcjsbx/picoclaw/issues/988) e [CONTRIBUTING.md](../../CONTRIBUTING.md) per le linee guida.
 
 Gruppo sviluppatori in costruzione, unisciti dopo la tua prima PR accettata!
 

@@ -26,7 +26,7 @@
 
 ## 🌱 Active Fork
 
-This repository is an actively maintained fork of the [original PicoClaw project](https://github.com/sipeed/picoclaw), which no longer appears to be maintained. Development continues here, with ongoing fixes, dependency updates, and new features.
+This repository is an actively maintained fork of PicoClaw. Development continues here, with ongoing fixes, dependency updates, and new features.
 
 **PicoClaw** is an ultra-lightweight personal AI assistant inspired by [NanoBot](https://github.com/HKUDS/nanobot). It was rebuilt from the ground up in **Go** through a "self-bootstrapping" process — the AI Agent itself drove the architecture migration and code optimization.
 
@@ -184,7 +184,7 @@ Visit **[picoclaw.io](https://picoclaw.io)** — the official website auto-detec
 
 ### Download precompiled binary
 
-Alternatively, download the binary for your platform from the [GitHub Releases](https://github.com/sipeed/picoclaw/releases) page.
+Alternatively, download the binary for your platform from the [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases) page.
 
 ### Build from source (for development)
 
@@ -194,7 +194,7 @@ Prerequisites:
 - Node.js 22+ and pnpm 10.33.0+ for Web UI / launcher builds
 
 ```bash
-git clone https://github.com/sipeed/picoclaw.git
+git clone https://github.com/afjcjsbx/picoclaw.git
 
 cd picoclaw
 make deps

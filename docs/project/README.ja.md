@@ -168,7 +168,7 @@ PicoClaw はほぼすべての Linux デバイスにデプロイできます！
 
 ### プリコンパイル済みバイナリをダウンロード
 
-または、[GitHub Releases](https://github.com/sipeed/picoclaw/releases) ページからプラットフォームに合ったバイナリをダウンロードしてください。
+または、[GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases) ページからプラットフォームに合ったバイナリをダウンロードしてください。
 
 ### ソースからビルド（開発用）
 
@@ -178,7 +178,7 @@ PicoClaw はほぼすべての Linux デバイスにデプロイできます！
 - Web UI / launcher のビルドには Node.js 22+ と pnpm 10.33.0+ が必要
 
 ```bash
-git clone https://github.com/sipeed/picoclaw.git
+git clone https://github.com/afjcjsbx/picoclaw.git
 
 cd picoclaw
 make deps
@@ -242,7 +242,7 @@ WebUI の詳細なドキュメントは [docs.picoclaw.io](https://docs.picoclaw
 
 ```bash
 # 1. このリポジトリをクローン
-git clone https://github.com/sipeed/picoclaw.git
+git clone https://github.com/afjcjsbx/picoclaw.git
 cd picoclaw
 
 # 2. 初回実行 — docker/data/config.json を自動生成して終了
@@ -327,7 +327,7 @@ docker compose -f docker/docker-compose.yml --profile launcher up -d
 
 ```bash
 # 最新リリースをダウンロード
-wget https://github.com/sipeed/picoclaw/releases/latest/download/picoclaw_Linux_arm64.tar.gz
+wget https://github.com/afjcjsbx/picoclaw/releases/latest/download/picoclaw_Linux_arm64.tar.gz
 tar xzf picoclaw_Linux_arm64.tar.gz
 pkg install proot
 termux-chroot ./picoclaw onboard   # chroot で標準的な Linux ファイルシステムレイアウトを提供
@@ -612,7 +612,7 @@ PicoClaw は `cron` ツールによるスケジュールリマインダーと定
 
 PR 歓迎！コードベースは意図的に小さく読みやすくしています。
 
-[コミュニティロードマップ](https://github.com/sipeed/picoclaw/issues/988)と[CONTRIBUTING.md](../../CONTRIBUTING.md)をご覧ください。
+[コミュニティロードマップ](https://github.com/afjcjsbx/picoclaw/issues/988)と[CONTRIBUTING.md](../../CONTRIBUTING.md)をご覧ください。
 
 開発者グループ構築中、最初の PR がマージされたら参加できます！
 

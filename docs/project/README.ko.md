@@ -168,7 +168,7 @@ PicoClaw는 사실상 거의 모든 Linux 장치에 배포할 수 있습니다!
 
 ### 사전 컴파일된 바이너리 다운로드
 
-또는 [GitHub Releases](https://github.com/sipeed/picoclaw/releases) 페이지에서 플랫폼에 맞는 바이너리를 다운로드할 수 있습니다.
+또는 [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases) 페이지에서 플랫폼에 맞는 바이너리를 다운로드할 수 있습니다.
 
 ### 소스에서 빌드(개발용)
 
@@ -178,7 +178,7 @@ PicoClaw는 사실상 거의 모든 Linux 장치에 배포할 수 있습니다!
 - Web UI / launcher 빌드에는 Node.js 22+와 pnpm 10.33.0+가 필요합니다
 
 ```bash
-git clone https://github.com/sipeed/picoclaw.git
+git clone https://github.com/afjcjsbx/picoclaw.git
 
 cd picoclaw
 make deps
@@ -242,7 +242,7 @@ WebUI를 연 뒤 다음 순서로 진행하세요. **1)** 프로바이더 설정
 
 ```bash
 # 1. 이 저장소를 클론
-git clone https://github.com/sipeed/picoclaw.git
+git clone https://github.com/afjcjsbx/picoclaw.git
 cd picoclaw
 
 # 2. 첫 실행 - docker/data/config.json을 자동 생성한 뒤 종료
@@ -326,7 +326,7 @@ macOS에서는 인터넷에서 다운로드한 앱이고 Mac App Store 공증을
 
 ```bash
 # 최신 릴리스 다운로드
-wget https://github.com/sipeed/picoclaw/releases/latest/download/picoclaw_Linux_arm64.tar.gz
+wget https://github.com/afjcjsbx/picoclaw/releases/latest/download/picoclaw_Linux_arm64.tar.gz
 tar xzf picoclaw_Linux_arm64.tar.gz
 pkg install proot
 termux-chroot ./picoclaw onboard   # chroot가 표준 Linux 파일시스템 레이아웃을 제공합니다
@@ -619,7 +619,7 @@ PicoClaw는 `cron` 도구를 통해 예약 리마인더와 반복 작업을 지�
 
 PR은 언제든 환영합니다! 코드베이스는 의도적으로 작고 읽기 쉽게 유지하고 있습니다.
 
-가이드라인은 [커뮤니티 로드맵](https://github.com/sipeed/picoclaw/issues/988)과 [CONTRIBUTING.md](../../CONTRIBUTING.md)를 참고하세요.
+가이드라인은 [커뮤니티 로드맵](https://github.com/afjcjsbx/picoclaw/issues/988)과 [CONTRIBUTING.md](../../CONTRIBUTING.md)를 참고하세요.
 
 개발자 그룹도 준비 중입니다. 첫 PR이 머지되면 함께할 수 있습니다!
 

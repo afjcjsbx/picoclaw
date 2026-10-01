@@ -168,7 +168,7 @@ Truy cập **[picoclaw.io](https://picoclaw.io)** — website chính thức tự
 
 ### Tải xuống binary đã biên dịch sẵn
 
-Ngoài ra, tải binary cho nền tảng của bạn từ trang [GitHub Releases](https://github.com/sipeed/picoclaw/releases).
+Ngoài ra, tải binary cho nền tảng của bạn từ trang [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases).
 
 ### Xây dựng từ mã nguồn (để phát triển)
 
@@ -178,7 +178,7 @@ Yêu cầu:
 - Node.js 22+ và pnpm 10.33.0+ cho các bản build Web UI / launcher
 
 ```bash
-git clone https://github.com/sipeed/picoclaw.git
+git clone https://github.com/afjcjsbx/picoclaw.git
 
 cd picoclaw
 make deps
@@ -242,7 +242,7 @@ Mở WebUI, sau đó: **1)** Cấu hình Provider (thêm API key LLM của bạn
 
 ```bash
 # 1. Clone this repo
-git clone https://github.com/sipeed/picoclaw.git
+git clone https://github.com/afjcjsbx/picoclaw.git
 cd picoclaw
 
 # 2. First run — auto-generates docker/data/config.json then exits
@@ -327,7 +327,7 @@ Tải APK từ [picoclaw.io](https://picoclaw.io/download/) và cài đặt tr�
 
 ```bash
 # Download the latest release
-wget https://github.com/sipeed/picoclaw/releases/latest/download/picoclaw_Linux_arm64.tar.gz
+wget https://github.com/afjcjsbx/picoclaw/releases/latest/download/picoclaw_Linux_arm64.tar.gz
 tar xzf picoclaw_Linux_arm64.tar.gz
 pkg install proot
 termux-chroot ./picoclaw onboard   # chroot provides a standard Linux filesystem layout
@@ -612,7 +612,7 @@ PicoClaw hỗ trợ nhắc nhở đã lên lịch và tác vụ định kỳ th�
 
 PR luôn được chào đón! Codebase được thiết kế nhỏ gọn và dễ đọc.
 
-Xem [Lộ trình Cộng đồng](https://github.com/sipeed/picoclaw/issues/988) và [CONTRIBUTING.md](../../CONTRIBUTING.md) để biết hướng dẫn.
+Xem [Lộ trình Cộng đồng](https://github.com/afjcjsbx/picoclaw/issues/988) và [CONTRIBUTING.md](../../CONTRIBUTING.md) để biết hướng dẫn.
 
 Nhóm nhà phát triển đang được xây dựng, tham gia sau khi PR đầu tiên của bạn được merge!
 

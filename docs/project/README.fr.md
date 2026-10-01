@@ -171,7 +171,7 @@ Visitez **[picoclaw.io](https://picoclaw.io)** — le site officiel détecte aut
 
 ### Télécharger le binaire précompilé
 
-Vous pouvez aussi télécharger le binaire pour votre plateforme depuis la page [GitHub Releases](https://github.com/sipeed/picoclaw/releases).
+Vous pouvez aussi télécharger le binaire pour votre plateforme depuis la page [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases).
 
 ### Compiler depuis les sources (pour le développement)
 
@@ -181,7 +181,7 @@ Prérequis :
 - Node.js 22+ et pnpm 10.33.0+ pour les builds Web UI / launcher
 
 ```bash
-git clone https://github.com/sipeed/picoclaw.git
+git clone https://github.com/afjcjsbx/picoclaw.git
 
 cd picoclaw
 make deps
@@ -245,7 +245,7 @@ Pour la documentation détaillée du WebUI, voir [docs.picoclaw.io](https://docs
 
 ```bash
 # 1. Cloner ce dépôt
-git clone https://github.com/sipeed/picoclaw.git
+git clone https://github.com/afjcjsbx/picoclaw.git
 cd picoclaw
 
 # 2. Premier lancement — génère automatiquement docker/data/config.json puis s'arrête
@@ -330,7 +330,7 @@ Téléchargez l'APK depuis [picoclaw.io](https://picoclaw.io/download/) et insta
 
 ```bash
 # Télécharger la dernière version
-wget https://github.com/sipeed/picoclaw/releases/latest/download/picoclaw_Linux_arm64.tar.gz
+wget https://github.com/afjcjsbx/picoclaw/releases/latest/download/picoclaw_Linux_arm64.tar.gz
 tar xzf picoclaw_Linux_arm64.tar.gz
 pkg install proot
 termux-chroot ./picoclaw onboard   # chroot fournit une arborescence Linux standard
@@ -616,7 +616,7 @@ Pour des guides détaillés au-delà de ce README :
 
 Les PRs sont les bienvenues ! Le code source est intentionnellement petit et lisible.
 
-Consultez notre [Roadmap communautaire](https://github.com/sipeed/picoclaw/issues/988) et [CONTRIBUTING.md](../../CONTRIBUTING.md) pour les directives.
+Consultez notre [Roadmap communautaire](https://github.com/afjcjsbx/picoclaw/issues/988) et [CONTRIBUTING.md](../../CONTRIBUTING.md) pour les directives.
 
 Groupe de développeurs en construction, rejoignez-le après votre première PR fusionnée !
 
