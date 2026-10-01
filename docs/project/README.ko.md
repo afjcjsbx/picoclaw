@@ -56,6 +56,13 @@
 
 ## 📢 뉴스
 
+2026-09-29 🚀 **[v0.4.0 Released!](https://github.com/afjcjsbx/picoclaw/releases/tag/v0.4.0)** This substantial release adds MCP CLI management and Web UI configuration, native Anthropic Messages API support, configurable web search (including Keenable and Kagi), configurable logging and virtual models, cross-platform serial-tool support, enhanced hooks and isolation, plus numerous channel, provider, security, and build fixes.
+
+2026-09-28 🌱 **Project revived!** Development has resumed and will continue to be actively maintained in this fork.
+
+<details>
+<summary>Earlier news...</summary>
+
 2026-05-11 🛒 **LicheeRV-Claw를 AliExpress에서 구매할 수 있습니다!** 이제 [AliExpress](https://www.aliexpress.com/item/1005006519668532.html)에서 LicheeRV-Claw를 구매해 소형 RISC-V 하드웨어에서 PicoClaw를 더 쉽게 사용해 볼 수 있습니다.
 
 <p align="center">
@@ -73,9 +80,6 @@
 2026-03-09 🎉 **v0.2.1 — 역대 최대 업데이트!** MCP 프로토콜 지원, 4개의 새 채널(Matrix/IRC/WeCom/Discord Proxy), 3개의 새 프로바이더(Kimi/Minimax/Avian), 비전 파이프라인, JSONL 메모리 저장소, 모델 라우팅이 추가되었습니다.
 
 2026-02-28 📦 **v0.2.0** 이 Docker Compose 및 WebUI 런처 지원과 함께 출시되었습니다.
-
-<details>
-<summary>이전 뉴스...</summary>
 
 2026-02-26 🎉 PicoClaw가 단 17일 만에 **20K 스타**를 달성했습니다! 채널 자동 오케스트레이션과 기능 인터페이스가 적용되었습니다.
 

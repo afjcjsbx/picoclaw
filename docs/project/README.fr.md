@@ -57,6 +57,13 @@
 
 ## 📢 Actualités
 
+2026-09-29 🚀 **[v0.4.0 Released!](https://github.com/afjcjsbx/picoclaw/releases/tag/v0.4.0)** This substantial release adds MCP CLI management and Web UI configuration, native Anthropic Messages API support, configurable web search (including Keenable and Kagi), configurable logging and virtual models, cross-platform serial-tool support, enhanced hooks and isolation, plus numerous channel, provider, security, and build fixes.
+
+2026-09-28 🌱 **Project revived!** Development has resumed and will continue to be actively maintained in this fork.
+
+<details>
+<summary>Earlier news...</summary>
+
 2026-05-11 🛒 **LicheeRV-Claw disponible sur AliExpress !** Vous pouvez désormais acheter le LicheeRV-Claw sur [AliExpress](https://www.aliexpress.com/item/1005006519668532.html), ce qui facilite l'essai de PicoClaw sur du matériel RISC-V compact.
 
 <p align="center">
@@ -75,9 +82,6 @@
 
 2026-02-28 📦 **v0.2.0** publiée avec support Docker Compose et Web UI Launcher.
 
-<details>
-<summary>Actualités précédentes...</summary>
-
 2026-02-26 🎉 PicoClaw atteint **20K Stars** en seulement 17 jours ! L'orchestration automatique des channels et les interfaces de capacités sont disponibles.
 
 2026-02-16 🎉 PicoClaw dépasse 12K Stars en une semaine ! Rôles de mainteneurs communautaires et [Roadmap](../../ROADMAP.md) officiellement lancés.
@@ -87,7 +91,6 @@
 2026-02-09 🎉 **PicoClaw publié !** Construit en 1 jour pour apporter les Agents IA sur du matériel à $10 avec <10 Mo de RAM. Let's Go, PicoClaw !
 
 </details>
-
 
 ## ✨ Fonctionnalités
 
