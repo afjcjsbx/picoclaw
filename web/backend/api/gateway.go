@@ -424,6 +424,7 @@ func computeConfigSignature(cfg *config.Config) string {
 	}
 	var parts []string
 	parts = append(parts, "default_provider:"+defaultChainProvider(cfg))
+	parts = append(parts, "log_level:"+config.EffectiveGatewayLogLevel(cfg))
 	defaultModel := strings.TrimSpace(cfg.Agents.Defaults.GetModelName())
 	if defaultModel != "" {
 		parts = append(parts, "model:"+defaultModel)
