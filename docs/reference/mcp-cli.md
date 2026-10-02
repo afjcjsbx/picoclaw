@@ -328,6 +328,68 @@ It is useful when:
 - you want to debug one server without probing the whole list
 - the entry is currently disabled in config but you still want to validate its definition
 
+## `picoclaw mcp login` and `logout`
+
+Remote HTTP/SSE servers can use OAuth instead of a static Authorization header:
+
+```bash
+picoclaw mcp add remote https://mcp.example.com/mcp --transport http
+picoclaw mcp login remote
+picoclaw mcp test remote
+picoclaw mcp logout remote
+```
+
+Login discovers the server's OAuth metadata, opens your browser, and receives the
+OAuth callback on `http://127.0.0.1:<port>/callback`. It uses authorization code
+flow with S256 PKCE and state validation. Dynamic client registration is used by
+default. For a pre-registered **public** client, use:
+
+```bash
+picoclaw mcp login remote --client-id YOUR_CLIENT_ID \
+  --issuer https://auth.example.com --callback-port 8123
+```
+
+Register `http://127.0.0.1:8123/callback` with that authorization server. Without
+`--callback-port`, login selects a free port. Confidential clients requiring a
+client secret are not configurable through this command.
+
+Additional options:
+
+- `--scope tools,offline_access`: override discovered scopes.
+- `--no-browser`: print the authorization URL without launching a browser.
+- `--timeout 5m`: bound the login wait (maximum five minutes).
+
+For SSH/headless use, select a fixed callback port and forward that port to your
+local browser machine, for example `ssh -L 8123:127.0.0.1:8123 host`, then run login
+with `--no-browser --callback-port 8123`. The callback listener binds only to IPv4
+loopback. Browser launch failures also leave the URL available for manual use.
+
+A successful login saves the `oauth` configuration on that server. The gateway,
+`mcp test`, and other connection probes reuse stored tokens and refresh expired
+access tokens automatically. They never initiate an interactive login: missing,
+rejected, or unrefreshable credentials produce an instruction to run `mcp login`.
+Re-login also obtains additional scopes when server requirements change.
+
+Credentials are stored separately from `config.json`, under
+`$PICOCLAW_HOME/auth/mcp/` (default `~/.picoclaw/auth/mcp/`), using hashed filenames
+bound to the server name, URL and OAuth configuration. Changing those settings
+requires another login. On Unix, token files have mode `0600` and the store
+directory has mode `0700`; writes use atomic replacement. Tokens are local JSON
+files, not encrypted or stored in an OS keychain. Protect this directory and its
+backups as credentials. Refresh and logout are serialized within each process;
+avoid multiple processes refreshing the same server credentials concurrently.
+
+Logout removes credentials for the current server configuration. It does not
+revoke tokens at the provider; restart running gateways to close existing
+sessions. Log out before renaming a server or changing its URL/OAuth settings to
+remove the corresponding old credentials.
+
+OAuth requires HTTPS, except for local loopback development servers. Combining
+`oauth` with any case variant of the `Authorization` header is rejected. Custom
+non-Authorization headers still work and are sent only to the MCP endpoint.
+OAuth requests do not follow HTTP redirects; configure the final endpoint URL.
+Existing static Bearer headers and stdio servers continue to work without OAuth.
+
 ## `picoclaw mcp edit`
 
 Syntax:

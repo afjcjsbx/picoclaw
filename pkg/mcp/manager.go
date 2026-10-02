@@ -13,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/sipeed/picoclaw/pkg/config"
@@ -326,6 +327,22 @@ func connectServer(
 	name string,
 	cfg config.MCPServerConfig,
 ) (*ServerConnection, error) {
+	var handler auth.OAuthHandler
+	if cfg.OAuth != nil {
+		if err := validateOAuthConfig(cfg); err != nil {
+			return nil, err
+		}
+		handler = &storedOAuthHandler{name: name, store: newOAuthStore(name, cfg)}
+	}
+	return connectServerWithOAuth(ctx, name, cfg, handler)
+}
+
+func connectServerWithOAuth(
+	ctx context.Context,
+	name string,
+	cfg config.MCPServerConfig,
+	handler auth.OAuthHandler,
+) (*ServerConnection, error) {
 	logger.InfoCF("mcp", "Connecting to MCP server",
 		map[string]any{
 			"server":     name,
@@ -372,6 +389,7 @@ func connectServer(
 		sseTransport := &mcp.StreamableClientTransport{
 			Endpoint:             cfg.URL,
 			DisableStandaloneSSE: disableStandaloneSSE,
+			OAuthHandler:         handler,
 		}
 
 		// Add custom headers if provided
@@ -390,6 +408,12 @@ func connectServer(
 				})
 		}
 
+		if handler != nil {
+			sseTransport.HTTPClient = &http.Client{
+				Transport:     &headerTransport{base: oauthHTTPTransport{}, headers: cfg.Headers},
+				CheckRedirect: rejectOAuthRedirect,
+			}
+		}
 		transport = sseTransport
 	case "stdio":
 		if cfg.Command == "" {
