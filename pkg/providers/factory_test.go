@@ -7,6 +7,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	cliprovider "github.com/sipeed/picoclaw/pkg/providers/cli"
 	"github.com/sipeed/picoclaw/pkg/providers/httpapi"
+	oauthprovider "github.com/sipeed/picoclaw/pkg/providers/oauth"
 )
 
 func TestCreateProviderReturnsHTTPProviderForOpenRouter(t *testing.T) {
@@ -257,8 +258,8 @@ func TestCreateProviderReturnsClaudeProviderForAnthropicOAuth(t *testing.T) {
 		t.Fatalf("CreateProvider() error = %v", err)
 	}
 
-	if _, ok := provider.(*ClaudeProvider); !ok {
-		t.Fatalf("provider type = %T, want *ClaudeProvider", provider)
+	if _, ok := provider.(*oauthprovider.ClaudeProvider); !ok {
+		t.Fatalf("provider type = %T, want *oauthprovider.ClaudeProvider", provider)
 	}
 	// TODO: Test custom APIBase when createClaudeAuthProvider supports it
 }

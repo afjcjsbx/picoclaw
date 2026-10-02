@@ -126,9 +126,13 @@ func NewAgentInstance(
 		maxReadFileSize := cfg.Tools.ReadFile.MaxReadFileSize
 		switch cfg.Tools.ReadFile.EffectiveMode() {
 		case config.ReadFileModeLines:
-			toolsRegistry.Register(fstools.NewReadFileLinesTool(workspace, readRestrict, maxReadFileSize, allowReadPaths))
+			toolsRegistry.Register(fstools.NewReadFileLinesTool(
+				workspace, readRestrict, maxReadFileSize, allowReadPaths,
+			))
 		default:
-			toolsRegistry.Register(fstools.NewReadFileBytesTool(workspace, readRestrict, maxReadFileSize, allowReadPaths))
+			toolsRegistry.Register(fstools.NewReadFileBytesTool(
+				workspace, readRestrict, maxReadFileSize, allowReadPaths,
+			))
 		}
 	}
 	if cfg.Tools.IsToolEnabled("edit_file") {

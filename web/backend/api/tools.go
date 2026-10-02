@@ -739,7 +739,9 @@ func resolveCurrentWebSearchProvider(cfg *config.Config) string {
 	if cfg == nil || !cfg.Tools.IsToolEnabled("web") {
 		return ""
 	}
-	selected, err := integrationtools.ResolveWebSearchProviderName(integrationtools.WebSearchToolOptionsFromConfig(cfg), "")
+	selected, err := integrationtools.ResolveWebSearchProviderName(
+		integrationtools.WebSearchToolOptionsFromConfig(cfg), "",
+	)
 	if err != nil {
 		return ""
 	}
