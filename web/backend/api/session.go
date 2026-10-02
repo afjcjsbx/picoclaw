@@ -72,8 +72,10 @@ const (
 
 	// Keep the session API aligned with the shared JSONL store reader limit in
 	// pkg/memory/jsonl.go so oversized lines fail consistently everywhere.
-	maxSessionJSONLLineSize = 10 * 1024 * 1024
-	maxSessionTitleRunes    = 60
+	maxSessionJSONLLineSize   = 10 * 1024 * 1024
+	maxSessionTitleRunes      = 60
+	sessionHistoryPageSize    = 50
+	maxSessionHistoryPageSize = 200
 
 	handledToolResponseSummaryText = "Requested output delivered via tool attachment."
 )
@@ -894,7 +896,7 @@ func (h *Handler) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(items)
 }
 
-// handleGetSession returns the full message history for a specific session.
+// handleGetSession returns a page of message history for a specific session.
 //
 //	GET /api/sessions/{id}
 func (h *Handler) handleGetSession(w http.ResponseWriter, r *http.Request) {
@@ -902,6 +904,25 @@ func (h *Handler) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	if sessionID == "" {
 		http.Error(w, "missing session id", http.StatusBadRequest)
 		return
+	}
+
+	limit := sessionHistoryPageSize
+	if rawLimit := r.URL.Query().Get("limit"); rawLimit != "" {
+		parsed, parseErr := strconv.Atoi(rawLimit)
+		if parseErr != nil || parsed < 1 || parsed > maxSessionHistoryPageSize {
+			http.Error(w, "invalid session history limit", http.StatusBadRequest)
+			return
+		}
+		limit = parsed
+	}
+	before := -1
+	if rawBefore := r.URL.Query().Get("before"); rawBefore != "" {
+		parsed, parseErr := strconv.Atoi(rawBefore)
+		if parseErr != nil || parsed < 0 {
+			http.Error(w, "invalid session history cursor", http.StatusBadRequest)
+			return
+		}
+		before = parsed
 	}
 
 	dir, toolFeedbackMaxArgsLength, err := h.sessionRuntimeSettings()
@@ -944,11 +965,20 @@ func (h *Handler) handleGetSession(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	messages := detailSessionMessages(sess.Messages, toolFeedbackMaxArgsLength)
+	total := len(messages)
+	end := total
+	if before >= 0 && before < end {
+		end = before
+	}
+	start := max(0, end-limit)
+	page := messages[start:end]
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
 		"id":       sessionID,
-		"messages": messages,
+		"messages": page,
+		"start":    start,
+		"total":    total,
 		"summary":  sess.Summary,
 		"created":  sess.Created.Format(time.RFC3339),
 		"updated":  sess.Updated.Format(time.RFC3339),
