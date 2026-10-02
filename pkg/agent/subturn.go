@@ -365,6 +365,11 @@ func spawnSubTurn(
 	// don't pollute the parent's registry.
 	if baseAgent.Tools != nil {
 		agent.Tools = baseAgent.Tools.Clone()
+		if tool, ok := agent.Tools.Get("todo"); ok {
+			if todo, ok := tool.(*tools.TodoTool); ok {
+				defer todo.ClearSession(agent.ID, childID)
+			}
+		}
 	}
 
 	// Create processOptions for the child turn

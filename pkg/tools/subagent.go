@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/sipeed/picoclaw/pkg/providers"
 )
 
@@ -215,6 +217,21 @@ func (sm *SubagentManager) runTask(
 		)
 	} else {
 		// Fallback to legacy RunToolLoop
+		// Give stateful tools a child identity instead of inheriting the parent's
+		// session. This also supports legacy callers without session metadata.
+		childAgentID := ToolAgentID(ctx)
+		if childAgentID == "" {
+			childAgentID = "subagent"
+		}
+		childSessionKey := "subagent:" + uuid.NewString()
+		childCtx := WithToolSessionContext(ctx, childAgentID, childSessionKey, nil)
+		if tools != nil {
+			if tool, ok := tools.Get("todo"); ok {
+				if todo, ok := tool.(*TodoTool); ok {
+					defer todo.ClearSession(childAgentID, childSessionKey)
+				}
+			}
+		}
 		systemPrompt := `You are a subagent. Complete the given task independently and report the result.
 You have access to tools - use them as needed to complete your task.
 After completing the task, provide a clear summary of what was done.`
@@ -236,7 +253,7 @@ After completing the task, provide a clear summary of what was done.`
 		}
 
 		var loopResult *ToolLoopResult
-		loopResult, err = RunToolLoop(ctx, ToolLoopConfig{
+		loopResult, err = RunToolLoop(childCtx, ToolLoopConfig{
 			Provider:      sm.provider,
 			Model:         sm.defaultModel,
 			Tools:         tools,

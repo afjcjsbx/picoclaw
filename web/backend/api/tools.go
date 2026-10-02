@@ -155,6 +155,12 @@ var toolCatalog = []toolCatalogEntry{
 		ConfigKey:   "spawn",
 	},
 	{
+		Name:        "todo",
+		Description: "Track a session-local plan for multi-step work.",
+		Category:    "agents",
+		ConfigKey:   "todo",
+	},
+	{
 		Name:        "spawn_status",
 		Description: "Query the status of spawned subagents.",
 		Category:    "agents",
@@ -373,6 +379,8 @@ func applyToolState(cfg *config.Config, toolName string, enabled bool) error {
 		if enabled {
 			cfg.Tools.Subagent.Enabled = true
 		}
+	case "todo":
+		cfg.Tools.Todo.Enabled = enabled
 	case "spawn_status":
 		cfg.Tools.SpawnStatus.Enabled = enabled
 		if enabled {
