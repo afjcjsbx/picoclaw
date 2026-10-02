@@ -31,6 +31,22 @@ func TestLoadConfig_GatewayHostEnvTrimmed(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_PromptInjectionEnabledEnvOverride(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"version":3}`), 0o600); err != nil {
+		t.Fatalf("WriteFile(configPath): %v", err)
+	}
+	t.Setenv("PICOCLAW_TOOLS_PROMPT_INJECTION_ENABLED", "false")
+
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error: %v", err)
+	}
+	if cfg.Tools.PromptInjection.Enabled {
+		t.Fatal("cfg.Tools.PromptInjection.Enabled = true, want false from environment")
+	}
+}
+
 func TestLoadConfig_GatewayHostBlankEnvFallsBackToConfigHost(t *testing.T) {
 	configPath := writeGatewayHostTestConfig(t, "  localhost  ")
 	t.Setenv(EnvGatewayHost, "   ")
