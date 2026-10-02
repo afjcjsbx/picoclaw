@@ -239,6 +239,9 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 // isTrustedDirectSender treats an explicitly allowlisted direct-message sender as trusted.
 // Group/channel messages and unknown direct senders remain untrusted.
 func isTrustedDirectSender(cfg *config.Config, msg bus.InboundMessage) bool {
+	if constants.IsInternalChannel(msg.Channel) || msg.SenderID == "cron" || msg.SenderID == "heartbeat" {
+		return true
+	}
 	if cfg == nil || msg.Context.ChatType != "direct" || msg.Channel == "" || msg.SenderID == "" {
 		return false
 	}

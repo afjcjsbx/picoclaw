@@ -29,4 +29,14 @@ func TestIsTrustedDirectSender(t *testing.T) {
 	if isTrustedDirectSender(cfg, trusted) {
 		t.Fatal("unknown direct sender should remain untrusted")
 	}
+
+	for _, msg := range []bus.InboundMessage{
+		{Context: bus.InboundContext{Channel: "cli", ChatType: "direct", SenderID: "cron"}, SenderID: "cron"},
+		{Context: bus.InboundContext{Channel: "telegram", ChatType: "direct", SenderID: "cron"}, SenderID: "cron"},
+		{Context: bus.InboundContext{Channel: "telegram", ChatType: "direct", SenderID: "heartbeat"}, SenderID: "heartbeat"},
+	} {
+		if !isTrustedDirectSender(&config.Config{}, msg) {
+			t.Errorf("internal message should not be wrapped: %+v", msg)
+		}
+	}
 }
