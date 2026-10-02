@@ -76,12 +76,8 @@ jobs:
         run: bash ./scripts/run-integration-tests.sh
 
   frontend:
-    name: Frontend (${{ matrix.node-version }})
+    name: Frontend
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        node-version: [20, 22, 24]
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -95,7 +91,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version: 24
           cache: pnpm
           cache-dependency-path: web/frontend/pnpm-lock.yaml
 
