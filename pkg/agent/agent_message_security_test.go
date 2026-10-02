@@ -19,38 +19,73 @@ func TestIsTrustedDirectSender(t *testing.T) {
 	}{
 		{
 			name: "allowlisted platform ID",
-			cfg:  &config.Config{Channels: config.ChannelsConfig{"telegram": {AllowFrom: config.FlexibleStringSlice{"123"}}}},
-			msg:  bus.InboundMessage{Channel: "telegram", SenderID: "telegram:123", Context: bus.InboundContext{ChatType: "direct"}, Sender: bus.SenderInfo{PlatformID: "123"}},
+			cfg: &config.Config{
+				Channels: config.ChannelsConfig{"telegram": {AllowFrom: config.FlexibleStringSlice{"123"}}},
+			},
+			msg: bus.InboundMessage{
+				Channel:  "telegram",
+				SenderID: "telegram:123",
+				Context:  bus.InboundContext{ChatType: "direct"},
+				Sender:   bus.SenderInfo{PlatformID: "123"},
+			},
 			want: true,
 		},
 		{
 			name: "canonical sender ID matches platform allowlist",
-			cfg:  &config.Config{Channels: config.ChannelsConfig{"telegram": {AllowFrom: config.FlexibleStringSlice{"123"}}}},
-			msg:  bus.InboundMessage{Channel: "telegram", SenderID: "telegram:123", Context: bus.InboundContext{ChatType: "direct"}},
+			cfg: &config.Config{
+				Channels: config.ChannelsConfig{"telegram": {AllowFrom: config.FlexibleStringSlice{"123"}}},
+			},
+			msg: bus.InboundMessage{
+				Channel:  "telegram",
+				SenderID: "telegram:123",
+				Context:  bus.InboundContext{ChatType: "direct"},
+			},
 			want: true,
 		},
 		{
 			name: "empty allowlist accepts direct senders",
 			cfg:  &config.Config{Channels: config.ChannelsConfig{"telegram": {}}},
-			msg:  bus.InboundMessage{Channel: "telegram", SenderID: "telegram:123", Context: bus.InboundContext{ChatType: "direct"}},
+			msg: bus.InboundMessage{
+				Channel:  "telegram",
+				SenderID: "telegram:123",
+				Context:  bus.InboundContext{ChatType: "direct"},
+			},
 			want: true,
 		},
 		{
 			name: "wildcard accepts direct senders",
-			cfg:  &config.Config{Channels: config.ChannelsConfig{"telegram": {AllowFrom: config.FlexibleStringSlice{"*"}}}},
-			msg:  bus.InboundMessage{Channel: "telegram", SenderID: "telegram:123", Context: bus.InboundContext{ChatType: "direct"}},
+			cfg: &config.Config{
+				Channels: config.ChannelsConfig{"telegram": {AllowFrom: config.FlexibleStringSlice{"*"}}},
+			},
+			msg: bus.InboundMessage{
+				Channel:  "telegram",
+				SenderID: "telegram:123",
+				Context:  bus.InboundContext{ChatType: "direct"},
+			},
 			want: true,
 		},
 		{
 			name: "group remains untrusted despite wildcard",
-			cfg:  &config.Config{Channels: config.ChannelsConfig{"telegram": {AllowFrom: config.FlexibleStringSlice{"*"}}}},
-			msg:  bus.InboundMessage{Channel: "telegram", SenderID: "telegram:123", Context: bus.InboundContext{ChatType: "group"}},
+			cfg: &config.Config{
+				Channels: config.ChannelsConfig{"telegram": {AllowFrom: config.FlexibleStringSlice{"*"}}},
+			},
+			msg: bus.InboundMessage{
+				Channel:  "telegram",
+				SenderID: "telegram:123",
+				Context:  bus.InboundContext{ChatType: "group"},
+			},
 			want: false,
 		},
 		{
 			name: "unlisted direct sender",
-			cfg:  &config.Config{Channels: config.ChannelsConfig{"telegram": {AllowFrom: config.FlexibleStringSlice{"123"}}}},
-			msg:  bus.InboundMessage{Channel: "telegram", SenderID: "telegram:other", Context: bus.InboundContext{ChatType: "direct"}},
+			cfg: &config.Config{
+				Channels: config.ChannelsConfig{"telegram": {AllowFrom: config.FlexibleStringSlice{"123"}}},
+			},
+			msg: bus.InboundMessage{
+				Channel:  "telegram",
+				SenderID: "telegram:other",
+				Context:  bus.InboundContext{ChatType: "direct"},
+			},
 			want: false,
 		},
 	}
