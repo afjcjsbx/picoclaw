@@ -19,7 +19,7 @@ export interface SessionDetail {
     role: "user" | "assistant"
     content: string
     created_at?: string
-    kind?: "normal" | "thought" | "tool_calls"
+    kind?: "normal" | "thought" | "tool_calls" | "tool_feedback"
     model_name?: string
     media?: string[]
     attachments?: {

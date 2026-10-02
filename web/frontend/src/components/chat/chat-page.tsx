@@ -497,6 +497,9 @@ export function ChatPage() {
             const messageIndex = storedIndex
               ? Number(storedIndex[1])
               : historyStart + messageOffset
+            const canFork =
+              msg.role === "assistant" &&
+              (!msg.kind || msg.kind === "normal")
             return (
               <div
                 key={msg.id}
@@ -519,16 +522,18 @@ export function ChatPage() {
                     timestamp={msg.timestamp}
                   />
                 )}
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label={t("chat.forkAtMessage")}
-                  title={t("chat.forkAtMessage")}
-                  className="mt-1 size-8 shrink-0 opacity-50 hover:opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
-                  onClick={() => void handleFork(messageIndex)}
-                >
-                  <IconGitFork className="size-4" />
-                </Button>
+                {canFork && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label={t("chat.forkAtMessage")}
+                    title={t("chat.forkAtMessage")}
+                    className="mt-1 size-8 shrink-0 opacity-50 hover:opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
+                    onClick={() => void handleFork(messageIndex)}
+                  >
+                    <IconGitFork className="size-4" />
+                  </Button>
+                )}
               </div>
             )
           })}

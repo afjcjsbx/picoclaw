@@ -37,6 +37,9 @@ function parseAssistantMessageKind(
   if (kind === "thought") {
     return "thought"
   }
+  if (kind === "tool_feedback") {
+    return "tool_feedback"
+  }
   if (kind === "tool_calls" || toolCalls) {
     return "tool_calls"
   }
