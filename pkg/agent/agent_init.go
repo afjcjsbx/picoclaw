@@ -20,6 +20,9 @@ import (
 	"github.com/sipeed/picoclaw/pkg/skills"
 	"github.com/sipeed/picoclaw/pkg/state"
 	"github.com/sipeed/picoclaw/pkg/tools"
+	fstools "github.com/sipeed/picoclaw/pkg/tools/fs"
+	hardwaretools "github.com/sipeed/picoclaw/pkg/tools/hardware"
+	integrationtools "github.com/sipeed/picoclaw/pkg/tools/integration"
 )
 
 func NewAgentLoop(
@@ -128,7 +131,7 @@ func registerSharedTools(
 		}
 
 		if cfg.Tools.IsToolEnabled("web") {
-			searchTool, err := tools.NewWebSearchTool(tools.WebSearchToolOptionsFromConfig(cfg))
+			searchTool, err := integrationtools.NewWebSearchTool(integrationtools.WebSearchToolOptionsFromConfig(cfg))
 			if err != nil {
 				logger.ErrorCF("agent", "Failed to create web search tool", map[string]any{"error": err.Error()})
 			} else if searchTool != nil {
@@ -136,7 +139,7 @@ func registerSharedTools(
 			}
 		}
 		if cfg.Tools.IsToolEnabled("web_fetch") {
-			fetchTool, err := tools.NewWebFetchToolWithProxy(
+			fetchTool, err := integrationtools.NewWebFetchToolWithProxy(
 				50000,
 				cfg.Tools.Web.Proxy,
 				cfg.Tools.Web.Format,
@@ -151,18 +154,18 @@ func registerSharedTools(
 
 		// Hardware tools (I2C, SPI) - Linux only, returns error on other platforms
 		if cfg.Tools.IsToolEnabled("i2c") {
-			agent.Tools.Register(tools.NewI2CTool())
+			agent.Tools.Register(hardwaretools.NewI2CTool())
 		}
 		if cfg.Tools.IsToolEnabled("spi") {
-			agent.Tools.Register(tools.NewSPITool())
+			agent.Tools.Register(hardwaretools.NewSPITool())
 		}
 		if cfg.Tools.IsToolEnabled("serial") {
-			agent.Tools.Register(tools.NewSerialTool())
+			agent.Tools.Register(hardwaretools.NewSerialTool())
 		}
 
 		// Message tool
 		if cfg.Tools.IsToolEnabled("message") {
-			messageTool := tools.NewMessageTool()
+			messageTool := integrationtools.NewMessageTool()
 			if cfg.Tools.Message.MediaEnabled {
 				messageTool.ConfigureLocalMedia(
 					agent.Workspace,
@@ -219,7 +222,7 @@ func registerSharedTools(
 			agent.Tools.Register(messageTool)
 		}
 		if cfg.Tools.IsToolEnabled("reaction") {
-			reactionTool := tools.NewReactionTool()
+			reactionTool := integrationtools.NewReactionTool()
 			reactionTool.SetReactionCallback(func(ctx context.Context, channel, chatID, messageID string) error {
 				if al.channelManager == nil {
 					return fmt.Errorf("channel manager not configured")
@@ -240,7 +243,7 @@ func registerSharedTools(
 
 		// Send file tool (outbound media via MediaStore — store injected later by SetMediaStore)
 		if cfg.Tools.IsToolEnabled("send_file") {
-			sendFileTool := tools.NewSendFileTool(
+			sendFileTool := fstools.NewSendFileTool(
 				agent.Workspace,
 				cfg.Agents.Defaults.RestrictToWorkspace,
 				cfg.Agents.Defaults.GetMaxMediaSize(),
@@ -251,11 +254,11 @@ func registerSharedTools(
 		}
 
 		if ttsProvider != nil {
-			agent.Tools.Register(tools.NewSendTTSTool(ttsProvider, nil))
+			agent.Tools.Register(integrationtools.NewSendTTSTool(ttsProvider, nil))
 		}
 
 		if cfg.Tools.IsToolEnabled("load_image") {
-			loadImageTool := tools.NewLoadImageTool(
+			loadImageTool := fstools.NewLoadImageTool(
 				agent.Workspace,
 				cfg.Agents.Defaults.RestrictToWorkspace,
 				cfg.Agents.Defaults.GetMaxMediaSize(),
@@ -277,11 +280,11 @@ func registerSharedTools(
 					cfg.Tools.Skills.SearchCache.MaxSize,
 					time.Duration(cfg.Tools.Skills.SearchCache.TTLSeconds)*time.Second,
 				)
-				agent.Tools.Register(tools.NewFindSkillsTool(registryMgr, searchCache))
+				agent.Tools.Register(integrationtools.NewFindSkillsTool(registryMgr, searchCache))
 			}
 
 			if install_skills_enable {
-				agent.Tools.Register(tools.NewInstallSkillTool(registryMgr, agent.Workspace))
+				agent.Tools.Register(integrationtools.NewInstallSkillTool(registryMgr, agent.Workspace))
 			}
 		}
 
