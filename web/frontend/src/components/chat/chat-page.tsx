@@ -504,35 +504,39 @@ export function ChatPage() {
               <div
                 key={msg.id}
                 data-chat-index={messageIndex}
-                className="group flex w-full items-start gap-2"
+                className="group flex w-full flex-col gap-1"
               >
                 {msg.role === "assistant" ? (
-                  <AssistantMessage
-                    content={msg.content}
-                    attachments={msg.attachments}
-                    kind={msg.kind}
-                    modelName={msg.modelName}
-                    toolCalls={msg.toolCalls}
-                    timestamp={msg.timestamp}
-                  />
+                  <>
+                    <AssistantMessage
+                      content={msg.content}
+                      attachments={msg.attachments}
+                      kind={msg.kind}
+                      modelName={msg.modelName}
+                      toolCalls={msg.toolCalls}
+                      timestamp={msg.timestamp}
+                    />
+                    {canFork && (
+                      <div className="flex justify-end">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label={t("chat.forkAtMessage")}
+                          title={t("chat.forkAtMessage")}
+                          className="size-8 opacity-50 hover:opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
+                          onClick={() => void handleFork(messageIndex)}
+                        >
+                          <IconGitFork className="size-4" />
+                        </Button>
+                      </div>
+                    )}
+                  </>
                 ) : (
                   <UserMessage
                     content={msg.content}
                     attachments={msg.attachments}
                     timestamp={msg.timestamp}
                   />
-                )}
-                {canFork && (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label={t("chat.forkAtMessage")}
-                    title={t("chat.forkAtMessage")}
-                    className="mt-1 size-8 shrink-0 opacity-50 hover:opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
-                    onClick={() => void handleFork(messageIndex)}
-                  >
-                    <IconGitFork className="size-4" />
-                  </Button>
                 )}
               </div>
             )
