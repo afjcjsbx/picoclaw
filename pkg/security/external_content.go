@@ -196,6 +196,12 @@ func metadataLine(name, value string) string {
 }
 
 func WrapExternalContent(content string, opts WrapOptions) string {
+	return WrapSanitizedExternalContent(SanitizeExternalContentText(content), opts)
+}
+
+// WrapSanitizedExternalContent wraps content that has already passed through
+// SanitizeExternalContentText (or TruncateSanitizedExternalContent).
+func WrapSanitizedExternalContent(content string, opts WrapOptions) string {
 	var nonce [8]byte
 	if _, err := rand.Read(
 		nonce[:],
@@ -216,17 +222,22 @@ func WrapExternalContent(content string, opts WrapOptions) string {
 	lines = append(
 		lines,
 		"---",
-		SanitizeExternalContentText(content),
+		content,
 		"<<<END_EXTERNAL_UNTRUSTED_CONTENT id=\""+id+"\">>>",
 	)
 	return strings.Join(lines, "\n")
 }
 
 func WrapWebContent(content string, source ExternalContentSource) string {
+	return WrapSanitizedWebContent(SanitizeExternalContentText(content), source)
+}
+
+// WrapSanitizedWebContent wraps already-sanitized web content.
+func WrapSanitizedWebContent(content string, source ExternalContentSource) string {
 	if source != SourceWebFetch {
 		source = SourceWebSearch
 	}
-	return WrapExternalContent(content, WrapOptions{Source: source, IncludeWarning: source == SourceWebFetch})
+	return WrapSanitizedExternalContent(content, WrapOptions{Source: source, IncludeWarning: source == SourceWebFetch})
 }
 
 var suspiciousPatterns = []*regexp.Regexp{

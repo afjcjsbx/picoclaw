@@ -1647,7 +1647,7 @@ func wrapWebContent(content string, cfg config.PromptInjectionConfig, source sec
 		}
 	}
 	content = security.TruncateSanitizedExternalContent(content, cfg.MaxWrappedChars)
-	return security.WrapWebContent(content, source)
+	return security.WrapSanitizedWebContent(content, source)
 }
 
 type WebSearchToolOptions struct {

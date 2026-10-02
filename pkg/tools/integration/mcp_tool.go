@@ -449,7 +449,7 @@ func (t *MCPTool) normalizeResultContent(ctx context.Context, content []mcp.Cont
 			}
 		}
 		forLLM = security.TruncateSanitizedExternalContent(forLLM, t.promptInjection.MaxWrappedChars)
-		result.ForLLM = security.WrapExternalContent(
+		result.ForLLM = security.WrapSanitizedExternalContent(
 			forLLM,
 			security.WrapOptions{Source: security.SourceAPI, IncludeWarning: true},
 		)

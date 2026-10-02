@@ -228,7 +228,7 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 			}
 		}
 		content := security.TruncateSanitizedExternalContent(msg.Content, pi.MaxWrappedChars)
-		opts.Dispatch.UserMessage = security.WrapExternalContent(content, security.WrapOptions{
+		opts.Dispatch.UserMessage = security.WrapSanitizedExternalContent(content, security.WrapOptions{
 			Source: security.SourceChannelMetadata, Sender: msg.SenderID, IncludeWarning: true,
 		})
 	}
