@@ -132,9 +132,11 @@ export function ChatPage() {
     connectionState,
     isTyping,
     activeSessionId,
+    hasMoreHistory,
     contextUsage,
     sendMessage,
     switchSession,
+    loadOlderHistory,
     newChat,
   } = usePicoChat()
 
@@ -178,7 +180,21 @@ export function ChatPage() {
   }
 
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
-    syncScrollState(e.currentTarget)
+    const element = e.currentTarget
+    syncScrollState(element)
+    if (element.scrollTop > 16 || !hasMoreHistory) {
+      return
+    }
+
+    const previousHeight = element.scrollHeight
+    void loadOlderHistory(activeSessionId).then((loaded) => {
+      if (!loaded) return
+      requestAnimationFrame(() => {
+        if (scrollRef.current !== element) return
+        element.scrollTop += element.scrollHeight - previousHeight
+        syncScrollState(element)
+      })
+    })
   }
 
   useEffect(() => {

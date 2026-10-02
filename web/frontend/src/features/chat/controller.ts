@@ -33,6 +33,7 @@ let connectionGeneration = 0
 let reconnectTimer: number | null = null
 let reconnectAttempts = 0
 let shouldMaintainConnection = false
+let isLoadingOlderHistory = false
 
 function clearReconnectTimer() {
   if (reconnectTimer !== null) {
@@ -265,7 +266,7 @@ export async function hydrateActiveSession() {
   }
 
   hydratePromise = loadSessionMessages(storedSessionId)
-    .then((historyMessages) => {
+    .then((historyPage) => {
       const currentState = getChatState()
       if (currentState.activeSessionId !== storedSessionId) {
         return
@@ -274,18 +275,22 @@ export async function hydrateActiveSession() {
       if (currentState.messages.length > 0) {
         updateChatStore({
           messages: mergeHistoryMessages(
-            historyMessages,
+            historyPage.messages,
             currentState.messages,
           ),
           hasHydratedActiveSession: true,
+          historyStart: historyPage.start,
+          hasMoreHistory: historyPage.hasMore,
         })
         return
       }
 
       updateChatStore({
-        messages: historyMessages,
+        messages: historyPage.messages,
         isTyping: false,
         hasHydratedActiveSession: true,
+        historyStart: historyPage.start,
+        hasMoreHistory: historyPage.hasMore,
       })
     })
     .catch((error) => {
@@ -306,6 +311,8 @@ export async function hydrateActiveSession() {
         messages: [],
         isTyping: false,
         hasHydratedActiveSession: true,
+        historyStart: 0,
+        hasMoreHistory: false,
       })
     })
     .finally(() => {
@@ -313,6 +320,43 @@ export async function hydrateActiveSession() {
     })
 
   return hydratePromise
+}
+
+export async function loadOlderChatHistory(
+  sessionId: string,
+): Promise<boolean> {
+  const state = getChatState()
+  if (
+    isLoadingOlderHistory ||
+    sessionId !== state.activeSessionId ||
+    !state.hasMoreHistory
+  ) {
+    return false
+  }
+
+  isLoadingOlderHistory = true
+  try {
+    const page = await loadSessionMessages(sessionId, state.historyStart)
+    const currentState = getChatState()
+    if (
+      currentState.activeSessionId !== sessionId ||
+      page.start >= currentState.historyStart
+    ) {
+      return false
+    }
+
+    updateChatStore((prev) => ({
+      messages: [...page.messages, ...prev.messages],
+      historyStart: page.start,
+      hasMoreHistory: page.hasMore,
+    }))
+    return true
+  } catch (error) {
+    console.error("Failed to load older session messages:", error)
+    return false
+  } finally {
+    isLoadingOlderHistory = false
+  }
 }
 
 interface SendChatMessageInput {
@@ -386,14 +430,16 @@ export async function switchChatSession(sessionId: string) {
   }
 
   try {
-    const historyMessages = await loadSessionMessages(sessionId)
+    const historyPage = await loadSessionMessages(sessionId)
 
     disconnectChatInternal({ clearDesiredConnection: false })
     setActiveSessionId(sessionId)
     updateChatStore({
-      messages: historyMessages,
+      messages: historyPage.messages,
       isTyping: false,
       hasHydratedActiveSession: true,
+      historyStart: historyPage.start,
+      hasMoreHistory: historyPage.hasMore,
       contextUsage: undefined,
     })
 
@@ -418,6 +464,8 @@ export async function newChatSession() {
     messages: [],
     isTyping: false,
     hasHydratedActiveSession: true,
+    historyStart: 0,
+    hasMoreHistory: false,
     contextUsage: undefined,
   })
 

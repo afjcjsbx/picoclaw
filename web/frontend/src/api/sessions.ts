@@ -11,6 +11,8 @@ export interface SessionSummary {
 
 export interface SessionDetail {
   id: string
+  start: number
+  total: number
   messages: {
     role: "user" | "assistant"
     content: string
@@ -57,8 +59,17 @@ export async function getSessions(
   return res.json()
 }
 
-export async function getSessionHistory(id: string): Promise<SessionDetail> {
-  const res = await launcherFetch(`/api/sessions/${encodeURIComponent(id)}`)
+export async function getSessionHistory(
+  id: string,
+  before?: number,
+): Promise<SessionDetail> {
+  const params = new URLSearchParams({ limit: "50" })
+  if (before !== undefined) {
+    params.set("before", String(before))
+  }
+  const res = await launcherFetch(
+    `/api/sessions/${encodeURIComponent(id)}?${params.toString()}`,
+  )
   if (!res.ok) {
     throw new Error(`Failed to fetch session ${id}: ${res.status}`)
   }
