@@ -11,26 +11,55 @@ import (
 )
 
 func TestIsTrustedDirectSender(t *testing.T) {
-	cfg := &config.Config{Channels: config.ChannelsConfig{
-		"telegram": {AllowFrom: config.FlexibleStringSlice{"123"}},
-	}}
-	trusted := bus.InboundMessage{
-		Channel:  "telegram",
-		SenderID: "telegram:123",
-		Context:  bus.InboundContext{ChatType: "direct"},
-		Sender:   bus.SenderInfo{PlatformID: "123"},
+	tests := []struct {
+		name string
+		cfg  *config.Config
+		msg  bus.InboundMessage
+		want bool
+	}{
+		{
+			name: "allowlisted platform ID",
+			cfg:  &config.Config{Channels: config.ChannelsConfig{"telegram": {AllowFrom: config.FlexibleStringSlice{"123"}}}},
+			msg:  bus.InboundMessage{Channel: "telegram", SenderID: "telegram:123", Context: bus.InboundContext{ChatType: "direct"}, Sender: bus.SenderInfo{PlatformID: "123"}},
+			want: true,
+		},
+		{
+			name: "canonical sender ID matches platform allowlist",
+			cfg:  &config.Config{Channels: config.ChannelsConfig{"telegram": {AllowFrom: config.FlexibleStringSlice{"123"}}}},
+			msg:  bus.InboundMessage{Channel: "telegram", SenderID: "telegram:123", Context: bus.InboundContext{ChatType: "direct"}},
+			want: true,
+		},
+		{
+			name: "empty allowlist accepts direct senders",
+			cfg:  &config.Config{Channels: config.ChannelsConfig{"telegram": {}}},
+			msg:  bus.InboundMessage{Channel: "telegram", SenderID: "telegram:123", Context: bus.InboundContext{ChatType: "direct"}},
+			want: true,
+		},
+		{
+			name: "wildcard accepts direct senders",
+			cfg:  &config.Config{Channels: config.ChannelsConfig{"telegram": {AllowFrom: config.FlexibleStringSlice{"*"}}}},
+			msg:  bus.InboundMessage{Channel: "telegram", SenderID: "telegram:123", Context: bus.InboundContext{ChatType: "direct"}},
+			want: true,
+		},
+		{
+			name: "group remains untrusted despite wildcard",
+			cfg:  &config.Config{Channels: config.ChannelsConfig{"telegram": {AllowFrom: config.FlexibleStringSlice{"*"}}}},
+			msg:  bus.InboundMessage{Channel: "telegram", SenderID: "telegram:123", Context: bus.InboundContext{ChatType: "group"}},
+			want: false,
+		},
+		{
+			name: "unlisted direct sender",
+			cfg:  &config.Config{Channels: config.ChannelsConfig{"telegram": {AllowFrom: config.FlexibleStringSlice{"123"}}}},
+			msg:  bus.InboundMessage{Channel: "telegram", SenderID: "telegram:other", Context: bus.InboundContext{ChatType: "direct"}},
+			want: false,
+		},
 	}
-	if !isTrustedDirectSender(cfg, trusted) {
-		t.Fatal("allowlisted direct sender should be trusted")
-	}
-	trusted.Context.ChatType = "group"
-	if isTrustedDirectSender(cfg, trusted) {
-		t.Fatal("group sender should remain untrusted")
-	}
-	trusted.Context.ChatType = "direct"
-	trusted.Sender.PlatformID = "other"
-	if isTrustedDirectSender(cfg, trusted) {
-		t.Fatal("unknown direct sender should remain untrusted")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isTrustedDirectSender(tt.cfg, tt.msg); got != tt.want {
+				t.Fatalf("isTrustedDirectSender() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 
 	for _, msg := range []bus.InboundMessage{

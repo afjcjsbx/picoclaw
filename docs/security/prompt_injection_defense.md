@@ -9,11 +9,12 @@ the boundary.
 
 ## Trust policy
 
-Trust comes from source metadata. A direct message is treated as trusted only
-when its sender exactly matches an entry in that channel's `allow_from` list.
-Group and channel messages are untrusted even when their sender is allowlisted.
-Unknown or wildcard senders are not treated as trusted. Ensure `allow_from`
-contains only the owner identities that should retain the trusted-DM behavior.
+Trust comes from source metadata and follows the channel access policy. Direct
+messages are trusted when `allow_from` is empty (the channel accepts everyone),
+contains `*`, or matches the sender's platform or canonical ID. Group and
+channel messages remain untrusted even when their sender is allowlisted. On an
+open channel, use `allow_from` with the owner's IDs if only the owner should
+retain trusted-DM behavior.
 
 Hook session keys can be classified with `security.ResolveHookExternalContentSource`;
 the current hook RPC path does not expose a stable source session key to the

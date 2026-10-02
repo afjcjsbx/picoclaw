@@ -10,6 +10,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/constants"
+	"github.com/sipeed/picoclaw/pkg/identity"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/routing"
 	"github.com/sipeed/picoclaw/pkg/security"
@@ -236,21 +237,48 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 	return al.runAgentLoop(ctx, agent, opts)
 }
 
-// isTrustedDirectSender treats an explicitly allowlisted direct-message sender as trusted.
+// isTrustedDirectSender mirrors the channel allow-list policy for direct messages.
 // Group/channel messages and unknown direct senders remain untrusted.
 func isTrustedDirectSender(cfg *config.Config, msg bus.InboundMessage) bool {
-	if constants.IsInternalChannel(msg.Channel) || msg.SenderID == "cron" || msg.SenderID == "heartbeat" {
+	channelName := msg.Channel
+	if channelName == "" {
+		channelName = msg.Context.Channel
+	}
+	senderID := msg.SenderID
+	if senderID == "" {
+		senderID = msg.Context.SenderID
+	}
+	if constants.IsInternalChannel(channelName) || senderID == "cron" || senderID == "heartbeat" {
 		return true
 	}
-	if cfg == nil || msg.Context.ChatType != "direct" || msg.Channel == "" || msg.SenderID == "" {
+	if cfg == nil || msg.Context.ChatType != "direct" || channelName == "" || senderID == "" {
 		return false
 	}
-	channel := cfg.Channels[msg.Channel]
+	channel := cfg.Channels[channelName]
 	if channel == nil {
 		return false
 	}
+	if len(channel.AllowFrom) == 0 {
+		return true
+	}
+
+	sender := msg.Sender
+	if sender.Platform == "" {
+		sender.Platform = channelName
+	}
+	if sender.PlatformID == "" {
+		sender.PlatformID = senderID
+	}
+	if platform, id, ok := identity.ParseCanonicalID(senderID); ok && strings.EqualFold(platform, channelName) {
+		if sender.CanonicalID == "" {
+			sender.CanonicalID = identity.BuildCanonicalID(platform, id)
+		}
+		if sender.PlatformID == senderID {
+			sender.PlatformID = id
+		}
+	}
 	for _, allowed := range channel.AllowFrom {
-		if allowed == msg.SenderID || allowed == msg.Sender.CanonicalID || allowed == msg.Sender.PlatformID {
+		if allowed == "*" || identity.MatchAllowed(sender, allowed) {
 			return true
 		}
 	}
