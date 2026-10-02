@@ -41,14 +41,18 @@ const (
 // Scope is stored as raw JSON so pkg/memory can stay decoupled from the
 // higher-level session package while still preserving structured scope data.
 type SessionMeta struct {
-	Key       string          `json:"key"`
-	Summary   string          `json:"summary"`
-	Skip      int             `json:"skip"`
-	Count     int             `json:"count"`
-	CreatedAt time.Time       `json:"created_at"`
-	UpdatedAt time.Time       `json:"updated_at"`
-	Scope     json.RawMessage `json:"scope,omitempty"`
-	Aliases   []string        `json:"aliases,omitempty"`
+	Key        string          `json:"key"`
+	Summary    string          `json:"summary"`
+	ForkedFrom string          `json:"forked_from,omitempty"`
+	ForkIndex  int             `json:"fork_index,omitempty"`
+	ForkTitle  string          `json:"fork_title,omitempty"`
+	ForkDepth  int             `json:"fork_depth,omitempty"`
+	Skip       int             `json:"skip"`
+	Count      int             `json:"count"`
+	CreatedAt  time.Time       `json:"created_at"`
+	UpdatedAt  time.Time       `json:"updated_at"`
+	Scope      json.RawMessage `json:"scope,omitempty"`
+	Aliases    []string        `json:"aliases,omitempty"`
 }
 
 // JSONLStore implements Store using append-only JSONL files.
@@ -425,6 +429,10 @@ func (s *JSONLStore) promoteAliasHistoryLocked(
 	}
 	canonicalMeta.Scope = cloneRawJSON(scope)
 	canonicalMeta.Aliases = normalizeAliases(sessionKey, aliases)
+	canonicalMeta.ForkedFrom = aliasMeta.ForkedFrom
+	canonicalMeta.ForkIndex = aliasMeta.ForkIndex
+	canonicalMeta.ForkTitle = aliasMeta.ForkTitle
+	canonicalMeta.ForkDepth = aliasMeta.ForkDepth
 	canonicalMeta.Skip = 0
 	canonicalMeta.Count = len(aliasHistory)
 	canonicalMeta.UpdatedAt = now

@@ -7,6 +7,8 @@ export interface SessionSummary {
   message_count: number
   created: string
   updated: string
+  forked_from?: string
+  fork_index?: number
 }
 
 export interface SessionDetail {
@@ -41,6 +43,24 @@ export interface SessionDetail {
   summary: string
   created: string
   updated: string
+  forked_from?: string
+  fork_index?: number
+}
+
+export async function forkSession(
+  id: string,
+  messageIndex: number,
+): Promise<{ id: string; forked_from: string; fork_index: number }> {
+  const res = await launcherFetch(
+    `/api/sessions/${encodeURIComponent(id)}/fork`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message_index: messageIndex }),
+    },
+  )
+  if (!res.ok) throw new Error(`Failed to fork session: ${res.status}`)
+  return res.json()
 }
 
 export async function getSessions(
