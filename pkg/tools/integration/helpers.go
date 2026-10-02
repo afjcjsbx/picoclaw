@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math"
 	"strconv"
-	"strings"
 
 	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )

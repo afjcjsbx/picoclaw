@@ -53,7 +53,10 @@ func looksLikeLargeBase64Payload(text string) bool {
 			continue
 		}
 		nonSpace++
-		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '+' || r == '/' || r == '=' {
+		if (r >= 'A' && r <= 'Z') ||
+			(r >= 'a' && r <= 'z') ||
+			(r >= '0' && r <= '9') ||
+			r == '+' || r == '/' || r == '=' {
 			base64Like++
 		}
 	}
