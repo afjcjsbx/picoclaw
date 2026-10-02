@@ -11,6 +11,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/sipeed/picoclaw/pkg/config"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/media"
 	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
@@ -298,6 +299,23 @@ func TestMCPTool_Execute_Success(t *testing.T) {
 	}
 	if result.ForLLM != "Found 3 repositories" {
 		t.Errorf("Expected 'Found 3 repositories', got '%s'", result.ForLLM)
+	}
+}
+
+func TestMCPTool_WrapsExternalText(t *testing.T) {
+	manager := &MockMCPManager{
+		callToolFunc: func(context.Context, string, string, map[string]any) (*mcp.CallToolResult, error) {
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "external result"}}}, nil
+		},
+	}
+	tool := NewMCPTool(manager, "remote", &mcp.Tool{Name: "read"})
+	tool.SetPromptInjectionConfig(
+		config.PromptInjectionConfig{Enabled: true, WrapMCPResults: true, MaxWrappedChars: 128},
+	)
+	got := tool.Execute(context.Background(), nil)
+	if !strings.Contains(got.ForLLM, "<<<EXTERNAL_UNTRUSTED_CONTENT id=\"") ||
+		!strings.Contains(got.ForLLM, "external result") {
+		t.Fatalf("MCP result was not wrapped: %q", got.ForLLM)
 	}
 }
 

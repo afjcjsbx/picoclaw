@@ -13,9 +13,11 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/sipeed/picoclaw/pkg/config"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/media"
+	"github.com/sipeed/picoclaw/pkg/security"
 	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
@@ -38,6 +40,7 @@ type MCPTool struct {
 	workspace          string
 	maxInlineTextRunes int
 	runtimeEvents      runtimeevents.Bus
+	promptInjection    config.PromptInjectionConfig
 }
 
 // MCPToolCallPayload describes MCP tool execution runtime events.
@@ -76,6 +79,10 @@ func (t *MCPTool) SetMaxInlineTextRunes(limit int) {
 // SetEventPublisher injects the runtime event bus used for MCP tool observations.
 func (t *MCPTool) SetEventPublisher(eventBus runtimeevents.Bus) {
 	t.runtimeEvents = eventBus
+}
+
+func (t *MCPTool) SetPromptInjectionConfig(cfg config.PromptInjectionConfig) {
+	t.promptInjection = cfg
 }
 
 const maxMCPInlineTextRunes = 16 * 1024
@@ -430,6 +437,22 @@ func (t *MCPTool) normalizeResultContent(ctx context.Context, content []mcp.Cont
 	result := &ToolResult{
 		ForLLM: forLLM,
 		Media:  mediaRefs,
+	}
+	if t.promptInjection.Enabled && t.promptInjection.WrapMCPResults {
+		if t.promptInjection.LogSuspicious {
+			if hits := security.DetectSuspiciousPatterns(forLLM); len(hits) > 0 {
+				logger.WarnCF(
+					"security",
+					"suspicious pattern in MCP content",
+					map[string]any{"source": "mcp", "server": t.serverName, "patterns": hits},
+				)
+			}
+		}
+		forLLM = security.TruncateSanitizedExternalContent(forLLM, t.promptInjection.MaxWrappedChars)
+		result.ForLLM = security.WrapExternalContent(
+			forLLM,
+			security.WrapOptions{Source: security.SourceAPI, IncludeWarning: true},
+		)
 	}
 	return result
 }

@@ -74,7 +74,8 @@ func loadSecurityConfig(cfg *Config, securityPath string) error {
 
 	// Unmarshal non-channel fields from security.yml
 	// This will resolve encrypted values for model_list, tools, etc.
-	if err := yaml.Unmarshal(data, cfg); err != nil {
+	// Config has yaml tags for the security-file schema; musttag cannot follow its custom nested unmarshallers.
+	if err := yaml.Unmarshal(data, cfg); err != nil { //nolint:musttag
 		return fmt.Errorf("failed to parse security config %s: %w", securityPath, err)
 	}
 	if err := applyLegacySkillsSecurityConfig(cfg, data); err != nil {
@@ -195,7 +196,7 @@ func saveSecurityConfig(securityPath string, sec *Config) error {
 	var buf bytes.Buffer
 	enc := yaml.NewEncoder(&buf)
 	enc.SetIndent(2)
-	err := enc.Encode(sec)
+	err := enc.Encode(sec) //nolint:musttag // Config uses yaml tags and custom nested serialization.
 	if err != nil {
 		return fmt.Errorf("failed to marshal security config: %w", err)
 	}

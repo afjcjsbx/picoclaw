@@ -145,6 +145,7 @@ func registerSharedTools(
 			if err != nil {
 				logger.ErrorCF("agent", "Failed to create web fetch tool", map[string]any{"error": err.Error()})
 			} else {
+				fetchTool.SetPromptInjectionConfig(cfg.Tools.PromptInjection)
 				agent.Tools.Register(fetchTool)
 			}
 		}

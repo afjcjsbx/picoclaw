@@ -22,6 +22,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/security"
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
@@ -1631,9 +1632,26 @@ type WebSearchTool struct {
 	provider         SearchProvider
 	maxResults       int
 	providerResolver func(query string) (SearchProvider, int)
+	promptInjection  config.PromptInjectionConfig
+}
+
+func wrapWebContent(content string, cfg config.PromptInjectionConfig, source security.ExternalContentSource) string {
+	if !cfg.Enabled || !cfg.WrapWeb {
+		return content
+	}
+	if cfg.LogSuspicious {
+		if hits := security.DetectSuspiciousPatterns(content); len(hits) > 0 {
+			logger.WarnCF("security", "suspicious pattern in web content", map[string]any{
+				"source": source, "patterns": hits,
+			})
+		}
+	}
+	content = security.TruncateSanitizedExternalContent(content, cfg.MaxWrappedChars)
+	return security.WrapWebContent(content, source)
 }
 
 type WebSearchToolOptions struct {
+	PromptInjection       config.PromptInjectionConfig
 	Provider              string
 	BraveAPIKeys          []string
 	BraveMaxResults       int
@@ -1678,6 +1696,7 @@ type WebSearchToolOptions struct {
 
 func WebSearchToolOptionsFromConfig(cfg *config.Config) WebSearchToolOptions {
 	return WebSearchToolOptions{
+		PromptInjection:       cfg.Tools.PromptInjection,
 		Provider:              cfg.Tools.Web.Provider,
 		BraveAPIKeys:          cfg.Tools.Web.Brave.APIKeys.Values(),
 		BraveMaxResults:       cfg.Tools.Web.Brave.MaxResults,
@@ -2117,6 +2136,7 @@ func NewWebSearchTool(opts WebSearchToolOptions) (*WebSearchTool, error) {
 		provider:         provider,
 		maxResults:       maxResults,
 		providerResolver: resolver,
+		promptInjection:  opts.PromptInjection,
 	}, nil
 }
 
@@ -2196,6 +2216,7 @@ func (t *WebSearchTool) Execute(ctx context.Context, args map[string]any) *ToolR
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("search failed: %v", err))
 	}
+	result = wrapWebContent(result, t.promptInjection, security.SourceWebSearch)
 
 	return &ToolResult{
 		ForLLM:  result,
@@ -2210,6 +2231,11 @@ type WebFetchTool struct {
 	format          string
 	fetchLimitBytes int64
 	whitelist       *utils.PrivateHostWhitelist
+	promptInjection config.PromptInjectionConfig
+}
+
+func (t *WebFetchTool) SetPromptInjectionConfig(cfg config.PromptInjectionConfig) {
+	t.promptInjection = cfg
 }
 
 func NewWebFetchTool(maxChars int, format string, fetchLimitBytes int64) (*WebFetchTool, error) {
@@ -2464,6 +2490,7 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	if truncated {
 		text = text[:maxChars] + "\n[Content truncated due to size limit]"
 	}
+	text = wrapWebContent(text, t.promptInjection, security.SourceWebFetch)
 
 	result := map[string]any{
 		"url":       urlStr,

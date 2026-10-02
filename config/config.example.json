@@ -337,6 +337,14 @@
   "tools": {
     "allow_read_paths": null,
     "allow_write_paths": null,
+    "prompt_injection": {
+      "enabled": true,
+      "wrap_web": true,
+      "wrap_untrusted_channels": true,
+      "wrap_mcp_results": true,
+      "log_suspicious": true,
+      "max_wrapped_chars": 65536
+    },
     "web": {
       "enabled": true,
       "prefer_native": true,

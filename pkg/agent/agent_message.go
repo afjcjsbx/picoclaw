@@ -8,9 +8,11 @@ import (
 	"strings"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
+	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/constants"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/routing"
+	"github.com/sipeed/picoclaw/pkg/security"
 	"github.com/sipeed/picoclaw/pkg/session"
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
@@ -214,7 +216,42 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 			})
 	}
 
+	pi := al.GetConfig().Tools.PromptInjection
+	if pi.Enabled && pi.WrapUntrustedChannels && !isTrustedDirectSender(al.GetConfig(), msg) {
+		if pi.LogSuspicious {
+			if hits := security.DetectSuspiciousPatterns(msg.Content); len(hits) > 0 {
+				logger.WarnCF(
+					"security",
+					"suspicious pattern in inbound channel message",
+					map[string]any{"source": msg.Channel, "patterns": hits},
+				)
+			}
+		}
+		content := security.TruncateSanitizedExternalContent(msg.Content, pi.MaxWrappedChars)
+		opts.Dispatch.UserMessage = security.WrapExternalContent(content, security.WrapOptions{
+			Source: security.SourceChannelMetadata, Sender: msg.SenderID, IncludeWarning: true,
+		})
+	}
+
 	return al.runAgentLoop(ctx, agent, opts)
+}
+
+// isTrustedDirectSender treats an explicitly allowlisted direct-message sender as trusted.
+// Group/channel messages and unknown direct senders remain untrusted.
+func isTrustedDirectSender(cfg *config.Config, msg bus.InboundMessage) bool {
+	if cfg == nil || msg.Context.ChatType != "direct" || msg.Channel == "" || msg.SenderID == "" {
+		return false
+	}
+	channel := cfg.Channels[msg.Channel]
+	if channel == nil {
+		return false
+	}
+	for _, allowed := range channel.AllowFrom {
+		if allowed == msg.SenderID || allowed == msg.Sender.CanonicalID || allowed == msg.Sender.PlatformID {
+			return true
+		}
+	}
+	return false
 }
 
 func (al *AgentLoop) resolveMessageRoute(msg bus.InboundMessage) (routing.ResolvedRoute, *AgentInstance, error) {
