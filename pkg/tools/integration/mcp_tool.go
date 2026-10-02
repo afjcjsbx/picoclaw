@@ -341,7 +341,7 @@ func extractContentText(content []mcp.Content) string {
 	for _, c := range content {
 		switch v := c.(type) {
 		case *mcp.TextContent:
-			parts = append(parts, sanitizeToolLLMContent(v.Text))
+			parts = append(parts, toolshared.SanitizeToolLLMContent(v.Text))
 		case *mcp.ImageContent:
 			parts = append(parts, fmt.Sprintf("[Image: %s]", normalizedMIMEType(v.MIMEType)))
 		case *mcp.AudioContent:
@@ -355,7 +355,7 @@ func extractContentText(content []mcp.Content) string {
 			parts = append(parts, fmt.Sprintf("[Content: %T]", v))
 		}
 	}
-	return sanitizeToolLLMContent(strings.Join(parts, "\n"))
+	return toolshared.SanitizeToolLLMContent(strings.Join(parts, "\n"))
 }
 
 func (t *MCPTool) normalizeResultContent(ctx context.Context, content []mcp.Content) *ToolResult {
@@ -370,7 +370,7 @@ func (t *MCPTool) normalizeResultContent(ctx context.Context, content []mcp.Cont
 			if rawText != "" {
 				rawTextParts = append(rawTextParts, rawText)
 			}
-			safeText := strings.TrimSpace(sanitizeToolLLMContent(v.Text))
+			safeText := strings.TrimSpace(toolshared.SanitizeToolLLMContent(v.Text))
 			if safeText != "" {
 				llmParts = append(llmParts, safeText)
 			}
@@ -515,7 +515,7 @@ func (t *MCPTool) storeEmbeddedResource(ctx context.Context, content *mcp.Embedd
 
 	rawText := strings.TrimSpace(resource.Text)
 	if rawText != "" {
-		return "", sanitizeToolLLMContent(resource.Text), rawText
+		return "", toolshared.SanitizeToolLLMContent(resource.Text), rawText
 	}
 
 	return "", summarizeEmbeddedResource(content), ""

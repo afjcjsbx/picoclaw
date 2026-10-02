@@ -9,14 +9,14 @@ import (
 	"regexp"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/sipeed/picoclaw/pkg/media"
+	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
 const (
-	largeBase64OmittedMessage = "[Tool returned a large base64-like payload; omitted from model context.]"
-	inlineMediaOmittedMessage = "[Tool returned inline media content; omitted from model context.]"
+	largeBase64OmittedMessage = toolshared.LargeBase64OmittedMessage
+	inlineMediaOmittedMessage = toolshared.InlineMediaOmittedMessage
 	inlineMediaStoredMessage  = "[Tool returned inline media content (%s); omitted from model context and registered as a media attachment.]"
 )
 
@@ -66,7 +66,7 @@ func normalizeToolResult(
 		notes = append(notes, extractedNotes...)
 	}
 
-	result.ForLLM = sanitizeToolLLMContent(result.ForLLM)
+	result.ForLLM = toolshared.SanitizeToolLLMContent(result.ForLLM)
 
 	if len(result.Media) > 0 && len(notes) > 0 {
 		if strings.TrimSpace(result.ForLLM) == "" {
@@ -80,58 +80,6 @@ func normalizeToolResult(
 	}
 
 	return result
-}
-
-func sanitizeToolLLMContent(text string) string {
-	trimmed := strings.TrimSpace(text)
-	if trimmed == "" {
-		return text
-	}
-	if inlineMarkdownDataURLRe.MatchString(trimmed) || inlineRawDataURLRe.MatchString(trimmed) {
-		cleaned := inlineMarkdownDataURLRe.ReplaceAllString(trimmed, "")
-		cleaned = inlineRawDataURLRe.ReplaceAllString(cleaned, "")
-		cleaned = strings.TrimSpace(cleaned)
-		if cleaned == "" {
-			return inlineMediaOmittedMessage
-		}
-		return cleaned + "\n" + inlineMediaOmittedMessage
-	}
-	if looksLikeLargeBase64Payload(trimmed) {
-		return largeBase64OmittedMessage
-	}
-	return text
-}
-
-func looksLikeLargeBase64Payload(text string) bool {
-	trimmed := strings.TrimSpace(text)
-	if len(trimmed) < 1024 {
-		return false
-	}
-
-	nonSpace := 0
-	base64Like := 0
-	spaceCount := 0
-
-	for _, r := range trimmed {
-		if unicode.IsSpace(r) {
-			spaceCount++
-			continue
-		}
-		nonSpace++
-		if (r >= 'A' && r <= 'Z') ||
-			(r >= 'a' && r <= 'z') ||
-			(r >= '0' && r <= '9') ||
-			r == '+' || r == '/' || r == '=' {
-			base64Like++
-		}
-	}
-
-	if nonSpace == 0 {
-		return false
-	}
-
-	ratio := float64(base64Like) / float64(nonSpace)
-	return ratio >= 0.97 && spaceCount <= len(trimmed)/128
 }
 
 func extractInlineMediaRefs(
@@ -268,7 +216,6 @@ func extensionForMIMEType(mimeType string) string {
 	if exts, err := mime.ExtensionsByType(mimeType); err == nil && len(exts) > 0 {
 		return exts[0]
 	}
-
 	switch strings.ToLower(mimeType) {
 	case "image/jpeg":
 		return ".jpg"
