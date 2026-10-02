@@ -118,6 +118,8 @@ func loadEnvFile(path string) (map[string]string, error) {
 
 // ServerConnection represents a connection to an MCP server
 type ServerConnection struct {
+	plugin      bool // Plugin calls are never automatically replayed after disconnect.
+	cancel      context.CancelFunc
 	Name        string
 	Config      config.MCPServerConfig
 	Client      *mcp.Client
@@ -538,7 +540,7 @@ func (m *Manager) CallTool(
 
 	result, err := conn.Session.CallTool(ctx, params)
 	if err != nil {
-		if shouldReconnectCallError(err) {
+		if !conn.plugin && shouldReconnectCallError(err) {
 			logger.WarnCF("mcp", "MCP server session was lost during tool call, reconnecting",
 				map[string]any{
 					"server": serverName,
@@ -685,7 +687,17 @@ func (m *Manager) Close() error {
 
 	var errs []error
 	for name, conn := range m.servers {
+		if conn.cancel != nil {
+			conn.cancel()
+		}
 		if err := conn.Session.Close(); err != nil {
+			// Plugin shutdown cancels process lifetime before joining sessions.
+			// A terminated child is expected here, not a new component failure.
+			var exitErr *exec.ExitError
+			if conn.plugin &&
+				(errors.As(err, &exitErr) || errors.Is(err, os.ErrClosed) || errors.Is(err, context.Canceled)) {
+				continue
+			}
 			logger.ErrorCF("mcp", "Failed to close server connection",
 				map[string]any{
 					"server": name,

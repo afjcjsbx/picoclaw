@@ -527,6 +527,10 @@ PicoClaw includes built-in tools for file operations, code execution, scheduling
 
 ## 🎯 Skills
 
+Skills and MCP servers can also be packaged together as portable **Agent Plugins 1.0.0**.
+See [Plugin development, installation and activation](PLUGINS.md) and the
+[working demo plugin](examples/plugins/demo-plugin).
+
 Skills are modular capabilities that extend your Agent. They are loaded from `SKILL.md` files in your workspace.
 
 **Install skills from ClawHub:**
