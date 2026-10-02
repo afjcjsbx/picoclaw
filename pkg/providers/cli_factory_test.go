@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	cliprovider "github.com/sipeed/picoclaw/pkg/providers/cli"
 )
 
 func testProviderWorkspace(t *testing.T, provider any) string {
@@ -35,9 +36,9 @@ func TestCreateProvider_ClaudeCli(t *testing.T) {
 		t.Fatalf("CreateProvider(claude-cli) error = %v", err)
 	}
 
-	cliProvider, ok := provider.(*ClaudeCliProvider)
+	cliProvider, ok := provider.(*cliprovider.ClaudeCliProvider)
 	if !ok {
-		t.Fatalf("CreateProvider(claude-cli) returned %T, want *ClaudeCliProvider", provider)
+		t.Fatalf("CreateProvider(claude-cli) returned %T, want *cliprovider.ClaudeCliProvider", provider)
 	}
 	if got := testProviderWorkspace(t, cliProvider); got != "/test/ws" {
 		t.Errorf("workspace = %q, want %q", got, "/test/ws")
@@ -55,8 +56,8 @@ func TestCreateProvider_ClaudeCode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateProvider(claude-code) error = %v", err)
 	}
-	if _, ok := provider.(*ClaudeCliProvider); !ok {
-		t.Fatalf("CreateProvider(claude-code) returned %T, want *ClaudeCliProvider", provider)
+	if _, ok := provider.(*cliprovider.ClaudeCliProvider); !ok {
+		t.Fatalf("CreateProvider(claude-code) returned %T, want *cliprovider.ClaudeCliProvider", provider)
 	}
 }
 
@@ -71,8 +72,8 @@ func TestCreateProvider_ClaudeCodec(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateProvider(claudecode) error = %v", err)
 	}
-	if _, ok := provider.(*ClaudeCliProvider); !ok {
-		t.Fatalf("CreateProvider(claudecode) returned %T, want *ClaudeCliProvider", provider)
+	if _, ok := provider.(*cliprovider.ClaudeCliProvider); !ok {
+		t.Fatalf("CreateProvider(claudecode) returned %T, want *cliprovider.ClaudeCliProvider", provider)
 	}
 }
 
@@ -89,9 +90,9 @@ func TestCreateProvider_ClaudeCliDefaultWorkspace(t *testing.T) {
 		t.Fatalf("CreateProvider error = %v", err)
 	}
 
-	cliProvider, ok := provider.(*ClaudeCliProvider)
+	cliProvider, ok := provider.(*cliprovider.ClaudeCliProvider)
 	if !ok {
-		t.Fatalf("returned %T, want *ClaudeCliProvider", provider)
+		t.Fatalf("returned %T, want *cliprovider.ClaudeCliProvider", provider)
 	}
 	if got := testProviderWorkspace(t, cliProvider); got != "." {
 		t.Errorf("workspace = %q, want %q (default)", got, ".")

@@ -15,6 +15,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
+	cliprovider "github.com/sipeed/picoclaw/pkg/providers/cli"
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
@@ -112,7 +113,7 @@ func RunToolLoop(
 
 		normalizedToolCalls := make([]providers.ToolCall, 0, len(response.ToolCalls))
 		for _, tc := range response.ToolCalls {
-			normalizedToolCalls = append(normalizedToolCalls, providers.NormalizeToolCall(tc))
+			normalizedToolCalls = append(normalizedToolCalls, cliprovider.NormalizeToolCall(tc))
 		}
 
 		// 5. Log tool calls

@@ -15,6 +15,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
+	oauthprovider "github.com/sipeed/picoclaw/pkg/providers/oauth"
 )
 
 const (
@@ -69,7 +70,7 @@ var (
 	oauthDeleteCredential         = auth.DeleteCredential
 	oauthLoadConfig               = config.LoadConfig
 	oauthSaveConfig               = config.SaveConfig
-	oauthFetchAntigravityProject  = providers.FetchAntigravityProjectID
+	oauthFetchAntigravityProject  = oauthprovider.FetchAntigravityProjectID
 	oauthFetchGoogleUserEmailFunc = fetchGoogleUserEmail
 )
 
