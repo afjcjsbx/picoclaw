@@ -3,7 +3,6 @@ package tools
 import (
 	"encoding/base64"
 	"fmt"
-	"mime"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -171,7 +170,7 @@ func storeInlineDataURL(
 		return "", fmt.Sprintf("[Tool returned inline media content (%s) but it could not be stored.]", mimeType)
 	}
 
-	ext := extensionForMIMEType(mimeType)
+	ext := toolshared.ExtensionForMIMEType(mimeType)
 	tmpFile, err := os.CreateTemp(dir, "tool-inline-*"+ext)
 	if err != nil {
 		return "", fmt.Sprintf("[Tool returned inline media content (%s) but it could not be stored.]", mimeType)
@@ -207,33 +206,4 @@ func storeInlineDataURL(
 	}
 
 	return ref, fmt.Sprintf(inlineMediaStoredMessage, mimeType)
-}
-
-func extensionForMIMEType(mimeType string) string {
-	if mimeType == "" {
-		return ".bin"
-	}
-	if exts, err := mime.ExtensionsByType(mimeType); err == nil && len(exts) > 0 {
-		return exts[0]
-	}
-	switch strings.ToLower(mimeType) {
-	case "image/jpeg":
-		return ".jpg"
-	case "image/png":
-		return ".png"
-	case "image/gif":
-		return ".gif"
-	case "image/webp":
-		return ".webp"
-	case "audio/wav", "audio/x-wav":
-		return ".wav"
-	case "audio/mpeg":
-		return ".mp3"
-	case "audio/ogg":
-		return ".ogg"
-	case "video/mp4":
-		return ".mp4"
-	default:
-		return filepath.Ext(mimeType)
-	}
 }

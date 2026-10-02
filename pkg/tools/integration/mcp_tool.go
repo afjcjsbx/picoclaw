@@ -561,7 +561,7 @@ func (t *MCPTool) storeBinaryContent(
 		return "", fmt.Sprintf("[MCP returned %s content (%s) but it could not be stored.]", kind, mimeType)
 	}
 
-	ext := extensionForMIMEType(mimeType)
+	ext := toolshared.ExtensionForMIMEType(mimeType)
 	tmpFile, err := os.CreateTemp(dir, "mcp-*"+ext)
 	if err != nil {
 		return "", fmt.Sprintf("[MCP returned %s content (%s) but it could not be stored.]", kind, mimeType)

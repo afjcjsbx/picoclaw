@@ -1,6 +1,8 @@
 package toolshared
 
 import (
+	"mime"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"unicode"
@@ -56,4 +58,33 @@ func looksLikeLargeBase64Payload(text string) bool {
 		}
 	}
 	return nonSpace > 0 && float64(base64Like)/float64(nonSpace) >= 0.97 && spaceCount <= len(trimmed)/128
+}
+
+func ExtensionForMIMEType(mimeType string) string {
+	if mimeType == "" {
+		return ".bin"
+	}
+	if exts, err := mime.ExtensionsByType(mimeType); err == nil && len(exts) > 0 {
+		return exts[0]
+	}
+	switch strings.ToLower(mimeType) {
+	case "image/jpeg":
+		return ".jpg"
+	case "image/png":
+		return ".png"
+	case "image/gif":
+		return ".gif"
+	case "image/webp":
+		return ".webp"
+	case "audio/wav", "audio/x-wav":
+		return ".wav"
+	case "audio/mpeg":
+		return ".mp3"
+	case "audio/ogg":
+		return ".ogg"
+	case "video/mp4":
+		return ".mp4"
+	default:
+		return filepath.Ext(mimeType)
+	}
 }

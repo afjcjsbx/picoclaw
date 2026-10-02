@@ -3,8 +3,6 @@ package integrationtools
 import (
 	"fmt"
 	"math"
-	"mime"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -15,36 +13,6 @@ const (
 	largeBase64OmittedMessage = toolshared.LargeBase64OmittedMessage
 	inlineMediaOmittedMessage = toolshared.InlineMediaOmittedMessage
 )
-
-func extensionForMIMEType(mimeType string) string {
-	if mimeType == "" {
-		return ".bin"
-	}
-	if exts, err := mime.ExtensionsByType(mimeType); err == nil && len(exts) > 0 {
-		return exts[0]
-	}
-
-	switch strings.ToLower(mimeType) {
-	case "image/jpeg":
-		return ".jpg"
-	case "image/png":
-		return ".png"
-	case "image/gif":
-		return ".gif"
-	case "image/webp":
-		return ".webp"
-	case "audio/wav", "audio/x-wav":
-		return ".wav"
-	case "audio/mpeg":
-		return ".mp3"
-	case "audio/ogg":
-		return ".ogg"
-	case "video/mp4":
-		return ".mp4"
-	default:
-		return filepath.Ext(mimeType)
-	}
-}
 
 func getInt64Arg(args map[string]any, key string, defaultVal int64) (int64, error) {
 	raw, exists := args[key]
