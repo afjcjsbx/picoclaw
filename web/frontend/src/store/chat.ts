@@ -36,7 +36,11 @@ export interface ChatToolCall {
   extraContent?: ChatToolCallExtraContent
 }
 
-export type AssistantMessageKind = "normal" | "thought" | "tool_calls"
+export type AssistantMessageKind =
+  | "normal"
+  | "thought"
+  | "tool_calls"
+  | "tool_feedback"
 
 export interface ChatMessage {
   id: string

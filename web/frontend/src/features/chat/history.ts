@@ -50,7 +50,9 @@ export async function loadSessionMessages(
       role: message.role,
       content: message.content,
       kind:
-        message.role === "assistant" ? (message.kind ?? "normal") : undefined,
+        message.role === "assistant"
+          ? (message.kind ?? "normal")
+          : undefined,
       modelName: message.model_name,
       toolCalls:
         message.role === "assistant"

@@ -837,6 +837,7 @@ func visibleAssistantToolMessages(
 		messages = append(messages, sessionChatMessage{
 			Role:      "assistant",
 			Content:   content,
+			Kind:      "tool_feedback",
 			ModelName: modelName,
 			CreatedAt: createdAt,
 		})
@@ -1094,6 +1095,11 @@ func (h *Handler) handleForkSession(w http.ResponseWriter, r *http.Request) {
 	transcript := detailSessionMessages(parent.Messages, toolFeedbackMaxArgsLength)
 	if request.MessageIndex >= len(transcript) {
 		http.Error(w, "fork message not found", http.StatusBadRequest)
+		return
+	}
+	if transcript[request.MessageIndex].Role != "assistant" ||
+		(transcript[request.MessageIndex].Kind != "" && transcript[request.MessageIndex].Kind != "normal") {
+		http.Error(w, "only assistant replies can be forked", http.StatusBadRequest)
 		return
 	}
 
