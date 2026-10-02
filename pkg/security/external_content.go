@@ -76,7 +76,6 @@ var specialTokenRE = regexp.MustCompile(`(?:` + func() string {
 		tokens[i] = regexp.QuoteMeta(tokens[i])
 	}
 	tokens = append(tokens, `<\|reserved_special_token_\d+\|>`)
-	sort.Slice(tokens, func(i, j int) bool { return len(tokens[i]) > len(tokens[j]) })
 	return strings.Join(tokens, "|")
 }() + `)\b?`)
 
