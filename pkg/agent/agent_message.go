@@ -65,7 +65,7 @@ func (al *AgentLoop) ProcessDirectWithChannel(
 		SessionKey: sessionKey,
 	}
 
-	return al.processMessage(ctx, msg)
+	return al.processMessageWithTrust(ctx, msg, true)
 }
 
 func (al *AgentLoop) ProcessHeartbeat(
@@ -124,6 +124,12 @@ func (al *AgentLoop) prepareInboundMessageForAgent(
 }
 
 func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage) (string, error) {
+	return al.processMessageWithTrust(ctx, msg, false)
+}
+
+func (al *AgentLoop) processMessageWithTrust(
+	ctx context.Context, msg bus.InboundMessage, trustedInternal bool,
+) (string, error) {
 	msg = al.prepareInboundMessageForAgent(ctx, msg)
 
 	// Add message preview to log (show full content for error messages)
@@ -217,8 +223,10 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 			})
 	}
 
-	if content, wrapped := al.secureInboundContent(msg); wrapped {
-		opts.Dispatch.UserMessage = content
+	if !trustedInternal {
+		if content, wrapped := al.secureInboundContent(msg); wrapped {
+			opts.Dispatch.UserMessage = content
+		}
 	}
 
 	return al.runAgentLoop(ctx, agent, opts)
@@ -255,7 +263,7 @@ func isTrustedDirectSender(cfg *config.Config, msg bus.InboundMessage) bool {
 	if senderID == "" {
 		senderID = msg.Context.SenderID
 	}
-	if constants.IsInternalChannel(channelName) || senderID == "cron" || senderID == "heartbeat" {
+	if constants.IsInternalChannel(channelName) {
 		return true
 	}
 	if cfg == nil || msg.Context.ChatType != "direct" || channelName == "" || senderID == "" {
