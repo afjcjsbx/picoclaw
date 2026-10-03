@@ -115,6 +115,7 @@ type ActiveTurnInfo struct {
 type turnExecution struct {
 	// Core message state (accumulates throughout the turn)
 	messages         []providers.Message // built from ContextBuilder, grows per-iteration
+	loopWarnings     []providers.Message // turn-local warnings restored after context compaction
 	pendingMessages  []providers.Message // steering/SubTurn messages awaiting injection
 	history          []providers.Message // from ContextManager.Assemble
 	summary          string

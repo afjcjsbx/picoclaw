@@ -853,6 +853,7 @@ toolLoop:
 		// The warning is deliberately turn-local: it guides the next LLM call but
 		// is not persisted into session history after the loop has been resolved.
 		messages = append(messages, warning)
+		exec.loopWarnings = append(exec.loopWarnings, warning)
 		exec.messages = messages
 	}
 

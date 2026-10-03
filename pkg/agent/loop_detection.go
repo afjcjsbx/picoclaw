@@ -37,6 +37,12 @@ func (ts *turnState) recordToolCall(toolName string, args map[string]any) (loopS
 	if ts == nil || !ts.loopDetectionConfig.Enabled {
 		return loopStatusNone, 0
 	}
+	if toolName == "spawn_status" {
+		// Polling the same task can return a new status without changing arguments.
+		ts.loopDetectionHistory = ts.loopDetectionHistory[:0]
+		ts.loopDetectionNext = 0
+		return loopStatusNone, 0
+	}
 
 	cfg := ts.loopDetectionConfig.Normalized()
 	h := hashToolCall(toolName, args)

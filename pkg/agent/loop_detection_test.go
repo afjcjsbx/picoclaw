@@ -69,6 +69,25 @@ func TestTurnStateRecordToolCallThresholds(t *testing.T) {
 	}
 }
 
+func TestTurnStateRecordToolCallSkipsSpawnStatus(t *testing.T) {
+	ts := &turnState{loopDetectionConfig: config.LoopDetectionConfig{
+		Enabled: true, RepeatThreshold: 3, CriticalThreshold: 6, WindowSize: 20,
+	}}
+	args := map[string]any{"query": "same"}
+	for i := 0; i < 2; i++ {
+		ts.recordToolCall("search", args)
+	}
+	for i := 0; i < 8; i++ {
+		status, count := ts.recordToolCall("spawn_status", map[string]any{"task_id": "subagent-1"})
+		if status != loopStatusNone || count != 0 {
+			t.Fatalf("poll %d: status=%v count=%d", i+1, status, count)
+		}
+	}
+	if status, count := ts.recordToolCall("search", args); status != loopStatusNone || count != 1 {
+		t.Fatalf("polling did not break the earlier streak: status=%v count=%d", status, count)
+	}
+}
+
 type repeatedToolProvider struct {
 	mu              sync.Mutex
 	callCount       int
@@ -106,6 +125,46 @@ func (p *repeatedToolProvider) Chat(
 
 func (p *repeatedToolProvider) GetDefaultModel() string { return "repeated-tool-model" }
 
+type warningRetryProvider struct {
+	callCount              int
+	warningBeforeRetrySeen bool
+	warningOnRetrySeen     bool
+}
+
+func (p *warningRetryProvider) Chat(
+	_ context.Context,
+	messages []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	p.callCount++
+	warning := false
+	for _, msg := range messages {
+		if msg.Role == "system" && strings.Contains(msg.Content, "[Loop Warning]") {
+			warning = true
+		}
+	}
+	if p.callCount <= 3 {
+		return &providers.LLMResponse{
+			ToolCalls: []providers.ToolCall{{
+				ID:        fmt.Sprintf("call_%d", p.callCount),
+				Name:      "missing_test_tool",
+				Arguments: map[string]any{"query": "same"},
+			}},
+			FinishReason: "tool_calls",
+		}, nil
+	}
+	if p.callCount == 4 {
+		p.warningBeforeRetrySeen = warning
+		return nil, fmt.Errorf("context_length_exceeded")
+	}
+	p.warningOnRetrySeen = warning
+	return &providers.LLMResponse{Content: "recovered", FinishReason: "stop"}, nil
+}
+
+func (p *warningRetryProvider) GetDefaultModel() string { return "warning-retry-model" }
+
 func TestRunTurnLoopDetectionWarningGuidesNextCall(t *testing.T) {
 	provider := &repeatedToolProvider{stopOnWarning: true}
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
@@ -135,6 +194,34 @@ func TestRunTurnLoopDetectionWarningGuidesNextCall(t *testing.T) {
 		t.Fatalf("provider calls = %d, want 4", provider.callCount)
 	}
 
+	for _, msg := range agent.Sessions.GetHistory(ts.sessionKey) {
+		if strings.Contains(msg.Content, "[Loop Warning]") {
+			t.Fatal("loop warning must not persist in session history")
+		}
+	}
+}
+
+func TestRunTurnLoopDetectionWarningSurvivesContextRetry(t *testing.T) {
+	provider := &warningRetryProvider{}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	agent.LoopDetection = config.LoopDetectionConfig{
+		Enabled: true, RepeatThreshold: 3, CriticalThreshold: 6, WindowSize: 20,
+	}
+
+	ts := newTurnState(agent, makeTestProcessOpts("test-loop-warning-context-retry"), turnEventScope{
+		turnID: "turn-loop-warning-context-retry", context: newTurnContext(nil, nil, nil),
+	})
+	result, err := al.runTurn(context.Background(), ts, NewPipeline(al))
+	if err != nil {
+		t.Fatalf("runTurn failed: %v", err)
+	}
+	if result.finalContent != "recovered" || provider.callCount != 5 {
+		t.Fatalf("result=%q provider calls=%d", result.finalContent, provider.callCount)
+	}
+	if !provider.warningBeforeRetrySeen || !provider.warningOnRetrySeen {
+		t.Fatalf("warning before retry=%t, after retry=%t", provider.warningBeforeRetrySeen, provider.warningOnRetrySeen)
+	}
 	for _, msg := range agent.Sessions.GetHistory(ts.sessionKey) {
 		if strings.Contains(msg.Content, "[Loop Warning]") {
 			t.Fatal("loop warning must not persist in session history")

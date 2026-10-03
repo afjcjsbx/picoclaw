@@ -1164,7 +1164,7 @@ Loop detection is an optional guard against consecutive identical tool calls wit
 }
 ```
 
-At `repeat_threshold`, PicoClaw adds a turn-local warning for the model. At `critical_threshold`, it stops the loop with a final response. `window_size` bounds the per-turn hash history and must cover the critical threshold. Calls are compared using the tool name and complete arguments, so legitimate pagination and different paths or IDs remain distinct. The feature is disabled by default and complements, rather than replaces, `max_tool_iterations`.
+At `repeat_threshold`, PicoClaw adds a turn-local warning for the model. At `critical_threshold`, it stops the loop with a final response. `window_size` bounds the per-turn hash history and must cover the critical threshold. Calls are compared using the tool name and complete arguments, so legitimate pagination and different paths or IDs remain distinct. `spawn_status` polling is excluded because the same request can return a new task status; it also resets any preceding repeat streak. The feature is disabled by default and complements, rather than replaces, `max_tool_iterations`.
 
 ### Scheduled Tasks / Reminders
 
