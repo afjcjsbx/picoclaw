@@ -46,6 +46,7 @@ type Config struct {
 	Hooks     HooksConfig     `json:"hooks,omitempty"     yaml:"-"`
 	Tools     ToolsConfig     `json:"tools"               yaml:",inline"`
 	Heartbeat HeartbeatConfig `json:"heartbeat"           yaml:"-"`
+	Power     PowerConfig     `json:"power,omitzero"      yaml:"-"`
 	Devices   DevicesConfig   `json:"devices"             yaml:"-"`
 	Voice     VoiceConfig     `json:"voice"               yaml:"-"`
 	// BuildInfo contains build-time version information
@@ -258,7 +259,8 @@ func (c *Config) MarshalJSON() ([]byte, error) {
 		Alias: (*Alias)(c),
 	}
 
-	if len(c.Session.Dimensions) > 0 || len(c.Session.IdentityLinks) > 0 || c.Session.DmScope != "" {
+	if len(c.Session.Dimensions) > 0 || len(c.Session.IdentityLinks) > 0 ||
+		c.Session.DmScope != "" {
 		sessionCfg := c.Session
 		aux.Session = &sessionCfg
 	}
@@ -739,6 +741,39 @@ type SlackWebhookTarget struct {
 type HeartbeatConfig struct {
 	Enabled  bool `json:"enabled"  env:"PICOCLAW_HEARTBEAT_ENABLED"`
 	Interval int  `json:"interval" env:"PICOCLAW_HEARTBEAT_INTERVAL"` // minutes, min 5
+}
+
+type PowerConfig struct {
+	LowPower                  bool `json:"low_power,omitempty"                    env:"PICOCLAW_POWER_LOW_POWER"`
+	LowPowerHeartbeatInterval int  `json:"low_power_heartbeat_interval,omitempty" env:"PICOCLAW_POWER_LOW_POWER_HEARTBEAT_INTERVAL"`
+	PollIntervalMultiplier    int  `json:"poll_interval_multiplier,omitempty"     env:"PICOCLAW_POWER_POLL_INTERVAL_MULTIPLIER"`
+}
+
+func (c PowerConfig) IsZero() bool { return c == (PowerConfig{}) }
+
+func (c PowerConfig) EffectiveHeartbeatInterval(normal int) int {
+	if !c.LowPower {
+		return normal
+	}
+	interval := c.LowPowerHeartbeatInterval
+	if interval <= 0 {
+		interval = 120
+	}
+	return max(normal, interval)
+}
+
+func (c PowerConfig) ScalePollInterval(interval time.Duration) time.Duration {
+	if !c.LowPower {
+		return interval
+	}
+	multiplier := c.PollIntervalMultiplier
+	if multiplier <= 0 {
+		multiplier = 5
+	}
+	if interval > time.Duration(1<<63-1)/time.Duration(multiplier) {
+		return time.Duration(1<<63 - 1)
+	}
+	return interval * time.Duration(multiplier)
 }
 
 type DevicesConfig struct {
@@ -1329,7 +1364,11 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if e := json.Unmarshal(data, &versionInfo); e != nil {
 		e = wrapJSONError(data, e, "config.json")
-		logger.ErrorCF("config", formatDiagnosticLogMessage("Malformed config file", e), map[string]any{"path": path})
+		logger.ErrorCF(
+			"config",
+			formatDiagnosticLogMessage("Malformed config file", e),
+			map[string]any{"path": path},
+		)
 		return nil, e
 	}
 	if len(data) <= 10 {

@@ -68,6 +68,7 @@ func NewAgentLoop(
 
 	al := &AgentLoop{
 		bus:               msgBus,
+		stopCh:            make(chan struct{}),
 		cfg:               cfg,
 		registry:          registry,
 		state:             stateManager,

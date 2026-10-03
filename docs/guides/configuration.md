@@ -40,12 +40,16 @@ PICOCLAW_HOME=/srv/picoclaw PICOCLAW_CONFIG=/srv/picoclaw/main.json picoclaw gat
 ```json
 {
   "gateway": {
-    "log_level": "warn"
+    "log_level": "warn",
+    "log_max_size_mb": 2,
+    "log_max_backups": 3
   }
 }
 ```
 
 When omitted, the default is `warn`. Supported values: `debug`, `info`, `warn`, `error`, `fatal`.
+
+`log_max_size_mb` sets the maximum size of each active log before rotation (default `2`, allowed `1`–`1024`). `log_max_backups` sets how many numbered archives to keep (default `3`, allowed `0`–`100`; `0` disables archives). Approximate disk usage per log is `(log_max_backups + 1) × log_max_size_mb`. These settings apply to `logs/gateway.log`, the workspace `heartbeat.log`, and any file selected with `PICOCLAW_LOG_FILE`; the panic log is trimmed to the configured size at startup. Existing oversized logs are trimmed to their latest content on startup. Environment overrides are `PICOCLAW_GATEWAY_LOG_MAX_SIZE_MB` and `PICOCLAW_GATEWAY_LOG_MAX_BACKUPS`. Restart the Gateway for changed rotation settings to take effect.
 
 You can also override this with the environment variable `PICOCLAW_LOG_LEVEL`.
 
@@ -614,6 +618,20 @@ The subagent has access to tools (message, web_search, etc.) and can communicate
 
 * `PICOCLAW_HEARTBEAT_ENABLED=false` to disable
 * `PICOCLAW_HEARTBEAT_INTERVAL=60` to change interval
+
+For constrained devices, enable the static low-power profile:
+
+```json
+{
+  "power": {
+    "low_power": true,
+    "low_power_heartbeat_interval": 120,
+    "poll_interval_multiplier": 5
+  }
+}
+```
+
+With `low_power` enabled, the heartbeat interval defaults to 120 minutes (or the larger configured normal interval), and the agent loop blocks on inbound events instead of waking every 100 ms. `poll_interval_multiplier` scales maintenance intervals: `5` turns a 30-minute media cleanup interval into 150 minutes, a 10-second channel-maintenance interval into 50 seconds, and a 2-second config-file check into 10 seconds when hot reload is enabled. Set `low_power_heartbeat_interval` and `poll_interval_multiplier` to tune the profile. Channel protocol keepalives remain unchanged so connected integrations stay available.
 
 ### Providers
 

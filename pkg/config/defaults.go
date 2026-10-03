@@ -306,10 +306,12 @@ func DefaultConfig() *Config {
 			},
 		},
 		Gateway: GatewayConfig{
-			Host:      "localhost",
-			Port:      18790,
-			HotReload: false,
-			LogLevel:  DefaultGatewayLogLevel,
+			Host:          "localhost",
+			Port:          18790,
+			HotReload:     false,
+			LogLevel:      DefaultGatewayLogLevel,
+			LogMaxSizeMB:  DefaultGatewayLogMaxSizeMB,
+			LogMaxBackups: DefaultGatewayLogMaxBackups,
 		},
 		Events: EventsConfig{
 			Logging: defaultEventLoggingConfig(),
