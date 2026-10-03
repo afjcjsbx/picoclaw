@@ -266,7 +266,8 @@ func (t *MCPTool) Execute(ctx context.Context, args map[string]any) *ToolResult 
 	result, err := t.manager.CallTool(ctx, t.serverName, t.tool.Name, args)
 	if err != nil {
 		t.publishRuntimeEvent(ctx, runtimeevents.KindMCPToolCallEnd, startedAt, true, err.Error())
-		return ErrorResult(fmt.Sprintf("MCP tool execution failed: %v", err)).WithError(err)
+		message := t.wrapExternalContent(err.Error())
+		return ErrorResult(fmt.Sprintf("MCP tool execution failed: %s", message)).WithError(err)
 	}
 
 	if result == nil {
@@ -279,7 +280,7 @@ func (t *MCPTool) Execute(ctx context.Context, args map[string]any) *ToolResult 
 	if result.IsError {
 		errMsg := extractContentText(result.Content)
 		t.publishRuntimeEvent(ctx, runtimeevents.KindMCPToolCallEnd, startedAt, true, errMsg)
-		return ErrorResult(fmt.Sprintf("MCP tool returned error: %s", errMsg)).
+		return ErrorResult(fmt.Sprintf("MCP tool returned error: %s", t.wrapExternalContent(errMsg))).
 			WithError(fmt.Errorf("MCP tool error: %s", errMsg))
 	}
 
@@ -434,13 +435,16 @@ func (t *MCPTool) normalizeResultContent(ctx context.Context, content []mcp.Cont
 		return artifactResult
 	}
 
-	result := &ToolResult{
-		ForLLM: forLLM,
+	return &ToolResult{
+		ForLLM: t.wrapExternalContent(forLLM),
 		Media:  mediaRefs,
 	}
+}
+
+func (t *MCPTool) wrapExternalContent(content string) string {
 	if t.promptInjection.Enabled && t.promptInjection.WrapMCPResults {
 		if t.promptInjection.LogSuspicious {
-			if hits := security.DetectSuspiciousPatterns(forLLM); len(hits) > 0 {
+			if hits := security.DetectSuspiciousPatterns(content); len(hits) > 0 {
 				logger.WarnCF(
 					"security",
 					"suspicious pattern in MCP content",
@@ -448,13 +452,13 @@ func (t *MCPTool) normalizeResultContent(ctx context.Context, content []mcp.Cont
 				)
 			}
 		}
-		forLLM = security.TruncateSanitizedExternalContent(forLLM, t.promptInjection.MaxWrappedChars)
-		result.ForLLM = security.WrapSanitizedExternalContent(
-			forLLM,
+		content = security.TruncateSanitizedExternalContent(content, t.promptInjection.MaxWrappedChars)
+		return security.WrapSanitizedExternalContent(
+			content,
 			security.WrapOptions{Source: security.SourceAPI, IncludeWarning: true},
 		)
 	}
-	return result
+	return content
 }
 
 func (t *MCPTool) persistLargeTextArtifact(text string) *ToolResult {
