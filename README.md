@@ -218,6 +218,21 @@ make install
 
 **Raspberry Pi Zero 2 W:** Use the binary that matches your OS: 32-bit Raspberry Pi OS -> `make build-linux-arm`; 64-bit -> `make build-linux-arm64`. Or run `make build-pi-zero` to build both.
 
+### Custom channel builds
+
+The normal build includes every channel. Custom channel selection, optional
+Seahorse builds, SQLite caveats, and measured binary sizes are documented in
+the [Custom Builds Guide](docs/guides/custom-builds.md). For example, this
+builds with Telegram and Discord only:
+
+```bash
+make build GO_BUILD_TAGS='goolm,stdjson,custom_channels,channel_telegram,channel_discord'
+```
+
+In the measured macOS ARM64 Telegram-only build, adding `no_seahorse` reduced
+the binary by 3.92 MiB (14.3%). See the guide for the full measurement details
+and the cases where Matrix or WhatsApp Native still require SQLite.
+
 ## 🚀 Quick Start Guide
 
 ### 🌐 WebUI Launcher (Recommended for Desktop)
