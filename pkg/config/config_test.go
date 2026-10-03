@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"gopkg.in/yaml.v3"
@@ -895,6 +896,32 @@ func TestDefaultConfig_HeartbeatEnabled(t *testing.T) {
 
 	if !cfg.Heartbeat.Enabled {
 		t.Error("Heartbeat should be enabled by default")
+	}
+}
+
+func TestPowerConfigLowPowerProfile(t *testing.T) {
+	var power PowerConfig
+	if got := power.EffectiveHeartbeatInterval(30); got != 30 {
+		t.Fatalf("normal heartbeat interval = %d, want 30", got)
+	}
+	if got := power.ScalePollInterval(2 * time.Second); got != 2*time.Second {
+		t.Fatalf("normal poll interval = %v, want 2s", got)
+	}
+
+	power.LowPower = true
+	if got := power.EffectiveHeartbeatInterval(30); got != 120 {
+		t.Fatalf("default low-power heartbeat interval = %d, want 120", got)
+	}
+	if got := power.ScalePollInterval(2 * time.Second); got != 10*time.Second {
+		t.Fatalf("default low-power poll interval = %v, want 10s", got)
+	}
+	power.LowPowerHeartbeatInterval = 90
+	power.PollIntervalMultiplier = 3
+	if got := power.EffectiveHeartbeatInterval(120); got != 120 {
+		t.Fatalf("low-power profile shortened normal interval to %d", got)
+	}
+	if got := power.ScalePollInterval(2 * time.Second); got != 6*time.Second {
+		t.Fatalf("configured low-power poll interval = %v, want 6s", got)
 	}
 }
 

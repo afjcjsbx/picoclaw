@@ -256,7 +256,9 @@ func Run(debug bool, homePath, configPath string, allowEmptyStartup bool) (runEr
 	var configReloadChan <-chan *config.Config
 	stopWatch := func() {}
 	if cfg.Gateway.HotReload {
-		configReloadChan, stopWatch = setupConfigWatcherPolling(configPath, debug)
+		configReloadChan, stopWatch = setupConfigWatcherPolling(
+			configPath, debug, cfg.Power.ScalePollInterval(2*time.Second),
+		)
 		logger.Info("Config hot reload enabled")
 	}
 	defer stopWatch()
@@ -432,7 +434,7 @@ func setupAndStartServices(
 
 	runningServices.HeartbeatService = heartbeat.NewHeartbeatService(
 		cfg.WorkspacePath(),
-		cfg.Heartbeat.Interval,
+		cfg.Power.EffectiveHeartbeatInterval(cfg.Heartbeat.Interval),
 		cfg.Heartbeat.Enabled,
 	)
 	runningServices.HeartbeatService.SetBus(msgBus)
@@ -441,11 +443,10 @@ func setupAndStartServices(
 		return nil, fmt.Errorf("error starting heartbeat service: %w", err)
 	}
 	fmt.Println("✓ Heartbeat service started")
-
 	runningServices.MediaStore = media.NewFileMediaStoreWithCleanup(media.MediaCleanerConfig{
 		Enabled:  cfg.Tools.MediaCleanup.Enabled,
 		MaxAge:   time.Duration(cfg.Tools.MediaCleanup.MaxAge) * time.Minute,
-		Interval: time.Duration(cfg.Tools.MediaCleanup.Interval) * time.Minute,
+		Interval: cfg.Power.ScalePollInterval(time.Duration(cfg.Tools.MediaCleanup.Interval) * time.Minute),
 	})
 	if fms, ok := runningServices.MediaStore.(*media.FileMediaStore); ok {
 		fms.Start()
@@ -680,7 +681,7 @@ func restartServices(
 
 	runningServices.HeartbeatService = heartbeat.NewHeartbeatService(
 		cfg.WorkspacePath(),
-		cfg.Heartbeat.Interval,
+		cfg.Power.EffectiveHeartbeatInterval(cfg.Heartbeat.Interval),
 		cfg.Heartbeat.Enabled,
 	)
 	runningServices.HeartbeatService.SetBus(msgBus)
@@ -689,11 +690,10 @@ func restartServices(
 		return fmt.Errorf("error restarting heartbeat service: %w", err)
 	}
 	fmt.Println("  ✓ Heartbeat service restarted")
-
 	runningServices.MediaStore = media.NewFileMediaStoreWithCleanup(media.MediaCleanerConfig{
 		Enabled:  cfg.Tools.MediaCleanup.Enabled,
 		MaxAge:   time.Duration(cfg.Tools.MediaCleanup.MaxAge) * time.Minute,
-		Interval: time.Duration(cfg.Tools.MediaCleanup.Interval) * time.Minute,
+		Interval: cfg.Power.ScalePollInterval(time.Duration(cfg.Tools.MediaCleanup.Interval) * time.Minute),
 	})
 	if fms, ok := runningServices.MediaStore.(*media.FileMediaStore); ok {
 		fms.Start()
@@ -751,7 +751,7 @@ func restartServices(
 	return nil
 }
 
-func setupConfigWatcherPolling(configPath string, debug bool) (chan *config.Config, func()) {
+func setupConfigWatcherPolling(configPath string, debug bool, interval time.Duration) (chan *config.Config, func()) {
 	configChan := make(chan *config.Config, 1)
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
@@ -763,7 +763,10 @@ func setupConfigWatcherPolling(configPath string, debug bool) (chan *config.Conf
 		lastModTime := getFileModTime(configPath)
 		lastSize := getFileSize(configPath)
 
-		ticker := time.NewTicker(2 * time.Second)
+		if interval <= 0 {
+			interval = 2 * time.Second
+		}
+		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 
 		for {

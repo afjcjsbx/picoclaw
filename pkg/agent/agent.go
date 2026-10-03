@@ -48,6 +48,8 @@ type AgentLoop struct {
 
 	// Runtime state
 	running        atomic.Bool
+	stopCh         chan struct{}
+	stopOnce       sync.Once
 	contextManager ContextManager
 	fallback       *providers.FallbackChain
 	channelManager interfaces.ChannelManager
@@ -144,6 +146,7 @@ const (
 
 func (al *AgentLoop) Run(ctx context.Context) error {
 	al.running.Store(true)
+	defer al.running.Store(false)
 
 	if err := al.ensureHooksInitialized(ctx); err != nil {
 		return err
@@ -152,17 +155,12 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 		return err
 	}
 
-	idleTicker := time.NewTicker(100 * time.Millisecond)
-	defer idleTicker.Stop()
-
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-idleTicker.C:
-			if !al.running.Load() {
-				return nil
-			}
+		case <-al.stopCh:
+			return nil
 		case msg, ok := <-al.bus.InboundChan():
 			if !ok {
 				return nil
@@ -320,6 +318,11 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 
 func (al *AgentLoop) Stop() {
 	al.running.Store(false)
+	al.stopOnce.Do(func() {
+		if al.stopCh != nil {
+			close(al.stopCh)
+		}
+	})
 }
 
 // Close releases resources held by agent session stores. Call after Stop.
