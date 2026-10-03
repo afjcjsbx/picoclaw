@@ -62,7 +62,11 @@ func TestTurnStateRecordToolCallThresholds(t *testing.T) {
 
 	status, count := ts.recordToolCall("search", map[string]any{"query": "different"})
 	if status != loopStatusNone || count != 1 {
-		t.Fatalf("different call did not reset consecutive count: status=%v count=%d", status, count)
+		t.Fatalf(
+			"different call did not reset consecutive count: status=%v count=%d",
+			status,
+			count,
+		)
 	}
 	if len(ts.loopDetectionHistory) != 5 {
 		t.Fatalf("bounded history length = %d, want 5", len(ts.loopDetectionHistory))
@@ -209,9 +213,13 @@ func TestRunTurnLoopDetectionWarningSurvivesContextRetry(t *testing.T) {
 		Enabled: true, RepeatThreshold: 3, CriticalThreshold: 6, WindowSize: 20,
 	}
 
-	ts := newTurnState(agent, makeTestProcessOpts("test-loop-warning-context-retry"), turnEventScope{
-		turnID: "turn-loop-warning-context-retry", context: newTurnContext(nil, nil, nil),
-	})
+	ts := newTurnState(
+		agent,
+		makeTestProcessOpts("test-loop-warning-context-retry"),
+		turnEventScope{
+			turnID: "turn-loop-warning-context-retry", context: newTurnContext(nil, nil, nil),
+		},
+	)
 	result, err := al.runTurn(context.Background(), ts, NewPipeline(al))
 	if err != nil {
 		t.Fatalf("runTurn failed: %v", err)
@@ -220,7 +228,11 @@ func TestRunTurnLoopDetectionWarningSurvivesContextRetry(t *testing.T) {
 		t.Fatalf("result=%q provider calls=%d", result.finalContent, provider.callCount)
 	}
 	if !provider.warningBeforeRetrySeen || !provider.warningOnRetrySeen {
-		t.Fatalf("warning before retry=%t, after retry=%t", provider.warningBeforeRetrySeen, provider.warningOnRetrySeen)
+		t.Fatalf(
+			"warning before retry=%t, after retry=%t",
+			provider.warningBeforeRetrySeen,
+			provider.warningOnRetrySeen,
+		)
 	}
 	for _, msg := range agent.Sessions.GetHistory(ts.sessionKey) {
 		if strings.Contains(msg.Content, "[Loop Warning]") {
