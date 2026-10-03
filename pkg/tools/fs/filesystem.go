@@ -20,6 +20,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/fileutil"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/security"
 )
 
 const MaxReadFileSize = 64 * 1024 // 64KB limit to avoid context overflow
@@ -435,6 +436,7 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	// it into the LLM context. Seeking back to 0 afterwards restores state.
 	sniff := make([]byte, 512)
 	sniffN, _ := file.Read(sniff)
+	isMCPArtifact := bytes.HasPrefix(sniff[:sniffN], []byte(security.MCPArtifactMarker))
 
 	// Reset read position to beginning before applying the caller's offset.
 	if seeker, ok := file.(io.Seeker); ok {
@@ -530,7 +532,7 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 			"has_more":   hasMore,
 		})
 
-	return NewToolResult(header + "\n\n" + string(data))
+	return newReadFileResult(header+"\n\n"+string(data), isMCPArtifact)
 }
 
 func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
@@ -583,6 +585,7 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 		return ErrorResult(fmt.Sprintf("failed to read file: %v", readErr))
 	}
 	sample = sample[:sampleN]
+	isMCPArtifact := bytes.HasPrefix(sample, []byte(security.MCPArtifactMarker))
 	if isBinaryReadFileData(sample) {
 		return ErrorResult("file appears to be binary; switch read_file mode to 'bytes' for byte-based inspection")
 	}
@@ -704,7 +707,16 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 			"tool":              t.Name(),
 		})
 
-	return NewToolResult(header + "\n\n" + content.String())
+	return newReadFileResult(header+"\n\n"+content.String(), isMCPArtifact)
+}
+
+func newReadFileResult(content string, isMCPArtifact bool) *ToolResult {
+	if isMCPArtifact {
+		content = security.WrapExternalContent(
+			content, security.WrapOptions{Source: security.SourceAPI, IncludeWarning: true},
+		)
+	}
+	return NewToolResult(content)
 }
 
 func formatReadFileLinePrefix(lineNumber int64) string {

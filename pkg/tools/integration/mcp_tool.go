@@ -488,7 +488,13 @@ func (t *MCPTool) persistLargeTextArtifact(text string) *ToolResult {
 		return t.largeTextArtifactFallback(text, err)
 	}
 	path := tmpFile.Name()
-	if _, err = tmpFile.WriteString(text); err != nil {
+	storedText := text
+	if t.promptInjection.Enabled && t.promptInjection.WrapMCPResults {
+		storedText = security.MCPArtifactMarker + security.WrapExternalContent(
+			text, security.WrapOptions{Source: security.SourceAPI, IncludeWarning: true},
+		)
+	}
+	if _, err = tmpFile.WriteString(storedText); err != nil {
 		_ = tmpFile.Close()
 		_ = os.Remove(path)
 		return t.largeTextArtifactFallback(text, err)

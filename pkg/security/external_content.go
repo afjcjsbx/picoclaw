@@ -35,6 +35,9 @@ func IsExternalHookSession(sessionKey string) bool {
 
 type ExternalContentSource string
 
+// MCPArtifactMarker records the provenance of large MCP responses saved to disk.
+const MCPArtifactMarker = "[[MCP_EXTERNAL_UNTRUSTED_ARTIFACT]]\n"
+
 const (
 	SourceEmail           ExternalContentSource = "email"
 	SourceWebhook         ExternalContentSource = "webhook"
