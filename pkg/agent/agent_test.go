@@ -24,9 +24,11 @@ import (
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/media"
 	"github.com/sipeed/picoclaw/pkg/providers"
+	cliprovider "github.com/sipeed/picoclaw/pkg/providers/cli"
 	"github.com/sipeed/picoclaw/pkg/routing"
 	"github.com/sipeed/picoclaw/pkg/session"
 	"github.com/sipeed/picoclaw/pkg/tools"
+	integrationtools "github.com/sipeed/picoclaw/pkg/tools/integration"
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
@@ -420,7 +422,7 @@ func TestPublishResponseIfNeeded_DismissesToolFeedbackWhenMessageToolAlreadySent
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
-	mt := tools.NewMessageTool()
+	mt := integrationtools.NewMessageTool()
 	mt.SetSendCallback(func(
 		ctx context.Context,
 		channel, chatID, content, replyToMessageID string,
@@ -6206,7 +6208,7 @@ func TestProcessMessage_PersistsReasoningToolResponseAsSingleAssistantRecord(t *
 	if len(assistantWithToolCall.ToolCalls) != 1 {
 		t.Fatalf("assistant tool calls = %+v, want single read_file tool", assistantWithToolCall.ToolCalls)
 	}
-	if got := providers.NormalizeToolCall(assistantWithToolCall.ToolCalls[0]).Name; got != "read_file" {
+	if got := cliprovider.NormalizeToolCall(assistantWithToolCall.ToolCalls[0]).Name; got != "read_file" {
 		t.Fatalf("assistant tool calls = %+v, want single read_file tool", assistantWithToolCall.ToolCalls)
 	}
 
@@ -6251,7 +6253,7 @@ func TestProcessMessage_PersistsReasoningToolResponseAsSingleAssistantRecord(t *
 			matchingRecords++
 			toolName := ""
 			if len(msg.ToolCalls) == 1 {
-				toolName = providers.NormalizeToolCall(msg.ToolCalls[0]).Name
+				toolName = cliprovider.NormalizeToolCall(msg.ToolCalls[0]).Name
 			}
 			if msg.Content != "I'll inspect that file now." ||
 				msg.ReasoningContent != "Read the file before answering." ||

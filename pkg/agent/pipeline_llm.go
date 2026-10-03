@@ -14,6 +14,7 @@ import (
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
+	cliprovider "github.com/sipeed/picoclaw/pkg/providers/cli"
 )
 
 // CallLLM performs an LLM call with fallback support, hook invocation, and retry logic.
@@ -636,7 +637,7 @@ func (p *Pipeline) CallLLM(
 	// Tool-call path: normalize and prepare for tool execution
 	exec.normalizedToolCalls = make([]providers.ToolCall, 0, len(exec.response.ToolCalls))
 	for _, tc := range exec.response.ToolCalls {
-		exec.normalizedToolCalls = append(exec.normalizedToolCalls, providers.NormalizeToolCall(tc))
+		exec.normalizedToolCalls = append(exec.normalizedToolCalls, cliprovider.NormalizeToolCall(tc))
 	}
 
 	toolNames := make([]string, 0, len(exec.normalizedToolCalls))

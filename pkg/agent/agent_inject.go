@@ -8,6 +8,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/media"
 	"github.com/sipeed/picoclaw/pkg/tools"
+	integrationtools "github.com/sipeed/picoclaw/pkg/tools/integration"
 )
 
 func (al *AgentLoop) RegisterTool(tool tools.Tool) {
@@ -46,7 +47,7 @@ func (al *AgentLoop) SetMediaStore(s media.MediaStore) {
 		}
 	}
 	registry.ForEachTool("send_tts", func(t tools.Tool) {
-		if st, ok := t.(*tools.SendTTSTool); ok {
+		if st, ok := t.(*integrationtools.SendTTSTool); ok {
 			st.SetMediaStore(s)
 		}
 	})

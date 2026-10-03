@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	fstools "github.com/sipeed/picoclaw/pkg/tools/fs"
 )
 
 func TestReadFileLinesTool_RegistryValidationSupportsMaxLinesAndRejectsLimit(t *testing.T) {
@@ -18,7 +20,7 @@ func TestReadFileLinesTool_RegistryValidationSupportsMaxLinesAndRejectsLimit(t *
 	}
 
 	reg := NewToolRegistry()
-	reg.Register(NewReadFileLinesTool(tmpDir, false, MaxReadFileSize))
+	reg.Register(fstools.NewReadFileLinesTool(tmpDir, false, fstools.MaxReadFileSize))
 
 	result := reg.Execute(context.Background(), "read_file", map[string]any{
 		"path":       testFile,
