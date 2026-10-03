@@ -18,6 +18,12 @@
         "enabled": false,
         "max_args_length": 300,
         "separate_messages": false
+      },
+      "loop_detection": {
+        "enabled": false,
+        "repeat_threshold": 3,
+        "critical_threshold": 6,
+        "window_size": 20
       }
     }
   },

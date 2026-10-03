@@ -427,11 +427,12 @@ func (p *Pipeline) CallLLM(
 				rebuildPromptReq := promptBuildRequestForTurn(ts, fullHistory, exec.summary, "", nil, p.Cfg)
 				rebuildPromptReq.ActiveSkills = append([]string(nil), contextualSkills...)
 				rebuilt := ts.agent.ContextBuilder.BuildMessagesFromPrompt(rebuildPromptReq)
+				rebuilt = append(rebuilt, exec.loopWarnings...)
 				return resolveMediaRefs(
 					rebuilt,
 					p.MediaStore,
 					maxMediaSize,
-					len(rebuilt)-len(protectedTurnTail),
+					len(rebuilt)-len(protectedTurnTail)-len(exec.loopWarnings),
 				)
 			}
 			originalHistoryCount := len(exec.history)
@@ -452,7 +453,7 @@ func (p *Pipeline) CallLLM(
 			)
 			exec.history = append(trimmedStableHistory, protectedTurnTail...)
 			exec.messages = buildMessages(trimmedStableHistory)
-			exec.currentTurnStart = len(exec.messages) - len(protectedTurnTail)
+			exec.currentTurnStart = len(exec.messages) - len(protectedTurnTail) - len(exec.loopWarnings)
 			if exec.gracefulTerminal {
 				msgs := append([]providers.Message(nil), exec.messages...)
 				exec.callMessages = append(msgs, ts.interruptHintMessage())
