@@ -2783,6 +2783,27 @@ func TestResolveGatewayLogLevel_UsesEnvOverrideAndNormalizesInvalid(t *testing.T
 	}
 }
 
+func TestResolveGatewayLogRotation(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(cfgPath, []byte(`{"gateway":{"log_max_size_mb":8,"log_max_backups":7}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if size, backups := ResolveGatewayLogRotation(cfgPath); size != 8 || backups != 7 {
+		t.Fatalf("rotation = (%d MiB, %d backups), want (8 MiB, 7 backups)", size, backups)
+	}
+	t.Setenv("PICOCLAW_GATEWAY_LOG_MAX_SIZE_MB", "4")
+	t.Setenv("PICOCLAW_GATEWAY_LOG_MAX_BACKUPS", "0")
+	if size, backups := ResolveGatewayLogRotation(cfgPath); size != 4 || backups != 0 {
+		t.Fatalf("env rotation = (%d MiB, %d backups), want (4 MiB, 0 backups)", size, backups)
+	}
+	t.Setenv("PICOCLAW_GATEWAY_LOG_MAX_SIZE_MB", "2048")
+	t.Setenv("PICOCLAW_GATEWAY_LOG_MAX_BACKUPS", "-1")
+	if size, backups := ResolveGatewayLogRotation(cfgPath); size != DefaultGatewayLogMaxSizeMB || backups != DefaultGatewayLogMaxBackups {
+		t.Fatalf("invalid rotation = (%d MiB, %d backups), want defaults (%d MiB, %d backups)",
+			size, backups, DefaultGatewayLogMaxSizeMB, DefaultGatewayLogMaxBackups)
+	}
+}
+
 func TestLoadConfig_AppliesLegacyClawHubRegistryEnvOverrides(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.json")

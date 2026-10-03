@@ -40,12 +40,16 @@ PICOCLAW_HOME=/srv/picoclaw PICOCLAW_CONFIG=/srv/picoclaw/main.json picoclaw gat
 ```json
 {
   "gateway": {
-    "log_level": "warn"
+    "log_level": "warn",
+    "log_max_size_mb": 2,
+    "log_max_backups": 3
   }
 }
 ```
 
 When omitted, the default is `warn`. Supported values: `debug`, `info`, `warn`, `error`, `fatal`.
+
+`log_max_size_mb` sets the maximum size of each active log before rotation (default `2`, allowed `1`–`1024`). `log_max_backups` sets how many numbered archives to keep (default `3`, allowed `0`–`100`; `0` disables archives). Approximate disk usage per log is `(log_max_backups + 1) × log_max_size_mb`. These settings apply to `logs/gateway.log`, the workspace `heartbeat.log`, and any file selected with `PICOCLAW_LOG_FILE`; the panic log is trimmed to the configured size at startup. Existing oversized logs are trimmed to their latest content on startup. Environment overrides are `PICOCLAW_GATEWAY_LOG_MAX_SIZE_MB` and `PICOCLAW_GATEWAY_LOG_MAX_BACKUPS`. Restart the Gateway for changed rotation settings to take effect.
 
 You can also override this with the environment variable `PICOCLAW_LOG_LEVEL`.
 

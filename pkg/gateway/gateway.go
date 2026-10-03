@@ -119,6 +119,10 @@ func (p *startupBlockedProvider) GetDefaultModel() string {
 // Run starts the gateway runtime using the configuration loaded from configPath.
 func Run(debug bool, homePath, configPath string, allowEmptyStartup bool) (runErr error) {
 	startedAt := time.Now()
+	logSizeMB, logBackups := config.ResolveGatewayLogRotation(configPath)
+	if err := logger.SetFileRotation(int64(logSizeMB)<<20, logBackups); err != nil {
+		return fmt.Errorf("invalid log rotation settings: %w", err)
+	}
 	panicPath := filepath.Join(homePath, logPath, panicFile)
 	panicFunc, err := logger.InitPanic(panicPath)
 	if err != nil {
