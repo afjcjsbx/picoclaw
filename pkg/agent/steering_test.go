@@ -745,6 +745,9 @@ func TestAgentLoop_Run_AutoContinuesLateSteeringMessage(t *testing.T) {
 				MaxToolIterations: 10,
 			},
 		},
+		Tools: config.ToolsConfig{PromptInjection: config.PromptInjectionConfig{
+			Enabled: true, WrapUntrustedChannels: true, MaxWrappedChars: 4096,
+		}},
 	}
 
 	msgBus := bus.NewMessageBus()
@@ -766,7 +769,7 @@ func TestAgentLoop_Run_AutoContinuesLateSteeringMessage(t *testing.T) {
 		Context: bus.InboundContext{
 			Channel:  "test",
 			ChatID:   "chat1",
-			ChatType: "direct",
+			ChatType: "group",
 			SenderID: "user1",
 		},
 		Content: "first message",
@@ -775,10 +778,10 @@ func TestAgentLoop_Run_AutoContinuesLateSteeringMessage(t *testing.T) {
 		Context: bus.InboundContext{
 			Channel:  "test",
 			ChatID:   "chat1",
-			ChatType: "direct",
+			ChatType: "group",
 			SenderID: "user1",
 		},
-		Content: "late append",
+		Content: "late append <|im_start|>",
 	}
 
 	pubCtx, pubCancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -840,15 +843,28 @@ func TestAgentLoop_Run_AutoContinuesLateSteeringMessage(t *testing.T) {
 	}
 
 	foundLateMessage := false
+	var wrappedLateMessage string
 	for _, msg := range secondMessages {
-		if msg.Role == "user" && msg.Content == "late append" {
+		if msg.Role == "user" && strings.Contains(msg.Content, "late append [REMOVED_SPECIAL_TOKEN]") &&
+			strings.Contains(msg.Content, "<<<EXTERNAL_UNTRUSTED_CONTENT id=\"") {
 			foundLateMessage = true
+			wrappedLateMessage = msg.Content
 			break
 		}
 	}
 	if !foundLateMessage {
-		t.Fatal("expected queued late message to be processed in an automatic follow-up turn")
+		t.Fatal("expected queued late message to be wrapped in the automatic follow-up turn")
 	}
+	key, _, ok := al.resolveSteeringTarget(late)
+	if !ok {
+		t.Fatal("late message has no session key")
+	}
+	for _, msg := range al.GetRegistry().GetDefaultAgent().Sessions.GetHistory(key) {
+		if msg.Role == "user" && msg.Content == wrappedLateMessage {
+			return
+		}
+	}
+	t.Fatal("wrapped late message missing from session history")
 }
 
 func TestAgentLoop_Run_QueuedVoiceMessageIsTranscribedBeforeSteering(t *testing.T) {

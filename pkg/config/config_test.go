@@ -1213,6 +1213,45 @@ func TestSaveConfig_FilePermissions(t *testing.T) {
 	}
 }
 
+func TestSaveConfig_PromptInjectionOnlyInJSON(t *testing.T) {
+	mustSetupSSHKey(t)
+	path := filepath.Join(t.TempDir(), "config.json")
+	cfg := DefaultConfig()
+	if err := SaveConfig(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	secPath := securityPath(path)
+	sec, err := os.ReadFile(secPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(sec), "prompt_injection") {
+		t.Fatal("prompt_injection was saved in .security.yml")
+	}
+
+	cfg.Tools.PromptInjection.Enabled = false
+	cfg.Tools.PromptInjection.MaxWrappedChars = 123
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if writeErr := os.WriteFile(path, data, 0o600); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	// Existing installations may retain a prompt_injection section from older saves.
+	sec = append(sec, []byte("\nprompt_injection:\n  enabled: true\n  max_wrapped_chars: 65536\n")...)
+	if writeErr := os.WriteFile(secPath, sec, 0o600); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	loaded, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Tools.PromptInjection.Enabled || loaded.Tools.PromptInjection.MaxWrappedChars != 123 {
+		t.Fatalf("JSON changes were overridden: %+v", loaded.Tools.PromptInjection)
+	}
+}
+
 func TestSaveConfig_IncludesEmptyLegacyModelField(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "config.json")

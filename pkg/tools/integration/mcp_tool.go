@@ -13,9 +13,11 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/sipeed/picoclaw/pkg/config"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/media"
+	"github.com/sipeed/picoclaw/pkg/security"
 	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
@@ -38,6 +40,7 @@ type MCPTool struct {
 	workspace          string
 	maxInlineTextRunes int
 	runtimeEvents      runtimeevents.Bus
+	promptInjection    config.PromptInjectionConfig
 }
 
 // MCPToolCallPayload describes MCP tool execution runtime events.
@@ -76,6 +79,10 @@ func (t *MCPTool) SetMaxInlineTextRunes(limit int) {
 // SetEventPublisher injects the runtime event bus used for MCP tool observations.
 func (t *MCPTool) SetEventPublisher(eventBus runtimeevents.Bus) {
 	t.runtimeEvents = eventBus
+}
+
+func (t *MCPTool) SetPromptInjectionConfig(cfg config.PromptInjectionConfig) {
+	t.promptInjection = cfg
 }
 
 const maxMCPInlineTextRunes = 16 * 1024
@@ -259,7 +266,8 @@ func (t *MCPTool) Execute(ctx context.Context, args map[string]any) *ToolResult 
 	result, err := t.manager.CallTool(ctx, t.serverName, t.tool.Name, args)
 	if err != nil {
 		t.publishRuntimeEvent(ctx, runtimeevents.KindMCPToolCallEnd, startedAt, true, err.Error())
-		return ErrorResult(fmt.Sprintf("MCP tool execution failed: %v", err)).WithError(err)
+		message := t.wrapExternalContent(err.Error())
+		return ErrorResult(fmt.Sprintf("MCP tool execution failed: %s", message)).WithError(err)
 	}
 
 	if result == nil {
@@ -272,7 +280,7 @@ func (t *MCPTool) Execute(ctx context.Context, args map[string]any) *ToolResult 
 	if result.IsError {
 		errMsg := extractContentText(result.Content)
 		t.publishRuntimeEvent(ctx, runtimeevents.KindMCPToolCallEnd, startedAt, true, errMsg)
-		return ErrorResult(fmt.Sprintf("MCP tool returned error: %s", errMsg)).
+		return ErrorResult(fmt.Sprintf("MCP tool returned error: %s", t.wrapExternalContent(errMsg))).
 			WithError(fmt.Errorf("MCP tool error: %s", errMsg))
 	}
 
@@ -427,11 +435,30 @@ func (t *MCPTool) normalizeResultContent(ctx context.Context, content []mcp.Cont
 		return artifactResult
 	}
 
-	result := &ToolResult{
-		ForLLM: forLLM,
+	return &ToolResult{
+		ForLLM: t.wrapExternalContent(forLLM),
 		Media:  mediaRefs,
 	}
-	return result
+}
+
+func (t *MCPTool) wrapExternalContent(content string) string {
+	if t.promptInjection.Enabled && t.promptInjection.WrapMCPResults {
+		if t.promptInjection.LogSuspicious {
+			if hits := security.DetectSuspiciousPatterns(content); len(hits) > 0 {
+				logger.WarnCF(
+					"security",
+					"suspicious pattern in MCP content",
+					map[string]any{"source": "mcp", "server": t.serverName, "patterns": hits},
+				)
+			}
+		}
+		content = security.TruncateSanitizedExternalContent(content, t.promptInjection.MaxWrappedChars)
+		return security.WrapSanitizedExternalContent(
+			content,
+			security.WrapOptions{Source: security.SourceAPI, IncludeWarning: true},
+		)
+	}
+	return content
 }
 
 func (t *MCPTool) persistLargeTextArtifact(text string) *ToolResult {
@@ -461,7 +488,13 @@ func (t *MCPTool) persistLargeTextArtifact(text string) *ToolResult {
 		return t.largeTextArtifactFallback(text, err)
 	}
 	path := tmpFile.Name()
-	if _, err = tmpFile.WriteString(text); err != nil {
+	storedText := text
+	if t.promptInjection.Enabled && t.promptInjection.WrapMCPResults {
+		storedText = security.MCPArtifactMarker + security.WrapExternalContent(
+			text, security.WrapOptions{Source: security.SourceAPI, IncludeWarning: true},
+		)
+	}
+	if _, err = tmpFile.WriteString(storedText); err != nil {
 		_ = tmpFile.Close()
 		_ = os.Remove(path)
 		return t.largeTextArtifactFallback(text, err)

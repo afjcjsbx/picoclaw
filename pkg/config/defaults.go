@@ -317,6 +317,10 @@ func DefaultConfig() *Config {
 		Tools: ToolsConfig{
 			FilterSensitiveData: true,
 			FilterMinLength:     8,
+			PromptInjection: PromptInjectionConfig{
+				Enabled: true, WrapWeb: true, WrapUntrustedChannels: true,
+				WrapMCPResults: true, LogSuspicious: true, MaxWrappedChars: 65536,
+			},
 			MediaCleanup: MediaCleanupConfig{
 				ToolConfig: ToolConfig{
 					Enabled: true,
