@@ -1122,7 +1122,7 @@ func (h *Handler) handleForkSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var idBytes [16]byte
-	if _, err := rand.Read(idBytes[:]); err != nil {
+	if _, readErr := rand.Read(idBytes[:]); readErr != nil {
 		http.Error(w, "failed to create fork", http.StatusInternalServerError)
 		return
 	}
