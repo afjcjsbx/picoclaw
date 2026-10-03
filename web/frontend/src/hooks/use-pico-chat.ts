@@ -63,6 +63,7 @@ export function usePicoChat() {
     activeSessionId,
     hasMoreHistory,
     contextUsage,
+    historyStart,
   } = useAtomValue(chatAtom)
 
   return {
@@ -72,6 +73,7 @@ export function usePicoChat() {
     activeSessionId,
     hasMoreHistory,
     contextUsage,
+    historyStart,
     sendMessage: sendChatMessage,
     switchSession: switchChatSession,
     loadOlderHistory: loadOlderChatHistory,

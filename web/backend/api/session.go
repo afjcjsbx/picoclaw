@@ -2,6 +2,8 @@ package api
 
 import (
 	"bufio"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -24,16 +26,21 @@ import (
 func (h *Handler) registerSessionRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sessions", h.handleListSessions)
 	mux.HandleFunc("GET /api/sessions/{id}", h.handleGetSession)
+	mux.HandleFunc("POST /api/sessions/{id}/fork", h.handleForkSession)
 	mux.HandleFunc("DELETE /api/sessions/{id}", h.handleDeleteSession)
 }
 
 // sessionFile mirrors the on-disk session JSON structure from pkg/session.
 type sessionFile struct {
-	Key      string              `json:"key"`
-	Messages []providers.Message `json:"messages"`
-	Summary  string              `json:"summary,omitempty"`
-	Created  time.Time           `json:"created"`
-	Updated  time.Time           `json:"updated"`
+	Key        string              `json:"key"`
+	Messages   []providers.Message `json:"messages"`
+	Summary    string              `json:"summary,omitempty"`
+	ForkedFrom string              `json:"forked_from,omitempty"`
+	ForkIndex  int                 `json:"fork_index,omitempty"`
+	ForkTitle  string              `json:"fork_title,omitempty"`
+	ForkDepth  int                 `json:"fork_depth,omitempty"`
+	Created    time.Time           `json:"created"`
+	Updated    time.Time           `json:"updated"`
 }
 
 // sessionListItem is a lightweight summary returned by GET /api/sessions.
@@ -44,6 +51,9 @@ type sessionListItem struct {
 	MessageCount int    `json:"message_count"`
 	Created      string `json:"created"`
 	Updated      string `json:"updated"`
+	ForkedFrom   string `json:"forked_from,omitempty"`
+	ForkIndex    int    `json:"fork_index,omitempty"`
+	ForkDepth    int    `json:"fork_depth,omitempty"`
 }
 
 type sessionChatMessage struct {
@@ -180,6 +190,19 @@ func (h *Handler) readJSONLSession(dir, sessionKey string) (sessionFile, error) 
 	if err != nil {
 		return sessionFile{}, err
 	}
+	if meta.ForkedFrom == "" {
+		for _, alias := range meta.Aliases {
+			aliasPath := filepath.Join(dir, sanitizeSessionKey(alias)+".meta.json")
+			aliasMeta, aliasErr := h.readSessionMeta(aliasPath, alias)
+			if aliasErr == nil && aliasMeta.ForkedFrom != "" {
+				meta.ForkedFrom = aliasMeta.ForkedFrom
+				meta.ForkIndex = aliasMeta.ForkIndex
+				meta.ForkTitle = aliasMeta.ForkTitle
+				meta.ForkDepth = aliasMeta.ForkDepth
+				break
+			}
+		}
+	}
 
 	messages, err := h.readSessionMessages(jsonlPath, meta.Skip)
 	if err != nil {
@@ -200,11 +223,15 @@ func (h *Handler) readJSONLSession(dir, sessionKey string) (sessionFile, error) 
 	}
 
 	return sessionFile{
-		Key:      meta.Key,
-		Messages: messages,
-		Summary:  meta.Summary,
-		Created:  created,
-		Updated:  updated,
+		Key:        meta.Key,
+		Messages:   messages,
+		Summary:    meta.Summary,
+		ForkedFrom: meta.ForkedFrom,
+		ForkIndex:  meta.ForkIndex,
+		ForkTitle:  meta.ForkTitle,
+		ForkDepth:  meta.ForkDepth,
+		Created:    created,
+		Updated:    updated,
 	}, nil
 }
 
@@ -279,7 +306,8 @@ func (h *Handler) findPicoJSONLSessions(dir string) ([]picoJSONLSessionRef, erro
 	}
 
 	refs := make([]picoJSONLSessionRef, 0)
-	seen := make(map[string]struct{})
+	refIndexes := make(map[string]int)
+	scopedIDs := make(map[string]bool)
 	metaBackedBases := make(map[string]struct{})
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".meta.json") {
@@ -296,10 +324,18 @@ func (h *Handler) findPicoJSONLSessions(dir string) ([]picoJSONLSessionRef, erro
 			continue
 		}
 		metaBackedBases[strings.TrimSuffix(name, ".meta.json")] = struct{}{}
-		if _, exists := seen[ref.ID]; exists {
+		index, exists := refIndexes[ref.ID]
+		if exists {
+			// Alias metadata can remain beside a canonical session after promotion.
+			// Prefer the scoped canonical record so history loads the latest JSONL.
+			if len(meta.Scope) > 0 && !scopedIDs[ref.ID] {
+				refs[index] = ref
+				scopedIDs[ref.ID] = true
+			}
 			continue
 		}
-		seen[ref.ID] = struct{}{}
+		refIndexes[ref.ID] = len(refs)
+		scopedIDs[ref.ID] = len(meta.Scope) > 0
 		refs = append(refs, ref)
 	}
 
@@ -316,10 +352,10 @@ func (h *Handler) findPicoJSONLSessions(dir string) ([]picoJSONLSessionRef, erro
 		if !ok || ref.Key == "" || ref.ID == "" {
 			continue
 		}
-		if _, exists := seen[ref.ID]; exists {
+		if _, exists := refIndexes[ref.ID]; exists {
 			continue
 		}
-		seen[ref.ID] = struct{}{}
+		refIndexes[ref.ID] = len(refs)
 		refs = append(refs, ref)
 	}
 	return refs, nil
@@ -415,6 +451,43 @@ func (h *Handler) findLegacyPicoSession(dir, sessionID string) (picoLegacySessio
 	return picoLegacySessionRef{}, os.ErrNotExist
 }
 
+func (h *Handler) readPicoSession(dir, sessionID string) (sessionFile, error) {
+	if ref, err := h.findPicoJSONLSession(dir, sessionID); err == nil {
+		return h.readJSONLSession(dir, ref.Key)
+	}
+	ref, err := h.findLegacyPicoSession(dir, sessionID)
+	if err != nil {
+		return sessionFile{}, err
+	}
+	return h.readLegacySession(ref.Path)
+}
+
+func (h *Handler) hydrateForkDisplay(dir string, sess *sessionFile, toolFeedbackMaxArgsLength int) {
+	if sess.ForkedFrom == "" {
+		return
+	}
+	if sess.ForkTitle == "" {
+		if parent, err := h.readPicoSession(dir, sess.ForkedFrom); err == nil {
+			transcript := detailSessionMessages(parent.Messages, toolFeedbackMaxArgsLength)
+			if sess.ForkIndex >= 0 && sess.ForkIndex < len(transcript) {
+				sess.ForkTitle = transcript[sess.ForkIndex].Content
+			}
+		}
+	}
+	if sess.ForkDepth == 0 {
+		seen := map[string]bool{}
+		for parentID := sess.ForkedFrom; parentID != "" && !seen[parentID]; {
+			seen[parentID] = true
+			sess.ForkDepth++
+			parent, err := h.readPicoSession(dir, parentID)
+			if err != nil {
+				break
+			}
+			parentID = parent.ForkedFrom
+		}
+	}
+}
+
 func buildSessionListItem(sessionID string, sess sessionFile, toolFeedbackMaxArgsLength int) sessionListItem {
 	transcript := visibleSessionMessages(sess.Messages, toolFeedbackMaxArgsLength)
 
@@ -433,6 +506,11 @@ func buildSessionListItem(sessionID string, sess sessionFile, toolFeedbackMaxArg
 		preview = "(empty)"
 	}
 	title := preview
+	if sess.ForkedFrom != "" {
+		prefix := strings.Repeat("fork: ", max(1, sess.ForkDepth))
+		remaining := max(0, maxSessionTitleRunes-len([]rune(prefix)))
+		title = truncateRunes(prefix+truncateRunes(sess.ForkTitle, remaining), maxSessionTitleRunes)
+	}
 
 	return sessionListItem{
 		ID:           sessionID,
@@ -441,6 +519,9 @@ func buildSessionListItem(sessionID string, sess sessionFile, toolFeedbackMaxArg
 		MessageCount: len(transcript),
 		Created:      sess.Created.Format(time.RFC3339),
 		Updated:      sess.Updated.Format(time.RFC3339),
+		ForkedFrom:   sess.ForkedFrom,
+		ForkIndex:    sess.ForkIndex,
+		ForkDepth:    sess.ForkDepth,
 	}
 }
 
@@ -756,6 +837,7 @@ func visibleAssistantToolMessages(
 		messages = append(messages, sessionChatMessage{
 			Role:      "assistant",
 			Content:   content,
+			Kind:      "tool_feedback",
 			ModelName: modelName,
 			CreatedAt: createdAt,
 		})
@@ -842,6 +924,7 @@ func (h *Handler) handleListSessions(w http.ResponseWriter, r *http.Request) {
 			if loadErr != nil || isEmptySession(sess) {
 				continue
 			}
+			h.hydrateForkDisplay(dir, &sess, toolFeedbackMaxArgsLength)
 			seen[ref.ID] = struct{}{}
 			items = append(items, buildSessionListItem(ref.ID, sess, toolFeedbackMaxArgsLength))
 		}
@@ -856,6 +939,7 @@ func (h *Handler) handleListSessions(w http.ResponseWriter, r *http.Request) {
 			if loadErr != nil || isEmptySession(sess) {
 				continue
 			}
+			h.hydrateForkDisplay(dir, &sess, toolFeedbackMaxArgsLength)
 			seen[ref.ID] = struct{}{}
 			items = append(items, buildSessionListItem(ref.ID, sess, toolFeedbackMaxArgsLength))
 		}
@@ -975,14 +1059,115 @@ func (h *Handler) handleGetSession(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"id":       sessionID,
-		"messages": page,
-		"start":    start,
-		"total":    total,
-		"summary":  sess.Summary,
-		"created":  sess.Created.Format(time.RFC3339),
-		"updated":  sess.Updated.Format(time.RFC3339),
+		"id":          sessionID,
+		"messages":    page,
+		"start":       start,
+		"total":       total,
+		"summary":     sess.Summary,
+		"created":     sess.Created.Format(time.RFC3339),
+		"updated":     sess.Updated.Format(time.RFC3339),
+		"forked_from": sess.ForkedFrom,
+		"fork_index":  sess.ForkIndex,
 	})
+}
+
+func (h *Handler) handleForkSession(w http.ResponseWriter, r *http.Request) {
+	parentID := r.PathValue("id")
+	var request struct {
+		MessageIndex int `json:"message_index"`
+	}
+	if parentID == "" || json.NewDecoder(r.Body).Decode(&request) != nil || request.MessageIndex < 0 {
+		http.Error(w, "invalid fork request", http.StatusBadRequest)
+		return
+	}
+
+	dir, toolFeedbackMaxArgsLength, err := h.sessionRuntimeSettings()
+	if err != nil {
+		http.Error(w, "failed to resolve sessions directory", http.StatusInternalServerError)
+		return
+	}
+	parent, err := h.readPicoSession(dir, parentID)
+	if err != nil || isEmptySession(parent) {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
+	h.hydrateForkDisplay(dir, &parent, toolFeedbackMaxArgsLength)
+	transcript := detailSessionMessages(parent.Messages, toolFeedbackMaxArgsLength)
+	if request.MessageIndex >= len(transcript) {
+		http.Error(w, "fork message not found", http.StatusBadRequest)
+		return
+	}
+	if transcript[request.MessageIndex].Role != "assistant" ||
+		(transcript[request.MessageIndex].Kind != "" && transcript[request.MessageIndex].Kind != "normal") {
+		http.Error(w, "only assistant replies can be forked", http.StatusBadRequest)
+		return
+	}
+
+	cut := -1
+	visibleCount := 0
+	for i, msg := range parent.Messages {
+		visibleCount += len(detailSessionMessages([]providers.Message{msg}, toolFeedbackMaxArgsLength))
+		if visibleCount > request.MessageIndex {
+			cut = i
+			break
+		}
+	}
+	if cut < 0 {
+		http.Error(w, "fork message not found", http.StatusBadRequest)
+		return
+	}
+	// Keep tool results attached to the assistant tool-call message at the fork point.
+	for cut+1 < len(parent.Messages) && parent.Messages[cut+1].Role == "tool" {
+		cut++
+	}
+
+	var idBytes [16]byte
+	if _, readErr := rand.Read(idBytes[:]); readErr != nil {
+		http.Error(w, "failed to create fork", http.StatusInternalServerError)
+		return
+	}
+	id := hex.EncodeToString(idBytes[:])
+	id = id[:8] + "-" + id[8:12] + "-" + id[12:16] + "-" + id[16:20] + "-" + id[20:]
+	key := legacyPicoSessionPrefix + id
+	base := filepath.Join(dir, sanitizeSessionKey(key))
+	created := time.Now().UTC()
+	messages := parent.Messages[:cut+1]
+
+	file, err := os.OpenFile(base+".jsonl", os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		http.Error(w, "failed to create fork", http.StatusInternalServerError)
+		return
+	}
+	encoder := json.NewEncoder(file)
+	for _, msg := range messages {
+		if err = encoder.Encode(msg); err != nil {
+			break
+		}
+	}
+	closeErr := file.Close()
+	if err == nil {
+		err = closeErr
+	}
+	meta := memory.SessionMeta{
+		Key: key, Summary: parent.Summary, Count: len(messages),
+		CreatedAt: created, UpdatedAt: created, ForkedFrom: parentID,
+		ForkIndex: request.MessageIndex, ForkTitle: transcript[request.MessageIndex].Content,
+		ForkDepth: parent.ForkDepth + 1,
+	}
+	metaData, metaErr := json.Marshal(meta)
+	if err == nil && metaErr == nil {
+		err = os.WriteFile(base+".meta.json", metaData, 0o600)
+	} else if err == nil {
+		err = metaErr
+	}
+	if err != nil {
+		_ = os.Remove(base + ".jsonl")
+		_ = os.Remove(base + ".meta.json")
+		http.Error(w, "failed to save fork", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"id": id, "forked_from": parentID, "fork_index": request.MessageIndex})
 }
 
 // handleDeleteSession deletes a specific session.
