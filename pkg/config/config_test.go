@@ -454,7 +454,11 @@ func TestEvolutionConfig_ModeSemantics(t *testing.T) {
 }
 
 func TestEvolutionConfig_ColdPathTriggerMode(t *testing.T) {
-	assert.Equal(t, "after_turn", (EvolutionConfig{Enabled: true, Mode: "draft"}).ColdPathTriggerMode())
+	assert.Equal(
+		t,
+		"after_turn",
+		(EvolutionConfig{Enabled: true, Mode: "draft"}).ColdPathTriggerMode(),
+	)
 	assert.True(t, (EvolutionConfig{Enabled: true, Mode: "draft"}).RunsColdPathAfterTurn())
 	assert.False(t, (EvolutionConfig{Enabled: true, Mode: "draft"}).RunsColdPathScheduled())
 
@@ -474,7 +478,12 @@ func TestEvolutionConfig_ColdPathTriggerMode(t *testing.T) {
 }
 
 func TestEvolutionConfig_NewThresholdNamesPreferLegacyAliases(t *testing.T) {
-	cfg := EvolutionConfig{MinTaskCount: 4, MinSuccessRatio: 0.9, MinCaseCount: 1, MinSuccessRate: 0.2}
+	cfg := EvolutionConfig{
+		MinTaskCount:    4,
+		MinSuccessRatio: 0.9,
+		MinCaseCount:    1,
+		MinSuccessRate:  0.2,
+	}
 	assert.Equal(t, 4, cfg.EffectiveMinTaskCount())
 	assert.Equal(t, 0.9, cfg.EffectiveMinSuccessRatio())
 
@@ -696,7 +705,8 @@ func TestAgentConfig_ParsesDispatchRules(t *testing.T) {
 	if rule.Name != "support-vip" || rule.Agent != "support" {
 		t.Fatalf("rule = %+v", rule)
 	}
-	if rule.When.Channel != "telegram" || rule.When.Chat != "group:-100123" || rule.When.Sender != "12345" {
+	if rule.When.Channel != "telegram" || rule.When.Chat != "group:-100123" ||
+		rule.When.Sender != "12345" {
 		t.Fatalf("rule.When = %+v", rule.When)
 	}
 	if rule.When.Mentioned == nil || !*rule.When.Mentioned {
@@ -840,7 +850,11 @@ func TestLoadConfig_PrefersDispatchRulesOverLegacyBindings(t *testing.T) {
 		t.Fatalf("Dispatch.Rules len = %d, want 1", len(cfg.Agents.Dispatch.Rules))
 	}
 	if cfg.Agents.Dispatch.Rules[0].Name != "explicit" {
-		t.Fatalf("Dispatch.Rules[0].Name = %q, want %q", cfg.Agents.Dispatch.Rules[0].Name, "explicit")
+		t.Fatalf(
+			"Dispatch.Rules[0].Name = %q, want %q",
+			cfg.Agents.Dispatch.Rules[0].Name,
+			"explicit",
+		)
 	}
 }
 
@@ -1068,7 +1082,10 @@ func TestDefaultConfig_DeltaChatExample(t *testing.T) {
 		t.Fatalf("deltachat settings type = %T, want *DeltaChatSettings", decoded)
 	}
 	if settings.Email != "@nine.testrun.org" {
-		t.Fatalf("DefaultConfig().deltachat.settings.email = %q, want @nine.testrun.org", settings.Email)
+		t.Fatalf(
+			"DefaultConfig().deltachat.settings.email = %q, want @nine.testrun.org",
+			settings.Email,
+		)
 	}
 	if settings.DisplayName == "" {
 		t.Fatal("DefaultConfig().deltachat.settings.display_name should be populated")
@@ -1098,7 +1115,11 @@ func TestConfigExample_DeltaChatExample(t *testing.T) {
 		t.Fatal("config.example.json deltachat channel should be disabled")
 	}
 	if deltachat.Type != ChannelDeltaChat {
-		t.Fatalf("config.example.json deltachat.type = %q, want %q", deltachat.Type, ChannelDeltaChat)
+		t.Fatalf(
+			"config.example.json deltachat.type = %q, want %q",
+			deltachat.Type,
+			ChannelDeltaChat,
+		)
 	}
 	if !deltachat.GroupTrigger.MentionOnly {
 		t.Fatal("config.example.json deltachat should use mention-only group trigger")
@@ -1289,7 +1310,9 @@ func TestSaveConfig_PreservesDisabledTelegramPlaceholder(t *testing.T) {
 	}
 	bc := loaded.Channels.Get("telegram")
 	if bc != nil && bc.Placeholder.Enabled {
-		t.Fatal("telegram placeholder should remain disabled after SaveConfig/LoadConfig round-trip")
+		t.Fatal(
+			"telegram placeholder should remain disabled after SaveConfig/LoadConfig round-trip",
+		)
 	}
 }
 
@@ -1311,8 +1334,12 @@ func TestSaveConfig_PreservesExplicitDisabledPicoStreaming(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile failed: %v", err)
 	}
-	if !strings.Contains(string(data), `"streaming"`) || !strings.Contains(string(data), `"enabled": false`) {
-		t.Fatalf("saved config should preserve explicit disabled pico streaming, got:\n%s", string(data))
+	if !strings.Contains(string(data), `"streaming"`) ||
+		!strings.Contains(string(data), `"enabled": false`) {
+		t.Fatalf(
+			"saved config should preserve explicit disabled pico streaming, got:\n%s",
+			string(data),
+		)
 	}
 
 	loaded, err := LoadConfig(path)
@@ -1332,7 +1359,9 @@ func TestSaveConfig_PreservesExplicitDisabledPicoStreaming(t *testing.T) {
 		t.Fatalf("pico settings type = %T, want *PicoSettings", decoded)
 	}
 	if settings.Streaming.Enabled {
-		t.Fatal("explicit disabled pico streaming should remain disabled after SaveConfig/LoadConfig round-trip")
+		t.Fatal(
+			"explicit disabled pico streaming should remain disabled after SaveConfig/LoadConfig round-trip",
+		)
 	}
 }
 
@@ -1485,7 +1514,9 @@ func TestLoadConfig_ToolFeedbackDefaultsFalseWhenUnset(t *testing.T) {
 		)
 	}
 	if cfg.Agents.Defaults.ToolFeedback.SeparateMessages {
-		t.Fatal("agents.defaults.tool_feedback.separate_messages should remain false when unset in config file")
+		t.Fatal(
+			"agents.defaults.tool_feedback.separate_messages should remain false when unset in config file",
+		)
 	}
 }
 
@@ -1582,7 +1613,8 @@ func TestLoadConfig_UnknownFieldsReportsExactPaths(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected unknown field error, got nil")
 	}
-	if !strings.Contains(err.Error(), "tools.weeb") || !strings.Contains(err.Error(), "tools.web.fatch_limit_bytes") {
+	if !strings.Contains(err.Error(), "tools.weeb") ||
+		!strings.Contains(err.Error(), "tools.web.fatch_limit_bytes") {
 		t.Fatalf("expected exact unknown field paths, got %q", err.Error())
 	}
 }
@@ -1762,11 +1794,19 @@ func TestLoadConfig_CronCommandAllowedRemotes(t *testing.T) {
 	}
 	want := []string{"telegram:1234567890", "discord"}
 	if len(cfg.Tools.Cron.CommandAllowedRemotes) != len(want) {
-		t.Fatalf("CommandAllowedRemotes = %#v, want %#v", cfg.Tools.Cron.CommandAllowedRemotes, want)
+		t.Fatalf(
+			"CommandAllowedRemotes = %#v, want %#v",
+			cfg.Tools.Cron.CommandAllowedRemotes,
+			want,
+		)
 	}
 	for i := range want {
 		if cfg.Tools.Cron.CommandAllowedRemotes[i] != want[i] {
-			t.Fatalf("CommandAllowedRemotes = %#v, want %#v", cfg.Tools.Cron.CommandAllowedRemotes, want)
+			t.Fatalf(
+				"CommandAllowedRemotes = %#v, want %#v",
+				cfg.Tools.Cron.CommandAllowedRemotes,
+				want,
+			)
 		}
 	}
 }
@@ -2120,7 +2160,8 @@ func TestConfig_UnmarshalIsolation(t *testing.T) {
 	if len(cfg.Isolation.ExposePaths) != 1 {
 		t.Fatalf("ExposePaths len = %d, want 1", len(cfg.Isolation.ExposePaths))
 	}
-	if got := cfg.Isolation.ExposePaths[0]; got.Source != "/src" || got.Target != "/dst" || got.Mode != "ro" {
+	if got := cfg.Isolation.ExposePaths[0]; got.Source != "/src" || got.Target != "/dst" ||
+		got.Mode != "ro" {
 		t.Fatalf("ExposePaths[0] = %+v, want source=/src target=/dst mode=ro", got)
 	}
 }
@@ -2779,13 +2820,21 @@ func TestResolveGatewayLogLevel_UsesEnvOverrideAndNormalizesInvalid(t *testing.T
 
 	t.Setenv("PICOCLAW_LOG_LEVEL", "garbage")
 	if got := ResolveGatewayLogLevel(cfgPath); got != DefaultGatewayLogLevel {
-		t.Fatalf("ResolveGatewayLogLevel() with invalid env override = %q, want %q", got, DefaultGatewayLogLevel)
+		t.Fatalf(
+			"ResolveGatewayLogLevel() with invalid env override = %q, want %q",
+			got,
+			DefaultGatewayLogLevel,
+		)
 	}
 }
 
 func TestResolveGatewayLogRotation(t *testing.T) {
 	cfgPath := filepath.Join(t.TempDir(), "config.json")
-	if err := os.WriteFile(cfgPath, []byte(`{"gateway":{"log_max_size_mb":8,"log_max_backups":7}}`), 0o600); err != nil {
+	if err := os.WriteFile(
+		cfgPath,
+		[]byte(`{"gateway":{"log_max_size_mb":8,"log_max_backups":7}}`),
+		0o600,
+	); err != nil {
 		t.Fatal(err)
 	}
 	if size, backups := ResolveGatewayLogRotation(cfgPath); size != 8 || backups != 7 {
@@ -2798,7 +2847,8 @@ func TestResolveGatewayLogRotation(t *testing.T) {
 	}
 	t.Setenv("PICOCLAW_GATEWAY_LOG_MAX_SIZE_MB", "2048")
 	t.Setenv("PICOCLAW_GATEWAY_LOG_MAX_BACKUPS", "-1")
-	if size, backups := ResolveGatewayLogRotation(cfgPath); size != DefaultGatewayLogMaxSizeMB || backups != DefaultGatewayLogMaxBackups {
+	if size, backups := ResolveGatewayLogRotation(cfgPath); size != DefaultGatewayLogMaxSizeMB ||
+		backups != DefaultGatewayLogMaxBackups {
 		t.Fatalf("invalid rotation = (%d MiB, %d backups), want defaults (%d MiB, %d backups)",
 			size, backups, DefaultGatewayLogMaxSizeMB, DefaultGatewayLogMaxBackups)
 	}
@@ -3112,7 +3162,10 @@ func TestFilterSensitiveData_AllTokenTypes(t *testing.T) {
 			Skills: SkillsToolsConfig{
 				Github: SkillsGithubConfig{Token: *NewSecureString("github-token-xyz")},
 				Registries: SkillsRegistriesConfig{
-					&SkillRegistryConfig{Name: "clawhub", AuthToken: *NewSecureString("clawhub-auth-token")},
+					&SkillRegistryConfig{
+						Name:      "clawhub",
+						AuthToken: *NewSecureString("clawhub-auth-token"),
+					},
 				},
 			},
 		},
@@ -3239,7 +3292,11 @@ func TestMakeBackup_AlsoBacksSecurityFile(t *testing.T) {
 	secPath := securityPath(configPath)
 
 	os.WriteFile(configPath, []byte(`{"version":2}`), 0o600)
-	os.WriteFile(secPath, []byte(`model_list:\n  test:0:\n    api_keys:\n      - "sk-test"\n`), 0o600)
+	os.WriteFile(
+		secPath,
+		[]byte(`model_list:\n  test:0:\n    api_keys:\n      - "sk-test"\n`),
+		0o600,
+	)
 
 	if err := MakeBackup(configPath); err != nil {
 		t.Fatalf("MakeBackup: %v", err)
@@ -3345,7 +3402,11 @@ func TestMakeBackup_SameDateSuffix(t *testing.T) {
 		t.Fatal("security backup file not found")
 	}
 	if configDate != secDate {
-		t.Errorf("config backup date = %q, security backup date = %q, should match", configDate, secDate)
+		t.Errorf(
+			"config backup date = %q, security backup date = %q, should match",
+			configDate,
+			secDate,
+		)
 	}
 }
 

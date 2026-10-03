@@ -17,8 +17,8 @@ func TestRotatingFileBoundsSizeAndBackupCount(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := w.Close(); err != nil {
-		t.Fatal(err)
+	if closeErr := w.Close(); closeErr != nil {
+		t.Fatal(closeErr)
 	}
 
 	for suffix, want := range map[string]string{"": "third33", ".1": "second2", ".2": "first123"} {
@@ -44,8 +44,8 @@ func TestRotatingFileTrimsAnOversizedExistingLog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := w.Close(); err != nil {
-		t.Fatal(err)
+	if closeErr := w.Close(); closeErr != nil {
+		t.Fatal(closeErr)
 	}
 	info, err := os.Stat(path)
 	if err != nil {

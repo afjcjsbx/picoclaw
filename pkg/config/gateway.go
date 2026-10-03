@@ -18,10 +18,10 @@ const (
 )
 
 type GatewayConfig struct {
-	Host          string `json:"host"                env:"PICOCLAW_GATEWAY_HOST"`
-	Port          int    `json:"port"                env:"PICOCLAW_GATEWAY_PORT"`
-	HotReload     bool   `json:"hot_reload"          env:"PICOCLAW_GATEWAY_HOT_RELOAD"`
-	LogLevel      string `json:"log_level,omitempty" env:"PICOCLAW_LOG_LEVEL"`
+	Host          string `json:"host"                      env:"PICOCLAW_GATEWAY_HOST"`
+	Port          int    `json:"port"                      env:"PICOCLAW_GATEWAY_PORT"`
+	HotReload     bool   `json:"hot_reload"                env:"PICOCLAW_GATEWAY_HOT_RELOAD"`
+	LogLevel      string `json:"log_level,omitempty"       env:"PICOCLAW_LOG_LEVEL"`
 	LogMaxSizeMB  int    `json:"log_max_size_mb,omitempty" env:"PICOCLAW_GATEWAY_LOG_MAX_SIZE_MB"`
 	LogMaxBackups int    `json:"log_max_backups,omitempty" env:"PICOCLAW_GATEWAY_LOG_MAX_BACKUPS"`
 }
@@ -97,10 +97,14 @@ func ResolveGatewayLogLevel(path string) string {
 	data, err := os.ReadFile(path)
 	if err == nil {
 		if err := json.Unmarshal(data, &cfg); err != nil {
-			logger.WarnCF("config", "failed to parse gateway config, using defaults", map[string]any{
-				"path":  path,
-				"error": err.Error(),
-			})
+			logger.WarnCF(
+				"config",
+				"failed to parse gateway config, using defaults",
+				map[string]any{
+					"path":  path,
+					"error": err.Error(),
+				},
+			)
 		}
 	}
 
@@ -122,9 +126,13 @@ func ResolveGatewayLogRotation(path string) (sizeMB, backups int) {
 	}}
 	if data, err := os.ReadFile(path); err == nil {
 		if err := json.Unmarshal(data, &cfg); err != nil {
-			logger.WarnCF("config", "failed to parse gateway log rotation settings, using defaults", map[string]any{
-				"path": path, "error": err.Error(),
-			})
+			logger.WarnCF(
+				"config",
+				"failed to parse gateway log rotation settings, using defaults",
+				map[string]any{
+					"path": path, "error": err.Error(),
+				},
+			)
 		}
 	}
 	if value := os.Getenv("PICOCLAW_GATEWAY_LOG_MAX_SIZE_MB"); value != "" {
@@ -139,11 +147,19 @@ func ResolveGatewayLogRotation(path string) (sizeMB, backups int) {
 	}
 	sizeMB, backups = cfg.Gateway.LogMaxSizeMB, cfg.Gateway.LogMaxBackups
 	if sizeMB < 1 || sizeMB > 1024 {
-		logger.WarnCF("config", "invalid gateway log_max_size_mb; using default", map[string]any{"value": sizeMB})
+		logger.WarnCF(
+			"config",
+			"invalid gateway log_max_size_mb; using default",
+			map[string]any{"value": sizeMB},
+		)
 		sizeMB = DefaultGatewayLogMaxSizeMB
 	}
 	if backups < 0 || backups > 100 {
-		logger.WarnCF("config", "invalid gateway log_max_backups; using default", map[string]any{"value": backups})
+		logger.WarnCF(
+			"config",
+			"invalid gateway log_max_backups; using default",
+			map[string]any{"value": backups},
+		)
 		backups = DefaultGatewayLogMaxBackups
 	}
 	return sizeMB, backups
