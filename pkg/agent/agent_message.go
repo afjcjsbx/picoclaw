@@ -217,6 +217,14 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 			})
 	}
 
+	if content, wrapped := al.secureInboundContent(msg); wrapped {
+		opts.Dispatch.UserMessage = content
+	}
+
+	return al.runAgentLoop(ctx, agent, opts)
+}
+
+func (al *AgentLoop) secureInboundContent(msg bus.InboundMessage) (string, bool) {
 	pi := al.GetConfig().Tools.PromptInjection
 	if pi.Enabled && pi.WrapUntrustedChannels && !isTrustedDirectSender(al.GetConfig(), msg) {
 		if pi.LogSuspicious {
@@ -229,12 +237,11 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 			}
 		}
 		content := security.TruncateSanitizedExternalContent(msg.Content, pi.MaxWrappedChars)
-		opts.Dispatch.UserMessage = security.WrapSanitizedExternalContent(content, security.WrapOptions{
+		return security.WrapSanitizedExternalContent(content, security.WrapOptions{
 			Source: security.SourceChannelMetadata, Sender: msg.SenderID, IncludeWarning: true,
-		})
+		}), true
 	}
-
-	return al.runAgentLoop(ctx, agent, opts)
+	return msg.Content, false
 }
 
 // isTrustedDirectSender mirrors the channel allow-list policy for direct messages.
