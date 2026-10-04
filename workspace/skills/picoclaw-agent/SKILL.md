@@ -230,7 +230,7 @@ Important activation rules:
 | Family | Runtime tool names | What they provide |
 | --- | --- | --- |
 | Filesystem | `read_file`, `write_file`, `list_dir`, `search_files`, `edit_file`, `append_file` | Read, search, write, list, and patch workspace files |
-| Web | `web_search`, `web_fetch` | Search the web (including Keenable) and fetch readable page content |
+| Web | `web_search`, `web_fetch` | Search the web and fetch readable page content |
 | Command execution | `exec` | Shell command execution with deny-pattern guardrails |
 | Scheduling | `cron` | Scheduled jobs, reminders, recurring tasks, and command jobs |
 | Planning | `todo` | Maintain a session-scoped task checklist |
@@ -296,34 +296,6 @@ OpenAI, Gemini, and OpenRouter image models are supported. The generated image
 is sent to the current chat. OpenAI and Gemini accept `aspect_ratio`;
 OpenRouter uses the model's default image shape. See
 `docs/tools/image-generation.md` for supported models and details.
-
-### Keenable web search
-
-Keenable can search without a key, subject to public per-IP rate limits. Enable
-it and select it explicitly, or leave the provider set to `auto` to use normal
-provider selection:
-
-```json
-{
-  "tools": {
-    "web": {
-      "provider": "keenable",
-      "keenable": {"enabled": true, "max_results": 5}
-    }
-  }
-}
-```
-
-To lift the public rate limits, put the key in `~/.picoclaw/.security.yml`:
-
-```yaml
-web:
-  keenable:
-    api_keys: ["YOUR_KEENABLE_API_KEY"]
-```
-
-The default base URL is `https://api.keenable.ai`. Full provider settings are
-in `docs/reference/tools_configuration.md` under “Keenable”.
 
 ## Specialized Subagents and Spawn
 
