@@ -1144,8 +1144,8 @@ type ReadFileToolConfig struct {
 }
 
 type ImageGenerateToolConfig struct {
-	ToolConfig `yaml:"-" envPrefix:"PICOCLAW_TOOLS_IMAGE_GENERATE_"`
-	ModelName  string `json:"model_name" env:"PICOCLAW_TOOLS_IMAGE_GENERATE_MODEL_NAME"`
+	ToolConfig `       yaml:"-" envPrefix:"PICOCLAW_TOOLS_IMAGE_GENERATE_"`
+	ModelName  string `                                                    json:"model_name" env:"PICOCLAW_TOOLS_IMAGE_GENERATE_MODEL_NAME"`
 }
 
 const (

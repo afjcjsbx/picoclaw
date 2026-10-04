@@ -75,7 +75,9 @@ func (t *ImageGenerateTool) Execute(ctx context.Context, args map[string]any) *t
 		return tools.ErrorResult("prompt is required")
 	}
 	if t.config == nil || t.modelName == "" {
-		return tools.ErrorResult("configure tools.image_generate.model_name with an image generation model from model_list")
+		return tools.ErrorResult(
+			"configure tools.image_generate.model_name with an image generation model from model_list",
+		)
 	}
 	if t.mediaStore == nil {
 		return tools.ErrorResult("media store not configured")
@@ -135,14 +137,14 @@ func (t *ImageGenerateTool) Execute(ctx context.Context, args map[string]any) *t
 		return tools.ErrorResult(fmt.Sprintf("failed to create generated image file: %v", err))
 	}
 	path := file.Name()
-	if _, err := file.Write(imageBytes); err != nil {
+	if _, writeErr := file.Write(imageBytes); writeErr != nil {
 		_ = file.Close()
 		_ = os.Remove(path)
-		return tools.ErrorResult(fmt.Sprintf("failed to save generated image: %v", err))
+		return tools.ErrorResult(fmt.Sprintf("failed to save generated image: %v", writeErr))
 	}
-	if err := file.Close(); err != nil {
+	if closeErr := file.Close(); closeErr != nil {
 		_ = os.Remove(path)
-		return tools.ErrorResult(fmt.Sprintf("failed to close generated image: %v", err))
+		return tools.ErrorResult(fmt.Sprintf("failed to close generated image: %v", closeErr))
 	}
 
 	scope := fmt.Sprintf("tool:image_generate:%s:%s", channel, chatID)
@@ -295,7 +297,11 @@ func (t *ImageGenerateTool) postJSON(
 		return nil, fmt.Errorf("image model response exceeds the configured media size limit")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("image model returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(responseBody)))
+		return nil, fmt.Errorf(
+			"image model returned HTTP %d: %s",
+			resp.StatusCode,
+			strings.TrimSpace(string(responseBody)),
+		)
 	}
 	return responseBody, nil
 }
@@ -357,7 +363,10 @@ func validateGeneratedImage(data []byte, maxSize int) (string, string, error) {
 	case "image/gif":
 		return contentType, ".gif", nil
 	default:
-		return "", "", fmt.Errorf("image model returned an unsupported image format (%s)", strings.TrimSpace(contentType))
+		return "", "", fmt.Errorf(
+			"image model returned an unsupported image format (%s)",
+			strings.TrimSpace(contentType),
+		)
 	}
 }
 

@@ -26,7 +26,11 @@ func TestImageGenerateUsesModelProxy(t *testing.T) {
 		if r.Header.Get("Authorization") != "Bearer key" {
 			t.Errorf("authorization = %q", r.Header.Get("Authorization"))
 		}
-		_, _ = fmt.Fprintf(w, `{"data":[{"b64_json":%q}]}`, base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\n")))
+		_, _ = fmt.Fprintf(
+			w,
+			`{"data":[{"b64_json":%q}]}`,
+			base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\n")),
+		)
 	}))
 	defer proxy.Close()
 
