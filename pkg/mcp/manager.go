@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -114,6 +115,39 @@ func loadEnvFile(path string) (map[string]string, error) {
 	}
 
 	return envVars, nil
+}
+
+func allowedMCPParentEnv(key string) bool {
+	// Keep the process usable without passing PicoClaw's unrelated credentials.
+	switch key {
+	case "PATH", "HOME", "USER", "LANG", "LC_ALL", "TERM", "SHELL", "TMPDIR":
+		return true
+	}
+	if strings.HasPrefix(key, "XDG_") {
+		return true
+	}
+	if runtime.GOOS == "windows" {
+		switch strings.ToUpper(key) {
+		case "PATH", "HOME", "USER", "LANG", "LC_ALL", "TERM", "SHELL", "TMPDIR",
+			"SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP",
+			"USERPROFILE", "APPDATA", "LOCALAPPDATA", "PROGRAMDATA", "HOMEDRIVE", "HOMEPATH":
+			return true
+		}
+	}
+	return false
+}
+
+func inheritedMCPEnv(environ []string, inheritAll bool) map[string]string {
+	env := make(map[string]string)
+	for _, entry := range environ {
+		if idx := strings.IndexByte(entry, '='); idx > 0 {
+			key := entry[:idx]
+			if inheritAll || allowedMCPParentEnv(key) {
+				env[key] = entry[idx+1:]
+			}
+		}
+	}
+	return env
 }
 
 // ServerConnection represents a connection to an MCP server
@@ -405,14 +439,8 @@ func connectServer(
 
 		// Build environment variables with proper override semantics
 		// Use a map to ensure config variables override file variables
-		envMap := make(map[string]string)
-
-		// Start with parent process environment
-		for _, e := range cmd.Environ() {
-			if idx := strings.Index(e, "="); idx > 0 {
-				envMap[e[:idx]] = e[idx+1:]
-			}
-		}
+		// Inherit only basic process variables unless this server explicitly opts in.
+		envMap := inheritedMCPEnv(cmd.Environ(), cfg.InheritEnv)
 
 		// Load environment variables from file if specified
 		if cfg.EnvFile != "" {
