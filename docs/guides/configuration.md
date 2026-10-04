@@ -473,8 +473,8 @@ Use `mode = lines` when:
 | Config Key | Type | Default | Description |
 |------------|------|---------|-------------|
 | `tools.exec.allow_remote` | bool | `false` | Allow exec tool from remote channels (Telegram/Discord etc.) |
-| `tools.exec.enable_deny_patterns` | bool | `true` | Enable dangerous command interception |
-| `tools.exec.custom_deny_patterns` | string[] | `[]` | Custom regex patterns to block |
+| `tools.exec.enable_deny_patterns` | bool | `true` | Require channel approval for default dangerous commands; deny when unattended |
+| `tools.exec.custom_deny_patterns` | string[] | `[]` | Custom regex patterns that always block |
 | `tools.exec.custom_allow_patterns` | string[] | `[]` | Custom regex patterns to allow |
 
 > **Security Note:** Symlink protection is enabled by default — all file paths are resolved through `filepath.EvalSymlinks` before whitelist matching, preventing symlink escape attacks.

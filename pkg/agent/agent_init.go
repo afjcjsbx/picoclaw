@@ -101,6 +101,7 @@ func NewAgentLoop(
 	al.providerFactory = providers.CreateProviderFromConfig
 	al.hooks = NewHookManager(al.runtimeEvents.Channel())
 	configureHookManagerFromConfig(al.hooks, cfg)
+	_ = al.MountHook(NamedHook("exec-confirmation", &execConfirmationHook{agent: al}))
 	al.contextManager = al.resolveContextManager()
 
 	// Register shared tools to all agents (now that al is created)

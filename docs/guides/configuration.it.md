@@ -243,9 +243,11 @@ Anche con `restrict_to_workspace: false`, lo strumento `exec` blocca questi coma
 | Chiave di configurazione | Tipo | Predefinito | Descrizione |
 |--------------------------|------|-------------|-------------|
 | `tools.exec.allow_remote` | bool | `false` | Consente lo strumento exec da canali remoti (Telegram/Discord ecc.) |
-| `tools.exec.enable_deny_patterns` | bool | `true` | Abilita l'intercettazione dei comandi pericolosi |
-| `tools.exec.custom_deny_patterns` | string[] | `[]` | Pattern regex personalizzati da bloccare |
+| `tools.exec.enable_deny_patterns` | bool | `true` | Richiede conferma nel canale per i comandi pericolosi; rifiuta le esecuzioni non presidiate |
+| `tools.exec.custom_deny_patterns` | string[] | `[]` | Pattern regex personalizzati sempre bloccati |
 | `tools.exec.custom_allow_patterns` | string[] | `[]` | Pattern regex personalizzati da consentire |
+
+Le richieste si approvano con `approve <token>` o si rifiutano con `deny <token>` dallo stesso utente, nel canale e nella chat originali. Scadono dopo `hooks.defaults.approval_timeout_ms` (60 secondi predefiniti). Una piccola lista di comandi catastrofici resta bloccata anche con `enable_deny_patterns: false`.
 
 > **Nota di sicurezza:** La protezione dei symlink è abilitata per impostazione predefinita — tutti i percorsi file vengono risolti tramite `filepath.EvalSymlinks` prima del confronto con la whitelist, prevenendo attacchi di escape tramite symlink.
 

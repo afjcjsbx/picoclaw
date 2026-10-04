@@ -1987,3 +1987,57 @@ func TestShellTool_CustomAllowDoesNotBecomeStrictAllowlist(t *testing.T) {
 		t.Fatalf("custom allow patterns should not become a strict allowlist, got: %q", got)
 	}
 }
+
+func TestExecApprovalOnlyBypassesDefaultPatterns(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Tools.Exec.EnableDenyPatterns = true
+	cfg.Tools.Exec.CustomDenyPatterns = []string{`forbidden`}
+	tool, err := NewExecToolWithConfig(t.TempDir(), false, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := "rm -rf old-build"
+	if got := tool.guardCommandWithContext(context.Background(), command, t.TempDir()); got == "" {
+		t.Fatal("dangerous command passed without approval")
+	}
+	approved := WithApprovedExecCommand(context.Background(), command)
+	if got := tool.guardCommandWithContext(approved, command, t.TempDir()); got != "" {
+		t.Fatalf("approved command blocked: %s", got)
+	}
+	if got := tool.guardCommandWithContext(approved, "rm -rf other-build", t.TempDir()); got == "" {
+		t.Fatal("approval applied to a different command")
+	}
+	if got := tool.guardCommandWithContext(
+		WithApprovedExecCommand(context.Background(), "rm -rf forbidden"),
+		"rm -rf forbidden",
+		t.TempDir(),
+	); got == "" {
+		t.Fatal("approval bypassed a custom deny pattern")
+	}
+}
+
+func TestExecCatastrophicPatternsRemainBlocked(t *testing.T) {
+	cfg := &config.Config{} // Default deny patterns disabled.
+	tool, err := NewExecToolWithConfig(t.TempDir(), false, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, command := range []string{"rm -rf /", "rm -r -f /", `rm -rf "$HOME"`, "mkfs.ext4 /dev/sda", "dd if=/dev/zero of=/dev/sda", "dd if=/dev/zero of=/dev/disk0", "echo bad > /dev/sda", "diskutil eraseDisk disk0", ":(){ :|:& };:"} {
+		if got := tool.guardCommandWithContext(
+			WithApprovedExecCommand(context.Background(), command),
+			command,
+			t.TempDir(),
+		); got == "" {
+			t.Errorf("catastrophic command passed: %q", command)
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" && home != "/" {
+		command := `rm -rf "` + home + `"`
+		if got := tool.guardCommand(command, t.TempDir()); got == "" {
+			t.Errorf("absolute home deletion passed: %q", command)
+		}
+	}
+	if got := tool.guardCommand("rm -rf old-build", t.TempDir()); got != "" {
+		t.Fatalf("default deny patterns should be disabled: %s", got)
+	}
+}

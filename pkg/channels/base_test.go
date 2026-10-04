@@ -91,6 +91,13 @@ func TestShouldRespondInGroup(t *testing.T) {
 			wantContent: "hello world",
 		},
 		{
+			name:        "approval reply bypasses mention_only",
+			gt:          config.GroupTriggerConfig{MentionOnly: true},
+			content:     "approve 0123456789abcdef0123456789abcdef",
+			wantRespond: true,
+			wantContent: "approve 0123456789abcdef0123456789abcdef",
+		},
+		{
 			name:        "mention_only - mentioned",
 			gt:          config.GroupTriggerConfig{MentionOnly: true},
 			isMentioned: true,
