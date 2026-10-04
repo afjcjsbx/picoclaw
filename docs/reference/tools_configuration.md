@@ -39,7 +39,7 @@ See [Sensitive Data Filtering](../security/sensitive_data_filtering.md) for full
 
 ## Image Generation
 
-The optional `image_generate` tool uses an image-capable OpenAI or Gemini model configured in `model_list` and sends generated images to the current chat. See the [image generation guide](../tools/image-generation.md) for configuration and supported arguments.
+The optional `image_generate` tool uses an image-capable OpenAI, Gemini, or OpenRouter model configured in `model_list` and sends generated images to the current chat. See the [image generation guide](../tools/image-generation.md) for configuration and supported arguments.
 
 ## Web Tools
 
