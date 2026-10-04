@@ -544,6 +544,9 @@
     "list_dir": {
       "enabled": true
     },
+    "search_files": {
+      "enabled": true
+    },
     "message": {
       "enabled": true
     },
@@ -580,6 +583,11 @@
     "enabled": true,
     "interval": 30
   },
+  "power": {
+    "low_power": false,
+    "low_power_heartbeat_interval": 120,
+    "poll_interval_multiplier": 5
+  },
   "devices": {
     "enabled": false,
     "monitor_usb": true
@@ -610,6 +618,8 @@
     "host": "localhost",
     "port": 18790,
     "hot_reload": false,
-    "log_level": "fatal"
+    "log_level": "fatal",
+    "log_max_size_mb": 2,
+    "log_max_backups": 3
   }
 }

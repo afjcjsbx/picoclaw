@@ -1822,7 +1822,11 @@ func (m *Manager) sendMediaWithRetry(
 // tombstone maps and evicts entries that have exceeded their TTL. This prevents
 // memory accumulation when outbound paths fail to trigger preSend (e.g. LLM errors).
 func (m *Manager) runTTLJanitor(ctx context.Context) {
-	ticker := time.NewTicker(janitorInterval)
+	interval := janitorInterval
+	if m.config != nil {
+		interval = m.config.Power.ScalePollInterval(interval)
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {

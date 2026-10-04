@@ -68,6 +68,7 @@ func NewAgentLoop(
 
 	al := &AgentLoop{
 		bus:               msgBus,
+		stopCh:            make(chan struct{}),
 		cfg:               cfg,
 		registry:          registry,
 		state:             stateManager,
@@ -123,6 +124,9 @@ func registerSharedTools(
 			logger.WarnCF("voice-tts", "send_tts enabled but no TTS provider configured", nil)
 		}
 	}
+	al.mu.Lock()
+	al.ttsProvider = ttsProvider
+	al.mu.Unlock()
 
 	for _, agentID := range registry.ListAgentIDs() {
 		agent, ok := registry.GetAgent(agentID)

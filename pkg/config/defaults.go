@@ -312,10 +312,12 @@ func DefaultConfig() *Config {
 			},
 		},
 		Gateway: GatewayConfig{
-			Host:      "localhost",
-			Port:      18790,
-			HotReload: false,
-			LogLevel:  DefaultGatewayLogLevel,
+			Host:          "localhost",
+			Port:          18790,
+			HotReload:     false,
+			LogLevel:      DefaultGatewayLogLevel,
+			LogMaxSizeMB:  DefaultGatewayLogMaxSizeMB,
+			LogMaxBackups: DefaultGatewayLogMaxBackups,
 		},
 		Events: EventsConfig{
 			Logging: defaultEventLoggingConfig(),
@@ -485,6 +487,7 @@ func DefaultConfig() *Config {
 			Serial: ToolConfig{
 				Enabled: false, // Hardware tool - requires host serial ports
 			},
+			SearchFiles: ToolConfig{Enabled: true},
 			Spawn: ToolConfig{
 				Enabled: true,
 			},

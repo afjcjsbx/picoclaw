@@ -37,7 +37,7 @@ var (
 
 	currentLevel  = INFO
 	logger        zerolog.Logger
-	logFile       *os.File
+	logFile       io.WriteCloser
 	once          sync.Once
 	mu            sync.RWMutex
 	writers       []io.Writer
@@ -177,11 +177,10 @@ func EnableFileLogging(filePath string) error {
 	mu.Lock()
 	defer mu.Unlock()
 
-	if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
-		return fmt.Errorf("failed to create log directory: %w", err)
+	if len(writers) > 2 {
+		return fmt.Errorf("failed to configure file logging: unexpected writer count %d", len(writers))
 	}
-
-	newFile, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	newFile, err := newDefaultRotatingFile(filePath)
 	if err != nil {
 		return fmt.Errorf("failed to open log file: %w", err)
 	}
@@ -192,12 +191,11 @@ func EnableFileLogging(filePath string) error {
 	}
 
 	logFile = newFile
-
-	if len(writers) != 1 {
-		return fmt.Errorf("failed to configure file logging: %w", err)
+	if len(writers) == 1 {
+		writers = append(writers, logFile)
+	} else {
+		writers[1] = logFile
 	}
-
-	writers = append(writers, logFile)
 	logger = logger.Output(io.MultiWriter(writers...))
 
 	return nil
