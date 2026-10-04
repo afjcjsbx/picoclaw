@@ -17,6 +17,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/media"
 	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/sipeed/picoclaw/pkg/providers/common"
 	"github.com/sipeed/picoclaw/pkg/tools"
 )
 
@@ -25,7 +26,6 @@ type ImageGenerateTool struct {
 	modelName   string
 	maxFileSize int
 	mediaStore  media.MediaStore
-	client      *http.Client
 }
 
 func NewImageGenerateTool(cfg *config.Config, maxFileSize int, store media.MediaStore) *ImageGenerateTool {
@@ -41,7 +41,6 @@ func NewImageGenerateTool(cfg *config.Config, maxFileSize int, store media.Media
 		modelName:   modelName,
 		maxFileSize: maxFileSize,
 		mediaStore:  store,
-		client:      &http.Client{Timeout: 3 * time.Minute},
 	}
 }
 
@@ -97,6 +96,11 @@ func (t *ImageGenerateTool) Execute(ctx context.Context, args map[string]any) *t
 		modelID = modelID[len(protocol)+1:]
 	}
 	apiBase := providers.ResolveAPIBase(modelCfg)
+	client := common.NewHTTPClient(modelCfg.Proxy)
+	client.Timeout = 3 * time.Minute
+	if client.Transport != nil {
+		defer client.CloseIdleConnections()
+	}
 
 	aspect := strings.ToLower(strings.TrimSpace(stringArg(args, "aspect_ratio")))
 	if aspect == "" {
@@ -109,9 +113,9 @@ func (t *ImageGenerateTool) Execute(ctx context.Context, args map[string]any) *t
 	var imageBytes []byte
 	switch protocol {
 	case "openai":
-		imageBytes, _, err = t.generateOpenAIImage(ctx, apiBase, modelCfg.APIKey(), modelID, prompt, aspect)
+		imageBytes, _, err = t.generateOpenAIImage(ctx, client, apiBase, modelCfg.APIKey(), modelID, prompt, aspect)
 	case "gemini":
-		imageBytes, _, err = t.generateGeminiImage(ctx, apiBase, modelCfg.APIKey(), modelID, prompt, aspect)
+		imageBytes, _, err = t.generateGeminiImage(ctx, client, apiBase, modelCfg.APIKey(), modelID, prompt, aspect)
 	default:
 		return tools.ErrorResult(fmt.Sprintf(
 			"image generation is not implemented for provider %q; select an OpenAI or Gemini image model",
@@ -160,6 +164,7 @@ func (t *ImageGenerateTool) Execute(ctx context.Context, args map[string]any) *t
 
 func (t *ImageGenerateTool) generateOpenAIImage(
 	ctx context.Context,
+	client *http.Client,
 	apiBase, apiKey, model, prompt, aspect string,
 ) ([]byte, string, error) {
 	size := "1024x1024"
@@ -178,7 +183,7 @@ func (t *ImageGenerateTool) generateOpenAIImage(
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to encode image request: %w", err)
 	}
-	respBody, err := t.postJSON(ctx, strings.TrimRight(apiBase, "/")+"/images/generations", apiKey, "", body)
+	respBody, err := t.postJSON(ctx, client, strings.TrimRight(apiBase, "/")+"/images/generations", apiKey, "", body)
 	if err != nil {
 		return nil, "", err
 	}
@@ -203,6 +208,7 @@ func (t *ImageGenerateTool) generateOpenAIImage(
 
 func (t *ImageGenerateTool) generateGeminiImage(
 	ctx context.Context,
+	client *http.Client,
 	apiBase, apiKey, model, prompt, aspect string,
 ) ([]byte, string, error) {
 	body, err := json.Marshal(map[string]any{
@@ -224,7 +230,7 @@ func (t *ImageGenerateTool) generateGeminiImage(
 		return nil, "", fmt.Errorf("failed to encode image request: %w", err)
 	}
 	endpoint := strings.TrimRight(apiBase, "/") + "/models/" + url.PathEscape(model) + ":generateContent"
-	respBody, err := t.postJSON(ctx, endpoint, "", apiKey, body)
+	respBody, err := t.postJSON(ctx, client, endpoint, "", apiKey, body)
 	if err != nil {
 		return nil, "", err
 	}
@@ -257,6 +263,7 @@ func (t *ImageGenerateTool) generateGeminiImage(
 
 func (t *ImageGenerateTool) postJSON(
 	ctx context.Context,
+	client *http.Client,
 	endpoint, bearerKey, googleAPIKey string,
 	body []byte,
 ) ([]byte, error) {
@@ -271,7 +278,7 @@ func (t *ImageGenerateTool) postJSON(
 	if googleAPIKey != "" {
 		req.Header.Set("x-goog-api-key", googleAPIKey)
 	}
-	resp, err := t.client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("image generation request failed: %w", err)
 	}
