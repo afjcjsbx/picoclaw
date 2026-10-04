@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -46,5 +47,20 @@ func TestImageGenerateUsesModelProxy(t *testing.T) {
 	}
 	if !proxyCalled.Load() || len(result.Media) != 1 {
 		t.Fatalf("proxy called = %t, media refs = %d", proxyCalled.Load(), len(result.Media))
+	}
+}
+
+func TestImageDownloadRejectsNonPublicTargets(t *testing.T) {
+	for _, host := range []string{"localhost", "127.0.0.1", "10.0.0.1", "169.254.169.254", "0.0.0.0", "::1", "fc00::1"} {
+		if isPublicImageHost(host) {
+			t.Errorf("accepted non-public host %q", host)
+		}
+		_, err := dialPublicImageHost(context.Background(), "tcp", net.JoinHostPort(host, "443"))
+		if err == nil {
+			t.Errorf("dialed non-public host %q", host)
+		}
+	}
+	if !isPublicImageHost("8.8.8.8") {
+		t.Error("rejected public IP")
 	}
 }

@@ -302,10 +302,15 @@ func (t *ImageGenerateTool) downloadImage(ctx context.Context, rawURL string) ([
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to create image download request: %w", err)
 	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	transport.DialContext = dialPublicImageHost
+	defer transport.CloseIdleConnections()
 	client := &http.Client{
-		Timeout: 60 * time.Second,
+		Timeout:   60 * time.Second,
+		Transport: transport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if req.URL.Scheme != "https" || !isPublicImageHost(req.URL.Hostname()) {
+			if len(via) >= 10 || req.URL.Scheme != "https" || !isPublicImageHost(req.URL.Hostname()) {
 				return fmt.Errorf("image download redirected to an invalid host")
 			}
 			return nil
@@ -355,9 +360,42 @@ func isPublicImageHost(host string) bool {
 		return false
 	}
 	if ip := net.ParseIP(host); ip != nil {
-		return !ip.IsPrivate() && !ip.IsLoopback() && !ip.IsLinkLocalUnicast()
+		return isPublicImageIP(ip)
 	}
 	return true
+}
+
+func isPublicImageIP(ip net.IP) bool {
+	return ip.IsGlobalUnicast() && !ip.IsPrivate()
+}
+
+func dialPublicImageHost(ctx context.Context, network, address string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil || !isPublicImageHost(host) {
+		return nil, fmt.Errorf("image download target is not public")
+	}
+	addresses, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve image download host: %w", err)
+	}
+	if len(addresses) == 0 {
+		return nil, fmt.Errorf("image download host has no IP address")
+	}
+	for _, address := range addresses {
+		if !isPublicImageIP(address.IP) {
+			return nil, fmt.Errorf("image download target is not public")
+		}
+	}
+	dialer := &net.Dialer{}
+	var dialErr error
+	for _, address := range addresses {
+		conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(address.IP.String(), port))
+		if err == nil {
+			return conn, nil
+		}
+		dialErr = err
+	}
+	return nil, dialErr
 }
 
 func stringArg(args map[string]any, name string) string {
