@@ -522,6 +522,10 @@
       "max_age_minutes": 30,
       "interval_minutes": 5
     },
+    "image_generate": {
+      "enabled": false,
+      "model_name": ""
+    },
     "append_file": {
       "enabled": true
     },
