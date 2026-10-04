@@ -20,7 +20,7 @@ require (
 	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/ergochat/irc-go v0.6.0
 	github.com/ergochat/readline v0.1.3
-	github.com/github/copilot-sdk/go v1.0.14
+	github.com/github/copilot-sdk/go v1.0.16
 	github.com/gomarkdown/markdown v0.0.0-20260411013819-759bbc3e3207
 	github.com/google/jsonschema-go v0.4.3
 	github.com/google/uuid v1.6.0
