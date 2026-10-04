@@ -51,12 +51,17 @@ func (al *AgentLoop) ProcessDirectWithChannel(
 		return "", err
 	}
 
+	senderID := "direct"
+	if strings.HasPrefix(sessionKey, "agent:cron-") {
+		senderID = "cron"
+	}
+
 	msg := bus.InboundMessage{
 		Context: bus.InboundContext{
 			Channel:  channel,
 			ChatID:   chatID,
 			ChatType: "direct",
-			SenderID: "cron",
+			SenderID: senderID,
 		},
 		Content:    content,
 		SessionKey: sessionKey,
