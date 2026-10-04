@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -219,13 +218,8 @@ func (t *SearchFilesTool) searchNames(ctx context.Context, opts searchFilesOptio
 			if !matchesFileGlob(opts.pattern, filepath.Base(path)) {
 				return false, nil
 			}
-			f, err := t.fs.Open(path)
+			info, err := t.fs.Stat(path)
 			if err != nil {
-				return false, errSearchSkipFile
-			}
-			info, statErr := f.Stat()
-			_ = f.Close()
-			if statErr != nil {
 				return false, errSearchSkipFile
 			}
 			if !info.Mode().IsRegular() {
@@ -411,6 +405,13 @@ func truncateSearchLine(line string) string {
 }
 
 func readSearchFile(filesystem fileSystem, path string, remainingBytes int64) ([]byte, int64, error) {
+	entry, err := filesystem.Stat(path)
+	if err != nil {
+		return nil, 0, err
+	}
+	if !entry.Mode().IsRegular() || entry.Size() > maxSearchFileBytes {
+		return nil, 0, fmt.Errorf("not a searchable regular file")
+	}
 	f, err := filesystem.Open(path)
 	if err != nil {
 		return nil, 0, err
@@ -454,16 +455,14 @@ func (t *SearchFilesTool) walkPath(
 	fullTree bool,
 	visit func(string) (bool, error),
 ) (int, bool, error) {
-	f, err := t.fs.Open(path)
-	if err != nil {
-		return 0, false, err
-	}
-	info, err := f.Stat()
-	_ = f.Close()
+	info, err := t.fs.Stat(path)
 	if err != nil {
 		return 0, false, err
 	}
 	if !info.IsDir() {
+		if !info.Mode().IsRegular() {
+			return 0, false, nil
+		}
 		stop, err := visit(path)
 		if errors.Is(err, errSearchSkipFile) {
 			return 1, false, nil
@@ -498,7 +497,7 @@ func (t *SearchFilesTool) walkPath(
 				}
 				continue
 			}
-			if entry.Type()&fs.ModeSymlink != 0 {
+			if !entry.Type().IsRegular() {
 				continue
 			}
 			filesScanned++
