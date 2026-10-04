@@ -2,6 +2,11 @@
 
 This package handles speech synthesis for PicoClaw.
 
+In chat, `/voice off` disables automatic audio, `/voice on` sends TTS replies
+only after an incoming audio message, `/voice tts` sends TTS for every reply,
+and `/voice status` shows the current mode. These modes require `send_tts` to
+be enabled and a TTS model configured; they reset to `off` when PicoClaw restarts.
+
 If you are new to TTS setup, the simplest workflow is:
 
 1. Add a TTS-capable entry to `model_list`.

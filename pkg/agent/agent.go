@@ -17,6 +17,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/agent/interfaces"
 	"github.com/sipeed/picoclaw/pkg/audio/asr"
+	"github.com/sipeed/picoclaw/pkg/audio/tts"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/commands"
 	"github.com/sipeed/picoclaw/pkg/config"
@@ -53,12 +54,14 @@ type AgentLoop struct {
 	channelManager interfaces.ChannelManager
 	mediaStore     media.MediaStore
 	transcriber    asr.Transcriber
+	ttsProvider    tts.TTSProvider
 	cmdRegistry    *commands.Registry
 	mcp            mcpRuntime
 	evolution      *evolutionBridge
 	hookRuntime    hookRuntime
 	steering       *steeringQueue
 	pendingSkills  sync.Map
+	voiceModes     sync.Map
 	pendingStops   sync.Map
 	mu             sync.RWMutex
 
@@ -139,6 +142,7 @@ const (
 	metadataKeyReplyToMessage  = "reply_to_message_id"
 	metadataKeyParentPeerKind  = "parent_peer_kind"
 	metadataKeyParentPeerID    = "parent_peer_id"
+	metadataKeyInputAudio      = "voice_input_audio"
 )
 
 // registerSharedTools registers tools that are shared across all agents (web, message, spawn).
@@ -611,6 +615,9 @@ func (al *AgentLoop) runAgentLoop(
 		}
 		markFinalOutbound(&msg)
 		al.bus.PublishOutbound(ctx, msg)
+		if opts.Dispatch.InboundContext != nil {
+			al.sendVoiceResponseIfEnabled(ctx, agent, opts, result.finalContent)
+		}
 	}
 
 	if result.finalContent != "" {

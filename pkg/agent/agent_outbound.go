@@ -40,8 +40,12 @@ func (al *AgentLoop) publishResponseOrError(
 }
 
 func (al *AgentLoop) PublishResponseIfNeeded(ctx context.Context, channel, chatID, sessionKey, response string) {
+	al.publishResponseIfNeeded(ctx, channel, chatID, sessionKey, response)
+}
+
+func (al *AgentLoop) publishResponseIfNeeded(ctx context.Context, channel, chatID, sessionKey, response string) bool {
 	if response == "" {
-		return
+		return false
 	}
 
 	alreadySentToSameChat := false
@@ -70,7 +74,7 @@ func (al *AgentLoop) PublishResponseIfNeeded(ctx context.Context, channel, chatI
 			"Skipped outbound (message tool already sent to same chat)",
 			map[string]any{"channel": channel, "chat_id": chatID},
 		)
-		return
+		return false
 	}
 
 	msg := bus.OutboundMessage{
@@ -82,13 +86,16 @@ func (al *AgentLoop) PublishResponseIfNeeded(ctx context.Context, channel, chatI
 		msg.ContextUsage = computeContextUsage(al.agentForSession(sessionKey), sessionKey)
 	}
 	markFinalOutbound(&msg)
-	al.bus.PublishOutbound(ctx, msg)
+	if err := al.bus.PublishOutbound(ctx, msg); err != nil {
+		return false
+	}
 	logger.InfoCF("agent", "Published outbound response",
 		map[string]any{
 			"channel":     channel,
 			"chat_id":     chatID,
 			"content_len": len(response),
 		})
+	return true
 }
 
 func (al *AgentLoop) targetReasoningChannelID(channelName string) (chatID string) {
