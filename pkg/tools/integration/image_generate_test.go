@@ -1,6 +1,7 @@
 package integrationtools
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"fmt"
@@ -62,5 +63,22 @@ func TestImageDownloadRejectsNonPublicTargets(t *testing.T) {
 	}
 	if !isPublicImageHost("8.8.8.8") {
 		t.Error("rejected public IP")
+	}
+}
+
+func TestImageGenerateAllowsConfiguredResponseSize(t *testing.T) {
+	response := bytes.Repeat([]byte("x"), 33<<20)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(response)
+	}))
+	defer server.Close()
+
+	tool := NewImageGenerateTool(nil, 25<<20, nil)
+	got, err := tool.postJSON(context.Background(), server.Client(), server.URL, "", "", nil)
+	if err != nil {
+		t.Fatalf("postJSON rejected response within configured limit: %v", err)
+	}
+	if len(got) != len(response) {
+		t.Fatalf("response length = %d, want %d", len(got), len(response))
 	}
 }

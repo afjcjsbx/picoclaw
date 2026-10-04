@@ -283,9 +283,16 @@ func (t *ImageGenerateTool) postJSON(
 		return nil, fmt.Errorf("image generation request failed: %w", err)
 	}
 	defer resp.Body.Close()
-	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+	responseLimit := int64(32 << 20)
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		responseLimit = max(responseLimit, int64(base64.StdEncoding.EncodedLen(t.maxFileSize))+(1<<20))
+	}
+	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, responseLimit+1))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read image model response: %w", err)
+	}
+	if int64(len(responseBody)) > responseLimit {
+		return nil, fmt.Errorf("image model response exceeds the configured media size limit")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("image model returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(responseBody)))
