@@ -37,6 +37,12 @@ See [Sensitive Data Filtering](../security/sensitive_data_filtering.md) for full
 | `filter_sensitive_data` | bool | `true` | Enable/disable filtering |
 | `filter_min_length` | int | `8` | Minimum content length to trigger filtering |
 
+## Protected local files
+
+Filesystem read tools deny `.env`, `.env.*`, `.envrc`, `.security.yml` (including its backups), `.netrc`, `.npmrc`, `.pypirc`, and files inside `.ssh`, `.aws`, `.kube`, or `.gnupg` directories. The check also follows symlinks, hides these entries from directory listings and file searches, and applies to local files attached through `send_file`, `load_image`, or `message`. Read allow paths do not override it. `write_file` can still create or explicitly overwrite these files; `edit_file` and `append_file` cannot read their existing contents.
+
+This is a guard for PicoClaw's filesystem tools. Shell commands and external MCP tools run outside this read policy; use process or container isolation when they must not access workspace secrets.
+
 ## Image Generation
 
 The optional `image_generate` tool uses an image-capable OpenAI, Gemini, or OpenRouter model configured in `model_list` and sends generated images to the current chat. See the [image generation guide](../tools/image-generation.md) for configuration and supported arguments.
