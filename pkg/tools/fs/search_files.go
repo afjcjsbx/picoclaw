@@ -259,12 +259,16 @@ func (t *SearchFilesTool) searchNames(ctx context.Context, opts searchFilesOptio
 	if len(paths) == 0 {
 		return NewToolResult(fmt.Sprintf("No matching files (%d files scanned).", filesScanned))
 	}
-	result := strings.Join(paths, "\n")
-	if truncated {
+	result, shown, outputCapped := capSearchRows(paths)
+	if shown == 0 {
+		return ErrorResult("a single result exceeds the search output limit; search a narrower path")
+	}
+	if outputCapped {
+		result += fmt.Sprintf("\n[Output capped at 64 KiB; use offset=%d to continue.]", opts.offset+shown)
+	} else if truncated {
 		result += "\n[More results are available; use offset to continue.]"
 	}
-	result, _ = capSearchOutput(result)
-	return NewToolResult(fmt.Sprintf("%s\n\n%d file(s), %d files scanned.", result, len(paths), filesScanned))
+	return NewToolResult(fmt.Sprintf("%s\n\n%d file(s), %d files scanned.", result, shown, filesScanned))
 }
 
 func (t *SearchFilesTool) searchContents(ctx context.Context, opts searchFilesOptions) *ToolResult {
@@ -304,23 +308,37 @@ func (t *SearchFilesTool) searchContents(ctx context.Context, opts searchFilesOp
 		}
 		return NewToolResult(fmt.Sprintf("No matches found (%d files scanned).", filesScanned))
 	}
-	result := strings.Join(rows, "\n")
-	if truncated {
+	result, shown, outputCapped := capSearchRows(rows)
+	if shown == 0 {
+		return ErrorResult("a single result exceeds the search output limit; reduce context")
+	}
+	if outputCapped {
+		result += fmt.Sprintf("\n[Output capped at 64 KiB; use offset=%d to continue.]", opts.offset+shown)
+	} else if truncated {
 		result += "\n[Search stopped at a safety limit. Use offset to continue when the result limit was reached.]"
 	}
-	result, _ = capSearchOutput(result)
-	return NewToolResult(fmt.Sprintf("%s\n\n%d result(s), %d files scanned.", result, len(rows), filesScanned))
+	return NewToolResult(fmt.Sprintf("%s\n\n%d result(s), %d files scanned.", result, shown, filesScanned))
 }
 
-func capSearchOutput(value string) (string, bool) {
-	if len(value) <= maxSearchOutputBytes {
-		return value, false
+func capSearchRows(rows []string) (string, int, bool) {
+	const footerBytes = 256
+	var result strings.Builder
+	shown := 0
+	for _, row := range rows {
+		separator := 0
+		if shown > 0 {
+			separator = 1
+		}
+		if result.Len()+separator+len(row) > maxSearchOutputBytes-footerBytes {
+			return result.String(), shown, true
+		}
+		if separator > 0 {
+			result.WriteByte('\n')
+		}
+		result.WriteString(row)
+		shown++
 	}
-	cut := maxSearchOutputBytes
-	for cut > 0 && !utf8.RuneStart(value[cut]) {
-		cut--
-	}
-	return value[:cut] + "\n[Output capped at 64 KiB. Use offset to continue.]", true
+	return result.String(), shown, false
 }
 
 func formatContentMatches(
