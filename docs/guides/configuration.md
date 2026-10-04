@@ -379,6 +379,7 @@ When `restrict_to_workspace: true`, the following tools are sandboxed:
 | `read_file`   | Read files       | Only files within workspace            |
 | `write_file`  | Write files      | Only files within workspace            |
 | `list_dir`    | List directories | Only directories within workspace      |
+| `search_files` | Search file contents or filenames | Uses the same read-path restrictions; paginated, bounded results |
 | `edit_file`   | Edit files       | Only files within workspace            |
 | `append_file` | Append to files  | Only files within workspace            |
 | `exec`        | Execute commands | Command paths must be within workspace |
@@ -400,6 +401,7 @@ Even with `restrict_to_workspace: false`, the `exec` tool blocks these dangerous
 |------------|------|---------|-------------|
 | `tools.allow_read_paths` | string[] | `[]` | Additional paths allowed for reading outside workspace |
 | `tools.allow_write_paths` | string[] | `[]` | Additional paths allowed for writing outside workspace |
+| `tools.search_files.enabled` | bool | `true` | Enables regex content search and glob-based filename search |
 | `tools.message.media_enabled` | bool | `false` | Allows the `message` tool to attach local media files by path. This is separate from `tools.send_file.enabled`; enable it only when unified text/media/caption delivery is intended. |
 
 ### Read File Mode
