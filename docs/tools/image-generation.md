@@ -1,0 +1,35 @@
+# Image generation
+
+PicoClaw can generate images through the `image_generate` tool using a model configured in `model_list`. The generated image is sent to the current chat.
+
+Configure an image-generating OpenAI or Gemini model in `model_list`, keep its API key in `.security.yml`, then select its `model_name` alias and enable the tool:
+
+```json
+{
+  "model_list": [
+    {
+      "model_name": "image-model",
+      "model": "gemini/gemini-3.1-flash-image"
+    }
+  ],
+  "tools": {
+    "image_generate": {
+      "enabled": true,
+      "model_name": "image-model"
+    }
+  }
+}
+```
+
+Put the API key in `~/.picoclaw/.security.yml`, using the same `model_name` as the entry in `model_list`:
+
+```yaml
+model_list:
+  image-model:
+    api_keys:
+      - "YOUR_GEMINI_API_KEY"
+```
+
+For OpenAI, use a model that supports the Images API. For Gemini, choose a model that supports image output. The API key is loaded from `.security.yml`; `api_base` is read from the selected `model_list` entry. `model_name` can also be set with `PICOCLAW_TOOLS_IMAGE_GENERATE_MODEL_NAME`; enable the tool with `PICOCLAW_TOOLS_IMAGE_GENERATE_ENABLED=true`.
+
+The tool accepts a prompt and an optional `aspect_ratio` (`square`, `landscape`, or `portrait`). It generates one image per call. Downloads are limited by `agents.defaults.max_media_size` (20 MB by default).

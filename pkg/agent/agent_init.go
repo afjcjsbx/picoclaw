@@ -253,6 +253,15 @@ func registerSharedTools(
 			agent.Tools.Register(sendFileTool)
 		}
 
+		if cfg.Tools.IsToolEnabled("image_generate") {
+			imageGenerateTool := integrationtools.NewImageGenerateTool(
+				cfg,
+				cfg.Agents.Defaults.GetMaxMediaSize(),
+				nil,
+			)
+			agent.Tools.Register(imageGenerateTool)
+		}
+
 		if ttsProvider != nil {
 			agent.Tools.Register(integrationtools.NewSendTTSTool(ttsProvider, nil))
 		}
