@@ -118,9 +118,11 @@ func (t *ImageGenerateTool) Execute(ctx context.Context, args map[string]any) *t
 		imageBytes, _, err = t.generateOpenAIImage(ctx, client, apiBase, modelCfg.APIKey(), modelID, prompt, aspect)
 	case "gemini":
 		imageBytes, _, err = t.generateGeminiImage(ctx, client, apiBase, modelCfg.APIKey(), modelID, prompt, aspect)
+	case "openrouter":
+		imageBytes, err = t.generateOpenRouterImage(ctx, client, apiBase, modelCfg.APIKey(), modelID, prompt, aspect)
 	default:
 		return tools.ErrorResult(fmt.Sprintf(
-			"image generation is not implemented for provider %q; select an OpenAI or Gemini image model",
+			"image generation is not implemented for provider %q; select an OpenAI, Gemini, or OpenRouter image model",
 			protocol,
 		))
 	}
@@ -206,6 +208,46 @@ func (t *ImageGenerateTool) generateOpenAIImage(
 		return nil, "", fmt.Errorf("image model returned neither image data nor a URL")
 	}
 	return t.downloadImage(ctx, response.Data[0].URL)
+}
+
+func (t *ImageGenerateTool) generateOpenRouterImage(
+	ctx context.Context,
+	client *http.Client,
+	apiBase, apiKey, model, prompt, aspect string,
+) ([]byte, error) {
+	aspectRatio := map[string]string{
+		"square":    "1:1",
+		"landscape": "4:3",
+		"portrait":  "3:4",
+	}[aspect]
+	body, err := json.Marshal(map[string]any{
+		"model":        model,
+		"prompt":       prompt,
+		"aspect_ratio": aspectRatio,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode image request: %w", err)
+	}
+	respBody, err := t.postJSON(ctx, client, strings.TrimRight(apiBase, "/")+"/images", apiKey, "", body)
+	if err != nil {
+		return nil, err
+	}
+	var response struct {
+		Data []struct {
+			B64JSON string `json:"b64_json"`
+		} `json:"data"`
+	}
+	if err = json.Unmarshal(respBody, &response); err != nil {
+		return nil, fmt.Errorf("failed to decode OpenRouter image response: %w", err)
+	}
+	if len(response.Data) == 0 || response.Data[0].B64JSON == "" {
+		return nil, fmt.Errorf("OpenRouter returned no image data")
+	}
+	imageBytes, err := base64.StdEncoding.DecodeString(response.Data[0].B64JSON)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode OpenRouter image data: %w", err)
+	}
+	return imageBytes, nil
 }
 
 func (t *ImageGenerateTool) generateGeminiImage(
