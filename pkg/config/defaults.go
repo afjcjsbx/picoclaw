@@ -485,6 +485,7 @@ func DefaultConfig() *Config {
 			Serial: ToolConfig{
 				Enabled: false, // Hardware tool - requires host serial ports
 			},
+			SearchFiles: ToolConfig{Enabled: true},
 			Spawn: ToolConfig{
 				Enabled: true,
 			},
