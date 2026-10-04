@@ -278,7 +278,7 @@ func (t *ImageGenerateTool) postJSON(
 		req.Header.Set("Authorization", "Bearer "+bearerKey)
 	}
 	if googleAPIKey != "" {
-		req.Header.Set("x-goog-api-key", googleAPIKey)
+		req.Header.Set("X-Goog-Api-Key", googleAPIKey)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
