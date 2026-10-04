@@ -680,22 +680,6 @@ PICOCLAW_GATEWAY_HOST=0.0.0.0
 Use `PICOCLAW_CONFIG` when the user reports "wrong config file" behavior.
 Use `PICOCLAW_HOME` when the user wants a portable or service-managed install.
 
-### Delta Chat
-
-Delta Chat runs through `deltachat-rpc-server`. For a new chatmail account,
-set `channels.deltachat.settings.email` to a relay marker such as
-`@nine.testrun.org`, start PicoClaw once, then replace the marker with the full
-address reported during setup. Set `show_invite_link: true` to print the bot's
-invite link and QR code. Use `join_invite_link` if the bot should join a chat
-on startup, and `allow_crosspost: true` only when it should send messages to
-other chats or recipients.
-
-For an existing account, point `data_dir` at its Delta Chat account store and
-set `email` to that account. The channel no longer configures classic email
-accounts from a password or manual IMAP/SMTP settings. See
-`docs/channels/deltachat/README.md` for installation, first-run behavior, and
-the complete settings list.
-
 ## PicoClaw-Native Concepts
 
 ### Model Configuration
@@ -918,7 +902,6 @@ When contributing code, these paths matter most:
 - `docs/reference/mcp-cli.md` — authoritative MCP CLI behavior
 - `docs/reference/cron.md` — cron behavior and limitations
 - `docs/guides/custom-builds.md` — selective channel builds and omitting Seahorse
-- `docs/channels/deltachat/README.md` — Delta Chat account setup and options
 - `docs/operations/debug.md` — debugging workflow
 - `docs/operations/troubleshooting.md` — known misconfiguration patterns
 - `docs/architecture/agent-self-evolution.md` — evolution design and safety
@@ -1024,7 +1007,6 @@ Read these only when the task needs them:
 - `docs/reference/mcp-cli.md` for MCP CLI flags and storage behavior
 - `docs/reference/cron.md` for schedule types and security gates
 - `docs/guides/custom-builds.md` for channel selection and reduced binaries
-- `docs/channels/deltachat/README.md` for Delta Chat account setup and options
 - `docs/operations/debug.md` for runtime inspection
 - `docs/operations/troubleshooting.md` for common provider/model mistakes
 
