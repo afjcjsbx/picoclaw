@@ -495,6 +495,9 @@ func (t *SearchFilesTool) walkPath(
 				if err := walk(child, false); err != nil {
 					return err
 				}
+				if truncated {
+					return nil
+				}
 				continue
 			}
 			if !entry.Type().IsRegular() {
