@@ -123,6 +123,7 @@ func registerSharedTools(
 			logger.WarnCF("voice-tts", "send_tts enabled but no TTS provider configured", nil)
 		}
 	}
+	al.ttsProvider = ttsProvider
 
 	for _, agentID := range registry.ListAgentIDs() {
 		agent, ok := registry.GetAgent(agentID)

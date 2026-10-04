@@ -49,6 +49,8 @@ type StopResult struct {
 // can coexist with long-lived callbacks (like GetModelInfo).
 type Runtime struct {
 	Config             *config.Config
+	VoiceMode          string
+	SetVoiceMode       func(mode string) error
 	GetModelInfo       func() (name, provider string)
 	AskSideQuestion    func(ctx context.Context, question string) (string, error)
 	ListAgentIDs       func() []string

@@ -136,6 +136,7 @@ func (al *AgentLoop) buildCommandsRuntime(
 	cfg := al.GetConfig()
 	rt := &commands.Runtime{
 		Config:          cfg,
+		VoiceMode:       al.voiceMode(opts.Dispatch.SessionKey),
 		ListAgentIDs:    registry.ListAgentIDs,
 		ListDefinitions: al.cmdRegistry.Definitions,
 		ListMCPServers: func(ctx context.Context) []commands.MCPServerInfo {
@@ -273,6 +274,9 @@ func (al *AgentLoop) buildCommandsRuntime(
 				return fmt.Errorf("channel '%s' not found or not enabled", value)
 			}
 			return nil
+		},
+		SetVoiceMode: func(mode string) error {
+			return al.setVoiceMode(opts.Dispatch.SessionKey, mode)
 		},
 	}
 	rt.StopActiveTurn = func() (commands.StopResult, error) {

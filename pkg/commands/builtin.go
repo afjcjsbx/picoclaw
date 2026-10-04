@@ -19,5 +19,6 @@ func BuiltinDefinitions() []Definition {
 		contextCommand(),
 		subagentsCommand(),
 		reloadCommand(),
+		voiceCommand(),
 	}
 }

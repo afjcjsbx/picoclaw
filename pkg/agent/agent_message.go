@@ -107,6 +107,12 @@ func (al *AgentLoop) prepareInboundMessageForAgent(
 	msg bus.InboundMessage,
 ) bus.InboundMessage {
 	msg = bus.NormalizeInboundMessage(msg)
+	if al.hasAudioInput(msg) {
+		if msg.Context.Raw == nil {
+			msg.Context.Raw = make(map[string]string, 1)
+		}
+		msg.Context.Raw[metadataKeyInputAudio] = "true"
+	}
 
 	var hadAudio bool
 	msg, hadAudio = al.transcribeAudioInMessage(ctx, msg)
