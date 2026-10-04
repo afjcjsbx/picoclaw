@@ -540,6 +540,9 @@
     "list_dir": {
       "enabled": true
     },
+    "search_files": {
+      "enabled": true
+    },
     "message": {
       "enabled": true
     },
