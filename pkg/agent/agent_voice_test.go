@@ -40,7 +40,9 @@ func TestVoiceModeSendsAudioForFinalChatResponse(t *testing.T) {
 			al := NewAgentLoop(cfg, msgBus, &simpleMockProvider{response: "spoken reply"})
 			store := media.NewFileMediaStore()
 			al.SetMediaStore(store)
+			al.mu.Lock()
 			al.ttsProvider = voiceTestTTSProvider{}
+			al.mu.Unlock()
 
 			msg := testInboundMessage(bus.InboundMessage{
 				Channel: "telegram", ChatID: "chat-1", SenderID: "user-1", Content: "hello",
@@ -50,7 +52,9 @@ func TestVoiceModeSendsAudioForFinalChatResponse(t *testing.T) {
 				if err := os.WriteFile(path, []byte("audio"), 0o600); err != nil {
 					t.Fatal(err)
 				}
-				ref, err := store.Store(path, media.MediaMeta{Filename: "voice.ogg", ContentType: "audio/ogg"}, "incoming")
+				ref, err := store.Store(path, media.MediaMeta{
+					Filename: "voice.ogg", ContentType: "audio/ogg",
+				}, "incoming")
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -95,4 +99,24 @@ func TestVoiceModeSendsAudioForFinalChatResponse(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestVoiceModeConcurrentWithProviderReload(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{})
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range 1000 {
+			_ = al.setVoiceMode("session", "tts")
+		}
+	}()
+	for range 5 {
+		if err := al.ReloadProviderAndConfig(context.Background(), &mockProvider{}, cfg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	<-done
 }

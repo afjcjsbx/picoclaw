@@ -21,6 +21,12 @@ func (al *AgentLoop) voiceMode(sessionKey string) string {
 	return "off"
 }
 
+func (al *AgentLoop) currentTTSProvider() tts.TTSProvider {
+	al.mu.RLock()
+	defer al.mu.RUnlock()
+	return al.ttsProvider
+}
+
 func (al *AgentLoop) setVoiceMode(sessionKey, mode string) error {
 	sessionKey = strings.TrimSpace(sessionKey)
 	if sessionKey == "" {
@@ -29,7 +35,7 @@ func (al *AgentLoop) setVoiceMode(sessionKey, mode string) error {
 	if mode != "off" && mode != "on" && mode != "tts" {
 		return fmt.Errorf("unknown voice mode: %s", mode)
 	}
-	if mode != "off" && al.ttsProvider == nil {
+	if mode != "off" && al.currentTTSProvider() == nil {
 		return fmt.Errorf("TTS unavailable: enable tools.send_tts and configure a TTS model")
 	}
 	al.voiceModes.Store(sessionKey, mode)
@@ -46,20 +52,21 @@ func (al *AgentLoop) sendVoiceResponseIfEnabled(
 	if mode == "off" || (mode == "on" && opts.Dispatch.InboundContext.Raw[metadataKeyInputAudio] != "true") {
 		return
 	}
-	if al.ttsProvider == nil || al.mediaStore == nil || al.bus == nil {
+	provider := al.currentTTSProvider()
+	if provider == nil || al.mediaStore == nil || al.bus == nil {
 		logger.WarnCF("voice-tts", "Cannot synthesize response: TTS runtime is not ready", nil)
 		return
 	}
 
 	channel, chatID := opts.Dispatch.Channel(), opts.Dispatch.ChatID()
-	ref, err := tts.SynthesizeAndStore(ctx, al.ttsProvider, al.mediaStore, text, "", channel, chatID)
+	ref, err := tts.SynthesizeAndStore(ctx, provider, al.mediaStore, text, "", channel, chatID)
 	if err != nil {
 		logger.WarnCF("voice-tts", "Failed to synthesize response", map[string]any{"error": err.Error()})
 		return
 	}
 
 	part := bus.MediaPart{Ref: ref}
-	if _, meta, err := al.mediaStore.ResolveWithMeta(ref); err == nil {
+	if _, meta, resolveErr := al.mediaStore.ResolveWithMeta(ref); resolveErr == nil {
 		part.Filename = meta.Filename
 		part.ContentType = meta.ContentType
 		part.Type = inferMediaType(meta.Filename, meta.ContentType)
