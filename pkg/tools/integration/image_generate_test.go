@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -52,6 +54,40 @@ func TestImageGenerateUsesModelProxy(t *testing.T) {
 	}
 	if !proxyCalled.Load() || len(result.Media) != 1 {
 		t.Fatalf("proxy called = %t, media refs = %d", proxyCalled.Load(), len(result.Media))
+	}
+}
+
+func TestOpenRouterImageUsesBaseRequest(t *testing.T) {
+	image := []byte("\x89PNG\r\n\x1a\n")
+	for _, model := range []string{"meta/muse-image", "recraft/recraft-v4"} {
+		t.Run(model, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.Method != http.MethodPost || req.URL.String() != "https://openrouter.ai/api/v1/images" {
+					t.Errorf("request = %s %s", req.Method, req.URL)
+				}
+				if req.Header.Get("Authorization") != "Bearer key" {
+					t.Errorf("authorization = %q", req.Header.Get("Authorization"))
+				}
+				var body map[string]any
+				if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+					t.Fatalf("decode request: %v", err)
+				}
+				if len(body) != 2 || body["model"] != model || body["prompt"] != "cat" {
+					t.Errorf("request body = %#v, want only model and prompt", body)
+				}
+				response := fmt.Sprintf(`{"data":[{"b64_json":%q}]}`, base64.StdEncoding.EncodeToString(image))
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(bytes.NewReader([]byte(response))),
+				}, nil
+			})}
+			got, err := NewImageGenerateTool(nil, config.DefaultMaxMediaSize, nil).generateOpenRouterImage(
+				context.Background(), client, "https://openrouter.ai/api/v1", "key", model, "cat",
+			)
+			if err != nil || !bytes.Equal(got, image) {
+				t.Fatalf("image = %v, error = %v", got, err)
+			}
+		})
 	}
 }
 

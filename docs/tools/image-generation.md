@@ -21,7 +21,7 @@ Configure an image-generating OpenAI, Gemini, or OpenRouter model in `model_list
 }
 ```
 
-For OpenRouter, use the model slug from its image catalog. For example, Meta Muse Image:
+For OpenRouter, use a model from its image catalog that accepts text-only prompts and produces a raster image. For example, Meta Muse Image:
 
 ```json
 {
@@ -62,4 +62,4 @@ model_list:
 
 For OpenAI, use a model that supports the Images API. For Gemini, choose a model that supports image output. For OpenRouter, use an image generation model slug; PicoClaw calls OpenRouter's `POST /api/v1/images` endpoint. The API key is loaded from `.security.yml`; `api_base` is read from the selected `model_list` entry. `model_name` can also be set with `PICOCLAW_TOOLS_IMAGE_GENERATE_MODEL_NAME`; enable the tool with `PICOCLAW_TOOLS_IMAGE_GENERATE_ENABLED=true`.
 
-The tool accepts a prompt and an optional `aspect_ratio` (`square`, `landscape`, or `portrait`). It generates one image per call. Downloads are limited by `agents.defaults.max_media_size` (20 MB by default).
+The tool accepts a prompt and an optional `aspect_ratio` (`square`, `landscape`, or `portrait`) for OpenAI and Gemini. OpenRouter receives only the model and prompt, so it uses the model's default image shape. The tool generates one image per call. Downloads are limited by `agents.defaults.max_media_size` (20 MB by default).

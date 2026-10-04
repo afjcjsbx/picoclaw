@@ -59,7 +59,7 @@ func (t *ImageGenerateTool) Parameters() map[string]any {
 			"aspect_ratio": map[string]any{
 				"type":        "string",
 				"enum":        []string{"square", "landscape", "portrait"},
-				"description": "Image shape; defaults to square.",
+				"description": "Image shape for OpenAI and Gemini; defaults to square. OpenRouter uses the model default.",
 			},
 		},
 		"required": []string{"prompt"},
@@ -119,7 +119,7 @@ func (t *ImageGenerateTool) Execute(ctx context.Context, args map[string]any) *t
 	case "gemini":
 		imageBytes, _, err = t.generateGeminiImage(ctx, client, apiBase, modelCfg.APIKey(), modelID, prompt, aspect)
 	case "openrouter":
-		imageBytes, err = t.generateOpenRouterImage(ctx, client, apiBase, modelCfg.APIKey(), modelID, prompt, aspect)
+		imageBytes, err = t.generateOpenRouterImage(ctx, client, apiBase, modelCfg.APIKey(), modelID, prompt)
 	default:
 		return tools.ErrorResult(fmt.Sprintf(
 			"image generation is not implemented for provider %q; select an OpenAI, Gemini, or OpenRouter image model",
@@ -213,17 +213,11 @@ func (t *ImageGenerateTool) generateOpenAIImage(
 func (t *ImageGenerateTool) generateOpenRouterImage(
 	ctx context.Context,
 	client *http.Client,
-	apiBase, apiKey, model, prompt, aspect string,
+	apiBase, apiKey, model, prompt string,
 ) ([]byte, error) {
-	aspectRatio := map[string]string{
-		"square":    "1:1",
-		"landscape": "4:3",
-		"portrait":  "3:4",
-	}[aspect]
 	body, err := json.Marshal(map[string]any{
-		"model":        model,
-		"prompt":       prompt,
-		"aspect_ratio": aspectRatio,
+		"model":  model,
+		"prompt": prompt,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode image request: %w", err)
