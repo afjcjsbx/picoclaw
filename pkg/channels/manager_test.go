@@ -3199,6 +3199,17 @@ func TestSendMessage_WithRetry(t *testing.T) {
 	}
 }
 
+func TestSendMessage_ReportsDeliveryFailure(t *testing.T) {
+	m := newTestManager()
+	ch := &mockChannel{sendFn: func(context.Context, bus.OutboundMessage) error { return ErrSendFailed }}
+	m.channels["test"] = ch
+	m.workers["test"] = &channelWorker{ch: ch, limiter: rate.NewLimiter(rate.Inf, 1)}
+	msg := testOutboundMessage(bus.OutboundMessage{Channel: "test", ChatID: "123", Content: "approval request"})
+	if err := m.SendMessage(context.Background(), msg); err == nil {
+		t.Fatal("delivery failure was not reported")
+	}
+}
+
 func TestSendMessage_ContextOnlyUsesContextAddressing(t *testing.T) {
 	m := newTestManager()
 

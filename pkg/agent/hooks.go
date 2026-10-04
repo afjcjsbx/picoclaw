@@ -46,8 +46,9 @@ func (d HookDecision) normalizedAction() HookAction {
 }
 
 type ApprovalDecision struct {
-	Approved bool   `json:"approved"`
-	Reason   string `json:"reason,omitempty"`
+	Approved        bool   `json:"approved"`
+	Reason          string `json:"reason,omitempty"`
+	approvedCommand string
 }
 
 type HookSource uint8
@@ -540,6 +541,7 @@ func (hm *HookManager) ApproveTool(ctx context.Context, req *ToolApprovalRequest
 		return ApprovalDecision{Approved: true}
 	}
 
+	approvedCommand := ""
 	for _, reg := range hm.snapshotHooks() {
 		approver, ok := reg.Hook.(ToolApprover)
 		if !ok {
@@ -556,9 +558,12 @@ func (hm *HookManager) ApproveTool(ctx context.Context, req *ToolApprovalRequest
 		if !decision.Approved {
 			return decision
 		}
+		if decision.approvedCommand != "" {
+			approvedCommand = decision.approvedCommand
+		}
 	}
 
-	return ApprovalDecision{Approved: true}
+	return ApprovalDecision{Approved: true, approvedCommand: approvedCommand}
 }
 
 func (hm *HookManager) rebuildOrdered() {

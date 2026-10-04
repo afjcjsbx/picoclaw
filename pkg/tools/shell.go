@@ -31,6 +31,41 @@ var (
 	sessionManagerMu     sync.RWMutex
 )
 
+type approvedExecCommandKey struct{}
+
+// WithApprovedExecCommand permits exactly one command string through the
+// default exec deny patterns. Hard blocks and custom deny patterns still apply.
+func WithApprovedExecCommand(ctx context.Context, command string) context.Context {
+	return context.WithValue(ctx, approvedExecCommandKey{}, command)
+}
+
+func approvedExecCommand(ctx context.Context, command string) bool {
+	approved, _ := ctx.Value(approvedExecCommandKey{}).(string)
+	return approved != "" && approved == command
+}
+
+// DefaultExecCommandNeedsApproval reports whether a command matches a default deny rule.
+func DefaultExecCommandNeedsApproval(command string) bool {
+	lower := strings.ToLower(strings.TrimSpace(command))
+	for _, pattern := range defaultDenyPatterns {
+		if pattern.MatchString(lower) {
+			return true
+		}
+	}
+	return false
+}
+
+// IsCatastrophicExecCommand reports matches that are never approvalable.
+func IsCatastrophicExecCommand(command string) bool {
+	lower := strings.ToLower(strings.TrimSpace(command))
+	for _, pattern := range catastrophicDenyPatterns {
+		if pattern.MatchString(lower) {
+			return true
+		}
+	}
+	return catastrophicHomePattern != nil && catastrophicHomePattern.MatchString(lower)
+}
+
 func getSessionManager() *SessionManager {
 	sessionManagerMu.RLock()
 	defer sessionManagerMu.RUnlock()
@@ -41,6 +76,7 @@ type ExecTool struct {
 	workingDir          string
 	timeout             time.Duration
 	denyPatterns        []*regexp.Regexp
+	enableDefaultDeny   bool
 	allowPatterns       []*regexp.Regexp
 	customAllowPatterns []*regexp.Regexp
 	allowedPathPatterns []*regexp.Regexp
@@ -99,6 +135,33 @@ var (
 		regexp.MustCompile(`\beval\b`),
 		regexp.MustCompile(`\bsource\s+.*\.sh\b`),
 	}
+	// These commands remain blocked even when the ordinary deny rules are disabled
+	// or a user approves a command in chat.
+	catastrophicDenyPatterns = []*regexp.Regexp{
+		regexp.MustCompile(`\brm\s+(?:(?:-[a-z]+|--[a-z-]+)\s+)*(?:--\s+)?["']?/(?:\*|["']?(?:\s|$|[;&|]))`),
+		regexp.MustCompile(
+			`\brm\s+(?:(?:-[a-z]+|--[a-z-]+)\s+)*(?:--\s+)?["']?(?:~|\$home|\$\{home\})(?:/|/\*|\*)?["']?(?:\s|$|[;&|])`,
+		),
+		regexp.MustCompile(`(^|[^-\w])\b(format|mkfs(?:\.[\w-]+)?|diskpart)\b\s`),
+		regexp.MustCompile(
+			`\bdd\s+.*\bof=/dev/(sd[a-z]|hd[a-z]|vd[a-z]|xvd[a-z]|nvme\d|mmcblk\d|loop\d|dm-\d|md\d|sr\d|nbd\d|r?disk\d)`,
+		),
+		regexp.MustCompile(
+			`>\s*/dev/(sd[a-z]|hd[a-z]|vd[a-z]|xvd[a-z]|nvme\d|mmcblk\d|loop\d|dm-\d|md\d|sr\d|nbd\d|r?disk\d)`,
+		),
+		regexp.MustCompile(`\bdiskutil\s+(erasedisk|partitiondisk)\b`),
+		regexp.MustCompile(`\b(clear-disk|format-volume|wipefs)\b`),
+		regexp.MustCompile(`:\(\)\s*\{.*\};\s*:`),
+	}
+	catastrophicHomePattern = func() *regexp.Regexp {
+		home, err := os.UserHomeDir()
+		if err != nil || home == "" || home == "/" {
+			return nil
+		}
+		return regexp.MustCompile(`\brm\s+(?:(?:-[a-z]+|--[a-z-]+)\s+)*(?:--\s+)?["']?` +
+			regexp.QuoteMeta(strings.ToLower(filepath.Clean(home))) +
+			`(?:/|/\*|\*)?["']?(?:\s|$|[;&|])`)
+	}()
 
 	// windowsDenyPatterns contains PowerShell-specific deny patterns that only
 	// apply on Windows, where commands are executed via powershell -Command.
@@ -160,25 +223,18 @@ func NewExecToolWithConfig(
 		enableDenyPatterns := execConfig.EnableDenyPatterns
 		allowRemote = execConfig.AllowRemote
 		if enableDenyPatterns {
-			denyPatterns = append(denyPatterns, defaultDenyPatterns...)
 			if runtime.GOOS == "windows" {
 				denyPatterns = append(denyPatterns, windowsDenyPatterns...)
 			}
-			if len(execConfig.CustomDenyPatterns) > 0 {
-				logger.InfoCF("tools", "using custom deny patterns", map[string]any{
-					"patterns": execConfig.CustomDenyPatterns,
-				})
-				for _, pattern := range execConfig.CustomDenyPatterns {
-					re, err := regexp.Compile(pattern)
-					if err != nil {
-						return nil, fmt.Errorf("invalid custom deny pattern %q: %w", pattern, err)
-					}
-					denyPatterns = append(denyPatterns, re)
-				}
-			}
 		} else {
-			// If deny patterns are disabled, we won't add any patterns, allowing all commands.
-			logger.WarnCF("tools", "deny patterns are disabled, all commands will be allowed", nil)
+			logger.WarnCF("tools", "default deny patterns are disabled; catastrophic commands remain blocked", nil)
+		}
+		for _, pattern := range execConfig.CustomDenyPatterns {
+			re, err := regexp.Compile(pattern)
+			if err != nil {
+				return nil, fmt.Errorf("invalid custom deny pattern %q: %w", pattern, err)
+			}
+			denyPatterns = append(denyPatterns, re)
 		}
 		for _, pattern := range execConfig.CustomAllowPatterns {
 			re, err := regexp.Compile(pattern)
@@ -188,7 +244,6 @@ func NewExecToolWithConfig(
 			customAllowPatterns = append(customAllowPatterns, re)
 		}
 	} else {
-		denyPatterns = append(denyPatterns, defaultDenyPatterns...)
 		if runtime.GOOS == "windows" {
 			denyPatterns = append(denyPatterns, windowsDenyPatterns...)
 		}
@@ -203,6 +258,7 @@ func NewExecToolWithConfig(
 		workingDir:          workingDir,
 		timeout:             timeout,
 		denyPatterns:        denyPatterns,
+		enableDefaultDeny:   cfg == nil || cfg.Tools.Exec.EnableDenyPatterns,
 		allowPatterns:       nil,
 		customAllowPatterns: customAllowPatterns,
 		allowedPathPatterns: allowedPathPatterns,
@@ -350,7 +406,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 		}
 	}
 
-	if guardError := t.guardCommand(command, cwd); guardError != "" {
+	if guardError := t.guardCommandWithContext(ctx, command, cwd); guardError != "" {
 		return ErrorResult(guardError)
 	}
 
@@ -1151,12 +1207,21 @@ func (t *ExecTool) commandMatchesAllowPattern(lower string) bool {
 }
 
 func (t *ExecTool) guardCommand(command, cwd string) string {
+	return t.guardCommandWithContext(context.Background(), command, cwd)
+}
+
+func (t *ExecTool) guardCommandWithContext(ctx context.Context, command, cwd string) string {
 	cmd := strings.TrimSpace(command)
 	lower := strings.ToLower(cmd)
+	if IsCatastrophicExecCommand(command) {
+		return "Command blocked by safety guard (catastrophic command)"
+	}
 
-	// Deny patterns always apply, even when a command matches a custom allow rule.
-	// Custom allow rules can permit a command, but must not disable secret-safety
-	// deny rules such as jq env access checks (#3079).
+	if t.enableDefaultDeny && DefaultExecCommandNeedsApproval(command) && !approvedExecCommand(ctx, command) {
+		return "Command blocked by safety guard (dangerous pattern detected)"
+	}
+
+	// Custom and platform deny patterns remain hard blocks, even after approval.
 	for _, pattern := range t.denyPatterns {
 		if pattern.MatchString(lower) {
 			return "Command blocked by safety guard (dangerous pattern detected)"

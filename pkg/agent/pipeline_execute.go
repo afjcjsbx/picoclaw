@@ -473,6 +473,7 @@ toolLoop:
 			}
 		}
 
+		approvedCommand := ""
 		if al.hooks != nil {
 			approval := al.hooks.ApproveTool(turnCtx, &ToolApprovalRequest{
 				Meta:      ts.eventMeta("runTurn", "turn.tool.approve"),
@@ -503,6 +504,7 @@ toolLoop:
 				}
 				continue
 			}
+			approvedCommand = approval.approvedCommand
 		}
 
 		if denyByTurnProfile() {
@@ -600,6 +602,9 @@ toolLoop:
 			ts.opts.Dispatch.MessageID(),
 			ts.opts.Dispatch.ReplyToMessageID(),
 		)
+		if toolName == "exec" && approvedCommand != "" {
+			execCtx = tools.WithApprovedExecCommand(execCtx, approvedCommand)
+		}
 		execCtx = tools.WithToolSessionContext(
 			execCtx,
 			ts.agent.ID,

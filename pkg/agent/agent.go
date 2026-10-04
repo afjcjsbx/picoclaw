@@ -48,24 +48,25 @@ type AgentLoop struct {
 	hooks              *HookManager
 
 	// Runtime state
-	running        atomic.Bool
-	stopCh         chan struct{}
-	stopOnce       sync.Once
-	contextManager ContextManager
-	fallback       *providers.FallbackChain
-	channelManager interfaces.ChannelManager
-	mediaStore     media.MediaStore
-	transcriber    asr.Transcriber
-	ttsProvider    tts.TTSProvider
-	cmdRegistry    *commands.Registry
-	mcp            mcpRuntime
-	evolution      *evolutionBridge
-	hookRuntime    hookRuntime
-	steering       *steeringQueue
-	pendingSkills  sync.Map
-	voiceModes     sync.Map
-	pendingStops   sync.Map
-	mu             sync.RWMutex
+	running              atomic.Bool
+	stopCh               chan struct{}
+	stopOnce             sync.Once
+	contextManager       ContextManager
+	fallback             *providers.FallbackChain
+	channelManager       interfaces.ChannelManager
+	mediaStore           media.MediaStore
+	transcriber          asr.Transcriber
+	ttsProvider          tts.TTSProvider
+	cmdRegistry          *commands.Registry
+	mcp                  mcpRuntime
+	evolution            *evolutionBridge
+	hookRuntime          hookRuntime
+	steering             *steeringQueue
+	pendingSkills        sync.Map
+	voiceModes           sync.Map
+	pendingStops         sync.Map
+	pendingExecApprovals sync.Map
+	mu                   sync.RWMutex
 
 	// workerSem limits concurrent turn processing workers.
 	workerSem chan struct{}
@@ -169,6 +170,9 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 		case msg, ok := <-al.bus.InboundChan():
 			if !ok {
 				return nil
+			}
+			if al.tryHandleExecApproval(ctx, msg) {
+				continue
 			}
 
 			// Resolve the session key for this message

@@ -2057,6 +2057,15 @@ func (m *Manager) SendMessage(ctx context.Context, msg bus.OutboundMessage) erro
 	if !wExists || w == nil {
 		return fmt.Errorf("channel %s has no active worker", channelName)
 	}
+	send := func(part bus.OutboundMessage) error {
+		if _, sent := m.sendWithRetry(ctx, channelName, w, part); sent {
+			return nil
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return fmt.Errorf("failed to send message to channel %s", channelName)
+	}
 
 	maxLen := 0
 	if mlp, ok := w.ch.(MessageLengthProvider); ok {
@@ -2066,13 +2075,17 @@ func (m *Manager) SendMessage(ctx context.Context, msg bus.OutboundMessage) erro
 		for _, chunk := range chunks {
 			chunkMsg := msg
 			chunkMsg.Content = chunk
-			m.sendWithRetry(ctx, channelName, w, chunkMsg)
+			if err := send(chunkMsg); err != nil {
+				return err
+			}
 		}
 	} else {
 		if len(chunks) == 1 {
 			msg.Content = chunks[0]
 		}
-		m.sendWithRetry(ctx, channelName, w, msg)
+		if err := send(msg); err != nil {
+			return err
+		}
 	}
 	return nil
 }

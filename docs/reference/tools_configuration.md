@@ -268,8 +268,8 @@ The exec tool is used to execute shell commands.
 | Config                 | Type  | Default | Description                                |
 |------------------------|-------|---------|--------------------------------------------|
 | `enabled`              | bool  | true    | Enable the exec tool                        |
-| `enable_deny_patterns` | bool  | true    | Enable default dangerous command blocking  |
-| `custom_deny_patterns` | array | []      | Custom deny patterns (regular expressions) |
+| `enable_deny_patterns` | bool  | true    | Require confirmation for default dangerous command patterns |
+| `custom_deny_patterns` | array | []      | Custom hard deny patterns (regular expressions) |
 
 ### Disabling the Exec Tool
 
@@ -295,15 +295,16 @@ PICOCLAW_TOOLS_EXEC_ENABLED=false
 
 ### Functionality
 
-- **`enable_deny_patterns`**: Set to `false` to completely disable the default dangerous command blocking patterns
-- **`custom_deny_patterns`**: Add custom deny regex patterns; commands matching these will be blocked
+- **`enable_deny_patterns`**: Default dangerous commands require `approve <token>` (or `deny <token>`) from the same sender in the same channel, chat, and topic. The request expires after `hooks.defaults.approval_timeout_ms` (60 seconds by default). Sessions without a reply-capable channel are denied immediately; unanswered requests are denied at expiry. Set to `false` to disable these confirmations.
+- **`custom_deny_patterns`**: Add custom regex patterns that remain blocked even after approval and when default patterns are disabled.
+- A small hard deny list always blocks root or home deletion, disk formatting or raw device writes, and fork bombs. Approval and `enable_deny_patterns: false` do not disable this list.
 
-### Default Blocked Command Patterns
+### Default Dangerous Command Patterns
 
-By default, PicoClaw blocks the following dangerous commands:
+The default rules cover the following commands. Catastrophic commands are always blocked; other matches require confirmation in an interactive channel:
 
 - Delete commands: `rm -rf`, `del /f/q`, `rmdir /s`
-- Disk operations: `format`, `mkfs`, `diskpart`, `dd if=`, writing to `/dev/sd*`
+- Disk operations: `format`, `mkfs`, `diskpart`, `diskutil eraseDisk`, `dd if=`, writing to block devices
 - System operations: `shutdown`, `reboot`, `poweroff`
 - Command substitution: `$()`, `${}`, backticks
 - Pipe to shell: `| sh`, `| bash`

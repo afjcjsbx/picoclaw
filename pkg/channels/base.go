@@ -157,6 +157,15 @@ func (c *BaseChannel) MaxMessageLength() int {
 //   - Otherwise (no group_trigger configured) → respond to all (permissive default)
 func (c *BaseChannel) ShouldRespondInGroup(isMentioned bool, content string) (bool, string) {
 	gt := c.groupTrigger
+	// Approval replies must reach the agent even while its turn is waiting and
+	// the group normally requires a mention or prefix.
+	parts := strings.Fields(strings.TrimSpace(content))
+	if len(parts) == 2 && len(parts[1]) == 32 &&
+		(parts[0] == "approve" || parts[0] == "deny" || parts[0] == "/approve" || parts[0] == "/deny") {
+		if token, err := hex.DecodeString(parts[1]); err == nil && len(token) == 16 {
+			return true, strings.TrimSpace(content)
+		}
+	}
 
 	// Mentioned → always respond
 	if isMentioned {
