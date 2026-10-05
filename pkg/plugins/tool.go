@@ -21,6 +21,7 @@ type PluginTool struct {
 	*tools.MCPTool
 	ID         string
 	Server     string
+	Deferred   *bool
 	definition *sdk.Tool
 	manager    *mcp.Manager
 	lifetime   context.Context
@@ -65,10 +66,35 @@ func newPluginTool(
 
 func (t *PluginTool) Name() string { return t.name }
 
+func (t *PluginTool) RemoteName() string { return t.definition.Name }
+
+// RedactCredentials removes this server's configured HTTP credentials from
+// content before automatic plugin hooks send it back to the server.
+func (t *PluginTool) RedactCredentials(content string) string {
+	conn, ok := t.manager.GetServer(t.Server)
+	if !ok {
+		return content
+	}
+	for name, value := range conn.Config.Headers {
+		lower := strings.ToLower(name)
+		if !strings.Contains(lower, "auth") && !strings.Contains(lower, "key") && !strings.Contains(lower, "token") && !strings.Contains(lower, "secret") {
+			continue
+		}
+		if len(value) > 8 {
+			content = strings.ReplaceAll(content, value, "[REDACTED]")
+		}
+		if strings.HasPrefix(strings.ToLower(value), "bearer ") && len(value) > len("Bearer ")+8 {
+			content = strings.ReplaceAll(content, value[len("Bearer "):], "[REDACTED]")
+		}
+	}
+	return content
+}
+
 func (t *PluginTool) Description() string { return "[Plugin:" + t.ID + "] " + t.MCPTool.Description() }
 
 func (t *PluginTool) ForAgent(workspace string, maxInline int, events runtimeevents.Bus) *PluginTool {
 	clone := newPluginTool(t.ID, t.Server, t.definition, t.manager, t.lifetime, t.timeout)
+	clone.Deferred = t.Deferred
 	clone.SetWorkspace(workspace)
 	clone.SetMaxInlineTextRunes(maxInline)
 	clone.SetEventPublisher(events)

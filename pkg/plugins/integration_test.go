@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -206,6 +208,49 @@ func TestPluginLoadAndExecuteIntegration(t *testing.T) {
 	}
 	if got := registry.Execute(ctx, names[0], map[string]any{"name": "Ada"}); !got.IsError {
 		t.Fatal("closed plugin accepted call")
+	}
+}
+
+func TestPluginRemoteMCPHeaderEnv(t *testing.T) {
+	t.Setenv("PICOCLAW_TEST_MCP_TOKEN", "test-token")
+	remote := sdk.NewServer(&sdk.Implementation{Name: "authenticated", Version: "1"}, nil)
+	sdk.AddTool(remote, &sdk.Tool{Name: "ping"}, func(_ context.Context, _ *sdk.CallToolRequest, _ struct{}) (*sdk.CallToolResult, any, error) {
+		return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: "pong"}}}, nil, nil
+	})
+	handler := sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return remote }, nil)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer test-token" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		handler.ServeHTTP(w, r)
+	}))
+	defer upstream.Close()
+
+	root := t.TempDir()
+	writeTestFile(t, root, "plugin.json", manifestJSON(nil))
+	writeServers(t, root, map[string]any{"remote": map[string]any{
+		"type": "streamable-http", "url": upstream.URL + "/mcp",
+		"headers": map[string]string{"Authorization": "Bearer ${PICOCLAW_TEST_MCP_TOKEN}"},
+	}})
+	cfg := testConfig(root, t.TempDir())
+	var registered []*PluginTool
+	m := NewManager(cfg, root, func(_ context.Context, c Capabilities) []Diagnostic {
+		registered = append(registered, c.Tools...)
+		return nil
+	})
+	defer m.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := m.Wait(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(registered) != 1 || len(m.Statuses()) != 1 || m.Statuses()[0].State != Ready {
+		t.Fatalf("tools=%d status=%+v", len(registered), m.Statuses())
+	}
+	result := registered[0].Execute(ctx, map[string]any{})
+	if result.IsError || !strings.Contains(result.ForLLM, "pong") {
+		t.Fatalf("authenticated MCP call failed: %+v", result)
 	}
 }
 

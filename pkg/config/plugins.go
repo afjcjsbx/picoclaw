@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"time"
 )
@@ -22,9 +23,17 @@ type PluginEntryConfig struct {
 	Enabled    bool   `json:"enabled"`
 	Path       string `json:"path,omitempty"`
 	AllowHooks bool   `json:"allow_hooks,omitempty"`
+	// MCPOverrides replaces or adds servers without changing the plugin package.
+	MCPOverrides map[string]json.RawMessage `json:"mcp_overrides,omitempty"`
+	// MCPOAuth enables saved browser OAuth credentials for named HTTP servers.
+	MCPOAuth map[string]MCPOAuthConfig `json:"mcp_oauth,omitempty"`
+	// SkillNames nil loads all package skills; an explicit empty list loads none.
+	SkillNames []string `json:"skill_names"`
 	// Agents nil grants access to all agents; an explicit empty list grants none.
-	Agents []string          `json:"agents"`
-	Config map[string]string `json:"config,omitempty"`
+	Agents []string `json:"agents"`
+	// MCPBearerTokenFiles maps MCP server names to token files inside PLUGIN_DATA.
+	MCPBearerTokenFiles map[string]string `json:"mcp_bearer_token_files,omitempty"`
+	Config              map[string]string `json:"config,omitempty"`
 }
 
 func (c PluginsConfig) Roots(workspace string) []string {

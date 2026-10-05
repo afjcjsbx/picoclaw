@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"golang.org/x/net/http/httpguts"
@@ -15,13 +17,14 @@ import (
 )
 
 type ServerSpec struct {
-	Type    string            `json:"type"`
-	Command string            `json:"command,omitempty"`
-	Args    []string          `json:"args,omitempty"`
-	Env     map[string]string `json:"env,omitempty"`
-	Cwd     string            `json:"cwd,omitempty"`
-	URL     string            `json:"url,omitempty"`
-	Headers map[string]string `json:"headers,omitempty"`
+	Type     string            `json:"type"`
+	Deferred *bool             `json:"deferred,omitempty"`
+	Command  string            `json:"command,omitempty"`
+	Args     []string          `json:"args,omitempty"`
+	Env      map[string]string `json:"env,omitempty"`
+	Cwd      string            `json:"cwd,omitempty"`
+	URL      string            `json:"url,omitempty"`
+	Headers  map[string]string `json:"headers,omitempty"`
 }
 
 func ParseMCP(data []byte) (map[string]ServerSpec, []Diagnostic, error) {
@@ -56,6 +59,16 @@ func ParseMCP(data []byte) (map[string]ServerSpec, []Diagnostic, error) {
 }
 
 func parseServer(raw []byte) (ServerSpec, error) {
+	return parseServerConfig(raw, false)
+}
+
+// parseServerOverride accepts host-only settings that aren't part of the
+// portable Agent Plugins MCP schema.
+func parseServerOverride(raw []byte) (ServerSpec, error) {
+	return parseServerConfig(raw, true)
+}
+
+func parseServerConfig(raw []byte, allowDeferred bool) (ServerSpec, error) {
 	var spec ServerSpec
 	fields, err := object(raw)
 	if err != nil {
@@ -65,6 +78,9 @@ func parseServer(raw []byte) (ServerSpec, error) {
 		return spec, fmt.Errorf("type: %w", err)
 	}
 	allowed := map[string]bool{"type": true}
+	if allowDeferred {
+		allowed["deferred"] = true
+	}
 	switch spec.Type {
 	case "stdio":
 		for _, key := range []string{"command", "args", "env", "cwd"} {
@@ -167,7 +183,7 @@ func validateEndpoint(endpoint string) error {
 }
 
 func (s ServerSpec) RuntimeConfig(root, data string) (config.MCPServerConfig, string, []string, error) {
-	cfg := config.MCPServerConfig{Enabled: true, Type: s.Type, URL: s.URL, Headers: s.Headers}
+	cfg := config.MCPServerConfig{Enabled: true, Deferred: s.Deferred, Type: s.Type, URL: s.URL, Headers: s.Headers}
 	if s.Type != "stdio" {
 		return cfg, "", nil, nil
 	}
@@ -188,4 +204,77 @@ func (s ServerSpec) RuntimeConfig(root, data string) (config.MCPServerConfig, st
 		cfg.Args = append(cfg.Args, Expand(arg, root, data))
 	}
 	return cfg, dir, Environment(root, data, s.Env), nil
+}
+
+func applyMCPBearerToken(cfg *config.MCPServerConfig, dataDir, filename string) error {
+	if cfg.Type == "stdio" {
+		return fmt.Errorf("bearer token files require an HTTP MCP server")
+	}
+	if dataDir == "" {
+		return fmt.Errorf("plugin data directory is unavailable")
+	}
+	if filename == "" || filepath.IsAbs(filename) {
+		return fmt.Errorf("bearer token file must be relative to PLUGIN_DATA")
+	}
+	root, err := canonicalRoot(dataDir)
+	if err != nil {
+		return fmt.Errorf("plugin data directory: %w", err)
+	}
+	data, err := ReadPackageFile(root, filename)
+	if err != nil {
+		return fmt.Errorf("read bearer token file: %w", err)
+	}
+	token := strings.TrimSpace(string(data))
+	if token == "" || len(token) > 8<<10 || !httpguts.ValidHeaderFieldValue("Bearer "+token) {
+		return fmt.Errorf("bearer token file contains an invalid token")
+	}
+	headers := make(map[string]string, len(cfg.Headers)+1)
+	for name, value := range cfg.Headers {
+		if !strings.EqualFold(name, "Authorization") {
+			headers[name] = value
+		}
+	}
+	headers["Authorization"] = "Bearer " + token
+	cfg.Headers = headers
+	return nil
+}
+
+var mcpHeaderEnvName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+func resolveMCPHeaderEnv(cfg *config.MCPServerConfig, overrideAuthorization bool) error {
+	if cfg.Type == "stdio" {
+		return nil
+	}
+	headers := make(map[string]string, len(cfg.Headers))
+	for _, name := range sortedKeys(cfg.Headers) {
+		if overrideAuthorization && strings.EqualFold(name, "Authorization") {
+			continue
+		}
+		value := cfg.Headers[name]
+		var resolved strings.Builder
+		for {
+			before, after, found := strings.Cut(value, "${")
+			resolved.WriteString(before)
+			if !found {
+				break
+			}
+			variable, rest, closed := strings.Cut(after, "}")
+			if !closed || !mcpHeaderEnvName.MatchString(variable) {
+				return fmt.Errorf("MCP header %q has an invalid environment reference", name)
+			}
+			secret, set := os.LookupEnv(variable)
+			if !set || secret == "" {
+				return fmt.Errorf("MCP header %q requires environment variable %q", name, variable)
+			}
+			resolved.WriteString(secret)
+			value = rest
+		}
+		result := resolved.String()
+		if !httpguts.ValidHeaderFieldValue(result) {
+			return fmt.Errorf("MCP header %q has an invalid resolved value", name)
+		}
+		headers[name] = result
+	}
+	cfg.Headers = headers
+	return nil
 }

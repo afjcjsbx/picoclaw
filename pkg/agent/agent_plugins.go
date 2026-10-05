@@ -39,6 +39,16 @@ func pluginAllowsAgent(entry config.PluginEntryConfig, id string) bool {
 	return entry.Agents == nil || slices.Contains(entry.Agents, id)
 }
 
+func pluginToolDeferred(discovery config.ToolDiscoveryConfig, override *bool) bool {
+	if !discovery.Enabled || (!discovery.UseBM25 && !discovery.UseRegex) {
+		return false
+	}
+	if override != nil {
+		return *override
+	}
+	return true
+}
+
 func (al *AgentLoop) startPlugins() *plugins.Manager {
 	al.plugins.mu.Lock()
 	defer al.plugins.mu.Unlock()
@@ -101,6 +111,7 @@ func (al *AgentLoop) publishPlugin(
 	}
 	binding.mu.Lock()
 	defer binding.mu.Unlock()
+	mcpToolsByAgent := make(map[string]map[string]*plugins.PluginTool)
 	for _, id := range registry.ListAgentIDs() {
 		if !pluginAllowsAgent(capabilities.Entry, id) {
 			continue
@@ -136,20 +147,20 @@ func (al *AgentLoop) publishPlugin(
 			binding.skills = append(binding.skills, pluginSkillRegistration{agent.ContextBuilder, capabilities.ID})
 		}
 		registeredMCP := false
+		mcpTools := map[string]*plugins.PluginTool{}
 		for _, tool := range capabilities.Tools {
 			// Agent mcpServers declarations use the installation-qualified server.
 			if !agent.AllowsMCPServer(capabilities.ID + ":" + tool.Server) {
 				continue
 			}
-			hidden := cfg.Tools.MCP.Discovery.Enabled &&
-				(cfg.Tools.MCP.Discovery.UseBM25 || cfg.Tools.MCP.Discovery.UseRegex)
-			if register(
-				tool.ForAgent(agent.Workspace, cfg.Tools.MCP.GetMaxInlineTextChars(), al.runtimeEvents),
-				hidden,
-			) {
+			hidden := pluginToolDeferred(cfg.Tools.MCP.Discovery, tool.Deferred)
+			agentTool := tool.ForAgent(agent.Workspace, cfg.Tools.MCP.GetMaxInlineTextChars(), al.runtimeEvents)
+			if register(agentTool, hidden) {
 				registeredMCP = true
+				mcpTools[tool.Server+"\x00"+tool.RemoteName()] = agentTool
 			}
 		}
+		mcpToolsByAgent[id] = mcpTools
 		if registeredMCP && cfg.Tools.MCP.Discovery.Enabled {
 			agent.ContextBuilder.WithToolDiscovery(cfg.Tools.MCP.Discovery.UseBM25, cfg.Tools.MCP.Discovery.UseRegex)
 			d := cfg.Tools.MCP.Discovery
@@ -173,6 +184,42 @@ func (al *AgentLoop) publishPlugin(
 		if ctx.Err() != nil {
 			break
 		}
+		if hook.MCP != nil {
+			observeKinds, observeEnabled, err := processHookObserveKindsFromConfig(hook.Observe)
+			if err != nil {
+				report("hook:"+hook.Name, err)
+				continue
+			}
+			observeAll := observeEnabled && len(observeKinds) == 0
+			for _, id := range registry.ListAgentIDs() {
+				if !pluginAllowsAgent(capabilities.Entry, id) {
+					continue
+				}
+				tool := mcpToolsByAgent[id][hook.MCP.Server+"\x00"+hook.MCP.Tool]
+				if tool == nil {
+					report("hook:"+hook.Name, fmt.Errorf("MCP tool %q on server %q is unavailable or not allowed for agent %q", hook.MCP.Tool, hook.MCP.Server, id))
+					continue
+				}
+				name := "plugin:" + hook.Name + ":" + id
+				registration := HookRegistration{
+					Name:            name,
+					Source:          HookSourceInProcess,
+					ObserverTimeout: pluginMCPHookTimeout,
+					Hook:            newPluginMCPHook(al, capabilities.ID, id, capabilities.Entry.Agents, hook, tool, cfg, observeKinds, observeAll),
+				}
+				if err := al.MountHook(registration); err != nil {
+					report("hook:"+hook.Name, err)
+					continue
+				}
+				binding.hooks = append(binding.hooks, name)
+			}
+			continue
+		}
+		observeKinds, observe, err := processHookObserveKindsFromConfig(hook.Observe)
+		if err != nil {
+			report("hook:"+hook.Name, err)
+			continue
+		}
 		initCtx, cancel := context.WithTimeout(ctx, cfg.Plugins.InitTimeout())
 		opts := ProcessHookOptions{
 			Command:      hook.Command,
@@ -180,8 +227,8 @@ func (al *AgentLoop) publishPlugin(
 			Env:          hook.Env,
 			ExactEnv:     true,
 			Config:       hook.Config,
-			Observe:      len(hook.Observe) > 0,
-			ObserveKinds: hook.Observe,
+			Observe:      observe,
+			ObserveKinds: observeKinds,
 			InterceptLLM: slices.Contains(hook.Intercept, "before_llm") ||
 				slices.Contains(hook.Intercept, "after_llm"),
 			InterceptTool: slices.Contains(hook.Intercept, "before_tool") ||

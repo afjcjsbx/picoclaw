@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strings"
 )
 
 type hookSpec struct {
@@ -14,6 +15,7 @@ type hookSpec struct {
 	Cwd       string            `json:"cwd,omitempty"`
 	Observe   []string          `json:"observe,omitempty"`
 	Intercept []string          `json:"intercept,omitempty"`
+	MCP       *MCPHookAction    `json:"mcp,omitempty"`
 }
 
 // An extension may be inline or file-based, but not both. This avoids ambiguous
@@ -45,10 +47,6 @@ func discoverHooks(manifest PluginManifest, pc PluginContext) ([]Hook, []Diagnos
 	if !inline && !hasFile {
 		return nil, nil
 	}
-	if pc.DataDir == "" {
-		report(fmt.Errorf("plugin data directory is unavailable"))
-		return nil, diagnostics
-	}
 	obj, err := object(raw)
 	if err != nil {
 		report(err)
@@ -78,7 +76,7 @@ func discoverHooks(manifest PluginManifest, pc PluginContext) ([]Hook, []Diagnos
 		bad := false
 		for key := range fields {
 			switch key {
-			case "name", "command", "args", "env", "cwd", "observe", "intercept":
+			case "name", "command", "args", "env", "cwd", "observe", "intercept", "mcp":
 			default:
 				report(fmt.Errorf("unknown hook field %q", key))
 				bad = true
@@ -105,6 +103,63 @@ func discoverHooks(manifest PluginManifest, pc PluginContext) ([]Hook, []Diagnos
 			}
 		}
 		if bad {
+			continue
+		}
+		if spec.MCP != nil {
+			if spec.Command != "" || len(spec.Args) > 0 || len(spec.Env) > 0 || spec.Cwd != "" {
+				report(fmt.Errorf("hook %q cannot combine an MCP action with process launch fields", spec.Name))
+				continue
+			}
+			if len(spec.Observe)+len(spec.Intercept) == 0 {
+				report(fmt.Errorf("MCP hook %q must declare observe or intercept events", spec.Name))
+				continue
+			}
+			if strings.TrimSpace(spec.MCP.Server) == "" || strings.TrimSpace(spec.MCP.Tool) == "" {
+				report(fmt.Errorf("MCP hook %q requires a valid server and tool name", spec.Name))
+				continue
+			}
+			mcpFields, err := object(fields["mcp"])
+			if err != nil {
+				report(fmt.Errorf("MCP hook %q: %w", spec.Name, err))
+				continue
+			}
+			for key := range mcpFields {
+				switch key {
+				case "server", "tool", "arguments", "result":
+				default:
+					report(fmt.Errorf("MCP hook %q has unknown action field %q", spec.Name, key))
+					bad = true
+				}
+			}
+			if bad {
+				continue
+			}
+			switch spec.MCP.Result {
+			case "", "ignore":
+			case "append_to_user_message":
+				if len(spec.Intercept) != 1 || spec.Intercept[0] != "before_llm" || len(spec.Observe) != 0 {
+					report(fmt.Errorf("MCP hook %q can append results only on before_llm", spec.Name))
+					continue
+				}
+			case "approval":
+				if len(spec.Intercept) != 1 || spec.Intercept[0] != "approve_tool" || len(spec.Observe) != 0 {
+					report(fmt.Errorf("MCP hook %q can return approval only on approve_tool", spec.Name))
+					continue
+				}
+			default:
+				report(fmt.Errorf("MCP hook %q has unsupported result mode %q", spec.Name, spec.MCP.Result))
+				continue
+			}
+			result = append(result, Hook{
+				Name:      pc.ID + ":" + spec.Name,
+				Observe:   spec.Observe,
+				Intercept: spec.Intercept,
+				MCP:       spec.MCP,
+			})
+			continue
+		}
+		if pc.DataDir == "" {
+			report(fmt.Errorf("plugin data directory is unavailable"))
 			continue
 		}
 		// Apply the same strict launch validation as portable stdio servers.

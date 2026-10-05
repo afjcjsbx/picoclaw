@@ -99,4 +99,14 @@ type Hook struct {
 	Observe   []string
 	Intercept []string
 	Config    map[string]string
+	MCP       *MCPHookAction
+}
+
+// MCPHookAction maps declared PicoClaw hook events to a tool on the plugin's
+// MCP server. Result selects how the tool output affects the active hook.
+type MCPHookAction struct {
+	Server    string         `json:"server"`
+	Tool      string         `json:"tool"`
+	Arguments map[string]any `json:"arguments,omitempty"`
+	Result    string         `json:"result,omitempty"`
 }

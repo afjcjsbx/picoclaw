@@ -241,45 +241,91 @@ func (p *packagePlugin) Initialize(pc PluginContext) error {
 	for _, d := range diagnostics {
 		p.host.diagnostic(d)
 	}
+	if p.entry.SkillNames != nil {
+		kept := skillEntries[:0]
+		for _, skill := range skillEntries {
+			for _, name := range p.entry.SkillNames {
+				if skill.Info.Name == pc.ID+":"+name {
+					kept = append(kept, skill)
+					break
+				}
+			}
+		}
+		skillEntries = kept
+	}
 	hooks, diagnostics := discoverHooks(p.manifest, pc)
 	for _, d := range diagnostics {
 		p.host.diagnostic(d)
 	}
-	publish(Capabilities{Skills: skillEntries, Hooks: hooks})
-	if !componentExists(pc.Root, "mcp.json") {
-		return nil
+	var mcpHooks, processHooks []Hook
+	for _, hook := range hooks {
+		if hook.MCP != nil {
+			mcpHooks = append(mcpHooks, hook)
+		} else {
+			processHooks = append(processHooks, hook)
+		}
 	}
-	data, err := ReadPackageFile(pc.Root, "mcp.json")
-	if err != nil {
-		report("mcp", err)
-		return nil
+	publish(Capabilities{Skills: skillEntries, Hooks: processHooks})
+	servers := map[string]ServerSpec{}
+	if componentExists(pc.Root, "mcp.json") {
+		data, err := ReadPackageFile(pc.Root, "mcp.json")
+		if err != nil {
+			report("mcp", err)
+			return nil
+		}
+		parsed, diagnostics, err := ParseMCP(data)
+		for _, d := range diagnostics {
+			d.Plugin = pc.ID
+			p.host.diagnostic(d)
+		}
+		if err != nil {
+			report("mcp", err)
+			return nil
+		}
+		servers = parsed
 	}
-	servers, diagnostics, err := ParseMCP(data)
-	for _, d := range diagnostics {
-		d.Plugin = pc.ID
-		p.host.diagnostic(d)
+	for _, name := range sortedKeys(p.entry.MCPOverrides) {
+		spec, err := parseServerOverride(p.entry.MCPOverrides[name])
+		if err != nil {
+			report("mcp:"+name, err)
+			delete(servers, name)
+			continue
+		}
+		servers[name] = spec
 	}
-	if err != nil {
-		report("mcp", err)
-		return nil
+	var availableMCPHooks []Hook
+	for _, hook := range mcpHooks {
+		if _, ok := servers[hook.MCP.Server]; !ok {
+			report("hook:"+hook.Name, fmt.Errorf("MCP server %q is not configured", hook.MCP.Server))
+			continue
+		}
+		availableMCPHooks = append(availableMCPHooks, hook)
 	}
 	for _, name := range sortedKeys(servers) {
 		if pc.Context.Err() != nil {
 			return pc.Context.Err()
 		}
-		p.loadServer(pc, name, servers[name], publish)
+		var serverHooks []Hook
+		for _, hook := range availableMCPHooks {
+			if hook.MCP.Server == name {
+				serverHooks = append(serverHooks, hook)
+			}
+		}
+		p.loadServer(pc, name, servers[name], serverHooks, publish)
 	}
 	return nil
 }
 
-func (p *packagePlugin) loadServer(pc PluginContext, name string, spec ServerSpec, publish func(Capabilities)) {
+func (p *packagePlugin) loadServer(pc PluginContext, name string, spec ServerSpec, hooks []Hook, publish func(Capabilities)) {
 	report := func(err error) {
 		p.host.diagnostic(Diagnostic{Plugin: pc.ID, Component: "mcp:" + name, Message: err.Error()})
 	}
+	var pluginTools []*PluginTool
 	defer func() {
 		if panicValue := recover(); panicValue != nil {
 			report(fmt.Errorf("panic: %v", panicValue))
 		}
+		publish(Capabilities{Tools: pluginTools, Hooks: hooks})
 	}()
 	if spec.Type == "stdio" && pc.DataDir == "" {
 		report(fmt.Errorf("plugin data directory is unavailable"))
@@ -290,12 +336,27 @@ func (p *packagePlugin) loadServer(pc PluginContext, name string, spec ServerSpe
 		report(err)
 		return
 	}
+	if oauth, ok := p.entry.MCPOAuth[name]; ok {
+		cfg.OAuth = &oauth
+	}
+	filename, overrideAuthorization := p.entry.MCPBearerTokenFiles[name]
+	if err := resolveMCPHeaderEnv(&cfg, overrideAuthorization); err != nil {
+		report(err)
+		return
+	}
+	if overrideAuthorization {
+		if err := applyMCPBearerToken(&cfg, pc.DataDir, filename); err != nil {
+			report(err)
+			return
+		}
+	}
 	if err := p.manager.ConnectPluginServer(
 		pc.Context,
 		name,
 		cfg,
 		mcp.PluginRuntimeOptions{
 			Lifetime:    pc.Context,
+			OAuthName:   pc.ID + ":" + name,
 			Directory:   dir,
 			Environment: env,
 			Timeout:     pc.InitTimeout,
@@ -309,13 +370,13 @@ func (p *packagePlugin) loadServer(pc PluginContext, name string, spec ServerSpe
 	if !ok {
 		return
 	}
-	var pluginTools []*PluginTool
 	for _, definition := range conn.Tools {
 		if definition == nil || definition.Name == "" {
 			report(fmt.Errorf("server returned an unnamed tool"))
 			continue
 		}
-		pluginTools = append(pluginTools, newPluginTool(pc.ID, name, definition, p.manager, pc.Context, pc.CallTimeout))
+		tool := newPluginTool(pc.ID, name, definition, p.manager, pc.Context, pc.CallTimeout)
+		tool.Deferred = cfg.Deferred
+		pluginTools = append(pluginTools, tool)
 	}
-	publish(Capabilities{Tools: pluginTools})
 }
