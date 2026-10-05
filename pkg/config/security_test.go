@@ -55,7 +55,16 @@ func TestWebsiteBlocklist(t *testing.T) {
 
 func TestLoadWebsiteBlocklistFromSecurityYAML(t *testing.T) {
 	path := filepath.Join(t.TempDir(), SecurityConfigFile)
-	require.NoError(t, os.WriteFile(path, []byte("security:\n  website_blocklist:\n    enabled: true\n    domains:\n      - '*.internal.company.com'\n"), 0o600))
+	require.NoError(
+		t,
+		os.WriteFile(
+			path,
+			[]byte(
+				"security:\n  website_blocklist:\n    enabled: true\n    domains:\n      - '*.internal.company.com'\n",
+			),
+			0o600,
+		),
+	)
 
 	cfg := &Config{}
 	require.NoError(t, loadSecurityConfig(cfg, path))
@@ -64,7 +73,13 @@ func TestLoadWebsiteBlocklistFromSecurityYAML(t *testing.T) {
 
 func TestWebsiteBlocklistConfigJSON(t *testing.T) {
 	var cfg Config
-	require.NoError(t, json.Unmarshal([]byte(`{"security":{"website_blocklist":{"enabled":true,"domains":["admin.example.com"]}}}`), &cfg))
+	require.NoError(
+		t,
+		json.Unmarshal(
+			[]byte(`{"security":{"website_blocklist":{"enabled":true,"domains":["admin.example.com"]}}}`),
+			&cfg,
+		),
+	)
 	assert.True(t, cfg.Security.WebsiteBlocklist.Blocks("admin.example.com"))
 }
 

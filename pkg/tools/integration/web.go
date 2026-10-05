@@ -2292,7 +2292,13 @@ func NewWebFetchToolWithProxy(
 	privateHostWhitelist []string,
 	websiteBlocklist ...config.WebsiteBlocklistConfig,
 ) (*WebFetchTool, error) {
-	return NewWebFetchToolWithConfig(maxChars, proxy, format, fetchLimitBytes, privateHostWhitelist, websiteBlocklist...)
+	return NewWebFetchToolWithConfig(
+		maxChars,
+		proxy,
+		format,
+		fetchLimitBytes,
+		privateHostWhitelist,
+		websiteBlocklist...)
 }
 
 func NewWebFetchToolWithConfig(

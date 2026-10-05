@@ -35,7 +35,7 @@ func init() {
 type Config struct {
 	// Config schema version for migration.
 	Version   int             `json:"version"             yaml:"-"`
-	Security  SecurityConfig  `json:"security,omitempty" yaml:"security,omitempty"`
+	Security  SecurityConfig  `json:"security,omitempty"  yaml:"security,omitempty"`
 	Isolation IsolationConfig `json:"isolation,omitempty" yaml:"-"`
 	Agents    AgentsConfig    `json:"agents"              yaml:"-"`
 	Session   SessionConfig   `json:"session,omitempty"   yaml:"-"`

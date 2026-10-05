@@ -2369,7 +2369,9 @@ type stubSearchProvider struct {
 
 func TestWebSearchToolFiltersBlockedDomains(t *testing.T) {
 	tool := &WebSearchTool{
-		provider:   &stubSearchProvider{result: "Results for: query\nSecret generated summary\n1. Private\n   https://admin.example.com/page\n   secret content\n2. Public\n   https://public.example.com/page\n   public content"},
+		provider: &stubSearchProvider{
+			result: "Results for: query\nSecret generated summary\n1. Private\n   https://admin.example.com/page\n   secret content\n2. Public\n   https://public.example.com/page\n   public content",
+		},
 		maxResults: 2,
 		websiteBlocklist: config.WebsiteBlocklistConfig{
 			Enabled: true,
@@ -2380,7 +2382,9 @@ func TestWebSearchToolFiltersBlockedDomains(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("Execute() returned error: %s", result.ForLLM)
 	}
-	if strings.Contains(result.ForLLM, "Secret generated summary") || strings.Contains(result.ForLLM, "secret content") || strings.Contains(result.ForLLM, "admin.example.com") {
+	if strings.Contains(result.ForLLM, "Secret generated summary") ||
+		strings.Contains(result.ForLLM, "secret content") ||
+		strings.Contains(result.ForLLM, "admin.example.com") {
 		t.Fatalf("blocked result leaked: %s", result.ForLLM)
 	}
 	if !strings.Contains(result.ForLLM, "public content") {
@@ -2406,7 +2410,11 @@ func TestWebFetchToolBlocksInitialAndRedirectHosts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := tool.client.CheckRedirect(redirect, nil); err == nil || !strings.Contains(err.Error(), "website blocked by policy") {
+	if err := tool.client.CheckRedirect(
+		redirect,
+		nil,
+	); err == nil ||
+		!strings.Contains(err.Error(), "website blocked by policy") {
 		t.Fatalf("blocked redirect error = %v", err)
 	}
 }
