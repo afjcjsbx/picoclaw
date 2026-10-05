@@ -65,8 +65,10 @@ var (
 	reSogouTitle = regexp.MustCompile(
 		`<a\s+class="?resultLink"?\s+href="([^"]+)"[^>]*id="sogou_vr_\d+_\d+"[^>]*>\s*(.*?)\s*</a>`,
 	)
-	reSogouSnippet = regexp.MustCompile(`<div class="clamp\d*[^"]*">\s*(.*?)\s*</div>`)
-	reSogouRealURL = regexp.MustCompile(`url=([^&]+)`)
+	reSogouSnippet      = regexp.MustCompile(`<div class="clamp\d*[^"]*">\s*(.*?)\s*</div>`)
+	reSogouRealURL      = regexp.MustCompile(`url=([^&]+)`)
+	reSearchResultStart = regexp.MustCompile(`(?m)^[ \t]*\d+[.)][ \t]+`)
+	reWebURL            = regexp.MustCompile(`https?://[^\s<>"']+`)
 )
 
 type APIKeyPool struct {
@@ -1631,6 +1633,7 @@ type WebSearchTool struct {
 	provider         SearchProvider
 	maxResults       int
 	providerResolver func(query string) (SearchProvider, int)
+	websiteBlocklist config.WebsiteBlocklistConfig
 }
 
 type WebSearchToolOptions struct {
@@ -1674,6 +1677,7 @@ type WebSearchToolOptions struct {
 	BaiduSearchMaxResults int
 	BaiduSearchEnabled    bool
 	Proxy                 string
+	WebsiteBlocklist      config.WebsiteBlocklistConfig
 }
 
 func WebSearchToolOptionsFromConfig(cfg *config.Config) WebSearchToolOptions {
@@ -1718,6 +1722,7 @@ func WebSearchToolOptionsFromConfig(cfg *config.Config) WebSearchToolOptions {
 		BaiduSearchMaxResults: cfg.Tools.Web.BaiduSearch.MaxResults,
 		BaiduSearchEnabled:    cfg.Tools.Web.BaiduSearch.Enabled,
 		Proxy:                 cfg.Tools.Web.Proxy,
+		WebsiteBlocklist:      cfg.Security.WebsiteBlocklist,
 	}
 }
 
@@ -2117,6 +2122,7 @@ func NewWebSearchTool(opts WebSearchToolOptions) (*WebSearchTool, error) {
 		provider:         provider,
 		maxResults:       maxResults,
 		providerResolver: resolver,
+		websiteBlocklist: opts.WebsiteBlocklist,
 	}, nil
 }
 
@@ -2196,6 +2202,7 @@ func (t *WebSearchTool) Execute(ctx context.Context, args map[string]any) *ToolR
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("search failed: %v", err))
 	}
+	result = filterBlockedSearchResults(result, t.websiteBlocklist)
 
 	return &ToolResult{
 		ForLLM:  result,
@@ -2203,13 +2210,69 @@ func (t *WebSearchTool) Execute(ctx context.Context, args map[string]any) *ToolR
 	}
 }
 
+func filterBlockedSearchResults(result string, blocklist config.WebsiteBlocklistConfig) string {
+	if !blocklist.IsEnabled() {
+		return result
+	}
+	starts := reSearchResultStart.FindAllStringIndex(result, -1)
+	if len(starts) == 0 {
+		if hasBlockedWebURL(result, blocklist) {
+			return "Search results withheld by website blocklist"
+		}
+		return result
+	}
+	header := result[:starts[0][0]]
+	var items []string
+	blockedItem := false
+	for i, start := range starts {
+		end := len(result)
+		if i+1 < len(starts) {
+			end = starts[i+1][0]
+		}
+		item := result[start[0]:end]
+		if hasBlockedWebURL(item, blocklist) {
+			blockedItem = true
+		} else {
+			items = append(items, item)
+		}
+	}
+	if blockedItem {
+		header, _, _ = strings.Cut(header, "\n")
+		if !strings.HasPrefix(strings.TrimSpace(header), "Results for:") {
+			header = ""
+		}
+	}
+	if hasBlockedWebURL(header, blocklist) {
+		header = ""
+	}
+	if len(items) == 0 {
+		if header != "" {
+			return header + "\nNo results available (website blocklist)"
+		}
+		return "No results available (website blocklist)"
+	}
+	return strings.TrimSpace(header + "\n" + strings.Join(items, ""))
+}
+
+func hasBlockedWebURL(text string, blocklist config.WebsiteBlocklistConfig) bool {
+	for _, match := range reWebURL.FindAllString(text, -1) {
+		match = strings.TrimRight(match, ".,;:!?)]}")
+		parsed, err := url.Parse(match)
+		if err == nil && blocklist.Blocks(parsed.Hostname()) {
+			return true
+		}
+	}
+	return false
+}
+
 type WebFetchTool struct {
-	maxChars        int
-	proxy           string
-	client          *http.Client
-	format          string
-	fetchLimitBytes int64
-	whitelist       *utils.PrivateHostWhitelist
+	maxChars         int
+	proxy            string
+	client           *http.Client
+	format           string
+	fetchLimitBytes  int64
+	whitelist        *utils.PrivateHostWhitelist
+	websiteBlocklist config.WebsiteBlocklistConfig
 }
 
 func NewWebFetchTool(maxChars int, format string, fetchLimitBytes int64) (*WebFetchTool, error) {
@@ -2227,8 +2290,9 @@ func NewWebFetchToolWithProxy(
 	format string,
 	fetchLimitBytes int64,
 	privateHostWhitelist []string,
+	websiteBlocklist ...config.WebsiteBlocklistConfig,
 ) (*WebFetchTool, error) {
-	return NewWebFetchToolWithConfig(maxChars, proxy, format, fetchLimitBytes, privateHostWhitelist)
+	return NewWebFetchToolWithConfig(maxChars, proxy, format, fetchLimitBytes, privateHostWhitelist, websiteBlocklist...)
 }
 
 func NewWebFetchToolWithConfig(
@@ -2237,6 +2301,7 @@ func NewWebFetchToolWithConfig(
 	format string,
 	fetchLimitBytes int64,
 	privateHostWhitelist []string,
+	websiteBlocklist ...config.WebsiteBlocklistConfig,
 ) (*WebFetchTool, error) {
 	if maxChars <= 0 {
 		maxChars = defaultMaxChars
@@ -2260,14 +2325,27 @@ func NewWebFetchToolWithConfig(
 	if fetchLimitBytes <= 0 {
 		fetchLimitBytes = 10 * 1024 * 1024 // Security Fallback
 	}
-	return &WebFetchTool{
+	tool := &WebFetchTool{
 		maxChars:        maxChars,
 		proxy:           proxy,
 		client:          client,
 		format:          format,
 		fetchLimitBytes: fetchLimitBytes,
 		whitelist:       whitelist,
-	}, nil
+	}
+	if len(websiteBlocklist) > 0 {
+		tool.websiteBlocklist = websiteBlocklist[0]
+		if tool.websiteBlocklist.IsEnabled() {
+			checkRedirect := client.CheckRedirect
+			client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+				if tool.websiteBlocklist.Blocks(req.URL.Hostname()) {
+					return fmt.Errorf("website blocked by policy: %s", req.URL.Hostname())
+				}
+				return checkRedirect(req, via)
+			}
+		}
+	}
+	return tool, nil
 }
 
 func (t *WebFetchTool) Name() string {
@@ -2313,6 +2391,9 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 
 	if parsedURL.Host == "" {
 		return ErrorResult("missing domain in URL")
+	}
+	if t.websiteBlocklist.Blocks(parsedURL.Hostname()) {
+		return ErrorResult(fmt.Sprintf("website blocked by policy: %s", parsedURL.Hostname()))
 	}
 
 	// Lightweight pre-flight: block obvious localhost/literal-IP without DNS resolution.

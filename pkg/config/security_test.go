@@ -30,6 +30,44 @@ func TestSecurityConfig(t *testing.T) {
 	})
 }
 
+func TestWebsiteBlocklist(t *testing.T) {
+	policy := WebsiteBlocklistConfig{
+		Enabled: true,
+		Domains: []string{"*.internal.company.com", "admin.example.com"},
+	}
+	for host, want := range map[string]bool{
+		"internal.company.com":            true,
+		"api.internal.company.com":        true,
+		"ADMIN.EXAMPLE.COM.":              true,
+		"notadmin.example.com":            false,
+		"company.com":                     false,
+		"admin.example.com.attacker.test": false,
+	} {
+		if got := policy.Blocks(host); got != want {
+			t.Errorf("Blocks(%q) = %v, want %v", host, got, want)
+		}
+	}
+	policy.Enabled = false
+	if policy.Blocks("admin.example.com") {
+		t.Fatal("disabled blocklist blocked a domain")
+	}
+}
+
+func TestLoadWebsiteBlocklistFromSecurityYAML(t *testing.T) {
+	path := filepath.Join(t.TempDir(), SecurityConfigFile)
+	require.NoError(t, os.WriteFile(path, []byte("security:\n  website_blocklist:\n    enabled: true\n    domains:\n      - '*.internal.company.com'\n"), 0o600))
+
+	cfg := &Config{}
+	require.NoError(t, loadSecurityConfig(cfg, path))
+	assert.True(t, cfg.Security.WebsiteBlocklist.Blocks("api.internal.company.com"))
+}
+
+func TestWebsiteBlocklistConfigJSON(t *testing.T) {
+	var cfg Config
+	require.NoError(t, json.Unmarshal([]byte(`{"security":{"website_blocklist":{"enabled":true,"domains":["admin.example.com"]}}}`), &cfg))
+	assert.True(t, cfg.Security.WebsiteBlocklist.Blocks("admin.example.com"))
+}
+
 func TestSecurityPath(t *testing.T) {
 	tests := []struct {
 		name      string

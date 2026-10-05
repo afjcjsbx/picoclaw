@@ -61,7 +61,7 @@ func turnProfileNativeSearchCallable(
 	if cfg == nil || agent == nil {
 		return false
 	}
-	if !cfg.Tools.IsToolEnabled("web") || !cfg.Tools.Web.PreferNative {
+	if !cfg.Tools.IsToolEnabled("web") || cfg.Security.WebsiteBlocklist.IsEnabled() || !cfg.Tools.Web.PreferNative {
 		return false
 	}
 	if !turnProfileToolAllowed(profile, "web_search") {

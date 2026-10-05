@@ -36,6 +36,12 @@
     "cold_path_trigger": "after_turn",
     "cold_path_times": []
   },
+  "security": {
+    "website_blocklist": {
+      "enabled": false,
+      "domains": []
+    }
+  },
   "model_list": [
     {
       "model_name": "gpt-5.4",

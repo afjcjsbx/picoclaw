@@ -596,6 +596,34 @@ func TestPipeline_CallLLM_UsesNativeSearchWithoutClientWebSearchTool(t *testing.
 	}
 }
 
+func TestPipeline_CallLLM_DisablesNativeSearchWithWebsiteBlocklist(t *testing.T) {
+	provider := &nativeSearchCaptureProvider{}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	al.cfg.Tools.Web.Enabled = true
+	al.cfg.Tools.Web.PreferNative = true
+	al.cfg.Security.WebsiteBlocklist = config.WebsiteBlocklistConfig{
+		Enabled: true,
+		Domains: []string{"admin.example.com"},
+	}
+
+	pipeline := NewPipeline(al)
+	ts := newTurnState(agent, makeTestProcessOpts("test-session"), turnEventScope{
+		turnID:  "turn-1",
+		context: newTurnContext(nil, nil, nil),
+	})
+	exec, err := pipeline.SetupTurn(context.Background(), ts)
+	if err != nil {
+		t.Fatalf("SetupTurn failed: %v", err)
+	}
+	if _, err = pipeline.CallLLM(context.Background(), context.Background(), ts, exec, 1); err != nil {
+		t.Fatalf("CallLLM failed: %v", err)
+	}
+	if got, _ := provider.lastOpts["native_search"].(bool); got {
+		t.Fatalf("expected native_search to be disabled, got %#v", provider.lastOpts["native_search"])
+	}
+}
+
 func TestPipeline_CallLLM_TimeoutRetry(t *testing.T) {
 	errorPrv := &errorProvider{errType: "timeout"}
 	al, agent, cleanup := newTurnCoordTestLoop(t, errorPrv)

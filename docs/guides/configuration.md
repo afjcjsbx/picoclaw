@@ -732,6 +732,23 @@ chmod 600 ~/.picoclaw/.security.yml
 
 For complete documentation, see [`../security/security_configuration.md`](../security/security_configuration.md).
 
+#### Website Blocklist
+
+To prevent web tools from returning or fetching selected domains, add a blocklist to `config.json`:
+
+```json
+{
+  "security": {
+    "website_blocklist": {
+      "enabled": true,
+      "domains": ["*.internal.company.com", "admin.example.com"]
+    }
+  }
+}
+```
+
+The policy filters `web_search` results and blocks `web_fetch`, including redirects. When enabled, provider-native web search is disabled so results pass through the same policy. `*.internal.company.com` matches the base domain and its subdomains.
+
 #### All Supported Vendors
 
 | Vendor                  | `provider` Value  | Default API Base                                    | Protocol  | API Key                                                          |
