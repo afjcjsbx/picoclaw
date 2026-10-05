@@ -1341,6 +1341,15 @@ func (c *SkillRegistryConfig) DecodeParam(target any) error {
 	return json.Unmarshal(data, target)
 }
 
+// MCPOAuthConfig enables browser-based OAuth for a remote MCP server.
+// Empty client_id uses dynamic client registration.
+type MCPOAuthConfig struct {
+	ClientID     string   `json:"client_id,omitempty"`
+	Issuer       string   `json:"issuer,omitempty"`
+	Scopes       []string `json:"scopes,omitempty"`
+	CallbackPort int      `json:"callback_port,omitempty"`
+}
+
 // MCPServerConfig defines configuration for a single MCP server
 type MCPServerConfig struct {
 	// Enabled indicates whether this MCP server is active
@@ -1367,6 +1376,8 @@ type MCPServerConfig struct {
 	URL string `json:"url,omitempty"`
 	// Headers are HTTP headers to send with requests (sse/http only)
 	Headers map[string]string `json:"headers,omitempty"`
+	// OAuth opts into browser login and persisted credentials.
+	OAuth *MCPOAuthConfig `json:"oauth,omitempty"`
 }
 
 // MCPConfig defines configuration for all MCP servers
