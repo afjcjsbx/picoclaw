@@ -1051,6 +1051,7 @@ type fileSystem interface {
 	ReadFile(path string) ([]byte, error)
 	WriteFile(path string, data []byte) error
 	ReadDir(path string) ([]os.DirEntry, error)
+	Stat(path string) (fs.FileInfo, error)
 	Open(path string) (fs.File, error)
 }
 
@@ -1073,6 +1074,10 @@ func (h *hostFs) ReadFile(path string) ([]byte, error) {
 
 func (h *hostFs) ReadDir(path string) ([]os.DirEntry, error) {
 	return os.ReadDir(path)
+}
+
+func (h *hostFs) Stat(path string) (fs.FileInfo, error) {
+	return os.Stat(path)
 }
 
 func (h *hostFs) WriteFile(path string, data []byte) error {
@@ -1209,6 +1214,16 @@ func (r *sandboxFs) ReadDir(path string) ([]os.DirEntry, error) {
 	return entries, err
 }
 
+func (r *sandboxFs) Stat(path string) (fs.FileInfo, error) {
+	var info fs.FileInfo
+	err := r.execute(path, func(root *os.Root, relPath string) error {
+		var statErr error
+		info, statErr = root.Stat(relPath)
+		return statErr
+	})
+	return info, err
+}
+
 func (r *sandboxFs) Open(path string) (fs.File, error) {
 	var f fs.File
 	err := r.execute(path, func(root *os.Root, relPath string) error {
@@ -1260,6 +1275,13 @@ func (w *whitelistFs) ReadDir(path string) ([]os.DirEntry, error) {
 		return w.host.ReadDir(path)
 	}
 	return w.sandbox.ReadDir(path)
+}
+
+func (w *whitelistFs) Stat(path string) (fs.FileInfo, error) {
+	if w.matches(path) {
+		return w.host.Stat(path)
+	}
+	return w.sandbox.Stat(path)
 }
 
 func (w *whitelistFs) Open(path string) (fs.File, error) {

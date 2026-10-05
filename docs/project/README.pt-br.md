@@ -56,6 +56,13 @@
 
 ## 📢 Novidades
 
+2026-09-29 🚀 **[v0.4.0 Released!](https://github.com/afjcjsbx/picoclaw/releases/tag/v0.4.0)** This substantial release adds MCP CLI management and Web UI configuration, native Anthropic Messages API support, configurable web search (including Keenable and Kagi), configurable logging and virtual models, cross-platform serial-tool support, enhanced hooks and isolation, plus numerous channel, provider, security, and build fixes.
+
+2026-09-28 🌱 **Project revived!** Development has resumed and will continue to be actively maintained in this fork.
+
+<details>
+<summary>Earlier news...</summary>
+
 2026-05-11 🛒 **LicheeRV-Claw no AliExpress!** Agora você pode comprar o LicheeRV-Claw no [AliExpress](https://www.aliexpress.com/item/1005006519668532.html), facilitando testar o PicoClaw em hardware RISC-V compacto.
 
 <p align="center">
@@ -64,7 +71,7 @@
   </a>
 </p>
 
-2026-03-31 📱 **Suporte Android!** PicoClaw agora roda no Android! Baixe o APK em [picoclaw.io](https://picoclaw.io/download)
+2026-03-31 📱 **Suporte Android!** PicoClaw agora roda no Android! Baixe o APK em [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases)
 
 2026-03-25 🚀 **v0.2.4 Lançada!** Reformulação da arquitetura Agent (SubTurn, Hooks, Steering, EventBus), integração WeChat/WeCom, fortalecimento de segurança (.security.yml, filtragem de dados sensíveis), novos providers (AWS Bedrock, Azure, Xiaomi MiMo) e 35 correções de bugs. O PicoClaw atingiu **26K Stars**!
 
@@ -73,9 +80,6 @@
 2026-03-09 🎉 **v0.2.1 — Maior atualização até agora!** Suporte ao protocolo MCP, 4 novos channels (Matrix/IRC/WeCom/Discord Proxy), 3 novos providers (Kimi/Minimax/Avian), pipeline de visão, armazenamento de memória JSONL, roteamento de modelos.
 
 2026-02-28 📦 **v0.2.0** lançada com suporte a Docker Compose e Web UI Launcher.
-
-<details>
-<summary>Notícias anteriores...</summary>
 
 2026-02-26 🎉 O PicoClaw atinge **20K Stars** em apenas 17 dias! Orquestração automática de channels e interfaces de capacidade estão disponíveis.
 
@@ -162,13 +166,9 @@ O PicoClaw pode ser implantado em praticamente qualquer dispositivo Linux!
 
 ## 📦 Instalação
 
-### Download pelo picoclaw.io (Recomendado)
-
-Acesse **[picoclaw.io](https://picoclaw.io)** — o site oficial detecta automaticamente sua plataforma e fornece download com um clique. Não é necessário selecionar a arquitetura manualmente.
-
 ### Download do binário pré-compilado
 
-Alternativamente, baixe o binário para sua plataforma na página de [GitHub Releases](https://github.com/sipeed/picoclaw/releases).
+Alternativamente, baixe o binário para sua plataforma na página de [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases).
 
 ### Compilar a partir do código-fonte (para desenvolvimento)
 
@@ -178,7 +178,7 @@ Pré-requisitos:
 - Node.js 22+ e pnpm 10.33.0+ para builds do Web UI / launcher
 
 ```bash
-git clone https://github.com/sipeed/picoclaw.git
+git clone https://github.com/afjcjsbx/picoclaw.git
 
 cd picoclaw
 make deps
@@ -212,7 +212,7 @@ O WebUI Launcher fornece uma interface baseada em navegador para configuração 
 
 **Opção 1: Duplo clique (Desktop)**
 
-Após baixar de [picoclaw.io](https://picoclaw.io), dê duplo clique em `picoclaw-launcher` (ou `picoclaw-launcher.exe` no Windows). Seu navegador abrirá automaticamente em `http://localhost:18800`.
+Após baixar de [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases), dê duplo clique em `picoclaw-launcher` (ou `picoclaw-launcher.exe` no Windows). Seu navegador abrirá automaticamente em `http://localhost:18800`.
 
 **Opção 2: Linha de comando**
 
@@ -242,7 +242,7 @@ Para documentação detalhada do WebUI, veja [docs.picoclaw.io](https://docs.pic
 
 ```bash
 # 1. Clone este repositório
-git clone https://github.com/sipeed/picoclaw.git
+git clone https://github.com/afjcjsbx/picoclaw.git
 cd picoclaw
 
 # 2. Primeira execução — gera automaticamente docker/data/config.json e encerra
@@ -315,7 +315,7 @@ Pré-visualização:
   </tr>
 </table>
 
-Baixe o APK de [picoclaw.io](https://picoclaw.io/download/) e instale diretamente. Sem necessidade de Termux!
+Baixe o APK de [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases) e instale diretamente. Sem necessidade de Termux!
 
 **Opção 2: Termux**
 
@@ -327,7 +327,7 @@ Baixe o APK de [picoclaw.io](https://picoclaw.io/download/) e instale diretament
 
 ```bash
 # Baixar a versão mais recente
-wget https://github.com/sipeed/picoclaw/releases/latest/download/picoclaw_Linux_arm64.tar.gz
+wget https://github.com/afjcjsbx/picoclaw/releases/latest/download/picoclaw_Linux_arm64.tar.gz
 tar xzf picoclaw_Linux_arm64.tar.gz
 pkg install proot
 termux-chroot ./picoclaw onboard   # chroot fornece um layout padrão de sistema de arquivos Linux
@@ -529,16 +529,23 @@ Para mais detalhes, veja [Configuração de Ferramentas - Skills](../reference/t
 
 O PicoClaw suporta nativamente o [MCP](https://modelcontextprotocol.io/) — conecte qualquer servidor MCP para estender as capacidades do seu Agent com ferramentas externas e fontes de dados.
 
+Como o PicoClaw é um assistente leve, a melhor opção é usar servidores MCP remotos. Para servidores locais, prefira binários compilados nativamente e evite `npx`, `uvx` ou outros gerenciadores de dependências pesados.
+
 ```json
 {
   "tools": {
     "mcp": {
       "enabled": true,
       "servers": {
-        "filesystem": {
+        "browserbase": {
           "enabled": true,
-          "command": "npx",
-          "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+          "deferred": false,
+          "command": "",
+          "type": "http",
+          "url": "https://mcp.browserbase.com/mcp?browserbaseApiKey=API_KEY",
+          "headers": {
+            "BROWSERBASE_PROJECT_ID": "********"
+          }
         }
       }
     }
@@ -605,7 +612,7 @@ Para guias detalhados além deste README:
 
 PRs são bem-vindos! O código-fonte é intencionalmente pequeno e legível.
 
-Veja nosso [Roadmap da Comunidade](https://github.com/sipeed/picoclaw/issues/988) e [CONTRIBUTING.md](../../CONTRIBUTING.md) para diretrizes.
+Veja nosso [Roadmap da Comunidade](https://github.com/afjcjsbx/picoclaw/issues/988) e [CONTRIBUTING.md](../../CONTRIBUTING.md) para diretrizes.
 
 Grupo de desenvolvedores em formação, entre após seu primeiro PR mesclado!
 

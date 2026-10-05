@@ -13,12 +13,13 @@ import (
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/mcp"
 	"github.com/sipeed/picoclaw/pkg/tools"
+	integrationtools "github.com/sipeed/picoclaw/pkg/tools/integration"
 )
 
 // PluginTool preserves PicoClaw's MCP result/media conversion and adds stable
 // identity, cancellation and a per-call deadline. No automatic retries occur.
 type PluginTool struct {
-	*tools.MCPTool
+	*integrationtools.MCPTool
 	ID         string
 	Server     string
 	Deferred   *bool
@@ -53,7 +54,7 @@ func newPluginTool(
 	timeout time.Duration,
 ) *PluginTool {
 	return &PluginTool{
-		MCPTool:    tools.NewMCPTool(manager, server, definition),
+		MCPTool:    integrationtools.NewMCPTool(manager, server, definition),
 		ID:         id,
 		Server:     server,
 		definition: definition,

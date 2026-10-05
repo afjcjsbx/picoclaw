@@ -56,6 +56,13 @@
 
 ## 📢 Tin tức
 
+2026-09-29 🚀 **[v0.4.0 Released!](https://github.com/afjcjsbx/picoclaw/releases/tag/v0.4.0)** This substantial release adds MCP CLI management and Web UI configuration, native Anthropic Messages API support, configurable web search (including Keenable and Kagi), configurable logging and virtual models, cross-platform serial-tool support, enhanced hooks and isolation, plus numerous channel, provider, security, and build fixes.
+
+2026-09-28 🌱 **Project revived!** Development has resumed and will continue to be actively maintained in this fork.
+
+<details>
+<summary>Earlier news...</summary>
+
 2026-05-11 🛒 **LicheeRV-Claw đã có trên AliExpress!** Bạn hiện có thể mua LicheeRV-Claw trên [AliExpress](https://www.aliexpress.com/item/1005006519668532.html), giúp việc thử PicoClaw trên phần cứng RISC-V nhỏ gọn dễ dàng hơn.
 
 <p align="center">
@@ -64,7 +71,7 @@
   </a>
 </p>
 
-2026-03-31 📱 **Hỗ trợ Android!** PicoClaw giờ chạy trên Android! Tải APK tại [picoclaw.io](https://picoclaw.io/download)
+2026-03-31 📱 **Hỗ trợ Android!** PicoClaw giờ chạy trên Android! Tải APK tại [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases)
 
 2026-03-25 🚀 **v0.2.4 đã phát hành!** Tái cấu trúc kiến trúc Agent (SubTurn, Hooks, Steering, EventBus), tích hợp WeChat/WeCom, tăng cường bảo mật (.security.yml, lọc dữ liệu nhạy cảm), provider mới (AWS Bedrock, Azure, Xiaomi MiMo) và 35 bản vá lỗi. PicoClaw đã đạt **26K Stars**!
 
@@ -73,9 +80,6 @@
 2026-03-09 🎉 **v0.2.1 — Bản cập nhật lớn nhất từ trước đến nay!** Hỗ trợ giao thức MCP, 4 Channel mới (Matrix/IRC/WeCom/Discord Proxy), 3 Provider mới (Kimi/Minimax/Avian), pipeline thị giác, bộ nhớ JSONL, định tuyến mô hình.
 
 2026-02-28 📦 **v0.2.0** phát hành với hỗ trợ Docker Compose và Web UI Launcher.
-
-<details>
-<summary>Tin tức trước đó...</summary>
 
 2026-02-26 🎉 PicoClaw đạt **20K Stars** chỉ trong 17 ngày! Tự động điều phối Channel và giao diện khả năng đã hoạt động.
 
@@ -162,13 +166,9 @@ PicoClaw có thể được triển khai trên hầu hết mọi thiết bị Li
 
 ## 📦 Cài đặt
 
-### Tải xuống từ picoclaw.io (Khuyến nghị)
-
-Truy cập **[picoclaw.io](https://picoclaw.io)** — website chính thức tự động phát hiện nền tảng của bạn và cung cấp tải xuống một cú nhấp. Không cần chọn kiến trúc thủ công.
-
 ### Tải xuống binary đã biên dịch sẵn
 
-Ngoài ra, tải binary cho nền tảng của bạn từ trang [GitHub Releases](https://github.com/sipeed/picoclaw/releases).
+Ngoài ra, tải binary cho nền tảng của bạn từ trang [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases).
 
 ### Xây dựng từ mã nguồn (để phát triển)
 
@@ -178,7 +178,7 @@ Yêu cầu:
 - Node.js 22+ và pnpm 10.33.0+ cho các bản build Web UI / launcher
 
 ```bash
-git clone https://github.com/sipeed/picoclaw.git
+git clone https://github.com/afjcjsbx/picoclaw.git
 
 cd picoclaw
 make deps
@@ -212,7 +212,7 @@ WebUI Launcher cung cấp giao diện dựa trên trình duyệt để cấu hì
 
 **Tùy chọn 1: Nhấp đúp (Desktop)**
 
-Sau khi tải xuống từ [picoclaw.io](https://picoclaw.io), nhấp đúp vào `picoclaw-launcher` (hoặc `picoclaw-launcher.exe` trên Windows). Trình duyệt của bạn sẽ tự động mở tại `http://localhost:18800`.
+Sau khi tải xuống từ [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases), nhấp đúp vào `picoclaw-launcher` (hoặc `picoclaw-launcher.exe` trên Windows). Trình duyệt của bạn sẽ tự động mở tại `http://localhost:18800`.
 
 **Tùy chọn 2: Dòng lệnh**
 
@@ -242,7 +242,7 @@ Mở WebUI, sau đó: **1)** Cấu hình Provider (thêm API key LLM của bạn
 
 ```bash
 # 1. Clone this repo
-git clone https://github.com/sipeed/picoclaw.git
+git clone https://github.com/afjcjsbx/picoclaw.git
 cd picoclaw
 
 # 2. First run — auto-generates docker/data/config.json then exits
@@ -315,7 +315,7 @@ Xem trước:
   </tr>
 </table>
 
-Tải APK từ [picoclaw.io](https://picoclaw.io/download/) và cài đặt trực tiếp. Không cần Termux!
+Tải APK từ [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases) và cài đặt trực tiếp. Không cần Termux!
 
 **Tùy chọn 2: Termux**
 
@@ -327,7 +327,7 @@ Tải APK từ [picoclaw.io](https://picoclaw.io/download/) và cài đặt tr�
 
 ```bash
 # Download the latest release
-wget https://github.com/sipeed/picoclaw/releases/latest/download/picoclaw_Linux_arm64.tar.gz
+wget https://github.com/afjcjsbx/picoclaw/releases/latest/download/picoclaw_Linux_arm64.tar.gz
 tar xzf picoclaw_Linux_arm64.tar.gz
 pkg install proot
 termux-chroot ./picoclaw onboard   # chroot provides a standard Linux filesystem layout
@@ -529,16 +529,23 @@ Thêm vào `config.json` của bạn:
 
 PicoClaw hỗ trợ [MCP](https://modelcontextprotocol.io/) gốc — kết nối bất kỳ MCP server nào để mở rộng khả năng Agent của bạn với các tool và nguồn dữ liệu bên ngoài.
 
+PicoClaw là trợ lý nhẹ, vì vậy nên ưu tiên dùng MCP server từ xa. Với server cục bộ, hãy chọn binary được biên dịch native và tránh `npx`, `uvx` hoặc các trình quản lý dependency nặng khác.
+
 ```json
 {
   "tools": {
     "mcp": {
       "enabled": true,
       "servers": {
-        "filesystem": {
+        "browserbase": {
           "enabled": true,
-          "command": "npx",
-          "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+          "deferred": false,
+          "command": "",
+          "type": "http",
+          "url": "https://mcp.browserbase.com/mcp?browserbaseApiKey=API_KEY",
+          "headers": {
+            "BROWSERBASE_PROJECT_ID": "********"
+          }
         }
       }
     }
@@ -605,7 +612,7 @@ PicoClaw hỗ trợ nhắc nhở đã lên lịch và tác vụ định kỳ th�
 
 PR luôn được chào đón! Codebase được thiết kế nhỏ gọn và dễ đọc.
 
-Xem [Lộ trình Cộng đồng](https://github.com/sipeed/picoclaw/issues/988) và [CONTRIBUTING.md](../../CONTRIBUTING.md) để biết hướng dẫn.
+Xem [Lộ trình Cộng đồng](https://github.com/afjcjsbx/picoclaw/issues/988) và [CONTRIBUTING.md](../../CONTRIBUTING.md) để biết hướng dẫn.
 
 Nhóm nhà phát triển đang được xây dựng, tham gia sau khi PR đầu tiên của bạn được merge!
 

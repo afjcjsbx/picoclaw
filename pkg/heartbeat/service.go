@@ -384,12 +384,9 @@ func (hs *HeartbeatService) logErrorf(format string, args ...any) {
 // logf writes a message to the heartbeat log file
 func (hs *HeartbeatService) logf(level, format string, args ...any) {
 	logFile := filepath.Join(hs.workspace, "heartbeat.log")
-	f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-
 	timestamp := time.Now().Format("2006-01-02 15:04:05")
-	fmt.Fprintf(f, "[%s] [%s] %s\n", timestamp, level, fmt.Sprintf(format, args...))
+	line := fmt.Sprintf("[%s] [%s] %s\n", timestamp, level, fmt.Sprintf(format, args...))
+	if err := logger.AppendToFile(logFile, []byte(line)); err != nil {
+		logger.WarnCF("heartbeat", "Failed to write heartbeat log", map[string]any{"error": err.Error()})
+	}
 }

@@ -602,3 +602,32 @@ func TestResolveCurrentWebSearchProvider_IgnoresPreferNativeInConfigView(t *test
 		t.Fatalf("resolveCurrentWebSearchProvider() = %q, want empty when only native search would be available", got)
 	}
 }
+
+func TestTodoToolSupportAndToggle(t *testing.T) {
+	cfg := config.DefaultConfig()
+	for _, enabled := range []bool{true, false, true} {
+		if err := applyToolState(cfg, "todo", enabled); err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Tools.IsToolEnabled("todo") != enabled {
+			t.Fatal("todo toggle not applied")
+		}
+		found := false
+		for _, item := range buildToolSupport(cfg) {
+			if item.Name != "todo" {
+				continue
+			}
+			found = true
+			want := "disabled"
+			if enabled {
+				want = "enabled"
+			}
+			if item.Status != want {
+				t.Fatalf("status = %s, want %s", item.Status, want)
+			}
+		}
+		if !found {
+			t.Fatal("todo missing from catalog")
+		}
+	}
+}

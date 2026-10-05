@@ -58,9 +58,13 @@ picoclaw onboard
 picoclaw agent [-m MESSAGE] [--session KEY] [--model MODEL] [--debug]
 picoclaw gateway [--debug] [--no-truncate] [--allow-empty] [--host HOST]
 picoclaw status
+picoclaw update
 picoclaw version
 picoclaw migrate
 ```
+
+`picoclaw update` installs the latest stable release from this repository's
+GitHub Releases. Restart the process after it reports success.
 
 ### Configuration and Models
 
@@ -225,16 +229,17 @@ Important activation rules:
 
 | Family | Runtime tool names | What they provide |
 | --- | --- | --- |
-| Filesystem | `read_file`, `write_file`, `list_dir`, `edit_file`, `append_file` | Read, write, list, and patch workspace files |
+| Filesystem | `read_file`, `write_file`, `list_dir`, `search_files`, `edit_file`, `append_file` | Read, search, write, list, and patch workspace files |
 | Web | `web_search`, `web_fetch` | Search the web and fetch readable page content |
 | Command execution | `exec` | Shell command execution with deny-pattern guardrails |
 | Scheduling | `cron` | Scheduled jobs, reminders, recurring tasks, and command jobs |
+| Planning | `todo` | Maintain a session-scoped task checklist |
 | Skills registry | `find_skills`, `install_skill` | Search and install skills from configured registries |
 | MCP | `mcp_<server>_<tool>` | Tools contributed by connected MCP servers |
 | MCP discovery | `tool_search_tool_bm25`, `tool_search_tool_regex` | Discover deferred hidden MCP tools on demand |
 | Hardware | `i2c`, `spi`, `serial` | Hardware access for supported devices and boards |
 | Messaging | `message`, `reaction` | Send outbound messages and reactions through channel integrations |
-| Media | `send_file`, `load_image`, `send_tts` | Send files, load local images into context, generate TTS output |
+| Media | `send_file`, `load_image`, `send_tts`, `image_generate` | Send files, load local images into context, synthesize speech, and generate images |
 | Subagents | `spawn`, `subagent`, `spawn_status`, `delegate` | Background tasks, synchronous sub-turns, task status, multi-agent delegation |
 
 ### Tool Registration Notes
@@ -246,6 +251,51 @@ Important activation rules:
 - `message` can be configured for outbound media as well as plain text.
 
 For per-tool configuration, read `docs/reference/tools_configuration.md`.
+
+### Search, planning, and image generation
+
+`search_files` is enabled by default and searches file contents with a regular
+expression or filenames with a glob. It searches only the configured readable
+filesystem sandbox (`restrict_to_workspace`, `allow_read_paths`). Use the tool's
+`target: "content"` or `target: "files"`; `file_glob`, `output_mode`, `context`,
+`limit`, and `offset` narrow or paginate results. Keep it in an agent's
+`AGENT.md` tool allowlist if that file explicitly restricts tools.
+
+`todo` is also enabled by default. It reads or replaces the current agent and
+chat-session plan; a write replaces the whole list, and `todos: []` clears it.
+Plans survive turns and conversation compaction but are in memory only, so a
+process restart or config reload clears them. It neither runs nor schedules
+tasks. Explicit tool allowlists must include `todo`.
+
+Image generation is opt-in. Add an image-capable model to `model_list`, store
+its key in `.security.yml`, then select the model alias in `tools.image_generate`:
+
+```json
+{
+  "model_list": [
+    {
+      "model_name": "muse-image",
+      "provider": "openrouter",
+      "model": "meta/muse-image",
+      "api_base": "https://openrouter.ai/api/v1"
+    }
+  ],
+  "tools": {
+    "image_generate": {"enabled": true, "model_name": "muse-image"}
+  }
+}
+```
+
+```yaml
+model_list:
+  muse-image:
+    api_keys: ["YOUR_OPENROUTER_API_KEY"]
+```
+
+OpenAI, Gemini, and OpenRouter image models are supported. The generated image
+is sent to the current chat. OpenAI and Gemini accept `aspect_ratio`;
+OpenRouter uses the model's default image shape. See
+`docs/tools/image-generation.md` for supported models and details.
 
 ## Specialized Subagents and Spawn
 
@@ -538,6 +588,15 @@ Operational notes:
 - you can override `voice` and `response_format` for a specific TTS model through `model_list[].extra_body`
 - if a provider rejects `response_format`, PicoClaw retries once without that field
 - `send_tts` is only registered when TTS detection succeeds
+- automatic voice mode also requires `tools.send_tts.enabled: true`
+
+### Automatic voice replies
+
+In a chat session, `/voice status` shows its current mode. Use `/voice on` to
+send synthesized speech when replying to an audio message, `/voice tts` to
+synthesize every reply, and `/voice off` to stop. Configure a working TTS
+model under `voice.tts_model_name` and enable `tools.send_tts` first. The mode
+is session-scoped and is not persisted across process restarts.
 
 
 ## In-Session Slash Commands
@@ -559,6 +618,7 @@ Use these when helping users inside chat channels:
 /list skills
 /list mcp
 /subagents
+/voice [off|on|tts|status]
 /use <skill> [message]
 /use clear
 /btw <question>
@@ -571,6 +631,8 @@ Semantics that matter:
 - `/use clear` cancels the pending skill override.
 - `/btw <question>` asks an isolated side question without mutating the main session history.
 - `/subagents` shows the currently active subagent tree for the session.
+- `/voice` controls automatic TTS for the current chat session; see
+  [Automatic voice replies](#automatic-voice-replies).
 - Unknown slash commands pass through to normal LLM handling instead of hard-failing.
 
 Telegram auto-registers supported top-level commands like `/start`, `/help`, `/show`, `/list`, `/use`, and `/btw`.
@@ -704,6 +766,67 @@ Notes:
 
 - `cold_path_trigger: manual` has no general user-facing CLI/API trigger yet.
 
+### Repeated tool-call detection
+
+Enable the per-turn guard under `agents.defaults.loop_detection` to warn on
+repeated identical tool calls and stop a sustained loop:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "loop_detection": {
+        "enabled": true,
+        "repeat_threshold": 3,
+        "critical_threshold": 6,
+        "window_size": 20
+      }
+    }
+  }
+}
+```
+
+Defaults are disabled, warning at 3 repeats, stopping at 6, with a history
+window of 20. Calls count as identical only when both tool name and complete
+arguments match. This complements `max_tool_iterations`; see
+`docs/guides/configuration.md` for the details.
+
+### Low-power profile
+
+For constrained devices, enable the static profile in `config.json`:
+
+```json
+{
+  "power": {
+    "low_power": true,
+    "low_power_heartbeat_interval": 120,
+    "poll_interval_multiplier": 5
+  }
+}
+```
+
+It lengthens heartbeat and maintenance polling intervals and lets the agent
+wait for inbound events instead of waking every 100 ms. Protocol keepalives
+remain active. These settings can also be supplied through
+`PICOCLAW_POWER_LOW_POWER`, `PICOCLAW_POWER_LOW_POWER_HEARTBEAT_INTERVAL`, and
+`PICOCLAW_POWER_POLL_INTERVAL_MULTIPLIER`.
+
+### Bounded log files
+
+Gateway and file logs rotate at 2 MiB by default and keep 3 backups. Configure
+`gateway.log_max_size_mb` (1–1024) and `gateway.log_max_backups` (0–100; zero
+keeps no archives). The limits also apply to heartbeat and `PICOCLAW_LOG_FILE`
+logs; restart the gateway after changing them. Environment overrides are
+`PICOCLAW_GATEWAY_LOG_MAX_SIZE_MB` and
+`PICOCLAW_GATEWAY_LOG_MAX_BACKUPS`.
+
+### Web UI conversation forks
+
+In the Web UI, choose **Fork from this message** on an assistant reply to open a
+new session containing the conversation through that reply. A fork label links
+back to its source session. Long histories load in pages as the user scrolls;
+neither feature needs configuration.
+
 ## Debugging Workflow
 
 Start with the most PicoClaw-native path:
@@ -778,6 +901,7 @@ When contributing code, these paths matter most:
 - `docs/guides/session-guide.md` — session behavior recipes
 - `docs/reference/mcp-cli.md` — authoritative MCP CLI behavior
 - `docs/reference/cron.md` — cron behavior and limitations
+- `docs/guides/custom-builds.md` — selective channel builds and omitting Seahorse
 - `docs/operations/debug.md` — debugging workflow
 - `docs/operations/troubleshooting.md` — known misconfiguration patterns
 - `docs/architecture/agent-self-evolution.md` — evolution design and safety
@@ -792,6 +916,21 @@ When changing PicoClaw:
 - If you touch skills behavior, validate load order, naming rules, and frontmatter assumptions.
 - If you touch routing or session logic, re-check both `docs/guides/session-guide.md` and architecture docs so behavior and docs stay consistent.
 - If you touch MCP, remember the CLI manages config while the runtime host manages execution.
+
+### Custom channel builds
+
+Build tags can omit unused channel drivers and optionally Seahorse. For
+example, build a Telegram-only executable without Seahorse with:
+
+```bash
+make build GO_BUILD_TAGS='goolm,stdjson,custom_channels,channel_telegram,no_seahorse'
+```
+
+`custom_channels` replaces the default channel set; each desired driver needs
+its `channel_<name>` tag, and omitted drivers cannot be enabled later through
+config. Read `docs/guides/custom-builds.md` for the full tag list and platform
+notes. Custom WhatsApp Native builds need both `channel_whatsapp_native` and
+`whatsapp_native`.
 
 ## Common Troubleshooting
 
@@ -867,6 +1006,7 @@ Read these only when the task needs them:
 - `docs/reference/tools_configuration.md` for tool-specific config
 - `docs/reference/mcp-cli.md` for MCP CLI flags and storage behavior
 - `docs/reference/cron.md` for schedule types and security gates
+- `docs/guides/custom-builds.md` for channel selection and reduced binaries
 - `docs/operations/debug.md` for runtime inspection
 - `docs/operations/troubleshooting.md` for common provider/model mistakes
 

@@ -56,6 +56,13 @@
 
 ## 📢 新闻
 
+2026-09-29 🚀 **[v0.4.0 Released!](https://github.com/afjcjsbx/picoclaw/releases/tag/v0.4.0)** This substantial release adds MCP CLI management and Web UI configuration, native Anthropic Messages API support, configurable web search (including Keenable and Kagi), configurable logging and virtual models, cross-platform serial-tool support, enhanced hooks and isolation, plus numerous channel, provider, security, and build fixes.
+
+2026-09-28 🌱 **Project revived!** Development has resumed and will continue to be actively maintained in this fork.
+
+<details>
+<summary>Earlier news...</summary>
+
 2026-05-11 🛒 **LicheeRV-Claw 已上架淘宝！** 现在可以在 [淘宝](https://item.taobao.com/item.htm?abbucket=20&id=764939520376) 购买 LicheeRV-Claw，更方便地在小型 RISC-V 硬件上体验 PicoClaw。
 
 <p align="center">
@@ -64,7 +71,7 @@
   </a>
 </p>
 
-2026-03-31 📱 **Android 支持！** PicoClaw 现可在 Android 上运行！APK 下载地址：[picoclaw.io](https://picoclaw.io/download)
+2026-03-31 📱 **Android 支持！** PicoClaw 现可在 Android 上运行！APK 下载地址：[GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases)
 
 2026-03-25 🚀 **v0.2.4 发布！** Agent 架构全面重构（SubTurn、Hook、Steering、EventBus）、微信/企业微信深度集成、安全体系升级（.security.yml、敏感数据过滤）、新增 Provider（AWS Bedrock、Azure、小米 MiMo），以及 35 项 Bug 修复。PicoClaw 已达 **26K ⭐**！
 
@@ -73,9 +80,6 @@
 2026-03-09 🎉 **v0.2.1 — 史上最大更新！** MCP 协议支持、4 个新频道 (Matrix/IRC/WeCom/Discord Proxy)、3 个新 Provider (Kimi/Minimax/Avian)、视觉管线、JSONL 记忆存储、模型路由。
 
 2026-02-28 📦 **v0.2.0** 发布，支持 Docker Compose 和 Web UI 启动器。
-
-<details>
-<summary>更早的新闻...</summary>
 
 2026-02-26 🎉 PicoClaw 仅 17 天突破 **20K Stars**！频道自动编排和能力接口上线。
 
@@ -162,13 +166,9 @@ PicoClaw 几乎可以部署在任何 Linux 设备上！
 
 ## 📦 安装
 
-### 从 picoclaw.io 下载（推荐）
-
-访问 **[picoclaw.io](https://picoclaw.io)** — 官网自动检测你的平台，提供一键下载，无需手动选择架构。
-
 ### 下载预编译二进制文件
 
-也可以从 [GitHub Releases](https://github.com/sipeed/picoclaw/releases) 页面手动下载对应平台的二进制文件。
+也可以从 [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases) 页面手动下载对应平台的二进制文件。
 
 ### 从源码构建（开发用）
 
@@ -178,7 +178,7 @@ PicoClaw 几乎可以部署在任何 Linux 设备上！
 - Node.js 22+ 和 pnpm 10.33.0+（用于 Web UI / launcher 构建）
 
 ```bash
-git clone https://github.com/sipeed/picoclaw.git
+git clone https://github.com/afjcjsbx/picoclaw.git
 
 cd picoclaw
 make deps
@@ -212,7 +212,7 @@ WebUI Launcher 提供基于浏览器的配置与聊天界面，是最简单的�
 
 **方式一：双击启动（桌面）**
 
-从 [picoclaw.io](https://picoclaw.io) 下载后，双击 `picoclaw-launcher`（Windows 上为 `picoclaw-launcher.exe`），浏览器将自动打开 `http://localhost:18800`。
+从 [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases) 下载后，双击 `picoclaw-launcher`（Windows 上为 `picoclaw-launcher.exe`），浏览器将自动打开 `http://localhost:18800`。
 
 **方式二：命令行**
 
@@ -242,7 +242,7 @@ picoclaw-launcher
 
 ```bash
 # 1. 克隆本仓库
-git clone https://github.com/sipeed/picoclaw.git
+git clone https://github.com/afjcjsbx/picoclaw.git
 cd picoclaw
 
 # 2. 首次运行——自动生成 docker/data/config.json 后退出
@@ -315,7 +315,7 @@ macOS 可能会在首次启动时拦截 `picoclaw-launcher`，因为它从互联
   </tr>
 </table>
 
-从 [picoclaw.io](https://picoclaw.io/download/) 下载 APK 并直接安装，无需 Termux！
+从 [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases) 下载 APK 并直接安装，无需 Termux！
 
 **方式二：Termux**
 
@@ -327,7 +327,7 @@ macOS 可能会在首次启动时拦截 `picoclaw-launcher`，因为它从互联
 
 ```bash
 # 从 Release 页面下载最新版本
-wget https://github.com/sipeed/picoclaw/releases/latest/download/picoclaw_Linux_arm64.tar.gz
+wget https://github.com/afjcjsbx/picoclaw/releases/latest/download/picoclaw_Linux_arm64.tar.gz
 tar xzf picoclaw_Linux_arm64.tar.gz
 pkg install proot
 termux-chroot ./picoclaw onboard   # chroot 提供标准 Linux 文件系统布局
@@ -537,16 +537,23 @@ picoclaw skills install <skill-name>
 
 PicoClaw 原生支持 [MCP](https://modelcontextprotocol.io/) — 连接任意 MCP 服务器，通过外部工具和数据源扩展 Agent 能力。
 
+PicoClaw 是轻量级助手，因此最适合使用远程 MCP 服务器。本地服务器请优先使用原生编译的二进制文件，避免使用 `npx`、`uvx` 或其他重量级依赖管理器。
+
 ```json
 {
   "tools": {
     "mcp": {
       "enabled": true,
       "servers": {
-        "filesystem": {
+        "browserbase": {
           "enabled": true,
-          "command": "npx",
-          "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+          "deferred": false,
+          "command": "",
+          "type": "http",
+          "url": "https://mcp.browserbase.com/mcp?browserbaseApiKey=API_KEY",
+          "headers": {
+            "BROWSERBASE_PROJECT_ID": "********"
+          }
         }
       }
     }
@@ -613,7 +620,7 @@ PicoClaw 通过 `cron` 工具支持定时提醒和重复任务：
 
 欢迎提交 PR！代码库刻意保持小巧和可读。🤗
 
-查看完整的 [社区路线图](https://github.com/sipeed/picoclaw/issues/988) 和 [CONTRIBUTING.md](../../CONTRIBUTING.md)。
+查看完整的 [社区路线图](https://github.com/afjcjsbx/picoclaw/issues/988) 和 [CONTRIBUTING.md](../../CONTRIBUTING.md)。
 
 开发者群组正在组建中，入群门槛：至少合并过 1 个 PR。
 

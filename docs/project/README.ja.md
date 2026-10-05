@@ -56,6 +56,13 @@
 
 ## 📢 ニュース
 
+2026-09-29 🚀 **[v0.4.0 Released!](https://github.com/afjcjsbx/picoclaw/releases/tag/v0.4.0)** This substantial release adds MCP CLI management and Web UI configuration, native Anthropic Messages API support, configurable web search (including Keenable and Kagi), configurable logging and virtual models, cross-platform serial-tool support, enhanced hooks and isolation, plus numerous channel, provider, security, and build fixes.
+
+2026-09-28 🌱 **Project revived!** Development has resumed and will continue to be actively maintained in this fork.
+
+<details>
+<summary>Earlier news...</summary>
+
 2026-05-11 🛒 **LicheeRV-Claw が AliExpress で購入可能に！** [AliExpress](https://www.aliexpress.com/item/1005006519668532.html) から LicheeRV-Claw を購入できるようになり、コンパクトな RISC-V ハードウェアで PicoClaw を試しやすくなりました。
 
 <p align="center">
@@ -64,7 +71,7 @@
   </a>
 </p>
 
-2026-03-31 📱 **Android サポート！** PicoClawがAndroidで動作！APKは[picoclaw.io](https://picoclaw.io/download)からダウンロード
+2026-03-31 📱 **Android サポート！** PicoClawがAndroidで動作！APKは[GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases)からダウンロード
 
 2026-03-25 🚀 **v0.2.4 リリース！** Agent アーキテクチャ全面刷新（SubTurn、Hooks、Steering、EventBus）、WeChat/WeCom 統合、セキュリティ強化（.security.yml、機密データフィルタリング）、新プロバイダー（AWS Bedrock、Azure、Xiaomi MiMo）、35 件のバグ修正。PicoClaw **26K ⭐** 達成！
 
@@ -73,9 +80,6 @@
 2026-03-09 🎉 **v0.2.1 — 最大のアップデート！** MCP プロトコルサポート、4 つの新チャンネル (Matrix/IRC/WeCom/Discord Proxy)、3 つの新プロバイダー (Kimi/Minimax/Avian)、ビジョンパイプライン、JSONL メモリストア、モデルルーティング。
 
 2026-02-28 📦 **v0.2.0** リリース — Docker Compose と Web UI Launcher サポート。
-
-<details>
-<summary>過去のニュース...</summary>
 
 2026-02-26 🎉 PicoClaw がわずか 17 日で **20K スター** 達成！Channel 自動オーケストレーションとケイパビリティインターフェースが実装されました。
 
@@ -162,13 +166,9 @@ PicoClaw はほぼすべての Linux デバイスにデプロイできます！
 
 ## 📦 インストール
 
-### picoclaw.io からダウンロード（推奨）
-
-**[picoclaw.io](https://picoclaw.io)** にアクセス — 公式サイトがプラットフォームを自動検出し、ワンクリックでダウンロードできます。アーキテクチャを手動で選ぶ必要はありません。
-
 ### プリコンパイル済みバイナリをダウンロード
 
-または、[GitHub Releases](https://github.com/sipeed/picoclaw/releases) ページからプラットフォームに合ったバイナリをダウンロードしてください。
+または、[GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases) ページからプラットフォームに合ったバイナリをダウンロードしてください。
 
 ### ソースからビルド（開発用）
 
@@ -178,7 +178,7 @@ PicoClaw はほぼすべての Linux デバイスにデプロイできます！
 - Web UI / launcher のビルドには Node.js 22+ と pnpm 10.33.0+ が必要
 
 ```bash
-git clone https://github.com/sipeed/picoclaw.git
+git clone https://github.com/afjcjsbx/picoclaw.git
 
 cd picoclaw
 make deps
@@ -212,7 +212,7 @@ WebUI Launcher はブラウザベースの設定・チャットインターフ�
 
 **オプション 1: ダブルクリック（デスクトップ）**
 
-[picoclaw.io](https://picoclaw.io) からダウンロード後、`picoclaw-launcher`（Windows では `picoclaw-launcher.exe`）をダブルクリックしてください。ブラウザが自動的に `http://localhost:18800` を開きます。
+[GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases) からダウンロード後、`picoclaw-launcher`（Windows では `picoclaw-launcher.exe`）をダブルクリックしてください。ブラウザが自動的に `http://localhost:18800` を開きます。
 
 **オプション 2: コマンドライン**
 
@@ -242,7 +242,7 @@ WebUI の詳細なドキュメントは [docs.picoclaw.io](https://docs.picoclaw
 
 ```bash
 # 1. このリポジトリをクローン
-git clone https://github.com/sipeed/picoclaw.git
+git clone https://github.com/afjcjsbx/picoclaw.git
 cd picoclaw
 
 # 2. 初回実行 — docker/data/config.json を自動生成して終了
@@ -315,7 +315,7 @@ docker compose -f docker/docker-compose.yml --profile launcher up -d
   </tr>
 </table>
 
-[picoclaw.io](https://picoclaw.io/download/) から APK をダウンロードして直接インストール。Termux 不要！
+[GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases) から APK をダウンロードして直接インストール。Termux 不要！
 
 **オプション 2: Termux**
 
@@ -327,7 +327,7 @@ docker compose -f docker/docker-compose.yml --profile launcher up -d
 
 ```bash
 # 最新リリースをダウンロード
-wget https://github.com/sipeed/picoclaw/releases/latest/download/picoclaw_Linux_arm64.tar.gz
+wget https://github.com/afjcjsbx/picoclaw/releases/latest/download/picoclaw_Linux_arm64.tar.gz
 tar xzf picoclaw_Linux_arm64.tar.gz
 pkg install proot
 termux-chroot ./picoclaw onboard   # chroot で標準的な Linux ファイルシステムレイアウトを提供
@@ -529,16 +529,23 @@ picoclaw skills install <skill-name>
 
 PicoClaw は [MCP](https://modelcontextprotocol.io/) をネイティブサポートしています — 任意の MCP サーバーに接続して、外部ツールやデータソースで Agent の機能を拡張できます。
 
+PicoClaw は軽量なアシスタントなので、リモート MCP サーバーの利用が最適です。ローカルサーバーを使う場合はネイティブにコンパイルされたバイナリを優先し、`npx`、`uvx` などの重い依存関係管理ツールは避けてください。
+
 ```json
 {
   "tools": {
     "mcp": {
       "enabled": true,
       "servers": {
-        "filesystem": {
+        "browserbase": {
           "enabled": true,
-          "command": "npx",
-          "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+          "deferred": false,
+          "command": "",
+          "type": "http",
+          "url": "https://mcp.browserbase.com/mcp?browserbaseApiKey=API_KEY",
+          "headers": {
+            "BROWSERBASE_PROJECT_ID": "********"
+          }
         }
       }
     }
@@ -605,7 +612,7 @@ PicoClaw は `cron` ツールによるスケジュールリマインダーと定
 
 PR 歓迎！コードベースは意図的に小さく読みやすくしています。
 
-[コミュニティロードマップ](https://github.com/sipeed/picoclaw/issues/988)と[CONTRIBUTING.md](../../CONTRIBUTING.md)をご覧ください。
+[コミュニティロードマップ](https://github.com/afjcjsbx/picoclaw/issues/988)と[CONTRIBUTING.md](../../CONTRIBUTING.md)をご覧ください。
 
 開発者グループ構築中、最初の PR がマージされたら参加できます！
 

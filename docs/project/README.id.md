@@ -56,6 +56,13 @@
 
 ## 📢 Berita
 
+2026-09-29 🚀 **[v0.4.0 Released!](https://github.com/afjcjsbx/picoclaw/releases/tag/v0.4.0)** This substantial release adds MCP CLI management and Web UI configuration, native Anthropic Messages API support, configurable web search (including Keenable and Kagi), configurable logging and virtual models, cross-platform serial-tool support, enhanced hooks and isolation, plus numerous channel, provider, security, and build fixes.
+
+2026-09-28 🌱 **Project revived!** Development has resumed and will continue to be actively maintained in this fork.
+
+<details>
+<summary>Earlier news...</summary>
+
 2026-05-11 🛒 **LicheeRV-Claw tersedia di AliExpress!** Kini Anda dapat membeli LicheeRV-Claw di [AliExpress](https://www.aliexpress.com/item/1005006519668532.html), sehingga lebih mudah mencoba PicoClaw di hardware RISC-V ringkas.
 
 <p align="center">
@@ -64,7 +71,7 @@
   </a>
 </p>
 
-2026-03-31 📱 **Dukungan Android!** PicoClaw sekarang berjalan di Android! Unduh APK di [picoclaw.io](https://picoclaw.io/download)
+2026-03-31 📱 **Dukungan Android!** PicoClaw sekarang berjalan di Android! Unduh APK di [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases)
 
 2026-03-25 🚀 **v0.2.4 Dirilis!** Perombakan arsitektur Agent (SubTurn, Hooks, Steering, EventBus), integrasi WeChat/WeCom, penguatan keamanan (.security.yml, penyaringan data sensitif), provider baru (AWS Bedrock, Azure, Xiaomi MiMo), dan 35 perbaikan bug. PicoClaw telah mencapai **26K Stars**!
 
@@ -73,9 +80,6 @@
 2026-03-09 🎉 **v0.2.1 — Pembaruan terbesar sejauh ini!** Dukungan protokol MCP, 4 channel baru (Matrix/IRC/WeCom/Discord Proxy), 3 provider baru (Kimi/Minimax/Avian), pipeline visi, penyimpanan memori JSONL, perutean model.
 
 2026-02-28 📦 **v0.2.0** dirilis dengan dukungan Docker Compose dan Web UI Launcher.
-
-<details>
-<summary>Berita sebelumnya...</summary>
 
 2026-02-26 🎉 PicoClaw mencapai **20K Stars** hanya dalam 17 hari! Orkestrasi channel otomatis dan antarmuka kapabilitas kini aktif.
 
@@ -162,13 +166,9 @@ PicoClaw dapat di-deploy di hampir semua perangkat Linux!
 
 ## 📦 Instalasi
 
-### Unduh dari picoclaw.io (Direkomendasikan)
-
-Kunjungi **[picoclaw.io](https://picoclaw.io)** — website resmi mendeteksi platform Anda secara otomatis dan menyediakan unduhan satu klik. Tidak perlu memilih arsitektur secara manual.
-
 ### Unduh binary yang sudah dikompilasi
 
-Atau, unduh binary untuk platform Anda dari halaman [GitHub Releases](https://github.com/sipeed/picoclaw/releases).
+Atau, unduh binary untuk platform Anda dari halaman [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases).
 
 ### Build dari source (untuk pengembangan)
 
@@ -178,7 +178,7 @@ Prasyarat:
 - Node.js 22+ dan pnpm 10.33.0+ untuk build Web UI / launcher
 
 ```bash
-git clone https://github.com/sipeed/picoclaw.git
+git clone https://github.com/afjcjsbx/picoclaw.git
 
 cd picoclaw
 make deps
@@ -212,7 +212,7 @@ WebUI Launcher menyediakan antarmuka berbasis browser untuk konfigurasi dan chat
 
 **Opsi 1: Klik dua kali (Desktop)**
 
-Setelah mengunduh dari [picoclaw.io](https://picoclaw.io), klik dua kali `picoclaw-launcher` (atau `picoclaw-launcher.exe` di Windows). Browser Anda akan terbuka otomatis di `http://localhost:18800`.
+Setelah mengunduh dari [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases), klik dua kali `picoclaw-launcher` (atau `picoclaw-launcher.exe` di Windows). Browser Anda akan terbuka otomatis di `http://localhost:18800`.
 
 **Opsi 2: Command line**
 
@@ -242,7 +242,7 @@ Untuk dokumentasi WebUI lengkap, lihat [docs.picoclaw.io](https://docs.picoclaw.
 
 ```bash
 # 1. Clone repo ini
-git clone https://github.com/sipeed/picoclaw.git
+git clone https://github.com/afjcjsbx/picoclaw.git
 cd picoclaw
 
 # 2. Jalankan pertama kali — otomatis membuat docker/data/config.json lalu keluar
@@ -314,7 +314,7 @@ Pratinjau:
   </tr>
 </table>
 
-Unduh APK dari [picoclaw.io](https://picoclaw.io/download/) dan instal langsung. Tanpa Termux!
+Unduh APK dari [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases) dan instal langsung. Tanpa Termux!
 
 **Opsi 2: Termux**
 
@@ -326,7 +326,7 @@ Unduh APK dari [picoclaw.io](https://picoclaw.io/download/) dan instal langsung.
 
 ```bash
 # Unduh rilis terbaru
-wget https://github.com/sipeed/picoclaw/releases/latest/download/picoclaw_Linux_arm64.tar.gz
+wget https://github.com/afjcjsbx/picoclaw/releases/latest/download/picoclaw_Linux_arm64.tar.gz
 tar xzf picoclaw_Linux_arm64.tar.gz
 pkg install proot
 termux-chroot ./picoclaw onboard   # chroot menyediakan tata letak filesystem Linux standar
@@ -528,16 +528,23 @@ Untuk detail lebih lanjut, lihat [Konfigurasi Tools - Skills](../reference/tools
 
 PicoClaw mendukung [MCP](https://modelcontextprotocol.io/) secara native — hubungkan server MCP mana pun untuk memperluas kapabilitas Agent Anda dengan tools dan sumber data eksternal.
 
+Karena PicoClaw adalah asisten ringan, pilihan terbaik adalah menggunakan server MCP jarak jauh. Untuk server lokal, utamakan biner yang dikompilasi secara native dan hindari `npx`, `uvx`, atau pengelola dependensi berat lainnya.
+
 ```json
 {
   "tools": {
     "mcp": {
       "enabled": true,
       "servers": {
-        "filesystem": {
+        "browserbase": {
           "enabled": true,
-          "command": "npx",
-          "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+          "deferred": false,
+          "command": "",
+          "type": "http",
+          "url": "https://mcp.browserbase.com/mcp?browserbaseApiKey=API_KEY",
+          "headers": {
+            "BROWSERBASE_PROJECT_ID": "********"
+          }
         }
       }
     }
@@ -604,7 +611,7 @@ Untuk panduan lengkap di luar README ini:
 
 PR sangat diterima! Codebase sengaja dibuat kecil dan mudah dibaca.
 
-Lihat [Roadmap Komunitas](https://github.com/sipeed/picoclaw/issues/988) dan [CONTRIBUTING.md](../../CONTRIBUTING.md) untuk panduan.
+Lihat [Roadmap Komunitas](https://github.com/afjcjsbx/picoclaw/issues/988) dan [CONTRIBUTING.md](../../CONTRIBUTING.md) untuk panduan.
 
 Grup pengembang sedang dibangun, bergabunglah setelah PR pertama Anda di-merge!
 

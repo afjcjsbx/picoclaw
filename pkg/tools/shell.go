@@ -23,6 +23,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/constants"
 	"github.com/sipeed/picoclaw/pkg/isolation"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	fstools "github.com/sipeed/picoclaw/pkg/tools/fs"
 )
 
 var (
@@ -332,7 +333,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 	cwd := t.workingDir
 	if wd, ok := args["cwd"].(string); ok && wd != "" {
 		if t.restrictToWorkspace && t.workingDir != "" {
-			resolvedWD, err := validatePathWithAllowPaths(wd, t.workingDir, true, t.allowedPathPatterns)
+			resolvedWD, err := fstools.ValidatePathWithAllowPaths(wd, t.workingDir, true, t.allowedPathPatterns)
 			if err != nil {
 				return ErrorResult("Command blocked by safety guard (" + err.Error() + ")")
 			}
@@ -360,7 +361,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 		if err != nil {
 			return ErrorResult(fmt.Sprintf("Command blocked by safety guard (path resolution failed: %v)", err))
 		}
-		if isAllowedPath(resolved, t.allowedPathPatterns) {
+		if fstools.IsAllowedPath(resolved, t.allowedPathPatterns) {
 			cwd = resolved
 		} else {
 			absWorkspace, _ := filepath.Abs(t.workingDir)
@@ -1265,7 +1266,7 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 			if safePaths[p] {
 				continue
 			}
-			if isAllowedPath(p, t.allowedPathPatterns) {
+			if fstools.IsAllowedPath(p, t.allowedPathPatterns) {
 				continue
 			}
 

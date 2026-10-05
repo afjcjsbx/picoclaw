@@ -47,6 +47,7 @@ type Config struct {
 	Plugins   PluginsConfig   `json:"plugins,omitempty"   yaml:"-"`
 	Tools     ToolsConfig     `json:"tools"               yaml:",inline"`
 	Heartbeat HeartbeatConfig `json:"heartbeat"           yaml:"-"`
+	Power     PowerConfig     `json:"power,omitzero"      yaml:"-"`
 	Devices   DevicesConfig   `json:"devices"             yaml:"-"`
 	Voice     VoiceConfig     `json:"voice"               yaml:"-"`
 	// BuildInfo contains build-time version information
@@ -259,7 +260,8 @@ func (c *Config) MarshalJSON() ([]byte, error) {
 		Alias: (*Alias)(c),
 	}
 
-	if len(c.Session.Dimensions) > 0 || len(c.Session.IdentityLinks) > 0 || c.Session.DmScope != "" {
+	if len(c.Session.Dimensions) > 0 || len(c.Session.IdentityLinks) > 0 ||
+		c.Session.DmScope != "" {
 		sessionCfg := c.Session
 		aux.Session = &sessionCfg
 	}
@@ -421,33 +423,71 @@ type ToolFeedbackConfig struct {
 	SeparateMessages bool `json:"separate_messages" env:"PICOCLAW_AGENTS_DEFAULTS_TOOL_FEEDBACK_SEPARATE_MESSAGES"`
 }
 
+const (
+	DefaultLoopDetectionRepeatThreshold   = 3
+	DefaultLoopDetectionCriticalThreshold = 6
+	DefaultLoopDetectionWindowSize        = 20
+)
+
+// LoopDetectionConfig controls detection of consecutive identical tool calls.
+// It is disabled by default to preserve the existing tool-loop behavior.
+type LoopDetectionConfig struct {
+	Enabled           bool `json:"enabled"            env:"PICOCLAW_AGENTS_DEFAULTS_LOOP_DETECTION_ENABLED"`
+	RepeatThreshold   int  `json:"repeat_threshold"   env:"PICOCLAW_AGENTS_DEFAULTS_LOOP_DETECTION_REPEAT_THRESHOLD"`
+	CriticalThreshold int  `json:"critical_threshold" env:"PICOCLAW_AGENTS_DEFAULTS_LOOP_DETECTION_CRITICAL_THRESHOLD"`
+	WindowSize        int  `json:"window_size"        env:"PICOCLAW_AGENTS_DEFAULTS_LOOP_DETECTION_WINDOW_SIZE"`
+}
+
+// Normalized returns a safe, internally consistent loop-detection config.
+// Zero or invalid values fall back to defaults so programmatically constructed
+// configs behave the same way as configs loaded from DefaultConfig.
+func (c LoopDetectionConfig) Normalized() LoopDetectionConfig {
+	if c.RepeatThreshold < 2 {
+		c.RepeatThreshold = DefaultLoopDetectionRepeatThreshold
+	}
+	if c.CriticalThreshold <= c.RepeatThreshold {
+		c.CriticalThreshold = DefaultLoopDetectionCriticalThreshold
+		if c.CriticalThreshold <= c.RepeatThreshold {
+			c.CriticalThreshold = c.RepeatThreshold + 1
+		}
+	}
+	if c.WindowSize < c.CriticalThreshold {
+		c.WindowSize = DefaultLoopDetectionWindowSize
+		if c.WindowSize < c.CriticalThreshold {
+			c.WindowSize = c.CriticalThreshold
+		}
+	}
+	return c
+}
+
 type AgentDefaults struct {
-	Workspace                 string             `json:"workspace"                        env:"PICOCLAW_AGENTS_DEFAULTS_WORKSPACE"`
-	RestrictToWorkspace       bool               `json:"restrict_to_workspace"            env:"PICOCLAW_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE"`
-	AllowReadOutsideWorkspace bool               `json:"allow_read_outside_workspace"     env:"PICOCLAW_AGENTS_DEFAULTS_ALLOW_READ_OUTSIDE_WORKSPACE"`
-	Provider                  string             `json:"provider"                         env:"PICOCLAW_AGENTS_DEFAULTS_PROVIDER"`
-	ModelName                 string             `json:"model_name"                       env:"PICOCLAW_AGENTS_DEFAULTS_MODEL_NAME"`
-	ModelFallbacks            []string           `json:"model_fallbacks,omitempty"`
-	ImageModel                string             `json:"image_model,omitempty"            env:"PICOCLAW_AGENTS_DEFAULTS_IMAGE_MODEL"`
-	ImageModelFallbacks       []string           `json:"image_model_fallbacks,omitempty"`
-	MaxTokens                 int                `json:"max_tokens"                       env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOKENS"`
-	ContextWindow             int                `json:"context_window,omitempty"         env:"PICOCLAW_AGENTS_DEFAULTS_CONTEXT_WINDOW"`
-	Temperature               *float64           `json:"temperature,omitempty"            env:"PICOCLAW_AGENTS_DEFAULTS_TEMPERATURE"`
-	MaxToolIterations         int                `json:"max_tool_iterations"              env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOOL_ITERATIONS"`
-	SummarizeMessageThreshold int                `json:"summarize_message_threshold"      env:"PICOCLAW_AGENTS_DEFAULTS_SUMMARIZE_MESSAGE_THRESHOLD"`
-	SummarizeTokenPercent     int                `json:"summarize_token_percent"          env:"PICOCLAW_AGENTS_DEFAULTS_SUMMARIZE_TOKEN_PERCENT"`
-	MaxMediaSize              int                `json:"max_media_size,omitempty"         env:"PICOCLAW_AGENTS_DEFAULTS_MAX_MEDIA_SIZE"`
-	Routing                   *RoutingConfig     `json:"routing,omitempty"`
-	SteeringMode              string             `json:"steering_mode,omitempty"          env:"PICOCLAW_AGENTS_DEFAULTS_STEERING_MODE"`      // "one-at-a-time" (default) or "all"
-	MaxParallelTurns          int                `json:"max_parallel_turns,omitempty"     env:"PICOCLAW_AGENTS_DEFAULTS_MAX_PARALLEL_TURNS"` // Max concurrent turns (0 or 1 = sequential)
-	SubTurn                   SubTurnConfig      `json:"subturn"                                                                                      envPrefix:"PICOCLAW_AGENTS_DEFAULTS_SUBTURN_"`
-	ToolFeedback              ToolFeedbackConfig `json:"tool_feedback,omitempty"`
-	SplitOnMarker             bool               `json:"split_on_marker"                  env:"PICOCLAW_AGENTS_DEFAULTS_SPLIT_ON_MARKER"` // split messages on <|[SPLIT]|> marker
-	ContextManager            string             `json:"context_manager,omitempty"        env:"PICOCLAW_AGENTS_DEFAULTS_CONTEXT_MANAGER"`
-	ContextManagerConfig      json.RawMessage    `json:"context_manager_config,omitempty" env:"PICOCLAW_AGENTS_DEFAULTS_CONTEXT_MANAGER_CONFIG"`
-	TurnProfile               TurnProfileConfig  `json:"turn_profile,omitempty"`
-	MaxLLMRetries             int                `json:"max_llm_retries,omitempty"        env:"PICOCLAW_AGENTS_DEFAULTS_MAX_LLM_RETRIES"`
-	LLMRetryBackoffSecs       int                `json:"llm_retry_backoff_secs,omitempty" env:"PICOCLAW_AGENTS_DEFAULTS_LLM_RETRY_BACKOFF_SECS"`
+	Workspace                 string              `json:"workspace"                        env:"PICOCLAW_AGENTS_DEFAULTS_WORKSPACE"`
+	RestrictToWorkspace       bool                `json:"restrict_to_workspace"            env:"PICOCLAW_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE"`
+	AllowReadOutsideWorkspace bool                `json:"allow_read_outside_workspace"     env:"PICOCLAW_AGENTS_DEFAULTS_ALLOW_READ_OUTSIDE_WORKSPACE"`
+	Provider                  string              `json:"provider"                         env:"PICOCLAW_AGENTS_DEFAULTS_PROVIDER"`
+	ModelName                 string              `json:"model_name"                       env:"PICOCLAW_AGENTS_DEFAULTS_MODEL_NAME"`
+	ModelFallbacks            []string            `json:"model_fallbacks,omitempty"`
+	ImageModel                string              `json:"image_model,omitempty"            env:"PICOCLAW_AGENTS_DEFAULTS_IMAGE_MODEL"`
+	ImageModelFallbacks       []string            `json:"image_model_fallbacks,omitempty"`
+	MaxTokens                 int                 `json:"max_tokens"                       env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOKENS"`
+	ContextWindow             int                 `json:"context_window,omitempty"         env:"PICOCLAW_AGENTS_DEFAULTS_CONTEXT_WINDOW"`
+	Temperature               *float64            `json:"temperature,omitempty"            env:"PICOCLAW_AGENTS_DEFAULTS_TEMPERATURE"`
+	MaxToolIterations         int                 `json:"max_tool_iterations"              env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOOL_ITERATIONS"`
+	SummarizeMessageThreshold int                 `json:"summarize_message_threshold"      env:"PICOCLAW_AGENTS_DEFAULTS_SUMMARIZE_MESSAGE_THRESHOLD"`
+	SummarizeTokenPercent     int                 `json:"summarize_token_percent"          env:"PICOCLAW_AGENTS_DEFAULTS_SUMMARIZE_TOKEN_PERCENT"`
+	MaxMediaSize              int                 `json:"max_media_size,omitempty"         env:"PICOCLAW_AGENTS_DEFAULTS_MAX_MEDIA_SIZE"`
+	Routing                   *RoutingConfig      `json:"routing,omitempty"`
+	SteeringMode              string              `json:"steering_mode,omitempty"          env:"PICOCLAW_AGENTS_DEFAULTS_STEERING_MODE"`      // "one-at-a-time" (default) or "all"
+	MaxParallelTurns          int                 `json:"max_parallel_turns,omitempty"     env:"PICOCLAW_AGENTS_DEFAULTS_MAX_PARALLEL_TURNS"` // Max concurrent turns (0 or 1 = sequential)
+	SubTurn                   SubTurnConfig       `json:"subturn"                                                                                      envPrefix:"PICOCLAW_AGENTS_DEFAULTS_SUBTURN_"`
+	ToolFeedback              ToolFeedbackConfig  `json:"tool_feedback,omitempty"`
+	LoopDetection             LoopDetectionConfig `json:"loop_detection,omitempty"`
+	SplitOnMarker             bool                `json:"split_on_marker"                  env:"PICOCLAW_AGENTS_DEFAULTS_SPLIT_ON_MARKER"` // split messages on <|[SPLIT]|> marker
+	ContextManager            string              `json:"context_manager,omitempty"        env:"PICOCLAW_AGENTS_DEFAULTS_CONTEXT_MANAGER"`
+	ContextManagerConfig      json.RawMessage     `json:"context_manager_config,omitempty" env:"PICOCLAW_AGENTS_DEFAULTS_CONTEXT_MANAGER_CONFIG"`
+	TurnProfile               TurnProfileConfig   `json:"turn_profile,omitempty"`
+	MaxLLMRetries             int                 `json:"max_llm_retries,omitempty"        env:"PICOCLAW_AGENTS_DEFAULTS_MAX_LLM_RETRIES"`
+	LLMRetryBackoffSecs       int                 `json:"llm_retry_backoff_secs,omitempty" env:"PICOCLAW_AGENTS_DEFAULTS_LLM_RETRY_BACKOFF_SECS"`
 }
 
 const DefaultMaxMediaSize = 20 * 1024 * 1024 // 20 MB
@@ -740,6 +780,39 @@ type SlackWebhookTarget struct {
 type HeartbeatConfig struct {
 	Enabled  bool `json:"enabled"  env:"PICOCLAW_HEARTBEAT_ENABLED"`
 	Interval int  `json:"interval" env:"PICOCLAW_HEARTBEAT_INTERVAL"` // minutes, min 5
+}
+
+type PowerConfig struct {
+	LowPower                  bool `json:"low_power,omitempty"                    env:"PICOCLAW_POWER_LOW_POWER"`
+	LowPowerHeartbeatInterval int  `json:"low_power_heartbeat_interval,omitempty" env:"PICOCLAW_POWER_LOW_POWER_HEARTBEAT_INTERVAL"`
+	PollIntervalMultiplier    int  `json:"poll_interval_multiplier,omitempty"     env:"PICOCLAW_POWER_POLL_INTERVAL_MULTIPLIER"`
+}
+
+func (c PowerConfig) IsZero() bool { return c == (PowerConfig{}) }
+
+func (c PowerConfig) EffectiveHeartbeatInterval(normal int) int {
+	if !c.LowPower {
+		return normal
+	}
+	interval := c.LowPowerHeartbeatInterval
+	if interval <= 0 {
+		interval = 120
+	}
+	return max(normal, interval)
+}
+
+func (c PowerConfig) ScalePollInterval(interval time.Duration) time.Duration {
+	if !c.LowPower {
+		return interval
+	}
+	multiplier := c.PollIntervalMultiplier
+	if multiplier <= 0 {
+		multiplier = 5
+	}
+	if interval > time.Duration(1<<63-1)/time.Duration(multiplier) {
+		return time.Duration(1<<63 - 1)
+	}
+	return interval * time.Duration(multiplier)
 }
 
 type DevicesConfig struct {
@@ -1106,6 +1179,11 @@ type ReadFileToolConfig struct {
 	MaxReadFileSize int    `json:"max_read_file_size"`
 }
 
+type ImageGenerateToolConfig struct {
+	ToolConfig `       yaml:"-" envPrefix:"PICOCLAW_TOOLS_IMAGE_GENERATE_"`
+	ModelName  string `                                                    json:"model_name" env:"PICOCLAW_TOOLS_IMAGE_GENERATE_MODEL_NAME"`
+}
+
 const (
 	ReadFileModeBytes = "bytes"
 	ReadFileModeLines = "lines"
@@ -1132,31 +1210,34 @@ type ToolsConfig struct {
 	// FilterMinLength is the minimum content length required for filtering.
 	// Content shorter than this will be returned unchanged for performance.
 	// Default: 8
-	FilterMinLength int                `json:"filter_min_length" yaml:"-"                env:"PICOCLAW_TOOLS_FILTER_MIN_LENGTH"`
-	Web             WebToolsConfig     `json:"web"               yaml:"web,omitempty"`
-	Cron            CronToolsConfig    `json:"cron"              yaml:"-"`
-	Exec            ExecConfig         `json:"exec"              yaml:"-"`
-	Skills          SkillsToolsConfig  `json:"skills"            yaml:"skills,omitempty"`
-	MediaCleanup    MediaCleanupConfig `json:"media_cleanup"     yaml:"-"`
-	MCP             MCPConfig          `json:"mcp"               yaml:"-"`
-	AppendFile      ToolConfig         `json:"append_file"       yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_APPEND_FILE_"`
-	EditFile        ToolConfig         `json:"edit_file"         yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_EDIT_FILE_"`
-	FindSkills      ToolConfig         `json:"find_skills"       yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_FIND_SKILLS_"`
-	I2C             ToolConfig         `json:"i2c"               yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_I2C_"`
-	InstallSkill    ToolConfig         `json:"install_skill"     yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_INSTALL_SKILL_"`
-	ListDir         ToolConfig         `json:"list_dir"          yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_LIST_DIR_"`
-	LoadImage       ToolConfig         `json:"load_image"        yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_LOAD_IMAGE_"`
-	Message         MessageToolsConfig `json:"message"           yaml:"-"`
-	ReadFile        ReadFileToolConfig `json:"read_file"         yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_READ_FILE_"`
-	Serial          ToolConfig         `json:"serial"            yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_SERIAL_"`
-	SendFile        ToolConfig         `json:"send_file"         yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_SEND_FILE_"`
-	SendTTS         ToolConfig         `json:"send_tts"          yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_SEND_TTS_"`
-	Spawn           ToolConfig         `json:"spawn"             yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_SPAWN_"`
-	SpawnStatus     ToolConfig         `json:"spawn_status"      yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_SPAWN_STATUS_"`
-	SPI             ToolConfig         `json:"spi"               yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_SPI_"`
-	Subagent        ToolConfig         `json:"subagent"          yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_SUBAGENT_"`
-	WebFetch        ToolConfig         `json:"web_fetch"         yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_WEB_FETCH_"`
-	WriteFile       ToolConfig         `json:"write_file"        yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_WRITE_FILE_"`
+	FilterMinLength int                     `json:"filter_min_length" yaml:"-"                env:"PICOCLAW_TOOLS_FILTER_MIN_LENGTH"`
+	Web             WebToolsConfig          `json:"web"               yaml:"web,omitempty"`
+	Cron            CronToolsConfig         `json:"cron"              yaml:"-"`
+	Exec            ExecConfig              `json:"exec"              yaml:"-"`
+	Skills          SkillsToolsConfig       `json:"skills"            yaml:"skills,omitempty"`
+	MediaCleanup    MediaCleanupConfig      `json:"media_cleanup"     yaml:"-"`
+	MCP             MCPConfig               `json:"mcp"               yaml:"-"`
+	AppendFile      ToolConfig              `json:"append_file"       yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_APPEND_FILE_"`
+	EditFile        ToolConfig              `json:"edit_file"         yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_EDIT_FILE_"`
+	FindSkills      ToolConfig              `json:"find_skills"       yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_FIND_SKILLS_"`
+	I2C             ToolConfig              `json:"i2c"               yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_I2C_"`
+	ImageGenerate   ImageGenerateToolConfig `json:"image_generate"    yaml:"-"`
+	InstallSkill    ToolConfig              `json:"install_skill"     yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_INSTALL_SKILL_"`
+	ListDir         ToolConfig              `json:"list_dir"          yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_LIST_DIR_"`
+	LoadImage       ToolConfig              `json:"load_image"        yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_LOAD_IMAGE_"`
+	Message         MessageToolsConfig      `json:"message"           yaml:"-"`
+	ReadFile        ReadFileToolConfig      `json:"read_file"         yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_READ_FILE_"`
+	SearchFiles     ToolConfig              `json:"search_files"      yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_SEARCH_FILES_"`
+	Serial          ToolConfig              `json:"serial"            yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_SERIAL_"`
+	SendFile        ToolConfig              `json:"send_file"         yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_SEND_FILE_"`
+	SendTTS         ToolConfig              `json:"send_tts"          yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_SEND_TTS_"`
+	Spawn           ToolConfig              `json:"spawn"             yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_SPAWN_"`
+	SpawnStatus     ToolConfig              `json:"spawn_status"      yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_SPAWN_STATUS_"`
+	SPI             ToolConfig              `json:"spi"               yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_SPI_"`
+	Subagent        ToolConfig              `json:"subagent"          yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_SUBAGENT_"`
+	Todo            ToolConfig              `json:"todo"              yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_TODO_"`
+	WebFetch        ToolConfig              `json:"web_fetch"         yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_WEB_FETCH_"`
+	WriteFile       ToolConfig              `json:"write_file"        yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_WRITE_FILE_"`
 }
 
 // IsFilterSensitiveDataEnabled returns true if sensitive data filtering is enabled
@@ -1340,7 +1421,11 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if e := json.Unmarshal(data, &versionInfo); e != nil {
 		e = wrapJSONError(data, e, "config.json")
-		logger.ErrorCF("config", formatDiagnosticLogMessage("Malformed config file", e), map[string]any{"path": path})
+		logger.ErrorCF(
+			"config",
+			formatDiagnosticLogMessage("Malformed config file", e),
+			map[string]any{"path": path},
+		)
 		return nil, e
 	}
 	if len(data) <= 10 {
@@ -1876,6 +1961,8 @@ func expandMultiKeyModels(models []*ModelConfig) []*ModelConfig {
 
 func (t *ToolsConfig) IsToolEnabled(name string) bool {
 	switch name {
+	case "todo":
+		return t.Todo.Enabled
 	case "web":
 		return t.Web.Enabled
 	case "cron":
@@ -1894,6 +1981,8 @@ func (t *ToolsConfig) IsToolEnabled(name string) bool {
 		return t.FindSkills.Enabled
 	case "i2c":
 		return t.I2C.Enabled
+	case "image_generate":
+		return t.ImageGenerate.Enabled
 	case "install_skill":
 		return t.InstallSkill.Enabled
 	case "list_dir":
@@ -1904,6 +1993,8 @@ func (t *ToolsConfig) IsToolEnabled(name string) bool {
 		return t.Message.Enabled
 	case "read_file":
 		return t.ReadFile.Enabled
+	case "search_files":
+		return t.SearchFiles.Enabled
 	case "serial":
 		return t.Serial.Enabled
 	case "spawn":

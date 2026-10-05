@@ -214,6 +214,7 @@ Quando `restrict_to_workspace: true`, i seguenti strumenti sono in sandbox:
 | `read_file`   | Legge file                | Solo file all'interno del workspace                  |
 | `write_file`  | Scrive file               | Solo file all'interno del workspace                  |
 | `list_dir`    | Elenca directory          | Solo directory all'interno del workspace             |
+| `search_files` | Cerca contenuti o nomi di file | Rispetta le restrizioni di lettura; risultati paginati e limitati |
 | `edit_file`   | Modifica file             | Solo file all'interno del workspace                  |
 | `append_file` | Aggiunge ai file          | Solo file all'interno del workspace                  |
 | `exec`        | Esegue comandi            | I percorsi dei comandi devono essere nel workspace   |
@@ -235,6 +236,7 @@ Anche con `restrict_to_workspace: false`, lo strumento `exec` blocca questi coma
 |--------------------------|------|-------------|-------------|
 | `tools.allow_read_paths` | string[] | `[]` | Percorsi aggiuntivi consentiti per la lettura al di fuori del workspace |
 | `tools.allow_write_paths` | string[] | `[]` | Percorsi aggiuntivi consentiti per la scrittura al di fuori del workspace |
+| `tools.search_files.enabled` | bool | `true` | Abilita la ricerca regex nei contenuti e quella per nome tramite glob |
 
 ### Sicurezza Exec
 

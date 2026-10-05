@@ -250,6 +250,11 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 					turnStatus = TurnEndStatusError
 					return turnResult{}, fmt.Errorf("hook requested turn abort")
 				}
+				// ExecuteTools may provide a terminal response (for example when
+				// repeated tool-call loop detection stops the turn).
+				if exec.finalContent != "" {
+					finalContent = exec.finalContent
+				}
 				// ExecuteTools returned ControlBreak:
 				// - allResponsesHandled=true: finalize without DefaultResponse (exec.finalContent empty)
 				// - allResponsesHandled=false: coordinator applies DefaultResponse before finalize

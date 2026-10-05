@@ -26,6 +26,12 @@
         "enabled": false,
         "max_args_length": 300,
         "separate_messages": false
+      },
+      "loop_detection": {
+        "enabled": false,
+        "repeat_threshold": 3,
+        "critical_threshold": 6,
+        "window_size": 20
       }
     }
   },
@@ -524,6 +530,10 @@
       "max_age_minutes": 30,
       "interval_minutes": 5
     },
+    "image_generate": {
+      "enabled": false,
+      "model_name": ""
+    },
     "append_file": {
       "enabled": true
     },
@@ -542,6 +552,9 @@
     "list_dir": {
       "enabled": true
     },
+    "search_files": {
+      "enabled": true
+    },
     "message": {
       "enabled": true
     },
@@ -554,6 +567,9 @@
     },
     "send_tts": {
       "enabled": false
+    },
+    "todo": {
+      "enabled": true
     },
     "spawn": {
       "enabled": true
@@ -574,6 +590,11 @@
   "heartbeat": {
     "enabled": true,
     "interval": 30
+  },
+  "power": {
+    "low_power": false,
+    "low_power_heartbeat_interval": 120,
+    "poll_interval_multiplier": 5
   },
   "devices": {
     "enabled": false,
@@ -605,6 +626,8 @@
     "host": "localhost",
     "port": 18790,
     "hot_reload": false,
-    "log_level": "fatal"
+    "log_level": "fatal",
+    "log_max_size_mb": 2,
+    "log_max_backups": 3
   }
 }

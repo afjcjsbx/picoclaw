@@ -19,26 +19,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/audio/tts"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/channels"
-	_ "github.com/sipeed/picoclaw/pkg/channels/deltachat"
-	_ "github.com/sipeed/picoclaw/pkg/channels/dingtalk"
-	_ "github.com/sipeed/picoclaw/pkg/channels/discord"
-	_ "github.com/sipeed/picoclaw/pkg/channels/feishu"
-	_ "github.com/sipeed/picoclaw/pkg/channels/irc"
-	_ "github.com/sipeed/picoclaw/pkg/channels/line"
-	_ "github.com/sipeed/picoclaw/pkg/channels/maixcam"
-	_ "github.com/sipeed/picoclaw/pkg/channels/mqtt"
-	_ "github.com/sipeed/picoclaw/pkg/channels/onebot"
-	_ "github.com/sipeed/picoclaw/pkg/channels/pico"
-	_ "github.com/sipeed/picoclaw/pkg/channels/qq"
-	_ "github.com/sipeed/picoclaw/pkg/channels/slack"
-	_ "github.com/sipeed/picoclaw/pkg/channels/slack_webhook"
-	_ "github.com/sipeed/picoclaw/pkg/channels/teams_webhook"
-	_ "github.com/sipeed/picoclaw/pkg/channels/telegram"
-	_ "github.com/sipeed/picoclaw/pkg/channels/vk"
-	_ "github.com/sipeed/picoclaw/pkg/channels/wecom"
-	_ "github.com/sipeed/picoclaw/pkg/channels/weixin"
-	_ "github.com/sipeed/picoclaw/pkg/channels/whatsapp"
-	_ "github.com/sipeed/picoclaw/pkg/channels/whatsapp_native"
+	_ "github.com/sipeed/picoclaw/pkg/channels/builtin"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/cron"
 	"github.com/sipeed/picoclaw/pkg/devices"
@@ -119,6 +100,10 @@ func (p *startupBlockedProvider) GetDefaultModel() string {
 // Run starts the gateway runtime using the configuration loaded from configPath.
 func Run(debug bool, homePath, configPath string, allowEmptyStartup bool) (runErr error) {
 	startedAt := time.Now()
+	logSizeMB, logBackups := config.ResolveGatewayLogRotation(configPath)
+	if err := logger.SetFileRotation(int64(logSizeMB)<<20, logBackups); err != nil {
+		return fmt.Errorf("invalid log rotation settings: %w", err)
+	}
 	panicPath := filepath.Join(homePath, logPath, panicFile)
 	panicFunc, err := logger.InitPanic(panicPath)
 	if err != nil {
@@ -256,7 +241,9 @@ func Run(debug bool, homePath, configPath string, allowEmptyStartup bool) (runEr
 	var configReloadChan <-chan *config.Config
 	stopWatch := func() {}
 	if cfg.Gateway.HotReload {
-		configReloadChan, stopWatch = setupConfigWatcherPolling(configPath, debug)
+		configReloadChan, stopWatch = setupConfigWatcherPolling(
+			configPath, debug, cfg.Power.ScalePollInterval(2*time.Second),
+		)
 		logger.Info("Config hot reload enabled")
 	}
 	defer stopWatch()
@@ -432,7 +419,7 @@ func setupAndStartServices(
 
 	runningServices.HeartbeatService = heartbeat.NewHeartbeatService(
 		cfg.WorkspacePath(),
-		cfg.Heartbeat.Interval,
+		cfg.Power.EffectiveHeartbeatInterval(cfg.Heartbeat.Interval),
 		cfg.Heartbeat.Enabled,
 	)
 	runningServices.HeartbeatService.SetBus(msgBus)
@@ -441,11 +428,10 @@ func setupAndStartServices(
 		return nil, fmt.Errorf("error starting heartbeat service: %w", err)
 	}
 	fmt.Println("✓ Heartbeat service started")
-
 	runningServices.MediaStore = media.NewFileMediaStoreWithCleanup(media.MediaCleanerConfig{
 		Enabled:  cfg.Tools.MediaCleanup.Enabled,
 		MaxAge:   time.Duration(cfg.Tools.MediaCleanup.MaxAge) * time.Minute,
-		Interval: time.Duration(cfg.Tools.MediaCleanup.Interval) * time.Minute,
+		Interval: cfg.Power.ScalePollInterval(time.Duration(cfg.Tools.MediaCleanup.Interval) * time.Minute),
 	})
 	if fms, ok := runningServices.MediaStore.(*media.FileMediaStore); ok {
 		fms.Start()
@@ -680,7 +666,7 @@ func restartServices(
 
 	runningServices.HeartbeatService = heartbeat.NewHeartbeatService(
 		cfg.WorkspacePath(),
-		cfg.Heartbeat.Interval,
+		cfg.Power.EffectiveHeartbeatInterval(cfg.Heartbeat.Interval),
 		cfg.Heartbeat.Enabled,
 	)
 	runningServices.HeartbeatService.SetBus(msgBus)
@@ -689,11 +675,10 @@ func restartServices(
 		return fmt.Errorf("error restarting heartbeat service: %w", err)
 	}
 	fmt.Println("  ✓ Heartbeat service restarted")
-
 	runningServices.MediaStore = media.NewFileMediaStoreWithCleanup(media.MediaCleanerConfig{
 		Enabled:  cfg.Tools.MediaCleanup.Enabled,
 		MaxAge:   time.Duration(cfg.Tools.MediaCleanup.MaxAge) * time.Minute,
-		Interval: time.Duration(cfg.Tools.MediaCleanup.Interval) * time.Minute,
+		Interval: cfg.Power.ScalePollInterval(time.Duration(cfg.Tools.MediaCleanup.Interval) * time.Minute),
 	})
 	if fms, ok := runningServices.MediaStore.(*media.FileMediaStore); ok {
 		fms.Start()
@@ -751,7 +736,7 @@ func restartServices(
 	return nil
 }
 
-func setupConfigWatcherPolling(configPath string, debug bool) (chan *config.Config, func()) {
+func setupConfigWatcherPolling(configPath string, debug bool, interval time.Duration) (chan *config.Config, func()) {
 	configChan := make(chan *config.Config, 1)
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
@@ -763,7 +748,10 @@ func setupConfigWatcherPolling(configPath string, debug bool) (chan *config.Conf
 		lastModTime := getFileModTime(configPath)
 		lastSize := getFileSize(configPath)
 
-		ticker := time.NewTicker(2 * time.Second)
+		if interval <= 0 {
+			interval = 2 * time.Second
+		}
+		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 
 		for {

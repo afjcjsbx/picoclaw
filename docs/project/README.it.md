@@ -56,6 +56,13 @@
 
 ## 📢 Novità
 
+2026-09-29 🚀 **[v0.4.0 Released!](https://github.com/afjcjsbx/picoclaw/releases/tag/v0.4.0)** This substantial release adds MCP CLI management and Web UI configuration, native Anthropic Messages API support, configurable web search (including Keenable and Kagi), configurable logging and virtual models, cross-platform serial-tool support, enhanced hooks and isolation, plus numerous channel, provider, security, and build fixes.
+
+2026-09-28 🌱 **Project revived!** Development has resumed and will continue to be actively maintained in this fork.
+
+<details>
+<summary>Earlier news...</summary>
+
 2026-05-11 🛒 **LicheeRV-Claw disponibile su AliExpress!** Ora puoi acquistare LicheeRV-Claw su [AliExpress](https://www.aliexpress.com/item/1005006519668532.html), rendendo più semplice provare PicoClaw su hardware RISC-V compatto.
 
 <p align="center">
@@ -64,7 +71,7 @@
   </a>
 </p>
 
-2026-03-31 📱 **Supporto Android!** PicoClaw ora funziona su Android! Scarica l'APK su [picoclaw.io](https://picoclaw.io/download)
+2026-03-31 📱 **Supporto Android!** PicoClaw ora funziona su Android! Scarica l'APK su [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases)
 
 2026-03-25 🚀 **v0.2.4 rilasciata!** Revisione dell'architettura Agent (SubTurn, Hooks, Steering, EventBus), integrazione WeChat/WeCom, rafforzamento della sicurezza (.security.yml, filtraggio dati sensibili), nuovi provider (AWS Bedrock, Azure, Xiaomi MiMo) e 35 correzioni di bug. PicoClaw raggiunge **26K Stars**!
 
@@ -73,9 +80,6 @@
 2026-03-09 🎉 **v0.2.1 — Il più grande aggiornamento di sempre!** Supporto al protocollo MCP, 4 nuovi canali (Matrix/IRC/WeCom/Discord Proxy), 3 nuovi provider (Kimi/Minimax/Avian), pipeline visiva, archivio memoria JSONL, routing dei modelli.
 
 2026-02-28 📦 **v0.2.0** rilasciata con supporto Docker Compose e Web UI Launcher.
-
-<details>
-<summary>Notizie precedenti...</summary>
 
 2026-02-26 🎉 PicoClaw raggiunge **20K stelle** in soli 17 giorni! Orchestrazione automatica dei canali e interfacce di capacità sono attive.
 
@@ -162,13 +166,9 @@ PicoClaw può essere distribuito su quasi qualsiasi dispositivo Linux!
 
 ## 📦 Installazione
 
-### Scarica da picoclaw.io (Consigliato)
-
-Visita **[picoclaw.io](https://picoclaw.io)** — il sito ufficiale rileva automaticamente la tua piattaforma e fornisce il download con un clic. Non è necessario scegliere manualmente l'architettura.
-
 ### Scarica il binario precompilato
 
-In alternativa, scarica il binario per la tua piattaforma dalla pagina delle [GitHub Releases](https://github.com/sipeed/picoclaw/releases).
+In alternativa, scarica il binario per la tua piattaforma dalla pagina delle [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases).
 
 ### Compila dai sorgenti (per lo sviluppo)
 
@@ -178,7 +178,7 @@ Prerequisiti:
 - Node.js 22+ e pnpm 10.33.0+ per le build Web UI / launcher
 
 ```bash
-git clone https://github.com/sipeed/picoclaw.git
+git clone https://github.com/afjcjsbx/picoclaw.git
 
 cd picoclaw
 make deps
@@ -212,7 +212,7 @@ Il WebUI Launcher fornisce un'interfaccia basata su browser per la configurazion
 
 **Opzione 1: Doppio clic (Desktop)**
 
-Dopo aver scaricato da [picoclaw.io](https://picoclaw.io), fai doppio clic su `picoclaw-launcher` (o `picoclaw-launcher.exe` su Windows). Il browser si aprirà automaticamente su `http://localhost:18800`.
+Dopo aver scaricato da [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases), fai doppio clic su `picoclaw-launcher` (o `picoclaw-launcher.exe` su Windows). Il browser si aprirà automaticamente su `http://localhost:18800`.
 
 **Opzione 2: Riga di comando**
 
@@ -242,7 +242,7 @@ Per la documentazione dettagliata del WebUI, vedi [docs.picoclaw.io](https://doc
 
 ```bash
 # 1. Clona questo repo
-git clone https://github.com/sipeed/picoclaw.git
+git clone https://github.com/afjcjsbx/picoclaw.git
 cd picoclaw
 
 # 2. Prima esecuzione — genera automaticamente docker/data/config.json poi si ferma
@@ -314,7 +314,7 @@ Anteprima:
   </tr>
 </table>
 
-Scarica l'APK da [picoclaw.io](https://picoclaw.io/download/) e installa direttamente. Senza Termux!
+Scarica l'APK da [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases) e installa direttamente. Senza Termux!
 
 **Opzione 2: Termux**
 
@@ -326,7 +326,7 @@ Scarica l'APK da [picoclaw.io](https://picoclaw.io/download/) e installa diretta
 
 ```bash
 # Scarica l'ultima release
-wget https://github.com/sipeed/picoclaw/releases/latest/download/picoclaw_Linux_arm64.tar.gz
+wget https://github.com/afjcjsbx/picoclaw/releases/latest/download/picoclaw_Linux_arm64.tar.gz
 tar xzf picoclaw_Linux_arm64.tar.gz
 pkg install proot
 termux-chroot ./picoclaw onboard   # chroot fornisce un layout standard del filesystem Linux
@@ -528,16 +528,23 @@ Per maggiori dettagli, vedi [Configurazione degli Strumenti - Skill](../referenc
 
 PicoClaw supporta nativamente [MCP](https://modelcontextprotocol.io/) — connetti qualsiasi server MCP per estendere le capacità del tuo Agent con strumenti e sorgenti di dati esterni.
 
+Dato che PicoClaw è un assistente leggero, la scelta migliore è usare server MCP remoti. Per i server locali, preferisci binari compilati in modo nativo ed evita `npx`, `uvx` o altri gestori di dipendenze pesanti.
+
 ```json
 {
   "tools": {
     "mcp": {
       "enabled": true,
       "servers": {
-        "filesystem": {
+        "browserbase": {
           "enabled": true,
-          "command": "npx",
-          "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+          "deferred": false,
+          "command": "",
+          "type": "http",
+          "url": "https://mcp.browserbase.com/mcp?browserbaseApiKey=API_KEY",
+          "headers": {
+            "BROWSERBASE_PROJECT_ID": "********"
+          }
         }
       }
     }
@@ -548,9 +555,8 @@ PicoClaw supporta nativamente [MCP](https://modelcontextprotocol.io/) — connet
 Puoi gestire i casi MCP più comuni direttamente dalla CLI senza modificare a mano il JSON:
 
 ```bash
-picoclaw mcp add filesystem -- npx -y @modelcontextprotocol/server-filesystem /tmp
 picoclaw mcp list
-picoclaw mcp test filesystem
+picoclaw mcp test browserbase
 ```
 
 `picoclaw mcp` agisce come configuration manager: aggiorna `config.json` sotto `tools.mcp.servers`, ma non mantiene in esecuzione il processo del server.
@@ -623,7 +629,7 @@ Per guide dettagliate oltre questo README:
 
 Le PR sono benvenute! Il codice è volutamente piccolo e leggibile.
 
-Consulta la nostra [Roadmap della Community](https://github.com/sipeed/picoclaw/issues/988) e [CONTRIBUTING.md](../../CONTRIBUTING.md) per le linee guida.
+Consulta la nostra [Roadmap della Community](https://github.com/afjcjsbx/picoclaw/issues/988) e [CONTRIBUTING.md](../../CONTRIBUTING.md) per le linee guida.
 
 Gruppo sviluppatori in costruzione, unisciti dopo la tua prima PR accettata!
 

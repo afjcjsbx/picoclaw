@@ -115,6 +115,7 @@ type ActiveTurnInfo struct {
 type turnExecution struct {
 	// Core message state (accumulates throughout the turn)
 	messages         []providers.Message // built from ContextBuilder, grows per-iteration
+	loopWarnings     []providers.Message // turn-local warnings restored after context compaction
 	pendingMessages  []providers.Message // steering/SubTurn messages awaiting injection
 	history          []providers.Message // from ContextManager.Assemble
 	summary          string
@@ -256,6 +257,11 @@ type turnState struct {
 
 	// Back-reference to the owning AgentLoop (set for SubTurns only, used for hard abort cascade)
 	al *AgentLoop
+
+	// Tool-loop detection is scoped to a single turn.
+	loopDetectionHistory []uint64
+	loopDetectionNext    int
+	loopDetectionConfig  config.LoopDetectionConfig
 }
 
 // =============================================================================
@@ -264,22 +270,23 @@ type turnState struct {
 
 func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScope) *turnState {
 	ts := &turnState{
-		agent:        agent,
-		opts:         opts,
-		profile:      opts.TurnProfile,
-		scope:        scope,
-		turnID:       scope.turnID,
-		agentID:      agent.ID,
-		sessionKey:   opts.Dispatch.SessionKey,
-		activeSkills: activeSkillNames(agent, opts),
-		turnCtx:      cloneTurnContext(scope.context),
-		channel:      opts.Dispatch.Channel(),
-		chatID:       opts.Dispatch.ChatID(),
-		workspace:    agent.Workspace,
-		userMessage:  opts.Dispatch.UserMessage,
-		media:        append([]string(nil), opts.Dispatch.Media...),
-		phase:        TurnPhaseSetup,
-		startedAt:    time.Now(),
+		agent:               agent,
+		opts:                opts,
+		profile:             opts.TurnProfile,
+		scope:               scope,
+		turnID:              scope.turnID,
+		agentID:             agent.ID,
+		sessionKey:          opts.Dispatch.SessionKey,
+		activeSkills:        activeSkillNames(agent, opts),
+		turnCtx:             cloneTurnContext(scope.context),
+		channel:             opts.Dispatch.Channel(),
+		chatID:              opts.Dispatch.ChatID(),
+		workspace:           agent.Workspace,
+		userMessage:         opts.Dispatch.UserMessage,
+		media:               append([]string(nil), opts.Dispatch.Media...),
+		phase:               TurnPhaseSetup,
+		startedAt:           time.Now(),
+		loopDetectionConfig: agent.LoopDetection.Normalized(),
 	}
 
 	// Bind session store and capture initial history length for rollback logic

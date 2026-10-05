@@ -39,6 +39,12 @@ func DefaultConfig() *Config {
 					MaxArgsLength:    300,
 					SeparateMessages: false,
 				},
+				LoopDetection: LoopDetectionConfig{
+					Enabled:           false,
+					RepeatThreshold:   DefaultLoopDetectionRepeatThreshold,
+					CriticalThreshold: DefaultLoopDetectionCriticalThreshold,
+					WindowSize:        DefaultLoopDetectionWindowSize,
+				},
 				SplitOnMarker:       false,
 				MaxLLMRetries:       2,
 				LLMRetryBackoffSecs: 2,
@@ -306,10 +312,12 @@ func DefaultConfig() *Config {
 			},
 		},
 		Gateway: GatewayConfig{
-			Host:      "localhost",
-			Port:      18790,
-			HotReload: false,
-			LogLevel:  DefaultGatewayLogLevel,
+			Host:          "localhost",
+			Port:          18790,
+			HotReload:     false,
+			LogLevel:      DefaultGatewayLogLevel,
+			LogMaxSizeMB:  DefaultGatewayLogMaxSizeMB,
+			LogMaxBackups: DefaultGatewayLogMaxBackups,
 		},
 		Events: EventsConfig{
 			Logging: defaultEventLoggingConfig(),
@@ -479,9 +487,11 @@ func DefaultConfig() *Config {
 			Serial: ToolConfig{
 				Enabled: false, // Hardware tool - requires host serial ports
 			},
+			SearchFiles: ToolConfig{Enabled: true},
 			Spawn: ToolConfig{
 				Enabled: true,
 			},
+			Todo: ToolConfig{Enabled: true},
 			SpawnStatus: ToolConfig{
 				Enabled: false,
 			},

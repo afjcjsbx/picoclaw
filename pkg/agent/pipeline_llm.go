@@ -14,6 +14,7 @@ import (
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
+	cliprovider "github.com/sipeed/picoclaw/pkg/providers/cli"
 )
 
 // CallLLM performs an LLM call with fallback support, hook invocation, and retry logic.
@@ -426,11 +427,12 @@ func (p *Pipeline) CallLLM(
 				rebuildPromptReq := promptBuildRequestForTurn(ts, fullHistory, exec.summary, "", nil, p.Cfg)
 				rebuildPromptReq.ActiveSkills = append([]string(nil), contextualSkills...)
 				rebuilt := ts.agent.ContextBuilder.BuildMessagesFromPrompt(rebuildPromptReq)
+				rebuilt = append(rebuilt, exec.loopWarnings...)
 				return resolveMediaRefs(
 					rebuilt,
 					p.MediaStore,
 					maxMediaSize,
-					len(rebuilt)-len(protectedTurnTail),
+					len(rebuilt)-len(protectedTurnTail)-len(exec.loopWarnings),
 				)
 			}
 			originalHistoryCount := len(exec.history)
@@ -451,7 +453,7 @@ func (p *Pipeline) CallLLM(
 			)
 			exec.history = append(trimmedStableHistory, protectedTurnTail...)
 			exec.messages = buildMessages(trimmedStableHistory)
-			exec.currentTurnStart = len(exec.messages) - len(protectedTurnTail)
+			exec.currentTurnStart = len(exec.messages) - len(protectedTurnTail) - len(exec.loopWarnings)
 			if exec.gracefulTerminal {
 				msgs := append([]providers.Message(nil), exec.messages...)
 				exec.callMessages = append(msgs, ts.interruptHintMessage())
@@ -636,7 +638,7 @@ func (p *Pipeline) CallLLM(
 	// Tool-call path: normalize and prepare for tool execution
 	exec.normalizedToolCalls = make([]providers.ToolCall, 0, len(exec.response.ToolCalls))
 	for _, tc := range exec.response.ToolCalls {
-		exec.normalizedToolCalls = append(exec.normalizedToolCalls, providers.NormalizeToolCall(tc))
+		exec.normalizedToolCalls = append(exec.normalizedToolCalls, cliprovider.NormalizeToolCall(tc))
 	}
 
 	toolNames := make([]string, 0, len(exec.normalizedToolCalls))

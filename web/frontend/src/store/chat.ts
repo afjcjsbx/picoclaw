@@ -36,7 +36,11 @@ export interface ChatToolCall {
   extraContent?: ChatToolCallExtraContent
 }
 
-export type AssistantMessageKind = "normal" | "thought" | "tool_calls"
+export type AssistantMessageKind =
+  | "normal"
+  | "thought"
+  | "tool_calls"
+  | "tool_feedback"
 
 export interface ChatMessage {
   id: string
@@ -70,6 +74,8 @@ export interface ChatStoreState {
   isTyping: boolean
   activeSessionId: string
   hasHydratedActiveSession: boolean
+  historyStart: number
+  hasMoreHistory: boolean
   contextUsage?: ContextUsage
 }
 
@@ -81,6 +87,8 @@ const DEFAULT_CHAT_STATE: ChatStoreState = {
   isTyping: false,
   activeSessionId: getInitialActiveSessionId(),
   hasHydratedActiveSession: false,
+  historyStart: 0,
+  hasMoreHistory: false,
 }
 
 export const chatAtom = atom<ChatStoreState>(DEFAULT_CHAT_STATE)

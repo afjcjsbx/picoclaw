@@ -1,4 +1,4 @@
-import { IconPlus } from "@tabler/icons-react"
+import { IconArrowBackUp, IconGitFork, IconPlus } from "@tabler/icons-react"
 import { useAtom } from "jotai"
 import {
   type ChangeEvent,
@@ -9,7 +9,9 @@ import {
   useState,
 } from "react"
 import { useTranslation } from "react-i18next"
+import { toast } from "sonner"
 
+import { forkSession, getSessionHistory } from "@/api/sessions"
 import { AssistantMessage } from "@/components/chat/assistant-message"
 import {
   ChatComposer,
@@ -110,6 +112,9 @@ export function ChatPage() {
   const [input, setInput] = useState("")
   const [attachments, setAttachments] = useState<ChatAttachment[]>([])
   const [isDragActive, setIsDragActive] = useState(false)
+  const [forkedFrom, setForkedFrom] = useState<string>()
+  const [forkIndex, setForkIndex] = useState(0)
+  const pendingReturnIndexRef = useRef<number | null>(null)
   const [assistantDetailVisibility, setAssistantDetailVisibility] = useAtom(
     assistantDetailVisibilityAtom,
   )
@@ -132,9 +137,12 @@ export function ChatPage() {
     connectionState,
     isTyping,
     activeSessionId,
+    historyStart,
+    hasMoreHistory,
     contextUsage,
     sendMessage,
     switchSession,
+    loadOlderHistory,
     newChat,
   } = usePicoChat()
 
@@ -158,6 +166,51 @@ export function ChatPage() {
   })
   const canInput = inputDisabledReason === null
 
+  useEffect(() => {
+    let cancelled = false
+    setForkedFrom(undefined)
+    setForkIndex(0)
+    void getSessionHistory(activeSessionId)
+      .then((detail) => {
+        if (!cancelled) {
+          setForkedFrom(detail.forked_from)
+          setForkIndex(detail.fork_index ?? 0)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setForkedFrom(undefined)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [activeSessionId])
+
+  useEffect(() => {
+    const index = pendingReturnIndexRef.current
+    if (index === null) return
+    if (index < historyStart && hasMoreHistory) {
+      void loadOlderHistory(activeSessionId)
+      return
+    }
+    pendingReturnIndexRef.current = null
+    requestAnimationFrame(() => {
+      scrollRef.current
+        ?.querySelector(`[data-chat-index="${index}"]`)
+        ?.scrollIntoView({ block: "center" })
+    })
+  }, [activeSessionId, hasMoreHistory, historyStart, loadOlderHistory, messages])
+
+  const handleFork = async (messageIndex: number) => {
+    try {
+      const fork = await forkSession(activeSessionId, messageIndex)
+      await switchSession(fork.id)
+      void loadSessions(true)
+    } catch (error) {
+      console.error("Failed to fork conversation:", error)
+      toast.error(t("chat.forkFailed"))
+    }
+  }
+
   const {
     sessions,
     hasMore,
@@ -178,7 +231,21 @@ export function ChatPage() {
   }
 
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
-    syncScrollState(e.currentTarget)
+    const element = e.currentTarget
+    syncScrollState(element)
+    if (element.scrollTop > 16 || !hasMoreHistory) {
+      return
+    }
+
+    const previousHeight = element.scrollHeight
+    void loadOlderHistory(activeSessionId).then((loaded) => {
+      if (!loaded) return
+      requestAnimationFrame(() => {
+        if (scrollRef.current !== element) return
+        element.scrollTop += element.scrollHeight - previousHeight
+        syncScrollState(element)
+      })
+    })
   }
 
   useEffect(() => {
@@ -383,6 +450,28 @@ export function ChatPage() {
         />
       </PageHeader>
 
+      {forkedFrom && (
+        <div className="border-border flex items-center justify-between gap-3 border-b px-4 py-2 text-sm">
+          <span className="text-muted-foreground flex items-center gap-2">
+            <IconGitFork className="size-4" />
+            {t("chat.forkedConversation")}
+          </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="gap-2"
+            onClick={() => {
+              pendingReturnIndexRef.current = forkIndex
+              setIsAtBottom(false)
+              void switchSession(forkedFrom)
+            }}
+          >
+            <IconArrowBackUp className="size-4" />
+            {t("chat.backToOriginal")}
+          </Button>
+        </div>
+      )}
+
       <div
         ref={scrollRef}
         onScroll={handleScroll}
@@ -397,24 +486,51 @@ export function ChatPage() {
             />
           )}
 
-          {messages.map((msg) => {
+          {messages.map((msg, messageOffset) => {
             if (
               !shouldShowAssistantMessage(assistantDetailVisibility, msg.kind)
             ) {
               return null
             }
 
+            const storedIndex = msg.id.match(/^hist-(\d+)$/)
+            const messageIndex = storedIndex
+              ? Number(storedIndex[1])
+              : historyStart + messageOffset
+            const canFork =
+              msg.role === "assistant" &&
+              (!msg.kind || msg.kind === "normal")
             return (
-              <div key={msg.id} className="flex w-full">
+              <div
+                key={msg.id}
+                data-chat-index={messageIndex}
+                className="group flex w-full flex-col gap-1"
+              >
                 {msg.role === "assistant" ? (
-                  <AssistantMessage
-                    content={msg.content}
-                    attachments={msg.attachments}
-                    kind={msg.kind}
-                    modelName={msg.modelName}
-                    toolCalls={msg.toolCalls}
-                    timestamp={msg.timestamp}
-                  />
+                  <>
+                    <AssistantMessage
+                      content={msg.content}
+                      attachments={msg.attachments}
+                      kind={msg.kind}
+                      modelName={msg.modelName}
+                      toolCalls={msg.toolCalls}
+                      timestamp={msg.timestamp}
+                    />
+                    {canFork && (
+                      <div className="flex justify-end">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label={t("chat.forkAtMessage")}
+                          title={t("chat.forkAtMessage")}
+                          className="size-8 opacity-50 hover:opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
+                          onClick={() => void handleFork(messageIndex)}
+                        >
+                          <IconGitFork className="size-4" />
+                        </Button>
+                      </div>
+                    )}
+                  </>
                 ) : (
                   <UserMessage
                     content={msg.content}
