@@ -11,6 +11,7 @@
     <br>
     <a href="https://picoclaw.io"><img src="https://img.shields.io/badge/Website-picoclaw.io-blue?style=flat&logo=google-chrome&logoColor=white" alt="Website"></a>
     <a href="https://docs.picoclaw.io/"><img src="https://img.shields.io/badge/Docs-Official-007acc?style=flat&logo=read-the-docs&logoColor=white" alt="Docs"></a>
+    <a href="https://discord.gg/bEuEDnKpf"><img src="https://img.shields.io/badge/Discord-Community-5865F2?style=flat&logo=discord&logoColor=white" alt="Discord"></a>
     <a href="https://deepwiki.com/sipeed/picoclaw"><img src="https://img.shields.io/badge/Wiki-DeepWiki-FFA500?style=flat&logo=wikipedia&logoColor=white" alt="Wiki"></a>
     <br>
 
@@ -686,5 +687,3 @@ For detailed guides beyond this README:
 PRs welcome! The codebase is intentionally small and readable.
 
 See our [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-Join the [Discord community](https://discord.gg/bEuEDnKpf).
