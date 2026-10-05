@@ -121,6 +121,22 @@ func (m *legacyContextManager) forceCompression(sessionKey string) (compressionR
 	}
 
 	history := agent.Sessions.GetHistory(sessionKey)
+	const protectedTail = 4
+	const minToolResultChars = 200
+	const prunedToolResult = "[Old tool output cleared to save context space]"
+	pruned := false
+	for i := 0; i < len(history)-protectedTail; i++ {
+		if history[i].Role == "tool" && len(history[i].Content) > minToolResultChars &&
+			len(history[i].Media) == 0 && len(history[i].Attachments) == 0 {
+			history[i].Content = prunedToolResult
+			pruned = true
+		}
+	}
+	if pruned {
+		agent.Sessions.SetHistory(sessionKey, history)
+		agent.Sessions.Save(sessionKey)
+		return compressionResult{RemainingMessages: len(history)}, true
+	}
 	if len(history) <= 2 {
 		return compressionResult{}, false
 	}
