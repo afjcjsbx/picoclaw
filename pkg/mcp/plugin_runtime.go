@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/auth"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/sipeed/picoclaw/pkg/config"
@@ -20,6 +21,7 @@ import (
 type PluginRuntimeOptions struct {
 	Stderr      io.Writer
 	Lifetime    context.Context
+	OAuthName   string
 	Directory   string
 	Environment []string
 	Timeout     time.Duration
@@ -95,6 +97,11 @@ func (m *Manager) ConnectPluginServer(
 			cancel()
 		}
 	}()
+	if cfg.OAuth != nil {
+		if err := validateOAuthConfig(cfg); err != nil {
+			return err
+		}
+	}
 	var transport sdk.Transport
 	switch cfg.Type {
 	case "stdio":
@@ -104,13 +111,28 @@ func (m *Manager) ConnectPluginServer(
 		cmd.Env = append([]string{}, opts.Environment...)
 		transport = &isolatedCommandTransport{Command: cmd, TerminateDuration: time.Second}
 	case "streamable-http", "sse":
+		var oauthHandler auth.OAuthHandler
+		if cfg.OAuth != nil {
+			oauthName := opts.OAuthName
+			if oauthName == "" {
+				oauthName = name
+			}
+			oauthHandler = &storedOAuthHandler{name: oauthName, store: newOAuthStore(oauthName, cfg)}
+		}
 		origin, err := url.Parse(cfg.URL)
 		if err != nil {
 			return err
 		}
+		var base http.RoundTripper = http.DefaultTransport
+		if oauthHandler != nil {
+			base = oauthHTTPTransport{}
+		}
 		client := &http.Client{
-			Transport: &pluginHTTPTransport{base: http.DefaultTransport, origin: origin, headers: cfg.Headers},
+			Transport: &pluginHTTPTransport{base: base, origin: origin, headers: cfg.Headers},
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				if oauthHandler != nil {
+					return rejectOAuthRedirect(req, via)
+				}
 				if len(via) >= 10 {
 					return fmt.Errorf("too many redirects")
 				}
@@ -120,10 +142,16 @@ func (m *Manager) ConnectPluginServer(
 				return nil
 			},
 		}
-		if cfg.Type == "sse" {
+		if cfg.Type == "sse" && oauthHandler == nil {
 			transport = &sdk.SSEClientTransport{Endpoint: cfg.URL, HTTPClient: client}
 		} else {
-			transport = &sdk.StreamableClientTransport{Endpoint: cfg.URL, HTTPClient: client}
+			transport = &sdk.StreamableClientTransport{
+				Endpoint:     cfg.URL,
+				HTTPClient:   client,
+				OAuthHandler: oauthHandler,
+				// The optional GET listener is not supported by every hosted server.
+				DisableStandaloneSSE: cfg.Type != "sse",
+			}
 		}
 	default:
 		return fmt.Errorf("unsupported plugin MCP transport %q", cfg.Type)
