@@ -11,12 +11,13 @@ import (
 )
 
 type addOptions struct {
-	Env       []string
-	EnvFile   string
-	Headers   []string
-	Transport string
-	Force     bool
-	Deferred  *bool // nil = not set, true = deferred, false = not deferred
+	Env        []string
+	EnvFile    string
+	InheritEnv bool
+	Headers    []string
+	Transport  string
+	Force      bool
+	Deferred   *bool // nil = not set, true = deferred, false = not deferred
 }
 
 func newAddCommand() *cobra.Command {
@@ -73,6 +74,7 @@ func newAddCommand() *cobra.Command {
 	flags := cmd.Flags()
 	flags.StringArrayP("env", "e", nil, "Environment variable in KEY=value format (repeatable, saved to config)")
 	flags.String("env-file", "", "Path to an env file for stdio servers (recommended for secrets)")
+	flags.Bool("inherit-env", false, "Pass the full parent environment to this stdio server")
 	flags.StringArrayP("header", "H", nil, "HTTP header in 'Name: Value' or 'Name=Value' format (repeatable)")
 	flags.StringP("transport", "t", "stdio", "Transport type: stdio, http / streamable-http, or sse")
 	flags.BoolP("force", "f", false, "Overwrite an existing server without prompting")
@@ -101,6 +103,8 @@ func parseAddArgs(args []string) (addOptions, string, string, []string, bool, er
 			i = len(args)
 		case arg == "--force" || arg == "-f":
 			opts.Force = true
+		case arg == "--inherit-env":
+			opts.InheritEnv = true
 		case arg == "--deferred":
 			t := true
 			opts.Deferred = &t
@@ -206,6 +210,9 @@ func buildServerConfig(target string, args []string, opts addOptions) (config.MC
 		if strings.TrimSpace(opts.EnvFile) != "" {
 			return config.MCPServerConfig{}, fmt.Errorf("--env-file can only be used with stdio transport")
 		}
+		if opts.InheritEnv {
+			return config.MCPServerConfig{}, fmt.Errorf("--inherit-env can only be used with stdio transport")
+		}
 		if len(args) > 0 {
 			return config.MCPServerConfig{}, fmt.Errorf("%s transport does not accept command arguments", transport)
 		}
@@ -244,6 +251,7 @@ func buildServerConfig(target string, args []string, opts addOptions) (config.MC
 	server.Args = commandArgs
 	server.Env = env
 	server.EnvFile = strings.TrimSpace(opts.EnvFile)
+	server.InheritEnv = opts.InheritEnv
 
 	return server, nil
 }
