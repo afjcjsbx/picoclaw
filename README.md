@@ -686,3 +686,5 @@ For detailed guides beyond this README:
 PRs welcome! The codebase is intentionally small and readable.
 
 See our [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+Join the [Discord community](https://discord.gg/bEuEDnKpf).
