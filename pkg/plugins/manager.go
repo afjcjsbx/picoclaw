@@ -316,7 +316,13 @@ func (p *packagePlugin) Initialize(pc PluginContext) error {
 	return nil
 }
 
-func (p *packagePlugin) loadServer(pc PluginContext, name string, spec ServerSpec, hooks []Hook, publish func(Capabilities)) {
+func (p *packagePlugin) loadServer(
+	pc PluginContext,
+	name string,
+	spec ServerSpec,
+	hooks []Hook,
+	publish func(Capabilities),
+) {
 	report := func(err error) {
 		p.host.diagnostic(Diagnostic{Plugin: pc.ID, Component: "mcp:" + name, Message: err.Error()})
 	}

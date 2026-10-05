@@ -78,7 +78,8 @@ func (t *PluginTool) RedactCredentials(content string) string {
 	}
 	for name, value := range conn.Config.Headers {
 		lower := strings.ToLower(name)
-		if !strings.Contains(lower, "auth") && !strings.Contains(lower, "key") && !strings.Contains(lower, "token") && !strings.Contains(lower, "secret") {
+		if !strings.Contains(lower, "auth") && !strings.Contains(lower, "key") && !strings.Contains(lower, "token") &&
+			!strings.Contains(lower, "secret") {
 			continue
 		}
 		if len(value) > 8 {

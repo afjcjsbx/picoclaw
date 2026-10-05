@@ -118,9 +118,9 @@ func discoverHooks(manifest PluginManifest, pc PluginContext) ([]Hook, []Diagnos
 				report(fmt.Errorf("MCP hook %q requires a valid server and tool name", spec.Name))
 				continue
 			}
-			mcpFields, err := object(fields["mcp"])
-			if err != nil {
-				report(fmt.Errorf("MCP hook %q: %w", spec.Name, err))
+			mcpFields, mcpErr := object(fields["mcp"])
+			if mcpErr != nil {
+				report(fmt.Errorf("MCP hook %q: %w", spec.Name, mcpErr))
 				continue
 			}
 			for key := range mcpFields {

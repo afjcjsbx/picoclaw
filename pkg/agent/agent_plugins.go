@@ -197,7 +197,15 @@ func (al *AgentLoop) publishPlugin(
 				}
 				tool := mcpToolsByAgent[id][hook.MCP.Server+"\x00"+hook.MCP.Tool]
 				if tool == nil {
-					report("hook:"+hook.Name, fmt.Errorf("MCP tool %q on server %q is unavailable or not allowed for agent %q", hook.MCP.Tool, hook.MCP.Server, id))
+					report(
+						"hook:"+hook.Name,
+						fmt.Errorf(
+							"MCP tool %q on server %q is unavailable or not allowed for agent %q",
+							hook.MCP.Tool,
+							hook.MCP.Server,
+							id,
+						),
+					)
 					continue
 				}
 				name := "plugin:" + hook.Name + ":" + id
@@ -205,7 +213,17 @@ func (al *AgentLoop) publishPlugin(
 					Name:            name,
 					Source:          HookSourceInProcess,
 					ObserverTimeout: pluginMCPHookTimeout,
-					Hook:            newPluginMCPHook(al, capabilities.ID, id, capabilities.Entry.Agents, hook, tool, cfg, observeKinds, observeAll),
+					Hook: newPluginMCPHook(
+						al,
+						capabilities.ID,
+						id,
+						capabilities.Entry.Agents,
+						hook,
+						tool,
+						cfg,
+						observeKinds,
+						observeAll,
+					),
 				}
 				if err := al.MountHook(registration); err != nil {
 					report("hook:"+hook.Name, err)

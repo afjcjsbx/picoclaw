@@ -8,7 +8,10 @@ import (
 
 // ResolveOAuthServer returns the same plugin MCP endpoint used at runtime, for
 // the explicit `picoclaw mcp login <plugin>:<server>` command.
-func ResolveOAuthServer(cfg config.PluginsConfig, workspace, pluginID, serverName string) (config.MCPServerConfig, error) {
+func ResolveOAuthServer(
+	cfg config.PluginsConfig,
+	workspace, pluginID, serverName string,
+) (config.MCPServerConfig, error) {
 	items, _ := discover(cfg, workspace)
 	for _, item := range items {
 		if item.id != pluginID {
@@ -19,7 +22,10 @@ func ResolveOAuthServer(cfg config.PluginsConfig, workspace, pluginID, serverNam
 		}
 		oauth, enabled := item.entry.MCPOAuth[serverName]
 		if !enabled {
-			return config.MCPServerConfig{}, fmt.Errorf("plugin MCP server %q has no OAuth configuration", pluginID+":"+serverName)
+			return config.MCPServerConfig{}, fmt.Errorf(
+				"plugin MCP server %q has no OAuth configuration",
+				pluginID+":"+serverName,
+			)
 		}
 		var spec ServerSpec
 		if raw, overridden := item.entry.MCPOverrides[serverName]; overridden {

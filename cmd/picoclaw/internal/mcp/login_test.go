@@ -76,14 +76,23 @@ func TestMCPLoginSavesOAuthOnlyAfterSuccess(t *testing.T) {
 func TestPluginMCPLoginUsesConfiguredOverride(t *testing.T) {
 	path := setupMCPConfigEnv(t)
 	root := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(root, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"memory"}`), 0o600))
+	require.NoError(
+		t,
+		os.WriteFile(
+			filepath.Join(root, "plugin.json"),
+			[]byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"memory"}`),
+			0o600,
+		),
+	)
 	cfg := readMCPConfig(t, path)
 	cfg.Plugins.Enabled = true
 	cfg.Plugins.Entries = map[string]config.PluginEntryConfig{"memory": {
-		Enabled:      true,
-		Path:         root,
-		MCPOverrides: map[string]json.RawMessage{"remote": json.RawMessage(`{"type":"streamable-http","url":"https://mcp.example/mcp"}`)},
-		MCPOAuth:     map[string]config.MCPOAuthConfig{"remote": {}},
+		Enabled: true,
+		Path:    root,
+		MCPOverrides: map[string]json.RawMessage{
+			"remote": json.RawMessage(`{"type":"streamable-http","url":"https://mcp.example/mcp"}`),
+		},
+		MCPOAuth: map[string]config.MCPOAuthConfig{"remote": {}},
 	}}
 	require.NoError(t, saveValidatedConfig(cfg))
 	original := loginOAuth
@@ -94,7 +103,11 @@ func TestPluginMCPLoginUsesConfiguredOverride(t *testing.T) {
 		require.NotNil(t, server.OAuth)
 		return nil
 	}
-	_, err := executeCommand(NewMCPCommand(), []string{"login", "memory:remote", "--no-browser", "--scope", "tools"}, "")
+	_, err := executeCommand(
+		NewMCPCommand(),
+		[]string{"login", "memory:remote", "--no-browser", "--scope", "tools"},
+		"",
+	)
 	require.NoError(t, err)
 	updated := readMCPConfig(t, path)
 	require.Equal(t, []string{"tools"}, updated.Plugins.Entries["memory"].MCPOAuth["remote"].Scopes)

@@ -71,7 +71,8 @@ func TestPluginToolDeferredOverride(t *testing.T) {
 	deferred := true
 	eager := false
 	discovery := config.ToolDiscoveryConfig{Enabled: true, UseBM25: true}
-	if !pluginToolDeferred(discovery, nil) || !pluginToolDeferred(discovery, &deferred) || pluginToolDeferred(discovery, &eager) {
+	if !pluginToolDeferred(discovery, nil) || !pluginToolDeferred(discovery, &deferred) ||
+		pluginToolDeferred(discovery, &eager) {
 		t.Fatal("plugin per-server deferred setting did not override global discovery")
 	}
 	if pluginToolDeferred(config.ToolDiscoveryConfig{Enabled: false, UseBM25: true}, &deferred) {
@@ -191,23 +192,32 @@ func TestOfficialMem0PluginRemoteMCPAndNativeHooks(t *testing.T) {
 	var searches []searchInput
 	var adds []addInput
 	var mu sync.Mutex
-	sdk.AddTool(server, &sdk.Tool{Name: "search_memories"}, func(_ context.Context, _ *sdk.CallToolRequest, in searchInput) (*sdk.CallToolResult, any, error) {
-		mu.Lock()
-		searches = append(searches, in)
-		memories := []map[string]string{{"memory": "Prefers concise explanations"}}
-		for _, saved := range adds {
-			memories = append(memories, map[string]string{"memory": saved.Text})
-		}
-		mu.Unlock()
-		data, _ := json.Marshal(memories)
-		return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: string(data)}}}, nil, nil
-	})
-	sdk.AddTool(server, &sdk.Tool{Name: "add_memory"}, func(_ context.Context, _ *sdk.CallToolRequest, in addInput) (*sdk.CallToolResult, any, error) {
-		mu.Lock()
-		adds = append(adds, in)
-		mu.Unlock()
-		return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: `{"event_id":"saved"}`}}}, nil, nil
-	})
+	sdk.AddTool(
+		server,
+		&sdk.Tool{Name: "search_memories"},
+		func(_ context.Context, _ *sdk.CallToolRequest, in searchInput) (*sdk.CallToolResult, any, error) {
+			mu.Lock()
+			searches = append(searches, in)
+			memories := make([]map[string]string, 0, 1+len(adds))
+			memories = append(memories, map[string]string{"memory": "Prefers concise explanations"})
+			for _, saved := range adds {
+				memories = append(memories, map[string]string{"memory": saved.Text})
+			}
+			mu.Unlock()
+			data, _ := json.Marshal(memories)
+			return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: string(data)}}}, nil, nil
+		},
+	)
+	sdk.AddTool(
+		server,
+		&sdk.Tool{Name: "add_memory"},
+		func(_ context.Context, _ *sdk.CallToolRequest, in addInput) (*sdk.CallToolResult, any, error) {
+			mu.Lock()
+			adds = append(adds, in)
+			mu.Unlock()
+			return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: `{"event_id":"saved"}`}}}, nil, nil
+		},
+	)
 	handler := sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, nil)
 	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer test-mem0-token" {
@@ -232,8 +242,14 @@ func TestOfficialMem0PluginRemoteMCPAndNativeHooks(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	write("plugin.json", `{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"mem0","repository":"https://github.com/mem0ai/mem0"}`)
-	write("mcp.json", `{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"mem0":{"type":"stdio","command":"python3","args":["${PLUGIN_ROOT}/core/mcp_server.py"]}}}`)
+	write(
+		"plugin.json",
+		`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"mem0","repository":"https://github.com/mem0ai/mem0"}`,
+	)
+	write(
+		"mcp.json",
+		`{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"mem0":{"type":"stdio","command":"python3","args":["${PLUGIN_ROOT}/core/mcp_server.py"]}}}`,
+	)
 	write("com.sipeed.picoclaw/hooks.json", `{"hooks":[
 		{"name":"recall","intercept":["before_llm"],"mcp":{"server":"mem0","tool":"search_memories","arguments":{"query":"${user_message}","filters":{"AND":[{"user_id":"alice"},{"app_id":"project-a"}]},"limit":5},"result":"append_to_user_message"}},
 		{"name":"capture","observe":["turn_completed"],"mcp":{"server":"mem0","tool":"add_memory","arguments":{"text":"User: ${user_message}\nAssistant: ${assistant_message}","user_id":"alice","app_id":"project-a","metadata":{"source":"picoclaw"}}}}
@@ -244,8 +260,15 @@ func TestOfficialMem0PluginRemoteMCPAndNativeHooks(t *testing.T) {
 		Enabled: true, DataDir: t.TempDir(), StartupWaitMS: 3000,
 		Entries: map[string]config.PluginEntryConfig{"mem0": {
 			Enabled: true, Path: root, AllowHooks: true,
-			SkillNames:   []string{},
-			MCPOverrides: map[string]json.RawMessage{"mem0": json.RawMessage(fmt.Sprintf(`{"type":"streamable-http","url":%q,"deferred":false,"headers":{"Authorization":"Bearer ${MEM0_API_KEY}"}}`, remote.URL+"/mcp"))},
+			SkillNames: []string{},
+			MCPOverrides: map[string]json.RawMessage{
+				"mem0": json.RawMessage(
+					fmt.Sprintf(
+						`{"type":"streamable-http","url":%q,"deferred":false,"headers":{"Authorization":"Bearer ${MEM0_API_KEY}"}}`,
+						remote.URL+"/mcp",
+					),
+				),
+			},
 		}},
 	}
 	cfg.Tools.MCP.Discovery = config.ToolDiscoveryConfig{Enabled: true, UseBM25: true}
@@ -286,7 +309,11 @@ func TestOfficialMem0PluginRemoteMCPAndNativeHooks(t *testing.T) {
 		t.Fatalf("MCP hooks missing: %+v", al.PluginStatuses())
 	}
 	if captureHook.observeAll || !captureHook.observeKinds[runtimeevents.KindAgentTurnEnd.String()] {
-		t.Fatalf("capture hook has incorrect event filter: all=%v kinds=%v", captureHook.observeAll, captureHook.observeKinds)
+		t.Fatalf(
+			"capture hook has incorrect event filter: all=%v kinds=%v",
+			captureHook.observeAll,
+			captureHook.observeKinds,
+		)
 	}
 	agentID := al.registry.GetDefaultAgent().ID
 	feedbackSession := "mem0-feedback-session"
@@ -319,10 +346,10 @@ func TestOfficialMem0PluginRemoteMCPAndNativeHooks(t *testing.T) {
 	if err != nil || !strings.Contains(before.Messages[0].Content, "Prefers concise explanations") {
 		t.Fatalf("cached memory was not injected on the next LLM iteration: %+v %v", before, err)
 	}
-	if err := recallHook.OnRuntimeEvent(ctx, runtimeevents.Event{
+	if eventErr := recallHook.OnRuntimeEvent(ctx, runtimeevents.Event{
 		Kind: runtimeevents.KindAgentTurnEnd, Scope: runtimeevents.Scope{AgentID: agentID, TurnID: turnID},
-	}); err != nil {
-		t.Fatal(err)
+	}); eventErr != nil {
+		t.Fatal(eventErr)
 	}
 	before, _, err = recallHook.BeforeLLM(feedbackCtx, &LLMHookRequest{
 		Meta:     HookMeta{AgentID: agentID, TurnID: "mem0-turn-2", Iteration: 1},
@@ -349,11 +376,16 @@ func TestOfficialMem0PluginRemoteMCPAndNativeHooks(t *testing.T) {
 	}
 	mu.Unlock()
 	if err := captureHook.OnRuntimeEvent(ctx, runtimeevents.Event{
-		Kind: runtimeevents.KindAgentTurnEnd, Scope: runtimeevents.Scope{
+		Kind: runtimeevents.KindAgentTurnEnd,
+		Scope: runtimeevents.Scope{
 			AgentID: agentID, SessionKey: feedbackSession, Channel: "telegram",
 			Account: "primary", ChatID: feedbackChat, TopicID: "topic-1",
 		},
-		Payload: TurnEndPayload{Status: TurnEndStatusCompleted, UserMessage: "remember this", FinalContent: "saved response"},
+		Payload: TurnEndPayload{
+			Status:       TurnEndStatusCompleted,
+			UserMessage:  "remember this",
+			FinalContent: "saved response",
+		},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -426,14 +458,24 @@ func TestPluginMCPHooksWithDifferentProviderSchema(t *testing.T) {
 	server := sdk.NewServer(&sdk.Implementation{Name: "supermemory-test", Version: "1"}, nil)
 	var searches []searchInput
 	var adds []addInput
-	sdk.AddTool(server, &sdk.Tool{Name: "search_memory"}, func(_ context.Context, _ *sdk.CallToolRequest, in searchInput) (*sdk.CallToolResult, any, error) {
-		searches = append(searches, in)
-		return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: "Prefers short answers"}}}, nil, nil
-	})
-	sdk.AddTool(server, &sdk.Tool{Name: "add_memory"}, func(_ context.Context, _ *sdk.CallToolRequest, in addInput) (*sdk.CallToolResult, any, error) {
-		adds = append(adds, in)
-		return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: "saved"}}}, nil, nil
-	})
+	sdk.AddTool(
+		server,
+		&sdk.Tool{Name: "search_memory"},
+		func(_ context.Context, _ *sdk.CallToolRequest, in searchInput) (*sdk.CallToolResult, any, error) {
+			searches = append(searches, in)
+			return &sdk.CallToolResult{
+				Content: []sdk.Content{&sdk.TextContent{Text: "Prefers short answers"}},
+			}, nil, nil
+		},
+	)
+	sdk.AddTool(
+		server,
+		&sdk.Tool{Name: "add_memory"},
+		func(_ context.Context, _ *sdk.CallToolRequest, in addInput) (*sdk.CallToolResult, any, error) {
+			adds = append(adds, in)
+			return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: "saved"}}}, nil, nil
+		},
+	)
 	remote := httptest.NewServer(sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, nil))
 	defer remote.Close()
 	al, cfg, _, _, cleanup := newTestAgentLoop(t)
@@ -453,7 +495,9 @@ func TestPluginMCPHooksWithDifferentProviderSchema(t *testing.T) {
 	entry := cfg.Plugins.Entries["test-plugin"]
 	entry.AllowHooks = true
 	entry.SkillNames = []string{}
-	entry.MCPOverrides = map[string]json.RawMessage{"supermemory": json.RawMessage(fmt.Sprintf(`{"type":"streamable-http","url":%q}`, remote.URL))}
+	entry.MCPOverrides = map[string]json.RawMessage{
+		"supermemory": json.RawMessage(fmt.Sprintf(`{"type":"streamable-http","url":%q}`, remote.URL)),
+	}
 	entry.Path = root
 	cfg.Plugins.Entries["test-plugin"] = entry
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -481,8 +525,13 @@ func TestPluginMCPHooksWithDifferentProviderSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := captureHook.OnRuntimeEvent(ctx, runtimeevents.Event{
-		Kind: runtimeevents.KindAgentTurnEnd, Scope: runtimeevents.Scope{AgentID: agentID},
-		Payload: TurnEndPayload{Status: TurnEndStatusCompleted, UserMessage: "project needs", FinalContent: "concise answer"},
+		Kind:  runtimeevents.KindAgentTurnEnd,
+		Scope: runtimeevents.Scope{AgentID: agentID},
+		Payload: TurnEndPayload{
+			Status:       TurnEndStatusCompleted,
+			UserMessage:  "project needs",
+			FinalContent: "concise answer",
+		},
 	}); err != nil {
 		t.Fatal(err)
 	}

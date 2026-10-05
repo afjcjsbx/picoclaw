@@ -30,7 +30,10 @@ func TestMCPHeaderEnv(t *testing.T) {
 			t.Fatalf("reference %q was accepted or leaked a value", value)
 		}
 	}
-	bad := config.MCPServerConfig{Type: "streamable-http", Headers: map[string]string{"Authorization": "${PICOCLAW_TEST_MCP_TOKEN}"}}
+	bad := config.MCPServerConfig{
+		Type:    "streamable-http",
+		Headers: map[string]string{"Authorization": "${PICOCLAW_TEST_MCP_TOKEN}"},
+	}
 	t.Setenv("PICOCLAW_TEST_MCP_TOKEN", "bad\r\nheader: value")
 	if err := resolveMCPHeaderEnv(&bad, false); err == nil {
 		t.Fatal("accepted a resolved header with a newline")

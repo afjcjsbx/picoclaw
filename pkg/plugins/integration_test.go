@@ -214,9 +214,13 @@ func TestPluginLoadAndExecuteIntegration(t *testing.T) {
 func TestPluginRemoteMCPHeaderEnv(t *testing.T) {
 	t.Setenv("PICOCLAW_TEST_MCP_TOKEN", "test-token")
 	remote := sdk.NewServer(&sdk.Implementation{Name: "authenticated", Version: "1"}, nil)
-	sdk.AddTool(remote, &sdk.Tool{Name: "ping"}, func(_ context.Context, _ *sdk.CallToolRequest, _ struct{}) (*sdk.CallToolResult, any, error) {
-		return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: "pong"}}}, nil, nil
-	})
+	sdk.AddTool(
+		remote,
+		&sdk.Tool{Name: "ping"},
+		func(_ context.Context, _ *sdk.CallToolRequest, _ struct{}) (*sdk.CallToolResult, any, error) {
+			return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: "pong"}}}, nil, nil
+		},
+	)
 	handler := sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return remote }, nil)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer test-token" {
