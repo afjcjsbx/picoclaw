@@ -236,13 +236,18 @@ func (h *Handler) readJSONLSession(dir, sessionKey string) (sessionFile, error) 
 }
 
 type picoJSONLSessionRef struct {
-	ID  string
-	Key string
+	ID        string
+	Key       string
+	UpdatedAt time.Time
+	Count     int
+	Skip      int
+	Summary   string
 }
 
 type picoLegacySessionRef struct {
-	ID   string
-	Path string
+	ID        string
+	Path      string
+	UpdatedAt time.Time
 }
 
 func extractPicoSessionIDFromScope(scope session.SessionScope) (string, bool) {
@@ -323,6 +328,10 @@ func (h *Handler) findPicoJSONLSessions(dir string) ([]picoJSONLSessionRef, erro
 		if !ok || ref.Key == "" || ref.ID == "" {
 			continue
 		}
+		ref.UpdatedAt = meta.UpdatedAt
+		ref.Count = meta.Count
+		ref.Skip = meta.Skip
+		ref.Summary = meta.Summary
 		metaBackedBases[strings.TrimSuffix(name, ".meta.json")] = struct{}{}
 		index, exists := refIndexes[ref.ID]
 		if exists {
@@ -336,6 +345,10 @@ func (h *Handler) findPicoJSONLSessions(dir string) ([]picoJSONLSessionRef, erro
 		}
 		refIndexes[ref.ID] = len(refs)
 		scopedIDs[ref.ID] = len(meta.Scope) > 0
+		info, statErr := entry.Info()
+		if ref.UpdatedAt.IsZero() && statErr == nil {
+			ref.UpdatedAt = info.ModTime()
+		}
 		refs = append(refs, ref)
 	}
 
@@ -356,6 +369,9 @@ func (h *Handler) findPicoJSONLSessions(dir string) ([]picoJSONLSessionRef, erro
 			continue
 		}
 		refIndexes[ref.ID] = len(refs)
+		if info, statErr := entry.Info(); statErr == nil {
+			ref.UpdatedAt = info.ModTime()
+		}
 		refs = append(refs, ref)
 	}
 	return refs, nil
@@ -423,15 +439,17 @@ func jsonlSessionRefFromFilename(name string) (picoJSONLSessionRef, bool) {
 			return picoJSONLSessionRef{}, false
 		}
 		return picoJSONLSessionRef{
-			ID:  sessionID,
-			Key: legacyPicoSessionPrefix + sessionID,
+			ID:    sessionID,
+			Key:   legacyPicoSessionPrefix + sessionID,
+			Count: -1,
 		}, true
 	}
 
 	if session.IsOpaqueSessionKey(base) {
 		return picoJSONLSessionRef{
-			ID:  base,
-			Key: base,
+			ID:    base,
+			Key:   base,
+			Count: -1,
 		}, true
 	}
 
@@ -915,40 +933,47 @@ func (h *Handler) handleListSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	items := []sessionListItem{}
+	type candidate struct {
+		id      string
+		updated time.Time
+		jsonl   *picoJSONLSessionRef
+		legacy  *picoLegacySessionRef
+	}
+	candidates := make([]candidate, 0)
 	seen := make(map[string]struct{})
-
 	if refs, findErr := h.findPicoJSONLSessions(dir); findErr == nil {
-		for _, ref := range refs {
-			sess, loadErr := h.readJSONLSession(dir, ref.Key)
-			if loadErr != nil || isEmptySession(sess) {
+		for i := range refs {
+			ref := refs[i]
+			if ref.Count >= 0 && ref.Count <= ref.Skip && strings.TrimSpace(ref.Summary) == "" {
 				continue
 			}
-			h.hydrateForkDisplay(dir, &sess, toolFeedbackMaxArgsLength)
 			seen[ref.ID] = struct{}{}
-			items = append(items, buildSessionListItem(ref.ID, sess, toolFeedbackMaxArgsLength))
+			candidates = append(candidates, candidate{id: ref.ID, updated: ref.UpdatedAt, jsonl: &ref})
 		}
 	}
-
-	if legacyRefs, findErr := h.findLegacyPicoSessions(dir); findErr == nil {
-		for _, ref := range legacyRefs {
+	if entries, readErr := os.ReadDir(dir); readErr == nil {
+		legacyPrefix := sanitizeSessionKey(legacyPicoSessionPrefix)
+		for _, entry := range entries {
+			name := entry.Name()
+			if entry.IsDir() || filepath.Ext(name) != ".json" ||
+				strings.HasSuffix(name, ".meta.json") || !strings.HasPrefix(name, legacyPrefix) {
+				continue
+			}
+			id := strings.TrimSuffix(strings.TrimPrefix(name, legacyPrefix), ".json")
+			if id == "" {
+				continue
+			}
+			ref := picoLegacySessionRef{ID: id, Path: filepath.Join(dir, name)}
+			if info, statErr := entry.Info(); statErr == nil {
+				ref.UpdatedAt = info.ModTime()
+			}
 			if _, exists := seen[ref.ID]; exists {
 				continue
 			}
-			sess, loadErr := h.readLegacySession(ref.Path)
-			if loadErr != nil || isEmptySession(sess) {
-				continue
-			}
-			h.hydrateForkDisplay(dir, &sess, toolFeedbackMaxArgsLength)
-			seen[ref.ID] = struct{}{}
-			items = append(items, buildSessionListItem(ref.ID, sess, toolFeedbackMaxArgsLength))
+			candidates = append(candidates, candidate{id: ref.ID, updated: ref.UpdatedAt, legacy: &ref})
 		}
 	}
-
-	// Sort by updated descending (most recent first)
-	sort.Slice(items, func(i, j int) bool {
-		return items[i].Updated > items[j].Updated
-	})
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i].updated.After(candidates[j].updated) })
 
 	// Pagination parameters
 	offsetStr := r.URL.Query().Get("offset")
@@ -964,16 +989,22 @@ func (h *Handler) handleListSessions(w http.ResponseWriter, r *http.Request) {
 		limit = val
 	}
 
-	totalItems := len(items)
-
-	end := offset + limit
-	if offset >= totalItems {
-		items = []sessionListItem{} // Out of bounds, return empty
-	} else {
-		if end > totalItems {
-			end = totalItems
+	start := min(offset, len(candidates))
+	end := min(start+limit, len(candidates))
+	items := make([]sessionListItem, 0, end-start)
+	for _, candidate := range candidates[start:end] {
+		var sess sessionFile
+		var loadErr error
+		if candidate.jsonl != nil {
+			sess, loadErr = h.readJSONLSession(dir, candidate.jsonl.Key)
+		} else {
+			sess, loadErr = h.readLegacySession(candidate.legacy.Path)
 		}
-		items = items[offset:end]
+		if loadErr != nil || isEmptySession(sess) {
+			continue
+		}
+		h.hydrateForkDisplay(dir, &sess, toolFeedbackMaxArgsLength)
+		items = append(items, buildSessionListItem(candidate.id, sess, toolFeedbackMaxArgsLength))
 	}
 
 	w.Header().Set("Content-Type", "application/json")
