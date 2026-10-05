@@ -73,6 +73,7 @@ type AgentLoop struct {
 	// activeTurnStates tracks active turns per session to prevent duplicates.
 	activeTurnStates sync.Map
 	subTurnCounter   atomic.Int64
+	activeSubTurns   atomic.Int64
 
 	turnSeq atomic.Uint64
 

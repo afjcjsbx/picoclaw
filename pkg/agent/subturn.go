@@ -30,6 +30,7 @@ const (
 var (
 	ErrDepthLimitExceeded   = errors.New("sub-turn depth limit exceeded")
 	ErrInvalidSubTurnConfig = errors.New("invalid sub-turn config")
+	ErrConcurrencyLimit     = errors.New("maximum concurrent sub-turns reached")
 	ErrConcurrencyTimeout   = errors.New("timeout waiting for concurrency slot")
 )
 
@@ -275,6 +276,23 @@ func spawnSubTurn(
 	// Get effective SubTurn configuration
 	rtCfg := al.getSubTurnConfig()
 
+	// Enforce maxConcurrent across the whole AgentLoop, including nested turns.
+	for {
+		active := al.activeSubTurns.Load()
+		if active >= int64(rtCfg.maxConcurrent) {
+			return nil, fmt.Errorf("%w: limit is %d", ErrConcurrencyLimit, rtCfg.maxConcurrent)
+		}
+		if al.activeSubTurns.CompareAndSwap(active, active+1) {
+			break
+		}
+	}
+	globalSemAcquired := true
+	defer func() {
+		if globalSemAcquired {
+			al.activeSubTurns.Add(-1)
+		}
+	}()
+
 	// 0. Acquire concurrency semaphore FIRST to ensure it's released even if early validation fails.
 	// Blocks if parent already has maxConcurrentSubTurns running, with a timeout to prevent indefinite blocking.
 	// Also respects context cancellation so we don't block forever if parent is aborted.
@@ -501,6 +519,8 @@ func spawnSubTurn(
 		<-parentTS.concurrencySem
 		semAcquired = false // prevent the defer from double-releasing
 	}
+	al.activeSubTurns.Add(-1)
+	globalSemAcquired = false
 
 	// Convert turnResult to tools.ToolResult
 	if turnErr != nil {
