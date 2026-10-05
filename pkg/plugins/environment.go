@@ -68,6 +68,9 @@ func prepareDataDirectory(base, id string) (string, error) {
 	if info.Mode()&os.ModeSymlink != 0 {
 		return "", fmt.Errorf("plugin data directory must not alias another installation")
 	}
+	if err := root.Chmod(id, 0o700); err != nil {
+		return "", fmt.Errorf("secure plugin data directory: %w", err)
+	}
 	path, err := ResolvePath(base, id)
 	if err != nil {
 		return "", err
