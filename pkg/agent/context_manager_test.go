@@ -350,6 +350,39 @@ func TestLegacyCompact_Overflow(t *testing.T) {
 	}
 }
 
+func TestLegacyCompact_PrunesOldToolResultsBeforeDroppingTurns(t *testing.T) {
+	cfg := testConfig(t)
+	al := newCMTestAgentLoop(cfg)
+	agent := al.registry.GetDefaultAgent()
+	largeOutput := strings.Repeat("tool output ", 30)
+	history := []providers.Message{
+		{Role: "user", Content: "read a file"},
+		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "old-call"}}},
+		{Role: "tool", ToolCallID: "old-call", Content: largeOutput},
+		{Role: "assistant", Content: "file read"},
+		{Role: "user", Content: "run a command"},
+		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "new-call"}}},
+		{Role: "tool", ToolCallID: "new-call", Content: "recent output"},
+		{Role: "assistant", Content: "done"},
+	}
+	agent.Sessions.SetHistory("session-prune-tools", history)
+
+	result, ok := al.contextManager.(*legacyContextManager).forceCompression("session-prune-tools")
+	if !ok {
+		t.Fatal("expected old tool output to be pruned")
+	}
+	got := agent.Sessions.GetHistory("session-prune-tools")
+	if len(got) != len(history) || result.DroppedMessages != 0 {
+		t.Fatalf("pruning dropped messages: got %d messages, dropped %d", len(got), result.DroppedMessages)
+	}
+	if got[2].Content != "[Old tool output cleared to save context space]" || got[2].ToolCallID != "old-call" {
+		t.Fatalf("old tool result not safely pruned: %+v", got[2])
+	}
+	if got[6].Content != "recent output" {
+		t.Fatalf("recent tool result should remain intact: %+v", got[6])
+	}
+}
+
 func TestLegacyCompact_Overflow_ProactiveReason(t *testing.T) {
 	cfg := testConfig(t)
 	al := newCMTestAgentLoop(cfg)
