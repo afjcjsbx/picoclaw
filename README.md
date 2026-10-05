@@ -533,7 +533,9 @@ PicoClaw includes built-in tools for file operations, code execution, scheduling
 
 Skills and MCP servers can also be packaged together as portable **Agent Plugins 1.0.0**.
 See [Plugin development, installation and activation](PLUGINS.md) and the
-[working demo plugin](examples/plugins/demo-plugin).
+[working demo plugin](examples/plugins/demo-plugin). Mem0 publishes its own
+[Agent Plugin](https://github.com/mem0ai/mem0/tree/main/integrations/mem0-agent-plugin);
+see the [compatibility notes](PLUGINS.md#mem0) before enabling it.
 
 Skills are modular capabilities that extend your Agent. They are loaded from `SKILL.md` files in your workspace.
 

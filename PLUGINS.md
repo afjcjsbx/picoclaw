@@ -193,8 +193,10 @@ contains only available executable-search and temporary-directory variables;
 provider keys and other ambient variables are not inherited. Configured `env`
 values overlay this base. The two reserved variables cannot be set by packages.
 Only their exact placeholders are expanded, once, in `args`, `env` values and
-`cwd`. Other placeholders remain literal. No expansion occurs in commands,
-remote URLs or headers. Install dependencies into `PLUGIN_DATA` explicitly.
+`cwd`. Other placeholders remain literal. Remote header values additionally
+support `${VAR}` references to the PicoClaw process environment. No expansion
+occurs in commands or remote URLs. Install dependencies into `PLUGIN_DATA`
+explicitly.
 
 Remote URLs require HTTPS except for literal loopback addresses and `localhost`.
 User information, fragments, invalid headers and duplicate case-insensitive
@@ -203,18 +205,218 @@ and legacy SSE endpoint events cannot send requests to another origin.
 Legacy `sse` selects the actual HTTP+SSE protocol here; this does not change the
 historical interpretation of `sse` in native PicoClaw MCP configuration.
 
-Credentials do not belong in portable package `env` or `headers`. There is no
-plugin-specific OAuth setup or credential-reference format in this implementation.
-Servers requiring unsupported authorization fail independently with diagnostics.
+Literal credentials do not belong in portable package `env` or `headers`.
+For a remote MCP server, a header can refer to a host environment variable:
+
+```json
+"headers": {"Authorization": "Bearer ${REMOTE_API_KEY}"}
+```
+
+Set `REMOTE_API_KEY` in the environment of the PicoClaw process. References
+are resolved once when the server connects. An unset or empty variable, an
+invalid reference, or a resolved header containing invalid HTTP characters
+disables that server with a diagnostic that does not contain the secret.
+Review a package's header references before enabling it: they select which
+host environment values are sent to its MCP endpoint. Stdio processes still
+receive only their explicitly configured environment.
+
+Alternatively, for a server that accepts a bearer token, put it alone in a
+file under that installation's `PLUGIN_DATA` directory and configure it on
+the host:
+
+```json
+"mcp_bearer_token_files": {"remote": "api-key"}
+```
+
+Add this field to `plugins.entries.<id>`. The map key is the server name in
+`mcp.json`; the value is a path relative to `PLUGIN_DATA`. PicoClaw reads the
+file at connection time and sends `Authorization: Bearer <token>` only to that
+server's origin. The host value replaces a package `Authorization` header.
+Missing, empty, invalid or escaping files disable that server with a diagnostic;
+the token itself is not logged. This host configuration leaves the portable
+Agent Plugins manifest unchanged. OAuth is not provided by this mechanism.
 
 ## Optional PicoClaw hooks
 
 Hooks are a PicoClaw extension, not a portable Agent Plugins component. Enable
-them explicitly with `entries.<id>.allow_hooks: true`.
+them explicitly with `entries.<id>.allow_hooks: true`. A plugin may declare
+process hooks or direct MCP actions in the same `hooks.json` file. Direct MCP
+actions use the plugin's already configured MCP servers and run through
+PicoClaw's normal hook lifecycle.
 
-Configure `plugin.json` as follows, or put the namespace value (the object
-containing `hooks`) in `com.sipeed.picoclaw/hooks.json`. Using both is an error
-limited to the hook extension.
+### MCP actions
+
+Each action names a server and tool from `mcp.json` or the entry's
+`mcp_overrides`. `intercept` runs the action at a synchronous hook stage;
+`observe` runs it for a runtime event. Supported intercept stages are
+`before_llm`, `after_llm`, `before_tool`, `after_tool`, and `approve_tool`.
+Observe accepts PicoClaw runtime event names such as `agent.turn.end`; the
+`turn_completed` alias runs only for successfully completed turns.
+
+Arguments support the event's available `${user_message}` and
+`${assistant_message}` values, `${tool_name}`, `${tool_arguments}`,
+`${tool_result}`, `${request}`, `${response}`, `${event}`, and
+`${event_payload}`. A placeholder occupying the whole value preserves its JSON
+type, so `${tool_arguments}` can be an object. Dotted paths such as
+`${event.payload.UserMessage}` select nested fields.
+
+The default result mode is `ignore`, which is useful for capture or other
+side-effect tools. `append_to_user_message` is valid with `before_llm`; it adds
+the MCP result to the prompt inside an untrusted context block. `approval` is
+valid with `approve_tool`; the MCP tool must return `true`/`false` or an object
+with an `approved` boolean. Approval errors fail closed. Other MCP hook errors
+are logged and leave the turn running.
+
+### Mem0
+
+This example uses Mem0's official Agent Plugin for its manifest and skills,
+Mem0's hosted MCP endpoint for tool calls, and PicoClaw's hook mapping for
+automatic recall and capture. It does not run Mem0's local MCP server.
+
+Clone the official plugin and the shared plugin core into PicoClaw's plugin
+directory. These commands respect `PICOCLAW_HOME` when it is set:
+
+```sh
+PICOCLAW_HOME="${PICOCLAW_HOME:-$HOME/.picoclaw}"
+PLUGIN_REPO="$PICOCLAW_HOME/plugins/mem0-source"
+PLUGIN_ROOT="$PLUGIN_REPO/integrations/mem0-agent-plugin"
+mkdir -p "$PICOCLAW_HOME/plugins"
+git clone --depth 1 --filter=blob:none --sparse \
+  https://github.com/mem0ai/mem0.git "$PLUGIN_REPO"
+git -C "$PLUGIN_REPO" sparse-checkout set \
+  integrations/mem0-agent-plugin integrations/agent-plugin-core
+mkdir -p "$PLUGIN_ROOT/com.sipeed.picoclaw"
+cat > "$PLUGIN_ROOT/com.sipeed.picoclaw/hooks.json" <<'JSON'
+{
+  "hooks": [
+    {
+      "name": "memory-recall",
+      "intercept": ["before_llm"],
+      "mcp": {
+        "server": "mem0",
+        "tool": "search_memories",
+        "arguments": {
+          "query": "${user_message}",
+          "filters": {"AND": [{"user_id": "your-user-id"}, {"app_id": "your-project-id"}]},
+          "limit": 5
+        },
+        "result": "append_to_user_message"
+      }
+    },
+    {
+      "name": "memory-capture",
+      "observe": ["turn_completed"],
+      "mcp": {
+        "server": "mem0",
+        "tool": "add_memory",
+        "arguments": {
+          "text": "User: ${user_message}\nAssistant: ${assistant_message}",
+          "user_id": "your-user-id",
+          "app_id": "your-project-id"
+        }
+      }
+    }
+  ]
+}
+JSON
+```
+
+Store the Mem0 API key in the plugin's private data directory. The prompt hides
+the key while you paste it; the file is created with mode `0600`:
+
+```sh
+python3 - <<'PY'
+import os
+from getpass import getpass
+from pathlib import Path
+
+home = Path(os.environ.get("PICOCLAW_HOME", str(Path.home() / ".picoclaw"))).expanduser()
+key_file = home / "plugin-data" / "mem0" / "mem0-api-key"
+key_file.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+key_file.parent.chmod(0o700)
+key_file.write_text(getpass("Mem0 API key: ").strip())
+key_file.chmod(0o600)
+print(f"Saved key to {key_file}")
+PY
+```
+
+Merge these settings into `config.json`. Set `path` to the absolute path of the
+cloned plugin. Keep any existing `tools.mcp.servers` entries; the discovery
+settings shown here leave discovery enabled globally, while `deferred: false`
+exposes Mem0's tools directly on every model call:
+
+```json
+{
+  "tools": {
+    "mcp": {
+      "enabled": true,
+      "discovery": {
+        "enabled": true,
+        "use_bm25": true,
+        "use_regex": false
+      }
+    }
+  },
+  "plugins": {
+    "enabled": true,
+    "entries": {
+      "mem0": {
+        "enabled": true,
+        "path": "/absolute/path/to/mem0-source/integrations/mem0-agent-plugin",
+        "allow_hooks": true,
+        "mcp_overrides": {
+          "mem0": {
+            "type": "streamable-http",
+            "url": "https://mcp.mem0.ai/mcp",
+            "deferred": false
+          }
+        },
+        "mcp_bearer_token_files": {
+          "mem0": "mem0-api-key"
+        }
+      }
+    }
+  }
+}
+```
+
+Since `skill_names` and `agents` are omitted, PicoClaw loads all plugin skills
+and enables the plugin for all configured agents. The token script assumes the
+default plugin data directory; if `plugins.data_dir` is configured, save the key
+under `<plugins.data_dir>/mem0/mem0-api-key` instead.
+
+The [official Mem0 Agent Plugin](https://github.com/mem0ai/mem0/tree/main/integrations/mem0-agent-plugin)
+ships a local MCP server; this configuration replaces it with Mem0's
+[hosted MCP server](https://docs.mem0.ai/platform/mem0-mcp). The host-side
+`deferred: false` option does not modify the portable plugin's `mcp.json`.
+Other MCP servers continue to follow the global discovery setting unless they
+have their own per-server override. Never put the API key literally in
+`config.json`, `mcp.json`, or `hooks.json`.
+
+Restart PicoClaw after saving the files. Ask it to remember a harmless fact,
+then ask about that fact in a later turn. The completed turn triggers
+`add_memory`; the following turn's `before_llm` hook calls `search_memories` and
+adds the result to the model context. With tool feedback enabled, these
+hook-triggered MCP calls are also shown in the conversation.
+
+The same hook declarations work with other MCP providers by changing the
+server, tool names and arguments. Supermemory, for example, uses
+`search_memory(query, containerTag)` and
+`add_memory(content, action, containerTag)`. Its hosted endpoint supports
+OAuth with `picoclaw mcp login <plugin-id>:<server-name>`; API-key bearer
+authentication also works. A real API test confirmed recall and capture with
+Supermemory on 5 October 2026.
+
+MCP arguments are filtered for configured secrets and the target server's
+authentication values. The `${user_message}` and `${assistant_message}` shortcuts
+are bounded to 6,000 bytes each; context added to the prompt is bounded to
+12,000 bytes. Each agent's MCP server allowlist still applies.
+
+### Process hooks
+
+Process hook entries can share `hooks.json` with MCP actions. Put the `hooks`
+object either inline in `plugin.json` or in `com.sipeed.picoclaw/hooks.json`;
+using both is an error limited to the hook extension.
 
 ```json
 {
@@ -234,12 +436,11 @@ limited to the hook extension.
 }
 ```
 
-Hook launch fields follow the same validation, environment and containment rules
-as stdio MCP. The process implements PicoClaw's existing JSON-RPC hook protocol:
-`hook.hello`, `hook.runtime_event`, and the requested interception methods.
-`entries.<id>.config` is delivered as `config` in the hello payload. Available
-interceptions are `before_llm`, `after_llm`, `before_tool`, `after_tool`, and
-`approve_tool`; only declared stages and allowed agents are forwarded.
+Process launch fields follow the same validation, environment and containment
+rules as stdio MCP. The process implements PicoClaw's existing JSON-RPC hook
+protocol: `hook.hello`, `hook.runtime_event`, and the requested interception
+methods. `entries.<id>.config` is delivered as `config` in the hello payload.
+Only declared stages and allowed agents are forwarded.
 
 See [the hook protocol](docs/architecture/hooks/README.md). Hook failures use the
 existing hook manager's timeout and error policies. In particular, approval

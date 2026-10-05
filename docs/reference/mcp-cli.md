@@ -328,6 +328,35 @@ It is useful when:
 - you want to debug one server without probing the whole list
 - the entry is currently disabled in config but you still want to validate its definition
 
+## `picoclaw mcp login` and `logout`
+
+Remote MCP servers can use browser OAuth instead of a static bearer header:
+
+```bash
+picoclaw mcp login remote
+picoclaw mcp logout remote
+```
+
+For a plugin server, add `"mcp_oauth": {"remote": {}}` to its plugin entry
+and use its qualified name:
+
+```bash
+picoclaw mcp login supermemory:supermemory
+picoclaw mcp logout supermemory:supermemory
+```
+
+Login discovers the server's OAuth metadata, opens the browser, and receives
+the callback on a local loopback port. Use `--no-browser` to print the URL,
+`--callback-port` for a fixed port, `--scope` for requested scopes, and
+`--client-id` with `--issuer` for a registered public client. The login timeout
+defaults to five minutes. Tokens are stored under `$PICOCLAW_HOME/auth/mcp/`
+with owner-only permissions, outside `config.json`; background connections
+reuse and refresh them. Logout removes local credentials but does not revoke
+server-side tokens. Restart a running gateway to close its active session.
+
+OAuth cannot be combined with an `Authorization` header. The MCP endpoint and
+OAuth URLs must use HTTPS, except for loopback development servers.
+
 ## `picoclaw mcp edit`
 
 Syntax:

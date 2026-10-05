@@ -414,6 +414,7 @@ and injected into the context for a configured number of turns (`ttl`).
 | `env_file` | string  | no       | Path to environment file for stdio process                                                                                                                      |
 | `url`      | string  | sse/http | Endpoint URL for `sse`/`http` transport                                                                                                                         |
 | `headers`  | object  | no       | HTTP headers for `sse`/`http` transport                                                                                                                         |
+| `oauth`    | object  | no       | Browser OAuth for remote servers; run `picoclaw mcp login <name>` before connecting. Cannot be combined with an `Authorization` header.                         |
 
 ### Transport Behavior
 
@@ -422,6 +423,9 @@ and injected into the context for a configured number of turns (`ttl`).
     - `command` is set → `stdio`
 - `http` and `sse` both use `url` + optional `headers`.
 - `env` and `env_file` are only applied to `stdio` servers.
+- `oauth: {}` enables browser login with dynamic client registration. Optional
+  fields are `client_id`, `issuer`, `scopes`, and `callback_port`. See
+  [MCP Server CLI](mcp-cli.md#picoclaw-mcp-login-and-logout).
 
 ### Configuration Examples
 
