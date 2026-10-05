@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -18,6 +19,26 @@ import (
 type legacyContextManager struct {
 	al          *AgentLoop
 	summarizing sync.Map // dedup for async Compact (post-turn)
+	cooldowns   sync.Map // session key -> summarizeCooldown
+}
+
+const legacySummaryTimeout = 120 * time.Second
+
+// ponytail: in-memory cooldown resets on restart; persist it only if restart retries matter.
+type summarizeCooldown struct {
+	failures int
+	retryAt  time.Time
+}
+
+func summarizeBackoff(failures int) time.Duration {
+	switch {
+	case failures <= 1:
+		return time.Minute
+	case failures == 2:
+		return 5 * time.Minute
+	default:
+		return 15 * time.Minute
+	}
 }
 
 func (m *legacyContextManager) Assemble(_ context.Context, req *AssembleRequest) (*AssembleResponse, error) {
@@ -71,6 +92,10 @@ func (m *legacyContextManager) Clear(_ context.Context, sessionKey string) error
 	}
 	agent.Sessions.SetHistory(sessionKey, []providers.Message{})
 	agent.Sessions.SetSummary(sessionKey, "")
+	m.cooldowns.Delete(agent.ID + ":" + sessionKey)
+	if defaultAgent := m.al.registry.GetDefaultAgent(); defaultAgent != nil {
+		m.cooldowns.Delete(defaultAgent.ID + ":" + sessionKey)
+	}
 	return agent.Sessions.Save(sessionKey)
 }
 
@@ -88,9 +113,13 @@ func (m *legacyContextManager) maybeSummarize(sessionKey string) {
 
 	if len(newHistory) > agent.SummarizeMessageThreshold || tokenEstimate > threshold {
 		summarizeKey := agent.ID + ":" + sessionKey
+		if value, ok := m.cooldowns.Load(summarizeKey); ok && time.Now().Before(value.(summarizeCooldown).retryAt) {
+			return
+		}
 		if _, loading := m.summarizing.LoadOrStore(summarizeKey, true); !loading {
 			go func() {
 				defer m.summarizing.Delete(summarizeKey)
+				failed := true
 				defer func() {
 					if r := recover(); r != nil {
 						logger.WarnCF("agent", "Summarization panic recovered", map[string]any{
@@ -98,9 +127,22 @@ func (m *legacyContextManager) maybeSummarize(sessionKey string) {
 							"panic":       r,
 						})
 					}
+					if failed {
+						value, _ := m.cooldowns.Load(summarizeKey)
+						state, _ := value.(summarizeCooldown)
+						state.failures++
+						cooldown := summarizeBackoff(state.failures)
+						if cooldown < legacySummaryTimeout {
+							cooldown = legacySummaryTimeout
+						}
+						state.retryAt = time.Now().Add(cooldown)
+						m.cooldowns.Store(summarizeKey, state)
+					} else {
+						m.cooldowns.Delete(summarizeKey)
+					}
 				}()
 				logger.Debug("Memory threshold reached. Optimizing conversation history...")
-				m.summarizeSession(agent, sessionKey)
+				failed = m.summarizeSession(agent, sessionKey)
 			}()
 		}
 	}
@@ -171,20 +213,20 @@ func (m *legacyContextManager) forceCompression(sessionKey string) (compressionR
 	}, true
 }
 
-func (m *legacyContextManager) summarizeSession(agent *AgentInstance, sessionKey string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+func (m *legacyContextManager) summarizeSession(agent *AgentInstance, sessionKey string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), legacySummaryTimeout)
 	defer cancel()
 
 	history := agent.Sessions.GetHistory(sessionKey)
 	summary := agent.Sessions.GetSummary(sessionKey)
 
 	if len(history) <= 4 {
-		return
+		return false
 	}
 
 	safeCut := findSafeBoundary(history, len(history)-4)
 	if safeCut <= 0 {
-		return
+		return false
 	}
 	keepCount := len(history) - safeCut
 	toSummarize := history[:safeCut]
@@ -206,7 +248,7 @@ func (m *legacyContextManager) summarizeSession(agent *AgentInstance, sessionKey
 	}
 
 	if len(validMessages) == 0 {
-		return
+		return false
 	}
 
 	const (
@@ -215,6 +257,7 @@ func (m *legacyContextManager) summarizeSession(agent *AgentInstance, sessionKey
 	)
 
 	var finalSummary string
+	var failed bool
 	if len(validMessages) > maxSummarizationMessages {
 		mid := len(validMessages) / 2
 		mid = m.findNearestUserMessage(validMessages, mid)
@@ -222,8 +265,9 @@ func (m *legacyContextManager) summarizeSession(agent *AgentInstance, sessionKey
 		part1 := validMessages[:mid]
 		part2 := validMessages[mid:]
 
-		s1, _ := m.summarizeBatch(ctx, agent, part1, "")
-		s2, _ := m.summarizeBatch(ctx, agent, part2, "")
+		s1, err1 := m.summarizeBatch(ctx, agent, part1, "")
+		s2, err2 := m.summarizeBatch(ctx, agent, part2, "")
+		failed = err1 != nil || err2 != nil
 
 		mergePrompt := fmt.Sprintf(
 			"Merge these two conversation summaries into one cohesive summary:\n\n1: %s\n\n2: %s",
@@ -231,13 +275,16 @@ func (m *legacyContextManager) summarizeSession(agent *AgentInstance, sessionKey
 		)
 
 		resp, err := m.retryLLMCall(ctx, agent, mergePrompt, llmMaxRetries)
-		if err == nil && resp.Content != "" {
+		if err == nil && resp != nil && resp.Content != "" {
 			finalSummary = resp.Content
 		} else {
+			failed = true
 			finalSummary = s1 + " " + s2
 		}
 	} else {
-		finalSummary, _ = m.summarizeBatch(ctx, agent, validMessages, summary)
+		var err error
+		finalSummary, err = m.summarizeBatch(ctx, agent, validMessages, summary)
+		failed = err != nil
 	}
 
 	if omitted && finalSummary != "" {
@@ -259,6 +306,7 @@ func (m *legacyContextManager) summarizeSession(agent *AgentInstance, sessionKey
 			},
 		)
 	}
+	return failed
 }
 
 func (m *legacyContextManager) findNearestUserMessage(messages []providers.Message, mid int) int {
@@ -349,8 +397,11 @@ func (m *legacyContextManager) summarizeBatch(
 	prompt := sb.String()
 
 	response, err := m.retryLLMCall(ctx, agent, prompt, llmMaxRetries)
-	if err == nil && response.Content != "" {
+	if err == nil && response != nil && response.Content != "" {
 		return strings.TrimSpace(response.Content), nil
+	}
+	if err == nil {
+		err = errors.New("empty summary response")
 	}
 
 	var fallback strings.Builder
@@ -380,7 +431,7 @@ func (m *legacyContextManager) summarizeBatch(
 		}
 		fallback.WriteString(fmt.Sprintf("%s: %s", msg.Role, content))
 	}
-	return fallback.String(), nil
+	return fallback.String(), err
 }
 
 func (m *legacyContextManager) estimateTokens(messages []providers.Message) int {
