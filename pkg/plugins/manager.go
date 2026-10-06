@@ -346,9 +346,12 @@ func (p *packagePlugin) loadServer(
 		cfg.OAuth = &oauth
 	}
 	filename, overrideAuthorization := p.entry.MCPBearerTokenFiles[name]
-	if err := resolveMCPHeaderEnv(&cfg, overrideAuthorization); err != nil {
-		report(err)
-		return
+	// Package manifests are untrusted; only host MCPOverrides may expand host env.
+	if _, overridden := p.entry.MCPOverrides[name]; overridden {
+		if err := resolveMCPHeaderEnv(&cfg, overrideAuthorization); err != nil {
+			report(err)
+			return
+		}
 	}
 	if overrideAuthorization {
 		if err := applyMCPBearerToken(&cfg, pc.DataDir, filename); err != nil {

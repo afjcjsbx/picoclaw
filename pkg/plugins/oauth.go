@@ -28,7 +28,8 @@ func ResolveOAuthServer(
 			)
 		}
 		var spec ServerSpec
-		if raw, overridden := item.entry.MCPOverrides[serverName]; overridden {
+		raw, overridden := item.entry.MCPOverrides[serverName]
+		if overridden {
 			var err error
 			spec, err = parseServerOverride(raw)
 			if err != nil {
@@ -56,8 +57,10 @@ func ResolveOAuthServer(
 		if _, bearerFile := item.entry.MCPBearerTokenFiles[serverName]; bearerFile {
 			return config.MCPServerConfig{}, fmt.Errorf("plugin MCP OAuth cannot be combined with a bearer token file")
 		}
-		if err := resolveMCPHeaderEnv(&server, false); err != nil {
-			return config.MCPServerConfig{}, err
+		if overridden {
+			if err := resolveMCPHeaderEnv(&server, false); err != nil {
+				return config.MCPServerConfig{}, err
+			}
 		}
 		server.OAuth = &oauth
 		return server, nil
