@@ -1,9 +1,4 @@
-import {
-  IconPlugConnectedX,
-  IconRobot,
-  IconRobotOff,
-  IconStar,
-} from "@tabler/icons-react"
+import { IconPlugConnectedX, IconRobotOff, IconStar } from "@tabler/icons-react"
 import { Link } from "@tanstack/react-router"
 import { useTranslation } from "react-i18next"
 
@@ -24,7 +19,7 @@ export function ChatEmptyState({
 
   if (!hasAvailableModels) {
     return (
-      <div className="flex flex-col items-center justify-center py-20 opacity-70">
+      <div className="flex flex-col items-center justify-center px-4 py-20 text-center">
         <div className="mb-6 flex h-16 w-16 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-500">
           <IconRobotOff className="h-8 w-8" />
         </div>
@@ -43,7 +38,7 @@ export function ChatEmptyState({
 
   if (!defaultModelName) {
     return (
-      <div className="flex flex-col items-center justify-center py-20 opacity-70">
+      <div className="flex flex-col items-center justify-center px-4 py-20 text-center">
         <div className="mb-6 flex h-16 w-16 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-500">
           <IconStar className="h-8 w-8" />
         </div>
@@ -59,7 +54,7 @@ export function ChatEmptyState({
 
   if (!isConnected) {
     return (
-      <div className="flex flex-col items-center justify-center py-20 opacity-70">
+      <div className="flex flex-col items-center justify-center px-4 py-20 text-center">
         <div className="mb-6 flex h-16 w-16 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-500">
           <IconPlugConnectedX className="h-8 w-8" />
         </div>
@@ -74,12 +69,11 @@ export function ChatEmptyState({
   }
 
   return (
-    <div className="flex flex-col items-center justify-center py-20 opacity-70">
-      <div className="mb-6 flex h-16 w-16 items-center justify-center rounded-2xl bg-violet-500/10 text-violet-500">
-        <IconRobot className="h-8 w-8" />
-      </div>
-      <h3 className="mb-2 text-xl font-medium">{t("chat.welcome")}</h3>
-      <p className="text-muted-foreground text-center text-sm">
+    <div className="flex flex-col items-center justify-center px-4 py-20 text-center">
+      <h3 className="mb-3 text-3xl font-medium tracking-tight sm:text-4xl">
+        {t("chat.welcome")}
+      </h3>
+      <p className="text-muted-foreground max-w-lg text-[15px] leading-relaxed">
         {t("chat.welcomeDesc")}
       </p>
     </div>

@@ -54,7 +54,7 @@ export const UserMessage = memo(function UserMessage({
               "wrap-break-word whitespace-pre-wrap",
               isCommand
                 ? "rounded-xl border border-zinc-200 bg-transparent px-4 py-3 font-mono text-[14px] text-zinc-800 dark:border-zinc-800/60 dark:bg-[#121212] dark:text-zinc-200 dark:shadow-sm"
-                : "rounded-2xl rounded-tr-sm bg-violet-500 px-5 py-3 text-[15px] leading-relaxed text-white shadow-sm",
+                : "bg-muted text-foreground rounded-2xl rounded-tr-sm px-5 py-3 text-[15px] leading-relaxed",
             )}
           >
             {isCommand ? (
@@ -76,7 +76,7 @@ export const UserMessage = memo(function UserMessage({
               "bg-background/75 hover:bg-background absolute top-2 right-2 h-7 w-7 opacity-0 shadow-xs transition-opacity group-hover:opacity-100",
               isCommand
                 ? "text-zinc-700 dark:text-zinc-200"
-                : "text-violet-700 dark:text-violet-100",
+                : "text-foreground",
             )}
             onClick={() => void copy(content)}
             aria-label={copyMessageLabel}
