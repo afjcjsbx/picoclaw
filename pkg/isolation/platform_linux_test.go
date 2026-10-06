@@ -23,7 +23,14 @@ func TestBuildLinuxBwrapArgs_IncludesNamespaceFlagsAndExec(t *testing.T) {
 		t.Fatal(err)
 	}
 	plan := BuildLinuxMountPlan(root, []config.ExposePath{{Source: binaryDir, Target: binaryDir, Mode: "ro"}})
-	args, err := buildLinuxBwrapArgs(binaryPath, binaryPath, []string{binaryPath, "--flag"}, root, plan, map[string]bool{"--unshare-ipc": true})
+	args, err := buildLinuxBwrapArgs(
+		binaryPath,
+		binaryPath,
+		[]string{binaryPath, "--flag"},
+		root,
+		plan,
+		map[string]bool{"--unshare-ipc": true},
+	)
 	if err != nil {
 		t.Fatalf("buildLinuxBwrapArgs() error = %v", err)
 	}

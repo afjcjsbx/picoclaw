@@ -145,13 +145,16 @@ func cachedLinuxNamespaceFlags(bwrapPath string) (map[string]bool, error) {
 		}
 		for _, flag := range linuxOptionalNamespaceFlags {
 			if !linuxNamespaceProbe.flags[flag] {
-				logger.WarnCF("isolation", "bubblewrap dropped "+flag+"; corresponding namespace isolation is not active",
+				logger.WarnCF(
+					"isolation",
+					"bubblewrap dropped "+flag+"; corresponding namespace isolation is not active",
 					map[string]any{
 						"flag":                flag,
 						"namespace_isolation": "not active",
 						"reason":              "kernel lacks this namespace; bwrap returned 'Creating new namespace failed' (EINVAL)",
 						"remaining_isolation": "mount namespace, filesystem view, and user environment remain active",
-					})
+					},
+				)
 			}
 		}
 	})
@@ -179,7 +182,12 @@ func probeLinuxNamespaceFlags(
 			flags[flag] = false
 			continue
 		}
-		return nil, fmt.Errorf("probe bubblewrap namespace flag %s: %w: %s", flag, err, strings.TrimSpace(string(output)))
+		return nil, fmt.Errorf(
+			"probe bubblewrap namespace flag %s: %w: %s",
+			flag,
+			err,
+			strings.TrimSpace(string(output)),
+		)
 	}
 	return flags, nil
 }
