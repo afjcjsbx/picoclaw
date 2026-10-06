@@ -60,8 +60,8 @@ func TestTranslateMessages_UserWithToolCallID(t *testing.T) {
 	if input[0].OfFunctionCallOutput == nil {
 		t.Fatal("expected FunctionCallOutput for user with ToolCallID")
 	}
-	if input[0].OfFunctionCallOutput.CallID != "call_1" {
-		t.Errorf("CallID = %q, want %q", input[0].OfFunctionCallOutput.CallID, "call_1")
+	if input[0].OfFunctionCallOutput.CallID.Value != "call_1" {
+		t.Errorf("CallID = %q, want %q", input[0].OfFunctionCallOutput.CallID.Value, "call_1")
 	}
 }
 
@@ -139,8 +139,8 @@ func TestTranslateMessages_ToolMessage(t *testing.T) {
 	if input[0].OfFunctionCallOutput == nil {
 		t.Fatal("expected FunctionCallOutput")
 	}
-	if input[0].OfFunctionCallOutput.CallID != "call_99" {
-		t.Errorf("CallID = %q, want %q", input[0].OfFunctionCallOutput.CallID, "call_99")
+	if input[0].OfFunctionCallOutput.CallID.Value != "call_99" {
+		t.Errorf("CallID = %q, want %q", input[0].OfFunctionCallOutput.CallID.Value, "call_99")
 	}
 }
 
@@ -370,8 +370,28 @@ func TestParseResponseBody_FunctionCall(t *testing.T) {
 	if result.ToolCalls[0].ID != "call_abc" {
 		t.Errorf("ID = %q, want %q", result.ToolCalls[0].ID, "call_abc")
 	}
+	if result.ToolCalls[0].Arguments["city"] != "SF" {
+		t.Errorf("Arguments[city] = %v, want SF", result.ToolCalls[0].Arguments["city"])
+	}
 	if result.FinishReason != "tool_calls" {
 		t.Errorf("FinishReason = %q, want %q", result.FinishReason, "tool_calls")
+	}
+}
+
+func TestParseResponseBody_FunctionCallObjectArguments(t *testing.T) {
+	body := strings.NewReader(`{
+		"status":"completed",
+		"output":[{"type":"function_call","call_id":"call_abc","name":"get_weather","arguments":{"city":"SF"}}]
+	}`)
+	result, err := ParseResponseBody(body)
+	if err != nil {
+		t.Fatalf("ParseResponseBody error: %v", err)
+	}
+	if len(result.ToolCalls) != 1 {
+		t.Fatalf("len(ToolCalls) = %d, want 1", len(result.ToolCalls))
+	}
+	if result.ToolCalls[0].Arguments["city"] != "SF" {
+		t.Errorf("Arguments[city] = %v, want SF", result.ToolCalls[0].Arguments["city"])
 	}
 }
 

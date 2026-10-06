@@ -5528,11 +5528,11 @@ func TestAgentLoop_ToolLimitUsesDedicatedFallback(t *testing.T) {
 	route := al.registry.ResolveRoute(bus.InboundContext{
 		Channel:  "test",
 		ChatType: "direct",
-		SenderID: "cron",
+		SenderID: "direct",
 	})
 	history := defaultAgent.Sessions.GetHistory(al.allocateRouteSession(route, testInboundMessage(bus.InboundMessage{
 		Channel:  "test",
-		SenderID: "cron",
+		SenderID: "direct",
 		ChatID:   "chat1",
 	})).SessionKey)
 	if len(history) != 4 {

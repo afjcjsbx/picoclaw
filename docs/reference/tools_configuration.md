@@ -416,6 +416,7 @@ and injected into the context for a configured number of turns (`ttl`).
 | `args`     | array   | no       | Command arguments for stdio transport                                                                                                                           |
 | `env`      | object  | no       | Environment variables for stdio process                                                                                                                         |
 | `env_file` | string  | no       | Path to environment file for stdio process                                                                                                                      |
+| `inherit_env` | bool | no | Pass the full PicoClaw process environment to this stdio server. Defaults to `false`. |
 | `url`      | string  | sse/http | Endpoint URL for `sse`/`http` transport                                                                                                                         |
 | `headers`  | object  | no       | HTTP headers for `sse`/`http` transport                                                                                                                         |
 
@@ -425,7 +426,8 @@ and injected into the context for a configured number of turns (`ttl`).
     - `url` is set → `sse`
     - `command` is set → `stdio`
 - `http` and `sse` both use `url` + optional `headers`.
-- `env` and `env_file` are only applied to `stdio` servers.
+- `env`, `env_file`, and `inherit_env` are only applied to `stdio` servers.
+- By default, stdio servers inherit only `PATH`, `HOME`, `USER`, `LANG`, `LC_ALL`, `TERM`, `SHELL`, `TMPDIR`, and `XDG_*` (plus basic Windows process variables on Windows). `env_file` adds variables, and `env` overrides both the file and inherited values. Set `inherit_env: true` only if the server needs the entire parent environment.
 
 ### Configuration Examples
 
