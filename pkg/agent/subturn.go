@@ -4,180 +4,28 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
 	"sync/atomic"
-	"time"
 
+	"github.com/sipeed/picoclaw/pkg/agent/subagent"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/logger"
-	"github.com/sipeed/picoclaw/pkg/providers"
-	"github.com/sipeed/picoclaw/pkg/providers/messageutil"
 	"github.com/sipeed/picoclaw/pkg/tools"
 )
 
-// ====================== Config & Constants ======================
-const (
-	// Default values for SubTurn configuration (used when config is not set or is zero)
-	defaultMaxSubTurnDepth       = 3
-	defaultMaxConcurrentSubTurns = 5
-	defaultConcurrencyTimeout    = 30 * time.Second
-	defaultSubTurnTimeout        = 5 * time.Minute
-	// maxEphemeralHistorySize limits the number of messages stored in ephemeral sessions.
-	// This prevents memory accumulation in long-running sub-turns.
-	maxEphemeralHistorySize = 50
-)
+// ====================== SubTurn Config ======================
+
+// SubTurnConfig and the sub-turn errors are defined in the subagent package.
+type SubTurnConfig = subagent.SubTurnConfig
 
 var (
-	ErrDepthLimitExceeded   = errors.New("sub-turn depth limit exceeded")
-	ErrInvalidSubTurnConfig = errors.New("invalid sub-turn config")
-	ErrConcurrencyTimeout   = errors.New("timeout waiting for concurrency slot")
+	ErrDepthLimitExceeded   = subagent.ErrDepthLimitExceeded
+	ErrInvalidSubTurnConfig = subagent.ErrInvalidSubTurnConfig
+	ErrConcurrencyTimeout   = subagent.ErrConcurrencyTimeout
 )
 
 // getSubTurnConfig returns the effective SubTurn configuration with defaults applied.
-func (al *AgentLoop) getSubTurnConfig() subTurnRuntimeConfig {
-	cfg := al.cfg.Agents.Defaults.SubTurn
-
-	maxDepth := cfg.MaxDepth
-	if maxDepth <= 0 {
-		maxDepth = defaultMaxSubTurnDepth
-	}
-
-	maxConcurrent := cfg.MaxConcurrent
-	if maxConcurrent <= 0 {
-		maxConcurrent = defaultMaxConcurrentSubTurns
-	}
-
-	concurrencyTimeout := time.Duration(cfg.ConcurrencyTimeoutSec) * time.Second
-	if concurrencyTimeout <= 0 {
-		concurrencyTimeout = defaultConcurrencyTimeout
-	}
-
-	defaultTimeout := time.Duration(cfg.DefaultTimeoutMinutes) * time.Minute
-	if defaultTimeout <= 0 {
-		defaultTimeout = defaultSubTurnTimeout
-	}
-
-	return subTurnRuntimeConfig{
-		maxDepth:           maxDepth,
-		maxConcurrent:      maxConcurrent,
-		concurrencyTimeout: concurrencyTimeout,
-		defaultTimeout:     defaultTimeout,
-		defaultTokenBudget: cfg.DefaultTokenBudget,
-	}
-}
-
-// subTurnRuntimeConfig holds the effective runtime configuration for SubTurn execution.
-type subTurnRuntimeConfig struct {
-	maxDepth           int
-	maxConcurrent      int
-	concurrencyTimeout time.Duration
-	defaultTimeout     time.Duration
-	defaultTokenBudget int
-}
-
-// ====================== SubTurn Config ======================
-
-// SubTurnConfig configures the execution of a child sub-turn.
-//
-// Usage Examples:
-//
-// Synchronous sub-turn (Async=false):
-//
-//	cfg := SubTurnConfig{
-//	    Model: "gpt-4o-mini",
-//	    SystemPrompt: "Analyze this code",
-//	    Async: false,  // Result returned immediately
-//	}
-//	result, err := SpawnSubTurn(ctx, cfg)
-//	// Use result directly here
-//	processResult(result)
-//
-// Asynchronous sub-turn (Async=true):
-//
-//	cfg := SubTurnConfig{
-//	    Model: "gpt-4o-mini",
-//	    SystemPrompt: "Background analysis",
-//	    Async: true,  // Result delivered to channel
-//	}
-//	result, err := SpawnSubTurn(ctx, cfg)
-//	// Result also available in parent's pendingResults channel
-//	// Parent turn will poll and process it in a later iteration
-type SubTurnConfig struct {
-	Model        string
-	Tools        []tools.Tool
-	SystemPrompt string
-	MaxTokens    int
-
-	// Async controls the result delivery mechanism:
-	//
-	// When Async = false (synchronous sub-turn):
-	//   - The caller blocks until the sub-turn completes
-	//   - The result is ONLY returned via the function return value
-	//   - The result is NOT delivered to the parent's pendingResults channel
-	//   - This prevents double delivery: caller gets result immediately, no need for channel
-	//   - Use case: When the caller needs the result immediately to continue execution
-	//   - Example: A tool that needs to process the sub-turn result before returning
-	//
-	// When Async = true (asynchronous sub-turn):
-	//   - The sub-turn runs in the background (still blocks the caller, but semantically async)
-	//   - The result is delivered to the parent's pendingResults channel
-	//   - The result is ALSO returned via the function return value (for consistency)
-	//   - The parent turn can poll pendingResults in later iterations to process results
-	//   - Use case: Fire-and-forget operations, or when results are processed in batches
-	//   - Example: Spawning multiple sub-turns in parallel and collecting results later
-	//
-	// IMPORTANT: The Async flag does NOT make the call non-blocking. It only controls
-	// whether the result is delivered via the channel. For true non-blocking execution,
-	// the caller must spawn the sub-turn in a separate goroutine.
-	Async bool
-
-	// Critical indicates this SubTurn's result is important and should continue
-	// running even after the parent turn finishes gracefully.
-	//
-	// When parent finishes gracefully (Finish(false)):
-	//   - Critical=true: SubTurn continues running, delivers result as orphan
-	//   - Critical=false: SubTurn exits gracefully without error
-	//
-	// When parent finishes with hard abort (Finish(true)):
-	//   - All SubTurns are canceled regardless of Critical flag
-	Critical bool
-
-	// Timeout is the maximum duration for this SubTurn.
-	// If the SubTurn runs longer than this, it will be canceled.
-	// Default is 5 minutes (defaultSubTurnTimeout) if not specified.
-	Timeout time.Duration
-
-	// MaxContextRunes limits the context size (in runes) passed to the SubTurn.
-	// This prevents context window overflow by truncating message history before LLM calls.
-	//
-	// Values:
-	//   0  = Auto-calculate based on model's ContextWindow * 0.75 (default, recommended)
-	//   -1 = No limit (disable soft truncation, rely only on hard context errors)
-	//   >0 = Use specified rune limit
-	//
-	// The soft limit acts as a first line of defense before hitting the provider's
-	// hard context window limit. When exceeded, older messages are intelligently
-	// truncated while preserving system messages and recent context.
-	MaxContextRunes int
-
-	// ActualSystemPrompt is injected as the true 'system' role message for the childAgent.
-	// The legacy SystemPrompt field is actually used as the first 'user' message (task description).
-	ActualSystemPrompt string
-
-	// InitialMessages preloads the ephemeral session history before the agent loop starts.
-	// Used by evaluator-optimizer patterns to pass the full worker context across multiple iterations.
-	InitialMessages []providers.Message
-
-	// InitialTokenBudget is a shared atomic counter for tracking remaining tokens.
-	// If set, the SubTurn will inherit this budget and deduct tokens after each LLM call.
-	// If nil, the SubTurn will inherit the parent's tokenBudget (if any).
-	// Used by team tool to enforce token limits across all team members.
-	InitialTokenBudget *atomic.Int64
-
-	// TargetAgentID, when set, runs the sub-turn as the specified agent.
-	// The target agent's workspace, model, tools, and system prompt are used
-	// instead of the caller's. If empty, the sub-turn runs as the parent agent.
-	TargetAgentID string
+func (al *AgentLoop) getSubTurnConfig() subagent.RuntimeConfig {
+	return subagent.ResolveRuntimeConfig(al.cfg.Agents.Defaults.SubTurn)
 }
 
 // ====================== Context Keys ======================
@@ -286,7 +134,7 @@ func spawnSubTurn(
 	var semAcquired bool
 	if parentTS.concurrencySem != nil {
 		// Create a timeout context for semaphore acquisition
-		timeoutCtx, cancel := context.WithTimeout(ctx, rtCfg.concurrencyTimeout)
+		timeoutCtx, cancel := context.WithTimeout(ctx, rtCfg.ConcurrencyTimeout)
 		defer cancel()
 
 		select {
@@ -304,16 +152,16 @@ func spawnSubTurn(
 			}
 			// Otherwise it's our timeout
 			return nil, fmt.Errorf("%w: all %d slots occupied for %v",
-				ErrConcurrencyTimeout, rtCfg.maxConcurrent, rtCfg.concurrencyTimeout)
+				ErrConcurrencyTimeout, rtCfg.MaxConcurrent, rtCfg.ConcurrencyTimeout)
 		}
 	}
 
 	// 1. Depth limit check
-	if parentTS.depth >= rtCfg.maxDepth {
+	if parentTS.depth >= rtCfg.MaxDepth {
 		logger.WarnCF("subturn", "Depth limit exceeded", map[string]any{
 			"parent_id": parentTS.turnID,
 			"depth":     parentTS.depth,
-			"max_depth": rtCfg.maxDepth,
+			"max_depth": rtCfg.MaxDepth,
 		})
 		return nil, ErrDepthLimitExceeded
 	}
@@ -327,7 +175,7 @@ func spawnSubTurn(
 	// 3. Determine timeout for child SubTurn
 	timeout := cfg.Timeout
 	if timeout <= 0 {
-		timeout = rtCfg.defaultTimeout
+		timeout = rtCfg.DefaultTimeout
 	}
 
 	// 4. Create INDEPENDENT child context (not derived from parent ctx).
@@ -358,7 +206,7 @@ func spawnSubTurn(
 	if baseAgent == nil {
 		return nil, errors.New("parent turnState has no agent instance")
 	}
-	ephemeralStore := newEphemeralSession(nil)
+	ephemeralStore := subagent.NewEphemeralSession(nil)
 	agent := *baseAgent // shallow copy
 	agent.Sessions = ephemeralStore
 	// Clone the tool registry so child turn's tool registrations
@@ -413,7 +261,7 @@ func spawnSubTurn(
 	childTS.parentTurnID = parentTS.turnID
 	childTS.parentTurnState = parentTS
 	childTS.pendingResults = make(chan *tools.ToolResult, 16)
-	childTS.concurrencySem = make(chan struct{}, rtCfg.maxConcurrent)
+	childTS.concurrencySem = make(chan struct{}, rtCfg.MaxConcurrent)
 	childTS.al = al                  // back-ref for hard abort cascade
 	childTS.session = ephemeralStore // same store as agent.Sessions
 
@@ -424,10 +272,10 @@ func spawnSubTurn(
 		childTS.tokenBudget = cfg.InitialTokenBudget
 	} else if parentTS.tokenBudget != nil {
 		childTS.tokenBudget = parentTS.tokenBudget
-	} else if rtCfg.defaultTokenBudget > 0 {
+	} else if rtCfg.DefaultTokenBudget > 0 {
 		// Apply default token budget from config if no budget is set
 		budget := &atomic.Int64{}
-		budget.Store(int64(rtCfg.defaultTokenBudget))
+		budget.Store(int64(rtCfg.DefaultTokenBudget))
 		childTS.tokenBudget = budget
 	}
 
@@ -609,105 +457,3 @@ func deliverSubTurnResult(al *AgentLoop, parentTS *turnState, childID string, re
 }
 
 // ====================== Other Types ======================
-
-// ephemeralSessionStore is an in-memory session.SessionStore used by SubTurns.
-// It does not persist to disk and auto-truncates history to maxEphemeralHistorySize.
-type ephemeralSessionStore struct {
-	mu      sync.Mutex
-	history []providers.Message
-	summary string
-}
-
-func newEphemeralSession(initial []providers.Message) ephemeralSessionStoreIface {
-	s := &ephemeralSessionStore{}
-	if len(initial) > 0 {
-		s.history = append(s.history, initial...)
-	}
-	return s
-}
-
-// ephemeralSessionStoreIface is satisfied by *ephemeralSessionStore.
-// Declared so newEphemeralSession can return a typed interface.
-type ephemeralSessionStoreIface interface {
-	AddMessage(sessionKey, role, content string)
-	AddFullMessage(sessionKey string, msg providers.Message)
-	GetHistory(key string) []providers.Message
-	GetSummary(key string) string
-	SetSummary(key, summary string)
-	SetHistory(key string, history []providers.Message)
-	TruncateHistory(key string, keepLast int)
-	Save(key string) error
-	ListSessions() []string
-	Close() error
-}
-
-func (e *ephemeralSessionStore) AddMessage(_, role, content string) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.history = append(e.history, providers.Message{Role: role, Content: content})
-	e.truncateLocked()
-}
-
-func (e *ephemeralSessionStore) AddFullMessage(_ string, msg providers.Message) {
-	if messageutil.IsTransientAssistantThoughtMessage(msg) {
-		return
-	}
-
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.history = append(e.history, msg)
-	e.truncateLocked()
-}
-
-func (e *ephemeralSessionStore) GetHistory(_ string) []providers.Message {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	out := make([]providers.Message, len(e.history))
-	copy(out, e.history)
-	return out
-}
-
-func (e *ephemeralSessionStore) GetSummary(_ string) string {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.summary
-}
-
-func (e *ephemeralSessionStore) SetSummary(_, summary string) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.summary = summary
-}
-
-func (e *ephemeralSessionStore) SetHistory(_ string, history []providers.Message) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	history = messageutil.FilterInvalidHistoryMessages(history)
-	e.history = make([]providers.Message, len(history))
-	copy(e.history, history)
-	e.truncateLocked()
-}
-
-func (e *ephemeralSessionStore) TruncateHistory(_ string, keepLast int) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if keepLast <= 0 {
-		e.history = nil
-		return
-	}
-
-	if keepLast >= len(e.history) {
-		return
-	}
-	e.history = e.history[len(e.history)-keepLast:]
-}
-
-func (e *ephemeralSessionStore) Save(_ string) error    { return nil }
-func (e *ephemeralSessionStore) Close() error           { return nil }
-func (e *ephemeralSessionStore) ListSessions() []string { return nil }
-
-func (e *ephemeralSessionStore) truncateLocked() {
-	if len(e.history) > maxEphemeralHistorySize {
-		e.history = e.history[len(e.history)-maxEphemeralHistorySize:]
-	}
-}
