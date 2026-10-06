@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -133,7 +134,7 @@ func (t *ResourceTool) Name() string {
 }
 
 func (t *ResourceTool) Description() string {
-	return "Read a UTF-8 resource bundled in plugin " + t.ID + "; provide a path relative to its root (for example skills/greet/references/help.md)."
+	return "Read a UTF-8 resource under skills/ or references/ bundled in plugin " + t.ID + "; provide a path relative to its root (for example skills/greet/references/help.md)."
 }
 
 func (t *ResourceTool) Parameters() map[string]any {
@@ -155,7 +156,20 @@ func (t *ResourceTool) Execute(ctx context.Context, args map[string]any) *tools.
 	if !ok || path == "" {
 		return tools.ErrorResult("path is required")
 	}
-	content, err := ReadPackageFile(t.Root, path)
+	path = filepath.Clean(path)
+	var root, relative string
+	for _, allowed := range []string{"skills", "references"} {
+		prefix := allowed + string(filepath.Separator)
+		if strings.HasPrefix(path, prefix) {
+			root = filepath.Join(t.Root, allowed)
+			relative = strings.TrimPrefix(path, prefix)
+			break
+		}
+	}
+	if root == "" || relative == "" {
+		return tools.ErrorResult("resource path must be under skills/ or references/")
+	}
+	content, err := ReadPackageFile(root, relative)
 	if err != nil {
 		return tools.ErrorResult(err.Error())
 	}
