@@ -1323,7 +1323,7 @@ func (m *Manager) StartAll(ctx context.Context) error {
 						"addr": ln.Addr().String(),
 					})
 					if err := m.httpServer.Serve(ln); err != nil && err != http.ErrServerClosed {
-						logger.FatalCF("channels", "Shared HTTP server error", map[string]any{
+						logger.ErrorCF("channels", "Shared HTTP server error", map[string]any{
 							"addr":  ln.Addr().String(),
 							"error": err.Error(),
 						})
@@ -1346,7 +1346,7 @@ func (m *Manager) StartAll(ctx context.Context) error {
 					"addr": m.httpServer.Addr,
 				})
 				if err := m.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-					logger.FatalCF("channels", "Shared HTTP server error", map[string]any{
+					logger.ErrorCF("channels", "Shared HTTP server error", map[string]any{
 						"error": err.Error(),
 					})
 				}
