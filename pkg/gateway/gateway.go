@@ -112,7 +112,7 @@ func Run(debug bool, homePath, configPath string, allowEmptyStartup bool) (runEr
 	defer panicFunc()
 
 	if err = logger.EnableFileLogging(filepath.Join(homePath, logPath, logFile)); err != nil {
-		logger.Fatal(fmt.Sprintf("error enabling file logging: %v", err))
+		return fmt.Errorf("error enabling file logging: %w", err)
 	}
 	defer logger.DisableFileLogging()
 
