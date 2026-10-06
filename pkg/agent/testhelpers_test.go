@@ -4,29 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/sipeed/picoclaw/pkg/providers"
 )
-
-func roles(msgs []providers.Message) []string {
-	r := make([]string, len(msgs))
-	for i, m := range msgs {
-		r[i] = m.Role
-	}
-	return r
-}
-
-func assertRoles(t *testing.T, msgs []providers.Message, expected ...string) {
-	t.Helper()
-	if len(msgs) != len(expected) {
-		t.Fatalf("role count mismatch: got %v, want %v", roles(msgs), expected)
-	}
-	for i, exp := range expected {
-		if msgs[i].Role != exp {
-			t.Errorf("message[%d]: got role %q, want %q", i, msgs[i].Role, exp)
-		}
-	}
-}
 
 // setupWorkspace creates a temporary workspace with standard directories and optional files.
 // Returns the tmpDir path; caller should defer os.RemoveAll(tmpDir).

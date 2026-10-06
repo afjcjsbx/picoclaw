@@ -12,7 +12,7 @@ import (
 	"github.com/ergochat/readline"
 
 	"github.com/sipeed/picoclaw/cmd/picoclaw/internal"
-	"github.com/sipeed/picoclaw/pkg/agent"
+	"github.com/sipeed/picoclaw/pkg/agent/loop"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
@@ -51,7 +51,7 @@ func agentCmd(message, sessionKey, model string, debug bool) error {
 
 	msgBus := bus.NewMessageBus()
 	defer msgBus.Close()
-	agentLoop := agent.NewAgentLoop(cfg, msgBus, provider)
+	agentLoop := loop.NewAgentLoop(cfg, msgBus, provider)
 	defer agentLoop.Close()
 
 	// Print agent startup info (only for interactive mode)
@@ -90,7 +90,7 @@ func agentCmd(message, sessionKey, model string, debug bool) error {
 	return nil
 }
 
-func interactiveMode(agentLoop *agent.AgentLoop, sessionKey string) {
+func interactiveMode(agentLoop *loop.AgentLoop, sessionKey string) {
 	prompt := fmt.Sprintf("%s You: ", internal.Logo)
 
 	rl, err := readline.NewEx(&readline.Config{
@@ -140,7 +140,7 @@ func interactiveMode(agentLoop *agent.AgentLoop, sessionKey string) {
 	}
 }
 
-func simpleInteractiveMode(agentLoop *agent.AgentLoop, sessionKey string) {
+func simpleInteractiveMode(agentLoop *loop.AgentLoop, sessionKey string) {
 	reader := bufio.NewReader(os.Stdin)
 	for {
 		fmt.Print(fmt.Sprintf("%s You: ", internal.Logo))

@@ -547,22 +547,6 @@ func TestResolvePrimaryProviderForCandidatePreservesInjectedProviderForRawModel(
 	}
 }
 
-func TestProviderForFallbackCandidateRejectsMissingCrossProvider(t *testing.T) {
-	agent := &AgentInstance{CandidateProviders: map[string]providers.LLMProvider{}}
-	activeProvider := &mockProvider{}
-	activeCandidates := []providers.FallbackCandidate{{Provider: "openai", Model: "gpt-4o"}}
-
-	provider, err := providerForFallbackCandidate(
-		agent,
-		activeProvider,
-		activeCandidates,
-		providers.FallbackCandidate{Provider: "openrouter", Model: "new-model"},
-	)
-	if err == nil || provider != nil {
-		t.Fatalf("provider = %T, error = %v, want missing cross-provider error", provider, err)
-	}
-}
-
 func TestResolvedCandidateModelConfigUsesConfigIndex(t *testing.T) {
 	cfg := &config.Config{ModelList: []*config.ModelConfig{
 		{
@@ -588,7 +572,7 @@ func TestResolvedCandidateModelConfigUsesConfigIndex(t *testing.T) {
 		ConfigIndex: 2,
 	}
 
-	resolved, err := resolvedCandidateModelConfig(cfg, candidate, t.TempDir())
+	resolved, err := ResolvedCandidateModelConfig(cfg, candidate, t.TempDir())
 	if err != nil {
 		t.Fatalf("resolvedCandidateModelConfig() error = %v", err)
 	}
@@ -602,13 +586,13 @@ func TestResolvedCandidateModelConfigSurvivesModelListReorder(t *testing.T) {
 		{ModelName: "other", Provider: "openai", Model: "other", APIKeys: config.SimpleSecureStrings("sk-other")},
 		{ModelName: "backup", Provider: "openai", Model: "gpt-4o", APIKeys: config.SimpleSecureStrings("sk-backup")},
 	}}
-	candidate, ok := resolveModelCandidate(cfg, "openai", "backup")
+	candidate, ok := ResolveModelCandidate(cfg, "openai", "backup")
 	if !ok {
 		t.Fatal("resolveModelCandidate() did not resolve backup")
 	}
 	cfg.ModelList = []*config.ModelConfig{cfg.ModelList[1], cfg.ModelList[0]}
 
-	resolved, err := resolvedCandidateModelConfig(cfg, candidate, t.TempDir())
+	resolved, err := ResolvedCandidateModelConfig(cfg, candidate, t.TempDir())
 	if err != nil {
 		t.Fatalf("resolvedCandidateModelConfig() error = %v", err)
 	}
@@ -626,66 +610,17 @@ func TestResolvedCandidateModelConfigUsesDefaultProviderForLegacyBareAlias(t *te
 			APIKeys:   config.SimpleSecureStrings("test-key"),
 		}},
 	}
-	candidate, ok := resolveModelCandidate(cfg, "anthropic", "primary")
+	candidate, ok := ResolveModelCandidate(cfg, "anthropic", "primary")
 	if !ok {
 		t.Fatal("resolveModelCandidate() did not resolve primary")
 	}
 
-	resolved, err := resolvedCandidateModelConfig(cfg, candidate, t.TempDir())
+	resolved, err := ResolvedCandidateModelConfig(cfg, candidate, t.TempDir())
 	if err != nil {
 		t.Fatalf("resolvedCandidateModelConfig() error = %v", err)
 	}
 	if resolved.Provider != "anthropic" || resolved.Model != "claude-sonnet-4-5" {
 		t.Fatalf("resolved provider/model = %q/%q, want anthropic/claude-sonnet-4-5", resolved.Provider, resolved.Model)
-	}
-}
-
-func TestProviderForConfiguredFallbackRejectsMissingProvider(t *testing.T) {
-	primary := providers.FallbackCandidate{Provider: "openai", Model: "primary", ConfigKey: "config:primary"}
-	fallback := providers.FallbackCandidate{Provider: "openai", Model: "backup", ConfigKey: "config:backup"}
-	provider, err := providerForFallbackCandidate(
-		&AgentInstance{CandidateProviders: map[string]providers.LLMProvider{}},
-		&mockProvider{},
-		[]providers.FallbackCandidate{primary, fallback},
-		fallback,
-	)
-	if err == nil || provider != nil {
-		t.Fatalf("provider = %T, error = %v, want configured provider initialization error", provider, err)
-	}
-}
-
-func TestApplyBeforeLLMModelRewriteSwitchesProvider(t *testing.T) {
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{Defaults: config.AgentDefaults{Provider: "openai"}},
-		ModelList: []*config.ModelConfig{{
-			ModelName: "hook-model",
-			Provider:  "anthropic",
-			Model:     "claude-sonnet",
-			APIKeys:   config.SimpleSecureStrings("sk-ant-test"),
-		}},
-	}
-	candidate, ok := resolveModelCandidate(cfg, "openai", "hook-model")
-	if !ok {
-		t.Fatal("resolveModelCandidate() did not resolve hook model")
-	}
-	replacement := &mockProvider{}
-	agent := &AgentInstance{
-		Workspace: t.TempDir(),
-		CandidateProviders: map[string]providers.LLMProvider{
-			candidateProviderKey(candidate): replacement,
-		},
-	}
-	exec := &turnExecution{llmModel: "hook-model", activeProvider: &mockProvider{}}
-	pipeline := &Pipeline{Cfg: cfg}
-
-	if err := pipeline.applyBeforeLLMModelRewrite(&turnState{agent: agent}, exec); err != nil {
-		t.Fatalf("applyBeforeLLMModelRewrite() error = %v", err)
-	}
-	if exec.activeProvider != replacement {
-		t.Fatalf("active provider = %T, want hook-selected candidate provider", exec.activeProvider)
-	}
-	if exec.activeModel != "claude-sonnet" {
-		t.Fatalf("active model = %q, want %q", exec.activeModel, "claude-sonnet")
 	}
 }
 
@@ -706,7 +641,7 @@ func TestResolveRawModelCandidatePreservesSelectedTemplateIndex(t *testing.T) {
 		},
 	}}
 
-	candidate, ok := resolveModelCandidate(cfg, "openai", "openai/gpt-4o")
+	candidate, ok := ResolveModelCandidate(cfg, "openai", "openai/gpt-4o")
 	if !ok {
 		t.Fatal("resolveModelCandidate() did not resolve raw model")
 	}
@@ -739,8 +674,8 @@ func TestPopulateCandidateProvidersUsesConfigIndexAndRuntimeKey(t *testing.T) {
 		ConfigIndex: 2,
 	}
 
-	populateCandidateProvidersFromCandidates(cfg, t.TempDir(), []providers.FallbackCandidate{candidate}, out)
-	if out[candidateProviderKey(candidate)] == nil {
+	PopulateCandidateProvidersFromCandidates(cfg, t.TempDir(), []providers.FallbackCandidate{candidate}, out)
+	if out[CandidateProviderKey(candidate)] == nil {
 		t.Fatal("candidate provider map is missing exact config-index key")
 	}
 	if out[providers.ModelKey("openai", "gpt-4o")] == nil {
@@ -771,7 +706,7 @@ func TestPopulateCandidateProvidersFromCandidatesUsesCandidateProvider(t *testin
 		IdentityKey: "model_name:backup",
 	}
 
-	populateCandidateProvidersFromCandidates(cfg, t.TempDir(), []providers.FallbackCandidate{candidate}, out)
+	PopulateCandidateProvidersFromCandidates(cfg, t.TempDir(), []providers.FallbackCandidate{candidate}, out)
 	if out[providers.ModelKey("openrouter", "shared-model")] == nil {
 		t.Fatal("candidate provider map did not use the already resolved OpenRouter candidate")
 	}

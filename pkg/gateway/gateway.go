@@ -14,7 +14,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/sipeed/picoclaw/pkg/agent"
+	"github.com/sipeed/picoclaw/pkg/agent/loop"
 	"github.com/sipeed/picoclaw/pkg/audio/asr"
 	"github.com/sipeed/picoclaw/pkg/audio/tts"
 	"github.com/sipeed/picoclaw/pkg/bus"
@@ -186,7 +186,7 @@ func Run(debug bool, homePath, configPath string, allowEmptyStartup bool) (runEr
 	}
 
 	msgBus := bus.NewMessageBus()
-	agentLoop := agent.NewAgentLoop(cfg, msgBus, provider)
+	agentLoop := loop.NewAgentLoop(cfg, msgBus, provider)
 	msgBus.SetEventPublisher(agentLoop.RuntimeEventBus())
 	publishGatewayEvent(agentLoop, runtimeevents.KindGatewayStart, startedAt, nil)
 
@@ -346,7 +346,7 @@ func startupInfoInt(value any) (int, bool) {
 
 func executeReload(
 	ctx context.Context,
-	agentLoop *agent.AgentLoop,
+	agentLoop *loop.AgentLoop,
 	newCfg *config.Config,
 	provider *providers.LLMProvider,
 	runningServices *services,
@@ -392,7 +392,7 @@ func createStartupProvider(
 
 func setupAndStartServices(
 	cfg *config.Config,
-	agentLoop *agent.AgentLoop,
+	agentLoop *loop.AgentLoop,
 	msgBus *bus.MessageBus,
 	authToken string,
 	listenResult netbind.OpenResult,
@@ -547,7 +547,7 @@ func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Dura
 
 func shutdownGateway(
 	runningServices *services,
-	agentLoop *agent.AgentLoop,
+	agentLoop *loop.AgentLoop,
 	provider providers.LLMProvider,
 	msgBus *bus.MessageBus,
 	fullShutdown bool,
@@ -572,7 +572,7 @@ func shutdownGateway(
 
 func handleConfigReload(
 	ctx context.Context,
-	al *agent.AgentLoop,
+	al *loop.AgentLoop,
 	newCfg *config.Config,
 	providerRef *providers.LLMProvider,
 	runningServices *services,
@@ -640,7 +640,7 @@ func handleConfigReload(
 }
 
 func restartServices(
-	al *agent.AgentLoop,
+	al *loop.AgentLoop,
 	runningServices *services,
 	msgBus *bus.MessageBus,
 ) error {
@@ -822,7 +822,7 @@ func getFileSize(path string) int64 {
 }
 
 func setupCronTool(
-	agentLoop *agent.AgentLoop,
+	agentLoop *loop.AgentLoop,
 	msgBus *bus.MessageBus,
 	workspace string,
 	restrict bool,
@@ -854,7 +854,7 @@ func setupCronTool(
 	return cronService, nil
 }
 
-func createHeartbeatHandler(agentLoop *agent.AgentLoop) func(prompt, channel, chatID string) *tools.ToolResult {
+func createHeartbeatHandler(agentLoop *loop.AgentLoop) func(prompt, channel, chatID string) *tools.ToolResult {
 	return func(prompt, channel, chatID string) *tools.ToolResult {
 		if channel == "" || chatID == "" {
 			channel, chatID = "cli", "direct"

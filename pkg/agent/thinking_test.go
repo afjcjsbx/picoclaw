@@ -27,7 +27,7 @@ func TestParseThinkingLevel(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := parseThinkingLevel(tt.input); got != tt.want {
+			if got := ParseThinkingLevel(tt.input); got != tt.want {
 				t.Errorf("parseThinkingLevel(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})

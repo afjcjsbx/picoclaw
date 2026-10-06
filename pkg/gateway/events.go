@@ -3,7 +3,7 @@ package gateway
 import (
 	"time"
 
-	"github.com/sipeed/picoclaw/pkg/agent"
+	"github.com/sipeed/picoclaw/pkg/agent/loop"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 )
 
@@ -13,7 +13,7 @@ type gatewayEventPayload struct {
 }
 
 func publishGatewayEvent(
-	al *agent.AgentLoop,
+	al *loop.AgentLoop,
 	kind runtimeevents.Kind,
 	startedAt time.Time,
 	err error,

@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sipeed/picoclaw/pkg/agent"
+	"github.com/sipeed/picoclaw/pkg/agent/loop"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
@@ -224,11 +224,11 @@ func TestPublishGatewayEvent(t *testing.T) {
 		}
 	})
 
-	al := agent.NewAgentLoop(
+	al := loop.NewAgentLoop(
 		config.DefaultConfig(),
 		bus.NewMessageBus(),
 		&startupBlockedProvider{reason: "not used"},
-		agent.WithRuntimeEvents(eventBus),
+		loop.WithRuntimeEvents(eventBus),
 	)
 	t.Cleanup(al.Close)
 
@@ -255,7 +255,7 @@ func TestPublishGatewayEvent(t *testing.T) {
 
 func TestShutdownGatewayClosesMessageBus(t *testing.T) {
 	msgBus := bus.NewMessageBus()
-	al := agent.NewAgentLoop(
+	al := loop.NewAgentLoop(
 		config.DefaultConfig(),
 		msgBus,
 		&startupBlockedProvider{reason: "not used"},
