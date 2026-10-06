@@ -41,7 +41,7 @@ func TestOAuthLoginRefreshAndLogout(t *testing.T) {
 func testOAuthLoginRefreshAndLogout(t *testing.T, clientID, transport string) {
 	t.Helper()
 	t.Setenv(config.EnvHome, t.TempDir())
-	var serverURL, redirect, challenge string
+	var serverURL, authURL, redirect, challenge string
 	var registrations, refreshes atomic.Int32
 	mcpServer := sdk.NewServer(&sdk.Implementation{Name: "oauth-test", Version: "1"}, nil)
 	mcpHandler := sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return mcpServer }, nil)
@@ -50,10 +50,28 @@ func testOAuthLoginRefreshAndLogout(t *testing.T, clientID, transport string) {
 		switch r.URL.Path {
 		case "/.well-known/oauth-protected-resource/mcp":
 			json.NewEncoder(w).
-				Encode(map[string]any{"resource": serverURL + "/mcp", "authorization_servers": []string{serverURL}, "scopes_supported": []string{"tools"}})
+				Encode(map[string]any{"resource": serverURL + "/mcp", "authorization_servers": []string{authURL}, "scopes_supported": []string{"tools"}})
+		case "/mcp":
+			bearer := r.Header.Get("Authorization")
+			if bearer != "Bearer access-one" && bearer != "Bearer access-two" {
+				w.Header().
+					Set("WWW-Authenticate", fmt.Sprintf(`Bearer resource_metadata="%s/.well-known/oauth-protected-resource/mcp"`, serverURL))
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			mcpHandler.ServeHTTP(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	serverURL = server.URL
+	authServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
 		case "/.well-known/oauth-authorization-server":
 			json.NewEncoder(w).
-				Encode(map[string]any{"issuer": serverURL, "authorization_endpoint": serverURL + "/authorize", "token_endpoint": serverURL + "/token", "registration_endpoint": serverURL + "/register", "code_challenge_methods_supported": []string{"S256"}})
+				Encode(map[string]any{"issuer": authURL, "authorization_endpoint": authURL + "/authorize", "token_endpoint": authURL + "/token", "registration_endpoint": authURL + "/register", "code_challenge_methods_supported": []string{"S256"}})
 		case "/register":
 			registrations.Add(1)
 			var metadata map[string]any
@@ -92,25 +110,17 @@ func testOAuthLoginRefreshAndLogout(t *testing.T, clientID, transport string) {
 					`{"access_token":"access-one","token_type":"Bearer","refresh_token":"refresh-one","expires_in":3600}`,
 				)
 			}
-		case "/mcp":
-			bearer := r.Header.Get("Authorization")
-			if bearer != "Bearer access-one" && bearer != "Bearer access-two" {
-				w.Header().
-					Set("WWW-Authenticate", fmt.Sprintf(`Bearer resource_metadata="%s/.well-known/oauth-protected-resource/mcp"`, serverURL))
-				w.WriteHeader(http.StatusUnauthorized)
-				return
-			}
-			mcpHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
 	}))
-	defer server.Close()
-	serverURL = server.URL
+	defer authServer.Close()
+	authURL = authServer.URL
+	require.NotEqual(t, serverURL, authURL, "OAuth endpoints must use a different origin")
 	cfg := config.MCPServerConfig{
 		Type:  transport,
 		URL:   server.URL + "/mcp",
-		OAuth: &config.MCPOAuthConfig{ClientID: clientID, Issuer: serverURL},
+		OAuth: &config.MCPOAuthConfig{ClientID: clientID, Issuer: authURL},
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
