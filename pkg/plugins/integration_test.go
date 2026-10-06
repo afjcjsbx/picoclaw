@@ -233,19 +233,46 @@ func TestPluginRemoteMCPHeaderEnv(t *testing.T) {
 
 	root := t.TempDir()
 	writeTestFile(t, root, "plugin.json", manifestJSON(nil))
-	writeServers(t, root, map[string]any{"remote": map[string]any{
+	serverConfig := map[string]any{
 		"type": "streamable-http", "url": upstream.URL + "/mcp",
 		"headers": map[string]string{"Authorization": "Bearer ${PICOCLAW_TEST_MCP_TOKEN}"},
-	}})
+	}
+	writeServers(t, root, map[string]any{"remote": serverConfig})
 	cfg := testConfig(root, t.TempDir())
+	var packageTools []*PluginTool
+	packageManager := NewManager(cfg, root, func(_ context.Context, c Capabilities) []Diagnostic {
+		packageTools = append(packageTools, c.Tools...)
+		return nil
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := packageManager.Wait(ctx); err != nil {
+		t.Fatal(err)
+	}
+	packageStatuses := packageManager.Statuses()
+	if len(packageTools) != 0 || len(packageStatuses) != 1 || packageStatuses[0].State != Degraded {
+		t.Fatalf(
+			"package header unexpectedly expanded: tools=%d status=%+v",
+			len(packageTools),
+			packageStatuses,
+		)
+	}
+	if err := packageManager.Close(); err != nil {
+		t.Fatal(err)
+	}
+	override, err := json.Marshal(serverConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := cfg.Entries["demo"]
+	entry.MCPOverrides = map[string]json.RawMessage{"remote": override}
+	cfg.Entries["demo"] = entry
 	var registered []*PluginTool
 	m := NewManager(cfg, root, func(_ context.Context, c Capabilities) []Diagnostic {
 		registered = append(registered, c.Tools...)
 		return nil
 	})
 	defer m.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
 	if err := m.Wait(ctx); err != nil {
 		t.Fatal(err)
 	}

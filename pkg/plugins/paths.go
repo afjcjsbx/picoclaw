@@ -61,11 +61,11 @@ func ReadPackageFile(root, path string) ([]byte, error) {
 		return nil, err
 	}
 	defer dir.Close()
-	info, err := dir.Lstat(rel)
+	pathInfo, err := dir.Lstat(rel)
 	if err != nil {
 		return nil, err
 	}
-	if !info.Mode().IsRegular() {
+	if !pathInfo.Mode().IsRegular() {
 		return nil, fmt.Errorf("not a regular file: %s", path)
 	}
 	file, err := dir.Open(rel)
