@@ -82,6 +82,7 @@ Rules for `expose_paths`:
 Platform note:
 
 - Linux uses a real `source -> target` mount view.
+- Linux probes optional bubblewrap namespace flags once. If the kernel rejects one with `Creating new namespace failed` (EINVAL), that namespace isolation is dropped with a warning while the mount namespace, filesystem view, and user environment remain active. This weakens isolation for that namespace; other probe failures stop startup.
 - macOS requires `target` to match `source`; Seatbelt does not remap paths.
 - Windows does not currently support `expose_paths`.
 
