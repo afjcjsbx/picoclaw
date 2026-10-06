@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"github.com/sipeed/picoclaw/pkg/agent/agentctx"
 	"github.com/sipeed/picoclaw/pkg/bus"
 )
 
@@ -8,7 +9,7 @@ import (
 // given agent and session. Includes history, system prompt (with dynamic context,
 // summary, and skills — mirroring BuildMessages composition), and tool definitions.
 // The output reserve (MaxTokens) is not counted as "used" but reduces the
-// effective budget, matching isOverContextBudget's compression trigger:
+// effective budget, matching agentctx.IsOverContextBudget's compression trigger:
 //
 //	compress when: history + system + tools + maxTokens > contextWindow
 //	equivalent to: history + system + tools > contextWindow - maxTokens
@@ -27,7 +28,7 @@ func computeContextUsage(agent *AgentInstance, sessionKey string) *bus.ContextUs
 	history := agent.Sessions.GetHistory(sessionKey)
 	historyTokens := 0
 	for _, m := range history {
-		historyTokens += EstimateMessageTokens(m)
+		historyTokens += agentctx.EstimateMessageTokens(m)
 	}
 
 	// System message tokens: uses EstimateSystemTokens which mirrors
@@ -45,7 +46,7 @@ func computeContextUsage(agent *AgentInstance, sessionKey string) *bus.ContextUs
 	// Tool definition tokens
 	toolTokens := 0
 	if agent.Tools != nil {
-		toolTokens = EstimateToolDefsTokens(agent.Tools.ToProviderDefs())
+		toolTokens = agentctx.EstimateToolDefsTokens(agent.Tools.ToProviderDefs())
 	}
 
 	// Used = history + system (includes summary) + tools
@@ -57,7 +58,7 @@ func computeContextUsage(agent *AgentInstance, sessionKey string) *bus.ContextUs
 		effectiveWindow = contextWindow
 	}
 
-	// compressAt = effectiveWindow: aligns with isOverContextBudget's
+	// compressAt = effectiveWindow: aligns with agentctx.IsOverContextBudget's
 	// proactive trigger (msgTokens + toolTokens + maxTokens > contextWindow).
 	compressAt := effectiveWindow
 

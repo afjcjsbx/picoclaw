@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/agent/agentctx"
 	"github.com/sipeed/picoclaw/pkg/config"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/logger"
@@ -146,7 +147,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 			case result, ok := <-ts.pendingResults:
 				if ok && result != nil && result.ForLLM != "" {
 					content := al.cfg.FilterSensitiveData(result.ForLLM)
-					msg := subTurnResultPromptMessage(content)
+					msg := agentctx.SubTurnResultPromptMessage(content)
 					pendingMessages = append(pendingMessages, msg)
 				}
 			default:
@@ -418,9 +419,9 @@ func (al *AgentLoop) askSideQuestion(
 		}
 	}
 
-	var promptReq PromptBuildRequest
+	var promptReq agentctx.PromptBuildRequest
 	if opts == nil {
-		promptReq = PromptBuildRequest{
+		promptReq = agentctx.PromptBuildRequest{
 			History:           history,
 			Summary:           summary,
 			CurrentMessage:    question,

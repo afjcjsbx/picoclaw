@@ -1,4 +1,4 @@
-package agent
+package agentctx
 
 import (
 	"fmt"
@@ -108,14 +108,14 @@ func TestParseTurnBoundaries(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := parseTurnBoundaries(tt.history)
+			got := ParseTurnBoundaries(tt.history)
 			if len(got) != len(tt.want) {
-				t.Errorf("parseTurnBoundaries() = %v, want %v", got, tt.want)
+				t.Errorf("ParseTurnBoundaries() = %v, want %v", got, tt.want)
 				return
 			}
 			for i := range got {
 				if got[i] != tt.want[i] {
-					t.Errorf("parseTurnBoundaries()[%d] = %d, want %d", i, got[i], tt.want[i])
+					t.Errorf("ParseTurnBoundaries()[%d] = %d, want %d", i, got[i], tt.want[i])
 				}
 			}
 		})
@@ -209,9 +209,9 @@ func TestIsSafeBoundary(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := isSafeBoundary(tt.history, tt.index)
+			got := IsSafeBoundary(tt.history, tt.index)
 			if got != tt.want {
-				t.Errorf("isSafeBoundary(history, %d) = %v, want %v", tt.index, got, tt.want)
+				t.Errorf("IsSafeBoundary(history, %d) = %v, want %v", tt.index, got, tt.want)
 			}
 		})
 	}
@@ -337,9 +337,9 @@ func TestFindSafeBoundary(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := findSafeBoundary(tt.history, tt.targetIndex)
+			got := FindSafeBoundary(tt.history, tt.targetIndex)
 			if got != tt.want {
-				t.Errorf("findSafeBoundary(history, %d) = %d, want %d",
+				t.Errorf("FindSafeBoundary(history, %d) = %d, want %d",
 					tt.targetIndex, got, tt.want)
 			}
 		})
@@ -349,7 +349,7 @@ func TestFindSafeBoundary(t *testing.T) {
 func TestFindSafeBoundary_SingleTurnReturnsZero(t *testing.T) {
 	// A single Turn with no subsequent user message. The only Turn boundary
 	// is at index 0; cutting anywhere else would split the Turn's tool
-	// sequence. findSafeBoundary must return 0 so callers skip compression.
+	// sequence. FindSafeBoundary must return 0 so callers skip compression.
 	history := []providers.Message{
 		msgUser("do everything"), // 0 ← only Turn boundary
 		msgAssistantTC("tc1"),    // 1
@@ -357,9 +357,9 @@ func TestFindSafeBoundary_SingleTurnReturnsZero(t *testing.T) {
 		msgAssistant("all done"), // 3
 	}
 
-	got := findSafeBoundary(history, 2)
+	got := FindSafeBoundary(history, 2)
 	if got != 0 {
-		t.Errorf("findSafeBoundary(single_turn, 2) = %d, want 0 (cannot split single Turn)", got)
+		t.Errorf("FindSafeBoundary(single_turn, 2) = %d, want 0 (cannot split single Turn)", got)
 	}
 }
 
@@ -381,9 +381,9 @@ func TestFindSafeBoundary_BackwardScanSkipsToolSequence(t *testing.T) {
 	}
 
 	// Target at index 6 (middle of tool results)
-	got := findSafeBoundary(history, 6)
+	got := FindSafeBoundary(history, 6)
 	if got != 2 {
-		t.Errorf("findSafeBoundary(history, 6) = %d, want 2 (user before chain)", got)
+		t.Errorf("FindSafeBoundary(history, 6) = %d, want 2 (user before chain)", got)
 	}
 }
 
@@ -634,7 +634,7 @@ func TestEstimateToolDefsTokens_ScalesWithCount(t *testing.T) {
 	}
 }
 
-// --- isOverContextBudget tests ---
+// --- IsOverContextBudget tests ---
 
 func TestIsOverContextBudget(t *testing.T) {
 	systemMsg := providers.Message{Role: "system", Content: strings.Repeat("x", 1000)}
@@ -696,9 +696,9 @@ func TestIsOverContextBudget(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := isOverContextBudget(tt.contextWindow, tt.messages, tt.toolDefs, tt.maxTokens)
+			got := IsOverContextBudget(tt.contextWindow, tt.messages, tt.toolDefs, tt.maxTokens)
 			if got != tt.want {
-				t.Errorf("isOverContextBudget() = %v, want %v", got, tt.want)
+				t.Errorf("IsOverContextBudget() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -723,9 +723,9 @@ func TestFindSafeBoundary_SessionHistoryNoSystem(t *testing.T) {
 	}
 
 	// Mid-point is 4 (tool result). Should snap backward to 2 (user).
-	got := findSafeBoundary(history, 4)
+	got := FindSafeBoundary(history, 4)
 	if got != 2 {
-		t.Errorf("findSafeBoundary(session_history, 4) = %d, want 2", got)
+		t.Errorf("FindSafeBoundary(session_history, 4) = %d, want 2", got)
 	}
 }
 
@@ -745,9 +745,9 @@ func TestFindSafeBoundary_SessionWithChainedTools(t *testing.T) {
 	// Target at 3 (inside chain). Should find user at 0, but backward
 	// scan stops at i>0, so forward scan finds user at 6.
 	// Actually: backward from 3: 2=tool (no), 1=assistantTC (no). Forward: 4=tool, 5=asst, 6=user ✓
-	got := findSafeBoundary(history, 3)
+	got := FindSafeBoundary(history, 3)
 	if got != 6 {
-		t.Errorf("findSafeBoundary(chained_tools, 3) = %d, want 6", got)
+		t.Errorf("FindSafeBoundary(chained_tools, 3) = %d, want 6", got)
 	}
 }
 
@@ -835,12 +835,12 @@ func TestIsOverContextBudget_RealisticSession(t *testing.T) {
 	}
 
 	// With a large context window, should be within budget.
-	if isOverContextBudget(131072, messages, tools, 32768) {
+	if IsOverContextBudget(131072, messages, tools, 32768) {
 		t.Error("realistic session should be within 131072 context window")
 	}
 
 	// With a tiny context window, should exceed budget.
-	if !isOverContextBudget(500, messages, tools, 32768) {
+	if !IsOverContextBudget(500, messages, tools, 32768) {
 		t.Error("realistic session should exceed 500 context window")
 	}
 }
@@ -859,7 +859,7 @@ func TestTrimHistoryToFitContextWindow_DropsOldestTurns(t *testing.T) {
 		return append([]providers.Message(nil), history...)
 	}
 
-	trimmedHistory, messages, fit := trimHistoryToFitContextWindow(
+	trimmedHistory, messages, fit := TrimHistoryToFitContextWindow(
 		history,
 		build,
 		700,
@@ -875,7 +875,7 @@ func TestTrimHistoryToFitContextWindow_DropsOldestTurns(t *testing.T) {
 	if trimmedHistory[0].Content != history[2].Content {
 		t.Fatalf("first kept message = %q, want second turn start", trimmedHistory[0].Content)
 	}
-	if isOverContextBudget(700, messages, nil, 0) {
+	if IsOverContextBudget(700, messages, nil, 0) {
 		t.Fatal("trimmed messages should be within budget")
 	}
 }
@@ -886,7 +886,7 @@ func TestTrimHistoryToFitContextWindow_ClearsSingleOversizedTurn(t *testing.T) {
 		msgAssistant(strings.Repeat("oversized ", 200)),
 	}
 
-	trimmedHistory, messages, fit := trimHistoryToFitContextWindow(
+	trimmedHistory, messages, fit := TrimHistoryToFitContextWindow(
 		history,
 		func(history []providers.Message) []providers.Message {
 			return append([]providers.Message(nil), history...)

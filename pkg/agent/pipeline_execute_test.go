@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/sipeed/picoclaw/pkg/agent/agentctx"
 )
 
 func TestInferSkillNamesFromToolCall_ReadFileSkillMarkdown(t *testing.T) {
@@ -20,7 +22,7 @@ func TestInferSkillNamesFromToolCall_ReadFileSkillMarkdown(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	cb := NewContextBuilder(workspace)
+	cb := agentctx.NewContextBuilder(workspace)
 	ts := &turnState{
 		workspace: workspace,
 		agent: &AgentInstance{

@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/agent/agentctx"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
@@ -114,7 +115,7 @@ type ActiveTurnInfo struct {
 
 type turnExecution struct {
 	// Core message state (accumulates throughout the turn)
-	messages         []providers.Message // built from ContextBuilder, grows per-iteration
+	messages         []providers.Message // built from agentctx.ContextBuilder, grows per-iteration
 	loopWarnings     []providers.Message // turn-local warnings restored after context compaction
 	pendingMessages  []providers.Message // steering/SubTurn messages awaiting injection
 	history          []providers.Message // from ContextManager.Assemble
@@ -813,7 +814,7 @@ func (ts *turnState) interruptHintMessage() providers.Message {
 	if hint != "" {
 		content += "\n\nInterrupt hint: " + hint
 	}
-	return interruptPromptMessage(content)
+	return agentctx.InterruptPromptMessage(content)
 }
 
 // =============================================================================

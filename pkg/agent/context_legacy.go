@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/agent/agentctx"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
@@ -23,7 +24,7 @@ type legacyContextManager struct {
 func (m *legacyContextManager) Assemble(_ context.Context, req *AssembleRequest) (*AssembleResponse, error) {
 	// Legacy: read history from session, return as-is.
 	// Budget enforcement happens in BuildMessages caller via
-	// isOverContextBudget + forceCompression.
+	// agentctx.IsOverContextBudget + forceCompression.
 	agent := m.al.registry.GetDefaultAgent()
 	if agent == nil {
 		return &AssembleResponse{}, nil
@@ -141,12 +142,12 @@ func (m *legacyContextManager) forceCompression(sessionKey string) (compressionR
 		return compressionResult{}, false
 	}
 
-	turns := parseTurnBoundaries(history)
+	turns := agentctx.ParseTurnBoundaries(history)
 	var mid int
 	if len(turns) >= 2 {
 		mid = turns[len(turns)/2]
 	} else {
-		mid = findSafeBoundary(history, len(history)/2)
+		mid = agentctx.FindSafeBoundary(history, len(history)/2)
 	}
 	var keptHistory []providers.Message
 	if mid <= 0 {
@@ -198,7 +199,7 @@ func (m *legacyContextManager) summarizeSession(agent *AgentInstance, sessionKey
 		return
 	}
 
-	safeCut := findSafeBoundary(history, len(history)-4)
+	safeCut := agentctx.FindSafeBoundary(history, len(history)-4)
 	if safeCut <= 0 {
 		return
 	}
@@ -402,7 +403,7 @@ func (m *legacyContextManager) summarizeBatch(
 func (m *legacyContextManager) estimateTokens(messages []providers.Message) int {
 	total := 0
 	for _, msg := range messages {
-		total += EstimateMessageTokens(msg)
+		total += agentctx.EstimateMessageTokens(msg)
 	}
 	return total
 }

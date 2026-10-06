@@ -4,6 +4,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/sipeed/picoclaw/pkg/agent/agentctx"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/tools"
@@ -31,7 +32,7 @@ func normalizedMCPServerNameSet(
 
 func warnOnUnknownAgentToolDeclarations(
 	agentID, workspace string,
-	definition AgentContextDefinition,
+	definition agentctx.AgentContextDefinition,
 	registry *tools.ToolRegistry,
 ) {
 	if registry == nil || frontmatterParseFailed(definition) {
@@ -51,7 +52,7 @@ func warnOnUnknownAgentToolDeclarations(
 func warnOnUnknownAgentMCPServerDeclarations(
 	agentID, workspace string,
 	cfg *config.Config,
-	definition AgentContextDefinition,
+	definition agentctx.AgentContextDefinition,
 ) {
 	if cfg == nil || frontmatterParseFailed(definition) {
 		return
@@ -69,7 +70,7 @@ func warnOnUnknownAgentMCPServerDeclarations(
 
 func unknownAgentToolNames(
 	registry *tools.ToolRegistry,
-	definition AgentContextDefinition,
+	definition agentctx.AgentContextDefinition,
 ) []string {
 	if definition.Agent == nil || definition.Agent.Frontmatter.Tools == nil {
 		return nil
@@ -106,7 +107,7 @@ func registeredRuntimeToolNames(registry *tools.ToolRegistry) map[string]struct{
 	return known
 }
 
-func unknownAgentMCPServerNames(cfg *config.Config, definition AgentContextDefinition) []string {
+func unknownAgentMCPServerNames(cfg *config.Config, definition agentctx.AgentContextDefinition) []string {
 	if cfg == nil || definition.Agent == nil || definition.Agent.Frontmatter.MCPServers == nil {
 		return nil
 	}
@@ -140,7 +141,7 @@ func sortedKeys(values map[string]struct{}) []string {
 	return result
 }
 
-func resolveAgentToolAllowlist(definition AgentContextDefinition) []string {
+func resolveAgentToolAllowlist(definition agentctx.AgentContextDefinition) []string {
 	if frontmatterParseFailed(definition) {
 		return []string{}
 	}
@@ -164,7 +165,7 @@ func resolveAgentToolAllowlist(definition AgentContextDefinition) []string {
 	return sortedKeys(allowlist)
 }
 
-func resolveAgentMCPServerAllowlist(definition AgentContextDefinition) map[string]struct{} {
+func resolveAgentMCPServerAllowlist(definition agentctx.AgentContextDefinition) map[string]struct{} {
 	if frontmatterParseFailed(definition) {
 		return map[string]struct{}{}
 	}
@@ -184,7 +185,7 @@ func resolveAgentMCPServerAllowlist(definition AgentContextDefinition) map[strin
 	return allowlist
 }
 
-func frontmatterDeclaresField(definition AgentContextDefinition, field string) bool {
+func frontmatterDeclaresField(definition agentctx.AgentContextDefinition, field string) bool {
 	if definition.Agent == nil || definition.Agent.Frontmatter.Fields == nil {
 		return false
 	}
@@ -192,7 +193,7 @@ func frontmatterDeclaresField(definition AgentContextDefinition, field string) b
 	return ok
 }
 
-func frontmatterParseFailed(definition AgentContextDefinition) bool {
+func frontmatterParseFailed(definition agentctx.AgentContextDefinition) bool {
 	if definition.Agent == nil {
 		return false
 	}

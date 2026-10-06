@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/sipeed/picoclaw/pkg/agent/agentctx"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
 	agenttools "github.com/sipeed/picoclaw/pkg/tools"
@@ -84,7 +85,7 @@ tools: [read_file, web_serach, mcp_github_search]
 	registry.Register(&allowlistTestTool{name: "read_file"})
 	registry.Register(&allowlistTestTool{name: "web_search"})
 
-	unknown := unknownAgentToolNames(registry, loadAgentDefinition(workspace))
+	unknown := unknownAgentToolNames(registry, agentctx.LoadAgentDefinition(workspace))
 	if len(unknown) != 1 || unknown[0] != "web_serach" {
 		t.Fatalf("unknownAgentToolNames() = %v, want [web_serach]", unknown)
 	}
@@ -105,7 +106,7 @@ tools: [serial, reaction, send_tts, load_image, delegate, made_up]
 		registry.Register(&allowlistTestTool{name: name})
 	}
 
-	unknown := unknownAgentToolNames(registry, loadAgentDefinition(workspace))
+	unknown := unknownAgentToolNames(registry, agentctx.LoadAgentDefinition(workspace))
 	if len(unknown) != 1 || unknown[0] != "made_up" {
 		t.Fatalf("unknownAgentToolNames() = %v, want [made_up]", unknown)
 	}
@@ -154,7 +155,7 @@ tools:
 			})
 			defer cleanupWorkspace(t, workspace)
 
-			allowlist := resolveAgentToolAllowlist(loadAgentDefinition(workspace))
+			allowlist := resolveAgentToolAllowlist(agentctx.LoadAgentDefinition(workspace))
 
 			if tt.wantNil {
 				if allowlist != nil {
@@ -193,7 +194,7 @@ mcpServers: [github, githb]
 		},
 	}
 
-	unknown := unknownAgentMCPServerNames(cfg, loadAgentDefinition(workspace))
+	unknown := unknownAgentMCPServerNames(cfg, agentctx.LoadAgentDefinition(workspace))
 	if len(unknown) != 1 || unknown[0] != "githb" {
 		t.Fatalf("unknownAgentMCPServerNames() = %v, want [githb]", unknown)
 	}
@@ -220,7 +221,7 @@ mcpServers: [github, FileSystem, slak]
 		},
 	}
 
-	unknown := unknownAgentMCPServerNames(cfg, loadAgentDefinition(workspace))
+	unknown := unknownAgentMCPServerNames(cfg, agentctx.LoadAgentDefinition(workspace))
 	if len(unknown) != 1 || unknown[0] != "slak" {
 		t.Fatalf("unknownAgentMCPServerNames() = %v, want [slak]", unknown)
 	}

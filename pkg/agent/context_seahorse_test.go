@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/agent/agentctx"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/providers"
@@ -348,7 +349,7 @@ func TestSeahorseAssemblePreservesActiveToolTurnAcrossSanitization(t *testing.T)
 		t.Fatalf("Assemble: %v", err)
 	}
 
-	sanitized := sanitizeHistoryForProvider(seahorseToProviderMessages(result))
+	sanitized := agentctx.SanitizeHistoryForProvider(seahorseToProviderMessages(result))
 	if len(sanitized) != 4 {
 		t.Fatalf("sanitized history len = %d, want 4 protected-turn messages", len(sanitized))
 	}

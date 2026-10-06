@@ -6,6 +6,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/sipeed/picoclaw/pkg/agent/agentctx"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
 )
@@ -48,7 +49,7 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 
 	if !ts.opts.NoHistory {
 		toolDefs := filterToolsByTurnProfile(ts.agent.Tools.ToProviderDefs(), ts.profile)
-		if isOverContextBudget(ts.agent.ContextWindow, messages, toolDefs, ts.agent.MaxTokens) {
+		if agentctx.IsOverContextBudget(ts.agent.ContextWindow, messages, toolDefs, ts.agent.MaxTokens) {
 			logger.WarnCF("agent", "Proactive compression: context budget exceeded before LLM call",
 				map[string]any{"session_key": ts.sessionKey})
 			if err := p.ContextManager.Compact(ctx, &CompactRequest{
@@ -72,7 +73,7 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 			}
 			originalHistoryCount := len(history)
 			var fit bool
-			history, messages, fit = trimHistoryToFitContextWindow(
+			history, messages, fit = agentctx.TrimHistoryToFitContextWindow(
 				history,
 				func(trimmedHistory []providers.Message) []providers.Message {
 					rebuildPromptReq := promptBuildRequestForTurn(
@@ -117,7 +118,7 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 	}
 
 	if !ts.opts.NoHistory && (strings.TrimSpace(ts.userMessage) != "" || len(ts.media) > 0) {
-		rootMsg := userPromptMessage(ts.userMessage, ts.media)
+		rootMsg := agentctx.UserPromptMessage(ts.userMessage, ts.media)
 		if len(rootMsg.Media) > 0 {
 			ts.agent.Sessions.AddFullMessage(ts.sessionKey, rootMsg)
 		} else {

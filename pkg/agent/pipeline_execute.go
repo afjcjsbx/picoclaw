@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/agent/agentctx"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/constants"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
@@ -55,7 +56,7 @@ func inferSkillNamesFromToolCall(ts *turnState, toolName string, toolArgs map[st
 
 	var roots []string
 	if ts.agent != nil && ts.agent.ContextBuilder != nil {
-		roots = ts.agent.ContextBuilder.skillRoots()
+		roots = ts.agent.ContextBuilder.SkillRoots()
 	}
 	if len(roots) == 0 && strings.TrimSpace(ts.workspace) != "" {
 		roots = []string{filepath.Join(ts.workspace, "skills")}
@@ -337,7 +338,7 @@ toolLoop:
 						}
 						toolResultMedia = append(toolResultMedia, hookResult.Media...)
 					}
-					toolResultMsg := toolResultPromptMessage(contentForLLM, tc.ID, toolResultMedia)
+					toolResultMsg := agentctx.ToolResultPromptMessage(contentForLLM, tc.ID, toolResultMedia)
 
 					al.emitEvent(
 						runtimeevents.KindAgentToolExecEnd,
@@ -423,7 +424,7 @@ toolLoop:
 						case result, ok := <-ts.pendingResults:
 							if ok && result != nil && result.ForLLM != "" {
 								content := al.cfg.FilterSensitiveData(result.ForLLM)
-								msg := subTurnResultPromptMessage(content)
+								msg := agentctx.SubTurnResultPromptMessage(content)
 								messages = append(messages, msg)
 								if !ts.opts.NoHistory {
 									ts.agent.Sessions.AddFullMessage(ts.sessionKey, msg)
@@ -733,7 +734,7 @@ toolLoop:
 		if len(toolResult.Media) > 0 && !toolResult.ResponseHandled {
 			toolResultMedia = append(toolResultMedia, toolResult.Media...)
 		}
-		toolResultMsg := toolResultPromptMessage(contentForLLM, toolCallID, toolResultMedia)
+		toolResultMsg := agentctx.ToolResultPromptMessage(contentForLLM, toolCallID, toolResultMedia)
 		al.emitEvent(
 			runtimeevents.KindAgentToolExecEnd,
 			ts.eventMeta("runTurn", "turn.tool.end"),
@@ -817,7 +818,7 @@ toolLoop:
 			case result, ok := <-ts.pendingResults:
 				if ok && result != nil && result.ForLLM != "" {
 					content := al.cfg.FilterSensitiveData(result.ForLLM)
-					msg := subTurnResultPromptMessage(content)
+					msg := agentctx.SubTurnResultPromptMessage(content)
 					messages = append(messages, msg)
 					if !ts.opts.NoHistory {
 						ts.agent.Sessions.AddFullMessage(ts.sessionKey, msg)

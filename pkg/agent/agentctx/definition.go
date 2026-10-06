@@ -1,4 +1,4 @@
-package agent
+package agentctx
 
 import (
 	"os"
@@ -75,10 +75,10 @@ type AgentContextDefinition struct {
 // structured files are absent, it falls back to the legacy AGENTS.md layout so
 // the current runtime can transition incrementally.
 func (cb *ContextBuilder) LoadAgentDefinition() AgentContextDefinition {
-	return loadAgentDefinition(cb.workspace)
+	return LoadAgentDefinition(cb.workspace)
 }
 
-func loadAgentDefinition(workspace string) AgentContextDefinition {
+func LoadAgentDefinition(workspace string) AgentContextDefinition {
 	definition := AgentContextDefinition{}
 	definition.User = loadUserDefinition(workspace)
 	agentPath := filepath.Join(workspace, string(AgentDefinitionSourceAgent))

@@ -1,4 +1,4 @@
-package agent
+package agentctx
 
 import (
 	"context"
@@ -430,7 +430,7 @@ func (s *PromptStack) Parts() []PromptPart {
 	return append([]PromptPart(nil), s.parts...)
 }
 
-func renderPromptPartsLegacy(parts []PromptPart) string {
+func RenderPromptPartsLegacy(parts []PromptPart) string {
 	textParts := make([]string, 0, len(parts))
 	for _, part := range sortPromptParts(parts) {
 		if strings.TrimSpace(part.Content) == "" {

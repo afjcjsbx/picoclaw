@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/agent/agentctx"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/commands"
 	"github.com/sipeed/picoclaw/pkg/config"
@@ -514,7 +515,7 @@ func activeSkillNames(agent *AgentInstance, opts processOptions) []string {
 	}
 
 	if turnProfileCustomSkills(opts.TurnProfile) {
-		return filterNamesByTurnProfile(resolved, opts.TurnProfile.AllowedSkills)
+		return agentctx.FilterNamesByTurnProfile(resolved, opts.TurnProfile.AllowedSkills)
 	}
 	return resolved
 }

@@ -3,21 +3,21 @@
 //
 // Copyright (c) 2026 PicoClaw contributors
 
-package agent
+package agentctx
 
 import (
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/tokenizer"
 )
 
-// parseTurnBoundaries returns the starting index of each Turn in the history.
+// ParseTurnBoundaries returns the starting index of each Turn in the history.
 // A Turn is a complete "user input → LLM iterations → final response" cycle
 // (as defined in #1316). Each Turn begins at a user message and extends
 // through all subsequent assistant/tool messages until the next user message.
 //
 // Cutting at a Turn boundary guarantees that no tool-call sequence
 // (assistant+ToolCalls → tool results) is split across the cut.
-func parseTurnBoundaries(history []providers.Message) []int {
+func ParseTurnBoundaries(history []providers.Message) []int {
 	var starts []int
 	for i, msg := range history {
 		if msg.Role == "user" {
@@ -27,21 +27,21 @@ func parseTurnBoundaries(history []providers.Message) []int {
 	return starts
 }
 
-// isSafeBoundary reports whether index is a valid Turn boundary — i.e.,
+// IsSafeBoundary reports whether index is a valid Turn boundary — i.e.,
 // a position where the kept portion (history[index:]) begins at a user
 // message, so no tool-call sequence is torn apart.
-func isSafeBoundary(history []providers.Message, index int) bool {
+func IsSafeBoundary(history []providers.Message, index int) bool {
 	if index <= 0 || index >= len(history) {
 		return true
 	}
 	return history[index].Role == "user"
 }
 
-// findSafeBoundary locates the nearest Turn boundary to targetIndex.
+// FindSafeBoundary locates the nearest Turn boundary to targetIndex.
 // It prefers the boundary at or before targetIndex (preserving more recent
 // context). Falls back to the nearest boundary after targetIndex, and
 // returns targetIndex unchanged only when no Turn boundary exists at all.
-func findSafeBoundary(history []providers.Message, targetIndex int) int {
+func FindSafeBoundary(history []providers.Message, targetIndex int) int {
 	if len(history) == 0 {
 		return 0
 	}
@@ -52,7 +52,7 @@ func findSafeBoundary(history []providers.Message, targetIndex int) int {
 		return len(history)
 	}
 
-	turns := parseTurnBoundaries(history)
+	turns := ParseTurnBoundaries(history)
 	if len(turns) == 0 {
 		return targetIndex
 	}
@@ -96,10 +96,10 @@ func EstimateToolDefsTokens(defs []providers.ToolDefinition) int {
 	return tokenizer.EstimateToolDefsTokens(defs)
 }
 
-// isOverContextBudget checks whether the assembled messages plus tool definitions
+// IsOverContextBudget checks whether the assembled messages plus tool definitions
 // and output reserve would exceed the model's context window. This enables
 // proactive compression before calling the LLM, rather than reacting to 400 errors.
-func isOverContextBudget(
+func IsOverContextBudget(
 	contextWindow int,
 	messages []providers.Message,
 	toolDefs []providers.ToolDefinition,
@@ -116,10 +116,10 @@ func isOverContextBudget(
 	return total > contextWindow
 }
 
-// trimHistoryToFitContextWindow rebuilds the prompt from progressively newer
+// TrimHistoryToFitContextWindow rebuilds the prompt from progressively newer
 // history slices until it fits within the context window. Oldest complete turns
 // are dropped first so tool-call sequences remain intact.
-func trimHistoryToFitContextWindow(
+func TrimHistoryToFitContextWindow(
 	history []providers.Message,
 	build func([]providers.Message) []providers.Message,
 	contextWindow int,
@@ -127,7 +127,7 @@ func trimHistoryToFitContextWindow(
 	maxTokens int,
 ) ([]providers.Message, []providers.Message, bool) {
 	messages := build(history)
-	if !isOverContextBudget(contextWindow, messages, toolDefs, maxTokens) {
+	if !IsOverContextBudget(contextWindow, messages, toolDefs, maxTokens) {
 		return history, messages, true
 	}
 
@@ -141,7 +141,7 @@ func trimHistoryToFitContextWindow(
 		}
 
 		messages = build(trimmedHistory)
-		if !isOverContextBudget(contextWindow, messages, toolDefs, maxTokens) {
+		if !IsOverContextBudget(contextWindow, messages, toolDefs, maxTokens) {
 			return trimmedHistory, messages, true
 		}
 	}
@@ -154,7 +154,7 @@ func nextHistoryTrimStart(history []providers.Message) int {
 		return 0
 	}
 
-	turns := parseTurnBoundaries(history)
+	turns := ParseTurnBoundaries(history)
 	if len(turns) >= 2 {
 		return turns[1]
 	}

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/agent/agentctx"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
@@ -258,8 +259,8 @@ func (h *llmToolRewriteHook) BeforeLLM(
 			Description: "hook tool",
 			Parameters:  map[string]any{"type": "object"},
 		},
-		PromptLayer:  string(PromptLayerCapability),
-		PromptSlot:   string(PromptSlotTooling),
+		PromptLayer:  string(agentctx.PromptLayerCapability),
+		PromptSlot:   string(agentctx.PromptSlotTooling),
 		PromptSource: "hook:test",
 	})
 	return next, HookDecision{Action: HookActionModify}, nil
@@ -342,17 +343,17 @@ func TestHookManager_BeforeLLMAllowsJSONRoundTripNonSystemMessageMutation(t *tes
 			{
 				Role:         "system",
 				Content:      "system",
-				PromptLayer:  string(PromptLayerKernel),
-				PromptSlot:   string(PromptSlotIdentity),
-				PromptSource: string(PromptSourceKernel),
+				PromptLayer:  string(agentctx.PromptLayerKernel),
+				PromptSlot:   string(agentctx.PromptSlotIdentity),
+				PromptSource: string(agentctx.PromptSourceKernel),
 				SystemParts: []providers.ContentBlock{
 					{
 						Type:         "text",
 						Text:         "system",
 						CacheControl: &providers.CacheControl{Type: "ephemeral"},
-						PromptLayer:  string(PromptLayerKernel),
-						PromptSlot:   string(PromptSlotIdentity),
-						PromptSource: string(PromptSourceKernel),
+						PromptLayer:  string(agentctx.PromptLayerKernel),
+						PromptSlot:   string(agentctx.PromptSlotIdentity),
+						PromptSource: string(agentctx.PromptSourceKernel),
 					},
 				},
 			},
@@ -366,8 +367,8 @@ func TestHookManager_BeforeLLMAllowsJSONRoundTripNonSystemMessageMutation(t *tes
 					Description: "create issue",
 					Parameters:  map[string]any{"type": "object"},
 				},
-				PromptLayer:  string(PromptLayerCapability),
-				PromptSlot:   string(PromptSlotMCP),
+				PromptLayer:  string(agentctx.PromptLayerCapability),
+				PromptSlot:   string(agentctx.PromptSlotMCP),
 				PromptSource: "mcp:github",
 			},
 		},
@@ -402,8 +403,8 @@ func TestHookManager_BeforeLLMControlsToolDefinitionMutation(t *testing.T) {
 					Description: "create issue",
 					Parameters:  map[string]any{"type": "object"},
 				},
-				PromptLayer:  string(PromptLayerCapability),
-				PromptSlot:   string(PromptSlotMCP),
+				PromptLayer:  string(agentctx.PromptLayerCapability),
+				PromptSlot:   string(agentctx.PromptSlotMCP),
 				PromptSource: "mcp:github",
 			},
 		},
@@ -422,7 +423,7 @@ func TestHookManager_BeforeLLMControlsToolDefinitionMutation(t *testing.T) {
 	if got.Tools[0].Function.Description != "create issue" {
 		t.Fatalf("tool description = %q, want original", got.Tools[0].Function.Description)
 	}
-	if got.Tools[0].PromptSource != "mcp:github" || got.Tools[0].PromptSlot != string(PromptSlotMCP) {
+	if got.Tools[0].PromptSource != "mcp:github" || got.Tools[0].PromptSlot != string(agentctx.PromptSlotMCP) {
 		t.Fatalf("tool prompt metadata = %#v, want original mcp metadata", got.Tools[0])
 	}
 }

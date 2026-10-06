@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sipeed/picoclaw/pkg/agent/agentctx"
 	"github.com/sipeed/picoclaw/pkg/providers"
 )
 
@@ -26,7 +27,7 @@ func TestMatchingTurnMessageTail_IgnoresInternalRuntimeFields(t *testing.T) {
 	}
 
 	persisted := []providers.Message{
-		userPromptMessage("question", nil),
+		agentctx.UserPromptMessage("question", nil),
 		{
 			Role: "assistant",
 			ToolCalls: []providers.ToolCall{
@@ -60,7 +61,7 @@ func TestSplitHistoryForActiveTurn_ProtectsPersistedTail(t *testing.T) {
 	}
 
 	persisted := []providers.Message{
-		userPromptMessage("current question", nil),
+		agentctx.UserPromptMessage("current question", nil),
 		{Role: "tool", Content: "tool output", ToolCallID: "call_1"},
 	}
 
@@ -85,9 +86,9 @@ func TestTrimHistoryToFitContextWindow_WithProtectedTurnTailKeepsActiveTurn(t *t
 	}
 
 	stable, protected := splitHistoryForActiveTurn(history, []providers.Message{
-		userPromptMessage(current, nil),
+		agentctx.UserPromptMessage(current, nil),
 	})
-	trimmedStable, messages, fit := trimHistoryToFitContextWindow(
+	trimmedStable, messages, fit := agentctx.TrimHistoryToFitContextWindow(
 		stable,
 		func(trimmedHistory []providers.Message) []providers.Message {
 			return append(append([]providers.Message(nil), trimmedHistory...), protected...)

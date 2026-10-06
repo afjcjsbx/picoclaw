@@ -16,6 +16,7 @@ import (
 
 	"github.com/h2non/filetype"
 
+	"github.com/sipeed/picoclaw/pkg/agent/agentctx"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/media"
 	"github.com/sipeed/picoclaw/pkg/providers"
@@ -75,14 +76,14 @@ func resolveMediaRefs(
 		// When leaving a tool-message block, flush any accumulated images
 		// as a synthetic user message.
 		if m.Role != "tool" && len(pendingToolImages) > 0 {
-			result = append(result, toolImageFollowUpPromptMessage(pendingToolImages))
+			result = append(result, agentctx.ToolImageFollowUpPromptMessage(pendingToolImages))
 			pendingToolImages = nil
 		}
 
 		if len(m.Media) == 0 {
 			result = append(result, m)
 			if idx == len(messages)-1 && len(pendingToolImages) > 0 {
-				result = append(result, toolImageFollowUpPromptMessage(pendingToolImages))
+				result = append(result, agentctx.ToolImageFollowUpPromptMessage(pendingToolImages))
 				pendingToolImages = nil
 			}
 			continue
@@ -140,7 +141,7 @@ func resolveMediaRefs(
 
 		// If this is the last message and we have pending images, flush them.
 		if idx == len(messages)-1 && len(pendingToolImages) > 0 {
-			result = append(result, toolImageFollowUpPromptMessage(pendingToolImages))
+			result = append(result, agentctx.ToolImageFollowUpPromptMessage(pendingToolImages))
 			pendingToolImages = nil
 		}
 	}

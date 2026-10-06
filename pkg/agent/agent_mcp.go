@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/sipeed/picoclaw/pkg/agent/agentctx"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/mcp"
@@ -280,10 +281,10 @@ func registerMCPServerPromptContributor(
 	if agent == nil || agent.ContextBuilder == nil || toolCount <= 0 {
 		return
 	}
-	if err := agent.ContextBuilder.RegisterPromptContributor(mcpServerPromptContributor{
-		serverName: serverName,
-		toolCount:  toolCount,
-		deferred:   registerAsHidden,
+	if err := agent.ContextBuilder.RegisterPromptContributor(agentctx.MCPServerPromptContributor{
+		ServerName: serverName,
+		ToolCount:  toolCount,
+		Deferred:   registerAsHidden,
 	}); err != nil {
 		logger.WarnCF("agent", "Failed to register MCP prompt contributor",
 			map[string]any{
