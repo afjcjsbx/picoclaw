@@ -1,4 +1,4 @@
-package agent
+package agentctx
 
 import (
 	"testing"
@@ -23,12 +23,12 @@ func toolResult(id string) providers.Message {
 }
 
 func TestSanitizeHistoryForProvider_EmptyHistory(t *testing.T) {
-	result := sanitizeHistoryForProvider(nil)
+	result := SanitizeHistoryForProvider(nil)
 	if len(result) != 0 {
 		t.Fatalf("expected empty, got %d messages", len(result))
 	}
 
-	result = sanitizeHistoryForProvider([]providers.Message{})
+	result = SanitizeHistoryForProvider([]providers.Message{})
 	if len(result) != 0 {
 		t.Fatalf("expected empty, got %d messages", len(result))
 	}
@@ -42,7 +42,7 @@ func TestSanitizeHistoryForProvider_SingleToolCall(t *testing.T) {
 		msg("assistant", "done"),
 	}
 
-	result := sanitizeHistoryForProvider(history)
+	result := SanitizeHistoryForProvider(history)
 	if len(result) != 4 {
 		t.Fatalf("expected 4 messages, got %d", len(result))
 	}
@@ -58,7 +58,7 @@ func TestSanitizeHistoryForProvider_MultiToolCalls(t *testing.T) {
 		msg("assistant", "both done"),
 	}
 
-	result := sanitizeHistoryForProvider(history)
+	result := SanitizeHistoryForProvider(history)
 	if len(result) != 5 {
 		t.Fatalf("expected 5 messages, got %d: %+v", len(result), roles(result))
 	}
@@ -73,7 +73,7 @@ func TestSanitizeHistoryForProvider_AssistantToolCallAfterPlainAssistant(t *test
 		toolResult("A"),
 	}
 
-	result := sanitizeHistoryForProvider(history)
+	result := SanitizeHistoryForProvider(history)
 	if len(result) != 2 {
 		t.Fatalf("expected 2 messages, got %d: %+v", len(result), roles(result))
 	}
@@ -86,7 +86,7 @@ func TestSanitizeHistoryForProvider_OrphanedLeadingTool(t *testing.T) {
 		msg("user", "hello"),
 	}
 
-	result := sanitizeHistoryForProvider(history)
+	result := SanitizeHistoryForProvider(history)
 	if len(result) != 1 {
 		t.Fatalf("expected 1 message, got %d: %+v", len(result), roles(result))
 	}
@@ -99,7 +99,7 @@ func TestSanitizeHistoryForProvider_ToolAfterUserDropped(t *testing.T) {
 		toolResult("A"),
 	}
 
-	result := sanitizeHistoryForProvider(history)
+	result := SanitizeHistoryForProvider(history)
 	if len(result) != 1 {
 		t.Fatalf("expected 1 message, got %d: %+v", len(result), roles(result))
 	}
@@ -113,7 +113,7 @@ func TestSanitizeHistoryForProvider_ToolAfterAssistantNoToolCalls(t *testing.T) 
 		toolResult("A"),
 	}
 
-	result := sanitizeHistoryForProvider(history)
+	result := SanitizeHistoryForProvider(history)
 	if len(result) != 2 {
 		t.Fatalf("expected 2 messages, got %d: %+v", len(result), roles(result))
 	}
@@ -127,7 +127,7 @@ func TestSanitizeHistoryForProvider_AssistantToolCallAtStart(t *testing.T) {
 		msg("user", "hello"),
 	}
 
-	result := sanitizeHistoryForProvider(history)
+	result := SanitizeHistoryForProvider(history)
 	if len(result) != 1 {
 		t.Fatalf("expected 1 message, got %d: %+v", len(result), roles(result))
 	}
@@ -147,7 +147,7 @@ func TestSanitizeHistoryForProvider_MultiToolCallsThenNewRound(t *testing.T) {
 		msg("assistant", "done again"),
 	}
 
-	result := sanitizeHistoryForProvider(history)
+	result := SanitizeHistoryForProvider(history)
 	if len(result) != 9 {
 		t.Fatalf("expected 9 messages, got %d: %+v", len(result), roles(result))
 	}
@@ -166,7 +166,7 @@ func TestSanitizeHistoryForProvider_ConsecutiveMultiToolRounds(t *testing.T) {
 		msg("assistant", "all done"),
 	}
 
-	result := sanitizeHistoryForProvider(history)
+	result := SanitizeHistoryForProvider(history)
 	if len(result) != 8 {
 		t.Fatalf("expected 8 messages, got %d: %+v", len(result), roles(result))
 	}
@@ -181,7 +181,7 @@ func TestSanitizeHistoryForProvider_PlainConversation(t *testing.T) {
 		msg("assistant", "fine"),
 	}
 
-	result := sanitizeHistoryForProvider(history)
+	result := SanitizeHistoryForProvider(history)
 	if len(result) != 4 {
 		t.Fatalf("expected 4 messages, got %d", len(result))
 	}
@@ -199,7 +199,7 @@ func TestSanitizeHistoryForProvider_DuplicateToolResults(t *testing.T) {
 		msg("assistant", "done"),
 	}
 
-	result := sanitizeHistoryForProvider(history)
+	result := SanitizeHistoryForProvider(history)
 	if len(result) != 5 {
 		t.Fatalf("expected 5 messages, got %d: %+v", len(result), roles(result))
 	}
@@ -225,7 +225,7 @@ func TestSanitizeHistoryForProvider_ReusedToolCallIDAcrossRounds(t *testing.T) {
 		msg("assistant", "second done"),
 	}
 
-	result := sanitizeHistoryForProvider(history)
+	result := SanitizeHistoryForProvider(history)
 	if len(result) != 8 {
 		t.Fatalf("expected 8 messages, got %d: %+v", len(result), roles(result))
 	}
@@ -247,7 +247,7 @@ func TestSanitizeHistoryForProvider_DropsAssistantWithEmptyToolCallID(t *testing
 		msg("assistant", "done"),
 	}
 
-	result := sanitizeHistoryForProvider(history)
+	result := SanitizeHistoryForProvider(history)
 	if len(result) != 2 {
 		t.Fatalf("expected 2 messages, got %d: %+v", len(result), roles(result))
 	}
@@ -289,7 +289,7 @@ func TestSanitizeHistoryForProvider_IncompleteToolResults(t *testing.T) {
 		msg("assistant", "answer"),
 	}
 
-	result := sanitizeHistoryForProvider(history)
+	result := SanitizeHistoryForProvider(history)
 	// The assistant message with incomplete tool results should be dropped,
 	// along with its partial tool result. The remaining messages are:
 	// user ("do two things"), user ("next question"), assistant ("answer")
@@ -310,7 +310,7 @@ func TestSanitizeHistoryForProvider_MissingAllToolResults(t *testing.T) {
 		msg("assistant", "hi"),
 	}
 
-	result := sanitizeHistoryForProvider(history)
+	result := SanitizeHistoryForProvider(history)
 	// The assistant message with no tool results should be dropped.
 	// Remaining: user ("do something"), user ("hello"), assistant ("hi")
 	if len(result) != 3 {
@@ -337,7 +337,7 @@ func TestSanitizeHistoryForProvider_PartialToolResultsInMiddle(t *testing.T) {
 		msg("assistant", "all done"),
 	}
 
-	result := sanitizeHistoryForProvider(history)
+	result := SanitizeHistoryForProvider(history)
 	// First round is complete (user, assistant+tools, tool, assistant),
 	// second round is incomplete and dropped (assistant+tools, partial tool),
 	// third round is complete (user, assistant+tools, tool, assistant).

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/sipeed/picoclaw/pkg/agent/agentctx"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/fileutil"
 	"github.com/sipeed/picoclaw/pkg/isolation"
@@ -42,9 +43,9 @@ type AgentInstance struct {
 	LoopDetection             config.LoopDetectionConfig
 	Provider                  providers.LLMProvider
 	Sessions                  session.SessionStore
-	ContextBuilder            *ContextBuilder
+	ContextBuilder            *agentctx.ContextBuilder
 	Tools                     *tools.ToolRegistry
-	Definition                AgentContextDefinition
+	Definition                agentctx.AgentContextDefinition
 	Subagents                 *config.SubagentsConfig
 	SkillsFilter              []string
 	MCPServerAllowlist        map[string]struct{}
@@ -106,7 +107,7 @@ func NewAgentInstance(
 	workspace := resolveAgentWorkspace(agentCfg, defaults)
 	os.MkdirAll(workspace, 0o755)
 
-	definition := loadAgentDefinition(workspace)
+	definition := agentctx.LoadAgentDefinition(workspace)
 
 	model := resolveAgentModel(agentCfg, defaults, definition)
 	fallbacks := resolveAgentFallbacks(agentCfg, defaults)
@@ -180,7 +181,7 @@ func NewAgentInstance(
 	sessions := initSessionStore(sessionsDir)
 
 	mcpDiscoveryActive := agentHasDiscoverableMCPServers(cfg, agentMCPServerAllowlist)
-	contextBuilder := NewContextBuilder(workspace).
+	contextBuilder := agentctx.NewContextBuilder(workspace).
 		WithToolDiscovery(
 			mcpDiscoveryActive && cfg.Tools.MCP.Discovery.UseBM25,
 			mcpDiscoveryActive && cfg.Tools.MCP.Discovery.UseRegex,
@@ -616,7 +617,7 @@ func resolveAgentWorkspace(agentCfg *config.AgentConfig, defaults *config.AgentD
 func resolveAgentModel(
 	agentCfg *config.AgentConfig,
 	defaults *config.AgentDefaults,
-	definition AgentContextDefinition,
+	definition agentctx.AgentContextDefinition,
 ) string {
 	if definition.Agent != nil && strings.TrimSpace(definition.Agent.Frontmatter.Model) != "" {
 		return strings.TrimSpace(definition.Agent.Frontmatter.Model)
@@ -637,7 +638,7 @@ func resolveAgentFallbacks(agentCfg *config.AgentConfig, defaults *config.AgentD
 
 func resolveAgentSkillsFilter(
 	agentCfg *config.AgentConfig,
-	definition AgentContextDefinition,
+	definition agentctx.AgentContextDefinition,
 ) []string {
 	if definition.Agent != nil && definition.Agent.Frontmatter.Skills != nil {
 		return append([]string(nil), definition.Agent.Frontmatter.Skills...)

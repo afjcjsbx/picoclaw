@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/agent/agentctx"
 	"github.com/sipeed/picoclaw/pkg/config"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/logger"
@@ -146,7 +147,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 			case result, ok := <-ts.pendingResults:
 				if ok && result != nil && result.ForLLM != "" {
 					content := al.cfg.FilterSensitiveData(result.ForLLM)
-					msg := subTurnResultPromptMessage(content)
+					msg := agentctx.SubTurnResultPromptMessage(content)
 					pendingMessages = append(pendingMessages, msg)
 				}
 			default:
@@ -344,25 +345,25 @@ func (al *AgentLoop) selectCandidates(
 	return agent.LightCandidates, resolvedCandidateModel(agent.LightCandidates, agent.Router.LightModel()), true
 }
 
-func (al *AgentLoop) resolveContextManager() ContextManager {
+func (al *AgentLoop) resolveContextManager() agentctx.ContextManager {
 	name := al.cfg.Agents.Defaults.ContextManager
 	if name == "" || name == "legacy" {
-		return &legacyContextManager{al: al}
+		return agentctx.NewLegacyContextManager(contextHost{al})
 	}
-	factory, ok := lookupContextManager(name)
+	factory, ok := agentctx.LookupContextManager(name)
 	if !ok {
 		logger.WarnCF("agent", "Unknown context manager, falling back to legacy", map[string]any{
 			"name": name,
 		})
-		return &legacyContextManager{al: al}
+		return agentctx.NewLegacyContextManager(contextHost{al})
 	}
-	cm, err := factory(al.cfg.Agents.Defaults.ContextManagerConfig, al)
+	cm, err := factory(al.cfg.Agents.Defaults.ContextManagerConfig, contextHost{al})
 	if err != nil {
 		logger.WarnCF("agent", "Failed to create context manager, falling back to legacy", map[string]any{
 			"name":  name,
 			"error": err.Error(),
 		})
-		return &legacyContextManager{al: al}
+		return agentctx.NewLegacyContextManager(contextHost{al})
 	}
 	return cm
 }
@@ -408,7 +409,7 @@ func (al *AgentLoop) askSideQuestion(
 	var history []providers.Message
 	var summary string
 	if opts != nil && !opts.NoHistory {
-		if resp, err := al.contextManager.Assemble(ctx, &AssembleRequest{
+		if resp, err := al.contextManager.Assemble(ctx, &agentctx.AssembleRequest{
 			SessionKey: opts.SessionKey,
 			Budget:     agent.ContextWindow,
 			MaxTokens:  agent.MaxTokens,
@@ -418,9 +419,9 @@ func (al *AgentLoop) askSideQuestion(
 		}
 	}
 
-	var promptReq PromptBuildRequest
+	var promptReq agentctx.PromptBuildRequest
 	if opts == nil {
-		promptReq = PromptBuildRequest{
+		promptReq = agentctx.PromptBuildRequest{
 			History:           history,
 			Summary:           summary,
 			CurrentMessage:    question,

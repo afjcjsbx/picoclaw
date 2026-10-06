@@ -4,7 +4,7 @@
 //
 // Copyright (c) 2026 PicoClaw contributors
 
-package agent
+package agentctx
 
 import (
 	"fmt"

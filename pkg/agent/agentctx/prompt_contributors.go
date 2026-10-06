@@ -1,4 +1,4 @@
-package agent
+package agentctx
 
 import (
 	"context"
@@ -54,31 +54,31 @@ func (c toolDiscoveryPromptContributor) ContributePrompt(
 	}, nil
 }
 
-type mcpServerPromptContributor struct {
-	serverName string
-	toolCount  int
-	deferred   bool
+type MCPServerPromptContributor struct {
+	ServerName string
+	ToolCount  int
+	Deferred   bool
 }
 
-func (c mcpServerPromptContributor) PromptSource() PromptSourceDescriptor {
+func (c MCPServerPromptContributor) PromptSource() PromptSourceDescriptor {
 	return PromptSourceDescriptor{
-		ID:              mcpPromptSourceID(c.serverName),
+		ID:              mcpPromptSourceID(c.ServerName),
 		Owner:           "mcp",
-		Description:     fmt.Sprintf("MCP server %q capability prompt", c.serverName),
+		Description:     fmt.Sprintf("MCP server %q capability prompt", c.ServerName),
 		Allowed:         []PromptPlacement{{Layer: PromptLayerCapability, Slot: PromptSlotMCP}},
 		StableByDefault: true,
 	}
 }
 
-func (c mcpServerPromptContributor) ContributePrompt(
+func (c MCPServerPromptContributor) ContributePrompt(
 	_ context.Context,
 	req PromptBuildRequest,
 ) ([]PromptPart, error) {
 	if req.SuppressToolUseRule {
 		return nil, nil
 	}
-	serverName := strings.TrimSpace(c.serverName)
-	if serverName == "" || c.toolCount <= 0 {
+	serverName := strings.TrimSpace(c.ServerName)
+	if serverName == "" || c.ToolCount <= 0 {
 		return nil, nil
 	}
 	if len(req.AllowedTools) > 0 &&
@@ -87,7 +87,7 @@ func (c mcpServerPromptContributor) ContributePrompt(
 	}
 
 	availability := "available as native tools"
-	if c.deferred {
+	if c.Deferred {
 		availability = "hidden behind tool discovery until unlocked"
 	}
 
@@ -101,7 +101,7 @@ func (c mcpServerPromptContributor) ContributePrompt(
 			Content: fmt.Sprintf(
 				"MCP server `%s` is connected. It contributes %d tool(s), currently %s.",
 				serverName,
-				c.toolCount,
+				c.ToolCount,
 				availability,
 			),
 			Stable: true,
@@ -206,7 +206,7 @@ func promptAllowsTool(req PromptBuildRequest, name string) bool {
 	if len(req.AllowedTools) == 0 {
 		return true
 	}
-	allowed := cleanAllowedSet(req.AllowedTools)
+	allowed := CleanAllowedSet(req.AllowedTools)
 	_, ok := allowed[strings.ToLower(strings.TrimSpace(name))]
 	return ok
 }

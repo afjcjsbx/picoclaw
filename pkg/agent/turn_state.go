@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/agent/agentctx"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
@@ -114,10 +115,10 @@ type ActiveTurnInfo struct {
 
 type turnExecution struct {
 	// Core message state (accumulates throughout the turn)
-	messages         []providers.Message // built from ContextBuilder, grows per-iteration
+	messages         []providers.Message // built from agentctx.ContextBuilder, grows per-iteration
 	loopWarnings     []providers.Message // turn-local warnings restored after context compaction
 	pendingMessages  []providers.Message // steering/SubTurn messages awaiting injection
-	history          []providers.Message // from ContextManager.Assemble
+	history          []providers.Message // from agentctx.ContextManager.Assemble
 	summary          string
 	currentTurnStart int
 
@@ -699,13 +700,13 @@ func (ts *turnState) refreshRestorePointFromSession(agent *AgentInstance) {
 	ts.captureRestorePoint(history, summary)
 }
 
-// ingestMessage calls the ContextManager's Ingest method for a persisted message.
+// ingestMessage calls the agentctx.ContextManager's Ingest method for a persisted message.
 // Errors are logged but never block the turn.
 func (ts *turnState) ingestMessage(ctx context.Context, al *AgentLoop, msg providers.Message) {
 	if al.contextManager == nil {
 		return
 	}
-	if err := al.contextManager.Ingest(ctx, &IngestRequest{
+	if err := al.contextManager.Ingest(ctx, &agentctx.IngestRequest{
 		SessionKey: ts.sessionKey,
 		Message:    msg,
 	}); err != nil {
@@ -813,7 +814,7 @@ func (ts *turnState) interruptHintMessage() providers.Message {
 	if hint != "" {
 		content += "\n\nInterrupt hint: " + hint
 	}
-	return interruptPromptMessage(content)
+	return agentctx.InterruptPromptMessage(content)
 }
 
 // =============================================================================

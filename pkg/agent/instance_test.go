@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sipeed/picoclaw/pkg/agent/agentctx"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/media"
 	"github.com/sipeed/picoclaw/pkg/providers"
@@ -1232,7 +1233,7 @@ mcpServers: []
 	if agent.AllowsMCPServer("github") {
 		t.Fatal("expected empty mcpServers allowlist to deny all servers")
 	}
-	messages := agent.ContextBuilder.BuildMessagesFromPrompt(PromptBuildRequest{CurrentMessage: "hello"})
+	messages := agent.ContextBuilder.BuildMessagesFromPrompt(agentctx.PromptBuildRequest{CurrentMessage: "hello"})
 	if prompt := messages[0].Content; strings.Contains(prompt, tools.BM25SearchToolName) {
 		t.Fatalf("expected no tool discovery prompt when no MCP servers are selected, got %q", prompt)
 	}
@@ -1275,7 +1276,7 @@ mcpServers: [github]
 		Workspace: workspace,
 	}, &cfg.Agents.Defaults, cfg, &mockProvider{})
 
-	messages := agent.ContextBuilder.BuildMessagesFromPrompt(PromptBuildRequest{CurrentMessage: "hello"})
+	messages := agent.ContextBuilder.BuildMessagesFromPrompt(agentctx.PromptBuildRequest{CurrentMessage: "hello"})
 	if prompt := messages[0].Content; !strings.Contains(prompt, tools.BM25SearchToolName) {
 		t.Fatalf("expected tool discovery prompt when a discoverable MCP server is selected, got %q", prompt)
 	}

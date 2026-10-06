@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/agent/agentctx"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/providers"
@@ -324,7 +325,7 @@ func TestTurnProfile_BtwCommandDoesNotAddToolFallbackWhenSystemPromptOff(t *test
 		t.Fatalf("processMessage() error = %v", err)
 	}
 	for _, msg := range sideProvider.messages {
-		if msg.Role == "system" && strings.Contains(msg.Content, toolUseSystemPromptRule()) {
+		if msg.Role == "system" && strings.Contains(msg.Content, agentctx.ToolUseSystemPromptRule()) {
 			t.Fatalf("side question system prompt includes tool fallback despite no tools:\n%s", msg.Content)
 		}
 	}
@@ -539,8 +540,8 @@ func TestTurnProfile_SystemPromptOffAddsToolFallbackWhenToolsVisible(t *testing.
 	if err != nil {
 		t.Fatalf("runAgentLoop() error = %v", err)
 	}
-	if got := strings.TrimSpace(provider.messages[0].Content); got != toolUseSystemPromptRule() {
-		t.Fatalf("fallback prompt = %q, want existing tool rule %q", got, toolUseSystemPromptRule())
+	if got := strings.TrimSpace(provider.messages[0].Content); got != agentctx.ToolUseSystemPromptRule() {
+		t.Fatalf("fallback prompt = %q, want existing tool rule %q", got, agentctx.ToolUseSystemPromptRule())
 	}
 }
 
@@ -831,7 +832,7 @@ func TestTurnProfile_ToolsOffSuppressesToolUsePromptRule(t *testing.T) {
 	if len(provider.messages) == 0 || provider.messages[0].Role != "system" {
 		t.Fatalf("first provider message = %#v, want system prompt", provider.messages)
 	}
-	if strings.Contains(provider.messages[0].Content, toolUseSystemPromptRule()) ||
+	if strings.Contains(provider.messages[0].Content, agentctx.ToolUseSystemPromptRule()) ||
 		strings.Contains(provider.messages[0].Content, "**ALWAYS use tools**") {
 		t.Fatalf("tools-off system prompt still asks the model to use tools:\n%s", provider.messages[0].Content)
 	}
@@ -871,7 +872,7 @@ func TestTurnProfile_ToolsCustomMissingToolSuppressesToolUsePromptRule(t *testin
 	if len(provider.tools) != 0 {
 		t.Fatalf("provider tools len = %d, want 0", len(provider.tools))
 	}
-	if strings.Contains(provider.messages[0].Content, toolUseSystemPromptRule()) ||
+	if strings.Contains(provider.messages[0].Content, agentctx.ToolUseSystemPromptRule()) ||
 		strings.Contains(provider.messages[0].Content, "**ALWAYS use tools**") {
 		t.Fatalf(
 			"custom profile with no resolved tools still asks the model to use tools:\n%s",
@@ -970,7 +971,7 @@ func TestTurnProfile_SystemPromptOffAddsToolFallbackForNativeWebSearch(t *testin
 	if got, _ := provider.lastOpts["native_search"].(bool); !got {
 		t.Fatalf("native_search = %#v, want true", provider.lastOpts["native_search"])
 	}
-	if len(provider.messages) == 0 || provider.messages[0].Content != toolUseSystemPromptRule() {
+	if len(provider.messages) == 0 || provider.messages[0].Content != agentctx.ToolUseSystemPromptRule() {
 		t.Fatalf("native-search-only prompt = %#v, want tool fallback", provider.messages)
 	}
 }

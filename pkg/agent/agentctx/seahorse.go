@@ -1,6 +1,6 @@
 //go:build !no_seahorse && !mipsle && !netbsd && !(freebsd && arm)
 
-package agent
+package agentctx
 
 import (
 	"context"
@@ -16,22 +16,25 @@ import (
 	"github.com/sipeed/picoclaw/pkg/tokenizer"
 )
 
-// seahorseContextManager adapts seahorse.Engine to agent.ContextManager.
-type seahorseContextManager struct {
+// SeahorseContextManager adapts seahorse.Engine to agent.ContextManager.
+type SeahorseContextManager struct {
 	engine   *seahorse.Engine
 	sessions session.SessionStore // for startup bootstrap
-	al       *AgentLoop           // for resolving the agent that owns a session
+	host     Host                 // for resolving the agent that owns a session
 }
 
 // newSeahorseContextManager creates a seahorse-backed ContextManager.
-func newSeahorseContextManager(_ json.RawMessage, al *AgentLoop) (ContextManager, error) {
-	if al == nil {
-		return nil, fmt.Errorf("seahorse: AgentLoop is required")
+func newSeahorseContextManager(_ json.RawMessage, host Host) (ContextManager, error) {
+	if host == nil {
+		return nil, fmt.Errorf("seahorse: Host is required")
 	}
 
 	// Resolve workspace for DB path
 	// DB stores session data, so it goes in sessions/ directory
-	agent := al.registry.GetDefaultAgent()
+	agent, ok := host.DefaultAgent()
+	if !ok {
+		return nil, fmt.Errorf("seahorse: no default agent")
+	}
 	dbPath := agent.Workspace + "/sessions/seahorse.db"
 
 	// Create CompleteFn from provider
@@ -45,16 +48,16 @@ func newSeahorseContextManager(_ json.RawMessage, al *AgentLoop) (ContextManager
 		return nil, fmt.Errorf("seahorse: create engine: %w", err)
 	}
 
-	mgr := &seahorseContextManager{
+	mgr := &SeahorseContextManager{
 		engine:   engine,
 		sessions: agent.Sessions,
-		al:       al,
+		host:     host,
 	}
 
 	// Register seahorse tools with the agent's tool registry
 	retrieval := mgr.engine.GetRetrieval()
-	al.RegisterTool(seahorse.NewGrepTool(retrieval))
-	al.RegisterTool(seahorse.NewExpandTool(retrieval))
+	host.RegisterTool(seahorse.NewGrepTool(retrieval))
+	host.RegisterTool(seahorse.NewExpandTool(retrieval))
 
 	// Bootstrap all existing sessions at startup
 	if agent.Sessions != nil {
@@ -89,7 +92,7 @@ func providerToCompleteFn(provider providers.LLMProvider, model string) seahorse
 }
 
 // Assemble builds budget-aware context from seahorse SQLite.
-func (m *seahorseContextManager) Assemble(ctx context.Context, req *AssembleRequest) (*AssembleResponse, error) {
+func (m *SeahorseContextManager) Assemble(ctx context.Context, req *AssembleRequest) (*AssembleResponse, error) {
 	if req == nil {
 		return nil, fmt.Errorf("seahorse assemble: nil request")
 	}
@@ -126,7 +129,7 @@ func (m *seahorseContextManager) Assemble(ctx context.Context, req *AssembleRequ
 }
 
 // Compact compresses conversation history via seahorse summarization.
-func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactRequest) error {
+func (m *SeahorseContextManager) Compact(ctx context.Context, req *CompactRequest) error {
 	if req == nil {
 		return nil
 	}
@@ -147,7 +150,7 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 
 // Ingest records a message into seahorse SQLite.
 // All existing sessions are bootstrapped at startup, so this only ingests new messages.
-func (m *seahorseContextManager) Ingest(ctx context.Context, req *IngestRequest) error {
+func (m *SeahorseContextManager) Ingest(ctx context.Context, req *IngestRequest) error {
 	if req == nil {
 		return nil
 	}
@@ -158,15 +161,15 @@ func (m *seahorseContextManager) Ingest(ctx context.Context, req *IngestRequest)
 }
 
 // Clear removes all stored context for a session (seahorse DB + JSONL).
-func (m *seahorseContextManager) Clear(ctx context.Context, sessionKey string) error {
+func (m *SeahorseContextManager) Clear(ctx context.Context, sessionKey string) error {
 	if err := m.engine.ClearSession(ctx, sessionKey); err != nil {
 		return err
 	}
 	// The session may belong to a routed (non-default) agent whose JSONL
 	// store differs from the bootstrap store, so clear the owner's store.
 	sessions := m.sessions
-	if m.al != nil {
-		if agent := m.al.agentForSession(sessionKey); agent != nil && agent.Sessions != nil {
+	if m.host != nil {
+		if agent, ok := m.host.AgentForSession(sessionKey); ok && agent.Sessions != nil {
 			sessions = agent.Sessions
 		}
 	}
@@ -179,7 +182,7 @@ func (m *seahorseContextManager) Clear(ctx context.Context, sessionKey string) e
 }
 
 // bootstrapSession reconciles JSONL session history into seahorse SQLite.
-func (m *seahorseContextManager) bootstrapSession(ctx context.Context, sessionKey string) {
+func (m *SeahorseContextManager) bootstrapSession(ctx context.Context, sessionKey string) {
 	if m.sessions == nil {
 		return
 	}
@@ -301,3 +304,6 @@ func init() {
 		panic(fmt.Sprintf("register seahorse context manager: %v", err))
 	}
 }
+
+// Engine returns the underlying seahorse engine.
+func (m *SeahorseContextManager) Engine() *seahorse.Engine { return m.engine }

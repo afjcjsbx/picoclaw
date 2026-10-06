@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/agent/agentctx"
 	"github.com/sipeed/picoclaw/pkg/constants"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/logger"
@@ -394,9 +395,9 @@ func (p *Pipeline) CallLLM(
 				))
 			}
 
-			if compactErr := p.ContextManager.Compact(ctx, &CompactRequest{
+			if compactErr := p.ContextManager.Compact(ctx, &agentctx.CompactRequest{
 				SessionKey: ts.sessionKey,
-				Reason:     ContextCompressReasonRetry,
+				Reason:     agentctx.ContextCompressReasonRetry,
 				Budget:     ts.agent.ContextWindow,
 			}); compactErr != nil {
 				logger.WarnCF("agent", "Context overflow compact failed", map[string]any{
@@ -405,7 +406,7 @@ func (p *Pipeline) CallLLM(
 				})
 			}
 			ts.refreshRestorePointFromSession(ts.agent)
-			if asmResp, asmErr := p.ContextManager.Assemble(ctx, &AssembleRequest{
+			if asmResp, asmErr := p.ContextManager.Assemble(ctx, &agentctx.AssembleRequest{
 				SessionKey: ts.sessionKey,
 				Budget:     ts.agent.ContextWindow,
 				MaxTokens:  ts.agent.MaxTokens,
@@ -438,7 +439,7 @@ func (p *Pipeline) CallLLM(
 			originalHistoryCount := len(exec.history)
 			var fit bool
 			var trimmedStableHistory []providers.Message //nolint:prealloc // Replaced by the slice returned from trimming below.
-			trimmedStableHistory, exec.callMessages, fit = trimHistoryToFitContextWindow(
+			trimmedStableHistory, exec.callMessages, fit = agentctx.TrimHistoryToFitContextWindow(
 				stableHistory,
 				func(trimmedHistory []providers.Message) []providers.Message {
 					rebuilt := buildMessages(trimmedHistory)

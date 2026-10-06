@@ -1,8 +1,10 @@
-package agent
+package agentctx
 
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -76,10 +78,10 @@ func TestRenderPromptPartsLegacy_UsesLayerAndSlotOrder(t *testing.T) {
 		},
 	}
 
-	got := renderPromptPartsLegacy(parts)
+	got := RenderPromptPartsLegacy(parts)
 	want := strings.Join([]string{"kernel", "workspace", "skill", "runtime"}, "\n\n---\n\n")
 	if got != want {
-		t.Fatalf("renderPromptPartsLegacy() = %q, want %q", got, want)
+		t.Fatalf("RenderPromptPartsLegacy() = %q, want %q", got, want)
 	}
 }
 
@@ -89,9 +91,15 @@ func TestBuildMessagesFromPrompt_IncludesSystemPromptOverlay(t *testing.T) {
 
 	messages := cb.BuildMessagesFromPrompt(PromptBuildRequest{
 		CurrentMessage: "do child task",
-		Overlays: promptOverlaysForOptions(processOptions{
-			SystemPromptOverride: "Use child-only system instructions.",
-		}),
+		Overlays: []PromptPart{{
+			ID:      "instruction.subturn_profile",
+			Layer:   PromptLayerInstruction,
+			Slot:    PromptSlotWorkspace,
+			Source:  PromptSource{ID: PromptSourceSubTurnProfile, Name: "subturn.profile"},
+			Title:   "SubTurn System Instructions",
+			Content: "Use child-only system instructions.",
+			Cache:   PromptCacheNone,
+		}},
 	})
 
 	if len(messages) < 2 {
@@ -269,10 +277,10 @@ func TestContextBuilder_CustomToolAllowListSuppressesReadFileSkillInstruction(t 
 func TestContextBuilder_CollectsMCPServerContributor(t *testing.T) {
 	t.Setenv("PICOCLAW_BUILTIN_SKILLS", t.TempDir())
 	cb := NewContextBuilder(t.TempDir())
-	err := cb.RegisterPromptContributor(mcpServerPromptContributor{
-		serverName: "GitHub Server",
-		toolCount:  3,
-		deferred:   true,
+	err := cb.RegisterPromptContributor(MCPServerPromptContributor{
+		ServerName: "GitHub Server",
+		ToolCount:  3,
+		Deferred:   true,
 	})
 	if err != nil {
 		t.Fatalf("RegisterPromptContributor() error = %v", err)
@@ -304,10 +312,10 @@ func TestContextBuilder_CollectsMCPServerContributor(t *testing.T) {
 func TestContextBuilder_SuppressesMCPServerContributorWhenToolsUnavailable(t *testing.T) {
 	t.Setenv("PICOCLAW_BUILTIN_SKILLS", t.TempDir())
 	cb := NewContextBuilder(t.TempDir())
-	err := cb.RegisterPromptContributor(mcpServerPromptContributor{
-		serverName: "GitHub Server",
-		toolCount:  3,
-		deferred:   false,
+	err := cb.RegisterPromptContributor(MCPServerPromptContributor{
+		ServerName: "GitHub Server",
+		ToolCount:  3,
+		Deferred:   false,
 	})
 	if err != nil {
 		t.Fatalf("RegisterPromptContributor() error = %v", err)
@@ -372,10 +380,10 @@ func TestContextBuilder_CustomToolAllowListSuppressesUnallowedToolContributors(t
 				}}
 			},
 		)
-	err := cb.RegisterPromptContributor(mcpServerPromptContributor{
-		serverName: "GitHub Server",
-		toolCount:  3,
-		deferred:   false,
+	err := cb.RegisterPromptContributor(MCPServerPromptContributor{
+		ServerName: "GitHub Server",
+		ToolCount:  3,
+		Deferred:   false,
 	})
 	if err != nil {
 		t.Fatalf("RegisterPromptContributor() error = %v", err)
@@ -445,5 +453,16 @@ func TestContextBuilder_CollectsRegisteredPromptContributors(t *testing.T) {
 	messages := cb.BuildMessagesFromPrompt(PromptBuildRequest{CurrentMessage: "hello"})
 	if !strings.Contains(messages[0].Content, "registered contributor prompt") {
 		t.Fatalf("system prompt missing contributor content: %q", messages[0].Content)
+	}
+}
+
+func writeTurnProfileSkill(t *testing.T, workspace, name, body string) {
+	t.Helper()
+	dir := filepath.Join(workspace, "skills", name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir skill: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write skill: %v", err)
 	}
 }

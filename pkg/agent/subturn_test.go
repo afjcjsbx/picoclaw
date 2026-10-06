@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/agent/subagent"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
@@ -20,7 +21,7 @@ import (
 
 // Test constants (use defaults from subturn.go)
 const (
-	testMaxConcurrentSubTurns = defaultMaxConcurrentSubTurns
+	testMaxConcurrentSubTurns = subagent.DefaultMaxConcurrent
 )
 
 // ====================== Test Helper: Event Collector ======================
@@ -139,7 +140,7 @@ func TestSpawnSubTurn(t *testing.T) {
 				depth:          tt.parentDepth,
 				childTurnIDs:   []string{},
 				pendingResults: make(chan *tools.ToolResult, 10),
-				session:        &ephemeralSessionStore{},
+				session:        &subagent.EphemeralSessionStore{},
 				agent:          al.registry.GetDefaultAgent(),
 			}
 
@@ -199,7 +200,7 @@ func TestSpawnSubTurn_EphemeralSessionIsolation(t *testing.T) {
 	defer cleanup()
 
 	// Parent uses its own ephemeral store pre-seeded with one message
-	parentSession := &ephemeralSessionStore{}
+	parentSession := &subagent.EphemeralSessionStore{}
 	parentSession.AddMessage("", "user", "parent msg")
 	parent := &turnState{
 		ctx:            context.Background(),
@@ -224,7 +225,7 @@ func TestSpawnSubTurn_EphemeralSessionIsolation(t *testing.T) {
 	// The child's agent.Sessions must NOT be the same pointer as the parent's session.
 	// We verify this indirectly: spawnSubTurn stores childTS in activeTurnStates during
 	// execution (deleted on return), so we can't easily grab childTS after the call.
-	// Instead, confirm that the child session is a distinct ephemeralSessionStore by
+	// Instead, confirm that the child session is a distinct subagent.EphemeralSessionStore by
 	// checking the parent session key is only used by the parent store.
 	// If isolation is correct, parent.session.GetHistory(childID) is always empty
 	// (the child never wrote to the parent store).
@@ -246,7 +247,7 @@ func TestSpawnSubTurn_ResultDelivery(t *testing.T) {
 		turnID:         "parent-1",
 		depth:          0,
 		pendingResults: make(chan *tools.ToolResult, 1),
-		session:        &ephemeralSessionStore{},
+		session:        &subagent.EphemeralSessionStore{},
 	}
 
 	// Set Async=true to test async result delivery via pendingResults channel
@@ -276,7 +277,7 @@ func TestSpawnSubTurn_ResultDeliverySync(t *testing.T) {
 		turnID:         "parent-sync-1",
 		depth:          0,
 		pendingResults: make(chan *tools.ToolResult, 1),
-		session:        &ephemeralSessionStore{},
+		session:        &subagent.EphemeralSessionStore{},
 	}
 
 	// Sync call (Async=false, the default) - result should be returned directly
@@ -317,7 +318,7 @@ func TestSpawnSubTurn_OrphanResultRouting(t *testing.T) {
 		turnID:         "parent-1",
 		depth:          0,
 		pendingResults: make(chan *tools.ToolResult, 1),
-		session:        &ephemeralSessionStore{},
+		session:        &subagent.EphemeralSessionStore{},
 	}
 
 	// Simulate parent finishing before child delivers result
@@ -349,7 +350,7 @@ func TestSubTurnResultChannelRegistration(t *testing.T) {
 		turnID:         "parent-reg-1",
 		depth:          0,
 		pendingResults: make(chan *tools.ToolResult, 4),
-		session:        &ephemeralSessionStore{},
+		session:        &subagent.EphemeralSessionStore{},
 	}
 
 	cfg := SubTurnConfig{Model: "gpt-4o-mini", Tools: []tools.Tool{}}
@@ -380,7 +381,7 @@ func TestDequeuePendingSubTurnResults(t *testing.T) {
 		ctx:            context.Background(),
 		turnID:         sessionKey,
 		depth:          0,
-		session:        &ephemeralSessionStore{},
+		session:        &subagent.EphemeralSessionStore{},
 		pendingResults: make(chan *tools.ToolResult, 4),
 	}
 	al.activeTurnStates.Store(sessionKey, ts)
@@ -422,7 +423,7 @@ func TestSubTurnConcurrencySemaphore(t *testing.T) {
 		turnID:         "parent-concurrency",
 		depth:          0,
 		pendingResults: make(chan *tools.ToolResult, 10),
-		session:        &ephemeralSessionStore{},
+		session:        &subagent.EphemeralSessionStore{},
 		concurrencySem: make(chan struct{}, 2), // Only allow 2 concurrent children
 	}
 
@@ -468,7 +469,7 @@ func TestHardAbortCascading(t *testing.T) {
 		cancelFunc:     rootCancel,
 		turnID:         sessionKey,
 		depth:          0,
-		session:        &ephemeralSessionStore{},
+		session:        &subagent.EphemeralSessionStore{},
 		pendingResults: make(chan *tools.ToolResult, 16),
 		concurrencySem: make(chan struct{}, 5),
 		al:             al,
@@ -540,12 +541,10 @@ func TestHardAbortSessionRollback(t *testing.T) {
 	defer cleanup()
 
 	// Create a session with initial history
-	sess := &ephemeralSessionStore{
-		history: []providers.Message{
-			{Role: "user", Content: "initial message 1"},
-			{Role: "assistant", Content: "initial response 1"},
-		},
-	}
+	sess := subagent.NewEphemeralSession([]providers.Message{
+		{Role: "user", Content: "initial message 1"},
+		{Role: "assistant", Content: "initial response 1"},
+	})
 
 	// Create a root turnState with initialHistoryLength = 2
 	rootTS := &turnState{
@@ -625,7 +624,7 @@ func TestNestedSubTurnHierarchy(t *testing.T) {
 	}()
 
 	// Create a root turn
-	rootSession := &ephemeralSessionStore{}
+	rootSession := &subagent.EphemeralSessionStore{}
 	rootTS := &turnState{
 		ctx:            context.Background(),
 		turnID:         "root-turn",
@@ -721,13 +720,11 @@ func TestHardAbortOrderOfOperations(t *testing.T) {
 	_ = provider
 	defer cleanup()
 
-	sess := &ephemeralSessionStore{
-		history: []providers.Message{
-			{Role: "user", Content: "initial message"},
-			{Role: "assistant", Content: "response 1"},
-			{Role: "user", Content: "follow-up"},
-		},
-	}
+	sess := subagent.NewEphemeralSession([]providers.Message{
+		{Role: "user", Content: "initial message"},
+		{Role: "assistant", Content: "response 1"},
+		{Role: "user", Content: "follow-up"},
+	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -827,7 +824,7 @@ func TestFinalPollCapturesLateResults(t *testing.T) {
 		ctx:            context.Background(),
 		turnID:         sessionKey,
 		depth:          0,
-		session:        &ephemeralSessionStore{},
+		session:        &subagent.EphemeralSessionStore{},
 		pendingResults: make(chan *tools.ToolResult, 4),
 	}
 	al.activeTurnStates.Store(sessionKey, ts)
@@ -873,7 +870,7 @@ func TestSpawnSubTurn_PanicRecovery(t *testing.T) {
 		turnID:         "parent-panic",
 		depth:          0,
 		pendingResults: make(chan *tools.ToolResult, 1),
-		session:        &ephemeralSessionStore{},
+		session:        &subagent.EphemeralSessionStore{},
 	}
 
 	collector, collectCleanup := newEventCollector(t, al)
@@ -969,7 +966,7 @@ func TestGetActiveTurn(t *testing.T) {
 		parentTurnID:   "",
 		depth:          0,
 		childTurnIDs:   []string{},
-		session:        newEphemeralSession(nil),
+		session:        subagent.NewEphemeralSession(nil),
 		pendingResults: make(chan *tools.ToolResult, 16),
 		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
 	}
@@ -1026,7 +1023,7 @@ func TestGetActiveTurn_WithChildren(t *testing.T) {
 		parentTurnID:   "",
 		depth:          0,
 		childTurnIDs:   []string{"child-1", "child-2"},
-		session:        newEphemeralSession(nil),
+		session:        subagent.NewEphemeralSession(nil),
 		pendingResults: make(chan *tools.ToolResult, 16),
 		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
 	}
@@ -1058,7 +1055,7 @@ func TestTurnStateInfo_ThreadSafety(t *testing.T) {
 		parentTurnID:   "parent",
 		depth:          1,
 		childTurnIDs:   []string{},
-		session:        newEphemeralSession(nil),
+		session:        subagent.NewEphemeralSession(nil),
 		pendingResults: make(chan *tools.ToolResult, 16),
 		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
 	}
@@ -1173,7 +1170,7 @@ func TestInterruptHard_Alias(t *testing.T) {
 		ctx:                  rootCtx,
 		turnID:               "test-turn",
 		depth:                0,
-		session:              newEphemeralSession(nil),
+		session:              subagent.NewEphemeralSession(nil),
 		initialHistoryLength: 0,
 		pendingResults:       make(chan *tools.ToolResult, 16),
 		concurrencySem:       make(chan struct{}, testMaxConcurrentSubTurns),
@@ -1355,7 +1352,7 @@ func TestConcurrencySemaphore_Timeout(t *testing.T) {
 		ctx:            ctx,
 		turnID:         "parent-timeout-test",
 		depth:          0,
-		session:        newEphemeralSession(nil),
+		session:        subagent.NewEphemeralSession(nil),
 		pendingResults: make(chan *tools.ToolResult, 16),
 		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
 	}
@@ -1408,22 +1405,22 @@ func TestConcurrencySemaphore_Timeout(t *testing.T) {
 // TestEphemeralSession_AutoTruncate verifies that ephemeral sessions automatically
 // truncate their history to prevent memory accumulation.
 func TestEphemeralSession_AutoTruncate(t *testing.T) {
-	store := newEphemeralSession(nil).(*ephemeralSessionStore)
+	store := subagent.NewEphemeralSession(nil)
 
 	// Add more messages than the limit
-	for i := 0; i < maxEphemeralHistorySize+20; i++ {
+	for i := 0; i < subagent.MaxEphemeralHistorySize+20; i++ {
 		store.AddMessage("test", "user", fmt.Sprintf("message-%d", i))
 	}
 
 	// Verify history is truncated to the limit
 	history := store.GetHistory("test")
-	if len(history) != maxEphemeralHistorySize {
-		t.Errorf("Expected history length %d, got %d", maxEphemeralHistorySize, len(history))
+	if len(history) != subagent.MaxEphemeralHistorySize {
+		t.Errorf("Expected history length %d, got %d", subagent.MaxEphemeralHistorySize, len(history))
 	}
 
 	// Verify we kept the most recent messages
 	lastMsg := history[len(history)-1]
-	expectedContent := fmt.Sprintf("message-%d", maxEphemeralHistorySize+20-1)
+	expectedContent := fmt.Sprintf("message-%d", subagent.MaxEphemeralHistorySize+20-1)
 	if lastMsg.Content != expectedContent {
 		t.Errorf("Expected last message to be %q, got %q", expectedContent, lastMsg.Content)
 	}
@@ -1455,7 +1452,7 @@ func TestContextWrapping_SingleLayer(t *testing.T) {
 		ctx:            ctx,
 		turnID:         "parent-context-test",
 		depth:          0,
-		session:        newEphemeralSession(nil),
+		session:        subagent.NewEphemeralSession(nil),
 		pendingResults: make(chan *tools.ToolResult, 16),
 		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
 	}
@@ -1501,7 +1498,7 @@ func TestSyncSubTurn_NoChannelDelivery(t *testing.T) {
 		ctx:            ctx,
 		turnID:         "parent-sync-test",
 		depth:          0,
-		session:        newEphemeralSession(nil),
+		session:        subagent.NewEphemeralSession(nil),
 		pendingResults: make(chan *tools.ToolResult, 16),
 		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
 	}
@@ -1558,7 +1555,7 @@ func TestAsyncSubTurn_ChannelDelivery(t *testing.T) {
 		ctx:            ctx,
 		turnID:         "parent-async-test",
 		depth:          0,
-		session:        newEphemeralSession(nil),
+		session:        subagent.NewEphemeralSession(nil),
 		pendingResults: make(chan *tools.ToolResult, 16),
 		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
 	}
@@ -1623,7 +1620,7 @@ func TestGrandchildAbort_CascadingCancellation(t *testing.T) {
 		cancelFunc:     gpCancel,
 		turnID:         "grandparent",
 		depth:          0,
-		session:        newEphemeralSession(nil),
+		session:        subagent.NewEphemeralSession(nil),
 		pendingResults: make(chan *tools.ToolResult, 16),
 		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
 		childTurnIDs:   []string{"parent"},
@@ -1722,7 +1719,7 @@ func TestSpawnDuringAbort_RaceCondition(t *testing.T) {
 		ctx:            ctx,
 		turnID:         "parent-abort-race",
 		depth:          0,
-		session:        newEphemeralSession(nil),
+		session:        subagent.NewEphemeralSession(nil),
 		pendingResults: make(chan *tools.ToolResult, 16),
 		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
 	}
@@ -1841,7 +1838,7 @@ func TestAsyncSubTurn_ParentFinishesEarly(t *testing.T) {
 		ctx:            ctx,
 		turnID:         "parent-fast",
 		depth:          0,
-		session:        newEphemeralSession(nil),
+		session:        subagent.NewEphemeralSession(nil),
 		pendingResults: make(chan *tools.ToolResult, 16),
 		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
 	}
@@ -1914,7 +1911,7 @@ func TestAsyncSubTurn_ParentWaitsForChild(t *testing.T) {
 		ctx:            ctx,
 		turnID:         "parent-wait",
 		depth:          0,
-		session:        newEphemeralSession(nil),
+		session:        subagent.NewEphemeralSession(nil),
 		pendingResults: make(chan *tools.ToolResult, 16),
 		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
 	}
@@ -2081,7 +2078,7 @@ func TestSubTurn_IndependentContext(t *testing.T) {
 		ctx:            ctx,
 		turnID:         "parent-independent",
 		depth:          0,
-		session:        newEphemeralSession(nil),
+		session:        subagent.NewEphemeralSession(nil),
 		pendingResults: make(chan *tools.ToolResult, 16),
 		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
 	}
@@ -2216,7 +2213,7 @@ func TestSpawnSubTurn_TargetAgentID_UsesTargetAgent(t *testing.T) {
 		childTurnIDs:   []string{},
 		pendingResults: make(chan *tools.ToolResult, 4),
 		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
-		session:        &ephemeralSessionStore{},
+		session:        &subagent.EphemeralSessionStore{},
 		agent:          alphaAgent,
 	}
 
@@ -2251,7 +2248,7 @@ func TestSpawnSubTurn_TargetAgentID_NotFound(t *testing.T) {
 		childTurnIDs:   []string{},
 		pendingResults: make(chan *tools.ToolResult, 4),
 		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
-		session:        &ephemeralSessionStore{},
+		session:        &subagent.EphemeralSessionStore{},
 		agent:          alphaAgent,
 	}
 
@@ -2280,7 +2277,7 @@ func TestSpawnSubTurn_TargetAgentID_EmptyModelAccepted(t *testing.T) {
 		childTurnIDs:   []string{},
 		pendingResults: make(chan *tools.ToolResult, 4),
 		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
-		session:        &ephemeralSessionStore{},
+		session:        &subagent.EphemeralSessionStore{},
 		agent:          alphaAgent,
 	}
 

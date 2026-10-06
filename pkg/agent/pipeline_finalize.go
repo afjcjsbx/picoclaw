@@ -5,6 +5,7 @@ package agent
 import (
 	"context"
 
+	"github.com/sipeed/picoclaw/pkg/agent/agentctx"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/providers"
@@ -68,9 +69,9 @@ func (p *Pipeline) Finalize(
 	if !ts.opts.NoHistory && ts.opts.EnableSummary {
 		al.contextManager.Compact(
 			turnCtx,
-			&CompactRequest{
+			&agentctx.CompactRequest{
 				SessionKey: ts.sessionKey,
-				Reason:     ContextCompressReasonSummarize,
+				Reason:     agentctx.ContextCompressReasonSummarize,
 				Budget:     ts.agent.ContextWindow,
 			},
 		)

@@ -1,26 +1,18 @@
 package agent
 
 import (
-	"encoding/json"
 	"path/filepath"
 	"sort"
 	"strings"
 
+	"github.com/sipeed/picoclaw/pkg/agent/agentctx"
 	"github.com/sipeed/picoclaw/pkg/routing"
 )
-
-// AgentDescriptor is the structured discovery payload injected into each
-// agent's system prompt so the LLM can choose a peer by identity.
-type AgentDescriptor struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-}
 
 // ListAgents returns structured descriptors for every agent in the current
 // PicoClaw instance. The current workspace, when provided, is used only to
 // order the matching agent first for prompt readability.
-func (r *AgentRegistry) ListAgents(workspace string) []AgentDescriptor {
+func (r *AgentRegistry) ListAgents(workspace string) []agentctx.AgentDescriptor {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -31,7 +23,7 @@ func (r *AgentRegistry) ListAgents(workspace string) []AgentDescriptor {
 	sort.Strings(ids)
 
 	selfWorkspace := cleanWorkspacePath(workspace)
-	descriptors := make([]AgentDescriptor, 0, len(ids))
+	descriptors := make([]agentctx.AgentDescriptor, 0, len(ids))
 	for _, id := range ids {
 		agent := r.agents[id]
 		if agent == nil {
@@ -63,7 +55,7 @@ func (r *AgentRegistry) ListAgents(workspace string) []AgentDescriptor {
 // ListSpawnableAgents returns descriptors only when the current agent can call
 // spawn, and only for peers it is allowed to spawn. Restricted peers are
 // intentionally omitted from discovery.
-func (r *AgentRegistry) ListSpawnableAgents(agentID string) []AgentDescriptor {
+func (r *AgentRegistry) ListSpawnableAgents(agentID string) []agentctx.AgentDescriptor {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -88,7 +80,7 @@ func (r *AgentRegistry) ListSpawnableAgents(agentID string) []AgentDescriptor {
 	}
 	sort.Strings(ids)
 
-	descriptors := make([]AgentDescriptor, 0, len(ids))
+	descriptors := make([]agentctx.AgentDescriptor, 0, len(ids))
 	for _, id := range ids {
 		agent := r.agents[id]
 		if agent == nil {
@@ -100,7 +92,7 @@ func (r *AgentRegistry) ListSpawnableAgents(agentID string) []AgentDescriptor {
 }
 
 // GetAgentDescriptor returns the structured discovery payload for one agent.
-func (r *AgentRegistry) GetAgentDescriptor(agentID string) (*AgentDescriptor, bool) {
+func (r *AgentRegistry) GetAgentDescriptor(agentID string) (*agentctx.AgentDescriptor, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -114,18 +106,18 @@ func (r *AgentRegistry) GetAgentDescriptor(agentID string) (*AgentDescriptor, bo
 	return &descriptor, true
 }
 
-func (r *AgentRegistry) buildAgentDescriptorLocked(agent *AgentInstance) AgentDescriptor {
-	definition := loadAgentDefinition(agent.Workspace)
+func (r *AgentRegistry) buildAgentDescriptorLocked(agent *AgentInstance) agentctx.AgentDescriptor {
+	definition := agentctx.LoadAgentDefinition(agent.Workspace)
 	name, description := descriptorIdentity(agent.ID, definition)
 
-	return AgentDescriptor{
+	return agentctx.AgentDescriptor{
 		ID:          agent.ID,
 		Name:        name,
 		Description: description,
 	}
 }
 
-func descriptorIdentity(agentID string, definition AgentContextDefinition) (string, string) {
+func descriptorIdentity(agentID string, definition agentctx.AgentContextDefinition) (string, string) {
 	name := agentID
 	description := ""
 	if definition.Agent != nil {
@@ -139,9 +131,9 @@ func descriptorIdentity(agentID string, definition AgentContextDefinition) (stri
 
 	if description == "" &&
 		definition.Agent != nil {
-		if definition.Source == AgentDefinitionSourceAgent {
+		if definition.Source == agentctx.AgentDefinitionSourceAgent {
 			description = firstNonEmptyLine(definition.Agent.Body)
-		} else if definition.Source == AgentDefinitionSourceAgents {
+		} else if definition.Source == agentctx.AgentDefinitionSourceAgents {
 			description = firstMeaningfulParagraph(definition.Agent.Body)
 		}
 	}
@@ -231,33 +223,4 @@ func cleanWorkspacePath(path string) string {
 		return ""
 	}
 	return filepath.Clean(path)
-}
-
-func formatAgentDiscoverySection(agents []AgentDescriptor) string {
-	if len(agents) == 0 {
-		return ""
-	}
-
-	payload := struct {
-		Agents []AgentDescriptor `json:"agents"`
-	}{
-		Agents: agents,
-	}
-
-	encoded, err := json.MarshalIndent(payload, "", "  ")
-	if err != nil {
-		return ""
-	}
-
-	var header strings.Builder
-	header.WriteString("# Agent Discovery\n\n")
-	header.WriteString("This registry lists the peer agents this agent is permitted to spawn.\n")
-	header.WriteString(
-		"Choose a peer based on its description. Use only agent IDs listed here when calling spawn.\n\n",
-	)
-	header.WriteString("```json\n")
-	header.Write(encoded)
-	header.WriteString("\n```")
-
-	return header.String()
 }

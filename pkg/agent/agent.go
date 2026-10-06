@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/agent/agentctx"
 	"github.com/sipeed/picoclaw/pkg/agent/interfaces"
 	"github.com/sipeed/picoclaw/pkg/audio/asr"
 	"github.com/sipeed/picoclaw/pkg/audio/tts"
@@ -51,7 +52,7 @@ type AgentLoop struct {
 	running        atomic.Bool
 	stopCh         chan struct{}
 	stopOnce       sync.Once
-	contextManager ContextManager
+	contextManager agentctx.ContextManager
 	fallback       *providers.FallbackChain
 	channelManager interfaces.ChannelManager
 	mediaStore     media.MediaStore
@@ -646,7 +647,7 @@ func (al *AgentLoop) runAgentLoop(
 // turn — tool follow-up iterations use the same tier as the initial call so
 // that a multi-step tool chain doesn't switch models mid-way.
 
-// resolveContextManager selects the ContextManager implementation based on config.
+// resolveContextManager selects the agentctx.ContextManager implementation based on config.
 
 // GetStartupInfo returns information about loaded tools and skills for logging.
 

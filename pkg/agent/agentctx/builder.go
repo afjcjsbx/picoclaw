@@ -1,4 +1,4 @@
-package agent
+package agentctx
 
 import (
 	"context"
@@ -149,7 +149,7 @@ func (cb *ContextBuilder) getIdentity(includeToolUseRule bool) string {
 	version := config.FormatVersion()
 	rules := []string{}
 	if includeToolUseRule {
-		rules = append(rules, toolUseSystemPromptRule())
+		rules = append(rules, ToolUseSystemPromptRule())
 	}
 	accuracyRule := "**Be helpful and accurate** - Briefly explain what you're doing."
 	if includeToolUseRule {
@@ -217,7 +217,7 @@ func formatToolDiscoveryRule(useBM25, useRegex bool) string {
 }
 
 func (cb *ContextBuilder) BuildSystemPrompt() string {
-	return renderPromptPartsLegacy(cb.BuildSystemPromptParts())
+	return RenderPromptPartsLegacy(cb.BuildSystemPromptParts())
 }
 
 func (cb *ContextBuilder) BuildSystemPromptParts() []PromptPart {
@@ -414,7 +414,7 @@ func (cb *ContextBuilder) buildSystemPromptForRequest(
 		AllowedSkills:       req.AllowedSkills,
 		AllowedTools:        req.AllowedTools,
 	})
-	staticPrompt := renderPromptPartsLegacy(parts)
+	staticPrompt := RenderPromptPartsLegacy(parts)
 	blocks := make([]providers.ContentBlock, 0, len(parts))
 	for _, part := range parts {
 		if strings.TrimSpace(part.Content) == "" {
@@ -432,7 +432,7 @@ func (cb *ContextBuilder) buildSkillsSummary(allowed []string) string {
 	if len(allowed) == 0 {
 		return cb.skillsLoader.BuildSkillsSummary()
 	}
-	allowedSet := cleanAllowedSet(allowed)
+	allowedSet := CleanAllowedSet(allowed)
 	if len(allowedSet) == 0 {
 		return ""
 	}
@@ -542,9 +542,9 @@ func (cb *ContextBuilder) sourcePaths() []string {
 	return uniquePaths(paths)
 }
 
-// skillRoots returns all skill root directories that can affect
+// SkillRoots returns all skill root directories that can affect
 // BuildSkillsSummary output (workspace/global/builtin).
-func (cb *ContextBuilder) skillRoots() []string {
+func (cb *ContextBuilder) SkillRoots() []string {
 	if cb.skillsLoader == nil {
 		return []string{filepath.Join(cb.workspace, "skills")}
 	}
@@ -568,10 +568,10 @@ type cacheBaseline struct {
 // the latest mtime across all tracked files + skills directory contents.
 // Called under write lock when the cache is built.
 func (cb *ContextBuilder) buildCacheBaseline() cacheBaseline {
-	skillRoots := cb.skillRoots()
+	SkillRoots := cb.SkillRoots()
 
 	// All paths whose existence we track: source files + all skill roots.
-	allPaths := append(cb.sourcePaths(), skillRoots...)
+	allPaths := append(cb.sourcePaths(), SkillRoots...)
 
 	existed := make(map[string]bool, len(allPaths))
 	skillFiles := make(map[string]time.Time)
@@ -587,7 +587,7 @@ func (cb *ContextBuilder) buildCacheBaseline() cacheBaseline {
 
 	// Walk all skill roots recursively to snapshot skill files and mtimes.
 	// Use os.Stat (not d.Info) for consistency with sourceFilesChanged checks.
-	for _, root := range skillRoots {
+	for _, root := range SkillRoots {
 		_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
 			if walkErr == nil && !d.IsDir() {
 				if info, err := os.Stat(path); err == nil {
@@ -636,12 +636,12 @@ func (cb *ContextBuilder) sourceFilesChangedLocked() bool {
 	// For each root:
 	// 1. Creation/deletion and root directory mtime changes are tracked by fileChangedSince.
 	// 2. Nested file create/delete/mtime changes are tracked by the skill file snapshot.
-	for _, root := range cb.skillRoots() {
+	for _, root := range cb.SkillRoots() {
 		if cb.fileChangedSince(root) {
 			return true
 		}
 	}
-	if skillFilesChangedSince(cb.skillRoots(), cb.skillFilesAtCache) {
+	if skillFilesChangedSince(cb.SkillRoots(), cb.skillFilesAtCache) {
 		return true
 	}
 
@@ -685,7 +685,7 @@ var errWalkStop = errors.New("walk stop")
 // skillFilesChangedSince compares the current recursive skill file tree
 // against the cache-time snapshot. Any create/delete/mtime drift invalidates
 // the cache.
-func skillFilesChangedSince(skillRoots []string, filesAtCache map[string]time.Time) bool {
+func skillFilesChangedSince(SkillRoots []string, filesAtCache map[string]time.Time) bool {
 	// Defensive: if the snapshot was never initialized, force rebuild.
 	if filesAtCache == nil {
 		return true
@@ -706,7 +706,7 @@ func skillFilesChangedSince(skillRoots []string, filesAtCache map[string]time.Ti
 
 	// Check no new files appeared under any skill root.
 	changed := false
-	for _, root := range skillRoots {
+	for _, root := range SkillRoots {
 		if strings.TrimSpace(root) == "" {
 			continue
 		}
@@ -873,7 +873,7 @@ func (cb *ContextBuilder) BuildMessagesFromPrompt(req PromptBuildRequest) []prov
 	if !req.SuppressDefaultSystemPrompt && !req.SuppressSkillContext {
 		activeSkills := append([]string(nil), req.ActiveSkills...)
 		if len(req.AllowedSkills) > 0 {
-			activeSkills = filterNamesByTurnProfile(activeSkills, req.AllowedSkills)
+			activeSkills = FilterNamesByTurnProfile(activeSkills, req.AllowedSkills)
 		}
 		promptParts = append(promptParts, cb.buildActiveSkillsPromptParts(activeSkills)...)
 	}
@@ -957,7 +957,7 @@ func (cb *ContextBuilder) BuildMessagesFromPrompt(req PromptBuildRequest) []prov
 			Slot:    PromptSlotIdentity,
 			Source:  PromptSource{ID: PromptSourceKernel, Name: "tool_use_fallback"},
 			Title:   "tool use fallback",
-			Content: toolUseSystemPromptRule(),
+			Content: ToolUseSystemPromptRule(),
 			Stable:  true,
 			Cache:   PromptCacheEphemeral,
 		}
@@ -991,7 +991,7 @@ func (cb *ContextBuilder) BuildMessagesFromPrompt(req PromptBuildRequest) []prov
 			"preview": preview,
 		})
 
-	history := sanitizeHistoryForProvider(req.History)
+	history := SanitizeHistoryForProvider(req.History)
 
 	// Single system message containing all context — compatible with all providers.
 	// SystemParts enables cache-aware adapters to set per-block cache_control;
@@ -1011,16 +1011,16 @@ func (cb *ContextBuilder) BuildMessagesFromPrompt(req PromptBuildRequest) []prov
 	// multimodal providers receive the uploaded image even when the user sends
 	// no accompanying text.
 	if strings.TrimSpace(req.CurrentMessage) != "" || len(req.Media) > 0 {
-		messages = append(messages, userPromptMessage(req.CurrentMessage, req.Media))
+		messages = append(messages, UserPromptMessage(req.CurrentMessage, req.Media))
 	}
 	if len(messages) == 0 {
-		messages = append(messages, userPromptMessage("", nil))
+		messages = append(messages, UserPromptMessage("", nil))
 	}
 
 	return messages
 }
 
-func sanitizeHistoryForProvider(history []providers.Message) []providers.Message {
+func SanitizeHistoryForProvider(history []providers.Message) []providers.Message {
 	if len(history) == 0 {
 		return history
 	}

@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/agent/agentctx"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/channels"
 	"github.com/sipeed/picoclaw/pkg/config"
@@ -6721,7 +6722,7 @@ func TestResolveMediaRefs_ToolRoleImageAppendedAsUserMessage(t *testing.T) {
 	ref, _ := store.Store(pngPath, media.MediaMeta{}, "test")
 
 	messages := []providers.Message{
-		toolResultPromptMessage("Image loaded", "call_tool_result_image", []string{ref}),
+		agentctx.ToolResultPromptMessage("Image loaded", "call_tool_result_image", []string{ref}),
 	}
 	result := resolveMediaRefs(messages, store, config.DefaultMaxMediaSize, 0)
 
@@ -6768,7 +6769,7 @@ func TestResolveMediaRefs_HistoricalToolRoleImageDoesNotAppendAsUserMessage(t *t
 	ref, _ := store.Store(pngPath, media.MediaMeta{}, "test")
 
 	messages := []providers.Message{
-		toolResultPromptMessage("Image loaded", "call_historical_tool_result_image", []string{ref}),
+		agentctx.ToolResultPromptMessage("Image loaded", "call_historical_tool_result_image", []string{ref}),
 		{Role: "user", Content: "now summarize it in one sentence"},
 	}
 	result := resolveMediaRefs(messages, store, config.DefaultMaxMediaSize, 1)
@@ -6812,9 +6813,9 @@ func TestResolveMediaRefs_HistoricalAndCurrentToolImagesOnlyRehydrateCurrentTurn
 	currentRef, _ := store.Store(currentPath, media.MediaMeta{}, "test")
 
 	messages := []providers.Message{
-		toolResultPromptMessage("Historical image loaded", "call_hist_image", []string{historicalRef}),
+		agentctx.ToolResultPromptMessage("Historical image loaded", "call_hist_image", []string{historicalRef}),
 		{Role: "assistant", Content: "Now I will inspect a new image."},
-		toolResultPromptMessage("Current image loaded", "call_current_image", []string{currentRef}),
+		agentctx.ToolResultPromptMessage("Current image loaded", "call_current_image", []string{currentRef}),
 	}
 	result := resolveMediaRefs(messages, store, config.DefaultMaxMediaSize, 1)
 
@@ -6867,8 +6868,8 @@ func TestResolveMediaRefs_MultiToolCallPreservesOrdering(t *testing.T) {
 	// Simulate: assistant called load_image + read_file, two tool results follow
 	messages := []providers.Message{
 		{Role: "assistant", Content: "Let me load the image and read the file."},
-		toolResultPromptMessage("Image loaded [image: photo]", "call_load_image_multi_tool", []string{imgRef}),
-		toolResultPromptMessage("file contents here", "call_read_file_multi_tool", nil),
+		agentctx.ToolResultPromptMessage("Image loaded [image: photo]", "call_load_image_multi_tool", []string{imgRef}),
+		agentctx.ToolResultPromptMessage("file contents here", "call_read_file_multi_tool", nil),
 	}
 	result := resolveMediaRefs(messages, store, config.DefaultMaxMediaSize, 0)
 
@@ -6920,8 +6921,8 @@ func TestResolveMediaRefs_MultipleCurrentToolImagesShareSingleSyntheticFollowUp(
 
 	messages := []providers.Message{
 		{Role: "assistant", Content: "I loaded two images for comparison."},
-		toolResultPromptMessage("First image loaded", "call_first_image", []string{firstRef}),
-		toolResultPromptMessage("Second image loaded", "call_second_image", []string{secondRef}),
+		agentctx.ToolResultPromptMessage("First image loaded", "call_first_image", []string{firstRef}),
+		agentctx.ToolResultPromptMessage("Second image loaded", "call_second_image", []string{secondRef}),
 	}
 	result := resolveMediaRefs(messages, store, config.DefaultMaxMediaSize, 0)
 
