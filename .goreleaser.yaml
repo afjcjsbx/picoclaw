@@ -165,6 +165,26 @@ archives:
       - goos: windows
         formats: [zip]
 
+# The updater only trusts checksums.txt when checksums.txt.minisig verifies
+# against the public key embedded in pkg/updater.
+checksum:
+  name_template: checksums.txt
+
+signs:
+  - id: minisign
+    cmd: minisign
+    artifacts: checksum
+    signature: "${artifact}.minisig"
+    stdin: '{{ .Env.MINISIGN_PASSWORD }}'
+    args:
+      - -S
+      - -s
+      - "{{ .Env.MINISIGN_KEY_FILE }}"
+      - -m
+      - "${artifact}"
+      - -x
+      - "${signature}"
+
 nfpms:
   - id: picoclaw
     ids:

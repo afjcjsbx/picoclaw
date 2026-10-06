@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -234,12 +235,8 @@ func findAssetInfo(releaseURL, platform, arch string) (string, string, error) {
 	}
 
 	var data struct {
-		TagName string `json:"tag_name"`
-		Assets  []struct {
-			Name               string `json:"name"`
-			BrowserDownloadURL string `json:"browser_download_url"`
-			Digest             string `json:"digest"`
-		} `json:"assets"`
+		TagName string         `json:"tag_name"`
+		Assets  []releaseAsset `json:"assets"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
 		return "", "", err
@@ -326,47 +323,78 @@ func findAssetInfo(releaseURL, platform, arch string) (string, string, error) {
 	}
 
 	// Try platform matches first
-	if url, idx, ok := pickBest(platformIdx); ok {
-		// attempt to find checksum: prefer asset digest from API if present
-		if d := strings.TrimSpace(data.Assets[idx].Digest); d != "" {
-			dLower := strings.ToLower(d)
-			if strings.HasPrefix(dLower, "sha256:") {
-				hexpart := strings.TrimPrefix(dLower, "sha256:")
-				return url, hexpart, nil
-			}
-			// If digest already looks like a 64-hex, return it
-			if ok, _ := regexp.MatchString("(?i)^[a-f0-9]{64}$", dLower); ok {
-				return url, dLower, nil
-			}
+	if url, _, ok := pickBest(platformIdx); ok {
+		// Checksums are only trusted when the checksum file carries a valid
+		// minisign signature made with the embedded release key. The API
+		// "digest" field is ignored: it is controlled by whoever can edit the
+		// release, so it proves nothing.
+		bs, err := fetchVerifiedChecksums(data.Assets)
+		if err != nil {
+			return "", "", err
 		}
-		// Look for checksum assets and verify by computing the asset's sha256.
-		for j, a := range data.Assets {
-			n := strings.ToLower(a.Name)
-			if strings.Contains(n, "sha256") ||
-				strings.Contains(n, "sha256sum") ||
-				strings.Contains(n, "checksums") ||
-				strings.HasSuffix(n, ".sha256") ||
-				strings.HasSuffix(n, ".sha256sum") {
-				resp2, err := getWithRetry(data.Assets[j].BrowserDownloadURL)
-				if err != nil {
-					continue
-				}
-				bs, err := io.ReadAll(resp2.Body)
-				_ = resp2.Body.Close()
-				if err != nil {
-					continue
-				}
-				if h, ok := findHashInChecksumContent(bs, url); ok {
-					return url, h, nil
-				}
-			}
+		if h, ok := findHashInChecksumContent(bs, url); ok {
+			return url, h, nil
 		}
-		// No checksum found for the selected platform asset -> error
 		return "", "", fmt.Errorf("no checksum found for asset %s", url)
 	}
 
 	// No platform match — require explicit platform+arch; fail fast.
 	return "", "", fmt.Errorf("no release asset matching platform %q and arch %q", platform, arch)
+}
+
+type releaseAsset struct {
+	Name               string `json:"name"`
+	BrowserDownloadURL string `json:"browser_download_url"`
+}
+
+// releasePublicKey is the minisign public key (base64, as printed by
+// `minisign -G`) that release checksum files must be signed with.
+// Empty until the release pipeline is provisioned; updates fail closed.
+var releasePublicKey = ""
+
+// fetchVerifiedChecksums downloads checksums.txt and its .minisig sibling
+// and returns the checksum content only if the signature verifies against
+// releasePublicKey.
+func fetchVerifiedChecksums(assets []releaseAsset) ([]byte, error) {
+	if releasePublicKey == "" {
+		return nil, errors.New("release public key not configured; refusing unsigned update")
+	}
+	var sumURL, sigURL string
+	for _, a := range assets {
+		switch strings.ToLower(a.Name) {
+		case "checksums.txt":
+			sumURL = a.BrowserDownloadURL
+		case "checksums.txt.minisig":
+			sigURL = a.BrowserDownloadURL
+		}
+	}
+	if sumURL == "" || sigURL == "" {
+		return nil, fmt.Errorf("release has no signed checksums (checksums.txt + checksums.txt.minisig)")
+	}
+	sum, err := fetchBytes(sumURL)
+	if err != nil {
+		return nil, err
+	}
+	sig, err := fetchBytes(sigURL)
+	if err != nil {
+		return nil, err
+	}
+	if err := verifyMinisign(releasePublicKey, sum, sig); err != nil {
+		return nil, fmt.Errorf("checksums.txt signature verification failed: %w", err)
+	}
+	return sum, nil
+}
+
+func fetchBytes(rawURL string) ([]byte, error) {
+	resp, err := getWithRetry(rawURL)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed to download %s: status %d", rawURL, resp.StatusCode)
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 }
 
 func looksLikeDirectAssetURL(u string) bool {

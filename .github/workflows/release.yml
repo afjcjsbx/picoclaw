@@ -84,6 +84,17 @@ jobs:
       - name: Install zip
         run: sudo apt-get install -y zip
 
+      - name: Install minisign and load signing key
+        shell: bash
+        env:
+          MINISIGN_KEY: ${{ secrets.MINISIGN_KEY }}
+        run: |
+          go install aead.dev/minisign/cmd/minisign@v0.2.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          umask 077
+          printf '%s\n' "$MINISIGN_KEY" > "$RUNNER_TEMP/minisign.key"
+          echo "MINISIGN_KEY_FILE=$RUNNER_TEMP/minisign.key" >> "$GITHUB_ENV"
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v7
         with:
@@ -93,6 +104,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
           DOCKERHUB_IMAGE_NAME: ${{ vars.DOCKERHUB_REPOSITORY }}
           GOVERSION: ${{ steps.setup-go.outputs.go-version }}
           INCLUDE_ANDROID_BUNDLE: "true"
