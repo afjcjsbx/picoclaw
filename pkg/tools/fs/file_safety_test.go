@@ -11,7 +11,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/media"
 )
 
-func TestProtectedWorkspaceReads(t *testing.T) {
+func TestFileSafetyProtectedWorkspaceReads(t *testing.T) {
 	workspace := t.TempDir()
 	for _, name := range []string{".env", ".env.local", ".envrc", ".security.yml", ".netrc"} {
 		if err := os.WriteFile(filepath.Join(workspace, name), []byte("TOP_SECRET"), 0o600); err != nil {
@@ -95,7 +95,7 @@ func TestProtectedWorkspaceReads(t *testing.T) {
 	}
 }
 
-func TestProtectedFilesRemainWritableButNotEditableByReading(t *testing.T) {
+func TestFileSafetyWritableButNotReadable(t *testing.T) {
 	workspace := t.TempDir()
 	path := filepath.Join(workspace, ".env")
 	write := NewWriteFileTool(workspace, true)
@@ -126,7 +126,7 @@ func TestProtectedFilesRemainWritableButNotEditableByReading(t *testing.T) {
 	}
 }
 
-func TestProtectedFilesCannotBeSentAsMedia(t *testing.T) {
+func TestFileSafetyBlocksProtectedMedia(t *testing.T) {
 	workspace := t.TempDir()
 	if err := os.WriteFile(filepath.Join(workspace, ".env"), []byte("TOP_SECRET"), 0o600); err != nil {
 		t.Fatal(err)
