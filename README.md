@@ -184,6 +184,22 @@ PicoClaw can be deployed on virtually any Linux device!
 
 ## 📦 Install
 
+### Quick install with Web UI
+
+On Linux or macOS:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/afjcjsbx/picoclaw/main/scripts/install.sh | sh
+```
+
+On Windows PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/afjcjsbx/picoclaw/main/scripts/install.ps1 | iex
+```
+
+The installer detects the CPU architecture, verifies the release checksum, installs both binaries, and starts the launcher. The Web UI opens at `http://localhost:18800`; on first run, create its dashboard password in the browser.
+
 ### Download precompiled binary
 
 Download the binary for your platform from this repository's [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases).
