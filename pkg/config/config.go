@@ -184,7 +184,7 @@ type IsolationConfig struct {
 }
 
 // ExposePath describes a host path that should remain visible inside the isolated
-// child-process environment. This is currently implemented on Linux only.
+// child-process environment. macOS Seatbelt supports same-path access, not remapping.
 type ExposePath struct {
 	Source string `json:"source"`
 	Target string `json:"target,omitempty"`
