@@ -24,10 +24,10 @@ const (
 	ThinkingAdaptive ThinkingLevel = "adaptive"
 )
 
-// parseThinkingLevel normalizes a config string to a ThinkingLevel.
+// ParseThinkingLevel normalizes a config string to a ThinkingLevel.
 // Case-insensitive and whitespace-tolerant for user-facing config values.
 // Returns ThinkingOff for unknown or empty values.
-func parseThinkingLevel(level string) ThinkingLevel {
+func ParseThinkingLevel(level string) ThinkingLevel {
 	switch strings.ToLower(strings.TrimSpace(level)) {
 	case "adaptive":
 		return ThinkingAdaptive
@@ -44,7 +44,7 @@ func parseThinkingLevel(level string) ThinkingLevel {
 	}
 }
 
-func isConfiguredThinkingLevel(level string) bool {
+func IsConfiguredThinkingLevel(level string) bool {
 	switch strings.ToLower(strings.TrimSpace(level)) {
 	case "off", "low", "medium", "high", "xhigh", "adaptive":
 		return true
@@ -53,77 +53,54 @@ func isConfiguredThinkingLevel(level string) bool {
 	}
 }
 
-type thinkingSettings struct {
-	level      ThinkingLevel
-	configured bool
+type ThinkingSettings struct {
+	Level      ThinkingLevel
+	Configured bool
 }
 
-func thinkingSettingsFromModelConfig(mc *config.ModelConfig) thinkingSettings {
-	if mc == nil || !isConfiguredThinkingLevel(mc.ThinkingLevel) {
-		return thinkingSettings{}
+func ThinkingSettingsFromModelConfig(mc *config.ModelConfig) ThinkingSettings {
+	if mc == nil || !IsConfiguredThinkingLevel(mc.ThinkingLevel) {
+		return ThinkingSettings{}
 	}
-	return thinkingSettings{
-		level:      parseThinkingLevel(mc.ThinkingLevel),
-		configured: true,
+	return ThinkingSettings{
+		Level:      ParseThinkingLevel(mc.ThinkingLevel),
+		Configured: true,
 	}
 }
 
-func activeThinkingSettings(agent *AgentInstance, modelCfg *config.ModelConfig) thinkingSettings {
-	if settings := thinkingSettingsFromModelConfig(modelCfg); settings.configured {
+func ActiveThinkingSettings(agent *AgentInstance, modelCfg *config.ModelConfig) ThinkingSettings {
+	if settings := ThinkingSettingsFromModelConfig(modelCfg); settings.Configured {
 		return settings
 	}
 	if modelCfg == nil && agent != nil {
-		return thinkingSettings{
-			level:      agent.ThinkingLevel,
-			configured: agent.ThinkingLevelConfigured,
+		return ThinkingSettings{
+			Level:      agent.ThinkingLevel,
+			Configured: agent.ThinkingLevelConfigured,
 		}
 	}
-	return thinkingSettings{}
+	return ThinkingSettings{}
 }
 
-func applyThinkingOption(
+func ApplyThinkingOption(
 	opts map[string]any,
 	provider providers.LLMProvider,
-	settings thinkingSettings,
+	settings ThinkingSettings,
 	warnUnsupported bool,
 	agentID string,
 ) {
-	if opts == nil || !settings.configured {
+	if opts == nil || !settings.Configured {
 		return
 	}
-	if settings.level == ThinkingOff {
-		opts["thinking_level"] = string(settings.level)
+	if settings.Level == ThinkingOff {
+		opts["thinking_level"] = string(settings.Level)
 		return
 	}
 	if tc, ok := provider.(providers.ThinkingCapable); ok && tc.SupportsThinking() {
-		opts["thinking_level"] = string(settings.level)
+		opts["thinking_level"] = string(settings.Level)
 		return
 	}
 	if warnUnsupported {
 		logger.WarnCF("agent", "thinking_level is set but current provider does not support it, ignoring",
-			map[string]any{"agent_id": agentID, "thinking_level": string(settings.level)})
+			map[string]any{"agent_id": agentID, "thinking_level": string(settings.Level)})
 	}
-}
-
-func applyTurnThinkingOptions(
-	exec *turnExecution,
-	agent *AgentInstance,
-	provider providers.LLMProvider,
-	warnUnsupported bool,
-) {
-	if exec == nil || exec.llmOpts == nil {
-		return
-	}
-	delete(exec.llmOpts, "thinking_level")
-	settings := activeThinkingSettings(agent, exec.activeModelConfig)
-	agentID := ""
-	if agent != nil {
-		agentID = agent.ID
-	}
-	applyThinkingOption(exec.llmOpts, provider, settings, warnUnsupported, agentID)
-	exec.suppressReasoning = shouldSuppressReasoningFor(settings)
-}
-
-func shouldSuppressReasoningFor(settings thinkingSettings) bool {
-	return settings.configured && settings.level == ThinkingOff
 }

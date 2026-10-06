@@ -10,7 +10,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/providers"
 )
 
-func ensureProtocolModel(model string) string {
+func EnsureProtocolModel(model string) string {
 	model = strings.TrimSpace(model)
 	if model == "" {
 		return ""
@@ -76,7 +76,7 @@ func modelConfigResolutionKey(defaultProvider string, mc *config.ModelConfig) st
 	return fmt.Sprintf("config:%x", sum)
 }
 
-func effectiveDefaultProvider(defaultProvider string) string {
+func EffectiveDefaultProvider(defaultProvider string) string {
 	defaultProvider = strings.TrimSpace(defaultProvider)
 	if defaultProvider == "" {
 		return "openai"
@@ -91,7 +91,7 @@ func modelProviderAndIDForResolution(defaultProvider string, mc *config.ModelCon
 	if strings.TrimSpace(mc.Provider) != "" {
 		return providers.ExtractProtocol(mc)
 	}
-	return providers.SplitModelProviderAndID(mc.Model, effectiveDefaultProvider(defaultProvider))
+	return providers.SplitModelProviderAndID(mc.Model, EffectiveDefaultProvider(defaultProvider))
 }
 
 func cloneModelConfigForResolution(
@@ -177,7 +177,7 @@ func modelConfigsResolveToSameEntry(
 		left.ConnectMode == right.ConnectMode
 }
 
-func resolveModelCandidate(
+func ResolveModelCandidate(
 	cfg *config.Config,
 	defaultProvider string,
 	raw string,
@@ -186,7 +186,7 @@ func resolveModelCandidate(
 	if raw == "" {
 		return providers.FallbackCandidate{}, false
 	}
-	defaultProvider = effectiveDefaultProvider(defaultProvider)
+	defaultProvider = EffectiveDefaultProvider(defaultProvider)
 
 	if mc := lookupModelConfigByRef(cfg, raw, defaultProvider); mc != nil {
 		candidate, ok := candidateFromModelConfig(defaultProvider, mc)
@@ -215,7 +215,7 @@ func resolveModelCandidate(
 	}, true
 }
 
-func resolveModelCandidates(
+func ResolveModelCandidates(
 	cfg *config.Config,
 	defaultProvider string,
 	primary string,
@@ -225,7 +225,7 @@ func resolveModelCandidates(
 	candidates := make([]providers.FallbackCandidate, 0, 1+len(fallbacks))
 
 	addCandidate := func(raw string) {
-		candidate, ok := resolveModelCandidate(cfg, defaultProvider, raw)
+		candidate, ok := ResolveModelCandidate(cfg, defaultProvider, raw)
 		if !ok {
 			return
 		}
@@ -246,23 +246,23 @@ func resolveModelCandidates(
 	return candidates
 }
 
-func resolvedCandidateModel(candidates []providers.FallbackCandidate, fallback string) string {
+func ResolvedCandidateModel(candidates []providers.FallbackCandidate, fallback string) string {
 	if len(candidates) > 0 && strings.TrimSpace(candidates[0].Model) != "" {
 		return candidates[0].Model
 	}
 	return fallback
 }
 
-func resolvedCandidateProvider(candidates []providers.FallbackCandidate, fallback string) string {
+func ResolvedCandidateProvider(candidates []providers.FallbackCandidate, fallback string) string {
 	if len(candidates) > 0 && strings.TrimSpace(candidates[0].Provider) != "" {
 		return candidates[0].Provider
 	}
 	return fallback
 }
 
-func resolvedCandidateModelName(candidates []providers.FallbackCandidate, fallback string) string {
+func ResolvedCandidateModelName(candidates []providers.FallbackCandidate, fallback string) string {
 	if len(candidates) > 0 {
-		if name := modelAliasFromCandidateIdentityKey(candidates[0].IdentityKey); strings.TrimSpace(name) != "" {
+		if name := ModelAliasFromCandidateIdentityKey(candidates[0].IdentityKey); strings.TrimSpace(name) != "" {
 			return name
 		}
 		if displayName := strings.TrimSpace(candidates[0].DisplayName); displayName != "" {
@@ -272,7 +272,7 @@ func resolvedCandidateModelName(candidates []providers.FallbackCandidate, fallba
 	return strings.TrimSpace(fallback)
 }
 
-func resolvedRuntimeModelConfig(cfg *config.Config, modelName, workspace string) (*config.ModelConfig, error) {
+func ResolvedRuntimeModelConfig(cfg *config.Config, modelName, workspace string) (*config.ModelConfig, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("config is nil")
 	}
@@ -287,7 +287,7 @@ func resolvedRuntimeModelConfig(cfg *config.Config, modelName, workspace string)
 	return modelCfg, nil
 }
 
-func resolveActiveModelConfig(
+func ResolveActiveModelConfig(
 	cfg *config.Config,
 	workspace string,
 	candidates []providers.FallbackCandidate,
@@ -297,11 +297,11 @@ func resolveActiveModelConfig(
 	if cfg == nil {
 		return nil
 	}
-	defaultProvider = effectiveDefaultProvider(defaultProvider)
+	defaultProvider = EffectiveDefaultProvider(defaultProvider)
 
 	if len(candidates) > 0 {
 		candidate := candidates[0]
-		if modelCfg, err := resolvedCandidateModelConfig(cfg, candidate, workspace); err == nil {
+		if modelCfg, err := ResolvedCandidateModelConfig(cfg, candidate, workspace); err == nil {
 			return modelCfg
 		}
 		identityKey := strings.TrimSpace(candidate.IdentityKey)
@@ -333,4 +333,26 @@ func resolveActiveModelConfig(
 	}
 
 	return nil
+}
+
+// ModelAliasFromCandidateIdentityKey extracts the model_list alias from an identity key.
+func ModelAliasFromCandidateIdentityKey(identityKey string) string {
+	const prefix = "model_name:"
+	if !strings.HasPrefix(identityKey, prefix) {
+		return ""
+	}
+	return strings.TrimSpace(strings.TrimPrefix(identityKey, prefix))
+}
+
+// ModelNameFromIdentityKey extracts the model name from an identity key.
+func ModelNameFromIdentityKey(identityKey string) string {
+	identityKey = strings.TrimSpace(identityKey)
+	if identityKey == "" {
+		return ""
+	}
+	parts := strings.SplitN(identityKey, "/", 2)
+	if len(parts) == 2 {
+		return parts[1]
+	}
+	return identityKey
 }

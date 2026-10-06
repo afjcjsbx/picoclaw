@@ -13,7 +13,7 @@ func TestFormatProcessingError_InvalidAPIKey(t *testing.T) {
 		`LLM call failed after retries: API request failed: Status: 401 Body: {"error":{"message":"Incorrect API key provided"}}`,
 	)
 
-	got := formatProcessingError(err)
+	got := FormatProcessingError(err)
 	if !strings.Contains(got, "API key appears to be invalid") {
 		t.Fatalf("formatted error missing friendly API key hint: %q", got)
 	}
@@ -33,7 +33,7 @@ func TestFormatProcessingError_GenericAuthHTTPError(t *testing.T) {
 		APIBase:     "https://api.example.com",
 	}
 
-	got := formatProcessingError(err)
+	got := FormatProcessingError(err)
 	if !strings.Contains(got, "check the API key, token, OAuth login, or provider permissions") {
 		t.Fatalf("formatted error missing generic auth hint: %q", got)
 	}
@@ -44,7 +44,7 @@ func TestFormatProcessingError_GenericAuthHTTPError(t *testing.T) {
 
 func TestFormatProcessingError_NonAuth(t *testing.T) {
 	err := errors.New("connection reset by peer")
-	got := formatProcessingError(err)
+	got := FormatProcessingError(err)
 	want := "Error processing message: connection reset by peer"
 	if got != want {
 		t.Fatalf("formatted error = %q, want %q", got, want)

@@ -30,7 +30,7 @@ func normalizedMCPServerNameSet(
 	return normalized
 }
 
-func warnOnUnknownAgentToolDeclarations(
+func WarnOnUnknownAgentToolDeclarations(
 	agentID, workspace string,
 	definition agentctx.AgentContextDefinition,
 	registry *tools.ToolRegistry,
@@ -201,4 +201,62 @@ func frontmatterParseFailed(definition agentctx.AgentContextDefinition) bool {
 		return false
 	}
 	return strings.TrimSpace(definition.Agent.FrontmatterErr) != ""
+}
+
+// FilterMCPConfigServers returns cfg restricted to the allowed servers.
+func FilterMCPConfigServers(
+	mcpCfg config.MCPConfig,
+	allowed map[string]struct{},
+) config.MCPConfig {
+	if allowed == nil {
+		return mcpCfg
+	}
+
+	filtered := mcpCfg
+	filtered.Servers = make(map[string]config.MCPServerConfig)
+	normalizedAllowed := make(map[string]struct{}, len(allowed))
+	for serverName := range allowed {
+		name := normalizeMCPServerName(serverName)
+		if name == "" {
+			continue
+		}
+		normalizedAllowed[name] = struct{}{}
+	}
+	for serverName, serverCfg := range mcpCfg.Servers {
+		if _, ok := normalizedAllowed[normalizeMCPServerName(serverName)]; ok {
+			filtered.Servers[serverName] = serverCfg
+		}
+	}
+
+	return filtered
+}
+
+func AgentHasDiscoverableMCPServers(cfg *config.Config, allowed map[string]struct{}) bool {
+	if cfg == nil || !cfg.Tools.MCP.Enabled || !cfg.Tools.MCP.Discovery.Enabled {
+		return false
+	}
+
+	filtered := FilterMCPConfigServers(cfg.Tools.MCP, allowed)
+	for _, serverCfg := range filtered.Servers {
+		if serverCfg.Enabled && ServerIsDeferred(cfg.Tools.MCP.Discovery.Enabled, serverCfg) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// ServerIsDeferred reports whether an MCP server's tools should be registered
+// as hidden (deferred/discovery mode).
+//
+// The per-server Deferred field takes precedence over the global discoveryEnabled
+// default. When Deferred is nil, discoveryEnabled is used as the fallback.
+func ServerIsDeferred(discoveryEnabled bool, serverCfg config.MCPServerConfig) bool {
+	if !discoveryEnabled {
+		return false
+	}
+	if serverCfg.Deferred != nil {
+		return *serverCfg.Deferred
+	}
+	return true
 }

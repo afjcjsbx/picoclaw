@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"sort"
+	"strings"
 	"sync"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
@@ -89,7 +91,7 @@ func (r *AgentRegistry) ListAgentIDs() []string {
 	return ids
 }
 
-func (r *AgentRegistry) allowedMCPServers() map[string]struct{} {
+func (r *AgentRegistry) AllowedMCPServers() map[string]struct{} {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -183,4 +185,32 @@ func (r *AgentRegistry) GetDefaultAgent() *AgentInstance {
 		return r.agents[id]
 	}
 	return nil
+}
+
+// RegistryWorkspaces returns the sorted, de-duplicated workspaces of every agent.
+func RegistryWorkspaces(registry *AgentRegistry) []string {
+	if registry == nil {
+		return nil
+	}
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+
+	out := make([]string, 0, len(registry.agents))
+	seen := make(map[string]struct{}, len(registry.agents))
+	for _, agent := range registry.agents {
+		if agent == nil {
+			continue
+		}
+		workspace := strings.TrimSpace(agent.Workspace)
+		if workspace == "" {
+			continue
+		}
+		if _, ok := seen[workspace]; ok {
+			continue
+		}
+		seen[workspace] = struct{}{}
+		out = append(out, workspace)
+	}
+	sort.Strings(out)
+	return out
 }

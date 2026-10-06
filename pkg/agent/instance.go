@@ -116,7 +116,7 @@ func NewAgentInstance(
 	readRestrict := restrict && !defaults.AllowReadOutsideWorkspace
 
 	// Compile path whitelist patterns from config.
-	allowReadPaths := buildAllowReadPatterns(cfg)
+	allowReadPaths := BuildAllowReadPatterns(cfg)
 	allowWritePaths := compilePatterns(cfg.Tools.AllowWritePaths)
 	agentToolAllowlist := resolveAgentToolAllowlist(definition)
 	agentMCPServerAllowlist := resolveAgentMCPServerAllowlist(definition)
@@ -180,7 +180,7 @@ func NewAgentInstance(
 	sessionsDir := filepath.Join(workspace, "sessions")
 	sessions := initSessionStore(sessionsDir)
 
-	mcpDiscoveryActive := agentHasDiscoverableMCPServers(cfg, agentMCPServerAllowlist)
+	mcpDiscoveryActive := AgentHasDiscoverableMCPServers(cfg, agentMCPServerAllowlist)
 	contextBuilder := agentctx.NewContextBuilder(workspace).
 		WithToolDiscovery(
 			mcpDiscoveryActive && cfg.Tools.MCP.Discovery.UseBM25,
@@ -234,8 +234,8 @@ func NewAgentInstance(
 	if mc, err := cfg.GetModelConfig(model); err == nil {
 		thinkingLevelStr = mc.ThinkingLevel
 	}
-	thinkingLevel := parseThinkingLevel(thinkingLevelStr)
-	thinkingLevelConfigured := isConfiguredThinkingLevel(thinkingLevelStr)
+	thinkingLevel := ParseThinkingLevel(thinkingLevelStr)
+	thinkingLevelConfigured := IsConfiguredThinkingLevel(thinkingLevelStr)
 
 	summarizeMessageThreshold := defaults.SummarizeMessageThreshold
 	if summarizeMessageThreshold == 0 {
@@ -248,7 +248,7 @@ func NewAgentInstance(
 	}
 
 	// Resolve fallback candidates
-	candidates := resolveModelCandidates(cfg, defaults.Provider, model, fallbacks)
+	candidates := ResolveModelCandidates(cfg, defaults.Provider, model, fallbacks)
 	usesInjectedPrimary := provider != nil &&
 		strings.TrimSpace(model) == strings.TrimSpace(defaults.GetModelName())
 	if !usesInjectedPrimary && len(candidates) > 0 {
@@ -262,7 +262,7 @@ func NewAgentInstance(
 	} else if !usesInjectedPrimary {
 		provider = resolvePrimaryProviderForAgent(cfg, workspace, agentID, model, provider)
 	}
-	imageCandidates := resolveModelCandidates(
+	imageCandidates := ResolveModelCandidates(
 		cfg,
 		defaults.Provider,
 		defaults.ImageModel,
@@ -271,7 +271,7 @@ func NewAgentInstance(
 
 	candidateProviders := make(map[string]providers.LLMProvider)
 	if len(candidates) > 1 {
-		inheritPrimaryProviderForCandidates(
+		InheritPrimaryProviderForCandidates(
 			cfg,
 			workspace,
 			candidates[0],
@@ -279,11 +279,11 @@ func NewAgentInstance(
 			provider,
 			candidateProviders,
 		)
-		populateCandidateProvidersFromCandidates(cfg, workspace, candidates[1:], candidateProviders)
+		PopulateCandidateProvidersFromCandidates(cfg, workspace, candidates[1:], candidateProviders)
 	}
 	if strings.TrimSpace(defaults.ImageModel) != "" {
 		if len(candidates) > 0 {
-			inheritPrimaryProviderForCandidates(
+			InheritPrimaryProviderForCandidates(
 				cfg,
 				workspace,
 				candidates[0],
@@ -292,7 +292,7 @@ func NewAgentInstance(
 				candidateProviders,
 			)
 		}
-		populateCandidateProvidersFromCandidates(cfg, workspace, imageCandidates, candidateProviders)
+		PopulateCandidateProvidersFromCandidates(cfg, workspace, imageCandidates, candidateProviders)
 	}
 
 	// Model routing setup: pre-resolve light model candidates at creation time
@@ -301,9 +301,9 @@ func NewAgentInstance(
 	var lightCandidates []providers.FallbackCandidate
 	var lightProvider providers.LLMProvider
 	if rc := defaults.Routing; rc != nil && rc.Enabled && rc.LightModel != "" {
-		resolved := resolveModelCandidates(cfg, defaults.Provider, rc.LightModel, nil)
+		resolved := ResolveModelCandidates(cfg, defaults.Provider, rc.LightModel, nil)
 		if len(resolved) > 0 {
-			lightModelCfg, err := resolvedCandidateModelConfig(cfg, resolved[0], workspace)
+			lightModelCfg, err := ResolvedCandidateModelConfig(cfg, resolved[0], workspace)
 			if err != nil {
 				logger.WarnCF(
 					"agent",
@@ -326,7 +326,7 @@ func NewAgentInstance(
 					})
 					lightCandidates = resolved
 					lightProvider = lp
-					populateCandidateProvidersFromCandidates(cfg, workspace, resolved, candidateProviders)
+					PopulateCandidateProvidersFromCandidates(cfg, workspace, resolved, candidateProviders)
 				}
 			}
 		} else {
@@ -381,12 +381,12 @@ func populateCandidateProvidersFromNames(
 		return
 	}
 	for _, name := range names {
-		candidates := resolveModelCandidates(cfg, cfg.Agents.Defaults.Provider, name, nil)
-		populateCandidateProvidersFromCandidates(cfg, workspace, candidates, out)
+		candidates := ResolveModelCandidates(cfg, cfg.Agents.Defaults.Provider, name, nil)
+		PopulateCandidateProvidersFromCandidates(cfg, workspace, candidates, out)
 	}
 }
 
-func populateCandidateProvidersFromCandidates(
+func PopulateCandidateProvidersFromCandidates(
 	cfg *config.Config,
 	workspace string,
 	candidates []providers.FallbackCandidate,
@@ -396,14 +396,14 @@ func populateCandidateProvidersFromCandidates(
 		return
 	}
 	for _, candidate := range candidates {
-		mc, err := resolvedCandidateModelConfig(cfg, candidate, workspace)
+		mc, err := ResolvedCandidateModelConfig(cfg, candidate, workspace)
 		if err != nil {
 			logger.WarnCF("agent",
 				"fallback provider: no model_list entry found; will inherit primary provider credentials",
 				map[string]any{"name": candidate.DisplayName, "error": err.Error()})
 			continue
 		}
-		key := candidateProviderKey(candidate)
+		key := CandidateProviderKey(candidate)
 		if _, exists := out[key]; exists {
 			continue
 		}
@@ -421,7 +421,7 @@ func populateCandidateProvidersFromCandidates(
 	}
 }
 
-func candidateProviderKey(candidate providers.FallbackCandidate) string {
+func CandidateProviderKey(candidate providers.FallbackCandidate) string {
 	if candidate.ConfigKey != "" {
 		return candidate.ConfigKey
 	}
@@ -431,7 +431,7 @@ func candidateProviderKey(candidate providers.FallbackCandidate) string {
 	return providers.ModelKey(candidate.Provider, candidate.Model)
 }
 
-func inheritPrimaryProviderForCandidates(
+func InheritPrimaryProviderForCandidates(
 	cfg *config.Config,
 	workspace string,
 	primaryCandidate providers.FallbackCandidate,
@@ -444,11 +444,11 @@ func inheritPrimaryProviderForCandidates(
 	}
 	primaryProtocol := providers.NormalizeProvider(primaryCandidate.Provider)
 	for _, candidate := range candidates {
-		key := candidateProviderKey(candidate)
+		key := CandidateProviderKey(candidate)
 		if out[key] != nil || providers.NormalizeProvider(candidate.Provider) != primaryProtocol {
 			continue
 		}
-		if !candidateCanInheritProvider(cfg, workspace, candidate) {
+		if !CandidateCanInheritProvider(cfg, workspace, candidate) {
 			continue
 		}
 		out[key] = primaryProvider
@@ -459,12 +459,12 @@ func inheritPrimaryProviderForCandidates(
 	}
 }
 
-func candidateCanInheritProvider(
+func CandidateCanInheritProvider(
 	cfg *config.Config,
 	workspace string,
 	candidate providers.FallbackCandidate,
 ) bool {
-	modelCfg, err := resolvedCandidateModelConfig(cfg, candidate, workspace)
+	modelCfg, err := ResolvedCandidateModelConfig(cfg, candidate, workspace)
 	return err == nil &&
 		strings.TrimSpace(modelCfg.APIBase) == "" &&
 		modelCfg.APIKey() == "" &&
@@ -472,7 +472,7 @@ func candidateCanInheritProvider(
 		strings.TrimSpace(modelCfg.ConnectMode) == ""
 }
 
-func resolvedCandidateModelConfig(
+func ResolvedCandidateModelConfig(
 	cfg *config.Config,
 	candidate providers.FallbackCandidate,
 	workspace string,
@@ -494,7 +494,7 @@ func resolvedCandidateModelConfig(
 			return resolvedCandidateModelConfigClone(modelCfg, candidate, workspace), nil
 		}
 	}
-	alias := modelAliasFromCandidateIdentityKey(candidate.IdentityKey)
+	alias := ModelAliasFromCandidateIdentityKey(candidate.IdentityKey)
 	for _, modelCfg := range cfg.ModelList {
 		if modelCfg == nil || modelCfg.IsVirtual() {
 			continue
@@ -508,7 +508,7 @@ func resolvedCandidateModelConfig(
 		}
 		return resolvedCandidateModelConfigClone(modelCfg, candidate, workspace), nil
 	}
-	return resolvedRuntimeModelConfig(cfg, candidate.DisplayName, workspace)
+	return ResolvedRuntimeModelConfig(cfg, candidate.DisplayName, workspace)
 }
 
 func resolvedCandidateModelConfigClone(
@@ -545,7 +545,7 @@ func resolvePrimaryProviderForAgent(
 		return fallback
 	}
 
-	modelCfg, err := resolvedRuntimeModelConfig(cfg, model, workspace)
+	modelCfg, err := ResolvedRuntimeModelConfig(cfg, model, workspace)
 	if err != nil {
 		return fallback
 	}
@@ -579,7 +579,7 @@ func resolvePrimaryProviderForCandidate(
 	if candidate.ConfigKey == "" && candidate.ConfigIndex == 0 {
 		return fallback
 	}
-	modelCfg, err := resolvedCandidateModelConfig(cfg, candidate, workspace)
+	modelCfg, err := ResolvedCandidateModelConfig(cfg, candidate, workspace)
 	if err != nil {
 		return &unavailableLLMProvider{model: candidate.Model, err: err}
 	}
@@ -673,7 +673,7 @@ func compilePatterns(patterns []string) []*regexp.Regexp {
 	return compiled
 }
 
-func buildAllowReadPatterns(cfg *config.Config) []*regexp.Regexp {
+func BuildAllowReadPatterns(cfg *config.Config) []*regexp.Regexp {
 	var configured []string
 	if cfg != nil {
 		configured = cfg.Tools.AllowReadPaths
@@ -697,7 +697,7 @@ func mediaTempDirPattern() string {
 
 // Close releases resources held by the agent's providers and session store.
 func (a *AgentInstance) Close() error {
-	modelMu := a.modelStateMutex()
+	modelMu := a.ModelStateMutex()
 	modelMu.Lock()
 	defer modelMu.Unlock()
 	providerList := make([]providers.LLMProvider, 0, 2+len(a.CandidateProviders))
@@ -705,21 +705,21 @@ func (a *AgentInstance) Close() error {
 	for _, provider := range a.CandidateProviders {
 		providerList = append(providerList, provider)
 	}
-	closeUniqueStatefulProviders(providerList...)
+	CloseUniqueStatefulProviders(providerList...)
 	if a.Sessions != nil {
 		return a.Sessions.Close()
 	}
 	return nil
 }
 
-func (a *AgentInstance) modelStateMutex() *sync.RWMutex {
+func (a *AgentInstance) ModelStateMutex() *sync.RWMutex {
 	if a.modelMu == nil {
 		return &fallbackAgentModelMu
 	}
 	return a.modelMu
 }
 
-func closeUniqueStatefulProviders(providerList ...providers.LLMProvider) {
+func CloseUniqueStatefulProviders(providerList ...providers.LLMProvider) {
 	seen := make(map[string]struct{})
 	for _, provider := range providerList {
 		stateful, ok := provider.(providers.StatefulProvider)
@@ -735,14 +735,14 @@ func closeUniqueStatefulProviders(providerList ...providers.LLMProvider) {
 	}
 }
 
-func copyInitializedCandidateProviders(
+func CopyInitializedCandidateProviders(
 	source map[string]providers.LLMProvider,
 	destination map[string]providers.LLMProvider,
 	candidates []providers.FallbackCandidate,
 ) {
 	for _, candidate := range candidates {
 		for _, key := range []string{
-			candidateProviderKey(candidate),
+			CandidateProviderKey(candidate),
 			providers.ModelKey(candidate.Provider, candidate.Model),
 		} {
 			if provider := source[key]; provider != nil {
@@ -752,7 +752,7 @@ func copyInitializedCandidateProviders(
 	}
 }
 
-func closeUnreferencedStatefulProviders(
+func CloseUnreferencedStatefulProviders(
 	previous map[string]providers.LLMProvider,
 	current map[string]providers.LLMProvider,
 	retained ...providers.LLMProvider,
@@ -771,7 +771,7 @@ func closeUnreferencedStatefulProviders(
 			removed = append(removed, provider)
 		}
 	}
-	closeUniqueStatefulProviders(removed...)
+	CloseUniqueStatefulProviders(removed...)
 }
 
 // initSessionStore creates the session persistence backend.

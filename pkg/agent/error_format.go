@@ -6,7 +6,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/providers"
 )
 
-func formatProcessingError(err error) string {
+func FormatProcessingError(err error) string {
 	if err == nil {
 		return ""
 	}

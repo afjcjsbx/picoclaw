@@ -8,28 +8,28 @@ import (
 )
 
 func TestModelNameFromIdentityKey_LegacyProviderModel(t *testing.T) {
-	if got := modelNameFromIdentityKey("openai/gpt-5.4"); got != "gpt-5.4" {
-		t.Fatalf("modelNameFromIdentityKey() = %q, want %q", got, "gpt-5.4")
+	if got := ModelNameFromIdentityKey("openai/gpt-5.4"); got != "gpt-5.4" {
+		t.Fatalf("ModelNameFromIdentityKey() = %q, want %q", got, "gpt-5.4")
 	}
 }
 
 func TestModelNameFromIdentityKey_PreservesNonLegacyIdentity(t *testing.T) {
-	if got := modelNameFromIdentityKey("model_name:primary"); got != "model_name:primary" {
-		t.Fatalf("modelNameFromIdentityKey() = %q, want %q", got, "model_name:primary")
+	if got := ModelNameFromIdentityKey("model_name:primary"); got != "model_name:primary" {
+		t.Fatalf("ModelNameFromIdentityKey() = %q, want %q", got, "model_name:primary")
 	}
 }
 
 func TestModelAliasFromCandidateIdentityKey(t *testing.T) {
-	if got := modelAliasFromCandidateIdentityKey("model_name:primary"); got != "primary" {
-		t.Fatalf("modelAliasFromCandidateIdentityKey() = %q, want %q", got, "primary")
+	if got := ModelAliasFromCandidateIdentityKey("model_name:primary"); got != "primary" {
+		t.Fatalf("ModelAliasFromCandidateIdentityKey() = %q, want %q", got, "primary")
 	}
-	if got := modelAliasFromCandidateIdentityKey("openai/gpt-5.4"); got != "" {
-		t.Fatalf("modelAliasFromCandidateIdentityKey() = %q, want empty", got)
+	if got := ModelAliasFromCandidateIdentityKey("openai/gpt-5.4"); got != "" {
+		t.Fatalf("ModelAliasFromCandidateIdentityKey() = %q, want empty", got)
 	}
 }
 
 func TestResolvedCandidateModelName_PrefersIdentityAlias(t *testing.T) {
-	got := resolvedCandidateModelName([]providers.FallbackCandidate{
+	got := ResolvedCandidateModelName([]providers.FallbackCandidate{
 		{Provider: "openai", Model: "gpt-5.4", IdentityKey: "model_name:primary"},
 	}, "fallback-model")
 	if got != "primary" {
@@ -38,7 +38,7 @@ func TestResolvedCandidateModelName_PrefersIdentityAlias(t *testing.T) {
 }
 
 func TestResolvedCandidateModelName_DoesNotScanFallbackAliases(t *testing.T) {
-	got := resolvedCandidateModelName([]providers.FallbackCandidate{
+	got := ResolvedCandidateModelName([]providers.FallbackCandidate{
 		{Provider: "openai", Model: "gpt-5.4"},
 		{Provider: "openai", Model: "gpt-5.4-mini", IdentityKey: "model_name:fallback"},
 	}, "primary-model")
@@ -48,7 +48,7 @@ func TestResolvedCandidateModelName_DoesNotScanFallbackAliases(t *testing.T) {
 }
 
 func TestResolvedCandidateModelName_UsesCandidateDisplayName(t *testing.T) {
-	got := resolvedCandidateModelName([]providers.FallbackCandidate{
+	got := ResolvedCandidateModelName([]providers.FallbackCandidate{
 		{Provider: "openai", Model: "gpt-5.4", DisplayName: "gpt-5.4-display"},
 	}, "fallback-model")
 	if got != "gpt-5.4-display" {
@@ -74,7 +74,7 @@ func TestResolveActiveModelConfig_PrefersCandidateIdentityKey(t *testing.T) {
 		},
 	}
 
-	got := resolveActiveModelConfig(
+	got := ResolveActiveModelConfig(
 		cfg,
 		"/workspace",
 		[]providers.FallbackCandidate{{
@@ -113,7 +113,7 @@ func TestResolveActiveModelConfig_LoadBalancedAliasUsesSelectedCandidate(t *test
 		},
 	}
 
-	got := resolveActiveModelConfig(
+	got := ResolveActiveModelConfig(
 		cfg,
 		"/workspace",
 		[]providers.FallbackCandidate{{
@@ -148,7 +148,7 @@ func TestResolveActiveModelConfig_DoesNotFallbackToOpenAIForDefaultProviderCandi
 		},
 	}
 
-	got := resolveActiveModelConfig(
+	got := ResolveActiveModelConfig(
 		cfg,
 		"/workspace",
 		[]providers.FallbackCandidate{{
