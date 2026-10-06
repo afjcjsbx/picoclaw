@@ -32,6 +32,23 @@ func ValidatePathWithAllowPaths(
 	return validatePathWithAllowPaths(path, workspace, restrict, patterns)
 }
 
+// ValidateReadablePathWithAllowPaths applies the filesystem tools' read policy
+// after the usual workspace and symlink validation.
+func ValidateReadablePathWithAllowPaths(
+	path, workspace string,
+	restrict bool,
+	patterns []*regexp.Regexp,
+) (string, error) {
+	resolved, err := validatePathWithAllowPaths(path, workspace, restrict, patterns)
+	if err != nil {
+		return "", err
+	}
+	if err := checkSensitiveReadPath(resolved, "", false); err != nil {
+		return "", err
+	}
+	return resolved, nil
+}
+
 func IsAllowedPath(path string, patterns []*regexp.Regexp) bool {
 	return isAllowedPath(path, patterns)
 }
@@ -878,7 +895,7 @@ func NewWriteFileTool(
 	// Default to both alternatives so standalone callers keep the full guidance;
 	// the agent wiring narrows this to the tools actually registered.
 	return &WriteFileTool{
-		fs:       buildFs(workspace, restrict, patterns),
+		fs:       buildBaseFs(workspace, restrict, patterns),
 		altTools: []string{"append_file", "edit_file"},
 	}
 }
@@ -1291,9 +1308,18 @@ func (w *whitelistFs) Open(path string) (fs.File, error) {
 	return w.sandbox.Open(path)
 }
 
-// buildFs returns the appropriate fileSystem implementation based on restriction
-// settings and optional path whitelist patterns.
+// buildFs applies the read policy to every filesystem tool that can inspect files.
 func buildFs(workspace string, restrict bool, patterns []*regexp.Regexp) fileSystem {
+	return &protectedReadFs{
+		fileSystem: buildBaseFs(workspace, restrict, patterns),
+		workspace:  workspace,
+		restrict:   restrict,
+	}
+}
+
+// buildBaseFs leaves write_file able to check whether a protected file exists
+// before overwriting it, while still enforcing the workspace sandbox.
+func buildBaseFs(workspace string, restrict bool, patterns []*regexp.Regexp) fileSystem {
 	if !restrict {
 		return &hostFs{}
 	}
