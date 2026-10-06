@@ -2,10 +2,24 @@ import {
   IconBrain,
   IconCheck,
   IconChevronDown,
+  IconClockHour4,
+  IconCode,
   IconCopy,
   IconDownload,
   IconFileText,
+  IconFolder,
+  IconFolderSearch,
+  IconList,
+  IconMessageCircle,
+  IconPhoto,
+  IconPhotoPlus,
+  IconPuzzle,
+  IconSearch,
+  IconTerminal2,
   IconTool,
+  IconUsers,
+  IconVolume,
+  IconWorld,
 } from "@tabler/icons-react"
 import { memo, useState } from "react"
 import { useTranslation } from "react-i18next"
@@ -38,6 +52,142 @@ interface AssistantMessageProps {
   timestamp?: string | number
 }
 
+type ToolDisplay = {
+  label: string
+  icon: typeof IconTool
+  fields?: string[]
+}
+
+const TOOL_DISPLAYS: Record<string, ToolDisplay> = {
+  read_file: { label: "Read file", icon: IconFileText, fields: ["path"] },
+  read_file_lines: { label: "Read file", icon: IconFileText, fields: ["path"] },
+  write_file: { label: "Write file", icon: IconFileText, fields: ["path"] },
+  edit_file: { label: "Edit file", icon: IconFileText, fields: ["path"] },
+  append_file: {
+    label: "Append to file",
+    icon: IconFileText,
+    fields: ["path"],
+  },
+  send_file: { label: "Send file", icon: IconFileText, fields: ["path"] },
+  list_dir: { label: "List directory", icon: IconFolder, fields: ["path"] },
+  search_files: {
+    label: "Find files",
+    icon: IconFolderSearch,
+    fields: ["glob", "query", "pattern", "path"],
+  },
+  regex_search: {
+    label: "Search tools",
+    icon: IconSearch,
+    fields: ["pattern"],
+  },
+  bm25_search: { label: "Search tools", icon: IconSearch, fields: ["query"] },
+  web_search: { label: "Search web", icon: IconWorld, fields: ["query"] },
+  web_fetch: { label: "Read webpage", icon: IconWorld, fields: ["url"] },
+  exec: { label: "Run command", icon: IconTerminal2 },
+  spawn: { label: "Delegate task", icon: IconUsers, fields: ["label", "task"] },
+  delegate: {
+    label: "Delegate task",
+    icon: IconUsers,
+    fields: ["agent_id", "task"],
+  },
+  subagent: {
+    label: "Run subagent",
+    icon: IconUsers,
+    fields: ["label", "task"],
+  },
+  cron: {
+    label: "Manage schedule",
+    icon: IconClockHour4,
+    fields: ["name", "action"],
+  },
+  image_generate: { label: "Generate image", icon: IconPhotoPlus },
+  load_image: { label: "Read image", icon: IconPhoto, fields: ["path"] },
+  send_tts: { label: "Generate audio", icon: IconVolume },
+  message: {
+    label: "Send message",
+    icon: IconMessageCircle,
+    fields: ["channel"],
+  },
+  reaction: {
+    label: "Add reaction",
+    icon: IconMessageCircle,
+    fields: ["channel"],
+  },
+  todo: { label: "Update task list", icon: IconList, fields: ["action"] },
+  find_skills: { label: "Find skills", icon: IconPuzzle, fields: ["query"] },
+  install_skill: {
+    label: "Install skill",
+    icon: IconPuzzle,
+    fields: ["slug", "name"],
+  },
+  i2c: { label: "Use I²C", icon: IconCode, fields: ["action"] },
+  spi: { label: "Use SPI", icon: IconCode, fields: ["action"] },
+  serial: { label: "Use serial port", icon: IconCode, fields: ["action"] },
+}
+
+function getToolDisplay(
+  toolName: string,
+  rawArguments: string,
+): ToolDisplay & {
+  detail: string
+} {
+  const display = TOOL_DISPLAYS[toolName] ?? {
+    label: toolName
+      .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+      .replace(/[._-]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim(),
+    icon: IconTool,
+    fields: ["path", "query", "url", "action", "name"],
+  }
+  let args: Record<string, unknown> = {}
+
+  try {
+    const parsed: unknown = JSON.parse(rawArguments)
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      args = parsed as Record<string, unknown>
+    }
+  } catch {
+    // Keep the tool label useful when the arguments are incomplete JSON.
+  }
+
+  const action =
+    typeof args.action === "string" ? args.action.toLowerCase() : ""
+  const label =
+    toolName === "cron"
+      ? action === "add"
+        ? "Schedule task"
+        : action === "remove"
+          ? "Remove scheduled task"
+          : "Manage schedule"
+      : toolName === "exec"
+        ? ({
+            list: "Check command sessions",
+            poll: "Check command",
+            read: "Read command output",
+            write: "Send command input",
+            kill: "Stop command",
+            "send-keys": "Send command keys",
+          }[action] ?? display.label)
+        : toolName === "todo" && action === "read"
+          ? "Read task list"
+          : display.label
+
+  const value = display.fields
+    ?.map((field) => args[field])
+    .find(
+      (field): field is string => typeof field === "string" && !!field.trim(),
+    )
+    ?.replace(/\s+/g, " ")
+    .trim()
+
+  return {
+    ...display,
+    label,
+    detail: value ? (value.length > 88 ? `${value.slice(0, 84)}…` : value) : "",
+  }
+}
+
 export const AssistantMessage = memo(function AssistantMessage({
   content,
   attachments = [],
@@ -50,7 +200,8 @@ export const AssistantMessage = memo(function AssistantMessage({
   const { copy, isCopied } = useCopyToClipboard()
   const isThought = kind === "thought"
   const isToolCalls = kind === "tool_calls"
-  const isCollapsedBlock = isThought || isToolCalls
+  const isToolFeedback = kind === "tool_feedback"
+  const isCollapsedBlock = isThought || isToolCalls || isToolFeedback
   const hasText = content.trim().length > 0
   const hasToolCalls = toolCalls.length > 0
   const imageAttachments = attachments.filter(
@@ -98,7 +249,7 @@ export const AssistantMessage = memo(function AssistantMessage({
             "relative overflow-hidden rounded-xl border",
             isCollapsedBlock
               ? "border-border/30 bg-muted/20 text-muted-foreground dark:border-border/20 dark:bg-muted/10"
-              : "bg-card text-card-foreground border-border/60",
+              : "text-card-foreground border-transparent bg-transparent",
           )}
         >
           {isCollapsedBlock && (
@@ -139,26 +290,34 @@ export const AssistantMessage = memo(function AssistantMessage({
                   toolCall.extraContent?.toolFeedbackExplanation?.trim() ?? ""
                 const toolName = toolCall.function?.name?.trim() ?? ""
                 const toolArguments = toolCall.function?.arguments?.trim() ?? ""
-                const hasFunctionSummary = toolName || toolArguments
+                const toolDisplay = getToolDisplay(toolName, toolArguments)
 
-                if (!explanation && !hasFunctionSummary) {
+                if (!explanation && !toolName && !toolArguments) {
                   return null
                 }
 
                 return (
                   <div
                     key={toolCall.id ?? `${toolName}-${index}`}
-                    className={cn(
-                      "space-y-3",
-                      index > 0 && "border-border/20 border-t pt-3",
-                    )}
+                    className="flex items-start gap-2.5"
                   >
-                    {explanation && (
-                      <div className="space-y-1.5">
-                        <div className="text-muted-foreground/55 text-[11px] font-medium tracking-wide uppercase">
-                          {t("chat.toolCallExplanationLabel")}
+                    <toolDisplay.icon className="text-muted-foreground mt-0.5 size-4 shrink-0" />
+                    <div className="min-w-0 flex-1">
+                      {toolName && (
+                        <div className="text-foreground/80 text-[13px] font-medium">
+                          {toolDisplay.label}
                         </div>
-                        <div className="prose dark:prose-invert prose-p:my-1.5 prose-p:whitespace-pre-wrap max-w-none text-[13px] leading-relaxed [overflow-wrap:anywhere] break-words opacity-75">
+                      )}
+                      {toolDisplay.detail && (
+                        <div
+                          className="text-muted-foreground mt-0.5 truncate text-xs"
+                          title={toolDisplay.detail}
+                        >
+                          {toolDisplay.detail}
+                        </div>
+                      )}
+                      {explanation && (
+                        <div className="prose dark:prose-invert prose-p:my-1 prose-p:whitespace-pre-wrap max-w-none text-[13px] leading-relaxed [overflow-wrap:anywhere] break-words">
                           <ReactMarkdown
                             remarkPlugins={[remarkGfm]}
                             rehypePlugins={[
@@ -173,53 +332,29 @@ export const AssistantMessage = memo(function AssistantMessage({
                             {explanation}
                           </ReactMarkdown>
                         </div>
-                      </div>
-                    )}
-
-                    {hasFunctionSummary && (
-                      <div
-                        className={cn(
-                          "space-y-1.5",
-                          explanation && "border-border/20 border-t pt-3",
-                        )}
-                      >
-                        <div className="text-muted-foreground/55 text-[11px] font-medium tracking-wide uppercase">
-                          {t("chat.toolCallFunctionLabel")}
-                        </div>
-                        <div className="bg-background/55 border-border/25 space-y-2 rounded-lg border px-3 py-2.5">
-                          {toolName && !toolArguments && (
-                            <div className="text-foreground/75 font-mono text-[12px] font-semibold">
-                              {toolName}
-                            </div>
-                          )}
-                          {toolArguments && (
-                            <MessageCodeBlock
-                              code={toolArguments}
-                              language="json"
-                              label={
-                                toolName || t("chat.toolCallArgumentsLabel")
-                              }
-                              className="my-0 shadow-none"
-                              bodyClassName="px-3 py-2 text-[12px] leading-relaxed"
-                            />
-                          )}
-                        </div>
-                      </div>
-                    )}
+                      )}
+                      {toolArguments && (
+                        <details className="text-muted-foreground mt-1 text-xs">
+                          <summary className="hover:text-foreground w-fit cursor-pointer select-none">
+                            {t("chat.toolCallArgumentsLabel")}
+                          </summary>
+                          <MessageCodeBlock
+                            code={toolArguments}
+                            language="json"
+                            label={toolName || t("chat.toolCallArgumentsLabel")}
+                            className="mt-2 mb-0 shadow-none"
+                            bodyClassName="px-3 py-2 text-[12px] leading-relaxed"
+                          />
+                        </details>
+                      )}
+                    </div>
                   </div>
                 )
               })}
             </div>
           )}
-          {(!isCollapsedBlock || isExpanded) && !isToolCalls && hasText && (
-            <div
-              className={cn(
-                "prose dark:prose-invert prose-pre:my-2 prose-pre:overflow-x-auto prose-pre:rounded-lg prose-pre:border prose-pre:bg-zinc-100 prose-pre:p-0 prose-pre:text-zinc-900 dark:prose-pre:bg-zinc-950 dark:prose-pre:text-zinc-100 max-w-none [overflow-wrap:anywhere] break-words",
-                isThought
-                  ? "prose-p:my-1.5 prose-p:whitespace-pre-wrap px-3 pt-0 pb-3 text-[13px] leading-relaxed opacity-70"
-                  : "prose-p:my-2 prose-p:whitespace-pre-wrap p-4 text-[15px] leading-relaxed",
-              )}
-            >
+          {(!isCollapsedBlock || isExpanded) && isToolFeedback && hasText && (
+            <div className="prose dark:prose-invert prose-p:my-1.5 prose-p:whitespace-pre-wrap max-w-none px-3 pb-3 text-[13px] leading-relaxed [overflow-wrap:anywhere] break-words">
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 rehypePlugins={[rehypeRaw, rehypeSanitize, rehypeHighlight]}
@@ -231,6 +366,29 @@ export const AssistantMessage = memo(function AssistantMessage({
               </ReactMarkdown>
             </div>
           )}
+          {(!isCollapsedBlock || isExpanded) &&
+            !isToolCalls &&
+            !isToolFeedback &&
+            hasText && (
+              <div
+                className={cn(
+                  "prose dark:prose-invert prose-pre:my-2 prose-pre:overflow-x-auto prose-pre:rounded-lg prose-pre:border prose-pre:bg-zinc-100 prose-pre:p-0 prose-pre:text-zinc-900 dark:prose-pre:bg-zinc-950 dark:prose-pre:text-zinc-100 max-w-none [overflow-wrap:anywhere] break-words",
+                  isThought
+                    ? "prose-p:my-1.5 prose-p:whitespace-pre-wrap px-3 pt-0 pb-3 text-[13px] leading-relaxed opacity-70"
+                    : "prose-p:my-2 prose-p:whitespace-pre-wrap py-1 text-[15px] leading-relaxed",
+                )}
+              >
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  rehypePlugins={[rehypeRaw, rehypeSanitize, rehypeHighlight]}
+                  components={{
+                    pre: MarkdownCodeBlock,
+                  }}
+                >
+                  {content}
+                </ReactMarkdown>
+              </div>
+            )}
 
           {!isCollapsedBlock && hasText && (
             <Button
