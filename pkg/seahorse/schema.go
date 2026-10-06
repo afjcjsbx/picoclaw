@@ -200,32 +200,12 @@ func ensureMessagesModelNameColumn(db *sql.DB) error {
 }
 
 func tableHasColumn(db *sql.DB, tableName, columnName string) (bool, error) {
-	rows, err := db.Query(fmt.Sprintf(`PRAGMA table_info(%s)`, tableName))
-	if err != nil {
-		return false, err
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var (
-			cid        int
-			name       string
-			columnType string
-			notNull    int
-			defaultVal sql.NullString
-			pk         int
-		)
-		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultVal, &pk); err != nil {
-			return false, err
-		}
-		if name == columnName {
-			return true, nil
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return false, err
-	}
-	return false, nil
+	// pragma_table_info() table-valued function accepts bound parameters, unlike PRAGMA.
+	var found int
+	err := db.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?`, tableName, columnName,
+	).Scan(&found)
+	return found > 0, err
 }
 
 // checkFTS5Support verifies that SQLite has FTS5 with trigram tokenizer enabled.

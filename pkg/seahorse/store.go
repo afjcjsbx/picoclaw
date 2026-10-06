@@ -1063,18 +1063,16 @@ func (s *Store) ReplaceContextItemsWithSummary(
 	defer tx.Rollback()
 
 	// Find the ordinals of items to delete and calculate midpoint
-	placeholders := make([]string, len(summaryIDs))
+	// Only "?" markers are ever concatenated into SQL; values are always bound.
+	inClause := "(?" + strings.Repeat(",?", len(summaryIDs)-1) + ")"
 	args := make([]any, len(summaryIDs)+1)
 	args[0] = convID
 	for i, sid := range summaryIDs {
-		placeholders[i] = "?"
 		args[i+1] = sid
 	}
 
-	query := fmt.Sprintf(
-		"SELECT ordinal FROM context_items WHERE conversation_id = ? AND summary_id IN (%s) ORDER BY ordinal",
-		strings.Join(placeholders, ","),
-	)
+	query := "SELECT ordinal FROM context_items WHERE conversation_id = ? AND summary_id IN " +
+		inClause + " ORDER BY ordinal"
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return err
@@ -1100,10 +1098,7 @@ func (s *Store) ReplaceContextItemsWithSummary(
 	midpoint := (ordinals[0] + ordinals[len(ordinals)-1]) / 2
 
 	// Delete the specific items by summary_id
-	deleteQuery := fmt.Sprintf(
-		"DELETE FROM context_items WHERE conversation_id = ? AND summary_id IN (%s)",
-		strings.Join(placeholders, ","),
-	)
+	deleteQuery := "DELETE FROM context_items WHERE conversation_id = ? AND summary_id IN " + inClause
 	_, err = tx.ExecContext(ctx, deleteQuery, args...)
 	if err != nil {
 		return err
