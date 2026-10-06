@@ -304,6 +304,20 @@ func validateWindowsExposePaths(items []config.ExposePath) error {
 	return fmt.Errorf("windows isolation does not yet support expose_paths filesystem rules")
 }
 
+func validateDarwinExposePaths(items []config.ExposePath) error {
+	for _, item := range items {
+		path := NormalizeExposePath(item)
+		if path.Source != path.Target {
+			return fmt.Errorf(
+				"macOS Seatbelt does not support expose_paths remapping: %s -> %s",
+				path.Source,
+				path.Target,
+			)
+		}
+	}
+	return nil
+}
+
 // IsSupported reports whether the current platform has an implemented isolation
 // backend.
 func IsSupported() bool {
@@ -312,7 +326,7 @@ func IsSupported() bool {
 
 func isSupportedOn(goos string) bool {
 	switch goos {
-	case "linux", "windows":
+	case "linux", "windows", "darwin":
 		return true
 	default:
 		return false
@@ -354,6 +368,11 @@ func Preflight() error {
 			if rule.Path == "" {
 				return fmt.Errorf("invalid windows access rule")
 			}
+		}
+	}
+	if runtime.GOOS == "darwin" {
+		if err := validateDarwinExposePaths(isolation.ExposePaths); err != nil {
+			return err
 		}
 	}
 	return nil
