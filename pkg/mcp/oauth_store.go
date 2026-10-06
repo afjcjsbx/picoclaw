@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -55,7 +56,7 @@ func (s oauthStore) load() (*oauthSession, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
+	if !info.Mode().IsRegular() || (runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0) {
 		return nil, errors.New("MCP OAuth token file must be a regular file with owner-only permissions")
 	}
 	data, err := os.ReadFile(s.path)
