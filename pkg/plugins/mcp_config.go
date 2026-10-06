@@ -173,7 +173,7 @@ func validateEndpoint(endpoint string) error {
 		(u.Scheme != "https" && u.Scheme != "http") {
 		return fmt.Errorf("invalid MCP endpoint")
 	}
-	if u.Scheme == "http" && u.Hostname() != "localhost" {
+	if u.Scheme == "http" && !strings.EqualFold(u.Hostname(), "localhost") {
 		ip := net.ParseIP(u.Hostname())
 		if ip == nil || !ip.IsLoopback() {
 			return fmt.Errorf("non-loopback MCP endpoints require HTTPS")

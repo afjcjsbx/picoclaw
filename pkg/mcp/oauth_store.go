@@ -194,7 +194,7 @@ func validateOAuthURL(raw string) error {
 		return nil
 	}
 	if u.Scheme == "http" &&
-		(u.Hostname() == "127.0.0.1" || u.Hostname() == "[::1]" || u.Hostname() == "::1" || u.Hostname() == "localhost") {
+		(u.Hostname() == "127.0.0.1" || u.Hostname() == "::1" || strings.EqualFold(u.Hostname(), "localhost")) {
 		return nil
 	}
 	return errors.New("OAuth requires HTTPS (HTTP is allowed only on loopback)")
