@@ -3436,3 +3436,32 @@ func TestSplitMarkerStreamerForwardsTurnUsage(t *testing.T) {
 		t.Errorf("inner usage = (%d, %d), want (1234, 567)", inner.inputTokens, inner.outputTokens)
 	}
 }
+
+func TestUnregisterChannel_ConcurrentSendNoPanic(t *testing.T) {
+	m := newTestManager()
+	ch := &mockChannel{}
+	w := newChannelWorker("test", ch, "")
+	m.channels["test"] = ch
+	m.workers["test"] = w
+	ctx := context.Background()
+	go m.runWorker(ctx, "test", w)
+	go m.runMediaWorker(ctx, "test", w)
+
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				_ = m.SendToChannel(ctx, "test", "chat", "hi")
+			}
+		}
+	}()
+	time.Sleep(10 * time.Millisecond)
+	m.UnregisterChannel("test") // used to panic: send on closed channel
+	close(stop)
+	<-done
+}
