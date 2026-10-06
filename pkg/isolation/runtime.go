@@ -308,7 +308,11 @@ func validateDarwinExposePaths(items []config.ExposePath) error {
 	for _, item := range items {
 		path := NormalizeExposePath(item)
 		if path.Source != path.Target {
-			return fmt.Errorf("macOS Seatbelt does not support expose_paths remapping: %s -> %s", path.Source, path.Target)
+			return fmt.Errorf(
+				"macOS Seatbelt does not support expose_paths remapping: %s -> %s",
+				path.Source,
+				path.Target,
+			)
 		}
 	}
 	return nil
