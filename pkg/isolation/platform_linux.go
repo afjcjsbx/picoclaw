@@ -3,12 +3,14 @@
 package isolation
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
@@ -40,6 +42,10 @@ func applyPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, roo
 	}
 	if cmd == nil || cmd.Path == "" || len(cmd.Args) == 0 {
 		return nil
+	}
+	namespaceFlags, err := cachedLinuxNamespaceFlags(bwrapPath)
+	if err != nil {
+		return err
 	}
 
 	originalPath := cmd.Path
@@ -77,7 +83,7 @@ func applyPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, roo
 			"working_dir": execDir,
 			"mounts":      formatLinuxMountPlan(plan),
 		})
-	bwrapArgs, err := buildLinuxBwrapArgs(originalPath, resolvedPath, originalArgs, execDir, plan)
+	bwrapArgs, err := buildLinuxBwrapArgs(originalPath, resolvedPath, originalArgs, execDir, plan, namespaceFlags)
 	if err != nil {
 		return err
 	}
@@ -112,6 +118,72 @@ func postStartPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig,
 func cleanupPendingPlatformResources(cmd *exec.Cmd) {
 }
 
+// Unsupported optional namespaces are omitted so mount and filesystem isolation
+// can still run; the dropped namespace is an explicit security tradeoff.
+var linuxOptionalNamespaceFlags = []string{"--unshare-ipc"}
+
+var linuxNamespaceProbe struct {
+	once  sync.Once
+	flags map[string]bool
+	err   error
+}
+
+func cachedLinuxNamespaceFlags(bwrapPath string) (map[string]bool, error) {
+	linuxNamespaceProbe.once.Do(func() {
+		linuxNamespaceProbe.flags, linuxNamespaceProbe.err = probeLinuxNamespaceFlags(
+			bwrapPath,
+			func(path string, args ...string) ([]byte, error) {
+				var stderr bytes.Buffer
+				cmd := exec.Command(path, args...)
+				cmd.Stderr = &stderr
+				err := cmd.Run()
+				return stderr.Bytes(), err
+			},
+		)
+		if linuxNamespaceProbe.err != nil {
+			return
+		}
+		for _, flag := range linuxOptionalNamespaceFlags {
+			if !linuxNamespaceProbe.flags[flag] {
+				logger.WarnCF("isolation", "bubblewrap dropped "+flag+"; corresponding namespace isolation is not active",
+					map[string]any{
+						"flag":                flag,
+						"namespace_isolation": "not active",
+						"reason":              "kernel lacks this namespace; bwrap returned 'Creating new namespace failed' (EINVAL)",
+						"remaining_isolation": "mount namespace, filesystem view, and user environment remain active",
+					})
+			}
+		}
+	})
+	return linuxNamespaceProbe.flags, linuxNamespaceProbe.err
+}
+
+func probeLinuxNamespaceFlags(
+	bwrapPath string,
+	run func(string, ...string) ([]byte, error),
+) (map[string]bool, error) {
+	flags := make(map[string]bool, len(linuxOptionalNamespaceFlags))
+	for _, flag := range linuxOptionalNamespaceFlags {
+		output, err := run(bwrapPath,
+			"--ro-bind", "/", "/",
+			"--dev", "/dev",
+			"--proc", "/proc",
+			flag,
+			"--", "true",
+		)
+		if err == nil {
+			flags[flag] = true
+			continue
+		}
+		if strings.Contains(string(output), "Creating new namespace failed") {
+			flags[flag] = false
+			continue
+		}
+		return nil, fmt.Errorf("probe bubblewrap namespace flag %s: %w: %s", flag, err, strings.TrimSpace(string(output)))
+	}
+	return flags, nil
+}
+
 // buildLinuxBwrapArgs translates the mount plan into the bubblewrap command
 // line that re-executes the original process inside the isolated mount view.
 func buildLinuxBwrapArgs(
@@ -120,14 +192,18 @@ func buildLinuxBwrapArgs(
 	originalArgs []string,
 	execDir string,
 	plan []MountRule,
+	namespaceFlags map[string]bool,
 ) ([]string, error) {
 	bwrapArgs := []string{
 		"bwrap",
 		"--die-with-parent",
-		"--unshare-ipc",
-		"--proc", "/proc",
-		"--dev", "/dev",
 	}
+	for _, flag := range linuxOptionalNamespaceFlags {
+		if namespaceFlags[flag] {
+			bwrapArgs = append(bwrapArgs, flag)
+		}
+	}
+	bwrapArgs = append(bwrapArgs, "--proc", "/proc", "--dev", "/dev")
 	for _, rule := range plan {
 		flag, err := linuxBindFlag(rule)
 		if err != nil {
