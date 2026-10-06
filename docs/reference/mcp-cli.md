@@ -116,6 +116,7 @@ Supported flags:
 |------|---------|
 | `--env`, `-e` | Add a stdio environment variable in `KEY=value` format. Repeatable. Values are saved to config. |
 | `--env-file` | Attach an env file path to a stdio server. Recommended for secrets you do not want stored inline in `config.json`. |
+| `--inherit-env` | Pass the full PicoClaw process environment to this stdio server. By default, only basic process variables are inherited. |
 | `--header`, `-H` | Add an HTTP header in `Name: Value` or `Name=Value` format. Repeatable. |
 | `--transport`, `-t` | Transport type: `stdio` (default), `http` / `streamable-http`, or `sse`. |
 | `--force`, `-f` | Overwrite an existing server entry without confirmation. |
@@ -195,6 +196,7 @@ For `stdio`:
 - `[args...]` are stored in `args`
 - `--env` is supported
 - `--env-file` is supported and stored in `env_file`
+- `--inherit-env` is supported and stored as `inherit_env: true`
 - `--header` is rejected
 - `-- <command> [args...]` is supported and recommended for unambiguous parsing
 
@@ -204,6 +206,7 @@ For `http` / `streamable-http` / `sse`:
 - extra command args are rejected
 - `--env` is rejected
 - `--env-file` is rejected
+- `--inherit-env` is rejected
 - `--header` is supported and stored in `headers`
 - `http` and `streamable-http` use streamable HTTP request-response mode
 - `sse` uses the same streamable HTTP transport, but also enables the optional standalone SSE listener for server-initiated notifications

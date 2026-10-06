@@ -185,7 +185,7 @@ type IsolationConfig struct {
 }
 
 // ExposePath describes a host path that should remain visible inside the isolated
-// child-process environment. This is currently implemented on Linux only.
+// child-process environment. macOS Seatbelt supports same-path access, not remapping.
 type ExposePath struct {
 	Source string `json:"source"`
 	Target string `json:"target,omitempty"`
@@ -1367,6 +1367,9 @@ type MCPServerConfig struct {
 	Env map[string]string `json:"env,omitempty"`
 	// EnvFile is the path to a file containing environment variables (stdio only)
 	EnvFile string `json:"env_file,omitempty"`
+	// InheritEnv passes the full parent environment to the stdio process when explicitly enabled.
+	// By default, only basic process variables and explicitly configured variables are passed.
+	InheritEnv bool `json:"inherit_env,omitempty"`
 	// Type is "stdio", "sse", "http", or "streamable-http".
 	// "http" and "streamable-http" both select streamable HTTP request-response
 	// mode, while "sse" keeps the standalone SSE listener enabled for

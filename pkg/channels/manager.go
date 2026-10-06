@@ -81,8 +81,13 @@ type channelWorker struct {
 	mediaQueue chan bus.OutboundMediaMessage
 	done       chan struct{}
 	mediaDone  chan struct{}
+	stop       chan struct{} // closed by shutdown; queues are never closed so senders cannot panic
+	stopOnce   sync.Once
 	limiter    *rate.Limiter
 }
+
+// shutdown signals senders and workers to stop. Workers drain what is already queued.
+func (w *channelWorker) shutdown() { w.stopOnce.Do(func() { close(w.stop) }) }
 
 type Manager struct {
 	channels                  map[string]Channel
@@ -1387,21 +1392,15 @@ func (m *Manager) StopAll(ctx context.Context) error {
 		m.dispatchTask = nil
 	}
 
-	// Close all worker queues and wait for them to drain
+	// Signal all workers to stop and wait for them to drain
 	for _, w := range m.workers {
 		if w != nil {
-			close(w.queue)
+			w.shutdown()
 		}
 	}
 	for _, w := range m.workers {
 		if w != nil {
 			<-w.done
-		}
-	}
-	// Close all media worker queues and wait for them to drain
-	for _, w := range m.workers {
-		if w != nil {
-			close(w.mediaQueue)
 		}
 	}
 	for _, w := range m.workers {
@@ -1450,6 +1449,7 @@ func newChannelWorker(name string, ch Channel, channelType string) *channelWorke
 		mediaQueue: make(chan bus.OutboundMediaMessage, defaultChannelQueueSize),
 		done:       make(chan struct{}),
 		mediaDone:  make(chan struct{}),
+		stop:       make(chan struct{}),
 		limiter:    rate.NewLimiter(rate.Limit(rateVal), burst),
 	}
 }
@@ -1462,10 +1462,7 @@ func (m *Manager) runWorker(ctx context.Context, name string, w *channelWorker) 
 	defer close(w.done)
 	for {
 		select {
-		case msg, ok := <-w.queue:
-			if !ok {
-				return
-			}
+		case msg := <-w.queue:
 			maxLen := 0
 			if mlp, ok := w.ch.(MessageLengthProvider); ok {
 				maxLen = mlp.MaxMessageLength()
@@ -1500,6 +1497,10 @@ func (m *Manager) runWorker(ctx context.Context, name string, w *channelWorker) 
 				chunkMsg := msg
 				chunkMsg.Content = chunk
 				m.sendWithRetry(ctx, name, w, chunkMsg)
+			}
+		case <-w.stop:
+			if len(w.queue) == 0 {
+				return
 			}
 		case <-ctx.Done():
 			return
@@ -1684,6 +1685,8 @@ func (m *Manager) dispatchOutbound(ctx context.Context) {
 			case w.queue <- msg:
 				m.publishOutboundQueued(outboundMessageChannel(msg), msg)
 				return true
+			case <-w.stop:
+				return true // worker shutting down: drop message, keep dispatcher alive
 			case <-ctx.Done():
 				return false
 			}
@@ -1705,6 +1708,8 @@ func (m *Manager) dispatchOutboundMedia(ctx context.Context) {
 			case w.mediaQueue <- msg:
 				m.publishOutboundMediaQueued(outboundMediaChannel(msg), msg)
 				return true
+			case <-w.stop:
+				return true
 			case <-ctx.Done():
 				return false
 			}
@@ -1721,11 +1726,12 @@ func (m *Manager) runMediaWorker(ctx context.Context, name string, w *channelWor
 	defer close(w.mediaDone)
 	for {
 		select {
-		case msg, ok := <-w.mediaQueue:
-			if !ok {
+		case msg := <-w.mediaQueue:
+			_, _ = m.sendMediaWithRetry(ctx, name, w, msg)
+		case <-w.stop:
+			if len(w.mediaQueue) == 0 {
 				return
 			}
-			_, _ = m.sendMediaWithRetry(ctx, name, w, msg)
 		case <-ctx.Done():
 			return
 		}
@@ -2029,9 +2035,8 @@ func (m *Manager) UnregisterChannel(name string) {
 		m.unregisterChannelHTTPHandler(name, ch)
 	}
 	if w, ok := m.workers[name]; ok && w != nil {
-		close(w.queue)
+		w.shutdown()
 		<-w.done
-		close(w.mediaQueue)
 		<-w.mediaDone
 	}
 	delete(m.workers, name)
@@ -2122,6 +2127,8 @@ func (m *Manager) SendToChannel(ctx context.Context, channelName, chatID, conten
 		case w.queue <- msg:
 			m.publishOutboundQueued(channelName, msg)
 			return nil
+		case <-w.stop:
+			return fmt.Errorf("channel %s is shutting down", channelName)
 		case <-ctx.Done():
 			return ctx.Err()
 		}

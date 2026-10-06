@@ -164,6 +164,21 @@ func TestMCPAddSupportsEnvFileForStdio(t *testing.T) {
 	assert.Equal(t, ".env.mcp", server.EnvFile)
 }
 
+func TestMCPAddInheritEnvRequiresExplicitStdioOptIn(t *testing.T) {
+	configPath := setupMCPConfigEnv(t)
+	cmd := NewMCPCommand()
+	_, err := executeCommand(cmd, []string{"add", "filesystem", "--inherit-env", "--", "npx", "-y", "server"}, "")
+	require.NoError(t, err)
+	assert.True(t, readMCPConfig(t, configPath).Tools.MCP.Servers["filesystem"].InheritEnv)
+
+	server, err := buildServerConfig("npx", nil, addOptions{Transport: "stdio"})
+	require.NoError(t, err)
+	assert.False(t, server.InheritEnv)
+
+	_, err = buildServerConfig("https://example.com/mcp", nil, addOptions{Transport: "http", InheritEnv: true})
+	require.ErrorContains(t, err, "--inherit-env can only be used with stdio transport")
+}
+
 func TestMCPAddRejectsEnvFileForHTTP(t *testing.T) {
 	setupMCPConfigEnv(t)
 

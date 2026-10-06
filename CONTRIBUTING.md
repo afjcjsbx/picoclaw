@@ -49,7 +49,7 @@ For documentation contributions, prefer the layout and naming conventions in [`d
    ```
 3. Add the upstream remote:
    ```bash
-   git remote add upstream https://github.com/sipeed/picoclaw.git
+   git remote add upstream https://github.com/afjcjsbx/picoclaw.git
    ```
 
 ---
@@ -269,22 +269,12 @@ Review for:
 Be constructive and specific. "This could have a race condition if two goroutines call this concurrently — consider using a mutex here" is better than "this looks wrong".
 
 
-### Reviewer List
-Once your PR is submitted, you can reach out to the assigned reviewers listed in the following table.
+### Maintainer
+For review questions, contact the maintainer:
 
-|Function| Reviewer|
-|---     |---      |
-|Provider|@yinwm   |
-|Channel |@yinwm/@alexhoshina   |
-|Agent   |@lxowalle/@Zhaoyikaiii|
-|Tools   |@lxowalle|
-|SKill   ||
-|MCP     ||
-|Optimization|@lxowalle|
-|Security||
-|AI CI   |@imguoguo|
-|UX      ||
-|Document||
+| Role | GitHub |
+|---|---|
+| Maintainer | [@afjcjsbx](https://github.com/afjcjsbx) |
 
 ---
 

@@ -523,6 +523,13 @@ func (r *ToolRegistry) Clone() *ToolRegistry {
 	return clone
 }
 
+// CloneWithout creates a turn-local registry that omits one tool.
+func (r *ToolRegistry) CloneWithout(name string) *ToolRegistry {
+	clone := r.Clone()
+	delete(clone.tools, name)
+	return clone
+}
+
 // Count returns the number of registered tools.
 func (r *ToolRegistry) Count() int {
 	r.mu.RLock()

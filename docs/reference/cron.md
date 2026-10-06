@@ -72,6 +72,8 @@ This is the default for the cron tool.
 
 When the job fires, PicoClaw sends the saved message back through the agent loop as a new agent turn. Use this for scheduled work that may need reasoning, tools, or a generated reply.
 
+A turn started by a cron job receives a tool registry without `cron`, so the agent cannot call it to manage jobs. This also applies to subagents spawned by that turn.
+
 ### `deliver: true`
 
 When the job fires, PicoClaw publishes the saved message directly to the target channel and recipient without agent processing.

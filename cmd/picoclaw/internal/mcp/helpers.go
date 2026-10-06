@@ -64,6 +64,7 @@ const mcpConfigSchemaJSON = `{
                     "additionalProperties": { "type": "string" }
                   },
                   "env_file": { "type": "string" },
+                  "inherit_env": { "type": "boolean" },
                   "type": {
                     "type": "string",
                     "enum": ["stdio", "http", "sse"]

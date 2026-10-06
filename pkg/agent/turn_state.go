@@ -269,6 +269,15 @@ type turnState struct {
 // =============================================================================
 
 func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScope) *turnState {
+	// Cron origin survives in SenderID when a scheduled turn spawns a subturn.
+	// The session key also identifies a scheduled root turn if sender metadata is absent.
+	if agent != nil && agent.Tools != nil &&
+		(opts.Dispatch.SenderID() == "cron" || strings.HasPrefix(opts.Dispatch.SessionKey, "agent:cron-")) {
+		cronAgent := *agent
+		cronAgent.Tools = agent.Tools.CloneWithout("cron")
+		agent = &cronAgent
+	}
+
 	ts := &turnState{
 		agent:               agent,
 		opts:                opts,

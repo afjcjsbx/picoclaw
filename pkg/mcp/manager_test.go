@@ -161,6 +161,27 @@ func TestExpandHomeCommandPath(t *testing.T) {
 	}
 }
 
+func TestInheritedMCPEnv(t *testing.T) {
+	parent := []string{
+		"PATH=/usr/bin", "HOME=/home/test", "XDG_CACHE_HOME=/tmp/cache",
+		"PICOCLAW_API_KEY=private", "CUSTOM_TOKEN=private", "EMPTY=", "INVALID",
+	}
+
+	filtered := inheritedMCPEnv(parent, false)
+	if len(filtered) != 3 || filtered["PATH"] != "/usr/bin" ||
+		filtered["HOME"] != "/home/test" || filtered["XDG_CACHE_HOME"] != "/tmp/cache" {
+		t.Fatalf("filtered environment = %v, want only safe process variables", filtered)
+	}
+	if _, ok := filtered["PICOCLAW_API_KEY"]; ok {
+		t.Fatal("PicoClaw credential leaked to MCP server")
+	}
+
+	full := inheritedMCPEnv(parent, true)
+	if len(full) != 6 || full["CUSTOM_TOKEN"] != "private" || full["EMPTY"] != "" {
+		t.Fatalf("inherited environment = %v, want all valid parent variables", full)
+	}
+}
+
 func TestEnvFilePriority(t *testing.T) {
 	// Create a temporary .env file
 	tmpDir := t.TempDir()
