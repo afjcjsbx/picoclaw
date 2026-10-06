@@ -7,6 +7,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/sipeed/picoclaw/pkg/agent/agenthooks"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
 )
@@ -23,22 +24,22 @@ type builtinAutoHook struct {
 
 func (h *builtinAutoHook) BeforeLLM(
 	ctx context.Context,
-	req *LLMHookRequest,
-) (*LLMHookRequest, HookDecision, error) {
+	req *agenthooks.LLMHookRequest,
+) (*agenthooks.LLMHookRequest, agenthooks.HookDecision, error) {
 	next := req.Clone()
 	next.Model = h.model
-	return next, HookDecision{Action: HookActionModify}, nil
+	return next, agenthooks.HookDecision{Action: agenthooks.HookActionModify}, nil
 }
 
 func (h *builtinAutoHook) AfterLLM(
 	ctx context.Context,
-	resp *LLMHookResponse,
-) (*LLMHookResponse, HookDecision, error) {
+	resp *agenthooks.LLMHookResponse,
+) (*agenthooks.LLMHookResponse, agenthooks.HookDecision, error) {
 	next := resp.Clone()
 	if next.Response != nil {
 		next.Response.Content += h.suffix
 	}
-	return next, HookDecision{Action: HookActionModify}, nil
+	return next, agenthooks.HookDecision{Action: agenthooks.HookActionModify}, nil
 }
 
 func newConfiguredHookLoop(t *testing.T, provider *llmHookTestProvider, hooks config.HooksConfig) *AgentLoop {

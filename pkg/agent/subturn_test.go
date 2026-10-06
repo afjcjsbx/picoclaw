@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/agent/agentevents"
 	"github.com/sipeed/picoclaw/pkg/agent/subagent"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
@@ -24,7 +25,7 @@ const (
 	testMaxConcurrentSubTurns = subagent.DefaultMaxConcurrent
 )
 
-// ====================== Test Helper: Event Collector ======================
+// ====================== Test Helper: agentevents.Event Collector ======================
 type eventCollector struct {
 	mu     sync.Mutex
 	events []runtimeevents.Event
@@ -612,7 +613,7 @@ func TestNestedSubTurnHierarchy(t *testing.T) {
 	go func() {
 		for evt := range runtimeCh {
 			if evt.Kind == runtimeevents.KindAgentSubTurnSpawn {
-				p, _ := evt.Payload.(SubTurnSpawnPayload)
+				p, _ := evt.Payload.(agentevents.SubTurnSpawnPayload)
 				mu.Lock()
 				spawnedTurns = append(spawnedTurns, turnInfo{
 					parentID: p.ParentTurnID,
@@ -1885,7 +1886,7 @@ func TestAsyncSubTurn_ParentFinishesEarly(t *testing.T) {
 	mu.Lock()
 	t.Logf("Captured %d events:", len(events))
 	for i, e := range events {
-		t.Logf("  Event %d: %s", i+1, e.Kind)
+		t.Logf("  agentevents.Event %d: %s", i+1, e.Kind)
 	}
 	mu.Unlock()
 }

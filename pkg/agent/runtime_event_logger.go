@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/agent/agentevents"
 	"github.com/sipeed/picoclaw/pkg/config"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/logger"
@@ -251,81 +252,81 @@ func appendRuntimeEventAttrs(fields map[string]any, attrs map[string]any) {
 
 func appendRuntimeEventPayloadSummary(fields map[string]any, payload any) {
 	switch payload := payload.(type) {
-	case TurnStartPayload:
+	case agentevents.TurnStartPayload:
 		fields["user_len"] = len(payload.UserMessage)
 		fields["media_count"] = payload.MediaCount
-	case TurnEndPayload:
+	case agentevents.TurnEndPayload:
 		fields["status"] = payload.Status
 		fields["iterations_total"] = payload.Iterations
 		fields["duration_ms"] = payload.Duration.Milliseconds()
 		fields["final_len"] = payload.FinalContentLen
-	case LLMRequestPayload:
+	case agentevents.LLMRequestPayload:
 		fields["model"] = payload.Model
 		fields["messages"] = payload.MessagesCount
 		fields["tools"] = payload.ToolsCount
 		fields["max_tokens"] = payload.MaxTokens
-	case LLMDeltaPayload:
+	case agentevents.LLMDeltaPayload:
 		fields["content_delta_len"] = payload.ContentDeltaLen
 		fields["reasoning_delta_len"] = payload.ReasoningDeltaLen
-	case LLMResponsePayload:
+	case agentevents.LLMResponsePayload:
 		fields["content_len"] = payload.ContentLen
 		fields["tool_calls"] = payload.ToolCalls
 		fields["has_reasoning"] = payload.HasReasoning
-	case LLMRetryPayload:
+	case agentevents.LLMRetryPayload:
 		fields["attempt"] = payload.Attempt
 		fields["max_retries"] = payload.MaxRetries
 		fields["reason"] = payload.Reason
 		fields["error"] = payload.Error
 		fields["backoff_ms"] = payload.Backoff.Milliseconds()
-	case ContextCompressPayload:
+	case agentevents.ContextCompressPayload:
 		fields["reason"] = payload.Reason
 		fields["dropped_messages"] = payload.DroppedMessages
 		fields["remaining_messages"] = payload.RemainingMessages
-	case SessionSummarizePayload:
+	case agentevents.SessionSummarizePayload:
 		fields["summarized_messages"] = payload.SummarizedMessages
 		fields["kept_messages"] = payload.KeptMessages
 		fields["summary_len"] = payload.SummaryLen
 		fields["omitted_oversized"] = payload.OmittedOversized
-	case ToolExecStartPayload:
+	case agentevents.ToolExecStartPayload:
 		fields["tool"] = payload.Tool
 		fields["args_count"] = len(payload.Arguments)
-	case ToolExecEndPayload:
+	case agentevents.ToolExecEndPayload:
 		fields["tool"] = payload.Tool
 		fields["duration_ms"] = payload.Duration.Milliseconds()
 		fields["for_llm_len"] = payload.ForLLMLen
 		fields["for_user_len"] = payload.ForUserLen
 		fields["is_error"] = payload.IsError
 		fields["async"] = payload.Async
-	case ToolExecSkippedPayload:
+	case agentevents.ToolExecSkippedPayload:
 		fields["tool"] = payload.Tool
 		fields["reason"] = payload.Reason
-	case SteeringInjectedPayload:
+	case agentevents.SteeringInjectedPayload:
 		fields["count"] = payload.Count
 		fields["total_content_len"] = payload.TotalContentLen
-	case FollowUpQueuedPayload:
+	case agentevents.FollowUpQueuedPayload:
 		fields["source_tool"] = payload.SourceTool
 		fields["content_len"] = payload.ContentLen
-	case InterruptReceivedPayload:
+	case agentevents.InterruptReceivedPayload:
 		fields["interrupt_kind"] = payload.Kind
 		fields["role"] = payload.Role
 		fields["content_len"] = payload.ContentLen
 		fields["queue_depth"] = payload.QueueDepth
 		fields["hint_len"] = payload.HintLen
-	case SubTurnSpawnPayload:
+	case agentevents.SubTurnSpawnPayload:
 		fields["child_agent_id"] = payload.AgentID
 		fields["label"] = payload.Label
-	case SubTurnEndPayload:
+	case agentevents.SubTurnEndPayload:
 		fields["child_agent_id"] = payload.AgentID
 		fields["status"] = payload.Status
-	case SubTurnResultDeliveredPayload:
+	case agentevents.SubTurnResultDeliveredPayload:
 		fields["target_channel"] = payload.TargetChannel
 		fields["target_chat_id"] = payload.TargetChatID
 		fields["content_len"] = payload.ContentLen
-	case SubTurnOrphanPayload:
+	case agentevents.SubTurnOrphanPayload:
 		fields["parent_turn_id"] = payload.ParentTurnID
 		fields["child_turn_id"] = payload.ChildTurnID
 		fields["reason"] = payload.Reason
-	case ErrorPayload:
+	case agentevents.ErrorPayload:
 		fields["stage"] = payload.Stage
 		fields["error"] = payload.Message
 	}

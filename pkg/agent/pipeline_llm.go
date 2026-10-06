@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/agent/agentctx"
+	"github.com/sipeed/picoclaw/pkg/agent/agentevents"
+	"github.com/sipeed/picoclaw/pkg/agent/agenthooks"
 	"github.com/sipeed/picoclaw/pkg/constants"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/logger"
@@ -85,17 +87,17 @@ func (p *Pipeline) CallLLM(
 
 	// BeforeLLM hook
 	if p.Hooks != nil {
-		llmReq, decision := p.Hooks.BeforeLLM(turnCtx, &LLMHookRequest{
+		llmReq, decision := p.Hooks.BeforeLLM(turnCtx, &agenthooks.LLMHookRequest{
 			Meta:             ts.eventMeta("runTurn", "turn.llm.request"),
-			Context:          cloneTurnContext(ts.turnCtx),
+			Context:          agentevents.CloneTurnContext(ts.turnCtx),
 			Model:            exec.llmModel,
 			Messages:         exec.callMessages,
 			Tools:            exec.providerToolDefs,
 			Options:          exec.llmOpts,
 			GracefulTerminal: exec.gracefulTerminal,
 		})
-		switch decision.normalizedAction() {
-		case HookActionContinue, HookActionModify:
+		switch decision.NormalizedAction() {
+		case agenthooks.HookActionContinue, agenthooks.HookActionModify:
 			if llmReq != nil {
 				prevModel := exec.llmModel
 				exec.llmModel = llmReq.Model
@@ -109,11 +111,11 @@ func (p *Pipeline) CallLLM(
 					applyTurnThinkingOptions(exec, ts.agent, exec.activeProvider, true)
 				}
 			}
-		case HookActionAbortTurn:
+		case agenthooks.HookActionAbortTurn:
 			cancelConfiguredStreamingLLM(turnCtx, exec)
 			exec.abortedByHook = true
 			return ControlBreak, nil
-		case HookActionHardAbort:
+		case agenthooks.HookActionHardAbort:
 			cancelConfiguredStreamingLLM(turnCtx, exec)
 			_ = ts.requestHardAbort()
 			exec.abortedByHardAbort = true
@@ -147,7 +149,7 @@ func (p *Pipeline) CallLLM(
 	al.emitEvent(
 		runtimeevents.KindAgentLLMRequest,
 		ts.eventMeta("runTurn", "turn.llm.request"),
-		LLMRequestPayload{
+		agentevents.LLMRequestPayload{
 			Model:         exec.llmModel,
 			MessagesCount: len(exec.callMessages),
 			ToolsCount:    len(exec.providerToolDefs),
@@ -343,7 +345,7 @@ func (p *Pipeline) CallLLM(
 			al.emitEvent(
 				runtimeevents.KindAgentLLMRetry,
 				ts.eventMeta("runTurn", "turn.llm.retry"),
-				LLMRetryPayload{
+				agentevents.LLMRetryPayload{
 					Attempt:    retry + 1,
 					MaxRetries: maxRetries,
 					Reason:     retryReason,
@@ -372,7 +374,7 @@ func (p *Pipeline) CallLLM(
 			al.emitEvent(
 				runtimeevents.KindAgentLLMRetry,
 				ts.eventMeta("runTurn", "turn.llm.retry"),
-				LLMRetryPayload{
+				agentevents.LLMRetryPayload{
 					Attempt:    retry + 1,
 					MaxRetries: maxRetries,
 					Reason:     "context_limit",
@@ -418,7 +420,7 @@ func (p *Pipeline) CallLLM(
 			if ts.agent.ContextBuilder != nil {
 				contextualSkills = ts.agent.ContextBuilder.ResolveActiveSkillsForContext(ts.activeSkills)
 			}
-			ts.recordSkillContextSnapshot(skillContextTriggerContextRetryRebuild, contextualSkills)
+			ts.recordSkillContextSnapshot(agentevents.SkillContextTriggerContextRetryRebuild, contextualSkills)
 			stableHistory, protectedTurnTail := splitHistoryForActiveTurn(
 				exec.history,
 				ts.persistedMessagesSnapshot(),
@@ -495,7 +497,7 @@ func (p *Pipeline) CallLLM(
 		al.emitEvent(
 			runtimeevents.KindAgentError,
 			ts.eventMeta("runTurn", "turn.error"),
-			ErrorPayload{
+			agentevents.ErrorPayload{
 				Stage:   "llm",
 				Message: err.Error(),
 			},
@@ -512,22 +514,22 @@ func (p *Pipeline) CallLLM(
 
 	// AfterLLM hook
 	if p.Hooks != nil {
-		llmResp, decision := p.Hooks.AfterLLM(turnCtx, &LLMHookResponse{
+		llmResp, decision := p.Hooks.AfterLLM(turnCtx, &agenthooks.LLMHookResponse{
 			Meta:     ts.eventMeta("runTurn", "turn.llm.response"),
-			Context:  cloneTurnContext(ts.turnCtx),
+			Context:  agentevents.CloneTurnContext(ts.turnCtx),
 			Model:    exec.llmModel,
 			Response: exec.response,
 		})
-		switch decision.normalizedAction() {
-		case HookActionContinue, HookActionModify:
+		switch decision.NormalizedAction() {
+		case agenthooks.HookActionContinue, agenthooks.HookActionModify:
 			if llmResp != nil && llmResp.Response != nil {
 				exec.response = llmResp.Response
 			}
-		case HookActionAbortTurn:
+		case agenthooks.HookActionAbortTurn:
 			cancelConfiguredStreamingLLM(turnCtx, exec)
 			exec.abortedByHook = true
 			return ControlBreak, nil
-		case HookActionHardAbort:
+		case agenthooks.HookActionHardAbort:
 			cancelConfiguredStreamingLLM(turnCtx, exec)
 			_ = ts.requestHardAbort()
 			exec.abortedByHardAbort = true
@@ -584,7 +586,7 @@ func (p *Pipeline) CallLLM(
 	al.emitEvent(
 		runtimeevents.KindAgentLLMResponse,
 		ts.eventMeta("runTurn", "turn.llm.response"),
-		LLMResponsePayload{
+		agentevents.LLMResponsePayload{
 			ContentLen:   len(exec.response.Content),
 			ToolCalls:    len(exec.response.ToolCalls),
 			HasReasoning: exec.response.Reasoning != "" || exec.response.ReasoningContent != "",

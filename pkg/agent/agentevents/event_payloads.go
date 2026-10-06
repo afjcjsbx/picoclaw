@@ -1,4 +1,4 @@
-package agent
+package agentevents
 
 import (
 	"time"
@@ -25,8 +25,8 @@ type TurnStartPayload struct {
 }
 
 const (
-	skillContextTriggerInitialBuild        = "initial_build"
-	skillContextTriggerContextRetryRebuild = "context_retry_rebuild"
+	SkillContextTriggerInitialBuild        = "initial_build"
+	SkillContextTriggerContextRetryRebuild = "context_retry_rebuild"
 )
 
 type SkillContextSnapshot struct {

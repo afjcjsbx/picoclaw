@@ -1,6 +1,9 @@
 package agent
 
-import runtimeevents "github.com/sipeed/picoclaw/pkg/events"
+import (
+	"github.com/sipeed/picoclaw/pkg/agent/agentevents"
+	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
+)
 
 func (al *AgentLoop) publishRuntimeEvent(evt runtimeevents.Event) {
 	if al == nil || al.runtimeEvents == nil {
@@ -10,7 +13,7 @@ func (al *AgentLoop) publishRuntimeEvent(evt runtimeevents.Event) {
 	al.runtimeEvents.PublishNonBlocking(evt)
 }
 
-func runtimeScopeFromHookMeta(meta HookMeta, eventCtx *TurnContext) runtimeevents.Scope {
+func runtimeScopeFromHookMeta(meta agentevents.HookMeta, eventCtx *agentevents.TurnContext) runtimeevents.Scope {
 	scope := runtimeevents.Scope{
 		AgentID:    meta.AgentID,
 		SessionKey: meta.SessionKey,
@@ -34,7 +37,7 @@ func runtimeScopeFromHookMeta(meta HookMeta, eventCtx *TurnContext) runtimeevent
 	return scope
 }
 
-func runtimeCorrelationFromHookMeta(meta HookMeta) runtimeevents.Correlation {
+func runtimeCorrelationFromHookMeta(meta agentevents.HookMeta) runtimeevents.Correlation {
 	return runtimeevents.Correlation{
 		TraceID:      meta.TracePath,
 		ParentTurnID: meta.ParentTurnID,
@@ -50,20 +53,20 @@ func runtimeSeverityForAgentEvent(kind runtimeevents.Kind, payload any) runtimee
 		runtimeevents.KindAgentToolExecSkipped:
 		return runtimeevents.SeverityWarn
 	case runtimeevents.KindAgentTurnEnd:
-		payload, ok := payload.(TurnEndPayload)
+		payload, ok := payload.(agentevents.TurnEndPayload)
 		if !ok {
 			return runtimeevents.SeverityInfo
 		}
 		switch payload.Status {
-		case TurnEndStatusError:
+		case agentevents.TurnEndStatusError:
 			return runtimeevents.SeverityError
-		case TurnEndStatusAborted:
+		case agentevents.TurnEndStatusAborted:
 			return runtimeevents.SeverityWarn
 		default:
 			return runtimeevents.SeverityInfo
 		}
 	case runtimeevents.KindAgentToolExecEnd:
-		payload, ok := payload.(ToolExecEndPayload)
+		payload, ok := payload.(agentevents.ToolExecEndPayload)
 		if ok && payload.IsError {
 			return runtimeevents.SeverityWarn
 		}
@@ -73,7 +76,7 @@ func runtimeSeverityForAgentEvent(kind runtimeevents.Kind, payload any) runtimee
 	}
 }
 
-func runtimeAttrsFromHookMeta(meta HookMeta) map[string]any {
+func runtimeAttrsFromHookMeta(meta agentevents.HookMeta) map[string]any {
 	attrs := make(map[string]any, 2)
 	if meta.Source != "" {
 		attrs["agent_source"] = meta.Source

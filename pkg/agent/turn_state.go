@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/agent/agentctx"
+	"github.com/sipeed/picoclaw/pkg/agent/agentevents"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
@@ -86,7 +87,7 @@ const (
 type turnResult struct {
 	finalContent string
 	modelName    string
-	status       TurnEndStatus
+	status       agentevents.TurnEndStatus
 	followUps    []bus.InboundMessage
 }
 
@@ -156,7 +157,7 @@ type turnExecution struct {
 
 	// Abort signaling for coordinator (set by Pipeline methods)
 	abortedByHardAbort bool // true when hard abort triggered during LLM/tools
-	abortedByHook      bool // true when HookActionAbortTurn triggered
+	abortedByHook      bool // true when agenthooks.HookActionAbortTurn triggered
 }
 
 func (exec *turnExecution) closeOwnedProviders() {
@@ -203,10 +204,10 @@ type turnState struct {
 	sessionKey        string
 	activeSkills      []string
 	attemptedSkills   []string
-	skillContextTrace []SkillContextSnapshot
+	skillContextTrace []agentevents.SkillContextSnapshot
 	toolKinds         []string
-	toolExecutions    []ToolExecutionRecord
-	turnCtx           *TurnContext
+	toolExecutions    []agentevents.ToolExecutionRecord
+	turnCtx           *agentevents.TurnContext
 
 	channel     string
 	chatID      string
@@ -288,7 +289,7 @@ func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScop
 		agentID:             agent.ID,
 		sessionKey:          opts.Dispatch.SessionKey,
 		activeSkills:        activeSkillNames(agent, opts),
-		turnCtx:             cloneTurnContext(scope.context),
+		turnCtx:             agentevents.CloneTurnContext(scope.context),
 		channel:             opts.Dispatch.Channel(),
 		chatID:              opts.Dispatch.ChatID(),
 		workspace:           agent.Workspace,
@@ -473,7 +474,7 @@ func (ts *turnState) recordToolExecution(tool string, success bool, errorSummary
 
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
-	ts.toolExecutions = append(ts.toolExecutions, ToolExecutionRecord{
+	ts.toolExecutions = append(ts.toolExecutions, agentevents.ToolExecutionRecord{
 		Name:         tool,
 		Success:      success,
 		ErrorSummary: strings.TrimSpace(errorSummary),
@@ -481,16 +482,16 @@ func (ts *turnState) recordToolExecution(tool string, success bool, errorSummary
 	})
 }
 
-func (ts *turnState) toolExecutionsSnapshot() []ToolExecutionRecord {
+func (ts *turnState) toolExecutionsSnapshot() []agentevents.ToolExecutionRecord {
 	ts.mu.RLock()
 	defer ts.mu.RUnlock()
 	if len(ts.toolExecutions) == 0 {
 		return nil
 	}
 
-	out := make([]ToolExecutionRecord, 0, len(ts.toolExecutions))
+	out := make([]agentevents.ToolExecutionRecord, 0, len(ts.toolExecutions))
 	for _, exec := range ts.toolExecutions {
-		out = append(out, ToolExecutionRecord{
+		out = append(out, agentevents.ToolExecutionRecord{
 			Name:         exec.Name,
 			Success:      exec.Success,
 			ErrorSummary: exec.ErrorSummary,
@@ -554,7 +555,7 @@ func (ts *turnState) recordSkillContextSnapshot(trigger string, skillNames []str
 
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
-	ts.skillContextTrace = append(ts.skillContextTrace, SkillContextSnapshot{
+	ts.skillContextTrace = append(ts.skillContextTrace, agentevents.SkillContextSnapshot{
 		Sequence:   len(ts.skillContextTrace) + 1,
 		Trigger:    trigger,
 		SkillNames: append([]string(nil), filtered...),
@@ -570,16 +571,16 @@ func (ts *turnState) latestSkillContextSnapshot() []string {
 	return append([]string(nil), ts.skillContextTrace[len(ts.skillContextTrace)-1].SkillNames...)
 }
 
-func (ts *turnState) skillContextSnapshotsSnapshot() []SkillContextSnapshot {
+func (ts *turnState) skillContextSnapshotsSnapshot() []agentevents.SkillContextSnapshot {
 	ts.mu.RLock()
 	defer ts.mu.RUnlock()
 	if len(ts.skillContextTrace) == 0 {
 		return nil
 	}
 
-	snapshots := make([]SkillContextSnapshot, 0, len(ts.skillContextTrace))
+	snapshots := make([]agentevents.SkillContextSnapshot, 0, len(ts.skillContextTrace))
 	for _, snapshot := range ts.skillContextTrace {
-		snapshots = append(snapshots, SkillContextSnapshot{
+		snapshots = append(snapshots, agentevents.SkillContextSnapshot{
 			Sequence:   snapshot.Sequence,
 			Trigger:    snapshot.Trigger,
 			SkillNames: append([]string(nil), snapshot.SkillNames...),
@@ -655,16 +656,16 @@ func (ts *turnState) hardAbortRequested() bool {
 	return ts.hardAbort
 }
 
-func (ts *turnState) eventMeta(source, tracePath string) HookMeta {
+func (ts *turnState) eventMeta(source, tracePath string) agentevents.HookMeta {
 	snap := ts.snapshot()
-	return HookMeta{
+	return agentevents.HookMeta{
 		AgentID:     snap.AgentID,
 		TurnID:      snap.TurnID,
 		SessionKey:  snap.SessionKey,
 		Iteration:   snap.Iteration,
 		Source:      source,
 		TracePath:   tracePath,
-		turnContext: cloneTurnContext(ts.turnCtx),
+		TurnContext: agentevents.CloneTurnContext(ts.turnCtx),
 	}
 }
 

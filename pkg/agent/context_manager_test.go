@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/agent/agentctx"
+	"github.com/sipeed/picoclaw/pkg/agent/agentevents"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
@@ -339,15 +340,15 @@ func TestLegacyCompact_Overflow(t *testing.T) {
 		t.Fatalf("expected compression note in summary, got %q", summary)
 	}
 
-	// Event should carry the proactive reason
+	// agentevents.Event should carry the proactive reason
 	events := collectRuntimeEventStream(runtimeCh)
 	compressEvt, ok := findRuntimeEvent(events, runtimeevents.KindAgentContextCompress)
 	if !ok {
 		t.Fatal("expected context compress event")
 	}
-	payload, ok := compressEvt.Payload.(ContextCompressPayload)
+	payload, ok := compressEvt.Payload.(agentevents.ContextCompressPayload)
 	if !ok {
-		t.Fatalf("expected ContextCompressPayload, got %T", compressEvt.Payload)
+		t.Fatalf("expected agentevents.ContextCompressPayload, got %T", compressEvt.Payload)
 	}
 	if payload.Reason != agentctx.ContextCompressReasonRetry {
 		t.Fatalf("expected retry reason, got %q", payload.Reason)
@@ -426,9 +427,9 @@ func TestLegacyCompact_Overflow_ProactiveReason(t *testing.T) {
 	if !ok {
 		t.Fatal("expected context compress event")
 	}
-	payload, ok := compressEvt.Payload.(ContextCompressPayload)
+	payload, ok := compressEvt.Payload.(agentevents.ContextCompressPayload)
 	if !ok {
-		t.Fatalf("expected ContextCompressPayload, got %T", compressEvt.Payload)
+		t.Fatalf("expected agentevents.ContextCompressPayload, got %T", compressEvt.Payload)
 	}
 	if payload.Reason != agentctx.ContextCompressReasonProactive {
 		t.Fatalf("expected proactive reason, got %q", payload.Reason)

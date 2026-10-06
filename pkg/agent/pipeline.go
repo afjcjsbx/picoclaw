@@ -4,6 +4,7 @@ package agent
 
 import (
 	"github.com/sipeed/picoclaw/pkg/agent/agentctx"
+	"github.com/sipeed/picoclaw/pkg/agent/agenthooks"
 	"github.com/sipeed/picoclaw/pkg/agent/interfaces"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/media"
@@ -17,7 +18,7 @@ type Pipeline struct {
 	Bus            interfaces.MessageBus
 	Cfg            *config.Config
 	ContextManager agentctx.ContextManager
-	Hooks          *HookManager
+	Hooks          *agenthooks.HookManager
 	Fallback       *providers.FallbackChain
 	ChannelManager interfaces.ChannelManager
 	MediaStore     media.MediaStore

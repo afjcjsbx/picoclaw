@@ -2,6 +2,7 @@ package agent
 
 import (
 	"github.com/sipeed/picoclaw/pkg/agent/agentctx"
+	"github.com/sipeed/picoclaw/pkg/agent/agentevents"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/tools"
 )
@@ -47,7 +48,7 @@ func (h contextHost) EmitContextCompress(sessionKey string, res agentctx.Compres
 	h.al.emitEvent(
 		runtimeevents.KindAgentContextCompress,
 		h.al.newTurnEventScope("", sessionKey, nil).meta(0, "forceCompression", "turn.context.compress"),
-		ContextCompressPayload{
+		agentevents.ContextCompressPayload{
 			Reason:            res.Reason,
 			DroppedMessages:   res.DroppedMessages,
 			RemainingMessages: res.RemainingMessages,
@@ -59,7 +60,7 @@ func (h contextHost) EmitSessionSummarize(agentID, sessionKey string, res agentc
 	h.al.emitEvent(
 		runtimeevents.KindAgentSessionSummarize,
 		h.al.newTurnEventScope(agentID, sessionKey, nil).meta(0, "summarizeSession", "turn.session.summarize"),
-		SessionSummarizePayload{
+		agentevents.SessionSummarizePayload{
 			SummarizedMessages: res.SummarizedMessages,
 			KeptMessages:       res.KeptMessages,
 			SummaryLen:         res.SummaryLen,

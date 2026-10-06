@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/agent/agentevents"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/providers"
@@ -289,7 +290,7 @@ func TestPipeline_SetupTurn_BasicInitialization(t *testing.T) {
 	pipeline := NewPipeline(al)
 	ts := newTurnState(agent, makeTestProcessOpts("test-session"), turnEventScope{
 		turnID:  "turn-1",
-		context: newTurnContext(nil, nil, nil),
+		context: agentevents.NewTurnContext(nil, nil, nil),
 	})
 
 	exec, err := pipeline.SetupTurn(context.Background(), ts)
@@ -318,7 +319,7 @@ func TestPipeline_CallLLM_SimpleResponse(t *testing.T) {
 	pipeline := NewPipeline(al)
 	ts := newTurnState(agent, makeTestProcessOpts("test-session"), turnEventScope{
 		turnID:  "turn-1",
-		context: newTurnContext(nil, nil, nil),
+		context: agentevents.NewTurnContext(nil, nil, nil),
 	})
 
 	exec, err := pipeline.SetupTurn(context.Background(), ts)
@@ -354,7 +355,7 @@ func TestPipeline_SetupTurn_ModelNameDoesNotUseFallbackAliasBeforeFallback(t *te
 	pipeline := NewPipeline(al)
 	ts := newTurnState(agent, makeTestProcessOpts("test-session"), turnEventScope{
 		turnID:  "turn-1",
-		context: newTurnContext(nil, nil, nil),
+		context: agentevents.NewTurnContext(nil, nil, nil),
 	})
 
 	exec, err := pipeline.SetupTurn(context.Background(), ts)
@@ -390,7 +391,7 @@ func TestPipeline_CallLLM_UsesSuccessfulFallbackIdentityAlias(t *testing.T) {
 	pipeline := NewPipeline(al)
 	ts := newTurnState(agent, makeTestProcessOpts("test-session"), turnEventScope{
 		turnID:  "turn-1",
-		context: newTurnContext(nil, nil, nil),
+		context: agentevents.NewTurnContext(nil, nil, nil),
 	})
 
 	exec, err := pipeline.SetupTurn(context.Background(), ts)
@@ -435,7 +436,7 @@ func TestPipeline_CallLLM_UsesSuccessfulFallbackDisplayNameWithoutAlias(t *testi
 	pipeline := NewPipeline(al)
 	ts := newTurnState(agent, makeTestProcessOpts("test-session"), turnEventScope{
 		turnID:  "turn-1",
-		context: newTurnContext(nil, nil, nil),
+		context: agentevents.NewTurnContext(nil, nil, nil),
 	})
 
 	exec, err := pipeline.SetupTurn(context.Background(), ts)
@@ -473,7 +474,7 @@ func TestPipeline_SetupTurn_UsesLightCandidateDisplayName(t *testing.T) {
 	opts.UserMessage = ""
 	ts := newTurnState(agent, opts, turnEventScope{
 		turnID:  "turn-1",
-		context: newTurnContext(nil, nil, nil),
+		context: agentevents.NewTurnContext(nil, nil, nil),
 	})
 
 	exec, err := pipeline.SetupTurn(context.Background(), ts)
@@ -509,15 +510,15 @@ func TestRunTurn_FinalizeSaveErrorEmitsErrorTurnEnd(t *testing.T) {
 	for {
 		select {
 		case evt := <-sub.C:
-			if evt.Kind != EventKindTurnEnd {
+			if evt.Kind != agentevents.EventKindTurnEnd {
 				continue
 			}
-			payload, ok := evt.Payload.(TurnEndPayload)
+			payload, ok := evt.Payload.(agentevents.TurnEndPayload)
 			if !ok {
 				t.Fatalf("TurnEnd payload type = %T", evt.Payload)
 			}
-			if payload.Status != TurnEndStatusError {
-				t.Fatalf("TurnEnd status = %q, want %q", payload.Status, TurnEndStatusError)
+			if payload.Status != agentevents.TurnEndStatusError {
+				t.Fatalf("TurnEnd status = %q, want %q", payload.Status, agentevents.TurnEndStatusError)
 			}
 			return
 		case <-deadline:
@@ -538,7 +539,7 @@ func TestPipeline_CallLLM_WithToolCall(t *testing.T) {
 	pipeline := NewPipeline(al)
 	ts := newTurnState(agent, makeTestProcessOpts("test-session"), turnEventScope{
 		turnID:  "turn-1",
-		context: newTurnContext(nil, nil, nil),
+		context: agentevents.NewTurnContext(nil, nil, nil),
 	})
 
 	exec, err := pipeline.SetupTurn(context.Background(), ts)
@@ -576,7 +577,7 @@ func TestPipeline_CallLLM_UsesNativeSearchWithoutClientWebSearchTool(t *testing.
 	pipeline := NewPipeline(al)
 	ts := newTurnState(agent, makeTestProcessOpts("test-session"), turnEventScope{
 		turnID:  "turn-1",
-		context: newTurnContext(nil, nil, nil),
+		context: agentevents.NewTurnContext(nil, nil, nil),
 	})
 
 	exec, err := pipeline.SetupTurn(context.Background(), ts)
@@ -604,7 +605,7 @@ func TestPipeline_CallLLM_TimeoutRetry(t *testing.T) {
 	pipeline := NewPipeline(al)
 	ts := newTurnState(agent, makeTestProcessOpts("test-session"), turnEventScope{
 		turnID:  "turn-1",
-		context: newTurnContext(nil, nil, nil),
+		context: agentevents.NewTurnContext(nil, nil, nil),
 	})
 
 	exec, err := pipeline.SetupTurn(context.Background(), ts)
@@ -649,7 +650,7 @@ func TestPipeline_CallLLM_HTTP5xxRetry(t *testing.T) {
 	pipeline := NewPipeline(al)
 	ts := newTurnState(agent, makeTestProcessOpts("test-session"), turnEventScope{
 		turnID:  "turn-1",
-		context: newTurnContext(nil, nil, nil),
+		context: agentevents.NewTurnContext(nil, nil, nil),
 	})
 
 	exec, err := pipeline.SetupTurn(context.Background(), ts)
@@ -680,7 +681,7 @@ func TestPipeline_CallLLM_ContextLengthError(t *testing.T) {
 	pipeline := NewPipeline(al)
 	ts := newTurnState(agent, makeTestProcessOpts("test-session"), turnEventScope{
 		turnID:  "turn-1",
-		context: newTurnContext(nil, nil, nil),
+		context: agentevents.NewTurnContext(nil, nil, nil),
 	})
 
 	exec, err := pipeline.SetupTurn(context.Background(), ts)
@@ -715,7 +716,7 @@ func TestPipeline_CallLLM_NetworkErrorRetry(t *testing.T) {
 			pipeline := NewPipeline(al)
 			ts := newTurnState(agent, makeTestProcessOpts("test-session"), turnEventScope{
 				turnID:  "turn-1",
-				context: newTurnContext(nil, nil, nil),
+				context: agentevents.NewTurnContext(nil, nil, nil),
 			})
 
 			exec, err := pipeline.SetupTurn(context.Background(), ts)
@@ -759,7 +760,7 @@ func TestPipeline_CallLLM_RetryConfigRespected(t *testing.T) {
 	pipeline := NewPipeline(al)
 	ts := newTurnState(agent, makeTestProcessOpts("test-session"), turnEventScope{
 		turnID:  "turn-1",
-		context: newTurnContext(nil, nil, nil),
+		context: agentevents.NewTurnContext(nil, nil, nil),
 	})
 
 	exec, err := pipeline.SetupTurn(context.Background(), ts)
@@ -809,7 +810,7 @@ func TestPipeline_CallLLM_RetryCountLimit(t *testing.T) {
 	pipeline := NewPipeline(al)
 	ts := newTurnState(agent, makeTestProcessOpts("test-session"), turnEventScope{
 		turnID:  "turn-1",
-		context: newTurnContext(nil, nil, nil),
+		context: agentevents.NewTurnContext(nil, nil, nil),
 	})
 
 	exec, err := pipeline.SetupTurn(context.Background(), ts)
@@ -865,7 +866,7 @@ func TestPipeline_ExecuteTools_NoTools(t *testing.T) {
 	pipeline := NewPipeline(al)
 	ts := newTurnState(agent, makeTestProcessOpts("test-session"), turnEventScope{
 		turnID:  "turn-1",
-		context: newTurnContext(nil, nil, nil),
+		context: agentevents.NewTurnContext(nil, nil, nil),
 	})
 
 	exec, err := pipeline.SetupTurn(context.Background(), ts)
@@ -899,14 +900,14 @@ func TestRunTurn_SimpleConversation(t *testing.T) {
 
 	ts := newTurnState(agent, opts, turnEventScope{
 		turnID:  "turn-simple",
-		context: newTurnContext(nil, nil, nil),
+		context: agentevents.NewTurnContext(nil, nil, nil),
 	})
 
 	result, err := al.runTurn(context.Background(), ts, pipeline)
 	if err != nil {
 		t.Fatalf("runTurn failed: %v", err)
 	}
-	if result.status != TurnEndStatusCompleted {
+	if result.status != agentevents.TurnEndStatusCompleted {
 		t.Errorf("expected status Completed, got %v", result.status)
 	}
 	if result.finalContent == "" {
@@ -932,7 +933,7 @@ func TestRunTurn_MaxIterations(t *testing.T) {
 
 	ts := newTurnState(agent, opts, turnEventScope{
 		turnID:  "turn-maxiter",
-		context: newTurnContext(nil, nil, nil),
+		context: agentevents.NewTurnContext(nil, nil, nil),
 	})
 
 	result, err := al.runTurn(context.Background(), ts, pipeline)
@@ -940,7 +941,7 @@ func TestRunTurn_MaxIterations(t *testing.T) {
 		t.Fatalf("runTurn failed: %v", err)
 	}
 	// Should complete due to max iterations
-	if result.status != TurnEndStatusCompleted {
+	if result.status != agentevents.TurnEndStatusCompleted {
 		t.Errorf("expected status Completed, got %v", result.status)
 	}
 }
@@ -956,7 +957,7 @@ func TestRunTurn_HardAbort(t *testing.T) {
 
 	ts := newTurnState(agent, opts, turnEventScope{
 		turnID:  "turn-abort",
-		context: newTurnContext(nil, nil, nil),
+		context: agentevents.NewTurnContext(nil, nil, nil),
 	})
 
 	// Run in goroutine with abort after short delay
@@ -991,7 +992,7 @@ func TestRunTurn_SteeringMessageInjection(t *testing.T) {
 
 	ts := newTurnState(agent, opts, turnEventScope{
 		turnID:  "turn-steering",
-		context: newTurnContext(nil, nil, nil),
+		context: agentevents.NewTurnContext(nil, nil, nil),
 	})
 
 	// Enqueue steering message before runTurn
@@ -1005,7 +1006,7 @@ func TestRunTurn_SteeringMessageInjection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runTurn failed: %v", err)
 	}
-	if result.status != TurnEndStatusCompleted {
+	if result.status != agentevents.TurnEndStatusCompleted {
 		t.Errorf("expected status Completed, got %v", result.status)
 	}
 	// Steering message should have been injected
@@ -1025,7 +1026,7 @@ func TestRunTurn_GracefulInterrupt(t *testing.T) {
 
 	ts := newTurnState(agent, opts, turnEventScope{
 		turnID:  "turn-graceful",
-		context: newTurnContext(nil, nil, nil),
+		context: agentevents.NewTurnContext(nil, nil, nil),
 	})
 
 	// Run in goroutine with graceful interrupt after first iteration
@@ -1050,7 +1051,7 @@ func TestRunTurn_GracefulInterrupt(t *testing.T) {
 	}
 
 	// Should complete gracefully
-	if result.status != TurnEndStatusCompleted {
+	if result.status != agentevents.TurnEndStatusCompleted {
 		t.Errorf("expected status Completed, got %v", result.status)
 	}
 }
@@ -1102,8 +1103,8 @@ func TestTurnState_HardAbortRequested(t *testing.T) {
 func TestTurnState_SkillContextSnapshotsTrackLatestSuccessfulPath(t *testing.T) {
 	ts := &turnState{}
 
-	ts.recordSkillContextSnapshot(skillContextTriggerInitialBuild, []string{"skill-a"})
-	ts.recordSkillContextSnapshot(skillContextTriggerContextRetryRebuild, []string{"skill-b", "skill-c"})
+	ts.recordSkillContextSnapshot(agentevents.SkillContextTriggerInitialBuild, []string{"skill-a"})
+	ts.recordSkillContextSnapshot(agentevents.SkillContextTriggerContextRetryRebuild, []string{"skill-b", "skill-c"})
 
 	if got := ts.attemptedSkillsSnapshot(); len(got) != 3 || got[0] != "skill-a" || got[1] != "skill-b" ||
 		got[2] != "skill-c" {
@@ -1118,10 +1119,18 @@ func TestTurnState_SkillContextSnapshotsTrackLatestSuccessfulPath(t *testing.T) 
 	if len(snapshots) != 2 {
 		t.Fatalf("len(skillContextSnapshotsSnapshot()) = %d, want 2", len(snapshots))
 	}
-	if snapshots[0].Sequence != 1 || snapshots[0].Trigger != skillContextTriggerInitialBuild {
-		t.Fatalf("snapshots[0] = %+v, want sequence=1 trigger=%q", snapshots[0], skillContextTriggerInitialBuild)
+	if snapshots[0].Sequence != 1 || snapshots[0].Trigger != agentevents.SkillContextTriggerInitialBuild {
+		t.Fatalf(
+			"snapshots[0] = %+v, want sequence=1 trigger=%q",
+			snapshots[0],
+			agentevents.SkillContextTriggerInitialBuild,
+		)
 	}
-	if snapshots[1].Sequence != 2 || snapshots[1].Trigger != skillContextTriggerContextRetryRebuild {
-		t.Fatalf("snapshots[1] = %+v, want sequence=2 trigger=%q", snapshots[1], skillContextTriggerContextRetryRebuild)
+	if snapshots[1].Sequence != 2 || snapshots[1].Trigger != agentevents.SkillContextTriggerContextRetryRebuild {
+		t.Fatalf(
+			"snapshots[1] = %+v, want sequence=2 trigger=%q",
+			snapshots[1],
+			agentevents.SkillContextTriggerContextRetryRebuild,
+		)
 	}
 }

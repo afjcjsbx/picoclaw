@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/agent/agentctx"
+	"github.com/sipeed/picoclaw/pkg/agent/agentevents"
+	"github.com/sipeed/picoclaw/pkg/agent/agenthooks"
 	"github.com/sipeed/picoclaw/pkg/agent/interfaces"
 	"github.com/sipeed/picoclaw/pkg/audio/asr"
 	"github.com/sipeed/picoclaw/pkg/audio/tts"
@@ -46,7 +48,7 @@ type AgentLoop struct {
 	runtimeEventLogMu  sync.RWMutex
 	runtimeEventLogger *runtimeEventLogger
 	runtimeEventLogSub runtimeevents.Subscription
-	hooks              *HookManager
+	hooks              *agenthooks.HookManager
 
 	// Runtime state
 	running        atomic.Bool
@@ -376,7 +378,7 @@ type turnEventScope struct {
 	agentID    string
 	sessionKey string
 	turnID     string
-	context    *TurnContext
+	context    *agentevents.TurnContext
 }
 
 // ReloadProviderAndConfig atomically swaps the provider and config with proper synchronization.
@@ -570,7 +572,7 @@ func (al *AgentLoop) runAgentLoop(
 	turnScope := al.newTurnEventScope(
 		agent.ID,
 		opts.Dispatch.SessionKey,
-		newTurnContext(opts.Dispatch.InboundContext, opts.Dispatch.RouteResult, opts.Dispatch.SessionScope),
+		agentevents.NewTurnContext(opts.Dispatch.InboundContext, opts.Dispatch.RouteResult, opts.Dispatch.SessionScope),
 	)
 	ts := newTurnState(agent, opts, turnScope)
 	pipeline := NewPipeline(al)
@@ -578,7 +580,7 @@ func (al *AgentLoop) runAgentLoop(
 	if err != nil {
 		return "", err
 	}
-	if result.status == TurnEndStatusAborted {
+	if result.status == agentevents.TurnEndStatusAborted {
 		return "", nil
 	}
 

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/agent/agentevents"
 	"github.com/sipeed/picoclaw/pkg/audio/asr"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
@@ -1546,11 +1547,11 @@ func TestAgentLoop_InterruptGraceful_UsesTerminalNoToolCall(t *testing.T) {
 	if !ok {
 		t.Fatal("expected interrupt received event")
 	}
-	interruptPayload, ok := interruptEvt.Payload.(InterruptReceivedPayload)
+	interruptPayload, ok := interruptEvt.Payload.(agentevents.InterruptReceivedPayload)
 	if !ok {
-		t.Fatalf("expected InterruptReceivedPayload, got %T", interruptEvt.Payload)
+		t.Fatalf("expected agentevents.InterruptReceivedPayload, got %T", interruptEvt.Payload)
 	}
-	if interruptPayload.Kind != InterruptKindGraceful {
+	if interruptPayload.Kind != agentevents.InterruptKindGraceful {
 		t.Fatalf("expected graceful interrupt payload, got %q", interruptPayload.Kind)
 	}
 
@@ -1558,11 +1559,11 @@ func TestAgentLoop_InterruptGraceful_UsesTerminalNoToolCall(t *testing.T) {
 	if !ok {
 		t.Fatal("expected turn end event")
 	}
-	turnEndPayload, ok := turnEndEvt.Payload.(TurnEndPayload)
+	turnEndPayload, ok := turnEndEvt.Payload.(agentevents.TurnEndPayload)
 	if !ok {
-		t.Fatalf("expected TurnEndPayload, got %T", turnEndEvt.Payload)
+		t.Fatalf("expected agentevents.TurnEndPayload, got %T", turnEndEvt.Payload)
 	}
-	if turnEndPayload.Status != TurnEndStatusCompleted {
+	if turnEndPayload.Status != agentevents.TurnEndStatusCompleted {
 		t.Fatalf("expected completed turn after graceful interrupt, got %q", turnEndPayload.Status)
 	}
 }
@@ -1685,11 +1686,11 @@ func TestAgentLoop_InterruptHard_RestoresSession(t *testing.T) {
 	if !ok {
 		t.Fatal("expected interrupt received event")
 	}
-	interruptPayload, ok := interruptEvt.Payload.(InterruptReceivedPayload)
+	interruptPayload, ok := interruptEvt.Payload.(agentevents.InterruptReceivedPayload)
 	if !ok {
-		t.Fatalf("expected InterruptReceivedPayload, got %T", interruptEvt.Payload)
+		t.Fatalf("expected agentevents.InterruptReceivedPayload, got %T", interruptEvt.Payload)
 	}
-	if interruptPayload.Kind != InterruptKindHard {
+	if interruptPayload.Kind != agentevents.InterruptKindHard {
 		t.Fatalf("expected hard interrupt payload, got %q", interruptPayload.Kind)
 	}
 
@@ -1697,11 +1698,11 @@ func TestAgentLoop_InterruptHard_RestoresSession(t *testing.T) {
 	if !ok {
 		t.Fatal("expected turn end event")
 	}
-	turnEndPayload, ok := turnEndEvt.Payload.(TurnEndPayload)
+	turnEndPayload, ok := turnEndEvt.Payload.(agentevents.TurnEndPayload)
 	if !ok {
-		t.Fatalf("expected TurnEndPayload, got %T", turnEndEvt.Payload)
+		t.Fatalf("expected agentevents.TurnEndPayload, got %T", turnEndEvt.Payload)
 	}
-	if turnEndPayload.Status != TurnEndStatusAborted {
+	if turnEndPayload.Status != agentevents.TurnEndStatusAborted {
 		t.Fatalf("expected aborted turn, got %q", turnEndPayload.Status)
 	}
 }

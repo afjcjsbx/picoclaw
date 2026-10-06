@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/agent/agentctx"
+	"github.com/sipeed/picoclaw/pkg/agent/agentevents"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
@@ -43,7 +44,7 @@ func TestAgentLoop_PublishesRuntimeEvents(t *testing.T) {
 
 	al.emitEvent(
 		runtimeevents.KindAgentToolExecStart,
-		HookMeta{
+		agentevents.HookMeta{
 			AgentID:      "main",
 			TurnID:       "turn-1",
 			ParentTurnID: "parent-turn",
@@ -51,7 +52,7 @@ func TestAgentLoop_PublishesRuntimeEvents(t *testing.T) {
 			Iteration:    2,
 			TracePath:    "trace/root",
 			Source:       "pipeline_execute",
-			turnContext: &TurnContext{
+			TurnContext: &agentevents.TurnContext{
 				Inbound: &bus.InboundContext{
 					Channel:   "cli",
 					Account:   "default",
@@ -63,7 +64,7 @@ func TestAgentLoop_PublishesRuntimeEvents(t *testing.T) {
 				},
 			},
 		},
-		ToolExecStartPayload{Tool: "mock_custom", Arguments: map[string]any{"task": "ping"}},
+		agentevents.ToolExecStartPayload{Tool: "mock_custom", Arguments: map[string]any{"task": "ping"}},
 	)
 
 	runtimeEvt := receiveRuntimeEvent(t, runtimeCh)
@@ -92,9 +93,9 @@ func TestAgentLoop_PublishesRuntimeEvents(t *testing.T) {
 	if runtimeEvt.Attrs["agent_source"] != "pipeline_execute" || runtimeEvt.Attrs["iteration"] != 2 {
 		t.Fatalf("runtime attrs = %+v", runtimeEvt.Attrs)
 	}
-	payload, ok := runtimeEvt.Payload.(ToolExecStartPayload)
+	payload, ok := runtimeEvt.Payload.(agentevents.ToolExecStartPayload)
 	if !ok {
-		t.Fatalf("runtime payload = %T, want ToolExecStartPayload", runtimeEvt.Payload)
+		t.Fatalf("runtime payload = %T, want agentevents.ToolExecStartPayload", runtimeEvt.Payload)
 	}
 	if payload.Tool != "mock_custom" {
 		t.Fatalf("runtime payload tool = %q, want mock_custom", payload.Tool)
@@ -248,25 +249,25 @@ func TestAgentLoop_EmitsMinimalTurnEvents(t *testing.T) {
 		}
 	}
 
-	startPayload, ok := events[0].Payload.(TurnStartPayload)
+	startPayload, ok := events[0].Payload.(agentevents.TurnStartPayload)
 	if !ok {
-		t.Fatalf("expected TurnStartPayload, got %T", events[0].Payload)
+		t.Fatalf("expected agentevents.TurnStartPayload, got %T", events[0].Payload)
 	}
 	if startPayload.UserMessage != "run tool" {
 		t.Fatalf("expected user message 'run tool', got %q", startPayload.UserMessage)
 	}
 
-	toolStartPayload, ok := events[3].Payload.(ToolExecStartPayload)
+	toolStartPayload, ok := events[3].Payload.(agentevents.ToolExecStartPayload)
 	if !ok {
-		t.Fatalf("expected ToolExecStartPayload, got %T", events[3].Payload)
+		t.Fatalf("expected agentevents.ToolExecStartPayload, got %T", events[3].Payload)
 	}
 	if toolStartPayload.Tool != "mock_custom" {
 		t.Fatalf("expected tool name mock_custom, got %q", toolStartPayload.Tool)
 	}
 
-	toolEndPayload, ok := events[4].Payload.(ToolExecEndPayload)
+	toolEndPayload, ok := events[4].Payload.(agentevents.ToolExecEndPayload)
 	if !ok {
-		t.Fatalf("expected ToolExecEndPayload, got %T", events[4].Payload)
+		t.Fatalf("expected agentevents.ToolExecEndPayload, got %T", events[4].Payload)
 	}
 	if toolEndPayload.Tool != "mock_custom" {
 		t.Fatalf("expected tool end payload for mock_custom, got %q", toolEndPayload.Tool)
@@ -275,11 +276,11 @@ func TestAgentLoop_EmitsMinimalTurnEvents(t *testing.T) {
 		t.Fatal("expected mock_custom tool to succeed")
 	}
 
-	turnEndPayload, ok := events[len(events)-1].Payload.(TurnEndPayload)
+	turnEndPayload, ok := events[len(events)-1].Payload.(agentevents.TurnEndPayload)
 	if !ok {
-		t.Fatalf("expected TurnEndPayload, got %T", events[len(events)-1].Payload)
+		t.Fatalf("expected agentevents.TurnEndPayload, got %T", events[len(events)-1].Payload)
 	}
-	if turnEndPayload.Status != TurnEndStatusCompleted {
+	if turnEndPayload.Status != agentevents.TurnEndStatusCompleted {
 		t.Fatalf("expected completed turn, got %q", turnEndPayload.Status)
 	}
 	if turnEndPayload.Iterations != 2 {
@@ -380,9 +381,9 @@ func TestAgentLoop_EmitsSteeringAndSkippedToolEvents(t *testing.T) {
 	if !ok {
 		t.Fatal("expected steering injected event")
 	}
-	steeringPayload, ok := steeringEvt.Payload.(SteeringInjectedPayload)
+	steeringPayload, ok := steeringEvt.Payload.(agentevents.SteeringInjectedPayload)
 	if !ok {
-		t.Fatalf("expected SteeringInjectedPayload, got %T", steeringEvt.Payload)
+		t.Fatalf("expected agentevents.SteeringInjectedPayload, got %T", steeringEvt.Payload)
 	}
 	if steeringPayload.Count != 1 {
 		t.Fatalf("expected 1 steering message, got %d", steeringPayload.Count)
@@ -392,9 +393,9 @@ func TestAgentLoop_EmitsSteeringAndSkippedToolEvents(t *testing.T) {
 	if !ok {
 		t.Fatal("expected skipped tool event")
 	}
-	skippedPayload, ok := skippedEvt.Payload.(ToolExecSkippedPayload)
+	skippedPayload, ok := skippedEvt.Payload.(agentevents.ToolExecSkippedPayload)
 	if !ok {
-		t.Fatalf("expected ToolExecSkippedPayload, got %T", skippedEvt.Payload)
+		t.Fatalf("expected agentevents.ToolExecSkippedPayload, got %T", skippedEvt.Payload)
 	}
 	if skippedPayload.Tool != "tool_two" {
 		t.Fatalf("expected skipped tool_two, got %q", skippedPayload.Tool)
@@ -404,14 +405,14 @@ func TestAgentLoop_EmitsSteeringAndSkippedToolEvents(t *testing.T) {
 	if !ok {
 		t.Fatal("expected interrupt received event")
 	}
-	interruptPayload, ok := interruptEvt.Payload.(InterruptReceivedPayload)
+	interruptPayload, ok := interruptEvt.Payload.(agentevents.InterruptReceivedPayload)
 	if !ok {
-		t.Fatalf("expected InterruptReceivedPayload, got %T", interruptEvt.Payload)
+		t.Fatalf("expected agentevents.InterruptReceivedPayload, got %T", interruptEvt.Payload)
 	}
 	if interruptPayload.Role != "user" {
 		t.Fatalf("expected interrupt role user, got %q", interruptPayload.Role)
 	}
-	if interruptPayload.Kind != InterruptKindSteering {
+	if interruptPayload.Kind != agentevents.InterruptKindSteering {
 		t.Fatalf("expected steering interrupt kind, got %q", interruptPayload.Kind)
 	}
 	if interruptPayload.ContentLen != len("change course") {
@@ -488,9 +489,9 @@ func TestAgentLoop_EmitsContextCompressEventOnRetry(t *testing.T) {
 	if !ok {
 		t.Fatal("expected llm retry event")
 	}
-	retryPayload, ok := retryEvt.Payload.(LLMRetryPayload)
+	retryPayload, ok := retryEvt.Payload.(agentevents.LLMRetryPayload)
 	if !ok {
-		t.Fatalf("expected LLMRetryPayload, got %T", retryEvt.Payload)
+		t.Fatalf("expected agentevents.LLMRetryPayload, got %T", retryEvt.Payload)
 	}
 	if retryPayload.Reason != "context_limit" {
 		t.Fatalf("expected context_limit retry reason, got %q", retryPayload.Reason)
@@ -503,9 +504,9 @@ func TestAgentLoop_EmitsContextCompressEventOnRetry(t *testing.T) {
 	if !ok {
 		t.Fatal("expected context compress event")
 	}
-	payload, ok := compressEvt.Payload.(ContextCompressPayload)
+	payload, ok := compressEvt.Payload.(agentevents.ContextCompressPayload)
 	if !ok {
-		t.Fatalf("expected ContextCompressPayload, got %T", compressEvt.Payload)
+		t.Fatalf("expected agentevents.ContextCompressPayload, got %T", compressEvt.Payload)
 	}
 	if payload.Reason != agentctx.ContextCompressReasonRetry {
 		t.Fatalf("expected retry compress reason, got %q", payload.Reason)
@@ -568,9 +569,9 @@ func TestAgentLoop_EmitsSessionSummarizeEvent(t *testing.T) {
 	if !ok {
 		t.Fatal("expected session summarize event")
 	}
-	payload, ok := summaryEvt.Payload.(SessionSummarizePayload)
+	payload, ok := summaryEvt.Payload.(agentevents.SessionSummarizePayload)
 	if !ok {
-		t.Fatalf("expected SessionSummarizePayload, got %T", summaryEvt.Payload)
+		t.Fatalf("expected agentevents.SessionSummarizePayload, got %T", summaryEvt.Payload)
 	}
 	if payload.SummaryLen == 0 {
 		t.Fatal("expected non-empty summary length")
@@ -657,9 +658,9 @@ func TestAgentLoop_EmitsFollowUpQueuedEvent(t *testing.T) {
 	followUpEvt := waitForRuntimeEvent(t, runtimeCh, 2*time.Second, func(evt runtimeevents.Event) bool {
 		return evt.Kind == runtimeevents.KindAgentFollowUpQueued
 	})
-	payload, ok := followUpEvt.Payload.(FollowUpQueuedPayload)
+	payload, ok := followUpEvt.Payload.(agentevents.FollowUpQueuedPayload)
 	if !ok {
-		t.Fatalf("expected FollowUpQueuedPayload, got %T", followUpEvt.Payload)
+		t.Fatalf("expected agentevents.FollowUpQueuedPayload, got %T", followUpEvt.Payload)
 	}
 	if payload.SourceTool != "async_followup" {
 		t.Fatalf("expected source tool async_followup, got %q", payload.SourceTool)

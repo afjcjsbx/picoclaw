@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/agent/agentevents"
+	"github.com/sipeed/picoclaw/pkg/agent/agenthooks"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
@@ -99,7 +101,7 @@ func TestEvolutionBridge_TurnEndBypassesHookObserverBackpressure(t *testing.T) {
 	}
 	defer close(blocker.release)
 	al.hooks.ConfigureTimeouts(5*time.Second, 0, 0)
-	if err := al.MountHook(NamedHook("aaa-block-runtime-events", blocker)); err != nil {
+	if err := al.MountHook(agenthooks.NamedHook("aaa-block-runtime-events", blocker)); err != nil {
 		t.Fatalf("MountHook: %v", err)
 	}
 
@@ -113,19 +115,19 @@ func TestEvolutionBridge_TurnEndBypassesHookObserverBackpressure(t *testing.T) {
 		t.Fatal("timed out waiting for blocking runtime observer")
 	}
 
-	for i := 0; i < hookObserverBufferSize+10; i++ {
+	for i := 0; i < agenthooks.HookObserverBufferSize+10; i++ {
 		al.publishRuntimeEvent(runtimeevents.Event{
 			Kind:   runtimeevents.KindAgentLLMDelta,
 			Source: runtimeevents.Source{Component: "agent", Name: "main"},
 		})
 	}
 
-	al.emitEvent(runtimeevents.KindAgentTurnEnd, EventMeta{
+	al.emitEvent(runtimeevents.KindAgentTurnEnd, agentevents.EventMeta{
 		AgentID:    "main",
 		TurnID:     "turn-backpressure",
 		SessionKey: "session-backpressure",
-	}, TurnEndPayload{
-		Status:       TurnEndStatusCompleted,
+	}, agentevents.TurnEndPayload{
+		Status:       agentevents.TurnEndStatusCompleted,
 		Workspace:    tmpDir,
 		UserMessage:  "hello",
 		FinalContent: "ok",
@@ -156,8 +158,8 @@ func TestEvolutionBridge_RuntimeBusTurnEndWritesCaseRecord(t *testing.T) {
 			TurnID:     "turn-runtime-bus",
 			SessionKey: "session-runtime-bus",
 		},
-		Payload: TurnEndPayload{
-			Status:       TurnEndStatusCompleted,
+		Payload: agentevents.TurnEndPayload{
+			Status:       agentevents.TurnEndStatusCompleted,
 			Workspace:    tmpDir,
 			UserMessage:  "runtime bus task",
 			FinalContent: "ok",
@@ -220,8 +222,8 @@ func TestEvolutionBridge_RuntimeBusOnlyCurrentBridgeConsumesTurnEnd(t *testing.T
 			TurnID:     "turn-current-bridge",
 			SessionKey: "session-current-bridge",
 		},
-		Payload: TurnEndPayload{
-			Status:       TurnEndStatusCompleted,
+		Payload: agentevents.TurnEndPayload{
+			Status:       agentevents.TurnEndStatusCompleted,
 			Workspace:    tmpDir,
 			UserMessage:  "current bridge task",
 			FinalContent: "ok",
@@ -263,12 +265,12 @@ func TestEvolutionBridge_DirectDeliveryFailureFallsBackToCurrentRuntimeBridge(t 
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		al.emitEvent(runtimeevents.KindAgentTurnEnd, EventMeta{
+		al.emitEvent(runtimeevents.KindAgentTurnEnd, agentevents.EventMeta{
 			AgentID:    "main",
 			TurnID:     "turn-direct-fallback",
 			SessionKey: "session-direct-fallback",
-		}, TurnEndPayload{
-			Status:       TurnEndStatusCompleted,
+		}, agentevents.TurnEndPayload{
+			Status:       agentevents.TurnEndStatusCompleted,
 			Workspace:    tmpDir,
 			UserMessage:  "direct fallback task",
 			FinalContent: "ok",
@@ -305,12 +307,12 @@ func TestEvolutionBridge_CloseCancelsPendingTurnEndRecord(t *testing.T) {
 		Mode:    "observe",
 	}, &simpleMockProvider{response: "ok"})
 
-	al.emitEvent(runtimeevents.KindAgentTurnEnd, EventMeta{
+	al.emitEvent(runtimeevents.KindAgentTurnEnd, agentevents.EventMeta{
 		AgentID:    "main",
 		TurnID:     "turn-close-flush",
 		SessionKey: "session-close-flush",
-	}, TurnEndPayload{
-		Status:       TurnEndStatusCompleted,
+	}, agentevents.TurnEndPayload{
+		Status:       agentevents.TurnEndStatusCompleted,
 		Workspace:    tmpDir,
 		UserMessage:  "close flush task",
 		FinalContent: "ok",
@@ -372,12 +374,12 @@ func TestEvolutionBridge_ObserveTurnEndPayloadIncludesResolvedAttemptTrail(t *te
 		t.Fatalf("response = %q, want %q", resp, "ok")
 	}
 
-	turnEndEvt := waitForEvent(t, sub.C, 2*time.Second, func(evt Event) bool {
-		return evt.Kind == EventKindTurnEnd
+	turnEndEvt := waitForEvent(t, sub.C, 2*time.Second, func(evt agentevents.Event) bool {
+		return evt.Kind == agentevents.EventKindTurnEnd
 	})
-	turnEndPayload, ok := turnEndEvt.Payload.(TurnEndPayload)
+	turnEndPayload, ok := turnEndEvt.Payload.(agentevents.TurnEndPayload)
 	if !ok {
-		t.Fatalf("expected TurnEndPayload, got %T", turnEndEvt.Payload)
+		t.Fatalf("expected agentevents.TurnEndPayload, got %T", turnEndEvt.Payload)
 	}
 	if got := turnEndPayload.AttemptedSkills; len(got) != 1 || got[0] != "observe-skill" {
 		t.Fatalf("AttemptedSkills = %v, want [observe-skill]", got)
@@ -385,7 +387,8 @@ func TestEvolutionBridge_ObserveTurnEndPayloadIncludesResolvedAttemptTrail(t *te
 	if got := turnEndPayload.FinalSuccessfulPath; len(got) != 1 || got[0] != "observe-skill" {
 		t.Fatalf("FinalSuccessfulPath = %v, want [observe-skill]", got)
 	}
-	if got := turnEndPayload.SkillContextSnapshots; len(got) != 1 || got[0].Trigger != skillContextTriggerInitialBuild {
+	if got := turnEndPayload.SkillContextSnapshots; len(got) != 1 ||
+		got[0].Trigger != agentevents.SkillContextTriggerInitialBuild {
 		t.Fatalf("SkillContextSnapshots = %+v, want single initial_build snapshot", got)
 	}
 }
@@ -435,12 +438,12 @@ func TestEvolutionBridge_ObserveTurnEndUsesLatestSkillSnapshotAfterRetry(t *test
 		t.Fatalf("response = %q, want %q", resp, "Recovered after retry")
 	}
 
-	turnEndEvt := waitForEvent(t, sub.C, 2*time.Second, func(evt Event) bool {
-		return evt.Kind == EventKindTurnEnd
+	turnEndEvt := waitForEvent(t, sub.C, 2*time.Second, func(evt agentevents.Event) bool {
+		return evt.Kind == agentevents.EventKindTurnEnd
 	})
-	turnEndPayload, ok := turnEndEvt.Payload.(TurnEndPayload)
+	turnEndPayload, ok := turnEndEvt.Payload.(agentevents.TurnEndPayload)
 	if !ok {
-		t.Fatalf("expected TurnEndPayload, got %T", turnEndEvt.Payload)
+		t.Fatalf("expected agentevents.TurnEndPayload, got %T", turnEndEvt.Payload)
 	}
 	if got := turnEndPayload.AttemptedSkills; len(got) != 2 || got[0] != "base-skill" || got[1] != "late-skill" {
 		t.Fatalf("AttemptedSkills = %v, want [base-skill late-skill]", got)
@@ -451,18 +454,18 @@ func TestEvolutionBridge_ObserveTurnEndUsesLatestSkillSnapshotAfterRetry(t *test
 	if got := turnEndPayload.SkillContextSnapshots; len(got) != 2 {
 		t.Fatalf("len(SkillContextSnapshots) = %d, want 2", len(got))
 	}
-	if turnEndPayload.SkillContextSnapshots[0].Trigger != skillContextTriggerInitialBuild {
+	if turnEndPayload.SkillContextSnapshots[0].Trigger != agentevents.SkillContextTriggerInitialBuild {
 		t.Fatalf(
 			"SkillContextSnapshots[0].Trigger = %q, want %q",
 			turnEndPayload.SkillContextSnapshots[0].Trigger,
-			skillContextTriggerInitialBuild,
+			agentevents.SkillContextTriggerInitialBuild,
 		)
 	}
-	if turnEndPayload.SkillContextSnapshots[1].Trigger != skillContextTriggerContextRetryRebuild {
+	if turnEndPayload.SkillContextSnapshots[1].Trigger != agentevents.SkillContextTriggerContextRetryRebuild {
 		t.Fatalf(
 			"SkillContextSnapshots[1].Trigger = %q, want %q",
 			turnEndPayload.SkillContextSnapshots[1].Trigger,
-			skillContextTriggerContextRetryRebuild,
+			agentevents.SkillContextTriggerContextRetryRebuild,
 		)
 	}
 	if got := turnEndPayload.SkillContextSnapshots[1].SkillNames; len(got) != 2 || got[0] != "base-skill" ||
@@ -822,15 +825,15 @@ func TestEvolutionBridge_TurnEndUsesPayloadWorkspace(t *testing.T) {
 		t.Fatalf("newEvolutionBridge: %v", err)
 	}
 
-	err = bridge.OnEvent(context.Background(), Event{
-		Kind: EventKindTurnEnd,
-		Meta: EventMeta{
+	err = bridge.OnEvent(context.Background(), agentevents.Event{
+		Kind: agentevents.EventKindTurnEnd,
+		Meta: agentevents.EventMeta{
 			AgentID:    "main",
 			TurnID:     "turn-1",
 			SessionKey: "session-1",
 		},
-		Payload: TurnEndPayload{
-			Status:       TurnEndStatusCompleted,
+		Payload: agentevents.TurnEndPayload{
+			Status:       agentevents.TurnEndStatusCompleted,
 			Workspace:    workspace,
 			ActiveSkills: []string{"observe-skill"},
 			ToolKinds:    []string{"echo_text"},
@@ -860,24 +863,24 @@ func TestEvolutionBridge_TurnEndUsesExplicitAttemptTrail(t *testing.T) {
 		t.Fatalf("newEvolutionBridge: %v", err)
 	}
 
-	err = bridge.OnEvent(context.Background(), Event{
-		Kind: EventKindTurnEnd,
-		Meta: EventMeta{
+	err = bridge.OnEvent(context.Background(), agentevents.Event{
+		Kind: agentevents.EventKindTurnEnd,
+		Meta: agentevents.EventMeta{
 			AgentID:    "main",
 			TurnID:     "turn-1",
 			SessionKey: "session-1",
 		},
-		Payload: TurnEndPayload{
-			Status:              TurnEndStatusCompleted,
+		Payload: agentevents.TurnEndPayload{
+			Status:              agentevents.TurnEndStatusCompleted,
 			Workspace:           workspace,
 			ActiveSkills:        []string{"weather"},
 			AttemptedSkills:     []string{"geocode", "weather"},
 			FinalSuccessfulPath: []string{"geocode", "weather"},
-			SkillContextSnapshots: []SkillContextSnapshot{
-				{Sequence: 1, Trigger: skillContextTriggerInitialBuild, SkillNames: []string{"weather"}},
+			SkillContextSnapshots: []agentevents.SkillContextSnapshot{
+				{Sequence: 1, Trigger: agentevents.SkillContextTriggerInitialBuild, SkillNames: []string{"weather"}},
 				{
 					Sequence:   2,
-					Trigger:    skillContextTriggerContextRetryRebuild,
+					Trigger:    agentevents.SkillContextTriggerContextRetryRebuild,
 					SkillNames: []string{"geocode", "weather"},
 				},
 			},
@@ -945,15 +948,15 @@ func TestEvolutionBridge_CloseRejectsLateTurnEndEvents(t *testing.T) {
 		t.Fatalf("Close() error = %v", closeErr)
 	}
 
-	err = bridge.OnEvent(context.Background(), Event{
-		Kind: EventKindTurnEnd,
-		Meta: EventMeta{
+	err = bridge.OnEvent(context.Background(), agentevents.Event{
+		Kind: agentevents.EventKindTurnEnd,
+		Meta: agentevents.EventMeta{
 			TurnID:     "turn-after-close",
 			SessionKey: "session-after-close",
 			AgentID:    "agent-after-close",
 		},
-		Payload: TurnEndPayload{
-			Status:    TurnEndStatusCompleted,
+		Payload: agentevents.TurnEndPayload{
+			Status:    agentevents.TurnEndStatusCompleted,
 			Workspace: workspace,
 		},
 	})
@@ -1275,7 +1278,12 @@ func assertNotExists(t *testing.T, path string) {
 	}
 }
 
-func waitForEvent(t *testing.T, ch <-chan Event, timeout time.Duration, match func(Event) bool) Event {
+func waitForEvent(
+	t *testing.T,
+	ch <-chan agentevents.Event,
+	timeout time.Duration,
+	match func(agentevents.Event) bool,
+) agentevents.Event {
 	t.Helper()
 
 	timer := time.NewTimer(timeout)

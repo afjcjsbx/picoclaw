@@ -1,4 +1,4 @@
-package agent
+package agentevents
 
 import (
 	"time"
@@ -16,7 +16,7 @@ type HookMeta struct {
 	Iteration    int
 	TracePath    string
 	Source       string
-	turnContext  *TurnContext
+	TurnContext  *TurnContext `json:"-"`
 }
 
 // EventKind is the legacy in-agent event kind alias kept for tests and

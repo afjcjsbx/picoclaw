@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/agent/agentevents"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
@@ -54,12 +55,12 @@ func TestSubscribeEventsFiltersRuntimeBusToLegacyAgentEvents(t *testing.T) {
 			SenderID:   "sender-1",
 			MessageID:  "message-1",
 		},
-		Payload: TurnStartPayload{UserMessage: "hello"},
+		Payload: agentevents.TurnStartPayload{UserMessage: "hello"},
 	})
 
 	evt := waitForEvent(t, sub.C, 2*time.Second, nil)
-	if evt.Kind != EventKindTurnStart {
-		t.Fatalf("event kind = %q, want %q", evt.Kind, EventKindTurnStart)
+	if evt.Kind != agentevents.EventKindTurnStart {
+		t.Fatalf("event kind = %q, want %q", evt.Kind, agentevents.EventKindTurnStart)
 	}
 	if evt.Context == nil || evt.Context.Inbound == nil {
 		t.Fatalf("expected legacy event inbound context, got %#v", evt.Context)

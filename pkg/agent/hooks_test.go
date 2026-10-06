@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/agent/agentctx"
+	"github.com/sipeed/picoclaw/pkg/agent/agentevents"
+	"github.com/sipeed/picoclaw/pkg/agent/agenthooks"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
@@ -55,27 +57,27 @@ func newHookTestLoop(
 }
 
 func TestHookManager_SortsInProcessBeforeProcess(t *testing.T) {
-	hm := NewHookManager(nil)
+	hm := agenthooks.NewHookManager(nil)
 	defer hm.Close()
 
-	if err := hm.Mount(HookRegistration{
+	if err := hm.Mount(agenthooks.HookRegistration{
 		Name:     "process",
 		Priority: -10,
-		Source:   HookSourceProcess,
+		Source:   agenthooks.HookSourceProcess,
 		Hook:     struct{}{},
 	}); err != nil {
 		t.Fatalf("mount process hook: %v", err)
 	}
-	if err := hm.Mount(HookRegistration{
+	if err := hm.Mount(agenthooks.HookRegistration{
 		Name:     "in-process",
 		Priority: 100,
-		Source:   HookSourceInProcess,
+		Source:   agenthooks.HookSourceInProcess,
 		Hook:     struct{}{},
 	}); err != nil {
 		t.Fatalf("mount in-process hook: %v", err)
 	}
 
-	ordered := hm.snapshotHooks()
+	ordered := hm.SnapshotHooks()
 	if len(ordered) != 2 {
 		t.Fatalf("expected 2 hooks, got %d", len(ordered))
 	}
@@ -131,25 +133,25 @@ func (h *llmObserverHook) OnRuntimeEvent(ctx context.Context, evt runtimeevents.
 
 func (h *llmObserverHook) BeforeLLM(
 	ctx context.Context,
-	req *LLMHookRequest,
-) (*LLMHookRequest, HookDecision, error) {
+	req *agenthooks.LLMHookRequest,
+) (*agenthooks.LLMHookRequest, agenthooks.HookDecision, error) {
 	if req.Context != nil {
-		h.lastInbound = cloneInboundContext(req.Context.Inbound)
-		h.lastRoute = cloneResolvedRoute(req.Context.Route)
+		h.lastInbound = agentevents.CloneInboundContext(req.Context.Inbound)
+		h.lastRoute = agentevents.CloneResolvedRoute(req.Context.Route)
 		h.lastScope = session.CloneScope(req.Context.Scope)
 	}
 	next := req.Clone()
 	next.Model = "hook-model"
-	return next, HookDecision{Action: HookActionModify}, nil
+	return next, agenthooks.HookDecision{Action: agenthooks.HookActionModify}, nil
 }
 
 func (h *llmObserverHook) AfterLLM(
 	ctx context.Context,
-	resp *LLMHookResponse,
-) (*LLMHookResponse, HookDecision, error) {
+	resp *agenthooks.LLMHookResponse,
+) (*agenthooks.LLMHookResponse, agenthooks.HookDecision, error) {
 	next := resp.Clone()
 	next.Response.Content = "hooked content"
-	return next, HookDecision{Action: HookActionModify}, nil
+	return next, agenthooks.HookDecision{Action: agenthooks.HookActionModify}, nil
 }
 
 type dualRuntimeObserverHook struct {
@@ -170,37 +172,37 @@ type llmSystemRewriteHook struct{}
 
 func (h *llmSystemRewriteHook) BeforeLLM(
 	ctx context.Context,
-	req *LLMHookRequest,
-) (*LLMHookRequest, HookDecision, error) {
+	req *agenthooks.LLMHookRequest,
+) (*agenthooks.LLMHookRequest, agenthooks.HookDecision, error) {
 	next := req.Clone()
 	next.Model = "changed-model"
 	next.Messages[0].Content = "rewritten system"
-	return next, HookDecision{Action: HookActionModify}, nil
+	return next, agenthooks.HookDecision{Action: agenthooks.HookActionModify}, nil
 }
 
 func (h *llmSystemRewriteHook) AfterLLM(
 	ctx context.Context,
-	resp *LLMHookResponse,
-) (*LLMHookResponse, HookDecision, error) {
-	return resp.Clone(), HookDecision{Action: HookActionContinue}, nil
+	resp *agenthooks.LLMHookResponse,
+) (*agenthooks.LLMHookResponse, agenthooks.HookDecision, error) {
+	return resp.Clone(), agenthooks.HookDecision{Action: agenthooks.HookActionContinue}, nil
 }
 
 type llmUserAppendHook struct{}
 
 func (h *llmUserAppendHook) BeforeLLM(
 	ctx context.Context,
-	req *LLMHookRequest,
-) (*LLMHookRequest, HookDecision, error) {
+	req *agenthooks.LLMHookRequest,
+) (*agenthooks.LLMHookRequest, agenthooks.HookDecision, error) {
 	next := req.Clone()
 	next.Messages = append(next.Messages, providers.Message{Role: "user", Content: "extra user context"})
-	return next, HookDecision{Action: HookActionModify}, nil
+	return next, agenthooks.HookDecision{Action: agenthooks.HookActionModify}, nil
 }
 
 func (h *llmUserAppendHook) AfterLLM(
 	ctx context.Context,
-	resp *LLMHookResponse,
-) (*LLMHookResponse, HookDecision, error) {
-	return resp.Clone(), HookDecision{Action: HookActionContinue}, nil
+	resp *agenthooks.LLMHookResponse,
+) (*agenthooks.LLMHookResponse, agenthooks.HookDecision, error) {
+	return resp.Clone(), agenthooks.HookDecision{Action: agenthooks.HookActionContinue}, nil
 }
 
 type llmJSONRoundTripUserAppendHook struct{}
@@ -213,8 +215,8 @@ type jsonRoundTripLLMHookRequest struct {
 
 func (h *llmJSONRoundTripUserAppendHook) BeforeLLM(
 	ctx context.Context,
-	req *LLMHookRequest,
-) (*LLMHookRequest, HookDecision, error) {
+	req *agenthooks.LLMHookRequest,
+) (*agenthooks.LLMHookRequest, agenthooks.HookDecision, error) {
 	payload := jsonRoundTripLLMHookRequest{
 		Model:    req.Model,
 		Messages: req.Messages,
@@ -222,33 +224,33 @@ func (h *llmJSONRoundTripUserAppendHook) BeforeLLM(
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
-		return nil, HookDecision{}, err
+		return nil, agenthooks.HookDecision{}, err
 	}
 	var decoded jsonRoundTripLLMHookRequest
 	if err := json.Unmarshal(data, &decoded); err != nil {
-		return nil, HookDecision{}, err
+		return nil, agenthooks.HookDecision{}, err
 	}
 	next := req.Clone()
 	next.Model = decoded.Model
 	next.Messages = decoded.Messages
 	next.Tools = decoded.Tools
 	next.Messages = append(next.Messages, providers.Message{Role: "user", Content: "json extra user context"})
-	return next, HookDecision{Action: HookActionModify}, nil
+	return next, agenthooks.HookDecision{Action: agenthooks.HookActionModify}, nil
 }
 
 func (h *llmJSONRoundTripUserAppendHook) AfterLLM(
 	ctx context.Context,
-	resp *LLMHookResponse,
-) (*LLMHookResponse, HookDecision, error) {
-	return resp.Clone(), HookDecision{Action: HookActionContinue}, nil
+	resp *agenthooks.LLMHookResponse,
+) (*agenthooks.LLMHookResponse, agenthooks.HookDecision, error) {
+	return resp.Clone(), agenthooks.HookDecision{Action: agenthooks.HookActionContinue}, nil
 }
 
 type llmToolRewriteHook struct{}
 
 func (h *llmToolRewriteHook) BeforeLLM(
 	ctx context.Context,
-	req *LLMHookRequest,
-) (*LLMHookRequest, HookDecision, error) {
+	req *agenthooks.LLMHookRequest,
+) (*agenthooks.LLMHookRequest, agenthooks.HookDecision, error) {
 	next := req.Clone()
 	next.Model = "changed-model"
 	next.Tools[0].Function.Description = "rewritten tool"
@@ -263,23 +265,23 @@ func (h *llmToolRewriteHook) BeforeLLM(
 		PromptSlot:   string(agentctx.PromptSlotTooling),
 		PromptSource: "hook:test",
 	})
-	return next, HookDecision{Action: HookActionModify}, nil
+	return next, agenthooks.HookDecision{Action: agenthooks.HookActionModify}, nil
 }
 
 func (h *llmToolRewriteHook) AfterLLM(
 	ctx context.Context,
-	resp *LLMHookResponse,
-) (*LLMHookResponse, HookDecision, error) {
-	return resp.Clone(), HookDecision{Action: HookActionContinue}, nil
+	resp *agenthooks.LLMHookResponse,
+) (*agenthooks.LLMHookResponse, agenthooks.HookDecision, error) {
+	return resp.Clone(), agenthooks.HookDecision{Action: agenthooks.HookActionContinue}, nil
 }
 
 func TestHookManager_BeforeLLMControlsSystemPromptMutation(t *testing.T) {
-	hm := NewHookManager(nil)
-	if err := hm.Mount(NamedHook("rewrite-system", &llmSystemRewriteHook{})); err != nil {
+	hm := agenthooks.NewHookManager(nil)
+	if err := hm.Mount(agenthooks.NamedHook("rewrite-system", &llmSystemRewriteHook{})); err != nil {
 		t.Fatalf("Mount() error = %v", err)
 	}
 
-	req := &LLMHookRequest{
+	req := &agenthooks.LLMHookRequest{
 		Model: "original-model",
 		Messages: []providers.Message{
 			{
@@ -294,7 +296,7 @@ func TestHookManager_BeforeLLMControlsSystemPromptMutation(t *testing.T) {
 	}
 
 	got, decision := hm.BeforeLLM(context.Background(), req)
-	if decision.normalizedAction() != HookActionContinue {
+	if decision.NormalizedAction() != agenthooks.HookActionContinue {
 		t.Fatalf("decision = %v, want continue", decision)
 	}
 	if got.Model != "changed-model" {
@@ -309,12 +311,12 @@ func TestHookManager_BeforeLLMControlsSystemPromptMutation(t *testing.T) {
 }
 
 func TestHookManager_BeforeLLMAllowsNonSystemMessageMutation(t *testing.T) {
-	hm := NewHookManager(nil)
-	if err := hm.Mount(NamedHook("append-user", &llmUserAppendHook{})); err != nil {
+	hm := agenthooks.NewHookManager(nil)
+	if err := hm.Mount(agenthooks.NamedHook("append-user", &llmUserAppendHook{})); err != nil {
 		t.Fatalf("Mount() error = %v", err)
 	}
 
-	req := &LLMHookRequest{
+	req := &agenthooks.LLMHookRequest{
 		Model: "model",
 		Messages: []providers.Message{
 			{Role: "system", Content: "system"},
@@ -332,12 +334,12 @@ func TestHookManager_BeforeLLMAllowsNonSystemMessageMutation(t *testing.T) {
 }
 
 func TestHookManager_BeforeLLMAllowsJSONRoundTripNonSystemMessageMutation(t *testing.T) {
-	hm := NewHookManager(nil)
-	if err := hm.Mount(NamedHook("json-append-user", &llmJSONRoundTripUserAppendHook{})); err != nil {
+	hm := agenthooks.NewHookManager(nil)
+	if err := hm.Mount(agenthooks.NamedHook("json-append-user", &llmJSONRoundTripUserAppendHook{})); err != nil {
 		t.Fatalf("Mount() error = %v", err)
 	}
 
-	req := &LLMHookRequest{
+	req := &agenthooks.LLMHookRequest{
 		Model: "model",
 		Messages: []providers.Message{
 			{
@@ -384,12 +386,12 @@ func TestHookManager_BeforeLLMAllowsJSONRoundTripNonSystemMessageMutation(t *tes
 }
 
 func TestHookManager_BeforeLLMControlsToolDefinitionMutation(t *testing.T) {
-	hm := NewHookManager(nil)
-	if err := hm.Mount(NamedHook("rewrite-tool", &llmToolRewriteHook{})); err != nil {
+	hm := agenthooks.NewHookManager(nil)
+	if err := hm.Mount(agenthooks.NamedHook("rewrite-tool", &llmToolRewriteHook{})); err != nil {
 		t.Fatalf("Mount() error = %v", err)
 	}
 
-	req := &LLMHookRequest{
+	req := &agenthooks.LLMHookRequest{
 		Model: "original-model",
 		Messages: []providers.Message{
 			{Role: "system", Content: "system"},
@@ -411,7 +413,7 @@ func TestHookManager_BeforeLLMControlsToolDefinitionMutation(t *testing.T) {
 	}
 
 	got, decision := hm.BeforeLLM(context.Background(), req)
-	if decision.normalizedAction() != HookActionContinue {
+	if decision.NormalizedAction() != agenthooks.HookActionContinue {
 		t.Fatalf("decision = %v, want continue", decision)
 	}
 	if got.Model != "changed-model" {
@@ -434,7 +436,7 @@ func TestAgentLoop_Hooks_ObserverAndLLMInterceptor(t *testing.T) {
 	defer cleanup()
 
 	hook := &llmObserverHook{eventCh: make(chan runtimeevents.Event, 1)}
-	if err := al.MountHook(NamedHook("llm-observer", hook)); err != nil {
+	if err := al.MountHook(agenthooks.NamedHook("llm-observer", hook)); err != nil {
 		t.Fatalf("MountHook failed: %v", err)
 	}
 
@@ -520,7 +522,7 @@ func TestAgentLoop_Hooks_RuntimeObserverReceivesEvents(t *testing.T) {
 	hook := &dualRuntimeObserverHook{
 		runtimeCh: make(chan runtimeevents.Event, 1),
 	}
-	if err := al.MountHook(NamedHook("runtime-observer", hook)); err != nil {
+	if err := al.MountHook(agenthooks.NamedHook("runtime-observer", hook)); err != nil {
 		t.Fatalf("MountHook failed: %v", err)
 	}
 
@@ -571,7 +573,7 @@ func TestAgentLoop_BtwCommand_UsesLLMHooks(t *testing.T) {
 	useTestSideQuestionProvider(al, provider)
 
 	hook := &llmObserverHook{eventCh: make(chan runtimeevents.Event, 1)}
-	if err := al.MountHook(NamedHook("llm-observer", hook)); err != nil {
+	if err := al.MountHook(agenthooks.NamedHook("llm-observer", hook)); err != nil {
 		t.Fatalf("MountHook failed: %v", err)
 	}
 
@@ -717,38 +719,38 @@ type toolRewriteHook struct{}
 
 func (h *toolRewriteHook) BeforeTool(
 	ctx context.Context,
-	call *ToolCallHookRequest,
-) (*ToolCallHookRequest, HookDecision, error) {
+	call *agenthooks.ToolCallHookRequest,
+) (*agenthooks.ToolCallHookRequest, agenthooks.HookDecision, error) {
 	next := call.Clone()
 	next.Arguments["text"] = "modified"
-	return next, HookDecision{Action: HookActionModify}, nil
+	return next, agenthooks.HookDecision{Action: agenthooks.HookActionModify}, nil
 }
 
 func (h *toolRewriteHook) AfterTool(
 	ctx context.Context,
-	result *ToolResultHookResponse,
-) (*ToolResultHookResponse, HookDecision, error) {
+	result *agenthooks.ToolResultHookResponse,
+) (*agenthooks.ToolResultHookResponse, agenthooks.HookDecision, error) {
 	next := result.Clone()
 	next.Result.ForLLM = "after:" + next.Result.ForLLM
-	return next, HookDecision{Action: HookActionModify}, nil
+	return next, agenthooks.HookDecision{Action: agenthooks.HookActionModify}, nil
 }
 
 type toolRenameHook struct{}
 
 func (h *toolRenameHook) BeforeTool(
 	ctx context.Context,
-	call *ToolCallHookRequest,
-) (*ToolCallHookRequest, HookDecision, error) {
+	call *agenthooks.ToolCallHookRequest,
+) (*agenthooks.ToolCallHookRequest, agenthooks.HookDecision, error) {
 	next := call.Clone()
 	next.Tool = "echo_text_rewritten"
-	return next, HookDecision{Action: HookActionModify}, nil
+	return next, agenthooks.HookDecision{Action: agenthooks.HookActionModify}, nil
 }
 
 func (h *toolRenameHook) AfterTool(
 	ctx context.Context,
-	result *ToolResultHookResponse,
-) (*ToolResultHookResponse, HookDecision, error) {
-	return result.Clone(), HookDecision{Action: HookActionContinue}, nil
+	result *agenthooks.ToolResultHookResponse,
+) (*agenthooks.ToolResultHookResponse, agenthooks.HookDecision, error) {
+	return result.Clone(), agenthooks.HookDecision{Action: agenthooks.HookActionContinue}, nil
 }
 
 func TestAgentLoop_Hooks_ToolInterceptorCanRewrite(t *testing.T) {
@@ -757,7 +759,7 @@ func TestAgentLoop_Hooks_ToolInterceptorCanRewrite(t *testing.T) {
 	defer cleanup()
 
 	al.RegisterTool(&echoTextTool{})
-	if err := al.MountHook(NamedHook("tool-rewrite", &toolRewriteHook{})); err != nil {
+	if err := al.MountHook(agenthooks.NamedHook("tool-rewrite", &toolRewriteHook{})); err != nil {
 		t.Fatalf("MountHook failed: %v", err)
 	}
 
@@ -812,7 +814,7 @@ func TestAgentLoop_Hooks_ToolFeedbackUsesRewrittenToolName(t *testing.T) {
 	al.cfg.Agents.Defaults.ToolFeedback.Enabled = true
 	al.RegisterTool(&echoTextTool{})
 	al.RegisterTool(&echoTextRewrittenTool{})
-	if err := al.MountHook(NamedHook("tool-rename", &toolRenameHook{})); err != nil {
+	if err := al.MountHook(agenthooks.NamedHook("tool-rename", &toolRenameHook{})); err != nil {
 		t.Fatalf("MountHook failed: %v", err)
 	}
 
@@ -849,8 +851,11 @@ func TestAgentLoop_Hooks_ToolFeedbackUsesRewrittenToolName(t *testing.T) {
 
 type denyApprovalHook struct{}
 
-func (h *denyApprovalHook) ApproveTool(ctx context.Context, req *ToolApprovalRequest) (ApprovalDecision, error) {
-	return ApprovalDecision{
+func (h *denyApprovalHook) ApproveTool(
+	ctx context.Context,
+	req *agenthooks.ToolApprovalRequest,
+) (agenthooks.ApprovalDecision, error) {
+	return agenthooks.ApprovalDecision{
 		Approved: false,
 		Reason:   "blocked",
 	}, nil
@@ -862,7 +867,7 @@ func TestAgentLoop_Hooks_ToolApproverCanDeny(t *testing.T) {
 	defer cleanup()
 
 	al.RegisterTool(&echoTextTool{})
-	if err := al.MountHook(NamedHook("deny-approval", &denyApprovalHook{})); err != nil {
+	if err := al.MountHook(agenthooks.NamedHook("deny-approval", &denyApprovalHook{})); err != nil {
 		t.Fatalf("MountHook failed: %v", err)
 	}
 
@@ -896,24 +901,24 @@ func TestAgentLoop_Hooks_ToolApproverCanDeny(t *testing.T) {
 	if !ok {
 		t.Fatal("expected tool skipped event")
 	}
-	payload, ok := skippedEvt.Payload.(ToolExecSkippedPayload)
+	payload, ok := skippedEvt.Payload.(agentevents.ToolExecSkippedPayload)
 	if !ok {
-		t.Fatalf("expected ToolExecSkippedPayload, got %T", skippedEvt.Payload)
+		t.Fatalf("expected agentevents.ToolExecSkippedPayload, got %T", skippedEvt.Payload)
 	}
 	if payload.Reason != expected {
 		t.Fatalf("expected skipped reason %q, got %q", expected, payload.Reason)
 	}
 }
 
-// respondHook is a test hook for testing HookActionRespond functionality
+// respondHook is a test hook for testing agenthooks.HookActionRespond functionality
 type respondHook struct {
 	respondTools map[string]bool // tool names to respond to
 }
 
 func (h *respondHook) BeforeTool(
 	ctx context.Context,
-	call *ToolCallHookRequest,
-) (*ToolCallHookRequest, HookDecision, error) {
+	call *agenthooks.ToolCallHookRequest,
+) (*agenthooks.ToolCallHookRequest, agenthooks.HookDecision, error) {
 	if h.respondTools[call.Tool] {
 		next := call.Clone()
 		next.HookResult = &tools.ToolResult{
@@ -922,17 +927,17 @@ func (h *respondHook) BeforeTool(
 			Silent:  false,
 			IsError: false,
 		}
-		return next, HookDecision{Action: HookActionRespond}, nil
+		return next, agenthooks.HookDecision{Action: agenthooks.HookActionRespond}, nil
 	}
-	return call, HookDecision{Action: HookActionContinue}, nil
+	return call, agenthooks.HookDecision{Action: agenthooks.HookActionContinue}, nil
 }
 
 func (h *respondHook) AfterTool(
 	ctx context.Context,
-	result *ToolResultHookResponse,
-) (*ToolResultHookResponse, HookDecision, error) {
+	result *agenthooks.ToolResultHookResponse,
+) (*agenthooks.ToolResultHookResponse, agenthooks.HookDecision, error) {
 	// Should not be called since respond skips tool execution
-	return result, HookDecision{Action: HookActionContinue}, nil
+	return result, agenthooks.HookDecision{Action: agenthooks.HookActionContinue}, nil
 }
 
 func TestAgentLoop_Hooks_ToolRespondAction(t *testing.T) {
@@ -941,7 +946,7 @@ func TestAgentLoop_Hooks_ToolRespondAction(t *testing.T) {
 	defer cleanup()
 
 	al.RegisterTool(&echoTextTool{})
-	if err := al.MountHook(NamedHook("respond-hook", &respondHook{
+	if err := al.MountHook(agenthooks.NamedHook("respond-hook", &respondHook{
 		respondTools: map[string]bool{"echo_text": true},
 	})); err != nil {
 		t.Fatalf("MountHook failed: %v", err)
@@ -980,9 +985,9 @@ func TestAgentLoop_Hooks_ToolRespondAction(t *testing.T) {
 	if !ok {
 		t.Fatal("expected tool exec end event")
 	}
-	payload, ok := endEvt.Payload.(ToolExecEndPayload)
+	payload, ok := endEvt.Payload.(agentevents.ToolExecEndPayload)
 	if !ok {
-		t.Fatalf("expected ToolExecEndPayload, got %T", endEvt.Payload)
+		t.Fatalf("expected agentevents.ToolExecEndPayload, got %T", endEvt.Payload)
 	}
 	if payload.Tool != "echo_text" {
 		t.Fatalf("expected tool echo_text, got %q", payload.Tool)
@@ -992,26 +997,26 @@ func TestAgentLoop_Hooks_ToolRespondAction(t *testing.T) {
 	}
 }
 
-// denyToolHook tests HookActionDenyTool functionality
+// denyToolHook tests agenthooks.HookActionDenyTool functionality
 type denyToolHook struct {
 	denyTools map[string]bool
 }
 
 func (h *denyToolHook) BeforeTool(
 	ctx context.Context,
-	call *ToolCallHookRequest,
-) (*ToolCallHookRequest, HookDecision, error) {
+	call *agenthooks.ToolCallHookRequest,
+) (*agenthooks.ToolCallHookRequest, agenthooks.HookDecision, error) {
 	if h.denyTools[call.Tool] {
-		return call, HookDecision{Action: HookActionDenyTool, Reason: "tool denied by hook"}, nil
+		return call, agenthooks.HookDecision{Action: agenthooks.HookActionDenyTool, Reason: "tool denied by hook"}, nil
 	}
-	return call, HookDecision{Action: HookActionContinue}, nil
+	return call, agenthooks.HookDecision{Action: agenthooks.HookActionContinue}, nil
 }
 
 func (h *denyToolHook) AfterTool(
 	ctx context.Context,
-	result *ToolResultHookResponse,
-) (*ToolResultHookResponse, HookDecision, error) {
-	return result, HookDecision{Action: HookActionContinue}, nil
+	result *agenthooks.ToolResultHookResponse,
+) (*agenthooks.ToolResultHookResponse, agenthooks.HookDecision, error) {
+	return result, agenthooks.HookDecision{Action: agenthooks.HookActionContinue}, nil
 }
 
 func TestAgentLoop_Hooks_ToolDenyAction(t *testing.T) {
@@ -1020,7 +1025,7 @@ func TestAgentLoop_Hooks_ToolDenyAction(t *testing.T) {
 	defer cleanup()
 
 	al.RegisterTool(&echoTextTool{})
-	if err := al.MountHook(NamedHook("deny-hook", &denyToolHook{
+	if err := al.MountHook(agenthooks.NamedHook("deny-hook", &denyToolHook{
 		denyTools: map[string]bool{"echo_text": true},
 	})); err != nil {
 		t.Fatalf("MountHook failed: %v", err)
@@ -1046,24 +1051,24 @@ func TestAgentLoop_Hooks_ToolDenyAction(t *testing.T) {
 }
 
 func TestHookManager_BeforeTool_RespondAction(t *testing.T) {
-	hm := NewHookManager(nil)
+	hm := agenthooks.NewHookManager(nil)
 	defer hm.Close()
 
 	hook := &respondHook{
 		respondTools: map[string]bool{"test_tool": true},
 	}
-	if err := hm.Mount(NamedHook("respond-test", hook)); err != nil {
+	if err := hm.Mount(agenthooks.NamedHook("respond-test", hook)); err != nil {
 		t.Fatalf("mount hook: %v", err)
 	}
 
-	req := &ToolCallHookRequest{
+	req := &agenthooks.ToolCallHookRequest{
 		Tool:      "test_tool",
 		Arguments: map[string]any{"arg": "value"},
 	}
 	result, decision := hm.BeforeTool(context.Background(), req)
 
-	if decision.Action != HookActionRespond {
-		t.Fatalf("expected action %q, got %q", HookActionRespond, decision.Action)
+	if decision.Action != agenthooks.HookActionRespond {
+		t.Fatalf("expected action %q, got %q", agenthooks.HookActionRespond, decision.Action)
 	}
 
 	if result.HookResult == nil {
@@ -1083,8 +1088,8 @@ type respondWithMediaHook struct {
 
 func (h *respondWithMediaHook) BeforeTool(
 	ctx context.Context,
-	call *ToolCallHookRequest,
-) (*ToolCallHookRequest, HookDecision, error) {
+	call *agenthooks.ToolCallHookRequest,
+) (*agenthooks.ToolCallHookRequest, agenthooks.HookDecision, error) {
 	if h.respondTools[call.Tool] {
 		next := call.Clone()
 		next.HookResult = &tools.ToolResult{
@@ -1095,16 +1100,16 @@ func (h *respondWithMediaHook) BeforeTool(
 			Silent:          false,
 			IsError:         false,
 		}
-		return next, HookDecision{Action: HookActionRespond}, nil
+		return next, agenthooks.HookDecision{Action: agenthooks.HookActionRespond}, nil
 	}
-	return call, HookDecision{Action: HookActionContinue}, nil
+	return call, agenthooks.HookDecision{Action: agenthooks.HookActionContinue}, nil
 }
 
 func (h *respondWithMediaHook) AfterTool(
 	ctx context.Context,
-	result *ToolResultHookResponse,
-) (*ToolResultHookResponse, HookDecision, error) {
-	return result, HookDecision{Action: HookActionContinue}, nil
+	result *agenthooks.ToolResultHookResponse,
+) (*agenthooks.ToolResultHookResponse, agenthooks.HookDecision, error) {
+	return result, agenthooks.HookDecision{Action: agenthooks.HookActionContinue}, nil
 }
 
 type errorMediaChannel struct {
@@ -1132,7 +1137,7 @@ func TestAgentLoop_HookRespond_MediaError(t *testing.T) {
 		responseHandled: true,
 		forLLM:          "media sent successfully",
 	}
-	if err := al.MountHook(NamedHook("media-hook", hook)); err != nil {
+	if err := al.MountHook(agenthooks.NamedHook("media-hook", hook)); err != nil {
 		t.Fatalf("MountHook failed: %v", err)
 	}
 
@@ -1167,9 +1172,9 @@ func TestAgentLoop_HookRespond_MediaError(t *testing.T) {
 	if !ok {
 		t.Fatal("expected ToolExecEnd event")
 	}
-	payload, ok := endEvt.Payload.(ToolExecEndPayload)
+	payload, ok := endEvt.Payload.(agentevents.ToolExecEndPayload)
 	if !ok {
-		t.Fatalf("expected ToolExecEndPayload, got %T", endEvt.Payload)
+		t.Fatalf("expected agentevents.ToolExecEndPayload, got %T", endEvt.Payload)
 	}
 
 	if !payload.IsError {
@@ -1197,7 +1202,7 @@ func TestAgentLoop_HookRespond_BusFallback(t *testing.T) {
 		responseHandled: true,
 		forLLM:          "media queued",
 	}
-	if err := al.MountHook(NamedHook("media-hook", hook)); err != nil {
+	if err := al.MountHook(agenthooks.NamedHook("media-hook", hook)); err != nil {
 		t.Fatalf("MountHook failed: %v", err)
 	}
 
@@ -1227,9 +1232,9 @@ func TestAgentLoop_HookRespond_BusFallback(t *testing.T) {
 	if !ok {
 		t.Fatal("expected ToolExecEnd event")
 	}
-	payload, ok := endEvt.Payload.(ToolExecEndPayload)
+	payload, ok := endEvt.Payload.(agentevents.ToolExecEndPayload)
 	if !ok {
-		t.Fatalf("expected ToolExecEndPayload, got %T", endEvt.Payload)
+		t.Fatalf("expected agentevents.ToolExecEndPayload, got %T", endEvt.Payload)
 	}
 
 	if payload.IsError {
@@ -1257,7 +1262,7 @@ func TestAgentLoop_HookRespond_ResponseHandledMediaPreservesOutboundContext(t *t
 		responseHandled: true,
 		forLLM:          "media sent successfully",
 	}
-	if err := al.MountHook(NamedHook("media-hook", hook)); err != nil {
+	if err := al.MountHook(agenthooks.NamedHook("media-hook", hook)); err != nil {
 		t.Fatalf("MountHook failed: %v", err)
 	}
 
@@ -1364,7 +1369,7 @@ func TestAgentLoop_HookRespond_InterruptSkipsRemaining(t *testing.T) {
 	hook := &respondHook{
 		respondTools: map[string]bool{"tool_one": true},
 	}
-	if err := al.MountHook(NamedHook("respond-hook", hook)); err != nil {
+	if err := al.MountHook(agenthooks.NamedHook("respond-hook", hook)); err != nil {
 		t.Fatalf("MountHook failed: %v", err)
 	}
 
@@ -1421,9 +1426,9 @@ func TestAgentLoop_HookRespond_InterruptSkipsRemaining(t *testing.T) {
 	}
 
 	for _, evt := range skippedEvts {
-		payload, ok := evt.Payload.(ToolExecSkippedPayload)
+		payload, ok := evt.Payload.(agentevents.ToolExecSkippedPayload)
 		if !ok {
-			t.Fatalf("expected ToolExecSkippedPayload, got %T", evt.Payload)
+			t.Fatalf("expected agentevents.ToolExecSkippedPayload, got %T", evt.Payload)
 		}
 		if payload.Reason != "graceful interrupt requested" {
 			t.Fatalf("expected skip reason 'graceful interrupt requested', got %q", payload.Reason)
@@ -1449,7 +1454,7 @@ func TestAgentLoop_HookRespond_SteeringSkipsRemaining(t *testing.T) {
 	hook := &respondHook{
 		respondTools: map[string]bool{"tool_one": true},
 	}
-	if err := al.MountHook(NamedHook("respond-hook", hook)); err != nil {
+	if err := al.MountHook(agenthooks.NamedHook("respond-hook", hook)); err != nil {
 		t.Fatalf("MountHook failed: %v", err)
 	}
 
@@ -1490,7 +1495,7 @@ func TestAgentLoop_HookRespond_SteeringSkipsRemaining(t *testing.T) {
 			if evt.Kind != runtimeevents.KindAgentToolExecEnd {
 				continue
 			}
-			payload, ok := evt.Payload.(ToolExecEndPayload)
+			payload, ok := evt.Payload.(agentevents.ToolExecEndPayload)
 			if !ok || payload.Tool != "tool_one" {
 				continue
 			}
@@ -1518,9 +1523,9 @@ func TestAgentLoop_HookRespond_SteeringSkipsRemaining(t *testing.T) {
 	}
 
 	for _, evt := range skippedEvts {
-		payload, ok := evt.Payload.(ToolExecSkippedPayload)
+		payload, ok := evt.Payload.(agentevents.ToolExecSkippedPayload)
 		if !ok {
-			t.Fatalf("expected ToolExecSkippedPayload, got %T", evt.Payload)
+			t.Fatalf("expected agentevents.ToolExecSkippedPayload, got %T", evt.Payload)
 		}
 		if payload.Reason != "queued user steering message" {
 			t.Fatalf("expected skip reason 'queued user steering message', got %q", payload.Reason)
@@ -1557,7 +1562,7 @@ func TestCloneStringAnyMap_EmptyMapReturnsNonNil(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := cloneStringAnyMap(tt.input)
+			result := agenthooks.CloneStringAnyMap(tt.input)
 			if result == nil {
 				t.Fatal("cloneStringAnyMap returned nil — MCP tool calls " +
 					"with no arguments would send null instead of {}")
@@ -1570,7 +1575,7 @@ func TestCloneStringAnyMap_EmptyMapReturnsNonNil(t *testing.T) {
 
 	t.Run("clone does not share underlying map", func(t *testing.T) {
 		src := map[string]any{"a": 1}
-		cloned := cloneStringAnyMap(src)
+		cloned := agenthooks.CloneStringAnyMap(src)
 		cloned["b"] = 2
 		if _, ok := src["b"]; ok {
 			t.Fatal("modifying clone should not affect source")

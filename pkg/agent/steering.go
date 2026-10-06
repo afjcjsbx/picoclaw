@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/sipeed/picoclaw/pkg/agent/agentctx"
+	"github.com/sipeed/picoclaw/pkg/agent/agentevents"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/logger"
@@ -220,7 +221,7 @@ func (al *AgentLoop) enqueueSteeringMessage(scope, agentID string, msg providers
 		"scope":       normalizeSteeringScope(scope),
 	})
 
-	meta := HookMeta{
+	meta := agentevents.HookMeta{
 		Source:    "Steer",
 		TracePath: "turn.interrupt.received",
 	}
@@ -246,8 +247,8 @@ func (al *AgentLoop) enqueueSteeringMessage(scope, agentID string, msg providers
 	al.emitEvent(
 		runtimeevents.KindAgentInterruptReceived,
 		meta,
-		InterruptReceivedPayload{
-			Kind:       InterruptKindSteering,
+		agentevents.InterruptReceivedPayload{
+			Kind:       agentevents.InterruptKindSteering,
 			Role:       msg.Role,
 			ContentLen: len(msg.Content),
 			QueueDepth: queueDepth,
@@ -433,8 +434,8 @@ func (al *AgentLoop) InterruptGraceful(hint string) error {
 	al.emitEvent(
 		runtimeevents.KindAgentInterruptReceived,
 		ts.eventMeta("InterruptGraceful", "turn.interrupt.received"),
-		InterruptReceivedPayload{
-			Kind:    InterruptKindGraceful,
+		agentevents.InterruptReceivedPayload{
+			Kind:    agentevents.InterruptKindGraceful,
 			HintLen: len(hint),
 		},
 	)
@@ -461,8 +462,8 @@ func (al *AgentLoop) InterruptHard() error {
 	al.emitEvent(
 		runtimeevents.KindAgentInterruptReceived,
 		ts.eventMeta("InterruptHard", "turn.interrupt.received"),
-		InterruptReceivedPayload{
-			Kind: InterruptKindHard,
+		agentevents.InterruptReceivedPayload{
+			Kind: agentevents.InterruptKindHard,
 		},
 	)
 

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/agent/agenthooks"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/providers"
@@ -232,26 +233,26 @@ func (s *failNthUpdateStreamer) Update(ctx context.Context, content string) erro
 
 type configuredStreamingAfterHook struct {
 	content string
-	action  HookAction
+	action  agenthooks.HookAction
 }
 
 func (h configuredStreamingAfterHook) BeforeLLM(
 	ctx context.Context,
-	req *LLMHookRequest,
-) (*LLMHookRequest, HookDecision, error) {
-	return req, HookDecision{Action: HookActionContinue}, nil
+	req *agenthooks.LLMHookRequest,
+) (*agenthooks.LLMHookRequest, agenthooks.HookDecision, error) {
+	return req, agenthooks.HookDecision{Action: agenthooks.HookActionContinue}, nil
 }
 
 func (h configuredStreamingAfterHook) AfterLLM(
 	ctx context.Context,
-	resp *LLMHookResponse,
-) (*LLMHookResponse, HookDecision, error) {
-	if h.action == HookActionAbortTurn || h.action == HookActionHardAbort {
-		return resp, HookDecision{Action: h.action}, nil
+	resp *agenthooks.LLMHookResponse,
+) (*agenthooks.LLMHookResponse, agenthooks.HookDecision, error) {
+	if h.action == agenthooks.HookActionAbortTurn || h.action == agenthooks.HookActionHardAbort {
+		return resp, agenthooks.HookDecision{Action: h.action}, nil
 	}
 	next := resp.Clone()
 	next.Response.Content = h.content
-	return next, HookDecision{Action: HookActionModify}, nil
+	return next, agenthooks.HookDecision{Action: agenthooks.HookActionModify}, nil
 }
 
 type configuredStreamingBeforeModelHook struct {
@@ -260,18 +261,18 @@ type configuredStreamingBeforeModelHook struct {
 
 func (h configuredStreamingBeforeModelHook) BeforeLLM(
 	ctx context.Context,
-	req *LLMHookRequest,
-) (*LLMHookRequest, HookDecision, error) {
+	req *agenthooks.LLMHookRequest,
+) (*agenthooks.LLMHookRequest, agenthooks.HookDecision, error) {
 	next := req.Clone()
 	next.Model = h.model
-	return next, HookDecision{Action: HookActionModify}, nil
+	return next, agenthooks.HookDecision{Action: agenthooks.HookActionModify}, nil
 }
 
 func (h configuredStreamingBeforeModelHook) AfterLLM(
 	ctx context.Context,
-	resp *LLMHookResponse,
-) (*LLMHookResponse, HookDecision, error) {
-	return resp, HookDecision{Action: HookActionContinue}, nil
+	resp *agenthooks.LLMHookResponse,
+) (*agenthooks.LLMHookResponse, agenthooks.HookDecision, error) {
+	return resp, agenthooks.HookDecision{Action: agenthooks.HookActionContinue}, nil
 }
 
 func TestConfiguredStreamingEligibilityGates(t *testing.T) {
@@ -809,7 +810,7 @@ func TestConfiguredStreamingBeforeLLMModelRewriteReevaluatesModelStreaming(t *te
 				}},
 			}
 			al := NewAgentLoop(cfg, msgBus, provider)
-			if err := al.MountHook(NamedHook("rewrite-model", configuredStreamingBeforeModelHook{
+			if err := al.MountHook(agenthooks.NamedHook("rewrite-model", configuredStreamingBeforeModelHook{
 				model: tt.rewriteModel,
 			})); err != nil {
 				t.Fatalf("MountHook() error = %v", err)
@@ -921,7 +922,7 @@ func TestConfiguredStreamingFinalizesAfterAfterLLMHookMutation(t *testing.T) {
 		}},
 	}
 	al := NewAgentLoop(cfg, msgBus, provider)
-	if err := al.MountHook(NamedHook("rewrite-stream-response", configuredStreamingAfterHook{
+	if err := al.MountHook(agenthooks.NamedHook("rewrite-stream-response", configuredStreamingAfterHook{
 		content: "hooked final response",
 	})); err != nil {
 		t.Fatalf("MountHook() error = %v", err)
@@ -940,10 +941,10 @@ func TestConfiguredStreamingFinalizesAfterAfterLLMHookMutation(t *testing.T) {
 func TestConfiguredStreamingAfterLLMAbortCancelsPublishedStream(t *testing.T) {
 	tests := []struct {
 		name   string
-		action HookAction
+		action agenthooks.HookAction
 	}{
-		{name: "abort turn", action: HookActionAbortTurn},
-		{name: "hard abort", action: HookActionHardAbort},
+		{name: "abort turn", action: agenthooks.HookActionAbortTurn},
+		{name: "hard abort", action: agenthooks.HookActionHardAbort},
 	}
 
 	for _, tt := range tests {
@@ -959,7 +960,7 @@ func TestConfiguredStreamingAfterLLMAbortCancelsPublishedStream(t *testing.T) {
 				}},
 			}
 			al := NewAgentLoop(cfg, msgBus, provider)
-			if err := al.MountHook(NamedHook("abort-stream-response", configuredStreamingAfterHook{
+			if err := al.MountHook(agenthooks.NamedHook("abort-stream-response", configuredStreamingAfterHook{
 				action: tt.action,
 			})); err != nil {
 				t.Fatalf("MountHook() error = %v", err)

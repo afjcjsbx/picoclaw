@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/agent/agenthooks"
 	"github.com/sipeed/picoclaw/pkg/config"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 )
@@ -93,7 +94,7 @@ func lookupBuiltinHook(name string) (BuiltinHookFactory, bool) {
 	return factory, ok
 }
 
-func configureHookManagerFromConfig(hm *HookManager, cfg *config.Config) {
+func configureHookManagerFromConfig(hm *agenthooks.HookManager, cfg *config.Config) {
 	if hm == nil || cfg == nil {
 		return
 	}
@@ -151,10 +152,10 @@ func (al *AgentLoop) loadConfiguredHooks(ctx context.Context) (err error) {
 		if factoryErr != nil {
 			return fmt.Errorf("build builtin hook %q: %w", name, factoryErr)
 		}
-		if err := al.MountHook(HookRegistration{
+		if err := al.MountHook(agenthooks.HookRegistration{
 			Name:     name,
 			Priority: spec.Priority,
-			Source:   HookSourceInProcess,
+			Source:   agenthooks.HookSourceInProcess,
 			Hook:     hook,
 		}); err != nil {
 			return fmt.Errorf("mount builtin hook %q: %w", name, err)
@@ -170,14 +171,14 @@ func (al *AgentLoop) loadConfiguredHooks(ctx context.Context) (err error) {
 			return fmt.Errorf("configure process hook %q: %w", name, buildErr)
 		}
 
-		processHook, buildErr := NewProcessHook(ctx, name, opts)
+		processHook, buildErr := agenthooks.NewProcessHook(ctx, name, opts)
 		if buildErr != nil {
 			return fmt.Errorf("start process hook %q: %w", name, buildErr)
 		}
-		if err := al.MountHook(HookRegistration{
+		if err := al.MountHook(agenthooks.HookRegistration{
 			Name:     name,
 			Priority: spec.Priority,
-			Source:   HookSourceProcess,
+			Source:   agenthooks.HookSourceProcess,
 			Hook:     processHook,
 		}); err != nil {
 			_ = processHook.Close()
@@ -219,19 +220,19 @@ func enabledProcessHookNames(specs map[string]config.ProcessHookConfig) []string
 	return names
 }
 
-func processHookOptionsFromConfig(spec config.ProcessHookConfig) (ProcessHookOptions, error) {
+func processHookOptionsFromConfig(spec config.ProcessHookConfig) (agenthooks.ProcessHookOptions, error) {
 	transport := spec.Transport
 	if transport == "" {
 		transport = "stdio"
 	}
 	if transport != "stdio" {
-		return ProcessHookOptions{}, fmt.Errorf("unsupported transport %q", transport)
+		return agenthooks.ProcessHookOptions{}, fmt.Errorf("unsupported transport %q", transport)
 	}
 	if len(spec.Command) == 0 {
-		return ProcessHookOptions{}, fmt.Errorf("command is required")
+		return agenthooks.ProcessHookOptions{}, fmt.Errorf("command is required")
 	}
 
-	opts := ProcessHookOptions{
+	opts := agenthooks.ProcessHookOptions{
 		Command: append([]string(nil), spec.Command...),
 		Dir:     spec.Dir,
 		Env:     processHookEnvFromMap(spec.Env),
@@ -239,7 +240,7 @@ func processHookOptionsFromConfig(spec config.ProcessHookConfig) (ProcessHookOpt
 
 	observeKinds, observeEnabled, err := processHookObserveKindsFromConfig(spec.Observe)
 	if err != nil {
-		return ProcessHookOptions{}, err
+		return agenthooks.ProcessHookOptions{}, err
 	}
 	opts.Observe = observeEnabled
 	opts.ObserveKinds = observeKinds
@@ -255,12 +256,12 @@ func processHookOptionsFromConfig(spec config.ProcessHookConfig) (ProcessHookOpt
 		case "":
 			continue
 		default:
-			return ProcessHookOptions{}, fmt.Errorf("unsupported intercept %q", intercept)
+			return agenthooks.ProcessHookOptions{}, fmt.Errorf("unsupported intercept %q", intercept)
 		}
 	}
 
 	if !opts.Observe && !opts.InterceptLLM && !opts.InterceptTool && !opts.ApproveTool {
-		return ProcessHookOptions{}, fmt.Errorf("no hook modes enabled")
+		return agenthooks.ProcessHookOptions{}, fmt.Errorf("no hook modes enabled")
 	}
 
 	return opts, nil
@@ -336,4 +337,23 @@ func validHookEventKinds() map[string]string {
 	kinds["subturn_orphan"] = runtimeevents.KindAgentSubTurnOrphan.String()
 	kinds["error"] = runtimeevents.KindAgentError.String()
 	return kinds
+}
+
+func (al *AgentLoop) MountProcessHook(ctx context.Context, name string, opts agenthooks.ProcessHookOptions) error {
+	if al == nil {
+		return fmt.Errorf("agent loop is nil")
+	}
+	processHook, err := agenthooks.NewProcessHook(ctx, name, opts)
+	if err != nil {
+		return err
+	}
+	if err := al.MountHook(agenthooks.HookRegistration{
+		Name:   name,
+		Source: agenthooks.HookSourceProcess,
+		Hook:   processHook,
+	}); err != nil {
+		_ = processHook.Close()
+		return err
+	}
+	return nil
 }

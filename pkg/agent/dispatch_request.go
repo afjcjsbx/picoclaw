@@ -3,6 +3,7 @@ package agent
 import (
 	"strings"
 
+	"github.com/sipeed/picoclaw/pkg/agent/agentevents"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/routing"
 	"github.com/sipeed/picoclaw/pkg/session"
@@ -76,14 +77,14 @@ func normalizeProcessOptions(opts processOptions) processOptions {
 		opts.Dispatch.Media = append([]string(nil), opts.Media...)
 	}
 	if opts.Dispatch.RouteResult == nil {
-		opts.Dispatch.RouteResult = cloneResolvedRoute(opts.RouteResult)
+		opts.Dispatch.RouteResult = agentevents.CloneResolvedRoute(opts.RouteResult)
 	}
 	if opts.Dispatch.SessionScope == nil {
 		opts.Dispatch.SessionScope = session.CloneScope(opts.SessionScope)
 	}
 	if opts.Dispatch.InboundContext == nil {
 		if opts.InboundContext != nil {
-			opts.Dispatch.InboundContext = cloneInboundContext(opts.InboundContext)
+			opts.Dispatch.InboundContext = agentevents.CloneInboundContext(opts.InboundContext)
 		} else if opts.Channel != "" || opts.ChatID != "" || opts.SenderID != "" ||
 			opts.MessageID != "" || opts.ReplyToMessageID != "" {
 			inbound := bus.InboundContext{
@@ -107,8 +108,8 @@ func normalizeProcessOptions(opts processOptions) processOptions {
 	opts.SessionAliases = append([]string(nil), opts.Dispatch.SessionAliases...)
 	opts.UserMessage = opts.Dispatch.UserMessage
 	opts.Media = append([]string(nil), opts.Dispatch.Media...)
-	opts.InboundContext = cloneInboundContext(opts.Dispatch.InboundContext)
-	opts.RouteResult = cloneResolvedRoute(opts.Dispatch.RouteResult)
+	opts.InboundContext = agentevents.CloneInboundContext(opts.Dispatch.InboundContext)
+	opts.RouteResult = agentevents.CloneResolvedRoute(opts.Dispatch.RouteResult)
 	opts.SessionScope = session.CloneScope(opts.Dispatch.SessionScope)
 	if opts.InboundContext != nil {
 		if opts.Channel == "" {

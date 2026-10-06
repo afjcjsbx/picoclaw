@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/sipeed/picoclaw/pkg/agent/agentevents"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/logger"
@@ -17,7 +18,7 @@ const defaultEventSubscriberBuffer = 16
 // AgentLoop.SubscribeEvents.
 type EventSubscription struct {
 	ID uint64
-	C  <-chan Event
+	C  <-chan agentevents.Event
 }
 
 type legacyEventSubscription struct {
@@ -37,7 +38,7 @@ func (al *AgentLoop) SubscribeEvents(buffer int) EventSubscription {
 		buffer = defaultEventSubscriberBuffer
 	}
 
-	out := make(chan Event, buffer)
+	out := make(chan agentevents.Event, buffer)
 	if al == nil || al.runtimeEvents == nil {
 		close(out)
 		return EventSubscription{C: out}
@@ -104,9 +105,9 @@ func (al *AgentLoop) UnsubscribeEvents(id uint64) {
 	}
 }
 
-func legacyEventFromRuntimeEvent(evt runtimeevents.Event) Event {
+func legacyEventFromRuntimeEvent(evt runtimeevents.Event) agentevents.Event {
 	meta := hookMetaFromRuntimeEvent(evt)
-	return Event{
+	return agentevents.Event{
 		Kind:    evt.Kind,
 		Time:    evt.Time,
 		Meta:    meta,
@@ -115,8 +116,8 @@ func legacyEventFromRuntimeEvent(evt runtimeevents.Event) Event {
 	}
 }
 
-func hookMetaFromRuntimeEvent(evt runtimeevents.Event) HookMeta {
-	meta := HookMeta{
+func hookMetaFromRuntimeEvent(evt runtimeevents.Event) agentevents.HookMeta {
+	meta := agentevents.HookMeta{
 		AgentID:      evt.Scope.AgentID,
 		TurnID:       evt.Scope.TurnID,
 		ParentTurnID: evt.Correlation.ParentTurnID,
@@ -134,7 +135,7 @@ func hookMetaFromRuntimeEvent(evt runtimeevents.Event) HookMeta {
 	return meta
 }
 
-func turnContextFromRuntimeScope(scope runtimeevents.Scope) *TurnContext {
+func turnContextFromRuntimeScope(scope runtimeevents.Scope) *agentevents.TurnContext {
 	if scope.Channel == "" &&
 		scope.Account == "" &&
 		scope.ChatID == "" &&
@@ -146,7 +147,7 @@ func turnContextFromRuntimeScope(scope runtimeevents.Scope) *TurnContext {
 		scope.MessageID == "" {
 		return nil
 	}
-	return &TurnContext{
+	return &agentevents.TurnContext{
 		Inbound: &bus.InboundContext{
 			Channel:   scope.Channel,
 			Account:   scope.Account,
@@ -163,24 +164,24 @@ func turnContextFromRuntimeScope(scope runtimeevents.Scope) *TurnContext {
 
 func legacyAgentEventKinds() []runtimeevents.Kind {
 	return []runtimeevents.Kind{
-		EventKindTurnStart,
-		EventKindTurnEnd,
-		EventKindLLMRequest,
-		EventKindLLMDelta,
-		EventKindLLMResponse,
-		EventKindLLMRetry,
-		EventKindContextCompress,
-		EventKindSessionSummarize,
-		EventKindToolExecStart,
-		EventKindToolExecEnd,
-		EventKindToolExecSkipped,
-		EventKindSteeringInjected,
-		EventKindFollowUpQueued,
-		EventKindInterruptReceived,
-		EventKindSubTurnSpawn,
-		EventKindSubTurnEnd,
-		EventKindSubTurnResultDelivered,
-		EventKindSubTurnOrphan,
-		EventKindError,
+		agentevents.EventKindTurnStart,
+		agentevents.EventKindTurnEnd,
+		agentevents.EventKindLLMRequest,
+		agentevents.EventKindLLMDelta,
+		agentevents.EventKindLLMResponse,
+		agentevents.EventKindLLMRetry,
+		agentevents.EventKindContextCompress,
+		agentevents.EventKindSessionSummarize,
+		agentevents.EventKindToolExecStart,
+		agentevents.EventKindToolExecEnd,
+		agentevents.EventKindToolExecSkipped,
+		agentevents.EventKindSteeringInjected,
+		agentevents.EventKindFollowUpQueued,
+		agentevents.EventKindInterruptReceived,
+		agentevents.EventKindSubTurnSpawn,
+		agentevents.EventKindSubTurnEnd,
+		agentevents.EventKindSubTurnResultDelivered,
+		agentevents.EventKindSubTurnOrphan,
+		agentevents.EventKindError,
 	}
 }

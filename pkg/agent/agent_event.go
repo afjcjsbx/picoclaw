@@ -5,34 +5,36 @@ package agent
 import (
 	"fmt"
 
+	"github.com/sipeed/picoclaw/pkg/agent/agentevents"
+	"github.com/sipeed/picoclaw/pkg/agent/agenthooks"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 )
 
-func (al *AgentLoop) newTurnEventScope(agentID, sessionKey string, turnCtx *TurnContext) turnEventScope {
+func (al *AgentLoop) newTurnEventScope(agentID, sessionKey string, turnCtx *agentevents.TurnContext) turnEventScope {
 	seq := al.turnSeq.Add(1)
 	return turnEventScope{
 		agentID:    agentID,
 		sessionKey: sessionKey,
 		turnID:     fmt.Sprintf("%s-turn-%d", agentID, seq),
-		context:    cloneTurnContext(turnCtx),
+		context:    agentevents.CloneTurnContext(turnCtx),
 	}
 }
 
-func (ts turnEventScope) meta(iteration int, source, tracePath string) HookMeta {
-	return HookMeta{
+func (ts turnEventScope) meta(iteration int, source, tracePath string) agentevents.HookMeta {
+	return agentevents.HookMeta{
 		AgentID:     ts.agentID,
 		TurnID:      ts.turnID,
 		SessionKey:  ts.sessionKey,
 		Iteration:   iteration,
 		Source:      source,
 		TracePath:   tracePath,
-		turnContext: cloneTurnContext(ts.context),
+		TurnContext: agentevents.CloneTurnContext(ts.context),
 	}
 }
 
-func (al *AgentLoop) emitEvent(kind runtimeevents.Kind, meta HookMeta, payload any) {
-	clonedMeta := cloneHookMeta(meta)
-	eventCtx := cloneTurnContext(clonedMeta.turnContext)
+func (al *AgentLoop) emitEvent(kind runtimeevents.Kind, meta agentevents.HookMeta, payload any) {
+	clonedMeta := agentevents.CloneHookMeta(meta)
+	eventCtx := agentevents.CloneTurnContext(clonedMeta.TurnContext)
 	evt := runtimeevents.Event{
 		Kind:        kind,
 		Source:      runtimeevents.Source{Component: "agent", Name: clonedMeta.AgentID},
@@ -82,7 +84,7 @@ func (al *AgentLoop) isCurrentEvolutionBridge(bridge *evolutionBridge) bool {
 }
 
 // MountHook registers an in-process hook on the agent loop.
-func (al *AgentLoop) MountHook(reg HookRegistration) error {
+func (al *AgentLoop) MountHook(reg agenthooks.HookRegistration) error {
 	if al == nil || al.hooks == nil {
 		return fmt.Errorf("hook manager is not initialized")
 	}

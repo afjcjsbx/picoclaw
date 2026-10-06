@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/sipeed/picoclaw/pkg/agent/agentevents"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/constants"
 	"github.com/sipeed/picoclaw/pkg/logger"
@@ -191,8 +192,8 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		Dispatch: DispatchRequest{
 			SessionKey:     sessionKey,
 			SessionAliases: buildSessionAliases(sessionKey, append(allocation.SessionAliases, msg.SessionKey)...),
-			InboundContext: cloneInboundContext(&msg.Context),
-			RouteResult:    cloneResolvedRoute(&route),
+			InboundContext: agentevents.CloneInboundContext(&msg.Context),
+			RouteResult:    agentevents.CloneResolvedRoute(&route),
 			SessionScope:   session.CloneScope(&allocation.Scope),
 			UserMessage:    msg.Content,
 			Media:          append([]string(nil), msg.Media...),

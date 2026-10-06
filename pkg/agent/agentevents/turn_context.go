@@ -1,4 +1,4 @@
-package agent
+package agentevents
 
 import (
 	"github.com/sipeed/picoclaw/pkg/bus"
@@ -14,7 +14,7 @@ type TurnContext struct {
 	Scope   *session.SessionScope  `json:"scope,omitempty"`
 }
 
-func newTurnContext(
+func NewTurnContext(
 	inbound *bus.InboundContext,
 	route *routing.ResolvedRoute,
 	scope *session.SessionScope,
@@ -23,24 +23,24 @@ func newTurnContext(
 		return nil
 	}
 	return &TurnContext{
-		Inbound: cloneInboundContext(inbound),
-		Route:   cloneResolvedRoute(route),
+		Inbound: CloneInboundContext(inbound),
+		Route:   CloneResolvedRoute(route),
 		Scope:   session.CloneScope(scope),
 	}
 }
 
-func cloneTurnContext(ctx *TurnContext) *TurnContext {
+func CloneTurnContext(ctx *TurnContext) *TurnContext {
 	if ctx == nil {
 		return nil
 	}
 	cloned := *ctx
-	cloned.Inbound = cloneInboundContext(ctx.Inbound)
-	cloned.Route = cloneResolvedRoute(ctx.Route)
+	cloned.Inbound = CloneInboundContext(ctx.Inbound)
+	cloned.Route = CloneResolvedRoute(ctx.Route)
 	cloned.Scope = session.CloneScope(ctx.Scope)
 	return &cloned
 }
 
-func cloneInboundContext(ctx *bus.InboundContext) *bus.InboundContext {
+func CloneInboundContext(ctx *bus.InboundContext) *bus.InboundContext {
 	if ctx == nil {
 		return nil
 	}
@@ -61,12 +61,12 @@ func cloneStringMap(src map[string]string) map[string]string {
 	return cloned
 }
 
-func cloneHookMeta(meta HookMeta) HookMeta {
-	meta.turnContext = cloneTurnContext(meta.turnContext)
+func CloneHookMeta(meta HookMeta) HookMeta {
+	meta.TurnContext = CloneTurnContext(meta.TurnContext)
 	return meta
 }
 
-func cloneResolvedRoute(route *routing.ResolvedRoute) *routing.ResolvedRoute {
+func CloneResolvedRoute(route *routing.ResolvedRoute) *routing.ResolvedRoute {
 	if route == nil {
 		return nil
 	}

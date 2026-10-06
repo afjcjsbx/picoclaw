@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/agent/agentctx"
+	"github.com/sipeed/picoclaw/pkg/agent/agenthooks"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/providers"
@@ -356,7 +357,9 @@ func TestTurnProfile_BtwHookCannotReenableNativeSearchWhenToolsOff(t *testing.T)
 	al.providerFactory = func(mc *config.ModelConfig) (providers.LLMProvider, string, error) {
 		return provider, "test-model", nil
 	}
-	if err := al.MountHook(NamedHook("enable-native-search", turnProfileEnableNativeSearchHook{})); err != nil {
+	if err := al.MountHook(
+		agenthooks.NamedHook("enable-native-search", turnProfileEnableNativeSearchHook{}),
+	); err != nil {
 		t.Fatalf("MountHook() error = %v", err)
 	}
 
@@ -627,8 +630,8 @@ type turnProfileAddToolHook struct{}
 
 func (h turnProfileAddToolHook) BeforeLLM(
 	ctx context.Context,
-	req *LLMHookRequest,
-) (*LLMHookRequest, HookDecision, error) {
+	req *agenthooks.LLMHookRequest,
+) (*agenthooks.LLMHookRequest, agenthooks.HookDecision, error) {
 	next := req.Clone()
 	next.Tools = append(next.Tools, providers.ToolDefinition{
 		Type: "function",
@@ -638,47 +641,47 @@ func (h turnProfileAddToolHook) BeforeLLM(
 			Parameters:  map[string]any{"type": "object"},
 		},
 	})
-	return next, HookDecision{Action: HookActionModify}, nil
+	return next, agenthooks.HookDecision{Action: agenthooks.HookActionModify}, nil
 }
 
 type turnProfileEnableNativeSearchHook struct{}
 
 func (h turnProfileEnableNativeSearchHook) BeforeLLM(
 	ctx context.Context,
-	req *LLMHookRequest,
-) (*LLMHookRequest, HookDecision, error) {
+	req *agenthooks.LLMHookRequest,
+) (*agenthooks.LLMHookRequest, agenthooks.HookDecision, error) {
 	next := req.Clone()
 	if next.Options == nil {
 		next.Options = map[string]any{}
 	}
 	next.Options["turn_profile_test_hook"] = true
 	next.Options["native_search"] = true
-	return next, HookDecision{Action: HookActionModify}, nil
+	return next, agenthooks.HookDecision{Action: agenthooks.HookActionModify}, nil
 }
 
 func (h turnProfileEnableNativeSearchHook) AfterLLM(
 	ctx context.Context,
-	resp *LLMHookResponse,
-) (*LLMHookResponse, HookDecision, error) {
-	return resp, HookDecision{Action: HookActionContinue}, nil
+	resp *agenthooks.LLMHookResponse,
+) (*agenthooks.LLMHookResponse, agenthooks.HookDecision, error) {
+	return resp, agenthooks.HookDecision{Action: agenthooks.HookActionContinue}, nil
 }
 
 type turnProfileRespondToolHook struct{}
 
 func (h turnProfileRespondToolHook) BeforeTool(
 	ctx context.Context,
-	req *ToolCallHookRequest,
-) (*ToolCallHookRequest, HookDecision, error) {
+	req *agenthooks.ToolCallHookRequest,
+) (*agenthooks.ToolCallHookRequest, agenthooks.HookDecision, error) {
 	next := req.Clone()
 	next.HookResult = &tools.ToolResult{ForLLM: "hook bypassed profile"}
-	return next, HookDecision{Action: HookActionRespond}, nil
+	return next, agenthooks.HookDecision{Action: agenthooks.HookActionRespond}, nil
 }
 
 func (h turnProfileRespondToolHook) AfterTool(
 	ctx context.Context,
-	result *ToolResultHookResponse,
-) (*ToolResultHookResponse, HookDecision, error) {
-	return result, HookDecision{Action: HookActionContinue}, nil
+	result *agenthooks.ToolResultHookResponse,
+) (*agenthooks.ToolResultHookResponse, agenthooks.HookDecision, error) {
+	return result, agenthooks.HookDecision{Action: agenthooks.HookActionContinue}, nil
 }
 
 type turnProfileToolCallProvider struct {
@@ -732,7 +735,7 @@ func TestTurnProfile_ToolsCustomFiltersProviderToolsAndHookAdditions(t *testing.
 	al := newTurnProfileAgentLoop(t, cfg, provider)
 	al.RegisterTool(&echoTextTool{})
 	al.RegisterTool(&echoTextRewrittenTool{})
-	if err := al.MountHook(NamedHook("add-disallowed-tool", turnProfileAddToolHook{})); err != nil {
+	if err := al.MountHook(agenthooks.NamedHook("add-disallowed-tool", turnProfileAddToolHook{})); err != nil {
 		t.Fatalf("MountHook() error = %v", err)
 	}
 
@@ -1000,7 +1003,9 @@ func TestTurnProfile_BeforeLLMHookCannotReenableNativeSearchWhenToolsOff(t *test
 	}
 	provider := &nativeSearchCaptureProvider{}
 	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
-	if err := al.MountHook(NamedHook("enable-native-search", turnProfileEnableNativeSearchHook{})); err != nil {
+	if err := al.MountHook(
+		agenthooks.NamedHook("enable-native-search", turnProfileEnableNativeSearchHook{}),
+	); err != nil {
 		t.Fatalf("MountHook() error = %v", err)
 	}
 
@@ -1050,7 +1055,9 @@ func TestTurnProfile_BeforeLLMHookCannotReenableNativeSearchWhenCustomToolsResol
 	}
 	provider := &nativeSearchCaptureProvider{}
 	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
-	if err := al.MountHook(NamedHook("enable-native-search", turnProfileEnableNativeSearchHook{})); err != nil {
+	if err := al.MountHook(
+		agenthooks.NamedHook("enable-native-search", turnProfileEnableNativeSearchHook{}),
+	); err != nil {
 		t.Fatalf("MountHook() error = %v", err)
 	}
 
@@ -1144,7 +1151,7 @@ func TestTurnProfile_BeforeToolRespondCannotBypassDisallowedTool(t *testing.T) {
 	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
 	al.RegisterTool(&echoTextTool{})
 	al.RegisterTool(&echoTextRewrittenTool{})
-	if err := al.MountHook(NamedHook("respond-tool", turnProfileRespondToolHook{})); err != nil {
+	if err := al.MountHook(agenthooks.NamedHook("respond-tool", turnProfileRespondToolHook{})); err != nil {
 		t.Fatalf("MountHook() error = %v", err)
 	}
 

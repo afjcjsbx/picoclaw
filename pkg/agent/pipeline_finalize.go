@@ -6,6 +6,7 @@ import (
 	"context"
 
 	"github.com/sipeed/picoclaw/pkg/agent/agentctx"
+	"github.com/sipeed/picoclaw/pkg/agent/agentevents"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/providers"
@@ -19,7 +20,7 @@ func (p *Pipeline) Finalize(
 	turnCtx context.Context,
 	ts *turnState,
 	exec *turnExecution,
-	turnStatus TurnEndStatus,
+	turnStatus agentevents.TurnEndStatus,
 	finalContent string,
 ) (turnResult, error) {
 	al := p.al
@@ -56,13 +57,13 @@ func (p *Pipeline) Finalize(
 			al.emitEvent(
 				runtimeevents.KindAgentError,
 				ts.eventMeta("runTurn", "turn.error"),
-				ErrorPayload{
+				agentevents.ErrorPayload{
 					Stage:   "session_save",
 					Message: err.Error(),
 				},
 			)
 			cancelConfiguredStreamingLLM(turnCtx, exec)
-			return turnResult{status: TurnEndStatusError}, err
+			return turnResult{status: agentevents.TurnEndStatusError}, err
 		}
 	}
 
@@ -94,7 +95,7 @@ func (p *Pipeline) Finalize(
 		ts.setPhase(TurnPhaseCompleted)
 		return turnResult{
 			finalContent: finalContent,
-			status:       TurnEndStatusError,
+			status:       agentevents.TurnEndStatusError,
 			followUps:    append([]bus.InboundMessage(nil), ts.followUps...),
 		}, streamErr
 	}

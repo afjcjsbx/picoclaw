@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/sipeed/picoclaw/pkg/agent/agentevents"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/providers"
 )
@@ -182,7 +183,7 @@ func TestRunTurnLoopDetectionWarningGuidesNextCall(t *testing.T) {
 
 	ts := newTurnState(agent, makeTestProcessOpts("test-loop-warning"), turnEventScope{
 		turnID:  "turn-loop-warning",
-		context: newTurnContext(nil, nil, nil),
+		context: agentevents.NewTurnContext(nil, nil, nil),
 	})
 	result, err := al.runTurn(context.Background(), ts, NewPipeline(al))
 	if err != nil {
@@ -217,7 +218,7 @@ func TestRunTurnLoopDetectionWarningSurvivesContextRetry(t *testing.T) {
 		agent,
 		makeTestProcessOpts("test-loop-warning-context-retry"),
 		turnEventScope{
-			turnID: "turn-loop-warning-context-retry", context: newTurnContext(nil, nil, nil),
+			turnID: "turn-loop-warning-context-retry", context: agentevents.NewTurnContext(nil, nil, nil),
 		},
 	)
 	result, err := al.runTurn(context.Background(), ts, NewPipeline(al))
@@ -254,13 +255,13 @@ func TestRunTurnLoopDetectionCriticalStopsCleanly(t *testing.T) {
 
 	ts := newTurnState(agent, makeTestProcessOpts("test-loop-critical"), turnEventScope{
 		turnID:  "turn-loop-critical",
-		context: newTurnContext(nil, nil, nil),
+		context: agentevents.NewTurnContext(nil, nil, nil),
 	})
 	result, err := al.runTurn(context.Background(), ts, NewPipeline(al))
 	if err != nil {
 		t.Fatalf("runTurn failed: %v", err)
 	}
-	if result.status != TurnEndStatusCompleted {
+	if result.status != agentevents.TurnEndStatusCompleted {
 		t.Fatalf("status = %v, want completed", result.status)
 	}
 	if result.finalContent != loopDetectionResponse {

@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/agent/agentevents"
+	"github.com/sipeed/picoclaw/pkg/agent/agenthooks"
 	"github.com/sipeed/picoclaw/pkg/config"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/isolation"
@@ -35,7 +37,7 @@ func TestAgentLoop_MountProcessHook_LLMAndObserver(t *testing.T) {
 	defer cleanup()
 
 	eventLog := filepath.Join(t.TempDir(), "events.log")
-	if err := al.MountProcessHook(context.Background(), "ipc-llm", ProcessHookOptions{
+	if err := al.MountProcessHook(context.Background(), "ipc-llm", agenthooks.ProcessHookOptions{
 		Command:      processHookHelperCommand(),
 		Env:          processHookHelperEnv("rewrite", eventLog),
 		Observe:      true,
@@ -76,7 +78,7 @@ func TestAgentLoop_MountProcessHook_ToolRewrite(t *testing.T) {
 	defer cleanup()
 
 	al.RegisterTool(&echoTextTool{})
-	if err := al.MountProcessHook(context.Background(), "ipc-tool", ProcessHookOptions{
+	if err := al.MountProcessHook(context.Background(), "ipc-tool", agenthooks.ProcessHookOptions{
 		Command:       processHookHelperCommand(),
 		Env:           processHookHelperEnv("rewrite", ""),
 		InterceptTool: true,
@@ -139,7 +141,7 @@ func TestAgentLoop_MountProcessHook_ApprovalDeny(t *testing.T) {
 	al, agent, cleanup := newHookTestLoop(t, provider)
 	defer cleanup()
 
-	if err := al.MountProcessHook(context.Background(), "ipc-approval", ProcessHookOptions{
+	if err := al.MountProcessHook(context.Background(), "ipc-approval", agenthooks.ProcessHookOptions{
 		Command:     processHookHelperCommand(),
 		Env:         processHookHelperEnv("deny", ""),
 		ApproveTool: true,
@@ -178,9 +180,9 @@ func TestAgentLoop_MountProcessHook_ApprovalDeny(t *testing.T) {
 	if !ok {
 		t.Fatal("expected tool skipped event")
 	}
-	payload, ok := skippedEvt.Payload.(ToolExecSkippedPayload)
+	payload, ok := skippedEvt.Payload.(agentevents.ToolExecSkippedPayload)
 	if !ok {
-		t.Fatalf("expected ToolExecSkippedPayload, got %T", skippedEvt.Payload)
+		t.Fatalf("expected agentevents.ToolExecSkippedPayload, got %T", skippedEvt.Payload)
 	}
 	if payload.Reason != expected {
 		t.Fatalf("expected reason %q, got %q", expected, payload.Reason)
@@ -224,7 +226,7 @@ func TestAgentLoop_MountProcessHook_IsolationSupportsRelativeDirAndCommand(t *te
 		t.Fatal(err)
 	}
 
-	mountErr := al.MountProcessHook(context.Background(), "ipc-relative", ProcessHookOptions{
+	mountErr := al.MountProcessHook(context.Background(), "ipc-relative", agenthooks.ProcessHookOptions{
 		Command:      []string{"./hook-helper", "-test.run=TestProcessHook_HelperProcess", "--"},
 		Dir:          relHookDir,
 		Env:          processHookHelperEnv("rewrite", ""),
@@ -346,11 +348,11 @@ func runProcessHookHelper() error {
 	eventLog := os.Getenv("PICOCLAW_HOOK_EVENT_LOG")
 
 	scanner := bufio.NewScanner(os.Stdin)
-	scanner.Buffer(make([]byte, 0, 64*1024), processHookReadBufferSize)
+	scanner.Buffer(make([]byte, 0, 64*1024), agenthooks.ProcessHookReadBufferSize)
 	encoder := json.NewEncoder(os.Stdout)
 
 	for scanner.Scan() {
-		var msg processHookRPCMessage
+		var msg agenthooks.ProcessHookRPCMessage
 		if err := json.Unmarshal(scanner.Bytes(), &msg); err != nil {
 			return err
 		}
@@ -368,8 +370,8 @@ func runProcessHookHelper() error {
 		}
 
 		result, rpcErr := handleProcessHookRequest(mode, msg)
-		resp := processHookRPCMessage{
-			JSONRPC: processHookJSONRPCVersion,
+		resp := agenthooks.ProcessHookRPCMessage{
+			JSONRPC: agenthooks.ProcessHookJSONRPCVersion,
 			ID:      msg.ID,
 		}
 		if rpcErr != nil {
@@ -392,24 +394,27 @@ func runProcessHookHelper() error {
 	return scanner.Err()
 }
 
-func handleProcessHookRequest(mode string, msg processHookRPCMessage) (any, *processHookRPCError) {
+func handleProcessHookRequest(
+	mode string,
+	msg agenthooks.ProcessHookRPCMessage,
+) (any, *agenthooks.ProcessHookRPCError) {
 	switch msg.Method {
 	case "hook.hello":
 		return map[string]any{"ok": true}, nil
 	case "hook.before_llm":
 		if mode != "rewrite" {
-			return map[string]any{"action": HookActionContinue}, nil
+			return map[string]any{"action": agenthooks.HookActionContinue}, nil
 		}
 		var req map[string]any
 		_ = json.Unmarshal(msg.Params, &req)
 		req["model"] = "process-model"
 		return map[string]any{
-			"action":  HookActionModify,
+			"action":  agenthooks.HookActionModify,
 			"request": req,
 		}, nil
 	case "hook.after_llm":
 		if mode != "rewrite" {
-			return map[string]any{"action": HookActionContinue}, nil
+			return map[string]any{"action": agenthooks.HookActionContinue}, nil
 		}
 		var resp map[string]any
 		_ = json.Unmarshal(msg.Params, &resp)
@@ -419,12 +424,12 @@ func handleProcessHookRequest(mode string, msg processHookRPCMessage) (any, *pro
 			}
 		}
 		return map[string]any{
-			"action":   HookActionModify,
+			"action":   agenthooks.HookActionModify,
 			"response": resp,
 		}, nil
 	case "hook.before_tool":
 		if mode != "rewrite" {
-			return map[string]any{"action": HookActionContinue}, nil
+			return map[string]any{"action": agenthooks.HookActionContinue}, nil
 		}
 		var call map[string]any
 		_ = json.Unmarshal(msg.Params, &call)
@@ -435,12 +440,12 @@ func handleProcessHookRequest(mode string, msg processHookRPCMessage) (any, *pro
 		rawArgs["text"] = "ipc"
 		call["arguments"] = rawArgs
 		return map[string]any{
-			"action": HookActionModify,
+			"action": agenthooks.HookActionModify,
 			"call":   call,
 		}, nil
 	case "hook.after_tool":
 		if mode != "rewrite" {
-			return map[string]any{"action": HookActionContinue}, nil
+			return map[string]any{"action": agenthooks.HookActionContinue}, nil
 		}
 		var result map[string]any
 		_ = json.Unmarshal(msg.Params, &result)
@@ -450,19 +455,19 @@ func handleProcessHookRequest(mode string, msg processHookRPCMessage) (any, *pro
 			}
 		}
 		return map[string]any{
-			"action": HookActionModify,
+			"action": agenthooks.HookActionModify,
 			"result": result,
 		}, nil
 	case "hook.approve_tool":
 		if mode == "deny" {
-			return ApprovalDecision{
+			return agenthooks.ApprovalDecision{
 				Approved: false,
 				Reason:   "blocked by ipc hook",
 			}, nil
 		}
-		return ApprovalDecision{Approved: true}, nil
+		return agenthooks.ApprovalDecision{Approved: true}, nil
 	default:
-		return nil, &processHookRPCError{
+		return nil, &agenthooks.ProcessHookRPCError{
 			Code:    -32601,
 			Message: "method not found",
 		}

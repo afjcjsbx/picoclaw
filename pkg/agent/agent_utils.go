@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/agent/agentctx"
+	"github.com/sipeed/picoclaw/pkg/agent/agentevents"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/commands"
 	"github.com/sipeed/picoclaw/pkg/config"
@@ -28,7 +29,7 @@ func outboundContextFromInbound(
 		return bus.NewOutboundContext(channel, chatID, replyToMessageID)
 	}
 
-	outboundCtx := *cloneInboundContext(inbound)
+	outboundCtx := *agentevents.CloneInboundContext(inbound)
 	if outboundCtx.Channel == "" {
 		outboundCtx.Channel = channel
 	}
@@ -243,7 +244,7 @@ func hookDeniedToolContent(prefix, reason string) string {
 	return prefix + ": " + reason
 }
 
-func appendEventContextFields(fields map[string]any, turnCtx *TurnContext) {
+func appendEventContextFields(fields map[string]any, turnCtx *agentevents.TurnContext) {
 	if turnCtx == nil {
 		return
 	}

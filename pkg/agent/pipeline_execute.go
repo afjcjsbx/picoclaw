@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/agent/agentctx"
+	"github.com/sipeed/picoclaw/pkg/agent/agentevents"
+	"github.com/sipeed/picoclaw/pkg/agent/agenthooks"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/constants"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
@@ -141,7 +143,7 @@ func (p *Pipeline) ExecuteTools(
 			al.emitEvent(
 				runtimeevents.KindAgentToolExecSkipped,
 				ts.eventMeta("runTurn", "turn.tool.skipped"),
-				ToolExecSkippedPayload{Tool: skippedTC.Name, Reason: reason},
+				agentevents.ToolExecSkippedPayload{Tool: skippedTC.Name, Reason: reason},
 			)
 			skippedMsg := providers.Message{
 				Role:       "tool",
@@ -164,7 +166,7 @@ toolLoop:
 		}
 
 		toolName := tc.Name
-		toolArgs := cloneStringAnyMap(tc.Arguments)
+		toolArgs := agenthooks.CloneStringAnyMap(tc.Arguments)
 		denyByTurnProfile := func() bool {
 			if turnProfileToolAllowed(ts.profile, toolName) {
 				return false
@@ -174,7 +176,7 @@ toolLoop:
 			al.emitEvent(
 				runtimeevents.KindAgentToolExecSkipped,
 				ts.eventMeta("runTurn", "turn.tool.skipped"),
-				ToolExecSkippedPayload{
+				agentevents.ToolExecSkippedPayload{
 					Tool:   toolName,
 					Reason: denyContent,
 				},
@@ -197,19 +199,19 @@ toolLoop:
 		}
 
 		if al.hooks != nil {
-			toolReq, decision := al.hooks.BeforeTool(turnCtx, &ToolCallHookRequest{
+			toolReq, decision := al.hooks.BeforeTool(turnCtx, &agenthooks.ToolCallHookRequest{
 				Meta:      ts.eventMeta("runTurn", "turn.tool.before"),
-				Context:   cloneTurnContext(ts.turnCtx),
+				Context:   agentevents.CloneTurnContext(ts.turnCtx),
 				Tool:      toolName,
 				Arguments: toolArgs,
 			})
-			switch decision.normalizedAction() {
-			case HookActionContinue, HookActionModify:
+			switch decision.NormalizedAction() {
+			case agenthooks.HookActionContinue, agenthooks.HookActionModify:
 				if toolReq != nil {
 					toolName = toolReq.Tool
 					toolArgs = toolReq.Arguments
 				}
-			case HookActionRespond:
+			case agenthooks.HookActionRespond:
 				if toolReq != nil && toolReq.HookResult != nil {
 					hookResult := toolReq.HookResult
 
@@ -225,7 +227,7 @@ toolLoop:
 					al.emitEvent(
 						runtimeevents.KindAgentToolExecStart,
 						ts.eventMeta("runTurn", "turn.tool.start"),
-						ToolExecStartPayload{
+						agentevents.ToolExecStartPayload{
 							Tool:      toolName,
 							Arguments: cloneEventArguments(toolArgs),
 						},
@@ -343,7 +345,7 @@ toolLoop:
 					al.emitEvent(
 						runtimeevents.KindAgentToolExecEnd,
 						ts.eventMeta("runTurn", "turn.tool.end"),
-						ToolExecEndPayload{
+						agentevents.ToolExecEndPayload{
 							Tool:       toolName,
 							Duration:   toolDuration,
 							ForLLMLen:  len(contentForLLM),
@@ -399,7 +401,7 @@ toolLoop:
 								al.emitEvent(
 									runtimeevents.KindAgentToolExecSkipped,
 									ts.eventMeta("runTurn", "turn.tool.skipped"),
-									ToolExecSkippedPayload{
+									agentevents.ToolExecSkippedPayload{
 										Tool:   skippedTC.Name,
 										Reason: skipReason,
 									},
@@ -442,13 +444,13 @@ toolLoop:
 						"tool":     toolName,
 						"action":   "respond",
 					})
-			case HookActionDenyTool:
+			case agenthooks.HookActionDenyTool:
 				exec.allResponsesHandled = false
 				denyContent := hookDeniedToolContent("Tool execution denied by hook", decision.Reason)
 				al.emitEvent(
 					runtimeevents.KindAgentToolExecSkipped,
 					ts.eventMeta("runTurn", "turn.tool.skipped"),
-					ToolExecSkippedPayload{
+					agentevents.ToolExecSkippedPayload{
 						Tool:   toolName,
 						Reason: denyContent,
 					},
@@ -464,10 +466,10 @@ toolLoop:
 					ts.recordPersistedMessage(deniedMsg)
 				}
 				continue
-			case HookActionAbortTurn:
+			case agenthooks.HookActionAbortTurn:
 				exec.abortedByHook = true
 				return ToolControlBreak
-			case HookActionHardAbort:
+			case agenthooks.HookActionHardAbort:
 				_ = ts.requestHardAbort()
 				exec.abortedByHardAbort = true
 				return ToolControlBreak
@@ -475,9 +477,9 @@ toolLoop:
 		}
 
 		if al.hooks != nil {
-			approval := al.hooks.ApproveTool(turnCtx, &ToolApprovalRequest{
+			approval := al.hooks.ApproveTool(turnCtx, &agenthooks.ToolApprovalRequest{
 				Meta:      ts.eventMeta("runTurn", "turn.tool.approve"),
-				Context:   cloneTurnContext(ts.turnCtx),
+				Context:   agentevents.CloneTurnContext(ts.turnCtx),
 				Tool:      toolName,
 				Arguments: toolArgs,
 			})
@@ -487,7 +489,7 @@ toolLoop:
 				al.emitEvent(
 					runtimeevents.KindAgentToolExecSkipped,
 					ts.eventMeta("runTurn", "turn.tool.skipped"),
-					ToolExecSkippedPayload{
+					agentevents.ToolExecSkippedPayload{
 						Tool:   toolName,
 						Reason: denyContent,
 					},
@@ -521,7 +523,7 @@ toolLoop:
 		al.emitEvent(
 			runtimeevents.KindAgentToolExecStart,
 			ts.eventMeta("runTurn", "turn.tool.start"),
-			ToolExecStartPayload{
+			agentevents.ToolExecStartPayload{
 				Tool:      toolName,
 				Arguments: cloneEventArguments(toolArgs),
 			},
@@ -573,7 +575,7 @@ toolLoop:
 			al.emitEvent(
 				runtimeevents.KindAgentFollowUpQueued,
 				ts.scope.meta(iteration, "runTurn", "turn.follow_up.queued"),
-				FollowUpQueuedPayload{
+				agentevents.FollowUpQueuedPayload{
 					SourceTool: asyncToolName,
 					ContentLen: len(content),
 				},
@@ -593,7 +595,7 @@ toolLoop:
 
 		toolStart := time.Now()
 		executedToolName := toolName
-		executedToolArgs := cloneStringAnyMap(toolArgs)
+		executedToolArgs := agenthooks.CloneStringAnyMap(toolArgs)
 		execCtx := tools.WithToolInboundContext(
 			turnCtx,
 			ts.channel,
@@ -623,16 +625,16 @@ toolLoop:
 		}
 
 		if al.hooks != nil {
-			toolResp, decision := al.hooks.AfterTool(turnCtx, &ToolResultHookResponse{
+			toolResp, decision := al.hooks.AfterTool(turnCtx, &agenthooks.ToolResultHookResponse{
 				Meta:      ts.eventMeta("runTurn", "turn.tool.after"),
-				Context:   cloneTurnContext(ts.turnCtx),
+				Context:   agentevents.CloneTurnContext(ts.turnCtx),
 				Tool:      toolName,
 				Arguments: toolArgs,
 				Result:    toolResult,
 				Duration:  toolDuration,
 			})
-			switch decision.normalizedAction() {
-			case HookActionContinue, HookActionModify:
+			switch decision.NormalizedAction() {
+			case agenthooks.HookActionContinue, agenthooks.HookActionModify:
 				if toolResp != nil {
 					if toolResp.Tool != "" {
 						toolName = toolResp.Tool
@@ -641,10 +643,10 @@ toolLoop:
 						toolResult = toolResp.Result
 					}
 				}
-			case HookActionAbortTurn:
+			case agenthooks.HookActionAbortTurn:
 				exec.abortedByHook = true
 				return ToolControlBreak
-			case HookActionHardAbort:
+			case agenthooks.HookActionHardAbort:
 				_ = ts.requestHardAbort()
 				exec.abortedByHardAbort = true
 				return ToolControlBreak
@@ -738,7 +740,7 @@ toolLoop:
 		al.emitEvent(
 			runtimeevents.KindAgentToolExecEnd,
 			ts.eventMeta("runTurn", "turn.tool.end"),
-			ToolExecEndPayload{
+			agentevents.ToolExecEndPayload{
 				Tool:       toolName,
 				Duration:   toolDuration,
 				ForLLMLen:  len(contentForLLM),
@@ -793,7 +795,7 @@ toolLoop:
 					al.emitEvent(
 						runtimeevents.KindAgentToolExecSkipped,
 						ts.eventMeta("runTurn", "turn.tool.skipped"),
-						ToolExecSkippedPayload{
+						agentevents.ToolExecSkippedPayload{
 							Tool:   skippedTC.Name,
 							Reason: skipReason,
 						},

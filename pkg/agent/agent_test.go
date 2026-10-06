@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/agent/agentctx"
+	"github.com/sipeed/picoclaw/pkg/agent/agentevents"
+	"github.com/sipeed/picoclaw/pkg/agent/agenthooks"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/channels"
 	"github.com/sipeed/picoclaw/pkg/config"
@@ -291,34 +293,34 @@ type clearOptionsHook struct{}
 
 func (clearOptionsHook) BeforeLLM(
 	ctx context.Context,
-	req *LLMHookRequest,
-) (*LLMHookRequest, HookDecision, error) {
+	req *agenthooks.LLMHookRequest,
+) (*agenthooks.LLMHookRequest, agenthooks.HookDecision, error) {
 	next := req.Clone()
 	next.Options = nil
-	return next, HookDecision{Action: HookActionModify}, nil
+	return next, agenthooks.HookDecision{Action: agenthooks.HookActionModify}, nil
 }
 
 func (clearOptionsHook) AfterLLM(
 	ctx context.Context,
-	resp *LLMHookResponse,
-) (*LLMHookResponse, HookDecision, error) {
-	return resp.Clone(), HookDecision{Action: HookActionContinue}, nil
+	resp *agenthooks.LLMHookResponse,
+) (*agenthooks.LLMHookResponse, agenthooks.HookDecision, error) {
+	return resp.Clone(), agenthooks.HookDecision{Action: agenthooks.HookActionContinue}, nil
 }
 
 func (h modelRewriteHook) BeforeLLM(
 	ctx context.Context,
-	req *LLMHookRequest,
-) (*LLMHookRequest, HookDecision, error) {
+	req *agenthooks.LLMHookRequest,
+) (*agenthooks.LLMHookRequest, agenthooks.HookDecision, error) {
 	next := req.Clone()
 	next.Model = h.model
-	return next, HookDecision{Action: HookActionModify}, nil
+	return next, agenthooks.HookDecision{Action: agenthooks.HookActionModify}, nil
 }
 
 func (h modelRewriteHook) AfterLLM(
 	ctx context.Context,
-	resp *LLMHookResponse,
-) (*LLMHookResponse, HookDecision, error) {
-	return resp.Clone(), HookDecision{Action: HookActionContinue}, nil
+	resp *agenthooks.LLMHookResponse,
+) (*agenthooks.LLMHookResponse, agenthooks.HookDecision, error) {
+	return resp.Clone(), agenthooks.HookDecision{Action: agenthooks.HookActionContinue}, nil
 }
 
 func useTestSideQuestionProvider(al *AgentLoop, provider providers.LLMProvider) {
@@ -765,7 +767,7 @@ func TestProcessMessage_BeforeLLMModelRewriteReevaluatesThinkingOff(t *testing.T
 	msgBus := bus.NewMessageBus()
 	provider := &reasoningOptionRecordingProvider{}
 	al := NewAgentLoop(cfg, msgBus, provider)
-	if err := al.MountHook(NamedHook("rewrite-model", modelRewriteHook{model: "off-model"})); err != nil {
+	if err := al.MountHook(agenthooks.NamedHook("rewrite-model", modelRewriteHook{model: "off-model"})); err != nil {
 		t.Fatalf("MountHook failed: %v", err)
 	}
 
@@ -817,7 +819,7 @@ func TestProcessMessage_BeforeLLMModelRewriteDoesNotLeakThinkingOff(t *testing.T
 	msgBus := bus.NewMessageBus()
 	provider := &reasoningOptionRecordingProvider{}
 	al := NewAgentLoop(cfg, msgBus, provider)
-	if err := al.MountHook(NamedHook("rewrite-model", modelRewriteHook{model: "plain-model"})); err != nil {
+	if err := al.MountHook(agenthooks.NamedHook("rewrite-model", modelRewriteHook{model: "plain-model"})); err != nil {
 		t.Fatalf("MountHook failed: %v", err)
 	}
 
@@ -928,7 +930,7 @@ func TestProcessMessage_BtwHookModelRewriteReevaluatesThinkingOff(t *testing.T) 
 		}
 		return &sideQuestionFallbackTestProvider{model: model}, model, nil
 	}
-	if err := al.MountHook(NamedHook("rewrite-model", modelRewriteHook{model: "off-model"})); err != nil {
+	if err := al.MountHook(agenthooks.NamedHook("rewrite-model", modelRewriteHook{model: "off-model"})); err != nil {
 		t.Fatalf("MountHook failed: %v", err)
 	}
 
@@ -984,7 +986,7 @@ func TestProcessMessage_BtwHookModelRewriteDoesNotLeakThinkingOff(t *testing.T) 
 		}
 		return &sideQuestionFallbackTestProvider{model: model}, model, nil
 	}
-	if err := al.MountHook(NamedHook("rewrite-model", modelRewriteHook{model: "plain-model"})); err != nil {
+	if err := al.MountHook(agenthooks.NamedHook("rewrite-model", modelRewriteHook{model: "plain-model"})); err != nil {
 		t.Fatalf("MountHook failed: %v", err)
 	}
 
@@ -1412,7 +1414,7 @@ func TestProcessMessage_BtwCommandHookModelBypassesFallbackCandidates(t *testing
 	provider := &recordingProvider{}
 	al := NewAgentLoop(cfg, msgBus, provider)
 	useTestSideQuestionProvider(al, provider)
-	if err := al.MountHook(NamedHook("rewrite-model", modelRewriteHook{model: "hook-model"})); err != nil {
+	if err := al.MountHook(agenthooks.NamedHook("rewrite-model", modelRewriteHook{model: "hook-model"})); err != nil {
 		t.Fatalf("MountHook failed: %v", err)
 	}
 
@@ -2026,7 +2028,7 @@ func TestRunAgentLoop_ResponseHandledToolPublishesForUserWhenSendResponseDisable
 func TestAppendEventContextFields_IncludesInboundRouteAndScope(t *testing.T) {
 	fields := map[string]any{}
 
-	appendEventContextFields(fields, &TurnContext{
+	appendEventContextFields(fields, &agentevents.TurnContext{
 		Inbound: &bus.InboundContext{
 			Channel:   "slack",
 			Account:   "workspace-a",
@@ -7332,7 +7334,7 @@ func TestProcessMessage_NativeSearchHandlesHookClearingOptions(t *testing.T) {
 	agent := al.registry.GetDefaultAgent()
 	agent.Provider = provider
 	agent.Candidates = nil
-	if err := al.MountHook(NamedHook("clear-options", clearOptionsHook{})); err != nil {
+	if err := al.MountHook(agenthooks.NamedHook("clear-options", clearOptionsHook{})); err != nil {
 		t.Fatalf("MountHook() error = %v", err)
 	}
 

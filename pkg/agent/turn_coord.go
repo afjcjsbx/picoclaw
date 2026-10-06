@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/agent/agentctx"
+	"github.com/sipeed/picoclaw/pkg/agent/agentevents"
+	"github.com/sipeed/picoclaw/pkg/agent/agenthooks"
 	"github.com/sipeed/picoclaw/pkg/config"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/logger"
@@ -36,12 +38,12 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 		_ = ts.requestHardAbort()
 	}
 
-	turnStatus := TurnEndStatusCompleted
+	turnStatus := agentevents.TurnEndStatusCompleted
 	defer func() {
 		attemptedSkills := ts.attemptedSkillsSnapshot()
 		skillContextSnapshots := ts.skillContextSnapshotsSnapshot()
 		finalSuccessfulPath := []string(nil)
-		if turnStatus == TurnEndStatusCompleted {
+		if turnStatus == agentevents.TurnEndStatusCompleted {
 			if latest := ts.latestSkillContextSnapshot(); len(latest) > 0 {
 				finalSuccessfulPath = latest
 			} else {
@@ -51,7 +53,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 		al.emitEvent(
 			runtimeevents.KindAgentTurnEnd,
 			ts.eventMeta("runTurn", "turn.end"),
-			TurnEndPayload{
+			agentevents.TurnEndPayload{
 				Status:                turnStatus,
 				Workspace:             ts.workspace,
 				Iterations:            ts.currentIteration(),
@@ -70,14 +72,14 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 	}()
 
 	if ts.hardAbortRequested() {
-		turnStatus = TurnEndStatusAborted
+		turnStatus = agentevents.TurnEndStatusAborted
 		return al.abortTurn(ts)
 	}
 
 	al.emitEvent(
 		runtimeevents.KindAgentTurnStart,
 		ts.eventMeta("runTurn", "turn.start"),
-		TurnStartPayload{
+		agentevents.TurnStartPayload{
 			UserMessage: ts.userMessage,
 			MediaCount:  len(ts.media),
 		},
@@ -101,7 +103,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 		return graceful
 	}() {
 		if ts.hardAbortRequested() {
-			turnStatus = TurnEndStatusAborted
+			turnStatus = agentevents.TurnEndStatusAborted
 			return al.abortTurn(ts)
 		}
 
@@ -178,7 +180,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 			al.emitEvent(
 				runtimeevents.KindAgentSteeringInjected,
 				ts.eventMeta("runTurn", "turn.steering.injected"),
-				SteeringInjectedPayload{
+				agentevents.SteeringInjectedPayload{
 					Count:           len(pendingMessages),
 					TotalContentLen: totalContentLen,
 				},
@@ -201,7 +203,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 		ts.setPhase(TurnPhaseRunning)
 		ctrl, callErr := pipeline.CallLLM(ctx, turnCtx, ts, exec, iteration)
 		if callErr != nil {
-			turnStatus = TurnEndStatusError
+			turnStatus = agentevents.TurnEndStatusError
 			return turnResult{}, callErr
 		}
 		messages = exec.messages
@@ -212,14 +214,14 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 		case ControlContinue:
 			continue
 		case ControlBreak:
-			// Hard abort: delegate to abortTurn (sets TurnEndStatusAborted)
+			// Hard abort: delegate to abortTurn (sets agentevents.TurnEndStatusAborted)
 			if exec.abortedByHardAbort {
-				turnStatus = TurnEndStatusAborted
+				turnStatus = agentevents.TurnEndStatusAborted
 				return al.abortTurn(ts)
 			}
-			// Hook abort (HookActionAbortTurn): sets TurnEndStatusError, returns error
+			// Hook abort (agenthooks.HookActionAbortTurn): sets agentevents.TurnEndStatusError, returns error
 			if exec.abortedByHook {
-				turnStatus = TurnEndStatusError
+				turnStatus = agentevents.TurnEndStatusError
 				return turnResult{}, fmt.Errorf("hook requested turn abort")
 			}
 			// Ensure empty response falls back to DefaultResponse
@@ -228,7 +230,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 			}
 			result, finalizeErr := pipeline.Finalize(ctx, turnCtx, ts, exec, turnStatus, finalContent)
 			if finalizeErr != nil {
-				turnStatus = TurnEndStatusError
+				turnStatus = agentevents.TurnEndStatusError
 			}
 			return result, finalizeErr
 		case ControlToolLoop:
@@ -241,14 +243,14 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 				messages = exec.messages
 				continue
 			case ToolControlBreak:
-				// Hard abort: delegate to abortTurn (sets TurnEndStatusAborted)
+				// Hard abort: delegate to abortTurn (sets agentevents.TurnEndStatusAborted)
 				if exec.abortedByHardAbort {
-					turnStatus = TurnEndStatusAborted
+					turnStatus = agentevents.TurnEndStatusAborted
 					return al.abortTurn(ts)
 				}
-				// Hook abort (HookActionAbortTurn): sets TurnEndStatusError, returns error
+				// Hook abort (agenthooks.HookActionAbortTurn): sets agentevents.TurnEndStatusError, returns error
 				if exec.abortedByHook {
-					turnStatus = TurnEndStatusError
+					turnStatus = agentevents.TurnEndStatusError
 					return turnResult{}, fmt.Errorf("hook requested turn abort")
 				}
 				// ExecuteTools may provide a terminal response (for example when
@@ -264,7 +266,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 				}
 				result, finalizeErr := pipeline.Finalize(ctx, turnCtx, ts, exec, turnStatus, finalContent)
 				if finalizeErr != nil {
-					turnStatus = TurnEndStatusError
+					turnStatus = agentevents.TurnEndStatusError
 				}
 				return result, finalizeErr
 			}
@@ -272,7 +274,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 	}
 
 	if ts.hardAbortRequested() {
-		turnStatus = TurnEndStatusAborted
+		turnStatus = agentevents.TurnEndStatusAborted
 		return al.abortTurn(ts)
 	}
 
@@ -286,13 +288,13 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 
 	// Check hard abort before finalizing (may have been set during tool execution)
 	if ts.hardAbortRequested() {
-		turnStatus = TurnEndStatusAborted
+		turnStatus = agentevents.TurnEndStatusAborted
 		return al.abortTurn(ts)
 	}
 
 	result, err := pipeline.Finalize(ctx, turnCtx, ts, exec, turnStatus, finalContent)
 	if err != nil {
-		turnStatus = TurnEndStatusError
+		turnStatus = agentevents.TurnEndStatusError
 	}
 	return result, err
 }
@@ -304,7 +306,7 @@ func (al *AgentLoop) abortTurn(ts *turnState) (turnResult, error) {
 			al.emitEvent(
 				runtimeevents.KindAgentError,
 				ts.eventMeta("abortTurn", "turn.error"),
-				ErrorPayload{
+				agentevents.ErrorPayload{
 					Stage:   "session_restore",
 					Message: err.Error(),
 				},
@@ -312,7 +314,7 @@ func (al *AgentLoop) abortTurn(ts *turnState) (turnResult, error) {
 			return turnResult{}, err
 		}
 	}
-	return turnResult{status: TurnEndStatusAborted}, nil
+	return turnResult{status: agentevents.TurnEndStatusAborted}, nil
 }
 
 func (al *AgentLoop) selectCandidates(
@@ -498,27 +500,31 @@ func (al *AgentLoop) askSideQuestion(
 		return provider.Chat(ctx, callMessages, nil, model, callOpts)
 	}
 
-	turnCtx := newTurnContext(nil, nil, nil)
+	turnCtx := agentevents.NewTurnContext(nil, nil, nil)
 	if opts != nil {
-		turnCtx = newTurnContext(opts.Dispatch.InboundContext, opts.Dispatch.RouteResult, opts.Dispatch.SessionScope)
+		turnCtx = agentevents.NewTurnContext(
+			opts.Dispatch.InboundContext,
+			opts.Dispatch.RouteResult,
+			opts.Dispatch.SessionScope,
+		)
 	}
 	llmModel := activeModel
 	if al.hooks != nil {
-		llmReq, decision := al.hooks.BeforeLLM(ctx, &LLMHookRequest{
-			Meta: HookMeta{
+		llmReq, decision := al.hooks.BeforeLLM(ctx, &agenthooks.LLMHookRequest{
+			Meta: agentevents.HookMeta{
 				Source:      "askSideQuestion",
 				TracePath:   "turn.llm.request",
-				turnContext: cloneTurnContext(turnCtx),
+				TurnContext: agentevents.CloneTurnContext(turnCtx),
 			},
-			Context:          cloneTurnContext(turnCtx),
+			Context:          agentevents.CloneTurnContext(turnCtx),
 			Model:            llmModel,
 			Messages:         messages,
 			Tools:            nil,
 			Options:          llmOpts,
 			GracefulTerminal: false,
 		})
-		switch decision.normalizedAction() {
-		case HookActionContinue, HookActionModify:
+		switch decision.NormalizedAction() {
+		case agenthooks.HookActionContinue, agenthooks.HookActionModify:
 			if llmReq != nil {
 				if strings.TrimSpace(llmReq.Model) != "" && llmReq.Model != llmModel {
 					hookModelChanged = true
@@ -528,13 +534,13 @@ func (al *AgentLoop) askSideQuestion(
 				llmOpts = llmReq.Options
 				delete(llmOpts, "native_search")
 			}
-		case HookActionAbortTurn:
+		case agenthooks.HookActionAbortTurn:
 			reason := decision.Reason
 			if reason == "" {
 				reason = "hook requested turn abort"
 			}
 			return "", fmt.Errorf("hook aborted turn during before_llm: %s", reason)
-		case HookActionHardAbort:
+		case agenthooks.HookActionHardAbort:
 			reason := decision.Reason
 			if reason == "" {
 				reason = "hook requested turn abort"
@@ -580,12 +586,12 @@ func (al *AgentLoop) askSideQuestion(
 	if err != nil && hasMediaRefs(messages) && isVisionUnsupportedError(err) {
 		al.emitEvent(
 			runtimeevents.KindAgentLLMRetry,
-			HookMeta{
+			agentevents.HookMeta{
 				Source:      "askSideQuestion",
 				TracePath:   "turn.llm.retry",
-				turnContext: cloneTurnContext(turnCtx),
+				TurnContext: agentevents.CloneTurnContext(turnCtx),
 			},
-			LLMRetryPayload{
+			agentevents.LLMRetryPayload{
 				Attempt:    1,
 				MaxRetries: 1,
 				Reason:     "vision_unsupported",
@@ -605,22 +611,22 @@ func (al *AgentLoop) askSideQuestion(
 
 	// Apply after_llm hooks
 	if al.hooks != nil {
-		llmResp, decision := al.hooks.AfterLLM(ctx, &LLMHookResponse{
-			Meta: HookMeta{
+		llmResp, decision := al.hooks.AfterLLM(ctx, &agenthooks.LLMHookResponse{
+			Meta: agentevents.HookMeta{
 				Source:      "askSideQuestion",
 				TracePath:   "turn.llm.response",
-				turnContext: cloneTurnContext(turnCtx),
+				TurnContext: agentevents.CloneTurnContext(turnCtx),
 			},
-			Context:  cloneTurnContext(turnCtx),
+			Context:  agentevents.CloneTurnContext(turnCtx),
 			Model:    llmModel,
 			Response: resp,
 		})
-		switch decision.normalizedAction() {
-		case HookActionContinue, HookActionModify:
+		switch decision.NormalizedAction() {
+		case agenthooks.HookActionContinue, agenthooks.HookActionModify:
 			if llmResp != nil && llmResp.Response != nil {
 				resp = llmResp.Response
 			}
-		case HookActionAbortTurn, HookActionHardAbort:
+		case agenthooks.HookActionAbortTurn, agenthooks.HookActionHardAbort:
 			reason := decision.Reason
 			if reason == "" {
 				reason = "hook requested turn abort"

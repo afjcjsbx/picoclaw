@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/agent/agentevents"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
@@ -86,7 +87,7 @@ func TestRuntimeEventLogFieldsSummarizeAgentPayload(t *testing.T) {
 			SessionKey: "session-1",
 			TurnID:     "turn-1",
 		},
-		Payload: ToolExecStartPayload{
+		Payload: agentevents.ToolExecStartPayload{
 			Tool: "exec",
 			Arguments: map[string]any{
 				"secret": "should-not-be-logged-by-default",

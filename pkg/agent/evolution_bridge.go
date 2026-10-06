@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/agent/agentevents"
+	"github.com/sipeed/picoclaw/pkg/agent/agenthooks"
 	"github.com/sipeed/picoclaw/pkg/config"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/evolution"
@@ -134,14 +136,14 @@ func (b *evolutionBridge) Close() error {
 	return closeErr
 }
 
-func (b *evolutionBridge) OnEvent(_ context.Context, evt Event) error {
+func (b *evolutionBridge) OnEvent(_ context.Context, evt agentevents.Event) error {
 	if b == nil || !b.cfg.Enabled || b.runtime == nil {
 		return nil
 	}
 
 	switch evt.Kind {
-	case EventKindTurnEnd:
-		payload, ok := evt.Payload.(TurnEndPayload)
+	case agentevents.EventKindTurnEnd:
+		payload, ok := evt.Payload.(agentevents.TurnEndPayload)
 		if !ok {
 			return nil
 		}
@@ -162,7 +164,7 @@ func (b *evolutionBridge) OnRuntimeEvent(_ context.Context, evt runtimeevents.Ev
 	if deliveredDirectly, _ := evt.Attrs[evolutionDirectDeliveryAttr].(bool); deliveredDirectly {
 		return nil
 	}
-	payload, ok := evt.Payload.(TurnEndPayload)
+	payload, ok := evt.Payload.(agentevents.TurnEndPayload)
 	if !ok {
 		return nil
 	}
@@ -174,14 +176,14 @@ func (b *evolutionBridge) handleRuntimeTurnEnd(evt runtimeevents.Event) bool {
 	if b == nil || !b.cfg.Enabled || b.runtime == nil || evt.Kind != runtimeevents.KindAgentTurnEnd {
 		return false
 	}
-	payload, ok := evt.Payload.(TurnEndPayload)
+	payload, ok := evt.Payload.(agentevents.TurnEndPayload)
 	if !ok {
 		return false
 	}
 	return b.handleTurnEndAsync(hookMetaFromRuntimeEvent(evt), payload)
 }
 
-func (b *evolutionBridge) handleTurnEndAsync(meta EventMeta, payload TurnEndPayload) bool {
+func (b *evolutionBridge) handleTurnEndAsync(meta agentevents.EventMeta, payload agentevents.TurnEndPayload) bool {
 	if b == nil || b.runtime == nil {
 		return false
 	}
@@ -243,7 +245,7 @@ func (b *evolutionBridge) subscribeRuntimeEvents(ch runtimeevents.EventChannel) 
 		b.bgCtx,
 		runtimeevents.SubscribeOptions{
 			Name:         "evolution-bridge",
-			Buffer:       hookObserverBufferSize,
+			Buffer:       agenthooks.HookObserverBufferSize,
 			Backpressure: runtimeevents.Block,
 			Concurrency:  runtimeevents.Locked,
 		},
@@ -417,7 +419,7 @@ func nextColdPathScheduledTime(now time.Time, schedule []coldPathScheduleTime) t
 	return time.Date(tomorrow.Year(), tomorrow.Month(), tomorrow.Day(), first.hour, first.minute, 0, 0, now.Location())
 }
 
-func toEvolutionSkillContextSnapshots(input []SkillContextSnapshot) []evolution.SkillContextSnapshot {
+func toEvolutionSkillContextSnapshots(input []agentevents.SkillContextSnapshot) []evolution.SkillContextSnapshot {
 	if len(input) == 0 {
 		return nil
 	}
@@ -433,7 +435,7 @@ func toEvolutionSkillContextSnapshots(input []SkillContextSnapshot) []evolution.
 	return out
 }
 
-func toEvolutionToolExecutions(input []ToolExecutionRecord) []evolution.ToolExecutionRecord {
+func toEvolutionToolExecutions(input []agentevents.ToolExecutionRecord) []evolution.ToolExecutionRecord {
 	if len(input) == 0 {
 		return nil
 	}

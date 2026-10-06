@@ -1,4 +1,4 @@
-package agent
+package agenthooks
 
 import (
 	"bufio"
@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	processHookJSONRPCVersion = "2.0"
-	processHookReadBufferSize = 1024 * 1024
+	ProcessHookJSONRPCVersion = "2.0"
+	ProcessHookReadBufferSize = 1024 * 1024
 	processHookCloseTimeout   = 2 * time.Second
 )
 
@@ -46,7 +46,7 @@ type ProcessHook struct {
 	writeMu sync.Mutex
 
 	pendingMu sync.Mutex
-	pending   map[uint64]chan processHookRPCMessage
+	pending   map[uint64]chan ProcessHookRPCMessage
 	nextID    atomic.Uint64
 
 	closed    atomic.Bool
@@ -56,16 +56,16 @@ type ProcessHook struct {
 	closeOnce sync.Once
 }
 
-type processHookRPCMessage struct {
+type ProcessHookRPCMessage struct {
 	JSONRPC string               `json:"jsonrpc,omitempty"`
 	ID      uint64               `json:"id,omitempty"`
 	Method  string               `json:"method,omitempty"`
 	Params  json.RawMessage      `json:"params,omitempty"`
 	Result  json.RawMessage      `json:"result,omitempty"`
-	Error   *processHookRPCError `json:"error,omitempty"`
+	Error   *ProcessHookRPCError `json:"error,omitempty"`
 }
 
-type processHookRPCError struct {
+type ProcessHookRPCError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
 }
@@ -136,7 +136,7 @@ func NewProcessHook(ctx context.Context, name string, opts ProcessHookOptions) (
 		cmd:          cmd,
 		stdin:        stdin,
 		observeKinds: newProcessHookObserveKinds(opts.ObserveKinds),
-		pending:      make(map[uint64]chan processHookRPCMessage),
+		pending:      make(map[uint64]chan ProcessHookRPCMessage),
 		done:         make(chan struct{}),
 	}
 
@@ -308,8 +308,8 @@ func (ph *ProcessHook) hello(ctx context.Context) error {
 }
 
 func (ph *ProcessHook) notify(ctx context.Context, method string, params any) error {
-	msg := processHookRPCMessage{
-		JSONRPC: processHookJSONRPCVersion,
+	msg := ProcessHookRPCMessage{
+		JSONRPC: ProcessHookJSONRPCVersion,
 		Method:  method,
 	}
 	if params != nil {
@@ -328,13 +328,13 @@ func (ph *ProcessHook) call(ctx context.Context, method string, params any, out 
 	}
 
 	id := ph.nextID.Add(1)
-	respCh := make(chan processHookRPCMessage, 1)
+	respCh := make(chan ProcessHookRPCMessage, 1)
 	ph.pendingMu.Lock()
 	ph.pending[id] = respCh
 	ph.pendingMu.Unlock()
 
-	msg := processHookRPCMessage{
-		JSONRPC: processHookJSONRPCVersion,
+	msg := ProcessHookRPCMessage{
+		JSONRPC: ProcessHookJSONRPCVersion,
 		ID:      id,
 		Method:  method,
 	}
@@ -372,7 +372,7 @@ func (ph *ProcessHook) call(ctx context.Context, method string, params any, out 
 	}
 }
 
-func (ph *ProcessHook) send(ctx context.Context, msg processHookRPCMessage) error {
+func (ph *ProcessHook) send(ctx context.Context, msg ProcessHookRPCMessage) error {
 	body, err := json.Marshal(msg)
 	if err != nil {
 		return err
@@ -405,10 +405,10 @@ func (ph *ProcessHook) send(ctx context.Context, msg processHookRPCMessage) erro
 
 func (ph *ProcessHook) readLoop(stdout io.Reader) {
 	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 0, 64*1024), processHookReadBufferSize)
+	scanner.Buffer(make([]byte, 0, 64*1024), ProcessHookReadBufferSize)
 
 	for scanner.Scan() {
-		var msg processHookRPCMessage
+		var msg ProcessHookRPCMessage
 		if err := json.Unmarshal(scanner.Bytes(), &msg); err != nil {
 			logger.WarnCF("hooks", "Failed to decode process hook message", map[string]any{
 				"hook":  ph.name,
@@ -434,7 +434,7 @@ func (ph *ProcessHook) readLoop(stdout io.Reader) {
 
 func (ph *ProcessHook) readStderr(stderr io.Reader) {
 	scanner := bufio.NewScanner(stderr)
-	scanner.Buffer(make([]byte, 0, 16*1024), processHookReadBufferSize)
+	scanner.Buffer(make([]byte, 0, 16*1024), ProcessHookReadBufferSize)
 	for scanner.Scan() {
 		logger.WarnCF("hooks", "Process hook stderr", map[string]any{
 			"hook":   ph.name,
@@ -456,8 +456,8 @@ func (ph *ProcessHook) failPending(err error) {
 	ph.pendingMu.Lock()
 	defer ph.pendingMu.Unlock()
 
-	msg := processHookRPCMessage{
-		Error: &processHookRPCError{
+	msg := ProcessHookRPCMessage{
+		Error: &ProcessHookRPCError{
 			Code:    -32000,
 			Message: "process exited",
 		},
@@ -481,25 +481,6 @@ func (ph *ProcessHook) removePending(id uint64) {
 		delete(ph.pending, id)
 		close(ch)
 	}
-}
-
-func (al *AgentLoop) MountProcessHook(ctx context.Context, name string, opts ProcessHookOptions) error {
-	if al == nil {
-		return fmt.Errorf("agent loop is nil")
-	}
-	processHook, err := NewProcessHook(ctx, name, opts)
-	if err != nil {
-		return err
-	}
-	if err := al.MountHook(HookRegistration{
-		Name:   name,
-		Source: HookSourceProcess,
-		Hook:   processHook,
-	}); err != nil {
-		_ = processHook.Close()
-		return err
-	}
-	return nil
 }
 
 func newProcessHookObserveKinds(kinds []string) map[string]struct{} {

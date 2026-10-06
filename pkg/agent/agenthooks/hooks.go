@@ -1,4 +1,4 @@
-package agent
+package agenthooks
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/agent/agentevents"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
@@ -19,7 +20,7 @@ const (
 	defaultHookObserverTimeout    = 500 * time.Millisecond
 	defaultHookInterceptorTimeout = 5 * time.Second
 	defaultHookApprovalTimeout    = 60 * time.Second
-	hookObserverBufferSize        = 64
+	HookObserverBufferSize        = 64
 )
 
 type HookAction string
@@ -38,7 +39,7 @@ type HookDecision struct {
 	Reason string     `json:"reason,omitempty"`
 }
 
-func (d HookDecision) normalizedAction() HookAction {
+func (d HookDecision) NormalizedAction() HookAction {
 	if d.Action == "" {
 		return HookActionContinue
 	}
@@ -91,8 +92,8 @@ type ToolApprover interface {
 }
 
 type LLMHookRequest struct {
-	Meta             HookMeta                   `json:"meta"`
-	Context          *TurnContext               `json:"context,omitempty"`
+	Meta             agentevents.HookMeta       `json:"meta"`
+	Context          *agentevents.TurnContext   `json:"context,omitempty"`
 	Model            string                     `json:"model"`
 	Messages         []providers.Message        `json:"messages,omitempty"`
 	Tools            []providers.ToolDefinition `json:"tools,omitempty"`
@@ -105,19 +106,19 @@ func (r *LLMHookRequest) Clone() *LLMHookRequest {
 		return nil
 	}
 	cloned := *r
-	cloned.Meta = cloneHookMeta(r.Meta)
-	cloned.Context = cloneTurnContext(r.Context)
+	cloned.Meta = agentevents.CloneHookMeta(r.Meta)
+	cloned.Context = agentevents.CloneTurnContext(r.Context)
 	cloned.Messages = cloneProviderMessages(r.Messages)
 	cloned.Tools = cloneToolDefinitions(r.Tools)
-	cloned.Options = cloneStringAnyMap(r.Options)
+	cloned.Options = CloneStringAnyMap(r.Options)
 	return &cloned
 }
 
 type LLMHookResponse struct {
-	Meta     HookMeta               `json:"meta"`
-	Context  *TurnContext           `json:"context,omitempty"`
-	Model    string                 `json:"model"`
-	Response *providers.LLMResponse `json:"response,omitempty"`
+	Meta     agentevents.HookMeta     `json:"meta"`
+	Context  *agentevents.TurnContext `json:"context,omitempty"`
+	Model    string                   `json:"model"`
+	Response *providers.LLMResponse   `json:"response,omitempty"`
 }
 
 func (r *LLMHookResponse) Clone() *LLMHookResponse {
@@ -125,20 +126,20 @@ func (r *LLMHookResponse) Clone() *LLMHookResponse {
 		return nil
 	}
 	cloned := *r
-	cloned.Meta = cloneHookMeta(r.Meta)
-	cloned.Context = cloneTurnContext(r.Context)
+	cloned.Meta = agentevents.CloneHookMeta(r.Meta)
+	cloned.Context = agentevents.CloneTurnContext(r.Context)
 	cloned.Response = cloneLLMResponse(r.Response)
 	return &cloned
 }
 
 type ToolCallHookRequest struct {
-	Meta       HookMeta          `json:"meta"`
-	Context    *TurnContext      `json:"context,omitempty"`
-	Tool       string            `json:"tool"`
-	Arguments  map[string]any    `json:"arguments,omitempty"`
-	Channel    string            `json:"channel,omitempty"`
-	ChatID     string            `json:"chat_id,omitempty"`
-	HookResult *tools.ToolResult `json:"hook_result,omitempty"` // Result returned directly by hook (for respond action). Media is supported - see Media handling section in docs.
+	Meta       agentevents.HookMeta     `json:"meta"`
+	Context    *agentevents.TurnContext `json:"context,omitempty"`
+	Tool       string                   `json:"tool"`
+	Arguments  map[string]any           `json:"arguments,omitempty"`
+	Channel    string                   `json:"channel,omitempty"`
+	ChatID     string                   `json:"chat_id,omitempty"`
+	HookResult *tools.ToolResult        `json:"hook_result,omitempty"` // Result returned directly by hook (for respond action). Media is supported - see Media handling section in docs.
 }
 
 func (r *ToolCallHookRequest) Clone() *ToolCallHookRequest {
@@ -146,18 +147,18 @@ func (r *ToolCallHookRequest) Clone() *ToolCallHookRequest {
 		return nil
 	}
 	cloned := *r
-	cloned.Meta = cloneHookMeta(r.Meta)
-	cloned.Context = cloneTurnContext(r.Context)
-	cloned.Arguments = cloneStringAnyMap(r.Arguments)
+	cloned.Meta = agentevents.CloneHookMeta(r.Meta)
+	cloned.Context = agentevents.CloneTurnContext(r.Context)
+	cloned.Arguments = CloneStringAnyMap(r.Arguments)
 	cloned.HookResult = cloneToolResult(r.HookResult)
 	return &cloned
 }
 
 type ToolApprovalRequest struct {
-	Meta      HookMeta       `json:"meta"`
-	Context   *TurnContext   `json:"context,omitempty"`
-	Tool      string         `json:"tool"`
-	Arguments map[string]any `json:"arguments,omitempty"`
+	Meta      agentevents.HookMeta     `json:"meta"`
+	Context   *agentevents.TurnContext `json:"context,omitempty"`
+	Tool      string                   `json:"tool"`
+	Arguments map[string]any           `json:"arguments,omitempty"`
 }
 
 func (r *ToolApprovalRequest) Clone() *ToolApprovalRequest {
@@ -165,19 +166,19 @@ func (r *ToolApprovalRequest) Clone() *ToolApprovalRequest {
 		return nil
 	}
 	cloned := *r
-	cloned.Meta = cloneHookMeta(r.Meta)
-	cloned.Context = cloneTurnContext(r.Context)
-	cloned.Arguments = cloneStringAnyMap(r.Arguments)
+	cloned.Meta = agentevents.CloneHookMeta(r.Meta)
+	cloned.Context = agentevents.CloneTurnContext(r.Context)
+	cloned.Arguments = CloneStringAnyMap(r.Arguments)
 	return &cloned
 }
 
 type ToolResultHookResponse struct {
-	Meta      HookMeta          `json:"meta"`
-	Context   *TurnContext      `json:"context,omitempty"`
-	Tool      string            `json:"tool"`
-	Arguments map[string]any    `json:"arguments,omitempty"`
-	Result    *tools.ToolResult `json:"result,omitempty"`
-	Duration  time.Duration     `json:"duration"`
+	Meta      agentevents.HookMeta     `json:"meta"`
+	Context   *agentevents.TurnContext `json:"context,omitempty"`
+	Tool      string                   `json:"tool"`
+	Arguments map[string]any           `json:"arguments,omitempty"`
+	Result    *tools.ToolResult        `json:"result,omitempty"`
+	Duration  time.Duration            `json:"duration"`
 }
 
 func (r *ToolResultHookResponse) Clone() *ToolResultHookResponse {
@@ -185,9 +186,9 @@ func (r *ToolResultHookResponse) Clone() *ToolResultHookResponse {
 		return nil
 	}
 	cloned := *r
-	cloned.Meta = cloneHookMeta(r.Meta)
-	cloned.Context = cloneTurnContext(r.Context)
-	cloned.Arguments = cloneStringAnyMap(r.Arguments)
+	cloned.Meta = agentevents.CloneHookMeta(r.Meta)
+	cloned.Context = agentevents.CloneTurnContext(r.Context)
+	cloned.Arguments = CloneStringAnyMap(r.Arguments)
 	cloned.Result = cloneToolResult(r.Result)
 	return &cloned
 }
@@ -220,7 +221,7 @@ func NewHookManager(runtimeEvents runtimeevents.EventChannel) *HookManager {
 	if runtimeEvents != nil {
 		sub, ch, err := runtimeEvents.SubscribeChan(context.Background(), runtimeevents.SubscribeOptions{
 			Name:   "hook-manager-observer",
-			Buffer: hookObserverBufferSize,
+			Buffer: HookObserverBufferSize,
 		})
 		if err != nil {
 			logger.WarnCF("hooks", "Failed to subscribe runtime events for hooks", map[string]any{
@@ -312,7 +313,7 @@ func (hm *HookManager) dispatchRuntimeEvents(ch <-chan runtimeevents.Event) {
 	defer close(hm.runtimeDone)
 
 	for evt := range ch {
-		for _, reg := range hm.snapshotHooks() {
+		for _, reg := range hm.SnapshotHooks() {
 			observer, ok := reg.Hook.(RuntimeEventObserver)
 			if !ok {
 				continue
@@ -328,7 +329,7 @@ func (hm *HookManager) BeforeLLM(ctx context.Context, req *LLMHookRequest) (*LLM
 	}
 
 	current := req.Clone()
-	for _, reg := range hm.snapshotHooks() {
+	for _, reg := range hm.SnapshotHooks() {
 		interceptor, ok := reg.Hook.(LLMInterceptor)
 		if !ok {
 			continue
@@ -339,7 +340,7 @@ func (hm *HookManager) BeforeLLM(ctx context.Context, req *LLMHookRequest) (*LLM
 			continue
 		}
 
-		switch decision.normalizedAction() {
+		switch decision.NormalizedAction() {
 		case HookActionContinue, HookActionModify:
 			if next != nil {
 				next = hm.applyBeforeLLMControls(reg.Name, current, next)
@@ -360,7 +361,7 @@ func (hm *HookManager) AfterLLM(ctx context.Context, resp *LLMHookResponse) (*LL
 	}
 
 	current := resp.Clone()
-	for _, reg := range hm.snapshotHooks() {
+	for _, reg := range hm.SnapshotHooks() {
 		interceptor, ok := reg.Hook.(LLMInterceptor)
 		if !ok {
 			continue
@@ -371,7 +372,7 @@ func (hm *HookManager) AfterLLM(ctx context.Context, resp *LLMHookResponse) (*LL
 			continue
 		}
 
-		switch decision.normalizedAction() {
+		switch decision.NormalizedAction() {
 		case HookActionContinue, HookActionModify:
 			if next != nil {
 				current = next
@@ -472,7 +473,7 @@ func (hm *HookManager) BeforeTool(
 	}
 
 	current := call.Clone()
-	for _, reg := range hm.snapshotHooks() {
+	for _, reg := range hm.SnapshotHooks() {
 		interceptor, ok := reg.Hook.(ToolInterceptor)
 		if !ok {
 			continue
@@ -483,7 +484,7 @@ func (hm *HookManager) BeforeTool(
 			continue
 		}
 
-		switch decision.normalizedAction() {
+		switch decision.NormalizedAction() {
 		case HookActionContinue, HookActionModify:
 			if next != nil {
 				current = next
@@ -510,7 +511,7 @@ func (hm *HookManager) AfterTool(
 	}
 
 	current := result.Clone()
-	for _, reg := range hm.snapshotHooks() {
+	for _, reg := range hm.SnapshotHooks() {
 		interceptor, ok := reg.Hook.(ToolInterceptor)
 		if !ok {
 			continue
@@ -521,7 +522,7 @@ func (hm *HookManager) AfterTool(
 			continue
 		}
 
-		switch decision.normalizedAction() {
+		switch decision.NormalizedAction() {
 		case HookActionContinue, HookActionModify:
 			if next != nil {
 				current = next
@@ -540,7 +541,7 @@ func (hm *HookManager) ApproveTool(ctx context.Context, req *ToolApprovalRequest
 		return ApprovalDecision{Approved: true}
 	}
 
-	for _, reg := range hm.snapshotHooks() {
+	for _, reg := range hm.SnapshotHooks() {
 		approver, ok := reg.Hook.(ToolApprover)
 		if !ok {
 			continue
@@ -577,7 +578,7 @@ func (hm *HookManager) rebuildOrdered() {
 	})
 }
 
-func (hm *HookManager) snapshotHooks() []HookRegistration {
+func (hm *HookManager) SnapshotHooks() []HookRegistration {
 	hm.mu.RLock()
 	defer hm.mu.RUnlock()
 
@@ -843,7 +844,7 @@ func cloneProviderToolCalls(calls []providers.ToolCall) []providers.ToolCall {
 			cloned[i].Function = &fn
 		}
 		if call.Arguments != nil {
-			cloned[i].Arguments = cloneStringAnyMap(call.Arguments)
+			cloned[i].Arguments = CloneStringAnyMap(call.Arguments)
 		}
 		if call.ExtraContent != nil {
 			extra := *call.ExtraContent
@@ -865,7 +866,7 @@ func cloneToolDefinitions(defs []providers.ToolDefinition) []providers.ToolDefin
 	cloned := make([]providers.ToolDefinition, len(defs))
 	for i, def := range defs {
 		cloned[i] = def
-		cloned[i].Function.Parameters = cloneStringAnyMap(def.Function.Parameters)
+		cloned[i].Function.Parameters = CloneStringAnyMap(def.Function.Parameters)
 	}
 	return cloned
 }
@@ -886,7 +887,7 @@ func cloneLLMResponse(resp *providers.LLMResponse) *providers.LLMResponse {
 	return &cloned
 }
 
-func cloneStringAnyMap(src map[string]any) map[string]any {
+func CloneStringAnyMap(src map[string]any) map[string]any {
 	if len(src) == 0 {
 		return map[string]any{}
 	}
