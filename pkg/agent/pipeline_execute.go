@@ -904,9 +904,9 @@ toolLoop:
 			}
 		}
 		if !ts.opts.NoHistory && ts.opts.EnableSummary {
-			al.contextManager.Compact(turnCtx, &CompactRequest{
+			al.contextManager.Compact(turnCtx, &agentctx.CompactRequest{
 				SessionKey: ts.sessionKey,
-				Reason:     ContextCompressReasonSummarize,
+				Reason:     agentctx.ContextCompressReasonSummarize,
 				Budget:     ts.agent.ContextWindow,
 			})
 		}

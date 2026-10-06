@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/agent/agentctx"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
@@ -25,14 +26,14 @@ func TestRegisterContextManager_Success(t *testing.T) {
 	cleanup := resetCMRegistry()
 	defer cleanup()
 
-	factory := func(cfg json.RawMessage, al *AgentLoop) (ContextManager, error) {
+	factory := func(cfg json.RawMessage, host agentctx.Host) (agentctx.ContextManager, error) {
 		return &noopContextManager{}, nil
 	}
-	if err := RegisterContextManager("test_cm", factory); err != nil {
+	if err := agentctx.RegisterContextManager("test_cm", factory); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	f, ok := lookupContextManager("test_cm")
+	f, ok := agentctx.LookupContextManager("test_cm")
 	if !ok {
 		t.Fatal("expected factory to be registered")
 	}
@@ -45,9 +46,12 @@ func TestRegisterContextManager_EmptyName(t *testing.T) {
 	cleanup := resetCMRegistry()
 	defer cleanup()
 
-	err := RegisterContextManager("", func(cfg json.RawMessage, al *AgentLoop) (ContextManager, error) {
-		return &noopContextManager{}, nil
-	})
+	err := agentctx.RegisterContextManager(
+		"",
+		func(cfg json.RawMessage, host agentctx.Host) (agentctx.ContextManager, error) {
+			return &noopContextManager{}, nil
+		},
+	)
 	if err == nil {
 		t.Fatal("expected error for empty name")
 	}
@@ -60,7 +64,7 @@ func TestRegisterContextManager_NilFactory(t *testing.T) {
 	cleanup := resetCMRegistry()
 	defer cleanup()
 
-	err := RegisterContextManager("nil_factory", nil)
+	err := agentctx.RegisterContextManager("nil_factory", nil)
 	if err == nil {
 		t.Fatal("expected error for nil factory")
 	}
@@ -73,13 +77,13 @@ func TestRegisterContextManager_Duplicate(t *testing.T) {
 	cleanup := resetCMRegistry()
 	defer cleanup()
 
-	factory := func(cfg json.RawMessage, al *AgentLoop) (ContextManager, error) {
+	factory := func(cfg json.RawMessage, host agentctx.Host) (agentctx.ContextManager, error) {
 		return &noopContextManager{}, nil
 	}
-	if err := RegisterContextManager("dup_cm", factory); err != nil {
+	if err := agentctx.RegisterContextManager("dup_cm", factory); err != nil {
 		t.Fatalf("first registration failed: %v", err)
 	}
-	err := RegisterContextManager("dup_cm", factory)
+	err := agentctx.RegisterContextManager("dup_cm", factory)
 	if err == nil {
 		t.Fatal("expected error for duplicate registration")
 	}
@@ -92,7 +96,7 @@ func TestLookupContextManager_Unknown(t *testing.T) {
 	cleanup := resetCMRegistry()
 	defer cleanup()
 
-	_, ok := lookupContextManager("nonexistent")
+	_, ok := agentctx.LookupContextManager("nonexistent")
 	if ok {
 		t.Fatal("expected lookup to fail for unknown name")
 	}
@@ -123,8 +127,8 @@ func TestResolveContextManager_Default(t *testing.T) {
 	if cm == nil {
 		t.Fatal("expected non-nil context manager")
 	}
-	if _, ok := cm.(*legacyContextManager); !ok {
-		t.Fatalf("expected *legacyContextManager, got %T", cm)
+	if _, ok := cm.(*agentctx.LegacyContextManager); !ok {
+		t.Fatalf("expected *agentctx.LegacyContextManager, got %T", cm)
 	}
 }
 
@@ -145,8 +149,8 @@ func TestResolveContextManager_ExplicitLegacy(t *testing.T) {
 	}
 	al := newCMTestAgentLoop(cfg)
 
-	if _, ok := al.contextManager.(*legacyContextManager); !ok {
-		t.Fatalf("expected *legacyContextManager, got %T", al.contextManager)
+	if _, ok := al.contextManager.(*agentctx.LegacyContextManager); !ok {
+		t.Fatalf("expected *agentctx.LegacyContextManager, got %T", al.contextManager)
 	}
 }
 
@@ -167,8 +171,8 @@ func TestResolveContextManager_UnknownFallsBackToLegacy(t *testing.T) {
 	}
 	al := newCMTestAgentLoop(cfg)
 
-	if _, ok := al.contextManager.(*legacyContextManager); !ok {
-		t.Fatalf("expected fallback to *legacyContextManager, got %T", al.contextManager)
+	if _, ok := al.contextManager.(*agentctx.LegacyContextManager); !ok {
+		t.Fatalf("expected fallback to *agentctx.LegacyContextManager, got %T", al.contextManager)
 	}
 }
 
@@ -176,10 +180,10 @@ func TestResolveContextManager_RegisteredFactory(t *testing.T) {
 	cleanup := resetCMRegistry()
 	defer cleanup()
 
-	factory := func(cfg json.RawMessage, al *AgentLoop) (ContextManager, error) {
+	factory := func(cfg json.RawMessage, host agentctx.Host) (agentctx.ContextManager, error) {
 		return &noopContextManager{}, nil
 	}
-	if err := RegisterContextManager("custom_cm", factory); err != nil {
+	if err := agentctx.RegisterContextManager("custom_cm", factory); err != nil {
 		t.Fatalf("register failed: %v", err)
 	}
 
@@ -205,10 +209,10 @@ func TestResolveContextManager_FactoryError(t *testing.T) {
 	cleanup := resetCMRegistry()
 	defer cleanup()
 
-	factory := func(cfg json.RawMessage, al *AgentLoop) (ContextManager, error) {
+	factory := func(cfg json.RawMessage, host agentctx.Host) (agentctx.ContextManager, error) {
 		return nil, os.ErrPermission
 	}
-	if err := RegisterContextManager("broken_cm", factory); err != nil {
+	if err := agentctx.RegisterContextManager("broken_cm", factory); err != nil {
 		t.Fatalf("register failed: %v", err)
 	}
 
@@ -226,8 +230,8 @@ func TestResolveContextManager_FactoryError(t *testing.T) {
 	al := newCMTestAgentLoop(cfg)
 
 	// Should fall back to legacy when factory returns error
-	if _, ok := al.contextManager.(*legacyContextManager); !ok {
-		t.Fatalf("expected fallback to *legacyContextManager on factory error, got %T", al.contextManager)
+	if _, ok := al.contextManager.(*agentctx.LegacyContextManager); !ok {
+		t.Fatalf("expected fallback to *agentctx.LegacyContextManager on factory error, got %T", al.contextManager)
 	}
 }
 
@@ -250,7 +254,7 @@ func TestLegacyAssemble_Passthrough(t *testing.T) {
 	}
 	agent.Sessions.SetHistory("test-session", history)
 
-	resp, err := al.contextManager.Assemble(context.Background(), &AssembleRequest{
+	resp, err := al.contextManager.Assemble(context.Background(), &agentctx.AssembleRequest{
 		SessionKey: "test-session",
 		Budget:     8000,
 		MaxTokens:  4096,
@@ -272,7 +276,7 @@ func TestLegacyAssemble_EmptyHistory(t *testing.T) {
 	cfg := testConfig(t)
 	al := newCMTestAgentLoop(cfg)
 
-	resp, err := al.contextManager.Assemble(context.Background(), &AssembleRequest{
+	resp, err := al.contextManager.Assemble(context.Background(), &agentctx.AssembleRequest{
 		SessionKey: "test-session",
 		Budget:     8000,
 		MaxTokens:  4096,
@@ -315,9 +319,9 @@ func TestLegacyCompact_Overflow(t *testing.T) {
 	)
 	defer closeRuntimeEvents()
 
-	err := al.contextManager.Compact(context.Background(), &CompactRequest{
+	err := al.contextManager.Compact(context.Background(), &agentctx.CompactRequest{
 		SessionKey: "session-overflow",
-		Reason:     ContextCompressReasonRetry,
+		Reason:     agentctx.ContextCompressReasonRetry,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -345,7 +349,7 @@ func TestLegacyCompact_Overflow(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected ContextCompressPayload, got %T", compressEvt.Payload)
 	}
-	if payload.Reason != ContextCompressReasonRetry {
+	if payload.Reason != agentctx.ContextCompressReasonRetry {
 		t.Fatalf("expected retry reason, got %q", payload.Reason)
 	}
 }
@@ -367,7 +371,7 @@ func TestLegacyCompact_PrunesOldToolResultsBeforeDroppingTurns(t *testing.T) {
 	}
 	agent.Sessions.SetHistory("session-prune-tools", history)
 
-	result, ok := al.contextManager.(*legacyContextManager).forceCompression("session-prune-tools")
+	result, ok := al.contextManager.(*agentctx.LegacyContextManager).ForceCompression("session-prune-tools")
 	if !ok {
 		t.Fatal("expected old tool output to be pruned")
 	}
@@ -409,9 +413,9 @@ func TestLegacyCompact_Overflow_ProactiveReason(t *testing.T) {
 	)
 	defer closeRuntimeEvents()
 
-	err := al.contextManager.Compact(context.Background(), &CompactRequest{
+	err := al.contextManager.Compact(context.Background(), &agentctx.CompactRequest{
 		SessionKey: "session-proactive",
-		Reason:     ContextCompressReasonProactive,
+		Reason:     agentctx.ContextCompressReasonProactive,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -426,7 +430,7 @@ func TestLegacyCompact_Overflow_ProactiveReason(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected ContextCompressPayload, got %T", compressEvt.Payload)
 	}
-	if payload.Reason != ContextCompressReasonProactive {
+	if payload.Reason != agentctx.ContextCompressReasonProactive {
 		t.Fatalf("expected proactive reason, got %q", payload.Reason)
 	}
 }
@@ -445,9 +449,9 @@ func TestLegacyCompact_Overflow_TooShortToCompress(t *testing.T) {
 	}
 	defaultAgent.Sessions.SetHistory("session-tiny", history)
 
-	err := al.contextManager.Compact(context.Background(), &CompactRequest{
+	err := al.contextManager.Compact(context.Background(), &agentctx.CompactRequest{
 		SessionKey: "session-tiny",
-		Reason:     ContextCompressReasonRetry,
+		Reason:     agentctx.ContextCompressReasonRetry,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -480,9 +484,9 @@ func TestLegacyCompact_PostTurn_BelowThreshold(t *testing.T) {
 	}
 	defaultAgent.Sessions.SetHistory("session-small", history)
 
-	err := al.contextManager.Compact(context.Background(), &CompactRequest{
+	err := al.contextManager.Compact(context.Background(), &agentctx.CompactRequest{
 		SessionKey: "session-small",
-		Reason:     ContextCompressReasonSummarize,
+		Reason:     agentctx.ContextCompressReasonSummarize,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -536,9 +540,9 @@ func TestLegacyCompact_PostTurn_ExceedsMessageThreshold(t *testing.T) {
 	)
 	defer closeRuntimeEvents()
 
-	err := al.contextManager.Compact(context.Background(), &CompactRequest{
+	err := al.contextManager.Compact(context.Background(), &agentctx.CompactRequest{
 		SessionKey: "session-threshold",
-		Reason:     ContextCompressReasonSummarize,
+		Reason:     agentctx.ContextCompressReasonSummarize,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -562,7 +566,7 @@ func TestLegacyIngest_NoOp(t *testing.T) {
 	cfg := testConfig(t)
 	al := newCMTestAgentLoop(cfg)
 
-	err := al.contextManager.Ingest(context.Background(), &IngestRequest{
+	err := al.contextManager.Ingest(context.Background(), &agentctx.IngestRequest{
 		SessionKey: "session-ingest",
 		Message:    providers.Message{Role: "user", Content: "test"},
 	})
@@ -572,7 +576,7 @@ func TestLegacyIngest_NoOp(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Mock ContextManager — verifies dispatch through AgentLoop
+// Mock agentctx.ContextManager — verifies dispatch through AgentLoop
 // ---------------------------------------------------------------------------
 
 func TestAgentLoop_UsesCustomContextManager(t *testing.T) {
@@ -580,10 +584,10 @@ func TestAgentLoop_UsesCustomContextManager(t *testing.T) {
 	defer cleanup()
 
 	mock := &trackingContextManager{}
-	factory := func(cfg json.RawMessage, al *AgentLoop) (ContextManager, error) {
+	factory := func(cfg json.RawMessage, host agentctx.Host) (agentctx.ContextManager, error) {
 		return mock, nil
 	}
-	if err := RegisterContextManager("tracking_cm", factory); err != nil {
+	if err := agentctx.RegisterContextManager("tracking_cm", factory); err != nil {
 		t.Fatalf("register failed: %v", err)
 	}
 
@@ -606,7 +610,7 @@ func TestAgentLoop_UsesCustomContextManager(t *testing.T) {
 	}
 
 	// Direct method calls
-	_, err := mock.Assemble(context.Background(), &AssembleRequest{
+	_, err := mock.Assemble(context.Background(), &agentctx.AssembleRequest{
 		SessionKey: "s1",
 		Budget:     8000,
 		MaxTokens:  4096,
@@ -618,9 +622,9 @@ func TestAgentLoop_UsesCustomContextManager(t *testing.T) {
 		t.Fatalf("expected 1 assemble call, got %d", mock.assembleCalls.Load())
 	}
 
-	err = mock.Compact(context.Background(), &CompactRequest{
+	err = mock.Compact(context.Background(), &agentctx.CompactRequest{
 		SessionKey: "s1",
-		Reason:     ContextCompressReasonRetry,
+		Reason:     agentctx.ContextCompressReasonRetry,
 	})
 	if err != nil {
 		t.Fatalf("Compact error: %v", err)
@@ -629,7 +633,7 @@ func TestAgentLoop_UsesCustomContextManager(t *testing.T) {
 		t.Fatalf("expected 1 compact call, got %d", mock.compactCalls.Load())
 	}
 
-	err = mock.Ingest(context.Background(), &IngestRequest{
+	err = mock.Ingest(context.Background(), &agentctx.IngestRequest{
 		SessionKey: "s1",
 		Message:    providers.Message{Role: "user", Content: "test"},
 	})
@@ -646,10 +650,10 @@ func TestIngestCalledDuringTurn(t *testing.T) {
 	defer cleanup()
 
 	mock := &trackingContextManager{}
-	factory := func(cfg json.RawMessage, al *AgentLoop) (ContextManager, error) {
+	factory := func(cfg json.RawMessage, host agentctx.Host) (agentctx.ContextManager, error) {
 		return mock, nil
 	}
-	if err := RegisterContextManager("ingest_track_cm", factory); err != nil {
+	if err := agentctx.RegisterContextManager("ingest_track_cm", factory); err != nil {
 		t.Fatalf("register failed: %v", err)
 	}
 
@@ -697,10 +701,10 @@ func TestClearCommandRoutedAgentCallsContextManagerClear(t *testing.T) {
 	defer cleanup()
 
 	mock := &trackingContextManager{}
-	factory := func(cfg json.RawMessage, al *AgentLoop) (ContextManager, error) {
+	factory := func(cfg json.RawMessage, host agentctx.Host) (agentctx.ContextManager, error) {
 		return mock, nil
 	}
-	if err := RegisterContextManager("clear_track_cm", factory); err != nil {
+	if err := agentctx.RegisterContextManager("clear_track_cm", factory); err != nil {
 		t.Fatalf("register failed: %v", err)
 	}
 
@@ -797,9 +801,9 @@ func TestLegacyCompact_Overflow_SingleTurnKeepsLastUserMessage(t *testing.T) {
 	}
 	defaultAgent.Sessions.SetHistory("session-2msg", history)
 
-	err := al.contextManager.Compact(context.Background(), &CompactRequest{
+	err := al.contextManager.Compact(context.Background(), &agentctx.CompactRequest{
 		SessionKey: "session-2msg",
-		Reason:     ContextCompressReasonRetry,
+		Reason:     agentctx.ContextCompressReasonRetry,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -816,15 +820,21 @@ func TestLegacyCompact_Overflow_SingleTurnKeepsLastUserMessage(t *testing.T) {
 // Test helpers
 // ---------------------------------------------------------------------------
 
-// noopContextManager is a minimal ContextManager that does nothing.
+// noopContextManager is a minimal agentctx.ContextManager that does nothing.
 type noopContextManager struct{}
 
-func (m *noopContextManager) Assemble(_ context.Context, req *AssembleRequest) (*AssembleResponse, error) {
-	return &AssembleResponse{}, nil
+func (m *noopContextManager) Assemble(
+	_ context.Context,
+	req *agentctx.AssembleRequest,
+) (*agentctx.AssembleResponse, error) {
+	return &agentctx.AssembleResponse{}, nil
 }
-func (m *noopContextManager) Compact(_ context.Context, _ *CompactRequest) error { return nil }
-func (m *noopContextManager) Ingest(_ context.Context, _ *IngestRequest) error   { return nil }
-func (m *noopContextManager) Clear(_ context.Context, _ string) error            { return nil }
+
+func (m *noopContextManager) Compact(_ context.Context, _ *agentctx.CompactRequest) error { return nil }
+
+func (m *noopContextManager) Ingest(_ context.Context, _ *agentctx.IngestRequest) error { return nil }
+
+func (m *noopContextManager) Clear(_ context.Context, _ string) error { return nil }
 
 // trackingContextManager tracks call counts for each method.
 type trackingContextManager struct {
@@ -833,21 +843,24 @@ type trackingContextManager struct {
 	ingestCalls   atomic.Int64
 	clearCalls    atomic.Int64
 	mu            sync.Mutex
-	lastAssemble  *AssembleRequest
-	lastCompact   *CompactRequest
-	lastIngest    *IngestRequest
+	lastAssemble  *agentctx.AssembleRequest
+	lastCompact   *agentctx.CompactRequest
+	lastIngest    *agentctx.IngestRequest
 	lastClearKey  string
 }
 
-func (m *trackingContextManager) Assemble(_ context.Context, req *AssembleRequest) (*AssembleResponse, error) {
+func (m *trackingContextManager) Assemble(
+	_ context.Context,
+	req *agentctx.AssembleRequest,
+) (*agentctx.AssembleResponse, error) {
 	m.assembleCalls.Add(1)
 	m.mu.Lock()
 	m.lastAssemble = req
 	m.mu.Unlock()
-	return &AssembleResponse{}, nil
+	return &agentctx.AssembleResponse{}, nil
 }
 
-func (m *trackingContextManager) Compact(_ context.Context, req *CompactRequest) error {
+func (m *trackingContextManager) Compact(_ context.Context, req *agentctx.CompactRequest) error {
 	m.compactCalls.Add(1)
 	m.mu.Lock()
 	m.lastCompact = req
@@ -855,7 +868,7 @@ func (m *trackingContextManager) Compact(_ context.Context, req *CompactRequest)
 	return nil
 }
 
-func (m *trackingContextManager) Ingest(_ context.Context, req *IngestRequest) error {
+func (m *trackingContextManager) Ingest(_ context.Context, req *agentctx.IngestRequest) error {
 	m.ingestCalls.Add(1)
 	m.mu.Lock()
 	m.lastIngest = req
@@ -873,21 +886,7 @@ func (m *trackingContextManager) Clear(_ context.Context, sessionKey string) err
 
 // resetCMRegistry clears the global factory registry and returns a cleanup
 // function that restores the original state after the test.
-func resetCMRegistry() func() {
-	cmRegistryMu.Lock()
-	original := make(map[string]ContextManagerFactory, len(cmRegistry))
-	for k, v := range cmRegistry {
-		original[k] = v
-	}
-	cmRegistry = make(map[string]ContextManagerFactory)
-	cmRegistryMu.Unlock()
-
-	return func() {
-		cmRegistryMu.Lock()
-		cmRegistry = original
-		cmRegistryMu.Unlock()
-	}
-}
+func resetCMRegistry() func() { return agentctx.ResetContextManagers() }
 
 func testConfig(t *testing.T) *config.Config {
 	t.Helper()

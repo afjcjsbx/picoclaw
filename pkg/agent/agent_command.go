@@ -388,7 +388,7 @@ func (al *AgentLoop) buildCommandsRuntime(
 			}
 			// /clear can arrive before any turn has persisted session scope
 			// metadata (runAgentLoop records it per turn), so record it here to
-			// let the ContextManager resolve which agent owns the session.
+			// let the agentctx.ContextManager resolve which agent owns the session.
 			ensureSessionMetadata(
 				agent.Sessions,
 				opts.Dispatch.SessionKey,

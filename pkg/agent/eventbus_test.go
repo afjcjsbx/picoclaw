@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/agent/agentctx"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
@@ -506,7 +507,7 @@ func TestAgentLoop_EmitsContextCompressEventOnRetry(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected ContextCompressPayload, got %T", compressEvt.Payload)
 	}
-	if payload.Reason != ContextCompressReasonRetry {
+	if payload.Reason != agentctx.ContextCompressReasonRetry {
 		t.Fatalf("expected retry compress reason, got %q", payload.Reason)
 	}
 	if payload.DroppedMessages == 0 {
@@ -559,8 +560,8 @@ func TestAgentLoop_EmitsSessionSummarizeEvent(t *testing.T) {
 	)
 	defer closeRuntimeEvents()
 
-	lcm := &legacyContextManager{al: al}
-	lcm.summarizeSession(defaultAgent, "session-1")
+	ref, _ := newAgentRef(defaultAgent)
+	agentctx.NewLegacyContextManager(contextHost{al}).SummarizeSession(ref, "session-1")
 
 	events := collectRuntimeEventStream(runtimeCh)
 	summaryEvt, ok := findRuntimeEvent(events, runtimeevents.KindAgentSessionSummarize)

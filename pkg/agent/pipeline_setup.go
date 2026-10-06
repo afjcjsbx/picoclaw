@@ -21,7 +21,7 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 	var history []providers.Message
 	var summary string
 	if !ts.opts.NoHistory {
-		if resp, err := p.ContextManager.Assemble(ctx, &AssembleRequest{
+		if resp, err := p.ContextManager.Assemble(ctx, &agentctx.AssembleRequest{
 			SessionKey: ts.sessionKey,
 			Budget:     ts.agent.ContextWindow,
 			MaxTokens:  ts.agent.MaxTokens,
@@ -52,9 +52,9 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 		if agentctx.IsOverContextBudget(ts.agent.ContextWindow, messages, toolDefs, ts.agent.MaxTokens) {
 			logger.WarnCF("agent", "Proactive compression: context budget exceeded before LLM call",
 				map[string]any{"session_key": ts.sessionKey})
-			if err := p.ContextManager.Compact(ctx, &CompactRequest{
+			if err := p.ContextManager.Compact(ctx, &agentctx.CompactRequest{
 				SessionKey: ts.sessionKey,
-				Reason:     ContextCompressReasonProactive,
+				Reason:     agentctx.ContextCompressReasonProactive,
 				Budget:     ts.agent.ContextWindow,
 			}); err != nil {
 				logger.WarnCF("agent", "Proactive compact failed", map[string]any{
@@ -63,7 +63,7 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 				})
 			}
 			ts.refreshRestorePointFromSession(ts.agent)
-			if resp, err := p.ContextManager.Assemble(ctx, &AssembleRequest{
+			if resp, err := p.ContextManager.Assemble(ctx, &agentctx.AssembleRequest{
 				SessionKey: ts.sessionKey,
 				Budget:     ts.agent.ContextWindow,
 				MaxTokens:  ts.agent.MaxTokens,

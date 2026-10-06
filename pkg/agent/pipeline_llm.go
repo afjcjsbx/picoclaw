@@ -395,9 +395,9 @@ func (p *Pipeline) CallLLM(
 				))
 			}
 
-			if compactErr := p.ContextManager.Compact(ctx, &CompactRequest{
+			if compactErr := p.ContextManager.Compact(ctx, &agentctx.CompactRequest{
 				SessionKey: ts.sessionKey,
-				Reason:     ContextCompressReasonRetry,
+				Reason:     agentctx.ContextCompressReasonRetry,
 				Budget:     ts.agent.ContextWindow,
 			}); compactErr != nil {
 				logger.WarnCF("agent", "Context overflow compact failed", map[string]any{
@@ -406,7 +406,7 @@ func (p *Pipeline) CallLLM(
 				})
 			}
 			ts.refreshRestorePointFromSession(ts.agent)
-			if asmResp, asmErr := p.ContextManager.Assemble(ctx, &AssembleRequest{
+			if asmResp, asmErr := p.ContextManager.Assemble(ctx, &agentctx.AssembleRequest{
 				SessionKey: ts.sessionKey,
 				Budget:     ts.agent.ContextWindow,
 				MaxTokens:  ts.agent.MaxTokens,

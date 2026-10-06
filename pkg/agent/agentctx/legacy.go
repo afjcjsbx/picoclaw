@@ -1,4 +1,4 @@
-package agent
+package agentctx
 
 import (
 	"context"
@@ -7,26 +7,24 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sipeed/picoclaw/pkg/agent/agentctx"
-	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
 )
 
-// legacyContextManager wraps the existing summarization/compression logic
+// LegacyContextManager wraps the existing summarization/compression logic
 // as a ContextManager implementation. It is the default when no other
 // ContextManager is configured.
-type legacyContextManager struct {
-	al          *AgentLoop
+type LegacyContextManager struct {
+	host        Host
 	summarizing sync.Map // dedup for async Compact (post-turn)
 }
 
-func (m *legacyContextManager) Assemble(_ context.Context, req *AssembleRequest) (*AssembleResponse, error) {
+func (m *LegacyContextManager) Assemble(_ context.Context, req *AssembleRequest) (*AssembleResponse, error) {
 	// Legacy: read history from session, return as-is.
 	// Budget enforcement happens in BuildMessages caller via
-	// agentctx.IsOverContextBudget + forceCompression.
-	agent := m.al.registry.GetDefaultAgent()
-	if agent == nil {
+	// agentctx.IsOverContextBudget + ForceCompression.
+	agent, ok := m.host.DefaultAgent()
+	if !ok {
 		return &AssembleResponse{}, nil
 	}
 	history := agent.Sessions.GetHistory(req.SessionKey)
@@ -37,20 +35,13 @@ func (m *legacyContextManager) Assemble(_ context.Context, req *AssembleRequest)
 	}, nil
 }
 
-func (m *legacyContextManager) Compact(_ context.Context, req *CompactRequest) error {
+func (m *LegacyContextManager) Compact(_ context.Context, req *CompactRequest) error {
 	switch req.Reason {
 	case ContextCompressReasonProactive, ContextCompressReasonRetry:
 		// Sync emergency compression — budget exceeded.
-		if result, ok := m.forceCompression(req.SessionKey); ok {
-			m.al.emitEvent(
-				runtimeevents.KindAgentContextCompress,
-				m.al.newTurnEventScope("", req.SessionKey, nil).meta(0, "forceCompression", "turn.context.compress"),
-				ContextCompressPayload{
-					Reason:            req.Reason,
-					DroppedMessages:   result.DroppedMessages,
-					RemainingMessages: result.RemainingMessages,
-				},
-			)
+		if result, ok := m.ForceCompression(req.SessionKey); ok {
+			result.Reason = req.Reason
+			m.host.EmitContextCompress(req.SessionKey, result)
 		}
 	case ContextCompressReasonSummarize:
 		m.maybeSummarize(req.SessionKey)
@@ -58,16 +49,16 @@ func (m *legacyContextManager) Compact(_ context.Context, req *CompactRequest) e
 	return nil
 }
 
-func (m *legacyContextManager) Ingest(_ context.Context, _ *IngestRequest) error {
+func (m *LegacyContextManager) Ingest(_ context.Context, _ *IngestRequest) error {
 	// Legacy: no-op. Messages are persisted by Sessions JSONL.
 	return nil
 }
 
-func (m *legacyContextManager) Clear(_ context.Context, sessionKey string) error {
+func (m *LegacyContextManager) Clear(_ context.Context, sessionKey string) error {
 	// Routed (non-default) agents keep history in their own session store,
 	// so resolve the owning agent instead of assuming the default one.
-	agent := m.al.agentForSession(sessionKey)
-	if agent == nil || agent.Sessions == nil {
+	agent, ok := m.host.AgentForSession(sessionKey)
+	if !ok || agent.Sessions == nil {
 		return fmt.Errorf("sessions not initialized")
 	}
 	agent.Sessions.SetHistory(sessionKey, []providers.Message{})
@@ -77,14 +68,14 @@ func (m *legacyContextManager) Clear(_ context.Context, sessionKey string) error
 
 // maybeSummarize triggers summarization if the session history exceeds thresholds.
 // It runs asynchronously in a goroutine.
-func (m *legacyContextManager) maybeSummarize(sessionKey string) {
-	agent := m.al.registry.GetDefaultAgent()
-	if agent == nil {
+func (m *LegacyContextManager) maybeSummarize(sessionKey string) {
+	agent, ok := m.host.DefaultAgent()
+	if !ok {
 		return
 	}
 
 	newHistory := agent.Sessions.GetHistory(sessionKey)
-	tokenEstimate := m.estimateTokens(newHistory)
+	tokenEstimate := EstimateMessagesTokens(newHistory)
 	threshold := agent.ContextWindow * agent.SummarizeTokenPercent / 100
 
 	if len(newHistory) > agent.SummarizeMessageThreshold || tokenEstimate > threshold {
@@ -101,65 +92,33 @@ func (m *legacyContextManager) maybeSummarize(sessionKey string) {
 					}
 				}()
 				logger.Debug("Memory threshold reached. Optimizing conversation history...")
-				m.summarizeSession(agent, sessionKey)
+				m.SummarizeSession(agent, sessionKey)
 			}()
 		}
 	}
 }
 
-type compressionResult struct {
-	DroppedMessages   int
-	RemainingMessages int
-}
-
-// forceCompression aggressively reduces context when the limit is hit.
+// ForceCompression aggressively reduces context when the limit is hit.
 // It drops the oldest ~50% of Turns (a Turn is a complete user→LLM→response
 // cycle, as defined in #1316), so tool-call sequences are never split.
-func (m *legacyContextManager) forceCompression(sessionKey string) (compressionResult, bool) {
-	agent := m.al.registry.GetDefaultAgent()
-	if agent == nil {
-		return compressionResult{}, false
+func (m *LegacyContextManager) ForceCompression(sessionKey string) (CompressResult, bool) {
+	agent, ok := m.host.DefaultAgent()
+	if !ok {
+		return CompressResult{}, false
 	}
 
 	history := agent.Sessions.GetHistory(sessionKey)
-	const protectedTail = 4
-	const minToolResultChars = 200
-	const prunedToolResult = "[Old tool output cleared to save context space]"
-	pruned := false
-	for i := 0; i < len(history)-protectedTail; i++ {
-		if history[i].Role == "tool" && len(history[i].Content) > minToolResultChars &&
-			len(history[i].Media) == 0 && len(history[i].Attachments) == 0 {
-			history[i].Content = prunedToolResult
-			pruned = true
-		}
-	}
+	pruned := PruneOldToolResults(history)
 	if pruned {
 		agent.Sessions.SetHistory(sessionKey, history)
 		agent.Sessions.Save(sessionKey)
-		return compressionResult{RemainingMessages: len(history)}, true
+		return CompressResult{RemainingMessages: len(history)}, true
 	}
 	if len(history) <= 2 {
-		return compressionResult{}, false
+		return CompressResult{}, false
 	}
 
-	turns := agentctx.ParseTurnBoundaries(history)
-	var mid int
-	if len(turns) >= 2 {
-		mid = turns[len(turns)/2]
-	} else {
-		mid = agentctx.FindSafeBoundary(history, len(history)/2)
-	}
-	var keptHistory []providers.Message
-	if mid <= 0 {
-		for i := len(history) - 1; i >= 0; i-- {
-			if history[i].Role == "user" {
-				keptHistory = []providers.Message{history[i]}
-				break
-			}
-		}
-	} else {
-		keptHistory = history[mid:]
-	}
+	keptHistory := EmergencyKeep(history)
 
 	droppedCount := len(history) - len(keptHistory)
 
@@ -182,13 +141,13 @@ func (m *legacyContextManager) forceCompression(sessionKey string) (compressionR
 		"new_count":    len(keptHistory),
 	})
 
-	return compressionResult{
+	return CompressResult{
 		DroppedMessages:   droppedCount,
 		RemainingMessages: len(keptHistory),
 	}, true
 }
 
-func (m *legacyContextManager) summarizeSession(agent *AgentInstance, sessionKey string) {
+func (m *LegacyContextManager) SummarizeSession(agent AgentRef, sessionKey string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
@@ -199,7 +158,7 @@ func (m *legacyContextManager) summarizeSession(agent *AgentInstance, sessionKey
 		return
 	}
 
-	safeCut := agentctx.FindSafeBoundary(history, len(history)-4)
+	safeCut := FindSafeBoundary(history, len(history)-4)
 	if safeCut <= 0 {
 		return
 	}
@@ -234,7 +193,7 @@ func (m *legacyContextManager) summarizeSession(agent *AgentInstance, sessionKey
 	var finalSummary string
 	if len(validMessages) > maxSummarizationMessages {
 		mid := len(validMessages) / 2
-		mid = m.findNearestUserMessage(validMessages, mid)
+		mid = FindNearestUserMessage(validMessages, mid)
 
 		part1 := validMessages[:mid]
 		part2 := validMessages[mid:]
@@ -265,45 +224,18 @@ func (m *legacyContextManager) summarizeSession(agent *AgentInstance, sessionKey
 		agent.Sessions.SetSummary(sessionKey, finalSummary)
 		agent.Sessions.TruncateHistory(sessionKey, keepCount)
 		agent.Sessions.Save(sessionKey)
-		m.al.emitEvent(
-			runtimeevents.KindAgentSessionSummarize,
-			m.al.newTurnEventScope(agent.ID, sessionKey, nil).meta(0, "summarizeSession", "turn.session.summarize"),
-			SessionSummarizePayload{
-				SummarizedMessages: len(validMessages),
-				KeptMessages:       keepCount,
-				SummaryLen:         len(finalSummary),
-				OmittedOversized:   omitted,
-			},
-		)
+		m.host.EmitSessionSummarize(agent.ID, sessionKey, SummarizeResult{
+			SummarizedMessages: len(validMessages),
+			KeptMessages:       keepCount,
+			SummaryLen:         len(finalSummary),
+			OmittedOversized:   omitted,
+		})
 	}
 }
 
-func (m *legacyContextManager) findNearestUserMessage(messages []providers.Message, mid int) int {
-	originalMid := mid
-
-	for mid > 0 && messages[mid].Role != "user" {
-		mid--
-	}
-
-	if messages[mid].Role == "user" {
-		return mid
-	}
-
-	mid = originalMid
-	for mid < len(messages) && messages[mid].Role != "user" {
-		mid++
-	}
-
-	if mid < len(messages) {
-		return mid
-	}
-
-	return originalMid
-}
-
-func (m *legacyContextManager) retryLLMCall(
+func (m *LegacyContextManager) retryLLMCall(
 	ctx context.Context,
-	agent *AgentInstance,
+	agent AgentRef,
 	prompt string,
 	maxRetries int,
 ) (*providers.LLMResponse, error) {
@@ -313,9 +245,9 @@ func (m *legacyContextManager) retryLLMCall(
 	var err error
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
-		m.al.activeRequestsInc()
+		m.host.ActiveRequestsInc()
 		resp, err = func() (*providers.LLMResponse, error) {
-			defer m.al.activeRequestsDec()
+			defer m.host.ActiveRequestsDec()
 			return agent.Provider.Chat(
 				ctx,
 				[]providers.Message{{Role: "user", Content: prompt}},
@@ -340,17 +272,13 @@ func (m *legacyContextManager) retryLLMCall(
 	return resp, err
 }
 
-func (m *legacyContextManager) summarizeBatch(
+func (m *LegacyContextManager) summarizeBatch(
 	ctx context.Context,
-	agent *AgentInstance,
+	agent AgentRef,
 	batch []providers.Message,
 	existingSummary string,
 ) (string, error) {
-	const (
-		llmMaxRetries             = 3
-		fallbackMinContentLength  = 200
-		fallbackMaxContentPercent = 10
-	)
+	const llmMaxRetries = 3
 
 	var sb strings.Builder
 	sb.WriteString("Provide a concise summary of this conversation segment, preserving core context and key points.\n")
@@ -370,40 +298,10 @@ func (m *legacyContextManager) summarizeBatch(
 		return strings.TrimSpace(response.Content), nil
 	}
 
-	var fallback strings.Builder
-	fallback.WriteString("Conversation summary: ")
-	for i, msg := range batch {
-		if i > 0 {
-			fallback.WriteString(" | ")
-		}
-		content := strings.TrimSpace(msg.Content)
-		runes := []rune(content)
-		if len(runes) == 0 {
-			fallback.WriteString(fmt.Sprintf("%s: ", msg.Role))
-			continue
-		}
-
-		keepLength := len(runes) * fallbackMaxContentPercent / 100
-		if keepLength < fallbackMinContentLength {
-			keepLength = fallbackMinContentLength
-		}
-		if keepLength > len(runes) {
-			keepLength = len(runes)
-		}
-
-		content = string(runes[:keepLength])
-		if keepLength < len(runes) {
-			content += "..."
-		}
-		fallback.WriteString(fmt.Sprintf("%s: %s", msg.Role, content))
-	}
-	return fallback.String(), nil
+	return FallbackSummary(batch), nil
 }
 
-func (m *legacyContextManager) estimateTokens(messages []providers.Message) int {
-	total := 0
-	for _, msg := range messages {
-		total += agentctx.EstimateMessageTokens(msg)
-	}
-	return total
+// NewLegacyContextManager returns the default summarize/compress ContextManager.
+func NewLegacyContextManager(host Host) *LegacyContextManager {
+	return &LegacyContextManager{host: host}
 }

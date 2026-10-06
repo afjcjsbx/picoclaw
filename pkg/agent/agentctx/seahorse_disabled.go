@@ -1,13 +1,13 @@
 //go:build no_seahorse
 
-package agent
+package agentctx
 
 import (
 	"encoding/json"
 	"fmt"
 )
 
-func newSeahorseContextManager(_ json.RawMessage, _ *AgentLoop) (ContextManager, error) {
+func newSeahorseContextManager(_ json.RawMessage, _ Host) (ContextManager, error) {
 	return nil, fmt.Errorf(
 		"seahorse context manager is not included in this build (remove the no_seahorse build tag to enable it)",
 	)

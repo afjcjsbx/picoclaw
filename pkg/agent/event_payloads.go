@@ -1,6 +1,10 @@
 package agent
 
-import "time"
+import (
+	"time"
+
+	"github.com/sipeed/picoclaw/pkg/agent/agentctx"
+)
 
 // TurnEndStatus describes the terminal state of a turn.
 type TurnEndStatus string
@@ -86,21 +90,9 @@ type LLMRetryPayload struct {
 	Backoff    time.Duration
 }
 
-// ContextCompressReason identifies why emergency compression ran.
-type ContextCompressReason string
-
-const (
-	// ContextCompressReasonProactive indicates compression before the first LLM call.
-	ContextCompressReasonProactive ContextCompressReason = "proactive_budget"
-	// ContextCompressReasonRetry indicates compression during context-error retry handling.
-	ContextCompressReasonRetry ContextCompressReason = "llm_retry"
-	// ContextCompressReasonSummarize indicates post-turn async summarization.
-	ContextCompressReasonSummarize ContextCompressReason = "summarize"
-)
-
 // ContextCompressPayload describes a forced history compression.
 type ContextCompressPayload struct {
-	Reason            ContextCompressReason
+	Reason            agentctx.ContextCompressReason
 	DroppedMessages   int
 	RemainingMessages int
 }
