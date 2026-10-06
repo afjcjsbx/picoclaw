@@ -81,6 +81,8 @@
     "expandCode": "Expand code",
     "collapseCode": "Collapse code",
     "history": "History",
+    "splitConversation": "Conversation {{number}}",
+    "removeSplitPane": "Remove conversation from split",
     "noHistory": "No chat history yet",
     "historyLoadFailed": "Failed to load chat history",
     "historyOpenFailed": "Failed to open this chat history",

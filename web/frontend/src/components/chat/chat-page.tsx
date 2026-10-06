@@ -1,10 +1,13 @@
-import { IconArrowBackUp, IconGitFork, IconPlus } from "@tabler/icons-react"
-import { useAtom } from "jotai"
+import { IconArrowBackUp, IconGitFork, IconX } from "@tabler/icons-react"
+import type { TFunction } from "i18next"
+import { useAtom, useAtomValue } from "jotai"
 import {
   type ChangeEvent,
   type ClipboardEvent,
   type DragEvent,
+  useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react"
@@ -19,7 +22,6 @@ import {
 } from "@/components/chat/chat-composer"
 import { ChatEmptyState } from "@/components/chat/chat-empty-state"
 import { ModelSelector } from "@/components/chat/model-selector"
-import { SessionHistoryMenu } from "@/components/chat/session-history-menu"
 import { TypingIndicator } from "@/components/chat/typing-indicator"
 import { UserMessage } from "@/components/chat/user-message"
 import { PageHeader } from "@/components/page-header"
@@ -31,22 +33,30 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { loadSessionMessages } from "@/features/chat/history"
 import {
   CHAT_IMAGE_ACCEPT,
   buildChatImageAttachments,
   getTransferredFiles,
   hasFileTransfer,
 } from "@/features/chat/image-input"
+import { removeSplitConversation } from "@/features/chat/split-groups"
 import { useChatModels } from "@/hooks/use-chat-models"
 import { useGateway } from "@/hooks/use-gateway"
 import { usePicoChat } from "@/hooks/use-pico-chat"
-import { useSessionHistory } from "@/hooks/use-session-history"
 import type { AssistantDetailVisibility } from "@/store/chat"
-import type { ConnectionState } from "@/store/chat"
-import type { ChatAttachment } from "@/store/chat"
+import type {
+  ChatAttachment,
+  ChatMessage,
+  ConnectionState,
+  SplitSessionState,
+} from "@/store/chat"
 import {
   assistantDetailVisibilityAtom,
+  sessionTitlesAtom,
   shouldShowAssistantMessage,
+  splitConversationsAtom,
+  splitSessionStatesAtom,
 } from "@/store/chat"
 import type { GatewayState } from "@/store/gateway"
 
@@ -102,6 +112,250 @@ function resolveChatInputDisabledReason({
   return null
 }
 
+interface SplitConversationViewProps {
+  sessions: string[]
+  activeSessionId: string
+  activeHistoryStart: number
+  hasHydratedActiveSession: boolean
+  sessionTitles: Record<string, string>
+  splitSessionStates: Record<string, SplitSessionState>
+  messages: ChatMessage[]
+  isTyping: boolean
+  renderMessages: (
+    messages: ChatMessage[],
+    sessionId: string,
+    historyStart: number,
+  ) => React.ReactNode
+  onActivate: (sessionId: string) => void
+  onRemove: (sessionId: string) => void
+  onScroll: (event: React.UIEvent<HTMLDivElement>) => void
+  activeEmptyState: React.ReactNode
+  t: TFunction
+}
+
+function SplitConversationView({
+  sessions,
+  activeSessionId,
+  activeHistoryStart,
+  hasHydratedActiveSession,
+  sessionTitles,
+  splitSessionStates,
+  messages,
+  isTyping,
+  renderMessages,
+  onActivate,
+  onRemove,
+  onScroll,
+  activeEmptyState,
+  t,
+}: SplitConversationViewProps) {
+  const [history, setHistory] = useState<Record<string, ChatMessage[] | null>>(
+    {},
+  )
+  const activeSessionRef = useRef(activeSessionId)
+  const hydratedSessionRef = useRef(hasHydratedActiveSession)
+  const sessionSnapshotsRef = useRef(new Set<string>())
+  const sessionsKey = JSON.stringify(sessions)
+
+  useLayoutEffect(() => {
+    activeSessionRef.current = activeSessionId
+    hydratedSessionRef.current = hasHydratedActiveSession
+  }, [activeSessionId, hasHydratedActiveSession])
+
+  useEffect(() => {
+    let cancelled = false
+    for (const sessionId of JSON.parse(sessionsKey) as string[]) {
+      void loadSessionMessages(sessionId)
+        .then((page) => {
+          if (
+            cancelled ||
+            sessionSnapshotsRef.current.has(sessionId) ||
+            (sessionId === activeSessionRef.current &&
+              hydratedSessionRef.current)
+          ) {
+            return
+          }
+          setHistory((current) => ({ ...current, [sessionId]: page.messages }))
+        })
+        .catch((error) => {
+          console.error("Failed to load split conversation:", error)
+          if (
+            cancelled ||
+            sessionSnapshotsRef.current.has(sessionId) ||
+            (sessionId === activeSessionRef.current &&
+              hydratedSessionRef.current)
+          ) {
+            return
+          }
+          setHistory((current) => ({ ...current, [sessionId]: null }))
+        })
+    }
+    return () => {
+      cancelled = true
+    }
+  }, [sessionsKey])
+
+  useEffect(() => {
+    if (!hasHydratedActiveSession) return
+    sessionSnapshotsRef.current.add(activeSessionId)
+    setHistory((current) => ({ ...current, [activeSessionId]: messages }))
+  }, [activeSessionId, hasHydratedActiveSession, messages])
+
+  return (
+    <div
+      className={`grid h-full min-h-0 gap-2 p-2 ${sessions.length === 3 ? "grid-cols-2 grid-rows-2 [&>*:nth-child(3)]:col-span-2" : sessions.length === 4 ? "grid-cols-2 grid-rows-2" : "grid-cols-1 sm:grid-cols-2"}`}
+    >
+      {sessions.map((sessionId, index) => {
+        const isActive = sessionId === activeSessionId
+        const paneMessages =
+          isActive && hasHydratedActiveSession
+            ? messages
+            : (splitSessionStates[sessionId]?.messages ??
+              history[sessionId] ??
+              (isActive ? messages : undefined))
+        const title =
+          sessionTitles[sessionId] ||
+          t("chat.splitConversation", { number: index + 1 })
+
+        return (
+          <SplitConversationPane
+            key={sessionId}
+            sessionId={sessionId}
+            index={index}
+            title={title}
+            messages={paneMessages ?? []}
+            historyStart={isActive ? activeHistoryStart : 0}
+            isLoaded={
+              (isActive && hasHydratedActiveSession) ||
+              sessionId in splitSessionStates ||
+              sessionId in history ||
+              (isActive && messages.length > 0)
+            }
+            isActive={isActive}
+            isTyping={
+              isActive
+                ? isTyping
+                : (splitSessionStates[sessionId]?.isTyping ?? false)
+            }
+            renderMessages={renderMessages}
+            onActivate={onActivate}
+            onRemove={onRemove}
+            onScroll={onScroll}
+            emptyContent={isActive ? activeEmptyState : null}
+            loadError={paneMessages === null}
+            t={t}
+          />
+        )
+      })}
+    </div>
+  )
+}
+
+interface SplitConversationPaneProps {
+  sessionId: string
+  index: number
+  title: string
+  messages: ChatMessage[]
+  historyStart: number
+  isLoaded: boolean
+  isActive: boolean
+  isTyping: boolean
+  renderMessages: SplitConversationViewProps["renderMessages"]
+  onActivate: SplitConversationViewProps["onActivate"]
+  onRemove: SplitConversationViewProps["onRemove"]
+  onScroll: SplitConversationViewProps["onScroll"]
+  emptyContent: React.ReactNode
+  loadError: boolean
+  t: SplitConversationViewProps["t"]
+}
+
+function SplitConversationPane({
+  sessionId,
+  index,
+  title,
+  messages,
+  historyStart,
+  isLoaded,
+  isActive,
+  isTyping,
+  renderMessages,
+  onActivate,
+  onRemove,
+  onScroll,
+  emptyContent,
+  loadError,
+  t,
+}: SplitConversationPaneProps) {
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const stickToBottomRef = useRef(true)
+
+  useEffect(() => {
+    if (isLoaded && stickToBottomRef.current && scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+    }
+  }, [isLoaded, messages, isTyping])
+
+  return (
+    <section
+      aria-label={`${title}, ${index + 1}`}
+      className={`bg-background flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border ${isActive ? "border-primary/50" : "border-border/70"}`}
+    >
+      <header className="border-border/60 flex min-w-0 items-center gap-2 border-b px-3 py-2">
+        <button
+          type="button"
+          aria-pressed={isActive}
+          onClick={() => onActivate(sessionId)}
+          className={`min-w-0 flex-1 truncate text-left text-sm ${isActive ? "font-medium" : "text-muted-foreground"}`}
+          title={title}
+        >
+          {title}
+        </button>
+        <button
+          type="button"
+          aria-label={t("chat.removeSplitPane")}
+          title={t("chat.removeSplitPane")}
+          onClick={() => onRemove(sessionId)}
+          className="text-muted-foreground hover:text-foreground rounded p-1"
+        >
+          <IconX className="size-4" />
+        </button>
+      </header>
+      <div
+        ref={scrollRef}
+        data-session-scroll={sessionId}
+        onScroll={onScroll}
+        onScrollCapture={(event) => {
+          const element = event.currentTarget
+          stickToBottomRef.current =
+            element.scrollHeight - element.scrollTop <=
+            element.clientHeight + 10
+        }}
+        className="min-h-0 flex-1 overflow-y-auto px-3 py-4"
+      >
+        {!isLoaded ? (
+          <div className="text-muted-foreground py-6 text-center text-sm">
+            {t("chat.loadingMore")}
+          </div>
+        ) : loadError ? (
+          <div className="text-muted-foreground py-6 text-center text-sm">
+            {t("chat.historyLoadFailed")}
+          </div>
+        ) : messages.length === 0 ? (
+          <>
+            {!isTyping && emptyContent}
+            {isTyping && <TypingIndicator />}
+          </>
+        ) : (
+          <div className="mx-auto flex w-full max-w-250 flex-col gap-6 pb-4">
+            {renderMessages(messages, sessionId, historyStart)}
+            {isTyping && <TypingIndicator />}
+          </div>
+        )}
+      </div>
+    </section>
+  )
+}
+
 export function ChatPage() {
   const { t } = useTranslation()
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -118,6 +372,9 @@ export function ChatPage() {
   const [assistantDetailVisibility, setAssistantDetailVisibility] = useAtom(
     assistantDetailVisibilityAtom,
   )
+  const [splitGroups, setSplitGroups] = useAtom(splitConversationsAtom)
+  const sessionTitles = useAtomValue(sessionTitlesAtom)
+  const splitSessionStates = useAtomValue(splitSessionStatesAtom)
 
   const assistantDetailVisibilityOptions: Array<{
     value: AssistantDetailVisibility
@@ -138,13 +395,28 @@ export function ChatPage() {
     isTyping,
     activeSessionId,
     historyStart,
+    hasHydratedActiveSession,
     hasMoreHistory,
     contextUsage,
     sendMessage,
     switchSession,
     loadOlderHistory,
-    newChat,
   } = usePicoChat()
+
+  const activeSplitGroup = splitGroups.find((group) =>
+    group.includes(activeSessionId),
+  )
+  const getActiveScroller = useCallback(() => {
+    const root = scrollRef.current
+    if (!root) return null
+    if (root.dataset.sessionScroll === activeSessionId) return root
+    return (
+      Array.from(
+        root.querySelectorAll<HTMLDivElement>("[data-session-scroll]"),
+      ).find((element) => element.dataset.sessionScroll === activeSessionId) ??
+      null
+    )
+  }, [activeSessionId])
 
   const { state: gwState } = useGateway()
   const isGatewayRunning = gwState === "running"
@@ -194,35 +466,87 @@ export function ChatPage() {
     }
     pendingReturnIndexRef.current = null
     requestAnimationFrame(() => {
-      scrollRef.current
+      getActiveScroller()
         ?.querySelector(`[data-chat-index="${index}"]`)
         ?.scrollIntoView({ block: "center" })
     })
-  }, [activeSessionId, hasMoreHistory, historyStart, loadOlderHistory, messages])
+  }, [
+    activeSessionId,
+    hasMoreHistory,
+    historyStart,
+    loadOlderHistory,
+    messages,
+    getActiveScroller,
+  ])
 
-  const handleFork = async (messageIndex: number) => {
+  const handleFork = async (sessionId: string, messageIndex: number) => {
     try {
-      const fork = await forkSession(activeSessionId, messageIndex)
+      const fork = await forkSession(sessionId, messageIndex)
       await switchSession(fork.id)
-      void loadSessions(true)
     } catch (error) {
       console.error("Failed to fork conversation:", error)
       toast.error(t("chat.forkFailed"))
     }
   }
 
-  const {
-    sessions,
-    hasMore,
-    loadError,
-    loadErrorMessage,
-    observerRef,
-    loadSessions,
-    handleDeleteSession,
-  } = useSessionHistory({
-    activeSessionId,
-    onDeletedActiveSession: newChat,
-  })
+  const renderMessages = (
+    renderedMessages: ChatMessage[],
+    sessionId: string,
+    start: number,
+  ) =>
+    renderedMessages.map((msg, messageOffset) => {
+      if (!shouldShowAssistantMessage(assistantDetailVisibility, msg.kind)) {
+        return null
+      }
+
+      const storedIndex = msg.id.match(/^hist-(\d+)$/)
+      const messageIndex = storedIndex
+        ? Number(storedIndex[1])
+        : start + messageOffset
+      const canFork =
+        msg.role === "assistant" && (!msg.kind || msg.kind === "normal")
+
+      return (
+        <div
+          key={msg.id}
+          data-chat-index={messageIndex}
+          className="group flex w-full flex-col gap-1"
+        >
+          {msg.role === "assistant" ? (
+            <>
+              <AssistantMessage
+                content={msg.content}
+                attachments={msg.attachments}
+                kind={msg.kind}
+                modelName={msg.modelName}
+                toolCalls={msg.toolCalls}
+                timestamp={msg.timestamp}
+              />
+              {canFork && (
+                <div className="flex justify-end">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label={t("chat.forkAtMessage")}
+                    title={t("chat.forkAtMessage")}
+                    className="size-8 opacity-50 hover:opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
+                    onClick={() => void handleFork(sessionId, messageIndex)}
+                  >
+                    <IconGitFork className="size-4" />
+                  </Button>
+                </div>
+              )}
+            </>
+          ) : (
+            <UserMessage
+              content={msg.content}
+              attachments={msg.attachments}
+              timestamp={msg.timestamp}
+            />
+          )}
+        </div>
+      )
+    })
 
   const syncScrollState = (element: HTMLDivElement) => {
     const { clientHeight, scrollHeight, scrollTop } = element
@@ -232,6 +556,7 @@ export function ChatPage() {
 
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
     const element = e.currentTarget
+    if (element.dataset.sessionScroll !== activeSessionId) return
     syncScrollState(element)
     if (element.scrollTop > 16 || !hasMoreHistory) {
       return
@@ -241,7 +566,7 @@ export function ChatPage() {
     void loadOlderHistory(activeSessionId).then((loaded) => {
       if (!loaded) return
       requestAnimationFrame(() => {
-        if (scrollRef.current !== element) return
+        if (getActiveScroller() !== element) return
         element.scrollTop += element.scrollHeight - previousHeight
         syncScrollState(element)
       })
@@ -249,13 +574,14 @@ export function ChatPage() {
   }
 
   useEffect(() => {
-    if (scrollRef.current) {
+    const activeScroller = getActiveScroller()
+    if (activeScroller) {
       if (isAtBottom) {
-        scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+        activeScroller.scrollTop = activeScroller.scrollHeight
       }
-      syncScrollState(scrollRef.current)
+      syncScrollState(activeScroller)
     }
-  }, [messages, isTyping, isAtBottom])
+  }, [messages, isTyping, isAtBottom, getActiveScroller])
 
   const handleSend = () => {
     if ((!input.trim() && attachments.length === 0) || !canInput) return
@@ -376,8 +702,29 @@ export function ChatPage() {
   const canSubmit =
     canInput && (Boolean(input.trim()) || attachments.length > 0)
 
+  const handleRemoveSplitPane = (sessionId: string) => {
+    const remaining = activeSplitGroup?.filter((id) => id !== sessionId)
+    const removePane = () =>
+      setSplitGroups((groups) => removeSplitConversation(groups, sessionId))
+
+    if (sessionId === activeSessionId && remaining?.[0]) {
+      setIsAtBottom(true)
+      void switchSession(remaining[0]).finally(removePane)
+      return
+    }
+    removePane()
+  }
+
+  const activeEmptyState = (
+    <ChatEmptyState
+      hasAvailableModels={hasAvailableModels}
+      defaultModelName={defaultModelName}
+      isConnected={isGatewayRunning}
+    />
+  )
+
   return (
-    <div className="bg-background/95 flex h-full flex-col">
+    <div className="flex h-full flex-col bg-[var(--conversation-background)]">
       <PageHeader
         title={t("navigation.chat")}
         className={`transition-shadow ${
@@ -422,32 +769,6 @@ export function ChatPage() {
             </SelectContent>
           </Select>
         </div>
-
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={newChat}
-          className="h-9 gap-2"
-        >
-          <IconPlus className="size-4" />
-          <span className="hidden sm:inline">{t("chat.newChat")}</span>
-        </Button>
-
-        <SessionHistoryMenu
-          sessions={sessions}
-          activeSessionId={activeSessionId}
-          hasMore={hasMore}
-          loadError={loadError}
-          loadErrorMessage={loadErrorMessage}
-          observerRef={observerRef}
-          onOpenChange={(open) => {
-            if (open) {
-              void loadSessions(true)
-            }
-          }}
-          onSwitchSession={switchSession}
-          onDeleteSession={handleDeleteSession}
-        />
       </PageHeader>
 
       {forkedFrom && (
@@ -472,79 +793,42 @@ export function ChatPage() {
         </div>
       )}
 
-      <div
-        ref={scrollRef}
-        onScroll={handleScroll}
-        className="min-h-0 flex-1 [scrollbar-gutter:stable] overflow-y-auto px-4 py-6 md:px-8 lg:px-24 xl:px-48"
-      >
-        <div className="mx-auto flex w-full max-w-250 flex-col gap-8 pb-8">
-          {messages.length === 0 && !isTyping && (
-            <ChatEmptyState
-              hasAvailableModels={hasAvailableModels}
-              defaultModelName={defaultModelName}
-              isConnected={isGatewayRunning}
-            />
-          )}
-
-          {messages.map((msg, messageOffset) => {
-            if (
-              !shouldShowAssistantMessage(assistantDetailVisibility, msg.kind)
-            ) {
-              return null
-            }
-
-            const storedIndex = msg.id.match(/^hist-(\d+)$/)
-            const messageIndex = storedIndex
-              ? Number(storedIndex[1])
-              : historyStart + messageOffset
-            const canFork =
-              msg.role === "assistant" &&
-              (!msg.kind || msg.kind === "normal")
-            return (
-              <div
-                key={msg.id}
-                data-chat-index={messageIndex}
-                className="group flex w-full flex-col gap-1"
-              >
-                {msg.role === "assistant" ? (
-                  <>
-                    <AssistantMessage
-                      content={msg.content}
-                      attachments={msg.attachments}
-                      kind={msg.kind}
-                      modelName={msg.modelName}
-                      toolCalls={msg.toolCalls}
-                      timestamp={msg.timestamp}
-                    />
-                    {canFork && (
-                      <div className="flex justify-end">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          aria-label={t("chat.forkAtMessage")}
-                          title={t("chat.forkAtMessage")}
-                          className="size-8 opacity-50 hover:opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
-                          onClick={() => void handleFork(messageIndex)}
-                        >
-                          <IconGitFork className="size-4" />
-                        </Button>
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <UserMessage
-                    content={msg.content}
-                    attachments={msg.attachments}
-                    timestamp={msg.timestamp}
-                  />
-                )}
-              </div>
-            )
-          })}
-
-          {isTyping && <TypingIndicator />}
+      {activeSplitGroup ? (
+        <div ref={scrollRef} className="min-h-0 flex-1 overflow-hidden">
+          <SplitConversationView
+            sessions={activeSplitGroup}
+            activeSessionId={activeSessionId}
+            activeHistoryStart={historyStart}
+            hasHydratedActiveSession={hasHydratedActiveSession}
+            sessionTitles={sessionTitles}
+            splitSessionStates={splitSessionStates}
+            messages={messages}
+            isTyping={isTyping}
+            renderMessages={renderMessages}
+            onActivate={(sessionId) => {
+              setIsAtBottom(true)
+              void switchSession(sessionId)
+            }}
+            onRemove={handleRemoveSplitPane}
+            onScroll={handleScroll}
+            activeEmptyState={activeEmptyState}
+            t={t}
+          />
         </div>
-      </div>
+      ) : (
+        <div
+          ref={scrollRef}
+          data-session-scroll={activeSessionId}
+          onScroll={handleScroll}
+          className="min-h-0 flex-1 [scrollbar-gutter:stable] overflow-y-auto px-4 py-6 md:px-8 lg:px-24 xl:px-48"
+        >
+          <div className="mx-auto flex w-full max-w-250 flex-col gap-8 pb-8">
+            {messages.length === 0 && !isTyping && activeEmptyState}
+            {renderMessages(messages, activeSessionId, historyStart)}
+            {isTyping && <TypingIndicator />}
+          </div>
+        </div>
+      )}
 
       <input
         ref={fileInputRef}

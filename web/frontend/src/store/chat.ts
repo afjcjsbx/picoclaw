@@ -79,6 +79,23 @@ export interface ChatStoreState {
   contextUsage?: ContextUsage
 }
 
+export interface SplitSessionState {
+  messages: ChatMessage[]
+  isTyping: boolean
+  contextUsage?: ContextUsage
+}
+
+export const splitConversationsAtom = atomWithStorage<string[][]>(
+  "picoclaw:split-conversations",
+  [],
+  undefined,
+  { getOnInit: true },
+)
+export const splitSessionStatesAtom = atom<Record<string, SplitSessionState>>(
+  {},
+)
+export const sessionTitlesAtom = atom<Record<string, string>>({})
+
 type ChatStorePatch = Partial<ChatStoreState>
 
 const DEFAULT_CHAT_STATE: ChatStoreState = {
@@ -104,6 +121,30 @@ export const showAssistantDetailsAtom = atom(
 )
 
 const store = getDefaultStore()
+
+export function updateSplitSessionState(
+  sessionId: string,
+  patch:
+    | Partial<SplitSessionState>
+    | ((prev: SplitSessionState) => Partial<SplitSessionState>),
+) {
+  store.set(splitSessionStatesAtom, (states) => {
+    const prev = states[sessionId] ?? { messages: [], isTyping: false }
+    const nextPatch = typeof patch === "function" ? patch(prev) : patch
+    return { ...states, [sessionId]: { ...prev, ...nextPatch } }
+  })
+}
+
+export function initializeSplitSessionState(
+  sessionId: string,
+  messages: ChatMessage[],
+) {
+  store.set(splitSessionStatesAtom, (states) =>
+    sessionId in states
+      ? states
+      : { ...states, [sessionId]: { messages, isTyping: false } },
+  )
+}
 
 export function getChatState() {
   return store.get(chatAtom)

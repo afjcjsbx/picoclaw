@@ -15,8 +15,14 @@ import { invalidateSocket, isCurrentSocket } from "@/features/chat/websocket"
 import i18n from "@/i18n"
 import {
   type ChatAttachment,
+  type ChatStoreState,
+  chatAtom,
   getChatState,
+  initializeSplitSessionState,
+  splitConversationsAtom,
+  splitSessionStatesAtom,
   updateChatStore,
+  updateSplitSessionState,
 } from "@/store/chat"
 import { type GatewayState, gatewayAtom } from "@/store/gateway"
 
@@ -34,6 +40,18 @@ let reconnectTimer: number | null = null
 let reconnectAttempts = 0
 let shouldMaintainConnection = false
 let isLoadingOlderHistory = false
+const splitConnections = new Map<
+  string,
+  {
+    socket: WebSocket | null
+    timer: number | null
+    attempts: number
+    generation: number
+  }
+>()
+let unsubscribeChat: (() => void) | null = null
+let unsubscribeSplitConversations: (() => void) | null = null
+let lastSplitSyncKey = ""
 
 function clearReconnectTimer() {
   if (reconnectTimer !== null) {
@@ -78,9 +96,178 @@ function needsActiveSessionHydration(): boolean {
   )
 }
 
-function setActiveSessionId(sessionId: string) {
+function setActiveSessionId(sessionId: string, patch: Partial<ChatStoreState>) {
   activeSessionIdRef = sessionId
-  updateChatStore({ activeSessionId: sessionId })
+  updateChatStore({ ...patch, activeSessionId: sessionId })
+}
+
+function splitSessionIds(): Set<string> {
+  const activeSessionId = getChatState().activeSessionId
+  return new Set(
+    store
+      .get(splitConversationsAtom)
+      .find((group) => group.includes(activeSessionId))
+      ?.filter((sessionId) => sessionId !== activeSessionId) ?? [],
+  )
+}
+
+function isCurrentSplitConnection(
+  sessionId: string,
+  connection: { socket: WebSocket | null; generation: number },
+  socket: WebSocket,
+  generation: number,
+): boolean {
+  return (
+    splitConnections.get(sessionId) === connection &&
+    connection.socket === socket &&
+    connection.generation === generation &&
+    splitSessionIds().has(sessionId) &&
+    store.get(gatewayAtom).status === "running"
+  )
+}
+
+function closeSplitConnection(sessionId: string) {
+  const connection = splitConnections.get(sessionId)
+  if (!connection) return
+  splitConnections.delete(sessionId)
+  connection.generation += 1
+  if (connection.timer !== null) {
+    window.clearTimeout(connection.timer)
+  }
+  invalidateSocket(connection.socket)
+}
+
+function scheduleSplitReconnect(
+  sessionId: string,
+  connection: NonNullable<ReturnType<typeof splitConnections.get>>,
+) {
+  if (
+    splitConnections.get(sessionId) !== connection ||
+    !splitSessionIds().has(sessionId) ||
+    store.get(gatewayAtom).status !== "running" ||
+    connection.timer !== null
+  ) {
+    return
+  }
+
+  const delay = Math.min(1000 * 2 ** connection.attempts, 5000)
+  connection.attempts += 1
+  connection.timer = window.setTimeout(() => {
+    connection.timer = null
+    void connectSplitSession(sessionId, connection)
+  }, delay)
+}
+
+async function connectSplitSession(
+  sessionId: string,
+  connection: NonNullable<ReturnType<typeof splitConnections.get>>,
+) {
+  if (
+    splitConnections.get(sessionId) !== connection ||
+    !splitSessionIds().has(sessionId) ||
+    store.get(gatewayAtom).status !== "running" ||
+    connection.socket
+  ) {
+    return
+  }
+
+  if (
+    connection.generation === 0 &&
+    !store.get(splitSessionStatesAtom)[sessionId]
+  ) {
+    try {
+      const history = await loadSessionMessages(sessionId)
+      if (splitConnections.get(sessionId) !== connection) return
+      initializeSplitSessionState(sessionId, history.messages)
+    } catch (error) {
+      console.error("Failed to load split conversation history:", error)
+      if (splitConnections.get(sessionId) !== connection) return
+      initializeSplitSessionState(sessionId, [])
+    }
+  }
+
+  if (
+    splitConnections.get(sessionId) !== connection ||
+    !splitSessionIds().has(sessionId) ||
+    store.get(gatewayAtom).status !== "running"
+  ) {
+    return
+  }
+
+  const generation = ++connection.generation
+  try {
+    const wsScheme = window.location.protocol === "https:" ? "wss:" : "ws:"
+    const socket = new WebSocket(
+      `${wsScheme}//${window.location.host}/pico/ws?session_id=${encodeURIComponent(sessionId)}`,
+    )
+    connection.socket = socket
+
+    socket.onmessage = (event) => {
+      if (
+        !isCurrentSplitConnection(sessionId, connection, socket, generation)
+      ) {
+        return
+      }
+      try {
+        handlePicoMessage(JSON.parse(event.data) as PicoMessage, sessionId)
+      } catch {
+        console.warn("Non-JSON message from pico:", event.data)
+      }
+    }
+
+    socket.onopen = () => {
+      if (
+        !isCurrentSplitConnection(sessionId, connection, socket, generation)
+      ) {
+        return
+      }
+      connection.attempts = 0
+    }
+
+    socket.onclose = () => {
+      if (
+        !isCurrentSplitConnection(sessionId, connection, socket, generation)
+      ) {
+        return
+      }
+      connection.socket = null
+      scheduleSplitReconnect(sessionId, connection)
+    }
+
+    socket.onerror = () => {
+      if (
+        !isCurrentSplitConnection(sessionId, connection, socket, generation)
+      ) {
+        return
+      }
+      connection.socket = null
+      invalidateSocket(socket)
+      scheduleSplitReconnect(sessionId, connection)
+    }
+  } catch (error) {
+    console.error("Failed to connect split conversation:", error)
+    scheduleSplitReconnect(sessionId, connection)
+  }
+}
+
+function syncSplitConnections() {
+  const targets =
+    store.get(gatewayAtom).status === "running"
+      ? splitSessionIds()
+      : new Set<string>()
+  const key = `${store.get(gatewayAtom).status}:${getChatState().activeSessionId}:${[...targets].sort().join(",")}`
+  if (key === lastSplitSyncKey) return
+  lastSplitSyncKey = key
+
+  for (const sessionId of splitConnections.keys()) {
+    if (!targets.has(sessionId)) closeSplitConnection(sessionId)
+  }
+  for (const sessionId of targets) {
+    if (splitConnections.has(sessionId)) continue
+    const connection = { socket: null, timer: null, attempts: 0, generation: 0 }
+    splitConnections.set(sessionId, connection)
+    void connectSplitSession(sessionId, connection)
+  }
 }
 
 function disconnectChatInternal({
@@ -431,10 +618,24 @@ export async function switchChatSession(sessionId: string) {
 
   try {
     const historyPage = await loadSessionMessages(sessionId)
+    const currentState = getChatState()
+    const sharesSplitGroup = store
+      .get(splitConversationsAtom)
+      .some(
+        (group) =>
+          group.includes(currentState.activeSessionId) &&
+          group.includes(sessionId),
+      )
+    if (sharesSplitGroup && currentState.hasHydratedActiveSession) {
+      updateSplitSessionState(currentState.activeSessionId, {
+        messages: currentState.messages,
+        isTyping: currentState.isTyping,
+        contextUsage: currentState.contextUsage,
+      })
+    }
 
     disconnectChatInternal({ clearDesiredConnection: false })
-    setActiveSessionId(sessionId)
-    updateChatStore({
+    setActiveSessionId(sessionId, {
       messages: historyPage.messages,
       isTyping: false,
       hasHydratedActiveSession: true,
@@ -459,8 +660,7 @@ export async function newChatSession() {
   }
 
   disconnectChatInternal({ clearDesiredConnection: false })
-  setActiveSessionId(generateSessionId())
-  updateChatStore({
+  setActiveSessionId(generateSessionId(), {
     messages: [],
     isTyping: false,
     hasHydratedActiveSession: true,
@@ -486,6 +686,7 @@ export function initializeChatStore() {
 
   const syncConnectionWithGateway = (force: boolean = false) => {
     const gatewayStatus = store.get(gatewayAtom).status
+    syncSplitConnections()
     if (!force && gatewayStatus === lastGatewayStatus) {
       return
     }
@@ -505,7 +706,13 @@ export function initializeChatStore() {
     }
   }
 
+  unsubscribeChat = store.sub(chatAtom, syncSplitConnections)
+  unsubscribeSplitConversations = store.sub(
+    splitConversationsAtom,
+    syncSplitConnections,
+  )
   unsubscribeGateway = store.sub(gatewayAtom, syncConnectionWithGateway)
+  syncSplitConnections()
 
   if (!readStoredSessionId()) {
     updateChatStore({ hasHydratedActiveSession: true })
@@ -524,6 +731,14 @@ export function initializeChatStore() {
 export function teardownChatStore() {
   unsubscribeGateway?.()
   unsubscribeGateway = null
+  unsubscribeChat?.()
+  unsubscribeChat = null
+  unsubscribeSplitConversations?.()
+  unsubscribeSplitConversations = null
   initialized = false
+  lastSplitSyncKey = ""
+  for (const sessionId of splitConnections.keys()) {
+    closeSplitConnection(sessionId)
+  }
   disconnectChat()
 }

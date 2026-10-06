@@ -8,7 +8,10 @@ import { normalizeUnixTimestamp } from "@/features/chat/state"
 import {
   type ChatAttachment,
   type ContextUsage,
+  type SplitSessionState,
+  getChatState,
   updateChatStore,
+  updateSplitSessionState,
 } from "@/store/chat"
 
 export interface PicoMessage {
@@ -78,9 +81,13 @@ function parseContextUsage(
   return {
     used_tokens: used,
     total_tokens: total,
-    history_tokens: obj.history_tokens != null ? Number(obj.history_tokens) : undefined,
+    history_tokens:
+      obj.history_tokens != null ? Number(obj.history_tokens) : undefined,
     compress_at_tokens: Number(obj.compress_at_tokens) || 0,
-    summarize_at_tokens: obj.summarize_at_tokens != null ? Number(obj.summarize_at_tokens) : undefined,
+    summarize_at_tokens:
+      obj.summarize_at_tokens != null
+        ? Number(obj.summarize_at_tokens)
+        : undefined,
     used_percent: Number(obj.used_percent) || 0,
   }
 }
@@ -102,6 +109,19 @@ export function handlePicoMessage(
   }
 
   const payload = message.payload || {}
+  const updateSession = (
+    patch:
+      | Partial<SplitSessionState>
+      | ((prev: SplitSessionState) => Partial<SplitSessionState>),
+  ) => {
+    if (getChatState().activeSessionId === expectedSessionId) {
+      updateChatStore((prev) =>
+        typeof patch === "function" ? patch(prev) : patch,
+      )
+    } else {
+      updateSplitSessionState(expectedSessionId, patch)
+    }
+  }
 
   switch (message.type) {
     case "message.create":
@@ -119,7 +139,7 @@ export function handlePicoMessage(
           ? normalizeUnixTimestamp(Number(message.timestamp))
           : Date.now()
 
-      updateChatStore((prev) => ({
+      updateSession((prev) => ({
         messages: [
           ...prev.messages,
           {
@@ -157,7 +177,7 @@ export function handlePicoMessage(
         break
       }
 
-      updateChatStore((prev) => ({
+      updateSession((prev) => ({
         messages: (() => {
           let found = false
           const messages = prev.messages.map((msg) => {
@@ -209,18 +229,18 @@ export function handlePicoMessage(
         break
       }
 
-      updateChatStore((prev) => ({
+      updateSession((prev) => ({
         messages: prev.messages.filter((msg) => msg.id !== messageId),
       }))
       break
     }
 
     case "typing.start":
-      updateChatStore({ isTyping: true })
+      updateSession({ isTyping: true })
       break
 
     case "typing.stop":
-      updateChatStore({ isTyping: false })
+      updateSession({ isTyping: false })
       break
 
     case "error": {
@@ -233,7 +253,7 @@ export function handlePicoMessage(
       if (errorMessage) {
         toast.error(errorMessage)
       }
-      updateChatStore((prev) => ({
+      updateSession((prev) => ({
         messages: requestId
           ? prev.messages.filter((msg) => msg.id !== requestId)
           : prev.messages,
