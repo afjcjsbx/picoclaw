@@ -419,6 +419,7 @@ and injected into the context for a configured number of turns (`ttl`).
 | `inherit_env` | bool | no | Pass the full PicoClaw process environment to this stdio server. Defaults to `false`. |
 | `url`      | string  | sse/http | Endpoint URL for `sse`/`http` transport                                                                                                                         |
 | `headers`  | object  | no       | HTTP headers for `sse`/`http` transport                                                                                                                         |
+| `oauth`    | object  | no       | Browser OAuth for remote servers; run `picoclaw mcp login <name>` before connecting. Cannot be combined with an `Authorization` header.                         |
 
 ### Transport Behavior
 
@@ -428,6 +429,9 @@ and injected into the context for a configured number of turns (`ttl`).
 - `http` and `sse` both use `url` + optional `headers`.
 - `env`, `env_file`, and `inherit_env` are only applied to `stdio` servers.
 - By default, stdio servers inherit only `PATH`, `HOME`, `USER`, `LANG`, `LC_ALL`, `TERM`, `SHELL`, `TMPDIR`, and `XDG_*` (plus basic Windows process variables on Windows). `env_file` adds variables, and `env` overrides both the file and inherited values. Set `inherit_env: true` only if the server needs the entire parent environment.
+- `oauth: {}` enables browser login with dynamic client registration. Optional
+  fields are `client_id`, `issuer`, `scopes`, and `callback_port`. See
+  [MCP Server CLI](mcp-cli.md#picoclaw-mcp-login-and-logout).
 
 ### Configuration Examples
 

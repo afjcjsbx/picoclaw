@@ -211,7 +211,7 @@ func formatToolDiscoveryRule(useBM25, useRegex bool) string {
 	}
 
 	return fmt.Sprintf(
-		`5. **Tool Discovery** - Your visible tools are limited to save memory, but a vast hidden library exists. If you lack the right tool for a task, BEFORE giving up, you MUST search using the %s tool. Do not refuse a request unless the search returns nothing. Found tools will temporarily unlock for your next turn.`,
+		`5. **Tool Discovery** - Some MCP tools may be deferred and absent from your visible tool list. If a needed capability is not visible, search using the %s tool before giving up. Found tools will temporarily unlock for your next turn.`,
 		strings.Join(toolNames, " or "),
 	)
 }

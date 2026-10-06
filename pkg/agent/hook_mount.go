@@ -318,6 +318,7 @@ func validHookEventKinds() map[string]string {
 	}
 	kinds["turn_start"] = runtimeevents.KindAgentTurnStart.String()
 	kinds["turn_end"] = runtimeevents.KindAgentTurnEnd.String()
+	kinds["turn_completed"] = runtimeevents.KindAgentTurnEnd.String()
 	kinds["llm_request"] = runtimeevents.KindAgentLLMRequest.String()
 	kinds["llm_delta"] = runtimeevents.KindAgentLLMDelta.String()
 	kinds["llm_response"] = runtimeevents.KindAgentLLMResponse.String()

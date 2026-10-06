@@ -25,6 +25,8 @@ const (
 )
 
 type ProcessHookOptions struct {
+	ExactEnv      bool              // Use Env without inheriting host credentials (plugin host).
+	Config        map[string]string // Plugin-scoped configuration sent during hello.
 	Command       []string
 	Dir           string
 	Env           []string
@@ -71,9 +73,10 @@ type processHookRPCError struct {
 }
 
 type processHookHelloParams struct {
-	Name    string   `json:"name"`
-	Version int      `json:"version"`
-	Modes   []string `json:"modes,omitempty"`
+	Config  map[string]string `json:"config,omitempty"`
+	Name    string            `json:"name"`
+	Version int               `json:"version"`
+	Modes   []string          `json:"modes,omitempty"`
 }
 
 type processHookDecisionResponse struct {
@@ -109,7 +112,9 @@ func NewProcessHook(ctx context.Context, name string, opts ProcessHookOptions) (
 
 	cmd := exec.Command(opts.Command[0], opts.Command[1:]...)
 	cmd.Dir = opts.Dir
-	if len(opts.Env) > 0 {
+	if opts.ExactEnv {
+		cmd.Env = append([]string{}, opts.Env...)
+	} else if len(opts.Env) > 0 {
 		cmd.Env = append(os.Environ(), opts.Env...)
 	}
 	stdin, err := cmd.StdinPipe()
@@ -301,6 +306,7 @@ func (ph *ProcessHook) hello(ctx context.Context) error {
 
 	var result map[string]any
 	return ph.call(ctx, "hook.hello", processHookHelloParams{
+		Config:  ph.opts.Config,
 		Name:    ph.name,
 		Version: 1,
 		Modes:   modes,
