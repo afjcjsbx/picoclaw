@@ -201,7 +201,7 @@ export const AssistantMessage = memo(function AssistantMessage({
   const isThought = kind === "thought"
   const isToolCalls = kind === "tool_calls"
   const isToolFeedback = kind === "tool_feedback"
-  const isCollapsedBlock = isThought || isToolCalls || isToolFeedback
+  const isCollapsedBlock = isThought || isToolCalls
   const hasText = content.trim().length > 0
   const hasToolCalls = toolCalls.length > 0
   const imageAttachments = attachments.filter(
@@ -220,10 +220,16 @@ export const AssistantMessage = memo(function AssistantMessage({
     ? t("chat.copiedLabel")
     : t("chat.copyMessage")
   const trimmedModelName = modelName?.trim() ?? ""
+  const toolFeedbackSummary = content
+    .trim()
+    .replace(/```(?:json)?|`/gi, "")
+    .replace(/\s+/g, " ")
+    .replace(/^🔧\s*/, "")
+    .trim()
 
   return (
     <div className="group flex w-full flex-col gap-1.5">
-      {!isCollapsedBlock && (
+      {!isCollapsedBlock && !isToolFeedback && (
         <div className="text-muted-foreground/60 flex items-center justify-between gap-2 px-1 text-xs opacity-70">
           <div className="flex items-center gap-2">
             <span>PicoClaw</span>
@@ -353,17 +359,19 @@ export const AssistantMessage = memo(function AssistantMessage({
               })}
             </div>
           )}
-          {(!isCollapsedBlock || isExpanded) && isToolFeedback && hasText && (
-            <div className="prose dark:prose-invert prose-p:my-1.5 prose-p:whitespace-pre-wrap max-w-none px-3 pb-3 text-[13px] leading-relaxed [overflow-wrap:anywhere] break-words">
-              <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
-                rehypePlugins={[rehypeRaw, rehypeSanitize, rehypeHighlight]}
-                components={{
-                  pre: MarkdownCodeBlock,
-                }}
+          {isToolFeedback && hasText && (
+            <div className="flex min-w-0 items-center gap-2 py-0.5 text-[13px] leading-5">
+              <IconTool
+                aria-hidden="true"
+                className="text-muted-foreground size-3.5 shrink-0"
+              />
+              <span
+                tabIndex={0}
+                className="text-muted-foreground min-w-0 flex-1 truncate whitespace-nowrap"
+                title={content}
               >
-                {content}
-              </ReactMarkdown>
+                {toolFeedbackSummary}
+              </span>
             </div>
           )}
           {(!isCollapsedBlock || isExpanded) &&
