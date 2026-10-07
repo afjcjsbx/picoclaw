@@ -155,7 +155,7 @@ export function ChatComposer({
             disabled={!canInput}
             title={disabledMessage || undefined}
             className={cn(
-              "placeholder:text-muted-foreground/65 max-h-[160px] min-h-[48px] resize-none border-0 bg-transparent px-1 py-1.5 text-[15px] shadow-none transition-colors focus-visible:ring-0 focus-visible:outline-none dark:bg-transparent",
+              "placeholder:text-muted-foreground/65 max-h-[160px] min-h-[40px] resize-none border-0 bg-transparent px-1 py-1.5 text-[15px] shadow-none transition-colors focus-visible:ring-0 focus-visible:outline-none dark:bg-transparent",
               !canInput && "cursor-not-allowed",
             )}
             minRows={1}
