@@ -1,4 +1,4 @@
-# PicoClaw plugins
+# Agent Plugin Installation and Reference
 
 PicoClaw supports **Agent Plugins 1.0.0**, including skills, stdio MCP,
 Streamable HTTP MCP and legacy HTTP+SSE MCP. The 1.1.0 draft is not enabled.
@@ -87,6 +87,30 @@ By default, discovery searches immediate child directories of:
 Copy or clone a reviewed package into one of those directories, or provide an
 explicit `entries.<id>.path`. Discovery alone never activates a package. Both
 `plugins.enabled` and the entry's `enabled` must be true.
+
+For the default plugin directory, install a package like this:
+
+```sh
+mkdir -p ~/.picoclaw/plugins
+git clone <plugin-repository> ~/.picoclaw/plugins/<plugin-name>
+```
+
+You can also copy it to `<workspace>/plugins/<plugin-name>`. Then enable the
+plugin in `config.json`, using the `name` from its `plugin.json` as the entry ID:
+
+```json
+{
+  "plugins": {
+    "enabled": true,
+    "entries": {
+      "plugin-name": { "enabled": true }
+    }
+  }
+}
+```
+
+Restart PicoClaw or reload its configuration to activate the plugin. Review
+packages before enabling them; local plugin servers run as subprocesses.
 
 An entry ID follows the plugin name syntax. Without `path`, it selects a
 discovered manifest name. With `path`, it is a stable installation alias and may
@@ -442,7 +466,7 @@ protocol: `hook.hello`, `hook.runtime_event`, and the requested interception
 methods. `entries.<id>.config` is delivered as `config` in the hello payload.
 Only declared stages and allowed agents are forwarded.
 
-See [the hook protocol](docs/architecture/hooks/README.md). Hook failures use the
+See [the hook protocol](../architecture/hooks/README.md). Hook failures use the
 existing hook manager's timeout and error policies. In particular, approval
 errors can deny a tool call; they do not crash the runtime. Trusted interception
 hooks can alter or short-circuit execution, so `allow_hooks` is a separate grant.
@@ -471,8 +495,9 @@ permissions. Path containment protects package discovery and resource access;
 it is not a sandbox for arbitrary subprocess code. Enable only trusted packages.
 
 For isolated installations outside the instance filesystem, configure explicit
-read-only package and writable data/toolchain exposure as described in
-[isolation documentation](pkg/isolation/README.md). The plugin loader never
+read-only package and writable data/toolchain exposure as described in the
+[isolation documentation](https://github.com/afjcjsbx/picoclaw/blob/main/pkg/isolation/README.md).
+The plugin loader never
 silently broadens those OS permissions.
 
 To disable a plugin, set its entry's `enabled` to false and reload. To uninstall,
