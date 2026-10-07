@@ -724,7 +724,7 @@ export function ChatPage() {
   )
 
   return (
-    <div className="flex h-full flex-col bg-[var(--conversation-background)]">
+    <div className="chat-font flex h-full flex-col bg-[var(--conversation-background)]">
       <PageHeader
         title={t("navigation.chat")}
         className={`transition-shadow ${

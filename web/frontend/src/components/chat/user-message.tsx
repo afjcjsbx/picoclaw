@@ -54,7 +54,7 @@ export const UserMessage = memo(function UserMessage({
               "wrap-break-word whitespace-pre-wrap",
               isCommand
                 ? "rounded-xl border border-zinc-200 bg-transparent px-4 py-3 font-mono text-[14px] text-zinc-800 dark:border-zinc-800/60 dark:bg-[#121212] dark:text-zinc-200 dark:shadow-sm"
-                : "bg-muted text-foreground rounded-2xl rounded-tr-sm px-5 py-3 text-[15px] leading-relaxed",
+                : "bg-muted text-foreground rounded-2xl rounded-tr-sm px-5 py-3 text-[16px] leading-[1.75]",
             )}
           >
             {isCommand ? (
