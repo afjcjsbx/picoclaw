@@ -176,7 +176,14 @@ func (h *pluginMCPHook) publishToolFeedback(
 
 	userMessage, _ := variables["user_message"].(string)
 	explanation := ""
-	if strings.TrimSpace(userMessage) != "" {
+	channel := ""
+	if ts != nil {
+		channel = ts.channel
+	} else if event != nil {
+		channel = event.Scope.Channel
+	}
+	if !strings.EqualFold(strings.TrimSpace(channel), "pico") &&
+		strings.TrimSpace(userMessage) != "" {
 		explanation = utils.ToolFeedbackContinuationHint + ": " + h.clean(userMessage)
 	}
 	msg.Content = utils.FormatToolFeedbackMessage(
