@@ -25,7 +25,7 @@ The implementation has four layers:
 
 1. Configuration layer: reads `config.Config.Isolation` and injects it through `isolation.Configure(cfg)`.
 2. Instance layout layer: resolves `config.GetHome()`, prepares instance directories, and builds the runtime user environment.
-3. Platform backend layer: Linux uses `bwrap`; Windows uses a restricted token, low integrity, and a `Job Object`; other platforms are not implemented.
+3. Platform backend layer: Linux uses `bwrap`; macOS uses Seatbelt through `sandbox-exec`; Windows uses a restricted token, low integrity, and a `Job Object`.
 4. Unified startup layer: `PrepareCommand(cmd)`, `Start(cmd)`, and `Run(cmd)`.
 
 All integrations that spawn subprocesses should reuse these helpers instead of calling `cmd.Start` or `cmd.Run` directly.
@@ -46,7 +46,7 @@ Isolation lives under:
 Field meanings:
 
 - `enabled`: enables or disables subprocess isolation. Default: `false`.
-- `expose_paths`: explicitly exposes host paths inside the isolated environment. It only matters when `enabled=true`. This is currently supported on Linux only.
+- `expose_paths`: explicitly exposes host paths inside the isolated environment. It only matters when `enabled=true`. Linux supports path remapping; macOS supports same-path access only.
 
 Example:
 
@@ -82,6 +82,8 @@ Rules for `expose_paths`:
 Platform note:
 
 - Linux uses a real `source -> target` mount view.
+- Linux probes optional bubblewrap namespace flags once. If the kernel rejects one with `Creating new namespace failed` (EINVAL), that namespace isolation is dropped with a warning while the mount namespace, filesystem view, and user environment remain active. This weakens isolation for that namespace; other probe failures stop startup.
+- macOS requires `target` to match `source`; Seatbelt does not remap paths.
 - Windows does not currently support `expose_paths`.
 
 ## Instance Root And Directories
@@ -113,7 +115,7 @@ Windows also prepares:
 
 When isolation is enabled, child processes receive a redirected per-instance user environment.
 
-Linux variables:
+Linux and macOS variables:
 
 - `HOME`
 - `TMPDIR`
@@ -186,9 +188,17 @@ The Windows backend currently uses:
 
 It does not currently implement true `source -> target` filesystem remapping.
 
-### macOS And Other Platforms
+### macOS
 
-They are not implemented yet.
+The macOS backend uses `/usr/bin/sandbox-exec` with a Seatbelt default-deny profile.
+It allows writes under the PicoClaw instance root and explicit `rw` paths, while
+exposing system files, the command, its configured working directory, and
+absolute path arguments as needed. Network access remains available, matching
+Linux behavior.
+Because Apple deprecated `sandbox-exec`, macOS may remove it in a future release;
+when it is missing, isolation fails closed.
+
+### Other Platforms
 
 When isolation is explicitly enabled on an unsupported platform, the higher-level runtime should surface that as an unsupported configuration instead of pretending isolation succeeded.
 
@@ -204,6 +214,8 @@ Windows log name:
 
 - `windows isolation access rules`
 
+macOS uses the `macOS Seatbelt profile prepared` debug log.
+
 If you suspect isolation is ineffective, check whether unexpected host paths appear in those logs.
 
 ## Relationship To `restrict_to_workspace`
@@ -218,7 +230,7 @@ They complement each other and do not replace each other.
 - Linux isolation is implemented with `bwrap`, not a custom in-process isolation runtime.
 - Linux does not currently enable a dedicated `pid` namespace by default.
 - Windows does not yet implement full host ACL enforcement for every allowed or denied path.
-- macOS is not implemented.
+- macOS Seatbelt does not support `source -> target` path remapping and relies on Apple's deprecated `sandbox-exec` command.
 - The current design isolates child processes, not the main `picoclaw` process.
 
 ## Suggested Reading Order

@@ -44,6 +44,7 @@ func (al *AgentLoop) ProcessDirectWithChannel(
 	ctx context.Context,
 	content, sessionKey, channel, chatID string,
 ) (string, error) {
+	al.waitPlugins(ctx)
 	if err := al.ensureHooksInitialized(ctx); err != nil {
 		return "", err
 	}
@@ -74,6 +75,7 @@ func (al *AgentLoop) ProcessHeartbeat(
 	ctx context.Context,
 	content, channel, chatID string,
 ) (string, error) {
+	al.waitPlugins(ctx)
 	if err := al.ensureHooksInitialized(ctx); err != nil {
 		return "", err
 	}

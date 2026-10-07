@@ -3,8 +3,10 @@
 package isolation
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/sipeed/picoclaw/pkg/config"
@@ -21,7 +23,14 @@ func TestBuildLinuxBwrapArgs_IncludesNamespaceFlagsAndExec(t *testing.T) {
 		t.Fatal(err)
 	}
 	plan := BuildLinuxMountPlan(root, []config.ExposePath{{Source: binaryDir, Target: binaryDir, Mode: "ro"}})
-	args, err := buildLinuxBwrapArgs(binaryPath, binaryPath, []string{binaryPath, "--flag"}, root, plan)
+	args, err := buildLinuxBwrapArgs(
+		binaryPath,
+		binaryPath,
+		[]string{binaryPath, "--flag"},
+		root,
+		plan,
+		map[string]bool{"--unshare-ipc": true},
+	)
 	if err != nil {
 		t.Fatalf("buildLinuxBwrapArgs() error = %v", err)
 	}
@@ -99,7 +108,7 @@ func TestBuildLinuxBwrapArgs_UsesResolvedPathForRelativeCommand(t *testing.T) {
 		{Source: execDir, Target: execDir, Mode: "rw"},
 		{Source: resolvedPath, Target: resolvedPath, Mode: "ro"},
 	}
-	args, err := buildLinuxBwrapArgs("./hook.sh", resolvedPath, []string{"./hook.sh"}, execDir, plan)
+	args, err := buildLinuxBwrapArgs("./hook.sh", resolvedPath, []string{"./hook.sh"}, execDir, plan, nil)
 	if err != nil {
 		t.Fatalf("buildLinuxBwrapArgs() error = %v", err)
 	}
@@ -122,6 +131,70 @@ func TestBuildLinuxBwrapArgs_UsesResolvedPathForRelativeCommand(t *testing.T) {
 		}
 	}
 	t.Fatalf("buildLinuxBwrapArgs() missing exec delimiter: %v", args)
+}
+
+func TestBuildLinuxBwrapArgs_UsesNamespaceProbeResult(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		output  string
+		runErr  error
+		wantIPC bool
+	}{
+		{name: "supported", wantIPC: true},
+		{name: "unsupported", output: "bwrap: Creating new namespace failed: Invalid argument", runErr: errors.New("exit status 1")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			flags, err := probeLinuxNamespaceFlags("/usr/bin/bwrap", func(path string, args ...string) ([]byte, error) {
+				if path != "/usr/bin/bwrap" {
+					t.Fatalf("probe path = %q, want resolved bwrap path", path)
+				}
+				if !contains(args, "--unshare-ipc") || !contains(args, "--") || args[len(args)-1] != "true" {
+					t.Fatalf("probe args = %v, want independent IPC namespace probe", args)
+				}
+				return []byte(tc.output), tc.runErr
+			})
+			if err != nil {
+				t.Fatalf("probeLinuxNamespaceFlags() error = %v", err)
+			}
+
+			args, err := buildLinuxBwrapArgs("/bin/true", "/bin/true", []string{"/bin/true"}, "", nil, flags)
+			if err != nil {
+				t.Fatalf("buildLinuxBwrapArgs() error = %v", err)
+			}
+			if got := contains(args, "--unshare-ipc"); got != tc.wantIPC {
+				t.Fatalf("bwrap args IPC flag = %t, want %t: %v", got, tc.wantIPC, args)
+			}
+			if !tc.wantIPC {
+				for _, required := range []string{"--die-with-parent", "--proc", "/proc", "--dev", "/dev"} {
+					if !contains(args, required) {
+						t.Errorf("bwrap args missing %q after unsupported IPC probe: %v", required, args)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestProbeLinuxNamespaceFlags_OtherFailureIsHardError(t *testing.T) {
+	wantErr := errors.New("permission denied")
+	_, err := probeLinuxNamespaceFlags("/usr/bin/bwrap", func(string, ...string) ([]byte, error) {
+		return []byte("bwrap: setting up environment failed"), wantErr
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("probeLinuxNamespaceFlags() error = %v, want wrapped %v", err, wantErr)
+	}
+	if strings.Contains(err.Error(), "unsupported") {
+		t.Fatalf("non-EINVAL probe failure was classified unsupported: %v", err)
+	}
+}
+
+func contains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestAppendLinuxArgumentMounts_AddsAbsoluteArgumentPaths(t *testing.T) {

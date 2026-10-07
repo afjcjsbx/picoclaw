@@ -37,6 +37,12 @@ See [Sensitive Data Filtering](../security/sensitive_data_filtering.md) for full
 | `filter_sensitive_data` | bool | `true` | Enable/disable filtering |
 | `filter_min_length` | int | `8` | Minimum content length to trigger filtering |
 
+## Protected local files
+
+Filesystem read tools deny `.env`, `.env.*`, `.envrc`, `.security.yml` (including its backups), `.netrc`, `.npmrc`, `.pypirc`, and files inside `.ssh`, `.aws`, `.kube`, or `.gnupg` directories. The check also follows symlinks, hides these entries from directory listings and file searches, and applies to local files attached through `send_file`, `load_image`, or `message`. Read allow paths do not override it. `write_file` can still create or explicitly overwrite these files; `edit_file` and `append_file` cannot read their existing contents.
+
+This is a guard for PicoClaw's filesystem tools. Shell commands and external MCP tools run outside this read policy; use process or container isolation when they must not access workspace secrets.
+
 ## Image Generation
 
 The optional `image_generate` tool uses an image-capable OpenAI, Gemini, or OpenRouter model configured in `model_list` and sends generated images to the current chat. See the [image generation guide](../tools/image-generation.md) for configuration and supported arguments.
@@ -419,6 +425,7 @@ and injected into the context for a configured number of turns (`ttl`).
 | `inherit_env` | bool | no | Pass the full PicoClaw process environment to this stdio server. Defaults to `false`. |
 | `url`      | string  | sse/http | Endpoint URL for `sse`/`http` transport                                                                                                                         |
 | `headers`  | object  | no       | HTTP headers for `sse`/`http` transport                                                                                                                         |
+| `oauth`    | object  | no       | Browser OAuth for remote servers; run `picoclaw mcp login <name>` before connecting. Cannot be combined with an `Authorization` header.                         |
 
 ### Transport Behavior
 
@@ -428,6 +435,9 @@ and injected into the context for a configured number of turns (`ttl`).
 - `http` and `sse` both use `url` + optional `headers`.
 - `env`, `env_file`, and `inherit_env` are only applied to `stdio` servers.
 - By default, stdio servers inherit only `PATH`, `HOME`, `USER`, `LANG`, `LC_ALL`, `TERM`, `SHELL`, `TMPDIR`, and `XDG_*` (plus basic Windows process variables on Windows). `env_file` adds variables, and `env` overrides both the file and inherited values. Set `inherit_env: true` only if the server needs the entire parent environment.
+- `oauth: {}` enables browser login with dynamic client registration. Optional
+  fields are `client_id`, `issuer`, `scopes`, and `callback_port`. See
+  [MCP Server CLI](mcp-cli.md#picoclaw-mcp-login-and-logout).
 
 ### Configuration Examples
 

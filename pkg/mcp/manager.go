@@ -14,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/sipeed/picoclaw/pkg/config"
@@ -152,6 +153,8 @@ func inheritedMCPEnv(environ []string, inheritAll bool) map[string]string {
 
 // ServerConnection represents a connection to an MCP server
 type ServerConnection struct {
+	plugin      bool // Plugin calls are never automatically replayed after disconnect.
+	cancel      context.CancelFunc
 	Name        string
 	Config      config.MCPServerConfig
 	Client      *mcp.Client
@@ -360,6 +363,22 @@ func connectServer(
 	name string,
 	cfg config.MCPServerConfig,
 ) (*ServerConnection, error) {
+	var handler auth.OAuthHandler
+	if cfg.OAuth != nil {
+		if err := validateOAuthConfig(cfg); err != nil {
+			return nil, err
+		}
+		handler = &storedOAuthHandler{name: name, store: newOAuthStore(name, cfg)}
+	}
+	return connectServerWithOAuth(ctx, name, cfg, handler)
+}
+
+func connectServerWithOAuth(
+	ctx context.Context,
+	name string,
+	cfg config.MCPServerConfig,
+	handler auth.OAuthHandler,
+) (*ServerConnection, error) {
 	logger.InfoCF("mcp", "Connecting to MCP server",
 		map[string]any{
 			"server":     name,
@@ -406,6 +425,7 @@ func connectServer(
 		sseTransport := &mcp.StreamableClientTransport{
 			Endpoint:             cfg.URL,
 			DisableStandaloneSSE: disableStandaloneSSE,
+			OAuthHandler:         handler,
 		}
 
 		// Add custom headers if provided
@@ -422,6 +442,12 @@ func connectServer(
 					"server":       name,
 					"header_count": len(cfg.Headers),
 				})
+		}
+		if handler != nil {
+			sseTransport.HTTPClient = &http.Client{
+				Transport:     &headerTransport{base: oauthHTTPTransport{}, headers: cfg.Headers},
+				CheckRedirect: rejectOAuthRedirect,
+			}
 		}
 
 		transport = sseTransport
@@ -566,7 +592,7 @@ func (m *Manager) CallTool(
 
 	result, err := conn.Session.CallTool(ctx, params)
 	if err != nil {
-		if shouldReconnectCallError(err) {
+		if !conn.plugin && shouldReconnectCallError(err) {
 			logger.WarnCF("mcp", "MCP server session was lost during tool call, reconnecting",
 				map[string]any{
 					"server": serverName,
@@ -713,7 +739,17 @@ func (m *Manager) Close() error {
 
 	var errs []error
 	for name, conn := range m.servers {
+		if conn.cancel != nil {
+			conn.cancel()
+		}
 		if err := conn.Session.Close(); err != nil {
+			// Plugin shutdown cancels process lifetime before joining sessions.
+			// A terminated child is expected here, not a new component failure.
+			var exitErr *exec.ExitError
+			if conn.plugin &&
+				(errors.As(err, &exitErr) || errors.Is(err, os.ErrClosed) || errors.Is(err, context.Canceled)) {
+				continue
+			}
 			logger.ErrorCF("mcp", "Failed to close server connection",
 				map[string]any{
 					"server": name,

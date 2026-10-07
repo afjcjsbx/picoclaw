@@ -105,6 +105,8 @@
 
 🔌 **Supporto MCP**: Integrazione nativa del [Model Context Protocol](https://modelcontextprotocol.io/) — connetti qualsiasi server MCP per estendere le capacità dell'Agent.
 
+🧩 **Plugin Agent**: Installa e attiva pacchetti Agent Plugins 1.0.0 che includono Skill e server MCP. Consulta la [guida all'installazione dei plugin](../guides/plugins.md).
+
 👁️ **Pipeline di Visione**: Invia immagini e file direttamente all'Agent — codifica base64 automatica per LLM multimodali.
 
 🧠 **Routing Intelligente**: Routing dei modelli basato su regole — le query semplici vanno verso modelli leggeri, risparmiando sui costi API.
@@ -495,6 +497,8 @@ PicoClaw può cercare sul web per fornire informazioni aggiornate. Configura in 
 PicoClaw include strumenti integrati per operazioni su file, esecuzione di codice, pianificazione e altro. Vedi [Configurazione degli Strumenti](../reference/tools_configuration.md) per i dettagli.
 
 ## 🎯 Skill
+
+PicoClaw supporta anche l'installazione di pacchetti Agent Plugins 1.0.0, che possono includere Skill e server MCP. Consulta la [guida completa ai plugin](../guides/plugins.md).
 
 Le Skill sono capacità modulari che estendono il tuo Agent. Vengono caricate dai file `SKILL.md` nel tuo workspace.
 

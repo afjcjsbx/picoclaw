@@ -105,7 +105,7 @@ func (t *SendFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult("media store not configured")
 	}
 
-	resolved, err := validatePathWithAllowPaths(path, t.workspace, t.restrict, t.allowPaths)
+	resolved, err := ValidateReadablePathWithAllowPaths(path, t.workspace, t.restrict, t.allowPaths)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("invalid path: %v", err))
 	}

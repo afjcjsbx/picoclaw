@@ -58,10 +58,11 @@ const (
 )
 
 type HookRegistration struct {
-	Name     string
-	Priority int
-	Source   HookSource
-	Hook     any
+	Name            string
+	Priority        int
+	Source          HookSource
+	ObserverTimeout time.Duration
+	Hook            any
 }
 
 func NamedHook(name string, hook any) HookRegistration {
@@ -317,7 +318,7 @@ func (hm *HookManager) dispatchRuntimeEvents(ch <-chan runtimeevents.Event) {
 			if !ok {
 				continue
 			}
-			hm.runRuntimeObserver(reg.Name, observer, evt)
+			hm.runRuntimeObserver(reg.Name, observer, evt, reg.ObserverTimeout)
 		}
 	}
 }
@@ -601,8 +602,12 @@ func (hm *HookManager) runRuntimeObserver(
 	name string,
 	observer RuntimeEventObserver,
 	evt runtimeevents.Event,
+	timeout time.Duration,
 ) {
-	ctx, cancel := context.WithTimeout(context.Background(), hm.observerTimeout)
+	if timeout <= 0 {
+		timeout = hm.observerTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	done := make(chan error, 1)

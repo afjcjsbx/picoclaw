@@ -19,6 +19,8 @@ func NewMCPCommand() *cobra.Command {
 		newEditCommand(),
 		newTestCommand(),
 		newShowCommand(),
+		newLoginCommand(),
+		newLogoutCommand(),
 	)
 
 	return cmd
