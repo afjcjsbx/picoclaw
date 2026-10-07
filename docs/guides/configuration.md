@@ -1106,7 +1106,7 @@ This keeps the runtime lightweight while making new OpenAI-compatible backends m
       "max_tokens": 8192,
       "temperature": 0.7,
       "max_tool_iterations": 20,
-      "max_parallel_turns": 1
+      "max_parallel_turns": 5
     }
   },
   "providers": {
@@ -1120,7 +1120,7 @@ This keeps the runtime lightweight while making new OpenAI-compatible backends m
 
 > **Note**: The `providers` format is deprecated. Use the new `model_list` format with `.security.yml` for better security.
 >
-> **`max_parallel_turns`**: Controls concurrent processing of messages from different sessions. `1` (default) = sequential; `>1` = parallel. Messages from the same session are always serialized. See [Steering docs](../architecture/steering.md) for details.
+> **`max_parallel_turns`**: Controls concurrent processing of messages from different sessions. `5` is the default; `0` or `1` = sequential; `>1` = parallel. Messages from the same session are always serialized. See [Steering docs](../architecture/steering.md) for details.
 
 </details>
 
