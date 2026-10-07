@@ -944,6 +944,11 @@ type ToolConfig struct {
 	Enabled bool `json:"enabled" yaml:"-" env:"ENABLED"`
 }
 
+type SelfToolConfig struct {
+	Enable   bool `json:"enable"`
+	AllowSet bool `json:"allow_set"`
+}
+
 type MessageToolsConfig struct {
 	ToolConfig `yaml:"-" envPrefix:"PICOCLAW_TOOLS_MESSAGE_"`
 
@@ -1211,6 +1216,7 @@ type ToolsConfig struct {
 	// Content shorter than this will be returned unchanged for performance.
 	// Default: 8
 	FilterMinLength int                     `json:"filter_min_length" yaml:"-"                env:"PICOCLAW_TOOLS_FILTER_MIN_LENGTH"`
+	Self            SelfToolConfig          `json:"self"               yaml:"-"`
 	Web             WebToolsConfig          `json:"web"               yaml:"web,omitempty"`
 	Cron            CronToolsConfig         `json:"cron"              yaml:"-"`
 	Exec            ExecConfig              `json:"exec"              yaml:"-"`
@@ -1964,6 +1970,8 @@ func expandMultiKeyModels(models []*ModelConfig) []*ModelConfig {
 
 func (t *ToolsConfig) IsToolEnabled(name string) bool {
 	switch name {
+	case "self":
+		return t.Self.Enable
 	case "todo":
 		return t.Todo.Enabled
 	case "web":
