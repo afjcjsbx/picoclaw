@@ -166,6 +166,9 @@ func (t *SelfTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 			return tools.ErrorResult(err.Error())
 		}
 		log("set " + key)
+		if key == "model_preset" {
+			return tools.NewToolResult(fmt.Sprintf("model preset for this session will change to %q starting next turn", value))
+		}
 		return tools.NewToolResult(key + " updated")
 	}
 	if isSelfRuntimeRoot(key) {
@@ -207,18 +210,21 @@ func (c *agentRuntimeControl) Snapshot(ctx context.Context) map[string]any {
 	if c.agent == nil {
 		return map[string]any{}
 	}
-	if turnStateFromContext(ctx) == nil {
+	agent := c.agent
+	if ts := turnStateFromContext(ctx); ts != nil && ts.agent != nil {
+		agent = ts.agent
+	} else {
 		mu := c.agent.modelStateMutex()
 		mu.RLock()
 		defer mu.RUnlock()
 	}
 	view := map[string]any{
-		"max_iterations":        c.agent.maxIterations(),
-		"context_window_tokens": c.agent.ContextWindow,
-		"model":                 c.agent.Model,
-		"model_preset":          c.agent.Model,
-		"workspace":             c.agent.Workspace,
-		"tool_names":            c.agent.Tools.List(),
+		"max_iterations":        agent.maxIterations(),
+		"context_window_tokens": agent.ContextWindow,
+		"model":                 agent.Model,
+		"model_preset":          agent.Model,
+		"workspace":             agent.Workspace,
+		"tool_names":            agent.Tools.List(),
 		"request":               requestSelfSnapshot(ctx),
 	}
 	if c.cfg != nil {
@@ -245,24 +251,23 @@ func (c *agentRuntimeControl) Snapshot(ctx context.Context) map[string]any {
 
 func (c *agentRuntimeControl) Set(ctx context.Context, key string, value any) error {
 	switch key {
-	case "model", "model_preset":
+	case "model":
 		preset, ok := value.(string)
 		if !ok || strings.TrimSpace(preset) == "" {
 			return fmt.Errorf("%s must be a non-empty string", key)
 		}
-		if key == "model_preset" && c.cfg != nil {
-			found := false
-			for _, model := range c.cfg.ModelList {
-				if model != nil && model.ModelName == strings.TrimSpace(preset) {
-					found = true
-					break
-				}
-			}
-			if !found {
-				return fmt.Errorf("model preset %q was not found", preset)
-			}
+		return fmt.Errorf("model cannot be changed directly through SelfTool; use model_preset")
+	case "model_preset":
+		preset, ok := value.(string)
+		if !ok || strings.TrimSpace(preset) == "" {
+			return fmt.Errorf("model_preset must be a non-empty string")
 		}
-		return fmt.Errorf("model changes cannot be applied during an active turn; use /model before the next turn")
+		ts := turnStateFromContext(ctx)
+		al := AgentLoopFromContext(ctx)
+		if ts == nil || ts.agent == nil || al == nil {
+			return fmt.Errorf("session model changes require an active agent turn")
+		}
+		return al.setSessionModelPreset(ts.agentID, ts.sessionKey, ts.agent, preset)
 	case "context_window_tokens":
 		window, err := selfInt(value)
 		if err != nil {
@@ -297,6 +302,9 @@ func (c *agentRuntimeControl) Set(ctx context.Context, key string, value any) er
 		return fmt.Errorf("runtime control is unavailable")
 	}
 	c.agent.setMaxIterations(iterations)
+	if ts := turnStateFromContext(ctx); ts != nil && ts.agent != nil && ts.agent != c.agent {
+		ts.agent.setMaxIterations(iterations)
+	}
 	return nil
 }
 

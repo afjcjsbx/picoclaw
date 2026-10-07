@@ -48,25 +48,27 @@ type AgentLoop struct {
 	hooks              *HookManager
 
 	// Runtime state
-	running        atomic.Bool
-	stopCh         chan struct{}
-	stopOnce       sync.Once
-	contextManager ContextManager
-	fallback       *providers.FallbackChain
-	channelManager interfaces.ChannelManager
-	mediaStore     media.MediaStore
-	transcriber    asr.Transcriber
-	ttsProvider    tts.TTSProvider
-	cmdRegistry    *commands.Registry
-	mcp            mcpRuntime
-	plugins        pluginRuntime
-	evolution      *evolutionBridge
-	hookRuntime    hookRuntime
-	steering       *steeringQueue
-	pendingSkills  sync.Map
-	voiceModes     sync.Map
-	pendingStops   sync.Map
-	mu             sync.RWMutex
+	running         atomic.Bool
+	stopCh          chan struct{}
+	stopOnce        sync.Once
+	contextManager  ContextManager
+	sessionModelsMu sync.Mutex
+	sessionModels   map[sessionModelKey]*sessionModelOverride
+	fallback        *providers.FallbackChain
+	channelManager  interfaces.ChannelManager
+	mediaStore      media.MediaStore
+	transcriber     asr.Transcriber
+	ttsProvider     tts.TTSProvider
+	cmdRegistry     *commands.Registry
+	mcp             mcpRuntime
+	plugins         pluginRuntime
+	evolution       *evolutionBridge
+	hookRuntime     hookRuntime
+	steering        *steeringQueue
+	pendingSkills   sync.Map
+	voiceModes      sync.Map
+	pendingStops    sync.Map
+	mu              sync.RWMutex
 
 	// workerSem limits concurrent turn processing workers.
 	workerSem chan struct{}
@@ -334,6 +336,7 @@ func (al *AgentLoop) Stop() {
 
 // Close releases resources held by agent session stores. Call after Stop.
 func (al *AgentLoop) Close() {
+	al.clearSessionModelOverrides()
 	al.closePlugins(true)
 	mcpManager := al.mcp.takeManager()
 
@@ -420,6 +423,7 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("context canceled after registry creation: %w", err)
 	}
+	al.clearSessionModelOverrides()
 
 	// Ensure shared tools are re-registered on the new registry
 	registerSharedTools(al, cfg, al.bus, registry, provider)
@@ -548,6 +552,14 @@ func (al *AgentLoop) runAgentLoop(
 	opts, err = resolveTurnProfileOptions(al.GetConfig(), opts)
 	if err != nil {
 		return "", err
+	}
+	if agent != nil && opts.Dispatch.SessionKey != "" {
+		if override := al.acquireSessionModelOverride(sessionModelKey{
+			agentID: agent.ID, sessionKey: opts.Dispatch.SessionKey,
+		}); override != nil {
+			defer al.releaseSessionModelOverride(override)
+			agent = override.apply(agent)
+		}
 	}
 
 	// Record last channel for heartbeat notifications (skip internal channels and cli)

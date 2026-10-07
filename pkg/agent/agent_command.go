@@ -309,29 +309,12 @@ func (al *AgentLoop) buildCommandsRuntime(
 			modelMu := agent.modelStateMutex()
 			modelMu.Lock()
 			defer modelMu.Unlock()
-			modelFound := false
-			for _, modelCfg := range cfg.ModelList {
-				if modelCfg != nil && modelCfg.ModelName == value {
-					modelFound = true
-					break
-				}
-			}
-			if !modelFound {
-				return "", fmt.Errorf("model %q not found in model_list or providers", value)
-			}
-
-			nextCandidates := resolveModelCandidates(cfg, cfg.Agents.Defaults.Provider, value, agent.Fallbacks)
-			if len(nextCandidates) == 0 {
-				return "", fmt.Errorf("model %q did not resolve to any provider candidates", value)
-			}
-			modelCfg, err := resolvedCandidateModelConfig(cfg, nextCandidates[0], agent.Workspace)
+			nextModel, err := resolveAgentModelSelection(cfg, agent, value)
 			if err != nil {
 				return "", err
 			}
-			nextProvider, _, err := providers.CreateProviderFromConfig(modelCfg)
-			if err != nil {
-				return "", fmt.Errorf("failed to initialize model %q: %w", value, err)
-			}
+			nextCandidates := nextModel.candidates
+			nextProvider := nextModel.provider
 			nextCandidateProviders := make(map[string]providers.LLMProvider)
 			copyInitializedCandidateProviders(
 				agent.CandidateProviders,
@@ -370,8 +353,8 @@ func (al *AgentLoop) buildCommandsRuntime(
 			agent.Provider = nextProvider
 			agent.Candidates = nextCandidates
 			agent.CandidateProviders = nextCandidateProviders
-			agent.ThinkingLevel = parseThinkingLevel(modelCfg.ThinkingLevel)
-			agent.ThinkingLevelConfigured = isConfiguredThinkingLevel(modelCfg.ThinkingLevel)
+			agent.ThinkingLevel = nextModel.thinkingLevel
+			agent.ThinkingLevelConfigured = nextModel.thinkingConfigured
 
 			closeUnreferencedStatefulProviders(
 				previousProviders,
