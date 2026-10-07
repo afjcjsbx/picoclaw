@@ -39,9 +39,11 @@ See [Sensitive Data Filtering](../security/sensitive_data_filtering.md) for full
 
 ## Protected local files
 
-Filesystem read tools deny `.env`, `.env.*`, `.envrc`, `.security.yml` (including its backups), `.netrc`, `.npmrc`, `.pypirc`, and files inside `.ssh`, `.aws`, `.kube`, or `.gnupg` directories. The check also follows symlinks, hides these entries from directory listings and file searches, and applies to local files attached through `send_file`, `load_image`, or `message`. Read allow paths do not override it. `write_file` can still create or explicitly overwrite these files; `edit_file` and `append_file` cannot read their existing contents.
+Filesystem read tools deny `.env`, `.env.*`, `.envrc`, `.security.yml` (including its backups), `.netrc`, `.npmrc`, `.pypirc`, `.pgpass`, `.git-credentials`, and files inside `.ssh`, `.aws`, `.kube`, `.gnupg`, `.docker`, `.azure`, `.config/gh`, or `.config/gcloud` directories. Under `PICOCLAW_HOME`, reads are also denied for `auth.json`, `auth/mcp`, and `channels/weixin/context-tokens`; the default `plugin-data` root is hidden because it may contain MCP bearer-token files. Reads of `CODEX_HOME/auth.json` (default `~/.codex/auth.json`) are denied as well. Windows NT/device-namespace paths are rejected before path resolution. The check follows symlinks, hides protected entries from directory listings and file searches, and applies to local files attached through `send_file`, `load_image`, or `message`. Read allow paths do not override it.
 
-This is a guard for PicoClaw's filesystem tools. Shell commands and external MCP tools run outside this read policy; use process or container isolation when they must not access workspace secrets.
+Filesystem writes are denied for those same credential paths, except that `write_file` may write `.env.example`; `edit_file` and `append_file` still cannot read it. Writes to `/etc/sudoers`, `/etc/passwd`, `/etc/shadow`, `/etc/sudoers.d`, `/etc/systemd`, and the workspace `sessions` directory are also denied. The write check follows symlinks and runs for `write_file`, `edit_file`, and `append_file`; write allow paths do not override it. The default `plugin-data` directory is protected, but a custom `plugins.data_dir` is not discovered by this policy.
+
+This is a guard for PicoClaw's filesystem tools. Shell commands and external MCP tools run outside this policy; use process or container isolation when they must not access workspace secrets.
 
 ## Image Generation
 
