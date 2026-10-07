@@ -60,7 +60,7 @@ func NewAgentLoop(
 		})
 	}
 
-	// Determine worker pool size from config (default: 1 = sequential)
+	// A zero value in programmatically built configs keeps turns sequential.
 	workerPoolSize := cfg.Agents.Defaults.MaxParallelTurns
 	if workerPoolSize <= 0 {
 		workerPoolSize = 1
