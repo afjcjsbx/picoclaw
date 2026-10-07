@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -260,7 +261,7 @@ func (t *ExecTool) Parameters() map[string]any {
 			},
 			"timeout": map[string]any{
 				"type":        "integer",
-				"description": "Timeout in seconds (0 = no timeout)",
+				"description": "Optional timeout in seconds for foreground commands; overrides the configured timeout, and 0 disables the timeout. Not supported with background=true.",
 			},
 		},
 		"required": []string{"action"},
@@ -323,6 +324,32 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 	}
 	isPty := getBoolArg("pty")
 	isBackground := getBoolArg("background")
+	timeout := t.timeout
+	if raw, ok := args["timeout"]; ok {
+		if isBackground {
+			return ErrorResult("timeout is only supported for foreground commands")
+		}
+
+		const maxTimeoutSeconds = (1<<63 - 1) / int64(time.Second)
+		var seconds int64
+		switch value := raw.(type) {
+		case float64:
+			if value != math.Trunc(value) || value < 0 || value > float64(maxTimeoutSeconds) {
+				return ErrorResult("timeout must be a non-negative integer number of seconds")
+			}
+			seconds = int64(value)
+		case int:
+			seconds = int64(value)
+		case int64:
+			seconds = value
+		default:
+			return ErrorResult("timeout must be a non-negative integer number of seconds")
+		}
+		if seconds < 0 || seconds > maxTimeoutSeconds {
+			return ErrorResult("timeout must be a non-negative integer number of seconds")
+		}
+		timeout = time.Duration(seconds) * time.Second
+	}
 
 	if isPty {
 		if runtime.GOOS == "windows" {
@@ -381,15 +408,15 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 		return t.runBackground(ctx, command, cwd, isPty)
 	}
 
-	return t.runSync(ctx, command, cwd)
+	return t.runSync(ctx, command, cwd, timeout)
 }
 
-func (t *ExecTool) runSync(ctx context.Context, command, cwd string) *ToolResult {
+func (t *ExecTool) runSync(ctx context.Context, command, cwd string, timeout time.Duration) *ToolResult {
 	// timeout == 0 means no timeout
 	var cmdCtx context.Context
 	var cancel context.CancelFunc
-	if t.timeout > 0 {
-		cmdCtx, cancel = context.WithTimeout(ctx, t.timeout)
+	if timeout > 0 {
+		cmdCtx, cancel = context.WithTimeout(ctx, timeout)
 	} else {
 		cmdCtx, cancel = context.WithCancel(ctx)
 	}
@@ -454,7 +481,7 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string) *ToolResult
 
 	if err != nil {
 		if errors.Is(cmdCtx.Err(), context.DeadlineExceeded) {
-			msg := fmt.Sprintf("Command timed out after %v", t.timeout)
+			msg := fmt.Sprintf("Command timed out after %v", timeout)
 			if output != "" {
 				msg += "\n\nPartial output before timeout:\n" + output
 			}
