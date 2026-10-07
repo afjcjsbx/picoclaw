@@ -19,8 +19,8 @@ const maxSelfRuntimeKeys = 64
 
 // RuntimeControl is the read/write boundary exposed to SelfTool.
 type RuntimeControl interface {
-	Snapshot(context.Context) map[string]any
-	Set(context.Context, string, any) error
+	Snapshot(ctx context.Context) map[string]any
+	Set(ctx context.Context, key string, value any) error
 }
 
 type selfSession struct{ agent, session string }
@@ -36,7 +36,11 @@ type SelfTool struct {
 }
 
 func NewSelfTool(runtime RuntimeControl, allowSet bool) *SelfTool {
-	return &SelfTool{runtime: runtime, allowSet: allowSet, scratchpad: make(map[selfSession]map[string]any)}
+	return &SelfTool{
+		runtime:    runtime,
+		allowSet:   allowSet,
+		scratchpad: make(map[selfSession]map[string]any),
+	}
 }
 
 func (t *SelfTool) Name() string { return "self" }
@@ -54,8 +58,13 @@ func (t *SelfTool) Parameters() map[string]any {
 		"type": "object", "additionalProperties": false,
 		"properties": map[string]any{
 			"action": map[string]any{"type": "string", "enum": []string{"check", "set"}},
-			"key":    map[string]any{"type": "string", "description": "Optional dot path; omit with check to inspect the safe runtime summary."},
-			"value":  map[string]any{"description": "JSON value to store or assign; required for set."},
+			"key": map[string]any{
+				"type":        "string",
+				"description": "Optional dot path; omit it for a safe summary.",
+			},
+			"value": map[string]any{
+				"description": "JSON value to store or assign; required for set.",
+			},
 		},
 		"required": []string{"action"},
 	}
@@ -167,7 +176,12 @@ func (t *SelfTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 		}
 		log("set " + key)
 		if key == "model_preset" {
-			return tools.NewToolResult(fmt.Sprintf("model preset for this session will change to %q starting next turn", value))
+			return tools.NewToolResult(
+				fmt.Sprintf(
+					"model preset for this session will change to %q starting next turn",
+					value,
+				),
+			)
 		}
 		return tools.NewToolResult(key + " updated")
 	}
@@ -289,7 +303,10 @@ func (c *agentRuntimeControl) Set(ctx context.Context, key string, value any) er
 		return nil
 	case "max_iterations":
 	default:
-		return fmt.Errorf("%s cannot be changed safely through SelfTool; use the agent command or configuration", key)
+		return fmt.Errorf(
+			"%s cannot be changed safely through SelfTool; use the agent command or configuration",
+			key,
+		)
 	}
 	iterations, err := selfInt(value)
 	if err != nil {
@@ -347,7 +364,10 @@ func (t *SelfTool) setNote(ctx context.Context, key string, value any) error {
 		t.scratchpad[session] = entries
 	}
 	if _, exists := entries[key]; !exists && len(entries) >= maxSelfRuntimeKeys {
-		return fmt.Errorf("scratchpad is full (%d keys); remove an unused key first", maxSelfRuntimeKeys)
+		return fmt.Errorf(
+			"scratchpad is full (%d keys); remove an unused key first",
+			maxSelfRuntimeKeys,
+		)
 	}
 	entries[key] = value
 	return nil
@@ -417,7 +437,14 @@ func selfSensitiveName(name string) bool {
 func isSelfReadOnly(path string) bool {
 	root := strings.Split(path, ".")[0]
 	switch root {
-	case "tool_names", "exec_config", "web_config", "model_presets", "workspace", "provider_retry_mode", "max_tool_result_chars", "request":
+	case "tool_names",
+		"exec_config",
+		"web_config",
+		"model_presets",
+		"workspace",
+		"provider_retry_mode",
+		"max_tool_result_chars",
+		"request":
 		return true
 	default:
 		return false

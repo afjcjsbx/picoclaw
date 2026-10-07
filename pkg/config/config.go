@@ -1216,7 +1216,7 @@ type ToolsConfig struct {
 	// Content shorter than this will be returned unchanged for performance.
 	// Default: 8
 	FilterMinLength int                     `json:"filter_min_length" yaml:"-"                env:"PICOCLAW_TOOLS_FILTER_MIN_LENGTH"`
-	Self            SelfToolConfig          `json:"self"               yaml:"-"`
+	Self            SelfToolConfig          `json:"self"              yaml:"-"`
 	Web             WebToolsConfig          `json:"web"               yaml:"web,omitempty"`
 	Cron            CronToolsConfig         `json:"cron"              yaml:"-"`
 	Exec            ExecConfig              `json:"exec"              yaml:"-"`
