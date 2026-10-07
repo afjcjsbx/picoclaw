@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
@@ -35,6 +36,33 @@ func runSelfTool(tool *SelfTool, ctx context.Context, action, key string, value 
 func selfTestContext(session string) context.Context {
 	ctx := tools.WithToolContext(context.Background(), "telegram", "chat-1")
 	return tools.WithToolSessionContext(ctx, "main", session, nil)
+}
+
+func TestSelfToolDescriptionAndParameters(t *testing.T) {
+	readOnly := NewSelfTool(nil, false)
+	for _, want := range []string{
+		"web_config.enabled", "request.channel", "max_iterations (integer 1–100)",
+		"64 keys", "10 levels", "READ-ONLY MODE: set is disabled.",
+	} {
+		if !strings.Contains(readOnly.Description(), want) {
+			t.Errorf("read-only description missing %q", want)
+		}
+	}
+
+	readWrite := NewSelfTool(nil, true)
+	if !strings.Contains(readWrite.Description(), "Warn the user before critical changes") {
+		t.Error("read-write description does not warn before critical changes")
+	}
+	parameters := readWrite.Parameters()["properties"].(map[string]any)
+	action := parameters["action"].(map[string]any)
+	if got, ok := action["enum"].([]string); !ok || len(got) != 2 || got[0] != "check" || got[1] != "set" {
+		t.Errorf("action enum = %#v, want [check set]", action["enum"])
+	}
+	for _, name := range []string{"action", "key", "value"} {
+		if _, ok := parameters[name].(map[string]any)["description"].(string); !ok {
+			t.Errorf("parameter %q has no description", name)
+		}
+	}
 }
 
 func TestSelfToolCheckFiltersAndResolvesPaths(t *testing.T) {

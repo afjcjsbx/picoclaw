@@ -46,24 +46,46 @@ func NewSelfTool(runtime RuntimeControl, allowSet bool) *SelfTool {
 func (t *SelfTool) Name() string { return "self" }
 
 func (t *SelfTool) Description() string {
+	base := "Inspect PicoClaw's filtered runtime state or keep temporary notes in this session's scratchpad.\n" +
+		"Actions: check, set.\n" +
+		"- check (no key): show the runtime snapshot and scratchpad.\n" +
+		"- check (key): inspect a value; dot paths are supported (for example, " +
+		"web_config.enabled or request.channel). Available fields include " +
+		"max_iterations, context_window_tokens, model, model_preset, model_presets, " +
+		"workspace, tool_names, web_config, exec_config, and request.channel/chat_id/sender_id.\n" +
+		"- set (key, value): change max_iterations (integer 1–100), select a configured " +
+		"model_preset for this session (effective next turn), or store a JSON-safe " +
+		"scratchpad note. Scratchpad notes are shared across turns in this session, " +
+		"lost on restart, and limited to 64 keys and 10 levels of nesting.\n" +
+		"Direct model changes are disabled; context_window_tokens cannot be changed " +
+		"during an active session. Runtime snapshot fields such as workspace, " +
+		"web_config, exec_config, model_presets, tool_names, and request are read-only.\n" +
+		"Use check for model/settings questions or to diagnose tool behavior; check " +
+		"context_window_tokens and max_iterations before a large task. Use model_preset " +
+		"when asked to switch to a configured model, and scratchpad notes for " +
+		"session-only reminders."
 	if t.allowSet {
-		return "Inspect the current PicoClaw runtime and keep temporary notes in this session's scratchpad. " +
-			"Before changing a setting, predict its impact and tell the user about critical changes. Use action check or set."
+		return base + "\nIMPORTANT: Before using set, predict its impact. Warn the user before " +
+			"critical changes, such as switching the session's model preset."
 	}
-	return "Inspect the current PicoClaw runtime. Read-only mode: action set is disabled."
+	return base + "\nREAD-ONLY MODE: set is disabled."
 }
 
 func (t *SelfTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object", "additionalProperties": false,
 		"properties": map[string]any{
-			"action": map[string]any{"type": "string", "enum": []string{"check", "set"}},
+			"action": map[string]any{
+				"type":        "string",
+				"enum":        []string{"check", "set"},
+				"description": "Use check to inspect runtime state or set to update an allowed setting or scratchpad note.",
+			},
 			"key": map[string]any{
 				"type":        "string",
-				"description": "Optional dot path; omit it for a safe summary.",
+				"description": "Optional target. For check, omit it for a full snapshot or use a dot path such as web_config.enabled or request.channel. For set, use max_iterations, model_preset, or a scratchpad note key.",
 			},
 			"value": map[string]any{
-				"description": "JSON value to store or assign; required for set.",
+				"description": "Required for set. Use an integer from 1 to 100 for max_iterations, a configured preset name for model_preset, or a JSON-safe value for a scratchpad note (maximum 64 keys and 10 nesting levels).",
 			},
 		},
 		"required": []string{"action"},
