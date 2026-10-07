@@ -118,6 +118,8 @@ This repository is an actively maintained fork of PicoClaw. Development continue
 
 🔌 **MCP support**: Native [Model Context Protocol](https://modelcontextprotocol.io/) integration — connect any MCP server to extend Agent capabilities.
 
+🧩 **Agent Plugins**: Install and activate Agent Plugins 1.0.0 packages that bundle skills and MCP servers. See the [plugin installation guide](docs/guides/plugins.md).
+
 👁️ **Vision pipeline**: Send images and files directly to the Agent — automatic base64 encoding for multimodal LLMs.
 
 🧠 **Smart routing**: Rule-based model routing — simple queries go to lightweight models, saving API costs.
@@ -565,10 +567,11 @@ PicoClaw includes built-in tools for file operations, code execution, scheduling
 ## 🎯 Skills
 
 Skills and MCP servers can also be packaged together as portable **Agent Plugins 1.0.0**.
-See [Plugin development, installation and activation](PLUGINS.md) and the
-[working demo plugin](examples/plugins/demo-plugin). Mem0 publishes its own
+See the [plugin guide](docs/guides/plugins.md) and the
+[working demo plugin](examples/plugins/demo-plugin).
+Mem0 publishes its own
 [Agent Plugin](https://github.com/mem0ai/mem0/tree/main/integrations/mem0-agent-plugin);
-see the [compatibility notes](PLUGINS.md#mem0) before enabling it.
+see the [compatibility notes](docs/guides/plugins.md#mem0) before enabling it.
 
 Skills are modular capabilities that extend your Agent. They are loaded from `SKILL.md` files in your workspace.
 
@@ -698,6 +701,7 @@ For detailed guides beyond this README:
 | [Docker & Quick Start](docs/guides/docker.md) | Docker Compose setup, Launcher/Agent modes |
 | [Chat Apps](docs/guides/chat-apps.md) | All 18+ channel setup guides |
 | [Configuration](docs/guides/configuration.md) | Environment variables, workspace layout, security sandbox |
+| [Plugin Installation](docs/guides/plugins.md) | Install and activate Agent Plugin packages |
 | [MCP Server CLI](docs/reference/mcp-cli.md) | Add, list, test, edit, and remove MCP server entries from the CLI |
 | [Scheduled Tasks and Cron Jobs](docs/reference/cron.md) | Cron schedule types, deliver modes, command gates, job storage |
 | [Providers & Models](docs/guides/providers.md) | 30+ LLM providers, model routing, model_list configuration |
