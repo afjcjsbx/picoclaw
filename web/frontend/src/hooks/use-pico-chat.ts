@@ -36,23 +36,7 @@ function parseTimestamp(dateRaw: number | string | Date) {
 
 export function formatMessageTime(dateRaw: number | string | Date): string {
   const date = parseTimestamp(dateRaw)
-  if (!date.isValid()) {
-    return ""
-  }
-  const now = dayjs()
-
-  const isToday = date.isSame(now, "day")
-  const isThisYear = date.isSame(now, "year")
-
-  if (isToday) {
-    return date.format("LT")
-  }
-
-  if (isThisYear) {
-    return date.format("MMM D LT")
-  }
-
-  return date.format("ll LT")
+  return date.isValid() ? date.format("MMM D, YYYY, h:mm A") : ""
 }
 
 export function usePicoChat() {

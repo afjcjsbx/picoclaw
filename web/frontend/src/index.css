@@ -168,6 +168,25 @@
       "Apple Color Emoji",
       "Segoe UI Emoji";
   }
+
+  .chat-scroll-fade {
+    -webkit-mask-image: linear-gradient(
+      to bottom,
+      #000 calc(100% - 2.25rem),
+      transparent 100%
+    );
+    mask-image: linear-gradient(
+      to bottom,
+      #000 calc(100% - 2.25rem),
+      transparent 100%
+    );
+  }
+
+  .chat-scroll-fade::after {
+    content: "";
+    display: block;
+    height: 2.25rem;
+  }
 }
 
 /* Offset sidebar below the full-width header */

@@ -1,7 +1,6 @@
 import {
   IconBrain,
   IconCheck,
-  IconChevronDown,
   IconClockHour4,
   IconCode,
   IconCopy,
@@ -21,7 +20,7 @@ import {
   IconVolume,
   IconWorld,
 } from "@tabler/icons-react"
-import { memo, useState } from "react"
+import { type ReactNode, memo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import ReactMarkdown from "react-markdown"
 import rehypeHighlight from "rehype-highlight"
@@ -29,11 +28,14 @@ import rehypeRaw from "rehype-raw"
 import rehypeSanitize from "rehype-sanitize"
 import remarkGfm from "remark-gfm"
 
-import {
-  MarkdownCodeBlock,
-  MessageCodeBlock,
-} from "@/components/chat/message-code-block"
+import { MarkdownCodeBlock } from "@/components/chat/message-code-block"
 import { Button } from "@/components/ui/button"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard"
 import { formatMessageTime } from "@/hooks/use-pico-chat"
 import { cn } from "@/lib/utils"
@@ -47,9 +49,29 @@ interface AssistantMessageProps {
   content: string
   attachments?: ChatAttachment[]
   kind?: AssistantMessageKind
-  modelName?: string
+  onFork?: () => void
   toolCalls?: ChatToolCall[]
   timestamp?: string | number
+}
+
+function ForkArrowIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <path d="M16 3h5v5" />
+      <path d="M8 3H3v5" />
+      <path d="m21 3-7.536 7.536A5 5 0 0 0 12 14.07V21" />
+      <path d="m3 3 7.536 7.536A5 5 0 0 1 12 14.07V15" />
+    </svg>
+  )
 }
 
 type ToolDisplay = {
@@ -83,7 +105,7 @@ const TOOL_DISPLAYS: Record<string, ToolDisplay> = {
   bm25_search: { label: "Search tools", icon: IconSearch, fields: ["query"] },
   web_search: { label: "Search web", icon: IconWorld, fields: ["query"] },
   web_fetch: { label: "Read webpage", icon: IconWorld, fields: ["url"] },
-  exec: { label: "Run command", icon: IconTerminal2 },
+  exec: { label: "Run command", icon: IconTerminal2, fields: ["command"] },
   spawn: { label: "Delegate task", icon: IconUsers, fields: ["label", "task"] },
   delegate: {
     label: "Delegate task",
@@ -130,6 +152,8 @@ function getToolDisplay(
   rawArguments: string,
 ): ToolDisplay & {
   detail: string
+  href?: string
+  faviconUrl?: string
 } {
   const display = TOOL_DISPLAYS[toolName] ?? {
     label: toolName
@@ -180,19 +204,147 @@ function getToolDisplay(
     )
     ?.replace(/\s+/g, " ")
     .trim()
+  const webUrl = toolName === "web_fetch" ? safeWebUrl(args.url) : undefined
 
   return {
     ...display,
     label,
-    detail: value ? (value.length > 88 ? `${value.slice(0, 84)}…` : value) : "",
+    detail: value ?? "",
+    href: webUrl?.href,
+    faviconUrl: webUrl
+      ? `https://www.google.com/s2/favicons?domain=${encodeURIComponent(webUrl.hostname)}&sz=32`
+      : undefined,
   }
+}
+
+function safeWebUrl(value: unknown): URL | undefined {
+  if (typeof value !== "string") return undefined
+  try {
+    const url = new URL(value)
+    return url.protocol === "http:" || url.protocol === "https:"
+      ? url
+      : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function WebFavicon({ src }: { src: string }) {
+  return (
+    <span className="relative size-3.5 shrink-0">
+      <IconWorld className="text-muted-foreground absolute inset-0 size-3.5" />
+      <img
+        src={src}
+        alt=""
+        loading="lazy"
+        referrerPolicy="no-referrer"
+        className="bg-background absolute inset-0 size-full rounded-sm object-contain"
+        onError={(event) => {
+          event.currentTarget.hidden = true
+        }}
+      />
+    </span>
+  )
+}
+
+function HoverPreview({
+  content,
+  className,
+  children,
+  href,
+}: {
+  content: string
+  className: string
+  children: ReactNode
+  href?: string
+}) {
+  const spanRef = useRef<HTMLSpanElement>(null)
+  const linkRef = useRef<HTMLAnchorElement>(null)
+  const [open, setOpen] = useState(false)
+
+  const handleOpenChange = (next: boolean) => {
+    const trigger = spanRef.current ?? linkRef.current
+    setOpen(
+      next &&
+        !!trigger &&
+        (trigger.scrollWidth > trigger.clientWidth ||
+          trigger.scrollHeight > trigger.clientHeight),
+    )
+  }
+
+  const trigger = href ? (
+    <a
+      ref={linkRef}
+      href={href}
+      target="_blank"
+      rel="noreferrer noopener"
+      tabIndex={0}
+      className={className}
+    >
+      {children}
+    </a>
+  ) : (
+    <span ref={spanRef} tabIndex={0} className={className}>
+      {children}
+    </span>
+  )
+
+  return (
+    <TooltipProvider delayDuration={120} skipDelayDuration={0}>
+      <Tooltip open={open} onOpenChange={handleOpenChange}>
+        <TooltipTrigger asChild>{trigger}</TooltipTrigger>
+        <TooltipContent
+          side="top"
+          className="max-h-[min(60vh,24rem)] max-w-[min(32rem,calc(100vw-2rem))] overflow-y-auto break-words whitespace-pre-wrap dark:border dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+        >
+          {content}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  )
+}
+
+function compactReasoningPreview(value: string) {
+  return value
+    .replace(/\[([^\]]+)]\([^)]+\)/g, "$1")
+    .replace(/[*_#`~]+/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+}
+
+function groupToolCalls(toolCalls: ChatToolCall[]) {
+  const groups = new Map<
+    string,
+    Array<{
+      id: string
+      name: string
+      display: ReturnType<typeof getToolDisplay>
+    }>
+  >()
+
+  toolCalls.forEach((toolCall, index) => {
+    const name = toolCall.function?.name?.trim() ?? ""
+    const arguments_ = toolCall.function?.arguments?.trim() ?? ""
+    if (!name && !arguments_) return
+
+    const display = getToolDisplay(name, arguments_)
+    const group = groups.get(display.label) ?? []
+    group.push({
+      id: toolCall.id ?? `${name}-${index}`,
+      name,
+      display,
+    })
+    groups.set(display.label, group)
+  })
+
+  return [...groups.entries()]
 }
 
 export const AssistantMessage = memo(function AssistantMessage({
   content,
   attachments = [],
   kind = "normal",
-  modelName,
+  onFork,
   toolCalls = [],
   timestamp = "",
 }: AssistantMessageProps) {
@@ -201,7 +353,6 @@ export const AssistantMessage = memo(function AssistantMessage({
   const isThought = kind === "thought"
   const isToolCalls = kind === "tool_calls"
   const isToolFeedback = kind === "tool_feedback"
-  const isCollapsedBlock = isThought || isToolCalls
   const hasText = content.trim().length > 0
   const hasToolCalls = toolCalls.length > 0
   const imageAttachments = attachments.filter(
@@ -210,16 +361,19 @@ export const AssistantMessage = memo(function AssistantMessage({
   const fileAttachments = attachments.filter(
     (attachment) => attachment.type !== "image",
   )
-  const [isExpanded, setIsExpanded] = useState(true)
   const formattedTimestamp =
     timestamp !== "" ? formatMessageTime(timestamp) : ""
-  const collapsedLabel = isThought
-    ? t("chat.reasoningLabel")
-    : t("chat.toolCallsLabel")
   const copyMessageLabel = isCopied
     ? t("chat.copiedLabel")
     : t("chat.copyMessage")
-  const trimmedModelName = modelName?.trim() ?? ""
+  const forkMessageLabel = t("chat.forkAtMessage")
+  const toolCallGroups = groupToolCalls(toolCalls)
+  const reasoningText = compactReasoningPreview(content)
+  const reasoningPreview =
+    reasoningText.length > 512
+      ? `${reasoningText.slice(0, 512).replace(/[\uD800-\uDBFF]$/, "")}…`
+      : reasoningText
+  const toolFeedbackContent = content.trim().replace(/^🔧\s*/, "")
   const toolFeedbackSummary = content
     .trim()
     .replace(/```(?:json)?|`/gi, "")
@@ -228,194 +382,150 @@ export const AssistantMessage = memo(function AssistantMessage({
     .trim()
 
   return (
-    <div className="group flex w-full flex-col gap-1.5">
-      {!isCollapsedBlock && !isToolFeedback && (
-        <div className="text-muted-foreground/60 flex items-center justify-between gap-2 px-1 text-xs opacity-70">
-          <div className="flex items-center gap-2">
-            <span>PicoClaw</span>
-            {trimmedModelName && (
-              <>
-                <span className="opacity-50">•</span>
-                <span>{trimmedModelName}</span>
-              </>
-            )}
-            {formattedTimestamp && (
-              <>
-                <span className="opacity-50">•</span>
-                <span>{formattedTimestamp}</span>
-              </>
-            )}
-          </div>
-        </div>
+    <div
+      className={cn(
+        "group flex w-full flex-col",
+        isThought || isToolCalls || isToolFeedback ? "gap-0" : "gap-1.5",
       )}
-
-      {(hasText || isCollapsedBlock || hasToolCalls) && (
+    >
+      {((hasText && !isThought && !isToolFeedback) || hasToolCalls) && (
         <div
           className={cn(
-            "relative overflow-hidden rounded-xl border",
-            isCollapsedBlock
-              ? "border-border/30 bg-muted/20 text-muted-foreground dark:border-border/20 dark:bg-muted/10"
-              : "text-card-foreground border-transparent bg-transparent",
+            !isToolCalls && "relative overflow-hidden rounded-xl border",
+            "text-card-foreground border-transparent bg-transparent",
           )}
         >
-          {isCollapsedBlock && (
-            <div
-              className="text-muted-foreground/60 hover:text-muted-foreground/80 flex cursor-pointer items-center justify-between px-3 py-2 text-[12px] font-medium transition-colors select-none"
-              onClick={() => setIsExpanded(!isExpanded)}
-            >
-              <div className="flex items-center gap-1.5">
-                {isThought ? (
-                  <IconBrain className="size-3.5" />
-                ) : (
-                  <IconTool className="size-3.5" />
-                )}
-                <span>{collapsedLabel}</span>
-                {trimmedModelName && (
-                  <span className="text-muted-foreground/45">
-                    {trimmedModelName}
-                  </span>
-                )}
-              </div>
-              <div className="flex items-center gap-2">
-                {formattedTimestamp && (
-                  <span className="opacity-50">{formattedTimestamp}</span>
-                )}
-                <IconChevronDown
-                  className={cn(
-                    "size-3.5 opacity-0 transition-all duration-200 group-hover:opacity-100",
-                    isExpanded ? "rotate-180" : "",
-                  )}
-                />
-              </div>
-            </div>
-          )}
-          {(!isCollapsedBlock || isExpanded) && isToolCalls && hasToolCalls && (
-            <div className="space-y-3 px-3 pt-0 pb-3">
-              {toolCalls.map((toolCall, index) => {
-                const explanation =
-                  toolCall.extraContent?.toolFeedbackExplanation?.trim() ?? ""
-                const toolName = toolCall.function?.name?.trim() ?? ""
-                const toolArguments = toolCall.function?.arguments?.trim() ?? ""
-                const toolDisplay = getToolDisplay(toolName, toolArguments)
-
-                if (!explanation && !toolName && !toolArguments) {
-                  return null
-                }
+          {isToolCalls && hasToolCalls && (
+            <div className="space-y-0">
+              {toolCallGroups.map(([label, calls]) => {
+                const first = calls[0]
+                const { display, name } = first
+                const isWebFetch = name === "web_fetch"
+                const isGroup = calls.length > 1
 
                 return (
-                  <div
-                    key={toolCall.id ?? `${toolName}-${index}`}
-                    className="flex items-start gap-2.5"
-                  >
-                    <toolDisplay.icon className="text-muted-foreground mt-0.5 size-4 shrink-0" />
-                    <div className="min-w-0 flex-1">
-                      {toolName && (
-                        <div className="text-foreground/80 text-[13px] font-medium">
-                          {toolDisplay.label}
+                  <div key={label} className="min-w-0">
+                    {isGroup ? (
+                      <>
+                        <div className="flex min-w-0 items-center gap-2 py-0 text-[13px] leading-5">
+                          <display.icon className="text-muted-foreground size-3.5 shrink-0" />
+                          <span className="text-foreground/80 truncate font-medium">
+                            {label}
+                          </span>
                         </div>
-                      )}
-                      {toolDisplay.detail && (
-                        <div
-                          className="text-muted-foreground mt-0.5 truncate text-xs"
-                          title={toolDisplay.detail}
+                        {calls.map(({ id, name: callName, display: item }) =>
+                          item.detail ? (
+                            <div
+                              key={id}
+                              className="ml-5 flex min-w-0 items-center gap-2 py-0 text-xs leading-5"
+                            >
+                              {item.href && item.faviconUrl ? (
+                                <HoverPreview
+                                  content={item.detail}
+                                  className="text-muted-foreground hover:text-foreground flex min-w-0 items-center gap-1 truncate hover:underline"
+                                  href={item.href}
+                                >
+                                  <WebFavicon src={item.faviconUrl} />
+                                  <span className="truncate">
+                                    {item.detail}
+                                  </span>
+                                </HoverPreview>
+                              ) : (
+                                <HoverPreview
+                                  content={item.detail}
+                                  className={`text-muted-foreground min-w-0 flex-1 truncate ${callName === "exec" ? "font-mono" : ""}`}
+                                >
+                                  {item.detail}
+                                </HoverPreview>
+                              )}
+                            </div>
+                          ) : null,
+                        )}
+                      </>
+                    ) : (
+                      <div className="flex min-w-0 items-center gap-2 overflow-hidden py-0 text-[13px] leading-5">
+                        {isWebFetch && display.href && display.faviconUrl ? (
+                          <WebFavicon src={display.faviconUrl} />
+                        ) : (
+                          <display.icon className="text-muted-foreground size-3.5 shrink-0" />
+                        )}
+                        <span
+                          className={`text-foreground/80 shrink-0 truncate font-medium ${display.detail ? "max-w-[45%]" : "max-w-full"}`}
                         >
-                          {toolDisplay.detail}
-                        </div>
-                      )}
-                      {explanation && (
-                        <div className="prose dark:prose-invert prose-p:my-1 prose-p:whitespace-pre-wrap max-w-none text-[13px] leading-relaxed [overflow-wrap:anywhere] break-words">
-                          <ReactMarkdown
-                            remarkPlugins={[remarkGfm]}
-                            rehypePlugins={[
-                              rehypeRaw,
-                              rehypeSanitize,
-                              rehypeHighlight,
-                            ]}
-                            components={{
-                              pre: MarkdownCodeBlock,
-                            }}
-                          >
-                            {explanation}
-                          </ReactMarkdown>
-                        </div>
-                      )}
-                      {toolArguments && (
-                        <details className="text-muted-foreground mt-1 text-xs">
-                          <summary className="hover:text-foreground w-fit cursor-pointer select-none">
-                            {t("chat.toolCallArgumentsLabel")}
-                          </summary>
-                          <MessageCodeBlock
-                            code={toolArguments}
-                            language="json"
-                            label={toolName || t("chat.toolCallArgumentsLabel")}
-                            className="mt-2 mb-0 shadow-none"
-                            bodyClassName="px-3 py-2 text-[12px] leading-relaxed"
-                          />
-                        </details>
-                      )}
-                    </div>
+                          {label}
+                        </span>
+                        {display.detail &&
+                          (display.href ? (
+                            <HoverPreview
+                              content={display.detail}
+                              className="text-muted-foreground hover:text-foreground min-w-0 flex-1 truncate text-xs hover:underline"
+                              href={display.href}
+                            >
+                              {display.detail}
+                            </HoverPreview>
+                          ) : (
+                            <HoverPreview
+                              content={display.detail}
+                              className={`text-muted-foreground min-w-0 flex-1 truncate text-xs ${name === "exec" ? "font-mono" : ""}`}
+                            >
+                              {display.detail}
+                            </HoverPreview>
+                          ))}
+                      </div>
+                    )}
                   </div>
                 )
               })}
             </div>
           )}
-          {isToolFeedback && hasText && (
-            <div className="flex min-w-0 items-center gap-2 py-0.5 text-[13px] leading-5">
-              <IconTool
-                aria-hidden="true"
-                className="text-muted-foreground size-3.5 shrink-0"
-              />
-              <span
-                tabIndex={0}
-                className="text-muted-foreground min-w-0 flex-1 truncate whitespace-nowrap"
-                title={content}
+          {!isThought && !isToolCalls && !isToolFeedback && hasText && (
+            <div
+              className={cn(
+                "prose dark:prose-invert prose-pre:my-2 prose-pre:overflow-x-auto prose-pre:rounded-lg prose-pre:border prose-pre:bg-zinc-100 prose-pre:p-0 prose-pre:text-zinc-900 dark:prose-pre:bg-zinc-950 dark:prose-pre:text-zinc-100 max-w-none [overflow-wrap:anywhere] break-words",
+                "prose-p:my-2 prose-p:whitespace-pre-wrap py-1 text-[15px] leading-relaxed",
+              )}
+            >
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                rehypePlugins={[rehypeRaw, rehypeSanitize, rehypeHighlight]}
+                components={{
+                  pre: MarkdownCodeBlock,
+                }}
               >
-                {toolFeedbackSummary}
-              </span>
+                {content}
+              </ReactMarkdown>
             </div>
           )}
-          {(!isCollapsedBlock || isExpanded) &&
-            !isToolCalls &&
-            !isToolFeedback &&
-            hasText && (
-              <div
-                className={cn(
-                  "prose dark:prose-invert prose-pre:my-2 prose-pre:overflow-x-auto prose-pre:rounded-lg prose-pre:border prose-pre:bg-zinc-100 prose-pre:p-0 prose-pre:text-zinc-900 dark:prose-pre:bg-zinc-950 dark:prose-pre:text-zinc-100 max-w-none [overflow-wrap:anywhere] break-words",
-                  isThought
-                    ? "prose-p:my-1.5 prose-p:whitespace-pre-wrap px-3 pt-0 pb-3 text-[13px] leading-relaxed opacity-70"
-                    : "prose-p:my-2 prose-p:whitespace-pre-wrap py-1 text-[15px] leading-relaxed",
-                )}
-              >
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm]}
-                  rehypePlugins={[rehypeRaw, rehypeSanitize, rehypeHighlight]}
-                  components={{
-                    pre: MarkdownCodeBlock,
-                  }}
-                >
-                  {content}
-                </ReactMarkdown>
-              </div>
-            )}
+        </div>
+      )}
 
-          {!isCollapsedBlock && hasText && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className={cn(
-                "bg-background/50 hover:bg-background/80 absolute top-2 right-2 h-7 w-7 opacity-0 transition-opacity group-hover:opacity-100",
-              )}
-              onClick={() => void copy(content)}
-              aria-label={copyMessageLabel}
-              title={copyMessageLabel}
-            >
-              {isCopied ? (
-                <IconCheck className="h-4 w-4 text-green-500" />
-              ) : (
-                <IconCopy className="text-muted-foreground h-4 w-4" />
-              )}
-            </Button>
-          )}
+      {isThought && hasText && (
+        <div className="flex min-w-0 items-center gap-2 py-0 text-[13px] leading-5">
+          <IconBrain
+            aria-hidden="true"
+            className="text-muted-foreground size-3.5 shrink-0"
+          />
+          <HoverPreview
+            content={reasoningText}
+            className="text-muted-foreground min-w-0 flex-1 truncate whitespace-nowrap italic"
+          >
+            {reasoningPreview}
+          </HoverPreview>
+        </div>
+      )}
+
+      {isToolFeedback && hasText && (
+        <div className="flex min-w-0 items-center gap-2 py-0 text-[13px] leading-5">
+          <IconTool
+            aria-hidden="true"
+            className="text-muted-foreground size-3.5 shrink-0"
+          />
+          <HoverPreview
+            content={toolFeedbackContent}
+            className="text-muted-foreground min-w-0 flex-1 truncate whitespace-nowrap"
+          >
+            {toolFeedbackSummary}
+          </HoverPreview>
         </div>
       )}
 
@@ -468,6 +578,45 @@ export const AssistantMessage = memo(function AssistantMessage({
           ))}
         </div>
       )}
+
+      {!isThought &&
+        !isToolFeedback &&
+        !isToolCalls &&
+        (formattedTimestamp || hasText) && (
+          <div className="text-muted-foreground/60 flex items-center gap-1 px-1 text-xs">
+            {formattedTimestamp && <span>{formattedTimestamp}</span>}
+            {hasText && (
+              <>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-6"
+                  onClick={() => void copy(content)}
+                  aria-label={copyMessageLabel}
+                  title={copyMessageLabel}
+                >
+                  {isCopied ? (
+                    <IconCheck className="size-3.5 text-green-500" />
+                  ) : (
+                    <IconCopy className="size-3.5" />
+                  )}
+                </Button>
+                {onFork && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-6"
+                    onClick={onFork}
+                    aria-label={forkMessageLabel}
+                    title={forkMessageLabel}
+                  >
+                    <ForkArrowIcon className="size-3.5" />
+                  </Button>
+                )}
+              </>
+            )}
+          </div>
+        )}
     </div>
   )
 })

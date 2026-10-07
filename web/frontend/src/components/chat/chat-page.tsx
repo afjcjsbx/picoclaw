@@ -1,5 +1,7 @@
 import {
+  IconActivity,
   IconArrowBackUp,
+  IconChevronDown,
   IconGitFork,
   IconLayoutColumns,
   IconLayoutDashboard,
@@ -13,8 +15,10 @@ import type { TFunction } from "i18next"
 import { useAtom, useAtomValue } from "jotai"
 import {
   type ChangeEvent,
+  Children,
   type ClipboardEvent,
   type DragEvent,
+  type ReactNode,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -36,6 +40,11 @@ import { TypingIndicator } from "@/components/chat/typing-indicator"
 import { UserMessage } from "@/components/chat/user-message"
 import { PageHeader } from "@/components/page-header"
 import { Button } from "@/components/ui/button"
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -101,6 +110,46 @@ const SPLIT_LAYOUTS: Array<{
     icon: IconLayoutSidebarRight,
   },
 ]
+
+function AssistantActivityGroup({
+  label,
+  status,
+  children,
+}: {
+  label: string
+  status?: ReactNode
+  children: ReactNode
+}) {
+  const [open, setOpen] = useState(false)
+  const hasDetails = Children.count(children) > 0
+
+  return (
+    <Collapsible
+      open={open}
+      onOpenChange={setOpen}
+      className="group/activity w-full"
+    >
+      {hasDetails ? (
+        <CollapsibleTrigger className="text-muted-foreground hover:text-foreground focus-visible:ring-ring flex w-full min-w-0 items-center gap-1 rounded-sm text-left focus-visible:ring-2 focus-visible:outline-none">
+          {status ?? (
+            <span className="flex min-w-0 flex-1 items-center gap-1.5 py-0.5 text-[12px] leading-4">
+              <IconActivity aria-hidden="true" className="size-3.5 shrink-0" />
+              <span className="truncate">{label}</span>
+            </span>
+          )}
+          <IconChevronDown className="size-3.5 shrink-0 transition-transform group-data-[state=open]/activity:rotate-180" />
+        </CollapsibleTrigger>
+      ) : (
+        status
+      )}
+      {hasDetails && (
+        <CollapsibleContent>
+          <div className="mt-0.5 space-y-0.75">{children}</div>
+        </CollapsibleContent>
+      )}
+    </Collapsible>
+  )
+}
 
 function splitGroupKey(sessions: string[]) {
   return [...sessions].sort().join("\u0000")
@@ -458,6 +507,7 @@ interface SplitConversationViewProps {
     messages: ChatMessage[],
     sessionId: string,
     historyStart: number,
+    isTyping: boolean,
   ) => React.ReactNode
   onActivate: (sessionId: string) => void
   onRemove: (sessionId: string) => void
@@ -693,7 +743,7 @@ function SplitConversationPane({
             element.scrollHeight - element.scrollTop <=
             element.clientHeight + 10
         }}
-        className="min-h-0 flex-1 overflow-y-auto px-3 py-4"
+        className="chat-scroll-fade min-h-0 flex-1 overflow-y-auto px-3 pt-4"
       >
         {!isLoaded ? (
           <div className="text-muted-foreground py-6 text-center text-sm">
@@ -703,15 +753,10 @@ function SplitConversationPane({
           <div className="text-muted-foreground py-6 text-center text-sm">
             {t("chat.historyLoadFailed")}
           </div>
-        ) : messages.length === 0 ? (
-          <>
-            {!isTyping && emptyContent}
-            {isTyping && <TypingIndicator />}
-          </>
         ) : (
-          <div className="mx-auto flex w-full max-w-250 flex-col gap-6 pb-4">
-            {renderMessages(messages, sessionId, historyStart)}
-            {isTyping && <TypingIndicator />}
+          <div className="mx-auto flex w-full max-w-[49.5rem] flex-col gap-6">
+            {messages.length === 0 && !isTyping && emptyContent}
+            {renderMessages(messages, sessionId, historyStart, isTyping)}
           </div>
         )}
       </div>
@@ -864,12 +909,118 @@ export function ChatPage() {
     renderedMessages: ChatMessage[],
     sessionId: string,
     start: number,
-  ) =>
-    renderedMessages.map((msg, messageOffset) => {
-      if (!shouldShowAssistantMessage(assistantDetailVisibility, msg.kind)) {
-        return null
-      }
+    isTyping: boolean,
+  ) => {
+    const messagesToRender: {
+      message: ChatMessage
+      offset: number
+      toolName?: string
+    }[] = []
 
+    renderedMessages.forEach((message, offset) => {
+      const firstToolName =
+        message.kind === "tool_calls"
+          ? message.toolCalls?.[0]?.function?.name?.trim()
+          : undefined
+      const toolName =
+        firstToolName &&
+        message.toolCalls?.every(
+          (call) => call.function?.name?.trim() === firstToolName,
+        )
+          ? firstToolName
+          : undefined
+      const previous = messagesToRender.at(-1)
+
+      if (toolName && previous?.toolName === toolName) {
+        previous.message = {
+          ...previous.message,
+          toolCalls: [
+            ...(previous.message.toolCalls ?? []),
+            ...(message.toolCalls ?? []),
+          ],
+        }
+      } else {
+        messagesToRender.push({ message, offset, toolName })
+      }
+    })
+
+    const visibleMessages = messagesToRender.filter(({ message }) =>
+      shouldShowAssistantMessage(assistantDetailVisibility, message.kind),
+    )
+    const lastUserIndex = visibleMessages.reduce(
+      (lastIndex, { message }, index) =>
+        message.role === "user" ? index : lastIndex,
+      -1,
+    )
+    const turnKey =
+      visibleMessages[lastUserIndex]?.message.id ?? `session-${sessionId}`
+    const renderItems: Array<
+      | {
+          type: "message"
+          item: (typeof visibleMessages)[number]
+        }
+      | {
+          type: "activity"
+          items: Array<(typeof visibleMessages)[number]>
+          label: string
+          startIndex: number
+        }
+    > = []
+
+    visibleMessages.forEach((item, index) => {
+      const kind = item.message.kind
+      const isActivity =
+        item.message.role === "assistant" &&
+        ["thought", "tool_calls", "tool_feedback"].includes(kind ?? "")
+      const previous = renderItems.at(-1)
+
+      if (isActivity && previous?.type === "activity") {
+        previous.items.push(item)
+      } else if (isActivity) {
+        renderItems.push({
+          type: "activity",
+          items: [item],
+          label: "",
+          startIndex: index,
+        })
+      } else {
+        renderItems.push({ type: "message", item })
+      }
+    })
+    renderItems.forEach((item) => {
+      if (item.type !== "activity") return
+      const kinds = new Set(item.items.map(({ message }) => message.kind))
+      item.label = [
+        kinds.has("thought") ? t("chat.reasoningLabel") : "",
+        kinds.has("tool_calls") || kinds.has("tool_feedback")
+          ? t("chat.toolCallsLabel")
+          : "",
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    })
+
+    let statusActivityIndex = renderItems.reduce(
+      (lastIndex, item, index) =>
+        item.type === "activity" && item.startIndex > lastUserIndex
+          ? index
+          : lastIndex,
+      -1,
+    )
+    if (statusActivityIndex < 0 && (lastUserIndex >= 0 || isTyping)) {
+      renderItems.push({
+        type: "activity",
+        items: [],
+        label: "",
+        startIndex: visibleMessages.length,
+      })
+      statusActivityIndex = renderItems.length - 1
+    }
+
+    const renderMessage = (
+      { message: msg, offset: messageOffset }: (typeof visibleMessages)[number],
+      activityChild = false,
+    ) => {
       const storedIndex = msg.id.match(/^hist-(\d+)$/)
       const messageIndex = storedIndex
         ? Number(storedIndex[1])
@@ -881,7 +1032,7 @@ export function ChatPage() {
         <div
           key={msg.id}
           data-chat-index={messageIndex}
-          className="group flex w-full flex-col gap-1"
+          className={`group flex w-full flex-col ${activityChild ? "gap-0" : "gap-1"}`}
         >
           {msg.role === "assistant" ? (
             <>
@@ -889,24 +1040,14 @@ export function ChatPage() {
                 content={msg.content}
                 attachments={msg.attachments}
                 kind={msg.kind}
-                modelName={msg.modelName}
+                onFork={
+                  canFork
+                    ? () => void handleFork(sessionId, messageIndex)
+                    : undefined
+                }
                 toolCalls={msg.toolCalls}
                 timestamp={msg.timestamp}
               />
-              {canFork && (
-                <div className="flex justify-end">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label={t("chat.forkAtMessage")}
-                    title={t("chat.forkAtMessage")}
-                    className="size-8 opacity-50 hover:opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
-                    onClick={() => void handleFork(sessionId, messageIndex)}
-                  >
-                    <IconGitFork className="size-4" />
-                  </Button>
-                </div>
-              )}
             </>
           ) : (
             <UserMessage
@@ -917,7 +1058,34 @@ export function ChatPage() {
           )}
         </div>
       )
+    }
+
+    return renderItems.map((item, index) => {
+      if (item.type === "message") return renderMessage(item.item)
+
+      const isStatusGroup = index === statusActivityIndex
+      const firstMessageId = item.items[0]?.message.id ?? turnKey
+      return (
+        <AssistantActivityGroup
+          key={
+            isStatusGroup ? `activity-${turnKey}` : `activity-${firstMessageId}`
+          }
+          label={item.label}
+          status={
+            isStatusGroup ? (
+              <TypingIndicator
+                key={sessionId}
+                isTyping={isTyping}
+                fallbackLabel={item.label}
+              />
+            ) : undefined
+          }
+        >
+          {item.items.map((activityItem) => renderMessage(activityItem, true))}
+        </AssistantActivityGroup>
+      )
     })
+  }
 
   const syncScrollState = (element: HTMLDivElement) => {
     const { clientHeight, scrollHeight, scrollTop } = element
@@ -1253,12 +1421,11 @@ export function ChatPage() {
           ref={scrollRef}
           data-session-scroll={activeSessionId}
           onScroll={handleScroll}
-          className="min-h-0 flex-1 [scrollbar-gutter:stable] overflow-y-auto px-4 py-6 md:px-8 lg:px-24 xl:px-48"
+          className="chat-scroll-fade min-h-0 flex-1 [scrollbar-gutter:stable] overflow-y-auto px-4 pt-6 md:px-8 lg:px-24 xl:px-48"
         >
-          <div className="mx-auto flex w-full max-w-250 flex-col gap-8 pb-8">
+          <div className="mx-auto flex w-full max-w-[49.5rem] flex-col gap-8">
             {messages.length === 0 && !isTyping && activeEmptyState}
-            {renderMessages(messages, activeSessionId, historyStart)}
-            {isTyping && <TypingIndicator />}
+            {renderMessages(messages, activeSessionId, historyStart, isTyping)}
           </div>
         </div>
       )}
@@ -1304,7 +1471,6 @@ export function ChatPage() {
         inputDisabledReason={inputDisabledReason}
         canSend={canSubmit}
         isDragActive={isDragActive}
-        isSplitView={Boolean(activeSplitGroup)}
         contextUsage={contextUsage}
       />
     </div>

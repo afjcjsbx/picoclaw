@@ -43,7 +43,6 @@ interface ChatComposerProps {
   inputDisabledReason: ChatInputDisabledReason | null
   canSend: boolean
   isDragActive: boolean
-  isSplitView: boolean
   contextUsage?: ContextUsage
 }
 
@@ -64,7 +63,6 @@ export function ChatComposer({
   inputDisabledReason,
   canSend,
   isDragActive,
-  isSplitView,
   contextUsage,
 }: ChatComposerProps) {
   const { t } = useTranslation()
@@ -96,13 +94,8 @@ export function ChatComposer({
   }
 
   return (
-    <div
-      className={cn(
-        "pointer-events-none relative z-10 shrink-0 [scrollbar-gutter:stable] overflow-y-auto px-4 pb-[calc(0.5rem+env(safe-area-inset-bottom))] before:pointer-events-none before:absolute before:inset-x-0 before:bottom-0 before:bg-[var(--conversation-background)] before:content-[''] md:px-8 md:pb-4 lg:px-24 xl:px-48",
-        isSplitView ? "mt-0 before:top-0" : "-mt-[24px] before:top-[24px]",
-      )}
-    >
-      <div className="pointer-events-auto mx-auto flex max-w-[1000px] flex-col items-end">
+    <div className="pointer-events-none relative z-10 mt-0 shrink-0 [scrollbar-gutter:stable] overflow-y-auto px-4 pb-[calc(0.5rem+env(safe-area-inset-bottom))] before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:bottom-0 before:bg-[var(--conversation-background)] before:content-[''] md:px-8 md:pb-4 lg:px-24 xl:px-48">
+      <div className="pointer-events-auto mx-auto flex max-w-[49.5rem] flex-col items-end">
         <div
           className={cn(
             "bg-muted/60 relative flex w-full flex-col rounded-3xl border border-transparent p-3 shadow-none transition-colors",

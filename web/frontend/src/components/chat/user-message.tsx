@@ -48,7 +48,7 @@ export const UserMessage = memo(function UserMessage({
       )}
 
       {hasText && (
-        <div className="relative max-w-[70%]">
+        <div className="max-w-[70%]">
           <div
             className={cn(
               "wrap-break-word whitespace-pre-wrap",
@@ -68,33 +68,35 @@ export const UserMessage = memo(function UserMessage({
               content
             )}
           </div>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className={cn(
-              "bg-background/75 hover:bg-background absolute top-2 right-2 h-7 w-7 opacity-0 shadow-xs transition-opacity group-hover:opacity-100",
-              isCommand
-                ? "text-zinc-700 dark:text-zinc-200"
-                : "text-foreground",
-            )}
-            onClick={() => void copy(content)}
-            aria-label={copyMessageLabel}
-            title={copyMessageLabel}
-          >
-            {isCopied ? (
-              <IconCheck className="h-4 w-4 text-green-500" />
-            ) : (
-              <IconCopy className="h-4 w-4" />
-            )}
-          </Button>
         </div>
       )}
 
-      {formattedTimestamp && (
-        <span className="px-1 text-[12px] text-zinc-400">
-          {formattedTimestamp}
-        </span>
+      {(formattedTimestamp || hasText) && (
+        <div className="flex items-center gap-1 px-1 text-[12px] text-zinc-400">
+          {formattedTimestamp && <span>{formattedTimestamp}</span>}
+          {hasText && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className={cn(
+                "size-6",
+                isCommand
+                  ? "text-zinc-700 dark:text-zinc-200"
+                  : "text-foreground",
+              )}
+              onClick={() => void copy(content)}
+              aria-label={copyMessageLabel}
+              title={copyMessageLabel}
+            >
+              {isCopied ? (
+                <IconCheck className="size-3.5 text-green-500" />
+              ) : (
+                <IconCopy className="size-3.5" />
+              )}
+            </Button>
+          )}
+        </div>
       )}
     </div>
   )
