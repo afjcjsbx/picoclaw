@@ -91,6 +91,20 @@ export const splitConversationsAtom = atomWithStorage<string[][]>(
   undefined,
   { getOnInit: true },
 )
+export type SplitLayout = "columns" | "rows" | "grid" | "bsp" | "main-stack"
+export interface SplitLayoutSizes {
+  columns: number[]
+  rows: number[]
+}
+export const splitLayoutsAtom = atomWithStorage<Record<string, SplitLayout>>(
+  "picoclaw:split-layouts",
+  {},
+  undefined,
+  { getOnInit: true },
+)
+export const splitLayoutSizesAtom = atomWithStorage<
+  Record<string, SplitLayoutSizes>
+>("picoclaw:split-layout-sizes", {}, undefined, { getOnInit: true })
 export const splitSessionStatesAtom = atom<Record<string, SplitSessionState>>(
   {},
 )

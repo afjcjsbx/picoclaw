@@ -654,13 +654,14 @@ export async function switchChatSession(sessionId: string) {
   }
 }
 
-export async function newChatSession() {
-  if (getChatState().messages.length === 0) {
-    return
+export async function newChatSession(force = false) {
+  if (!force && getChatState().messages.length === 0) {
+    return undefined
   }
 
   disconnectChatInternal({ clearDesiredConnection: false })
-  setActiveSessionId(generateSessionId(), {
+  const sessionId = generateSessionId()
+  setActiveSessionId(sessionId, {
     messages: [],
     isTyping: false,
     hasHydratedActiveSession: true,
@@ -673,6 +674,7 @@ export async function newChatSession() {
     shouldMaintainConnection = true
     await connectChat()
   }
+  return sessionId
 }
 
 export function initializeChatStore() {

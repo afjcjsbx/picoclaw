@@ -1,4 +1,14 @@
-import { IconArrowBackUp, IconGitFork, IconX } from "@tabler/icons-react"
+import {
+  IconArrowBackUp,
+  IconGitFork,
+  IconLayoutColumns,
+  IconLayoutDashboard,
+  IconLayoutGrid,
+  IconLayoutRows,
+  IconLayoutSidebarRight,
+  IconPlus,
+  IconX,
+} from "@tabler/icons-react"
 import type { TFunction } from "i18next"
 import { useAtom, useAtomValue } from "jotai"
 import {
@@ -27,6 +37,15 @@ import { UserMessage } from "@/components/chat/user-message"
 import { PageHeader } from "@/components/page-header"
 import { Button } from "@/components/ui/button"
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -40,7 +59,10 @@ import {
   getTransferredFiles,
   hasFileTransfer,
 } from "@/features/chat/image-input"
-import { removeSplitConversation } from "@/features/chat/split-groups"
+import {
+  mergeSplitConversations,
+  removeSplitConversation,
+} from "@/features/chat/split-groups"
 import { useChatModels } from "@/hooks/use-chat-models"
 import { useGateway } from "@/hooks/use-gateway"
 import { usePicoChat } from "@/hooks/use-pico-chat"
@@ -49,6 +71,8 @@ import type {
   ChatAttachment,
   ChatMessage,
   ConnectionState,
+  SplitLayout,
+  SplitLayoutSizes,
   SplitSessionState,
 } from "@/store/chat"
 import {
@@ -56,9 +80,317 @@ import {
   sessionTitlesAtom,
   shouldShowAssistantMessage,
   splitConversationsAtom,
+  splitLayoutSizesAtom,
+  splitLayoutsAtom,
   splitSessionStatesAtom,
 } from "@/store/chat"
 import type { GatewayState } from "@/store/gateway"
+
+const SPLIT_LAYOUTS: Array<{
+  value: SplitLayout
+  label: string
+  icon: typeof IconLayoutColumns
+}> = [
+  { value: "columns", label: "Columns", icon: IconLayoutColumns },
+  { value: "rows", label: "Rows", icon: IconLayoutRows },
+  { value: "grid", label: "Grid", icon: IconLayoutGrid },
+  { value: "bsp", label: "BSP", icon: IconLayoutDashboard },
+  {
+    value: "main-stack",
+    label: "Main and stack",
+    icon: IconLayoutSidebarRight,
+  },
+]
+
+function splitGroupKey(sessions: string[]) {
+  return [...sessions].sort().join("\u0000")
+}
+
+type SplitAxis = "columns" | "rows"
+
+interface SplitDivider {
+  axis: SplitAxis
+  index: number
+  style: React.CSSProperties
+}
+
+function getDefaultSplitSizes(
+  layout: SplitLayout,
+  count: number,
+): SplitLayoutSizes {
+  if (layout === "rows") {
+    return {
+      columns: [1],
+      rows: Array.from({ length: count }, () => 1 / count),
+    }
+  }
+
+  if (layout === "grid") {
+    const columns = Math.ceil(Math.sqrt(count))
+    const rows = Math.ceil(count / columns)
+    return {
+      columns: Array.from({ length: columns }, () => 1 / columns),
+      rows: Array.from({ length: rows }, () => 1 / rows),
+    }
+  }
+
+  if (layout === "main-stack") {
+    return {
+      columns: [1.65 / 2.65, 1 / 2.65],
+      rows: Array.from({ length: count - 1 }, () => 1 / (count - 1)),
+    }
+  }
+
+  if (layout === "bsp" && count === 3) {
+    return { columns: [0.5, 0.5], rows: [0.5, 0.5] }
+  }
+
+  if (layout === "bsp" && count >= 4) {
+    return { columns: [0.5, 0.25, 0.25], rows: [0.5, 0.5] }
+  }
+
+  return {
+    columns: Array.from({ length: count }, () => 1 / count),
+    rows: [1],
+  }
+}
+
+function normalizeSplitSizes(sizes: number[] | undefined, defaults: number[]) {
+  if (
+    !sizes ||
+    sizes.length !== defaults.length ||
+    sizes.some((size) => !Number.isFinite(size) || size <= 0)
+  ) {
+    return defaults
+  }
+  const total = sizes.reduce((sum, size) => sum + size, 0)
+  return sizes.map((size) => size / total)
+}
+
+function getSplitLayoutGeometry(
+  layout: SplitLayout,
+  count: number,
+  savedSizes?: SplitLayoutSizes,
+) {
+  const defaults = getDefaultSplitSizes(layout, count)
+  const sizes = {
+    columns: normalizeSplitSizes(savedSizes?.columns, defaults.columns),
+    rows: normalizeSplitSizes(savedSizes?.rows, defaults.rows),
+  }
+  const gridStyle: React.CSSProperties = {
+    gridTemplateColumns: sizes.columns
+      .map((size) => `minmax(0, ${size}fr)`)
+      .join(" "),
+    gridTemplateRows: sizes.rows
+      .map((size) => `minmax(0, ${size}fr)`)
+      .join(" "),
+  }
+  const paneStyles: Array<React.CSSProperties | undefined> = []
+  const dividers: SplitDivider[] = []
+  const columnOffset = (index: number) =>
+    `${sizes.columns.slice(0, index).reduce((sum, size) => sum + size, 0) * 100}%`
+  const rowOffset = (index: number) =>
+    `${sizes.rows.slice(0, index).reduce((sum, size) => sum + size, 0) * 100}%`
+  const addColumnDividers = (first = 1, last = sizes.columns.length - 1) => {
+    for (let index = first; index <= last; index += 1) {
+      dividers.push({
+        axis: "columns",
+        index: index - 1,
+        style: { left: columnOffset(index), top: 0, bottom: 0 },
+      })
+    }
+  }
+  const addRowDividers = (left = "0%") => {
+    for (let index = 1; index < sizes.rows.length; index += 1) {
+      dividers.push({
+        axis: "rows",
+        index: index - 1,
+        style: { top: rowOffset(index), left, right: 0 },
+      })
+    }
+  }
+
+  if (layout === "rows") {
+    addRowDividers()
+  } else if (layout === "grid") {
+    addColumnDividers()
+    addRowDividers()
+  } else if (layout === "main-stack") {
+    addColumnDividers()
+    addRowDividers(columnOffset(1))
+  } else if (layout === "bsp" && count === 3) {
+    addColumnDividers()
+    addRowDividers(columnOffset(1))
+  } else if (layout === "bsp" && count >= 4) {
+    addColumnDividers(1, 1)
+    dividers.push({
+      axis: "columns",
+      index: 1,
+      style: { left: columnOffset(2), top: rowOffset(1), bottom: 0 },
+    })
+    dividers.push({
+      axis: "rows",
+      index: 0,
+      style: { top: rowOffset(1), left: columnOffset(1), right: 0 },
+    })
+  } else {
+    addColumnDividers()
+  }
+
+  if (layout === "main-stack") {
+    paneStyles.push({ gridColumn: "1", gridRow: `1 / ${count}` })
+    for (let index = 0; index < count - 1; index += 1) {
+      paneStyles.push({ gridColumn: "2", gridRow: index + 1 })
+    }
+  } else if (layout === "bsp" && count === 3) {
+    paneStyles.push(
+      { gridColumn: "1", gridRow: "1 / 3" },
+      { gridColumn: "2", gridRow: "1" },
+      { gridColumn: "2", gridRow: "2" },
+    )
+  } else if (layout === "bsp" && count >= 4) {
+    paneStyles.push(
+      { gridColumn: "1", gridRow: "1 / 3" },
+      { gridColumn: "2 / 4", gridRow: "1" },
+      { gridColumn: "2", gridRow: "2" },
+      { gridColumn: "3", gridRow: "2" },
+    )
+  }
+
+  return { gridStyle, paneStyles, dividers, sizes }
+}
+
+const MIN_SPLIT_PANE_SIZE = 160
+
+function resizeSplitSizes(
+  sizes: SplitLayoutSizes,
+  axis: SplitAxis,
+  index: number,
+  delta: number,
+  extent: number,
+): SplitLayoutSizes {
+  const tracks = [...sizes[axis]]
+  const pairSize = tracks[index] + tracks[index + 1]
+  const minimum = Math.min(
+    MIN_SPLIT_PANE_SIZE / Math.max(extent, 1),
+    pairSize / 2,
+  )
+  tracks[index] = Math.max(
+    minimum,
+    Math.min(pairSize - minimum, tracks[index] + delta),
+  )
+  tracks[index + 1] = pairSize - tracks[index]
+  return { ...sizes, [axis]: tracks }
+}
+
+interface SplitResizeHandleProps extends SplitDivider {
+  sizes: SplitLayoutSizes
+  onResize: (sizes: SplitLayoutSizes) => void
+  label: string
+}
+
+function SplitResizeHandle({
+  axis,
+  index,
+  style,
+  sizes,
+  onResize,
+  label,
+}: SplitResizeHandleProps) {
+  const dragRef = useRef<{
+    pointerId: number
+    position: number
+    extent: number
+    sizes: SplitLayoutSizes
+  } | null>(null)
+  const orientation = axis === "columns" ? "vertical" : "horizontal"
+  const currentSize = sizes[axis][index]
+
+  const getExtent = (element: HTMLElement) => {
+    const rect = element.parentElement?.getBoundingClientRect()
+    return rect ? (axis === "columns" ? rect.width : rect.height) : 0
+  }
+  const getPosition = (event: React.PointerEvent) =>
+    axis === "columns" ? event.clientX : event.clientY
+
+  return (
+    <div
+      role="separator"
+      aria-label={label}
+      aria-orientation={orientation}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={Math.round(currentSize * 100)}
+      tabIndex={0}
+      style={style}
+      onPointerDown={(event) => {
+        if (event.button !== 0) return
+        const extent = getExtent(event.currentTarget)
+        if (!extent) return
+        event.preventDefault()
+        event.currentTarget.setPointerCapture(event.pointerId)
+        dragRef.current = {
+          pointerId: event.pointerId,
+          position: getPosition(event),
+          extent,
+          sizes,
+        }
+      }}
+      onPointerMove={(event) => {
+        const drag = dragRef.current
+        if (!drag || drag.pointerId !== event.pointerId) return
+        const delta = (getPosition(event) - drag.position) / drag.extent
+        onResize(resizeSplitSizes(drag.sizes, axis, index, delta, drag.extent))
+      }}
+      onPointerUp={(event) => {
+        dragRef.current = null
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+          event.currentTarget.releasePointerCapture(event.pointerId)
+        }
+      }}
+      onPointerCancel={() => {
+        dragRef.current = null
+      }}
+      onLostPointerCapture={() => {
+        dragRef.current = null
+      }}
+      onKeyDown={(event) => {
+        const extent = getExtent(event.currentTarget)
+        const pairSize = currentSize + sizes[axis][index + 1]
+        const minimum = Math.min(
+          MIN_SPLIT_PANE_SIZE / Math.max(extent, 1),
+          pairSize / 2,
+        )
+        let delta: number
+        if (event.key === "Home") {
+          delta = minimum - currentSize
+        } else if (event.key === "End") {
+          delta = pairSize - minimum - currentSize
+        } else if (
+          (axis === "columns" && event.key === "ArrowLeft") ||
+          (axis === "rows" && event.key === "ArrowUp")
+        ) {
+          delta = -24 / Math.max(extent, 1)
+        } else if (
+          (axis === "columns" && event.key === "ArrowRight") ||
+          (axis === "rows" && event.key === "ArrowDown")
+        ) {
+          delta = 24 / Math.max(extent, 1)
+        } else {
+          return
+        }
+        event.preventDefault()
+        onResize(resizeSplitSizes(sizes, axis, index, delta, extent))
+      }}
+      className={`group focus-visible:ring-ring absolute z-20 flex touch-none items-center justify-center outline-none select-none focus-visible:ring-2 ${axis === "columns" ? "top-0 bottom-0 w-2 -translate-x-1/2 cursor-col-resize" : "right-0 left-0 h-2 -translate-y-1/2 cursor-row-resize"}`}
+    >
+      <span
+        aria-hidden="true"
+        className={`${axis === "columns" ? "h-full w-px" : "h-px w-full"} bg-border/70 group-hover:bg-primary group-focus-visible:bg-primary transition-colors`}
+      />
+    </div>
+  )
+}
 
 function resolveChatInputDisabledReason({
   hasDefaultModel,
@@ -114,6 +446,7 @@ function resolveChatInputDisabledReason({
 
 interface SplitConversationViewProps {
   sessions: string[]
+  layout: SplitLayout
   activeSessionId: string
   activeHistoryStart: number
   hasHydratedActiveSession: boolean
@@ -135,6 +468,7 @@ interface SplitConversationViewProps {
 
 function SplitConversationView({
   sessions,
+  layout,
   activeSessionId,
   activeHistoryStart,
   hasHydratedActiveSession,
@@ -149,6 +483,13 @@ function SplitConversationView({
   activeEmptyState,
   t,
 }: SplitConversationViewProps) {
+  const [storedSizes, setStoredSizes] = useAtom(splitLayoutSizesAtom)
+  const sizeKey = `${splitGroupKey(sessions)}\u0001${layout}`
+  const { gridStyle, paneStyles, dividers, sizes } = getSplitLayoutGeometry(
+    layout,
+    sessions.length,
+    storedSizes[sizeKey],
+  )
   const [history, setHistory] = useState<Record<string, ChatMessage[] | null>>(
     {},
   )
@@ -203,7 +544,8 @@ function SplitConversationView({
 
   return (
     <div
-      className={`grid h-full min-h-0 gap-2 p-2 ${sessions.length === 3 ? "grid-cols-2 grid-rows-2 [&>*:nth-child(3)]:col-span-2" : sessions.length === 4 ? "grid-cols-2 grid-rows-2" : "grid-cols-1 sm:grid-cols-2"}`}
+      className="relative grid h-full min-h-0 min-w-0 gap-0 overflow-hidden"
+      style={gridStyle}
     >
       {sessions.map((sessionId, index) => {
         const isActive = sessionId === activeSessionId
@@ -223,6 +565,7 @@ function SplitConversationView({
             sessionId={sessionId}
             index={index}
             title={title}
+            style={paneStyles[index]}
             messages={paneMessages ?? []}
             historyStart={isActive ? activeHistoryStart : 0}
             isLoaded={
@@ -247,6 +590,19 @@ function SplitConversationView({
           />
         )
       })}
+      {dividers.map((divider) => (
+        <SplitResizeHandle
+          key={`${divider.axis}-${divider.index}`}
+          {...divider}
+          sizes={sizes}
+          onResize={(nextSizes) =>
+            setStoredSizes((current) => ({ ...current, [sizeKey]: nextSizes }))
+          }
+          label={t("chat.resizeSplitPane", {
+            defaultValue: "Resize conversation panes",
+          })}
+        />
+      ))}
     </div>
   )
 }
@@ -255,6 +611,7 @@ interface SplitConversationPaneProps {
   sessionId: string
   index: number
   title: string
+  style?: React.CSSProperties
   messages: ChatMessage[]
   historyStart: number
   isLoaded: boolean
@@ -273,6 +630,7 @@ function SplitConversationPane({
   sessionId,
   index,
   title,
+  style,
   messages,
   historyStart,
   isLoaded,
@@ -298,28 +656,33 @@ function SplitConversationPane({
   return (
     <section
       aria-label={`${title}, ${index + 1}`}
-      className={`bg-background flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border ${isActive ? "border-primary/50" : "border-border/70"}`}
+      tabIndex={0}
+      style={style}
+      onClick={(event) => {
+        const target = event.target as HTMLElement
+        if (target.closest("[data-pane-close]")) return
+        if (!isActive) onActivate(sessionId)
+      }}
+      onFocusCapture={(event) => {
+        if (
+          !isActive &&
+          !(event.target as HTMLElement).closest("[data-pane-close]")
+        ) {
+          onActivate(sessionId)
+        }
+      }}
+      className="bg-background relative flex min-h-0 min-w-0 flex-col overflow-hidden"
     >
-      <header className="border-border/60 flex min-w-0 items-center gap-2 border-b px-3 py-2">
-        <button
-          type="button"
-          aria-pressed={isActive}
-          onClick={() => onActivate(sessionId)}
-          className={`min-w-0 flex-1 truncate text-left text-sm ${isActive ? "font-medium" : "text-muted-foreground"}`}
-          title={title}
-        >
-          {title}
-        </button>
-        <button
-          type="button"
-          aria-label={t("chat.removeSplitPane")}
-          title={t("chat.removeSplitPane")}
-          onClick={() => onRemove(sessionId)}
-          className="text-muted-foreground hover:text-foreground rounded p-1"
-        >
-          <IconX className="size-4" />
-        </button>
-      </header>
+      <button
+        type="button"
+        data-pane-close
+        aria-label={t("chat.removeSplitPane")}
+        title={t("chat.removeSplitPane")}
+        onClick={() => onRemove(sessionId)}
+        className="text-muted-foreground hover:text-foreground bg-background/85 absolute top-1 right-1 z-30 rounded p-1"
+      >
+        <IconX className="size-4" />
+      </button>
       <div
         ref={scrollRef}
         data-session-scroll={sessionId}
@@ -373,6 +736,7 @@ export function ChatPage() {
     assistantDetailVisibilityAtom,
   )
   const [splitGroups, setSplitGroups] = useAtom(splitConversationsAtom)
+  const [splitLayouts, setSplitLayouts] = useAtom(splitLayoutsAtom)
   const sessionTitles = useAtomValue(sessionTitlesAtom)
   const splitSessionStates = useAtomValue(splitSessionStatesAtom)
 
@@ -401,11 +765,18 @@ export function ChatPage() {
     sendMessage,
     switchSession,
     loadOlderHistory,
+    newChat,
   } = usePicoChat()
 
   const activeSplitGroup = splitGroups.find((group) =>
     group.includes(activeSessionId),
   )
+  const activeSplitLayout = activeSplitGroup
+    ? (splitLayouts[splitGroupKey(activeSplitGroup)] ?? "columns")
+    : "columns"
+  const ActiveSplitLayoutIcon =
+    SPLIT_LAYOUTS.find((option) => option.value === activeSplitLayout)?.icon ??
+    IconLayoutColumns
   const getActiveScroller = useCallback(() => {
     const root = scrollRef.current
     if (!root) return null
@@ -715,6 +1086,36 @@ export function ChatPage() {
     removePane()
   }
 
+  const handleAddSplitPane = async (
+    layout: SplitLayout = activeSplitLayout,
+  ) => {
+    if (activeSplitGroup && activeSplitGroup.length >= 4) return
+
+    const newSessionId = await newChat(true)
+    if (!newSessionId) return
+
+    const nextGroup = [...(activeSplitGroup ?? [activeSessionId]), newSessionId]
+    setSplitGroups((groups) =>
+      mergeSplitConversations(groups, newSessionId, activeSessionId),
+    )
+    setSplitLayouts((layouts) => ({
+      ...layouts,
+      [splitGroupKey(nextGroup)]: layout,
+    }))
+  }
+
+  const handleSplitLayoutChange = (value: string) => {
+    const layout = value as SplitLayout
+    if (!activeSplitGroup) {
+      void handleAddSplitPane(layout)
+      return
+    }
+    setSplitLayouts((layouts) => ({
+      ...layouts,
+      [splitGroupKey(activeSplitGroup)]: layout,
+    }))
+  }
+
   const activeEmptyState = (
     <ChatEmptyState
       hasAvailableModels={hasAvailableModels}
@@ -730,19 +1131,50 @@ export function ChatPage() {
         className={`transition-shadow ${
           hasScrolled ? "shadow-xs" : "shadow-none"
         }`}
-        titleExtra={
-          hasAvailableModels && (
-            <ModelSelector
-              defaultModelName={defaultModelName}
-              apiKeyModels={apiKeyModels}
-              oauthModels={oauthModels}
-              localModels={localModels}
-              disabled={settingDefault}
-              onValueChange={handleSetDefault}
-            />
-          )
-        }
       >
+        <div className="flex items-center gap-0.5">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label={t("chat.paneLayout")}
+                title={t("chat.paneLayout")}
+                className="text-muted-foreground hover:text-foreground h-8 w-8 rounded-full"
+              >
+                <ActiveSplitLayoutIcon className="size-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuLabel>{t("chat.paneLayout")}</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuRadioGroup
+                value={activeSplitGroup ? activeSplitLayout : ""}
+                onValueChange={handleSplitLayoutChange}
+              >
+                {SPLIT_LAYOUTS.map(({ value, label, icon: LayoutIcon }) => (
+                  <DropdownMenuRadioItem key={value} value={value}>
+                    <LayoutIcon className="size-4" />
+                    {t(`chat.splitLayouts.${value}`, { defaultValue: label })}
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            disabled={activeSplitGroup?.length === 4}
+            aria-label={t("chat.addSplitPane")}
+            title={t("chat.addSplitPane")}
+            onClick={() => void handleAddSplitPane()}
+            className="text-muted-foreground hover:text-foreground h-8 w-8 rounded-full"
+          >
+            <IconPlus className="size-4" />
+          </Button>
+        </div>
         <div className="border-border/60 hidden items-center gap-2 rounded-lg border px-3 py-1.5 sm:flex">
           <span className="text-muted-foreground text-sm">
             {t("chat.showAssistantDetails")}
@@ -797,6 +1229,7 @@ export function ChatPage() {
         <div ref={scrollRef} className="min-h-0 flex-1 overflow-hidden">
           <SplitConversationView
             sessions={activeSplitGroup}
+            layout={activeSplitLayout}
             activeSessionId={activeSessionId}
             activeHistoryStart={historyStart}
             hasHydratedActiveSession={hasHydratedActiveSession}
@@ -851,6 +1284,18 @@ export function ChatPage() {
         onDrop={handleComposerDrop}
         onRemoveAttachment={handleRemoveAttachment}
         onSend={handleSend}
+        modelSelector={
+          hasAvailableModels ? (
+            <ModelSelector
+              defaultModelName={defaultModelName}
+              apiKeyModels={apiKeyModels}
+              oauthModels={oauthModels}
+              localModels={localModels}
+              disabled={settingDefault}
+              onValueChange={handleSetDefault}
+            />
+          ) : null
+        }
         onContextDetail={() => {
           if (sendMessage({ content: "/context", attachments: [] })) {
             setInput("")
@@ -859,6 +1304,7 @@ export function ChatPage() {
         inputDisabledReason={inputDisabledReason}
         canSend={canSubmit}
         isDragActive={isDragActive}
+        isSplitView={Boolean(activeSplitGroup)}
         contextUsage={contextUsage}
       />
     </div>

@@ -83,6 +83,16 @@
     "history": "History",
     "splitConversation": "Conversation {{number}}",
     "removeSplitPane": "Remove conversation from split",
+    "resizeSplitPane": "Resize conversation panes",
+    "paneLayout": "Pane layout",
+    "addSplitPane": "Add pane",
+    "splitLayouts": {
+      "columns": "Columns",
+      "rows": "Rows",
+      "grid": "Grid",
+      "bsp": "BSP",
+      "main-stack": "Main and stack"
+    },
     "noHistory": "No chat history yet",
     "historyLoadFailed": "Failed to load chat history",
     "historyOpenFailed": "Failed to open this chat history",
