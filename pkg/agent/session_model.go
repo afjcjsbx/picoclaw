@@ -166,6 +166,30 @@ func (al *AgentLoop) releaseSessionModelOverride(override *sessionModelOverride)
 	}
 }
 
+// sessionModel returns the model a session selected through model_preset, or
+// nil when the session follows the agent's model. The result is immutable.
+func (al *AgentLoop) sessionModel(key sessionModelKey) *resolvedAgentModel {
+	al.sessionModelsMu.Lock()
+	defer al.sessionModelsMu.Unlock()
+	if override := al.sessionModels[key]; override != nil {
+		return override.model
+	}
+	return nil
+}
+
+// clearSessionModelOverride drops a session's model_preset so the agent's
+// model applies again; in-flight turns keep the override until they release it.
+func (al *AgentLoop) clearSessionModelOverride(key sessionModelKey) {
+	al.sessionModelsMu.Lock()
+	override := al.sessionModels[key]
+	delete(al.sessionModels, key)
+	closeOverride := retireSessionModelOverride(override)
+	al.sessionModelsMu.Unlock()
+	if closeOverride {
+		override.close()
+	}
+}
+
 func (al *AgentLoop) clearSessionModelOverrides() {
 	al.sessionModelsMu.Lock()
 	var closeOverrides []*sessionModelOverride

@@ -298,7 +298,11 @@ func (al *AgentLoop) buildCommandsRuntime(
 		if agent.ContextBuilder != nil {
 			rt.ListSkillNames = agent.ContextBuilder.ListSkillNames
 		}
+		sessionModelID := sessionModelKey{agentID: agent.ID, sessionKey: opts.Dispatch.SessionKey}
 		rt.GetModelInfo = func() (string, string) {
+			if model := al.sessionModel(sessionModelID); model != nil {
+				return model.name, resolvedCandidateProvider(model.candidates, cfg.Agents.Defaults.Provider)
+			}
 			modelMu := agent.modelStateMutex()
 			modelMu.RLock()
 			defer modelMu.RUnlock()
@@ -362,6 +366,8 @@ func (al *AgentLoop) buildCommandsRuntime(
 				nextProvider,
 				agent.LightProvider,
 			)
+			// An explicit /model wins over a model_preset the session chose earlier.
+			al.clearSessionModelOverride(sessionModelID)
 			return oldModel, nil
 		}
 

@@ -9,24 +9,26 @@ import (
 	"github.com/sipeed/picoclaw/pkg/providers"
 )
 
-func TestSelfToolModelPresetIsSessionScopedAndStartsNextTurn(t *testing.T) {
-	workspace := t.TempDir()
-	localCalls, remoteCalls := 0, 0
-	localModel, remoteModel := "", ""
-	localServer := newChatCompletionTestServer(t, "local", "local reply", &localCalls, &localModel)
-	defer localServer.Close()
-	remoteServer := newChatCompletionTestServer(
-		t,
-		"remote",
-		"remote reply",
-		&remoteCalls,
-		&remoteModel,
-	)
-	defer remoteServer.Close()
+type sessionModelFixture struct {
+	t                       *testing.T
+	al                      *AgentLoop
+	baseAgent               *AgentInstance
+	selfTool                *SelfTool
+	localCalls, remoteCalls int
+	localModel, remoteModel string
+}
+
+func newSessionModelFixture(t *testing.T) *sessionModelFixture {
+	t.Helper()
+	f := &sessionModelFixture{t: t}
+	localServer := newChatCompletionTestServer(t, "local", "local reply", &f.localCalls, &f.localModel)
+	t.Cleanup(localServer.Close)
+	remoteServer := newChatCompletionTestServer(t, "remote", "remote reply", &f.remoteCalls, &f.remoteModel)
+	t.Cleanup(remoteServer.Close)
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{Defaults: config.AgentDefaults{
-			Workspace: workspace, Provider: "openai", ModelName: "local",
+			Workspace: t.TempDir(), Provider: "openai", ModelName: "local",
 			MaxTokens: 4096, MaxToolIterations: 10,
 		}},
 		Tools: config.ToolsConfig{Self: config.SelfToolConfig{Enable: true, AllowSet: true}},
@@ -45,62 +47,97 @@ func TestSelfToolModelPresetIsSessionScopedAndStartsNextTurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateProvider(): %v", err)
 	}
-	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
-	defer al.Close()
-	baseAgent := al.GetRegistry().GetDefaultAgent()
-	toolValue, ok := baseAgent.Tools.Get("self")
+	f.al = NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+	t.Cleanup(f.al.Close)
+	f.baseAgent = f.al.GetRegistry().GetDefaultAgent()
+	toolValue, ok := f.baseAgent.Tools.Get("self")
 	if !ok {
 		t.Fatal("self tool was not registered")
 	}
-	selfTool, ok := toolValue.(*SelfTool)
-	if !ok {
+	if f.selfTool, ok = toolValue.(*SelfTool); !ok {
 		t.Fatalf("self tool has type %T", toolValue)
 	}
+	return f
+}
 
-	callTurn := func(sessionKey string) string {
-		t.Helper()
-		response, err := al.runAgentLoop(context.Background(), baseAgent, processOptions{
-			Dispatch:  DispatchRequest{SessionKey: sessionKey, UserMessage: "hello"},
-			NoHistory: true,
-		})
-		if err != nil {
-			t.Fatalf("runAgentLoop(%q): %v", sessionKey, err)
-		}
-		return response
+func (f *sessionModelFixture) callTurn(sessionKey string) string {
+	f.t.Helper()
+	response, err := f.al.runAgentLoop(context.Background(), f.baseAgent, processOptions{
+		Dispatch:  DispatchRequest{SessionKey: sessionKey, UserMessage: "hello"},
+		NoHistory: true,
+	})
+	if err != nil {
+		f.t.Fatalf("runAgentLoop(%q): %v", sessionKey, err)
 	}
-	if got := callTurn("session-a"); got != "local reply" {
+	return response
+}
+
+// turnContext mimics the context a tool receives while a turn of the session runs.
+func (f *sessionModelFixture) turnContext(sessionKey string) context.Context {
+	ctx := withTurnState(context.Background(), newTurnState(
+		f.baseAgent,
+		processOptions{Dispatch: DispatchRequest{SessionKey: sessionKey}},
+		turnEventScope{agentID: f.baseAgent.ID, sessionKey: sessionKey, turnID: "self-set-model"},
+	))
+	return WithAgentLoop(ctx, f.al)
+}
+
+func TestSelfToolModelPresetIsSessionScopedAndStartsNextTurn(t *testing.T) {
+	f := newSessionModelFixture(t)
+	if got := f.callTurn("session-a"); got != "local reply" {
 		t.Fatalf("initial response = %q, want local reply", got)
 	}
 
-	setContext := withTurnState(context.Background(), newTurnState(
-		baseAgent,
-		processOptions{Dispatch: DispatchRequest{SessionKey: "session-a"}},
-		turnEventScope{agentID: baseAgent.ID, sessionKey: "session-a", turnID: "self-set-model"},
-	))
-	setContext = WithAgentLoop(setContext, al)
-	if result := runSelfTool(selfTool, setContext, "set", "model_preset", "missing", true); !result.IsError {
+	setContext := f.turnContext("session-a")
+	if result := runSelfTool(f.selfTool, setContext, "set", "model_preset", "missing", true); !result.IsError {
 		t.Fatal("unknown model preset was accepted")
 	}
-	if result := runSelfTool(selfTool, setContext, "set", "model_preset", "remote", true); result.IsError {
+	if result := runSelfTool(f.selfTool, setContext, "set", "model_preset", "remote", true); result.IsError {
 		t.Fatalf("set model_preset: %s", result.ForLLM)
 	}
-	if got := runSelfTool(selfTool, setContext, "check", "model", nil, false).ForLLM; got != "local" {
+	if got := runSelfTool(f.selfTool, setContext, "check", "model", nil, false).ForLLM; got != "local" {
 		t.Fatalf("model during active turn = %q, want local", got)
 	}
-	if baseAgent.Model != "local" {
-		t.Fatalf("global model = %q, want local", baseAgent.Model)
+	if f.baseAgent.Model != "local" {
+		t.Fatalf("global model = %q, want local", f.baseAgent.Model)
 	}
 
-	if got := callTurn("session-a"); got != "remote reply" {
+	if got := f.callTurn("session-a"); got != "remote reply" {
 		t.Fatalf("session-a response after preset change = %q, want remote reply", got)
 	}
-	if got := callTurn("session-b"); got != "local reply" {
+	if got := f.callTurn("session-b"); got != "local reply" {
 		t.Fatalf("session-b response = %q, want local reply", got)
 	}
-	if remoteCalls != 1 || remoteModel != "deepseek-v3.2" {
-		t.Fatalf("remote calls/model = %d/%q, want 1/deepseek-v3.2", remoteCalls, remoteModel)
+	if f.remoteCalls != 1 || f.remoteModel != "deepseek-v3.2" {
+		t.Fatalf("remote calls/model = %d/%q, want 1/deepseek-v3.2", f.remoteCalls, f.remoteModel)
 	}
-	if localCalls != 2 {
-		t.Fatalf("local calls = %d, want 2", localCalls)
+	if f.localCalls != 2 {
+		t.Fatalf("local calls = %d, want 2", f.localCalls)
+	}
+}
+
+func TestModelCommandReplacesSessionModelPreset(t *testing.T) {
+	f := newSessionModelFixture(t)
+	for _, session := range []string{"session-a", "session-b"} {
+		ctx := f.turnContext(session)
+		if result := runSelfTool(f.selfTool, ctx, "set", "model_preset", "remote", true); result.IsError {
+			t.Fatalf("set model_preset for %s: %s", session, result.ForLLM)
+		}
+	}
+
+	opts := &processOptions{Dispatch: DispatchRequest{SessionKey: "session-a"}}
+	rt := f.al.buildCommandsRuntime(context.Background(), f.baseAgent, opts)
+	if model, _ := rt.GetModelInfo(); model != "remote" {
+		t.Fatalf("/model shows %q for a session using the remote preset, want remote", model)
+	}
+	if _, err := rt.SwitchModel("local"); err != nil {
+		t.Fatalf("SwitchModel(local): %v", err)
+	}
+
+	if got := f.callTurn("session-a"); got != "local reply" {
+		t.Fatalf("session-a response after /model local = %q, want local reply", got)
+	}
+	if got := f.callTurn("session-b"); got != "remote reply" {
+		t.Fatalf("session-b response = %q, want remote reply (its preset is untouched)", got)
 	}
 }
