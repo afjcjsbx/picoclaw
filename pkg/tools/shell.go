@@ -217,7 +217,14 @@ func (t *ExecTool) Name() string {
 	return "exec"
 }
 
+// execDescription only depends on runtime.GOOS, so build it once instead of on every call.
+var execDescription = buildExecDescription()
+
 func (t *ExecTool) Description() string {
+	return execDescription
+}
+
+func buildExecDescription() string {
 	shell := "sh"
 	chainGuidance := "If commands depend on each other, chain them with && so a failure stops the sequence."
 	if runtime.GOOS == "windows" {
@@ -240,9 +247,7 @@ Usage notes:
 - The optional timeout parameter is in seconds and overrides the configured timeout for foreground commands; 0 disables the timeout. It cannot be combined with background=true. Foreground output is truncated after 10,000 bytes; background session output is limited to 1 MB.
 - Use background=true for long-running commands. The result includes a sessionId. Use action=list to list sessions; use poll, read, write, send-keys, or kill with sessionId to manage one. write sends stdin; send-keys sends keys to a PTY. Sessions are cleaned up 30 minutes after the process exits.
 - Combine background=true with pty=true for interactive sessions when supported. PTY is not supported on Windows.
-- Run independent commands in separate tool calls so they can run in parallel. %s Use semicolons only when later commands may run even if an earlier one fails. Do not use newlines to separate commands; newlines inside quoted strings are fine.
-
-`, runtime.GOOS, shell, chainGuidance)
+- Run independent commands in separate tool calls. %s Use semicolons only when later commands may run even if an earlier one fails. Do not use newlines to separate commands; newlines inside quoted strings are fine.`, runtime.GOOS, shell, chainGuidance)
 }
 
 //nolint:dupl // Tool parameter schemas intentionally use similar JSON-schema map literals.
@@ -350,27 +355,16 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 	isBackground := getBoolArg("background")
 	timeout := t.timeout
 	if raw, ok := args["timeout"]; ok {
-		if isBackground {
-			return ErrorResult("timeout is only supported for foreground commands")
-		}
-
 		const maxTimeoutSeconds = (1<<63 - 1) / int64(time.Second)
-		var seconds int64
-		switch value := raw.(type) {
-		case float64:
-			if value != math.Trunc(value) || value < 0 || value > float64(maxTimeoutSeconds) {
-				return ErrorResult("timeout must be a non-negative integer number of seconds")
-			}
-			seconds = int64(value)
-		case int:
-			seconds = int64(value)
-		case int64:
-			seconds = value
-		default:
+		// JSON tool arguments always decode numbers as float64.
+		value, isNumber := raw.(float64)
+		if !isNumber || value != math.Trunc(value) || value < 0 || value > float64(maxTimeoutSeconds) {
 			return ErrorResult("timeout must be a non-negative integer number of seconds")
 		}
-		if seconds < 0 || seconds > maxTimeoutSeconds {
-			return ErrorResult("timeout must be a non-negative integer number of seconds")
+		seconds := int64(value)
+		// timeout=0 means "no timeout", which is already how background sessions behave.
+		if isBackground && seconds != 0 {
+			return ErrorResult("timeout is only supported for foreground commands")
 		}
 		timeout = time.Duration(seconds) * time.Second
 	}

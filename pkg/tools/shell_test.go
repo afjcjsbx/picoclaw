@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -103,6 +104,140 @@ func TestShellTool_Timeout(t *testing.T) {
 	if !strings.Contains(result.ForLLM, "timed out") && !strings.Contains(result.ForUser, "timed out") {
 		t.Errorf("Expected timeout message, got ForLLM: %s, ForUser: %s", result.ForLLM, result.ForUser)
 	}
+}
+
+// TestShellTool_TimeoutArg_Invalid verifies malformed per-run timeouts are rejected before running
+func TestShellTool_TimeoutArg_Invalid(t *testing.T) {
+	tests := []struct {
+		name    string
+		timeout any
+	}{
+		{"fractional", 1.5},
+		{"negative", float64(-1)},
+		{"overflow", 1e19},
+		{"nan", math.NaN()},
+		{"infinity", math.Inf(1)},
+		{"string", "30"},
+		{"bool", true},
+	}
+
+	tool, err := NewExecTool("", false)
+	require.NoError(t, err)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tool.Execute(context.Background(), map[string]any{
+				"action":  "run",
+				"command": "echo should-not-run",
+				"timeout": tt.timeout,
+			})
+
+			require.True(t, result.IsError)
+			require.Contains(t, result.ForLLM, "timeout must be a non-negative integer number of seconds")
+			require.NotContains(t, result.ForLLM, "should-not-run")
+		})
+	}
+}
+
+// TestShellTool_TimeoutArg_OverridesConfigured verifies a per-run timeout replaces the configured one
+func TestShellTool_TimeoutArg_OverridesConfigured(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sleep with fractional seconds is not portable to PowerShell")
+	}
+
+	tool, err := NewExecTool("", false)
+	require.NoError(t, err)
+	tool.SetTimeout(100 * time.Millisecond)
+
+	t.Run("longer timeout lets command finish", func(t *testing.T) {
+		result := tool.Execute(context.Background(), map[string]any{
+			"action":  "run",
+			"command": "sleep 0.3; echo done",
+			"timeout": float64(5),
+		})
+
+		require.False(t, result.IsError, result.ForLLM)
+		require.Contains(t, result.ForLLM, "done")
+	})
+
+	t.Run("zero disables the timeout", func(t *testing.T) {
+		result := tool.Execute(context.Background(), map[string]any{
+			"action":  "run",
+			"command": "sleep 0.3; echo done",
+			"timeout": float64(0),
+		})
+
+		require.False(t, result.IsError, result.ForLLM)
+		require.Contains(t, result.ForLLM, "done")
+	})
+
+	t.Run("shorter timeout kills command", func(t *testing.T) {
+		tool, err := NewExecTool("", false)
+		require.NoError(t, err)
+
+		start := time.Now()
+		result := tool.Execute(context.Background(), map[string]any{
+			"action":  "run",
+			"command": "sleep 10",
+			"timeout": float64(1),
+		})
+
+		require.True(t, result.IsError)
+		require.Contains(t, result.ForLLM, "timed out after 1s")
+		require.Less(t, time.Since(start), 5*time.Second)
+	})
+}
+
+// TestShellTool_TimeoutArg_Background verifies timeout only conflicts with background when non-zero
+func TestShellTool_TimeoutArg_Background(t *testing.T) {
+	tool, err := NewExecTool("", false)
+	require.NoError(t, err)
+
+	sm := NewSessionManager()
+	t.Cleanup(sm.Stop)
+	tool.sessionManager = sm
+
+	ctx := WithToolContext(context.Background(), "cli", "test")
+
+	t.Run("non-zero timeout is rejected", func(t *testing.T) {
+		result := tool.Execute(ctx, map[string]any{
+			"action":     "run",
+			"command":    "echo hello",
+			"background": true,
+			"timeout":    float64(5),
+		})
+
+		require.True(t, result.IsError)
+		require.Contains(t, result.ForLLM, "timeout is only supported for foreground commands")
+	})
+
+	t.Run("invalid timeout reports the parsing error", func(t *testing.T) {
+		result := tool.Execute(ctx, map[string]any{
+			"action":     "run",
+			"command":    "echo hello",
+			"background": true,
+			"timeout":    float64(-1),
+		})
+
+		require.True(t, result.IsError)
+		require.Contains(t, result.ForLLM, "timeout must be a non-negative integer number of seconds")
+	})
+
+	t.Run("zero timeout starts the session", func(t *testing.T) {
+		result := tool.Execute(ctx, map[string]any{
+			"action":     "run",
+			"command":    "sleep 10",
+			"background": true,
+			"timeout":    float64(0),
+		})
+
+		require.False(t, result.IsError, result.ForLLM)
+		require.Contains(t, result.ForLLM, "sessionId")
+
+		var resp ExecResponse
+		require.NoError(t, json.Unmarshal([]byte(result.ForLLM), &resp))
+		tool.Execute(ctx, map[string]any{"action": "kill", "sessionId": resp.SessionID})
+	})
 }
 
 // TestShellTool_WorkingDir verifies custom working directory
