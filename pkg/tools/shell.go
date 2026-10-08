@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -217,7 +218,31 @@ func (t *ExecTool) Name() string {
 }
 
 func (t *ExecTool) Description() string {
-	return `Execute shell commands. Use background=true for long-running commands (returns sessionId). Use pty=true for interactive commands (can combine with background=true). Use poll/read/write/send-keys/kill with sessionId to manage background sessions. Sessions auto-cleanup 30 minutes after process exits; use kill to terminate early. Output buffer limit: 1MB.`
+	shell := "sh"
+	chainGuidance := "If commands depend on each other, chain them with && so a failure stops the sequence."
+	if runtime.GOOS == "windows" {
+		shell = "PowerShell"
+		chainGuidance = "PowerShell does not support &&; use cmd1; if ($?) { cmd2 } when cmd2 depends on cmd1 succeeding."
+	}
+
+	return fmt.Sprintf(`Executes shell commands with PicoClaw's configured safety guards.
+
+Be aware: OS: %s, Shell: %s
+
+All commands run in the configured working directory by default. Use the cwd parameter to select another directory; do not use cd to change directories inside a command.
+
+IMPORTANT: Use this tool for terminal operations such as git, go, npm, and docker. For listing, searching, reading, or editing files, use PicoClaw's filesystem tools (list_dir, search_files, read_file, edit_file, append_file, and write_file) when available.
+
+Before a command explicitly creates files or directories, use list_dir when available to verify that the parent exists and is the intended location. Always quote paths containing spaces. Command output is returned by the tool.
+
+Usage notes:
+- action is required; command is required for action=run.
+- The optional timeout parameter is in seconds and overrides the configured timeout for foreground commands; 0 disables the timeout. It cannot be combined with background=true. Foreground output is truncated after 10,000 bytes; background session output is limited to 1 MB.
+- Use background=true for long-running commands. The result includes a sessionId. Use action=list to list sessions; use poll, read, write, send-keys, or kill with sessionId to manage one. write sends stdin; send-keys sends keys to a PTY. Sessions are cleaned up 30 minutes after the process exits.
+- Combine background=true with pty=true for interactive sessions when supported. PTY is not supported on Windows.
+- Run independent commands in separate tool calls so they can run in parallel. %s Use semicolons only when later commands may run even if an earlier one fails. Do not use newlines to separate commands; newlines inside quoted strings are fine.
+
+`, runtime.GOOS, shell, chainGuidance)
 }
 
 //nolint:dupl // Tool parameter schemas intentionally use similar JSON-schema map literals.
@@ -260,7 +285,7 @@ func (t *ExecTool) Parameters() map[string]any {
 			},
 			"timeout": map[string]any{
 				"type":        "integer",
-				"description": "Timeout in seconds (0 = no timeout)",
+				"description": "Optional timeout in seconds for foreground commands; overrides the configured timeout, and 0 disables the timeout. Not supported with background=true.",
 			},
 		},
 		"required": []string{"action"},
@@ -323,6 +348,32 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 	}
 	isPty := getBoolArg("pty")
 	isBackground := getBoolArg("background")
+	timeout := t.timeout
+	if raw, ok := args["timeout"]; ok {
+		if isBackground {
+			return ErrorResult("timeout is only supported for foreground commands")
+		}
+
+		const maxTimeoutSeconds = (1<<63 - 1) / int64(time.Second)
+		var seconds int64
+		switch value := raw.(type) {
+		case float64:
+			if value != math.Trunc(value) || value < 0 || value > float64(maxTimeoutSeconds) {
+				return ErrorResult("timeout must be a non-negative integer number of seconds")
+			}
+			seconds = int64(value)
+		case int:
+			seconds = int64(value)
+		case int64:
+			seconds = value
+		default:
+			return ErrorResult("timeout must be a non-negative integer number of seconds")
+		}
+		if seconds < 0 || seconds > maxTimeoutSeconds {
+			return ErrorResult("timeout must be a non-negative integer number of seconds")
+		}
+		timeout = time.Duration(seconds) * time.Second
+	}
 
 	if isPty {
 		if runtime.GOOS == "windows" {
@@ -381,15 +432,15 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 		return t.runBackground(ctx, command, cwd, isPty)
 	}
 
-	return t.runSync(ctx, command, cwd)
+	return t.runSync(ctx, command, cwd, timeout)
 }
 
-func (t *ExecTool) runSync(ctx context.Context, command, cwd string) *ToolResult {
+func (t *ExecTool) runSync(ctx context.Context, command, cwd string, timeout time.Duration) *ToolResult {
 	// timeout == 0 means no timeout
 	var cmdCtx context.Context
 	var cancel context.CancelFunc
-	if t.timeout > 0 {
-		cmdCtx, cancel = context.WithTimeout(ctx, t.timeout)
+	if timeout > 0 {
+		cmdCtx, cancel = context.WithTimeout(ctx, timeout)
 	} else {
 		cmdCtx, cancel = context.WithCancel(ctx)
 	}
@@ -454,7 +505,7 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string) *ToolResult
 
 	if err != nil {
 		if errors.Is(cmdCtx.Err(), context.DeadlineExceeded) {
-			msg := fmt.Sprintf("Command timed out after %v", t.timeout)
+			msg := fmt.Sprintf("Command timed out after %v", timeout)
 			if output != "" {
 				msg += "\n\nPartial output before timeout:\n" + output
 			}
