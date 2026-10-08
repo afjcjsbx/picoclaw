@@ -42,10 +42,37 @@ func (t *TodoTool) ClearSession(agentID, sessionKey string) {
 
 func (t *TodoTool) Name() string { return "todo" }
 func (t *TodoTool) Description() string {
-	return "Track a short plan for complex, multi-step work in the current session. Skip simple requests. " +
-		"Read before resuming or updating an existing plan; write replaces the entire list, so preserve stable IDs and unfinished steps. " +
-		"Mark steps in_progress when starting and completed only after verifying the work; use canceled for abandoned steps. " +
-		"Clear obsolete plans with write and todos: []. Plans are in memory only, lost on restart/reload; this tool does not execute or schedule tasks."
+	return "Create and maintain a structured task list for the current session. Tracks progress and surfaces status to the user.\n\n" +
+		"Each write replaces the whole list: always send every item, including unchanged ones, with a stable unique id. Use `read` before resuming or after context loss; never rewrite a plan from memory.\n\n" +
+		"## When to use\n" +
+		"- Task has 3+ distinct steps, spans multiple files, or the user listed several tasks or asked for a todo list.\n" +
+		"- New user instructions mid-session: add them as items before starting.\n" +
+		"- Several tool calls for one conceptual step do not count as separate steps.\n\n" +
+		"## When NOT to use\n" +
+		"- Single action or fewer than 3 trivial steps.\n" +
+		"- Informational or conversational requests.\n\n" +
+		"## States\n" +
+		"- `pending`: not started.\n" +
+		"- `in_progress`: working on it. At most one at a time; a write with more than one is rejected.\n" +
+		"- `completed`: done AND verified.\n" +
+		"- `canceled`: no longer needed. Cancel instead of deleting.\n\n" +
+		"## Priority\n" +
+		"`high` (blocks other work or user-critical), `medium` (default if omitted), `low` (optional, cleanup).\n\n" +
+		"## Rules\n" +
+		"- Mark `completed` right after finishing, not in batches.\n" +
+		"- Mark `completed` only after verification passes (tests, build, confirmed change). If it fails or was not run, keep it `in_progress` or add a fix item.\n" +
+		"- If blocked: keep the item `in_progress`, add a `pending` item naming the blocker, and tell the user what is needed.\n" +
+		"- Follow-ups found during work: add as new `pending` items.\n" +
+		"- Content: specific, imperative, in the user's language. \"Add dark mode toggle to Settings\", not \"Dark mode\".\n" +
+		"- Keep commands, flags, paths, and identifiers verbatim (e.g. `go test ./... -race`).\n" +
+		"- Plan, not log: do not add an item per tool call.\n" +
+		"- Clear an obsolete plan with `todos: []`.\n\n" +
+		"## Limits\n" +
+		"Max 100 items; content up to 1024 bytes; id up to 128 bytes. Plans live in memory for the session only: lost on restart, cleared with the conversation. This tool does not execute or schedule tasks.\n\n" +
+		"## Examples\n" +
+		"- \"Add a dark mode toggle and run the tests\" -> feature items + explicit test item.\n" +
+		"- \"Rename getCwd across the repo\" (15 hits in 8 files) -> rename item + verification item.\n" +
+		"- \"How do I print Hello World?\", \"Add a comment to calculateTotal\", \"Run npm install\" -> skip."
 }
 
 func (t *TodoTool) Parameters() map[string]any {
@@ -154,6 +181,15 @@ func (t *TodoTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 			default:
 				return ErrorResult("invalid todo priority")
 			}
+		}
+		inProgress := 0
+		for _, item := range todos {
+			if item.Status == "in_progress" {
+				inProgress++
+			}
+		}
+		if inProgress > 1 {
+			return ErrorResult("at most one todo may be in_progress; set the others to pending or completed and retry")
 		}
 	}
 	t.mu.Lock()

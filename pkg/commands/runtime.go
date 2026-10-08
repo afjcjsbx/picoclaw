@@ -27,6 +27,15 @@ type MCPToolInfo struct {
 	Parameters  []MCPToolParameterInfo
 }
 
+// PluginInfo describes an installed plugin package or configured plugin entry.
+type PluginInfo struct {
+	ID          string
+	Name        string
+	Root        string
+	State       string
+	Diagnostics int
+}
+
 // ContextStats describes current session context window usage.
 type ContextStats struct {
 	UsedTokens        int
@@ -58,8 +67,9 @@ type Runtime struct {
 	ListSkillNames     func() []string
 	ListMCPServers     func(ctx context.Context) []MCPServerInfo
 	ListMCPTools       func(ctx context.Context, serverName string) ([]MCPToolInfo, error)
+	ListPlugins        func(ctx context.Context) []PluginInfo
 	GetEnabledChannels func() []string
-	GetActiveTurn      func() any // Returning any to avoid circular dependency with agent package
+	GetActiveTurnTree  func() []TurnInfo // Active root turn of the session followed by its subagents
 	GetContextStats    func() *ContextStats
 	SwitchModel        func(value string) (oldModel string, err error)
 	SwitchChannel      func(value string) error

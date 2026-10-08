@@ -27,7 +27,7 @@ func TestTodoAgentRegistration(t *testing.T) {
 		if !enabled {
 			continue
 		}
-		if !strings.Contains(tool.Description(), "Skip simple requests") {
+		if !strings.Contains(tool.Description(), "Each write replaces the whole list") {
 			t.Fatal("missing planning guidance")
 		}
 		// Registry clones used by subagents share implementations but must not share plans.

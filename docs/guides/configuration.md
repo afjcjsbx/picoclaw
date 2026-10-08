@@ -180,6 +180,7 @@ Once skills are installed, and MCP servers are configured, you can inspect and f
 
 - `/list skills` shows the installed skill names available to the current agent.
 - `/list mcp` shows configured MCP servers with enabled/deferred/connected status.
+- `/list plugins` shows installed plugin packages with their state (ready, degraded, failed, disabled, not enabled) and path.
 - `/show mcp <server>` shows the active tools exposed by a connected MCP server.
 - `/use <skill> <message>` forces a specific skill for a single request.
 - `/use <skill>` arms that skill for your next message in the same chat session.

@@ -13,6 +13,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/commands"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/plugins"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/tools"
 )
@@ -259,12 +260,45 @@ func (al *AgentLoop) buildCommandsRuntime(
 			}
 			return al.channelManager.GetEnabledChannels()
 		},
-		GetActiveTurn: func() any {
-			info := al.GetActiveTurn()
-			if info == nil {
+		ListPlugins: func(ctx context.Context) []commands.PluginInfo {
+			if cfg == nil {
 				return nil
 			}
-			return info
+
+			al.waitPlugins(ctx)
+			items := plugins.Inventory(cfg.Plugins, cfg.WorkspacePath(), al.PluginStatuses())
+			infos := make([]commands.PluginInfo, 0, len(items))
+			for _, item := range items {
+				infos = append(infos, commands.PluginInfo{
+					ID:          item.ID,
+					Name:        item.Name,
+					Root:        item.Root,
+					State:       item.State,
+					Diagnostics: item.Diagnostics,
+				})
+			}
+			return infos
+		},
+		GetActiveTurnTree: func() []commands.TurnInfo {
+			if opts == nil {
+				return nil
+			}
+			tree := al.GetActiveTurnTree(opts.Dispatch.SessionKey)
+			if len(tree) == 0 {
+				return nil
+			}
+			turns := make([]commands.TurnInfo, 0, len(tree))
+			for _, info := range tree {
+				turns = append(turns, commands.TurnInfo{
+					TurnID:       info.TurnID,
+					ParentTurnID: info.ParentTurnID,
+					AgentID:      info.AgentID,
+					UserMessage:  info.UserMessage,
+					Phase:        string(info.Phase),
+					StartedAt:    info.StartedAt,
+				})
+			}
+			return turns
 		},
 		SwitchChannel: func(value string) error {
 			if al.channelManager == nil {
