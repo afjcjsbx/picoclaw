@@ -1,8 +1,4 @@
 import { getSessionHistory } from "@/api/sessions"
-import {
-  CHAT_TEXT_ATTACHMENT_INSTRUCTION,
-  CHAT_UPLOADED_FILE_PATH_INSTRUCTION,
-} from "@/features/chat/image-input"
 import { normalizeUnixTimestamp } from "@/features/chat/state"
 import {
   parseToolCallsValue,
@@ -70,14 +66,9 @@ function stripUploadedFiles(content: string) {
       start + opening.length,
       -closing.length,
     )
-    const fileJSON = [
-      CHAT_TEXT_ATTACHMENT_INSTRUCTION,
-      CHAT_UPLOADED_FILE_PATH_INSTRUCTION,
-    ].reduce(
-      (value, instruction) =>
-        value.startsWith(instruction) ? value.slice(instruction.length) : value,
-      serializedFiles,
-    )
+    const jsonStart = serializedFiles.indexOf("[")
+    const fileJSON =
+      jsonStart >= 0 ? serializedFiles.slice(jsonStart) : serializedFiles
     const files = JSON.parse(fileJSON) as {
       filename?: unknown
       content?: unknown
