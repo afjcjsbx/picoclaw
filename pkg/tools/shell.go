@@ -217,7 +217,14 @@ func (t *ExecTool) Name() string {
 	return "exec"
 }
 
+// execDescription only depends on runtime.GOOS, so build it once instead of on every call.
+var execDescription = buildExecDescription()
+
 func (t *ExecTool) Description() string {
+	return execDescription
+}
+
+func buildExecDescription() string {
 	shell := "sh"
 	chainGuidance := "If commands depend on each other, chain them with && so a failure stops the sequence."
 	if runtime.GOOS == "windows" {
