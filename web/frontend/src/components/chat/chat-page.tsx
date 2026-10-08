@@ -35,6 +35,7 @@ import {
   type ChatInputDisabledReason,
 } from "@/components/chat/chat-composer"
 import { ChatEmptyState } from "@/components/chat/chat-empty-state"
+import { FilePreviewPanel } from "@/components/chat/file-preview-panel"
 import { ModelSelector } from "@/components/chat/model-selector"
 import { TypingIndicator } from "@/components/chat/typing-indicator"
 import { UserMessage } from "@/components/chat/user-message"
@@ -305,6 +306,7 @@ function getSplitLayoutGeometry(
 }
 
 const MIN_SPLIT_PANE_SIZE = 160
+const MIN_FILE_PREVIEW_WIDTH = 280
 
 function resizeSplitSizes(
   sizes: SplitLayoutSizes,
@@ -767,6 +769,13 @@ export function ChatPage() {
   const [isAtBottom, setIsAtBottom] = useState(true)
   const [hasScrolled, setHasScrolled] = useState(false)
   const [input, setInput] = useState("")
+  const [filePreviewPath, setFilePreviewPath] = useState("")
+  const [filePreviewWidth, setFilePreviewWidth] = useState(420)
+  const fileResizeRef = useRef<{
+    pointerId: number
+    x: number
+    width: number
+  } | null>(null)
   const [attachments, setAttachments] = useState<ChatAttachment[]>([])
   const [isDragActive, setIsDragActive] = useState(false)
   const [forkedFrom, setForkedFrom] = useState<string>()
@@ -833,6 +842,24 @@ export function ChatPage() {
   })
   const canInput = inputDisabledReason === null
 
+  const handleOpenFile = (path: string) => {
+    setFilePreviewPath(path)
+  }
+
+  const handleResizeFilePreview = (
+    event: React.PointerEvent<HTMLDivElement>,
+  ) => {
+    const drag = fileResizeRef.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+    const max = Math.min(window.innerWidth * 0.72, 900)
+    setFilePreviewWidth(
+      Math.max(
+        MIN_FILE_PREVIEW_WIDTH,
+        Math.min(max, drag.width + drag.x - event.clientX),
+      ),
+    )
+  }
+
   useEffect(() => {
     let cancelled = false
     setForkedFrom(undefined)
@@ -890,6 +917,26 @@ export function ChatPage() {
     start: number,
     isTyping: boolean,
   ) => {
+    const filePathAliasesByMessage = new Map<string, Record<string, string>>()
+    const filePathAliases: Record<string, string> = {}
+    renderedMessages.forEach((message) => {
+      if (message.role === "assistant") {
+        message.toolCalls?.forEach((toolCall) => {
+          try {
+            const args: unknown = JSON.parse(toolCall.function?.arguments ?? "")
+            if (!args || typeof args !== "object") return
+            const path = (args as { path?: unknown }).path
+            if (typeof path !== "string") return
+            const filename = path.replaceAll("\\", "/").split("/").at(-1)
+            if (filename) filePathAliases[filename] = path
+          } catch {
+            // Ignore malformed tool arguments while building file links.
+          }
+        })
+        filePathAliasesByMessage.set(message.id, { ...filePathAliases })
+      }
+    })
+
     const messagesToRender: {
       message: ChatMessage
       offset: number
@@ -1017,6 +1064,8 @@ export function ChatPage() {
                 content={msg.content}
                 attachments={msg.attachments}
                 kind={msg.kind}
+                onOpenFile={handleOpenFile}
+                filePathAliases={filePathAliasesByMessage.get(msg.id)}
                 onFork={
                   canFork
                     ? () => void handleFork(sessionId, messageIndex)
@@ -1343,86 +1392,157 @@ export function ChatPage() {
         </div>
       )}
 
-      {activeSplitGroup ? (
-        <div ref={scrollRef} className="min-h-0 flex-1 overflow-hidden">
-          <SplitConversationView
-            sessions={activeSplitGroup}
-            layout={activeSplitLayout}
-            activeSessionId={activeSessionId}
-            activeHistoryStart={historyStart}
-            hasHydratedActiveSession={hasHydratedActiveSession}
-            sessionTitles={sessionTitles}
-            splitSessionStates={splitSessionStates}
-            messages={messages}
-            isTyping={isTyping}
-            renderMessages={renderMessages}
-            onActivate={(sessionId) => {
-              setIsAtBottom(true)
-              void switchSession(sessionId)
-            }}
-            onRemove={handleRemoveSplitPane}
-            onScroll={handleScroll}
-            activeEmptyState={activeEmptyState}
-            t={t}
+      <div className="relative flex min-h-0 flex-1">
+        <section className="flex min-h-0 min-w-0 flex-1 flex-col">
+          {activeSplitGroup ? (
+            <div ref={scrollRef} className="min-h-0 flex-1 overflow-hidden">
+              <SplitConversationView
+                sessions={activeSplitGroup}
+                layout={activeSplitLayout}
+                activeSessionId={activeSessionId}
+                activeHistoryStart={historyStart}
+                hasHydratedActiveSession={hasHydratedActiveSession}
+                sessionTitles={sessionTitles}
+                splitSessionStates={splitSessionStates}
+                messages={messages}
+                isTyping={isTyping}
+                renderMessages={renderMessages}
+                onActivate={(sessionId) => {
+                  void switchSession(sessionId)
+                }}
+                onRemove={handleRemoveSplitPane}
+                onScroll={handleScroll}
+                activeEmptyState={activeEmptyState}
+                t={t}
+              />
+            </div>
+          ) : (
+            <div
+              ref={scrollRef}
+              data-session-scroll={activeSessionId}
+              onScroll={handleScroll}
+              className="chat-scroll-fade min-h-0 flex-1 [scrollbar-gutter:stable] overflow-y-auto px-4 md:px-8 lg:px-24 xl:px-48"
+            >
+              <div className="mx-auto flex w-full max-w-[49.5rem] flex-col gap-8">
+                {messages.length === 0 && !isTyping && activeEmptyState}
+                {renderMessages(
+                  messages,
+                  activeSessionId,
+                  historyStart,
+                  isTyping,
+                )}
+              </div>
+            </div>
+          )}
+
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept={CHAT_ATTACHMENT_ACCEPT}
+            multiple
+            className="hidden"
+            onChange={handleFileSelection}
           />
-        </div>
-      ) : (
-        <div
-          ref={scrollRef}
-          data-session-scroll={activeSessionId}
-          onScroll={handleScroll}
-          className="chat-scroll-fade min-h-0 flex-1 [scrollbar-gutter:stable] overflow-y-auto px-4 pt-6 md:px-8 lg:px-24 xl:px-48"
-        >
-          <div className="mx-auto flex w-full max-w-[49.5rem] flex-col gap-8">
-            {messages.length === 0 && !isTyping && activeEmptyState}
-            {renderMessages(messages, activeSessionId, historyStart, isTyping)}
-          </div>
-        </div>
-      )}
 
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept={CHAT_ATTACHMENT_ACCEPT}
-        multiple
-        className="hidden"
-        onChange={handleFileSelection}
-      />
+          <ChatComposer
+            input={input}
+            attachments={attachments}
+            onInputChange={setInput}
+            onAddFiles={handleAddFiles}
+            onPaste={handleComposerPaste}
+            onDragEnter={handleComposerDragEnter}
+            onDragLeave={handleComposerDragLeave}
+            onDragOver={handleComposerDragOver}
+            onDrop={handleComposerDrop}
+            onRemoveAttachment={handleRemoveAttachment}
+            onSend={handleSend}
+            modelSelector={
+              hasAvailableModels ? (
+                <ModelSelector
+                  defaultModelName={defaultModelName}
+                  apiKeyModels={apiKeyModels}
+                  oauthModels={oauthModels}
+                  localModels={localModels}
+                  disabled={settingDefault}
+                  onValueChange={handleSetDefault}
+                />
+              ) : null
+            }
+            onContextDetail={() => {
+              if (sendMessage({ content: "/context", attachments: [] })) {
+                setInput("")
+              }
+            }}
+            inputDisabledReason={inputDisabledReason}
+            canSend={canSubmit}
+            isDragActive={isDragActive}
+            contextUsage={contextUsage}
+          />
+        </section>
 
-      <ChatComposer
-        input={input}
-        attachments={attachments}
-        onInputChange={setInput}
-        onAddFiles={handleAddFiles}
-        onPaste={handleComposerPaste}
-        onDragEnter={handleComposerDragEnter}
-        onDragLeave={handleComposerDragLeave}
-        onDragOver={handleComposerDragOver}
-        onDrop={handleComposerDrop}
-        onRemoveAttachment={handleRemoveAttachment}
-        onSend={handleSend}
-        modelSelector={
-          hasAvailableModels ? (
-            <ModelSelector
-              defaultModelName={defaultModelName}
-              apiKeyModels={apiKeyModels}
-              oauthModels={oauthModels}
-              localModels={localModels}
-              disabled={settingDefault}
-              onValueChange={handleSetDefault}
+        {filePreviewPath && (
+          <>
+            <div
+              role="separator"
+              aria-label={t("chat.resizeFilePreview", {
+                defaultValue: "Resize file preview",
+              })}
+              aria-orientation="vertical"
+              aria-valuemin={MIN_FILE_PREVIEW_WIDTH}
+              aria-valuemax={900}
+              aria-valuenow={Math.round(filePreviewWidth)}
+              tabIndex={0}
+              className="group border-border/70 hover:border-primary focus-visible:border-primary focus-visible:ring-ring relative z-10 hidden w-2 shrink-0 cursor-col-resize touch-none items-center justify-center border-l outline-none focus-visible:ring-2 focus-visible:ring-inset sm:flex"
+              onPointerDown={(event) => {
+                if (event.button !== 0) return
+                event.preventDefault()
+                event.currentTarget.setPointerCapture(event.pointerId)
+                fileResizeRef.current = {
+                  pointerId: event.pointerId,
+                  x: event.clientX,
+                  width: filePreviewWidth,
+                }
+              }}
+              onPointerMove={handleResizeFilePreview}
+              onPointerUp={(event) => {
+                fileResizeRef.current = null
+                if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+                  event.currentTarget.releasePointerCapture(event.pointerId)
+                }
+              }}
+              onPointerCancel={() => {
+                fileResizeRef.current = null
+              }}
+              onLostPointerCapture={() => {
+                fileResizeRef.current = null
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "ArrowLeft") {
+                  setFilePreviewWidth((width) => Math.min(width + 24, 900))
+                } else if (event.key === "ArrowRight") {
+                  setFilePreviewWidth((width) =>
+                    Math.max(width - 24, MIN_FILE_PREVIEW_WIDTH),
+                  )
+                } else if (event.key === "Home") {
+                  setFilePreviewWidth(MIN_FILE_PREVIEW_WIDTH)
+                } else if (event.key === "End") {
+                  setFilePreviewWidth(900)
+                } else {
+                  return
+                }
+                event.preventDefault()
+              }}
+            >
+              <span className="bg-border/80 group-hover:bg-primary group-focus-visible:bg-primary h-10 w-px transition-colors" />
+            </div>
+            <FilePreviewPanel
+              activePath={filePreviewPath}
+              onClose={() => setFilePreviewPath("")}
+              width={filePreviewWidth}
             />
-          ) : null
-        }
-        onContextDetail={() => {
-          if (sendMessage({ content: "/context", attachments: [] })) {
-            setInput("")
-          }
-        }}
-        inputDisabledReason={inputDisabledReason}
-        canSend={canSubmit}
-        isDragActive={isDragActive}
-        contextUsage={contextUsage}
-      />
+          </>
+        )}
+      </div>
     </div>
   )
 }

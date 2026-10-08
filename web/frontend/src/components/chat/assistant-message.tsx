@@ -50,6 +50,8 @@ interface AssistantMessageProps {
   attachments?: ChatAttachment[]
   kind?: AssistantMessageKind
   onFork?: () => void
+  onOpenFile?: (path: string) => void
+  filePathAliases?: Record<string, string>
   toolCalls?: ChatToolCall[]
   timestamp?: string | number
 }
@@ -79,6 +81,14 @@ type ToolDisplay = {
   icon: typeof IconTool
   fields?: string[]
 }
+
+const FILE_TOOLS = new Set([
+  "read_file",
+  "read_file_lines",
+  "write_file",
+  "edit_file",
+  "append_file",
+])
 
 const TOOL_DISPLAYS: Record<string, ToolDisplay> = {
   read_file: { label: "Read file", icon: IconFileText, fields: ["path"] },
@@ -152,6 +162,7 @@ function getToolDisplay(
   rawArguments: string,
 ): ToolDisplay & {
   detail: string
+  filePath?: string
   href?: string
   faviconUrl?: string
 } {
@@ -197,19 +208,26 @@ function getToolDisplay(
           ? "Read task list"
           : display.label
 
-  const value = display.fields
+  const rawValue = display.fields
     ?.map((field) => args[field])
     .find(
       (field): field is string => typeof field === "string" && !!field.trim(),
     )
-    ?.replace(/\s+/g, " ")
-    .trim()
+  const value = rawValue
+    ? FILE_TOOLS.has(toolName)
+      ? rawValue.trim()
+      : rawValue.replace(/\s+/g, " ").trim()
+    : undefined
   const webUrl = toolName === "web_fetch" ? safeWebUrl(args.url) : undefined
 
   return {
     ...display,
     label,
     detail: value ?? "",
+    filePath:
+      FILE_TOOLS.has(toolName) && typeof args.path === "string"
+        ? args.path
+        : undefined,
     href: webUrl?.href,
     faviconUrl: webUrl
       ? `https://www.google.com/s2/favicons?domain=${encodeURIComponent(webUrl.hostname)}&sz=32`
@@ -227,6 +245,171 @@ function safeWebUrl(value: unknown): URL | undefined {
   } catch {
     return undefined
   }
+}
+
+const FILE_REFERENCE_PATTERN =
+  /[A-Za-z]:\\[A-Za-z0-9._@+-]+(?:\\[A-Za-z0-9._@+-]+)*|(?:~\/|\/|\.{1,2}\/)[A-Za-z0-9._@+-]+(?:\/[A-Za-z0-9._@+-]+)*|(?:[A-Za-z0-9._@+-]+\/)+[A-Za-z0-9._@+-]+|[A-Za-z0-9_@+-]+\.(?:txt|md|yaml|yml|json|go|py|ts|tsx|js|jsx|css|html|toml|sh|pdf|csv|xml|sql|log|conf|mod|sum|env|lock|ini|cfg|rs|c|h|cpp|java)\b/gi
+
+function filePathMatches(value: string) {
+  const matches: Array<{ start: number; end: number; path: string }> = []
+  const pattern = new RegExp(FILE_REFERENCE_PATTERN.source, "gi")
+  for (const match of value.matchAll(pattern)) {
+    const start = match.index ?? 0
+    const before = value[start - 1]
+    if (before === ":" || before === "/") continue
+    const path = match[0].replace(/[.,;:!?]+$/, "")
+    if (path) matches.push({ start, end: start + path.length, path })
+  }
+  return matches
+}
+
+function isFilePath(value: string) {
+  const trimmed = value.trim()
+  const [match] = filePathMatches(trimmed)
+  return !!match && match.start === 0 && match.end === trimmed.length
+}
+
+function resolveFilePath(path: string, aliases?: Record<string, string>) {
+  return path.includes("/") || path.includes("\\")
+    ? path
+    : (aliases?.[path] ?? path)
+}
+
+function filePreviewLink(path: string, aliases?: Record<string, string>) {
+  const label = path.replace(/[\\[\]]/g, "\\$&")
+  const target = resolveFilePath(path, aliases)
+  return `[${label}](/api/files/preview?path=${encodeURIComponent(target)})`
+}
+
+function linkifyFileText(value: string, aliases?: Record<string, string>) {
+  let result = ""
+  let offset = 0
+  for (const { start, end, path } of filePathMatches(value)) {
+    const prefix = value.slice(0, start)
+    if (prefix.lastIndexOf("](") > prefix.lastIndexOf(")")) continue
+    result += value.slice(offset, start) + filePreviewLink(path, aliases)
+    offset = end
+  }
+  return offset > 0 ? result + value.slice(offset) : value
+}
+
+function linkifyMarkdownPaths(
+  value: string,
+  aliases?: Record<string, string>,
+) {
+  return value
+    .split(/(```[\s\S]*?```|~~~[\s\S]*?~~~)/g)
+    .map((block) => {
+      if (block.startsWith("```") || block.startsWith("~~~")) return block
+      return block
+        .split(/(`+[^`\n]*`+)/g)
+        .map((segment) => {
+          if (!segment.startsWith("`")) return linkifyFileText(segment, aliases)
+          const code = segment.match(/^(`+)([\s\S]*)\1$/)
+          return code && isFilePath(code[2])
+            ? filePreviewLink(code[2].trim(), aliases)
+            : segment
+        })
+        .join("")
+    })
+    .join("")
+}
+
+function FilePathText({
+  text,
+  onOpenFile,
+  filePath,
+  filePathAliases,
+}: {
+  text: string
+  onOpenFile?: (path: string) => void
+  filePath?: string
+  filePathAliases?: Record<string, string>
+}) {
+  if (filePath && onOpenFile) {
+    const resolvedPath = resolveFilePath(filePath, filePathAliases)
+    return (
+      <button
+        type="button"
+        className="text-primary hover:text-primary/80 inline cursor-pointer bg-transparent p-0 align-baseline font-mono text-[inherit] underline decoration-current/40 underline-offset-2"
+        title={resolvedPath}
+        onClick={(event) => {
+          event.stopPropagation()
+          onOpenFile(resolvedPath)
+        }}
+      >
+        {text}
+      </button>
+    )
+  }
+  const matches = filePathMatches(text)
+  if (!onOpenFile || matches.length === 0) return text
+
+  const parts: ReactNode[] = []
+  let offset = 0
+  for (const { start, end, path } of matches) {
+    const resolvedPath = resolveFilePath(path, filePathAliases)
+    parts.push(text.slice(offset, start))
+    parts.push(
+      <button
+        key={`${start}-${path}`}
+        type="button"
+        className="text-primary hover:text-primary/80 inline cursor-pointer bg-transparent p-0 align-baseline font-mono text-[inherit] underline decoration-current/40 underline-offset-2"
+        title={resolvedPath}
+        onClick={(event) => {
+          event.stopPropagation()
+          onOpenFile(resolvedPath)
+        }}
+      >
+        {path}
+      </button>,
+    )
+    offset = end
+  }
+  parts.push(text.slice(offset))
+  return parts
+}
+
+function MarkdownFileLink({
+  href,
+  children,
+  onOpenFile,
+  filePathAliases,
+}: {
+  href?: string
+  children: ReactNode
+  onOpenFile?: (path: string) => void
+  filePathAliases?: Record<string, string>
+}) {
+  if (href && onOpenFile) {
+    try {
+      const url = new URL(href, window.location.origin)
+      const requestedPath =
+        url.pathname === "/api/files/preview"
+          ? url.searchParams.get("path")
+          : !/^(?:[a-z]+:|\/\/|#)/i.test(href) &&
+              isFilePath(decodeURIComponent(href))
+            ? decodeURIComponent(href)
+            : null
+      const path = requestedPath
+        ? resolveFilePath(requestedPath, filePathAliases)
+        : null
+      if (path) {
+        return (
+          <button
+            type="button"
+            className="text-primary hover:text-primary/80 cursor-pointer bg-transparent p-0 underline decoration-current/40 underline-offset-2"
+            onClick={() => onOpenFile(path)}
+          >
+            {children}
+          </button>
+        )
+      }
+    } catch {
+      // Keep malformed or external markdown links as ordinary links.
+    }
+  }
+  return <a href={href}>{children}</a>
 }
 
 function WebFavicon({ src }: { src: string }) {
@@ -345,6 +528,8 @@ export const AssistantMessage = memo(function AssistantMessage({
   attachments = [],
   kind = "normal",
   onFork,
+  onOpenFile,
+  filePathAliases,
   toolCalls = [],
   timestamp = "",
 }: AssistantMessageProps) {
@@ -435,7 +620,12 @@ export const AssistantMessage = memo(function AssistantMessage({
                                   content={item.detail}
                                   className={`text-muted-foreground min-w-0 flex-1 truncate ${callName === "exec" ? "font-mono" : ""}`}
                                 >
-                                  {item.detail}
+                                  <FilePathText
+                                    text={item.detail}
+                                    onOpenFile={onOpenFile}
+                                    filePath={item.filePath}
+                                    filePathAliases={filePathAliases}
+                                  />
                                 </HoverPreview>
                               )}
                             </div>
@@ -468,7 +658,12 @@ export const AssistantMessage = memo(function AssistantMessage({
                               content={display.detail}
                               className={`text-muted-foreground min-w-0 flex-1 truncate text-xs ${name === "exec" ? "font-mono" : ""}`}
                             >
-                              {display.detail}
+                              <FilePathText
+                                text={display.detail}
+                                onOpenFile={onOpenFile}
+                                filePath={display.filePath}
+                                filePathAliases={filePathAliases}
+                              />
                             </HoverPreview>
                           ))}
                       </div>
@@ -490,9 +685,18 @@ export const AssistantMessage = memo(function AssistantMessage({
                 rehypePlugins={[rehypeRaw, rehypeSanitize, rehypeHighlight]}
                 components={{
                   pre: MarkdownCodeBlock,
+                  a: ({ href, children }) => (
+                    <MarkdownFileLink
+                      href={href}
+                      onOpenFile={onOpenFile}
+                      filePathAliases={filePathAliases}
+                    >
+                      {children}
+                    </MarkdownFileLink>
+                  ),
                 }}
               >
-                {content}
+                {linkifyMarkdownPaths(content, filePathAliases)}
               </ReactMarkdown>
             </div>
           )}
@@ -509,7 +713,11 @@ export const AssistantMessage = memo(function AssistantMessage({
             content={reasoningText}
             className="text-muted-foreground min-w-0 flex-1 truncate whitespace-nowrap italic"
           >
-            {reasoningPreview}
+            <FilePathText
+              text={reasoningPreview}
+              onOpenFile={onOpenFile}
+              filePathAliases={filePathAliases}
+            />
           </HoverPreview>
         </div>
       )}
@@ -524,7 +732,11 @@ export const AssistantMessage = memo(function AssistantMessage({
             content={toolFeedbackContent}
             className="text-muted-foreground min-w-0 flex-1 truncate whitespace-nowrap"
           >
-            {toolFeedbackSummary}
+            <FilePathText
+              text={toolFeedbackSummary}
+              onOpenFile={onOpenFile}
+              filePathAliases={filePathAliases}
+            />
           </HoverPreview>
         </div>
       )}
