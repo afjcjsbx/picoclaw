@@ -52,12 +52,14 @@ restart.
 {
   "tools": {
     "self": {
-      "enable": true,
+      "enabled": true,
       "allow_set": false
     }
   }
 }
 ```
+
+Environment variables: `PICOCLAW_TOOLS_SELF_ENABLED` and `PICOCLAW_TOOLS_SELF_ALLOW_SET`.
 
 The tool rejects credential-like keys and excludes provider credentials from
 its runtime snapshot. Model changes during a turn and context

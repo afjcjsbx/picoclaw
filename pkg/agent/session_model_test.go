@@ -32,7 +32,7 @@ func newSessionModelFixture(t *testing.T) *sessionModelFixture {
 			Workspace: t.TempDir(), Provider: "openai", ModelName: "local",
 			MaxTokens: 4096, MaxToolIterations: 10,
 		}},
-		Tools: config.ToolsConfig{Self: config.SelfToolConfig{Enable: true, AllowSet: true}},
+		Tools: config.ToolsConfig{Self: config.SelfToolConfig{ToolConfig: config.ToolConfig{Enabled: true}, AllowSet: true}},
 		ModelList: []*config.ModelConfig{
 			{
 				ModelName: "local", Model: "openai/local-model", APIBase: localServer.URL,

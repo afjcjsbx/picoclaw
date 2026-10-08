@@ -945,8 +945,8 @@ type ToolConfig struct {
 }
 
 type SelfToolConfig struct {
-	Enable   bool `json:"enable"`
-	AllowSet bool `json:"allow_set"`
+	ToolConfig `envPrefix:"PICOCLAW_TOOLS_SELF_"`
+	AllowSet   bool `json:"allow_set" env:"PICOCLAW_TOOLS_SELF_ALLOW_SET"`
 }
 
 type MessageToolsConfig struct {
@@ -1971,7 +1971,7 @@ func expandMultiKeyModels(models []*ModelConfig) []*ModelConfig {
 func (t *ToolsConfig) IsToolEnabled(name string) bool {
 	switch name {
 	case "self":
-		return t.Self.Enable
+		return t.Self.Enabled
 	case "todo":
 		return t.Todo.Enabled
 	case "web":
