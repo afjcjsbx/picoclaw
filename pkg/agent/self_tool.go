@@ -141,7 +141,11 @@ func (t *SelfTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 		view["scratchpad"] = t.sessionNotes(ctx)
 		if key == "" {
 			log("check summary")
-			return tools.NewToolResult(formatSelfValue(view))
+			encoded, err := json.Marshal(view)
+			if err != nil {
+				return tools.ErrorResult("runtime snapshot is not JSON-compatible")
+			}
+			return tools.NewToolResult(string(encoded))
 		}
 		if err := validateSelfPath(key); err != nil {
 			log("BLOCKED " + key)

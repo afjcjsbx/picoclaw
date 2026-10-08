@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -87,6 +88,37 @@ func TestSelfToolCheckFiltersAndResolvesPaths(t *testing.T) {
 	}
 	if result := runSelfTool(tool, ctx, "set", "note", "value", true); !result.IsError {
 		t.Fatal("set succeeded in read-only mode")
+	}
+}
+
+func TestSelfToolCheckWithoutKeyReturnsSnapshotValues(t *testing.T) {
+	runtime := &selfToolTestRuntime{view: map[string]any{
+		"max_iterations":        20,
+		"context_window_tokens": 32768,
+		"model":                 "local",
+		"model_preset":          "local",
+		"workspace":             "/tmp/ws",
+		"tool_names":            []string{"self", "read_file"},
+		"web_config":            map[string]any{"format": "markdown"},
+		"request":               map[string]any{"channel": "telegram"},
+	}}
+	tool := NewSelfTool(runtime, true)
+	ctx := selfTestContext("session-1")
+	if result := runSelfTool(tool, ctx, "set", "plan", "ship it", true); result.IsError {
+		t.Fatalf("set scratchpad: %s", result.ForLLM)
+	}
+
+	got := runSelfTool(tool, ctx, "check", "", nil, false).ForLLM
+	var snapshot map[string]any
+	if err := json.Unmarshal([]byte(got), &snapshot); err != nil {
+		t.Fatalf("snapshot is not JSON: %v\n%s", err, got)
+	}
+	if snapshot["max_iterations"] != float64(20) || snapshot["model"] != "local" ||
+		snapshot["context_window_tokens"] != float64(32768) {
+		t.Errorf("snapshot is missing runtime values: %s", got)
+	}
+	if notes, _ := snapshot["scratchpad"].(map[string]any); notes["plan"] != "ship it" {
+		t.Errorf("snapshot scratchpad = %v, want the plan note", snapshot["scratchpad"])
 	}
 }
 
