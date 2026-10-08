@@ -84,9 +84,14 @@ func TestTodoInvalidWritesAreAtomic(t *testing.T) {
 	ctx := todoContext("main", "chat")
 	tool.Execute(ctx, todoArgs("original"))
 	cases := []string{
-		`{}`, `{"action":"delete"}`, `{"action":"write"}`, `{"action":"write","todos":null}`,
-		`{"action":"write","todos":{}}`, `{"action":"read","todos":[]}`,
-		`{"action":"write","todos":[null]}`, `{"action":"write","todos":[1]}`,
+		`{}`,
+		`{"action":"delete"}`,
+		`{"action":"write"}`,
+		`{"action":"write","todos":null}`,
+		`{"action":"write","todos":{}}`,
+		`{"action":"read","todos":[]}`,
+		`{"action":"write","todos":[null]}`,
+		`{"action":"write","todos":[1]}`,
 		`{"action":"write","todos":[{"id":"a","content":"x","status":"oops"}]}`,
 		`{"action":"write","todos":[{"id":"a","content":"x","priority":"urgent"}]}`,
 		`{"action":"write","todos":[{"id":"a","content":"x","status":null}]}`,
@@ -95,6 +100,7 @@ func TestTodoInvalidWritesAreAtomic(t *testing.T) {
 		`{"action":"write","todos":[{"id":" ","content":"x"}]}`,
 		`{"action":"write","todos":[{"id":"a","content":" "}]}`,
 		`{"action":"write","todos":[{"id":"a","content":"x"},{"id":"a","content":"y"}]}`,
+		`{"action":"write","todos":[{"id":"a","content":"x","status":"in_progress"},{"id":"b","content":"y","status":"in_progress"}]}`,
 		`{"action":"write","todos":[],"extra":true}`,
 	}
 	for _, raw := range cases {
