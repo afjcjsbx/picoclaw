@@ -189,16 +189,6 @@
   }
 }
 
-/* Offset sidebar below the full-width header */
-[data-slot="sidebar-container"] {
-  top: 3.5rem !important;
-  height: calc(100svh - 3.5rem) !important;
-}
-
-[data-slot="sidebar-gap"] {
-  height: calc(100svh - 3.5rem);
-}
-
 /* Typing indicator animations */
 @keyframes shimmer {
   0% {

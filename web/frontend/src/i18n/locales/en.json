@@ -44,7 +44,7 @@
       "gatewayStarting": "Unable to chat: Gateway is starting. Wait for startup to complete, then try again.",
       "gatewayRestarting": "Unable to chat: Gateway is restarting. Please wait for restart to finish.",
       "gatewayStopping": "Unable to chat: Gateway is stopping. Wait for it to stop, then start Gateway again.",
-      "gatewayStopped": "Unable to chat: Gateway is not started. Click Start Gateway in the top bar, then retry.",
+      "gatewayStopped": "Unable to chat: Gateway is not started. Click Start Gateway in the sidebar, then retry.",
       "gatewayError": "Unable to chat: Gateway is in an error state. Check logs, then restart Gateway or Launcher.",
       "websocketConnecting": "Connecting to chat service... Please wait.",
       "websocketDisconnected": "Unable to chat: WebSocket connection is disconnected. Check network and gateway status, then refresh the page or restart Launcher.",
@@ -129,7 +129,7 @@
       "noSelectedModel": "No Model Selected",
       "noSelectedModelDescription": "You have configured models, but none is set as default. Select a model before starting chat.",
       "notRunning": "Gateway Not Running",
-      "notRunningDescription": "Start the gateway service to begin chatting. Use the Start Gateway button in the top bar."
+      "notRunningDescription": "Start the gateway service to begin chatting. Use the Start Gateway button in the sidebar."
     },
     "modelGroup": {
       "apikey": "API Key",
@@ -999,11 +999,11 @@
     },
     "gateway": {
       "title": "Start Gateway",
-      "description": "After configuring models, click the \"Start Gateway\" button at the top to begin chatting with AI."
+      "description": "After configuring models, click the \"Start Gateway\" button at the bottom of the sidebar to begin chatting with AI."
     },
     "docs": {
       "title": "View Documentation",
-      "description": "Need more help? Click the documentation button in the top right corner to view detailed guides and configuration docs."
+      "description": "Need more help? Click the documentation button at the bottom of the sidebar to view detailed guides and configuration docs."
     }
   }
 }

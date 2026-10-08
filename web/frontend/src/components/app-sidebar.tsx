@@ -18,6 +18,7 @@ import { useAtom, useSetAtom } from "jotai"
 import * as React from "react"
 import { useTranslation } from "react-i18next"
 
+import { AppSidebarControls } from "@/components/app-sidebar-controls"
 import { Button } from "@/components/ui/button"
 import {
   Collapsible,
@@ -27,9 +28,11 @@ import {
 import {
   Sidebar,
   SidebarContent,
+  SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
   SidebarGroupLabel,
+  SidebarHeader,
   SidebarMenu,
   SidebarMenuAction,
   SidebarMenuButton,
@@ -37,7 +40,6 @@ import {
   SidebarMenuSub,
   SidebarMenuSubButton,
   SidebarMenuSubItem,
-  SidebarRail,
   useSidebar,
 } from "@/components/ui/sidebar"
 import {
@@ -83,15 +85,27 @@ const baseNavGroups: Omit<NavGroup, "items">[] = [
 ]
 
 const SESSION_DRAG_TYPE = "application/x-picoclaw-session"
+const SIDEBAR_ICON_WIDTH = 48
+const MIN_SIDEBAR_WIDTH = 184
+const MAX_SIDEBAR_WIDTH = 560
+
+interface AppSidebarProps extends React.ComponentProps<typeof Sidebar> {
+  sidebarWidth: number
+  onSidebarWidthChange: React.Dispatch<React.SetStateAction<number>>
+}
 
 function splitGroupKey(group: string[]) {
   return [...group].sort().join("\u0000")
 }
 
-export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
+export function AppSidebar({
+  sidebarWidth,
+  onSidebarWidthChange,
+  ...props
+}: AppSidebarProps) {
   const routerState = useRouterState()
   const { i18n, t } = useTranslation()
-  const { isMobile, setOpenMobile, state: sidebarState } = useSidebar()
+  const { isMobile, setOpen, setOpenMobile, state: sidebarState } = useSidebar()
   const currentPath = routerState.location.pathname
   const { activeSessionId, messages, newChat, switchSession } = usePicoChat()
   const [splitGroups, setSplitGroups] = useAtom(splitConversationsAtom)
@@ -99,6 +113,11 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const [expandedSplitId, setExpandedSplitId] = React.useState<string | null>(
     null,
   )
+  const sidebarResizeRef = React.useRef<{
+    pointerId: number
+    x: number
+    width: number
+  } | null>(null)
   const {
     sessions,
     hasMore,
@@ -216,6 +235,20 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     }
   }, [isMobile, setOpenMobile])
 
+  const handleSidebarResize = (
+    event: React.PointerEvent<HTMLDivElement>,
+  ) => {
+    const drag = sidebarResizeRef.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+    const max = Math.min(MAX_SIDEBAR_WIDTH, window.innerWidth * 0.55)
+    const width = drag.width + event.clientX - drag.x
+    const expanded = width > MIN_SIDEBAR_WIDTH
+    if (expanded !== (sidebarState === "expanded")) setOpen(expanded)
+    if (width > MIN_SIDEBAR_WIDTH) {
+      onSidebarWidthChange(Math.min(max, width))
+    }
+  }
+
   const navGroups: NavGroup[] = React.useMemo(() => {
     return [
       {
@@ -303,24 +336,43 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   return (
     <Sidebar
       {...props}
-      className="border-sidebar-border bg-sidebar border-r pt-3"
+      collapsible="icon"
+      className="border-sidebar-border bg-sidebar border-r"
     >
+      <SidebarHeader className="px-4 pb-2 pt-3 group-data-[collapsible=icon]:px-2">
+        <Link
+          to="/"
+          onClick={handleNavItemClick}
+          aria-label="PicoClaw"
+          className="flex h-8 w-full items-center overflow-hidden"
+        >
+          <img
+            className="h-auto w-36 shrink-0 object-left group-data-[collapsible=icon]:h-6 group-data-[collapsible=icon]:w-[115px] group-data-[collapsible=icon]:max-w-none"
+            src="/logo_with_text.png"
+            alt="PicoClaw"
+          />
+        </Link>
+      </SidebarHeader>
       <SidebarContent className="bg-sidebar">
-        <div className="px-4 pb-3">
+        <div className="px-4 pb-3 group-data-[collapsible=icon]:px-1">
           <Button
             asChild
             variant="outline"
-            className="bg-background h-10 w-full justify-start gap-2.5 rounded-xl shadow-none"
+            className="bg-background h-10 w-full justify-start gap-2.5 rounded-xl shadow-none group-data-[collapsible=icon]:size-10 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0"
           >
             <Link
               to="/"
+              aria-label={t("chat.newChat")}
+              title={t("chat.newChat")}
               onClick={() => {
                 newChat()
                 handleNavItemClick()
               }}
             >
               <IconPlus className="size-4" />
-              {t("chat.newChat")}
+              <span className="group-data-[collapsible=icon]:hidden">
+                {t("chat.newChat")}
+              </span>
             </Link>
           </Button>
         </div>
@@ -516,6 +568,11 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                           <SidebarMenuButton
                             asChild
                             isActive={isActive}
+                            tooltip={
+                              item.translateTitle === false
+                                ? item.title
+                                : t(item.title)
+                            }
                             onClick={handleNavItemClick}
                             data-tour={
                               item.url === "/models" ? "models-nav" : undefined
@@ -528,7 +585,9 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                               />
                               <span
                                 className={
-                                  isActive ? "opacity-100" : "opacity-80"
+                                  isActive
+                                    ? "group-data-[collapsible=icon]:hidden opacity-100"
+                                    : "group-data-[collapsible=icon]:hidden opacity-80"
                                 }
                               >
                                 {item.translateTitle === false
@@ -544,6 +603,11 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                       <SidebarMenuItem key="channels-more-toggle">
                         <SidebarMenuButton
                           onClick={toggleShowAllChannels}
+                          tooltip={
+                            showAllChannels
+                              ? t("navigation.show_less_channels")
+                              : t("navigation.show_more_channels")
+                          }
                           className="text-muted-foreground hover:bg-muted/60 h-9 px-3"
                         >
                           {showAllChannels ? (
@@ -551,7 +615,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                           ) : (
                             <IconChevronsDown className="size-4 opacity-60" />
                           )}
-                          <span className="opacity-80">
+                          <span className="group-data-[collapsible=icon]:hidden opacity-80">
                             {showAllChannels
                               ? t("navigation.show_less_channels")
                               : t("navigation.show_more_channels")}
@@ -566,7 +630,82 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           </Collapsible>
         ))}
       </SidebarContent>
-      <SidebarRail />
+      <SidebarFooter className="border-sidebar-border border-t">
+        <AppSidebarControls />
+      </SidebarFooter>
+      <div
+        role="separator"
+        aria-label={t("chat.resizeSidebar", {
+          defaultValue: "Resize sidebar",
+        })}
+        aria-orientation="vertical"
+        aria-valuemin={SIDEBAR_ICON_WIDTH}
+        aria-valuemax={MAX_SIDEBAR_WIDTH}
+        aria-valuenow={
+          sidebarState === "collapsed"
+            ? SIDEBAR_ICON_WIDTH
+            : Math.round(sidebarWidth)
+        }
+        tabIndex={0}
+        className="group hover:border-primary focus-visible:border-primary focus-visible:ring-ring absolute inset-y-0 right-0 z-30 hidden w-2 cursor-col-resize touch-none items-center justify-center border-r outline-none focus-visible:ring-2 focus-visible:ring-inset md:flex"
+        onPointerDown={(event) => {
+          if (event.button !== 0) return
+          event.preventDefault()
+          event.currentTarget.setPointerCapture(event.pointerId)
+          sidebarResizeRef.current = {
+            pointerId: event.pointerId,
+            x: event.clientX,
+            width:
+              sidebarState === "collapsed"
+                ? SIDEBAR_ICON_WIDTH
+                : sidebarWidth,
+          }
+        }}
+        onPointerMove={handleSidebarResize}
+        onPointerUp={(event) => {
+          sidebarResizeRef.current = null
+          if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+            event.currentTarget.releasePointerCapture(event.pointerId)
+          }
+        }}
+        onPointerCancel={() => {
+          sidebarResizeRef.current = null
+        }}
+        onLostPointerCapture={() => {
+          sidebarResizeRef.current = null
+        }}
+        onKeyDown={(event) => {
+          const max = Math.min(MAX_SIDEBAR_WIDTH, window.innerWidth * 0.55)
+          if (event.key === "ArrowLeft") {
+            if (sidebarState === "collapsed") {
+              event.preventDefault()
+              return
+            }
+            if (sidebarWidth <= MIN_SIDEBAR_WIDTH + 24) {
+              setOpen(false)
+            } else {
+              onSidebarWidthChange((width) => width - 24)
+            }
+          } else if (event.key === "ArrowRight") {
+            if (sidebarState === "collapsed") {
+              setOpen(true)
+              onSidebarWidthChange(MIN_SIDEBAR_WIDTH)
+            } else {
+              onSidebarWidthChange((width) => Math.min(width + 24, max))
+            }
+          } else if (event.key === "Home") {
+            setOpen(false)
+          } else if (event.key === "End") {
+            setOpen(true)
+            onSidebarWidthChange(max)
+          } else {
+            return
+          }
+          event.preventDefault()
+        }}
+      >
+        <span className="bg-border/80 group-hover:bg-primary group-focus-visible:bg-primary h-10 w-px transition-colors" />
+      </div>
     </Sidebar>
   )
 }

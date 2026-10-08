@@ -1293,12 +1293,10 @@ export function ChatPage() {
   )
 
   return (
-    <div className="chat-font flex h-full flex-col bg-[var(--conversation-background)]">
+    <div className="chat-font relative flex h-full flex-col bg-[var(--conversation-background)]">
       <PageHeader
-        title={t("navigation.chat")}
-        className={`transition-shadow ${
-          hasScrolled ? "shadow-xs" : "shadow-none"
-        }`}
+        title=""
+        className="bg-[var(--conversation-background)] justify-end"
       >
         <div className="flex items-center gap-0.5">
           <DropdownMenu>
