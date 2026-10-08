@@ -48,25 +48,28 @@ type AgentLoop struct {
 	hooks              *HookManager
 
 	// Runtime state
-	running        atomic.Bool
-	stopCh         chan struct{}
-	stopOnce       sync.Once
-	contextManager ContextManager
-	fallback       *providers.FallbackChain
-	channelManager interfaces.ChannelManager
-	mediaStore     media.MediaStore
-	transcriber    asr.Transcriber
-	ttsProvider    tts.TTSProvider
-	cmdRegistry    *commands.Registry
-	mcp            mcpRuntime
-	plugins        pluginRuntime
-	evolution      *evolutionBridge
-	hookRuntime    hookRuntime
-	steering       *steeringQueue
-	pendingSkills  sync.Map
-	voiceModes     sync.Map
-	pendingStops   sync.Map
-	mu             sync.RWMutex
+	running         atomic.Bool
+	stopCh          chan struct{}
+	stopOnce        sync.Once
+	contextManager  ContextManager
+	sessionModelsMu sync.Mutex
+	sessionModels   map[sessionModelKey]*sessionModelOverride
+	fallback        *providers.FallbackChain
+	channelManager  interfaces.ChannelManager
+	mediaStore      media.MediaStore
+	transcriber     asr.Transcriber
+	ttsProvider     tts.TTSProvider
+	cmdRegistry     *commands.Registry
+	mcp             mcpRuntime
+	plugins         pluginRuntime
+	evolution       *evolutionBridge
+	hookRuntime     hookRuntime
+	steering        *steeringQueue
+	pendingSkills   sync.Map
+	voiceModes      sync.Map
+	pendingStops    sync.Map
+	sessionLimits   sync.Map // sessionModelKey -> max_iterations set through the self tool
+	mu              sync.RWMutex
 
 	// workerSem limits concurrent turn processing workers.
 	workerSem chan struct{}
@@ -334,6 +337,7 @@ func (al *AgentLoop) Stop() {
 
 // Close releases resources held by agent session stores. Call after Stop.
 func (al *AgentLoop) Close() {
+	al.clearSessionModelOverrides()
 	al.closePlugins(true)
 	mcpManager := al.mcp.takeManager()
 
@@ -459,6 +463,12 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	al.fallback = providers.NewFallbackChain(providers.NewCooldownTracker(), newRL)
 
 	al.mu.Unlock()
+	// Session presets hold providers built from the previous config, so they
+	// are released once the new config is in place, never for a failed reload.
+	if dropped := al.clearSessionModelOverrides(); dropped > 0 {
+		logger.WarnCF("agent", "Reload reset session model presets to the configured model",
+			map[string]any{"sessions": dropped})
+	}
 	al.refreshRuntimeEventLogger(cfg)
 
 	oldMCPManager := al.mcp.reset()
@@ -549,6 +559,14 @@ func (al *AgentLoop) runAgentLoop(
 	if err != nil {
 		return "", err
 	}
+	if agent != nil && opts.Dispatch.SessionKey != "" {
+		if override := al.acquireSessionModelOverride(sessionModelKey{
+			agentID: agent.ID, sessionKey: opts.Dispatch.SessionKey,
+		}); override != nil {
+			defer al.releaseSessionModelOverride(override)
+			agent = override.apply(agent)
+		}
+	}
 
 	// Record last channel for heartbeat notifications (skip internal channels and cli)
 	if opts.Dispatch.Channel() != "" &&
@@ -577,6 +595,7 @@ func (al *AgentLoop) runAgentLoop(
 		newTurnContext(opts.Dispatch.InboundContext, opts.Dispatch.RouteResult, opts.Dispatch.SessionScope),
 	)
 	ts := newTurnState(agent, opts, turnScope)
+	ts.maxIterationsOverride.Store(int64(al.sessionIterationLimit(agent.ID, opts.Dispatch.SessionKey)))
 	pipeline := NewPipeline(al)
 	result, err := al.runTurn(ctx, ts, pipeline)
 	if err != nil {

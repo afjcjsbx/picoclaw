@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/caarlos0/env/v11"
 	"github.com/stretchr/testify/assert"
 	"gopkg.in/yaml.v3"
 
@@ -986,6 +987,37 @@ func TestDefaultConfig_MaxToolIterations(t *testing.T) {
 
 	if cfg.Agents.Defaults.MaxToolIterations == 0 {
 		t.Error("MaxToolIterations should not be zero")
+	}
+}
+
+func TestSelfToolConfig_UsesEnabledKeyAndEnvVars(t *testing.T) {
+	var fromJSON ToolsConfig
+	if err := json.Unmarshal([]byte(`{"self":{"enabled":true,"allow_set":true}}`), &fromJSON); err != nil {
+		t.Fatalf("json.Unmarshal(): %v", err)
+	}
+	if !fromJSON.IsToolEnabled("self") || !fromJSON.Self.AllowSet {
+		t.Errorf("JSON self config = %+v, want enabled with allow_set", fromJSON.Self)
+	}
+
+	t.Setenv("PICOCLAW_TOOLS_SELF_ENABLED", "true")
+	t.Setenv("PICOCLAW_TOOLS_SELF_ALLOW_SET", "true")
+	var fromEnv Config
+	if err := env.Parse(&fromEnv); err != nil {
+		t.Fatalf("env.Parse(): %v", err)
+	}
+	if !fromEnv.Tools.IsToolEnabled("self") || !fromEnv.Tools.Self.AllowSet {
+		t.Errorf("env self config = %+v, want enabled with allow_set", fromEnv.Tools.Self)
+	}
+}
+
+func TestDefaultConfig_SelfToolDisabled(t *testing.T) {
+	cfg := DefaultConfig()
+
+	if cfg.Tools.IsToolEnabled("self") {
+		t.Error("self tool should be opt-in")
+	}
+	if cfg.Tools.Self.AllowSet {
+		t.Error("self tool writes should be opt-in")
 	}
 }
 

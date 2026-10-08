@@ -334,7 +334,7 @@ func NewAgentInstance(
 		}
 	}
 
-	return &AgentInstance{
+	instance := &AgentInstance{
 		modelMu:                   &sync.RWMutex{},
 		ID:                        agentID,
 		Name:                      agentName,
@@ -365,6 +365,10 @@ func NewAgentInstance(
 		LightProvider:             lightProvider,
 		CandidateProviders:        candidateProviders,
 	}
+	if cfg.Tools.IsToolEnabled("self") {
+		instance.Tools.Register(NewSelfTool(&agentRuntimeControl{agent: instance, cfg: cfg}, cfg.Tools.Self.AllowSet))
+	}
+	return instance
 }
 
 // populateCandidateProvidersFromNames resolves each model name (alias or

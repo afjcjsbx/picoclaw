@@ -37,6 +37,37 @@ See [Sensitive Data Filtering](../security/sensitive_data_filtering.md) for full
 | `filter_sensitive_data` | bool | `true` | Enable/disable filtering |
 | `filter_min_length` | int | `8` | Minimum content length to trigger filtering |
 
+## Runtime self-inspection
+
+The `self` tool is disabled by default. When enabled, it exposes a filtered view
+of the current agent and request, including the workspace path and the web and
+exec settings, and keeps a temporary scratchpad per session (cleared by
+`/clear`). Writes are disabled by default; enabling `allow_set` permits
+scratchpad writes and two changes that apply only to the session that makes
+them: `max_iterations` (1–100, effective immediately) and `model_preset` (a
+configured model, effective from the next turn). Session changes are lost on
+restart.
+
+```json
+{
+  "tools": {
+    "self": {
+      "enabled": true,
+      "allow_set": false
+    }
+  }
+}
+```
+
+Environment variables: `PICOCLAW_TOOLS_SELF_ENABLED` and `PICOCLAW_TOOLS_SELF_ALLOW_SET`.
+
+The tool rejects credential-like keys and excludes provider credentials from
+its runtime snapshot. `context_window_tokens` is read-only through the tool;
+change it in configuration. A direct `model` write is rejected; use
+`model_preset` instead. `max_iterations` needs a session key, so turns without
+one cannot change it. Runtime options that PicoClaw does not currently
+implement are not exposed as writable fields.
+
 ## Protected local files
 
 Filesystem read tools deny `.env`, `.env.*`, `.envrc`, `.security.yml` (including its backups), `.netrc`, `.npmrc`, `.pypirc`, and files inside `.ssh`, `.aws`, `.kube`, or `.gnupg` directories. The check also follows symlinks, hides these entries from directory listings and file searches, and applies to local files attached through `send_file`, `load_image`, or `message`. Read allow paths do not override it. `write_file` can still create or explicitly overwrite these files; `edit_file` and `append_file` cannot read their existing contents.

@@ -298,7 +298,11 @@ func (al *AgentLoop) buildCommandsRuntime(
 		if agent.ContextBuilder != nil {
 			rt.ListSkillNames = agent.ContextBuilder.ListSkillNames
 		}
+		sessionModelID := sessionModelKey{agentID: agent.ID, sessionKey: opts.Dispatch.SessionKey}
 		rt.GetModelInfo = func() (string, string) {
+			if model := al.sessionModel(sessionModelID); model != nil {
+				return model.name, resolvedCandidateProvider(model.candidates, cfg.Agents.Defaults.Provider)
+			}
 			modelMu := agent.modelStateMutex()
 			modelMu.RLock()
 			defer modelMu.RUnlock()
@@ -309,29 +313,12 @@ func (al *AgentLoop) buildCommandsRuntime(
 			modelMu := agent.modelStateMutex()
 			modelMu.Lock()
 			defer modelMu.Unlock()
-			modelFound := false
-			for _, modelCfg := range cfg.ModelList {
-				if modelCfg != nil && modelCfg.ModelName == value {
-					modelFound = true
-					break
-				}
-			}
-			if !modelFound {
-				return "", fmt.Errorf("model %q not found in model_list or providers", value)
-			}
-
-			nextCandidates := resolveModelCandidates(cfg, cfg.Agents.Defaults.Provider, value, agent.Fallbacks)
-			if len(nextCandidates) == 0 {
-				return "", fmt.Errorf("model %q did not resolve to any provider candidates", value)
-			}
-			modelCfg, err := resolvedCandidateModelConfig(cfg, nextCandidates[0], agent.Workspace)
+			nextModel, err := resolveAgentModelSelection(cfg, agent, value)
 			if err != nil {
 				return "", err
 			}
-			nextProvider, _, err := providers.CreateProviderFromConfig(modelCfg)
-			if err != nil {
-				return "", fmt.Errorf("failed to initialize model %q: %w", value, err)
-			}
+			nextCandidates := nextModel.candidates
+			nextProvider := nextModel.provider
 			nextCandidateProviders := make(map[string]providers.LLMProvider)
 			copyInitializedCandidateProviders(
 				agent.CandidateProviders,
@@ -370,8 +357,8 @@ func (al *AgentLoop) buildCommandsRuntime(
 			agent.Provider = nextProvider
 			agent.Candidates = nextCandidates
 			agent.CandidateProviders = nextCandidateProviders
-			agent.ThinkingLevel = parseThinkingLevel(modelCfg.ThinkingLevel)
-			agent.ThinkingLevelConfigured = isConfiguredThinkingLevel(modelCfg.ThinkingLevel)
+			agent.ThinkingLevel = nextModel.thinkingLevel
+			agent.ThinkingLevelConfigured = nextModel.thinkingConfigured
 
 			closeUnreferencedStatefulProviders(
 				previousProviders,
@@ -379,6 +366,8 @@ func (al *AgentLoop) buildCommandsRuntime(
 				nextProvider,
 				agent.LightProvider,
 			)
+			// An explicit /model wins over a model_preset the session chose earlier.
+			al.clearSessionModelOverride(sessionModelID)
 			return oldModel, nil
 		}
 
@@ -403,6 +392,7 @@ func (al *AgentLoop) buildCommandsRuntime(
 					todo.ClearSession(agent.ID, opts.SessionKey)
 				}
 			}
+			al.clearSessionRuntime(agent, opts.Dispatch.SessionKey)
 			return nil
 		}
 
