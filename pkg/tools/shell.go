@@ -247,9 +247,7 @@ Usage notes:
 - The optional timeout parameter is in seconds and overrides the configured timeout for foreground commands; 0 disables the timeout. It cannot be combined with background=true. Foreground output is truncated after 10,000 bytes; background session output is limited to 1 MB.
 - Use background=true for long-running commands. The result includes a sessionId. Use action=list to list sessions; use poll, read, write, send-keys, or kill with sessionId to manage one. write sends stdin; send-keys sends keys to a PTY. Sessions are cleaned up 30 minutes after the process exits.
 - Combine background=true with pty=true for interactive sessions when supported. PTY is not supported on Windows.
-- Run independent commands in separate tool calls. %s Use semicolons only when later commands may run even if an earlier one fails. Do not use newlines to separate commands; newlines inside quoted strings are fine.
-
-`, runtime.GOOS, shell, chainGuidance)
+- Run independent commands in separate tool calls. %s Use semicolons only when later commands may run even if an earlier one fails. Do not use newlines to separate commands; newlines inside quoted strings are fine.`, runtime.GOOS, shell, chainGuidance)
 }
 
 //nolint:dupl // Tool parameter schemas intentionally use similar JSON-schema map literals.
