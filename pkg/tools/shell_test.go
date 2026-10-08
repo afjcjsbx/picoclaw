@@ -113,11 +113,8 @@ func TestShellTool_TimeoutArg_Invalid(t *testing.T) {
 		timeout any
 	}{
 		{"fractional", 1.5},
-		{"negative float", float64(-1)},
-		{"negative int", -1},
-		{"negative int64", int64(-1)},
-		{"float overflow", 1e19},
-		{"int64 overflow", int64(math.MaxInt64)},
+		{"negative", float64(-1)},
+		{"overflow", 1e19},
 		{"nan", math.NaN()},
 		{"infinity", math.Inf(1)},
 		{"string", "30"},
@@ -153,16 +150,14 @@ func TestShellTool_TimeoutArg_OverridesConfigured(t *testing.T) {
 	tool.SetTimeout(100 * time.Millisecond)
 
 	t.Run("longer timeout lets command finish", func(t *testing.T) {
-		for _, timeout := range []any{float64(5), 5, int64(5)} {
-			result := tool.Execute(context.Background(), map[string]any{
-				"action":  "run",
-				"command": "sleep 0.3; echo done",
-				"timeout": timeout,
-			})
+		result := tool.Execute(context.Background(), map[string]any{
+			"action":  "run",
+			"command": "sleep 0.3; echo done",
+			"timeout": float64(5),
+		})
 
-			require.False(t, result.IsError, "timeout=%T(%v): %s", timeout, timeout, result.ForLLM)
-			require.Contains(t, result.ForLLM, "done")
-		}
+		require.False(t, result.IsError, result.ForLLM)
+		require.Contains(t, result.ForLLM, "done")
 	})
 
 	t.Run("zero disables the timeout", func(t *testing.T) {

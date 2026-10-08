@@ -351,23 +351,12 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 	timeout := t.timeout
 	if raw, ok := args["timeout"]; ok {
 		const maxTimeoutSeconds = (1<<63 - 1) / int64(time.Second)
-		var seconds int64
-		switch value := raw.(type) {
-		case float64:
-			if value != math.Trunc(value) || value < 0 || value > float64(maxTimeoutSeconds) {
-				return ErrorResult("timeout must be a non-negative integer number of seconds")
-			}
-			seconds = int64(value)
-		case int:
-			seconds = int64(value)
-		case int64:
-			seconds = value
-		default:
+		// JSON tool arguments always decode numbers as float64.
+		value, isNumber := raw.(float64)
+		if !isNumber || value != math.Trunc(value) || value < 0 || value > float64(maxTimeoutSeconds) {
 			return ErrorResult("timeout must be a non-negative integer number of seconds")
 		}
-		if seconds < 0 || seconds > maxTimeoutSeconds {
-			return ErrorResult("timeout must be a non-negative integer number of seconds")
-		}
+		seconds := int64(value)
 		// timeout=0 means "no timeout", which is already how background sessions behave.
 		if isBackground && seconds != 0 {
 			return ErrorResult("timeout is only supported for foreground commands")
