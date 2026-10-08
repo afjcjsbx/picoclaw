@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/sipeed/picoclaw/pkg/providers"
 )
 
 func listCommand() Definition {
@@ -12,20 +14,38 @@ func listCommand() Definition {
 		Description: "List available options",
 		SubCommands: []SubCommand{
 			{
+				Name:        "model",
+				Description: "Current model and provider",
+				Handler:     currentModelHandler(),
+			},
+			{
 				Name:        "models",
 				Description: "Configured models",
 				Handler: func(_ context.Context, req Request, rt *Runtime) error {
-					if rt == nil || rt.GetModelInfo == nil {
+					if rt == nil || rt.Config == nil {
 						return req.Reply(unavailableMsg)
 					}
-					name, provider := rt.GetModelInfo()
-					if provider == "" {
-						provider = "configured default"
+					defaultProvider := rt.Config.Agents.Defaults.Provider
+					if strings.TrimSpace(defaultProvider) == "" {
+						defaultProvider = "openai"
 					}
-					return req.Reply(fmt.Sprintf(
-						"Configured Model: %s\nProvider: %s\n\nTo change models, update config.json",
-						name, provider,
-					))
+					models := make([]string, 0, len(rt.Config.ModelList))
+					for _, model := range rt.Config.ModelList {
+						if model == nil || model.IsVirtual() {
+							continue
+						}
+						provider := strings.TrimSpace(model.Provider)
+						if provider == "" {
+							provider, _ = providers.SplitModelProviderAndID(model.Model, defaultProvider)
+						} else {
+							provider = providers.NormalizeProvider(provider)
+						}
+						models = append(models, fmt.Sprintf("%s (Provider: %s)", model.ModelName, provider))
+					}
+					if len(models) == 0 {
+						return req.Reply("No models configured")
+					}
+					return req.Reply("Configured Models:\n- " + strings.Join(models, "\n- "))
 				},
 			},
 			{
