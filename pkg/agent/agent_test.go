@@ -3578,6 +3578,59 @@ func TestProcessMessage_MCPCommandsHandledWithoutLLMCall(t *testing.T) {
 	}
 }
 
+func TestProcessMessage_ListPluginsCommandReportsInstalledPackages(t *testing.T) {
+	tmpDir := t.TempDir()
+	pluginDir := filepath.Join(tmpDir, "plugins", "demo")
+	if err := os.MkdirAll(pluginDir, 0o700); err != nil {
+		t.Fatalf("Failed to create plugin dir: %v", err)
+	}
+	manifest := `{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"demo"}`
+	if err := os.WriteFile(filepath.Join(pluginDir, "plugin.json"), []byte(manifest), 0o600); err != nil {
+		t.Fatalf("Failed to write plugin manifest: %v", err)
+	}
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				ModelName:         "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+		},
+		Session: config.SessionConfig{
+			Dimensions: []string{"chat"},
+		},
+		Plugins: config.PluginsConfig{
+			Enabled:     true,
+			Directories: []string{filepath.Join(tmpDir, "plugins")},
+			Entries:     map[string]config.PluginEntryConfig{"demo": {Enabled: true}},
+		},
+	}
+
+	msgBus := bus.NewMessageBus()
+	provider := &countingMockProvider{response: "LLM reply"}
+	al := NewAgentLoop(cfg, msgBus, provider)
+	t.Cleanup(al.Close)
+	helper := testHelper{al: al}
+
+	resp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
+		Context: bus.InboundContext{
+			Channel:  "whatsapp",
+			ChatID:   "chat1",
+			ChatType: "direct",
+			SenderID: "user1",
+		},
+		Content: "/list plugins",
+	})
+	if !strings.Contains(resp, "- `demo`\n  State: ready\n  Path: ") {
+		t.Fatalf("unexpected /list plugins reply: %q", resp)
+	}
+	if provider.calls != 0 {
+		t.Fatalf("LLM should not be called for /list plugins, calls=%d", provider.calls)
+	}
+}
+
 func TestProcessMessage_SwitchModelShowModelConsistency(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "agent-test-*")
 	if err != nil {
