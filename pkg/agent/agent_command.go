@@ -13,6 +13,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/commands"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/plugins"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/tools"
 )
@@ -258,6 +259,25 @@ func (al *AgentLoop) buildCommandsRuntime(
 				return nil
 			}
 			return al.channelManager.GetEnabledChannels()
+		},
+		ListPlugins: func(ctx context.Context) []commands.PluginInfo {
+			if cfg == nil {
+				return nil
+			}
+
+			al.waitPlugins(ctx)
+			items := plugins.Inventory(cfg.Plugins, cfg.WorkspacePath(), al.PluginStatuses())
+			infos := make([]commands.PluginInfo, 0, len(items))
+			for _, item := range items {
+				infos = append(infos, commands.PluginInfo{
+					ID:          item.ID,
+					Name:        item.Name,
+					Root:        item.Root,
+					State:       item.State,
+					Diagnostics: item.Diagnostics,
+				})
+			}
+			return infos
 		},
 		GetActiveTurnTree: func() []commands.TurnInfo {
 			if opts == nil {

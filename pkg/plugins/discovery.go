@@ -14,7 +14,10 @@ type installation struct {
 	err      error
 }
 
-func discover(cfg config.PluginsConfig, workspace string) ([]installation, []Diagnostic) {
+// scanPackages maps each package under the configured roots to its canonical
+// root. Packages are keyed by manifest name; a package with an invalid manifest
+// is keyed by its directory name so an explicit entry can still report the error.
+func scanPackages(cfg config.PluginsConfig, workspace string) (map[string][]string, []Diagnostic) {
 	candidates := map[string][]string{}
 	seenRoots := map[string]bool{}
 	var diagnostics []Diagnostic
@@ -47,6 +50,11 @@ func discover(cfg config.PluginsConfig, workspace string) ([]installation, []Dia
 			candidates[manifest.Name] = append(candidates[manifest.Name], root)
 		}
 	}
+	return candidates, diagnostics
+}
+
+func discover(cfg config.PluginsConfig, workspace string) ([]installation, []Diagnostic) {
+	candidates, diagnostics := scanPackages(cfg, workspace)
 	var result []installation
 	used := map[string]bool{}
 	for _, id := range sortedKeys(cfg.Entries) {
