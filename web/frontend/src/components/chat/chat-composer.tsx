@@ -94,7 +94,7 @@ export function ChatComposer({
   }
 
   return (
-    <div className="pointer-events-none relative z-10 mt-0 shrink-0 [scrollbar-gutter:stable] overflow-y-auto px-4 pb-[calc(0.5rem+env(safe-area-inset-bottom))] before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:bottom-0 before:bg-[var(--conversation-background)] before:content-[''] md:px-8 md:pb-4 lg:px-24 xl:px-48">
+    <div className="pointer-events-none relative z-10 mt-0 shrink-0 [scrollbar-gutter:stable] overflow-y-auto bg-[var(--conversation-background)] px-4 pb-[calc(0.5rem+env(safe-area-inset-bottom))] md:px-8 md:pb-4 lg:px-24 xl:px-48">
       <div className="pointer-events-auto mx-auto flex max-w-[49.5rem] flex-col items-end">
         <div
           className={cn(
