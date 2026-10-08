@@ -350,10 +350,6 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 	isBackground := getBoolArg("background")
 	timeout := t.timeout
 	if raw, ok := args["timeout"]; ok {
-		if isBackground {
-			return ErrorResult("timeout is only supported for foreground commands")
-		}
-
 		const maxTimeoutSeconds = (1<<63 - 1) / int64(time.Second)
 		var seconds int64
 		switch value := raw.(type) {
@@ -371,6 +367,10 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 		}
 		if seconds < 0 || seconds > maxTimeoutSeconds {
 			return ErrorResult("timeout must be a non-negative integer number of seconds")
+		}
+		// timeout=0 means "no timeout", which is already how background sessions behave.
+		if isBackground && seconds != 0 {
+			return ErrorResult("timeout is only supported for foreground commands")
 		}
 		timeout = time.Duration(seconds) * time.Second
 	}
