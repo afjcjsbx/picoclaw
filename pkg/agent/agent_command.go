@@ -279,12 +279,26 @@ func (al *AgentLoop) buildCommandsRuntime(
 			}
 			return infos
 		},
-		GetActiveTurn: func() any {
-			info := al.GetActiveTurn()
-			if info == nil {
+		GetActiveTurnTree: func() []commands.TurnInfo {
+			if opts == nil {
 				return nil
 			}
-			return info
+			tree := al.GetActiveTurnTree(opts.Dispatch.SessionKey)
+			if len(tree) == 0 {
+				return nil
+			}
+			turns := make([]commands.TurnInfo, 0, len(tree))
+			for _, info := range tree {
+				turns = append(turns, commands.TurnInfo{
+					TurnID:       info.TurnID,
+					ParentTurnID: info.ParentTurnID,
+					AgentID:      info.AgentID,
+					UserMessage:  info.UserMessage,
+					Phase:        string(info.Phase),
+					StartedAt:    info.StartedAt,
+				})
+			}
+			return turns
 		},
 		SwitchChannel: func(value string) error {
 			if al.channelManager == nil {
