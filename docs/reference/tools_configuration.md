@@ -59,8 +59,8 @@ restart.
 }
 ```
 
-The tool filters blocked and credential-like keys and excludes provider
-credentials from its runtime snapshot. Model changes during a turn and context
+The tool rejects credential-like keys and excludes provider credentials from
+its runtime snapshot. Model changes during a turn and context
 window changes during a session are rejected; use `/model` or configuration
 changes for those settings. Runtime options that PicoClaw does not currently
 implement are not exposed as writable fields.

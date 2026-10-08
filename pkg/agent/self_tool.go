@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 
@@ -101,12 +100,6 @@ func (t *SelfTool) Parameters() map[string]any {
 func (t *SelfTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	action, _ := args["action"].(string)
 	action = strings.ToLower(strings.TrimSpace(action))
-	switch action {
-	case "inspect":
-		action = "check"
-	case "modify":
-		action = "set"
-	}
 	sessionID := selfSessionID(ctx)
 	log := func(detail string) {
 		logger.InfoCF("agent", "SelfTool audit", map[string]any{
@@ -475,15 +468,6 @@ func selfSessionID(ctx context.Context) string {
 	return selfSessionFor(ctx).session
 }
 
-var selfBlockedKeys = map[string]struct{}{
-	"bus": {}, "provider": {}, "runtime_resolver": {}, "_running": {}, "tools": {},
-	"_runtime_vars": {}, "runner": {}, "sessions": {}, "consolidator": {}, "subagents": {},
-	"dream": {}, "auto_compact": {}, "context": {}, "commands": {}, "_pending_queues": {},
-	"_session_locks": {}, "_active_tasks": {}, "_background_tasks": {}, "restrict_to_workspace": {},
-	"channels_config": {}, "_concurrency_gate": {}, "_unified_session": {}, "_extra_hooks": {},
-	"_hook_factories": {},
-}
-
 var selfSensitiveParts = []string{
 	"api_key", "secret", "password", "token", "credential", "private_key", "access_token", "refresh_token", "auth",
 }
@@ -496,10 +480,7 @@ func validateSelfPath(path string) error {
 	}
 	for _, part := range strings.Split(path, ".") {
 		lower := strings.ToLower(part)
-		if part == "" || strings.HasPrefix(part, "__") || strings.HasSuffix(part, "__") {
-			return fmt.Errorf("access denied")
-		}
-		if _, blocked := selfBlockedKeys[lower]; blocked || selfSensitiveName(lower) {
+		if part == "" || selfSensitiveName(lower) {
 			return fmt.Errorf("access denied")
 		}
 	}
@@ -523,8 +504,6 @@ func isSelfReadOnly(path string) bool {
 		"web_config",
 		"model_presets",
 		"workspace",
-		"provider_retry_mode",
-		"max_tool_result_chars",
 		"request":
 		return true
 	default:
@@ -624,37 +603,13 @@ func selfInt(value any) (int, error) {
 	switch value := value.(type) {
 	case int:
 		return value, nil
-	case int8:
-		return int(value), nil
-	case int16:
-		return int(value), nil
-	case int32:
-		return int(value), nil
-	case int64:
-		return int(value), nil
-	case uint:
-		return int(value), nil
-	case uint8:
-		return int(value), nil
-	case uint16:
-		return int(value), nil
-	case uint32:
-		return int(value), nil
-	case uint64:
-		return int(value), nil
 	case float64:
 		if math.Trunc(value) == value && value >= float64(math.MinInt) && value <= float64(math.MaxInt) {
 			return int(value), nil
 		}
 	case json.Number:
-		parsed, err := value.Int64()
-		if err == nil {
+		if parsed, err := value.Int64(); err == nil {
 			return int(parsed), nil
-		}
-	case string:
-		parsed, err := strconv.Atoi(strings.TrimSpace(value))
-		if err == nil {
-			return parsed, nil
 		}
 	}
 	return 0, fmt.Errorf("expected a whole number")

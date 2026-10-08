@@ -69,7 +69,7 @@ func TestSelfToolDescriptionAndParameters(t *testing.T) {
 func TestSelfToolCheckFiltersAndResolvesPaths(t *testing.T) {
 	runtime := &selfToolTestRuntime{view: map[string]any{
 		"max_iterations": 20,
-		"web_config":     map[string]any{"format": "markdown"},
+		"web_config":     map[string]any{"format": "markdown", "provider": "duckduckgo"},
 		"request":        map[string]any{"channel": "telegram"},
 	}}
 	tool := NewSelfTool(runtime, false)
@@ -78,12 +78,20 @@ func TestSelfToolCheckFiltersAndResolvesPaths(t *testing.T) {
 	if got := runSelfTool(tool, ctx, "check", "web_config.format", nil, false).ForLLM; got != "markdown" {
 		t.Fatalf("dot-path result = %q, want markdown", got)
 	}
-	if got := runSelfTool(tool, ctx, "inspect", "request.channel", nil, false).ForLLM; got != "telegram" {
+	if got := runSelfTool(tool, ctx, "check", "web_config.provider", nil, false).ForLLM; got != "duckduckgo" {
+		t.Fatalf("web_config.provider = %q, want duckduckgo", got)
+	}
+	if got := runSelfTool(tool, ctx, "check", "request.channel", nil, false).ForLLM; got != "telegram" {
 		t.Fatalf("request channel = %q, want telegram", got)
 	}
-	for _, key := range []string{"provider", "request.api_key", "__class__"} {
+	for _, key := range []string{"provider", "request.api_key"} {
 		if result := runSelfTool(tool, ctx, "check", key, nil, false); !result.IsError {
-			t.Errorf("check %q was allowed", key)
+			t.Errorf("check %q returned a value", key)
+		}
+	}
+	for _, action := range []string{"inspect", "modify"} {
+		if result := runSelfTool(tool, ctx, action, "request.channel", nil, false); !result.IsError {
+			t.Errorf("undocumented action %q was accepted", action)
 		}
 	}
 	if result := runSelfTool(tool, ctx, "set", "note", "value", true); !result.IsError {
@@ -216,6 +224,29 @@ func TestSelfToolContextWindowTokensIsNotSensitive(t *testing.T) {
 	for _, key := range []string{"access_token", "refresh_token", "context_window_tokens.api_key"} {
 		if result := runSelfTool(tool, ctx, "check", key, nil, false); !result.IsError {
 			t.Errorf("check %q was allowed", key)
+		}
+	}
+}
+
+func TestSelfInt(t *testing.T) {
+	for _, tc := range []struct {
+		value any
+		want  int
+		ok    bool
+	}{
+		{35, 35, true},
+		{float64(35), 35, true},
+		{json.Number("35"), 35, true},
+		{float64(100.5), 0, false},
+		{json.Number("35.5"), 0, false},
+		{float64(1e30), 0, false},
+		{"35", 0, false},
+		{true, 0, false},
+		{nil, 0, false},
+	} {
+		got, err := selfInt(tc.value)
+		if (err == nil) != tc.ok || got != tc.want {
+			t.Errorf("selfInt(%#v) = %d, %v; want %d, ok=%v", tc.value, got, err, tc.want, tc.ok)
 		}
 	}
 }
