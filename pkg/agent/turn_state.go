@@ -383,6 +383,36 @@ func (al *AgentLoop) GetActiveTurnBySession(sessionKey string) *ActiveTurnInfo {
 // turnState - getters and setters
 // =============================================================================
 
+// GetActiveTurnTree returns the active root turn of sessionKey followed by its
+// still-running descendant SubTurns (subagents), depth-first. The root is always
+// the first element. Children that already finished are skipped. Returns nil when
+// the session has no active turn.
+func (al *AgentLoop) GetActiveTurnTree(sessionKey string) []ActiveTurnInfo {
+	root := al.getActiveTurnState(sessionKey)
+	if root == nil {
+		return nil
+	}
+
+	var tree []ActiveTurnInfo
+	var walk func(ts *turnState)
+	walk = func(ts *turnState) {
+		info := ts.snapshot()
+		tree = append(tree, info)
+		for _, childID := range info.ChildTurnIDs {
+			// SubTurns are registered under their own turn ID, not the session key.
+			val, ok := al.activeTurnStates.Load(childID)
+			if !ok {
+				continue
+			}
+			if child, ok := val.(*turnState); ok {
+				walk(child)
+			}
+		}
+	}
+	walk(root)
+	return tree
+}
+
 func (ts *turnState) snapshot() ActiveTurnInfo {
 	ts.mu.RLock()
 	defer ts.mu.RUnlock()
