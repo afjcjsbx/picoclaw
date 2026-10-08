@@ -206,6 +206,33 @@ func TestSelfToolMaxIterationsIsSessionScoped(t *testing.T) {
 	}
 }
 
+func TestSelfToolMaxIterationsRequiresSessionKey(t *testing.T) {
+	agent := &AgentInstance{
+		ID: "main", modelMu: &sync.RWMutex{}, Tools: tools.NewToolRegistry(), MaxIterations: 20,
+	}
+	al := &AgentLoop{}
+	tool := NewSelfTool(&agentRuntimeControl{agent: agent}, true)
+	ts := newTurnState(
+		agent,
+		processOptions{Dispatch: DispatchRequest{SessionKey: ""}},
+		turnEventScope{agentID: agent.ID, sessionKey: "", turnID: "turn-keyless"},
+	)
+	ctx := WithAgentLoop(withTurnState(selfTestContext(""), ts), al)
+
+	if result := runSelfTool(tool, ctx, "set", "max_iterations", float64(35), true); !result.IsError {
+		t.Fatal("max_iterations was accepted for a turn without a session key")
+	}
+	if got := ts.maxIterations(); got != 20 {
+		t.Fatalf("keyless turn max_iterations = %d, want 20", got)
+	}
+	if got := al.sessionIterationLimit("main", ""); got != 0 {
+		t.Fatalf("keyless limit = %d, want none; it would leak to other keyless turns", got)
+	}
+	if got := al.sessionIterationLimit("main", "session-1"); got != 0 {
+		t.Fatalf("session-1 limit = %d, want none", got)
+	}
+}
+
 func TestSelfToolContextWindowTokensIsNotSensitive(t *testing.T) {
 	runtime := &selfToolTestRuntime{view: map[string]any{"context_window_tokens": 32768}}
 	tool := NewSelfTool(runtime, true)

@@ -354,6 +354,11 @@ func (c *agentRuntimeControl) Set(ctx context.Context, key string, value any) er
 	if ts == nil || al == nil {
 		return fmt.Errorf("session iteration limit changes require an active agent turn")
 	}
+	// Turns without a session key share the "" entry, so the limit would leak
+	// to every other keyless turn. model_preset has the same guard.
+	if strings.TrimSpace(ts.sessionKey) == "" {
+		return fmt.Errorf("session iteration limit changes require a session")
+	}
 	al.setSessionIterationLimit(ts.agentID, ts.sessionKey, iterations)
 	ts.maxIterationsOverride.Store(int64(iterations))
 	return nil
