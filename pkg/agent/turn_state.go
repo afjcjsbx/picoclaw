@@ -262,6 +262,18 @@ type turnState struct {
 	loopDetectionHistory []uint64
 	loopDetectionNext    int
 	loopDetectionConfig  config.LoopDetectionConfig
+
+	// maxIterationsOverride is the limit the session chose through the self
+	// tool; 0 keeps the agent's configured limit.
+	maxIterationsOverride atomic.Int64
+}
+
+// maxIterations returns the tool-iteration limit that applies to this turn.
+func (ts *turnState) maxIterations() int {
+	if limit := ts.maxIterationsOverride.Load(); limit > 0 {
+		return int(limit)
+	}
+	return ts.agent.MaxIterations
 }
 
 // =============================================================================

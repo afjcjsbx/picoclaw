@@ -26,7 +26,6 @@ import (
 // session manager, context builder, and tool registry.
 type AgentInstance struct {
 	modelMu                   *sync.RWMutex
-	runtimeSettingsMu         *sync.RWMutex
 	ID                        string
 	Name                      string
 	Model                     string
@@ -337,7 +336,6 @@ func NewAgentInstance(
 
 	instance := &AgentInstance{
 		modelMu:                   &sync.RWMutex{},
-		runtimeSettingsMu:         &sync.RWMutex{},
 		ID:                        agentID,
 		Name:                      agentName,
 		Model:                     model,
@@ -722,29 +720,6 @@ func (a *AgentInstance) modelStateMutex() *sync.RWMutex {
 		return &fallbackAgentModelMu
 	}
 	return a.modelMu
-}
-
-var fallbackRuntimeSettingsMu sync.RWMutex
-
-func (a *AgentInstance) runtimeSettingsMutex() *sync.RWMutex {
-	if a.runtimeSettingsMu == nil {
-		return &fallbackRuntimeSettingsMu
-	}
-	return a.runtimeSettingsMu
-}
-
-func (a *AgentInstance) maxIterations() int {
-	mu := a.runtimeSettingsMutex()
-	mu.RLock()
-	defer mu.RUnlock()
-	return a.MaxIterations
-}
-
-func (a *AgentInstance) setMaxIterations(value int) {
-	mu := a.runtimeSettingsMutex()
-	mu.Lock()
-	a.MaxIterations = value
-	mu.Unlock()
 }
 
 func closeUniqueStatefulProviders(providerList ...providers.LLMProvider) {

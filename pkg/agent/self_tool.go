@@ -53,7 +53,8 @@ func (t *SelfTool) Description() string {
 		"web_config.enabled or request.channel). Available fields include " +
 		"max_iterations, context_window_tokens, model, model_preset, model_presets, " +
 		"workspace, tool_names, web_config, exec_config, and request.channel/chat_id/sender_id.\n" +
-		"- set (key, value): change max_iterations (integer 1–100), select a configured " +
+		"- set (key, value): change max_iterations (integer 1–100) for this session, " +
+		"effective immediately, select a configured " +
 		"model_preset for this session (effective next turn), or store a JSON-safe " +
 		"scratchpad note. Scratchpad notes are shared across turns in this session, " +
 		"lost on restart, and limited to 64 keys and 10 levels of nesting.\n" +
@@ -247,15 +248,17 @@ func (c *agentRuntimeControl) Snapshot(ctx context.Context) map[string]any {
 		return map[string]any{}
 	}
 	agent := c.agent
+	maxIterations := agent.MaxIterations
 	if ts := turnStateFromContext(ctx); ts != nil && ts.agent != nil {
 		agent = ts.agent
+		maxIterations = ts.maxIterations()
 	} else {
 		mu := c.agent.modelStateMutex()
 		mu.RLock()
 		defer mu.RUnlock()
 	}
 	view := map[string]any{
-		"max_iterations":        agent.maxIterations(),
+		"max_iterations":        maxIterations,
 		"context_window_tokens": agent.ContextWindow,
 		"model":                 agent.Model,
 		"model_preset":          agent.Model,
@@ -337,14 +340,25 @@ func (c *agentRuntimeControl) Set(ctx context.Context, key string, value any) er
 	if iterations < 1 || iterations > 100 {
 		return fmt.Errorf("max_iterations must be between 1 and 100")
 	}
-	if c.agent == nil {
-		return fmt.Errorf("runtime control is unavailable")
+	ts := turnStateFromContext(ctx)
+	al := AgentLoopFromContext(ctx)
+	if ts == nil || al == nil {
+		return fmt.Errorf("session iteration limit changes require an active agent turn")
 	}
-	c.agent.setMaxIterations(iterations)
-	if ts := turnStateFromContext(ctx); ts != nil && ts.agent != nil && ts.agent != c.agent {
-		ts.agent.setMaxIterations(iterations)
-	}
+	al.setSessionIterationLimit(ts.agentID, ts.sessionKey, iterations)
+	ts.maxIterationsOverride.Store(int64(iterations))
 	return nil
+}
+
+func (al *AgentLoop) setSessionIterationLimit(agentID, sessionKey string, limit int) {
+	al.sessionLimits.Store(sessionModelKey{agentID: agentID, sessionKey: sessionKey}, limit)
+}
+
+// sessionIterationLimit returns the max_iterations a session set, or 0 if none.
+func (al *AgentLoop) sessionIterationLimit(agentID, sessionKey string) int {
+	limit, _ := al.sessionLimits.Load(sessionModelKey{agentID: agentID, sessionKey: sessionKey})
+	value, _ := limit.(int)
+	return value
 }
 
 func requestSelfSnapshot(ctx context.Context) map[string]any {

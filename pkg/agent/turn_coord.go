@@ -95,7 +95,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 	maxMediaSize := pipeline.Cfg.Agents.Defaults.GetMaxMediaSize()
 	finalContent := exec.finalContent
 
-	for ts.currentIteration() < ts.agent.maxIterations() || len(exec.pendingMessages) > 0 || func() bool {
+	for ts.currentIteration() < ts.maxIterations() || len(exec.pendingMessages) > 0 || func() bool {
 		graceful, _ := ts.gracefulInterruptRequested()
 		return graceful
 	}() {
@@ -193,7 +193,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 			map[string]any{
 				"agent_id":  ts.agent.ID,
 				"iteration": iteration,
-				"max":       ts.agent.maxIterations(),
+				"max":       ts.maxIterations(),
 			})
 
 		// Execute LLM call via Pipeline
@@ -276,7 +276,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 	}
 
 	if finalContent == "" {
-		if ts.currentIteration() >= ts.agent.maxIterations() && ts.agent.maxIterations() > 0 {
+		if ts.currentIteration() >= ts.maxIterations() && ts.maxIterations() > 0 {
 			finalContent = toolLimitResponse
 		} else {
 			finalContent = ts.opts.DefaultResponse

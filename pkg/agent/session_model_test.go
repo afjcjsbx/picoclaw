@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
@@ -139,5 +140,54 @@ func TestModelCommandReplacesSessionModelPreset(t *testing.T) {
 	}
 	if got := f.callTurn("session-b"); got != "remote reply" {
 		t.Fatalf("session-b response = %q, want remote reply (its preset is untouched)", got)
+	}
+}
+
+// loopingToolCallProvider asks for a tool on every call, so only the turn's
+// iteration limit ends the turn.
+type loopingToolCallProvider struct{ calls int }
+
+func (p *loopingToolCallProvider) Chat(
+	_ context.Context,
+	_ []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	p.calls++
+	return &providers.LLMResponse{
+		ToolCalls: []providers.ToolCall{{
+			ID: fmt.Sprintf("call_%d", p.calls), Name: "search", Arguments: map[string]any{"q": p.calls},
+		}},
+		FinishReason: "tool_calls",
+	}, nil
+}
+
+func (p *loopingToolCallProvider) GetDefaultModel() string { return "looping-model" }
+
+func TestSessionIterationLimitAppliesToThatSessionOnly(t *testing.T) {
+	provider := &loopingToolCallProvider{}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	al.setSessionIterationLimit(agent.ID, "limited", 2)
+
+	runTurn := func(sessionKey string) int {
+		t.Helper()
+		provider.calls = 0
+		_, err := al.runAgentLoop(context.Background(), agent, processOptions{
+			Dispatch:  DispatchRequest{SessionKey: sessionKey, UserMessage: "go"},
+			NoHistory: true,
+		})
+		if err != nil {
+			t.Fatalf("runAgentLoop(%q): %v", sessionKey, err)
+		}
+		return provider.calls
+	}
+	limited, unlimited := runTurn("limited"), runTurn("other")
+	if limited != 2 {
+		t.Errorf("limited session made %d LLM calls, want 2", limited)
+	}
+	if unlimited != agent.MaxIterations {
+		t.Errorf("other session made %d LLM calls, want the agent limit %d", unlimited, agent.MaxIterations)
 	}
 }

@@ -89,11 +89,8 @@ func (o *sessionModelOverride) apply(agent *AgentInstance) *AgentInstance {
 		return agent
 	}
 	modelMu := agent.modelStateMutex()
-	settingsMu := agent.runtimeSettingsMutex()
 	modelMu.RLock()
-	settingsMu.RLock()
 	clone := *agent
-	settingsMu.RUnlock()
 	modelMu.RUnlock()
 
 	clone.modelMu = &sync.RWMutex{}

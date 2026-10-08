@@ -114,24 +114,55 @@ func TestSelfToolScratchpadIsSessionScopedAndJSONSafe(t *testing.T) {
 	}
 }
 
-func TestSelfToolRuntimeSetValidatesIterations(t *testing.T) {
+func TestSelfToolMaxIterationsIsSessionScoped(t *testing.T) {
 	agent := &AgentInstance{
-		modelMu:           &sync.RWMutex{},
-		runtimeSettingsMu: &sync.RWMutex{},
-		MaxIterations:     20,
+		ID: "main", modelMu: &sync.RWMutex{}, Tools: tools.NewToolRegistry(), MaxIterations: 20,
 	}
+	al := &AgentLoop{}
 	tool := NewSelfTool(&agentRuntimeControl{agent: agent}, true)
-	ctx := selfTestContext("session-1")
+	turnContext := func(session string) (context.Context, *turnState) {
+		ts := newTurnState(
+			agent,
+			processOptions{Dispatch: DispatchRequest{SessionKey: session}},
+			turnEventScope{agentID: agent.ID, sessionKey: session, turnID: "turn-" + session},
+		)
+		return WithAgentLoop(withTurnState(selfTestContext(session), ts), al), ts
+	}
+	ctx, ts := turnContext("session-1")
+	otherCtx, otherTS := turnContext("session-2")
+
 	if result := runSelfTool(tool, ctx, "set", "max_iterations", float64(35), true); result.IsError {
 		t.Fatalf("set max_iterations: %s", result.ForLLM)
 	}
-	if got := agent.maxIterations(); got != 35 {
-		t.Fatalf("max_iterations = %d, want 35", got)
+	if got := ts.maxIterations(); got != 35 {
+		t.Fatalf("running turn max_iterations = %d, want 35", got)
 	}
-	for _, value := range []any{true, float64(100.5), float64(101)} {
+	if got := agent.MaxIterations; got != 20 {
+		t.Fatalf("agent max_iterations = %d, want it to stay 20", got)
+	}
+	if got := al.sessionIterationLimit("main", "session-1"); got != 35 {
+		t.Fatalf("session-1 limit = %d, want 35", got)
+	}
+	if got := al.sessionIterationLimit("main", "session-2"); got != 0 {
+		t.Fatalf("session-2 limit = %d, want none", got)
+	}
+	if got := otherTS.maxIterations(); got != 20 {
+		t.Fatalf("session-2 turn max_iterations = %d, want 20", got)
+	}
+	if got := runSelfTool(tool, ctx, "check", "max_iterations", nil, false).ForLLM; got != "35" {
+		t.Fatalf("session-1 check = %q, want 35", got)
+	}
+	if got := runSelfTool(tool, otherCtx, "check", "max_iterations", nil, false).ForLLM; got != "20" {
+		t.Fatalf("session-2 check = %q, want 20", got)
+	}
+
+	for _, value := range []any{true, float64(100.5), float64(0), float64(101)} {
 		if result := runSelfTool(tool, ctx, "set", "max_iterations", value, true); !result.IsError {
 			t.Errorf("max_iterations accepted invalid value %#v", value)
 		}
+	}
+	if result := runSelfTool(tool, selfTestContext("session-3"), "set", "max_iterations", float64(5), true); !result.IsError {
+		t.Error("max_iterations changed outside an active agent turn")
 	}
 }
 

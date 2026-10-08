@@ -68,6 +68,7 @@ type AgentLoop struct {
 	pendingSkills   sync.Map
 	voiceModes      sync.Map
 	pendingStops    sync.Map
+	sessionLimits   sync.Map // sessionModelKey -> max_iterations set through the self tool
 	mu              sync.RWMutex
 
 	// workerSem limits concurrent turn processing workers.
@@ -589,6 +590,7 @@ func (al *AgentLoop) runAgentLoop(
 		newTurnContext(opts.Dispatch.InboundContext, opts.Dispatch.RouteResult, opts.Dispatch.SessionScope),
 	)
 	ts := newTurnState(agent, opts, turnScope)
+	ts.maxIterationsOverride.Store(int64(al.sessionIterationLimit(agent.ID, opts.Dispatch.SessionKey)))
 	pipeline := NewPipeline(al)
 	result, err := al.runTurn(ctx, ts, pipeline)
 	if err != nil {

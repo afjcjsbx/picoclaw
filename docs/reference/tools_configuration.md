@@ -42,7 +42,8 @@ See [Sensitive Data Filtering](../security/sensitive_data_filtering.md) for full
 The `self` tool is enabled by default. It exposes a filtered view of the current
 agent and request, and keeps a temporary scratchpad per session. Writes are
 disabled by default; enabling `allow_set` permits scratchpad writes and changes
-to `max_iterations` (1–100).
+to `max_iterations` (1–100). Like the scratchpad, a `max_iterations` change applies
+only to the session that made it, takes effect immediately, and is lost on restart.
 
 ```json
 {
