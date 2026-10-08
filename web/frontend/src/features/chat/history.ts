@@ -1,4 +1,8 @@
 import { getSessionHistory } from "@/api/sessions"
+import {
+  CHAT_TEXT_ATTACHMENT_INSTRUCTION,
+  CHAT_UPLOADED_FILE_PATH_INSTRUCTION,
+} from "@/features/chat/image-input"
 import { normalizeUnixTimestamp } from "@/features/chat/state"
 import {
   parseToolCallsValue,
@@ -30,13 +34,78 @@ function toChatAttachments({
         }) satisfies ChatAttachment,
     )
 
-  const legacyMediaAttachments = (media ?? [])
-    .filter((item) => item.startsWith("data:image/"))
-    .map((url) => ({ type: "image" as const, url }))
+  const legacyMediaAttachments = (media ?? []).flatMap<ChatAttachment>(
+    (url) => {
+      if (url.startsWith("data:image/"))
+        return [{ type: "image" as const, url }]
+      if (url.startsWith("data:application/pdf;")) {
+        return [
+          {
+            type: "file" as const,
+            url,
+            filename: "attachment.pdf",
+            contentType: "application/pdf",
+          },
+        ]
+      }
+      return []
+    },
+  )
 
   const merged = [...(normalizedAttachments ?? []), ...legacyMediaAttachments]
 
   return merged.length > 0 ? merged : undefined
+}
+
+function stripUploadedFiles(content: string) {
+  const opening = "\n\n<uploaded_files>\n"
+  const closing = "\n</uploaded_files>"
+  const start = content.lastIndexOf(opening)
+  if (start < 0 || !content.endsWith(closing)) {
+    return { content }
+  }
+
+  try {
+    const serializedFiles = content.slice(
+      start + opening.length,
+      -closing.length,
+    )
+    const fileJSON = [
+      CHAT_TEXT_ATTACHMENT_INSTRUCTION,
+      CHAT_UPLOADED_FILE_PATH_INSTRUCTION,
+    ].reduce(
+      (value, instruction) =>
+        value.startsWith(instruction) ? value.slice(instruction.length) : value,
+      serializedFiles,
+    )
+    const files = JSON.parse(fileJSON) as {
+      filename?: unknown
+      content?: unknown
+      path?: unknown
+    }[]
+    if (
+      !Array.isArray(files) ||
+      files.some(
+        (file) =>
+          !file ||
+          typeof file.filename !== "string" ||
+          (typeof file.content !== "string" && typeof file.path !== "string"),
+      )
+    ) {
+      return { content }
+    }
+
+    return {
+      content: content.slice(0, start),
+      attachments: files.map((file) => ({
+        type: "file" as const,
+        url: "",
+        filename: file.filename as string,
+      })),
+    }
+  } catch {
+    return { content }
+  }
 }
 
 export async function loadSessionMessages(
@@ -45,25 +114,34 @@ export async function loadSessionMessages(
 ): Promise<{ messages: ChatMessage[]; start: number; hasMore: boolean }> {
   const detail = await getSessionHistory(sessionId, before)
   return {
-    messages: detail.messages.map((message, index) => ({
-      id: `hist-${detail.start + index}`,
-      role: message.role,
-      content: message.content,
-      kind:
-        message.role === "assistant"
-          ? (message.kind ?? "normal")
-          : undefined,
-      modelName: message.model_name,
-      toolCalls:
-        message.role === "assistant"
-          ? parseToolCallsValue(message.tool_calls)
-          : undefined,
-      attachments: toChatAttachments({
-        media: message.media,
-        attachments: message.attachments,
-      }),
-      timestamp: message.created_at ?? detail.updated,
-    })),
+    messages: detail.messages.map((message, index) => {
+      const uploadedFiles =
+        message.role === "user"
+          ? stripUploadedFiles(message.content)
+          : { content: message.content }
+      const attachments = [
+        ...(toChatAttachments({
+          media: message.media,
+          attachments: message.attachments,
+        }) ?? []),
+        ...(uploadedFiles.attachments ?? []),
+      ]
+
+      return {
+        id: `hist-${detail.start + index}`,
+        role: message.role,
+        content: uploadedFiles.content,
+        kind:
+          message.role === "assistant" ? (message.kind ?? "normal") : undefined,
+        modelName: message.model_name,
+        toolCalls:
+          message.role === "assistant"
+            ? parseToolCallsValue(message.tool_calls)
+            : undefined,
+        attachments: attachments.length > 0 ? attachments : undefined,
+        timestamp: message.created_at ?? detail.updated,
+      }
+    }),
     start: detail.start,
     hasMore: detail.start > 0,
   }

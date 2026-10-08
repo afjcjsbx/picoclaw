@@ -1,4 +1,4 @@
-import { IconCheck, IconCopy } from "@tabler/icons-react"
+import { IconCheck, IconCopy, IconFileText } from "@tabler/icons-react"
 import { memo } from "react"
 import { useTranslation } from "react-i18next"
 
@@ -71,7 +71,52 @@ export const UserMessage = memo(function UserMessage({
         </div>
       )}
 
-      {(formattedTimestamp || hasText) && (
+      {attachments.some((attachment) => attachment.type !== "image") && (
+        <div className="flex max-w-[70%] flex-wrap justify-end gap-2">
+          {attachments
+            .filter((attachment) => attachment.type !== "image")
+            .map((attachment, index) => {
+              const card = (
+                <>
+                  <span className="bg-background/70 text-muted-foreground flex size-9 shrink-0 items-center justify-center rounded-lg">
+                    <IconFileText className="size-4" />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block max-w-48 truncate text-sm font-medium">
+                      {attachment.filename || t("chat.uploadedFile")}
+                    </span>
+                    <span className="text-muted-foreground text-[11px]">
+                      {attachment.filename?.split(".").pop()?.toUpperCase() ||
+                        "FILE"}
+                    </span>
+                  </span>
+                </>
+              )
+              const className =
+                "bg-muted/50 border-border/60 flex w-fit max-w-full items-center gap-2 rounded-xl border px-3 py-2"
+
+              return attachment.url ? (
+                <a
+                  key={`${attachment.url}-${index}`}
+                  href={attachment.url}
+                  download={attachment.filename}
+                  className={`${className} hover:border-violet-500/40`}
+                >
+                  {card}
+                </a>
+              ) : (
+                <div
+                  key={`${attachment.filename}-${index}`}
+                  className={className}
+                >
+                  {card}
+                </div>
+              )
+            })}
+        </div>
+      )}
+
+      {(formattedTimestamp || hasText || attachments.length > 0) && (
         <div className="flex items-center gap-1 px-1 text-[12px] text-zinc-400">
           {formattedTimestamp && <span>{formattedTimestamp}</span>}
           {hasText && (

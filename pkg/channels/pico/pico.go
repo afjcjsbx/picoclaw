@@ -45,6 +45,23 @@ var allowedInlineImageMIMETypes = map[string]struct{}{
 	"image/bmp":  {},
 }
 
+const allowedInlinePDFMIMEType = "application/pdf"
+
+var allowedInlineTextMIMETypes = map[string]struct{}{
+	"text/plain": {}, "text/markdown": {}, "application/yaml": {}, "application/json": {},
+	"text/csv": {}, "text/tab-separated-values": {}, "application/xml": {}, "text/html": {},
+	"application/toml": {}, "text/javascript": {}, "text/typescript": {}, "text/x-python": {},
+	"text/x-go": {}, "text/x-shellscript": {}, "application/sql": {}, "text/css": {},
+	"text/x-c": {}, "text/x-c++src": {}, "text/x-java-source": {}, "text/x-rust": {},
+	"text/x-ruby": {}, "text/x-php": {},
+}
+
+type picoUploadedFile struct {
+	Filename string `json:"filename"`
+	Path     string `json:"path"`
+	Type     string `json:"type"`
+}
+
 func outboundMessageIsThought(msg bus.OutboundMessage) bool {
 	if len(msg.Context.Raw) == 0 {
 		return false
@@ -98,6 +115,7 @@ type PicoChannel struct {
 	*channels.BaseChannel
 	bc                 *config.Channel
 	config             *config.PicoSettings
+	workspace          string
 	upgrader           websocket.Upgrader
 	connections        map[string]*picoConn            // connID -> *picoConn
 	sessionConnections map[string]map[string]*picoConn // sessionID -> connID -> *picoConn
@@ -1207,6 +1225,24 @@ func (c *PicoChannel) handleMessageSend(pc *picoConn, msg PicoMessage) {
 		pc.writeJSON(errMsg)
 		return
 	}
+	attachmentsToStore, err := picoAttachmentsToStore(msg.Payload["attachments"], media)
+	if err != nil {
+		pc.writeJSON(newErrorWithPayload("invalid_media", err.Error(), map[string]any{
+			"request_id": msg.ID,
+		}))
+		return
+	}
+	uploadedFiles, err := c.storeInlineAttachments(attachmentsToStore)
+	if err != nil {
+		pc.writeJSON(newErrorWithPayload("upload_failed", err.Error(), map[string]any{
+			"request_id": msg.ID,
+		}))
+		return
+	}
+	if len(uploadedFiles) > 0 {
+		media = nil
+		content = appendUploadedFiles(content, uploadedFiles)
+	}
 
 	if strings.TrimSpace(content) == "" && len(media) == 0 {
 		errMsg := newErrorWithPayload("empty_content", "message content is empty", map[string]any{
@@ -1256,6 +1292,159 @@ func (c *PicoChannel) handleMessageSend(pc *picoConn, msg PicoMessage) {
 	}
 
 	c.HandleInboundContext(c.ctx, chatID, content, media, inboundCtx, sender)
+}
+
+func picoAttachmentsToStore(raw any, mediaURLs []string) ([]any, error) {
+	attachments := make([]any, 0, len(mediaURLs))
+	seenURLs := make(map[string]struct{}, len(mediaURLs))
+	if values, ok := raw.([]any); ok {
+		for _, value := range values {
+			attachment, ok := value.(map[string]any)
+			if !ok {
+				continue
+			}
+			kind, _ := attachment["type"].(string)
+			kind = strings.ToLower(strings.TrimSpace(kind))
+			if kind != "image" && kind != "file" {
+				continue
+			}
+			dataURL, err := inlineImageValue(attachment)
+			if err != nil {
+				return nil, err
+			}
+			seenURLs[dataURL] = struct{}{}
+			attachments = append(attachments, attachment)
+		}
+	}
+
+	for i, dataURL := range mediaURLs {
+		if _, exists := seenURLs[dataURL]; exists {
+			continue
+		}
+		header, _, _ := strings.Cut(dataURL, ",")
+		mediaType, _, _ := strings.Cut(strings.TrimPrefix(header, "data:"), ";")
+		kind := "file"
+		if _, isImage := allowedInlineImageMIMETypes[mediaType]; isImage {
+			kind = "image"
+		}
+		filename := fmt.Sprintf("attachment-%d", i+1)
+		if extensions, _ := mime.ExtensionsByType(mediaType); len(extensions) > 0 {
+			filename += extensions[0]
+		}
+		attachments = append(attachments, map[string]any{
+			"type":     kind,
+			"filename": filename,
+			"url":      dataURL,
+		})
+	}
+	return attachments, nil
+}
+
+func appendUploadedFiles(content string, files []picoUploadedFile) string {
+	paths := make([]picoUploadedFile, 0, len(files))
+	for _, file := range files {
+		paths = append(paths, picoUploadedFile{Filename: file.Filename, Path: file.Path, Type: file.Type})
+	}
+	serialized, _ := json.Marshal(paths)
+	return content + "\n\n<uploaded_files>\n" + string(serialized) + "\n</uploaded_files>"
+}
+
+func (c *PicoChannel) storeInlineAttachments(raw any) (files []picoUploadedFile, err error) {
+	if raw == nil {
+		return nil, nil
+	}
+	values, ok := raw.([]any)
+	if !ok {
+		return nil, fmt.Errorf("attachments must be an array")
+	}
+	if len(values) == 0 {
+		return nil, nil
+	}
+	if strings.TrimSpace(c.workspace) == "" {
+		return nil, fmt.Errorf("workspace is unavailable for saving uploaded files")
+	}
+
+	// ponytail: uploads persist so their workspace paths stay readable in later turns; add retention if storage growth becomes a concern.
+	createdDirs := make([]string, 0, len(values))
+	defer func() {
+		if err != nil {
+			for _, dir := range createdDirs {
+				_ = os.RemoveAll(dir)
+			}
+		}
+	}()
+
+	workspace, err := filepath.Abs(c.workspace)
+	if err != nil {
+		return nil, fmt.Errorf("resolve workspace: %w", err)
+	}
+	workspace, err = filepath.EvalSymlinks(workspace)
+	if err != nil {
+		return nil, fmt.Errorf("resolve workspace: %w", err)
+	}
+	artifactDir := filepath.Join(workspace, ".artifacts")
+	if err = os.Mkdir(artifactDir, 0o700); err != nil && !os.IsExist(err) {
+		return nil, fmt.Errorf("create artifact directory: %w", err)
+	}
+	artifactDir, err = filepath.EvalSymlinks(artifactDir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve artifact directory: %w", err)
+	}
+	if relative, relErr := filepath.Rel(workspace, artifactDir); relErr != nil || !filepath.IsLocal(relative) {
+		return nil, fmt.Errorf("artifact directory is outside the workspace")
+	}
+	uploadDir := filepath.Join(artifactDir, "uploads")
+	if err = os.Mkdir(uploadDir, 0o700); err != nil && !os.IsExist(err) {
+		return nil, fmt.Errorf("create upload directory: %w", err)
+	}
+	uploadDir, err = filepath.EvalSymlinks(uploadDir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve upload directory: %w", err)
+	}
+	if relative, relErr := filepath.Rel(workspace, uploadDir); relErr != nil || !filepath.IsLocal(relative) {
+		return nil, fmt.Errorf("upload directory is outside the workspace")
+	}
+
+	for i, value := range values {
+		attachment, ok := value.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("attachments[%d]: attachment must be an object", i)
+		}
+		kind, _ := attachment["type"].(string)
+		kind = strings.ToLower(strings.TrimSpace(kind))
+		if kind != "image" && kind != "file" {
+			continue
+		}
+		dataURL, valueErr := inlineImageValue(attachment)
+		if valueErr != nil {
+			return nil, fmt.Errorf("attachments[%d]: %w", i, valueErr)
+		}
+		_, data, decodeErr := decodeInlineAttachmentDataURL(dataURL)
+		if decodeErr != nil {
+			return nil, fmt.Errorf("attachments[%d]: %w", i, decodeErr)
+		}
+
+		filename, _ := attachment["filename"].(string)
+		filename = filepath.Base(strings.ReplaceAll(strings.TrimSpace(filename), `\`, "/"))
+		if filename == "" || filename == "." || filename == ".." || filename == string(filepath.Separator) {
+			filename = fmt.Sprintf("attachment-%d", i+1)
+		}
+		dir := filepath.Join(uploadDir, uuid.NewString())
+		if err = os.Mkdir(dir, 0o700); err != nil {
+			return nil, fmt.Errorf("create upload directory: %w", err)
+		}
+		createdDirs = append(createdDirs, dir)
+		path := filepath.Join(dir, filename)
+		if err = os.WriteFile(path, data, 0o600); err != nil {
+			return nil, fmt.Errorf("save uploaded file: %w", err)
+		}
+		files = append(files, picoUploadedFile{
+			Filename: filename,
+			Path:     path,
+			Type:     kind,
+		})
+	}
+	return files, nil
 }
 
 func parseInlineImageMedia(payload map[string]any) ([]string, error) {
@@ -1335,13 +1524,13 @@ func parseInlineImageAttachments(raw any) ([]string, error) {
 
 		attachmentType, _ := attachment["type"].(string)
 		attachmentType = strings.ToLower(strings.TrimSpace(attachmentType))
-		if attachmentType != "" && attachmentType != "image" {
+		if attachmentType != "" && attachmentType != "image" && attachmentType != "file" {
 			continue
 		}
 
 		value, err := inlineImageValue(attachment)
 		if err != nil {
-			if attachmentType == "image" {
+			if attachmentType == "image" || attachmentType == "file" {
 				return nil, fmt.Errorf("attachments[%d]: %w", i, err)
 			}
 			continue
@@ -1378,34 +1567,43 @@ func inlineImageValue(item any) (string, error) {
 }
 
 func validateInlineImageDataURL(mediaURL string) error {
+	_, _, err := decodeInlineAttachmentDataURL(mediaURL)
+	return err
+}
+
+func decodeInlineAttachmentDataURL(mediaURL string) (string, []byte, error) {
 	if mediaURL == "" {
-		return fmt.Errorf("image payload is empty")
-	}
-	if !strings.HasPrefix(mediaURL, "data:image/") {
-		return fmt.Errorf("only inline image data URLs are supported")
+		return "", nil, fmt.Errorf("attachment payload is empty")
 	}
 
 	header, data, found := strings.Cut(mediaURL, ",")
 	if !found || strings.TrimSpace(data) == "" {
-		return fmt.Errorf("image data URL is malformed")
+		return "", nil, fmt.Errorf("attachment data URL is malformed")
 	}
 	if !strings.Contains(header, ";base64") {
-		return fmt.Errorf("image data URL must be base64 encoded")
+		return "", nil, fmt.Errorf("attachment data URL must be base64 encoded")
 	}
 	mimeType, _, _ := strings.Cut(strings.TrimPrefix(header, "data:"), ";")
-	if _, ok := allowedInlineImageMIMETypes[mimeType]; !ok {
-		return fmt.Errorf("unsupported image format: %s", mimeType)
+	_, isImage := allowedInlineImageMIMETypes[mimeType]
+	_, isText := allowedInlineTextMIMETypes[mimeType]
+	isText = isText || strings.HasPrefix(mimeType, "text/")
+	if !isImage && !isText && mimeType != allowedInlinePDFMIMEType {
+		return "", nil, fmt.Errorf("unsupported attachment format: %s", mimeType)
 	}
 
 	data = strings.TrimSpace(data)
 	if base64.StdEncoding.DecodedLen(len(data)) > config.DefaultMaxMediaSize {
-		return fmt.Errorf("image exceeds %d byte limit", config.DefaultMaxMediaSize)
+		return "", nil, fmt.Errorf("attachment exceeds %d byte limit", config.DefaultMaxMediaSize)
 	}
-	if _, err := base64.StdEncoding.DecodeString(data); err != nil {
-		return fmt.Errorf("invalid base64 image data")
+	decoded, err := base64.StdEncoding.DecodeString(data)
+	if err != nil {
+		return "", nil, fmt.Errorf("invalid base64 attachment data")
+	}
+	if mimeType == allowedInlinePDFMIMEType && !strings.HasPrefix(string(decoded), "%PDF-") {
+		return "", nil, fmt.Errorf("invalid PDF signature")
 	}
 
-	return nil
+	return mimeType, decoded, nil
 }
 
 // setContextUsagePayload adds context window usage stats to a pico payload.

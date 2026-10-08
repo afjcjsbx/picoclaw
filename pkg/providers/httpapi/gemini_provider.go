@@ -682,7 +682,7 @@ func buildInlineMediaParts(media []string) []geminiPart {
 	parts := make([]geminiPart, 0, len(media))
 	for _, mediaURL := range media {
 		mimeType, data, ok := parseBase64DataURL(mediaURL)
-		if !ok {
+		if !ok || (!strings.HasPrefix(mimeType, "image/") && !strings.HasPrefix(mimeType, "audio/")) {
 			continue
 		}
 		parts = append(parts, geminiPart{

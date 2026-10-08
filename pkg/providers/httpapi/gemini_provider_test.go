@@ -610,8 +610,8 @@ func TestGeminiProvider_BuildRequestBodyIncludesMediaAndThinkingConfig(t *testin
 			mimeSet[part.InlineData.MIMEType] = true
 		}
 	}
-	if !mimeSet["application/pdf"] {
-		t.Fatalf("inline media missing application/pdf: %#v", parts)
+	if mimeSet["application/pdf"] {
+		t.Fatalf("user PDF was inlined instead of being read from its saved path: %#v", parts)
 	}
 	if !mimeSet["image/png"] {
 		t.Fatalf("inline media missing image/png: %#v", parts)
