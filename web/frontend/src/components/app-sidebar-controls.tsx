@@ -230,7 +230,7 @@ export function AppSidebarControls() {
               asChild
             >
               <a
-                href="https://docs.picoclaw.io"
+                href="https://afjcjsbx.github.io/picoclaw/"
                 target="_blank"
                 rel="noreferrer"
               >
