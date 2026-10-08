@@ -233,6 +233,27 @@ func TestSelfToolMaxIterationsRequiresSessionKey(t *testing.T) {
 	}
 }
 
+func TestSelfToolContextWindowTokensIsReadOnlyWithRealRuntime(t *testing.T) {
+	f := newSessionModelFixture(t)
+	ctx := f.turnContext("session-a")
+	want := f.baseAgent.ContextWindow
+
+	if result := runSelfTool(f.selfTool, ctx, "check", "context_window_tokens", nil, false); result.IsError ||
+		result.ForLLM != fmt.Sprint(want) {
+		t.Fatalf("check context_window_tokens = %q (error=%v), want %d", result.ForLLM, result.IsError, want)
+	}
+	result := runSelfTool(f.selfTool, ctx, "set", "context_window_tokens", float64(65536), true)
+	if !result.IsError || !strings.Contains(result.ForLLM, "read-only") {
+		t.Fatalf("set context_window_tokens = %q (error=%v), want read-only rejection", result.ForLLM, result.IsError)
+	}
+	if f.baseAgent.ContextWindow != want {
+		t.Fatalf("context window changed to %d, want %d", f.baseAgent.ContextWindow, want)
+	}
+	if got := runSelfTool(f.selfTool, ctx, "check", "context_window_tokens", nil, false).ForLLM; got != fmt.Sprint(want) {
+		t.Fatalf("check after rejected set = %q, want %d", got, want)
+	}
+}
+
 func TestSelfToolContextWindowTokensIsNotSensitive(t *testing.T) {
 	runtime := &selfToolTestRuntime{view: map[string]any{"context_window_tokens": 32768}}
 	tool := NewSelfTool(runtime, true)
@@ -242,11 +263,12 @@ func TestSelfToolContextWindowTokensIsNotSensitive(t *testing.T) {
 		result.ForLLM != "32768" {
 		t.Fatalf("check context_window_tokens = %q (error=%v), want 32768", result.ForLLM, result.IsError)
 	}
-	if result := runSelfTool(tool, ctx, "set", "context_window_tokens", float64(65536), true); result.IsError {
-		t.Fatalf("set context_window_tokens: %s", result.ForLLM)
+	if result := runSelfTool(tool, ctx, "set", "context_window_tokens", float64(65536), true); !result.IsError ||
+		!strings.Contains(result.ForLLM, "read-only") {
+		t.Fatalf("set context_window_tokens = %q (error=%v), want read-only rejection", result.ForLLM, result.IsError)
 	}
-	if runtime.setKey != "context_window_tokens" || runtime.setValue != float64(65536) {
-		t.Fatalf("runtime.Set got %q=%v, want context_window_tokens=65536", runtime.setKey, runtime.setValue)
+	if runtime.setKey != "" {
+		t.Fatalf("runtime.Set was called with %q for a read-only field", runtime.setKey)
 	}
 	for _, key := range []string{"access_token", "refresh_token", "context_window_tokens.api_key"} {
 		if result := runSelfTool(tool, ctx, "check", key, nil, false); !result.IsError {

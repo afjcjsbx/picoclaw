@@ -62,9 +62,10 @@ restart.
 Environment variables: `PICOCLAW_TOOLS_SELF_ENABLED` and `PICOCLAW_TOOLS_SELF_ALLOW_SET`.
 
 The tool rejects credential-like keys and excludes provider credentials from
-its runtime snapshot. Model changes during a turn and context
-window changes during a session are rejected; use `/model` or configuration
-changes for those settings. Runtime options that PicoClaw does not currently
+its runtime snapshot. `context_window_tokens` is read-only through the tool;
+change it in configuration. A direct `model` write is rejected; use
+`model_preset` instead. `max_iterations` needs a session key, so turns without
+one cannot change it. Runtime options that PicoClaw does not currently
 implement are not exposed as writable fields.
 
 ## Protected local files

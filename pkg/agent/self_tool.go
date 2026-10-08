@@ -62,9 +62,9 @@ func (t *SelfTool) Description() string {
 		"scratchpad note (null deletes it). Scratchpad notes are shared across turns in this " +
 		"session, cleared by /clear, lost on restart, and limited to 64 keys, 128-byte keys, " +
 		"1024 bytes of JSON per value, and 10 levels of nesting.\n" +
-		"Direct model changes are disabled; context_window_tokens cannot be changed " +
-		"during an active session. Runtime snapshot fields such as workspace, " +
-		"web_config, exec_config, model_presets, tool_names, and request are read-only.\n" +
+		"Direct model changes are disabled. context_window_tokens and the runtime snapshot " +
+		"fields workspace, web_config, exec_config, model_presets, tool_names, and request " +
+		"are read-only.\n" +
 		"Use check for model/settings questions or to diagnose tool behavior; check " +
 		"context_window_tokens and max_iterations before a large task. Use model_preset " +
 		"when asked to switch to a configured model, and scratchpad notes for " +
@@ -316,25 +316,6 @@ func (c *agentRuntimeControl) Set(ctx context.Context, key string, value any) er
 			return fmt.Errorf("session model changes require an active agent turn")
 		}
 		return al.setSessionModelPreset(ts.agentID, ts.sessionKey, ts.agent, preset)
-	case "context_window_tokens":
-		window, err := selfInt(value)
-		if err != nil {
-			return fmt.Errorf("context_window_tokens must be an integer")
-		}
-		if window < 4096 || window > 1_000_000 {
-			return fmt.Errorf("context_window_tokens must be between 4096 and 1000000")
-		}
-		if turnStateFromContext(ctx) != nil {
-			return fmt.Errorf("context_window_tokens cannot be changed during an active session")
-		}
-		if c.agent == nil {
-			return fmt.Errorf("runtime control is unavailable")
-		}
-		mu := c.agent.modelStateMutex()
-		mu.Lock()
-		c.agent.ContextWindow = window
-		mu.Unlock()
-		return nil
 	case "max_iterations":
 	default:
 		return fmt.Errorf(
@@ -509,7 +490,8 @@ func isSelfReadOnly(path string) bool {
 		"web_config",
 		"model_presets",
 		"workspace",
-		"request":
+		"request",
+		"context_window_tokens":
 		return true
 	default:
 		return false
@@ -527,7 +509,7 @@ func isSelfRuntimeKey(path string) bool {
 
 func isSelfRuntimeRoot(path string) bool {
 	switch strings.Split(path, ".")[0] {
-	case "max_iterations", "context_window_tokens", "model", "model_preset":
+	case "max_iterations", "model", "model_preset":
 		return true
 	default:
 		return false
