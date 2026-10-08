@@ -191,3 +191,42 @@ func TestSessionIterationLimitAppliesToThatSessionOnly(t *testing.T) {
 		t.Errorf("other session made %d LLM calls, want the agent limit %d", unlimited, agent.MaxIterations)
 	}
 }
+
+func TestClearCommandDropsSessionRuntimeState(t *testing.T) {
+	f := newSessionModelFixture(t)
+	for _, session := range []string{"session-a", "session-b"} {
+		ctx := f.turnContext(session)
+		for key, value := range map[string]any{"model_preset": "remote", "max_iterations": float64(3), "note": "keep"} {
+			if result := runSelfTool(f.selfTool, ctx, "set", key, value, true); result.IsError {
+				t.Fatalf("set %s for %s: %s", key, session, result.ForLLM)
+			}
+		}
+	}
+
+	opts := &processOptions{Dispatch: DispatchRequest{SessionKey: "session-a"}}
+	rt := f.al.buildCommandsRuntime(context.Background(), f.baseAgent, opts)
+	if err := rt.ClearHistory(); err != nil {
+		t.Fatalf("ClearHistory(): %v", err)
+	}
+
+	id := f.baseAgent.ID
+	if f.al.sessionModel(sessionModelKey{agentID: id, sessionKey: "session-a"}) != nil {
+		t.Error("session-a kept its model preset after /clear")
+	}
+	if got := f.al.sessionIterationLimit(id, "session-a"); got != 0 {
+		t.Errorf("session-a kept max_iterations %d after /clear", got)
+	}
+	if result := runSelfTool(f.selfTool, f.turnContext("session-a"), "check", "note", nil, false); !result.IsError {
+		t.Error("session-a kept its scratchpad after /clear")
+	}
+
+	if f.al.sessionModel(sessionModelKey{agentID: id, sessionKey: "session-b"}) == nil {
+		t.Error("/clear in session-a removed the model preset of session-b")
+	}
+	if got := f.al.sessionIterationLimit(id, "session-b"); got != 3 {
+		t.Errorf("session-b max_iterations = %d, want 3", got)
+	}
+	if result := runSelfTool(f.selfTool, f.turnContext("session-b"), "check", "note", nil, false); result.IsError {
+		t.Errorf("/clear in session-a removed the scratchpad of session-b: %s", result.ForLLM)
+	}
+}

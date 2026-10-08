@@ -15,7 +15,11 @@ import (
 	"github.com/sipeed/picoclaw/pkg/tools"
 )
 
-const maxSelfRuntimeKeys = 64
+const (
+	maxSelfRuntimeKeys = 64
+	maxSelfNoteKeyLen  = 128
+	maxSelfNoteBytes   = 1024
+)
 
 // RuntimeControl is the read/write boundary exposed to SelfTool.
 type RuntimeControl interface {
@@ -56,8 +60,9 @@ func (t *SelfTool) Description() string {
 		"- set (key, value): change max_iterations (integer 1–100) for this session, " +
 		"effective immediately, select a configured " +
 		"model_preset for this session (effective next turn), or store a JSON-safe " +
-		"scratchpad note. Scratchpad notes are shared across turns in this session, " +
-		"lost on restart, and limited to 64 keys and 10 levels of nesting.\n" +
+		"scratchpad note (null deletes it). Scratchpad notes are shared across turns in this " +
+		"session, cleared by /clear, lost on restart, and limited to 64 keys, 128-byte keys, " +
+		"1024 bytes of JSON per value, and 10 levels of nesting.\n" +
 		"Direct model changes are disabled; context_window_tokens cannot be changed " +
 		"during an active session. Runtime snapshot fields such as workspace, " +
 		"web_config, exec_config, model_presets, tool_names, and request are read-only.\n" +
@@ -86,7 +91,7 @@ func (t *SelfTool) Parameters() map[string]any {
 				"description": "Optional target. For check, omit it for a full snapshot or use a dot path such as web_config.enabled or request.channel. For set, use max_iterations, model_preset, or a scratchpad note key.",
 			},
 			"value": map[string]any{
-				"description": "Required for set. Use an integer from 1 to 100 for max_iterations, a configured preset name for model_preset, or a JSON-safe value for a scratchpad note (maximum 64 keys and 10 nesting levels).",
+				"description": "Required for set. Use an integer from 1 to 100 for max_iterations, a configured preset name for model_preset, or a JSON-safe value for a scratchpad note (maximum 64 keys, 1024 bytes per value, and 10 nesting levels; null deletes the note).",
 			},
 		},
 		"required": []string{"action"},
@@ -228,6 +233,13 @@ func (t *SelfTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 	if err != nil {
 		log("REJECTED JSON value")
 		return tools.ErrorResult("value must be JSON-compatible")
+	}
+	if len(key) > maxSelfNoteKeyLen || len(encoded) > maxSelfNoteBytes {
+		log("REJECTED oversized note")
+		return tools.ErrorResult(fmt.Sprintf(
+			"scratchpad keys are limited to %d bytes and values to %d bytes of JSON",
+			maxSelfNoteKeyLen, maxSelfNoteBytes,
+		))
 	}
 	var clone any
 	if err := json.Unmarshal(encoded, &clone); err != nil {
@@ -399,6 +411,10 @@ func (t *SelfTool) setNote(ctx context.Context, key string, value any) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	entries := t.scratchpad[session]
+	if value == nil {
+		delete(entries, key)
+		return nil
+	}
 	if entries == nil {
 		entries = make(map[string]any)
 		t.scratchpad[session] = entries
@@ -411,6 +427,26 @@ func (t *SelfTool) setNote(ctx context.Context, key string, value any) error {
 	}
 	entries[key] = value
 	return nil
+}
+
+// ClearSession discards a session's scratchpad when its conversation is cleared.
+func (t *SelfTool) ClearSession(agentID, sessionKey string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.scratchpad, selfSession{agent: agentID, session: sessionKey})
+}
+
+// clearSessionRuntime drops what the self tool and model_preset kept for a
+// session, so /clear starts it again from the configured agent settings.
+func (al *AgentLoop) clearSessionRuntime(agent *AgentInstance, sessionKey string) {
+	key := sessionModelKey{agentID: agent.ID, sessionKey: sessionKey}
+	al.clearSessionModelOverride(key)
+	al.sessionLimits.Delete(key)
+	if tool, ok := agent.Tools.Get("self"); ok {
+		if self, ok := tool.(*SelfTool); ok {
+			self.ClearSession(agent.ID, sessionKey)
+		}
+	}
 }
 
 func selfSessionFor(ctx context.Context) selfSession {

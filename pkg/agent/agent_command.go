@@ -392,6 +392,7 @@ func (al *AgentLoop) buildCommandsRuntime(
 					todo.ClearSession(agent.ID, opts.SessionKey)
 				}
 			}
+			al.clearSessionRuntime(agent, opts.Dispatch.SessionKey)
 			return nil
 		}
 

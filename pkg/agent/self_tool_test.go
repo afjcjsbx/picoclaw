@@ -233,6 +233,42 @@ func TestSelfToolScratchpadKeyLimit(t *testing.T) {
 	}
 }
 
+func TestSelfToolScratchpadLimitsNoteSizeAndAllowsDelete(t *testing.T) {
+	tool := NewSelfTool(&selfToolTestRuntime{view: map[string]any{}}, true)
+	ctx := selfTestContext("session-size")
+
+	// A JSON string adds two quote bytes, so this is exactly at the limit.
+	atLimit := strings.Repeat("x", maxSelfNoteBytes-2)
+	if result := runSelfTool(tool, ctx, "set", "big", atLimit, true); result.IsError {
+		t.Fatalf("set note at the size limit: %s", result.ForLLM)
+	}
+	if result := runSelfTool(tool, ctx, "set", "big", atLimit+"x", true); !result.IsError {
+		t.Error("scratchpad accepted a value over the size limit")
+	}
+	longKey := strings.Repeat("k", maxSelfNoteKeyLen+1)
+	if result := runSelfTool(tool, ctx, "set", longKey, "v", true); !result.IsError {
+		t.Error("scratchpad accepted a key over the length limit")
+	}
+
+	for i := 0; i < maxSelfRuntimeKeys-1; i++ {
+		if result := runSelfTool(tool, ctx, "set", fmt.Sprintf("key-%d", i), i, true); result.IsError {
+			t.Fatalf("set key %d: %s", i, result.ForLLM)
+		}
+	}
+	if result := runSelfTool(tool, ctx, "set", "overflow", true, true); !result.IsError {
+		t.Fatal("scratchpad accepted more than 64 keys")
+	}
+	if result := runSelfTool(tool, ctx, "set", "big", nil, true); result.IsError {
+		t.Fatalf("delete note: %s", result.ForLLM)
+	}
+	if result := runSelfTool(tool, ctx, "check", "big", nil, false); !result.IsError {
+		t.Error("deleted note is still readable")
+	}
+	if result := runSelfTool(tool, ctx, "set", "overflow", true, true); result.IsError {
+		t.Errorf("delete did not free a scratchpad slot: %s", result.ForLLM)
+	}
+}
+
 func nestedSelfValue(depth int) any {
 	var value any = "leaf"
 	for range depth {
