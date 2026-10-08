@@ -424,7 +424,6 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("context canceled after registry creation: %w", err)
 	}
-	al.clearSessionModelOverrides()
 
 	// Ensure shared tools are re-registered on the new registry
 	registerSharedTools(al, cfg, al.bus, registry, provider)
@@ -464,6 +463,12 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	al.fallback = providers.NewFallbackChain(providers.NewCooldownTracker(), newRL)
 
 	al.mu.Unlock()
+	// Session presets hold providers built from the previous config, so they
+	// are released once the new config is in place, never for a failed reload.
+	if dropped := al.clearSessionModelOverrides(); dropped > 0 {
+		logger.WarnCF("agent", "Reload reset session model presets to the configured model",
+			map[string]any{"sessions": dropped})
+	}
 	al.refreshRuntimeEventLogger(cfg)
 
 	oldMCPManager := al.mcp.reset()

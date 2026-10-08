@@ -187,8 +187,11 @@ func (al *AgentLoop) clearSessionModelOverride(key sessionModelKey) {
 	}
 }
 
-func (al *AgentLoop) clearSessionModelOverrides() {
+// clearSessionModelOverrides drops every session's model_preset and returns how
+// many there were.
+func (al *AgentLoop) clearSessionModelOverrides() int {
 	al.sessionModelsMu.Lock()
+	dropped := len(al.sessionModels)
 	var closeOverrides []*sessionModelOverride
 	for key, override := range al.sessionModels {
 		delete(al.sessionModels, key)
@@ -200,6 +203,7 @@ func (al *AgentLoop) clearSessionModelOverrides() {
 	for _, override := range closeOverrides {
 		override.close()
 	}
+	return dropped
 }
 
 func retireSessionModelOverride(override *sessionModelOverride) bool {

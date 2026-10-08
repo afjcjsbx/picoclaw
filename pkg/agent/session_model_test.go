@@ -230,3 +230,34 @@ func TestClearCommandDropsSessionRuntimeState(t *testing.T) {
 		t.Errorf("/clear in session-a removed the scratchpad of session-b: %s", result.ForLLM)
 	}
 }
+
+func TestReloadResetsSessionModelPresetsOnlyWhenItSucceeds(t *testing.T) {
+	f := newSessionModelFixture(t)
+	key := sessionModelKey{agentID: f.baseAgent.ID, sessionKey: "session-a"}
+	if result := runSelfTool(
+		f.selfTool, f.turnContext("session-a"), "set", "model_preset", "remote", true,
+	); result.IsError {
+		t.Fatalf("set model_preset: %s", result.ForLLM)
+	}
+	cfg := f.al.GetConfig()
+	provider, _, err := providers.CreateProvider(cfg)
+	if err != nil {
+		t.Fatalf("CreateProvider(): %v", err)
+	}
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := f.al.ReloadProviderAndConfig(canceled, provider, cfg); err == nil {
+		t.Fatal("reload with a canceled context succeeded")
+	}
+	if f.al.sessionModel(key) == nil {
+		t.Fatal("a failed reload dropped the session model preset")
+	}
+
+	if err := f.al.ReloadProviderAndConfig(context.Background(), provider, cfg); err != nil {
+		t.Fatalf("ReloadProviderAndConfig(): %v", err)
+	}
+	if f.al.sessionModel(key) != nil {
+		t.Fatal("a successful reload kept a preset built from the previous config")
+	}
+}
