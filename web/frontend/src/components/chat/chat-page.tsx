@@ -782,7 +782,6 @@ export function ChatPage() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const dragDepthRef = useRef(0)
   const [isAtBottom, setIsAtBottom] = useState(true)
-  const [hasScrolled, setHasScrolled] = useState(false)
   const [input, setInput] = useState("")
   const [filePreviewPath, setFilePreviewPath] = useState("")
   const [filePreviewWidth, setFilePreviewWidth] = useState(420)
@@ -1131,7 +1130,6 @@ export function ChatPage() {
 
   const syncScrollState = (element: HTMLDivElement) => {
     const { clientHeight, scrollHeight, scrollTop } = element
-    setHasScrolled(scrollTop > 0)
     setIsAtBottom(scrollHeight - scrollTop <= clientHeight + 10)
   }
 

@@ -172,11 +172,15 @@
   .chat-scroll-fade {
     -webkit-mask-image: linear-gradient(
       to bottom,
+      transparent 0,
+      #000 2.25rem,
       #000 calc(100% - 2.25rem),
       transparent 100%
     );
     mask-image: linear-gradient(
       to bottom,
+      transparent 0,
+      #000 2.25rem,
       #000 calc(100% - 2.25rem),
       transparent 100%
     );
