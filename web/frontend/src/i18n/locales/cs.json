@@ -64,13 +64,6 @@
     "toolCallExplanationLabel": "Poznámka k volání",
     "toolCallFunctionLabel": "Shrnutí volání",
     "toolCallArgumentsLabel": "Argumenty",
-    "showAssistantDetails": "Zobrazit úvahy a volání nástrojů",
-    "assistantDetailVisibility": {
-      "none": "Skrýt oboje",
-      "thought": "Zobrazit jen úvahy",
-      "toolCalls": "Zobrazit jen volání nástrojů",
-      "all": "Zobrazit oboje"
-    },
     "toolLabel": "Nástroj",
     "codeLabel": "Kód",
     "copyMessage": "Kopírovat zprávu",

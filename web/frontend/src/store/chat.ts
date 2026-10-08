@@ -2,13 +2,6 @@ import { atom, getDefaultStore } from "jotai"
 import { atomWithStorage } from "jotai/utils"
 
 import {
-  ASSISTANT_DETAIL_VISIBILITY_STORAGE_KEY,
-  type AssistantDetailVisibility,
-  DEFAULT_ASSISTANT_DETAIL_VISIBILITY,
-  assistantDetailVisibilityStorage,
-  shouldShowAssistantMessage,
-} from "@/features/chat/detail-visibility"
-import {
   getInitialActiveSessionId,
   writeStoredSessionId,
 } from "@/features/chat/state"
@@ -123,16 +116,6 @@ const DEFAULT_CHAT_STATE: ChatStoreState = {
 }
 
 export const chatAtom = atom<ChatStoreState>(DEFAULT_CHAT_STATE)
-export const assistantDetailVisibilityAtom =
-  atomWithStorage<AssistantDetailVisibility>(
-    ASSISTANT_DETAIL_VISIBILITY_STORAGE_KEY,
-    DEFAULT_ASSISTANT_DETAIL_VISIBILITY,
-    assistantDetailVisibilityStorage,
-    { getOnInit: true },
-  )
-export const showAssistantDetailsAtom = atom(
-  (get) => get(assistantDetailVisibilityAtom) !== "none",
-)
 
 const store = getDefaultStore()
 
@@ -180,6 +163,3 @@ export function updateChatStore(
     return next
   })
 }
-
-export { shouldShowAssistantMessage, DEFAULT_ASSISTANT_DETAIL_VISIBILITY }
-export type { AssistantDetailVisibility }

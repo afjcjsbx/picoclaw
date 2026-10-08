@@ -54,13 +54,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import { loadSessionMessages } from "@/features/chat/history"
 import {
   CHAT_ATTACHMENT_ACCEPT,
@@ -75,7 +68,6 @@ import {
 import { useChatModels } from "@/hooks/use-chat-models"
 import { useGateway } from "@/hooks/use-gateway"
 import { usePicoChat } from "@/hooks/use-pico-chat"
-import type { AssistantDetailVisibility } from "@/store/chat"
 import type {
   ChatAttachment,
   ChatMessage,
@@ -85,9 +77,7 @@ import type {
   SplitSessionState,
 } from "@/store/chat"
 import {
-  assistantDetailVisibilityAtom,
   sessionTitlesAtom,
-  shouldShowAssistantMessage,
   splitConversationsAtom,
   splitLayoutSizesAtom,
   splitLayoutsAtom,
@@ -115,17 +105,22 @@ function AssistantActivityGroup({
   label,
   status,
   children,
+  isActive,
 }: {
   label: string
   status?: ReactNode
   children: ReactNode
+  isActive: boolean
 }) {
   const [open, setOpen] = useState(false)
+  useEffect(() => {
+    if (!isActive) setOpen(false)
+  }, [isActive])
   const hasDetails = Children.count(children) > 0
 
   return (
     <Collapsible
-      open={open}
+      open={isActive || open}
       onOpenChange={setOpen}
       className="group/activity w-full"
     >
@@ -777,26 +772,10 @@ export function ChatPage() {
   const [forkedFrom, setForkedFrom] = useState<string>()
   const [forkIndex, setForkIndex] = useState(0)
   const pendingReturnIndexRef = useRef<number | null>(null)
-  const [assistantDetailVisibility, setAssistantDetailVisibility] = useAtom(
-    assistantDetailVisibilityAtom,
-  )
   const [splitGroups, setSplitGroups] = useAtom(splitConversationsAtom)
   const [splitLayouts, setSplitLayouts] = useAtom(splitLayoutsAtom)
   const sessionTitles = useAtomValue(sessionTitlesAtom)
   const splitSessionStates = useAtomValue(splitSessionStatesAtom)
-
-  const assistantDetailVisibilityOptions: Array<{
-    value: AssistantDetailVisibility
-    label: string
-  }> = [
-    { value: "none", label: t("chat.assistantDetailVisibility.none") },
-    { value: "thought", label: t("chat.assistantDetailVisibility.thought") },
-    {
-      value: "tool_calls",
-      label: t("chat.assistantDetailVisibility.toolCalls"),
-    },
-    { value: "all", label: t("chat.assistantDetailVisibility.all") },
-  ]
 
   const {
     messages,
@@ -944,9 +923,7 @@ export function ChatPage() {
       }
     })
 
-    const visibleMessages = messagesToRender.filter(({ message }) =>
-      shouldShowAssistantMessage(assistantDetailVisibility, message.kind),
-    )
+    const visibleMessages = messagesToRender
     const lastUserIndex = visibleMessages.reduce(
       (lastIndex, { message }, index) =>
         message.role === "user" ? index : lastIndex,
@@ -1071,6 +1048,7 @@ export function ChatPage() {
             isStatusGroup ? `activity-${turnKey}` : `activity-${firstMessageId}`
           }
           label={item.label}
+          isActive={isStatusGroup && isTyping}
           status={
             isStatusGroup ? (
               <TypingIndicator
@@ -1340,32 +1318,6 @@ export function ChatPage() {
           >
             <IconPlus className="size-4" />
           </Button>
-        </div>
-        <div className="border-border/60 hidden items-center gap-2 rounded-lg border px-3 py-1.5 sm:flex">
-          <span className="text-muted-foreground text-sm">
-            {t("chat.showAssistantDetails")}
-          </span>
-          <Select
-            value={assistantDetailVisibility}
-            onValueChange={(value) =>
-              setAssistantDetailVisibility(value as AssistantDetailVisibility)
-            }
-          >
-            <SelectTrigger
-              size="sm"
-              aria-label={t("chat.showAssistantDetails")}
-              className="text-muted-foreground hover:text-foreground focus-visible:border-input h-8 min-w-[104px] bg-transparent shadow-none focus-visible:ring-0"
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent align="end">
-              {assistantDetailVisibilityOptions.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
         </div>
       </PageHeader>
 

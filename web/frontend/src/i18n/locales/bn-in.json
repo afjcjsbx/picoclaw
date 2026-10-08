@@ -64,13 +64,6 @@
     "toolCallExplanationLabel": "কল নোট",
     "toolCallFunctionLabel": "কল সারাংশ",
     "toolCallArgumentsLabel": "আর্গুমেন্ট",
-    "showAssistantDetails": "যুক্তি এবং টুল কল",
-    "assistantDetailVisibility": {
-      "none": "কোনোটিই দেখাবেন না",
-      "thought": "শুধু যুক্তি দেখান",
-      "toolCalls": "শুধু টুল কল দেখান",
-      "all": "উভয়ই দেখান"
-    },
     "toolLabel": "টুল",
     "codeLabel": "কোড",
     "copyMessage": "বার্তা কপি করুন",
