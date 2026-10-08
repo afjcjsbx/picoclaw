@@ -989,6 +989,17 @@ func TestDefaultConfig_MaxToolIterations(t *testing.T) {
 	}
 }
 
+func TestDefaultConfig_SelfToolDisabled(t *testing.T) {
+	cfg := DefaultConfig()
+
+	if cfg.Tools.IsToolEnabled("self") {
+		t.Error("self tool should be opt-in")
+	}
+	if cfg.Tools.Self.AllowSet {
+		t.Error("self tool writes should be opt-in")
+	}
+}
+
 // TestDefaultConfig_Temperature verifies temperature has default value
 func TestDefaultConfig_Temperature(t *testing.T) {
 	cfg := DefaultConfig()

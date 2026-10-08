@@ -39,11 +39,14 @@ See [Sensitive Data Filtering](../security/sensitive_data_filtering.md) for full
 
 ## Runtime self-inspection
 
-The `self` tool is enabled by default. It exposes a filtered view of the current
-agent and request, and keeps a temporary scratchpad per session (cleared by `/clear`). Writes are
-disabled by default; enabling `allow_set` permits scratchpad writes and changes
-to `max_iterations` (1–100). Like the scratchpad, a `max_iterations` change applies
-only to the session that made it, takes effect immediately, and is lost on restart.
+The `self` tool is disabled by default. When enabled, it exposes a filtered view
+of the current agent and request, including the workspace path and the web and
+exec settings, and keeps a temporary scratchpad per session (cleared by
+`/clear`). Writes are disabled by default; enabling `allow_set` permits
+scratchpad writes and two changes that apply only to the session that makes
+them: `max_iterations` (1–100, effective immediately) and `model_preset` (a
+configured model, effective from the next turn). Session changes are lost on
+restart.
 
 ```json
 {
