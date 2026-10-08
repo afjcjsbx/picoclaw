@@ -75,6 +75,7 @@
     "collapseCode": "Collapse code",
     "history": "History",
     "splitConversation": "Conversation {{number}}",
+    "activeSplitPane": "Active",
     "removeSplitPane": "Remove conversation from split",
     "resizeSplitPane": "Resize conversation panes",
     "paneLayout": "Pane layout",

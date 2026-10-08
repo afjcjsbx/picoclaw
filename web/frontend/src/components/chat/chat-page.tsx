@@ -615,6 +615,7 @@ function SplitConversationView({
             index={index}
             title={title}
             style={paneStyles[index]}
+            showActiveIndicator={sessions.length > 1}
             messages={paneMessages ?? []}
             historyStart={isActive ? activeHistoryStart : 0}
             isLoaded={
@@ -661,6 +662,7 @@ interface SplitConversationPaneProps {
   index: number
   title: string
   style?: React.CSSProperties
+  showActiveIndicator: boolean
   messages: ChatMessage[]
   historyStart: number
   isLoaded: boolean
@@ -680,6 +682,7 @@ function SplitConversationPane({
   index,
   title,
   style,
+  showActiveIndicator,
   messages,
   historyStart,
   isLoaded,
@@ -704,7 +707,11 @@ function SplitConversationPane({
 
   return (
     <section
-      aria-label={`${title}, ${index + 1}`}
+      aria-label={
+        isActive && showActiveIndicator
+          ? `${title}, ${index + 1}, ${t("chat.activeSplitPane", { defaultValue: "Active" })}`
+          : `${title}, ${index + 1}`
+      }
       tabIndex={0}
       style={style}
       onClick={(event) => {
@@ -728,10 +735,16 @@ function SplitConversationPane({
         aria-label={t("chat.removeSplitPane")}
         title={t("chat.removeSplitPane")}
         onClick={() => onRemove(sessionId)}
-        className="text-muted-foreground hover:text-foreground bg-background/85 absolute top-1 right-1 z-30 rounded p-1"
+        className="text-muted-foreground hover:text-foreground bg-background/85 absolute top-12 right-1 z-30 rounded p-1"
       >
         <IconX className="size-4" />
       </button>
+      {isActive && showActiveIndicator && (
+        <span
+          aria-hidden="true"
+          className="bg-foreground/35 pointer-events-none absolute bottom-3 left-1/2 z-20 h-[3px] w-9 -translate-x-1/2 rounded-full"
+        />
+      )}
       <div
         ref={scrollRef}
         data-session-scroll={sessionId}
@@ -742,7 +755,7 @@ function SplitConversationPane({
             element.scrollHeight - element.scrollTop <=
             element.clientHeight + 10
         }}
-        className="chat-scroll-fade min-h-0 flex-1 overflow-y-auto px-3 pt-4"
+        className="chat-scroll-fade min-h-0 flex-1 overflow-y-auto px-3"
       >
         {!isLoaded ? (
           <div className="text-muted-foreground py-6 text-center text-sm">
