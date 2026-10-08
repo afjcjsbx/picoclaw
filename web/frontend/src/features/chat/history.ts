@@ -6,6 +6,11 @@ import {
 } from "@/features/chat/tool-calls"
 import type { ChatAttachment, ChatMessage } from "@/store/chat"
 
+const pendingHistoryLoads = new Map<
+  string,
+  Promise<{ messages: ChatMessage[]; start: number; hasMore: boolean }>
+>()
+
 function toChatAttachments({
   media,
   attachments,
@@ -99,12 +104,15 @@ function stripUploadedFiles(content: string) {
   }
 }
 
-export async function loadSessionMessages(
+export function loadSessionMessages(
   sessionId: string,
   before?: number,
 ): Promise<{ messages: ChatMessage[]; start: number; hasMore: boolean }> {
-  const detail = await getSessionHistory(sessionId, before)
-  return {
+  const key = JSON.stringify([sessionId, before])
+  const pending = pendingHistoryLoads.get(key)
+  if (pending) return pending
+
+  const request = getSessionHistory(sessionId, before).then((detail) => ({
     messages: detail.messages.map((message, index) => {
       const uploadedFiles =
         message.role === "user"
@@ -135,7 +143,15 @@ export async function loadSessionMessages(
     }),
     start: detail.start,
     hasMore: detail.start > 0,
+  }))
+  pendingHistoryLoads.set(key, request)
+  const clearPending = () => {
+    if (pendingHistoryLoads.get(key) === request) {
+      pendingHistoryLoads.delete(key)
+    }
   }
+  void request.then(clearPending, clearPending)
+  return request
 }
 
 function normalizeMessageTimestamp(timestamp: number | string): string {

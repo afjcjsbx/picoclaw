@@ -76,6 +76,8 @@ export interface SplitSessionState {
   messages: ChatMessage[]
   isTyping: boolean
   contextUsage?: ContextUsage
+  historyStart: number
+  hasMoreHistory: boolean
 }
 
 export const splitConversationsAtom = atomWithStorage<string[][]>(
@@ -126,7 +128,12 @@ export function updateSplitSessionState(
     | ((prev: SplitSessionState) => Partial<SplitSessionState>),
 ) {
   store.set(splitSessionStatesAtom, (states) => {
-    const prev = states[sessionId] ?? { messages: [], isTyping: false }
+    const prev = states[sessionId] ?? {
+      messages: [],
+      isTyping: false,
+      historyStart: 0,
+      hasMoreHistory: false,
+    }
     const nextPatch = typeof patch === "function" ? patch(prev) : patch
     return { ...states, [sessionId]: { ...prev, ...nextPatch } }
   })
@@ -134,12 +141,20 @@ export function updateSplitSessionState(
 
 export function initializeSplitSessionState(
   sessionId: string,
-  messages: ChatMessage[],
+  history: { messages: ChatMessage[]; start: number; hasMore: boolean },
 ) {
   store.set(splitSessionStatesAtom, (states) =>
     sessionId in states
       ? states
-      : { ...states, [sessionId]: { messages, isTyping: false } },
+      : {
+          ...states,
+          [sessionId]: {
+            messages: history.messages,
+            isTyping: false,
+            historyStart: history.start,
+            hasMoreHistory: history.hasMore,
+          },
+        },
   )
 }
 

@@ -78,6 +78,7 @@ import type {
   SplitSessionState,
 } from "@/store/chat"
 import {
+  initializeSplitSessionState,
   sessionTitlesAtom,
   splitConversationsAtom,
   splitLayoutSizesAtom,
@@ -563,6 +564,7 @@ function SplitConversationView({
           ) {
             return
           }
+          initializeSplitSessionState(sessionId, page)
           setHistory((current) => ({ ...current, [sessionId]: page.messages }))
         })
         .catch((error) => {
@@ -1140,6 +1142,7 @@ export function ChatPage() {
   }
 
   useEffect(() => {
+    if (activeSplitGroup) return
     const activeScroller = getActiveScroller()
     if (activeScroller) {
       if (isAtBottom) {
@@ -1147,7 +1150,7 @@ export function ChatPage() {
       }
       syncScrollState(activeScroller)
     }
-  }, [messages, isTyping, isAtBottom, getActiveScroller])
+  }, [messages, isTyping, isAtBottom, activeSplitGroup, getActiveScroller])
 
   const handleSend = () => {
     if ((!input.trim() && attachments.length === 0) || !canInput) return
