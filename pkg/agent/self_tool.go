@@ -435,6 +435,11 @@ var selfSensitiveParts = []string{
 }
 
 func validateSelfPath(path string) error {
+	// Runtime keys are fixed and harmless; "context_window_tokens" would
+	// otherwise match the "token" credential filter.
+	if isSelfRuntimeKey(path) {
+		return nil
+	}
 	for _, part := range strings.Split(path, ".") {
 		lower := strings.ToLower(part)
 		if part == "" || strings.HasPrefix(part, "__") || strings.HasSuffix(part, "__") {

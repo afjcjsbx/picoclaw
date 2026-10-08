@@ -135,6 +135,28 @@ func TestSelfToolRuntimeSetValidatesIterations(t *testing.T) {
 	}
 }
 
+func TestSelfToolContextWindowTokensIsNotSensitive(t *testing.T) {
+	runtime := &selfToolTestRuntime{view: map[string]any{"context_window_tokens": 32768}}
+	tool := NewSelfTool(runtime, true)
+	ctx := selfTestContext("session-1")
+
+	if result := runSelfTool(tool, ctx, "check", "context_window_tokens", nil, false); result.IsError ||
+		result.ForLLM != "32768" {
+		t.Fatalf("check context_window_tokens = %q (error=%v), want 32768", result.ForLLM, result.IsError)
+	}
+	if result := runSelfTool(tool, ctx, "set", "context_window_tokens", float64(65536), true); result.IsError {
+		t.Fatalf("set context_window_tokens: %s", result.ForLLM)
+	}
+	if runtime.setKey != "context_window_tokens" || runtime.setValue != float64(65536) {
+		t.Fatalf("runtime.Set got %q=%v, want context_window_tokens=65536", runtime.setKey, runtime.setValue)
+	}
+	for _, key := range []string{"access_token", "refresh_token", "context_window_tokens.api_key"} {
+		if result := runSelfTool(tool, ctx, "check", key, nil, false); !result.IsError {
+			t.Errorf("check %q was allowed", key)
+		}
+	}
+}
+
 func TestSelfToolScratchpadKeyLimit(t *testing.T) {
 	tool := NewSelfTool(&selfToolTestRuntime{view: map[string]any{}}, true)
 	ctx := selfTestContext("session-limit")
