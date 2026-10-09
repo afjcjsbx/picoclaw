@@ -25,6 +25,9 @@ const (
 	// maxEphemeralHistorySize limits the number of messages stored in ephemeral sessions.
 	// This prevents memory accumulation in long-running sub-turns.
 	maxEphemeralHistorySize = 50
+	// subTurnPendingResultsBuffer is the buffer size of the per-turn SubTurn
+	// result channel used to deliver async SubTurn results back to their parent.
+	subTurnPendingResultsBuffer = 16
 )
 
 var (
@@ -412,7 +415,7 @@ func spawnSubTurn(
 	childTS.depth = parentTS.depth + 1
 	childTS.parentTurnID = parentTS.turnID
 	childTS.parentTurnState = parentTS
-	childTS.pendingResults = make(chan *tools.ToolResult, 16)
+	childTS.pendingResults = make(chan *tools.ToolResult, subTurnPendingResultsBuffer)
 	childTS.concurrencySem = make(chan struct{}, rtCfg.maxConcurrent)
 	childTS.al = al                  // back-ref for hard abort cascade
 	childTS.session = ephemeralStore // same store as agent.Sessions

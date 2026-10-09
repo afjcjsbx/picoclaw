@@ -453,6 +453,80 @@ func TestSubTurnConcurrencySemaphore(t *testing.T) {
 	}
 }
 
+// turnStateProbeProvider captures the turnState injected into the provider
+// context during an agent loop run.
+type turnStateProbeProvider struct {
+	response string
+	mu       sync.Mutex
+	ts       *turnState
+}
+
+func (p *turnStateProbeProvider) Chat(
+	ctx context.Context,
+	_ []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	p.mu.Lock()
+	p.ts = turnStateFromContext(ctx)
+	p.mu.Unlock()
+	return &providers.LLMResponse{Content: p.response}, nil
+}
+
+func (p *turnStateProbeProvider) GetDefaultModel() string { return "gpt-4o-mini" }
+
+func (p *turnStateProbeProvider) turnState() *turnState {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.ts
+}
+
+// TestRunAgentLoop_InitializesSubTurnChannels verifies that production root turns
+// own a SubTurn result channel and a concurrency semaphore, so that the
+// concurrency limit and async result delivery also work for root turns.
+func TestRunAgentLoop_InitializesSubTurnChannels(t *testing.T) {
+	probe := &turnStateProbeProvider{response: "ok"}
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         t.TempDir(),
+				ModelName:         "gpt-4o-mini",
+				Provider:          "mock",
+				MaxTokens:         1024,
+				MaxToolIterations: 2,
+			},
+		},
+	}
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), probe)
+	agent := al.registry.GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("expected default agent")
+	}
+
+	if _, err := al.runAgentLoop(context.Background(), agent, processOptions{
+		Dispatch:        DispatchRequest{SessionKey: "root-session", UserMessage: "hello"},
+		DefaultResponse: defaultResponse,
+	}); err != nil {
+		t.Fatalf("runAgentLoop() error = %v", err)
+	}
+
+	ts := probe.turnState()
+	if ts == nil {
+		t.Fatal("provider did not observe a turn state in context")
+	}
+	if ts.pendingResults == nil {
+		t.Error("root turn pendingResults channel is nil")
+	} else if cap(ts.pendingResults) != subTurnPendingResultsBuffer {
+		t.Errorf("pendingResults cap = %d, want %d", cap(ts.pendingResults), subTurnPendingResultsBuffer)
+	}
+	if ts.concurrencySem == nil {
+		t.Error("root turn concurrencySem is nil")
+	} else if cap(ts.concurrencySem) != defaultMaxConcurrentSubTurns {
+		t.Errorf("concurrencySem cap = %d, want %d", cap(ts.concurrencySem), defaultMaxConcurrentSubTurns)
+	}
+}
+
 // ====================== Extra Independent Test: Hard Abort Cascading ======================
 func TestHardAbortCascading(t *testing.T) {
 	al, _, _, provider, cleanup := newTestAgentLoop(t)
