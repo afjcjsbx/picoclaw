@@ -34,7 +34,9 @@ type Engine interface {
 	Checkpoint(ctx context.Context, truncate bool) error
 }
 
-// Store is the subset of the session store used for pruning.
+// Store is the subset of a session store used for pruning. Each agent owns its
+// own store (workspace/sessions), so a prune pass receives every store and
+// deletes a session from whichever stores list it.
 type Store interface {
 	ListSessions() []string
 	DeleteSession(key string) error
@@ -136,11 +138,38 @@ func Select(infos []Info, cfg config.SessionPruneConfig, now time.Time) []string
 	return out
 }
 
+// owners maps a session key to every store that lists it.
+type owners map[string][]Store
+
+// indexOwners builds the key -> stores index from the given stores. Nil stores
+// and duplicate store instances are ignored.
+func indexOwners(stores []Store) owners {
+	idx := make(owners)
+	seen := make(map[Store]struct{}, len(stores))
+	for _, store := range stores {
+		if store == nil {
+			continue
+		}
+		if _, dup := seen[store]; dup {
+			continue
+		}
+		seen[store] = struct{}{}
+		for _, key := range store.ListSessions() {
+			idx[key] = append(idx[key], store)
+		}
+	}
+	return idx
+}
+
 // Run executes one prune pass: it applies the age and session-count thresholds,
 // then enforces the database-size guard by deleting the oldest remaining
 // sessions until the database fits (or nothing is left to delete). When Vacuum
 // is enabled the database is vacuumed after deletions to reclaim space.
-func Run(ctx context.Context, eng Engine, store Store, cfg config.SessionPruneConfig) Result {
+//
+// The seahorse database is shared by every agent while each agent has its own
+// session store, so stores must contain the store of every agent. A session is
+// deleted from the seahorse database and from each store that lists it.
+func Run(ctx context.Context, eng Engine, stores []Store, cfg config.SessionPruneConfig) Result {
 	var result Result
 	if !cfg.Enabled || eng == nil {
 		return result
@@ -151,12 +180,13 @@ func Run(ctx context.Context, eng Engine, store Store, cfg config.SessionPruneCo
 
 	result.DBBytesBefore, _ = eng.DBFileSize()
 
-	infos := collectInfos(ctx, eng, store)
+	idx := indexOwners(stores)
+	infos := collectInfos(ctx, eng, idx)
 	toDelete := Select(infos, cfg, time.Now())
 
 	deleted := 0
 	for _, key := range toDelete {
-		if deleteSession(ctx, eng, store, key) {
+		if deleteSession(ctx, eng, idx, key) {
 			result.Deleted = append(result.Deleted, key)
 			deleted++
 		}
@@ -167,7 +197,7 @@ func Run(ctx context.Context, eng Engine, store Store, cfg config.SessionPruneCo
 	}
 
 	if cfg.MaxDBSizeMB > 0 {
-		deleted += enforceDBSize(ctx, eng, store, cfg, &result)
+		deleted += enforceDBSize(ctx, eng, idx, cfg, &result)
 	}
 
 	if deleted > 0 {
@@ -197,7 +227,7 @@ func Run(ctx context.Context, eng Engine, store Store, cfg config.SessionPruneCo
 func enforceDBSize(
 	ctx context.Context,
 	eng Engine,
-	store Store,
+	idx owners,
 	cfg config.SessionPruneConfig,
 	result *Result,
 ) int {
@@ -235,7 +265,7 @@ func enforceDBSize(
 			if oldest == "" {
 				break
 			}
-			if !deleteSession(ctx, eng, store, oldest) {
+			if !deleteSession(ctx, eng, idx, oldest) {
 				break
 			}
 			result.Deleted = append(result.Deleted, oldest)
@@ -269,7 +299,7 @@ func reclaim(ctx context.Context, eng Engine, cfg config.SessionPruneConfig) {
 	}
 }
 
-func collectInfos(ctx context.Context, eng Engine, store Store) []Info {
+func collectInfos(ctx context.Context, eng Engine, idx owners) []Info {
 	statuses, err := eng.SessionStatuses(ctx)
 	if err != nil {
 		logger.WarnCF("session-prune", "Failed to list seahorse sessions", map[string]any{"error": err.Error()})
@@ -290,13 +320,16 @@ func collectInfos(ctx context.Context, eng Engine, store Store) []Info {
 	// Include sessions that exist only as JSONL files (not yet bootstrapped
 	// into seahorse). Their timestamps are unknown, so the count cap treats
 	// them as oldest; age-based deletion leaves them untouched.
-	if store != nil {
-		for _, key := range store.ListSessions() {
-			if _, ok := known[key]; ok {
-				continue
-			}
-			infos = append(infos, Info{Key: key})
+	keys := make([]string, 0, len(idx))
+	for key := range idx {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if _, ok := known[key]; ok {
+			continue
 		}
+		infos = append(infos, Info{Key: key})
 	}
 	return infos
 }
@@ -336,7 +369,7 @@ func oldestSessionKey(statuses []seahorse.SessionStatus) string {
 	return oldest.SessionKey
 }
 
-func deleteSession(ctx context.Context, eng Engine, store Store, key string) bool {
+func deleteSession(ctx context.Context, eng Engine, idx owners, key string) bool {
 	if key == "" {
 		return false
 	}
@@ -349,7 +382,7 @@ func deleteSession(ctx context.Context, eng Engine, store Store, key string) boo
 	} else {
 		ok = true
 	}
-	if store != nil {
+	for _, store := range idx[key] {
 		if err := store.DeleteSession(key); err != nil {
 			logger.WarnCF("session-prune", "Failed to delete session store files", map[string]any{
 				"session": key,

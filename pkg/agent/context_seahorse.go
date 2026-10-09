@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/config"
@@ -60,12 +61,11 @@ func newSeahorseContextManager(_ json.RawMessage, al *AgentLoop) (ContextManager
 	if al.cfg != nil {
 		pruneCfg := al.cfg.Session.Prune
 		if pruneCfg.Enabled && pruneCfg.IsActive() {
-			pstore := asPruneStore(agent.Sessions)
-			pruner.Run(context.Background(), engine, pstore, pruneCfg)
+			pruner.Run(context.Background(), engine, mgr.pruneStores(), pruneCfg)
 
 			pruneCtx, cancel := context.WithCancel(context.Background())
 			mgr.stopPrune = cancel
-			go runPruneLoop(pruneCtx, engine, pstore, pruneCfg)
+			go runPruneLoop(pruneCtx, engine, mgr.pruneStores, pruneCfg)
 		}
 	}
 
@@ -97,11 +97,42 @@ func asPruneStore(store session.SessionStore) pruner.Store {
 	return nil
 }
 
+// pruneStores returns the session store of every agent. The seahorse database
+// is shared, but each agent keeps its own JSONL store, so pruning must reach
+// all of them or routed agents would lose their seahorse context while their
+// JSONL history stays behind. The registry is re-read on every call so agents
+// added after startup are covered.
+func (m *seahorseContextManager) pruneStores() []pruner.Store {
+	var stores []pruner.Store
+	add := func(store session.SessionStore) {
+		if ps := asPruneStore(store); ps != nil {
+			stores = append(stores, ps)
+		}
+	}
+	add(m.sessions)
+	if m.al == nil {
+		return stores
+	}
+	registry := m.al.GetRegistry()
+	if registry == nil {
+		return stores
+	}
+	ids := registry.ListAgentIDs()
+	sort.Strings(ids)
+	for _, id := range ids {
+		if agent, ok := registry.GetAgent(id); ok && agent != nil {
+			add(agent.Sessions)
+		}
+	}
+	return stores
+}
+
 // runPruneLoop periodically prunes old sessions until ctx is canceled.
+// stores is evaluated on every pass.
 func runPruneLoop(
 	ctx context.Context,
 	engine *seahorse.Engine,
-	store pruner.Store,
+	stores func() []pruner.Store,
 	cfg config.SessionPruneConfig,
 ) {
 	interval := time.Duration(cfg.EffectiveCheckIntervalMinutes()) * time.Minute
@@ -116,7 +147,7 @@ func runPruneLoop(
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			pruner.Run(ctx, engine, store, cfg)
+			pruner.Run(ctx, engine, stores(), cfg)
 		}
 	}
 }

@@ -93,7 +93,7 @@ func TestRunAppliesAgeCountAndVacuum(t *testing.T) {
 	}
 	store := newFakeStore("a", "b", "c")
 
-	res := Run(context.Background(), eng, store, config.SessionPruneConfig{
+	res := Run(context.Background(), eng, []Store{store}, config.SessionPruneConfig{
 		Enabled:     true,
 		MaxAgeDays:  30,
 		MaxSessions: 2,
@@ -130,7 +130,7 @@ func TestRunEnforcesDBSize(t *testing.T) {
 	}
 	store := newFakeStore("s1", "s2", "s3", "s4", "s5")
 
-	res := Run(context.Background(), eng, store, config.SessionPruneConfig{
+	res := Run(context.Background(), eng, []Store{store}, config.SessionPruneConfig{
 		Enabled:     true,
 		MaxDBSizeMB: 2,
 		Vacuum:      boolPtr(true),
@@ -145,12 +145,70 @@ func TestRunEnforcesDBSize(t *testing.T) {
 	}
 }
 
+// TestRunDeletesFromOwningStore covers multi-agent setups: the seahorse DB is
+// shared but every agent has its own session store, so a session must be
+// removed from the store that owns it and other stores left untouched.
+func TestRunDeletesFromOwningStore(t *testing.T) {
+	now := time.Now()
+	eng := newFakeEngine(1 << 20)
+	eng.statuses = []seahorse.SessionStatus{
+		{SessionKey: "main-old", NewestAt: now.Add(-100 * 24 * time.Hour)},
+		{SessionKey: "other-old", NewestAt: now.Add(-90 * 24 * time.Hour)},
+		{SessionKey: "other-new", NewestAt: now.Add(-time.Hour)},
+	}
+	mainStore := newFakeStore("main-old")
+	otherStore := newFakeStore("other-old", "other-new")
+
+	res := Run(context.Background(), eng, []Store{mainStore, otherStore}, config.SessionPruneConfig{
+		Enabled:    true,
+		MaxAgeDays: 30,
+	})
+
+	if len(res.Deleted) != 2 {
+		t.Fatalf("Deleted = %v, want main-old and other-old", res.Deleted)
+	}
+	if !contains(mainStore.deleted, "main-old") {
+		t.Fatalf("main store deleted = %v, want main-old", mainStore.deleted)
+	}
+	if !contains(otherStore.deleted, "other-old") {
+		t.Fatalf("other store deleted = %v, want other-old", otherStore.deleted)
+	}
+	if contains(mainStore.deleted, "other-old") || contains(otherStore.deleted, "main-old") {
+		t.Fatalf("session deleted from a store that does not own it: main=%v other=%v",
+			mainStore.deleted, otherStore.deleted)
+	}
+	if got := otherStore.ListSessions(); !reflect.DeepEqual(got, []string{"other-new"}) {
+		t.Fatalf("other store sessions = %v, want [other-new]", got)
+	}
+}
+
+func TestRunIgnoresNilAndDuplicateStores(t *testing.T) {
+	now := time.Now()
+	eng := newFakeEngine(1 << 20)
+	eng.statuses = []seahorse.SessionStatus{
+		{SessionKey: "old", NewestAt: now.Add(-100 * 24 * time.Hour)},
+		{SessionKey: "new", NewestAt: now.Add(-time.Hour)},
+	}
+	store := newFakeStore("old", "new")
+
+	res := Run(context.Background(), eng, []Store{nil, store, store}, config.SessionPruneConfig{
+		Enabled:    true,
+		MaxAgeDays: 30,
+	})
+	if len(res.Deleted) != 1 || res.Deleted[0] != "old" {
+		t.Fatalf("Deleted = %v, want [old]", res.Deleted)
+	}
+	if len(store.deleted) != 1 {
+		t.Fatalf("duplicate store deleted %d times, want 1: %v", len(store.deleted), store.deleted)
+	}
+}
+
 func TestRunNoopWhenDisabled(t *testing.T) {
 	eng := newFakeEngine(1 << 20)
 	eng.statuses = []seahorse.SessionStatus{{SessionKey: "a", NewestAt: time.Now().Add(-1000 * time.Hour)}}
 	store := newFakeStore("a")
 
-	res := Run(context.Background(), eng, store, config.SessionPruneConfig{
+	res := Run(context.Background(), eng, []Store{store}, config.SessionPruneConfig{
 		Enabled:    false,
 		MaxAgeDays: 1,
 	})
