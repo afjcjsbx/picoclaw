@@ -489,12 +489,13 @@ func (f *fixedTranscriber) Transcribe(ctx context.Context, audioFilePath string)
 }
 
 type blockingDirectProvider struct {
-	mu           sync.Mutex
-	calls        int
-	firstStarted chan struct{}
-	releaseFirst chan struct{}
-	firstResp    string
-	finalResp    string
+	mu                 sync.Mutex
+	calls              int
+	firstStarted       chan struct{}
+	releaseFirst       chan struct{}
+	firstResp          string
+	finalResp          string
+	secondCallMessages []providers.Message
 }
 
 func (p *blockingDirectProvider) Chat(
@@ -526,6 +527,9 @@ func (p *blockingDirectProvider) Chat(
 		return &providers.LLMResponse{Content: firstResp}, nil
 	}
 
+	p.mu.Lock()
+	p.secondCallMessages = append([]providers.Message(nil), messages...)
+	p.mu.Unlock()
 	_ = firstStarted
 	return &providers.LLMResponse{Content: finalResp}, nil
 }
@@ -1224,9 +1228,20 @@ func TestAgentLoop_Steering_DirectResponseContinuesWithQueuedMessage(t *testing.
 
 	provider.mu.Lock()
 	calls := provider.calls
+	secondMessages := append([]providers.Message(nil), provider.secondCallMessages...)
 	provider.mu.Unlock()
 	if calls != 2 {
 		t.Fatalf("expected 2 provider calls, got %d", calls)
+	}
+
+	injectedCount := 0
+	for _, msg := range secondMessages {
+		if msg.Role == "user" && msg.Content == "follow-up instruction" {
+			injectedCount++
+		}
+	}
+	if injectedCount != 1 {
+		t.Fatalf("expected steering message injected exactly once, got %d", injectedCount)
 	}
 
 	if msgs := al.dequeueSteeringMessagesForScope(sessionKey); len(msgs) != 0 {
