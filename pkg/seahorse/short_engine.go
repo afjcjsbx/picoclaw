@@ -98,6 +98,23 @@ func (r *RetrievalEngine) Store() *Store {
 	return r.store
 }
 
+// sqliteBusyTimeoutMS is how long a connection waits for a lock before failing
+// with SQLITE_BUSY.
+const sqliteBusyTimeoutMS = 5000
+
+// sqliteDSN returns the driver DSN for path with the per-connection settings
+// every pooled connection must have. database/sql opens connections lazily and
+// recycles them, so running "PRAGMA busy_timeout" once via db.Exec only
+// configures a single connection and leaves the others failing immediately with
+// SQLITE_BUSY while a long write (such as a pruning VACUUM) holds the lock.
+func sqliteDSN(path string) string {
+	sep := "?"
+	if strings.Contains(path, "?") {
+		sep = "&"
+	}
+	return fmt.Sprintf("%s%s_busy_timeout=%d&_pragma=synchronous(NORMAL)", path, sep, sqliteBusyTimeoutMS)
+}
+
 // NewEngine creates a new short-term memory engine.
 func NewEngine(config Config, completeFn CompleteFn) (*Engine, error) {
 	dir := filepath.Dir(config.DBPath)
@@ -107,23 +124,17 @@ func NewEngine(config Config, completeFn CompleteFn) (*Engine, error) {
 		}
 	}
 
-	db, err := sql.Open("sqlite", config.DBPath)
+	db, err := sql.Open("sqlite", sqliteDSN(config.DBPath))
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
 
-	// Configure SQLite for concurrent access
+	// journal_mode is stored in the database file, so setting it once is
+	// enough. busy_timeout and synchronous are per-connection settings and
+	// are applied to every pooled connection through the DSN (see sqliteDSN).
 	if _, err := db.Exec("PRAGMA journal_mode = WAL;"); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("enable WAL: %w", err)
-	}
-	if _, err := db.Exec("PRAGMA busy_timeout = 5000;"); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("set busy_timeout: %w", err)
-	}
-	if _, err := db.Exec("PRAGMA synchronous = NORMAL;"); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("set synchronous: %w", err)
 	}
 
 	if err := runSchema(db); err != nil {
@@ -457,6 +468,12 @@ func (e *Engine) DBFileSize() (int64, error) {
 // Vacuum reclaims unused disk space in the underlying SQLite database.
 func (e *Engine) Vacuum(ctx context.Context) error {
 	return e.store.Vacuum(ctx)
+}
+
+// ReclaimableBytes reports how much of the database file is free space that a
+// Vacuum would return to the filesystem.
+func (e *Engine) ReclaimableBytes(ctx context.Context) (int64, error) {
+	return e.store.ReclaimableBytes(ctx)
 }
 
 // Checkpoint folds the write-ahead log into the database file. When truncate is

@@ -931,6 +931,19 @@ func (s *Store) Vacuum(ctx context.Context) error {
 	return err
 }
 
+// ReclaimableBytes returns the size of the free pages inside the database file,
+// i.e. the space a VACUUM would give back to the filesystem.
+func (s *Store) ReclaimableBytes(ctx context.Context) (int64, error) {
+	var freePages, pageSize int64
+	if err := s.db.QueryRowContext(ctx, "PRAGMA freelist_count").Scan(&freePages); err != nil {
+		return 0, fmt.Errorf("freelist_count: %w", err)
+	}
+	if err := s.db.QueryRowContext(ctx, "PRAGMA page_size").Scan(&pageSize); err != nil {
+		return 0, fmt.Errorf("page_size: %w", err)
+	}
+	return freePages * pageSize, nil
+}
+
 // CheckpointWAL folds the write-ahead log back into the main database file.
 // Pass truncate=true to also shrink the -wal file to zero bytes.
 func (s *Store) CheckpointWAL(ctx context.Context, truncate bool) error {

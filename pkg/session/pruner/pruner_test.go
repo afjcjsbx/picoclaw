@@ -2,6 +2,8 @@ package pruner
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"reflect"
 	"sort"
 	"testing"
@@ -293,6 +295,82 @@ func TestRunSizeGuardSkipsAlreadyPrunedSessions(t *testing.T) {
 	}
 }
 
+func TestRunSkipsVacuumWhenLittleReclaimable(t *testing.T) {
+	now := time.Now()
+	const mb = 1 << 20
+	// 40 sessions of 1 MiB: removing one frees 1 MiB, only 2.5% of the file.
+	eng := newFakeEngine(mb)
+	for i := 0; i < 40; i++ {
+		key := fmt.Sprintf("s%02d", i)
+		eng.statuses = append(eng.statuses, seahorse.SessionStatus{
+			SessionKey: key,
+			NewestAt:   now.Add(-time.Duration(i) * time.Hour),
+		})
+	}
+	store := newFakeStore()
+
+	res := Run(context.Background(), eng, []Store{store}, config.SessionPruneConfig{
+		Enabled:     true,
+		MaxSessions: 39,
+	})
+	if len(res.Deleted) != 1 {
+		t.Fatalf("Deleted = %v, want exactly one session", res.Deleted)
+	}
+	if eng.vacuumCount != 0 {
+		t.Fatalf("VACUUM ran %d times for a negligible reclaim, want 0", eng.vacuumCount)
+	}
+	if eng.checkpointCount == 0 {
+		t.Fatal("expected a WAL checkpoint instead of VACUUM")
+	}
+}
+
+func TestRunVacuumsWhenReclaimIsLarge(t *testing.T) {
+	now := time.Now()
+	const mb = 1 << 20
+	eng := newFakeEngine(mb)
+	eng.statuses = []seahorse.SessionStatus{
+		{SessionKey: "old1", NewestAt: now.Add(-100 * 24 * time.Hour)},
+		{SessionKey: "old2", NewestAt: now.Add(-90 * 24 * time.Hour)},
+		{SessionKey: "new", NewestAt: now.Add(-time.Hour)},
+	}
+
+	Run(context.Background(), eng, nil, config.SessionPruneConfig{Enabled: true, MaxAgeDays: 30})
+	if eng.vacuumCount != 1 {
+		t.Fatalf("VACUUM ran %d times, want exactly 1 (no redundant second vacuum)", eng.vacuumCount)
+	}
+}
+
+func TestRunVacuumsWhenReclaimableUnknown(t *testing.T) {
+	now := time.Now()
+	eng := newFakeEngine(1 << 20)
+	eng.reclaimableErr = errors.New("boom")
+	eng.statuses = []seahorse.SessionStatus{
+		{SessionKey: "old", NewestAt: now.Add(-100 * 24 * time.Hour)},
+		{SessionKey: "new", NewestAt: now.Add(-time.Hour)},
+	}
+	Run(context.Background(), eng, nil, config.SessionPruneConfig{Enabled: true, MaxAgeDays: 30})
+	if eng.vacuumCount == 0 {
+		t.Fatal("expected VACUUM when reclaimable size is unknown")
+	}
+}
+
+func TestRunStopsWhenContextCanceled(t *testing.T) {
+	now := time.Now()
+	eng := newFakeEngine(1 << 20)
+	eng.statuses = []seahorse.SessionStatus{
+		{SessionKey: "old1", NewestAt: now.Add(-100 * 24 * time.Hour)},
+		{SessionKey: "old2", NewestAt: now.Add(-90 * 24 * time.Hour)},
+		{SessionKey: "new", NewestAt: now.Add(-time.Hour)},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	res := Run(ctx, eng, nil, config.SessionPruneConfig{Enabled: true, MaxAgeDays: 30})
+	if len(res.Deleted) != 0 {
+		t.Fatalf("canceled context still deleted %v", res.Deleted)
+	}
+}
+
 func TestRunNoopWhenDisabled(t *testing.T) {
 	eng := newFakeEngine(1 << 20)
 	eng.statuses = []seahorse.SessionStatus{{SessionKey: "a", NewestAt: time.Now().Add(-1000 * time.Hour)}}
@@ -315,6 +393,10 @@ type fakeEngine struct {
 	deleted         []string
 	vacuumCount     int
 	checkpointCount int
+	// freed is the space released by deletions that no VACUUM has reclaimed yet.
+	freed int64
+	// reclaimableErr, when set, is returned by ReclaimableBytes.
+	reclaimableErr error
 }
 
 func newFakeEngine(perSessionBytes int64) *fakeEngine {
@@ -332,6 +414,7 @@ func (f *fakeEngine) DeleteSession(_ context.Context, sessionKey string) error {
 		if s.SessionKey == sessionKey {
 			f.statuses = append(f.statuses[:i], f.statuses[i+1:]...)
 			f.deleted = append(f.deleted, sessionKey)
+			f.freed += f.perSessionBytes
 			return nil
 		}
 	}
@@ -344,7 +427,12 @@ func (f *fakeEngine) DBFileSize() (int64, error) {
 
 func (f *fakeEngine) Vacuum(context.Context) error {
 	f.vacuumCount++
+	f.freed = 0
 	return nil
+}
+
+func (f *fakeEngine) ReclaimableBytes(context.Context) (int64, error) {
+	return f.freed, f.reclaimableErr
 }
 
 func (f *fakeEngine) Checkpoint(context.Context, bool) error {
