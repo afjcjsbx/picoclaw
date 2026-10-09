@@ -175,7 +175,9 @@ signs:
     cmd: minisign
     artifacts: checksum
     signature: "${artifact}.minisig"
-    stdin: '{{ .Env.MINISIGN_PASSWORD }}'
+    # minisign reads the password with ReadString('\n') and fails on EOF, so
+    # the workflows write the secret to a file and point stdin_file at it.
+    stdin_file: "{{ .Env.MINISIGN_PASSWORD_FILE }}"
     args:
       - -S
       - -s
