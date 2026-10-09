@@ -19,6 +19,67 @@ import (
 	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
 )
 
+func TestOpenAIProviderUsesResponsesAPI(t *testing.T) {
+	var requestBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/chat/completions" {
+			_, _ = fmt.Fprint(w, `{"choices":[{"message":{"content":"compat"},"finish_reason":"stop"}]}`)
+			return
+		}
+		if r.URL.Path != "/responses" {
+			http.Error(w, "wrong endpoint", http.StatusNotFound)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		response := `{"id":"resp_1","object":"response","status":"completed","output":[{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"output_text","text":"ok","annotations":[]}]}]}`
+		if requestBody["stream"] == true {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = fmt.Fprint(w, "event: response.output_text.delta\n"+
+				"data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\n")
+			_, _ = fmt.Fprintf(w, "event: response.completed\n"+
+				"data: {\"type\":\"response.completed\",\"response\":%s}\n\n", response)
+			return
+		}
+		_, _ = fmt.Fprint(w, response)
+	}))
+	defer server.Close()
+
+	p := NewProvider("key", server.URL, "")
+	p.SetProviderName("openai")
+	messages := []Message{{Role: "system", Content: "system prompt"}, {Role: "user", Content: "hello"}}
+	result, err := p.responsesChat(t.Context(), messages, nil, "gpt-test", map[string]any{"max_tokens": 12})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Content != "ok" ||
+		requestBody["instructions"] != "system prompt" ||
+		requestBody["max_output_tokens"] != float64(12) {
+		t.Fatalf("response/request = %#v / %#v", result, requestBody)
+	}
+
+	var streamed string
+	result, err = p.responsesStream(t.Context(), messages, nil, "gpt-test", nil, func(chunk StreamChunk) {
+		streamed = chunk.Content
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Content != "ok" || streamed != "ok" || requestBody["stream"] != true {
+		t.Fatalf("stream response/request = %#v / %#v, delta=%q", result, requestBody, streamed)
+	}
+
+	result, err = p.Chat(t.Context(), messages, nil, "deepseek/deepseek-r1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Content != "compat" {
+		t.Fatalf("custom API base response = %#v, want Chat Completions", result)
+	}
+}
+
 func TestProviderChat_UsesMaxCompletionTokensForGLM(t *testing.T) {
 	var requestBody map[string]any
 
