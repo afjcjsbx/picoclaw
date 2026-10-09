@@ -24,7 +24,6 @@ type CronSchedule struct {
 }
 
 type CronPayload struct {
-	Kind    string `json:"kind"`
 	Message string `json:"message"`
 	Command string `json:"command,omitempty"`
 	Channel string `json:"channel,omitempty"`
@@ -424,7 +423,6 @@ func (cs *CronService) AddJob(
 		Enabled:  true,
 		Schedule: schedule,
 		Payload: CronPayload{
-			Kind:    "agent_turn",
 			Message: message,
 			Channel: channel,
 			To:      to,
