@@ -61,7 +61,6 @@ type Runtime struct {
 	VoiceMode          string
 	SetVoiceMode       func(mode string) error
 	GetModelInfo       func() (name, provider string)
-	AskSideQuestion    func(ctx context.Context, question string) (string, error)
 	ListAgentIDs       func() []string
 	ListDefinitions    func() []Definition
 	ListSkillNames     func() []string

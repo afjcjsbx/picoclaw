@@ -677,24 +677,12 @@ func (al *AgentLoop) runAgentLoop(
 // Counts Content, ToolCalls arguments, and ToolCallID metadata so that
 // tool-heavy conversations are not systematically undercounted.
 
-// askSideQuestion handles /btw commands by creating an isolated provider instance
-// that doesn't share state with the main conversation provider.
-
 // shallowCloneLLMOptions creates a shallow copy of LLM options map.
 // Note: This is a shallow copy - nested maps/slices are shared.
 
 // hasMediaRefs checks if any message has media references.
 
-// isolatedSideQuestionProvider creates a separate provider instance for /btw commands
-// to avoid sharing state with the main conversation provider.
-
-// sideQuestionModelConfig resolves the model config for side questions.
-
-// sideQuestionModelName determines which model name to use for side questions.
-
 // modelNameFromIdentityKey extracts the model name from an identity key.
-
-// closeProviderIfStateful closes a provider if it implements StatefulProvider.
 
 // makePendingTurnID generates a unique turn ID for placeholder turns.
 // Format: "pending-{sessionKey}-{sequence}"

@@ -133,14 +133,12 @@ Depois que as skills estiverem instaladas, voce pode inspeciona-las e aplica-las
 - `/use <skill> <message>` força uma skill para uma unica requisicao.
 - `/use <skill>` prepara essa skill para a sua proxima mensagem no mesmo chat.
 - `/use clear` cancela uma substituicao pendente criada por `/use <skill>`.
-- `/btw <question>` faz uma pergunta lateral imediata sem alterar o historico atual da sessao. `/btw` e tratado como uma consulta direta sem ferramentas e nao entra no fluxo normal de execucao de ferramentas.
 
 Exemplos:
 
 ```text
 /list skills
 /use git explique como fazer squash dos ultimos 3 commits
-/btw me relembre o que ja decidimos sobre o plano de deploy
 /use italiapersonalfinance
 dammi le ultime news
 ```
@@ -148,7 +146,7 @@ dammi le ultime news
 ### Política Unificada de Execução de Comandos
 
 - Comandos slash genéricos são executados através de um único caminho em `pkg/agent/loop.go` via `commands.Executor`.
-- Os adaptadores de canal não consomem mais comandos genéricos localmente; eles encaminham o texto de entrada para o caminho bus/agent. O Telegram ainda registra automaticamente na inicialização comandos suportados como `/start`, `/help`, `/show`, `/list`, `/use` e `/btw`.
+- Os adaptadores de canal não consomem mais comandos genéricos localmente; eles encaminham o texto de entrada para o caminho bus/agent. O Telegram ainda registra automaticamente na inicialização comandos suportados como `/start`, `/help`, `/show`, `/list`, `/use`.
 - Comando slash desconhecido (por exemplo `/foo`) passa para o processamento normal do LLM.
 - Comando registrado mas não suportado no canal atual (por exemplo `/show` no WhatsApp) retorna um erro explícito ao usuário e interrompe o processamento.
 

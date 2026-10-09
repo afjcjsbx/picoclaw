@@ -62,7 +62,7 @@ picoclaw gateway
 
 **4. Menu de commandes Telegram (enregistré automatiquement au démarrage)**
 
-PicoClaw conserve les définitions de commandes dans un registre partagé unique. Au démarrage, Telegram enregistre automatiquement les commandes bot prises en charge (par exemple `/start`, `/help`, `/show`, `/list`, `/use`, `/btw`) afin que le menu de commandes et le comportement à l'exécution restent synchronisés.
+PicoClaw conserve les définitions de commandes dans un registre partagé unique. Au démarrage, Telegram enregistre automatiquement les commandes bot prises en charge (par exemple `/start`, `/help`, `/show`, `/list`, `/use`) afin que le menu de commandes et le comportement à l'exécution restent synchronisés.
 L'enregistrement du menu de commandes Telegram reste une découverte UX locale au canal ; l'exécution générique des commandes est gérée de manière centralisée dans la boucle agent via l'exécuteur de commandes.
 
 Si l'enregistrement des commandes échoue (erreurs transitoires réseau/API), le canal démarre quand même et PicoClaw réessaie l'enregistrement en arrière-plan.
@@ -73,7 +73,6 @@ Vous pouvez aussi gerer les competences installees directement depuis Telegram :
 - `/use <skill> <message>`
 - `/use <skill>` puis envoyer la vraie requete dans le message suivant
 - `/use clear`
-- `/btw <question>` pour poser une question annexe immediate sans modifier l'historique actif de la session ; `/btw` est traite comme une requete directe sans outils et n'entre pas dans le flux normal d'execution des outils
 
 </details>
 

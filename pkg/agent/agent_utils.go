@@ -519,16 +519,6 @@ func activeSkillNames(agent *AgentInstance, opts processOptions) []string {
 	return resolved
 }
 
-func sideQuestionResponseContent(response *providers.LLMResponse) string {
-	if response == nil {
-		return ""
-	}
-	if strings.TrimSpace(response.Content) != "" {
-		return response.Content
-	}
-	return responseReasoningContent(response)
-}
-
 func responseReasoningContent(response *providers.LLMResponse) string {
 	if response == nil {
 		return ""
@@ -557,7 +547,7 @@ func hasMediaRefs(messages []providers.Message) bool {
 	return false
 }
 
-func sideQuestionModelName(agent *AgentInstance, usedLight bool) string {
+func lightModelName(agent *AgentInstance, usedLight bool) string {
 	if usedLight && len(agent.LightCandidates) > 0 {
 		if name := resolvedCandidateModelName(agent.LightCandidates, ""); name != "" {
 			return name
@@ -584,12 +574,6 @@ func modelAliasFromCandidateIdentityKey(identityKey string) string {
 		return ""
 	}
 	return strings.TrimSpace(strings.TrimPrefix(identityKey, prefix))
-}
-
-func closeProviderIfStateful(provider providers.LLMProvider) {
-	if stateful, ok := provider.(providers.StatefulProvider); ok {
-		stateful.Close()
-	}
 }
 
 // activeRequestsInc atomically increments the active request count.
