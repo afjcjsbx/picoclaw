@@ -60,6 +60,7 @@ type Info struct {
 	OldestAt time.Time // oldest message in the seahorse database
 	StoreAt  time.Time // last write recorded by the owning session store
 	Messages int
+	InDB     bool // the session has a conversation in the seahorse database
 }
 
 // lastActivity returns the most recent known activity timestamp for the
@@ -218,7 +219,7 @@ func Run(ctx context.Context, eng Engine, stores []Store, cfg config.SessionPrun
 	}
 
 	if cfg.MaxDBSizeMB > 0 {
-		deleted += enforceDBSize(ctx, eng, idx, cfg, &result)
+		deleted += enforceDBSize(ctx, eng, idx, infos, cfg, &result)
 	}
 
 	if deleted > 0 {
@@ -240,62 +241,69 @@ func Run(ctx context.Context, eng Engine, stores []Store, cfg config.SessionPrun
 }
 
 // enforceDBSize deletes the oldest remaining sessions until the database is
-// under MaxDBSizeMB. It estimates how many sessions to remove from the average
-// session size, deletes them in a batch, then reclaims and re-measures. The
-// loop stops as soon as a pass makes no progress, so a database that does not
-// shrink (for example when Vacuum is disabled) never causes runaway deletion.
-// Returns the number of sessions deleted.
+// under MaxDBSizeMB. Sessions are ranked exactly like Select ranks them (newest
+// activity wins, undated sessions are never touched). It estimates how many
+// sessions to remove from the average session size, deletes them in a batch,
+// then reclaims and re-measures. The loop stops as soon as a pass makes no
+// progress, so a database that does not shrink (for example when Vacuum is
+// disabled) never causes runaway deletion. Only sessions that live in the
+// seahorse database are candidates, since JSONL-only sessions occupy no
+// database space. Returns the number of sessions deleted.
 func enforceDBSize(
 	ctx context.Context,
 	eng Engine,
 	idx owners,
+	infos []Info,
 	cfg config.SessionPruneConfig,
 	result *Result,
 ) int {
 	limit := int64(cfg.MaxDBSizeMB) << 20 // MB -> bytes
-	deleted := 0
 
-	for iteration := 0; iteration < maxDBSizeIterations; iteration++ {
+	gone := make(map[string]struct{}, len(result.Deleted))
+	for _, key := range result.Deleted {
+		gone[key] = struct{}{}
+	}
+	inDB := make([]Info, 0, len(infos))
+	for _, info := range infos {
+		if _, deleted := gone[info.Key]; info.InDB && !deleted {
+			inDB = append(inDB, info)
+		}
+	}
+	candidates := datedOldestFirst(inDB)
+	remaining := len(inDB)
+
+	deleted := 0
+	for iteration := 0; iteration < maxDBSizeIterations && len(candidates) > 0; iteration++ {
 		size, err := eng.DBFileSize()
 		if err != nil || size <= limit {
 			break
 		}
 
-		statuses, err := eng.SessionStatuses(ctx)
-		if err != nil || len(statuses) == 0 {
-			break
-		}
-
 		// Estimate how many of the oldest sessions must go to close the gap.
 		over := size - limit
-		avg := size / int64(len(statuses))
+		avg := size / int64(max(remaining, 1))
 		if avg <= 0 {
 			avg = 1
 		}
 		need := int((over + avg - 1) / avg)
-		if need < 1 {
-			need = 1
-		}
-		if need > len(statuses) {
-			need = len(statuses)
-		}
+		need = min(max(need, 1), len(candidates))
 
 		removed := 0
-		for removed < need {
-			oldest := oldestSessionKey(statuses)
-			if oldest == "" {
+		for _, info := range candidates[:need] {
+			if ctx.Err() != nil {
 				break
 			}
-			if !deleteSession(ctx, eng, idx, oldest) {
-				break
+			if !deleteSession(ctx, eng, idx, info.Key) {
+				continue
 			}
-			result.Deleted = append(result.Deleted, oldest)
+			result.Deleted = append(result.Deleted, info.Key)
 			deleted++
 			removed++
-			statuses = withoutKey(statuses, oldest)
+			remaining--
 		}
+		candidates = candidates[need:]
 		if removed == 0 {
-			break
+			continue
 		}
 
 		reclaim(ctx, eng, cfg)
@@ -335,6 +343,7 @@ func collectInfos(ctx context.Context, eng Engine, idx owners) []Info {
 			OldestAt: status.OldestAt,
 			StoreAt:  storeActivity(idx[status.SessionKey], status.SessionKey),
 			Messages: status.Messages,
+			InDB:     true,
 		})
 		known[status.SessionKey] = struct{}{}
 	}
@@ -369,41 +378,6 @@ func storeActivity(stores []Store, key string) time.Time {
 		}
 	}
 	return last
-}
-
-func withoutKey(statuses []seahorse.SessionStatus, key string) []seahorse.SessionStatus {
-	out := statuses[:0]
-	for _, status := range statuses {
-		if status.SessionKey != key {
-			out = append(out, status)
-		}
-	}
-	return out
-}
-
-func oldestSessionKey(statuses []seahorse.SessionStatus) string {
-	if len(statuses) == 0 {
-		return ""
-	}
-	oldest := statuses[0]
-	oldestTs := oldest.NewestAt
-	if oldestTs.IsZero() {
-		oldestTs = oldest.OldestAt
-	}
-	for _, status := range statuses[1:] {
-		ts := status.NewestAt
-		if ts.IsZero() {
-			ts = status.OldestAt
-		}
-		if ts.IsZero() {
-			return status.SessionKey
-		}
-		if oldestTs.IsZero() || ts.Before(oldestTs) {
-			oldest = status
-			oldestTs = ts
-		}
-	}
-	return oldest.SessionKey
 }
 
 func deleteSession(ctx context.Context, eng Engine, idx owners, key string) bool {

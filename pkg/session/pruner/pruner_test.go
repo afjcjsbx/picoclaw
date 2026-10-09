@@ -247,6 +247,52 @@ func TestRunIgnoresNilAndDuplicateStores(t *testing.T) {
 	}
 }
 
+func TestRunSizeGuardNeverDeletesUndated(t *testing.T) {
+	now := time.Now()
+	const mb = 1 << 20
+	eng := newFakeEngine(mb)
+	eng.statuses = []seahorse.SessionStatus{
+		{SessionKey: "s2", NewestAt: now.Add(-time.Hour)},
+		{SessionKey: "undated"}, // no message timestamps at all
+		{SessionKey: "s1", NewestAt: now.Add(-5 * time.Hour)},
+	}
+	store := newFakeStore("s2", "undated", "s1")
+
+	res := Run(context.Background(), eng, []Store{store}, config.SessionPruneConfig{
+		Enabled:     true,
+		MaxDBSizeMB: 2,
+	})
+
+	// 3 MB > 2 MB limit: exactly one session must go, and it is the oldest
+	// dated one, never the undated one.
+	if !reflect.DeepEqual(res.Deleted, []string{"s1"}) {
+		t.Fatalf("Deleted = %v, want [s1]", res.Deleted)
+	}
+}
+
+func TestRunSizeGuardSkipsAlreadyPrunedSessions(t *testing.T) {
+	now := time.Now()
+	const mb = 1 << 20
+	eng := newFakeEngine(mb)
+	eng.statuses = []seahorse.SessionStatus{
+		{SessionKey: "ancient", NewestAt: now.Add(-100 * 24 * time.Hour)},
+		{SessionKey: "old", NewestAt: now.Add(-10 * time.Hour)},
+		{SessionKey: "new", NewestAt: now.Add(-time.Hour)},
+	}
+	store := newFakeStore("ancient", "old", "new")
+
+	// The age check removes "ancient" (3 MB -> 2 MB); the size guard is then
+	// already satisfied and must not delete anything else.
+	res := Run(context.Background(), eng, []Store{store}, config.SessionPruneConfig{
+		Enabled:     true,
+		MaxAgeDays:  30,
+		MaxDBSizeMB: 2,
+	})
+	if !reflect.DeepEqual(res.Deleted, []string{"ancient"}) {
+		t.Fatalf("Deleted = %v, want [ancient]", res.Deleted)
+	}
+}
+
 func TestRunNoopWhenDisabled(t *testing.T) {
 	eng := newFakeEngine(1 << 20)
 	eng.statuses = []seahorse.SessionStatus{{SessionKey: "a", NewestAt: time.Now().Add(-1000 * time.Hour)}}
