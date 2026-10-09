@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +20,101 @@ import (
 type legacyContextManager struct {
 	al          *AgentLoop
 	summarizing sync.Map // dedup for async Compact (post-turn)
+}
+
+const exactDetailsMarker = "\n\nEXACT DETAILS (verbatim; do not infer):\n"
+
+var exactReferencePatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\b(?:error|failed|failure|exception|panic)\b[^\n]*`),
+	regexp.MustCompile(`\b[[:xdigit:]]{7,64}\b`),
+	regexp.MustCompile(`(?:[A-Za-z]:\\|/|\./|\.\./)?[\w.-]+(?:[/\\][\w.-]+)+`),
+}
+
+// ponytail: regexes preserve recognizable literals only; structured references need typed extraction if this misses real cases.
+func exactDetails(messages []providers.Message, userBudget int) []string {
+	seen := make(map[string]bool)
+	var details []string
+	userTokens := 0
+	add := func(s string) {
+		s = strings.TrimSpace(s)
+		if s != "" && !seen[s] {
+			seen[s] = true
+			details = append(details, s)
+		}
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		if msg.Role == "user" {
+			request := "User request (verbatim):\n" + msg.Content
+			tokens := EstimateMessageTokens(providers.Message{Role: "user", Content: msg.Content})
+			if msg.Content != "" && userTokens+tokens <= userBudget && !seen[request] {
+				seen[request] = true
+				details = append(details, request)
+				userTokens += tokens
+			}
+		}
+		for _, pattern := range exactReferencePatterns {
+			for _, match := range pattern.FindAllString(msg.Content, -1) {
+				add(match)
+			}
+		}
+	}
+	return details
+}
+
+func splitExactDetails(summary string) (string, []string) {
+	if i := strings.Index(summary, exactDetailsMarker); i >= 0 {
+		var details []string
+		for _, line := range strings.Split(strings.TrimSpace(summary[i+len(exactDetailsMarker):]), "\n") {
+			if line = strings.TrimSpace(strings.TrimPrefix(line, "- ")); line != "" {
+				if detail, err := strconv.Unquote(line); err == nil {
+					details = append(details, detail)
+				} else {
+					details = append(details, line)
+				}
+			}
+		}
+		return strings.TrimSpace(summary[:i]), details
+	}
+	return summary, nil
+}
+
+func appendExactDetails(summary string, messages []providers.Message, userBudget int) string {
+	base, details := splitExactDetails(summary)
+	return appendDetails(base, exactDetails(messages, userBudget), details, userBudget)
+}
+
+func appendDetails(summary string, preferred, fallback []string, userBudget int) string {
+	base, existing := splitExactDetails(summary)
+	seen := make(map[string]bool, len(preferred)+len(fallback)+len(existing))
+	unique := make([]string, 0, len(preferred)+len(fallback)+len(existing))
+	userTokens := 0
+	for _, detail := range append(append(preferred, fallback...), existing...) {
+		if !seen[detail] {
+			if strings.HasPrefix(detail, "User request (verbatim):\n") {
+				content := strings.TrimPrefix(detail, "User request (verbatim):\n")
+				tokens := EstimateMessageTokens(providers.Message{Role: "user", Content: content})
+				if userTokens+tokens > userBudget {
+					continue
+				}
+				userTokens += tokens
+			}
+			seen[detail] = true
+			unique = append(unique, detail)
+		}
+	}
+	if len(unique) == 0 {
+		return base
+	}
+	var b strings.Builder
+	b.WriteString(base)
+	b.WriteString(exactDetailsMarker)
+	for _, detail := range unique {
+		b.WriteString("- ")
+		b.WriteString(strconv.Quote(detail))
+		b.WriteByte('\n')
+	}
+	return b.String()
 }
 
 func (m *legacyContextManager) Assemble(_ context.Context, req *AssembleRequest) (*AssembleResponse, error) {
@@ -149,20 +246,28 @@ func (m *legacyContextManager) forceCompression(sessionKey string) (compressionR
 		mid = findSafeBoundary(history, len(history)/2)
 	}
 	var keptHistory []providers.Message
+	var droppedHistory []providers.Message
 	if mid <= 0 {
 		for i := len(history) - 1; i >= 0; i-- {
 			if history[i].Role == "user" {
 				keptHistory = []providers.Message{history[i]}
+				droppedHistory = append(droppedHistory, history[:i]...)
+				droppedHistory = append(droppedHistory, history[i+1:]...)
 				break
 			}
 		}
+		if len(keptHistory) == 0 {
+			droppedHistory = history
+		}
 	} else {
 		keptHistory = history[mid:]
+		droppedHistory = history[:mid]
 	}
 
 	droppedCount := len(history) - len(keptHistory)
 
 	existingSummary := agent.Sessions.GetSummary(sessionKey)
+	existingSummary = appendExactDetails(existingSummary, droppedHistory, agent.ContextWindow/40)
 	compressionNote := fmt.Sprintf(
 		"[Emergency compression dropped %d oldest messages due to context limit]",
 		droppedCount,
@@ -204,6 +309,7 @@ func (m *legacyContextManager) summarizeSession(agent *AgentInstance, sessionKey
 	}
 	keepCount := len(history) - safeCut
 	toSummarize := history[:safeCut]
+	summary, preservedDetails := splitExactDetails(summary)
 
 	maxMessageTokens := agent.ContextWindow / 2
 	validMessages := make([]providers.Message, 0)
@@ -261,6 +367,12 @@ func (m *legacyContextManager) summarizeSession(agent *AgentInstance, sessionKey
 	}
 
 	if finalSummary != "" {
+		finalSummary = appendDetails(
+			finalSummary,
+			exactDetails(toSummarize, agent.ContextWindow/40),
+			preservedDetails,
+			agent.ContextWindow/40,
+		)
 		agent.Sessions.SetSummary(sessionKey, finalSummary)
 		agent.Sessions.TruncateHistory(sessionKey, keepCount)
 		agent.Sessions.Save(sessionKey)
