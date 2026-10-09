@@ -34,6 +34,15 @@ func normalizeToolResult(
 		return nil
 	}
 
+	// Work on a shallow copy so the tool-owned result is never mutated in
+	// place. A tool that returns a cached/shared *ToolResult would otherwise
+	// accumulate media refs and re-emit them on subsequent calls.
+	normalized := *result
+	if len(result.Media) > 0 {
+		normalized.Media = append([]string(nil), result.Media...)
+	}
+	result = &normalized
+
 	notes := make([]string, 0, 2)
 	seen := make(map[string]struct{})
 

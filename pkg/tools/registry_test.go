@@ -904,3 +904,35 @@ func TestToolRegistry_ExecuteWithContext_SanitizesInlineMediaWithoutStore(t *tes
 		t.Fatalf("expected inline media omission note, got %q", result.ForLLM)
 	}
 }
+
+func TestToolRegistry_ExecuteWithContext_DoesNotMutateToolResult(t *testing.T) {
+	r := NewToolRegistry()
+	r.SetMediaStore(media.NewFileMediaStore())
+
+	shared := SilentResult("![img](data:image/png;base64,aGVsbG8=)")
+	r.Register(&mockRegistryTool{
+		name:   "shared_result",
+		desc:   "returns the same result pointer every call",
+		params: map[string]any{},
+		result: shared,
+	})
+
+	first := r.ExecuteWithContext(context.Background(), "shared_result", nil, "telegram", "chat-1", nil)
+	if len(first.Media) != 1 {
+		t.Fatalf("first call media = %d, want 1", len(first.Media))
+	}
+	if strings.Contains(shared.ForLLM, "registered as a media attachment") {
+		t.Fatalf("tool-owned result ForLLM was mutated: %q", shared.ForLLM)
+	}
+	if len(shared.Media) != 0 {
+		t.Fatalf("tool-owned result media was mutated: %v", shared.Media)
+	}
+
+	second := r.ExecuteWithContext(context.Background(), "shared_result", nil, "telegram", "chat-1", nil)
+	if len(second.Media) != 1 {
+		t.Fatalf("second call media = %d, want 1", len(second.Media))
+	}
+	if second == shared {
+		t.Fatal("normalized result must not be the tool-owned pointer")
+	}
+}
