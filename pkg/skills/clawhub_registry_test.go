@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -85,6 +86,114 @@ func TestClawHubRegistrySearchRetries429(t *testing.T) {
 	require.Len(t, results, 1)
 	assert.Equal(t, 2, attempts)
 	assert.Equal(t, "github", results[0].Slug)
+}
+
+func TestClawHubRegistrySearchIncludesOwnerReference(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		slug := "reddit"
+		name := "Reddit"
+		summary := "Browse, search, post, and moderate Reddit"
+		owner := "theglove44"
+		canonical := "/theglove44/skills/reddit"
+
+		json.NewEncoder(w).Encode(clawhubSearchResponse{
+			Results: []clawhubSearchResult{
+				{
+					Score:        0.9,
+					Slug:         &slug,
+					DisplayName:  &name,
+					Summary:      &summary,
+					OwnerHandle:  &owner,
+					CanonicalURL: &canonical,
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	reg := newTestRegistry(srv.URL, "")
+	results, err := reg.Search(context.Background(), "reddit", 5)
+
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, "theglove44/reddit", results[0].Slug)
+	assert.Equal(t, "theglove44", results[0].Owner)
+
+	assert.Equal(t, srv.URL+"/theglove44/skills/reddit", reg.SkillURL(results[0].Slug, ""))
+	assert.Equal(t, srv.URL+"/theglove44/skills/reddit", reg.SkillURL("theglove44/reddit", ""))
+	assert.Equal(t, srv.URL+"/skills/reddit", reg.SkillURL("reddit", ""))
+}
+
+func TestClawHubRegistryResolveInstallDirNameWithOwner(t *testing.T) {
+	reg := newTestRegistry("https://example.com", "")
+
+	dir, err := reg.ResolveInstallDirName("theglove44/reddit")
+	require.NoError(t, err)
+	assert.Equal(t, "reddit", dir)
+
+	dir, err = reg.ResolveInstallDirName("reddit")
+	require.NoError(t, err)
+	assert.Equal(t, "reddit", dir)
+}
+
+func TestClawHubRegistryGetSkillMetaNestedOwner(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/v1/skills/reddit", r.URL.Path)
+		assert.Equal(t, "theglove44", r.URL.Query().Get("ownerHandle"))
+
+		json.NewEncoder(w).Encode(clawhubSkillResponse{
+			Skill: &clawhubSkillInfo{
+				Slug:        "reddit",
+				DisplayName: "Reddit",
+				Summary:     "Browse and moderate Reddit",
+			},
+			LatestVersion: &clawhubVersionInfo{Version: "1.0.0"},
+			Moderation:    &clawhubModerationInfo{IsSuspicious: false},
+		})
+	}))
+	defer srv.Close()
+
+	reg := newTestRegistry(srv.URL, "")
+	meta, err := reg.GetSkillMeta(context.Background(), "theglove44/reddit")
+
+	require.NoError(t, err)
+	assert.Equal(t, "reddit", meta.Slug)
+	assert.Equal(t, "Reddit", meta.DisplayName)
+	assert.Equal(t, "1.0.0", meta.LatestVersion)
+}
+
+func TestClawHubRegistryDownloadAndInstallWithOwner(t *testing.T) {
+	zipBuf := createTestZip(t, map[string]string{
+		"SKILL.md": "---\nname: reddit\ndescription: A test\n---\nHello skill",
+	})
+
+	var downloadQuery url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/skills/reddit":
+			assert.Equal(t, "theglove44", r.URL.Query().Get("ownerHandle"))
+			json.NewEncoder(w).Encode(clawhubSkillResponse{
+				Skill:         &clawhubSkillInfo{Slug: "reddit", DisplayName: "Reddit"},
+				LatestVersion: &clawhubVersionInfo{Version: "1.0.0"},
+			})
+		case "/api/v1/download":
+			downloadQuery = r.URL.Query()
+			w.Header().Set("Content-Type", "application/zip")
+			w.Write(zipBuf)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	targetDir := filepath.Join(t.TempDir(), "reddit")
+	reg := newTestRegistry(srv.URL, "")
+	result, err := reg.DownloadAndInstall(context.Background(), "theglove44/reddit", "", targetDir)
+
+	require.NoError(t, err)
+	assert.Equal(t, "1.0.0", result.Version)
+	assert.Equal(t, "reddit", downloadQuery.Get("slug"))
+	assert.Equal(t, "theglove44", downloadQuery.Get("ownerHandle"))
 }
 
 func TestClawHubRegistryGetSkillMeta(t *testing.T) {
