@@ -5,9 +5,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
-	"crypto/ed25519"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -19,6 +17,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"aead.dev/minisign"
 )
 
 // matchesMagic checks whether the file at path looks like a platform binary
@@ -113,6 +113,7 @@ func TestFindAssetInfo_SelectsPreferredAsset(t *testing.T) {
 		strings.Repeat("2", 64) + "  picoclaw_Linux_x86_64.tar.gz\n" +
 		strings.Repeat("3", 64) + "  picoclaw_Windows_x86_64.zip\n" +
 		strings.Repeat("4", 64) + "  picoclaw_Windows_arm64.zip\n"
+	sig := priv.sign(t, []byte(sums))
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -141,7 +142,7 @@ func TestFindAssetInfo_SelectsPreferredAsset(t *testing.T) {
 				},
 			})
 		default:
-			serveSignedChecksums(w, r, priv, sums)
+			serveSignedChecksums(w, r, sig, sums)
 		}
 	}))
 	defer server.Close()
@@ -203,6 +204,8 @@ func TestFindAssetInfo_SelectsPreferredAsset(t *testing.T) {
 func TestFindAssetInfo_UsesSignedChecksums(t *testing.T) {
 	const checksum = "77b564f36da6d1e02169d0ecc837728eecb9ef983c317d9186ac9651798b924c"
 	priv := withSigningKey(t)
+	sums := checksum + "  picoclaw_Windows_x86_64.zip\n"
+	sig := priv.sign(t, []byte(sums))
 
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -223,7 +226,7 @@ func TestFindAssetInfo_UsesSignedChecksums(t *testing.T) {
 				},
 			})
 		default:
-			serveSignedChecksums(w, r, priv, checksum+"  picoclaw_Windows_x86_64.zip\n")
+			serveSignedChecksums(w, r, sig, sums)
 		}
 	}))
 	defer server.Close()
@@ -249,6 +252,8 @@ func TestDownloadAndExtractRelease_ExtractsTarGz(t *testing.T) {
 	sum := sha256.Sum256(tarGzContent)
 	checksum := hex.EncodeToString(sum[:])
 	priv := withSigningKey(t)
+	sums := checksum + "  picoclaw_Linux_x86_64.tar.gz\n"
+	sig := priv.sign(t, []byte(sums))
 
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -269,7 +274,7 @@ func TestDownloadAndExtractRelease_ExtractsTarGz(t *testing.T) {
 			w.Header().Set("Content-Type", "application/gzip")
 			_, _ = w.Write(tarGzContent)
 		default:
-			serveSignedChecksums(w, r, priv, checksum+"  picoclaw_Linux_x86_64.tar.gz\n")
+			serveSignedChecksums(w, r, sig, sums)
 		}
 	}))
 	defer server.Close()
@@ -303,6 +308,8 @@ func TestDownloadAndExtractRelease_RetriesTransientAssetFailure(t *testing.T) {
 	sum := sha256.Sum256(zipContent)
 	checksum := hex.EncodeToString(sum[:])
 	priv := withSigningKey(t)
+	sums := checksum + "  picoclaw_Windows_x86_64.zip\n"
+	sig := priv.sign(t, []byte(sums))
 
 	var assetAttempts int
 	var server *httptest.Server
@@ -326,7 +333,7 @@ func TestDownloadAndExtractRelease_RetriesTransientAssetFailure(t *testing.T) {
 			w.Header().Set("Content-Type", "application/zip")
 			_, _ = w.Write(zipContent)
 		default:
-			serveSignedChecksums(w, r, priv, checksum+"  picoclaw_Windows_x86_64.zip\n")
+			serveSignedChecksums(w, r, sig, sums)
 		}
 	}))
 	defer server.Close()
@@ -420,30 +427,29 @@ func withTestHTTPClient(t *testing.T, client *http.Client) {
 	})
 }
 
-// signingKey is a throwaway ed25519 key plus minisign key id.
+// signingKey is a throwaway minisign key used to sign test release assets.
 type signingKey struct {
-	id   [8]byte
-	priv ed25519.PrivateKey
+	priv minisign.PrivateKey
 }
 
 func newSigningKey(t *testing.T) (signingKey, string) {
 	t.Helper()
-	pub, priv, err := ed25519.GenerateKey(nil)
+	pub, priv, err := minisign.GenerateKey(nil)
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
 	}
-	k := signingKey{id: [8]byte{1, 2, 3, 4, 5, 6, 7, 8}, priv: priv}
-	return k, base64.StdEncoding.EncodeToString(append(append([]byte("Ed"), k.id[:]...), pub...))
+	return signingKey{priv: priv}, pub.String()
 }
 
-// sign returns a minisign signature file for msg.
-func (k signingKey) sign(msg []byte) []byte {
-	sig := ed25519.Sign(k.priv, msg)
-	const trusted = "timestamp:1"
-	global := ed25519.Sign(k.priv, append(append([]byte{}, sig...), trusted...))
-	raw := append(append([]byte("Ed"), k.id[:]...), sig...)
-	return []byte("untrusted comment: test\n" + base64.StdEncoding.EncodeToString(raw) +
-		"\ntrusted comment: " + trusted + "\n" + base64.StdEncoding.EncodeToString(global) + "\n")
+// sign returns a minisign signature file for msg, using the same pre-hashed
+// "ED" scheme as the aead.dev/minisign CLI (`minisign -S`).
+func (k signingKey) sign(t *testing.T, msg []byte) []byte {
+	t.Helper()
+	reader := minisign.NewReader(bytes.NewReader(msg))
+	if _, err := io.Copy(io.Discard, reader); err != nil {
+		t.Fatalf("read message: %v", err)
+	}
+	return reader.SignWithComments(k.priv, "timestamp:1\tfilename:checksums.txt", "signature from minisign secret key")
 }
 
 // withSigningKey generates a throwaway key and trusts it as the release key
@@ -458,14 +464,37 @@ func withSigningKey(t *testing.T) signingKey {
 }
 
 // serveSignedChecksums answers requests for checksums.txt and its signature.
-func serveSignedChecksums(w http.ResponseWriter, r *http.Request, k signingKey, sums string) {
+func serveSignedChecksums(w http.ResponseWriter, r *http.Request, sig []byte, sums string) {
 	switch r.URL.Path {
 	case "/assets/checksums.txt":
 		_, _ = io.WriteString(w, sums)
 	case "/assets/checksums.txt.minisig":
-		_, _ = w.Write(k.sign([]byte(sums)))
+		_, _ = w.Write(sig)
 	default:
 		http.NotFound(w, r)
+	}
+}
+
+// TestVerifyMinisign_AcceptsPrehashedSignatures locks in compatibility with the
+// release pipeline: the pinned aead.dev/minisign CLI emits HashEdDSA ("ED")
+// signatures, not the legacy ("Ed") ones the hand-rolled verifier expected.
+func TestVerifyMinisign_AcceptsPrehashedSignatures(t *testing.T) {
+	k, pub := newSigningKey(t)
+	msg := []byte(strings.Repeat("a", 64) + "  picoclaw_Linux_x86_64.tar.gz\n")
+	sig := k.sign(t, msg)
+
+	var parsed minisign.Signature
+	if err := parsed.UnmarshalText(sig); err != nil {
+		t.Fatalf("parse signature: %v", err)
+	}
+	if parsed.Algorithm != minisign.HashEdDSA {
+		t.Fatalf("test signature algorithm = %#x, want HashEdDSA", parsed.Algorithm)
+	}
+	if err := verifyMinisign(pub, msg, sig); err != nil {
+		t.Fatalf("verifyMinisign rejected prehashed signature: %v", err)
+	}
+	if err := verifyMinisign(pub, []byte("tampered"), sig); err == nil {
+		t.Fatal("verifyMinisign accepted tampered message")
 	}
 }
 
@@ -498,6 +527,7 @@ func TestFindAssetInfo_RejectsUnverifiedChecksums(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			priv := tc.setup(t)
+			sig := priv.sign(t, []byte(sums))
 			var server *httptest.Server
 			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == testReleaseAPIPath {
@@ -513,7 +543,7 @@ func TestFindAssetInfo_RejectsUnverifiedChecksums(t *testing.T) {
 					_, _ = io.WriteString(w, tc.serve)
 					return
 				}
-				serveSignedChecksums(w, r, priv, sums)
+				serveSignedChecksums(w, r, sig, sums)
 			}))
 			defer server.Close()
 			withTestHTTPClient(t, server.Client())
