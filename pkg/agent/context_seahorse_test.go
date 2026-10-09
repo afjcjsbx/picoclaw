@@ -3,12 +3,14 @@ package agent
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/memory"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
 	"github.com/sipeed/picoclaw/pkg/seahorse"
@@ -1192,5 +1194,78 @@ func TestSeahorsePruneStoresAcceptsDeletableStore(t *testing.T) {
 	stores, ok := mgr.pruneStores()
 	if !ok || len(stores) != 1 {
 		t.Fatalf("pruneStores = (%d stores, ok=%v), want (1, true)", len(stores), ok)
+	}
+}
+
+func newPruneTestManager(t *testing.T) (*seahorseContextManager, *session.JSONLBackend) {
+	t.Helper()
+	dir := t.TempDir()
+	store, err := memory.NewJSONLStore(filepath.Join(dir, "sessions"))
+	if err != nil {
+		t.Fatalf("NewJSONLStore: %v", err)
+	}
+	backend := session.NewJSONLBackend(store)
+	eng, err := seahorse.NewEngine(seahorse.Config{DBPath: filepath.Join(dir, "sessions", "seahorse.db")}, nil)
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	mgr := &seahorseContextManager{engine: eng, sessions: backend}
+	t.Cleanup(func() { _ = mgr.Close() })
+	return mgr, backend
+}
+
+func waitForSessionCount(t *testing.T, backend *session.JSONLBackend, want int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(backend.ListSessions()) == want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("sessions = %v, want %d", backend.ListSessions(), want)
+}
+
+func TestSeahorsePruneLoopRunsInBackgroundUntilClose(t *testing.T) {
+	mgr, backend := newPruneTestManager(t)
+	for _, key := range []string{"agent:main:a", "agent:main:b", "agent:main:c"} {
+		backend.AddMessage(key, "user", "hello")
+		time.Sleep(2 * time.Millisecond) // distinct activity times
+	}
+
+	mgr.startPruneLoop(config.SessionPruneConfig{Enabled: true, MaxSessions: 1}, 10*time.Millisecond)
+	waitForSessionCount(t, backend, 1)
+	if got := backend.ListSessions(); len(got) != 1 || got[0] != "agent:main:c" {
+		t.Fatalf("remaining sessions = %v, want only the newest (agent:main:c)", got)
+	}
+
+	if err := mgr.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if mgr.stopPrune != nil || mgr.pruneDone != nil {
+		t.Fatal("Close should clear the prune loop state")
+	}
+
+	// The loop is gone: new surplus sessions are no longer pruned.
+	backend.AddMessage("agent:main:d", "user", "hello")
+	time.Sleep(100 * time.Millisecond)
+	if got := len(backend.ListSessions()); got != 2 {
+		t.Fatalf("sessions after Close = %d, want 2 (loop must have stopped)", got)
+	}
+
+	// Close is idempotent.
+	if err := mgr.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+}
+
+func TestSeahorseCloseWithoutPruneLoop(t *testing.T) {
+	mgr, _ := newPruneTestManager(t)
+	if err := mgr.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	var nilEngine seahorseContextManager
+	if err := nilEngine.Close(); err != nil {
+		t.Fatalf("Close with no engine: %v", err)
 	}
 }

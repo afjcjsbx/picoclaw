@@ -22,12 +22,17 @@ import (
 
 // seahorseContextManager adapts seahorse.Engine to agent.ContextManager.
 type seahorseContextManager struct {
-	engine    *seahorse.Engine
-	sessions  session.SessionStore // for startup bootstrap
-	al        *AgentLoop           // for resolving the agent that owns a session
-	stopPrune context.CancelFunc   // stops the background prune loop on Close
+	engine   *seahorse.Engine
+	sessions session.SessionStore // for startup bootstrap
+	al       *AgentLoop           // for resolving the agent that owns a session
 
 	warnUnprunable sync.Once // log once when a session store cannot be pruned
+
+	pruneMu   sync.Mutex         // guards stopPrune and pruneDone
+	stopPrune context.CancelFunc // stops the background prune loop on Close
+	pruneDone chan struct{}      // closed when the prune loop has exited
+	closeOnce sync.Once
+	closeErr  error
 }
 
 // newSeahorseContextManager creates a seahorse-backed ContextManager.
@@ -67,9 +72,7 @@ func newSeahorseContextManager(_ json.RawMessage, al *AgentLoop) (ContextManager
 			if stores, ok := mgr.pruneStores(); ok {
 				pruner.Run(context.Background(), engine, stores, pruneCfg)
 
-				pruneCtx, cancel := context.WithCancel(context.Background())
-				mgr.stopPrune = cancel
-				go runPruneLoop(pruneCtx, engine, mgr.pruneStores, pruneCfg)
+				mgr.startPruneLoop(pruneCfg, time.Duration(pruneCfg.EffectiveCheckIntervalMinutes())*time.Minute)
 			}
 		}
 	}
@@ -148,43 +151,58 @@ func asPruneStore(store session.SessionStore) pruner.Store {
 	return nil
 }
 
-// runPruneLoop periodically prunes old sessions until ctx is canceled.
-// stores is evaluated on every pass.
-func runPruneLoop(
-	ctx context.Context,
-	engine *seahorse.Engine,
-	stores func() ([]pruner.Store, bool),
-	cfg config.SessionPruneConfig,
-) {
-	interval := time.Duration(cfg.EffectiveCheckIntervalMinutes()) * time.Minute
+// startPruneLoop runs a prune pass every interval in the background until Close.
+func (m *seahorseContextManager) startPruneLoop(cfg config.SessionPruneConfig, interval time.Duration) {
 	if interval <= 0 {
 		interval = time.Hour
 	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
 
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			if current, ok := stores(); ok {
-				pruner.Run(ctx, engine, current, cfg)
+	m.pruneMu.Lock()
+	m.stopPrune = cancel
+	m.pruneDone = done
+	m.pruneMu.Unlock()
+
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if stores, ok := m.pruneStores(); ok {
+					pruner.Run(ctx, m.engine, stores, cfg)
+				}
 			}
 		}
-	}
+	}()
 }
 
-// Close stops the background prune loop and releases the seahorse engine.
+// Close stops the background prune loop, waits for a pass that is already
+// running to unwind (so it never touches a closed database) and releases the
+// seahorse engine. It is safe to call more than once.
 func (m *seahorseContextManager) Close() error {
-	if m.stopPrune != nil {
-		m.stopPrune()
-		m.stopPrune = nil
+	m.pruneMu.Lock()
+	stop, done := m.stopPrune, m.pruneDone
+	m.stopPrune, m.pruneDone = nil, nil
+	m.pruneMu.Unlock()
+
+	if stop != nil {
+		stop()
 	}
-	if m.engine != nil {
-		return m.engine.Close()
+	if done != nil {
+		<-done
 	}
-	return nil
+
+	m.closeOnce.Do(func() {
+		if m.engine != nil {
+			m.closeErr = m.engine.Close()
+		}
+	})
+	return m.closeErr
 }
 
 // providerToCompleteFn wraps providers.LLMProvider as a seahorse.CompleteFn.
