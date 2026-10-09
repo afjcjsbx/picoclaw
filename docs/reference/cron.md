@@ -23,7 +23,7 @@ Examples:
 
 ```bash
 picoclaw cron add --name "Daily summary" --message "Summarize today's logs" --cron "0 18 * * *"
-picoclaw cron add --name "Ping" --message "heartbeat" --every 300 --deliver
+picoclaw cron add --name "Ping" --message "heartbeat" --every 300
 ```
 
 ## Agent Tool Actions
@@ -64,29 +64,19 @@ channel allowlist and confirmation gates as command creation.
 
 ## Execution Modes
 
-Jobs are stored with a message payload and can execute in three stable user-facing modes:
-
-### `deliver: false`
-
-This is the default for the cron tool.
-
-When the job fires, PicoClaw sends the saved message back through the agent loop as a new agent turn. Use this for scheduled work that may need reasoning, tools, or a generated reply.
-
-A turn started by a cron job receives a tool registry without `cron`, so the agent cannot call it to manage jobs. This also applies to subagents spawned by that turn.
-
-### `deliver: true`
-
-When the job fires, PicoClaw publishes the saved message directly to the target channel and recipient without agent processing.
-
-The CLI `picoclaw cron add --deliver` flag uses this mode.
+Jobs are stored with a message payload. When a job fires, PicoClaw picks one of two execution paths based on the payload.
 
 ### `command`
 
-When a cron-tool job includes `command`, PicoClaw runs that shell command through the `exec` tool and publishes the command output back to the channel.
-
-For command jobs, `deliver` is forced to `false` when the job is created. The saved `message` becomes descriptive text only; the scheduled action is the shell command.
+When a cron-tool job includes `command`, PicoClaw runs that shell command through the `exec` tool and publishes the command output directly to the job's channel and recipient. The saved `message` becomes descriptive text only; the scheduled action is the shell command. Command jobs do not go through the agent.
 
 The current CLI `picoclaw cron add` command does not expose a `command` flag.
+
+### Agent turn
+
+Without a `command`, PicoClaw sends the saved message through the agent loop as a new agent turn. Use this for scheduled work that may need reasoning, tools, or a generated reply. This is the default for the cron tool.
+
+A turn started by a cron job receives a tool registry without `cron`, so the agent cannot call it to manage jobs. This also applies to subagents spawned by that turn.
 
 ## Config and Security Gates
 
