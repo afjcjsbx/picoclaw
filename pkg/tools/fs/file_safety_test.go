@@ -95,21 +95,15 @@ func TestFileSafetyProtectedWorkspaceReads(t *testing.T) {
 	}
 }
 
-func TestFileSafetyWritableButNotReadable(t *testing.T) {
+func TestFileSafetyBlocksProtectedWrites(t *testing.T) {
 	workspace := t.TempDir()
 	path := filepath.Join(workspace, ".env")
 	write := NewWriteFileTool(workspace, true)
 	if result := write.Execute(
 		context.Background(),
 		map[string]any{"path": path, "content": "TOKEN=old"},
-	); result.IsError {
-		t.Fatalf("create .env: %+v", result)
-	}
-	if result := write.Execute(
-		context.Background(),
-		map[string]any{"path": path, "content": "TOKEN=new"},
-	); !result.IsError {
-		t.Fatalf("overwrite without flag succeeded: %+v", result)
+	); !result.IsError || !strings.Contains(result.ForLLM, "write denied") {
+		t.Fatalf("create .env was not blocked: %+v", result)
 	}
 	for _, tool := range []interface {
 		Execute(ctx context.Context, args map[string]any) *ToolResult

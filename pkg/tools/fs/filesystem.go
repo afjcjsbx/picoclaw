@@ -58,6 +58,9 @@ func validatePathWithAllowPaths(
 	restrict bool,
 	patterns []*regexp.Regexp,
 ) (string, error) {
+	if err := checkNTNamespacePath(path); err != nil {
+		return "", err
+	}
 	if workspace == "" {
 		return path, fmt.Errorf("workspace is not defined")
 	}
@@ -895,7 +898,11 @@ func NewWriteFileTool(
 	// Default to both alternatives so standalone callers keep the full guidance;
 	// the agent wiring narrows this to the tools actually registered.
 	return &WriteFileTool{
-		fs:       buildBaseFs(workspace, restrict, patterns),
+		fs: &protectedWriteFs{
+			fileSystem: buildBaseFs(workspace, restrict, patterns),
+			workspace:  workspace,
+			restrict:   restrict,
+		},
 		altTools: []string{"append_file", "edit_file"},
 	}
 }
@@ -1317,8 +1324,8 @@ func buildFs(workspace string, restrict bool, patterns []*regexp.Regexp) fileSys
 	}
 }
 
-// buildBaseFs leaves write_file able to check whether a protected file exists
-// before overwriting it, while still enforcing the workspace sandbox.
+// buildBaseFs enforces the workspace sandbox; read and write policies wrap it
+// at the individual tool boundaries.
 func buildBaseFs(workspace string, restrict bool, patterns []*regexp.Regexp) fileSystem {
 	if !restrict {
 		return &hostFs{}
