@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/config"
@@ -25,6 +26,8 @@ type seahorseContextManager struct {
 	sessions  session.SessionStore // for startup bootstrap
 	al        *AgentLoop           // for resolving the agent that owns a session
 	stopPrune context.CancelFunc   // stops the background prune loop on Close
+
+	warnUnprunable sync.Once // log once when a session store cannot be pruned
 }
 
 // newSeahorseContextManager creates a seahorse-backed ContextManager.
@@ -61,11 +64,13 @@ func newSeahorseContextManager(_ json.RawMessage, al *AgentLoop) (ContextManager
 	if al.cfg != nil {
 		pruneCfg := al.cfg.Session.Prune
 		if pruneCfg.Enabled && pruneCfg.IsActive() {
-			pruner.Run(context.Background(), engine, mgr.pruneStores(), pruneCfg)
+			if stores, ok := mgr.pruneStores(); ok {
+				pruner.Run(context.Background(), engine, stores, pruneCfg)
 
-			pruneCtx, cancel := context.WithCancel(context.Background())
-			mgr.stopPrune = cancel
-			go runPruneLoop(pruneCtx, engine, mgr.pruneStores, pruneCfg)
+				pruneCtx, cancel := context.WithCancel(context.Background())
+				mgr.stopPrune = cancel
+				go runPruneLoop(pruneCtx, engine, mgr.pruneStores, pruneCfg)
+			}
 		}
 	}
 
@@ -85,6 +90,52 @@ func newSeahorseContextManager(_ json.RawMessage, al *AgentLoop) (ContextManager
 	return mgr, nil
 }
 
+// pruneStores returns the session store of every agent. The seahorse database
+// is shared, but each agent keeps its own JSONL store, so pruning must reach
+// all of them or routed agents would lose their seahorse context while their
+// JSONL history stays behind. The registry is re-read on every call so agents
+// added after startup are covered.
+//
+// ok is false when some agent's store cannot delete sessions. Pruning is then
+// skipped altogether: removing only the seahorse side would not shrink the
+// history (the next startup bootstrap re-imports it from the JSONL files) and
+// would throw away the retrieval context of the sessions concerned.
+func (m *seahorseContextManager) pruneStores() (stores []pruner.Store, ok bool) {
+	ok = true
+	add := func(store session.SessionStore) {
+		if store == nil {
+			return
+		}
+		ps := asPruneStore(store)
+		if ps == nil {
+			ok = false
+			return
+		}
+		stores = append(stores, ps)
+	}
+	add(m.sessions)
+	if m.al != nil {
+		if registry := m.al.GetRegistry(); registry != nil {
+			ids := registry.ListAgentIDs()
+			sort.Strings(ids)
+			for _, id := range ids {
+				if agent, found := registry.GetAgent(id); found && agent != nil {
+					add(agent.Sessions)
+				}
+			}
+		}
+	}
+	if !ok {
+		m.warnUnprunable.Do(func() {
+			logger.WarnCF("session-prune",
+				"Session pruning is enabled but a session store cannot delete sessions; pruning skipped",
+				nil)
+		})
+		return nil, false
+	}
+	return stores, true
+}
+
 // asPruneStore returns the session store as a pruning store when its dynamic
 // type supports deletion (JSONLBackend and SessionManager do).
 func asPruneStore(store session.SessionStore) pruner.Store {
@@ -97,42 +148,12 @@ func asPruneStore(store session.SessionStore) pruner.Store {
 	return nil
 }
 
-// pruneStores returns the session store of every agent. The seahorse database
-// is shared, but each agent keeps its own JSONL store, so pruning must reach
-// all of them or routed agents would lose their seahorse context while their
-// JSONL history stays behind. The registry is re-read on every call so agents
-// added after startup are covered.
-func (m *seahorseContextManager) pruneStores() []pruner.Store {
-	var stores []pruner.Store
-	add := func(store session.SessionStore) {
-		if ps := asPruneStore(store); ps != nil {
-			stores = append(stores, ps)
-		}
-	}
-	add(m.sessions)
-	if m.al == nil {
-		return stores
-	}
-	registry := m.al.GetRegistry()
-	if registry == nil {
-		return stores
-	}
-	ids := registry.ListAgentIDs()
-	sort.Strings(ids)
-	for _, id := range ids {
-		if agent, ok := registry.GetAgent(id); ok && agent != nil {
-			add(agent.Sessions)
-		}
-	}
-	return stores
-}
-
 // runPruneLoop periodically prunes old sessions until ctx is canceled.
 // stores is evaluated on every pass.
 func runPruneLoop(
 	ctx context.Context,
 	engine *seahorse.Engine,
-	stores func() []pruner.Store,
+	stores func() ([]pruner.Store, bool),
 	cfg config.SessionPruneConfig,
 ) {
 	interval := time.Duration(cfg.EffectiveCheckIntervalMinutes()) * time.Minute
@@ -147,7 +168,9 @@ func runPruneLoop(
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			pruner.Run(ctx, engine, stores(), cfg)
+			if current, ok := stores(); ok {
+				pruner.Run(ctx, engine, current, cfg)
+			}
 		}
 	}
 }

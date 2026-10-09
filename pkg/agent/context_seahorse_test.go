@@ -12,6 +12,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
 	"github.com/sipeed/picoclaw/pkg/seahorse"
+	"github.com/sipeed/picoclaw/pkg/session"
 )
 
 // seahorseTestProvider implements providers.LLMProvider for seahorse tests.
@@ -1163,5 +1164,33 @@ func TestSeahorseSummarizeSkipsCondensedWhenBelowThreshold(t *testing.T) {
 
 	if tokensBefore < threshold && condensedCount > 0 {
 		t.Errorf("BUG: condensed created when tokens (%d) < threshold (%d)", tokensBefore, threshold)
+	}
+}
+
+// noDeleteStore hides DeleteSession so it cannot be pruned.
+type noDeleteStore struct{ session.SessionStore }
+
+func TestSeahorsePruneStoresSkipsWhenStoreCannotDelete(t *testing.T) {
+	mgr := &seahorseContextManager{sessions: noDeleteStore{session.NewSessionManager("")}}
+
+	stores, ok := mgr.pruneStores()
+	if ok {
+		t.Fatal("pruneStores ok = true for a store without DeleteSession, want false")
+	}
+	if len(stores) != 0 {
+		t.Fatalf("pruneStores returned %d stores, want none so nothing is half-pruned", len(stores))
+	}
+	// Asking again must stay false (and not panic on the warn-once).
+	if _, ok := mgr.pruneStores(); ok {
+		t.Fatal("second pruneStores ok = true, want false")
+	}
+}
+
+func TestSeahorsePruneStoresAcceptsDeletableStore(t *testing.T) {
+	mgr := &seahorseContextManager{sessions: session.NewSessionManager("")}
+
+	stores, ok := mgr.pruneStores()
+	if !ok || len(stores) != 1 {
+		t.Fatalf("pruneStores = (%d stores, ok=%v), want (1, true)", len(stores), ok)
 	}
 }
