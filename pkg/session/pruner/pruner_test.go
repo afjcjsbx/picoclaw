@@ -77,10 +77,11 @@ func TestSelectUndatedNeverDeleted(t *testing.T) {
 	if !reflect.DeepEqual(got, []string{"stale"}) {
 		t.Fatalf("Select(count) = %v, want [stale]", got)
 	}
-	// Cap smaller than the number of dated sessions still never touches it.
+	// A tighter cap still never touches the undated session, and the newest
+	// dated one is always kept.
 	got = Select(infos, config.SessionPruneConfig{MaxSessions: 1}, now)
-	if !reflect.DeepEqual(got, []string{"stale", "fresh"}) {
-		t.Fatalf("Select(count=1) = %v, want [stale fresh]", got)
+	if !reflect.DeepEqual(got, []string{"stale"}) {
+		t.Fatalf("Select(count=1) = %v, want [stale]", got)
 	}
 }
 
@@ -368,6 +369,72 @@ func TestRunStopsWhenContextCanceled(t *testing.T) {
 	res := Run(ctx, eng, nil, config.SessionPruneConfig{Enabled: true, MaxAgeDays: 30})
 	if len(res.Deleted) != 0 {
 		t.Fatalf("canceled context still deleted %v", res.Deleted)
+	}
+}
+
+func TestSelectNeverDeletesNewestSession(t *testing.T) {
+	now := time.Date(2026, 1, 31, 12, 0, 0, 0, time.UTC)
+	infos := []Info{
+		{Key: "a", NewestAt: now.Add(-90 * 24 * time.Hour)},
+		{Key: "b", NewestAt: now.Add(-60 * 24 * time.Hour)},
+		{Key: "c", NewestAt: now.Add(-45 * 24 * time.Hour)},
+	}
+	// Everything is older than 30 days (e.g. the device was off for a while),
+	// yet the most recent session must survive.
+	got := Select(infos, config.SessionPruneConfig{MaxAgeDays: 30}, now)
+	if !reflect.DeepEqual(got, []string{"a", "b"}) {
+		t.Fatalf("Select(age) = %v, want [a b]", got)
+	}
+	got = Select(infos[2:], config.SessionPruneConfig{MaxAgeDays: 30}, now)
+	if len(got) != 0 {
+		t.Fatalf("Select(single stale session) = %v, want none", got)
+	}
+}
+
+func TestRunSizeGuardKeepsNewestSession(t *testing.T) {
+	now := time.Now()
+	const mb = 1 << 20
+	// Every session is 5 MB and the limit is 1 MB: the limit can never be met,
+	// but the guard must not delete everything while trying.
+	eng := newFakeEngine(5 * mb)
+	eng.statuses = []seahorse.SessionStatus{
+		{SessionKey: "s1", NewestAt: now.Add(-5 * time.Hour)},
+		{SessionKey: "s2", NewestAt: now.Add(-3 * time.Hour)},
+		{SessionKey: "s3", NewestAt: now.Add(-time.Hour)},
+	}
+	store := newFakeStore("s1", "s2", "s3")
+
+	res := Run(context.Background(), eng, []Store{store}, config.SessionPruneConfig{
+		Enabled:     true,
+		MaxDBSizeMB: 1,
+	})
+	if !reflect.DeepEqual(store.ListSessions(), []string{"s3"}) {
+		t.Fatalf("store sessions = %v, want only the newest (s3) kept; deleted=%v", store.ListSessions(), res.Deleted)
+	}
+	if len(eng.statuses) != 1 || eng.statuses[0].SessionKey != "s3" {
+		t.Fatalf("engine sessions = %v, want only s3", eng.statuses)
+	}
+}
+
+func TestRunSizeGuardKeepsNewestJSONLOnlySession(t *testing.T) {
+	now := time.Now()
+	const mb = 1 << 20
+	eng := newFakeEngine(5 * mb)
+	eng.statuses = []seahorse.SessionStatus{
+		{SessionKey: "db-old", NewestAt: now.Add(-5 * time.Hour)},
+		{SessionKey: "db-new", NewestAt: now.Add(-3 * time.Hour)},
+	}
+	store := newFakeStore("db-old", "db-new", "jsonl-newest")
+	store.activity = map[string]time.Time{"jsonl-newest": now.Add(-time.Minute)}
+
+	Run(context.Background(), eng, []Store{store}, config.SessionPruneConfig{
+		Enabled:     true,
+		MaxDBSizeMB: 1,
+	})
+	// jsonl-newest is the protected session; db-new is the only other candidate
+	// left in the database once db-old is gone, and it is deletable.
+	if contains(store.deleted, "jsonl-newest") {
+		t.Fatalf("newest JSONL-only session was deleted: %v", store.deleted)
 	}
 }
 

@@ -91,6 +91,13 @@ type Result struct {
 // maxDBSizeIterations bounds the database-size enforcement loop.
 const maxDBSizeIterations = 32
 
+// minKeptSessions is how many of the most recently active sessions a prune pass
+// never deletes, whatever the thresholds say. It stops a pass from wiping the
+// device clean (a size limit below the minimum database size, every session
+// older than max_age_days after a long idle period, a wrong clock) and always
+// leaves the session the user is most likely still using.
+const minKeptSessions = 1
+
 // VACUUM rewrites the whole database file and blocks every writer for the
 // duration, which can be long on slow storage. It is only worth running when it
 // returns a meaningful share of the file; smaller amounts of free space are
@@ -108,8 +115,9 @@ const (
 //   - its last activity is older than MaxAgeDays, or
 //   - it is not among the MaxSessions most recently active sessions.
 //
-// A threshold of 0 disables the corresponding check. Sessions whose activity is
-// unknown (undated) are never selected: they still count toward MaxSessions, but
+// A threshold of 0 disables the corresponding check. The most recently active
+// session is never selected, whatever the thresholds are. Sessions whose
+// activity is unknown (undated) are never selected: they still count toward MaxSessions, but
 // the sessions dropped to honor the cap are always the oldest dated ones, so a
 // session is never deleted on the basis of a timestamp we do not have.
 func Select(infos []Info, cfg config.SessionPruneConfig, now time.Time) []string {
@@ -118,6 +126,7 @@ func Select(infos []Info, cfg config.SessionPruneConfig, now time.Time) []string
 	}
 
 	dated := datedOldestFirst(infos)
+	protected := newestKeys(dated, minKeptSessions)
 	selected := make(map[string]struct{})
 
 	if cfg.MaxSessions > 0 && len(infos) > cfg.MaxSessions {
@@ -139,18 +148,27 @@ func Select(infos []Info, cfg config.SessionPruneConfig, now time.Time) []string
 		}
 	}
 
-	if len(selected) == 0 {
-		return nil
-	}
-
 	// Preserve oldest-first ordering in the output.
-	out := make([]string, 0, len(selected))
+	var out []string
 	for _, info := range dated {
+		if _, keep := protected[info.Key]; keep {
+			continue
+		}
 		if _, ok := selected[info.Key]; ok {
 			out = append(out, info.Key)
 		}
 	}
 	return out
+}
+
+// newestKeys returns the keys of the n most recently active sessions of an
+// oldest-first slice.
+func newestKeys(oldestFirst []Info, n int) map[string]struct{} {
+	keys := make(map[string]struct{}, n)
+	for i := len(oldestFirst) - 1; i >= 0 && len(keys) < n; i-- {
+		keys[oldestFirst[i].Key] = struct{}{}
+	}
+	return keys
 }
 
 // datedOldestFirst returns the sessions with a known activity time, ordered
@@ -284,7 +302,15 @@ func enforceDBSize(
 			inDB = append(inDB, info)
 		}
 	}
-	candidates := datedOldestFirst(inDB)
+	// The kept sessions are chosen among all sessions, not only those in the
+	// database, so a JSONL-only session that is newer still counts.
+	protected := newestKeys(datedOldestFirst(infos), minKeptSessions)
+	var candidates []Info
+	for _, info := range datedOldestFirst(inDB) {
+		if _, keep := protected[info.Key]; !keep {
+			candidates = append(candidates, info)
+		}
+	}
 	remaining := len(inDB)
 
 	deleted := 0
