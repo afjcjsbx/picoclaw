@@ -120,8 +120,13 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 			// is where ExecuteTools (or initial poll) deposits steering.
 			// We do NOT call dequeueSteeringMessagesForScope here because
 			// steering was already consumed from al.steering by ExecuteTools.
+			//
+			// Assign instead of appending: after every LLM call the local
+			// pendingMessages is already synced from exec.pendingMessages
+			// (see the CallLLM return handling below), so appending here would
+			// duplicate messages that arrived via the post-response poll.
 			if len(exec.pendingMessages) > 0 {
-				pendingMessages = append(pendingMessages, exec.pendingMessages...)
+				pendingMessages = exec.pendingMessages
 				exec.pendingMessages = nil
 			}
 		} else if !ts.opts.SkipInitialSteeringPoll {

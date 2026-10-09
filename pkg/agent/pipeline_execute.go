@@ -829,6 +829,20 @@ toolLoop:
 
 	exec.messages = messages
 	if loopDetectionStatus == loopStatusCritical {
+		// A steering message that arrived while the repeated tool was running
+		// takes precedence over loop termination: the user asked for a change
+		// of direction, so let the model react to it. The loop guard still
+		// applies on the next iteration if the model keeps repeating the call.
+		if steerMsgs := al.dequeueSteeringMessagesForScope(ts.sessionKey); len(steerMsgs) > 0 {
+			logger.InfoCF("agent", "Steering arrived during critical loop detection; continuing turn",
+				map[string]any{
+					"agent_id":       ts.agent.ID,
+					"steering_count": len(steerMsgs),
+				})
+			exec.pendingMessages = append(exec.pendingMessages, steerMsgs...)
+			exec.allResponsesHandled = false
+			return ToolControlContinue
+		}
 		logger.WarnCF("agent", "Critical repeated tool-call loop detected; stopping turn",
 			map[string]any{
 				"agent_id": ts.agent.ID,
