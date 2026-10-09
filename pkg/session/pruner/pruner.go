@@ -68,15 +68,18 @@ type Info struct {
 
 // lastActivity returns the most recent known activity timestamp for the
 // session: the newest of the seahorse message time and the session store write
-// time, falling back to the oldest seahorse message. A zero value means the
-// session is undated; undated sessions are never selected for deletion.
+// time, falling back to the oldest seahorse message. Implausible timestamps (see
+// minPlausibleTime) are ignored. A zero value means the session is undated;
+// undated sessions are never selected for deletion.
 func (i Info) lastActivity() time.Time {
-	last := i.NewestAt
-	if i.StoreAt.After(last) {
-		last = i.StoreAt
+	var last time.Time
+	for _, at := range []time.Time{i.NewestAt, i.StoreAt} {
+		if plausibleTime(at) && at.After(last) {
+			last = at
+		}
 	}
-	if last.IsZero() {
-		return i.OldestAt
+	if last.IsZero() && plausibleTime(i.OldestAt) {
+		last = i.OldestAt
 	}
 	return last
 }
@@ -90,6 +93,20 @@ type Result struct {
 
 // maxDBSizeIterations bounds the database-size enforcement loop.
 const maxDBSizeIterations = 32
+
+// minPlausibleTime is the earliest wall-clock reading treated as real. Boards
+// without a battery-backed RTC boot with the clock at the epoch (or a stale
+// build date) until NTP syncs. Messages written in that window carry bogus old
+// timestamps, and pruning at that moment would see a bogus "now"; either way an
+// age comparison would delete live sessions. Timestamps earlier than this are
+// ignored (the session is treated as undated) and age-based pruning is skipped
+// while the current clock is earlier than this.
+var minPlausibleTime = time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC)
+
+// plausibleTime reports whether t looks like a real wall-clock reading.
+func plausibleTime(t time.Time) bool {
+	return !t.IsZero() && !t.Before(minPlausibleTime)
+}
 
 // minKeptSessions is how many of the most recently active sessions a prune pass
 // never deletes, whatever the thresholds say. It stops a pass from wiping the
@@ -115,7 +132,8 @@ const (
 //   - its last activity is older than MaxAgeDays, or
 //   - it is not among the MaxSessions most recently active sessions.
 //
-// A threshold of 0 disables the corresponding check. The most recently active
+// A threshold of 0 disables the corresponding check. Age-based pruning is skipped
+// while the clock reads before minPlausibleTime. The most recently active
 // session is never selected, whatever the thresholds are. Sessions whose
 // activity is unknown (undated) are never selected: they still count toward MaxSessions, but
 // the sessions dropped to honor the cap are always the oldest dated ones, so a
@@ -139,7 +157,8 @@ func Select(infos []Info, cfg config.SessionPruneConfig, now time.Time) []string
 		}
 	}
 
-	if cfg.MaxAgeDays > 0 {
+	// Without a trustworthy clock "older than N days" is meaningless.
+	if cfg.MaxAgeDays > 0 && plausibleTime(now) {
 		cutoff := now.Add(-time.Duration(cfg.MaxAgeDays) * 24 * time.Hour)
 		for _, info := range dated {
 			if info.lastActivity().Before(cutoff) {

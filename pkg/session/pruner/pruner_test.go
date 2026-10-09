@@ -438,6 +438,42 @@ func TestRunSizeGuardKeepsNewestJSONLOnlySession(t *testing.T) {
 	}
 }
 
+func TestSelectSkipsAgePruningWithImplausibleClock(t *testing.T) {
+	// A board without an RTC boots at the epoch until NTP syncs.
+	epoch := time.Unix(0, 0)
+	infos := []Info{
+		{Key: "a", NewestAt: epoch.Add(-24 * time.Hour)},
+		{Key: "b", NewestAt: epoch},
+	}
+	if got := Select(infos, config.SessionPruneConfig{MaxAgeDays: 1}, epoch.Add(48*time.Hour)); len(got) != 0 {
+		t.Fatalf("Select with epoch clock = %v, want none", got)
+	}
+}
+
+func TestSelectIgnoresImplausibleTimestamps(t *testing.T) {
+	now := time.Date(2026, 1, 31, 12, 0, 0, 0, time.UTC)
+	infos := []Info{
+		// Written before NTP synced: the stamp says 1970, the session is live.
+		{Key: "offline-boot", NewestAt: time.Unix(3600, 0)},
+		{Key: "stale", NewestAt: now.Add(-90 * 24 * time.Hour)},
+		{Key: "fresh", NewestAt: now.Add(-time.Hour)},
+	}
+	got := Select(infos, config.SessionPruneConfig{MaxAgeDays: 30}, now)
+	if !reflect.DeepEqual(got, []string{"stale"}) {
+		t.Fatalf("Select() = %v, want [stale]; the 1970-stamped session must be left alone", got)
+	}
+	// A newer, plausible store time rescues a bogus index timestamp.
+	infos = []Info{
+		{Key: "a", NewestAt: time.Unix(3600, 0), StoreAt: now.Add(-time.Hour)},
+		{Key: "b", NewestAt: now.Add(-90 * 24 * time.Hour)},
+		{Key: "c", NewestAt: now.Add(-2 * time.Hour)},
+	}
+	got = Select(infos, config.SessionPruneConfig{MaxAgeDays: 30}, now)
+	if !reflect.DeepEqual(got, []string{"b"}) {
+		t.Fatalf("Select() = %v, want [b]", got)
+	}
+}
+
 func TestRunNoopWhenDisabled(t *testing.T) {
 	eng := newFakeEngine(1 << 20)
 	eng.statuses = []seahorse.SessionStatus{{SessionKey: "a", NewestAt: time.Now().Add(-1000 * time.Hour)}}
