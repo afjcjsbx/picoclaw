@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"sort"
 	"testing"
 	"time"
 
@@ -575,9 +574,12 @@ func (f *fakeStore) DeleteSession(key string) error {
 }
 
 func contains(list []string, val string) bool {
-	sort.Strings(list)
-	i := sort.SearchStrings(list, val)
-	return i < len(list) && list[i] == val
+	for _, item := range list {
+		if item == val {
+			return true
+		}
+	}
+	return false
 }
 
 func boolPtr(v bool) *bool {

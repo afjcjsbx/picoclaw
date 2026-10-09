@@ -15,6 +15,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
 	"github.com/sipeed/picoclaw/pkg/seahorse"
 	"github.com/sipeed/picoclaw/pkg/session"
+	"github.com/sipeed/picoclaw/pkg/session/pruner"
 )
 
 // seahorseTestProvider implements providers.LLMProvider for seahorse tests.
@@ -1267,5 +1268,133 @@ func TestSeahorseCloseWithoutPruneLoop(t *testing.T) {
 	var nilEngine seahorseContextManager
 	if err := nilEngine.Close(); err != nil {
 		t.Fatalf("Close with no engine: %v", err)
+	}
+}
+
+func TestSeahorseStartupPrunesBeforeBootstrap(t *testing.T) {
+	workspace := t.TempDir()
+
+	// Sessions left behind by a previous run, oldest first.
+	pre, err := memory.NewJSONLStore(filepath.Join(workspace, "sessions"))
+	if err != nil {
+		t.Fatalf("NewJSONLStore: %v", err)
+	}
+	backend := session.NewJSONLBackend(pre)
+	keys := []string{"agent:main:old1", "agent:main:old2", "agent:main:newest"}
+	for _, key := range keys {
+		backend.AddMessage(key, "user", "hello "+key)
+		time.Sleep(2 * time.Millisecond)
+	}
+	if closeErr := backend.Close(); closeErr != nil {
+		t.Fatalf("Close: %v", closeErr)
+	}
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:      workspace,
+				ModelName:      "test-model",
+				MaxTokens:      4096,
+				ContextManager: "seahorse",
+			},
+		},
+		Session: config.SessionConfig{
+			Prune: config.SessionPruneConfig{Enabled: true, MaxSessions: 1},
+		},
+	}
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), &simpleMockProvider{response: "ok"})
+	defer al.Close()
+
+	mgr, ok := al.contextManager.(*seahorseContextManager)
+	if !ok {
+		t.Fatal("expected seahorseContextManager")
+	}
+
+	sessions := al.registry.GetDefaultAgent().Sessions.ListSessions()
+	if len(sessions) != 1 || sessions[0] != "agent:main:newest" {
+		t.Fatalf("JSONL sessions after startup = %v, want only agent:main:newest", sessions)
+	}
+	statuses, err := mgr.engine.SessionStatuses(context.Background())
+	if err != nil {
+		t.Fatalf("SessionStatuses: %v", err)
+	}
+	if len(statuses) != 1 || statuses[0].SessionKey != "agent:main:newest" {
+		t.Fatalf("seahorse sessions after startup = %v, want only agent:main:newest "+
+			"(pruned sessions must not be bootstrapped)", statuses)
+	}
+}
+
+func TestSeahorsePruneReachesEveryAgentStore(t *testing.T) {
+	workspace := t.TempDir()
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:      filepath.Join(workspace, "default"),
+				ModelName:      "test-model",
+				MaxTokens:      4096,
+				ContextManager: "seahorse",
+			},
+			List: []config.AgentConfig{
+				{ID: "main", Default: true, Workspace: filepath.Join(workspace, "main")},
+				{ID: "support", Workspace: filepath.Join(workspace, "support")},
+			},
+		},
+	}
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), &simpleMockProvider{response: "ok"})
+	defer al.Close()
+
+	mgr, ok := al.contextManager.(*seahorseContextManager)
+	if !ok {
+		t.Fatal("expected seahorseContextManager")
+	}
+	mainAgent, _ := al.registry.GetAgent("main")
+	supportAgent, _ := al.registry.GetAgent("support")
+	if mainAgent == nil || supportAgent == nil {
+		t.Fatal("expected main and support agents")
+	}
+
+	ctx := context.Background()
+	// Oldest to newest; the middle one belongs to the routed agent.
+	seed := []struct {
+		agent *AgentInstance
+		key   string
+	}{
+		{mainAgent, "agent:main:oldest"},
+		{supportAgent, "agent:support:middle"},
+		{mainAgent, "agent:main:newest"},
+	}
+	for _, item := range seed {
+		item.agent.Sessions.AddMessage(item.key, "user", "hello")
+		if _, err := mgr.engine.Ingest(ctx, item.key, []seahorse.Message{
+			{Role: "user", Content: "hello", TokenCount: 2, CreatedAt: time.Now().UTC().Truncate(time.Second)},
+		}); err != nil {
+			t.Fatalf("Ingest %s: %v", item.key, err)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	stores, ok := mgr.pruneStores()
+	if !ok || len(stores) < 2 {
+		t.Fatalf("pruneStores = (%d stores, ok=%v), want a store per agent", len(stores), ok)
+	}
+	res := pruner.Run(ctx, mgr.engine, stores, config.SessionPruneConfig{Enabled: true, MaxSessions: 1})
+	if len(res.Deleted) != 2 {
+		t.Fatalf("Deleted = %v, want the two oldest sessions", res.Deleted)
+	}
+
+	// The routed agent's JSONL history must be removed along with its seahorse
+	// conversation, not left behind.
+	if got := supportAgent.Sessions.ListSessions(); len(got) != 0 {
+		t.Fatalf("support agent sessions = %v, want none", got)
+	}
+	if got := mainAgent.Sessions.ListSessions(); len(got) != 1 || got[0] != "agent:main:newest" {
+		t.Fatalf("main agent sessions = %v, want [agent:main:newest]", got)
+	}
+	statuses, err := mgr.engine.SessionStatuses(ctx)
+	if err != nil {
+		t.Fatalf("SessionStatuses: %v", err)
+	}
+	if len(statuses) != 1 || statuses[0].SessionKey != "agent:main:newest" {
+		t.Fatalf("seahorse sessions = %v, want only agent:main:newest", statuses)
 	}
 }

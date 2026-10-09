@@ -2104,3 +2104,79 @@ func TestEngineDeleteSessionFreesSpaceThatVacuumReclaims(t *testing.T) {
 		t.Fatalf("DeleteSession(missing): %v", delErr)
 	}
 }
+
+func TestEngineDBFileSize(t *testing.T) {
+	// No path configured (in-memory style configs): nothing to measure.
+	noPath := &Engine{}
+	if size, err := noPath.DBFileSize(); err != nil || size != 0 {
+		t.Fatalf("DBFileSize(no path) = (%d, %v), want (0, nil)", size, err)
+	}
+
+	// A path that does not exist yet measures zero rather than failing.
+	missing := &Engine{config: Config{DBPath: filepath.Join(t.TempDir(), "missing.db")}}
+	if size, err := missing.DBFileSize(); err != nil || size != 0 {
+		t.Fatalf("DBFileSize(missing) = (%d, %v), want (0, nil)", size, err)
+	}
+
+	dbPath := filepath.Join(t.TempDir(), "size.db")
+	eng, err := NewEngine(Config{DBPath: dbPath}, nil)
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	defer eng.Close()
+	ctx := context.Background()
+	if _, ingestErr := eng.Ingest(ctx, "agent:main:s", []Message{
+		{Role: "user", Content: strings.Repeat("x", 4096), TokenCount: 10},
+	}); ingestErr != nil {
+		t.Fatalf("Ingest: %v", ingestErr)
+	}
+
+	var want int64
+	for _, path := range []string{dbPath, dbPath + "-wal"} {
+		if info, statErr := os.Stat(path); statErr == nil {
+			want += info.Size()
+		}
+	}
+	got, err := eng.DBFileSize()
+	if err != nil {
+		t.Fatalf("DBFileSize: %v", err)
+	}
+	if got != want || got == 0 {
+		t.Fatalf("DBFileSize = %d, want %d (db + wal, non-zero)", got, want)
+	}
+}
+
+func TestEngineCheckpointTruncatesWAL(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "wal.db")
+	eng, err := NewEngine(Config{DBPath: dbPath}, nil)
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	defer eng.Close()
+	ctx := context.Background()
+
+	if _, ingestErr := eng.Ingest(ctx, "agent:main:s", []Message{
+		{Role: "user", Content: strings.Repeat("y", 4096), TokenCount: 10},
+	}); ingestErr != nil {
+		t.Fatalf("Ingest: %v", ingestErr)
+	}
+	walInfo, err := os.Stat(dbPath + "-wal")
+	if err != nil || walInfo.Size() == 0 {
+		t.Fatalf("expected a non-empty WAL after a write (info=%v, err=%v)", walInfo, err)
+	}
+
+	if ckptErr := eng.Checkpoint(ctx, true); ckptErr != nil {
+		t.Fatalf("Checkpoint(truncate): %v", ckptErr)
+	}
+	walInfo, err = os.Stat(dbPath + "-wal")
+	if err != nil {
+		t.Fatalf("Stat WAL: %v", err)
+	}
+	if walInfo.Size() != 0 {
+		t.Fatalf("WAL size after TRUNCATE checkpoint = %d, want 0", walInfo.Size())
+	}
+
+	if ckptErr := eng.Checkpoint(ctx, false); ckptErr != nil {
+		t.Fatalf("Checkpoint(passive): %v", ckptErr)
+	}
+}

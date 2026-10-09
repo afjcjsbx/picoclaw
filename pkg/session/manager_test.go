@@ -128,3 +128,60 @@ func TestLastActivity(t *testing.T) {
 		t.Fatalf("LastActivity = %v, want >= %v", got, before)
 	}
 }
+
+func TestDeleteSession(t *testing.T) {
+	dir := t.TempDir()
+	sm := NewSessionManager(dir)
+
+	for _, key := range []string{"telegram:1", "telegram:2"} {
+		sm.GetOrCreate(key)
+		sm.AddMessage(key, "user", "hello")
+		if err := sm.Save(key); err != nil {
+			t.Fatalf("Save(%q): %v", key, err)
+		}
+	}
+
+	if err := sm.DeleteSession("telegram:1"); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "telegram_1.json")); !os.IsNotExist(err) {
+		t.Fatalf("session file still exists after delete (err=%v)", err)
+	}
+	if got := sm.ListSessions(); len(got) != 1 || got[0] != "telegram:2" {
+		t.Fatalf("ListSessions = %v, want [telegram:2]", got)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "telegram_2.json")); err != nil {
+		t.Fatalf("other session file was affected: %v", err)
+	}
+
+	// A reloaded manager must not resurrect the deleted session.
+	if got := NewSessionManager(dir).ListSessions(); len(got) != 1 || got[0] != "telegram:2" {
+		t.Fatalf("reloaded ListSessions = %v, want [telegram:2]", got)
+	}
+
+	// Unknown and already-deleted sessions are a no-op.
+	if err := sm.DeleteSession("telegram:1"); err != nil {
+		t.Fatalf("DeleteSession(again): %v", err)
+	}
+	if err := sm.DeleteSession("never-existed"); err != nil {
+		t.Fatalf("DeleteSession(missing): %v", err)
+	}
+}
+
+func TestDeleteSession_RejectsInvalidKey(t *testing.T) {
+	sm := NewSessionManager(t.TempDir())
+	if err := sm.DeleteSession("."); err != os.ErrInvalid {
+		t.Fatalf("DeleteSession(\".\") = %v, want os.ErrInvalid", err)
+	}
+}
+
+func TestDeleteSession_InMemoryManager(t *testing.T) {
+	sm := NewSessionManager("")
+	sm.GetOrCreate("s1")
+	if err := sm.DeleteSession("s1"); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	if got := sm.ListSessions(); len(got) != 0 {
+		t.Fatalf("ListSessions = %v, want none", got)
+	}
+}
