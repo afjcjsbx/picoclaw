@@ -361,7 +361,12 @@ func (r *ToolRegistry) ExecuteWithContext(
 		}
 	}
 
-	result = normalizeToolResult(result, name, r.mediaStore, channel, chatID)
+	// Read the media store under the registry lock: SetMediaStore may be
+	// called concurrently (e.g. config hot reload) while tools are executing.
+	r.mu.RLock()
+	mediaStore := r.mediaStore
+	r.mu.RUnlock()
+	result = normalizeToolResult(result, name, mediaStore, channel, chatID)
 
 	duration := time.Since(start)
 
