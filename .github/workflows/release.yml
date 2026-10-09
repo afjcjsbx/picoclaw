@@ -116,6 +116,11 @@ jobs:
           MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
           MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
 
+      - name: Verify signed checksums against embedded public key
+        run: go test ./pkg/updater -run TestVerifyReleaseArtifacts -count=1 -v
+        env:
+          PICOCLAW_VERIFY_RELEASE_DIR: dist
+
       - name: Apply release flags
         shell: bash
         env:

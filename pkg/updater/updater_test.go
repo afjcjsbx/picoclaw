@@ -498,6 +498,41 @@ func TestVerifyMinisign_AcceptsPrehashedSignatures(t *testing.T) {
 	}
 }
 
+// TestReleasePublicKeyConfigured guards against shipping a build whose
+// embedded release key is empty, which would make every self-update fail
+// closed.
+func TestReleasePublicKeyConfigured(t *testing.T) {
+	if strings.TrimSpace(releasePublicKey) == "" {
+		t.Fatal("releasePublicKey is empty; signed updates would be rejected")
+	}
+	var pub minisign.PublicKey
+	if err := pub.UnmarshalText([]byte(releasePublicKey)); err != nil {
+		t.Fatalf("releasePublicKey is not a valid minisign public key: %v", err)
+	}
+}
+
+// TestVerifyReleaseArtifacts verifies checksums.txt from a GoReleaser dist
+// directory against the embedded release public key. The release workflows run
+// it with PICOCLAW_VERIFY_RELEASE_DIR=dist to prove the signing key matches the
+// key baked into the binaries before publishing artifacts.
+func TestVerifyReleaseArtifacts(t *testing.T) {
+	dir := os.Getenv("PICOCLAW_VERIFY_RELEASE_DIR")
+	if dir == "" {
+		t.Skip("set PICOCLAW_VERIFY_RELEASE_DIR to a GoReleaser dist directory")
+	}
+	sum, err := os.ReadFile(filepath.Join(dir, "checksums.txt"))
+	if err != nil {
+		t.Fatalf("read checksums.txt: %v", err)
+	}
+	sig, err := os.ReadFile(filepath.Join(dir, "checksums.txt.minisig"))
+	if err != nil {
+		t.Fatalf("read checksums.txt.minisig: %v", err)
+	}
+	if err := verifyMinisign(releasePublicKey, sum, sig); err != nil {
+		t.Fatalf("release checksums do not verify with the embedded public key: %v", err)
+	}
+}
+
 func TestFindAssetInfo_RejectsUnverifiedChecksums(t *testing.T) {
 	sums := strings.Repeat("a", 64) + "  picoclaw_Linux_x86_64.tar.gz\n"
 	signed := []testReleaseAsset{

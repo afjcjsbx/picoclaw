@@ -348,13 +348,19 @@ type releaseAsset struct {
 }
 
 // releasePublicKey is the minisign public key (base64, as printed by
-// `minisign -G`) that release checksum files must be signed with.
-// Empty until the release pipeline is provisioned; updates fail closed.
-var releasePublicKey = ""
+// `minisign -G`) that release checksum files must be signed with. It must
+// match the MINISIGN_KEY secret used by the release workflows; a mismatch is
+// caught by TestVerifyReleaseArtifacts before the nightly artifacts are
+// uploaded and by the failed signature check on the next self-update.
+var releasePublicKey = "RWQfxHIyc+J5d3uprzTBh+8a4kbKznw2Q30yhjg/WRyjREDLebK1kN5B"
 
 // fetchVerifiedChecksums downloads checksums.txt and its .minisig sibling
 // and returns the checksum content only if the signature verifies against
 // releasePublicKey.
+//
+// The signature authenticates the checksums but does not bind them to a
+// version, so an attacker able to edit a release could replay an older,
+// validly signed checksums.txt (rollback). Out of scope for now.
 func fetchVerifiedChecksums(assets []releaseAsset) ([]byte, error) {
 	if releasePublicKey == "" {
 		return nil, errors.New("release public key not configured; refusing unsigned update")
