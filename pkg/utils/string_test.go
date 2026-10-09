@@ -128,3 +128,20 @@ func TestSanitizeMessageContent(t *testing.T) {
 		})
 	}
 }
+
+func TestSortedArgKeys(t *testing.T) {
+	if got := SortedArgKeys(nil); len(got) != 0 {
+		t.Fatalf("SortedArgKeys(nil) = %v, want empty", got)
+	}
+
+	got := SortedArgKeys(map[string]any{"b": 1, "a": 2, "c": 3})
+	want := []string{"a", "b", "c"}
+	if len(got) != len(want) {
+		t.Fatalf("SortedArgKeys len = %d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("SortedArgKeys[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
