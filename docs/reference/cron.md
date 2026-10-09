@@ -59,8 +59,9 @@ Example tool calls:
 `update` accepts `name`, `message`, `command`, and exactly one schedule field
 (`at_seconds`, `every_seconds`, or `cron_expr`).
 Omit `command` to preserve it, set `command` to a non-empty string to replace
-it, or set `command` to `""` to clear it. Command updates require the same
-channel allowlist and confirmation gates as command creation.
+it, or set `command` to `""` to clear it. Setting or replacing a command
+requires the same channel allowlist and confirmation gates as command
+creation; clearing it does not.
 
 ## Execution Modes
 
@@ -84,7 +85,7 @@ A turn started by a cron job receives a tool registry without `cron`, so the age
 
 `tools.cron.enabled` controls whether the agent-facing `cron` tool is registered. Default: `true`.
 
-If you disable `tools.cron`, users can no longer create or manage jobs through the agent tool. The gateway still starts `CronService`, but it does not install the job execution callback. As a result, due jobs do not actually run; one-time jobs may be deleted and recurring jobs may be rescheduled without executing their payload. The CLI still uses the same job store.
+If you disable `tools.cron`, users can no longer create or manage jobs through the agent tool. The gateway still starts `CronService`, but it does not install the job execution callback. As a result, due jobs do not actually run; one-time jobs may be deleted and recurring jobs may be rescheduled without executing their payload. Jobs that fire without a callback are recorded with `state.lastStatus: "skipped"`. The CLI still uses the same job store.
 
 `tools.cron.exec_timeout_minutes` sets the timeout used for scheduled command execution. Default: `5`. Set `0` for no timeout.
 
