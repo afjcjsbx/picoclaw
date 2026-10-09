@@ -17,6 +17,8 @@ interface GatewayLogsResponse {
   logs?: string[]
   log_total?: number
   log_run_id?: number
+  log_start?: number
+  log_has_older?: boolean
 }
 
 interface GatewayActionResponse {
@@ -43,6 +45,7 @@ export async function getGatewayStatus(): Promise<GatewayStatusResponse> {
 export async function getGatewayLogs(options?: {
   log_offset?: number
   log_run_id?: number
+  log_before?: number
 }): Promise<GatewayLogsResponse> {
   const params = new URLSearchParams()
   if (options?.log_offset !== undefined) {
@@ -50,6 +53,9 @@ export async function getGatewayLogs(options?: {
   }
   if (options?.log_run_id !== undefined) {
     params.set("log_run_id", options.log_run_id.toString())
+  }
+  if (options?.log_before !== undefined) {
+    params.set("log_before", options.log_before.toString())
   }
   const queryString = params.toString() ? `?${params.toString()}` : ""
   return request<GatewayLogsResponse>(`/api/gateway/logs${queryString}`)

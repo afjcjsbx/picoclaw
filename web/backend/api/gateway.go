@@ -43,7 +43,7 @@ var gateway = struct {
 	picoToken           string            // cached raw pico token for upstream gateway proxy injection
 }{
 	runtimeStatus: "stopped",
-	logs:          NewLogBuffer(200),
+	logs:          NewLogBuffer(gatewayLogBufferSize),
 }
 
 // refreshPicoTokensLocked reads the pico token from config and caches it.
@@ -84,8 +84,11 @@ func (h *Handler) gatewayCommandArgs() []string {
 }
 
 const (
-	protocolKey = "Sec-WebSocket-Protocol"
-	tokenPrefix = "token."
+	protocolKey        = "Sec-WebSocket-Protocol"
+	tokenPrefix        = "token."
+	gatewayLogPageSize = 200
+	// ponytail: 10k-line in-memory history; read rotated logs if deeper history is needed.
+	gatewayLogBufferSize = 10_000
 )
 
 // picoGatewayProtocol returns the gateway-facing pico subprotocol that the
@@ -1522,6 +1525,19 @@ func gatewayLogsData(r *http.Request) map[string]any {
 	data := map[string]any{}
 	clientOffset := 0
 	clientRunID := -1
+	if v := r.URL.Query().Get("log_before"); v != "" {
+		if before, err := strconv.Atoi(v); err == nil {
+			lines, start, hasOlder, total, runID := gateway.logs.LinesBefore(before, gatewayLogPageSize)
+			if requestedRunID, err := strconv.Atoi(r.URL.Query().Get("log_run_id")); err == nil && requestedRunID == runID {
+				data["logs"] = lines
+				data["log_total"] = total
+				data["log_run_id"] = runID
+				data["log_start"] = start
+				data["log_has_older"] = hasOlder
+				return data
+			}
+		}
+	}
 
 	if v := r.URL.Query().Get("log_offset"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
@@ -1541,13 +1557,19 @@ func gatewayLogsData(r *http.Request) map[string]any {
 		data["logs"] = []string{}
 		data["log_total"] = 0
 		data["log_run_id"] = 0
+		data["log_start"] = 0
+		data["log_has_older"] = false
 		return data
 	}
 
-	// If runID changed, reset offset to get all logs from new run
+	// If runID changed, start from the newest page of the new run.
 	offset := clientOffset
 	if clientRunID != runID {
-		offset = 0
+		_, total, _ := gateway.logs.LinesSince(0)
+		offset = total - gatewayLogPageSize
+		if offset < 0 {
+			offset = 0
+		}
 	}
 
 	lines, total, runID := gateway.logs.LinesSince(offset)
@@ -1558,6 +1580,8 @@ func gatewayLogsData(r *http.Request) map[string]any {
 	data["logs"] = lines
 	data["log_total"] = total
 	data["log_run_id"] = runID
+	data["log_start"] = offset
+	data["log_has_older"] = offset > max(total-gatewayLogBufferSize, 0)
 	return data
 }
 
