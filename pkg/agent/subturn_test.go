@@ -527,6 +527,45 @@ func TestRunAgentLoop_InitializesSubTurnChannels(t *testing.T) {
 	}
 }
 
+// TestRunTurn_MarksTurnFinishedOnGracefulCompletion verifies that the turn
+// coordinator marks the turn finished when it ends naturally, so that late
+// SubTurn results become orphans and child turns see the parent as ended.
+func TestRunTurn_MarksTurnFinishedOnGracefulCompletion(t *testing.T) {
+	al, _, _, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+
+	agent := al.registry.GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("expected default agent")
+	}
+
+	turnScope := al.newTurnEventScope(agent.ID, "finish-session", newTurnContext(nil, nil, nil))
+	ts := newTurnState(agent, processOptions{
+		Dispatch:        DispatchRequest{SessionKey: "finish-session", UserMessage: "hello"},
+		DefaultResponse: defaultResponse,
+	}, turnScope)
+
+	if ts.isFinished.Load() {
+		t.Fatal("turn should not be finished before runTurn")
+	}
+
+	if _, err := al.runTurn(context.Background(), ts, NewPipeline(al)); err != nil {
+		t.Fatalf("runTurn() error = %v", err)
+	}
+
+	if !ts.isFinished.Load() {
+		t.Error("expected turn to be marked finished after graceful completion")
+	}
+	if !ts.parentEnded.Load() {
+		t.Error("expected graceful finish to signal parentEnded for child turns")
+	}
+	select {
+	case <-ts.Finished():
+	default:
+		t.Error("expected Finished() channel to be closed after turn completion")
+	}
+}
+
 // ====================== Extra Independent Test: Hard Abort Cascading ======================
 func TestHardAbortCascading(t *testing.T) {
 	al, _, _, provider, cleanup := newTestAgentLoop(t)

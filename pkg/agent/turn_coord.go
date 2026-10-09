@@ -66,6 +66,13 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 				ToolExecutions:        ts.toolExecutionsSnapshot(),
 			},
 		)
+
+		// Mark the turn as finished so that late SubTurn results are reported as
+		// orphans and direct child turns observe that the parent ended. Hard aborts
+		// already finished the turn (directly or through the parent cascade).
+		if !ts.isFinished.Load() {
+			ts.Finish(ts.hardAbortRequested())
+		}
 	}()
 
 	if ts.hardAbortRequested() {
