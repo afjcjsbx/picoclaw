@@ -1426,19 +1426,16 @@ func TestDeliverSubTurnResult_RaceWithFinish(t *testing.T) {
 
 	t.Logf("Delivered: %d, Orphan: %d, Total: %d", finalDelivered, finalOrphan, finalDelivered+finalOrphan)
 
-	// With the new drainPendingResults behavior, the total events may be >= numResults
-	// because Finish() drains remaining results from the channel and emits them as orphans.
-	// So we expect:
-	// - Some results were delivered successfully (before Finish())
-	// - Some results became orphans (after Finish() or channel full)
-	// - Some results were in the channel when Finish() was called and got drained as orphans
-	// The total should be at least numResults (could be more due to drain)
+	// Deliveries that race the parent's Finish() are reported as orphans:
+	// either the sender observes Finished() while blocked, or it re-checks
+	// isFinished after a successful send. Every result should therefore be
+	// accounted for exactly once, as delivered or as orphan.
 	if finalDelivered+finalOrphan < numResults {
 		t.Errorf("Expected at least %d total events, got %d delivered + %d orphan = %d",
 			numResults, finalDelivered, finalOrphan, finalDelivered+finalOrphan)
 	}
 
-	// Should have at least some orphan results (those that arrived after Finish() or were drained)
+	// Should have at least some orphan results (those that arrived after Finish())
 	if finalOrphan == 0 {
 		t.Error("Expected at least some orphan results after Finish()")
 	}
