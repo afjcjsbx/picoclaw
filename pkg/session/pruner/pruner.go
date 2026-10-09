@@ -42,22 +42,39 @@ type Store interface {
 	DeleteSession(key string) error
 }
 
+// ActivityStore is optionally implemented by stores that know when a session
+// was last written. The JSONL store is the canonical history, whereas the
+// seahorse database is only an index that can lag behind it (crash, session
+// not bootstrapped yet), so the store timestamp keeps recently active sessions
+// from looking stale or undated.
+type ActivityStore interface {
+	// LastActivity returns the last time the session was written, or the zero
+	// time when unknown.
+	LastActivity(key string) time.Time
+}
+
 // Info describes a single session for pruning decisions.
 type Info struct {
 	Key      string
-	NewestAt time.Time
-	OldestAt time.Time
+	NewestAt time.Time // newest message in the seahorse database
+	OldestAt time.Time // oldest message in the seahorse database
+	StoreAt  time.Time // last write recorded by the owning session store
 	Messages int
 }
 
 // lastActivity returns the most recent known activity timestamp for the
-// session, falling back to the oldest message. A zero value means the session
-// has no recorded activity and is treated as the oldest.
+// session: the newest of the seahorse message time and the session store write
+// time, falling back to the oldest seahorse message. A zero value means the
+// session is undated; undated sessions are never selected for deletion.
 func (i Info) lastActivity() time.Time {
-	if !i.NewestAt.IsZero() {
-		return i.NewestAt
+	last := i.NewestAt
+	if i.StoreAt.After(last) {
+		last = i.StoreAt
 	}
-	return i.OldestAt
+	if last.IsZero() {
+		return i.OldestAt
+	}
+	return last
 }
 
 // Result reports what a prune pass did.
@@ -78,47 +95,32 @@ const maxDBSizeIterations = 32
 //   - its last activity is older than MaxAgeDays, or
 //   - it is not among the MaxSessions most recently active sessions.
 //
-// A threshold of 0 disables the corresponding check. Sessions with unknown
-// timestamps are only selected by the session-count check.
+// A threshold of 0 disables the corresponding check. Sessions whose activity is
+// unknown (undated) are never selected: they still count toward MaxSessions, but
+// the sessions dropped to honor the cap are always the oldest dated ones, so a
+// session is never deleted on the basis of a timestamp we do not have.
 func Select(infos []Info, cfg config.SessionPruneConfig, now time.Time) []string {
 	if len(infos) == 0 {
 		return nil
 	}
 
-	// Sort oldest-first so the count cap drops the least recent sessions.
-	sorted := make([]Info, len(infos))
-	copy(sorted, infos)
-	sort.SliceStable(sorted, func(a, b int) bool {
-		ta, tb := sorted[a].lastActivity(), sorted[b].lastActivity()
-		if ta.Equal(tb) {
-			return sorted[a].Key < sorted[b].Key
-		}
-		// Zero timestamps sort first (oldest).
-		if ta.IsZero() {
-			return true
-		}
-		if tb.IsZero() {
-			return false
-		}
-		return ta.Before(tb)
-	})
-
+	dated := datedOldestFirst(infos)
 	selected := make(map[string]struct{})
 
-	if cfg.MaxSessions > 0 && len(sorted) > cfg.MaxSessions {
-		for _, info := range sorted[:len(sorted)-cfg.MaxSessions] {
+	if cfg.MaxSessions > 0 && len(infos) > cfg.MaxSessions {
+		excess := len(infos) - cfg.MaxSessions
+		if excess > len(dated) {
+			excess = len(dated)
+		}
+		for _, info := range dated[:excess] {
 			selected[info.Key] = struct{}{}
 		}
 	}
 
 	if cfg.MaxAgeDays > 0 {
 		cutoff := now.Add(-time.Duration(cfg.MaxAgeDays) * 24 * time.Hour)
-		for _, info := range sorted {
-			last := info.lastActivity()
-			if last.IsZero() {
-				continue // no activity to compare, leave age-based deletion alone
-			}
-			if last.Before(cutoff) {
+		for _, info := range dated {
+			if info.lastActivity().Before(cutoff) {
 				selected[info.Key] = struct{}{}
 			}
 		}
@@ -130,12 +132,31 @@ func Select(infos []Info, cfg config.SessionPruneConfig, now time.Time) []string
 
 	// Preserve oldest-first ordering in the output.
 	out := make([]string, 0, len(selected))
-	for _, info := range sorted {
+	for _, info := range dated {
 		if _, ok := selected[info.Key]; ok {
 			out = append(out, info.Key)
 		}
 	}
 	return out
+}
+
+// datedOldestFirst returns the sessions with a known activity time, ordered
+// oldest-first (ties broken by key for determinism).
+func datedOldestFirst(infos []Info) []Info {
+	dated := make([]Info, 0, len(infos))
+	for _, info := range infos {
+		if !info.lastActivity().IsZero() {
+			dated = append(dated, info)
+		}
+	}
+	sort.SliceStable(dated, func(a, b int) bool {
+		ta, tb := dated[a].lastActivity(), dated[b].lastActivity()
+		if ta.Equal(tb) {
+			return dated[a].Key < dated[b].Key
+		}
+		return ta.Before(tb)
+	})
+	return dated
 }
 
 // owners maps a session key to every store that lists it.
@@ -312,14 +333,14 @@ func collectInfos(ctx context.Context, eng Engine, idx owners) []Info {
 			Key:      status.SessionKey,
 			NewestAt: status.NewestAt,
 			OldestAt: status.OldestAt,
+			StoreAt:  storeActivity(idx[status.SessionKey], status.SessionKey),
 			Messages: status.Messages,
 		})
 		known[status.SessionKey] = struct{}{}
 	}
 
 	// Include sessions that exist only as JSONL files (not yet bootstrapped
-	// into seahorse). Their timestamps are unknown, so the count cap treats
-	// them as oldest; age-based deletion leaves them untouched.
+	// into seahorse). Their only timestamp is the one kept by the store.
 	keys := make([]string, 0, len(idx))
 	for key := range idx {
 		keys = append(keys, key)
@@ -329,9 +350,25 @@ func collectInfos(ctx context.Context, eng Engine, idx owners) []Info {
 		if _, ok := known[key]; ok {
 			continue
 		}
-		infos = append(infos, Info{Key: key})
+		infos = append(infos, Info{Key: key, StoreAt: storeActivity(idx[key], key)})
 	}
 	return infos
+}
+
+// storeActivity returns the newest write time reported by the stores that own
+// the session, or the zero time when none of them track activity.
+func storeActivity(stores []Store, key string) time.Time {
+	var last time.Time
+	for _, store := range stores {
+		as, ok := store.(ActivityStore)
+		if !ok {
+			continue
+		}
+		if at := as.LastActivity(key); at.After(last) {
+			last = at
+		}
+	}
+	return last
 }
 
 func withoutKey(statuses []seahorse.SessionStatus, key string) []seahorse.SessionStatus {

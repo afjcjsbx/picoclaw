@@ -178,6 +178,17 @@ func (sm *SessionManager) ListSessions() []string {
 	return keys
 }
 
+// LastActivity returns when the session was last updated, or the zero time for
+// an unknown session. Used by automatic session pruning.
+func (sm *SessionManager) LastActivity(key string) time.Time {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	if stored, ok := sm.sessions[key]; ok {
+		return stored.Updated
+	}
+	return time.Time{}
+}
+
 // DeleteSession removes a session from memory and deletes its backing file.
 // Used by automatic session pruning. Missing files are ignored.
 func (sm *SessionManager) DeleteSession(key string) error {

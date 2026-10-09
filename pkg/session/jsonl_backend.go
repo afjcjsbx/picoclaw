@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/sipeed/picoclaw/pkg/memory"
 	"github.com/sipeed/picoclaw/pkg/providers"
@@ -196,6 +197,22 @@ func (b *JSONLBackend) ListSessions() []string {
 // remove a session. It is optional so alternative backends remain compatible.
 type sessionDeletingStore interface {
 	DeleteSession(ctx context.Context, sessionKey string) error
+}
+
+// sessionActivityStore is implemented by memory stores that can report when a
+// session was last written.
+type sessionActivityStore interface {
+	LastActivity(sessionKey string) time.Time
+}
+
+// LastActivity returns when the session was last written, or the zero time when
+// the backing store cannot tell. Used by automatic session pruning, which only
+// passes canonical keys, so no alias resolution is done here.
+func (b *JSONLBackend) LastActivity(key string) time.Time {
+	if store, ok := b.store.(sessionActivityStore); ok {
+		return store.LastActivity(key)
+	}
+	return time.Time{}
 }
 
 // DeleteSession removes a session and its metadata from the backing store.

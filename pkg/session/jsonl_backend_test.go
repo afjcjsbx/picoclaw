@@ -3,6 +3,7 @@ package session_test
 import (
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/memory"
@@ -319,5 +320,19 @@ func TestJSONLBackend_EnsureSessionMetadata_DoesNotOverwriteNonEmptyCanonicalHis
 	history := b.GetHistory(canonicalKey)
 	if len(history) != 1 || history[0].Content != "current canonical history" {
 		t.Fatalf("canonical history overwritten: %+v", history)
+	}
+}
+
+func TestJSONLBackend_LastActivity(t *testing.T) {
+	b := newBackend(t)
+
+	if got := b.LastActivity("missing"); !got.IsZero() {
+		t.Fatalf("LastActivity(missing) = %v, want zero", got)
+	}
+
+	before := time.Now().Add(-time.Second)
+	b.AddMessage("s1", "user", "hello")
+	if got := b.LastActivity("s1"); got.Before(before) {
+		t.Fatalf("LastActivity = %v, want >= %v", got, before)
 	}
 }

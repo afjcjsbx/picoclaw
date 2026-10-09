@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestSanitizeFilename(t *testing.T) {
@@ -110,5 +111,20 @@ func TestLoadSessions_NormalizesMissingCreatedAt(t *testing.T) {
 	}
 	if history[0].CreatedAt == nil || history[0].CreatedAt.IsZero() {
 		t.Fatalf("history[0].CreatedAt = %v, want non-zero timestamp", history[0].CreatedAt)
+	}
+}
+
+func TestLastActivity(t *testing.T) {
+	sm := NewSessionManager(t.TempDir())
+
+	if got := sm.LastActivity("missing"); !got.IsZero() {
+		t.Fatalf("LastActivity(missing) = %v, want zero", got)
+	}
+
+	before := time.Now().Add(-time.Second)
+	sm.GetOrCreate("s1")
+	sm.AddMessage("s1", "user", "hello")
+	if got := sm.LastActivity("s1"); got.Before(before) {
+		t.Fatalf("LastActivity = %v, want >= %v", got, before)
 	}
 }

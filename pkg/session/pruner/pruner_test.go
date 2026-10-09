@@ -58,20 +58,64 @@ func TestSelectCombinesAgeAndCount(t *testing.T) {
 	}
 }
 
-func TestSelectZeroTimestampsOnlyCounted(t *testing.T) {
+func TestSelectUndatedNeverDeleted(t *testing.T) {
 	now := time.Now()
 	infos := []Info{
 		{Key: "unknown"},
 		{Key: "fresh", NewestAt: now.Add(-1 * time.Hour)},
+		{Key: "stale", NewestAt: now.Add(-5 * time.Hour)},
 	}
-	// Age-only: unknown timestamp must not be age-pruned.
+	// Age-only: an undated session must not be age-pruned.
 	if got := Select(infos, config.SessionPruneConfig{MaxAgeDays: 1}, now); len(got) != 0 {
 		t.Fatalf("Select(age) = %v, want none", got)
 	}
-	// Count: the unknown one sorts oldest and is dropped.
-	got := Select(infos, config.SessionPruneConfig{MaxSessions: 1}, now)
-	if !reflect.DeepEqual(got, []string{"unknown"}) {
-		t.Fatalf("Select(count) = %v, want [unknown]", got)
+	// Count: the undated session occupies a slot but is never the one dropped;
+	// the oldest dated session goes instead.
+	got := Select(infos, config.SessionPruneConfig{MaxSessions: 2}, now)
+	if !reflect.DeepEqual(got, []string{"stale"}) {
+		t.Fatalf("Select(count) = %v, want [stale]", got)
+	}
+	// Cap smaller than the number of dated sessions still never touches it.
+	got = Select(infos, config.SessionPruneConfig{MaxSessions: 1}, now)
+	if !reflect.DeepEqual(got, []string{"stale", "fresh"}) {
+		t.Fatalf("Select(count=1) = %v, want [stale fresh]", got)
+	}
+}
+
+func TestSelectStoreActivityKeepsRecentSession(t *testing.T) {
+	now := time.Date(2026, 1, 31, 12, 0, 0, 0, time.UTC)
+	infos := []Info{
+		// Stale seahorse index, but the JSONL store was written an hour ago.
+		{Key: "lagging", NewestAt: now.Add(-90 * 24 * time.Hour), StoreAt: now.Add(-time.Hour)},
+		// Never indexed by seahorse; only the store knows it is old.
+		{Key: "jsonl-old", StoreAt: now.Add(-60 * 24 * time.Hour)},
+		// Never indexed and no activity info at all.
+		{Key: "jsonl-undated"},
+	}
+	got := Select(infos, config.SessionPruneConfig{MaxAgeDays: 30}, now)
+	if !reflect.DeepEqual(got, []string{"jsonl-old"}) {
+		t.Fatalf("Select() = %v, want [jsonl-old]", got)
+	}
+}
+
+func TestRunUsesStoreActivityForJSONLOnlySessions(t *testing.T) {
+	now := time.Now()
+	eng := newFakeEngine(1 << 20)
+	store := newFakeStore("a-old", "b-recent", "c-recent")
+	store.activity = map[string]time.Time{
+		"a-old":    now.Add(-48 * time.Hour),
+		"b-recent": now.Add(-time.Hour),
+		"c-recent": now.Add(-2 * time.Hour),
+	}
+
+	// With no seahorse data every session is JSONL-only. Previously all of them
+	// were undated and dropped alphabetically; now the oldest by store time goes.
+	res := Run(context.Background(), eng, []Store{store}, config.SessionPruneConfig{
+		Enabled:     true,
+		MaxSessions: 2,
+	})
+	if !reflect.DeepEqual(res.Deleted, []string{"a-old"}) {
+		t.Fatalf("Deleted = %v, want [a-old]", res.Deleted)
 	}
 }
 
@@ -265,6 +309,11 @@ func (f *fakeEngine) Checkpoint(context.Context, bool) error {
 type fakeStore struct {
 	sessions []string
 	deleted  []string
+	activity map[string]time.Time
+}
+
+func (f *fakeStore) LastActivity(key string) time.Time {
+	return f.activity[key]
 }
 
 func newFakeStore(keys ...string) *fakeStore {

@@ -208,6 +208,31 @@ func (s *JSONLStore) DeleteSession(_ context.Context, sessionKey string) error {
 	return firstErr
 }
 
+// LastActivity returns when the session was last written: the newest of the
+// metadata update time and the modification time of its files. It returns the
+// zero time when the session is unknown. Used by automatic session pruning,
+// where the JSONL store (not the seahorse index) is the source of truth.
+func (s *JSONLStore) LastActivity(sessionKey string) time.Time {
+	sessionKey = strings.TrimSpace(sessionKey)
+	if sessionKey == "" {
+		return time.Time{}
+	}
+	l := s.sessionLock(sessionKey)
+	l.Lock()
+	defer l.Unlock()
+
+	var last time.Time
+	if meta, err := s.readMeta(sessionKey); err == nil {
+		last = meta.UpdatedAt
+	}
+	for _, path := range []string{s.jsonlPath(sessionKey), s.metaPath(sessionKey)} {
+		if info, err := os.Stat(path); err == nil && info.ModTime().After(last) {
+			last = info.ModTime()
+		}
+	}
+	return last
+}
+
 // GetSessionMeta returns the current metadata snapshot for sessionKey.
 func (s *JSONLStore) GetSessionMeta(_ context.Context, sessionKey string) (SessionMeta, error) {
 	l := s.sessionLock(sessionKey)
