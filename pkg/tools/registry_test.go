@@ -318,6 +318,25 @@ func TestToolRegistry_ExecuteWithContext_AsyncCallback(t *testing.T) {
 	}
 }
 
+func TestToolRegistry_ExecuteWithContext_AsyncExecutorGetsNoopCallback(t *testing.T) {
+	r := NewToolRegistry()
+	at := &mockAsyncRegistryTool{
+		mockRegistryTool: *newMockTool("async_tool", "async work"),
+	}
+	at.result = AsyncResult("started")
+	r.Register(at)
+
+	result := r.ExecuteWithContext(context.Background(), "async_tool", nil, "", "", nil)
+	if at.lastCB == nil {
+		t.Fatal("expected ExecuteAsync to receive a non-nil callback even when the caller passes nil")
+	}
+	if !result.Async {
+		t.Error("expected async result")
+	}
+	// The substituted no-op callback must be safe to invoke.
+	at.lastCB(context.Background(), SilentResult("done"))
+}
+
 func TestToolRegistry_GetDefinitions(t *testing.T) {
 	r := NewToolRegistry()
 	r.Register(newMockTool("alpha", "tool A"))
