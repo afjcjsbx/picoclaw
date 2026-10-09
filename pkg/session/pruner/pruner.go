@@ -8,11 +8,13 @@
 //
 // This package selects and deletes the oldest sessions according to a
 // configurable policy (age, session count and database size). Both the backing
-// session store (JSONL files) and the seahorse database are cleaned up, then
-// the database is vacuumed to reclaim disk space.
+// session stores (JSONL files, one per agent) and the seahorse database are
+// cleaned up, then the database is vacuumed when that reclaims a meaningful
+// amount of disk space.
 //
-// Pruning is opt-in and never deletes the most recent sessions unless the
-// configured thresholds explicitly require it.
+// Pruning is opt-in. Whatever the thresholds are, a pass never deletes the most
+// recently active session, never deletes a session whose activity time is
+// unknown, and ignores timestamps from a clock that was clearly not set.
 package pruner
 
 import (

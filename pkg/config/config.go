@@ -393,8 +393,9 @@ func (s *SessionConfig) MarshalJSON() ([]byte, error) {
 //	}
 //
 // A threshold of 0 disables that specific check. Sessions are always deleted
-// oldest-first, and the most recent sessions (and any session more recent than
-// MaxAgeDays) are never pruned by the count/size checks.
+// oldest-first by last activity, and the single most recently active session is
+// never deleted, whatever the thresholds are. Sessions without a usable
+// timestamp are never deleted either.
 type SessionPruneConfig struct {
 	// Enabled turns automatic session pruning on. Default false: nothing is
 	// deleted unless the user opts in.
@@ -417,9 +418,11 @@ type SessionPruneConfig struct {
 	// Defaults to 60 when 0.
 	CheckIntervalMinutes int `json:"check_interval_minutes,omitempty" env:"PICOCLAW_SESSION_PRUNE_CHECK_INTERVAL_MINUTES"`
 
-	// Vacuum reclaims disk space (SQLite VACUUM + WAL checkpoint) after a prune
-	// pass that deleted at least one session. Defaults to true when omitted;
-	// it is required for the database-size guard to observe freed space.
+	// Vacuum gives freed space back to the filesystem (SQLite VACUUM, which
+	// blocks writers while it runs) after a prune pass that deleted sessions.
+	// A pass only vacuums when that returns a meaningful share of the file;
+	// the database-size guard always vacuums because it needs the file to
+	// shrink. Defaults to true when omitted.
 	Vacuum *bool `json:"vacuum,omitempty" env:"PICOCLAW_SESSION_PRUNE_VACUUM"`
 }
 

@@ -128,12 +128,15 @@ Pruning is **opt-in** (`enabled: false` by default) because it deletes data.
 | `enabled` | Master switch. When `false`, nothing is ever deleted. |
 | `max_age_days` | Delete sessions whose last activity is older than this. `0` disables the check. |
 | `max_sessions` | Keep only the most recently active N sessions. `0` disables the check. |
-| `max_db_size_mb` | Safety net: when `seahorse.db` (+ WAL) exceeds this, delete the oldest remaining sessions until it fits. `0` disables the check. |
+| `max_db_size_mb` | Safety net: when `seahorse.db` (+ WAL) exceeds this, delete the oldest remaining sessions until it fits (the most recent session is always kept, so a limit below the minimum database size cannot wipe everything). `0` disables the check. |
 | `check_interval_minutes` | How often the background prune pass runs. Defaults to `60`. |
-| `vacuum` | Run SQLite `VACUUM` + WAL checkpoint after a pass that deleted sessions. Default `true`. |
+| `vacuum` | Give freed space back to the filesystem after a pass that deleted sessions. Default `true`. See [Disk space and VACUUM](#disk-space-and-vacuum). |
 
 Environment overrides are available with the `PICOCLAW_SESSION_PRUNE_*`
 prefix (for example `PICOCLAW_SESSION_PRUNE_MAX_AGE_DAYS`).
+
+The prune settings are read once at startup. Changing them (or the matching
+environment variables) takes effect after a gateway restart.
 
 ### Recommended values
 
@@ -157,14 +160,72 @@ a guard:
 
 ### Semantics
 
-- Sessions are always deleted **oldest-first** (by last message activity).
-- Age-based deletion uses the last message timestamp. Sessions with no known
-  activity are never age-deleted; the session-count cap may still drop them.
+- A session's **last activity** is the newest of its last seahorse message time
+  and the last write recorded by its JSONL store. The JSONL store is the
+  canonical history and the seahorse database only an index that can lag behind
+  it, so a session that was written recently but not yet indexed (or never
+  indexed) is not mistaken for a stale one.
+- Sessions are always deleted **oldest-first** by last activity.
+- The **most recently active session is never deleted**, whatever the
+  thresholds say (for example when every session is older than `max_age_days`
+  after a long idle period, or when `max_db_size_mb` is smaller than the
+  smallest possible database).
+- A session with **no usable timestamp is never deleted**. It still counts
+  toward `max_sessions`, but the sessions dropped to honor the cap are always the
+  oldest dated ones.
+- **Every agent's session store is pruned.** The seahorse database is shared by
+  all agents while each agent keeps its own JSONL store; a session is removed
+  from the database and from the store that lists it. If any agent's store
+  cannot delete sessions, pruning is skipped entirely and a warning is logged,
+  because removing only the database side would not shrink anything (the
+  startup bootstrap re-imports the JSONL history) and would drop the retrieval
+  context of those sessions.
 - A prune pass runs once during startup **before** the seahorse bootstrap, so
   a device that has grown too large recovers on the next restart. It then
-  repeats every `check_interval_minutes` while the gateway runs.
-- Deletion is applied to both the seahorse database and the JSONL session
-  files; the conversation rows are removed so no orphans accumulate.
+  repeats every `check_interval_minutes` while the gateway runs, and stops
+  cleanly when the gateway shuts down.
+- `max_sessions` counts every session, including those created by cron jobs
+  and subagents, not only interactive chats. On a busy device a small cap can
+  therefore evict real chats in favor of recent automated sessions.
+
+### Clock requirements
+
+`max_age_days` compares message timestamps with the system clock. Boards
+without a battery-backed RTC boot with the clock at the epoch (or a stale build
+date) until NTP syncs, so:
+
+- timestamps earlier than **2024-01-01** are ignored (the session is treated as
+  having no timestamp and is left alone), and
+- age-based pruning is skipped altogether while the current clock reads earlier
+  than that.
+
+A clock that is wrong but still after 2024 cannot be detected: messages written
+while the clock lagged will look older than they are once it is corrected. Keep
+NTP working on such devices, or rely on `max_sessions` instead of
+`max_age_days`. The "most recent session is never deleted" rule limits the
+damage in the worst case.
+
+### Disk space and VACUUM
+
+Deleting rows frees pages inside `seahorse.db` but does not shrink the file;
+only `VACUUM` does, by rewriting the whole database. Keep in mind on small
+devices:
+
+- `VACUUM` temporarily needs free disk space about the size of the database.
+- It **blocks writers** while it runs, which can be long on slow storage. Live
+  chat messages wait for it (up to the 5 second SQLite busy timeout, which now
+  applies to every database connection) and can fail to be indexed if it takes
+  longer.
+- The first pass at startup is **synchronous**: it runs before the gateway is
+  ready, so a large `VACUUM` adds to the startup time the pruning is meant to
+  reduce.
+
+To limit this, a pass vacuums only when it would give back at least 1 MiB **and**
+at least a tenth of the file; otherwise it just truncates the WAL. Free pages
+inside the file are reused by later writes, so the file does not keep growing.
+The `max_db_size_mb` guard always vacuums, because it needs the file to shrink
+to observe progress. Set `vacuum` to `false` to never vacuum; the size guard
+then stops as soon as a pass makes no progress, rather than deleting everything.
 
 ## Limitations and future fix
 
