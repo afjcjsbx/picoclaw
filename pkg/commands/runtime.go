@@ -50,7 +50,6 @@ type StopResult struct {
 type Runtime struct {
 	Config             *config.Config
 	GetModelInfo       func() (name, provider string)
-	AskSideQuestion    func(ctx context.Context, question string) (string, error)
 	ListAgentIDs       func() []string
 	ListDefinitions    func() []Definition
 	ListSkillNames     func() []string

@@ -134,7 +134,7 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 	}
 	activeModelName := strings.TrimSpace(ts.agent.Model)
 	if usedLight {
-		activeModelName = strings.TrimSpace(sideQuestionModelName(ts.agent, true))
+		activeModelName = strings.TrimSpace(lightModelName(ts.agent, true))
 	}
 	activeModelName = resolvedCandidateModelName(activeCandidates, activeModelName)
 
