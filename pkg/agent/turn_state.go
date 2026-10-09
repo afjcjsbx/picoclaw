@@ -851,15 +851,17 @@ func (ts *turnState) interruptHintMessage() providers.Message {
 // SubTurn-related methods
 // =============================================================================
 
-// Finish marks the turn as finished and closes the pendingResults channel
+// Finish marks the turn as finished, signals waiting SubTurns and cancels the
+// turn context.
 func (ts *turnState) Finish(isHardAbort bool) {
 	ts.isFinished.Store(true)
 
-	// Close pendingResults channel exactly once
+	// Close the finished signal exactly once. pendingResults is intentionally
+	// left open: concurrent SubTurn deliveries may still be sending on it and
+	// closing it here would race with deliverSubTurnResult, turning valid
+	// deliveries into recovered "send on closed channel" panics. The channel is
+	// reclaimed by the GC together with the turn state.
 	ts.closeOnce.Do(func() {
-		if ts.pendingResults != nil {
-			close(ts.pendingResults)
-		}
 		ts.mu.Lock()
 		if ts.finishedChan == nil {
 			ts.finishedChan = make(chan struct{})

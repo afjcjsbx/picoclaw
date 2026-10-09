@@ -29,6 +29,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/routing"
 	"github.com/sipeed/picoclaw/pkg/session"
 	"github.com/sipeed/picoclaw/pkg/state"
+	"github.com/sipeed/picoclaw/pkg/tools"
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
@@ -577,6 +578,14 @@ func (al *AgentLoop) runAgentLoop(
 		newTurnContext(opts.Dispatch.InboundContext, opts.Dispatch.RouteResult, opts.Dispatch.SessionScope),
 	)
 	ts := newTurnState(agent, opts, turnScope)
+
+	// Every turn owns its SubTurn result channel and concurrency semaphore.
+	// Without them, SubTurns spawned by root turns bypass the concurrency limit
+	// and async results can never be delivered back to the turn.
+	rtCfg := al.getSubTurnConfig()
+	ts.pendingResults = make(chan *tools.ToolResult, subTurnPendingResultsBuffer)
+	ts.concurrencySem = make(chan struct{}, rtCfg.maxConcurrent)
+
 	pipeline := NewPipeline(al)
 	result, err := al.runTurn(ctx, ts, pipeline)
 	if err != nil {

@@ -25,6 +25,9 @@ const (
 	// maxEphemeralHistorySize limits the number of messages stored in ephemeral sessions.
 	// This prevents memory accumulation in long-running sub-turns.
 	maxEphemeralHistorySize = 50
+	// subTurnPendingResultsBuffer is the buffer size of the per-turn SubTurn
+	// result channel used to deliver async SubTurn results back to their parent.
+	subTurnPendingResultsBuffer = 16
 )
 
 var (
@@ -412,7 +415,7 @@ func spawnSubTurn(
 	childTS.depth = parentTS.depth + 1
 	childTS.parentTurnID = parentTS.turnID
 	childTS.parentTurnState = parentTS
-	childTS.pendingResults = make(chan *tools.ToolResult, 16)
+	childTS.pendingResults = make(chan *tools.ToolResult, subTurnPendingResultsBuffer)
 	childTS.concurrencySem = make(chan struct{}, rtCfg.maxConcurrent)
 	childTS.al = al                  // back-ref for hard abort cascade
 	childTS.session = ephemeralStore // same store as agent.Sessions
@@ -529,19 +532,22 @@ func spawnSubTurn(
 //
 // Delivery behavior:
 //   - If parent turn is still running: attempts to deliver to pendingResults channel
-//   - If channel is full: emits agent.subturn.orphan (result is lost from channel but tracked)
+//   - If channel is full: blocks until space is available or the parent finishes
 //   - If parent turn has finished: emits agent.subturn.orphan (late arrival)
 //
 // Thread safety:
 //   - Reads parent state under lock, then releases lock before channel send
-//   - Small race window exists but is acceptable (worst case: result becomes orphan)
+//   - A send can race with the parent finishing; results that land after the
+//     finish are reported as orphans instead of being silently dropped
 //
 // Event emissions:
 //   - agent.subturn.result_delivered: successful delivery to channel
-//   - agent.subturn.orphan: delivery failed (parent finished or channel full)
+//   - agent.subturn.orphan: delivery failed (parent finished or delivery raced
+//     with the parent finishing)
 func deliverSubTurnResult(al *AgentLoop, parentTS *turnState, childID string, result *tools.ToolResult) {
-	// Let GC clean up the pendingResults channel; parent Finish will no longer close it.
-	// We use defer/recover to catch any unlikely channel panics if it were ever closed.
+	// pendingResults is never closed (Finish only closes finishedChan), so
+	// send-on-closed-channel panics should not happen. The recover remains as
+	// a safety net for unexpected nil/closed channel states.
 	defer func() {
 		if r := recover(); r != nil {
 			logger.RecoverPanicNoExit(r)
@@ -580,8 +586,29 @@ func deliverSubTurnResult(al *AgentLoop, parentTS *turnState, childID string, re
 	// is full), we don't leak this goroutine by blocking forever.
 	select {
 	case resultChan <- result:
+		// The parent may have finished between the isFinished check above and
+		// this send. Such results are no longer consumed by the parent loop, so
+		// report them as orphans instead of silently dropping them.
+		if parentTS.isFinished.Load() {
+			logger.WarnCF("subturn", "parent finished while result was being delivered", map[string]any{
+				"parent_id": parentTS.turnID,
+				"child_id":  childID,
+			})
+			if result != nil && al != nil {
+				al.emitEvent(
+					runtimeevents.KindAgentSubTurnOrphan,
+					parentTS.eventMeta("deliverSubTurnResult", "subturn.orphan"),
+					SubTurnOrphanPayload{
+						ParentTurnID: parentTS.turnID,
+						ChildTurnID:  childID,
+						Reason:       "parent_finished",
+					},
+				)
+			}
+			return
+		}
 		// Successfully delivered
-		if al != nil {
+		if al != nil && result != nil {
 			al.emitEvent(runtimeevents.KindAgentSubTurnResultDelivered,
 				parentTS.eventMeta("deliverSubTurnResult", "subturn.result_delivered"),
 				SubTurnResultDeliveredPayload{ContentLen: len(result.ForLLM)},
