@@ -303,7 +303,10 @@ func (cs *CronService) executeJobByID(jobID string) {
 	case err != nil:
 		// Failure already logged above.
 	case skipped:
-		log.Printf("[cron] ⚠ job '%s' skipped in %dms (no job handler), next run: %s", job.Name, execDuration, nextRunStr)
+		log.Printf(
+			"[cron] ⚠ job '%s' skipped in %dms (no job handler), next run: %s",
+			job.Name, execDuration, nextRunStr,
+		)
 	default:
 		log.Printf("[cron] ✓ job '%s' completed in %dms, next run: %s", job.Name, execDuration, nextRunStr)
 	}
