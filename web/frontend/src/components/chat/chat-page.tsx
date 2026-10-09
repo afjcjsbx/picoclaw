@@ -69,6 +69,7 @@ import {
 import { useChatModels } from "@/hooks/use-chat-models"
 import { useGateway } from "@/hooks/use-gateway"
 import { usePicoChat } from "@/hooks/use-pico-chat"
+import { useSlashCommands } from "@/hooks/use-slash-commands"
 import type {
   ChatAttachment,
   ChatMessage,
@@ -836,6 +837,7 @@ export function ChatPage() {
     )
   }, [activeSessionId])
 
+  const slashCommands = useSlashCommands()
   const { state: gwState } = useGateway()
   const isGatewayRunning = gwState === "running"
 
@@ -1491,6 +1493,7 @@ export function ChatPage() {
             canSend={canSubmit}
             isDragActive={isDragActive}
             contextUsage={contextUsage}
+            slashCommands={slashCommands}
           />
         </section>
 

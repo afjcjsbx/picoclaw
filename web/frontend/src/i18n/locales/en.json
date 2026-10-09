@@ -104,6 +104,68 @@
     },
     "sendMessage": "Send message",
     "composeHint": "Press Enter to send, Shift + Enter for a new line",
+    "slash": {
+      "ariaLabel": "Slash commands",
+      "recent": "Recent",
+      "commands": {
+        "start": {
+          "title": "Start",
+          "description": "Start the bot"
+        },
+        "help": {
+          "title": "Help",
+          "description": "Show this help message"
+        },
+        "stop": {
+          "title": "Stop",
+          "description": "Stop the current task"
+        },
+        "show": {
+          "title": "Show config",
+          "description": "Show current configuration"
+        },
+        "list": {
+          "title": "List",
+          "description": "List available options"
+        },
+        "use": {
+          "title": "Use skill",
+          "description": "Force a specific installed skill for one request"
+        },
+        "btw": {
+          "title": "Side question",
+          "description": "Ask a side question without changing session history"
+        },
+        "switch": {
+          "title": "Switch model",
+          "description": "Switch model"
+        },
+        "check": {
+          "title": "Check channel",
+          "description": "Check channel availability"
+        },
+        "clear": {
+          "title": "Clear chat",
+          "description": "Clear the chat history"
+        },
+        "context": {
+          "title": "Context",
+          "description": "Show current session context and token usage"
+        },
+        "subagents": {
+          "title": "Subagents",
+          "description": "Show running tasks and subagents in this chat"
+        },
+        "reload": {
+          "title": "Reload config",
+          "description": "Reload the configuration file"
+        },
+        "voice": {
+          "title": "Voice",
+          "description": "Set automatic text-to-speech mode"
+        }
+      }
+    },
     "contextTitle": "Context",
     "contextDetail": "View Details",
     "contextCompressAt": "Compress at",

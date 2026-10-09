@@ -91,6 +91,68 @@
     },
     "sendMessage": "发送消息",
     "composeHint": "按 Enter 发送，Shift + Enter 换行",
+    "slash": {
+      "ariaLabel": "斜杠命令",
+      "recent": "最近",
+      "commands": {
+        "start": {
+          "title": "开始",
+          "description": "启动机器人"
+        },
+        "help": {
+          "title": "帮助",
+          "description": "显示此帮助信息"
+        },
+        "stop": {
+          "title": "停止",
+          "description": "停止当前任务"
+        },
+        "show": {
+          "title": "查看配置",
+          "description": "显示当前配置"
+        },
+        "list": {
+          "title": "列出",
+          "description": "列出可用选项"
+        },
+        "use": {
+          "title": "使用技能",
+          "description": "为本次请求强制使用指定的已安装技能"
+        },
+        "btw": {
+          "title": "旁路提问",
+          "description": "提出旁路问题，不改变会话历史"
+        },
+        "switch": {
+          "title": "切换模型",
+          "description": "切换模型"
+        },
+        "check": {
+          "title": "检查通道",
+          "description": "检查通道是否可用"
+        },
+        "clear": {
+          "title": "清空对话",
+          "description": "清空聊天记录"
+        },
+        "context": {
+          "title": "上下文",
+          "description": "显示当前会话的上下文和 token 用量"
+        },
+        "subagents": {
+          "title": "子代理",
+          "description": "显示此对话中正在运行的任务和子代理"
+        },
+        "reload": {
+          "title": "重新加载配置",
+          "description": "重新加载配置文件"
+        },
+        "voice": {
+          "title": "语音",
+          "description": "设置自动文本转语音模式"
+        }
+      }
+    },
     "contextTitle": "上下文",
     "contextDetail": "查看详情",
     "contextCompressAt": "压缩阈值",

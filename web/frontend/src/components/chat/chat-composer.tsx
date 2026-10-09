@@ -4,13 +4,30 @@ import {
   type DragEvent as ReactDragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
+  useEffect,
+  useMemo,
   useRef,
+  useState,
 } from "react"
 import { useTranslation } from "react-i18next"
 import TextareaAutosize from "react-textarea-autosize"
 
+import type { SlashCommand } from "@/api/commands"
 import { ContextUsageRing } from "@/components/chat/context-usage-ring"
+import { SlashCommandPalette } from "@/components/chat/slash-command-palette"
 import { Button } from "@/components/ui/button"
+import {
+  type SlashPaletteEntry,
+  type SlashPaletteItem,
+  filterSlashPaletteItems,
+  nextSlashRecents,
+  readSlashRecents,
+  slashCommandFallbackTitle,
+  slashCommandI18nKey,
+  slashCommandInsertion,
+  slashQueryFromInput,
+  storeSlashRecents,
+} from "@/features/chat/slash-commands"
 import { cn } from "@/lib/utils"
 import type { ChatAttachment, ContextUsage } from "@/store/chat"
 
@@ -44,6 +61,7 @@ interface ChatComposerProps {
   canSend: boolean
   isDragActive: boolean
   contextUsage?: ContextUsage
+  slashCommands?: SlashCommand[]
 }
 
 export function ChatComposer({
@@ -64,16 +82,91 @@ export function ChatComposer({
   canSend,
   isDragActive,
   contextUsage,
+  slashCommands = [],
 }: ChatComposerProps) {
   const { t } = useTranslation()
   const canInput = inputDisabledReason === null
   const composingRef = useRef(false)
+  const surfaceRef = useRef<HTMLDivElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const [paletteDismissed, setPaletteDismissed] = useState(false)
+  const [selectedCommandIndex, setSelectedCommandIndex] = useState(0)
+  const [recentCommands, setRecentCommands] = useState<string[]>(() =>
+    readSlashRecents(),
+  )
   const hasInput = input.trim().length > 0
   const disabledMessage =
     inputDisabledReason === null
       ? null
       : t(`chat.disabledPlaceholder.${inputDisabledReason}`)
   const placeholder = disabledMessage ?? t("chat.placeholder")
+
+  const paletteEntries = useMemo<SlashPaletteEntry[]>(
+    () =>
+      slashCommands.map((command) => {
+        const key = slashCommandI18nKey(command.command)
+        return {
+          command: command.command,
+          title: t(`chat.slash.commands.${key}.title`, {
+            defaultValue: slashCommandFallbackTitle(command.command),
+          }),
+          description: t(`chat.slash.commands.${key}.description`, {
+            defaultValue: command.description,
+          }),
+          argHint: command.arg_hint ?? "",
+        }
+      }),
+    [slashCommands, t],
+  )
+
+  const slashQuery = useMemo(
+    () => (canInput && !paletteDismissed ? slashQueryFromInput(input) : null),
+    [canInput, input, paletteDismissed],
+  )
+  const paletteItems = useMemo<SlashPaletteItem[]>(
+    () =>
+      slashQuery === null
+        ? []
+        : filterSlashPaletteItems(paletteEntries, slashQuery, recentCommands),
+    [paletteEntries, recentCommands, slashQuery],
+  )
+  const showPalette = paletteItems.length > 0
+  const activeCommandIndex = Math.min(
+    selectedCommandIndex,
+    Math.max(paletteItems.length - 1, 0),
+  )
+
+  useEffect(() => {
+    if (!showPalette) return
+
+    // Close the palette on pointer input outside the composer, like the composer's other popovers.
+    const dismissOnPointerDown = (event: PointerEvent) => {
+      const target = event.target
+      if (target instanceof Node && surfaceRef.current?.contains(target)) return
+      setPaletteDismissed(true)
+    }
+
+    document.addEventListener("pointerdown", dismissOnPointerDown, true)
+    return () => {
+      document.removeEventListener("pointerdown", dismissOnPointerDown, true)
+    }
+  }, [showPalette])
+
+  const handleInputChange = (value: string) => {
+    setPaletteDismissed(false)
+    setSelectedCommandIndex(0)
+    onInputChange(value)
+  }
+
+  const chooseSlashCommand = (item: SlashPaletteItem) => {
+    const nextRecents = nextSlashRecents(recentCommands, item.command)
+    setRecentCommands(nextRecents)
+    storeSlashRecents(nextRecents)
+    setPaletteDismissed(true)
+    setSelectedCommandIndex(0)
+    onInputChange(slashCommandInsertion(item))
+    textareaRef.current?.focus()
+  }
 
   const handleKeyDown = (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     const nativeEvent = e.nativeEvent as Event & {
@@ -87,6 +180,37 @@ export function ChatComposer({
     ) {
       return
     }
+    if (showPalette) {
+      const count = paletteItems.length
+      if (e.key === "ArrowDown") {
+        e.preventDefault()
+        setSelectedCommandIndex((activeCommandIndex + 1) % count)
+        return
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault()
+        setSelectedCommandIndex((activeCommandIndex - 1 + count) % count)
+        return
+      }
+      if (e.key === "Escape") {
+        e.preventDefault()
+        setPaletteDismissed(true)
+        return
+      }
+      // A bare command that is already fully typed (e.g. "/clear") is sent
+      // directly; Enter on any other partial match completes it first.
+      const isExactBareCommand = slashCommands.some(
+        (command) => command.command === input && !command.arg_hint,
+      )
+      if (
+        e.key === "Tab" ||
+        (e.key === "Enter" && !e.shiftKey && !isExactBareCommand)
+      ) {
+        e.preventDefault()
+        chooseSlashCommand(paletteItems[activeCommandIndex])
+        return
+      }
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault()
       onSend()
@@ -94,9 +218,10 @@ export function ChatComposer({
   }
 
   return (
-    <div className="pointer-events-none relative z-10 mt-0 shrink-0 [scrollbar-gutter:stable] overflow-y-auto bg-[var(--conversation-background)] px-4 pb-[calc(0.5rem+env(safe-area-inset-bottom))] md:px-8 md:pb-4 lg:px-24 xl:px-48">
+    <div className="pointer-events-none relative z-10 mt-0 shrink-0 bg-[var(--conversation-background)] px-4 pb-[calc(0.5rem+env(safe-area-inset-bottom))] md:px-8 md:pb-4 lg:px-24 xl:px-48">
       <div className="pointer-events-auto mx-auto flex max-w-[49.5rem] flex-col items-end">
         <div
+          ref={surfaceRef}
           className={cn(
             "bg-muted/60 relative flex w-full flex-col rounded-3xl border border-transparent p-3 shadow-none transition-colors",
             isDragActive && "border-violet-400/70 bg-violet-500/10",
@@ -154,9 +279,19 @@ export function ChatComposer({
             </div>
           )}
 
+          {showPalette && (
+            <SlashCommandPalette
+              items={paletteItems}
+              selectedIndex={activeCommandIndex}
+              onHover={setSelectedCommandIndex}
+              onChoose={chooseSlashCommand}
+            />
+          )}
+
           <TextareaAutosize
+            ref={textareaRef}
             value={input}
-            onChange={(e) => onInputChange(e.target.value)}
+            onChange={(e) => handleInputChange(e.target.value)}
             onCompositionStart={() => {
               composingRef.current = true
             }}
