@@ -318,6 +318,25 @@ func TestToolRegistry_ExecuteWithContext_AsyncCallback(t *testing.T) {
 	}
 }
 
+func TestToolRegistry_ExecuteWithContext_AsyncExecutorGetsNoopCallback(t *testing.T) {
+	r := NewToolRegistry()
+	at := &mockAsyncRegistryTool{
+		mockRegistryTool: *newMockTool("async_tool", "async work"),
+	}
+	at.result = AsyncResult("started")
+	r.Register(at)
+
+	result := r.ExecuteWithContext(context.Background(), "async_tool", nil, "", "", nil)
+	if at.lastCB == nil {
+		t.Fatal("expected ExecuteAsync to receive a non-nil callback even when the caller passes nil")
+	}
+	if !result.Async {
+		t.Error("expected async result")
+	}
+	// The substituted no-op callback must be safe to invoke.
+	at.lastCB(context.Background(), SilentResult("done"))
+}
+
 func TestToolRegistry_GetDefinitions(t *testing.T) {
 	r := NewToolRegistry()
 	r.Register(newMockTool("alpha", "tool A"))
@@ -902,5 +921,37 @@ func TestToolRegistry_ExecuteWithContext_SanitizesInlineMediaWithoutStore(t *tes
 	}
 	if !strings.Contains(result.ForLLM, inlineMediaOmittedMessage) {
 		t.Fatalf("expected inline media omission note, got %q", result.ForLLM)
+	}
+}
+
+func TestToolRegistry_ExecuteWithContext_DoesNotMutateToolResult(t *testing.T) {
+	r := NewToolRegistry()
+	r.SetMediaStore(media.NewFileMediaStore())
+
+	shared := SilentResult("![img](data:image/png;base64,aGVsbG8=)")
+	r.Register(&mockRegistryTool{
+		name:   "shared_result",
+		desc:   "returns the same result pointer every call",
+		params: map[string]any{},
+		result: shared,
+	})
+
+	first := r.ExecuteWithContext(context.Background(), "shared_result", nil, "telegram", "chat-1", nil)
+	if len(first.Media) != 1 {
+		t.Fatalf("first call media = %d, want 1", len(first.Media))
+	}
+	if strings.Contains(shared.ForLLM, "registered as a media attachment") {
+		t.Fatalf("tool-owned result ForLLM was mutated: %q", shared.ForLLM)
+	}
+	if len(shared.Media) != 0 {
+		t.Fatalf("tool-owned result media was mutated: %v", shared.Media)
+	}
+
+	second := r.ExecuteWithContext(context.Background(), "shared_result", nil, "telegram", "chat-1", nil)
+	if len(second.Media) != 1 {
+		t.Fatalf("second call media = %d, want 1", len(second.Media))
+	}
+	if second == shared {
+		t.Fatal("normalized result must not be the tool-owned pointer")
 	}
 }

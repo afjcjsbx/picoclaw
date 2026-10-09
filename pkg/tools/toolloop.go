@@ -179,11 +179,11 @@ func RunToolLoop(
 					}
 				}()
 
-				argsJSON, _ := json.Marshal(tc.Arguments)
-				argsPreview := utils.Truncate(string(argsJSON), 200)
-				logger.InfoCF("toolloop", fmt.Sprintf("Tool call: %s(%s)", tc.Name, argsPreview),
+				logger.InfoCF("toolloop", fmt.Sprintf("Tool call: %s", tc.Name),
 					map[string]any{
 						"tool":      tc.Name,
+						"arg_keys":  utils.SortedArgKeys(tc.Arguments),
+						"arg_count": len(tc.Arguments),
 						"iteration": iteration,
 					})
 
