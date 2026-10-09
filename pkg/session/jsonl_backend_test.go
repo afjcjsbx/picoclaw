@@ -336,3 +336,53 @@ func TestJSONLBackend_LastActivity(t *testing.T) {
 		t.Fatalf("LastActivity = %v, want >= %v", got, before)
 	}
 }
+
+func TestJSONLBackend_DeleteSession(t *testing.T) {
+	b := newBackend(t)
+
+	b.AddMessage("agent:main:s1", "user", "one")
+	b.AddMessage("agent:main:s2", "user", "two")
+	b.SetSummary("agent:main:s1", "a summary")
+
+	if err := b.DeleteSession("agent:main:s1"); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	if got := b.GetHistory("agent:main:s1"); len(got) != 0 {
+		t.Fatalf("history after delete = %v, want empty", got)
+	}
+	if got := b.GetSummary("agent:main:s1"); got != "" {
+		t.Fatalf("summary after delete = %q, want empty", got)
+	}
+	sessions := b.ListSessions()
+	if len(sessions) != 1 || sessions[0] != "agent:main:s2" {
+		t.Fatalf("ListSessions = %v, want [agent:main:s2]", sessions)
+	}
+	if got := b.GetHistory("agent:main:s2"); len(got) != 1 {
+		t.Fatalf("other session history = %v, want untouched", got)
+	}
+
+	// Deleting an unknown or already-deleted session is a no-op.
+	if err := b.DeleteSession("agent:main:s1"); err != nil {
+		t.Fatalf("DeleteSession(again): %v", err)
+	}
+	if err := b.DeleteSession("agent:main:never-existed"); err != nil {
+		t.Fatalf("DeleteSession(missing): %v", err)
+	}
+}
+
+func TestJSONLBackend_DeleteSessionDoesNotFollowAliases(t *testing.T) {
+	b := newBackend(t)
+
+	b.AddMessage("sk_canonical", "user", "keep me")
+	b.EnsureSessionMetadata("sk_canonical", nil, []string{"agent:main:legacy"})
+	if got := b.ResolveSessionKey("agent:main:legacy"); got != "sk_canonical" {
+		t.Fatalf("alias resolves to %q, want sk_canonical (test setup)", got)
+	}
+
+	if err := b.DeleteSession("agent:main:legacy"); err != nil {
+		t.Fatalf("DeleteSession(alias): %v", err)
+	}
+	if got := b.GetHistory("sk_canonical"); len(got) != 1 {
+		t.Fatalf("canonical session lost its history after deleting an alias: %v", got)
+	}
+}

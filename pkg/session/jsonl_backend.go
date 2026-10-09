@@ -216,9 +216,12 @@ func (b *JSONLBackend) LastActivity(key string) time.Time {
 }
 
 // DeleteSession removes a session and its metadata from the backing store.
-// Used by automatic session pruning.
+// Used by automatic session pruning, which only passes canonical keys (from
+// ListSessions or the seahorse index). The key is deliberately not resolved
+// through aliases: resolving costs a scan of every metadata file per call,
+// making a prune pass quadratic in the number of sessions, and an alias must
+// never cause the session it points to to be deleted.
 func (b *JSONLBackend) DeleteSession(key string) error {
-	key = b.resolveSessionKey(key)
 	deleter, ok := b.store.(sessionDeletingStore)
 	if !ok {
 		return fmt.Errorf("session: backing store does not support DeleteSession")
