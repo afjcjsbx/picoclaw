@@ -293,10 +293,7 @@ function linkifyFileText(value: string, aliases?: Record<string, string>) {
   return offset > 0 ? result + value.slice(offset) : value
 }
 
-function linkifyMarkdownPaths(
-  value: string,
-  aliases?: Record<string, string>,
-) {
+function linkifyMarkdownPaths(value: string, aliases?: Record<string, string>) {
   return value
     .split(/(```[\s\S]*?```|~~~[\s\S]*?~~~)/g)
     .map((block) => {
@@ -370,6 +367,32 @@ function FilePathText({
   return parts
 }
 
+function resolveMarkdownFileLinkPath(
+  href: string | undefined,
+  onOpenFile: ((path: string) => void) | undefined,
+  filePathAliases: Record<string, string> | undefined,
+): string | null {
+  if (!href || !onOpenFile) {
+    return null
+  }
+  try {
+    const url = new URL(href, window.location.origin)
+    const requestedPath =
+      url.pathname === "/api/files/preview"
+        ? url.searchParams.get("path")
+        : !/^(?:[a-z]+:|\/\/|#)/i.test(href) &&
+            isFilePath(decodeURIComponent(href))
+          ? decodeURIComponent(href)
+          : null
+    return requestedPath
+      ? resolveFilePath(requestedPath, filePathAliases)
+      : null
+  } catch {
+    // Keep malformed or external markdown links as ordinary links.
+    return null
+  }
+}
+
 function MarkdownFileLink({
   href,
   children,
@@ -381,33 +404,17 @@ function MarkdownFileLink({
   onOpenFile?: (path: string) => void
   filePathAliases?: Record<string, string>
 }) {
-  if (href && onOpenFile) {
-    try {
-      const url = new URL(href, window.location.origin)
-      const requestedPath =
-        url.pathname === "/api/files/preview"
-          ? url.searchParams.get("path")
-          : !/^(?:[a-z]+:|\/\/|#)/i.test(href) &&
-              isFilePath(decodeURIComponent(href))
-            ? decodeURIComponent(href)
-            : null
-      const path = requestedPath
-        ? resolveFilePath(requestedPath, filePathAliases)
-        : null
-      if (path) {
-        return (
-          <button
-            type="button"
-            className="text-primary hover:text-primary/80 cursor-pointer bg-transparent p-0 underline decoration-current/40 underline-offset-2"
-            onClick={() => onOpenFile(path)}
-          >
-            {children}
-          </button>
-        )
-      }
-    } catch {
-      // Keep malformed or external markdown links as ordinary links.
-    }
+  const path = resolveMarkdownFileLinkPath(href, onOpenFile, filePathAliases)
+  if (path && onOpenFile) {
+    return (
+      <button
+        type="button"
+        className="text-primary hover:text-primary/80 cursor-pointer bg-transparent p-0 underline decoration-current/40 underline-offset-2"
+        onClick={() => onOpenFile(path)}
+      >
+        {children}
+      </button>
+    )
   }
   return <a href={href}>{children}</a>
 }
