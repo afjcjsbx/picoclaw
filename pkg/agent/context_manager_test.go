@@ -17,6 +17,22 @@ import (
 	"github.com/sipeed/picoclaw/pkg/providers"
 )
 
+func TestSummarizeBackoffProgression(t *testing.T) {
+	for _, tt := range []struct {
+		failures int
+		want     time.Duration
+	}{
+		{1, time.Minute},
+		{2, 5 * time.Minute},
+		{3, 15 * time.Minute},
+		{10, 15 * time.Minute},
+	} {
+		if got := summarizeBackoff(tt.failures); got != tt.want {
+			t.Fatalf("summarizeBackoff(%d) = %v, want %v", tt.failures, got, tt.want)
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Factory registry tests
 // ---------------------------------------------------------------------------
