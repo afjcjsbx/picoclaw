@@ -595,9 +595,14 @@ func deliverSubTurnResult(al *AgentLoop, parentTS *turnState, childID string, re
 				"child_id":  childID,
 			})
 			if result != nil && al != nil {
-				al.emitEvent(runtimeevents.KindAgentSubTurnOrphan,
+				al.emitEvent(
+					runtimeevents.KindAgentSubTurnOrphan,
 					parentTS.eventMeta("deliverSubTurnResult", "subturn.orphan"),
-					SubTurnOrphanPayload{ParentTurnID: parentTS.turnID, ChildTurnID: childID, Reason: "parent_finished"},
+					SubTurnOrphanPayload{
+						ParentTurnID: parentTS.turnID,
+						ChildTurnID:  childID,
+						Reason:       "parent_finished",
+					},
 				)
 			}
 			return

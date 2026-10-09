@@ -531,7 +531,7 @@ func TestRunAgentLoop_InitializesSubTurnChannels(t *testing.T) {
 // coordinator marks the turn finished when it ends naturally, so that late
 // SubTurn results become orphans and child turns see the parent as ended.
 func TestRunTurn_MarksTurnFinishedOnGracefulCompletion(t *testing.T) {
-	al, _, _, _, cleanup := newTestAgentLoop(t)
+	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled
 	defer cleanup()
 
 	agent := al.registry.GetDefaultAgent()
