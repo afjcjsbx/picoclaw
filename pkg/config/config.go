@@ -261,7 +261,7 @@ func (c *Config) MarshalJSON() ([]byte, error) {
 	}
 
 	if len(c.Session.Dimensions) > 0 || len(c.Session.IdentityLinks) > 0 ||
-		c.Session.DmScope != "" {
+		c.Session.DmScope != "" || !c.Session.Prune.IsZero() {
 		sessionCfg := c.Session
 		aux.Session = &sessionCfg
 	}
@@ -354,7 +354,23 @@ type SessionConfig struct {
 	Dimensions    []string            `json:"dimensions,omitempty"`
 	IdentityLinks map[string][]string `json:"identity_links,omitempty"`
 	DmScope       string              `json:"dm_scope,omitempty"`
-	Prune         SessionPruneConfig  `json:"prune,omitempty"`
+	Prune         SessionPruneConfig  `json:"prune"`
+}
+
+// MarshalJSON omits the prune block while it is unconfigured, so saving the
+// config does not litter it with an empty "prune" object (encoding/json's
+// omitempty never omits a struct value).
+func (s *SessionConfig) MarshalJSON() ([]byte, error) {
+	type alias SessionConfig
+	aux := struct {
+		alias
+		Prune *SessionPruneConfig `json:"prune,omitempty"`
+	}{alias: alias(*s)}
+	if !s.Prune.IsZero() {
+		prune := s.Prune
+		aux.Prune = &prune
+	}
+	return json.Marshal(aux)
 }
 
 // SessionPruneConfig controls automatic pruning of old chat sessions.
@@ -405,6 +421,11 @@ type SessionPruneConfig struct {
 	// pass that deleted at least one session. Defaults to true when omitted;
 	// it is required for the database-size guard to observe freed space.
 	Vacuum *bool `json:"vacuum,omitempty" env:"PICOCLAW_SESSION_PRUNE_VACUUM"`
+}
+
+// IsZero reports whether no pruning option has been set.
+func (p SessionPruneConfig) IsZero() bool {
+	return p == SessionPruneConfig{}
 }
 
 // IsActive reports whether any pruning threshold would be enforced.
