@@ -35,6 +35,7 @@ func init() {
 type Config struct {
 	// Config schema version for migration.
 	Version   int             `json:"version"             yaml:"-"`
+	Security  SecurityConfig  `json:"security,omitempty"  yaml:"security,omitempty"`
 	Isolation IsolationConfig `json:"isolation,omitempty" yaml:"-"`
 	Agents    AgentsConfig    `json:"agents"              yaml:"-"`
 	Session   SessionConfig   `json:"session,omitempty"   yaml:"-"`
@@ -55,6 +56,34 @@ type Config struct {
 
 	// cache for sensitive values and compiled regex (computed once)
 	sensitiveCache *SensitiveDataCache
+}
+
+type SecurityConfig struct {
+	WebsiteBlocklist WebsiteBlocklistConfig `json:"website_blocklist,omitempty" yaml:"website_blocklist,omitempty"`
+}
+
+type WebsiteBlocklistConfig struct {
+	Enabled bool     `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+	Domains []string `json:"domains,omitempty" yaml:"domains,omitempty"`
+}
+
+func (c WebsiteBlocklistConfig) IsEnabled() bool {
+	return c.Enabled && len(c.Domains) > 0
+}
+
+func (c WebsiteBlocklistConfig) Blocks(host string) bool {
+	if !c.IsEnabled() {
+		return false
+	}
+	host = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
+	for _, domain := range c.Domains {
+		domain = strings.TrimSpace(strings.TrimPrefix(strings.ToLower(domain), "*."))
+		domain = strings.TrimSuffix(domain, ".")
+		if host == domain || strings.HasSuffix(host, "."+domain) {
+			return true
+		}
+	}
+	return false
 }
 
 type EvolutionConfig struct {

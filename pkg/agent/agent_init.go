@@ -148,7 +148,8 @@ func registerSharedTools(
 				cfg.Tools.Web.Proxy,
 				cfg.Tools.Web.Format,
 				cfg.Tools.Web.FetchLimitBytes,
-				cfg.Tools.Web.PrivateHostWhitelist)
+				cfg.Tools.Web.PrivateHostWhitelist,
+				cfg.Security.WebsiteBlocklist)
 			if err != nil {
 				logger.ErrorCF("agent", "Failed to create web fetch tool", map[string]any{"error": err.Error()})
 			} else {
