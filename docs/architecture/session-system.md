@@ -11,6 +11,10 @@ This document describes the runtime session system used by PicoClaw to:
 This document covers the core runtime path in `pkg/session`, `pkg/memory`, and `pkg/agent`.
 It does not describe launcher login cookies or dashboard authentication sessions in `web/backend/middleware`.
 
+> For how large session histories affect gateway startup and how to bound growth
+> with automatic pruning, see
+> [Session Startup Cost and Automatic Pruning](session-startup-and-pruning.md).
+
 ## Responsibilities
 
 The session system has four jobs:

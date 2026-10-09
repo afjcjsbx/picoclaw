@@ -53,6 +53,13 @@ func DefaultConfig() *Config {
 		},
 		Session: SessionConfig{
 			Dimensions: []string{"chat"},
+			// Pruning is opt-in. Thresholds default to 0 (disabled) so no data
+			// is ever deleted unexpectedly; see the recommended values in
+			// SessionPruneConfig documentation. Vacuum defaults to enabled.
+			Prune: SessionPruneConfig{
+				Enabled:              false,
+				CheckIntervalMinutes: 60,
+			},
 		},
 		Evolution: EvolutionConfig{
 			Enabled:         false,

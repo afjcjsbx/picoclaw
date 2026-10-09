@@ -410,6 +410,61 @@ func (e *Engine) ClearSession(ctx context.Context, sessionKey string) error {
 	return e.store.ClearConversation(ctx, conv.ConversationID)
 }
 
+// DeleteSession removes all stored data for a session and the conversation row
+// itself. Used by session pruning so no orphaned conversation rows remain.
+func (e *Engine) DeleteSession(ctx context.Context, sessionKey string) error {
+	conv, err := e.store.GetConversationBySessionKey(ctx, sessionKey)
+	if err != nil {
+		return err
+	}
+	if conv == nil {
+		return nil // session never ingested, nothing to delete
+	}
+	return e.store.DeleteConversation(ctx, conv.ConversationID)
+}
+
+// SessionStatuses returns status for every conversation in the database.
+func (e *Engine) SessionStatuses(ctx context.Context) ([]SessionStatus, error) {
+	return e.store.GetAllSessionStatuses(ctx)
+}
+
+// ConversationCount returns the number of conversations in the database.
+func (e *Engine) ConversationCount(ctx context.Context) (int, error) {
+	return e.store.ConversationCount(ctx)
+}
+
+// DBFileSize returns the combined size in bytes of the SQLite database file and
+// its write-ahead log (if present).
+func (e *Engine) DBFileSize() (int64, error) {
+	path := e.config.DBPath
+	if strings.TrimSpace(path) == "" {
+		return 0, nil
+	}
+	var total int64
+	if info, err := os.Stat(path); err == nil {
+		total += info.Size()
+	} else if !os.IsNotExist(err) {
+		return 0, err
+	}
+	if info, err := os.Stat(path + "-wal"); err == nil {
+		total += info.Size()
+	} else if !os.IsNotExist(err) {
+		return 0, err
+	}
+	return total, nil
+}
+
+// Vacuum reclaims unused disk space in the underlying SQLite database.
+func (e *Engine) Vacuum(ctx context.Context) error {
+	return e.store.Vacuum(ctx)
+}
+
+// Checkpoint folds the write-ahead log into the database file. When truncate is
+// true the -wal file is also shrunk to zero bytes.
+func (e *Engine) Checkpoint(ctx context.Context, truncate bool) error {
+	return e.store.CheckpointWAL(ctx, truncate)
+}
+
 // Bootstrap reconciles a session's messages with the database.
 // Called once at startup for each known session.
 // Bootstrap reconciles JSONL history with SQLite by ingesting only the delta.

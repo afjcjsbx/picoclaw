@@ -178,6 +178,28 @@ func (sm *SessionManager) ListSessions() []string {
 	return keys
 }
 
+// DeleteSession removes a session from memory and deletes its backing file.
+// Used by automatic session pruning. Missing files are ignored.
+func (sm *SessionManager) DeleteSession(key string) error {
+	sm.mu.Lock()
+	delete(sm.sessions, key)
+	sm.mu.Unlock()
+
+	if sm.storage == "" {
+		return nil
+	}
+
+	filename := sanitizeFilename(key)
+	if filename == "." || !filepath.IsLocal(filename) {
+		return os.ErrInvalid
+	}
+	path := filepath.Join(sm.storage, filename+".json")
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
 // sanitizeFilename converts a session key into a cross-platform safe filename.
 // Replaces ':' with '_' (session key separator) and '/' and '\' with '_' so
 // composite IDs (e.g. Telegram forum "chatID/threadID") do not create

@@ -36,6 +36,17 @@
       }
     }
   },
+  "session": {
+    "dimensions": ["chat"],
+    "prune": {
+      "enabled": false,
+      "max_age_days": 30,
+      "max_sessions": 100,
+      "max_db_size_mb": 512,
+      "check_interval_minutes": 60,
+      "vacuum": true
+    }
+  },
   "evolution": {
     "enabled": false,
     "mode": "observe",

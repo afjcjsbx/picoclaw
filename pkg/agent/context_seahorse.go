@@ -8,19 +8,22 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
 	"github.com/sipeed/picoclaw/pkg/seahorse"
 	"github.com/sipeed/picoclaw/pkg/session"
+	"github.com/sipeed/picoclaw/pkg/session/pruner"
 	"github.com/sipeed/picoclaw/pkg/tokenizer"
 )
 
 // seahorseContextManager adapts seahorse.Engine to agent.ContextManager.
 type seahorseContextManager struct {
-	engine   *seahorse.Engine
-	sessions session.SessionStore // for startup bootstrap
-	al       *AgentLoop           // for resolving the agent that owns a session
+	engine    *seahorse.Engine
+	sessions  session.SessionStore // for startup bootstrap
+	al        *AgentLoop           // for resolving the agent that owns a session
+	stopPrune context.CancelFunc   // stops the background prune loop on Close
 }
 
 // newSeahorseContextManager creates a seahorse-backed ContextManager.
@@ -51,6 +54,21 @@ func newSeahorseContextManager(_ json.RawMessage, al *AgentLoop) (ContextManager
 		al:       al,
 	}
 
+	// Prune old sessions before the (expensive) startup bootstrap so the
+	// gateway becomes ready faster once history has grown large. Pruning is
+	// opt-in and disabled by default.
+	if al.cfg != nil {
+		pruneCfg := al.cfg.Session.Prune
+		if pruneCfg.Enabled && pruneCfg.IsActive() {
+			pstore := asPruneStore(agent.Sessions)
+			pruner.Run(context.Background(), engine, pstore, pruneCfg)
+
+			pruneCtx, cancel := context.WithCancel(context.Background())
+			mgr.stopPrune = cancel
+			go runPruneLoop(pruneCtx, engine, pstore, pruneCfg)
+		}
+	}
+
 	// Register seahorse tools with the agent's tool registry
 	retrieval := mgr.engine.GetRetrieval()
 	al.RegisterTool(seahorse.NewGrepTool(retrieval))
@@ -65,6 +83,54 @@ func newSeahorseContextManager(_ json.RawMessage, al *AgentLoop) (ContextManager
 	}
 
 	return mgr, nil
+}
+
+// asPruneStore returns the session store as a pruning store when its dynamic
+// type supports deletion (JSONLBackend and SessionManager do).
+func asPruneStore(store session.SessionStore) pruner.Store {
+	if store == nil {
+		return nil
+	}
+	if s, ok := store.(pruner.Store); ok {
+		return s
+	}
+	return nil
+}
+
+// runPruneLoop periodically prunes old sessions until ctx is canceled.
+func runPruneLoop(
+	ctx context.Context,
+	engine *seahorse.Engine,
+	store pruner.Store,
+	cfg config.SessionPruneConfig,
+) {
+	interval := time.Duration(cfg.EffectiveCheckIntervalMinutes()) * time.Minute
+	if interval <= 0 {
+		interval = time.Hour
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			pruner.Run(ctx, engine, store, cfg)
+		}
+	}
+}
+
+// Close stops the background prune loop and releases the seahorse engine.
+func (m *seahorseContextManager) Close() error {
+	if m.stopPrune != nil {
+		m.stopPrune()
+		m.stopPrune = nil
+	}
+	if m.engine != nil {
+		return m.engine.Close()
+	}
+	return nil
 }
 
 // providerToCompleteFn wraps providers.LLMProvider as a seahorse.CompleteFn.

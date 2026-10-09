@@ -902,6 +902,46 @@ func (s *Store) ClearConversation(ctx context.Context, convID int64) error {
 	return tx.Commit()
 }
 
+// DeleteConversation removes all data for a conversation and the conversation
+// row itself. Unlike ClearConversation (which keeps the row for /clear), this
+// is used by session pruning so no orphaned conversations accumulate.
+func (s *Store) DeleteConversation(ctx context.Context, convID int64) error {
+	if err := s.ClearConversation(ctx, convID); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx,
+		"DELETE FROM conversations WHERE conversation_id = ?", convID); err != nil {
+		return fmt.Errorf("delete conversation row: %w", err)
+	}
+	return nil
+}
+
+// ConversationCount returns the number of conversations in the database.
+func (s *Store) ConversationCount(ctx context.Context) (int, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM conversations").Scan(&count)
+	return count, err
+}
+
+// Vacuum reclaims unused disk space in the SQLite database. It is a no-op
+// cost-wise only when the database is small; call it after a prune that
+// deleted data.
+func (s *Store) Vacuum(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, "VACUUM")
+	return err
+}
+
+// CheckpointWAL folds the write-ahead log back into the main database file.
+// Pass truncate=true to also shrink the -wal file to zero bytes.
+func (s *Store) CheckpointWAL(ctx context.Context, truncate bool) error {
+	if truncate {
+		_, err := s.db.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)")
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, "PRAGMA wal_checkpoint(PASSIVE)")
+	return err
+}
+
 // AppendContextMessage appends a single message to context_items at next ordinal.
 func (s *Store) AppendContextMessage(ctx context.Context, convID int64, messageID int64) error {
 	return s.appendContextItems(ctx, convID, []ContextItem{

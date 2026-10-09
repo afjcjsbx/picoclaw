@@ -1247,3 +1247,37 @@ func BenchmarkGetHistory_1000(b *testing.B) {
 		_, _ = store.GetHistory(ctx, "bench")
 	}
 }
+
+func TestDeleteSession(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	if err := store.AddMessage(ctx, "s1", "user", "hello"); err != nil {
+		t.Fatalf("AddMessage: %v", err)
+	}
+	if err := store.UpsertSessionMeta(ctx, "s1", nil, nil); err != nil {
+		t.Fatalf("UpsertSessionMeta: %v", err)
+	}
+	if !store.sessionExists("s1") {
+		t.Fatal("session should exist before delete")
+	}
+
+	if err := store.DeleteSession(ctx, "s1"); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	if store.sessionExists("s1") {
+		t.Fatal("session still exists after delete")
+	}
+	if sessions := store.ListSessions(); len(sessions) != 0 {
+		t.Fatalf("ListSessions = %v, want empty", sessions)
+	}
+
+	// Deleting an unknown session is a no-op.
+	if err := store.DeleteSession(ctx, "missing"); err != nil {
+		t.Fatalf("DeleteSession(missing): %v", err)
+	}
+	// Empty key is ignored.
+	if err := store.DeleteSession(ctx, "  "); err != nil {
+		t.Fatalf("DeleteSession(empty): %v", err)
+	}
+}

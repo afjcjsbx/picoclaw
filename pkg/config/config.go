@@ -354,6 +354,79 @@ type SessionConfig struct {
 	Dimensions    []string            `json:"dimensions,omitempty"`
 	IdentityLinks map[string][]string `json:"identity_links,omitempty"`
 	DmScope       string              `json:"dm_scope,omitempty"`
+	Prune         SessionPruneConfig  `json:"prune,omitempty"`
+}
+
+// SessionPruneConfig controls automatic pruning of old chat sessions.
+//
+// The seahorse context manager bootstraps every session into SQLite on
+// startup, so the cost of a gateway start grows with the number of sessions
+// and the size of their history. Without pruning, a device can end up with
+// hundreds of sessions and a large seahorse.db, making startup take minutes.
+//
+// Pruning is opt-in (Enabled=false by default) because it deletes data.
+// A recommended, conservative configuration for a small device is:
+//
+//	"prune": {
+//	  "enabled": true,
+//	  "max_age_days": 30,
+//	  "max_sessions": 100,
+//	  "max_db_size_mb": 512,
+//	  "check_interval_minutes": 60,
+//	  "vacuum": true
+//	}
+//
+// A threshold of 0 disables that specific check. Sessions are always deleted
+// oldest-first, and the most recent sessions (and any session more recent than
+// MaxAgeDays) are never pruned by the count/size checks.
+type SessionPruneConfig struct {
+	// Enabled turns automatic session pruning on. Default false: nothing is
+	// deleted unless the user opts in.
+	Enabled bool `json:"enabled" env:"PICOCLAW_SESSION_PRUNE_ENABLED"`
+
+	// MaxAgeDays deletes sessions whose last activity is older than this many
+	// days. 0 disables age-based pruning.
+	MaxAgeDays int `json:"max_age_days,omitempty" env:"PICOCLAW_SESSION_PRUNE_MAX_AGE_DAYS"`
+
+	// MaxSessions keeps at most this many of the most recently active sessions.
+	// 0 disables the session-count cap.
+	MaxSessions int `json:"max_sessions,omitempty" env:"PICOCLAW_SESSION_PRUNE_MAX_SESSIONS"`
+
+	// MaxDBSizeMB is a safety net: when the seahorse SQLite database exceeds
+	// this size, the oldest remaining sessions are pruned (and the database is
+	// vacuumed) until it fits. 0 disables the size guard.
+	MaxDBSizeMB int `json:"max_db_size_mb,omitempty" env:"PICOCLAW_SESSION_PRUNE_MAX_DB_SIZE_MB"`
+
+	// CheckIntervalMinutes is how often the background prune pass runs.
+	// Defaults to 60 when 0.
+	CheckIntervalMinutes int `json:"check_interval_minutes,omitempty" env:"PICOCLAW_SESSION_PRUNE_CHECK_INTERVAL_MINUTES"`
+
+	// Vacuum reclaims disk space (SQLite VACUUM + WAL checkpoint) after a prune
+	// pass that deleted at least one session. Defaults to true when omitted;
+	// it is required for the database-size guard to observe freed space.
+	Vacuum *bool `json:"vacuum,omitempty" env:"PICOCLAW_SESSION_PRUNE_VACUUM"`
+}
+
+// IsActive reports whether any pruning threshold would be enforced.
+func (p SessionPruneConfig) IsActive() bool {
+	return p.MaxAgeDays > 0 || p.MaxSessions > 0 || p.MaxDBSizeMB > 0
+}
+
+// VacuumEnabled reports whether pruned sessions should be followed by a
+// SQLite VACUUM. Defaults to true when not explicitly configured.
+func (p SessionPruneConfig) VacuumEnabled() bool {
+	if p.Vacuum == nil {
+		return true
+	}
+	return *p.Vacuum
+}
+
+// EffectiveCheckIntervalMinutes returns the configured interval or the default.
+func (p SessionPruneConfig) EffectiveCheckIntervalMinutes() int {
+	if p.CheckIntervalMinutes > 0 {
+		return p.CheckIntervalMinutes
+	}
+	return 60
 }
 
 // ApplyDmScope translates the user-facing dm_scope value into the internal

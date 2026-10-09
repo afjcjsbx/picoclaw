@@ -187,6 +187,27 @@ func (s *JSONLStore) sessionExists(key string) bool {
 	return false
 }
 
+// DeleteSession removes a session's JSONL data and metadata files. Missing
+// files are ignored, so deleting an unknown session is a no-op. Used by
+// automatic session pruning.
+func (s *JSONLStore) DeleteSession(_ context.Context, sessionKey string) error {
+	sessionKey = strings.TrimSpace(sessionKey)
+	if sessionKey == "" {
+		return nil
+	}
+	l := s.sessionLock(sessionKey)
+	l.Lock()
+	defer l.Unlock()
+
+	var firstErr error
+	for _, path := range []string{s.jsonlPath(sessionKey), s.metaPath(sessionKey)} {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) && firstErr == nil {
+			firstErr = fmt.Errorf("memory: delete session file %s: %w", path, err)
+		}
+	}
+	return firstErr
+}
+
 // GetSessionMeta returns the current metadata snapshot for sessionKey.
 func (s *JSONLStore) GetSessionMeta(_ context.Context, sessionKey string) (SessionMeta, error) {
 	l := s.sessionLock(sessionKey)

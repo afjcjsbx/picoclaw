@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"strings"
 
@@ -189,4 +190,21 @@ func (b *JSONLBackend) Close() error {
 // ListSessions returns all known session keys.
 func (b *JSONLBackend) ListSessions() []string {
 	return b.store.ListSessions()
+}
+
+// sessionDeletingStore is implemented by memory stores that can physically
+// remove a session. It is optional so alternative backends remain compatible.
+type sessionDeletingStore interface {
+	DeleteSession(ctx context.Context, sessionKey string) error
+}
+
+// DeleteSession removes a session and its metadata from the backing store.
+// Used by automatic session pruning.
+func (b *JSONLBackend) DeleteSession(key string) error {
+	key = b.resolveSessionKey(key)
+	deleter, ok := b.store.(sessionDeletingStore)
+	if !ok {
+		return fmt.Errorf("session: backing store does not support DeleteSession")
+	}
+	return deleter.DeleteSession(context.Background(), key)
 }
