@@ -59,8 +59,9 @@ Example tool calls:
 `update` accepts `name`, `message`, `command`, and exactly one schedule field
 (`at_seconds`, `every_seconds`, or `cron_expr`).
 Omit `command` to preserve it, set `command` to a non-empty string to replace
-it, or set `command` to `""` to clear it. Command updates require the same
-channel allowlist and confirmation gates as command creation.
+it, or set `command` to `""` to clear it. Setting or replacing a command
+requires the same channel allowlist and confirmation gates as command
+creation; clearing it does not.
 
 ## Execution Modes
 

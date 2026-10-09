@@ -358,8 +358,10 @@ func (t *CronTool) updateJob(ctx context.Context, args map[string]any) *ToolResu
 		return errResult
 	}
 	if commandPresent {
-		if errResult := t.validateCommandMutation(ctx, args); errResult != nil {
-			return errResult
+		if command != "" {
+			if errResult := t.validateCommandMutation(ctx, args); errResult != nil {
+				return errResult
+			}
 		}
 		job.Payload.Command = command
 		patches++
