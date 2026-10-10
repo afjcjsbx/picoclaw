@@ -53,7 +53,8 @@ func (s SkillInfo) IsPluginSkill() bool {
 
 // PluginSkillUsage is the catalog hint shown for a plugin skill. It names the
 // bundled resource tool and a plugin-relative path instead of a host path the
-// agent would be denied from reading.
+// agent would be denied from reading. It is only emitted when ResourceTool is
+// set, so callers must guarantee a non-empty tool name.
 func (s SkillInfo) PluginSkillUsage() string {
 	location := s.pluginLocation()
 	if location == "" {
@@ -94,8 +95,8 @@ func (s SkillInfo) CatalogLines() []string {
 				lines,
 				fmt.Sprintf("    <resource-tool>%s</resource-tool>", escapeXML(s.ResourceTool)),
 			)
+			lines = append(lines, fmt.Sprintf("    <usage>%s</usage>", escapeXML(s.PluginSkillUsage())))
 		}
-		lines = append(lines, fmt.Sprintf("    <usage>%s</usage>", escapeXML(s.PluginSkillUsage())))
 	} else {
 		lines = append(lines, fmt.Sprintf("    <location>%s</location>", escapeXML(s.Path)))
 		lines = append(lines, fmt.Sprintf("    <source>%s</source>", escapeXML(s.Source)))
