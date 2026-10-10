@@ -10,6 +10,16 @@ import (
 
 const sqliteTimeLayout = "2006-01-02 15:04:05"
 
+// sqlInPlaceholders returns a parenthesized list of n "?" bind markers, e.g.
+// "(?,?,?)", for use in SQL IN clauses. Only markers are generated; values
+// must always be supplied via bound query arguments.
+func sqlInPlaceholders(n int) string {
+	if n <= 0 {
+		return "()"
+	}
+	return "(?" + strings.Repeat(",?", n-1) + ")"
+}
+
 // Store provides SQLite storage for seahorse.
 type Store struct {
 	db *sql.DB
@@ -358,7 +368,7 @@ func (s *Store) GetMessages(ctx context.Context, convID int64, limit int, before
 	for rows.Next() {
 		var msg Message
 		var createdAt string
-		if err := rows.Scan(
+		if err = rows.Scan(
 			&msg.ID,
 			&msg.ConversationID,
 			&msg.Role,
@@ -373,17 +383,23 @@ func (s *Store) GetMessages(ctx context.Context, convID int64, limit int, before
 		msg.CreatedAt = parseSQLiteTime(createdAt)
 		msgs = append(msgs, msg)
 	}
-	if err := rows.Err(); err != nil {
+	if err = rows.Err(); err != nil {
 		return nil, err
 	}
 
-	// Load parts for all messages
+	// Load parts for all messages in a single batched query per chunk instead of
+	// one query per message. The per-message (N+1) pattern was the dominant
+	// startup cost of the seahorse bootstrap on slow single-core devices.
+	ids := make([]int64, len(msgs))
 	for i := range msgs {
-		parts, err := s.loadMessageParts(ctx, msgs[i].ID)
-		if err != nil {
-			return nil, err
-		}
-		msgs[i].Parts = parts
+		ids[i] = msgs[i].ID
+	}
+	partsByMsg, err := s.loadMessagePartsBatch(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	for i := range msgs {
+		msgs[i].Parts = partsByMsg[msgs[i].ID]
 	}
 
 	return msgs, nil
@@ -492,6 +508,63 @@ func (s *Store) loadMessageParts(ctx context.Context, msgID int64) ([]MessagePar
 		parts = append(parts, p)
 	}
 	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return parts, nil
+}
+
+// loadMessagePartsBatch loads parts for many messages using batched IN queries
+// (chunked to stay under SQLite's bound-variable limit). The returned map only
+// contains entries for messages that have parts; callers should treat a missing
+// key as "no parts". Parts within each message are ordered by ordinal.
+func (s *Store) loadMessagePartsBatch(ctx context.Context, msgIDs []int64) (map[int64][]MessagePart, error) {
+	result := make(map[int64][]MessagePart, len(msgIDs))
+	if len(msgIDs) == 0 {
+		return result, nil
+	}
+
+	const chunkSize = 800
+	for start := 0; start < len(msgIDs); start += chunkSize {
+		end := min(start+chunkSize, len(msgIDs))
+		parts, err := s.loadMessagePartsChunk(ctx, msgIDs[start:end])
+		if err != nil {
+			return nil, err
+		}
+		for i := range parts {
+			result[parts[i].MessageID] = append(result[parts[i].MessageID], parts[i])
+		}
+	}
+
+	return result, nil
+}
+
+// loadMessagePartsChunk loads the parts for one chunk of message IDs.
+func (s *Store) loadMessagePartsChunk(ctx context.Context, chunk []int64) ([]MessagePart, error) {
+	args := make([]any, len(chunk))
+	for i, id := range chunk {
+		args[i] = id
+	}
+
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT part_id, message_id, type, text, name, arguments, tool_call_id, media_uri, mime_type
+		 FROM message_parts WHERE message_id IN `+sqlInPlaceholders(len(chunk))+` ORDER BY message_id, ordinal`,
+		args...,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var parts []MessagePart
+	for rows.Next() {
+		var p MessagePart
+		if err = rows.Scan(&p.ID, &p.MessageID, &p.Type, &p.Text, &p.Name, &p.Arguments,
+			&p.ToolCallID, &p.MediaURI, &p.MimeType); err != nil {
+			return nil, err
+		}
+		parts = append(parts, p)
+	}
+	if err = rows.Err(); err != nil {
 		return nil, err
 	}
 	return parts, nil
@@ -1117,7 +1190,7 @@ func (s *Store) ReplaceContextItemsWithSummary(
 
 	// Find the ordinals of items to delete and calculate midpoint
 	// Only "?" markers are ever concatenated into SQL; values are always bound.
-	inClause := "(?" + strings.Repeat(",?", len(summaryIDs)-1) + ")"
+	inClause := sqlInPlaceholders(len(summaryIDs))
 	args := make([]any, len(summaryIDs)+1)
 	args[0] = convID
 	for i, sid := range summaryIDs {
