@@ -52,19 +52,52 @@ func (s SkillInfo) IsPluginSkill() bool {
 // bundled resource tool and a plugin-relative path instead of a host path the
 // agent would be denied from reading.
 func (s SkillInfo) PluginSkillUsage() string {
-	tool := "the plugin read_resource tool"
-	if s.ResourceTool != "" {
-		tool = "`" + s.ResourceTool + "`"
-	}
-	location := s.Path
-	if location == "" || filepath.IsAbs(location) {
+	location := s.pluginLocation()
+	if location == "" {
 		location = "skills/<name>/SKILL.md"
 	}
 	return fmt.Sprintf(
-		"Read this skill and its bundled references with %s using a path relative to the plugin root (for example `%s`). Do not use filesystem tools on plugin files; they live outside the workspace.",
-		tool,
+		"Read this skill and its bundled references with `%s` using a path relative to the plugin root (for example `%s`). Do not use filesystem tools on plugin files; they live outside the workspace.",
+		s.ResourceTool,
 		location,
 	)
+}
+
+// pluginLocation returns the plugin-relative skill path, or "" when the path is
+// empty or an absolute host path that must never be shown to the agent.
+func (s SkillInfo) pluginLocation() string {
+	if s.Path == "" || filepath.IsAbs(s.Path) {
+		return ""
+	}
+	return s.Path
+}
+
+// CatalogLines renders the indented XML lines for this skill's catalog entry
+// (without any surrounding wrapper). The workspace loader summary and the agent
+// skill catalog both use it so the two renderings can never diverge.
+func (s SkillInfo) CatalogLines() []string {
+	lines := []string{
+		"  <skill>",
+		fmt.Sprintf("    <name>%s</name>", escapeXML(s.Name)),
+		fmt.Sprintf("    <description>%s</description>", escapeXML(s.Description)),
+	}
+	if s.IsPluginSkill() {
+		if location := s.pluginLocation(); location != "" {
+			lines = append(lines, fmt.Sprintf("    <location>%s</location>", escapeXML(location)))
+		}
+		lines = append(lines, fmt.Sprintf("    <source>%s</source>", escapeXML(s.Source)))
+		if s.ResourceTool != "" {
+			lines = append(
+				lines,
+				fmt.Sprintf("    <resource-tool>%s</resource-tool>", escapeXML(s.ResourceTool)),
+			)
+		}
+		lines = append(lines, fmt.Sprintf("    <usage>%s</usage>", escapeXML(s.PluginSkillUsage())))
+	} else {
+		lines = append(lines, fmt.Sprintf("    <location>%s</location>", escapeXML(s.Path)))
+		lines = append(lines, fmt.Sprintf("    <source>%s</source>", escapeXML(s.Source)))
+	}
+	return append(lines, "  </skill>")
 }
 
 func (info SkillInfo) validate() error {
@@ -241,26 +274,7 @@ func (sl *SkillsLoader) BuildSkillsSummary() string {
 	var lines []string
 	lines = append(lines, "<skills>")
 	for _, s := range allSkills {
-		escapedName := escapeXML(s.Name)
-		escapedDesc := escapeXML(s.Description)
-
-		lines = append(lines, fmt.Sprintf("  <skill>"))
-		lines = append(lines, fmt.Sprintf("    <name>%s</name>", escapedName))
-		lines = append(lines, fmt.Sprintf("    <description>%s</description>", escapedDesc))
-		if s.IsPluginSkill() {
-			if s.Path != "" && !filepath.IsAbs(s.Path) {
-				lines = append(lines, fmt.Sprintf("    <location>%s</location>", escapeXML(s.Path)))
-			}
-			lines = append(lines, fmt.Sprintf("    <source>%s</source>", escapeXML(s.Source)))
-			if s.ResourceTool != "" {
-				lines = append(lines, fmt.Sprintf("    <resource-tool>%s</resource-tool>", escapeXML(s.ResourceTool)))
-			}
-			lines = append(lines, fmt.Sprintf("    <usage>%s</usage>", escapeXML(s.PluginSkillUsage())))
-		} else {
-			lines = append(lines, fmt.Sprintf("    <location>%s</location>", escapeXML(s.Path)))
-			lines = append(lines, fmt.Sprintf("    <source>%s</source>", s.Source))
-		}
-		lines = append(lines, "  </skill>")
+		lines = append(lines, s.CatalogLines()...)
 	}
 	lines = append(lines, "</skills>")
 
@@ -429,9 +443,14 @@ func splitFrontmatter(content string) (frontmatter, body string) {
 	return frontmatter, body
 }
 
+var xmlReplacer = strings.NewReplacer(
+	"&", "&amp;",
+	"<", "&lt;",
+	">", "&gt;",
+	"\"", "&quot;",
+	"'", "&apos;",
+)
+
 func escapeXML(s string) string {
-	s = strings.ReplaceAll(s, "&", "&amp;")
-	s = strings.ReplaceAll(s, "<", "&lt;")
-	s = strings.ReplaceAll(s, ">", "&gt;")
-	return s
+	return xmlReplacer.Replace(s)
 }

@@ -443,55 +443,13 @@ func (cb *ContextBuilder) buildSkillsSummary(allowed []string) string {
 		if _, ok := allowedSet[strings.ToLower(strings.TrimSpace(s.Name))]; !ok {
 			continue
 		}
-		lines = append(lines, "  <skill>")
-		lines = append(lines, fmt.Sprintf("    <name>%s</name>", xmlEscapeForPrompt(s.Name)))
-		lines = append(
-			lines,
-			fmt.Sprintf("    <description>%s</description>", xmlEscapeForPrompt(s.Description)),
-		)
-		if s.IsPluginSkill() {
-			if s.Path != "" && !filepath.IsAbs(s.Path) {
-				lines = append(
-					lines,
-					fmt.Sprintf("    <location>%s</location>", xmlEscapeForPrompt(s.Path)),
-				)
-			}
-			lines = append(lines, fmt.Sprintf("    <source>%s</source>", xmlEscapeForPrompt(s.Source)))
-			if s.ResourceTool != "" {
-				lines = append(
-					lines,
-					fmt.Sprintf("    <resource-tool>%s</resource-tool>", xmlEscapeForPrompt(s.ResourceTool)),
-				)
-			}
-			lines = append(
-				lines,
-				fmt.Sprintf("    <usage>%s</usage>", xmlEscapeForPrompt(s.PluginSkillUsage())),
-			)
-		} else {
-			lines = append(
-				lines,
-				fmt.Sprintf("    <location>%s</location>", xmlEscapeForPrompt(s.Path)),
-			)
-			lines = append(lines, fmt.Sprintf("    <source>%s</source>", xmlEscapeForPrompt(s.Source)))
-		}
-		lines = append(lines, "  </skill>")
+		lines = append(lines, s.CatalogLines()...)
 	}
 	if len(lines) == 1 {
 		return ""
 	}
 	lines = append(lines, "</skills>")
 	return strings.Join(lines, "\n")
-}
-
-func xmlEscapeForPrompt(s string) string {
-	replacer := strings.NewReplacer(
-		"&", "&amp;",
-		"<", "&lt;",
-		">", "&gt;",
-		"\"", "&quot;",
-		"'", "&apos;",
-	)
-	return replacer.Replace(s)
 }
 
 // EstimateSystemTokens estimates the token count of the full system message
