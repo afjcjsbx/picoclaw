@@ -907,3 +907,116 @@ func newCMTestAgentLoop(cfg *config.Config) *AgentLoop {
 	msgBus := bus.NewMessageBus()
 	return NewAgentLoop(cfg, msgBus, &simpleMockProvider{response: "test"})
 }
+
+func TestContextFeedback_PublishedWhenToolFeedbackEnabled(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Agents.Defaults.ToolFeedback = config.ToolFeedbackConfig{Enabled: true}
+	msgBus := bus.NewMessageBus()
+	al := NewAgentLoop(cfg, msgBus, &simpleMockProvider{response: "test"})
+	agent := al.registry.GetDefaultAgent()
+	ts := &turnState{agent: agent, sessionKey: "sk-feedback", channel: "telegram", chatID: "chat-1"}
+
+	al.notifyContextFeedback(ts, "notice")
+
+	select {
+	case out := <-msgBus.OutboundChan():
+		if out.Channel != "telegram" || out.ChatID != "chat-1" {
+			t.Fatalf("unexpected target: %+v", out)
+		}
+		if out.Context.Raw[metadataKeyMessageKind] != messageKindToolFeedback {
+			t.Fatalf("kind = %q, want %q", out.Context.Raw[metadataKeyMessageKind], messageKindToolFeedback)
+		}
+		if out.Content != "notice" {
+			t.Fatalf("content = %q, want %q", out.Content, "notice")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected context feedback outbound")
+	}
+}
+
+func TestContextFeedback_PublishedOnPicoChannel(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Agents.Defaults.ToolFeedback = config.ToolFeedbackConfig{Enabled: true}
+	msgBus := bus.NewMessageBus()
+	al := NewAgentLoop(cfg, msgBus, &simpleMockProvider{response: "test"})
+	agent := al.registry.GetDefaultAgent()
+	ts := &turnState{agent: agent, sessionKey: "sk-feedback-pico", channel: "pico", chatID: "chat-pico"}
+
+	al.notifyContextFeedback(ts, "notice")
+
+	select {
+	case out := <-msgBus.OutboundChan():
+		if out.Channel != "pico" || out.ChatID != "chat-pico" {
+			t.Fatalf("unexpected target: %+v", out)
+		}
+		if out.Context.Raw[metadataKeyMessageKind] != messageKindToolFeedback {
+			t.Fatalf("kind = %q, want %q", out.Context.Raw[metadataKeyMessageKind], messageKindToolFeedback)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected context feedback outbound on pico")
+	}
+}
+
+func TestContextFeedback_SuppressedWhenToolFeedbackDisabled(t *testing.T) {
+	cfg := testConfig(t)
+	msgBus := bus.NewMessageBus()
+	al := NewAgentLoop(cfg, msgBus, &simpleMockProvider{response: "test"})
+	agent := al.registry.GetDefaultAgent()
+	ts := &turnState{agent: agent, sessionKey: "sk-feedback-off", channel: "telegram", chatID: "chat-1"}
+
+	al.notifyContextFeedback(ts, "notice")
+
+	select {
+	case out := <-msgBus.OutboundChan():
+		t.Fatalf("unexpected outbound when tool feedback disabled: %+v", out)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+func TestLegacyCompact_PublishesFeedbackWhenToolFeedbackEnabled(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Agents.Defaults.ToolFeedback = config.ToolFeedbackConfig{Enabled: true}
+	msgBus := bus.NewMessageBus()
+	al := NewAgentLoop(cfg, msgBus, &simpleMockProvider{response: "test"})
+	agent := al.registry.GetDefaultAgent()
+
+	history := []providers.Message{
+		{Role: "user", Content: "msg 1"},
+		{Role: "assistant", Content: "resp 1"},
+		{Role: "user", Content: "msg 2"},
+		{Role: "assistant", Content: "resp 2"},
+		{Role: "user", Content: "msg 3"},
+	}
+	agent.Sessions.SetHistory("session-feedback", history)
+
+	ts := &turnState{
+		agent:      agent,
+		sessionKey: "session-feedback",
+		channel:    "telegram",
+		chatID:     "chat-1",
+	}
+	al.activeTurnStates.Store("session-feedback", ts)
+	defer al.activeTurnStates.Delete("session-feedback")
+
+	if err := al.contextManager.Compact(context.Background(), &CompactRequest{
+		SessionKey: "session-feedback",
+		Reason:     ContextCompressReasonRetry,
+	}); err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+
+	select {
+	case out := <-msgBus.OutboundChan():
+		if out.Channel != "telegram" || out.ChatID != "chat-1" {
+			t.Fatalf("unexpected target: %+v", out)
+		}
+		if out.Context.Raw[metadataKeyMessageKind] != messageKindToolFeedback {
+			t.Fatalf("kind = %q, want %q", out.Context.Raw[metadataKeyMessageKind], messageKindToolFeedback)
+		}
+		if !strings.Contains(out.Content, contextFeedbackToolCompact) {
+			t.Fatalf("content = %q, want compaction notice", out.Content)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected compaction feedback outbound")
+	}
+}

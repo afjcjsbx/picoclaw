@@ -7,18 +7,20 @@
 package agent
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/sipeed/picoclaw/pkg/fileutil"
+	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
-// MemoryStore manages persistent memory for the agent.
+// MemoryStore provides read access to the agent's persistent memory.
 // - Long-term memory: memory/MEMORY.md
 // - Daily notes: memory/YYYYMM/YYYYMMDD.md
+//
+// Writes go through the agent's generic file tools (write_file / edit_file),
+// which target these paths directly, so the store only reads.
 type MemoryStore struct {
 	workspace  string
 	memoryDir  string
@@ -31,8 +33,14 @@ func NewMemoryStore(workspace string) *MemoryStore {
 	memoryDir := filepath.Join(workspace, "memory")
 	memoryFile := filepath.Join(memoryDir, "MEMORY.md")
 
-	// Ensure memory directory exists
-	os.MkdirAll(memoryDir, 0o755)
+	// Ensure the memory directory exists. Use 0o700: memory may contain
+	// personal notes, so keep it owner-only rather than world-listable.
+	if err := os.MkdirAll(memoryDir, 0o700); err != nil {
+		logger.WarnCF("agent", "Failed to create memory directory", map[string]any{
+			"dir":   memoryDir,
+			"error": err.Error(),
+		})
+	}
 
 	return &MemoryStore{
 		workspace:  workspace,
@@ -41,12 +49,31 @@ func NewMemoryStore(workspace string) *MemoryStore {
 	}
 }
 
-// getTodayFile returns the path to today's daily note file (memory/YYYYMM/YYYYMMDD.md).
-func (ms *MemoryStore) getTodayFile() string {
-	today := time.Now().Format("20060102") // YYYYMMDD
-	monthDir := today[:6]                  // YYYYMM
-	filePath := filepath.Join(ms.memoryDir, monthDir, today+".md")
-	return filePath
+// recentDailyNotesDays is the number of daily notes folded into the memory
+// context and, therefore, into the cached system prompt.
+const recentDailyNotesDays = 3
+
+// dailyNotePath returns the path to the daily note file for t
+// (memory/YYYYMM/YYYYMMDD.md).
+func (ms *MemoryStore) dailyNotePath(t time.Time) string {
+	dateStr := t.Format("20060102") // YYYYMMDD
+	monthDir := dateStr[:6]         // YYYYMM
+	return filepath.Join(ms.memoryDir, monthDir, dateStr+".md")
+}
+
+// RecentDailyNotePaths returns the paths of the last N daily notes, including
+// entries for files that do not exist yet. It reports exactly the set of files
+// GetRecentDailyNotes reads, so callers can track them for cache invalidation.
+func (ms *MemoryStore) RecentDailyNotePaths(days int) []string {
+	if days <= 0 {
+		return nil
+	}
+	now := time.Now()
+	paths := make([]string, 0, days)
+	for i := range days {
+		paths = append(paths, ms.dailyNotePath(now.AddDate(0, 0, -i)))
+	}
+	return paths
 }
 
 // ReadLongTerm reads the long-term memory (MEMORY.md).
@@ -58,64 +85,14 @@ func (ms *MemoryStore) ReadLongTerm() string {
 	return ""
 }
 
-// WriteLongTerm writes content to the long-term memory file (MEMORY.md).
-func (ms *MemoryStore) WriteLongTerm(content string) error {
-	// Use unified atomic write utility with explicit sync for flash storage reliability.
-	// Using 0o600 (owner read/write only) for secure default permissions.
-	return fileutil.WriteFileAtomic(ms.memoryFile, []byte(content), 0o600)
-}
-
-// ReadToday reads today's daily note.
-// Returns empty string if the file doesn't exist.
-func (ms *MemoryStore) ReadToday() string {
-	todayFile := ms.getTodayFile()
-	if data, err := os.ReadFile(todayFile); err == nil {
-		return string(data)
-	}
-	return ""
-}
-
-// AppendToday appends content to today's daily note.
-// If the file doesn't exist, it creates a new file with a date header.
-func (ms *MemoryStore) AppendToday(content string) error {
-	todayFile := ms.getTodayFile()
-
-	// Ensure month directory exists
-	monthDir := filepath.Dir(todayFile)
-	if err := os.MkdirAll(monthDir, 0o755); err != nil {
-		return err
-	}
-
-	var existingContent string
-	if data, err := os.ReadFile(todayFile); err == nil {
-		existingContent = string(data)
-	}
-
-	var newContent string
-	if existingContent == "" {
-		// Add header for new day
-		header := fmt.Sprintf("# %s\n\n", time.Now().Format("2006-01-02"))
-		newContent = header + content
-	} else {
-		// Append to existing content
-		newContent = existingContent + "\n" + content
-	}
-
-	// Use unified atomic write utility with explicit sync for flash storage reliability.
-	return fileutil.WriteFileAtomic(todayFile, []byte(newContent), 0o600)
-}
-
-// GetRecentDailyNotes returns daily notes from the last N days.
-// Contents are joined with "---" separator.
+// GetRecentDailyNotes returns daily notes from the last N days, newest first.
+// Existing notes are joined with a "\n\n---\n\n" separator.
 func (ms *MemoryStore) GetRecentDailyNotes(days int) string {
 	var sb strings.Builder
 	first := true
 
 	for i := range days {
-		date := time.Now().AddDate(0, 0, -i)
-		dateStr := date.Format("20060102") // YYYYMMDD
-		monthDir := dateStr[:6]            // YYYYMM
-		filePath := filepath.Join(ms.memoryDir, monthDir, dateStr+".md")
+		filePath := ms.dailyNotePath(time.Now().AddDate(0, 0, -i))
 
 		if data, err := os.ReadFile(filePath); err == nil {
 			if !first {
@@ -133,7 +110,7 @@ func (ms *MemoryStore) GetRecentDailyNotes(days int) string {
 // Includes long-term memory and recent daily notes.
 func (ms *MemoryStore) GetMemoryContext() string {
 	longTerm := ms.ReadLongTerm()
-	recentNotes := ms.GetRecentDailyNotes(3)
+	recentNotes := ms.GetRecentDailyNotes(recentDailyNotesDays)
 
 	if longTerm == "" && recentNotes == "" {
 		return ""
