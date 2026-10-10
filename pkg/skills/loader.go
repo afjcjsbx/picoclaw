@@ -36,6 +36,9 @@ type SkillInfo struct {
 	Path        string `json:"path"`
 	Source      string `json:"source"`
 	Description string `json:"description"`
+	// PluginID is set only for skills published by an agent plugin. Its presence
+	// marks the skill as plugin-backed; the catalog never exposes a host path.
+	PluginID string `json:"plugin_id,omitempty"`
 	// ResourceTool is the plugin resource tool that reads bundled plugin files.
 	// It is set only for skills published by an agent plugin.
 	ResourceTool string `json:"resource_tool,omitempty"`
@@ -45,7 +48,7 @@ type SkillInfo struct {
 // files live outside the workspace and must be read through the plugin resource
 // tool, so the catalog never exposes a host filesystem location for it.
 func (s SkillInfo) IsPluginSkill() bool {
-	return strings.HasPrefix(s.Source, "plugin:")
+	return s.PluginID != ""
 }
 
 // PluginSkillUsage is the catalog hint shown for a plugin skill. It names the
