@@ -1529,3 +1529,74 @@ func TestStoreCheckpointAndVacuum(t *testing.T) {
 		t.Fatalf("Vacuum: %v", err)
 	}
 }
+
+// TestGetMessagesBatchesParts verifies that GetMessages returns each message's
+// parts grouped correctly and ordered by ordinal, even though parts are now
+// loaded with a single batched query instead of one query per message.
+func TestGetMessagesBatchesParts(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	conv, err := s.GetOrCreateConversation(ctx, "agent:batch-parts")
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+	convID := conv.ConversationID
+
+	// Message with no parts (must not gain a spurious empty slice entry).
+	if _, err = s.AddMessage(ctx, convID, "user", "plain", 1); err != nil {
+		t.Fatalf("AddMessage: %v", err)
+	}
+
+	// First message with two parts: the batch query must preserve per-message
+	// ordinal order and keep the two parts attached to the right message.
+	first, err := s.AddMessageWithParts(ctx, convID, "assistant", []MessagePart{
+		{Type: "tool_use", Name: "web_fetch", Arguments: `{"url":"a"}`, ToolCallID: "c1"},
+		{Type: "tool_use", Name: "web_search", Arguments: `{"q":"b"}`, ToolCallID: "c2"},
+	}, 3)
+	if err != nil {
+		t.Fatalf("AddMessageWithParts: %v", err)
+	}
+
+	if _, err = s.AddMessage(ctx, convID, "tool", "mid", 1); err != nil {
+		t.Fatalf("AddMessage: %v", err)
+	}
+
+	second, err := s.AddMessageWithParts(ctx, convID, "tool", []MessagePart{
+		{Type: "tool_result", Text: "r1", ToolCallID: "c1"},
+		{Type: "tool_result", Text: "r2", ToolCallID: "c2"},
+		{Type: "tool_result", Text: "r3", ToolCallID: "c3"},
+	}, 4)
+	if err != nil {
+		t.Fatalf("AddMessageWithParts: %v", err)
+	}
+
+	msgs, err := s.GetMessages(ctx, convID, 0, 0)
+	if err != nil {
+		t.Fatalf("GetMessages: %v", err)
+	}
+	if len(msgs) != 4 {
+		t.Fatalf("got %d messages, want 4", len(msgs))
+	}
+
+	byID := make(map[int64]Message, len(msgs))
+	for _, m := range msgs {
+		byID[m.ID] = m
+	}
+
+	if got := len(byID[first.ID].Parts); got != 2 {
+		t.Fatalf("first message parts = %d, want 2", got)
+	}
+	if byID[first.ID].Parts[0].ToolCallID != "c1" || byID[first.ID].Parts[1].ToolCallID != "c2" {
+		t.Errorf("first message parts out of ordinal order: %+v", byID[first.ID].Parts)
+	}
+
+	if got := len(byID[second.ID].Parts); got != 3 {
+		t.Fatalf("second message parts = %d, want 3", got)
+	}
+	for i, want := range []string{"r1", "r2", "r3"} {
+		if byID[second.ID].Parts[i].Text != want {
+			t.Errorf("second message part[%d] text = %q, want %q", i, byID[second.ID].Parts[i].Text, want)
+		}
+	}
+}
