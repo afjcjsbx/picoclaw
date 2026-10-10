@@ -36,7 +36,7 @@ func (m *legacyContextManager) Assemble(_ context.Context, req *AssembleRequest)
 	}, nil
 }
 
-func (m *legacyContextManager) Compact(_ context.Context, req *CompactRequest) error {
+func (m *legacyContextManager) Compact(ctx context.Context, req *CompactRequest) error {
 	switch req.Reason {
 	case ContextCompressReasonProactive, ContextCompressReasonRetry:
 		// Sync emergency compression — budget exceeded.
@@ -50,9 +50,14 @@ func (m *legacyContextManager) Compact(_ context.Context, req *CompactRequest) e
 					RemainingMessages: result.RemainingMessages,
 				},
 			)
+			m.al.notifyContextFeedbackFromCtx(
+				ctx,
+				req.SessionKey,
+				formatContextCompactFeedback(result.DroppedMessages, result.RemainingMessages),
+			)
 		}
 	case ContextCompressReasonSummarize:
-		m.maybeSummarize(req.SessionKey)
+		m.maybeSummarize(ctx, req.SessionKey)
 	}
 	return nil
 }
@@ -76,7 +81,7 @@ func (m *legacyContextManager) Clear(_ context.Context, sessionKey string) error
 
 // maybeSummarize triggers summarization if the session history exceeds thresholds.
 // It runs asynchronously in a goroutine.
-func (m *legacyContextManager) maybeSummarize(sessionKey string) {
+func (m *legacyContextManager) maybeSummarize(ctx context.Context, sessionKey string) {
 	agent := m.al.registry.GetDefaultAgent()
 	if agent == nil {
 		return
@@ -89,6 +94,12 @@ func (m *legacyContextManager) maybeSummarize(sessionKey string) {
 	if len(newHistory) > agent.SummarizeMessageThreshold || tokenEstimate > threshold {
 		summarizeKey := agent.ID + ":" + sessionKey
 		if _, loading := m.summarizing.LoadOrStore(summarizeKey, true); !loading {
+			// Capture the active turn (if any) before going async so the
+			// resulting summarization notice can still be routed to the chat.
+			ts := turnStateFromContext(ctx)
+			if ts == nil {
+				ts = m.al.getActiveTurnState(sessionKey)
+			}
 			go func() {
 				defer m.summarizing.Delete(summarizeKey)
 				defer func() {
@@ -100,7 +111,7 @@ func (m *legacyContextManager) maybeSummarize(sessionKey string) {
 					}
 				}()
 				logger.Debug("Memory threshold reached. Optimizing conversation history...")
-				m.summarizeSession(agent, sessionKey)
+				m.summarizeSession(agent, sessionKey, ts)
 			}()
 		}
 	}
@@ -187,7 +198,7 @@ func (m *legacyContextManager) forceCompression(sessionKey string) (compressionR
 	}, true
 }
 
-func (m *legacyContextManager) summarizeSession(agent *AgentInstance, sessionKey string) {
+func (m *legacyContextManager) summarizeSession(agent *AgentInstance, sessionKey string, ts *turnState) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
@@ -273,6 +284,10 @@ func (m *legacyContextManager) summarizeSession(agent *AgentInstance, sessionKey
 				SummaryLen:         len(finalSummary),
 				OmittedOversized:   omitted,
 			},
+		)
+		m.al.notifyContextFeedback(
+			ts,
+			formatContextSummarizeFeedback(len(validMessages), keepCount),
 		)
 	}
 }

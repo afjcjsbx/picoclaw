@@ -271,16 +271,41 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 
 	// For retry (LLM overflow), use aggressive CompactUntilUnder to guarantee
 	// context shrinks below budget (spec lines ~1410).
+	var (
+		result *seahorse.CompactResult
+		err    error
+	)
 	if req.Reason == ContextCompressReasonRetry && req.Budget > 0 {
-		_, err := m.engine.CompactUntilUnder(ctx, req.SessionKey, req.Budget)
+		result, err = m.engine.CompactUntilUnder(ctx, req.SessionKey, req.Budget)
+	} else {
+		result, err = m.engine.Compact(ctx, req.SessionKey, seahorse.CompactInput{
+			Force:  req.Reason == ContextCompressReasonRetry,
+			Budget: &req.Budget,
+		})
+	}
+	if err != nil {
 		return err
 	}
+	m.notifyCompaction(ctx, req, result)
+	return nil
+}
 
-	_, err := m.engine.Compact(ctx, req.SessionKey, seahorse.CompactInput{
-		Force:  req.Reason == ContextCompressReasonRetry,
-		Budget: &req.Budget,
-	})
-	return err
+// notifyCompaction reports a summarization/compaction notice to the session's
+// channel when seahorse actually created summaries. It is a no-op unless tool
+// feedback is enabled (enforced by notifyContextFeedback).
+func (m *seahorseContextManager) notifyCompaction(
+	ctx context.Context,
+	req *CompactRequest,
+	result *seahorse.CompactResult,
+) {
+	if m.al == nil || result == nil {
+		return
+	}
+	if result.LeafSummaries+result.CondensedSummaries <= 0 {
+		return
+	}
+	content := formatContextSummaryCounts(result.LeafSummaries, result.CondensedSummaries)
+	m.al.notifyContextFeedbackFromCtx(ctx, req.SessionKey, content)
 }
 
 // Ingest records a message into seahorse SQLite.
