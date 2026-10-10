@@ -36,6 +36,35 @@ type SkillInfo struct {
 	Path        string `json:"path"`
 	Source      string `json:"source"`
 	Description string `json:"description"`
+	// ResourceTool is the plugin resource tool that reads bundled plugin files.
+	// It is set only for skills published by an agent plugin.
+	ResourceTool string `json:"resource_tool,omitempty"`
+}
+
+// IsPluginSkill reports whether the skill was published by an agent plugin. Its
+// files live outside the workspace and must be read through the plugin resource
+// tool, so the catalog never exposes a host filesystem location for it.
+func (s SkillInfo) IsPluginSkill() bool {
+	return strings.HasPrefix(s.Source, "plugin:")
+}
+
+// PluginSkillUsage is the catalog hint shown for a plugin skill. It names the
+// bundled resource tool and a plugin-relative path instead of a host path the
+// agent would be denied from reading.
+func (s SkillInfo) PluginSkillUsage() string {
+	tool := "the plugin read_resource tool"
+	if s.ResourceTool != "" {
+		tool = "`" + s.ResourceTool + "`"
+	}
+	location := s.Path
+	if location == "" || filepath.IsAbs(location) {
+		location = "skills/<name>/SKILL.md"
+	}
+	return fmt.Sprintf(
+		"Read this skill and its bundled references with %s using a path relative to the plugin root (for example `%s`). Do not use filesystem tools on plugin files; they live outside the workspace.",
+		tool,
+		location,
+	)
 }
 
 func (info SkillInfo) validate() error {
@@ -214,13 +243,23 @@ func (sl *SkillsLoader) BuildSkillsSummary() string {
 	for _, s := range allSkills {
 		escapedName := escapeXML(s.Name)
 		escapedDesc := escapeXML(s.Description)
-		escapedPath := escapeXML(s.Path)
 
 		lines = append(lines, fmt.Sprintf("  <skill>"))
 		lines = append(lines, fmt.Sprintf("    <name>%s</name>", escapedName))
 		lines = append(lines, fmt.Sprintf("    <description>%s</description>", escapedDesc))
-		lines = append(lines, fmt.Sprintf("    <location>%s</location>", escapedPath))
-		lines = append(lines, fmt.Sprintf("    <source>%s</source>", s.Source))
+		if s.IsPluginSkill() {
+			if s.Path != "" && !filepath.IsAbs(s.Path) {
+				lines = append(lines, fmt.Sprintf("    <location>%s</location>", escapeXML(s.Path)))
+			}
+			lines = append(lines, fmt.Sprintf("    <source>%s</source>", escapeXML(s.Source)))
+			if s.ResourceTool != "" {
+				lines = append(lines, fmt.Sprintf("    <resource-tool>%s</resource-tool>", escapeXML(s.ResourceTool)))
+			}
+			lines = append(lines, fmt.Sprintf("    <usage>%s</usage>", escapeXML(s.PluginSkillUsage())))
+		} else {
+			lines = append(lines, fmt.Sprintf("    <location>%s</location>", escapeXML(s.Path)))
+			lines = append(lines, fmt.Sprintf("    <source>%s</source>", s.Source))
+		}
 		lines = append(lines, "  </skill>")
 	}
 	lines = append(lines, "</skills>")

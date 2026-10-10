@@ -96,7 +96,7 @@ func TestAgentPluginsLoadExecuteAndReload(t *testing.T) {
 	al, cfg, _, _, cleanup := newTestAgentLoop(t)
 	defer cleanup()
 	defer al.Close()
-	agentPluginFixture(t, cfg, httpServer.URL)
+	pluginRoot := agentPluginFixture(t, cfg, httpServer.URL)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if _, err := al.ProcessDirect(ctx, "hi", "plugin-test"); err != nil {
@@ -119,8 +119,19 @@ func TestAgentPluginsLoadExecuteAndReload(t *testing.T) {
 	if _, ok := agent.ContextBuilder.ResolveSkillName("test-plugin:greet"); !ok {
 		t.Fatal("plugin skill missing")
 	}
-	if !strings.Contains(agent.ContextBuilder.buildSkillsSummary(nil), "test-plugin:greet") {
+	summary := agent.ContextBuilder.buildSkillsSummary(nil)
+	if !strings.Contains(summary, "test-plugin:greet") {
 		t.Fatal("missing skill prompt")
+	}
+	// The catalog must not expose the plugin's host filesystem path: the agent
+	// cannot read it and would loop against the workspace guard. It must point
+	// at the plugin resource tool with a plugin-relative path instead.
+	if strings.Contains(summary, "<location>/") || strings.Contains(summary, pluginRoot) {
+		t.Fatalf("plugin catalog leaked absolute host path:\n%s", summary)
+	}
+	if !strings.Contains(summary, "<resource-tool>plugin_test-plugin_package_read_resource_") ||
+		!strings.Contains(summary, "<location>skills/greet/SKILL.md</location>") {
+		t.Fatalf("plugin catalog missing resource-tool guidance:\n%s", summary)
 	}
 	cfg.Plugins.Enabled = false
 	if err := al.ReloadProviderAndConfig(ctx, &mockProvider{}, cfg); err != nil {

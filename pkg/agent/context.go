@@ -287,7 +287,7 @@ func (cb *ContextBuilder) buildSystemPromptParts(opts systemPromptBuildOptions) 
 			"read_file",
 		)
 		if opts.IncludeToolUseRule && readFileAllowed {
-			skillIntro += " To use a skill, read its SKILL.md file using the read_file tool."
+			skillIntro += " To use a workspace skill, read its SKILL.md file using the read_file tool; plugin skills are read with their bundled resource tool instead."
 		}
 		add(PromptPart{
 			ID:     "capability.skill_catalog",
@@ -449,11 +449,31 @@ func (cb *ContextBuilder) buildSkillsSummary(allowed []string) string {
 			lines,
 			fmt.Sprintf("    <description>%s</description>", xmlEscapeForPrompt(s.Description)),
 		)
-		lines = append(
-			lines,
-			fmt.Sprintf("    <location>%s</location>", xmlEscapeForPrompt(s.Path)),
-		)
-		lines = append(lines, fmt.Sprintf("    <source>%s</source>", xmlEscapeForPrompt(s.Source)))
+		if s.IsPluginSkill() {
+			if s.Path != "" && !filepath.IsAbs(s.Path) {
+				lines = append(
+					lines,
+					fmt.Sprintf("    <location>%s</location>", xmlEscapeForPrompt(s.Path)),
+				)
+			}
+			lines = append(lines, fmt.Sprintf("    <source>%s</source>", xmlEscapeForPrompt(s.Source)))
+			if s.ResourceTool != "" {
+				lines = append(
+					lines,
+					fmt.Sprintf("    <resource-tool>%s</resource-tool>", xmlEscapeForPrompt(s.ResourceTool)),
+				)
+			}
+			lines = append(
+				lines,
+				fmt.Sprintf("    <usage>%s</usage>", xmlEscapeForPrompt(s.PluginSkillUsage())),
+			)
+		} else {
+			lines = append(
+				lines,
+				fmt.Sprintf("    <location>%s</location>", xmlEscapeForPrompt(s.Path)),
+			)
+			lines = append(lines, fmt.Sprintf("    <source>%s</source>", xmlEscapeForPrompt(s.Source)))
+		}
 		lines = append(lines, "  </skill>")
 	}
 	if len(lines) == 1 {
