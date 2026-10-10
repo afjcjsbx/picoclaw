@@ -250,6 +250,12 @@ func (cs *CronService) executeJobByID(jobID string) {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
+	// Stop() may have run while the job was executing. Skip persisting so a
+	// stopped instance cannot overwrite the store after a config reload.
+	if !cs.running {
+		return
+	}
+
 	var job *CronJob
 	for i := range cs.store.Jobs {
 		if cs.store.Jobs[i].ID == jobID {
