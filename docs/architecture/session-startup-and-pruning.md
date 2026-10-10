@@ -116,7 +116,7 @@ Pruning is **opt-in** (`enabled: false` by default) because it deletes data.
     "enabled": true,
     "max_age_days": 30,
     "max_sessions": 100,
-    "max_db_size_mb": 512,
+    "max_db_size_mb": 128,
     "check_interval_minutes": 60,
     "vacuum": true
   }
@@ -148,7 +148,7 @@ a guard:
 {
   "max_age_days": 30,
   "max_sessions": 100,
-  "max_db_size_mb": 512
+  "max_db_size_mb": 128
 }
 ```
 
