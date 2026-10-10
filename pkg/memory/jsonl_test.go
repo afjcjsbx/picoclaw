@@ -1247,3 +1247,69 @@ func BenchmarkGetHistory_1000(b *testing.B) {
 		_, _ = store.GetHistory(ctx, "bench")
 	}
 }
+
+func TestDeleteSession(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	if err := store.AddMessage(ctx, "s1", "user", "hello"); err != nil {
+		t.Fatalf("AddMessage: %v", err)
+	}
+	if err := store.UpsertSessionMeta(ctx, "s1", nil, nil); err != nil {
+		t.Fatalf("UpsertSessionMeta: %v", err)
+	}
+	if !store.sessionExists("s1") {
+		t.Fatal("session should exist before delete")
+	}
+
+	if err := store.DeleteSession(ctx, "s1"); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	if store.sessionExists("s1") {
+		t.Fatal("session still exists after delete")
+	}
+	if sessions := store.ListSessions(); len(sessions) != 0 {
+		t.Fatalf("ListSessions = %v, want empty", sessions)
+	}
+
+	// Deleting an unknown session is a no-op.
+	if err := store.DeleteSession(ctx, "missing"); err != nil {
+		t.Fatalf("DeleteSession(missing): %v", err)
+	}
+	// Empty key is ignored.
+	if err := store.DeleteSession(ctx, "  "); err != nil {
+		t.Fatalf("DeleteSession(empty): %v", err)
+	}
+}
+
+func TestLastActivity(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	if got := store.LastActivity("missing"); !got.IsZero() {
+		t.Fatalf("LastActivity(missing) = %v, want zero", got)
+	}
+	if got := store.LastActivity("  "); !got.IsZero() {
+		t.Fatalf("LastActivity(empty) = %v, want zero", got)
+	}
+
+	before := time.Now().Add(-time.Second)
+	if err := store.AddMessage(ctx, "s1", "user", "hello"); err != nil {
+		t.Fatalf("AddMessage: %v", err)
+	}
+	got := store.LastActivity("s1")
+	if got.Before(before) {
+		t.Fatalf("LastActivity = %v, want >= %v", got, before)
+	}
+
+	// Metadata UpdatedAt wins over an older file mtime.
+	old := time.Now().Add(-48 * time.Hour)
+	for _, path := range []string{store.jsonlPath("s1"), store.metaPath("s1")} {
+		if err := os.Chtimes(path, old, old); err != nil {
+			t.Fatalf("Chtimes: %v", err)
+		}
+	}
+	if got := store.LastActivity("s1"); got.Before(before) {
+		t.Fatalf("LastActivity after Chtimes = %v, want meta UpdatedAt >= %v", got, before)
+	}
+}

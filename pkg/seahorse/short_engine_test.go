@@ -2,6 +2,7 @@ package seahorse
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1982,5 +1983,200 @@ func TestSelectShallowestCondensationWithNonConsecutiveDepths(t *testing.T) {
 				t.Errorf("candidates have mixed depths: %d vs %d", expectedDepth, c.Depth)
 			}
 		}
+	}
+}
+
+func TestNewEngineAppliesPragmasToEveryConnection(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "pragmas.db")
+	eng, err := NewEngine(Config{DBPath: dbPath}, nil)
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	defer eng.Close()
+
+	ctx := context.Background()
+	// Hold several connections at once so the pool must open distinct ones.
+	const conns = 3
+	held := make([]*sql.Conn, 0, conns)
+	for i := 0; i < conns; i++ {
+		c, connErr := eng.store.db.Conn(ctx)
+		if connErr != nil {
+			t.Fatalf("Conn %d: %v", i, connErr)
+		}
+		defer c.Close()
+		held = append(held, c)
+	}
+
+	for i, c := range held {
+		var busy, synchronous int
+		if scanErr := c.QueryRowContext(ctx, "PRAGMA busy_timeout").Scan(&busy); scanErr != nil {
+			t.Fatalf("conn %d busy_timeout: %v", i, scanErr)
+		}
+		if busy != sqliteBusyTimeoutMS {
+			t.Errorf("conn %d busy_timeout = %d, want %d", i, busy, sqliteBusyTimeoutMS)
+		}
+		if scanErr := c.QueryRowContext(ctx, "PRAGMA synchronous").Scan(&synchronous); scanErr != nil {
+			t.Fatalf("conn %d synchronous: %v", i, scanErr)
+		}
+		if synchronous != 1 { // 1 == NORMAL
+			t.Errorf("conn %d synchronous = %d, want 1 (NORMAL)", i, synchronous)
+		}
+	}
+}
+
+func TestSQLiteDSN(t *testing.T) {
+	if got, want := sqliteDSN("/tmp/a.db"), "/tmp/a.db?_busy_timeout=5000&_pragma=synchronous(NORMAL)"; got != want {
+		t.Errorf("sqliteDSN(plain) = %q, want %q", got, want)
+	}
+	if got, want := sqliteDSN("file:a.db?mode=rwc"),
+		"file:a.db?mode=rwc&_busy_timeout=5000&_pragma=synchronous(NORMAL)"; got != want {
+		t.Errorf("sqliteDSN(uri) = %q, want %q", got, want)
+	}
+}
+
+func TestEngineDeleteSessionFreesSpaceThatVacuumReclaims(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "reclaim.db")
+	eng, err := NewEngine(Config{DBPath: dbPath}, nil)
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	defer eng.Close()
+	ctx := context.Background()
+
+	payload := strings.Repeat("lorem ipsum dolor sit amet ", 40)
+	msgs := make([]Message, 0, 400)
+	for i := 0; i < 400; i++ {
+		msgs = append(msgs, Message{Role: "user", Content: fmt.Sprintf("%d %s", i, payload), TokenCount: 10})
+	}
+	if _, ingestErr := eng.Ingest(ctx, "agent:main:big", msgs); ingestErr != nil {
+		t.Fatalf("Ingest: %v", ingestErr)
+	}
+	if ckptErr := eng.Checkpoint(ctx, true); ckptErr != nil {
+		t.Fatalf("Checkpoint: %v", ckptErr)
+	}
+	fullSize, err := eng.DBFileSize()
+	if err != nil {
+		t.Fatalf("DBFileSize: %v", err)
+	}
+
+	if delErr := eng.DeleteSession(ctx, "agent:main:big"); delErr != nil {
+		t.Fatalf("DeleteSession: %v", delErr)
+	}
+	statuses, err := eng.SessionStatuses(ctx)
+	if err != nil {
+		t.Fatalf("SessionStatuses: %v", err)
+	}
+	if len(statuses) != 0 {
+		t.Fatalf("SessionStatuses after delete = %v, want none", statuses)
+	}
+
+	reclaimable, err := eng.ReclaimableBytes(ctx)
+	if err != nil {
+		t.Fatalf("ReclaimableBytes: %v", err)
+	}
+	if reclaimable <= 0 {
+		t.Fatalf("ReclaimableBytes = %d after deleting a session, want > 0", reclaimable)
+	}
+
+	if vacErr := eng.Vacuum(ctx); vacErr != nil {
+		t.Fatalf("Vacuum: %v", vacErr)
+	}
+	if ckptErr := eng.Checkpoint(ctx, true); ckptErr != nil {
+		t.Fatalf("Checkpoint: %v", ckptErr)
+	}
+	after, err := eng.DBFileSize()
+	if err != nil {
+		t.Fatalf("DBFileSize: %v", err)
+	}
+	if after >= fullSize {
+		t.Fatalf("DBFileSize after vacuum = %d, want < %d", after, fullSize)
+	}
+	left, err := eng.ReclaimableBytes(ctx)
+	if err != nil {
+		t.Fatalf("ReclaimableBytes after vacuum: %v", err)
+	}
+	if left != 0 {
+		t.Fatalf("ReclaimableBytes after vacuum = %d, want 0", left)
+	}
+
+	// Deleting an unknown session is a no-op.
+	if delErr := eng.DeleteSession(ctx, "agent:main:missing"); delErr != nil {
+		t.Fatalf("DeleteSession(missing): %v", delErr)
+	}
+}
+
+func TestEngineDBFileSize(t *testing.T) {
+	// No path configured (in-memory style configs): nothing to measure.
+	noPath := &Engine{}
+	if size, err := noPath.DBFileSize(); err != nil || size != 0 {
+		t.Fatalf("DBFileSize(no path) = (%d, %v), want (0, nil)", size, err)
+	}
+
+	// A path that does not exist yet measures zero rather than failing.
+	missing := &Engine{config: Config{DBPath: filepath.Join(t.TempDir(), "missing.db")}}
+	if size, err := missing.DBFileSize(); err != nil || size != 0 {
+		t.Fatalf("DBFileSize(missing) = (%d, %v), want (0, nil)", size, err)
+	}
+
+	dbPath := filepath.Join(t.TempDir(), "size.db")
+	eng, err := NewEngine(Config{DBPath: dbPath}, nil)
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	defer eng.Close()
+	ctx := context.Background()
+	if _, ingestErr := eng.Ingest(ctx, "agent:main:s", []Message{
+		{Role: "user", Content: strings.Repeat("x", 4096), TokenCount: 10},
+	}); ingestErr != nil {
+		t.Fatalf("Ingest: %v", ingestErr)
+	}
+
+	var want int64
+	for _, path := range []string{dbPath, dbPath + "-wal"} {
+		if info, statErr := os.Stat(path); statErr == nil {
+			want += info.Size()
+		}
+	}
+	got, err := eng.DBFileSize()
+	if err != nil {
+		t.Fatalf("DBFileSize: %v", err)
+	}
+	if got != want || got == 0 {
+		t.Fatalf("DBFileSize = %d, want %d (db + wal, non-zero)", got, want)
+	}
+}
+
+func TestEngineCheckpointTruncatesWAL(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "wal.db")
+	eng, err := NewEngine(Config{DBPath: dbPath}, nil)
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	defer eng.Close()
+	ctx := context.Background()
+
+	if _, ingestErr := eng.Ingest(ctx, "agent:main:s", []Message{
+		{Role: "user", Content: strings.Repeat("y", 4096), TokenCount: 10},
+	}); ingestErr != nil {
+		t.Fatalf("Ingest: %v", ingestErr)
+	}
+	walInfo, err := os.Stat(dbPath + "-wal")
+	if err != nil || walInfo.Size() == 0 {
+		t.Fatalf("expected a non-empty WAL after a write (info=%v, err=%v)", walInfo, err)
+	}
+
+	if ckptErr := eng.Checkpoint(ctx, true); ckptErr != nil {
+		t.Fatalf("Checkpoint(truncate): %v", ckptErr)
+	}
+	walInfo, err = os.Stat(dbPath + "-wal")
+	if err != nil {
+		t.Fatalf("Stat WAL: %v", err)
+	}
+	if walInfo.Size() != 0 {
+		t.Fatalf("WAL size after TRUNCATE checkpoint = %d, want 0", walInfo.Size())
+	}
+
+	if ckptErr := eng.Checkpoint(ctx, false); ckptErr != nil {
+		t.Fatalf("Checkpoint(passive): %v", ckptErr)
 	}
 }

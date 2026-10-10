@@ -98,6 +98,23 @@ func (r *RetrievalEngine) Store() *Store {
 	return r.store
 }
 
+// sqliteBusyTimeoutMS is how long a connection waits for a lock before failing
+// with SQLITE_BUSY.
+const sqliteBusyTimeoutMS = 5000
+
+// sqliteDSN returns the driver DSN for path with the per-connection settings
+// every pooled connection must have. database/sql opens connections lazily and
+// recycles them, so running "PRAGMA busy_timeout" once via db.Exec only
+// configures a single connection and leaves the others failing immediately with
+// SQLITE_BUSY while a long write (such as a pruning VACUUM) holds the lock.
+func sqliteDSN(path string) string {
+	sep := "?"
+	if strings.Contains(path, "?") {
+		sep = "&"
+	}
+	return fmt.Sprintf("%s%s_busy_timeout=%d&_pragma=synchronous(NORMAL)", path, sep, sqliteBusyTimeoutMS)
+}
+
 // NewEngine creates a new short-term memory engine.
 func NewEngine(config Config, completeFn CompleteFn) (*Engine, error) {
 	dir := filepath.Dir(config.DBPath)
@@ -107,23 +124,17 @@ func NewEngine(config Config, completeFn CompleteFn) (*Engine, error) {
 		}
 	}
 
-	db, err := sql.Open("sqlite", config.DBPath)
+	db, err := sql.Open("sqlite", sqliteDSN(config.DBPath))
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
 
-	// Configure SQLite for concurrent access
+	// journal_mode is stored in the database file, so setting it once is
+	// enough. busy_timeout and synchronous are per-connection settings and
+	// are applied to every pooled connection through the DSN (see sqliteDSN).
 	if _, err := db.Exec("PRAGMA journal_mode = WAL;"); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("enable WAL: %w", err)
-	}
-	if _, err := db.Exec("PRAGMA busy_timeout = 5000;"); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("set busy_timeout: %w", err)
-	}
-	if _, err := db.Exec("PRAGMA synchronous = NORMAL;"); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("set synchronous: %w", err)
 	}
 
 	if err := runSchema(db); err != nil {
@@ -408,6 +419,67 @@ func (e *Engine) ClearSession(ctx context.Context, sessionKey string) error {
 		return nil // session never ingested, nothing to clear
 	}
 	return e.store.ClearConversation(ctx, conv.ConversationID)
+}
+
+// DeleteSession removes all stored data for a session and the conversation row
+// itself. Used by session pruning so no orphaned conversation rows remain.
+func (e *Engine) DeleteSession(ctx context.Context, sessionKey string) error {
+	conv, err := e.store.GetConversationBySessionKey(ctx, sessionKey)
+	if err != nil {
+		return err
+	}
+	if conv == nil {
+		return nil // session never ingested, nothing to delete
+	}
+	return e.store.DeleteConversation(ctx, conv.ConversationID)
+}
+
+// SessionStatuses returns status for every conversation in the database.
+func (e *Engine) SessionStatuses(ctx context.Context) ([]SessionStatus, error) {
+	return e.store.GetAllSessionStatuses(ctx)
+}
+
+// ConversationCount returns the number of conversations in the database.
+func (e *Engine) ConversationCount(ctx context.Context) (int, error) {
+	return e.store.ConversationCount(ctx)
+}
+
+// DBFileSize returns the combined size in bytes of the SQLite database file and
+// its write-ahead log (if present).
+func (e *Engine) DBFileSize() (int64, error) {
+	path := e.config.DBPath
+	if strings.TrimSpace(path) == "" {
+		return 0, nil
+	}
+	var total int64
+	if info, err := os.Stat(path); err == nil {
+		total += info.Size()
+	} else if !os.IsNotExist(err) {
+		return 0, err
+	}
+	if info, err := os.Stat(path + "-wal"); err == nil {
+		total += info.Size()
+	} else if !os.IsNotExist(err) {
+		return 0, err
+	}
+	return total, nil
+}
+
+// Vacuum reclaims unused disk space in the underlying SQLite database.
+func (e *Engine) Vacuum(ctx context.Context) error {
+	return e.store.Vacuum(ctx)
+}
+
+// ReclaimableBytes reports how much of the database file is free space that a
+// Vacuum would return to the filesystem.
+func (e *Engine) ReclaimableBytes(ctx context.Context) (int64, error) {
+	return e.store.ReclaimableBytes(ctx)
+}
+
+// Checkpoint folds the write-ahead log into the database file. When truncate is
+// true the -wal file is also shrunk to zero bytes.
+func (e *Engine) Checkpoint(ctx context.Context, truncate bool) error {
+	return e.store.CheckpointWAL(ctx, truncate)
 }
 
 // Bootstrap reconciles a session's messages with the database.
