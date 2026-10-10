@@ -7,28 +7,22 @@
 package agent
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
-
-	"github.com/sipeed/picoclaw/pkg/fileutil"
 )
 
-// MemoryStore manages persistent memory for the agent.
+// MemoryStore provides read access to the agent's persistent memory.
 // - Long-term memory: memory/MEMORY.md
 // - Daily notes: memory/YYYYMM/YYYYMMDD.md
+//
+// Writes go through the agent's generic file tools (write_file / edit_file),
+// which target these paths directly, so the store only reads.
 type MemoryStore struct {
 	workspace  string
 	memoryDir  string
 	memoryFile string
-
-	// mu serializes read-modify-write operations on this store's files.
-	// Without it, concurrent AppendToday calls can interleave their
-	// read -> concatenate -> write steps and silently drop entries.
-	mu sync.Mutex
 }
 
 // NewMemoryStore creates a new MemoryStore with the given workspace path.
@@ -59,11 +53,6 @@ func (ms *MemoryStore) dailyNotePath(t time.Time) string {
 	return filepath.Join(ms.memoryDir, monthDir, dateStr+".md")
 }
 
-// getTodayFile returns the path to today's daily note file (memory/YYYYMM/YYYYMMDD.md).
-func (ms *MemoryStore) getTodayFile() string {
-	return ms.dailyNotePath(time.Now())
-}
-
 // RecentDailyNotePaths returns the paths of the last N daily notes, including
 // entries for files that do not exist yet. It reports exactly the set of files
 // GetRecentDailyNotes reads, so callers can track them for cache invalidation.
@@ -86,59 +75,6 @@ func (ms *MemoryStore) ReadLongTerm() string {
 		return string(data)
 	}
 	return ""
-}
-
-// WriteLongTerm writes content to the long-term memory file (MEMORY.md).
-func (ms *MemoryStore) WriteLongTerm(content string) error {
-	ms.mu.Lock()
-	defer ms.mu.Unlock()
-
-	// Use unified atomic write utility with explicit sync for flash storage reliability.
-	// Using 0o600 (owner read/write only) for secure default permissions.
-	return fileutil.WriteFileAtomic(ms.memoryFile, []byte(content), 0o600)
-}
-
-// ReadToday reads today's daily note.
-// Returns empty string if the file doesn't exist.
-func (ms *MemoryStore) ReadToday() string {
-	todayFile := ms.getTodayFile()
-	if data, err := os.ReadFile(todayFile); err == nil {
-		return string(data)
-	}
-	return ""
-}
-
-// AppendToday appends content to today's daily note.
-// If the file doesn't exist, it creates a new file with a date header.
-func (ms *MemoryStore) AppendToday(content string) error {
-	ms.mu.Lock()
-	defer ms.mu.Unlock()
-
-	todayFile := ms.getTodayFile()
-
-	// Ensure month directory exists
-	monthDir := filepath.Dir(todayFile)
-	if err := os.MkdirAll(monthDir, 0o755); err != nil {
-		return err
-	}
-
-	var existingContent string
-	if data, err := os.ReadFile(todayFile); err == nil {
-		existingContent = string(data)
-	}
-
-	var newContent string
-	if existingContent == "" {
-		// Add header for new day
-		header := fmt.Sprintf("# %s\n\n", time.Now().Format("2006-01-02"))
-		newContent = header + content
-	} else {
-		// Append to existing content
-		newContent = existingContent + "\n" + content
-	}
-
-	// Use unified atomic write utility with explicit sync for flash storage reliability.
-	return fileutil.WriteFileAtomic(todayFile, []byte(newContent), 0o600)
 }
 
 // GetRecentDailyNotes returns daily notes from the last N days.
