@@ -47,12 +47,36 @@ func NewMemoryStore(workspace string) *MemoryStore {
 	}
 }
 
+// recentDailyNotesDays is the number of daily notes folded into the memory
+// context and, therefore, into the cached system prompt.
+const recentDailyNotesDays = 3
+
+// dailyNotePath returns the path to the daily note file for t
+// (memory/YYYYMM/YYYYMMDD.md).
+func (ms *MemoryStore) dailyNotePath(t time.Time) string {
+	dateStr := t.Format("20060102") // YYYYMMDD
+	monthDir := dateStr[:6]         // YYYYMM
+	return filepath.Join(ms.memoryDir, monthDir, dateStr+".md")
+}
+
 // getTodayFile returns the path to today's daily note file (memory/YYYYMM/YYYYMMDD.md).
 func (ms *MemoryStore) getTodayFile() string {
-	today := time.Now().Format("20060102") // YYYYMMDD
-	monthDir := today[:6]                  // YYYYMM
-	filePath := filepath.Join(ms.memoryDir, monthDir, today+".md")
-	return filePath
+	return ms.dailyNotePath(time.Now())
+}
+
+// RecentDailyNotePaths returns the paths of the last N daily notes, including
+// entries for files that do not exist yet. It reports exactly the set of files
+// GetRecentDailyNotes reads, so callers can track them for cache invalidation.
+func (ms *MemoryStore) RecentDailyNotePaths(days int) []string {
+	if days <= 0 {
+		return nil
+	}
+	now := time.Now()
+	paths := make([]string, 0, days)
+	for i := range days {
+		paths = append(paths, ms.dailyNotePath(now.AddDate(0, 0, -i)))
+	}
+	return paths
 }
 
 // ReadLongTerm reads the long-term memory (MEMORY.md).
@@ -124,10 +148,7 @@ func (ms *MemoryStore) GetRecentDailyNotes(days int) string {
 	first := true
 
 	for i := range days {
-		date := time.Now().AddDate(0, 0, -i)
-		dateStr := date.Format("20060102") // YYYYMMDD
-		monthDir := dateStr[:6]            // YYYYMM
-		filePath := filepath.Join(ms.memoryDir, monthDir, dateStr+".md")
+		filePath := ms.dailyNotePath(time.Now().AddDate(0, 0, -i))
 
 		if data, err := os.ReadFile(filePath); err == nil {
 			if !first {
@@ -145,7 +166,7 @@ func (ms *MemoryStore) GetRecentDailyNotes(days int) string {
 // Includes long-term memory and recent daily notes.
 func (ms *MemoryStore) GetMemoryContext() string {
 	longTerm := ms.ReadLongTerm()
-	recentNotes := ms.GetRecentDailyNotes(3)
+	recentNotes := ms.GetRecentDailyNotes(recentDailyNotesDays)
 
 	if longTerm == "" && recentNotes == "" {
 		return ""

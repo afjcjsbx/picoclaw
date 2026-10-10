@@ -517,6 +517,12 @@ func (cb *ContextBuilder) sourcePaths() []string {
 	agentDefinition := cb.LoadAgentDefinition()
 	paths := agentDefinition.trackedPaths(cb.workspace)
 	paths = append(paths, filepath.Join(cb.workspace, "memory", "MEMORY.md"))
+	// Daily notes are folded into the cached system prompt via
+	// GetMemoryContext. Track the exact files it reads so edits and newly
+	// created notes invalidate the cache like MEMORY.md does.
+	if cb.memory != nil {
+		paths = append(paths, cb.memory.RecentDailyNotePaths(recentDailyNotesDays)...)
+	}
 	return uniquePaths(paths)
 }
 

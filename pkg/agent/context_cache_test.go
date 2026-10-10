@@ -274,6 +274,42 @@ func TestMtimeAutoInvalidation(t *testing.T) {
 			t.Error("sourceFilesChangedLocked() should detect skills dir mtime change")
 		}
 	})
+
+	// Daily notes are folded into the cached prompt through GetMemoryContext.
+	// Creating one must invalidate the cache even though it is not a workspace
+	// bootstrap file.
+	t.Run("daily note change", func(t *testing.T) {
+		tmpDir := setupWorkspace(t, nil)
+		defer os.RemoveAll(tmpDir)
+
+		cb := NewContextBuilder(tmpDir)
+		sp1 := cb.BuildSystemPromptWithCache()
+
+		dailyPath := cb.memory.dailyNotePath(time.Now())
+		if err := os.MkdirAll(filepath.Dir(dailyPath), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(dailyPath, []byte("# Today\n\nWent for a run."), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		future := time.Now().Add(2 * time.Second)
+		os.Chtimes(dailyPath, future, future)
+
+		cb.systemPromptMutex.RLock()
+		changed := cb.sourceFilesChangedLocked()
+		cb.systemPromptMutex.RUnlock()
+		if !changed {
+			t.Fatal("sourceFilesChangedLocked() should detect daily note creation")
+		}
+
+		sp2 := cb.BuildSystemPromptWithCache()
+		if sp1 == sp2 {
+			t.Error("cache not rebuilt after daily note change")
+		}
+		if !strings.Contains(sp2, "Went for a run") {
+			t.Error("rebuilt prompt missing daily note content")
+		}
+	})
 }
 
 // TestExplicitInvalidateCache verifies that InvalidateCache() forces a rebuild
