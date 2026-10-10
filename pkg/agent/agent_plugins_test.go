@@ -67,6 +67,44 @@ func agentPluginFixture(t *testing.T, cfg *config.Config, url string) string {
 	return root
 }
 
+func TestPluginRelativePath(t *testing.T) {
+	root := filepath.Join(string(filepath.Separator), "plugin-root")
+	cases := []struct {
+		name string
+		path string
+		want string
+	}{
+		{"skill file", filepath.Join(root, "skills", "greet", "SKILL.md"), "skills/greet/SKILL.md"},
+		{"dot-prefixed dir is kept", filepath.Join(root, "..foo", "SKILL.md"), "..foo/SKILL.md"},
+		{"root itself", root, ""},
+		{"escapes root", filepath.Join(root, "..", "outside", "SKILL.md"), ""},
+		{"empty", "", ""},
+	}
+	for _, tc := range cases {
+		if got := pluginRelativePath(root, tc.path); got != tc.want {
+			t.Errorf("%s: pluginRelativePath(%q) = %q, want %q", tc.name, tc.path, got, tc.want)
+		}
+	}
+}
+
+func catalogLocations(summary string) []string {
+	var out []string
+	const open, closeTag = "<location>", "</location>"
+	for {
+		start := strings.Index(summary, open)
+		if start < 0 {
+			return out
+		}
+		summary = summary[start+len(open):]
+		end := strings.Index(summary, closeTag)
+		if end < 0 {
+			return out
+		}
+		out = append(out, summary[:end])
+		summary = summary[end+len(closeTag):]
+	}
+}
+
 func TestPluginToolDeferredOverride(t *testing.T) {
 	deferred := true
 	eager := false
@@ -96,7 +134,7 @@ func TestAgentPluginsLoadExecuteAndReload(t *testing.T) {
 	al, cfg, _, _, cleanup := newTestAgentLoop(t)
 	defer cleanup()
 	defer al.Close()
-	agentPluginFixture(t, cfg, httpServer.URL)
+	pluginRoot := agentPluginFixture(t, cfg, httpServer.URL)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if _, err := al.ProcessDirect(ctx, "hi", "plugin-test"); err != nil {
@@ -119,8 +157,24 @@ func TestAgentPluginsLoadExecuteAndReload(t *testing.T) {
 	if _, ok := agent.ContextBuilder.ResolveSkillName("test-plugin:greet"); !ok {
 		t.Fatal("plugin skill missing")
 	}
-	if !strings.Contains(agent.ContextBuilder.buildSkillsSummary(nil), "test-plugin:greet") {
+	summary := agent.ContextBuilder.buildSkillsSummary(nil)
+	if !strings.Contains(summary, "test-plugin:greet") {
 		t.Fatal("missing skill prompt")
+	}
+	// The catalog must not expose the plugin's host filesystem path: the agent
+	// cannot read it and would loop against the workspace guard. It must point
+	// at the plugin resource tool with a plugin-relative path instead.
+	locations := catalogLocations(summary)
+	if len(locations) != 1 || locations[0] != "skills/greet/SKILL.md" {
+		t.Fatalf("plugin catalog locations = %q, want [skills/greet/SKILL.md]:\n%s", locations, summary)
+	}
+	for _, loc := range locations {
+		if filepath.IsAbs(loc) || strings.Contains(loc, pluginRoot) {
+			t.Fatalf("plugin catalog leaked absolute host path %q:\n%s", loc, summary)
+		}
+	}
+	if !strings.Contains(summary, "<resource-tool>plugin_test-plugin_package_read_resource_") {
+		t.Fatalf("plugin catalog missing resource-tool guidance:\n%s", summary)
 	}
 	cfg.Plugins.Enabled = false
 	if err := al.ReloadProviderAndConfig(ctx, &mockProvider{}, cfg); err != nil {

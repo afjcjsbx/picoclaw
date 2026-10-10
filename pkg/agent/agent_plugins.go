@@ -3,7 +3,9 @@ package agent
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/sipeed/picoclaw/pkg/config"
@@ -37,6 +39,18 @@ type pluginBinding struct {
 
 func pluginAllowsAgent(entry config.PluginEntryConfig, id string) bool {
 	return entry.Agents == nil || slices.Contains(entry.Agents, id)
+}
+
+// pluginRelativePath rewrites an absolute skill path to a plugin-root-relative,
+// slash-separated path. It returns "" when the path is empty, is not under the
+// root, or does not yield a clean relative path, so a host path is never
+// exposed to the catalog.
+func pluginRelativePath(root, path string) string {
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return ""
+	}
+	return filepath.ToSlash(rel)
 }
 
 func pluginToolDeferred(discovery config.ToolDiscoveryConfig, override *bool) bool {
@@ -135,6 +149,8 @@ func (al *AgentLoop) publishPlugin(
 			register(resource, false)
 			entries := append([]skills.PluginSkill(nil), capabilities.Skills...)
 			for i := range entries {
+				entries[i].Info.ResourceTool = resource.Name()
+				entries[i].Info.Path = pluginRelativePath(capabilities.Root, entries[i].Info.Path)
 				entries[i].Body = fmt.Sprintf(
 					"Read bundled plugin references with the `%s` tool using a path relative to the plugin root (for example `skills/greet/references/help.md`). Do not use filesystem tools on plugin files; they live outside the workspace.\n\n%s",
 					resource.Name(),
