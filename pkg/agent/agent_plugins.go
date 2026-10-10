@@ -136,8 +136,7 @@ func (al *AgentLoop) publishPlugin(
 			entries := append([]skills.PluginSkill(nil), capabilities.Skills...)
 			for i := range entries {
 				entries[i].Body = fmt.Sprintf(
-					"Plugin root: %s\nRead bundled references with `%s` using a plugin-relative path.\n\n%s",
-					capabilities.Root,
+					"Read bundled plugin references with the `%s` tool using a path relative to the plugin root (for example `skills/greet/references/help.md`). Do not use filesystem tools on plugin files; they live outside the workspace.\n\n%s",
 					resource.Name(),
 					entries[i].Body,
 				)
