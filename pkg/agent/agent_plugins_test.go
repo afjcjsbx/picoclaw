@@ -87,6 +87,24 @@ func TestPluginRelativePath(t *testing.T) {
 	}
 }
 
+func catalogLocations(summary string) []string {
+	var out []string
+	const open, closeTag = "<location>", "</location>"
+	for {
+		start := strings.Index(summary, open)
+		if start < 0 {
+			return out
+		}
+		summary = summary[start+len(open):]
+		end := strings.Index(summary, closeTag)
+		if end < 0 {
+			return out
+		}
+		out = append(out, summary[:end])
+		summary = summary[end+len(closeTag):]
+	}
+}
+
 func TestPluginToolDeferredOverride(t *testing.T) {
 	deferred := true
 	eager := false
@@ -146,11 +164,16 @@ func TestAgentPluginsLoadExecuteAndReload(t *testing.T) {
 	// The catalog must not expose the plugin's host filesystem path: the agent
 	// cannot read it and would loop against the workspace guard. It must point
 	// at the plugin resource tool with a plugin-relative path instead.
-	if strings.Contains(summary, "<location>/") || strings.Contains(summary, pluginRoot) {
-		t.Fatalf("plugin catalog leaked absolute host path:\n%s", summary)
+	locations := catalogLocations(summary)
+	if len(locations) != 1 || locations[0] != "skills/greet/SKILL.md" {
+		t.Fatalf("plugin catalog locations = %q, want [skills/greet/SKILL.md]:\n%s", locations, summary)
 	}
-	if !strings.Contains(summary, "<resource-tool>plugin_test-plugin_package_read_resource_") ||
-		!strings.Contains(summary, "<location>skills/greet/SKILL.md</location>") {
+	for _, loc := range locations {
+		if filepath.IsAbs(loc) || strings.Contains(loc, pluginRoot) {
+			t.Fatalf("plugin catalog leaked absolute host path %q:\n%s", loc, summary)
+		}
+	}
+	if !strings.Contains(summary, "<resource-tool>plugin_test-plugin_package_read_resource_") {
 		t.Fatalf("plugin catalog missing resource-tool guidance:\n%s", summary)
 	}
 	cfg.Plugins.Enabled = false
