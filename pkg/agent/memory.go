@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
 // MemoryStore provides read access to the agent's persistent memory.
@@ -31,8 +33,14 @@ func NewMemoryStore(workspace string) *MemoryStore {
 	memoryDir := filepath.Join(workspace, "memory")
 	memoryFile := filepath.Join(memoryDir, "MEMORY.md")
 
-	// Ensure memory directory exists
-	os.MkdirAll(memoryDir, 0o755)
+	// Ensure the memory directory exists. Use 0o700: memory may contain
+	// personal notes, so keep it owner-only rather than world-listable.
+	if err := os.MkdirAll(memoryDir, 0o700); err != nil {
+		logger.WarnCF("agent", "Failed to create memory directory", map[string]any{
+			"dir":   memoryDir,
+			"error": err.Error(),
+		})
+	}
 
 	return &MemoryStore{
 		workspace:  workspace,
@@ -77,8 +85,8 @@ func (ms *MemoryStore) ReadLongTerm() string {
 	return ""
 }
 
-// GetRecentDailyNotes returns daily notes from the last N days.
-// Contents are joined with "---" separator.
+// GetRecentDailyNotes returns daily notes from the last N days, newest first.
+// Existing notes are joined with a "\n\n---\n\n" separator.
 func (ms *MemoryStore) GetRecentDailyNotes(days int) string {
 	var sb strings.Builder
 	first := true
