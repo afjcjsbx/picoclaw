@@ -234,7 +234,7 @@ func TestOfficialMem0PluginRemoteMCPAndNativeHooks(t *testing.T) {
 	type searchInput struct {
 		Query   string         `json:"query"`
 		Filters map[string]any `json:"filters"`
-		Limit   int            `json:"limit"`
+		TopK    int            `json:"top_k"`
 	}
 	type addInput struct {
 		Text     string         `json:"text"`
@@ -305,7 +305,7 @@ func TestOfficialMem0PluginRemoteMCPAndNativeHooks(t *testing.T) {
 		`{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"mem0":{"type":"stdio","command":"python3","args":["${PLUGIN_ROOT}/core/mcp_server.py"]}}}`,
 	)
 	write("com.sipeed.picoclaw/hooks.json", `{"hooks":[
-		{"name":"recall","intercept":["before_llm"],"mcp":{"server":"mem0","tool":"search_memories","arguments":{"query":"${user_message}","filters":{"AND":[{"user_id":"alice"},{"app_id":"project-a"}]},"limit":5},"result":"append_to_user_message"}},
+		{"name":"recall","intercept":["before_llm"],"mcp":{"server":"mem0","tool":"search_memories","arguments":{"query":"${user_message}","filters":{"AND":[{"user_id":"alice"},{"app_id":"project-a"}]},"top_k":5},"result":"append_to_user_message"}},
 		{"name":"capture","observe":["turn_completed"],"mcp":{"server":"mem0","tool":"add_memory","arguments":{"text":"User: ${user_message}\nAssistant: ${assistant_message}","user_id":"alice","app_id":"project-a","metadata":{"source":"picoclaw"}}}}
 	]}`)
 	write("skills/remember/SKILL.md", "---\nname: remember\ndescription: Remember a fact\n---\nRemember it.\n")
@@ -488,7 +488,7 @@ drainFeedback:
 	}
 	if !strings.Contains(searches[0].Query, "What did we decide?") ||
 		!strings.Contains(searches[1].Query, "What about the next topic?") ||
-		!strings.Contains(fmt.Sprint(searches[0].Filters), "project-a") || searches[0].Limit != 5 {
+		!strings.Contains(fmt.Sprint(searches[0].Filters), "project-a") || searches[0].TopK != 5 {
 		t.Fatalf("unscoped recall: %+v", searches[0])
 	}
 	if adds[0].UserID != "alice" || adds[0].AppID != "project-a" || !strings.Contains(adds[0].Text, "saved response") {
