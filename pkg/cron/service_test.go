@@ -290,6 +290,41 @@ func TestCronService_ExecutionFlow(t *testing.T) {
 	}
 }
 
+func TestCronService_NilHandlerMarksJobsSkipped(t *testing.T) {
+	cs, path := setupService(nil)
+	defer os.Remove(path)
+
+	if err := cs.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer cs.Stop()
+
+	everyMS := int64(50)
+	job, err := cs.AddJob("NoHandler", CronSchedule{Kind: "every", EveryMS: &everyMS}, "msg", "cli", "direct")
+	if err != nil {
+		t.Fatalf("AddJob failed: %v", err)
+	}
+
+	var skipped *CronJob
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if current, ok := cs.GetJob(job.ID); ok && current.State.LastStatus == "skipped" {
+			skipped = current
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if skipped == nil {
+		t.Fatal("job with nil handler was not marked skipped")
+	}
+	if skipped.State.LastError != "no job handler configured" {
+		t.Fatalf("LastError = %q, want no handler reason", skipped.State.LastError)
+	}
+	if skipped.State.LastRunAtMS == nil {
+		t.Fatal("expected LastRunAtMS to be recorded for skipped job")
+	}
+}
+
 func TestCronService_PersistenceIntegrity(t *testing.T) {
 	tmpFile := "persist_test.json"
 	defer os.Remove(tmpFile)

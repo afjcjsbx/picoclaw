@@ -133,14 +133,12 @@ Sau khi cai dat skill, ban co the xem va ep dung truc tiep tu kenh chat:
 - `/use <skill> <message>` ep dung mot skill cho duy nhat mot yeu cau.
 - `/use <skill>` dat san skill do cho tin nhan tiep theo trong cung cuoc tro chuyen.
 - `/use clear` huy skill override dang cho duoc tao boi `/use <skill>`.
-- `/btw <question>` dat cau hoi phu ngay lap tuc ma khong thay doi lich su phien hien tai. `/btw` duoc xu ly nhu mot truy van truc tiep khong dung cong cu va khong di vao luong thuc thi cong cu thong thuong.
 
 Vi du:
 
 ```text
 /list skills
 /use git giai thich cach squash 3 commit cuoi
-/btw nhac lai giup toi chung ta da chot gi cho ke hoach deploy
 /use italiapersonalfinance
 dammi le ultime news
 ```
@@ -148,7 +146,7 @@ dammi le ultime news
 ### Chính Sách Thực Thi Lệnh Thống Nhất
 
 - Lệnh slash chung được thực thi qua một đường dẫn duy nhất trong `pkg/agent/loop.go` qua `commands.Executor`.
-- Adapter kênh không còn xử lý lệnh chung cục bộ; chúng chuyển tiếp văn bản đầu vào đến đường dẫn bus/agent. Telegram vẫn tự động đăng ký khi khởi động các lệnh được hỗ trợ như `/start`, `/help`, `/show`, `/list`, `/use`, va `/btw`.
+- Adapter kênh không còn xử lý lệnh chung cục bộ; chúng chuyển tiếp văn bản đầu vào đến đường dẫn bus/agent. Telegram vẫn tự động đăng ký khi khởi động các lệnh được hỗ trợ như `/start`, `/help`, `/show`, `/list`, `/use`.
 - Lệnh slash không xác định (ví dụ `/foo`) được chuyển sang xử lý LLM bình thường.
 - Lệnh đã đăng ký nhưng không được hỗ trợ trên kênh hiện tại (ví dụ `/show` trên WhatsApp) trả về lỗi rõ ràng cho người dùng và dừng xử lý tiếp.
 

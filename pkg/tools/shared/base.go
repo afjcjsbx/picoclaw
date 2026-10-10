@@ -184,7 +184,8 @@ type AsyncExecutor interface {
 	Tool
 	// ExecuteAsync runs the tool asynchronously. The callback cb will be
 	// invoked (possibly from another goroutine) when the async operation
-	// completes. cb is guaranteed to be non-nil by the caller (registry).
+	// completes. The registry always calls ExecuteAsync with a non-nil cb,
+	// substituting a no-op callback when the caller did not provide one.
 	ExecuteAsync(ctx context.Context, args map[string]any, cb AsyncCallback) *ToolResult
 }
 

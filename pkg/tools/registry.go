@@ -12,6 +12,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/media"
 	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
 type ToolEntry struct {
@@ -275,9 +276,10 @@ func (r *ToolRegistry) Execute(ctx context.Context, name string, args map[string
 }
 
 // ExecuteWithContext executes a tool with channel/chatID context and optional async callback.
-// If the tool implements AsyncExecutor and a non-nil callback is provided,
-// ExecuteAsync is called instead of Execute — the callback is a parameter,
-// never stored as mutable state on the tool.
+// If the tool implements AsyncExecutor, ExecuteAsync is always called instead
+// of Execute — the callback is a parameter, never stored as mutable state on
+// the tool. When the caller provides no callback, a no-op callback is used so
+// that ExecuteAsync always receives a non-nil callback (see AsyncExecutor).
 func (r *ToolRegistry) ExecuteWithContext(
 	ctx context.Context,
 	name string,
@@ -287,8 +289,9 @@ func (r *ToolRegistry) ExecuteWithContext(
 ) *ToolResult {
 	logger.InfoCF("tool", "Tool execution started",
 		map[string]any{
-			"tool": name,
-			"args": args,
+			"tool":      name,
+			"arg_keys":  utils.SortedArgKeys(args),
+			"arg_count": len(args),
 		})
 
 	tool, ok := r.Get(name)
@@ -340,12 +343,16 @@ func (r *ToolRegistry) ExecuteWithContext(
 			}
 		}()
 
-		if asyncExec, ok := tool.(AsyncExecutor); ok && asyncCallback != nil {
+		if asyncExec, ok := tool.(AsyncExecutor); ok {
+			cb := asyncCallback
+			if cb == nil {
+				cb = func(context.Context, *ToolResult) {}
+			}
 			logger.DebugCF("tool", "Executing async tool via ExecuteAsync",
 				map[string]any{
 					"tool": name,
 				})
-			result = asyncExec.ExecuteAsync(ctx, args, asyncCallback)
+			result = asyncExec.ExecuteAsync(ctx, args, cb)
 		} else {
 			result = tool.Execute(ctx, args)
 		}
@@ -361,7 +368,12 @@ func (r *ToolRegistry) ExecuteWithContext(
 		}
 	}
 
-	result = normalizeToolResult(result, name, r.mediaStore, channel, chatID)
+	// Read the media store under the registry lock: SetMediaStore may be
+	// called concurrently (e.g. config hot reload) while tools are executing.
+	r.mu.RLock()
+	mediaStore := r.mediaStore
+	r.mu.RUnlock()
+	result = normalizeToolResult(result, name, mediaStore, channel, chatID)
 
 	duration := time.Since(start)
 

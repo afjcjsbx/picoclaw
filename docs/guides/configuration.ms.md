@@ -120,14 +120,12 @@ Selepas skill dipasang, anda boleh menyemak dan memaksanya terus dari saluran ch
 - `/use <skill> <message>` memaksa satu skill untuk satu permintaan sahaja.
 - `/use <skill>` menyediakan skill itu untuk mesej anda yang seterusnya dalam chat yang sama.
 - `/use clear` membatalkan skill override tertunda yang dibuat melalui `/use <skill>`.
-- `/btw <question>` bertanya soalan sampingan segera tanpa mengubah sejarah sesi semasa. `/btw` dikendalikan sebagai pertanyaan langsung tanpa tool dan tidak memasuki aliran pelaksanaan tool biasa.
 
 Contoh:
 
 ```text
 /list skills
 /use git terangkan cara squash 3 commit terakhir
-/btw ingatkan saya semula apa keputusan tadi untuk pelan deploy
 /use italiapersonalfinance
 dammi le ultime news
 ```
@@ -135,7 +133,7 @@ dammi le ultime news
 ### Polisi Pelaksanaan Arahan Bersepadu
 
 - Generic slash command dilaksanakan melalui satu laluan dalam `pkg/agent/loop.go` melalui `commands.Executor`.
-- Adapter saluran tidak lagi menggunakan generic command secara setempat; ia memajukan teks masuk ke laluan bus/agent. Telegram masih auto-register arahan yang disokong semasa startup seperti `/start`, `/help`, `/show`, `/list`, `/use`, dan `/btw`.
+- Adapter saluran tidak lagi menggunakan generic command secara setempat; ia memajukan teks masuk ke laluan bus/agent. Telegram masih auto-register arahan yang disokong semasa startup seperti `/start`, `/help`, `/show`, `/list`, `/use`.
 - Slash command yang tidak dikenali (contohnya `/foo`) akan diteruskan ke pemprosesan LLM biasa.
 - Arahan yang didaftarkan tetapi tidak disokong pada saluran semasa (contohnya `/show` di WhatsApp) akan memulangkan ralat yang jelas kepada pengguna dan menghentikan pemprosesan lanjut.
 

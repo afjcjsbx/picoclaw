@@ -1091,6 +1091,39 @@ func TestCronTool_CommandUpdateSafetyGates(t *testing.T) {
 			t.Fatalf("command not cleared: %+v", updated.Payload)
 		}
 	})
+	t.Run("clearing does not require confirm", func(t *testing.T) {
+		cfg := config.DefaultConfig()
+		cfg.Tools.Cron.AllowCommand = false
+		tool := newTestCronToolWithConfig(t, cfg)
+		ctx := WithToolContext(context.Background(), "cli", "direct")
+		job, err := tool.cronService.AddJob(
+			"job",
+			cron.CronSchedule{Kind: "cron", Expr: "0 8 * * *"},
+			"message",
+			"cli",
+			"direct",
+		)
+		if err != nil {
+			t.Fatalf("AddJob() error: %v", err)
+		}
+		job.Payload.Command = "df -h"
+		if err := tool.cronService.UpdateJob(job); err != nil {
+			t.Fatalf("UpdateJob() error: %v", err)
+		}
+
+		result := tool.Execute(ctx, map[string]any{
+			"action":  "update",
+			"job_id":  job.ID,
+			"command": "",
+		})
+		if result.IsError {
+			t.Fatalf("expected clearing command without confirm to succeed, got: %s", result.ForLLM)
+		}
+		updated, _ := tool.cronService.GetJob(job.ID)
+		if updated.Payload.Command != "" {
+			t.Fatalf("command not cleared: %+v", updated.Payload)
+		}
+	})
 }
 
 func TestCronTool_InternalCanAccessCommandJobFromAnyChannel(t *testing.T) {

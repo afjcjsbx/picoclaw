@@ -56,6 +56,12 @@ Sensitive data filtering is configured in the `tools` section of `config.json`:
 
 ---
 
+## Logging
+
+Tool call logs (registry, tool loop and agent execution pipeline) record only the argument names and their count, never the argument values. Secrets passed to a tool are therefore not written to log files. This is independent of `filter_sensitive_data`, which only applies to the content sent to the LLM.
+
+---
+
 ## Example
 
 Given the following `.security.yml`:

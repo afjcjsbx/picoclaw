@@ -24,7 +24,6 @@ type CronSchedule struct {
 }
 
 type CronPayload struct {
-	Kind    string `json:"kind"`
 	Message string `json:"message"`
 	Command string `json:"command,omitempty"`
 	Channel string `json:"channel,omitempty"`
@@ -235,9 +234,14 @@ func (cs *CronService) executeJobByID(jobID string) {
 	log.Printf("[cron] ▶ executing job '%s' (id: %s, schedule: %s, channel: %s)",
 		callbackJob.Name, jobID, callbackJob.Schedule.Kind, callbackJob.Payload.Channel)
 
-	var err error
+	var (
+		err     error
+		skipped bool
+	)
 	if cs.onJob != nil {
 		_, err = cs.onJob(callbackJob)
+	} else {
+		skipped = true
 	}
 
 	execDuration := time.Now().UnixMilli() - startTime
@@ -261,11 +265,15 @@ func (cs *CronService) executeJobByID(jobID string) {
 	job.State.LastRunAtMS = &startTime
 	job.UpdatedAtMS = time.Now().UnixMilli()
 
-	if err != nil {
+	switch {
+	case err != nil:
 		job.State.LastStatus = "error"
 		job.State.LastError = err.Error()
 		log.Printf("[cron] ✗ job '%s' failed after %dms: %v", job.Name, execDuration, err)
-	} else {
+	case skipped:
+		job.State.LastStatus = "skipped"
+		job.State.LastError = "no job handler configured"
+	default:
 		job.State.LastStatus = "ok"
 		job.State.LastError = ""
 	}
@@ -291,7 +299,15 @@ func (cs *CronService) executeJobByID(jobID string) {
 		}
 	}
 
-	if err == nil {
+	switch {
+	case err != nil:
+		// Failure already logged above.
+	case skipped:
+		log.Printf(
+			"[cron] ⚠ job '%s' skipped in %dms (no job handler), next run: %s",
+			job.Name, execDuration, nextRunStr,
+		)
+	default:
 		log.Printf("[cron] ✓ job '%s' completed in %dms, next run: %s", job.Name, execDuration, nextRunStr)
 	}
 
@@ -424,7 +440,6 @@ func (cs *CronService) AddJob(
 		Enabled:  true,
 		Schedule: schedule,
 		Payload: CronPayload{
-			Kind:    "agent_turn",
 			Message: message,
 			Channel: channel,
 			To:      to,

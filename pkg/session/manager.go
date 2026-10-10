@@ -178,6 +178,39 @@ func (sm *SessionManager) ListSessions() []string {
 	return keys
 }
 
+// LastActivity returns when the session was last updated, or the zero time for
+// an unknown session. Used by automatic session pruning.
+func (sm *SessionManager) LastActivity(key string) time.Time {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	if stored, ok := sm.sessions[key]; ok {
+		return stored.Updated
+	}
+	return time.Time{}
+}
+
+// DeleteSession removes a session from memory and deletes its backing file.
+// Used by automatic session pruning. Missing files are ignored.
+func (sm *SessionManager) DeleteSession(key string) error {
+	sm.mu.Lock()
+	delete(sm.sessions, key)
+	sm.mu.Unlock()
+
+	if sm.storage == "" {
+		return nil
+	}
+
+	filename := sanitizeFilename(key)
+	if filename == "." || !filepath.IsLocal(filename) {
+		return os.ErrInvalid
+	}
+	path := filepath.Join(sm.storage, filename+".json")
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
 // sanitizeFilename converts a session key into a cross-platform safe filename.
 // Replaces ':' with '_' (session key separator) and '/' and '\' with '_' so
 // composite IDs (e.g. Telegram forum "chatID/threadID") do not create

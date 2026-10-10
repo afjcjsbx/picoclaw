@@ -37,6 +37,8 @@ See [Sensitive Data Filtering](../security/sensitive_data_filtering.md) for full
 | `filter_sensitive_data` | bool | `true` | Enable/disable filtering |
 | `filter_min_length` | int | `8` | Minimum content length to trigger filtering |
 
+Tool call logs record only the argument **keys** and count, never the argument values, so secrets passed to a tool are not written to log files. The filter above applies to the content exchanged with the LLM, not to logs.
+
 ## Protected local files
 
 Filesystem read tools deny `.env`, `.env.*`, `.envrc`, `.security.yml` (including its backups), `.netrc`, `.npmrc`, `.pypirc`, and files inside `.ssh`, `.aws`, `.kube`, or `.gnupg` directories. The check also follows symlinks, hides these entries from directory listings and file searches, and applies to local files attached through `send_file`, `load_image`, or `message`. Read allow paths do not override it. `write_file` can still create or explicitly overwrite these files; `edit_file` and `append_file` cannot read their existing contents.

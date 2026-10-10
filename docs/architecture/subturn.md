@@ -101,7 +101,7 @@ When the provider returns a context length error (e.g., `context_length_exceeded
 SubTurns operate within an independent context but maintain a structural link to their parent `turnState`.
 
 ### Graceful Parent Finish
-When the parent task finishes naturally (`Finish(false)`):
+When the parent task finishes naturally, the turn coordinator calls `Finish(false)` during turn teardown:
 - **Non-critical** sub-turns receive a signal to exit gracefully without throwing an error.
 - **Critical** (`Critical: true`) sub-turns continue running in the background. Once finished, their results are emitted as **Orphan Results** so the data is not lost.
 
@@ -130,6 +130,8 @@ The agent loop polls for async SubTurn results at two points per iteration:
 1. **Before the LLM call**: injects any arrived results as `[SubTurn Result]` messages into the conversation context.
 2. **After all tool executions**: polls again during the tool loop to catch results that arrived during tool execution.
 3. **After the final iteration**: one last poll before the turn ends to avoid losing late-arriving results.
+
+Every turn owns its own 16-slot `pendingResults` channel and concurrency semaphore, including root turns created by the inbound message loop, so async delivery and the concurrency limit apply at every nesting level.
 
 ### Turn State Tracking
 
@@ -231,15 +233,15 @@ SubTurns are designed for concurrent execution:
 - **Parent-child relationships**: Managed under mutex (`parentTS.mu.Lock()`)
 - **Active turn tracking**: Uses `sync.Map` for concurrent access to `activeTurnStates`
 - **ID generation**: Uses `atomic.Int64` for unique SubTurn IDs (format: `subturn-N`, globally monotonic per `AgentLoop` instance)
-- **Result delivery**: Reads parent state under lock, releases before channel send (small race window acceptable)
+- **Result delivery**: Reads parent state under lock, releases before the channel send, then re-checks `isFinished`. A result that lands after the parent finished is reported as an orphan (`parent_finished`) instead of being silently dropped. `Finish` does not close `pendingResults` — it only closes `finishedChan` — so concurrent deliveries cannot panic with `send on closed channel`.
 
 ## Orphan Results
 
 An orphan result occurs when:
-1. Parent turn finishes before the SubTurn completes
-2. The `pendingResults` channel is full (buffer size: 16)
+1. The parent turn has finished before the SubTurn result could be delivered (`parent_finished`), including the case where the parent finishes while the sender is blocked waiting for room in a full channel (`parent_finished_waiting`).
+2. An unexpected channel state triggers a recovered panic during delivery (`panic`; safety net only).
 
-When a result becomes orphan:
+A full `pendingResults` channel (buffer size: 16) does **not** orphan a result by itself: the sender blocks until space is available or the parent finishes. When a result becomes orphan:
 - `agent.subturn.orphan` is emitted to the runtime event bus
 - The result is **NOT** delivered to the LLM context
 - External systems can listen to this event for custom handling

@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"sort"
 	"strings"
 	"sync/atomic"
 	"unicode"
@@ -64,4 +65,16 @@ func DerefStr(s *string, fallback string) string {
 		return fallback
 	}
 	return *s
+}
+
+// SortedArgKeys returns the sorted key names of a tool argument map.
+// Logging only keys (never values) keeps secrets passed to tools out of log
+// files while still making tool calls traceable.
+func SortedArgKeys(args map[string]any) []string {
+	keys := make([]string, 0, len(args))
+	for key := range args {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }

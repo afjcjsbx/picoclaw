@@ -440,10 +440,6 @@ func (al *AgentLoop) buildCommandsRuntime(
 			return nil
 		}
 
-		rt.AskSideQuestion = func(ctx context.Context, question string) (string, error) {
-			return al.askSideQuestion(ctx, agent, opts, question)
-		}
-
 		rt.GetContextStats = func() *commands.ContextStats {
 			if opts == nil || agent.Sessions == nil {
 				return nil

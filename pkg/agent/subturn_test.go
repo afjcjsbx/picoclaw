@@ -453,6 +453,119 @@ func TestSubTurnConcurrencySemaphore(t *testing.T) {
 	}
 }
 
+// turnStateProbeProvider captures the turnState injected into the provider
+// context during an agent loop run.
+type turnStateProbeProvider struct {
+	response string
+	mu       sync.Mutex
+	ts       *turnState
+}
+
+func (p *turnStateProbeProvider) Chat(
+	ctx context.Context,
+	_ []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	p.mu.Lock()
+	p.ts = turnStateFromContext(ctx)
+	p.mu.Unlock()
+	return &providers.LLMResponse{Content: p.response}, nil
+}
+
+func (p *turnStateProbeProvider) GetDefaultModel() string { return "gpt-4o-mini" }
+
+func (p *turnStateProbeProvider) turnState() *turnState {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.ts
+}
+
+// TestRunAgentLoop_InitializesSubTurnChannels verifies that production root turns
+// own a SubTurn result channel and a concurrency semaphore, so that the
+// concurrency limit and async result delivery also work for root turns.
+func TestRunAgentLoop_InitializesSubTurnChannels(t *testing.T) {
+	probe := &turnStateProbeProvider{response: "ok"}
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         t.TempDir(),
+				ModelName:         "gpt-4o-mini",
+				Provider:          "mock",
+				MaxTokens:         1024,
+				MaxToolIterations: 2,
+			},
+		},
+	}
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), probe)
+	agent := al.registry.GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("expected default agent")
+	}
+
+	if _, err := al.runAgentLoop(context.Background(), agent, processOptions{
+		Dispatch:        DispatchRequest{SessionKey: "root-session", UserMessage: "hello"},
+		DefaultResponse: defaultResponse,
+	}); err != nil {
+		t.Fatalf("runAgentLoop() error = %v", err)
+	}
+
+	ts := probe.turnState()
+	if ts == nil {
+		t.Fatal("provider did not observe a turn state in context")
+	}
+	if ts.pendingResults == nil {
+		t.Error("root turn pendingResults channel is nil")
+	} else if cap(ts.pendingResults) != subTurnPendingResultsBuffer {
+		t.Errorf("pendingResults cap = %d, want %d", cap(ts.pendingResults), subTurnPendingResultsBuffer)
+	}
+	if ts.concurrencySem == nil {
+		t.Error("root turn concurrencySem is nil")
+	} else if cap(ts.concurrencySem) != defaultMaxConcurrentSubTurns {
+		t.Errorf("concurrencySem cap = %d, want %d", cap(ts.concurrencySem), defaultMaxConcurrentSubTurns)
+	}
+}
+
+// TestRunTurn_MarksTurnFinishedOnGracefulCompletion verifies that the turn
+// coordinator marks the turn finished when it ends naturally, so that late
+// SubTurn results become orphans and child turns see the parent as ended.
+func TestRunTurn_MarksTurnFinishedOnGracefulCompletion(t *testing.T) {
+	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled
+	defer cleanup()
+
+	agent := al.registry.GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("expected default agent")
+	}
+
+	turnScope := al.newTurnEventScope(agent.ID, "finish-session", newTurnContext(nil, nil, nil))
+	ts := newTurnState(agent, processOptions{
+		Dispatch:        DispatchRequest{SessionKey: "finish-session", UserMessage: "hello"},
+		DefaultResponse: defaultResponse,
+	}, turnScope)
+
+	if ts.isFinished.Load() {
+		t.Fatal("turn should not be finished before runTurn")
+	}
+
+	if _, err := al.runTurn(context.Background(), ts, NewPipeline(al)); err != nil {
+		t.Fatalf("runTurn() error = %v", err)
+	}
+
+	if !ts.isFinished.Load() {
+		t.Error("expected turn to be marked finished after graceful completion")
+	}
+	if !ts.parentEnded.Load() {
+		t.Error("expected graceful finish to signal parentEnded for child turns")
+	}
+	select {
+	case <-ts.Finished():
+	default:
+		t.Error("expected Finished() channel to be closed after turn completion")
+	}
+}
+
 // ====================== Extra Independent Test: Hard Abort Cascading ======================
 func TestHardAbortCascading(t *testing.T) {
 	al, _, _, provider, cleanup := newTestAgentLoop(t)
@@ -1313,19 +1426,16 @@ func TestDeliverSubTurnResult_RaceWithFinish(t *testing.T) {
 
 	t.Logf("Delivered: %d, Orphan: %d, Total: %d", finalDelivered, finalOrphan, finalDelivered+finalOrphan)
 
-	// With the new drainPendingResults behavior, the total events may be >= numResults
-	// because Finish() drains remaining results from the channel and emits them as orphans.
-	// So we expect:
-	// - Some results were delivered successfully (before Finish())
-	// - Some results became orphans (after Finish() or channel full)
-	// - Some results were in the channel when Finish() was called and got drained as orphans
-	// The total should be at least numResults (could be more due to drain)
+	// Deliveries that race the parent's Finish() are reported as orphans:
+	// either the sender observes Finished() while blocked, or it re-checks
+	// isFinished after a successful send. Every result should therefore be
+	// accounted for exactly once, as delivered or as orphan.
 	if finalDelivered+finalOrphan < numResults {
 		t.Errorf("Expected at least %d total events, got %d delivered + %d orphan = %d",
 			numResults, finalDelivered, finalOrphan, finalDelivered+finalOrphan)
 	}
 
-	// Should have at least some orphan results (those that arrived after Finish() or were drained)
+	// Should have at least some orphan results (those that arrived after Finish())
 	if finalOrphan == 0 {
 		t.Error("Expected at least some orphan results after Finish()")
 	}

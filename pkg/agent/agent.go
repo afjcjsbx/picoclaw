@@ -29,6 +29,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/routing"
 	"github.com/sipeed/picoclaw/pkg/session"
 	"github.com/sipeed/picoclaw/pkg/state"
+	"github.com/sipeed/picoclaw/pkg/tools"
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
@@ -368,6 +369,15 @@ func (al *AgentLoop) Close() {
 				})
 		}
 	}
+
+	if closer, ok := al.contextManager.(interface{ Close() error }); ok {
+		if err := closer.Close(); err != nil {
+			logger.ErrorCF("agent", "Failed to close context manager",
+				map[string]any{
+					"error": err.Error(),
+				})
+		}
+	}
 }
 
 // MountHook registers an in-process hook on the agent loop.
@@ -577,6 +587,14 @@ func (al *AgentLoop) runAgentLoop(
 		newTurnContext(opts.Dispatch.InboundContext, opts.Dispatch.RouteResult, opts.Dispatch.SessionScope),
 	)
 	ts := newTurnState(agent, opts, turnScope)
+
+	// Every turn owns its SubTurn result channel and concurrency semaphore.
+	// Without them, SubTurns spawned by root turns bypass the concurrency limit
+	// and async results can never be delivered back to the turn.
+	rtCfg := al.getSubTurnConfig()
+	ts.pendingResults = make(chan *tools.ToolResult, subTurnPendingResultsBuffer)
+	ts.concurrencySem = make(chan struct{}, rtCfg.maxConcurrent)
+
 	pipeline := NewPipeline(al)
 	result, err := al.runTurn(ctx, ts, pipeline)
 	if err != nil {
@@ -668,24 +686,12 @@ func (al *AgentLoop) runAgentLoop(
 // Counts Content, ToolCalls arguments, and ToolCallID metadata so that
 // tool-heavy conversations are not systematically undercounted.
 
-// askSideQuestion handles /btw commands by creating an isolated provider instance
-// that doesn't share state with the main conversation provider.
-
 // shallowCloneLLMOptions creates a shallow copy of LLM options map.
 // Note: This is a shallow copy - nested maps/slices are shared.
 
 // hasMediaRefs checks if any message has media references.
 
-// isolatedSideQuestionProvider creates a separate provider instance for /btw commands
-// to avoid sharing state with the main conversation provider.
-
-// sideQuestionModelConfig resolves the model config for side questions.
-
-// sideQuestionModelName determines which model name to use for side questions.
-
 // modelNameFromIdentityKey extracts the model name from an identity key.
-
-// closeProviderIfStateful closes a provider if it implements StatefulProvider.
 
 // makePendingTurnID generates a unique turn ID for placeholder turns.
 // Format: "pending-{sessionKey}-{sequence}"

@@ -4,7 +4,6 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -212,12 +211,12 @@ toolLoop:
 				if toolReq != nil && toolReq.HookResult != nil {
 					hookResult := toolReq.HookResult
 
-					argsJSON, _ := json.Marshal(toolArgs)
-					argsPreview := utils.Truncate(string(argsJSON), 200)
-					logger.InfoCF("agent", fmt.Sprintf("Tool call (hook respond): %s(%s)", toolName, argsPreview),
+					logger.InfoCF("agent", fmt.Sprintf("Tool call (hook respond): %s", toolName),
 						map[string]any{
 							"agent_id":  ts.agent.ID,
 							"tool":      toolName,
+							"arg_keys":  utils.SortedArgKeys(toolArgs),
+							"arg_count": len(toolArgs),
 							"iteration": iteration,
 						})
 
@@ -509,12 +508,12 @@ toolLoop:
 			continue
 		}
 
-		argsJSON, _ := json.Marshal(toolArgs)
-		argsPreview := utils.Truncate(string(argsJSON), 200)
-		logger.InfoCF("agent", fmt.Sprintf("Tool call: %s(%s)", toolName, argsPreview),
+		logger.InfoCF("agent", fmt.Sprintf("Tool call: %s", toolName),
 			map[string]any{
 				"agent_id":  ts.agent.ID,
 				"tool":      toolName,
+				"arg_keys":  utils.SortedArgKeys(toolArgs),
+				"arg_count": len(toolArgs),
 				"iteration": iteration,
 			})
 		al.emitEvent(
@@ -830,6 +829,20 @@ toolLoop:
 
 	exec.messages = messages
 	if loopDetectionStatus == loopStatusCritical {
+		// A steering message that arrived while the repeated tool was running
+		// takes precedence over loop termination: the user asked for a change
+		// of direction, so let the model react to it. The loop guard still
+		// applies on the next iteration if the model keeps repeating the call.
+		if steerMsgs := al.dequeueSteeringMessagesForScope(ts.sessionKey); len(steerMsgs) > 0 {
+			logger.InfoCF("agent", "Steering arrived during critical loop detection; continuing turn",
+				map[string]any{
+					"agent_id":       ts.agent.ID,
+					"steering_count": len(steerMsgs),
+				})
+			exec.pendingMessages = append(exec.pendingMessages, steerMsgs...)
+			exec.allResponsesHandled = false
+			return ToolControlContinue
+		}
 		logger.WarnCF("agent", "Critical repeated tool-call loop detected; stopping turn",
 			map[string]any{
 				"agent_id": ts.agent.ID,

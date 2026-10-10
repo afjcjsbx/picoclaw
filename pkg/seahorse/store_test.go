@@ -1467,3 +1467,65 @@ func TestStoreReplaceContextItemsWithSummary(t *testing.T) {
 		ordinalSet[item.Ordinal] = true
 	}
 }
+
+func TestStoreDeleteConversation(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	conv, err := s.GetOrCreateConversation(ctx, "agent:delete-test")
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+	if _, addErr := s.AddMessage(ctx, conv.ConversationID, "user", "hello", 5); addErr != nil {
+		t.Fatalf("add message: %v", addErr)
+	}
+
+	count, err := s.ConversationCount(ctx)
+	if err != nil {
+		t.Fatalf("ConversationCount: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("ConversationCount = %d, want 1", count)
+	}
+
+	if delErr := s.DeleteConversation(ctx, conv.ConversationID); delErr != nil {
+		t.Fatalf("DeleteConversation: %v", delErr)
+	}
+
+	// The conversation row must be gone (unlike ClearConversation).
+	got, err := s.GetConversationBySessionKey(ctx, "agent:delete-test")
+	if err != nil {
+		t.Fatalf("GetConversationBySessionKey: %v", err)
+	}
+	if got != nil {
+		t.Fatal("conversation row still present after DeleteConversation")
+	}
+
+	count, err = s.ConversationCount(ctx)
+	if err != nil {
+		t.Fatalf("ConversationCount after delete: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("ConversationCount = %d, want 0", count)
+	}
+
+	// Deleting a missing conversation is a no-op.
+	if delErr := s.DeleteConversation(ctx, conv.ConversationID); delErr != nil {
+		t.Fatalf("DeleteConversation (missing): %v", delErr)
+	}
+}
+
+func TestStoreCheckpointAndVacuum(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	if _, err := s.GetOrCreateConversation(ctx, "agent:vacuum-test"); err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+	if err := s.CheckpointWAL(ctx, true); err != nil {
+		t.Fatalf("CheckpointWAL: %v", err)
+	}
+	if err := s.Vacuum(ctx); err != nil {
+		t.Fatalf("Vacuum: %v", err)
+	}
+}

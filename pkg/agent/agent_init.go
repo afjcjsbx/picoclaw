@@ -336,8 +336,8 @@ func registerSharedTools(
 						turnID:         "adhoc-root",
 						depth:          0,
 						session:        nil, // Ephemeral session not needed for adhoc spawn
-						pendingResults: make(chan *tools.ToolResult, 16),
-						concurrencySem: make(chan struct{}, 5),
+						pendingResults: make(chan *tools.ToolResult, subTurnPendingResultsBuffer),
+						concurrencySem: make(chan struct{}, al.getSubTurnConfig().maxConcurrent),
 					}
 				}
 

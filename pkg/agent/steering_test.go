@@ -489,12 +489,13 @@ func (f *fixedTranscriber) Transcribe(ctx context.Context, audioFilePath string)
 }
 
 type blockingDirectProvider struct {
-	mu           sync.Mutex
-	calls        int
-	firstStarted chan struct{}
-	releaseFirst chan struct{}
-	firstResp    string
-	finalResp    string
+	mu                 sync.Mutex
+	calls              int
+	firstStarted       chan struct{}
+	releaseFirst       chan struct{}
+	firstResp          string
+	finalResp          string
+	secondCallMessages []providers.Message
 }
 
 func (p *blockingDirectProvider) Chat(
@@ -526,6 +527,9 @@ func (p *blockingDirectProvider) Chat(
 		return &providers.LLMResponse{Content: firstResp}, nil
 	}
 
+	p.mu.Lock()
+	p.secondCallMessages = append([]providers.Message(nil), messages...)
+	p.mu.Unlock()
 	_ = firstStarted
 	return &providers.LLMResponse{Content: finalResp}, nil
 }
@@ -1224,9 +1228,20 @@ func TestAgentLoop_Steering_DirectResponseContinuesWithQueuedMessage(t *testing.
 
 	provider.mu.Lock()
 	calls := provider.calls
+	secondMessages := append([]providers.Message(nil), provider.secondCallMessages...)
 	provider.mu.Unlock()
 	if calls != 2 {
 		t.Fatalf("expected 2 provider calls, got %d", calls)
+	}
+
+	injectedCount := 0
+	for _, msg := range secondMessages {
+		if msg.Role == "user" && msg.Content == "follow-up instruction" {
+			injectedCount++
+		}
+	}
+	if injectedCount != 1 {
+		t.Fatalf("expected steering message injected exactly once, got %d", injectedCount)
 	}
 
 	if msgs := al.dequeueSteeringMessagesForScope(sessionKey); len(msgs) != 0 {
@@ -1992,6 +2007,161 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+// gatedTool blocks every execution until the test releases it, so steering can
+// be enqueued while a specific tool call is still in flight.
+type gatedTool struct {
+	name    string
+	mu      sync.Mutex
+	execs   int
+	execCh  chan int
+	release chan struct{}
+}
+
+func (t *gatedTool) Name() string        { return t.name }
+func (t *gatedTool) Description() string { return "gated tool for testing" }
+func (t *gatedTool) Parameters() map[string]any {
+	return map[string]any{
+		"type":       "object",
+		"properties": map[string]any{},
+	}
+}
+
+func (t *gatedTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
+	t.mu.Lock()
+	t.execs++
+	n := t.execs
+	t.mu.Unlock()
+	t.execCh <- n
+	<-t.release
+	return tools.SilentResult(fmt.Sprintf("executed %s", t.name))
+}
+
+// loopRepeatingProvider always requests the same tool call until a steering
+// message shows up in the conversation, then returns a final answer.
+type loopRepeatingProvider struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (p *loopRepeatingProvider) Chat(
+	ctx context.Context,
+	messages []providers.Message,
+	tools []providers.ToolDefinition,
+	model string,
+	opts map[string]any,
+) (*providers.LLMResponse, error) {
+	p.mu.Lock()
+	p.calls++
+	p.mu.Unlock()
+
+	for _, msg := range messages {
+		if msg.Role == "user" && msg.Content == "break the loop" {
+			return &providers.LLMResponse{Content: "steered after loop"}, nil
+		}
+	}
+
+	return &providers.LLMResponse{
+		ToolCalls: []providers.ToolCall{
+			{
+				ID:   "call_loop",
+				Type: "function",
+				Name: "looping_tool",
+				Function: &providers.FunctionCall{
+					Name:      "looping_tool",
+					Arguments: "{}",
+				},
+				Arguments: map[string]any{},
+			},
+		},
+	}, nil
+}
+
+func (p *loopRepeatingProvider) GetDefaultModel() string {
+	return "loop-repeating-mock"
+}
+
+func TestAgentLoop_Steering_InterruptsCriticalLoopTermination(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "agent-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				ModelName:         "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 20,
+				LoopDetection: config.LoopDetectionConfig{
+					Enabled:           true,
+					RepeatThreshold:   2,
+					CriticalThreshold: 3,
+					WindowSize:        5,
+				},
+			},
+		},
+	}
+
+	tool := &gatedTool{
+		name:    "looping_tool",
+		execCh:  make(chan int),
+		release: make(chan struct{}),
+	}
+	msgBus := bus.NewMessageBus()
+	provider := &loopRepeatingProvider{}
+	al := NewAgentLoop(cfg, msgBus, provider)
+	al.RegisterTool(tool)
+
+	type result struct {
+		resp string
+		err  error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		resp, err := al.ProcessDirectWithChannel(
+			context.Background(),
+			"keep calling the tool",
+			"loop-session",
+			"test",
+			"chat1",
+		)
+		resultCh <- result{resp: resp, err: err}
+	}()
+
+	// Drive three identical tool executions. Steering arrives while the third
+	// one (which trips the critical threshold) is still in flight.
+	for i := 0; i < 3; i++ {
+		select {
+		case n := <-tool.execCh:
+			if n != i+1 {
+				t.Fatalf("expected tool execution %d, got %d", i+1, n)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("timeout waiting for tool execution")
+		}
+		if i == 2 {
+			if err := al.Steer(providers.Message{Role: "user", Content: "break the loop"}); err != nil {
+				t.Fatalf("Steer failed: %v", err)
+			}
+		}
+		tool.release <- struct{}{}
+	}
+
+	select {
+	case r := <-resultCh:
+		if r.err != nil {
+			t.Fatalf("unexpected error: %v", r.err)
+		}
+		if r.resp != "steered after loop" {
+			t.Fatalf("expected steering to interrupt loop termination, got %q", r.resp)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for agent loop to complete")
+	}
 }
 
 // wrappingProvider wraps another provider to hook into Chat calls.

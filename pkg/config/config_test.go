@@ -3455,3 +3455,97 @@ func testChannelsConfigWithTokens() ChannelsConfig {
 	}
 	return channels
 }
+
+func TestSessionPruneConfig_DefaultsAreDisabledAndOmittedFromJSON(t *testing.T) {
+	cfg := DefaultConfig()
+
+	assert.True(t, cfg.Session.Prune.IsZero())
+	assert.False(t, cfg.Session.Prune.Enabled)
+	assert.False(t, cfg.Session.Prune.IsActive())
+	assert.True(t, cfg.Session.Prune.VacuumEnabled(), "vacuum defaults to on")
+	assert.Equal(t, 60, cfg.Session.Prune.EffectiveCheckIntervalMinutes())
+
+	data, err := json.Marshal(cfg)
+	assert.NoError(t, err)
+	var raw map[string]any
+	assert.NoError(t, json.Unmarshal(data, &raw))
+	session, ok := raw["session"].(map[string]any)
+	assert.True(t, ok, "session section should be present for the default dimensions")
+	assert.NotContains(t, session, "prune", "an unconfigured prune block must not be saved")
+}
+
+func TestSessionPruneConfig_SurvivesMarshalWithoutOtherSessionSettings(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Session.Dimensions = nil
+	cfg.Session.Prune = SessionPruneConfig{Enabled: true, MaxAgeDays: 30}
+
+	data, err := json.Marshal(cfg)
+	assert.NoError(t, err)
+
+	var raw map[string]any
+	assert.NoError(t, json.Unmarshal(data, &raw))
+	session, ok := raw["session"].(map[string]any)
+	if !assert.True(t, ok, "session section with only prune settings must still be saved: %s", data) {
+		return
+	}
+	prune, ok := session["prune"].(map[string]any)
+	if !assert.True(t, ok, "prune block missing: %s", data) {
+		return
+	}
+	assert.Equal(t, true, prune["enabled"])
+	assert.EqualValues(t, 30, prune["max_age_days"])
+}
+
+func TestSessionPruneConfig_JSONRoundTrip(t *testing.T) {
+	vacuum := false
+	cfg := DefaultConfig()
+	cfg.Session.Prune = SessionPruneConfig{
+		Enabled:              true,
+		MaxAgeDays:           7,
+		MaxSessions:          50,
+		MaxDBSizeMB:          128,
+		CheckIntervalMinutes: 15,
+		Vacuum:               &vacuum,
+	}
+
+	data, err := json.Marshal(cfg)
+	assert.NoError(t, err)
+
+	var got Config
+	assert.NoError(t, json.Unmarshal(data, &got))
+	assert.Equal(t, cfg.Session.Prune.Enabled, got.Session.Prune.Enabled)
+	assert.Equal(t, 7, got.Session.Prune.MaxAgeDays)
+	assert.Equal(t, 50, got.Session.Prune.MaxSessions)
+	assert.Equal(t, 128, got.Session.Prune.MaxDBSizeMB)
+	assert.Equal(t, 15, got.Session.Prune.EffectiveCheckIntervalMinutes())
+	assert.False(t, got.Session.Prune.VacuumEnabled())
+	assert.True(t, got.Session.Prune.IsActive())
+	// Other session settings are unaffected by the custom marshaler.
+	assert.Equal(t, []string{"chat"}, got.Session.Dimensions)
+}
+
+func TestSessionPruneConfig_EnvOverrides(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	data, err := json.Marshal(DefaultConfig())
+	assert.NoError(t, err)
+	assert.NoError(t, os.WriteFile(path, data, 0o600))
+
+	t.Setenv("PICOCLAW_HOME", dir)
+	t.Setenv("PICOCLAW_SESSION_PRUNE_ENABLED", "true")
+	t.Setenv("PICOCLAW_SESSION_PRUNE_MAX_AGE_DAYS", "7")
+	t.Setenv("PICOCLAW_SESSION_PRUNE_MAX_SESSIONS", "25")
+	t.Setenv("PICOCLAW_SESSION_PRUNE_MAX_DB_SIZE_MB", "64")
+	t.Setenv("PICOCLAW_SESSION_PRUNE_CHECK_INTERVAL_MINUTES", "5")
+	t.Setenv("PICOCLAW_SESSION_PRUNE_VACUUM", "false")
+
+	cfg, err := LoadConfig(path)
+	assert.NoError(t, err)
+	prune := cfg.Session.Prune
+	assert.True(t, prune.Enabled)
+	assert.Equal(t, 7, prune.MaxAgeDays)
+	assert.Equal(t, 25, prune.MaxSessions)
+	assert.Equal(t, 64, prune.MaxDBSizeMB)
+	assert.Equal(t, 5, prune.EffectiveCheckIntervalMinutes())
+	assert.False(t, prune.VacuumEnabled())
+}

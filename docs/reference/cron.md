@@ -23,7 +23,7 @@ Examples:
 
 ```bash
 picoclaw cron add --name "Daily summary" --message "Summarize today's logs" --cron "0 18 * * *"
-picoclaw cron add --name "Ping" --message "heartbeat" --every 300 --deliver
+picoclaw cron add --name "Ping" --message "heartbeat" --every 300
 ```
 
 ## Agent Tool Actions
@@ -59,34 +59,25 @@ Example tool calls:
 `update` accepts `name`, `message`, `command`, and exactly one schedule field
 (`at_seconds`, `every_seconds`, or `cron_expr`).
 Omit `command` to preserve it, set `command` to a non-empty string to replace
-it, or set `command` to `""` to clear it. Command updates require the same
-channel allowlist and confirmation gates as command creation.
+it, or set `command` to `""` to clear it. Setting or replacing a command
+requires the same channel allowlist and confirmation gates as command
+creation; clearing it does not.
 
 ## Execution Modes
 
-Jobs are stored with a message payload and can execute in three stable user-facing modes:
-
-### `deliver: false`
-
-This is the default for the cron tool.
-
-When the job fires, PicoClaw sends the saved message back through the agent loop as a new agent turn. Use this for scheduled work that may need reasoning, tools, or a generated reply.
-
-A turn started by a cron job receives a tool registry without `cron`, so the agent cannot call it to manage jobs. This also applies to subagents spawned by that turn.
-
-### `deliver: true`
-
-When the job fires, PicoClaw publishes the saved message directly to the target channel and recipient without agent processing.
-
-The CLI `picoclaw cron add --deliver` flag uses this mode.
+Jobs are stored with a message payload. When a job fires, PicoClaw picks one of two execution paths based on the payload.
 
 ### `command`
 
-When a cron-tool job includes `command`, PicoClaw runs that shell command through the `exec` tool and publishes the command output back to the channel.
-
-For command jobs, `deliver` is forced to `false` when the job is created. The saved `message` becomes descriptive text only; the scheduled action is the shell command.
+When a cron-tool job includes `command`, PicoClaw runs that shell command through the `exec` tool and publishes the command output directly to the job's channel and recipient. The saved `message` becomes descriptive text only; the scheduled action is the shell command. Command jobs do not go through the agent.
 
 The current CLI `picoclaw cron add` command does not expose a `command` flag.
+
+### Agent turn
+
+Without a `command`, PicoClaw sends the saved message through the agent loop as a new agent turn. Use this for scheduled work that may need reasoning, tools, or a generated reply. This is the default for the cron tool.
+
+A turn started by a cron job receives a tool registry without `cron`, so the agent cannot call it to manage jobs. This also applies to subagents spawned by that turn.
 
 ## Config and Security Gates
 
@@ -94,7 +85,7 @@ The current CLI `picoclaw cron add` command does not expose a `command` flag.
 
 `tools.cron.enabled` controls whether the agent-facing `cron` tool is registered. Default: `true`.
 
-If you disable `tools.cron`, users can no longer create or manage jobs through the agent tool. The gateway still starts `CronService`, but it does not install the job execution callback. As a result, due jobs do not actually run; one-time jobs may be deleted and recurring jobs may be rescheduled without executing their payload. The CLI still uses the same job store.
+If you disable `tools.cron`, users can no longer create or manage jobs through the agent tool. The gateway still starts `CronService`, but it does not install the job execution callback. As a result, due jobs do not actually run; one-time jobs may be deleted and recurring jobs may be rescheduled without executing their payload. Jobs that fire without a callback are recorded with `state.lastStatus: "skipped"`. The CLI still uses the same job store.
 
 `tools.cron.exec_timeout_minutes` sets the timeout used for scheduled command execution. Default: `5`. Set `0` for no timeout.
 
