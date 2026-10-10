@@ -10,6 +10,16 @@ import (
 
 const sqliteTimeLayout = "2006-01-02 15:04:05"
 
+// sqlInPlaceholders returns a parenthesized list of n "?" bind markers, e.g.
+// "(?,?,?)", for use in SQL IN clauses. Only markers are generated; values
+// must always be supplied via bound query arguments.
+func sqlInPlaceholders(n int) string {
+	if n <= 0 {
+		return "()"
+	}
+	return "(?" + strings.Repeat(",?", n-1) + ")"
+}
+
 // Store provides SQLite storage for seahorse.
 type Store struct {
 	db *sql.DB
@@ -530,7 +540,6 @@ func (s *Store) loadMessagePartsBatch(ctx context.Context, msgIDs []int64) (map[
 
 // loadMessagePartsChunk loads the parts for one chunk of message IDs.
 func (s *Store) loadMessagePartsChunk(ctx context.Context, chunk []int64) ([]MessagePart, error) {
-	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(chunk)), ",")
 	args := make([]any, len(chunk))
 	for i, id := range chunk {
 		args[i] = id
@@ -538,7 +547,7 @@ func (s *Store) loadMessagePartsChunk(ctx context.Context, chunk []int64) ([]Mes
 
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT part_id, message_id, type, text, name, arguments, tool_call_id, media_uri, mime_type
-		 FROM message_parts WHERE message_id IN (`+placeholders+`) ORDER BY message_id, ordinal`,
+		 FROM message_parts WHERE message_id IN `+sqlInPlaceholders(len(chunk))+` ORDER BY message_id, ordinal`,
 		args...,
 	)
 	if err != nil {
@@ -1181,7 +1190,7 @@ func (s *Store) ReplaceContextItemsWithSummary(
 
 	// Find the ordinals of items to delete and calculate midpoint
 	// Only "?" markers are ever concatenated into SQL; values are always bound.
-	inClause := "(?" + strings.Repeat(",?", len(summaryIDs)-1) + ")"
+	inClause := sqlInPlaceholders(len(summaryIDs))
 	args := make([]any, len(summaryIDs)+1)
 	args[0] = convID
 	for i, sid := range summaryIDs {
