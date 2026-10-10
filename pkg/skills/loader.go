@@ -36,6 +36,72 @@ type SkillInfo struct {
 	Path        string `json:"path"`
 	Source      string `json:"source"`
 	Description string `json:"description"`
+	// PluginID is set only for skills published by an agent plugin. Its presence
+	// marks the skill as plugin-backed; the catalog never exposes a host path.
+	PluginID string `json:"plugin_id,omitempty"`
+	// ResourceTool is the plugin resource tool that reads bundled plugin files.
+	// It is set only for skills published by an agent plugin.
+	ResourceTool string `json:"resource_tool,omitempty"`
+}
+
+// IsPluginSkill reports whether the skill was published by an agent plugin. Its
+// files live outside the workspace and must be read through the plugin resource
+// tool, so the catalog never exposes a host filesystem location for it.
+func (s SkillInfo) IsPluginSkill() bool {
+	return s.PluginID != ""
+}
+
+// PluginSkillUsage is the catalog hint shown for a plugin skill. It names the
+// bundled resource tool and a plugin-relative path instead of a host path the
+// agent would be denied from reading. It is only emitted when ResourceTool is
+// set, so callers must guarantee a non-empty tool name.
+func (s SkillInfo) PluginSkillUsage() string {
+	location := s.pluginLocation()
+	if location == "" {
+		location = "skills/<name>/SKILL.md"
+	}
+	return fmt.Sprintf(
+		"Read this skill and its bundled references with `%s` using a path relative to the plugin root (for example `%s`). Do not use filesystem tools on plugin files; they live outside the workspace.",
+		s.ResourceTool,
+		location,
+	)
+}
+
+// pluginLocation returns the plugin-relative skill path, or "" when the path is
+// empty or an absolute host path that must never be shown to the agent.
+func (s SkillInfo) pluginLocation() string {
+	if s.Path == "" || filepath.IsAbs(s.Path) {
+		return ""
+	}
+	return s.Path
+}
+
+// CatalogLines renders the indented XML lines for this skill's catalog entry
+// (without any surrounding wrapper). The workspace loader summary and the agent
+// skill catalog both use it so the two renderings can never diverge.
+func (s SkillInfo) CatalogLines() []string {
+	lines := []string{
+		"  <skill>",
+		fmt.Sprintf("    <name>%s</name>", escapeXML(s.Name)),
+		fmt.Sprintf("    <description>%s</description>", escapeXML(s.Description)),
+	}
+	if s.IsPluginSkill() {
+		if location := s.pluginLocation(); location != "" {
+			lines = append(lines, fmt.Sprintf("    <location>%s</location>", escapeXML(location)))
+		}
+		lines = append(lines, fmt.Sprintf("    <source>%s</source>", escapeXML(s.Source)))
+		if s.ResourceTool != "" {
+			lines = append(
+				lines,
+				fmt.Sprintf("    <resource-tool>%s</resource-tool>", escapeXML(s.ResourceTool)),
+			)
+			lines = append(lines, fmt.Sprintf("    <usage>%s</usage>", escapeXML(s.PluginSkillUsage())))
+		}
+	} else {
+		lines = append(lines, fmt.Sprintf("    <location>%s</location>", escapeXML(s.Path)))
+		lines = append(lines, fmt.Sprintf("    <source>%s</source>", escapeXML(s.Source)))
+	}
+	return append(lines, "  </skill>")
 }
 
 func (info SkillInfo) validate() error {
@@ -212,16 +278,7 @@ func (sl *SkillsLoader) BuildSkillsSummary() string {
 	var lines []string
 	lines = append(lines, "<skills>")
 	for _, s := range allSkills {
-		escapedName := escapeXML(s.Name)
-		escapedDesc := escapeXML(s.Description)
-		escapedPath := escapeXML(s.Path)
-
-		lines = append(lines, fmt.Sprintf("  <skill>"))
-		lines = append(lines, fmt.Sprintf("    <name>%s</name>", escapedName))
-		lines = append(lines, fmt.Sprintf("    <description>%s</description>", escapedDesc))
-		lines = append(lines, fmt.Sprintf("    <location>%s</location>", escapedPath))
-		lines = append(lines, fmt.Sprintf("    <source>%s</source>", s.Source))
-		lines = append(lines, "  </skill>")
+		lines = append(lines, s.CatalogLines()...)
 	}
 	lines = append(lines, "</skills>")
 
@@ -390,9 +447,14 @@ func splitFrontmatter(content string) (frontmatter, body string) {
 	return frontmatter, body
 }
 
+var xmlReplacer = strings.NewReplacer(
+	"&", "&amp;",
+	"<", "&lt;",
+	">", "&gt;",
+	"\"", "&quot;",
+	"'", "&apos;",
+)
+
 func escapeXML(s string) string {
-	s = strings.ReplaceAll(s, "&", "&amp;")
-	s = strings.ReplaceAll(s, "<", "&lt;")
-	s = strings.ReplaceAll(s, ">", "&gt;")
-	return s
+	return xmlReplacer.Replace(s)
 }

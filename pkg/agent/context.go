@@ -287,7 +287,7 @@ func (cb *ContextBuilder) buildSystemPromptParts(opts systemPromptBuildOptions) 
 			"read_file",
 		)
 		if opts.IncludeToolUseRule && readFileAllowed {
-			skillIntro += " To use a skill, read its SKILL.md file using the read_file tool."
+			skillIntro += " To use a workspace skill, read its SKILL.md file using the read_file tool; plugin skills are read with their bundled resource tool instead."
 		}
 		add(PromptPart{
 			ID:     "capability.skill_catalog",
@@ -443,35 +443,13 @@ func (cb *ContextBuilder) buildSkillsSummary(allowed []string) string {
 		if _, ok := allowedSet[strings.ToLower(strings.TrimSpace(s.Name))]; !ok {
 			continue
 		}
-		lines = append(lines, "  <skill>")
-		lines = append(lines, fmt.Sprintf("    <name>%s</name>", xmlEscapeForPrompt(s.Name)))
-		lines = append(
-			lines,
-			fmt.Sprintf("    <description>%s</description>", xmlEscapeForPrompt(s.Description)),
-		)
-		lines = append(
-			lines,
-			fmt.Sprintf("    <location>%s</location>", xmlEscapeForPrompt(s.Path)),
-		)
-		lines = append(lines, fmt.Sprintf("    <source>%s</source>", xmlEscapeForPrompt(s.Source)))
-		lines = append(lines, "  </skill>")
+		lines = append(lines, s.CatalogLines()...)
 	}
 	if len(lines) == 1 {
 		return ""
 	}
 	lines = append(lines, "</skills>")
 	return strings.Join(lines, "\n")
-}
-
-func xmlEscapeForPrompt(s string) string {
-	replacer := strings.NewReplacer(
-		"&", "&amp;",
-		"<", "&lt;",
-		">", "&gt;",
-		"\"", "&quot;",
-		"'", "&apos;",
-	)
-	return replacer.Replace(s)
 }
 
 // EstimateSystemTokens estimates the token count of the full system message
