@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/fileutil"
@@ -23,6 +24,11 @@ type MemoryStore struct {
 	workspace  string
 	memoryDir  string
 	memoryFile string
+
+	// mu serializes read-modify-write operations on this store's files.
+	// Without it, concurrent AppendToday calls can interleave their
+	// read -> concatenate -> write steps and silently drop entries.
+	mu sync.Mutex
 }
 
 // NewMemoryStore creates a new MemoryStore with the given workspace path.
@@ -60,6 +66,9 @@ func (ms *MemoryStore) ReadLongTerm() string {
 
 // WriteLongTerm writes content to the long-term memory file (MEMORY.md).
 func (ms *MemoryStore) WriteLongTerm(content string) error {
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
+
 	// Use unified atomic write utility with explicit sync for flash storage reliability.
 	// Using 0o600 (owner read/write only) for secure default permissions.
 	return fileutil.WriteFileAtomic(ms.memoryFile, []byte(content), 0o600)
@@ -78,6 +87,9 @@ func (ms *MemoryStore) ReadToday() string {
 // AppendToday appends content to today's daily note.
 // If the file doesn't exist, it creates a new file with a date header.
 func (ms *MemoryStore) AppendToday(content string) error {
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
+
 	todayFile := ms.getTodayFile()
 
 	// Ensure month directory exists
