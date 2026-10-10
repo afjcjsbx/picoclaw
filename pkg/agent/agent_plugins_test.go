@@ -67,6 +67,26 @@ func agentPluginFixture(t *testing.T, cfg *config.Config, url string) string {
 	return root
 }
 
+func TestPluginRelativePath(t *testing.T) {
+	root := filepath.Join(string(filepath.Separator), "plugin-root")
+	cases := []struct {
+		name string
+		path string
+		want string
+	}{
+		{"skill file", filepath.Join(root, "skills", "greet", "SKILL.md"), "skills/greet/SKILL.md"},
+		{"dot-prefixed dir is kept", filepath.Join(root, "..foo", "SKILL.md"), "..foo/SKILL.md"},
+		{"root itself", root, ""},
+		{"escapes root", filepath.Join(root, "..", "outside", "SKILL.md"), ""},
+		{"empty", "", ""},
+	}
+	for _, tc := range cases {
+		if got := pluginRelativePath(root, tc.path); got != tc.want {
+			t.Errorf("%s: pluginRelativePath(%q) = %q, want %q", tc.name, tc.path, got, tc.want)
+		}
+	}
+}
+
 func TestPluginToolDeferredOverride(t *testing.T) {
 	deferred := true
 	eager := false
