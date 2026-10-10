@@ -322,7 +322,7 @@ cat > "$PLUGIN_ROOT/com.sipeed.picoclaw/hooks.json" <<'JSON'
         "arguments": {
           "query": "${user_message}",
           "filters": {"AND": [{"user_id": "your-user-id"}, {"app_id": "your-project-id"}]},
-          "limit": 5
+          "top_k": 5
         },
         "result": "append_to_user_message"
       }
@@ -422,6 +422,31 @@ then ask about that fact in a later turn. The completed turn triggers
 `add_memory`; the following turn's `before_llm` hook calls `search_memories` and
 adds the result to the model context. With tool feedback enabled, these
 hook-triggered MCP calls are also shown in the conversation.
+
+#### Tuning recall
+
+`search_memories` on Mem0's hosted MCP server accepts `top_k`, the maximum
+number of memories returned. Its default is 10, so set it explicitly to bound
+how much memory context each turn injects. The hook above uses `top_k: 5`;
+values of 2–3 work well for short, focused turns:
+
+```json
+"arguments": {
+  "query": "${user_message}",
+  "filters": {"AND": [{"user_id": "your-user-id"}, {"app_id": "your-project-id"}]},
+  "top_k": 3
+}
+```
+
+Do not use `limit`: the hosted server ignores it and returns its default of 10.
+The Mem0 Platform API reference also lists `threshold`, but the hosted v3 search
+endpoint ignores it, so it does not filter results. To reduce low-relevance
+noise, lower `top_k` rather than relying on `threshold`; use the plugin's local
+MCP server or filter in the agent when you need score-based filtering.
+
+Filters accept a `created_at` range, for example
+`{"AND": [{"user_id": "your-user-id"}, {"created_at": {"gte": "2026-01-01"}}]}`,
+to prefer recent memories.
 
 The same hook declarations work with other MCP providers by changing the
 server, tool names and arguments. Supermemory, for example, uses
