@@ -13,9 +13,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/openai/openai-go/v3/responses"
+
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers/common"
 	"github.com/sipeed/picoclaw/pkg/providers/messageutil"
+	orc "github.com/sipeed/picoclaw/pkg/providers/openai_responses_common"
 	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
 )
 
@@ -467,6 +470,9 @@ func (p *Provider) Chat(
 	if p.apiBase == "" {
 		return nil, fmt.Errorf("API base not configured")
 	}
+	if p.usesResponsesAPI() {
+		return p.responsesChat(ctx, messages, tools, model, options)
+	}
 
 	requestBody := p.buildRequestBody(messages, tools, model, options)
 
@@ -500,6 +506,189 @@ func (p *Provider) Chat(
 	}
 
 	return common.ReadAndParseResponse(resp, p.apiBase)
+}
+
+func (p *Provider) usesResponsesAPI() bool {
+	u, err := url.Parse(strings.TrimSpace(p.apiBase))
+	return p.providerName == "openai" && err == nil && u.Hostname() == "api.openai.com"
+}
+
+func (p *Provider) responsesRequestBody(
+	messages []Message, tools []ToolDefinition, model string, options map[string]any,
+) map[string]any {
+	input, instructions := orc.TranslateMessages(messages)
+	body := map[string]any{
+		"model": model,
+		"input": input,
+		"store": false,
+	}
+	if instructions != "" {
+		body["instructions"] = instructions
+	}
+	if len(tools) > 0 || options["native_search"] == true && isNativeSearchHost(p.apiBase) {
+		body["tools"] = orc.TranslateTools(tools, options["native_search"] == true && isNativeSearchHost(p.apiBase))
+		body["tool_choice"] = "auto"
+	}
+	if maxTokens, ok := common.AsInt(options["max_tokens"]); ok {
+		body["max_output_tokens"] = maxTokens
+	}
+	if temperature, ok := common.AsFloat(options["temperature"]); ok {
+		body["temperature"] = temperature
+	}
+	if topP, ok := common.AsFloat(options["top_p"]); ok {
+		body["top_p"] = topP
+	}
+	if cacheKey, ok := options["prompt_cache_key"].(string); ok && cacheKey != "" && supportsPromptCacheKey(p.apiBase) {
+		body["prompt_cache_key"] = cacheKey
+	}
+	if level, ok := normalizedThinkingLevel(options); ok {
+		effort := level
+		if level == "off" {
+			effort = "none"
+		}
+		if level != "adaptive" {
+			body["reasoning"] = map[string]string{"effort": effort}
+		}
+	}
+	maps.Copy(body, p.extraBody)
+	return body
+}
+
+func (p *Provider) responsesChat(
+	ctx context.Context, messages []Message, tools []ToolDefinition, model string, options map[string]any,
+) (*LLMResponse, error) {
+	body, err := json.Marshal(p.responsesRequestBody(messages, tools, model, options))
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.apiBase+"/responses", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	p.applyRequestHeaders(req)
+	resp, err := p.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, common.HandleErrorResponse(resp, p.apiBase)
+	}
+	return orc.ParseResponseBody(resp.Body)
+}
+
+func (p *Provider) responsesStream(
+	ctx context.Context, messages []Message, tools []ToolDefinition, model string,
+	options map[string]any, onChunk func(StreamChunk),
+) (*LLMResponse, error) {
+	body := p.responsesRequestBody(messages, tools, model, options)
+	body["stream"] = true
+	jsonData, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.apiBase+"/responses", bytes.NewReader(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	p.applyRequestHeaders(req)
+	streamClient := &http.Client{Transport: p.httpClient.Transport}
+	resp, err := streamClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, common.HandleErrorResponse(resp, p.apiBase)
+	}
+
+	var result *responses.Response
+	var textContent, reasoning strings.Builder
+	scanner := bufio.NewScanner(withStreamingReadIdleTimeout(resp.Body, defaultStreamingReadIdleTimeout))
+	scanner.Buffer(make([]byte, 4096), 10*1024*1024)
+	var event, data string
+	process := func() error {
+		if data == "" {
+			return nil
+		}
+		var payload struct {
+			Type     string              `json:"type"`
+			Delta    string              `json:"delta"`
+			Response *responses.Response `json:"response"`
+			Error    struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal([]byte(data), &payload); err != nil {
+			return fmt.Errorf("failed to decode Responses stream event: %w", err)
+		}
+		typ := payload.Type
+		if typ == "" {
+			typ = event
+		}
+		switch typ {
+		case "response.output_text.delta":
+			textContent.WriteString(payload.Delta)
+			if onChunk != nil {
+				onChunk(StreamChunk{Content: textContent.String()})
+			}
+		case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
+			reasoning.WriteString(payload.Delta)
+			if onChunk != nil {
+				onChunk(StreamChunk{ReasoningContent: reasoning.String()})
+			}
+		case "response.completed", "response.incomplete", "response.failed":
+			if payload.Response != nil {
+				result = payload.Response
+			}
+			if typ == "response.failed" {
+				return fmt.Errorf("Responses API stream failed: %s", payload.Error.Message)
+			}
+		case "error":
+			return fmt.Errorf("Responses API stream error: %s", payload.Error.Message)
+		}
+		return nil
+	}
+	for scanner.Scan() {
+		line := scanner.Text()
+		switch {
+		case strings.HasPrefix(line, "event:"):
+			event = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+		case strings.HasPrefix(line, "data:"):
+			if data != "" {
+				data += "\n"
+			}
+			data += strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		case line == "":
+			if err := process(); err != nil {
+				return nil, err
+			}
+			event, data = "", ""
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("reading Responses stream: %w", err)
+	}
+	if err := process(); err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return nil, fmt.Errorf("Responses API stream ended without a completed response")
+	}
+	return orc.ParseResponseFromStruct(result), nil
+}
+
+func (p *Provider) applyRequestHeaders(req *http.Request) {
+	if p.userAgent != "" {
+		req.Header.Set("User-Agent", p.userAgent)
+	}
+	if p.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+p.apiKey)
+	}
+	p.applyCustomHeaders(req)
 }
 
 // ChatStream implements streaming via OpenAI-compatible SSE (stream: true).
@@ -536,6 +725,9 @@ func (p *Provider) ChatStreamEvents(
 ) (*LLMResponse, error) {
 	if p.apiBase == "" {
 		return nil, fmt.Errorf("API base not configured")
+	}
+	if p.usesResponsesAPI() {
+		return p.responsesStream(ctx, messages, tools, model, options, onChunk)
 	}
 
 	requestBody := p.buildRequestBody(messages, tools, model, options)
