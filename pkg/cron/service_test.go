@@ -1,6 +1,7 @@
 package cron
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -40,14 +41,15 @@ func int64Ptr(v int64) *int64 {
 	return &v
 }
 
-func setupService(handler JobHandler) (*CronService, string) {
-	tmpFile := fmt.Sprintf("test_cron_%d.json", time.Now().UnixNano())
+func setupService(t *testing.T, handler JobHandler) (*CronService, string) {
+	t.Helper()
+	tmpFile := filepath.Join(t.TempDir(), "test_cron.json")
 	cs := NewCronService(tmpFile, handler)
 	return cs, tmpFile
 }
 
 func TestCronService_CRUD(t *testing.T) {
-	cs, path := setupService(nil)
+	cs, path := setupService(t, nil)
 	defer os.Remove(path)
 
 	// Test AddJob
@@ -83,7 +85,7 @@ func TestCronService_CRUD(t *testing.T) {
 }
 
 func TestCronService_GetJobReturnsCopy(t *testing.T) {
-	cs, path := setupService(nil)
+	cs, path := setupService(t, nil)
 	defer os.Remove(path)
 
 	everyMS := int64(60_000)
@@ -125,7 +127,7 @@ func TestCronService_GetJobReturnsCopy(t *testing.T) {
 }
 
 func TestCronService_UpdateJobRecomputesNextRunOnScheduleOrEnabledChange(t *testing.T) {
-	cs, path := setupService(nil)
+	cs, path := setupService(t, nil)
 	defer os.Remove(path)
 
 	at := time.Now().Add(time.Hour).UnixMilli()
@@ -175,7 +177,7 @@ func TestCronService_UpdateJobRecomputesNextRunOnScheduleOrEnabledChange(t *test
 }
 
 func TestCronService_UpdateJobPreservesRunStateOnPayloadOnlyChange(t *testing.T) {
-	cs, path := setupService(nil)
+	cs, path := setupService(t, nil)
 	defer os.Remove(path)
 
 	everyMS := int64(60_000)
@@ -214,7 +216,7 @@ func TestCronService_UpdateJobPreservesRunStateOnPayloadOnlyChange(t *testing.T)
 
 // 2. Test Cron Expression Calculation Logic
 func TestCronService_ComputeNextRun(t *testing.T) {
-	cs, path := setupService(nil)
+	cs, path := setupService(t, nil)
 	defer os.Remove(path)
 
 	now := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC).UnixMilli()
@@ -253,7 +255,7 @@ func TestCronService_ExecutionFlow(t *testing.T) {
 		return "ok", nil
 	}
 
-	cs, path := setupService(handler)
+	cs, path := setupService(t, handler)
 	defer os.Remove(path)
 
 	// Start the service
@@ -291,7 +293,7 @@ func TestCronService_ExecutionFlow(t *testing.T) {
 }
 
 func TestCronService_NilHandlerMarksJobsSkipped(t *testing.T) {
-	cs, path := setupService(nil)
+	cs, path := setupService(t, nil)
 	defer os.Remove(path)
 
 	if err := cs.Start(); err != nil {
@@ -326,8 +328,7 @@ func TestCronService_NilHandlerMarksJobsSkipped(t *testing.T) {
 }
 
 func TestCronService_PersistenceIntegrity(t *testing.T) {
-	tmpFile := "persist_test.json"
-	defer os.Remove(tmpFile)
+	tmpFile := filepath.Join(t.TempDir(), "persist_test.json")
 
 	// write a job and persist
 	cs1 := NewCronService(tmpFile, nil)
@@ -360,7 +361,7 @@ func TestCronService_PersistenceIntegrity(t *testing.T) {
 }
 
 func TestCronService_ConcurrentAccess(t *testing.T) {
-	cs, path := setupService(nil)
+	cs, path := setupService(t, nil)
 	defer os.Remove(path)
 
 	cs.Start()
@@ -399,4 +400,36 @@ func TestCronService_ConcurrentAccess(t *testing.T) {
 	}
 
 	wg.Wait()
+}
+
+func TestCronService_NoStaleSaveAfterStop(t *testing.T) {
+	cs, path := setupService(t, func(job *CronJob) (string, error) { return "ok", nil })
+	defer os.Remove(path)
+
+	at := time.Now().Add(time.Hour).UnixMilli()
+	job, err := cs.AddJob("j", CronSchedule{Kind: "at", AtMS: &at}, "msg", "cli", "direct")
+	if err != nil {
+		t.Fatalf("AddJob failed: %v", err)
+	}
+
+	if startErr := cs.Start(); startErr != nil {
+		t.Fatalf("Start failed: %v", startErr)
+	}
+	cs.Stop()
+
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read before: %v", err)
+	}
+
+	// A job finishing after Stop must not persist its (stale) state.
+	cs.executeJobByID(job.ID)
+
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read after: %v", err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("executeJobByID wrote the store after Stop")
+	}
 }
