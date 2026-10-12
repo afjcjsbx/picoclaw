@@ -254,6 +254,7 @@ type turnState struct {
 	tokenBudget      *atomic.Int64        // Shared token budget counter
 	lastFinishReason string               // Last LLM finish_reason
 	lastUsage        *providers.UsageInfo // Last LLM usage info
+	selfContextUsage *selfContextUsage    // Last LLM input budget, without message contents
 
 	// Back-reference to the owning AgentLoop (set for SubTurns only, used for hard abort cascade)
 	al *AgentLoop
@@ -266,6 +267,30 @@ type turnState struct {
 	// Latest explanation shown in compact tool feedback (channels that cannot
 	// edit messages), used to avoid repeating it on every tool call.
 	lastToolFeedbackExplanation string
+
+	// maxIterationsOverride is the limit the session chose through the self
+	// tool; 0 keeps the agent's configured limit.
+	maxIterationsOverride atomic.Int64
+
+	// contextWindowOverride is the context window the session chose through the
+	// self tool; 0 keeps the agent's configured window.
+	contextWindowOverride atomic.Int64
+}
+
+// maxIterations returns the tool-iteration limit that applies to this turn.
+func (ts *turnState) maxIterations() int {
+	if limit := ts.maxIterationsOverride.Load(); limit > 0 {
+		return int(limit)
+	}
+	return ts.agent.MaxIterations
+}
+
+// contextWindow returns the context window that applies to this turn.
+func (ts *turnState) contextWindow() int {
+	if window := ts.contextWindowOverride.Load(); window > 0 {
+		return int(window)
+	}
+	return ts.agent.ContextWindow
 }
 
 // =============================================================================

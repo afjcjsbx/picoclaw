@@ -15,10 +15,22 @@ import (
 //
 // Returns nil when the agent or session is unavailable.
 func computeContextUsage(agent *AgentInstance, sessionKey string) *bus.ContextUsage {
+	if agent == nil {
+		return nil
+	}
+	return computeContextUsageForWindow(agent, agent.ContextWindow, sessionKey)
+}
+
+// computeContextUsageForWindow is computeContextUsage with an explicit context
+// window, so a session-scoped override set through the self tool is reflected.
+func computeContextUsageForWindow(
+	agent *AgentInstance,
+	contextWindow int,
+	sessionKey string,
+) *bus.ContextUsage {
 	if agent == nil || agent.Sessions == nil {
 		return nil
 	}
-	contextWindow := agent.ContextWindow
 	if contextWindow <= 0 {
 		return nil
 	}

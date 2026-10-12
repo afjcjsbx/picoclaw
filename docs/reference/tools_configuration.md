@@ -39,6 +39,60 @@ See [Sensitive Data Filtering](../security/sensitive_data_filtering.md) for full
 
 Tool call logs record only the argument **keys** and count, never the argument values, so secrets passed to a tool are not written to log files. The filter above applies to the content exchanged with the LLM, not to logs.
 
+## Runtime self-inspection
+
+The `self` tool is disabled by default. Enable it to expose a compact JSON
+snapshot with `model`, `model_presets`, `max_iterations`,
+`context_window_tokens`, `tool_names`, `turn` and `context_usage`.
+
+It has two actions:
+
+- `check`: return the complete snapshot. It accepts no `key` or `value`.
+- `set`: change one session setting using `key` and `value`. It requires
+  `allow_set`, an active agent turn and a session key. Supported keys are
+  `max_iterations` (integer 1–100), `context_window_tokens` (integer
+  4096–1,000,000), and `model_preset` (a name from `model_presets`).
+  Use `value: null` to restore the selected setting's configured default.
+
+Iteration and context limits apply immediately. Model changes, including resets,
+start next turn. Changes affect only the current session, are cleared by `/clear`,
+and are lost on restart.
+
+```json
+{"tools":{"self":{"enabled":true,"allow_set":false}}}
+```
+
+Environment variables: `PICOCLAW_TOOLS_SELF_ENABLED` and `PICOCLAW_TOOLS_SELF_ALLOW_SET`.
+
+Example tool calls (writes require `allow_set: true`):
+
+```json
+{"action":"check"}
+{"action":"set","key":"max_iterations","value":30}
+{"action":"set","key":"model_preset","value":"my-configured-preset"}
+{"action":"set","key":"max_iterations","value":null}
+```
+
+`turn` describes the active phase, iteration, iteration limit, remaining
+iterations, elapsed milliseconds and subturn depth. Remaining iterations count
+future LLM iterations, excluding the current one, and never become negative.
+Multiple tool calls in one iteration do not each consume an iteration.
+It is `null` outside an active turn.
+
+`context_usage` describes the **last LLM input**, including tool definitions.
+It contains `used_tokens`, `total_tokens` (the current session context window),
+`output_reserve_tokens`, `available_tokens`, `used_percent` (0–100), and `source`.
+The source is `provider` when a prompt-token count is available, otherwise
+`local_estimate`. Available tokens subtract the input and output reserve and
+never become negative. The latest reply and subsequent tool results are excluded;
+this is not a prediction of the next request. It is `null` before the first LLM
+response, outside a turn, or when the context window is unknown.
+
+The snapshot includes no configuration dump, credentials, logs, request contents
+or scratchpad. Dot-path reads and the former `list`, `schema`, `explain`, `diff`,
+`history`, `logs`, `reset` and `undo` actions are no longer supported. Replace
+`reset` with `set` using `value: null`.
+
 ## Protected local files
 
 Filesystem read tools deny `.env`, `.env.*`, `.envrc`, `.security.yml` (including its backups), `.netrc`, `.npmrc`, `.pypirc`, and files inside `.ssh`, `.aws`, `.kube`, or `.gnupg` directories. The check also follows symlinks, hides these entries from directory listings and file searches, and applies to local files attached through `send_file`, `load_image`, or `message`. Read allow paths do not override it. `write_file` can still create or explicitly overwrite these files; `edit_file` and `append_file` cannot read their existing contents.

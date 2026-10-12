@@ -22,7 +22,7 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 	if !ts.opts.NoHistory {
 		if resp, err := p.ContextManager.Assemble(ctx, &AssembleRequest{
 			SessionKey: ts.sessionKey,
-			Budget:     ts.agent.ContextWindow,
+			Budget:     ts.contextWindow(),
 			MaxTokens:  ts.agent.MaxTokens,
 		}); err == nil && resp != nil {
 			history = resp.History
@@ -48,13 +48,13 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 
 	if !ts.opts.NoHistory {
 		toolDefs := filterToolsByTurnProfile(ts.agent.Tools.ToProviderDefs(), ts.profile)
-		if isOverContextBudget(ts.agent.ContextWindow, messages, toolDefs, ts.agent.MaxTokens) {
+		if isOverContextBudget(ts.contextWindow(), messages, toolDefs, ts.agent.MaxTokens) {
 			logger.WarnCF("agent", "Proactive compression: context budget exceeded before LLM call",
 				map[string]any{"session_key": ts.sessionKey})
 			if err := p.ContextManager.Compact(ctx, &CompactRequest{
 				SessionKey: ts.sessionKey,
 				Reason:     ContextCompressReasonProactive,
-				Budget:     ts.agent.ContextWindow,
+				Budget:     ts.contextWindow(),
 			}); err != nil {
 				logger.WarnCF("agent", "Proactive compact failed", map[string]any{
 					"session_key": ts.sessionKey,
@@ -64,7 +64,7 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 			ts.refreshRestorePointFromSession(ts.agent)
 			if resp, err := p.ContextManager.Assemble(ctx, &AssembleRequest{
 				SessionKey: ts.sessionKey,
-				Budget:     ts.agent.ContextWindow,
+				Budget:     ts.contextWindow(),
 				MaxTokens:  ts.agent.MaxTokens,
 			}); err == nil && resp != nil {
 				history = resp.History
@@ -91,7 +91,7 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 					}
 					return resolveMediaRefs(rebuilt, p.MediaStore, maxMediaSize, rebuiltCurrentTurnStart)
 				},
-				ts.agent.ContextWindow,
+				ts.contextWindow(),
 				toolDefs,
 				ts.agent.MaxTokens,
 			)
@@ -100,7 +100,7 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 					"session_key":     ts.sessionKey,
 					"dropped_msgs":    dropped,
 					"remaining_msgs":  len(history),
-					"context_window":  ts.agent.ContextWindow,
+					"context_window":  ts.contextWindow(),
 					"max_tokens":      ts.agent.MaxTokens,
 					"still_overlimit": !fit,
 				})
@@ -109,7 +109,7 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 					"after proactive compaction rebuild", map[string]any{
 					"session_key":    ts.sessionKey,
 					"history_msgs":   len(history),
-					"context_window": ts.agent.ContextWindow,
+					"context_window": ts.contextWindow(),
 					"max_tokens":     ts.agent.MaxTokens,
 				})
 			}
