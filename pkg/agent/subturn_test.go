@@ -2438,3 +2438,38 @@ func TestDelegateToolRegistered_MultiAgent(t *testing.T) {
 		}
 	}
 }
+
+func TestGetSubTurnConfig_MemoryAwareDefaultConcurrency(t *testing.T) {
+	al, _, _, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+
+	rt := al.getSubTurnConfig()
+	if rt.maxConcurrent != defaultMaxConcurrentSubTurns {
+		t.Fatalf("default maxConcurrent = %d, want %d", rt.maxConcurrent, defaultMaxConcurrentSubTurns)
+	}
+	if defaultMaxConcurrentSubTurns > 3 {
+		t.Errorf(
+			"default SubTurn concurrency = %d; keep it small because each SubTurn holds its own context",
+			defaultMaxConcurrentSubTurns,
+		)
+	}
+}
+
+func TestGetSubTurnConfig_ClampsConcurrency(t *testing.T) {
+	probe := &turnStateProbeProvider{response: "ok"}
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: t.TempDir(),
+				ModelName: "gpt-4o-mini",
+				Provider:  "mock",
+				SubTurn:   config.SubTurnConfig{MaxConcurrent: maxSubTurnConcurrency * 4},
+			},
+		},
+	}
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), probe)
+
+	if got := al.getSubTurnConfig().maxConcurrent; got != maxSubTurnConcurrency {
+		t.Fatalf("maxConcurrent = %d, want clamp to %d", got, maxSubTurnConcurrency)
+	}
+}
