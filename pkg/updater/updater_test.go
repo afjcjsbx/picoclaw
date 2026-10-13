@@ -18,6 +18,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"aead.dev/minisign"
 )
 
 // matchesMagic checks whether the file at path looks like a platform binary
@@ -45,7 +47,6 @@ func matchesMagic(path, platform string) (bool, error) {
 type testReleaseAsset struct {
 	Name               string `json:"name"`
 	BrowserDownloadURL string `json:"browser_download_url"`
-	Digest             string `json:"digest,omitempty"`
 }
 
 type testReleasePayload struct {
@@ -108,6 +109,12 @@ func TestDownloadAndExtractRelease_IntegrationLatestRelease(t *testing.T) {
 }
 
 func TestFindAssetInfo_SelectsPreferredAsset(t *testing.T) {
+	priv := withSigningKey(t)
+	sums := strings.Repeat("1", 64) + "  picoclaw_Linux_x86_64.zip\n" +
+		strings.Repeat("2", 64) + "  picoclaw_Linux_x86_64.tar.gz\n" +
+		strings.Repeat("3", 64) + "  picoclaw_Windows_x86_64.zip\n" +
+		strings.Repeat("4", 64) + "  picoclaw_Windows_arm64.zip\n"
+	sig := priv.sign(t, []byte(sums))
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -118,27 +125,25 @@ func TestFindAssetInfo_SelectsPreferredAsset(t *testing.T) {
 					{
 						Name:               "picoclaw_Linux_x86_64.zip",
 						BrowserDownloadURL: server.URL + "/assets/picoclaw_Linux_x86_64.zip",
-						Digest:             "sha256:" + strings.Repeat("1", 64),
 					},
 					{
 						Name:               "picoclaw_Linux_x86_64.tar.gz",
 						BrowserDownloadURL: server.URL + "/assets/picoclaw_Linux_x86_64.tar.gz",
-						Digest:             "sha256:" + strings.Repeat("2", 64),
 					},
 					{
 						Name:               "picoclaw_Windows_x86_64.zip",
 						BrowserDownloadURL: server.URL + "/assets/picoclaw_Windows_x86_64.zip",
-						Digest:             "sha256:" + strings.Repeat("3", 64),
 					},
 					{
 						Name:               "picoclaw_Windows_arm64.zip",
 						BrowserDownloadURL: server.URL + "/assets/picoclaw_Windows_arm64.zip",
-						Digest:             "sha256:" + strings.Repeat("4", 64),
 					},
+					{Name: "checksums.txt", BrowserDownloadURL: server.URL + "/assets/checksums.txt"},
+					{Name: "checksums.txt.minisig", BrowserDownloadURL: server.URL + "/assets/checksums.txt.minisig"},
 				},
 			})
 		default:
-			http.NotFound(w, r)
+			serveSignedChecksums(w, r, sig, sums)
 		}
 	}))
 	defer server.Close()
@@ -197,8 +202,11 @@ func TestFindAssetInfo_SelectsPreferredAsset(t *testing.T) {
 	}
 }
 
-func TestFindAssetInfo_UsesChecksumAssetWhenDigestMissing(t *testing.T) {
+func TestFindAssetInfo_UsesSignedChecksums(t *testing.T) {
 	const checksum = "77b564f36da6d1e02169d0ecc837728eecb9ef983c317d9186ac9651798b924c"
+	priv := withSigningKey(t)
+	sums := checksum + "  picoclaw_Windows_x86_64.zip\n"
+	sig := priv.sign(t, []byte(sums))
 
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -215,14 +223,11 @@ func TestFindAssetInfo_UsesChecksumAssetWhenDigestMissing(t *testing.T) {
 						Name:               "checksums.txt",
 						BrowserDownloadURL: server.URL + "/assets/checksums.txt",
 					},
+					{Name: "checksums.txt.minisig", BrowserDownloadURL: server.URL + "/assets/checksums.txt.minisig"},
 				},
 			})
-		case "/assets/checksums.txt":
-			_, _ = io.WriteString(w, checksum+"  picoclaw_Windows_x86_64.zip\n")
-		case "/assets/picoclaw_Windows_x86_64.zip":
-			w.WriteHeader(http.StatusInternalServerError)
 		default:
-			http.NotFound(w, r)
+			serveSignedChecksums(w, r, sig, sums)
 		}
 	}))
 	defer server.Close()
@@ -401,6 +406,9 @@ func TestDownloadAndExtractRelease_ExtractsTarGz(t *testing.T) {
 	})
 	sum := sha256.Sum256(tarGzContent)
 	checksum := hex.EncodeToString(sum[:])
+	priv := withSigningKey(t)
+	sums := checksum + "  picoclaw_Linux_x86_64.tar.gz\n"
+	sig := priv.sign(t, []byte(sums))
 
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -412,15 +420,16 @@ func TestDownloadAndExtractRelease_ExtractsTarGz(t *testing.T) {
 					{
 						Name:               "picoclaw_Linux_x86_64.tar.gz",
 						BrowserDownloadURL: server.URL + "/assets/picoclaw_Linux_x86_64.tar.gz",
-						Digest:             "sha256:" + checksum,
 					},
+					{Name: "checksums.txt", BrowserDownloadURL: server.URL + "/assets/checksums.txt"},
+					{Name: "checksums.txt.minisig", BrowserDownloadURL: server.URL + "/assets/checksums.txt.minisig"},
 				},
 			})
 		case "/assets/picoclaw_Linux_x86_64.tar.gz":
 			w.Header().Set("Content-Type", "application/gzip")
 			_, _ = w.Write(tarGzContent)
 		default:
-			http.NotFound(w, r)
+			serveSignedChecksums(w, r, sig, sums)
 		}
 	}))
 	defer server.Close()
@@ -453,6 +462,9 @@ func TestDownloadAndExtractRelease_RetriesTransientAssetFailure(t *testing.T) {
 	})
 	sum := sha256.Sum256(zipContent)
 	checksum := hex.EncodeToString(sum[:])
+	priv := withSigningKey(t)
+	sums := checksum + "  picoclaw_Windows_x86_64.zip\n"
+	sig := priv.sign(t, []byte(sums))
 
 	var assetAttempts int
 	var server *httptest.Server
@@ -462,9 +474,10 @@ func TestDownloadAndExtractRelease_RetriesTransientAssetFailure(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			fmt.Fprintf(
 				w,
-				`{"tag_name":"v0.2.6","assets":[{"name":"picoclaw_Windows_x86_64.zip","browser_download_url":%q,"digest":"sha256:%s"}]}`,
+				`{"tag_name":"v0.2.6","assets":[{"name":"picoclaw_Windows_x86_64.zip","browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q},{"name":"checksums.txt.minisig","browser_download_url":%q}]}`,
 				server.URL+"/assets/picoclaw_Windows_x86_64.zip",
-				checksum,
+				server.URL+"/assets/checksums.txt",
+				server.URL+"/assets/checksums.txt.minisig",
 			)
 		case "/assets/picoclaw_Windows_x86_64.zip":
 			assetAttempts++
@@ -475,7 +488,7 @@ func TestDownloadAndExtractRelease_RetriesTransientAssetFailure(t *testing.T) {
 			w.Header().Set("Content-Type", "application/zip")
 			_, _ = w.Write(zipContent)
 		default:
-			http.NotFound(w, r)
+			serveSignedChecksums(w, r, sig, sums)
 		}
 	}))
 	defer server.Close()
@@ -567,4 +580,167 @@ func withTestHTTPClient(t *testing.T, client *http.Client) {
 	t.Cleanup(func() {
 		httpClient = origClient
 	})
+}
+
+// signingKey is a throwaway minisign key used to sign test release assets.
+type signingKey struct {
+	priv minisign.PrivateKey
+}
+
+func newSigningKey(t *testing.T) (signingKey, string) {
+	t.Helper()
+	pub, priv, err := minisign.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	return signingKey{priv: priv}, pub.String()
+}
+
+// sign returns a minisign signature file for msg, using the same pre-hashed
+// "ED" scheme as the aead.dev/minisign CLI (`minisign -S`).
+func (k signingKey) sign(t *testing.T, msg []byte) []byte {
+	t.Helper()
+	reader := minisign.NewReader(bytes.NewReader(msg))
+	if _, err := io.Copy(io.Discard, reader); err != nil {
+		t.Fatalf("read message: %v", err)
+	}
+	return reader.SignWithComments(k.priv, "timestamp:1\tfilename:checksums.txt", "signature from minisign secret key")
+}
+
+// withSigningKey generates a throwaway key and trusts it as the release key
+// for the duration of the test.
+func withSigningKey(t *testing.T) signingKey {
+	t.Helper()
+	k, pub := newSigningKey(t)
+	orig := releasePublicKey
+	releasePublicKey = pub
+	t.Cleanup(func() { releasePublicKey = orig })
+	return k
+}
+
+// serveSignedChecksums answers requests for checksums.txt and its signature.
+func serveSignedChecksums(w http.ResponseWriter, r *http.Request, sig []byte, sums string) {
+	switch r.URL.Path {
+	case "/assets/checksums.txt":
+		_, _ = io.WriteString(w, sums)
+	case "/assets/checksums.txt.minisig":
+		_, _ = w.Write(sig)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+// TestVerifyMinisign_AcceptsPrehashedSignatures locks in compatibility with the
+// release pipeline: the pinned aead.dev/minisign CLI emits HashEdDSA ("ED")
+// signatures, not the legacy ("Ed") ones the hand-rolled verifier expected.
+func TestVerifyMinisign_AcceptsPrehashedSignatures(t *testing.T) {
+	k, pub := newSigningKey(t)
+	msg := []byte(strings.Repeat("a", 64) + "  picoclaw_Linux_x86_64.tar.gz\n")
+	sig := k.sign(t, msg)
+
+	var parsed minisign.Signature
+	if err := parsed.UnmarshalText(sig); err != nil {
+		t.Fatalf("parse signature: %v", err)
+	}
+	if parsed.Algorithm != minisign.HashEdDSA {
+		t.Fatalf("test signature algorithm = %#x, want HashEdDSA", parsed.Algorithm)
+	}
+	if err := verifyMinisign(pub, msg, sig); err != nil {
+		t.Fatalf("verifyMinisign rejected prehashed signature: %v", err)
+	}
+	if err := verifyMinisign(pub, []byte("tampered"), sig); err == nil {
+		t.Fatal("verifyMinisign accepted tampered message")
+	}
+}
+
+// TestReleasePublicKeyConfigured guards against shipping a build whose
+// embedded release key is empty, which would make every self-update fail
+// closed.
+func TestReleasePublicKeyConfigured(t *testing.T) {
+	if strings.TrimSpace(releasePublicKey) == "" {
+		t.Fatal("releasePublicKey is empty; signed updates would be rejected")
+	}
+	var pub minisign.PublicKey
+	if err := pub.UnmarshalText([]byte(releasePublicKey)); err != nil {
+		t.Fatalf("releasePublicKey is not a valid minisign public key: %v", err)
+	}
+}
+
+// TestVerifyReleaseArtifacts verifies checksums.txt from a GoReleaser dist
+// directory against the embedded release public key. The release workflows run
+// it with PICOCLAW_VERIFY_RELEASE_DIR=dist to prove the signing key matches the
+// key baked into the binaries before publishing artifacts.
+func TestVerifyReleaseArtifacts(t *testing.T) {
+	dir := os.Getenv("PICOCLAW_VERIFY_RELEASE_DIR")
+	if dir == "" {
+		t.Skip("set PICOCLAW_VERIFY_RELEASE_DIR to a GoReleaser dist directory")
+	}
+	sum, err := os.ReadFile(filepath.Join(dir, "checksums.txt"))
+	if err != nil {
+		t.Fatalf("read checksums.txt: %v", err)
+	}
+	sig, err := os.ReadFile(filepath.Join(dir, "checksums.txt.minisig"))
+	if err != nil {
+		t.Fatalf("read checksums.txt.minisig: %v", err)
+	}
+	if err := verifyMinisign(releasePublicKey, sum, sig); err != nil {
+		t.Fatalf("release checksums do not verify with the embedded public key: %v", err)
+	}
+}
+
+func TestFindAssetInfo_RejectsUnverifiedChecksums(t *testing.T) {
+	sums := strings.Repeat("a", 64) + "  picoclaw_Linux_x86_64.tar.gz\n"
+	signed := []testReleaseAsset{
+		{Name: "picoclaw_Linux_x86_64.tar.gz"},
+		{Name: "checksums.txt"},
+		{Name: "checksums.txt.minisig"},
+	}
+	tests := []struct {
+		name   string
+		setup  func(t *testing.T) signingKey // returns key that signs the served checksums
+		assets []testReleaseAsset
+		serve  string // checksums served, if different from sums
+	}{
+		{"signed by untrusted key", func(t *testing.T) signingKey {
+			withSigningKey(t)
+			other, _ := newSigningKey(t)
+			return other
+		}, signed, sums},
+		{"tampered checksums", withSigningKey, signed, strings.Repeat("b", 64) + "  picoclaw_Linux_x86_64.tar.gz\n"},
+		{"missing signature", withSigningKey, signed[:2], sums},
+		{"no pinned key", func(t *testing.T) signingKey {
+			priv := withSigningKey(t)
+			releasePublicKey = ""
+			return priv
+		}, signed, sums},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			priv := tc.setup(t)
+			sig := priv.sign(t, []byte(sums))
+			var server *httptest.Server
+			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == testReleaseAPIPath {
+					assets := make([]testReleaseAsset, len(tc.assets))
+					for i, a := range tc.assets {
+						a.BrowserDownloadURL = server.URL + "/assets/" + a.Name
+						assets[i] = a
+					}
+					writeReleasePayload(w, testReleasePayload{TagName: "v0.2.6", Assets: assets})
+					return
+				}
+				if tc.serve != "" && r.URL.Path == "/assets/checksums.txt" {
+					_, _ = io.WriteString(w, tc.serve)
+					return
+				}
+				serveSignedChecksums(w, r, sig, sums)
+			}))
+			defer server.Close()
+			withTestHTTPClient(t, server.Client())
+
+			if _, _, err := findAssetInfo(server.URL+testReleaseAPIPath, "linux", "amd64"); err == nil {
+				t.Fatal("findAssetInfo succeeded, want error")
+			}
+		})
+	}
 }

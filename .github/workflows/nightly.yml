@@ -86,6 +86,20 @@ jobs:
       - name: Create local tag for GoReleaser
         run: git tag "${{ steps.version.outputs.version }}"
 
+      - name: Install minisign and load signing key
+        shell: bash
+        env:
+          MINISIGN_KEY: ${{ secrets.MINISIGN_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+        run: |
+          go install aead.dev/minisign/cmd/minisign@v0.2.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          umask 077
+          printf '%s\n' "$MINISIGN_KEY" > "$RUNNER_TEMP/minisign.key"
+          printf '%s\n' "$MINISIGN_PASSWORD" > "$RUNNER_TEMP/minisign.pw"
+          echo "MINISIGN_KEY_FILE=$RUNNER_TEMP/minisign.key" >> "$GITHUB_ENV"
+          echo "MINISIGN_PASSWORD_FILE=$RUNNER_TEMP/minisign.pw" >> "$GITHUB_ENV"
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v7
         with:
@@ -105,6 +119,11 @@ jobs:
           MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
           MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
           MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
+
+      - name: Verify signed checksums against embedded public key
+        run: go test ./pkg/updater -run TestVerifyReleaseArtifacts -count=1 -v
+        env:
+          PICOCLAW_VERIFY_RELEASE_DIR: dist
 
       - name: Update nightly release
         env:
@@ -132,7 +151,7 @@ jobs:
 
           # Collect release artifacts from goreleaser dist/
           ASSETS=()
-          for f in dist/*.tar.gz dist/*.zip dist/*.deb dist/*.rpm dist/checksums.txt build/picoclaw-android-universal.zip; do
+          for f in dist/*.tar.gz dist/*.zip dist/*.deb dist/*.rpm dist/checksums.txt dist/checksums.txt.minisig build/picoclaw-android-universal.zip; do
             [ -f "$f" ] && ASSETS+=("$f")
           done
 

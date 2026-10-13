@@ -165,6 +165,28 @@ archives:
       - goos: windows
         formats: [zip]
 
+# The updater only trusts checksums.txt when checksums.txt.minisig verifies
+# against the public key embedded in pkg/updater.
+checksum:
+  name_template: checksums.txt
+
+signs:
+  - id: minisign
+    cmd: minisign
+    artifacts: checksum
+    signature: "${artifact}.minisig"
+    # minisign reads the password with ReadString('\n') and fails on EOF, so
+    # the workflows write the secret to a file and point stdin_file at it.
+    stdin_file: "{{ .Env.MINISIGN_PASSWORD_FILE }}"
+    args:
+      - -S
+      - -s
+      - "{{ .Env.MINISIGN_KEY_FILE }}"
+      - -m
+      - "${artifact}"
+      - -x
+      - "${signature}"
+
 nfpms:
   - id: picoclaw
     ids:
