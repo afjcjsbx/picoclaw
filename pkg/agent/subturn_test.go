@@ -2440,8 +2440,17 @@ func TestDelegateToolRegistered_MultiAgent(t *testing.T) {
 }
 
 func TestGetSubTurnConfig_MemoryAwareDefaultConcurrency(t *testing.T) {
-	al, _, _, _, cleanup := newTestAgentLoop(t)
-	defer cleanup()
+	probe := &turnStateProbeProvider{response: "ok"}
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: t.TempDir(),
+				ModelName: "gpt-4o-mini",
+				Provider:  "mock",
+			},
+		},
+	}
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), probe)
 
 	rt := al.getSubTurnConfig()
 	if rt.maxConcurrent != defaultMaxConcurrentSubTurns {
