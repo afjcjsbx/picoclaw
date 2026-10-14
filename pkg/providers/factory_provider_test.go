@@ -240,6 +240,7 @@ func TestCreateProviderFromConfig_DefaultAPIBase(t *testing.T) {
 		{"longcat", "longcat"},
 		{"modelscope", "modelscope"},
 		{"mimo", "mimo"},
+		{"byteplus", "byteplus"},
 	}
 
 	for _, tt := range tests {
@@ -583,6 +584,16 @@ func TestCreateProviderFromConfig_SiliconFlow(t *testing.T) {
 func TestGetDefaultAPIBase_Mimo(t *testing.T) {
 	if got := getDefaultAPIBase("mimo"); got != "https://api.xiaomimimo.com/v1" {
 		t.Fatalf("getDefaultAPIBase(%q) = %q, want %q", "mimo", got, "https://api.xiaomimimo.com/v1")
+	}
+}
+
+func TestGetDefaultAPIBase_BytePlus(t *testing.T) {
+	if got := getDefaultAPIBase("byteplus"); got != "https://ark.ap-southeast.bytepluses.com/api/v3" {
+		t.Fatalf("getDefaultAPIBase(%q) = %q, want %q",
+			"byteplus", got, "https://ark.ap-southeast.bytepluses.com/api/v3")
+	}
+	if !IsSupportedModelProvider("byteplus") {
+		t.Fatal("byteplus should be a supported model provider")
 	}
 }
 

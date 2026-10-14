@@ -556,6 +556,17 @@ var modelProviderOptionsByName = map[string]ModelProviderOption{
 		Priority:            36,
 		httpAPI:             true,
 	},
+	"byteplus": {
+		ID:                  "byteplus",
+		DisplayName:         "BytePlus",
+		Domain:              "byteplus.com",
+		DefaultAPIBase:      "https://ark.ap-southeast.bytepluses.com/api/v3",
+		CreateAllowed:       true,
+		DefaultModelAllowed: true,
+		SupportsFetch:       true,
+		Priority:            35.5,
+		httpAPI:             true,
+	},
 	"litellm": {
 		ID:                  "litellm",
 		DisplayName:         "LiteLLM",
