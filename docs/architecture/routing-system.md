@@ -248,6 +248,7 @@ Agent dispatch and model routing happen in different places:
 
 When the light model is selected, the agent loop swaps to `agent.LightCandidates`.
 When it is not selected, execution stays on the agent's primary provider candidate set.
+A turn that carries media (or that gains media while it runs) is evaluated before provider execution by `pkg/agent/llm_media.go:routeMediaTurn`, which routes it to the configured image model or back to the primary candidates even if the classifier had picked the light model.
 
 ## Explicit Session Keys
 
