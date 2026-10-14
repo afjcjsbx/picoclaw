@@ -417,7 +417,11 @@ If the standard Zhipu endpoint (`https://open.bigmodel.cn/api/paas/v4`) returns 
 
 #### Load Balancing
 
-Configure multiple endpoints for the same model name—PicoClaw will automatically round-robin between them:
+Configure multiple endpoints for the same model name. PicoClaw selects one of
+them round-robin when the model is resolved (at agent startup or when switching
+models with `/model`), then reuses the resolved candidate set for the agent's
+subsequent turns, so the rotation is not per-request. The round-robin counter is
+process-wide, so selection is shared across all agents:
 
 ```json
 {
