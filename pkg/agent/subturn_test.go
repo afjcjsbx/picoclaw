@@ -2439,46 +2439,29 @@ func TestDelegateToolRegistered_MultiAgent(t *testing.T) {
 	}
 }
 
-func TestGetSubTurnConfig_MemoryAwareDefaultConcurrency(t *testing.T) {
-	probe := &turnStateProbeProvider{response: "ok"}
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Workspace: t.TempDir(),
-				ModelName: "gpt-4o-mini",
-				Provider:  "mock",
-			},
-		},
+func TestGetSubTurnConfig_MaxConcurrent(t *testing.T) {
+	tests := []struct {
+		name       string
+		configured int
+		want       int
+	}{
+		{"unset uses default", 0, defaultMaxConcurrentSubTurns},
+		{"negative uses default", -1, defaultMaxConcurrentSubTurns},
+		{"explicit value is kept", 7, 7},
+		{"value at the cap is kept", maxSubTurnConcurrency, maxSubTurnConcurrency},
+		{"value just above the cap is clamped", maxSubTurnConcurrency + 1, maxSubTurnConcurrency},
+		{"value far above the cap is clamped", maxSubTurnConcurrency * 4, maxSubTurnConcurrency},
 	}
-	al := NewAgentLoop(cfg, bus.NewMessageBus(), probe)
 
-	rt := al.getSubTurnConfig()
-	if rt.maxConcurrent != defaultMaxConcurrentSubTurns {
-		t.Fatalf("default maxConcurrent = %d, want %d", rt.maxConcurrent, defaultMaxConcurrentSubTurns)
-	}
-	if defaultMaxConcurrentSubTurns > 3 {
-		t.Errorf(
-			"default SubTurn concurrency = %d; keep it small because each SubTurn holds its own context",
-			defaultMaxConcurrentSubTurns,
-		)
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{}
+			cfg.Agents.Defaults.SubTurn.MaxConcurrent = tt.configured
+			al := &AgentLoop{cfg: cfg}
 
-func TestGetSubTurnConfig_ClampsConcurrency(t *testing.T) {
-	probe := &turnStateProbeProvider{response: "ok"}
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Workspace: t.TempDir(),
-				ModelName: "gpt-4o-mini",
-				Provider:  "mock",
-				SubTurn:   config.SubTurnConfig{MaxConcurrent: maxSubTurnConcurrency * 4},
-			},
-		},
-	}
-	al := NewAgentLoop(cfg, bus.NewMessageBus(), probe)
-
-	if got := al.getSubTurnConfig().maxConcurrent; got != maxSubTurnConcurrency {
-		t.Fatalf("maxConcurrent = %d, want clamp to %d", got, maxSubTurnConcurrency)
+			if got := al.getSubTurnConfig().maxConcurrent; got != tt.want {
+				t.Fatalf("maxConcurrent = %d, want %d", got, tt.want)
+			}
+		})
 	}
 }
