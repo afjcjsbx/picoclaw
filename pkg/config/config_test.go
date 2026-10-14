@@ -488,6 +488,20 @@ func TestEvolutionConfig_ColdPathTriggerMode(t *testing.T) {
 	assert.False(t, manual.RunsColdPathAutomatically())
 }
 
+func TestEvolutionConfig_EffectiveMinSuccessRatioClampsToValidRange(t *testing.T) {
+	above := EvolutionConfig{MinSuccessRatio: 1.5}
+	assert.Equal(t, 1.0, above.EffectiveMinSuccessRatio())
+
+	legacyAbove := EvolutionConfig{MinSuccessRate: 2}
+	assert.Equal(t, 1.0, legacyAbove.EffectiveMinSuccessRatio())
+
+	inRange := EvolutionConfig{MinSuccessRatio: 0.7}
+	assert.Equal(t, 0.7, inRange.EffectiveMinSuccessRatio())
+
+	negative := EvolutionConfig{MinSuccessRatio: -0.1}
+	assert.Equal(t, 0.7, negative.EffectiveMinSuccessRatio())
+}
+
 func TestEvolutionConfig_NewThresholdNamesPreferLegacyAliases(t *testing.T) {
 	cfg := EvolutionConfig{
 		MinTaskCount:    4,

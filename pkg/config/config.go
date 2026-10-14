@@ -152,13 +152,17 @@ func (c EvolutionConfig) EffectiveMinTaskCount() int {
 }
 
 func (c EvolutionConfig) EffectiveMinSuccessRatio() float64 {
-	if c.MinSuccessRatio > 0 {
-		return c.MinSuccessRatio
+	ratio := c.MinSuccessRatio
+	if ratio <= 0 {
+		ratio = c.MinSuccessRate
 	}
-	if c.MinSuccessRate > 0 {
-		return c.MinSuccessRate
+	if ratio <= 0 {
+		return 0.7
 	}
-	return 0.7
+	if ratio > 1 {
+		return 1
+	}
+	return ratio
 }
 
 func (c EvolutionConfig) EffectiveColdPathTimes() []string {
