@@ -366,6 +366,12 @@ func executeReload(
 		publishGatewayEvent(agentLoop, runtimeevents.KindGatewayReloadCompleted, startedAt, nil)
 	}()
 
+	// Apply the same sanity checks as startup so a reload cannot install a
+	// config that startup would have rejected.
+	if err = preCheckConfig(newCfg); err != nil {
+		return fmt.Errorf("config pre-check failed: %w", err)
+	}
+
 	err = handleConfigReload(ctx, agentLoop, newCfg, provider, runningServices, msgBus, allowEmptyStartup, debug)
 	return err
 }

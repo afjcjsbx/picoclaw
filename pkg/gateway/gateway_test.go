@@ -331,3 +331,30 @@ func receiveGatewayRuntimeEvent(t *testing.T, ch <-chan runtimeevents.Event) run
 		return runtimeevents.Event{}
 	}
 }
+
+func TestExecuteReload_RejectsInvalidConfigAndResetsFlag(t *testing.T) {
+	msgBus := bus.NewMessageBus()
+	al := agent.NewAgentLoop(
+		config.DefaultConfig(),
+		msgBus,
+		&startupBlockedProvider{reason: "not used"},
+	)
+	t.Cleanup(al.Close)
+
+	runningServices := &services{}
+	runningServices.reloading.Store(true)
+
+	badCfg := config.DefaultConfig()
+	badCfg.Gateway.Port = 0
+
+	err := executeReload(context.Background(), al, badCfg, nil, runningServices, msgBus, false, false)
+	if err == nil {
+		t.Fatal("executeReload() with an invalid config = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "config pre-check failed") {
+		t.Fatalf("executeReload() error = %v, want config pre-check failure", err)
+	}
+	if runningServices.reloading.Load() {
+		t.Fatal("reloading flag was not reset after a rejected reload")
+	}
+}
