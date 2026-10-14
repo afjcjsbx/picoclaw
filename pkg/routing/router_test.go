@@ -291,6 +291,33 @@ func TestRouter_SelectModel_AttachmentUsesPrimary(t *testing.T) {
 	}
 }
 
+func TestRouter_SelectModelWithMedia_EmptyTextWithRealMediaUsesPrimary(t *testing.T) {
+	r := New(RouterConfig{LightModel: "gemini-flash", Threshold: 0.35})
+	// The attachment is delivered as a structured field, so the message text
+	// is empty and text-only detection alone would score the turn as trivial.
+	model, usedLight, score := r.SelectModelWithMedia("", nil, "claude-sonnet-4-6", true)
+	if usedLight {
+		t.Error("real media: expected primary model to be selected")
+	}
+	if model != "claude-sonnet-4-6" {
+		t.Errorf("real media: model got %q, want %q", model, "claude-sonnet-4-6")
+	}
+	if score != 1.0 {
+		t.Errorf("real media: score got %f, want 1.0", score)
+	}
+}
+
+func TestRouter_SelectModel_EmptyTextWithoutMediaStaysLight(t *testing.T) {
+	r := New(RouterConfig{LightModel: "gemini-flash", Threshold: 0.35})
+	model, usedLight, _ := r.SelectModel("", nil, "claude-sonnet-4-6")
+	if !usedLight {
+		t.Error("no media, empty text: expected light model to be selected")
+	}
+	if model != "gemini-flash" {
+		t.Errorf("no media, empty text: model got %q, want %q", model, "gemini-flash")
+	}
+}
+
 func TestRouter_SelectModel_LongMessageUsesPrimary(t *testing.T) {
 	r := New(RouterConfig{LightModel: "gemini-flash", Threshold: 0.35})
 	// >200 token estimate: 210 * 3 = 630 chars

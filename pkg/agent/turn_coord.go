@@ -337,12 +337,13 @@ func (al *AgentLoop) selectCandidates(
 	agent *AgentInstance,
 	userMsg string,
 	history []providers.Message,
+	hasMedia bool,
 ) (candidates []providers.FallbackCandidate, model string, usedLight bool) {
 	if agent.Router == nil || len(agent.LightCandidates) == 0 {
 		return agent.Candidates, resolvedCandidateModel(agent.Candidates, agent.Model), false
 	}
 
-	_, usedLight, score := agent.Router.SelectModel(userMsg, history, agent.Model)
+	_, usedLight, score := agent.Router.SelectModelWithMedia(userMsg, history, agent.Model, hasMedia)
 	if !usedLight {
 		logger.DebugCF("agent", "Model routing: primary model selected",
 			map[string]any{

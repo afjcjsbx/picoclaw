@@ -130,8 +130,14 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 	// Model routing scores the turn against the assembled session history
 	// (not the rendered prompt): ConversationDepth and RecentToolCalls must
 	// reflect real prior conversation, not the system prompt or the current
-	// user message that BuildMessagesFromPrompt injects.
-	activeCandidates, activeModel, usedLight := p.al.selectCandidates(ts.agent, ts.userMessage, history)
+	// user message that BuildMessagesFromPrompt injects. hasMedia carries the
+	// structured attachments, which the classifier cannot see in the text.
+	activeCandidates, activeModel, usedLight := p.al.selectCandidates(
+		ts.agent,
+		ts.userMessage,
+		history,
+		len(ts.media) > 0,
+	)
 	activeProvider := ts.agent.Provider
 	if usedLight && ts.agent.LightProvider != nil {
 		activeProvider = ts.agent.LightProvider
