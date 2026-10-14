@@ -188,6 +188,17 @@ func (p *Pipeline) CallLLM(
 		al.activeRequestsInc()
 		defer al.activeRequestsDec()
 
+		// Honor the configured per-model RPM limit even when there is only one
+		// candidate. For multi-candidate configs the fallback chain acquires a
+		// token per candidate; configured streaming requires exactly one
+		// candidate, so acquire here to cover both streaming and the direct
+		// single-candidate call.
+		if p.Fallback != nil && len(exec.activeCandidates) == 1 {
+			if acquireErr := p.Fallback.Acquire(providerCtx, exec.activeCandidates[0].StableKey()); acquireErr != nil {
+				return nil, acquireErr
+			}
+		}
+
 		if response, handled, streamErr := p.tryConfiguredStreamingLLM(
 			providerCtx,
 			ts,
