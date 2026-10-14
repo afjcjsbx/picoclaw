@@ -241,6 +241,7 @@ Important behavior:
 
 - the light model must exist in `model_list`
 - PicoClaw resolves the light model at startup; if it is invalid, routing is disabled
+- a `threshold` of `0` or below is replaced by the default `0.35`; to always use the primary model, set `enabled` to `false`
 - one turn stays on one model tier, even if it later calls tools
 
 ## What Affects The Complexity Score

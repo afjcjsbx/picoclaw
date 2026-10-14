@@ -198,6 +198,7 @@ Config shape:
 
 If the score is below the threshold, the light model wins.
 Otherwise the agent's primary model is used.
+A `threshold` of `0` or a negative value is treated as "unset" and replaced by the default `0.35`, so the boundary cannot be lowered to "always primary" through config; use `enabled: false` instead.
 At runtime this only matters when the agent actually has light-model candidates configured; otherwise execution stays on the primary candidate set.
 
 ## Complexity Features
