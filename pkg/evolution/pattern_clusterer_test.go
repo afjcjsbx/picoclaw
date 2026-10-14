@@ -250,7 +250,7 @@ func TestLLMPatternClusterer_RejectsClusterBelowEvidenceSuccessRatio(t *testing.
 	}
 }
 
-func TestLLMPatternClusterer_RejectsIncompleteEvidenceAssignment(t *testing.T) {
+func TestLLMPatternClusterer_FallsBackWhenLLMAssignmentIsIncomplete(t *testing.T) {
 	provider := &llmClusterTestProvider{
 		content:      `{"clusters":[{"label":"weather-lookup","summary":"lookup weather","task_record_ids":["task-success"],"cluster_reason":"same weather lookup goal"}]}`,
 		defaultModel: "test-model",
@@ -288,7 +288,7 @@ func TestLLMPatternClusterer_RejectsIncompleteEvidenceAssignment(t *testing.T) {
 		},
 	}
 
-	patterns, clusteredIDs, err := clusterer.BuildPatternsWithEvidence(
+	patterns, _, err := clusterer.BuildPatternsWithEvidence(
 		context.Background(),
 		"workspace-a",
 		successfulTasks,
@@ -299,11 +299,14 @@ func TestLLMPatternClusterer_RejectsIncompleteEvidenceAssignment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildPatternsWithEvidence: %v", err)
 	}
-	if len(patterns) != 0 {
-		t.Fatalf("len(patterns) = %d, want 0: %#v", len(patterns), patterns)
+	// The LLM omitted task-failed from its assignment. The incomplete LLM
+	// result is discarded and the deterministic fallback clusterer runs
+	// instead, so the cold path still learns a pattern rather than nothing.
+	if len(patterns) != 1 {
+		t.Fatalf("len(patterns) = %d, want 1 fallback pattern: %#v", len(patterns), patterns)
 	}
-	if len(clusteredIDs) != 0 {
-		t.Fatalf("clusteredIDs = %v, want none", clusteredIDs)
+	if got := strings.Join(patterns[0].TaskRecordIDs, ","); got != "task-success" {
+		t.Fatalf("pattern TaskRecordIDs = %v, want only the successful task", patterns[0].TaskRecordIDs)
 	}
 }
 
