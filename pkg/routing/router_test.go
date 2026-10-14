@@ -78,6 +78,24 @@ func TestExtractFeatures_CodeBlocks(t *testing.T) {
 	}
 }
 
+func TestExtractFeatures_CodeBlocks_TildeFence(t *testing.T) {
+	cases := []struct {
+		msg  string
+		want int
+	}{
+		{"~~~\ncode\n~~~", 1},
+		{"~~~python\npass\n~~~\n~~~js\nconsole.log()\n~~~", 2},
+		{"~~~unclosed", 0},
+		{"\\~~~ is not a fence line", 0},
+	}
+	for _, tc := range cases {
+		f := ExtractFeatures(tc.msg, nil)
+		if f.CodeBlockCount != tc.want {
+			t.Errorf("msg=%q: CodeBlockCount got %d, want %d", tc.msg, f.CodeBlockCount, tc.want)
+		}
+	}
+}
+
 func TestExtractFeatures_RecentToolCalls(t *testing.T) {
 	// History longer than lookbackWindow — only last lookbackWindow entries count.
 	history := make([]providers.Message, 10)

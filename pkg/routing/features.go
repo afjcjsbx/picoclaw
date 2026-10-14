@@ -71,12 +71,24 @@ func estimateTokens(msg string) int {
 }
 
 // countCodeBlocks counts the number of complete fenced code blocks.
-// Each ``` delimiter increments a counter; pairs of delimiters form one block.
-// An unclosed opening fence (odd count) is treated as zero complete blocks
-// since it may just be an inline code span or a typo.
+// It recognizes both backtick (```) and tilde (~~~) fences, tracking whether a
+// fence is currently open and counting a block when a matching pair is closed.
+// An unclosed opening fence is treated as zero complete blocks since it may
+// just be an inline code span or a typo.
 func countCodeBlocks(msg string) int {
-	n := strings.Count(msg, "```")
-	return n / 2
+	blocks := 0
+	inside := false
+	for _, line := range strings.Split(msg, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "```") && !strings.HasPrefix(trimmed, "~~~") {
+			continue
+		}
+		if inside {
+			blocks++
+		}
+		inside = !inside
+	}
+	return blocks
 }
 
 // countRecentToolCalls counts messages with tool calls in the last lookbackWindow
