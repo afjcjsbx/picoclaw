@@ -3,6 +3,8 @@
 
 <h1>PicoClaw: The Ultra-Lightweight Agent the Upstream No Longer Is — for RISC-V, SBCs, and Embedded Systems</h1>
 
+> PicoClaw is small on purpose. Small is not lesser. Small is enough.
+
 <h3>$10 Hardware · 10–20 MB RAM · ms Boot · Let's Go, PicoClaw!</h3>
   <p>
     <img src="https://img.shields.io/badge/Go-1.27.2+-00ADD8?style=flat&logo=go&logoColor=white" alt="Go">
@@ -350,98 +352,10 @@ After this one-time step, `picoclaw-launcher` will open normally on subsequent l
 
 </details>
 
-<a id="-run-on-old-android-phones"></a>
-### 📱 Android
-
-Give your decade-old phone a second life! Turn it into a smart AI Assistant with PicoClaw.
-
-**Option 1: APK Install**
-
-Preview:
-
-<table>
-  <tr>
-    <td><img src="assets/fui_main_page.jpg" width="200"></td>
-    <td><img src="assets/fui_web_page.jpg" width="200"></td>
-    <td><img src="assets/fui_log_page.jpg" width="200"></td>
-    <td><img src="assets/fui_setting_page.jpg" width="200"></td>
-  </tr>
-</table>
-
-Download the APK from [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases) and install directly. No Termux required!
-
-**Option 2: Termux**
-
-For a full command-line setup checklist, see the [Android Termux Guide](docs/guides/android-termux.md).
+## 🔌 Providers (LLM)
 
 <details>
-<summary><b>Terminal Launcher (for resource-constrained environments)</b></summary>
-
-1. Install [Termux](https://github.com/termux/termux-app) (download from [GitHub Releases](https://github.com/termux/termux-app/releases), or search in F-Droid / Google Play)
-2. Run the following commands:
-
-```bash
-# Download the latest release
-wget https://github.com/afjcjsbx/picoclaw/releases/latest/download/picoclaw_Linux_arm64.tar.gz
-tar xzf picoclaw_Linux_arm64.tar.gz
-pkg install proot
-termux-chroot ./picoclaw onboard   # chroot provides a standard Linux filesystem layout
-```
-
-Then follow the Terminal Launcher section below to complete configuration.
-
-<img src="assets/termux.jpg" alt="PicoClaw on Termux" width="512">
-
-For minimal environments where only the `picoclaw` core binary is available (no Launcher UI), you can configure everything via the command line and a JSON config file.
-
-**1. Initialize**
-
-```bash
-picoclaw onboard
-```
-
-This creates `~/.picoclaw/config.json` and the workspace directory.
-
-**2. Configure** (`~/.picoclaw/config.json`)
-
-```json
-{
-  "agents": {
-    "defaults": {
-      "model_name": "gpt-5.4"
-    }
-  },
-  "model_list": [
-    {
-      "model_name": "gpt-5.4",
-      "model": "openai/gpt-5.4"
-      // api_key is now loaded from .security.yml
-    }
-  ]
-}
-```
-
-> See `config/config.example.json` in the repo for a complete configuration template with all available options.
->
-> Please note: config.example.json format is version 0, with sensitive codes in it, and will be auto migrated to version 1+, then, the config.json will only store insensitive data, the sensitive codes will be stored in .security.yml, if you need manually modify the codes, please see `docs/security/security_configuration.md` for more details.
-
-
-**3. Chat**
-
-```bash
-# One-shot question
-picoclaw agent -m "What is 2+2?"
-
-# Interactive mode
-picoclaw agent
-
-# Start gateway for chat app integration
-picoclaw gateway
-```
-
-</details>
-
-## 🔌 Providers (LLM)
+<summary><b>Show 30+ supported providers and configuration</b></summary>
 
 PicoClaw supports 30+ LLM providers through the `model_list` configuration. Use the `protocol/model` format:
 
@@ -509,7 +423,12 @@ For full provider configuration details, see [Providers & Models](docs/guides/pr
 
 </details>
 
+</details>
+
 ## 💬 Channels (Chat Apps)
+
+<details>
+<summary><b>Show 19+ supported channels and setup guides</b></summary>
 
 Talk to your PicoClaw through 19+ messaging platforms:
 
@@ -541,9 +460,14 @@ Talk to your PicoClaw through 19+ messaging platforms:
 
 For detailed channel setup instructions, see [Chat Apps Configuration](docs/guides/chat-apps.md).
 
+</details>
+
 ## 🔧 Tools
 
 ### 🔍 Web Search
+
+<details>
+<summary><b>Show supported search engines and free tiers</b></summary>
 
 PicoClaw can search the web to provide up-to-date information. Configure in `tools.web`:
 
@@ -559,6 +483,8 @@ PicoClaw can search the web to provide up-to-date information. Configure in `too
 | [Perplexity](https://www.perplexity.ai) | Required | Paid | AI-powered search |
 | [SearXNG](https://github.com/searxng/searxng) | Not needed | Self-hosted | Free metasearch engine |
 | [GLM Search](https://open.bigmodel.cn/) | Required | Varies | Zhipu web search |
+
+</details>
 
 ### ⚙️ Other Tools
 

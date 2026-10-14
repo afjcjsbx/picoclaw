@@ -3,6 +3,7 @@ package seahorse
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1995,41 +1996,162 @@ func TestNewEngineAppliesPragmasToEveryConnection(t *testing.T) {
 	defer eng.Close()
 
 	ctx := context.Background()
-	// Hold several connections at once so the pool must open distinct ones.
-	const conns = 3
-	held := make([]*sql.Conn, 0, conns)
-	for i := 0; i < conns; i++ {
+	// checkRound holds every pooled connection at once (the pool is bounded, so
+	// that is the most it can hand out) and checks the pragmas on each.
+	checkRound := func(round int) {
+		held := make([]*sql.Conn, 0, sqliteMaxOpenConns)
+		defer func() {
+			for _, c := range held {
+				_ = c.Close()
+			}
+		}()
+		for i := 0; i < sqliteMaxOpenConns; i++ {
+			c, connErr := eng.store.db.Conn(ctx)
+			if connErr != nil {
+				t.Fatalf("round %d conn %d: %v", round, i, connErr)
+			}
+			held = append(held, c)
+		}
+
+		for i, c := range held {
+			var busy, synchronous, tempStore int
+			if scanErr := c.QueryRowContext(ctx, "PRAGMA busy_timeout").Scan(&busy); scanErr != nil {
+				t.Fatalf("round %d conn %d busy_timeout: %v", round, i, scanErr)
+			}
+			if busy != sqliteBusyTimeoutMS {
+				t.Errorf("round %d conn %d busy_timeout = %d, want %d", round, i, busy, sqliteBusyTimeoutMS)
+			}
+			if scanErr := c.QueryRowContext(ctx, "PRAGMA synchronous").Scan(&synchronous); scanErr != nil {
+				t.Fatalf("round %d conn %d synchronous: %v", round, i, scanErr)
+			}
+			if synchronous != 1 { // 1 == NORMAL
+				t.Errorf("round %d conn %d synchronous = %d, want 1 (NORMAL)", round, i, synchronous)
+			}
+			if scanErr := c.QueryRowContext(ctx, "PRAGMA temp_store").Scan(&tempStore); scanErr != nil {
+				t.Fatalf("round %d conn %d temp_store: %v", round, i, scanErr)
+			}
+			if tempStore != sqliteTempStoreFile {
+				t.Errorf("round %d conn %d temp_store = %d, want %d (FILE)", round, i, tempStore, sqliteTempStoreFile)
+			}
+		}
+	}
+
+	checkRound(1)
+
+	// Drop the idle connections so the next round runs on freshly opened ones:
+	// pragmas must come from the DSN, not from state a reused connection kept.
+	eng.store.db.SetMaxIdleConns(0)
+	checkRound(2)
+}
+
+// TestNewEngineBoundsConnectionPool verifies the pool is bounded so the
+// per-connection page cache cannot grow without limit. It checks behavior, not
+// just the configured value: once the cap is reached, one more connection
+// request must wait instead of opening a new connection.
+func TestNewEngineBoundsConnectionPool(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "pool.db")
+	eng, err := NewEngine(Config{DBPath: dbPath}, nil)
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	defer eng.Close()
+	if got := eng.store.db.Stats().MaxOpenConnections; got != sqliteMaxOpenConns {
+		t.Fatalf("MaxOpenConnections = %d, want %d", got, sqliteMaxOpenConns)
+	}
+
+	ctx := context.Background()
+	for i := 0; i < sqliteMaxOpenConns; i++ {
 		c, connErr := eng.store.db.Conn(ctx)
 		if connErr != nil {
 			t.Fatalf("Conn %d: %v", i, connErr)
 		}
 		defer c.Close()
-		held = append(held, c)
 	}
 
-	for i, c := range held {
-		var busy, synchronous int
-		if scanErr := c.QueryRowContext(ctx, "PRAGMA busy_timeout").Scan(&busy); scanErr != nil {
-			t.Fatalf("conn %d busy_timeout: %v", i, scanErr)
+	waitCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer cancel()
+	extra, err := eng.store.db.Conn(waitCtx)
+	if err == nil {
+		_ = extra.Close()
+		t.Fatalf("Conn beyond the cap succeeded, want it to block until the context ends")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Conn beyond the cap: err = %v, want context.DeadlineExceeded", err)
+	}
+	if got := eng.store.db.Stats().OpenConnections; got > sqliteMaxOpenConns {
+		t.Fatalf("OpenConnections = %d, want at most %d", got, sqliteMaxOpenConns)
+	}
+}
+
+// TestStoreWaitingForPooledConnectionHonoursContext documents the failure mode
+// of the bounded pool: when every connection is busy, store calls queue for
+// one and must give up when their context ends instead of blocking forever.
+func TestStoreWaitingForPooledConnectionHonoursContext(t *testing.T) {
+	eng, err := NewEngine(Config{DBPath: filepath.Join(t.TempDir(), "starved.db")}, nil)
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	defer eng.Close()
+
+	ctx := context.Background()
+	for i := 0; i < sqliteMaxOpenConns; i++ {
+		c, connErr := eng.store.db.Conn(ctx)
+		if connErr != nil {
+			t.Fatalf("Conn %d: %v", i, connErr)
 		}
-		if busy != sqliteBusyTimeoutMS {
-			t.Errorf("conn %d busy_timeout = %d, want %d", i, busy, sqliteBusyTimeoutMS)
+		defer c.Close()
+	}
+
+	callCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer cancel()
+	if _, err = eng.store.GetMessageCount(callCtx, 1); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("GetMessageCount with exhausted pool: err = %v, want context.DeadlineExceeded", err)
+	}
+}
+
+// TestGetAllSessionStatusesDoesNotNeedSecondConnectionWhileScanning guards the
+// bounded pool: an open cursor pins one connection, so running the per-session
+// queries inside the scan loop needs a second one. With another caller holding
+// all but one pooled connection, that second acquisition blocks forever.
+func TestGetAllSessionStatusesDoesNotNeedSecondConnectionWhileScanning(t *testing.T) {
+	eng, err := NewEngine(Config{DBPath: filepath.Join(t.TempDir(), "status.db")}, nil)
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	defer eng.Close()
+
+	ctx := context.Background()
+	if _, err = eng.store.GetOrCreateConversation(ctx, "test:status"); err != nil {
+		t.Fatalf("GetOrCreateConversation: %v", err)
+	}
+
+	// Leave exactly one pooled connection free for the call under test.
+	for i := 0; i < sqliteMaxOpenConns-1; i++ {
+		c, connErr := eng.store.db.Conn(ctx)
+		if connErr != nil {
+			t.Fatalf("Conn %d: %v", i, connErr)
 		}
-		if scanErr := c.QueryRowContext(ctx, "PRAGMA synchronous").Scan(&synchronous); scanErr != nil {
-			t.Fatalf("conn %d synchronous: %v", i, scanErr)
-		}
-		if synchronous != 1 { // 1 == NORMAL
-			t.Errorf("conn %d synchronous = %d, want 1 (NORMAL)", i, synchronous)
-		}
+		defer c.Close()
+	}
+
+	callCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	statuses, err := eng.store.GetAllSessionStatuses(callCtx)
+	if err != nil {
+		t.Fatalf("GetAllSessionStatuses: %v", err)
+	}
+	if len(statuses) != 1 {
+		t.Fatalf("got %d statuses, want 1 (per-session query starved for a connection)", len(statuses))
 	}
 }
 
 func TestSQLiteDSN(t *testing.T) {
-	if got, want := sqliteDSN("/tmp/a.db"), "/tmp/a.db?_busy_timeout=5000&_pragma=synchronous(NORMAL)"; got != want {
+	if got, want := sqliteDSN("/tmp/a.db"),
+		"/tmp/a.db?_busy_timeout=5000&_pragma=synchronous(NORMAL)&_pragma=temp_store(1)"; got != want {
 		t.Errorf("sqliteDSN(plain) = %q, want %q", got, want)
 	}
 	if got, want := sqliteDSN("file:a.db?mode=rwc"),
-		"file:a.db?mode=rwc&_busy_timeout=5000&_pragma=synchronous(NORMAL)"; got != want {
+		"file:a.db?mode=rwc&_busy_timeout=5000&_pragma=synchronous(NORMAL)&_pragma=temp_store(1)"; got != want {
 		t.Errorf("sqliteDSN(uri) = %q, want %q", got, want)
 	}
 }

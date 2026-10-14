@@ -130,12 +130,25 @@ func (s *Store) GetAllSessionStatuses(ctx context.Context) ([]SessionStatus, err
 	}
 	defer rows.Close()
 
-	var statuses []SessionStatus
+	// Drain the cursor before running the per-session queries: an open cursor
+	// pins a pooled connection, and the pool is bounded (sqliteMaxOpenConns),
+	// so two callers each holding a cursor while waiting for a second
+	// connection would deadlock.
+	var sessionKeys []string
 	for rows.Next() {
 		var sessionKey string
 		if err := rows.Scan(&sessionKey); err != nil {
 			continue
 		}
+		sessionKeys = append(sessionKeys, sessionKey)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate sessions: %w", err)
+	}
+	_ = rows.Close()
+
+	var statuses []SessionStatus
+	for _, sessionKey := range sessionKeys {
 		status, err := s.GetSessionStatus(ctx, sessionKey)
 		if err != nil {
 			continue
@@ -143,9 +156,6 @@ func (s *Store) GetAllSessionStatuses(ctx context.Context) ([]SessionStatus, err
 		if status != nil {
 			statuses = append(statuses, *status)
 		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate sessions: %w", err)
 	}
 	return statuses, nil
 }

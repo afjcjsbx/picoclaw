@@ -296,6 +296,17 @@ func TestDefaultConfig_MCPMaxInlineTextChars(t *testing.T) {
 	}
 }
 
+func TestDefaultConfig_MaxInlineResultChars(t *testing.T) {
+	cfg := DefaultConfig()
+	if got := cfg.Tools.GetMaxInlineResultChars(); got != DefaultMaxInlineResultChars {
+		t.Fatalf(
+			"DefaultConfig().Tools.GetMaxInlineResultChars() = %d, want %d",
+			got,
+			DefaultMaxInlineResultChars,
+		)
+	}
+}
+
 func TestDefaultConfig_EvolutionDefaults(t *testing.T) {
 	cfg := DefaultConfig()
 
@@ -637,6 +648,54 @@ func TestLoadConfig_MCPMaxInlineTextChars(t *testing.T) {
 	}
 	if got := cfg.Tools.MCP.GetMaxInlineTextChars(); got != 2048 {
 		t.Fatalf("cfg.Tools.MCP.GetMaxInlineTextChars() = %d, want 2048", got)
+	}
+}
+
+func TestLoadConfig_MaxInlineResultChars(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	raw := `{
+		"tools": {
+			"max_inline_result_chars": 2048
+		}
+	}`
+	if err := os.WriteFile(configPath, []byte(raw), 0o644); err != nil {
+		t.Fatalf("WriteFile(configPath): %v", err)
+	}
+
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error: %v", err)
+	}
+	if got := cfg.Tools.GetMaxInlineResultChars(); got != 2048 {
+		t.Fatalf("cfg.Tools.GetMaxInlineResultChars() = %d, want 2048", got)
+	}
+}
+
+func TestLoadConfig_MaxInlineResultCharsDefaultsWhenAbsent(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	raw := `{
+		"tools": {
+			"exec": {
+				"enabled": true
+			}
+		}
+	}`
+	if err := os.WriteFile(configPath, []byte(raw), 0o644); err != nil {
+		t.Fatalf("WriteFile(configPath): %v", err)
+	}
+
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error: %v", err)
+	}
+	if got := cfg.Tools.GetMaxInlineResultChars(); got != DefaultMaxInlineResultChars {
+		t.Fatalf(
+			"cfg.Tools.GetMaxInlineResultChars() = %d, want default %d",
+			got,
+			DefaultMaxInlineResultChars,
+		)
 	}
 }
 

@@ -558,33 +558,35 @@ func (c LoopDetectionConfig) Normalized() LoopDetectionConfig {
 }
 
 type AgentDefaults struct {
-	Workspace                 string              `json:"workspace"                        env:"PICOCLAW_AGENTS_DEFAULTS_WORKSPACE"`
-	RestrictToWorkspace       bool                `json:"restrict_to_workspace"            env:"PICOCLAW_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE"`
-	AllowReadOutsideWorkspace bool                `json:"allow_read_outside_workspace"     env:"PICOCLAW_AGENTS_DEFAULTS_ALLOW_READ_OUTSIDE_WORKSPACE"`
-	Provider                  string              `json:"provider"                         env:"PICOCLAW_AGENTS_DEFAULTS_PROVIDER"`
-	ModelName                 string              `json:"model_name"                       env:"PICOCLAW_AGENTS_DEFAULTS_MODEL_NAME"`
+	Workspace                 string              `json:"workspace"                            env:"PICOCLAW_AGENTS_DEFAULTS_WORKSPACE"`
+	RestrictToWorkspace       bool                `json:"restrict_to_workspace"                env:"PICOCLAW_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE"`
+	AllowReadOutsideWorkspace bool                `json:"allow_read_outside_workspace"         env:"PICOCLAW_AGENTS_DEFAULTS_ALLOW_READ_OUTSIDE_WORKSPACE"`
+	Provider                  string              `json:"provider"                             env:"PICOCLAW_AGENTS_DEFAULTS_PROVIDER"`
+	ModelName                 string              `json:"model_name"                           env:"PICOCLAW_AGENTS_DEFAULTS_MODEL_NAME"`
 	ModelFallbacks            []string            `json:"model_fallbacks,omitempty"`
-	ImageModel                string              `json:"image_model,omitempty"            env:"PICOCLAW_AGENTS_DEFAULTS_IMAGE_MODEL"`
+	ImageModel                string              `json:"image_model,omitempty"                env:"PICOCLAW_AGENTS_DEFAULTS_IMAGE_MODEL"`
 	ImageModelFallbacks       []string            `json:"image_model_fallbacks,omitempty"`
-	MaxTokens                 int                 `json:"max_tokens"                       env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOKENS"`
-	ContextWindow             int                 `json:"context_window,omitempty"         env:"PICOCLAW_AGENTS_DEFAULTS_CONTEXT_WINDOW"`
-	Temperature               *float64            `json:"temperature,omitempty"            env:"PICOCLAW_AGENTS_DEFAULTS_TEMPERATURE"`
-	MaxToolIterations         int                 `json:"max_tool_iterations"              env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOOL_ITERATIONS"`
-	SummarizeMessageThreshold int                 `json:"summarize_message_threshold"      env:"PICOCLAW_AGENTS_DEFAULTS_SUMMARIZE_MESSAGE_THRESHOLD"`
-	SummarizeTokenPercent     int                 `json:"summarize_token_percent"          env:"PICOCLAW_AGENTS_DEFAULTS_SUMMARIZE_TOKEN_PERCENT"`
-	MaxMediaSize              int                 `json:"max_media_size,omitempty"         env:"PICOCLAW_AGENTS_DEFAULTS_MAX_MEDIA_SIZE"`
+	MaxTokens                 int                 `json:"max_tokens"                           env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOKENS"`
+	ContextWindow             int                 `json:"context_window,omitempty"             env:"PICOCLAW_AGENTS_DEFAULTS_CONTEXT_WINDOW"`
+	Temperature               *float64            `json:"temperature,omitempty"                env:"PICOCLAW_AGENTS_DEFAULTS_TEMPERATURE"`
+	MaxToolIterations         int                 `json:"max_tool_iterations"                  env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOOL_ITERATIONS"`
+	SummarizeMessageThreshold int                 `json:"summarize_message_threshold"          env:"PICOCLAW_AGENTS_DEFAULTS_SUMMARIZE_MESSAGE_THRESHOLD"`
+	SummarizeTokenPercent     int                 `json:"summarize_token_percent"              env:"PICOCLAW_AGENTS_DEFAULTS_SUMMARIZE_TOKEN_PERCENT"`
+	MaxMediaSize              int                 `json:"max_media_size,omitempty"             env:"PICOCLAW_AGENTS_DEFAULTS_MAX_MEDIA_SIZE"`
+	VisionMaxImageDimension   int                 `json:"vision_max_image_dimension,omitempty" env:"PICOCLAW_AGENTS_DEFAULTS_VISION_MAX_IMAGE_DIMENSION"`
+	VisionJPEGQuality         int                 `json:"vision_jpeg_quality,omitempty"        env:"PICOCLAW_AGENTS_DEFAULTS_VISION_JPEG_QUALITY"`
 	Routing                   *RoutingConfig      `json:"routing,omitempty"`
-	SteeringMode              string              `json:"steering_mode,omitempty"          env:"PICOCLAW_AGENTS_DEFAULTS_STEERING_MODE"`      // "one-at-a-time" (default) or "all"
-	MaxParallelTurns          int                 `json:"max_parallel_turns,omitempty"     env:"PICOCLAW_AGENTS_DEFAULTS_MAX_PARALLEL_TURNS"` // Max concurrent turns (0 or 1 = sequential)
-	SubTurn                   SubTurnConfig       `json:"subturn"                                                                                      envPrefix:"PICOCLAW_AGENTS_DEFAULTS_SUBTURN_"`
+	SteeringMode              string              `json:"steering_mode,omitempty"              env:"PICOCLAW_AGENTS_DEFAULTS_STEERING_MODE"`      // "one-at-a-time" (default) or "all"
+	MaxParallelTurns          int                 `json:"max_parallel_turns,omitempty"         env:"PICOCLAW_AGENTS_DEFAULTS_MAX_PARALLEL_TURNS"` // Max concurrent turns (0 or 1 = sequential)
+	SubTurn                   SubTurnConfig       `json:"subturn"                                                                                          envPrefix:"PICOCLAW_AGENTS_DEFAULTS_SUBTURN_"`
 	ToolFeedback              ToolFeedbackConfig  `json:"tool_feedback,omitempty"`
 	LoopDetection             LoopDetectionConfig `json:"loop_detection,omitempty"`
-	SplitOnMarker             bool                `json:"split_on_marker"                  env:"PICOCLAW_AGENTS_DEFAULTS_SPLIT_ON_MARKER"` // split messages on <|[SPLIT]|> marker
-	ContextManager            string              `json:"context_manager,omitempty"        env:"PICOCLAW_AGENTS_DEFAULTS_CONTEXT_MANAGER"`
-	ContextManagerConfig      json.RawMessage     `json:"context_manager_config,omitempty" env:"PICOCLAW_AGENTS_DEFAULTS_CONTEXT_MANAGER_CONFIG"`
+	SplitOnMarker             bool                `json:"split_on_marker"                      env:"PICOCLAW_AGENTS_DEFAULTS_SPLIT_ON_MARKER"` // split messages on <|[SPLIT]|> marker
+	ContextManager            string              `json:"context_manager,omitempty"            env:"PICOCLAW_AGENTS_DEFAULTS_CONTEXT_MANAGER"`
+	ContextManagerConfig      json.RawMessage     `json:"context_manager_config,omitempty"     env:"PICOCLAW_AGENTS_DEFAULTS_CONTEXT_MANAGER_CONFIG"`
 	TurnProfile               TurnProfileConfig   `json:"turn_profile,omitempty"`
-	MaxLLMRetries             int                 `json:"max_llm_retries,omitempty"        env:"PICOCLAW_AGENTS_DEFAULTS_MAX_LLM_RETRIES"`
-	LLMRetryBackoffSecs       int                 `json:"llm_retry_backoff_secs,omitempty" env:"PICOCLAW_AGENTS_DEFAULTS_LLM_RETRY_BACKOFF_SECS"`
+	MaxLLMRetries             int                 `json:"max_llm_retries,omitempty"            env:"PICOCLAW_AGENTS_DEFAULTS_MAX_LLM_RETRIES"`
+	LLMRetryBackoffSecs       int                 `json:"llm_retry_backoff_secs,omitempty"     env:"PICOCLAW_AGENTS_DEFAULTS_LLM_RETRY_BACKOFF_SECS"`
 }
 
 const DefaultMaxMediaSize = 20 * 1024 * 1024 // 20 MB
@@ -594,6 +596,44 @@ func (d *AgentDefaults) GetMaxMediaSize() int {
 		return d.MaxMediaSize
 	}
 	return DefaultMaxMediaSize
+}
+
+const (
+	// DefaultVisionMaxImageDimension is the longest edge, in pixels, that an
+	// inline image is downscaled to before being base64-encoded for a vision
+	// model. It matches the resolution most multimodal LLMs use internally,
+	// so shrinking larger images does not lose information the model would
+	// have seen anyway, while cutting the base64 payload (and its transient
+	// heap footprint) by an order of magnitude for photos from modern cameras.
+	DefaultVisionMaxImageDimension = 1568
+
+	// DefaultVisionJPEGQuality is the JPEG quality used when an oversized
+	// image is recompressed. 85 is visually high quality for LLM input.
+	DefaultVisionJPEGQuality = 85
+)
+
+// GetVisionMaxImageDimension returns the configured longest-edge cap for inline
+// images. When unset (0) the default cap is applied, so oversized images are
+// downscaled out of the box. Set a negative value (e.g. -1) to disable
+// downscaling and send images as-is (bounded only by GetMaxMediaSize).
+func (d *AgentDefaults) GetVisionMaxImageDimension() int {
+	switch {
+	case d.VisionMaxImageDimension == 0:
+		return DefaultVisionMaxImageDimension
+	case d.VisionMaxImageDimension < 0:
+		return 0
+	default:
+		return d.VisionMaxImageDimension
+	}
+}
+
+// GetVisionJPEGQuality returns the JPEG quality for recompressed images,
+// clamped to [1,100] with a default when unset.
+func (d *AgentDefaults) GetVisionJPEGQuality() int {
+	if d.VisionJPEGQuality <= 0 || d.VisionJPEGQuality > 100 {
+		return DefaultVisionJPEGQuality
+	}
+	return d.VisionJPEGQuality
 }
 
 // GetToolFeedbackMaxArgsLength returns the max visible text length for tool argument previews.
@@ -1304,34 +1344,40 @@ type ToolsConfig struct {
 	// FilterMinLength is the minimum content length required for filtering.
 	// Content shorter than this will be returned unchanged for performance.
 	// Default: 8
-	FilterMinLength int                     `json:"filter_min_length" yaml:"-"                env:"PICOCLAW_TOOLS_FILTER_MIN_LENGTH"`
-	Web             WebToolsConfig          `json:"web"               yaml:"web,omitempty"`
-	Cron            CronToolsConfig         `json:"cron"              yaml:"-"`
-	Exec            ExecConfig              `json:"exec"              yaml:"-"`
-	Skills          SkillsToolsConfig       `json:"skills"            yaml:"skills,omitempty"`
-	MediaCleanup    MediaCleanupConfig      `json:"media_cleanup"     yaml:"-"`
-	MCP             MCPConfig               `json:"mcp"               yaml:"-"`
-	AppendFile      ToolConfig              `json:"append_file"       yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_APPEND_FILE_"`
-	EditFile        ToolConfig              `json:"edit_file"         yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_EDIT_FILE_"`
-	FindSkills      ToolConfig              `json:"find_skills"       yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_FIND_SKILLS_"`
-	I2C             ToolConfig              `json:"i2c"               yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_I2C_"`
-	ImageGenerate   ImageGenerateToolConfig `json:"image_generate"    yaml:"-"`
-	InstallSkill    ToolConfig              `json:"install_skill"     yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_INSTALL_SKILL_"`
-	ListDir         ToolConfig              `json:"list_dir"          yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_LIST_DIR_"`
-	LoadImage       ToolConfig              `json:"load_image"        yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_LOAD_IMAGE_"`
-	Message         MessageToolsConfig      `json:"message"           yaml:"-"`
-	ReadFile        ReadFileToolConfig      `json:"read_file"         yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_READ_FILE_"`
-	SearchFiles     ToolConfig              `json:"search_files"      yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_SEARCH_FILES_"`
-	Serial          ToolConfig              `json:"serial"            yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_SERIAL_"`
-	SendFile        ToolConfig              `json:"send_file"         yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_SEND_FILE_"`
-	SendTTS         ToolConfig              `json:"send_tts"          yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_SEND_TTS_"`
-	Spawn           ToolConfig              `json:"spawn"             yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_SPAWN_"`
-	SpawnStatus     ToolConfig              `json:"spawn_status"      yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_SPAWN_STATUS_"`
-	SPI             ToolConfig              `json:"spi"               yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_SPI_"`
-	Subagent        ToolConfig              `json:"subagent"          yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_SUBAGENT_"`
-	Todo            ToolConfig              `json:"todo"              yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_TODO_"`
-	WebFetch        ToolConfig              `json:"web_fetch"         yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_WEB_FETCH_"`
-	WriteFile       ToolConfig              `json:"write_file"        yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_WRITE_FILE_"`
+	FilterMinLength int `json:"filter_min_length" yaml:"-" env:"PICOCLAW_TOOLS_FILTER_MIN_LENGTH"`
+	// MaxInlineResultChars caps how much tool-result text stays inline in the
+	// model context. Larger results are saved as workspace artifacts and kept
+	// inline as a bounded head+tail preview plus a pointer to the full artifact.
+	// The limit is counted in Unicode characters (Go runes), not bytes.
+	// Default: 16384. A non-positive value disables the protection.
+	MaxInlineResultChars int                     `json:"max_inline_result_chars" yaml:"-"                env:"PICOCLAW_TOOLS_MAX_INLINE_RESULT_CHARS"`
+	Web                  WebToolsConfig          `json:"web"                     yaml:"web,omitempty"`
+	Cron                 CronToolsConfig         `json:"cron"                    yaml:"-"`
+	Exec                 ExecConfig              `json:"exec"                    yaml:"-"`
+	Skills               SkillsToolsConfig       `json:"skills"                  yaml:"skills,omitempty"`
+	MediaCleanup         MediaCleanupConfig      `json:"media_cleanup"           yaml:"-"`
+	MCP                  MCPConfig               `json:"mcp"                     yaml:"-"`
+	AppendFile           ToolConfig              `json:"append_file"             yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_APPEND_FILE_"`
+	EditFile             ToolConfig              `json:"edit_file"               yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_EDIT_FILE_"`
+	FindSkills           ToolConfig              `json:"find_skills"             yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_FIND_SKILLS_"`
+	I2C                  ToolConfig              `json:"i2c"                     yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_I2C_"`
+	ImageGenerate        ImageGenerateToolConfig `json:"image_generate"          yaml:"-"`
+	InstallSkill         ToolConfig              `json:"install_skill"           yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_INSTALL_SKILL_"`
+	ListDir              ToolConfig              `json:"list_dir"                yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_LIST_DIR_"`
+	LoadImage            ToolConfig              `json:"load_image"              yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_LOAD_IMAGE_"`
+	Message              MessageToolsConfig      `json:"message"                 yaml:"-"`
+	ReadFile             ReadFileToolConfig      `json:"read_file"               yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_READ_FILE_"`
+	SearchFiles          ToolConfig              `json:"search_files"            yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_SEARCH_FILES_"`
+	Serial               ToolConfig              `json:"serial"                  yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_SERIAL_"`
+	SendFile             ToolConfig              `json:"send_file"               yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_SEND_FILE_"`
+	SendTTS              ToolConfig              `json:"send_tts"                yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_SEND_TTS_"`
+	Spawn                ToolConfig              `json:"spawn"                   yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_SPAWN_"`
+	SpawnStatus          ToolConfig              `json:"spawn_status"            yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_SPAWN_STATUS_"`
+	SPI                  ToolConfig              `json:"spi"                     yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_SPI_"`
+	Subagent             ToolConfig              `json:"subagent"                yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_SUBAGENT_"`
+	Todo                 ToolConfig              `json:"todo"                    yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_TODO_"`
+	WebFetch             ToolConfig              `json:"web_fetch"               yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_WEB_FETCH_"`
+	WriteFile            ToolConfig              `json:"write_file"              yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_WRITE_FILE_"`
 }
 
 // IsFilterSensitiveDataEnabled returns true if sensitive data filtering is enabled
@@ -1345,6 +1391,17 @@ func (c *ToolsConfig) GetFilterMinLength() int {
 		return 8
 	}
 	return c.FilterMinLength
+}
+
+// DefaultMaxInlineResultChars is the default cap, in runes, on how much
+// tool-result text stays inline in model context. Larger results are spilled to
+// a workspace artifact.
+const DefaultMaxInlineResultChars = 16 * 1024
+
+// GetMaxInlineResultChars returns the inline tool-result cap in runes.
+// A non-positive value disables large-result artifact persistence.
+func (c *ToolsConfig) GetMaxInlineResultChars() int {
+	return c.MaxInlineResultChars
 }
 
 type SearchCacheConfig struct {

@@ -7,7 +7,6 @@ import (
 	"hash/fnv"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -81,111 +80,6 @@ func (t *MCPTool) SetEventPublisher(eventBus runtimeevents.Bus) {
 
 const maxMCPInlineTextRunes = 16 * 1024
 
-// MCP large-text artifacts are written under <workspace>/.artifacts/mcp. They
-// are pruned on every write so a long-lived process cannot grow the directory
-// without bound.
-const (
-	mcpArtifactMaxAge   = 24 * time.Hour
-	mcpArtifactMaxFiles = 128
-)
-
-// pruneMCPArtifacts bounds the MCP artifact directory: it removes files older
-// than maxAge and, if the directory still exceeds maxFiles, the oldest ones.
-// Cleanup is best-effort and never fails the tool call.
-func pruneMCPArtifacts(dir string, maxAge time.Duration, maxFiles int) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return
-	}
-
-	type artifact struct {
-		path    string
-		modTime time.Time
-	}
-	files := make([]artifact, 0, len(entries))
-	cutoff := time.Now().Add(-maxAge)
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		info, err := entry.Info()
-		if err != nil {
-			continue
-		}
-		path := filepath.Join(dir, entry.Name())
-		if maxAge > 0 && info.ModTime().Before(cutoff) {
-			_ = os.Remove(path)
-			continue
-		}
-		files = append(files, artifact{path: path, modTime: info.ModTime()})
-	}
-
-	if maxFiles <= 0 || len(files) <= maxFiles {
-		return
-	}
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].modTime.Before(files[j].modTime)
-	})
-	for _, file := range files[:len(files)-maxFiles] {
-		_ = os.Remove(file.path)
-	}
-}
-
-// sanitizeIdentifierComponent normalizes a string so it can be safely used
-// as part of a tool/function identifier for downstream providers.
-// It:
-//   - lowercases the string
-//   - replaces any character not in [a-z0-9_-] with '_'
-//   - collapses multiple consecutive '_' into a single '_'
-//   - trims leading/trailing '_'
-//   - falls back to "unnamed" if the result is empty
-//   - truncates overly long components to a reasonable length
-func sanitizeIdentifierComponent(s string) string {
-	const maxLen = 64
-
-	s = strings.ToLower(s)
-	var b strings.Builder
-	b.Grow(len(s))
-
-	prevUnderscore := false
-	for _, r := range s {
-		isAllowed := (r >= 'a' && r <= 'z') ||
-			(r >= '0' && r <= '9') ||
-			r == '_' || r == '-'
-
-		if !isAllowed {
-			// Normalize any disallowed character to '_'
-			if !prevUnderscore {
-				b.WriteRune('_')
-				prevUnderscore = true
-			}
-			continue
-		}
-
-		if r == '_' {
-			if prevUnderscore {
-				continue
-			}
-			prevUnderscore = true
-		} else {
-			prevUnderscore = false
-		}
-
-		b.WriteRune(r)
-	}
-
-	result := strings.Trim(b.String(), "_")
-	if result == "" {
-		result = "unnamed"
-	}
-
-	if len(result) > maxLen {
-		result = result[:maxLen]
-	}
-
-	return result
-}
-
 // Name returns the tool name, prefixed with the server name.
 // The total length is capped at 64 characters (OpenAI-compatible API limit).
 // A short hash of the original (unsanitized) server and tool names is appended
@@ -194,8 +88,8 @@ func sanitizeIdentifierComponent(s string) string {
 // after sanitization.
 func (t *MCPTool) Name() string {
 	// Prefix with server name to avoid conflicts, and sanitize components
-	sanitizedServer := sanitizeIdentifierComponent(t.serverName)
-	sanitizedTool := sanitizeIdentifierComponent(t.tool.Name)
+	sanitizedServer := toolshared.SanitizeIdentifierComponent(t.serverName)
+	sanitizedTool := toolshared.SanitizeIdentifierComponent(t.tool.Name)
 	full := fmt.Sprintf("mcp_%s_%s", sanitizedServer, sanitizedTool)
 
 	// Check if sanitization was lossless. Case folding counts as lossy:
@@ -236,7 +130,7 @@ func (t *MCPTool) PromptMetadata() toolshared.PromptMetadata {
 	return toolshared.PromptMetadata{
 		Layer:  toolshared.ToolPromptLayerCapability,
 		Slot:   toolshared.ToolPromptSlotMCP,
-		Source: "mcp:" + sanitizeIdentifierComponent(t.serverName),
+		Source: "mcp:" + toolshared.SanitizeIdentifierComponent(t.serverName),
 	}
 }
 
@@ -500,31 +394,16 @@ func (t *MCPTool) persistLargeTextArtifact(text string) *ToolResult {
 	}
 
 	dir := filepath.Join(t.workspace, ".artifacts", "mcp")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return t.largeTextArtifactFallback(text, err)
-	}
 
 	pattern := fmt.Sprintf(
 		"%s_%s_*.txt",
-		sanitizeIdentifierComponent(t.serverName),
-		sanitizeIdentifierComponent(t.tool.Name),
+		toolshared.SanitizeIdentifierComponent(t.serverName),
+		toolshared.SanitizeIdentifierComponent(t.tool.Name),
 	)
-	tmpFile, err := os.CreateTemp(dir, pattern)
+	path, err := toolshared.PersistTextArtifact(dir, pattern, text)
 	if err != nil {
 		return t.largeTextArtifactFallback(text, err)
 	}
-	path := tmpFile.Name()
-	if _, err = tmpFile.WriteString(text); err != nil {
-		_ = tmpFile.Close()
-		_ = os.Remove(path)
-		return t.largeTextArtifactFallback(text, err)
-	}
-	if err = tmpFile.Close(); err != nil {
-		_ = os.Remove(path)
-		return t.largeTextArtifactFallback(text, err)
-	}
-
-	pruneMCPArtifacts(dir, mcpArtifactMaxAge, mcpArtifactMaxFiles)
 
 	return &ToolResult{
 		ForLLM: fmt.Sprintf(
@@ -634,15 +513,15 @@ func (t *MCPTool) storeBinaryContent(
 
 	scope := fmt.Sprintf(
 		"tool:mcp:%s:%s:%s:%d",
-		sanitizeIdentifierComponent(t.serverName),
+		toolshared.SanitizeIdentifierComponent(t.serverName),
 		channel,
 		chatID,
 		time.Now().UnixNano(),
 	)
 	filename := fmt.Sprintf(
 		"%s_%s%s",
-		sanitizeIdentifierComponent(t.serverName),
-		sanitizeIdentifierComponent(t.tool.Name),
+		toolshared.SanitizeIdentifierComponent(t.serverName),
+		toolshared.SanitizeIdentifierComponent(t.tool.Name),
 		ext,
 	)
 
@@ -651,8 +530,8 @@ func (t *MCPTool) storeBinaryContent(
 		ContentType: mimeType,
 		Source: fmt.Sprintf(
 			"tool:mcp:%s:%s",
-			sanitizeIdentifierComponent(t.serverName),
-			sanitizeIdentifierComponent(t.tool.Name),
+			toolshared.SanitizeIdentifierComponent(t.serverName),
+			toolshared.SanitizeIdentifierComponent(t.tool.Name),
 		),
 	}, scope)
 	if err != nil {

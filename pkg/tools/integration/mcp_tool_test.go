@@ -930,7 +930,7 @@ func TestPruneMCPArtifacts_RemovesStaleFiles(t *testing.T) {
 		t.Fatalf("chtimes: %v", err)
 	}
 
-	pruneMCPArtifacts(dir, 24*time.Hour, 0)
+	toolshared.PruneArtifacts(dir, 24*time.Hour, 0)
 
 	if _, err := os.Stat(oldPath); !os.IsNotExist(err) {
 		t.Fatalf("expected stale artifact removed, err=%v", err)
@@ -953,7 +953,7 @@ func TestPruneMCPArtifacts_EnforcesMaxFiles(t *testing.T) {
 		}
 	}
 
-	pruneMCPArtifacts(dir, time.Hour, 2)
+	toolshared.PruneArtifacts(dir, time.Hour, 2)
 
 	entries, err := os.ReadDir(dir)
 	if err != nil {

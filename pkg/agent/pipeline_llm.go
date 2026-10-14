@@ -28,11 +28,11 @@ func (p *Pipeline) CallLLM(
 	iteration int,
 ) (Control, error) {
 	al := p.al
-	maxMediaSize := p.Cfg.Agents.Defaults.GetMaxMediaSize()
+	mediaOpts := mediaResolveOptionsFor(p.Cfg)
 
 	// PreLLM: resolve media refs (except on iteration 1 where user media is already resolved)
 	if iteration > 1 {
-		exec.messages = resolveMediaRefs(exec.messages, p.MediaStore, maxMediaSize, exec.currentTurnStart)
+		exec.messages = resolveMediaRefsWithOptions(exec.messages, p.MediaStore, mediaOpts, exec.currentTurnStart)
 	}
 
 	// PreLLM: graceful terminal handling
@@ -428,10 +428,10 @@ func (p *Pipeline) CallLLM(
 				rebuildPromptReq.ActiveSkills = append([]string(nil), contextualSkills...)
 				rebuilt := ts.agent.ContextBuilder.BuildMessagesFromPrompt(rebuildPromptReq)
 				rebuilt = append(rebuilt, exec.loopWarnings...)
-				return resolveMediaRefs(
+				return resolveMediaRefsWithOptions(
 					rebuilt,
 					p.MediaStore,
-					maxMediaSize,
+					mediaOpts,
 					len(rebuilt)-len(protectedTurnTail)-len(exec.loopWarnings),
 				)
 			}

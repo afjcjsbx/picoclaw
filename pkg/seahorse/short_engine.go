@@ -102,6 +102,25 @@ func (r *RetrievalEngine) Store() *Store {
 // with SQLITE_BUSY.
 const sqliteBusyTimeoutMS = 5000
 
+const (
+	// sqliteMaxOpenConns bounds the connection pool. The pure-Go SQLite driver
+	// keeps a page cache per connection, so an unbounded pool lets memory grow
+	// with concurrent load. SQLite serializes writers, and in WAL mode a reader
+	// does not block the writer, so two connections let one writer run next to
+	// one reader (e.g. compaction alongside context assembly). Further
+	// concurrent callers queue for a free connection, bounded by their context,
+	// instead of opening another page cache, which keeps the memory footprint
+	// predictable on constrained devices.
+	sqliteMaxOpenConns = 2
+
+	// sqliteTempStoreFile tells SQLite to spill temporary tables and sort
+	// buffers to temporary files instead of the Go heap (temp_store = FILE),
+	// which bounds the peak heap used by large compaction/sort queries. It
+	// does not reduce total memory where the temp directory is RAM-backed
+	// (tmpfs): the spill then uses kernel memory instead of the heap.
+	sqliteTempStoreFile = 1
+)
+
 // sqliteDSN returns the driver DSN for path with the per-connection settings
 // every pooled connection must have. database/sql opens connections lazily and
 // recycles them, so running "PRAGMA busy_timeout" once via db.Exec only
@@ -112,7 +131,10 @@ func sqliteDSN(path string) string {
 	if strings.Contains(path, "?") {
 		sep = "&"
 	}
-	return fmt.Sprintf("%s%s_busy_timeout=%d&_pragma=synchronous(NORMAL)", path, sep, sqliteBusyTimeoutMS)
+	return fmt.Sprintf(
+		"%s%s_busy_timeout=%d&_pragma=synchronous(NORMAL)&_pragma=temp_store(%d)",
+		path, sep, sqliteBusyTimeoutMS, sqliteTempStoreFile,
+	)
 }
 
 // NewEngine creates a new short-term memory engine.
@@ -128,6 +150,14 @@ func NewEngine(config Config, completeFn CompleteFn) (*Engine, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
+
+	// Bound the pool so the per-connection page cache cannot grow unchecked on
+	// memory-constrained devices (see sqliteMaxOpenConns). Idle is tied to the
+	// cap rather than left at database/sql's default of 2, so changing the cap
+	// never makes the pool close and reopen connections (and re-run their
+	// pragmas) on every release.
+	db.SetMaxOpenConns(sqliteMaxOpenConns)
+	db.SetMaxIdleConns(sqliteMaxOpenConns)
 
 	// journal_mode is stored in the database file, so setting it once is
 	// enough. busy_timeout and synchronous are per-connection settings and

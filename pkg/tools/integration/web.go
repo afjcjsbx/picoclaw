@@ -38,6 +38,16 @@ const (
 	defaultMaxChars = 50000
 	maxRedirects    = 5
 
+	// maxSearchResponseBytes caps how much of a search provider's HTTP response
+	// is buffered in memory. Search providers return compact JSON; anything
+	// larger is either an error page or a misbehaving upstream, and reading it
+	// unbounded could exhaust RAM on constrained devices.
+	maxSearchResponseBytes = 2 << 20 // 2 MiB
+
+	// maxErrorBodyBytes caps how much of an upstream error body is echoed into
+	// an error message, which ends up in logs and in the LLM's tool result.
+	maxErrorBodyBytes = 1 << 10 // 1 KiB
+
 	keenableDefaultBaseURL = "https://api.keenable.ai"
 	// keenableAppTitle identifies PicoClaw to Keenable's public (keyless)
 	// endpoint, which rejects requests without an X-Keenable-Title header.
@@ -294,6 +304,29 @@ func mapKagiLensTimeFilter(rangeCode string, now time.Time) *kagiopenapi.SearchR
 	return lens
 }
 
+// readSearchBody reads a search provider response, failing loudly when it is
+// larger than maxSearchResponseBytes instead of handing a silently truncated
+// body to the parser (which would surface as a misleading JSON error).
+func readSearchBody(r io.Reader) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(r, maxSearchResponseBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > maxSearchResponseBytes {
+		return nil, fmt.Errorf("response exceeds %d bytes", maxSearchResponseBytes)
+	}
+	return body, nil
+}
+
+// errorBody renders an upstream response body for an error message, cut to
+// maxErrorBodyBytes so a large error page doesn't flood logs or the model.
+func errorBody(body []byte) string {
+	if len(body) <= maxErrorBodyBytes {
+		return string(body)
+	}
+	return strings.ToValidUTF8(string(body[:maxErrorBodyBytes]), "") + "..."
+}
+
 type BraveSearchProvider struct {
 	keyPool *APIKeyPool
 	proxy   string
@@ -339,7 +372,7 @@ func (p *BraveSearchProvider) Search(
 			continue
 		}
 
-		body, err := io.ReadAll(resp.Body)
+		body, err := readSearchBody(resp.Body)
 		_ = resp.Body.Close()
 
 		if err != nil {
@@ -348,7 +381,7 @@ func (p *BraveSearchProvider) Search(
 		}
 
 		if resp.StatusCode != http.StatusOK {
-			lastErr = fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(body))
+			lastErr = fmt.Errorf("API error (status %d): %s", resp.StatusCode, errorBody(body))
 			if resp.StatusCode == http.StatusTooManyRequests ||
 				resp.StatusCode == http.StatusUnauthorized ||
 				resp.StatusCode == http.StatusForbidden ||
@@ -472,7 +505,7 @@ func (p *TavilySearchProvider) Search(
 			continue
 		}
 
-		body, err := io.ReadAll(resp.Body)
+		body, err := readSearchBody(resp.Body)
 		_ = resp.Body.Close()
 
 		if err != nil {
@@ -481,7 +514,7 @@ func (p *TavilySearchProvider) Search(
 		}
 
 		if resp.StatusCode != http.StatusOK {
-			lastErr = fmt.Errorf("tavily api error (status %d): %s", resp.StatusCode, string(body))
+			lastErr = fmt.Errorf("tavily api error (status %d): %s", resp.StatusCode, errorBody(body))
 			if resp.StatusCode == http.StatusTooManyRequests ||
 				resp.StatusCode == http.StatusUnauthorized ||
 				resp.StatusCode == http.StatusForbidden ||
@@ -679,7 +712,7 @@ func (p *KeenableSearchProvider) Search(
 			continue
 		}
 
-		body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		body, err := readSearchBody(resp.Body)
 		_ = resp.Body.Close()
 		if err != nil {
 			lastErr = fmt.Errorf("failed to read response: %w", err)
@@ -687,7 +720,11 @@ func (p *KeenableSearchProvider) Search(
 		}
 
 		if resp.StatusCode != http.StatusOK {
-			lastErr = fmt.Errorf("keenable api error (status %d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
+			lastErr = fmt.Errorf(
+				"keenable api error (status %d): %s",
+				resp.StatusCode,
+				strings.TrimSpace(errorBody(body)),
+			)
 			if resp.StatusCode == http.StatusTooManyRequests && keyless {
 				lastErr = fmt.Errorf(
 					"keenable api error (status %d): public rate limit reached, retry later or configure an API key",
@@ -829,7 +866,7 @@ func fallbackKagiSearchResults(resp *http.Response, count int) ([]SearchResultIt
 	if resp == nil || resp.Body == nil {
 		return nil, fmt.Errorf("failed to parse response: empty response body")
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	body, err := readSearchBody(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
@@ -989,12 +1026,12 @@ func (p *GeminiSearchProvider) Search(
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	body, err := readSearchBody(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("failed to read response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("gemini search api error (status %d): %s", resp.StatusCode, string(body))
+		return "", fmt.Errorf("gemini search api error (status %d): %s", resp.StatusCode, errorBody(body))
 	}
 
 	var searchResp struct {
@@ -1075,7 +1112,7 @@ func (p *SogouSearchProvider) Search(
 			return "", fmt.Errorf("request failed: %w", err)
 		}
 
-		body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		body, err := readSearchBody(resp.Body)
 		_ = resp.Body.Close()
 		if err != nil {
 			return "", fmt.Errorf("failed to read response: %w", err)
@@ -1168,7 +1205,7 @@ func (p *DuckDuckGoSearchProvider) Search(
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readSearchBody(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("failed to read response: %w", err)
 	}
@@ -1316,7 +1353,7 @@ func (p *PerplexitySearchProvider) Search(
 			continue
 		}
 
-		body, err := io.ReadAll(resp.Body)
+		body, err := readSearchBody(resp.Body)
 		_ = resp.Body.Close()
 
 		if err != nil {
@@ -1325,7 +1362,7 @@ func (p *PerplexitySearchProvider) Search(
 		}
 
 		if resp.StatusCode != http.StatusOK {
-			lastErr = fmt.Errorf("Perplexity API error: %s", string(body))
+			lastErr = fmt.Errorf("Perplexity API error: %s", errorBody(body))
 			if resp.StatusCode == http.StatusTooManyRequests ||
 				resp.StatusCode == http.StatusUnauthorized ||
 				resp.StatusCode == http.StatusForbidden ||
@@ -1413,7 +1450,11 @@ func (p *SearXNGSearchProvider) Search(
 		} `json:"results"`
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	body, err := readSearchBody(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response: %w", err)
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
 		return "", fmt.Errorf("failed to parse response: %w", err)
 	}
 
@@ -1493,13 +1534,13 @@ func (p *GLMSearchProvider) Search(
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	body, err := readSearchBody(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("failed to read response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("GLM Search API error (status %d): %s", resp.StatusCode, string(body))
+		return "", fmt.Errorf("GLM Search API error (status %d): %s", resp.StatusCode, errorBody(body))
 	}
 
 	var searchResp struct {
@@ -1589,13 +1630,13 @@ func (p *BaiduSearchProvider) Search(
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	body, err := readSearchBody(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("failed to read response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("baidu search API error %d: %s", resp.StatusCode, string(body))
+		return "", fmt.Errorf("baidu search API error %d: %s", resp.StatusCode, errorBody(body))
 	}
 
 	var result struct {

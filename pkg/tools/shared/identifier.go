@@ -1,8 +1,17 @@
-package tools
+package toolshared
 
 import "strings"
 
-func sanitizeIdentifierComponent(s string) string {
+// SanitizeIdentifierComponent normalizes a string so it can be safely used
+// as part of a tool/function identifier for downstream providers.
+// It:
+//   - lowercases the string
+//   - replaces any character not in [a-z0-9_-] with '_'
+//   - collapses multiple consecutive '_' into a single '_'
+//   - trims leading/trailing '_'
+//   - falls back to "unnamed" if the result is empty
+//   - truncates overly long components to a reasonable length
+func SanitizeIdentifierComponent(s string) string {
 	const maxLen = 64
 
 	s = strings.ToLower(s)
@@ -16,6 +25,7 @@ func sanitizeIdentifierComponent(s string) string {
 			r == '_' || r == '-'
 
 		if !isAllowed {
+			// Normalize any disallowed character to '_'
 			if !prevUnderscore {
 				b.WriteRune('_')
 				prevUnderscore = true

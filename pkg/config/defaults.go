@@ -330,8 +330,9 @@ func DefaultConfig() *Config {
 			Logging: defaultEventLoggingConfig(),
 		},
 		Tools: ToolsConfig{
-			FilterSensitiveData: true,
-			FilterMinLength:     8,
+			FilterSensitiveData:  true,
+			FilterMinLength:      8,
+			MaxInlineResultChars: DefaultMaxInlineResultChars,
 			MediaCleanup: MediaCleanupConfig{
 				ToolConfig: ToolConfig{
 					Enabled: true,

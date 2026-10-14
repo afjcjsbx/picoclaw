@@ -62,6 +62,22 @@ Tool call logs (registry, tool loop and agent execution pipeline) record only th
 
 ---
 
+## Large tool-result artifacts
+
+Large tool results (over `tools.max_inline_result_chars`, default `16384`) are saved to the agent workspace under `<workspace>/.artifacts/tool/`, while a bounded head+tail preview and a pointer stay inline in the model context. See [Large tool results](../reference/tools_configuration.md#large-tool-results) for the full behavior.
+
+The spill happens inside tool-result normalization, **before** `filter_sensitive_data` is applied. The filter runs later and only on the content that is injected into the model context, so the two surfaces diverge:
+
+- **Model context**: still filtered — the preview embedded in the result passes through `filter_sensitive_data` like any other tool content.
+- **Artifact on disk**: **not filtered** — it contains the raw tool output, including any secret that the filter would otherwise have replaced with `[FILTERED]`.
+- **Model access**: the artifact path is exposed to the model (a structured `[file:...]` tag plus an inline pointer). The model can read it with `read_file` or forward it with `send_file`; `send_file` delivers the raw file without filtering.
+
+This applies to every tool. It was already true for MCP large-text artifacts, but the behavior is now generalized to all tools (for example, a large `exec` result can persist raw credentials to the workspace even when filtering is enabled). The artifact directory is created with `0700` and files with `0600`, but permissions do not redact content.
+
+If your threat model requires that secrets never reach disk unfiltered, disable the spill (`max_inline_result_chars: 0`), avoid running commands that echo credentials, and treat `<workspace>/.artifacts/` as sensitive data. A future improvement would be to apply the filter (or an equivalent redaction) to the artifact text before it is written.
+
+---
+
 ## Example
 
 Given the following `.security.yml`:
@@ -104,6 +120,7 @@ The model is using API key [FILTERED] and Telegram bot [FILTERED]
 - **Credential exposure prevention**: Without filtering, tools that echo credentials could cause the LLM to see its own API keys, potentially leading to confusion or credential leakage in logs
 - **Defense in depth**: Filtering complements (but does not replace) credential encryption — both features should be used together
 - **No false positives**: Only values explicitly stored in `.security.yml` are filtered; the LLM's general knowledge is unaffected
+- **Artifacts bypass filtering on disk**: large tool-result artifacts are written before filtering and are not redacted — treat `<workspace>/.artifacts/` as sensitive (see [Large tool-result artifacts](#large-tool-result-artifacts))
 
 ---
 

@@ -15,7 +15,7 @@ import (
 // It replaces lines 56-145 of the original runTurn.
 func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution, error) {
 	cfg := p.Cfg
-	maxMediaSize := cfg.Agents.Defaults.GetMaxMediaSize()
+	mediaOpts := mediaResolveOptionsFor(cfg)
 
 	var history []providers.Message
 	var summary string
@@ -44,7 +44,7 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 		currentTurnStart = len(messages) - 1
 	}
 
-	messages = resolveMediaRefs(messages, p.MediaStore, maxMediaSize, currentTurnStart)
+	messages = resolveMediaRefsWithOptions(messages, p.MediaStore, mediaOpts, currentTurnStart)
 
 	if !ts.opts.NoHistory {
 		toolDefs := filterToolsByTurnProfile(ts.agent.Tools.ToProviderDefs(), ts.profile)
@@ -89,7 +89,7 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 					if strings.TrimSpace(ts.userMessage) != "" || len(ts.media) > 0 {
 						rebuiltCurrentTurnStart = len(rebuilt) - 1
 					}
-					return resolveMediaRefs(rebuilt, p.MediaStore, maxMediaSize, rebuiltCurrentTurnStart)
+					return resolveMediaRefsWithOptions(rebuilt, p.MediaStore, mediaOpts, rebuiltCurrentTurnStart)
 				},
 				ts.agent.ContextWindow,
 				toolDefs,

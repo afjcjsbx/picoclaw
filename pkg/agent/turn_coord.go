@@ -106,7 +106,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 	// Convenience references to exec fields used throughout the turn loop.
 	messages := exec.messages
 	pendingMessages := exec.pendingMessages
-	maxMediaSize := pipeline.Cfg.Agents.Defaults.GetMaxMediaSize()
+	mediaOpts := mediaResolveOptionsFor(pipeline.Cfg)
 	finalContent := exec.finalContent
 
 	for ts.currentIteration() < ts.agent.MaxIterations || len(exec.pendingMessages) > 0 || func() bool {
@@ -175,7 +175,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 
 		// Inject pending steering messages
 		if len(pendingMessages) > 0 {
-			resolvedPending := resolveMediaRefs(pendingMessages, al.mediaStore, maxMediaSize, 0)
+			resolvedPending := resolveMediaRefsWithOptions(pendingMessages, al.mediaStore, mediaOpts, 0)
 			totalContentLen := 0
 			for i, pm := range pendingMessages {
 				messages = append(messages, resolvedPending[i])

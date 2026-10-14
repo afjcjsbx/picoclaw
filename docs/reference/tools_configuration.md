@@ -39,6 +39,16 @@ See [Sensitive Data Filtering](../security/sensitive_data_filtering.md) for full
 
 Tool call logs record only the argument **keys** and count, never the argument values, so secrets passed to a tool are not written to log files. The filter above applies to the content exchanged with the LLM, not to logs.
 
+## Large tool results
+
+Tool results larger than `max_inline_result_chars` (counted in Unicode characters, not bytes) are not injected into the model context in full. PicoClaw saves the full text as a local artifact in the agent workspace (`<workspace>/.artifacts/tool/`) and keeps a bounded **head+tail preview** inline: an honest, front-loaded truncation notice with the real number of omitted characters, then the first and last few kilobytes of the output, then a pointer to the full artifact. Keeping useful content inline means the model can usually answer without re-reading the artifact — important for content tools such as `read_file`, where re-reading a spilled artifact would spill again and loop. The artifact path is also exposed as a structured `[file:...]` tag so the model can read it (via `read_file` with `offset`/`length`) or forward it with `send_file`. The preview never removes a tool's own truncation guidance (for example `read_file`'s "call again with offset=…" hint stays in the head). This mirrors the large-text handling already used for MCP tools and applies to every tool, including results produced or replaced by an `AfterTool` hook; artifacts are pruned automatically (older than 24 hours, or beyond the newest 128 files per directory).
+
+| Config | Type | Default | Description |
+|--------|------|---------|-------------|
+| `max_inline_result_chars` | int | `16384` | Maximum tool-result text kept inline, in Go runes. Larger results are spilled to a workspace artifact with a bounded head+tail preview. Set to `0` or a negative value to disable. |
+
+> **Security note — artifacts are not filtered.** The artifact file is written from the raw tool result inside result normalization, which runs **before** `filter_sensitive_data` is applied. The filter only redacts the content that is later injected into the model context, so the artifact on disk keeps the **unfiltered** payload (this was already true for MCP large-text artifacts; it now applies to every tool). A large `exec` result, for example, can persist raw secrets to the workspace even when filtering is enabled. The directory (`0700`) and files (`0600`) are permission-restricted, but their contents are not redacted, and the artifact path is exposed to the model — which can read it or forward it with `send_file`, delivering the raw file. Treat workspace artifacts as sensitive data. See [Sensitive Data Filtering](../security/sensitive_data_filtering.md#large-tool-result-artifacts).
+
 ## Protected local files
 
 Filesystem read tools deny `.env`, `.env.*`, `.envrc`, `.security.yml` (including its backups), `.netrc`, `.npmrc`, `.pypirc`, `.pgpass`, `.git-credentials`, and files inside `.ssh`, `.aws`, `.kube`, `.gnupg`, `.docker`, `.azure`, `.config/gh`, or `.config/gcloud` directories. Under `PICOCLAW_HOME`, reads are also denied for `auth.json`, `auth/mcp`, and `channels/weixin/context-tokens`; the default `plugin-data` root is hidden because it may contain MCP bearer-token files. Reads of `CODEX_HOME/auth.json` (default `~/.codex/auth.json`) are denied as well. Windows NT/device-namespace paths are rejected before path resolution. The check follows symlinks, hides protected entries from directory listings and file searches, and applies to local files attached through `send_file`, `load_image`, or `message`. Read allow paths do not override it.
@@ -684,6 +694,7 @@ For example:
 - `PICOCLAW_TOOLS_CRON_EXEC_TIMEOUT_MINUTES=10`
 - `PICOCLAW_TOOLS_MCP_ENABLED=true`
 - `PICOCLAW_TOOLS_MCP_MAX_INLINE_TEXT_CHARS=16384`
+- `PICOCLAW_TOOLS_MAX_INLINE_RESULT_CHARS=16384`
 
 Note: Nested map-style config (for example `tools.mcp.servers.<name>.*`) is configured in `config.json` rather than
 environment variables.

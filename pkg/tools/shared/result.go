@@ -59,6 +59,12 @@ type ToolResult struct {
 	// user's request at the channel/output level, so the agent loop can stop
 	// without a follow-up assistant response.
 	ResponseHandled bool `json:"response_handled,omitempty"`
+
+	// LargeResultSpilled marks a result whose ForLLM was already reduced to a
+	// bounded preview by the large-result spill. It is set by the tools package
+	// rather than inferred from ForLLM, because ForLLM is tool-controlled text
+	// that could otherwise forge the marker and bypass the spill.
+	LargeResultSpilled bool `json:"-"`
 }
 
 // ContentForLLM returns the normalized textual content to append to the
