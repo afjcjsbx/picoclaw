@@ -127,7 +127,11 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 		ts.ingestMessage(ctx, p.al, rootMsg)
 	}
 
-	activeCandidates, activeModel, usedLight := p.al.selectCandidates(ts.agent, ts.userMessage, messages)
+	// Model routing scores the turn against the assembled session history
+	// (not the rendered prompt): ConversationDepth and RecentToolCalls must
+	// reflect real prior conversation, not the system prompt or the current
+	// user message that BuildMessagesFromPrompt injects.
+	activeCandidates, activeModel, usedLight := p.al.selectCandidates(ts.agent, ts.userMessage, history)
 	activeProvider := ts.agent.Provider
 	if usedLight && ts.agent.LightProvider != nil {
 		activeProvider = ts.agent.LightProvider
