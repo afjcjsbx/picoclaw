@@ -350,7 +350,7 @@ func TestStartAllPublishesLifecycleRuntimeEvents(t *testing.T) {
 
 	m := newTestManager()
 	m.runtimeEvents = eventBus
-	m.config = &config.Config{Channels: config.ChannelsConfig{}}
+	m.config.Store(&config.Config{Channels: config.ChannelsConfig{}})
 	m.channels["good"] = &mockChannel{}
 	m.channels["bad"] = &mockChannel{
 		startFn: func(_ context.Context) error { return errors.New("bad start") },
@@ -1297,7 +1297,7 @@ func TestPreSend_NonToolFeedbackDefersTrackedMessageFinalizationToChannelSend(t 
 
 func TestPreSend_ToolFeedbackSeparateMessagesDeletesPlaceholderAndSkipsEdit(t *testing.T) {
 	m := newTestManager()
-	m.config = &config.Config{
+	m.config.Store(&config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				ToolFeedback: config.ToolFeedbackConfig{
@@ -1306,7 +1306,7 @@ func TestPreSend_ToolFeedbackSeparateMessagesDeletesPlaceholderAndSkipsEdit(t *t
 				},
 			},
 		},
-	}
+	})
 
 	ch := &mockDeletingMessageEditor{
 		mockMessageEditor: mockMessageEditor{
@@ -1453,7 +1453,7 @@ func TestSendWithRetry_ToolCallsPlaceholderDeleteAndFallsThroughToSend(t *testin
 
 func TestPreSend_NonToolFeedbackSeparateMessagesClearsTrackedMessageWithoutDismiss(t *testing.T) {
 	m := newTestManager()
-	m.config = &config.Config{
+	m.config.Store(&config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				ToolFeedback: config.ToolFeedbackConfig{
@@ -1462,7 +1462,7 @@ func TestPreSend_NonToolFeedbackSeparateMessagesClearsTrackedMessageWithoutDismi
 				},
 			},
 		},
-	}
+	})
 
 	ch := &mockMessageEditor{}
 
@@ -1787,7 +1787,7 @@ func TestPreSendMedia_LeavesTrackedMessageForChannelSend(t *testing.T) {
 
 func TestPreSendMedia_SeparateMessagesClearsTrackedMessageWithoutDismiss(t *testing.T) {
 	m := newTestManager()
-	m.config = &config.Config{
+	m.config.Store(&config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				ToolFeedback: config.ToolFeedbackConfig{
@@ -1796,7 +1796,7 @@ func TestPreSendMedia_SeparateMessagesClearsTrackedMessageWithoutDismiss(t *test
 				},
 			},
 		},
-	}
+	})
 
 	ch := &mockMessageEditor{}
 
@@ -2120,13 +2120,13 @@ func TestGetStreamer_PreservesModelNameSetter(t *testing.T) {
 
 func TestGetStreamer_SplitOnMarkerStreamsSeparateSegments(t *testing.T) {
 	m := newTestManager()
-	m.config = &config.Config{
+	m.config.Store(&config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				SplitOnMarker: true,
 			},
 		},
-	}
+	})
 
 	var segments []*recordingStreamSegment
 	ch := &mockStreamingChannel{
@@ -2190,13 +2190,13 @@ func TestGetStreamer_SplitOnMarkerStreamsSeparateSegments(t *testing.T) {
 
 func TestGetStreamer_SplitOnMarkerKeepsReasoningOnInitialStreamer(t *testing.T) {
 	m := newTestManager()
-	m.config = &config.Config{
+	m.config.Store(&config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				SplitOnMarker: true,
 			},
 		},
-	}
+	})
 
 	initial := &mockReasoningStreamer{}
 	next := &recordingStreamSegment{}
@@ -2240,13 +2240,13 @@ func TestGetStreamer_SplitOnMarkerKeepsReasoningOnInitialStreamer(t *testing.T) 
 
 func TestGetStreamer_SplitOnMarkerPreservesModelNameSetter(t *testing.T) {
 	m := newTestManager()
-	m.config = &config.Config{
+	m.config.Store(&config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				SplitOnMarker: true,
 			},
 		},
-	}
+	})
 
 	initial := &modelTrackingReasoningStreamer{}
 	next := &recordingStreamSegment{}
@@ -2292,7 +2292,7 @@ func TestGetStreamer_SplitOnMarkerPreservesModelNameSetter(t *testing.T) {
 
 func TestGetStreamer_FinalizeSeparateMessagesClearsTrackedToolFeedback(t *testing.T) {
 	m := newTestManager()
-	m.config = &config.Config{
+	m.config.Store(&config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				ToolFeedback: config.ToolFeedbackConfig{
@@ -2301,7 +2301,7 @@ func TestGetStreamer_FinalizeSeparateMessagesClearsTrackedToolFeedback(t *testin
 				},
 			},
 		},
-	}
+	})
 	ch := &mockStreamingChannel{
 		mockMessageEditor: mockMessageEditor{},
 		streamer: &mockStreamer{
@@ -2443,13 +2443,13 @@ func TestGetStreamer_FinalizeFailureDoesNotDismissTrackedToolFeedback(t *testing
 
 func TestRunWorker_ToolFeedbackSkipsMarkerSplitting(t *testing.T) {
 	m := newTestManager()
-	m.config = &config.Config{
+	m.config.Store(&config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				SplitOnMarker: true,
 			},
 		},
-	}
+	})
 
 	var (
 		mu       sync.Mutex
@@ -2506,13 +2506,13 @@ func TestRunWorker_ToolFeedbackSkipsMarkerSplitting(t *testing.T) {
 
 func TestRunWorker_FinalizedStreamSuppressesMarkerSplitBeforeSending(t *testing.T) {
 	m := newTestManager()
-	m.config = &config.Config{
+	m.config.Store(&config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				SplitOnMarker: true,
 			},
 		},
-	}
+	})
 
 	var (
 		mu       sync.Mutex

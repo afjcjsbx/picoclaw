@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -94,7 +95,7 @@ type Manager struct {
 	workers                   map[string]*channelWorker
 	bus                       *bus.MessageBus
 	runtimeEvents             runtimeevents.Bus
-	config                    *config.Config
+	config                    atomic.Pointer[config.Config]
 	mediaStore                media.MediaStore
 	dispatchTask              *asyncTask
 	mux                       *dynamicServeMux
@@ -304,10 +305,14 @@ func prepareToolFeedbackMessageContent(ch Channel, content string) string {
 }
 
 func (m *Manager) toolFeedbackSeparateMessagesEnabled() bool {
-	if m == nil || m.config == nil {
+	if m == nil {
 		return false
 	}
-	return m.config.Agents.Defaults.IsToolFeedbackSeparateMessagesEnabled()
+	cfg := m.config.Load()
+	if cfg == nil {
+		return false
+	}
+	return cfg.Agents.Defaults.IsToolFeedbackSeparateMessagesEnabled()
 }
 
 // RecordPlaceholder registers a placeholder message for later editing.
@@ -563,10 +568,10 @@ func NewManager(
 		channels:      make(map[string]Channel),
 		workers:       make(map[string]*channelWorker),
 		bus:           messageBus,
-		config:        cfg,
 		mediaStore:    store,
 		channelHashes: make(map[string]string),
 	}
+	m.config.Store(cfg)
 	for _, opt := range opts {
 		if opt != nil {
 			opt(m)
@@ -668,7 +673,7 @@ func (m *Manager) GetStreamer(ctx context.Context, channelName, chatID, sessionK
 		m.streamAuxiliaryTombstones.Store(streamKey, time.Now())
 	}
 
-	if m.config != nil && m.config.Agents.Defaults.SplitOnMarker {
+	if cfg := m.config.Load(); cfg != nil && cfg.Agents.Defaults.SplitOnMarker {
 		return &splitMarkerStreamer{
 			current:     streamer,
 			reasoning:   reasoningStreamerFrom(streamer),
@@ -990,7 +995,7 @@ func (m *Manager) initChannel(typeName, channelName string) {
 		"channel": channelName,
 		"type":    typeName,
 	})
-	ch, err := f(channelName, typeName, m.config, m.bus)
+	ch, err := f(channelName, typeName, m.config.Load(), m.bus)
 	if err != nil {
 		logger.ErrorCF("channels", "Failed to initialize channel", map[string]any{
 			"channel": channelName,
@@ -1028,7 +1033,11 @@ func (m *Manager) initChannel(typeName, channelName string) {
 }
 
 func (m *Manager) getChannelConfigAndEnabled(channelName string) (*config.Channel, bool) {
-	bc, ok := m.config.Channels[channelName]
+	cfg := m.config.Load()
+	if cfg == nil {
+		return nil, false
+	}
+	bc, ok := cfg.Channels[channelName]
 	if !ok || bc == nil {
 		return nil, false
 	}
@@ -1253,8 +1262,8 @@ func (m *Manager) StartAll(ctx context.Context) error {
 		}
 		// Lazily create worker only after channel starts successfully
 		channelType := name
-		if m.config != nil {
-			if bc := m.config.Channels.Get(name); bc != nil && bc.Type != "" {
+		if currentCfg := m.config.Load(); currentCfg != nil {
+			if bc := currentCfg.Channels.Get(name); bc != nil && bc.Type != "" {
 				channelType = bc.Type
 			}
 		}
@@ -1477,7 +1486,7 @@ func (m *Manager) runWorker(ctx context.Context, name string, w *channelWorker) 
 			// consume the whole final message before any marker chunk leaks.
 			if m.finalizedStreamActiveForMessage(name, msg) {
 				chunks = []string{msg.Content}
-			} else if m.config != nil && m.config.Agents.Defaults.SplitOnMarker && !outboundMessageIsToolFeedback(msg) {
+			} else if currentCfg := m.config.Load(); currentCfg != nil && currentCfg.Agents.Defaults.SplitOnMarker && !outboundMessageIsToolFeedback(msg) {
 				if markerChunks := SplitByMarker(msg.Content); len(markerChunks) > 1 {
 					for _, chunk := range markerChunks {
 						chunkMsg := msg
@@ -1829,8 +1838,8 @@ func (m *Manager) sendMediaWithRetry(
 // memory accumulation when outbound paths fail to trigger preSend (e.g. LLM errors).
 func (m *Manager) runTTLJanitor(ctx context.Context) {
 	interval := janitorInterval
-	if m.config != nil {
-		interval = m.config.Power.ScalePollInterval(interval)
+	if cfg := m.config.Load(); cfg != nil {
+		interval = cfg.Power.ScalePollInterval(interval)
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -1917,29 +1926,35 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config) error {
 	defer m.mu.Unlock()
 
 	// Save old config so we can revert on error.
-	oldConfig := m.config
+	oldConfig := m.config.Load()
 
 	// Update config early: initChannel uses m.config via factory(m.config, m.bus).
-	m.config = cfg
+	m.config.Store(cfg)
 
 	list := toChannelHashes(cfg)
 	added, removed := compareChannels(m.channelHashes, list)
 
 	deferFuncs := make([]func(), 0, len(removed)+len(added))
 	for _, name := range removed {
-		// Stop all channels
+		// Capture the instances being retired before initChannels replaces them
+		// under the same name. A channel whose settings changed appears in both
+		// `removed` and `added`, so the cleanup must release exactly these
+		// instances and leave the replacement channel and its worker untouched.
 		channel := m.channels[name]
+		worker := m.workers[name]
 		logger.InfoCF("channels", "Stopping channel", map[string]any{
 			"channel": name,
 		})
-		if err := channel.Stop(ctx); err != nil {
-			logger.ErrorCF("channels", "Error stopping channel", map[string]any{
-				"channel": name,
-				"error":   err.Error(),
-			})
+		if channel != nil {
+			if err := channel.Stop(ctx); err != nil {
+				logger.ErrorCF("channels", "Error stopping channel", map[string]any{
+					"channel": name,
+					"error":   err.Error(),
+				})
+			}
 		}
 		deferFuncs = append(deferFuncs, func() {
-			m.UnregisterChannel(name)
+			m.retireChannelInstance(name, channel, worker)
 		})
 	}
 	dispatchCtx, cancel := context.WithCancel(ctx)
@@ -1947,14 +1962,14 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config) error {
 	cc, err := toChannelConfig(cfg, added)
 	if err != nil {
 		logger.ErrorC("channels", fmt.Sprintf("toChannelConfig error: %v", err))
-		m.config = oldConfig
+		m.config.Store(oldConfig)
 		cancel()
 		return err
 	}
 	err = m.initChannels(cc)
 	if err != nil {
 		logger.ErrorC("channels", fmt.Sprintf("initChannels error: %v", err))
-		m.config = oldConfig
+		m.config.Store(oldConfig)
 		cancel()
 		return err
 	}
@@ -1979,8 +1994,8 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config) error {
 		}
 		// Lazily create worker only after channel starts successfully
 		channelType := name
-		if m.config != nil {
-			if bc := m.config.Channels.Get(name); bc != nil && bc.Type != "" {
+		if currentCfg := m.config.Load(); currentCfg != nil {
+			if bc := currentCfg.Channels.Get(name); bc != nil && bc.Type != "" {
 				channelType = bc.Type
 			}
 		}
@@ -2041,6 +2056,32 @@ func (m *Manager) UnregisterChannel(name string) {
 	}
 	delete(m.workers, name)
 	delete(m.channels, name)
+}
+
+// retireChannelInstance releases the resources of a channel instance that was
+// removed or replaced during a reload. Unlike UnregisterChannel it only clears
+// the manager maps when they still reference the retired instances, so a
+// replacement registered under the same name (config changed) keeps its own
+// channel and worker. It must run without holding the reload lock because it
+// waits for the retired worker goroutines to drain.
+func (m *Manager) retireChannelInstance(name string, channel Channel, worker *channelWorker) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if worker != nil {
+		worker.shutdown()
+		<-worker.done
+		<-worker.mediaDone
+		if m.workers[name] == worker {
+			delete(m.workers, name)
+		}
+	}
+	if channel != nil && m.channels[name] == channel {
+		if m.mux != nil {
+			m.unregisterChannelHTTPHandler(name, channel)
+		}
+		delete(m.channels, name)
+	}
 }
 
 // SendMessage sends an outbound message synchronously through the channel
