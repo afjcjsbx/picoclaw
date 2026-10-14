@@ -53,6 +53,30 @@ When omitted, the default is `warn`. Supported values: `debug`, `info`, `warn`, 
 
 You can also override this with the environment variable `PICOCLAW_LOG_LEVEL`.
 
+### Gateway Hot Reload
+
+The Gateway can reload `config.json` without a restart. Two independent triggers are available:
+
+- **Config file watching** — opt in with `gateway.hot_reload`:
+
+  ```json
+  {
+    "gateway": {
+      "hot_reload": true
+    }
+  }
+  ```
+
+  The default is `false`. When enabled, PicoClaw polls the config file (every 2 seconds, scaled by `power.poll_interval_multiplier`) and reloads after a change is written and validated. An invalid or partially written file is ignored and retried on the next poll; the last valid configuration stays in effect.
+
+- **`POST /reload`** — always available, regardless of `gateway.hot_reload`, on the shared Gateway HTTP server. It requires the Gateway auth token (`Authorization: Bearer <token>`) when one is configured and returns `202 Accepted` as soon as the reload is scheduled. The reload itself runs asynchronously; watch the `gateway.reload.started` / `gateway.reload.completed` / `gateway.reload.failed` runtime events, or the logs, for the outcome.
+
+A reload swaps the provider and the agent registry/configuration, restarts the cron, heartbeat, media, device and voice services, and restarts only the channels whose configuration changed. In-flight requests are allowed to drain before the previous provider is closed.
+
+**Not reloadable:** changing `gateway.host`, `gateway.port`, the log rotation settings (`log_max_size_mb`, `log_max_backups`) or the singleton PID file requires a full Gateway restart. Environment-variable overrides are also read only at startup.
+
+`gateway.hot_reload` can also be set with the environment variable `PICOCLAW_GATEWAY_HOT_RELOAD`.
+
 ### Workspace Layout
 
 PicoClaw stores data in your configured workspace (default: `~/.picoclaw/workspace`):
