@@ -145,3 +145,34 @@ func TestReload_UnchangedChannelKeepsSameWorker(t *testing.T) {
 		t.Fatalf("unchanged channel worker was replaced: got %p want %p", got, oldWorker)
 	}
 }
+
+// A reload must reuse the manager lifecycle context so StopAll keeps owning
+// every goroutine it may need to cancel; replacing it would orphan the previous
+// cancel func on each reload.
+func TestReload_ReusesLifecycleContext(t *testing.T) {
+	m := newReloadTestManager(t, newReloadTestConfig(t, `{"v":1}`, true))
+
+	m.mu.RLock()
+	beforeCtx := m.dispatchCtx
+	beforeTask := m.dispatchTask
+	m.mu.RUnlock()
+	if beforeCtx == nil || beforeTask == nil {
+		t.Fatal("expected a lifecycle context after StartAll")
+	}
+
+	if err := m.Reload(context.Background(), newReloadTestConfig(t, `{"v":2}`, true)); err != nil {
+		t.Fatalf("Reload() error = %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	m.mu.RLock()
+	afterCtx := m.dispatchCtx
+	afterTask := m.dispatchTask
+	m.mu.RUnlock()
+	if afterCtx != beforeCtx {
+		t.Fatal("reload replaced the lifecycle context")
+	}
+	if afterTask != beforeTask {
+		t.Fatal("reload replaced the lifecycle dispatch task")
+	}
+}

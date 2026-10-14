@@ -98,6 +98,7 @@ type Manager struct {
 	config                    atomic.Pointer[config.Config]
 	mediaStore                media.MediaStore
 	dispatchTask              *asyncTask
+	dispatchCtx               context.Context
 	mux                       *dynamicServeMux
 	httpServer                *http.Server
 	httpListeners             []net.Listener
@@ -1237,6 +1238,7 @@ func (m *Manager) StartAll(ctx context.Context) error {
 
 	dispatchCtx, cancel := context.WithCancel(ctx)
 	m.dispatchTask = &asyncTask{cancel: cancel}
+	m.dispatchCtx = dispatchCtx
 	failedStarts := make([]error, 0, len(m.channels))
 	failedNames := make([]string, 0, len(m.channels))
 
@@ -1285,6 +1287,7 @@ func (m *Manager) StartAll(ctx context.Context) error {
 			m.dispatchTask.cancel()
 			m.dispatchTask = nil
 		}
+		m.dispatchCtx = nil
 
 		sort.Strings(failedNames)
 		if len(failedStarts) == 0 {
@@ -1400,6 +1403,7 @@ func (m *Manager) StopAll(ctx context.Context) error {
 		m.dispatchTask.cancel()
 		m.dispatchTask = nil
 	}
+	m.dispatchCtx = nil
 
 	// Signal all workers to stop and wait for them to drain
 	for _, w := range m.workers {
@@ -1957,20 +1961,36 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config) error {
 			m.retireChannelInstance(name, channel, worker)
 		})
 	}
-	dispatchCtx, cancel := context.WithCancel(ctx)
-	m.dispatchTask = &asyncTask{cancel: cancel}
+	// Reuse the manager lifecycle context so workers added during a reload are
+	// canceled by StopAll together with the startup dispatchers. Allocating a
+	// fresh context here would orphan the previous cancel func on every reload.
+	dispatchCtx := m.dispatchCtx
+	var cancelCreated context.CancelFunc
+	if dispatchCtx == nil {
+		dispatchCtx, cancelCreated = context.WithCancel(ctx)
+		m.dispatchCtx = dispatchCtx
+		m.dispatchTask = &asyncTask{cancel: cancelCreated}
+	}
 	cc, err := toChannelConfig(cfg, added)
 	if err != nil {
 		logger.ErrorC("channels", fmt.Sprintf("toChannelConfig error: %v", err))
 		m.config.Store(oldConfig)
-		cancel()
+		if cancelCreated != nil {
+			cancelCreated()
+			m.dispatchCtx = nil
+			m.dispatchTask = nil
+		}
 		return err
 	}
 	err = m.initChannels(cc)
 	if err != nil {
 		logger.ErrorC("channels", fmt.Sprintf("initChannels error: %v", err))
 		m.config.Store(oldConfig)
-		cancel()
+		if cancelCreated != nil {
+			cancelCreated()
+			m.dispatchCtx = nil
+			m.dispatchTask = nil
+		}
 		return err
 	}
 	for _, name := range added {
