@@ -100,7 +100,7 @@ func TestExtractProtocol(t *testing.T) {
 		{
 			name:         "empty provider segment",
 			config:       &config.ModelConfig{Model: "/gpt-4o"},
-			wantProtocol: "",
+			wantProtocol: "openai",
 			wantModelID:  "gpt-4o",
 		},
 		{
