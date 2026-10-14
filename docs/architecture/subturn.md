@@ -13,7 +13,7 @@ By using a SubTurn, an agent can break down a problem and run a separate LLM inv
 - **Context Isolation**: Each SubTurn uses an `ephemeralSessionStore`. Its message history does not leak into the parent task and is destroyed upon completion. The ephemeral session holds at most **50 messages**; older messages are automatically truncated when this limit is reached.
 - **Depth & Concurrency Limits**: Prevents infinite loops and resource exhaustion.
   - **Maximum Depth**: Up to 3 nested levels.
-  - **Maximum Concurrency**: Up to 5 concurrent sub-turns per parent turn (managed via a semaphore with a 30-second timeout).
+  - **Maximum Concurrency**: Up to 3 concurrent sub-turns per parent turn by default (managed via a semaphore with a 30-second timeout). Each concurrent sub-turn holds its own context, so the default is kept low for low-RAM devices. Raise it with `agents.defaults.subturn.max_concurrent`; values above 32 are capped at 32.
 - **Context Protection**: Supports soft context limits (`MaxContextRunes`). It proactively truncates old messages (while preserving system prompts and recent context) before hitting the provider's hard context window limit.
 - **Error Recovery**: Automatically detects and recovers from provider context length exceeded errors and truncation errors by compressing history and retrying.
 
@@ -223,7 +223,7 @@ ctx = withTurnState(ctx, turnState)
 |:------|:----------|
 | `ErrDepthLimitExceeded` | SubTurn depth exceeds 3 levels |
 | `ErrInvalidSubTurnConfig` | Required field `Model` is empty |
-| `ErrConcurrencyTimeout` | All 5 concurrency slots occupied for 30+ seconds |
+| `ErrConcurrencyTimeout` | All concurrency slots (3 by default) occupied for 30+ seconds |
 | Context errors | Parent context cancelled during semaphore acquisition |
 
 ## Thread Safety
@@ -277,7 +277,8 @@ cfg := agent.SubTurnConfig{
 | Constant | Value |
 |:---------|:------|
 | `maxSubTurnDepth` | 3 |
-| `maxConcurrentSubTurns` | 5 |
+| `defaultMaxConcurrentSubTurns` | 3 |
+| `maxSubTurnConcurrency` (hard cap per parent turn) | 32 |
 | `concurrencyTimeout` | 30s |
 | `defaultSubTurnTimeout` | 5m |
 | `maxEphemeralHistorySize` | 50 messages |
