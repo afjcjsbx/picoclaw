@@ -55,7 +55,6 @@ type Runtime struct {
 
 type TurnCaseInput struct {
 	Workspace             string
-	WorkspaceID           string
 	TurnID                string
 	SessionKey            string
 	AgentID               string
