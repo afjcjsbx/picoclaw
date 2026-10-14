@@ -143,6 +143,42 @@ func TestExtractFeatures_HasAttachments_Extension(t *testing.T) {
 	}
 }
 
+func TestExtractFeatures_HasAttachments_IgnoresFencedCode(t *testing.T) {
+	cases := []struct {
+		msg  string
+		want bool
+	}{
+		{"plan:\n```go\nurl := \"clip.mp4\"\n```\n", false},
+		{"plan:\n~~~bash\ncp photo.png /tmp\n~~~\n", false},
+		{"plan:\n```\nsee photo.png\n```\n", false},
+		{"attachment: photo.png", true}, // outside the fence
+	}
+	for _, tc := range cases {
+		f := ExtractFeatures(tc.msg, nil)
+		if f.HasAttachments != tc.want {
+			t.Errorf("msg=%q: HasAttachments got %v, want %v", tc.msg, f.HasAttachments, tc.want)
+		}
+	}
+}
+
+func TestExtractFeatures_HasAttachments_FilenameBoundary(t *testing.T) {
+	cases := []struct {
+		msg  string
+		want bool
+	}{
+		{"the token .png alone is not an attachment", false},
+		{"photo.jpgx is not a media file", false},
+		{"see photo.jpg in the folder", true},
+		{"download report.png)", true},
+	}
+	for _, tc := range cases {
+		f := ExtractFeatures(tc.msg, nil)
+		if f.HasAttachments != tc.want {
+			t.Errorf("msg=%q: HasAttachments got %v, want %v", tc.msg, f.HasAttachments, tc.want)
+		}
+	}
+}
+
 // ── RuleClassifier ───────────────────────────────────────────────────────────
 
 func TestRuleClassifier_ZeroFeatures(t *testing.T) {

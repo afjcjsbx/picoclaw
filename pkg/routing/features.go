@@ -1,6 +1,7 @@
 package routing
 
 import (
+	"regexp"
 	"strings"
 	"unicode/utf8"
 
@@ -96,13 +97,22 @@ func countRecentToolCalls(history []providers.Message) int {
 	return count
 }
 
+// mediaExtensionRegex matches a filename-like token ending in a media
+// extension. It requires a leading alphanumeric character and a trailing
+// boundary so that a bare ".png" fragment or a longer token such as
+// "photo.jpgx" does not look like an attachment.
+var mediaExtensionRegex = regexp.MustCompile(
+	`(?i)[a-z0-9][a-z0-9._-]*\.(?:jpg|jpeg|png|gif|webp|bmp|mp3|wav|ogg|m4a|flac|mp4|avi|mov|webm)(?:[^a-z0-9]|$)`,
+)
+
 // hasAttachments returns true when the message content contains embedded media.
 // It checks for base64 data URIs (data:image/, data:audio/, data:video/) and
-// common image/audio URL extensions. This is intentionally conservative —
-// false negatives (missing an attachment) just mean the routing falls back to
-// the primary model anyway.
+// common image/audio URL/file extensions. Fenced code blocks are ignored first,
+// so a code snippet that merely mentions a media file name does not force the
+// heavy model. This is intentionally conservative — false negatives (missing an
+// attachment) just mean the routing falls back to the primary model anyway.
 func hasAttachments(msg string) bool {
-	lower := strings.ToLower(msg)
+	lower := strings.ToLower(stripFencedCodeBlocks(msg))
 
 	// Base64 data URIs embedded directly in the message
 	if strings.Contains(lower, "data:image/") ||
@@ -112,16 +122,33 @@ func hasAttachments(msg string) bool {
 	}
 
 	// Common image/audio extensions in URLs or file references
-	mediaExts := []string{
-		".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp",
-		".mp3", ".wav", ".ogg", ".m4a", ".flac",
-		".mp4", ".avi", ".mov", ".webm",
-	}
-	for _, ext := range mediaExts {
-		if strings.Contains(lower, ext) {
-			return true
-		}
+	return mediaExtensionRegex.MatchString(lower)
+}
+
+// stripFencedCodeBlocks removes fenced code blocks (``` or ~~~) so that media
+// file names mentioned in code are not mistaken for attachments. An unclosed
+// opening fence is treated as an open block, i.e. everything after it is
+// dropped; this mirrors countCodeBlocks, which also treats an unclosed fence as
+// incomplete.
+func stripFencedCodeBlocks(msg string) string {
+	if !strings.Contains(msg, "```") && !strings.Contains(msg, "~~~") {
+		return msg
 	}
 
-	return false
+	var b strings.Builder
+	b.Grow(len(msg))
+	inside := false
+	for _, line := range strings.Split(msg, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
+			inside = !inside
+			continue
+		}
+		if inside {
+			continue
+		}
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+	return b.String()
 }
