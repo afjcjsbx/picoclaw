@@ -771,36 +771,45 @@ func setupConfigWatcherPolling(configPath string, debug bool, interval time.Dura
 				currentModTime := getFileModTime(configPath)
 				currentSize := getFileSize(configPath)
 
-				if currentModTime.After(lastModTime) || currentSize != lastSize {
-					if debug {
-						logger.Debugf("🔍 Config file change detected")
-					}
+				if !currentModTime.After(lastModTime) && currentSize == lastSize {
+					continue
+				}
 
-					time.Sleep(500 * time.Millisecond)
+				if debug {
+					logger.Debugf("🔍 Config file change detected")
+				}
 
-					lastModTime = currentModTime
-					lastSize = currentSize
+				// Debounce: wait for the write to settle, then re-stat so the
+				// watermark reflects the version that is about to be loaded.
+				time.Sleep(500 * time.Millisecond)
+				currentModTime = getFileModTime(configPath)
+				currentSize = getFileSize(configPath)
 
-					newCfg, err := config.LoadConfig(configPath)
-					if err != nil {
-						logger.Errorf("⚠ Error loading new config: %v", err)
-						logger.Warn("  Using previous valid config")
-						continue
-					}
+				newCfg, err := config.LoadConfig(configPath)
+				if err != nil {
+					logger.Errorf("⚠ Error loading new config: %v", err)
+					logger.Warn("  Using previous valid config")
+					continue
+				}
 
-					if err := newCfg.ValidateModelList(); err != nil {
-						logger.Errorf("  ⚠ New config validation failed: %v", err)
-						logger.Warn("  Using previous valid config")
-						continue
-					}
+				if err := newCfg.ValidateModelList(); err != nil {
+					logger.Errorf("  ⚠ New config validation failed: %v", err)
+					logger.Warn("  Using previous valid config")
+					continue
+				}
 
-					logger.Info("✓ Config file validated and loaded")
+				// Advance the watermark only after a successful load, so a
+				// partially written or invalid file is retried on the next tick
+				// instead of being silently skipped.
+				lastModTime = currentModTime
+				lastSize = currentSize
 
-					select {
-					case configChan <- newCfg:
-					default:
-						logger.Warn("⚠ Previous config reload still in progress, skipping")
-					}
+				logger.Info("✓ Config file validated and loaded")
+
+				select {
+				case configChan <- newCfg:
+				default:
+					logger.Warn("⚠ Previous config reload still in progress, skipping")
 				}
 			case <-stop:
 				return
