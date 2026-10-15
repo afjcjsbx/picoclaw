@@ -58,6 +58,28 @@ func (m *legacyContextManager) Compact(ctx context.Context, req *CompactRequest)
 		}
 	case ContextCompressReasonSummarize:
 		m.maybeSummarize(ctx, req.SessionKey)
+	case ContextCompressReasonManual:
+		return m.compactManually(req)
+	}
+	return nil
+}
+
+// compactManually summarizes the session synchronously for /compact. It shares
+// the dedup key with the async post-turn summarization so the two never
+// truncate the same history concurrently.
+func (m *legacyContextManager) compactManually(req *CompactRequest) error {
+	agent := m.al.agentForSession(req.SessionKey)
+	if agent == nil || agent.Sessions == nil {
+		return fmt.Errorf("sessions not initialized")
+	}
+	summarizeKey := agent.ID + ":" + req.SessionKey
+	if _, loading := m.summarizing.LoadOrStore(summarizeKey, true); loading {
+		return fmt.Errorf("a summarization is already in progress")
+	}
+	defer m.summarizing.Delete(summarizeKey)
+
+	if !m.summarizeSession(agent, req.SessionKey, nil, req.Instructions) {
+		return ErrNothingToCompact
 	}
 	return nil
 }
@@ -111,7 +133,7 @@ func (m *legacyContextManager) maybeSummarize(ctx context.Context, sessionKey st
 					}
 				}()
 				logger.Debug("Memory threshold reached. Optimizing conversation history...")
-				m.summarizeSession(agent, sessionKey, ts)
+				m.summarizeSession(agent, sessionKey, ts, "")
 			}()
 		}
 	}
@@ -198,7 +220,15 @@ func (m *legacyContextManager) forceCompression(sessionKey string) (compressionR
 	}, true
 }
 
-func (m *legacyContextManager) summarizeSession(agent *AgentInstance, sessionKey string, ts *turnState) {
+// summarizeSession summarizes all but the most recent messages. focus, when
+// non-empty, tells the summarizer which details to preserve. It reports whether
+// a summary was applied.
+func (m *legacyContextManager) summarizeSession(
+	agent *AgentInstance,
+	sessionKey string,
+	ts *turnState,
+	focus string,
+) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
@@ -206,12 +236,12 @@ func (m *legacyContextManager) summarizeSession(agent *AgentInstance, sessionKey
 	summary := agent.Sessions.GetSummary(sessionKey)
 
 	if len(history) <= 4 {
-		return
+		return false
 	}
 
 	safeCut := findSafeBoundary(history, len(history)-4)
 	if safeCut <= 0 {
-		return
+		return false
 	}
 	keepCount := len(history) - safeCut
 	toSummarize := history[:safeCut]
@@ -233,7 +263,7 @@ func (m *legacyContextManager) summarizeSession(agent *AgentInstance, sessionKey
 	}
 
 	if len(validMessages) == 0 {
-		return
+		return false
 	}
 
 	const (
@@ -249,12 +279,12 @@ func (m *legacyContextManager) summarizeSession(agent *AgentInstance, sessionKey
 		part1 := validMessages[:mid]
 		part2 := validMessages[mid:]
 
-		s1, _ := m.summarizeBatch(ctx, agent, part1, "")
-		s2, _ := m.summarizeBatch(ctx, agent, part2, "")
+		s1, _ := m.summarizeBatch(ctx, agent, part1, "", focus)
+		s2, _ := m.summarizeBatch(ctx, agent, part2, "", focus)
 
 		mergePrompt := fmt.Sprintf(
-			"Merge these two conversation summaries into one cohesive summary:\n\n1: %s\n\n2: %s",
-			s1, s2,
+			"Merge these two conversation summaries into one cohesive summary:%s\n\n1: %s\n\n2: %s",
+			focusInstruction(focus), s1, s2,
 		)
 
 		resp, err := m.retryLLMCall(ctx, agent, mergePrompt, llmMaxRetries)
@@ -264,7 +294,7 @@ func (m *legacyContextManager) summarizeSession(agent *AgentInstance, sessionKey
 			finalSummary = s1 + " " + s2
 		}
 	} else {
-		finalSummary, _ = m.summarizeBatch(ctx, agent, validMessages, summary)
+		finalSummary, _ = m.summarizeBatch(ctx, agent, validMessages, summary, focus)
 	}
 
 	if omitted && finalSummary != "" {
@@ -289,7 +319,9 @@ func (m *legacyContextManager) summarizeSession(agent *AgentInstance, sessionKey
 			ts,
 			formatContextSummarizeFeedback(len(validMessages), keepCount),
 		)
+		return true
 	}
+	return false
 }
 
 func (m *legacyContextManager) findNearestUserMessage(messages []providers.Message, mid int) int {
@@ -359,6 +391,7 @@ func (m *legacyContextManager) summarizeBatch(
 	agent *AgentInstance,
 	batch []providers.Message,
 	existingSummary string,
+	focus string,
 ) (string, error) {
 	const (
 		llmMaxRetries             = 3
@@ -367,7 +400,9 @@ func (m *legacyContextManager) summarizeBatch(
 	)
 
 	var sb strings.Builder
-	sb.WriteString("Provide a concise summary of this conversation segment, preserving core context and key points.\n")
+	sb.WriteString("Provide a concise summary of this conversation segment, preserving core context and key points.")
+	sb.WriteString(focusInstruction(focus))
+	sb.WriteString("\n")
 	if existingSummary != "" {
 		sb.WriteString("Existing context: ")
 		sb.WriteString(existingSummary)
@@ -412,6 +447,15 @@ func (m *legacyContextManager) summarizeBatch(
 		fallback.WriteString(fmt.Sprintf("%s: %s", msg.Role, content))
 	}
 	return fallback.String(), nil
+}
+
+// focusInstruction renders the user's /compact focus as a prompt sentence
+// (empty when no focus was given).
+func focusInstruction(focus string) string {
+	if focus == "" {
+		return ""
+	}
+	return " Pay particular attention to preserving details about: " + focus + "."
 }
 
 func (m *legacyContextManager) estimateTokens(messages []providers.Message) int {

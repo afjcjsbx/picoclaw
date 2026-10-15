@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -1396,5 +1397,47 @@ func TestSeahorsePruneReachesEveryAgentStore(t *testing.T) {
 	}
 	if len(statuses) != 1 || statuses[0].SessionKey != "agent:main:newest" {
 		t.Fatalf("seahorse sessions = %v, want only agent:main:newest", statuses)
+	}
+}
+
+func TestSeahorseCompact_Manual(t *testing.T) {
+	var prompts []string
+	engine, err := seahorse.NewEngine(seahorse.Config{DBPath: t.TempDir() + "/test.db"},
+		func(_ context.Context, prompt string, _ seahorse.CompleteOptions) (string, error) {
+			prompts = append(prompts, prompt)
+			return "short summary", nil
+		})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	defer engine.Close()
+	mgr := &seahorseContextManager{engine: engine}
+	ctx := context.Background()
+
+	err = mgr.Compact(ctx, &CompactRequest{SessionKey: "manual-test", Reason: ContextCompressReasonManual})
+	if !errors.Is(err, ErrNothingToCompact) {
+		t.Fatalf("empty session: err = %v, want ErrNothingToCompact", err)
+	}
+
+	for i := 0; i < 40; i++ {
+		for _, role := range []string{"user", "assistant"} {
+			content := fmt.Sprintf("%s message %d with some body text", role, i)
+			_ = mgr.Ingest(ctx, &IngestRequest{
+				SessionKey: "manual-test",
+				Message:    protocoltypes.Message{Role: role, Content: content},
+			})
+		}
+	}
+
+	err = mgr.Compact(ctx, &CompactRequest{
+		SessionKey:   "manual-test",
+		Reason:       ContextCompressReasonManual,
+		Instructions: "database migration",
+	})
+	if err != nil {
+		t.Fatalf("Compact manual: %v", err)
+	}
+	if len(prompts) == 0 || !strings.Contains(prompts[0], "database migration") {
+		t.Fatalf("summarizer prompt missing focus: %q", prompts)
 	}
 }

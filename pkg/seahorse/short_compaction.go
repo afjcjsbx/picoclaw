@@ -48,7 +48,7 @@ func (e *CompactionEngine) Compact(ctx context.Context, convID int64, input Comp
 	result := &CompactResult{}
 
 	// Phase 1: leaf compaction (synchronous, every turn)
-	summaryID, err := e.compactLeaf(ctx, convID)
+	summaryID, err := e.compactLeaf(ctx, convID, "")
 	if err != nil {
 		return nil, fmt.Errorf("compact leaf: %w", err)
 	}
@@ -80,7 +80,7 @@ func (e *CompactionEngine) Compact(ctx context.Context, convID int64, input Comp
 		if _, loaded := e.condensing.LoadOrStore(convID, struct{}{}); !loaded {
 			go func() {
 				defer e.condensing.Delete(convID)
-				e.runCondensedLoop(e.shutdownCtx, convID)
+				e.runCondensedLoop(e.shutdownCtx, convID, "")
 			}()
 		}
 	}
@@ -90,6 +90,35 @@ func (e *CompactionEngine) Compact(ctx context.Context, convID int64, input Comp
 		result.TokensSaved = tokensBefore - tokensAfter
 	}
 
+	return result, nil
+}
+
+// CompactNow runs one leaf pass followed by the condensed loop, all synchronously,
+// so the caller can report what actually happened. Unlike Compact it ignores
+// thresholds beyond the per-pass minimums. instructions (may be empty) tells the
+// summarizer which details to prioritize.
+func (e *CompactionEngine) CompactNow(ctx context.Context, convID int64, instructions string) (*CompactResult, error) {
+	result := &CompactResult{}
+	tokensBefore, _ := e.store.GetContextTokenCount(ctx, convID)
+
+	summaryID, err := e.compactLeaf(ctx, convID, instructions)
+	if err != nil {
+		return nil, fmt.Errorf("compact leaf: %w", err)
+	}
+	if summaryID != nil {
+		result.SummariesCreated = append(result.SummariesCreated, *summaryID)
+		result.LeafSummaries++
+	}
+
+	// Share the dedup map with the async path so two condensed loops never overlap.
+	if _, loaded := e.condensing.LoadOrStore(convID, struct{}{}); !loaded {
+		defer e.condensing.Delete(convID)
+		result.CondensedSummaries = e.runCondensedLoop(ctx, convID, instructions)
+	}
+
+	if tokensAfter, _ := e.store.GetContextTokenCount(ctx, convID); tokensAfter < tokensBefore {
+		result.TokensSaved = tokensBefore - tokensAfter
+	}
 	return result, nil
 }
 
@@ -116,7 +145,7 @@ func (e *CompactionEngine) CompactUntilUnder(ctx context.Context, convID int64, 
 		}
 
 		// Try leaf first
-		summaryID, err := e.compactLeaf(ctx, convID, true)
+		summaryID, err := e.compactLeaf(ctx, convID, "", true)
 		if err != nil {
 			return result, err
 		}
@@ -131,7 +160,7 @@ func (e *CompactionEngine) CompactUntilUnder(ctx context.Context, convID int64, 
 		}
 
 		// Try condensed with forced fanout
-		condensedID, err := e.compactCondensed(ctx, convID)
+		condensedID, err := e.compactCondensed(ctx, convID, "")
 		if err != nil {
 			return result, err
 		}
@@ -169,7 +198,13 @@ func (e *CompactionEngine) CompactUntilUnder(ctx context.Context, convID int64, 
 
 // compactLeaf compresses the oldest contiguous message chunk into a leaf summary.
 // When force is true, FreshTailCount protection is bypassed (used by CompactUntilUnder).
-func (e *CompactionEngine) compactLeaf(ctx context.Context, convID int64, force ...bool) (*string, error) {
+// instructions optionally tells the summarizer which details to prioritize.
+func (e *CompactionEngine) compactLeaf(
+	ctx context.Context,
+	convID int64,
+	instructions string,
+	force ...bool,
+) (*string, error) {
 	items, err := e.store.GetContextItems(ctx, convID)
 	if err != nil {
 		return nil, err
@@ -257,7 +292,7 @@ func (e *CompactionEngine) compactLeaf(ctx context.Context, convID int64, force 
 	}
 
 	// Generate summary
-	content, err := e.generateLeafSummary(ctx, messages, priorSummary)
+	content, err := e.generateLeafSummary(ctx, messages, priorSummary, instructions)
 	if err != nil {
 		return nil, err
 	}
@@ -305,7 +340,7 @@ func (e *CompactionEngine) compactLeaf(ctx context.Context, convID int64, force 
 }
 
 // compactCondensed compresses multiple summaries into one higher-level summary.
-func (e *CompactionEngine) compactCondensed(ctx context.Context, convID int64) (*string, error) {
+func (e *CompactionEngine) compactCondensed(ctx context.Context, convID int64, instructions string) (*string, error) {
 	// Try ordinal-aware selection first (respects consecutive ordering)
 	var candidates []Summary
 
@@ -338,7 +373,7 @@ func (e *CompactionEngine) compactCondensed(ctx context.Context, convID int64) (
 	}
 
 	// Generate condensed summary
-	content, err := e.generateCondensedSummary(ctx, candidates)
+	content, err := e.generateCondensedSummary(ctx, candidates, instructions)
 	if err != nil {
 		return nil, err
 	}
@@ -574,6 +609,7 @@ func (e *CompactionEngine) generateLeafSummary(
 	ctx context.Context,
 	messages []Message,
 	previousSummary string,
+	instructions string,
 ) (string, error) {
 	if e.complete == nil {
 		return truncateSummary(messages), nil
@@ -584,7 +620,7 @@ func (e *CompactionEngine) generateLeafSummary(
 	targetTokens := min(LeafTargetTokens, int(float64(inputTokens)*0.35))
 
 	// Level 1: normal prompt
-	prompt := buildLeafSummaryPrompt(sourceText, previousSummary, targetTokens)
+	prompt := withFocus(buildLeafSummaryPrompt(sourceText, previousSummary, targetTokens), instructions)
 	content, err := e.complete(ctx, prompt, CompleteOptions{
 		MaxTokens:   LeafTargetTokens * 2,
 		Temperature: 0.3,
@@ -610,7 +646,10 @@ func (e *CompactionEngine) generateLeafSummary(
 
 	// Level 2: aggressive prompt
 	aggressiveTarget := min(640, int(float64(inputTokens)*0.20))
-	aggressivePrompt := buildAggressiveLeafSummaryPrompt(sourceText, previousSummary, aggressiveTarget)
+	aggressivePrompt := withFocus(
+		buildAggressiveLeafSummaryPrompt(sourceText, previousSummary, aggressiveTarget),
+		instructions,
+	)
 	content, err = e.complete(ctx, aggressivePrompt, CompleteOptions{
 		MaxTokens:   aggressiveTarget * 2,
 		Temperature: 0.3,
@@ -637,7 +676,11 @@ func (e *CompactionEngine) generateLeafSummary(
 }
 
 // generateCondensedSummary calls the LLM to generate a condensed summary with 3-level escalation.
-func (e *CompactionEngine) generateCondensedSummary(ctx context.Context, summaries []Summary) (string, error) {
+func (e *CompactionEngine) generateCondensedSummary(
+	ctx context.Context,
+	summaries []Summary,
+	instructions string,
+) (string, error) {
 	if e.complete == nil {
 		return truncateCondensedSummaries(summaries), nil
 	}
@@ -647,7 +690,7 @@ func (e *CompactionEngine) generateCondensedSummary(ctx context.Context, summari
 	targetTokens := min(CondensedTargetTokens, int(float64(inputTokens)*0.35))
 
 	// Level 1: normal prompt
-	prompt := buildCondensedSummaryPrompt(sourceText, targetTokens)
+	prompt := withFocus(buildCondensedSummaryPrompt(sourceText, targetTokens), instructions)
 	content, err := e.complete(ctx, prompt, CompleteOptions{
 		MaxTokens:   CondensedTargetTokens * 2,
 		Temperature: 0.3,
@@ -670,7 +713,7 @@ func (e *CompactionEngine) generateCondensedSummary(ctx context.Context, summari
 
 	// Level 2: aggressive prompt
 	aggressiveTarget := min(640, int(float64(inputTokens)*0.20))
-	aggressivePrompt := buildCondensedSummaryPrompt(sourceText, aggressiveTarget)
+	aggressivePrompt := withFocus(buildCondensedSummaryPrompt(sourceText, aggressiveTarget), instructions)
 	content, err = e.complete(ctx, aggressivePrompt, CompleteOptions{
 		MaxTokens:   aggressiveTarget * 2,
 		Temperature: 0.3,
@@ -691,31 +734,34 @@ func (e *CompactionEngine) generateCondensedSummary(ctx context.Context, summari
 // b) No candidate found (nothing to condense), OR
 // c) tokensAfter >= tokensBefore (no progress this iteration), OR
 // d) tokensAfter >= previousTokens (no improvement over last iteration)
-func (e *CompactionEngine) runCondensedLoop(ctx context.Context, convID int64) {
+//
+// It returns how many condensed summaries were created.
+func (e *CompactionEngine) runCondensedLoop(ctx context.Context, convID int64, instructions string) (created int) {
 	var prevTokens int
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return created
 		default:
 		}
 
 		tokensBefore, err := e.store.GetContextTokenCount(ctx, convID)
 		if err != nil {
 			logger.ErrorCF("seahorse", "condensed: get tokens", map[string]any{"error": err.Error()})
-			return
+			return created
 		}
 
-		condensedID, err := e.compactCondensed(ctx, convID)
+		condensedID, err := e.compactCondensed(ctx, convID, instructions)
 		if err != nil {
 			logger.ErrorCF("seahorse", "condensed: compact", map[string]any{"error": err.Error()})
-			return
+			return created
 		}
 		if condensedID == nil {
 			// No candidate found
 			logger.DebugCF("seahorse", "condensed: no candidate", map[string]any{"conv_id": convID})
-			return
+			return created
 		}
+		created++
 
 		tokensAfter, _ := e.store.GetContextTokenCount(ctx, convID)
 
@@ -726,7 +772,7 @@ func (e *CompactionEngine) runCondensedLoop(ctx context.Context, convID int64) {
 				"condensed: no progress",
 				map[string]any{"conv_id": convID, "tokens_before": tokensBefore, "tokens_after": tokensAfter},
 			)
-			return
+			return created
 		}
 		if tokensAfter >= prevTokens && prevTokens > 0 {
 			// No improvement over last iteration
@@ -735,7 +781,7 @@ func (e *CompactionEngine) runCondensedLoop(ctx context.Context, convID int64) {
 				"condensed: no improvement",
 				map[string]any{"conv_id": convID, "tokens": tokensAfter},
 			)
-			return
+			return created
 		}
 
 		prevTokens = tokensAfter
@@ -771,6 +817,17 @@ func formatSummariesForCondensation(summaries []Summary) string {
 		result += fmt.Sprintf("[%s - %s]\n%s\n\n", earliest, latest, s.Content)
 	}
 	return result
+}
+
+// withFocus appends the user's /compact focus to a summary prompt. It is a no-op
+// for empty instructions, so automatic compaction prompts are unchanged.
+func withFocus(prompt, instructions string) string {
+	if instructions == "" {
+		return prompt
+	}
+	return prompt + "\n\n<focus>\n" + instructions + "\n</focus>\n" +
+		"Prioritize preserving details related to the focus above. " +
+		"All output requirements above still apply."
 }
 
 func buildLeafSummaryPrompt(sourceText, previousSummary string, targetTokens int) string {
