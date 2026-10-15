@@ -154,10 +154,10 @@ func hasAttachments(msg string) bool {
 }
 
 // stripFencedCodeBlocks removes fenced code blocks (``` or ~~~) so that media
-// file names mentioned in code are not mistaken for attachments. An unclosed
-// opening fence is treated as an open block, i.e. everything after it is
-// dropped; this mirrors countCodeBlocks, which also treats an unclosed fence as
-// incomplete.
+// file names mentioned in code are not mistaken for attachments. Like
+// countCodeBlocks, a block is closed only by a fence of the same type that
+// opened it, so a different fence inside a block is dropped with the rest of
+// its content. An unclosed opening fence drops everything after it.
 func stripFencedCodeBlocks(msg string) string {
 	if !strings.Contains(msg, "```") && !strings.Contains(msg, "~~~") {
 		return msg
@@ -165,19 +165,18 @@ func stripFencedCodeBlocks(msg string) string {
 
 	var b strings.Builder
 	b.Grow(len(msg))
-	inside := false
 	for rest := msg; ; {
 		i, marker := nextFence(rest)
 		if i < 0 {
-			if !inside {
-				b.WriteString(rest)
-			}
+			b.WriteString(rest)
 			return b.String()
 		}
-		if !inside {
-			b.WriteString(rest[:i])
-		}
-		inside = !inside
+		b.WriteString(rest[:i])
 		rest = rest[i+len(marker):]
+		end := strings.Index(rest, marker)
+		if end < 0 {
+			return b.String()
+		}
+		rest = rest[end+len(marker):]
 	}
 }

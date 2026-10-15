@@ -176,6 +176,7 @@ func TestExtractFeatures_HasAttachments_IgnoresFencedCode(t *testing.T) {
 		{"plan:\n```\nsee photo.png\n```\n", false},
 		{"attachment: photo.png", true},                  // outside the fence
 		{"plan: ```go\nurl := \"clip.mp4\"\n```", false}, // opening fence mid-line
+		{"```\nreal.png\n~~~\nother.png\n```\n", false},  // ~~~ does not end a ``` block
 	}
 	for _, tc := range cases {
 		f := ExtractFeatures(tc.msg, nil)
@@ -195,6 +196,8 @@ func TestStripFencedCodeBlocks_KeepsOutsideTextVerbatim(t *testing.T) {
 		{"no fences\n", "no fences\n"},
 		{"see ```x.png``` ok", "see  ok"},
 		{"keep ```unclosed.png", "keep "},
+		{"```\na\n~~~\nb\n```\nc", "\nc"}, // ~~~ inside a ``` block is content
+		{"~~~\na\n```\nb\n~~~\nc", "\nc"},
 	}
 	for _, tc := range cases {
 		if got := stripFencedCodeBlocks(tc.msg); got != tc.want {
