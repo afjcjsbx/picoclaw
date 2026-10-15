@@ -72,11 +72,36 @@ func formatContextCompactFeedback(dropped, remaining int) string {
 	)
 }
 
-// formatContextSummaryCounts reports seahorse summary creation counts.
+// formatContextSummaryCounts reports seahorse summary creation counts in plain
+// language, for example:
+//
+//	"Compacted context: summarized 2 blocks of older messages and merged 3
+//	summaries into a higher-level summary to free up space."
+//
+// A "block" is a chunk of older messages collapsed into one compact summary; a
+// merge folds several summaries into a higher-level one. The notice only shows
+// the steps that actually ran, so leaf-only compactions omit the merge clause.
 func formatContextSummaryCounts(leaf, condensed int) string {
-	detail := "Compacted context: created " + strconv.Itoa(leaf) + " leaf summaries"
-	if condensed > 0 {
-		detail += " and " + strconv.Itoa(condensed) + " condensed summaries"
+	detail := "Compacted context: "
+	switch {
+	case leaf > 0 && condensed > 0:
+		detail += "summarized " + countLabel(leaf, "block", "blocks") +
+			" of older messages and merged " + countLabel(condensed, "summary", "summaries") +
+			" into a higher-level summary"
+	case leaf > 0:
+		detail += "summarized " + countLabel(leaf, "block", "blocks") + " of older messages"
+	default:
+		detail += "merged " + countLabel(condensed, "summary", "summaries") + " into a higher-level summary"
 	}
-	return utils.FormatToolFeedbackMessage(contextFeedbackToolCompact, detail+".", "")
+	return utils.FormatToolFeedbackMessage(contextFeedbackToolCompact, detail+" to free up space.", "")
+}
+
+// countLabel renders a count with its correctly pluralized noun, e.g.
+// "1 block" or "3 blocks".
+func countLabel(n int, singular, plural string) string {
+	word := plural
+	if n == 1 {
+		word = singular
+	}
+	return strconv.Itoa(n) + " " + word
 }
