@@ -759,6 +759,20 @@ func setupConfigWatcherPolling(configPath string, debug bool, interval time.Dura
 		lastModTime := getFileModTime(configPath)
 		lastSize := getFileSize(configPath)
 
+		// A rejected file is retried on every tick (see below), so only log
+		// a rejection when it differs from the previous one; otherwise an
+		// invalid file would repeat the same error forever.
+		var lastRejection string
+		reject := func(format string, err error) {
+			msg := fmt.Sprintf(format, err)
+			if msg == lastRejection {
+				return
+			}
+			lastRejection = msg
+			logger.Error(msg)
+			logger.Warn("  Using previous valid config")
+		}
+
 		if interval <= 0 {
 			interval = 2 * time.Second
 		}
@@ -787,14 +801,12 @@ func setupConfigWatcherPolling(configPath string, debug bool, interval time.Dura
 
 				newCfg, err := config.LoadConfig(configPath)
 				if err != nil {
-					logger.Errorf("⚠ Error loading new config: %v", err)
-					logger.Warn("  Using previous valid config")
+					reject("⚠ Error loading new config: %v", err)
 					continue
 				}
 
 				if err := newCfg.ValidateModelList(); err != nil {
-					logger.Errorf("  ⚠ New config validation failed: %v", err)
-					logger.Warn("  Using previous valid config")
+					reject("  ⚠ New config validation failed: %v", err)
 					continue
 				}
 
@@ -803,6 +815,7 @@ func setupConfigWatcherPolling(configPath string, debug bool, interval time.Dura
 				// instead of being silently skipped.
 				lastModTime = currentModTime
 				lastSize = currentSize
+				lastRejection = ""
 
 				logger.Info("✓ Config file validated and loaded")
 
