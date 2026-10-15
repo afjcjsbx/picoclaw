@@ -83,7 +83,7 @@
 
 2026-02-26 🎉 PicoClaw raggiunge **20K stelle** in soli 17 giorni! Orchestrazione automatica dei canali e interfacce di capacità sono attive.
 
-2026-02-16 🎉 PicoClaw supera 12K stelle in una settimana! Ruoli di maintainer della community e [Roadmap](../../ROADMAP.md) pubblicati ufficialmente.
+2026-02-16 🎉 PicoClaw supera 12K stelle in una settimana! Ruoli di maintainer della community e Roadmap pubblicati ufficialmente.
 
 2026-02-13 🎉 PicoClaw supera 5000 stelle in 4 giorni! Roadmap del progetto e gruppi sviluppatori in fase di avvio.
 

@@ -98,7 +98,7 @@ This repository is an actively maintained fork of PicoClaw. Development continue
 
 2026-02-26 🎉 PicoClaw hits **20K Stars** in just 17 days! Channel auto-orchestration and capability interfaces are live.
 
-2026-02-16 🎉 PicoClaw breaks 12K Stars in one week! Community maintainer roles and [Roadmap](ROADMAP.md) officially launched.
+2026-02-16 🎉 PicoClaw breaks 12K Stars in one week! Community maintainer roles and Roadmap officially launched.
 
 2026-02-13 🎉 PicoClaw breaks 5000 Stars in 4 days! Project roadmap and developer groups in progress.
 
