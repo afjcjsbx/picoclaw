@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -488,18 +489,27 @@ func TestEvolutionConfig_ColdPathTriggerMode(t *testing.T) {
 	assert.False(t, manual.RunsColdPathAutomatically())
 }
 
-func TestEvolutionConfig_EffectiveMinSuccessRatioClampsToValidRange(t *testing.T) {
+func TestEvolutionConfig_EffectiveMinSuccessRatioFallsBackOutsideValidRange(t *testing.T) {
 	above := EvolutionConfig{MinSuccessRatio: 1.5}
-	assert.Equal(t, 1.0, above.EffectiveMinSuccessRatio())
+	assert.Equal(t, 0.7, above.EffectiveMinSuccessRatio())
+
+	percent := EvolutionConfig{MinSuccessRatio: 70}
+	assert.Equal(t, 0.7, percent.EffectiveMinSuccessRatio())
 
 	legacyAbove := EvolutionConfig{MinSuccessRate: 2}
-	assert.Equal(t, 1.0, legacyAbove.EffectiveMinSuccessRatio())
-
-	inRange := EvolutionConfig{MinSuccessRatio: 0.7}
-	assert.Equal(t, 0.7, inRange.EffectiveMinSuccessRatio())
+	assert.Equal(t, 0.7, legacyAbove.EffectiveMinSuccessRatio())
 
 	negative := EvolutionConfig{MinSuccessRatio: -0.1}
 	assert.Equal(t, 0.7, negative.EffectiveMinSuccessRatio())
+
+	nan := EvolutionConfig{MinSuccessRatio: math.NaN()}
+	assert.Equal(t, 0.7, nan.EffectiveMinSuccessRatio())
+
+	upperBound := EvolutionConfig{MinSuccessRatio: 1}
+	assert.Equal(t, 1.0, upperBound.EffectiveMinSuccessRatio())
+
+	inRange := EvolutionConfig{MinSuccessRatio: 0.7}
+	assert.Equal(t, 0.7, inRange.EffectiveMinSuccessRatio())
 }
 
 func TestEvolutionConfig_NewThresholdNamesPreferLegacyAliases(t *testing.T) {

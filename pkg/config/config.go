@@ -156,13 +156,12 @@ func (c EvolutionConfig) EffectiveMinSuccessRatio() float64 {
 	if ratio <= 0 {
 		ratio = c.MinSuccessRate
 	}
-	if ratio <= 0 {
-		return 0.7
+	// The documented range is (0, 1]; anything else (including NaN) falls back
+	// to the default instead of silently disabling pattern generation.
+	if ratio > 0 && ratio <= 1 {
+		return ratio
 	}
-	if ratio > 1 {
-		return 1
-	}
-	return ratio
+	return 0.7
 }
 
 func (c EvolutionConfig) EffectiveColdPathTimes() []string {
