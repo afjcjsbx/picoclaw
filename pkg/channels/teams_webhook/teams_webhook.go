@@ -12,10 +12,10 @@ import (
 	goteamsnotify "github.com/atc0005/go-teams-notify/v2"
 	"github.com/atc0005/go-teams-notify/v2/adaptivecard"
 
-	"github.com/sipeed/picoclaw/pkg/bus"
-	"github.com/sipeed/picoclaw/pkg/channels"
-	"github.com/sipeed/picoclaw/pkg/config"
-	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/afjcjsbx/picoclaw/pkg/bus"
+	"github.com/afjcjsbx/picoclaw/pkg/channels"
+	"github.com/afjcjsbx/picoclaw/pkg/config"
+	"github.com/afjcjsbx/picoclaw/pkg/logger"
 )
 
 // statusCodeRe extracts HTTP status codes from error messages like "401 Unauthorized".

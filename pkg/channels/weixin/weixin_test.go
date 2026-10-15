@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sipeed/picoclaw/pkg/bus"
-	basechannels "github.com/sipeed/picoclaw/pkg/channels"
-	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/afjcjsbx/picoclaw/pkg/bus"
+	basechannels "github.com/afjcjsbx/picoclaw/pkg/channels"
+	"github.com/afjcjsbx/picoclaw/pkg/config"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)

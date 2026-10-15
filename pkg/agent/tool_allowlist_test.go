@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/sipeed/picoclaw/pkg/bus"
-	"github.com/sipeed/picoclaw/pkg/config"
-	agenttools "github.com/sipeed/picoclaw/pkg/tools"
+	"github.com/afjcjsbx/picoclaw/pkg/bus"
+	"github.com/afjcjsbx/picoclaw/pkg/config"
+	agenttools "github.com/afjcjsbx/picoclaw/pkg/tools"
 )
 
 type allowlistTestTool struct {

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/sipeed/picoclaw/pkg/logger"
-	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/afjcjsbx/picoclaw/pkg/logger"
+	"github.com/afjcjsbx/picoclaw/pkg/providers"
 )
 
 type PromptLayer string

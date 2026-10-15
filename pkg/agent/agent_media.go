@@ -16,11 +16,11 @@ import (
 
 	"github.com/h2non/filetype"
 
-	"github.com/sipeed/picoclaw/pkg/config"
-	"github.com/sipeed/picoclaw/pkg/logger"
-	"github.com/sipeed/picoclaw/pkg/media"
-	"github.com/sipeed/picoclaw/pkg/memlimit"
-	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/afjcjsbx/picoclaw/pkg/config"
+	"github.com/afjcjsbx/picoclaw/pkg/logger"
+	"github.com/afjcjsbx/picoclaw/pkg/media"
+	"github.com/afjcjsbx/picoclaw/pkg/memlimit"
+	"github.com/afjcjsbx/picoclaw/pkg/providers"
 )
 
 // genericPlaceholderRegex matches generic media placeholders emitted by various

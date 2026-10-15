@@ -13,11 +13,11 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/sipeed/picoclaw/pkg/bus"
-	"github.com/sipeed/picoclaw/pkg/config"
-	"github.com/sipeed/picoclaw/pkg/mcp"
-	"github.com/sipeed/picoclaw/pkg/providers"
-	agenttools "github.com/sipeed/picoclaw/pkg/tools"
+	"github.com/afjcjsbx/picoclaw/pkg/bus"
+	"github.com/afjcjsbx/picoclaw/pkg/config"
+	"github.com/afjcjsbx/picoclaw/pkg/mcp"
+	"github.com/afjcjsbx/picoclaw/pkg/providers"
+	agenttools "github.com/afjcjsbx/picoclaw/pkg/tools"
 )
 
 func boolPtr(b bool) *bool { return &b }

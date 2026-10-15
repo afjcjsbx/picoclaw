@@ -10,8 +10,8 @@ import (
 
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 
-	"github.com/sipeed/picoclaw/pkg/logger"
-	"github.com/sipeed/picoclaw/pkg/utils"
+	"github.com/afjcjsbx/picoclaw/pkg/logger"
+	"github.com/afjcjsbx/picoclaw/pkg/utils"
 )
 
 const messageCacheTTL = 30 * time.Second

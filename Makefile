@@ -28,7 +28,7 @@ VERSION?=$(if $(VERSION_RAW),$(VERSION_RAW),dev)
 GIT_COMMIT=$(if $(GIT_COMMIT_RAW),$(GIT_COMMIT_RAW),dev)
 BUILD_TIME=$(if $(BUILD_TIME_RAW),$(BUILD_TIME_RAW),dev)
 GO_VERSION=$(if $(GO_VERSION_RAW),$(firstword $(GO_VERSION_RAW)),unknown)
-CONFIG_PKG=github.com/sipeed/picoclaw/pkg/config
+CONFIG_PKG=github.com/afjcjsbx/picoclaw/pkg/config
 LDFLAGS=-X $(CONFIG_PKG).Version=$(VERSION) -X $(CONFIG_PKG).GitCommit=$(GIT_COMMIT) -X $(CONFIG_PKG).BuildTime=$(BUILD_TIME) -X $(CONFIG_PKG).GoVersion=$(GO_VERSION) -s -w
 
 # Go variables
@@ -371,12 +371,12 @@ endif
 ## vet: Run go vet for static analysis
 vet: generate
 	@packages="$$($(GO) list $(GOFLAGS) ./...)" && \
-		$(GO) vet $(GOFLAGS) $$(printf '%s\n' "$$packages" | grep -v '^github.com/sipeed/picoclaw/web/')
+		$(GO) vet $(GOFLAGS) $$(printf '%s\n' "$$packages" | grep -v '^github.com/afjcjsbx/picoclaw/web/')
 	@cd web/backend && $(WEB_GO) vet ./...
 
 ## test: Test Go code
 test: generate
-	@$(GO) test $(GOFLAGS) $$($(GO) list $(GOFLAGS) ./... | grep -v github.com/sipeed/picoclaw/web/)
+	@$(GO) test $(GOFLAGS) $$($(GO) list $(GOFLAGS) ./... | grep -v github.com/afjcjsbx/picoclaw/web/)
 	@cd web && make test
 
 ## integration-test: Run Docker-backed integration test suites

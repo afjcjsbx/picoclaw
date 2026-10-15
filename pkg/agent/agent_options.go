@@ -1,6 +1,6 @@
 package agent
 
-import runtimeevents "github.com/sipeed/picoclaw/pkg/events"
+import runtimeevents "github.com/afjcjsbx/picoclaw/pkg/events"
 
 // AgentLoopOption configures an AgentLoop at construction time.
 type AgentLoopOption func(*AgentLoop)

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/sipeed/picoclaw/pkg/bus"
+	"github.com/afjcjsbx/picoclaw/pkg/bus"
 )
 
 const (

@@ -13,10 +13,10 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
-	"github.com/sipeed/picoclaw/pkg/logger"
-	"github.com/sipeed/picoclaw/pkg/media"
-	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
+	runtimeevents "github.com/afjcjsbx/picoclaw/pkg/events"
+	"github.com/afjcjsbx/picoclaw/pkg/logger"
+	"github.com/afjcjsbx/picoclaw/pkg/media"
+	toolshared "github.com/afjcjsbx/picoclaw/pkg/tools/shared"
 )
 
 // MCPManager defines the interface for MCP manager operations

@@ -5,7 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/sipeed/picoclaw/cmd/picoclaw/internal"
+	"github.com/afjcjsbx/picoclaw/cmd/picoclaw/internal"
 )
 
 func newInstallCommand() *cobra.Command {
@@ -15,7 +15,7 @@ func newInstallCommand() *cobra.Command {
 		Use:   "install",
 		Short: "Install skill from GitHub or a registry",
 		Example: `
-picoclaw skills install sipeed/picoclaw-skills/weather
+picoclaw skills install afjcjsbx/picoclaw-skills/weather
 picoclaw skills install --registry clawhub github
 `,
 		Args: func(cmd *cobra.Command, args []string) error {

@@ -9,11 +9,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sipeed/picoclaw/pkg/bus"
-	"github.com/sipeed/picoclaw/pkg/logger"
-	"github.com/sipeed/picoclaw/pkg/providers"
-	integrationtools "github.com/sipeed/picoclaw/pkg/tools/integration"
-	"github.com/sipeed/picoclaw/pkg/utils"
+	"github.com/afjcjsbx/picoclaw/pkg/bus"
+	"github.com/afjcjsbx/picoclaw/pkg/logger"
+	"github.com/afjcjsbx/picoclaw/pkg/providers"
+	integrationtools "github.com/afjcjsbx/picoclaw/pkg/tools/integration"
+	"github.com/afjcjsbx/picoclaw/pkg/utils"
 )
 
 func (al *AgentLoop) maybePublishError(ctx context.Context, channel, chatID, sessionKey string, err error) bool {

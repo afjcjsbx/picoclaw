@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/afjcjsbx/picoclaw/pkg/providers"
 )
 
 func newTestStore(t *testing.T) *JSONLStore {

@@ -16,11 +16,11 @@ import (
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/sipeed/picoclaw/pkg/bus"
-	"github.com/sipeed/picoclaw/pkg/config"
-	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
-	"github.com/sipeed/picoclaw/pkg/plugins"
-	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/afjcjsbx/picoclaw/pkg/bus"
+	"github.com/afjcjsbx/picoclaw/pkg/config"
+	runtimeevents "github.com/afjcjsbx/picoclaw/pkg/events"
+	"github.com/afjcjsbx/picoclaw/pkg/plugins"
+	"github.com/afjcjsbx/picoclaw/pkg/providers"
 )
 
 func agentPluginFixture(t *testing.T, cfg *config.Config, url string) string {

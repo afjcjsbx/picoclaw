@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/afjcjsbx/picoclaw/pkg/config"
 )
 
 // ResolveModelConfig resolves an alias or raw model reference to a configured

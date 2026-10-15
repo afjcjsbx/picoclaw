@@ -11,11 +11,11 @@ import (
 
 	"github.com/ergochat/readline"
 
-	"github.com/sipeed/picoclaw/cmd/picoclaw/internal"
-	"github.com/sipeed/picoclaw/pkg/agent"
-	"github.com/sipeed/picoclaw/pkg/bus"
-	"github.com/sipeed/picoclaw/pkg/logger"
-	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/afjcjsbx/picoclaw/cmd/picoclaw/internal"
+	"github.com/afjcjsbx/picoclaw/pkg/agent"
+	"github.com/afjcjsbx/picoclaw/pkg/bus"
+	"github.com/afjcjsbx/picoclaw/pkg/logger"
+	"github.com/afjcjsbx/picoclaw/pkg/providers"
 )
 
 func agentCmd(message, sessionKey, model string, debug bool) error {

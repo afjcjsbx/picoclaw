@@ -9,17 +9,17 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/sipeed/picoclaw/pkg/config"
-	"github.com/sipeed/picoclaw/pkg/fileutil"
-	"github.com/sipeed/picoclaw/pkg/isolation"
-	"github.com/sipeed/picoclaw/pkg/logger"
-	"github.com/sipeed/picoclaw/pkg/media"
-	"github.com/sipeed/picoclaw/pkg/memory"
-	"github.com/sipeed/picoclaw/pkg/providers"
-	"github.com/sipeed/picoclaw/pkg/routing"
-	"github.com/sipeed/picoclaw/pkg/session"
-	"github.com/sipeed/picoclaw/pkg/tools"
-	fstools "github.com/sipeed/picoclaw/pkg/tools/fs"
+	"github.com/afjcjsbx/picoclaw/pkg/config"
+	"github.com/afjcjsbx/picoclaw/pkg/fileutil"
+	"github.com/afjcjsbx/picoclaw/pkg/isolation"
+	"github.com/afjcjsbx/picoclaw/pkg/logger"
+	"github.com/afjcjsbx/picoclaw/pkg/media"
+	"github.com/afjcjsbx/picoclaw/pkg/memory"
+	"github.com/afjcjsbx/picoclaw/pkg/providers"
+	"github.com/afjcjsbx/picoclaw/pkg/routing"
+	"github.com/afjcjsbx/picoclaw/pkg/session"
+	"github.com/afjcjsbx/picoclaw/pkg/tools"
+	fstools "github.com/afjcjsbx/picoclaw/pkg/tools/fs"
 )
 
 // AgentInstance represents a fully configured agent with its own workspace,

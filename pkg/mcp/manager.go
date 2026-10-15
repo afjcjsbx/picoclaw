@@ -17,9 +17,9 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/sipeed/picoclaw/pkg/config"
-	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
-	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/afjcjsbx/picoclaw/pkg/config"
+	runtimeevents "github.com/afjcjsbx/picoclaw/pkg/events"
+	"github.com/afjcjsbx/picoclaw/pkg/logger"
 )
 
 // mcpMaxConcurrentConnect bounds how many MCP servers are started at the same

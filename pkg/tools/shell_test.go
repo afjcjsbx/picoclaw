@@ -13,7 +13,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/afjcjsbx/picoclaw/pkg/config"
 )
 
 // TestShellTool_Success verifies successful command execution
@@ -840,7 +840,7 @@ func TestShellTool_URLsNotBlocked(t *testing.T) {
 		"wget http://example.com/file",
 		"browser open https://github.com/user/repo",
 		"fetch ftp://ftp.example.com/file.txt",
-		"git clone https://github.com/sipeed/picoclaw.git",
+		"git clone https://github.com/afjcjsbx/picoclaw.git",
 	}
 
 	for _, cmd := range commands {

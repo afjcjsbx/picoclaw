@@ -3,5 +3,5 @@
 package builtin
 
 import (
-	_ "github.com/sipeed/picoclaw/pkg/channels/irc"
+	_ "github.com/afjcjsbx/picoclaw/pkg/channels/irc"
 )

@@ -47,7 +47,7 @@ PicoClaw 本身在很大程度上是借助 AI 辅助开发的——我们拥抱�
    ```
 3. 添加上游远程仓库：
    ```bash
-   git remote add upstream https://github.com/sipeed/picoclaw.git
+   git remote add upstream https://github.com/afjcjsbx/picoclaw.git
    ```
 
 ---

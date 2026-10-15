@@ -8,9 +8,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/sipeed/picoclaw/pkg/config"
-	picomcp "github.com/sipeed/picoclaw/pkg/mcp"
-	"github.com/sipeed/picoclaw/pkg/plugins"
+	"github.com/afjcjsbx/picoclaw/pkg/config"
+	picomcp "github.com/afjcjsbx/picoclaw/pkg/mcp"
+	"github.com/afjcjsbx/picoclaw/pkg/plugins"
 )
 
 var loginOAuth = picomcp.LoginOAuth

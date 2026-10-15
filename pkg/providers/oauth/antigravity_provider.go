@@ -12,10 +12,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sipeed/picoclaw/pkg/auth"
-	"github.com/sipeed/picoclaw/pkg/logger"
-	"github.com/sipeed/picoclaw/pkg/providers/common"
-	"github.com/sipeed/picoclaw/pkg/textutil"
+	"github.com/afjcjsbx/picoclaw/pkg/auth"
+	"github.com/afjcjsbx/picoclaw/pkg/logger"
+	"github.com/afjcjsbx/picoclaw/pkg/providers/common"
+	"github.com/afjcjsbx/picoclaw/pkg/textutil"
 )
 
 const (

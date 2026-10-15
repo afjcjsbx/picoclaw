@@ -11,9 +11,9 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
-	"github.com/sipeed/picoclaw/pkg/media"
-	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
+	runtimeevents "github.com/afjcjsbx/picoclaw/pkg/events"
+	"github.com/afjcjsbx/picoclaw/pkg/media"
+	toolshared "github.com/afjcjsbx/picoclaw/pkg/tools/shared"
 )
 
 // MockMCPManager is a mock implementation of MCPManager interface for testing

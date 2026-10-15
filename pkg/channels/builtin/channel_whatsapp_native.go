@@ -3,5 +3,5 @@
 package builtin
 
 import (
-	_ "github.com/sipeed/picoclaw/pkg/channels/whatsapp_native"
+	_ "github.com/afjcjsbx/picoclaw/pkg/channels/whatsapp_native"
 )

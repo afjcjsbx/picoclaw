@@ -4,7 +4,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/sipeed/picoclaw/pkg/skills"
+	"github.com/afjcjsbx/picoclaw/pkg/skills"
 )
 
 func discoverSkills(id, root string) ([]skills.PluginSkill, []Diagnostic) {

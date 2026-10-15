@@ -24,11 +24,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/h2non/filetype"
 
-	"github.com/sipeed/picoclaw/pkg/bus"
-	basechannels "github.com/sipeed/picoclaw/pkg/channels"
-	"github.com/sipeed/picoclaw/pkg/isolation"
-	"github.com/sipeed/picoclaw/pkg/logger"
-	"github.com/sipeed/picoclaw/pkg/media"
+	"github.com/afjcjsbx/picoclaw/pkg/bus"
+	basechannels "github.com/afjcjsbx/picoclaw/pkg/channels"
+	"github.com/afjcjsbx/picoclaw/pkg/isolation"
+	"github.com/afjcjsbx/picoclaw/pkg/logger"
+	"github.com/afjcjsbx/picoclaw/pkg/media"
 )
 
 const (

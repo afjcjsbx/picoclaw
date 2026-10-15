@@ -13,7 +13,7 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/afjcjsbx/picoclaw/pkg/config"
 )
 
 // TestIntegration_RealConfiguredServer is an opt-in smoke test for a real MCP

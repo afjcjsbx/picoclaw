@@ -13,7 +13,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/afjcjsbx/picoclaw/pkg/logger"
 )
 
 // buildModelWithProtocol constructs a model string with protocol prefix.

@@ -17,7 +17,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/afjcjsbx/picoclaw/pkg/logger"
 )
 
 // maxDecodePixels caps the decoded size of an image we are willing to

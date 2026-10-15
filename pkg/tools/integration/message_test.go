@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sipeed/picoclaw/pkg/bus"
-	"github.com/sipeed/picoclaw/pkg/media"
-	"github.com/sipeed/picoclaw/pkg/session"
+	"github.com/afjcjsbx/picoclaw/pkg/bus"
+	"github.com/afjcjsbx/picoclaw/pkg/media"
+	"github.com/afjcjsbx/picoclaw/pkg/session"
 )
 
 func TestMessageTool_Execute_Success(t *testing.T) {

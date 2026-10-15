@@ -4,8 +4,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/sipeed/picoclaw/pkg/config"
-	cliprovider "github.com/sipeed/picoclaw/pkg/providers/cli"
+	"github.com/afjcjsbx/picoclaw/pkg/config"
+	cliprovider "github.com/afjcjsbx/picoclaw/pkg/providers/cli"
 )
 
 func testProviderWorkspace(t *testing.T, provider any) string {

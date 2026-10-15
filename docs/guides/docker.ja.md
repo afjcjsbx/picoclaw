@@ -8,7 +8,7 @@ Docker Compose を使用して PicoClaw を実行できます。ローカルに�
 
 ```bash
 # 1. リポジトリをクローン
-git clone https://github.com/sipeed/picoclaw.git
+git clone https://github.com/afjcjsbx/picoclaw.git
 cd picoclaw
 
 # 2. 初回実行 — docker/data/config.json を自動生成して終了

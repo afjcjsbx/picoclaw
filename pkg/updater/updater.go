@@ -23,8 +23,8 @@ import (
 	"github.com/minio/selfupdate"
 	"github.com/spf13/cobra"
 
-	"github.com/sipeed/picoclaw/pkg/config"
-	"github.com/sipeed/picoclaw/pkg/utils"
+	"github.com/afjcjsbx/picoclaw/pkg/config"
+	"github.com/afjcjsbx/picoclaw/pkg/utils"
 )
 
 // httpClient is a shared HTTP client used for release checks and downloads.
@@ -199,14 +199,14 @@ func GetProdReleaseAPIURL() string {
 }
 
 // GetReleaseTagAPIURL returns the GitHub Releases API URL for a specific tag.
-// Example: owner="sipeed", tag="nightly" -> https://api.github.com/repos/sipeed/picoclaw/releases/tags/nightly
+// Example: owner="afjcjsbx", tag="nightly" -> https://api.github.com/repos/afjcjsbx/picoclaw/releases/tags/nightly
 func GetReleaseTagAPIURL(owner, tag string) string {
 	return fmt.Sprintf("https://api.github.com/repos/%s/picoclaw/releases/tags/%s", owner, tag)
 }
 
 // GetNightlyReleaseAPIURL returns the nightly release API URL for the production repo.
 func GetNightlyReleaseAPIURL() string {
-	return GetReleaseTagAPIURL("sipeed", "nightly")
+	return GetReleaseTagAPIURL("afjcjsbx", "nightly")
 }
 
 // findAssetURL resolves the appropriate asset URL for the given release

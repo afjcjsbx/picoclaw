@@ -130,7 +130,7 @@ PicoClaw 几乎可以在任何 Linux 设备上运行。本页面记录了已验�
 
 ```bash
 # 1. 下载适合你架构的版本
-wget https://github.com/sipeed/picoclaw/releases/latest/download/picoclaw_Linux_arm64.tar.gz
+wget https://github.com/afjcjsbx/picoclaw/releases/latest/download/picoclaw_Linux_arm64.tar.gz
 tar xzf picoclaw_Linux_arm64.tar.gz
 
 # 2. 初始化

@@ -263,5 +263,5 @@ api_key or api_base is required for HTTP-based protocol "xxx"
 
 ## Need Help?
 
-- [GitHub Issues](https://github.com/sipeed/picoclaw/issues)
-- [Discussion #122](https://github.com/sipeed/picoclaw/discussions/122): Original proposal
+- [GitHub Issues](https://github.com/afjcjsbx/picoclaw/issues)
+- [Discussion #122](https://github.com/afjcjsbx/picoclaw/discussions/122): Original proposal

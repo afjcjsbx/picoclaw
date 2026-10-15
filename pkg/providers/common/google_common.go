@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
+	"github.com/afjcjsbx/picoclaw/pkg/providers/protocoltypes"
 )
 
 // NormalizeStoredToolCall extracts the tool name, arguments, and thought signature

@@ -12,7 +12,7 @@ import (
 	"runtime/debug"
 	"strconv"
 
-	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/afjcjsbx/picoclaw/pkg/logger"
 )
 
 // Environment variables understood by Apply.

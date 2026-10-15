@@ -11,11 +11,11 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/sipeed/picoclaw/pkg/config"
-	"github.com/sipeed/picoclaw/pkg/logger"
-	"github.com/sipeed/picoclaw/pkg/mcp"
-	"github.com/sipeed/picoclaw/pkg/tools"
-	integrationtools "github.com/sipeed/picoclaw/pkg/tools/integration"
+	"github.com/afjcjsbx/picoclaw/pkg/config"
+	"github.com/afjcjsbx/picoclaw/pkg/logger"
+	"github.com/afjcjsbx/picoclaw/pkg/mcp"
+	"github.com/afjcjsbx/picoclaw/pkg/tools"
+	integrationtools "github.com/afjcjsbx/picoclaw/pkg/tools/integration"
 )
 
 type mcpRuntime struct {

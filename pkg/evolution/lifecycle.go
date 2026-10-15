@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/sipeed/picoclaw/pkg/skills"
+	"github.com/afjcjsbx/picoclaw/pkg/skills"
 )
 
 type LifecycleRunSummary struct {

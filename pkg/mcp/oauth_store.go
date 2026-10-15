@@ -18,7 +18,7 @@ import (
 
 	"golang.org/x/oauth2"
 
-	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/afjcjsbx/picoclaw/pkg/config"
 )
 
 // Sessions are isolated by server name, endpoint and OAuth configuration. A

@@ -8,7 +8,7 @@ Você também pode executar o PicoClaw usando Docker Compose sem instalar nada l
 
 ```bash
 # 1. Clone este repositório
-git clone https://github.com/sipeed/picoclaw.git
+git clone https://github.com/afjcjsbx/picoclaw.git
 cd picoclaw
 
 # 2. Primeira execução — gera automaticamente docker/data/config.json e encerra

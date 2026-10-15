@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sipeed/picoclaw/pkg/memory"
-	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/afjcjsbx/picoclaw/pkg/memory"
+	"github.com/afjcjsbx/picoclaw/pkg/providers"
 )
 
 // JSONLBackend adapts a memory.Store into the SessionStore interface.

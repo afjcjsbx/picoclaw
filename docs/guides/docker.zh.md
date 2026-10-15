@@ -8,7 +8,7 @@
 
 ```bash
 # 1. 克隆仓库
-git clone https://github.com/sipeed/picoclaw.git
+git clone https://github.com/afjcjsbx/picoclaw.git
 cd picoclaw
 
 # 2. 首次运行 — 自动生成 docker/data/config.json 后退出

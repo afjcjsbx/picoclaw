@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 
-	"github.com/sipeed/picoclaw/pkg/credential"
+	"github.com/afjcjsbx/picoclaw/pkg/credential"
 )
 
 // ─── Test extend structs (simplified, settings + secure in one struct) ───

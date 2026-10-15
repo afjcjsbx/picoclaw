@@ -20,11 +20,11 @@ import (
 
 	"github.com/creack/pty"
 
-	"github.com/sipeed/picoclaw/pkg/config"
-	"github.com/sipeed/picoclaw/pkg/constants"
-	"github.com/sipeed/picoclaw/pkg/isolation"
-	"github.com/sipeed/picoclaw/pkg/logger"
-	fstools "github.com/sipeed/picoclaw/pkg/tools/fs"
+	"github.com/afjcjsbx/picoclaw/pkg/config"
+	"github.com/afjcjsbx/picoclaw/pkg/constants"
+	"github.com/afjcjsbx/picoclaw/pkg/isolation"
+	"github.com/afjcjsbx/picoclaw/pkg/logger"
+	fstools "github.com/afjcjsbx/picoclaw/pkg/tools/fs"
 )
 
 var (

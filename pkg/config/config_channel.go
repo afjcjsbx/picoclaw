@@ -12,7 +12,7 @@ import (
 	"github.com/caarlos0/env/v11"
 	"gopkg.in/yaml.v3"
 
-	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/afjcjsbx/picoclaw/pkg/logger"
 )
 
 // Channel type constants — single source of truth for all channel type names.

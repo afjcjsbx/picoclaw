@@ -13,10 +13,10 @@ import (
 	"runtime/debug"
 	"sync"
 
-	"github.com/sipeed/picoclaw/pkg/logger"
-	"github.com/sipeed/picoclaw/pkg/providers"
-	cliprovider "github.com/sipeed/picoclaw/pkg/providers/cli"
-	"github.com/sipeed/picoclaw/pkg/utils"
+	"github.com/afjcjsbx/picoclaw/pkg/logger"
+	"github.com/afjcjsbx/picoclaw/pkg/providers"
+	cliprovider "github.com/afjcjsbx/picoclaw/pkg/providers/cli"
+	"github.com/afjcjsbx/picoclaw/pkg/utils"
 )
 
 // ToolLoopConfig configures the tool execution loop.

@@ -4,7 +4,7 @@ import (
 	"context"
 	"slices"
 
-	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
+	runtimeevents "github.com/afjcjsbx/picoclaw/pkg/events"
 )
 
 // pluginHook enforces per-agent and per-stage scope before sending any data to

@@ -3,7 +3,7 @@ package tools
 import (
 	"testing"
 
-	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/afjcjsbx/picoclaw/pkg/providers"
 )
 
 func TestSubagentManager_SetMediaResolver_StoresResolver(t *testing.T) {

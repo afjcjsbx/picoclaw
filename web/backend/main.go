@@ -26,14 +26,14 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/sipeed/picoclaw/pkg/config"
-	"github.com/sipeed/picoclaw/pkg/logger"
-	"github.com/sipeed/picoclaw/pkg/netbind"
-	"github.com/sipeed/picoclaw/web/backend/api"
-	"github.com/sipeed/picoclaw/web/backend/dashboardauth"
-	"github.com/sipeed/picoclaw/web/backend/launcherconfig"
-	"github.com/sipeed/picoclaw/web/backend/middleware"
-	"github.com/sipeed/picoclaw/web/backend/utils"
+	"github.com/afjcjsbx/picoclaw/pkg/config"
+	"github.com/afjcjsbx/picoclaw/pkg/logger"
+	"github.com/afjcjsbx/picoclaw/pkg/netbind"
+	"github.com/afjcjsbx/picoclaw/web/backend/api"
+	"github.com/afjcjsbx/picoclaw/web/backend/dashboardauth"
+	"github.com/afjcjsbx/picoclaw/web/backend/launcherconfig"
+	"github.com/afjcjsbx/picoclaw/web/backend/middleware"
+	"github.com/afjcjsbx/picoclaw/web/backend/utils"
 )
 
 const (

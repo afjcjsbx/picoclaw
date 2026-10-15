@@ -11,14 +11,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sipeed/picoclaw/pkg/config"
-	anthropicmessages "github.com/sipeed/picoclaw/pkg/providers/anthropic_messages"
-	"github.com/sipeed/picoclaw/pkg/providers/azure"
-	"github.com/sipeed/picoclaw/pkg/providers/bedrock"
-	cliprovider "github.com/sipeed/picoclaw/pkg/providers/cli"
-	"github.com/sipeed/picoclaw/pkg/providers/common"
-	"github.com/sipeed/picoclaw/pkg/providers/httpapi"
-	oauthprovider "github.com/sipeed/picoclaw/pkg/providers/oauth"
+	"github.com/afjcjsbx/picoclaw/pkg/config"
+	anthropicmessages "github.com/afjcjsbx/picoclaw/pkg/providers/anthropic_messages"
+	"github.com/afjcjsbx/picoclaw/pkg/providers/azure"
+	"github.com/afjcjsbx/picoclaw/pkg/providers/bedrock"
+	cliprovider "github.com/afjcjsbx/picoclaw/pkg/providers/cli"
+	"github.com/afjcjsbx/picoclaw/pkg/providers/common"
+	"github.com/afjcjsbx/picoclaw/pkg/providers/httpapi"
+	oauthprovider "github.com/afjcjsbx/picoclaw/pkg/providers/oauth"
 )
 
 // createClaudeAuthProvider creates a Claude provider using OAuth credentials from auth store.

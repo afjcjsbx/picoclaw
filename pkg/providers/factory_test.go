@@ -3,11 +3,11 @@ package providers
 import (
 	"testing"
 
-	"github.com/sipeed/picoclaw/pkg/auth"
-	"github.com/sipeed/picoclaw/pkg/config"
-	cliprovider "github.com/sipeed/picoclaw/pkg/providers/cli"
-	"github.com/sipeed/picoclaw/pkg/providers/httpapi"
-	oauthprovider "github.com/sipeed/picoclaw/pkg/providers/oauth"
+	"github.com/afjcjsbx/picoclaw/pkg/auth"
+	"github.com/afjcjsbx/picoclaw/pkg/config"
+	cliprovider "github.com/afjcjsbx/picoclaw/pkg/providers/cli"
+	"github.com/afjcjsbx/picoclaw/pkg/providers/httpapi"
+	oauthprovider "github.com/afjcjsbx/picoclaw/pkg/providers/oauth"
 )
 
 func TestCreateProviderReturnsHTTPProviderForOpenRouter(t *testing.T) {
