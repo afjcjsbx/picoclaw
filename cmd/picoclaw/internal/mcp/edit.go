@@ -8,7 +8,7 @@ import (
 	"github.com/spf13/cobra"
 	"go.mau.fi/util/shlex"
 
-	"github.com/sipeed/picoclaw/cmd/picoclaw/internal"
+	"github.com/afjcjsbx/picoclaw/cmd/picoclaw/internal"
 )
 
 func newEditCommand() *cobra.Command {

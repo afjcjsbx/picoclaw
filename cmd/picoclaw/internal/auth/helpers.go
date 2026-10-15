@@ -10,11 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sipeed/picoclaw/cmd/picoclaw/internal"
-	"github.com/sipeed/picoclaw/pkg/auth"
-	"github.com/sipeed/picoclaw/pkg/config"
-	"github.com/sipeed/picoclaw/pkg/providers"
-	oauthprovider "github.com/sipeed/picoclaw/pkg/providers/oauth"
+	"github.com/afjcjsbx/picoclaw/cmd/picoclaw/internal"
+	"github.com/afjcjsbx/picoclaw/pkg/auth"
+	"github.com/afjcjsbx/picoclaw/pkg/config"
+	"github.com/afjcjsbx/picoclaw/pkg/providers"
+	oauthprovider "github.com/afjcjsbx/picoclaw/pkg/providers/oauth"
 )
 
 const (

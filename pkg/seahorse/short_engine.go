@@ -13,8 +13,8 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"github.com/sipeed/picoclaw/pkg/logger"
-	"github.com/sipeed/picoclaw/pkg/textutil"
+	"github.com/afjcjsbx/picoclaw/pkg/logger"
+	"github.com/afjcjsbx/picoclaw/pkg/textutil"
 )
 
 // Config holds engine configuration.

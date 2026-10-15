@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
+	"github.com/afjcjsbx/picoclaw/pkg/providers/protocoltypes"
 )
 
 // --- NewHTTPClient tests ---

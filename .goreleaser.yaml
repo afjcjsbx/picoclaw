@@ -24,10 +24,10 @@ builds:
       - stdjson
     ldflags:
       - -s -w
-      - -X github.com/sipeed/picoclaw/pkg/config.Version={{ .Version }}
-      - -X github.com/sipeed/picoclaw/pkg/config.GitCommit={{ .ShortCommit }}
-      - -X github.com/sipeed/picoclaw/pkg/config.BuildTime={{ .Date }}
-      - -X github.com/sipeed/picoclaw/pkg/config.GoVersion={{ with index .Env "GOVERSION" }}{{ . }}{{ else }}unknown{{ end }}
+      - -X github.com/afjcjsbx/picoclaw/pkg/config.Version={{ .Version }}
+      - -X github.com/afjcjsbx/picoclaw/pkg/config.GitCommit={{ .ShortCommit }}
+      - -X github.com/afjcjsbx/picoclaw/pkg/config.BuildTime={{ .Date }}
+      - -X github.com/afjcjsbx/picoclaw/pkg/config.GoVersion={{ with index .Env "GOVERSION" }}{{ . }}{{ else }}unknown{{ end }}
     goos:
       - linux
       - windows
@@ -67,10 +67,10 @@ builds:
       - stdjson
     ldflags:
       - -s -w
-      - -X github.com/sipeed/picoclaw/pkg/config.Version={{ .Version }}
-      - -X github.com/sipeed/picoclaw/pkg/config.GitCommit={{ .ShortCommit }}
-      - -X github.com/sipeed/picoclaw/pkg/config.BuildTime={{ .Date }}
-      - -X github.com/sipeed/picoclaw/pkg/config.GoVersion={{ with index .Env "GOVERSION" }}{{ . }}{{ else }}unknown{{ end }}
+      - -X github.com/afjcjsbx/picoclaw/pkg/config.Version={{ .Version }}
+      - -X github.com/afjcjsbx/picoclaw/pkg/config.GitCommit={{ .ShortCommit }}
+      - -X github.com/afjcjsbx/picoclaw/pkg/config.BuildTime={{ .Date }}
+      - -X github.com/afjcjsbx/picoclaw/pkg/config.GoVersion={{ with index .Env "GOVERSION" }}{{ . }}{{ else }}unknown{{ end }}
     goos:
       - linux
       - windows

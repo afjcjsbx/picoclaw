@@ -11,8 +11,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/sipeed/picoclaw/pkg/bus"
-	basechannels "github.com/sipeed/picoclaw/pkg/channels"
+	"github.com/afjcjsbx/picoclaw/pkg/bus"
+	basechannels "github.com/afjcjsbx/picoclaw/pkg/channels"
 )
 
 // budgetTestChannel returns a running channel with a context token for

@@ -6,9 +6,9 @@ import (
 	"context"
 	"time"
 
-	"github.com/sipeed/picoclaw/pkg/channels"
-	"github.com/sipeed/picoclaw/pkg/providers"
-	"github.com/sipeed/picoclaw/pkg/utils"
+	"github.com/afjcjsbx/picoclaw/pkg/channels"
+	"github.com/afjcjsbx/picoclaw/pkg/providers"
+	"github.com/afjcjsbx/picoclaw/pkg/utils"
 )
 
 // toolFeedbackBatch publishes the tool feedback for the tool calls of one LLM

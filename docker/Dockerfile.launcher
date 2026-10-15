@@ -39,7 +39,7 @@ RUN make build
 
 # Build picoclaw-launcher binary (frontend already built in stage 1)
 # Mirror ldflags from web/Makefile to inject version metadata
-RUN CONFIG_PKG=github.com/sipeed/picoclaw/pkg/config && \
+RUN CONFIG_PKG=github.com/afjcjsbx/picoclaw/pkg/config && \
     VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo dev) && \
     GIT_COMMIT=$(git rev-parse --short=8 HEAD 2>/dev/null || echo dev) && \
     BUILD_TIME=$(date +%FT%T%z) && \

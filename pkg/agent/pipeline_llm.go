@@ -10,11 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sipeed/picoclaw/pkg/constants"
-	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
-	"github.com/sipeed/picoclaw/pkg/logger"
-	"github.com/sipeed/picoclaw/pkg/providers"
-	cliprovider "github.com/sipeed/picoclaw/pkg/providers/cli"
+	"github.com/afjcjsbx/picoclaw/pkg/constants"
+	runtimeevents "github.com/afjcjsbx/picoclaw/pkg/events"
+	"github.com/afjcjsbx/picoclaw/pkg/logger"
+	"github.com/afjcjsbx/picoclaw/pkg/providers"
+	cliprovider "github.com/afjcjsbx/picoclaw/pkg/providers/cli"
 )
 
 // CallLLM performs an LLM call with fallback support, hook invocation, and retry logic.

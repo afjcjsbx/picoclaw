@@ -10,14 +10,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sipeed/picoclaw/pkg/config"
-	"github.com/sipeed/picoclaw/pkg/logger"
-	"github.com/sipeed/picoclaw/pkg/providers"
-	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
-	"github.com/sipeed/picoclaw/pkg/seahorse"
-	"github.com/sipeed/picoclaw/pkg/session"
-	"github.com/sipeed/picoclaw/pkg/session/pruner"
-	"github.com/sipeed/picoclaw/pkg/tokenizer"
+	"github.com/afjcjsbx/picoclaw/pkg/config"
+	"github.com/afjcjsbx/picoclaw/pkg/logger"
+	"github.com/afjcjsbx/picoclaw/pkg/providers"
+	"github.com/afjcjsbx/picoclaw/pkg/providers/protocoltypes"
+	"github.com/afjcjsbx/picoclaw/pkg/seahorse"
+	"github.com/afjcjsbx/picoclaw/pkg/session"
+	"github.com/afjcjsbx/picoclaw/pkg/session/pruner"
+	"github.com/afjcjsbx/picoclaw/pkg/tokenizer"
 )
 
 // seahorseContextManager adapts seahorse.Engine to agent.ContextManager.

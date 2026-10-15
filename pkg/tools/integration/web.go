@@ -20,15 +20,15 @@ import (
 
 	kagiopenapi "github.com/kagisearch/kagi-openapi-golang"
 
-	"github.com/sipeed/picoclaw/pkg/config"
-	"github.com/sipeed/picoclaw/pkg/logger"
-	"github.com/sipeed/picoclaw/pkg/utils"
+	"github.com/afjcjsbx/picoclaw/pkg/config"
+	"github.com/afjcjsbx/picoclaw/pkg/logger"
+	"github.com/afjcjsbx/picoclaw/pkg/utils"
 )
 
 const (
 	userAgent       = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 	sogouUserAgent  = "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1"
-	userAgentHonest = "picoclaw/%s (+https://github.com/sipeed/picoclaw; AI assistant bot)"
+	userAgentHonest = "picoclaw/%s (+https://github.com/afjcjsbx/picoclaw; AI assistant bot)"
 
 	// HTTP client timeouts for web tool providers.
 	searchTimeout     = 10 * time.Second // Brave, Tavily, DuckDuckGo

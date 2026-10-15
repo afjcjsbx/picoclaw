@@ -3,5 +3,5 @@
 package builtin
 
 import (
-	_ "github.com/sipeed/picoclaw/pkg/channels/deltachat"
+	_ "github.com/afjcjsbx/picoclaw/pkg/channels/deltachat"
 )

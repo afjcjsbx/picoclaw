@@ -5,7 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/sipeed/picoclaw/pkg/cron"
+	"github.com/afjcjsbx/picoclaw/pkg/cron"
 )
 
 func newAddCommand(storePath func() string) *cobra.Command {

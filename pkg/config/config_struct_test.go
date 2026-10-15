@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"gopkg.in/yaml.v3"
 
-	"github.com/sipeed/picoclaw/pkg/credential"
+	"github.com/afjcjsbx/picoclaw/pkg/credential"
 )
 
 func TestLoadSecurityValue(t *testing.T) {

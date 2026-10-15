@@ -3,12 +3,12 @@
 package agent
 
 import (
-	"github.com/sipeed/picoclaw/pkg/audio/asr"
-	"github.com/sipeed/picoclaw/pkg/channels"
-	"github.com/sipeed/picoclaw/pkg/config"
-	"github.com/sipeed/picoclaw/pkg/media"
-	"github.com/sipeed/picoclaw/pkg/tools"
-	integrationtools "github.com/sipeed/picoclaw/pkg/tools/integration"
+	"github.com/afjcjsbx/picoclaw/pkg/audio/asr"
+	"github.com/afjcjsbx/picoclaw/pkg/channels"
+	"github.com/afjcjsbx/picoclaw/pkg/config"
+	"github.com/afjcjsbx/picoclaw/pkg/media"
+	"github.com/afjcjsbx/picoclaw/pkg/tools"
+	integrationtools "github.com/afjcjsbx/picoclaw/pkg/tools/integration"
 )
 
 func (al *AgentLoop) RegisterTool(tool tools.Tool) {

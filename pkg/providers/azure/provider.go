@@ -11,9 +11,9 @@ import (
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
 
-	"github.com/sipeed/picoclaw/pkg/providers/common"
-	orc "github.com/sipeed/picoclaw/pkg/providers/openai_responses_common"
-	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
+	"github.com/afjcjsbx/picoclaw/pkg/providers/common"
+	orc "github.com/afjcjsbx/picoclaw/pkg/providers/openai_responses_common"
+	"github.com/afjcjsbx/picoclaw/pkg/providers/protocoltypes"
 )
 
 type (

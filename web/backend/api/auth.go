@@ -10,7 +10,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/sipeed/picoclaw/web/backend/middleware"
+	"github.com/afjcjsbx/picoclaw/web/backend/middleware"
 )
 
 // PasswordStore is the interface for dashboard password persistence.

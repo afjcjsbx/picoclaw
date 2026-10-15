@@ -3,7 +3,7 @@ package skills
 import (
 	"github.com/spf13/cobra"
 
-	"github.com/sipeed/picoclaw/cmd/picoclaw/internal"
+	"github.com/afjcjsbx/picoclaw/cmd/picoclaw/internal"
 )
 
 func newRemoveCommand() *cobra.Command {

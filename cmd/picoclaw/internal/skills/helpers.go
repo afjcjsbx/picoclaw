@@ -10,11 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sipeed/picoclaw/cmd/picoclaw/internal"
-	"github.com/sipeed/picoclaw/pkg/config"
-	"github.com/sipeed/picoclaw/pkg/fileutil"
-	"github.com/sipeed/picoclaw/pkg/skills"
-	"github.com/sipeed/picoclaw/pkg/utils"
+	"github.com/afjcjsbx/picoclaw/cmd/picoclaw/internal"
+	"github.com/afjcjsbx/picoclaw/pkg/config"
+	"github.com/afjcjsbx/picoclaw/pkg/fileutil"
+	"github.com/afjcjsbx/picoclaw/pkg/skills"
+	"github.com/afjcjsbx/picoclaw/pkg/utils"
 )
 
 const skillsSearchMaxResults = 20

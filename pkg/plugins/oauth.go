@@ -3,7 +3,7 @@ package plugins
 import (
 	"fmt"
 
-	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/afjcjsbx/picoclaw/pkg/config"
 )
 
 // ResolveOAuthServer returns the same plugin MCP endpoint used at runtime, for

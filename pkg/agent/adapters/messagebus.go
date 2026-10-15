@@ -5,8 +5,8 @@ package adapters
 import (
 	"context"
 
-	"github.com/sipeed/picoclaw/pkg/agent/interfaces"
-	"github.com/sipeed/picoclaw/pkg/bus"
+	"github.com/afjcjsbx/picoclaw/pkg/agent/interfaces"
+	"github.com/afjcjsbx/picoclaw/pkg/bus"
 )
 
 // messageBusAdapter wraps *bus.MessageBus to implement interfaces.MessageBus.

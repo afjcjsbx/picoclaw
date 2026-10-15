@@ -10,8 +10,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/sipeed/picoclaw/pkg/config"
-	picomcp "github.com/sipeed/picoclaw/pkg/mcp"
+	"github.com/afjcjsbx/picoclaw/pkg/config"
+	picomcp "github.com/afjcjsbx/picoclaw/pkg/mcp"
 )
 
 func TestMCPLoginSavesOAuthOnlyAfterSuccess(t *testing.T) {

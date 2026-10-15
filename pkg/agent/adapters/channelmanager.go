@@ -5,9 +5,9 @@ package adapters
 import (
 	"context"
 
-	"github.com/sipeed/picoclaw/pkg/agent/interfaces"
-	"github.com/sipeed/picoclaw/pkg/bus"
-	"github.com/sipeed/picoclaw/pkg/channels"
+	"github.com/afjcjsbx/picoclaw/pkg/agent/interfaces"
+	"github.com/afjcjsbx/picoclaw/pkg/bus"
+	"github.com/afjcjsbx/picoclaw/pkg/channels"
 )
 
 // channelManagerAdapter wraps *channels.Manager to implement interfaces.ChannelManager.

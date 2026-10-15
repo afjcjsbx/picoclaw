@@ -4,7 +4,7 @@
 #define MyAppName "PicoClaw Launcher"
 #define MyAppVersion "1.0"
 #define MyAppPublisher "PicoClaw"
-#define MyAppURL "https://github.com/sipeed/picoclaw"
+#define MyAppURL "https://github.com/afjcjsbx/picoclaw"
 #define MyAppExeName "picoclaw-launcher.exe"
 
 [Setup]

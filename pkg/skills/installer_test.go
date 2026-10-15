@@ -25,47 +25,47 @@ func TestParseGitHubRef(t *testing.T) {
 	}{
 		{
 			name:         "simple owner/repo",
-			repo:         "sipeed/picoclaw",
-			wantOwner:    "sipeed",
+			repo:         "afjcjsbx/picoclaw",
+			wantOwner:    "afjcjsbx",
 			wantRepoName: "picoclaw",
 			wantRef:      "main",
 			wantSubPath:  "",
 		},
 		{
 			name:         "owner/repo with subpath",
-			repo:         "sipeed/picoclaw/skills/test",
-			wantOwner:    "sipeed",
+			repo:         "afjcjsbx/picoclaw/skills/test",
+			wantOwner:    "afjcjsbx",
 			wantRepoName: "picoclaw",
 			wantRef:      "main",
 			wantSubPath:  "skills/test",
 		},
 		{
 			name:         "full URL with tree",
-			repo:         "https://github.com/sipeed/picoclaw/tree/dev/skills/test",
-			wantOwner:    "sipeed",
+			repo:         "https://github.com/afjcjsbx/picoclaw/tree/dev/skills/test",
+			wantOwner:    "afjcjsbx",
 			wantRepoName: "picoclaw",
 			wantRef:      "dev",
 			wantSubPath:  "skills/test",
 		},
 		{
 			name:         "full URL with blob",
-			repo:         "https://github.com/sipeed/picoclaw/blob/main/README.md",
-			wantOwner:    "sipeed",
+			repo:         "https://github.com/afjcjsbx/picoclaw/blob/main/README.md",
+			wantOwner:    "afjcjsbx",
 			wantRepoName: "picoclaw",
 			wantRef:      "main",
 			wantSubPath:  "README.md",
 		},
 		{
 			name:         "full URL without ref",
-			repo:         "https://github.com/sipeed/picoclaw",
-			wantOwner:    "sipeed",
+			repo:         "https://github.com/afjcjsbx/picoclaw",
+			wantOwner:    "afjcjsbx",
 			wantRepoName: "picoclaw",
 			wantRef:      "main",
 			wantSubPath:  "",
 		},
 		{
 			name:           "invalid format - single part",
-			repo:           "sipeed",
+			repo:           "afjcjsbx",
 			wantErr:        true,
 			wantErrContain: "expected 'owner/repo'",
 		},
@@ -77,21 +77,21 @@ func TestParseGitHubRef(t *testing.T) {
 		},
 		{
 			name:           "invalid GitHub URL - only one path part",
-			repo:           "https://github.com/sipeed",
+			repo:           "https://github.com/afjcjsbx",
 			wantErr:        true,
 			wantErrContain: "invalid GitHub URL",
 		},
 		{
 			name:         "with whitespace",
-			repo:         "  sipeed/picoclaw  ",
-			wantOwner:    "sipeed",
+			repo:         "  afjcjsbx/picoclaw  ",
+			wantOwner:    "afjcjsbx",
 			wantRepoName: "picoclaw",
 			wantRef:      "main",
 			wantSubPath:  "",
 		},
 		{
 			name:           "invalid non github host",
-			repo:           "https://gitlab.com/sipeed/picoclaw/-/tree/main/skills/test",
+			repo:           "https://gitlab.com/afjcjsbx/picoclaw/-/tree/main/skills/test",
 			wantErr:        true,
 			wantErrContain: `invalid GitHub URL host "gitlab.com"`,
 		},
@@ -732,7 +732,7 @@ func TestSkillInstaller_InstallFromGitHub_SkillAlreadyExists(t *testing.T) {
 	os.WriteFile(filepath.Join(existingSkill, "SKILL.md"), []byte("existing"), 0o644)
 
 	// Try to install the same skill - should fail
-	err = installer.InstallFromGitHub(context.Background(), "sipeed/picoclaw")
+	err = installer.InstallFromGitHub(context.Background(), "afjcjsbx/picoclaw")
 	if err == nil {
 		t.Error("InstallFromGitHub() expected error for existing skill, got nil")
 	}

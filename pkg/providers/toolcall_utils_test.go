@@ -3,7 +3,7 @@ package providers
 import (
 	"testing"
 
-	cliprovider "github.com/sipeed/picoclaw/pkg/providers/cli"
+	cliprovider "github.com/afjcjsbx/picoclaw/pkg/providers/cli"
 )
 
 func TestNormalizeToolCall_PreservesExtraContentGoogleThoughtSignature(t *testing.T) {

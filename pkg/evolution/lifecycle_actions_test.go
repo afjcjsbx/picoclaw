@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/sipeed/picoclaw/pkg/evolution"
+	"github.com/afjcjsbx/picoclaw/pkg/evolution"
 )
 
 func TestApplyLifecycleStateDeletedRemovesSkillFile(t *testing.T) {

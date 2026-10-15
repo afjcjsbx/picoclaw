@@ -11,10 +11,10 @@ import (
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
-	"github.com/sipeed/picoclaw/pkg/mcp"
-	"github.com/sipeed/picoclaw/pkg/tools"
-	integrationtools "github.com/sipeed/picoclaw/pkg/tools/integration"
+	runtimeevents "github.com/afjcjsbx/picoclaw/pkg/events"
+	"github.com/afjcjsbx/picoclaw/pkg/mcp"
+	"github.com/afjcjsbx/picoclaw/pkg/tools"
+	integrationtools "github.com/afjcjsbx/picoclaw/pkg/tools/integration"
 )
 
 // PluginTool preserves PicoClaw's MCP result/media conversion and adds stable

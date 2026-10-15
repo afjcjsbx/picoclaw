@@ -162,19 +162,19 @@ Using Telegram as an example, the main changes are:
 package channels
 
 import (
-    "github.com/sipeed/picoclaw/pkg/bus"
-    "github.com/sipeed/picoclaw/pkg/config"
+    "github.com/afjcjsbx/picoclaw/pkg/bus"
+    "github.com/afjcjsbx/picoclaw/pkg/config"
 )
 
 // New code (refactored branch)
 package telegram
 
 import (
-    "github.com/sipeed/picoclaw/pkg/bus"
-    "github.com/sipeed/picoclaw/pkg/channels"     // Reference parent package
-    "github.com/sipeed/picoclaw/pkg/config"
-    "github.com/sipeed/picoclaw/pkg/identity"      // New
-    "github.com/sipeed/picoclaw/pkg/media"          // New (if media support needed)
+    "github.com/afjcjsbx/picoclaw/pkg/bus"
+    "github.com/afjcjsbx/picoclaw/pkg/channels"     // Reference parent package
+    "github.com/afjcjsbx/picoclaw/pkg/config"
+    "github.com/afjcjsbx/picoclaw/pkg/identity"      // New
+    "github.com/afjcjsbx/picoclaw/pkg/media"          // New (if media support needed)
 )
 ```
 
@@ -321,9 +321,9 @@ Create `init.go` for your channel:
 package telegram
 
 import (
-    "github.com/sipeed/picoclaw/pkg/bus"
-    "github.com/sipeed/picoclaw/pkg/channels"
-    "github.com/sipeed/picoclaw/pkg/config"
+    "github.com/afjcjsbx/picoclaw/pkg/bus"
+    "github.com/afjcjsbx/picoclaw/pkg/channels"
+    "github.com/afjcjsbx/picoclaw/pkg/config"
 )
 
 func init() {
@@ -343,9 +343,9 @@ func init() {
 ```go
 // cmd/picoclaw/internal/gateway/helpers.go
 import (
-    _ "github.com/sipeed/picoclaw/pkg/channels/telegram"   // Triggers init() registration
-    _ "github.com/sipeed/picoclaw/pkg/channels/discord"
-    _ "github.com/sipeed/picoclaw/pkg/channels/your_new_channel"  // New addition
+    _ "github.com/afjcjsbx/picoclaw/pkg/channels/telegram"   // Triggers init() registration
+    _ "github.com/afjcjsbx/picoclaw/pkg/channels/discord"
+    _ "github.com/afjcjsbx/picoclaw/pkg/channels/your_new_channel"  // New addition
 )
 ```
 
@@ -426,9 +426,9 @@ To add a new chat platform (e.g., `matrix`), you need to:
 package matrix
 
 import (
-    "github.com/sipeed/picoclaw/pkg/bus"
-    "github.com/sipeed/picoclaw/pkg/channels"
-    "github.com/sipeed/picoclaw/pkg/config"
+    "github.com/afjcjsbx/picoclaw/pkg/bus"
+    "github.com/afjcjsbx/picoclaw/pkg/channels"
+    "github.com/afjcjsbx/picoclaw/pkg/config"
 )
 
 func init() {
@@ -452,11 +452,11 @@ import (
     "context"
     "fmt"
 
-    "github.com/sipeed/picoclaw/pkg/bus"
-    "github.com/sipeed/picoclaw/pkg/channels"
-    "github.com/sipeed/picoclaw/pkg/config"
-    "github.com/sipeed/picoclaw/pkg/identity"
-    "github.com/sipeed/picoclaw/pkg/logger"
+    "github.com/afjcjsbx/picoclaw/pkg/bus"
+    "github.com/afjcjsbx/picoclaw/pkg/channels"
+    "github.com/afjcjsbx/picoclaw/pkg/config"
+    "github.com/afjcjsbx/picoclaw/pkg/identity"
+    "github.com/afjcjsbx/picoclaw/pkg/logger"
 )
 
 // MatrixChannel implements channels.Channel for the Matrix protocol.
@@ -843,7 +843,7 @@ just register the factory and the config entry.
 ```go
 // cmd/picoclaw/internal/gateway/helpers.go
 import (
-    _ "github.com/sipeed/picoclaw/pkg/channels/matrix"
+    _ "github.com/afjcjsbx/picoclaw/pkg/channels/matrix"
 )
 ```
 

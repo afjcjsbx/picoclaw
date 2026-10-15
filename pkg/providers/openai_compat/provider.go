@@ -12,10 +12,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sipeed/picoclaw/pkg/logger"
-	"github.com/sipeed/picoclaw/pkg/providers/common"
-	"github.com/sipeed/picoclaw/pkg/providers/messageutil"
-	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
+	"github.com/afjcjsbx/picoclaw/pkg/logger"
+	"github.com/afjcjsbx/picoclaw/pkg/providers/common"
+	"github.com/afjcjsbx/picoclaw/pkg/providers/messageutil"
+	"github.com/afjcjsbx/picoclaw/pkg/providers/protocoltypes"
 )
 
 type (

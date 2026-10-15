@@ -3,7 +3,7 @@ package commands
 import (
 	"context"
 
-	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/afjcjsbx/picoclaw/pkg/config"
 )
 
 type MCPServerInfo struct {

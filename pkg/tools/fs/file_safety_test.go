@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sipeed/picoclaw/pkg/media"
+	"github.com/afjcjsbx/picoclaw/pkg/media"
 )
 
 func TestFileSafetyProtectedWorkspaceReads(t *testing.T) {
