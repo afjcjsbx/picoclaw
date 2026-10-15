@@ -48,6 +48,14 @@ func NewAgentLoop(
 ) *AgentLoop {
 	registry := NewAgentRegistry(cfg, provider)
 
+	// getSubTurnConfig clamps silently because it runs on every spawn; warn once here.
+	if n := cfg.Agents.Defaults.SubTurn.MaxConcurrent; n > maxSubTurnConcurrency {
+		logger.WarnCF("agent", "subturn.max_concurrent exceeds the hard cap and will be clamped", map[string]any{
+			"configured": n,
+			"effective":  maxSubTurnConcurrency,
+		})
+	}
+
 	// Set up shared fallback chain with rate limiting.
 	cooldown := providers.NewCooldownTracker()
 	fallbackChain := providers.NewFallbackChain(cooldown, newRateLimiterRegistry(registry))
