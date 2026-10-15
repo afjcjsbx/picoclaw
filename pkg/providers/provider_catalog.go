@@ -55,6 +55,13 @@ func SplitModelProviderAndID(model, defaultProvider string) (provider, modelID s
 		return "", ""
 	}
 
+	// A leading "/" is an empty provider segment. Resolve it to the default
+	// provider with the remaining model ID, matching the documented fallback
+	// rule for omitted providers instead of returning an empty protocol.
+	if after, ok := strings.CutPrefix(model, "/"); ok {
+		return NormalizeProvider(defaultProvider), after
+	}
+
 	provider, modelID = splitKnownProviderModel(model)
 	if provider != "" || modelID != "" {
 		return provider, modelID

@@ -1,7 +1,7 @@
 <div align="center">
 <img src="assets/logo.webp" alt="PicoClaw" width="512">
 
-<h1>PicoClaw: The Ultra-Lightweight Agent the Upstream No Longer Is — for RISC-V, SBCs, and Embedded Systems</h1>
+<h1>PicoClaw: An Ultra-Lightweight Go AI Agent for RISC-V, SBCs, and Embedded Systems — Actively Maintained Fork</h1>
 
 > PicoClaw is small on purpose. Small is not lesser. Small is enough.
 

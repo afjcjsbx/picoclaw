@@ -227,7 +227,6 @@ func TestRuntime_RunColdPathOnce_AdmitsOnlyRecordsApprovedBySuccessJudge(t *test
 		Config:         config.EvolutionConfig{Enabled: true, Mode: "draft", MinTaskCount: 1},
 		Store:          store,
 		SuccessJudge:   judge,
-		Organizer:      evolution.NewOrganizer(evolution.OrganizerOptions{MinCaseCount: 1, MinSuccessRate: 1}),
 		SkillsRecaller: evolution.NewSkillsRecaller(root),
 		DraftGenerator: stubDraftGenerator{
 			draft: evolution.SkillDraft{
@@ -672,7 +671,6 @@ func TestRuntime_RunColdPathOnce_AdmitsSingleSkillTaskButWaitsForMinTaskCount(t 
 		Config:         config.EvolutionConfig{Enabled: true, Mode: "draft"},
 		Store:          store,
 		SuccessJudge:   judge,
-		Organizer:      evolution.NewOrganizer(evolution.OrganizerOptions{MinCaseCount: 1, MinSuccessRate: 1}),
 		SkillsRecaller: evolution.NewSkillsRecaller(root),
 		DraftGenerator: stubDraftGenerator{
 			draft: evolution.SkillDraft{
@@ -746,7 +744,6 @@ func TestRuntime_RunColdPathOnce_RejectsTaskWhenSuccessJudgeRejects(t *testing.T
 		Config:         config.EvolutionConfig{Enabled: true, Mode: "draft"},
 		Store:          store,
 		SuccessJudge:   judge,
-		Organizer:      evolution.NewOrganizer(evolution.OrganizerOptions{MinCaseCount: 1, MinSuccessRate: 1}),
 		SkillsRecaller: evolution.NewSkillsRecaller(root),
 		DraftGenerator: stubDraftGenerator{
 			draft: evolution.SkillDraft{

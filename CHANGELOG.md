@@ -7,9 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- BytePlus (`byteplus`) as an OpenAI-compatible provider, including `thinking_level: "off"` support.
+
 ### Changed
 
 - Removed unused channel settings fields (`discord.settings.mention_only`, `onebot.settings.group_trigger_prefix`, `pico.settings.write_timeout`); group triggering is configured through `group_trigger`.
+- Per-model `rpm` is now enforced for single-candidate calls, configured streaming and image-model candidates, not only inside the fallback chain. Existing configs that set `rpm` on a model without fallbacks will now be throttled; waits of one second or more are logged.
+- Documented that round-robin load balancing is applied when a model is resolved (agent startup or `/model` switch), not per request.
+
+### Fixed
+
+- A model written with a leading slash (for example `/gpt-4o`) now resolves to the default provider instead of failing with `unknown protocol ""`.
+- Providers guide: the Z.AI Coding Plan provider id is `zai`, not `zai-coding`.
+- Lowered the default number of concurrent SubTurns per parent turn from 5 to 3 to reduce memory use on low-RAM devices; set `agents.defaults.subturn.max_concurrent` to restore the previous value. Values above 32 are now clamped to 32.
 
 ## [0.5.0] - 2026-10-11
 

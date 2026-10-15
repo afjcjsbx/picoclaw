@@ -2438,3 +2438,30 @@ func TestDelegateToolRegistered_MultiAgent(t *testing.T) {
 		}
 	}
 }
+
+func TestGetSubTurnConfig_MaxConcurrent(t *testing.T) {
+	tests := []struct {
+		name       string
+		configured int
+		want       int
+	}{
+		{"unset uses default", 0, defaultMaxConcurrentSubTurns},
+		{"negative uses default", -1, defaultMaxConcurrentSubTurns},
+		{"explicit value is kept", 7, 7},
+		{"value at the cap is kept", maxSubTurnConcurrency, maxSubTurnConcurrency},
+		{"value just above the cap is clamped", maxSubTurnConcurrency + 1, maxSubTurnConcurrency},
+		{"value far above the cap is clamped", maxSubTurnConcurrency * 4, maxSubTurnConcurrency},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{}
+			cfg.Agents.Defaults.SubTurn.MaxConcurrent = tt.configured
+			al := &AgentLoop{cfg: cfg}
+
+			if got := al.getSubTurnConfig().maxConcurrent; got != tt.want {
+				t.Fatalf("maxConcurrent = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}

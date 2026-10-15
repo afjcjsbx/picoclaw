@@ -18,10 +18,21 @@ import (
 // ====================== Config & Constants ======================
 const (
 	// Default values for SubTurn configuration (used when config is not set or is zero)
-	defaultMaxSubTurnDepth       = 3
-	defaultMaxConcurrentSubTurns = 5
-	defaultConcurrencyTimeout    = 30 * time.Second
-	defaultSubTurnTimeout        = 5 * time.Minute
+	defaultMaxSubTurnDepth = 3
+	// defaultMaxConcurrentSubTurns is the default number of SubTurns a single
+	// parent turn may run at once. It is intentionally small: each concurrent
+	// SubTurn runs an in-process agent loop with its own context and history, so
+	// concurrency multiplies memory use. On the low-RAM devices PicoClaw targets
+	// a high default is counterproductive; deployments that can afford more can
+	// raise it via agents.defaults.subturn.max_concurrent.
+	defaultMaxConcurrentSubTurns = 3
+	// maxSubTurnConcurrency is a hard upper bound on the configured per-parent
+	// limit, so a misconfiguration cannot let one turn fan out without bound.
+	// It is not a global cap: every turn owns its own semaphore, so nested
+	// SubTurns each get their own limit (bounded by the max depth).
+	maxSubTurnConcurrency     = 32
+	defaultConcurrencyTimeout = 30 * time.Second
+	defaultSubTurnTimeout     = 5 * time.Minute
 	// maxEphemeralHistorySize limits the number of messages stored in ephemeral sessions.
 	// This prevents memory accumulation in long-running sub-turns.
 	maxEphemeralHistorySize = 50
@@ -48,6 +59,9 @@ func (al *AgentLoop) getSubTurnConfig() subTurnRuntimeConfig {
 	maxConcurrent := cfg.MaxConcurrent
 	if maxConcurrent <= 0 {
 		maxConcurrent = defaultMaxConcurrentSubTurns
+	}
+	if maxConcurrent > maxSubTurnConcurrency {
+		maxConcurrent = maxSubTurnConcurrency
 	}
 
 	concurrencyTimeout := time.Duration(cfg.ConcurrencyTimeoutSec) * time.Second

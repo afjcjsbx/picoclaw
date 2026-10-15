@@ -366,6 +366,12 @@ func executeReload(
 		publishGatewayEvent(agentLoop, runtimeevents.KindGatewayReloadCompleted, startedAt, nil)
 	}()
 
+	// Apply the same sanity checks as startup so a reload cannot install a
+	// config that startup would have rejected.
+	if err = preCheckConfig(newCfg); err != nil {
+		return fmt.Errorf("config pre-check failed: %w", err)
+	}
+
 	err = handleConfigReload(ctx, agentLoop, newCfg, provider, runningServices, msgBus, allowEmptyStartup, debug)
 	return err
 }
@@ -753,6 +759,20 @@ func setupConfigWatcherPolling(configPath string, debug bool, interval time.Dura
 		lastModTime := getFileModTime(configPath)
 		lastSize := getFileSize(configPath)
 
+		// A rejected file is retried on every tick (see below), so only log
+		// a rejection when it differs from the previous one; otherwise an
+		// invalid file would repeat the same error forever.
+		var lastRejection string
+		reject := func(format string, err error) {
+			msg := fmt.Sprintf(format, err)
+			if msg == lastRejection {
+				return
+			}
+			lastRejection = msg
+			logger.Error(msg)
+			logger.Warn("  Using previous valid config")
+		}
+
 		if interval <= 0 {
 			interval = 2 * time.Second
 		}
@@ -765,36 +785,44 @@ func setupConfigWatcherPolling(configPath string, debug bool, interval time.Dura
 				currentModTime := getFileModTime(configPath)
 				currentSize := getFileSize(configPath)
 
-				if currentModTime.After(lastModTime) || currentSize != lastSize {
-					if debug {
-						logger.Debugf("🔍 Config file change detected")
-					}
+				if !currentModTime.After(lastModTime) && currentSize == lastSize {
+					continue
+				}
 
-					time.Sleep(500 * time.Millisecond)
+				if debug {
+					logger.Debugf("🔍 Config file change detected")
+				}
 
-					lastModTime = currentModTime
-					lastSize = currentSize
+				// Debounce: wait for the write to settle, then re-stat so the
+				// watermark reflects the version that is about to be loaded.
+				time.Sleep(500 * time.Millisecond)
+				currentModTime = getFileModTime(configPath)
+				currentSize = getFileSize(configPath)
 
-					newCfg, err := config.LoadConfig(configPath)
-					if err != nil {
-						logger.Errorf("⚠ Error loading new config: %v", err)
-						logger.Warn("  Using previous valid config")
-						continue
-					}
+				newCfg, err := config.LoadConfig(configPath)
+				if err != nil {
+					reject("⚠ Error loading new config: %v", err)
+					continue
+				}
 
-					if err := newCfg.ValidateModelList(); err != nil {
-						logger.Errorf("  ⚠ New config validation failed: %v", err)
-						logger.Warn("  Using previous valid config")
-						continue
-					}
+				if err := newCfg.ValidateModelList(); err != nil {
+					reject("  ⚠ New config validation failed: %v", err)
+					continue
+				}
 
-					logger.Info("✓ Config file validated and loaded")
+				// Advance the watermark only after a successful load, so a
+				// partially written or invalid file is retried on the next tick
+				// instead of being silently skipped.
+				lastModTime = currentModTime
+				lastSize = currentSize
+				lastRejection = ""
 
-					select {
-					case configChan <- newCfg:
-					default:
-						logger.Warn("⚠ Previous config reload still in progress, skipping")
-					}
+				logger.Info("✓ Config file validated and loaded")
+
+				select {
+				case configChan <- newCfg:
+				default:
+					logger.Warn("⚠ Previous config reload still in progress, skipping")
 				}
 			case <-stop:
 				return

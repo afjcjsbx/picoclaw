@@ -63,7 +63,39 @@ func (r *Router) SelectModel(
 	history []providers.Message,
 	primaryModel string,
 ) (model string, usedLight bool, score float64) {
+	return r.SelectModelWithMedia(msg, history, primaryModel, false)
+}
+
+// SelectModelWithMedia is SelectModel plus an explicit signal that the current
+// turn carries real media (providers.Message.Media / turnState.media).
+//
+// The text-only detection in ExtractFeatures cannot see media delivered as a
+// structured field, so it would score an image-only turn as trivial and select
+// the light model up front. hasMedia makes the tier decision itself correct: it
+// is treated as a hard gate, so the primary model is selected and the reported
+// score reflects it, matching the documented "attachments force the heavy
+// model" behavior.
+//
+// This is not the only guard: before the LLM call the agent pipeline
+// (routeMediaTurn) can still switch an already-selected light model to the
+// primary or image model. That switch is a later safety net that also covers
+// configured image models; it does not replace selecting the right tier here.
+func (r *Router) SelectModelWithMedia(
+	msg string,
+	history []providers.Message,
+	primaryModel string,
+	hasMedia bool,
+) (model string, usedLight bool, score float64) {
 	features := ExtractFeatures(msg, history)
+	features.HasAttachments = features.HasAttachments || hasMedia
+	return r.selectFeatures(primaryModel, features)
+}
+
+// selectFeatures applies the classifier and threshold to choose a tier.
+func (r *Router) selectFeatures(
+	primaryModel string,
+	features Features,
+) (model string, usedLight bool, score float64) {
 	score = r.classifier.Score(features)
 	if score < r.cfg.Threshold {
 		return r.cfg.LightModel, true, score

@@ -3440,6 +3440,117 @@ func TestProcessMessage_ModelRoutingUsesLightProvider(t *testing.T) {
 	}
 }
 
+// TestProcessMessage_ModelRoutingScoresSessionHistoryNotRenderedPrompt is the
+// regression test for the ConversationDepth signal: the router must be scored
+// against the assembled session history, not the rendered prompt (which
+// additionally carries the system prompt and the current user message).
+//
+// The agent is seeded with nine history messages. Scoring the real history
+// yields ConversationDepth = 9 (below the >10 boundary), so the light model is
+// used. Scoring the rendered prompt would yield 11 and cross the boundary,
+// pushing the turn onto the heavy model.
+//
+// The depth signal adds 0.10 to the score, so the threshold is set to 0.05:
+// strictly between the real-history score (0.00) and the rendered-prompt score
+// (0.10). A threshold equal to the signal weight would make the test pass or
+// fail on a floating-point/weight tie instead of on the behavior under test.
+func TestProcessMessage_ModelRoutingScoresSessionHistoryNotRenderedPrompt(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "agent-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	heavyCalls := 0
+	heavyServer := newStrictChatCompletionTestServer(
+		t,
+		"heavy",
+		"gemini-2.5-flash",
+		"heavy reply",
+		&heavyCalls,
+	)
+	defer heavyServer.Close()
+
+	lightCalls := 0
+	lightServer := newStrictChatCompletionTestServer(
+		t,
+		"light",
+		"qwen2.5:0.5b",
+		"light reply",
+		&lightCalls,
+	)
+	defer lightServer.Close()
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				ModelName:         "gemini-main",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+				Routing: &config.RoutingConfig{
+					Enabled:    true,
+					LightModel: "qwen-light",
+					Threshold:  0.05,
+				},
+			},
+		},
+		ModelList: []*config.ModelConfig{
+			{
+				ModelName: "gemini-main",
+				Model:     "gemini/gemini-2.5-flash",
+				APIBase:   heavyServer.URL,
+				APIKeys:   config.SimpleSecureStrings("heavy-key"),
+			},
+			{
+				ModelName: "qwen-light",
+				Model:     "ollama/qwen2.5:0.5b",
+				APIBase:   lightServer.URL,
+				APIKeys:   config.SimpleSecureStrings("light-key"),
+			},
+		},
+	}
+
+	msgBus := bus.NewMessageBus()
+	provider, _, err := providers.CreateProvider(cfg)
+	if err != nil {
+		t.Fatalf("CreateProvider() error = %v", err)
+	}
+	al := NewAgentLoop(cfg, msgBus, provider)
+
+	agent := al.registry.GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("No default agent found")
+	}
+
+	msg := bus.InboundMessage{
+		Context: bus.InboundContext{
+			Channel:  "telegram",
+			ChatID:   "chat1",
+			ChatType: "direct",
+			SenderID: "user1",
+		},
+		Content: "hi",
+	}
+	route := al.registry.ResolveRoute(bus.NormalizeInboundMessage(msg).Context)
+	sessionKey := al.allocateRouteSession(route, msg).SessionKey
+	for i := 0; i < 9; i++ {
+		agent.Sessions.AddFullMessage(sessionKey, providers.Message{Role: "user", Content: "prior turn"})
+	}
+
+	helper := testHelper{al: al}
+	resp := helper.executeAndGetResponse(t, context.Background(), msg)
+	if resp != "light reply" {
+		t.Fatalf("response = %q, want %q", resp, "light reply")
+	}
+	if heavyCalls != 0 {
+		t.Fatalf("heavy calls = %d, want 0 (depth must come from real history)", heavyCalls)
+	}
+	if lightCalls != 1 {
+		t.Fatalf("light calls = %d, want 1", lightCalls)
+	}
+}
+
 // TestProcessMessage_FallbackUsesPerCandidateProvider is the loop-level test for
 // bug #2140. It verifies that when the primary model returns a rate-limit error
 // the fallback closure routes the retry to the fallback model's own provider

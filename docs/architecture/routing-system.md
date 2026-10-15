@@ -198,6 +198,7 @@ Config shape:
 
 If the score is below the threshold, the light model wins.
 Otherwise the agent's primary model is used.
+A `threshold` of `0` or a negative value is treated as "unset" and replaced by the default `0.35`, so the boundary cannot be lowered to "always primary" through config; use `enabled: false` instead.
 At runtime this only matters when the agent actually has light-model candidates configured; otherwise execution stays on the primary candidate set.
 
 ## Complexity Features
@@ -247,6 +248,7 @@ Agent dispatch and model routing happen in different places:
 
 When the light model is selected, the agent loop swaps to `agent.LightCandidates`.
 When it is not selected, execution stays on the agent's primary provider candidate set.
+A turn that carries media (or that gains media while it runs) is evaluated before provider execution by `pkg/agent/llm_media.go:routeMediaTurn`, which routes it to the configured image model or back to the primary candidates even if the classifier had picked the light model.
 
 ## Explicit Session Keys
 

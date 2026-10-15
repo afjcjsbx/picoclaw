@@ -1,6 +1,7 @@
 package routing
 
 import (
+	"regexp"
 	"strings"
 	"unicode/utf8"
 
@@ -38,8 +39,9 @@ type Features struct {
 }
 
 // ExtractFeatures computes the structural feature vector for a message.
-// It is a pure function with no side effects and zero allocations beyond
-// the returned struct.
+// It is a pure function with no side effects. It makes no model or network
+// calls; the only allocations are small string buffers for attachment
+// detection (lowercasing, and stripping fenced code blocks when present).
 func ExtractFeatures(msg string, history []providers.Message) Features {
 	return Features{
 		TokenEstimate:     estimateTokens(msg),
@@ -70,12 +72,40 @@ func estimateTokens(msg string) int {
 }
 
 // countCodeBlocks counts the number of complete fenced code blocks.
-// Each ``` delimiter increments a counter; pairs of delimiters form one block.
-// An unclosed opening fence (odd count) is treated as zero complete blocks
+// It recognizes both backtick (```) and tilde (~~~) fences; a block is closed
+// only by a fence of the same type that opened it, so "```" followed by "~~~"
+// is not a block. An unclosed opening fence is treated as zero complete blocks
 // since it may just be an inline code span or a typo.
 func countCodeBlocks(msg string) int {
-	n := strings.Count(msg, "```")
-	return n / 2
+	blocks := 0
+	for rest := msg; ; {
+		i, marker := nextFence(rest)
+		if i < 0 {
+			return blocks
+		}
+		rest = rest[i+len(marker):]
+		end := strings.Index(rest, marker)
+		if end < 0 {
+			return blocks
+		}
+		blocks++
+		rest = rest[end+len(marker):]
+	}
+}
+
+// nextFence returns the index and marker (``` or ~~~) of the earliest fence
+// marker in s, or -1 if there is none. Markers are matched anywhere in the
+// text, not only at the start of a line, so "Try this: ```go ... ```" counts.
+func nextFence(s string) (int, string) {
+	b, t := strings.Index(s, "```"), strings.Index(s, "~~~")
+	switch {
+	case b < 0 && t < 0:
+		return -1, ""
+	case t < 0 || (b >= 0 && b < t):
+		return b, "```"
+	default:
+		return t, "~~~"
+	}
 }
 
 // countRecentToolCalls counts messages with tool calls in the last lookbackWindow
@@ -96,13 +126,26 @@ func countRecentToolCalls(history []providers.Message) int {
 	return count
 }
 
+// mediaExtensionRegex matches a filename-like token ending in a media
+// extension. It requires a leading alphanumeric character and a trailing
+// boundary so that a bare ".png" fragment or a longer token such as
+// "photo.jpgx" does not look like an attachment. It is case-sensitive: callers
+// must lowercase the input first (hasAttachments does).
+var mediaExtensionRegex = regexp.MustCompile(
+	`[a-z0-9][a-z0-9._-]*\.(?:jpg|jpeg|png|gif|webp|bmp|mp3|wav|ogg|m4a|flac|mp4|avi|mov|webm)(?:[^a-z0-9]|$)`,
+)
+
 // hasAttachments returns true when the message content contains embedded media.
 // It checks for base64 data URIs (data:image/, data:audio/, data:video/) and
-// common image/audio URL extensions. This is intentionally conservative —
-// false negatives (missing an attachment) just mean the routing falls back to
-// the primary model anyway.
+// common image/audio URL/file extensions. Fenced code blocks are ignored first
+// for both checks, so a code snippet that merely mentions a media file name or
+// embeds a sample data URI (e.g. an HTML <img> tag) does not force the heavy
+// model. Real media arrives as a structured field (see SelectModelWithMedia),
+// not as a fenced text snippet. This is intentionally conservative — false
+// negatives (missing an attachment) just mean the routing falls back to the
+// primary model anyway.
 func hasAttachments(msg string) bool {
-	lower := strings.ToLower(msg)
+	lower := strings.ToLower(stripFencedCodeBlocks(msg))
 
 	// Base64 data URIs embedded directly in the message
 	if strings.Contains(lower, "data:image/") ||
@@ -112,16 +155,33 @@ func hasAttachments(msg string) bool {
 	}
 
 	// Common image/audio extensions in URLs or file references
-	mediaExts := []string{
-		".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp",
-		".mp3", ".wav", ".ogg", ".m4a", ".flac",
-		".mp4", ".avi", ".mov", ".webm",
-	}
-	for _, ext := range mediaExts {
-		if strings.Contains(lower, ext) {
-			return true
-		}
+	return mediaExtensionRegex.MatchString(lower)
+}
+
+// stripFencedCodeBlocks removes fenced code blocks (``` or ~~~) so that media
+// file names mentioned in code are not mistaken for attachments. Like
+// countCodeBlocks, a block is closed only by a fence of the same type that
+// opened it, so a different fence inside a block is dropped with the rest of
+// its content. An unclosed opening fence drops everything after it.
+func stripFencedCodeBlocks(msg string) string {
+	if !strings.Contains(msg, "```") && !strings.Contains(msg, "~~~") {
+		return msg
 	}
 
-	return false
+	var b strings.Builder
+	b.Grow(len(msg))
+	for rest := msg; ; {
+		i, marker := nextFence(rest)
+		if i < 0 {
+			b.WriteString(rest)
+			return b.String()
+		}
+		b.WriteString(rest[:i])
+		rest = rest[i+len(marker):]
+		end := strings.Index(rest, marker)
+		if end < 0 {
+			return b.String()
+		}
+		rest = rest[end+len(marker):]
+	}
 }

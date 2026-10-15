@@ -279,7 +279,7 @@ func (p *Provider) thinkingControlKind(model string) string {
 	lowerModel := strings.ToLower(strings.TrimSpace(model))
 
 	switch providerName {
-	case "volcengine":
+	case "volcengine", "byteplus":
 		return "thinking_type"
 	case "zhipu", "zai":
 		return "thinking_type"

@@ -460,14 +460,7 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	al.evolution = newEvolution
 
 	// Also update fallback chain with new config; rebuild rate limiter registry.
-	newRL := providers.NewRateLimiterRegistry()
-	for _, agentID := range registry.ListAgentIDs() {
-		if agent, ok := registry.GetAgent(agentID); ok {
-			newRL.RegisterCandidates(agent.Candidates)
-			newRL.RegisterCandidates(agent.LightCandidates)
-		}
-	}
-	al.fallback = providers.NewFallbackChain(providers.NewCooldownTracker(), newRL)
+	al.fallback = providers.NewFallbackChain(providers.NewCooldownTracker(), newRateLimiterRegistry(registry))
 
 	al.mu.Unlock()
 	al.refreshRuntimeEventLogger(cfg)

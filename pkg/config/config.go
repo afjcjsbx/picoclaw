@@ -152,11 +152,14 @@ func (c EvolutionConfig) EffectiveMinTaskCount() int {
 }
 
 func (c EvolutionConfig) EffectiveMinSuccessRatio() float64 {
-	if c.MinSuccessRatio > 0 {
-		return c.MinSuccessRatio
+	ratio := c.MinSuccessRatio
+	if ratio <= 0 {
+		ratio = c.MinSuccessRate
 	}
-	if c.MinSuccessRate > 0 {
-		return c.MinSuccessRate
+	// The documented range is (0, 1]; anything else (including NaN) falls back
+	// to the default instead of silently disabling pattern generation.
+	if ratio > 0 && ratio <= 1 {
+		return ratio
 	}
 	return 0.7
 }
