@@ -153,3 +153,11 @@ require (
 )
 
 replace github.com/bwmarrin/discordgo => github.com/yeongaori/discordgo-fork v0.0.0-20260319072544-e8e546f5d532
+
+// The QQ OpenAPI requires "Authorization: QQBot <token>". botgo v0.2.1 sets the
+// resty auth scheme on the *Client* from inside OnBeforeRequest, but resty >= v2.17
+// snapshots Client.AuthScheme into the Request at R() time and only reads the
+// request-level scheme, so requests go out as "Bearer <token>" and the gateway
+// rejects them with 401 (code 11241). This fork is upstream v0.2.1 plus the
+// 3-line fix; drop this replace once tencent-connect/botgo#60 is merged and tagged.
+replace github.com/tencent-connect/botgo => github.com/afjcjsbx/botgo v0.2.2-0.20261015203710-64b99d903a76
