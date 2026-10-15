@@ -56,6 +56,20 @@ func channelPresent(m *Manager, name string) bool {
 	return ok
 }
 
+// eventually polls cond until it holds or the deadline passes. Retiring a
+// channel finishes with a map update that happens after the worker's done
+// channel closes, so tests must not assume it is visible at that point.
+func eventually(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // waitWorkerRetired blocks until the reload cleanup goroutine has finished
 // draining the given worker (its done channel is closed).
 func waitWorkerRetired(t *testing.T, w *channelWorker) {
@@ -119,11 +133,64 @@ func TestReload_RemovedChannelCleansUp(t *testing.T) {
 	}
 	waitWorkerRetired(t, oldWorker)
 
-	if channelPresent(m, reloadTestChannel) {
-		t.Fatal("channel was not removed after a reload disabling it")
+	eventually(t, "channel removal after a reload disabling it", func() bool {
+		return !channelPresent(m, reloadTestChannel)
+	})
+	eventually(t, "worker removal after a reload disabling its channel", func() bool {
+		return workerFor(t, m, reloadTestChannel) == nil
+	})
+}
+
+// Draining a retired worker can take as long as its send retries. It must not
+// hold m.mu meanwhile, or the outbound dispatchers (which take m.mu.RLock for
+// every message) stall for every other channel.
+func TestRetireChannelInstance_DoesNotHoldLockWhileDraining(t *testing.T) {
+	m := newReloadTestManager(t, newReloadTestConfig(t, `{"v":1}`, true))
+
+	slow := &channelWorker{
+		done:      make(chan struct{}),
+		mediaDone: make(chan struct{}),
+		stop:      make(chan struct{}),
 	}
-	if w := workerFor(t, m, reloadTestChannel); w != nil {
-		t.Fatal("worker was not removed after a reload disabling its channel")
+	retired := make(chan struct{})
+	go func() {
+		defer close(retired)
+		m.retireChannelInstance("slow_channel", nil, slow)
+	}()
+
+	// shutdown() closes stop right before the drain wait, so once stop is closed
+	// the retire goroutine is blocked waiting for the worker to drain.
+	select {
+	case <-slow.stop:
+	case <-time.After(2 * time.Second):
+		t.Fatal("retireChannelInstance did not start draining the worker")
+	}
+
+	// The worker is still draining: the manager lock must be free.
+	locked := make(chan struct{})
+	go func() {
+		m.mu.RLock()
+		m.mu.RUnlock()
+		close(locked)
+	}()
+	select {
+	case <-locked:
+	case <-time.After(2 * time.Second):
+		t.Fatal("retireChannelInstance holds m.mu while waiting for the worker to drain")
+	}
+
+	select {
+	case <-retired:
+		t.Fatal("retireChannelInstance returned before the worker finished draining")
+	default:
+	}
+
+	close(slow.done)
+	close(slow.mediaDone)
+	select {
+	case <-retired:
+	case <-time.After(2 * time.Second):
+		t.Fatal("retireChannelInstance did not return after the worker drained")
 	}
 }
 

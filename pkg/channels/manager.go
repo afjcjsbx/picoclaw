@@ -2082,19 +2082,23 @@ func (m *Manager) UnregisterChannel(name string) {
 // removed or replaced during a reload. Unlike UnregisterChannel it only clears
 // the manager maps when they still reference the retired instances, so a
 // replacement registered under the same name (config changed) keeps its own
-// channel and worker. It must run without holding the reload lock because it
-// waits for the retired worker goroutines to drain.
+// channel and worker. It must run without holding m.mu: draining the retired
+// worker can take as long as its in-flight send retries, and the outbound
+// dispatchers need m.mu.RLock to route messages for every other channel. The
+// dispatchers tolerate a worker that is shutting down (they select on w.stop),
+// so only the map mutations below take the lock.
 func (m *Manager) retireChannelInstance(name string, channel Channel, worker *channelWorker) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	if worker != nil {
 		worker.shutdown()
 		<-worker.done
 		<-worker.mediaDone
-		if m.workers[name] == worker {
-			delete(m.workers, name)
-		}
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if worker != nil && m.workers[name] == worker {
+		delete(m.workers, name)
 	}
 	if channel != nil && m.channels[name] == channel {
 		if m.mux != nil {
