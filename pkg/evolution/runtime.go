@@ -568,9 +568,6 @@ func (rt *Runtime) filterRecordsByMinSuccessRatio(
 	admittedRecords []LearningRecord,
 ) []LearningRecord {
 	minRatio := rt.cfg.EffectiveMinSuccessRatio()
-	if minRatio <= 0 {
-		return admittedRecords
-	}
 
 	type successStats struct {
 		success int
