@@ -70,10 +70,16 @@ func (r *Router) SelectModel(
 // turn carries real media (providers.Message.Media / turnState.media).
 //
 // The text-only detection in ExtractFeatures cannot see media delivered as a
-// structured field, so it would score an image-only turn as trivial and pick
-// the light model. hasMedia closes that gap: it is treated as a hard gate, so
-// the primary model is selected, matching the documented "attachments force
-// the heavy model" behavior.
+// structured field, so it would score an image-only turn as trivial and select
+// the light model up front. hasMedia makes the tier decision itself correct: it
+// is treated as a hard gate, so the primary model is selected and the reported
+// score reflects it, matching the documented "attachments force the heavy
+// model" behavior.
+//
+// This is not the only guard: before the LLM call the agent pipeline
+// (routeMediaTurn) can still switch an already-selected light model to the
+// primary or image model. That switch is a later safety net that also covers
+// configured image models; it does not replace selecting the right tier here.
 func (r *Router) SelectModelWithMedia(
 	msg string,
 	history []providers.Message,
