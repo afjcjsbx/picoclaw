@@ -6,8 +6,11 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/sipeed/picoclaw/pkg/cron"
 )
 
 func newTestServer() *Server {
@@ -354,5 +357,97 @@ func TestStatusString(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("statusString(%v) = %q, want %q", tt.input, got, tt.want)
 		}
+	}
+}
+
+func cronRunRequest(method, token, body string) *http.Request {
+	req := httptest.NewRequest(method, "/cron/run", strings.NewReader(body))
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	return req
+}
+
+func TestCronRunHandler(t *testing.T) {
+	tests := []struct {
+		name   string
+		method string
+		token  string
+		body   string
+		runErr error
+		noFunc bool
+		want   int
+		called string
+	}{
+		{"success", http.MethodPost, "test", `{"job_id":"j1"}`, nil, false, http.StatusAccepted, "j1"},
+		{"wrong method", http.MethodGet, "test", `{"job_id":"j1"}`, nil, false, http.StatusMethodNotAllowed, ""},
+		{"missing token", http.MethodPost, "", `{"job_id":"j1"}`, nil, false, http.StatusUnauthorized, ""},
+		{"wrong token", http.MethodPost, "nope", `{"job_id":"j1"}`, nil, false, http.StatusUnauthorized, ""},
+		{"no func", http.MethodPost, "test", `{"job_id":"j1"}`, nil, true, http.StatusServiceUnavailable, ""},
+		{"bad json", http.MethodPost, "test", `not json`, nil, false, http.StatusBadRequest, ""},
+		{"missing job id", http.MethodPost, "test", `{}`, nil, false, http.StatusBadRequest, ""},
+		{
+			"not found",
+			http.MethodPost,
+			"test",
+			`{"job_id":"j1"}`,
+			cron.ErrJobNotFound,
+			false,
+			http.StatusNotFound,
+			"j1",
+		},
+		{
+			"already running",
+			http.MethodPost,
+			"test",
+			`{"job_id":"j1"}`,
+			cron.ErrJobRunning,
+			false,
+			http.StatusConflict,
+			"j1",
+		},
+		{
+			"service unavailable", http.MethodPost, "test", `{"job_id":"j1"}`,
+			errors.New("cron service is not running"), false, http.StatusServiceUnavailable, "j1",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newTestServer()
+			var called string
+			if !tt.noFunc {
+				s.SetCronRunFunc(func(id string) error {
+					called = id
+					return tt.runErr
+				})
+			}
+			w := httptest.NewRecorder()
+			s.cronRunHandler(w, cronRunRequest(tt.method, tt.token, tt.body))
+			if w.Code != tt.want {
+				t.Errorf("status = %d, want %d (body: %s)", w.Code, tt.want, w.Body.String())
+			}
+			if called != tt.called {
+				t.Errorf("run func called with %q, want %q", called, tt.called)
+			}
+		})
+	}
+}
+
+// Running a job can execute a shell command, so an unconfigured token must
+// reject the request rather than leave the endpoint open like /reload.
+func TestCronRunHandler_FailsClosedWithoutConfiguredToken(t *testing.T) {
+	s := NewServer("127.0.0.1", 0, "")
+	called := false
+	s.SetCronRunFunc(func(string) error { called = true; return nil })
+
+	for _, token := range []string{"", "anything"} {
+		w := httptest.NewRecorder()
+		s.cronRunHandler(w, cronRunRequest(http.MethodPost, token, `{"job_id":"j1"}`))
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("token %q: status = %d, want %d", token, w.Code, http.StatusUnauthorized)
+		}
+	}
+	if called {
+		t.Error("run func must not be called without a configured token")
 	}
 }

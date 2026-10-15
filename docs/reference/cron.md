@@ -44,6 +44,7 @@ The agent-facing `cron` tool supports these actions:
 - `list`: show accessible job names, ids, and schedules.
 - `get`: fetch one accessible persisted job by `job_id`, including its saved payload.
 - `update`: partially update one accessible job by `job_id`; omitted fields are preserved.
+- `run`: execute one accessible job right now by `job_id`, without waiting for its schedule.
 - `remove`, `enable`, `disable`: existing management actions.
 
 When rescheduling an existing task, use `list -> get -> update`. Do not use
@@ -52,9 +53,9 @@ the original prompt, delivery target, or command payload.
 
 Remote channel access is scoped to the current `channel/chat_id`: remote callers
 can only act on jobs whose saved `payload.channel` and `payload.to` match the
-current conversation. This applies to `list`, `get`, `update`, `remove`,
+current conversation. This applies to `list`, `get`, `update`, `run`, `remove`,
 `enable`, and `disable`. Command jobs include a shell command payload, so they
-can only be listed, inspected, or updated from internal channels or remote
+can only be listed, inspected, updated, or run from internal channels or remote
 channels allowed by `tools.cron.command_allowed_remotes`.
 
 Example tool calls:
@@ -73,6 +74,56 @@ Omit `command` to preserve it, set `command` to a non-empty string to replace
 it, or set `command` to `""` to clear it. Setting or replacing a command
 requires the same channel allowlist and confirmation gates as command
 creation; clearing it does not.
+
+### Running a job on demand
+
+`run` starts a job immediately, from the agent tool or the CLI. It returns
+without waiting for the job to finish; output is delivered to the job's own
+channel, exactly like a scheduled run.
+
+- The schedule is not changed: an `every`/`cron` job keeps its next run time.
+  A one-time `at` job is consumed like after any run (deleted, or disabled when
+  `deleteAfterRun` is false).
+- Disabled jobs can be run; they stay disabled.
+- Jobs execute inside the gateway, so a gateway must be running and have the
+  cron tool enabled.
+- A job never runs concurrently with itself. If a manual `run` finds the job
+  already executing, it fails with `job is already running`. If the scheduler
+  finds the job due while a run is in flight, it skips that occurrence and
+  advances the schedule. Whichever side claims the job first wins. This also
+  means a recurring job whose run is slower than its interval no longer
+  overlaps itself: the occurrences that fall during the run are skipped.
+
+Agent tool:
+
+```json
+{"action":"run","job_id":"79095b2f5685a0f2"}
+```
+
+CLI:
+
+```bash
+picoclaw cron run 79095b2f5685a0f2
+```
+
+The CLI is a separate process, so it does not execute the job itself. It reads
+the gateway's `.picoclaw.pid` file in the PicoClaw home (host, port and auth
+token) and asks the running gateway to run the job, which keeps manual and
+scheduled runs serialized in a single process. It exits non-zero with a clear
+message when the gateway is not running, the job is already running, or the
+gateway does not know the job.
+
+The gateway only knows the jobs it loaded at startup (or on a config reload),
+not jobs added to `jobs.json` since, for example with `picoclaw cron add` while
+the gateway is running. Restart the gateway before running such a job.
+
+The CLI uses `POST /cron/run` on the shared Gateway HTTP server with a JSON
+body `{"job_id":"<id>"}`. Running a job can execute its shell command, so the
+endpoint always requires the Gateway auth token (`Authorization: Bearer
+<token>`) and rejects every request when no token is configured, unlike
+`/reload`. Responses: `202` job started, `401` bad or missing token, `404`
+unknown job, `409` job already running, `503` cron service unavailable (not
+running, or no job handler because the cron tool is disabled).
 
 ## Execution Modes
 

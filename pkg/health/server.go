@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"maps"
 	"net"
 	"net/http"
@@ -11,16 +12,19 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/sipeed/picoclaw/pkg/cron"
 )
 
 type Server struct {
-	server     *http.Server
-	mu         sync.RWMutex
-	ready      bool
-	checks     map[string]Check
-	startTime  time.Time
-	reloadFunc func() error
-	authToken  string // optional bearer token for protected endpoints
+	server      *http.Server
+	mu          sync.RWMutex
+	ready       bool
+	checks      map[string]Check
+	startTime   time.Time
+	reloadFunc  func() error
+	cronRunFunc func(jobID string) error
+	authToken   string // optional bearer token for protected endpoints
 }
 
 type Check struct {
@@ -49,6 +53,7 @@ func NewServer(host string, port int, token string) *Server {
 	mux.HandleFunc("/health", s.healthHandler)
 	mux.HandleFunc("/ready", s.readyHandler)
 	mux.HandleFunc("/reload", s.reloadHandler)
+	mux.HandleFunc("/cron/run", s.cronRunHandler)
 
 	addr := net.JoinHostPort(host, strconv.Itoa(port))
 	s.server = &http.Server{
@@ -170,6 +175,66 @@ func (s *Server) reloadHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// SetCronRunFunc sets the callback that starts a cron job on demand. It must
+// return promptly (cron.CronService.RunJob does: the job runs detached).
+func (s *Server) SetCronRunFunc(fn func(jobID string) error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cronRunFunc = fn
+}
+
+// cronRunHandler triggers a cron job on demand: POST {"job_id":"..."}.
+// Running a job can execute its shell command, so unlike /reload it fails
+// closed when no auth token is configured.
+func (s *Server) cronRunHandler(w http.ResponseWriter, r *http.Request) {
+	writeError := func(status int, msg string) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
+	}
+
+	if r.Method != http.MethodPost {
+		writeError(http.StatusMethodNotAllowed, "method not allowed, use POST")
+		return
+	}
+
+	s.mu.RLock()
+	requiredToken := s.authToken
+	runFunc := s.cronRunFunc
+	s.mu.RUnlock()
+
+	given := extractBearerToken(r.Header.Get("Authorization"))
+	if requiredToken == "" || given == "" || subtle.ConstantTimeCompare([]byte(given), []byte(requiredToken)) != 1 {
+		writeError(http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	if runFunc == nil {
+		writeError(http.StatusServiceUnavailable, "cron run not configured")
+		return
+	}
+
+	var req struct {
+		JobID string `json:"job_id"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<10)).Decode(&req); err != nil || req.JobID == "" {
+		writeError(http.StatusBadRequest, `body must be JSON like {"job_id":"<id>"}`)
+		return
+	}
+
+	switch err := runFunc(req.JobID); {
+	case err == nil:
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "triggered", "job_id": req.JobID})
+	case errors.Is(err, cron.ErrJobNotFound):
+		writeError(http.StatusNotFound, err.Error())
+	case errors.Is(err, cron.ErrJobRunning):
+		writeError(http.StatusConflict, err.Error())
+	default:
+		writeError(http.StatusServiceUnavailable, err.Error())
+	}
+}
+
 func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -230,12 +295,13 @@ type HandlerMux interface {
 	HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request))
 }
 
-// RegisterOnMux registers /health, /ready and /reload handlers onto the given mux.
+// RegisterOnMux registers /health, /ready, /reload and /cron/run handlers onto the given mux.
 // This allows the health endpoints to be served by a shared HTTP server.
 func (s *Server) RegisterOnMux(mux HandlerMux) {
 	mux.HandleFunc("/health", s.healthHandler)
 	mux.HandleFunc("/ready", s.readyHandler)
 	mux.HandleFunc("/reload", s.reloadHandler)
+	mux.HandleFunc("/cron/run", s.cronRunHandler)
 }
 
 func statusString(ok bool) string {

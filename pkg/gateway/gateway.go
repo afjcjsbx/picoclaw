@@ -47,6 +47,9 @@ const (
 )
 
 type services struct {
+	// cronMu guards CronService, which a config reload replaces while HTTP
+	// handlers (/cron/run) may be reading it.
+	cronMu           sync.RWMutex
 	CronService      *cron.CronService
 	HeartbeatService *heartbeat.HeartbeatService
 	MediaStore       media.MediaStore
@@ -57,6 +60,24 @@ type services struct {
 	manualReloadChan chan struct{}
 	reloading        atomic.Bool
 	authToken        string
+}
+
+func (s *services) setCronService(cs *cron.CronService) {
+	s.cronMu.Lock()
+	defer s.cronMu.Unlock()
+	s.CronService = cs
+}
+
+// runCronJob starts a job on demand on the current cron service. Going through
+// the service's per-job claim keeps it from overlapping a scheduled run.
+func (s *services) runCronJob(jobID string) error {
+	s.cronMu.RLock()
+	cs := s.CronService
+	s.cronMu.RUnlock()
+	if cs == nil {
+		return fmt.Errorf("cron service is not available")
+	}
+	return cs.RunJob(jobID)
 }
 
 type startupBlockedProvider struct {
@@ -233,6 +254,7 @@ func Run(debug bool, homePath, configPath string, allowEmptyStartup bool) (runEr
 		}
 	}
 	runningServices.HealthServer.SetReloadFunc(reloadTrigger)
+	runningServices.HealthServer.SetCronRunFunc(runningServices.runCronJob)
 	agentLoop.SetReloadFunc(reloadTrigger)
 
 	for _, bindHost := range listenResult.BindHosts {
@@ -414,7 +436,7 @@ func setupAndStartServices(
 
 	execTimeout := time.Duration(cfg.Tools.Cron.ExecTimeoutMinutes) * time.Minute
 	var err error
-	runningServices.CronService, err = setupCronTool(
+	cronService, err := setupCronTool(
 		agentLoop,
 		msgBus,
 		cfg.WorkspacePath(),
@@ -425,7 +447,8 @@ func setupAndStartServices(
 	if err != nil {
 		return nil, fmt.Errorf("error setting up cron service: %w", err)
 	}
-	if err = runningServices.CronService.Start(); err != nil {
+	runningServices.setCronService(cronService)
+	if err = cronService.Start(); err != nil {
 		return nil, fmt.Errorf("error starting cron service: %w", err)
 	}
 	fmt.Println("✓ Cron service started")
@@ -663,7 +686,7 @@ func restartServices(
 
 	execTimeout := time.Duration(cfg.Tools.Cron.ExecTimeoutMinutes) * time.Minute
 	var err error
-	runningServices.CronService, err = setupCronTool(
+	cronService, err := setupCronTool(
 		al,
 		msgBus,
 		cfg.WorkspacePath(),
@@ -674,7 +697,8 @@ func restartServices(
 	if err != nil {
 		return fmt.Errorf("error restarting cron service: %w", err)
 	}
-	if err = runningServices.CronService.Start(); err != nil {
+	runningServices.setCronService(cronService)
+	if err = cronService.Start(); err != nil {
 		return fmt.Errorf("error restarting cron service: %w", err)
 	}
 	fmt.Println("  ✓ Cron service restarted")
