@@ -137,6 +137,9 @@ func TestExtractFeatures_HasAttachments_DataURI(t *testing.T) {
 		{"here is an image: data:image/png;base64,abc123", true},
 		{"audio: data:audio/mp3;base64,xyz", true},
 		{"video: data:video/mp4;base64,xyz", true},
+		// A sample data URI inside a code block is code, not an attachment.
+		{"```html\n<img src=\"data:image/png;base64,abc123\">\n```", false},
+		{"~~~\ndata:audio/mp3;base64,xyz\n~~~\nthanks", false},
 	}
 	for _, tc := range cases {
 		f := ExtractFeatures(tc.msg, nil)

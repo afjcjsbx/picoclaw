@@ -135,10 +135,13 @@ var mediaExtensionRegex = regexp.MustCompile(
 
 // hasAttachments returns true when the message content contains embedded media.
 // It checks for base64 data URIs (data:image/, data:audio/, data:video/) and
-// common image/audio URL/file extensions. Fenced code blocks are ignored first,
-// so a code snippet that merely mentions a media file name does not force the
-// heavy model. This is intentionally conservative — false negatives (missing an
-// attachment) just mean the routing falls back to the primary model anyway.
+// common image/audio URL/file extensions. Fenced code blocks are ignored first
+// for both checks, so a code snippet that merely mentions a media file name or
+// embeds a sample data URI (e.g. an HTML <img> tag) does not force the heavy
+// model. Real media arrives as a structured field (see SelectModelWithMedia),
+// not as a fenced text snippet. This is intentionally conservative — false
+// negatives (missing an attachment) just mean the routing falls back to the
+// primary model anyway.
 func hasAttachments(msg string) bool {
 	lower := strings.ToLower(stripFencedCodeBlocks(msg))
 
