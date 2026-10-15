@@ -410,6 +410,49 @@ func TestPipeline_CallLLM_UsesSuccessfulFallbackIdentityAlias(t *testing.T) {
 	}
 }
 
+func TestPipeline_CallLLM_EnforcesRPMForSingleCandidate(t *testing.T) {
+	provider := &sequenceProvider{}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+
+	agent.Model = "solo-model"
+	agent.Candidates = []providers.FallbackCandidate{
+		{Provider: "openai", Model: "gpt-5.4", IdentityKey: "model_name:solo", RPM: 1},
+	}
+	rl := providers.NewRateLimiterRegistry()
+	rl.RegisterCandidates(agent.Candidates)
+	al.fallback = providers.NewFallbackChain(providers.NewCooldownTracker(), rl)
+
+	pipeline := NewPipeline(al)
+	ts := newTurnState(agent, makeTestProcessOpts("test-session"), turnEventScope{
+		turnID:  "turn-1",
+		context: newTurnContext(nil, nil, nil),
+	})
+	exec, err := pipeline.SetupTurn(context.Background(), ts)
+	if err != nil {
+		t.Fatalf("SetupTurn failed: %v", err)
+	}
+
+	// The first call consumes the only burst token and reaches the provider.
+	if _, err = pipeline.CallLLM(context.Background(), context.Background(), ts, exec, 1); err != nil {
+		t.Fatalf("first CallLLM failed: %v", err)
+	}
+	if provider.callCount != 1 {
+		t.Fatalf("provider calls after first CallLLM = %d, want 1", provider.callCount)
+	}
+
+	// The second call must wait for a token and never reach the provider.
+	waitCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, err = pipeline.CallLLM(context.Background(), waitCtx, ts, exec, 2)
+	if err == nil {
+		t.Fatal("expected second CallLLM to fail while waiting for the local RPM token")
+	}
+	if provider.callCount != 1 {
+		t.Fatalf("provider calls after rate-limited CallLLM = %d, want 1", provider.callCount)
+	}
+}
+
 func TestPipeline_CallLLM_UsesSuccessfulFallbackDisplayNameWithoutAlias(t *testing.T) {
 	provider := &sequenceProvider{
 		errors: []error{
