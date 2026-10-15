@@ -1938,6 +1938,16 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config) error {
 	list := toChannelHashes(cfg)
 	added, removed := compareChannels(m.channelHashes, list)
 
+	// Build the config for the added channels before stopping anything: a
+	// failure here must leave the running channels untouched, because the
+	// stopped ones are never restarted on the error path.
+	cc, err := toChannelConfig(cfg, added)
+	if err != nil {
+		logger.ErrorC("channels", fmt.Sprintf("toChannelConfig error: %v", err))
+		m.config.Store(oldConfig)
+		return err
+	}
+
 	deferFuncs := make([]func(), 0, len(removed)+len(added))
 	for _, name := range removed {
 		// Capture the instances being retired before initChannels replaces them
@@ -1950,10 +1960,10 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config) error {
 			"channel": name,
 		})
 		if channel != nil {
-			if err := channel.Stop(ctx); err != nil {
+			if stopErr := channel.Stop(ctx); stopErr != nil {
 				logger.ErrorCF("channels", "Error stopping channel", map[string]any{
 					"channel": name,
-					"error":   err.Error(),
+					"error":   stopErr.Error(),
 				})
 			}
 		}
@@ -1970,17 +1980,6 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config) error {
 		dispatchCtx, cancelCreated = context.WithCancel(ctx)
 		m.dispatchCtx = dispatchCtx
 		m.dispatchTask = &asyncTask{cancel: cancelCreated}
-	}
-	cc, err := toChannelConfig(cfg, added)
-	if err != nil {
-		logger.ErrorC("channels", fmt.Sprintf("toChannelConfig error: %v", err))
-		m.config.Store(oldConfig)
-		if cancelCreated != nil {
-			cancelCreated()
-			m.dispatchCtx = nil
-			m.dispatchTask = nil
-		}
-		return err
 	}
 	err = m.initChannels(cc)
 	if err != nil {
