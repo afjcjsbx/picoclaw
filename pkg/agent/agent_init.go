@@ -25,6 +25,21 @@ import (
 	integrationtools "github.com/sipeed/picoclaw/pkg/tools/integration"
 )
 
+// newRateLimiterRegistry registers rate limiters for every candidate set an
+// agent can send requests through (primary, light-routing and image models) so
+// that RPM limits configured in ModelConfig are enforced before each LLM call.
+func newRateLimiterRegistry(registry *AgentRegistry) *providers.RateLimiterRegistry {
+	rl := providers.NewRateLimiterRegistry()
+	for _, agentID := range registry.ListAgentIDs() {
+		if agent, ok := registry.GetAgent(agentID); ok {
+			rl.RegisterCandidates(agent.Candidates)
+			rl.RegisterCandidates(agent.LightCandidates)
+			rl.RegisterCandidates(agent.ImageCandidates)
+		}
+	}
+	return rl
+}
+
 func NewAgentLoop(
 	cfg *config.Config,
 	msgBus *bus.MessageBus,
@@ -35,16 +50,7 @@ func NewAgentLoop(
 
 	// Set up shared fallback chain with rate limiting.
 	cooldown := providers.NewCooldownTracker()
-	rl := providers.NewRateLimiterRegistry()
-	// Register rate limiters for all agents' candidates so that RPM limits
-	// configured in ModelConfig are enforced before each LLM call.
-	for _, agentID := range registry.ListAgentIDs() {
-		if agent, ok := registry.GetAgent(agentID); ok {
-			rl.RegisterCandidates(agent.Candidates)
-			rl.RegisterCandidates(agent.LightCandidates)
-		}
-	}
-	fallbackChain := providers.NewFallbackChain(cooldown, rl)
+	fallbackChain := providers.NewFallbackChain(cooldown, newRateLimiterRegistry(registry))
 
 	// Create state manager using default agent's workspace for channel recording
 	defaultAgent := registry.GetDefaultAgent()

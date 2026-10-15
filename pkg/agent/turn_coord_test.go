@@ -410,6 +410,43 @@ func TestPipeline_CallLLM_UsesSuccessfulFallbackIdentityAlias(t *testing.T) {
 	}
 }
 
+func TestNewRateLimiterRegistry_CoversImageCandidates(t *testing.T) {
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         t.TempDir(),
+				ModelName:         "text-model",
+				ImageModel:        "vision-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 3,
+			},
+		},
+		ModelList: []*config.ModelConfig{
+			{ModelName: "text-model", Model: "openai/text-model"},
+			{ModelName: "vision-model", Model: "openai/vision-model", RPM: 1},
+		},
+	}
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), &simpleConvProvider{})
+	defer al.Close()
+
+	agent := al.registry.GetDefaultAgent()
+	if agent == nil || len(agent.ImageCandidates) != 1 {
+		t.Fatalf("expected one image candidate, got %+v", agent)
+	}
+	key := agent.ImageCandidates[0].StableKey()
+
+	// The first acquire consumes the only burst token.
+	if err := al.fallback.Acquire(context.Background(), key); err != nil {
+		t.Fatalf("first Acquire() error = %v", err)
+	}
+	// The second must block: the image candidate's RPM limiter is registered.
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := al.fallback.Acquire(ctx, key); err == nil {
+		t.Fatal("expected Acquire() to block once the image candidate's RPM token is exhausted")
+	}
+}
+
 func TestPipeline_CallLLM_EnforcesRPMForSingleCandidate(t *testing.T) {
 	provider := &sequenceProvider{}
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
