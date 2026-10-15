@@ -179,6 +179,22 @@ func TestExtractFeatures_HasAttachments_IgnoresFencedCode(t *testing.T) {
 	}
 }
 
+func TestStripFencedCodeBlocks_PreservesLineStructure(t *testing.T) {
+	cases := []struct {
+		msg  string
+		want string
+	}{
+		{"```\nx\n```\ntext\n", "text\n"},
+		{"before\n```\nx\n```\nafter", "before\nafter"},
+		{"no fences\n", "no fences\n"},
+	}
+	for _, tc := range cases {
+		if got := stripFencedCodeBlocks(tc.msg); got != tc.want {
+			t.Errorf("msg=%q: got %q, want %q", tc.msg, got, tc.want)
+		}
+	}
+}
+
 func TestExtractFeatures_HasAttachments_FilenameBoundary(t *testing.T) {
 	cases := []struct {
 		msg  string

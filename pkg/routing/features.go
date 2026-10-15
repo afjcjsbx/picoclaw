@@ -147,20 +147,18 @@ func stripFencedCodeBlocks(msg string) string {
 		return msg
 	}
 
-	var b strings.Builder
-	b.Grow(len(msg))
+	lines := strings.Split(msg, "\n")
+	kept := lines[:0]
 	inside := false
-	for _, line := range strings.Split(msg, "\n") {
+	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
 			inside = !inside
 			continue
 		}
-		if inside {
-			continue
+		if !inside {
+			kept = append(kept, line)
 		}
-		b.WriteString(line)
-		b.WriteByte('\n')
 	}
-	return b.String()
+	return strings.Join(kept, "\n")
 }
