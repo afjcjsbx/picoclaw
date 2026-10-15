@@ -288,7 +288,7 @@ func TestLLMPatternClusterer_FallsBackWhenLLMAssignmentIsIncomplete(t *testing.T
 		},
 	}
 
-	patterns, _, err := clusterer.BuildPatternsWithEvidence(
+	patterns, clusteredIDs, err := clusterer.BuildPatternsWithEvidence(
 		context.Background(),
 		"workspace-a",
 		successfulTasks,
@@ -302,11 +302,19 @@ func TestLLMPatternClusterer_FallsBackWhenLLMAssignmentIsIncomplete(t *testing.T
 	// The LLM omitted task-failed from its assignment. The incomplete LLM
 	// result is discarded and the deterministic fallback clusterer runs
 	// instead, so the cold path still learns a pattern rather than nothing.
+	if len(provider.messages) == 0 {
+		t.Fatal("LLM clusterer was not consulted before falling back")
+	}
 	if len(patterns) != 1 {
 		t.Fatalf("len(patterns) = %d, want 1 fallback pattern: %#v", len(patterns), patterns)
 	}
 	if got := strings.Join(patterns[0].TaskRecordIDs, ","); got != "task-success" {
 		t.Fatalf("pattern TaskRecordIDs = %v, want only the successful task", patterns[0].TaskRecordIDs)
+	}
+	// Only the evidence the fallback actually grouped is reported as clustered,
+	// so the unrelated failed task stays available for a later run.
+	if got := strings.Join(clusteredIDs, ","); got != "task-success" {
+		t.Fatalf("clusteredIDs = %v, want only task-success", clusteredIDs)
 	}
 }
 
