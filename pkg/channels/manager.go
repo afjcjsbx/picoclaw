@@ -1974,10 +1974,13 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config) error {
 	// Reuse the manager lifecycle context so workers added during a reload are
 	// canceled by StopAll together with the startup dispatchers. Allocating a
 	// fresh context here would orphan the previous cancel func on every reload.
+	// When none exists yet, detach it from ctx: that is the caller's (possibly
+	// request-scoped) context, and the workers must outlive it. StopAll cancels
+	// the lifecycle context through dispatchTask.
 	dispatchCtx := m.dispatchCtx
 	var cancelCreated context.CancelFunc
 	if dispatchCtx == nil {
-		dispatchCtx, cancelCreated = context.WithCancel(ctx)
+		dispatchCtx, cancelCreated = context.WithCancel(context.WithoutCancel(ctx))
 		m.dispatchCtx = dispatchCtx
 		m.dispatchTask = &asyncTask{cancel: cancelCreated}
 	}

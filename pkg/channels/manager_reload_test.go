@@ -23,7 +23,9 @@ func newReloadTestConfig(t *testing.T, settings string, enabled bool) *config.Co
 	return cfg
 }
 
-func newReloadTestManager(t *testing.T, cfg *config.Config) *Manager {
+// newUnstartedReloadTestManager builds a manager that has not been started, so
+// it has no lifecycle context yet.
+func newUnstartedReloadTestManager(t *testing.T, cfg *config.Config) *Manager {
 	t.Helper()
 	RegisterFactory(reloadTestChannel, func(
 		_ string, _ string, _ *config.Config, _ *bus.MessageBus,
@@ -36,6 +38,12 @@ func newReloadTestManager(t *testing.T, cfg *config.Config) *Manager {
 		t.Fatalf("NewManager() error = %v", err)
 	}
 	m.mux = newDynamicServeMux()
+	return m
+}
+
+func newReloadTestManager(t *testing.T, cfg *config.Config) *Manager {
+	t.Helper()
+	m := newUnstartedReloadTestManager(t, cfg)
 	if err := m.StartAll(context.Background()); err != nil {
 		t.Fatalf("StartAll() error = %v", err)
 	}
@@ -191,6 +199,32 @@ func TestRetireChannelInstance_DoesNotHoldLockWhileDraining(t *testing.T) {
 	case <-retired:
 	case <-time.After(2 * time.Second):
 		t.Fatal("retireChannelInstance did not return after the worker drained")
+	}
+}
+
+// When the manager has no lifecycle context (never started, or after StopAll),
+// a reload creates one. It must not be derived from the caller's context: for a
+// reload triggered over HTTP that context ends with the request and would take
+// every new worker down with it.
+func TestReload_LifecycleContextOutlivesCallerContext(t *testing.T) {
+	m := newUnstartedReloadTestManager(t, newReloadTestConfig(t, `{"v":1}`, true))
+
+	callerCtx, cancel := context.WithCancel(context.Background())
+	if err := m.Reload(callerCtx, newReloadTestConfig(t, `{"v":2}`, true)); err != nil {
+		t.Fatalf("Reload() error = %v", err)
+	}
+	t.Cleanup(func() { _ = m.StopAll(context.Background()) })
+
+	worker := workerFor(t, m, reloadTestChannel)
+	if worker == nil {
+		t.Fatal("expected a worker after Reload")
+	}
+
+	cancel()
+	select {
+	case <-worker.done:
+		t.Fatal("worker stopped when the Reload caller's context was canceled")
+	case <-time.After(200 * time.Millisecond):
 	}
 }
 
