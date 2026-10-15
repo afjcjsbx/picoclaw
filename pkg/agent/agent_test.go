@@ -3449,6 +3449,11 @@ func TestProcessMessage_ModelRoutingUsesLightProvider(t *testing.T) {
 // yields ConversationDepth = 9 (below the >10 boundary), so the light model is
 // used. Scoring the rendered prompt would yield 11 and cross the boundary,
 // pushing the turn onto the heavy model.
+//
+// The depth signal adds 0.10 to the score, so the threshold is set to 0.05:
+// strictly between the real-history score (0.00) and the rendered-prompt score
+// (0.10). A threshold equal to the signal weight would make the test pass or
+// fail on a floating-point/weight tie instead of on the behavior under test.
 func TestProcessMessage_ModelRoutingScoresSessionHistoryNotRenderedPrompt(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "agent-test-*")
 	if err != nil {
@@ -3486,7 +3491,7 @@ func TestProcessMessage_ModelRoutingScoresSessionHistoryNotRenderedPrompt(t *tes
 				Routing: &config.RoutingConfig{
 					Enabled:    true,
 					LightModel: "qwen-light",
-					Threshold:  0.10,
+					Threshold:  0.05,
 				},
 			},
 		},
