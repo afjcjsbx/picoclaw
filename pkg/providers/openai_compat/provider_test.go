@@ -84,6 +84,26 @@ func TestBuildRequestBody_DisablesDoubaoThinkingWhenThinkingLevelOff(t *testing.
 	}
 }
 
+func TestBuildRequestBody_DisablesBytePlusThinkingWhenThinkingLevelOff(t *testing.T) {
+	p := NewProvider("key", "https://ark.ap-southeast.bytepluses.com/api/v3", "")
+	p.SetProviderName("byteplus")
+
+	body := p.buildRequestBody(
+		[]Message{{Role: "user", Content: "hi"}},
+		nil,
+		"seed-2-0-lite-260228",
+		map[string]any{"thinking_level": "off"},
+	)
+
+	thinking, ok := body["thinking"].(map[string]any)
+	if !ok {
+		t.Fatalf("thinking = %#v, want map", body["thinking"])
+	}
+	if got := thinking["type"]; got != "disabled" {
+		t.Fatalf("thinking.type = %#v, want %q", got, "disabled")
+	}
+}
+
 func TestBuildRequestBody_DisablesModelDependentQwenThinkingWhenThinkingLevelOff(t *testing.T) {
 	p := NewProvider("key", "https://api-inference.modelscope.cn/v1", "")
 	p.SetProviderName("modelscope")
