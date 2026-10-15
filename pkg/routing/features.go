@@ -78,17 +78,32 @@ func estimateTokens(msg string) int {
 func countCodeBlocks(msg string) int {
 	blocks := 0
 	inside := false
-	for _, line := range strings.Split(msg, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if !strings.HasPrefix(trimmed, "```") && !strings.HasPrefix(trimmed, "~~~") {
-			continue
+	for rest := msg; ; {
+		i, marker := nextFence(rest)
+		if i < 0 {
+			return blocks
 		}
 		if inside {
 			blocks++
 		}
 		inside = !inside
+		rest = rest[i+len(marker):]
 	}
-	return blocks
+}
+
+// nextFence returns the index and marker (``` or ~~~) of the earliest fence
+// marker in s, or -1 if there is none. Markers are matched anywhere in the
+// text, not only at the start of a line, so "Try this: ```go ... ```" counts.
+func nextFence(s string) (int, string) {
+	b, t := strings.Index(s, "```"), strings.Index(s, "~~~")
+	switch {
+	case b < 0 && t < 0:
+		return -1, ""
+	case t < 0 || (b >= 0 && b < t):
+		return b, "```"
+	default:
+		return t, "~~~"
+	}
 }
 
 // countRecentToolCalls counts messages with tool calls in the last lookbackWindow
@@ -147,18 +162,21 @@ func stripFencedCodeBlocks(msg string) string {
 		return msg
 	}
 
-	lines := strings.Split(msg, "\n")
-	kept := lines[:0]
+	var b strings.Builder
+	b.Grow(len(msg))
 	inside := false
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
-			inside = !inside
-			continue
+	for rest := msg; ; {
+		i, marker := nextFence(rest)
+		if i < 0 {
+			if !inside {
+				b.WriteString(rest)
+			}
+			return b.String()
 		}
 		if !inside {
-			kept = append(kept, line)
+			b.WriteString(rest[:i])
 		}
+		inside = !inside
+		rest = rest[i+len(marker):]
 	}
-	return strings.Join(kept, "\n")
 }

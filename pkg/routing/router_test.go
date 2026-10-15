@@ -68,7 +68,9 @@ func TestExtractFeatures_CodeBlocks(t *testing.T) {
 		{"no code here", 0},
 		{"```go\nfmt.Println()\n```", 1},
 		{"```python\npass\n```\n```js\nconsole.log()\n```", 2},
-		{"```unclosed", 0}, // odd number of fences = 0 complete blocks
+		{"```unclosed", 0},                       // odd number of fences = 0 complete blocks
+		{"Try this: ```go\nfunc f() {}\n```", 1}, // opening fence mid-line
+		{"inline ```x``` span", 1},
 	}
 	for _, tc := range cases {
 		f := ExtractFeatures(tc.msg, nil)
@@ -169,7 +171,8 @@ func TestExtractFeatures_HasAttachments_IgnoresFencedCode(t *testing.T) {
 		{"plan:\n```go\nurl := \"clip.mp4\"\n```\n", false},
 		{"plan:\n~~~bash\ncp photo.png /tmp\n~~~\n", false},
 		{"plan:\n```\nsee photo.png\n```\n", false},
-		{"attachment: photo.png", true}, // outside the fence
+		{"attachment: photo.png", true},                  // outside the fence
+		{"plan: ```go\nurl := \"clip.mp4\"\n```", false}, // opening fence mid-line
 	}
 	for _, tc := range cases {
 		f := ExtractFeatures(tc.msg, nil)
@@ -179,14 +182,16 @@ func TestExtractFeatures_HasAttachments_IgnoresFencedCode(t *testing.T) {
 	}
 }
 
-func TestStripFencedCodeBlocks_PreservesLineStructure(t *testing.T) {
+func TestStripFencedCodeBlocks_KeepsOutsideTextVerbatim(t *testing.T) {
 	cases := []struct {
 		msg  string
 		want string
 	}{
-		{"```\nx\n```\ntext\n", "text\n"},
-		{"before\n```\nx\n```\nafter", "before\nafter"},
+		{"```\nx\n```\ntext\n", "\ntext\n"},
+		{"before\n```\nx\n```\nafter", "before\n\nafter"},
 		{"no fences\n", "no fences\n"},
+		{"see ```x.png``` ok", "see  ok"},
+		{"keep ```unclosed.png", "keep "},
 	}
 	for _, tc := range cases {
 		if got := stripFencedCodeBlocks(tc.msg); got != tc.want {
