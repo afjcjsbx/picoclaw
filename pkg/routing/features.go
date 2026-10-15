@@ -39,8 +39,9 @@ type Features struct {
 }
 
 // ExtractFeatures computes the structural feature vector for a message.
-// It is a pure function with no side effects and zero allocations beyond
-// the returned struct.
+// It is a pure function with no side effects. It makes no model or network
+// calls; the only allocations are small string buffers for attachment
+// detection (lowercasing, and stripping fenced code blocks when present).
 func ExtractFeatures(msg string, history []providers.Message) Features {
 	return Features{
 		TokenEstimate:     estimateTokens(msg),
