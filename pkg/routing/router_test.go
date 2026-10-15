@@ -158,6 +158,7 @@ func TestExtractFeatures_HasAttachments_Extension(t *testing.T) {
 		{"see screenshot.png", true},
 		{"listen to audio.mp3", true},
 		{"watch clip.mp4", true},
+		{"mixed case SCREENSHOT.PNG", true},
 		{"just a .go file", false},
 		{"document.pdf", false}, // pdf is not in the media list
 	}

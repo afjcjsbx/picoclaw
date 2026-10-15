@@ -128,9 +128,10 @@ func countRecentToolCalls(history []providers.Message) int {
 // mediaExtensionRegex matches a filename-like token ending in a media
 // extension. It requires a leading alphanumeric character and a trailing
 // boundary so that a bare ".png" fragment or a longer token such as
-// "photo.jpgx" does not look like an attachment.
+// "photo.jpgx" does not look like an attachment. It is case-sensitive: callers
+// must lowercase the input first (hasAttachments does).
 var mediaExtensionRegex = regexp.MustCompile(
-	`(?i)[a-z0-9][a-z0-9._-]*\.(?:jpg|jpeg|png|gif|webp|bmp|mp3|wav|ogg|m4a|flac|mp4|avi|mov|webm)(?:[^a-z0-9]|$)`,
+	`[a-z0-9][a-z0-9._-]*\.(?:jpg|jpeg|png|gif|webp|bmp|mp3|wav|ogg|m4a|flac|mp4|avi|mov|webm)(?:[^a-z0-9]|$)`,
 )
 
 // hasAttachments returns true when the message content contains embedded media.
