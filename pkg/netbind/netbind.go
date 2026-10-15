@@ -48,6 +48,12 @@ type OpenResult struct {
 	BindHosts []string
 	Port      string
 	ProbeHost string
+	// Degraded lists bind attempts that failed while a sibling listener on the
+	// same port succeeded. Each entry is a human-readable description suitable
+	// for logging. A non-empty list means the process is listening on fewer
+	// interfaces than requested, so callers should surface it instead of
+	// treating a partial bind as fully healthy.
+	Degraded []string
 }
 
 type tokenKind int
@@ -321,6 +327,7 @@ func OpenPlan(plan Plan, port string) (OpenResult, error) {
 	listeners := make([]net.Listener, 0, len(plan.groups))
 	bindHosts := make([]string, 0, len(plan.groups))
 	bindSeen := make(map[string]struct{}, len(plan.groups))
+	degraded := make([]string, 0)
 
 	closeAll := func() {
 		for _, ln := range listeners {
@@ -329,11 +336,12 @@ func OpenPlan(plan Plan, port string) (OpenResult, error) {
 	}
 
 	for _, group := range plan.groups {
-		groupListeners, groupHosts, actualPort, err := openGroup(group, selectedPort)
+		groupListeners, groupHosts, actualPort, groupDegraded, err := openGroup(group, selectedPort)
 		if err != nil {
 			closeAll()
 			return OpenResult{}, err
 		}
+		degraded = append(degraded, groupDegraded...)
 		if selectedPort == "0" && actualPort != "" {
 			selectedPort = actualPort
 		}
@@ -353,6 +361,7 @@ func OpenPlan(plan Plan, port string) (OpenResult, error) {
 		BindHosts: bindHosts,
 		Port:      selectedPort,
 		ProbeHost: plan.ProbeHost,
+		Degraded:  degraded,
 	}, nil
 }
 
@@ -487,89 +496,98 @@ func parseHostToken(raw string) (hostToken, error) {
 	}, nil
 }
 
-func openGroup(group bindGroup, port string) ([]net.Listener, []string, string, error) {
+func openGroup(group bindGroup, port string) ([]net.Listener, []string, string, []string, error) {
 	switch group.kind {
 	case groupAdaptiveLoopback:
 		return openAdaptiveLoopbackGroup(group.allowIPv6, group.allowIPv4, port)
 	case groupAdaptiveAny:
 		return openAdaptiveAnyGroup(port)
 	case groupExact:
-		ln, actualPort, err := openExactListener(group.exact, port)
-		if err != nil {
-			return nil, nil, "", err
-		}
-		return []net.Listener{ln}, []string{group.exact.host}, actualPort, nil
+		return openBindings([]exactBinding{group.exact}, port)
 	default:
-		return nil, nil, "", fmt.Errorf("unsupported bind group kind: %d", group.kind)
+		return nil, nil, "", nil, fmt.Errorf("unsupported bind group kind: %d", group.kind)
 	}
 }
 
-func openAdaptiveLoopbackGroup(allowIPv6, allowIPv4 bool, port string) ([]net.Listener, []string, string, error) {
-	if allowIPv6 && allowIPv4 {
-		if ln6, actualPort, err6 := openExactListener(
-			exactBinding{host: "::1", network: "tcp6", v6Only: true},
+// openBindings opens each exact binding on the same port. At least one binding
+// must succeed; the ones that fail are returned as human-readable degraded
+// entries instead of being dropped silently. This keeps the process serving on
+// the families that did bind while still making a partial bind observable (for
+// example when 0.0.0.0 fails because the port is already in use).
+func openBindings(bindings []exactBinding, port string) ([]net.Listener, []string, string, []string, error) {
+	listeners := make([]net.Listener, 0, len(bindings))
+	hosts := make([]string, 0, len(bindings))
+	degraded := make([]string, 0)
+
+	selectedPort := port
+	for _, binding := range bindings {
+		ln, actualPort, err := openExactListener(binding, selectedPort)
+		if err != nil {
+			degraded = append(
+				degraded,
+				fmt.Sprintf("%s %s: %v", binding.network, binding.host, err),
+			)
+			continue
+		}
+		if selectedPort == "0" && actualPort != "" {
+			selectedPort = actualPort
+		}
+		listeners = append(listeners, ln)
+		hosts = append(hosts, binding.host)
+	}
+
+	if len(listeners) == 0 {
+		return nil, nil, "", nil, fmt.Errorf(
+			"failed to open listener(s) on port %s: %s",
 			port,
-		); err6 == nil {
-			if ln4, _, err4 := openExactListener(
-				exactBinding{host: "127.0.0.1", network: "tcp4"},
-				actualPort,
-			); err4 == nil {
-				return []net.Listener{ln6, ln4}, []string{"::1", "127.0.0.1"}, actualPort, nil
-			}
-			_ = ln6.Close()
-		}
+			strings.Join(degraded, "; "),
+		)
 	}
 
-	if allowIPv6 {
-		ln6, actualPort, err := openExactListener(exactBinding{host: "::1", network: "tcp6", v6Only: true}, port)
-		if err == nil {
-			return []net.Listener{ln6}, []string{"::1"}, actualPort, nil
-		}
-	}
-
-	if allowIPv4 {
-		ln4, actualPort, err := openExactListener(exactBinding{host: "127.0.0.1", network: "tcp4"}, port)
-		if err == nil {
-			return []net.Listener{ln4}, []string{"127.0.0.1"}, actualPort, nil
-		}
-	}
-
-	return nil, nil, "", fmt.Errorf("failed to open adaptive localhost listener on port %s", port)
+	return listeners, hosts, selectedPort, degraded, nil
 }
 
-func openAdaptiveAnyGroup(port string) ([]net.Listener, []string, string, error) {
+func openAdaptiveLoopbackGroup(
+	allowIPv6, allowIPv4 bool,
+	port string,
+) ([]net.Listener, []string, string, []string, error) {
+	bindings := make([]exactBinding, 0, 2)
+	if allowIPv6 {
+		bindings = append(bindings, exactBinding{host: "::1", network: "tcp6", v6Only: true})
+	}
+	if allowIPv4 {
+		bindings = append(bindings, exactBinding{host: "127.0.0.1", network: "tcp4"})
+	}
+
+	if len(bindings) == 0 {
+		return nil, nil, "", nil, fmt.Errorf(
+			"failed to open adaptive localhost listener on port %s: no IP family allowed",
+			port,
+		)
+	}
+
+	return openBindings(bindings, port)
+}
+
+func openAdaptiveAnyGroup(port string) ([]net.Listener, []string, string, []string, error) {
 	hasIPv4, hasIPv6 := DetectIPFamilies()
 
-	if hasIPv4 && hasIPv6 {
-		if ln6, actualPort, err6 := openExactListener(
-			exactBinding{host: "::", network: "tcp6", v6Only: true},
-			port,
-		); err6 == nil {
-			if ln4, _, err4 := openExactListener(
-				exactBinding{host: "0.0.0.0", network: "tcp4"},
-				actualPort,
-			); err4 == nil {
-				return []net.Listener{ln6, ln4}, []string{"::", "0.0.0.0"}, actualPort, nil
-			}
-			_ = ln6.Close()
-		}
-	}
-
+	bindings := make([]exactBinding, 0, 2)
 	if hasIPv6 {
-		ln6, actualPort, err := openExactListener(exactBinding{host: "::", network: "tcp6", v6Only: true}, port)
-		if err == nil {
-			return []net.Listener{ln6}, []string{"::"}, actualPort, nil
-		}
+		bindings = append(bindings, exactBinding{host: "::", network: "tcp6", v6Only: true})
 	}
-
 	if hasIPv4 {
-		ln4, actualPort, err := openExactListener(exactBinding{host: "0.0.0.0", network: "tcp4"}, port)
-		if err == nil {
-			return []net.Listener{ln4}, []string{"0.0.0.0"}, actualPort, nil
-		}
+		bindings = append(bindings, exactBinding{host: "0.0.0.0", network: "tcp4"})
 	}
 
-	return nil, nil, "", fmt.Errorf("failed to open adaptive any-host listener on port %s", port)
+	if len(bindings) == 0 {
+		return nil, nil, "", nil, fmt.Errorf(
+			"failed to open adaptive any-host listener on port %s: no IP family detected",
+			port,
+		)
+	}
+
+	return openBindings(bindings, port)
 }
 
 func openExactListener(binding exactBinding, port string) (net.Listener, string, error) {

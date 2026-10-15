@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -193,6 +194,103 @@ func TestOpenPlan_WildcardRulesKeepIPv4AndIPv6AnyHosts(t *testing.T) {
 	requireHTTPReachable(t, "::1", port)
 	if len(result.BindHosts) != 2 {
 		t.Fatalf("len(BindHosts) = %d, want 2 (%#v)", len(result.BindHosts), result.BindHosts)
+	}
+}
+
+func TestOpenPlan_DegradedWhenSiblingFamilyBindFails(t *testing.T) {
+	hasIPv4, hasIPv6 := DetectIPFamilies()
+	if !hasIPv4 || !hasIPv6 {
+		t.Skip("dual-stack is unavailable in this environment")
+	}
+
+	// Occupy the IPv4 wildcard on a fixed port so the IPv4 half of the
+	// dual-stack bind fails while IPv6 still succeeds. Before this was reported,
+	// the IPv6 listener was kept and the lost IPv4 family went unnoticed.
+	blocker, err := net.Listen("tcp4", "0.0.0.0:0")
+	if err != nil {
+		t.Fatalf("net.Listen() error = %v", err)
+	}
+	defer blocker.Close()
+	port := strconv.Itoa(blocker.Addr().(*net.TCPAddr).Port)
+
+	plan, err := BuildPlan("", DefaultAny)
+	if err != nil {
+		t.Fatalf("BuildPlan() error = %v", err)
+	}
+	result, err := OpenPlan(plan, port)
+	if err != nil {
+		t.Fatalf("OpenPlan() error = %v", err)
+	}
+	t.Cleanup(func() {
+		for _, ln := range result.Listeners {
+			_ = ln.Close()
+		}
+	})
+
+	if len(result.Listeners) != 1 {
+		t.Fatalf("len(Listeners) = %d, want 1 (IPv6 should keep serving)", len(result.Listeners))
+	}
+	if len(result.Degraded) != 1 {
+		t.Fatalf("len(Degraded) = %d, want 1 (%#v)", len(result.Degraded), result.Degraded)
+	}
+	if !strings.Contains(result.Degraded[0], "0.0.0.0") {
+		t.Fatalf("Degraded[0] = %q, want it to name the failed IPv4 bind", result.Degraded[0])
+	}
+}
+
+func TestOpenPlan_ErrorsWhenNoFamilyBinds(t *testing.T) {
+	hasIPv4, hasIPv6 := DetectIPFamilies()
+	if !hasIPv4 || !hasIPv6 {
+		t.Skip("dual-stack is unavailable in this environment")
+	}
+
+	blocker4, err := net.Listen("tcp4", "0.0.0.0:0")
+	if err != nil {
+		t.Fatalf("net.Listen() error = %v", err)
+	}
+	defer blocker4.Close()
+	port := strconv.Itoa(blocker4.Addr().(*net.TCPAddr).Port)
+
+	blocker6, _, err := openExactListener(
+		exactBinding{host: "::", network: "tcp6", v6Only: true},
+		port,
+	)
+	if err != nil {
+		t.Fatalf("openExactListener() error = %v", err)
+	}
+	defer blocker6.Close()
+
+	plan, err := BuildPlan("", DefaultAny)
+	if err != nil {
+		t.Fatalf("BuildPlan() error = %v", err)
+	}
+	if _, err = OpenPlan(plan, port); err == nil {
+		t.Fatal("OpenPlan() error = nil, want an error when no family can bind")
+	}
+}
+
+func TestOpenPlan_HealthyDualStackHasNoDegradedEntries(t *testing.T) {
+	hasIPv4, hasIPv6 := DetectIPFamilies()
+	if !hasIPv4 || !hasIPv6 {
+		t.Skip("dual-stack is unavailable in this environment")
+	}
+
+	plan, err := BuildPlan("", DefaultAny)
+	if err != nil {
+		t.Fatalf("BuildPlan() error = %v", err)
+	}
+	result, err := OpenPlan(plan, "0")
+	if err != nil {
+		t.Fatalf("OpenPlan() error = %v", err)
+	}
+	t.Cleanup(func() {
+		for _, ln := range result.Listeners {
+			_ = ln.Close()
+		}
+	})
+
+	if len(result.Degraded) != 0 {
+		t.Fatalf("len(Degraded) = %d, want 0 (%#v)", len(result.Degraded), result.Degraded)
 	}
 }
 
