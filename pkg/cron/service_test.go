@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -433,13 +434,23 @@ func TestCronService_PersistenceIntegrity(t *testing.T) {
 }
 
 func TestCronService_SlowHandlerDoesNotBlockScheduler(t *testing.T) {
-	var mu sync.Mutex
-	fires := 0
+	var inFlight atomic.Int32
+	var maxInFlight atomic.Int32
+	release := make(chan struct{})
+
 	handler := func(job *CronJob) (string, error) {
-		time.Sleep(200 * time.Millisecond)
-		mu.Lock()
-		fires++
-		mu.Unlock()
+		n := inFlight.Add(1)
+		for {
+			cur := maxInFlight.Load()
+			if n <= cur || maxInFlight.CompareAndSwap(cur, n) {
+				break
+			}
+		}
+		// Block until the test observes concurrent dispatch. A scheduler that
+		// ran due jobs synchronously (or serialized them behind the handler)
+		// would stall here and never dispatch another run.
+		<-release
+		inFlight.Add(-1)
 		return "ok", nil
 	}
 
@@ -451,7 +462,7 @@ func TestCronService_SlowHandlerDoesNotBlockScheduler(t *testing.T) {
 	}
 	defer cs.Stop()
 
-	everyMS := int64(50)
+	everyMS := int64(20)
 	if _, err := cs.AddJob(
 		"Slow",
 		CronSchedule{Kind: "every", EveryMS: &everyMS},
@@ -462,13 +473,27 @@ func TestCronService_SlowHandlerDoesNotBlockScheduler(t *testing.T) {
 		t.Fatalf("AddJob failed: %v", err)
 	}
 
-	time.Sleep(1200 * time.Millisecond)
+	// The handler blocks until released, so reaching three concurrent runs
+	// proves the scheduler keeps ticking while handlers are still in flight.
+	// This is deterministic and independent of wall-clock timing on a loaded
+	// runner, unlike counting fires in a fixed window.
+	deadline := time.Now().Add(5 * time.Second)
+	for maxInFlight.Load() < 3 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
 
-	mu.Lock()
-	got := fires
-	mu.Unlock()
-	if got < 10 {
-		t.Fatalf("slow handler blocked the scheduler: only %d fires in 1.2s (want >=10)", got)
+	got := maxInFlight.Load()
+	close(release)
+
+	// Let the released handlers finish so no goroutine writes to the store
+	// file after the test removes it.
+	drainDeadline := time.Now().Add(time.Second)
+	for inFlight.Load() > 0 && time.Now().Before(drainDeadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	if got < 3 {
+		t.Fatalf("slow handler blocked the scheduler: max concurrent runs = %d (want >= 3)", got)
 	}
 }
 
