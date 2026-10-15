@@ -194,7 +194,17 @@ func (p *Pipeline) CallLLM(
 		// candidate, so acquire here to cover both streaming and the direct
 		// single-candidate call.
 		if p.Fallback != nil && len(exec.activeCandidates) == 1 {
-			if acquireErr := p.Fallback.Acquire(providerCtx, exec.activeCandidates[0].StableKey()); acquireErr != nil {
+			acquireStart := time.Now()
+			acquireErr := p.Fallback.Acquire(providerCtx, exec.activeCandidates[0].StableKey())
+			if waited := time.Since(acquireStart); waited >= time.Second {
+				logger.InfoCF("agent", "Waited for local RPM rate limit token", map[string]any{
+					"agent_id": ts.agent.ID,
+					"model":    exec.llmModel,
+					"waited":   waited.String(),
+					"canceled": acquireErr != nil,
+				})
+			}
+			if acquireErr != nil {
 				return nil, acquireErr
 			}
 		}
