@@ -57,12 +57,8 @@ type CronStore struct {
 
 type JobHandler func(job *CronJob) (string, error)
 
-var (
-	// ErrJobRunning is returned by RunJob when the job is already executing.
-	ErrJobRunning = errors.New("job is already running")
-	// ErrJobNotFound is returned by RunJob when no job has the given ID.
-	ErrJobNotFound = errors.New("job not found")
-)
+// ErrJobRunning is returned by RunJob when the job is already executing.
+var ErrJobRunning = errors.New("job is already running")
 
 type CronService struct {
 	storePath string
@@ -272,10 +268,6 @@ func (cs *CronService) RunJob(jobID string) error {
 	if !cs.running {
 		return errors.New("cron service is not running")
 	}
-	if cs.onJob == nil {
-		// Without a handler the run would only be recorded as "skipped".
-		return errors.New("no job handler configured")
-	}
 	found := false
 	for i := range cs.store.Jobs {
 		if cs.store.Jobs[i].ID == jobID {
@@ -284,7 +276,7 @@ func (cs *CronService) RunJob(jobID string) error {
 		}
 	}
 	if !found {
-		return ErrJobNotFound
+		return errors.New("job not found")
 	}
 	if !cs.claimJobUnsafe(jobID) {
 		return ErrJobRunning

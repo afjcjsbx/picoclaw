@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - BytePlus (`byteplus`) as an OpenAI-compatible provider, including `thinking_level: "off"` support.
-- Cron tool `run` action and `picoclaw cron run <id>` command to execute a job on demand. The CLI asks the running gateway through the new token-protected `POST /cron/run` endpoint. A job never runs concurrently with itself: a manual run and a scheduler tick racing on the same job are serialized, and the loser is rejected (manual) or skipped (scheduled).
+- Cron tool `run` action to execute a job on demand. A job never runs concurrently with itself: a manual run and a scheduler tick racing on the same job are serialized, and the loser is rejected (manual) or skipped (scheduled).
 
 ### Changed
 

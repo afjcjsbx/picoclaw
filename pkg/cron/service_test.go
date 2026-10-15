@@ -850,12 +850,8 @@ func TestCronService_RunJobErrors(t *testing.T) {
 		t.Fatalf("Start failed: %v", err)
 	}
 	defer cs.Stop()
-	if err := cs.RunJob(job.ID); err == nil {
-		t.Fatal("RunJob without a job handler should fail instead of recording a skipped run")
-	}
-	cs.SetOnJob(func(*CronJob) (string, error) { return "ok", nil })
-	if err := cs.RunJob("missing"); !errors.Is(err, ErrJobNotFound) {
-		t.Fatalf("RunJob on unknown job error = %v, want ErrJobNotFound", err)
+	if err := cs.RunJob("missing"); err == nil {
+		t.Fatal("RunJob on unknown job should fail")
 	}
 }
 

@@ -38,7 +38,6 @@ func NewCronCommand() *cobra.Command {
 		newRemoveCommand(func() string { return storePath }),
 		newEnableCommand(func() string { return storePath }),
 		newDisableCommand(func() string { return storePath }),
-		newRunCommand(),
 	)
 
 	return cmd

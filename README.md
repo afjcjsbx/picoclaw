@@ -605,7 +605,6 @@ Connect PicoClaw to the Agent Social Network simply by sending a single message 
 | `picoclaw mcp remove`     | Remove an MCP server entry       |
 | `picoclaw cron list`      | List all scheduled jobs          |
 | `picoclaw cron add ...`   | Add a scheduled job              |
-| `picoclaw cron run`       | Run a scheduled job now          |
 | `picoclaw cron disable`   | Disable a scheduled job          |
 | `picoclaw cron remove`    | Remove a scheduled job           |
 | `picoclaw skills list`    | List installed skills            |
