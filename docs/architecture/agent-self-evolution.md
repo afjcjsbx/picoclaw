@@ -4,7 +4,7 @@ Agent self-evolution lets PicoClaw learn from completed turns and turn repeated 
 
 ## Flow
 
-The hot path runs at the end of an agent turn. When `evolution.enabled` is true, it records a slim learning record with the turn summary, success state, the used skill names (the final successful path when available, otherwise the skills pulled from successful tool executions), and session/workspace metadata. Raw tool executions, attempt-trail snapshots, and tool kinds are used only transiently to derive the used skill names and are not persisted. Heartbeat turns are skipped.
+The hot path runs at the end of an agent turn. When `evolution.enabled` is true, it records a slim learning record with the turn summary, success state, the used skill names (the final successful path when available, otherwise the skills pulled from successful tool executions), and session/workspace metadata. Raw tool executions, attempt-trail snapshots, and tool kinds are not persisted in the record; they are read only during the turn to derive the used skill names. Separately, every skill the turn touched (active, attempted, final path, snapshot, and tool-execution skills) has its skill profile updated with a new use count, last-used time, and retention score. Heartbeat turns are skipped.
 
 The cold path groups related task records, checks the configured success threshold, and prepares skill drafts for patterns that have enough evidence. Drafts can target new skills or append/replace/merge existing workspace skills.
 
