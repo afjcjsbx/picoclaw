@@ -89,6 +89,9 @@ func TestExtractFeatures_CodeBlocks_TildeFence(t *testing.T) {
 		{"~~~python\npass\n~~~\n~~~js\nconsole.log()\n~~~", 2},
 		{"~~~unclosed", 0},
 		{"\\~~~ is not a fence line", 0},
+		{"```\ncode\n~~~", 0}, // mismatched fence types never form a block
+		{"~~~\ncode\n```", 0},
+		{"~~~\n```\n~~~", 1}, // a different fence inside a block is plain content
 	}
 	for _, tc := range cases {
 		f := ExtractFeatures(tc.msg, nil)

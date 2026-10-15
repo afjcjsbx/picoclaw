@@ -71,23 +71,24 @@ func estimateTokens(msg string) int {
 }
 
 // countCodeBlocks counts the number of complete fenced code blocks.
-// It recognizes both backtick (```) and tilde (~~~) fences, tracking whether a
-// fence is currently open and counting a block when a matching pair is closed.
-// An unclosed opening fence is treated as zero complete blocks since it may
-// just be an inline code span or a typo.
+// It recognizes both backtick (```) and tilde (~~~) fences; a block is closed
+// only by a fence of the same type that opened it, so "```" followed by "~~~"
+// is not a block. An unclosed opening fence is treated as zero complete blocks
+// since it may just be an inline code span or a typo.
 func countCodeBlocks(msg string) int {
 	blocks := 0
-	inside := false
 	for rest := msg; ; {
 		i, marker := nextFence(rest)
 		if i < 0 {
 			return blocks
 		}
-		if inside {
-			blocks++
-		}
-		inside = !inside
 		rest = rest[i+len(marker):]
+		end := strings.Index(rest, marker)
+		if end < 0 {
+			return blocks
+		}
+		blocks++
+		rest = rest[end+len(marker):]
 	}
 }
 
