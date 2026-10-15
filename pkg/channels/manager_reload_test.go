@@ -240,7 +240,15 @@ func TestReload_UnchangedChannelKeepsSameWorker(t *testing.T) {
 	if err := m.Reload(context.Background(), newReloadTestConfig(t, `{"v":1}`, true)); err != nil {
 		t.Fatalf("Reload() error = %v", err)
 	}
-	time.Sleep(50 * time.Millisecond)
+
+	// Retiring happens asynchronously after Reload returns and there is no event
+	// to wait for when nothing is retired, so give a wrongly scheduled
+	// retirement a window to show up. This can only hide a bug, never flake.
+	select {
+	case <-oldWorker.done:
+		t.Fatal("unchanged channel worker was retired by a reload")
+	case <-time.After(100 * time.Millisecond):
+	}
 
 	if got := workerFor(t, m, reloadTestChannel); got != oldWorker {
 		t.Fatalf("unchanged channel worker was replaced: got %p want %p", got, oldWorker)
@@ -260,11 +268,14 @@ func TestReload_ReusesLifecycleContext(t *testing.T) {
 	if beforeCtx == nil || beforeTask == nil {
 		t.Fatal("expected a lifecycle context after StartAll")
 	}
+	oldWorker := workerFor(t, m, reloadTestChannel)
 
 	if err := m.Reload(context.Background(), newReloadTestConfig(t, `{"v":2}`, true)); err != nil {
 		t.Fatalf("Reload() error = %v", err)
 	}
-	time.Sleep(50 * time.Millisecond)
+	// Only Reload writes the lifecycle fields; waiting for the old worker to be
+	// retired just lets the cleanup goroutine finish before the test ends.
+	waitWorkerRetired(t, oldWorker)
 
 	m.mu.RLock()
 	afterCtx := m.dispatchCtx
