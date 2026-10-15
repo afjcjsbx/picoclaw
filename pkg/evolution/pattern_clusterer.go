@@ -297,8 +297,12 @@ func (c *LLMPatternClusterer) BuildPatternsWithEvidence(
 	)
 	if !complete {
 		// The LLM omitted some acceptable evidence tasks from its clusters.
-		// Distrust the partial result and run the deterministic clusterer
-		// instead of silently learning nothing for this run.
+		// Keeping the partial result is unsafe: leaving failed tasks out of a
+		// cluster inflates its success ratio and lets it pass the threshold.
+		// Distrust the whole result and run the deterministic clusterer, which
+		// derives the ratio from the full evidence, instead of silently
+		// learning nothing for this run. The trade-off is that valid LLM
+		// clusters are discarded along with the incomplete ones.
 		return buildFallbackPatternsWithEvidence(
 			ctx,
 			fallback,
