@@ -556,6 +556,9 @@ var modelProviderOptionsByName = map[string]ModelProviderOption{
 		Priority:            36,
 		httpAPI:             true,
 	},
+	// BytePlus ModelArk lists models through its signed control-plane API
+	// (ListFoundationModels), not an OpenAI-style GET {api_base}/models, so
+	// SupportsFetch is intentionally left false.
 	"byteplus": {
 		ID:                  "byteplus",
 		DisplayName:         "BytePlus",
@@ -563,7 +566,6 @@ var modelProviderOptionsByName = map[string]ModelProviderOption{
 		DefaultAPIBase:      "https://ark.ap-southeast.bytepluses.com/api/v3",
 		CreateAllowed:       true,
 		DefaultModelAllowed: true,
-		SupportsFetch:       true,
 		Priority:            35.5,
 		httpAPI:             true,
 	},

@@ -595,6 +595,9 @@ func TestGetDefaultAPIBase_BytePlus(t *testing.T) {
 	if !IsSupportedModelProvider("byteplus") {
 		t.Fatal("byteplus should be a supported model provider")
 	}
+	if IsModelProviderFetchable("byteplus") {
+		t.Fatal("byteplus has no OpenAI-style /models endpoint and must not be fetchable")
+	}
 }
 
 func TestCreateProviderFromConfig_Anthropic(t *testing.T) {
