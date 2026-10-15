@@ -40,9 +40,8 @@ const (
 	sqliteDriver   = "sqlite"
 	whatsappDBName = "store.db"
 
-	reconnectInitial    = 5 * time.Second
-	reconnectMax        = 5 * time.Minute
-	reconnectMultiplier = 2.0
+	reconnectInitial = 5 * time.Second
+	reconnectMax     = 5 * time.Minute
 )
 
 // WhatsAppNativeChannel implements the WhatsApp channel using whatsmeow (in-process, no external bridge).
@@ -303,44 +302,37 @@ func (c *WhatsAppNativeChannel) reconnectWithBackoff() {
 		c.reconnectMu.Unlock()
 	}()
 
-	backoff := reconnectInitial
-	for {
-		select {
-		case <-c.runCtx.Done():
-			return
-		default:
-		}
-
+	// Reconnect until success, the client is gone, or the channel shuts down,
+	// growing the delay from reconnectInitial up to reconnectMax.
+	err := utils.RetryErr(c.runCtx, utils.RetryOptions{
+		Attempts:  0,
+		Backoff:   utils.ExponentialBackoff(reconnectInitial, reconnectMax),
+		Retryable: func(err error) bool { return !errors.Is(err, errReconnectAborted) },
+		OnRetry: func(_ int, err error, delay time.Duration) {
+			logger.WarnCF("whatsapp", "WhatsApp reconnect failed", map[string]any{
+				"error":   err.Error(),
+				"backoff": delay.String(),
+			})
+		},
+	}, func(context.Context) error {
 		c.mu.Lock()
 		client := c.client
 		c.mu.Unlock()
 		if client == nil {
-			return
+			return errReconnectAborted
 		}
 
-		logger.InfoCF("whatsapp", "WhatsApp reconnecting", map[string]any{"backoff": backoff.String()})
-		err := client.Connect()
-		if err == nil {
-			logger.InfoC("whatsapp", "WhatsApp reconnected")
-			return
-		}
-
-		logger.WarnCF("whatsapp", "WhatsApp reconnect failed", map[string]any{"error": err.Error()})
-
-		select {
-		case <-c.runCtx.Done():
-			return
-		case <-time.After(backoff):
-			if backoff < reconnectMax {
-				next := time.Duration(float64(backoff) * reconnectMultiplier)
-				if next > reconnectMax {
-					next = reconnectMax
-				}
-				backoff = next
-			}
-		}
+		logger.InfoC("whatsapp", "WhatsApp reconnecting")
+		return client.Connect()
+	})
+	if err == nil {
+		logger.InfoC("whatsapp", "WhatsApp reconnected")
 	}
 }
+
+// errReconnectAborted stops the reconnect loop without retrying (the client is
+// no longer available).
+var errReconnectAborted = errors.New("whatsapp reconnect aborted")
 
 func (c *WhatsAppNativeChannel) handleIncoming(evt *events.Message) {
 	if evt.Message == nil {

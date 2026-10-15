@@ -10,6 +10,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/commands"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
 var commandRegistrationBackoff = []time.Duration{
@@ -77,44 +78,25 @@ func (c *TelegramChannel) startCommandRegistration(ctx context.Context, defs []c
 	// Registration runs asynchronously so Telegram message intake is never blocked
 	// by temporary upstream API failures. Retry stops on success or channel shutdown.
 	go func() {
-		attempt := 0
-		timer := time.NewTimer(0)
-		if !timer.Stop() {
-			select {
-			case <-timer.C:
-			default:
-			}
-		}
-		defer timer.Stop()
-		for {
-			err := register(regCtx, defs)
-			if err == nil {
-				logger.InfoCF("telegram", "Telegram commands registered", map[string]any{
-					"count": len(defs),
+		err := utils.RetryErr(regCtx, utils.RetryOptions{
+			// Retry indefinitely until success or channel shutdown.
+			Attempts: 0,
+			Backoff: func(attempt int, _ error) time.Duration {
+				return delayFn(attempt)
+			},
+			OnRetry: func(_ int, err error, delay time.Duration) {
+				logger.WarnCF("telegram", "Telegram command registration failed; will retry", map[string]any{
+					"error":       err.Error(),
+					"retry_after": delay.String(),
 				})
-				return
-			}
-
-			delay := delayFn(attempt)
-			logger.WarnCF("telegram", "Telegram command registration failed; will retry", map[string]any{
-				"error":       err.Error(),
-				"retry_after": delay.String(),
+			},
+		}, func(ctx context.Context) error {
+			return register(ctx, defs)
+		})
+		if err == nil {
+			logger.InfoCF("telegram", "Telegram commands registered", map[string]any{
+				"count": len(defs),
 			})
-			attempt++
-
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
-			timer.Reset(delay)
-
-			select {
-			case <-regCtx.Done():
-				return
-			case <-timer.C:
-			}
 		}
 	}()
 }

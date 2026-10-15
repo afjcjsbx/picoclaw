@@ -1588,42 +1588,32 @@ func (m *Manager) sendWithRetry(
 		return msgIDs, true
 	}
 
-	var lastErr error
-	var msgIDs []string
-	for attempt := 0; attempt <= maxRetries; attempt++ {
-		msgIDs, lastErr = w.ch.Send(ctx, msg)
-		if lastErr == nil {
-			m.publishOutboundSent(name, msg, msgIDs)
-			return msgIDs, true
-		}
-
-		// Permanent failures — don't retry
-		if errors.Is(lastErr, ErrNotRunning) || errors.Is(lastErr, ErrSendFailed) {
-			break
-		}
-
-		// Last attempt exhausted — don't sleep
-		if attempt == maxRetries {
-			break
-		}
-
-		// Rate limit error — fixed delay
-		if errors.Is(lastErr, ErrRateLimit) {
-			select {
-			case <-time.After(rateLimitDelay):
-				continue
-			case <-ctx.Done():
-				return nil, false
+	msgIDs, lastErr := utils.Retry(ctx, utils.RetryOptions{
+		Attempts: maxRetries + 1,
+		Retryable: func(err error) bool {
+			// Permanent failures — don't retry.
+			return !errors.Is(err, ErrNotRunning) && !errors.Is(err, ErrSendFailed)
+		},
+		Backoff: func(attempt int, err error) time.Duration {
+			// Rate limit errors use a fixed delay; ErrTemporary/unknown errors
+			// use exponential backoff.
+			if errors.Is(err, ErrRateLimit) {
+				return rateLimitDelay
 			}
-		}
+			return utils.ExponentialBackoff(baseBackoff, maxBackoff)(attempt, err)
+		},
+	}, func(ctx context.Context) ([]string, error) {
+		return w.ch.Send(ctx, msg)
+	})
 
-		// ErrTemporary or unknown error — exponential backoff
-		backoff := min(time.Duration(float64(baseBackoff)*math.Pow(2, float64(attempt))), maxBackoff)
-		select {
-		case <-time.After(backoff):
-		case <-ctx.Done():
-			return nil, false
-		}
+	if lastErr == nil {
+		m.publishOutboundSent(name, msg, msgIDs)
+		return msgIDs, true
+	}
+
+	// Canceled while waiting between attempts (shutdown) — nothing to report.
+	if errors.Is(lastErr, context.Canceled) || errors.Is(lastErr, context.DeadlineExceeded) {
+		return nil, false
 	}
 
 	// All retries exhausted or permanent failure
@@ -1788,42 +1778,32 @@ func (m *Manager) sendMediaWithRetry(
 	// Pre-send: stop typing and clean up any placeholder before sending media.
 	m.preSendMedia(ctx, name, msg, w.ch)
 
-	var lastErr error
-	var msgIDs []string
-	for attempt := 0; attempt <= maxRetries; attempt++ {
-		msgIDs, lastErr = ms.SendMedia(ctx, msg)
-		if lastErr == nil {
-			m.publishOutboundMediaSent(name, msg, msgIDs)
-			return msgIDs, nil
-		}
-
-		// Permanent failures — don't retry
-		if errors.Is(lastErr, ErrNotRunning) || errors.Is(lastErr, ErrSendFailed) {
-			break
-		}
-
-		// Last attempt exhausted — don't sleep
-		if attempt == maxRetries {
-			break
-		}
-
-		// Rate limit error — fixed delay
-		if errors.Is(lastErr, ErrRateLimit) {
-			select {
-			case <-time.After(rateLimitDelay):
-				continue
-			case <-ctx.Done():
-				return nil, ctx.Err()
+	msgIDs, lastErr := utils.Retry(ctx, utils.RetryOptions{
+		Attempts: maxRetries + 1,
+		Retryable: func(err error) bool {
+			// Permanent failures — don't retry.
+			return !errors.Is(err, ErrNotRunning) && !errors.Is(err, ErrSendFailed)
+		},
+		Backoff: func(attempt int, err error) time.Duration {
+			// Rate limit errors use a fixed delay; ErrTemporary/unknown errors
+			// use exponential backoff.
+			if errors.Is(err, ErrRateLimit) {
+				return rateLimitDelay
 			}
-		}
+			return utils.ExponentialBackoff(baseBackoff, maxBackoff)(attempt, err)
+		},
+	}, func(ctx context.Context) ([]string, error) {
+		return ms.SendMedia(ctx, msg)
+	})
 
-		// ErrTemporary or unknown error — exponential backoff
-		backoff := min(time.Duration(float64(baseBackoff)*math.Pow(2, float64(attempt))), maxBackoff)
-		select {
-		case <-time.After(backoff):
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
+	if lastErr == nil {
+		m.publishOutboundMediaSent(name, msg, msgIDs)
+		return msgIDs, nil
+	}
+
+	// Canceled while waiting between attempts (shutdown).
+	if errors.Is(lastErr, context.Canceled) || errors.Is(lastErr, context.DeadlineExceeded) {
+		return nil, ctx.Err()
 	}
 
 	// All retries exhausted or permanent failure

@@ -18,6 +18,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/identity"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
 const (
@@ -294,34 +295,20 @@ func (c *WeComChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessa
 }
 
 func (c *WeComChannel) connectLoop() {
-	backoff := time.Second
-	for {
-		select {
-		case <-c.ctx.Done():
-			return
-		default:
-		}
-
-		if err := c.runConnection(); err != nil {
+	// Reconnect until the connection succeeds or the channel shuts down,
+	// doubling the delay from 1s up to a 1 minute cap.
+	_ = utils.RetryErr(c.ctx, utils.RetryOptions{
+		Attempts: 0,
+		Backoff:  utils.ExponentialBackoff(time.Second, time.Minute),
+		OnRetry: func(_ int, err error, delay time.Duration) {
 			logger.WarnCF("wecom", "WeCom connection lost", map[string]any{
 				"error":   err.Error(),
-				"backoff": backoff.String(),
+				"backoff": delay.String(),
 			})
-			select {
-			case <-time.After(backoff):
-			case <-c.ctx.Done():
-				return
-			}
-			if backoff < time.Minute {
-				backoff *= 2
-				if backoff > time.Minute {
-					backoff = time.Minute
-				}
-			}
-			continue
-		}
-		return
-	}
+		},
+	}, func(context.Context) error {
+		return c.runConnection()
+	})
 }
 
 func (c *WeComChannel) runConnection() error {
