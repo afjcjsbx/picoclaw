@@ -114,6 +114,8 @@ func (al *AgentLoop) prepareInboundMessageForAgent(
 	msg bus.InboundMessage,
 ) bus.InboundMessage {
 	msg = bus.NormalizeInboundMessage(msg)
+
+	hasAudioAnnotation := audioAnnotationRe.MatchString(msg.Content)
 	if al.hasAudioInput(msg) {
 		if msg.Context.Raw == nil {
 			msg.Context.Raw = make(map[string]string, 1)
@@ -121,12 +123,15 @@ func (al *AgentLoop) prepareInboundMessageForAgent(
 		msg.Context.Raw[metadataKeyInputAudio] = "true"
 	}
 
-	var hadAudio bool
-	msg, hadAudio = al.transcribeAudioInMessage(ctx, msg)
+	msg, hadAudio := al.transcribeAudioInMessage(ctx, msg)
 
-	// For audio messages the placeholder was deferred by the channel.
-	// Now that transcription (and optional feedback) is done, send it.
-	if hadAudio && al.channelManager != nil {
+	// For audio messages the channel deferred the placeholder until after
+	// transcription (it skips it when the content matches audioAnnotationRe, see
+	// channels.BaseChannel.HandleMessageWithContext). Send it now whenever that
+	// same annotation was present, also when transcription could not run or
+	// failed, so an audio message always produces visible feedback instead of
+	// appearing silently lost.
+	if (hadAudio || hasAudioAnnotation) && al.channelManager != nil {
 		al.channelManager.SendPlaceholder(ctx, msg.Channel, msg.ChatID)
 	}
 

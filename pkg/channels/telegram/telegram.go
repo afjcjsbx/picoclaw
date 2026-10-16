@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/mymmrac/telego"
+	ta "github.com/mymmrac/telego/telegoapi"
 	th "github.com/mymmrac/telego/telegohandler"
 	tu "github.com/mymmrac/telego/telegoutil"
 
@@ -79,6 +80,10 @@ type telegramMediaGroup struct {
 type telegramMessageParts struct {
 	content    []string
 	mediaPaths []string
+	// failedMedia lists human-readable attachment kinds (voice, audio, photo,
+	// file) whose download failed, so the channel can tell the user instead of
+	// dropping the message silently.
+	failedMedia []string
 }
 
 func NewTelegramChannel(
@@ -1080,6 +1085,7 @@ func (c *TelegramChannel) handleMessages(ctx context.Context, messages []*telego
 
 	content := ""
 	mediaPaths := []string{}
+	failedMedia := []string{}
 
 	chatIDStr := fmt.Sprintf("%d", chatID)
 	messageIDStr := fmt.Sprintf("%d", message.MessageID)
@@ -1112,9 +1118,11 @@ func (c *TelegramChannel) handleMessages(ctx context.Context, messages []*telego
 			content += part
 		}
 		mediaPaths = append(mediaPaths, parts.mediaPaths...)
+		failedMedia = append(failedMedia, parts.failedMedia...)
 	}
 
-	if content == "" && len(mediaPaths) == 0 {
+	hasPayload := content != "" || len(mediaPaths) > 0
+	if !hasPayload && len(failedMedia) == 0 {
 		return nil
 	}
 
@@ -1136,8 +1144,8 @@ func (c *TelegramChannel) handleMessages(ctx context.Context, messages []*telego
 		content = cleaned
 	}
 
-	if message.ReplyToMessage != nil {
-		quotedMedia := quotedTelegramMediaRefs(
+	if hasPayload && message.ReplyToMessage != nil {
+		quotedMedia, quotedFailed := quotedTelegramMediaRefs(
 			message.ReplyToMessage,
 			func(fileID, ext, filename string) string {
 				localPath := c.downloadFile(ctx, fileID, ext)
@@ -1150,6 +1158,22 @@ func (c *TelegramChannel) handleMessages(ctx context.Context, messages []*telego
 		if len(quotedMedia) > 0 {
 			mediaPaths = append(quotedMedia, mediaPaths...)
 		}
+		failedMedia = append(failedMedia, quotedFailed...)
+	}
+
+	if len(failedMedia) > 0 {
+		// Tell the user an attachment was dropped instead of silently ignoring
+		// the message (e.g. a transient getFile/download failure that survived
+		// the retries). This runs after the group trigger filter so the bot
+		// never replies in groups where it is meant to stay silent.
+		c.notifyMediaDownloadFailure(ctx, message, failedMedia)
+	}
+
+	if !hasPayload {
+		return nil
+	}
+
+	if message.ReplyToMessage != nil {
 		content = c.prependTelegramQuotedReply(content, message.ReplyToMessage)
 	}
 
@@ -1210,6 +1234,60 @@ func (c *TelegramChannel) handleMessages(ctx context.Context, messages []*telego
 	return nil
 }
 
+// telegramMediaDownloadFailureText builds the user-facing notice for attachments
+// that could not be downloaded, de-duplicating repeated kinds. kinds must not be
+// empty.
+func telegramMediaDownloadFailureText(kinds []string) string {
+	unique := make([]string, 0, len(kinds))
+	seen := make(map[string]struct{}, len(kinds))
+	for _, kind := range kinds {
+		if _, ok := seen[kind]; ok {
+			continue
+		}
+		seen[kind] = struct{}{}
+		unique = append(unique, kind)
+	}
+
+	noun := "attachment"
+	if len(unique) > 1 {
+		noun = "attachments"
+	}
+	return fmt.Sprintf(
+		"⚠️ I couldn't download the %s (%s). It may be a temporary network issue, or the file may exceed "+
+			"the 20 MB limit Telegram enforces for bot downloads. Please try again or send a smaller file.",
+		noun,
+		strings.Join(unique, ", "),
+	)
+}
+
+// notifyMediaDownloadFailure informs the user that one or more attachments were
+// dropped because they could not be downloaded. Best-effort: failures are logged
+// but never block message processing.
+func (c *TelegramChannel) notifyMediaDownloadFailure(
+	ctx context.Context,
+	message *telego.Message,
+	kinds []string,
+) {
+	if message == nil {
+		return
+	}
+	text := telegramMediaDownloadFailureText(kinds)
+
+	_, err := c.sendChunk(ctx, sendChunkParams{
+		chatID:     message.Chat.ID,
+		threadID:   message.MessageThreadID,
+		content:    text,
+		replyToID:  strconv.Itoa(message.MessageID),
+		mdFallback: text,
+	})
+	if err != nil {
+		logger.WarnCF("telegram", "Failed to notify user about media download failure", map[string]any{
+			"chat_id": message.Chat.ID,
+			"error":   err.Error(),
+		})
+	}
+}
+
 func (c *TelegramChannel) collectTelegramMessageParts(
 	ctx context.Context,
 	msg *telego.Message,
@@ -1241,6 +1319,8 @@ func (c *TelegramChannel) collectTelegramMessageParts(
 			photoNumber := index + 1
 			parts.mediaPaths = append(parts.mediaPaths, storeMedia(photoPath, fmt.Sprintf("photo-%d.jpg", photoNumber)))
 			parts.content = append(parts.content, fmt.Sprintf("[image: photo %d]", photoNumber))
+		} else {
+			parts.failedMedia = append(parts.failedMedia, "photo")
 		}
 	}
 	if msg.Voice != nil {
@@ -1251,6 +1331,8 @@ func (c *TelegramChannel) collectTelegramMessageParts(
 				storeMedia(voicePath, indexedMediaFilename("voice", ".ogg", index, total)),
 			)
 			parts.content = append(parts.content, "[voice]")
+		} else {
+			parts.failedMedia = append(parts.failedMedia, "voice")
 		}
 	}
 	if msg.Audio != nil {
@@ -1262,6 +1344,8 @@ func (c *TelegramChannel) collectTelegramMessageParts(
 			}
 			parts.mediaPaths = append(parts.mediaPaths, storeMedia(audioPath, filename))
 			parts.content = append(parts.content, "[audio]")
+		} else {
+			parts.failedMedia = append(parts.failedMedia, "audio")
 		}
 	}
 	if msg.Document != nil {
@@ -1273,6 +1357,8 @@ func (c *TelegramChannel) collectTelegramMessageParts(
 			}
 			parts.mediaPaths = append(parts.mediaPaths, storeMedia(docPath, filename))
 			parts.content = append(parts.content, "[file]")
+		} else {
+			parts.failedMedia = append(parts.failedMedia, "file")
 		}
 	}
 	return parts
@@ -1382,46 +1468,148 @@ func telegramQuotedContent(message *telego.Message) string {
 func quotedTelegramMediaRefs(
 	message *telego.Message,
 	resolve func(fileID, ext, filename string) string,
-) []string {
+) (refs, failed []string) {
 	if message == nil || resolve == nil {
-		return nil
+		return nil, nil
 	}
 
-	var refs []string
 	if message.Voice != nil {
 		if ref := resolve(message.Voice.FileID, ".ogg", "voice.ogg"); ref != "" {
 			refs = append(refs, ref)
+		} else {
+			failed = append(failed, "voice")
 		}
 	}
 	if message.Audio != nil {
 		if ref := resolve(message.Audio.FileID, ".mp3", "audio.mp3"); ref != "" {
 			refs = append(refs, ref)
+		} else {
+			failed = append(failed, "audio")
 		}
 	}
-	return refs
+	return refs, failed
+}
+
+const (
+	// telegramGetFileMaxAttempts bounds how many times the Telegram getFile
+	// metadata call is attempted (1 initial try + retries). Transient DNS and
+	// network failures (e.g. "lookup api.telegram.org: i/o timeout") otherwise
+	// drop the whole incoming message silently. The subsequent HTTP download
+	// reuses the shared retry policy inside utils.DownloadFile
+	// (utils.DoRequestWithRetry).
+	telegramGetFileMaxAttempts = 3
+	// telegramGetFileBackoff is the base delay multiplied by the attempt number
+	// between getFile retries.
+	telegramGetFileBackoff = 500 * time.Millisecond
+)
+
+// isTransientTelegramGetFileError reports whether a getFile error is worth
+// retrying. Context cancellation is never retried. Structured Telegram API
+// errors are classified by status code (5xx is transient, everything else is
+// not); other errors fall back to matching known network failure messages.
+func isTransientTelegramGetFileError(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return false
+	}
+
+	var apiErr *ta.Error
+	if errors.As(err, &apiErr) {
+		return apiErr.ErrorCode >= http.StatusInternalServerError
+	}
+
+	msg := strings.ToLower(err.Error())
+	for _, needle := range []string{
+		"i/o timeout",
+		"timeout",
+		"temporary failure in name resolution",
+		"no such host",
+		"connection reset",
+		"connection refused",
+		"connection closed",
+		"broken pipe",
+		"unexpected eof",
+		"network is unreachable",
+		"tls handshake timeout",
+	} {
+		if strings.Contains(msg, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+// getFileWithRetry fetches Telegram file metadata, retrying transient network
+// errors with linear backoff. It returns nil once retries are exhausted.
+//
+// The HTTP download that follows (downloadFileWithInfo) is retried by the shared
+// HTTP retry policy inside utils.DownloadFile, so this loop only covers the
+// telego getFile call, which cannot go through utils.DoRequestWithRetry.
+func (c *TelegramChannel) getFileWithRetry(ctx context.Context, fileID string) *telego.File {
+	var lastErr error
+	attempts := 0
+
+	for attempt := 1; attempt <= telegramGetFileMaxAttempts; attempt++ {
+		attempts = attempt
+		file, err := c.bot.GetFile(ctx, &telego.GetFileParams{FileID: fileID})
+		if err == nil {
+			if attempt > 1 {
+				logger.InfoCF("telegram", "getFile succeeded after retry", map[string]any{
+					"file_id": fileID,
+					"attempt": attempt,
+				})
+			}
+			return file
+		}
+		lastErr = err
+
+		if ctx.Err() != nil || attempt == telegramGetFileMaxAttempts || !isTransientTelegramGetFileError(err) {
+			break
+		}
+
+		backoff := time.Duration(attempt) * telegramGetFileBackoff
+		logger.WarnCF("telegram", "Transient getFile error, retrying", map[string]any{
+			"file_id":    fileID,
+			"attempt":    attempt,
+			"backoff_ms": backoff.Milliseconds(),
+			"error":      err.Error(),
+		})
+
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(backoff):
+		}
+	}
+
+	// Do not log a shutdown as a hard failure.
+	if ctx.Err() == nil && lastErr != nil {
+		logger.ErrorCF("telegram", "Failed to get file", map[string]any{
+			"file_id":  fileID,
+			"attempts": attempts,
+			"error":    lastErr.Error(),
+		})
+	}
+	return nil
 }
 
 func (c *TelegramChannel) downloadPhoto(ctx context.Context, fileID string) string {
-	file, err := c.bot.GetFile(ctx, &telego.GetFileParams{FileID: fileID})
-	if err != nil {
-		logger.ErrorCF("telegram", "Failed to get photo file", map[string]any{
-			"error": err.Error(),
-		})
+	file := c.getFileWithRetry(ctx, fileID)
+	if file == nil {
 		return ""
 	}
-
 	return c.downloadFileWithInfo(file, ".jpg")
 }
 
 func (c *TelegramChannel) downloadFileWithInfo(file *telego.File, ext string) string {
-	if file.FilePath == "" {
+	if file == nil || file.FilePath == "" {
 		return ""
 	}
 
 	url := c.bot.FileDownloadURL(file.FilePath)
 	logger.DebugCF("telegram", "File URL", map[string]any{"url": url})
 
-	// Use FilePath as filename for better identification
+	// Use FilePath as filename for better identification. utils.DownloadFile
+	// applies the shared HTTP retry policy (utils.DoRequestWithRetry) internally.
 	filename := file.FilePath + ext
 	return utils.DownloadFile(url, filename, utils.DownloadOptions{
 		LoggerPrefix: "telegram",
@@ -1429,14 +1617,10 @@ func (c *TelegramChannel) downloadFileWithInfo(file *telego.File, ext string) st
 }
 
 func (c *TelegramChannel) downloadFile(ctx context.Context, fileID, ext string) string {
-	file, err := c.bot.GetFile(ctx, &telego.GetFileParams{FileID: fileID})
-	if err != nil {
-		logger.ErrorCF("telegram", "Failed to get file", map[string]any{
-			"error": err.Error(),
-		})
+	file := c.getFileWithRetry(ctx, fileID)
+	if file == nil {
 		return ""
 	}
-
 	return c.downloadFileWithInfo(file, ext)
 }
 

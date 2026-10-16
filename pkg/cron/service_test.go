@@ -433,13 +433,38 @@ func TestCronService_PersistenceIntegrity(t *testing.T) {
 }
 
 func TestCronService_SlowHandlerDoesNotBlockScheduler(t *testing.T) {
-	var mu sync.Mutex
-	fires := 0
+	const wantConcurrent = 3
+
+	var (
+		mu      sync.Mutex
+		stopped bool
+		wg      sync.WaitGroup
+	)
+	started := make(chan struct{}, wantConcurrent)
+	release := make(chan struct{})
+	releaseHandlers := sync.OnceFunc(func() { close(release) })
+	defer releaseHandlers() // never leave handlers blocked if the test fails early
+
 	handler := func(job *CronJob) (string, error) {
-		time.Sleep(200 * time.Millisecond)
+		// Runs spawned by a scheduler tick that raced with Stop are ignored so
+		// wg.Add never overlaps wg.Wait.
 		mu.Lock()
-		fires++
+		if stopped {
+			mu.Unlock()
+			return "ok", nil
+		}
+		wg.Add(1)
 		mu.Unlock()
+		defer wg.Done()
+
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		// Block until the test has seen enough concurrent runs. A scheduler
+		// that ran due jobs synchronously (or serialized them behind the
+		// handler) would stall here and never dispatch another run.
+		<-release
 		return "ok", nil
 	}
 
@@ -451,7 +476,7 @@ func TestCronService_SlowHandlerDoesNotBlockScheduler(t *testing.T) {
 	}
 	defer cs.Stop()
 
-	everyMS := int64(50)
+	everyMS := int64(20)
 	if _, err := cs.AddJob(
 		"Slow",
 		CronSchedule{Kind: "every", EveryMS: &everyMS},
@@ -462,14 +487,29 @@ func TestCronService_SlowHandlerDoesNotBlockScheduler(t *testing.T) {
 		t.Fatalf("AddJob failed: %v", err)
 	}
 
-	time.Sleep(1200 * time.Millisecond)
-
-	mu.Lock()
-	got := fires
-	mu.Unlock()
-	if got < 10 {
-		t.Fatalf("slow handler blocked the scheduler: only %d fires in 1.2s (want >=10)", got)
+	// Handlers stay blocked until released, so receiving wantConcurrent start
+	// signals proves the scheduler keeps ticking while earlier runs are still in
+	// flight. Waiting on events rather than sleeping makes this independent of
+	// wall-clock timing on a loaded runner.
+	for got := 0; got < wantConcurrent; got++ {
+		select {
+		case <-started:
+		case <-time.After(5 * time.Second):
+			t.Fatalf(
+				"slow handler blocked the scheduler: only %d concurrent runs (want >= %d)",
+				got, wantConcurrent,
+			)
+		}
 	}
+
+	// Stop dispatching, then release and wait for every started handler so none
+	// is still running when the test removes the store file.
+	cs.Stop()
+	mu.Lock()
+	stopped = true
+	mu.Unlock()
+	releaseHandlers()
+	wg.Wait()
 }
 
 func TestCronService_HandlerPanicKeepsScheduleAlive(t *testing.T) {
