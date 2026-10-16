@@ -69,6 +69,12 @@ type CronService struct {
 	stopChan  chan struct{}
 	wakeChan  chan struct{}
 	gronx     *gronx.Gronx
+	// reloadEvery is the polling interval used to detect external edits of the
+	// store file (hand edits, CLI). Zero disables hot-reload.
+	reloadEvery time.Duration
+	// storeStat is the state of the store file as last read or written by this
+	// service; any difference means someone else changed it.
+	storeStat os.FileInfo
 	// inFlight holds the IDs of jobs whose handler is executing, guarded by mu.
 	// A job is claimed under mu before its goroutine starts and released when
 	// executeJobByID returns, so a job never runs concurrently with itself.
@@ -139,6 +145,16 @@ func (cs *CronService) runLoop(stopChan chan struct{}) {
 	}
 	defer timer.Stop()
 
+	var reloadC <-chan time.Time
+	cs.mu.RLock()
+	reloadEvery := cs.reloadEvery
+	cs.mu.RUnlock()
+	if reloadEvery > 0 {
+		reloadTicker := time.NewTicker(reloadEvery)
+		defer reloadTicker.Stop()
+		reloadC = reloadTicker.C
+	}
+
 	for {
 		// every loop, recalculate the next wake time
 		cs.mu.RLock()
@@ -173,6 +189,13 @@ func (cs *CronService) runLoop(stopChan chan struct{}) {
 				}
 			}
 			continue
+		case <-reloadC:
+			// The loop recomputes its wake time on the next iteration, so no notify is needed.
+			cs.mu.Lock()
+			if cs.running {
+				cs.syncFromDiskUnsafe()
+			}
+			cs.mu.Unlock()
 		case <-timer.C:
 			cs.checkJobs()
 		}
@@ -186,6 +209,8 @@ func (cs *CronService) checkJobs() {
 		cs.mu.Unlock()
 		return
 	}
+
+	cs.syncFromDiskUnsafe()
 
 	now := time.Now().UnixMilli()
 	var dueJobIDs []string
@@ -337,6 +362,8 @@ func (cs *CronService) executeJobByID(jobID string) {
 	// Now acquire lock to update state
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
+
+	cs.syncFromDiskUnsafe()
 
 	var job *CronJob
 	for i := range cs.store.Jobs {
@@ -538,21 +565,42 @@ func (cs *CronService) SetOnJob(handler JobHandler) {
 	cs.onJob = handler
 }
 
-func (cs *CronService) loadStore() error {
-	cs.store = &CronStore{
-		Version: 1,
-		Jobs:    []CronJob{},
-	}
+func newEmptyStore() *CronStore {
+	return &CronStore{Version: 1, Jobs: []CronJob{}}
+}
 
-	data, err := os.ReadFile(cs.storePath)
+func readStoreFile(path string) (*CronStore, error) {
+	data, err := os.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
+		return nil, err
+	}
+	store := newEmptyStore()
+	if err := json.Unmarshal(data, store); err != nil {
+		return nil, err
+	}
+	return store, nil
+}
+
+// loadStore replaces the in-memory store with the file content. A missing file
+// yields an empty store; an unreadable or invalid file leaves the current store
+// untouched (empty on first load) and returns the error.
+func (cs *CronService) loadStore() error {
+	// Stat before reading: a write landing in between is then seen as a change.
+	cs.storeStat, _ = os.Stat(cs.storePath)
+
+	store, err := readStoreFile(cs.storePath)
+	switch {
+	case err == nil:
+		cs.store = store
+	case os.IsNotExist(err):
+		cs.store = newEmptyStore()
+	default:
+		if cs.store == nil {
+			cs.store = newEmptyStore()
 		}
 		return err
 	}
-
-	return json.Unmarshal(data, cs.store)
+	return nil
 }
 
 func (cs *CronService) saveStoreUnsafe() error {
@@ -562,7 +610,88 @@ func (cs *CronService) saveStoreUnsafe() error {
 	}
 
 	// Use unified atomic write utility with explicit sync for flash storage reliability.
-	return fileutil.WriteFileAtomic(cs.storePath, data, 0o600)
+	if err := fileutil.WriteFileAtomic(cs.storePath, data, 0o600); err != nil {
+		return err
+	}
+	// Our own write must not look like an external edit.
+	cs.storeStat, _ = os.Stat(cs.storePath)
+	return nil
+}
+
+// SetReloadInterval sets how often the store file is polled for external edits
+// (hand edits, CLI). A non-positive value disables hot-reload. Call before Start.
+func (cs *CronService) SetReloadInterval(d time.Duration) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	cs.reloadEvery = d
+}
+
+// storeChanged reports whether the store file differs from what this service
+// last read or wrote. A missing or unreadable file is not a change: the
+// in-memory store stays authoritative and the next save recreates the file.
+// ponytail: mtime+size only; a same-size edit within the filesystem timestamp
+// granularity of our own write is missed. Hash the content if that ever matters.
+func (cs *CronService) storeChanged() (os.FileInfo, bool) {
+	info, err := os.Stat(cs.storePath)
+	if err != nil {
+		return nil, false
+	}
+	prev := cs.storeStat
+	return info, prev == nil || info.Size() != prev.Size() || !info.ModTime().Equal(prev.ModTime())
+}
+
+// syncFromDiskUnsafe replaces the in-memory store when the store file was
+// changed by someone else. Callers hold cs.mu. Mutators call it before touching
+// the store so an external edit is never overwritten by a stale in-memory copy;
+// the poll tick in runLoop calls it to pick edits up while idle.
+func (cs *CronService) syncFromDiskUnsafe() {
+	if cs.reloadEvery <= 0 {
+		return
+	}
+	info, changed := cs.storeChanged()
+	if !changed {
+		return
+	}
+
+	next, err := readStoreFile(cs.storePath)
+	// Advance the watermark even on failure so a broken file is reported once;
+	// the next edit changes mtime/size again. Using the stat taken before the
+	// read means a write racing with the read is picked up on the next check.
+	cs.storeStat = info
+	if err != nil {
+		log.Printf("[cron] hot-reload failed, keeping in-memory store: %v", err)
+		return
+	}
+
+	cs.replaceStoreUnsafe(next)
+	if err := cs.saveStoreUnsafe(); err != nil {
+		log.Printf("[cron] hot-reload: failed to persist reloaded store: %v", err)
+	}
+	log.Printf("[cron] store reloaded from disk (%d jobs)", len(cs.store.Jobs))
+}
+
+// replaceStoreUnsafe swaps in a store read from disk. Next runs are recomputed
+// like on startup, except for jobs whose schedule and enabled flag are
+// unchanged: those keep their in-memory position so unrelated edits do not
+// push back (or re-anchor) a recurring job.
+func (cs *CronService) replaceStoreUnsafe(next *CronStore) {
+	prev := make(map[string]CronJob, len(cs.store.Jobs))
+	for _, job := range cs.store.Jobs {
+		prev[job.ID] = job
+	}
+
+	cs.store = next
+	cs.recomputeNextRuns()
+
+	for i := range cs.store.Jobs {
+		job := &cs.store.Jobs[i]
+		p, ok := prev[job.ID]
+		if ok && job.Enabled && p.Enabled && p.State.NextRunAtMS != nil &&
+			sameSchedule(p.Schedule, job.Schedule) {
+			nextRun := *p.State.NextRunAtMS
+			job.State.NextRunAtMS = &nextRun
+		}
+	}
 }
 
 func (cs *CronService) AddJob(
@@ -573,6 +702,8 @@ func (cs *CronService) AddJob(
 ) (*CronJob, error) {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
+
+	cs.syncFromDiskUnsafe()
 
 	now := time.Now().UnixMilli()
 
@@ -623,6 +754,8 @@ func (cs *CronService) GetJob(jobID string) (*CronJob, bool) {
 func (cs *CronService) UpdateJob(job *CronJob) error {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
+
+	cs.syncFromDiskUnsafe()
 
 	for i := range cs.store.Jobs {
 		if cs.store.Jobs[i].ID == job.ID {
@@ -687,6 +820,8 @@ func (cs *CronService) RemoveJob(jobID string) bool {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
+	cs.syncFromDiskUnsafe()
+
 	return cs.removeJobUnsafe(jobID)
 }
 
@@ -715,6 +850,8 @@ func (cs *CronService) removeJobUnsafe(jobID string) bool {
 func (cs *CronService) EnableJob(jobID string, enabled bool) *CronJob {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
+
+	cs.syncFromDiskUnsafe()
 
 	for i := range cs.store.Jobs {
 		job := &cs.store.Jobs[i]
