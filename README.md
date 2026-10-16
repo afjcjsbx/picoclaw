@@ -294,7 +294,7 @@ picoclaw-launcher
 
 Open the WebUI, then: **1)** Configure a Provider (add your LLM API key) -> **2)** Configure a Channel (e.g., Telegram) -> **3)** Start the Gateway -> **4)** Chat!
 
-For detailed WebUI documentation, see [PicoClaw documentation](https://afjcjsbx.github.io/picoclaw/).
+For detailed WebUI documentation, see the [Web UI & Launcher Guide](docs/guides/webui.md).
 
 <details>
 <summary><b>Docker (alternative)</b></summary>
