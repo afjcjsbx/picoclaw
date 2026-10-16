@@ -250,7 +250,6 @@ Usage notes:
 - Run independent commands in separate tool calls. %s Use semicolons only when later commands may run even if an earlier one fails. Do not use newlines to separate commands; newlines inside quoted strings are fine.`, runtime.GOOS, shell, chainGuidance)
 }
 
-//nolint:dupl // Tool parameter schemas intentionally use similar JSON-schema map literals.
 func (t *ExecTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
