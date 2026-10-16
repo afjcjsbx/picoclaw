@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -434,23 +433,38 @@ func TestCronService_PersistenceIntegrity(t *testing.T) {
 }
 
 func TestCronService_SlowHandlerDoesNotBlockScheduler(t *testing.T) {
-	var inFlight atomic.Int32
-	var maxInFlight atomic.Int32
+	const wantConcurrent = 3
+
+	var (
+		mu      sync.Mutex
+		stopped bool
+		wg      sync.WaitGroup
+	)
+	started := make(chan struct{}, wantConcurrent)
 	release := make(chan struct{})
+	releaseHandlers := sync.OnceFunc(func() { close(release) })
+	defer releaseHandlers() // never leave handlers blocked if the test fails early
 
 	handler := func(job *CronJob) (string, error) {
-		n := inFlight.Add(1)
-		for {
-			cur := maxInFlight.Load()
-			if n <= cur || maxInFlight.CompareAndSwap(cur, n) {
-				break
-			}
+		// Runs spawned by a scheduler tick that raced with Stop are ignored so
+		// wg.Add never overlaps wg.Wait.
+		mu.Lock()
+		if stopped {
+			mu.Unlock()
+			return "ok", nil
 		}
-		// Block until the test observes concurrent dispatch. A scheduler that
-		// ran due jobs synchronously (or serialized them behind the handler)
-		// would stall here and never dispatch another run.
+		wg.Add(1)
+		mu.Unlock()
+		defer wg.Done()
+
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		// Block until the test has seen enough concurrent runs. A scheduler
+		// that ran due jobs synchronously (or serialized them behind the
+		// handler) would stall here and never dispatch another run.
 		<-release
-		inFlight.Add(-1)
 		return "ok", nil
 	}
 
@@ -473,28 +487,29 @@ func TestCronService_SlowHandlerDoesNotBlockScheduler(t *testing.T) {
 		t.Fatalf("AddJob failed: %v", err)
 	}
 
-	// The handler blocks until released, so reaching three concurrent runs
-	// proves the scheduler keeps ticking while handlers are still in flight.
-	// This is deterministic and independent of wall-clock timing on a loaded
-	// runner, unlike counting fires in a fixed window.
-	deadline := time.Now().Add(5 * time.Second)
-	for maxInFlight.Load() < 3 && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
+	// Handlers stay blocked until released, so receiving wantConcurrent start
+	// signals proves the scheduler keeps ticking while earlier runs are still in
+	// flight. Waiting on events rather than sleeping makes this independent of
+	// wall-clock timing on a loaded runner.
+	for got := 0; got < wantConcurrent; got++ {
+		select {
+		case <-started:
+		case <-time.After(5 * time.Second):
+			t.Fatalf(
+				"slow handler blocked the scheduler: only %d concurrent runs (want >= %d)",
+				got, wantConcurrent,
+			)
+		}
 	}
 
-	got := maxInFlight.Load()
-	close(release)
-
-	// Let the released handlers finish so no goroutine writes to the store
-	// file after the test removes it.
-	drainDeadline := time.Now().Add(time.Second)
-	for inFlight.Load() > 0 && time.Now().Before(drainDeadline) {
-		time.Sleep(5 * time.Millisecond)
-	}
-
-	if got < 3 {
-		t.Fatalf("slow handler blocked the scheduler: max concurrent runs = %d (want >= 3)", got)
-	}
+	// Stop dispatching, then release and wait for every started handler so none
+	// is still running when the test removes the store file.
+	cs.Stop()
+	mu.Lock()
+	stopped = true
+	mu.Unlock()
+	releaseHandlers()
+	wg.Wait()
 }
 
 func TestCronService_HandlerPanicKeepsScheduleAlive(t *testing.T) {
