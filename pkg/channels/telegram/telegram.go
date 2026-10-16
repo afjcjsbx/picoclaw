@@ -1120,14 +1120,8 @@ func (c *TelegramChannel) handleMessages(ctx context.Context, messages []*telego
 		failedMedia = append(failedMedia, parts.failedMedia...)
 	}
 
-	if len(failedMedia) > 0 {
-		// Tell the user an attachment was dropped instead of silently ignoring
-		// the message (e.g. a transient getFile/download failure that survived
-		// the retries).
-		c.notifyMediaDownloadFailure(ctx, message, failedMedia)
-	}
-
-	if content == "" && len(mediaPaths) == 0 {
+	hasPayload := content != "" || len(mediaPaths) > 0
+	if !hasPayload && len(failedMedia) == 0 {
 		return nil
 	}
 
@@ -1147,6 +1141,18 @@ func (c *TelegramChannel) handleMessages(ctx context.Context, messages []*telego
 			return nil
 		}
 		content = cleaned
+	}
+
+	if len(failedMedia) > 0 {
+		// Tell the user an attachment was dropped instead of silently ignoring
+		// the message (e.g. a transient getFile/download failure that survived
+		// the retries). This runs after the group trigger filter so the bot
+		// never replies in groups where it is meant to stay silent.
+		c.notifyMediaDownloadFailure(ctx, message, failedMedia)
+	}
+
+	if !hasPayload {
+		return nil
 	}
 
 	if message.ReplyToMessage != nil {

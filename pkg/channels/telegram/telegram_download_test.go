@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/sipeed/picoclaw/pkg/channels"
 	"github.com/sipeed/picoclaw/pkg/config"
 )
 
@@ -190,4 +191,53 @@ func TestHandleMessage_NotifiesUserWhenVoiceDownloadFails(t *testing.T) {
 
 	require.Equal(t, telegramGetFileMaxAttempts, countAPICalls(caller, "getFile"))
 	require.Equal(t, 1, countAPICalls(caller, "sendMessage"), "user must be told the audio was dropped")
+}
+
+// TestHandleMessage_GroupDownloadFailureRespectsGroupTrigger ensures the failure
+// notice is subject to the group trigger filter: a mention-only bot must stay
+// silent in a group when it was not addressed, even if the download failed.
+func TestHandleMessage_GroupDownloadFailureRespectsGroupTrigger(t *testing.T) {
+	tests := []struct {
+		name        string
+		mentionOnly bool
+		wantNotices int
+	}{
+		{name: "mention-only group stays silent", mentionOnly: true, wantNotices: 0},
+		{name: "permissive group is notified", mentionOnly: false, wantNotices: 1},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			caller := &stubCaller{
+				callFn: func(_ context.Context, url string, _ *ta.RequestData) (*ta.Response, error) {
+					switch {
+					case strings.Contains(url, "getFile"):
+						return nil, errors.New(`api: 400 "Bad Request: file not found"`)
+					case strings.Contains(url, "sendMessage"):
+						return successResponse(t), nil
+					default:
+						t.Fatalf("unexpected API call: %s", url)
+						return nil, nil
+					}
+				},
+			}
+			ch := newTestChannel(t, caller)
+			ch.ctx = context.Background()
+			ch.BaseChannel = channels.NewBaseChannel("telegram", nil, nil, nil,
+				channels.WithMaxMessageLength(4000),
+				channels.WithGroupTrigger(config.GroupTriggerConfig{MentionOnly: tc.mentionOnly}),
+			)
+			ch.SetRunning(true)
+
+			msg := &telego.Message{
+				MessageID: 7,
+				Chat:      telego.Chat{ID: -42, Type: "supergroup"},
+				From:      &telego.User{ID: 99, FirstName: "Alice"},
+				Voice:     &telego.Voice{FileID: "voice-file"},
+			}
+
+			require.NoError(t, ch.handleMessage(context.Background(), msg))
+
+			require.Equal(t, tc.wantNotices, countAPICalls(caller, "sendMessage"))
+		})
+	}
 }
