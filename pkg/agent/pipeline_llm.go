@@ -616,6 +616,7 @@ func (p *Pipeline) CallLLM(
 		"iteration":      iteration,
 		"content_chars":  len(exec.response.Content),
 		"tool_calls":     len(exec.response.ToolCalls),
+		"finish_reason":  exec.response.FinishReason,
 		"reasoning":      exec.response.Reasoning,
 		"target_channel": al.targetReasoningChannelID(ts.channel),
 		"channel":        ts.channel,
