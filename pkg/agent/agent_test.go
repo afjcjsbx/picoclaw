@@ -5124,14 +5124,11 @@ func TestAgentLoop_TruncatedModelResponseUsesDedicatedFallback(t *testing.T) {
 
 func TestIsTruncatedFinishReason(t *testing.T) {
 	tests := map[string]bool{
-		"":                  false,
-		"stop":              false,
-		"tool_calls":        false,
-		"length":            true,
-		"truncated":         true,
-		"max_tokens":        true,
-		"max_output_tokens": true,
-		"  LENGTH  ":        true,
+		"":           false,
+		"stop":       false,
+		"tool_calls": false,
+		"length":     true,
+		"truncated":  true,
 	}
 	for reason, want := range tests {
 		if got := isTruncatedFinishReason(reason); got != want {

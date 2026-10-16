@@ -168,15 +168,10 @@ func emptyResponseFallback(ts *turnState) string {
 
 // isTruncatedFinishReason reports whether a provider finish_reason means the
 // model stopped because it reached the output token limit. Providers normalize
-// the raw value to "length" (Anthropic/Bedrock/Gemini) or "truncated"
-// (OpenAI-compatible); the raw variants are accepted for safety.
+// the raw value to "length" (Anthropic/Bedrock/Gemini, and the OpenAI-compatible
+// streaming path) or "truncated" (OpenAI-compatible non-streaming).
 func isTruncatedFinishReason(reason string) bool {
-	switch strings.ToLower(strings.TrimSpace(reason)) {
-	case "length", "truncated", "max_tokens", "max_output_tokens":
-		return true
-	default:
-		return false
-	}
+	return reason == "length" || reason == "truncated"
 }
 
 // registerSharedTools registers tools that are shared across all agents (web, message, spawn).
