@@ -81,7 +81,8 @@ const (
 	picoSessionPrefix       = legacyPicoSessionPrefix
 
 	// cronSessionKeyPrefix matches the keys built in pkg/tools/cron.go.
-	cronSessionKeyPrefix = "agent:cron-"
+	cronSessionKeyPrefix   = "agent:cron-"
+	cronSessionTitlePrefix = "[cron] "
 
 	// Keep the session API aligned with the shared JSONL store reader limit in
 	// pkg/memory/jsonl.go so oversized lines fail consistently everywhere.
@@ -272,10 +273,10 @@ func extractPicoSessionIDFromScope(scope session.SessionScope) (string, bool) {
 }
 
 func sessionRefFromMeta(meta memory.SessionMeta) (picoJSONLSessionRef, bool) {
-	// Cron runs persist the target chat's scope, so their pico ID equals the
-	// real conversation's and they would shadow it in the list.
+	// Cron runs persist the target chat's scope, so their pico ID would equal the
+	// real conversation's and shadow it. Use the sanitized key as ID instead.
 	if strings.HasPrefix(meta.Key, cronSessionKeyPrefix) {
-		return picoJSONLSessionRef{}, false
+		return picoJSONLSessionRef{ID: sanitizeSessionKey(meta.Key), Key: meta.Key}, true
 	}
 	if len(meta.Scope) == 0 {
 		if sessionID, ok := extractLegacyPicoSessionID(meta.Key); ok {
@@ -934,7 +935,11 @@ func (h *Handler) handleListSessions(w http.ResponseWriter, r *http.Request) {
 			}
 			h.hydrateForkDisplay(dir, &sess, toolFeedbackMaxArgsLength)
 			seen[ref.ID] = struct{}{}
-			items = append(items, buildSessionListItem(ref.ID, sess, toolFeedbackMaxArgsLength))
+			item := buildSessionListItem(ref.ID, sess, toolFeedbackMaxArgsLength)
+			if strings.HasPrefix(ref.Key, cronSessionKeyPrefix) {
+				item.Title = cronSessionTitlePrefix + item.Title
+			}
+			items = append(items, item)
 		}
 	}
 

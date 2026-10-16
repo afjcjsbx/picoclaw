@@ -501,7 +501,7 @@ func TestHandleSessions_JSONLScopeDiscovery(t *testing.T) {
 	}
 }
 
-func TestHandleListSessions_CronRunDoesNotShadowPicoChat(t *testing.T) {
+func TestHandleSessions_CronRunListedSeparatelyFromPicoChat(t *testing.T) {
 	configPath, cleanup := setupOAuthTestEnv(t)
 	defer cleanup()
 
@@ -550,11 +550,36 @@ func TestHandleListSessions_CronRunDoesNotShadowPicoChat(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &items); err != nil {
 		t.Fatalf("Unmarshal() error = %v", err)
 	}
-	if len(items) != 1 {
-		t.Fatalf("len(items) = %d, want 1 (cron run hidden): %#v", len(items), items)
+	titles := make(map[string]string, len(items))
+	for _, item := range items {
+		titles[item.ID] = item.Title
 	}
-	if items[0].ID != "shared-chat" || items[0].Title != "real conversation" {
-		t.Fatalf("items[0] = {ID:%q Title:%q}, want the real conversation", items[0].ID, items[0].Title)
+	want := map[string]string{
+		"shared-chat":          "real conversation",
+		"agent_cron-job1-run1": "[cron] cron prompt",
+	}
+	if len(titles) != len(want) {
+		t.Fatalf("items = %#v, want IDs/titles %v", items, want)
+	}
+	for id, title := range want {
+		if titles[id] != title {
+			t.Fatalf("title[%q] = %q, want %q (items=%#v)", id, titles[id], title, items)
+		}
+	}
+
+	detailRec := httptest.NewRecorder()
+	mux.ServeHTTP(detailRec, httptest.NewRequest(http.MethodGet, "/api/sessions/agent_cron-job1-run1", nil))
+	if detailRec.Code != http.StatusOK || !strings.Contains(detailRec.Body.String(), "cron prompt") {
+		t.Fatalf("cron detail status = %d, body=%s", detailRec.Code, detailRec.Body.String())
+	}
+
+	deleteRec := httptest.NewRecorder()
+	mux.ServeHTTP(deleteRec, httptest.NewRequest(http.MethodDelete, "/api/sessions/agent_cron-job1-run1", nil))
+	if deleteRec.Code != http.StatusNoContent {
+		t.Fatalf("cron delete status = %d, body=%s", deleteRec.Code, deleteRec.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "sk_v1_real_chat.jsonl")); err != nil {
+		t.Fatalf("real chat file removed by cron delete: %v", err)
 	}
 }
 
