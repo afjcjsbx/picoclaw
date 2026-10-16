@@ -8,9 +8,9 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.14.1
 	github.com/SevereCloud/vksdk/v3 v3.3.1
 	github.com/adhocore/gronx v1.20.0
-	github.com/anthropics/anthropic-sdk-go v1.78.0
+	github.com/anthropics/anthropic-sdk-go v1.80.0
 	github.com/atc0005/go-teams-notify/v2 v2.14.0
-	github.com/aws/aws-sdk-go-v2 v1.47.1
+	github.com/aws/aws-sdk-go-v2 v1.47.3
 	github.com/aws/aws-sdk-go-v2/config v1.33.4
 	github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.63.1
 	github.com/bwmarrin/discordgo v0.29.0
@@ -20,7 +20,7 @@ require (
 	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/ergochat/irc-go v0.6.0
 	github.com/ergochat/readline v0.1.3
-	github.com/github/copilot-sdk/go v1.0.16
+	github.com/github/copilot-sdk/go v1.0.19
 	github.com/gomarkdown/markdown v0.0.0-20260411013819-759bbc3e3207
 	github.com/google/jsonschema-go v0.4.3
 	github.com/google/uuid v1.6.0
@@ -35,12 +35,12 @@ require (
 	github.com/muesli/termenv v0.16.0
 	github.com/mymmrac/telego v1.12.1
 	github.com/open-dingtalk/dingtalk-stream-sdk-go v0.9.1
-	github.com/openai/openai-go/v3 v3.70.0
+	github.com/openai/openai-go/v3 v3.77.0
 	github.com/pion/rtp v1.10.5
 	github.com/pion/webrtc/v3 v3.3.6
 	github.com/pmezard/go-difflib v1.0.0
 	github.com/rs/zerolog v1.35.1
-	github.com/slack-go/slack v0.23.1
+	github.com/slack-go/slack v0.30.1
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
 	github.com/stretchr/testify v1.12.1
@@ -79,7 +79,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sso v1.38.0 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.43.0 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.50.0 // indirect
-	github.com/aws/smithy-go v1.28.1 // indirect
+	github.com/aws/smithy-go v1.28.5 // indirect
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/beeper/argo-go v1.1.2 // indirect
@@ -153,3 +153,11 @@ require (
 )
 
 replace github.com/bwmarrin/discordgo => github.com/yeongaori/discordgo-fork v0.0.0-20260319072544-e8e546f5d532
+
+// The QQ OpenAPI requires "Authorization: QQBot <token>". botgo v0.2.1 sets the
+// resty auth scheme on the *Client* from inside OnBeforeRequest, but resty >= v2.17
+// snapshots Client.AuthScheme into the Request at R() time and only reads the
+// request-level scheme, so requests go out as "Bearer <token>" and the gateway
+// rejects them with 401 (code 11241). This fork is upstream v0.2.1 plus the
+// 3-line fix; drop this replace once tencent-connect/botgo#60 is merged and tagged.
+replace github.com/tencent-connect/botgo => github.com/afjcjsbx/botgo v0.2.2-0.20261015203710-64b99d903a76

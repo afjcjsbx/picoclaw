@@ -1,10 +1,12 @@
 <div align="center">
-<img src="../../assets/logo.webp" alt="PicoClaw" width="512">
+<p align="center">
+  <img src="../../assets/logo.webp" alt="PicoClaw" width="200">
+</p>
 
 <h1>PicoClaw: Go로 작성된 초고효율 AI 어시스턴트</h1>
 
 <h3>$10 하드웨어 · 10MB RAM · ms 부팅 · Let's Go, PicoClaw!</h3>
-  <p>
+  <p align="center">
     <img src="https://img.shields.io/badge/Go-1.27.1+-00ADD8?style=flat&logo=go&logoColor=white" alt="Go">
     <img src="https://img.shields.io/badge/Arch-x86__64%2C%20ARM64%2C%20MIPS%2C%20RISC--V%2C%20LoongArch-blue" alt="Hardware">
     <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
@@ -18,7 +20,9 @@
     <a href="https://discord.gg/V4sAZ9XWpN"><img src="https://img.shields.io/badge/Discord-Community-4c60eb?style=flat&logo=discord&logoColor=white" alt="Discord"></a>
   </p>
 
-[中文](README.zh.md) | [日本語](README.ja.md) | **한국어** | [Português](README.pt-br.md) | [Tiếng Việt](README.vi.md) | [Français](README.fr.md) | [Italiano](README.it.md) | [Bahasa Indonesia](README.id.md) | [Malay](README.ms.md) | [English](../../README.md)
+<p align="center">
+  <a href="README.zh.md">中文</a> | <a href="README.ja.md">日本語</a> | <strong>한국어</strong> | <a href="README.pt-br.md">Português</a> | <a href="README.vi.md">Tiếng Việt</a> | <a href="README.fr.md">Français</a> | <a href="README.it.md">Italiano</a> | <a href="README.id.md">Bahasa Indonesia</a> | <a href="README.ms.md">Malay</a> | <a href="../../README.md">English</a>
+</p>
 
 </div>
 
@@ -83,7 +87,7 @@
 
 2026-02-26 🎉 PicoClaw가 단 17일 만에 **20K 스타**를 달성했습니다! 채널 자동 오케스트레이션과 기능 인터페이스가 적용되었습니다.
 
-2026-02-16 🎉 PicoClaw가 1주일 만에 **12K 스타**를 돌파했습니다! 커뮤니티 메인터너 역할과 [로드맵](../../ROADMAP.md)이 공식적으로 공개되었습니다.
+2026-02-16 🎉 PicoClaw가 1주일 만에 **12K 스타**를 돌파했습니다! 커뮤니티 메인터너 역할과 로드맵이 공식적으로 공개되었습니다.
 
 2026-02-13 🎉 PicoClaw가 4일 만에 **5000 스타**를 돌파했습니다! 프로젝트 로드맵과 개발자 그룹이 준비 중입니다.
 

@@ -1,25 +1,29 @@
 <div align="center">
-<img src="assets/logo.webp" alt="PicoClaw" width="512">
+
+<p align="center">
+  <img src="assets/logo.webp" alt="PicoClaw" width="200">
+</p>
 
 <h1>PicoClaw: An Ultra-Lightweight Go AI Agent for RISC-V, SBCs, and Embedded Systems — Actively Maintained Fork</h1>
 
 > PicoClaw is small on purpose. Small is not lesser. Small is enough.
 
 <h3>$10 Hardware · 10–20 MB RAM · ms Boot · Let's Go, PicoClaw!</h3>
-  <p>
-    <img src="https://img.shields.io/badge/Go-1.27.2+-00ADD8?style=flat&logo=go&logoColor=white" alt="Go">
-    <img src="https://img.shields.io/badge/Arch-x86__64%2C%20ARM64%2C%20MIPS%2C%20RISC--V%2C%20LoongArch-blue" alt="Hardware">
-    <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
-    <br>
-    <a href="https://afjcjsbx.github.io/picoclaw/"><img src="https://img.shields.io/badge/Docs-Official-007acc?style=flat&logo=read-the-docs&logoColor=white" alt="Docs"></a>
-    <a href="https://github.com/afjcjsbx/picoclaw/releases/latest"><img src="https://img.shields.io/github/v/release/afjcjsbx/picoclaw?style=flat&label=Latest%20release" alt="Latest release"></a>
-    <a href="https://discord.gg/bEuEDnKpf"><img src="https://img.shields.io/badge/Discord-Community-5865F2?style=flat&logo=discord&logoColor=white" alt="Discord"></a>
-    <a href="https://deepwiki.com/afjcjsbx/picoclaw"><img src="https://img.shields.io/badge/Wiki-DeepWiki-FFA500?style=flat&logo=wikipedia&logoColor=white" alt="Wiki"></a>
-    <br>
 
-  </p>
+<p align="center">
+  <img src="https://img.shields.io/badge/Go-1.27.2+-00ADD8?style=flat&logo=go&logoColor=white" alt="Go">
+  <img src="https://img.shields.io/badge/Arch-x86__64%2C%20ARM64%2C%20MIPS%2C%20RISC--V%2C%20LoongArch-blue" alt="Hardware">
+  <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
+  <br>
+  <a href="https://afjcjsbx.github.io/picoclaw/"><img src="https://img.shields.io/badge/Docs-Official-007acc?style=flat&logo=read-the-docs&logoColor=white" alt="Docs"></a>
+  <a href="https://github.com/afjcjsbx/picoclaw/releases/latest"><img src="https://img.shields.io/github/v/release/afjcjsbx/picoclaw?style=flat&label=Latest%20release" alt="Latest release"></a>
+  <a href="https://discord.gg/bEuEDnKpf"><img src="https://img.shields.io/badge/Discord-Community-5865F2?style=flat&logo=discord&logoColor=white" alt="Discord"></a>
+  <a href="https://deepwiki.com/afjcjsbx/picoclaw"><img src="https://img.shields.io/badge/Wiki-DeepWiki-FFA500?style=flat&logo=wikipedia&logoColor=white" alt="Wiki"></a>
+</p>
 
-[中文](docs/project/README.zh.md) | [日本語](docs/project/README.ja.md) | [한국어](docs/project/README.ko.md) | [Português](docs/project/README.pt-br.md) | [Tiếng Việt](docs/project/README.vi.md) | [Français](docs/project/README.fr.md) | [Italiano](docs/project/README.it.md) | [Bahasa Indonesia](docs/project/README.id.md) | [Malay](docs/project/README.ms.md) | **English**
+<p align="center">
+  <a href="docs/project/README.zh.md">中文</a> | <a href="docs/project/README.ja.md">日本語</a> | <a href="docs/project/README.ko.md">한국어</a> | <a href="docs/project/README.pt-br.md">Português</a> | <a href="docs/project/README.vi.md">Tiếng Việt</a> | <a href="docs/project/README.fr.md">Français</a> | <a href="docs/project/README.it.md">Italiano</a> | <a href="docs/project/README.id.md">Bahasa Indonesia</a> | <a href="docs/project/README.ms.md">Malay</a> | <strong>English</strong>
+</p>
 
 </div>
 
@@ -98,7 +102,7 @@ This repository is an actively maintained fork of PicoClaw. Development continue
 
 2026-02-26 🎉 PicoClaw hits **20K Stars** in just 17 days! Channel auto-orchestration and capability interfaces are live.
 
-2026-02-16 🎉 PicoClaw breaks 12K Stars in one week! Community maintainer roles and [Roadmap](ROADMAP.md) officially launched.
+2026-02-16 🎉 PicoClaw breaks 12K Stars in one week! Community maintainer roles and Roadmap officially launched.
 
 2026-02-13 🎉 PicoClaw breaks 5000 Stars in 4 days! Project roadmap and developer groups in progress.
 

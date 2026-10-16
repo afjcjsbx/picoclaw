@@ -12,10 +12,15 @@ PicoClaw currently uses three schedule forms in the cron tool:
 - `every_seconds`: recurring interval, in seconds.
 - `cron_expr`: recurring cron expression such as `0 9 * * *`.
 
-For `cron_expr`, the stored schedule also accepts an optional `tz` field with an
-IANA timezone name (for example `Europe/Rome`). When it is empty, the expression
-is evaluated in the server's local time. The agent tool and the CLI do not set
-this field, so it is only reachable by editing `cron/jobs.json` directly.
+`cron_expr` is evaluated in the time zone of the PicoClaw process, which is set
+by the `TZ` environment variable (for example `TZ=Europe/Rome`). When `TZ` is
+unset, the system time zone is used, which is usually UTC in containers and on
+servers, so `0 9 * * *` would fire at 09:00 UTC. Set `TZ` before starting the
+gateway; changing it requires a restart. There is no per-job time zone in the
+agent tool or the CLI.
+
+The agent can see the active zone in the `Current Time` line of its prompt, for
+example `2026-10-15 16:02 CEST (Thursday)`.
 
 The CLI command `picoclaw cron add` currently supports recurring jobs only:
 

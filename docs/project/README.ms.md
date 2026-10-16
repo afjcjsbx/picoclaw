@@ -1,10 +1,12 @@
 <div align="center">
-<img src="../../assets/logo.webp" alt="PicoClaw" width="512">
+<p align="center">
+  <img src="../../assets/logo.webp" alt="PicoClaw" width="200">
+</p>
 
 <h1>PicoClaw: Pembantu AI Ultra-Cekap dalam Go</h1>
 
 <h3>Perkakasan $10 · RAM 10MB · Boot ms · Jom, PicoClaw!</h3>
-  <p>
+  <p align="center">
     <img src="https://img.shields.io/badge/Go-1.27.1+-00ADD8?style=flat&logo=go&logoColor=white" alt="Go">
     <img src="https://img.shields.io/badge/Arch-x86__64%2C%20ARM64%2C%20MIPS%2C%20RISC--V%2C%20LoongArch-blue" alt="Hardware">
     <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
@@ -18,7 +20,9 @@
     <a href="https://discord.gg/V4sAZ9XWpN"><img src="https://img.shields.io/badge/Discord-Community-4c60eb?style=flat&logo=discord&logoColor=white" alt="Discord"></a>
   </p>
 
-[中文](README.zh.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | [Português](README.pt-br.md) | [Tiếng Việt](README.vi.md) | [Français](README.fr.md) | [Italiano](README.it.md) | [Bahasa Indonesia](README.id.md) | **Malay** | [English](../../README.md)
+<p align="center">
+  <a href="README.zh.md">中文</a> | <a href="README.ja.md">日本語</a> | <a href="README.ko.md">한국어</a> | <a href="README.pt-br.md">Português</a> | <a href="README.vi.md">Tiếng Việt</a> | <a href="README.fr.md">Français</a> | <a href="README.it.md">Italiano</a> | <a href="README.id.md">Bahasa Indonesia</a> | <strong>Malay</strong> | <a href="../../README.md">English</a>
+</p>
 
 </div>
 
@@ -83,7 +87,7 @@
 
 2026-02-26 🎉 PicoClaw mencapai **20K Stars** hanya dalam 17 hari! Orkestrasi saluran automatik dan antara muka keupayaan kini aktif.
 
-2026-02-16 🎉 PicoClaw melepasi 12K Stars dalam seminggu! Peranan penyelenggara komuniti dan [Peta Jalan](../../ROADMAP.md) dilancarkan secara rasmi.
+2026-02-16 🎉 PicoClaw melepasi 12K Stars dalam seminggu! Peranan penyelenggara komuniti dan Peta Jalan dilancarkan secara rasmi.
 
 2026-02-13 🎉 PicoClaw melepasi 5000 Stars dalam 4 hari! Peta jalan projek dan kumpulan pembangun sedang dalam proses.
 

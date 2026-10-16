@@ -1,10 +1,12 @@
 <div align="center">
-<img src="../../assets/logo.webp" alt="PicoClaw" width="512">
+<p align="center">
+  <img src="../../assets/logo.webp" alt="PicoClaw" width="200">
+</p>
 
 <h1>PicoClaw: Assistente de IA Ultra-Eficiente em Go</h1>
 
 <h3>Hardware de $10 · 10MB de RAM · Boot em ms · Let's Go, PicoClaw!</h3>
-  <p>
+  <p align="center">
     <img src="https://img.shields.io/badge/Go-1.27.1+-00ADD8?style=flat&logo=go&logoColor=white" alt="Go">
     <img src="https://img.shields.io/badge/Arch-x86__64%2C%20ARM64%2C%20MIPS%2C%20RISC--V%2C%20LoongArch-blue" alt="Hardware">
     <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
@@ -18,7 +20,9 @@
     <a href="https://discord.gg/V4sAZ9XWpN"><img src="https://img.shields.io/badge/Discord-Community-4c60eb?style=flat&logo=discord&logoColor=white" alt="Discord"></a>
   </p>
 
-[中文](README.zh.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | **Português** | [Tiếng Việt](README.vi.md) | [Français](README.fr.md) | [Italiano](README.it.md) | [Bahasa Indonesia](README.id.md) | [Malay](README.ms.md) | [English](../../README.md)
+<p align="center">
+  <a href="README.zh.md">中文</a> | <a href="README.ja.md">日本語</a> | <a href="README.ko.md">한국어</a> | <strong>Português</strong> | <a href="README.vi.md">Tiếng Việt</a> | <a href="README.fr.md">Français</a> | <a href="README.it.md">Italiano</a> | <a href="README.id.md">Bahasa Indonesia</a> | <a href="README.ms.md">Malay</a> | <a href="../../README.md">English</a>
+</p>
 
 </div>
 
@@ -83,7 +87,7 @@
 
 2026-02-26 🎉 O PicoClaw atinge **20K Stars** em apenas 17 dias! Orquestração automática de channels e interfaces de capacidade estão disponíveis.
 
-2026-02-16 🎉 O PicoClaw ultrapassa 12K Stars em uma semana! Funções de mantenedor da comunidade e [Roadmap](../../ROADMAP.md) lançados oficialmente.
+2026-02-16 🎉 O PicoClaw ultrapassa 12K Stars em uma semana! Funções de mantenedor da comunidade e Roadmap lançados oficialmente.
 
 2026-02-13 🎉 O PicoClaw ultrapassa 5000 Stars em 4 dias! Roadmap do projeto e grupos de desenvolvedores em andamento.
 

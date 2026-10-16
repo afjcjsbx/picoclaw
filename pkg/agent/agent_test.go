@@ -1783,7 +1783,8 @@ func TestAgentLoop_Stop(t *testing.T) {
 // Mock implementations for testing
 
 type simpleMockProvider struct {
-	response string
+	response     string
+	finishReason string
 }
 
 func (m *simpleMockProvider) Chat(
@@ -1794,8 +1795,9 @@ func (m *simpleMockProvider) Chat(
 	opts map[string]any,
 ) (*providers.LLMResponse, error) {
 	return &providers.LLMResponse{
-		Content:   m.response,
-		ToolCalls: []providers.ToolCall{},
+		Content:      m.response,
+		FinishReason: m.finishReason,
+		ToolCalls:    []providers.ToolCall{},
 	}, nil
 }
 
@@ -5077,6 +5079,62 @@ func TestAgentLoop_EmptyModelResponseUsesAccurateFallback(t *testing.T) {
 	}
 	if response != defaultResponse {
 		t.Fatalf("response = %q, want %q", response, defaultResponse)
+	}
+}
+
+func TestAgentLoop_TruncatedModelResponseUsesDedicatedFallback(t *testing.T) {
+	// Providers report the token-limit stop as "truncated" (OpenAI-compatible,
+	// non-streaming) or "length" (Anthropic/Bedrock/Gemini and the
+	// OpenAI-compatible streaming path); both must map to the dedicated
+	// token-limit message instead of the generic one.
+	for _, finishReason := range []string{"truncated", "length"} {
+		t.Run(finishReason, func(t *testing.T) {
+			tmpDir, err := os.MkdirTemp("", "agent-test-*")
+			if err != nil {
+				t.Fatalf("Failed to create temp dir: %v", err)
+			}
+			defer os.RemoveAll(tmpDir)
+
+			cfg := &config.Config{
+				Agents: config.AgentsConfig{
+					Defaults: config.AgentDefaults{
+						Workspace:         tmpDir,
+						ModelName:         "test-model",
+						MaxTokens:         4096,
+						MaxToolIterations: 3,
+					},
+				},
+			}
+
+			msgBus := bus.NewMessageBus()
+			provider := &simpleMockProvider{response: "", finishReason: finishReason}
+			al := NewAgentLoop(cfg, msgBus, provider)
+
+			response, err := al.ProcessDirectWithChannel(
+				context.Background(), "hello", "truncated-response", "test", "chat1",
+			)
+			if err != nil {
+				t.Fatalf("ProcessDirectWithChannel failed: %v", err)
+			}
+			if response != truncatedResponse {
+				t.Fatalf("response = %q, want %q", response, truncatedResponse)
+			}
+		})
+	}
+}
+
+func TestIsTruncatedFinishReason(t *testing.T) {
+	tests := map[string]bool{
+		"":           false,
+		"stop":       false,
+		"tool_calls": false,
+		"length":     true,
+		"truncated":  true,
+	}
+	for reason, want := range tests {
+		if got := isTruncatedFinishReason(reason); got != want {
+			t.Errorf("isTruncatedFinishReason(%q) = %v, want %v", reason, got, want)
+		}
 	}
 }
 

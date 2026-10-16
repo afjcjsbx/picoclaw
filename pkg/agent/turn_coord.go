@@ -240,9 +240,10 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 				turnStatus = TurnEndStatusError
 				return turnResult{}, fmt.Errorf("hook requested turn abort")
 			}
-			// Ensure empty response falls back to DefaultResponse
+			// Ensure an empty response falls back to a user-facing message,
+			// with a dedicated hint when the model was cut off by max_tokens.
 			if finalContent == "" {
-				finalContent = ts.opts.DefaultResponse
+				finalContent = emptyResponseFallback(ts)
 			}
 			result, finalizeErr := pipeline.Finalize(ctx, turnCtx, ts, exec, turnStatus, finalContent)
 			if finalizeErr != nil {
@@ -298,7 +299,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 		if ts.currentIteration() >= ts.agent.MaxIterations && ts.agent.MaxIterations > 0 {
 			finalContent = toolLimitResponse
 		} else {
-			finalContent = ts.opts.DefaultResponse
+			finalContent = emptyResponseFallback(ts)
 		}
 	}
 
