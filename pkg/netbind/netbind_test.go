@@ -279,6 +279,28 @@ func TestOpenPlan_LoopbackDegradedWhenSiblingFamilyBindFails(t *testing.T) {
 	}
 }
 
+func TestOpenPlan_ExactHostBindErrorIsNotWrapped(t *testing.T) {
+	blocker, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen() error = %v", err)
+	}
+	defer blocker.Close()
+	port := strconv.Itoa(blocker.Addr().(*net.TCPAddr).Port)
+
+	plan, err := BuildPlan("127.0.0.1", DefaultLoopback)
+	if err != nil {
+		t.Fatalf("BuildPlan() error = %v", err)
+	}
+	_, err = OpenPlan(plan, port)
+	if err == nil {
+		t.Fatal("OpenPlan() error = nil, want an error for an occupied exact host")
+	}
+	var opErr *net.OpError
+	if !errors.As(err, &opErr) {
+		t.Fatalf("OpenPlan() error = %v (%T), want the underlying *net.OpError", err, err)
+	}
+}
+
 func TestOpenPlan_ErrorsWhenNoFamilyBinds(t *testing.T) {
 	hasIPv4, hasIPv6 := DetectIPFamilies()
 	if !hasIPv4 || !hasIPv6 {

@@ -503,7 +503,11 @@ func openGroup(group bindGroup, port string) ([]net.Listener, []string, string, 
 	case groupAdaptiveAny:
 		return openAdaptiveAnyGroup(port)
 	case groupExact:
-		return openBindings([]exactBinding{group.exact}, port)
+		ln, actualPort, err := openExactListener(group.exact, port)
+		if err != nil {
+			return nil, nil, "", nil, err
+		}
+		return []net.Listener{ln}, []string{group.exact.host}, actualPort, nil, nil
 	default:
 		return nil, nil, "", nil, fmt.Errorf("unsupported bind group kind: %d", group.kind)
 	}
