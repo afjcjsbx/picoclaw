@@ -269,6 +269,17 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 		return nil
 	}
 
+	if req.Reason == ContextCompressReasonManual {
+		result, err := m.engine.CompactNow(ctx, req.SessionKey, req.Instructions)
+		if err != nil {
+			return err
+		}
+		if result.LeafSummaries+result.CondensedSummaries == 0 {
+			return ErrNothingToCompact
+		}
+		return nil
+	}
+
 	// For retry (LLM overflow), use aggressive CompactUntilUnder to guarantee
 	// context shrinks below budget (spec lines ~1410).
 	var (

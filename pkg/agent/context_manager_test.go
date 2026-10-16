@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1018,5 +1019,152 @@ func TestLegacyCompact_PublishesFeedbackWhenToolFeedbackEnabled(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("expected compaction feedback outbound")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Legacy manual compaction (/compact)
+// ---------------------------------------------------------------------------
+
+// promptRecordingProvider captures the prompts it is asked to summarize.
+type promptRecordingProvider struct {
+	mu      sync.Mutex
+	prompts []string
+}
+
+func (p *promptRecordingProvider) Chat(
+	_ context.Context,
+	messages []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, m := range messages {
+		p.prompts = append(p.prompts, m.Content)
+	}
+	return &providers.LLMResponse{Content: "manual summary"}, nil
+}
+
+func (p *promptRecordingProvider) GetDefaultModel() string { return "mock-model" }
+
+func newManualCompactLoop(t *testing.T) (*AgentLoop, *AgentInstance, *promptRecordingProvider) {
+	t.Helper()
+	provider := &promptRecordingProvider{}
+	al := NewAgentLoop(testConfig(t), bus.NewMessageBus(), provider)
+	agent := al.registry.GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("expected default agent")
+	}
+	return al, agent, provider
+}
+
+func TestLegacyCompact_Manual_AppliesFocus(t *testing.T) {
+	al, agent, provider := newManualCompactLoop(t)
+	history := []providers.Message{
+		{Role: "user", Content: "q1"},
+		{Role: "assistant", Content: "a1"},
+		{Role: "user", Content: "q2"},
+		{Role: "assistant", Content: "a2"},
+		{Role: "user", Content: "q3"},
+		{Role: "assistant", Content: "a3"},
+	}
+	agent.Sessions.SetHistory("session-manual", history)
+
+	err := al.contextManager.Compact(context.Background(), &CompactRequest{
+		SessionKey:   "session-manual",
+		Reason:       ContextCompressReasonManual,
+		Instructions: "database migration",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if got := agent.Sessions.GetSummary("session-manual"); got != "manual summary" {
+		t.Fatalf("summary = %q, want %q", got, "manual summary")
+	}
+	if got := len(agent.Sessions.GetHistory("session-manual")); got >= len(history) {
+		t.Fatalf("history len = %d, want fewer than %d", got, len(history))
+	}
+	if len(provider.prompts) == 0 || !strings.Contains(provider.prompts[0], "database migration") {
+		t.Fatalf("summarizer prompt missing focus: %q", provider.prompts)
+	}
+}
+
+func TestLegacyCompact_Manual_NothingToCompact(t *testing.T) {
+	al, agent, provider := newManualCompactLoop(t)
+	agent.Sessions.SetHistory("session-short", []providers.Message{
+		{Role: "user", Content: "q1"},
+		{Role: "assistant", Content: "a1"},
+	})
+
+	err := al.contextManager.Compact(context.Background(), &CompactRequest{
+		SessionKey: "session-short",
+		Reason:     ContextCompressReasonManual,
+	})
+	if !errors.Is(err, ErrNothingToCompact) {
+		t.Fatalf("err = %v, want ErrNothingToCompact", err)
+	}
+	if len(provider.prompts) != 0 {
+		t.Fatalf("summarizer must not run for short history, got %d calls", len(provider.prompts))
+	}
+	if got := len(agent.Sessions.GetHistory("session-short")); got != 2 {
+		t.Fatalf("history len = %d, want 2 (untouched)", got)
+	}
+}
+
+func TestLegacyCompact_Manual_RejectsConcurrentSummarization(t *testing.T) {
+	al, agent, _ := newManualCompactLoop(t)
+	lcm := al.contextManager.(*legacyContextManager)
+	lcm.summarizing.Store(agent.ID+":session-busy", true)
+
+	err := lcm.Compact(context.Background(), &CompactRequest{
+		SessionKey: "session-busy",
+		Reason:     ContextCompressReasonManual,
+	})
+	if err == nil || errors.Is(err, ErrNothingToCompact) {
+		t.Fatalf("err = %v, want in-progress error", err)
+	}
+}
+
+func TestProcessMessage_CompactCommand(t *testing.T) {
+	al, agent, provider := newManualCompactLoop(t)
+	msg := testInboundMessage(bus.InboundMessage{
+		Context: bus.InboundContext{Channel: "telegram", ChatID: "chat1", ChatType: "direct", SenderID: "user1"},
+		Content: "/compact focus on database migration",
+	})
+	route, _, err := al.resolveMessageRoute(msg)
+	if err != nil {
+		t.Fatalf("resolveMessageRoute() error = %v", err)
+	}
+	sessionKey := al.allocateRouteSession(route, msg).SessionKey
+
+	// Short history: nothing to compact, LLM untouched.
+	agent.Sessions.SetHistory(sessionKey, []providers.Message{{Role: "user", Content: "hi"}})
+	resp, err := al.processMessage(context.Background(), msg)
+	if err != nil || resp != "Nothing to compact yet." {
+		t.Fatalf("short history: resp=%q err=%v", resp, err)
+	}
+	if len(provider.prompts) != 0 {
+		t.Fatalf("LLM must not be called, got %d calls", len(provider.prompts))
+	}
+
+	// Long history: compacted with the focus forwarded to the summarizer.
+	history := []providers.Message{
+		{Role: "user", Content: "q1"},
+		{Role: "assistant", Content: "a1"},
+		{Role: "user", Content: "q2"},
+		{Role: "assistant", Content: "a2"},
+		{Role: "user", Content: "q3"},
+		{Role: "assistant", Content: "a3"},
+	}
+	agent.Sessions.SetHistory(sessionKey, history)
+	resp, err = al.processMessage(context.Background(), msg)
+	if err != nil || resp != "Context compacted." {
+		t.Fatalf("long history: resp=%q err=%v", resp, err)
+	}
+	if len(provider.prompts) == 0 || !strings.Contains(provider.prompts[0], "focus on database migration") {
+		t.Fatalf("summarizer prompt missing focus: %q", provider.prompts)
 	}
 }
