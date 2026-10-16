@@ -294,6 +294,63 @@ func TestOpenPlan_HealthyDualStackHasNoDegradedEntries(t *testing.T) {
 	}
 }
 
+func TestOpenBindings_UnavailableFamilyIsNotDegraded(t *testing.T) {
+	// 192.0.2.1 (TEST-NET-1) is never assigned to a local interface, so binding
+	// it fails the same way a missing IP family does (EADDRNOTAVAIL).
+	unassigned := exactBinding{host: "192.0.2.1", network: "tcp4"}
+	ln, _, probeErr := openExactListener(unassigned, "0")
+	if probeErr == nil {
+		_ = ln.Close()
+		t.Skip("192.0.2.1 is bindable in this environment")
+	}
+	if !isFamilyUnavailable(probeErr) {
+		t.Skipf("binding an unassigned address did not report an unavailable family: %v", probeErr)
+	}
+
+	listeners, hosts, _, degraded, err := openBindings(
+		[]exactBinding{unassigned, {host: "127.0.0.1", network: "tcp4"}},
+		"0",
+	)
+	if err != nil {
+		t.Fatalf("openBindings() error = %v", err)
+	}
+	t.Cleanup(func() {
+		for _, l := range listeners {
+			_ = l.Close()
+		}
+	})
+
+	if len(listeners) != 1 || len(hosts) != 1 || hosts[0] != "127.0.0.1" {
+		t.Fatalf("listeners = %d, hosts = %v, want only 127.0.0.1", len(listeners), hosts)
+	}
+	if len(degraded) != 0 {
+		t.Fatalf("Degraded = %#v, want none for an unavailable IP family", degraded)
+	}
+}
+
+func TestOpenBindings_ErrorListsUnavailableFamilyWhenNothingBinds(t *testing.T) {
+	unassigned := exactBinding{host: "192.0.2.1", network: "tcp4"}
+	ln, _, probeErr := openExactListener(unassigned, "0")
+	if probeErr == nil {
+		_ = ln.Close()
+		t.Skip("192.0.2.1 is bindable in this environment")
+	}
+	if !isFamilyUnavailable(probeErr) {
+		t.Skipf("binding an unassigned address did not report an unavailable family: %v", probeErr)
+	}
+
+	listeners, hosts, boundPort, degraded, err := openBindings([]exactBinding{unassigned}, "0")
+	if err == nil {
+		t.Fatal("openBindings() error = nil, want an error when no binding opens")
+	}
+	if listeners != nil || hosts != nil || boundPort != "" || degraded != nil {
+		t.Fatalf("openBindings() = %v, %v, %q, %v, want zero values on error", listeners, hosts, boundPort, degraded)
+	}
+	if !strings.Contains(err.Error(), "192.0.2.1") {
+		t.Fatalf("openBindings() error = %q, want it to name the failed bind", err)
+	}
+}
+
 func startTestHTTPServer(t *testing.T, listeners []net.Listener) {
 	t.Helper()
 

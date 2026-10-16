@@ -514,19 +514,25 @@ func openGroup(group bindGroup, port string) ([]net.Listener, []string, string, 
 // entries instead of being dropped silently. This keeps the process serving on
 // the families that did bind while still making a partial bind observable (for
 // example when 0.0.0.0 fails because the port is already in use).
+//
+// A binding that fails because the host does not support its IP family at all
+// (for example ::1 on a kernel with IPv6 disabled) is an expected fallback, not
+// a partial bind, so it is left out of the degraded entries.
 func openBindings(bindings []exactBinding, port string) ([]net.Listener, []string, string, []string, error) {
 	listeners := make([]net.Listener, 0, len(bindings))
 	hosts := make([]string, 0, len(bindings))
+	failures := make([]string, 0)
 	degraded := make([]string, 0)
 
 	selectedPort := port
 	for _, binding := range bindings {
 		ln, actualPort, err := openExactListener(binding, selectedPort)
 		if err != nil {
-			degraded = append(
-				degraded,
-				fmt.Sprintf("%s %s: %v", binding.network, binding.host, err),
-			)
+			failure := fmt.Sprintf("%s %s: %v", binding.network, binding.host, err)
+			failures = append(failures, failure)
+			if !isFamilyUnavailable(err) {
+				degraded = append(degraded, failure)
+			}
 			continue
 		}
 		if selectedPort == "0" && actualPort != "" {
@@ -540,7 +546,7 @@ func openBindings(bindings []exactBinding, port string) ([]net.Listener, []strin
 		return nil, nil, "", nil, fmt.Errorf(
 			"failed to open listener(s) on port %s: %s",
 			port,
-			strings.Join(degraded, "; "),
+			strings.Join(failures, "; "),
 		)
 	}
 
