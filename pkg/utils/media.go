@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -133,7 +134,13 @@ func DownloadFile(urlStr, filename string, opts DownloadOptions) string {
 		}
 	}
 
-	req, err := http.NewRequest(http.MethodGet, urlStr, nil)
+	// opts.Timeout bounds the whole download, retries and backoff included, so
+	// the shared retry policy cannot stretch a hung endpoint to several times
+	// the configured timeout. It also makes the retry sleeps cancellable.
+	ctx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, nil)
 	if err != nil {
 		logger.ErrorCF(opts.LoggerPrefix, "Failed to create download request", map[string]any{
 			"error": err.Error(),

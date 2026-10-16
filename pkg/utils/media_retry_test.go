@@ -52,3 +52,22 @@ func TestDownloadFile_DoesNotRetryPermanentStatus(t *testing.T) {
 	require.Empty(t, path)
 	require.Equal(t, 1, attempts)
 }
+
+// TestDownloadFile_RetriesShareTimeoutBudget verifies that the configured
+// timeout bounds the whole download including retry backoff, instead of
+// applying per attempt.
+func TestDownloadFile_RetriesShareTimeoutBudget(t *testing.T) {
+	retryDelayUnit = 10 * time.Second
+	t.Cleanup(func() { retryDelayUnit = time.Second })
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	start := time.Now()
+	path := DownloadFile(server.URL, "file.bin", DownloadOptions{Timeout: 300 * time.Millisecond})
+
+	require.Empty(t, path)
+	require.Less(t, time.Since(start), 3*time.Second, "retry backoff must not outlive the download timeout")
+}
