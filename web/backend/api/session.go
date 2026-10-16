@@ -80,6 +80,9 @@ const (
 	legacyPicoSessionPrefix = "agent:main:pico:direct:pico:"
 	picoSessionPrefix       = legacyPicoSessionPrefix
 
+	// cronSessionKeyPrefix matches the keys built in pkg/tools/cron.go.
+	cronSessionKeyPrefix = "agent:cron-"
+
 	// Keep the session API aligned with the shared JSONL store reader limit in
 	// pkg/memory/jsonl.go so oversized lines fail consistently everywhere.
 	maxSessionJSONLLineSize   = 10 * 1024 * 1024
@@ -269,6 +272,11 @@ func extractPicoSessionIDFromScope(scope session.SessionScope) (string, bool) {
 }
 
 func sessionRefFromMeta(meta memory.SessionMeta) (picoJSONLSessionRef, bool) {
+	// Cron runs persist the target chat's scope, so their pico ID equals the
+	// real conversation's and they would shadow it in the list.
+	if strings.HasPrefix(meta.Key, cronSessionKeyPrefix) {
+		return picoJSONLSessionRef{}, false
+	}
 	if len(meta.Scope) == 0 {
 		if sessionID, ok := extractLegacyPicoSessionID(meta.Key); ok {
 			return picoJSONLSessionRef{ID: sessionID, Key: meta.Key}, true

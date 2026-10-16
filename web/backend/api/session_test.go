@@ -501,6 +501,63 @@ func TestHandleSessions_JSONLScopeDiscovery(t *testing.T) {
 	}
 }
 
+func TestHandleListSessions_CronRunDoesNotShadowPicoChat(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	dir := sessionsTestDir(t, configPath)
+	store, storeErr := memory.NewJSONLStore(dir)
+	if storeErr != nil {
+		t.Fatalf("NewJSONLStore() error = %v", storeErr)
+	}
+
+	// Cron runs persist the same chat scope as the conversation they deliver to.
+	scopeData, err := json.Marshal(session.SessionScope{
+		Version:    session.ScopeVersionV1,
+		AgentID:    "main",
+		Channel:    "pico",
+		Dimensions: []string{"chat"},
+		Values:     map[string]string{"chat": "direct:pico:shared-chat"},
+	})
+	if err != nil {
+		t.Fatalf("Marshal(scope) error = %v", err)
+	}
+
+	// "agent_cron-*" sorts before "sk_v1_*", so the cron meta is visited first.
+	for key, content := range map[string]string{
+		"agent:cron-job1-run1": "cron prompt",
+		"sk_v1_real_chat":      "real conversation",
+	} {
+		if err := store.AddFullMessage(nil, key, providers.Message{Role: "user", Content: content}); err != nil {
+			t.Fatalf("AddFullMessage(%s) error = %v", key, err)
+		}
+		if err := store.UpsertSessionMeta(nil, key, scopeData, nil); err != nil {
+			t.Fatalf("UpsertSessionMeta(%s) error = %v", key, err)
+		}
+	}
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/sessions", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var items []sessionListItem
+	if err := json.Unmarshal(rec.Body.Bytes(), &items); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("len(items) = %d, want 1 (cron run hidden): %#v", len(items), items)
+	}
+	if items[0].ID != "shared-chat" || items[0].Title != "real conversation" {
+		t.Fatalf("items[0] = {ID:%q Title:%q}, want the real conversation", items[0].ID, items[0].Title)
+	}
+}
+
 func TestHandleGetSession_SkipsTransientThoughtMessages(t *testing.T) {
 	configPath, cleanup := setupOAuthTestEnv(t)
 	defer cleanup()
