@@ -37,6 +37,7 @@ func DefaultConfig() *Config {
 				MaxParallelTurns:          5,
 				ToolFeedback: ToolFeedbackConfig{
 					Enabled:          false,
+					HideArgs:         false,
 					MaxArgsLength:    300,
 					SeparateMessages: false,
 				},

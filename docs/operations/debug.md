@@ -65,6 +65,7 @@ Debug logs are server-side only. If you want the agent to send a visible notific
     "defaults": {
       "tool_feedback": {
         "enabled": true,
+        "hide_args": false,
         "max_args_length": 300,
         "separate_messages": true
       }
@@ -90,6 +91,7 @@ Weixin also limits how many messages a bot may send after each user message (abo
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `enabled` | bool | `false` | Send a chat notification for each tool call |
+| `hide_args` | bool | `false` | Omit serialized tool arguments from the notification |
 | `separate_messages` | bool | `false` | Keep every tool feedback update as a separate chat message instead of reusing a single placeholder/progress message |
 | `max_args_length` | int | `300` | Maximum characters of the serialised arguments included in the notification |
 
@@ -99,6 +101,7 @@ Both fields can also be set via environment variables:
 
 ```bash
 PICOCLAW_AGENTS_DEFAULTS_TOOL_FEEDBACK_ENABLED=true
+PICOCLAW_AGENTS_DEFAULTS_TOOL_FEEDBACK_HIDE_ARGS=true
 PICOCLAW_AGENTS_DEFAULTS_TOOL_FEEDBACK_MAX_ARGS_LENGTH=300
 ```
 
