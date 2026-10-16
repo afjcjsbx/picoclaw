@@ -632,6 +632,8 @@ For detailed guides beyond this README:
 | [Chat Apps](docs/guides/chat-apps.md) | All 18+ channel setup guides |
 | [Configuration](docs/guides/configuration.md) | Environment variables, workspace layout, security sandbox |
 | [Plugin Installation](docs/guides/plugins.md) | Install and activate Agent Plugin packages |
+| [Writing a Plugin](docs/guides/writing-a-plugin.md) | Scaffold, validate, test, and share an Agent Plugin package |
+| [Plugin CLI](docs/reference/plugins-cli.md) | Add, list, validate, scaffold, test, and remove plugin entries from the CLI |
 | [MCP Server CLI](docs/reference/mcp-cli.md) | Add, list, test, edit, and remove MCP server entries from the CLI |
 | [Scheduled Tasks and Cron Jobs](docs/reference/cron.md) | Cron schedule types, deliver modes, command gates, job storage |
 | [Providers & Models](docs/guides/providers.md) | 30+ LLM providers, model routing, model_list configuration |
