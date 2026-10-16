@@ -5083,9 +5083,10 @@ func TestAgentLoop_EmptyModelResponseUsesAccurateFallback(t *testing.T) {
 }
 
 func TestAgentLoop_TruncatedModelResponseUsesDedicatedFallback(t *testing.T) {
-	// Providers normalize the raw finish_reason to "truncated"
-	// (OpenAI-compatible) or "length" (Anthropic/Bedrock/Gemini); both must map
-	// to the dedicated token-limit message instead of the generic one.
+	// Providers report the token-limit stop as "truncated" (OpenAI-compatible,
+	// non-streaming) or "length" (Anthropic/Bedrock/Gemini and the
+	// OpenAI-compatible streaming path); both must map to the dedicated
+	// token-limit message instead of the generic one.
 	for _, finishReason := range []string{"truncated", "length"} {
 		t.Run(finishReason, func(t *testing.T) {
 			tmpDir, err := os.MkdirTemp("", "agent-test-*")
