@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/channels"
 	"github.com/sipeed/picoclaw/pkg/config"
 )
@@ -280,4 +281,50 @@ func TestTelegramMediaDownloadFailureText(t *testing.T) {
 
 	multi := telegramMediaDownloadFailureText([]string{"voice", "photo", "voice"})
 	assert.Contains(t, multi, "the attachments (voice, photo)")
+}
+
+// TestHandleMessage_NotifiesUserWhenQuotedVoiceDownloadFails ensures a failed
+// download of a quoted attachment is reported just like a direct one, while the
+// user's own text message is still forwarded to the agent.
+func TestHandleMessage_NotifiesUserWhenQuotedVoiceDownloadFails(t *testing.T) {
+	caller := &stubCaller{
+		callFn: func(_ context.Context, url string, _ *ta.RequestData) (*ta.Response, error) {
+			switch {
+			case strings.Contains(url, "getFile"):
+				return nil, errors.New(`api: 400 "Bad Request: file not found"`)
+			case strings.Contains(url, "sendMessage"):
+				return successResponse(t), nil
+			default:
+				t.Fatalf("unexpected API call: %s", url)
+				return nil, nil
+			}
+		},
+	}
+	ch := newTestChannel(t, caller)
+	ch.ctx = context.Background()
+	messageBus := bus.NewMessageBus()
+	ch.BaseChannel = channels.NewBaseChannel("telegram", nil, messageBus, nil, channels.WithMaxMessageLength(4000))
+	ch.SetRunning(true)
+
+	msg := &telego.Message{
+		MessageID: 7,
+		Chat:      telego.Chat{ID: 42, Type: "private"},
+		From:      &telego.User{ID: 99, FirstName: "Alice"},
+		Text:      "what did he say?",
+		ReplyToMessage: &telego.Message{
+			MessageID: 5,
+			Chat:      telego.Chat{ID: 42, Type: "private"},
+			Voice:     &telego.Voice{FileID: "voice-file"},
+		},
+	}
+
+	require.NoError(t, ch.handleMessage(context.Background(), msg))
+
+	require.Equal(t, 1, countAPICalls(caller, "sendMessage"), "user must be told the quoted audio was dropped")
+	select {
+	case inbound := <-messageBus.InboundChan():
+		assert.Contains(t, inbound.Content, "what did he say?")
+	case <-time.After(time.Second):
+		t.Fatal("the user's own message must still reach the agent")
+	}
 }

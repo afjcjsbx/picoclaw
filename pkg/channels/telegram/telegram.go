@@ -1143,6 +1143,23 @@ func (c *TelegramChannel) handleMessages(ctx context.Context, messages []*telego
 		content = cleaned
 	}
 
+	if hasPayload && message.ReplyToMessage != nil {
+		quotedMedia, quotedFailed := quotedTelegramMediaRefs(
+			message.ReplyToMessage,
+			func(fileID, ext, filename string) string {
+				localPath := c.downloadFile(ctx, fileID, ext)
+				if localPath == "" {
+					return ""
+				}
+				return storeMedia(localPath, filename)
+			},
+		)
+		if len(quotedMedia) > 0 {
+			mediaPaths = append(quotedMedia, mediaPaths...)
+		}
+		failedMedia = append(failedMedia, quotedFailed...)
+	}
+
 	if len(failedMedia) > 0 {
 		// Tell the user an attachment was dropped instead of silently ignoring
 		// the message (e.g. a transient getFile/download failure that survived
@@ -1156,19 +1173,6 @@ func (c *TelegramChannel) handleMessages(ctx context.Context, messages []*telego
 	}
 
 	if message.ReplyToMessage != nil {
-		quotedMedia := quotedTelegramMediaRefs(
-			message.ReplyToMessage,
-			func(fileID, ext, filename string) string {
-				localPath := c.downloadFile(ctx, fileID, ext)
-				if localPath == "" {
-					return ""
-				}
-				return storeMedia(localPath, filename)
-			},
-		)
-		if len(quotedMedia) > 0 {
-			mediaPaths = append(quotedMedia, mediaPaths...)
-		}
 		content = c.prependTelegramQuotedReply(content, message.ReplyToMessage)
 	}
 
@@ -1465,23 +1469,26 @@ func telegramQuotedContent(message *telego.Message) string {
 func quotedTelegramMediaRefs(
 	message *telego.Message,
 	resolve func(fileID, ext, filename string) string,
-) []string {
+) (refs, failed []string) {
 	if message == nil || resolve == nil {
-		return nil
+		return nil, nil
 	}
 
-	var refs []string
 	if message.Voice != nil {
 		if ref := resolve(message.Voice.FileID, ".ogg", "voice.ogg"); ref != "" {
 			refs = append(refs, ref)
+		} else {
+			failed = append(failed, "voice")
 		}
 	}
 	if message.Audio != nil {
 		if ref := resolve(message.Audio.FileID, ".mp3", "audio.mp3"); ref != "" {
 			refs = append(refs, ref)
+		} else {
+			failed = append(failed, "audio")
 		}
 	}
-	return refs
+	return refs, failed
 }
 
 const (
