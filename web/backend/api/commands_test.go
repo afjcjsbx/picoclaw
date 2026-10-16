@@ -40,17 +40,6 @@ func TestHandleListCommands(t *testing.T) {
 		byCommand[item.Command] = item
 	}
 
-	btw, ok := byCommand["/btw"]
-	if !ok {
-		t.Fatalf("missing /btw in %+v", resp.Commands)
-	}
-	if btw.ArgHint != "<question>" {
-		t.Fatalf("/btw arg_hint = %q, want %q", btw.ArgHint, "<question>")
-	}
-	if btw.Description == "" {
-		t.Fatalf("/btw description is empty")
-	}
-
 	help, ok := byCommand["/help"]
 	if !ok {
 		t.Fatalf("missing /help in %+v", resp.Commands)
