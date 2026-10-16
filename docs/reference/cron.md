@@ -44,6 +44,7 @@ The agent-facing `cron` tool supports these actions:
 - `list`: show accessible job names, ids, and schedules.
 - `get`: fetch one accessible persisted job by `job_id`, including its saved payload.
 - `update`: partially update one accessible job by `job_id`; omitted fields are preserved.
+- `run`: execute one accessible job right now by `job_id`, without waiting for its schedule.
 - `remove`, `enable`, `disable`: existing management actions.
 
 When rescheduling an existing task, use `list -> get -> update`. Do not use
@@ -52,9 +53,9 @@ the original prompt, delivery target, or command payload.
 
 Remote channel access is scoped to the current `channel/chat_id`: remote callers
 can only act on jobs whose saved `payload.channel` and `payload.to` match the
-current conversation. This applies to `list`, `get`, `update`, `remove`,
+current conversation. This applies to `list`, `get`, `update`, `run`, `remove`,
 `enable`, and `disable`. Command jobs include a shell command payload, so they
-can only be listed, inspected, or updated from internal channels or remote
+can only be listed, inspected, updated, or run from internal channels or remote
 channels allowed by `tools.cron.command_allowed_remotes`.
 
 Example tool calls:
@@ -73,6 +74,27 @@ Omit `command` to preserve it, set `command` to a non-empty string to replace
 it, or set `command` to `""` to clear it. Setting or replacing a command
 requires the same channel allowlist and confirmation gates as command
 creation; clearing it does not.
+
+### Running a job on demand
+
+The agent tool's `run` action starts a job immediately and returns without
+waiting for it to finish; output is delivered to the job's own channel, exactly
+like a scheduled run.
+
+- The schedule is not changed: an `every`/`cron` job keeps its next run time.
+  A one-time `at` job is consumed like after any run (deleted, or disabled when
+  `deleteAfterRun` is false).
+- Disabled jobs can be run; they stay disabled.
+- A job never runs concurrently with itself. If a manual `run` finds the job
+  already executing, it fails with `job is already running`. If the scheduler
+  finds the job due while a run is in flight, it skips that occurrence and
+  advances the schedule. Whichever side claims the job first wins. This also
+  means a recurring job whose run is slower than its interval no longer
+  overlaps itself: the occurrences that fall during the run are skipped.
+
+```json
+{"action":"run","job_id":"79095b2f5685a0f2"}
+```
 
 ## Execution Modes
 
@@ -176,6 +198,14 @@ $PICOCLAW_HOME/workspace
 ```
 
 Both the gateway and `picoclaw cron` CLI subcommands use the same `cron/jobs.json` file.
+
+The running gateway watches this file (a `stat` every 2 seconds, scaled up in low-power mode). Hand edits and `picoclaw cron add/remove/enable/disable` take effect without a restart:
+
+- the file replaces the in-memory job list; jobs whose schedule and enabled flag are unchanged keep their next run time, all others are rescheduled
+- an invalid JSON file is logged once and ignored; the gateway keeps its current jobs until the next valid edit
+- a deleted file is ignored; the gateway keeps its jobs and recreates the file on the next change
+- a job removed from the file while it is running finishes, but is not written back
+- one-time jobs already in the past are dropped or disabled, same as at startup
 
 Notes:
 

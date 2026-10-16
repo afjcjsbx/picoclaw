@@ -5,6 +5,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -438,6 +439,29 @@ func (al *AgentLoop) buildCommandsRuntime(
 				}
 			}
 			return nil
+		}
+
+		rt.CompactContext = func(focus string) (bool, error) {
+			if opts == nil {
+				return false, fmt.Errorf("process options not available")
+			}
+			// Same as /clear: the owning agent must be resolvable from the session.
+			ensureSessionMetadata(
+				agent.Sessions,
+				opts.Dispatch.SessionKey,
+				opts.Dispatch.SessionScope,
+				opts.Dispatch.SessionAliases,
+			)
+			err := al.contextManager.Compact(ctx, &CompactRequest{
+				SessionKey:   opts.SessionKey,
+				Reason:       ContextCompressReasonManual,
+				Budget:       agent.ContextWindow,
+				Instructions: focus,
+			})
+			if errors.Is(err, ErrNothingToCompact) {
+				return false, nil
+			}
+			return err == nil, err
 		}
 
 		rt.GetContextStats = func() *commands.ContextStats {

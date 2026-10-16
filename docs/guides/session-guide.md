@@ -131,6 +131,22 @@ You usually do not need a special workaround for Telegram forums.
 `summarize_message_threshold` and `summarize_token_percent` apply inside each session independently.
 If you create smaller sessions, summarization also happens on smaller per-session histories.
 
+### Compact a session on demand
+
+Summarization normally starts by itself, but you can trigger it from any chat channel with `/compact`:
+
+```text
+/compact
+/compact focus on database migration
+```
+
+`/compact` summarizes the older part of the current session right away and keeps the most recent messages.
+Any text after the command is passed to the summarizer as a hint about which details to preserve.
+The command works with both the `legacy` and `seahorse` context managers and only affects the session it is sent in.
+
+PicoClaw replies `Context compacted.` when it summarized something, or `Nothing to compact yet.` when the history is still too short.
+If an automatic summarization of the same session is already running, `/compact` reports that instead of starting a second one.
+
 ## Common Recipes
 
 ### One shared assistant per group or direct chat

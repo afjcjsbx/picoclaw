@@ -26,6 +26,7 @@ import (
 	"github.com/sipeed/picoclaw/cmd/picoclaw/internal/migrate"
 	"github.com/sipeed/picoclaw/cmd/picoclaw/internal/model"
 	"github.com/sipeed/picoclaw/cmd/picoclaw/internal/onboard"
+	"github.com/sipeed/picoclaw/cmd/picoclaw/internal/plugin"
 	"github.com/sipeed/picoclaw/cmd/picoclaw/internal/skills"
 	"github.com/sipeed/picoclaw/cmd/picoclaw/internal/status"
 	"github.com/sipeed/picoclaw/cmd/picoclaw/internal/version"
@@ -137,6 +138,7 @@ picoclaw --no-color status`,
 		status.NewStatusCommand(),
 		cron.NewCronCommand(),
 		mcp.NewMCPCommand(),
+		plugin.NewPluginCommand(),
 		migrate.NewMigrateCommand(),
 		skills.NewSkillsCommand(),
 		model.NewModelCommand(),

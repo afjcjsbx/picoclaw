@@ -8,6 +8,7 @@ Task-oriented guides for setup, configuration, and common PicoClaw workflows.
 - [Configuration Guide](configuration.md): environment variables, workspace layout, routing, and sandbox settings.
 - [Plugin Installation](plugins.md): install and activate Agent Plugin packages with skills and MCP servers.
 - [Skills Authoring Guide](skills-authoring.md): write `SKILL.md` skills from scratch, bundle resources, and share them.
+- [Writing a Plugin](writing-a-plugin.md): scaffold, validate, test, and share an Agent Plugin package.
 - [Session Guide](session-guide.md): how session scope affects memory sharing, summaries, and isolation.
 - [Routing Guide](routing-guide.md): agent dispatch, session overrides, and light-model routing.
 - [Chat Apps Configuration](chat-apps.md): supported chat platforms and channel-specific setup paths.

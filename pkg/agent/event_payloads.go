@@ -96,6 +96,8 @@ const (
 	ContextCompressReasonRetry ContextCompressReason = "llm_retry"
 	// ContextCompressReasonSummarize indicates post-turn async summarization.
 	ContextCompressReasonSummarize ContextCompressReason = "summarize"
+	// ContextCompressReasonManual indicates a user-requested /compact.
+	ContextCompressReasonManual ContextCompressReason = "manual"
 )
 
 // ContextCompressPayload describes a forced history compression.

@@ -102,3 +102,10 @@ func (p *HTTPProvider) SetProviderName(providerName string) {
 	}
 	p.delegate.SetProviderName(providerName)
 }
+
+func (p *HTTPProvider) SetSessionHeader(name, fallback string) {
+	if p == nil || p.delegate == nil {
+		return
+	}
+	p.delegate.SetSessionHeader(name, fallback)
+}

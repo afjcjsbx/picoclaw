@@ -38,10 +38,34 @@ const (
 // Provider implements Anthropic Messages API via HTTP (without SDK).
 // It supports custom endpoints that use Anthropic's native message format.
 type Provider struct {
-	apiKey     string
-	apiBase    string
-	httpClient *http.Client
-	userAgent  string
+	apiKey        string
+	apiBase       string
+	httpClient    *http.Client
+	userAgent     string
+	proxy         string
+	customHeaders map[string]string
+	session       common.SessionHeader
+}
+
+// Option customizes a Provider built with NewProviderWithOptions.
+type Option func(*Provider)
+
+// WithProxy routes requests through the given proxy URL.
+func WithProxy(proxy string) Option {
+	return func(p *Provider) { p.proxy = proxy }
+}
+
+// WithCustomHeaders adds static headers to every request.
+func WithCustomHeaders(headers map[string]string) Option {
+	return func(p *Provider) { p.customHeaders = headers }
+}
+
+// WithSessionHeader makes every request carry options["session_key"] (or
+// fallback when absent) in the named header; an explicit custom header wins.
+func WithSessionHeader(name, fallback string) Option {
+	return func(p *Provider) {
+		p.session = common.SessionHeader{Name: strings.TrimSpace(name), Fallback: fallback}
+	}
 }
 
 // NewProvider creates a new Anthropic Messages API provider.
@@ -51,20 +75,26 @@ func NewProvider(apiKey, apiBase, userAgent string) *Provider {
 
 // NewProviderWithTimeout creates a provider with custom request timeout.
 func NewProviderWithTimeout(apiKey, apiBase, userAgent string, timeoutSeconds int) *Provider {
-	baseURL := common.NormalizeBaseURL(apiBase, defaultBaseURL, true)
-	timeout := defaultRequestTimeout
-	if timeoutSeconds > 0 {
-		timeout = time.Duration(timeoutSeconds) * time.Second
-	}
+	return NewProviderWithOptions(apiKey, apiBase, userAgent, timeoutSeconds)
+}
 
-	return &Provider{
+// NewProviderWithOptions creates a provider with a custom request timeout plus
+// optional proxy, custom headers and session header.
+func NewProviderWithOptions(apiKey, apiBase, userAgent string, timeoutSeconds int, opts ...Option) *Provider {
+	p := &Provider{
 		apiKey:    apiKey,
-		apiBase:   baseURL,
+		apiBase:   common.NormalizeBaseURL(apiBase, defaultBaseURL, true),
 		userAgent: userAgent,
-		httpClient: &http.Client{
-			Timeout: timeout,
-		},
 	}
+	for _, opt := range opts {
+		opt(p)
+	}
+	p.httpClient = common.NewHTTPClient(p.proxy)
+	p.httpClient.Timeout = defaultRequestTimeout
+	if timeoutSeconds > 0 {
+		p.httpClient.Timeout = time.Duration(timeoutSeconds) * time.Second
+	}
+	return p
 }
 
 // Chat sends messages to the Anthropic Messages API and returns the response.
@@ -105,6 +135,12 @@ func (p *Provider) Chat(
 	if p.userAgent != "" {
 		req.Header.Set("User-Agent", p.userAgent)
 	}
+	for k, v := range p.customHeaders {
+		if strings.TrimSpace(k) != "" {
+			req.Header.Set(k, v)
+		}
+	}
+	p.session.Apply(req.Header, options)
 
 	// Execute request
 	resp, err := p.httpClient.Do(req)

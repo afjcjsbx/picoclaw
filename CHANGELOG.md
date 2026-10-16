@@ -10,9 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - BytePlus (`byteplus`) as an OpenAI-compatible provider, including `thinking_level: "off"` support.
+- Cron tool `run` action to execute a job on demand. A job never runs concurrently with itself: a manual run and a scheduler tick racing on the same job are serialized, and the loser is rejected (manual) or skipped (scheduled).
 
 ### Changed
 
+- Cron: a job no longer runs concurrently with itself. A scheduled occurrence that falls due while the previous run of the same job is still executing is skipped (the schedule still advances) instead of starting an overlapping run.
 - Removed unused channel settings fields (`discord.settings.mention_only`, `onebot.settings.group_trigger_prefix`, `pico.settings.write_timeout`); group triggering is configured through `group_trigger`.
 - Per-model `rpm` is now enforced for single-candidate calls, configured streaming and image-model candidates, not only inside the fallback chain. Existing configs that set `rpm` on a model without fallbacks will now be throttled; waits of one second or more are logged.
 - Documented that round-robin load balancing is applied when a model is resolved (agent startup or `/model` switch), not per request.
