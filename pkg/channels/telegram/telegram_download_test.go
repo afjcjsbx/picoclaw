@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mymmrac/telego"
 	ta "github.com/mymmrac/telego/telegoapi"
@@ -51,6 +53,14 @@ func TestIsTransientTelegramGetFileError(t *testing.T) {
 			want: true,
 		},
 		{name: "connection reset", err: errors.New("read tcp 1.2.3.4: connection reset by peer"), want: true},
+		{
+			// Go's net package reports DNS/dial timeouts as errors that also match
+			// context.DeadlineExceeded; they are exactly the transient failures we
+			// must retry, so DeadlineExceeded alone must not disable the retry.
+			name: "dns timeout matching deadline exceeded",
+			err:  fmt.Errorf("lookup api.telegram.org: i/o timeout: %w", context.DeadlineExceeded),
+			want: true,
+		},
 		{name: "nil", err: nil, want: false},
 		{name: "context canceled", err: context.Canceled, want: false},
 		{name: "permanent bad request", err: errors.New(`api: 400 "Bad Request: file not found"`), want: false},
@@ -106,6 +116,27 @@ func TestGetFileWithRetry_StopsOnContextCancellation(t *testing.T) {
 			calls++
 			cancel()
 			return nil, errors.New("lookup api.telegram.org: i/o timeout")
+		},
+	}
+	ch := newTestChannel(t, caller)
+
+	file := ch.getFileWithRetry(ctx, "f1")
+
+	require.Nil(t, file)
+	require.Equal(t, 1, calls)
+}
+
+// TestGetFileWithRetry_StopsOnParentDeadline ensures that an expired parent
+// context stops the retry loop even though the error itself looks transient.
+func TestGetFileWithRetry_StopsOnParentDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	calls := 0
+	caller := &stubCaller{
+		callFn: func(callCtx context.Context, _ string, _ *ta.RequestData) (*ta.Response, error) {
+			calls++
+			<-callCtx.Done()
+			return nil, fmt.Errorf("lookup api.telegram.org: i/o timeout: %w", context.DeadlineExceeded)
 		},
 	}
 	ch := newTestChannel(t, caller)
