@@ -155,9 +155,6 @@ const (
 // output token limit, a dedicated message is returned so the user knows to raise
 // max_tokens instead of seeing the generic provider-error hint.
 func emptyResponseFallback(ts *turnState) string {
-	if ts == nil {
-		return ""
-	}
 	// Internal turns (heartbeat, subturn) opt out of user-facing fallbacks by
 	// leaving DefaultResponse empty; preserve that behavior.
 	if ts.opts.DefaultResponse == "" {
