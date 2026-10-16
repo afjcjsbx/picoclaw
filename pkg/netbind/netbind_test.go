@@ -301,6 +301,21 @@ func TestOpenPlan_ExactHostBindErrorIsNotWrapped(t *testing.T) {
 	}
 }
 
+func TestDescribeBindFailure_UsesGivenPortAndDropsListenPrefix(t *testing.T) {
+	err := &net.OpError{
+		Op:  "listen",
+		Net: "tcp6",
+		Err: errors.New("cannot assign requested address"),
+	}
+
+	got := describeBindFailure(exactBinding{host: "::", network: "tcp6"}, "54321", err)
+
+	want := "tcp6 [::]:54321: cannot assign requested address"
+	if got != want {
+		t.Fatalf("describeBindFailure() = %q, want %q", got, want)
+	}
+}
+
 func TestOpenPlan_ErrorsWhenNoFamilyBinds(t *testing.T) {
 	hasIPv4, hasIPv6 := DetectIPFamilies()
 	if !hasIPv4 || !hasIPv6 {

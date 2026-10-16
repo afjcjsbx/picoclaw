@@ -523,20 +523,21 @@ func openGroup(group bindGroup, port string) ([]net.Listener, []string, string, 
 // (for example ::1 on a kernel with IPv6 disabled) is an expected fallback, not
 // a partial bind, so it is left out of the degraded entries.
 func openBindings(bindings []exactBinding, port string) ([]net.Listener, []string, string, []string, error) {
+	type bindFailure struct {
+		binding     exactBinding
+		err         error
+		unavailable bool
+	}
+
 	listeners := make([]net.Listener, 0, len(bindings))
 	hosts := make([]string, 0, len(bindings))
-	failures := make([]string, 0)
-	degraded := make([]string, 0)
+	failures := make([]bindFailure, 0)
 
 	selectedPort := port
 	for _, binding := range bindings {
 		ln, actualPort, err := openExactListener(binding, selectedPort)
 		if err != nil {
-			failure := fmt.Sprintf("%s %s: %v", binding.network, binding.host, err)
-			failures = append(failures, failure)
-			if !isFamilyUnavailable(err) {
-				degraded = append(degraded, failure)
-			}
+			failures = append(failures, bindFailure{binding, err, isFamilyUnavailable(err)})
 			continue
 		}
 		if selectedPort == "0" && actualPort != "" {
@@ -547,14 +548,37 @@ func openBindings(bindings []exactBinding, port string) ([]net.Listener, []strin
 	}
 
 	if len(listeners) == 0 {
+		reasons := make([]string, 0, len(failures))
+		for _, f := range failures {
+			reasons = append(reasons, describeBindFailure(f.binding, port, f.err))
+		}
 		return nil, nil, "", nil, fmt.Errorf(
 			"failed to open listener(s) on port %s: %s",
 			port,
-			strings.Join(failures, "; "),
+			strings.Join(reasons, "; "),
 		)
 	}
 
+	// Describe against the port that was actually bound, so a failure seen
+	// while the port was still "0" can be matched to the running service.
+	degraded := make([]string, 0, len(failures))
+	for _, f := range failures {
+		if !f.unavailable {
+			degraded = append(degraded, describeBindFailure(f.binding, selectedPort, f.err))
+		}
+	}
+
 	return listeners, hosts, selectedPort, degraded, nil
+}
+
+// describeBindFailure renders a failed bind as "<network> <host:port>: <cause>",
+// dropping the redundant "listen <network> <addr>:" prefix of *net.OpError.
+func describeBindFailure(binding exactBinding, port string, err error) string {
+	var opErr *net.OpError
+	if errors.As(err, &opErr) && opErr.Err != nil {
+		err = opErr.Err
+	}
+	return fmt.Sprintf("%s %s: %v", binding.network, net.JoinHostPort(binding.host, port), err)
 }
 
 func openAdaptiveLoopbackGroup(
