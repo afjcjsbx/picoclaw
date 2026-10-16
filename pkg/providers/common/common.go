@@ -39,6 +39,40 @@ type (
 
 const DefaultRequestTimeout = 120 * time.Second
 
+// SessionOptionKey is the LLM options key carrying the stable conversation
+// session key, for providers that tag requests with a per-conversation header.
+const SessionOptionKey = "session_key"
+
+// SessionHeader tags requests with the conversation session key, for gateways
+// that route or cache per conversation. The zero value is disabled.
+type SessionHeader struct {
+	Name     string // header to set; empty disables
+	Fallback string // used when options carry no session key (summaries, subagents, ...)
+}
+
+// Apply sets the header from options[SessionOptionKey], else Fallback. A value
+// already present (e.g. from custom_headers) is never overwritten. The value
+// is reduced to visible ASCII because net/http rejects the whole request on an
+// invalid header value.
+func (s SessionHeader) Apply(h http.Header, options map[string]any) {
+	if s.Name == "" || h.Get(s.Name) != "" {
+		return
+	}
+	key, _ := options[SessionOptionKey].(string)
+	if strings.TrimSpace(key) == "" {
+		key = s.Fallback
+	}
+	key = strings.Map(func(r rune) rune {
+		if r < 0x20 || r > 0x7e {
+			return '_'
+		}
+		return r
+	}, strings.TrimSpace(key))
+	if key != "" {
+		h.Set(s.Name, key)
+	}
+}
+
 // NewHTTPClient creates an *http.Client with an optional proxy and the default timeout.
 func NewHTTPClient(proxy string) *http.Client {
 	client := &http.Client{
