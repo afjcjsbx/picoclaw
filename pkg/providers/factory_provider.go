@@ -235,6 +235,13 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 		provider.SetProviderName(protocol)
 		return finalizeProviderFromConfig(provider, modelID, cfg)
 
+	case "opencode-go":
+		provider, err := newOpenCodeGoProvider(cfg, modelID, userAgent)
+		if err != nil {
+			return nil, "", err
+		}
+		return finalizeProviderFromConfig(provider, modelID, cfg)
+
 	case "gemini":
 		if cfg.APIKey() == "" && cfg.APIBase == "" {
 			return nil, "", fmt.Errorf("api_key or api_base is required for gemini protocol (model: %s)", cfg.Model)

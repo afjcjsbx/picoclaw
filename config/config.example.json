@@ -64,6 +64,12 @@
   },
   "model_list": [
     {
+      "_comment": "OpenCode Go - one key for all models; PicoClaw picks the right endpoint per model (api_base optional, defaults to https://opencode.ai/inference/go)",
+      "model_name": "go-kimi",
+      "model": "opencode-go/kimi-k3",
+      "api_keys": ["your-opencode-go-api-key"]
+    },
+    {
       "model_name": "gpt-5.4",
       "model": "openai/gpt-5.4",
       "api_keys": ["sk-your-openai-key"],
