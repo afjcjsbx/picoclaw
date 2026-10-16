@@ -156,6 +156,12 @@ func Run(debug bool, homePath, configPath string, allowEmptyStartup bool) (runEr
 	if err != nil {
 		return fmt.Errorf("error opening gateway listeners: %w", err)
 	}
+	for _, degraded := range listenResult.Degraded {
+		logger.Warnf(
+			"Gateway is listening on fewer interfaces than requested; some clients may be unable to connect: %s",
+			degraded,
+		)
+	}
 
 	// Enforce singleton: write PID file with generated token.
 	pidData, err := pid.WritePidFile(homePath, bindPlan.ProbeHost, cfg.Gateway.Port)
