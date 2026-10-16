@@ -1250,7 +1250,8 @@ func telegramMediaDownloadFailureText(kinds []string) string {
 		noun = "attachments"
 	}
 	return fmt.Sprintf(
-		"⚠️ I couldn't download the %s (%s). Please try sending it again.",
+		"⚠️ I couldn't download the %s (%s). It may be a temporary network issue, or the file may exceed "+
+			"the 20 MB limit Telegram enforces for bot downloads. Please try again or send a smaller file.",
 		noun,
 		strings.Join(unique, ", "),
 	)

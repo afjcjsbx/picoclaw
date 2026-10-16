@@ -241,3 +241,12 @@ func TestHandleMessage_GroupDownloadFailureRespectsGroupTrigger(t *testing.T) {
 		})
 	}
 }
+
+func TestTelegramMediaDownloadFailureText(t *testing.T) {
+	single := telegramMediaDownloadFailureText([]string{"audio", "audio"})
+	assert.Contains(t, single, "the attachment (audio)")
+	assert.Contains(t, single, "20 MB", "must not suggest a plain retry fixes an oversized file")
+
+	multi := telegramMediaDownloadFailureText([]string{"voice", "photo", "voice"})
+	assert.Contains(t, multi, "the attachments (voice, photo)")
+}
