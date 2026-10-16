@@ -531,7 +531,7 @@ picoclaw skills install <skill-name>
 }
 ```
 
-자세한 내용은 [도구 설정 - 스킬](../reference/tools_configuration.md#skills-tool)를 참고하세요.
+자세한 내용은 [도구 설정 - 스킬](../tools/skills.md)를 참고하세요.
 
 ## 🔗 MCP (Model Context Protocol)
 
@@ -561,7 +561,7 @@ PicoClaw는 가벼운 어시스턴트이므로 원격 MCP 서버를 사용하는
 }
 ```
 
-MCP 전체 설정(stdio, SSE, HTTP 전송 방식, 도구 탐색)은 [도구 설정 - MCP](../reference/tools_configuration.md#mcp-tool)를 참고하세요.
+MCP 전체 설정(stdio, SSE, HTTP 전송 방식, 도구 탐색)은 [도구 설정 - MCP](../tools/mcp.md)를 참고하세요.
 
 ## <img src="../../assets/clawdchat-icon.png" width="24" height="24" alt="ClawdChat"> 에이전트 소셜 네트워크 참여하기
 

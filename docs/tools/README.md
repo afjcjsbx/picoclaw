@@ -7,16 +7,16 @@ PicoClaw registers its tools dynamically at runtime. Each one can be enabled or 
 | Family | Tools | Documentation |
 |--------|-------|---------------|
 | Filesystem | `read_file`, `write_file`, `edit_file`, `append_file`, `list_dir`, `search_files` | [Filesystem tools](filesystem.md) |
-| Web | `web_search`, `web_fetch` | [Web tools](../reference/tools_configuration.md#web-tools) |
-| Command execution | `exec` | [Exec tool](../reference/tools_configuration.md#exec-tool) |
-| Scheduling | `cron` | [Cron tool](../reference/tools_configuration.md#cron-tool), [Scheduled tasks and cron jobs](../reference/cron.md) |
+| Web | `web_search`, `web_fetch` | [Web tools](web.md) |
+| Command execution | `exec` | [Exec tool](exec.md) |
+| Scheduling | `cron` | [Cron tool](cron.md), [Scheduled tasks and cron jobs](../reference/cron.md) |
 | Messaging | `message`, `reaction` | [Messaging tools](messaging.md) |
 | Media | `load_image`, `send_file`, `send_tts`, `image_generate` | [Media tools](media.md), [Image generation](image-generation.md) |
 | Subagents | `spawn`, `subagent`, `spawn_status`, `delegate` | [Subagent tools](subagents.md) |
-| Skills registry | `find_skills`, `install_skill` | [Skills tool](../reference/tools_configuration.md#skills-tool) |
-| MCP | `mcp_<server>_<tool>`, `tool_search_tool_bm25`, `tool_search_tool_regex` | [MCP tool](../reference/tools_configuration.md#mcp-tool) |
+| Skills registry | `find_skills`, `install_skill` | [Skills tools](skills.md) |
+| MCP | `mcp_<server>_<tool>`, `tool_search_tool_bm25`, `tool_search_tool_regex` | [MCP tools](mcp.md) |
 | Hardware | `i2c`, `spi`, `serial` | [Hardware tools](hardware.md) |
-| Planning | `todo` | [Todo planning tool](../reference/tools_configuration.md#todo-planning-tool) |
+| Planning | `todo` | [Todo planning tool](todo.md) |
 
 ## Global settings
 

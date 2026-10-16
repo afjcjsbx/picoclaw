@@ -69,7 +69,7 @@ Run it with Docker, or enable **launch at login** in the launcher config page (m
 Cron jobs are scheduled tasks that deliver messages to a channel ([Scheduled Tasks and Cron Jobs](../reference/cron.md)). The heartbeat periodically checks `workspace/HEARTBEAT.md` inside your workspace and only messages you when something needs attention ([Spawn & Async Tasks](spawn-tasks.md)).
 
 **What is the difference between skills, plugins, and MCP?**
-Skills are `SKILL.md` folders with instructions and resources ([authoring guide](skills-authoring.md)). Agent Plugins are installable packages that can bundle skills plus MCP servers ([Plugin Installation](plugins.md)). MCP connects external tool servers ([Tools Configuration](../reference/tools_configuration.md)).
+Skills are `SKILL.md` folders with instructions and resources ([authoring guide](skills-authoring.md)). Agent Plugins are installable packages that can bundle skills plus MCP servers ([Plugin Installation](plugins.md)). MCP connects external tool servers ([MCP tools](../tools/mcp.md)).
 
 **Where are sessions and memory stored?**
 Session history is stored per session as JSONL files in the workspace, with summaries and scoping rules described in the [Session Guide](session-guide.md) and [Session System](../architecture/session-system.md).

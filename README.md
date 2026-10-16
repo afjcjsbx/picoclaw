@@ -492,7 +492,7 @@ PicoClaw can search the web to provide up-to-date information. Configure in `too
 
 ### ⚙️ Other Tools
 
-PicoClaw includes built-in tools for file operations, code execution, scheduling, and more. See [Tools Configuration](docs/reference/tools_configuration.md) for details.
+PicoClaw includes built-in tools for file operations, code execution, scheduling, and more. See [Tools](docs/tools/README.md) for details.
 
 ## 🎯 Skills
 
@@ -536,7 +536,7 @@ Add to your `config.json`:
 
 `tools.skills.github.*` is deprecated. Use `tools.skills.registries.github.*` instead.
 
-For more details, see [Tools Configuration - Skills](docs/reference/tools_configuration.md#skills-tool).
+For more details, see [Skills tools](docs/tools/skills.md).
 
 ## 🔗 MCP (Model Context Protocol)
 
@@ -578,7 +578,7 @@ picoclaw mcp test browserbase
 Use `picoclaw mcp edit` when you need advanced fields that are not covered by `picoclaw mcp add`.
 For example, `picoclaw mcp add` supports `--deferred` and `--env-file`, while `picoclaw mcp edit` is still useful for direct JSON editing and uncommon MCP settings.
 
-For full MCP configuration (stdio, SSE, HTTP transports, Tool Discovery), see [Tools Configuration - MCP](docs/reference/tools_configuration.md#mcp-tool). For CLI usage and examples, see [MCP Server CLI](docs/reference/mcp-cli.md).
+For full MCP configuration (stdio, SSE, HTTP transports, Tool Discovery), see [MCP tools](docs/tools/mcp.md). For CLI usage and examples, see [MCP Server CLI](docs/reference/mcp-cli.md).
 
 ## <img src="assets/clawdchat-icon.png" width="24" height="24" alt="ClawdChat"> Join the Agent Social Network
 
@@ -640,7 +640,7 @@ For detailed guides beyond this README:
 | [Steering](docs/architecture/steering.md) | Inject messages into a running agent loop between tool calls |
 | [SubTurn](docs/architecture/subturn.md) | Subagent coordination, concurrency control, lifecycle |
 | [Troubleshooting](docs/operations/troubleshooting.md) | Common issues and solutions |
-| [Tools Configuration](docs/reference/tools_configuration.md) | Per-tool enable/disable, exec policies, MCP, Skills |
+| [Tools Configuration](docs/reference/tools_configuration.md) | Tool switches, exec policies, path policies, MCP, Skills |
 | [Hardware Compatibility](docs/guides/hardware-compatibility.md) | Tested boards, minimum requirements |
 
 ## 🤝 Contribute & Roadmap

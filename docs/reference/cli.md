@@ -159,7 +159,7 @@ picoclaw auth weixin --timeout 300
 
 ## Skills
 
-Manages installed skills, builtin skills, and registry installs. See the [Skills Authoring Guide](../guides/skills-authoring.md) for the `SKILL.md` format and [Tools Configuration](tools_configuration.md#skills-tool) for registry settings.
+Manages installed skills, builtin skills, and registry installs. See the [Skills Authoring Guide](../guides/skills-authoring.md) for the `SKILL.md` format and [Skills tools](../tools/skills.md) for registry settings.
 
 | Subcommand | Purpose |
 | --- | --- |

@@ -22,7 +22,7 @@ This is the documentation home. For the project overview, feature comparison, re
 | [Security](security/README.md) | Hardening, credentials, sensitive data, provider auth |
 | [Architecture](architecture/README.md) | Runtime internals: sessions, routing, events, hooks, steering, sub-turns |
 | [Channels](guides/chat-apps.md) | Per-platform chat setup guides (`channels/<name>/README.md`) |
-| [Tools](tools/README.md) | Tool-specific deep dives such as image generation |
+| [Tools](tools/README.md) | Documentation for every tool family, with switches and parameters |
 | [Design Notes](design/README.md) | Proposals and investigations |
 | [Migration](migration/README.md) | Breaking changes and upgrade notes |
 | [Project Translations](https://github.com/afjcjsbx/picoclaw/tree/main/docs/project) | Translated versions of the repository README and contributing guide |

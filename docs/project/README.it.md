@@ -530,7 +530,7 @@ Aggiungi al tuo `config.json`:
 }
 ```
 
-Per maggiori dettagli, vedi [Configurazione degli Strumenti - Skill](../reference/tools_configuration.md#skills-tool).
+Per maggiori dettagli, vedi [Configurazione degli Strumenti - Skill](../tools/skills.md).
 
 ## 🔗 MCP (Model Context Protocol)
 
@@ -572,7 +572,7 @@ picoclaw mcp test browserbase
 Usa `picoclaw mcp edit` quando ti servono campi avanzati che non sono coperti da `picoclaw mcp add`.
 Per esempio, `picoclaw mcp add` supporta `--deferred` e `--env-file`, mentre `picoclaw mcp edit` resta utile per modifiche JSON dirette e opzioni MCP meno comuni.
 
-Per la configurazione MCP completa (trasporti stdio, SSE, HTTP, Tool Discovery), vedi [Configurazione degli Strumenti - MCP](../reference/tools_configuration.md#mcp-tool). Per la reference della CLI, vedi [MCP Server CLI](../reference/mcp-cli.md).
+Per la configurazione MCP completa (trasporti stdio, SSE, HTTP, Tool Discovery), vedi [Configurazione degli Strumenti - MCP](../tools/mcp.md). Per la reference della CLI, vedi [MCP Server CLI](../reference/mcp-cli.md).
 
 ## <img src="../../assets/clawdchat-icon.png" width="24" height="24" alt="ClawdChat"> Unisciti al Social Network degli Agent
 

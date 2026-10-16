@@ -2,7 +2,7 @@
 
 Skills are modular capabilities you add to your agent by dropping a `SKILL.md` folder into a skills directory. This guide covers writing a skill from scratch. To install existing skills or Agent Plugin packages, see [Plugin Installation](plugins.md) and the [`picoclaw skills` commands](../reference/cli.md#skills).
 
-A plain skill is just a folder the agent reads with `read_file`. If you need packaged MCP servers, scripts, or shareable bundles, consider [Agent Plugins](plugins.md) instead. MCP servers are a separate mechanism for external tools — see [Tools Configuration](../reference/tools_configuration.md).
+A plain skill is just a folder the agent reads with `read_file`. If you need packaged MCP servers, scripts, or shareable bundles, consider [Agent Plugins](plugins.md) instead. MCP servers are a separate mechanism for external tools — see [MCP tools](../tools/mcp.md).
 
 ## Where Skills Live
 
@@ -99,5 +99,5 @@ Two ready-to-read examples ship in the repository:
 ## Sharing Skills
 
 - **GitHub**: publish the skill folder in a repository and install it with `picoclaw skills install <owner>/<repo>/<path-to-skill>`.
-- **Registries**: configure `tools.skills.registries` in `config.json` (the default `clawhub` and `github` registries are documented in [Tools Configuration](../reference/tools_configuration.md#skills-tool)) and install with `picoclaw skills install --registry <name> <slug>`.
+- **Registries**: configure `tools.skills.registries` in `config.json` (the default `clawhub` and `github` registries are documented in [Skills tools](../tools/skills.md)) and install with `picoclaw skills install --registry <name> <slug>`.
 - **Plugins**: to ship skills together with MCP servers as one package, follow the [Plugin Installation](plugins.md) guide and the [demo plugin](https://github.com/afjcjsbx/picoclaw/tree/main/examples/plugins/demo-plugin) layout.
