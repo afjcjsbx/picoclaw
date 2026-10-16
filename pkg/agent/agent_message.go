@@ -126,9 +126,11 @@ func (al *AgentLoop) prepareInboundMessageForAgent(
 	msg, hadAudio := al.transcribeAudioInMessage(ctx, msg)
 
 	// For audio messages the channel deferred the placeholder until after
-	// transcription. Send it now, also when transcription could not run (for
-	// example no ASR configured and no audio media match), so an audio message
-	// always produces visible feedback instead of appearing silently lost.
+	// transcription (it skips it when the content matches audioAnnotationRe, see
+	// channels.BaseChannel.HandleMessageWithContext). Send it now whenever that
+	// same annotation was present, also when transcription could not run or
+	// failed, so an audio message always produces visible feedback instead of
+	// appearing silently lost.
 	if (hadAudio || hasAudioAnnotation) && al.channelManager != nil {
 		al.channelManager.SendPlaceholder(ctx, msg.Channel, msg.ChatID)
 	}
