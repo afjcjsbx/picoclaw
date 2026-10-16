@@ -62,6 +62,21 @@ func TestIsTransientTelegramGetFileError(t *testing.T) {
 			err:  fmt.Errorf("lookup api.telegram.org: i/o timeout: %w", context.DeadlineExceeded),
 			want: true,
 		},
+		{
+			name: "telegram api 5xx",
+			err:  &ta.Error{ErrorCode: http.StatusInternalServerError, Description: "Internal Server Error"},
+			want: true,
+		},
+		{
+			name: "telegram api 5xx wrapped",
+			err:  fmt.Errorf("telego: getFile: %w", &ta.Error{ErrorCode: http.StatusBadGateway}),
+			want: true,
+		},
+		{
+			name: "telegram api 4xx even if the description mentions a timeout",
+			err:  &ta.Error{ErrorCode: http.StatusBadRequest, Description: "Bad Request: timeout"},
+			want: false,
+		},
 		{name: "nil", err: nil, want: false},
 		{name: "context canceled", err: context.Canceled, want: false},
 		{name: "permanent bad request", err: errors.New(`api: 400 "Bad Request: file not found"`), want: false},
@@ -158,7 +173,7 @@ func TestDownloadFile_RetriesTransientGetFileFailure(t *testing.T) {
 			getFileCalls++
 			w.Header().Set("Content-Type", "application/json")
 			if getFileCalls == 1 {
-				_, _ = w.Write([]byte(`{"ok":false,"error_code":500,"description":"timeout contacting file server"}`))
+				_, _ = w.Write([]byte(`{"ok":false,"error_code":500,"description":"Internal Server Error"}`))
 				return
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{

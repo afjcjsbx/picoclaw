@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/mymmrac/telego"
+	ta "github.com/mymmrac/telego/telegoapi"
 	th "github.com/mymmrac/telego/telegohandler"
 	tu "github.com/mymmrac/telego/telegoutil"
 
@@ -1505,10 +1506,17 @@ const (
 )
 
 // isTransientTelegramGetFileError reports whether a getFile error is worth
-// retrying. Context cancellation is never retried.
+// retrying. Context cancellation is never retried. Structured Telegram API
+// errors are classified by status code (5xx is transient, everything else is
+// not); other errors fall back to matching known network failure messages.
 func isTransientTelegramGetFileError(err error) bool {
 	if err == nil || errors.Is(err, context.Canceled) {
 		return false
+	}
+
+	var apiErr *ta.Error
+	if errors.As(err, &apiErr) {
+		return apiErr.ErrorCode >= http.StatusInternalServerError
 	}
 
 	msg := strings.ToLower(err.Error())
