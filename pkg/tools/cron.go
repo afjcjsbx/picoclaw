@@ -89,16 +89,14 @@ Use 'command' to execute shell commands directly.`
 }
 
 // Parameters returns the tool parameters schema
-//
-//nolint:dupl // Tool parameter schemas intentionally use similar JSON-schema map literals.
 func (t *CronTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"action": map[string]any{
 				"type":        "string",
-				"enum":        []string{"add", "list", "get", "update", "remove", "enable", "disable"},
-				"description": "Action to perform. Use 'get' before editing and 'update' to change existing jobs without losing their payload. Remote channels can only list/get/update jobs for the current channel/chat_id.",
+				"enum":        []string{"add", "list", "get", "update", "remove", "enable", "disable", "run"},
+				"description": "Action to perform. Use 'get' before editing and 'update' to change existing jobs without losing their payload. Use 'run' to execute an existing job right now, on demand, without changing its schedule. Remote channels can only list/get/update/run jobs for the current channel/chat_id.",
 			},
 			"name": map[string]any{
 				"type":        "string",
@@ -130,7 +128,7 @@ func (t *CronTool) Parameters() map[string]any {
 			},
 			"job_id": map[string]any{
 				"type":        "string",
-				"description": "Job ID (for get/update/remove/enable/disable)",
+				"description": "Job ID (for get/update/remove/enable/disable/run)",
 			},
 		},
 		"required": []string{"action"},
@@ -159,6 +157,8 @@ func (t *CronTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 		return t.enableJob(ctx, args, true)
 	case "disable":
 		return t.enableJob(ctx, args, false)
+	case "run":
+		return t.runJob(ctx, args)
 	default:
 		return ErrorResult(fmt.Sprintf("unknown action: %s", action))
 	}
@@ -590,6 +590,31 @@ func (t *CronTool) enableJob(ctx context.Context, args map[string]any, enable bo
 		status = "disabled"
 	}
 	return SilentResult(fmt.Sprintf("Cron job '%s' %s", updatedJob.Name, status))
+}
+
+// runJob triggers a job on demand. Execution is asynchronous (same path as the
+// scheduler, detached from the tool call context) and its output goes to the
+// job's own channel. The service guarantees it cannot overlap a scheduled run.
+func (t *CronTool) runJob(ctx context.Context, args map[string]any) *ToolResult {
+	jobID, errResult := requiredCronJobID(args, "run")
+	if errResult != nil {
+		return errResult
+	}
+
+	job, ok := t.cronService.GetJob(jobID)
+	if !ok {
+		return ErrorResult(fmt.Sprintf("Job %s not found", jobID))
+	}
+	if !t.canAccessJob(ctx, job) {
+		return ErrorResult(fmt.Sprintf("Job %s is not accessible from this channel", jobID))
+	}
+
+	if err := t.cronService.RunJob(jobID); err != nil {
+		return ErrorResult(fmt.Sprintf("Error running job %s: %v", jobID, err))
+	}
+	return SilentResult(
+		fmt.Sprintf("Cron job '%s' triggered; its output will be delivered to the job's channel", job.Name),
+	)
 }
 
 // ExecuteJob executes a cron job through the agent

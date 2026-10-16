@@ -299,7 +299,7 @@ func TestCompactCondensedDoesNotOrphanSummaryWhenCandidatesRemovedConcurrently(t
 	}
 	resultCh := make(chan compactResult, 1)
 	go func() {
-		sid, err := ce.compactCondensed(context.Background(), convID)
+		sid, err := ce.compactCondensed(context.Background(), convID, "")
 		resultCh <- compactResult{summaryID: sid, err: err}
 	}()
 
@@ -463,7 +463,7 @@ func TestCompactCondensedUsesSelectOldestChunk(t *testing.T) {
 	s.AppendContextMessage(ctx, convID, msg.ID)
 
 	// Run compactCondensed
-	result, err := ce.compactCondensed(ctx, convID)
+	result, err := ce.compactCondensed(ctx, convID, "")
 	if err != nil {
 		t.Fatalf("compactCondensed: %v", err)
 	}
@@ -638,7 +638,7 @@ func TestGenerateLeafSummary(t *testing.T) {
 		{Role: "assistant", Content: "hi there", TokenCount: 5},
 	}
 
-	content, err := ce.generateLeafSummary(ctx, msgs, "")
+	content, err := ce.generateLeafSummary(ctx, msgs, "", "")
 	if err != nil {
 		t.Fatalf("generateLeafSummary: %v", err)
 	}
@@ -672,7 +672,7 @@ func TestGenerateLeafSummaryEscalationToAggressive(t *testing.T) {
 		{Role: "assistant", Content: "response", TokenCount: 10},
 	}
 
-	content, err := ce.generateLeafSummary(context.Background(), msgs, "")
+	content, err := ce.generateLeafSummary(context.Background(), msgs, "", "")
 	if err != nil {
 		t.Fatalf("generateLeafSummary: %v", err)
 	}
@@ -719,7 +719,7 @@ func TestGenerateLeafSummaryEscalatesWhenLevel1MissesTarget(t *testing.T) {
 		{Role: "assistant", Content: "response", TokenCount: 500},
 	}
 
-	content, err := ce.generateLeafSummary(context.Background(), msgs, "")
+	content, err := ce.generateLeafSummary(context.Background(), msgs, "", "")
 	if err != nil {
 		t.Fatalf("generateLeafSummary: %v", err)
 	}
@@ -749,7 +749,7 @@ func TestGenerateLeafSummaryAcceptsContentAtTargetBoundary(t *testing.T) {
 		{Role: "assistant", Content: "response", TokenCount: 286},
 	}
 
-	content, err := ce.generateLeafSummary(context.Background(), msgs, "")
+	content, err := ce.generateLeafSummary(context.Background(), msgs, "", "")
 	if err != nil {
 		t.Fatalf("generateLeafSummary: %v", err)
 	}
@@ -775,7 +775,7 @@ func TestGenerateLeafSummaryEscalationToTruncation(t *testing.T) {
 		{Role: "assistant", Content: "response text here", TokenCount: 10},
 	}
 
-	content, err := ce.generateLeafSummary(context.Background(), msgs, "")
+	content, err := ce.generateLeafSummary(context.Background(), msgs, "", "")
 	if err != nil {
 		t.Fatalf("generateLeafSummary: %v", err)
 	}
@@ -797,7 +797,7 @@ func TestGenerateCondensedSummary(t *testing.T) {
 		{SummaryID: "sum_b", Content: "second summary", TokenCount: 100},
 	}
 
-	content, err := ce.generateCondensedSummary(ctx, summaries)
+	content, err := ce.generateCondensedSummary(ctx, summaries, "")
 	if err != nil {
 		t.Fatalf("generateCondensedSummary: %v", err)
 	}
@@ -820,7 +820,7 @@ func TestGenerateCondensedSummaryEscalation(t *testing.T) {
 		{SummaryID: "sum_b", Content: "second summary text", TokenCount: 50},
 	}
 
-	content, err := ce.generateCondensedSummary(context.Background(), summaries)
+	content, err := ce.generateCondensedSummary(context.Background(), summaries, "")
 	if err != nil {
 		t.Fatalf("generateCondensedSummary: %v", err)
 	}
@@ -974,7 +974,7 @@ func TestCompactLeafForceBypassesFreshTail(t *testing.T) {
 	}
 
 	// Without force: should return nil (all in fresh tail)
-	summaryID, err := ce.compactLeaf(ctx, convID)
+	summaryID, err := ce.compactLeaf(ctx, convID, "")
 	if err != nil {
 		t.Fatalf("compactLeaf no-force: %v", err)
 	}
@@ -983,7 +983,7 @@ func TestCompactLeafForceBypassesFreshTail(t *testing.T) {
 	}
 
 	// With force: should compact despite fresh tail protection
-	summaryID, err = ce.compactLeaf(ctx, convID, true)
+	summaryID, err = ce.compactLeaf(ctx, convID, "", true)
 	if err != nil {
 		t.Fatalf("compactLeaf force: %v", err)
 	}
@@ -1014,7 +1014,7 @@ func TestCompactLeafAccumulatesUpToLeafChunkTokens(t *testing.T) {
 		s.AppendContextMessage(ctx, convID, m.ID)
 	}
 
-	summaryID, err := ce.compactLeaf(ctx, convID)
+	summaryID, err := ce.compactLeaf(ctx, convID, "")
 	if err != nil {
 		t.Fatalf("compactLeaf: %v", err)
 	}
@@ -1034,5 +1034,79 @@ func TestCompactLeafAccumulatesUpToLeafChunkTokens(t *testing.T) {
 	if summary.SourceMessageTokenCount > LeafChunkTokens {
 		t.Errorf("source tokens = %d, should be <= LeafChunkTokens (%d)",
 			summary.SourceMessageTokenCount, LeafChunkTokens)
+	}
+}
+
+func TestCompactNow_FocusReachesSummaryPrompt(t *testing.T) {
+	var (
+		mu      sync.Mutex
+		prompts []string
+	)
+	record := func(_ context.Context, prompt string, _ CompleteOptions) (string, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		prompts = append(prompts, prompt)
+		return "short summary", nil
+	}
+	ce, s, convID := newTestCompactionEngine(t)
+	ce.complete = record
+	ctx := context.Background()
+
+	// Enough messages outside the fresh tail for one leaf pass.
+	for i := 0; i < FreshTailCount+LeafMinFanout+2; i++ {
+		m, _ := s.AddMessage(ctx, convID, "user", fmt.Sprintf("message %d", i), 100)
+		s.AppendContextMessage(ctx, convID, m.ID)
+	}
+
+	res, err := ce.CompactNow(ctx, convID, "database migration")
+	if err != nil {
+		t.Fatalf("CompactNow: %v", err)
+	}
+	if res.LeafSummaries != 1 {
+		t.Fatalf("LeafSummaries = %d, want 1", res.LeafSummaries)
+	}
+	if len(prompts) == 0 {
+		t.Fatal("expected the summarizer to be called")
+	}
+	for _, p := range prompts {
+		if !strings.Contains(p, "<focus>\ndatabase migration\n</focus>") {
+			t.Fatalf("prompt missing focus block:\n%s", p)
+		}
+	}
+}
+
+func TestCompactNow_NoFocusLeavesPromptUntouched(t *testing.T) {
+	var prompt string
+	ce, s, convID := newTestCompactionEngine(t)
+	ce.complete = func(_ context.Context, p string, _ CompleteOptions) (string, error) {
+		prompt = p
+		return "short summary", nil
+	}
+	ctx := context.Background()
+	for i := 0; i < FreshTailCount+LeafMinFanout+2; i++ {
+		m, _ := s.AddMessage(ctx, convID, "user", fmt.Sprintf("message %d", i), 100)
+		s.AppendContextMessage(ctx, convID, m.ID)
+	}
+
+	if _, err := ce.CompactNow(ctx, convID, ""); err != nil {
+		t.Fatalf("CompactNow: %v", err)
+	}
+	if prompt == "" || strings.Contains(prompt, "<focus>") {
+		t.Fatalf("expected a prompt without focus block, got:\n%s", prompt)
+	}
+}
+
+func TestCompactNow_NothingToCompact(t *testing.T) {
+	ce, s, convID := newTestCompactionEngine(t)
+	ctx := context.Background()
+	m, _ := s.AddMessage(ctx, convID, "user", "hi", 5)
+	s.AppendContextMessage(ctx, convID, m.ID)
+
+	res, err := ce.CompactNow(ctx, convID, "anything")
+	if err != nil {
+		t.Fatalf("CompactNow: %v", err)
+	}
+	if res.LeafSummaries+res.CondensedSummaries != 0 {
+		t.Fatalf("expected no summaries, got %+v", res)
 	}
 }

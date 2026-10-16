@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -56,6 +57,9 @@ type CronStore struct {
 
 type JobHandler func(job *CronJob) (string, error)
 
+// ErrJobRunning is returned by RunJob when the job is already executing.
+var ErrJobRunning = errors.New("job is already running")
+
 type CronService struct {
 	storePath string
 	store     *CronStore
@@ -65,13 +69,16 @@ type CronService struct {
 	stopChan  chan struct{}
 	wakeChan  chan struct{}
 	gronx     *gronx.Gronx
-
 	// reloadEvery is the polling interval used to detect external edits of the
 	// store file (hand edits, CLI). Zero disables hot-reload.
 	reloadEvery time.Duration
 	// storeStat is the state of the store file as last read or written by this
 	// service; any difference means someone else changed it.
 	storeStat os.FileInfo
+	// inFlight holds the IDs of jobs whose handler is executing, guarded by mu.
+	// A job is claimed under mu before its goroutine starts and released when
+	// executeJobByID returns, so a job never runs concurrently with itself.
+	inFlight map[string]struct{}
 }
 
 func NewCronService(storePath string, onJob JobHandler) *CronService {
@@ -80,6 +87,7 @@ func NewCronService(storePath string, onJob JobHandler) *CronService {
 		onJob:     onJob,
 		gronx:     gronx.New(),
 		wakeChan:  make(chan struct{}, 1),
+		inFlight:  make(map[string]struct{}),
 	}
 	// Initialize and load store on creation
 	cs.loadStore()
@@ -211,6 +219,13 @@ func (cs *CronService) checkJobs() {
 	for i := range cs.store.Jobs {
 		job := &cs.store.Jobs[i]
 		if job.Enabled && job.State.NextRunAtMS != nil && *job.State.NextRunAtMS <= now {
+			// Claim under the same lock RunJob uses: whoever claims first runs the
+			// job, the other side backs off. The skipped occurrence is covered by
+			// the run already in flight and the schedule is advanced below.
+			if !cs.claimJobUnsafe(job.ID) {
+				log.Printf("[cron] job '%s' (id: %s) is still running, skipping scheduled run", job.Name, job.ID)
+				continue
+			}
 			dueJobIDs = append(dueJobIDs, job.ID)
 		}
 	}
@@ -235,18 +250,70 @@ func (cs *CronService) checkJobs() {
 	// Execute jobs outside the lock, each in its own goroutine so a slow
 	// handler does not block the scheduler loop or other due jobs.
 	for _, jobID := range dueJobIDs {
-		go func(id string) {
-			defer func() {
-				if r := recover(); r != nil {
-					log.Printf("[cron] recovered panic while executing job %s: %v", id, r)
-				}
-			}()
-			cs.executeJobByID(id)
-		}(jobID)
+		go cs.executeClaimedJob(jobID)
 	}
 }
 
+// claimJobUnsafe marks jobID as executing and reports false if it already is.
+// The caller must hold cs.mu and must follow a successful claim with
+// executeJobByID, which releases it.
+func (cs *CronService) claimJobUnsafe(jobID string) bool {
+	if _, busy := cs.inFlight[jobID]; busy {
+		return false
+	}
+	cs.inFlight[jobID] = struct{}{}
+	return true
+}
+
+func (cs *CronService) releaseJob(jobID string) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	delete(cs.inFlight, jobID)
+}
+
+// executeClaimedJob runs a job already claimed via claimJobUnsafe, containing
+// any panic so it cannot take down the process.
+func (cs *CronService) executeClaimedJob(jobID string) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[cron] recovered panic while executing job %s: %v", jobID, r)
+		}
+	}()
+	cs.executeJobByID(jobID)
+}
+
+// RunJob starts a job immediately, regardless of its schedule or enabled state,
+// and returns without waiting for the handler. The schedule is left untouched,
+// except that one-time jobs are finalized as after any other run. It returns
+// ErrJobRunning if the job is already executing (scheduled or manual).
+func (cs *CronService) RunJob(jobID string) error {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+
+	if !cs.running {
+		return errors.New("cron service is not running")
+	}
+	found := false
+	for i := range cs.store.Jobs {
+		if cs.store.Jobs[i].ID == jobID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return errors.New("job not found")
+	}
+	if !cs.claimJobUnsafe(jobID) {
+		return ErrJobRunning
+	}
+
+	go cs.executeClaimedJob(jobID)
+	return nil
+}
+
 func (cs *CronService) executeJobByID(jobID string) {
+	defer cs.releaseJob(jobID)
+
 	startTime := time.Now().UnixMilli()
 
 	cs.mu.RLock()

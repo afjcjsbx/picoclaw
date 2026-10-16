@@ -1314,3 +1314,134 @@ func TestCronTool_ExecuteJobReturnsErrorWithoutPublish(t *testing.T) {
 		t.Fatalf("unexpected publish on error path: %q", executor.publishedResp)
 	}
 }
+
+// startRunnableCronTool starts the tool's service with a handler that reports
+// every executed job ID, so run requests can be observed.
+func startRunnableCronTool(t *testing.T, cfg *config.Config) (*CronTool, chan string) {
+	t.Helper()
+	tool := newTestCronToolWithConfig(t, cfg)
+	ran := make(chan string, 4)
+	tool.cronService.SetOnJob(func(job *cron.CronJob) (string, error) {
+		ran <- job.ID
+		return "ok", nil
+	})
+	if err := tool.cronService.Start(); err != nil {
+		t.Fatalf("Start() error: %v", err)
+	}
+	t.Cleanup(tool.cronService.Stop)
+	return tool, ran
+}
+
+// waitCronJobDone blocks until a triggered job has recorded its result, so the
+// service's final store write cannot race the test's temp dir cleanup.
+func waitCronJobDone(t *testing.T, tool *CronTool, jobID string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if job, ok := tool.cronService.GetJob(jobID); ok && job.State.LastStatus != "" {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("job %s never finished", jobID)
+}
+
+func TestCronTool_RunTriggersJobNow(t *testing.T) {
+	tool, ran := startRunnableCronTool(t, config.DefaultConfig())
+	job := addTestCronJob(t, tool, "hourly", "cli", "direct", "")
+	ctx := WithToolContext(context.Background(), "cli", "direct")
+
+	result := tool.Execute(ctx, map[string]any{"action": "run", "job_id": job.ID})
+	if result.IsError {
+		t.Fatalf("run failed: %s", result.ForLLM)
+	}
+	select {
+	case id := <-ran:
+		if id != job.ID {
+			t.Fatalf("ran %s, want %s", id, job.ID)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("job was not executed")
+	}
+	waitCronJobDone(t, tool, job.ID)
+}
+
+func TestCronTool_RunValidationAndAccess(t *testing.T) {
+	tool, ran := startRunnableCronTool(t, config.DefaultConfig())
+	own := addTestCronJob(t, tool, "own", "telegram", "chat-1", "")
+	other := addTestCronJob(t, tool, "other", "telegram", "chat-2", "")
+	command := addTestCronJob(t, tool, "cmd", "telegram", "chat-1", "df -h")
+	ctx := WithToolContext(context.Background(), "telegram", "chat-1")
+
+	tests := []struct {
+		name string
+		args map[string]any
+		want string
+	}{
+		{"missing id", map[string]any{"action": "run"}, "job_id is required for run"},
+		{"unknown job", map[string]any{"action": "run", "job_id": "nope"}, "not found"},
+		{"other chat", map[string]any{"action": "run", "job_id": other.ID}, "not accessible"},
+		{
+			"command job, remote not allowlisted",
+			map[string]any{"action": "run", "job_id": command.ID},
+			"not accessible",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tool.Execute(ctx, tt.args)
+			if !result.IsError || !strings.Contains(result.ForLLM, tt.want) {
+				t.Fatalf("want error containing %q, got: %+v", tt.want, result)
+			}
+		})
+	}
+
+	// Rejected requests must not have started anything.
+	select {
+	case id := <-ran:
+		t.Fatalf("rejected run executed job %s", id)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if result := tool.Execute(ctx, map[string]any{"action": "run", "job_id": own.ID}); result.IsError {
+		t.Fatalf("run of own job failed: %s", result.ForLLM)
+	}
+	waitCronJobDone(t, tool, own.ID)
+}
+
+func TestCronTool_RunReportsAlreadyRunning(t *testing.T) {
+	tool := newTestCronTool(t)
+	gate := make(chan struct{})
+	started := make(chan struct{}, 1)
+	tool.cronService.SetOnJob(func(job *cron.CronJob) (string, error) {
+		started <- struct{}{}
+		<-gate
+		return "ok", nil
+	})
+	if err := tool.cronService.Start(); err != nil {
+		t.Fatalf("Start() error: %v", err)
+	}
+	t.Cleanup(tool.cronService.Stop)
+
+	job := addTestCronJob(t, tool, "slow", "cli", "direct", "")
+	t.Cleanup(func() {
+		close(gate)
+		waitCronJobDone(t, tool, job.ID)
+	})
+	ctx := WithToolContext(context.Background(), "cli", "direct")
+	args := map[string]any{"action": "run", "job_id": job.ID}
+
+	if result := tool.Execute(ctx, args); result.IsError {
+		t.Fatalf("first run failed: %s", result.ForLLM)
+	}
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("job did not start")
+	}
+
+	result := tool.Execute(ctx, args)
+	if !result.IsError || !strings.Contains(result.ForLLM, "already running") {
+		t.Fatalf("want already-running error, got: %+v", result)
+	}
+}
