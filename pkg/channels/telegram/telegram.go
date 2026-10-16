@@ -1235,7 +1235,8 @@ func (c *TelegramChannel) handleMessages(ctx context.Context, messages []*telego
 }
 
 // telegramMediaDownloadFailureText builds the user-facing notice for attachments
-// that could not be downloaded, de-duplicating repeated kinds.
+// that could not be downloaded, de-duplicating repeated kinds. kinds must not be
+// empty.
 func telegramMediaDownloadFailureText(kinds []string) string {
 	unique := make([]string, 0, len(kinds))
 	seen := make(map[string]struct{}, len(kinds))
@@ -1245,9 +1246,6 @@ func telegramMediaDownloadFailureText(kinds []string) string {
 		}
 		seen[kind] = struct{}{}
 		unique = append(unique, kind)
-	}
-	if len(unique) == 0 {
-		return ""
 	}
 
 	noun := "attachment"
@@ -1270,10 +1268,10 @@ func (c *TelegramChannel) notifyMediaDownloadFailure(
 	message *telego.Message,
 	kinds []string,
 ) {
-	text := telegramMediaDownloadFailureText(kinds)
-	if message == nil || text == "" {
+	if message == nil {
 		return
 	}
+	text := telegramMediaDownloadFailureText(kinds)
 
 	_, err := c.sendChunk(ctx, sendChunkParams{
 		chatID:     message.Chat.ID,
