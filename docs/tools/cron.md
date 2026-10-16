@@ -27,7 +27,7 @@ Command jobs must also pass the exec guards: they are rejected when `tools.exec.
 | `command` | string | — | Shell command to execute instead of just showing the message (for example `df -h`) |
 | `command_confirm` | bool | — | Explicit confirmation for scheduling or modifying a command job; required when `tools.cron.allow_command` is `false` |
 
-Schedule fields are mutually exclusive and at least one is required for `add`; if several are supplied, priority is `at_seconds` > `every_seconds` > `cron_expr`. Use `get` before editing and `update` to change a job without losing its payload. On remote channels the tool only lists and modifies jobs bound to the current channel/chat.
+Schedule fields are mutually exclusive and at least one is required for `add`; if several are supplied, priority is `at_seconds` > `every_seconds` > `cron_expr`. Use `get` before editing and `update` to change a job without losing its payload. On remote channels the tool can only list, get, and update jobs bound to the current channel/chat.
 
 ## Examples
 
