@@ -1,0 +1,114 @@
+# Filesystem tools
+
+PicoClaw ships a filesystem tool family for reading, writing, and searching files. Relative paths are resolved from the agent workspace.
+
+| Tool | What it does | Switch (default) |
+|------|--------------|------------------|
+| `read_file` | Read file contents, in byte-offset or line-numbered mode | `tools.read_file.enabled` (`true`) |
+| `write_file` | Create a file; replacing an existing file requires `overwrite=true` | `tools.write_file.enabled` (`true`) |
+| `edit_file` | Replace one exact text occurrence in a file | `tools.edit_file.enabled` (`true`) |
+| `append_file` | Append content to a file (creates it if missing) | `tools.append_file.enabled` (`true`) |
+| `list_dir` | List directory entries | `tools.list_dir.enabled` (`true`) |
+| `search_files` | Regex content search or glob file search | `tools.search_files.enabled` (`true`) |
+
+Every switch follows the environment variable pattern `PICOCLAW_TOOLS_<TOOL>_ENABLED` (for example `PICOCLAW_TOOLS_SEARCH_FILES_ENABLED=false`), except `read_file`, whose settings are configured in JSON only. See the [tool switch table](../reference/tools_configuration.md#tool-switches) for the full list of tools.
+
+## Sandbox and path policy
+
+The filesystem tools are always bound to the agent workspace and the readable/writable sandbox:
+
+- `agents.defaults.restrict_to_workspace` (default `true`) keeps reads and writes inside the workspace.
+- `agents.defaults.allow_read_outside_workspace` (default `false`) lets read-only tools access paths outside the workspace while keeping the restriction for writes and for `exec`.
+- `tools.allow_read_paths` and `tools.allow_write_paths` are regular-expression allowlists evaluated against absolute paths, granting access that the workspace restriction would otherwise deny.
+- The credential/protected-file policy always wins over allow paths. See [Protected local files](../reference/tools_configuration.md#protected-local-files) for the full deny list and symlink behavior.
+
+These settings are global. There is no per-tool path configuration beyond the switches above.
+
+## `read_file`
+
+The tool has two modes, selected with `tools.read_file.mode`:
+
+| Config | Type | Default | Description |
+|--------|------|---------|-------------|
+| `tools.read_file.enabled` | bool | `true` | Register the `read_file` tool |
+| `tools.read_file.mode` | string | `bytes` | `bytes` = byte-offset pagination; `lines` = line-numbered output |
+| `tools.read_file.max_read_file_size` | int | `65536` | Maximum bytes read per call (byte mode), and the default `length` |
+
+**Byte mode** (`mode: "bytes"`, default) reads raw content and supports pagination:
+
+| Argument | Type | Required | Description |
+|----------|------|----------|-------------|
+| `path` | string | yes | Path to the file to read |
+| `offset` | integer | no | Byte offset to start reading from. Default: `0` |
+| `length` | integer | no | Maximum number of bytes to read. Default: `max_read_file_size` |
+
+**Line mode** (`mode: "lines"`) returns line-numbered output (`LINE_NUMBER|LINE_CONTENT`, 1-indexed) and supports partial reads of large text files:
+
+| Argument | Type | Required | Description |
+|----------|------|----------|-------------|
+| `path` | string | yes | Path to the file to read |
+| `start_line` | integer | no | Line number to start from (1-indexed, inclusive). Default: `1` |
+| `max_lines` | integer | no | Maximum number of lines to read |
+
+Using `offset`/`length` in line mode (or `limit`) is rejected with an error: each mode only accepts its own pagination arguments.
+
+Results larger than `tools.max_inline_result_chars` are spilled to a workspace artifact with a head+tail preview, exactly like every other tool result; see [Large tool results](../reference/tools_configuration.md#large-tool-results).
+
+## `write_file`
+
+Creates a file with the full content in one call. If the file already exists, the call fails unless `overwrite=true` is passed, which replaces the entire file and discards its current contents.
+
+| Argument | Type | Required | Description |
+|----------|------|----------|-------------|
+| `path` | string | yes | Path to write |
+| `content` | string | yes | Full file content. Standard JSON escaping applies: `\n` for newline, `\\n` for a literal backslash-n |
+| `overwrite` | boolean | no | Set to `true` to replace an existing file in full. Default: `false` |
+
+For targeted changes, prefer `edit_file` or `append_file`: PicoClaw advertises those alternatives in the tool description and in the "file already exists" error only when they are enabled. Writes to protected credential paths (and to `write_file`-specific denies such as `/etc/shadow` or the workspace `sessions` directory) are refused; write allow paths do not override the policy.
+
+## `edit_file`
+
+Replaces a single, exact occurrence of `old_text` with `new_text` and returns a diff of the change.
+
+| Argument | Type | Required | Description |
+|----------|------|----------|-------------|
+| `path` | string | yes | Path to the file to edit |
+| `old_text` | string | yes | Exact text to replace; must appear exactly once |
+| `new_text` | string | yes | Replacement text |
+
+The call fails when `old_text` is not found, or when it appears more than once (add more context to make the match unique). The file is rewritten in place.
+
+## `append_file`
+
+Appends content to the end of a file. The file is created if it does not exist.
+
+| Argument | Type | Required | Description |
+|----------|------|----------|-------------|
+| `path` | string | yes | Path of the file to append to |
+| `content` | string | yes | Content to append |
+
+## `list_dir`
+
+Lists the entries of a directory. Protected entries (for example `.ssh` and credential files) are hidden by the policy.
+
+| Argument | Type | Required | Description |
+|----------|------|----------|-------------|
+| `path` | string | yes | Directory to list (relative paths resolve from the workspace) |
+
+## `search_files`
+
+Searches file contents with a regular expression, or finds file names by glob. It is the intended replacement for `grep`, `rg`, `find`, and `ls` in the terminal tool.
+
+| Argument | Type | Required | Description |
+|----------|------|----------|-------------|
+| `pattern` | string | yes | Regex for content search, or filename glob (for example `*.go`) for `target: "files"` |
+| `target` | string | no | `content` (default) or `files` |
+| `path` | string | no | File or directory to search. Default: `.` |
+| `file_glob` | string | no | Optional filename glob applied to content searches |
+| `limit` | integer | no | Maximum results to return. Default: `50`, maximum: `200` |
+| `offset` | integer | no | Number of results to skip (pagination). Default: `0` |
+| `order` | string | no | `discovery` (default) or `modified` (newest modification time first; scans the full tree) |
+| `output_mode` | string | no | Content searches: `content` (default), `files_only`, or `count` |
+| `context` | integer | no | Lines before and after each content match (maximum: `20`). Default: `0` |
+
+Searches run inside the readable sandbox. On macOS, searches above your home directory skip TCC-protected folders; target one directly to include it.

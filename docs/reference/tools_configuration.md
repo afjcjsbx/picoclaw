@@ -1,6 +1,57 @@
 # Tools Configuration
 
-PicoClaw's tools configuration is located in the `tools` field of `config.json`.
+PicoClaw's tool settings live under the `tools` field of `config.json`. This page is the reference for global tool behavior and for every tool family that does not have a dedicated page under [docs/tools](../tools/README.md).
+
+## Tool switches
+
+Every built-in tool is enabled or disabled individually through `tools.<key>.enabled` unless noted otherwise. Most switches also accept an environment override following the pattern `PICOCLAW_TOOLS_<KEY>_ENABLED` (for example `PICOCLAW_TOOLS_EXEC_ENABLED=false`); the exception is `read_file`, whose settings are JSON-only.
+
+| Tool | Switch | Default | Notes |
+|------|--------|---------|-------|
+| `read_file` | `tools.read_file.enabled` | `true` | Mode and size limit under `tools.read_file`; see [Filesystem tools](../tools/filesystem.md) |
+| `write_file` | `tools.write_file.enabled` | `true` | [Filesystem tools](../tools/filesystem.md) |
+| `edit_file` | `tools.edit_file.enabled` | `true` | [Filesystem tools](../tools/filesystem.md) |
+| `append_file` | `tools.append_file.enabled` | `true` | [Filesystem tools](../tools/filesystem.md) |
+| `list_dir` | `tools.list_dir.enabled` | `true` | [Filesystem tools](../tools/filesystem.md) |
+| `search_files` | `tools.search_files.enabled` | `true` | [Filesystem tools](../tools/filesystem.md) |
+| `load_image` | `tools.load_image.enabled` | `true` | [Media tools](../tools/media.md) |
+| `send_file` | `tools.send_file.enabled` | `true` | [Media tools](../tools/media.md) |
+| `send_tts` | `tools.send_tts.enabled` | `false` | Registered only when a TTS provider is configured; see [Media tools](../tools/media.md) |
+| `image_generate` | `tools.image_generate.enabled` | `false` | Needs an image model under `tools.image_generate.model_name`; see [Image generation](../tools/image-generation.md) |
+| `web_search` | `tools.web.enabled` | `true` | Search providers and settings under `tools.web`; see [Web tools](#web-tools) |
+| `web_fetch` | `tools.web_fetch.enabled` | `true` | Fetch settings under `tools.web`; see [Web tools](#web-tools) |
+| `exec` | `tools.exec.enabled` | `true` | See [Exec tool](#exec-tool) |
+| `cron` | `tools.cron.enabled` | `true` | See [Cron tool](#cron-tool) |
+| `todo` | `tools.todo.enabled` | `true` | See [Todo planning tool](#todo-planning-tool) |
+| `message` | `tools.message.enabled` | `true` | Media attachments gated by `tools.message.media_enabled` (`false`); see [Messaging tools](../tools/messaging.md) |
+| `reaction` | — | always on | No switch; fails gracefully on channels without reaction support |
+| `spawn` | `tools.spawn.enabled` | `true` | Requires `tools.subagent.enabled`; see [Subagent tools](../tools/subagents.md) |
+| `subagent` | `tools.subagent.enabled` | `true` | The sync `subagent` tool also requires `spawn` or `spawn_status` to be enabled |
+| `spawn_status` | `tools.spawn_status.enabled` | `false` | Requires `tools.subagent.enabled` |
+| `delegate` | — | multi-agent setups | Registered automatically when more than one agent exists |
+| `find_skills` | `tools.find_skills.enabled` | `true` | Requires `tools.skills.enabled`; see [Skills tool](#skills-tool) |
+| `install_skill` | `tools.install_skill.enabled` | `true` | Requires `tools.skills.enabled`; see [Skills tool](#skills-tool) |
+| `i2c`, `spi`, `serial` | `tools.i2c.enabled`, `tools.spi.enabled`, `tools.serial.enabled` | `false` | Platform-specific; see [Hardware tools](../tools/hardware.md) |
+| MCP tools | `tools.mcp.enabled` | `false` | Servers under `tools.mcp.servers`; see [MCP tool](#mcp-tool) |
+| MCP discovery | `tools.mcp.discovery.enabled` | `false` | Registers `tool_search_tool_bm25` / `tool_search_tool_regex`; see [Tool Discovery](#tool-discovery-lazy-loading) |
+
+Two related settings sit outside the pattern:
+
+- `tools.media_cleanup.*` prunes stored media and uses the `PICOCLAW_MEDIA_CLEANUP_` environment prefix; see [Media tools](../tools/media.md#media-cleanup).
+- `tools.skills.registries` configures the registries used by `find_skills` and `install_skill`; see [Skills tool](#skills-tool).
+
+Agents can see a narrower tool set than the global switches allow: an `AGENT.md` frontmatter `tools:` list acts as an allowlist per agent, and `turn_profile` can narrow the exposed tools further for specific requests (see [Configuration](../guides/configuration.md)).
+
+## Path access
+
+All filesystem-facing tools share one sandbox model:
+
+| Config | Type | Default | Description |
+|--------|------|---------|-------------|
+| `allow_read_paths` | string[] | `[]` | Regular expressions of absolute paths that read tools may access even when the workspace restriction would deny them (for example `^/srv/data(?:/|$)`) |
+| `allow_write_paths` | string[] | `[]` | Regular expressions of absolute paths that write tools (`write_file`, `edit_file`, `append_file`) may modify outside the workspace |
+
+These allowlists extend the workspace boundary defined by `agents.defaults.restrict_to_workspace` (default `true`) and `agents.defaults.allow_read_outside_workspace` (default `false`, read-only). They never override the [protected local files](#protected-local-files) policy, so credentials and system files stay denied. The agent's own media directory is always appended to the read allowlist automatically.
 
 ## Directory Structure
 
@@ -63,16 +114,31 @@ The optional `image_generate` tool uses an image-capable OpenAI, Gemini, or Open
 
 ## Web Tools
 
-Web tools are used for web search and fetching.
+Web tools are used for web search and fetching. They are two tools with separate switches:
+
+- `web_search` is enabled by `tools.web.enabled` (default `true`).
+- `web_fetch` is enabled by `tools.web_fetch.enabled` (default `true`).
+
+Provider settings and fetch settings live under `tools.web.*`.
+
+### Provider selection
+
+| Config              | Type   | Default  | Description                                                                                   |
+|---------------------|--------|----------|-----------------------------------------------------------------------------------------------|
+| `provider`          | string | `auto`   | Search provider to use: `auto`, `brave`, `duckduckgo`, `gemini`, `glm_search`, `baidu_search`, `kagi`, `keenable`, `perplexity`, `searxng`, `sogou`, or `tavily`. Unknown values fall back to `auto` |
+| `prefer_native`     | bool   | `true`   | Prefer the active LLM's built-in web search (for example OpenAI's native search) over the configured search engines. The client-side `web_search` tool is hidden while native search is available, and PicoClaw falls back to it automatically |
+
+With `auto`, PicoClaw picks the first *ready* provider (enabled and fully configured for its type). Order: `perplexity`, `brave`, `kagi`, `searxng`, `tavily`, `gemini`, `keenable`; then `sogou`/`duckduckgo` (choosing between the two based on the query when both are ready); finally `baidu_search` and `glm_search`. Sogou, DuckDuckGo, and Keenable work without a key; SearXNG needs a `base_url`; the other providers need an API key. A ready provider configured explicitly in `provider` wins over the order.
 
 ### Web Fetcher
 General settings for fetching and processing webpage content.
 
 | Config              | Type   | Default       | Description                                                                                   |
 |---------------------|--------|---------------|-----------------------------------------------------------------------------------------------|
-| `enabled`           | bool   | true          | Enable the webpage fetching capability.                                                       |
-| `fetch_limit_bytes` | int    | 10485760      | Maximum size of the webpage payload to fetch, in bytes (default is 10MB).                     |
-| `format`            | string | "plaintext"   | Output format of the fetched content. Options: `plaintext` or `markdown` (recommended).       |
+| `tools.web_fetch.enabled` | bool | `true`   | Register the `web_fetch` tool to fetch and process webpage content                             |
+| `tools.web.fetch_limit_bytes` | int | 10485760 | Maximum size of the webpage payload to fetch, in bytes (default is 10MB).                  |
+| `tools.web.format`  | string | "plaintext"   | Output format of the fetched content. Options: `plaintext` or `markdown` (recommended).       |
+| `tools.web.proxy`   | string | ""            | Optional proxy URL for web tools (`http`, `https`, `socks5`, `socks5h`). For authenticated proxies, prefer the `HTTP_PROXY`/`HTTPS_PROXY` environment variables instead of embedding credentials in config |
 
 ### Brave
 
@@ -87,8 +153,17 @@ General settings for fetching and processing webpage content.
 
 | Config        | Type | Default | Description               |
 |---------------|------|---------|---------------------------|
-| `enabled`     | bool | true    | Enable DuckDuckGo search  |
+| `enabled`     | bool | false   | Enable DuckDuckGo search  |
 | `max_results` | int  | 5       | Maximum number of results |
+
+### Sogou
+
+| Config        | Type | Default | Description               |
+|---------------|------|---------|---------------------------|
+| `enabled`     | bool | true    | Enable Sogou search       |
+| `max_results` | int  | 5       | Maximum number of results |
+
+Sogou and DuckDuckGo are keyless engines; when both are ready, `auto` picks between them based on the query language.
 
 ### Gemini Google Search
 
@@ -255,7 +330,6 @@ The `range` parameter maps to `published_after` (`d`, `w`, `m`, `y` become a dat
 
 | Config                   | Type     | Default | Description                                                    |
 |--------------------------|----------|---------|----------------------------------------------------------------|
-| `prefer_native`          | bool     | true    | Prefer provider's native search over configured search engines |
 | `private_host_whitelist` | string[] | `[]`    | Private/internal hosts allowed for web fetching                |
 
 ### `web_search` Tool Parameters
@@ -281,15 +355,27 @@ For Kagi, `d`, `w`, and `m` map to Kagi lens `time_relative`; `y` maps to a lens
 }
 ```
 
+### `web_fetch` Tool Parameters
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `url` | string | yes | URL to fetch |
+| `maxChars` | integer | no | Maximum characters to extract (minimum `100`) |
+
 ## Exec Tool
 
 The exec tool is used to execute shell commands.
 
-| Config                 | Type  | Default | Description                                |
-|------------------------|-------|---------|--------------------------------------------|
-| `enabled`              | bool  | true    | Enable the exec tool                        |
-| `enable_deny_patterns` | bool  | true    | Enable default dangerous command blocking  |
-| `custom_deny_patterns` | array | []      | Custom deny patterns (regular expressions) |
+| Config | Type | Default | Description |
+|--------|------|---------|-------------|
+| `enabled` | bool | `true` | Enable the exec tool |
+| `enable_deny_patterns` | bool | `true` | Enable the default dangerous-command blocking |
+| `custom_deny_patterns` | string[] | `[]` | Additional deny patterns (regular expressions); they take priority over allow rules |
+| `custom_allow_patterns` | string[] | `[]` | Allow patterns (regular expressions) that explicitly permit matching commands. Deny patterns still win, so this cannot unlock a denied command |
+| `allow_remote` | bool | `true` | When `false`, exec only accepts commands that originate from internal channels (`cli`, `system`, `subagent`). Remote channels are then blocked (fail-closed): an empty channel is also rejected |
+| `timeout_seconds` | int | `60` | Command timeout in seconds. `0` means the default (60s) |
+
+Environment variables use the `PICOCLAW_TOOLS_EXEC_` prefix: `PICOCLAW_TOOLS_EXEC_ENABLED`, `PICOCLAW_TOOLS_EXEC_ENABLE_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_ALLOW_REMOTE`, `PICOCLAW_TOOLS_EXEC_CUSTOM_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_CUSTOM_ALLOW_PATTERNS`, `PICOCLAW_TOOLS_EXEC_TIMEOUT_SECONDS`.
 
 ### Disabling the Exec Tool
 
@@ -406,11 +492,12 @@ and injected into the context for a configured number of turns (`ttl`).
 
 ### Global Config
 
-| Config      | Type   | Default | Description                                  |
-|-------------|--------|---------|----------------------------------------------|
-| `enabled`   | bool   | false   | Enable MCP integration globally              |
-| `discovery` | object | `{}`    | Configuration for Tool Discovery (see below) |
-| `servers`   | object | `{}`    | Map of server name to server config          |
+| Config                 | Type   | Default | Description                                  |
+|------------------------|--------|---------|----------------------------------------------|
+| `enabled`              | bool   | false   | Enable MCP integration globally              |
+| `discovery`            | object | `{}`    | Configuration for Tool Discovery (see below) |
+| `max_inline_text_chars`| int    | 16384   | How much MCP text stays inline in model context before the result is saved as a workspace artifact |
+| `servers`              | object | `{}`    | Map of server name to server config          |
 
 ### Discovery Config (`discovery`)
 
