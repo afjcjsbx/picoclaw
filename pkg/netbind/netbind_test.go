@@ -238,6 +238,47 @@ func TestOpenPlan_DegradedWhenSiblingFamilyBindFails(t *testing.T) {
 	}
 }
 
+func TestOpenPlan_LoopbackDegradedWhenSiblingFamilyBindFails(t *testing.T) {
+	probe, err := net.Listen("tcp6", "[::1]:0")
+	if err != nil {
+		t.Skipf("IPv6 loopback is unavailable in this environment: %v", err)
+	}
+	_ = probe.Close()
+
+	// Occupy 127.0.0.1 on a fixed port so the IPv4 half of the default
+	// loopback bind fails while ::1 still succeeds.
+	blocker, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen() error = %v", err)
+	}
+	defer blocker.Close()
+	port := strconv.Itoa(blocker.Addr().(*net.TCPAddr).Port)
+
+	plan, err := BuildPlan("", DefaultLoopback)
+	if err != nil {
+		t.Fatalf("BuildPlan() error = %v", err)
+	}
+	result, err := OpenPlan(plan, port)
+	if err != nil {
+		t.Fatalf("OpenPlan() error = %v", err)
+	}
+	t.Cleanup(func() {
+		for _, ln := range result.Listeners {
+			_ = ln.Close()
+		}
+	})
+
+	if len(result.Listeners) != 1 {
+		t.Fatalf("len(Listeners) = %d, want 1 (::1 should keep serving)", len(result.Listeners))
+	}
+	if len(result.Degraded) != 1 {
+		t.Fatalf("len(Degraded) = %d, want 1 (%#v)", len(result.Degraded), result.Degraded)
+	}
+	if !strings.Contains(result.Degraded[0], "127.0.0.1") {
+		t.Fatalf("Degraded[0] = %q, want it to name the failed IPv4 bind", result.Degraded[0])
+	}
+}
+
 func TestOpenPlan_ErrorsWhenNoFamilyBinds(t *testing.T) {
 	hasIPv4, hasIPv6 := DetectIPFamilies()
 	if !hasIPv4 || !hasIPv6 {
