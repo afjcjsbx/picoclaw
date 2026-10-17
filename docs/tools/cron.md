@@ -27,7 +27,7 @@ Command jobs must also pass the exec guards: they are rejected when `tools.exec.
 | `command` | string | — | Shell command to execute instead of just showing the message (for example `df -h`) |
 | `command_confirm` | bool | — | Explicit confirmation for scheduling or modifying a command job; required when `tools.cron.allow_command` is `false` |
 
-Schedule fields are mutually exclusive and at least one is required for `add`; if several are supplied, priority is `at_seconds` > `every_seconds` > `cron_expr`. Use `get` before editing and `update` to change a job without losing its payload. On remote channels the tool can only list, get, and update jobs bound to the current channel/chat.
+Schedule fields are mutually exclusive and at least one is required for `add`; if several are supplied, priority is `at_seconds` > `every_seconds` > `cron_expr`. Use `get` before editing and `update` to change a job without losing its payload. On remote channels the tool can only list, get, update, run, remove, enable, and disable jobs bound to the current channel/chat. The Pico WebUI channel is single-owner — one shared token and the fixed `pico-user` sender — so its jobs are scoped to the whole channel: a job created in one WebUI conversation remains visible and manageable from every other conversation. Command jobs still require the channel to be allowed by `tools.cron.command_allowed_remotes`.
 
 ## Examples
 
