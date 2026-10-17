@@ -291,8 +291,10 @@ func (t *SearchFilesTool) searchContents(ctx context.Context, opts searchFilesOp
 		}
 		content, size, err := readSearchFile(t.fs, path, maxSearchBytesScanned-bytesScanned)
 		if errors.Is(err, errSearchByteLimit) {
+			// The file does not fit in the remaining scan budget: skip it
+			// and keep walking, so smaller files that still fit are reached.
 			byteLimit = true
-			return true, nil
+			return false, nil
 		}
 		bytesScanned += size
 		if err != nil {

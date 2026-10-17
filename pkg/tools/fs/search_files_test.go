@@ -76,6 +76,36 @@ func TestSearchFilesTruncationCutsLongContextLine(t *testing.T) {
 	}
 }
 
+func TestSearchFilesSkipsFilesBeyondByteBudget(t *testing.T) {
+	root := t.TempDir()
+	filler := []byte(strings.Repeat("a", 1_000_000))
+	// 67 files x 1,000,000 bytes consume most of the 64 MiB budget.
+	for i := 0; i < 67; i++ {
+		if err := os.WriteFile(filepath.Join(root, fmt.Sprintf("f%02d.txt", i)), filler, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 200,000 bytes no longer fit in the ~108 KB that remain.
+	if err := os.WriteFile(filepath.Join(root, "f67.txt"), []byte(strings.Repeat("b", 200_000)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// This small file does fit and must still be reached.
+	if err := os.WriteFile(filepath.Join(root, "z.txt"), []byte("needle\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewSearchFilesTool(root, true)
+	result := tool.Execute(context.Background(), map[string]any{"pattern": "needle"})
+	if result.IsError {
+		t.Fatalf("search failed: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "z.txt:1: needle") {
+		t.Fatalf("a small file after the byte budget must still be searched:\n%s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "safety limit") {
+		t.Fatalf("expected the safety-limit notice when files are skipped:\n%s", result.ForLLM)
+	}
+}
+
 func TestSearchFilesOutputCapKeepsPagination(t *testing.T) {
 	root := t.TempDir()
 	lines := make([]string, 100)
