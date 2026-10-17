@@ -41,6 +41,41 @@ func TestSearchFilesStopsAcrossDirectories(t *testing.T) {
 	}
 }
 
+func TestSearchFilesTruncationKeepsMatchVisible(t *testing.T) {
+	root := t.TempDir()
+	line := strings.Repeat("x", 300) + "needle" + strings.Repeat("y", 300)
+	if err := os.WriteFile(filepath.Join(root, "long.txt"), []byte(line+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewSearchFilesTool(root, true)
+	result := tool.Execute(context.Background(), map[string]any{"pattern": "needle"})
+	if result.IsError {
+		t.Fatalf("search failed: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "needle") {
+		t.Fatalf("a match beyond the cut must stay visible:\n%s", result.ForLLM)
+	}
+	if strings.Contains(result.ForLLM, strings.Repeat("x", maxSearchLineLength)+"…") {
+		t.Fatalf("the window should start near the match instead of the line start:\n%s", result.ForLLM)
+	}
+}
+
+func TestSearchFilesTruncationCutsLongContextLine(t *testing.T) {
+	root := t.TempDir()
+	long := strings.Repeat("x", 400)
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("first\n"+long+"\nneedle\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewSearchFilesTool(root, true)
+	result := tool.Execute(context.Background(), map[string]any{"pattern": "needle", "context": 1})
+	if result.IsError {
+		t.Fatalf("search failed: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, strings.Repeat("x", maxSearchLineLength)+"…") {
+		t.Fatalf("context lines should keep the head-truncated form:\n%s", result.ForLLM)
+	}
+}
+
 func TestSearchFilesOutputCapKeepsPagination(t *testing.T) {
 	root := t.TempDir()
 	lines := make([]string, 100)

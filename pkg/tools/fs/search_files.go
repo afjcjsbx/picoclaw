@@ -362,12 +362,14 @@ func formatContentMatches(
 	}
 	lines := strings.Split(strings.TrimSuffix(string(content), "\n"), "\n")
 	hits := make([]bool, len(lines))
+	locs := make([][]int, len(lines))
 	count := 0
 	for i, line := range lines {
 		lines[i] = strings.TrimSuffix(line, "\r")
 		line = lines[i]
-		if pattern.MatchString(line) {
+		if loc := pattern.FindStringIndex(line); loc != nil {
 			hits[i] = true
+			locs[i] = loc
 			count++
 		}
 	}
@@ -400,7 +402,7 @@ func formatContentMatches(
 			block.WriteString(fmt.Sprintf("%s:\n", path))
 		}
 		for lineIndex := start; lineIndex <= end; lineIndex++ {
-			line := truncateSearchLine(lines[lineIndex])
+			line := truncateSearchLine(lines[lineIndex], locs[lineIndex])
 			if opts.context > 0 {
 				prefix := " "
 				if hits[lineIndex] {
@@ -419,15 +421,36 @@ func formatContentMatches(
 	return rows, count
 }
 
-func truncateSearchLine(line string) string {
+// truncateSearchLine bounds a line to maxSearchLineLength bytes. When
+// matchLoc places the match beyond the cut, the window starts shortly before
+// the match instead of at the line start, so the matched text stays visible;
+// "…" marks both cut sides.
+func truncateSearchLine(line string, matchLoc []int) string {
 	if len(line) <= maxSearchLineLength {
 		return line
 	}
-	cut := maxSearchLineLength
-	for cut > 0 && !utf8.RuneStart(line[cut]) {
-		cut--
+	start := 0
+	if matchLoc != nil && matchLoc[0] > maxSearchLineLength {
+		start = matchLoc[0] - maxSearchLineLength/3
+		for start > 0 && !utf8.RuneStart(line[start]) {
+			start--
+		}
 	}
-	return line[:cut] + "…"
+	end := start + maxSearchLineLength
+	if end > len(line) {
+		end = len(line)
+	}
+	for end > start+1 && end < len(line) && !utf8.RuneStart(line[end]) {
+		end--
+	}
+	window := line[start:end]
+	if start > 0 {
+		window = "…" + window
+	}
+	if end < len(line) {
+		window += "…"
+	}
+	return window
 }
 
 func readSearchFile(filesystem fileSystem, path string, remainingBytes int64) ([]byte, int64, error) {

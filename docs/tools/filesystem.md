@@ -117,6 +117,8 @@ Filename patterns accept three forms:
 * **Plain text** — a pattern without `*`, `?`, `[`, or `{` matches as a substring of the path relative to the search root, so `docker-compose` finds both `docker-compose.yml` and `deploy/docker-compose.prod.yml`.
 * **Glob** — a pattern with metacharacters is matched as a glob. A glob containing `/` is matched against the whole relative path; one without `/` is matched against the base name. `*` and `?` do not cross `/`, `**/` matches any number of directories (`src/**/*.ts` also matches `src/main.ts`), and `{a,b}` alternates (`*.{js,ts}`).
 
+Output lines are capped at 240 bytes each. When a match lies beyond that cut, the displayed window moves to keep the matched text visible, with `…` marking both cut sides, so reported matches are never silently dropped from the output.
+
 Searches run inside the readable sandbox. On macOS, searches above your home directory skip TCC-protected folders; target one directly to include it.
 
 Like `ripgrep`, directory walks honor `.gitignore` and `.ignore` files, including nested ones: patterns are gitignore-style (`!` negation, trailing `/` for directories, a leading or embedded `/` anchors to the declaring directory), `.ignore` overrides `.gitignore`, and a deeper file overrides a shallower one. `.git` is always skipped. An explicitly targeted file or directory (via `path`) is searched even when its ancestors are ignored.
