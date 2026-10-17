@@ -264,11 +264,15 @@ func buildLargeResultPreview(text string, total, maxRunes int) (preview string, 
 // Persisting such an envelope verbatim would put the whole document on ONE
 // line with escaped newlines, so the read_file/search_files pagination the
 // spill notice recommends could not page it at all. Recognition is by SHAPE,
-// not by tool name: a JSON object whose keys stay inside the web_fetch key set
-// with a non-empty string "text" is that tool's own envelope. Anything else —
-// unparseable JSON, a non-object, an unknown key, a missing, empty, or
-// non-string "text" — is returned verbatim, so opaque JSON payloads from other
-// tools (exec, curl, ...) keep their exact bytes and stay jq-able.
+// not by tool name: a JSON object whose keys stay inside the web_fetch key set,
+// with a non-empty string "url", a numeric "status", and a non-empty string
+// "text", is that tool's own envelope. The discriminator fields matter: the
+// spill path also sees hook, plugin, and other-tool results, and a generic
+// payload such as {"text": "..."} must stay verbatim. Anything else —
+// unparseable JSON, a non-object, an unknown key, a missing or mistyped
+// discriminator, or a missing, empty, or non-string "text" — is returned
+// verbatim, so opaque JSON payloads from other tools (exec, curl, ...) keep
+// their exact bytes and stay jq-able.
 func pageableToolResultText(content string) string {
 	var payload map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(content), &payload); err != nil || len(payload) == 0 {
@@ -279,6 +283,17 @@ func pageableToolResultText(content string) string {
 			return content
 		}
 	}
+	var pageURL string
+	if err := json.Unmarshal(payload["url"], &pageURL); err != nil || pageURL == "" {
+		return content
+	}
+	var status any
+	if err := json.Unmarshal(payload["status"], &status); err != nil {
+		return content
+	}
+	if _, ok := status.(float64); !ok {
+		return content
+	}
 	var text string
 	if err := json.Unmarshal(payload["text"], &text); err != nil || text == "" {
 		return content
@@ -288,9 +303,6 @@ func pageableToolResultText(content string) string {
 		if key != "text" {
 			extras[key] = value
 		}
-	}
-	if len(extras) == 0 {
-		return text
 	}
 	metadata, err := json.MarshalIndent(extras, "", "  ")
 	if err != nil {

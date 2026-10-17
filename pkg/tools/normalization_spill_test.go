@@ -416,15 +416,12 @@ func buildWebFetchEnvelope(t *testing.T, text string) string {
 	return string(envelope)
 }
 
-func TestPageableToolResultText_UnwrapsEnvelopeWithoutExtras(t *testing.T) {
-	body := "line one\nline two"
-	envelope, err := json.Marshal(map[string]any{"text": body})
-	if err != nil {
-		t.Fatalf("failed to marshal envelope: %v", err)
-	}
-
-	if got := pageableToolResultText(string(envelope)); got != body {
-		t.Fatalf("pageableToolResultText() = %q, want %q", got, body)
+func TestPageableToolResultText_TextOnlyPayloadIsVerbatim(t *testing.T) {
+	// Hooks, plugins, and other tools can legitimately return {"text": "..."}.
+	// Without the web_fetch discriminator fields it is not the envelope.
+	content := `{"text": "line one\nline two"}`
+	if got := pageableToolResultText(content); got != content {
+		t.Fatalf("pageableToolResultText() = %q, want verbatim %q", got, content)
 	}
 }
 
@@ -465,6 +462,12 @@ func TestPageableToolResultText_UnrecognizedContentIsVerbatim(t *testing.T) {
 	cases := map[string]string{
 		"ordinary tool JSON":  `{"output": "line\n", "exit_code": 0}`,
 		"unknown sibling key": `{"text": "line\n", "exit_code": 0}`,
+		"text only":           `{"text": "line\n"}`,
+		"missing url":         `{"status": 200, "text": "line\n"}`,
+		"missing status":      `{"url": "https://example.com", "text": "line\n"}`,
+		"empty url":           `{"url": "", "status": 200, "text": "line\n"}`,
+		"string status":       `{"url": "https://example.com", "status": "200", "text": "line\n"}`,
+		"bool status":         `{"url": "https://example.com", "status": true, "text": "line\n"}`,
 		"not an object":       `[{"text": "line\n"}]`,
 		"structured text":     `{"text": {"blob": "line\n"}}`,
 		"non-string text":     `{"text": 42}`,
@@ -579,5 +582,63 @@ func TestExecuteWithContext_SpillKeepsOpaqueJSONVerbatim(t *testing.T) {
 	}
 	if string(data) != strings.TrimSpace(opaque) {
 		t.Fatalf("expected opaque JSON artifact verbatim, got %q", string(data))
+	}
+}
+
+func TestExecuteWithContext_SpillUnwrapsEnvelopeFromAnyTool(t *testing.T) {
+	// Recognition is by shape, not tool name: an exec result (or an AfterTool
+	// hook result) that is byte-for-byte the web_fetch envelope is unwrapped
+	// too, so the fix is not tied to a single producer.
+	workspace := t.TempDir()
+	reg := NewToolRegistry()
+	reg.SetWorkspace(workspace)
+	reg.SetMaxInlineResultRunes(512)
+
+	body := strings.Repeat("pageable content line\n", 200)
+	envelope := buildWebFetchEnvelope(t, body)
+	reg.Register(newSpillTool("exec", SilentResult(envelope)))
+
+	result := reg.Execute(context.Background(), "exec", nil)
+
+	if len(result.ArtifactTags) != 1 {
+		t.Fatalf("expected 1 artifact tag, got %+v", result.ArtifactTags)
+	}
+	path := strings.TrimSuffix(strings.TrimPrefix(result.ArtifactTags[0], "[file:"), "]")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("expected artifact file to be readable: %v", err)
+	}
+	if !strings.Contains(string(data), "pageable content line\n") {
+		t.Fatalf("expected the envelope shape to be unwrapped regardless of tool name")
+	}
+	if !strings.Contains(string(data), webFetchMetadataTag) {
+		t.Fatalf("expected metadata block in artifact")
+	}
+}
+
+func TestExecuteWithContext_SpillKeepsTextOnlyJSONVerbatim(t *testing.T) {
+	// Hooks, plugins, and other tools can return {"text": "..."} without the
+	// web_fetch discriminator fields. That is not the envelope and must stay
+	// byte-for-byte verbatim.
+	workspace := t.TempDir()
+	reg := NewToolRegistry()
+	reg.SetWorkspace(workspace)
+	reg.SetMaxInlineResultRunes(32)
+
+	opaque := "{\"text\": \"" + strings.Repeat(`x\n`, 100) + "\"}"
+	reg.Register(newSpillTool("exec", SilentResult(opaque)))
+
+	result := reg.Execute(context.Background(), "exec", nil)
+
+	if len(result.ArtifactTags) != 1 {
+		t.Fatalf("expected 1 artifact tag, got %+v", result.ArtifactTags)
+	}
+	path := strings.TrimSuffix(strings.TrimPrefix(result.ArtifactTags[0], "[file:"), "]")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("expected artifact file to be readable: %v", err)
+	}
+	if string(data) != strings.TrimSpace(opaque) {
+		t.Fatalf("expected text-only JSON artifact verbatim, got %q", string(data))
 	}
 }
