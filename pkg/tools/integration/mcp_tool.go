@@ -370,7 +370,7 @@ func (t *MCPTool) normalizeResultContent(ctx context.Context, content []mcp.Cont
 
 	forLLM := strings.Join(compactStrings(llmParts), "\n")
 	rawText := strings.Join(compactStrings(rawTextParts), "\n")
-	if artifactResult := t.persistLargeTextArtifact(rawText); artifactResult != nil {
+	if artifactResult := t.persistLargeTextArtifact(rawText, forLLM); artifactResult != nil {
 		artifactResult.Media = mediaRefs
 		return artifactResult
 	}
@@ -382,7 +382,36 @@ func (t *MCPTool) normalizeResultContent(ctx context.Context, content []mcp.Cont
 	return result
 }
 
-func (t *MCPTool) persistLargeTextArtifact(text string) *ToolResult {
+// Model-facing notes for an oversized MCP text result: the text above stays a
+// bounded head+tail window, and the note says where the full payload lives (or
+// why it is unavailable).
+const (
+	mcpArtifactSavedNote = "[The full MCP text is saved as a local artifact (path listed below) — " +
+		"use read_file (offset/length) to read more.]"
+	mcpArtifactFailedNote = "[MCP artifact persistence failed; showing a bounded head+tail view.]"
+)
+
+// mcpTextResultMessage renders the model-facing text for an oversized MCP text
+// result: the sanitized inline text (llmText) cut to a 40% head / 60% tail
+// window at the configured inline limit — the notice carries the omission
+// counts when it cuts — followed by a one-line note about the full payload.
+func mcpTextResultMessage(llmText string, limit int, note string) string {
+	body := strings.TrimSpace(llmText)
+	if body != "" {
+		body, _ = toolshared.TruncateHeadTail(body, limit, "MCP RESULT")
+	}
+	if body == "" {
+		return note
+	}
+	return body + "\n\n" + note
+}
+
+// persistLargeTextArtifact persists an oversized MCP text payload to a workspace
+// artifact and returns the model-facing replacement result: a bounded head+tail
+// window of the sanitized text plus the artifact path. The full raw payload is
+// what lands on disk, so the window costs no cargo. Returns nil when the text
+// fits, is empty, or no workspace is configured.
+func (t *MCPTool) persistLargeTextArtifact(text, llmText string) *ToolResult {
 	text = strings.TrimSpace(text)
 	limit := t.maxInlineTextRunes
 	if limit <= 0 {
@@ -402,19 +431,17 @@ func (t *MCPTool) persistLargeTextArtifact(text string) *ToolResult {
 	)
 	path, err := toolshared.PersistTextArtifact(dir, pattern, text)
 	if err != nil {
-		return t.largeTextArtifactFallback(text, err)
+		return t.largeTextArtifactFallback(text, llmText, limit, err)
 	}
 
 	return &ToolResult{
-		ForLLM: fmt.Sprintf(
-			"[MCP returned a large text result (%d chars); omitted from model context and saved as a local artifact.]",
-			size,
-		),
-		ArtifactTags: []string{"[file:" + path + "]"},
+		ForLLM:             mcpTextResultMessage(llmText, limit, mcpArtifactSavedNote),
+		ArtifactTags:       []string{"[file:" + path + "]"},
+		LargeResultSpilled: true,
 	}
 }
 
-func (t *MCPTool) largeTextArtifactFallback(text string, err error) *ToolResult {
+func (t *MCPTool) largeTextArtifactFallback(text, llmText string, limit int, err error) *ToolResult {
 	size := utf8.RuneCountInString(text)
 	logger.WarnCF("tool", "Failed to persist large MCP text artifact", map[string]any{
 		"server": t.serverName,
@@ -422,11 +449,13 @@ func (t *MCPTool) largeTextArtifactFallback(text string, err error) *ToolResult 
 		"chars":  size,
 		"error":  err.Error(),
 	})
+	// Keep the bounded head+tail view inline and hand the full payload to the
+	// generic large-result spill: it persists under a different artifact
+	// directory, so an unwritable .artifacts/mcp does not lose the text. If the
+	// spill cannot persist either, the bounded view above is what remains.
 	return &ToolResult{
-		ForLLM: fmt.Sprintf(
-			"[MCP returned a large text result (%d chars); omitted from model context because artifact persistence failed.]",
-			size,
-		),
+		ForLLM:   mcpTextResultMessage(llmText, limit, mcpArtifactFailedNote),
+		FullText: text,
 	}
 }
 

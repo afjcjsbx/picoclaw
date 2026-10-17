@@ -28,8 +28,10 @@ and injected into the context for a configured number of turns (`ttl`).
 |------------------------|--------|---------|----------------------------------------------|
 | `enabled`              | bool   | false   | Enable MCP integration globally              |
 | `discovery`            | object | `{}`    | Configuration for Tool Discovery (see below) |
-| `max_inline_text_chars`| int    | 16384   | How much MCP text stays inline in model context before the result is saved as a workspace artifact |
+| `max_inline_text_chars`| int    | 16384   | Head+tail budget for MCP text: beyond this, the model keeps the first 40% and the last 60% of the sanitized text (with an omission notice) and the full payload is saved as a workspace artifact |
 | `servers`              | object | `{}`    | Map of server name to server config          |
+
+Oversized MCP text results are bounded, not dropped: the model keeps the first 40% and the last 60% of the sanitized text around an `[MCP RESULT TRUNCATED - N chars omitted out of T total]` notice, while the full raw payload is saved to `<workspace>/.artifacts/mcp/` and exposed via a `[file:...]` artifact path. If that write fails, the bounded view stays inline and the full payload is handed to the generic large-result spillover, which saves it under `<workspace>/.artifacts/tool/` instead.
 
 ## Discovery Config (`discovery`)
 

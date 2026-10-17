@@ -8,11 +8,13 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/media"
+	"github.com/sipeed/picoclaw/pkg/tools"
 	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
@@ -802,8 +804,11 @@ func TestMCPTool_Execute_LargeTextStoredAsArtifact(t *testing.T) {
 
 	result := mcpTool.Execute(context.Background(), nil)
 
-	if strings.Contains(result.ForLLM, "This is a large MCP text payload") {
-		t.Fatalf("expected large MCP text to be omitted from ForLLM, got %q", result.ForLLM)
+	if !strings.Contains(result.ForLLM, "[MCP RESULT TRUNCATED") {
+		t.Fatalf("expected a head+tail truncation notice, got %q", result.ForLLM)
+	}
+	if !result.LargeResultSpilled {
+		t.Fatal("expected the result marked as already reduced (no double spill)")
 	}
 	if !strings.Contains(result.ForLLM, "saved as a local artifact") {
 		t.Fatalf("expected artifact note, got %q", result.ForLLM)
@@ -856,7 +861,7 @@ func TestMCPTool_Execute_CustomInlineTextThreshold(t *testing.T) {
 	}
 }
 
-func TestMCPTool_Execute_LargeTextArtifactFailureStillOmitsContext(t *testing.T) {
+func TestMCPTool_Execute_LargeTextArtifactFailureKeepsWindowAndFullText(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	workspaceFile := filepath.Join(workspaceRoot, "not-a-directory")
 	if err := os.WriteFile(workspaceFile, []byte("x"), 0o600); err != nil {
@@ -879,14 +884,151 @@ func TestMCPTool_Execute_LargeTextArtifactFailureStillOmitsContext(t *testing.T)
 
 	result := mcpTool.Execute(context.Background(), nil)
 
-	if strings.Contains(result.ForLLM, "This is a large MCP text payload") {
-		t.Fatalf("expected large MCP text to be omitted from ForLLM, got %q", result.ForLLM)
+	if !strings.Contains(result.ForLLM, "[MCP RESULT TRUNCATED") {
+		t.Fatalf("expected the bounded head+tail view, got %q", result.ForLLM)
 	}
 	if !strings.Contains(result.ForLLM, "artifact persistence failed") {
 		t.Fatalf("expected persistence failure note, got %q", result.ForLLM)
 	}
 	if len(result.ArtifactTags) != 0 {
 		t.Fatalf("expected no artifact tags on persistence failure, got %+v", result.ArtifactTags)
+	}
+	if result.FullText != strings.TrimSpace(largeText) {
+		t.Fatalf("expected the full payload handed to the generic spill, got %d chars", len(result.FullText))
+	}
+}
+
+// TestMCPTool_Execute_LargeTextKeepsHeadAndTailWindow verifies the oversized
+// text stays bounded to a head+tail window at the configured inline limit,
+// around an omission notice, while the artifact keeps the full payload.
+func TestMCPTool_Execute_LargeTextKeepsHeadAndTailWindow(t *testing.T) {
+	workspace := t.TempDir()
+	largeText := "HEAD_MARKER_ALPHA\n" +
+		strings.Repeat("the omitted middle line\n", 1000) +
+		"TAIL_MARKER_OMEGA"
+	manager := &MockMCPManager{
+		callToolFunc: func(ctx context.Context, serverName, toolName string, arguments map[string]any) (*mcp.CallToolResult, error) {
+			return &mcp.CallToolResult{
+				Content: []mcp.Content{
+					&mcp.TextContent{Text: largeText},
+				},
+			}, nil
+		},
+	}
+
+	mcpTool := NewMCPTool(manager, "test_server", &mcp.Tool{Name: "dump_payload"})
+	mcpTool.SetWorkspace(workspace)
+	mcpTool.SetMaxInlineTextRunes(2048)
+
+	result := mcpTool.Execute(context.Background(), nil)
+
+	if !strings.Contains(result.ForLLM, "HEAD_MARKER_ALPHA") {
+		t.Fatalf("expected the payload head inline, got %q", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "TAIL_MARKER_OMEGA") {
+		t.Fatalf("expected the payload tail inline, got %q", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "[MCP RESULT TRUNCATED - ") ||
+		!strings.Contains(result.ForLLM, "chars omitted out of") {
+		t.Fatalf("expected an omission notice with counts, got %q", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "saved as a local artifact") {
+		t.Fatalf("expected the artifact note, got %q", result.ForLLM)
+	}
+	if n := utf8.RuneCountInString(result.ForLLM); n > 2048+500 {
+		t.Fatalf("expected the inline window bounded at the limit, got %d runes", n)
+	}
+	if len(result.ArtifactTags) != 1 {
+		t.Fatalf("expected 1 artifact tag, got %+v", result.ArtifactTags)
+	}
+	path := strings.TrimSuffix(strings.TrimPrefix(result.ArtifactTags[0], "[file:"), "]")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("expected artifact readable: %v", err)
+	}
+	if string(data) != largeText {
+		t.Fatalf("expected the artifact to hold the full payload, middle included")
+	}
+}
+
+// TestMCPTool_Execute_SpilledResultIsNotRespilledByRegistry verifies the
+// generic large-result spill leaves an already-reduced MCP result alone even
+// when its bounded window exceeds the global inline threshold.
+func TestMCPTool_Execute_SpilledResultIsNotRespilledByRegistry(t *testing.T) {
+	workspace := t.TempDir()
+	largeText := strings.Repeat("This is a large MCP text payload.\n", 800)
+	manager := &MockMCPManager{
+		callToolFunc: func(ctx context.Context, serverName, toolName string, arguments map[string]any) (*mcp.CallToolResult, error) {
+			return &mcp.CallToolResult{
+				Content: []mcp.Content{
+					&mcp.TextContent{Text: largeText},
+				},
+			}, nil
+		},
+	}
+
+	mcpTool := NewMCPTool(manager, "test_server", &mcp.Tool{Name: "dump_payload"})
+	mcpTool.SetWorkspace(workspace)
+
+	reg := tools.NewToolRegistry()
+	reg.SetWorkspace(t.TempDir())
+	reg.SetMaxInlineResultRunes(4096)
+	reg.Register(mcpTool)
+
+	result := reg.Execute(context.Background(), mcpTool.Name(), nil)
+
+	if len(result.ArtifactTags) != 1 {
+		t.Fatalf("expected only the MCP artifact, got %+v", result.ArtifactTags)
+	}
+	if !strings.Contains(result.ForLLM, "[MCP RESULT TRUNCATED") {
+		t.Fatalf("expected the MCP window kept as-is, got %q", result.ForLLM)
+	}
+	if strings.Contains(result.ForLLM, "Tool returned a large result") {
+		t.Fatalf("expected no generic re-spill, got %q", result.ForLLM)
+	}
+}
+
+// TestMCPTool_Execute_ArtifactFailureStillSpillsFullText verifies that when the
+// MCP artifact directory is unwritable, the full payload is handed to the
+// generic spill and saved under .artifacts/tool instead of being dropped.
+func TestMCPTool_Execute_ArtifactFailureStillSpillsFullText(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	workspaceFile := filepath.Join(workspaceRoot, "not-a-directory")
+	if err := os.WriteFile(workspaceFile, []byte("x"), 0o600); err != nil {
+		t.Fatalf("failed to create workspace file: %v", err)
+	}
+
+	largeText := strings.Repeat("This is a large MCP text payload.\n", 800)
+	manager := &MockMCPManager{
+		callToolFunc: func(ctx context.Context, serverName, toolName string, arguments map[string]any) (*mcp.CallToolResult, error) {
+			return &mcp.CallToolResult{
+				Content: []mcp.Content{
+					&mcp.TextContent{Text: largeText},
+				},
+			}, nil
+		},
+	}
+
+	mcpTool := NewMCPTool(manager, "test_server", &mcp.Tool{Name: "dump_payload"})
+	mcpTool.SetWorkspace(workspaceFile)
+
+	reg := tools.NewToolRegistry()
+	reg.SetWorkspace(t.TempDir())
+	reg.SetMaxInlineResultRunes(512)
+	reg.Register(mcpTool)
+
+	result := reg.Execute(context.Background(), mcpTool.Name(), nil)
+
+	if len(result.ArtifactTags) != 1 {
+		t.Fatalf("expected the generic spill to save the payload, got %+v", result.ArtifactTags)
+	}
+	path := strings.TrimSuffix(strings.TrimPrefix(result.ArtifactTags[0], "[file:"), "]")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("expected artifact readable: %v", err)
+	}
+	if string(data) != strings.TrimSpace(largeText) {
+		t.Fatalf("expected the full payload in the generic spill artifact")
 	}
 }
 
