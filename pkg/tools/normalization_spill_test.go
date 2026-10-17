@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
 func newSpillTool(name string, result *ToolResult) *mockRegistryTool {
@@ -612,6 +614,50 @@ func TestExecuteWithContext_SpillUnwrapsWebFetchEnvelope(t *testing.T) {
 	}
 	if !strings.Contains(artifact, `"extractor": "markdown"`) {
 		t.Fatalf("expected envelope fields preserved as metadata, got %q", artifact[max(0, len(artifact)-300):])
+	}
+}
+
+func TestExecuteWithContext_SpillUnwrapsMCPServerEnvelope(t *testing.T) {
+	workspace := t.TempDir()
+	reg := NewToolRegistry()
+	reg.SetWorkspace(workspace)
+	reg.SetMaxInlineResultRunes(512)
+
+	body := strings.Repeat("pageable content line\n", 200)
+	envelope, err := json.Marshal(map[string]any{
+		"result":            body,
+		"structuredContent": map[string]any{"answer": 42},
+	})
+	if err != nil {
+		t.Fatalf("failed to build envelope: %v", err)
+	}
+	reg.Register(newSpillTool("mcp_github_get_file", SilentResult(string(envelope))))
+
+	result := reg.Execute(context.Background(), "mcp_github_get_file", nil)
+
+	if !strings.Contains(result.ForLLM, "pageable content line\n") {
+		t.Fatalf("expected real newlines in preview, got %q", result.ForLLM)
+	}
+	if strings.Contains(result.ForLLM, `\npageable`) {
+		t.Fatalf("expected no escaped newlines in preview, got %q", result.ForLLM)
+	}
+	if len(result.ArtifactTags) != 1 {
+		t.Fatalf("expected 1 artifact tag, got %+v", result.ArtifactTags)
+	}
+	path := strings.TrimSuffix(strings.TrimPrefix(result.ArtifactTags[0], "[file:"), "]")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("expected artifact file to be readable: %v", err)
+	}
+	artifact := string(data)
+	if !strings.Contains(artifact, "pageable content line\n") {
+		t.Fatalf("expected artifact to keep real newlines, got %q", artifact[:min(200, len(artifact))])
+	}
+	if !strings.Contains(artifact, toolshared.MCPResultMetadataTag) {
+		t.Fatalf("expected the mcp-result-metadata block in artifact")
+	}
+	if !strings.Contains(artifact, `"structuredContent"`) {
+		t.Fatalf("expected structuredContent preserved as metadata, got %q", artifact[max(0, len(artifact)-300):])
 	}
 }
 

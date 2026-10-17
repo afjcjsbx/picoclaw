@@ -406,11 +406,28 @@ func mcpTextResultMessage(llmText string, limit int, note string) string {
 	return body + "\n\n" + note
 }
 
+// mcpSanitizedStandInMessage reports whether text is one of the sanitizer's
+// stand-in notices for large inline data, as opposed to the server's own
+// payload. A stand-in must never be unwrapped: the envelope around it is not
+// what the server delivered.
+func mcpSanitizedStandInMessage(text string) bool {
+	return text == toolshared.LargeBase64OmittedMessage ||
+		text == toolshared.InlineMediaOmittedMessage
+}
+
 // persistLargeTextArtifact persists an oversized MCP text payload to a workspace
 // artifact and returns the model-facing replacement result: a bounded head+tail
 // window of the sanitized text plus the artifact path. The full raw payload is
 // what lands on disk, so the window costs no cargo. Returns nil when the text
 // fits, is empty, or no workspace is configured.
+//
+// A recognizable server envelope ({result, structuredContent, _meta}, see
+// toolshared.PageableMCPServerText) is unwrapped before the write: servers
+// commonly deliver one minified JSON document, and storing it verbatim would
+// put the whole payload on ONE line with escaped newlines, so the read_file /
+// search_files pagination the artifact note recommends could not page it.
+// Sibling fields survive in a <mcp-result-metadata> block; the size decision
+// stays on the raw text, which is what would have cost context.
 func (t *MCPTool) persistLargeTextArtifact(text, llmText string) *ToolResult {
 	text = strings.TrimSpace(text)
 	limit := t.maxInlineTextRunes
@@ -422,6 +439,14 @@ func (t *MCPTool) persistLargeTextArtifact(text, llmText string) *ToolResult {
 		return nil
 	}
 
+	// The sanitized view can be a stand-in (for example the large-base64
+	// notice); never unwrap the envelope around it. The artifact keeps the raw
+	// payload as before, just pageable.
+	persistedText := text
+	if !mcpSanitizedStandInMessage(strings.TrimSpace(llmText)) {
+		persistedText = toolshared.PageableMCPServerText(text)
+	}
+
 	dir := filepath.Join(t.workspace, ".artifacts", "mcp")
 
 	pattern := fmt.Sprintf(
@@ -429,9 +454,9 @@ func (t *MCPTool) persistLargeTextArtifact(text, llmText string) *ToolResult {
 		toolshared.SanitizeIdentifierComponent(t.serverName),
 		toolshared.SanitizeIdentifierComponent(t.tool.Name),
 	)
-	path, err := toolshared.PersistTextArtifact(dir, pattern, text)
+	path, err := toolshared.PersistTextArtifact(dir, pattern, persistedText)
 	if err != nil {
-		return t.largeTextArtifactFallback(text, llmText, limit, err)
+		return t.largeTextArtifactFallback(persistedText, text, llmText, limit, err)
 	}
 
 	return &ToolResult{
@@ -441,8 +466,13 @@ func (t *MCPTool) persistLargeTextArtifact(text, llmText string) *ToolResult {
 	}
 }
 
-func (t *MCPTool) largeTextArtifactFallback(text, llmText string, limit int, err error) *ToolResult {
-	size := utf8.RuneCountInString(text)
+// largeTextArtifactFallback keeps the bounded window inline, logs the failure,
+// and hands the full payload to the generic large-result spill under its own
+// artifact directory, so an unwritable .artifacts/mcp does not lose the text.
+// For an unwrapped envelope, the pageable text is handed over rather than the
+// JSON envelope, so the fallback artifact stays pageable too.
+func (t *MCPTool) largeTextArtifactFallback(persistedText, rawText, llmText string, limit int, err error) *ToolResult {
+	size := utf8.RuneCountInString(rawText)
 	logger.WarnCF("tool", "Failed to persist large MCP text artifact", map[string]any{
 		"server": t.serverName,
 		"tool":   t.tool.Name,
@@ -455,7 +485,7 @@ func (t *MCPTool) largeTextArtifactFallback(text, llmText string, limit int, err
 	// spill cannot persist either, the bounded view above is what remains.
 	return &ToolResult{
 		ForLLM:   mcpTextResultMessage(llmText, limit, mcpArtifactFailedNote),
-		FullText: text,
+		FullText: persistedText,
 	}
 }
 

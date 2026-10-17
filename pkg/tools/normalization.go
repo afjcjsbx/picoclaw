@@ -277,23 +277,23 @@ func buildLargeResultPreview(text string, total, maxRunes int) (preview string, 
 		omitted, headRunes, tailRunes
 }
 
-// pageableToolResultText rewrites a recognized JSON envelope — today only the
-// web_fetch result {url, status, extractor, truncated, length, text} — into
-// the pageable text it wraps: the payload's text with real newlines, followed
-// by the sibling fields in a <web-fetch-metadata> block.
+// pageableToolResultText rewrites a recognized JSON envelope — today the
+// web_fetch result {url, status, extractor, truncated, length, text} and an MCP
+// server's {result, structuredContent, _meta} envelope — into the pageable text
+// it wraps: the payload's text with real newlines, followed by the sibling
+// fields in a metadata block.
 //
 // Persisting such an envelope verbatim would put the whole document on ONE
 // line with escaped newlines, so the read_file/search_files pagination the
 // spill notice recommends could not page it at all. Recognition is by SHAPE,
-// not by tool name: a JSON object whose keys stay inside the web_fetch key set,
-// with a non-empty string "url", a numeric "status", and a non-empty string
-// "text", is that tool's own envelope. The discriminator fields matter: the
-// spill path also sees hook, plugin, and other-tool results, and a generic
-// payload such as {"text": "..."} must stay verbatim. Anything else —
-// unparseable JSON, a non-object, an unknown key, a missing or mistyped
-// discriminator, or a missing, empty, or non-string "text" — is returned
-// verbatim, so opaque JSON payloads from other tools (exec, curl, ...) keep
-// their exact bytes and stay jq-able.
+// not by tool name: a JSON object whose keys stay inside a known envelope key
+// set, with the envelope's text field present and well typed, is that server's
+// own envelope. The discriminator fields matter: the spill path also sees hook,
+// plugin, and other-tool results, and a generic payload such as {"text": "..."}
+// must stay verbatim. Anything else — unparseable JSON, a non-object, an
+// unknown key, a missing or mistyped discriminator, or a missing, empty, or
+// non-string text field — is returned verbatim, so opaque JSON payloads from
+// other tools (exec, curl, ...) keep their exact bytes and stay jq-able.
 func pageableToolResultText(content string) string {
 	// Cheap guards before any parse allocation. The envelope is a JSON object,
 	// so plain text, log output, and JSON arrays are rejected on the first byte.
@@ -302,6 +302,13 @@ func pageableToolResultText(content string) string {
 	trimmed := strings.TrimLeft(content, " \t\r\n")
 	if trimmed == "" || trimmed[0] != '{' || len(content) > webFetchEnvelopeMaxParseBytes {
 		return content
+	}
+
+	// An MCP server's own envelope ({result, structuredContent, _meta}) is the
+	// pageable text it wraps: servers commonly return one minified JSON
+	// document, which would otherwise land on one escaped line.
+	if pageable := toolshared.PageableMCPServerText(content); pageable != content {
+		return pageable
 	}
 
 	var payload map[string]json.RawMessage
