@@ -3,11 +3,13 @@ package fstools
 import (
 	"math"
 	"regexp"
+	"strings"
 )
 
 // redactedMarker is the placeholder used by the pipeline-wide sensitive data
-// filter (see docs/security/sensitive_data_filtering.md); search results use
-// the same marker for consistency.
+// filter (see docs/security/sensitive_data_filtering.md); the built-in
+// redaction (search results and file reads) uses the same marker for
+// consistency.
 const redactedMarker = "[FILTERED]"
 
 // searchSecretPatterns match well-known credential formats with high
@@ -52,22 +54,38 @@ const (
 	searchOpaqueMinLength      = 32
 )
 
-// redactSearchSecrets masks credential-looking values in one rendered result
-// line, so that secrets found in files do not reach the model even when they
-// are not part of the configured sensitive values covered by the pipeline
-// filter. Well-known token formats are always masked; other tokens are masked
-// when they look machine-generated (long and high-entropy, and not a plain
-// hex hash such as a commit id or checksum).
-func redactSearchSecrets(line string) string {
+// redactSecrets masks credential-looking values in content rendered to the
+// model (search results and file reads), so that secrets found in files do not
+// reach the model even when they are not part of the configured sensitive
+// values covered by the pipeline filter. Well-known token formats are always
+// masked; other tokens are masked when they look machine-generated (long and
+// high-entropy, and not a plain hex hash such as a commit id or checksum).
+//
+// Heuristics are evaluated per line: a secret-like identifier on one line does
+// not lower the bar for tokens on other lines, and the hex exemption stays
+// line-scoped even when whole files are passed in.
+func redactSecrets(text string) string {
+	if !strings.Contains(text, "\n") {
+		return redactSecretLine(text)
+	}
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		lines[i] = redactSecretLine(line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// redactSecretLine masks credential-looking values in a single line.
+func redactSecretLine(line string) string {
 	for _, pattern := range searchSecretPatterns {
 		line = pattern.ReplaceAllString(line, redactedMarker)
 	}
 	return redactHighEntropyRuns(line)
 }
 
-func redactHighEntropyRuns(line string) string {
-	hinted := searchSecretHintPattern.MatchString(line)
-	return searchHighEntropyRunPattern.ReplaceAllStringFunc(line, func(token string) string {
+func redactHighEntropyRuns(text string) string {
+	hinted := searchSecretHintPattern.MatchString(text)
+	return searchHighEntropyRunPattern.ReplaceAllStringFunc(text, func(token string) string {
 		minEntropy, minLength := searchOpaqueMinEntropy, searchOpaqueMinLength
 		if hinted {
 			minEntropy, minLength = searchSecretHintMinEntropy, searchSecretHintMinLength

@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestRedactSearchSecretsMasksKnownTokenFormats(t *testing.T) {
+func TestRedactSecretsMasksKnownTokenFormats(t *testing.T) {
 	// Token samples are assembled from fragments on purpose: the repository
 	// must not contain a literal string that secret scanners would flag,
 	// while the assembled lines still exercise the redaction patterns.
@@ -28,14 +28,14 @@ func TestRedactSearchSecretsMasksKnownTokenFormats(t *testing.T) {
 		{"google api key", `key=AIzaSyA1234567890abcdefghijklmnopqrstuv`},
 	}
 	for _, tc := range cases {
-		got := redactSearchSecrets(tc.line)
+		got := redactSecrets(tc.line)
 		if !strings.Contains(got, redactedMarker) {
 			t.Errorf("%s: expected %s in %q", tc.name, redactedMarker, got)
 		}
 	}
 }
 
-func TestRedactSearchSecretsMasksHighEntropyTokens(t *testing.T) {
+func TestRedactSecretsMasksHighEntropyTokens(t *testing.T) {
 	cases := []struct {
 		name string
 		line string
@@ -44,14 +44,14 @@ func TestRedactSearchSecretsMasksHighEntropyTokens(t *testing.T) {
 		{"unhinted random token", `value 8fJd92kLmQ73xPqR5tNvBw6YcAeZ1sUo2dF5gH7jK9lM`},
 	}
 	for _, tc := range cases {
-		got := redactSearchSecrets(tc.line)
+		got := redactSecrets(tc.line)
 		if !strings.Contains(got, redactedMarker) {
 			t.Errorf("%s: expected %s in %q", tc.name, redactedMarker, got)
 		}
 	}
 }
 
-func TestRedactSearchSecretsKeepsOrdinaryText(t *testing.T) {
+func TestRedactSecretsKeepsOrdinaryText(t *testing.T) {
 	cases := []string{
 		`SomeVeryLongCamelCaseIdentifierNameXYZ1234`,
 		`func getUserProfileByAccountIdentifierAndTenantID(ctx context.Context) {`,
@@ -62,7 +62,7 @@ func TestRedactSearchSecretsKeepsOrdinaryText(t *testing.T) {
 		`retry_policy: exponential-backoff-with-jitter-enabled-by-default`,
 	}
 	for _, line := range cases {
-		if got := redactSearchSecrets(line); got != line {
+		if got := redactSecrets(line); got != line {
 			t.Errorf("line must be left unchanged:\n in: %q\nout: %q", line, got)
 		}
 	}
@@ -101,5 +101,62 @@ func TestSearchFilesRedactsSecretsInResults(t *testing.T) {
 	}
 	if !strings.Contains(result.ForLLM, redactedMarker) {
 		t.Fatalf("expected %s in context results:\n%s", redactedMarker, result.ForLLM)
+	}
+}
+
+func TestReadFileToolRedactsSecretsInBytesMode(t *testing.T) {
+	dir := t.TempDir()
+	content := "OPENAI_API_KEY=sk-proj-4eC39HqLyjWDarjtT1zdp7dc\n" +
+		"commit e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n"
+	path := filepath.Join(dir, "config.env")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewReadFileTool(dir, true, MaxReadFileSize)
+
+	result := tool.Execute(context.Background(), map[string]any{"path": path})
+	if result.IsError {
+		t.Fatalf("read failed: %s", result.ForLLM)
+	}
+	if strings.Contains(result.ForLLM, "sk-proj-4eC39HqLyjWDarjtT1zdp7dc") {
+		t.Fatalf("secret key must be redacted:\n%s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, redactedMarker) {
+		t.Fatalf("expected %s in output:\n%s", redactedMarker, result.ForLLM)
+	}
+	// The hex exemption stays line-scoped: the hint on the key line must not
+	// cause the commit hash on the next line to be masked.
+	if !strings.Contains(result.ForLLM, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855") {
+		t.Fatalf("hex hash must stay visible:\n%s", result.ForLLM)
+	}
+	// The header keeps describing the raw byte range of the file, so the
+	// pagination offsets remain valid even when redaction shortens content.
+	if !strings.Contains(result.ForLLM, "bytes 0-") {
+		t.Fatalf("expected raw byte range in header:\n%s", result.ForLLM)
+	}
+}
+
+func TestReadFileLinesToolRedactsSecrets(t *testing.T) {
+	dir := t.TempDir()
+	token := "kZ8x3PqR7tYv2wBc5nMf9jLh4gD1sA6eUoQpXmWz"
+	content := "api_token = \"" + token + "\"\nplain = \"hello world\"\n"
+	path := filepath.Join(dir, "config.txt")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewReadFileLinesTool(dir, true, MaxReadFileSize)
+
+	result := tool.Execute(context.Background(), map[string]any{"path": path})
+	if result.IsError {
+		t.Fatalf("read failed: %s", result.ForLLM)
+	}
+	if strings.Contains(result.ForLLM, token) {
+		t.Fatalf("secret token must be redacted:\n%s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, redactedMarker) {
+		t.Fatalf("expected %s in output:\n%s", redactedMarker, result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, `plain = "hello world"`) {
+		t.Fatalf("ordinary content must stay visible:\n%s", result.ForLLM)
 	}
 }
