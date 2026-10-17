@@ -46,7 +46,7 @@ func NewSearchFilesTool(workspace string, restrict bool, allowPaths ...[]*regexp
 func (t *SearchFilesTool) Name() string { return "search_files" }
 
 func (t *SearchFilesTool) Description() string {
-	return "Search file contents or find files by name. Use this instead of grep/rg/find/ls in terminal. target='content' does regex search with files_only, count, or context output; target='files' finds names by glob or substring (an empty pattern lists files). Supports pagination. On macOS, searches above your home directory skip TCC-protected folders; target one directly to include it. Searches the configured readable filesystem sandbox."
+	return "Search file contents or find files by name. Use this instead of grep/rg/find/ls in terminal. target='content' does regex search with files_only, count, or context output; target='files' finds names by glob or substring (an empty pattern lists files). Skipped: paths ignored by .gitignore/.ignore and .git. Supports pagination. On macOS, searches above your home directory skip TCC-protected folders; target one directly to include it. Searches the configured readable filesystem sandbox."
 }
 
 func (t *SearchFilesTool) Parameters() map[string]any {
@@ -497,10 +497,13 @@ func (t *SearchFilesTool) walkPath(
 	}
 	filesScanned := 0
 	truncated := false
-	var walk func(string, bool) error
-	walk = func(dir string, isRoot bool) error {
+	var walk func(string, bool, searchIgnoreStack) error
+	walk = func(dir string, isRoot bool, ignore searchIgnoreStack) error {
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		if set, ok := loadSearchIgnoreSet(t.fs, dir); ok {
+			ignore = append(ignore[:len(ignore):len(ignore)], set)
 		}
 		entries, err := t.fs.ReadDir(dir)
 		if err != nil {
@@ -515,10 +518,10 @@ func (t *SearchFilesTool) walkPath(
 			}
 			child := filepath.Join(dir, entry.Name())
 			if entry.IsDir() {
-				if shouldSkipSearchDir(path, child, entry.Name()) {
+				if shouldSkipSearchDir(path, child, entry.Name()) || ignore.ignored(child, true) {
 					continue
 				}
-				if err := walk(child, false); err != nil {
+				if err := walk(child, false, ignore); err != nil {
 					return err
 				}
 				if truncated {
@@ -527,6 +530,9 @@ func (t *SearchFilesTool) walkPath(
 				continue
 			}
 			if !entry.Type().IsRegular() {
+				continue
+			}
+			if ignore.ignored(child, false) {
 				continue
 			}
 			filesScanned++
@@ -548,7 +554,7 @@ func (t *SearchFilesTool) walkPath(
 		}
 		return nil
 	}
-	if err := walk(path, true); err != nil {
+	if err := walk(path, true, nil); err != nil {
 		return filesScanned, truncated, err
 	}
 	return filesScanned, truncated, nil

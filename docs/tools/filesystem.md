@@ -118,3 +118,5 @@ Filename patterns accept three forms:
 * **Glob** — a pattern with metacharacters is matched as a glob. A glob containing `/` is matched against the whole relative path; one without `/` is matched against the base name. `*` and `?` do not cross `/`, `**/` matches any number of directories (`src/**/*.ts` also matches `src/main.ts`), and `{a,b}` alternates (`*.{js,ts}`).
 
 Searches run inside the readable sandbox. On macOS, searches above your home directory skip TCC-protected folders; target one directly to include it.
+
+Like `ripgrep`, directory walks honor `.gitignore` and `.ignore` files, including nested ones: patterns are gitignore-style (`!` negation, trailing `/` for directories, a leading or embedded `/` anchors to the declaring directory), `.ignore` overrides `.gitignore`, and a deeper file overrides a shallower one. `.git` is always skipped. An explicitly targeted file or directory (via `path`) is searched even when its ancestors are ignored.
