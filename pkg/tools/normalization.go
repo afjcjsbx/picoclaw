@@ -21,18 +21,10 @@ const (
 	inlineMediaStoredMessage  = "[Tool returned inline media content (%s); omitted from model context and registered as a media attachment.]"
 
 	// largeResultSpillSentinel prefixes a ForLLM value that has been reduced to a
-	// bounded artifact preview, so the model and logs can recognize it. It is
-	// informational only: idempotency is tracked by ToolResult.LargeResultSpilled,
-	// because tool output could contain this text.
-	largeResultSpillSentinel = "[picoclaw-large-tool-result]"
-
-	// largeResultPreviewHeadRunes and largeResultPreviewTailRunes bound the
-	// inline head/tail preview kept for a spilled result. Together they stay
-	// within the intended ~2-4KB preview budget: the model usually has enough
-	// content to answer without re-reading the artifact, which would otherwise
-	// re-spill and loop.
-	largeResultPreviewHeadRunes = 2048
-	largeResultPreviewTailRunes = 1024
+	// bounded artifact preview, so the model and logs can recognize it. The
+	// preview budget and builder live in toolshared so every producer of a
+	// spilled result (generic normalization, MCP tools) renders the same shape.
+	largeResultSpillSentinel = toolshared.LargeResultSpillSentinel
 )
 
 var (
@@ -147,7 +139,7 @@ func persistLargeResultArtifact(result *ToolResult, toolName, workspace string, 
 		return
 	}
 
-	preview, omitted, headRunes, tailRunes := buildLargeResultPreview(text, size, maxRunes)
+	preview, omitted, headRunes, tailRunes := toolshared.BuildLargeResultPreview(text, size, maxRunes)
 
 	dir := filepath.Join(workspace, ".artifacts", "tool")
 	pattern := toolshared.SanitizeIdentifierComponent(toolName) + "_*.txt"
@@ -179,46 +171,6 @@ func persistLargeResultArtifact(result *ToolResult, toolName, workspace string, 
 	)
 	result.ArtifactTags = append(result.ArtifactTags, "[file:"+path+"]")
 	result.LargeResultSpilled = true
-}
-
-// buildLargeResultPreview returns a head+tail preview of text, the number of
-// runes omitted between the two fragments, and the head/tail sizes. The preview
-// is bounded so inline context stays small while keeping the most useful parts:
-// the head (which for read_file includes its native truncation/offset guidance)
-// and the tail. The middle omission marker carries the real omitted count.
-//
-// Callers must only pass oversized text: total > maxRunes > 0. That guarantees
-// headBudget+tailBudget <= maxRunes < total, so something is always omitted and
-// both budgets are positive.
-func buildLargeResultPreview(text string, total, maxRunes int) (preview string, omitted, headRunes, tailRunes int) {
-	headBudget := largeResultPreviewHeadRunes
-	tailBudget := largeResultPreviewTailRunes
-	if headBudget+tailBudget > maxRunes {
-		// Small caps (e.g. tests): scale the preview down so it fits.
-		headBudget = maxRunes * 2 / 3
-		tailBudget = maxRunes - headBudget
-	}
-
-	headRunes = headBudget
-	tailRunes = tailBudget
-	omitted = total - headBudget - tailBudget
-
-	// Walk only the head and tail windows instead of converting the whole text
-	// to []rune: tool output can be tens of MB while the preview is ~3KB.
-	headEnd := 0
-	for i := 0; i < headBudget; i++ {
-		_, w := utf8.DecodeRuneInString(text[headEnd:])
-		headEnd += w
-	}
-	tailStart := len(text)
-	for i := 0; i < tailBudget; i++ {
-		_, w := utf8.DecodeLastRuneInString(text[:tailStart])
-		tailStart -= w
-	}
-
-	head, tail := text[:headEnd], text[tailStart:]
-	return fmt.Sprintf("%s\n\n[... %d characters truncated ...]\n\n%s", head, omitted, tail),
-		omitted, headRunes, tailRunes
 }
 
 func extractInlineMediaRefs(

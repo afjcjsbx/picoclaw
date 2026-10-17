@@ -28,7 +28,7 @@ and injected into the context for a configured number of turns (`ttl`).
 |------------------------|--------|---------|----------------------------------------------|
 | `enabled`              | bool   | false   | Enable MCP integration globally              |
 | `discovery`            | object | `{}`    | Configuration for Tool Discovery (see below) |
-| `max_inline_text_chars`| int    | 16384   | How much MCP text stays inline in model context before the result is saved as a workspace artifact |
+| `max_inline_text_chars`| int    | 16384   | How much MCP text stays inline in model context before the result is saved as a workspace artifact with a bounded head+tail preview |
 | `servers`              | object | `{}`    | Map of server name to server config          |
 
 ## Discovery Config (`discovery`)
