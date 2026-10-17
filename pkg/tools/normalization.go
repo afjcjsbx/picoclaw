@@ -40,14 +40,6 @@ const (
 	// the artifact; only the JSON envelope around them is replaced.
 	webFetchMetadataTag        = "<web-fetch-metadata>"
 	webFetchMetadataClosingTag = "</web-fetch-metadata>"
-
-	// webFetchEnvelopeMaxParseBytes bounds the payload size pageableToolResultText
-	// is willing to parse. Unwrapping copies the result into a map and then into
-	// a string, so a multi-megabyte JSON object from exec or a hook would be
-	// duplicated in memory for no practical gain. web_fetch itself is bounded by
-	// its download limit (10 MiB by default) and maxChars, so this only affects
-	// pathological payloads; those spill verbatim, as before the unwrap existed.
-	webFetchEnvelopeMaxParseBytes = 16 << 20
 )
 
 var (
@@ -65,6 +57,16 @@ var (
 		"truncated": {},
 		"length":    {},
 		"text":      {},
+	}
+
+	// webFetchEnvelopeSpec lets the shared unwrapper parse the payload once and
+	// recognize the web_fetch shape without a separate key-set walk.
+	webFetchEnvelopeSpec = toolshared.EnvelopeSpec{
+		Keys:     webFetchEnvelopeKeys,
+		TextKey:  "text",
+		OpenTag:  webFetchMetadataTag,
+		CloseTag: webFetchMetadataClosingTag,
+		Validate: validateWebFetchEnvelope,
 	}
 )
 
@@ -296,56 +298,30 @@ func buildLargeResultPreview(text string, total, maxRunes int) (preview string, 
 // non-string text field — is returned verbatim, so opaque JSON payloads from
 // other tools (exec, curl, ...) keep their exact bytes and stay jq-able.
 func pageableToolResultText(content, toolName string) string {
-	// Cheap guards before any parse allocation. The envelope is a JSON object,
-	// so plain text, log output, and JSON arrays are rejected on the first byte.
-	// The size cap keeps a pathological multi-megabyte object from being parsed
-	// and duplicated in memory (see webFetchEnvelopeMaxParseBytes).
-	trimmed := strings.TrimLeft(content, " \t\r\n")
-	if trimmed == "" || trimmed[0] != '{' || len(content) > webFetchEnvelopeMaxParseBytes {
-		return content
-	}
-
+	specs := make([]toolshared.EnvelopeSpec, 0, 2)
 	if isMCPToolName(toolName) {
-		if pageable := toolshared.PageableMCPServerText(content); pageable != content {
-			return pageable
-		}
+		// {"result": "..."} is common outside MCP, so only MCP tools may use
+		// the MCP spec; the web_fetch shape remains shape-based for any tool.
+		specs = append(specs, toolshared.MCPEnvelopeSpec)
 	}
+	specs = append(specs, webFetchEnvelopeSpec)
+	return toolshared.UnwrapEnvelopes(content, specs...)
+}
 
-	var payload map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(content), &payload); err != nil || len(payload) == 0 {
-		return content
-	}
-	for key := range payload {
-		if _, ok := webFetchEnvelopeKeys[key]; !ok {
-			return content
-		}
-	}
+// validateWebFetchEnvelope requires the producer's discriminator fields in
+// addition to the text member checked by the shared renderer. A bare
+// {"text": "..."} object from a hook or another tool is not this envelope.
+func validateWebFetchEnvelope(payload map[string]json.RawMessage) bool {
 	var pageURL string
 	if err := json.Unmarshal(payload["url"], &pageURL); err != nil || pageURL == "" {
-		return content
+		return false
 	}
 	var status any
 	if err := json.Unmarshal(payload["status"], &status); err != nil {
-		return content
+		return false
 	}
-	if _, ok := status.(float64); !ok {
-		return content
-	}
-	var text string
-	if err := json.Unmarshal(payload["text"], &text); err != nil || text == "" {
-		return content
-	}
-	extras := make(map[string]json.RawMessage, len(payload)-1)
-	for key, value := range payload {
-		if key != "text" {
-			extras[key] = value
-		}
-	}
-	metadata, err := json.MarshalIndent(extras, "", "  ")
-	if err != nil {
-		return text
-	}
-	return fmt.Sprintf("%s\n\n%s\n%s\n%s\n", text, webFetchMetadataTag, metadata, webFetchMetadataClosingTag)
+	_, ok := status.(float64)
+	return ok
 }
 
 // isMCPToolName reports whether toolName belongs to an MCP tool. MCPTool.Name
