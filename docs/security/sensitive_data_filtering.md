@@ -56,11 +56,13 @@ Sensitive data filtering is configured in the `tools` section of `config.json`:
 
 ---
 
-## Built-in redaction in search results
+## Built-in redaction in file reads and search results
 
-`search_files` scrubs its own output before the pipeline filter even runs. Rendered result lines are checked against well-known credential formats — Bearer headers, JWTs, `sk-`/`rk-` keys, GitHub tokens, AWS access key IDs, Slack `xox...` tokens, Google `AIza...` keys — and against a high-entropy heuristic that catches long machine-generated tokens, including on lines that mention a secret-like identifier (`key`, `token`, `password`, ...). Matches are replaced with `[FILTERED]`.
+`search_files` and `read_file` scrub their own output before the pipeline filter even runs. Rendered result lines and read content are checked against well-known credential formats — Bearer headers, JWTs, `sk-`/`rk-` keys, GitHub tokens, AWS access key IDs, Slack `xox...` tokens, Google `AIza...` keys — and against a high-entropy heuristic that catches long machine-generated tokens, including on content that mentions a secret-like identifier (`key`, `token`, `password`, ...). Matches are replaced with `[FILTERED]`. Heuristics are evaluated per line, so a secret-like word on one line does not change how other lines are treated.
 
 This layer does not depend on `filter_sensitive_data` or `.security.yml`: secrets found in files are masked even when they are not among the configured values. Ordinary code identifiers, long prose words and plain hex hashes (commit ids, checksums) are deliberately left untouched to keep results usable. When `filter_sensitive_data` is enabled, the pipeline filter then runs on top as a second layer.
+
+`read_file` redaction affects only the rendered text: byte offsets and line numbers still refer to the raw file, so the header range and the pagination arguments (`offset`, `start_line`) keep working even when a masked value is shorter than the original.
 
 ---
 

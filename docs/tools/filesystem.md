@@ -52,6 +52,8 @@ The tool has two modes, selected with `tools.read_file.mode`:
 
 Using `offset`/`length` in line mode (or `limit`) is rejected with an error: each mode only accepts its own pagination arguments.
 
+Both modes scrub credential-looking values from the rendered content before it reaches the model: well-known token formats and long machine-generated high-entropy strings are replaced with `[FILTERED]`, while ordinary identifiers, prose, and hex hashes stay visible. Pagination arguments and line numbers still refer to the raw file, so reads continue normally after a masked value. See [Built-in redaction in file reads and search results](../security/sensitive_data_filtering.md#built-in-redaction-in-file-reads-and-search-results).
+
 Results larger than `tools.max_inline_result_chars` are spilled to a workspace artifact with a head+tail preview, exactly like every other tool result; see [Large tool results](../reference/tools_configuration.md#large-tool-results).
 
 ## `write_file`
