@@ -136,6 +136,53 @@ func TestSearchFilesScansFilesLargerThanOneMiB(t *testing.T) {
 	}
 }
 
+func TestSearchFilesSearchesNonUTF8Text(t *testing.T) {
+	root := t.TempDir()
+	// Latin-1 text: 0xE9 is "é" in ISO-8859-1 and invalid UTF-8.
+	if err := os.WriteFile(filepath.Join(root, "latin1.txt"), []byte("caf\xe9 needle\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewSearchFilesTool(root, true)
+	result := tool.Execute(context.Background(), map[string]any{"pattern": "needle"})
+	if result.IsError {
+		t.Fatalf("search failed: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "latin1.txt:1:") || !strings.Contains(result.ForLLM, "needle") {
+		t.Fatalf("text with invalid UTF-8 must be searched:\n%s", result.ForLLM)
+	}
+}
+
+func TestSearchFilesSkipsFilesWithNULInHead(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "binary.bin"), []byte("needle\x00after\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewSearchFilesTool(root, true)
+	result := tool.Execute(context.Background(), map[string]any{"pattern": "needle"})
+	if result.IsError {
+		t.Fatalf("search failed: %s", result.ForLLM)
+	}
+	if strings.Contains(result.ForLLM, "needle") {
+		t.Fatalf("a file with a NUL byte in its head is binary and must be skipped:\n%s", result.ForLLM)
+	}
+}
+
+func TestSearchFilesSearchesNULBeyondHeadSniff(t *testing.T) {
+	root := t.TempDir()
+	content := strings.Repeat("a", 2*scanSearchBinarySniffBytes) + "\x00needle\n"
+	if err := os.WriteFile(filepath.Join(root, "deep.bin"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewSearchFilesTool(root, true)
+	result := tool.Execute(context.Background(), map[string]any{"pattern": "needle"})
+	if result.IsError {
+		t.Fatalf("search failed: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "deep.bin:") || !strings.Contains(result.ForLLM, "needle") {
+		t.Fatalf("only the head of a file decides binary detection:\n%s", result.ForLLM)
+	}
+}
+
 func TestSearchFilesContextMergesAdjacentMatches(t *testing.T) {
 	root := t.TempDir()
 	var lines []string

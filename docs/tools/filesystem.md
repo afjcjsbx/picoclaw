@@ -125,7 +125,7 @@ Output lines are capped at 240 bytes each. When a match lies beyond that cut, th
 
 With `context` greater than zero, matches whose context ranges overlap or touch are merged into a single block (as ripgrep does) instead of reprinting shared lines, and blocks are split at 50 lines so each result row stays small. `offset` and `limit` count these blocks, which makes pagination duplicate-free.
 
-Content searches are bounded by a scan budget (5,000 files and 64 MiB of file content). Files are streamed line by line, so there is no per-file size limit: larger files are searched in full as long as they fit the global budget. When a file no longer fits in the remaining byte budget it is skipped on its own and the walk continues with the files that still fit, instead of ending the search early.
+Content searches are bounded by a scan budget (5,000 files and 64 MiB of file content). Files are streamed line by line, so there is no per-file size limit: larger files are searched in full as long as they fit the global budget. When a file no longer fits in the remaining byte budget it is skipped on its own and the walk continues with the files that still fit, instead of ending the search early. Binary detection looks only at the first 8 KiB: a NUL byte there marks the file as binary and it is skipped, while text in other encodings (Latin-1, mixed byte sequences) is searched as byte text.
 
 Searches run inside the readable sandbox. On macOS, searches above your home directory skip TCC-protected folders; target one directly to include it.
 
