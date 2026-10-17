@@ -108,6 +108,34 @@ func TestSearchFilesSkipsFilesBeyondByteBudget(t *testing.T) {
 	}
 }
 
+func TestSearchFilesScansFilesLargerThanOneMiB(t *testing.T) {
+	root := t.TempDir()
+	var content strings.Builder
+	for content.Len() < 2*1024*1024 {
+		content.WriteString("lorem ipsum dolor sit amet consectetur adipiscing elit sed\n")
+	}
+	content.WriteString("needle\n")
+	if err := os.WriteFile(filepath.Join(root, "big.log"), []byte(content.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewSearchFilesTool(root, true)
+	result := tool.Execute(context.Background(), map[string]any{"pattern": "needle"})
+	if result.IsError {
+		t.Fatalf("search failed: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "big.log:") || !strings.Contains(result.ForLLM, "needle") {
+		t.Fatalf("matches in a file larger than 1 MiB must be found:\n%s", result.ForLLM)
+	}
+
+	result = tool.Execute(context.Background(), map[string]any{"pattern": "needle", "output_mode": "count"})
+	if result.IsError {
+		t.Fatalf("count search failed: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "big.log: 1") {
+		t.Fatalf("count mode must scan the whole large file:\n%s", result.ForLLM)
+	}
+}
+
 func TestSearchFilesContextMergesAdjacentMatches(t *testing.T) {
 	root := t.TempDir()
 	var lines []string
