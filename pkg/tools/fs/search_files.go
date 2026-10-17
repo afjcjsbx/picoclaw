@@ -2,6 +2,7 @@ package fstools
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -29,6 +30,9 @@ const (
 	// scanSearchReadBufferBytes is the buffered reader size used to stream
 	// file contents line by line.
 	scanSearchReadBufferBytes = 64 * 1024
+	// scanSearchBinarySniffBytes is how much of a file head is inspected for
+	// NUL bytes when deciding whether the file is binary.
+	scanSearchBinarySniffBytes = 8 * 1024
 )
 
 var (
@@ -52,7 +56,7 @@ func NewSearchFilesTool(workspace string, restrict bool, allowPaths ...[]*regexp
 func (t *SearchFilesTool) Name() string { return "search_files" }
 
 func (t *SearchFilesTool) Description() string {
-	return "Search file contents or find files by name. Use this instead of grep/rg/find/ls in terminal. target='content' does regex search with files_only, count, or context output; target='files' finds names by glob or substring (an empty pattern lists files). Skipped: paths ignored by .gitignore/.ignore and .git. Supports pagination. On macOS, searches above your home directory skip TCC-protected folders; target one directly to include it. Searches the configured readable filesystem sandbox."
+	return "Search file contents or find files by name. Use this instead of grep/rg/find/ls in terminal. target='content' does regex search with files_only, count, or context output; target='files' finds names by glob or substring (an empty pattern lists files). Skipped: paths ignored by .gitignore/.ignore or .git, and binary files (NUL byte in the first 8 KiB); other encodings are searched. Supports pagination. On macOS, searches above your home directory skip TCC-protected folders; target one directly to include it. Searches the configured readable filesystem sandbox."
 }
 
 func (t *SearchFilesTool) Parameters() map[string]any {
@@ -382,8 +386,10 @@ type searchFileResult struct {
 // result rows, reading at most remainingBytes of content and never holding
 // the whole file in memory. When the file cannot be scanned in full because
 // the global budget ran out mid-read, byteLimit is set and the partial
-// results are discarded, as if the file had not fit at all. Binary files (a
-// NUL byte or invalid UTF-8 in any line) are skipped silently.
+// results are discarded, as if the file had not fit at all. A file is
+// treated as binary, and skipped silently, when its first bytes contain a
+// NUL byte; invalid UTF-8 is not a reason to skip, so text in other
+// encodings is searched as byte text.
 func (t *SearchFilesTool) scanSearchFile(
 	path string,
 	pattern *regexp.Regexp,
@@ -425,10 +431,25 @@ func (t *SearchFilesTool) scanSearchFile(
 	br := &budgetReader{reader: f, limit: remainingBytes}
 	reader := bufio.NewReaderSize(br, scanSearchReadBufferBytes)
 
+	// Like ripgrep, binary detection inspects only the head of the file: a
+	// NUL byte there marks it as binary. Invalid UTF-8 is not a reason to
+	// skip, so Latin-1 and other encodings are searched as byte text.
+	sniff, sniffErr := reader.Peek(scanSearchBinarySniffBytes)
+	switch {
+	case errors.Is(sniffErr, errSearchByteLimit):
+		result.byteLimit = true
+		result.bytesRead = br.read
+		return result, nil
+	case sniffErr != nil && !errors.Is(sniffErr, io.EOF):
+		return result, sniffErr
+	case bytes.IndexByte(sniff, 0) >= 0:
+		result.bytesRead = br.read
+		return result, nil
+	}
+
 	var (
 		rows   []string
-		seen   int // rows generated for this file, committed to rowsSeen when the file is not binary
-		binary bool
+		seen   int // rows generated for this file, committed to rowsSeen when the file is scanned in full
 		number int
 		done   bool
 
@@ -522,10 +543,6 @@ func (t *SearchFilesTool) scanSearchFile(
 		if line != "" {
 			number++
 			text := strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
-			if strings.IndexByte(text, 0) >= 0 || !utf8.ValidString(text) {
-				binary = true
-				break
-			}
 			current := searchLine{number: number, text: text, loc: pattern.FindStringIndex(text)}
 			if current.hit() {
 				result.matches++
@@ -567,10 +584,6 @@ func (t *SearchFilesTool) scanSearchFile(
 	}
 
 	result.bytesRead = br.read
-	if binary {
-		result.matches = 0
-		return result, nil
-	}
 	if result.byteLimit {
 		// The file exceeded the remaining budget mid-read: drop its results.
 		result.matches = 0
