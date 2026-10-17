@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
 func newSpillTool(name string, result *ToolResult) *mockRegistryTool {
@@ -338,7 +340,7 @@ func TestBuildLargeResultPreview_MultibyteBoundaries(t *testing.T) {
 	text := strings.Repeat("é", 40) + strings.Repeat("世", 40) + strings.Repeat("x", 40)
 	total := utf8.RuneCountInString(text)
 
-	preview, omitted, headRunes, tailRunes := buildLargeResultPreview(text, total, 30)
+	preview, omitted, headRunes, tailRunes := toolshared.BuildLargeResultPreview(text, total, 30)
 
 	if !utf8.ValidString(preview) {
 		t.Fatalf("preview is not valid UTF-8: %q", preview)
@@ -364,7 +366,7 @@ func TestBuildLargeResultPreview_BudgetInvariants(t *testing.T) {
 			total := maxRunes + extra
 			text := strings.Repeat("é", total)
 
-			preview, omitted, headRunes, tailRunes := buildLargeResultPreview(text, total, maxRunes)
+			preview, omitted, headRunes, tailRunes := toolshared.BuildLargeResultPreview(text, total, maxRunes)
 
 			if headRunes < 0 || tailRunes < 1 {
 				t.Fatalf("max=%d total=%d: bad budgets head=%d tail=%d", maxRunes, total, headRunes, tailRunes)
@@ -390,7 +392,7 @@ func TestBuildLargeResultPreview_DoesNotCopyWholeText(t *testing.T) {
 	// preview itself only needs a few KB.
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
-	buildLargeResultPreview(text, total, 16*1024)
+	toolshared.BuildLargeResultPreview(text, total, 16*1024)
 	runtime.ReadMemStats(&after)
 	if grown := after.TotalAlloc - before.TotalAlloc; grown > 64<<10 {
 		t.Fatalf("preview allocated %d bytes for a %d byte input", grown, len(text))

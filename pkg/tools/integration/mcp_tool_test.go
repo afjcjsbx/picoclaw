@@ -786,7 +786,7 @@ func TestMCPTool_Execute_LargeBase64TextArtifactPreservesRawPayload(t *testing.T
 
 func TestMCPTool_Execute_LargeTextStoredAsArtifact(t *testing.T) {
 	workspace := t.TempDir()
-	largeText := strings.Repeat("This is a large MCP text payload.\n", 800)
+	largeText := "MCP-HEAD-MARKER\n" + strings.Repeat("middle payload line\n", 900) + "MCP-TAIL-MARKER"
 	manager := &MockMCPManager{
 		callToolFunc: func(ctx context.Context, serverName, toolName string, arguments map[string]any) (*mcp.CallToolResult, error) {
 			return &mcp.CallToolResult{
@@ -802,8 +802,20 @@ func TestMCPTool_Execute_LargeTextStoredAsArtifact(t *testing.T) {
 
 	result := mcpTool.Execute(context.Background(), nil)
 
-	if strings.Contains(result.ForLLM, "This is a large MCP text payload") {
-		t.Fatalf("expected large MCP text to be omitted from ForLLM, got %q", result.ForLLM)
+	if !strings.Contains(result.ForLLM, toolshared.LargeResultSpillSentinel) {
+		t.Fatalf("expected spill sentinel, got %q", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "MCP returned a large text result") {
+		t.Fatalf("expected spill note, got %q", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "MCP-HEAD-MARKER") {
+		t.Fatalf("expected head of the payload inline, got %q", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "MCP-TAIL-MARKER") {
+		t.Fatalf("expected tail of the payload inline, got %q", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "characters truncated") {
+		t.Fatalf("expected omission marker, got %q", result.ForLLM)
 	}
 	if !strings.Contains(result.ForLLM, "saved as a local artifact") {
 		t.Fatalf("expected artifact note, got %q", result.ForLLM)
@@ -851,12 +863,18 @@ func TestMCPTool_Execute_CustomInlineTextThreshold(t *testing.T) {
 	if len(result.ArtifactTags) != 1 {
 		t.Fatalf("expected custom threshold to persist artifact, got %+v", result)
 	}
-	if strings.Contains(result.ForLLM, "small custom threshold text") {
-		t.Fatalf("expected text to be omitted from ForLLM, got %q", result.ForLLM)
+	if !strings.Contains(result.ForLLM, "small custom thres") {
+		t.Fatalf("expected bounded head preview, got %q", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "ld text") {
+		t.Fatalf("expected bounded tail preview, got %q", result.ForLLM)
+	}
+	if strings.Contains(result.ForLLM, strings.TrimSpace(text)) {
+		t.Fatalf("expected full text to be omitted from ForLLM, got %q", result.ForLLM)
 	}
 }
 
-func TestMCPTool_Execute_LargeTextArtifactFailureStillOmitsContext(t *testing.T) {
+func TestMCPTool_Execute_LargeTextArtifactFailureKeepsBoundedPreview(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	workspaceFile := filepath.Join(workspaceRoot, "not-a-directory")
 	if err := os.WriteFile(workspaceFile, []byte("x"), 0o600); err != nil {
@@ -879,8 +897,11 @@ func TestMCPTool_Execute_LargeTextArtifactFailureStillOmitsContext(t *testing.T)
 
 	result := mcpTool.Execute(context.Background(), nil)
 
-	if strings.Contains(result.ForLLM, "This is a large MCP text payload") {
-		t.Fatalf("expected large MCP text to be omitted from ForLLM, got %q", result.ForLLM)
+	if !strings.Contains(result.ForLLM, "This is a large MCP text payload.") {
+		t.Fatalf("expected head preview on persistence failure, got %q", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "characters truncated") {
+		t.Fatalf("expected omission marker on persistence failure, got %q", result.ForLLM)
 	}
 	if !strings.Contains(result.ForLLM, "artifact persistence failed") {
 		t.Fatalf("expected persistence failure note, got %q", result.ForLLM)

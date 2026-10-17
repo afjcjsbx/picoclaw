@@ -370,7 +370,7 @@ func (t *MCPTool) normalizeResultContent(ctx context.Context, content []mcp.Cont
 
 	forLLM := strings.Join(compactStrings(llmParts), "\n")
 	rawText := strings.Join(compactStrings(rawTextParts), "\n")
-	if artifactResult := t.persistLargeTextArtifact(rawText); artifactResult != nil {
+	if artifactResult := t.persistLargeTextArtifact(rawText, forLLM); artifactResult != nil {
 		artifactResult.Media = mediaRefs
 		return artifactResult
 	}
@@ -382,7 +382,21 @@ func (t *MCPTool) normalizeResultContent(ctx context.Context, content []mcp.Cont
 	return result
 }
 
-func (t *MCPTool) persistLargeTextArtifact(text string) *ToolResult {
+// Model-facing tails for a spilled MCP text result: they close the note that
+// introduces the inline preview.
+const (
+	mcpArtifactSavedNote = "the full payload is saved as a local artifact " +
+		"(path listed below) — use read_file (offset/length) to read more"
+	mcpArtifactFailedNote = "artifact persistence failed, so the raw payload is unavailable"
+)
+
+// persistLargeTextArtifact persists an oversized MCP text payload to a workspace
+// artifact and returns the model-facing replacement result: a bounded head+tail
+// preview of the payload plus the artifact path. llmText is the sanitized text
+// the model would have seen inline; it feeds the preview so placeholders (for
+// example large base64 payloads) never leak into context. Returns nil when the
+// text fits, is empty, or no workspace is configured.
+func (t *MCPTool) persistLargeTextArtifact(text, llmText string) *ToolResult {
 	text = strings.TrimSpace(text)
 	limit := t.maxInlineTextRunes
 	if limit <= 0 {
@@ -402,32 +416,62 @@ func (t *MCPTool) persistLargeTextArtifact(text string) *ToolResult {
 	)
 	path, err := toolshared.PersistTextArtifact(dir, pattern, text)
 	if err != nil {
-		return t.largeTextArtifactFallback(text, err)
+		return t.largeTextArtifactFallback(llmText, size, err)
 	}
 
 	return &ToolResult{
-		ForLLM: fmt.Sprintf(
-			"[MCP returned a large text result (%d chars); omitted from model context and saved as a local artifact.]",
-			size,
-		),
-		ArtifactTags: []string{"[file:" + path + "]"},
+		ForLLM:             t.largeTextArtifactMessage(llmText, size, mcpArtifactSavedNote),
+		ArtifactTags:       []string{"[file:" + path + "]"},
+		LargeResultSpilled: true,
 	}
 }
 
-func (t *MCPTool) largeTextArtifactFallback(text string, err error) *ToolResult {
-	size := utf8.RuneCountInString(text)
+func (t *MCPTool) largeTextArtifactFallback(llmText string, size int, err error) *ToolResult {
 	logger.WarnCF("tool", "Failed to persist large MCP text artifact", map[string]any{
 		"server": t.serverName,
 		"tool":   t.tool.Name,
 		"chars":  size,
 		"error":  err.Error(),
 	})
+	// Keep the bounded preview even when the full payload could not be saved:
+	// dropping everything would hide actionable content and can make the model
+	// retry identically.
 	return &ToolResult{
-		ForLLM: fmt.Sprintf(
-			"[MCP returned a large text result (%d chars); omitted from model context because artifact persistence failed.]",
-			size,
-		),
+		ForLLM:             t.largeTextArtifactMessage(llmText, size, mcpArtifactFailedNote),
+		LargeResultSpilled: true,
 	}
+}
+
+// largeTextArtifactMessage renders the model-facing text for an oversized MCP
+// text result. When the sanitized inline text is itself oversized it keeps the
+// same bounded head+tail preview used for other spilled tool results; otherwise
+// the whole sanitized text stays inline next to the note. Either way the model
+// sees the beginning and the end of the output instead of a bare pointer.
+func (t *MCPTool) largeTextArtifactMessage(llmText string, rawSize int, note string) string {
+	limit := t.maxInlineTextRunes
+	if limit <= 0 {
+		limit = maxMCPInlineTextRunes
+	}
+	inline := strings.TrimSpace(llmText)
+	inlineSize := utf8.RuneCountInString(inline)
+	if inlineSize > limit {
+		preview, omitted, headRunes, tailRunes := toolshared.BuildLargeResultPreview(inline, inlineSize, limit)
+		return fmt.Sprintf(
+			"%s [MCP returned a large text result (%d chars, %d omitted); "+
+				"showing first %d and last %d characters; %s]\n\n%s",
+			toolshared.LargeResultSpillSentinel, inlineSize, omitted, headRunes, tailRunes, note, preview,
+		)
+	}
+	if inline == "" {
+		return fmt.Sprintf(
+			"%s [MCP returned a large text result (%d chars); %s]",
+			toolshared.LargeResultSpillSentinel, rawSize, note,
+		)
+	}
+	return fmt.Sprintf(
+		"%s [MCP returned a large text result (%d chars); %s]\n\n%s",
+		toolshared.LargeResultSpillSentinel, rawSize, note, inline,
+	)
 }
 
 func (t *MCPTool) storeEmbeddedResource(ctx context.Context, content *mcp.EmbeddedResource) (string, string, string) {
