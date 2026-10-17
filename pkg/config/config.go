@@ -1292,7 +1292,19 @@ type ExecConfig struct {
 	AllowRemote         bool     `                                 json:"allow_remote"          env:"PICOCLAW_TOOLS_EXEC_ALLOW_REMOTE"`
 	CustomDenyPatterns  []string `                                 json:"custom_deny_patterns"  env:"PICOCLAW_TOOLS_EXEC_CUSTOM_DENY_PATTERNS"`
 	CustomAllowPatterns []string `                                 json:"custom_allow_patterns" env:"PICOCLAW_TOOLS_EXEC_CUSTOM_ALLOW_PATTERNS"`
-	TimeoutSeconds      int      `                                 json:"timeout_seconds"       env:"PICOCLAW_TOOLS_EXEC_TIMEOUT_SECONDS"` // 0 means use default (60s)
+	TimeoutSeconds      int      `                                 json:"timeout_seconds"       env:"PICOCLAW_TOOLS_EXEC_TIMEOUT_SECONDS"`  // 0 means use default (60s)
+	MaxOutputChars      int      `                                 json:"max_output_chars"      env:"PICOCLAW_TOOLS_EXEC_MAX_OUTPUT_CHARS"` // 0 means use default (50000 chars)
+}
+
+// DefaultExecMaxOutputChars bounds foreground exec output before it is
+// truncated to a head+tail window with an omission notice.
+const DefaultExecMaxOutputChars = 50000
+
+func (c ExecConfig) GetMaxOutputChars() int {
+	if c.MaxOutputChars > 0 {
+		return c.MaxOutputChars
+	}
+	return DefaultExecMaxOutputChars
 }
 
 type SkillsToolsConfig struct {
@@ -1314,6 +1326,32 @@ type ReadFileToolConfig struct {
 	Enabled         bool   `json:"enabled"`
 	Mode            string `json:"mode"`
 	MaxReadFileSize int    `json:"max_read_file_size"`
+	// MaxLines caps how many lines a single line-mode read returns; requests
+	// above it are clamped. 0 means use the default (2000).
+	MaxLines int `json:"max_lines"`
+	// MaxLineLength caps how long any single line may be in the line-numbered
+	// view; the remainder is replaced by a " ... [truncated]" marker. 0 means
+	// use the default (2000).
+	MaxLineLength int `json:"max_line_length"`
+}
+
+const (
+	DefaultReadFileMaxLines      = 2000
+	DefaultReadFileMaxLineLength = 2000
+)
+
+func (c ReadFileToolConfig) GetMaxLines() int {
+	if c.MaxLines > 0 {
+		return c.MaxLines
+	}
+	return DefaultReadFileMaxLines
+}
+
+func (c ReadFileToolConfig) GetMaxLineLength() int {
+	if c.MaxLineLength > 0 {
+		return c.MaxLineLength
+	}
+	return DefaultReadFileMaxLineLength
 }
 
 type ImageGenerateToolConfig struct {

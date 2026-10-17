@@ -775,6 +775,112 @@ func TestCronTool_AllowlistedRemoteCannotAccessOtherChatCommandJob(t *testing.T)
 	}
 }
 
+// TestCronTool_PicoJobsAreVisibleAcrossChats verifies job access on the Pico
+// channel is scoped to the whole channel: it has a single owner (one shared
+// token and the fixed pico-user sender), so every WebUI chat belongs to the
+// same owner and a job created in one chat stays manageable from another.
+func TestCronTool_PicoJobsAreVisibleAcrossChats(t *testing.T) {
+	tool := newTestCronTool(t)
+	picoJob := addTestCronJob(t, tool, "daily", "pico", "pico:chat-a", "")
+	telegramJob := addTestCronJob(t, tool, "other", "telegram", "chat-1", "")
+	ctx := WithToolContext(context.Background(), "pico", "pico:chat-b")
+
+	listResult := tool.Execute(ctx, map[string]any{"action": "list"})
+	if listResult.IsError {
+		t.Fatalf("list failed: %s", listResult.ForLLM)
+	}
+	if !strings.Contains(listResult.ForLLM, picoJob.ID) {
+		t.Fatalf("list should include pico job from another chat, got: %s", listResult.ForLLM)
+	}
+	if strings.Contains(listResult.ForLLM, telegramJob.ID) {
+		t.Fatalf("list should not include jobs of other channels, got: %s", listResult.ForLLM)
+	}
+
+	getResult := tool.Execute(ctx, map[string]any{"action": "get", "job_id": picoJob.ID})
+	if getResult.IsError {
+		t.Fatalf("get from another pico chat failed: %s", getResult.ForLLM)
+	}
+
+	updateResult := tool.Execute(ctx, map[string]any{"action": "update", "job_id": picoJob.ID, "message": "updated"})
+	if updateResult.IsError {
+		t.Fatalf("update from another pico chat failed: %s", updateResult.ForLLM)
+	}
+	updated, ok := tool.cronService.GetJob(picoJob.ID)
+	if !ok {
+		t.Fatal("job should still exist")
+	}
+	if updated.Payload.Message != "updated" {
+		t.Fatalf("update did not apply: %+v", updated.Payload)
+	}
+
+	removeResult := tool.Execute(ctx, map[string]any{"action": "remove", "job_id": picoJob.ID})
+	if removeResult.IsError {
+		t.Fatalf("remove from another pico chat failed: %s", removeResult.ForLLM)
+	}
+	if _, ok := tool.cronService.GetJob(picoJob.ID); ok {
+		t.Fatal("job should have been removed")
+	}
+}
+
+// TestCronTool_PicoCommandJobsStillRequireAllowlist verifies the
+// command_allowed_remotes gate still applies to command jobs on the
+// single-owner Pico channel, even though their visibility spans chats.
+func TestCronTool_PicoCommandJobsStillRequireAllowlist(t *testing.T) {
+	tool := newTestCronTool(t)
+	job := addTestCronJob(t, tool, "command", "pico", "pico:chat-a", "df -h")
+	ctx := WithToolContext(context.Background(), "pico", "pico:chat-b")
+
+	for _, action := range []string{"get", "update", "run", "remove"} {
+		args := map[string]any{"action": action, "job_id": job.ID}
+		if action == "update" {
+			args["message"] = "changed"
+		}
+		result := tool.Execute(ctx, args)
+		if !result.IsError || !strings.Contains(result.ForLLM, "not accessible") {
+			t.Fatalf("expected %s to reject non-allowlisted pico command job, got: %+v", action, result)
+		}
+	}
+	unchanged, ok := tool.cronService.GetJob(job.ID)
+	if !ok {
+		t.Fatal("rejected management must not remove the job")
+	}
+	if unchanged.Payload.Message != "command message" || unchanged.Payload.Command != "df -h" {
+		t.Fatalf("rejected management mutated the job: %+v", unchanged.Payload)
+	}
+
+	allowedCfg := config.DefaultConfig()
+	allowedCfg.Tools.Cron.CommandAllowedRemotes = []string{"pico"}
+	allowedTool := newTestCronToolWithConfig(t, allowedCfg)
+	allowedJob := addTestCronJob(t, allowedTool, "command", "pico", "pico:chat-a", "df -h")
+
+	getResult := allowedTool.Execute(ctx, map[string]any{"action": "get", "job_id": allowedJob.ID})
+	if getResult.IsError {
+		t.Fatalf("allowlisted pico command job should be visible from another chat, got: %s", getResult.ForLLM)
+	}
+}
+
+// TestCronTool_RunPicoJobFromAnotherChat verifies on-demand runs honor the
+// channel-wide access of the single-owner Pico channel.
+func TestCronTool_RunPicoJobFromAnotherChat(t *testing.T) {
+	tool, ran := startRunnableCronTool(t, config.DefaultConfig())
+	job := addTestCronJob(t, tool, "hourly", "pico", "pico:chat-a", "")
+	ctx := WithToolContext(context.Background(), "pico", "pico:chat-b")
+
+	result := tool.Execute(ctx, map[string]any{"action": "run", "job_id": job.ID})
+	if result.IsError {
+		t.Fatalf("run from another pico chat failed: %s", result.ForLLM)
+	}
+	select {
+	case id := <-ran:
+		if id != job.ID {
+			t.Fatalf("ran %s, want %s", id, job.ID)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("job was not executed")
+	}
+	waitCronJobDone(t, tool, job.ID)
+}
+
 func TestCronTool_NonAllowlistedRemoteCannotAccessOwnCommandJob(t *testing.T) {
 	tool := newTestCronTool(t)
 	job := addTestCronJob(t, tool, "command", "telegram", "chat-1", "df -h")

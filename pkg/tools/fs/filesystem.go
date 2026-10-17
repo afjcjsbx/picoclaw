@@ -22,7 +22,18 @@ import (
 	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
-const MaxReadFileSize = 64 * 1024 // 64KB limit to avoid context overflow
+const (
+	MaxReadFileSize = 64 * 1024 // 64KB limit to avoid context overflow
+
+	// DefaultReadFileMaxLines caps how many lines one line-mode read returns
+	// when the caller does not request a smaller batch.
+	DefaultReadFileMaxLines = 2000
+	// DefaultReadFileMaxLineLength caps how long a single line may be in the
+	// line-numbered view before the remainder is replaced by a marker.
+	DefaultReadFileMaxLineLength = 2000
+	// lineTruncationMarker replaces the part of an oversized line that was cut.
+	lineTruncationMarker = " ... [truncated]"
+)
 
 func ValidatePathWithAllowPaths(
 	path, workspace string,
@@ -294,8 +305,10 @@ type ReadFileTool struct {
 }
 
 type ReadFileLinesTool struct {
-	fs      fileSystem
-	maxSize int64
+	fs            fileSystem
+	maxSize       int64
+	maxLines      int
+	maxLineLength int
 }
 
 func NewReadFileTool(
@@ -333,6 +346,8 @@ func NewReadFileLinesTool(
 	workspace string,
 	restrict bool,
 	maxReadFileSize int,
+	maxLines int,
+	maxLineLength int,
 	allowPaths ...[]*regexp.Regexp,
 ) *ReadFileLinesTool {
 	var patterns []*regexp.Regexp
@@ -344,10 +359,18 @@ func NewReadFileLinesTool(
 	if maxSize <= 0 {
 		maxSize = MaxReadFileSize
 	}
+	if maxLines <= 0 {
+		maxLines = DefaultReadFileMaxLines
+	}
+	if maxLineLength <= 0 {
+		maxLineLength = DefaultReadFileMaxLineLength
+	}
 
 	return &ReadFileLinesTool{
-		fs:      buildFs(workspace, restrict, patterns),
-		maxSize: maxSize,
+		fs:            buildFs(workspace, restrict, patterns),
+		maxSize:       maxSize,
+		maxLines:      maxLines,
+		maxLineLength: maxLineLength,
 	}
 }
 
@@ -586,6 +609,9 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 			return ErrorResult("max_lines, if provided, must be > 0")
 		}
 	}
+	if limit > int64(t.maxLines) {
+		limit = int64(t.maxLines)
+	}
 
 	file, err := t.fs.Open(path)
 	if err != nil {
@@ -617,9 +643,10 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 	var reachedEOF bool
 	var byteBudgetTruncated bool
 	var lineTruncated bool
+	var linesTruncated int64
 
 	for lineIndex < startLine {
-		hasLine, consumeErr := consumeNextLine(reader)
+		hasLine, _, consumeErr := consumeNextLine(reader)
 		if consumeErr != nil {
 			return ErrorResult(fmt.Sprintf("failed to read file content: %v", consumeErr))
 		}
@@ -638,7 +665,20 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 			break
 		}
 
-		line, complete, hasLine, readLineErr := readNextLinePrefix(reader, remaining)
+		// Reading a line is capped so a single long line cannot eat the whole
+		// byte budget. The +1 byte leaves room for the trailing newline, so a
+		// line cut at this allowance is guaranteed to have more than
+		// maxLineLength runes.
+		allowance := remaining
+		lineAllowance := int64(0)
+		if t.maxLineLength > 0 {
+			lineAllowance = int64(t.maxLineLength)*int64(utf8.UTFMax) + 1
+			if lineAllowance < allowance {
+				allowance = lineAllowance
+			}
+		}
+
+		line, complete, hasLine, restPending, consumedBytes, readLineErr := readNextLinePrefix(reader, allowance)
 		if readLineErr != nil {
 			return ErrorResult(fmt.Sprintf("failed to read file content: %v", readLineErr))
 		}
@@ -647,14 +687,54 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 			break
 		}
 
+		hadTrailingNewline := len(line) > 0 && line[len(line)-1] == '\n'
+
+		cutAtLineAllowance := !complete && lineAllowance > 0 && allowance == lineAllowance
+		cutAtByteBudget := !complete && !cutAtLineAllowance
+
+		displayLine := line
+		lineCutByLimit := false
+		if t.maxLineLength > 0 && len(displayLine) > t.maxLineLength {
+			if cut := truncateLineRunes(displayLine, t.maxLineLength); len(cut) < len(displayLine) {
+				displayLine = cut
+				lineCutByLimit = true
+			}
+		}
+		if lineCutByLimit {
+			displayLine = append(displayLine, lineTruncationMarker...)
+			if complete && hadTrailingNewline {
+				displayLine = append(displayLine, '\n')
+			}
+			linesTruncated++
+		}
+
+		if cutAtLineAllowance && (len(displayLine) == 0 || displayLine[len(displayLine)-1] != '\n') {
+			// The prefix stops mid-line: terminate the display line so the
+			// next line number is not glued to the truncation marker.
+			displayLine = append(displayLine, '\n')
+		}
+
 		content.WriteString(prefix)
-		content.Write(line)
-		fileBytesRead += int64(len(line))
-		outputBytesRead += int64(len(prefix) + len(line))
+		content.Write(displayLine)
+		fileBytesRead += consumedBytes
+		outputBytesRead += int64(len(prefix) + len(displayLine))
 		linesRead++
 		lineIndex++
 
-		if !complete {
+		if cutAtLineAllowance {
+			// Discard any unread remainder of the oversized line so the next
+			// iteration starts at the next line.
+			if restPending {
+				_, discardedBytes, consumeErr := consumeNextLine(reader)
+				if consumeErr != nil {
+					return ErrorResult(fmt.Sprintf("failed to read file content: %v", consumeErr))
+				}
+				fileBytesRead += discardedBytes
+			}
+			continue
+		}
+
+		if cutAtByteBudget {
 			byteBudgetTruncated = true
 			lineTruncated = true
 			break
@@ -721,6 +801,7 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 			"file_bytes_read":   fileBytesRead,
 			"output_bytes_read": outputBytesRead,
 			"truncated":         byteBudgetTruncated,
+			"lines_truncated":   linesTruncated,
 			"tool":              t.Name(),
 		})
 
@@ -729,6 +810,16 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 
 func formatReadFileLinePrefix(lineNumber int64) string {
 	return strconv.FormatInt(lineNumber, 10) + "|"
+}
+
+// truncateLineRunes cuts line to at most maxRunes runes, on a rune boundary.
+func truncateLineRunes(line []byte, maxRunes int) []byte {
+	end := 0
+	for i := 0; i < maxRunes && end < len(line); i++ {
+		_, width := utf8.DecodeRune(line[end:])
+		end += width
+	}
+	return line[:end]
 }
 
 func isBinaryReadFileData(data []byte) bool {
@@ -771,39 +862,52 @@ func isBinaryReadFileData(data []byte) bool {
 	return float64(controlChars)/float64(len(sample)) > 0.1
 }
 
-func consumeNextLine(reader *bufio.Reader) (bool, error) {
+func consumeNextLine(reader *bufio.Reader) (bool, int64, error) {
 	sawData := false
+	var consumed int64
 
 	for {
 		fragment, err := reader.ReadSlice('\n')
+		consumed += int64(len(fragment))
 		if len(fragment) > 0 {
 			sawData = true
 		}
 
 		switch {
 		case err == nil:
-			return true, nil
+			return true, consumed, nil
 		case errors.Is(err, bufio.ErrBufferFull):
 			continue
 		case errors.Is(err, io.EOF):
-			return sawData, nil
+			return sawData, consumed, nil
 		default:
-			return false, err
+			return false, consumed, err
 		}
 	}
 }
 
-func readNextLinePrefix(reader *bufio.Reader, maxBytes int64) ([]byte, bool, bool, error) {
+// readNextLinePrefix reads at most maxBytes from the start of the next line.
+// complete reports whether the whole line (including its terminator, if any)
+// was read. restPending reports whether the reader still holds the remainder of
+// an oversized line that the caller must discard before reading the next line;
+// it is false when ReadSlice already consumed the terminator. consumed is the
+// total number of bytes taken from the reader for this line, including bytes
+// read past maxBytes.
+func readNextLinePrefix(
+	reader *bufio.Reader,
+	maxBytes int64,
+) (line []byte, complete, hasLine, restPending bool, consumed int64, err error) {
 	if maxBytes <= 0 {
-		return nil, false, false, nil
+		return nil, false, false, false, 0, nil
 	}
 
 	var out bytes.Buffer
 	sawData := false
-	complete := true
+	complete = true
 
 	for {
-		fragment, err := reader.ReadSlice('\n')
+		fragment, readErr := reader.ReadSlice('\n')
+		consumed += int64(len(fragment))
 		if len(fragment) > 0 {
 			sawData = true
 			if remaining := maxBytes - int64(out.Len()); remaining > 0 {
@@ -819,20 +923,23 @@ func readNextLinePrefix(reader *bufio.Reader, maxBytes int64) ([]byte, bool, boo
 		}
 
 		switch {
-		case err == nil:
-			return out.Bytes(), complete, sawData, nil
-		case errors.Is(err, bufio.ErrBufferFull):
+		case readErr == nil:
+			// The terminator (and any bytes after the returned prefix) has
+			// already been consumed, so the caller must not discard again.
+			return out.Bytes(), complete, sawData, false, consumed, nil
+		case errors.Is(readErr, bufio.ErrBufferFull):
 			if !complete {
-				return out.Bytes(), false, true, nil
+				// The terminator has not been reached yet.
+				return out.Bytes(), false, true, true, consumed, nil
 			}
 			continue
-		case errors.Is(err, io.EOF):
+		case errors.Is(readErr, io.EOF):
 			if !sawData {
-				return nil, true, false, nil
+				return nil, true, false, false, consumed, nil
 			}
-			return out.Bytes(), complete, true, nil
+			return out.Bytes(), complete, true, false, consumed, nil
 		default:
-			return nil, false, false, err
+			return nil, false, false, false, consumed, readErr
 		}
 	}
 }

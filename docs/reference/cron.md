@@ -54,9 +54,15 @@ the original prompt, delivery target, or command payload.
 Remote channel access is scoped to the current `channel/chat_id`: remote callers
 can only act on jobs whose saved `payload.channel` and `payload.to` match the
 current conversation. This applies to `list`, `get`, `update`, `run`, `remove`,
-`enable`, and `disable`. Command jobs include a shell command payload, so they
-can only be listed, inspected, updated, or run from internal channels or remote
-channels allowed by `tools.cron.command_allowed_remotes`.
+`enable`, and `disable`. Single-owner channels are the exception: the Pico WebUI
+is authenticated with one shared token and always sends as the fixed `pico-user`
+sender, so its jobs are scoped to the whole channel — a job created in one WebUI
+conversation remains visible and manageable from every other one. Because all of
+its chats belong to the same owner, this does not widen access to anyone else.
+Command jobs include a shell command payload, so they can only be listed,
+inspected, updated, or run from internal channels or remote channels allowed by
+`tools.cron.command_allowed_remotes`; that command gate applies on single-owner
+channels as well.
 
 Example tool calls:
 
