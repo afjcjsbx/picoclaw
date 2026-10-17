@@ -25,6 +25,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/isolation"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	fstools "github.com/sipeed/picoclaw/pkg/tools/fs"
+	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
 var (
@@ -47,6 +48,7 @@ type ExecTool struct {
 	allowedPathPatterns []*regexp.Regexp
 	restrictToWorkspace bool
 	allowRemote         bool
+	maxOutputChars      int
 	sessionManager      *SessionManager
 }
 
@@ -200,6 +202,11 @@ func NewExecToolWithConfig(
 		timeout = time.Duration(cfg.Tools.Exec.TimeoutSeconds) * time.Second
 	}
 
+	maxOutputChars := config.DefaultExecMaxOutputChars
+	if cfg != nil {
+		maxOutputChars = cfg.Tools.Exec.GetMaxOutputChars()
+	}
+
 	return &ExecTool{
 		workingDir:          workingDir,
 		timeout:             timeout,
@@ -209,6 +216,7 @@ func NewExecToolWithConfig(
 		allowedPathPatterns: allowedPathPatterns,
 		restrictToWorkspace: restrict,
 		allowRemote:         allowRemote,
+		maxOutputChars:      maxOutputChars,
 		sessionManager:      getSessionManager(),
 	}, nil
 }
@@ -244,7 +252,7 @@ Before a command explicitly creates files or directories, use list_dir when avai
 
 Usage notes:
 - action is required; command is required for action=run.
-- The optional timeout parameter is in seconds and overrides the configured timeout for foreground commands; 0 disables the timeout. It cannot be combined with background=true. Foreground output is truncated after 10,000 bytes; background session output is limited to 1 MB.
+- The optional timeout parameter is in seconds and overrides the configured timeout for foreground commands; 0 disables the timeout. It cannot be combined with background=true. Foreground output longer than the configured limit (default 50,000 chars) is truncated to the first 40%% and last 60%% around an omission notice; background session output is limited to 1 MB.
 - Use background=true for long-running commands. The result includes a sessionId. Use action=list to list sessions; use poll, read, write, send-keys, or kill with sessionId to manage one. write sends stdin; send-keys sends keys to a PTY. Sessions are cleaned up 30 minutes after the process exits.
 - Combine background=true with pty=true for interactive sessions when supported. PTY is not supported on Windows.
 - Run independent commands in separate tool calls. %s Use semicolons only when later commands may run even if an earlier one fails. Do not use newlines to separate commands; newlines inside quoted strings are fine.`, runtime.GOOS, shell, chainGuidance)
@@ -529,23 +537,35 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string, timeout tim
 		output = "(no output)"
 	}
 
-	maxLen := 10000
-	if len(output) > maxLen {
-		output = output[:maxLen] + fmt.Sprintf("\n... (truncated, %d more chars)", len(output)-maxLen)
+	maxOutputChars := t.maxOutputChars
+	if maxOutputChars <= 0 {
+		maxOutputChars = config.DefaultExecMaxOutputChars
+	}
+	fullOutput := output
+	output, truncated := toolshared.TruncateHeadTail(output, maxOutputChars, "OUTPUT")
+
+	// Attach the pre-truncation output so the large-result spill can save it
+	// instead of the cut view: the omitted middle stays readable from the
+	// artifact whenever the result is large enough to spill.
+	fullText := ""
+	if truncated {
+		fullText = fullOutput
 	}
 
 	if err != nil {
 		return &ToolResult{
-			ForLLM:  output,
-			ForUser: output,
-			IsError: true,
+			ForLLM:   output,
+			ForUser:  output,
+			IsError:  true,
+			FullText: fullText,
 		}
 	}
 
 	return &ToolResult{
-		ForLLM:  output,
-		ForUser: output,
-		IsError: false,
+		ForLLM:   output,
+		ForUser:  output,
+		IsError:  false,
+		FullText: fullText,
 	}
 }
 

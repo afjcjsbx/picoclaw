@@ -145,6 +145,77 @@ func TestExecuteWithContext_SpillKeepsReadFileTruncationGuidance(t *testing.T) {
 	}
 }
 
+func TestExecuteWithContext_SpillsPreTruncationText(t *testing.T) {
+	workspace := t.TempDir()
+	reg := NewToolRegistry()
+	reg.SetWorkspace(workspace)
+	reg.SetMaxInlineResultRunes(4096)
+
+	// What a truncating tool keeps after its own head+tail cut (exec, web_fetch).
+	truncatedView := "HEAD_MARKER_ALPHA\n\n" +
+		"... [OUTPUT TRUNCATED - 31,500 chars omitted out of 32,000 total] ...\n\n" +
+		"TAIL_MARKER_OMEGA"
+	full := "HEAD_MARKER_ALPHA\n" +
+		strings.Repeat("the omitted middle line\n", 1000) +
+		"TAIL_MARKER_OMEGA"
+	result := SilentResult(truncatedView)
+	result.FullText = full
+
+	reg.Register(newSpillTool("truncating_tool", result))
+
+	got := reg.Execute(context.Background(), "truncating_tool", nil)
+
+	if got.FullText != "" {
+		t.Fatalf("expected FullText consumed by the spill, got %d runes", utf8.RuneCountInString(got.FullText))
+	}
+	// The preview must come from the pre-truncation text, not the cut view.
+	if !strings.Contains(got.ForLLM, "HEAD_MARKER_ALPHA") ||
+		!strings.Contains(got.ForLLM, "TAIL_MARKER_OMEGA") {
+		t.Fatalf("expected head+tail of the full text, got %q", got.ForLLM)
+	}
+	if strings.Contains(got.ForLLM, "[OUTPUT TRUNCATED") {
+		t.Fatalf("expected the truncated view replaced by the spill preview, got %q", got.ForLLM)
+	}
+	if len(got.ArtifactTags) != 1 {
+		t.Fatalf("expected one artifact tag, got %+v", got.ArtifactTags)
+	}
+	path := strings.TrimSuffix(strings.TrimPrefix(got.ArtifactTags[0], "[file:"), "]")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("expected artifact readable: %v", err)
+	}
+	if string(data) != strings.TrimSpace(full) {
+		t.Fatalf("expected the artifact to hold the pre-truncation text")
+	}
+}
+
+func TestExecuteWithContext_SmallPreTruncationTextIsNotSpilled(t *testing.T) {
+	workspace := t.TempDir()
+	reg := NewToolRegistry()
+	reg.SetWorkspace(workspace)
+	reg.SetMaxInlineResultRunes(4096)
+
+	// The tool cut its output, but the full text fits the inline budget: keep
+	// the tool's own (explicitly capped) view, and consume the side channel.
+	truncatedView := "short capped view ... [CONTENT TRUNCATED - 20 chars omitted out of 40 total]"
+	result := SilentResult(truncatedView)
+	result.FullText = strings.Repeat("y", 40)
+
+	reg.Register(newSpillTool("small_truncating_tool", result))
+
+	got := reg.Execute(context.Background(), "small_truncating_tool", nil)
+
+	if got.FullText != "" {
+		t.Fatalf("expected FullText cleared, got %q", got.FullText)
+	}
+	if got.ForLLM != truncatedView {
+		t.Fatalf("expected the tool view untouched, got %q", got.ForLLM)
+	}
+	if len(got.ArtifactTags) != 0 {
+		t.Fatalf("expected no artifact, got %+v", got.ArtifactTags)
+	}
+}
+
 func TestSpillLargeResult_AppliesToPostHookResult(t *testing.T) {
 	workspace := t.TempDir()
 	reg := NewToolRegistry()

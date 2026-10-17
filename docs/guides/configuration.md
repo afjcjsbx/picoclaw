@@ -440,6 +440,8 @@ Even with `restrict_to_workspace: false`, the `exec` tool blocks these dangerous
 | `tools.read_file.enabled` | bool | `true` | Enables the `read_file` tool |
 | `tools.read_file.mode` | string | `bytes` | Selects the `read_file` implementation: `bytes` or `lines` |
 | `tools.read_file.max_read_file_size` | int | `65536` | Maximum bytes returned by `read_file` |
+| `tools.read_file.max_lines` | int | `2000` | Upper bound on lines returned by a single line-mode read; larger `max_lines` requests are clamped |
+| `tools.read_file.max_line_length` | int | `2000` | Maximum characters per line in the line-numbered view; the remainder is replaced by a ` ... [truncated]` marker |
 
 #### Mode: `bytes`
 
@@ -464,12 +466,12 @@ Parameters:
 
 * `path` (required): File path
 * `start_line` (optional): Starting line number, 1-indexed and inclusive, default `1`
-* `max_lines` (optional): Maximum number of lines to read, default = all remaining lines until EOF or byte budget
+* `max_lines` (optional): Maximum number of lines to read, default = all remaining lines until EOF or byte budget; requests above `tools.read_file.max_lines` are clamped
 
 Behavior notes:
 
 * Binary-looking files are rejected with guidance to switch `read_file` to `mode = bytes`
-* Extremely long single lines are truncated rather than skipped
+* Extremely long single lines are cut after `tools.read_file.max_line_length` characters with a ` ... [truncated]` marker, and the read continues with the next line; if the byte budget runs out mid-line, the header reports that cut instead
 
 Use `mode = lines` when:
 
@@ -485,7 +487,9 @@ Use `mode = lines` when:
     "read_file": {
       "enabled": true,
       "mode": "lines",
-      "max_read_file_size": 65536
+      "max_read_file_size": 65536,
+      "max_lines": 2000,
+      "max_line_length": 2000
     }
   }
 }

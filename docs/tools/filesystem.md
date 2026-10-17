@@ -33,6 +33,8 @@ The tool has two modes, selected with `tools.read_file.mode`:
 | `tools.read_file.enabled` | bool | `true` | Register the `read_file` tool |
 | `tools.read_file.mode` | string | `bytes` | `bytes` = byte-offset pagination; `lines` = line-numbered output |
 | `tools.read_file.max_read_file_size` | int | `65536` | Maximum bytes read per call (byte mode), and the default `length` |
+| `tools.read_file.max_lines` | int | `2000` | Upper bound on a single line-mode read; `max_lines` requests above it are clamped |
+| `tools.read_file.max_line_length` | int | `2000` | Maximum characters per line in the line-numbered view; the remainder is replaced by a ` ... [truncated]` marker |
 
 **Byte mode** (`mode: "bytes"`, default) reads raw content and supports pagination:
 
@@ -48,9 +50,11 @@ The tool has two modes, selected with `tools.read_file.mode`:
 |----------|------|----------|-------------|
 | `path` | string | yes | Path to the file to read |
 | `start_line` | integer | no | Line number to start from (1-indexed, inclusive). Default: `1` |
-| `max_lines` | integer | no | Maximum number of lines to read |
+| `max_lines` | integer | no | Maximum number of lines to read. Requests above `tools.read_file.max_lines` are clamped |
 
 Using `offset`/`length` in line mode (or `limit`) is rejected with an error: each mode only accepts its own pagination arguments.
+
+Lines longer than `tools.read_file.max_line_length` characters are cut after that many characters with a ` ... [truncated]` marker and the read continues with the next line, so a single long line cannot consume the whole byte budget. If the byte budget itself runs out mid-line, the header reports the mid-line cut instead.
 
 Results larger than `tools.max_inline_result_chars` are spilled to a workspace artifact with a head+tail preview, exactly like every other tool result; see [Large tool results](../reference/tools_configuration.md#large-tool-results).
 

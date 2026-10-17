@@ -151,6 +151,10 @@ func normalizeToolResult(
 // a no-op when the result is small, already spilled, the workspace is unknown,
 // or persistence is disabled.
 //
+// When a tool cut its own output before returning (result.FullText is set),
+// that pre-truncation text is spilled and previewed instead of the truncated
+// view, so the omitted middle stays readable from the artifact.
+//
 // Security note: this runs before the sensitive-data filter is applied, so the
 // artifact file on disk keeps the unredacted tool output — verbatim, or the
 // normalized pageable text for a recognized JSON envelope. Only the content
@@ -171,6 +175,14 @@ func persistLargeResultArtifact(result *ToolResult, toolName, workspace string, 
 	}
 
 	text := strings.TrimSpace(result.ForLLM)
+	if fullText := strings.TrimSpace(result.FullText); fullText != "" {
+		// The tool truncated its own output before returning it (exec,
+		// web_fetch). Spill and preview the pre-truncation text so the omitted
+		// middle is not lost together with the tool's notice.
+		text = fullText
+	}
+	result.FullText = ""
+
 	size := utf8.RuneCountInString(text)
 	if text == "" || size <= maxRunes {
 		return
