@@ -456,7 +456,13 @@ func (t *MCPTool) persistLargeTextArtifact(text, llmText string) *ToolResult {
 	)
 	path, err := toolshared.PersistTextArtifact(dir, pattern, persistedText)
 	if err != nil {
-		return t.largeTextArtifactFallback(persistedText, text, llmText, limit, err)
+		return t.largeTextArtifactFallback(largeTextArtifactFallbackInput{
+			rawText:       text,
+			persistedText: persistedText,
+			llmText:       llmText,
+			limit:         limit,
+			err:           err,
+		})
 	}
 
 	return &ToolResult{
@@ -466,26 +472,38 @@ func (t *MCPTool) persistLargeTextArtifact(text, llmText string) *ToolResult {
 	}
 }
 
+// largeTextArtifactFallbackInput groups the three text views involved in the
+// fallback so callers cannot transpose them: rawText drives the log and size,
+// persistedText is handed to the generic spill, and llmText is the sanitized
+// view kept inline.
+type largeTextArtifactFallbackInput struct {
+	rawText       string
+	persistedText string
+	llmText       string
+	limit         int
+	err           error
+}
+
 // largeTextArtifactFallback keeps the bounded window inline, logs the failure,
 // and hands the full payload to the generic large-result spill under its own
 // artifact directory, so an unwritable .artifacts/mcp does not lose the text.
 // For an unwrapped envelope, the pageable text is handed over rather than the
 // JSON envelope, so the fallback artifact stays pageable too.
-func (t *MCPTool) largeTextArtifactFallback(persistedText, rawText, llmText string, limit int, err error) *ToolResult {
-	size := utf8.RuneCountInString(rawText)
+func (t *MCPTool) largeTextArtifactFallback(in largeTextArtifactFallbackInput) *ToolResult {
+	size := utf8.RuneCountInString(in.rawText)
 	logger.WarnCF("tool", "Failed to persist large MCP text artifact", map[string]any{
 		"server": t.serverName,
 		"tool":   t.tool.Name,
 		"chars":  size,
-		"error":  err.Error(),
+		"error":  in.err.Error(),
 	})
 	// Keep the bounded head+tail view inline and hand the full payload to the
 	// generic large-result spill: it persists under a different artifact
 	// directory, so an unwritable .artifacts/mcp does not lose the text. If the
 	// spill cannot persist either, the bounded view above is what remains.
 	return &ToolResult{
-		ForLLM:   mcpTextResultMessage(llmText, limit, mcpArtifactFailedNote),
-		FullText: persistedText,
+		ForLLM:   mcpTextResultMessage(in.llmText, in.limit, mcpArtifactFailedNote),
+		FullText: in.persistedText,
 	}
 }
 
