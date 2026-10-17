@@ -1280,6 +1280,55 @@ func TestReadFileLinesTool_MaxLineLengthTruncatesAndContinues(t *testing.T) {
 	}
 }
 
+// TestReadFileLinesTool_MaxLineLengthDiscardContinuesWithNextLine covers the
+// path where the read stops at the per-line allowance before the newline: the
+// unread tail must be discarded without eating the next line, and both line
+// numbering and file_bytes must stay correct.
+func TestReadFileLinesTool_MaxLineLengthDiscardContinuesWithNextLine(t *testing.T) {
+	cases := []struct {
+		name        string
+		longLineLen int
+	}{
+		// The newline is consumed by ReadSlice together with the prefix.
+		{name: "newline_in_same_fragment", longLineLen: 9000},
+		// The newline is beyond the bufio buffer, so the tail is still pending.
+		{name: "newline_pending", longLineLen: 40000},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			testFile := filepath.Join(tmpDir, "long_line.txt")
+			content := strings.Repeat("a", tc.longLineLen) + "\nLINE_TWO\nLINE_THREE\n"
+			if err := os.WriteFile(testFile, []byte(content), 0o644); err != nil {
+				t.Fatalf("Failed to write test file: %v", err)
+			}
+
+			tool := NewReadFileLinesTool(
+				tmpDir, false, MaxReadFileSize,
+				DefaultReadFileMaxLines, DefaultReadFileMaxLineLength,
+			)
+			result := tool.Execute(context.Background(), map[string]any{"path": testFile})
+			if result.IsError {
+				t.Fatalf("Execute() error = %s", result.ForLLM)
+			}
+
+			if !strings.Contains(result.ForLLM, lineTruncationMarker+"\n2|LINE_TWO\n") {
+				t.Fatalf("expected line 2 right after the truncated line, got: %s", result.ForLLM)
+			}
+			if !strings.Contains(result.ForLLM, "3|LINE_THREE\n") {
+				t.Fatalf("expected line 3 to be read, got: %s", result.ForLLM)
+			}
+			if !strings.Contains(result.ForLLM, "read: lines 1-3") {
+				t.Fatalf("expected the header to report lines 1-3, got: %s", result.ForLLM)
+			}
+			if !strings.Contains(result.ForLLM, "file_bytes: "+strconv.Itoa(len(content))) {
+				t.Fatalf("expected file_bytes to count the discarded tail, got: %s", result.ForLLM)
+			}
+		})
+	}
+}
+
 func TestReadFileLinesTool_MaxLinesClamp(t *testing.T) {
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "many.txt")

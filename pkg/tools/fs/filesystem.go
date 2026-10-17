@@ -646,7 +646,7 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 	var linesTruncated int64
 
 	for lineIndex < startLine {
-		hasLine, consumeErr := consumeNextLine(reader)
+		hasLine, _, consumeErr := consumeNextLine(reader)
 		if consumeErr != nil {
 			return ErrorResult(fmt.Sprintf("failed to read file content: %v", consumeErr))
 		}
@@ -678,7 +678,7 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 			}
 		}
 
-		line, complete, hasLine, readLineErr := readNextLinePrefix(reader, allowance)
+		line, complete, hasLine, restPending, consumedBytes, readLineErr := readNextLinePrefix(reader, allowance)
 		if readLineErr != nil {
 			return ErrorResult(fmt.Sprintf("failed to read file content: %v", readLineErr))
 		}
@@ -687,8 +687,7 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 			break
 		}
 
-		consumedBytes := len(line)
-		hadTrailingNewline := consumedBytes > 0 && line[consumedBytes-1] == '\n'
+		hadTrailingNewline := len(line) > 0 && line[len(line)-1] == '\n'
 
 		cutAtLineAllowance := !complete && lineAllowance > 0 && allowance == lineAllowance
 		cutAtByteBudget := !complete && !cutAtLineAllowance
@@ -709,18 +708,28 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 			linesTruncated++
 		}
 
+		if cutAtLineAllowance && (len(displayLine) == 0 || displayLine[len(displayLine)-1] != '\n') {
+			// The prefix stops mid-line: terminate the display line so the
+			// next line number is not glued to the truncation marker.
+			displayLine = append(displayLine, '\n')
+		}
+
 		content.WriteString(prefix)
 		content.Write(displayLine)
-		fileBytesRead += int64(consumedBytes)
+		fileBytesRead += consumedBytes
 		outputBytesRead += int64(len(prefix) + len(displayLine))
 		linesRead++
 		lineIndex++
 
 		if cutAtLineAllowance {
-			// Discard the rest of the oversized line and keep going, so the
-			// following lines remain readable.
-			if _, consumeErr := consumeNextLine(reader); consumeErr != nil {
-				return ErrorResult(fmt.Sprintf("failed to read file content: %v", consumeErr))
+			// Discard any unread remainder of the oversized line so the next
+			// iteration starts at the next line.
+			if restPending {
+				_, discardedBytes, consumeErr := consumeNextLine(reader)
+				if consumeErr != nil {
+					return ErrorResult(fmt.Sprintf("failed to read file content: %v", consumeErr))
+				}
+				fileBytesRead += discardedBytes
 			}
 			continue
 		}
@@ -853,39 +862,52 @@ func isBinaryReadFileData(data []byte) bool {
 	return float64(controlChars)/float64(len(sample)) > 0.1
 }
 
-func consumeNextLine(reader *bufio.Reader) (bool, error) {
+func consumeNextLine(reader *bufio.Reader) (bool, int64, error) {
 	sawData := false
+	var consumed int64
 
 	for {
 		fragment, err := reader.ReadSlice('\n')
+		consumed += int64(len(fragment))
 		if len(fragment) > 0 {
 			sawData = true
 		}
 
 		switch {
 		case err == nil:
-			return true, nil
+			return true, consumed, nil
 		case errors.Is(err, bufio.ErrBufferFull):
 			continue
 		case errors.Is(err, io.EOF):
-			return sawData, nil
+			return sawData, consumed, nil
 		default:
-			return false, err
+			return false, consumed, err
 		}
 	}
 }
 
-func readNextLinePrefix(reader *bufio.Reader, maxBytes int64) ([]byte, bool, bool, error) {
+// readNextLinePrefix reads at most maxBytes from the start of the next line.
+// complete reports whether the whole line (including its terminator, if any)
+// was read. restPending reports whether the reader still holds the remainder of
+// an oversized line that the caller must discard before reading the next line;
+// it is false when ReadSlice already consumed the terminator. consumed is the
+// total number of bytes taken from the reader for this line, including bytes
+// read past maxBytes.
+func readNextLinePrefix(
+	reader *bufio.Reader,
+	maxBytes int64,
+) (line []byte, complete, hasLine, restPending bool, consumed int64, err error) {
 	if maxBytes <= 0 {
-		return nil, false, false, nil
+		return nil, false, false, false, 0, nil
 	}
 
 	var out bytes.Buffer
 	sawData := false
-	complete := true
+	complete = true
 
 	for {
-		fragment, err := reader.ReadSlice('\n')
+		fragment, readErr := reader.ReadSlice('\n')
+		consumed += int64(len(fragment))
 		if len(fragment) > 0 {
 			sawData = true
 			if remaining := maxBytes - int64(out.Len()); remaining > 0 {
@@ -901,20 +923,23 @@ func readNextLinePrefix(reader *bufio.Reader, maxBytes int64) ([]byte, bool, boo
 		}
 
 		switch {
-		case err == nil:
-			return out.Bytes(), complete, sawData, nil
-		case errors.Is(err, bufio.ErrBufferFull):
+		case readErr == nil:
+			// The terminator (and any bytes after the returned prefix) has
+			// already been consumed, so the caller must not discard again.
+			return out.Bytes(), complete, sawData, false, consumed, nil
+		case errors.Is(readErr, bufio.ErrBufferFull):
 			if !complete {
-				return out.Bytes(), false, true, nil
+				// The terminator has not been reached yet.
+				return out.Bytes(), false, true, true, consumed, nil
 			}
 			continue
-		case errors.Is(err, io.EOF):
+		case errors.Is(readErr, io.EOF):
 			if !sawData {
-				return nil, true, false, nil
+				return nil, true, false, false, consumed, nil
 			}
-			return out.Bytes(), complete, true, nil
+			return out.Bytes(), complete, true, false, consumed, nil
 		default:
-			return nil, false, false, err
+			return nil, false, false, false, consumed, readErr
 		}
 	}
 }
