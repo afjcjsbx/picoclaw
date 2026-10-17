@@ -239,14 +239,21 @@ func (t *SearchFilesTool) searchNames(ctx context.Context, opts searchFilesOptio
 			if !opts.namePattern.match(relativeSearchPath(opts.path, path)) {
 				return false, nil
 			}
-			info, err := t.fs.Stat(path)
-			if err != nil {
-				return false, errSearchSkipFile
+			// Only the modified order needs per-file metadata; in discovery
+			// order the walk's directory entries (already checked as regular
+			// files) are enough, so no extra stat is issued per file.
+			entry := searchFileEntry{path: path}
+			if opts.order == "modified" {
+				info, err := t.fs.Stat(path)
+				if err != nil {
+					return false, errSearchSkipFile
+				}
+				if !info.Mode().IsRegular() {
+					return false, errSearchSkipFile
+				}
+				entry.modTime = info.ModTime().UnixNano()
 			}
-			if !info.Mode().IsRegular() {
-				return false, errSearchSkipFile
-			}
-			entries = append(entries, searchFileEntry{path: path, modTime: info.ModTime().UnixNano()})
+			entries = append(entries, entry)
 			return opts.order == "discovery" && len(entries) > requested, nil
 		},
 	)
@@ -401,6 +408,8 @@ func (t *SearchFilesTool) scanSearchFile(
 	remainingBytes int64,
 ) (searchFileResult, error) {
 	var result searchFileResult
+	// A single stat decides type and budget eligibility before opening; a
+	// file that grows past the budget after this is caught by budgetReader.
 	entry, err := t.fs.Stat(path)
 	if err != nil {
 		return result, err
@@ -417,17 +426,6 @@ func (t *SearchFilesTool) scanSearchFile(
 		return result, err
 	}
 	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return result, err
-	}
-	if !info.Mode().IsRegular() {
-		return result, fmt.Errorf("not a searchable regular file")
-	}
-	if info.Size() > remainingBytes {
-		result.byteLimit = true
-		return result, nil
-	}
 
 	// The budget bounds the memory a single line may allocate.
 	br := &budgetReader{reader: f, limit: remainingBytes}
