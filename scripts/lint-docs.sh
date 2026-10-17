@@ -61,7 +61,7 @@ suggest_docs_language_bucket_target() {
 		locale="$(lowercase "${BASH_REMATCH[1]}")"
 		file="$(basename "$path")"
 		name="${file%.md}"
-		mapfile -t matches < <(find docs/project docs/guides docs/reference docs/operations docs/security docs/architecture docs/channels docs/design docs/migration -type f -name "${name}.md" 2>/dev/null | sort)
+		mapfile -t matches < <(find docs/project docs/guides docs/reference docs/operations docs/security docs/architecture docs/channels docs/design docs/migration docs/tools -type f -name "${name}.md" 2>/dev/null | sort)
 		if [[ "${#matches[@]}" -eq 1 ]]; then
 			printf '%s' "${matches[0]%.md}.${locale}.md"
 			return
@@ -77,7 +77,7 @@ suggest_nested_locale_bucket_target() {
 	local locale
 	local rest
 
-	if [[ "$path" =~ ^(docs/(project|guides|reference|operations|security|architecture|design|migration))/([A-Za-z]{2}(-[A-Za-z]{2})?)/(.*)\.md$ ]]; then
+	if [[ "$path" =~ ^(docs/(project|guides|reference|operations|security|architecture|design|migration|tools))/([A-Za-z]{2}(-[A-Za-z]{2})?)/(.*)\.md$ ]]; then
 		prefix="${BASH_REMATCH[1]}"
 		locale="$(lowercase "${BASH_REMATCH[3]}")"
 		rest="${BASH_REMATCH[5]}"
@@ -113,7 +113,7 @@ is_noncanonical_translation_name() {
 is_noncanonical_locale_bucket() {
 	local path="$1"
 
-	[[ "$path" =~ ^docs/(project|guides|reference|operations|security|architecture|design|migration)/[A-Za-z]{2}(-[A-Za-z]{2})?/ ]] && return 0
+	[[ "$path" =~ ^docs/(project|guides|reference|operations|security|architecture|design|migration|tools)/[A-Za-z]{2}(-[A-Za-z]{2})?/ ]] && return 0
 	[[ "$path" =~ ^docs/channels/[^/]+/[A-Za-z]{2}(-[A-Za-z]{2})?/ ]] && return 0
 	return 1
 }
@@ -187,11 +187,11 @@ while IFS= read -r path; do
 			"move it to $(suggest_nested_locale_bucket_target "$path")"
 	fi
 
-	if [[ "$path" =~ ^docs/[^/]+\.md$ && "$path" != "docs/README.md" ]]; then
+	if [[ "$path" =~ ^docs/[^/]+\.md$ && "$path" != "docs/README.md" && "$path" != "docs/index.md" ]]; then
 		error \
 			"$path" \
 			"top-level docs Markdown files must move into a typed docs/ subdirectory" \
-			"move it into one of docs/project/, docs/guides/, docs/reference/, docs/operations/, docs/security/, docs/architecture/, docs/channels/, docs/design/, or docs/migration/"
+			"move it into one of docs/project/, docs/guides/, docs/reference/, docs/operations/, docs/security/, docs/architecture/, docs/channels/, docs/design/, docs/migration/, or docs/tools/ (docs/README.md and docs/index.md are reserved for the documentation home and conventions)"
 	fi
 
 	if is_translation_file "$path"; then

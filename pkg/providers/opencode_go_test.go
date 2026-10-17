@@ -124,7 +124,7 @@ func TestOpenCodeGoEndToEnd(t *testing.T) {
 			if got := gotHeader.Get(tt.authHeader); got != tt.wantAuth {
 				t.Errorf("%s = %q, want %q", tt.authHeader, got, tt.wantAuth)
 			}
-			if got := gotHeader.Get("x-opencode-session"); got != "agent:main:chat 1" {
+			if got := gotHeader.Get("X-Opencode-Session"); got != "agent:main:chat 1" {
 				t.Errorf("x-opencode-session = %q", got)
 			}
 			if got := gotHeader.Get("X-Custom"); got != "yes" {
@@ -150,7 +150,7 @@ func TestOpenCodeGoEndToEnd(t *testing.T) {
 func TestOpenCodeGoExplicitSessionHeaderWins(t *testing.T) {
 	var got string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		got = r.Header.Get("x-opencode-session")
+		got = r.Header.Get("X-Opencode-Session")
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
 	}))
 	defer srv.Close()
@@ -180,7 +180,7 @@ func TestOpenCodeGoExplicitSessionHeaderWins(t *testing.T) {
 func TestOpenCodeGoFallbackSession(t *testing.T) {
 	var got string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		got = r.Header.Get("x-opencode-session")
+		got = r.Header.Get("X-Opencode-Session")
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
 	}))
 	defer srv.Close()

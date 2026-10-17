@@ -526,7 +526,7 @@ Tambahkan ke `config.json` Anda:
 }
 ```
 
-Untuk detail lebih lanjut, lihat [Konfigurasi Tools - Skills](../reference/tools_configuration.md#skills-tool).
+Untuk detail lebih lanjut, lihat [Konfigurasi Tools - Skills](../tools/skills.md).
 
 ## 🔗 MCP (Model Context Protocol)
 
@@ -556,7 +556,7 @@ Karena PicoClaw adalah asisten ringan, pilihan terbaik adalah menggunakan server
 }
 ```
 
-Untuk konfigurasi MCP lengkap (transport stdio, SSE, HTTP, Tool Discovery), lihat [Konfigurasi Tools - MCP](../reference/tools_configuration.md#mcp-tool).
+Untuk konfigurasi MCP lengkap (transport stdio, SSE, HTTP, Tool Discovery), lihat [Konfigurasi Tools - MCP](../tools/mcp.md).
 
 ## <img src="../../assets/clawdchat-icon.png" width="24" height="24" alt="ClawdChat"> Bergabung dengan Jaringan Sosial Agent
 

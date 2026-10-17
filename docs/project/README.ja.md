@@ -128,7 +128,7 @@ _*最近のバージョンでは急速な PR マージにより 10〜20MB にな
 
 </div>
 
-> **[ハードウェア互換性リスト](../guides/hardware-compatibility.ja.md)** — テスト済みの全ボード一覧（$5 RISC-V から Raspberry Pi、Android スマートフォンまで）。お使いのボードが未掲載？PR を送ってください！
+> **[ハードウェア互換性リスト](../guides/hardware-compatibility.md)** — テスト済みの全ボード一覧（$5 RISC-V から Raspberry Pi、Android スマートフォンまで）。お使いのボードが未掲載？PR を送ってください！
 
 <p align="center">
 <img src="../../assets/hardware-banner.jpg" alt="PicoClaw Hardware Compatibility" width="100%">
@@ -446,7 +446,7 @@ PicoClaw は `model_list` 設定を通じて 30 以上の LLM Provider をサポ
 }
 ```
 
-Provider の完全な設定詳細は [Provider とモデル](../guides/providers.ja.md) を参照してください。
+Provider の完全な設定詳細は [Provider とモデル](../guides/providers.md) を参照してください。
 
 </details>
 
@@ -458,8 +458,8 @@ Provider の完全な設定詳細は [Provider とモデル](../guides/providers
 |---------|------------|----------|------------|
 | **Telegram** | 簡単（bot トークン） | Long polling | [ガイド](../channels/telegram/README.ja.md) |
 | **Discord** | 簡単（bot トークン + intents） | WebSocket | [ガイド](../channels/discord/README.ja.md) |
-| **WhatsApp** | 簡単（QR スキャンまたは bridge URL） | Native / Bridge | [ガイド](../guides/chat-apps.ja.md#whatsapp) |
-| **微信 (Weixin)** | 簡単（QR スキャン） | iLink API | [ガイド](../guides/chat-apps.ja.md#weixin) |
+| **WhatsApp** | 簡単（QR スキャンまたは bridge URL） | Native / Bridge | [ガイド](../guides/chat-apps.md#whatsapp) |
+| **微信 (Weixin)** | 簡単（QR スキャン） | iLink API | [ガイド](../guides/chat-apps.md#weixin) |
 | **QQ** | 簡単（AppID + AppSecret） | WebSocket | [ガイド](../channels/qq/README.ja.md) |
 | **Slack** | 簡単（bot + app トークン） | Socket Mode | [ガイド](../channels/slack/README.ja.md) |
 | **Matrix** | 中級（homeserver + トークン） | Sync API | [ガイド](../channels/matrix/README.ja.md) |
@@ -467,7 +467,7 @@ Provider の完全な設定詳細は [Provider とモデル](../guides/providers
 | **Feishu / Lark** | 中級（App ID + Secret） | WebSocket/SDK | [ガイド](../channels/feishu/README.ja.md) |
 | **LINE** | 中級（認証情報 + webhook） | Webhook | [ガイド](../channels/line/README.ja.md) |
 | **WeCom** | 簡単（QR ログインまたは手動） | WebSocket | [ガイド](../channels/wecom/README.ja.md) |
-| **IRC** | 中級（サーバー + nick） | IRC protocol | [ガイド](../guides/chat-apps.ja.md#irc) |
+| **IRC** | 中級（サーバー + nick） | IRC protocol | [ガイド](../guides/chat-apps.md#irc) |
 | **OneBot** | 中級（WebSocket URL） | OneBot v11 | [ガイド](../channels/onebot/README.ja.md) |
 | **MaixCam** | 簡単（有効化） | TCP socket | [ガイド](../channels/maixcam/README.ja.md) |
 | **Pico** | 簡単（有効化） | Native protocol | 内蔵 |
@@ -475,9 +475,9 @@ Provider の完全な設定詳細は [Provider とモデル](../guides/providers
 
 > webhook ベースのすべての Channel は単一の Gateway HTTP サーバー（`gateway.host`:`gateway.port`、デフォルト `127.0.0.1:18790`）を共有します。Feishu は WebSocket/SDK モードを使用し、共有 HTTP サーバーを使用しません。
 
-> ログの詳細度は `gateway.log_level` で制御します（デフォルト：`warn`）。サポートされる値：`debug`、`info`、`warn`、`error`、`fatal`。`PICOCLAW_LOG_LEVEL` 環境変数でも設定可能です。詳細は[設定ガイド](../guides/configuration.ja.md#gateway-ログレベル)を参照してください。
+> ログの詳細度は `gateway.log_level` で制御します（デフォルト：`warn`）。サポートされる値：`debug`、`info`、`warn`、`error`、`fatal`。`PICOCLAW_LOG_LEVEL` 環境変数でも設定可能です。詳細は[設定ガイド](../guides/configuration.md#gateway-log-level)を参照してください。
 
-Channel の詳細なセットアップ手順は [チャットアプリ設定](../guides/chat-apps.ja.md) を参照してください。
+Channel の詳細なセットアップ手順は [チャットアプリ設定](../guides/chat-apps.md) を参照してください。
 
 ## 🔧 ツール
 
@@ -497,7 +497,7 @@ PicoClaw は最新情報を提供するために Web を検索できます。`to
 
 ### ⚙️ その他のツール
 
-PicoClaw にはファイル操作、コード実行、スケジューリングなどの組み込みツールが含まれています。詳細は [ツール設定](../reference/tools_configuration.ja.md) を参照してください。
+PicoClaw にはファイル操作、コード実行、スケジューリングなどの組み込みツールが含まれています。詳細は [ツール設定](../reference/tools_configuration.md) を参照してください。
 
 ## 🎯 Skill
 
@@ -527,7 +527,7 @@ picoclaw skills install <skill-name>
 }
 ```
 
-詳細は [ツール設定 - Skill](../reference/tools_configuration.ja.md#skills-tool) を参照してください。
+詳細は [ツール設定 - Skill](../tools/skills.md) を参照してください。
 
 ## 🔗 MCP（Model Context Protocol）
 
@@ -557,7 +557,7 @@ PicoClaw は軽量なアシスタントなので、リモート MCP サーバー
 }
 ```
 
-MCP の完全な設定（stdio、SSE、HTTP トランスポート、Tool Discovery）は [ツール設定 - MCP](../reference/tools_configuration.ja.md#mcp-tool) を参照してください。
+MCP の完全な設定（stdio、SSE、HTTP トランスポート、Tool Discovery）は [ツール設定 - MCP](../tools/mcp.md) を参照してください。
 
 ## <img src="../../assets/clawdchat-icon.png" width="24" height="24" alt="ClawdChat"> エージェントソーシャルネットワークに参加
 
@@ -600,17 +600,17 @@ PicoClaw は `cron` ツールによるスケジュールリマインダーと定
 
 | トピック | 説明 |
 |---------|------|
-| [Docker & クイックスタート](../guides/docker.ja.md) | Docker Compose セットアップ、Launcher/Agent モード |
-| [チャットアプリ](../guides/chat-apps.ja.md) | 17 以上の Channel セットアップガイド |
-| [設定](../guides/configuration.ja.md) | 環境変数、ワークスペース構成、セキュリティサンドボックス |
-| [Provider とモデル](../guides/providers.ja.md) | 30 以上の LLM Provider、モデルルーティング、model_list 設定 |
-| [Spawn & 非同期タスク](../guides/spawn-tasks.ja.md) | クイックタスク、spawn による長時間タスク、非同期サブエージェントオーケストレーション |
+| [Docker & クイックスタート](../guides/docker.md) | Docker Compose セットアップ、Launcher/Agent モード |
+| [チャットアプリ](../guides/chat-apps.md) | 17 以上の Channel セットアップガイド |
+| [設定](../guides/configuration.md) | 環境変数、ワークスペース構成、セキュリティサンドボックス |
+| [Provider とモデル](../guides/providers.md) | 30 以上の LLM Provider、モデルルーティング、model_list 設定 |
+| [Spawn & 非同期タスク](../guides/spawn-tasks.md) | クイックタスク、spawn による長時間タスク、非同期サブエージェントオーケストレーション |
 | [Hook システム](../architecture/hooks/README.md) | イベント駆動 Hook：オブザーバー、インターセプター、承認 Hook |
 | [Steering](../architecture/steering.md) | 実行中の Agent ループにメッセージを注入 |
 | [SubTurn](../architecture/subturn.md) | サブ Agent の調整、並行制御、ライフサイクル |
-| [トラブルシューティング](../operations/troubleshooting.ja.md) | よくある問題と解決策 |
-| [ツール設定](../reference/tools_configuration.ja.md) | ツールごとの有効/無効、exec ポリシー、MCP、Skill |
-| [ハードウェア互換性](../guides/hardware-compatibility.ja.md) | テスト済みボード、最小要件 |
+| [トラブルシューティング](../operations/troubleshooting.md) | よくある問題と解決策 |
+| [ツール設定](../reference/tools_configuration.md) | ツールごとの有効/無効、exec ポリシー、MCP、Skill |
+| [ハードウェア互換性](../guides/hardware-compatibility.md) | テスト済みボード、最小要件 |
 
 ## 🤝 コントリビュート＆ロードマップ
 

@@ -391,5 +391,5 @@ For advanced cases:
 
 ## Related Docs
 
-- [Tools Configuration](tools_configuration.md#mcp-tool): MCP config structure, transports, discovery, and examples
+- [MCP tools](../tools/mcp.md): MCP config structure, transports, discovery, and examples
 - [README](../README.md): high-level overview
