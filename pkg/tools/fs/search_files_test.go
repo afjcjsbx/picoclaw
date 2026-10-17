@@ -3,6 +3,7 @@ package fstools
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -298,5 +299,110 @@ func TestTruncateSearchLine(t *testing.T) {
 	}
 	if len(window) > maxSearchLineLength+2*len("\u2026") {
 		t.Errorf("window larger than allowed: %d bytes", len(window))
+	}
+}
+
+// searchStatCounter wraps a fileSystem and records every stat issued through
+// the interface and through files opened by it, so tests can assert that the
+// search does not stat the same path twice.
+type searchStatCounter struct {
+	fileSystem
+	stats map[string]int
+}
+
+func newSearchStatCounter(inner fileSystem) *searchStatCounter {
+	return &searchStatCounter{fileSystem: inner, stats: map[string]int{}}
+}
+
+func (c *searchStatCounter) Stat(path string) (fs.FileInfo, error) {
+	c.stats[path]++
+	return c.fileSystem.Stat(path)
+}
+
+func (c *searchStatCounter) Open(path string) (fs.File, error) {
+	f, err := c.fileSystem.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	return &searchStatCounterFile{File: f, counter: c, path: path}, nil
+}
+
+type searchStatCounterFile struct {
+	fs.File
+	counter *searchStatCounter
+	path    string
+}
+
+func (f *searchStatCounterFile) Stat() (fs.FileInfo, error) {
+	f.counter.stats[f.path]++
+	return f.File.Stat()
+}
+
+func TestSearchFilesStatsEachFileOnceForContent(t *testing.T) {
+	root := t.TempDir()
+	files := []string{"a.txt", "b.txt", "c.txt"}
+	for _, name := range files {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("needle\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	counter := newSearchStatCounter(&hostFs{})
+	tool := &SearchFilesTool{fs: counter}
+	result := tool.Execute(context.Background(), map[string]any{"pattern": "needle", "path": root})
+	if result.IsError {
+		t.Fatalf("search failed: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "3 files scanned.") {
+		t.Fatalf("expected all files scanned: %s", result.ForLLM)
+	}
+	for _, name := range files {
+		if got := counter.stats[filepath.Join(root, name)]; got != 1 {
+			t.Errorf("expected exactly 1 stat for %s, got %d", name, got)
+		}
+	}
+	// The root and the .gitignore/.ignore probes are each stat'ed once, so no
+	// path may be stat'ed twice over the whole search.
+	for path, count := range counter.stats {
+		if count > 1 {
+			t.Errorf("path %s was stat'ed %d times", path, count)
+		}
+	}
+}
+
+func TestSearchFilesDiscoveryOrderSkipsFileStats(t *testing.T) {
+	root := t.TempDir()
+	files := []string{"a.txt", "b.txt", "c.txt"}
+	for _, name := range files {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("needle\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	counter := newSearchStatCounter(&hostFs{})
+	tool := &SearchFilesTool{fs: counter}
+	result := tool.Execute(context.Background(), map[string]any{
+		"pattern": "*.txt", "target": "files", "path": root,
+	})
+	if result.IsError {
+		t.Fatalf("search failed: %s", result.ForLLM)
+	}
+	for _, name := range files {
+		if got := counter.stats[filepath.Join(root, name)]; got != 0 {
+			t.Errorf("discovery order must not stat %s, got %d stats", name, got)
+		}
+	}
+
+	counter = newSearchStatCounter(&hostFs{})
+	tool = &SearchFilesTool{fs: counter}
+	result = tool.Execute(context.Background(), map[string]any{
+		"pattern": "*.txt", "target": "files", "path": root, "order": "modified",
+	})
+	if result.IsError {
+		t.Fatalf("modified search failed: %s", result.ForLLM)
+	}
+	for _, name := range files {
+		if got := counter.stats[filepath.Join(root, name)]; got != 1 {
+			t.Errorf("modified order needs exactly 1 stat per file for %s, got %d", name, got)
+		}
 	}
 }
