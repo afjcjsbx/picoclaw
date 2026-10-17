@@ -128,7 +128,7 @@ _*Các bản build gần đây có thể dùng 10-20MB do merge PR nhanh. Tối 
 
 </div>
 
-> **[Danh sách Tương thích Phần cứng](../guides/hardware-compatibility.vi.md)** — Xem tất cả các board đã được kiểm tra, từ RISC-V $5 đến Raspberry Pi đến điện thoại Android. Board của bạn chưa có trong danh sách? Gửi PR!
+> **[Danh sách Tương thích Phần cứng](../guides/hardware-compatibility.md)** — Xem tất cả các board đã được kiểm tra, từ RISC-V $5 đến Raspberry Pi đến điện thoại Android. Board của bạn chưa có trong danh sách? Gửi PR!
 
 <p align="center">
 <img src="../../assets/hardware-banner.jpg" alt="PicoClaw Hardware Compatibility" width="100%">
@@ -446,7 +446,7 @@ PicoClaw hỗ trợ 30+ Provider LLM thông qua cấu hình `model_list`. Sử d
 }
 ```
 
-Để biết chi tiết cấu hình provider đầy đủ, xem [Providers & Models](../guides/providers.vi.md).
+Để biết chi tiết cấu hình provider đầy đủ, xem [Providers & Models](../guides/providers.md).
 
 </details>
 
@@ -458,8 +458,8 @@ Trò chuyện với PicoClaw của bạn qua 17+ nền tảng nhắn tin:
 |---------|-----------|----------|----------|
 | **Telegram** | Dễ (bot token) | Long polling | [Hướng dẫn](../channels/telegram/README.vi.md) |
 | **Discord** | Dễ (bot token + intents) | WebSocket | [Hướng dẫn](../channels/discord/README.vi.md) |
-| **WhatsApp** | Dễ (quét QR hoặc bridge URL) | Native / Bridge | [Hướng dẫn](../guides/chat-apps.vi.md#whatsapp) |
-| **Weixin** | Dễ (quét QR gốc) | iLink API | [Hướng dẫn](../guides/chat-apps.vi.md#weixin) |
+| **WhatsApp** | Dễ (quét QR hoặc bridge URL) | Native / Bridge | [Hướng dẫn](../guides/chat-apps.md#whatsapp) |
+| **Weixin** | Dễ (quét QR gốc) | iLink API | [Hướng dẫn](../guides/chat-apps.md#weixin) |
 | **QQ** | Dễ (AppID + AppSecret) | WebSocket | [Hướng dẫn](../channels/qq/README.vi.md) |
 | **Slack** | Dễ (bot + app token) | Socket Mode | [Hướng dẫn](../channels/slack/README.vi.md) |
 | **Matrix** | Trung bình (homeserver + token) | Sync API | [Hướng dẫn](../channels/matrix/README.vi.md) |
@@ -467,7 +467,7 @@ Trò chuyện với PicoClaw của bạn qua 17+ nền tảng nhắn tin:
 | **Feishu / Lark** | Trung bình (App ID + Secret) | WebSocket/SDK | [Hướng dẫn](../channels/feishu/README.vi.md) |
 | **LINE** | Trung bình (credentials + webhook) | Webhook | [Hướng dẫn](../channels/line/README.vi.md) |
 | **WeCom** | Dễ (đăng nhập QR hoặc thủ công) | WebSocket | [Hướng dẫn](../channels/wecom/README.vi.md) |
-| **IRC** | Trung bình (server + nick) | IRC protocol | [Hướng dẫn](../guides/chat-apps.vi.md#irc) |
+| **IRC** | Trung bình (server + nick) | IRC protocol | [Hướng dẫn](../guides/chat-apps.md#irc) |
 | **OneBot** | Trung bình (WebSocket URL) | OneBot v11 | [Hướng dẫn](../channels/onebot/README.vi.md) |
 | **MaixCam** | Dễ (bật) | TCP socket | [Hướng dẫn](../channels/maixcam/README.vi.md) |
 | **Pico** | Dễ (bật) | Native protocol | Tích hợp sẵn |
@@ -475,9 +475,9 @@ Trò chuyện với PicoClaw của bạn qua 17+ nền tảng nhắn tin:
 
 > Tất cả các Channel dựa trên webhook dùng chung một Gateway HTTP server (`gateway.host`:`gateway.port`, mặc định `127.0.0.1:18790`). Feishu sử dụng chế độ WebSocket/SDK và không dùng HTTP server chung.
 
-> Mức độ chi tiết log được kiểm soát bởi `gateway.log_level` (mặc định: `warn`). Các giá trị được hỗ trợ: `debug`, `info`, `warn`, `error`, `fatal`. Cũng có thể đặt qua `PICOCLAW_LOG_LEVEL`. Xem [Cấu hình](../guides/configuration.vi.md#mức-log-của-gateway) để biết thêm chi tiết.
+> Mức độ chi tiết log được kiểm soát bởi `gateway.log_level` (mặc định: `warn`). Các giá trị được hỗ trợ: `debug`, `info`, `warn`, `error`, `fatal`. Cũng có thể đặt qua `PICOCLAW_LOG_LEVEL`. Xem [Cấu hình](../guides/configuration.md#gateway-log-level) để biết thêm chi tiết.
 
-Để biết hướng dẫn thiết lập Channel chi tiết, xem [Cấu hình Ứng dụng Chat](../guides/chat-apps.vi.md).
+Để biết hướng dẫn thiết lập Channel chi tiết, xem [Cấu hình Ứng dụng Chat](../guides/chat-apps.md).
 
 ## 🔧 Tools
 
@@ -497,7 +497,7 @@ PicoClaw có thể tìm kiếm web để cung cấp thông tin cập nhật. C�
 
 ### ⚙️ Các Tools Khác
 
-PicoClaw bao gồm các tool tích hợp sẵn cho thao tác tệp, thực thi mã, lên lịch và nhiều hơn nữa. Xem [Cấu hình Tools](../reference/tools_configuration.vi.md) để biết chi tiết.
+PicoClaw bao gồm các tool tích hợp sẵn cho thao tác tệp, thực thi mã, lên lịch và nhiều hơn nữa. Xem [Cấu hình Tools](../reference/tools_configuration.md) để biết chi tiết.
 
 ## 🎯 Skills
 
@@ -527,7 +527,7 @@ Thêm vào `config.json` của bạn:
 }
 ```
 
-Để biết thêm chi tiết, xem [Cấu hình Tools - Skills](../reference/tools_configuration.vi.md#skills-tool).
+Để biết thêm chi tiết, xem [Cấu hình Tools - Skills](../tools/skills.md).
 
 ## 🔗 MCP (Model Context Protocol)
 
@@ -557,7 +557,7 @@ PicoClaw là trợ lý nhẹ, vì vậy nên ưu tiên dùng MCP server từ xa.
 }
 ```
 
-Để biết cấu hình MCP đầy đủ (stdio, SSE, HTTP transports, Tool Discovery), xem [Cấu hình Tools - MCP](../reference/tools_configuration.vi.md#mcp-tool).
+Để biết cấu hình MCP đầy đủ (stdio, SSE, HTTP transports, Tool Discovery), xem [Cấu hình Tools - MCP](../tools/mcp.md).
 
 ## <img src="../../assets/clawdchat-icon.png" width="24" height="24" alt="ClawdChat"> Tham gia Mạng xã hội Agent
 
@@ -600,17 +600,17 @@ PicoClaw hỗ trợ nhắc nhở đã lên lịch và tác vụ định kỳ th�
 
 | Chủ đề | Mô tả |
 |--------|-------|
-| [Docker & Khởi động Nhanh](../guides/docker.vi.md) | Thiết lập Docker Compose, chế độ Launcher/Agent |
-| [Ứng dụng Chat](../guides/chat-apps.vi.md) | Hướng dẫn thiết lập 17+ Channel |
-| [Cấu hình](../guides/configuration.vi.md) | Biến môi trường, bố cục workspace, sandbox bảo mật |
-| [Providers & Models](../guides/providers.vi.md) | 30+ Provider LLM, định tuyến mô hình, cấu hình model_list |
-| [Spawn & Tác vụ Bất đồng bộ](../guides/spawn-tasks.vi.md) | Tác vụ nhanh, tác vụ dài với spawn, điều phối sub-agent bất đồng bộ |
+| [Docker & Khởi động Nhanh](../guides/docker.md) | Thiết lập Docker Compose, chế độ Launcher/Agent |
+| [Ứng dụng Chat](../guides/chat-apps.md) | Hướng dẫn thiết lập 17+ Channel |
+| [Cấu hình](../guides/configuration.md) | Biến môi trường, bố cục workspace, sandbox bảo mật |
+| [Providers & Models](../guides/providers.md) | 30+ Provider LLM, định tuyến mô hình, cấu hình model_list |
+| [Spawn & Tác vụ Bất đồng bộ](../guides/spawn-tasks.md) | Tác vụ nhanh, tác vụ dài với spawn, điều phối sub-agent bất đồng bộ |
 | [Hooks](../architecture/hooks/README.md) | Hệ thống hook hướng sự kiện: observer, interceptor, approval hook |
 | [Steering](../architecture/steering.md) | Chèn tin nhắn vào vòng lặp agent đang chạy |
 | [SubTurn](../architecture/subturn.md) | Điều phối subagent, kiểm soát đồng thời, vòng đời |
-| [Khắc phục sự cố](../operations/troubleshooting.vi.md) | Các vấn đề thường gặp và giải pháp |
-| [Cấu hình Tools](../reference/tools_configuration.vi.md) | Bật/tắt từng tool, chính sách exec, MCP, Skills |
-| [Tương thích Phần cứng](../guides/hardware-compatibility.vi.md) | Các board đã kiểm tra, yêu cầu tối thiểu |
+| [Khắc phục sự cố](../operations/troubleshooting.md) | Các vấn đề thường gặp và giải pháp |
+| [Cấu hình Tools](../reference/tools_configuration.md) | Bật/tắt từng tool, chính sách exec, MCP, Skills |
+| [Tương thích Phần cứng](../guides/hardware-compatibility.md) | Các board đã kiểm tra, yêu cầu tối thiểu |
 
 ## 🤝 Đóng góp & Lộ trình
 
