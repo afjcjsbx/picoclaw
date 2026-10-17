@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -990,7 +991,7 @@ func TestReadFileLinesTool_ChunkedReading(t *testing.T) {
 		t.Fatalf("Failed to write test file: %v", err)
 	}
 
-	tool := NewReadFileLinesTool(tmpDir, false, MaxReadFileSize)
+	tool := NewReadFileLinesTool(tmpDir, false, MaxReadFileSize, DefaultReadFileMaxLines, DefaultReadFileMaxLineLength)
 
 	result1 := tool.Execute(context.Background(), map[string]any{
 		"path":       testFile,
@@ -1056,7 +1057,7 @@ func TestReadFileLinesTool_DefaultOffsetAndRemainingLines(t *testing.T) {
 		t.Fatalf("Failed to write test file: %v", err)
 	}
 
-	tool := NewReadFileLinesTool(tmpDir, false, MaxReadFileSize)
+	tool := NewReadFileLinesTool(tmpDir, false, MaxReadFileSize, DefaultReadFileMaxLines, DefaultReadFileMaxLineLength)
 	result := tool.Execute(context.Background(), map[string]any{
 		"path":       testFile,
 		"start_line": 1,
@@ -1110,7 +1111,7 @@ func TestReadFileLinesTool_OffsetBeyondEOF(t *testing.T) {
 		t.Fatalf("Failed to write test file: %v", err)
 	}
 
-	tool := NewReadFileLinesTool(tmpDir, false, MaxReadFileSize)
+	tool := NewReadFileLinesTool(tmpDir, false, MaxReadFileSize, DefaultReadFileMaxLines, DefaultReadFileMaxLineLength)
 	result := tool.Execute(context.Background(), map[string]any{
 		"path":       testFile,
 		"start_line": int64(100),
@@ -1132,7 +1133,7 @@ func TestReadFileLinesTool_RejectsOffset(t *testing.T) {
 		t.Fatalf("Failed to write test file: %v", err)
 	}
 
-	tool := NewReadFileLinesTool(tmpDir, false, MaxReadFileSize)
+	tool := NewReadFileLinesTool(tmpDir, false, MaxReadFileSize, DefaultReadFileMaxLines, DefaultReadFileMaxLineLength)
 	result := tool.Execute(context.Background(), map[string]any{
 		"path":       testFile,
 		"start_line": 1,
@@ -1155,7 +1156,7 @@ func TestReadFileLinesTool_RejectsLength(t *testing.T) {
 		t.Fatalf("Failed to write test file: %v", err)
 	}
 
-	tool := NewReadFileLinesTool(tmpDir, false, MaxReadFileSize)
+	tool := NewReadFileLinesTool(tmpDir, false, MaxReadFileSize, DefaultReadFileMaxLines, DefaultReadFileMaxLineLength)
 	result := tool.Execute(context.Background(), map[string]any{
 		"path":       testFile,
 		"start_line": 1,
@@ -1178,7 +1179,7 @@ func TestReadFileLinesTool_RejectsLimit(t *testing.T) {
 		t.Fatalf("Failed to write test file: %v", err)
 	}
 
-	tool := NewReadFileLinesTool(tmpDir, false, MaxReadFileSize)
+	tool := NewReadFileLinesTool(tmpDir, false, MaxReadFileSize, DefaultReadFileMaxLines, DefaultReadFileMaxLineLength)
 	result := tool.Execute(context.Background(), map[string]any{
 		"path":       testFile,
 		"start_line": 1,
@@ -1202,7 +1203,7 @@ func TestReadFileLinesTool_BinaryFileRejected(t *testing.T) {
 		t.Fatalf("Failed to write test file: %v", err)
 	}
 
-	tool := NewReadFileLinesTool(tmpDir, false, MaxReadFileSize)
+	tool := NewReadFileLinesTool(tmpDir, false, MaxReadFileSize, DefaultReadFileMaxLines, DefaultReadFileMaxLineLength)
 	result := tool.Execute(context.Background(), map[string]any{
 		"path":       testFile,
 		"start_line": 1,
@@ -1228,7 +1229,7 @@ func TestReadFileLinesTool_TruncatesSingleLongLineAtByteBudget(t *testing.T) {
 		t.Fatalf("Failed to write test file: %v", err)
 	}
 
-	tool := NewReadFileLinesTool(tmpDir, false, MaxReadFileSize)
+	tool := NewReadFileLinesTool(tmpDir, false, 100, DefaultReadFileMaxLines, DefaultReadFileMaxLineLength)
 	result := tool.Execute(context.Background(), map[string]any{
 		"path":       testFile,
 		"start_line": 1,
@@ -1247,6 +1248,119 @@ func TestReadFileLinesTool_TruncatesSingleLongLineAtByteBudget(t *testing.T) {
 	}
 }
 
+func TestReadFileLinesTool_MaxLineLengthTruncatesAndContinues(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "wide.txt")
+
+	content := strings.Repeat("y", 50) + "\n" + "short line\n" + strings.Repeat("z", 80) + "\n"
+	if err := os.WriteFile(testFile, []byte(content), 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	tool := NewReadFileLinesTool(tmpDir, false, MaxReadFileSize, DefaultReadFileMaxLines, 20)
+	result := tool.Execute(context.Background(), map[string]any{
+		"path":       testFile,
+		"start_line": 1,
+	})
+	if result.IsError {
+		t.Fatalf("Execute() error = %s", result.ForLLM)
+	}
+
+	if !strings.Contains(result.ForLLM, "1|"+strings.Repeat("y", 20)+" ... [truncated]\n") {
+		t.Fatalf("expected oversized line 1 to be cut with a marker, got: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "2|short line\n") {
+		t.Fatalf("expected line 2 to be read after an oversized line, got: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "3|"+strings.Repeat("z", 20)+" ... [truncated]\n") {
+		t.Fatalf("expected oversized line 3 to be cut with a marker, got: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "[END OF FILE - no further content.]") {
+		t.Fatalf("expected the read to reach EOF, got: %s", result.ForLLM)
+	}
+}
+
+// TestReadFileLinesTool_MaxLineLengthDiscardContinuesWithNextLine covers the
+// path where the read stops at the per-line allowance before the newline: the
+// unread tail must be discarded without eating the next line, and both line
+// numbering and file_bytes must stay correct.
+func TestReadFileLinesTool_MaxLineLengthDiscardContinuesWithNextLine(t *testing.T) {
+	cases := []struct {
+		name        string
+		longLineLen int
+	}{
+		// The newline is consumed by ReadSlice together with the prefix.
+		{name: "newline_in_same_fragment", longLineLen: 9000},
+		// The newline is beyond the bufio buffer, so the tail is still pending.
+		{name: "newline_pending", longLineLen: 40000},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			testFile := filepath.Join(tmpDir, "long_line.txt")
+			content := strings.Repeat("a", tc.longLineLen) + "\nLINE_TWO\nLINE_THREE\n"
+			if err := os.WriteFile(testFile, []byte(content), 0o644); err != nil {
+				t.Fatalf("Failed to write test file: %v", err)
+			}
+
+			tool := NewReadFileLinesTool(
+				tmpDir, false, MaxReadFileSize,
+				DefaultReadFileMaxLines, DefaultReadFileMaxLineLength,
+			)
+			result := tool.Execute(context.Background(), map[string]any{"path": testFile})
+			if result.IsError {
+				t.Fatalf("Execute() error = %s", result.ForLLM)
+			}
+
+			if !strings.Contains(result.ForLLM, lineTruncationMarker+"\n2|LINE_TWO\n") {
+				t.Fatalf("expected line 2 right after the truncated line, got: %s", result.ForLLM)
+			}
+			if !strings.Contains(result.ForLLM, "3|LINE_THREE\n") {
+				t.Fatalf("expected line 3 to be read, got: %s", result.ForLLM)
+			}
+			if !strings.Contains(result.ForLLM, "read: lines 1-3") {
+				t.Fatalf("expected the header to report lines 1-3, got: %s", result.ForLLM)
+			}
+			if !strings.Contains(result.ForLLM, "file_bytes: "+strconv.Itoa(len(content))) {
+				t.Fatalf("expected file_bytes to count the discarded tail, got: %s", result.ForLLM)
+			}
+		})
+	}
+}
+
+func TestReadFileLinesTool_MaxLinesClamp(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "many.txt")
+
+	var content strings.Builder
+	for i := 1; i <= 50; i++ {
+		content.WriteString("line " + strconv.Itoa(i) + "\n")
+	}
+	if err := os.WriteFile(testFile, []byte(content.String()), 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	tool := NewReadFileLinesTool(tmpDir, false, MaxReadFileSize, 5, DefaultReadFileMaxLineLength)
+	result := tool.Execute(context.Background(), map[string]any{
+		"path":      testFile,
+		"max_lines": 100, // above the configured cap of 5: must be clamped
+	})
+	if result.IsError {
+		t.Fatalf("Execute() error = %s", result.ForLLM)
+	}
+
+	if !strings.Contains(result.ForLLM, "5|line 5\n") {
+		t.Fatalf("expected the clamped read to stop at line 5, got: %s", result.ForLLM)
+	}
+	if strings.Contains(result.ForLLM, "6|line 6") {
+		t.Fatalf("expected the clamped read to not include line 6, got: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "[PARTIAL") {
+		t.Fatalf("expected a partial-read marker, got: %s", result.ForLLM)
+	}
+}
+
 func TestReadFileLinesTool_NoTrailingNewline(t *testing.T) {
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "no_trailing_newline.txt")
@@ -1256,7 +1370,7 @@ func TestReadFileLinesTool_NoTrailingNewline(t *testing.T) {
 		t.Fatalf("Failed to write test file: %v", err)
 	}
 
-	tool := NewReadFileLinesTool(tmpDir, false, MaxReadFileSize)
+	tool := NewReadFileLinesTool(tmpDir, false, MaxReadFileSize, DefaultReadFileMaxLines, DefaultReadFileMaxLineLength)
 	result := tool.Execute(context.Background(), map[string]any{
 		"path":       testFile,
 		"start_line": 1,
@@ -1284,7 +1398,7 @@ func TestReadFileLinesTool_ExactByteBudgetBoundaryIncludesPrefix(t *testing.T) {
 		t.Fatalf("Failed to write test file: %v", err)
 	}
 
-	tool := NewReadFileLinesTool(tmpDir, false, 10)
+	tool := NewReadFileLinesTool(tmpDir, false, 10, DefaultReadFileMaxLines, DefaultReadFileMaxLineLength)
 	result := tool.Execute(context.Background(), map[string]any{
 		"path":       testFile,
 		"start_line": 1,

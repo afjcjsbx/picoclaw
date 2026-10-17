@@ -22,6 +22,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
@@ -35,7 +36,12 @@ const (
 	perplexityTimeout = 30 * time.Second // Perplexity (LLM-based, slower)
 	fetchTimeout      = 60 * time.Second // WebFetchTool
 
-	defaultMaxChars = 50000
+	// defaultMaxChars is a flood guard, not a context budget: content under it
+	// reaches the generic spillover path intact, which keeps a head+tail
+	// preview inline and stores the full page as a pageable workspace
+	// artifact. Only floods are lossy. Callers can request a smaller maxChars
+	// per call; the same head+tail truncation then applies at that cap.
+	defaultMaxChars = 2_000_000
 	maxRedirects    = 5
 
 	// maxSearchResponseBytes caps how much of a search provider's HTTP response
@@ -2501,10 +2507,8 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		extractor = "raw"
 	}
 
-	truncated := len(text) > maxChars
-	if truncated {
-		text = text[:maxChars] + "\n[Content truncated due to size limit]"
-	}
+	fullText := text
+	text, truncated := toolshared.TruncateHeadTail(text, maxChars, "CONTENT")
 
 	result := map[string]any{
 		"url":       urlStr,
@@ -2520,7 +2524,7 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult(fmt.Sprintf("failed to marshal result: %v", marshalErr))
 	}
 
-	return &ToolResult{
+	toolResult := &ToolResult{
 		ForLLM: string(resultJSON),
 		ForUser: fmt.Sprintf(
 			"Fetched %d bytes from %s (extractor: %s, truncated: %v)",
@@ -2530,6 +2534,12 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 			truncated,
 		),
 	}
+	if truncated {
+		// Hand the large-result spill the full page so a capped fetch stays
+		// pageable from the artifact instead of losing the omitted middle.
+		toolResult.FullText = fullText
+	}
+	return toolResult
 }
 
 func looksLikeHTML(body string) bool {
