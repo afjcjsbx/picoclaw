@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
@@ -2364,6 +2365,58 @@ func TestResolveWebSearchProviderName_FallsBackFromUnknownProvider(t *testing.T)
 type stubSearchProvider struct {
 	result string
 	calls  []string
+}
+
+func TestWebSearchToolFiltersBlockedDomains(t *testing.T) {
+	tool := &WebSearchTool{
+		provider: &stubSearchProvider{
+			result: "Results for: query\nSecret generated summary\n1. Private\n   https://admin.example.com/page\n   secret content\n2. Public\n   https://public.example.com/page\n   public content",
+		},
+		maxResults: 2,
+		websiteBlocklist: config.WebsiteBlocklistConfig{
+			Enabled: true,
+			Domains: []string{"admin.example.com"},
+		},
+	}
+	result := tool.Execute(context.Background(), map[string]any{"query": "query"})
+	if result.IsError {
+		t.Fatalf("Execute() returned error: %s", result.ForLLM)
+	}
+	if strings.Contains(result.ForLLM, "Secret generated summary") ||
+		strings.Contains(result.ForLLM, "secret content") ||
+		strings.Contains(result.ForLLM, "admin.example.com") {
+		t.Fatalf("blocked result leaked: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "public content") {
+		t.Fatalf("allowed result missing: %s", result.ForLLM)
+	}
+}
+
+func TestWebFetchToolBlocksInitialAndRedirectHosts(t *testing.T) {
+	policy := config.WebsiteBlocklistConfig{
+		Enabled: true,
+		Domains: []string{"*.internal.company.com", "admin.example.com"},
+	}
+	tool, err := NewWebFetchToolWithProxy(50000, "", format, testFetchLimit, nil, policy)
+	if err != nil {
+		t.Fatalf("NewWebFetchToolWithProxy() error: %v", err)
+	}
+	result := tool.Execute(context.Background(), map[string]any{"url": "https://admin.example.com"})
+	if !result.IsError || !strings.Contains(result.ForLLM, "website blocked by policy") {
+		t.Fatalf("blocked URL result = %#v", result)
+	}
+
+	redirect, err := http.NewRequest(http.MethodGet, "https://api.internal.company.com/page", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tool.client.CheckRedirect(
+		redirect,
+		nil,
+	); err == nil ||
+		!strings.Contains(err.Error(), "website blocked by policy") {
+		t.Fatalf("blocked redirect error = %v", err)
+	}
 }
 
 func (p *stubSearchProvider) Search(

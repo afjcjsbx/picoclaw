@@ -62,6 +62,12 @@
     "cold_path_trigger": "after_turn",
     "cold_path_times": []
   },
+  "security": {
+    "website_blocklist": {
+      "enabled": false,
+      "domains": []
+    }
+  },
   "model_list": [
     {
       "_comment": "OpenCode Go - one key for all models; PicoClaw picks the right endpoint per model (api_base optional, defaults to https://opencode.ai/inference/go)",
