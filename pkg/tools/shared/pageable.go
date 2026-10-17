@@ -13,11 +13,11 @@ const (
 	MCPResultMetadataTag        = "<mcp-result-metadata>"
 	MCPResultMetadataClosingTag = "</mcp-result-metadata>"
 
-	// EnvelopeMaxParseBytes bounds the payload size EnvelopeSpec unwrapping is
+	// envelopeMaxParseBytes bounds the payload size EnvelopeSpec unwrapping is
 	// willing to parse. Unwrapping copies the result into a map and then into a
 	// string, so a multi-megabyte JSON object would be duplicated in memory for
 	// no practical gain; oversized payloads are returned verbatim.
-	EnvelopeMaxParseBytes = 16 << 20
+	envelopeMaxParseBytes = 16 << 20
 )
 
 // EnvelopeSpec describes one recognized JSON envelope shape.
@@ -77,15 +77,9 @@ func PageableMCPServerText(content string) string {
 	return UnwrapEnvelopes(content, MCPEnvelopeSpec)
 }
 
-// UnwrapEnvelope rewrites content as pageable text when it matches spec.
-// It returns content unchanged otherwise.
-func UnwrapEnvelope(content string, spec EnvelopeSpec) string {
-	return UnwrapEnvelopes(content, spec)
-}
-
 // UnwrapEnvelopes parses content once and returns the pageable text for the
 // first matching spec. It returns content unchanged when no spec matches or
-// when content is not a JSON object within EnvelopeMaxParseBytes.
+// when content is not a JSON object within envelopeMaxParseBytes.
 func UnwrapEnvelopes(content string, specs ...EnvelopeSpec) string {
 	payload, ok := parseEnvelopeObject(content)
 	if !ok {
@@ -110,7 +104,7 @@ func UnwrapEnvelopes(content string, specs ...EnvelopeSpec) string {
 // any map allocation.
 func parseEnvelopeObject(content string) (map[string]json.RawMessage, bool) {
 	trimmed := strings.TrimLeft(content, " \t\r\n")
-	if trimmed == "" || trimmed[0] != '{' || len(content) > EnvelopeMaxParseBytes {
+	if trimmed == "" || trimmed[0] != '{' || len(content) > envelopeMaxParseBytes {
 		return nil, false
 	}
 	var payload map[string]json.RawMessage

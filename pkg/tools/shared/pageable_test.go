@@ -116,7 +116,7 @@ func TestPageableMCPServerText_AllowsLeadingWhitespace(t *testing.T) {
 func TestPageableMCPServerText_OversizedPayloadStaysVerbatim(t *testing.T) {
 	// The parse cap is 16 MiB; simulate a payload beyond it without allocating
 	// the whole body: the guard checks length first, before any parse.
-	payload := `{"result":"` + strings.Repeat("a", EnvelopeMaxParseBytes) + `"}`
+	payload := `{"result":"` + strings.Repeat("a", envelopeMaxParseBytes) + `"}`
 
 	if got := PageableMCPServerText(payload); got != payload {
 		t.Fatalf("expected the oversized payload verbatim")

@@ -546,30 +546,33 @@ func TestPageableToolResultText_KeepsMetadataAfterText(t *testing.T) {
 }
 
 func TestPageableToolResultText_UnrecognizedContentIsVerbatim(t *testing.T) {
-	cases := map[string]string{
-		"ordinary tool JSON":  `{"output": "line\n", "exit_code": 0}`,
-		"unknown sibling key": `{"text": "line\n", "exit_code": 0}`,
-		"text only":           `{"text": "line\n"}`,
-		"mcp shape from exec": `{"result": "line\n"}`,
-		"missing url":         `{"status": 200, "text": "line\n"}`,
-		"missing status":      `{"url": "https://example.com", "text": "line\n"}`,
-		"empty url":           `{"url": "", "status": 200, "text": "line\n"}`,
-		"string status":       `{"url": "https://example.com", "status": "200", "text": "line\n"}`,
-		"bool status":         `{"url": "https://example.com", "status": true, "text": "line\n"}`,
-		"not an object":       `[{"text": "line\n"}]`,
-		"structured text":     `{"text": {"blob": "line\n"}}`,
-		"non-string text":     `{"text": 42}`,
-		"empty text":          `{"text": ""}`,
-		"missing text":        `{"url": "https://example.com"}`,
-		"empty object":        `{}`,
-		"unparseable JSON":    `{"text": "line`,
-		"plain text":          "line one\nline two",
-		"array payload":       `[1, 2, 3]`,
+	cases := []struct {
+		name    string
+		content string
+	}{
+		{"ordinary tool JSON", `{"output": "line\n", "exit_code": 0}`},
+		{"unknown sibling key", `{"text": "line\n", "exit_code": 0}`},
+		{"text only", `{"text": "line\n"}`},
+		{"mcp shape from exec", `{"result": "line\n"}`},
+		{"missing url", `{"status": 200, "text": "line\n"}`},
+		{"missing status", `{"url": "https://example.com", "text": "line\n"}`},
+		{"empty url", `{"url": "", "status": 200, "text": "line\n"}`},
+		{"string status", `{"url": "https://example.com", "status": "200", "text": "line\n"}`},
+		{"bool status", `{"url": "https://example.com", "status": true, "text": "line\n"}`},
+		{"not an object", `[{"text": "line\n"}]`},
+		{"structured text", `{"text": {"blob": "line\n"}}`},
+		{"non-string text", `{"text": 42}`},
+		{"empty text", `{"text": ""}`},
+		{"missing text", `{"url": "https://example.com"}`},
+		{"empty object", `{}`},
+		{"unparseable JSON", `{"text": "line`},
+		{"plain text", "line one\nline two"},
+		{"array payload", `[1, 2, 3]`},
 	}
-	for name, content := range cases {
-		t.Run(name, func(t *testing.T) {
-			if got := pageableToolResultText(content, "exec"); got != content {
-				t.Fatalf("pageableToolResultText() = %q, want verbatim %q", got, content)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := pageableToolResultText(tc.content, "exec"); got != tc.content {
+				t.Fatalf("pageableToolResultText() = %q, want verbatim %q", got, tc.content)
 			}
 		})
 	}

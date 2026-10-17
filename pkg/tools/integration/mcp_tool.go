@@ -417,9 +417,10 @@ func mcpSanitizedStandInMessage(text string) bool {
 
 // persistLargeTextArtifact persists an oversized MCP text payload to a workspace
 // artifact and returns the model-facing replacement result: a bounded head+tail
-// window of the sanitized text plus the artifact path. The full raw payload is
-// what lands on disk, so the window costs no cargo. Returns nil when the text
-// fits, is empty, or no workspace is configured.
+// window of the sanitized text plus the artifact path. The full payload — the
+// raw text, or the pageable text for a recognized JSON payload — is what lands
+// on disk, so the window costs no cargo. Returns nil when the text fits, is
+// empty, or no workspace is configured.
 //
 // A recognizable JSON text payload ({"result": <text>, ...}, see
 // toolshared.PageableMCPServerText) is unwrapped before the write: servers
@@ -443,8 +444,8 @@ func (t *MCPTool) persistLargeTextArtifact(text, llmText string) *ToolResult {
 	}
 
 	// The sanitized view can be a stand-in (for example the large-base64
-	// notice); never unwrap the envelope around it. The artifact keeps the raw
-	// payload as before, just pageable.
+	// notice); never unwrap the payload around it. The artifact keeps the raw
+	// payload when the view is a stand-in; otherwise it stores pageable text.
 	persistedText := text
 	if !mcpSanitizedStandInMessage(strings.TrimSpace(llmText)) {
 		persistedText = toolshared.PageableMCPServerText(text)

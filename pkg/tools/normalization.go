@@ -190,10 +190,10 @@ func persistLargeResultArtifact(result *ToolResult, toolName, workspace string, 
 		return
 	}
 
-	// A recognized JSON envelope (today only web_fetch) is spilled as the
-	// pageable text it wraps. The size decision above stays on the raw result
-	// — that is what would have cost context — but the artifact and preview
-	// both carry real newlines instead of one escaped line.
+	// A recognized JSON envelope (web_fetch, or an MCP tool's text payload) is
+	// spilled as the pageable text it wraps. The size decision above stays on
+	// the raw result — that is what would have cost context — but the artifact
+	// and preview both carry real newlines instead of one escaped line.
 	if pageable := pageableToolResultText(text, toolName); pageable != text {
 		text = pageable
 		size = utf8.RuneCountInString(text)
