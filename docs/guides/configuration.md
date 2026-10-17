@@ -428,7 +428,7 @@ Even with `restrict_to_workspace: false`, the `exec` tool blocks these dangerous
 |------------|------|---------|-------------|
 | `tools.allow_read_paths` | string[] | `[]` | Additional paths allowed for reading outside workspace |
 | `tools.allow_write_paths` | string[] | `[]` | Additional paths allowed for writing outside workspace |
-| `tools.search_files.enabled` | bool | `true` | Enables regex content search and glob-based filename search |
+| `tools.search_files.enabled` | bool | `true` | Enables regex content search and glob/substring filename search |
 | `tools.message.media_enabled` | bool | `false` | Allows the `message` tool to attach local media files by path. This is separate from `tools.send_file.enabled`; enable it only when unified text/media/caption delivery is intended. |
 
 ### Read File Mode

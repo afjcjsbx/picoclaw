@@ -46,7 +46,7 @@ func NewSearchFilesTool(workspace string, restrict bool, allowPaths ...[]*regexp
 func (t *SearchFilesTool) Name() string { return "search_files" }
 
 func (t *SearchFilesTool) Description() string {
-	return "Search file contents or find files by name. Use this instead of grep/rg/find/ls in terminal. target='content' does regex search with files_only, count, or context output; target='files' finds names by glob. Supports pagination. On macOS, searches above your home directory skip TCC-protected folders; target one directly to include it. Searches the configured readable filesystem sandbox."
+	return "Search file contents or find files by name. Use this instead of grep/rg/find/ls in terminal. target='content' does regex search with files_only, count, or context output; target='files' finds names by glob or substring (an empty pattern lists files). Supports pagination. On macOS, searches above your home directory skip TCC-protected folders; target one directly to include it. Searches the configured readable filesystem sandbox."
 }
 
 func (t *SearchFilesTool) Parameters() map[string]any {
@@ -55,7 +55,7 @@ func (t *SearchFilesTool) Parameters() map[string]any {
 		"properties": map[string]any{
 			"pattern": map[string]any{
 				"type":        "string",
-				"description": "Regex for content search, or filename glob (for example *.go) for target=files",
+				"description": "Regex for content search (empty matches every line), or a filename pattern for target=files: a glob such as *.go, src/**/*.ts or *.{js,ts}, or a plain substring such as docker-compose (empty lists every file)",
 			},
 			"target": map[string]any{
 				"type":        "string",
@@ -68,7 +68,7 @@ func (t *SearchFilesTool) Parameters() map[string]any {
 				"description": "File or directory to search (default: .)",
 				"default":     ".",
 			},
-			"file_glob": map[string]any{"type": "string", "description": "Optional filename glob for content search"},
+			"file_glob": map[string]any{"type": "string", "description": "Optional filename pattern for content search (same syntax as pattern for target=files)"},
 			"limit": map[string]any{
 				"type":        "integer",
 				"description": "Maximum results to return (default: 50, maximum: 200)",
@@ -102,15 +102,17 @@ func (t *SearchFilesTool) Parameters() map[string]any {
 }
 
 type searchFilesOptions struct {
-	pattern    string
-	target     string
-	path       string
-	fileGlob   string
-	limit      int
-	offset     int
-	order      string
-	outputMode string
-	context    int
+	pattern     string
+	target      string
+	path        string
+	fileGlob    string
+	namePattern searchPattern
+	filePattern searchPattern
+	limit       int
+	offset      int
+	order       string
+	outputMode  string
+	context     int
 }
 
 type searchFileEntry struct {
@@ -131,8 +133,8 @@ func (t *SearchFilesTool) Execute(ctx context.Context, args map[string]any) *Too
 
 func parseSearchFilesOptions(args map[string]any) (searchFilesOptions, error) {
 	pattern, ok := args["pattern"].(string)
-	if !ok || strings.TrimSpace(pattern) == "" {
-		return searchFilesOptions{}, fmt.Errorf("pattern is required and must be a non-empty string")
+	if !ok {
+		return searchFilesOptions{}, fmt.Errorf("pattern is required and must be a string")
 	}
 	opts := searchFilesOptions{
 		pattern:    pattern,
@@ -171,12 +173,18 @@ func parseSearchFilesOptions(args map[string]any) (searchFilesOptions, error) {
 			return searchFilesOptions{}, fmt.Errorf("invalid regex pattern: %w", err)
 		}
 		if opts.fileGlob != "" {
-			if _, err := filepath.Match(opts.fileGlob, "example"); err != nil {
+			matcher, err := newSearchPattern(opts.fileGlob)
+			if err != nil {
 				return searchFilesOptions{}, fmt.Errorf("invalid file_glob: %w", err)
 			}
+			opts.filePattern = matcher
 		}
-	} else if _, err := filepath.Match(opts.pattern, "example"); err != nil {
-		return searchFilesOptions{}, fmt.Errorf("invalid filename glob: %w", err)
+	} else {
+		matcher, err := newSearchPattern(opts.pattern)
+		if err != nil {
+			return searchFilesOptions{}, fmt.Errorf("invalid filename pattern: %w", err)
+		}
+		opts.namePattern = matcher
 	}
 	if opts.limit, ok = intArg(args, "limit", opts.limit); !ok || opts.limit < 1 || opts.limit > maxSearchResults {
 		return searchFilesOptions{}, fmt.Errorf("limit must be between 1 and %d", maxSearchResults)
@@ -215,7 +223,7 @@ func (t *SearchFilesTool) searchNames(ctx context.Context, opts searchFilesOptio
 		opts.path,
 		opts.order == "modified",
 		func(path string) (bool, error) {
-			if !matchesFileGlob(opts.pattern, filepath.Base(path)) {
+			if !opts.namePattern.match(relativeSearchPath(opts.path, path)) {
 				return false, nil
 			}
 			info, err := t.fs.Stat(path)
@@ -278,7 +286,7 @@ func (t *SearchFilesTool) searchContents(ctx context.Context, opts searchFilesOp
 	bytesScanned := int64(0)
 	var byteLimit bool
 	filesScanned, truncated, err := t.walkPath(ctx, opts.path, false, func(path string) (bool, error) {
-		if opts.fileGlob != "" && !matchesFileGlob(opts.fileGlob, filepath.Base(path)) {
+		if opts.fileGlob != "" && !opts.filePattern.match(relativeSearchPath(opts.path, path)) {
 			return false, nil
 		}
 		content, size, err := readSearchFile(t.fs, path, maxSearchBytesScanned-bytesScanned)
@@ -546,9 +554,15 @@ func (t *SearchFilesTool) walkPath(
 	return filesScanned, truncated, nil
 }
 
-func matchesFileGlob(pattern, name string) bool {
-	matched, _ := filepath.Match(pattern, name)
-	return matched
+// relativeSearchPath returns path relative to the search root for pattern
+// matching. When the search root is the candidate itself (a single-file
+// search), the base name is returned instead.
+func relativeSearchPath(root, path string) string {
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == "." || !filepath.IsLocal(rel) {
+		return filepath.Base(path)
+	}
+	return rel
 }
 
 func shouldSkipSearchDir(root, path, name string) bool {
