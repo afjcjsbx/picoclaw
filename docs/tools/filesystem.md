@@ -106,7 +106,7 @@ Searches file contents with a regular expression, or finds file names by glob or
 | `path` | string | no | File or directory to search. Default: `.` |
 | `file_glob` | string | no | Optional filename pattern applied to content searches (same syntax as `pattern` for `target: "files"`) |
 | `limit` | integer | no | Maximum results to return. Default: `50`, maximum: `200` |
-| `offset` | integer | no | Number of results to skip (pagination). Default: `0` |
+| `offset` | integer | no | Number of results to skip (pagination); a result is a match line, or a merged context block when `context` > 0. Default: `0` |
 | `order` | string | no | `discovery` (default) or `modified` (newest modification time first; scans the full tree) |
 | `output_mode` | string | no | Content searches: `content` (default), `files_only`, or `count` |
 | `context` | integer | no | Lines before and after each content match (maximum: `20`). Default: `0` |
@@ -118,6 +118,8 @@ Filename patterns accept three forms:
 * **Glob** — a pattern with metacharacters is matched as a glob. A glob containing `/` is matched against the whole relative path; one without `/` is matched against the base name. `*` and `?` do not cross `/`, `**/` matches any number of directories (`src/**/*.ts` also matches `src/main.ts`), and `{a,b}` alternates (`*.{js,ts}`).
 
 Output lines are capped at 240 bytes each. When a match lies beyond that cut, the displayed window moves to keep the matched text visible, with `…` marking both cut sides, so reported matches are never silently dropped from the output.
+
+With `context` greater than zero, matches whose context ranges overlap or touch are merged into a single block (as ripgrep does) instead of reprinting shared lines, and blocks are split at 50 lines so each result row stays small. `offset` and `limit` count these blocks, which makes pagination duplicate-free.
 
 Content searches are bounded by a scan budget (5,000 files and 64 MiB of file content). When a file no longer fits in the remaining byte budget it is skipped on its own and the walk continues with the files that still fit, instead of ending the search early.
 

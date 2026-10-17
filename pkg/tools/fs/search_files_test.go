@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -106,18 +107,58 @@ func TestSearchFilesSkipsFilesBeyondByteBudget(t *testing.T) {
 	}
 }
 
-func TestSearchFilesOutputCapKeepsPagination(t *testing.T) {
+func TestSearchFilesContextMergesAdjacentMatches(t *testing.T) {
 	root := t.TempDir()
-	lines := make([]string, 100)
+	var lines []string
+	for i := 1; i <= 50; i++ {
+		switch {
+		case i == 10 || i == 11:
+			lines = append(lines, fmt.Sprintf("needle line %d", i))
+		case i == 40:
+			lines = append(lines, "needle far away")
+		default:
+			lines = append(lines, fmt.Sprintf("filler %d", i))
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewSearchFilesTool(root, true)
+	result := tool.Execute(context.Background(), map[string]any{"pattern": "needle", "context": 2})
+	if result.IsError {
+		t.Fatalf("search failed: %s", result.ForLLM)
+	}
+	// Lines 10 and 11 merge into one block; line 40 is its own block.
+	if got := strings.Count(result.ForLLM, "a.txt:\n"); got != 2 {
+		t.Fatalf("expected 2 merged blocks, got %d:\n%s", got, result.ForLLM)
+	}
+	for _, line := range []string{"  8: filler 8", "  9: filler 9", "> 10: needle line 10", "> 11: needle line 11", "  12: filler 12"} {
+		if got := strings.Count(result.ForLLM, line+"\n"); got != 1 {
+			t.Fatalf("line %q should appear exactly once, got %d:\n%s", line, got, result.ForLLM)
+		}
+	}
+	if !strings.Contains(result.ForLLM, "2 result(s)") {
+		t.Fatalf("merged blocks should be counted as results:\n%s", result.ForLLM)
+	}
+}
+
+func TestSearchFilesContextPaginationWithoutDuplication(t *testing.T) {
+	root := t.TempDir()
+	const total = 4000
+	lines := make([]string, total)
 	for i := range lines {
-		lines[i] = fmt.Sprintf("needle%03d %s", i+1, strings.Repeat("x", 220))
+		lines[i] = fmt.Sprintf("needle%04d %s", i+1, strings.Repeat("x", 220))
 	}
 	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte(strings.Join(lines, "\n")), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	tool := NewSearchFilesTool(root, true)
+	seen := make(map[string]int)
 	offset := 0
-	for offset < len(lines) {
+	for pages := 0; ; pages++ {
+		if pages > 100 {
+			t.Fatal("pagination did not terminate")
+		}
 		result := tool.Execute(context.Background(), map[string]any{
 			"pattern": "needle", "limit": 50, "offset": offset, "context": 20,
 		})
@@ -127,21 +168,28 @@ func TestSearchFilesOutputCapKeepsPagination(t *testing.T) {
 		if len(result.ForLLM) > maxSearchOutputBytes {
 			t.Fatalf("output has %d bytes, limit is %d", len(result.ForLLM), maxSearchOutputBytes)
 		}
+		if !strings.Contains(result.ForLLM, "result(s)") {
+			break // no more blocks
+		}
 		var shown int
 		summary := result.ForLLM[strings.LastIndex(result.ForLLM, "\n\n")+2:]
 		if _, err := fmt.Sscanf(summary, "%d result(s)", &shown); err != nil {
 			t.Fatal(err)
 		}
-		blocks := strings.Count(result.ForLLM, "a.txt:\n")
-		if shown == 0 || shown != blocks {
-			t.Fatalf("reported %d results, output contains %d: %s", shown, blocks, result.ForLLM)
+		if shown == 0 {
+			break
+		}
+		for _, match := range regexp.MustCompile(`needle\d{4}`).FindAllString(result.ForLLM, -1) {
+			seen[match]++
 		}
 		offset += shown
-		if offset < len(lines) && !strings.Contains(result.ForLLM, fmt.Sprintf("offset=%d", offset)) {
-			t.Fatalf("missing next offset %d", offset)
-		}
 	}
-	if offset != len(lines) {
-		t.Fatalf("pagination advanced to %d, want %d", offset, len(lines))
+	if len(seen) != total {
+		t.Fatalf("saw %d distinct matches, want %d", len(seen), total)
+	}
+	for match, count := range seen {
+		if count != 1 {
+			t.Fatalf("match %s appeared %d times across pages", match, count)
+		}
 	}
 }

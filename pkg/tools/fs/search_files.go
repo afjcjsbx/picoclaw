@@ -23,6 +23,9 @@ const (
 	maxSearchContext      = 20
 	maxSearchLineLength   = 240
 	maxSearchOutputBytes  = 64 * 1024
+	// maxSearchHunkLines bounds the number of lines in one merged context
+	// block so a single result row always stays well below the output cap.
+	maxSearchHunkLines = 50
 )
 
 var (
@@ -76,7 +79,7 @@ func (t *SearchFilesTool) Parameters() map[string]any {
 			},
 			"offset": map[string]any{
 				"type":        "integer",
-				"description": "Number of results to skip (default: 0)",
+				"description": "Number of results to skip (results are match lines, or merged context blocks when context > 0)",
 				"default":     0,
 			},
 			"order": map[string]any{
@@ -93,7 +96,7 @@ func (t *SearchFilesTool) Parameters() map[string]any {
 			},
 			"context": map[string]any{
 				"type":        "integer",
-				"description": "Lines before and after each content match (maximum: 20)",
+				"description": "Lines before and after each content match (maximum: 20); contiguous matches merge into one block",
 				"default":     0,
 			},
 		},
@@ -389,38 +392,88 @@ func formatContentMatches(
 		return []string{fmt.Sprintf("%s: %d", path, count)}, count
 	}
 
+	if opts.context == 0 {
+		var rows []string
+		for i, matched := range hits {
+			if !matched {
+				continue
+			}
+			(*rowsSeen)++
+			if *rowsSeen <= opts.offset {
+				continue
+			}
+			rows = append(rows, fmt.Sprintf("%s:%d: %s", path, i+1, truncateSearchLine(lines[i], locs[i])))
+			if len(rows) >= remaining {
+				break
+			}
+		}
+		return rows, count
+	}
+
 	var rows []string
-	for i, matched := range hits {
-		if !matched {
-			continue
-		}
-		(*rowsSeen)++
-		if *rowsSeen <= opts.offset {
-			continue
-		}
-		start, end := max(0, i-opts.context), min(len(lines)-1, i+opts.context)
-		var block strings.Builder
-		if opts.context > 0 {
-			block.WriteString(fmt.Sprintf("%s:\n", path))
-		}
-		for lineIndex := start; lineIndex <= end; lineIndex++ {
-			line := truncateSearchLine(lines[lineIndex], locs[lineIndex])
-			if opts.context > 0 {
+	for _, hunk := range mergeMatchHunks(hits, opts.context) {
+		for _, chunk := range splitHunkChunks(hunk) {
+			(*rowsSeen)++
+			if *rowsSeen <= opts.offset {
+				continue
+			}
+			var block strings.Builder
+			block.WriteString(path + ":\n")
+			for lineIndex := chunk[0]; lineIndex <= chunk[1]; lineIndex++ {
 				prefix := " "
 				if hits[lineIndex] {
 					prefix = ">"
 				}
-				block.WriteString(fmt.Sprintf("%s %d: %s\n", prefix, lineIndex+1, line))
-			} else {
-				block.WriteString(fmt.Sprintf("%s:%d: %s\n", path, lineIndex+1, line))
+				block.WriteString(fmt.Sprintf("%s %d: %s\n", prefix, lineIndex+1, truncateSearchLine(lines[lineIndex], locs[lineIndex])))
 			}
-		}
-		rows = append(rows, strings.TrimRight(block.String(), "\n"))
-		if len(rows) >= remaining {
-			break
+			rows = append(rows, strings.TrimRight(block.String(), "\n"))
+			if len(rows) >= remaining {
+				return rows, count
+			}
 		}
 	}
 	return rows, count
+}
+
+// mergeMatchHunks merges the context ranges of matches whose ranges overlap
+// or touch (as ripgrep does), so adjacent matches produce one block instead
+// of reprinting shared context lines.
+func mergeMatchHunks(hits []bool, context int) [][2]int {
+	last := len(hits) - 1
+	var hunks [][2]int
+	var start, end int
+	open := false
+	for i, matched := range hits {
+		if !matched {
+			continue
+		}
+		hunkStart := max(0, i-context)
+		hunkEnd := min(last, i+context)
+		switch {
+		case !open:
+			start, end, open = hunkStart, hunkEnd, true
+		case hunkStart <= end+1:
+			end = max(end, hunkEnd)
+		default:
+			hunks = append(hunks, [2]int{start, end})
+			start, end = hunkStart, hunkEnd
+		}
+	}
+	if open {
+		hunks = append(hunks, [2]int{start, end})
+	}
+	return hunks
+}
+
+// splitHunkChunks splits a hunk into line ranges of at most
+// maxSearchHunkLines lines, so one result row stays small enough for the
+// output cap even when a run of matches produces a huge hunk.
+func splitHunkChunks(hunk [2]int) [][2]int {
+	var chunks [][2]int
+	for start := hunk[0]; start <= hunk[1]; start += maxSearchHunkLines {
+		chunks = append(chunks, [2]int{start, min(hunk[1], start+maxSearchHunkLines-1)})
+	}
+	return chunks
 }
 
 // truncateSearchLine bounds a line to maxSearchLineLength bytes. When
