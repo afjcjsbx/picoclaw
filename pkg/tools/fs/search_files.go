@@ -1,6 +1,7 @@
 package fstools
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -16,7 +17,6 @@ import (
 
 const (
 	maxSearchFilesScanned = 5000
-	maxSearchFileBytes    = 1024 * 1024
 	maxSearchBytesScanned = 64 * 1024 * 1024
 	maxSearchResults      = 200
 	maxSearchOffset       = 10000
@@ -26,6 +26,9 @@ const (
 	// maxSearchHunkLines bounds the number of lines in one merged context
 	// block so a single result row always stays well below the output cap.
 	maxSearchHunkLines = 50
+	// scanSearchReadBufferBytes is the buffered reader size used to stream
+	// file contents line by line.
+	scanSearchReadBufferBytes = 64 * 1024
 )
 
 var (
@@ -71,7 +74,10 @@ func (t *SearchFilesTool) Parameters() map[string]any {
 				"description": "File or directory to search (default: .)",
 				"default":     ".",
 			},
-			"file_glob": map[string]any{"type": "string", "description": "Optional filename pattern for content search (same syntax as pattern for target=files)"},
+			"file_glob": map[string]any{
+				"type":        "string",
+				"description": "Optional filename pattern for content search (same syntax as pattern for target=files)",
+			},
 			"limit": map[string]any{
 				"type":        "integer",
 				"description": "Maximum results to return (default: 50, maximum: 200)",
@@ -292,19 +298,19 @@ func (t *SearchFilesTool) searchContents(ctx context.Context, opts searchFilesOp
 		if opts.fileGlob != "" && !opts.filePattern.match(relativeSearchPath(opts.path, path)) {
 			return false, nil
 		}
-		content, size, err := readSearchFile(t.fs, path, maxSearchBytesScanned-bytesScanned)
-		if errors.Is(err, errSearchByteLimit) {
-			// The file does not fit in the remaining scan budget: skip it
-			// and keep walking, so smaller files that still fit are reached.
-			byteLimit = true
-			return false, nil
-		}
-		bytesScanned += size
+		fileResult, err := t.scanSearchFile(
+			path, pattern, opts, &rowsSeen, opts.limit+1-len(rows), maxSearchBytesScanned-bytesScanned,
+		)
 		if err != nil {
 			return false, errSearchSkipFile
 		}
-		fileRows, _ := formatContentMatches(path, content, pattern, opts, &rowsSeen, opts.limit+1-len(rows))
-		rows = append(rows, fileRows...)
+		bytesScanned += fileResult.bytesRead
+		if fileResult.byteLimit {
+			// The file does not fit in the remaining scan budget: skip it
+			// and keep walking, so smaller files that still fit are reached.
+			byteLimit = true
+		}
+		rows = append(rows, fileResult.rows...)
 		return len(rows) > opts.limit, nil
 	})
 	if err != nil {
@@ -354,126 +360,241 @@ func capSearchRows(rows []string) (string, int, bool) {
 	return result.String(), shown, false
 }
 
-func formatContentMatches(
+// searchLine is one scanned line: its 1-based number, its text, and the
+// match position when the pattern matches (nil otherwise).
+type searchLine struct {
+	number int
+	text   string
+	loc    []int
+}
+
+func (l searchLine) hit() bool { return l.loc != nil }
+
+// searchFileResult carries the outcome of scanning one file.
+type searchFileResult struct {
+	rows      []string
+	matches   int
+	bytesRead int64
+	byteLimit bool
+}
+
+// scanSearchFile streams one file line by line and formats its matches as
+// result rows, reading at most remainingBytes of content and never holding
+// the whole file in memory. When the file cannot be scanned in full because
+// the global budget ran out mid-read, byteLimit is set and the partial
+// results are discarded, as if the file had not fit at all. Binary files (a
+// NUL byte or invalid UTF-8 in any line) are skipped silently.
+func (t *SearchFilesTool) scanSearchFile(
 	path string,
-	content []byte,
 	pattern *regexp.Regexp,
 	opts searchFilesOptions,
 	rowsSeen *int,
-	remaining int,
-) ([]string, int) {
-	if len(content) == 0 {
-		return nil, 0
+	remainingRows int,
+	remainingBytes int64,
+) (searchFileResult, error) {
+	var result searchFileResult
+	entry, err := t.fs.Stat(path)
+	if err != nil {
+		return result, err
 	}
-	lines := strings.Split(strings.TrimSuffix(string(content), "\n"), "\n")
-	hits := make([]bool, len(lines))
-	locs := make([][]int, len(lines))
-	count := 0
-	for i, line := range lines {
-		lines[i] = strings.TrimSuffix(line, "\r")
-		line = lines[i]
-		if loc := pattern.FindStringIndex(line); loc != nil {
-			hits[i] = true
-			locs[i] = loc
-			count++
-		}
+	if !entry.Mode().IsRegular() {
+		return result, fmt.Errorf("not a searchable regular file")
 	}
-	if count == 0 {
-		return nil, 0
+	if entry.Size() > remainingBytes {
+		result.byteLimit = true
+		return result, nil
 	}
-	if opts.outputMode == "files_only" || opts.outputMode == "count" {
-		(*rowsSeen)++
-		if *rowsSeen <= opts.offset || remaining <= 0 {
-			return nil, count
-		}
-		if opts.outputMode == "files_only" {
-			return []string{path}, count
-		}
-		return []string{fmt.Sprintf("%s: %d", path, count)}, count
+	f, err := t.fs.Open(path)
+	if err != nil {
+		return result, err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return result, err
+	}
+	if !info.Mode().IsRegular() {
+		return result, fmt.Errorf("not a searchable regular file")
+	}
+	if info.Size() > remainingBytes {
+		result.byteLimit = true
+		return result, nil
 	}
 
-	if opts.context == 0 {
-		var rows []string
-		for i, matched := range hits {
-			if !matched {
-				continue
+	// The budget bounds the memory a single line may allocate.
+	br := &budgetReader{reader: f, limit: remainingBytes}
+	reader := bufio.NewReaderSize(br, scanSearchReadBufferBytes)
+
+	var (
+		rows   []string
+		seen   int // rows generated for this file, committed to rowsSeen when the file is not binary
+		binary bool
+		number int
+		done   bool
+
+		hunkOpen bool
+		lastHit  int
+		nextEmit int
+		buf      []searchLine
+		ring     []searchLine
+	)
+
+	emitChunk := func(lines []searchLine) {
+		seen++
+		if *rowsSeen+seen <= opts.offset {
+			return
+		}
+		var block strings.Builder
+		block.WriteString(path)
+		block.WriteString(":\n")
+		for _, line := range lines {
+			prefix := " "
+			if line.hit() {
+				prefix = ">"
 			}
-			(*rowsSeen)++
-			if *rowsSeen <= opts.offset {
-				continue
-			}
-			rows = append(rows, fmt.Sprintf("%s:%d: %s", path, i+1, truncateSearchLine(lines[i], locs[i])))
-			if len(rows) >= remaining {
+			block.WriteString(fmt.Sprintf("%s %d: %s\n", prefix, line.number, truncateSearchLine(line.text, line.loc)))
+		}
+		rows = append(rows, strings.TrimRight(block.String(), "\n"))
+		if len(rows) >= remainingRows {
+			done = true
+		}
+	}
+
+	emitMatchLine := func(line searchLine) {
+		seen++
+		if *rowsSeen+seen <= opts.offset {
+			return
+		}
+		rows = append(rows, fmt.Sprintf("%s:%d: %s", path, line.number, truncateSearchLine(line.text, line.loc)))
+		if len(rows) >= remainingRows {
+			done = true
+		}
+	}
+
+	pushRing := func(line searchLine) {
+		ring = append(ring, line)
+		if len(ring) > opts.context {
+			ring = ring[len(ring)-opts.context:]
+		}
+	}
+
+	flushChunks := func() {
+		for !done && len(buf) >= maxSearchHunkLines && nextEmit+maxSearchHunkLines-1 <= lastHit+opts.context {
+			emitChunk(buf[:maxSearchHunkLines])
+			buf = buf[maxSearchHunkLines:]
+			nextEmit += maxSearchHunkLines
+		}
+	}
+
+	closeHunk := func() {
+		confirmed := min(len(buf), lastHit+opts.context-nextEmit+1)
+		for confirmed > 0 && !done {
+			chunk := min(confirmed, maxSearchHunkLines)
+			emitChunk(buf[:chunk])
+			buf = buf[chunk:]
+			nextEmit += chunk
+			confirmed -= chunk
+		}
+		// The lines left after the confirmed hunk sit past the merge
+		// window: they can only serve as leading context for a later hunk,
+		// so drop the oldest one.
+		if len(buf) > 1 {
+			buf = buf[1:]
+		} else {
+			buf = buf[:0]
+		}
+		ring = append(ring[:0], buf...)
+		buf = buf[:0]
+		hunkOpen = false
+	}
+
+	for !done {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			if errors.Is(err, errSearchByteLimit) {
+				result.byteLimit = true
 				break
 			}
-		}
-		return rows, count
-	}
-
-	var rows []string
-	for _, hunk := range mergeMatchHunks(hits, opts.context) {
-		for _, chunk := range splitHunkChunks(hunk) {
-			(*rowsSeen)++
-			if *rowsSeen <= opts.offset {
-				continue
+			if !errors.Is(err, io.EOF) {
+				return result, err
 			}
-			var block strings.Builder
-			block.WriteString(path + ":\n")
-			for lineIndex := chunk[0]; lineIndex <= chunk[1]; lineIndex++ {
-				prefix := " "
-				if hits[lineIndex] {
-					prefix = ">"
+		}
+		if line != "" {
+			number++
+			text := strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
+			if strings.IndexByte(text, 0) >= 0 || !utf8.ValidString(text) {
+				binary = true
+				break
+			}
+			current := searchLine{number: number, text: text, loc: pattern.FindStringIndex(text)}
+			if current.hit() {
+				result.matches++
+			}
+			switch {
+			case opts.outputMode == "files_only" || opts.outputMode == "count":
+				// Counting only; the row is built after the scan.
+			case opts.context == 0:
+				if current.hit() {
+					emitMatchLine(current)
 				}
-				block.WriteString(fmt.Sprintf("%s %d: %s\n", prefix, lineIndex+1, truncateSearchLine(lines[lineIndex], locs[lineIndex])))
+			case current.hit():
+				if hunkOpen {
+					buf = append(buf, current)
+					lastHit = number
+				} else {
+					buf = append(buf[:0], ring...)
+					buf = append(buf, current)
+					ring = ring[:0]
+					hunkOpen = true
+					lastHit = number
+					nextEmit = buf[0].number
+				}
+			case !hunkOpen:
+				pushRing(current)
+			case number < lastHit+2*opts.context+1:
+				buf = append(buf, current)
+			default:
+				closeHunk()
+				pushRing(current)
 			}
-			rows = append(rows, strings.TrimRight(block.String(), "\n"))
-			if len(rows) >= remaining {
-				return rows, count
+			if opts.context > 0 {
+				flushChunks()
+			}
+		}
+		if errors.Is(err, io.EOF) {
+			break
+		}
+	}
+
+	result.bytesRead = br.read
+	if binary {
+		result.matches = 0
+		return result, nil
+	}
+	if result.byteLimit {
+		// The file exceeded the remaining budget mid-read: drop its results.
+		result.matches = 0
+		return result, nil
+	}
+	if !done && hunkOpen && opts.context > 0 {
+		confirmed := min(len(buf), lastHit+opts.context-nextEmit+1)
+		if confirmed > 0 {
+			emitChunk(buf[:confirmed])
+		}
+	}
+	if opts.outputMode != "content" && result.matches > 0 {
+		seen++
+		if *rowsSeen+seen > opts.offset {
+			if opts.outputMode == "files_only" {
+				rows = append(rows, path)
+			} else {
+				rows = append(rows, fmt.Sprintf("%s: %d", path, result.matches))
 			}
 		}
 	}
-	return rows, count
-}
-
-// mergeMatchHunks merges the context ranges of matches whose ranges overlap
-// or touch (as ripgrep does), so adjacent matches produce one block instead
-// of reprinting shared context lines.
-func mergeMatchHunks(hits []bool, context int) [][2]int {
-	last := len(hits) - 1
-	var hunks [][2]int
-	var start, end int
-	open := false
-	for i, matched := range hits {
-		if !matched {
-			continue
-		}
-		hunkStart := max(0, i-context)
-		hunkEnd := min(last, i+context)
-		switch {
-		case !open:
-			start, end, open = hunkStart, hunkEnd, true
-		case hunkStart <= end+1:
-			end = max(end, hunkEnd)
-		default:
-			hunks = append(hunks, [2]int{start, end})
-			start, end = hunkStart, hunkEnd
-		}
-	}
-	if open {
-		hunks = append(hunks, [2]int{start, end})
-	}
-	return hunks
-}
-
-// splitHunkChunks splits a hunk into line ranges of at most
-// maxSearchHunkLines lines, so one result row stays small enough for the
-// output cap even when a run of matches produces a huge hunk.
-func splitHunkChunks(hunk [2]int) [][2]int {
-	var chunks [][2]int
-	for start := hunk[0]; start <= hunk[1]; start += maxSearchHunkLines {
-		chunks = append(chunks, [2]int{start, min(hunk[1], start+maxSearchHunkLines-1)})
-	}
-	return chunks
+	*rowsSeen += seen
+	result.rows = rows
+	return result, nil
 }
 
 // truncateSearchLine bounds a line to maxSearchLineLength bytes. When
@@ -508,49 +629,29 @@ func truncateSearchLine(line string, matchLoc []int) string {
 	return window
 }
 
-func readSearchFile(filesystem fileSystem, path string, remainingBytes int64) ([]byte, int64, error) {
-	entry, err := filesystem.Stat(path)
-	if err != nil {
-		return nil, 0, err
-	}
-	if !entry.Mode().IsRegular() || entry.Size() > maxSearchFileBytes {
-		return nil, 0, fmt.Errorf("not a searchable regular file")
-	}
-	f, err := filesystem.Open(path)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return nil, 0, err
-	}
-	if !info.Mode().IsRegular() || info.Size() > maxSearchFileBytes {
-		return nil, 0, fmt.Errorf("not a searchable regular file")
-	}
-	if info.Size() > remainingBytes {
-		return nil, 0, errSearchByteLimit
-	}
-	content, err := io.ReadAll(io.LimitReader(f, maxSearchFileBytes+1))
-	if err != nil {
-		return nil, 0, err
-	}
-	if len(content) > maxSearchFileBytes {
-		return nil, int64(len(content)), fmt.Errorf("file exceeded search size limit")
-	}
-	if bytesContainNUL(content) || !utf8.Valid(content) {
-		return nil, info.Size(), fmt.Errorf("binary file")
-	}
-	return content, int64(len(content)), nil
+// budgetReader tracks how many bytes have been scanned and stops with
+// errSearchByteLimit once the remaining budget is exhausted, so one large
+// file cannot consume more than the search's global content budget.
+type budgetReader struct {
+	reader io.Reader
+	limit  int64
+	read   int64
 }
 
-func bytesContainNUL(content []byte) bool {
-	for _, b := range content {
-		if b == 0 {
-			return true
+func (b *budgetReader) Read(p []byte) (int, error) {
+	n, err := b.reader.Read(p)
+	if n > 0 {
+		b.read += int64(n)
+		if b.read > b.limit {
+			excess := b.read - b.limit
+			if excess > int64(n) {
+				excess = int64(n)
+			}
+			b.read = b.limit
+			return n - int(excess), errSearchByteLimit
 		}
 	}
-	return false
+	return n, err
 }
 
 func (t *SearchFilesTool) walkPath(
