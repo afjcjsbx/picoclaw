@@ -2507,6 +2507,7 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		extractor = "raw"
 	}
 
+	fullText := text
 	text, truncated := toolshared.TruncateHeadTail(text, maxChars, "CONTENT")
 
 	result := map[string]any{
@@ -2523,7 +2524,7 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult(fmt.Sprintf("failed to marshal result: %v", marshalErr))
 	}
 
-	return &ToolResult{
+	toolResult := &ToolResult{
 		ForLLM: string(resultJSON),
 		ForUser: fmt.Sprintf(
 			"Fetched %d bytes from %s (extractor: %s, truncated: %v)",
@@ -2533,6 +2534,12 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 			truncated,
 		),
 	}
+	if truncated {
+		// Hand the large-result spill the full page so a capped fetch stays
+		// pageable from the artifact instead of losing the omitted middle.
+		toolResult.FullText = fullText
+	}
+	return toolResult
 }
 
 func looksLikeHTML(body string) bool {

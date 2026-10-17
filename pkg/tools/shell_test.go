@@ -405,6 +405,54 @@ func TestShellTool_OutputTruncation(t *testing.T) {
 	}
 }
 
+// TestShellTool_TruncatedOutputSpillsFullText verifies that foreground output
+// beyond the configured cap stays recoverable: the large-result spill saves the
+// pre-truncation output, so the omitted middle is readable from the artifact.
+func TestShellTool_TruncatedOutputSpillsFullText(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Tools.Exec.AllowRemote = true
+	cfg.Tools.Exec.MaxOutputChars = 1000
+
+	tool, err := NewExecToolWithConfig("", false, cfg)
+	if err != nil {
+		t.Fatalf("unable to configure exec tool: %s", err)
+	}
+
+	workspace := t.TempDir()
+	reg := NewToolRegistry()
+	reg.SetWorkspace(workspace)
+	reg.SetMaxInlineResultRunes(512)
+	reg.Register(tool)
+
+	full := strings.Repeat("A", 900) + strings.Repeat("M", 20000) + strings.Repeat("Z", 900)
+	result := reg.Execute(context.Background(), "exec", map[string]any{
+		"action":  "run",
+		"command": "python3 -c \"print('A' * 900 + 'M' * 20000 + 'Z' * 900)\" || echo " + full,
+	})
+	if result.IsError {
+		t.Fatalf("Execute() failed: %s", result.ForLLM)
+	}
+
+	if len(result.ArtifactTags) != 1 {
+		t.Fatalf("expected the full output spilled as one artifact, got %+v", result.ArtifactTags)
+	}
+	path := strings.TrimSuffix(strings.TrimPrefix(result.ArtifactTags[0], "[file:"), "]")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("expected artifact readable: %v", err)
+	}
+	if got := strings.TrimSpace(string(data)); got != full {
+		t.Fatalf("expected the artifact to hold the full output, got %d chars (want %d)", len(got), len(full))
+	}
+	// Inline stays bounded and keeps the real head and tail of the full output.
+	if !strings.Contains(result.ForLLM, strings.Repeat("A", 100)) {
+		t.Fatal("expected the real output head in the preview")
+	}
+	if !strings.Contains(result.ForLLM, strings.Repeat("Z", 100)) {
+		t.Fatal("expected the real output tail in the preview")
+	}
+}
+
 // TestShellTool_WorkingDir_OutsideWorkspace verifies that working_dir cannot escape the workspace directly
 func TestShellTool_WorkingDir_OutsideWorkspace(t *testing.T) {
 	root := t.TempDir()

@@ -227,6 +227,16 @@ func TestWebTool_WebFetch_Truncation(t *testing.T) {
 	if !strings.Contains(text, "[CONTENT TRUNCATED - 19,000 chars omitted out of 20,000 total]") {
 		t.Errorf("expected an omission notice with counts, got: %q", text)
 	}
+
+	// The tool hands the large-result spill the full page, so the omitted
+	// middle stays readable from the artifact.
+	if result.FullText != longContent {
+		t.Fatalf(
+			"expected FullText to carry the full page, got %d chars (want %d)",
+			len(result.FullText),
+			len(longContent),
+		)
+	}
 }
 
 // TestWebTool_WebFetch_DefaultKeepsLargeContentIntact verifies the default cap
@@ -267,6 +277,9 @@ func TestWebTool_WebFetch_DefaultKeepsLargeContentIntact(t *testing.T) {
 	}
 	if len(text) != len(longContent) {
 		t.Fatalf("expected the full %d chars, got %d", len(longContent), len(text))
+	}
+	if result.FullText != "" {
+		t.Fatalf("expected no FullText for untruncated content, got %d chars", len(result.FullText))
 	}
 }
 

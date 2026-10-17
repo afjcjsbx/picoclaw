@@ -34,7 +34,7 @@ Behavior notes:
 
 - Run one independent command per tool call and chain dependent commands with `&&` (`;` when later commands must run regardless of earlier failures). Do not separate commands with newlines.
 - Prefer `cwd` over `cd` inside the command, and the filesystem tools over shell file operations.
-- Foreground output longer than `max_output_chars` (default 50,000 chars) is truncated to the first 40% and the last 60% around a `[OUTPUT TRUNCATED - N chars omitted out of T total]` notice; background session output is limited to 1 MB.
+- Foreground output longer than `max_output_chars` (default 50,000 chars) is truncated to the first 40% and the last 60% around a `[OUTPUT TRUNCATED - N chars omitted out of T total]` notice; background session output is limited to 1 MB. When the result is oversized, the large-result spillover saves the full pre-truncation output as a workspace artifact and the preview points to it, so the omitted middle stays readable.
 - Sessions are cleaned up 30 minutes after the process exits. `write` sends stdin, `send-keys` sends keys to a PTY session; combine `background=true` with `pty=true` for interactive sessions such as a REPL.
 
 ## Disabling the Exec Tool

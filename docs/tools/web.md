@@ -248,4 +248,4 @@ For Kagi, `d`, `w`, and `m` map to Kagi lens `time_relative`; `y` maps to a lens
 | `url` | string | yes | URL to fetch |
 | `maxChars` | integer | no | Maximum characters to extract (minimum `100`). Content beyond the cap keeps the first 40% and the last 60% around a `[CONTENT TRUNCATED - N chars omitted out of T total]` notice. Default: `2000000` |
 
-The default cap is a flood guard, not a context budget: pages fetched without `maxChars` (or under it) keep their full text, which the generic [large tool result handling](../reference/tools_configuration.md#large-tool-results) turns into a head+tail preview plus a pageable workspace artifact instead of a lossy cut.
+The default cap is a flood guard, not a context budget: pages fetched without `maxChars` (or under it) keep their full text, which the generic [large tool result handling](../reference/tools_configuration.md#large-tool-results) turns into a head+tail preview plus a pageable workspace artifact instead of a lossy cut. When the cap does apply, the spillover saves the full pre-truncation page (when the result is oversized), so the omitted middle stays readable.

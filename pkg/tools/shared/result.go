@@ -65,6 +65,14 @@ type ToolResult struct {
 	// rather than inferred from ForLLM, because ForLLM is tool-controlled text
 	// that could otherwise forge the marker and bypass the spill.
 	LargeResultSpilled bool `json:"-"`
+
+	// FullText is the pre-truncation payload when a tool cut its own output
+	// before returning it (for example exec's max_output_chars or web_fetch's
+	// maxChars). The large-result spill persists this text instead of the
+	// truncated view, so the omitted middle stays readable from the artifact,
+	// and clears the field once handled. It is never part of the model-visible
+	// result itself.
+	FullText string `json:"-"`
 }
 
 // ContentForLLM returns the normalized textual content to append to the

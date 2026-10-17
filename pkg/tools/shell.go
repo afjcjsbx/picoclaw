@@ -541,20 +541,31 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string, timeout tim
 	if maxOutputChars <= 0 {
 		maxOutputChars = config.DefaultExecMaxOutputChars
 	}
-	output, _ = toolshared.TruncateHeadTail(output, maxOutputChars, "OUTPUT")
+	fullOutput := output
+	output, truncated := toolshared.TruncateHeadTail(output, maxOutputChars, "OUTPUT")
+
+	// Attach the pre-truncation output so the large-result spill can save it
+	// instead of the cut view: the omitted middle stays readable from the
+	// artifact whenever the result is large enough to spill.
+	fullText := ""
+	if truncated {
+		fullText = fullOutput
+	}
 
 	if err != nil {
 		return &ToolResult{
-			ForLLM:  output,
-			ForUser: output,
-			IsError: true,
+			ForLLM:   output,
+			ForUser:  output,
+			IsError:  true,
+			FullText: fullText,
 		}
 	}
 
 	return &ToolResult{
-		ForLLM:  output,
-		ForUser: output,
-		IsError: false,
+		ForLLM:   output,
+		ForUser:  output,
+		IsError:  false,
+		FullText: fullText,
 	}
 }
 
