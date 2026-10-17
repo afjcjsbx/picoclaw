@@ -29,6 +29,10 @@ type ContextBuilder struct {
 	agentDiscovery func(agentID string) []AgentDescriptor
 	promptRegistry *PromptRegistry
 
+	// contextFileMaxChars caps, in runes, each workspace bootstrap file
+	// injected by LoadBootstrapFiles. See context_files.go for the protocol.
+	contextFileMaxChars int
+
 	// Cache for system prompt to avoid rebuilding on every call.
 	// This fixes issue #607: repeated reprocessing of the entire context.
 	// The cache auto-invalidates when workspace source files change (mtime check).
@@ -114,11 +118,29 @@ func NewContextBuilder(workspace string) *ContextBuilder {
 	globalSkillsDir := filepath.Join(getGlobalConfigDir(), "skills")
 
 	return &ContextBuilder{
-		workspace:      workspace,
-		skillsLoader:   skills.NewSkillsLoader(workspace, globalSkillsDir, builtinSkillsDir),
-		memory:         NewMemoryStore(workspace),
-		promptRegistry: NewPromptRegistry(),
+		workspace:           workspace,
+		skillsLoader:        skills.NewSkillsLoader(workspace, globalSkillsDir, builtinSkillsDir),
+		memory:              NewMemoryStore(workspace),
+		promptRegistry:      NewPromptRegistry(),
+		contextFileMaxChars: defaultContextFileMaxChars,
 	}
+}
+
+// WithContextFileLimits sets the per-file cap for workspace bootstrap files
+// injected by LoadBootstrapFiles. A positive configuredMaxChars wins; otherwise
+// the cap scales with contextWindow (see resolveContextFileMaxChars).
+func (cb *ContextBuilder) WithContextFileLimits(configuredMaxChars, contextWindow int) *ContextBuilder {
+	cb.contextFileMaxChars = resolveContextFileMaxChars(configuredMaxChars, contextWindow)
+	return cb
+}
+
+// contextFileLimit returns the cap applied to each bootstrap file; direct
+// struct construction without the option still gets the default cap.
+func (cb *ContextBuilder) contextFileLimit() int {
+	if cb.contextFileMaxChars > 0 {
+		return cb.contextFileMaxChars
+	}
+	return defaultContextFileMaxChars
 }
 
 func (cb *ContextBuilder) RegisterPromptSource(desc PromptSourceDescriptor) error {
@@ -735,28 +757,40 @@ func (cb *ContextBuilder) LoadBootstrapFiles() string {
 		if label == "" {
 			label = relativeWorkspacePath(cb.workspace, agentDefinition.Agent.Path)
 		}
-		fmt.Fprintf(&sb, "## %s\n\n%s\n\n", label, agentDefinition.Agent.Body)
+		sb.WriteString(cb.bootstrapSection(label, agentDefinition.Agent.Path, agentDefinition.Agent.Body))
 	}
 	if agentDefinition.Soul != nil {
-		fmt.Fprintf(
-			&sb,
-			"## %s\n\n%s\n\n",
+		sb.WriteString(cb.bootstrapSection(
 			relativeWorkspacePath(cb.workspace, agentDefinition.Soul.Path),
+			agentDefinition.Soul.Path,
 			agentDefinition.Soul.Content,
-		)
+		))
 	}
 	if agentDefinition.User != nil {
-		fmt.Fprintf(&sb, "## %s\n\n%s\n\n", "USER.md", agentDefinition.User.Content)
+		sb.WriteString(cb.bootstrapSection("USER.md", agentDefinition.User.Path, agentDefinition.User.Content))
 	}
 
 	if agentDefinition.Source != AgentDefinitionSourceAgent {
 		filePath := filepath.Join(cb.workspace, "IDENTITY.md")
 		if data, err := os.ReadFile(filePath); err == nil {
-			fmt.Fprintf(&sb, "## %s\n\n%s\n\n", "IDENTITY.md", data)
+			sb.WriteString(cb.bootstrapSection("IDENTITY.md", filePath, string(data)))
 		}
 	}
 
 	return sb.String()
+}
+
+// bootstrapSection renders one workspace context file as a "## label" markdown
+// section, truncating oversized content to a head+tail excerpt whose marker
+// points at the file the agent can read in full.
+func (cb *ContextBuilder) bootstrapSection(label, path, content string) string {
+	section := fmt.Sprintf("## %s\n\n%s\n\n", label, content)
+	return truncateContextFileSection(
+		section,
+		label,
+		relativeWorkspacePath(cb.workspace, path),
+		cb.contextFileLimit(),
+	)
 }
 
 // buildDynamicContext returns a short dynamic context string with per-request info.

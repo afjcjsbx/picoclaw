@@ -97,6 +97,8 @@ PicoClaw stores data in your configured workspace (default: `~/.picoclaw/workspa
 
 > **Note:** Changes to `AGENT.md`, `SOUL.md`, `USER.md` and `memory/MEMORY.md` are automatically detected at runtime via file modification time (mtime) tracking. You do **not** need to restart the gateway after editing these files — the agent picks up the new content on the next request.
 
+> **Oversized context files are truncated, not dropped.** Context files are injected into the system prompt on every request, so each one is capped by `agents.defaults.context_file_max_chars` (counted in Unicode characters, not bytes). Above the cap, the prompt keeps the first 70% and the last 20% of the cap and leaves a marker in the middle that names the omitted sections and points at the `read_file` call that returns the full file. When the key is unset or non-positive, the cap scales with the model's context window (6% of it, floored at 20,000 and capped at 500,000 characters).
+
 ### Agent Self-Evolution
 
 The `evolution` block controls PicoClaw's self-evolution runtime. When enabled, the agent records completed turns as learning records. In higher modes it can group repeated successful patterns, generate skill drafts, and optionally apply accepted drafts into workspace skills.
@@ -392,10 +394,11 @@ PicoClaw runs in a sandboxed environment by default. The agent can only access f
 }
 ```
 
-| Option                  | Default                 | Description                               |
-| ----------------------- | ----------------------- | ----------------------------------------- |
-| `workspace`             | `~/.picoclaw/workspace` | Working directory for the agent           |
-| `restrict_to_workspace` | `true`                  | Restrict file/command access to workspace |
+| Option                   | Default                 | Description                               |
+| ------------------------ | ----------------------- | ----------------------------------------- |
+| `workspace`              | `~/.picoclaw/workspace` | Working directory for the agent           |
+| `restrict_to_workspace`  | `true`                  | Restrict file/command access to workspace |
+| `context_file_max_chars` | auto                    | Per-file cap, in Unicode characters, for workspace context files (`AGENT.md`/`AGENTS.md`, `SOUL.md`, `USER.md`, `IDENTITY.md`). Oversized files are injected as a 70% head + 20% tail excerpt with a marker pointing at the full file. When unset or non-positive the cap scales with the model context window (6%, floor 20,000, ceiling 500,000). |
 
 #### Protected Tools
 

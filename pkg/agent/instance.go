@@ -226,6 +226,11 @@ func NewAgentInstance(
 		contextWindow = maxTokens * 4
 	}
 
+	// Context files are injected into the system prompt on every request, so
+	// their per-file cap follows the resolved context window (see
+	// resolveContextFileMaxChars).
+	contextBuilder.WithContextFileLimits(defaults.ContextFileMaxChars, contextWindow)
+
 	temperature := 0.7
 	if defaults.Temperature != nil {
 		temperature = *defaults.Temperature

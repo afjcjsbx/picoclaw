@@ -590,6 +590,14 @@ type AgentDefaults struct {
 	TurnProfile               TurnProfileConfig   `json:"turn_profile,omitempty"`
 	MaxLLMRetries             int                 `json:"max_llm_retries,omitempty"            env:"PICOCLAW_AGENTS_DEFAULTS_MAX_LLM_RETRIES"`
 	LLMRetryBackoffSecs       int                 `json:"llm_retry_backoff_secs,omitempty"     env:"PICOCLAW_AGENTS_DEFAULTS_LLM_RETRY_BACKOFF_SECS"`
+	// ContextFileMaxChars caps, in Unicode characters (Go runes), how much of
+	// each workspace context file (AGENT.md/AGENTS.md, SOUL.md, USER.md,
+	// IDENTITY.md) is injected into the system prompt. A larger file keeps a
+	// head+tail excerpt with a marker naming what was omitted and pointing at
+	// the read_file call that recovers the full text. When unset or
+	// non-positive the cap scales with the model's context window (6% of it,
+	// floored at 20000 and capped at 500000 characters).
+	ContextFileMaxChars int `json:"context_file_max_chars,omitempty" env:"PICOCLAW_AGENTS_DEFAULTS_CONTEXT_FILE_MAX_CHARS"`
 }
 
 const DefaultMaxMediaSize = 20 * 1024 * 1024 // 20 MB
