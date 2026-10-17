@@ -493,7 +493,7 @@ func TestPageableToolResultText_TextOnlyPayloadIsVerbatim(t *testing.T) {
 	// Hooks, plugins, and other tools can legitimately return {"text": "..."}.
 	// Without the web_fetch discriminator fields it is not the envelope.
 	content := `{"text": "line one\nline two"}`
-	if got := pageableToolResultText(content); got != content {
+	if got := pageableToolResultText(content, "exec"); got != content {
 		t.Fatalf("pageableToolResultText() = %q, want verbatim %q", got, content)
 	}
 }
@@ -503,7 +503,7 @@ func TestPageableToolResultText_AllowsLeadingWhitespace(t *testing.T) {
 	// that happens to be indented.
 	body := "line one\nline two"
 	envelope := "\n\t  " + strings.TrimSpace(buildWebFetchEnvelope(t, body))
-	pageable := pageableToolResultText(envelope)
+	pageable := pageableToolResultText(envelope, "web_fetch")
 	if !strings.Contains(pageable, body) {
 		t.Fatalf("expected envelope with leading whitespace to unwrap, got %q", pageable)
 	}
@@ -523,7 +523,7 @@ func TestPageableToolResultText_KeepsMetadataAfterText(t *testing.T) {
 		t.Fatalf("failed to marshal envelope: %v", err)
 	}
 
-	pageable := pageableToolResultText(string(envelope))
+	pageable := pageableToolResultText(string(envelope), "web_fetch")
 
 	text, rest, ok := strings.Cut(pageable, "\n\n"+webFetchMetadataTag+"\n")
 	if !ok {
@@ -550,6 +550,7 @@ func TestPageableToolResultText_UnrecognizedContentIsVerbatim(t *testing.T) {
 		"ordinary tool JSON":  `{"output": "line\n", "exit_code": 0}`,
 		"unknown sibling key": `{"text": "line\n", "exit_code": 0}`,
 		"text only":           `{"text": "line\n"}`,
+		"mcp shape from exec": `{"result": "line\n"}`,
 		"missing url":         `{"status": 200, "text": "line\n"}`,
 		"missing status":      `{"url": "https://example.com", "text": "line\n"}`,
 		"empty url":           `{"url": "", "status": 200, "text": "line\n"}`,
@@ -567,7 +568,7 @@ func TestPageableToolResultText_UnrecognizedContentIsVerbatim(t *testing.T) {
 	}
 	for name, content := range cases {
 		t.Run(name, func(t *testing.T) {
-			if got := pageableToolResultText(content); got != content {
+			if got := pageableToolResultText(content, "exec"); got != content {
 				t.Fatalf("pageableToolResultText() = %q, want verbatim %q", got, content)
 			}
 		})
@@ -670,7 +671,7 @@ func TestExecuteWithContext_UnwrappedEnvelopeThatFitsIsKeptInline(t *testing.T) 
 	// after unwrapping the result fits the inline budget and must not spill.
 	body := strings.Repeat("a\n", 40)
 	envelope := strings.TrimSpace(buildWebFetchEnvelope(t, body))
-	pageable := pageableToolResultText(envelope)
+	pageable := pageableToolResultText(envelope, "web_fetch")
 	rawSize := utf8.RuneCountInString(envelope)
 	pageableSize := utf8.RuneCountInString(pageable)
 	if pageableSize >= rawSize {
@@ -771,5 +772,31 @@ func TestExecuteWithContext_SpillKeepsTextOnlyJSONVerbatim(t *testing.T) {
 	}
 	if string(data) != strings.TrimSpace(opaque) {
 		t.Fatalf("expected text-only JSON artifact verbatim, got %q", string(data))
+	}
+}
+
+func TestExecuteWithContext_SpillKeepsExecResultOnlyJSONVerbatim(t *testing.T) {
+	// {"result": "..."} is a generic JSON shape, not proof of an MCP payload.
+	// Non-MCP results must keep their exact bytes so jq workflows survive.
+	workspace := t.TempDir()
+	reg := NewToolRegistry()
+	reg.SetWorkspace(workspace)
+	reg.SetMaxInlineResultRunes(32)
+
+	opaque := "{\"result\": \"" + strings.Repeat(`x\n`, 100) + "\"}"
+	reg.Register(newSpillTool("exec", SilentResult(opaque)))
+
+	result := reg.Execute(context.Background(), "exec", nil)
+
+	if len(result.ArtifactTags) != 1 {
+		t.Fatalf("expected 1 artifact tag, got %+v", result.ArtifactTags)
+	}
+	path := strings.TrimSuffix(strings.TrimPrefix(result.ArtifactTags[0], "[file:"), "]")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("expected artifact file to be readable: %v", err)
+	}
+	if string(data) != strings.TrimSpace(opaque) {
+		t.Fatalf("expected exec result-only JSON artifact verbatim, got %q", string(data))
 	}
 }
