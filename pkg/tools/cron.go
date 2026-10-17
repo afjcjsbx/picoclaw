@@ -96,7 +96,7 @@ func (t *CronTool) Parameters() map[string]any {
 			"action": map[string]any{
 				"type":        "string",
 				"enum":        []string{"add", "list", "get", "update", "remove", "enable", "disable", "run"},
-				"description": "Action to perform. Use 'get' before editing and 'update' to change existing jobs without losing their payload. Use 'run' to execute an existing job right now, on demand, without changing its schedule. Remote channels can only list/get/update/run jobs for the current channel/chat_id.",
+				"description": "Action to perform. Use 'get' before editing and 'update' to change existing jobs without losing their payload. Use 'run' to execute an existing job right now, on demand, without changing its schedule. Remote channels can only list/get/update/run jobs for the current channel/chat_id; on single-owner channels such as the Pico WebUI, jobs are scoped to the whole channel.",
 			},
 			"name": map[string]any{
 				"type":        "string",
@@ -539,6 +539,20 @@ func isCommandAllowedRemote(channel, chatID string, allowed []string) bool {
 	return false
 }
 
+// singleOwnerChannels are remote channels where every chat belongs to the same
+// owner: the channel is protected by one shared auth token and always sends as
+// a fixed sender identity. Job access on these channels is scoped to the whole
+// channel instead of a single chat, so a job created in one chat stays visible
+// from the owner's other chats (for example a new Pico WebUI conversation).
+var singleOwnerChannels = map[string]struct{}{
+	config.ChannelPico: {},
+}
+
+func isSingleOwnerChannel(channel string) bool {
+	_, ok := singleOwnerChannels[channel]
+	return ok
+}
+
 func (t *CronTool) canAccessJob(ctx context.Context, job *cron.CronJob) bool {
 	channel := ToolChannel(ctx)
 	if constants.IsInternalChannel(channel) {
@@ -549,7 +563,10 @@ func (t *CronTool) canAccessJob(ctx context.Context, job *cron.CronJob) bool {
 	if channel == "" || chatID == "" {
 		return false
 	}
-	if job.Payload.Channel != channel || job.Payload.To != chatID {
+	if job.Payload.Channel != channel {
+		return false
+	}
+	if !isSingleOwnerChannel(channel) && job.Payload.To != chatID {
 		return false
 	}
 	if job.Payload.Command != "" {
