@@ -54,6 +54,8 @@ func TestFileSafetyProtectedWorkspaceReads(t *testing.T) {
 		workspace,
 		true,
 		MaxReadFileSize,
+		DefaultReadFileMaxLines,
+		DefaultReadFileMaxLineLength,
 	).Execute(context.Background(), map[string]any{"path": ".env"})
 	if !linesResult.IsError {
 		t.Fatalf("line-based read exposed .env: %+v", linesResult)

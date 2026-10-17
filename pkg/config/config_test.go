@@ -308,6 +308,50 @@ func TestDefaultConfig_MaxInlineResultChars(t *testing.T) {
 	}
 }
 
+func TestConfig_TruncationLimits(t *testing.T) {
+	cfg := DefaultConfig()
+	if got := cfg.Tools.Exec.GetMaxOutputChars(); got != DefaultExecMaxOutputChars {
+		t.Fatalf(
+			"DefaultConfig().Tools.Exec.GetMaxOutputChars() = %d, want %d",
+			got,
+			DefaultExecMaxOutputChars,
+		)
+	}
+	if got := cfg.Tools.ReadFile.GetMaxLines(); got != DefaultReadFileMaxLines {
+		t.Fatalf(
+			"DefaultConfig().Tools.ReadFile.GetMaxLines() = %d, want %d",
+			got,
+			DefaultReadFileMaxLines,
+		)
+	}
+	if got := cfg.Tools.ReadFile.GetMaxLineLength(); got != DefaultReadFileMaxLineLength {
+		t.Fatalf(
+			"DefaultConfig().Tools.ReadFile.GetMaxLineLength() = %d, want %d",
+			got,
+			DefaultReadFileMaxLineLength,
+		)
+	}
+
+	// Zero values fall back to the defaults instead of disabling the caps.
+	var (
+		zeroExec ExecConfig
+		zeroRead ReadFileToolConfig
+	)
+	if got := zeroExec.GetMaxOutputChars(); got != DefaultExecMaxOutputChars {
+		t.Fatalf("zero ExecConfig.GetMaxOutputChars() = %d, want %d", got, DefaultExecMaxOutputChars)
+	}
+	if got := zeroRead.GetMaxLines(); got != DefaultReadFileMaxLines {
+		t.Fatalf("zero ReadFileToolConfig.GetMaxLines() = %d, want %d", got, DefaultReadFileMaxLines)
+	}
+	if got := zeroRead.GetMaxLineLength(); got != DefaultReadFileMaxLineLength {
+		t.Fatalf(
+			"zero ReadFileToolConfig.GetMaxLineLength() = %d, want %d",
+			got,
+			DefaultReadFileMaxLineLength,
+		)
+	}
+}
+
 func TestDefaultConfig_EvolutionDefaults(t *testing.T) {
 	cfg := DefaultConfig()
 

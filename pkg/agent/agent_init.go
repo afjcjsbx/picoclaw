@@ -158,7 +158,7 @@ func registerSharedTools(
 		}
 		if cfg.Tools.IsToolEnabled("web_fetch") {
 			fetchTool, err := integrationtools.NewWebFetchToolWithProxy(
-				50000,
+				0, // 0 = use the tool's flood-guard default; oversized pages are spilled, not cut
 				cfg.Tools.Web.Proxy,
 				cfg.Tools.Web.Format,
 				cfg.Tools.Web.FetchLimitBytes,
