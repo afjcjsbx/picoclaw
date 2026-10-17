@@ -213,20 +213,69 @@ func TestWebTool_WebFetch_Truncation(t *testing.T) {
 		t.Errorf("Expected 'truncated' to be true in result")
 	}
 
-	// Text should end with the truncation notice
-	if text, ok := resultMap["text"].(string); ok {
-		if !strings.HasSuffix(text, "[Content truncated due to size limit]") {
-			t.Errorf("Expected text to end with truncation notice, got: %q", text[max(0, len(text)-60):])
-		}
+	// Text should keep the first 40% and the last 60% around the omission notice.
+	text, ok := resultMap["text"].(string)
+	if !ok {
+		t.Fatal("missing 'text' field in result")
+	}
+	if !strings.HasPrefix(text, strings.Repeat("x", 400)) {
+		t.Errorf("expected the first 40%% of the content to be kept, got: %q", text[:60])
+	}
+	if !strings.HasSuffix(text, strings.Repeat("x", 600)) {
+		t.Errorf("expected the last 60%% of the content to be kept, got: %q", text[max(0, len(text)-60):])
+	}
+	if !strings.Contains(text, "[CONTENT TRUNCATED - 19,000 chars omitted out of 20,000 total]") {
+		t.Errorf("expected an omission notice with counts, got: %q", text)
 	}
 }
 
-// TestWebTool_WebFetch_TruncationNotice verifies the truncation notice is appended
-// for all content formats (text/plain, text/html, markdown, application/json).
+// TestWebTool_WebFetch_DefaultKeepsLargeContentIntact verifies the default cap
+// is a flood guard: pages under it reach the spillover path intact instead of
+// being cut inside the tool.
+func TestWebTool_WebFetch_DefaultKeepsLargeContentIntact(t *testing.T) {
+	withPrivateWebFetchHostsAllowed(t)
+
+	longContent := strings.Repeat("y", 60000) // above the old 50,000-char cap
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(longContent))
+	}))
+	defer server.Close()
+
+	tool, err := NewWebFetchTool(0, format, testFetchLimit) // 0 = use the default
+	if err != nil {
+		t.Fatalf("NewWebFetchTool() error: %v", err)
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{"url": server.URL})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.ForLLM)
+	}
+
+	var resultMap map[string]any
+	if err := json.Unmarshal([]byte(result.ForLLM), &resultMap); err != nil {
+		t.Fatalf("failed to unmarshal result JSON: %v", err)
+	}
+	if truncated, _ := resultMap["truncated"].(bool); truncated {
+		t.Fatal("expected large-but-not-flood content to stay untruncated")
+	}
+	text, ok := resultMap["text"].(string)
+	if !ok {
+		t.Fatal("missing 'text' field in result")
+	}
+	if len(text) != len(longContent) {
+		t.Fatalf("expected the full %d chars, got %d", len(longContent), len(text))
+	}
+}
+
+// TestWebTool_WebFetch_TruncationNotice verifies oversized content keeps a
+// head+tail window with an omission notice for all content formats
+// (text/plain, text/html, markdown, application/json).
 func TestWebTool_WebFetch_TruncationNotice(t *testing.T) {
 	withPrivateWebFetchHostsAllowed(t)
 
-	const truncationNotice = "[Content truncated due to size limit]"
 	const maxChars = 100
 
 	tests := []struct {
@@ -290,8 +339,14 @@ func TestWebTool_WebFetch_TruncationNotice(t *testing.T) {
 				t.Fatal("missing 'text' field in result")
 			}
 
-			if !strings.HasSuffix(text, truncationNotice) {
-				t.Errorf("expected text to end with %q, got suffix: %q", truncationNotice, text[max(0, len(text)-60):])
+			if !strings.Contains(text, "[CONTENT TRUNCATED - ") {
+				t.Errorf("expected an omission notice, got: %q", text)
+			}
+			if !strings.Contains(text, "chars omitted out of ") {
+				t.Errorf("expected omitted/total counts in the notice, got: %q", text)
+			}
+			if len(text) > maxChars+100 {
+				t.Errorf("expected ~%d chars plus the notice, got: %d", maxChars, len(text))
 			}
 
 			if truncated, ok := resultMap["truncated"].(bool); !ok || !truncated {
@@ -1067,8 +1122,8 @@ func TestNewWebFetchToolWithProxy(t *testing.T) {
 		logger.ErrorCF("agent", "Failed to create web fetch tool", map[string]any{"error": err.Error()})
 	}
 
-	if tool.maxChars != 50000 {
-		t.Fatalf("default maxChars = %d, want %d", tool.maxChars, 50000)
+	if tool.maxChars != defaultMaxChars {
+		t.Fatalf("default maxChars = %d, want %d", tool.maxChars, defaultMaxChars)
 	}
 }
 
