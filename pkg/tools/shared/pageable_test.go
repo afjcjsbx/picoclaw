@@ -86,6 +86,7 @@ func TestPageableMCPServerText_UnrecognizedContentIsVerbatim(t *testing.T) {
 		{"ordinary tool JSON", `{"foo":"bar","count":3}`},
 		{"web_fetch shape", `{"url":"https://example.com","status":200,"text":"page"}`},
 		{"unknown sibling key", `{"result":"body","extra":1}`},
+		{"structured output without result", `{"answer":42}`},
 		{"missing result", `{"structuredContent":{"k":"v"}}`},
 		{"empty result", `{"result":""}`},
 		{"non-string result", `{"result":{"nested":"object"}}`},

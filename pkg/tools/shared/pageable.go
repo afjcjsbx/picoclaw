@@ -59,16 +59,20 @@ var MCPEnvelopeSpec = EnvelopeSpec{
 // {"result": <text>, ...} with only known keys and a non-empty string "result"
 // — into the pageable text it wraps: the result text with real newlines,
 // followed by the sibling fields in a <mcp-result-metadata> block. The
-// metadata block keeps structuredContent, _meta, and any other sibling intact
-// instead of dropping them.
+// metadata block keeps siblings embedded in that text object (for example
+// "structuredContent" or "_meta") intact instead of dropping them. The
+// protocol-level structuredContent and _meta fields of mcp.CallToolResult are
+// separate from the text and are not part of this rewrite.
 //
-// Recognition is by SHAPE, not by tool name: an MCP server often returns its
+// Within the MCP path, recognition is by SHAPE: an MCP server often returns its
 // payload as a single minified JSON document, and storing that verbatim puts a
 // whole report or file on ONE line with escaped newlines, so the
 // read_file/search_files pagination the spill notices recommend could not page
-// it at all. Anything unrecognized — unparseable JSON, a non-object, an unknown
-// key, a missing/empty/non-string "result" — is returned verbatim, so opaque
-// JSON payloads keep their exact bytes.
+// it at all. The generic spill only applies this helper to tools whose name
+// starts with mcp_, because {"result": "..."} is also a common non-MCP shape.
+// Anything unrecognized — unparseable JSON, a non-object, an unknown key, a
+// missing/empty/non-string "result" — is returned verbatim, so opaque JSON
+// payloads keep their exact bytes.
 func PageableMCPServerText(content string) string {
 	return UnwrapEnvelopes(content, MCPEnvelopeSpec)
 }

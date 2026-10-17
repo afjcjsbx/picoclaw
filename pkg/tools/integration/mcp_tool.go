@@ -421,13 +421,16 @@ func mcpSanitizedStandInMessage(text string) bool {
 // what lands on disk, so the window costs no cargo. Returns nil when the text
 // fits, is empty, or no workspace is configured.
 //
-// A recognizable server envelope ({result, structuredContent, _meta}, see
+// A recognizable JSON text payload ({"result": <text>, ...}, see
 // toolshared.PageableMCPServerText) is unwrapped before the write: servers
 // commonly deliver one minified JSON document, and storing it verbatim would
 // put the whole payload on ONE line with escaped newlines, so the read_file /
 // search_files pagination the artifact note recommends could not page it.
-// Sibling fields survive in a <mcp-result-metadata> block; the size decision
-// stays on the raw text, which is what would have cost context.
+// Siblings embedded in that text object survive in a <mcp-result-metadata>
+// block; the protocol-level structuredContent and _meta fields of
+// mcp.CallToolResult are separate from the text and are not included by this
+// rewrite. The size decision stays on the raw text, which is what would have
+// cost context.
 func (t *MCPTool) persistLargeTextArtifact(text, llmText string) *ToolResult {
 	text = strings.TrimSpace(text)
 	limit := t.maxInlineTextRunes
