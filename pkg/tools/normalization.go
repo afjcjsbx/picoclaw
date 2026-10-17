@@ -40,6 +40,14 @@ const (
 	// the artifact; only the JSON envelope around them is replaced.
 	webFetchMetadataTag        = "<web-fetch-metadata>"
 	webFetchMetadataClosingTag = "</web-fetch-metadata>"
+
+	// webFetchEnvelopeMaxParseBytes bounds the payload size pageableToolResultText
+	// is willing to parse. Unwrapping copies the result into a map and then into
+	// a string, so a multi-megabyte JSON object from exec or a hook would be
+	// duplicated in memory for no practical gain. web_fetch itself is bounded by
+	// its download limit (10 MiB by default) and maxChars, so this only affects
+	// pathological payloads; those spill verbatim, as before the unwrap existed.
+	webFetchEnvelopeMaxParseBytes = 16 << 20
 )
 
 var (
@@ -275,6 +283,15 @@ func buildLargeResultPreview(text string, total, maxRunes int) (preview string, 
 // verbatim, so opaque JSON payloads from other tools (exec, curl, ...) keep
 // their exact bytes and stay jq-able.
 func pageableToolResultText(content string) string {
+	// Cheap guards before any parse allocation. The envelope is a JSON object,
+	// so plain text, log output, and JSON arrays are rejected on the first byte.
+	// The size cap keeps a pathological multi-megabyte object from being parsed
+	// and duplicated in memory (see webFetchEnvelopeMaxParseBytes).
+	trimmed := strings.TrimLeft(content, " \t\r\n")
+	if trimmed == "" || trimmed[0] != '{' || len(content) > webFetchEnvelopeMaxParseBytes {
+		return content
+	}
+
 	var payload map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(content), &payload); err != nil || len(payload) == 0 {
 		return content

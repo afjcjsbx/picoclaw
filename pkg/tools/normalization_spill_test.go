@@ -425,6 +425,20 @@ func TestPageableToolResultText_TextOnlyPayloadIsVerbatim(t *testing.T) {
 	}
 }
 
+func TestPageableToolResultText_AllowsLeadingWhitespace(t *testing.T) {
+	// The fast path only skips parsing; it must not reject a valid envelope
+	// that happens to be indented.
+	body := "line one\nline two"
+	envelope := "\n\t  " + strings.TrimSpace(buildWebFetchEnvelope(t, body))
+	pageable := pageableToolResultText(envelope)
+	if !strings.Contains(pageable, body) {
+		t.Fatalf("expected envelope with leading whitespace to unwrap, got %q", pageable)
+	}
+	if !strings.Contains(pageable, webFetchMetadataTag) {
+		t.Fatalf("expected metadata block, got %q", pageable)
+	}
+}
+
 func TestPageableToolResultText_KeepsMetadataAfterText(t *testing.T) {
 	body := "line one\nline two"
 	envelope, err := json.Marshal(map[string]any{
