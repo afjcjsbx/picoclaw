@@ -77,6 +77,7 @@ This design also enables **multi-agent support** with flexible provider selectio
 | **Azure OpenAI**    | `azure`           | `https://{resource}.openai.azure.com`               | Azure     | [Get Key](https://portal.azure.com)                              |
 | **Antigravity**     | `antigravity`     | Google Cloud                                        | Custom    | OAuth only                                                       |
 | **GitHub Copilot**  | `github-copilot`  | `localhost:4321`                                    | gRPC      | -                                                                |
+| **OpenCode Go**     | `opencode-go`     | `https://opencode.ai/inference/go`                  | Multi     | [Get Key](https://opencode.ai/docs/go/)                          |
 
 #### Basic Configuration
 
@@ -347,6 +348,36 @@ For direct Anthropic API access or custom endpoints that only support Anthropic'
 > - The existing `anthropic` protocol returns 404 errors (indicating the endpoint doesn't support OpenAI-compatible format)
 >
 > **Note:** The `anthropic` protocol uses OpenAI-compatible format (`/v1/chat/completions`), while `anthropic-messages` uses Anthropic's native format (`/v1/messages`). Choose based on your endpoint's supported format.
+
+**OpenCode Go**
+
+One OpenCode Go key serves models on four different wire protocols. PicoClaw
+picks the endpoint from the model ID prefix, so just name the model:
+
+| Model ID prefix                  | Protocol                    | Endpoint under `api_base`          |
+|----------------------------------|-----------------------------|------------------------------------|
+| `grok-`, `gpt-`, `muse-spark-`   | OpenAI Responses            | `/openai/v1/responses`             |
+| `claude-`, `minimax-`, `qwen`    | Anthropic Messages          | `/anthropic/v1/messages`           |
+| `gemini-`                        | Google Gemini               | `/google/v1beta/models/{id}:…`     |
+| anything else (`kimi-`, `glm-`, `deepseek-`, …) | OpenAI Chat Completions | `/openai/v1/chat/completions` |
+
+```json
+{
+  "model_name": "go-kimi",
+  "model": "opencode-go/kimi-k3",
+  "api_keys": ["your-opencode-go-key"]
+}
+```
+
+> `api_base` is optional and defaults to `https://opencode.ai/inference/go`.
+> OpenCode Go rejects requests without an `x-opencode-session` header, so
+> PicoClaw always sends it: the conversation session key during a chat turn, or
+> `picoclaw-<model_name>` for background calls such as summarization. An
+> explicit `custom_headers` entry for that header takes precedence.
+>
+> The Responses endpoint is called without `temperature` (reasoning models
+> reject it). For a model PicoClaw routes wrongly, use `provider: "openai"` or
+> `"anthropic-messages"` with the full family URL as `api_base` instead.
 
 **Ollama (local)**
 

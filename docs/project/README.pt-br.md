@@ -128,7 +128,7 @@ _*Builds recentes podem usar 10-20MB devido a merges rápidos de PRs. Otimizaç�
 
 </div>
 
-> **[Lista de Compatibilidade de Hardware](../guides/hardware-compatibility.pt-br.md)** — Veja todas as placas testadas, de RISC-V de $5 ao Raspberry Pi e celulares Android. Sua placa não está listada? Envie um PR!
+> **[Lista de Compatibilidade de Hardware](../guides/hardware-compatibility.md)** — Veja todas as placas testadas, de RISC-V de $5 ao Raspberry Pi e celulares Android. Sua placa não está listada? Envie um PR!
 
 <p align="center">
 <img src="../../assets/hardware-banner.jpg" alt="PicoClaw Hardware Compatibility" width="100%">
@@ -446,7 +446,7 @@ O PicoClaw suporta mais de 30 providers de LLM através da configuração `model
 }
 ```
 
-Para detalhes completos de configuração de providers, veja [Providers & Models](../guides/providers.pt-br.md).
+Para detalhes completos de configuração de providers, veja [Providers & Models](../guides/providers.md).
 
 </details>
 
@@ -458,8 +458,8 @@ Converse com seu PicoClaw por meio de mais de 17 plataformas de mensagens:
 |---------|--------------|-----------|------|
 | **Telegram** | Fácil (bot token) | Long polling | [Guia](../channels/telegram/README.pt-br.md) |
 | **Discord** | Fácil (bot token + intents) | WebSocket | [Guia](../channels/discord/README.pt-br.md) |
-| **WhatsApp** | Fácil (QR scan ou bridge URL) | Nativo / Bridge | [Guia](../guides/chat-apps.pt-br.md#whatsapp) |
-| **Weixin** | Fácil (scan QR nativo) | iLink API | [Guia](../guides/chat-apps.pt-br.md#weixin) |
+| **WhatsApp** | Fácil (QR scan ou bridge URL) | Nativo / Bridge | [Guia](../guides/chat-apps.md#whatsapp) |
+| **Weixin** | Fácil (scan QR nativo) | iLink API | [Guia](../guides/chat-apps.md#weixin) |
 | **QQ** | Fácil (AppID + AppSecret) | WebSocket | [Guia](../channels/qq/README.pt-br.md) |
 | **Slack** | Fácil (bot + app token) | Socket Mode | [Guia](../channels/slack/README.pt-br.md) |
 | **Matrix** | Médio (homeserver + token) | Sync API | [Guia](../channels/matrix/README.pt-br.md) |
@@ -467,7 +467,7 @@ Converse com seu PicoClaw por meio de mais de 17 plataformas de mensagens:
 | **Feishu / Lark** | Médio (App ID + Secret) | WebSocket/SDK | [Guia](../channels/feishu/README.pt-br.md) |
 | **LINE** | Médio (credenciais + webhook) | Webhook | [Guia](../channels/line/README.pt-br.md) |
 | **WeCom** | Fácil (login QR ou manual) | WebSocket | [Guia](../channels/wecom/README.pt-br.md) |
-| **IRC** | Médio (servidor + nick) | Protocolo IRC | [Guia](../guides/chat-apps.pt-br.md#irc) |
+| **IRC** | Médio (servidor + nick) | Protocolo IRC | [Guia](../guides/chat-apps.md#irc) |
 | **OneBot** | Médio (WebSocket URL) | OneBot v11 | [Guia](../channels/onebot/README.pt-br.md) |
 | **MaixCam** | Fácil (habilitar) | TCP socket | [Guia](../channels/maixcam/README.pt-br.md) |
 | **Pico** | Fácil (habilitar) | Protocolo nativo | Integrado |
@@ -475,9 +475,9 @@ Converse com seu PicoClaw por meio de mais de 17 plataformas de mensagens:
 
 > Todos os channels baseados em webhook compartilham um único servidor HTTP do Gateway (`gateway.host`:`gateway.port`, padrão `127.0.0.1:18790`). O Feishu usa modo WebSocket/SDK e não utiliza o servidor HTTP compartilhado.
 
-> A verbosidade dos logs é controlada por `gateway.log_level` (padrão: `warn`). Valores suportados: `debug`, `info`, `warn`, `error`, `fatal`. Também pode ser definido via `PICOCLAW_LOG_LEVEL`. Veja [Configuração](../guides/configuration.pt-br.md#nível-de-log-do-gateway) para detalhes.
+> A verbosidade dos logs é controlada por `gateway.log_level` (padrão: `warn`). Valores suportados: `debug`, `info`, `warn`, `error`, `fatal`. Também pode ser definido via `PICOCLAW_LOG_LEVEL`. Veja [Configuração](../guides/configuration.md#gateway-log-level) para detalhes.
 
-Para instruções detalhadas de configuração de channels, veja [Configuração de Apps de Chat](../guides/chat-apps.pt-br.md).
+Para instruções detalhadas de configuração de channels, veja [Configuração de Apps de Chat](../guides/chat-apps.md).
 
 ## 🔧 Ferramentas
 
@@ -497,7 +497,7 @@ O PicoClaw pode pesquisar na web para fornecer informações atualizadas. Config
 
 ### ⚙️ Outras Ferramentas
 
-O PicoClaw inclui ferramentas integradas para operações de arquivo, execução de código, agendamento e mais. Veja [Configuração de Ferramentas](../reference/tools_configuration.pt-br.md) para detalhes.
+O PicoClaw inclui ferramentas integradas para operações de arquivo, execução de código, agendamento e mais. Veja [Configuração de Ferramentas](../reference/tools_configuration.md) para detalhes.
 
 ## 🎯 Skills
 
@@ -527,7 +527,7 @@ Adicione ao seu `config.json`:
 }
 ```
 
-Para mais detalhes, veja [Configuração de Ferramentas - Skills](../reference/tools_configuration.pt-br.md#skills-tool).
+Para mais detalhes, veja [Configuração de Ferramentas - Skills](../tools/skills.md).
 
 ## 🔗 MCP (Model Context Protocol)
 
@@ -557,7 +557,7 @@ Como o PicoClaw é um assistente leve, a melhor opção é usar servidores MCP r
 }
 ```
 
-Para configuração completa de MCP (transportes stdio, SSE, HTTP, Tool Discovery), veja [Configuração de Ferramentas - MCP](../reference/tools_configuration.pt-br.md#mcp-tool).
+Para configuração completa de MCP (transportes stdio, SSE, HTTP, Tool Discovery), veja [Configuração de Ferramentas - MCP](../tools/mcp.md).
 
 ## <img src="../../assets/clawdchat-icon.png" width="24" height="24" alt="ClawdChat"> Junte-se à Rede Social de Agents
 
@@ -600,17 +600,17 @@ Para guias detalhados além deste README:
 
 | Tópico | Descrição |
 |--------|-----------|
-| [Docker & Início Rápido](../guides/docker.pt-br.md) | Configuração do Docker Compose, modos Launcher/Agent |
-| [Apps de Chat](../guides/chat-apps.pt-br.md) | Guias de configuração para todos os 17+ channels |
-| [Configuração](../guides/configuration.pt-br.md) | Variáveis de ambiente, layout do workspace, sandbox de segurança |
-| [Providers & Models](../guides/providers.pt-br.md) | 30+ providers de LLM, roteamento de modelos, configuração de model_list |
-| [Spawn & Tarefas Assíncronas](../guides/spawn-tasks.pt-br.md) | Tarefas rápidas, tarefas longas com spawn, orquestração assíncrona de sub-agents |
+| [Docker & Início Rápido](../guides/docker.md) | Configuração do Docker Compose, modos Launcher/Agent |
+| [Apps de Chat](../guides/chat-apps.md) | Guias de configuração para todos os 17+ channels |
+| [Configuração](../guides/configuration.md) | Variáveis de ambiente, layout do workspace, sandbox de segurança |
+| [Providers & Models](../guides/providers.md) | 30+ providers de LLM, roteamento de modelos, configuração de model_list |
+| [Spawn & Tarefas Assíncronas](../guides/spawn-tasks.md) | Tarefas rápidas, tarefas longas com spawn, orquestração assíncrona de sub-agents |
 | [Hooks](../architecture/hooks/README.md) | Sistema de hooks orientado a eventos: observadores, interceptores, hooks de aprovação |
 | [Steering](../architecture/steering.md) | Injetar mensagens em um loop de agente em execução |
 | [SubTurn](../architecture/subturn.md) | Coordenação de subagentes, controle de concorrência, ciclo de vida |
-| [Solução de Problemas](../operations/troubleshooting.pt-br.md) | Problemas comuns e soluções |
-| [Configuração de Ferramentas](../reference/tools_configuration.pt-br.md) | Habilitar/desabilitar por ferramenta, políticas de exec, MCP, Skills |
-| [Compatibilidade de Hardware](../guides/hardware-compatibility.pt-br.md) | Placas testadas, requisitos mínimos |
+| [Solução de Problemas](../operations/troubleshooting.md) | Problemas comuns e soluções |
+| [Configuração de Ferramentas](../reference/tools_configuration.md) | Habilitar/desabilitar por ferramenta, políticas de exec, MCP, Skills |
+| [Compatibilidade de Hardware](../guides/hardware-compatibility.md) | Placas testadas, requisitos mínimos |
 
 ## 🤝 Contribuir & Roadmap
 

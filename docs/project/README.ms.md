@@ -456,8 +456,8 @@ Bercakap dengan PicoClaw anda melalui 17+ platform pemesejan:
 |---------|-----------|----------|-----|
 | **Telegram** | Mudah (token bot) | Long polling | [Panduan](../channels/telegram/README.md) |
 | **Discord** | Mudah (token bot + intents) | WebSocket | [Panduan](../channels/discord/README.md) |
-| **WhatsApp** | Mudah (imbas QR atau URL jambatan) | Natif / Jambatan | [Panduan](../guides/chat-apps.ms.md#whatsapp) |
-| **Weixin** | Mudah (imbas QR natif) | iLink API | [Panduan](../guides/chat-apps.ms.md#weixin) |
+| **WhatsApp** | Mudah (imbas QR atau URL jambatan) | Natif / Jambatan | [Panduan](../guides/chat-apps.md#whatsapp) |
+| **Weixin** | Mudah (imbas QR natif) | iLink API | [Panduan](../guides/chat-apps.md#weixin) |
 | **QQ** | Mudah (AppID + AppSecret) | WebSocket | [Panduan](../channels/qq/README.md) |
 | **Slack** | Mudah (token bot + app) | Socket Mode | [Panduan](../channels/slack/README.md) |
 | **Matrix** | Sederhana (homeserver + token) | Sync API | [Panduan](../channels/matrix/README.md) |
@@ -465,7 +465,7 @@ Bercakap dengan PicoClaw anda melalui 17+ platform pemesejan:
 | **Feishu / Lark** | Sederhana (App ID + Secret) | WebSocket/SDK | [Panduan](../channels/feishu/README.md) |
 | **LINE** | Sederhana (kelayakan + webhook) | Webhook | [Panduan](../channels/line/README.md) |
 | **WeCom** | Mudah (log masuk QR atau manual) | WebSocket | [Panduan](../channels/wecom/README.md) |
-| **IRC** | Sederhana (pelayan + nick) | Protokol IRC | [Panduan](../guides/chat-apps.ms.md#irc) |
+| **IRC** | Sederhana (pelayan + nick) | Protokol IRC | [Panduan](../guides/chat-apps.md#irc) |
 | **OneBot** | Sederhana (URL WebSocket) | OneBot v11 | [Panduan](../channels/onebot/README.md) |
 | **MaixCam** | Mudah (aktifkan) | TCP socket | [Panduan](../channels/maixcam/README.md) |
 | **Pico** | Mudah (aktifkan) | Protokol natif | Terbina dalam |
@@ -473,9 +473,9 @@ Bercakap dengan PicoClaw anda melalui 17+ platform pemesejan:
 
 > Semua saluran berasaskan webhook berkongsi satu pelayan HTTP Gateway (`gateway.host`:`gateway.port`, lalai `127.0.0.1:18790`). Feishu menggunakan mod WebSocket/SDK dan tidak menggunakan pelayan HTTP yang dikongsi.
 
-> Tahap perincian log dikawal oleh `gateway.log_level` (lalai: `warn`). Nilai yang disokong: `debug`, `info`, `warn`, `error`, `fatal`. Boleh juga ditetapkan melalui `PICOCLAW_LOG_LEVEL`. Lihat [Konfigurasi](../guides/configuration.ms.md#gateway-log-level) untuk butiran.
+> Tahap perincian log dikawal oleh `gateway.log_level` (lalai: `warn`). Nilai yang disokong: `debug`, `info`, `warn`, `error`, `fatal`. Boleh juga ditetapkan melalui `PICOCLAW_LOG_LEVEL`. Lihat [Konfigurasi](../guides/configuration.md#gateway-log-level) untuk butiran.
 
-Untuk arahan persediaan saluran terperinci, lihat [Konfigurasi Aplikasi Sembang](../guides/chat-apps.ms.md).
+Untuk arahan persediaan saluran terperinci, lihat [Konfigurasi Aplikasi Sembang](../guides/chat-apps.md).
 
 ## 🔧 Alat
 
@@ -525,7 +525,7 @@ Tambah ke `config.json` anda:
 }
 ```
 
-Untuk butiran lanjut, lihat [Konfigurasi Alat - Kemahiran](../reference/tools_configuration.md#skills-tool).
+Untuk butiran lanjut, lihat [Konfigurasi Alat - Kemahiran](../tools/skills.md).
 
 ## 🔗 MCP (Protokol Konteks Model)
 
@@ -555,7 +555,7 @@ PicoClaw ialah pembantu yang ringan, jadi pilihan terbaik ialah menggunakan pela
 }
 ```
 
-Untuk konfigurasi MCP penuh (pengangkutan stdio, SSE, HTTP, Penemuan Alat), lihat [Konfigurasi Alat - MCP](../reference/tools_configuration.md#mcp-tool).
+Untuk konfigurasi MCP penuh (pengangkutan stdio, SSE, HTTP, Penemuan Alat), lihat [Konfigurasi Alat - MCP](../tools/mcp.md).
 
 ## <img src="../../assets/clawdchat-icon.png" width="24" height="24" alt="ClawdChat"> Sertai Rangkaian Sosial Agent
 
@@ -598,12 +598,12 @@ Untuk panduan terperinci melebihi README ini:
 
 | Topik | Penerangan |
 |-------|------------|
-| [Docker & Permulaan Pantas](../guides/docker.ms.md) | Persediaan Docker Compose, mod Launcher/Agent |
-| [Aplikasi Sembang](../guides/chat-apps.ms.md) | Panduan persediaan 17+ saluran |
-| [Konfigurasi](../guides/configuration.ms.md) | Pemboleh ubah persekitaran, susun atur ruang kerja |
+| [Docker & Permulaan Pantas](../guides/docker.md) | Persediaan Docker Compose, mod Launcher/Agent |
+| [Aplikasi Sembang](../guides/chat-apps.md) | Panduan persediaan 17+ saluran |
+| [Konfigurasi](../guides/configuration.md) | Pemboleh ubah persekitaran, susun atur ruang kerja |
 | [Penyedia & Model](../guides/providers.md) | 30+ penyedia LLM, penghalaan model |
-| [Spawn & Tugasan Async](../guides/spawn-tasks.ms.md) | Tugasan pantas, tugasan panjang dengan spawn |
-| [Penyelesaian Masalah](../operations/troubleshooting.ms.md) | Isu biasa dan penyelesaian |
+| [Spawn & Tugasan Async](../guides/spawn-tasks.md) | Tugasan pantas, tugasan panjang dengan spawn |
+| [Penyelesaian Masalah](../operations/troubleshooting.md) | Isu biasa dan penyelesaian |
 | [Konfigurasi Alat](../reference/tools_configuration.md) | Aktif/nyahaktif alat, dasar exec, MCP, Kemahiran |
 | [Keserasian Perkakasan](../guides/hardware-compatibility.md) | Papan yang diuji, keperluan minimum |
 

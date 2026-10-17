@@ -73,6 +73,7 @@ type Runtime struct {
 	SwitchModel        func(value string) (oldModel string, err error)
 	SwitchChannel      func(value string) error
 	ClearHistory       func() error
+	CompactContext     func(focus string) (compacted bool, err error) // false when nothing to summarize
 	ReloadConfig       func() error
 	StopActiveTurn     func() (StopResult, error)
 }

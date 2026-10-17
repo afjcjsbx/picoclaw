@@ -294,7 +294,7 @@ picoclaw-launcher
 
 Open the WebUI, then: **1)** Configure a Provider (add your LLM API key) -> **2)** Configure a Channel (e.g., Telegram) -> **3)** Start the Gateway -> **4)** Chat!
 
-For detailed WebUI documentation, see [PicoClaw documentation](https://afjcjsbx.github.io/picoclaw/).
+For detailed WebUI documentation, see the [Web UI & Launcher Guide](docs/guides/webui.md).
 
 <details>
 <summary><b>Docker (alternative)</b></summary>
@@ -492,7 +492,7 @@ PicoClaw can search the web to provide up-to-date information. Configure in `too
 
 ### ⚙️ Other Tools
 
-PicoClaw includes built-in tools for file operations, code execution, scheduling, and more. See [Tools Configuration](docs/reference/tools_configuration.md) for details.
+PicoClaw includes built-in tools for file operations, code execution, scheduling, and more. See [Tools](docs/tools/README.md) for details.
 
 ## 🎯 Skills
 
@@ -536,7 +536,7 @@ Add to your `config.json`:
 
 `tools.skills.github.*` is deprecated. Use `tools.skills.registries.github.*` instead.
 
-For more details, see [Tools Configuration - Skills](docs/reference/tools_configuration.md#skills-tool).
+For more details, see [Skills tools](docs/tools/skills.md).
 
 ## 🔗 MCP (Model Context Protocol)
 
@@ -578,7 +578,7 @@ picoclaw mcp test browserbase
 Use `picoclaw mcp edit` when you need advanced fields that are not covered by `picoclaw mcp add`.
 For example, `picoclaw mcp add` supports `--deferred` and `--env-file`, while `picoclaw mcp edit` is still useful for direct JSON editing and uncommon MCP settings.
 
-For full MCP configuration (stdio, SSE, HTTP transports, Tool Discovery), see [Tools Configuration - MCP](docs/reference/tools_configuration.md#mcp-tool). For CLI usage and examples, see [MCP Server CLI](docs/reference/mcp-cli.md).
+For full MCP configuration (stdio, SSE, HTTP transports, Tool Discovery), see [MCP tools](docs/tools/mcp.md). For CLI usage and examples, see [MCP Server CLI](docs/reference/mcp-cli.md).
 
 ## <img src="assets/clawdchat-icon.png" width="24" height="24" alt="ClawdChat"> Join the Agent Social Network
 
@@ -632,6 +632,8 @@ For detailed guides beyond this README:
 | [Chat Apps](docs/guides/chat-apps.md) | All 18+ channel setup guides |
 | [Configuration](docs/guides/configuration.md) | Environment variables, workspace layout, security sandbox |
 | [Plugin Installation](docs/guides/plugins.md) | Install and activate Agent Plugin packages |
+| [Writing a Plugin](docs/guides/writing-a-plugin.md) | Scaffold, validate, test, and share an Agent Plugin package |
+| [Plugin CLI](docs/reference/plugins-cli.md) | Add, list, validate, scaffold, test, and remove plugin entries from the CLI |
 | [MCP Server CLI](docs/reference/mcp-cli.md) | Add, list, test, edit, and remove MCP server entries from the CLI |
 | [Scheduled Tasks and Cron Jobs](docs/reference/cron.md) | Cron schedule types, deliver modes, command gates, job storage |
 | [Providers & Models](docs/guides/providers.md) | 30+ LLM providers, model routing, model_list configuration |
@@ -640,7 +642,7 @@ For detailed guides beyond this README:
 | [Steering](docs/architecture/steering.md) | Inject messages into a running agent loop between tool calls |
 | [SubTurn](docs/architecture/subturn.md) | Subagent coordination, concurrency control, lifecycle |
 | [Troubleshooting](docs/operations/troubleshooting.md) | Common issues and solutions |
-| [Tools Configuration](docs/reference/tools_configuration.md) | Per-tool enable/disable, exec policies, MCP, Skills |
+| [Tools Configuration](docs/reference/tools_configuration.md) | Tool switches, exec policies, path policies, MCP, Skills |
 | [Hardware Compatibility](docs/guides/hardware-compatibility.md) | Tested boards, minimum requirements |
 
 ## 🤝 Contribute & Roadmap

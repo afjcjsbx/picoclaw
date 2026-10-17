@@ -388,6 +388,22 @@ func (e *Engine) Compact(ctx context.Context, sessionKey string, input CompactIn
 	return e.compaction.Compact(ctx, conv.ConversationID, input)
 }
 
+// CompactNow synchronously compacts a session on user request (/compact).
+// instructions (may be empty) tells the summarizer which details to prioritize.
+func (e *Engine) CompactNow(ctx context.Context, sessionKey, instructions string) (*CompactResult, error) {
+	if e.shouldIgnoreSession(sessionKey) || e.isStatelessSession(sessionKey) {
+		return &CompactResult{}, nil
+	}
+
+	conv, err := e.store.GetOrCreateConversation(ctx, sessionKey)
+	if err != nil {
+		return nil, fmt.Errorf("get conversation: %w", err)
+	}
+
+	e.initCompactionOnce()
+	return e.compaction.CompactNow(ctx, conv.ConversationID, instructions)
+}
+
 // CompactUntilUnder aggressively compacts until context is under budget.
 // Used for emergency compaction after LLM overflow (retry reason).
 func (e *Engine) CompactUntilUnder(ctx context.Context, sessionKey string, budget int) (*CompactResult, error) {
