@@ -954,6 +954,58 @@ func TestMCPTool_Execute_LargeEnvelopeStoredAsPageableText(t *testing.T) {
 	}
 }
 
+// TestMCPTool_Execute_UnwrappedEnvelopeThatFitsIsKeptInline verifies that an
+// envelope whose escaped JSON is over the MCP budget but whose unwrapped text
+// fits is returned whole inline, with no artifact and no truncation notice.
+func TestMCPTool_Execute_UnwrappedEnvelopeThatFitsIsKeptInline(t *testing.T) {
+	workspace := t.TempDir()
+	body := strings.Repeat("a\n", 5500)
+	envelope, err := json.Marshal(map[string]any{
+		"result":            body,
+		"structuredContent": map[string]any{"answer": 42},
+	})
+	if err != nil {
+		t.Fatalf("failed to build envelope: %v", err)
+	}
+	if len(envelope) <= maxMCPInlineTextRunes {
+		t.Fatalf("fixture must exceed the MCP budget before unwrapping: %d", len(envelope))
+	}
+	if utf8.RuneCountInString(body) > maxMCPInlineTextRunes {
+		t.Fatalf("fixture must fit the MCP budget after unwrapping: %d", utf8.RuneCountInString(body))
+	}
+
+	manager := &MockMCPManager{
+		callToolFunc: func(ctx context.Context, serverName, toolName string, arguments map[string]any) (*mcp.CallToolResult, error) {
+			return &mcp.CallToolResult{
+				Content: []mcp.Content{
+					&mcp.TextContent{Text: string(envelope)},
+				},
+			}, nil
+		},
+	}
+
+	mcpTool := NewMCPTool(manager, "test_server", &mcp.Tool{Name: "dump_payload"})
+	mcpTool.SetWorkspace(workspace)
+
+	result := mcpTool.Execute(context.Background(), nil)
+
+	if result.LargeResultSpilled {
+		t.Fatalf("expected no spill flag for an unwrapped payload that fits")
+	}
+	if len(result.ArtifactTags) != 0 {
+		t.Fatalf("expected no artifact tags, got %+v", result.ArtifactTags)
+	}
+	if !strings.Contains(result.ForLLM, body) {
+		t.Fatalf("expected the full unwrapped text inline")
+	}
+	if strings.Contains(result.ForLLM, `\n`) {
+		t.Fatalf("expected real newlines, got escaped ones")
+	}
+	if strings.Contains(result.ForLLM, "[MCP RESULT TRUNCATED") {
+		t.Fatalf("expected no truncation notice, got %q", result.ForLLM[:min(120, len(result.ForLLM))])
+	}
+}
+
 // TestMCPTool_Execute_EnvelopeArtifactFailureHandsOverPageableText verifies the
 // fallback path: when .artifacts/mcp cannot be written, the generic spill gets
 // the unwrapped pageable text, not the original JSON envelope.

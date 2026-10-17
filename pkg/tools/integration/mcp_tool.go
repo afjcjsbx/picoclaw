@@ -449,6 +449,12 @@ func (t *MCPTool) persistLargeTextArtifact(text, llmText string) *ToolResult {
 	if !mcpSanitizedStandInMessage(strings.TrimSpace(llmText)) {
 		persistedText = toolshared.PageableMCPServerText(text)
 	}
+	if persistedText != text && utf8.RuneCountInString(persistedText) <= limit {
+		// Unwrapping, not truncation, brought the payload back under the MCP
+		// budget: keep it whole inline and skip the artifact. Sanitize the raw
+		// text view because llmText reflects the envelope, not this rewrite.
+		return &ToolResult{ForLLM: toolshared.SanitizeToolLLMContent(persistedText)}
+	}
 
 	dir := filepath.Join(t.workspace, ".artifacts", "mcp")
 
