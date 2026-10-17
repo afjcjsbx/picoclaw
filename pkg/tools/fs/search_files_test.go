@@ -42,6 +42,41 @@ func TestSearchFilesStopsAcrossDirectories(t *testing.T) {
 	}
 }
 
+func TestSearchFilesTruncationKeepsMatchVisible(t *testing.T) {
+	root := t.TempDir()
+	line := strings.Repeat("x", 300) + "needle" + strings.Repeat("y", 300)
+	if err := os.WriteFile(filepath.Join(root, "long.txt"), []byte(line+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewSearchFilesTool(root, true)
+	result := tool.Execute(context.Background(), map[string]any{"pattern": "needle"})
+	if result.IsError {
+		t.Fatalf("search failed: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "needle") {
+		t.Fatalf("a match beyond the cut must stay visible:\n%s", result.ForLLM)
+	}
+	if strings.Contains(result.ForLLM, strings.Repeat("x", maxSearchLineLength)+"…") {
+		t.Fatalf("the window should start near the match instead of the line start:\n%s", result.ForLLM)
+	}
+}
+
+func TestSearchFilesTruncationCutsLongContextLine(t *testing.T) {
+	root := t.TempDir()
+	long := strings.Repeat("x", 400)
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("first\n"+long+"\nneedle\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewSearchFilesTool(root, true)
+	result := tool.Execute(context.Background(), map[string]any{"pattern": "needle", "context": 1})
+	if result.IsError {
+		t.Fatalf("search failed: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, strings.Repeat("x", maxSearchLineLength)+"…") {
+		t.Fatalf("context lines should keep the head-truncated form:\n%s", result.ForLLM)
+	}
+}
+
 func TestSearchFilesOutputCapKeepsPagination(t *testing.T) {
 	root := t.TempDir()
 	lines := make([]string, 100)
@@ -84,20 +119,31 @@ func TestSearchFilesOutputCapKeepsPagination(t *testing.T) {
 
 func TestTruncateSearchLine(t *testing.T) {
 	short := "a plain line"
-	if got := truncateSearchLine(short); got != short {
+	if got := truncateSearchLine(short, nil); got != short {
 		t.Errorf("short line changed: %q", got)
 	}
 
 	ascii := strings.Repeat("a", maxSearchLineLength+20)
-	if got, want := truncateSearchLine(ascii), strings.Repeat("a", maxSearchLineLength)+"\u2026"; got != want {
+	if got, want := truncateSearchLine(ascii, nil), strings.Repeat("a", maxSearchLineLength)+"\u2026"; got != want {
 		t.Errorf("ASCII line cut to %q, want %q", got, want)
 	}
 
-	got := truncateSearchLine(strings.Repeat("\u6f22", maxSearchLineLength+5))
-	if want := strings.Repeat("\u6f22", maxSearchLineLength) + "\u2026"; got != want {
-		t.Errorf("CJK line cut to %d runes, want %d", utf8.RuneCountInString(got), maxSearchLineLength+1)
+	// The window is sized in bytes but always ends on a rune boundary.
+	got := truncateSearchLine(strings.Repeat("\u6f22", maxSearchLineLength+5), nil)
+	if want := strings.Repeat("\u6f22", maxSearchLineLength/3) + "\u2026"; got != want {
+		t.Errorf("CJK line cut to %d runes, want %d", utf8.RuneCountInString(got), maxSearchLineLength/3+1)
 	}
 	if !utf8.ValidString(got) {
 		t.Errorf("CJK line cut mid-rune: %q", got)
+	}
+
+	// A match past the cut moves the window so the matched text stays visible.
+	long := strings.Repeat("x", 400) + "needle" + strings.Repeat("y", 100)
+	window := truncateSearchLine(long, []int{400, 406})
+	if !strings.Contains(window, "needle") {
+		t.Errorf("match beyond the cut was not kept visible: %q", window)
+	}
+	if len(window) > maxSearchLineLength+2*len("\u2026") {
+		t.Errorf("window larger than allowed: %d bytes", len(window))
 	}
 }
