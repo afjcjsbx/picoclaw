@@ -2,6 +2,7 @@ package tools
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -33,11 +34,30 @@ const (
 	// re-spill and loop.
 	largeResultPreviewHeadRunes = 2048
 	largeResultPreviewTailRunes = 1024
+
+	// webFetchMetadataTag delimits the sibling fields kept for the model when a
+	// web_fetch envelope is spilled as its pageable text. The values survive in
+	// the artifact; only the JSON envelope around them is replaced.
+	webFetchMetadataTag        = "<web-fetch-metadata>"
+	webFetchMetadataClosingTag = "</web-fetch-metadata>"
 )
 
 var (
 	inlineMarkdownDataURLRe = regexp.MustCompile(`!\[[^\]]*\]\((data:[^)]+)\)`)
 	inlineRawDataURLRe      = regexp.MustCompile(`data:[^;\s]+;base64,[A-Za-z0-9+/=\r\n]+`)
+
+	// webFetchEnvelopeKeys is the complete key set of the web_fetch result
+	// envelope (pkg/tools/integration/web.go). A JSON object whose keys stay
+	// inside this set with a non-empty string "text" is that tool's own
+	// envelope, never an arbitrary tool's JSON payload.
+	webFetchEnvelopeKeys = map[string]struct{}{
+		"url":       {},
+		"status":    {},
+		"extractor": {},
+		"truncated": {},
+		"length":    {},
+		"text":      {},
+	}
 )
 
 func normalizeToolResult(
@@ -147,6 +167,21 @@ func persistLargeResultArtifact(result *ToolResult, toolName, workspace string, 
 		return
 	}
 
+	// A recognized JSON envelope (today only web_fetch) is spilled as the
+	// pageable text it wraps. The size decision above stays on the raw result
+	// — that is what would have cost context — but the artifact and preview
+	// both carry real newlines instead of one escaped line.
+	if pageable := pageableToolResultText(text); pageable != text {
+		text = pageable
+		size = utf8.RuneCountInString(text)
+		if size <= maxRunes {
+			// Unwrapping, not truncation, brought the result back under the
+			// inline budget: keep it whole and artifact-free.
+			result.ForLLM = text
+			return
+		}
+	}
+
 	preview, omitted, headRunes, tailRunes := buildLargeResultPreview(text, size, maxRunes)
 
 	dir := filepath.Join(workspace, ".artifacts", "tool")
@@ -219,6 +254,49 @@ func buildLargeResultPreview(text string, total, maxRunes int) (preview string, 
 	head, tail := text[:headEnd], text[tailStart:]
 	return fmt.Sprintf("%s\n\n[... %d characters truncated ...]\n\n%s", head, omitted, tail),
 		omitted, headRunes, tailRunes
+}
+
+// pageableToolResultText rewrites a recognized JSON envelope — today only the
+// web_fetch result {url, status, extractor, truncated, length, text} — into
+// the pageable text it wraps: the payload's text with real newlines, followed
+// by the sibling fields in a <web-fetch-metadata> block.
+//
+// Persisting such an envelope verbatim would put the whole document on ONE
+// line with escaped newlines, so the read_file/search_files pagination the
+// spill notice recommends could not page it at all. Recognition is by SHAPE,
+// not by tool name: a JSON object whose keys stay inside the web_fetch key set
+// with a non-empty string "text" is that tool's own envelope. Anything else —
+// unparseable JSON, a non-object, an unknown key, a missing, empty, or
+// non-string "text" — is returned verbatim, so opaque JSON payloads from other
+// tools (exec, curl, ...) keep their exact bytes and stay jq-able.
+func pageableToolResultText(content string) string {
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(content), &payload); err != nil || len(payload) == 0 {
+		return content
+	}
+	for key := range payload {
+		if _, ok := webFetchEnvelopeKeys[key]; !ok {
+			return content
+		}
+	}
+	var text string
+	if err := json.Unmarshal(payload["text"], &text); err != nil || text == "" {
+		return content
+	}
+	extras := make(map[string]json.RawMessage, len(payload)-1)
+	for key, value := range payload {
+		if key != "text" {
+			extras[key] = value
+		}
+	}
+	if len(extras) == 0 {
+		return text
+	}
+	metadata, err := json.MarshalIndent(extras, "", "  ")
+	if err != nil {
+		return text
+	}
+	return fmt.Sprintf("%s\n\n%s\n%s\n%s\n", text, webFetchMetadataTag, metadata, webFetchMetadataClosingTag)
 }
 
 func extractInlineMediaRefs(

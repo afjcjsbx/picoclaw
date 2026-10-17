@@ -247,3 +247,5 @@ For Kagi, `d`, `w`, and `m` map to Kagi lens `time_relative`; `y` maps to a lens
 |-------|------|----------|-------------|
 | `url` | string | yes | URL to fetch |
 | `maxChars` | integer | no | Maximum characters to extract (minimum `100`) |
+
+When a result is large enough to be spilled to a workspace artifact (`<workspace>/.artifacts/tool/`), the `web_fetch` envelope is stored as its pageable text: the extracted content with real newlines, followed by a `<web-fetch-metadata>` block holding the other result fields (URL, status, extractor, truncation flag, length). This keeps the artifact usable with `read_file` (`offset`/`length`) and `search_files`. JSON payloads from other tools are stored verbatim.
