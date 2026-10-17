@@ -56,7 +56,7 @@ func NewSearchFilesTool(workspace string, restrict bool, allowPaths ...[]*regexp
 func (t *SearchFilesTool) Name() string { return "search_files" }
 
 func (t *SearchFilesTool) Description() string {
-	return "Search file contents or find files by name. Use this instead of grep/rg/find/ls in terminal. target='content' does regex search with files_only, count, or context output; target='files' finds names by glob or substring (an empty pattern lists files). Skipped: paths ignored by .gitignore/.ignore or .git, and binary files (NUL byte in the first 8 KiB); other encodings are searched. Supports pagination. On macOS, searches above your home directory skip TCC-protected folders; target one directly to include it. Searches the configured readable filesystem sandbox."
+	return "Search file contents or find files by name. Use this instead of grep/rg/find/ls in terminal. target='content' does regex search with files_only, count, or context output; target='files' finds names by glob or substring (an empty pattern lists files). Skipped: paths ignored by .gitignore/.ignore or .git, and binary files (NUL byte in the first 8 KiB); other encodings are searched. Credential-looking tokens in results are replaced with [FILTERED]. Supports pagination. On macOS, searches above your home directory skip TCC-protected folders; target one directly to include it. Searches the configured readable filesystem sandbox."
 }
 
 func (t *SearchFilesTool) Parameters() map[string]any {
@@ -389,7 +389,9 @@ type searchFileResult struct {
 // results are discarded, as if the file had not fit at all. A file is
 // treated as binary, and skipped silently, when its first bytes contain a
 // NUL byte; invalid UTF-8 is not a reason to skip, so text in other
-// encodings is searched as byte text.
+// encodings is searched as byte text. Rendered lines pass through
+// redactSearchSecrets, so credential-looking values in results are masked
+// (see redact.go).
 func (t *SearchFilesTool) scanSearchFile(
 	path string,
 	pattern *regexp.Regexp,
@@ -473,7 +475,8 @@ func (t *SearchFilesTool) scanSearchFile(
 			if line.hit() {
 				prefix = ">"
 			}
-			block.WriteString(fmt.Sprintf("%s %d: %s\n", prefix, line.number, truncateSearchLine(line.text, line.loc)))
+			rendered := renderSearchLine(line, pattern)
+			block.WriteString(fmt.Sprintf("%s %d: %s\n", prefix, line.number, rendered))
 		}
 		rows = append(rows, strings.TrimRight(block.String(), "\n"))
 		if len(rows) >= remainingRows {
@@ -486,7 +489,8 @@ func (t *SearchFilesTool) scanSearchFile(
 		if *rowsSeen+seen <= opts.offset {
 			return
 		}
-		rows = append(rows, fmt.Sprintf("%s:%d: %s", path, line.number, truncateSearchLine(line.text, line.loc)))
+		rendered := renderSearchLine(line, pattern)
+		rows = append(rows, fmt.Sprintf("%s:%d: %s", path, line.number, rendered))
 		if len(rows) >= remainingRows {
 			done = true
 		}
@@ -614,6 +618,23 @@ func (t *SearchFilesTool) scanSearchFile(
 // matchLoc places the match beyond the cut, the window starts shortly before
 // the match instead of at the line start, so the matched text stays visible;
 // "…" marks both cut sides.
+// renderSearchLine redacts credentials before truncation, so a secret crossing
+// the output window is masked in full instead of leaking a partial token. The
+// match position is recomputed on the redacted text because masking shifts
+// byte offsets.
+func renderSearchLine(line searchLine, pattern *regexp.Regexp) string {
+	text := redactSearchSecrets(line.text)
+	loc := line.loc
+	if loc != nil {
+		if found := pattern.FindStringIndex(text); found != nil {
+			loc = found
+		} else if loc[0] > len(text) {
+			loc = nil
+		}
+	}
+	return truncateSearchLine(text, loc)
+}
+
 func truncateSearchLine(line string, matchLoc []int) string {
 	if len(line) <= maxSearchLineLength {
 		return line
