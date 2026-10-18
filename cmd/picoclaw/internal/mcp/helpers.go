@@ -23,10 +23,6 @@ import (
 	picomcp "github.com/sipeed/picoclaw/pkg/mcp"
 )
 
-type probeResult struct {
-	ToolCount int
-}
-
 var (
 	editorCommand = exec.Command
 	serverProbe   = defaultServerProbe
@@ -361,14 +357,15 @@ func probeServer[T any](
 	return extract(conn), nil
 }
 
+// defaultServerProbe returns the number of tools the server exposes.
 func defaultServerProbe(
 	ctx context.Context,
 	name string,
 	server config.MCPServerConfig,
 	workspacePath string,
-) (probeResult, error) {
-	return probeServer(ctx, name, server, workspacePath, func(conn *picomcp.ServerConnection) probeResult {
-		return probeResult{ToolCount: len(conn.Tools)}
+) (int, error) {
+	return probeServer(ctx, name, server, workspacePath, func(conn *picomcp.ServerConnection) int {
+		return len(conn.Tools)
 	})
 }
 

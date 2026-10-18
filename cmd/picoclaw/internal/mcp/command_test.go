@@ -433,11 +433,11 @@ func TestMCPListWithStatusUsesProbe(t *testing.T) {
 
 	originalProbe := serverProbe
 	defer func() { serverProbe = originalProbe }()
-	serverProbe = func(_ context.Context, name string, server config.MCPServerConfig, workspacePath string) (probeResult, error) {
+	serverProbe = func(_ context.Context, name string, server config.MCPServerConfig, workspacePath string) (int, error) {
 		assert.Equal(t, "filesystem", name)
 		assert.Equal(t, readMCPConfig(t, configPath).WorkspacePath(), workspacePath)
 		assert.Equal(t, "npx", server.Command)
-		return probeResult{ToolCount: 3}, nil
+		return 3, nil
 	}
 
 	cmd := NewMCPCommand()
@@ -501,10 +501,10 @@ func TestMCPTestUsesProbe(t *testing.T) {
 
 	originalProbe := serverProbe
 	defer func() { serverProbe = originalProbe }()
-	serverProbe = func(_ context.Context, name string, _ config.MCPServerConfig, workspacePath string) (probeResult, error) {
+	serverProbe = func(_ context.Context, name string, _ config.MCPServerConfig, workspacePath string) (int, error) {
 		assert.Equal(t, "filesystem", name)
 		assert.Equal(t, readMCPConfig(t, configPath).WorkspacePath(), workspacePath)
-		return probeResult{ToolCount: 2}, nil
+		return 2, nil
 	}
 
 	cmd := NewMCPCommand()

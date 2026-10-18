@@ -30,12 +30,12 @@ func newTestCommand() *cobra.Command {
 			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 			defer cancel()
 
-			result, err := serverProbe(ctx, name, server, cfg.WorkspacePath())
+			toolCount, err := serverProbe(ctx, name, server, cfg.WorkspacePath())
 			if err != nil {
 				return fmt.Errorf("failed to reach MCP server %q: %w", name, err)
 			}
 
-			fmt.Fprintf(cmd.OutOrStdout(), "✓ MCP server %q reachable (%d tools).\n", name, result.ToolCount)
+			fmt.Fprintf(cmd.OutOrStdout(), "✓ MCP server %q reachable (%d tools).\n", name, toolCount)
 			return nil
 		},
 	}

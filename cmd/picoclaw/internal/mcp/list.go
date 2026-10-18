@@ -41,12 +41,12 @@ func newListCommand() *cobra.Command {
 
 				if includeStatus && server.Enabled {
 					ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
-					result, probeErr := serverProbe(ctx, name, server, cfg.WorkspacePath())
+					toolCount, probeErr := serverProbe(ctx, name, server, cfg.WorkspacePath())
 					cancel()
 					if probeErr != nil {
 						status = "error"
 					} else {
-						status = fmt.Sprintf("ok (%d tools)", result.ToolCount)
+						status = fmt.Sprintf("ok (%d tools)", toolCount)
 					}
 				}
 
