@@ -290,44 +290,15 @@ func (e *Engine) Ingest(ctx context.Context, sessionKey string, messages []Messa
 		return nil, fmt.Errorf("get conversation: %w", err)
 	}
 
+	// Insert the whole batch and append it to the context in one transaction:
+	// a commit per message (plus one for the context append) is the dominant
+	// cost with the pure-Go sqlite driver on low-end hardware.
 	var totalTokens int
-	var msgIDs []int64
 	for _, msg := range messages {
-		var added *Message
-		var err error
-		if len(msg.Parts) > 0 {
-			added, err = e.store.AddMessageWithPartsAndReasoning(
-				ctx,
-				conv.ConversationID,
-				msg.Role,
-				msg.Parts,
-				msg.ModelName,
-				msg.ReasoningContent,
-				msg.TokenCount,
-				msg.CreatedAt,
-			)
-		} else {
-			added, err = e.store.AddMessageWithReasoning(
-				ctx,
-				conv.ConversationID,
-				msg.Role,
-				msg.Content,
-				msg.ModelName,
-				msg.ReasoningContent,
-				msg.TokenCount,
-				msg.CreatedAt,
-			)
-		}
-		if err != nil {
-			return nil, fmt.Errorf("add message: %w", err)
-		}
 		totalTokens += msg.TokenCount
-		msgIDs = append(msgIDs, added.ID)
 	}
-
-	// Append to context_items using actual inserted IDs
-	if err := e.store.AppendContextMessages(ctx, conv.ConversationID, msgIDs); err != nil {
-		return nil, fmt.Errorf("append context: %w", err)
+	if _, err := e.store.AddMessagesBatch(ctx, conv.ConversationID, messages); err != nil {
+		return nil, fmt.Errorf("add messages: %w", err)
 	}
 
 	logger.InfoCF("seahorse", "ingest", map[string]any{
