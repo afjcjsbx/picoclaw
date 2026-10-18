@@ -634,8 +634,11 @@ func (t *CronTool) runJob(ctx context.Context, args map[string]any) *ToolResult 
 	)
 }
 
-// ExecuteJob executes a cron job through the agent
-func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
+// ExecuteJob runs a cron job through the agent (or through the exec tool for
+// command jobs) and reports its outcome. A non-nil error means the job did not
+// do its work; the cron service stores it in the job state, so a failed run no
+// longer looks like a successful one.
+func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) (string, error) {
 	// Get channel/chatID from job payload
 	channel := job.Payload.Channel
 	chatID := job.Payload.To
@@ -652,13 +655,8 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 	if job.Payload.Command != "" {
 		if !t.execEnabled || t.execTool == nil {
 			output := "Error executing scheduled command: command execution is disabled"
-			pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer pubCancel()
-			t.msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
-				Context: bus.NewOutboundContext(channel, chatID, ""),
-				Content: output,
-			})
-			return "ok"
+			t.publishJobOutput(channel, chatID, output)
+			return output, fmt.Errorf("scheduled command not executed: command execution is disabled")
 		}
 
 		args := map[string]any{
@@ -669,20 +667,15 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 		}
 
 		result := t.execTool.Execute(ctx, args)
-		var output string
 		if result.IsError {
-			output = fmt.Sprintf("Error executing scheduled command: %s", result.ForLLM)
-		} else {
-			output = fmt.Sprintf("Scheduled command '%s' executed:\n%s", job.Payload.Command, result.ForLLM)
+			output := fmt.Sprintf("Error executing scheduled command: %s", result.ForLLM)
+			t.publishJobOutput(channel, chatID, output)
+			return output, fmt.Errorf("scheduled command failed: %s", result.ForLLM)
 		}
 
-		pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer pubCancel()
-		t.msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
-			Context: bus.NewOutboundContext(channel, chatID, ""),
-			Content: output,
-		})
-		return "ok"
+		output := fmt.Sprintf("Scheduled command '%s' executed:\n%s", job.Payload.Command, result.ForLLM)
+		t.publishJobOutput(channel, chatID, output)
+		return "ok", nil
 	}
 
 	sessionKey := fmt.Sprintf("agent:cron-%s-%s", job.ID, uuid.New().String())
@@ -696,11 +689,21 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 		chatID,
 	)
 	if err != nil {
-		return fmt.Sprintf("Error: %v", err)
+		return "", fmt.Errorf("cron job %s: %w", job.ID, err)
 	}
 
 	if response != "" {
 		t.executor.PublishResponseIfNeeded(ctx, channel, chatID, sessionKey, response)
 	}
-	return "ok"
+	return "ok", nil
+}
+
+// publishJobOutput reports a command job result to the job's channel.
+func (t *CronTool) publishJobOutput(channel, chatID, content string) {
+	pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer pubCancel()
+	t.msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
+		Context: bus.NewOutboundContext(channel, chatID, ""),
+		Content: content,
+	})
 }
