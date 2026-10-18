@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/rs/zerolog"
 	"golang.org/x/term"
@@ -35,7 +36,7 @@ var (
 		FATAL: "FATAL",
 	}
 
-	currentLevel  = INFO
+	currentLevel  atomic.Int32 // LogLevel; atomic so log calls can filter without a lock
 	logger        zerolog.Logger
 	logFile       io.WriteCloser
 	once          sync.Once
@@ -46,6 +47,7 @@ var (
 
 func init() {
 	once.Do(func() {
+		currentLevel.Store(int32(INFO))
 		zerolog.SetGlobalLevel(zerolog.InfoLevel)
 
 		isTTY := term.IsTerminal(int(os.Stdout.Fd()))
@@ -113,7 +115,7 @@ func formatFieldValue(i any) string {
 func SetLevel(level LogLevel) {
 	mu.Lock()
 	defer mu.Unlock()
-	currentLevel = level
+	currentLevel.Store(int32(level))
 	zerolog.SetGlobalLevel(level)
 }
 
@@ -138,9 +140,7 @@ func EnableConsole() {
 }
 
 func GetLevel() LogLevel {
-	mu.RLock()
-	defer mu.RUnlock()
-	return currentLevel
+	return LogLevel(currentLevel.Load())
 }
 
 // ParseLevel converts a case-insensitive level name to a LogLevel.
@@ -301,7 +301,7 @@ func getEvent(logger zerolog.Logger, level LogLevel) *zerolog.Event {
 }
 
 func logMessage(level LogLevel, component string, message string, fields map[string]any) {
-	if level < currentLevel {
+	if level < LogLevel(currentLevel.Load()) {
 		return
 	}
 
@@ -360,6 +360,17 @@ func DebugF(message string, fields map[string]any) {
 
 func DebugCF(component string, message string, fields map[string]any) {
 	logMessage(DEBUG, component, message, fields)
+}
+
+// DebugFieldsCF behaves like DebugCF, but only calls the fields builder when
+// DEBUG logging is enabled. Use it at call sites whose fields are expensive to
+// compute (walks, serializations, truncations) instead of building the map
+// unconditionally and letting the level filter drop it.
+func DebugFieldsCF(component string, message string, fields func() map[string]any) {
+	if GetLevel() > DEBUG {
+		return
+	}
+	logMessage(DEBUG, component, message, fields())
 }
 
 func Info(message string) {

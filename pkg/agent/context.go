@@ -951,29 +951,31 @@ func (cb *ContextBuilder) BuildMessagesFromPrompt(req PromptBuildRequest) []prov
 
 	fullSystemPrompt := strings.Join(stringParts, "\n\n---\n\n")
 
-	// Log system prompt summary for debugging (debug mode only).
-	// Read cachedSystemPrompt under lock to avoid a data race with
-	// concurrent InvalidateCache / BuildSystemPromptWithCache writes.
-	cb.systemPromptMutex.RLock()
-	isCached := cb.cachedSystemPrompt != ""
-	cb.systemPromptMutex.RUnlock()
+	// Log system prompt summary for debugging (debug mode only). The field
+	// builders only run when DEBUG is enabled: the preview walks the prompt.
+	logger.DebugFieldsCF("agent", "System prompt built", func() map[string]any {
+		// Read cachedSystemPrompt under lock to avoid a data race with
+		// concurrent InvalidateCache / BuildSystemPromptWithCache writes.
+		cb.systemPromptMutex.RLock()
+		isCached := cb.cachedSystemPrompt != ""
+		cb.systemPromptMutex.RUnlock()
 
-	logger.DebugCF("agent", "System prompt built",
-		map[string]any{
+		return map[string]any{
 			"static_chars":  len(staticPrompt),
 			"dynamic_chars": dynamicChars,
 			"total_chars":   len(fullSystemPrompt),
 			"has_summary":   req.Summary != "",
 			"overlays":      len(req.Overlays),
 			"cached":        isCached,
-		})
+		}
+	})
 
 	// Log preview of system prompt (avoid logging huge content)
-	preview := utils.Truncate(fullSystemPrompt, 500)
-	logger.DebugCF("agent", "System prompt preview",
-		map[string]any{
-			"preview": preview,
-		})
+	logger.DebugFieldsCF("agent", "System prompt preview", func() map[string]any {
+		return map[string]any{
+			"preview": utils.Truncate(fullSystemPrompt, 500),
+		}
+	})
 
 	history := sanitizeHistoryForProvider(req.History)
 

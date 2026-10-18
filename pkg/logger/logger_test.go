@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -51,6 +52,62 @@ func TestLogLevelFiltering(t *testing.T) {
 	}
 
 	SetLevel(INFO)
+}
+
+// TestDebugFieldsCFLazyFields verifies the fields builder only runs when
+// DEBUG logging is enabled.
+func TestDebugFieldsCFLazyFields(t *testing.T) {
+	initialLevel := GetLevel()
+	defer SetLevel(initialLevel)
+
+	calls := 0
+	fields := func() map[string]any {
+		calls++
+		return map[string]any{"k": "v"}
+	}
+
+	SetLevel(INFO)
+	DebugFieldsCF("test", "message", fields)
+	if calls != 0 {
+		t.Fatalf("fields builder called %d times at INFO, want 0", calls)
+	}
+
+	SetLevel(DEBUG)
+	DebugFieldsCF("test", "message", fields)
+	if calls != 1 {
+		t.Fatalf("fields builder called %d times at DEBUG, want 1", calls)
+	}
+}
+
+// TestSetLevelConcurrentWithLogging exercises level flips racing with log
+// calls: the level filter must be race-free (run with -race to verify).
+func TestSetLevelConcurrentWithLogging(t *testing.T) {
+	initialLevel := GetLevel()
+	defer SetLevel(initialLevel)
+
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				Debug("concurrent debug")
+				Info("concurrent info")
+			}
+		}
+	}()
+
+	for i := 0; i < 50; i++ {
+		SetLevel(DEBUG)
+		SetLevel(INFO)
+	}
+	close(stop)
+	wg.Wait()
 }
 
 func TestLoggerWithComponent(t *testing.T) {
