@@ -38,8 +38,11 @@ func (m *Manager) ConnectPluginServer(
 	if opts.Timeout <= 0 {
 		opts.Timeout = 15 * time.Second
 	}
-	// SSE binds its long-lived GET request to Connect's context. Keep that
-	// context alive after the handshake; stop only the initialization timer.
+	// The session outlives the handshake: SSE binds its long-lived GET request
+	// to Connect's context, so it is derived from opts.Lifetime, not from the
+	// timeout. The timer cancels only a stuck initialization and is stopped on
+	// success; ctx (caller gave up) always cancels. Any failure path releases
+	// the session context through the deferred cancel.
 	sessionCtx, cancel := context.WithCancel(opts.Lifetime)
 	timer := time.AfterFunc(opts.Timeout, cancel)
 	stop := context.AfterFunc(ctx, cancel)
