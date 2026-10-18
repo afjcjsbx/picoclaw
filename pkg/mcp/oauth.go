@@ -145,7 +145,10 @@ func fetchBrowserCode(
 	if err := validateOAuthURL(authURL); err != nil {
 		return nil, err
 	}
-	parsed, _ := url.Parse(authURL)
+	parsed, err := url.Parse(authURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid OAuth authorization URL: %w", err)
+	}
 	state := parsed.Query().Get("state")
 	if state == "" {
 		return nil, errors.New("OAuth authorization state is missing")
