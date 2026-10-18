@@ -16,7 +16,9 @@ import (
 	"github.com/sipeed/picoclaw/pkg/isolation"
 )
 
-var isolatedCommandTerminateDuration = 5 * time.Second
+// isolatedCommandTerminateDuration bounds how long a stdio child may take to
+// exit after stdin closes, before it is signaled and finally killed.
+const isolatedCommandTerminateDuration = 5 * time.Second
 
 // isolatedCommandTransport mirrors the SDK command transport but routes
 // process startup through pkg/isolation so Windows post-start hooks run too.
