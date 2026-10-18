@@ -16,9 +16,8 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/oauth2"
-
 	"github.com/modelcontextprotocol/go-sdk/auth"
+	"golang.org/x/oauth2"
 
 	"github.com/sipeed/picoclaw/pkg/config"
 )

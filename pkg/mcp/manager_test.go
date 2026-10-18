@@ -590,7 +590,8 @@ func TestLoadFromMCPConfig_AllServersFailedAfterPreviousLoad(t *testing.T) {
 	mgr := NewManager()
 	t.Cleanup(func() { _ = mgr.Close() })
 
-	if err := mgr.ConnectServer(context.Background(), "preexisting", config.MCPServerConfig{Enabled: true}); err != nil {
+	preexisting := config.MCPServerConfig{Enabled: true}
+	if err := mgr.ConnectServer(context.Background(), "preexisting", preexisting); err != nil {
 		t.Fatalf("ConnectServer(preexisting) error = %v", err)
 	}
 
