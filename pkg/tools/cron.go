@@ -622,11 +622,18 @@ func jobTimingSummary(job *cron.CronJob) string {
 	return strings.Join(parts, ", ")
 }
 
+// cronJobLocalTimes holds the derived, human-readable local times for a job.
+// Missing timestamps are omitted from the JSON payload.
+type cronJobLocalTimes struct {
+	LastRun string `json:"lastRun,omitempty"`
+	NextRun string `json:"nextRun,omitempty"`
+}
+
 // cronJobLocalView decorates a CronJob with derived, human-readable local
 // times. The original epoch-millisecond fields stay in the payload.
 type cronJobLocalView struct {
 	*cron.CronJob
-	LocalTimes map[string]string `json:"localTimes,omitempty"`
+	LocalTimes *cronJobLocalTimes `json:"localTimes,omitempty"`
 }
 
 func formatCronJobJSON(job *cron.CronJob) string {
@@ -635,15 +642,12 @@ func formatCronJobJSON(job *cron.CronJob) string {
 	}
 
 	view := cronJobLocalView{CronJob: job}
-	times := make(map[string]string, 2)
-	if last := formatLocalTimeMS(job.State.LastRunAtMS); last != "" {
-		times["lastRun"] = last
+	times := cronJobLocalTimes{
+		LastRun: formatLocalTimeMS(job.State.LastRunAtMS),
+		NextRun: formatLocalTimeMS(job.State.NextRunAtMS),
 	}
-	if next := formatLocalTimeMS(job.State.NextRunAtMS); next != "" {
-		times["nextRun"] = next
-	}
-	if len(times) > 0 {
-		view.LocalTimes = times
+	if times.LastRun != "" || times.NextRun != "" {
+		view.LocalTimes = &times
 	}
 
 	data, err := json.Marshal(view)
