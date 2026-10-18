@@ -336,15 +336,17 @@ func (m *Manager) ConnectServer(
 	}
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	if m.closed.Load() {
+		m.mu.Unlock()
 		_ = conn.Session.Close()
 		m.publishServerEvent(runtimeevents.KindMCPServerFailed, name, cfg, 0, fmt.Errorf("manager is closed"))
 		return fmt.Errorf("manager is closed")
 	}
-
 	m.registerConnection(name, conn)
+	m.mu.Unlock()
+
+	// Publish observations after releasing the manager lock: the event bus must
+	// never run while the connection registry is locked.
 	for _, tool := range conn.Tools {
 		toolName := ""
 		if tool != nil {
