@@ -219,3 +219,4 @@ Notes:
 - one-time jobs whose scheduled time elapsed while the gateway was down are dropped on the next startup (or disabled when they are not marked for deletion), instead of lingering as enabled jobs that never fire
 - recurring jobs stay in the store until removed
 - disabled jobs stay in the store and still appear in `picoclaw cron list`
+- each run records its outcome in the job state: `state.lastStatus` is `"ok"` on success, `"error"` with the reason in `state.lastError` when the agent turn failed or a scheduled command was disabled or failed, and `"skipped"` when no execution callback is installed (see `tools.cron`)
