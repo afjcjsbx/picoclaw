@@ -393,7 +393,7 @@ func connectServerWithOAuth(
 		}
 	default:
 		return nil, fmt.Errorf(
-			"unsupported transport type: %s (supported: stdio, sse, http, streamable-http)",
+			"unsupported transport type %q (supported: stdio, sse, http)",
 			transportType,
 		)
 	}
