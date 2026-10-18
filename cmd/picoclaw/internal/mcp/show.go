@@ -203,18 +203,13 @@ func newShowCommand() *cobra.Command {
 }
 
 func buildServerInfo(name string, server config.MCPServerConfig, discoveryEnabled bool) cliui.MCPShowServer {
-	effectiveDeferred := discoveryEnabled
-	deferredExplicit := server.Deferred != nil
-	if deferredExplicit {
-		effectiveDeferred = *server.Deferred
-	}
 	info := cliui.MCPShowServer{
 		Name:              name,
 		Type:              inferTransportType(server),
 		Target:            renderServerTarget(server),
 		Enabled:           server.Enabled,
-		EffectiveDeferred: effectiveDeferred,
-		DeferredExplicit:  deferredExplicit,
+		EffectiveDeferred: server.EffectiveDeferred(discoveryEnabled),
+		DeferredExplicit:  server.Deferred != nil,
 		EnvFile:           server.EnvFile,
 	}
 	if len(server.Env) > 0 {

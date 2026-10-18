@@ -170,7 +170,7 @@ func (al *AgentLoop) buildCommandsRuntime(
 				servers = append(servers, commands.MCPServerInfo{
 					Name:      serverName,
 					Enabled:   serverCfg.Enabled,
-					Deferred:  serverIsDeferred(cfg.Tools.MCP.Discovery.Enabled, serverCfg),
+					Deferred:  serverCfg.EffectiveDeferred(cfg.Tools.MCP.Discovery.Enabled),
 					Connected: isConnected,
 					ToolCount: toolCount,
 				})

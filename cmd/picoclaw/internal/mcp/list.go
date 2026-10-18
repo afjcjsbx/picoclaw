@@ -50,19 +50,13 @@ func newListCommand() *cobra.Command {
 					}
 				}
 
-				effectiveDeferred := cfg.Tools.MCP.Discovery.Enabled
-				deferredExplicit := server.Deferred != nil
-				if deferredExplicit {
-					effectiveDeferred = *server.Deferred
-				}
-
 				rows = append(rows, cliui.MCPListRow{
 					Name:              name,
 					Type:              inferTransportType(server),
 					Target:            renderServerTarget(server),
 					Status:            status,
-					EffectiveDeferred: effectiveDeferred,
-					DeferredExplicit:  deferredExplicit,
+					EffectiveDeferred: server.EffectiveDeferred(cfg.Tools.MCP.Discovery.Enabled),
+					DeferredExplicit:  server.Deferred != nil,
 				})
 			}
 
