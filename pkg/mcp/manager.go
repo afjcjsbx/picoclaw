@@ -461,7 +461,7 @@ func connectServerWithOAuth(
 			DisableStandaloneSSE: disableStandaloneSSE,
 			OAuthHandler:         handler,
 			HTTPClient: &http.Client{
-				Transport:     &pluginHTTPTransport{base: base, origin: origin, headers: cfg.Headers},
+				Transport:     &originBoundTransport{base: base, origin: origin, headers: cfg.Headers},
 				CheckRedirect: checkRedirect,
 			},
 		}
