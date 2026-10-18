@@ -20,6 +20,11 @@ var isolatedCommandTerminateDuration = 5 * time.Second
 
 // isolatedCommandTransport mirrors the SDK command transport but routes
 // process startup through pkg/isolation so Windows post-start hooks run too.
+//
+// It is a deliberate fork of github.com/modelcontextprotocol/go-sdk/mcp
+// CommandTransport for that single reason. When the SDK dependency is
+// upgraded, keep the wire behavior (pipes, framing, terminate sequence) in
+// sync with the upstream transport.
 type isolatedCommandTransport struct {
 	Command           *exec.Cmd
 	TerminateDuration time.Duration
