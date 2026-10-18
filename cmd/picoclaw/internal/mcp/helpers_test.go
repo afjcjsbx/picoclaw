@@ -43,3 +43,19 @@ func TestParseHeaderAssignments(t *testing.T) {
 		t.Fatal("parseHeaderAssignments(empty name) = nil, want error")
 	}
 }
+
+func TestParseAddArgsRejectsConflictingDeferredFlags(t *testing.T) {
+	if _, _, _, err := parseAddArgs([]string{"fs", "npx", "server", "--deferred", "--no-deferred"}); err == nil {
+		t.Fatal("parseAddArgs(--deferred --no-deferred) = nil, want conflict error")
+	}
+	opts, target, _, err := parseAddArgs([]string{"fs", "npx", "server", "--no-deferred"})
+	if err != nil {
+		t.Fatalf("parseAddArgs(--no-deferred) error = %v", err)
+	}
+	if opts.Deferred == nil || *opts.Deferred {
+		t.Fatalf("opts.Deferred = %v, want explicit false", opts.Deferred)
+	}
+	if target.Name != "fs" || target.Command != "npx" {
+		t.Fatalf("target = %+v, want fs/npx", target)
+	}
+}

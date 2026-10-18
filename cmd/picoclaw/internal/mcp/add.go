@@ -119,9 +119,15 @@ func parseAddArgs(args []string) (addOptions, addTarget, bool, error) {
 		case arg == "--inherit-env":
 			opts.InheritEnv = true
 		case arg == "--deferred":
+			if opts.Deferred != nil && !*opts.Deferred {
+				return addOptions{}, addTarget{}, false, errors.New("cannot use --deferred together with --no-deferred")
+			}
 			t := true
 			opts.Deferred = &t
 		case arg == "--no-deferred":
+			if opts.Deferred != nil && *opts.Deferred {
+				return addOptions{}, addTarget{}, false, errors.New("cannot use --deferred together with --no-deferred")
+			}
 			f := false
 			opts.Deferred = &f
 		case arg == "--transport" || arg == "-t":
