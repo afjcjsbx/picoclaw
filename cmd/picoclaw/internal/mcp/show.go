@@ -2,10 +2,8 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -13,6 +11,7 @@ import (
 	"github.com/sipeed/picoclaw/cmd/picoclaw/internal/cliui"
 	"github.com/sipeed/picoclaw/pkg/config"
 	picomcp "github.com/sipeed/picoclaw/pkg/mcp"
+	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
 type toolDetail struct {
@@ -68,76 +67,20 @@ func defaultServerShowProbe(
 }
 
 func extractParameters(schema any) []paramDetail {
-	schemaMap := normalizeSchema(schema)
-	properties, ok := schemaMap["properties"].(map[string]any)
-	if !ok || len(properties) == 0 {
+	properties := toolshared.SchemaProperties(schema)
+	if len(properties) == 0 {
 		return nil
 	}
-
-	required := make(map[string]struct{})
-	switch raw := schemaMap["required"].(type) {
-	case []string:
-		for _, name := range raw {
-			required[name] = struct{}{}
-		}
-	case []any:
-		for _, value := range raw {
-			if name, ok := value.(string); ok {
-				required[name] = struct{}{}
-			}
-		}
-	}
-
-	names := make([]string, 0, len(properties))
-	for name := range properties {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-
-	params := make([]paramDetail, 0, len(names))
-	for _, name := range names {
-		param := paramDetail{Name: name}
-		if propMap, ok := properties[name].(map[string]any); ok {
-			if typeName, ok := propMap["type"].(string); ok {
-				param.Type = strings.TrimSpace(typeName)
-			}
-			if desc, ok := propMap["description"].(string); ok {
-				param.Description = strings.TrimSpace(desc)
-			}
-		}
-		_, param.Required = required[name]
-		params = append(params, param)
+	params := make([]paramDetail, 0, len(properties))
+	for _, property := range properties {
+		params = append(params, paramDetail{
+			Name:        property.Name,
+			Type:        property.Type,
+			Description: property.Description,
+			Required:    property.Required,
+		})
 	}
 	return params
-}
-
-func normalizeSchema(schema any) map[string]any {
-	if schema == nil {
-		return map[string]any{}
-	}
-	if schemaMap, ok := schema.(map[string]any); ok {
-		return schemaMap
-	}
-
-	var jsonData []byte
-	switch raw := schema.(type) {
-	case json.RawMessage:
-		jsonData = raw
-	case []byte:
-		jsonData = raw
-	default:
-		var err error
-		jsonData, err = json.Marshal(schema)
-		if err != nil {
-			return map[string]any{}
-		}
-	}
-
-	var result map[string]any
-	if err := json.Unmarshal(jsonData, &result); err != nil {
-		return map[string]any{}
-	}
-	return result
 }
 
 func newShowCommand() *cobra.Command {
