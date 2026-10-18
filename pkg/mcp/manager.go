@@ -220,7 +220,10 @@ func (m *Manager) LoadFromMCPConfig(
 			"count": len(mcpCfg.Servers),
 		})
 
-	var wg sync.WaitGroup
+	var (
+		wg      sync.WaitGroup
+		success atomic.Int64
+	)
 	errs := make(chan error, len(mcpCfg.Servers))
 	sem := make(chan struct{}, mcpMaxConcurrentConnect)
 	enabledCount := 0
@@ -271,7 +274,9 @@ func (m *Manager) LoadFromMCPConfig(
 						"error":  err.Error(),
 					})
 				errs <- fmt.Errorf("failed to connect to server %s: %w", name, err)
+				return
 			}
+			success.Add(1)
 		}(name, serverCfg, workspacePath)
 	}
 
@@ -284,7 +289,9 @@ func (m *Manager) LoadFromMCPConfig(
 		allErrors = append(allErrors, err)
 	}
 
-	connectedCount := len(m.GetServers())
+	// Count only the servers connected by this call: pre-existing connections
+	// from an earlier load must not mask a fully failed reload.
+	connectedCount := int(success.Load())
 
 	// If all enabled servers failed to connect, return aggregated error
 	if enabledCount > 0 && connectedCount == 0 {

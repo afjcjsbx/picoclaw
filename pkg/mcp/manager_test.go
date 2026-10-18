@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -588,6 +589,36 @@ func TestConnectServer_DoesNotForwardHeadersToRedirectTargets(t *testing.T) {
 	case header := <-leaked:
 		t.Fatalf("redirect target received a request; Authorization header = %q", header)
 	default:
+	}
+}
+
+func TestLoadFromMCPConfig_AllServersFailedAfterPreviousLoad(t *testing.T) {
+	originalConnectServerFunc := connectServerFunc
+	t.Cleanup(func() { connectServerFunc = originalConnectServerFunc })
+
+	connectServerFunc = func(_ context.Context, name string, _ config.MCPServerConfig) (*ServerConnection, error) {
+		if name == "failing" {
+			return nil, errors.New("connect refused")
+		}
+		conn, _, err := newScriptedServerConnection("session-"+name, nil, nil)
+		return conn, err
+	}
+
+	mgr := NewManager()
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	if err := mgr.ConnectServer(context.Background(), "preexisting", config.MCPServerConfig{Enabled: true}); err != nil {
+		t.Fatalf("ConnectServer(preexisting) error = %v", err)
+	}
+
+	err := mgr.LoadFromMCPConfig(context.Background(), config.MCPConfig{
+		ToolConfig: config.ToolConfig{Enabled: true},
+		Servers: map[string]config.MCPServerConfig{
+			"failing": {Enabled: true, Type: "http", URL: "https://example.invalid/mcp"},
+		},
+	}, "")
+	if err == nil {
+		t.Fatal("expected an aggregated error when every configured server failed, got nil")
 	}
 }
 
