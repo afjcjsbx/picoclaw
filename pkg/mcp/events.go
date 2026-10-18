@@ -20,7 +20,7 @@ func (m *Manager) publishServerEvent(
 	if err != nil {
 		severity = runtimeevents.SeverityError
 	}
-	payload := ServerEventPayload{
+	payload := serverEventPayload{
 		Server:    serverName,
 		Type:      mcpTransportType(cfg),
 		URL:       cfg.URL,
@@ -44,7 +44,7 @@ func (m *Manager) publishToolDiscovered(serverName string, cfg config.MCPServerC
 	if m == nil || m.runtimeEvents == nil {
 		return
 	}
-	payload := ServerEventPayload{
+	payload := serverEventPayload{
 		Server:  serverName,
 		Type:    mcpTransportType(cfg),
 		URL:     cfg.URL,
@@ -60,7 +60,7 @@ func (m *Manager) publishToolDiscovered(serverName string, cfg config.MCPServerC
 	})
 }
 
-func mcpServerEventAttrs(payload ServerEventPayload) map[string]any {
+func mcpServerEventAttrs(payload serverEventPayload) map[string]any {
 	attrs := map[string]any{}
 	setMCPAttrString(attrs, "server", payload.Server)
 	setMCPAttrString(attrs, "type", payload.Type)

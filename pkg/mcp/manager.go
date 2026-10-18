@@ -123,9 +123,7 @@ func inheritedMCPEnv(environ []string, inheritAll bool) map[string]string {
 type ServerConnection struct {
 	plugin      bool // Plugin calls are never automatically replayed after disconnect.
 	cancel      context.CancelFunc
-	Name        string
 	Config      config.MCPServerConfig
-	Client      *mcp.Client
 	Session     *mcp.ClientSession
 	Tools       []*mcp.Tool
 	reconnectMu sync.Mutex
@@ -152,8 +150,8 @@ func WithRuntimeEvents(eventBus runtimeevents.Bus) ManagerOption {
 	}
 }
 
-// ServerEventPayload describes MCP server connection events.
-type ServerEventPayload struct {
+// serverEventPayload describes MCP server connection events.
+type serverEventPayload struct {
 	Server    string `json:"server"`
 	Type      string `json:"type,omitempty"`
 	URL       string `json:"url,omitempty"`
@@ -523,9 +521,7 @@ func connectServerWithOAuth(
 	tools := listServerTools(ctx, name, session, initResult)
 
 	return &ServerConnection{
-		Name:    name,
 		Config:  cfg,
-		Client:  client,
 		Session: session,
 		Tools:   tools,
 	}, nil

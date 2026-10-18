@@ -130,9 +130,7 @@ func (m *Manager) ConnectPluginServer(
 		return fmt.Errorf("plugin initialization canceled or timed out")
 	}
 	m.servers[name] = &ServerConnection{
-		Name:    name,
 		Config:  cfg,
-		Client:  client,
 		Session: session,
 		Tools:   serverTools,
 		plugin:  true,

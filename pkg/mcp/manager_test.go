@@ -288,7 +288,6 @@ func TestConnectServerPublishesRuntimeEvents(t *testing.T) {
 			return nil, fmt.Errorf("connect failed")
 		}
 		return &ServerConnection{
-			Name:   name,
 			Config: cfg,
 			Tools:  []*sdkmcp.Tool{{Name: "echo"}},
 		}, nil
@@ -371,7 +370,7 @@ func TestLoadFromMCPConfig_DisabledOrEmptyServers(t *testing.T) {
 
 func TestGetServers_ReturnsCopy(t *testing.T) {
 	mgr := NewManager()
-	mgr.servers["s1"] = &ServerConnection{Name: "s1"}
+	mgr.servers["s1"] = &ServerConnection{}
 
 	servers := mgr.GetServers()
 	delete(servers, "s1")
@@ -383,8 +382,8 @@ func TestGetServers_ReturnsCopy(t *testing.T) {
 
 func TestGetAllTools_FiltersEmptyTools(t *testing.T) {
 	mgr := NewManager()
-	mgr.servers["empty"] = &ServerConnection{Name: "empty", Tools: nil}
-	mgr.servers["with-tools"] = &ServerConnection{Name: "with-tools", Tools: []*sdkmcp.Tool{{}}}
+	mgr.servers["empty"] = &ServerConnection{Tools: nil}
+	mgr.servers["with-tools"] = &ServerConnection{Tools: []*sdkmcp.Tool{{}}}
 
 	all := mgr.GetAllTools()
 	if _, ok := all["empty"]; ok {
@@ -755,9 +754,7 @@ func newScriptedServerConnection(
 	}
 
 	return &ServerConnection{
-		Name:    "flaky",
 		Config:  config.MCPServerConfig{Enabled: true, Type: "http", URL: "https://example.invalid/mcp"},
-		Client:  client,
 		Session: session,
 		Tools: []*sdkmcp.Tool{
 			{
@@ -918,7 +915,7 @@ func TestManager_CloseWaitsForInFlightCallTool(t *testing.T) {
 
 	mgr := NewManager()
 	mgr.mu.Lock()
-	mgr.servers["srv"] = &ServerConnection{Name: "srv", Session: clientSession}
+	mgr.servers["srv"] = &ServerConnection{Session: clientSession}
 	mgr.mu.Unlock()
 
 	callDone := make(chan error, 1)
@@ -975,7 +972,7 @@ func TestLoadFromMCPConfigBoundsConcurrentConnects(t *testing.T) {
 		mu.Lock()
 		current--
 		mu.Unlock()
-		return &ServerConnection{Name: name, Config: cfg}, nil
+		return &ServerConnection{Config: cfg}, nil
 	}
 
 	servers := make(map[string]config.MCPServerConfig, mcpMaxConcurrentConnect*3)
