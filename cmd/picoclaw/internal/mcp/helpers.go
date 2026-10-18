@@ -226,49 +226,50 @@ func sortedServerNames(servers map[string]config.MCPServerConfig) []string {
 }
 
 func parseEnvAssignments(values []string) (map[string]string, error) {
-	if len(values) == 0 {
-		return nil, nil
-	}
-
-	env := make(map[string]string, len(values))
-	for _, entry := range values {
-		key, value, found := strings.Cut(entry, "=")
-		if !found {
-			return nil, fmt.Errorf("invalid env assignment %q: expected KEY=value", entry)
-		}
-		key = strings.TrimSpace(key)
-		if key == "" {
-			return nil, fmt.Errorf("invalid env assignment %q: key cannot be empty", entry)
-		}
-		env[key] = value
-	}
-
-	return env, nil
+	return parseAssignments(values, "env assignment", []string{"="}, "KEY=value", false)
 }
 
 func parseHeaderAssignments(values []string) (map[string]string, error) {
+	return parseAssignments(values, "header", []string{":", "="}, "'Name: Value' or 'Name=Value'", true)
+}
+
+// parseAssignments parses repeated "key<separator>value" CLI assignments,
+// trying each separator in order. Header values are trimmed; environment
+// values stay verbatim so trailing spaces and similar content survive.
+func parseAssignments(
+	values []string,
+	kind string,
+	separators []string,
+	expected string,
+	trimValue bool,
+) (map[string]string, error) {
 	if len(values) == 0 {
 		return nil, nil
 	}
 
-	headers := make(map[string]string, len(values))
+	result := make(map[string]string, len(values))
 	for _, entry := range values {
-		key, value, found := strings.Cut(entry, ":")
-		if !found {
-			key, value, found = strings.Cut(entry, "=")
+		key, value, found := "", "", false
+		for _, separator := range separators {
+			if key, value, found = strings.Cut(entry, separator); found {
+				break
+			}
 		}
 		if !found {
-			return nil, fmt.Errorf("invalid header %q: expected 'Name: Value' or 'Name=Value'", entry)
+			return nil, fmt.Errorf("invalid %s %q: expected %s", kind, entry, expected)
 		}
+
 		key = strings.TrimSpace(key)
-		value = strings.TrimSpace(value)
 		if key == "" {
-			return nil, fmt.Errorf("invalid header %q: name cannot be empty", entry)
+			return nil, fmt.Errorf("invalid %s %q: key cannot be empty", kind, entry)
 		}
-		headers[key] = value
+		if trimValue {
+			value = strings.TrimSpace(value)
+		}
+		result[key] = value
 	}
 
-	return headers, nil
+	return result, nil
 }
 
 func looksLikeRemoteURL(target string) bool {
