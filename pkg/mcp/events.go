@@ -22,7 +22,7 @@ func (m *Manager) publishServerEvent(
 	}
 	payload := serverEventPayload{
 		Server:    serverName,
-		Type:      mcpTransportType(cfg),
+		Type:      config.EffectiveMCPTransportType(cfg),
 		URL:       cfg.URL,
 		Command:   cfg.Command,
 		ToolCount: toolCount,
@@ -46,7 +46,7 @@ func (m *Manager) publishToolDiscovered(serverName string, cfg config.MCPServerC
 	}
 	payload := serverEventPayload{
 		Server:  serverName,
-		Type:    mcpTransportType(cfg),
+		Type:    config.EffectiveMCPTransportType(cfg),
 		URL:     cfg.URL,
 		Command: cfg.Command,
 		Tool:    toolName,
@@ -76,8 +76,4 @@ func setMCPAttrString(attrs map[string]any, key, value string) {
 	if value != "" {
 		attrs[key] = value
 	}
-}
-
-func mcpTransportType(cfg config.MCPServerConfig) string {
-	return config.EffectiveMCPTransportType(cfg)
 }
