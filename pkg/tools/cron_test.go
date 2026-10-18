@@ -1695,3 +1695,97 @@ func TestCronTool_GetIncludesLocalTimesJSON(t *testing.T) {
 		t.Fatalf("localTimes.nextRun = %q, want %q", envelope.LocalTimes["nextRun"], want)
 	}
 }
+
+// TestCronTool_UpdateIncludesLocalTimesJSON verifies update keeps the raw epoch
+// fields and adds derived local times under localTimes.
+func TestCronTool_UpdateIncludesLocalTimesJSON(t *testing.T) {
+	tool := newTestCronTool(t)
+	job := addTestCronJob(t, tool, "timed", "cli", "direct", "")
+
+	last := time.Now().Add(-45 * time.Minute).UnixMilli()
+	next := time.Now().Add(15 * time.Minute).UnixMilli()
+	current, ok := tool.cronService.GetJob(job.ID)
+	if !ok {
+		t.Fatal("job not found")
+	}
+	current.State.LastRunAtMS = &last
+	current.State.LastStatus = "ok"
+	current.State.NextRunAtMS = &next
+	if err := tool.cronService.UpdateJob(current); err != nil {
+		t.Fatalf("UpdateJob() error: %v", err)
+	}
+
+	result := tool.Execute(
+		WithToolContext(context.Background(), "cli", "direct"),
+		map[string]any{"action": "update", "job_id": job.ID, "message": "updated message"},
+	)
+	if result.IsError {
+		t.Fatalf("update failed: %s", result.ForLLM)
+	}
+
+	got := parseCronJobResult(t, result)
+	if got.Payload.Message != "updated message" {
+		t.Fatalf("update returned wrong message: %+v", got.Payload)
+	}
+	if got.State.NextRunAtMS == nil || *got.State.NextRunAtMS != next {
+		t.Fatalf("update payload lost nextRunAtMs: %+v", got.State)
+	}
+
+	var envelope struct {
+		LocalTimes *cronJobLocalTimes `json:"localTimes"`
+	}
+	text := result.ForLLM
+	if idx := strings.Index(text, "{"); idx >= 0 {
+		text = text[idx:]
+	}
+	if err := json.Unmarshal([]byte(text), &envelope); err != nil {
+		t.Fatalf("failed to parse update JSON %q: %v", result.ForLLM, err)
+	}
+	if envelope.LocalTimes == nil {
+		t.Fatalf("update payload is missing localTimes: %s", result.ForLLM)
+	}
+	if want := time.UnixMilli(last).Format(cronLocalTimeLayout); envelope.LocalTimes.LastRun != want {
+		t.Fatalf("localTimes.lastRun = %q, want %q", envelope.LocalTimes.LastRun, want)
+	}
+	if want := time.UnixMilli(next).Format(cronLocalTimeLayout); envelope.LocalTimes.NextRun != want {
+		t.Fatalf("localTimes.nextRun = %q, want %q", envelope.LocalTimes.NextRun, want)
+	}
+}
+
+// TestFormatTimeMSInLocation verifies the rendered offset is RFC 3339: UTC
+// renders as Z, while non-UTC zones carry a numeric offset.
+func TestFormatTimeMSInLocation(t *testing.T) {
+	ms := int64(1792393200000)
+	tests := []struct {
+		name string
+		loc  *time.Location
+		want string
+	}{
+		{"UTC", time.UTC, "2026-10-19T07:00:00Z"},
+		{"fixed offset", time.FixedZone("CEST", 2*60*60), "2026-10-19T09:00:00+02:00"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatTimeMSInLocation(&ms, tt.loc); got != tt.want {
+				t.Fatalf("formatTimeMSInLocation() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestFormatTimeMSInLocation_TruncatesMilliseconds documents that RFC 3339
+// output is second-granular even though the stored epoch value has milliseconds.
+func TestFormatTimeMSInLocation_TruncatesMilliseconds(t *testing.T) {
+	ms := int64(1792393200123)
+	got := formatTimeMSInLocation(&ms, time.UTC)
+	if want := "2026-10-19T07:00:00Z"; got != want {
+		t.Fatalf("formatTimeMSInLocation() = %q, want %q", got, want)
+	}
+	parsed, err := time.Parse(time.RFC3339, got)
+	if err != nil {
+		t.Fatalf("rendered time %q is not ISO 8601: %v", got, err)
+	}
+	if want := int64(1792393200000); parsed.UnixMilli() != want {
+		t.Fatalf("rendered time %q resolves to %d ms, want %d ms", got, parsed.UnixMilli(), want)
+	}
+}

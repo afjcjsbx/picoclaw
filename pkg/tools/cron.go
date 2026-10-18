@@ -592,10 +592,16 @@ const cronLocalTimeLayout = time.RFC3339
 // formatLocalTimeMS renders an epoch-millisecond timestamp as local time.
 // Nil or non-positive values have no meaningful time and render as "".
 func formatLocalTimeMS(ms *int64) string {
+	return formatTimeMSInLocation(ms, time.Local)
+}
+
+// formatTimeMSInLocation renders an epoch-millisecond timestamp in loc as
+// RFC 3339. Nil or non-positive values have no meaningful time and render as "".
+func formatTimeMSInLocation(ms *int64, loc *time.Location) string {
 	if ms == nil || *ms <= 0 {
 		return ""
 	}
-	return time.UnixMilli(*ms).Format(cronLocalTimeLayout)
+	return time.UnixMilli(*ms).In(loc).Format(cronLocalTimeLayout)
 }
 
 // localTimesForJob renders the last and next run of a job in the process time
