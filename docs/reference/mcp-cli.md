@@ -123,7 +123,7 @@ Supported flags:
 | `--deferred` | Mark the server as deferred: tools are hidden and discoverable on demand. |
 | `--no-deferred` | Mark the server as non-deferred: tools are always loaded into context. |
 
-When neither `--deferred` nor `--no-deferred` is passed, the `deferred` field is omitted from the stored config and the global `discovery.enabled` value applies at runtime. A stored `deferred: true` only takes effect when `discovery.enabled` is `true`; otherwise the server's tools stay visible.
+When neither `--deferred` nor `--no-deferred` is passed, the `deferred` field is omitted from the stored config and the global `discovery.enabled` value applies at runtime. A stored `deferred: true` only takes effect when `discovery.enabled` is `true`; otherwise the server's tools stay visible. Passing both flags in the same invocation is rejected as a conflict.
 
 Supported forms:
 
