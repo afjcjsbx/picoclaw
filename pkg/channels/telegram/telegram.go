@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -48,6 +49,24 @@ var (
 const (
 	defaultMediaGroupDelay = 500 * time.Millisecond
 	telegramCaptionLimit   = 1024
+
+	// telegramLongPollTimeoutSeconds is the getUpdates long-poll timeout sent
+	// to Telegram: the server holds the request until an update arrives or the
+	// timeout expires.
+	telegramLongPollTimeoutSeconds = 30
+
+	// HTTP client timeouts for the Telegram Bot API. No overall client timeout
+	// is set on purpose: getUpdates is a long poll and an overall timeout would
+	// abort healthy polls. The per-transport timeouts bound requests whose
+	// connection silently stops delivering data (half-open TCP, stalled proxy
+	// tunnel), so telego receives an error and retries instead of hanging
+	// forever. ResponseHeaderTimeout must stay above the long-poll timeout,
+	// because Telegram sends no response headers until the poll finishes.
+	telegramHTTPDialTimeout           = 15 * time.Second
+	telegramHTTPKeepAlive             = 30 * time.Second
+	telegramHTTPTLSHandshakeTimeout   = 15 * time.Second
+	telegramHTTPResponseHeaderTimeout = 60 * time.Second
+	telegramHTTPIdleConnTimeout       = 90 * time.Second
 )
 
 type TelegramChannel struct {
@@ -86,6 +105,30 @@ type telegramMessageParts struct {
 	failedMedia []string
 }
 
+// newTelegramHTTPClient builds the HTTP client used for every Telegram Bot API
+// call. proxy may be nil for a direct connection.
+//
+// The client carries no overall timeout on purpose: getUpdates is a long poll
+// and an overall timeout would abort healthy polls (Telegram sends no response
+// headers until the poll finishes). The per-transport timeouts exist so that a
+// request stalled by a half-open connection or a dead proxy/tunnel fails with
+// an ordinary error within minutes instead of hanging forever, allowing telego
+// to log it and retry.
+func newTelegramHTTPClient(proxy func(*http.Request) (*url.URL, error)) *http.Client {
+	return &http.Client{
+		Transport: &http.Transport{
+			Proxy: proxy,
+			DialContext: (&net.Dialer{
+				Timeout:   telegramHTTPDialTimeout,
+				KeepAlive: telegramHTTPKeepAlive,
+			}).DialContext,
+			TLSHandshakeTimeout:   telegramHTTPTLSHandshakeTimeout,
+			ResponseHeaderTimeout: telegramHTTPResponseHeaderTimeout,
+			IdleConnTimeout:       telegramHTTPIdleConnTimeout,
+		},
+	}
+}
+
 func NewTelegramChannel(
 	bc *config.Channel,
 	telegramCfg *config.TelegramSettings,
@@ -94,24 +137,23 @@ func NewTelegramChannel(
 	channelName := bc.Name()
 	var opts []telego.BotOption
 
-	if telegramCfg.Proxy != "" {
+	// Every configuration (explicit proxy, environment proxy, direct) installs
+	// a client with bounded transport timeouts. getUpdates is a long poll, so a
+	// connection that silently stops delivering data must fail instead of
+	// hanging forever without telego ever seeing an error to retry.
+	var proxyFunc func(*http.Request) (*url.URL, error)
+	switch {
+	case telegramCfg.Proxy != "":
 		proxyURL, parseErr := url.Parse(telegramCfg.Proxy)
 		if parseErr != nil {
 			return nil, fmt.Errorf("invalid proxy URL %q: %w", telegramCfg.Proxy, parseErr)
 		}
-		opts = append(opts, telego.WithHTTPClient(&http.Client{
-			Transport: &http.Transport{
-				Proxy: http.ProxyURL(proxyURL),
-			},
-		}))
-	} else if os.Getenv("HTTP_PROXY") != "" || os.Getenv("HTTPS_PROXY") != "" {
+		proxyFunc = http.ProxyURL(proxyURL)
+	case os.Getenv("HTTP_PROXY") != "" || os.Getenv("HTTPS_PROXY") != "":
 		// Use environment proxy if configured
-		opts = append(opts, telego.WithHTTPClient(&http.Client{
-			Transport: &http.Transport{
-				Proxy: http.ProxyFromEnvironment,
-			},
-		}))
+		proxyFunc = http.ProxyFromEnvironment
 	}
+	opts = append(opts, telego.WithHTTPClient(newTelegramHTTPClient(proxyFunc)))
 
 	if baseURL := strings.TrimRight(strings.TrimSpace(telegramCfg.BaseURL), "/"); baseURL != "" {
 		opts = append(opts, telego.WithAPIServer(baseURL))
@@ -160,7 +202,7 @@ func (c *TelegramChannel) Start(ctx context.Context) error {
 	c.ctx, c.cancel = context.WithCancel(ctx)
 
 	updates, err := c.bot.UpdatesViaLongPolling(c.ctx, &telego.GetUpdatesParams{
-		Timeout: 30,
+		Timeout: telegramLongPollTimeoutSeconds,
 	})
 	if err != nil {
 		c.cancel()
