@@ -283,10 +283,17 @@ func (t *CronTool) listJobs(ctx context.Context) *ToolResult {
 			scheduleInfo = j.Schedule.Expr
 		} else if j.Schedule.Kind == "at" {
 			scheduleInfo = "one-time"
+			if at := formatLocalTimeMS(j.Schedule.AtMS); at != "" {
+				scheduleInfo += " at " + at
+			}
 		} else {
 			scheduleInfo = "unknown"
 		}
-		result.WriteString(fmt.Sprintf("- %s (id: %s, %s)\n", j.Name, j.ID, scheduleInfo))
+		line := fmt.Sprintf("- %s (id: %s, %s", j.Name, j.ID, scheduleInfo)
+		if timing := jobTimingSummary(&j); timing != "" {
+			line += ", " + timing
+		}
+		result.WriteString(line + ")\n")
 	}
 
 	return SilentResult(result.String())
@@ -575,8 +582,89 @@ func (t *CronTool) canAccessJob(ctx context.Context, job *cron.CronJob) bool {
 	return true
 }
 
+// cronLocalTimeLayout is the timestamp format used for rendered run times. It
+// is ISO 8601 (RFC 3339) in the process time zone, so every value carries a
+// numeric UTC offset and stays unambiguous and machine-parseable. The zone is
+// the same one used to evaluate cron expressions, so agents do not need to
+// shell out to `date` to interpret epoch milliseconds.
+const cronLocalTimeLayout = time.RFC3339
+
+// formatLocalTimeMS renders an epoch-millisecond timestamp as local time.
+// Nil or non-positive values have no meaningful time and render as "".
+func formatLocalTimeMS(ms *int64) string {
+	return formatTimeMSInLocation(ms, time.Local)
+}
+
+// formatTimeMSInLocation renders an epoch-millisecond timestamp in loc as
+// RFC 3339. Nil or non-positive values have no meaningful time and render as "".
+func formatTimeMSInLocation(ms *int64, loc *time.Location) string {
+	if ms == nil || *ms <= 0 {
+		return ""
+	}
+	return time.UnixMilli(*ms).In(loc).Format(cronLocalTimeLayout)
+}
+
+// localTimesForJob renders the last and next run of a job in the process time
+// zone. Missing or non-positive timestamps render as empty strings.
+func localTimesForJob(job *cron.CronJob) cronJobLocalTimes {
+	return cronJobLocalTimes{
+		LastRun: formatLocalTimeMS(job.State.LastRunAtMS),
+		NextRun: formatLocalTimeMS(job.State.NextRunAtMS),
+	}
+}
+
+// jobTimingSummary renders the last and next run of a job as local times for
+// the human-readable list output. The next run is skipped for one-time jobs
+// when it duplicates the scheduled time shown with the schedule.
+func jobTimingSummary(job *cron.CronJob) string {
+	times := localTimesForJob(job)
+
+	parts := make([]string, 0, 2)
+	if times.LastRun != "" {
+		entry := "last run: " + times.LastRun
+		if job.State.LastStatus != "" {
+			entry += " (" + job.State.LastStatus + ")"
+		}
+		parts = append(parts, entry)
+	}
+
+	if job.Schedule.Kind == "at" && job.State.NextRunAtMS != nil && job.Schedule.AtMS != nil &&
+		*job.State.NextRunAtMS == *job.Schedule.AtMS {
+		times.NextRun = ""
+	}
+	if times.NextRun != "" {
+		parts = append(parts, "next run: "+times.NextRun)
+	}
+
+	return strings.Join(parts, ", ")
+}
+
+// cronJobLocalTimes holds the derived, human-readable local times for a job.
+// Missing timestamps are omitted from the JSON payload.
+type cronJobLocalTimes struct {
+	LastRun string `json:"lastRun,omitempty"`
+	NextRun string `json:"nextRun,omitempty"`
+}
+
+// cronJobLocalView decorates a CronJob with derived, human-readable local
+// times. The original epoch-millisecond fields stay in the payload.
+type cronJobLocalView struct {
+	*cron.CronJob
+	LocalTimes *cronJobLocalTimes `json:"localTimes,omitempty"`
+}
+
 func formatCronJobJSON(job *cron.CronJob) string {
-	data, err := json.Marshal(job)
+	if job == nil {
+		return ""
+	}
+
+	view := cronJobLocalView{CronJob: job}
+	times := localTimesForJob(job)
+	if times.LastRun != "" || times.NextRun != "" {
+		view.LocalTimes = &times
+	}
+
+	data, err := json.Marshal(view)
 	if err != nil {
 		return fmt.Sprintf("%+v", *job)
 	}
