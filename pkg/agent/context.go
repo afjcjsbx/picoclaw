@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -46,6 +47,12 @@ type ContextBuilder struct {
 	// build time. This catches nested file creations/deletions/mtime changes
 	// that may not update the top-level skill root directory mtime.
 	skillFilesAtCache map[string]time.Time
+
+	// lastSkillScan is the unix-nano time of the last recursive skill-tree
+	// walk. Atomic because sourceFilesChangedLocked can run under only a read
+	// lock, where several goroutines may race on it. The walk itself is
+	// throttled to skillScanInterval; tracked-file stats are always checked.
+	lastSkillScan atomic.Int64
 }
 
 func (cb *ContextBuilder) WithToolDiscovery(useBM25, useRegex bool) *ContextBuilder {
@@ -375,6 +382,9 @@ func (cb *ContextBuilder) BuildSystemPromptWithCache() string {
 	cb.cachedAt = baseline.maxMtime
 	cb.existedAtCache = baseline.existed
 	cb.skillFilesAtCache = baseline.skillFiles
+	// The baseline walk just refreshed the skill snapshot, so the next cache
+	// check does not need to walk the tree again.
+	cb.markSkillScanned()
 
 	logger.DebugCF("agent", "System prompt cached",
 		map[string]any{
@@ -506,6 +516,7 @@ func (cb *ContextBuilder) InvalidateCache() {
 	cb.cachedAt = time.Time{}
 	cb.existedAtCache = nil
 	cb.skillFilesAtCache = nil
+	cb.lastSkillScan.Store(0)
 
 	logger.DebugCF("agent", "System prompt cache invalidated", nil)
 }
@@ -598,6 +609,23 @@ func (cb *ContextBuilder) buildCacheBaseline() cacheBaseline {
 	return cacheBaseline{existed: existed, skillFiles: skillFiles, maxMtime: maxMtime}
 }
 
+// skillScanInterval throttles the recursive skill-tree walk in
+// sourceFilesChangedLocked. Skill content changes rarely at runtime, and the
+// walk reads one directory entry per file under every skill root, which is the
+// expensive half of the cache check on slow storage.
+const skillScanInterval = 10 * time.Second
+
+// lastSkillScanTime returns the time of the last recursive skill-tree walk.
+func (cb *ContextBuilder) lastSkillScanTime() time.Time {
+	return time.Unix(0, cb.lastSkillScan.Load())
+}
+
+// markSkillScanned records that the recursive skill-tree walk just ran. It is
+// safe to call while holding only a read lock on systemPromptMutex.
+func (cb *ContextBuilder) markSkillScanned() {
+	cb.lastSkillScan.Store(time.Now().UnixNano())
+}
+
 // sourceFilesChangedLocked checks whether any workspace source file has been
 // modified, created, or deleted since the cache was last built.
 //
@@ -625,8 +653,16 @@ func (cb *ContextBuilder) sourceFilesChangedLocked() bool {
 			return true
 		}
 	}
-	if skillFilesChangedSince(cb.skillRoots(), cb.skillFilesAtCache) {
+	// Tracked skill files are cheap to stat and catch content edits
+	// immediately; the recursive walk for newly created files is throttled.
+	if skillFilesModifiedSince(cb.skillFilesAtCache) {
 		return true
+	}
+	if time.Since(cb.lastSkillScanTime()) >= skillScanInterval {
+		cb.markSkillScanned()
+		if skillTreeHasNewFiles(cb.skillRoots(), cb.skillFilesAtCache) {
+			return true
+		}
 	}
 
 	return false
@@ -666,10 +702,9 @@ func (cb *ContextBuilder) fileChangedSince(path string) bool {
 // if the callback returned nil when its err parameter is non-nil.
 var errWalkStop = errors.New("walk stop")
 
-// skillFilesChangedSince compares the current recursive skill file tree
-// against the cache-time snapshot. Any create/delete/mtime drift invalidates
-// the cache.
-func skillFilesChangedSince(skillRoots []string, filesAtCache map[string]time.Time) bool {
+// skillFilesModifiedSince reports whether any tracked skill file changed or
+// disappeared since the cache-time snapshot.
+func skillFilesModifiedSince(filesAtCache map[string]time.Time) bool {
 	// Defensive: if the snapshot was never initialized, force rebuild.
 	if filesAtCache == nil {
 		return true
@@ -688,7 +723,12 @@ func skillFilesChangedSince(skillRoots []string, filesAtCache map[string]time.Ti
 		}
 	}
 
-	// Check no new files appeared under any skill root.
+	return false
+}
+
+// skillTreeHasNewFiles walks the skill roots and reports whether any file
+// appeared that is not part of the cache-time snapshot.
+func skillTreeHasNewFiles(skillRoots []string, filesAtCache map[string]time.Time) bool {
 	changed := false
 	for _, root := range skillRoots {
 		if strings.TrimSpace(root) == "" {
