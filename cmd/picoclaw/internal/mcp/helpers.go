@@ -19,6 +19,7 @@ import (
 
 	"github.com/sipeed/picoclaw/cmd/picoclaw/internal"
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/fileutil"
 	picomcp "github.com/sipeed/picoclaw/pkg/mcp"
 )
 
@@ -299,29 +300,12 @@ func isLocalCommandPath(command string) bool {
 		strings.ContainsRune(command, os.PathSeparator)
 }
 
-func expandHomePath(path string) string {
-	if path == "" || path[0] != '~' {
-		return path
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return path
-	}
-	if path == "~" {
-		return home
-	}
-	if strings.HasPrefix(path, "~/") || strings.HasPrefix(path, "~\\") {
-		return filepath.Join(home, path[2:])
-	}
-	return path
-}
-
 func validateLocalCommandPath(command string) error {
 	if !isLocalCommandPath(command) {
 		return nil
 	}
 
-	path := expandHomePath(command)
+	path := fileutil.ExpandHome(command)
 	info, err := os.Stat(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {

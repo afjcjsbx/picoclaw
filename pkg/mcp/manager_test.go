@@ -146,22 +146,6 @@ func TestLoadEnvFileNotFound(t *testing.T) {
 	}
 }
 
-func TestExpandHomeCommandPath(t *testing.T) {
-	homeDir := t.TempDir()
-	t.Setenv("HOME", homeDir)
-	t.Setenv("USERPROFILE", homeDir)
-
-	want := filepath.Join(homeDir, "bin", "my-mcp")
-	got := expandHomeCommandPath("~" + string(os.PathSeparator) + filepath.Join("bin", "my-mcp"))
-	if got != want {
-		t.Fatalf("expandHomeCommandPath() = %q, want %q", got, want)
-	}
-
-	if got := expandHomeCommandPath("npx"); got != "npx" {
-		t.Fatalf("expandHomeCommandPath() should leave bare commands unchanged, got %q", got)
-	}
-}
-
 func TestInheritedMCPEnv(t *testing.T) {
 	parent := []string{
 		"PATH=/usr/bin", "HOME=/home/test", "XDG_CACHE_HOME=/tmp/cache",

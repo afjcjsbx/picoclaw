@@ -20,6 +20,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
+	"github.com/sipeed/picoclaw/pkg/fileutil"
 	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
@@ -29,24 +30,6 @@ import (
 // spike memory and CPU on constrained devices. All enabled servers are still
 // connected; only the startup burst is bounded.
 const mcpMaxConcurrentConnect = 4
-
-func expandHomeCommandPath(command string) string {
-	if command == "" || command[0] != '~' {
-		return command
-	}
-
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return command
-	}
-	if command == "~" {
-		return home
-	}
-	if strings.HasPrefix(command, "~/") || strings.HasPrefix(command, "~\\") {
-		return filepath.Join(home, command[2:])
-	}
-	return command
-}
 
 // loadEnvFile loads environment variables from a file in .env format
 // Each line should be in the format: KEY=value
@@ -477,7 +460,7 @@ func connectServerWithOAuth(
 				"command": cfg.Command,
 			})
 		// Create command with context
-		cmd := exec.CommandContext(ctx, expandHomeCommandPath(cfg.Command), cfg.Args...)
+		cmd := exec.CommandContext(ctx, fileutil.ExpandHome(cfg.Command), cfg.Args...)
 
 		// Build environment variables with proper override semantics
 		// Use a map to ensure config variables override file variables

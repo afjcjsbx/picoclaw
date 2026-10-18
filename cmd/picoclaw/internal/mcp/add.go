@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/fileutil"
 )
 
 type addOptions struct {
@@ -244,7 +245,7 @@ func buildServerConfig(target string, args []string, opts addOptions) (config.MC
 		return config.MCPServerConfig{}, err
 	}
 	if isLocalCommandPath(command) {
-		command = expandHomePath(command)
+		command = fileutil.ExpandHome(command)
 	}
 
 	server.Command = command
