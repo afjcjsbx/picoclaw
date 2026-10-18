@@ -174,11 +174,7 @@ func (m *Manager) ConnectPluginServer(
 	if err != nil {
 		return err
 	}
-	serverTools, err := listServerTools(sessionCtx, name, session, session.InitializeResult())
-	if err != nil {
-		_ = session.Close()
-		return err
-	}
+	serverTools := listServerTools(sessionCtx, name, session, session.InitializeResult())
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed.Load() {

@@ -528,11 +528,7 @@ func connectServerWithOAuth(
 		})
 
 	// List available tools if supported
-	tools, err := listServerTools(ctx, name, session, initResult)
-	if err != nil {
-		_ = session.Close()
-		return nil, err
-	}
+	tools := listServerTools(ctx, name, session, initResult)
 
 	return &ServerConnection{
 		Name:    name,
@@ -624,15 +620,17 @@ func (m *Manager) CallTool(
 	return result, nil
 }
 
+// listServerTools lists the tools exposed by a session. Listing is
+// best-effort: per-iteration errors are logged and skipped.
 func listServerTools(
 	ctx context.Context,
 	name string,
 	session *mcp.ClientSession,
 	initResult *mcp.InitializeResult,
-) ([]*mcp.Tool, error) {
+) []*mcp.Tool {
 	var tools []*mcp.Tool
 	if initResult.Capabilities.Tools == nil {
-		return tools, nil
+		return nil
 	}
 
 	for tool, err := range session.Tools(ctx, nil) {
@@ -653,7 +651,7 @@ func listServerTools(
 			"toolCount": len(tools),
 		})
 
-	return tools, nil
+	return tools
 }
 
 func shouldReconnectCallError(err error) bool {
