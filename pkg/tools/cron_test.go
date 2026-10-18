@@ -1551,3 +1551,127 @@ func TestCronTool_RunReportsAlreadyRunning(t *testing.T) {
 		t.Fatalf("want already-running error, got: %+v", result)
 	}
 }
+
+// TestCronTool_ListShowsLocalRunTimes verifies list output renders last and
+// next run as local times next to the raw job metadata, so agents can report
+// schedules without shelling out to a date command.
+func TestCronTool_ListShowsLocalRunTimes(t *testing.T) {
+	tool := newTestCronTool(t)
+	job := addTestCronJob(t, tool, "timed", "cli", "direct", "")
+
+	last := time.Now().Add(-2 * time.Hour).UnixMilli()
+	next := time.Now().Add(2 * time.Hour).UnixMilli()
+	current, ok := tool.cronService.GetJob(job.ID)
+	if !ok {
+		t.Fatal("job not found")
+	}
+	current.State.LastRunAtMS = &last
+	current.State.LastStatus = "ok"
+	current.State.NextRunAtMS = &next
+	if err := tool.cronService.UpdateJob(current); err != nil {
+		t.Fatalf("UpdateJob() error: %v", err)
+	}
+
+	result := tool.Execute(
+		WithToolContext(context.Background(), "cli", "direct"),
+		map[string]any{"action": "list"},
+	)
+	if result.IsError {
+		t.Fatalf("list failed: %s", result.ForLLM)
+	}
+
+	wantLast := "last run: " + time.UnixMilli(last).Format(cronLocalTimeLayout) + " (ok)"
+	if !strings.Contains(result.ForLLM, wantLast) {
+		t.Fatalf("list should show local last run %q, got: %s", wantLast, result.ForLLM)
+	}
+	wantNext := "next run: " + time.UnixMilli(next).Format(cronLocalTimeLayout)
+	if !strings.Contains(result.ForLLM, wantNext) {
+		t.Fatalf("list should show local next run %q, got: %s", wantNext, result.ForLLM)
+	}
+}
+
+// TestCronTool_ListShowsOneTimeScheduleInLocalTime verifies one-time jobs show
+// their target time in the schedule summary without duplicating it as next run.
+func TestCronTool_ListShowsOneTimeScheduleInLocalTime(t *testing.T) {
+	tool := newTestCronTool(t)
+	atMS := time.Now().Add(45 * time.Minute).UnixMilli()
+	if _, err := tool.cronService.AddJob(
+		"once",
+		cron.CronSchedule{Kind: "at", AtMS: &atMS},
+		"once message",
+		"cli",
+		"direct",
+	); err != nil {
+		t.Fatalf("AddJob() error: %v", err)
+	}
+
+	result := tool.Execute(
+		WithToolContext(context.Background(), "cli", "direct"),
+		map[string]any{"action": "list"},
+	)
+	if result.IsError {
+		t.Fatalf("list failed: %s", result.ForLLM)
+	}
+
+	local := time.UnixMilli(atMS).Format(cronLocalTimeLayout)
+	if want := "one-time at " + local; !strings.Contains(result.ForLLM, want) {
+		t.Fatalf("list should show %q, got: %s", want, result.ForLLM)
+	}
+	if dup := "next run: " + local; strings.Contains(result.ForLLM, dup) {
+		t.Fatalf("one-time job should not repeat its target as next run, got: %s", result.ForLLM)
+	}
+}
+
+// TestCronTool_GetIncludesLocalTimesJSON verifies get keeps the raw epoch
+// fields and adds derived local times under localTimes.
+func TestCronTool_GetIncludesLocalTimesJSON(t *testing.T) {
+	tool := newTestCronTool(t)
+	job := addTestCronJob(t, tool, "timed", "pico", "pico:chat-a", "")
+
+	last := time.Now().Add(-90 * time.Minute).UnixMilli()
+	next := time.Now().Add(30 * time.Minute).UnixMilli()
+	current, ok := tool.cronService.GetJob(job.ID)
+	if !ok {
+		t.Fatal("job not found")
+	}
+	current.State.LastRunAtMS = &last
+	current.State.LastStatus = "ok"
+	current.State.NextRunAtMS = &next
+	if err := tool.cronService.UpdateJob(current); err != nil {
+		t.Fatalf("UpdateJob() error: %v", err)
+	}
+
+	result := tool.Execute(
+		WithToolContext(context.Background(), "pico", "pico:chat-b"),
+		map[string]any{"action": "get", "job_id": job.ID},
+	)
+	if result.IsError {
+		t.Fatalf("get failed: %s", result.ForLLM)
+	}
+
+	// Existing consumers still parse the payload as a plain cron job.
+	got := parseCronJobResult(t, result)
+	if got.ID != job.ID {
+		t.Fatalf("get returned wrong job: %+v", got)
+	}
+	if got.State.NextRunAtMS == nil || *got.State.NextRunAtMS != next {
+		t.Fatalf("get payload lost nextRunAtMs: %+v", got.State)
+	}
+
+	var envelope struct {
+		LocalTimes map[string]string `json:"localTimes"`
+	}
+	text := result.ForLLM
+	if idx := strings.Index(text, "{"); idx >= 0 {
+		text = text[idx:]
+	}
+	if err := json.Unmarshal([]byte(text), &envelope); err != nil {
+		t.Fatalf("failed to parse get JSON %q: %v", result.ForLLM, err)
+	}
+	if want := time.UnixMilli(last).Format(cronLocalTimeLayout); envelope.LocalTimes["lastRun"] != want {
+		t.Fatalf("localTimes.lastRun = %q, want %q", envelope.LocalTimes["lastRun"], want)
+	}
+	if want := time.UnixMilli(next).Format(cronLocalTimeLayout); envelope.LocalTimes["nextRun"] != want {
+		t.Fatalf("localTimes.nextRun = %q, want %q", envelope.LocalTimes["nextRun"], want)
+	}
+}

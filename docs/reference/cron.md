@@ -41,11 +41,17 @@ picoclaw cron add --name "Ping" --message "heartbeat" --every 300
 The agent-facing `cron` tool supports these actions:
 
 - `add`: create a new job.
-- `list`: show accessible job names, ids, and schedules.
-- `get`: fetch one accessible persisted job by `job_id`, including its saved payload.
+- `list`: show accessible job names, ids, and schedules, with the last and next run in local time when known.
+- `get`: fetch one accessible persisted job by `job_id`, including its saved payload and derived local times.
 - `update`: partially update one accessible job by `job_id`; omitted fields are preserved.
 - `run`: execute one accessible job right now by `job_id`, without waiting for its schedule.
 - `remove`, `enable`, `disable`: existing management actions.
+
+`list` renders run times in the process time zone (the same zone used to
+evaluate cron expressions); `get` and `update` return the raw job JSON — epoch
+fields `state.nextRunAtMs` and `state.lastRunAtMs` included — together with a
+derived `localTimes` object (`lastRun`, `nextRun`) in that same format. Local
+times are informational; scheduling and storage always use the raw epoch fields.
 
 When rescheduling an existing task, use `list -> get -> update`. Do not use
 `remove -> add` just to change the schedule, because recreating a job can drop

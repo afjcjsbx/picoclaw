@@ -48,3 +48,19 @@ Reschedule a job while keeping its payload:
 ```json
 {"action": "update", "job_id": "79095b2f5685a0f2", "cron_expr": "30 10 * * *"}
 ```
+
+## Output
+
+`list` shows each job with its schedule and, when known, the last and next run in the process time zone:
+
+```text
+- Daily report (id: 79095b2f5685a0f2, 0 9 * * *, last run: 2026-10-18 09:00 CEST (ok), next run: 2026-10-19 09:00 CEST)
+```
+
+One-time jobs show `one-time at <time>`. `get` and `update` return the raw job JSON — including `state.nextRunAtMs` and `state.lastRunAtMs` as epoch milliseconds — plus a derived `localTimes` object with `lastRun` and `nextRun` in the same local format:
+
+```json
+{"id": "79095b2f5685a0f2", "localTimes": {"lastRun": "2026-10-18 09:00 CEST", "nextRun": "2026-10-19 09:00 CEST"}}
+```
+
+Local times are informational; scheduling and storage always use the raw epoch fields, and the agent does not need shell `date` conversions to report them.
