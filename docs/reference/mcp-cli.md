@@ -375,6 +375,8 @@ Use it when you need to configure MCP fields that are not exposed directly by `p
 
 If `$EDITOR` is not set, the command fails with an explicit error.
 
+The config is validated against the schema after the editor exits: if the saved document is invalid, the command reports the error instead of leaving a broken config behind.
+
 ## Recommended Workflow
 
 For common cases:
