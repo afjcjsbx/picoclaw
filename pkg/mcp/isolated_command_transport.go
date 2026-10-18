@@ -94,9 +94,12 @@ func (s *isolatedPipeRWC) Close() error {
 }
 
 type isolatedIOConn struct {
-	writeMu   sync.Mutex
-	rwc       io.ReadWriteCloser
-	incoming  <-chan isolatedMsgOrErr
+	writeMu  sync.Mutex
+	rwc      io.ReadWriteCloser
+	incoming <-chan isolatedMsgOrErr
+	// queue holds the remaining messages of a decoded batch. Read is invoked
+	// from a single goroutine, so queue needs no lock; writes are serialized
+	// separately by writeMu.
 	queue     []jsonrpc.Message
 	closeOnce sync.Once
 	closed    chan struct{}
