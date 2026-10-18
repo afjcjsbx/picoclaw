@@ -40,6 +40,73 @@ func TestNewJSONLStore_CreatesDirectory(t *testing.T) {
 	}
 }
 
+func TestNewJSONLStore_DurableWritesOption(t *testing.T) {
+	store, err := NewJSONLStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewJSONLStore: %v", err)
+	}
+	defer store.Close()
+	if !store.durableWrites {
+		t.Error("durableWrites = false by default, want true")
+	}
+
+	fast, err := NewJSONLStore(t.TempDir(), WithDurableWrites(false))
+	if err != nil {
+		t.Fatalf("NewJSONLStore: %v", err)
+	}
+	defer fast.Close()
+	if fast.durableWrites {
+		t.Error("durableWrites = true with WithDurableWrites(false), want false")
+	}
+}
+
+func TestAddMessage_NonDurableWritesRoundtrip(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewJSONLStore(dir, WithDurableWrites(false))
+	if err != nil {
+		t.Fatalf("NewJSONLStore: %v", err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+
+	if err = store.AddMessage(ctx, "nondurable", "user", "hello"); err != nil {
+		t.Fatalf("AddMessage: %v", err)
+	}
+	if err = store.AddMessage(ctx, "nondurable", "assistant", "world"); err != nil {
+		t.Fatalf("AddMessage: %v", err)
+	}
+
+	meta, err := store.readMeta("nondurable")
+	if err != nil {
+		t.Fatalf("readMeta: %v", err)
+	}
+	if meta.Count != 2 {
+		t.Errorf("meta.Count = %d, want 2", meta.Count)
+	}
+
+	history, err := store.GetHistory(ctx, "nondurable")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if len(history) != 2 || history[0].Content != "hello" || history[1].Content != "world" {
+		t.Fatalf("history = %+v, want hello/world", history)
+	}
+
+	// A fresh store over the same directory must see the same state.
+	reopened, err := NewJSONLStore(dir, WithDurableWrites(false))
+	if err != nil {
+		t.Fatalf("NewJSONLStore(reopen): %v", err)
+	}
+	defer reopened.Close()
+	reopenedHistory, err := reopened.GetHistory(ctx, "nondurable")
+	if err != nil {
+		t.Fatalf("GetHistory(reopen): %v", err)
+	}
+	if len(reopenedHistory) != 2 {
+		t.Fatalf("reopened history length = %d, want 2", len(reopenedHistory))
+	}
+}
+
 func TestAddMessage_BasicRoundtrip(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
@@ -1198,6 +1265,21 @@ func TestStore_PreservesExistingCreatedAt(t *testing.T) {
 func BenchmarkAddMessage(b *testing.B) {
 	dir := b.TempDir()
 	store, err := NewJSONLStore(dir)
+	if err != nil {
+		b.Fatalf("NewJSONLStore: %v", err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = store.AddMessage(ctx, "bench", "user", "benchmark message content")
+	}
+}
+
+func BenchmarkAddMessage_NonDurableWrites(b *testing.B) {
+	dir := b.TempDir()
+	store, err := NewJSONLStore(dir, WithDurableWrites(false))
 	if err != nil {
 		b.Fatalf("NewJSONLStore: %v", err)
 	}
