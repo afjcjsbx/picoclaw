@@ -98,18 +98,22 @@ func (s oauthStore) save(session *oauthSession) error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(file.Name())
-	defer file.Close()
+	tmpPath := file.Name()
+	// Any failure before the rename leaves a partial file behind: drop it.
+	// After a successful rename the path no longer exists.
+	defer os.Remove(tmpPath)
 	if _, err := file.Write(data); err != nil {
+		_ = file.Close()
 		return err
 	}
 	if err := file.Sync(); err != nil {
+		_ = file.Close()
 		return err
 	}
 	if err := file.Close(); err != nil {
 		return err
 	}
-	return os.Rename(file.Name(), s.path)
+	return os.Rename(tmpPath, s.path)
 }
 
 // LogoutOAuth removes local credentials. Already issued server-side tokens are
