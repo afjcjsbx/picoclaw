@@ -2,6 +2,7 @@ package integrationtools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -895,6 +896,201 @@ func TestMCPTool_Execute_LargeTextArtifactFailureKeepsWindowAndFullText(t *testi
 	}
 	if result.FullText != strings.TrimSpace(largeText) {
 		t.Fatalf("expected the full payload handed to the generic spill, got %d chars", len(result.FullText))
+	}
+}
+
+// TestMCPTool_Execute_LargeEnvelopeStoredAsPageableText verifies that a large
+// MCP server envelope ({result, structuredContent}) is unwrapped before the
+// artifact write: the stored file carries the wrapped text with real newlines
+// plus a <mcp-result-metadata> block, so read_file/search_files can page it
+// instead of reading one escaped JSON line.
+func TestMCPTool_Execute_LargeEnvelopeStoredAsPageableText(t *testing.T) {
+	workspace := t.TempDir()
+	body := "# Report\n\n" + strings.Repeat("pageable content line\n", 800)
+	envelope, err := json.Marshal(map[string]any{
+		"result":            body,
+		"structuredContent": map[string]any{"answer": 42},
+	})
+	if err != nil {
+		t.Fatalf("failed to build envelope: %v", err)
+	}
+
+	manager := &MockMCPManager{
+		callToolFunc: func(ctx context.Context, serverName, toolName string, arguments map[string]any) (*mcp.CallToolResult, error) {
+			return &mcp.CallToolResult{
+				Content: []mcp.Content{
+					&mcp.TextContent{Text: string(envelope)},
+				},
+			}, nil
+		},
+	}
+
+	mcpTool := NewMCPTool(manager, "test_server", &mcp.Tool{Name: "dump_payload"})
+	mcpTool.SetWorkspace(workspace)
+
+	result := mcpTool.Execute(context.Background(), nil)
+
+	if len(result.ArtifactTags) != 1 {
+		t.Fatalf("expected 1 artifact tag, got %d", len(result.ArtifactTags))
+	}
+	path := strings.TrimSuffix(strings.TrimPrefix(result.ArtifactTags[0], "[file:"), "]")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("expected artifact readable: %v", err)
+	}
+	stored := string(data)
+	if !strings.HasPrefix(stored, strings.TrimSpace(body)) {
+		t.Fatalf("expected the wrapped text at the top of the artifact, got %q", stored[:200])
+	}
+	if !strings.Contains(stored, toolshared.MCPResultMetadataTag) ||
+		!strings.Contains(stored, toolshared.MCPResultMetadataClosingTag) {
+		t.Fatalf("expected an mcp-result-metadata block, got %q", stored)
+	}
+	if !strings.Contains(stored, `"structuredContent"`) {
+		t.Fatalf("expected structuredContent preserved, got %q", stored)
+	}
+	if strings.Contains(stored, `\"result\"`) {
+		t.Fatalf("expected the JSON envelope replaced, got %q", stored)
+	}
+}
+
+// TestMCPTool_Execute_UnwrappedEnvelopeThatFitsIsKeptInline verifies that an
+// envelope whose escaped JSON is over the MCP budget but whose unwrapped text
+// fits is returned whole inline, with no artifact and no truncation notice.
+func TestMCPTool_Execute_UnwrappedEnvelopeThatFitsIsKeptInline(t *testing.T) {
+	workspace := t.TempDir()
+	body := strings.Repeat("a\n", 5500)
+	envelope, err := json.Marshal(map[string]any{
+		"result":            body,
+		"structuredContent": map[string]any{"answer": 42},
+	})
+	if err != nil {
+		t.Fatalf("failed to build envelope: %v", err)
+	}
+	if len(envelope) <= maxMCPInlineTextRunes {
+		t.Fatalf("fixture must exceed the MCP budget before unwrapping: %d", len(envelope))
+	}
+	if utf8.RuneCountInString(body) > maxMCPInlineTextRunes {
+		t.Fatalf("fixture must fit the MCP budget after unwrapping: %d", utf8.RuneCountInString(body))
+	}
+
+	manager := &MockMCPManager{
+		callToolFunc: func(ctx context.Context, serverName, toolName string, arguments map[string]any) (*mcp.CallToolResult, error) {
+			return &mcp.CallToolResult{
+				Content: []mcp.Content{
+					&mcp.TextContent{Text: string(envelope)},
+				},
+			}, nil
+		},
+	}
+
+	mcpTool := NewMCPTool(manager, "test_server", &mcp.Tool{Name: "dump_payload"})
+	mcpTool.SetWorkspace(workspace)
+
+	result := mcpTool.Execute(context.Background(), nil)
+
+	if result.LargeResultSpilled {
+		t.Fatalf("expected no spill flag for an unwrapped payload that fits")
+	}
+	if len(result.ArtifactTags) != 0 {
+		t.Fatalf("expected no artifact tags, got %+v", result.ArtifactTags)
+	}
+	if !strings.Contains(result.ForLLM, body) {
+		t.Fatalf("expected the full unwrapped text inline")
+	}
+	if strings.Contains(result.ForLLM, `\n`) {
+		t.Fatalf("expected real newlines, got escaped ones")
+	}
+	if strings.Contains(result.ForLLM, "[MCP RESULT TRUNCATED") {
+		t.Fatalf("expected no truncation notice, got %q", result.ForLLM[:min(120, len(result.ForLLM))])
+	}
+}
+
+// TestMCPTool_Execute_EnvelopeArtifactFailureHandsOverPageableText verifies the
+// fallback path: when .artifacts/mcp cannot be written, the generic spill gets
+// the unwrapped pageable text, not the original JSON envelope.
+func TestMCPTool_Execute_EnvelopeArtifactFailureHandsOverPageableText(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	workspaceFile := filepath.Join(workspaceRoot, "not-a-directory")
+	if err := os.WriteFile(workspaceFile, []byte("x"), 0o600); err != nil {
+		t.Fatalf("failed to create workspace file: %v", err)
+	}
+
+	body := strings.Repeat("pageable content line\n", 800)
+	envelope, err := json.Marshal(map[string]any{
+		"result":            body,
+		"structuredContent": map[string]any{"answer": 42},
+	})
+	if err != nil {
+		t.Fatalf("failed to build envelope: %v", err)
+	}
+
+	manager := &MockMCPManager{
+		callToolFunc: func(ctx context.Context, serverName, toolName string, arguments map[string]any) (*mcp.CallToolResult, error) {
+			return &mcp.CallToolResult{
+				Content: []mcp.Content{
+					&mcp.TextContent{Text: string(envelope)},
+				},
+			}, nil
+		},
+	}
+
+	mcpTool := NewMCPTool(manager, "test_server", &mcp.Tool{Name: "dump_payload"})
+	mcpTool.SetWorkspace(workspaceFile)
+
+	result := mcpTool.Execute(context.Background(), nil)
+
+	if !strings.Contains(result.ForLLM, "artifact persistence failed") {
+		t.Fatalf("expected persistence failure note, got %q", result.ForLLM)
+	}
+	if !strings.HasPrefix(result.FullText, strings.TrimSpace(body)) {
+		t.Fatalf("expected the handed-over text to start with the wrapped payload, got %q", result.FullText[:200])
+	}
+	if !strings.Contains(result.FullText, toolshared.MCPResultMetadataTag) {
+		t.Fatalf("expected the metadata block in the handed-over text, got %q", result.FullText)
+	}
+	if strings.Contains(result.FullText, `\"result\"`) {
+		t.Fatalf("expected the envelope unwrapped before the generic spill, got %q", result.FullText)
+	}
+}
+
+// TestMCPTool_Execute_SanitizedStandInEnvelopeStaysVerbatim verifies the
+// sanitizer gate: when the inline view is a stand-in notice (for example the
+// large-base64 message), the artifact keeps the raw payload verbatim instead of
+// unwrapping an envelope that merely looks like {result, structuredContent}.
+func TestMCPTool_Execute_SanitizedStandInEnvelopeStaysVerbatim(t *testing.T) {
+	workspace := t.TempDir()
+	payload := `{"result":"` + strings.Repeat("A", 4096) + `","structuredContent":{"k":"v"}}`
+
+	manager := &MockMCPManager{
+		callToolFunc: func(ctx context.Context, serverName, toolName string, arguments map[string]any) (*mcp.CallToolResult, error) {
+			return &mcp.CallToolResult{
+				Content: []mcp.Content{
+					&mcp.TextContent{Text: payload},
+				},
+			}, nil
+		},
+	}
+
+	mcpTool := NewMCPTool(manager, "test_server", &mcp.Tool{Name: "dump_payload"})
+	mcpTool.SetWorkspace(workspace)
+	mcpTool.SetMaxInlineTextRunes(64)
+
+	result := mcpTool.Execute(context.Background(), nil)
+
+	if !strings.Contains(result.ForLLM, "[MCP RESULT TRUNCATED") {
+		t.Fatalf("expected a bounded head+tail window, got %q", result.ForLLM)
+	}
+	if len(result.ArtifactTags) != 1 {
+		t.Fatalf("expected 1 artifact tag, got %d", len(result.ArtifactTags))
+	}
+	path := strings.TrimSuffix(strings.TrimPrefix(result.ArtifactTags[0], "[file:"), "]")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("expected artifact readable: %v", err)
+	}
+	if string(data) != payload {
+		t.Fatalf("expected the raw payload stored verbatim when the inline view is a stand-in")
 	}
 }
 
