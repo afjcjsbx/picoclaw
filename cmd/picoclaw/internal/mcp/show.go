@@ -91,7 +91,7 @@ func newShowCommand() *cobra.Command {
 				return nil
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 			defer cancel()
 
 			details, err := serverShowProbe(ctx, name, server, cfg.WorkspacePath())

@@ -40,7 +40,7 @@ func newListCommand() *cobra.Command {
 				}
 
 				if includeStatus && server.Enabled {
-					ctx, cancel := context.WithTimeout(context.Background(), timeout)
+					ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 					result, probeErr := serverProbe(ctx, name, server, cfg.WorkspacePath())
 					cancel()
 					if probeErr != nil {

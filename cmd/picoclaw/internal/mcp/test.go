@@ -27,7 +27,7 @@ func newTestCommand() *cobra.Command {
 				return fmt.Errorf("MCP server %q not found", name)
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 			defer cancel()
 
 			result, err := serverProbe(ctx, name, server, cfg.WorkspacePath())
