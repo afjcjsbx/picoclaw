@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -21,13 +22,24 @@ type addOptions struct {
 	Deferred   *bool // nil = not set, true = deferred, false = not deferred
 }
 
+// addTarget is the positional part of "mcp add": the server name plus the
+// remote URL or local command with its arguments.
+type addTarget struct {
+	Name    string
+	Command string
+	Args    []string
+}
+
+const addUsage = "usage: picoclaw mcp add [flags] <name> <command-or-url> [args...] " +
+	"or picoclaw mcp add [flags] <name> -- <command> [args...]"
+
 func newAddCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:                "add [flags] <name> <command-or-url> [args...]",
 		Short:              "Add or update an MCP server",
 		DisableFlagParsing: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			opts, name, target, targetArgs, showHelp, err := parseAddArgs(args)
+			opts, target, showHelp, err := parseAddArgs(args)
 			if showHelp {
 				return cmd.Help()
 			}
@@ -43,31 +55,31 @@ func newAddCommand() *cobra.Command {
 				cfg.Tools.MCP.Servers = make(map[string]config.MCPServerConfig)
 			}
 
-			if _, exists := cfg.Tools.MCP.Servers[name]; exists && !opts.Force {
+			if _, exists := cfg.Tools.MCP.Servers[target.Name]; exists && !opts.Force {
 				var overwrite bool
 
-				overwrite, err = confirmOverwrite(cmd.InOrStdin(), cmd.OutOrStdout(), name)
+				overwrite, err = confirmOverwrite(cmd.InOrStdin(), cmd.OutOrStdout(), target.Name)
 				if err != nil {
 					return fmt.Errorf("failed to confirm overwrite: %w", err)
 				}
 				if !overwrite {
-					return fmt.Errorf("aborted: MCP server %q already exists", name)
+					return fmt.Errorf("aborted: MCP server %q already exists", target.Name)
 				}
 			}
 
-			server, err := buildServerConfig(target, targetArgs, opts)
+			server, err := buildServerConfig(target.Command, target.Args, opts)
 			if err != nil {
 				return err
 			}
 
 			cfg.Tools.MCP.Enabled = true
-			cfg.Tools.MCP.Servers[name] = server
+			cfg.Tools.MCP.Servers[target.Name] = server
 
 			if err := saveValidatedConfig(cfg); err != nil {
 				return err
 			}
 
-			fmt.Fprintf(cmd.OutOrStdout(), "✓ MCP server %q saved.\n", name)
+			fmt.Fprintf(cmd.OutOrStdout(), "✓ MCP server %q saved.\n", target.Name)
 			return nil
 		},
 	}
@@ -85,7 +97,7 @@ func newAddCommand() *cobra.Command {
 	return cmd
 }
 
-func parseAddArgs(args []string) (addOptions, string, string, []string, bool, error) {
+func parseAddArgs(args []string) (addOptions, addTarget, bool, error) {
 	opts := addOptions{Transport: "stdio"}
 	var positional []string
 	serverArgs := make([]string, 0)
@@ -96,7 +108,7 @@ func parseAddArgs(args []string) (addOptions, string, string, []string, bool, er
 
 		switch {
 		case arg == "--help" || arg == "-h":
-			return addOptions{}, "", "", nil, true, nil
+			return addOptions{}, addTarget{}, true, nil
 		case arg == "--":
 			if i+1 < len(args) {
 				explicitCommand = append(explicitCommand, args[i+1:]...)
@@ -114,7 +126,7 @@ func parseAddArgs(args []string) (addOptions, string, string, []string, bool, er
 			opts.Deferred = &f
 		case arg == "--transport" || arg == "-t":
 			if i+1 >= len(args) {
-				return addOptions{}, "", "", nil, false, fmt.Errorf("missing value for %s", arg)
+				return addOptions{}, addTarget{}, false, fmt.Errorf("missing value for %s", arg)
 			}
 			i++
 			opts.Transport = args[i]
@@ -122,13 +134,13 @@ func parseAddArgs(args []string) (addOptions, string, string, []string, bool, er
 			opts.Transport = strings.TrimPrefix(arg, "--transport=")
 		case arg == "--env" || arg == "-e":
 			if i+1 >= len(args) {
-				return addOptions{}, "", "", nil, false, fmt.Errorf("missing value for %s", arg)
+				return addOptions{}, addTarget{}, false, fmt.Errorf("missing value for %s", arg)
 			}
 			i++
 			opts.Env = append(opts.Env, args[i])
 		case arg == "--env-file":
 			if i+1 >= len(args) {
-				return addOptions{}, "", "", nil, false, fmt.Errorf("missing value for %s", arg)
+				return addOptions{}, addTarget{}, false, fmt.Errorf("missing value for %s", arg)
 			}
 			i++
 			opts.EnvFile = args[i]
@@ -138,7 +150,7 @@ func parseAddArgs(args []string) (addOptions, string, string, []string, bool, er
 			opts.EnvFile = strings.TrimPrefix(arg, "--env-file=")
 		case arg == "--header" || arg == "-H":
 			if i+1 >= len(args) {
-				return addOptions{}, "", "", nil, false, fmt.Errorf("missing value for %s", arg)
+				return addOptions{}, addTarget{}, false, fmt.Errorf("missing value for %s", arg)
 			}
 			i++
 			opts.Headers = append(opts.Headers, args[i])
@@ -154,27 +166,28 @@ func parseAddArgs(args []string) (addOptions, string, string, []string, bool, er
 
 	if len(explicitCommand) > 0 {
 		if len(positional) != 1 {
-			return addOptions{}, "", "", nil, false, fmt.Errorf(
-				"usage: picoclaw mcp add [flags] <name> <command-or-url> [args...] or picoclaw mcp add [flags] <name> -- <command> [args...]",
-			)
+			return addOptions{}, addTarget{}, false, errors.New(addUsage)
 		}
-		if len(explicitCommand) == 0 {
-			return addOptions{}, "", "", nil, false, fmt.Errorf("missing stdio command after --")
-		}
-		return opts, positional[0], explicitCommand[0], explicitCommand[1:], false, nil
+		return opts, addTarget{
+			Name:    positional[0],
+			Command: explicitCommand[0],
+			Args:    explicitCommand[1:],
+		}, false, nil
 	}
 
 	if len(positional) < 2 {
-		return addOptions{}, "", "", nil, false, fmt.Errorf(
-			"usage: picoclaw mcp add [flags] <name> <command-or-url> [args...] or picoclaw mcp add [flags] <name> -- <command> [args...]",
-		)
+		return addOptions{}, addTarget{}, false, errors.New(addUsage)
 	}
 
 	targetArgs := make([]string, 0, len(positional)-2+len(serverArgs))
 	targetArgs = append(targetArgs, positional[2:]...)
 	targetArgs = append(targetArgs, serverArgs...)
 
-	return opts, positional[0], positional[1], targetArgs, false, nil
+	return opts, addTarget{
+		Name:    positional[0],
+		Command: positional[1],
+		Args:    targetArgs,
+	}, false, nil
 }
 
 func buildServerConfig(target string, args []string, opts addOptions) (config.MCPServerConfig, error) {
