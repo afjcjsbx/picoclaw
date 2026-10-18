@@ -322,12 +322,18 @@ func validateLocalCommandPath(command string) error {
 	return nil
 }
 
-func defaultServerProbe(
+// probeServer starts a throwaway manager for one server and extracts a value
+// from its connection. The status probe and the show probe share this
+// bootstrap so the manager lifecycle lives in one place.
+func probeServer[T any](
 	ctx context.Context,
 	name string,
 	server config.MCPServerConfig,
 	workspacePath string,
-) (probeResult, error) {
+	extract func(*picomcp.ServerConnection) T,
+) (T, error) {
+	var zero T
+
 	mgr := picomcp.NewManager()
 	defer func() { _ = mgr.Close() }()
 
@@ -340,15 +346,26 @@ func defaultServerProbe(
 	}
 
 	if err := mgr.LoadFromMCPConfig(ctx, mcpCfg, workspacePath); err != nil {
-		return probeResult{}, err
+		return zero, err
 	}
 
 	conn, ok := mgr.GetServer(name)
 	if !ok {
-		return probeResult{}, fmt.Errorf("server %q did not register a connection", name)
+		return zero, fmt.Errorf("server %q did not register a connection", name)
 	}
 
-	return probeResult{ToolCount: len(conn.Tools)}, nil
+	return extract(conn), nil
+}
+
+func defaultServerProbe(
+	ctx context.Context,
+	name string,
+	server config.MCPServerConfig,
+	workspacePath string,
+) (probeResult, error) {
+	return probeServer(ctx, name, server, workspacePath, func(conn *picomcp.ServerConnection) probeResult {
+		return probeResult{ToolCount: len(conn.Tools)}
+	})
 }
 
 func confirmOverwrite(r io.Reader, w io.Writer, name string) (bool, error) {

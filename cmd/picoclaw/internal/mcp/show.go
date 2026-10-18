@@ -35,35 +35,17 @@ func defaultServerShowProbe(
 	server config.MCPServerConfig,
 	workspacePath string,
 ) ([]toolDetail, error) {
-	mgr := picomcp.NewManager()
-	defer func() { _ = mgr.Close() }()
-
-	server.Enabled = true
-	mcpCfg := config.MCPConfig{
-		ToolConfig: config.ToolConfig{Enabled: true},
-		Servers: map[string]config.MCPServerConfig{
-			name: server,
-		},
-	}
-
-	if err := mgr.LoadFromMCPConfig(ctx, mcpCfg, workspacePath); err != nil {
-		return nil, err
-	}
-
-	conn, ok := mgr.GetServer(name)
-	if !ok {
-		return nil, fmt.Errorf("server %q did not register a connection", name)
-	}
-
-	details := make([]toolDetail, 0, len(conn.Tools))
-	for _, tool := range conn.Tools {
-		details = append(details, toolDetail{
-			Name:        tool.Name,
-			Description: tool.Description,
-			Parameters:  extractParameters(tool.InputSchema),
-		})
-	}
-	return details, nil
+	return probeServer(ctx, name, server, workspacePath, func(conn *picomcp.ServerConnection) []toolDetail {
+		details := make([]toolDetail, 0, len(conn.Tools))
+		for _, tool := range conn.Tools {
+			details = append(details, toolDetail{
+				Name:        tool.Name,
+				Description: tool.Description,
+				Parameters:  extractParameters(tool.InputSchema),
+			})
+		}
+		return details
+	})
 }
 
 func extractParameters(schema any) []paramDetail {
