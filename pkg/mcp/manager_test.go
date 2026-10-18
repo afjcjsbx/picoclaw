@@ -385,7 +385,7 @@ func TestGetAllTools_FiltersEmptyTools(t *testing.T) {
 	mgr.servers["empty"] = &ServerConnection{Tools: nil}
 	mgr.servers["with-tools"] = &ServerConnection{Tools: []*sdkmcp.Tool{{}}}
 
-	all := mgr.GetAllTools()
+	all := mgr.getAllTools()
 	if _, ok := all["empty"]; ok {
 		t.Fatal("expected server without tools to be excluded")
 	}

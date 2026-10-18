@@ -660,8 +660,8 @@ func (m *Manager) Close() error {
 	return nil
 }
 
-// GetAllTools returns all tools from all connected servers
-func (m *Manager) GetAllTools() map[string][]*mcp.Tool {
+// getAllTools returns all tools from all connected servers.
+func (m *Manager) getAllTools() map[string][]*mcp.Tool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
