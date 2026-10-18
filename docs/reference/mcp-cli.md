@@ -352,7 +352,8 @@ Login discovers the server's OAuth metadata, opens the browser, and receives
 the callback on a local loopback port. Use `--no-browser` to print the URL,
 `--callback-port` for a fixed port, `--scope` for requested scopes, and
 `--client-id` with `--issuer` for a registered public client. The login timeout
-defaults to five minutes. Tokens are stored under `$PICOCLAW_HOME/auth/mcp/`
+defaults to five minutes and can be changed with `--timeout`; the flow is
+cancelled when the deadline expires. Tokens are stored under `$PICOCLAW_HOME/auth/mcp/`
 with owner-only permissions, outside `config.json`; background connections
 reuse and refresh them. Logout removes local credentials but does not revoke
 server-side tokens. Restart a running gateway to close its active session.
