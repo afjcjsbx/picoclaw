@@ -291,46 +291,16 @@ func (s *Store) AddMessageWithPartsAndReasoning(
 		storedCreatedAt = normalizeMessageCreatedAt(time.Now())
 	}
 
-	// Derive readable content from Parts for FTS5 indexing and summary formatting
-	readableContent := partsToReadableContent(parts)
-
-	result, err := tx.ExecContext(
-		ctx,
-		"INSERT INTO messages (conversation_id, role, content, model_name, reasoning_content, token_count, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-		convID,
-		role,
-		readableContent,
-		modelName,
-		reasoningContent,
-		tokenCount,
-		formatSQLiteTime(storedCreatedAt),
-	)
+	msgID, err := insertMessageTx(ctx, tx, convID, Message{
+		Role:             role,
+		ModelName:        modelName,
+		ReasoningContent: reasoningContent,
+		TokenCount:       tokenCount,
+		CreatedAt:        storedCreatedAt,
+		Parts:            parts,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("add message: %w", err)
-	}
-	msgID, err := result.LastInsertId()
-	if err != nil {
-		return nil, fmt.Errorf("get last insert id: %w", err)
-	}
-
-	for i, p := range parts {
-		_, err = tx.ExecContext(
-			ctx,
-			`INSERT INTO message_parts (message_id, type, text, name, arguments, tool_call_id, media_uri, mime_type, ordinal)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			msgID,
-			p.Type,
-			p.Text,
-			p.Name,
-			p.Arguments,
-			p.ToolCallID,
-			p.MediaURI,
-			p.MimeType,
-			i,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("add message part %d: %w", i, err)
-		}
+		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit: %w", err)
@@ -352,6 +322,94 @@ func (s *Store) AddMessageWithPartsAndReasoning(
 		msg.Parts[i] = p
 	}
 	return msg, nil
+}
+
+// insertMessageTx inserts one message row — deriving the FTS-indexed content
+// from its parts when present — followed by its part rows, inside an existing
+// transaction. It returns the new message ID.
+func insertMessageTx(ctx context.Context, tx *sql.Tx, convID int64, msg Message) (int64, error) {
+	storedCreatedAt := normalizeMessageCreatedAt(msg.CreatedAt)
+	if storedCreatedAt.IsZero() {
+		storedCreatedAt = normalizeMessageCreatedAt(time.Now())
+	}
+
+	content := msg.Content
+	if len(msg.Parts) > 0 {
+		// Derive readable content from Parts for FTS5 indexing and summary formatting
+		content = partsToReadableContent(msg.Parts)
+	}
+
+	result, err := tx.ExecContext(
+		ctx,
+		"INSERT INTO messages (conversation_id, role, content, model_name, reasoning_content, token_count, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		convID,
+		msg.Role,
+		content,
+		msg.ModelName,
+		msg.ReasoningContent,
+		msg.TokenCount,
+		formatSQLiteTime(storedCreatedAt),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("add message: %w", err)
+	}
+	msgID, err := result.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("get last insert id: %w", err)
+	}
+
+	for i, p := range msg.Parts {
+		_, err = tx.ExecContext(
+			ctx,
+			`INSERT INTO message_parts (message_id, type, text, name, arguments, tool_call_id, media_uri, mime_type, ordinal)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			msgID,
+			p.Type,
+			p.Text,
+			p.Name,
+			p.Arguments,
+			p.ToolCallID,
+			p.MediaURI,
+			p.MimeType,
+			i,
+		)
+		if err != nil {
+			return 0, fmt.Errorf("add message part %d: %w", i, err)
+		}
+	}
+	return msgID, nil
+}
+
+// AddMessagesBatch inserts a batch of messages (with optional parts) and
+// appends them to the conversation context in a single transaction, so a
+// batch of N messages costs one commit instead of N (plus one for the context
+// append). It returns the inserted message IDs in input order.
+func (s *Store) AddMessagesBatch(ctx context.Context, convID int64, msgs []Message) ([]int64, error) {
+	if len(msgs) == 0 {
+		return nil, nil
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	ids := make([]int64, 0, len(msgs))
+	for i := range msgs {
+		id, err := insertMessageTx(ctx, tx, convID, msgs[i])
+		if err != nil {
+			return nil, fmt.Errorf("message %d: %w", i, err)
+		}
+		ids = append(ids, id)
+	}
+	if err := s.appendContextMessagesTx(ctx, tx, convID, ids); err != nil {
+		return nil, fmt.Errorf("append context: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit: %w", err)
+	}
+	return ids, nil
 }
 
 // GetMessages retrieves messages for a conversation.
@@ -1068,6 +1126,25 @@ func (s *Store) appendContextItems(ctx context.Context, convID int64, items []Co
 	}
 	defer tx.Rollback()
 
+	if err := s.appendContextItemsTx(ctx, tx, convID, items); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// appendContextMessagesTx appends message-backed items at the next ordinals
+// inside an existing transaction.
+func (s *Store) appendContextMessagesTx(ctx context.Context, tx *sql.Tx, convID int64, messageIDs []int64) error {
+	items := make([]ContextItem, len(messageIDs))
+	for i, id := range messageIDs {
+		items[i] = ContextItem{ItemType: "message", MessageID: id}
+	}
+	return s.appendContextItemsTx(ctx, tx, convID, items)
+}
+
+// appendContextItemsTx is the transaction-scoped implementation of context
+// item appends. The caller owns the transaction boundary.
+func (s *Store) appendContextItemsTx(ctx context.Context, tx *sql.Tx, convID int64, items []ContextItem) error {
 	maxOrd, err := s.GetMaxOrdinalTx(ctx, tx, convID)
 	if err != nil {
 		return err
@@ -1096,7 +1173,7 @@ func (s *Store) appendContextItems(ctx context.Context, convID int64, items []Co
 		}
 		ordinal += OrdinalStep
 	}
-	return tx.Commit()
+	return nil
 }
 
 // resolveItemTokenCountTx looks up token count within a transaction.

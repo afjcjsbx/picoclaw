@@ -3,6 +3,7 @@ package seahorse
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -594,6 +595,79 @@ func TestStoreGetRootSummaries(t *testing.T) {
 }
 
 // --- Context Item Operations ---
+
+// TestStoreAddMessagesBatch verifies the batched insert path: content, parts
+// and context ordering survive while all inserts share one transaction.
+func TestStoreAddMessagesBatch(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	conv, err := s.GetOrCreateConversation(ctx, "agent:batch")
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+
+	msgs := []Message{
+		{Role: "user", Content: "first", TokenCount: 3},
+		{Role: "assistant", ModelName: "test-model", Parts: []MessagePart{
+			{Type: "text", Text: "calling a tool"},
+			{Type: "tool_use", Name: "grep", Arguments: `{"pattern":"x"}`, ToolCallID: "call-1"},
+		}, TokenCount: 7},
+		{Role: "user", Content: "third", TokenCount: 4},
+	}
+
+	ids, err := s.AddMessagesBatch(ctx, conv.ConversationID, msgs)
+	if err != nil {
+		t.Fatalf("AddMessagesBatch: %v", err)
+	}
+	if len(ids) != len(msgs) {
+		t.Fatalf("returned %d ids, want %d", len(ids), len(msgs))
+	}
+	for i := 1; i < len(ids); i++ {
+		if ids[i] <= ids[i-1] {
+			t.Fatalf("ids not in insertion order: %v", ids)
+		}
+	}
+
+	stored, err := s.GetMessages(ctx, conv.ConversationID, 0, 0)
+	if err != nil {
+		t.Fatalf("GetMessages: %v", err)
+	}
+	if len(stored) != len(msgs) {
+		t.Fatalf("stored %d messages, want %d", len(stored), len(msgs))
+	}
+	if stored[0].Content != "first" || stored[2].Content != "third" {
+		t.Fatalf("plain content mismatch: %q / %q", stored[0].Content, stored[2].Content)
+	}
+	if !strings.Contains(stored[1].Content, "tool_use: grep") {
+		t.Fatalf("parts-derived content missing tool_use summary: %q", stored[1].Content)
+	}
+
+	withParts, err := s.GetMessageByID(ctx, ids[1])
+	if err != nil {
+		t.Fatalf("GetMessageByID: %v", err)
+	}
+	if len(withParts.Parts) != 2 || withParts.Parts[1].Name != "grep" {
+		t.Fatalf("parts not persisted: %+v", withParts.Parts)
+	}
+
+	items, err := s.GetContextItems(ctx, conv.ConversationID)
+	if err != nil {
+		t.Fatalf("GetContextItems: %v", err)
+	}
+	if len(items) != len(msgs) {
+		t.Fatalf("context has %d items, want %d", len(items), len(msgs))
+	}
+	for i, item := range items {
+		if item.ItemType != "message" || item.MessageID != ids[i] {
+			t.Fatalf("context item %d = %+v, want message id %d", i, item, ids[i])
+		}
+	}
+
+	if ids, err := s.AddMessagesBatch(ctx, conv.ConversationID, nil); err != nil || ids != nil {
+		t.Fatalf("AddMessagesBatch(nil) = %v, %v; want nil, nil", ids, err)
+	}
+}
 
 func TestStoreContextItems(t *testing.T) {
 	s := openTestStore(t)
