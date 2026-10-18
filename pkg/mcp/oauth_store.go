@@ -33,8 +33,13 @@ type (
 	}
 )
 
+// oauthStoreLocks serializes token-store access per store path across
+// goroutines in this process. Entries are never evicted: one mutex per distinct
+// store path, and paths are derived from configured server identities, so the
+// map is bounded by the configuration rather than by request volume.
 var oauthStoreLocks sync.Map
 
+// lock acquires the per-store mutex and returns the release function.
 func (s oauthStore) lock() func() {
 	value, _ := oauthStoreLocks.LoadOrStore(s.path, new(sync.Mutex))
 	mu := value.(*sync.Mutex)
