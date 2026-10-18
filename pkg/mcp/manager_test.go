@@ -558,6 +558,39 @@ func TestConnectServer_StreamableHTTPRequestResponseMode(t *testing.T) {
 	}
 }
 
+func TestConnectServer_DoesNotForwardHeadersToRedirectTargets(t *testing.T) {
+	t.Parallel()
+
+	leaked := make(chan string, 1)
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		leaked <- r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer target.Close()
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+"/mcp", http.StatusTemporaryRedirect)
+	}))
+	defer origin.Close()
+
+	conn, err := connectServer(context.Background(), "redirect", config.MCPServerConfig{
+		Enabled: true,
+		Type:    "http",
+		URL:     origin.URL + "/mcp",
+		Headers: map[string]string{"Authorization": "Bearer secret-token"},
+	})
+	if conn != nil {
+		_ = conn.Session.Close()
+	}
+	if err == nil {
+		t.Fatal("connectServer() followed a cross-origin redirect, want error")
+	}
+	select {
+	case header := <-leaked:
+		t.Fatalf("redirect target received a request; Authorization header = %q", header)
+	default:
+	}
+}
+
 func TestCallTool_ReconnectsWhenHTTPServerLosesSession(t *testing.T) {
 	originalConnectServerFunc := connectServerFunc
 	t.Cleanup(func() {

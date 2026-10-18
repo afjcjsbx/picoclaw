@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,12 +30,6 @@ import (
 // connected; only the startup burst is bounded.
 const mcpMaxConcurrentConnect = 4
 
-// headerTransport is an http.RoundTripper that adds custom headers to requests
-type headerTransport struct {
-	base    http.RoundTripper
-	headers map[string]string
-}
-
 func expandHomeCommandPath(command string) string {
 	if command == "" || command[0] != '~' {
 		return command
@@ -51,23 +46,6 @@ func expandHomeCommandPath(command string) string {
 		return filepath.Join(home, command[2:])
 	}
 	return command
-}
-
-func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	// Clone the request to avoid modifying the original
-	req = req.Clone(req.Context())
-
-	// Add custom headers
-	for key, value := range t.headers {
-		req.Header.Set(key, value)
-	}
-
-	// Use the base transport
-	base := t.base
-	if base == nil {
-		base = http.DefaultTransport
-	}
-	return base.RoundTrip(req)
 }
 
 // loadEnvFile loads environment variables from a file in .env format
@@ -435,32 +413,35 @@ func connectServerWithOAuth(
 				"disableStandaloneSSE": disableStandaloneSSE,
 			})
 
-		sseTransport := &mcp.StreamableClientTransport{
-			Endpoint:             cfg.URL,
-			DisableStandaloneSSE: disableStandaloneSSE,
-			OAuthHandler:         handler,
+		origin, parseErr := url.Parse(cfg.URL)
+		if parseErr != nil {
+			return nil, fmt.Errorf("invalid MCP URL: %w", parseErr)
 		}
-
-		// Add custom headers if provided
 		if len(cfg.Headers) > 0 {
-			// Create a custom HTTP client with header-injecting transport
-			sseTransport.HTTPClient = &http.Client{
-				Transport: &headerTransport{
-					base:    http.DefaultTransport,
-					headers: cfg.Headers,
-				},
-			}
 			logger.DebugCF("mcp", "Added custom HTTP headers",
 				map[string]any{
 					"server":       name,
 					"header_count": len(cfg.Headers),
 				})
 		}
+
+		// Every request is bound to the configured origin and redirects may not
+		// leave it, so configured headers (for example Authorization) are never
+		// replayed to another host.
+		var base http.RoundTripper = http.DefaultTransport
+		checkRedirect := sameOriginRedirectPolicy(origin)
 		if handler != nil {
-			sseTransport.HTTPClient = &http.Client{
-				Transport:     &headerTransport{base: oauthHTTPTransport{}, headers: cfg.Headers},
-				CheckRedirect: rejectOAuthRedirect,
-			}
+			base = oauthHTTPTransport{}
+			checkRedirect = rejectOAuthRedirect
+		}
+		sseTransport := &mcp.StreamableClientTransport{
+			Endpoint:             cfg.URL,
+			DisableStandaloneSSE: disableStandaloneSSE,
+			OAuthHandler:         handler,
+			HTTPClient: &http.Client{
+				Transport:     &pluginHTTPTransport{base: base, origin: origin, headers: cfg.Headers},
+				CheckRedirect: checkRedirect,
+			},
 		}
 
 		transport = sseTransport

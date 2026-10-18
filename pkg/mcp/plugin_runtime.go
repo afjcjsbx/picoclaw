@@ -48,6 +48,22 @@ func sameOrigin(a, b *url.URL) bool {
 	return strings.EqualFold(a.Scheme, b.Scheme) && strings.EqualFold(a.Hostname(), b.Hostname()) && port(a) == port(b)
 }
 
+// sameOriginRedirectPolicy follows redirects only while they stay on the
+// configured origin, bounding the chain like net/http's default policy. It is
+// shared by every MCP HTTP client so configured headers can never be replayed
+// to a different origin.
+func sameOriginRedirectPolicy(origin *url.URL) func(*http.Request, []*http.Request) error {
+	return func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return fmt.Errorf("too many redirects")
+		}
+		if !sameOrigin(origin, req.URL) {
+			return fmt.Errorf("MCP HTTP redirect changed origin")
+		}
+		return nil
+	}
+}
+
 func (t *pluginHTTPTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if !sameOrigin(t.origin, req.URL) {
 		return nil, fmt.Errorf("plugin HTTP request changed origin")
@@ -127,20 +143,17 @@ func (m *Manager) ConnectPluginServer(
 		if oauthHandler != nil {
 			base = oauthHTTPTransport{}
 		}
+		// Redirects must stay on the configured origin so configured headers
+		// (for example Authorization) are never replayed to another host.
+		var checkRedirect func(*http.Request, []*http.Request) error
+		if oauthHandler != nil {
+			checkRedirect = rejectOAuthRedirect
+		} else {
+			checkRedirect = sameOriginRedirectPolicy(origin)
+		}
 		client := &http.Client{
-			Transport: &pluginHTTPTransport{base: base, origin: origin, headers: cfg.Headers},
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				if oauthHandler != nil {
-					return rejectOAuthRedirect(req, via)
-				}
-				if len(via) >= 10 {
-					return fmt.Errorf("too many redirects")
-				}
-				if !sameOrigin(origin, req.URL) {
-					return fmt.Errorf("plugin redirect changed origin")
-				}
-				return nil
-			},
+			Transport:     &pluginHTTPTransport{base: base, origin: origin, headers: cfg.Headers},
+			CheckRedirect: checkRedirect,
 		}
 		if cfg.Type == "sse" && oauthHandler == nil {
 			transport = &sdk.SSEClientTransport{Endpoint: cfg.URL, HTTPClient: client}
