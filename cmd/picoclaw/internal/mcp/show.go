@@ -130,7 +130,7 @@ func newShowCommand() *cobra.Command {
 func buildServerInfo(name string, server config.MCPServerConfig, discoveryEnabled bool) cliui.MCPShowServer {
 	info := cliui.MCPShowServer{
 		Name:              name,
-		Type:              inferTransportType(server),
+		Type:              displayTransportType(server),
 		Target:            renderServerTarget(server),
 		Enabled:           server.Enabled,
 		EffectiveDeferred: server.EffectiveDeferred(discoveryEnabled),

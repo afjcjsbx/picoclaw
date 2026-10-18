@@ -188,7 +188,10 @@ func loadMCPConfigSchema() (*jsonschema.Resolved, error) {
 	return mcpConfigSchema, errMcpConfigSchema
 }
 
-func inferTransportType(server config.MCPServerConfig) string {
+// displayTransportType returns the transport name for CLI output. A config
+// that resolves to no transport (neither URL nor command) is shown as
+// "unknown" instead of an empty cell.
+func displayTransportType(server config.MCPServerConfig) string {
 	transport := config.EffectiveMCPTransportType(server)
 	if transport == "" {
 		return "unknown"
@@ -197,7 +200,7 @@ func inferTransportType(server config.MCPServerConfig) string {
 }
 
 func renderServerTarget(server config.MCPServerConfig) string {
-	transport := inferTransportType(server)
+	transport := displayTransportType(server)
 	if transport == "http" || transport == "sse" {
 		if server.URL == "" {
 			return "<missing url>"

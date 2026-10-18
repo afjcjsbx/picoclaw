@@ -52,7 +52,7 @@ func newListCommand() *cobra.Command {
 
 				rows = append(rows, cliui.MCPListRow{
 					Name:              name,
-					Type:              inferTransportType(server),
+					Type:              displayTransportType(server),
 					Target:            renderServerTarget(server),
 					Status:            status,
 					EffectiveDeferred: server.EffectiveDeferred(cfg.Tools.MCP.Discovery.Enabled),
