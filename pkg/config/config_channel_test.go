@@ -249,6 +249,55 @@ func TestInitChannelList_TelegramStreamingEnvCompatibility(t *testing.T) {
 	assert.Equal(t, 0, picoCfg.Streaming.MinGrowthChars)
 }
 
+func TestInitChannelList_TelegramTypingKeepalive(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		env  string
+		want bool
+	}{
+		{name: "defaults to enabled", raw: `{"token":"telegram-token"}`, want: true},
+		{name: "explicitly enabled", raw: `{"token":"telegram-token","typing_keepalive":true}`, want: true},
+		{name: "explicitly disabled", raw: `{"token":"telegram-token","typing_keepalive":false}`, want: false},
+		{name: "env override disables", raw: `{"token":"telegram-token"}`, env: "false", want: false},
+		{
+			name: "env override wins over config",
+			raw:  `{"token":"telegram-token","typing_keepalive":false}`,
+			env:  "true",
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.env != "" {
+				t.Setenv("PICOCLAW_CHANNELS_TELEGRAM_TYPING_KEEPALIVE", tt.env)
+			}
+
+			channels := ChannelsConfig{
+				"telegram": {
+					Type:     ChannelTelegram,
+					Enabled:  true,
+					Settings: RawNode(tt.raw),
+				},
+			}
+			if err := InitChannelList(channels); err != nil {
+				t.Fatalf("InitChannelList() error = %v", err)
+			}
+
+			decoded, err := channels["telegram"].GetDecoded()
+			if err != nil {
+				t.Fatalf("GetDecoded() error = %v", err)
+			}
+			settings, ok := decoded.(*TelegramSettings)
+			if !ok {
+				t.Fatalf("decoded settings type = %T, want *TelegramSettings", decoded)
+			}
+			assert.Equal(t, tt.want, settings.TypingKeepaliveEnabled())
+		})
+	}
+}
+
 func TestInitChannelList_RejectsNegativeStreamingDeliveryValues(t *testing.T) {
 	tests := []struct {
 		name        string
