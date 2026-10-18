@@ -65,6 +65,8 @@ func (m *Manager) ConnectPluginServer(
 		cmd := exec.CommandContext(sessionCtx, cfg.Command, cfg.Args...)
 		cmd.Dir = opts.Directory
 		cmd.Stderr = opts.Stderr
+		// The host supplies the exact child environment: no ambient
+		// inheritance and no cfg.Env merge, unlike native stdio servers.
 		cmd.Env = append([]string{}, opts.Environment...)
 		transport = &isolatedCommandTransport{Command: cmd, TerminateDuration: time.Second}
 	case "streamable-http", "sse":
