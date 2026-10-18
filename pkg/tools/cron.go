@@ -598,25 +598,36 @@ func formatLocalTimeMS(ms *int64) string {
 	return time.UnixMilli(*ms).Format(cronLocalTimeLayout)
 }
 
+// localTimesForJob renders the last and next run of a job in the process time
+// zone. Missing or non-positive timestamps render as empty strings.
+func localTimesForJob(job *cron.CronJob) cronJobLocalTimes {
+	return cronJobLocalTimes{
+		LastRun: formatLocalTimeMS(job.State.LastRunAtMS),
+		NextRun: formatLocalTimeMS(job.State.NextRunAtMS),
+	}
+}
+
 // jobTimingSummary renders the last and next run of a job as local times for
 // the human-readable list output. The next run is skipped for one-time jobs
 // when it duplicates the scheduled time shown with the schedule.
 func jobTimingSummary(job *cron.CronJob) string {
+	times := localTimesForJob(job)
+
 	parts := make([]string, 0, 2)
-	if last := formatLocalTimeMS(job.State.LastRunAtMS); last != "" {
-		entry := "last run: " + last
+	if times.LastRun != "" {
+		entry := "last run: " + times.LastRun
 		if job.State.LastStatus != "" {
 			entry += " (" + job.State.LastStatus + ")"
 		}
 		parts = append(parts, entry)
 	}
 
-	next := formatLocalTimeMS(job.State.NextRunAtMS)
-	if job.Schedule.Kind == "at" && next != "" && next == formatLocalTimeMS(job.Schedule.AtMS) {
-		next = ""
+	if job.Schedule.Kind == "at" && job.State.NextRunAtMS != nil && job.Schedule.AtMS != nil &&
+		*job.State.NextRunAtMS == *job.Schedule.AtMS {
+		times.NextRun = ""
 	}
-	if next != "" {
-		parts = append(parts, "next run: "+next)
+	if times.NextRun != "" {
+		parts = append(parts, "next run: "+times.NextRun)
 	}
 
 	return strings.Join(parts, ", ")
@@ -642,10 +653,7 @@ func formatCronJobJSON(job *cron.CronJob) string {
 	}
 
 	view := cronJobLocalView{CronJob: job}
-	times := cronJobLocalTimes{
-		LastRun: formatLocalTimeMS(job.State.LastRunAtMS),
-		NextRun: formatLocalTimeMS(job.State.NextRunAtMS),
-	}
+	times := localTimesForJob(job)
 	if times.LastRun != "" || times.NextRun != "" {
 		view.LocalTimes = &times
 	}
