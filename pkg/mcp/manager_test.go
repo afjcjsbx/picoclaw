@@ -591,6 +591,48 @@ func TestConnectServer_DoesNotForwardHeadersToRedirectTargets(t *testing.T) {
 	}
 }
 
+func TestConnectServer_ClosesPreviousSessionWithSameName(t *testing.T) {
+	originalConnectServerFunc := connectServerFunc
+	t.Cleanup(func() { connectServerFunc = originalConnectServerFunc })
+
+	var transports []*scriptedTransport
+	connectServerFunc = func(_ context.Context, _ string, _ config.MCPServerConfig) (*ServerConnection, error) {
+		conn, transport, err := newScriptedServerConnection("session", nil, nil)
+		if err != nil {
+			return nil, err
+		}
+		transports = append(transports, transport)
+		return conn, nil
+	}
+
+	mgr := NewManager()
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	cfg := config.MCPServerConfig{Enabled: true, Type: "http", URL: "https://example.invalid/mcp"}
+	if err := mgr.ConnectServer(context.Background(), "dup", cfg); err != nil {
+		t.Fatalf("first ConnectServer() error = %v", err)
+	}
+	if err := mgr.ConnectServer(context.Background(), "dup", cfg); err != nil {
+		t.Fatalf("second ConnectServer() error = %v", err)
+	}
+
+	if len(transports) != 2 {
+		t.Fatalf("connect calls = %d, want 2", len(transports))
+	}
+	if !transportClosed(transports[0]) {
+		t.Fatal("previous connection session was not closed")
+	}
+	if transportClosed(transports[1]) {
+		t.Fatal("current connection session must stay open")
+	}
+}
+
+func transportClosed(transport *scriptedTransport) bool {
+	transport.mu.Lock()
+	defer transport.mu.Unlock()
+	return transport.closed
+}
+
 func TestCallTool_ReconnectsWhenHTTPServerLosesSession(t *testing.T) {
 	originalConnectServerFunc := connectServerFunc
 	t.Cleanup(func() {

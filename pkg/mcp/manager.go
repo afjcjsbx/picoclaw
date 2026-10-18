@@ -337,7 +337,7 @@ func (m *Manager) ConnectServer(
 		return fmt.Errorf("manager is closed")
 	}
 
-	m.servers[name] = conn
+	m.registerConnection(name, conn)
 	for _, tool := range conn.Tools {
 		toolName := ""
 		if tool != nil {
@@ -347,6 +347,19 @@ func (m *Manager) ConnectServer(
 	}
 	m.publishServerEvent(runtimeevents.KindMCPServerConnected, name, cfg, len(conn.Tools), nil)
 	return nil
+}
+
+// registerConnection stores conn under name. A previous connection with the
+// same name is closed first so its session and child process cannot leak.
+// Callers must hold m.mu.
+func (m *Manager) registerConnection(name string, conn *ServerConnection) {
+	if previous, ok := m.servers[name]; ok {
+		if previous.cancel != nil {
+			previous.cancel()
+		}
+		_ = previous.Session.Close()
+	}
+	m.servers[name] = conn
 }
 
 func connectServer(
