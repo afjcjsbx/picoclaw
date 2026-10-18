@@ -18,6 +18,8 @@ import (
 
 	"golang.org/x/oauth2"
 
+	"github.com/modelcontextprotocol/go-sdk/auth"
+
 	"github.com/sipeed/picoclaw/pkg/config"
 )
 
@@ -121,6 +123,13 @@ func LogoutOAuth(name string, cfg config.MCPServerConfig) error {
 		return nil
 	}
 	return err
+}
+
+// newStoredOAuthHandler builds the persisted-credential handler used by
+// background connections. name selects the credential store identity and may
+// be qualified by the caller (for example "pluginID:serverName").
+func newStoredOAuthHandler(name string, cfg config.MCPServerConfig) auth.OAuthHandler {
+	return &storedOAuthHandler{name: name, store: newOAuthStore(name, cfg)}
 }
 
 type storedOAuthHandler struct {

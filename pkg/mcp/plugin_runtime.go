@@ -133,7 +133,7 @@ func (m *Manager) ConnectPluginServer(
 			if oauthName == "" {
 				oauthName = name
 			}
-			oauthHandler = &storedOAuthHandler{name: oauthName, store: newOAuthStore(oauthName, cfg)}
+			oauthHandler = newStoredOAuthHandler(oauthName, cfg)
 		}
 		origin, err := url.Parse(cfg.URL)
 		if err != nil {

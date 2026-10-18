@@ -381,7 +381,7 @@ func connectServer(
 		if err := validateOAuthConfig(cfg); err != nil {
 			return nil, err
 		}
-		handler = &storedOAuthHandler{name: name, store: newOAuthStore(name, cfg)}
+		handler = newStoredOAuthHandler(name, cfg)
 	}
 	return connectServerWithOAuth(ctx, name, cfg, handler)
 }
