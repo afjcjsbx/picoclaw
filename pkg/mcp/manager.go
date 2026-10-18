@@ -131,7 +131,7 @@ type Manager struct {
 	servers       map[string]*ServerConnection
 	runtimeEvents runtimeevents.Bus
 	mu            sync.RWMutex
-	closed        atomic.Bool    // changed from bool to atomic.Bool to avoid TOCTOU race
+	closed        atomic.Bool    // set once by Close; read without the mutex to fail closed
 	wg            sync.WaitGroup // tracks in-flight CallTool calls
 }
 
