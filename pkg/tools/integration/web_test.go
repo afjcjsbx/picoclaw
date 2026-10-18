@@ -59,6 +59,43 @@ func TestWebTool_WebFetch_Success(t *testing.T) {
 	}
 }
 
+// TestWebTool_WebFetch_ResultEnvelopeKeys pins the web_fetch result shape.
+// Recognition in pkg/tools/normalization.go keys off this exact set, so a new
+// producer field must be accompanied by a normalizer update.
+func TestWebTool_WebFetch_ResultEnvelopeKeys(t *testing.T) {
+	withPrivateWebFetchHostsAllowed(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("page body"))
+	}))
+	defer server.Close()
+
+	tool, err := NewWebFetchTool(50000, format, testFetchLimit)
+	if err != nil {
+		t.Fatalf("failed to create web fetch tool: %v", err)
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{"url": server.URL})
+	if result.IsError {
+		t.Fatalf("expected success, got %q", result.ForLLM)
+	}
+
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(result.ForLLM), &envelope); err != nil {
+		t.Fatalf("expected a JSON envelope, got %q: %v", result.ForLLM, err)
+	}
+	for _, key := range []string{"url", "status", "extractor", "truncated", "length", "text"} {
+		if _, ok := envelope[key]; !ok {
+			t.Fatalf("missing envelope key %q in %v", key, envelope)
+		}
+	}
+	if len(envelope) != 6 {
+		t.Fatalf("unexpected envelope keys: %v", envelope)
+	}
+}
+
 // TestWebTool_WebFetch_JSON verifies JSON content handling
 func TestWebTool_WebFetch_JSON(t *testing.T) {
 	withPrivateWebFetchHostsAllowed(t)

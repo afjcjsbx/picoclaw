@@ -2,6 +2,7 @@ package tools
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -33,11 +34,40 @@ const (
 	// re-spill and loop.
 	largeResultPreviewHeadRunes = 2048
 	largeResultPreviewTailRunes = 1024
+
+	// webFetchMetadataTag delimits the sibling fields kept for the model when a
+	// web_fetch envelope is spilled as its pageable text. The values survive in
+	// the artifact; only the JSON envelope around them is replaced.
+	webFetchMetadataTag        = "<web-fetch-metadata>"
+	webFetchMetadataClosingTag = "</web-fetch-metadata>"
 )
 
 var (
 	inlineMarkdownDataURLRe = regexp.MustCompile(`!\[[^\]]*\]\((data:[^)]+)\)`)
 	inlineRawDataURLRe      = regexp.MustCompile(`data:[^;\s]+;base64,[A-Za-z0-9+/=\r\n]+`)
+
+	// webFetchEnvelopeKeys is the complete key set of the web_fetch result
+	// envelope (pkg/tools/integration/web.go). A JSON object whose keys stay
+	// inside this set with a non-empty string "text" is that tool's own
+	// envelope, never an arbitrary tool's JSON payload.
+	webFetchEnvelopeKeys = map[string]struct{}{
+		"url":       {},
+		"status":    {},
+		"extractor": {},
+		"truncated": {},
+		"length":    {},
+		"text":      {},
+	}
+
+	// webFetchEnvelopeSpec lets the shared unwrapper parse the payload once and
+	// recognize the web_fetch shape without a separate key-set walk.
+	webFetchEnvelopeSpec = toolshared.EnvelopeSpec{
+		Keys:     webFetchEnvelopeKeys,
+		TextKey:  "text",
+		OpenTag:  webFetchMetadataTag,
+		CloseTag: webFetchMetadataClosingTag,
+		Validate: validateWebFetchEnvelope,
+	}
 )
 
 func normalizeToolResult(
@@ -128,7 +158,8 @@ func normalizeToolResult(
 // view, so the omitted middle stays readable from the artifact.
 //
 // Security note: this runs before the sensitive-data filter is applied, so the
-// artifact file on disk keeps the raw, unredacted tool output. Only the content
+// artifact file on disk keeps the unredacted tool output — verbatim, or the
+// normalized pageable text for a recognized JSON envelope. Only the content
 // injected into the model context is filtered. Treat workspace artifacts as
 // sensitive data. See docs/security/sensitive_data_filtering.md.
 func persistLargeResultArtifact(result *ToolResult, toolName, workspace string, maxRunes int) {
@@ -157,6 +188,21 @@ func persistLargeResultArtifact(result *ToolResult, toolName, workspace string, 
 	size := utf8.RuneCountInString(text)
 	if text == "" || size <= maxRunes {
 		return
+	}
+
+	// A recognized JSON envelope (web_fetch, or an MCP tool's text payload) is
+	// spilled as the pageable text it wraps. The size decision above stays on
+	// the raw result — that is what would have cost context — but the artifact
+	// and preview both carry real newlines instead of one escaped line.
+	if pageable := pageableToolResultText(text, toolName); pageable != text {
+		text = pageable
+		size = utf8.RuneCountInString(text)
+		if size <= maxRunes {
+			// Unwrapping, not truncation, brought the result back under the
+			// inline budget: keep it whole and artifact-free.
+			result.ForLLM = text
+			return
+		}
 	}
 
 	preview, omitted, headRunes, tailRunes := buildLargeResultPreview(text, size, maxRunes)
@@ -231,6 +277,59 @@ func buildLargeResultPreview(text string, total, maxRunes int) (preview string, 
 	head, tail := text[:headEnd], text[tailStart:]
 	return fmt.Sprintf("%s\n\n[... %d characters truncated ...]\n\n%s", head, omitted, tail),
 		omitted, headRunes, tailRunes
+}
+
+// pageableToolResultText rewrites a recognized JSON envelope — the web_fetch
+// result {url, status, extractor, truncated, length, text} and, for MCP tools,
+// a text payload shaped like {"result": <text>, ...} — into the pageable text
+// it wraps: the payload's text with real newlines, followed by the sibling
+// fields in a metadata block.
+//
+// Persisting such an envelope verbatim would put the whole document on ONE
+// line with escaped newlines, so the read_file/search_files pagination the
+// spill notice recommends could not page it at all. The web_fetch envelope is
+// recognized by SHAPE: a JSON object whose keys stay inside its known key set,
+// with the envelope's discriminator fields present and well typed. That is
+// safe because {"url": ..., "status": ..., "text": ...} is not a generic shape.
+// The MCP text payload is recognized only for MCP tools (names prefixed mcp_):
+// {"result": "..."} is a common generic JSON shape, and an exec or hook result
+// must stay verbatim. Anything else — unparseable JSON, a non-object, an
+// unknown key, a missing or mistyped discriminator, or a missing, empty, or
+// non-string text field — is returned verbatim, so opaque JSON payloads from
+// other tools (exec, curl, ...) keep their exact bytes and stay jq-able.
+func pageableToolResultText(content, toolName string) string {
+	specs := make([]toolshared.EnvelopeSpec, 0, 2)
+	if isMCPToolName(toolName) {
+		// {"result": "..."} is common outside MCP, so only MCP tools may use
+		// the MCP spec; the web_fetch shape remains shape-based for any tool.
+		specs = append(specs, toolshared.MCPEnvelopeSpec)
+	}
+	specs = append(specs, webFetchEnvelopeSpec)
+	return toolshared.UnwrapEnvelopes(content, specs...)
+}
+
+// validateWebFetchEnvelope requires the producer's discriminator fields in
+// addition to the text member checked by the shared renderer. A bare
+// {"text": "..."} object from a hook or another tool is not this envelope.
+func validateWebFetchEnvelope(payload map[string]json.RawMessage) bool {
+	var pageURL string
+	if err := json.Unmarshal(payload["url"], &pageURL); err != nil || pageURL == "" {
+		return false
+	}
+	var status any
+	if err := json.Unmarshal(payload["status"], &status); err != nil {
+		return false
+	}
+	_, ok := status.(float64)
+	return ok
+}
+
+// isMCPToolName reports whether toolName belongs to an MCP tool. MCPTool.Name
+// always prefixes the sanitized server and tool names with "mcp_" (see
+// pkg/tools/integration/mcp_tool.go), so the prefix is the stable discriminator
+// between a server text payload and an arbitrary tool's JSON output.
+func isMCPToolName(toolName string) bool {
+	return strings.HasPrefix(toolName, "mcp_")
 }
 
 func extractInlineMediaRefs(

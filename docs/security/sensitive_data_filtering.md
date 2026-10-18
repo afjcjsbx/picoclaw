@@ -69,7 +69,7 @@ Large tool results (over `tools.max_inline_result_chars`, default `16384`) are s
 The spill happens inside tool-result normalization, **before** `filter_sensitive_data` is applied. The filter runs later and only on the content that is injected into the model context, so the two surfaces diverge:
 
 - **Model context**: still filtered — the preview embedded in the result passes through `filter_sensitive_data` like any other tool content.
-- **Artifact on disk**: **not filtered** — it contains the raw tool output, including any secret that the filter would otherwise have replaced with `[FILTERED]`.
+- **Artifact on disk**: **not filtered** — it contains the full tool output (verbatim, or the normalized pageable text for a recognized JSON envelope), including any secret that the filter would otherwise have replaced with `[FILTERED]`.
 - **Model access**: the artifact path is exposed to the model (a structured `[file:...]` tag plus an inline pointer). The model can read it with `read_file` or forward it with `send_file`; `send_file` delivers the raw file without filtering.
 
 This applies to every tool. It was already true for MCP large-text artifacts, but the behavior is now generalized to all tools (for example, a large `exec` result can persist raw credentials to the workspace even when filtering is enabled). The artifact directory is created with `0700` and files with `0600`, but permissions do not redact content.
