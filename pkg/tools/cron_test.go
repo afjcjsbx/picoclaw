@@ -1622,6 +1622,26 @@ func TestCronTool_ListShowsOneTimeScheduleInLocalTime(t *testing.T) {
 	}
 }
 
+// TestFormatLocalTimeMS_ISO8601 verifies rendered times are ISO 8601
+// (RFC 3339) with an offset and round-trip to the original instant.
+func TestFormatLocalTimeMS_ISO8601(t *testing.T) {
+	ms := int64(1792393200000)
+	got := formatLocalTimeMS(&ms)
+	if want := time.UnixMilli(ms).Format(time.RFC3339); got != want {
+		t.Fatalf("formatLocalTimeMS() = %q, want %q", got, want)
+	}
+	parsed, err := time.Parse(time.RFC3339, got)
+	if err != nil {
+		t.Fatalf("rendered time %q is not ISO 8601: %v", got, err)
+	}
+	if !parsed.Equal(time.UnixMilli(ms)) {
+		t.Fatalf("rendered time %q does not round-trip the instant", got)
+	}
+	if empty := formatLocalTimeMS(nil); empty != "" {
+		t.Fatalf("nil timestamp should render empty, got %q", empty)
+	}
+}
+
 // TestCronTool_GetIncludesLocalTimesJSON verifies get keeps the raw epoch
 // fields and adds derived local times under localTimes.
 func TestCronTool_GetIncludesLocalTimesJSON(t *testing.T) {

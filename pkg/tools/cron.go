@@ -582,11 +582,12 @@ func (t *CronTool) canAccessJob(ctx context.Context, job *cron.CronJob) bool {
 	return true
 }
 
-// cronLocalTimeLayout is the human-readable timestamp format used in cron tool
-// output. Times are rendered in the process time zone, the same zone used to
-// evaluate cron expressions, so agents do not need to shell out to `date` to
-// interpret epoch milliseconds.
-const cronLocalTimeLayout = "2006-01-02 15:04 MST"
+// cronLocalTimeLayout is the timestamp format used for rendered run times. It
+// is ISO 8601 (RFC 3339) in the process time zone, so every value carries a
+// numeric UTC offset and stays unambiguous and machine-parseable. The zone is
+// the same one used to evaluate cron expressions, so agents do not need to
+// shell out to `date` to interpret epoch milliseconds.
+const cronLocalTimeLayout = time.RFC3339
 
 // formatLocalTimeMS renders an epoch-millisecond timestamp as local time.
 // Nil or non-positive values have no meaningful time and render as "".

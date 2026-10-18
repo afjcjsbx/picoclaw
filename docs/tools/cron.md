@@ -51,16 +51,16 @@ Reschedule a job while keeping its payload:
 
 ## Output
 
-`list` shows each job with its schedule and, when known, the last and next run in the process time zone:
+`list` shows each job with its schedule and, when known, the last and next run as ISO 8601 timestamps (RFC 3339) carrying the process time zone's UTC offset:
 
 ```text
-- Daily report (id: 79095b2f5685a0f2, 0 9 * * *, last run: 2026-10-18 09:00 CEST (ok), next run: 2026-10-19 09:00 CEST)
+- Daily report (id: 79095b2f5685a0f2, 0 9 * * *, last run: 2026-10-18T09:00:00+02:00 (ok), next run: 2026-10-19T09:00:00+02:00)
 ```
 
-One-time jobs show `one-time at <time>`. `get` and `update` return the raw job JSON — including `state.nextRunAtMs` and `state.lastRunAtMs` as epoch milliseconds — plus a derived `localTimes` object with `lastRun` and `nextRun` in the same local format:
+One-time jobs show `one-time at <time>`. `get` and `update` return the raw job JSON — including `state.nextRunAtMs` and `state.lastRunAtMs` as epoch milliseconds — plus a derived `localTimes` object with `lastRun` and `nextRun` in the same ISO 8601 format:
 
 ```json
-{"id": "79095b2f5685a0f2", "localTimes": {"lastRun": "2026-10-18 09:00 CEST", "nextRun": "2026-10-19 09:00 CEST"}}
+{"id": "79095b2f5685a0f2", "localTimes": {"lastRun": "2026-10-18T09:00:00+02:00", "nextRun": "2026-10-19T09:00:00+02:00"}}
 ```
 
-Local times are informational; scheduling and storage always use the raw epoch fields, and the agent does not need shell `date` conversions to report them.
+Rendered times are informational; scheduling and storage always use the raw epoch fields, and the agent does not need shell `date` conversions to report them.
