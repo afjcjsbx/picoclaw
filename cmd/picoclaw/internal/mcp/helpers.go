@@ -140,8 +140,6 @@ func normalizedConfigForSave(cfg *config.Config) *config.Config {
 		return &clone
 	}
 
-	clone.Tools = cfg.Tools
-	clone.Tools.MCP = cfg.Tools.MCP
 	clone.Tools.MCP.Servers = make(map[string]config.MCPServerConfig, len(cfg.Tools.MCP.Servers))
 	for name, server := range cfg.Tools.MCP.Servers {
 		if server.Type != "" {
