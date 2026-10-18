@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net/http"
-	"net/url"
 	"os/exec"
 	"time"
 
@@ -75,46 +73,25 @@ func (m *Manager) ConnectPluginServer(
 			}
 			oauthHandler = newStoredOAuthHandler(oauthName, cfg)
 		}
-		origin, err := url.Parse(cfg.URL)
+		transportType := "http"
+		if cfg.Type == "sse" {
+			transportType = "sse"
+		}
+		var err error
+		transport, err = buildHTTPTransport(name, cfg, transportType, oauthHandler, true)
 		if err != nil {
 			return err
-		}
-		var base http.RoundTripper = http.DefaultTransport
-		if oauthHandler != nil {
-			base = oauthHTTPTransport{}
-		}
-		// Redirects must stay on the configured origin so configured headers
-		// (for example Authorization) are never replayed to another host.
-		var checkRedirect func(*http.Request, []*http.Request) error
-		if oauthHandler != nil {
-			checkRedirect = rejectOAuthRedirect
-		} else {
-			checkRedirect = sameOriginRedirectPolicy(origin)
-		}
-		client := &http.Client{
-			Transport:     &originBoundTransport{base: base, origin: origin, headers: cfg.Headers},
-			CheckRedirect: checkRedirect,
-		}
-		if cfg.Type == "sse" && oauthHandler == nil {
-			transport = &sdk.SSEClientTransport{Endpoint: cfg.URL, HTTPClient: client}
-		} else {
-			transport = &sdk.StreamableClientTransport{
-				Endpoint:     cfg.URL,
-				HTTPClient:   client,
-				OAuthHandler: oauthHandler,
-				// The optional GET listener is not supported by every hosted server.
-				DisableStandaloneSSE: cfg.Type != "sse",
-			}
 		}
 	default:
 		return fmt.Errorf("unsupported plugin MCP transport %q", cfg.Type)
 	}
-	client := sdk.NewClient(&sdk.Implementation{Name: "picoclaw-plugins", Version: "1.0.0"}, nil)
-	session, err := client.Connect(sessionCtx, transport, nil)
+
+	dialed, err := dialServer(sessionCtx, "picoclaw-plugins", transport, name)
 	if err != nil {
 		return err
 	}
-	serverTools := listServerTools(sessionCtx, name, session, session.InitializeResult())
+	session := dialed.Session
+	serverTools := dialed.Tools
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed.Load() {

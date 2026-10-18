@@ -5,8 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,7 +18,6 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
-	"github.com/sipeed/picoclaw/pkg/fileutil"
 	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
@@ -380,120 +377,25 @@ func connectServerWithOAuth(
 			"args_count": len(cfg.Args),
 		})
 
-	// Create client
-	client := mcp.NewClient(&mcp.Implementation{
-		Name:    "picoclaw",
-		Version: "1.0.0",
-	}, nil)
-
-	// Create transport based on configuration
-	// Auto-detect transport type if not explicitly specified
-	var transport mcp.Transport
 	transportType := config.EffectiveMCPTransportType(cfg)
 	if transportType == "" {
 		return nil, fmt.Errorf("either URL or command must be provided")
 	}
 
+	var transport mcp.Transport
 	switch transportType {
 	case "sse", "http":
-		if cfg.URL == "" {
-			return nil, fmt.Errorf("URL is required for SSE/HTTP transport")
+		var err error
+		transport, err = buildHTTPTransport(name, cfg, transportType, handler, false)
+		if err != nil {
+			return nil, err
 		}
-
-		// Configure DisableStandaloneSSE based on transport type.
-		// - "http": Streamable HTTP request-response mode. Disable the standalone
-		//   SSE stream to avoid compatibility issues with servers that don't
-		//   support the optional GET listener.
-		// - "sse": Bidirectional mode. Enable the standalone SSE stream to receive
-		//   server-initiated notifications (e.g., ToolListChangedNotification).
-		// - Empty or auto-detected: Defaults to "sse" behavior (standalone SSE enabled).
-		disableStandaloneSSE := transportType == "http"
-
-		logger.DebugCF("mcp", "Using SSE/HTTP transport",
-			map[string]any{
-				"server":               name,
-				"url":                  cfg.URL,
-				"disableStandaloneSSE": disableStandaloneSSE,
-			})
-
-		origin, parseErr := url.Parse(cfg.URL)
-		if parseErr != nil {
-			return nil, fmt.Errorf("invalid MCP URL: %w", parseErr)
-		}
-		if len(cfg.Headers) > 0 {
-			logger.DebugCF("mcp", "Added custom HTTP headers",
-				map[string]any{
-					"server":       name,
-					"header_count": len(cfg.Headers),
-				})
-		}
-
-		// Every request is bound to the configured origin and redirects may not
-		// leave it, so configured headers (for example Authorization) are never
-		// replayed to another host.
-		var base http.RoundTripper = http.DefaultTransport
-		checkRedirect := sameOriginRedirectPolicy(origin)
-		if handler != nil {
-			base = oauthHTTPTransport{}
-			checkRedirect = rejectOAuthRedirect
-		}
-		sseTransport := &mcp.StreamableClientTransport{
-			Endpoint:             cfg.URL,
-			DisableStandaloneSSE: disableStandaloneSSE,
-			OAuthHandler:         handler,
-			HTTPClient: &http.Client{
-				Transport:     &originBoundTransport{base: base, origin: origin, headers: cfg.Headers},
-				CheckRedirect: checkRedirect,
-			},
-		}
-
-		transport = sseTransport
 	case "stdio":
-		if cfg.Command == "" {
-			return nil, fmt.Errorf("command is required for stdio transport")
+		var err error
+		transport, err = buildNativeStdioTransport(ctx, name, cfg)
+		if err != nil {
+			return nil, err
 		}
-		logger.DebugCF("mcp", "Using stdio transport",
-			map[string]any{
-				"server":  name,
-				"command": cfg.Command,
-			})
-		// Create command with context
-		cmd := exec.CommandContext(ctx, fileutil.ExpandHome(cfg.Command), cfg.Args...)
-
-		// Build environment variables with proper override semantics
-		// Use a map to ensure config variables override file variables
-		// Inherit only basic process variables unless this server explicitly opts in.
-		envMap := inheritedMCPEnv(cmd.Environ(), cfg.InheritEnv)
-
-		// Load environment variables from file if specified
-		if cfg.EnvFile != "" {
-			envVars, err := loadEnvFile(cfg.EnvFile)
-			if err != nil {
-				return nil, fmt.Errorf("failed to load env file %s: %w", cfg.EnvFile, err)
-			}
-			for k, v := range envVars {
-				envMap[k] = v
-			}
-			logger.DebugCF("mcp", "Loaded environment variables from file",
-				map[string]any{
-					"server":    name,
-					"envFile":   cfg.EnvFile,
-					"var_count": len(envVars),
-				})
-		}
-
-		// Environment variables from config override those from file
-		for k, v := range cfg.Env {
-			envMap[k] = v
-		}
-
-		// Convert map to slice
-		env := make([]string, 0, len(envMap))
-		for k, v := range envMap {
-			env = append(env, fmt.Sprintf("%s=%s", k, v))
-		}
-		cmd.Env = env
-		transport = &isolatedCommandTransport{Command: cmd}
 	default:
 		return nil, fmt.Errorf(
 			"unsupported transport type: %s (supported: stdio, sse, http, streamable-http)",
@@ -501,14 +403,13 @@ func connectServerWithOAuth(
 		)
 	}
 
-	// Connect to server
-	session, err := client.Connect(ctx, transport, nil)
+	dialed, err := dialServer(ctx, "picoclaw", transport, name)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect: %w", err)
 	}
 
 	// Get server info
-	initResult := session.InitializeResult()
+	initResult := dialed.Session.InitializeResult()
 	logger.InfoCF("mcp", "Connected to MCP server",
 		map[string]any{
 			"server":        name,
@@ -517,13 +418,10 @@ func connectServerWithOAuth(
 			"protocol":      initResult.ProtocolVersion,
 		})
 
-	// List available tools if supported
-	tools := listServerTools(ctx, name, session, initResult)
-
 	return &ServerConnection{
 		Config:  cfg,
-		Session: session,
-		Tools:   tools,
+		Session: dialed.Session,
+		Tools:   dialed.Tools,
 	}, nil
 }
 
