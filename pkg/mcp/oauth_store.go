@@ -158,6 +158,10 @@ func loginRequired(name string) error {
 	return fmt.Errorf("MCP OAuth authorization required; run picoclaw mcp login %q", name)
 }
 
+// storedTokenSource refreshes a persisted token on demand. The context is
+// retained because the oauth2.TokenSource interface has no context parameter:
+// the connection's context must still flow into refresh requests and their
+// cancellation.
 type storedTokenSource struct {
 	ctx   context.Context
 	name  string
