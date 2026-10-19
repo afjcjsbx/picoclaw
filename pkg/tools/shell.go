@@ -579,6 +579,10 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 		StartTime:  time.Now().Unix(),
 		Status:     "running",
 		ptyKeyMode: PtyKeyModeCSI,
+		// Initialize the output buffer before the session is published to the
+		// manager: readers (session_read/list_sessions) must never observe a
+		// session whose buffer is still nil.
+		outputBuffer: &bytes.Buffer{},
 	}
 
 	var cmd *exec.Cmd
@@ -641,8 +645,6 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 
 	session.PID = cmd.Process.Pid
 	t.sessionManager.Add(session)
-
-	session.outputBuffer = &bytes.Buffer{}
 
 	// PTY mode: read from ptyMaster and wait for process
 	// Note: On Linux, closing ptyMaster doesn't interrupt blocking Read() calls,
