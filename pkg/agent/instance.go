@@ -139,7 +139,7 @@ func NewAgentInstance(
 				allowReadPaths,
 			))
 		default:
-			toolsRegistry.Register(fstools.NewReadFileBytesTool(
+			toolsRegistry.Register(fstools.NewReadFileTool(
 				workspace, readRestrict, maxReadFileSize, allowReadPaths,
 			))
 		}

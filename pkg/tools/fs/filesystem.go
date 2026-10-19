@@ -333,15 +333,6 @@ func NewReadFileTool(
 	}
 }
 
-func NewReadFileBytesTool(
-	workspace string,
-	restrict bool,
-	maxReadFileSize int,
-	allowPaths ...[]*regexp.Regexp,
-) *ReadFileTool {
-	return NewReadFileTool(workspace, restrict, maxReadFileSize, allowPaths...)
-}
-
 func NewReadFileLinesTool(
 	workspace string,
 	restrict bool,
