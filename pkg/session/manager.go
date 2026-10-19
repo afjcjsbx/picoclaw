@@ -14,23 +14,19 @@ import (
 	"github.com/sipeed/picoclaw/pkg/session/schema"
 )
 
-type Session struct {
-	Key      string              `json:"key"`
-	Messages []providers.Message `json:"messages"`
-	Summary  string              `json:"summary,omitempty"`
-	Created  time.Time           `json:"created"`
-	Updated  time.Time           `json:"updated"`
-}
+// sessionRecord is the persisted session snapshot; the layout lives in the
+// shared schema package so the migration path reads the same struct.
+type sessionRecord = schema.Record
 
 type SessionManager struct {
-	sessions map[string]*Session
+	sessions map[string]*sessionRecord
 	mu       sync.RWMutex
 	storage  string
 }
 
 func NewSessionManager(storage string) *SessionManager {
 	sm := &SessionManager{
-		sessions: make(map[string]*Session),
+		sessions: make(map[string]*sessionRecord),
 		storage:  storage,
 	}
 
@@ -42,9 +38,9 @@ func NewSessionManager(storage string) *SessionManager {
 	return sm
 }
 
-func newSession(key string) *Session {
+func newSession(key string) *sessionRecord {
 	now := time.Now()
-	return &Session{
+	return &sessionRecord{
 		Key:      key,
 		Messages: []providers.Message{},
 		Created:  now,
@@ -224,7 +220,7 @@ func (sm *SessionManager) Save(_ context.Context, key string) error {
 		return nil
 	}
 
-	snapshot := Session{
+	snapshot := sessionRecord{
 		Key:     stored.Key,
 		Summary: stored.Summary,
 		Created: stored.Created,
@@ -300,7 +296,7 @@ func (sm *SessionManager) loadSessions() error {
 			continue
 		}
 
-		var session Session
+		var session sessionRecord
 		if err := json.Unmarshal(data, &session); err != nil {
 			continue
 		}

@@ -9,10 +9,11 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/sipeed/picoclaw/pkg/session/schema"
 )
 
 func writeJSONSession(
-	t *testing.T, dir string, filename string, sess jsonSession,
+	t *testing.T, dir string, filename string, sess schema.Record,
 ) {
 	t.Helper()
 	data, err := json.MarshalIndent(sess, "", "  ")
@@ -30,7 +31,7 @@ func TestMigrateFromJSON_Basic(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
 
-	writeJSONSession(t, sessionsDir, "test.json", jsonSession{
+	writeJSONSession(t, sessionsDir, "test.json", schema.Record{
 		Key: "test",
 		Messages: []providers.Message{
 			{Role: "user", Content: "hello"},
@@ -74,7 +75,7 @@ func TestMigrateFromJSON_WithToolCalls(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
 
-	writeJSONSession(t, sessionsDir, "tools.json", jsonSession{
+	writeJSONSession(t, sessionsDir, "tools.json", schema.Record{
 		Key: "tools",
 		Messages: []providers.Message{
 			{
@@ -134,7 +135,7 @@ func TestMigrateFromJSON_MultipleFiles(t *testing.T) {
 
 	for i := 0; i < 3; i++ {
 		key := string(rune('a' + i))
-		writeJSONSession(t, sessionsDir, key+".json", jsonSession{
+		writeJSONSession(t, sessionsDir, key+".json", schema.Record{
 			Key:      key,
 			Messages: []providers.Message{{Role: "user", Content: "msg " + key}},
 			Created:  time.Now(),
@@ -168,7 +169,7 @@ func TestMigrateFromJSON_InvalidJSON(t *testing.T) {
 	ctx := context.Background()
 
 	// One valid, one invalid.
-	writeJSONSession(t, sessionsDir, "good.json", jsonSession{
+	writeJSONSession(t, sessionsDir, "good.json", schema.Record{
 		Key:      "good",
 		Messages: []providers.Message{{Role: "user", Content: "ok"}},
 		Created:  time.Now(),
@@ -205,7 +206,7 @@ func TestMigrateFromJSON_RenamesFiles(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
 
-	writeJSONSession(t, sessionsDir, "rename.json", jsonSession{
+	writeJSONSession(t, sessionsDir, "rename.json", schema.Record{
 		Key:      "rename",
 		Messages: []providers.Message{{Role: "user", Content: "hi"}},
 		Created:  time.Now(),
@@ -236,7 +237,7 @@ func TestMigrateFromJSON_Idempotent(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
 
-	writeJSONSession(t, sessionsDir, "idem.json", jsonSession{
+	writeJSONSession(t, sessionsDir, "idem.json", schema.Record{
 		Key:      "idem",
 		Messages: []providers.Message{{Role: "user", Content: "once"}},
 		Created:  time.Now(),
@@ -275,7 +276,7 @@ func TestMigrateFromJSON_ColonInKey(t *testing.T) {
 	ctx := context.Background()
 
 	// File is named telegram_123 (sanitized), but the key inside is telegram:123.
-	writeJSONSession(t, sessionsDir, "telegram_123.json", jsonSession{
+	writeJSONSession(t, sessionsDir, "telegram_123.json", schema.Record{
 		Key:      "telegram:123",
 		Messages: []providers.Message{{Role: "user", Content: "from telegram"}},
 		Created:  time.Now(),
@@ -322,7 +323,7 @@ func TestMigrateFromJSON_RetryAfterCrash(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
 
-	writeJSONSession(t, sessionsDir, "retry.json", jsonSession{
+	writeJSONSession(t, sessionsDir, "retry.json", schema.Record{
 		Key: "retry",
 		Messages: []providers.Message{
 			{Role: "user", Content: "one"},

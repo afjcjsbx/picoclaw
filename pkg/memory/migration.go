@@ -8,19 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
-	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/sipeed/picoclaw/pkg/session/schema"
 )
-
-// jsonSession mirrors pkg/session.Session for migration purposes.
-type jsonSession struct {
-	Key      string              `json:"key"`
-	Messages []providers.Message `json:"messages"`
-	Summary  string              `json:"summary,omitempty"`
-	Created  time.Time           `json:"created"`
-	Updated  time.Time           `json:"updated"`
-}
 
 // MigrateFromJSON reads legacy sessions/*.json files from sessionsDir,
 // writes them into the Store, and renames each migrated file to
@@ -67,7 +57,7 @@ func MigrateFromJSON(
 			continue
 		}
 
-		var sess jsonSession
+		var sess schema.Record
 		if parseErr := json.Unmarshal(data, &sess); parseErr != nil {
 			log.Printf("memory: migrate: skip %s: %v", name, parseErr)
 			continue
