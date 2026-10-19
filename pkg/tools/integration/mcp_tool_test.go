@@ -739,7 +739,7 @@ func TestMCPTool_Execute_LargeBase64TextIsOmittedFromContext(t *testing.T) {
 
 	result := mcpTool.Execute(context.Background(), nil)
 
-	if result.ForLLM != largeBase64OmittedMessage {
+	if result.ForLLM != toolshared.LargeBase64OmittedMessage {
 		t.Fatalf("expected sanitized large base64 note, got %q", result.ForLLM)
 	}
 }
@@ -766,7 +766,7 @@ func TestMCPTool_Execute_LargeBase64TextArtifactPreservesRawPayload(t *testing.T
 	if !strings.Contains(result.ForLLM, "saved as a local artifact") {
 		t.Fatalf("expected artifact note, got %q", result.ForLLM)
 	}
-	if result.ForLLM == largeBase64OmittedMessage {
+	if result.ForLLM == toolshared.LargeBase64OmittedMessage {
 		t.Fatalf("expected artifact note instead of sanitized base64 placeholder")
 	}
 	if len(result.ArtifactTags) != 1 {

@@ -4,13 +4,6 @@ import (
 	"fmt"
 	"math"
 	"strconv"
-
-	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
-)
-
-const (
-	largeBase64OmittedMessage = toolshared.LargeBase64OmittedMessage
-	inlineMediaOmittedMessage = toolshared.InlineMediaOmittedMessage
 )
 
 func getInt64Arg(args map[string]any, key string, defaultVal int64) (int64, error) {

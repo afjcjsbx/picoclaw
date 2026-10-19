@@ -9,7 +9,6 @@ import (
 	"html"
 	"io"
 	"mime"
-	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -2363,7 +2362,7 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	}
 
 	// Lightweight pre-flight: block obvious localhost/literal-IP without DNS resolution.
-	// The real SSRF guard is newSafeDialContext at connect time.
+	// The real SSRF guard is utils.NewSafeDialContext at connect time.
 	hostname := parsedURL.Hostname()
 	if utils.IsObviousPrivateHost(hostname, t.whitelist, func() bool {
 		return allowPrivateWebFetchHosts.Load()
@@ -2371,11 +2370,15 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult("fetching private or local network hosts is not allowed")
 	}
 
+	// A per-call maxChars may only lower the configured flood guard: the value
+	// comes from the model, so an out-of-range number must not be able to
+	// disable truncation entirely.
 	maxChars := t.maxChars
-	if mc, ok := args["maxChars"].(float64); ok {
-		if int(mc) > 100 {
-			maxChars = int(mc)
+	if mc, ok := args["maxChars"].(float64); ok && mc > 100 {
+		if mc > float64(maxChars) {
+			mc = float64(maxChars)
 		}
+		maxChars = int(mc)
 	}
 
 	doFetch := func(ua string) (*http.Response, []byte, error) {
@@ -2573,21 +2576,4 @@ func (t *WebFetchTool) extractText(htmlContent string) string {
 	}
 
 	return strings.Join(cleanLines, "\n")
-}
-
-func newSafeDialContext(
-	dialer *net.Dialer,
-	whitelist *utils.PrivateHostWhitelist,
-) func(context.Context, string, string) (net.Conn, error) {
-	return utils.NewSafeDialContext(dialer, whitelist, func() bool {
-		return allowPrivateWebFetchHosts.Load()
-	})
-}
-
-func newPrivateHostWhitelist(entries []string) (*utils.PrivateHostWhitelist, error) {
-	return utils.NewPrivateHostWhitelist(entries)
-}
-
-func isPrivateOrRestrictedIP(ip net.IP) bool {
-	return utils.IsPrivateOrRestrictedIP(ip)
 }

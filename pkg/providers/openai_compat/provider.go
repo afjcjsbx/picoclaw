@@ -324,6 +324,7 @@ func normalizedHostname(rawURL string) string {
 }
 
 func (p *Provider) applyCustomHeaders(req *http.Request, options map[string]any) {
+	common.SetOpenRouterAttribution(req)
 	for k, v := range p.customHeaders {
 		if strings.TrimSpace(k) == "" {
 			continue

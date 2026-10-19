@@ -589,6 +589,11 @@ toolLoop:
 			ts.sessionKey,
 			ts.opts.Dispatch.SessionScope,
 		)
+		if ts.parentTurnState != nil {
+			// SubTurns join their async children before finishing; root turns
+			// keep the fire-and-forget follow-up via the bus.
+			execCtx = tools.WithChildTracker(execCtx, ts)
+		}
 		toolResult := ts.agent.Tools.ExecuteWithContext(
 			execCtx,
 			toolName,

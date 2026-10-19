@@ -11,10 +11,6 @@ import (
 	"github.com/google/uuid"
 )
 
-const maxOutputBufferSize = 1 * 1024 * 1024 // 1MB
-
-const outputTruncateMarker = "\n... [output truncated, exceeded 1MB]\n"
-
 // PtyKeyMode represents arrow key encoding mode for PTY sessions.
 // Programs send smkx/rmkx sequences to switch between CSI and SS3 modes.
 type PtyKeyMode uint8
@@ -110,6 +106,15 @@ func (s *ProcessSession) killProcess() error {
 
 	if err := killProcessGroup(pid); err != nil {
 		return err
+	}
+
+	// Release the session's own descriptors: the reader goroutine can then
+	// observe the closure and stop, and a dead session keeps no fd open.
+	if s.ptyMaster != nil {
+		_ = s.ptyMaster.Close()
+	}
+	if closer, ok := s.stdinWriter.(io.Closer); ok {
+		_ = closer.Close()
 	}
 
 	s.Status = "done"

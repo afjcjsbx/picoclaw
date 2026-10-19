@@ -237,6 +237,7 @@ type turnState struct {
 	childTurnIDs         []string               // Child turn IDs
 	pendingResults       chan *tools.ToolResult // Channel for SubTurn results
 	concurrencySem       chan struct{}          // Semaphore for limiting concurrent SubTurns
+	children             sync.WaitGroup         // Async children a SubTurn must join before finishing
 	isFinished           atomic.Bool            // Whether this turn has finished
 	session              session.SessionStore   // Session store reference
 	initialHistoryLength int                    // Snapshot of history length at turn start
@@ -255,7 +256,7 @@ type turnState struct {
 	lastFinishReason string               // Last LLM finish_reason
 	lastUsage        *providers.UsageInfo // Last LLM usage info
 
-	// Back-reference to the owning AgentLoop (set for SubTurns only, used for hard abort cascade)
+	// Back-reference to the owning AgentLoop (set on every turn, used for hard abort cascade)
 	al *AgentLoop
 
 	// Tool-loop detection is scoped to a single turn.

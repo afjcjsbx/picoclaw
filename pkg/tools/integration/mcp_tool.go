@@ -3,9 +3,9 @@ package integrationtools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/fnv"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -577,57 +577,37 @@ func (t *MCPTool) storeBinaryContent(
 		)
 	}
 
-	dir := media.TempDir()
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", fmt.Sprintf("[MCP returned %s content (%s) but it could not be stored.]", kind, mimeType)
-	}
-
-	ext := toolshared.ExtensionForMIMEType(mimeType)
-	tmpFile, err := os.CreateTemp(dir, "mcp-*"+ext)
-	if err != nil {
-		return "", fmt.Sprintf("[MCP returned %s content (%s) but it could not be stored.]", kind, mimeType)
-	}
-	tmpPath := tmpFile.Name()
-	if _, err = tmpFile.Write(data); err != nil {
-		_ = tmpFile.Close()
-		_ = os.Remove(tmpPath)
-		return "", fmt.Sprintf("[MCP returned %s content (%s) but it could not be stored.]", kind, mimeType)
-	}
-	if err = tmpFile.Close(); err != nil {
-		_ = os.Remove(tmpPath)
-		return "", fmt.Sprintf("[MCP returned %s content (%s) but it could not be stored.]", kind, mimeType)
-	}
-
-	scope := fmt.Sprintf(
-		"tool:mcp:%s:%s:%s:%d",
-		toolshared.SanitizeIdentifierComponent(t.serverName),
-		channel,
-		chatID,
-		time.Now().UnixNano(),
-	)
-	filename := fmt.Sprintf(
-		"%s_%s%s",
-		toolshared.SanitizeIdentifierComponent(t.serverName),
-		toolshared.SanitizeIdentifierComponent(t.tool.Name),
-		ext,
-	)
-
-	ref, err := t.mediaStore.Store(tmpPath, media.MediaMeta{
-		Filename:    filename,
-		ContentType: mimeType,
-		Source: fmt.Sprintf(
-			"tool:mcp:%s:%s",
-			toolshared.SanitizeIdentifierComponent(t.serverName),
-			toolshared.SanitizeIdentifierComponent(t.tool.Name),
+	sanitizedServer := toolshared.SanitizeIdentifierComponent(t.serverName)
+	sanitizedTool := toolshared.SanitizeIdentifierComponent(t.tool.Name)
+	ref, err := toolshared.StoreTempMedia(toolshared.StoreTempMediaInput{
+		Store:      t.mediaStore,
+		Data:       data,
+		MIMEType:   mimeType,
+		TempPrefix: "mcp-",
+		Filename: fmt.Sprintf(
+			"%s_%s%s",
+			sanitizedServer,
+			sanitizedTool,
+			toolshared.ExtensionForMIMEType(mimeType),
 		),
-	}, scope)
+		Source: fmt.Sprintf("tool:mcp:%s:%s", sanitizedServer, sanitizedTool),
+		Scope: fmt.Sprintf(
+			"tool:mcp:%s:%s:%s:%d",
+			sanitizedServer,
+			channel,
+			chatID,
+			time.Now().UnixNano(),
+		),
+	})
 	if err != nil {
-		_ = os.Remove(tmpPath)
-		return "", fmt.Sprintf(
-			"[MCP returned %s content (%s) but it could not be registered as media.]",
-			kind,
-			mimeType,
-		)
+		if errors.Is(err, toolshared.ErrMediaStoreRegistration) {
+			return "", fmt.Sprintf(
+				"[MCP returned %s content (%s) but it could not be registered as media.]",
+				kind,
+				mimeType,
+			)
+		}
+		return "", fmt.Sprintf("[MCP returned %s content (%s) but it could not be stored.]", kind, mimeType)
 	}
 
 	return ref, fmt.Sprintf(
