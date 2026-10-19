@@ -144,7 +144,7 @@ func (al *AgentLoop) ensureMCPInitialized(ctx context.Context) error {
 			// Determine whether this server's tools should be deferred (hidden).
 			// Per-server "deferred" field takes precedence over the global Discovery.Enabled.
 			serverCfg := mcpCfg.Servers[serverName]
-			registerAsHidden := serverIsDeferred(al.cfg.Tools.MCP.Discovery.Enabled, serverCfg)
+			registerAsHidden := serverCfg.EffectiveDeferred(al.cfg.Tools.MCP.Discovery.Enabled)
 			registeredToolsByAgent := make(map[string]map[string]struct{}, len(agentIDs))
 
 			for _, tool := range conn.Tools {
@@ -345,25 +345,10 @@ func agentHasDiscoverableMCPServers(cfg *config.Config, allowed map[string]struc
 
 	filtered := filterMCPConfigServers(cfg.Tools.MCP, allowed)
 	for _, serverCfg := range filtered.Servers {
-		if serverCfg.Enabled && serverIsDeferred(cfg.Tools.MCP.Discovery.Enabled, serverCfg) {
+		if serverCfg.Enabled && serverCfg.EffectiveDeferred(cfg.Tools.MCP.Discovery.Enabled) {
 			return true
 		}
 	}
 
 	return false
-}
-
-// serverIsDeferred reports whether an MCP server's tools should be registered
-// as hidden (deferred/discovery mode).
-//
-// The per-server Deferred field takes precedence over the global discoveryEnabled
-// default. When Deferred is nil, discoveryEnabled is used as the fallback.
-func serverIsDeferred(discoveryEnabled bool, serverCfg config.MCPServerConfig) bool {
-	if !discoveryEnabled {
-		return false
-	}
-	if serverCfg.Deferred != nil {
-		return *serverCfg.Deferred
-	}
-	return true
 }

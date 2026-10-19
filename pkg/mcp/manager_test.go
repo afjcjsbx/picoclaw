@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -142,22 +143,6 @@ func TestLoadEnvFileNotFound(t *testing.T) {
 	_, err := loadEnvFile("/nonexistent/file.env")
 	if err == nil {
 		t.Error("Expected error for nonexistent file")
-	}
-}
-
-func TestExpandHomeCommandPath(t *testing.T) {
-	homeDir := t.TempDir()
-	t.Setenv("HOME", homeDir)
-	t.Setenv("USERPROFILE", homeDir)
-
-	want := filepath.Join(homeDir, "bin", "my-mcp")
-	got := expandHomeCommandPath("~" + string(os.PathSeparator) + filepath.Join("bin", "my-mcp"))
-	if got != want {
-		t.Fatalf("expandHomeCommandPath() = %q, want %q", got, want)
-	}
-
-	if got := expandHomeCommandPath("npx"); got != "npx" {
-		t.Fatalf("expandHomeCommandPath() should leave bare commands unchanged, got %q", got)
 	}
 }
 
@@ -303,7 +288,6 @@ func TestConnectServerPublishesRuntimeEvents(t *testing.T) {
 			return nil, fmt.Errorf("connect failed")
 		}
 		return &ServerConnection{
-			Name:   name,
 			Config: cfg,
 			Tools:  []*sdkmcp.Tool{{Name: "echo"}},
 		}, nil
@@ -386,7 +370,7 @@ func TestLoadFromMCPConfig_DisabledOrEmptyServers(t *testing.T) {
 
 func TestGetServers_ReturnsCopy(t *testing.T) {
 	mgr := NewManager()
-	mgr.servers["s1"] = &ServerConnection{Name: "s1"}
+	mgr.servers["s1"] = &ServerConnection{}
 
 	servers := mgr.GetServers()
 	delete(servers, "s1")
@@ -398,10 +382,10 @@ func TestGetServers_ReturnsCopy(t *testing.T) {
 
 func TestGetAllTools_FiltersEmptyTools(t *testing.T) {
 	mgr := NewManager()
-	mgr.servers["empty"] = &ServerConnection{Name: "empty", Tools: nil}
-	mgr.servers["with-tools"] = &ServerConnection{Name: "with-tools", Tools: []*sdkmcp.Tool{{}}}
+	mgr.servers["empty"] = &ServerConnection{Tools: nil}
+	mgr.servers["with-tools"] = &ServerConnection{Tools: []*sdkmcp.Tool{{}}}
 
-	all := mgr.GetAllTools()
+	all := mgr.getAllTools()
 	if _, ok := all["empty"]; ok {
 		t.Fatal("expected server without tools to be excluded")
 	}
@@ -558,6 +542,112 @@ func TestConnectServer_StreamableHTTPRequestResponseMode(t *testing.T) {
 	}
 }
 
+func TestConnectServer_DoesNotForwardHeadersToRedirectTargets(t *testing.T) {
+	t.Parallel()
+
+	leaked := make(chan string, 1)
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		leaked <- r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer target.Close()
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+"/mcp", http.StatusTemporaryRedirect)
+	}))
+	defer origin.Close()
+
+	conn, err := connectServer(context.Background(), "redirect", config.MCPServerConfig{
+		Enabled: true,
+		Type:    "http",
+		URL:     origin.URL + "/mcp",
+		Headers: map[string]string{"Authorization": "Bearer secret-token"},
+	})
+	if conn != nil {
+		_ = conn.Session.Close()
+	}
+	if err == nil {
+		t.Fatal("connectServer() followed a cross-origin redirect, want error")
+	}
+	select {
+	case header := <-leaked:
+		t.Fatalf("redirect target received a request; Authorization header = %q", header)
+	default:
+	}
+}
+
+func TestLoadFromMCPConfig_AllServersFailedAfterPreviousLoad(t *testing.T) {
+	originalConnectServerFunc := connectServerFunc
+	t.Cleanup(func() { connectServerFunc = originalConnectServerFunc })
+
+	connectServerFunc = func(_ context.Context, name string, _ config.MCPServerConfig) (*ServerConnection, error) {
+		if name == "failing" {
+			return nil, errors.New("connect refused")
+		}
+		conn, _, err := newScriptedServerConnection("session-"+name, nil, nil)
+		return conn, err
+	}
+
+	mgr := NewManager()
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	preexisting := config.MCPServerConfig{Enabled: true}
+	if err := mgr.ConnectServer(context.Background(), "preexisting", preexisting); err != nil {
+		t.Fatalf("ConnectServer(preexisting) error = %v", err)
+	}
+
+	err := mgr.LoadFromMCPConfig(context.Background(), config.MCPConfig{
+		ToolConfig: config.ToolConfig{Enabled: true},
+		Servers: map[string]config.MCPServerConfig{
+			"failing": {Enabled: true, Type: "http", URL: "https://example.invalid/mcp"},
+		},
+	}, "")
+	if err == nil {
+		t.Fatal("expected an aggregated error when every configured server failed, got nil")
+	}
+}
+
+func TestConnectServer_ClosesPreviousSessionWithSameName(t *testing.T) {
+	originalConnectServerFunc := connectServerFunc
+	t.Cleanup(func() { connectServerFunc = originalConnectServerFunc })
+
+	var transports []*scriptedTransport
+	connectServerFunc = func(_ context.Context, _ string, _ config.MCPServerConfig) (*ServerConnection, error) {
+		conn, transport, err := newScriptedServerConnection("session", nil, nil)
+		if err != nil {
+			return nil, err
+		}
+		transports = append(transports, transport)
+		return conn, nil
+	}
+
+	mgr := NewManager()
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	cfg := config.MCPServerConfig{Enabled: true, Type: "http", URL: "https://example.invalid/mcp"}
+	if err := mgr.ConnectServer(context.Background(), "dup", cfg); err != nil {
+		t.Fatalf("first ConnectServer() error = %v", err)
+	}
+	if err := mgr.ConnectServer(context.Background(), "dup", cfg); err != nil {
+		t.Fatalf("second ConnectServer() error = %v", err)
+	}
+
+	if len(transports) != 2 {
+		t.Fatalf("connect calls = %d, want 2", len(transports))
+	}
+	if !transportClosed(transports[0]) {
+		t.Fatal("previous connection session was not closed")
+	}
+	if transportClosed(transports[1]) {
+		t.Fatal("current connection session must stay open")
+	}
+}
+
+func transportClosed(transport *scriptedTransport) bool {
+	transport.mu.Lock()
+	defer transport.mu.Unlock()
+	return transport.closed
+}
+
 func TestCallTool_ReconnectsWhenHTTPServerLosesSession(t *testing.T) {
 	originalConnectServerFunc := connectServerFunc
 	t.Cleanup(func() {
@@ -665,9 +755,7 @@ func newScriptedServerConnection(
 	}
 
 	return &ServerConnection{
-		Name:    "flaky",
 		Config:  config.MCPServerConfig{Enabled: true, Type: "http", URL: "https://example.invalid/mcp"},
-		Client:  client,
 		Session: session,
 		Tools: []*sdkmcp.Tool{
 			{
@@ -828,7 +916,7 @@ func TestManager_CloseWaitsForInFlightCallTool(t *testing.T) {
 
 	mgr := NewManager()
 	mgr.mu.Lock()
-	mgr.servers["srv"] = &ServerConnection{Name: "srv", Session: clientSession}
+	mgr.servers["srv"] = &ServerConnection{Session: clientSession}
 	mgr.mu.Unlock()
 
 	callDone := make(chan error, 1)
@@ -885,7 +973,7 @@ func TestLoadFromMCPConfigBoundsConcurrentConnects(t *testing.T) {
 		mu.Lock()
 		current--
 		mu.Unlock()
-		return &ServerConnection{Name: name, Config: cfg}, nil
+		return &ServerConnection{Config: cfg}, nil
 	}
 
 	servers := make(map[string]config.MCPServerConfig, mcpMaxConcurrentConnect*3)

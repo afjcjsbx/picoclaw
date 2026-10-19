@@ -62,7 +62,7 @@ func (f pluginRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) 
 func TestPluginHTTPHeaderBoundary(t *testing.T) {
 	origin, _ := url.Parse("https://example.org/mcp")
 	called := 0
-	transport := &pluginHTTPTransport{
+	transport := &originBoundTransport{
 		origin:  origin,
 		headers: map[string]string{"Authorization": "package", "Mcp-Session-Id": "package", "X-Plugin": "yes"},
 		base: pluginRoundTripFunc(func(r *http.Request) (*http.Response, error) {

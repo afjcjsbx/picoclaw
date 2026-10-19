@@ -2,10 +2,8 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -13,6 +11,7 @@ import (
 	"github.com/sipeed/picoclaw/cmd/picoclaw/internal/cliui"
 	"github.com/sipeed/picoclaw/pkg/config"
 	picomcp "github.com/sipeed/picoclaw/pkg/mcp"
+	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
 type toolDetail struct {
@@ -36,108 +35,34 @@ func defaultServerShowProbe(
 	server config.MCPServerConfig,
 	workspacePath string,
 ) ([]toolDetail, error) {
-	mgr := picomcp.NewManager()
-	defer func() { _ = mgr.Close() }()
-
-	server.Enabled = true
-	mcpCfg := config.MCPConfig{
-		ToolConfig: config.ToolConfig{Enabled: true},
-		Servers: map[string]config.MCPServerConfig{
-			name: server,
-		},
-	}
-
-	if err := mgr.LoadFromMCPConfig(ctx, mcpCfg, workspacePath); err != nil {
-		return nil, err
-	}
-
-	conn, ok := mgr.GetServer(name)
-	if !ok {
-		return nil, fmt.Errorf("server %q did not register a connection", name)
-	}
-
-	details := make([]toolDetail, 0, len(conn.Tools))
-	for _, tool := range conn.Tools {
-		details = append(details, toolDetail{
-			Name:        tool.Name,
-			Description: tool.Description,
-			Parameters:  extractParameters(tool.InputSchema),
-		})
-	}
-	return details, nil
+	return probeServer(ctx, name, server, workspacePath, func(conn *picomcp.ServerConnection) []toolDetail {
+		details := make([]toolDetail, 0, len(conn.Tools))
+		for _, tool := range conn.Tools {
+			details = append(details, toolDetail{
+				Name:        tool.Name,
+				Description: tool.Description,
+				Parameters:  extractParameters(tool.InputSchema),
+			})
+		}
+		return details
+	})
 }
 
 func extractParameters(schema any) []paramDetail {
-	schemaMap := normalizeSchema(schema)
-	properties, ok := schemaMap["properties"].(map[string]any)
-	if !ok || len(properties) == 0 {
+	properties := toolshared.SchemaProperties(schema)
+	if len(properties) == 0 {
 		return nil
 	}
-
-	required := make(map[string]struct{})
-	switch raw := schemaMap["required"].(type) {
-	case []string:
-		for _, name := range raw {
-			required[name] = struct{}{}
-		}
-	case []any:
-		for _, value := range raw {
-			if name, ok := value.(string); ok {
-				required[name] = struct{}{}
-			}
-		}
-	}
-
-	names := make([]string, 0, len(properties))
-	for name := range properties {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-
-	params := make([]paramDetail, 0, len(names))
-	for _, name := range names {
-		param := paramDetail{Name: name}
-		if propMap, ok := properties[name].(map[string]any); ok {
-			if typeName, ok := propMap["type"].(string); ok {
-				param.Type = strings.TrimSpace(typeName)
-			}
-			if desc, ok := propMap["description"].(string); ok {
-				param.Description = strings.TrimSpace(desc)
-			}
-		}
-		_, param.Required = required[name]
-		params = append(params, param)
+	params := make([]paramDetail, 0, len(properties))
+	for _, property := range properties {
+		params = append(params, paramDetail{
+			Name:        property.Name,
+			Type:        property.Type,
+			Description: property.Description,
+			Required:    property.Required,
+		})
 	}
 	return params
-}
-
-func normalizeSchema(schema any) map[string]any {
-	if schema == nil {
-		return map[string]any{}
-	}
-	if schemaMap, ok := schema.(map[string]any); ok {
-		return schemaMap
-	}
-
-	var jsonData []byte
-	switch raw := schema.(type) {
-	case json.RawMessage:
-		jsonData = raw
-	case []byte:
-		jsonData = raw
-	default:
-		var err error
-		jsonData, err = json.Marshal(schema)
-		if err != nil {
-			return map[string]any{}
-		}
-	}
-
-	var result map[string]any
-	if err := json.Unmarshal(jsonData, &result); err != nil {
-		return map[string]any{}
-	}
-	return result
 }
 
 func newShowCommand() *cobra.Command {
@@ -166,7 +91,7 @@ func newShowCommand() *cobra.Command {
 				return nil
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 			defer cancel()
 
 			details, err := serverShowProbe(ctx, name, server, cfg.WorkspacePath())
@@ -203,18 +128,13 @@ func newShowCommand() *cobra.Command {
 }
 
 func buildServerInfo(name string, server config.MCPServerConfig, discoveryEnabled bool) cliui.MCPShowServer {
-	effectiveDeferred := discoveryEnabled
-	deferredExplicit := server.Deferred != nil
-	if deferredExplicit {
-		effectiveDeferred = *server.Deferred
-	}
 	info := cliui.MCPShowServer{
 		Name:              name,
-		Type:              inferTransportType(server),
+		Type:              displayTransportType(server),
 		Target:            renderServerTarget(server),
 		Enabled:           server.Enabled,
-		EffectiveDeferred: effectiveDeferred,
-		DeferredExplicit:  deferredExplicit,
+		EffectiveDeferred: server.EffectiveDeferred(discoveryEnabled),
+		DeferredExplicit:  server.Deferred != nil,
 		EnvFile:           server.EnvFile,
 	}
 	if len(server.Env) > 0 {

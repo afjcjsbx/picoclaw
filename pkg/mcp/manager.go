@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,47 +27,6 @@ import (
 // spike memory and CPU on constrained devices. All enabled servers are still
 // connected; only the startup burst is bounded.
 const mcpMaxConcurrentConnect = 4
-
-// headerTransport is an http.RoundTripper that adds custom headers to requests
-type headerTransport struct {
-	base    http.RoundTripper
-	headers map[string]string
-}
-
-func expandHomeCommandPath(command string) string {
-	if command == "" || command[0] != '~' {
-		return command
-	}
-
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return command
-	}
-	if command == "~" {
-		return home
-	}
-	if strings.HasPrefix(command, "~/") || strings.HasPrefix(command, "~\\") {
-		return filepath.Join(home, command[2:])
-	}
-	return command
-}
-
-func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	// Clone the request to avoid modifying the original
-	req = req.Clone(req.Context())
-
-	// Add custom headers
-	for key, value := range t.headers {
-		req.Header.Set(key, value)
-	}
-
-	// Use the base transport
-	base := t.base
-	if base == nil {
-		base = http.DefaultTransport
-	}
-	return base.RoundTrip(req)
-}
 
 // loadEnvFile loads environment variables from a file in .env format
 // Each line should be in the format: KEY=value
@@ -162,9 +120,7 @@ func inheritedMCPEnv(environ []string, inheritAll bool) map[string]string {
 type ServerConnection struct {
 	plugin      bool // Plugin calls are never automatically replayed after disconnect.
 	cancel      context.CancelFunc
-	Name        string
 	Config      config.MCPServerConfig
-	Client      *mcp.Client
 	Session     *mcp.ClientSession
 	Tools       []*mcp.Tool
 	reconnectMu sync.Mutex
@@ -175,7 +131,7 @@ type Manager struct {
 	servers       map[string]*ServerConnection
 	runtimeEvents runtimeevents.Bus
 	mu            sync.RWMutex
-	closed        atomic.Bool    // changed from bool to atomic.Bool to avoid TOCTOU race
+	closed        atomic.Bool    // set once by Close; read without the mutex to fail closed
 	wg            sync.WaitGroup // tracks in-flight CallTool calls
 }
 
@@ -191,8 +147,8 @@ func WithRuntimeEvents(eventBus runtimeevents.Bus) ManagerOption {
 	}
 }
 
-// ServerEventPayload describes MCP server connection events.
-type ServerEventPayload struct {
+// serverEventPayload describes MCP server connection events.
+type serverEventPayload struct {
 	Server    string `json:"server"`
 	Type      string `json:"type,omitempty"`
 	URL       string `json:"url,omitempty"`
@@ -215,13 +171,8 @@ func NewManager(opts ...ManagerOption) *Manager {
 	return m
 }
 
-// LoadFromConfig loads MCP servers from configuration
-func (m *Manager) LoadFromConfig(ctx context.Context, cfg *config.Config) error {
-	return m.LoadFromMCPConfig(ctx, cfg.Tools.MCP, cfg.WorkspacePath())
-}
-
-// LoadFromMCPConfig loads MCP servers from MCP configuration and workspace path.
-// This is the minimal dependency version that doesn't require the full Config object.
+// LoadFromMCPConfig loads MCP servers from MCP configuration and workspace path,
+// taking the MCP section rather than the full Config.
 func (m *Manager) LoadFromMCPConfig(
 	ctx context.Context,
 	mcpCfg config.MCPConfig,
@@ -242,7 +193,10 @@ func (m *Manager) LoadFromMCPConfig(
 			"count": len(mcpCfg.Servers),
 		})
 
-	var wg sync.WaitGroup
+	var (
+		wg      sync.WaitGroup
+		success atomic.Int64
+	)
 	errs := make(chan error, len(mcpCfg.Servers))
 	sem := make(chan struct{}, mcpMaxConcurrentConnect)
 	enabledCount := 0
@@ -293,7 +247,9 @@ func (m *Manager) LoadFromMCPConfig(
 						"error":  err.Error(),
 					})
 				errs <- fmt.Errorf("failed to connect to server %s: %w", name, err)
+				return
 			}
+			success.Add(1)
 		}(name, serverCfg, workspacePath)
 	}
 
@@ -306,7 +262,9 @@ func (m *Manager) LoadFromMCPConfig(
 		allErrors = append(allErrors, err)
 	}
 
-	connectedCount := len(m.GetServers())
+	// Count only the servers connected by this call: pre-existing connections
+	// from an earlier load must not mask a fully failed reload.
+	connectedCount := int(success.Load())
 
 	// If all enabled servers failed to connect, return aggregated error
 	if enabledCount > 0 && connectedCount == 0 {
@@ -351,15 +309,17 @@ func (m *Manager) ConnectServer(
 	}
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	if m.closed.Load() {
+		m.mu.Unlock()
 		_ = conn.Session.Close()
 		m.publishServerEvent(runtimeevents.KindMCPServerFailed, name, cfg, 0, fmt.Errorf("manager is closed"))
 		return fmt.Errorf("manager is closed")
 	}
+	m.registerConnection(name, conn)
+	m.mu.Unlock()
 
-	m.servers[name] = conn
+	// Publish observations after releasing the manager lock: the event bus must
+	// never run while the connection registry is locked.
 	for _, tool := range conn.Tools {
 		toolName := ""
 		if tool != nil {
@@ -369,6 +329,19 @@ func (m *Manager) ConnectServer(
 	}
 	m.publishServerEvent(runtimeevents.KindMCPServerConnected, name, cfg, len(conn.Tools), nil)
 	return nil
+}
+
+// registerConnection stores conn under name. A previous connection with the
+// same name is closed first so its session and child process cannot leak.
+// Callers must hold m.mu.
+func (m *Manager) registerConnection(name string, conn *ServerConnection) {
+	if previous, ok := m.servers[name]; ok {
+		if previous.cancel != nil {
+			previous.cancel()
+		}
+		_ = previous.Session.Close()
+	}
+	m.servers[name] = conn
 }
 
 func connectServer(
@@ -381,7 +354,7 @@ func connectServer(
 		if err := validateOAuthConfig(cfg); err != nil {
 			return nil, err
 		}
-		handler = &storedOAuthHandler{name: name, store: newOAuthStore(name, cfg)}
+		handler = newStoredOAuthHandler(name, cfg)
 	}
 	return connectServerWithOAuth(ctx, name, cfg, handler)
 }
@@ -399,132 +372,39 @@ func connectServerWithOAuth(
 			"args_count": len(cfg.Args),
 		})
 
-	// Create client
-	client := mcp.NewClient(&mcp.Implementation{
-		Name:    "picoclaw",
-		Version: "1.0.0",
-	}, nil)
-
-	// Create transport based on configuration
-	// Auto-detect transport type if not explicitly specified
-	var transport mcp.Transport
 	transportType := config.EffectiveMCPTransportType(cfg)
 	if transportType == "" {
 		return nil, fmt.Errorf("either URL or command must be provided")
 	}
 
+	var transport mcp.Transport
 	switch transportType {
 	case "sse", "http":
-		if cfg.URL == "" {
-			return nil, fmt.Errorf("URL is required for SSE/HTTP transport")
+		var err error
+		transport, err = buildHTTPTransport(name, cfg, transportType, handler, false)
+		if err != nil {
+			return nil, err
 		}
-
-		// Configure DisableStandaloneSSE based on transport type.
-		// - "http": Streamable HTTP request-response mode. Disable the standalone
-		//   SSE stream to avoid compatibility issues with servers that don't
-		//   support the optional GET listener.
-		// - "sse": Bidirectional mode. Enable the standalone SSE stream to receive
-		//   server-initiated notifications (e.g., ToolListChangedNotification).
-		// - Empty or auto-detected: Defaults to "sse" behavior (standalone SSE enabled).
-		disableStandaloneSSE := transportType == "http"
-
-		logger.DebugCF("mcp", "Using SSE/HTTP transport",
-			map[string]any{
-				"server":               name,
-				"url":                  cfg.URL,
-				"disableStandaloneSSE": disableStandaloneSSE,
-			})
-
-		sseTransport := &mcp.StreamableClientTransport{
-			Endpoint:             cfg.URL,
-			DisableStandaloneSSE: disableStandaloneSSE,
-			OAuthHandler:         handler,
-		}
-
-		// Add custom headers if provided
-		if len(cfg.Headers) > 0 {
-			// Create a custom HTTP client with header-injecting transport
-			sseTransport.HTTPClient = &http.Client{
-				Transport: &headerTransport{
-					base:    http.DefaultTransport,
-					headers: cfg.Headers,
-				},
-			}
-			logger.DebugCF("mcp", "Added custom HTTP headers",
-				map[string]any{
-					"server":       name,
-					"header_count": len(cfg.Headers),
-				})
-		}
-		if handler != nil {
-			sseTransport.HTTPClient = &http.Client{
-				Transport:     &headerTransport{base: oauthHTTPTransport{}, headers: cfg.Headers},
-				CheckRedirect: rejectOAuthRedirect,
-			}
-		}
-
-		transport = sseTransport
 	case "stdio":
-		if cfg.Command == "" {
-			return nil, fmt.Errorf("command is required for stdio transport")
+		var err error
+		transport, err = buildNativeStdioTransport(ctx, name, cfg)
+		if err != nil {
+			return nil, err
 		}
-		logger.DebugCF("mcp", "Using stdio transport",
-			map[string]any{
-				"server":  name,
-				"command": cfg.Command,
-			})
-		// Create command with context
-		cmd := exec.CommandContext(ctx, expandHomeCommandPath(cfg.Command), cfg.Args...)
-
-		// Build environment variables with proper override semantics
-		// Use a map to ensure config variables override file variables
-		// Inherit only basic process variables unless this server explicitly opts in.
-		envMap := inheritedMCPEnv(cmd.Environ(), cfg.InheritEnv)
-
-		// Load environment variables from file if specified
-		if cfg.EnvFile != "" {
-			envVars, err := loadEnvFile(cfg.EnvFile)
-			if err != nil {
-				return nil, fmt.Errorf("failed to load env file %s: %w", cfg.EnvFile, err)
-			}
-			for k, v := range envVars {
-				envMap[k] = v
-			}
-			logger.DebugCF("mcp", "Loaded environment variables from file",
-				map[string]any{
-					"server":    name,
-					"envFile":   cfg.EnvFile,
-					"var_count": len(envVars),
-				})
-		}
-
-		// Environment variables from config override those from file
-		for k, v := range cfg.Env {
-			envMap[k] = v
-		}
-
-		// Convert map to slice
-		env := make([]string, 0, len(envMap))
-		for k, v := range envMap {
-			env = append(env, fmt.Sprintf("%s=%s", k, v))
-		}
-		cmd.Env = env
-		transport = &isolatedCommandTransport{Command: cmd}
 	default:
 		return nil, fmt.Errorf(
-			"unsupported transport type: %s (supported: stdio, sse, http, streamable-http)",
+			"unsupported transport type %q (supported: stdio, sse, http)",
 			transportType,
 		)
 	}
 
-	// Connect to server
-	session, err := client.Connect(ctx, transport, nil)
+	dialed, err := dialServer(ctx, "picoclaw", transport, name)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect: %w", err)
 	}
 
 	// Get server info
-	initResult := session.InitializeResult()
+	initResult := dialed.Session.InitializeResult()
 	logger.InfoCF("mcp", "Connected to MCP server",
 		map[string]any{
 			"server":        name,
@@ -533,19 +413,10 @@ func connectServerWithOAuth(
 			"protocol":      initResult.ProtocolVersion,
 		})
 
-	// List available tools if supported
-	tools, err := listServerTools(ctx, name, session, initResult)
-	if err != nil {
-		_ = session.Close()
-		return nil, err
-	}
-
 	return &ServerConnection{
-		Name:    name,
 		Config:  cfg,
-		Client:  client,
-		Session: session,
-		Tools:   tools,
+		Session: dialed.Session,
+		Tools:   dialed.Tools,
 	}, nil
 }
 
@@ -630,15 +501,17 @@ func (m *Manager) CallTool(
 	return result, nil
 }
 
+// listServerTools lists the tools exposed by a session. Listing is
+// best-effort: per-iteration errors are logged and skipped.
 func listServerTools(
 	ctx context.Context,
 	name string,
 	session *mcp.ClientSession,
 	initResult *mcp.InitializeResult,
-) ([]*mcp.Tool, error) {
+) []*mcp.Tool {
 	var tools []*mcp.Tool
 	if initResult.Capabilities.Tools == nil {
-		return tools, nil
+		return nil
 	}
 
 	for tool, err := range session.Tools(ctx, nil) {
@@ -659,7 +532,7 @@ func listServerTools(
 			"toolCount": len(tools),
 		})
 
-	return tools, nil
+	return tools
 }
 
 func shouldReconnectCallError(err error) bool {
@@ -787,8 +660,8 @@ func (m *Manager) Close() error {
 	return nil
 }
 
-// GetAllTools returns all tools from all connected servers
-func (m *Manager) GetAllTools() map[string][]*mcp.Tool {
+// getAllTools returns all tools from all connected servers.
+func (m *Manager) getAllTools() map[string][]*mcp.Tool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 

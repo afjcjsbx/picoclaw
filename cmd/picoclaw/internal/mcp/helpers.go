@@ -19,12 +19,9 @@ import (
 
 	"github.com/sipeed/picoclaw/cmd/picoclaw/internal"
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/fileutil"
 	picomcp "github.com/sipeed/picoclaw/pkg/mcp"
 )
-
-type probeResult struct {
-	ToolCount int
-}
 
 var (
 	editorCommand = exec.Command
@@ -143,8 +140,6 @@ func normalizedConfigForSave(cfg *config.Config) *config.Config {
 		return &clone
 	}
 
-	clone.Tools = cfg.Tools
-	clone.Tools.MCP = cfg.Tools.MCP
 	clone.Tools.MCP.Servers = make(map[string]config.MCPServerConfig, len(cfg.Tools.MCP.Servers))
 	for name, server := range cfg.Tools.MCP.Servers {
 		if server.Type != "" {
@@ -187,7 +182,10 @@ func loadMCPConfigSchema() (*jsonschema.Resolved, error) {
 	return mcpConfigSchema, errMcpConfigSchema
 }
 
-func inferTransportType(server config.MCPServerConfig) string {
+// displayTransportType returns the transport name for CLI output. A config
+// that resolves to no transport (neither URL nor command) is shown as
+// "unknown" instead of an empty cell.
+func displayTransportType(server config.MCPServerConfig) string {
 	transport := config.EffectiveMCPTransportType(server)
 	if transport == "" {
 		return "unknown"
@@ -196,7 +194,7 @@ func inferTransportType(server config.MCPServerConfig) string {
 }
 
 func renderServerTarget(server config.MCPServerConfig) string {
-	transport := inferTransportType(server)
+	transport := displayTransportType(server)
 	if transport == "http" || transport == "sse" {
 		if server.URL == "" {
 			return "<missing url>"
@@ -222,49 +220,50 @@ func sortedServerNames(servers map[string]config.MCPServerConfig) []string {
 }
 
 func parseEnvAssignments(values []string) (map[string]string, error) {
-	if len(values) == 0 {
-		return nil, nil
-	}
-
-	env := make(map[string]string, len(values))
-	for _, entry := range values {
-		key, value, found := strings.Cut(entry, "=")
-		if !found {
-			return nil, fmt.Errorf("invalid env assignment %q: expected KEY=value", entry)
-		}
-		key = strings.TrimSpace(key)
-		if key == "" {
-			return nil, fmt.Errorf("invalid env assignment %q: key cannot be empty", entry)
-		}
-		env[key] = value
-	}
-
-	return env, nil
+	return parseAssignments(values, "env assignment", []string{"="}, "KEY=value", false)
 }
 
 func parseHeaderAssignments(values []string) (map[string]string, error) {
+	return parseAssignments(values, "header", []string{":", "="}, "'Name: Value' or 'Name=Value'", true)
+}
+
+// parseAssignments parses repeated "key<separator>value" CLI assignments,
+// trying each separator in order. Header values are trimmed; environment
+// values stay verbatim so trailing spaces and similar content survive.
+func parseAssignments(
+	values []string,
+	kind string,
+	separators []string,
+	expected string,
+	trimValue bool,
+) (map[string]string, error) {
 	if len(values) == 0 {
 		return nil, nil
 	}
 
-	headers := make(map[string]string, len(values))
+	result := make(map[string]string, len(values))
 	for _, entry := range values {
-		key, value, found := strings.Cut(entry, ":")
-		if !found {
-			key, value, found = strings.Cut(entry, "=")
+		key, value, found := "", "", false
+		for _, separator := range separators {
+			if key, value, found = strings.Cut(entry, separator); found {
+				break
+			}
 		}
 		if !found {
-			return nil, fmt.Errorf("invalid header %q: expected 'Name: Value' or 'Name=Value'", entry)
+			return nil, fmt.Errorf("invalid %s %q: expected %s", kind, entry, expected)
 		}
+
 		key = strings.TrimSpace(key)
-		value = strings.TrimSpace(value)
 		if key == "" {
-			return nil, fmt.Errorf("invalid header %q: name cannot be empty", entry)
+			return nil, fmt.Errorf("invalid %s %q: key cannot be empty", kind, entry)
 		}
-		headers[key] = value
+		if trimValue {
+			value = strings.TrimSpace(value)
+		}
+		result[key] = value
 	}
 
-	return headers, nil
+	return result, nil
 }
 
 func looksLikeRemoteURL(target string) bool {
@@ -299,29 +298,12 @@ func isLocalCommandPath(command string) bool {
 		strings.ContainsRune(command, os.PathSeparator)
 }
 
-func expandHomePath(path string) string {
-	if path == "" || path[0] != '~' {
-		return path
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return path
-	}
-	if path == "~" {
-		return home
-	}
-	if strings.HasPrefix(path, "~/") || strings.HasPrefix(path, "~\\") {
-		return filepath.Join(home, path[2:])
-	}
-	return path
-}
-
 func validateLocalCommandPath(command string) error {
 	if !isLocalCommandPath(command) {
 		return nil
 	}
 
-	path := expandHomePath(command)
+	path := fileutil.ExpandHome(command)
 	info, err := os.Stat(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -338,12 +320,18 @@ func validateLocalCommandPath(command string) error {
 	return nil
 }
 
-func defaultServerProbe(
+// probeServer starts a throwaway manager for one server and extracts a value
+// from its connection. The status probe and the show probe share this
+// bootstrap so the manager lifecycle lives in one place.
+func probeServer[T any](
 	ctx context.Context,
 	name string,
 	server config.MCPServerConfig,
 	workspacePath string,
-) (probeResult, error) {
+	extract func(*picomcp.ServerConnection) T,
+) (T, error) {
+	var zero T
+
 	mgr := picomcp.NewManager()
 	defer func() { _ = mgr.Close() }()
 
@@ -356,15 +344,27 @@ func defaultServerProbe(
 	}
 
 	if err := mgr.LoadFromMCPConfig(ctx, mcpCfg, workspacePath); err != nil {
-		return probeResult{}, err
+		return zero, err
 	}
 
 	conn, ok := mgr.GetServer(name)
 	if !ok {
-		return probeResult{}, fmt.Errorf("server %q did not register a connection", name)
+		return zero, fmt.Errorf("server %q did not register a connection", name)
 	}
 
-	return probeResult{ToolCount: len(conn.Tools)}, nil
+	return extract(conn), nil
+}
+
+// defaultServerProbe returns the number of tools the server exposes.
+func defaultServerProbe(
+	ctx context.Context,
+	name string,
+	server config.MCPServerConfig,
+	workspacePath string,
+) (int, error) {
+	return probeServer(ctx, name, server, workspacePath, func(conn *picomcp.ServerConnection) int {
+		return len(conn.Tools)
+	})
 }
 
 func confirmOverwrite(r io.Reader, w io.Writer, name string) (bool, error) {
