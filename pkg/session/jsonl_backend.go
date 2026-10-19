@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/memory"
@@ -17,6 +18,12 @@ import (
 // whether to surface, retry or drop a failed operation.
 type JSONLBackend struct {
 	store memory.Store
+
+	// aliasCache memoizes alias -> canonical session key resolutions.
+	// Metadata for a session is written once, when the session is
+	// created, so a positive resolution stays valid for the process
+	// lifetime; entries are dropped when the target is deleted.
+	aliasCache sync.Map // alias string -> canonical string
 }
 
 type metaAwareStore interface {
@@ -41,16 +48,28 @@ func NewJSONLBackend(store memory.Store) *JSONLBackend {
 	return &JSONLBackend{store: store}
 }
 
+// resolveSessionKey maps an alias onto its canonical session key. Positive
+// resolutions are memoized in aliasCache: without it every read and write
+// would call ResolveSessionKey on the metadata store, which scans every
+// *.meta.json file in the sessions directory unless the key is a
+// short-circuiting canonical key. Misses are deliberately not cached, so a
+// session created after a failed lookup still resolves on the next call.
 func (b *JSONLBackend) resolveSessionKey(ctx context.Context, sessionKey string) (string, error) {
 	metaStore, ok := b.store.(metaAwareStore)
 	if !ok {
 		return sessionKey, nil
+	}
+	if cached, ok := b.aliasCache.Load(sessionKey); ok {
+		if canonical, ok := cached.(string); ok && canonical != "" {
+			return canonical, nil
+		}
 	}
 	resolved, found, err := metaStore.ResolveSessionKey(ctx, sessionKey)
 	if err != nil {
 		return "", fmt.Errorf("session: resolve session key: %w", err)
 	}
 	if found && resolved != "" {
+		b.aliasCache.Store(sessionKey, resolved)
 		return resolved, nil
 	}
 	return sessionKey, nil
@@ -69,7 +88,9 @@ func (b *JSONLBackend) ResolveSessionKey(sessionKey string) string {
 	return resolved
 }
 
-// EnsureSessionMetadata persists scope and alias metadata for a session.
+// EnsureSessionMetadata persists scope and alias metadata for a session and
+// seeds aliasCache with the aliases it just wrote, so later resolutions of
+// those aliases do not have to scan the metadata files.
 func (b *JSONLBackend) EnsureSessionMetadata(sessionKey string, scope *SessionScope, aliases []string) {
 	metaStore, ok := b.store.(metaAwareStore)
 	if !ok {
@@ -93,6 +114,16 @@ func (b *JSONLBackend) EnsureSessionMetadata(sessionKey string, scope *SessionSc
 	if err := metaStore.UpsertSessionMeta(ctx, sessionKey, rawScope, aliases); err != nil {
 		log.Printf("session: upsert session metadata: %v", err)
 		return
+	}
+
+	// The metadata written above is the ground truth for these aliases:
+	// seed the cache so subsequent resolutions skip the metadata scan.
+	for _, alias := range aliases {
+		alias = strings.TrimSpace(alias)
+		if alias == "" || alias == sessionKey {
+			continue
+		}
+		b.aliasCache.Store(alias, sessionKey)
 	}
 
 	if promotingStore, ok := b.store.(aliasPromotingStore); ok {
@@ -262,11 +293,22 @@ func (b *JSONLBackend) LastActivity(key string) time.Time {
 // ListSessions or the seahorse index). The key is deliberately not resolved
 // through aliases: resolving costs a scan of every metadata file per call,
 // making a prune pass quadratic in the number of sessions, and an alias must
-// never cause the session it points to to be deleted.
+// never cause the session it points to to be deleted. After a successful
+// delete the alias cache is swept for entries pointing at the removed
+// session, so a stale alias cannot resurrect it.
 func (b *JSONLBackend) DeleteSession(key string) error {
 	deleter, ok := b.store.(sessionDeletingStore)
 	if !ok {
 		return fmt.Errorf("session: backing store does not support DeleteSession")
 	}
-	return deleter.DeleteSession(context.Background(), key)
+	if err := deleter.DeleteSession(context.Background(), key); err != nil {
+		return err
+	}
+	b.aliasCache.Range(func(alias, canonical any) bool {
+		if resolved, ok := canonical.(string); ok && resolved == key {
+			b.aliasCache.Delete(alias)
+		}
+		return true
+	})
+	return nil
 }
