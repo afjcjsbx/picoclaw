@@ -42,6 +42,24 @@ Two related settings sit outside the pattern:
 
 Agents can see a narrower tool set than the global switches allow: an `AGENT.md` frontmatter `tools:` list acts as an allowlist per agent, and `turn_profile` can narrow the exposed tools further for specific requests (see [Configuration](../guides/configuration.md)).
 
+## Concurrent tool calls
+
+The agent normally executes the tool calls of one model response sequentially, in model order. Consecutive calls to concurrency-safe tools run concurrently with a bounded fan-out (at most 8 at a time), and their results are appended to the conversation in the original order.
+
+Built-in concurrency-safe tools:
+
+| Tool | Why it is safe |
+|------|----------------|
+| `web_search` | Independent provider requests; provider configuration is read-only |
+| `web_fetch` | Independent HTTP requests; the shared client is concurrency-safe |
+| `read_file` | Read-only filesystem access |
+| `list_dir` | Read-only filesystem access |
+| `search_files` | Read-only filesystem access |
+
+A side-effectful tool splits the batch, so `[web_fetch, web_fetch, write_file, web_fetch]` runs the first two fetches together, then `write_file`, then the last fetch. Tools that do not opt in, including every `AsyncExecutor` tool, stay on the sequential path.
+
+Steering is checked after the concurrent batch: calls already in flight finish (they are read-only), while later side-effectful calls are skipped. See [Steering](../architecture/steering.md#trade-off-sequential-execution).
+
 ## Path access
 
 All filesystem-facing tools share one sandbox model:

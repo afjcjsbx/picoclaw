@@ -137,7 +137,9 @@ Skipped tools receive an explicit error result (`"Skipped due to queued user mes
 
 ### Trade-off: sequential execution
 
-Skipping requires tools to run **sequentially** (the previous implementation ran them in parallel). This introduces latency when the LLM requests multiple independent tools in a single turn. In practice, most batches contain 1-2 tools, so the impact is minimal compared to the benefit of being able to stop unwanted actions.
+Stopping side effects requires tools to run **sequentially**. Consecutive calls to tools marked as concurrency-safe (read-only tools such as `web_search`, `web_fetch`, `read_file`, `list_dir`, `search_files`) are the exception: PicoClaw runs them as a bounded concurrent batch, then finalizes their results in the original model order.
+
+Steering is still checked after the batch and before the next tool starts. That keeps ordering guarantees for side-effectful tools, but a concurrency-safe call that is already in flight when the steering message arrives completes anyway. This is the deliberate trade-off: read-only calls are safe to finish, while the side-effectful calls after the batch are skipped. In practice, most batches contain 1-2 tools, so the latency impact is small compared to the benefit of being able to stop unwanted actions.
 
 ## Skipped tool result format
 

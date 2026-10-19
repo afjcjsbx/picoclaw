@@ -13,6 +13,13 @@ import (
 
 type ToolResult = toolshared.ToolResult
 
+var (
+	_ toolshared.ConcurrencySafe = (*ReadFileTool)(nil)
+	_ toolshared.ConcurrencySafe = (*ReadFileLinesTool)(nil)
+	_ toolshared.ConcurrencySafe = (*ListDirTool)(nil)
+	_ toolshared.ConcurrencySafe = (*SearchFilesTool)(nil)
+)
+
 // requirePath reads the mandatory "path" argument of a media tool.
 func requirePath(args map[string]any) (string, *ToolResult) {
 	path, _ := args["path"].(string)

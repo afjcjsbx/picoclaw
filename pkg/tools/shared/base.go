@@ -189,6 +189,34 @@ type AsyncExecutor interface {
 	ExecuteAsync(ctx context.Context, args map[string]any, cb AsyncCallback) *ToolResult
 }
 
+// ConcurrencySafe is implemented by tools whose Execute method can run
+// concurrently with other invocations without shared mutable state or an
+// ordering dependency. The agent loop batches consecutive calls to such tools
+// when the model requests more than one in a single response.
+//
+// Tools that implement AsyncExecutor are never treated as concurrency-safe:
+// their real work already runs in the background and their ExecuteAsync
+// return value is only an acknowledgement.
+type ConcurrencySafe interface {
+	Tool
+	// IsConcurrencySafe reports whether this tool can run alongside other
+	// concurrency-safe invocations. Returning false keeps the tool on the
+	// sequential path.
+	IsConcurrencySafe() bool
+}
+
+// IsConcurrencySafe reports whether tool may run in a concurrent tool batch.
+func IsConcurrencySafe(tool Tool) bool {
+	if tool == nil {
+		return false
+	}
+	if _, async := tool.(AsyncExecutor); async {
+		return false
+	}
+	safe, ok := tool.(ConcurrencySafe)
+	return ok && safe.IsConcurrencySafe()
+}
+
 func ToolToSchema(tool Tool) map[string]any {
 	return map[string]any{
 		"type": "function",
