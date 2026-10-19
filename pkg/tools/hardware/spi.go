@@ -93,7 +93,7 @@ func (t *SPITool) Execute(ctx context.Context, args map[string]any) *ToolResult 
 func (t *SPITool) list() *ToolResult {
 	matches, err := filepath.Glob("/dev/spidev*")
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("failed to scan for SPI devices: %v", err))
+		return ErrorResult(fmt.Sprintf("failed to scan for SPI devices: %v", err)).WithError(err)
 	}
 
 	if len(matches) == 0 {

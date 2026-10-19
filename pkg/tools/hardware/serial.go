@@ -137,7 +137,7 @@ func (t *SerialTool) Execute(ctx context.Context, args map[string]any) *ToolResu
 func (t *SerialTool) list() *ToolResult {
 	ports, err := serialListPorts()
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("failed to list serial ports: %v", err))
+		return ErrorResult(fmt.Sprintf("failed to list serial ports: %v", err)).WithError(err)
 	}
 	if len(ports) == 0 {
 		return SilentResult("No serial ports found on this host.")
@@ -171,7 +171,7 @@ func (t *SerialTool) read(ctx context.Context, args map[string]any) *ToolResult 
 
 	data, err := serialRead(ctx, cfg, length, timeout)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("serial read failed on %s: %v", cfg.Port, err))
+		return ErrorResult(fmt.Sprintf("serial read failed on %s: %v", cfg.Port, err)).WithError(err)
 	}
 
 	return SilentResult(formatSerialPayload("read", cfg, data, timeout, nil))
@@ -200,7 +200,7 @@ func (t *SerialTool) write(ctx context.Context, args map[string]any) *ToolResult
 
 	written, err := serialWrite(ctx, cfg, payload, timeout)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("serial write failed on %s: %v", cfg.Port, err))
+		return ErrorResult(fmt.Sprintf("serial write failed on %s: %v", cfg.Port, err)).WithError(err)
 	}
 
 	return SilentResult(formatSerialPayload("write", cfg, payload, timeout, map[string]any{

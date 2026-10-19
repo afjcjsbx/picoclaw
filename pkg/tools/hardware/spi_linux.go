@@ -38,28 +38,30 @@ type spiTransfer struct {
 func configureSPI(devPath string, mode uint8, bits uint8, speed uint32) (int, *ToolResult) {
 	fd, err := syscall.Open(devPath, syscall.O_RDWR, 0)
 	if err != nil {
-		return -1, ErrorResult(fmt.Sprintf("failed to open %s: %v (check permissions and spidev module)", devPath, err))
+		return -1, ErrorResult(
+			fmt.Sprintf("failed to open %s: %v (check permissions and spidev module)", devPath, err),
+		).WithError(err)
 	}
 
 	// Set SPI mode
 	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), spiIocWrMode, uintptr(unsafe.Pointer(&mode)))
 	if errno != 0 {
 		syscall.Close(fd)
-		return -1, ErrorResult(fmt.Sprintf("failed to set SPI mode %d: %v", mode, errno))
+		return -1, ErrorResult(fmt.Sprintf("failed to set SPI mode %d: %v", mode, errno)).WithError(errno)
 	}
 
 	// Set bits per word
 	_, _, errno = syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), spiIocWrBitsPerWord, uintptr(unsafe.Pointer(&bits)))
 	if errno != 0 {
 		syscall.Close(fd)
-		return -1, ErrorResult(fmt.Sprintf("failed to set bits per word %d: %v", bits, errno))
+		return -1, ErrorResult(fmt.Sprintf("failed to set bits per word %d: %v", bits, errno)).WithError(errno)
 	}
 
 	// Set max speed
 	_, _, errno = syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), spiIocWrMaxSpeedHz, uintptr(unsafe.Pointer(&speed)))
 	if errno != 0 {
 		syscall.Close(fd)
-		return -1, ErrorResult(fmt.Sprintf("failed to set SPI speed %d Hz: %v", speed, errno))
+		return -1, ErrorResult(fmt.Sprintf("failed to set SPI speed %d Hz: %v", speed, errno)).WithError(errno)
 	}
 
 	return fd, nil
@@ -121,7 +123,7 @@ func (t *SPITool) transfer(args map[string]any) *ToolResult {
 	runtime.KeepAlive(txBuf)
 	runtime.KeepAlive(rxBuf)
 	if errno != 0 {
-		return ErrorResult(fmt.Sprintf("SPI transfer failed: %v", errno))
+		return ErrorResult(fmt.Sprintf("SPI transfer failed: %v", errno)).WithError(errno)
 	}
 
 	// Format received bytes
@@ -178,7 +180,7 @@ func (t *SPITool) readDevice(args map[string]any) *ToolResult {
 	runtime.KeepAlive(txBuf)
 	runtime.KeepAlive(rxBuf)
 	if errno != 0 {
-		return ErrorResult(fmt.Sprintf("SPI read failed: %v", errno))
+		return ErrorResult(fmt.Sprintf("SPI read failed: %v", errno)).WithError(errno)
 	}
 
 	hexBytes := make([]string, len(rxBuf))

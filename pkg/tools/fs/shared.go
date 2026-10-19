@@ -54,12 +54,12 @@ func resolveMediaFile(
 ) (string, *ToolResult) {
 	resolved, err := ValidateReadablePathWithAllowPaths(path, workspace, restrict, allowPaths)
 	if err != nil {
-		return "", ErrorResult(fmt.Sprintf("invalid path: %v", err))
+		return "", ErrorResult(fmt.Sprintf("invalid path: %v", err)).WithError(err)
 	}
 
 	info, err := os.Stat(resolved)
 	if err != nil {
-		return "", ErrorResult(fmt.Sprintf("file not found: %v", err))
+		return "", ErrorResult(fmt.Sprintf("file not found: %v", err)).WithError(err)
 	}
 	if info.IsDir() {
 		return "", ErrorResult(fmt.Sprintf("path is a directory, expected %s", expectedKind))

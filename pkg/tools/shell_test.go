@@ -2278,3 +2278,31 @@ func TestShellTool_PTY_ReaderStopsAfterExit(t *testing.T) {
 	}, 5*time.Second, 50*time.Millisecond,
 		"PTY reader goroutines should stop after the process exits")
 }
+
+// TestExecTool_PathResolutionFailureAttachesError pins that a failing exec
+// exposes the underlying error on the result, so callers can inspect the cause
+// instead of parsing ForLLM.
+func TestExecTool_PathResolutionFailureAttachesError(t *testing.T) {
+	workspace := t.TempDir()
+	tool, err := NewExecTool(workspace, true)
+	if err != nil {
+		t.Fatalf("NewExecTool() error: %v", err)
+	}
+
+	ctx := WithToolContext(context.Background(), "cli", "test")
+	result := tool.Execute(ctx, map[string]any{
+		"action":  "run",
+		"command": "true",
+		"cwd":     "does-not-exist",
+	})
+
+	if result == nil || !result.IsError {
+		t.Fatalf("expected an error result, got %+v", result)
+	}
+	if result.Err == nil {
+		t.Fatalf("error result carries no cause: %q", result.ForLLM)
+	}
+	if !strings.Contains(result.Err.Error(), "does-not-exist") {
+		t.Errorf("attached cause %q does not mention the missing directory", result.Err)
+	}
+}

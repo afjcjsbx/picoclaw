@@ -474,7 +474,7 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	if seeker, ok := file.(io.Seeker); ok {
 		_, err = seeker.Seek(0, io.SeekStart)
 		if err != nil {
-			return ErrorResult(fmt.Sprintf("failed to reset file position after sniff: %v", err))
+			return ErrorResult(fmt.Sprintf("failed to reset file position after sniff: %v", err)).WithError(err)
 		}
 	} else {
 		// Non-seekable: we consumed sniffN bytes above; account for them when
@@ -492,7 +492,7 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	if seeker, ok := file.(io.Seeker); ok {
 		_, err = seeker.Seek(offset, io.SeekStart)
 		if err != nil {
-			return ErrorResult(fmt.Sprintf("failed to seek to offset %d: %v", offset, err))
+			return ErrorResult(fmt.Sprintf("failed to seek to offset %d: %v", offset, err)).WithError(err)
 		}
 	} else if offset > 0 {
 		// Fallback for non-seekable streams: discard leading bytes.
@@ -501,7 +501,7 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		if remaining > 0 {
 			_, err = io.CopyN(io.Discard, file, remaining)
 			if err != nil {
-				return ErrorResult(fmt.Sprintf("failed to advance to offset %d: %v", offset, err))
+				return ErrorResult(fmt.Sprintf("failed to advance to offset %d: %v", offset, err)).WithError(err)
 			}
 		}
 	}
@@ -515,7 +515,7 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	// and io.EOF only when n == 0. Both are normal terminal conditions — only
 	// other errors are genuine failures.
 	if err != nil && err != io.EOF && !errors.Is(err, io.ErrUnexpectedEOF) {
-		return ErrorResult(fmt.Sprintf("failed to read file content: %v", err))
+		return ErrorResult(fmt.Sprintf("failed to read file content: %v", err)).WithError(err)
 	}
 
 	// hasMore is true only when we actually got the extra probe byte.
@@ -617,7 +617,7 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 	sample := make([]byte, 512)
 	sampleN, readErr := file.Read(sample)
 	if readErr != nil && readErr != io.EOF {
-		return ErrorResult(fmt.Sprintf("failed to read file: %v", readErr))
+		return ErrorResult(fmt.Sprintf("failed to read file: %v", readErr)).WithError(readErr)
 	}
 	sample = sample[:sampleN]
 	if isBinaryReadFileData(sample) {
@@ -639,7 +639,7 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 	for lineIndex < startLine {
 		hasLine, _, consumeErr := consumeNextLine(reader)
 		if consumeErr != nil {
-			return ErrorResult(fmt.Sprintf("failed to read file content: %v", consumeErr))
+			return ErrorResult(fmt.Sprintf("failed to read file content: %v", consumeErr)).WithError(consumeErr)
 		}
 		if !hasLine {
 			reachedEOF = true
@@ -671,7 +671,7 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 
 		line, complete, hasLine, restPending, consumedBytes, readLineErr := readNextLinePrefix(reader, allowance)
 		if readLineErr != nil {
-			return ErrorResult(fmt.Sprintf("failed to read file content: %v", readLineErr))
+			return ErrorResult(fmt.Sprintf("failed to read file content: %v", readLineErr)).WithError(readLineErr)
 		}
 		if !hasLine {
 			reachedEOF = true
@@ -718,7 +718,7 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 			if restPending {
 				_, discardedBytes, consumeErr := consumeNextLine(reader)
 				if consumeErr != nil {
-					return ErrorResult(fmt.Sprintf("failed to read file content: %v", consumeErr))
+					return ErrorResult(fmt.Sprintf("failed to read file content: %v", consumeErr)).WithError(consumeErr)
 				}
 				fileBytesRead += discardedBytes
 			}
@@ -735,7 +735,7 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 	if !reachedEOF && !lineTruncated {
 		hasMoreContent, peekErr := readerHasMoreContent(reader)
 		if peekErr != nil {
-			return ErrorResult(fmt.Sprintf("failed to inspect remaining file content: %v", peekErr))
+			return ErrorResult(fmt.Sprintf("failed to inspect remaining file content: %v", peekErr)).WithError(peekErr)
 		}
 		if !hasMoreContent {
 			reachedEOF = true
@@ -1118,7 +1118,7 @@ func (t *ListDirTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 
 	entries, err := t.fs.ReadDir(path)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("failed to read directory: %v", err))
+		return ErrorResult(fmt.Sprintf("failed to read directory: %v", err)).WithError(err)
 	}
 	return formatDirEntries(entries)
 }

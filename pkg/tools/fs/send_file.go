@@ -110,7 +110,7 @@ func (t *SendFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 
 	ref, err := storeMediaRef(t.mediaStore, resolved, filename, mediaType, "tool:send_file", scope)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("failed to register media: %v", err))
+		return ErrorResult(fmt.Sprintf("failed to register media: %v", err)).WithError(err)
 	}
 
 	return MediaResult(fmt.Sprintf("File %q sent to user", filename), []string{ref}).WithResponseHandled()

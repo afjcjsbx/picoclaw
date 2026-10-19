@@ -91,7 +91,7 @@ func (t *I2CTool) Execute(ctx context.Context, args map[string]any) *ToolResult 
 func (t *I2CTool) detect() *ToolResult {
 	matches, err := filepath.Glob("/dev/i2c-*")
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("failed to scan for I2C buses: %v", err))
+		return ErrorResult(fmt.Sprintf("failed to scan for I2C buses: %v", err)).WithError(err)
 	}
 
 	if len(matches) == 0 {

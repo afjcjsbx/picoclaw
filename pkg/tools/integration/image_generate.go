@@ -140,7 +140,7 @@ func (t *ImageGenerateTool) Execute(ctx context.Context, args map[string]any) *t
 	// the decoded bytes are never held in memory alongside the base64 payload.
 	file, err := os.CreateTemp("", "picoclaw-generated-*")
 	if err != nil {
-		return tools.ErrorResult(fmt.Sprintf("failed to create generated image file: %v", err))
+		return tools.ErrorResult(fmt.Sprintf("failed to create generated image file: %v", err)).WithError(err)
 	}
 	path := file.Name()
 	removeFile := func() {
@@ -160,12 +160,12 @@ func (t *ImageGenerateTool) Execute(ctx context.Context, args map[string]any) *t
 	}
 	if closeErr := file.Close(); closeErr != nil {
 		_ = os.Remove(path)
-		return tools.ErrorResult(fmt.Sprintf("failed to close generated image: %v", closeErr))
+		return tools.ErrorResult(fmt.Sprintf("failed to close generated image: %v", closeErr)).WithError(closeErr)
 	}
 	finalPath := path + ext
 	if renameErr := os.Rename(path, finalPath); renameErr != nil {
 		_ = os.Remove(path)
-		return tools.ErrorResult(fmt.Sprintf("failed to finalize generated image: %v", renameErr))
+		return tools.ErrorResult(fmt.Sprintf("failed to finalize generated image: %v", renameErr)).WithError(renameErr)
 	}
 	path = finalPath
 
@@ -178,7 +178,7 @@ func (t *ImageGenerateTool) Execute(ctx context.Context, args map[string]any) *t
 	}, scope)
 	if err != nil {
 		_ = os.Remove(path)
-		return tools.ErrorResult(fmt.Sprintf("failed to register generated image: %v", err))
+		return tools.ErrorResult(fmt.Sprintf("failed to register generated image: %v", err)).WithError(err)
 	}
 	return (&tools.ToolResult{
 		ForLLM: "Generated and sent one image.",

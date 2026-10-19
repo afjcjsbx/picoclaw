@@ -83,7 +83,9 @@ func (t *I2CTool) scan(args map[string]any) *ToolResult {
 	devPath := fmt.Sprintf("/dev/i2c-%s", bus)
 	fd, err := syscall.Open(devPath, syscall.O_RDWR, 0)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("failed to open %s: %v (check permissions and i2c-dev module)", devPath, err))
+		return ErrorResult(
+			fmt.Sprintf("failed to open %s: %v (check permissions and i2c-dev module)", devPath, err),
+		).WithError(err)
 	}
 	defer syscall.Close(fd)
 
@@ -92,7 +94,9 @@ func (t *I2CTool) scan(args map[string]any) *ToolResult {
 	var funcs uintptr
 	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), i2cFuncs, uintptr(unsafe.Pointer(&funcs)))
 	if errno != 0 {
-		return ErrorResult(fmt.Sprintf("failed to query I2C adapter capabilities on %s: %v", devPath, errno))
+		return ErrorResult(
+			fmt.Sprintf("failed to query I2C adapter capabilities on %s: %v", devPath, errno),
+		).WithError(errno)
 	}
 
 	hasQuick := funcs&i2cFuncSmbusQuick != 0
@@ -166,14 +170,14 @@ func (t *I2CTool) readDevice(args map[string]any) *ToolResult {
 	devPath := fmt.Sprintf("/dev/i2c-%s", bus)
 	fd, err := syscall.Open(devPath, syscall.O_RDWR, 0)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("failed to open %s: %v", devPath, err))
+		return ErrorResult(fmt.Sprintf("failed to open %s: %v", devPath, err)).WithError(err)
 	}
 	defer syscall.Close(fd)
 
 	// Set slave address
 	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), i2cSlave, uintptr(addr))
 	if errno != 0 {
-		return ErrorResult(fmt.Sprintf("failed to set I2C address 0x%02x: %v", addr, errno))
+		return ErrorResult(fmt.Sprintf("failed to set I2C address 0x%02x: %v", addr, errno)).WithError(errno)
 	}
 
 	// If register is specified, write it first
@@ -184,7 +188,7 @@ func (t *I2CTool) readDevice(args map[string]any) *ToolResult {
 		}
 		_, err = syscall.Write(fd, []byte{byte(reg)})
 		if err != nil {
-			return ErrorResult(fmt.Sprintf("failed to write register 0x%02x: %v", reg, err))
+			return ErrorResult(fmt.Sprintf("failed to write register 0x%02x: %v", reg, err)).WithError(err)
 		}
 	}
 
@@ -192,7 +196,7 @@ func (t *I2CTool) readDevice(args map[string]any) *ToolResult {
 	buf := make([]byte, length)
 	n, err := syscall.Read(fd, buf)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("failed to read from device 0x%02x: %v", addr, err))
+		return ErrorResult(fmt.Sprintf("failed to read from device 0x%02x: %v", addr, err)).WithError(err)
 	}
 
 	// Format as hex bytes
@@ -266,20 +270,20 @@ func (t *I2CTool) writeDevice(args map[string]any) *ToolResult {
 	devPath := fmt.Sprintf("/dev/i2c-%s", bus)
 	fd, err := syscall.Open(devPath, syscall.O_RDWR, 0)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("failed to open %s: %v", devPath, err))
+		return ErrorResult(fmt.Sprintf("failed to open %s: %v", devPath, err)).WithError(err)
 	}
 	defer syscall.Close(fd)
 
 	// Set slave address
 	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), i2cSlave, uintptr(addr))
 	if errno != 0 {
-		return ErrorResult(fmt.Sprintf("failed to set I2C address 0x%02x: %v", addr, errno))
+		return ErrorResult(fmt.Sprintf("failed to set I2C address 0x%02x: %v", addr, errno)).WithError(errno)
 	}
 
 	// Write data
 	n, err := syscall.Write(fd, data)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("failed to write to device 0x%02x: %v", addr, err))
+		return ErrorResult(fmt.Sprintf("failed to write to device 0x%02x: %v", addr, err)).WithError(err)
 	}
 
 	return SilentResult(fmt.Sprintf("Wrote %d byte(s) to device 0x%02x on %s", n, addr, devPath))

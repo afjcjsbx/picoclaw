@@ -76,7 +76,9 @@ func (t *RegexSearchTool) Execute(ctx context.Context, args map[string]any) *Too
 	res, err := t.registry.SearchRegex(pattern, t.maxSearchResults)
 	if err != nil {
 		logger.WarnCF("discovery", "Invalid regex pattern", map[string]any{"pattern": pattern, "error": err.Error()})
-		return ErrorResult(fmt.Sprintf("Invalid regex pattern syntax: %v. Please fix your regex and try again.", err))
+		return ErrorResult(
+			fmt.Sprintf("Invalid regex pattern syntax: %v. Please fix your regex and try again.", err),
+		).WithError(err)
 	}
 
 	logger.InfoCF("discovery", "Regex search completed", map[string]any{"pattern": pattern, "results": len(res)})

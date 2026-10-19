@@ -230,7 +230,7 @@ func (t *SearchFilesTool) searchNames(ctx context.Context, opts searchFilesOptio
 		},
 	)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("failed to search %q: %v", opts.path, err))
+		return ErrorResult(fmt.Sprintf("failed to search %q: %v", opts.path, err)).WithError(err)
 	}
 	if opts.order == "modified" {
 		sort.Slice(entries, func(i, j int) bool {
@@ -295,7 +295,7 @@ func (t *SearchFilesTool) searchContents(ctx context.Context, opts searchFilesOp
 		return len(rows) > opts.limit, nil
 	})
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("failed to search %q: %v", opts.path, err))
+		return ErrorResult(fmt.Sprintf("failed to search %q: %v", opts.path, err)).WithError(err)
 	}
 	moreResults := len(rows) > opts.limit
 	if moreResults {

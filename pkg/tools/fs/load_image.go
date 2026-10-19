@@ -119,7 +119,7 @@ func (t *LoadImageTool) Execute(ctx context.Context, args map[string]any) *ToolR
 
 	ref, err := storeMediaRef(t.mediaStore, resolved, filename, mediaType, "tool:load_image", scope)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("failed to register image in media store: %v", err))
+		return ErrorResult(fmt.Sprintf("failed to register image in media store: %v", err)).WithError(err)
 	}
 
 	// Build the tool result text. The media:// ref in Media will be picked

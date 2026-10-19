@@ -2904,3 +2904,21 @@ func TestWebTool_WebFetch_PerCallMaxCharsCannotDisableFloodGuard(t *testing.T) {
 		t.Fatalf("unexpected error: %s", smaller.ForLLM)
 	}
 }
+
+// TestWebTool_WebFetch_InvalidURLAttachesError pins that a URL that fails to
+// parse keeps the parse error on the result.
+func TestWebTool_WebFetch_InvalidURLAttachesError(t *testing.T) {
+	tool, err := NewWebFetchTool(50000, format, testFetchLimit)
+	if err != nil {
+		t.Fatalf("NewWebFetchTool() error: %v", err)
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{"url": "http://[::1"})
+
+	if !result.IsError {
+		t.Fatalf("expected an error for an unparsable URL, got %+v", result)
+	}
+	if result.Err == nil {
+		t.Fatalf("error result carries no cause: %q", result.ForLLM)
+	}
+}

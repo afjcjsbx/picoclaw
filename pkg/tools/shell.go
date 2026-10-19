@@ -418,7 +418,9 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 	if t.restrictToWorkspace && t.workingDir != "" && cwd != t.workingDir {
 		resolved, err := filepath.EvalSymlinks(cwd)
 		if err != nil {
-			return ErrorResult(fmt.Sprintf("Command blocked by safety guard (path resolution failed: %v)", err))
+			return ErrorResult(
+				fmt.Sprintf("Command blocked by safety guard (path resolution failed: %v)", err),
+			).WithError(err)
 		}
 		if fstools.IsAllowedPath(resolved, t.allowedPathPatterns) {
 			cwd = resolved
@@ -473,7 +475,7 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string, timeout tim
 	// Route shell execution through the shared isolation entry point so exec tool
 	// subprocesses receive the same isolation policy as other integrations.
 	if err := isolation.Start(cmd); err != nil {
-		return ErrorResult(fmt.Sprintf("failed to start command: %v", err))
+		return ErrorResult(fmt.Sprintf("failed to start command: %v", err)).WithError(err)
 	}
 
 	done := make(chan error, 1)
@@ -612,7 +614,7 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 	if ptyEnabled {
 		ptmx, tty, err := pty.Open()
 		if err != nil {
-			return ErrorResult(fmt.Sprintf("failed to create PTY: %v", err))
+			return ErrorResult(fmt.Sprintf("failed to create PTY: %v", err)).WithError(err)
 		}
 
 		cmd.Stdin = tty
@@ -629,15 +631,15 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 		var err error
 		stdoutReader, err = cmd.StdoutPipe()
 		if err != nil {
-			return ErrorResult(fmt.Sprintf("failed to create stdout pipe: %v", err))
+			return ErrorResult(fmt.Sprintf("failed to create stdout pipe: %v", err)).WithError(err)
 		}
 		stderrReader, err = cmd.StderrPipe()
 		if err != nil {
-			return ErrorResult(fmt.Sprintf("failed to create stderr pipe: %v", err))
+			return ErrorResult(fmt.Sprintf("failed to create stderr pipe: %v", err)).WithError(err)
 		}
 		stdinWriter, err = cmd.StdinPipe()
 		if err != nil {
-			return ErrorResult(fmt.Sprintf("failed to create stdin pipe: %v", err))
+			return ErrorResult(fmt.Sprintf("failed to create stdin pipe: %v", err)).WithError(err)
 		}
 		session.stdoutPipe = io.MultiReader(stdoutReader, stderrReader)
 		session.stdinWriter = stdinWriter
@@ -652,7 +654,7 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 		if session.ptyMaster != nil {
 			_ = session.ptyMaster.Close()
 		}
-		return ErrorResult(fmt.Sprintf("failed to start command: %v", err))
+		return ErrorResult(fmt.Sprintf("failed to start command: %v", err)).WithError(err)
 	}
 
 	// The child inherited its own copies of the PTY slave end. The parent must
@@ -918,7 +920,7 @@ func (t *ExecTool) executeWrite(args map[string]any) *ToolResult {
 		if errors.Is(err, ErrSessionDone) {
 			return ErrorResult(fmt.Sprintf("process already exited with code %d", session.GetExitCode()))
 		}
-		return ErrorResult(fmt.Sprintf("failed to write to session: %v", err))
+		return ErrorResult(fmt.Sprintf("failed to write to session: %v", err)).WithError(err)
 	}
 
 	resp := ExecResponse{
@@ -954,7 +956,7 @@ func (t *ExecTool) executeKill(args map[string]any) *ToolResult {
 	}
 
 	if err = session.Kill(); err != nil {
-		return ErrorResult(fmt.Sprintf("failed to kill session: %v", err))
+		return ErrorResult(fmt.Sprintf("failed to kill session: %v", err)).WithError(err)
 	}
 
 	t.sessionManager.Remove(sessionID)
@@ -1171,7 +1173,7 @@ func (t *ExecTool) executeSendKeys(args map[string]any) *ToolResult {
 
 	data, err := encodeKeySequence(keys, ptyKeyMode)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("invalid key: %v", err))
+		return ErrorResult(fmt.Sprintf("invalid key: %v", err)).WithError(err)
 	}
 
 	if session.IsDone() {
@@ -1182,7 +1184,7 @@ func (t *ExecTool) executeSendKeys(args map[string]any) *ToolResult {
 		if errors.Is(err, ErrSessionDone) {
 			return ErrorResult(fmt.Sprintf("process already exited with code %d", session.GetExitCode()))
 		}
-		return ErrorResult(fmt.Sprintf("failed to send keys: %v", err))
+		return ErrorResult(fmt.Sprintf("failed to send keys: %v", err)).WithError(err)
 	}
 
 	resp := ExecResponse{

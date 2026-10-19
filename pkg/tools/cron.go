@@ -243,7 +243,7 @@ func (t *CronTool) addJob(ctx context.Context, args map[string]any) *ToolResult 
 		chatID,
 	)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("Error adding job: %v", err))
+		return ErrorResult(fmt.Sprintf("Error adding job: %v", err)).WithError(err)
 	}
 
 	// Apply optional payload fields and persist in a single UpdateJob call
@@ -389,7 +389,7 @@ func (t *CronTool) updateJob(ctx context.Context, args map[string]any) *ToolResu
 	}
 
 	if err := t.cronService.UpdateJob(job); err != nil {
-		return ErrorResult(fmt.Sprintf("Error updating job: %v", err))
+		return ErrorResult(fmt.Sprintf("Error updating job: %v", err)).WithError(err)
 	}
 
 	updated, ok := t.cronService.GetJob(jobID)
@@ -717,7 +717,7 @@ func (t *CronTool) runJob(ctx context.Context, args map[string]any) *ToolResult 
 	}
 
 	if err := t.cronService.RunJob(jobID); err != nil {
-		return ErrorResult(fmt.Sprintf("Error running job %s: %v", jobID, err))
+		return ErrorResult(fmt.Sprintf("Error running job %s: %v", jobID, err)).WithError(err)
 	}
 	return SilentResult(
 		fmt.Sprintf("Cron job '%s' triggered; its output will be delivered to the job's channel", job.Name),

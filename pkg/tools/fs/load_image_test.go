@@ -163,3 +163,24 @@ func TestLoadImage_Directory(t *testing.T) {
 		t.Fatalf("expected directory error, got: %s", result.ForLLM)
 	}
 }
+
+// TestLoadImage_MissingFileAttachesError pins that the stat failure keeps its
+// cause on the result, instead of only in the user-facing message.
+func TestLoadImage_MissingFileAttachesError(t *testing.T) {
+	dir := t.TempDir()
+	tool := NewLoadImageTool(dir, true, 0, media.NewFileMediaStore())
+	ctx := WithToolContext(context.Background(), "test", "chat1")
+
+	missing := filepath.Join(dir, "missing.png")
+	result := tool.Execute(ctx, map[string]any{"path": missing})
+
+	if !result.IsError {
+		t.Fatal("expected an error for a missing file")
+	}
+	if result.Err == nil {
+		t.Fatalf("error result carries no cause: %q", result.ForLLM)
+	}
+	if !strings.Contains(result.Err.Error(), "missing.png") {
+		t.Errorf("attached cause %q does not mention the missing file", result.Err)
+	}
+}

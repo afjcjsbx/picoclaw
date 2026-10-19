@@ -76,7 +76,7 @@ func (t *FindSkillsTool) Execute(ctx context.Context, args map[string]any) *Tool
 	// Search all registries.
 	results, err := t.registryMgr.SearchAll(ctx, query, limit)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("skill search failed: %v", err))
+		return ErrorResult(fmt.Sprintf("skill search failed: %v", err)).WithError(err)
 	}
 
 	// Cache the results.

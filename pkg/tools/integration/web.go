@@ -2230,7 +2230,7 @@ func (t *WebSearchTool) Execute(ctx context.Context, args map[string]any) *ToolR
 
 	result, err := provider.Search(ctx, query, count, rangeCode)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("search failed: %v", err))
+		return ErrorResult(fmt.Sprintf("search failed: %v", err)).WithError(err)
 	}
 
 	return &ToolResult{
@@ -2340,7 +2340,7 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 
 	parsedURL, err := url.Parse(urlStr)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("invalid URL: %v", err))
+		return ErrorResult(fmt.Sprintf("invalid URL: %v", err)).WithError(err)
 	}
 
 	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
@@ -2486,7 +2486,7 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 			var err error
 			text, err = utils.HtmlToMarkdown(bodyStr)
 			if err != nil {
-				return ErrorResult(fmt.Sprintf("failed to HTML to markdown: %v", err))
+				return ErrorResult(fmt.Sprintf("failed to HTML to markdown: %v", err)).WithError(err)
 			}
 			extractor = "markdown"
 
@@ -2514,7 +2514,7 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 
 	resultJSON, marshalErr := json.MarshalIndent(result, "", "  ")
 	if marshalErr != nil {
-		return ErrorResult(fmt.Sprintf("failed to marshal result: %v", marshalErr))
+		return ErrorResult(fmt.Sprintf("failed to marshal result: %v", marshalErr)).WithError(marshalErr)
 	}
 
 	toolResult := &ToolResult{

@@ -159,17 +159,21 @@ func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) *To
 		if _, statErr := os.Stat(targetDir); statErr == nil {
 			backupDir = filepath.Join(skillsDir, fmt.Sprintf(".%s.picoclaw-backup-%d", dirName, time.Now().UnixNano()))
 			if renameErr := os.Rename(targetDir, backupDir); renameErr != nil {
-				return ErrorResult(fmt.Sprintf("failed to prepare reinstall for %q: %v", slug, renameErr))
+				return ErrorResult(
+					fmt.Sprintf("failed to prepare reinstall for %q: %v", slug, renameErr),
+				).WithError(renameErr)
 			}
 		} else if !os.IsNotExist(statErr) {
-			return ErrorResult(fmt.Sprintf("failed to inspect existing install for %q: %v", slug, statErr))
+			return ErrorResult(
+				fmt.Sprintf("failed to inspect existing install for %q: %v", slug, statErr),
+			).WithError(statErr)
 		}
 	}
 
 	// Ensure skills directory exists.
 	if mkdirErr := os.MkdirAll(skillsDir, 0o755); mkdirErr != nil {
 		restorePreviousInstall()
-		return ErrorResult(fmt.Sprintf("failed to create skills directory: %v", mkdirErr))
+		return ErrorResult(fmt.Sprintf("failed to create skills directory: %v", mkdirErr)).WithError(mkdirErr)
 	}
 
 	// Download and install (handles metadata, version resolution, extraction).
@@ -177,7 +181,7 @@ func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) *To
 	if err != nil {
 		// Clean up partial install.
 		cleanupFailedInstall("Failed to remove partial install")
-		return ErrorResult(fmt.Sprintf("failed to install %q: %v", slug, err))
+		return ErrorResult(fmt.Sprintf("failed to install %q: %v", slug, err)).WithError(err)
 	}
 
 	// Moderation: block malware.
@@ -203,7 +207,7 @@ func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) *To
 				"version":  result.Version,
 			})
 		cleanupFailedInstall("Failed to roll back install after metadata write failure")
-		return ErrorResult(fmt.Sprintf("failed to persist skill metadata for %q: %v", slug, err))
+		return ErrorResult(fmt.Sprintf("failed to persist skill metadata for %q: %v", slug, err)).WithError(err)
 	}
 	if backupDir != "" {
 		if rmErr := os.RemoveAll(backupDir); rmErr != nil {
