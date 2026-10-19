@@ -329,6 +329,14 @@ func (r *ToolRegistry) Execute(ctx context.Context, name string, args map[string
 	return r.ExecuteWithContext(ctx, name, args, "", "", nil)
 }
 
+// IsConcurrencySafe reports whether the named tool can run concurrently with
+// other concurrency-safe tool calls. Unregistered and TTL-expired tools are
+// not concurrency-safe.
+func (r *ToolRegistry) IsConcurrencySafe(name string) bool {
+	tool, ok := r.Get(name)
+	return ok && IsConcurrencySafe(tool)
+}
+
 // ExecuteWithContext executes a tool with channel/chatID context and optional async callback.
 // If the tool implements AsyncExecutor, ExecuteAsync is always called instead
 // of Execute — the callback is a parameter, never stored as mutable state on

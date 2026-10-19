@@ -19,11 +19,11 @@ import (
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
-// maxParallelToolCalls bounds how many tool calls from a single assistant
+// MaxParallelToolCalls bounds how many tool calls from a single assistant
 // response run at the same time. The count is model-controlled, and every call
 // can spawn a process or open network connections, so the fan-out must not be
 // unbounded.
-const maxParallelToolCalls = 8
+const MaxParallelToolCalls = 8
 
 // ToolLoopConfig configures the tool execution loop.
 type ToolLoopConfig struct {
@@ -168,7 +168,7 @@ func RunToolLoop(
 
 		results := make([]indexedResult, len(normalizedToolCalls))
 		var wg sync.WaitGroup
-		sem := make(chan struct{}, maxParallelToolCalls)
+		sem := make(chan struct{}, MaxParallelToolCalls)
 
 		for i, tc := range normalizedToolCalls {
 			results[i].tc = tc

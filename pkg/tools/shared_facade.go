@@ -22,6 +22,7 @@ type (
 	Tool                   = toolshared.Tool
 	AsyncCallback          = toolshared.AsyncCallback
 	AsyncExecutor          = toolshared.AsyncExecutor
+	ConcurrencySafe        = toolshared.ConcurrencySafe
 	PromptMetadata         = toolshared.PromptMetadata
 	PromptMetadataProvider = toolshared.PromptMetadataProvider
 	ToolResult             = toolshared.ToolResult
@@ -91,6 +92,11 @@ func ToolSessionScope(ctx context.Context) *session.SessionScope {
 
 func ToolToSchema(tool Tool) map[string]any {
 	return toolshared.ToolToSchema(tool)
+}
+
+// IsConcurrencySafe reports whether tool may run in a concurrent tool batch.
+func IsConcurrencySafe(tool Tool) bool {
+	return toolshared.IsConcurrencySafe(tool)
 }
 
 func NewToolResult(forLLM string) *ToolResult {

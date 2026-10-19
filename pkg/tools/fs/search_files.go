@@ -45,6 +45,8 @@ func NewSearchFilesTool(workspace string, restrict bool, allowPaths ...[]*regexp
 
 func (t *SearchFilesTool) Name() string { return "search_files" }
 
+func (t *SearchFilesTool) IsConcurrencySafe() bool { return true }
+
 func (t *SearchFilesTool) Description() string {
 	return "Search file contents or find files by name. Use this instead of grep/rg/find/ls in terminal. target='content' does regex search with files_only, count, or context output; target='files' finds names by glob. Supports pagination. On macOS, searches above your home directory skip TCC-protected folders; target one directly to include it. Searches the configured readable filesystem sandbox."
 }

@@ -75,7 +75,7 @@ func (p *manyToolCallsProvider) GetDefaultModel() string { return "test-model" }
 // TestRunToolLoop_BoundsConcurrentToolExecution verifies that a single
 // assistant response requesting many tool calls cannot fan out unbounded.
 func TestRunToolLoop_BoundsConcurrentToolExecution(t *testing.T) {
-	const calls = maxParallelToolCalls * 3
+	const calls = MaxParallelToolCalls * 3
 
 	registry := NewToolRegistry()
 	tracker := &concurrencyTrackingTool{}
@@ -113,8 +113,8 @@ func TestRunToolLoop_BoundsConcurrentToolExecution(t *testing.T) {
 	if ran != calls {
 		t.Errorf("tool executions = %d, want %d", ran, calls)
 	}
-	if maxSeen > maxParallelToolCalls {
-		t.Errorf("max concurrent executions = %d, want <= %d", maxSeen, maxParallelToolCalls)
+	if maxSeen > MaxParallelToolCalls {
+		t.Errorf("max concurrent executions = %d, want <= %d", maxSeen, MaxParallelToolCalls)
 	}
 	if maxSeen < 2 {
 		t.Errorf("max concurrent executions = %d, tool calls should still run in parallel", maxSeen)

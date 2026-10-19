@@ -1663,6 +1663,11 @@ func (p *BaiduSearchProvider) Search(
 	return strings.Join(lines, "\n"), nil
 }
 
+var (
+	_ toolshared.ConcurrencySafe = (*WebSearchTool)(nil)
+	_ toolshared.ConcurrencySafe = (*WebFetchTool)(nil)
+)
+
 type WebSearchTool struct {
 	provider         SearchProvider
 	maxResults       int
@@ -2160,6 +2165,10 @@ func (t *WebSearchTool) Name() string {
 	return "web_search"
 }
 
+// IsConcurrencySafe implements toolshared.ConcurrencySafe. Searches only read
+// the provider configuration and perform independent HTTP requests.
+func (t *WebSearchTool) IsConcurrencySafe() bool { return true }
+
 func (t *WebSearchTool) Description() string {
 	return "Search the web for current information. Supports query, count, and an optional temporal range filter. Returns titles, URLs, and snippets from search results."
 }
@@ -2309,6 +2318,10 @@ func NewWebFetchToolWithConfig(
 func (t *WebFetchTool) Name() string {
 	return "web_fetch"
 }
+
+// IsConcurrencySafe implements toolshared.ConcurrencySafe. Fetches are
+// independent requests and the shared HTTP client is safe for concurrent use.
+func (t *WebFetchTool) IsConcurrencySafe() bool { return true }
 
 func (t *WebFetchTool) Description() string {
 	return "Fetch a URL and extract readable content (HTML to text). Use this to get weather info, news, articles, or any web content."
