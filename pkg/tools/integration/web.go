@@ -9,7 +9,6 @@ import (
 	"html"
 	"io"
 	"mime"
-	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -2363,7 +2362,7 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	}
 
 	// Lightweight pre-flight: block obvious localhost/literal-IP without DNS resolution.
-	// The real SSRF guard is newSafeDialContext at connect time.
+	// The real SSRF guard is utils.NewSafeDialContext at connect time.
 	hostname := parsedURL.Hostname()
 	if utils.IsObviousPrivateHost(hostname, t.whitelist, func() bool {
 		return allowPrivateWebFetchHosts.Load()
@@ -2577,21 +2576,4 @@ func (t *WebFetchTool) extractText(htmlContent string) string {
 	}
 
 	return strings.Join(cleanLines, "\n")
-}
-
-func newSafeDialContext(
-	dialer *net.Dialer,
-	whitelist *utils.PrivateHostWhitelist,
-) func(context.Context, string, string) (net.Conn, error) {
-	return utils.NewSafeDialContext(dialer, whitelist, func() bool {
-		return allowPrivateWebFetchHosts.Load()
-	})
-}
-
-func newPrivateHostWhitelist(entries []string) (*utils.PrivateHostWhitelist, error) {
-	return utils.NewPrivateHostWhitelist(entries)
-}
-
-func isPrivateOrRestrictedIP(ip net.IP) bool {
-	return utils.IsPrivateOrRestrictedIP(ip)
 }
