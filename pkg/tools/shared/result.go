@@ -1,7 +1,6 @@
 package toolshared
 
 import (
-	"encoding/json"
 	"strings"
 
 	"github.com/sipeed/picoclaw/pkg/providers"
@@ -206,17 +205,6 @@ func MediaResult(forLLM string, mediaRefs []string) *ToolResult {
 		ForLLM: forLLM,
 		Media:  mediaRefs,
 	}
-}
-
-// MarshalJSON implements custom JSON serialization.
-// The Err field is excluded from JSON output via the json:"-" tag.
-func (tr *ToolResult) MarshalJSON() ([]byte, error) {
-	type Alias ToolResult
-	return json.Marshal(&struct {
-		*Alias
-	}{
-		Alias: (*Alias)(tr),
-	})
 }
 
 // WithError sets the Err field and returns the result for chaining.
