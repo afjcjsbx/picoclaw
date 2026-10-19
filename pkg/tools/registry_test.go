@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/sipeed/picoclaw/pkg/media"
 	"github.com/sipeed/picoclaw/pkg/providers"
@@ -1025,5 +1026,46 @@ func TestToolRegistry_ExecuteWithContext_DoesNotMutateToolResult(t *testing.T) {
 	}
 	if second == shared {
 		t.Fatal("normalized result must not be the tool-owned pointer")
+	}
+}
+
+// registrarTool registers another tool from within Parameters, which the
+// registry calls while building schemas and summaries.
+type registrarTool struct {
+	mockRegistryTool
+	registry *ToolRegistry
+	once     sync.Once
+}
+
+func (m *registrarTool) Parameters() map[string]any {
+	m.once.Do(func() {
+		m.registry.Register(&mockRegistryTool{name: "spawned-by-schema", desc: "registered during schema build"})
+	})
+	return map[string]any{"type": "object", "properties": map[string]any{}}
+}
+
+// TestToolRegistry_SchemaViewsDoNotHoldTheLock verifies that building tool
+// definitions, provider definitions and summaries runs tool code without
+// holding the registry lock.
+func TestToolRegistry_SchemaViewsDoNotHoldTheLock(t *testing.T) {
+	registry := NewToolRegistry()
+	registry.Register(&registrarTool{registry: registry})
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = registry.GetDefinitions()
+		_ = registry.ToProviderDefs()
+		_ = registry.GetSummaries()
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("schema views did not return: tool methods ran while the registry lock was held")
+	}
+
+	if !registry.HasRegistered("spawned-by-schema") {
+		t.Error("the tool could not register itself while its schema was being built")
 	}
 }

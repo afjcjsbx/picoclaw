@@ -474,21 +474,46 @@ func (r *ToolRegistry) sortedToolNames() []string {
 }
 
 func (r *ToolRegistry) GetDefinitions() []map[string]any {
+	entries := r.activeToolSnapshot()
+
+	definitions := make([]map[string]any, 0, len(entries))
+	for _, entry := range entries {
+		definitions = append(definitions, ToolToSchema(entry.Tool))
+	}
+	return definitions
+}
+
+// activeToolSnapshot copies the core tools and the non-core tools with an
+// active TTL, sorted by name, under the lock. Callers must build schemas and
+// render summaries from the copy: those call ToolToSchema/Name/Description/
+// Parameters, i.e. arbitrary tool code, and running it while holding r.mu
+// blocks every writer and deadlocks if the tool touches the registry.
+func (r *ToolRegistry) activeToolSnapshot() []ToolEntry {
+	entries, _ := r.activeToolSnapshotWithVersion()
+	return entries
+}
+
+// activeToolSnapshotWithVersion also returns the registry version observed
+// under the same lock, so a caller can memoize work built from the copy.
+func (r *ToolRegistry) activeToolSnapshotWithVersion() ([]ToolEntry, uint64) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
+	version := r.version.Load()
+
 	sorted := r.sortedToolNames()
-	definitions := make([]map[string]any, 0, len(sorted))
+	entries := make([]ToolEntry, 0, len(sorted))
 	for _, name := range sorted {
 		entry := r.tools[name]
-
+		if entry == nil {
+			continue
+		}
 		if !entry.IsCore && entry.TTL <= 0 {
 			continue
 		}
-
-		definitions = append(definitions, ToolToSchema(r.tools[name].Tool))
+		entries = append(entries, *entry)
 	}
-	return definitions
+	return entries, version
 }
 
 // ToProviderDefs converts tool definitions to provider-compatible format.
@@ -503,12 +528,11 @@ func (r *ToolRegistry) ToProviderDefs() []providers.ToolDefinition {
 		return defs
 	}
 
-	// Build under the registry lock so the captured version and the tool
-	// state used to build the defs always match.
-	r.mu.RLock()
-	version := r.version.Load()
-	defs := r.buildProviderDefsLocked()
-	r.mu.RUnlock()
+	// Capture the version and the tool state under the same lock, then build
+	// outside it: the conversion calls ToolToSchema/Parameters, i.e. arbitrary
+	// tool code, and running it while holding r.mu blocks every writer.
+	entries, version := r.activeToolSnapshotWithVersion()
+	defs := buildProviderDefs(entries)
 
 	r.defsMu.Lock()
 	r.defsCache = defs
@@ -528,18 +552,10 @@ func (r *ToolRegistry) cachedProviderDefs() ([]providers.ToolDefinition, bool) {
 	return nil, false
 }
 
-// buildProviderDefsLocked converts the visible tools to provider definitions.
-// The caller must hold r.mu for reading.
-func (r *ToolRegistry) buildProviderDefsLocked() []providers.ToolDefinition {
-	sorted := r.sortedToolNames()
-	definitions := make([]providers.ToolDefinition, 0, len(sorted))
-	for _, name := range sorted {
-		entry := r.tools[name]
-
-		if !entry.IsCore && entry.TTL <= 0 {
-			continue
-		}
-
+// buildProviderDefs converts a tool-entry snapshot to provider definitions.
+func buildProviderDefs(entries []ToolEntry) []providers.ToolDefinition {
+	definitions := make([]providers.ToolDefinition, 0, len(entries))
+	for _, entry := range entries {
 		schema := ToolToSchema(entry.Tool)
 
 		// Safely extract nested values with type checks
@@ -645,18 +661,10 @@ func (r *ToolRegistry) Count() int {
 // GetSummaries returns human-readable summaries of all registered tools.
 // Returns a slice of "name - description" strings.
 func (r *ToolRegistry) GetSummaries() []string {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+	entries := r.activeToolSnapshot()
 
-	sorted := r.sortedToolNames()
-	summaries := make([]string, 0, len(sorted))
-	for _, name := range sorted {
-		entry := r.tools[name]
-
-		if !entry.IsCore && entry.TTL <= 0 {
-			continue
-		}
-
+	summaries := make([]string, 0, len(entries))
+	for _, entry := range entries {
 		summaries = append(
 			summaries,
 			fmt.Sprintf("- `%s` - %s", entry.Tool.Name(), entry.Tool.Description()),
