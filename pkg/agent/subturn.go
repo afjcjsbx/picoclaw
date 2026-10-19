@@ -219,6 +219,40 @@ func (al *AgentLoop) generateSubTurnID() string {
 	return fmt.Sprintf("subturn-%d", al.subTurnCounter.Add(1))
 }
 
+// newSubTurnSource adapts the agent turn registry to the spawn_status tool: it
+// reports the still-running SubTurns (subagents) of the calling conversation.
+func newSubTurnSource(al *AgentLoop) tools.SubTurnSource {
+	return func(ctx context.Context) []tools.SubagentTask {
+		sessionKey := tools.ToolSessionKey(ctx)
+		if sessionKey == "" {
+			return nil
+		}
+		var tasks []tools.SubagentTask
+		for _, info := range al.GetActiveTurnTree(sessionKey) {
+			if info.Depth == 0 {
+				continue // the root turn is the caller itself
+			}
+			status := "running"
+			switch info.Phase {
+			case TurnPhaseCompleted:
+				status = "completed"
+			case TurnPhaseAborted:
+				status = "canceled"
+			}
+			tasks = append(tasks, tools.SubagentTask{
+				ID:            info.TurnID,
+				Task:          info.UserMessage,
+				AgentID:       info.AgentID,
+				Status:        status,
+				OriginChannel: info.Channel,
+				OriginChatID:  info.ChatID,
+				Created:       info.StartedAt.UnixMilli(),
+			})
+		}
+		return tasks
+	}
+}
+
 // ====================== Core Function: spawnSubTurn ======================
 
 // AgentLoopSpawner implements tools.SubTurnSpawner interface.

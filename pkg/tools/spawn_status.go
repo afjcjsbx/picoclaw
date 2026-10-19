@@ -8,16 +8,36 @@ import (
 	"time"
 )
 
+// SubTurnSource returns the live sub-turns of the calling conversation. It is
+// how the tool learns about subagents in production, where spawning goes
+// through the agent turn registry instead of SubagentManager.
+type SubTurnSource func(ctx context.Context) []SubagentTask
+
 // SpawnStatusTool reports the status of subagents that were spawned via the
 // spawn tool. It can query a specific task by ID, or list every known task with
 // a summary count broken-down by status.
 type SpawnStatusTool struct {
-	manager *SubagentManager
+	manager       *SubagentManager
+	subTurnSource SubTurnSource
 }
 
 // NewSpawnStatusTool creates a SpawnStatusTool backed by the given manager.
 func NewSpawnStatusTool(manager *SubagentManager) *SpawnStatusTool {
 	return &SpawnStatusTool{manager: manager}
+}
+
+// SetSubTurnSource wires a live source of sub-turns (the agent turn registry).
+// Results are merged with the manager's task snapshots and deduplicated by ID.
+func (t *SpawnStatusTool) SetSubTurnSource(source SubTurnSource) {
+	t.subTurnSource = source
+}
+
+// subTurns returns the live sub-turns for this call, if a source is wired.
+func (t *SpawnStatusTool) subTurns(ctx context.Context) []SubagentTask {
+	if t.subTurnSource == nil {
+		return nil
+	}
+	return t.subTurnSource(ctx)
 }
 
 func (t *SpawnStatusTool) Name() string {
@@ -73,14 +93,20 @@ func (t *SpawnStatusTool) Execute(ctx context.Context, args map[string]any) *Too
 		// eliminating any data race with the concurrent subagent goroutine.
 		taskCopy, ok := t.manager.GetTaskCopy(taskID)
 		if !ok {
+			// Live sub-turns are not routed through the manager.
+			for _, live := range t.subTurns(ctx) {
+				if live.ID == taskID {
+					taskCopy, ok = live, true
+					break
+				}
+			}
+		}
+		if !ok {
 			return ErrorResult(fmt.Sprintf("No subagent found with task ID: %s", taskID))
 		}
 
 		// Restrict lookup to tasks that belong to this conversation.
-		if callerChannel != "" && taskCopy.OriginChannel != "" && taskCopy.OriginChannel != callerChannel {
-			return ErrorResult(fmt.Sprintf("No subagent found with task ID: %s", taskID))
-		}
-		if callerChatID != "" && taskCopy.OriginChatID != "" && taskCopy.OriginChatID != callerChatID {
+		if !spawnStatusVisibleTo(callerChannel, callerChatID, &taskCopy) {
 			return ErrorResult(fmt.Sprintf("No subagent found with task ID: %s", taskID))
 		}
 
@@ -88,24 +114,39 @@ func (t *SpawnStatusTool) Execute(ctx context.Context, args map[string]any) *Too
 	}
 
 	// ListTaskCopies returns consistent snapshots under the manager lock.
-	origTasks := t.manager.ListTaskCopies()
-	if len(origTasks) == 0 {
+	stored := t.manager.ListTaskCopies()
+	live := t.subTurns(ctx)
+
+	if len(stored) == 0 && len(live) == 0 {
 		return NewToolResult("No subagents have been spawned yet.")
 	}
 
-	tasks := make([]*SubagentTask, 0, len(origTasks))
-	for i := range origTasks {
-		cpy := &origTasks[i]
+	seen := make(map[string]struct{}, len(stored)+len(live))
+	tasks := make([]*SubagentTask, 0, len(stored)+len(live))
 
-		// Filter to tasks that originate from the current conversation only.
-		if callerChannel != "" && cpy.OriginChannel != "" && cpy.OriginChannel != callerChannel {
+	// Filter to tasks that originate from the current conversation only.
+	for i := range stored {
+		cpy := &stored[i]
+		if _, dup := seen[cpy.ID]; dup {
 			continue
 		}
-		if callerChatID != "" && cpy.OriginChatID != "" && cpy.OriginChatID != callerChatID {
+		if !spawnStatusVisibleTo(callerChannel, callerChatID, cpy) {
 			continue
 		}
-
+		seen[cpy.ID] = struct{}{}
 		tasks = append(tasks, cpy)
+	}
+
+	// Merge the live sub-turns reported by the turn registry.
+	for _, task := range live {
+		if _, dup := seen[task.ID]; dup {
+			continue
+		}
+		if !spawnStatusVisibleTo(callerChannel, callerChatID, &task) {
+			continue
+		}
+		seen[task.ID] = struct{}{}
+		tasks = append(tasks, &task)
 	}
 
 	if len(tasks) == 0 {
@@ -142,6 +183,19 @@ func (t *SpawnStatusTool) Execute(ctx context.Context, args map[string]any) *Too
 	}
 
 	return NewToolResult(strings.TrimRight(sb.String(), "\n"))
+}
+
+// spawnStatusVisibleTo reports whether a task belongs to the calling
+// conversation. Tasks without origin info stay visible for backward
+// compatibility with programmatic callers.
+func spawnStatusVisibleTo(channel, chatID string, task *SubagentTask) bool {
+	if channel != "" && task.OriginChannel != "" && task.OriginChannel != channel {
+		return false
+	}
+	if chatID != "" && task.OriginChatID != "" && task.OriginChatID != chatID {
+		return false
+	}
+	return true
 }
 
 // spawnStatusFormatTask renders a single SubagentTask as a human-readable block.

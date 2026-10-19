@@ -412,7 +412,12 @@ func registerSharedTools(
 				agent.Tools.Register(subagentTool)
 			}
 			if spawnStatusEnabled {
-				agent.Tools.Register(tools.NewSpawnStatusTool(subagentManager))
+				statusTool := tools.NewSpawnStatusTool(subagentManager)
+				// Production subagents run as SubTurns tracked by the agent
+				// loop, not by SubagentManager. Feed spawn_status from the
+				// active turn tree so it reports real sub-turns.
+				statusTool.SetSubTurnSource(newSubTurnSource(al))
+				agent.Tools.Register(statusTool)
 			}
 		} else if (spawnEnabled || spawnStatusEnabled) && !cfg.Tools.IsToolEnabled("subagent") {
 			logger.WarnCF("agent", "spawn/spawn_status tools require subagent to be enabled", nil)
