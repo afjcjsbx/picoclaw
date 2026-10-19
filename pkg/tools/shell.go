@@ -831,18 +831,38 @@ func (t *ExecTool) executeList() *ToolResult {
 	}
 }
 
-func (t *ExecTool) executePoll(args map[string]any) *ToolResult {
+// sessionIDFromArgs reads args["sessionId"], returning a ready-to-return error
+// result when it is missing.
+func sessionIDFromArgs(args map[string]any) (string, *ToolResult) {
 	sessionID, ok := args["sessionId"].(string)
 	if !ok {
-		return ErrorResult("sessionId is required")
+		return "", ErrorResult("sessionId is required")
 	}
+	return sessionID, nil
+}
 
+// sessionByID loads a session, mapping an unknown id onto the tool's own
+// "session not found" error text.
+func (t *ExecTool) sessionByID(sessionID string) (*ProcessSession, *ToolResult) {
 	session, err := t.sessionManager.Get(sessionID)
 	if err != nil {
 		if errors.Is(err, ErrSessionNotFound) {
-			return ErrorResult(fmt.Sprintf("session not found: %s", sessionID))
+			return nil, ErrorResult(fmt.Sprintf("session not found: %s", sessionID))
 		}
-		return ErrorResult(err.Error())
+		return nil, ErrorResult(err.Error())
+	}
+	return session, nil
+}
+
+func (t *ExecTool) executePoll(args map[string]any) *ToolResult {
+	sessionID, errResult := sessionIDFromArgs(args)
+	if errResult != nil {
+		return errResult
+	}
+
+	session, errResult := t.sessionByID(sessionID)
+	if errResult != nil {
+		return errResult
 	}
 
 	resp := ExecResponse{
@@ -861,17 +881,14 @@ func (t *ExecTool) executePoll(args map[string]any) *ToolResult {
 }
 
 func (t *ExecTool) executeRead(args map[string]any) *ToolResult {
-	sessionID, ok := args["sessionId"].(string)
-	if !ok {
-		return ErrorResult("sessionId is required")
+	sessionID, errResult := sessionIDFromArgs(args)
+	if errResult != nil {
+		return errResult
 	}
 
-	session, err := t.sessionManager.Get(sessionID)
-	if err != nil {
-		if errors.Is(err, ErrSessionNotFound) {
-			return ErrorResult(fmt.Sprintf("session not found: %s", sessionID))
-		}
-		return ErrorResult(err.Error())
+	session, errResult := t.sessionByID(sessionID)
+	if errResult != nil {
+		return errResult
 	}
 
 	output := session.Read()
@@ -892,9 +909,9 @@ func (t *ExecTool) executeRead(args map[string]any) *ToolResult {
 }
 
 func (t *ExecTool) executeWrite(args map[string]any) *ToolResult {
-	sessionID, ok := args["sessionId"].(string)
-	if !ok {
-		return ErrorResult("sessionId is required")
+	sessionID, errResult := sessionIDFromArgs(args)
+	if errResult != nil {
+		return errResult
 	}
 
 	data, ok := args["data"].(string)
@@ -902,19 +919,16 @@ func (t *ExecTool) executeWrite(args map[string]any) *ToolResult {
 		return ErrorResult("data is required")
 	}
 
-	session, err := t.sessionManager.Get(sessionID)
-	if err != nil {
-		if errors.Is(err, ErrSessionNotFound) {
-			return ErrorResult(fmt.Sprintf("session not found: %s", sessionID))
-		}
-		return ErrorResult(err.Error())
+	session, errResult := t.sessionByID(sessionID)
+	if errResult != nil {
+		return errResult
 	}
 
 	if session.IsDone() {
 		return ErrorResult(fmt.Sprintf("process already exited with code %d", session.GetExitCode()))
 	}
 
-	if err = session.Write(data); err != nil {
+	if err := session.Write(data); err != nil {
 		if errors.Is(err, ErrSessionDone) {
 			return ErrorResult(fmt.Sprintf("process already exited with code %d", session.GetExitCode()))
 		}
@@ -936,24 +950,21 @@ func (t *ExecTool) executeWrite(args map[string]any) *ToolResult {
 }
 
 func (t *ExecTool) executeKill(args map[string]any) *ToolResult {
-	sessionID, ok := args["sessionId"].(string)
-	if !ok {
-		return ErrorResult("sessionId is required")
+	sessionID, errResult := sessionIDFromArgs(args)
+	if errResult != nil {
+		return errResult
 	}
 
-	session, err := t.sessionManager.Get(sessionID)
-	if err != nil {
-		if errors.Is(err, ErrSessionNotFound) {
-			return ErrorResult(fmt.Sprintf("session not found: %s", sessionID))
-		}
-		return ErrorResult(err.Error())
+	session, errResult := t.sessionByID(sessionID)
+	if errResult != nil {
+		return errResult
 	}
 
 	if session.IsDone() {
 		return ErrorResult(fmt.Sprintf("process already exited with code %d", session.GetExitCode()))
 	}
 
-	if err = session.Kill(); err != nil {
+	if err := session.Kill(); err != nil {
 		return ErrorResult(fmt.Sprintf("failed to kill session: %v", err))
 	}
 
@@ -1131,9 +1142,9 @@ func encodeKeySequence(tokens []string, ptyKeyMode PtyKeyMode) (string, error) {
 }
 
 func (t *ExecTool) executeSendKeys(args map[string]any) *ToolResult {
-	sessionID, ok := args["sessionId"].(string)
-	if !ok {
-		return ErrorResult("sessionId is required")
+	sessionID, errResult := sessionIDFromArgs(args)
+	if errResult != nil {
+		return errResult
 	}
 
 	keysStr, ok := args["keys"].(string)
@@ -1159,12 +1170,9 @@ func (t *ExecTool) executeSendKeys(args map[string]any) *ToolResult {
 		return ErrorResult("keys cannot be empty")
 	}
 
-	session, err := t.sessionManager.Get(sessionID)
-	if err != nil {
-		if errors.Is(err, ErrSessionNotFound) {
-			return ErrorResult(fmt.Sprintf("session not found: %s", sessionID))
-		}
-		return ErrorResult(err.Error())
+	session, errResult := t.sessionByID(sessionID)
+	if errResult != nil {
+		return errResult
 	}
 
 	ptyKeyMode := session.GetPtyKeyMode()
@@ -1200,13 +1208,19 @@ func (t *ExecTool) executeSendKeys(args map[string]any) *ToolResult {
 	}
 }
 
+// PowerShell and CMD environment-variable syntaxes expanded by
+// expandPowerShellEnvVars. Compiled once: expansion runs per command.
+var (
+	psEnvVarRe  = regexp.MustCompile(`\$\{?env:(\w+)\}?`)
+	cmdEnvVarRe = regexp.MustCompile(`%([^%]+)%`)
+)
+
 // expandPowerShellEnvVars expands environment variable syntax used by both
 // PowerShell ($env:VAR) and CMD (%VAR%) to their actual values.
 func expandPowerShellEnvVars(cmd string) string {
 	// Handle PowerShell style: $env:VAR and ${env:VAR}
-	rePs := regexp.MustCompile(`\$\{?env:(\w+)\}?`)
-	cmd = rePs.ReplaceAllStringFunc(cmd, func(match string) string {
-		varName := rePs.FindStringSubmatch(match)[1]
+	cmd = psEnvVarRe.ReplaceAllStringFunc(cmd, func(match string) string {
+		varName := psEnvVarRe.FindStringSubmatch(match)[1]
 		if val := os.Getenv(varName); val != "" {
 			return val
 		}
@@ -1214,9 +1228,8 @@ func expandPowerShellEnvVars(cmd string) string {
 	})
 
 	// Handle CMD style: %VAR%
-	reCmd := regexp.MustCompile(`%([^%]+)%`)
-	return reCmd.ReplaceAllStringFunc(cmd, func(match string) string {
-		varName := reCmd.FindStringSubmatch(match)[1]
+	return cmdEnvVarRe.ReplaceAllStringFunc(cmd, func(match string) string {
+		varName := cmdEnvVarRe.FindStringSubmatch(match)[1]
 		if val := os.Getenv(varName); val != "" {
 			return val
 		}
