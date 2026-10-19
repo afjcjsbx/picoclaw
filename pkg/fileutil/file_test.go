@@ -26,6 +26,42 @@ func TestWriteFileAtomic_Basic(t *testing.T) {
 	}
 }
 
+func TestWriteFileAtomicNoSync_Basic(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "lazy.txt")
+
+	if err := WriteFileAtomicNoSync(path, []byte("first"), 0o644); err != nil {
+		t.Fatalf("WriteFileAtomicNoSync failed: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile failed: %v", err)
+	}
+	if string(got) != "first" {
+		t.Errorf("got %q, want %q", got, "first")
+	}
+
+	// Overwriting must replace the file and leave no temp files behind.
+	err = WriteFileAtomicNoSync(path, []byte("second"), 0o644)
+	if err != nil {
+		t.Fatalf("WriteFileAtomicNoSync overwrite failed: %v", err)
+	}
+	got, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile failed: %v", err)
+	}
+	if string(got) != "second" {
+		t.Errorf("got %q, want %q", got, "second")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "lazy.txt" {
+		t.Errorf("dir entries = %v, want only lazy.txt", entries)
+	}
+}
+
 func TestWriteFileAtomic_Permissions(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "secret.txt")

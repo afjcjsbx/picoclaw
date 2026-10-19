@@ -181,7 +181,7 @@ func NewAgentInstance(
 	}
 
 	sessionsDir := filepath.Join(workspace, "sessions")
-	sessions := initSessionStore(sessionsDir)
+	sessions := initSessionStore(sessionsDir, cfg.Session.DurableWritesEnabled())
 
 	mcpDiscoveryActive := agentHasDiscoverableMCPServers(cfg, agentMCPServerAllowlist)
 	contextBuilder := NewContextBuilder(workspace).
@@ -781,8 +781,8 @@ func closeUnreferencedStatefulProviders(
 // It uses the JSONL store by default and auto-migrates legacy JSON sessions.
 // Falls back to SessionManager if the JSONL store cannot be initialized or
 // if migration fails (which indicates the store cannot write reliably).
-func initSessionStore(dir string) session.SessionStore {
-	store, err := memory.NewJSONLStore(dir)
+func initSessionStore(dir string, durableWrites bool) session.SessionStore {
+	store, err := memory.NewJSONLStore(dir, memory.WithDurableWrites(durableWrites))
 	if err != nil {
 		logger.WarnCF("agent", "Memory JSONL store init failed; falling back to json sessions",
 			map[string]any{"error": err.Error()})
