@@ -536,6 +536,55 @@ func spawnSubTurn(
 	return result, err
 }
 
+// ====================== Child Join ======================
+
+// Begin implements tools.ChildTracker. The returned func delivers the child's
+// result to this turn and releases the join, so a result is never lost between
+// "child done" and "parent finished".
+func (ts *turnState) Begin() func(*tools.ToolResult) {
+	ts.children.Add(1)
+	return func(result *tools.ToolResult) {
+		defer ts.children.Done()
+		deliverSubTurnResult(ts.al, ts, "", result)
+	}
+}
+
+// joinChildren blocks until every tracked async child has delivered (or ctx
+// ends) and returns their results as prompt messages. It drains pendingResults
+// while waiting, so more than subTurnPendingResultsBuffer children cannot
+// block on a full channel.
+func (ts *turnState) joinChildren(ctx context.Context, filter func(string) string) []providers.Message {
+	done := make(chan struct{})
+	go func() {
+		ts.children.Wait()
+		close(done)
+	}()
+
+	var msgs []providers.Message
+	collect := func(r *tools.ToolResult) {
+		if r != nil && r.ForLLM != "" {
+			msgs = append(msgs, subTurnResultPromptMessage(filter(r.ForLLM)))
+		}
+	}
+	for {
+		select {
+		case r := <-ts.pendingResults:
+			collect(r)
+		case <-done:
+			for {
+				select {
+				case r := <-ts.pendingResults:
+					collect(r)
+				default:
+					return msgs
+				}
+			}
+		case <-ctx.Done():
+			return msgs
+		}
+	}
+}
+
 // ====================== Result Delivery ======================
 
 // deliverSubTurnResult delivers a sub-turn result to the parent turn's pendingResults channel.
