@@ -33,7 +33,7 @@ func NewPipeline(al *AgentLoop) *Pipeline {
 		Hooks:          al.hooks,
 		Fallback:       al.fallback,
 		ChannelManager: al.channelManager,
-		MediaStore:     al.mediaStore,
+		MediaStore:     al.mediaStoreRef(),
 		Steering:       al.steering,
 		al:             al,
 	}

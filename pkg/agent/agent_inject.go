@@ -36,8 +36,19 @@ func (al *AgentLoop) GetConfig() *config.Config {
 	return al.cfg
 }
 
+// mediaStoreRef returns the injected MediaStore, if any. The store can be
+// swapped at runtime (gateway restart), so the field must always be read under
+// the lock.
+func (al *AgentLoop) mediaStoreRef() media.MediaStore {
+	al.mu.RLock()
+	defer al.mu.RUnlock()
+	return al.mediaStore
+}
+
 func (al *AgentLoop) SetMediaStore(s media.MediaStore) {
+	al.mu.Lock()
 	al.mediaStore = s
+	al.mu.Unlock()
 
 	// Propagate store to all registered tools that can emit media.
 	registry := al.GetRegistry()

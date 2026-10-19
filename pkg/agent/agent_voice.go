@@ -53,20 +53,21 @@ func (al *AgentLoop) sendVoiceResponseIfEnabled(
 		return
 	}
 	provider := al.currentTTSProvider()
-	if provider == nil || al.mediaStore == nil || al.bus == nil {
+	store := al.mediaStoreRef()
+	if provider == nil || store == nil || al.bus == nil {
 		logger.WarnCF("voice-tts", "Cannot synthesize response: TTS runtime is not ready", nil)
 		return
 	}
 
 	channel, chatID := opts.Dispatch.Channel(), opts.Dispatch.ChatID()
-	ref, err := tts.SynthesizeAndStore(ctx, provider, al.mediaStore, text, "", channel, chatID)
+	ref, err := tts.SynthesizeAndStore(ctx, provider, store, text, "", channel, chatID)
 	if err != nil {
 		logger.WarnCF("voice-tts", "Failed to synthesize response", map[string]any{"error": err.Error()})
 		return
 	}
 
 	part := bus.MediaPart{Ref: ref}
-	if _, meta, resolveErr := al.mediaStore.ResolveWithMeta(ref); resolveErr == nil {
+	if _, meta, resolveErr := store.ResolveWithMeta(ref); resolveErr == nil {
 		part.Filename = meta.Filename
 		part.ContentType = meta.ContentType
 		part.Type = inferMediaType(meta.Filename, meta.ContentType)
@@ -99,11 +100,12 @@ func (al *AgentLoop) hasAudioInput(msg bus.InboundMessage) bool {
 	if audioAnnotationRe.MatchString(msg.Content) {
 		return true
 	}
-	if al.mediaStore == nil {
+	store := al.mediaStoreRef()
+	if store == nil {
 		return false
 	}
 	for _, ref := range msg.Media {
-		_, meta, err := al.mediaStore.ResolveWithMeta(ref)
+		_, meta, err := store.ResolveWithMeta(ref)
 		if err == nil && utils.IsAudioFile(meta.Filename, meta.ContentType) {
 			return true
 		}

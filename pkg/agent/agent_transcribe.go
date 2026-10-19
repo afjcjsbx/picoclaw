@@ -12,7 +12,8 @@ import (
 )
 
 func (al *AgentLoop) transcribeAudioInMessage(ctx context.Context, msg bus.InboundMessage) (bus.InboundMessage, bool) {
-	if al.transcriber == nil || al.mediaStore == nil || len(msg.Media) == 0 {
+	store := al.mediaStoreRef()
+	if al.transcriber == nil || store == nil || len(msg.Media) == 0 {
 		return msg, false
 	}
 
@@ -20,7 +21,7 @@ func (al *AgentLoop) transcribeAudioInMessage(ctx context.Context, msg bus.Inbou
 	var transcriptions []string
 	var keptMedia []string
 	for _, ref := range msg.Media {
-		path, meta, err := al.mediaStore.ResolveWithMeta(ref)
+		path, meta, err := store.ResolveWithMeta(ref)
 		if err != nil {
 			logger.WarnCF("voice", "Failed to resolve media ref", map[string]any{"ref": ref, "error": err})
 			keptMedia = append(keptMedia, ref)

@@ -267,8 +267,8 @@ toolLoop:
 						parts := make([]bus.MediaPart, 0, len(hookResult.Media))
 						for _, ref := range hookResult.Media {
 							part := bus.MediaPart{Ref: ref}
-							if al.mediaStore != nil {
-								if _, meta, err := al.mediaStore.ResolveWithMeta(ref); err == nil {
+							if store := al.mediaStoreRef(); store != nil {
+								if _, meta, err := store.ResolveWithMeta(ref); err == nil {
 									part.Filename = meta.Filename
 									part.ContentType = meta.ContentType
 									part.Type = inferMediaType(meta.Filename, meta.ContentType)
@@ -305,7 +305,7 @@ toolLoop:
 							} else {
 								handledAttachments = append(
 									handledAttachments,
-									buildProviderAttachments(al.mediaStore, hookResult.Media)...,
+									buildProviderAttachments(al.mediaStoreRef(), hookResult.Media)...,
 								)
 							}
 						} else if al.bus != nil {
@@ -331,7 +331,7 @@ toolLoop:
 					if len(hookResult.Media) > 0 && !hookResult.ResponseHandled {
 						hookResult.ArtifactTags = appendArtifactTags(
 							hookResult.ArtifactTags,
-							buildArtifactTags(al.mediaStore, hookResult.Media),
+							buildArtifactTags(al.mediaStoreRef(), hookResult.Media),
 						)
 						contentForLLM = hookResult.ContentForLLM()
 						if al.cfg.Tools.IsFilterSensitiveDataEnabled() {
@@ -646,8 +646,8 @@ toolLoop:
 			parts := make([]bus.MediaPart, 0, len(toolResult.Media))
 			for _, ref := range toolResult.Media {
 				part := bus.MediaPart{Ref: ref}
-				if al.mediaStore != nil {
-					if _, meta, err := al.mediaStore.ResolveWithMeta(ref); err == nil {
+				if store := al.mediaStoreRef(); store != nil {
+					if _, meta, err := store.ResolveWithMeta(ref); err == nil {
 						part.Filename = meta.Filename
 						part.ContentType = meta.ContentType
 						part.Type = inferMediaType(meta.Filename, meta.ContentType)
@@ -683,7 +683,7 @@ toolLoop:
 				} else {
 					handledAttachments = append(
 						handledAttachments,
-						buildProviderAttachments(al.mediaStore, toolResult.Media)...,
+						buildProviderAttachments(al.mediaStoreRef(), toolResult.Media)...,
 					)
 				}
 			} else if al.bus != nil {
@@ -695,7 +695,7 @@ toolLoop:
 		if len(toolResult.Media) > 0 && !toolResult.ResponseHandled {
 			toolResult.ArtifactTags = appendArtifactTags(
 				toolResult.ArtifactTags,
-				buildArtifactTags(al.mediaStore, toolResult.Media),
+				buildArtifactTags(al.mediaStoreRef(), toolResult.Media),
 			)
 		}
 
