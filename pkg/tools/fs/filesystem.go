@@ -20,6 +20,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/fileutil"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
 const (
@@ -695,7 +696,7 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 		displayLine := line
 		lineCutByLimit := false
 		if t.maxLineLength > 0 && len(displayLine) > t.maxLineLength {
-			if cut := truncateLineRunes(displayLine, t.maxLineLength); len(cut) < len(displayLine) {
+			if cut := []byte(toolshared.RunePrefix(string(displayLine), t.maxLineLength)); len(cut) < len(displayLine) {
 				displayLine = cut
 				lineCutByLimit = true
 			}
@@ -810,16 +811,6 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 
 func formatReadFileLinePrefix(lineNumber int64) string {
 	return strconv.FormatInt(lineNumber, 10) + "|"
-}
-
-// truncateLineRunes cuts line to at most maxRunes runes, on a rune boundary.
-func truncateLineRunes(line []byte, maxRunes int) []byte {
-	end := 0
-	for i := 0; i < maxRunes && end < len(line); i++ {
-		_, width := utf8.DecodeRune(line[end:])
-		end += width
-	}
-	return line[:end]
 }
 
 func isBinaryReadFileData(data []byte) bool {

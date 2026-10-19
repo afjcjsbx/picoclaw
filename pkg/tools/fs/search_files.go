@@ -1,6 +1,7 @@
 package fstools
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -12,6 +13,8 @@ import (
 	"sort"
 	"strings"
 	"unicode/utf8"
+
+	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
 const (
@@ -411,15 +414,13 @@ func formatContentMatches(
 	return rows, count
 }
 
+// truncateSearchLine bounds a result line to maxSearchLineLength runes so a
+// single long line cannot dominate the search output.
 func truncateSearchLine(line string) string {
-	if len(line) <= maxSearchLineLength {
+	if utf8.RuneCountInString(line) <= maxSearchLineLength {
 		return line
 	}
-	cut := maxSearchLineLength
-	for cut > 0 && !utf8.RuneStart(line[cut]) {
-		cut--
-	}
-	return line[:cut] + "…"
+	return toolshared.RunePrefix(line, maxSearchLineLength) + "…"
 }
 
 func readSearchFile(filesystem fileSystem, path string, remainingBytes int64) ([]byte, int64, error) {
@@ -452,19 +453,10 @@ func readSearchFile(filesystem fileSystem, path string, remainingBytes int64) ([
 	if len(content) > maxSearchFileBytes {
 		return nil, int64(len(content)), fmt.Errorf("file exceeded search size limit")
 	}
-	if bytesContainNUL(content) || !utf8.Valid(content) {
+	if bytes.IndexByte(content, 0) >= 0 || !utf8.Valid(content) {
 		return nil, info.Size(), fmt.Errorf("binary file")
 	}
 	return content, int64(len(content)), nil
-}
-
-func bytesContainNUL(content []byte) bool {
-	for _, b := range content {
-		if b == 0 {
-			return true
-		}
-	}
-	return false
 }
 
 func (t *SearchFilesTool) walkPath(
