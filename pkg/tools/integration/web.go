@@ -323,13 +323,20 @@ func readSearchBody(r io.Reader) ([]byte, error) {
 	return body, nil
 }
 
-// errorBody renders an upstream response body for an error message, cut to
-// maxErrorBodyBytes so a large error page doesn't flood logs or the model.
-func errorBody(body []byte) string {
-	if len(body) <= maxErrorBodyBytes {
-		return string(body)
+// errorBodySnippet renders an upstream response body for an error message:
+// trimmed, cut to limit bytes and marked with "..." when it was cut, so a large
+// error page doesn't flood logs or the model. A multi-byte rune straddling the
+// cut is dropped rather than split.
+func errorBodySnippet(body []byte, limit int) string {
+	truncated := len(body) > limit
+	if truncated {
+		body = body[:limit]
 	}
-	return strings.ToValidUTF8(string(body[:maxErrorBodyBytes]), "") + "..."
+	snippet := strings.TrimSpace(strings.ToValidUTF8(string(body), ""))
+	if truncated {
+		snippet += "..."
+	}
+	return snippet
 }
 
 type BraveSearchProvider struct {
@@ -386,7 +393,11 @@ func (p *BraveSearchProvider) Search(
 		}
 
 		if resp.StatusCode != http.StatusOK {
-			lastErr = fmt.Errorf("API error (status %d): %s", resp.StatusCode, errorBody(body))
+			lastErr = fmt.Errorf(
+				"API error (status %d): %s",
+				resp.StatusCode,
+				errorBodySnippet(body, maxErrorBodyBytes),
+			)
 			if resp.StatusCode == http.StatusTooManyRequests ||
 				resp.StatusCode == http.StatusUnauthorized ||
 				resp.StatusCode == http.StatusForbidden ||
@@ -519,7 +530,11 @@ func (p *TavilySearchProvider) Search(
 		}
 
 		if resp.StatusCode != http.StatusOK {
-			lastErr = fmt.Errorf("tavily api error (status %d): %s", resp.StatusCode, errorBody(body))
+			lastErr = fmt.Errorf(
+				"tavily api error (status %d): %s",
+				resp.StatusCode,
+				errorBodySnippet(body, maxErrorBodyBytes),
+			)
 			if resp.StatusCode == http.StatusTooManyRequests ||
 				resp.StatusCode == http.StatusUnauthorized ||
 				resp.StatusCode == http.StatusForbidden ||
@@ -728,7 +743,7 @@ func (p *KeenableSearchProvider) Search(
 			lastErr = fmt.Errorf(
 				"keenable api error (status %d): %s",
 				resp.StatusCode,
-				strings.TrimSpace(errorBody(body)),
+				errorBodySnippet(body, maxErrorBodyBytes),
 			)
 			if resp.StatusCode == http.StatusTooManyRequests && keyless {
 				lastErr = fmt.Errorf(
@@ -1036,7 +1051,11 @@ func (p *GeminiSearchProvider) Search(
 		return "", fmt.Errorf("failed to read response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("gemini search api error (status %d): %s", resp.StatusCode, errorBody(body))
+		return "", fmt.Errorf(
+			"gemini search api error (status %d): %s",
+			resp.StatusCode,
+			errorBodySnippet(body, maxErrorBodyBytes),
+		)
 	}
 
 	var searchResp struct {
@@ -1367,7 +1386,7 @@ func (p *PerplexitySearchProvider) Search(
 		}
 
 		if resp.StatusCode != http.StatusOK {
-			lastErr = fmt.Errorf("Perplexity API error: %s", errorBody(body))
+			lastErr = fmt.Errorf("Perplexity API error: %s", errorBodySnippet(body, maxErrorBodyBytes))
 			if resp.StatusCode == http.StatusTooManyRequests ||
 				resp.StatusCode == http.StatusUnauthorized ||
 				resp.StatusCode == http.StatusForbidden ||
@@ -1545,7 +1564,11 @@ func (p *GLMSearchProvider) Search(
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("GLM Search API error (status %d): %s", resp.StatusCode, errorBody(body))
+		return "", fmt.Errorf(
+			"GLM Search API error (status %d): %s",
+			resp.StatusCode,
+			errorBodySnippet(body, maxErrorBodyBytes),
+		)
 	}
 
 	var searchResp struct {
@@ -1641,7 +1664,11 @@ func (p *BaiduSearchProvider) Search(
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("baidu search API error %d: %s", resp.StatusCode, errorBody(body))
+		return "", fmt.Errorf(
+			"baidu search API error %d: %s",
+			resp.StatusCode,
+			errorBodySnippet(body, maxErrorBodyBytes),
+		)
 	}
 
 	var result struct {
@@ -2214,7 +2241,7 @@ func (t *WebSearchTool) Execute(ctx context.Context, args map[string]any) *ToolR
 		return ErrorResult("search provider is not configured")
 	}
 
-	count64, err := getInt64Arg(args, "count", int64(maxResults))
+	count64, err := toolshared.Int64Arg(args, "count", int64(maxResults))
 	if err != nil {
 		return ErrorResult(err.Error())
 	}

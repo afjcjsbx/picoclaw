@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -41,9 +40,6 @@ const (
 )
 
 var (
-	inlineMarkdownDataURLRe = regexp.MustCompile(`!\[[^\]]*\]\((data:[^)]+)\)`)
-	inlineRawDataURLRe      = regexp.MustCompile(`data:[^;\s]+;base64,[A-Za-z0-9+/=\r\n]+`)
-
 	// webFetchEnvelopeKeys is the complete key set of the web_fetch result
 	// envelope (pkg/tools/integration/web.go). A JSON object whose keys stay
 	// inside this set with a non-empty string "text" is that tool's own
@@ -340,32 +336,26 @@ func extractInlineMediaRefs(
 ) (cleaned string, refs []string, notes []string) {
 	cleaned = text
 
-	matches := inlineMarkdownDataURLRe.FindAllStringSubmatch(cleaned, -1)
-	for _, match := range matches {
-		if len(match) < 2 {
-			continue
-		}
-		dataURL := match[1]
-		ref, note := storeInlineDataURL(toolName, store, channel, chatID, dataURL, seen)
+	for _, match := range toolshared.MarkdownDataURLs(cleaned) {
+		ref, note := storeInlineDataURL(toolName, store, channel, chatID, match.URL, seen)
 		if ref != "" {
 			refs = append(refs, ref)
 		}
 		if note != "" {
 			notes = append(notes, note)
 		}
-		cleaned = strings.ReplaceAll(cleaned, match[0], "")
+		cleaned = strings.ReplaceAll(cleaned, match.Full, "")
 	}
 
-	rawMatches := inlineRawDataURLRe.FindAllString(cleaned, -1)
-	for _, dataURL := range rawMatches {
-		ref, note := storeInlineDataURL(toolName, store, channel, chatID, dataURL, seen)
+	for _, match := range toolshared.RawBase64DataURLs(cleaned) {
+		ref, note := storeInlineDataURL(toolName, store, channel, chatID, match.URL, seen)
 		if ref != "" {
 			refs = append(refs, ref)
 		}
 		if note != "" {
 			notes = append(notes, note)
 		}
-		cleaned = strings.ReplaceAll(cleaned, dataURL, "")
+		cleaned = strings.ReplaceAll(cleaned, match.Full, "")
 	}
 
 	return strings.TrimSpace(cleaned), refs, notes
