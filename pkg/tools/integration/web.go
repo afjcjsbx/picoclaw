@@ -2371,11 +2371,15 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult("fetching private or local network hosts is not allowed")
 	}
 
+	// A per-call maxChars may only lower the configured flood guard: the value
+	// comes from the model, so an out-of-range number must not be able to
+	// disable truncation entirely.
 	maxChars := t.maxChars
-	if mc, ok := args["maxChars"].(float64); ok {
-		if int(mc) > 100 {
-			maxChars = int(mc)
+	if mc, ok := args["maxChars"].(float64); ok && mc > 100 {
+		if mc > float64(maxChars) {
+			mc = float64(maxChars)
 		}
+		maxChars = int(mc)
 	}
 
 	doFetch := func(ua string) (*http.Response, []byte, error) {
