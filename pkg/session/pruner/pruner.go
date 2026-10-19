@@ -88,7 +88,11 @@ func (i Info) lastActivity() time.Time {
 
 // Result reports what a prune pass did.
 type Result struct {
-	Deleted       []string
+	// Deleted lists sessions removed from every target that listed them.
+	Deleted []string
+	// Partial lists sessions removed from at least one target but still
+	// present in another (a deletion failed); a later pass retries them.
+	Partial       []string
 	DBBytesBefore int64
 	DBBytesAfter  int64
 }
@@ -242,6 +246,9 @@ func indexOwners(stores []Store) owners {
 // The seahorse database is shared by every agent while each agent has its own
 // session store, so stores must contain the store of every agent. A session is
 // deleted from the seahorse database and from each store that lists it.
+// Sessions removed from every target are reported in Result.Deleted; sessions
+// removed from only some of their targets (a deletion failed) are reported in
+// Result.Partial and retried by a later pass.
 func Run(ctx context.Context, eng Engine, stores []Store, cfg config.SessionPruneConfig) Result {
 	var result Result
 	if !cfg.Enabled || eng == nil {
@@ -262,9 +269,15 @@ func Run(ctx context.Context, eng Engine, stores []Store, cfg config.SessionPrun
 		if ctx.Err() != nil {
 			break
 		}
-		if deleteSession(ctx, eng, idx, key) {
+		removed, complete := deleteSession(ctx, eng, idx, key)
+		if !removed {
+			continue
+		}
+		deleted++
+		if complete {
 			result.Deleted = append(result.Deleted, key)
-			deleted++
+		} else {
+			result.Partial = append(result.Partial, key)
 		}
 	}
 
@@ -284,6 +297,7 @@ func Run(ctx context.Context, eng Engine, stores []Store, cfg config.SessionPrun
 	if deleted > 0 {
 		logger.InfoCF("session-prune", "Pruned chat sessions", map[string]any{
 			"deleted":         len(result.Deleted),
+			"partial":         len(result.Partial),
 			"max_age_days":    cfg.MaxAgeDays,
 			"max_sessions":    cfg.MaxSessions,
 			"max_db_size_mb":  cfg.MaxDBSizeMB,
@@ -302,7 +316,9 @@ func Run(ctx context.Context, eng Engine, stores []Store, cfg config.SessionPrun
 // progress, so a database that does not shrink (for example when Vacuum is
 // disabled) never causes runaway deletion. Only sessions that live in the
 // seahorse database are candidates, since JSONL-only sessions occupy no
-// database space. Returns the number of sessions deleted.
+// database space. Incomplete removals are recorded in Result.Partial instead of
+// Result.Deleted; both count toward the returned number of deletions, because
+// both free space. Returns the number of sessions deleted.
 func enforceDBSize(
 	ctx context.Context,
 	eng Engine,
@@ -350,21 +366,26 @@ func enforceDBSize(
 		need := int((over + avg - 1) / avg)
 		need = min(max(need, 1), len(candidates))
 
-		removed := 0
+		batchRemoved := 0
 		for _, info := range candidates[:need] {
 			if ctx.Err() != nil {
 				return deleted
 			}
-			if !deleteSession(ctx, eng, idx, info.Key) {
+			removed, complete := deleteSession(ctx, eng, idx, info.Key)
+			if !removed {
 				continue
 			}
-			result.Deleted = append(result.Deleted, info.Key)
+			if complete {
+				result.Deleted = append(result.Deleted, info.Key)
+			} else {
+				result.Partial = append(result.Partial, info.Key)
+			}
 			deleted++
-			removed++
+			batchRemoved++
 			remaining--
 		}
 		candidates = candidates[need:]
-		if removed == 0 {
+		if batchRemoved == 0 {
 			continue
 		}
 
@@ -462,18 +483,23 @@ func storeActivity(stores []Store, key string) time.Time {
 	return last
 }
 
-func deleteSession(ctx context.Context, eng Engine, idx owners, key string) bool {
+// deleteSession removes the session from the seahorse database and from every
+// store that lists it. It reports whether at least one target removed the
+// session and whether every target did; an incomplete removal means the
+// session still exists somewhere and is retried by a later pass.
+func deleteSession(ctx context.Context, eng Engine, idx owners, key string) (removed, complete bool) {
 	if key == "" {
-		return false
+		return false, false
 	}
-	ok := false
+	complete = true
 	if err := eng.DeleteSession(ctx, key); err != nil {
 		logger.WarnCF("session-prune", "Failed to delete seahorse session", map[string]any{
 			"session": key,
 			"error":   err.Error(),
 		})
+		complete = false
 	} else {
-		ok = true
+		removed = true
 	}
 	for _, store := range idx[key] {
 		if err := store.DeleteSession(key); err != nil {
@@ -481,9 +507,10 @@ func deleteSession(ctx context.Context, eng Engine, idx owners, key string) bool
 				"session": key,
 				"error":   err.Error(),
 			})
+			complete = false
 		} else {
-			ok = true
+			removed = true
 		}
 	}
-	return ok
+	return removed, complete && removed
 }

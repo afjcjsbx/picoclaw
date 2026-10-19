@@ -162,6 +162,92 @@ func TestRunAppliesAgeCountAndVacuum(t *testing.T) {
 	}
 }
 
+// TestRun_PartialDeletion_EngineFails covers a deletion that succeeds in the
+// session store but fails in the seahorse database: the session is still in the
+// database, so it must be reported as partial rather than deleted.
+func TestRun_PartialDeletion_EngineFails(t *testing.T) {
+	now := time.Now()
+	eng := newFakeEngine(1 << 20)
+	eng.statuses = []seahorse.SessionStatus{
+		{SessionKey: "old", NewestAt: now.Add(-100 * 24 * time.Hour)},
+		{SessionKey: "new", NewestAt: now.Add(-time.Hour)},
+	}
+	eng.deleteErr = map[string]error{"old": errors.New("engine unavailable")}
+	store := newFakeStore("old", "new")
+
+	res := Run(context.Background(), eng, []Store{store}, config.SessionPruneConfig{
+		Enabled:    true,
+		MaxAgeDays: 30,
+	})
+
+	if !reflect.DeepEqual(res.Partial, []string{"old"}) {
+		t.Fatalf("Partial = %v, want [old]", res.Partial)
+	}
+	if len(res.Deleted) != 0 {
+		t.Fatalf("Deleted = %v, want none", res.Deleted)
+	}
+	if contains(store.ListSessions(), "old") {
+		t.Fatalf("store still lists old: %v", store.ListSessions())
+	}
+}
+
+// TestRun_PartialDeletion_StoreFails covers a deletion that succeeds in the
+// seahorse database and in one store but fails in another: the session still
+// exists on disk, so it must be reported as partial.
+func TestRun_PartialDeletion_StoreFails(t *testing.T) {
+	now := time.Now()
+	eng := newFakeEngine(1 << 20)
+	eng.statuses = []seahorse.SessionStatus{
+		{SessionKey: "old", NewestAt: now.Add(-100 * 24 * time.Hour)},
+		{SessionKey: "new", NewestAt: now.Add(-time.Hour)},
+	}
+	failing := newFakeStore("old", "new")
+	failing.deleteErr = map[string]error{"old": errors.New("disk full")}
+	healthy := newFakeStore("old")
+
+	res := Run(context.Background(), eng, []Store{failing, healthy}, config.SessionPruneConfig{
+		Enabled:    true,
+		MaxAgeDays: 30,
+	})
+
+	if !reflect.DeepEqual(res.Partial, []string{"old"}) {
+		t.Fatalf("Partial = %v, want [old]", res.Partial)
+	}
+	if len(res.Deleted) != 0 {
+		t.Fatalf("Deleted = %v, want none", res.Deleted)
+	}
+	if !contains(failing.ListSessions(), "old") {
+		t.Fatalf("failing store no longer lists old: %v", failing.ListSessions())
+	}
+	if contains(healthy.ListSessions(), "old") {
+		t.Fatalf("healthy store still lists old: %v", healthy.ListSessions())
+	}
+}
+
+// TestRun_CompleteDeletion covers the all-success path: the session is removed
+// from every target and reported as deleted, with no partial entries.
+func TestRun_CompleteDeletion(t *testing.T) {
+	now := time.Now()
+	eng := newFakeEngine(1 << 20)
+	eng.statuses = []seahorse.SessionStatus{
+		{SessionKey: "old", NewestAt: now.Add(-100 * 24 * time.Hour)},
+		{SessionKey: "new", NewestAt: now.Add(-time.Hour)},
+	}
+	store := newFakeStore("old", "new")
+
+	res := Run(context.Background(), eng, []Store{store}, config.SessionPruneConfig{
+		Enabled:    true,
+		MaxAgeDays: 30,
+	})
+
+	if !reflect.DeepEqual(res.Deleted, []string{"old"}) {
+		t.Fatalf("Deleted = %v, want [old]", res.Deleted)
+	}
+	if len(res.Partial) != 0 {
+		t.Fatalf("Partial = %v, want none", res.Partial)
+	}
+}
+
 func TestRunEnforcesDBSize(t *testing.T) {
 	now := time.Now()
 	const mb = 1 << 20
@@ -499,6 +585,9 @@ type fakeEngine struct {
 	freed int64
 	// reclaimableErr, when set, is returned by ReclaimableBytes.
 	reclaimableErr error
+	// deleteErr, when set, makes DeleteSession fail for the listed keys and
+	// leave the session in place.
+	deleteErr map[string]error
 }
 
 func newFakeEngine(perSessionBytes int64) *fakeEngine {
@@ -512,6 +601,9 @@ func (f *fakeEngine) SessionStatuses(context.Context) ([]seahorse.SessionStatus,
 }
 
 func (f *fakeEngine) DeleteSession(_ context.Context, sessionKey string) error {
+	if err := f.deleteErr[sessionKey]; err != nil {
+		return err
+	}
 	for i, s := range f.statuses {
 		if s.SessionKey == sessionKey {
 			f.statuses = append(f.statuses[:i], f.statuses[i+1:]...)
@@ -546,6 +638,9 @@ type fakeStore struct {
 	sessions []string
 	deleted  []string
 	activity map[string]time.Time
+	// deleteErr, when set, makes DeleteSession fail for the listed keys and
+	// leave the session in place.
+	deleteErr map[string]error
 }
 
 func (f *fakeStore) LastActivity(key string) time.Time {
@@ -563,6 +658,9 @@ func (f *fakeStore) ListSessions() []string {
 }
 
 func (f *fakeStore) DeleteSession(key string) error {
+	if err := f.deleteErr[key]; err != nil {
+		return err
+	}
 	for i, k := range f.sessions {
 		if k == key {
 			f.sessions = append(f.sessions[:i], f.sessions[i+1:]...)
