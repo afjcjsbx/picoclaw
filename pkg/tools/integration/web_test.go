@@ -2848,3 +2848,54 @@ func TestWebTool_KeenableSearch_KeyFailover(t *testing.T) {
 		t.Fatalf("unexpected output: %s", result.ForUser)
 	}
 }
+
+// TestWebTool_WebFetch_PerCallMaxCharsCannotDisableFloodGuard verifies that a
+// per-call maxChars can only lower the configured cap: an oversized value from
+// the model must not turn off truncation.
+func TestWebTool_WebFetch_PerCallMaxCharsCannotDisableFloodGuard(t *testing.T) {
+	withPrivateWebFetchHostsAllowed(t)
+
+	const configuredMaxChars = 100
+	body := strings.Repeat("a", 500)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(body))
+	}))
+	defer server.Close()
+
+	tool, err := NewWebFetchTool(configuredMaxChars, "plaintext", testFetchLimit)
+	if err != nil {
+		t.Fatalf("NewWebFetchTool() error: %v", err)
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"url":      server.URL,
+		"maxChars": float64(1_000_000),
+	})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.ForLLM)
+	}
+
+	var resultMap map[string]any
+	if err := json.Unmarshal([]byte(result.ForLLM), &resultMap); err != nil {
+		t.Fatalf("failed to unmarshal result JSON: %v", err)
+	}
+	text, _ := resultMap["text"].(string)
+	if !strings.Contains(text, "[CONTENT TRUNCATED - ") {
+		t.Errorf("expected the configured cap to still truncate, got: %q", text)
+	}
+	if truncated, ok := resultMap["truncated"].(bool); !ok || !truncated {
+		t.Error("expected truncated=true in result")
+	}
+
+	// A smaller per-call value is still honored.
+	smaller := tool.Execute(context.Background(), map[string]any{
+		"url":      server.URL,
+		"maxChars": float64(200),
+	})
+	if smaller.IsError {
+		t.Fatalf("unexpected error: %s", smaller.ForLLM)
+	}
+}
