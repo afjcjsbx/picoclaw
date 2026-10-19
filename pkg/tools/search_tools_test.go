@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -136,6 +137,40 @@ func TestBM25SearchTool_Execute(t *testing.T) {
 			t.Errorf("Expected TTL of 'mcp_read_file' to be promoted to 3")
 		}
 	})
+}
+
+func TestBM25SearchTool_ConcurrentExecute(t *testing.T) {
+	reg := setupPopulatedRegistry()
+	tool := NewBM25SearchTool(reg, 3, 10)
+	ctx := context.Background()
+
+	var wg sync.WaitGroup
+
+	// Readers keep hitting the lock-free cache fast path.
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 20; j++ {
+				_ = tool.Execute(ctx, map[string]any{"query": "read files"})
+			}
+		}()
+	}
+
+	// The writer bumps the registry version, forcing cache rebuilds while
+	// readers are on the fast path.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 20; i++ {
+			reg.RegisterHidden(&mockSearchableTool{
+				name: fmt.Sprintf("mcp_extra_%d", i),
+				desc: "extra hidden tool for cache invalidation",
+			})
+		}
+	}()
+
+	wg.Wait()
 }
 
 func TestRegexSearchTool_PatternTooLong(t *testing.T) {
