@@ -18,6 +18,38 @@ var (
 	inlineRawDataURLRe      = regexp.MustCompile(`data:[^;\s]+;base64,[A-Za-z0-9+/=\r\n]+`)
 )
 
+// InlineDataURL is one data: URL found in tool output. Full is the complete
+// match — what callers remove from the text — while URL is the data: URL
+// itself, e.g. the capture of a markdown image.
+type InlineDataURL struct {
+	Full string
+	URL  string
+}
+
+// MarkdownDataURLs returns the data URLs used as markdown image sources.
+func MarkdownDataURLs(text string) []InlineDataURL {
+	matches := inlineMarkdownDataURLRe.FindAllStringSubmatch(text, -1)
+	found := make([]InlineDataURL, 0, len(matches))
+	for _, match := range matches {
+		if len(match) < 2 {
+			continue
+		}
+		found = append(found, InlineDataURL{Full: match[0], URL: match[1]})
+	}
+	return found
+}
+
+// RawBase64DataURLs returns the bare base64 data: URLs in text, i.e. the ones
+// that are not wrapped in a markdown image.
+func RawBase64DataURLs(text string) []InlineDataURL {
+	matches := inlineRawDataURLRe.FindAllString(text, -1)
+	found := make([]InlineDataURL, 0, len(matches))
+	for _, match := range matches {
+		found = append(found, InlineDataURL{Full: match, URL: match})
+	}
+	return found
+}
+
 func SanitizeToolLLMContent(text string) string {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
