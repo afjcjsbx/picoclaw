@@ -253,7 +253,9 @@ func (t *CronTool) addJob(ctx context.Context, args map[string]any) *ToolResult 
 		needsUpdate = true
 	}
 	if needsUpdate {
-		t.cronService.UpdateJob(job)
+		if err := t.cronService.UpdateJob(job); err != nil {
+			return ErrorResult(fmt.Sprintf("Cron job %s was created but saving its payload failed: %v", job.ID, err))
+		}
 	}
 
 	return SilentResult(fmt.Sprintf("Cron job added: %s (id: %s)", job.Name, job.ID))
@@ -300,18 +302,28 @@ func (t *CronTool) listJobs(ctx context.Context) *ToolResult {
 	return SilentResult(result.String())
 }
 
+// accessibleJob loads jobID and verifies that the caller's channel may access
+// it. A non-nil *ToolResult is the ready-to-return error result.
+func (t *CronTool) accessibleJob(ctx context.Context, jobID string) (*cron.CronJob, *ToolResult) {
+	job, ok := t.cronService.GetJob(jobID)
+	if !ok {
+		return nil, ErrorResult(fmt.Sprintf("Job %s not found", jobID))
+	}
+	if !t.canAccessJob(ctx, job) {
+		return nil, ErrorResult(fmt.Sprintf("Job %s is not accessible from this channel", jobID))
+	}
+	return job, nil
+}
+
 func (t *CronTool) getJob(ctx context.Context, args map[string]any) *ToolResult {
 	jobID, errResult := requiredCronJobID(args, "get")
 	if errResult != nil {
 		return errResult
 	}
 
-	job, ok := t.cronService.GetJob(jobID)
-	if !ok {
-		return ErrorResult(fmt.Sprintf("Job %s not found", jobID))
-	}
-	if !t.canAccessJob(ctx, job) {
-		return ErrorResult(fmt.Sprintf("Job %s is not accessible from this channel", jobID))
+	job, errResult := t.accessibleJob(ctx, jobID)
+	if errResult != nil {
+		return errResult
 	}
 
 	return SilentResult(formatCronJobJSON(job))
@@ -323,12 +335,9 @@ func (t *CronTool) updateJob(ctx context.Context, args map[string]any) *ToolResu
 		return errResult
 	}
 
-	job, ok := t.cronService.GetJob(jobID)
-	if !ok {
-		return ErrorResult(fmt.Sprintf("Job %s not found", jobID))
-	}
-	if !t.canAccessJob(ctx, job) {
-		return ErrorResult(fmt.Sprintf("Job %s is not accessible from this channel", jobID))
+	job, errResult := t.accessibleJob(ctx, jobID)
+	if errResult != nil {
+		return errResult
 	}
 
 	patches := 0
@@ -383,7 +392,10 @@ func (t *CronTool) updateJob(ctx context.Context, args map[string]any) *ToolResu
 		return ErrorResult(fmt.Sprintf("Error updating job: %v", err))
 	}
 
-	updated, _ := t.cronService.GetJob(jobID)
+	updated, ok := t.cronService.GetJob(jobID)
+	if !ok {
+		return ErrorResult(fmt.Sprintf("Job %s not found after update", jobID))
+	}
 	return SilentResult(fmt.Sprintf("Cron job updated:\n%s", formatCronJobJSON(updated)))
 }
 
@@ -393,12 +405,8 @@ func (t *CronTool) removeJob(ctx context.Context, args map[string]any) *ToolResu
 		return ErrorResult("job_id is required for remove")
 	}
 
-	job, ok := t.cronService.GetJob(jobID)
-	if !ok {
-		return ErrorResult(fmt.Sprintf("Job %s not found", jobID))
-	}
-	if !t.canAccessJob(ctx, job) {
-		return ErrorResult(fmt.Sprintf("Job %s is not accessible from this channel", jobID))
+	if _, errResult := t.accessibleJob(ctx, jobID); errResult != nil {
+		return errResult
 	}
 
 	if t.cronService.RemoveJob(jobID) {
@@ -678,12 +686,8 @@ func (t *CronTool) enableJob(ctx context.Context, args map[string]any, enable bo
 		return ErrorResult("job_id is required for enable/disable")
 	}
 
-	job, ok := t.cronService.GetJob(jobID)
-	if !ok {
-		return ErrorResult(fmt.Sprintf("Job %s not found", jobID))
-	}
-	if !t.canAccessJob(ctx, job) {
-		return ErrorResult(fmt.Sprintf("Job %s is not accessible from this channel", jobID))
+	if _, errResult := t.accessibleJob(ctx, jobID); errResult != nil {
+		return errResult
 	}
 
 	updatedJob := t.cronService.EnableJob(jobID, enable)
@@ -707,12 +711,9 @@ func (t *CronTool) runJob(ctx context.Context, args map[string]any) *ToolResult 
 		return errResult
 	}
 
-	job, ok := t.cronService.GetJob(jobID)
-	if !ok {
-		return ErrorResult(fmt.Sprintf("Job %s not found", jobID))
-	}
-	if !t.canAccessJob(ctx, job) {
-		return ErrorResult(fmt.Sprintf("Job %s is not accessible from this channel", jobID))
+	job, errResult := t.accessibleJob(ctx, jobID)
+	if errResult != nil {
+		return errResult
 	}
 
 	if err := t.cronService.RunJob(jobID); err != nil {
