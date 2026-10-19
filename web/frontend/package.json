@@ -61,7 +61,7 @@
     "@tailwindcss/typography": "^0.5.20",
     "@tanstack/router-plugin": "^1.164.0",
     "@trivago/prettier-plugin-sort-imports": "^6.0.2",
-    "@types/node": "^25.6.0",
+    "@types/node": "^26.6.5",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
     "@typescript-eslint/eslint-plugin": "^8.58.2",
