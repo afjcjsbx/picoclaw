@@ -28,6 +28,13 @@ import (
 	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
+// maxOutputBufferSize caps the output captured per session; outputTruncateMarker
+// is appended once the cap is reached.
+const (
+	maxOutputBufferSize  = 1 * 1024 * 1024 // 1MB
+	outputTruncateMarker = "\n... [output truncated, exceeded 1MB]\n"
+)
+
 var (
 	globalSessionManager = NewSessionManager()
 	sessionManagerMu     sync.RWMutex

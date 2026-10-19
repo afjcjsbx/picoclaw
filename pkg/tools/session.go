@@ -11,10 +11,6 @@ import (
 	"github.com/google/uuid"
 )
 
-const maxOutputBufferSize = 1 * 1024 * 1024 // 1MB
-
-const outputTruncateMarker = "\n... [output truncated, exceeded 1MB]\n"
-
 // PtyKeyMode represents arrow key encoding mode for PTY sessions.
 // Programs send smkx/rmkx sequences to switch between CSI and SS3 modes.
 type PtyKeyMode uint8
