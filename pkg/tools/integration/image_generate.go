@@ -347,6 +347,7 @@ func (t *ImageGenerateTool) postJSON(
 		return nil, fmt.Errorf("failed to create image request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	common.SetOpenRouterAttribution(req)
 	if bearerKey != "" {
 		req.Header.Set("Authorization", "Bearer "+bearerKey)
 	}

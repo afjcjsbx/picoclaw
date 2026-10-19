@@ -73,6 +73,19 @@ func (s SessionHeader) Apply(h http.Header, options map[string]any) {
 	}
 }
 
+// SetOpenRouterAttribution adds OpenRouter app attribution headers
+// (https://openrouter.ai/docs/app-attribution) when req targets openrouter.ai,
+// so PicoClaw shows up in OpenRouter rankings and analytics. Call it before
+// applying user custom headers so those can still override these defaults.
+func SetOpenRouterAttribution(req *http.Request) {
+	if req == nil || req.URL == nil || !strings.EqualFold(req.URL.Hostname(), "openrouter.ai") {
+		return
+	}
+	req.Header.Set("Http-Referer", "https://github.com/afjcjsbx/picoclaw")
+	req.Header.Set("X-Openrouter-Title", "PicoClaw")
+	req.Header.Set("X-Openrouter-Categories", "personal-agent,cli-agent")
+}
+
 // NewHTTPClient creates an *http.Client with an optional proxy and the default timeout.
 func NewHTTPClient(proxy string) *http.Client {
 	client := &http.Client{
