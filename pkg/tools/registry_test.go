@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -399,6 +400,75 @@ func TestToolRegistry_ToProviderDefs(t *testing.T) {
 	}
 }
 
+// TestToolRegistry_ToProviderDefsCacheReuse verifies the memoized conversion
+// is reused while the registry version does not change.
+func TestToolRegistry_ToProviderDefsCacheReuse(t *testing.T) {
+	r := NewToolRegistry()
+	r.Register(newMockTool("one", "first"))
+
+	first := r.ToProviderDefs()
+	if len(first) != 1 {
+		t.Fatalf("expected 1 def, got %d", len(first))
+	}
+	same := r.ToProviderDefs()
+	if len(same) != 1 || &same[0] != &first[0] {
+		t.Fatal("expected the cached provider defs to be reused while the version is unchanged")
+	}
+}
+
+// TestToolRegistry_ToProviderDefsCacheInvalidatesOnChange verifies the memo is
+// dropped when the visible tool set changes.
+func TestToolRegistry_ToProviderDefsCacheInvalidatesOnChange(t *testing.T) {
+	r := NewToolRegistry()
+	r.Register(newMockTool("one", "first"))
+
+	if defs := r.ToProviderDefs(); len(defs) != 1 {
+		t.Fatalf("expected 1 def, got %d", len(defs))
+	}
+
+	r.Register(newMockTool("two", "second"))
+	if defs := r.ToProviderDefs(); len(defs) != 2 {
+		t.Fatalf("expected 2 defs after registration, got %d", len(defs))
+	}
+}
+
+// TestToolRegistry_ToProviderDefsCacheFollowsTTL verifies the memo follows
+// promotions and TTL expiry, which change visibility without a registration.
+func TestToolRegistry_ToProviderDefsCacheFollowsTTL(t *testing.T) {
+	r := NewToolRegistry()
+	r.RegisterHidden(newMockTool("deferred", "deferred tool"))
+
+	if defs := r.ToProviderDefs(); len(defs) != 0 {
+		t.Fatalf("hidden tool must stay invisible before promotion, got %d defs", len(defs))
+	}
+
+	r.PromoteTools([]string{"deferred"}, 2)
+	promoted := r.ToProviderDefs()
+	if len(promoted) != 1 || promoted[0].Function.Name != "deferred" {
+		t.Fatalf("expected the promoted tool in the defs, got %+v", promoted)
+	}
+
+	r.TickTTL() // 2 -> 1: still visible
+	if defs := r.ToProviderDefs(); len(defs) != 1 {
+		t.Fatalf("expected the tool to remain visible after one tick, got %d defs", len(defs))
+	}
+	r.TickTTL() // 1 -> 0: hidden again
+	if defs := r.ToProviderDefs(); len(defs) != 0 {
+		t.Fatalf("expected the tool to be hidden after its TTL expired, got %d defs", len(defs))
+	}
+}
+
+func BenchmarkToolRegistry_ToProviderDefs(b *testing.B) {
+	r := NewToolRegistry()
+	for i := 0; i < 50; i++ {
+		r.Register(newMockTool(fmt.Sprintf("tool_%02d", i), "benchmark tool"))
+	}
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = r.ToProviderDefs()
+	}
+}
+
 func TestToolRegistry_List(t *testing.T) {
 	r := NewToolRegistry()
 	r.Register(newMockTool("x", ""))
@@ -622,6 +692,7 @@ func TestToolRegistry_ConcurrentAccess(t *testing.T) {
 			r.Count()
 			r.List()
 			r.GetDefinitions()
+			r.ToProviderDefs()
 		}(i)
 	}
 
