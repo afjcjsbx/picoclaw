@@ -12,6 +12,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/media"
 	"github.com/sipeed/picoclaw/pkg/providers"
+	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
 // --- mock types ---
@@ -918,7 +919,7 @@ func TestToolRegistry_ExecuteWithContext_SanitizesLargeBase64Payload(t *testing.
 		nil,
 	)
 
-	if result.ForLLM != largeBase64OmittedMessage {
+	if result.ForLLM != toolshared.LargeBase64OmittedMessage {
 		t.Fatalf("expected sanitized payload, got %q", result.ForLLM)
 	}
 }
@@ -990,7 +991,7 @@ func TestToolRegistry_ExecuteWithContext_SanitizesInlineMediaWithoutStore(t *tes
 	if strings.Contains(result.ForLLM, "data:image/png;base64") {
 		t.Fatalf("expected inline data URL to be removed from ForLLM, got %q", result.ForLLM)
 	}
-	if !strings.Contains(result.ForLLM, inlineMediaOmittedMessage) {
+	if !strings.Contains(result.ForLLM, toolshared.InlineMediaOmittedMessage) {
 		t.Fatalf("expected inline media omission note, got %q", result.ForLLM)
 	}
 }
