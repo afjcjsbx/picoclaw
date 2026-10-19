@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+
+	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
 // I2CTool provides I2C bus interaction for reading sensors and controlling peripherals.
@@ -68,9 +70,9 @@ func (t *I2CTool) Execute(ctx context.Context, args map[string]any) *ToolResult 
 		return ErrorResult("I2C is only supported on Linux. This tool requires /dev/i2c-* device files.")
 	}
 
-	action, ok := args["action"].(string)
-	if !ok {
-		return ErrorResult("action is required")
+	action, argErr := toolshared.RequireStringArg(args, "action")
+	if argErr != nil {
+		return ErrorResult(argErr.Error()).WithError(argErr)
 	}
 
 	switch action {

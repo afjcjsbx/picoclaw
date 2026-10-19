@@ -5,22 +5,12 @@ import (
 	"fmt"
 	"os"
 	"regexp"
-	"strings"
 
 	"github.com/sipeed/picoclaw/pkg/media"
 	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
 type ToolResult = toolshared.ToolResult
-
-// requirePath reads the mandatory "path" argument of a media tool.
-func requirePath(args map[string]any) (string, *ToolResult) {
-	path, _ := args["path"].(string)
-	if strings.TrimSpace(path) == "" {
-		return "", ErrorResult("path is required")
-	}
-	return path, nil
-}
 
 // mediaTarget picks the channel/chatID a media tool delivers to, preferring the
 // context-injected values over the ones configured on the tool.

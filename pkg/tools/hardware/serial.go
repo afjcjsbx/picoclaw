@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
 const (
@@ -117,9 +119,9 @@ func (t *SerialTool) Parameters() map[string]any {
 }
 
 func (t *SerialTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
-	action, ok := args["action"].(string)
-	if !ok || strings.TrimSpace(action) == "" {
-		return ErrorResult("action is required")
+	action, argErr := toolshared.RequireStringArg(args, "action")
+	if argErr != nil {
+		return ErrorResult(argErr.Error()).WithError(argErr)
 	}
 
 	switch action {

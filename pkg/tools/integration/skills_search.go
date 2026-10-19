@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/sipeed/picoclaw/pkg/skills"
+	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
 // FindSkillsTool allows the LLM agent to search for installable skills from registries.
@@ -52,11 +53,11 @@ func (t *FindSkillsTool) Parameters() map[string]any {
 }
 
 func (t *FindSkillsTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
-	query, ok := args["query"].(string)
-	query = strings.ToLower(strings.TrimSpace(query))
-	if !ok || query == "" {
-		return ErrorResult("query is required and must be a non-empty string")
+	query, argErr := toolshared.RequireNonEmptyStringArg(args, "query")
+	if argErr != nil {
+		return ErrorResult(argErr.Error()).WithError(argErr)
 	}
+	query = strings.ToLower(query)
 
 	limit := 5
 	if l, ok := args["limit"].(float64); ok {

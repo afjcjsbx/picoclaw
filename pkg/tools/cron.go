@@ -14,6 +14,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/constants"
 	"github.com/sipeed/picoclaw/pkg/cron"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
@@ -138,9 +139,9 @@ func (t *CronTool) Parameters() map[string]any {
 
 // Execute runs the tool with the given arguments
 func (t *CronTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
-	action, ok := args["action"].(string)
-	if !ok {
-		return ErrorResult("action is required")
+	action, argErr := toolshared.RequireStringArg(args, "action")
+	if argErr != nil {
+		return ErrorResult(argErr.Error()).WithError(argErr)
 	}
 
 	switch action {

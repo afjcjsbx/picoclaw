@@ -7,6 +7,8 @@ import (
 	"io/fs"
 	"regexp"
 	"strings"
+
+	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
 // EditFileTool edits a file by replacing old_text with new_text.
@@ -54,9 +56,9 @@ func (t *EditFileTool) Parameters() map[string]any {
 }
 
 func (t *EditFileTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
-	path, ok := args["path"].(string)
-	if !ok {
-		return ErrorResult("path is required")
+	path, argErr := toolshared.RequireStringArg(args, "path")
+	if argErr != nil {
+		return ErrorResult(argErr.Error()).WithError(argErr)
 	}
 
 	oldText, ok := args["old_text"].(string)
@@ -114,9 +116,9 @@ func (t *AppendFileTool) Parameters() map[string]any {
 }
 
 func (t *AppendFileTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
-	path, ok := args["path"].(string)
-	if !ok {
-		return ErrorResult("path is required")
+	path, argErr := toolshared.RequireStringArg(args, "path")
+	if argErr != nil {
+		return ErrorResult(argErr.Error()).WithError(argErr)
 	}
 
 	content, ok := args["content"].(string)

@@ -3,9 +3,9 @@ package tools
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/sipeed/picoclaw/pkg/routing"
+	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
 // DelegateTool delegates a task to a specific named agent and waits for
@@ -63,15 +63,15 @@ func (t *DelegateTool) Parameters() map[string]any {
 }
 
 func (t *DelegateTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
-	rawAgentID, _ := args["agent_id"].(string)
-	if strings.TrimSpace(rawAgentID) == "" {
-		return ErrorResult("agent_id is required and must be a non-empty string")
+	rawAgentID, argErr := toolshared.RequireNonEmptyStringArg(args, "agent_id")
+	if argErr != nil {
+		return ErrorResult(argErr.Error()).WithError(argErr)
 	}
 	agentID := routing.NormalizeAgentID(rawAgentID)
 
-	task, _ := args["task"].(string)
-	if strings.TrimSpace(task) == "" {
-		return ErrorResult("task is required and must be a non-empty string")
+	task, argErr := toolshared.RequireNonEmptyStringArg(args, "task")
+	if argErr != nil {
+		return ErrorResult(argErr.Error()).WithError(argErr)
 	}
 
 	if t.selfAgentID != "" && agentID == t.selfAgentID {

@@ -312,9 +312,9 @@ func (t *ExecTool) Parameters() map[string]any {
 }
 
 func (t *ExecTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
-	action, _ := args["action"].(string)
-	if action == "" {
-		return ErrorResult("action is required")
+	action, argErr := toolshared.RequireStringArg(args, "action")
+	if argErr != nil {
+		return ErrorResult(argErr.Error()).WithError(argErr)
 	}
 
 	switch action {

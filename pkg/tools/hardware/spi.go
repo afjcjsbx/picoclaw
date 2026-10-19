@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+
+	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
 // SPITool provides SPI bus interaction for high-speed peripheral communication.
@@ -72,9 +74,9 @@ func (t *SPITool) Execute(ctx context.Context, args map[string]any) *ToolResult 
 		return ErrorResult("SPI is only supported on Linux. This tool requires /dev/spidev* device files.")
 	}
 
-	action, ok := args["action"].(string)
-	if !ok {
-		return ErrorResult("action is required")
+	action, argErr := toolshared.RequireStringArg(args, "action")
+	if argErr != nil {
+		return ErrorResult(argErr.Error()).WithError(argErr)
 	}
 
 	switch action {

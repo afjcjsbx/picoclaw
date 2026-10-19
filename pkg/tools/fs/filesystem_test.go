@@ -866,6 +866,26 @@ func TestWhitelistFs_AllowsResolvedAllowedRootAlias(t *testing.T) {
 
 // TestReadFileTool_ChunkedReading verifies the pagination logic of the tool
 // by reading a file in multiple chunks using 'offset' and 'length'.
+// TestReadFileTool_PaddedPathIsAccepted pins that a whitespace-padded path
+// argument is trimmed rather than treated as a different (missing) file.
+func TestReadFileTool_PaddedPathIsAccepted(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "note.txt")
+	if err := os.WriteFile(file, []byte("hello"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := NewReadFileTool(dir, true, MaxReadFileSize)
+	result := tool.Execute(context.Background(), map[string]any{"path": "  " + file + "\n"})
+
+	if result.IsError {
+		t.Fatalf("padded path rejected: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "hello") {
+		t.Errorf("result does not contain the file content: %q", result.ForLLM)
+	}
+}
+
 func TestReadFileTool_ChunkedReading(t *testing.T) {
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "pagination_test.txt")

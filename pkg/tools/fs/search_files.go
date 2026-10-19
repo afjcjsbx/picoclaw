@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"unicode/utf8"
+
+	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
 const (
@@ -130,10 +132,14 @@ func (t *SearchFilesTool) Execute(ctx context.Context, args map[string]any) *Too
 }
 
 func parseSearchFilesOptions(args map[string]any) (searchFilesOptions, error) {
-	pattern, ok := args["pattern"].(string)
-	if !ok || strings.TrimSpace(pattern) == "" {
-		return searchFilesOptions{}, fmt.Errorf("pattern is required and must be a non-empty string")
+	pattern, argErr := toolshared.RequireNonEmptyStringArg(args, "pattern")
+	if argErr != nil {
+		return searchFilesOptions{}, argErr
 	}
+
+	// ok is reused by the numeric lookups below.
+	var ok bool
+
 	opts := searchFilesOptions{
 		pattern:    pattern,
 		target:     "content",

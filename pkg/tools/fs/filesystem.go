@@ -427,9 +427,9 @@ func (t *ReadFileLinesTool) Parameters() map[string]any {
 }
 
 func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
-	path, ok := args["path"].(string)
-	if !ok {
-		return ErrorResult("path is required")
+	path, argErr := toolshared.RequireStringArg(args, "path")
+	if argErr != nil {
+		return ErrorResult(argErr.Error()).WithError(argErr)
 	}
 
 	// offset (optional, default 0)
@@ -568,9 +568,9 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 }
 
 func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
-	path, ok := args["path"].(string)
-	if !ok {
-		return ErrorResult("path is required")
+	path, argErr := toolshared.RequireStringArg(args, "path")
+	if argErr != nil {
+		return ErrorResult(argErr.Error()).WithError(argErr)
 	}
 
 	startLine, err := toolshared.Int64Arg(args, "start_line", 1)
@@ -1038,9 +1038,9 @@ func (t *WriteFileTool) Parameters() map[string]any {
 }
 
 func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
-	path, ok := args["path"].(string)
-	if !ok {
-		return ErrorResult("path is required")
+	path, argErr := toolshared.RequireStringArg(args, "path")
+	if argErr != nil {
+		return ErrorResult(argErr.Error()).WithError(argErr)
 	}
 
 	content, ok := args["content"].(string)

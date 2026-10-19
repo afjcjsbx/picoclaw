@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
 // ChildTracker lets a turn count the async children it spawns so it can join
@@ -110,9 +112,9 @@ func (t *SpawnTool) execute(
 	args map[string]any,
 	cb AsyncCallback,
 ) *ToolResult {
-	task, ok := args["task"].(string)
-	if !ok || strings.TrimSpace(task) == "" {
-		return ErrorResult("task is required and must be a non-empty string")
+	task, argErr := toolshared.RequireNonEmptyStringArg(args, "task")
+	if argErr != nil {
+		return ErrorResult(argErr.Error()).WithError(argErr)
 	}
 
 	label, ok := args["label"].(string)

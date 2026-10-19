@@ -9,6 +9,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/media"
+	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
 // LoadImageTool loads a local image file into the MediaStore and returns a
@@ -85,9 +86,9 @@ func (t *LoadImageTool) SetMediaStore(store media.MediaStore) {
 }
 
 func (t *LoadImageTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
-	path, errResult := requirePath(args)
-	if errResult != nil {
-		return errResult
+	path, argErr := toolshared.RequireStringArg(args, "path")
+	if argErr != nil {
+		return ErrorResult(argErr.Error()).WithError(argErr)
 	}
 
 	channel, chatID, errResult := mediaTarget(ctx, t.defaultChannel, t.defaultChatID)
