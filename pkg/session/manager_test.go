@@ -4,8 +4,11 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
+
+	"github.com/sipeed/picoclaw/pkg/providers"
 )
 
 func TestSanitizeFilename(t *testing.T) {
@@ -38,7 +41,6 @@ func TestSave_WithColonInKey(t *testing.T) {
 
 	// Create a session with a key containing colon (typical channel session key).
 	key := "telegram:123456"
-	sm.GetOrCreate(key)
 	if err := sm.AddMessage(context.Background(), key, "user", "hello"); err != nil {
 		t.Fatalf("AddMessage(%q) failed: %v", key, err)
 	}
@@ -75,14 +77,15 @@ func TestSave_RejectsPathTraversal(t *testing.T) {
 	// Invalid names that must still be rejected.
 	badKeys := []string{"", ".", ".."}
 	for _, key := range badKeys {
-		sm.GetOrCreate(key)
 		if err := sm.Save(context.Background(), key); err == nil {
 			t.Errorf("Save(%q) should have failed but didn't", key)
 		}
 	}
 
 	// Keys containing path separators are sanitized (no subdirs created).
-	sm.GetOrCreate("foo/bar")
+	if err := sm.AddMessage(context.Background(), "foo/bar", "user", "hello"); err != nil {
+		t.Fatalf("AddMessage(\"foo/bar\") failed: %v", err)
+	}
 	if err := sm.Save(context.Background(), "foo/bar"); err != nil {
 		t.Fatalf("Save(\"foo/bar\") after sanitize should succeed: %v", err)
 	}
@@ -131,7 +134,6 @@ func TestLastActivity(t *testing.T) {
 	}
 
 	before := time.Now().Add(-time.Second)
-	sm.GetOrCreate("s1")
 	if err := sm.AddMessage(context.Background(), "s1", "user", "hello"); err != nil {
 		t.Fatalf("AddMessage(s1) failed: %v", err)
 	}
@@ -145,7 +147,6 @@ func TestDeleteSession(t *testing.T) {
 	sm := NewSessionManager(dir)
 
 	for _, key := range []string{"telegram:1", "telegram:2"} {
-		sm.GetOrCreate(key)
 		if err := sm.AddMessage(context.Background(), key, "user", "hello"); err != nil {
 			t.Fatalf("AddMessage(%q): %v", key, err)
 		}
@@ -190,11 +191,232 @@ func TestDeleteSession_RejectsInvalidKey(t *testing.T) {
 
 func TestDeleteSession_InMemoryManager(t *testing.T) {
 	sm := NewSessionManager("")
-	sm.GetOrCreate("s1")
+	if err := sm.AddMessage(context.Background(), "s1", "user", "hello"); err != nil {
+		t.Fatalf("AddMessage: %v", err)
+	}
+	if got := sm.ListSessions(); len(got) != 1 {
+		t.Fatalf("ListSessions = %v, want [s1]", got)
+	}
 	if err := sm.DeleteSession("s1"); err != nil {
 		t.Fatalf("DeleteSession: %v", err)
 	}
 	if got := sm.ListSessions(); len(got) != 0 {
 		t.Fatalf("ListSessions = %v, want none", got)
+	}
+}
+
+func TestGetHistory_ReturnsIsolatedCopy(t *testing.T) {
+	sm := NewSessionManager("")
+	ctx := context.Background()
+
+	if err := sm.AddFullMessage(ctx, "s1", sampleSessionMessage()); err != nil {
+		t.Fatalf("AddFullMessage: %v", err)
+	}
+
+	history, err := sm.GetHistory(ctx, "s1")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if len(history) != 1 {
+		t.Fatalf("history len = %d, want 1", len(history))
+	}
+
+	// Mutate every nested field through the returned history.
+	mutateSessionMessage(&history[0])
+
+	again, err := sm.GetHistory(ctx, "s1")
+	if err != nil {
+		t.Fatalf("GetHistory (second): %v", err)
+	}
+	if len(again) != 1 {
+		t.Fatalf("history len = %d, want 1", len(again))
+	}
+	assertSampleSessionMessage(t, again[0])
+	wantCreatedAt := time.Date(2026, 2, 3, 4, 5, 6, 0, time.UTC)
+	if again[0].CreatedAt == nil || !again[0].CreatedAt.Equal(wantCreatedAt) {
+		t.Fatalf("stored CreatedAt = %v, want %v", again[0].CreatedAt, wantCreatedAt)
+	}
+}
+
+func TestSetHistory_CopiesInput(t *testing.T) {
+	sm := NewSessionManager("")
+	ctx := context.Background()
+	key := "s1"
+
+	// SetHistory only updates existing sessions.
+	if err := sm.AddMessage(ctx, key, "user", "seed"); err != nil {
+		t.Fatalf("AddMessage: %v", err)
+	}
+
+	input := []providers.Message{sampleSessionMessage()}
+	input[0].CreatedAt = nil
+
+	if err := sm.SetHistory(ctx, key, input); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
+
+	// CreatedAt normalization must apply to the stored copy only.
+	if input[0].CreatedAt != nil {
+		t.Fatalf("caller's CreatedAt = %v, want nil after SetHistory", input[0].CreatedAt)
+	}
+
+	stored, err := sm.GetHistory(ctx, key)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if len(stored) != 1 {
+		t.Fatalf("history len = %d, want 1", len(stored))
+	}
+	if stored[0].CreatedAt == nil || stored[0].CreatedAt.IsZero() {
+		t.Fatalf("stored CreatedAt = %v, want normalized non-zero timestamp", stored[0].CreatedAt)
+	}
+	normalizedAt := *stored[0].CreatedAt
+
+	// Mutating the caller's message afterwards must not leak into storage.
+	mutateSessionMessage(&input[0])
+
+	again, err := sm.GetHistory(ctx, key)
+	if err != nil {
+		t.Fatalf("GetHistory (second): %v", err)
+	}
+	if len(again) != 1 {
+		t.Fatalf("history len = %d, want 1", len(again))
+	}
+	assertSampleSessionMessage(t, again[0])
+	if again[0].CreatedAt == nil || !again[0].CreatedAt.Equal(normalizedAt) {
+		t.Fatalf("stored CreatedAt = %v, want %v", again[0].CreatedAt, normalizedAt)
+	}
+}
+
+func TestTruncateHistory_ReleasesBackingArray(t *testing.T) {
+	sm := NewSessionManager("")
+	ctx := context.Background()
+	key := "s1"
+
+	for _, content := range []string{"one", "two", "three"} {
+		if err := sm.AddMessage(ctx, key, "user", content); err != nil {
+			t.Fatalf("AddMessage(%q): %v", content, err)
+		}
+	}
+
+	if err := sm.TruncateHistory(ctx, key, 1); err != nil {
+		t.Fatalf("TruncateHistory: %v", err)
+	}
+
+	sm.mu.RLock()
+	msgs := sm.sessions[key].Messages
+	sm.mu.RUnlock()
+
+	if len(msgs) != 1 {
+		t.Fatalf("len(Messages) = %d, want 1", len(msgs))
+	}
+	if cap(msgs) != len(msgs) {
+		t.Fatalf(
+			"cap(Messages) = %d, want %d: truncated history still references the old backing array",
+			cap(msgs), len(msgs),
+		)
+	}
+	if msgs[0].Content != "three" {
+		t.Fatalf("surviving message = %q, want %q", msgs[0].Content, "three")
+	}
+}
+
+func sampleSessionMessage() providers.Message {
+	createdAt := time.Date(2026, 2, 3, 4, 5, 6, 0, time.UTC)
+	return providers.Message{
+		Role:      "assistant",
+		Content:   "hello",
+		CreatedAt: &createdAt,
+		Media:     []string{"media-1", "media-2"},
+		Attachments: []providers.Attachment{
+			{Type: "image", Filename: "a.png"},
+		},
+		SystemParts: []providers.ContentBlock{
+			{Type: "text", Text: "system", CacheControl: &providers.CacheControl{Type: "ephemeral"}},
+		},
+		ToolCalls: []providers.ToolCall{
+			{
+				ID:       "call-1",
+				Function: &providers.FunctionCall{Name: "lookup", Arguments: `{"q":"x"}`},
+				Arguments: map[string]any{
+					"nested": map[string]any{"deep": "value"},
+					"list":   []any{"a", map[string]any{"b": true}},
+					"scalar": "keep",
+				},
+				ExtraContent: &providers.ExtraContent{
+					Google:                  &providers.GoogleExtra{ThoughtSignature: "sig"},
+					ToolFeedbackExplanation: "why",
+				},
+			},
+		},
+	}
+}
+
+func mutateSessionMessage(msg *providers.Message) {
+	msg.Role = "mutated"
+	msg.Content = "mutated"
+	if msg.CreatedAt != nil {
+		*msg.CreatedAt = msg.CreatedAt.Add(24 * time.Hour)
+	}
+	msg.Media[0] = "mutated"
+	msg.Attachments[0].Filename = "mutated"
+	msg.SystemParts[0].Text = "mutated"
+	msg.SystemParts[0].CacheControl.Type = "mutated"
+	msg.ToolCalls[0].Function.Name = "mutated"
+	msg.ToolCalls[0].Function.Arguments = "{}"
+	msg.ToolCalls[0].Arguments["scalar"] = "mutated"
+	msg.ToolCalls[0].Arguments["nested"].(map[string]any)["deep"] = "mutated"
+	msg.ToolCalls[0].Arguments["list"].([]any)[0] = "mutated"
+	msg.ToolCalls[0].Arguments["list"].([]any)[1].(map[string]any)["b"] = false
+	msg.ToolCalls[0].ExtraContent.Google.ThoughtSignature = "mutated"
+	msg.ToolCalls[0].ExtraContent.ToolFeedbackExplanation = "mutated"
+}
+
+func assertSampleSessionMessage(t *testing.T, msg providers.Message) {
+	t.Helper()
+
+	if msg.Role != "assistant" || msg.Content != "hello" {
+		t.Fatalf("message identity mutated: role=%q content=%q", msg.Role, msg.Content)
+	}
+	if want := []string{"media-1", "media-2"}; !slices.Equal(msg.Media, want) {
+		t.Fatalf("Media = %v, want %v", msg.Media, want)
+	}
+	if want := []providers.Attachment{{Type: "image", Filename: "a.png"}}; !slices.Equal(msg.Attachments, want) {
+		t.Fatalf("Attachments = %+v, want %+v", msg.Attachments, want)
+	}
+	if len(msg.SystemParts) != 1 || msg.SystemParts[0].Text != "system" {
+		t.Fatalf("SystemParts = %+v, want one text block", msg.SystemParts)
+	}
+	if msg.SystemParts[0].CacheControl == nil || msg.SystemParts[0].CacheControl.Type != "ephemeral" {
+		t.Fatalf("SystemParts[0].CacheControl = %+v, want ephemeral", msg.SystemParts[0].CacheControl)
+	}
+	if len(msg.ToolCalls) != 1 {
+		t.Fatalf("ToolCalls = %+v, want one call", msg.ToolCalls)
+	}
+	call := msg.ToolCalls[0]
+	if call.ID != "call-1" || call.Function == nil || call.Function.Name != "lookup" ||
+		call.Function.Arguments != `{"q":"x"}` {
+		t.Fatalf("ToolCalls[0] = %+v, want call-1 with function lookup", call)
+	}
+	if got := call.Arguments["scalar"]; got != "keep" {
+		t.Fatalf("Arguments[scalar] = %v, want keep", got)
+	}
+	nested, ok := call.Arguments["nested"].(map[string]any)
+	if !ok || nested["deep"] != "value" {
+		t.Fatalf("Arguments[nested] = %v, want map with deep=value", call.Arguments["nested"])
+	}
+	list, ok := call.Arguments["list"].([]any)
+	if !ok || len(list) != 2 || list[0] != "a" {
+		t.Fatalf("Arguments[list] = %v, want [a, {b:true}]", call.Arguments["list"])
+	}
+	inner, ok := list[1].(map[string]any)
+	if !ok || inner["b"] != true {
+		t.Fatalf("Arguments[list][1] = %v, want map with b=true", list[1])
+	}
+	if call.ExtraContent == nil || call.ExtraContent.ToolFeedbackExplanation != "why" {
+		t.Fatalf("ExtraContent = %+v, want explanation why", call.ExtraContent)
+	}
+	if call.ExtraContent.Google == nil || call.ExtraContent.Google.ThoughtSignature != "sig" {
+		t.Fatalf("ExtraContent.Google = %+v, want signature sig", call.ExtraContent.Google)
 	}
 }

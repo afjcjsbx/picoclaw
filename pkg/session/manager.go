@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -41,24 +42,14 @@ func NewSessionManager(storage string) *SessionManager {
 	return sm
 }
 
-func (sm *SessionManager) GetOrCreate(key string) *Session {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
-	session, ok := sm.sessions[key]
-	if ok {
-		return session
-	}
-
-	session = &Session{
+func newSession(key string) *Session {
+	now := time.Now()
+	return &Session{
 		Key:      key,
 		Messages: []providers.Message{},
-		Created:  time.Now(),
-		Updated:  time.Now(),
+		Created:  now,
+		Updated:  now,
 	}
-	sm.sessions[key] = session
-
-	return session
 }
 
 func ensureMessageCreatedAt(msg *providers.Message, fallback time.Time) {
@@ -95,11 +86,7 @@ func (sm *SessionManager) AddFullMessage(_ context.Context, sessionKey string, m
 
 	session, ok := sm.sessions[sessionKey]
 	if !ok {
-		session = &Session{
-			Key:      sessionKey,
-			Messages: []providers.Message{},
-			Created:  time.Now(),
-		}
+		session = newSession(sessionKey)
 		sm.sessions[sessionKey] = session
 	}
 
@@ -120,9 +107,7 @@ func (sm *SessionManager) GetHistory(_ context.Context, key string) ([]providers
 		return []providers.Message{}, nil
 	}
 
-	history := make([]providers.Message, len(session.Messages))
-	copy(history, session.Messages)
-	return history, nil
+	return messageutil.CloneHistory(session.Messages), nil
 }
 
 func (sm *SessionManager) GetSummary(_ context.Context, key string) (string, error) {
@@ -167,7 +152,9 @@ func (sm *SessionManager) TruncateHistory(_ context.Context, key string, keepLas
 		return nil
 	}
 
-	session.Messages = session.Messages[len(session.Messages)-keepLast:]
+	// Copy the retained tail into a fresh slice so the old backing array
+	// (and the messages dropped by the truncation) can be garbage collected.
+	session.Messages = slices.Clone(session.Messages[len(session.Messages)-keepLast:])
 	session.Updated = time.Now()
 	return nil
 }
@@ -352,10 +339,11 @@ func (sm *SessionManager) SetHistory(_ context.Context, key string, history []pr
 	session, ok := sm.sessions[key]
 	if ok {
 		history = messageutil.FilterInvalidHistoryMessages(history)
-		// Create a deep copy to strictly isolate internal state
-		// from the caller's slice.
-		msgs := make([]providers.Message, len(history))
-		copy(msgs, history)
+		// Copy the caller's slice and every nested field before storing so
+		// later mutations on either side stay isolated. It also keeps the
+		// CreatedAt normalization below from writing into the caller's
+		// messages.
+		msgs := messageutil.CloneHistory(history)
 		normalizeHistoryCreatedAt(msgs)
 		session.Messages = msgs
 		session.Updated = time.Now()
