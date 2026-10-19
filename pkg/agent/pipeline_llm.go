@@ -716,7 +716,11 @@ func (p *Pipeline) CallLLM(
 	}
 	exec.messages = append(exec.messages, assistantMsg)
 	if !ts.opts.NoHistory {
-		ts.agent.Sessions.AddFullMessage(ts.sessionKey, assistantMsg)
+		warnSessionStoreError(
+			ts.sessionKey,
+			"add full message",
+			ts.agent.Sessions.AddFullMessage(ctx, ts.sessionKey, assistantMsg),
+		)
 		ts.recordPersistedMessage(assistantMsg)
 		ts.ingestMessage(turnCtx, al, assistantMsg)
 	}

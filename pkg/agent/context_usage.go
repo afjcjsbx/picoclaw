@@ -1,7 +1,10 @@
 package agent
 
 import (
+	"context"
+
 	"github.com/sipeed/picoclaw/pkg/bus"
+	"github.com/sipeed/picoclaw/pkg/providers"
 )
 
 // computeContextUsage estimates current context window consumption for the
@@ -23,8 +26,14 @@ func computeContextUsage(agent *AgentInstance, sessionKey string) *bus.ContextUs
 		return nil
 	}
 
-	// History tokens
-	history := agent.Sessions.GetHistory(sessionKey)
+	// History tokens. This is a best-effort estimator used by UI and command
+	// stats, so read failures are logged and the zero value is used instead of
+	// aborting the estimate.
+	history, err := agent.Sessions.GetHistory(context.Background(), sessionKey)
+	if err != nil {
+		warnSessionStoreError(sessionKey, "get history", err)
+		history = []providers.Message{}
+	}
 	historyTokens := 0
 	for _, m := range history {
 		historyTokens += EstimateMessageTokens(m)
@@ -35,7 +44,11 @@ func computeContextUsage(agent *AgentInstance, sessionKey string) *bus.ContextUs
 	// dynamic context, active skills, summary with wrapping prefix).
 	systemTokens := 0
 	if agent.ContextBuilder != nil {
-		summary := agent.Sessions.GetSummary(sessionKey)
+		summary, err := agent.Sessions.GetSummary(context.Background(), sessionKey)
+		if err != nil {
+			warnSessionStoreError(sessionKey, "get summary", err)
+			summary = ""
+		}
 		// Pass nil for active skills: skills are only injected when the user
 		// explicitly activates them via /use, which is rare. Using nil matches
 		// the common case and avoids over-counting all installed skills.

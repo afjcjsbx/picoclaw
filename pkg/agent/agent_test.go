@@ -1317,7 +1317,10 @@ func TestProcessMessage_MediaToolHandledSkipsFollowUpLLMAndFinalText(t *testing.
 		SenderID: "user1",
 		Content:  "take a screenshot of the screen and send it to me",
 	})).SessionKey, "")
-	history := defaultAgent.Sessions.GetHistory(sessionKey)
+	history, err := defaultAgent.Sessions.GetHistory(context.Background(), sessionKey)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
 	if len(history) == 0 {
 		t.Fatal("expected session history to be saved")
 	}
@@ -2720,7 +2723,10 @@ func TestProcessMessage_UsesRouteSessionKey(t *testing.T) {
 	helper := testHelper{al: al}
 	_ = helper.executeAndGetResponse(t, context.Background(), msg)
 
-	history := defaultAgent.Sessions.GetHistory(sessionKey)
+	history, err := defaultAgent.Sessions.GetHistory(context.Background(), sessionKey)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
 	if len(history) != 2 {
 		t.Fatalf("expected session history len=2, got %d", len(history))
 	}
@@ -2882,10 +2888,18 @@ func TestProcessMessage_ClearCommandClearsRoutedAgentSession(t *testing.T) {
 
 	mainHistory := []providers.Message{{Role: "user", Content: "main history"}}
 	supportHistory := []providers.Message{{Role: "user", Content: "support history"}}
-	mainAgent.Sessions.SetHistory(sessionKey, mainHistory)
-	mainAgent.Sessions.SetSummary(sessionKey, "main summary")
-	supportAgent.Sessions.SetHistory(sessionKey, supportHistory)
-	supportAgent.Sessions.SetSummary(sessionKey, "support summary")
+	if err = mainAgent.Sessions.SetHistory(context.Background(), sessionKey, mainHistory); err != nil {
+		t.Fatalf("main SetHistory: %v", err)
+	}
+	if err = mainAgent.Sessions.SetSummary(context.Background(), sessionKey, "main summary"); err != nil {
+		t.Fatalf("main SetSummary: %v", err)
+	}
+	if err = supportAgent.Sessions.SetHistory(context.Background(), sessionKey, supportHistory); err != nil {
+		t.Fatalf("support SetHistory: %v", err)
+	}
+	if err = supportAgent.Sessions.SetSummary(context.Background(), sessionKey, "support summary"); err != nil {
+		t.Fatalf("support SetSummary: %v", err)
+	}
 
 	for _, a := range []*AgentInstance{mainAgent, supportAgent} {
 		tool, _ := a.Tools.Get("todo")
@@ -2919,21 +2933,37 @@ func TestProcessMessage_ClearCommandClearsRoutedAgentSession(t *testing.T) {
 		}
 	}
 
-	if got := supportAgent.Sessions.GetHistory(sessionKey); len(got) != 0 {
-		t.Fatalf("support history len = %d, want 0", len(got))
+	supportHist, err := supportAgent.Sessions.GetHistory(context.Background(), sessionKey)
+	if err != nil {
+		t.Fatalf("support GetHistory: %v", err)
 	}
-	if got := supportAgent.Sessions.GetSummary(sessionKey); got != "" {
-		t.Fatalf("support summary = %q, want empty", got)
+	if len(supportHist) != 0 {
+		t.Fatalf("support history len = %d, want 0", len(supportHist))
 	}
-	if got := mainAgent.Sessions.GetHistory(sessionKey); len(got) != len(mainHistory) {
-		t.Fatalf("main history len = %d, want %d", len(got), len(mainHistory))
-	} else if got[0].Role != mainHistory[0].Role {
-		t.Fatalf("main history[0].Role = %q, want %q", got[0].Role, mainHistory[0].Role)
-	} else if got[0].Content != mainHistory[0].Content {
-		t.Fatalf("main history[0].Content = %q, want %q", got[0].Content, mainHistory[0].Content)
+	supportSummary, err := supportAgent.Sessions.GetSummary(context.Background(), sessionKey)
+	if err != nil {
+		t.Fatalf("support GetSummary: %v", err)
 	}
-	if got := mainAgent.Sessions.GetSummary(sessionKey); got != "main summary" {
-		t.Fatalf("main summary = %q, want %q", got, "main summary")
+	if supportSummary != "" {
+		t.Fatalf("support summary = %q, want empty", supportSummary)
+	}
+	mainHist, err := mainAgent.Sessions.GetHistory(context.Background(), sessionKey)
+	if err != nil {
+		t.Fatalf("main GetHistory: %v", err)
+	}
+	if len(mainHist) != len(mainHistory) {
+		t.Fatalf("main history len = %d, want %d", len(mainHist), len(mainHistory))
+	} else if mainHist[0].Role != mainHistory[0].Role {
+		t.Fatalf("main history[0].Role = %q, want %q", mainHist[0].Role, mainHistory[0].Role)
+	} else if mainHist[0].Content != mainHistory[0].Content {
+		t.Fatalf("main history[0].Content = %q, want %q", mainHist[0].Content, mainHistory[0].Content)
+	}
+	mainSummary, err := mainAgent.Sessions.GetSummary(context.Background(), sessionKey)
+	if err != nil {
+		t.Fatalf("main GetSummary: %v", err)
+	}
+	if mainSummary != "main summary" {
+		t.Fatalf("main summary = %q, want %q", mainSummary, "main summary")
 	}
 }
 
@@ -3537,7 +3567,10 @@ func TestProcessMessage_ModelRoutingScoresSessionHistoryNotRenderedPrompt(t *tes
 	route := al.registry.ResolveRoute(bus.NormalizeInboundMessage(msg).Context)
 	sessionKey := al.allocateRouteSession(route, msg).SessionKey
 	for i := 0; i < 9; i++ {
-		agent.Sessions.AddFullMessage(sessionKey, providers.Message{Role: "user", Content: "prior turn"})
+		if err := agent.Sessions.AddFullMessage(context.Background(), sessionKey,
+			providers.Message{Role: "user", Content: "prior turn"}); err != nil {
+			t.Fatalf("AddFullMessage: %v", err)
+		}
 	}
 
 	helper := testHelper{al: al}
@@ -4162,7 +4195,9 @@ func TestAgentLoop_ContextExhaustionRetry(t *testing.T) {
 	if defaultAgent == nil {
 		t.Fatal("No default agent found")
 	}
-	defaultAgent.Sessions.SetHistory(sessionKey, history)
+	if err = defaultAgent.Sessions.SetHistory(context.Background(), sessionKey, history); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
 
 	// Call ProcessDirectWithChannel
 	// Note: ProcessDirectWithChannel calls processMessage which will execute runLLMIteration
@@ -4187,7 +4222,10 @@ func TestAgentLoop_ContextExhaustionRetry(t *testing.T) {
 	}
 
 	// Check final history length
-	finalHistory := defaultAgent.Sessions.GetHistory(sessionKey)
+	finalHistory, err := defaultAgent.Sessions.GetHistory(context.Background(), sessionKey)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
 	// We verify that the history has been modified (compressed)
 	// Original length: 5
 	// Expected behavior: compression drops ~50% of Turns
@@ -4538,7 +4576,10 @@ func TestAgentLoop_VisionUnsupportedErrorReturnsClearFailure(t *testing.T) {
 	if agent == nil {
 		t.Fatal("expected default agent")
 	}
-	history := agent.Sessions.GetHistory(sessionKey)
+	history, err := agent.Sessions.GetHistory(context.Background(), sessionKey)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
 	if len(history) == 0 {
 		t.Fatal("expected user message to remain in session history")
 	}
@@ -5178,11 +5219,17 @@ func TestAgentLoop_ToolLimitUsesDedicatedFallback(t *testing.T) {
 		ChatType: "direct",
 		SenderID: "direct",
 	})
-	history := defaultAgent.Sessions.GetHistory(al.allocateRouteSession(route, testInboundMessage(bus.InboundMessage{
-		Channel:  "test",
-		SenderID: "direct",
-		ChatID:   "chat1",
-	})).SessionKey)
+	history, err := defaultAgent.Sessions.GetHistory(
+		context.Background(),
+		al.allocateRouteSession(route, testInboundMessage(bus.InboundMessage{
+			Channel:  "test",
+			SenderID: "direct",
+			ChatID:   "chat1",
+		})).SessionKey,
+	)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
 	if len(history) != 4 {
 		t.Fatalf("history len = %d, want 4", len(history))
 	}
@@ -5778,7 +5825,10 @@ func TestProcessMessage_PersistsReasoningContentInSessionHistory(t *testing.T) {
 	if len(sessionKeys) != 1 {
 		t.Fatalf("session keys = %v, want exactly 1 active session", sessionKeys)
 	}
-	history := store.GetHistory(sessionKeys[0])
+	history, err := store.GetHistory(context.Background(), sessionKeys[0])
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
 	if len(history) < 2 {
 		t.Fatalf("session history len = %d, want at least 2", len(history))
 	}
@@ -5831,7 +5881,10 @@ func TestProcessMessage_PersistsReasoningToolResponseAsSingleAssistantRecord(t *
 		t.Fatalf("session keys = %v, want exactly 1 active session", sessionKeys)
 	}
 
-	history := store.GetHistory(sessionKeys[0])
+	history, err := store.GetHistory(context.Background(), sessionKeys[0])
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
 	if len(history) < 3 {
 		t.Fatalf("session history len = %d, want at least 3", len(history))
 	}
@@ -7103,8 +7156,14 @@ func TestProcessMessage_ContextOverflowRecovery(t *testing.T) {
 	agent := al.GetRegistry().GetDefaultAgent()
 
 	for i := 0; i < 5; i++ {
-		agent.Sessions.AddFullMessage(sessionKey, providers.Message{Role: "user", Content: "heavy message"})
-		agent.Sessions.AddFullMessage(sessionKey, providers.Message{Role: "assistant", Content: "response"})
+		if err := agent.Sessions.AddFullMessage(context.Background(), sessionKey,
+			providers.Message{Role: "user", Content: "heavy message"}); err != nil {
+			t.Fatalf("AddFullMessage: %v", err)
+		}
+		if err := agent.Sessions.AddFullMessage(context.Background(), sessionKey,
+			providers.Message{Role: "assistant", Content: "response"}); err != nil {
+			t.Fatalf("AddFullMessage: %v", err)
+		}
 	}
 
 	response, err := al.processMessage(context.Background(), testInboundMessage(bus.InboundMessage{

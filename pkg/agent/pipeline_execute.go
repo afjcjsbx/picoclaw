@@ -132,25 +132,34 @@ func (p *Pipeline) ExecuteTools(
 		}
 		return status == loopStatusCritical
 	}
-	skipRemainingForLoop := func(start int) {
-		for j := start; j < len(normalizedToolCalls); j++ {
-			skippedTC := normalizedToolCalls[j]
-			const reason = "critical repeated tool-call loop detected"
-			al.emitEvent(
-				runtimeevents.KindAgentToolExecSkipped,
-				ts.eventMeta("runTurn", "turn.tool.skipped"),
-				ToolExecSkippedPayload{Tool: skippedTC.Name, Reason: reason},
+	// persistSkippedToolCall emits the skip event, appends the synthetic tool
+	// message to the turn and persists it to the session store.
+	persistSkippedToolCall := func(tc providers.ToolCall, reason, message string) {
+		al.emitEvent(
+			runtimeevents.KindAgentToolExecSkipped,
+			ts.eventMeta("runTurn", "turn.tool.skipped"),
+			ToolExecSkippedPayload{Tool: tc.Name, Reason: reason},
+		)
+		skippedMsg := providers.Message{
+			Role:       "tool",
+			Content:    message,
+			ToolCallID: tc.ID,
+		}
+		messages = append(messages, skippedMsg)
+		if !ts.opts.NoHistory {
+			warnSessionStoreError(
+				ts.sessionKey,
+				"add full message",
+				ts.agent.Sessions.AddFullMessage(ctx, ts.sessionKey, skippedMsg),
 			)
-			skippedMsg := providers.Message{
-				Role:       "tool",
-				Content:    "Skipped because a repeated tool-call loop was detected.",
-				ToolCallID: skippedTC.ID,
-			}
-			messages = append(messages, skippedMsg)
-			if !ts.opts.NoHistory {
-				ts.agent.Sessions.AddFullMessage(ts.sessionKey, skippedMsg)
-				ts.recordPersistedMessage(skippedMsg)
-			}
+			ts.recordPersistedMessage(skippedMsg)
+		}
+	}
+	skipRemainingForLoop := func(start int) {
+		const reason = "critical repeated tool-call loop detected"
+		const message = "Skipped because a repeated tool-call loop was detected."
+		for j := start; j < len(normalizedToolCalls); j++ {
+			persistSkippedToolCall(normalizedToolCalls[j], reason, message)
 		}
 	}
 
@@ -186,7 +195,7 @@ toolLoop:
 			}
 			messages = append(messages, deniedMsg)
 			if !ts.opts.NoHistory {
-				ts.agent.Sessions.AddFullMessage(ts.sessionKey, deniedMsg)
+				warnSessionStoreError(ts.sessionKey, "add full message", ts.agent.Sessions.AddFullMessage(ctx, ts.sessionKey, deniedMsg))
 				ts.recordPersistedMessage(deniedMsg)
 			}
 			return true
@@ -362,7 +371,7 @@ toolLoop:
 
 					messages = append(messages, toolResultMsg)
 					if !ts.opts.NoHistory {
-						ts.agent.Sessions.AddFullMessage(ts.sessionKey, toolResultMsg)
+						warnSessionStoreError(ts.sessionKey, "add full message", ts.agent.Sessions.AddFullMessage(ctx, ts.sessionKey, toolResultMsg))
 						ts.recordPersistedMessage(toolResultMsg)
 						ts.ingestMessage(turnCtx, al, toolResultMsg)
 					}
@@ -396,25 +405,7 @@ toolLoop:
 									"reason":    skipReason,
 								})
 							for j := i + 1; j < len(normalizedToolCalls); j++ {
-								skippedTC := normalizedToolCalls[j]
-								al.emitEvent(
-									runtimeevents.KindAgentToolExecSkipped,
-									ts.eventMeta("runTurn", "turn.tool.skipped"),
-									ToolExecSkippedPayload{
-										Tool:   skippedTC.Name,
-										Reason: skipReason,
-									},
-								)
-								skippedMsg := providers.Message{
-									Role:       "tool",
-									Content:    skipMessage,
-									ToolCallID: skippedTC.ID,
-								}
-								messages = append(messages, skippedMsg)
-								if !ts.opts.NoHistory {
-									ts.agent.Sessions.AddFullMessage(ts.sessionKey, skippedMsg)
-									ts.recordPersistedMessage(skippedMsg)
-								}
+								persistSkippedToolCall(normalizedToolCalls[j], skipReason, skipMessage)
 							}
 						}
 						break toolLoop
@@ -428,7 +419,7 @@ toolLoop:
 								msg := subTurnResultPromptMessage(content)
 								messages = append(messages, msg)
 								if !ts.opts.NoHistory {
-									ts.agent.Sessions.AddFullMessage(ts.sessionKey, msg)
+									warnSessionStoreError(ts.sessionKey, "add full message", ts.agent.Sessions.AddFullMessage(ctx, ts.sessionKey, msg))
 								}
 							}
 						default:
@@ -461,7 +452,7 @@ toolLoop:
 				}
 				messages = append(messages, deniedMsg)
 				if !ts.opts.NoHistory {
-					ts.agent.Sessions.AddFullMessage(ts.sessionKey, deniedMsg)
+					warnSessionStoreError(ts.sessionKey, "add full message", ts.agent.Sessions.AddFullMessage(ctx, ts.sessionKey, deniedMsg))
 					ts.recordPersistedMessage(deniedMsg)
 				}
 				continue
@@ -500,7 +491,7 @@ toolLoop:
 				}
 				messages = append(messages, deniedMsg)
 				if !ts.opts.NoHistory {
-					ts.agent.Sessions.AddFullMessage(ts.sessionKey, deniedMsg)
+					warnSessionStoreError(ts.sessionKey, "add full message", ts.agent.Sessions.AddFullMessage(ctx, ts.sessionKey, deniedMsg))
 					ts.recordPersistedMessage(deniedMsg)
 				}
 				continue
@@ -745,7 +736,7 @@ toolLoop:
 		)
 		messages = append(messages, toolResultMsg)
 		if !ts.opts.NoHistory {
-			ts.agent.Sessions.AddFullMessage(ts.sessionKey, toolResultMsg)
+			warnSessionStoreError(ts.sessionKey, "add full message", ts.agent.Sessions.AddFullMessage(ctx, ts.sessionKey, toolResultMsg))
 			ts.recordPersistedMessage(toolResultMsg)
 			ts.ingestMessage(turnCtx, al, toolResultMsg)
 		}
@@ -779,25 +770,7 @@ toolLoop:
 						"reason":    skipReason,
 					})
 				for j := i + 1; j < len(normalizedToolCalls); j++ {
-					skippedTC := normalizedToolCalls[j]
-					al.emitEvent(
-						runtimeevents.KindAgentToolExecSkipped,
-						ts.eventMeta("runTurn", "turn.tool.skipped"),
-						ToolExecSkippedPayload{
-							Tool:   skippedTC.Name,
-							Reason: skipReason,
-						},
-					)
-					skippedMsg := providers.Message{
-						Role:       "tool",
-						Content:    skipMessage,
-						ToolCallID: skippedTC.ID,
-					}
-					messages = append(messages, skippedMsg)
-					if !ts.opts.NoHistory {
-						ts.agent.Sessions.AddFullMessage(ts.sessionKey, skippedMsg)
-						ts.recordPersistedMessage(skippedMsg)
-					}
+					persistSkippedToolCall(normalizedToolCalls[j], skipReason, skipMessage)
 				}
 			}
 			break toolLoop
@@ -811,7 +784,7 @@ toolLoop:
 					msg := subTurnResultPromptMessage(content)
 					messages = append(messages, msg)
 					if !ts.opts.NoHistory {
-						ts.agent.Sessions.AddFullMessage(ts.sessionKey, msg)
+						warnSessionStoreError(ts.sessionKey, "add full message", ts.agent.Sessions.AddFullMessage(ctx, ts.sessionKey, msg))
 					}
 				}
 			default:
@@ -896,10 +869,14 @@ toolLoop:
 			Attachments: append([]providers.Attachment(nil), handledAttachments...),
 		}
 		if !ts.opts.NoHistory {
-			ts.agent.Sessions.AddFullMessage(ts.sessionKey, summaryMsg)
+			warnSessionStoreError(
+				ts.sessionKey,
+				"add full message",
+				ts.agent.Sessions.AddFullMessage(ctx, ts.sessionKey, summaryMsg),
+			)
 			ts.recordPersistedMessage(summaryMsg)
 			ts.ingestMessage(turnCtx, al, summaryMsg)
-			if err := ts.agent.Sessions.Save(ts.sessionKey); err != nil {
+			if err := ts.agent.Sessions.Save(ctx, ts.sessionKey); err != nil {
 				logger.WarnCF("agent", "Failed to save session after tool delivery",
 					map[string]any{
 						"agent_id": ts.agent.ID,
