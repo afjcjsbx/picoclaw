@@ -108,6 +108,15 @@ func (s *ProcessSession) killProcess() error {
 		return err
 	}
 
+	// Release the session's own descriptors: the reader goroutine can then
+	// observe the closure and stop, and a dead session keeps no fd open.
+	if s.ptyMaster != nil {
+		_ = s.ptyMaster.Close()
+	}
+	if closer, ok := s.stdinWriter.(io.Closer); ok {
+		_ = closer.Close()
+	}
+
 	s.Status = "done"
 	s.ExitCode = -1
 	return nil

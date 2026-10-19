@@ -607,6 +607,7 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 	var stdoutReader io.ReadCloser
 	var stderrReader io.ReadCloser
 	var stdinWriter io.WriteCloser
+	var ptySlave *os.File
 
 	if ptyEnabled {
 		ptmx, tty, err := pty.Open()
@@ -623,6 +624,7 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 		setSysProcAttrForPty(cmd)
 
 		session.ptyMaster = ptmx
+		ptySlave = tty
 	} else {
 		var err error
 		stdoutReader, err = cmd.StdoutPipe()
@@ -644,10 +646,20 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 	// Background sessions use the same startup path so isolation stays consistent
 	// with synchronous exec runs.
 	if err := isolation.Start(cmd); err != nil {
+		if ptySlave != nil {
+			_ = ptySlave.Close()
+		}
 		if session.ptyMaster != nil {
 			_ = session.ptyMaster.Close()
 		}
 		return ErrorResult(fmt.Sprintf("failed to start command: %v", err))
+	}
+
+	// The child inherited its own copies of the PTY slave end. The parent must
+	// release its copy now, otherwise the master never observes EOF/EIO when
+	// the child exits and the reader goroutine would block forever.
+	if ptySlave != nil {
+		_ = ptySlave.Close()
 	}
 
 	session.PID = cmd.Process.Pid
@@ -713,6 +725,9 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 					break
 				}
 			}
+			// The child side is gone (EOF/EIO) or the session was killed:
+			// release the master descriptor so no fd survives the session.
+			_ = session.ptyMaster.Close()
 		}()
 	} else {
 		// Non-PTY mode: single goroutine reads pipes.
