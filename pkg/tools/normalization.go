@@ -17,9 +17,7 @@ import (
 )
 
 const (
-	largeBase64OmittedMessage = toolshared.LargeBase64OmittedMessage
-	inlineMediaOmittedMessage = toolshared.InlineMediaOmittedMessage
-	inlineMediaStoredMessage  = "[Tool returned inline media content (%s); omitted from model context and registered as a media attachment.]"
+	inlineMediaStoredMessage = "[Tool returned inline media content (%s); omitted from model context and registered as a media attachment.]"
 
 	// largeResultSpillSentinel prefixes a ForLLM value that has been reduced to a
 	// bounded artifact preview, so the model and logs can recognize it. It is
