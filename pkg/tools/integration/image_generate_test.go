@@ -17,11 +17,13 @@ import (
 	"sync/atomic"
 	"testing"
 	"testing/iotest"
+	"time"
 	"unicode/utf8"
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/media"
 	"github.com/sipeed/picoclaw/pkg/tools"
+	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
 func TestImageGenerateUsesModelProxy(t *testing.T) {
@@ -99,11 +101,26 @@ func TestOpenRouterImageUsesBaseRequest(t *testing.T) {
 }
 
 func TestImageDownloadRejectsNonPublicTargets(t *testing.T) {
-	for _, host := range []string{"localhost", "127.0.0.1", "10.0.0.1", "169.254.169.254", "0.0.0.0", "::1", "fc00::1"} {
+	dial := utils.NewSafeDialContext(&net.Dialer{Timeout: 5 * time.Second}, nil, nil)
+	for _, host := range []string{
+		"localhost",
+		"127.0.0.1",
+		"10.0.0.1",
+		"169.254.169.254",
+		"0.0.0.0",
+		"0.1.2.3",
+		"100.64.0.1",
+		"198.18.0.1",
+		"::1",
+		"fc00::1",
+		// 6to4 and Teredo wrap an embedded IPv4 address.
+		"2002:0a00:0001::1",
+		"2001:0000:4136:e378:8000:63bf:f5ff:fffe",
+	} {
 		if isPublicImageHost(host) {
 			t.Errorf("accepted non-public host %q", host)
 		}
-		_, err := dialPublicImageHost(context.Background(), "tcp", net.JoinHostPort(host, "443"))
+		_, err := dial(context.Background(), "tcp", net.JoinHostPort(host, "443"))
 		if err == nil {
 			t.Errorf("dialed non-public host %q", host)
 		}

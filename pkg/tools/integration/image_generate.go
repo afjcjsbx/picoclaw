@@ -20,6 +20,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/providers/common"
 	"github.com/sipeed/picoclaw/pkg/tools"
+	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
 type ImageGenerateTool struct {
@@ -418,7 +419,9 @@ func (t *ImageGenerateTool) downloadImage(ctx context.Context, rawURL string, ds
 		transport = base.Clone()
 	}
 	transport.Proxy = nil
-	transport.DialContext = dialPublicImageHost
+	// Reuse the canonical SSRF guard so every resolved address is checked
+	// against the same private/restricted ranges used by web_fetch.
+	transport.DialContext = utils.NewSafeDialContext(&net.Dialer{}, nil, nil)
 	defer transport.CloseIdleConnections()
 	client := &http.Client{
 		Timeout:   60 * time.Second,
@@ -519,36 +522,10 @@ func isPublicImageHost(host string) bool {
 }
 
 func isPublicImageIP(ip net.IP) bool {
-	return ip.IsGlobalUnicast() && !ip.IsPrivate()
-}
-
-func dialPublicImageHost(ctx context.Context, network, address string) (net.Conn, error) {
-	host, port, err := net.SplitHostPort(address)
-	if err != nil || !isPublicImageHost(host) {
-		return nil, fmt.Errorf("image download target is not public")
-	}
-	addresses, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve image download host: %w", err)
-	}
-	if len(addresses) == 0 {
-		return nil, fmt.Errorf("image download host has no IP address")
-	}
-	for _, address := range addresses {
-		if !isPublicImageIP(address.IP) {
-			return nil, fmt.Errorf("image download target is not public")
-		}
-	}
-	dialer := &net.Dialer{}
-	var dialErr error
-	for _, address := range addresses {
-		conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(address.IP.String(), port))
-		if err == nil {
-			return conn, nil
-		}
-		dialErr = err
-	}
-	return nil, dialErr
+	// Single source of truth for "not private/restricted": the canonical guard
+	// also covers CGNAT (100.64/10), benchmarking (198.18/15), 0.0.0.0/8 and
+	// IPv6 forms that embed an IPv4 address (6to4, Teredo, ISATAP).
+	return ip.IsGlobalUnicast() && !utils.IsPrivateOrRestrictedIP(ip)
 }
 
 func stringArg(args map[string]any, name string) string {
