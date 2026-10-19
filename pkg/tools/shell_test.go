@@ -2278,3 +2278,29 @@ func TestShellTool_PTY_ReaderStopsAfterExit(t *testing.T) {
 	}, 5*time.Second, 50*time.Millisecond,
 		"PTY reader goroutines should stop after the process exits")
 }
+
+// TestShellTool_DetachedChildDoesNotBlockWait verifies that a grandchild which
+// inherits stdout and outlives the command cannot keep cmd.Wait blocked after
+// the command itself exited.
+func TestShellTool_DetachedChildDoesNotBlockWait(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires a POSIX shell")
+	}
+
+	tool, err := NewExecTool("", false)
+	require.NoError(t, err)
+
+	start := time.Now()
+	result := tool.Execute(context.Background(), map[string]any{
+		"action": "run",
+		// The background sleep inherits the stdout pipe and keeps it open
+		// after sh exits.
+		"command": "sleep 60 & echo started",
+		"timeout": float64(30),
+	})
+	elapsed := time.Since(start)
+
+	require.Less(t, elapsed, 20*time.Second, "wait must not block on the detached child")
+	require.False(t, result.IsError, "command itself succeeded: %s", result.ForLLM)
+	require.Contains(t, result.ForLLM, "started")
+}

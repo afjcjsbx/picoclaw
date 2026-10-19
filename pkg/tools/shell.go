@@ -443,6 +443,10 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 	return t.runSync(ctx, command, cwd, timeout)
 }
 
+// shellWaitDelay bounds how long cmd.Wait waits for the stdout/stderr pipes to
+// close after the command itself has finished or been killed.
+const shellWaitDelay = 3 * time.Second
+
 func (t *ExecTool) runSync(ctx context.Context, command, cwd string, timeout time.Duration) *ToolResult {
 	// timeout == 0 means no timeout
 	var cmdCtx context.Context
@@ -465,6 +469,10 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string, timeout tim
 	}
 
 	prepareCommandForTermination(cmd)
+	// Bound the wait for the stdout/stderr copy goroutines: a grandchild that
+	// inherited those pipes (e.g. a detached background process) can otherwise
+	// keep cmd.Wait blocked forever after the command itself exited.
+	cmd.WaitDelay = shellWaitDelay
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -502,7 +510,15 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string, timeout tim
 			if cmd.Process != nil {
 				_ = cmd.Process.Kill()
 			}
-			err = <-done
+			select {
+			case err = <-done:
+			case <-time.After(2 * time.Second):
+				// The process could not be reaped in time (e.g. stuck in an
+				// uninterruptible state). Report it instead of blocking the
+				// turn forever; the buffered channel lets the Wait goroutine
+				// finish on its own once the process is gone.
+				err = errors.New("process did not exit after being killed")
+			}
 		}
 	}
 
@@ -525,6 +541,22 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string, timeout tim
 			}
 		}
 
+		// exec.ErrWaitDelay means the process itself finished; only the I/O
+		// copy was cut short (a detached grandchild can keep the stdout pipe
+		// open). Prefer the real exit status over the I/O error.
+		if errors.Is(err, exec.ErrWaitDelay) && cmd.ProcessState != nil {
+			if cmd.ProcessState.Success() {
+				err = nil
+			} else {
+				err = fmt.Errorf(
+					"command exited with code %d (stdout/stderr pipes did not close in time)",
+					cmd.ProcessState.ExitCode(),
+				)
+			}
+		}
+	}
+
+	if err != nil {
 		// Extract detailed exit information
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
