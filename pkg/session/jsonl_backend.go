@@ -36,13 +36,6 @@ type aliasPromotingStore interface {
 	PromoteAliasHistory(ctx context.Context, sessionKey string, scope json.RawMessage, aliases []string) (bool, error)
 }
 
-// MetadataAwareSessionStore exposes structured session metadata operations.
-type MetadataAwareSessionStore interface {
-	EnsureSessionMetadata(sessionKey string, scope *SessionScope, aliases []string)
-	ResolveSessionKey(sessionKey string) string
-	GetSessionScope(sessionKey string) *SessionScope
-}
-
 // NewJSONLBackend wraps a memory.Store for use as a SessionStore.
 func NewJSONLBackend(store memory.Store) *JSONLBackend {
 	return &JSONLBackend{store: store}

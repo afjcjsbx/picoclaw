@@ -1277,7 +1277,7 @@ func TestAgentLoop_AgentForSession_UsesStoredScopeMetadata(t *testing.T) {
 		t.Fatal("expected support agent")
 	}
 
-	metaStore, ok := support.Sessions.(session.MetadataAwareSessionStore)
+	metaStore, ok := support.Sessions.(sessionMetadataStore)
 	if !ok {
 		t.Fatal("support session store does not support metadata")
 	}

@@ -362,23 +362,26 @@ func normalizedInboundContext(msg bus.InboundMessage) bus.InboundContext {
 }
 
 func resolveScopeKey(routeSessionKey, msgSessionKey string) string {
-	if isExplicitSessionKey(msgSessionKey) {
+	if session.IsExplicitSessionKey(msgSessionKey) {
 		return msgSessionKey
 	}
 	return routeSessionKey
 }
 
-func isExplicitSessionKey(sessionKey string) bool {
-	return session.IsExplicitSessionKey(sessionKey)
+// sessionMetadataStore is the optional metadata surface of the session store.
+// It is declared here, at the consumer, and satisfied by the JSONL-backed
+// store.
+type sessionMetadataStore interface {
+	EnsureSessionMetadata(sessionKey string, scope *session.SessionScope, aliases []string)
+	ResolveSessionKey(sessionKey string) string
+	GetSessionScope(sessionKey string) *session.SessionScope
 }
 
 func ensureSessionMetadata(store session.SessionStore, key string, scope *session.SessionScope, aliases []string) {
 	if key == "" || scope == nil {
 		return
 	}
-	metaStore, ok := store.(interface {
-		EnsureSessionMetadata(sessionKey string, scope *session.SessionScope, aliases []string)
-	})
+	metaStore, ok := store.(sessionMetadataStore)
 	if !ok {
 		return
 	}
