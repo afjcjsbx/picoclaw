@@ -454,3 +454,24 @@ func TestImageSink_RejectsOversizedStream(t *testing.T) {
 		t.Fatalf("header length = %d, want %d", len(sink.header), imageHeaderSniffLen)
 	}
 }
+
+// TestImageDownloadNonTransportDefaultDoesNotPanic verifies that replacing
+// http.DefaultTransport with a non-*http.Transport round tripper cannot panic
+// the image download path.
+func TestImageDownloadNonTransportDefaultDoesNotPanic(t *testing.T) {
+	previous := http.DefaultTransport
+	http.DefaultTransport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("round tripper should not be reached")
+	})
+	defer func() { http.DefaultTransport = previous }()
+
+	tool := NewImageGenerateTool(nil, config.DefaultMaxMediaSize, nil)
+	err := tool.downloadImage(
+		context.Background(),
+		"https://image-download-test.invalid/img.png",
+		io.Discard,
+	)
+	if err == nil {
+		t.Fatal("expected an error for a download host that cannot be resolved")
+	}
+}

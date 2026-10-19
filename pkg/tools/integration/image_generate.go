@@ -408,7 +408,14 @@ func (t *ImageGenerateTool) downloadImage(ctx context.Context, rawURL string, ds
 	if err != nil {
 		return fmt.Errorf("failed to create image download request: %w", err)
 	}
-	transport := http.DefaultTransport.(*http.Transport).Clone()
+	// http.DefaultTransport is a package-level variable: guard the assertion so
+	// a process that replaced it with another RoundTripper cannot panic the
+	// download path. The SSRF dialer and Proxy settings below must still apply
+	// to whichever transport is used.
+	transport := &http.Transport{}
+	if base, ok := http.DefaultTransport.(*http.Transport); ok {
+		transport = base.Clone()
+	}
 	transport.Proxy = nil
 	transport.DialContext = dialPublicImageHost
 	defer transport.CloseIdleConnections()
