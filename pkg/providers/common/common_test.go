@@ -990,3 +990,23 @@ func TestNewJSONRequest_FollowsTemporaryRedirect(t *testing.T) {
 		t.Fatalf("redirect target received %v, want map[hello:world]", received)
 	}
 }
+
+func TestSetOpenRouterAttribution(t *testing.T) {
+	cases := map[string]bool{
+		"https://openrouter.ai/api/v1/chat/completions": true,
+		"https://OpenRouter.ai/api/v1/images":           true,
+		"https://api.openai.com/v1/chat/completions":    false,
+		"http://localhost:8080/openrouter.ai":           false,
+	}
+	for rawURL, want := range cases {
+		req, err := http.NewRequest(http.MethodPost, rawURL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		SetOpenRouterAttribution(req)
+		if got := req.Header.Get("X-Openrouter-Title") == "PicoClaw" &&
+			req.Header.Get("Http-Referer") != ""; got != want {
+			t.Errorf("%s: attribution set = %v, want %v", rawURL, got, want)
+		}
+	}
+}
