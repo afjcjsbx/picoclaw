@@ -69,15 +69,39 @@ type SessionMeta struct {
 type JSONLStore struct {
 	dir   string
 	locks [numLockShards]sync.Mutex
+
+	// durableWrites keeps the original fsync-per-write durability. When
+	// false, message appends skip fsync and metadata files are replaced
+	// without fsync (still atomically, via temp + rename): files stay
+	// consistent after a crash, but the most recent writes may be lost on
+	// power failure. Intended for flash-constrained devices where the
+	// per-message fsync cost and flash wear are not acceptable.
+	durableWrites bool
+}
+
+// StoreOption configures a JSONLStore created by NewJSONLStore.
+type StoreOption func(*JSONLStore)
+
+// WithDurableWrites controls whether writes are fsynced before they are
+// acknowledged. It defaults to true; see JSONLStore.durableWrites for the
+// trade-off when it is disabled.
+func WithDurableWrites(durable bool) StoreOption {
+	return func(s *JSONLStore) {
+		s.durableWrites = durable
+	}
 }
 
 // NewJSONLStore creates a new JSONL-backed store rooted at dir.
-func NewJSONLStore(dir string) (*JSONLStore, error) {
+func NewJSONLStore(dir string, opts ...StoreOption) (*JSONLStore, error) {
 	err := os.MkdirAll(dir, 0o755)
 	if err != nil {
 		return nil, fmt.Errorf("memory: create directory: %w", err)
 	}
-	return &JSONLStore{dir: dir}, nil
+	s := &JSONLStore{dir: dir, durableWrites: true}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s, nil
 }
 
 // sessionLock returns a mutex for the given session key.
@@ -131,14 +155,18 @@ func (s *JSONLStore) readMeta(key string) (SessionMeta, error) {
 }
 
 // writeMeta atomically writes the metadata file using the project's
-// standard WriteFileAtomic (temp + fsync + rename).
+// standard WriteFileAtomic (temp + fsync + rename). When durable writes are
+// disabled the file is still replaced atomically, but without fsync.
 func (s *JSONLStore) writeMeta(key string, meta SessionMeta) error {
 	if strings.TrimSpace(meta.Key) == "" {
 		meta.Key = key
 	}
-	data, err := json.MarshalIndent(meta, "", "  ")
+	data, err := json.Marshal(meta)
 	if err != nil {
 		return fmt.Errorf("memory: encode meta: %w", err)
+	}
+	if !s.durableWrites {
+		return fileutil.WriteFileAtomicNoSync(s.metaPath(key), data, 0o644)
 	}
 	return fileutil.WriteFileAtomic(s.metaPath(key), data, 0o644)
 }
@@ -683,9 +711,12 @@ func (s *JSONLStore) addMsg(sessionKey string, msg providers.Message) error {
 	// durability guarantee of writeMeta and rewriteJSONL (which use
 	// WriteFileAtomic with fsync). Without Sync, a power loss could
 	// leave the append in the kernel page cache only — lost on reboot.
-	if syncErr := f.Sync(); syncErr != nil {
-		f.Close()
-		return fmt.Errorf("memory: sync jsonl: %w", syncErr)
+	// The store drops the Sync when durable writes are disabled.
+	if s.durableWrites {
+		if syncErr := f.Sync(); syncErr != nil {
+			f.Close()
+			return fmt.Errorf("memory: sync jsonl: %w", syncErr)
+		}
 	}
 	if closeErr := f.Close(); closeErr != nil {
 		return fmt.Errorf("memory: close jsonl: %w", closeErr)

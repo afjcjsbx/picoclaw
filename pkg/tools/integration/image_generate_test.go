@@ -17,11 +17,13 @@ import (
 	"sync/atomic"
 	"testing"
 	"testing/iotest"
+	"time"
 	"unicode/utf8"
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/media"
 	"github.com/sipeed/picoclaw/pkg/tools"
+	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
 func TestImageGenerateUsesModelProxy(t *testing.T) {
@@ -99,11 +101,26 @@ func TestOpenRouterImageUsesBaseRequest(t *testing.T) {
 }
 
 func TestImageDownloadRejectsNonPublicTargets(t *testing.T) {
-	for _, host := range []string{"localhost", "127.0.0.1", "10.0.0.1", "169.254.169.254", "0.0.0.0", "::1", "fc00::1"} {
+	dial := utils.NewSafeDialContext(&net.Dialer{Timeout: 5 * time.Second}, nil, nil)
+	for _, host := range []string{
+		"localhost",
+		"127.0.0.1",
+		"10.0.0.1",
+		"169.254.169.254",
+		"0.0.0.0",
+		"0.1.2.3",
+		"100.64.0.1",
+		"198.18.0.1",
+		"::1",
+		"fc00::1",
+		// 6to4 and Teredo wrap an embedded IPv4 address.
+		"2002:0a00:0001::1",
+		"2001:0000:4136:e378:8000:63bf:f5ff:fffe",
+	} {
 		if isPublicImageHost(host) {
 			t.Errorf("accepted non-public host %q", host)
 		}
-		_, err := dialPublicImageHost(context.Background(), "tcp", net.JoinHostPort(host, "443"))
+		_, err := dial(context.Background(), "tcp", net.JoinHostPort(host, "443"))
 		if err == nil {
 			t.Errorf("dialed non-public host %q", host)
 		}
@@ -452,5 +469,26 @@ func TestImageSink_RejectsOversizedStream(t *testing.T) {
 	}
 	if len(sink.header) != imageHeaderSniffLen {
 		t.Fatalf("header length = %d, want %d", len(sink.header), imageHeaderSniffLen)
+	}
+}
+
+// TestImageDownloadNonTransportDefaultDoesNotPanic verifies that replacing
+// http.DefaultTransport with a non-*http.Transport round tripper cannot panic
+// the image download path.
+func TestImageDownloadNonTransportDefaultDoesNotPanic(t *testing.T) {
+	previous := http.DefaultTransport
+	http.DefaultTransport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("round tripper should not be reached")
+	})
+	defer func() { http.DefaultTransport = previous }()
+
+	tool := NewImageGenerateTool(nil, config.DefaultMaxMediaSize, nil)
+	err := tool.downloadImage(
+		context.Background(),
+		"https://image-download-test.invalid/img.png",
+		io.Discard,
+	)
+	if err == nil {
+		t.Fatal("expected an error for a download host that cannot be resolved")
 	}
 }

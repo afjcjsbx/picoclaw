@@ -24,11 +24,19 @@ type ToolEntry struct {
 type ToolRegistry struct {
 	tools                map[string]*ToolEntry
 	mu                   sync.RWMutex
-	version              atomic.Uint64 // incremented on Register/RegisterHidden for cache invalidation
+	version              atomic.Uint64 // bumped whenever the visible tool set or its schemas may change
 	mediaStore           media.MediaStore
 	allowlist            map[string]struct{}
 	workspace            string
 	maxInlineResultRunes int
+
+	// defsMu guards the provider-defs memo. Conversions rebuild every tool's
+	// schema map, and the agent loop asks for the defs several times per
+	// turn, so they are cached until the registry version changes.
+	defsMu         sync.Mutex
+	defsCache      []providers.ToolDefinition
+	defsCacheVer   uint64
+	defsCacheValid bool
 }
 
 type mediaStoreAware interface {
@@ -211,6 +219,11 @@ func (r *ToolRegistry) PromoteTools(names []string, ttl int) {
 			}
 		}
 	}
+	if promoted > 0 {
+		// TTL changes the visible tool set, so caches keyed by the registry
+		// version (provider defs, hidden-tool snapshot) must invalidate.
+		r.version.Add(1)
+	}
 	logger.DebugCF(
 		"tools",
 		"PromoteTools completed",
@@ -222,10 +235,16 @@ func (r *ToolRegistry) PromoteTools(names []string, ttl int) {
 func (r *ToolRegistry) TickTTL() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	changed := false
 	for _, entry := range r.tools {
 		if !entry.IsCore && entry.TTL > 0 {
 			entry.TTL--
+			changed = true
 		}
+	}
+	if changed {
+		// A TTL reaching zero hides the tool; keep version-keyed caches in sync.
+		r.version.Add(1)
 	}
 }
 
@@ -474,10 +493,44 @@ func (r *ToolRegistry) GetDefinitions() []map[string]any {
 
 // ToProviderDefs converts tool definitions to provider-compatible format.
 // This is the format expected by LLM provider APIs.
+//
+// The result is memoized per registry version: the conversion walks every
+// visible tool and rebuilds its schema map. Callers must treat the returned
+// slice and its nested maps as read-only (consumers already filter by
+// copying or clone the schema before transforming it).
 func (r *ToolRegistry) ToProviderDefs() []providers.ToolDefinition {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+	if defs, ok := r.cachedProviderDefs(); ok {
+		return defs
+	}
 
+	// Build under the registry lock so the captured version and the tool
+	// state used to build the defs always match.
+	r.mu.RLock()
+	version := r.version.Load()
+	defs := r.buildProviderDefsLocked()
+	r.mu.RUnlock()
+
+	r.defsMu.Lock()
+	r.defsCache = defs
+	r.defsCacheVer = version
+	r.defsCacheValid = true
+	r.defsMu.Unlock()
+
+	return defs
+}
+
+func (r *ToolRegistry) cachedProviderDefs() ([]providers.ToolDefinition, bool) {
+	r.defsMu.Lock()
+	defer r.defsMu.Unlock()
+	if r.defsCacheValid && r.defsCacheVer == r.version.Load() {
+		return r.defsCache, true
+	}
+	return nil, false
+}
+
+// buildProviderDefsLocked converts the visible tools to provider definitions.
+// The caller must hold r.mu for reading.
+func (r *ToolRegistry) buildProviderDefsLocked() []providers.ToolDefinition {
 	sorted := r.sortedToolNames()
 	definitions := make([]providers.ToolDefinition, 0, len(sorted))
 	for _, name := range sorted {

@@ -35,6 +35,20 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 
 	turnStatus := TurnEndStatusCompleted
 	defer func() {
+		// A SubTurn never ends before its async children, whatever the exit path
+		// (iteration cap, loop guard, hook abort, ...). The direct-answer path has
+		// already fed their results to the model; here nobody can read them any
+		// more, so they are dropped.
+		if ts.parentTurnState != nil {
+			if dropped := ts.joinChildren(turnCtx, func(s string) string { return s }); len(dropped) > 0 {
+				logger.WarnCF("agent", "SubTurn ended with unread child results", map[string]any{
+					"agent_id": ts.agentID,
+					"turn_id":  ts.turnID,
+					"dropped":  len(dropped),
+				})
+			}
+		}
+
 		attemptedSkills := ts.attemptedSkillsSnapshot()
 		skillContextSnapshots := ts.skillContextSnapshotsSnapshot()
 		finalSuccessfulPath := []string(nil)

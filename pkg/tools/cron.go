@@ -13,6 +13,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/constants"
 	"github.com/sipeed/picoclaw/pkg/cron"
+	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
@@ -786,12 +787,25 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) (string, e
 	return "ok", nil
 }
 
+// cronOutputPublishTimeout bounds a single job-output publish.
+const cronOutputPublishTimeout = 5 * time.Second
+
 // publishJobOutput reports a command job result to the job's channel.
+//
+// The publish deliberately does not inherit the run's context: a job that
+// failed or was canceled still has to report its outcome, so it gets its own
+// budget instead of a context that may already be done.
 func (t *CronTool) publishJobOutput(channel, chatID, content string) {
-	pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	pubCtx, pubCancel := context.WithTimeout(context.Background(), cronOutputPublishTimeout)
 	defer pubCancel()
-	t.msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
+	if err := t.msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
 		Context: bus.NewOutboundContext(channel, chatID, ""),
 		Content: content,
-	})
+	}); err != nil {
+		logger.WarnCF("cron", "Failed to publish job output", map[string]any{
+			"channel": channel,
+			"chat_id": chatID,
+			"error":   err.Error(),
+		})
+	}
 }

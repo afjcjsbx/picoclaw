@@ -3,8 +3,8 @@ package tools
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -16,9 +16,7 @@ import (
 )
 
 const (
-	largeBase64OmittedMessage = toolshared.LargeBase64OmittedMessage
-	inlineMediaOmittedMessage = toolshared.InlineMediaOmittedMessage
-	inlineMediaStoredMessage  = "[Tool returned inline media content (%s); omitted from model context and registered as a media attachment.]"
+	inlineMediaStoredMessage = "[Tool returned inline media content (%s); omitted from model context and registered as a media attachment.]"
 
 	// largeResultSpillSentinel prefixes a ForLLM value that has been reduced to a
 	// bounded artifact preview, so the model and logs can recognize it. It is
@@ -406,44 +404,30 @@ func storeInlineDataURL(
 		return "", fmt.Sprintf("[Tool returned inline media content (%s) that could not be decoded.]", mimeType)
 	}
 
-	dir := media.TempDir()
-	if err = os.MkdirAll(dir, 0o700); err != nil {
-		return "", fmt.Sprintf("[Tool returned inline media content (%s) but it could not be stored.]", mimeType)
-	}
-
-	ext := toolshared.ExtensionForMIMEType(mimeType)
-	tmpFile, err := os.CreateTemp(dir, "tool-inline-*"+ext)
+	sanitizedTool := toolshared.SanitizeIdentifierComponent(toolName)
+	ref, err = toolshared.StoreTempMedia(toolshared.StoreTempMediaInput{
+		Store:      store,
+		Data:       decoded,
+		MIMEType:   mimeType,
+		TempPrefix: "tool-inline-",
+		Filename:   sanitizedTool + toolshared.ExtensionForMIMEType(mimeType),
+		Source:     fmt.Sprintf("tool:inline:%s", sanitizedTool),
+		Scope: fmt.Sprintf(
+			"tool:inline:%s:%s:%s:%d",
+			sanitizedTool,
+			channel,
+			chatID,
+			time.Now().UnixNano(),
+		),
+	})
 	if err != nil {
+		if errors.Is(err, toolshared.ErrMediaStoreRegistration) {
+			return "", fmt.Sprintf(
+				"[Tool returned inline media content (%s) but it could not be registered.]",
+				mimeType,
+			)
+		}
 		return "", fmt.Sprintf("[Tool returned inline media content (%s) but it could not be stored.]", mimeType)
-	}
-	tmpPath := tmpFile.Name()
-	if _, err = tmpFile.Write(decoded); err != nil {
-		_ = tmpFile.Close()
-		_ = os.Remove(tmpPath)
-		return "", fmt.Sprintf("[Tool returned inline media content (%s) but it could not be stored.]", mimeType)
-	}
-	if err = tmpFile.Close(); err != nil {
-		_ = os.Remove(tmpPath)
-		return "", fmt.Sprintf("[Tool returned inline media content (%s) but it could not be stored.]", mimeType)
-	}
-
-	filename := toolshared.SanitizeIdentifierComponent(toolName) + ext
-	scope := fmt.Sprintf(
-		"tool:inline:%s:%s:%s:%d",
-		toolshared.SanitizeIdentifierComponent(toolName),
-		channel,
-		chatID,
-		time.Now().UnixNano(),
-	)
-
-	ref, err = store.Store(tmpPath, media.MediaMeta{
-		Filename:    filename,
-		ContentType: mimeType,
-		Source:      fmt.Sprintf("tool:inline:%s", toolshared.SanitizeIdentifierComponent(toolName)),
-	}, scope)
-	if err != nil {
-		_ = os.Remove(tmpPath)
-		return "", fmt.Sprintf("[Tool returned inline media content (%s) but it could not be registered.]", mimeType)
 	}
 
 	return ref, fmt.Sprintf(inlineMediaStoredMessage, mimeType)

@@ -358,6 +358,20 @@ type SessionConfig struct {
 	IdentityLinks map[string][]string `json:"identity_links,omitempty"`
 	DmScope       string              `json:"dm_scope,omitempty"`
 	Prune         SessionPruneConfig  `json:"prune"`
+
+	// DurableWrites controls whether session writes are fsynced before they
+	// are acknowledged. When disabled, message appends and metadata updates
+	// use atomic (temp + rename) writes without fsync: files stay consistent
+	// after a crash, but the most recent writes may be lost on power
+	// failure. Disabling it trades crash durability for lower latency and
+	// less flash wear on constrained devices. Defaults to true.
+	DurableWrites *bool `json:"durable_writes,omitempty" env:"PICOCLAW_SESSION_DURABLE_WRITES"`
+}
+
+// DurableWritesEnabled reports whether session writes must be fsynced.
+// It defaults to true when session.durable_writes is unset.
+func (s *SessionConfig) DurableWritesEnabled() bool {
+	return s.DurableWrites == nil || *s.DurableWrites
 }
 
 // MarshalJSON omits the prune block while it is unconfigured, so saving the

@@ -111,6 +111,7 @@ func (p *Provider) Chat(
 	if p.userAgent != "" {
 		req.Header.Set("User-Agent", p.userAgent)
 	}
+	common.SetOpenRouterAttribution(req)
 	for k, v := range p.customHeaders {
 		if strings.TrimSpace(k) != "" {
 			req.Header.Set(k, v)

@@ -19,7 +19,7 @@ func TestFilesystemTool_ReadFile_Success(t *testing.T) {
 	testFile := filepath.Join(tmpDir, "test.txt")
 	os.WriteFile(testFile, []byte("test content"), 0o644)
 
-	tool := NewReadFileBytesTool("", false, MaxReadFileSize)
+	tool := NewReadFileTool("", false, MaxReadFileSize)
 	ctx := context.Background()
 	args := map[string]any{
 		"path": testFile,
@@ -46,7 +46,7 @@ func TestFilesystemTool_ReadFile_Success(t *testing.T) {
 
 // TestFilesystemTool_ReadFile_NotFound verifies error handling for missing file
 func TestFilesystemTool_ReadFile_NotFound(t *testing.T) {
-	tool := NewReadFileBytesTool("", false, MaxReadFileSize)
+	tool := NewReadFileTool("", false, MaxReadFileSize)
 	ctx := context.Background()
 	args := map[string]any{
 		"path": "/nonexistent_file_12345.txt",
@@ -1082,7 +1082,7 @@ func TestReadFileTool_LegacyLengthUsesByteModeForText(t *testing.T) {
 		t.Fatalf("Failed to write test file: %v", err)
 	}
 
-	tool := NewReadFileBytesTool(tmpDir, false, MaxReadFileSize)
+	tool := NewReadFileTool(tmpDir, false, MaxReadFileSize)
 	result := tool.Execute(context.Background(), map[string]any{
 		"path":   testFile,
 		"offset": 10,
