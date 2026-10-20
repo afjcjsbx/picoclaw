@@ -85,7 +85,7 @@ func (t *SPITool) Execute(ctx context.Context, args map[string]any) *ToolResult 
 	case "read":
 		return t.readDevice(args)
 	default:
-		return ErrorResult(fmt.Sprintf("unknown action: %s (valid: list, transfer, read)", action))
+		return unknownActionResult(action, "list", "transfer", "read")
 	}
 }
 

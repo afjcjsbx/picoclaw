@@ -267,3 +267,14 @@ func TestParseSerialWritePayloadRejectsOutOfRangeByte(t *testing.T) {
 		t.Fatal("expected payload validation failure")
 	}
 }
+
+func TestSerialToolUnknownActionReportsValidActions(t *testing.T) {
+	result := NewSerialTool().Execute(context.Background(), map[string]any{"action": "fly"})
+	if !result.IsError {
+		t.Fatalf("IsError = false, want true")
+	}
+	want := "unknown action: fly (valid: list, read, write)"
+	if result.ForLLM != want {
+		t.Fatalf("ForLLM = %q, want %q", result.ForLLM, want)
+	}
+}

@@ -83,7 +83,7 @@ func (t *I2CTool) Execute(ctx context.Context, args map[string]any) *ToolResult 
 	case "write":
 		return t.writeDevice(args)
 	default:
-		return ErrorResult(fmt.Sprintf("unknown action: %s (valid: detect, scan, read, write)", action))
+		return unknownActionResult(action, "detect", "scan", "read", "write")
 	}
 }
 

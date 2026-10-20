@@ -130,7 +130,7 @@ func (t *SerialTool) Execute(ctx context.Context, args map[string]any) *ToolResu
 	case "write":
 		return t.write(ctx, args)
 	default:
-		return ErrorResult(fmt.Sprintf("unknown action: %s (valid: list, read, write)", action))
+		return unknownActionResult(action, "list", "read", "write")
 	}
 }
 
