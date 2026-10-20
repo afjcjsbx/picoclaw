@@ -498,6 +498,25 @@ func TestParseResponseBody_Reasoning(t *testing.T) {
 	}
 }
 
+func TestParseResponseBody_CachedTokens(t *testing.T) {
+	body := strings.NewReader(`{
+		"id": "resp_cache", "object": "response", "status": "completed",
+		"output": [{"type": "message", "content": [{"type": "output_text", "text": "hi"}]}],
+		"usage": {
+			"input_tokens": 100, "output_tokens": 5, "total_tokens": 105,
+			"input_tokens_details": {"cached_tokens": 64},
+			"output_tokens_details": {"reasoning_tokens": 0}
+		}
+	}`)
+	result, err := ParseResponseBody(body)
+	if err != nil {
+		t.Fatalf("ParseResponseBody error: %v", err)
+	}
+	if result.Usage == nil || result.Usage.CacheReadTokens != 64 || result.Usage.PromptTokens != 100 {
+		t.Errorf("Usage = %+v, want PromptTokens 100 and CacheReadTokens 64", result.Usage)
+	}
+}
+
 func TestParseResponseBody_Refusal(t *testing.T) {
 	body := strings.NewReader(fmt.Sprintf(`{
 		"id": "resp_ref",
