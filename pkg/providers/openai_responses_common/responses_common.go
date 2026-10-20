@@ -59,6 +59,7 @@ func TranslateMessages(messages []protocoltypes.Message) (input responses.Respon
 			}
 		case "assistant":
 			if len(msg.ToolCalls) > 0 {
+				input = appendReasoningItems(input, msg.ToolCalls)
 				if msg.Content != "" {
 					input = append(input, responses.ResponseInputItemUnionParam{
 						OfMessage: &responses.EasyInputMessageParam{
@@ -101,6 +102,32 @@ func TranslateMessages(messages []protocoltypes.Message) (input responses.Respon
 	}
 
 	return input, instructions
+}
+
+// appendReasoningItems replays the reasoning items stored on tool calls, which
+// the model needs back with the tool outputs when responses are not stored.
+func appendReasoningItems(
+	input responses.ResponseInputParam, toolCalls []protocoltypes.ToolCall,
+) responses.ResponseInputParam {
+	for _, tc := range toolCalls {
+		if tc.ExtraContent == nil || tc.ExtraContent.OpenAI == nil {
+			continue
+		}
+		for _, r := range tc.ExtraContent.OpenAI.ReasoningItems {
+			summary := make([]responses.ResponseReasoningItemSummaryParam, 0, len(r.Summary))
+			for _, text := range r.Summary {
+				summary = append(summary, responses.ResponseReasoningItemSummaryParam{Text: text})
+			}
+			input = append(input, responses.ResponseInputItemUnionParam{
+				OfReasoning: &responses.ResponseReasoningItemParam{
+					ID:               r.ID,
+					Summary:          summary,
+					EncryptedContent: openai.Opt(r.EncryptedContent),
+				},
+			})
+		}
+	}
+	return input
 }
 
 // BuildMultipartContent constructs a ResponseInputMessageContentListParam from
@@ -223,6 +250,7 @@ func parseResponse(apiResp *responses.Response) *protocoltypes.LLMResponse {
 	var content strings.Builder
 	var reasoningContent strings.Builder
 	var toolCalls []protocoltypes.ToolCall
+	var reasoningItems []protocoltypes.OpenAIReasoningItem
 
 	for _, item := range apiResp.Output {
 		switch item.Type {
@@ -255,6 +283,20 @@ func parseResponse(apiResp *responses.Response) *protocoltypes.LLMResponse {
 			for _, s := range item.Summary {
 				reasoningContent.WriteString(s.Text)
 			}
+			// Only items with encrypted content can be replayed without server-side state.
+			if item.EncryptedContent != "" {
+				r := protocoltypes.OpenAIReasoningItem{ID: item.ID, EncryptedContent: item.EncryptedContent}
+				for _, s := range item.Summary {
+					r.Summary = append(r.Summary, s.Text)
+				}
+				reasoningItems = append(reasoningItems, r)
+			}
+		}
+	}
+	// Reasoning only has to travel with tool calls; the first call carries it for the whole turn.
+	if len(reasoningItems) > 0 && len(toolCalls) > 0 {
+		toolCalls[0].ExtraContent = &protocoltypes.ExtraContent{
+			OpenAI: &protocoltypes.OpenAIExtra{ReasoningItems: reasoningItems},
 		}
 	}
 

@@ -423,6 +423,44 @@ func TestParseResponseBody_FunctionCallObjectArguments(t *testing.T) {
 	}
 }
 
+func TestReasoningItemsRoundTripThroughToolCalls(t *testing.T) {
+	body := strings.NewReader(`{
+		"id": "resp_1", "object": "response", "status": "completed",
+		"output": [
+			{"type": "reasoning", "id": "rs_1", "encrypted_content": "enc-1",
+			 "summary": [{"type": "summary_text", "text": "plan"}]},
+			{"type": "reasoning", "id": "rs_2", "summary": []},
+			{"type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": "{}"}
+		]
+	}`)
+	result, err := ParseResponseBody(body)
+	if err != nil {
+		t.Fatalf("ParseResponseBody error: %v", err)
+	}
+	extra := result.ToolCalls[0].ExtraContent
+	if extra == nil || extra.OpenAI == nil || len(extra.OpenAI.ReasoningItems) != 1 {
+		t.Fatalf("ExtraContent = %+v, want only the reasoning item that has encrypted content", extra)
+	}
+
+	input, _ := TranslateMessages([]protocoltypes.Message{
+		{Role: "user", Content: "go"},
+		{Role: "assistant", ToolCalls: result.ToolCalls},
+		{Role: "tool", Content: "ok", ToolCallID: "call_1"},
+	})
+	if len(input) != 4 || input[1].OfReasoning == nil || input[2].OfFunctionCall == nil {
+		t.Fatalf("input = %+v, want user, reasoning, function_call, output", input)
+	}
+	raw, err := json.Marshal(input[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"id":"rs_1","summary":[{"text":"plan","type":"summary_text"}],` +
+		`"encrypted_content":"enc-1","type":"reasoning"}`
+	if string(raw) != want {
+		t.Errorf("reasoning item = %s, want %s", raw, want)
+	}
+}
+
 func TestParseResponseBody_Reasoning(t *testing.T) {
 	body := strings.NewReader(fmt.Sprintf(`{
 		"id": "resp_789",
