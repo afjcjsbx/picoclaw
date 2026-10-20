@@ -41,6 +41,8 @@ func isLegacyAgentSessionKey(key string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(key)), legacyAgentSessionKeyPrefix)
 }
 
+// IsExplicitSessionKey reports whether key uses the current opaque format or
+// the legacy "agent:..." format.
 func IsExplicitSessionKey(key string) bool {
 	return IsOpaqueSessionKey(key) || isLegacyAgentSessionKey(key)
 }
@@ -91,8 +93,7 @@ func buildLegacyMainAlias(agentID string) string {
 }
 
 // BuildMainSessionKey returns the canonical opaque main-session key for an
-// agent. The corresponding legacy alias remains available via
-// buildLegacyMainAlias for compatibility and migration logic.
+// agent. The legacy alias form remains accepted by the key parser.
 func BuildMainSessionKey(agentID string) string {
 	return BuildOpaqueSessionKey(buildLegacyMainAlias(agentID))
 }
