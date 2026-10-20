@@ -168,15 +168,15 @@ func (s *ProcessSession) ToSessionInfo() SessionInfo {
 	}
 }
 
-type SessionManager struct {
+type ProcessSessionManager struct {
 	mu       sync.RWMutex
 	sessions map[string]*ProcessSession
 	stopCh   chan struct{}
 	stopOnce sync.Once
 }
 
-func NewSessionManager() *SessionManager {
-	sm := &SessionManager{
+func NewProcessSessionManager() *ProcessSessionManager {
+	sm := &ProcessSessionManager{
 		sessions: make(map[string]*ProcessSession),
 		stopCh:   make(chan struct{}),
 	}
@@ -199,16 +199,16 @@ func NewSessionManager() *SessionManager {
 }
 
 // Stop shuts down the background cleanup goroutine. Safe to call multiple
-// times from concurrent goroutines. After Stop returns, the SessionManager
+// times from concurrent goroutines. After Stop returns, the ProcessSessionManager
 // is still usable — only the cleanup goroutine is terminated.
-func (sm *SessionManager) Stop() {
+func (sm *ProcessSessionManager) Stop() {
 	sm.stopOnce.Do(func() {
 		close(sm.stopCh)
 	})
 }
 
 // cleanupOldSessions removes sessions that are done and older than 30 minutes
-func (sm *SessionManager) cleanupOldSessions() {
+func (sm *ProcessSessionManager) cleanupOldSessions() {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
@@ -220,13 +220,13 @@ func (sm *SessionManager) cleanupOldSessions() {
 	}
 }
 
-func (sm *SessionManager) Add(session *ProcessSession) {
+func (sm *ProcessSessionManager) Add(session *ProcessSession) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	sm.sessions[session.ID] = session
 }
 
-func (sm *SessionManager) Get(sessionID string) (*ProcessSession, error) {
+func (sm *ProcessSessionManager) Get(sessionID string) (*ProcessSession, error) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
@@ -238,13 +238,13 @@ func (sm *SessionManager) Get(sessionID string) (*ProcessSession, error) {
 	return session, nil
 }
 
-func (sm *SessionManager) Remove(sessionID string) {
+func (sm *ProcessSessionManager) Remove(sessionID string) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	delete(sm.sessions, sessionID)
 }
 
-func (sm *SessionManager) List() []SessionInfo {
+func (sm *ProcessSessionManager) List() []SessionInfo {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 

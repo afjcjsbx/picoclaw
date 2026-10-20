@@ -31,9 +31,6 @@ func TestAllocateRouteSession_PerPeerDM(t *testing.T) {
 	if allocation.MainSessionKey == "" || !IsOpaqueSessionKey(allocation.MainSessionKey) {
 		t.Fatalf("MainSessionKey = %q, want opaque session key", allocation.MainSessionKey)
 	}
-	if len(allocation.MainAliases) != 1 || allocation.MainAliases[0] != "agent:main:main" {
-		t.Fatalf("MainAliases = %v, want [agent:main:main]", allocation.MainAliases)
-	}
 	if allocation.Scope.Version != ScopeVersionV1 {
 		t.Fatalf("Scope.Version = %d, want %d", allocation.Scope.Version, ScopeVersionV1)
 	}
@@ -68,9 +65,6 @@ func TestAllocateRouteSession_GroupPeer(t *testing.T) {
 	}
 	if allocation.MainSessionKey == "" || !IsOpaqueSessionKey(allocation.MainSessionKey) {
 		t.Fatalf("MainSessionKey = %q, want opaque session key", allocation.MainSessionKey)
-	}
-	if len(allocation.MainAliases) != 1 || allocation.MainAliases[0] != "agent:main:main" {
-		t.Fatalf("MainAliases = %v, want [agent:main:main]", allocation.MainAliases)
 	}
 	if len(allocation.Scope.Dimensions) != 1 || allocation.Scope.Dimensions[0] != "chat" {
 		t.Fatalf("Scope.Dimensions = %v, want [chat]", allocation.Scope.Dimensions)

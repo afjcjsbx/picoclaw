@@ -32,8 +32,8 @@ func TestIsExplicitSessionKey(t *testing.T) {
 	}
 }
 
-func TestParseLegacyAgentSessionKey(t *testing.T) {
-	parsed := ParseLegacyAgentSessionKey("agent:sales:telegram:direct:user123")
+func TestParseLegacySessionKey(t *testing.T) {
+	parsed := parseLegacySessionKey("agent:sales:telegram:direct:user123")
 	if parsed == nil {
 		t.Fatal("expected parsed legacy key, got nil")
 	}
@@ -44,13 +44,13 @@ func TestParseLegacyAgentSessionKey(t *testing.T) {
 		t.Fatalf("Rest = %q, want telegram:direct:user123", parsed.Rest)
 	}
 
-	if got := ParseLegacyAgentSessionKey("sk_v1_abc"); got != nil {
+	if got := parseLegacySessionKey("sk_v1_abc"); got != nil {
 		t.Fatalf("expected nil for opaque key, got %+v", got)
 	}
 }
 
 func TestBuildLegacyDirectAliases(t *testing.T) {
-	aliases := BuildLegacyDirectAliases("Main", "Telegram", "BotA", "User123")
+	aliases := buildLegacyDirectAliases("Main", "Telegram", "BotA", "User123")
 	want := []string{
 		"agent:main:direct:user123",
 		"agent:main:telegram:direct:user123",
@@ -67,9 +67,9 @@ func TestBuildLegacyDirectAliases(t *testing.T) {
 }
 
 func TestBuildLegacyPeerAlias(t *testing.T) {
-	got := BuildLegacyPeerAlias("Main", "Slack", "channel", "C001")
+	got := buildLegacyPeerAlias("Main", "Slack", "channel", "C001")
 	if got != "agent:main:slack:channel:c001" {
-		t.Fatalf("BuildLegacyPeerAlias() = %q", got)
+		t.Fatalf("buildLegacyPeerAlias() = %q", got)
 	}
 }
 
