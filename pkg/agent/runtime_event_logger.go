@@ -14,7 +14,11 @@ import (
 )
 
 const (
-	runtimeEventLoggerBuffer       = 256
+	// runtimeEventLoggerBuffer bounds the queue between the runtime event bus
+	// and the log writer. 64 slots absorb short bursts; the previous 256 kept
+	// ~77 KiB of Event structs resident for the whole process lifetime, which
+	// is wasteful on memory-constrained devices.
+	runtimeEventLoggerBuffer       = 64
 	runtimeEventLoggerDrainTimeout = 2 * time.Second
 )
 

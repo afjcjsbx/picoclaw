@@ -47,91 +47,108 @@ func getSessionManager() *SessionManager {
 }
 
 type ExecTool struct {
-	workingDir          string
-	timeout             time.Duration
-	denyPatterns        []*regexp.Regexp
-	allowPatterns       []*regexp.Regexp
-	customAllowPatterns []*regexp.Regexp
-	allowedPathPatterns []*regexp.Regexp
-	restrictToWorkspace bool
-	allowRemote         bool
-	maxOutputChars      int
-	sessionManager      *SessionManager
+	workingDir             string
+	timeout                time.Duration
+	denyPatterns           []*regexp.Regexp
+	useDefaultDenyPatterns bool
+	useWindowsDenyPatterns bool
+	allowPatterns          []*regexp.Regexp
+	customAllowPatterns    []*regexp.Regexp
+	allowedPathPatterns    []*regexp.Regexp
+	restrictToWorkspace    bool
+	allowRemote            bool
+	maxOutputChars         int
+	sessionManager         *SessionManager
 }
 
 var (
-	defaultDenyPatterns = []*regexp.Regexp{
-		regexp.MustCompile(`\brm\s+-[rf]{1,2}\b`),
-		regexp.MustCompile(`\bdel\s+/[fq]\b`),
-		regexp.MustCompile(`\brmdir\s+/s\b`),
-		// Match disk wiping commands (must be followed by space/args)
-		regexp.MustCompile(
-			`(^|[^-\w])\b(format|mkfs|diskpart)\b\s`,
-		),
-		regexp.MustCompile(`\bdd\s+if=`),
-		// Block writes to block devices (all common naming schemes).
-		regexp.MustCompile(
-			`>\s*/dev/(sd[a-z]|hd[a-z]|vd[a-z]|xvd[a-z]|nvme\d|mmcblk\d|loop\d|dm-\d|md\d|sr\d|nbd\d)`,
-		),
-		regexp.MustCompile(`\b(shutdown|reboot|poweroff)\b`),
-		regexp.MustCompile(`:\(\)\s*\{.*\};\s*:`),
-		regexp.MustCompile(`\$\([^)]+\)`),
-		regexp.MustCompile(`\$\{[^}]+\}`),
-		regexp.MustCompile("`[^`]+`"),
-		regexp.MustCompile(`\|\s*sh\b`),
-		regexp.MustCompile(`\|\s*bash\b`),
-		regexp.MustCompile(`;\s*rm\s+-[rf]`),
-		regexp.MustCompile(`&&\s*rm\s+-[rf]`),
-		regexp.MustCompile(`\|\|\s*rm\s+-[rf]`),
-		regexp.MustCompile(`<<\s*EOF`),
-		regexp.MustCompile(`\$\(\s*cat\s+`),
-		regexp.MustCompile(`\$\(\s*curl\s+`),
-		regexp.MustCompile(`\$\(\s*wget\s+`),
-		regexp.MustCompile(`\$\(\s*which\s+`),
-		regexp.MustCompile(`\bsudo\b`),
-		regexp.MustCompile(`\bchmod\s+[0-7]{3,4}\b`),
-		regexp.MustCompile(`\bchown\b`),
-		regexp.MustCompile(`\bpkill\b`),
-		regexp.MustCompile(`\bkillall\b`),
-		regexp.MustCompile(`\bkill\b`),
-		regexp.MustCompile(`\bcurl\b.*\|\s*(sh|bash)`),
-		regexp.MustCompile(`\bwget\b.*\|\s*(sh|bash)`),
-		regexp.MustCompile(`\bnpm\s+install\s+-g\b`),
-		regexp.MustCompile(`\bpip\s+install\s+--user\b`),
-		regexp.MustCompile(`\bapt\s+(install|remove|purge)\b`),
-		regexp.MustCompile(`\byum\s+(install|remove)\b`),
-		regexp.MustCompile(`\bdnf\s+(install|remove)\b`),
-		regexp.MustCompile(`\bdocker\s+run\b`),
-		regexp.MustCompile(`\bdocker\s+exec\b`),
-		regexp.MustCompile(`\bgit\s+push\b`),
-		regexp.MustCompile(`\bgit\s+force\b`),
-		regexp.MustCompile(`\bssh\b.*@`),
-		regexp.MustCompile(`\beval\b`),
-		regexp.MustCompile(`\bsource\s+.*\.sh\b`),
-	}
+	// defaultDenyPatterns and windowsDenyPatterns are compiled on the first
+	// command validation instead of at package init. Most gateways never
+	// execute shell commands, and compiling ~50 expressions is a measurable
+	// chunk of the idle heap on constrained devices.
+	defaultDenyPatterns = sync.OnceValue(func() []*regexp.Regexp {
+		return []*regexp.Regexp{
+			regexp.MustCompile(`\brm\s+-[rf]{1,2}\b`),
+			regexp.MustCompile(`\bdel\s+/[fq]\b`),
+			regexp.MustCompile(`\brmdir\s+/s\b`),
+			// Match disk wiping commands (must be followed by space/args)
+			regexp.MustCompile(
+				`(^|[^-\w])\b(format|mkfs|diskpart)\b\s`,
+			),
+			regexp.MustCompile(`\bdd\s+if=`),
+			// Block writes to block devices (all common naming schemes).
+			regexp.MustCompile(
+				`>\s*/dev/(sd[a-z]|hd[a-z]|vd[a-z]|xvd[a-z]|nvme\d|mmcblk\d|loop\d|dm-\d|md\d|sr\d|nbd\d)`,
+			),
+			regexp.MustCompile(`\b(shutdown|reboot|poweroff)\b`),
+			regexp.MustCompile(`:\(\)\s*\{.*\};\s*:`),
+			regexp.MustCompile(`\$\([^)]+\)`),
+			regexp.MustCompile(`\$\{[^}]+\}`),
+			regexp.MustCompile("`[^`]+`"),
+			regexp.MustCompile(`\|\s*sh\b`),
+			regexp.MustCompile(`\|\s*bash\b`),
+			regexp.MustCompile(`;\s*rm\s+-[rf]`),
+			regexp.MustCompile(`&&\s*rm\s+-[rf]`),
+			regexp.MustCompile(`\|\|\s*rm\s+-[rf]`),
+			regexp.MustCompile(`<<\s*EOF`),
+			regexp.MustCompile(`\$\(\s*cat\s+`),
+			regexp.MustCompile(`\$\(\s*curl\s+`),
+			regexp.MustCompile(`\$\(\s*wget\s+`),
+			regexp.MustCompile(`\$\(\s*which\s+`),
+			regexp.MustCompile(`\bsudo\b`),
+			regexp.MustCompile(`\bchmod\s+[0-7]{3,4}\b`),
+			regexp.MustCompile(`\bchown\b`),
+			regexp.MustCompile(`\bpkill\b`),
+			regexp.MustCompile(`\bkillall\b`),
+			regexp.MustCompile(`\bkill\b`),
+			regexp.MustCompile(`\bcurl\b.*\|\s*(sh|bash)`),
+			regexp.MustCompile(`\bwget\b.*\|\s*(sh|bash)`),
+			regexp.MustCompile(`\bnpm\s+install\s+-g\b`),
+			regexp.MustCompile(`\bpip\s+install\s+--user\b`),
+			regexp.MustCompile(`\bapt\s+(install|remove|purge)\b`),
+			regexp.MustCompile(`\byum\s+(install|remove)\b`),
+			regexp.MustCompile(`\bdnf\s+(install|remove)\b`),
+			regexp.MustCompile(`\bdocker\s+run\b`),
+			regexp.MustCompile(`\bdocker\s+exec\b`),
+			regexp.MustCompile(`\bgit\s+push\b`),
+			regexp.MustCompile(`\bgit\s+force\b`),
+			regexp.MustCompile(`\bssh\b.*@`),
+			regexp.MustCompile(`\beval\b`),
+			regexp.MustCompile(`\bsource\s+.*\.sh\b`),
+		}
+	})
 
 	// windowsDenyPatterns contains PowerShell-specific deny patterns that only
 	// apply on Windows, where commands are executed via powershell -Command.
-	windowsDenyPatterns = []*regexp.Regexp{
-		// [Text.Encoding] used to construct command strings at runtime.
-		// Matches [Text.Encoding] and [System.Text.Encoding] variants.
-		regexp.MustCompile(`\[(?:\w+\.)?text\.encoding\]`),
-		// PowerShell -EncodedCommand flag (base64-encoded command) and all short forms.
-		// Matches: -e, -ec, -enc, -en, -EncodedCommand (all with space prefix)
-		regexp.MustCompile(` -e(?:$|\s)| -ec(?:$|\s)| -enc(?:$|\s)| -en(?:$|\s)| -encodedcommand\b`),
-		// .GetString called on byte array to decode commands.
-		regexp.MustCompile(`\.getstring\s*\(\s*\[byte\[\]`),
-		// FromBase64String used in command construction chain.
-		regexp.MustCompile(`frombase64string\(`),
-		// PowerShell variable holding byte array used in GetString.
-		regexp.MustCompile(`\$[a-zA-Z_]\w*\s*=\s*\[byte\[\]`),
-		// Unicode escape sequences that could be used to construct commands.
-		// Matches \uXXXX format used to represent characters like i = "i"
-		regexp.MustCompile(`\\u[0-9a-fA-F]{4}`),
-	}
+	windowsDenyPatterns = sync.OnceValue(func() []*regexp.Regexp {
+		return []*regexp.Regexp{
+			// [Text.Encoding] used to construct command strings at runtime.
+			// Matches [Text.Encoding] and [System.Text.Encoding] variants.
+			regexp.MustCompile(`\[(?:\w+\.)?text\.encoding\]`),
+			// PowerShell -EncodedCommand flag (base64-encoded command) and all short forms.
+			// Matches: -e, -ec, -enc, -en, -EncodedCommand (all with space prefix)
+			regexp.MustCompile(` -e(?:$|\s)| -ec(?:$|\s)| -enc(?:$|\s)| -en(?:$|\s)| -encodedcommand\b`),
+			// .GetString called on byte array to decode commands.
+			regexp.MustCompile(`\.getstring\s*\(\s*\[byte\[\]`),
+			// FromBase64String used in command construction chain.
+			regexp.MustCompile(`frombase64string\(`),
+			// PowerShell variable holding byte array used in GetString.
+			regexp.MustCompile(`\$[a-zA-Z_]\w*\s*=\s*\[byte\[\]`),
+			// Unicode escape sequences that could be used to construct commands.
+			// Matches \uXXXX format used to represent characters like i = "i"
+			regexp.MustCompile(`\\u[0-9a-fA-F]{4}`),
+		}
+	})
 
 	// absolutePathPattern matches absolute file paths in commands (Unix and Windows).
-	absolutePathPattern = regexp.MustCompile(`[A-Za-z]:\\[^\\\"']+|/[^\s\"']+`)
+	absolutePathPattern = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`[A-Za-z]:\\[^\\\"']+|/[^\s\"']+`)
+	})
+
+	// pathTraversalPattern detects ../ and Windows ..\ escapes.
+	pathTraversalPattern = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`\.\.(?:[\\/]\.\.)*[\\/]`)
+	})
 
 	// safePaths are kernel pseudo-devices that are always safe to reference in
 	// commands, regardless of workspace restriction. They contain no user data
@@ -161,6 +178,8 @@ func NewExecToolWithConfig(
 	customAllowPatterns := make([]*regexp.Regexp, 0)
 	var allowedPathPatterns []*regexp.Regexp
 	allowRemote := true
+	useDefaultDenyPatterns := false
+	useWindowsDenyPatterns := false
 	if len(allowPaths) > 0 {
 		allowedPathPatterns = allowPaths[0]
 	}
@@ -170,10 +189,8 @@ func NewExecToolWithConfig(
 		enableDenyPatterns := execConfig.EnableDenyPatterns
 		allowRemote = execConfig.AllowRemote
 		if enableDenyPatterns {
-			denyPatterns = append(denyPatterns, defaultDenyPatterns...)
-			if runtime.GOOS == "windows" {
-				denyPatterns = append(denyPatterns, windowsDenyPatterns...)
-			}
+			useDefaultDenyPatterns = true
+			useWindowsDenyPatterns = runtime.GOOS == "windows"
 			if len(execConfig.CustomDenyPatterns) > 0 {
 				logger.InfoCF("tools", "using custom deny patterns", map[string]any{
 					"patterns": execConfig.CustomDenyPatterns,
@@ -198,10 +215,8 @@ func NewExecToolWithConfig(
 			customAllowPatterns = append(customAllowPatterns, re)
 		}
 	} else {
-		denyPatterns = append(denyPatterns, defaultDenyPatterns...)
-		if runtime.GOOS == "windows" {
-			denyPatterns = append(denyPatterns, windowsDenyPatterns...)
-		}
+		useDefaultDenyPatterns = true
+		useWindowsDenyPatterns = runtime.GOOS == "windows"
 	}
 
 	var timeout time.Duration
@@ -215,16 +230,18 @@ func NewExecToolWithConfig(
 	}
 
 	return &ExecTool{
-		workingDir:          workingDir,
-		timeout:             timeout,
-		denyPatterns:        denyPatterns,
-		allowPatterns:       nil,
-		customAllowPatterns: customAllowPatterns,
-		allowedPathPatterns: allowedPathPatterns,
-		restrictToWorkspace: restrict,
-		allowRemote:         allowRemote,
-		maxOutputChars:      maxOutputChars,
-		sessionManager:      getSessionManager(),
+		workingDir:             workingDir,
+		timeout:                timeout,
+		denyPatterns:           denyPatterns,
+		useDefaultDenyPatterns: useDefaultDenyPatterns,
+		useWindowsDenyPatterns: useWindowsDenyPatterns,
+		allowPatterns:          nil,
+		customAllowPatterns:    customAllowPatterns,
+		allowedPathPatterns:    allowedPathPatterns,
+		restrictToWorkspace:    restrict,
+		allowRemote:            allowRemote,
+		maxOutputChars:         maxOutputChars,
+		sessionManager:         getSessionManager(),
 	}, nil
 }
 
@@ -1250,6 +1267,20 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 			return "Command blocked by safety guard (dangerous pattern detected)"
 		}
 	}
+	if t.useDefaultDenyPatterns {
+		for _, pattern := range defaultDenyPatterns() {
+			if pattern.MatchString(lower) {
+				return "Command blocked by safety guard (dangerous pattern detected)"
+			}
+		}
+	}
+	if t.useWindowsDenyPatterns {
+		for _, pattern := range windowsDenyPatterns() {
+			if pattern.MatchString(lower) {
+				return "Command blocked by safety guard (dangerous pattern detected)"
+			}
+		}
+	}
 
 	if len(t.allowPatterns) > 0 {
 		if !t.commandMatchesAllowPattern(lower) {
@@ -1259,7 +1290,7 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 
 	if t.restrictToWorkspace {
 		// Block path traversal patterns including .../.../ variants
-		if regexp.MustCompile(`\.\.(?:[\\/]\.\.)*[\\/]`).MatchString(cmd) {
+		if pathTraversalPattern().MatchString(cmd) {
 			return "Command blocked by safety guard (path traversal detected)"
 		}
 
@@ -1283,7 +1314,7 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 			}
 		}
 
-		matchIndices := absolutePathPattern.FindAllStringIndex(cmd, -1)
+		matchIndices := absolutePathPattern().FindAllStringIndex(cmd, -1)
 
 		for _, loc := range matchIndices {
 			raw := cmd[loc[0]:loc[1]]

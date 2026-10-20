@@ -25,7 +25,11 @@ var (
 	ErrMissingOutboundMediaContext = errors.New("outbound media context is required")
 )
 
-const defaultBusBufferSize = 64
+// defaultBusBufferSize is the per-stream queue depth. PicoClaw targets
+// single-user gateways where the agent consumes messages promptly; 16 slots
+// absorb bursts without keeping ~78 KiB of always-resident channel buffers
+// (the previous value was 64, with 4x for audio chunks).
+const defaultBusBufferSize = 16
 
 // defaultAudioPublishTimeout is the default backpressure drop budget for audio
 // chunks. It seeds the per-stream budget registry (see SetBackpressureTimeout)
