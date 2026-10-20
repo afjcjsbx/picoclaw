@@ -88,6 +88,35 @@ func (b *LogBuffer) LinesSince(offset int) (lines []string, total int, runID int
 	return result, total, runID
 }
 
+// LinesBefore returns up to limit lines before offset and whether older lines remain buffered.
+func (b *LogBuffer) LinesBefore(offset, limit int) (lines []string, start int, hasOlder bool, total int, runID int) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	total = b.total
+	runID = b.runID
+	oldest := b.total - len(b.lines)
+	if offset > b.total {
+		offset = b.total
+	}
+	start = offset - limit
+	if start < oldest {
+		start = oldest
+	}
+	if start < 0 {
+		start = 0
+	}
+	if offset <= start {
+		return []string{}, start, start > oldest, total, runID
+	}
+
+	lines = make([]string, offset-start)
+	for i := range lines {
+		lines[i] = b.lines[(start+i)%b.cap]
+	}
+	return lines, start, start > oldest, total, runID
+}
+
 // RunID returns the current run identifier.
 func (b *LogBuffer) RunID() int {
 	b.mu.RLock()

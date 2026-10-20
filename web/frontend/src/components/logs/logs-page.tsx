@@ -10,7 +10,15 @@ import { useLogWrapColumns } from "@/hooks/use-log-wrap-columns"
 
 export function LogsPage() {
   const { t } = useTranslation()
-  const { clearLogs, clearing, logs } = useGatewayLogs()
+  const {
+    clearLogs,
+    clearing,
+    hasOlder,
+    loadOlder,
+    loadingOlder,
+    logStart,
+    logs,
+  } = useGatewayLogs()
   const { contentRef, measureRef, wrapColumns } = useLogWrapColumns()
 
   return (
@@ -40,6 +48,10 @@ export function LogsPage() {
           wrapColumns={wrapColumns}
           contentRef={contentRef}
           measureRef={measureRef}
+          hasOlder={hasOlder}
+          loadingOlder={loadingOlder}
+          logStart={logStart}
+          onLoadOlder={loadOlder}
         />
       </div>
     </div>
