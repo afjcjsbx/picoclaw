@@ -113,7 +113,7 @@ func (p *Pipeline) ExecuteTools(
 	ts *turnState,
 	exec *turnExecution,
 	iteration int,
-) ToolControl {
+) (ToolControl, error) {
 	al := p.al
 	normalizedToolCalls := exec.normalizedToolCalls
 
@@ -160,7 +160,7 @@ toolLoop:
 	for i, tc := range normalizedToolCalls {
 		if ts.hardAbortRequested() {
 			exec.abortedByHardAbort = true
-			return ToolControlBreak
+			return ToolControlBreak, nil
 		}
 
 		toolName := tc.Name
@@ -467,11 +467,11 @@ toolLoop:
 				continue
 			case HookActionAbortTurn:
 				exec.abortedByHook = true
-				return ToolControlBreak
+				return ToolControlBreak, nil
 			case HookActionHardAbort:
 				_ = ts.requestHardAbort()
 				exec.abortedByHardAbort = true
-				return ToolControlBreak
+				return ToolControlBreak, nil
 			}
 		}
 
@@ -536,7 +536,14 @@ toolLoop:
 			if !result.Silent && result.ForUser != "" {
 				outCtx, outCancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer outCancel()
-				_ = al.bus.PublishOutbound(outCtx, outboundMessageForTurn(ts, result.ForUser))
+				if err := al.bus.PublishOutbound(outCtx, outboundMessageForTurn(ts, result.ForUser)); err != nil {
+					logger.WarnCF("agent", "Failed to publish async tool result", map[string]any{
+						"tool":    asyncToolName,
+						"channel": ts.channel,
+						"chat_id": ts.chatID,
+						"error":   err.Error(),
+					})
+				}
 			}
 
 			content := result.ContentForLLM()
@@ -606,7 +613,7 @@ toolLoop:
 
 		if ts.hardAbortRequested() {
 			exec.abortedByHardAbort = true
-			return ToolControlBreak
+			return ToolControlBreak, nil
 		}
 
 		if al.hooks != nil {
@@ -630,11 +637,11 @@ toolLoop:
 				}
 			case HookActionAbortTurn:
 				exec.abortedByHook = true
-				return ToolControlBreak
+				return ToolControlBreak, nil
 			case HookActionHardAbort:
 				_ = ts.requestHardAbort()
 				exec.abortedByHardAbort = true
-				return ToolControlBreak
+				return ToolControlBreak, nil
 			}
 		}
 
@@ -838,7 +845,7 @@ toolLoop:
 				})
 			exec.pendingMessages = append(exec.pendingMessages, steerMsgs...)
 			exec.allResponsesHandled = false
-			return ToolControlContinue
+			return ToolControlContinue, nil
 		}
 		logger.WarnCF("agent", "Critical repeated tool-call loop detected; stopping turn",
 			map[string]any{
@@ -849,7 +856,7 @@ toolLoop:
 			})
 		exec.allResponsesHandled = false
 		exec.finalContent = loopDetectionResponse
-		return ToolControlBreak
+		return ToolControlBreak, nil
 	}
 	if loopDetectionStatus == loopStatusWarning {
 		warning := providers.Message{
@@ -878,7 +885,7 @@ toolLoop:
 				"allResponsesHandled": exec.allResponsesHandled,
 			})
 		exec.allResponsesHandled = false
-		return ToolControlContinue
+		return ToolControlContinue, nil
 	}
 
 	// Poll for newly arrived steering
@@ -890,7 +897,7 @@ toolLoop:
 			})
 		exec.pendingMessages = append(exec.pendingMessages, steerMsgs...)
 		exec.allResponsesHandled = false
-		return ToolControlContinue
+		return ToolControlContinue, nil
 	}
 
 	// No pending steering: finalize or break depending on allResponsesHandled
@@ -905,19 +912,23 @@ toolLoop:
 			ts.recordPersistedMessage(summaryMsg)
 			ts.ingestMessage(turnCtx, al, summaryMsg)
 			if err := ts.agent.Sessions.Save(ts.sessionKey); err != nil {
-				logger.WarnCF("agent", "Failed to save session after tool delivery",
-					map[string]any{
-						"agent_id": ts.agent.ID,
-						"error":    err.Error(),
-					})
+				al.emitEvent(
+					runtimeevents.KindAgentError,
+					ts.eventMeta("runTurn", "turn.error"),
+					ErrorPayload{
+						Stage:   "session_save",
+						Message: err.Error(),
+					},
+				)
+				return ToolControlBreak, fmt.Errorf(
+					"save session %q after tool delivery: %w",
+					ts.sessionKey,
+					err,
+				)
 			}
 		}
 		if !ts.opts.NoHistory && ts.opts.EnableSummary {
-			al.contextManager.Compact(turnCtx, &CompactRequest{
-				SessionKey: ts.sessionKey,
-				Reason:     ContextCompressReasonSummarize,
-				Budget:     ts.agent.ContextWindow,
-			})
+			p.compactPostTurn(turnCtx, ts)
 		}
 		ts.setPhase(TurnPhaseCompleted)
 		ts.setFinalContent("")
@@ -930,7 +941,7 @@ toolLoop:
 				"iteration":  iteration,
 				"tool_count": len(normalizedToolCalls),
 			})
-		return ToolControlBreak
+		return ToolControlBreak, nil
 	}
 
 	// allResponsesHandled=false and no pending steering: continue so coordinator
@@ -940,5 +951,5 @@ toolLoop:
 	// Discovery TTL is intentionally NOT ticked here: it advances once per
 	// conversational turn in runTurn, so a tool discovered in this turn stays
 	// callable across the remaining tool-loop iterations of the same turn.
-	return ToolControlContinue
+	return ToolControlContinue, nil
 }

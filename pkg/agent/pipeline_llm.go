@@ -703,7 +703,16 @@ func (p *Pipeline) CallLLM(
 		ReasoningContent: reasoningContent,
 	}
 	for _, tc := range exec.normalizedToolCalls {
-		argumentsJSON, _ := json.Marshal(tc.Arguments)
+		argumentsJSON, err := json.Marshal(tc.Arguments)
+		if err != nil {
+			cancelConfiguredStreamingLLM(turnCtx, exec)
+			return ControlBreak, fmt.Errorf(
+				"marshal arguments for tool call %q (%s): %w",
+				tc.Name,
+				tc.ID,
+				err,
+			)
+		}
 		toolFeedbackExplanation := toolFeedbackExplanationForToolCall(
 			exec.response,
 			tc,
