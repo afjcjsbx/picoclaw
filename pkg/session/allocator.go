@@ -6,6 +6,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/routing"
+	"github.com/sipeed/picoclaw/pkg/session/schema"
 )
 
 // Allocation contains the concrete session keys selected for a routed turn.
@@ -189,25 +190,16 @@ func buildLegacyDirectPeerIDs(input AllocationInput) []string {
 	return uniqueAliases(peerIDs)
 }
 
+// uniqueAliases lowercases, trims, and dedupes aliases, returning nil when no
+// alias survives. The current session-key layout is case-insensitive, so the
+// shared normalizer (which preserves case) is applied to lowercased input.
 func uniqueAliases(aliases []string) []string {
 	if len(aliases) == 0 {
 		return nil
 	}
-	normalized := make([]string, 0, len(aliases))
-	seen := make(map[string]struct{}, len(aliases))
+	lowered := make([]string, 0, len(aliases))
 	for _, alias := range aliases {
-		alias = strings.TrimSpace(strings.ToLower(alias))
-		if alias == "" {
-			continue
-		}
-		if _, ok := seen[alias]; ok {
-			continue
-		}
-		seen[alias] = struct{}{}
-		normalized = append(normalized, alias)
+		lowered = append(lowered, strings.ToLower(alias))
 	}
-	if len(normalized) == 0 {
-		return nil
-	}
-	return normalized
+	return schema.NormalizeAliases("", lowered)
 }

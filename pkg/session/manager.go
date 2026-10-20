@@ -6,12 +6,12 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/providers/messageutil"
+	"github.com/sipeed/picoclaw/pkg/session/schema"
 )
 
 type Session struct {
@@ -191,7 +191,7 @@ func (sm *SessionManager) DeleteSession(key string) error {
 		return nil
 	}
 
-	filename := sanitizeFilename(key)
+	filename := schema.SanitizeKey(key)
 	if filename == "." || !filepath.IsLocal(filename) {
 		return os.ErrInvalid
 	}
@@ -202,27 +202,15 @@ func (sm *SessionManager) DeleteSession(key string) error {
 	return nil
 }
 
-// sanitizeFilename converts a session key into a cross-platform safe filename.
-// Replaces ':' with '_' (session key separator) and '/' and '\' with '_' so
-// composite IDs (e.g. Telegram forum "chatID/threadID") do not create
-// subdirectories or break on Windows. The original key is preserved inside
-// the JSON file, so loadSessions still maps back to the right in-memory key.
-func sanitizeFilename(key string) string {
-	s := strings.ReplaceAll(key, ":", "_")
-	s = strings.ReplaceAll(s, "/", "_")
-	s = strings.ReplaceAll(s, "\\", "_")
-	return s
-}
-
 func (sm *SessionManager) Save(_ context.Context, key string) error {
 	if sm.storage == "" {
 		return nil
 	}
 
-	filename := sanitizeFilename(key)
+	filename := schema.SanitizeKey(key)
 
 	// filepath.IsLocal rejects empty names, "..", absolute paths, and
-	// OS-reserved device names (NUL, COM1 … on Windows). sanitizeFilename
+	// OS-reserved device names (NUL, COM1 … on Windows). SanitizeKey
 	// already replaced '/' and '\' with '_', so no subdirs are created.
 	if filename == "." || !filepath.IsLocal(filename) {
 		return os.ErrInvalid
