@@ -27,6 +27,8 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 		}); err == nil && resp != nil {
 			history = resp.History
 			summary = resp.Summary
+		} else if err != nil {
+			warnSessionStoreError(ts.sessionKey, "assemble", err)
 		}
 	}
 	ts.captureRestorePoint(history, summary)
@@ -69,6 +71,8 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 			}); err == nil && resp != nil {
 				history = resp.History
 				summary = resp.Summary
+			} else if err != nil {
+				warnSessionStoreError(ts.sessionKey, "assemble", err)
 			}
 			originalHistoryCount := len(history)
 			var fit bool

@@ -434,6 +434,8 @@ func (p *Pipeline) CallLLM(
 			}); asmErr == nil && asmResp != nil {
 				exec.history = asmResp.History
 				exec.summary = asmResp.Summary
+			} else if asmErr != nil {
+				warnSessionStoreError(ts.sessionKey, "assemble", asmErr)
 			}
 			contextualSkills := ts.activeSkills
 			if ts.agent.ContextBuilder != nil {
