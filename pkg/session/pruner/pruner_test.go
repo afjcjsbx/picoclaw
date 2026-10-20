@@ -408,6 +408,9 @@ func TestRunSkipsVacuumWhenLittleReclaimable(t *testing.T) {
 	if eng.checkpointCount == 0 {
 		t.Fatal("expected a WAL checkpoint instead of VACUUM")
 	}
+	if res.Vacuumed {
+		t.Fatal("Vacuumed = true, want false when only a checkpoint ran")
+	}
 }
 
 func TestRunVacuumsWhenReclaimIsLarge(t *testing.T) {
@@ -420,9 +423,12 @@ func TestRunVacuumsWhenReclaimIsLarge(t *testing.T) {
 		{SessionKey: "new", NewestAt: now.Add(-time.Hour)},
 	}
 
-	Run(context.Background(), eng, nil, config.SessionPruneConfig{Enabled: true, MaxAgeDays: 30})
+	res := Run(context.Background(), eng, nil, config.SessionPruneConfig{Enabled: true, MaxAgeDays: 30})
 	if eng.vacuumCount != 1 {
 		t.Fatalf("VACUUM ran %d times, want exactly 1 (no redundant second vacuum)", eng.vacuumCount)
+	}
+	if !res.Vacuumed {
+		t.Fatal("Vacuumed = false, want true when VACUUM ran")
 	}
 }
 
@@ -434,9 +440,40 @@ func TestRunVacuumsWhenReclaimableUnknown(t *testing.T) {
 		{SessionKey: "old", NewestAt: now.Add(-100 * 24 * time.Hour)},
 		{SessionKey: "new", NewestAt: now.Add(-time.Hour)},
 	}
-	Run(context.Background(), eng, nil, config.SessionPruneConfig{Enabled: true, MaxAgeDays: 30})
+	res := Run(context.Background(), eng, nil, config.SessionPruneConfig{Enabled: true, MaxAgeDays: 30})
 	if eng.vacuumCount == 0 {
 		t.Fatal("expected VACUUM when reclaimable size is unknown")
+	}
+	if !res.Vacuumed {
+		t.Fatal("Vacuumed = false, want true when VACUUM ran")
+	}
+}
+
+// TestRun_ReclaimsOncePerPass covers the reclaim bookkeeping: a pass with the
+// database-size guard disabled reclaims once, right after the select-phase
+// deletions, and must not checkpoint again at the end of the pass.
+func TestRun_ReclaimsOncePerPass(t *testing.T) {
+	now := time.Now()
+	eng := newFakeEngine(1 << 20)
+	eng.statuses = []seahorse.SessionStatus{
+		{SessionKey: "old", NewestAt: now.Add(-100 * 24 * time.Hour)},
+		{SessionKey: "new", NewestAt: now.Add(-time.Hour)},
+	}
+	store := newFakeStore("old", "new")
+
+	res := Run(context.Background(), eng, []Store{store}, config.SessionPruneConfig{
+		Enabled:    true,
+		MaxAgeDays: 30,
+		Vacuum:     boolPtr(false),
+	})
+	if !reflect.DeepEqual(res.Deleted, []string{"old"}) {
+		t.Fatalf("Deleted = %v, want [old]", res.Deleted)
+	}
+	if eng.checkpointCount != 1 {
+		t.Fatalf("checkpointCount = %d, want exactly 1 (one reclaim per pass)", eng.checkpointCount)
+	}
+	if res.Vacuumed {
+		t.Fatal("Vacuumed = true, want false with Vacuum disabled")
 	}
 }
 

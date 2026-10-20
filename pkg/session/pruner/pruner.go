@@ -95,6 +95,9 @@ type Result struct {
 	Partial       []string
 	DBBytesBefore int64
 	DBBytesAfter  int64
+	// Vacuumed reports whether the pass ran VACUUM (as opposed to only a WAL
+	// checkpoint) to release deleted space.
+	Vacuumed bool
 }
 
 // maxDBSizeIterations bounds the database-size enforcement loop.
@@ -241,7 +244,8 @@ func indexOwners(stores []Store) owners {
 // Run executes one prune pass: it applies the age and session-count thresholds,
 // then enforces the database-size guard by deleting the oldest remaining
 // sessions until the database fits (or nothing is left to delete). When Vacuum
-// is enabled the database is vacuumed after deletions to reclaim space.
+// is enabled the database is vacuumed after deletions to reclaim space; the
+// result reports whether a VACUUM ran.
 //
 // The seahorse database is shared by every agent while each agent has its own
 // session store, so stores must contain the store of every agent. A session is
@@ -264,7 +268,7 @@ func Run(ctx context.Context, eng Engine, stores []Store, cfg config.SessionPrun
 	infos := collectInfos(ctx, eng, idx)
 	toDelete := Select(infos, cfg, time.Now())
 
-	deleted := 0
+	removals := 0
 	for _, key := range toDelete {
 		if ctx.Err() != nil {
 			break
@@ -273,7 +277,7 @@ func Run(ctx context.Context, eng Engine, stores []Store, cfg config.SessionPrun
 		if !removed {
 			continue
 		}
-		deleted++
+		removals++
 		if complete {
 			result.Deleted = append(result.Deleted, key)
 		} else {
@@ -281,20 +285,18 @@ func Run(ctx context.Context, eng Engine, stores []Store, cfg config.SessionPrun
 		}
 	}
 
-	if deleted > 0 {
-		reclaim(ctx, eng, cfg, false)
+	// enforceDBSize reclaims after every deletion batch it runs, so the
+	// select-phase removals are the only ones that need a reclaim here.
+	if removals > 0 {
+		result.Vacuumed = reclaim(ctx, eng, cfg, false)
 	}
 
 	if cfg.MaxDBSizeMB > 0 && ctx.Err() == nil {
-		deleted += enforceDBSize(ctx, eng, idx, infos, cfg, &result)
-	}
-
-	if deleted > 0 {
-		reclaim(ctx, eng, cfg, false)
+		removals += enforceDBSize(ctx, eng, idx, infos, cfg, &result)
 	}
 
 	result.DBBytesAfter, _ = eng.DBFileSize()
-	if deleted > 0 {
+	if removals > 0 {
 		logger.InfoCF("session-prune", "Pruned chat sessions", map[string]any{
 			"deleted":         len(result.Deleted),
 			"partial":         len(result.Partial),
@@ -391,7 +393,7 @@ func enforceDBSize(
 
 		// The guard needs the file to actually shrink to observe progress, so
 		// it vacuums regardless of how much space would be reclaimed.
-		reclaim(ctx, eng, cfg, true)
+		result.Vacuumed = result.Vacuumed || reclaim(ctx, eng, cfg, true)
 
 		after, err := eng.DBFileSize()
 		if err != nil || after >= size {
@@ -402,19 +404,21 @@ func enforceDBSize(
 }
 
 // reclaim gives deleted space back to the filesystem. With Vacuum enabled it
-// runs VACUUM, but unless force is set only when that would return a meaningful
-// share of the file (see minVacuumReclaimBytes); otherwise it just folds and
-// truncates the write-ahead log, which is cheap and does not block writers.
-func reclaim(ctx context.Context, eng Engine, cfg config.SessionPruneConfig, force bool) {
+// runs VACUUM, but unless force is set only when that would return a
+// meaningful share of the file (see minVacuumReclaimBytes); otherwise it
+// just folds and truncates the write-ahead log, which is cheap and does not
+// block writers. It reports whether a VACUUM ran.
+func reclaim(ctx context.Context, eng Engine, cfg config.SessionPruneConfig, force bool) bool {
 	if cfg.VacuumEnabled() && (force || worthVacuum(ctx, eng)) {
 		if err := eng.Vacuum(ctx); err != nil {
 			logger.WarnCF("session-prune", "VACUUM failed", map[string]any{"error": err.Error()})
 		}
-		return
+		return true
 	}
 	if err := eng.Checkpoint(ctx, true); err != nil {
 		logger.WarnCF("session-prune", "WAL checkpoint failed", map[string]any{"error": err.Error()})
 	}
+	return false
 }
 
 // worthVacuum reports whether a VACUUM would return enough space to justify
