@@ -1,6 +1,6 @@
 // Package schema holds the storage primitives shared by the session stores
-// and their clients: session key sanitization and, later, the on-disk
-// session record layout and alias normalization.
+// and their clients: key sanitization, alias normalization, file path
+// construction and the on-disk session record layout.
 package schema
 
 import (

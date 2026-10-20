@@ -97,7 +97,7 @@ func (s *JSONLStore) metaPath(key string) string {
 }
 
 // readMeta loads the metadata file for a session.
-// Returns a zero-value sessionMeta if the file does not exist.
+// Returns a zero-value SessionMeta if the file does not exist.
 func (s *JSONLStore) readMeta(key string) (SessionMeta, error) {
 	data, err := os.ReadFile(s.metaPath(key))
 	if os.IsNotExist(err) {
@@ -562,6 +562,7 @@ func scanRetainedMessageLines(path string) (int, []int, error) {
 	return rawCount, retained, nil
 }
 
+// AddMessage appends a role/content message, creating the JSONL file and metadata when needed.
 func (s *JSONLStore) AddMessage(
 	_ context.Context, sessionKey, role, content string,
 ) error {
@@ -571,6 +572,7 @@ func (s *JSONLStore) AddMessage(
 	})
 }
 
+// AddFullMessage appends a full message, including tool calls and tool call IDs.
 func (s *JSONLStore) AddFullMessage(
 	_ context.Context, sessionKey string, msg providers.Message,
 ) error {
@@ -639,6 +641,7 @@ func (s *JSONLStore) addMsg(sessionKey string, msg providers.Message) error {
 	return s.writeMeta(sessionKey, meta)
 }
 
+// GetHistory returns the visible messages in insertion order, honoring the truncation offset.
 func (s *JSONLStore) GetHistory(
 	_ context.Context, sessionKey string,
 ) ([]providers.Message, error) {
@@ -661,6 +664,7 @@ func (s *JSONLStore) GetHistory(
 	return msgs, nil
 }
 
+// GetSummary returns the stored summary, or "" when none is stored.
 func (s *JSONLStore) GetSummary(
 	_ context.Context, sessionKey string,
 ) (string, error) {
@@ -675,6 +679,7 @@ func (s *JSONLStore) GetSummary(
 	return meta.Summary, nil
 }
 
+// SetSummary replaces the session summary and updates the metadata timestamps.
 func (s *JSONLStore) SetSummary(
 	_ context.Context, sessionKey, summary string,
 ) error {
@@ -696,6 +701,7 @@ func (s *JSONLStore) SetSummary(
 	return s.writeMeta(sessionKey, meta)
 }
 
+// TruncateHistory hides all but the last keepLast messages by advancing the metadata offset; keepLast <= 0 hides everything.
 func (s *JSONLStore) TruncateHistory(
 	_ context.Context, sessionKey string, keepLast int,
 ) error {
@@ -734,6 +740,7 @@ func (s *JSONLStore) TruncateHistory(
 	return s.writeMeta(sessionKey, meta)
 }
 
+// SetHistory replaces the entire history, dropping invalid or transient messages.
 func (s *JSONLStore) SetHistory(
 	_ context.Context,
 	sessionKey string,
@@ -866,6 +873,7 @@ func (s *JSONLStore) ListSessions() []string {
 	return keys
 }
 
+// Close is a no-op because the store keeps no open handles between calls.
 func (s *JSONLStore) Close() error {
 	return nil
 }
