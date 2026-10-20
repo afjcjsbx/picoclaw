@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -2214,5 +2215,96 @@ func TestSerializeMessages_StripsSystemParts(t *testing.T) {
 	raw := string(data)
 	if strings.Contains(raw, "system_parts") {
 		t.Fatal("system_parts should not appear in serialized output")
+	}
+}
+
+func TestBuildRequestBody_OpenRouterAnthropicTopLevelCacheControl(t *testing.T) {
+	tests := []struct {
+		name    string
+		apiBase string
+		model   string
+		want    bool
+	}{
+		{"openrouter anthropic", "https://openrouter.ai/api/v1", "anthropic/claude-sonnet-4.5", true},
+		{"openrouter anthropic alias", "https://openrouter.ai/api/v1", "~anthropic/claude-sonnet-latest", true},
+		{"openrouter other vendor", "https://openrouter.ai/api/v1", "minimax/minimax-m3.1-flash:free", false},
+		{"anthropic model on other host", "https://example.com/v1", "anthropic/claude-sonnet-4.5", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewProvider("key", tt.apiBase, "")
+			body := p.buildRequestBody([]Message{{Role: "user", Content: "hi"}}, nil, tt.model, nil)
+
+			got, present := body["cache_control"]
+			if present != tt.want {
+				t.Fatalf("cache_control present = %v, want %v", present, tt.want)
+			}
+			if tt.want && !reflect.DeepEqual(got, map[string]any{"type": "ephemeral"}) {
+				t.Fatalf("cache_control = %#v, want ephemeral", got)
+			}
+		})
+	}
+}
+
+func TestApplyCustomHeaders_OpenRouterSessionID(t *testing.T) {
+	long := strings.Repeat("k", 300)
+	tests := []struct {
+		name    string
+		apiBase string
+		options map[string]any
+		want    string
+	}{
+		{
+			"openrouter sends session key",
+			"https://openrouter.ai/api/v1",
+			map[string]any{"session_key": "agent:main:42"},
+			"agent:main:42",
+		},
+		{
+			"openrouter truncates to 256",
+			"https://openrouter.ai/api/v1",
+			map[string]any{"session_key": long},
+			long[:256],
+		},
+		{"openrouter without session key", "https://openrouter.ai/api/v1", nil, ""},
+		{"other host sends nothing", "https://api.example.com/v1", map[string]any{"session_key": "agent:main:42"}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewProvider("key", tt.apiBase, "")
+			req, err := http.NewRequest(http.MethodPost, tt.apiBase+"/chat/completions", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			p.applyCustomHeaders(req, tt.options)
+			if got := req.Header.Get("X-Session-Id"); got != tt.want {
+				t.Fatalf("x-session-id = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestProviderChatStream_ParsesCacheUsage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n"))
+		_, _ = w.Write(
+			[]byte(
+				"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":5400,\"completion_tokens\":3,\"total_tokens\":5403," +
+					"\"prompt_tokens_details\":{\"cached_tokens\":5398,\"cache_write_tokens\":2}}}\n\n",
+			),
+		)
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	out, err := NewProvider("key", server.URL, "").ChatStream(
+		t.Context(), []Message{{Role: "user", Content: "hi"}}, nil, "gpt-4o", nil, nil,
+	)
+	if err != nil {
+		t.Fatalf("ChatStream() error = %v", err)
+	}
+	if u := out.Usage; u == nil || u.PromptTokens != 5400 || u.CacheReadTokens != 5398 || u.CacheCreationTokens != 2 {
+		t.Fatalf("Usage = %+v, want PromptTokens=5400 CacheReadTokens=5398 CacheCreationTokens=2", u)
 	}
 }

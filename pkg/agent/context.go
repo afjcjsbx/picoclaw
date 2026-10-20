@@ -783,14 +783,38 @@ func formatCurrentSenderLine(senderID, senderDisplayName string) string {
 	}
 }
 
+// warnTZUnsetOnce limits the unset-TZ warning to one per process: the date line
+// is rebuilt on every LLM request.
+var warnTZUnsetOnce sync.Once
+
+// currentDateLine renders the date and zone without the time of day, so the
+// system prompt stays byte-identical all day and LLM prompt caches keep hitting.
+// The zone name comes only from the TZ variable, e.g.
+// "Tuesday, October 20, 2026 (Europe/Rome, CEST, UTC+02:00)".
+func currentDateLine(now time.Time) string {
+	abbr, _ := now.Zone()
+	zone := fmt.Sprintf("%s, UTC%s", abbr, now.Format("-07:00"))
+	if tz := strings.TrimSpace(os.Getenv("TZ")); tz != "" {
+		zone = tz + ", " + zone
+	} else {
+		warnTZUnsetOnce.Do(func() {
+			logger.WarnCF(
+				"agent",
+				"TZ environment variable is not set; the system prompt date has no time zone name",
+				nil,
+			)
+		})
+	}
+	return fmt.Sprintf("%s (%s)", now.Format("Monday, January 2, 2006"), zone)
+}
+
 func (cb *ContextBuilder) buildDynamicContext(
 	channel, chatID, senderID, senderDisplayName string,
 ) string {
-	now := time.Now().Format("2006-01-02 15:04 MST (Monday)")
 	rt := fmt.Sprintf("%s %s, Go %s", runtime.GOOS, runtime.GOARCH, runtime.Version())
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "## Current Time\n%s\n\n## Runtime\n%s", now, rt)
+	fmt.Fprintf(&sb, "## Current Date\n%s\n\n## Runtime\n%s", currentDateLine(time.Now()), rt)
 
 	if channel != "" && chatID != "" {
 		fmt.Fprintf(&sb, "\n\n## Current Session\nChannel: %s\nChat ID: %s", channel, chatID)

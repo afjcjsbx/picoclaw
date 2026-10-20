@@ -271,6 +271,7 @@ func parseResponse(apiResp *responses.Response) *protocoltypes.LLMResponse {
 			PromptTokens:     int(apiResp.Usage.InputTokens),
 			CompletionTokens: int(apiResp.Usage.OutputTokens),
 			TotalTokens:      int(apiResp.Usage.TotalTokens),
+			CacheReadTokens:  int(apiResp.Usage.InputTokensDetails.CachedTokens),
 		}
 	}
 

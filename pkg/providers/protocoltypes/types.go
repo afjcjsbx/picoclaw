@@ -53,6 +53,11 @@ type UsageInfo struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
 	TotalTokens      int `json:"total_tokens"`
+
+	// Prompt-cache breakdown; both are already included in PromptTokens.
+	// A persistent zero CacheReadTokens means the cache is not being hit.
+	CacheReadTokens     int `json:"cache_read_tokens,omitempty"`     // prompt tokens served from cache
+	CacheCreationTokens int `json:"cache_creation_tokens,omitempty"` // prompt tokens written to cache (Anthropic)
 }
 
 // CacheControl marks a content block for LLM-side prefix caching.
