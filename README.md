@@ -514,16 +514,20 @@ picoclaw skills install <skill-name>
 
 **Configure skill registries**:
 
-Add to your `config.json`:
+Registries are configured under `tools.skills.registries`. Add to your `config.json`:
+
 ```json
 {
   "tools": {
     "skills": {
       "registries": {
         "clawhub": {
+          "enabled": true,
+          "base_url": "https://clawhub.ai",
           "auth_token": "your-clawhub-token"
         },
         "github": {
+          "enabled": true,
           "base_url": "https://github.com",
           "auth_token": "your-github-token",
           "proxy": ""
@@ -534,7 +538,7 @@ Add to your `config.json`:
 }
 ```
 
-`tools.skills.github.*` is deprecated. Use `tools.skills.registries.github.*` instead.
+The ClawHub token is optional and only raises the rate limit. The GitHub token is needed for searches and for private repositories. Pass them via `PICOCLAW_SKILLS_REGISTRIES_CLAWHUB_AUTH_TOKEN` and `PICOCLAW_SKILLS_REGISTRIES_GITHUB_AUTH_TOKEN`.
 
 For more details, see [Skills tools](docs/tools/skills.md).
 
