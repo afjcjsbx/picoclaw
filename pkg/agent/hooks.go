@@ -19,7 +19,10 @@ const (
 	defaultHookObserverTimeout    = 500 * time.Millisecond
 	defaultHookInterceptorTimeout = 5 * time.Second
 	defaultHookApprovalTimeout    = 60 * time.Second
-	hookObserverBufferSize        = 64
+	// hookObserverBufferSize bounds the observer queues used by hooks and the
+	// evolution bridge. Hook events are low-frequency (turn/tool boundaries),
+	// so 16 slots are enough and avoid ~24 KiB of always-resident Events.
+	hookObserverBufferSize = 16
 )
 
 type HookAction string

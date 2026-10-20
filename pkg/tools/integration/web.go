@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unicode"
@@ -62,26 +63,36 @@ const (
 	keenableSnippetMaxLength = 500
 )
 
-// Pre-compiled regexes for HTML text extraction
+// Regexes for HTML text extraction and search-provider parsing, compiled on
+// first use. Web tools are optional: keeping ~10 compiled programs out of
+// package init trims the idle heap of gateways that never fetch or search.
 var (
-	reScript     = regexp.MustCompile(`<script[\s\S]*?</script>`)
-	reStyle      = regexp.MustCompile(`<style[\s\S]*?</style>`)
-	reTags       = regexp.MustCompile(`<[^>]+>`)
-	reWhitespace = regexp.MustCompile(`[^\S\n]+`)
-	reBlankLines = regexp.MustCompile(`\n{3,}`)
+	reScript     = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`<script[\s\S]*?</script>`) })
+	reStyle      = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`<style[\s\S]*?</style>`) })
+	reTags       = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`<[^>]+>`) })
+	reWhitespace = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`[^\S\n]+`) })
+	reBlankLines = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`\n{3,}`) })
 
 	// DuckDuckGo result extraction
-	reDDGLink = regexp.MustCompile(
-		`<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)</a>`,
-	)
-	reDDGSnippet = regexp.MustCompile(
-		`<a class="result__snippet[^"]*".*?>([\s\S]*?)</a>`,
-	)
-	reSogouTitle = regexp.MustCompile(
-		`<a\s+class="?resultLink"?\s+href="([^"]+)"[^>]*id="sogou_vr_\d+_\d+"[^>]*>\s*(.*?)\s*</a>`,
-	)
-	reSogouSnippet = regexp.MustCompile(`<div class="clamp\d*[^"]*">\s*(.*?)\s*</div>`)
-	reSogouRealURL = regexp.MustCompile(`url=([^&]+)`)
+	reDDGLink = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(
+			`<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)</a>`,
+		)
+	})
+	reDDGSnippet = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(
+			`<a class="result__snippet[^"]*".*?>([\s\S]*?)</a>`,
+		)
+	})
+	reSogouTitle = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(
+			`<a\s+class="?resultLink"?\s+href="([^"]+)"[^>]*id="sogou_vr_\d+_\d+"[^>]*>\s*(.*?)\s*</a>`,
+		)
+	})
+	reSogouSnippet = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`<div class="clamp\d*[^"]*">\s*(.*?)\s*</div>`)
+	})
+	reSogouRealURL = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`url=([^&]+)`) })
 )
 
 type APIKeyPool struct {
@@ -134,7 +145,7 @@ type SearchResultItem struct {
 }
 
 func extractSogouURL(href string) string {
-	match := reSogouRealURL.FindStringSubmatch(href)
+	match := reSogouRealURL().FindStringSubmatch(href)
 	if len(match) < 2 {
 		return ""
 	}
@@ -1136,7 +1147,7 @@ func (p *SogouSearchProvider) Search(
 			break
 		}
 
-		matches := reSogouTitle.FindAllStringSubmatch(html, -1)
+		matches := reSogouTitle().FindAllStringSubmatch(html, -1)
 		for _, match := range matches {
 			if len(match) < 3 {
 				continue
@@ -1156,7 +1167,7 @@ func (p *SogouSearchProvider) Search(
 				if len(after) > 2000 {
 					after = after[:2000]
 				}
-				if snippetMatch := reSogouSnippet.FindStringSubmatch(after); len(snippetMatch) > 1 {
+				if snippetMatch := reSogouSnippet().FindStringSubmatch(after); len(snippetMatch) > 1 {
 					snippet = stripTags(snippetMatch[1])
 				}
 			}
@@ -1228,7 +1239,7 @@ func (p *DuckDuckGoSearchProvider) extractResults(
 	// Try finding the result links directly first, as they are the most critical
 	// Pattern: <a class="result__a" href="...">Title</a>
 	// The previous regex was a bit strict. Let's make it more flexible for attributes order/content
-	matches := reDDGLink.FindAllStringSubmatch(html, count+5)
+	matches := reDDGLink().FindAllStringSubmatch(html, count+5)
 
 	if len(matches) == 0 {
 		return fmt.Sprintf("No results found or extraction failed. Query: %s", query), nil
@@ -1245,7 +1256,7 @@ func (p *DuckDuckGoSearchProvider) extractResults(
 
 	// A better regex approach: iterate through text and find matches in order
 	// But for now, let's grab all snippets too
-	snippetMatches := reDDGSnippet.FindAllStringSubmatch(html, count+5)
+	snippetMatches := reDDGSnippet().FindAllStringSubmatch(html, count+5)
 
 	maxItems := min(len(matches), count)
 
@@ -1280,7 +1291,7 @@ func (p *DuckDuckGoSearchProvider) extractResults(
 }
 
 func stripTags(content string) string {
-	return reTags.ReplaceAllString(content, "")
+	return reTags().ReplaceAllString(content, "")
 }
 
 type PerplexitySearchProvider struct {
@@ -2547,14 +2558,14 @@ func looksLikeHTML(body string) bool {
 }
 
 func (t *WebFetchTool) extractText(htmlContent string) string {
-	result := reScript.ReplaceAllLiteralString(htmlContent, "")
-	result = reStyle.ReplaceAllLiteralString(result, "")
-	result = reTags.ReplaceAllLiteralString(result, "")
+	result := reScript().ReplaceAllLiteralString(htmlContent, "")
+	result = reStyle().ReplaceAllLiteralString(result, "")
+	result = reTags().ReplaceAllLiteralString(result, "")
 
 	result = strings.TrimSpace(result)
 
-	result = reWhitespace.ReplaceAllString(result, " ")
-	result = reBlankLines.ReplaceAllString(result, "\n\n")
+	result = reWhitespace().ReplaceAllString(result, " ")
+	result = reBlankLines().ReplaceAllString(result, "\n\n")
 
 	lines := strings.Split(result, "\n")
 	var cleanLines []string

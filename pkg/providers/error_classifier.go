@@ -7,26 +7,48 @@ import (
 	"net"
 	"regexp"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/sipeed/picoclaw/pkg/providers/common"
 )
 
-// Common patterns in Go HTTP error messages
-var httpStatusPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`status[:\s]+(\d{3})`),
-	regexp.MustCompile(`http[/\s]+\d*\.?\d*\s+(\d{3})`),
-	regexp.MustCompile(`\b([3-5]\d{2})\b`),
-}
+// Common patterns in Go HTTP error messages. Compiled on first use because
+// they only matter after a request fails.
+var httpStatusPatterns = sync.OnceValue(func() []*regexp.Regexp {
+	return []*regexp.Regexp{
+		regexp.MustCompile(`status[:\s]+(\d{3})`),
+		regexp.MustCompile(`http[/\s]+\d*\.?\d*\s+(\d{3})`),
+		regexp.MustCompile(`\b([3-5]\d{2})\b`),
+	}
+})
 
 // errorPattern defines a single pattern (string or regex) for error classification.
 type errorPattern struct {
 	substring string
 	regex     *regexp.Regexp
+	lazy      *lazyRegexp
+}
+
+// lazyRegexp defers regexp compilation until the first error classification.
+// Provider error patterns are only needed when a request fails, so compiling
+// them at package init would keep tens of kilobytes resident for gateways that
+// never hit an error path.
+type lazyRegexp struct {
+	once sync.Once
+	src  string
+	re   *regexp.Regexp
+}
+
+func (l *lazyRegexp) get() *regexp.Regexp {
+	l.once.Do(func() {
+		l.re = regexp.MustCompile(l.src)
+	})
+	return l.re
 }
 
 func substr(s string) errorPattern { return errorPattern{substring: s} }
-func rxp(r string) errorPattern    { return errorPattern{regex: regexp.MustCompile("(?i)" + r)} }
+func rxp(r string) errorPattern    { return errorPattern{lazy: &lazyRegexp{src: "(?i)" + r}} }
 
 // Error patterns organized by FailoverReason, matching OpenClaw production (~40 patterns).
 var (
@@ -326,7 +348,7 @@ func classifyByMessage(msg string) FailoverReason {
 // extractHTTPStatus extracts an HTTP status code from an error message.
 // Looks for patterns like "status: 429", "status 429", "http/1.1 429", "http 429", or standalone "429".
 func extractHTTPStatus(msg string) int {
-	for _, p := range httpStatusPatterns {
+	for _, p := range httpStatusPatterns() {
 		if m := p.FindStringSubmatch(msg); len(m) > 1 {
 			return parseDigits(m[1])
 		}
@@ -347,11 +369,16 @@ func IsImageSizeError(msg string) bool {
 // matchesAny checks if msg matches any of the patterns.
 func matchesAny(msg string, patterns []errorPattern) bool {
 	for _, p := range patterns {
-		if p.regex != nil {
+		switch {
+		case p.lazy != nil:
+			if p.lazy.get().MatchString(msg) {
+				return true
+			}
+		case p.regex != nil:
 			if p.regex.MatchString(msg) {
 				return true
 			}
-		} else if p.substring != "" {
+		case p.substring != "":
 			if strings.Contains(msg, p.substring) {
 				return true
 			}

@@ -6,17 +6,23 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 
 	"golang.org/x/net/html"
 )
 
+// Markdown post-processing regexes are compiled on first conversion. They are
+// only needed when HTML-to-Markdown runs, which keeps them out of the idle heap
+// of gateways that never fetch web pages.
 var (
-	reSpaces           = regexp.MustCompile(`[ \t]+`)
-	reNewlines         = regexp.MustCompile(`\n{3,}`)
-	reEmptyListItem    = regexp.MustCompile(`(?m)^[-*]\s*$`)
-	reImageOnlyLink    = regexp.MustCompile(`\[!\[\]\(<[^>]*>\)\]\(<[^>]*>\)`)
-	reEmptyHeader      = regexp.MustCompile(`(?m)^#{1,6}\s*$`)
-	reLeadingLineSpace = regexp.MustCompile(`(?m)^([ \t])([^ \t\n])`)
+	reSpaces        = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`[ \t]+`) })
+	reNewlines      = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`\n{3,}`) })
+	reEmptyListItem = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?m)^[-*]\s*$`) })
+	reImageOnlyLink = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`\[!\[\]\(<[^>]*>\)\]\(<[^>]*>\)`)
+	})
+	reEmptyHeader      = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?m)^#{1,6}\s*$`) })
+	reLeadingLineSpace = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?m)^([ \t])([^ \t\n])`) })
 )
 
 var skipTags = map[string]bool{
@@ -149,7 +155,7 @@ func (c *converter) walk(n *html.Node) {
 		text := n.Data
 		if !c.inPre {
 			text = strings.ReplaceAll(text, "\n", " ")
-			text = reSpaces.ReplaceAllString(text, " ")
+			text = reSpaces().ReplaceAllString(text, " ")
 		}
 		if text != "" {
 			c.write(text)
@@ -382,9 +388,9 @@ func HtmlToMarkdown(htmlStr string) (string, error) {
 	res := c.stack[0].String()
 
 	// Post-processing
-	res = reImageOnlyLink.ReplaceAllString(res, "")
-	res = reEmptyListItem.ReplaceAllString(res, "")
-	res = reEmptyHeader.ReplaceAllString(res, "")
+	res = reImageOnlyLink().ReplaceAllString(res, "")
+	res = reEmptyListItem().ReplaceAllString(res, "")
+	res = reEmptyHeader().ReplaceAllString(res, "")
 
 	lines := strings.Split(res, "\n")
 	var cleanLines []string
@@ -400,12 +406,12 @@ func HtmlToMarkdown(htmlStr string) (string, error) {
 	res = strings.Join(cleanLines, "\n")
 
 	res = strings.TrimSpace(res)
-	res = reNewlines.ReplaceAllString(res, "\n\n")
+	res = reNewlines().ReplaceAllString(res, "\n\n")
 
 	// Strip a single leading space from lines that are NOT list indentation.
 	// "(?m)^([ \t])([^ \t\n])" matches exactly one space/tab at line start followed
 	// by a non-whitespace char, so "    - nested" (4 spaces) is left untouched.
-	res = reLeadingLineSpace.ReplaceAllString(res, "$2")
+	res = reLeadingLineSpace().ReplaceAllString(res, "$2")
 
 	return res, nil
 }

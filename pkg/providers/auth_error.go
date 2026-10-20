@@ -4,6 +4,7 @@ import (
 	"errors"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/sipeed/picoclaw/pkg/providers/common"
 )
@@ -17,19 +18,30 @@ const (
 	AuthErrorGeneric       AuthErrorKind = "auth"
 )
 
+// Auth error regexes are compiled on first classification: they only run on
+// failed requests, so gateways that never see an auth error avoid retaining
+// these large expressions.
 var (
-	invalidAPIKeyPattern = regexp.MustCompile(
-		`(?i)\b(?:invalid|incorrect|malformed|wrong)[-_\s]+(?:api[-_\s]*)?key\b|\b(?:api[-_\s]*)?key[-_\s]+(?:is[-_\s]+)?(?:invalid|incorrect|malformed|wrong)\b|\binvalid[-_]?api[-_]?key\b`,
-	)
-	missingAPIKeyPattern = regexp.MustCompile(
-		`(?i)\b(?:missing|no|not[-_\s]+configured)[-_\s]+(?:api[-_\s]*)?key\b|\bno[-_\s]+credentials[-_\s]+found\b|\bapi[-_\s]+key[-_\s]+not[-_\s]+configured\b`,
-	)
-	expiredTokenPattern = regexp.MustCompile(
-		`(?i)\b(?:oauth[-_\s]+token[-_\s]+refresh[-_\s]+failed|re-authenticate|token[-_\s]+(?:has[-_\s]+)?expired|expired[-_\s]+token)\b`,
-	)
-	genericAuthPattern = regexp.MustCompile(
-		`(?i)\b(?:unauthorized|forbidden|authentication[-_\s]+(?:failed|required)|access[-_\s]+denied)\b`,
-	)
+	invalidAPIKeyPattern = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(
+			`(?i)\b(?:invalid|incorrect|malformed|wrong)[-_\s]+(?:api[-_\s]*)?key\b|\b(?:api[-_\s]*)?key[-_\s]+(?:is[-_\s]+)?(?:invalid|incorrect|malformed|wrong)\b|\binvalid[-_]?api[-_]?key\b`,
+		)
+	})
+	missingAPIKeyPattern = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(
+			`(?i)\b(?:missing|no|not[-_\s]+configured)[-_\s]+(?:api[-_\s]*)?key\b|\bno[-_\s]+credentials[-_\s]+found\b|\bapi[-_\s]+key[-_\s]+not[-_\s]+configured\b`,
+		)
+	})
+	expiredTokenPattern = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(
+			`(?i)\b(?:oauth[-_\s]+token[-_\s]+refresh[-_\s]+failed|re-authenticate|token[-_\s]+(?:has[-_\s]+)?expired|expired[-_\s]+token)\b`,
+		)
+	})
+	genericAuthPattern = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(
+			`(?i)\b(?:unauthorized|forbidden|authentication[-_\s]+(?:failed|required)|access[-_\s]+denied)\b`,
+		)
+	})
 )
 
 func ClassifyAuthError(err error) (AuthErrorKind, bool) {
@@ -43,17 +55,17 @@ func ClassifyAuthError(err error) (AuthErrorKind, bool) {
 	}
 
 	msg := authErrorText(err)
-	if missingAPIKeyPattern.MatchString(msg) {
+	if missingAPIKeyPattern().MatchString(msg) {
 		return AuthErrorMissingAPIKey, true
 	}
-	if expiredTokenPattern.MatchString(msg) {
+	if expiredTokenPattern().MatchString(msg) {
 		return AuthErrorExpiredToken, true
 	}
-	if invalidAPIKeyPattern.MatchString(msg) {
+	if invalidAPIKeyPattern().MatchString(msg) {
 		return AuthErrorInvalidAPIKey, true
 	}
 
-	if hasStructuredAuthError(err) || genericAuthPattern.MatchString(msg) {
+	if hasStructuredAuthError(err) || genericAuthPattern().MatchString(msg) {
 		return AuthErrorGeneric, true
 	}
 	return "", false
@@ -111,13 +123,13 @@ func classifyFallbackExhaustedAuthError(err *FallbackExhaustedError) (AuthErrorK
 	}
 
 	msg := strings.Join(authMessages, "\n")
-	if missingAPIKeyPattern.MatchString(msg) {
+	if missingAPIKeyPattern().MatchString(msg) {
 		return AuthErrorMissingAPIKey, true
 	}
-	if expiredTokenPattern.MatchString(msg) {
+	if expiredTokenPattern().MatchString(msg) {
 		return AuthErrorExpiredToken, true
 	}
-	if invalidAPIKeyPattern.MatchString(msg) {
+	if invalidAPIKeyPattern().MatchString(msg) {
 		return AuthErrorInvalidAPIKey, true
 	}
 	return AuthErrorGeneric, true
