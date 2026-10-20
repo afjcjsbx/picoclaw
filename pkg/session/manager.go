@@ -187,7 +187,7 @@ func (sm *SessionManager) sessionPath(key string) (string, error) {
 	if filename == "." || !filepath.IsLocal(filename) {
 		return "", os.ErrInvalid
 	}
-	return filepath.Join(sm.storage, filename+".json"), nil
+	return schema.Path(sm.storage, key, ".json"), nil
 }
 
 // DeleteSession removes a session from memory and deletes its backing file.

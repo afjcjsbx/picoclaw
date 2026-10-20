@@ -89,11 +89,11 @@ func (s *JSONLStore) sessionLock(key string) *sync.Mutex {
 }
 
 func (s *JSONLStore) jsonlPath(key string) string {
-	return filepath.Join(s.dir, schema.SanitizeKey(key)+".jsonl")
+	return schema.Path(s.dir, key, ".jsonl")
 }
 
 func (s *JSONLStore) metaPath(key string) string {
-	return filepath.Join(s.dir, schema.SanitizeKey(key)+".meta.json")
+	return schema.Path(s.dir, key, ".meta.json")
 }
 
 // readMeta loads the metadata file for a session.

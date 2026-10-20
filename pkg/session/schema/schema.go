@@ -3,7 +3,10 @@
 // session record layout and alias normalization.
 package schema
 
-import "strings"
+import (
+	"path/filepath"
+	"strings"
+)
 
 // SanitizeKey converts a session key into a cross-platform safe filename
 // component. It replaces ':' (session key separator) and '/' and '\' with
@@ -14,4 +17,10 @@ func SanitizeKey(key string) string {
 	s = strings.ReplaceAll(s, "/", "_")
 	s = strings.ReplaceAll(s, "\\", "_")
 	return s
+}
+
+// Path returns the path of a session file inside dir. The key is sanitized
+// like a filename component, so callers cannot escape dir through the key.
+func Path(dir, key, suffix string) string {
+	return filepath.Join(dir, SanitizeKey(key)+suffix)
 }
