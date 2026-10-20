@@ -137,30 +137,6 @@ func cloneRawJSON(data json.RawMessage) json.RawMessage {
 	return append(json.RawMessage(nil), data...)
 }
 
-func normalizeAliases(canonicalKey string, aliases []string) []string {
-	if len(aliases) == 0 {
-		return nil
-	}
-	normalized := make([]string, 0, len(aliases))
-	seen := make(map[string]struct{}, len(aliases))
-	canonicalKey = strings.TrimSpace(canonicalKey)
-	for _, alias := range aliases {
-		alias = strings.TrimSpace(alias)
-		if alias == "" || alias == canonicalKey {
-			continue
-		}
-		if _, ok := seen[alias]; ok {
-			continue
-		}
-		seen[alias] = struct{}{}
-		normalized = append(normalized, alias)
-	}
-	if len(normalized) == 0 {
-		return nil
-	}
-	return normalized
-}
-
 func (s *JSONLStore) sessionExists(key string) bool {
 	if key == "" {
 		return false
@@ -254,7 +230,7 @@ func (s *JSONLStore) UpsertSessionMeta(
 		return err
 	}
 	meta.Scope = cloneRawJSON(scope)
-	meta.Aliases = normalizeAliases(sessionKey, aliases)
+	meta.Aliases = schema.NormalizeAliases(sessionKey, aliases)
 	now := time.Now()
 	if meta.CreatedAt.IsZero() {
 		meta.CreatedAt = now
@@ -284,7 +260,7 @@ func (s *JSONLStore) PromoteAliasHistory(
 		return false, nil
 	}
 
-	aliases = normalizeAliases(sessionKey, aliases)
+	aliases = schema.NormalizeAliases(sessionKey, aliases)
 	for _, alias := range aliases {
 		unlock := s.lockSessionPair(sessionKey, alias)
 		promoted, err := s.promoteAliasHistoryLocked(sessionKey, alias, scope, aliases)
@@ -432,7 +408,7 @@ func (s *JSONLStore) promoteAliasHistoryLocked(
 		canonicalMeta.CreatedAt = now
 	}
 	canonicalMeta.Scope = cloneRawJSON(scope)
-	canonicalMeta.Aliases = normalizeAliases(sessionKey, aliases)
+	canonicalMeta.Aliases = schema.NormalizeAliases(sessionKey, aliases)
 	canonicalMeta.ForkedFrom = aliasMeta.ForkedFrom
 	canonicalMeta.ForkIndex = aliasMeta.ForkIndex
 	canonicalMeta.ForkTitle = aliasMeta.ForkTitle

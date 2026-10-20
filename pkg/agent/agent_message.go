@@ -12,6 +12,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/routing"
 	"github.com/sipeed/picoclaw/pkg/session"
+	"github.com/sipeed/picoclaw/pkg/session/schema"
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
@@ -197,7 +198,7 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 	opts := processOptions{
 		Dispatch: DispatchRequest{
 			SessionKey:     sessionKey,
-			SessionAliases: buildSessionAliases(sessionKey, append(allocation.SessionAliases, msg.SessionKey)...),
+			SessionAliases: schema.NormalizeAliases(sessionKey, append(allocation.SessionAliases, msg.SessionKey)),
 			InboundContext: cloneInboundContext(&msg.Context),
 			RouteResult:    cloneResolvedRoute(&route),
 			SessionScope:   session.CloneScope(&allocation.Scope),
