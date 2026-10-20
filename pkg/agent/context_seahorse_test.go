@@ -1231,7 +1231,9 @@ func waitForSessionCount(t *testing.T, backend *session.JSONLBackend, want int) 
 func TestSeahorsePruneLoopRunsInBackgroundUntilClose(t *testing.T) {
 	mgr, backend := newPruneTestManager(t)
 	for _, key := range []string{"agent:main:a", "agent:main:b", "agent:main:c"} {
-		backend.AddMessage(key, "user", "hello")
+		if err := backend.AddMessage(context.Background(), key, "user", "hello"); err != nil {
+			t.Fatalf("AddMessage(%s): %v", key, err)
+		}
 		time.Sleep(2 * time.Millisecond) // distinct activity times
 	}
 
@@ -1249,7 +1251,9 @@ func TestSeahorsePruneLoopRunsInBackgroundUntilClose(t *testing.T) {
 	}
 
 	// The loop is gone: new surplus sessions are no longer pruned.
-	backend.AddMessage("agent:main:d", "user", "hello")
+	if err := backend.AddMessage(context.Background(), "agent:main:d", "user", "hello"); err != nil {
+		t.Fatalf("AddMessage: %v", err)
+	}
 	time.Sleep(100 * time.Millisecond)
 	if got := len(backend.ListSessions()); got != 2 {
 		t.Fatalf("sessions after Close = %d, want 2 (loop must have stopped)", got)
@@ -1283,7 +1287,9 @@ func TestSeahorseStartupPrunesBeforeBootstrap(t *testing.T) {
 	backend := session.NewJSONLBackend(pre)
 	keys := []string{"agent:main:old1", "agent:main:old2", "agent:main:newest"}
 	for _, key := range keys {
-		backend.AddMessage(key, "user", "hello "+key)
+		if err = backend.AddMessage(context.Background(), key, "user", "hello "+key); err != nil {
+			t.Fatalf("AddMessage(%s): %v", key, err)
+		}
 		time.Sleep(2 * time.Millisecond)
 	}
 	if closeErr := backend.Close(); closeErr != nil {
@@ -1365,7 +1371,9 @@ func TestSeahorsePruneReachesEveryAgentStore(t *testing.T) {
 		{mainAgent, "agent:main:newest"},
 	}
 	for _, item := range seed {
-		item.agent.Sessions.AddMessage(item.key, "user", "hello")
+		if err := item.agent.Sessions.AddMessage(ctx, item.key, "user", "hello"); err != nil {
+			t.Fatalf("AddMessage %s: %v", item.key, err)
+		}
 		if _, err := mgr.engine.Ingest(ctx, item.key, []seahorse.Message{
 			{Role: "user", Content: "hello", TokenCount: 2, CreatedAt: time.Now().UTC().Truncate(time.Second)},
 		}); err != nil {

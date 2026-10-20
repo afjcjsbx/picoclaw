@@ -91,8 +91,12 @@ func TestTurnProfile_DisabledPreservesDefaultHistoryAndPrompt(t *testing.T) {
 		{Role: "user", Content: "old user", CreatedAt: &ts},
 		{Role: "assistant", Content: "old assistant", CreatedAt: &ts},
 	}
-	agent.Sessions.SetHistory(sessionKey, initialHistory)
-	agent.Sessions.SetSummary(sessionKey, "old summary")
+	if err := agent.Sessions.SetHistory(context.Background(), sessionKey, initialHistory); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
+	if err := agent.Sessions.SetSummary(context.Background(), sessionKey, "old summary"); err != nil {
+		t.Fatalf("SetSummary: %v", err)
+	}
 
 	got, err := al.runAgentLoop(context.Background(), agent, processOptions{
 		SessionKey:      sessionKey,
@@ -115,7 +119,10 @@ func TestTurnProfile_DisabledPreservesDefaultHistoryAndPrompt(t *testing.T) {
 	if !strings.Contains(provider.messages[0].Content, "CONTEXT_SUMMARY") {
 		t.Fatalf("system prompt missing summary in default mode:\n%s", provider.messages[0].Content)
 	}
-	history := agent.Sessions.GetHistory(sessionKey)
+	history, err := agent.Sessions.GetHistory(context.Background(), sessionKey)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
 	if len(history) != len(initialHistory)+2 {
 		t.Fatalf("history len = %d, want initial + user + assistant", len(history))
 	}
@@ -141,8 +148,12 @@ func TestTurnProfile_HistoryOffSuppressesHistoryAndPersistence(t *testing.T) {
 		{Role: "user", Content: "old user", CreatedAt: &ts},
 		{Role: "assistant", Content: "old assistant", CreatedAt: &ts},
 	}
-	agent.Sessions.SetHistory(sessionKey, initialHistory)
-	agent.Sessions.SetSummary(sessionKey, "old summary")
+	if err := agent.Sessions.SetHistory(context.Background(), sessionKey, initialHistory); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
+	if err := agent.Sessions.SetSummary(context.Background(), sessionKey, "old summary"); err != nil {
+		t.Fatalf("SetSummary: %v", err)
+	}
 
 	_, err := al.runAgentLoop(context.Background(), agent, processOptions{
 		SessionKey:      sessionKey,
@@ -162,7 +173,10 @@ func TestTurnProfile_HistoryOffSuppressesHistoryAndPersistence(t *testing.T) {
 	if strings.Contains(provider.messages[0].Content, "old summary") {
 		t.Fatalf("system prompt includes suppressed summary:\n%s", provider.messages[0].Content)
 	}
-	history := agent.Sessions.GetHistory(sessionKey)
+	history, err := agent.Sessions.GetHistory(context.Background(), sessionKey)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
 	if !reflect.DeepEqual(history, initialHistory) {
 		t.Fatalf("history = %#v, want unchanged %#v", history, initialHistory)
 	}

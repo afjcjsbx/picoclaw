@@ -195,7 +195,8 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 				messages = append(messages, resolvedPending[i])
 				totalContentLen += len(pm.Content)
 				if !ts.opts.NoHistory {
-					ts.agent.Sessions.AddFullMessage(ts.sessionKey, pm)
+					warnSessionStoreError(ts.sessionKey, "add full message",
+						ts.agent.Sessions.AddFullMessage(ctx, ts.sessionKey, pm))
 					ts.recordPersistedMessage(pm)
 					ts.ingestMessage(turnCtx, al, pm)
 				}

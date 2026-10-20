@@ -345,9 +345,9 @@ func (m *seahorseContextManager) Clear(ctx context.Context, sessionKey string) e
 		}
 	}
 	if sessions != nil {
-		sessions.SetHistory(sessionKey, []providers.Message{})
-		sessions.SetSummary(sessionKey, "")
-		return sessions.Save(sessionKey)
+		warnSessionStoreError(sessionKey, "set history", sessions.SetHistory(ctx, sessionKey, []providers.Message{}))
+		warnSessionStoreError(sessionKey, "set summary", sessions.SetSummary(ctx, sessionKey, ""))
+		return sessions.Save(ctx, sessionKey)
 	}
 	return nil
 }
@@ -358,7 +358,11 @@ func (m *seahorseContextManager) bootstrapSession(ctx context.Context, sessionKe
 		return
 	}
 
-	history := m.sessions.GetHistory(sessionKey)
+	history, err := m.sessions.GetHistory(ctx, sessionKey)
+	if err != nil {
+		warnSessionStoreError(sessionKey, "get history", err)
+		history = nil
+	}
 	if len(history) == 0 {
 		return
 	}

@@ -542,9 +542,15 @@ func (al *AgentLoop) HardAbort(sessionKey string) error {
 
 	// Roll back session history to the state before the turn started.
 	if ts.session != nil {
-		history := ts.session.GetHistory(sessionKey)
+		// HardAbort has no context of its own; the rollback only touches the
+		// local session store, so a background context is used.
+		history, err := ts.session.GetHistory(context.Background(), sessionKey)
+		if err != nil {
+			return fmt.Errorf("hard abort: get history: %w", err)
+		}
 		if ts.initialHistoryLength < len(history) {
-			ts.session.SetHistory(sessionKey, history[:ts.initialHistoryLength])
+			warnSessionStoreError(sessionKey, "set history",
+				ts.session.SetHistory(context.Background(), sessionKey, history[:ts.initialHistoryLength]))
 		}
 	}
 

@@ -438,6 +438,8 @@ func (p *Pipeline) CallLLM(
 			}); asmErr == nil && asmResp != nil {
 				exec.history = asmResp.History
 				exec.summary = asmResp.Summary
+			} else if asmErr != nil {
+				warnSessionStoreError(ts.sessionKey, "assemble", asmErr)
 			}
 			contextualSkills := ts.activeSkills
 			if ts.agent.ContextBuilder != nil {
@@ -737,7 +739,11 @@ func (p *Pipeline) CallLLM(
 	}
 	exec.messages = append(exec.messages, assistantMsg)
 	if !ts.opts.NoHistory {
-		ts.agent.Sessions.AddFullMessage(ts.sessionKey, assistantMsg)
+		warnSessionStoreError(
+			ts.sessionKey,
+			"add full message",
+			ts.agent.Sessions.AddFullMessage(ctx, ts.sessionKey, assistantMsg),
+		)
 		ts.recordPersistedMessage(assistantMsg)
 		ts.ingestMessage(turnCtx, al, assistantMsg)
 	}

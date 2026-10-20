@@ -20,7 +20,7 @@ type legacyContextManager struct {
 	summarizing sync.Map // dedup for async Compact (post-turn)
 }
 
-func (m *legacyContextManager) Assemble(_ context.Context, req *AssembleRequest) (*AssembleResponse, error) {
+func (m *legacyContextManager) Assemble(ctx context.Context, req *AssembleRequest) (*AssembleResponse, error) {
 	// Legacy: read history from session, return as-is.
 	// Budget enforcement happens in BuildMessages caller via
 	// isOverContextBudget + forceCompression.
@@ -28,8 +28,14 @@ func (m *legacyContextManager) Assemble(_ context.Context, req *AssembleRequest)
 	if agent == nil {
 		return &AssembleResponse{}, nil
 	}
-	history := agent.Sessions.GetHistory(req.SessionKey)
-	summary := agent.Sessions.GetSummary(req.SessionKey)
+	history, err := agent.Sessions.GetHistory(ctx, req.SessionKey)
+	if err != nil {
+		return nil, fmt.Errorf("assemble history: %w", err)
+	}
+	summary, err := agent.Sessions.GetSummary(ctx, req.SessionKey)
+	if err != nil {
+		return nil, fmt.Errorf("assemble summary: %w", err)
+	}
 	return &AssembleResponse{
 		History: history,
 		Summary: summary,
@@ -89,16 +95,16 @@ func (m *legacyContextManager) Ingest(_ context.Context, _ *IngestRequest) error
 	return nil
 }
 
-func (m *legacyContextManager) Clear(_ context.Context, sessionKey string) error {
+func (m *legacyContextManager) Clear(ctx context.Context, sessionKey string) error {
 	// Routed (non-default) agents keep history in their own session store,
 	// so resolve the owning agent instead of assuming the default one.
 	agent := m.al.agentForSession(sessionKey)
 	if agent == nil || agent.Sessions == nil {
 		return fmt.Errorf("sessions not initialized")
 	}
-	agent.Sessions.SetHistory(sessionKey, []providers.Message{})
-	agent.Sessions.SetSummary(sessionKey, "")
-	return agent.Sessions.Save(sessionKey)
+	warnSessionStoreError(sessionKey, "set history", agent.Sessions.SetHistory(ctx, sessionKey, []providers.Message{}))
+	warnSessionStoreError(sessionKey, "set summary", agent.Sessions.SetSummary(ctx, sessionKey, ""))
+	return agent.Sessions.Save(ctx, sessionKey)
 }
 
 // maybeSummarize triggers summarization if the session history exceeds thresholds.
@@ -109,7 +115,11 @@ func (m *legacyContextManager) maybeSummarize(ctx context.Context, sessionKey st
 		return
 	}
 
-	newHistory := agent.Sessions.GetHistory(sessionKey)
+	newHistory, err := agent.Sessions.GetHistory(ctx, sessionKey)
+	if err != nil {
+		warnSessionStoreError(sessionKey, "get history", err)
+		newHistory = []providers.Message{}
+	}
 	tokenEstimate := m.estimateTokens(newHistory)
 	threshold := agent.ContextWindow * agent.SummarizeTokenPercent / 100
 
@@ -153,7 +163,13 @@ func (m *legacyContextManager) forceCompression(sessionKey string) (compressionR
 		return compressionResult{}, false
 	}
 
-	history := agent.Sessions.GetHistory(sessionKey)
+	// forceCompression has no context of its own: it only reads and writes the
+	// local session store, so a background context is sufficient.
+	history, err := agent.Sessions.GetHistory(context.Background(), sessionKey)
+	if err != nil {
+		warnSessionStoreError(sessionKey, "get history", err)
+		history = []providers.Message{}
+	}
 	const protectedTail = 4
 	const minToolResultChars = 200
 	const prunedToolResult = "[Old tool output cleared to save context space]"
@@ -166,8 +182,12 @@ func (m *legacyContextManager) forceCompression(sessionKey string) (compressionR
 		}
 	}
 	if pruned {
-		agent.Sessions.SetHistory(sessionKey, history)
-		agent.Sessions.Save(sessionKey)
+		warnSessionStoreError(
+			sessionKey,
+			"set history",
+			agent.Sessions.SetHistory(context.Background(), sessionKey, history),
+		)
+		warnSessionStoreError(sessionKey, "save", agent.Sessions.Save(context.Background(), sessionKey))
 		return compressionResult{RemainingMessages: len(history)}, true
 	}
 	if len(history) <= 2 {
@@ -195,7 +215,11 @@ func (m *legacyContextManager) forceCompression(sessionKey string) (compressionR
 
 	droppedCount := len(history) - len(keptHistory)
 
-	existingSummary := agent.Sessions.GetSummary(sessionKey)
+	existingSummary, err := agent.Sessions.GetSummary(context.Background(), sessionKey)
+	if err != nil {
+		warnSessionStoreError(sessionKey, "get summary", err)
+		existingSummary = ""
+	}
 	compressionNote := fmt.Sprintf(
 		"[Emergency compression dropped %d oldest messages due to context limit]",
 		droppedCount,
@@ -203,10 +227,18 @@ func (m *legacyContextManager) forceCompression(sessionKey string) (compressionR
 	if existingSummary != "" {
 		compressionNote = existingSummary + "\n\n" + compressionNote
 	}
-	agent.Sessions.SetSummary(sessionKey, compressionNote)
+	warnSessionStoreError(
+		sessionKey,
+		"set summary",
+		agent.Sessions.SetSummary(context.Background(), sessionKey, compressionNote),
+	)
 
-	agent.Sessions.SetHistory(sessionKey, keptHistory)
-	agent.Sessions.Save(sessionKey)
+	warnSessionStoreError(
+		sessionKey,
+		"set history",
+		agent.Sessions.SetHistory(context.Background(), sessionKey, keptHistory),
+	)
+	warnSessionStoreError(sessionKey, "save", agent.Sessions.Save(context.Background(), sessionKey))
 
 	logger.WarnCF("agent", "Forced compression executed", map[string]any{
 		"session_key":  sessionKey,
@@ -232,8 +264,16 @@ func (m *legacyContextManager) summarizeSession(
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
-	history := agent.Sessions.GetHistory(sessionKey)
-	summary := agent.Sessions.GetSummary(sessionKey)
+	history, err := agent.Sessions.GetHistory(ctx, sessionKey)
+	if err != nil {
+		warnSessionStoreError(sessionKey, "get history", err)
+		history = []providers.Message{}
+	}
+	summary, err := agent.Sessions.GetSummary(ctx, sessionKey)
+	if err != nil {
+		warnSessionStoreError(sessionKey, "get summary", err)
+		summary = ""
+	}
 
 	if len(history) <= 4 {
 		return false
@@ -302,9 +342,13 @@ func (m *legacyContextManager) summarizeSession(
 	}
 
 	if finalSummary != "" {
-		agent.Sessions.SetSummary(sessionKey, finalSummary)
-		agent.Sessions.TruncateHistory(sessionKey, keepCount)
-		agent.Sessions.Save(sessionKey)
+		warnSessionStoreError(sessionKey, "set summary", agent.Sessions.SetSummary(ctx, sessionKey, finalSummary))
+		warnSessionStoreError(
+			sessionKey,
+			"truncate history",
+			agent.Sessions.TruncateHistory(ctx, sessionKey, keepCount),
+		)
+		warnSessionStoreError(sessionKey, "save", agent.Sessions.Save(ctx, sessionKey))
 		m.al.emitEvent(
 			runtimeevents.KindAgentSessionSummarize,
 			m.al.newTurnEventScope(agent.ID, sessionKey, nil).meta(0, "summarizeSession", "turn.session.summarize"),

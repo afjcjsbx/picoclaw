@@ -249,7 +249,9 @@ func TestLegacyAssemble_Passthrough(t *testing.T) {
 		{Role: "user", Content: "hello"},
 		{Role: "assistant", Content: "hi there"},
 	}
-	agent.Sessions.SetHistory("test-session", history)
+	if err := agent.Sessions.SetHistory(context.Background(), "test-session", history); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
 
 	resp, err := al.contextManager.Assemble(context.Background(), &AssembleRequest{
 		SessionKey: "test-session",
@@ -306,7 +308,9 @@ func TestLegacyCompact_Overflow(t *testing.T) {
 		{Role: "assistant", Content: "resp 2"},
 		{Role: "user", Content: "msg 3"},
 	}
-	defaultAgent.Sessions.SetHistory("session-overflow", history)
+	if err := defaultAgent.Sessions.SetHistory(context.Background(), "session-overflow", history); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
 
 	runtimeCh, closeRuntimeEvents := subscribeRuntimeEventsForTest(
 		t,
@@ -325,13 +329,19 @@ func TestLegacyCompact_Overflow(t *testing.T) {
 	}
 
 	// After overflow compression, history should be shorter
-	newHistory := defaultAgent.Sessions.GetHistory("session-overflow")
+	newHistory, err := defaultAgent.Sessions.GetHistory(context.Background(), "session-overflow")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
 	if len(newHistory) >= len(history) {
 		t.Fatalf("expected compressed history, got %d messages (was %d)", len(newHistory), len(history))
 	}
 
 	// Summary should contain compression note
-	summary := defaultAgent.Sessions.GetSummary("session-overflow")
+	summary, err := defaultAgent.Sessions.GetSummary(context.Background(), "session-overflow")
+	if err != nil {
+		t.Fatalf("GetSummary: %v", err)
+	}
 	if !strings.Contains(summary, "Emergency compression") {
 		t.Fatalf("expected compression note in summary, got %q", summary)
 	}
@@ -366,13 +376,18 @@ func TestLegacyCompact_PrunesOldToolResultsBeforeDroppingTurns(t *testing.T) {
 		{Role: "tool", ToolCallID: "new-call", Content: "recent output"},
 		{Role: "assistant", Content: "done"},
 	}
-	agent.Sessions.SetHistory("session-prune-tools", history)
+	if err := agent.Sessions.SetHistory(context.Background(), "session-prune-tools", history); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
 
 	result, ok := al.contextManager.(*legacyContextManager).forceCompression("session-prune-tools")
 	if !ok {
 		t.Fatal("expected old tool output to be pruned")
 	}
-	got := agent.Sessions.GetHistory("session-prune-tools")
+	got, err := agent.Sessions.GetHistory(context.Background(), "session-prune-tools")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
 	if len(got) != len(history) || result.DroppedMessages != 0 {
 		t.Fatalf("pruning dropped messages: got %d messages, dropped %d", len(got), result.DroppedMessages)
 	}
@@ -400,7 +415,9 @@ func TestLegacyCompact_Overflow_ProactiveReason(t *testing.T) {
 		{Role: "assistant", Content: "resp 2"},
 		{Role: "user", Content: "msg 3"},
 	}
-	defaultAgent.Sessions.SetHistory("session-proactive", history)
+	if err := defaultAgent.Sessions.SetHistory(context.Background(), "session-proactive", history); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
 
 	runtimeCh, closeRuntimeEvents := subscribeRuntimeEventsForTest(
 		t,
@@ -444,7 +461,9 @@ func TestLegacyCompact_Overflow_TooShortToCompress(t *testing.T) {
 	history := []providers.Message{
 		{Role: "user", Content: "only one"},
 	}
-	defaultAgent.Sessions.SetHistory("session-tiny", history)
+	if err := defaultAgent.Sessions.SetHistory(context.Background(), "session-tiny", history); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
 
 	err := al.contextManager.Compact(context.Background(), &CompactRequest{
 		SessionKey: "session-tiny",
@@ -455,7 +474,10 @@ func TestLegacyCompact_Overflow_TooShortToCompress(t *testing.T) {
 	}
 
 	// History should be unchanged (too short to compress)
-	newHistory := defaultAgent.Sessions.GetHistory("session-tiny")
+	newHistory, err := defaultAgent.Sessions.GetHistory(context.Background(), "session-tiny")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
 	if len(newHistory) != len(history) {
 		t.Fatalf("expected history unchanged, got %d messages (was %d)", len(newHistory), len(history))
 	}
@@ -479,7 +501,9 @@ func TestLegacyCompact_PostTurn_BelowThreshold(t *testing.T) {
 		{Role: "user", Content: "hi"},
 		{Role: "assistant", Content: "hello"},
 	}
-	defaultAgent.Sessions.SetHistory("session-small", history)
+	if err := defaultAgent.Sessions.SetHistory(context.Background(), "session-small", history); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
 
 	err := al.contextManager.Compact(context.Background(), &CompactRequest{
 		SessionKey: "session-small",
@@ -490,7 +514,10 @@ func TestLegacyCompact_PostTurn_BelowThreshold(t *testing.T) {
 	}
 
 	// History should remain unchanged
-	newHistory := defaultAgent.Sessions.GetHistory("session-small")
+	newHistory, err := defaultAgent.Sessions.GetHistory(context.Background(), "session-small")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
 	if len(newHistory) != len(history) {
 		t.Fatalf("expected unchanged history, got %d messages (was %d)", len(newHistory), len(history))
 	}
@@ -527,7 +554,9 @@ func TestLegacyCompact_PostTurn_ExceedsMessageThreshold(t *testing.T) {
 		{Role: "user", Content: "q3"},
 		{Role: "assistant", Content: "a3"},
 	}
-	defaultAgent.Sessions.SetHistory("session-threshold", history)
+	if err := defaultAgent.Sessions.SetHistory(context.Background(), "session-threshold", history); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
 
 	runtimeCh, closeRuntimeEvents := subscribeRuntimeEventsForTest(
 		t,
@@ -549,7 +578,10 @@ func TestLegacyCompact_PostTurn_ExceedsMessageThreshold(t *testing.T) {
 		return evt.Kind == runtimeevents.KindAgentSessionSummarize
 	})
 
-	newHistory := defaultAgent.Sessions.GetHistory("session-threshold")
+	newHistory, err := defaultAgent.Sessions.GetHistory(context.Background(), "session-threshold")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
 	if len(newHistory) >= len(history) {
 		t.Fatalf("expected summarization to reduce history from %d messages, got %d", len(history), len(newHistory))
 	}
@@ -796,7 +828,9 @@ func TestLegacyCompact_Overflow_SingleTurnKeepsLastUserMessage(t *testing.T) {
 		{Role: "user", Content: "first question"},
 		{Role: "assistant", Content: "first answer"},
 	}
-	defaultAgent.Sessions.SetHistory("session-2msg", history)
+	if err := defaultAgent.Sessions.SetHistory(context.Background(), "session-2msg", history); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
 
 	err := al.contextManager.Compact(context.Background(), &CompactRequest{
 		SessionKey: "session-2msg",
@@ -806,7 +840,10 @@ func TestLegacyCompact_Overflow_SingleTurnKeepsLastUserMessage(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	newHistory := defaultAgent.Sessions.GetHistory("session-2msg")
+	newHistory, err := defaultAgent.Sessions.GetHistory(context.Background(), "session-2msg")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
 	// With 2 messages, forceCompression returns false (len <= 2), so no compression
 	if len(newHistory) != len(history) {
 		t.Fatalf("expected no compression for 2-message history, got %d", len(newHistory))
@@ -988,7 +1025,9 @@ func TestLegacyCompact_PublishesFeedbackWhenToolFeedbackEnabled(t *testing.T) {
 		{Role: "assistant", Content: "resp 2"},
 		{Role: "user", Content: "msg 3"},
 	}
-	agent.Sessions.SetHistory("session-feedback", history)
+	if err := agent.Sessions.SetHistory(context.Background(), "session-feedback", history); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
 
 	ts := &turnState{
 		agent:      agent,
@@ -1070,7 +1109,9 @@ func TestLegacyCompact_Manual_AppliesFocus(t *testing.T) {
 		{Role: "user", Content: "q3"},
 		{Role: "assistant", Content: "a3"},
 	}
-	agent.Sessions.SetHistory("session-manual", history)
+	if err := agent.Sessions.SetHistory(context.Background(), "session-manual", history); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
 
 	err := al.contextManager.Compact(context.Background(), &CompactRequest{
 		SessionKey:   "session-manual",
@@ -1081,11 +1122,19 @@ func TestLegacyCompact_Manual_AppliesFocus(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if got := agent.Sessions.GetSummary("session-manual"); got != "manual summary" {
-		t.Fatalf("summary = %q, want %q", got, "manual summary")
+	manualSummary, err := agent.Sessions.GetSummary(context.Background(), "session-manual")
+	if err != nil {
+		t.Fatalf("GetSummary: %v", err)
 	}
-	if got := len(agent.Sessions.GetHistory("session-manual")); got >= len(history) {
-		t.Fatalf("history len = %d, want fewer than %d", got, len(history))
+	if manualSummary != "manual summary" {
+		t.Fatalf("summary = %q, want %q", manualSummary, "manual summary")
+	}
+	manualHistory, err := agent.Sessions.GetHistory(context.Background(), "session-manual")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if len(manualHistory) >= len(history) {
+		t.Fatalf("history len = %d, want fewer than %d", len(manualHistory), len(history))
 	}
 	if len(provider.prompts) == 0 || !strings.Contains(provider.prompts[0], "database migration") {
 		t.Fatalf("summarizer prompt missing focus: %q", provider.prompts)
@@ -1094,10 +1143,12 @@ func TestLegacyCompact_Manual_AppliesFocus(t *testing.T) {
 
 func TestLegacyCompact_Manual_NothingToCompact(t *testing.T) {
 	al, agent, provider := newManualCompactLoop(t)
-	agent.Sessions.SetHistory("session-short", []providers.Message{
+	if err := agent.Sessions.SetHistory(context.Background(), "session-short", []providers.Message{
 		{Role: "user", Content: "q1"},
 		{Role: "assistant", Content: "a1"},
-	})
+	}); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
 
 	err := al.contextManager.Compact(context.Background(), &CompactRequest{
 		SessionKey: "session-short",
@@ -1109,8 +1160,12 @@ func TestLegacyCompact_Manual_NothingToCompact(t *testing.T) {
 	if len(provider.prompts) != 0 {
 		t.Fatalf("summarizer must not run for short history, got %d calls", len(provider.prompts))
 	}
-	if got := len(agent.Sessions.GetHistory("session-short")); got != 2 {
-		t.Fatalf("history len = %d, want 2 (untouched)", got)
+	shortHistory, err := agent.Sessions.GetHistory(context.Background(), "session-short")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if len(shortHistory) != 2 {
+		t.Fatalf("history len = %d, want 2 (untouched)", len(shortHistory))
 	}
 }
 
@@ -1141,7 +1196,10 @@ func TestProcessMessage_CompactCommand(t *testing.T) {
 	sessionKey := al.allocateRouteSession(route, msg).SessionKey
 
 	// Short history: nothing to compact, LLM untouched.
-	agent.Sessions.SetHistory(sessionKey, []providers.Message{{Role: "user", Content: "hi"}})
+	if err = agent.Sessions.SetHistory(context.Background(), sessionKey,
+		[]providers.Message{{Role: "user", Content: "hi"}}); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
 	resp, err := al.processMessage(context.Background(), msg)
 	if err != nil || resp != "Nothing to compact yet." {
 		t.Fatalf("short history: resp=%q err=%v", resp, err)
@@ -1159,7 +1217,9 @@ func TestProcessMessage_CompactCommand(t *testing.T) {
 		{Role: "user", Content: "q3"},
 		{Role: "assistant", Content: "a3"},
 	}
-	agent.Sessions.SetHistory(sessionKey, history)
+	if err = agent.Sessions.SetHistory(context.Background(), sessionKey, history); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
 	resp, err = al.processMessage(context.Background(), msg)
 	if err != nil || resp != "Context compacted." {
 		t.Fatalf("long history: resp=%q err=%v", resp, err)

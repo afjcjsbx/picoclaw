@@ -4,6 +4,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"strings"
 	"sync"
@@ -306,10 +307,21 @@ func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScop
 	// Bind session store and capture initial history length for rollback logic
 	if agent != nil && agent.Sessions != nil {
 		ts.session = agent.Sessions
-		history := agent.Sessions.GetHistory(opts.Dispatch.SessionKey)
+		// newTurnState has no context of its own; the snapshot it takes only
+		// touches the local session store, so a background context is used.
+		history, err := agent.Sessions.GetHistory(context.Background(), opts.Dispatch.SessionKey)
+		if err != nil {
+			warnSessionStoreError(opts.Dispatch.SessionKey, "get history", err)
+			history = []providers.Message{}
+		}
 		ts.initialHistoryLength = len(history)
 		ts.restorePointHistory = append([]providers.Message(nil), history...)
-		ts.restorePointSummary = agent.Sessions.GetSummary(opts.Dispatch.SessionKey)
+		summary, err := agent.Sessions.GetSummary(context.Background(), opts.Dispatch.SessionKey)
+		if err != nil {
+			warnSessionStoreError(opts.Dispatch.SessionKey, "get summary", err)
+			summary = ""
+		}
+		ts.restorePointSummary = summary
 	}
 
 	return ts
@@ -723,8 +735,18 @@ func (ts *turnState) persistedMessagesSnapshot() []providers.Message {
 }
 
 func (ts *turnState) refreshRestorePointFromSession(agent *AgentInstance) {
-	history := agent.Sessions.GetHistory(ts.sessionKey)
-	summary := agent.Sessions.GetSummary(ts.sessionKey)
+	// The helper has no context of its own; refreshing the restore point only
+	// touches the local session store, so a background context is used.
+	history, err := agent.Sessions.GetHistory(context.Background(), ts.sessionKey)
+	if err != nil {
+		warnSessionStoreError(ts.sessionKey, "get history", err)
+		history = []providers.Message{}
+	}
+	summary, err := agent.Sessions.GetSummary(context.Background(), ts.sessionKey)
+	if err != nil {
+		warnSessionStoreError(ts.sessionKey, "get summary", err)
+		summary = ""
+	}
 
 	persisted := ts.persistedMessagesSnapshot()
 
@@ -758,9 +780,16 @@ func (ts *turnState) restoreSession(agent *AgentInstance) error {
 	summary := ts.restorePointSummary
 	ts.mu.RUnlock()
 
-	agent.Sessions.SetHistory(ts.sessionKey, history)
-	agent.Sessions.SetSummary(ts.sessionKey, summary)
-	return agent.Sessions.Save(ts.sessionKey)
+	// restoreSession has no context of its own; restoring only touches the
+	// local session store, so a background context is used.
+	ctx := context.Background()
+	if err := agent.Sessions.SetHistory(ctx, ts.sessionKey, history); err != nil {
+		return fmt.Errorf("restore session history: %w", err)
+	}
+	if err := agent.Sessions.SetSummary(ctx, ts.sessionKey, summary); err != nil {
+		return fmt.Errorf("restore session summary: %w", err)
+	}
+	return agent.Sessions.Save(ctx, ts.sessionKey)
 }
 
 func matchingTurnMessageTail(history, persisted []providers.Message) int {

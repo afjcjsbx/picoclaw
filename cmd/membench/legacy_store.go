@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/session"
 )
@@ -23,12 +25,16 @@ func (ls *LegacyStore) IngestSample(sample *LocomoSample) {
 	turns := GetTurns(sample)
 	for _, turn := range turns {
 		content := turn.Speaker + ": " + turn.Text
-		ls.sm.AddMessage(sessionKey, "user", content)
+		_ = ls.sm.AddMessage(context.Background(), sessionKey, "user", content)
 	}
 }
 
 // GetHistory returns all messages for a sample's session.
 func (ls *LegacyStore) GetHistory(sampleID string) []providers.Message {
 	sessionKey := "locomo-" + sampleID
-	return ls.sm.GetHistory(sessionKey)
+	history, err := ls.sm.GetHistory(context.Background(), sessionKey)
+	if err != nil {
+		return nil
+	}
+	return history
 }
