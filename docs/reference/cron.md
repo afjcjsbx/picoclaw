@@ -19,8 +19,13 @@ servers, so `0 9 * * *` would fire at 09:00 UTC. Set `TZ` before starting the
 gateway; changing it requires a restart. There is no per-job time zone in the
 agent tool or the CLI.
 
-The agent can see the active zone in the `Current Time` line of its prompt, for
-example `2026-10-15 16:02 CEST (Thursday)`.
+The agent sees the current date and the active zone in the `Current Date` line
+of its prompt, for example `Thursday, October 15, 2026 (Europe/Rome, CEST,
+UTC+02:00)`. The zone name is taken from `TZ`; when `TZ` is unset the name is
+omitted and a warning is logged. The time of day is left out on purpose, so the
+system prompt stays identical all day and LLM prompt caches keep hitting; the
+agent has to look it up (for example with `date` through the exec tool) when it
+needs it.
 
 The CLI command `picoclaw cron add` currently supports recurring jobs only:
 

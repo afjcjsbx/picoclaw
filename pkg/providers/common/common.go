@@ -48,6 +48,7 @@ const SessionOptionKey = "session_key"
 type SessionHeader struct {
 	Name     string // header to set; empty disables
 	Fallback string // used when options carry no session key (summaries, subagents, ...)
+	MaxLen   int    // longest value the gateway accepts; longer ones are truncated, 0 = no limit
 }
 
 // Apply sets the header from options[SessionOptionKey], else Fallback. A value
@@ -68,6 +69,9 @@ func (s SessionHeader) Apply(h http.Header, options map[string]any) {
 		}
 		return r
 	}, strings.TrimSpace(key))
+	if s.MaxLen > 0 && len(key) > s.MaxLen {
+		key = key[:s.MaxLen] // ASCII only after the Map above, so a byte cut is safe
+	}
 	if key != "" {
 		h.Set(s.Name, key)
 	}
@@ -276,6 +280,29 @@ func ParseDataAudioURL(mediaURL string) (format, data string, ok bool) {
 
 // --- Response parsing ---
 
+// WireUsage is an OpenAI-compatible usage object, including the prompt-cache
+// breakdown that OpenAI and OpenRouter report under prompt_tokens_details.
+type WireUsage struct {
+	UsageInfo
+	PromptTokensDetails *struct {
+		CachedTokens     int `json:"cached_tokens"`
+		CacheWriteTokens int `json:"cache_write_tokens"`
+	} `json:"prompt_tokens_details"`
+}
+
+// Info converts u to a UsageInfo with the cache breakdown filled in. Nil-safe.
+func (u *WireUsage) Info() *UsageInfo {
+	if u == nil {
+		return nil
+	}
+	info := u.UsageInfo
+	if d := u.PromptTokensDetails; d != nil {
+		info.CacheReadTokens = d.CachedTokens
+		info.CacheCreationTokens = d.CacheWriteTokens
+	}
+	return &info
+}
+
 // ParseResponse parses a JSON chat completion response body into an LLMResponse.
 func ParseResponse(body io.Reader) (*LLMResponse, error) {
 	var apiResponse struct {
@@ -303,7 +330,7 @@ func ParseResponse(body io.Reader) (*LLMResponse, error) {
 			} `json:"message"`
 			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
-		Usage *UsageInfo `json:"usage"`
+		Usage *WireUsage `json:"usage"`
 	}
 
 	if err := json.NewDecoder(body).Decode(&apiResponse); err != nil {
@@ -370,7 +397,7 @@ func ParseResponse(body io.Reader) (*LLMResponse, error) {
 		ReasoningDetails: choice.Message.ReasoningDetails,
 		ToolCalls:        toolCalls,
 		FinishReason:     normalizeFinishReason(choice.FinishReason),
-		Usage:            apiResponse.Usage,
+		Usage:            apiResponse.Usage.Info(),
 	}, nil
 }
 
