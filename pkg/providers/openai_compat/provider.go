@@ -641,10 +641,8 @@ func (p *Provider) responsesStream(
 		var payload struct {
 			Type     string              `json:"type"`
 			Delta    string              `json:"delta"`
+			Message  string              `json:"message"` // "error" events carry it top-level
 			Response *responses.Response `json:"response"`
-			Error    struct {
-				Message string `json:"message"`
-			} `json:"error"`
 		}
 		if err := json.Unmarshal([]byte(data), &payload); err != nil {
 			return fmt.Errorf("failed to decode Responses stream event: %w", err)
@@ -664,15 +662,18 @@ func (p *Provider) responsesStream(
 			if onChunk != nil {
 				onChunk(StreamChunk{ReasoningContent: reasoning.String()})
 			}
-		case "response.completed", "response.incomplete", "response.failed":
+		case "response.completed", "response.incomplete":
 			if payload.Response != nil {
 				result = payload.Response
 			}
-			if typ == "response.failed" {
-				return fmt.Errorf("Responses API stream failed: %s", payload.Error.Message)
+		case "response.failed":
+			msg := ""
+			if payload.Response != nil {
+				msg = payload.Response.Error.Message
 			}
+			return fmt.Errorf("Responses API stream failed: %s", msg)
 		case "error":
-			return fmt.Errorf("Responses API stream error: %s", payload.Error.Message)
+			return fmt.Errorf("Responses API stream error: %s", payload.Message)
 		}
 		return nil
 	}

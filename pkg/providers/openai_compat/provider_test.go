@@ -81,6 +81,32 @@ func TestOpenAIProviderUsesResponsesAPI(t *testing.T) {
 	}
 }
 
+func TestResponsesStream_ErrorEventsKeepMessage(t *testing.T) {
+	for name, sse := range map[string]string{
+		"error": `data: {"type":"error","code":"server_error","message":"boom","param":null,"sequence_number":1}` +
+			"\n\n",
+		"response.failed": `data: {"type":"response.failed","response":{"id":"resp_1","object":"response",` +
+			`"status":"failed","error":{"code":"server_error","message":"boom"},"output":[]}}` + "\n\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = fmt.Fprint(w, sse)
+			}))
+			defer server.Close()
+
+			p := NewProvider("key", server.URL, "")
+			p.SetProviderName("openai")
+			_, err := p.responsesStream(
+				t.Context(), []Message{{Role: "user", Content: "hi"}}, nil, "gpt-test", nil, nil,
+			)
+			if err == nil || !strings.Contains(err.Error(), "boom") {
+				t.Fatalf("err = %v, want it to contain the API error message", err)
+			}
+		})
+	}
+}
+
 func TestResponsesRequestBody_ThinkingLevel(t *testing.T) {
 	p := NewProvider("key", "https://api.openai.com/v1", "")
 	p.SetProviderName("openai")
