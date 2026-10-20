@@ -81,6 +81,87 @@ func TestOpenAIProviderUsesResponsesAPI(t *testing.T) {
 	}
 }
 
+func TestResponsesToolCallRoundTrip(t *testing.T) {
+	const response = `{"id":"resp_1","object":"response","status":"completed","output":[` +
+		`{"type":"reasoning","id":"rs_1","encrypted_content":"enc","summary":[]},` +
+		`{"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{\"q\":\"x\"}"}]}`
+	var requestBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestBody = nil // decoding into a non-nil map would keep keys from the previous request
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if requestBody["stream"] == true {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = fmt.Fprintf(w, "data: {\"type\":\"response.completed\",\"response\":%s}\n\n", response)
+			return
+		}
+		_, _ = fmt.Fprint(w, response)
+	}))
+	defer server.Close()
+
+	p := NewProvider("key", server.URL, "")
+	p.SetProviderName("openai")
+	tools := []ToolDefinition{{Type: "function", Function: protocoltypes.ToolFunctionDefinition{Name: "lookup"}}}
+	user := Message{Role: "user", Content: "find x"}
+
+	chat, err := p.responsesChat(t.Context(), []Message{user}, tools, "gpt-test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream, err := p.responsesStream(t.Context(), []Message{user}, tools, "gpt-test", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, result := range map[string]*LLMResponse{"chat": chat, "stream": stream} {
+		if result.FinishReason != "tool_calls" || len(result.ToolCalls) != 1 ||
+			result.ToolCalls[0].ID != "call_1" || result.ToolCalls[0].Name != "lookup" ||
+			result.ToolCalls[0].Arguments["q"] != "x" {
+			t.Fatalf("%s result = %+v, want one lookup tool call", name, result)
+		}
+	}
+
+	// The follow-up request must replay the reasoning item ahead of the function call.
+	followUp := []Message{
+		user,
+		{Role: "assistant", ToolCalls: chat.ToolCalls},
+		{Role: "tool", Content: "found", ToolCallID: "call_1"},
+	}
+	if _, err := p.responsesChat(t.Context(), followUp, tools, "gpt-test", nil); err != nil {
+		t.Fatal(err)
+	}
+	items := requestBody["input"].([]any)
+	types := make([]string, 0, len(items))
+	for _, item := range items {
+		typ, _ := item.(map[string]any)["type"].(string)
+		if typ == "" {
+			typ = "message"
+		}
+		types = append(types, typ)
+	}
+	if got, want := strings.Join(types, ","), "message,reasoning,function_call,function_call_output"; got != want {
+		t.Errorf("input item types = %s, want %s", got, want)
+	}
+}
+
+func TestResponsesChat_HTTPErrorIsReturned(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, `{"error":{"message":"bad request"}}`, http.StatusBadRequest)
+	}))
+	defer server.Close()
+
+	p := NewProvider("key", server.URL, "")
+	p.SetProviderName("openai")
+	messages := []Message{{Role: "user", Content: "hi"}}
+	if _, err := p.responsesChat(t.Context(), messages, nil, "gpt-test", nil); err == nil {
+		t.Error("responsesChat: want an error for a 400 response")
+	}
+	if _, err := p.responsesStream(t.Context(), messages, nil, "gpt-test", nil, nil); err == nil {
+		t.Error("responsesStream: want an error for a 400 response")
+	}
+}
+
 func TestResponsesStream_ErrorEventsKeepMessage(t *testing.T) {
 	for name, sse := range map[string]string{
 		"error": `data: {"type":"error","code":"server_error","message":"boom","param":null,"sequence_number":1}` +
