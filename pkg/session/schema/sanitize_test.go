@@ -1,6 +1,9 @@
 package schema
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+)
 
 func TestSanitizeKey(t *testing.T) {
 	tests := []struct {
@@ -23,5 +26,16 @@ func TestSanitizeKey(t *testing.T) {
 				t.Errorf("SanitizeKey(%q) = %q, want %q", tt.input, got, tt.expected)
 			}
 		})
+	}
+}
+
+func TestPath(t *testing.T) {
+	got := Path("/sessions", "agent:main:telegram:1", ".jsonl")
+	want := filepath.Join("/sessions", "agent_main_telegram_1.jsonl")
+	if got != want {
+		t.Fatalf("Path() = %q, want %q", got, want)
+	}
+	if base := Path("/sessions", "../escape", ".json"); filepath.Dir(base) != "/sessions" {
+		t.Fatalf("Path() escaped the directory: %q", base)
 	}
 }

@@ -17,7 +17,6 @@ type Allocation struct {
 	SessionKey     string
 	SessionAliases []string
 	MainSessionKey string
-	MainAliases    []string
 }
 
 // AllocationInput contains the routing result and peer context needed to
@@ -33,13 +32,12 @@ type AllocationInput struct {
 func AllocateRouteSession(input AllocationInput) Allocation {
 	scope := buildSessionScope(input)
 	legacySessionAliases := buildLegacySessionAliases(input)
-	legacyMainSessionKey := strings.ToLower(BuildLegacyMainAlias(input.AgentID))
+	legacyMainSessionKey := strings.ToLower(buildLegacyMainAlias(input.AgentID))
 	return Allocation{
 		Scope:          scope,
-		SessionKey:     BuildSessionKey(scope),
+		SessionKey:     buildSessionKey(scope),
 		SessionAliases: legacySessionAliases,
 		MainSessionKey: BuildOpaqueSessionKey(legacyMainSessionKey),
-		MainAliases:    []string{legacyMainSessionKey},
 	}
 }
 
@@ -92,7 +90,7 @@ func buildSessionScope(input AllocationInput) SessionScope {
 				values["topic"] = "topic:" + strings.ToLower(topicID)
 			}
 		case "sender":
-			senderID := CanonicalSessionIdentityID(
+			senderID := canonicalSessionIdentityID(
 				inbound.Channel,
 				inbound.SenderID,
 				input.SessionPolicy.IdentityLinks,
@@ -114,7 +112,7 @@ func buildSessionScope(input AllocationInput) SessionScope {
 }
 
 func buildLegacySessionAliases(input AllocationInput) []string {
-	aliases := []string{strings.ToLower(BuildLegacyMainAlias(input.AgentID))}
+	aliases := []string{strings.ToLower(buildLegacyMainAlias(input.AgentID))}
 	inbound := input.Context
 
 	if strings.EqualFold(strings.TrimSpace(inbound.ChatType), "direct") {
@@ -125,7 +123,7 @@ func buildLegacySessionAliases(input AllocationInput) []string {
 		for _, peerID := range peerIDs {
 			aliases = append(
 				aliases,
-				BuildLegacyDirectAliases(input.AgentID, inbound.Channel, inbound.Account, peerID)...,
+				buildLegacyDirectAliases(input.AgentID, inbound.Channel, inbound.Account, peerID)...,
 			)
 		}
 		return uniqueAliases(aliases)
@@ -138,7 +136,7 @@ func buildLegacySessionAliases(input AllocationInput) []string {
 	if topicID := strings.TrimSpace(inbound.TopicID); topicID != "" {
 		peerID = peerID + "/" + topicID
 	}
-	aliases = append(aliases, BuildLegacyPeerAlias(
+	aliases = append(aliases, buildLegacyPeerAlias(
 		input.AgentID,
 		inbound.Channel,
 		strings.ToLower(strings.TrimSpace(inbound.ChatType)),
@@ -173,7 +171,7 @@ func buildLegacyDirectPeerIDs(input AllocationInput) []string {
 		peerIDs = append(peerIDs, strings.ToLower(rawSenderID))
 	}
 
-	canonicalSenderID := CanonicalSessionIdentityID(
+	canonicalSenderID := canonicalSessionIdentityID(
 		inbound.Channel,
 		inbound.SenderID,
 		input.SessionPolicy.IdentityLinks,

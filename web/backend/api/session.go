@@ -180,9 +180,8 @@ func (h *Handler) readSessionMessages(path string, skip int) ([]providers.Messag
 }
 
 func (h *Handler) readJSONLSession(dir, sessionKey string) (sessionFile, error) {
-	base := filepath.Join(dir, schema.SanitizeKey(sessionKey))
-	jsonlPath := base + ".jsonl"
-	metaPath := base + ".meta.json"
+	jsonlPath := schema.Path(dir, sessionKey, ".jsonl")
+	metaPath := schema.Path(dir, sessionKey, ".meta.json")
 
 	meta, err := h.readSessionMeta(metaPath, sessionKey)
 	if err != nil {
@@ -190,7 +189,7 @@ func (h *Handler) readJSONLSession(dir, sessionKey string) (sessionFile, error) 
 	}
 	if meta.ForkedFrom == "" {
 		for _, alias := range meta.Aliases {
-			aliasPath := filepath.Join(dir, schema.SanitizeKey(alias)+".meta.json")
+			aliasPath := schema.Path(dir, alias, ".meta.json")
 			aliasMeta, aliasErr := h.readSessionMeta(aliasPath, alias)
 			if aliasErr == nil && aliasMeta.ForkedFrom != "" {
 				meta.ForkedFrom = aliasMeta.ForkedFrom
@@ -1136,11 +1135,12 @@ func (h *Handler) handleForkSession(w http.ResponseWriter, r *http.Request) {
 	id := hex.EncodeToString(idBytes[:])
 	id = id[:8] + "-" + id[8:12] + "-" + id[12:16] + "-" + id[16:20] + "-" + id[20:]
 	key := legacyPicoSessionPrefix + id
-	base := filepath.Join(dir, schema.SanitizeKey(key))
+	jsonlPath := schema.Path(dir, key, ".jsonl")
+	metaPath := schema.Path(dir, key, ".meta.json")
 	created := time.Now().UTC()
 	messages := parent.Messages[:cut+1]
 
-	file, err := os.OpenFile(base+".jsonl", os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	file, err := os.OpenFile(jsonlPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		http.Error(w, "failed to create fork", http.StatusInternalServerError)
 		return
@@ -1163,13 +1163,13 @@ func (h *Handler) handleForkSession(w http.ResponseWriter, r *http.Request) {
 	}
 	metaData, metaErr := json.Marshal(meta)
 	if err == nil && metaErr == nil {
-		err = os.WriteFile(base+".meta.json", metaData, 0o600)
+		err = os.WriteFile(metaPath, metaData, 0o600)
 	} else if err == nil {
 		err = metaErr
 	}
 	if err != nil {
-		_ = os.Remove(base + ".jsonl")
-		_ = os.Remove(base + ".meta.json")
+		_ = os.Remove(jsonlPath)
+		_ = os.Remove(metaPath)
 		http.Error(w, "failed to save fork", http.StatusInternalServerError)
 		return
 	}
@@ -1195,8 +1195,10 @@ func (h *Handler) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 
 	removed := false
 	if ref, err := h.findPicoJSONLSession(dir, sessionID); err == nil {
-		base := filepath.Join(dir, schema.SanitizeKey(ref.Key))
-		for _, path := range []string{base + ".jsonl", base + ".meta.json"} {
+		for _, path := range []string{
+			schema.Path(dir, ref.Key, ".jsonl"),
+			schema.Path(dir, ref.Key, ".meta.json"),
+		} {
 			if err := os.Remove(path); err != nil {
 				if os.IsNotExist(err) {
 					continue
