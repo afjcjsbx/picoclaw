@@ -14,6 +14,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/sipeed/picoclaw/pkg/providers/messageutil"
 	"github.com/sipeed/picoclaw/pkg/session"
 	"github.com/sipeed/picoclaw/pkg/tools"
 )
@@ -255,6 +256,13 @@ type turnState struct {
 	tokenBudget      *atomic.Int64        // Shared token budget counter
 	lastFinishReason string               // Last LLM finish_reason
 	lastUsage        *providers.UsageInfo // Last LLM usage info
+
+	// History token cache. It is primed from the assembled history at setup,
+	// extended for each persisted turn message, and treated as invalid when the
+	// summary changes because compaction can rewrite the session.
+	historyTokens        int
+	historyTokensValid   bool
+	historyTokensSummary string
 
 	// Back-reference to the owning AgentLoop (set on every turn, used for hard abort cascade)
 	al *AgentLoop
@@ -714,6 +722,29 @@ func (ts *turnState) recordPersistedMessage(msg providers.Message) {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	ts.persistedMessages = append(ts.persistedMessages, msg)
+	if ts.historyTokensValid && !messageutil.IsTransientAssistantThoughtMessage(msg) {
+		ts.historyTokens += EstimateMessageTokens(msg)
+	}
+}
+
+// setHistoryTokens primes the cached history token count from a fully
+// assembled history snapshot.
+func (ts *turnState) setHistoryTokens(history []providers.Message, summary string) {
+	tokens := estimateHistoryTokens(history)
+	ts.mu.Lock()
+	ts.historyTokens = tokens
+	ts.historyTokensValid = true
+	ts.historyTokensSummary = summary
+	ts.mu.Unlock()
+}
+
+// historyTokensSnapshot returns the cached count when it is still valid. The
+// summary is part of the key because compaction can rewrite history while
+// keeping the cached value in place.
+func (ts *turnState) historyTokensSnapshot(summary string) (int, bool) {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return ts.historyTokens, ts.historyTokensValid && ts.historyTokensSummary == summary
 }
 
 func (ts *turnState) persistedMessagesSnapshot() []providers.Message {

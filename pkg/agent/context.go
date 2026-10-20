@@ -824,7 +824,7 @@ func (cb *ContextBuilder) BuildMessages(
 }
 
 func (cb *ContextBuilder) BuildMessagesFromPrompt(req PromptBuildRequest) []providers.Message {
-	messages := []providers.Message{}
+	messages := make([]providers.Message, 0, len(req.History)+2)
 
 	// The default static part (identity, bootstrap, skills, memory) is cached
 	// locally to avoid repeated file I/O and string building on every call
@@ -1008,6 +1008,9 @@ func sanitizeHistoryForProvider(history []providers.Message) []providers.Message
 	if len(history) == 0 {
 		return history
 	}
+	if historyIsProviderSafe(history) {
+		return history
+	}
 
 	sanitized := make([]providers.Message, 0, len(history))
 	for _, msg := range history {
@@ -1182,6 +1185,66 @@ func sanitizeHistoryForProvider(history []providers.Message) []providers.Message
 	}
 
 	return final
+}
+
+// historyIsProviderSafe reports whether sanitizeHistoryForProvider would keep
+// every message unchanged. Session history written by the agent is normally
+// already valid, so this avoids allocating two full message slices on the hot
+// prompt-building path. The checks mirror the two passes in
+// sanitizeHistoryForProvider.
+func historyIsProviderSafe(history []providers.Message) bool {
+	for i := 0; i < len(history); {
+		msg := history[i]
+		switch msg.Role {
+		case "system":
+			return false
+		case "tool":
+			// A tool result is only valid inside the block immediately after
+			// an assistant tool-call message.
+			return false
+		case "assistant":
+			if len(msg.ToolCalls) == 0 {
+				i++
+				continue
+			}
+			if i == 0 {
+				return false
+			}
+			prevRole := history[i-1].Role
+			if prevRole != "user" && prevRole != "tool" {
+				return false
+			}
+
+			expected := make(map[string]bool, len(msg.ToolCalls))
+			for _, tc := range msg.ToolCalls {
+				if tc.ID == "" {
+					return false
+				}
+				expected[tc.ID] = false
+			}
+
+			j := i + 1
+			for ; j < len(history) && history[j].Role == "tool"; j++ {
+				id := history[j].ToolCallID
+				if id == "" {
+					return false
+				}
+				if _, ok := expected[id]; !ok || expected[id] {
+					return false
+				}
+				expected[id] = true
+			}
+			for _, found := range expected {
+				if !found {
+					return false
+				}
+			}
+			i = j
+		default:
+			i++
+		}
+	}
+	return true
 }
 
 func (cb *ContextBuilder) AddToolResult(

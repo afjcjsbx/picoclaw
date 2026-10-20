@@ -347,3 +347,107 @@ func TestSanitizeHistoryForProvider_PartialToolResultsInMiddle(t *testing.T) {
 	}
 	assertRoles(t, result, "user", "assistant", "tool", "assistant", "user", "user", "assistant", "tool", "assistant")
 }
+
+func TestSanitizeHistoryForProvider_ValidHistoryReturnsSameBackingArray(t *testing.T) {
+	history := []providers.Message{
+		msg("user", "hello"),
+		assistantWithTools("A", "B"),
+		toolResult("A"),
+		toolResult("B"),
+		msg("assistant", "done"),
+	}
+
+	result := sanitizeHistoryForProvider(history)
+	if len(result) != len(history) {
+		t.Fatalf("expected %d messages, got %d", len(history), len(result))
+	}
+	if &result[0] != &history[0] {
+		t.Fatal("expected valid history to be returned without copying")
+	}
+}
+
+func TestHistoryIsProviderSafe(t *testing.T) {
+	tests := []struct {
+		name    string
+		history []providers.Message
+		want    bool
+	}{
+		{
+			name:    "empty",
+			history: nil,
+			want:    true,
+		},
+		{
+			name: "plain conversation",
+			history: []providers.Message{
+				msg("user", "hello"),
+				msg("assistant", "hi"),
+			},
+			want: true,
+		},
+		{
+			name: "complete tool round",
+			history: []providers.Message{
+				msg("user", "hello"),
+				assistantWithTools("A"),
+				toolResult("A"),
+				msg("assistant", "done"),
+			},
+			want: true,
+		},
+		{
+			name: "consecutive tool rounds",
+			history: []providers.Message{
+				msg("user", "hello"),
+				assistantWithTools("A"),
+				toolResult("A"),
+				assistantWithTools("B"),
+				toolResult("B"),
+			},
+			want: true,
+		},
+		{
+			name: "system message",
+			history: []providers.Message{
+				msg("system", "prompt"),
+				msg("user", "hello"),
+			},
+			want: false,
+		},
+		{
+			name: "orphan tool",
+			history: []providers.Message{
+				msg("user", "hello"),
+				toolResult("A"),
+			},
+			want: false,
+		},
+		{
+			name: "incomplete tool round",
+			history: []providers.Message{
+				msg("user", "hello"),
+				assistantWithTools("A", "B"),
+				toolResult("A"),
+			},
+			want: false,
+		},
+		{
+			name: "duplicate tool result",
+			history: []providers.Message{
+				msg("user", "hello"),
+				assistantWithTools("A"),
+				toolResult("A"),
+				toolResult("A"),
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := historyIsProviderSafe(tt.history); got != tt.want {
+				t.Fatalf("historyIsProviderSafe() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

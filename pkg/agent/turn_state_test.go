@@ -110,3 +110,30 @@ func TestTrimHistoryToFitContextWindow_WithProtectedTurnTailKeepsActiveTurn(t *t
 		t.Fatalf("messages[0].Content = %q, want protected current turn", messages[0].Content)
 	}
 }
+
+func TestTurnState_HistoryTokenCache(t *testing.T) {
+	ts := &turnState{}
+	history := []providers.Message{
+		msg("user", "hello"),
+		msg("assistant", "world"),
+	}
+	ts.setHistoryTokens(history, "summary")
+
+	want := estimateHistoryTokens(history)
+	got, ok := ts.historyTokensSnapshot("summary")
+	if !ok || got != want {
+		t.Fatalf("historyTokensSnapshot() = (%d, %v), want (%d, true)", got, ok, want)
+	}
+
+	persisted := msg("user", "another message")
+	ts.recordPersistedMessage(persisted)
+	want += EstimateMessageTokens(persisted)
+	got, ok = ts.historyTokensSnapshot("summary")
+	if !ok || got != want {
+		t.Fatalf("after recordPersistedMessage = (%d, %v), want (%d, true)", got, ok, want)
+	}
+
+	if got, ok := ts.historyTokensSnapshot("changed summary"); ok {
+		t.Fatalf("historyTokensSnapshot(changed summary) = (%d, true), want invalid", got)
+	}
+}
