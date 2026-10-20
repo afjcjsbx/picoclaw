@@ -15,7 +15,7 @@ import (
 )
 
 // TranslateMessages converts internal Message entries to the OpenAI Responses API
-// input format. System messages are extracted as instructions (returned separately),
+// input format. System messages are joined into instructions (returned separately),
 // user/assistant/tool messages become ResponseInputItemUnionParam entries.
 // Supports multipart media (images, audio).
 func TranslateMessages(messages []protocoltypes.Message) (input responses.ResponseInputParam, instructions string) {
@@ -24,7 +24,13 @@ func TranslateMessages(messages []protocoltypes.Message) (input responses.Respon
 	for _, msg := range messages {
 		switch msg.Role {
 		case "system":
-			instructions = msg.Content
+			if msg.Content == "" {
+				continue
+			}
+			if instructions != "" {
+				instructions += "\n\n"
+			}
+			instructions += msg.Content
 		case "user":
 			if msg.ToolCallID != "" {
 				input = append(input, responses.ResponseInputItemUnionParam{

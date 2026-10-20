@@ -30,6 +30,22 @@ func TestTranslateMessages_SystemExtractedAsInstructions(t *testing.T) {
 	}
 }
 
+func TestTranslateMessages_MultipleSystemMessagesAreJoined(t *testing.T) {
+	msgs := []protocoltypes.Message{
+		{Role: "system", Content: "first"},
+		{Role: "system", Content: ""},
+		{Role: "user", Content: "Hi"},
+		{Role: "system", Content: "second"},
+	}
+	input, instructions := TranslateMessages(msgs)
+	if instructions != "first\n\nsecond" {
+		t.Errorf("instructions = %q, want %q", instructions, "first\n\nsecond")
+	}
+	if len(input) != 1 {
+		t.Errorf("len(input) = %d, want 1", len(input))
+	}
+}
+
 func TestTranslateMessages_UserTextMessage(t *testing.T) {
 	msgs := []protocoltypes.Message{
 		{Role: "user", Content: "Hello"},
