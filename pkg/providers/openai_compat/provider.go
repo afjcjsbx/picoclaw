@@ -146,18 +146,10 @@ func NewProviderWithMaxTokensFieldAndTimeout(
 	)
 }
 
-// buildRequestBody constructs the common request body for Chat and ChatStream.
-func (p *Provider) buildRequestBody(
-	messages []Message, tools []ToolDefinition, model string, options map[string]any,
-) map[string]any {
-	model = normalizeModel(model, p.apiBase)
-
-	requestBody := map[string]any{
-		"model":    model,
-		"messages": common.SerializeMessages(p.prepareMessagesForRequest(messages)),
-	}
-
-	// When fallback uses a different provider (e.g. DeepSeek), that provider must not inject web_search_preview.
+// nativeSearchEnabled reports whether the native web search tool should be injected.
+// When fallback uses a different provider (e.g. DeepSeek), that provider must not
+// inject web_search_preview.
+func (p *Provider) nativeSearchEnabled(options map[string]any) bool {
 	nativeSearch, ok := options["native_search"].(bool)
 	if !ok {
 		// If the option is present but not a bool, log a warning and
@@ -173,7 +165,21 @@ func (p *Provider) buildRequestBody(
 			)
 		}
 	}
-	nativeSearch = nativeSearch && isNativeSearchHost(p.apiBase)
+	return nativeSearch && isNativeSearchHost(p.apiBase)
+}
+
+// buildRequestBody constructs the common request body for Chat and ChatStream.
+func (p *Provider) buildRequestBody(
+	messages []Message, tools []ToolDefinition, model string, options map[string]any,
+) map[string]any {
+	model = normalizeModel(model, p.apiBase)
+
+	requestBody := map[string]any{
+		"model":    model,
+		"messages": common.SerializeMessages(p.prepareMessagesForRequest(messages)),
+	}
+
+	nativeSearch := p.nativeSearchEnabled(options)
 	if len(tools) > 0 || nativeSearch {
 		requestBody["tools"] = buildToolsList(tools, nativeSearch)
 		requestBody["tool_choice"] = "auto"
@@ -553,8 +559,8 @@ func (p *Provider) responsesRequestBody(
 	if instructions != "" {
 		body["instructions"] = instructions
 	}
-	if len(tools) > 0 || options["native_search"] == true && isNativeSearchHost(p.apiBase) {
-		body["tools"] = orc.TranslateTools(tools, options["native_search"] == true && isNativeSearchHost(p.apiBase))
+	if nativeSearch := p.nativeSearchEnabled(options); len(tools) > 0 || nativeSearch {
+		body["tools"] = orc.TranslateTools(tools, nativeSearch)
 		body["tool_choice"] = "auto"
 	}
 	if maxTokens, ok := common.AsInt(options["max_tokens"]); ok {
@@ -569,14 +575,10 @@ func (p *Provider) responsesRequestBody(
 	if cacheKey, ok := options["prompt_cache_key"].(string); ok && cacheKey != "" && supportsPromptCacheKey(p.apiBase) {
 		body["prompt_cache_key"] = cacheKey
 	}
-	if level, ok := normalizedThinkingLevel(options); ok {
-		effort := level
-		if level == "off" {
-			effort = "none"
-		}
-		if level != "adaptive" {
-			body["reasoning"] = map[string]string{"effort": effort}
-		}
+	// "off" and "adaptive" send nothing, as on Chat Completions: effort "none" is
+	// rejected by some reasoning models and `reasoning` by non-reasoning ones.
+	if level, ok := normalizedThinkingLevel(options); ok && level != "off" && level != "adaptive" {
+		body["reasoning"] = map[string]string{"effort": level}
 	}
 	maps.Copy(body, p.extraBody)
 	return body
@@ -645,10 +647,8 @@ func (p *Provider) responsesStream(
 		var payload struct {
 			Type     string              `json:"type"`
 			Delta    string              `json:"delta"`
+			Message  string              `json:"message"` // "error" events carry it top-level
 			Response *responses.Response `json:"response"`
-			Error    struct {
-				Message string `json:"message"`
-			} `json:"error"`
 		}
 		if err := json.Unmarshal([]byte(data), &payload); err != nil {
 			return fmt.Errorf("failed to decode Responses stream event: %w", err)
@@ -668,15 +668,18 @@ func (p *Provider) responsesStream(
 			if onChunk != nil {
 				onChunk(StreamChunk{ReasoningContent: reasoning.String()})
 			}
-		case "response.completed", "response.incomplete", "response.failed":
+		case "response.completed", "response.incomplete":
 			if payload.Response != nil {
 				result = payload.Response
 			}
-			if typ == "response.failed" {
-				return fmt.Errorf("Responses API stream failed: %s", payload.Error.Message)
+		case "response.failed":
+			msg := ""
+			if payload.Response != nil {
+				msg = payload.Response.Error.Message
 			}
+			return fmt.Errorf("Responses API stream failed: %s", msg)
 		case "error":
-			return fmt.Errorf("Responses API stream error: %s", payload.Error.Message)
+			return fmt.Errorf("Responses API stream error: %s", payload.Message)
 		}
 		return nil
 	}
