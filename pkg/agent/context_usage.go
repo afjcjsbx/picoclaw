@@ -2,6 +2,7 @@ package agent
 
 import (
 	"github.com/sipeed/picoclaw/pkg/bus"
+	"github.com/sipeed/picoclaw/pkg/providers"
 )
 
 // computeContextUsage estimates current context window consumption for the
@@ -18,16 +19,44 @@ func computeContextUsage(agent *AgentInstance, sessionKey string) *bus.ContextUs
 	if agent == nil || agent.Sessions == nil {
 		return nil
 	}
+	return contextUsageFromTokens(
+		agent,
+		agent.Sessions.GetSummary(sessionKey),
+		estimateHistoryTokens(agent.Sessions.GetHistory(sessionKey)),
+	)
+}
+
+// computeContextUsageWithHistoryTokens is the cached variant used at turn
+// finalization, where the history was already assembled and tokenized. The
+// caller passes the current summary so a concurrent compaction invalidates the
+// cache instead of reporting stale history.
+func computeContextUsageWithHistoryTokens(
+	agent *AgentInstance,
+	summary string,
+	historyTokens int,
+) *bus.ContextUsage {
+	if agent == nil || agent.Sessions == nil {
+		return nil
+	}
+	return contextUsageFromTokens(agent, summary, historyTokens)
+}
+
+func estimateHistoryTokens(history []providers.Message) int {
+	tokens := 0
+	for _, m := range history {
+		tokens += EstimateMessageTokens(m)
+	}
+	return tokens
+}
+
+func contextUsageFromTokens(
+	agent *AgentInstance,
+	summary string,
+	historyTokens int,
+) *bus.ContextUsage {
 	contextWindow := agent.ContextWindow
 	if contextWindow <= 0 {
 		return nil
-	}
-
-	// History tokens
-	history := agent.Sessions.GetHistory(sessionKey)
-	historyTokens := 0
-	for _, m := range history {
-		historyTokens += EstimateMessageTokens(m)
 	}
 
 	// System message tokens: uses EstimateSystemTokens which mirrors
@@ -35,7 +64,6 @@ func computeContextUsage(agent *AgentInstance, sessionKey string) *bus.ContextUs
 	// dynamic context, active skills, summary with wrapping prefix).
 	systemTokens := 0
 	if agent.ContextBuilder != nil {
-		summary := agent.Sessions.GetSummary(sessionKey)
 		// Pass nil for active skills: skills are only injected when the user
 		// explicitly activates them via /use, which is rare. Using nil matches
 		// the common case and avoids over-counting all installed skills.

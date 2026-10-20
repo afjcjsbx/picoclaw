@@ -438,6 +438,7 @@ func (p *Pipeline) CallLLM(
 			}); asmErr == nil && asmResp != nil {
 				exec.history = asmResp.History
 				exec.summary = asmResp.Summary
+				ts.setHistoryTokens(asmResp.History, asmResp.Summary)
 			}
 			contextualSkills := ts.activeSkills
 			if ts.agent.ContextBuilder != nil {

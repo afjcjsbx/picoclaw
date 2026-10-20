@@ -76,7 +76,13 @@ func (p *Pipeline) Finalize(
 		)
 	}
 
-	contextUsage := computeContextUsage(ts.agent, ts.sessionKey)
+	var contextUsage *bus.ContextUsage
+	summary := ts.agent.Sessions.GetSummary(ts.sessionKey)
+	if historyTokens, ok := ts.historyTokensSnapshot(summary); ok {
+		contextUsage = computeContextUsageWithHistoryTokens(ts.agent, summary, historyTokens)
+	} else {
+		contextUsage = computeContextUsage(ts.agent, ts.sessionKey)
+	}
 	streamErr := finalizeConfiguredStreamingLLM(turnCtx, ts, exec, finalContent, contextUsage)
 	// If streaming never became visible, keep the legacy Pico interim publish path
 	// so the final answer is still delivered outside normal SendResponse.

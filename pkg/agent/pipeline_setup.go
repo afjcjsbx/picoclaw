@@ -116,6 +116,10 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 		}
 	}
 
+	// Prime the token cache from the history that will actually be used by
+	// this turn. Messages persisted below extend the cache incrementally.
+	ts.setHistoryTokens(history, summary)
+
 	if !ts.opts.NoHistory && (strings.TrimSpace(ts.userMessage) != "" || len(ts.media) > 0) {
 		rootMsg := userPromptMessage(ts.userMessage, ts.media)
 		if len(rootMsg.Media) > 0 {
