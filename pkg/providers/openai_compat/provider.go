@@ -146,18 +146,10 @@ func NewProviderWithMaxTokensFieldAndTimeout(
 	)
 }
 
-// buildRequestBody constructs the common request body for Chat and ChatStream.
-func (p *Provider) buildRequestBody(
-	messages []Message, tools []ToolDefinition, model string, options map[string]any,
-) map[string]any {
-	model = normalizeModel(model, p.apiBase)
-
-	requestBody := map[string]any{
-		"model":    model,
-		"messages": common.SerializeMessages(p.prepareMessagesForRequest(messages)),
-	}
-
-	// When fallback uses a different provider (e.g. DeepSeek), that provider must not inject web_search_preview.
+// nativeSearchEnabled reports whether the native web search tool should be injected.
+// When fallback uses a different provider (e.g. DeepSeek), that provider must not
+// inject web_search_preview.
+func (p *Provider) nativeSearchEnabled(options map[string]any) bool {
 	nativeSearch, ok := options["native_search"].(bool)
 	if !ok {
 		// If the option is present but not a bool, log a warning and
@@ -173,7 +165,21 @@ func (p *Provider) buildRequestBody(
 			)
 		}
 	}
-	nativeSearch = nativeSearch && isNativeSearchHost(p.apiBase)
+	return nativeSearch && isNativeSearchHost(p.apiBase)
+}
+
+// buildRequestBody constructs the common request body for Chat and ChatStream.
+func (p *Provider) buildRequestBody(
+	messages []Message, tools []ToolDefinition, model string, options map[string]any,
+) map[string]any {
+	model = normalizeModel(model, p.apiBase)
+
+	requestBody := map[string]any{
+		"model":    model,
+		"messages": common.SerializeMessages(p.prepareMessagesForRequest(messages)),
+	}
+
+	nativeSearch := p.nativeSearchEnabled(options)
 	if len(tools) > 0 || nativeSearch {
 		requestBody["tools"] = buildToolsList(tools, nativeSearch)
 		requestBody["tool_choice"] = "auto"
@@ -553,8 +559,8 @@ func (p *Provider) responsesRequestBody(
 	if instructions != "" {
 		body["instructions"] = instructions
 	}
-	if len(tools) > 0 || options["native_search"] == true && isNativeSearchHost(p.apiBase) {
-		body["tools"] = orc.TranslateTools(tools, options["native_search"] == true && isNativeSearchHost(p.apiBase))
+	if nativeSearch := p.nativeSearchEnabled(options); len(tools) > 0 || nativeSearch {
+		body["tools"] = orc.TranslateTools(tools, nativeSearch)
 		body["tool_choice"] = "auto"
 	}
 	if maxTokens, ok := common.AsInt(options["max_tokens"]); ok {

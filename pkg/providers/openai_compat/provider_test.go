@@ -107,6 +107,26 @@ func TestResponsesStream_ErrorEventsKeepMessage(t *testing.T) {
 	}
 }
 
+func TestResponsesRequestBody_NativeSearch(t *testing.T) {
+	p := NewProvider("key", "https://api.openai.com/v1", "")
+	p.SetProviderName("openai")
+	messages := []Message{{Role: "user", Content: "hello"}}
+
+	for name, tc := range map[string]struct {
+		value     any
+		wantTools bool
+	}{
+		"true":       {true, true},
+		"false":      {false, false},
+		"wrong type": {"true", false},
+	} {
+		body := p.responsesRequestBody(messages, nil, "gpt-4o", map[string]any{"native_search": tc.value})
+		if _, got := body["tools"]; got != tc.wantTools {
+			t.Errorf("native_search %s: tools present = %v, want %v", name, got, tc.wantTools)
+		}
+	}
+}
+
 func TestResponsesRequestBody_ThinkingLevel(t *testing.T) {
 	p := NewProvider("key", "https://api.openai.com/v1", "")
 	p.SetProviderName("openai")
