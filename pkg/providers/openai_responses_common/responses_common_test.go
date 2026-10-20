@@ -128,6 +128,18 @@ func TestTranslateMessages_AssistantWithoutToolCalls(t *testing.T) {
 	}
 }
 
+func TestTranslateMessages_SkipsEmptyAssistantMessage(t *testing.T) {
+	msgs := []protocoltypes.Message{
+		{Role: "user", Content: "Hi"},
+		{Role: "assistant", Content: "", ReasoningContent: "thinking only"},
+		{Role: "user", Content: "Again"},
+	}
+	input, _ := TranslateMessages(msgs)
+	if len(input) != 2 {
+		t.Fatalf("len(input) = %d, want 2 (empty assistant message dropped)", len(input))
+	}
+}
+
 func TestTranslateMessages_ToolMessage(t *testing.T) {
 	msgs := []protocoltypes.Message{
 		{Role: "tool", Content: "result data", ToolCallID: "call_99"},

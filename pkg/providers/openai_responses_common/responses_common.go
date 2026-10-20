@@ -74,7 +74,7 @@ func TranslateMessages(messages []protocoltypes.Message) (input responses.Respon
 						},
 					})
 				}
-			} else {
+			} else if msg.Content != "" { // an assistant turn with no text and no tool calls carries nothing
 				input = append(input, responses.ResponseInputItemUnionParam{
 					OfMessage: &responses.EasyInputMessageParam{
 						Role:    responses.EasyInputMessageRoleAssistant,
