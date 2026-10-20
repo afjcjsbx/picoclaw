@@ -47,19 +47,19 @@ type Store interface {
 	DeleteSession(key string) error
 }
 
-// ActivityStore is optionally implemented by stores that know when a session
+// activityStore is optionally implemented by stores that know when a session
 // was last written. The JSONL store is the canonical history, whereas the
 // seahorse database is only an index that can lag behind it (crash, session
 // not bootstrapped yet), so the store timestamp keeps recently active sessions
 // from looking stale or undated.
-type ActivityStore interface {
+type activityStore interface {
 	// LastActivity returns the last time the session was written, or the zero
 	// time when unknown.
 	LastActivity(key string) time.Time
 }
 
-// Info describes a single session for pruning decisions.
-type Info struct {
+// sessionInfo describes a single session for pruning decisions.
+type sessionInfo struct {
 	Key      string
 	NewestAt time.Time // newest message in the seahorse database
 	OldestAt time.Time // oldest message in the seahorse database
@@ -73,7 +73,7 @@ type Info struct {
 // time, falling back to the oldest seahorse message. Implausible timestamps (see
 // minPlausibleTime) are ignored. A zero value means the session is undated;
 // undated sessions are never selected for deletion.
-func (i Info) lastActivity() time.Time {
+func (i sessionInfo) lastActivity() time.Time {
 	var last time.Time
 	for _, at := range []time.Time{i.NewestAt, i.StoreAt} {
 		if plausibleTime(at) && at.After(last) {
@@ -133,7 +133,7 @@ const (
 	minVacuumReclaimRatio = 10      // ...or for less than 1/10th of the file
 )
 
-// Select returns the session keys that should be deleted for the age and
+// selectSessions returns the session keys that should be deleted for the age and
 // session-count thresholds, ordered oldest-first. The database-size guard is
 // handled separately by Run because it depends on the file size on disk.
 //
@@ -147,7 +147,7 @@ const (
 // activity is unknown (undated) are never selected: they still count toward MaxSessions, but
 // the sessions dropped to honor the cap are always the oldest dated ones, so a
 // session is never deleted on the basis of a timestamp we do not have.
-func Select(infos []Info, cfg config.SessionPruneConfig, now time.Time) []string {
+func selectSessions(infos []sessionInfo, cfg config.SessionPruneConfig, now time.Time) []string {
 	if len(infos) == 0 {
 		return nil
 	}
@@ -191,7 +191,7 @@ func Select(infos []Info, cfg config.SessionPruneConfig, now time.Time) []string
 
 // newestKeys returns the keys of the n most recently active sessions of an
 // oldest-first slice.
-func newestKeys(oldestFirst []Info, n int) map[string]struct{} {
+func newestKeys(oldestFirst []sessionInfo, n int) map[string]struct{} {
 	keys := make(map[string]struct{}, n)
 	for i := len(oldestFirst) - 1; i >= 0 && len(keys) < n; i-- {
 		keys[oldestFirst[i].Key] = struct{}{}
@@ -201,8 +201,8 @@ func newestKeys(oldestFirst []Info, n int) map[string]struct{} {
 
 // datedOldestFirst returns the sessions with a known activity time, ordered
 // oldest-first (ties broken by key for determinism).
-func datedOldestFirst(infos []Info) []Info {
-	dated := make([]Info, 0, len(infos))
+func datedOldestFirst(infos []sessionInfo) []sessionInfo {
+	dated := make([]sessionInfo, 0, len(infos))
 	for _, info := range infos {
 		if !info.lastActivity().IsZero() {
 			dated = append(dated, info)
@@ -266,7 +266,7 @@ func Run(ctx context.Context, eng Engine, stores []Store, cfg config.SessionPrun
 
 	idx := indexOwners(stores)
 	infos := collectInfos(ctx, eng, idx)
-	toDelete := Select(infos, cfg, time.Now())
+	toDelete := selectSessions(infos, cfg, time.Now())
 
 	removals := 0
 	for _, key := range toDelete {
@@ -311,7 +311,7 @@ func Run(ctx context.Context, eng Engine, stores []Store, cfg config.SessionPrun
 }
 
 // enforceDBSize deletes the oldest remaining sessions until the database is
-// under MaxDBSizeMB. Sessions are ranked exactly like Select ranks them (newest
+// under MaxDBSizeMB. Sessions are ranked exactly like selectSessions ranks them (newest
 // activity wins, undated sessions are never touched). It estimates how many
 // sessions to remove from the average session size, deletes them in a batch,
 // then reclaims and re-measures. The loop stops as soon as a pass makes no
@@ -325,7 +325,7 @@ func enforceDBSize(
 	ctx context.Context,
 	eng Engine,
 	idx owners,
-	infos []Info,
+	infos []sessionInfo,
 	cfg config.SessionPruneConfig,
 	result *Result,
 ) int {
@@ -335,7 +335,7 @@ func enforceDBSize(
 	for _, key := range result.Deleted {
 		gone[key] = struct{}{}
 	}
-	inDB := make([]Info, 0, len(infos))
+	inDB := make([]sessionInfo, 0, len(infos))
 	for _, info := range infos {
 		if _, deleted := gone[info.Key]; info.InDB && !deleted {
 			inDB = append(inDB, info)
@@ -344,7 +344,7 @@ func enforceDBSize(
 	// The kept sessions are chosen among all sessions, not only those in the
 	// database, so a JSONL-only session that is newer still counts.
 	protected := newestKeys(datedOldestFirst(infos), minKeptSessions)
-	var candidates []Info
+	var candidates []sessionInfo
 	for _, info := range datedOldestFirst(inDB) {
 		if _, keep := protected[info.Key]; !keep {
 			candidates = append(candidates, info)
@@ -435,16 +435,16 @@ func worthVacuum(ctx context.Context, eng Engine) bool {
 	return reclaimable >= minVacuumReclaimBytes && reclaimable*minVacuumReclaimRatio >= size
 }
 
-func collectInfos(ctx context.Context, eng Engine, idx owners) []Info {
+func collectInfos(ctx context.Context, eng Engine, idx owners) []sessionInfo {
 	statuses, err := eng.SessionStatuses(ctx)
 	if err != nil {
 		logger.WarnCF("session-prune", "Failed to list seahorse sessions", map[string]any{"error": err.Error()})
 	}
 
-	infos := make([]Info, 0, len(statuses))
+	infos := make([]sessionInfo, 0, len(statuses))
 	known := make(map[string]struct{}, len(statuses))
 	for _, status := range statuses {
-		infos = append(infos, Info{
+		infos = append(infos, sessionInfo{
 			Key:      status.SessionKey,
 			NewestAt: status.NewestAt,
 			OldestAt: status.OldestAt,
@@ -466,7 +466,7 @@ func collectInfos(ctx context.Context, eng Engine, idx owners) []Info {
 		if _, ok := known[key]; ok {
 			continue
 		}
-		infos = append(infos, Info{Key: key, StoreAt: storeActivity(idx[key], key)})
+		infos = append(infos, sessionInfo{Key: key, StoreAt: storeActivity(idx[key], key)})
 	}
 	return infos
 }
@@ -476,7 +476,7 @@ func collectInfos(ctx context.Context, eng Engine, idx owners) []Info {
 func storeActivity(stores []Store, key string) time.Time {
 	var last time.Time
 	for _, store := range stores {
-		as, ok := store.(ActivityStore)
+		as, ok := store.(activityStore)
 		if !ok {
 			continue
 		}
