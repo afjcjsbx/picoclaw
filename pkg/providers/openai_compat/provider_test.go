@@ -81,6 +81,24 @@ func TestOpenAIProviderUsesResponsesAPI(t *testing.T) {
 	}
 }
 
+func TestResponsesRequestBody_ThinkingLevel(t *testing.T) {
+	p := NewProvider("key", "https://api.openai.com/v1", "")
+	p.SetProviderName("openai")
+	messages := []Message{{Role: "user", Content: "hello"}}
+
+	for level, want := range map[string]any{
+		"off":      nil,
+		"adaptive": nil,
+		"low":      map[string]string{"effort": "low"},
+		"high":     map[string]string{"effort": "high"},
+	} {
+		body := p.responsesRequestBody(messages, nil, "gpt-4o", map[string]any{"thinking_level": level})
+		if got := body["reasoning"]; fmt.Sprint(got) != fmt.Sprint(want) {
+			t.Errorf("thinking_level %q: reasoning = %v, want %v", level, got, want)
+		}
+	}
+}
+
 func TestProviderChat_UsesMaxCompletionTokensForGLM(t *testing.T) {
 	var requestBody map[string]any
 

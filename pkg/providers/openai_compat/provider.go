@@ -569,14 +569,10 @@ func (p *Provider) responsesRequestBody(
 	if cacheKey, ok := options["prompt_cache_key"].(string); ok && cacheKey != "" && supportsPromptCacheKey(p.apiBase) {
 		body["prompt_cache_key"] = cacheKey
 	}
-	if level, ok := normalizedThinkingLevel(options); ok {
-		effort := level
-		if level == "off" {
-			effort = "none"
-		}
-		if level != "adaptive" {
-			body["reasoning"] = map[string]string{"effort": effort}
-		}
+	// "off" and "adaptive" send nothing, as on Chat Completions: effort "none" is
+	// rejected by some reasoning models and `reasoning` by non-reasoning ones.
+	if level, ok := normalizedThinkingLevel(options); ok && level != "off" && level != "adaptive" {
+		body["reasoning"] = map[string]string{"effort": level}
 	}
 	maps.Copy(body, p.extraBody)
 	return body
