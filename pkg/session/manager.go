@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
 	"slices"
@@ -35,8 +36,12 @@ func NewSessionManager(storage string) *SessionManager {
 	}
 
 	if storage != "" {
-		os.MkdirAll(storage, 0o700)
-		sm.loadSessions()
+		if err := os.MkdirAll(storage, 0o700); err != nil {
+			log.Printf("session: create storage directory %s: %v", storage, err)
+		}
+		if err := sm.loadSessions(); err != nil {
+			log.Printf("session: load sessions from %s: %v", storage, err)
+		}
 	}
 
 	return sm
@@ -314,11 +319,17 @@ func (sm *SessionManager) loadSessions() error {
 		sessionPath := filepath.Join(sm.storage, file.Name())
 		data, err := os.ReadFile(sessionPath)
 		if err != nil {
+			log.Printf("session: skipping unreadable session %s: %v", file.Name(), err)
 			continue
 		}
 
 		var session sessionRecord
 		if err := json.Unmarshal(data, &session); err != nil {
+			log.Printf("session: skipping corrupt session %s: %v", file.Name(), err)
+			continue
+		}
+		if session.Key == "" {
+			log.Printf("session: skipping session file %s: missing key", file.Name())
 			continue
 		}
 		session.Messages = messageutil.FilterInvalidHistoryMessages(session.Messages)
