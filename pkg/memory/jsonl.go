@@ -34,6 +34,10 @@ const (
 	// we set a generous limit. The scanner starts at 64 KB and grows
 	// only as needed up to this cap.
 	maxLineSize = 10 * 1024 * 1024 // 10 MB
+
+	// defaultGroupCommitBytes bounds the memory held by the write-behind
+	// buffer before an automatic flush.
+	defaultGroupCommitBytes = 256 * 1024
 )
 
 // SessionMeta holds per-session metadata stored in a .meta.json file.
@@ -77,6 +81,21 @@ type JSONLStore struct {
 	// power failure. Intended for flash-constrained devices where the
 	// per-message fsync cost and flash wear are not acceptable.
 	durableWrites bool
+
+	// groupCommit buffers message appends and flushes them with one
+	// open/write/fsync per session. Reads and explicit Flush calls drain the
+	// buffer, so read-after-write stays synchronous. The trade-off is that a
+	// crash before a flush loses the buffered messages.
+	groupCommit      bool
+	groupCommitBytes int
+
+	pendingMu      sync.Mutex
+	pending        map[string][][]byte
+	pendingCounts  map[string]int
+	pendingCreated map[string]time.Time
+	pendingUpdated map[string]time.Time
+	pendingBytes   int
+	flushMu        sync.Mutex
 }
 
 // StoreOption configures a JSONLStore created by NewJSONLStore.
@@ -91,13 +110,28 @@ func WithDurableWrites(durable bool) StoreOption {
 	}
 }
 
+// WithGroupCommit enables write-behind message appends. Messages are buffered
+// and flushed with a single open/write/fsync per session when the buffer grows
+// past 256 KB, when a read method is called, on Save, or on Close. This trades
+// per-message durability for far fewer fsyncs; a crash before the next flush
+// loses the buffered messages.
+func WithGroupCommit(enabled bool) StoreOption {
+	return func(s *JSONLStore) {
+		s.groupCommit = enabled
+	}
+}
+
 // NewJSONLStore creates a new JSONL-backed store rooted at dir.
 func NewJSONLStore(dir string, opts ...StoreOption) (*JSONLStore, error) {
 	err := os.MkdirAll(dir, 0o755)
 	if err != nil {
 		return nil, fmt.Errorf("memory: create directory: %w", err)
 	}
-	s := &JSONLStore{dir: dir, durableWrites: true}
+	s := &JSONLStore{
+		dir:              dir,
+		durableWrites:    true,
+		groupCommitBytes: defaultGroupCommitBytes,
+	}
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -223,6 +257,10 @@ func (s *JSONLStore) DeleteSession(_ context.Context, sessionKey string) error {
 	if sessionKey == "" {
 		return nil
 	}
+	if err := s.Flush(context.Background()); err != nil {
+		return err
+	}
+
 	l := s.sessionLock(sessionKey)
 	l.Lock()
 	defer l.Unlock()
@@ -245,14 +283,17 @@ func (s *JSONLStore) LastActivity(sessionKey string) time.Time {
 	if sessionKey == "" {
 		return time.Time{}
 	}
+	if err := s.Flush(context.Background()); err != nil {
+		log.Printf("memory: flush before last activity: %v", err)
+	}
 	l := s.sessionLock(sessionKey)
 	l.Lock()
 	defer l.Unlock()
 
-	var last time.Time
-	if meta, err := s.readMeta(sessionKey); err == nil {
-		last = meta.UpdatedAt
+	if meta, err := s.readMeta(sessionKey); err == nil && !meta.UpdatedAt.IsZero() {
+		return meta.UpdatedAt
 	}
+	var last time.Time
 	for _, path := range []string{s.jsonlPath(sessionKey), s.metaPath(sessionKey)} {
 		if info, err := os.Stat(path); err == nil && info.ModTime().After(last) {
 			last = info.ModTime()
@@ -263,6 +304,10 @@ func (s *JSONLStore) LastActivity(sessionKey string) time.Time {
 
 // GetSessionMeta returns the current metadata snapshot for sessionKey.
 func (s *JSONLStore) GetSessionMeta(_ context.Context, sessionKey string) (SessionMeta, error) {
+	if err := s.Flush(context.Background()); err != nil {
+		return SessionMeta{}, err
+	}
+
 	l := s.sessionLock(sessionKey)
 	l.Lock()
 	defer l.Unlock()
@@ -677,10 +722,6 @@ func (s *JSONLStore) addMsg(sessionKey string, msg providers.Message) error {
 		return nil
 	}
 
-	l := s.sessionLock(sessionKey)
-	l.Lock()
-	defer l.Unlock()
-
 	now := time.Now()
 
 	if msg.CreatedAt == nil {
@@ -693,6 +734,17 @@ func (s *JSONLStore) addMsg(sessionKey string, msg providers.Message) error {
 		return fmt.Errorf("memory: marshal message: %w", err)
 	}
 	line = append(line, '\n')
+
+	if s.groupCommit {
+		return s.enqueueMessage(sessionKey, line, now)
+	}
+	return s.appendMessage(sessionKey, line, now)
+}
+
+func (s *JSONLStore) appendMessage(sessionKey string, line []byte, now time.Time) error {
+	l := s.sessionLock(sessionKey)
+	l.Lock()
+	defer l.Unlock()
 
 	f, err := os.OpenFile(
 		s.jsonlPath(sessionKey),
@@ -736,9 +788,140 @@ func (s *JSONLStore) addMsg(sessionKey string, msg providers.Message) error {
 	return s.writeMeta(sessionKey, meta)
 }
 
+func (s *JSONLStore) enqueueMessage(sessionKey string, line []byte, at time.Time) error {
+	s.pendingMu.Lock()
+	if s.pending == nil {
+		s.pending = make(map[string][][]byte)
+		s.pendingCounts = make(map[string]int)
+		s.pendingCreated = make(map[string]time.Time)
+		s.pendingUpdated = make(map[string]time.Time)
+	}
+	if _, ok := s.pendingCreated[sessionKey]; !ok {
+		s.pendingCreated[sessionKey] = at
+	}
+	s.pending[sessionKey] = append(s.pending[sessionKey], line)
+	s.pendingCounts[sessionKey]++
+	s.pendingUpdated[sessionKey] = at
+	s.pendingBytes += len(line)
+	shouldFlush := s.pendingBytes >= s.groupCommitBytes
+	s.pendingMu.Unlock()
+
+	if shouldFlush {
+		return s.Flush(context.Background())
+	}
+	return nil
+}
+
+type pendingBatch struct {
+	key       string
+	lines     [][]byte
+	count     int
+	bytes     int
+	createdAt time.Time
+	updatedAt time.Time
+}
+
+// Flush writes all buffered messages and their metadata. It is a no-op when
+// group commit is disabled or the buffer is empty. Reads call Flush so callers
+// keep observing their own writes.
+func (s *JSONLStore) Flush(_ context.Context) error {
+	if !s.groupCommit {
+		return nil
+	}
+
+	s.flushMu.Lock()
+	defer s.flushMu.Unlock()
+
+	s.pendingMu.Lock()
+	if len(s.pending) == 0 {
+		s.pendingMu.Unlock()
+		return nil
+	}
+	batches := make([]pendingBatch, 0, len(s.pending))
+	for key, lines := range s.pending {
+		total := 0
+		for _, line := range lines {
+			total += len(line)
+		}
+		batches = append(batches, pendingBatch{
+			key:       key,
+			lines:     lines,
+			count:     s.pendingCounts[key],
+			bytes:     total,
+			createdAt: s.pendingCreated[key],
+			updatedAt: s.pendingUpdated[key],
+		})
+	}
+	s.pending = nil
+	s.pendingCounts = nil
+	s.pendingCreated = nil
+	s.pendingUpdated = nil
+	s.pendingBytes = 0
+	s.pendingMu.Unlock()
+
+	for _, batch := range batches {
+		if err := s.flushBatch(batch); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *JSONLStore) flushBatch(batch pendingBatch) error {
+	l := s.sessionLock(batch.key)
+	l.Lock()
+	defer l.Unlock()
+
+	var buf bytes.Buffer
+	buf.Grow(batch.bytes)
+	for _, line := range batch.lines {
+		buf.Write(line)
+	}
+
+	f, err := os.OpenFile(
+		s.jsonlPath(batch.key),
+		os.O_CREATE|os.O_WRONLY|os.O_APPEND,
+		0o644,
+	)
+	if err != nil {
+		return fmt.Errorf("memory: open jsonl for append: %w", err)
+	}
+	if _, writeErr := f.Write(buf.Bytes()); writeErr != nil {
+		f.Close()
+		return fmt.Errorf("memory: append message: %w", writeErr)
+	}
+	if s.durableWrites {
+		if syncErr := f.Sync(); syncErr != nil {
+			f.Close()
+			return fmt.Errorf("memory: sync jsonl: %w", syncErr)
+		}
+	}
+	if closeErr := f.Close(); closeErr != nil {
+		return fmt.Errorf("memory: close jsonl: %w", closeErr)
+	}
+
+	meta, err := s.readMeta(batch.key)
+	if err != nil {
+		return err
+	}
+	if meta.Count == 0 && meta.CreatedAt.IsZero() {
+		meta.CreatedAt = batch.createdAt
+	}
+	meta.Count += batch.count
+	if batch.updatedAt.After(meta.UpdatedAt) {
+		meta.UpdatedAt = batch.updatedAt
+	}
+
+	return s.writeMeta(batch.key, meta)
+}
+
 func (s *JSONLStore) GetHistory(
 	_ context.Context, sessionKey string,
 ) ([]providers.Message, error) {
+	if err := s.Flush(context.Background()); err != nil {
+		return nil, err
+	}
+
 	l := s.sessionLock(sessionKey)
 	l.Lock()
 	defer l.Unlock()
@@ -761,6 +944,10 @@ func (s *JSONLStore) GetHistory(
 func (s *JSONLStore) GetSummary(
 	_ context.Context, sessionKey string,
 ) (string, error) {
+	if err := s.Flush(context.Background()); err != nil {
+		return "", err
+	}
+
 	l := s.sessionLock(sessionKey)
 	l.Lock()
 	defer l.Unlock()
@@ -775,6 +962,10 @@ func (s *JSONLStore) GetSummary(
 func (s *JSONLStore) SetSummary(
 	_ context.Context, sessionKey, summary string,
 ) error {
+	if err := s.Flush(context.Background()); err != nil {
+		return err
+	}
+
 	l := s.sessionLock(sessionKey)
 	l.Lock()
 	defer l.Unlock()
@@ -796,6 +987,10 @@ func (s *JSONLStore) SetSummary(
 func (s *JSONLStore) TruncateHistory(
 	_ context.Context, sessionKey string, keepLast int,
 ) error {
+	if err := s.Flush(context.Background()); err != nil {
+		return err
+	}
+
 	l := s.sessionLock(sessionKey)
 	l.Lock()
 	defer l.Unlock()
@@ -837,6 +1032,10 @@ func (s *JSONLStore) SetHistory(
 	history []providers.Message,
 ) error {
 	history = messageutil.FilterInvalidHistoryMessages(history)
+
+	if err := s.Flush(context.Background()); err != nil {
+		return err
+	}
 
 	l := s.sessionLock(sessionKey)
 	l.Lock()
@@ -881,6 +1080,10 @@ func (s *JSONLStore) SetHistory(
 func (s *JSONLStore) Compact(
 	_ context.Context, sessionKey string,
 ) error {
+	if err := s.Flush(context.Background()); err != nil {
+		return err
+	}
+
 	l := s.sessionLock(sessionKey)
 	l.Lock()
 	defer l.Unlock()
@@ -938,6 +1141,10 @@ func (s *JSONLStore) rewriteJSONL(
 
 // ListSessions returns all known session keys by reading .meta.json files.
 func (s *JSONLStore) ListSessions() []string {
+	if err := s.Flush(context.Background()); err != nil {
+		log.Printf("memory: flush before listing sessions: %v", err)
+	}
+
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
 		return nil
@@ -964,5 +1171,5 @@ func (s *JSONLStore) ListSessions() []string {
 }
 
 func (s *JSONLStore) Close() error {
-	return nil
+	return s.Flush(context.Background())
 }

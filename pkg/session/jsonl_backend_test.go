@@ -1,6 +1,7 @@
 package session_test
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -43,6 +44,35 @@ func TestJSONLBackend_AddAndGetHistory(t *testing.T) {
 	}
 	if history[1].Role != "assistant" || history[1].Content != "hi" {
 		t.Errorf("msg[1] = %+v", history[1])
+	}
+}
+
+func TestJSONLBackend_SaveFlushesGroupCommit(t *testing.T) {
+	dir := t.TempDir()
+	store, err := memory.NewJSONLStore(dir, memory.WithGroupCommit(true))
+	if err != nil {
+		t.Fatalf("NewJSONLStore: %v", err)
+	}
+	defer store.Close()
+
+	b := session.NewJSONLBackend(store)
+	b.AddMessage("s1", "user", "hello")
+	if saveErr := b.Save("s1"); saveErr != nil {
+		t.Fatalf("Save: %v", saveErr)
+	}
+
+	reopened, err := memory.NewJSONLStore(dir)
+	if err != nil {
+		t.Fatalf("NewJSONLStore(reopen): %v", err)
+	}
+	defer reopened.Close()
+
+	history, err := reopened.GetHistory(context.Background(), "s1")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if len(history) != 1 || history[0].Content != "hello" {
+		t.Fatalf("history = %#v, want one hello message", history)
 	}
 }
 
