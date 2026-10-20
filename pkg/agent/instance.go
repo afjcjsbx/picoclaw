@@ -782,7 +782,11 @@ func closeUnreferencedStatefulProviders(
 // Falls back to SessionManager if the JSONL store cannot be initialized or
 // if migration fails (which indicates the store cannot write reliably).
 func initSessionStore(dir string, durableWrites bool) session.SessionStore {
-	store, err := memory.NewJSONLStore(dir, memory.WithDurableWrites(durableWrites))
+	store, err := memory.NewJSONLStore(
+		dir,
+		memory.WithDurableWrites(durableWrites),
+		memory.WithGroupCommit(true),
+	)
 	if err != nil {
 		logger.WarnCF("agent", "Memory JSONL store init failed; falling back to json sessions",
 			map[string]any{"error": err.Error()})

@@ -107,6 +107,144 @@ func TestAddMessage_NonDurableWritesRoundtrip(t *testing.T) {
 	}
 }
 
+func TestGroupCommit_ReadFlushesBufferedMessages(t *testing.T) {
+	store, err := NewJSONLStore(t.TempDir(), WithGroupCommit(true))
+	if err != nil {
+		t.Fatalf("NewJSONLStore: %v", err)
+	}
+	ctx := context.Background()
+
+	if addErr := store.AddMessage(ctx, "s1", "user", "hello"); addErr != nil {
+		t.Fatalf("AddMessage(user): %v", addErr)
+	}
+	if addErr := store.AddMessage(ctx, "s1", "assistant", "world"); addErr != nil {
+		t.Fatalf("AddMessage(assistant): %v", addErr)
+	}
+	if _, statErr := os.Stat(store.jsonlPath("s1")); !os.IsNotExist(statErr) {
+		t.Fatalf("buffered session file exists before flush: %v", statErr)
+	}
+
+	history, err := store.GetHistory(ctx, "s1")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if len(history) != 2 || history[0].Content != "hello" || history[1].Content != "world" {
+		t.Fatalf("history = %#v, want hello/world", history)
+	}
+
+	meta, err := store.GetSessionMeta(ctx, "s1")
+	if err != nil {
+		t.Fatalf("GetSessionMeta: %v", err)
+	}
+	if meta.Count != 2 {
+		t.Fatalf("meta.Count = %d, want 2", meta.Count)
+	}
+}
+
+func TestGroupCommit_FlushAndClosePersistMessages(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewJSONLStore(dir, WithGroupCommit(true))
+	if err != nil {
+		t.Fatalf("NewJSONLStore: %v", err)
+	}
+	ctx := context.Background()
+
+	if addErr := store.AddMessage(ctx, "flushed", "user", "one"); addErr != nil {
+		t.Fatalf("AddMessage(flushed): %v", addErr)
+	}
+	if flushErr := store.Flush(ctx); flushErr != nil {
+		t.Fatalf("Flush: %v", flushErr)
+	}
+
+	if addErr := store.AddMessage(ctx, "closed", "user", "two"); addErr != nil {
+		t.Fatalf("AddMessage(closed): %v", addErr)
+	}
+	if closeErr := store.Close(); closeErr != nil {
+		t.Fatalf("Close: %v", closeErr)
+	}
+
+	reopened, err := NewJSONLStore(dir)
+	if err != nil {
+		t.Fatalf("NewJSONLStore(reopen): %v", err)
+	}
+	defer reopened.Close()
+
+	for key, want := range map[string]string{"flushed": "one", "closed": "two"} {
+		history, histErr := reopened.GetHistory(ctx, key)
+		if histErr != nil {
+			t.Fatalf("GetHistory(%s): %v", key, histErr)
+		}
+		if len(history) != 1 || history[0].Content != want {
+			t.Fatalf("history(%s) = %#v, want %q", key, history, want)
+		}
+	}
+}
+
+func TestGroupCommit_PreservesLastActivityOrder(t *testing.T) {
+	store, err := NewJSONLStore(t.TempDir(), WithGroupCommit(true))
+	if err != nil {
+		t.Fatalf("NewJSONLStore: %v", err)
+	}
+	ctx := context.Background()
+
+	if err := store.AddMessage(ctx, "older", "user", "first"); err != nil {
+		t.Fatalf("AddMessage(older): %v", err)
+	}
+	time.Sleep(5 * time.Millisecond)
+	if err := store.AddMessage(ctx, "newer", "user", "second"); err != nil {
+		t.Fatalf("AddMessage(newer): %v", err)
+	}
+	if err := store.Flush(ctx); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	older := store.LastActivity("older")
+	newer := store.LastActivity("newer")
+	if !newer.After(older) {
+		t.Fatalf("LastActivity(newer) = %v, want after older = %v", newer, older)
+	}
+}
+
+func TestGroupCommit_ConcurrentWrites(t *testing.T) {
+	store, err := NewJSONLStore(t.TempDir(), WithGroupCommit(true))
+	if err != nil {
+		t.Fatalf("NewJSONLStore: %v", err)
+	}
+	ctx := context.Background()
+
+	const (
+		writers   = 8
+		perWriter = 20
+	)
+	var wg sync.WaitGroup
+	errs := make(chan error, writers)
+	for i := 0; i < writers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < perWriter; j++ {
+				if addErr := store.AddMessage(ctx, "shared", "user", "message"); addErr != nil {
+					errs <- addErr
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for addErr := range errs {
+		t.Fatalf("AddMessage: %v", addErr)
+	}
+
+	history, err := store.GetHistory(ctx, "shared")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if len(history) != writers*perWriter {
+		t.Fatalf("history length = %d, want %d", len(history), writers*perWriter)
+	}
+}
+
 func TestAddMessage_BasicRoundtrip(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
