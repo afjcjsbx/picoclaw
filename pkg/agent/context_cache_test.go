@@ -105,8 +105,8 @@ func TestSingleSystemMessage(t *testing.T) {
 			if !strings.Contains(sys, "picoclaw") {
 				t.Error("system message missing identity")
 			}
-			if !strings.Contains(sys, "Current Time") {
-				t.Error("system message missing dynamic time context")
+			if !strings.Contains(sys, "Current Date") {
+				t.Error("system message missing dynamic date context")
 			}
 
 			// Summary handling
@@ -361,7 +361,7 @@ func TestCacheStability(t *testing.T) {
 	}
 
 	// Static prompt must NOT contain per-request data
-	if strings.Contains(results[0], "Current Time") {
+	if strings.Contains(results[0], "Current Date") {
 		t.Error("static cached prompt should not contain time (added dynamically)")
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/cron"
+	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
 type stubJobExecutor struct {
@@ -1405,6 +1407,36 @@ func TestCronTool_ExecuteJobRunsCommand(t *testing.T) {
 	}
 	if !strings.Contains(msg.Content, "cron-test-ok") {
 		t.Fatalf("expected command output containing 'cron-test-ok', got: %s", msg.Content)
+	}
+}
+
+// TestCronTool_ExecuteJobLogsDroppedOutput pins that a job whose outcome cannot
+// be published still completes, and that the dropped publish is reported
+// instead of vanishing.
+func TestCronTool_ExecuteJobLogsDroppedOutput(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "cron.log")
+	if err := logger.EnableFileLogging(logPath); err != nil {
+		t.Fatalf("EnableFileLogging() error: %v", err)
+	}
+	t.Cleanup(logger.DisableFileLogging)
+
+	tool := newTestCronToolWithConfig(t, config.DefaultConfig())
+	job := &cron.CronJob{}
+	job.Payload.Channel = "cli"
+	job.Payload.To = "direct"
+	job.Payload.Command = "echo dropped-output"
+
+	// A closed bus rejects the publish; the command itself already ran.
+	tool.msgBus.Close()
+
+	mustExecuteJobOK(t, tool, job)
+
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read log file: %v", err)
+	}
+	if !strings.Contains(string(data), "Failed to publish job output") {
+		t.Fatalf("log does not mention the dropped publish: %s", data)
 	}
 }
 

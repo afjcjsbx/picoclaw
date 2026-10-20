@@ -197,5 +197,63 @@ func TestSubagentPromptText(t *testing.T) {
 				t.Errorf("system prompt =\n%q\nwant\n%q", spawner.lastConfig.SystemPrompt, tt.expected)
 			}
 		})
+// panickingSpawner panics inside SpawnSubTurn to exercise goroutine recovery.
+type panickingSpawner struct{}
+
+func (m *panickingSpawner) SpawnSubTurn(ctx context.Context, cfg SubTurnConfig) (*ToolResult, error) {
+	panic("spawner exploded")
+}
+
+func TestSpawnTool_ExecuteAsync_PanicRecovered(t *testing.T) {
+	tool := NewSpawnTool(nil)
+	tool.SetSpawner(&panickingSpawner{})
+
+	results := make(chan *ToolResult, 1)
+	ack := tool.ExecuteAsync(
+		context.Background(),
+		map[string]any{"task": "do work"},
+		func(_ context.Context, result *ToolResult) { results <- result },
+	)
+
+	if ack == nil || ack.IsError {
+		t.Fatalf("spawn should be acknowledged, got: %+v", ack)
+	}
+	if !ack.Async {
+		t.Error("SpawnTool should return an async result")
+	}
+
+	select {
+	case result := <-results:
+		if result == nil || !result.IsError {
+			t.Fatalf("panic should surface as an error result, got: %+v", result)
+		}
+		if !strings.Contains(result.ForLLM, "spawn failed unexpectedly") {
+			t.Errorf("unexpected error message: %s", result.ForLLM)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("callback was not invoked after spawner panic")
+	}
+}
+
+func TestSpawnTool_ExecuteAsync_NilSpawnerResult(t *testing.T) {
+	tool := NewSpawnTool(nil)
+	tool.SetSpawner(&nilResultSpawner{})
+	results := make(chan *ToolResult, 1)
+	tool.ExecuteAsync(
+		context.Background(),
+		map[string]any{"task": "do work"},
+		func(_ context.Context, result *ToolResult) { results <- result },
+	)
+
+	select {
+	case result := <-results:
+		if result == nil || !result.IsError {
+			t.Fatalf("nil spawner result should surface as an error, got: %+v", result)
+		}
+		if !strings.Contains(result.ForLLM, "spawn returned no result") {
+			t.Errorf("unexpected error message: %s", result.ForLLM)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("callback was not invoked for nil spawner result")
 	}
 }

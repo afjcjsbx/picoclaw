@@ -55,6 +55,127 @@ type SessionMeta struct {
 	Aliases    []string        `json:"aliases,omitempty"`
 }
 
+// sessionIndex caches canonical session keys and their aliases. The index is
+// built lazily from the metadata files and kept in sync by metadata writes so
+// ResolveSessionKey does not scan the whole sessions directory on every call.
+type sessionIndex struct {
+	mu        sync.RWMutex
+	canonical map[string]string
+	loaded    bool
+}
+
+func (ix *sessionIndex) lookup(key string) (string, bool) {
+	ix.mu.RLock()
+	defer ix.mu.RUnlock()
+
+	if !ix.loaded {
+		return "", false
+	}
+	canonical, ok := ix.canonical[key]
+	return canonical, ok
+}
+
+// store updates an already-built index after metadata for canonical changed.
+// It removes stale aliases before inserting the new ones.
+func (ix *sessionIndex) store(canonical string, aliases []string) {
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+
+	if !ix.loaded {
+		return
+	}
+	for key, value := range ix.canonical {
+		if value == canonical {
+			delete(ix.canonical, key)
+		}
+	}
+	ix.canonical[canonical] = canonical
+	for _, alias := range aliases {
+		if alias != "" && alias != canonical {
+			ix.canonical[alias] = canonical
+		}
+	}
+}
+
+func (ix *sessionIndex) remove(canonical string) {
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+
+	if !ix.loaded {
+		return
+	}
+	for key, value := range ix.canonical {
+		if key == canonical || value == canonical {
+			delete(ix.canonical, key)
+		}
+	}
+}
+
+func (ix *sessionIndex) invalidate() {
+	ix.mu.Lock()
+	ix.loaded = false
+	ix.canonical = nil
+	ix.mu.Unlock()
+}
+
+func (ix *sessionIndex) load(dir, key string) (string, bool, error) {
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+
+	if ix.loaded {
+		canonical, ok := ix.canonical[key]
+		return canonical, ok, nil
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", false, fmt.Errorf("memory: read sessions dir: %w", err)
+	}
+
+	metas := make([]SessionMeta, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".meta.json") {
+			continue
+		}
+
+		data, readErr := os.ReadFile(filepath.Join(dir, entry.Name()))
+		if readErr != nil {
+			log.Printf("memory: skipping unreadable meta %s: %v", entry.Name(), readErr)
+			continue
+		}
+
+		var meta SessionMeta
+		if err := json.Unmarshal(data, &meta); err != nil {
+			log.Printf("memory: skipping corrupt meta %s: %v", entry.Name(), err)
+			continue
+		}
+		if meta.Key == "" {
+			continue
+		}
+		metas = append(metas, meta)
+	}
+
+	canonical := make(map[string]string, len(metas))
+	for _, meta := range metas {
+		canonical[meta.Key] = meta.Key
+	}
+	// Aliases take precedence over direct keys so an explicit metadata
+	// mapping wins over a legacy file with the same name.
+	for _, meta := range metas {
+		for _, alias := range meta.Aliases {
+			if alias != "" && alias != meta.Key {
+				canonical[alias] = meta.Key
+			}
+		}
+	}
+
+	ix.canonical = canonical
+	ix.loaded = true
+
+	resolved, ok := canonical[key]
+	return resolved, ok, nil
+}
+
 // JSONLStore implements Store using append-only JSONL files.
 //
 // Each session is stored as two files:
@@ -69,15 +190,40 @@ type SessionMeta struct {
 type JSONLStore struct {
 	dir   string
 	locks [numLockShards]sync.Mutex
+	index sessionIndex
+
+	// durableWrites keeps the original fsync-per-write durability. When
+	// false, message appends skip fsync and metadata files are replaced
+	// without fsync (still atomically, via temp + rename): files stay
+	// consistent after a crash, but the most recent writes may be lost on
+	// power failure. Intended for flash-constrained devices where the
+	// per-message fsync cost and flash wear are not acceptable.
+	durableWrites bool
+}
+
+// StoreOption configures a JSONLStore created by NewJSONLStore.
+type StoreOption func(*JSONLStore)
+
+// WithDurableWrites controls whether writes are fsynced before they are
+// acknowledged. It defaults to true; see JSONLStore.durableWrites for the
+// trade-off when it is disabled.
+func WithDurableWrites(durable bool) StoreOption {
+	return func(s *JSONLStore) {
+		s.durableWrites = durable
+	}
 }
 
 // NewJSONLStore creates a new JSONL-backed store rooted at dir.
-func NewJSONLStore(dir string) (*JSONLStore, error) {
+func NewJSONLStore(dir string, opts ...StoreOption) (*JSONLStore, error) {
 	err := os.MkdirAll(dir, 0o755)
 	if err != nil {
 		return nil, fmt.Errorf("memory: create directory: %w", err)
 	}
-	return &JSONLStore{dir: dir}, nil
+	s := &JSONLStore{dir: dir, durableWrites: true}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s, nil
 }
 
 // sessionLock returns a mutex for the given session key.
@@ -131,14 +277,18 @@ func (s *JSONLStore) readMeta(key string) (SessionMeta, error) {
 }
 
 // writeMeta atomically writes the metadata file using the project's
-// standard WriteFileAtomic (temp + fsync + rename).
+// standard WriteFileAtomic (temp + fsync + rename). When durable writes are
+// disabled the file is still replaced atomically, but without fsync.
 func (s *JSONLStore) writeMeta(key string, meta SessionMeta) error {
 	if strings.TrimSpace(meta.Key) == "" {
 		meta.Key = key
 	}
-	data, err := json.MarshalIndent(meta, "", "  ")
+	data, err := json.Marshal(meta)
 	if err != nil {
 		return fmt.Errorf("memory: encode meta: %w", err)
+	}
+	if !s.durableWrites {
+		return fileutil.WriteFileAtomicNoSync(s.metaPath(key), data, 0o644)
 	}
 	return fileutil.WriteFileAtomic(s.metaPath(key), data, 0o644)
 }
@@ -204,6 +354,9 @@ func (s *JSONLStore) DeleteSession(_ context.Context, sessionKey string) error {
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) && firstErr == nil {
 			firstErr = fmt.Errorf("memory: delete session file %s: %w", path, err)
 		}
+	}
+	if firstErr == nil {
+		s.index.remove(sessionKey)
 	}
 	return firstErr
 }
@@ -274,7 +427,11 @@ func (s *JSONLStore) UpsertSessionMeta(
 	}
 	meta.UpdatedAt = now
 
-	return s.writeMeta(sessionKey, meta)
+	if err := s.writeMeta(sessionKey, meta); err != nil {
+		return err
+	}
+	s.index.store(sessionKey, meta.Aliases)
+	return nil
 }
 
 // PromoteAliasHistory atomically promotes the first non-empty alias session
@@ -303,6 +460,10 @@ func (s *JSONLStore) PromoteAliasHistory(
 		unlock := s.lockSessionPair(sessionKey, alias)
 		promoted, err := s.promoteAliasHistoryLocked(sessionKey, alias, scope, aliases)
 		unlock()
+		if promoted {
+			// The canonical metadata and its aliases changed.
+			s.index.invalidate()
+		}
 		if err != nil || promoted {
 			return promoted, err
 		}
@@ -348,66 +509,26 @@ func (s *JSONLStore) ResolveSessionKey(_ context.Context, sessionKey string) (st
 		return "", false, nil
 	}
 
-	hasDirectSession := s.sessionExists(sessionKey)
-	if hasDirectSession && shouldShortCircuitSessionResolve(sessionKey) {
-		return sessionKey, true, nil
+	if canonical, ok := s.index.lookup(sessionKey); ok {
+		return canonical, true, nil
 	}
 
-	entries, err := os.ReadDir(s.dir)
+	canonical, found, err := s.index.load(s.dir, sessionKey)
 	if err != nil {
-		return "", false, fmt.Errorf("memory: read sessions dir: %w", err)
+		return "", false, err
+	}
+	if found {
+		return canonical, true, nil
 	}
 
-	var directMetaMatch string
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".meta.json") {
-			continue
-		}
-
-		data, readErr := os.ReadFile(filepath.Join(s.dir, entry.Name()))
-		if readErr != nil {
-			log.Printf("memory: skipping unreadable meta %s: %v", entry.Name(), readErr)
-			continue
-		}
-
-		var meta SessionMeta
-		if err := json.Unmarshal(data, &meta); err != nil {
-			log.Printf("memory: skipping corrupt meta %s: %v", entry.Name(), err)
-			continue
-		}
-
-		if meta.Key == "" {
-			continue
-		}
-
-		if meta.Key == sessionKey {
-			directMetaMatch = meta.Key
-		}
-
-		for _, alias := range meta.Aliases {
-			if alias == sessionKey && meta.Key != sessionKey {
-				return meta.Key, true, nil
-			}
-		}
-	}
-
-	if directMetaMatch != "" {
-		return directMetaMatch, true, nil
-	}
-
-	if hasDirectSession {
+	// Preserve direct sessions that predate metadata files. This also covers
+	// keys created while the index was being built.
+	if s.sessionExists(sessionKey) {
+		s.index.store(sessionKey, nil)
 		return sessionKey, true, nil
 	}
 
 	return "", false, nil
-}
-
-func shouldShortCircuitSessionResolve(sessionKey string) bool {
-	sessionKey = strings.TrimSpace(strings.ToLower(sessionKey))
-	if sessionKey == "" {
-		return false
-	}
-	return !strings.ContainsAny(sessionKey, ":/\\")
 }
 
 func (s *JSONLStore) lockSessionPair(keyA, keyB string) func() {
@@ -683,9 +804,12 @@ func (s *JSONLStore) addMsg(sessionKey string, msg providers.Message) error {
 	// durability guarantee of writeMeta and rewriteJSONL (which use
 	// WriteFileAtomic with fsync). Without Sync, a power loss could
 	// leave the append in the kernel page cache only — lost on reboot.
-	if syncErr := f.Sync(); syncErr != nil {
-		f.Close()
-		return fmt.Errorf("memory: sync jsonl: %w", syncErr)
+	// The store drops the Sync when durable writes are disabled.
+	if s.durableWrites {
+		if syncErr := f.Sync(); syncErr != nil {
+			f.Close()
+			return fmt.Errorf("memory: sync jsonl: %w", syncErr)
+		}
 	}
 	if closeErr := f.Close(); closeErr != nil {
 		return fmt.Errorf("memory: close jsonl: %w", closeErr)

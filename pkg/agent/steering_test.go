@@ -1395,7 +1395,10 @@ func TestAgentLoop_Continue_PreservesSteeringMedia(t *testing.T) {
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
-	history := defaultAgent.Sessions.GetHistory(sessionKey)
+	history, err := defaultAgent.Sessions.GetHistory(context.Background(), sessionKey)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
 	foundOriginalRef := false
 	for _, msg := range history {
 		if msg.Role == "user" && len(msg.Media) == 1 && msg.Media[0] == ref {
@@ -1631,9 +1634,14 @@ func TestAgentLoop_InterruptHard_RestoresSession(t *testing.T) {
 		{Role: "user", Content: "before"},
 		{Role: "assistant", Content: "after"},
 	}
-	defaultAgent.Sessions.SetHistory(sessionKey, originalHistory)
+	if err = defaultAgent.Sessions.SetHistory(context.Background(), sessionKey, originalHistory); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
 
-	originalHistory = defaultAgent.Sessions.GetHistory(sessionKey)
+	originalHistory, err = defaultAgent.Sessions.GetHistory(context.Background(), sessionKey)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
 
 	runtimeCh, closeRuntimeEvents := subscribeRuntimeEventsForTest(
 		t,
@@ -1650,14 +1658,14 @@ func TestAgentLoop_InterruptHard_RestoresSession(t *testing.T) {
 	}
 	resultCh := make(chan result, 1)
 	go func() {
-		resp, err := al.ProcessDirectWithChannel(
+		resp, callErr := al.ProcessDirectWithChannel(
 			context.Background(),
 			"do work",
 			sessionKey,
 			"test",
 			"chat1",
 		)
-		resultCh <- result{resp: resp, err: err}
+		resultCh <- result{resp: resp, err: callErr}
 	}()
 
 	select {
@@ -1670,7 +1678,7 @@ func TestAgentLoop_InterruptHard_RestoresSession(t *testing.T) {
 		t.Fatal("expected active turn before hard abort")
 	}
 
-	if err := al.InterruptHard(); err != nil {
+	if err = al.InterruptHard(); err != nil {
 		t.Fatalf("InterruptHard failed: %v", err)
 	}
 
@@ -1690,7 +1698,10 @@ func TestAgentLoop_InterruptHard_RestoresSession(t *testing.T) {
 		t.Fatalf("expected no active turn after hard abort, got %#v", active)
 	}
 
-	finalHistory := defaultAgent.Sessions.GetHistory(sessionKey)
+	finalHistory, err := defaultAgent.Sessions.GetHistory(context.Background(), sessionKey)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
 	if !reflect.DeepEqual(finalHistory, originalHistory) {
 		t.Fatalf("expected history rollback after hard abort, got %#v", finalHistory)
 	}

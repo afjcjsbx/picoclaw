@@ -536,6 +536,55 @@ func spawnSubTurn(
 	return result, err
 }
 
+// ====================== Child Join ======================
+
+// Begin implements tools.ChildTracker. The returned func delivers the child's
+// result to this turn and releases the join, so a result is never lost between
+// "child done" and "parent finished".
+func (ts *turnState) Begin() func(*tools.ToolResult) {
+	ts.children.Add(1)
+	return func(result *tools.ToolResult) {
+		defer ts.children.Done()
+		deliverSubTurnResult(ts.al, ts, "", result)
+	}
+}
+
+// joinChildren blocks until every tracked async child has delivered (or ctx
+// ends) and returns their results as prompt messages. It drains pendingResults
+// while waiting, so more than subTurnPendingResultsBuffer children cannot
+// block on a full channel.
+func (ts *turnState) joinChildren(ctx context.Context, filter func(string) string) []providers.Message {
+	done := make(chan struct{})
+	go func() {
+		ts.children.Wait()
+		close(done)
+	}()
+
+	var msgs []providers.Message
+	collect := func(r *tools.ToolResult) {
+		if r != nil && r.ForLLM != "" {
+			msgs = append(msgs, subTurnResultPromptMessage(filter(r.ForLLM)))
+		}
+	}
+	for {
+		select {
+		case r := <-ts.pendingResults:
+			collect(r)
+		case <-done:
+			for {
+				select {
+				case r := <-ts.pendingResults:
+					collect(r)
+				default:
+					return msgs
+				}
+			}
+		case <-ctx.Done():
+			return msgs
+		}
+	}
+}
+
 // ====================== Result Delivery ======================
 
 // deliverSubTurnResult delivers a sub-turn result to the parent turn's pendingResults channel.
@@ -670,82 +719,87 @@ func newEphemeralSession(initial []providers.Message) ephemeralSessionStoreIface
 // ephemeralSessionStoreIface is satisfied by *ephemeralSessionStore.
 // Declared so newEphemeralSession can return a typed interface.
 type ephemeralSessionStoreIface interface {
-	AddMessage(sessionKey, role, content string)
-	AddFullMessage(sessionKey string, msg providers.Message)
-	GetHistory(key string) []providers.Message
-	GetSummary(key string) string
-	SetSummary(key, summary string)
-	SetHistory(key string, history []providers.Message)
-	TruncateHistory(key string, keepLast int)
-	Save(key string) error
+	AddMessage(ctx context.Context, sessionKey, role, content string) error
+	AddFullMessage(ctx context.Context, sessionKey string, msg providers.Message) error
+	GetHistory(ctx context.Context, key string) ([]providers.Message, error)
+	GetSummary(ctx context.Context, key string) (string, error)
+	SetSummary(ctx context.Context, key, summary string) error
+	SetHistory(ctx context.Context, key string, history []providers.Message) error
+	TruncateHistory(ctx context.Context, key string, keepLast int) error
+	Save(ctx context.Context, key string) error
 	ListSessions() []string
 	Close() error
 }
 
-func (e *ephemeralSessionStore) AddMessage(_, role, content string) {
+func (e *ephemeralSessionStore) AddMessage(_ context.Context, _, role, content string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.history = append(e.history, providers.Message{Role: role, Content: content})
 	e.truncateLocked()
+	return nil
 }
 
-func (e *ephemeralSessionStore) AddFullMessage(_ string, msg providers.Message) {
+func (e *ephemeralSessionStore) AddFullMessage(_ context.Context, _ string, msg providers.Message) error {
 	if messageutil.IsTransientAssistantThoughtMessage(msg) {
-		return
+		return nil
 	}
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.history = append(e.history, msg)
 	e.truncateLocked()
+	return nil
 }
 
-func (e *ephemeralSessionStore) GetHistory(_ string) []providers.Message {
+func (e *ephemeralSessionStore) GetHistory(_ context.Context, _ string) ([]providers.Message, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	out := make([]providers.Message, len(e.history))
 	copy(out, e.history)
-	return out
+	return out, nil
 }
 
-func (e *ephemeralSessionStore) GetSummary(_ string) string {
+func (e *ephemeralSessionStore) GetSummary(_ context.Context, _ string) (string, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.summary
+	return e.summary, nil
 }
 
-func (e *ephemeralSessionStore) SetSummary(_, summary string) {
+func (e *ephemeralSessionStore) SetSummary(_ context.Context, _, summary string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.summary = summary
+	return nil
 }
 
-func (e *ephemeralSessionStore) SetHistory(_ string, history []providers.Message) {
+func (e *ephemeralSessionStore) SetHistory(_ context.Context, _ string, history []providers.Message) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	history = messageutil.FilterInvalidHistoryMessages(history)
 	e.history = make([]providers.Message, len(history))
 	copy(e.history, history)
 	e.truncateLocked()
+	return nil
 }
 
-func (e *ephemeralSessionStore) TruncateHistory(_ string, keepLast int) {
+func (e *ephemeralSessionStore) TruncateHistory(_ context.Context, _ string, keepLast int) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if keepLast <= 0 {
 		e.history = nil
-		return
+		return nil
 	}
 
 	if keepLast >= len(e.history) {
-		return
+		return nil
 	}
 	e.history = e.history[len(e.history)-keepLast:]
+	return nil
 }
 
-func (e *ephemeralSessionStore) Save(_ string) error    { return nil }
-func (e *ephemeralSessionStore) Close() error           { return nil }
-func (e *ephemeralSessionStore) ListSessions() []string { return nil }
+func (e *ephemeralSessionStore) Save(_ context.Context, _ string) error { return nil }
+func (e *ephemeralSessionStore) Close() error                           { return nil }
+func (e *ephemeralSessionStore) ListSessions() []string                 { return nil }
 
 func (e *ephemeralSessionStore) truncateLocked() {
 	if len(e.history) > maxEphemeralHistorySize {

@@ -327,6 +327,17 @@ func TestParseResponse_WithUsage(t *testing.T) {
 	}
 }
 
+func TestParseResponse_WithCachedTokens(t *testing.T) {
+	body := `{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":5,"total_tokens":105,"prompt_tokens_details":{"cached_tokens":80,"cache_write_tokens":15}}}`
+	out, err := ParseResponse(strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("ParseResponse() error = %v", err)
+	}
+	if u := out.Usage; u.PromptTokens != 100 || u.CacheReadTokens != 80 || u.CacheCreationTokens != 15 {
+		t.Errorf("Usage = %+v, want PromptTokens=100 CacheReadTokens=80 CacheCreationTokens=15", u)
+	}
+}
+
 func TestParseResponse_WithReasoningContent(t *testing.T) {
 	body := `{"choices":[{"message":{"content":"2","reasoning_content":"Let me think... 1+1=2"},"finish_reason":"stop"}]}`
 	out, err := ParseResponse(strings.NewReader(body))
@@ -988,5 +999,25 @@ func TestNewJSONRequest_FollowsTemporaryRedirect(t *testing.T) {
 	}
 	if received["hello"] != "world" {
 		t.Fatalf("redirect target received %v, want map[hello:world]", received)
+	}
+}
+
+func TestSetOpenRouterAttribution(t *testing.T) {
+	cases := map[string]bool{
+		"https://openrouter.ai/api/v1/chat/completions": true,
+		"https://OpenRouter.ai/api/v1/images":           true,
+		"https://api.openai.com/v1/chat/completions":    false,
+		"http://localhost:8080/openrouter.ai":           false,
+	}
+	for rawURL, want := range cases {
+		req, err := http.NewRequest(http.MethodPost, rawURL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		SetOpenRouterAttribution(req)
+		if got := req.Header.Get("X-Openrouter-Title") == "PicoClaw" &&
+			req.Header.Get("Http-Referer") != ""; got != want {
+			t.Errorf("%s: attribution set = %v, want %v", rawURL, got, want)
+		}
 	}
 }

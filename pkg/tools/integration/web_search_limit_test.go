@@ -144,11 +144,11 @@ func TestSearchProviders_TruncateErrorBody(t *testing.T) {
 func TestErrorBody_KeepsValidUTF8(t *testing.T) {
 	// A multi-byte rune straddling the cut must be dropped, not split.
 	body := []byte(strings.Repeat("a", maxErrorBodyBytes-1) + "é" + "tail")
-	got := errorBody(body)
+	got := errorBodySnippet(body, maxErrorBodyBytes)
 	if !utf8.ValidString(got) {
-		t.Fatalf("errorBody returned invalid UTF-8: %q", got[len(got)-8:])
+		t.Fatalf("errorBodySnippet returned invalid UTF-8: %q", got[len(got)-8:])
 	}
 	if !strings.HasSuffix(got, "...") {
-		t.Fatalf("errorBody = %q..., want a trailing ellipsis", got[:8])
+		t.Fatalf("errorBodySnippet = %q..., want a trailing ellipsis", got[:8])
 	}
 }

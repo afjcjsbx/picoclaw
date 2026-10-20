@@ -1,19 +1,15 @@
-package integrationtools
+package toolshared
 
 import (
 	"fmt"
 	"math"
 	"strconv"
-
-	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
-const (
-	largeBase64OmittedMessage = toolshared.LargeBase64OmittedMessage
-	inlineMediaOmittedMessage = toolshared.InlineMediaOmittedMessage
-)
-
-func getInt64Arg(args map[string]any, key string, defaultVal int64) (int64, error) {
+// Int64Arg extracts an integer argument from a tool-call argument map, returning
+// defaultVal when the key is absent. JSON decoders deliver numbers as float64,
+// so the float64 case must be integral.
+func Int64Arg(args map[string]any, key string, defaultVal int64) (int64, error) {
 	raw, exists := args[key]
 	if !exists {
 		return defaultVal, nil

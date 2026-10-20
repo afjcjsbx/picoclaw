@@ -8,15 +8,6 @@ import (
 )
 
 type (
-	Message                = toolshared.Message
-	ToolCall               = toolshared.ToolCall
-	FunctionCall           = toolshared.FunctionCall
-	LLMResponse            = toolshared.LLMResponse
-	UsageInfo              = toolshared.UsageInfo
-	LLMProvider            = toolshared.LLMProvider
-	ToolDefinition         = toolshared.ToolDefinition
-	ToolFunctionDefinition = toolshared.ToolFunctionDefinition
-	ExecRequest            = toolshared.ExecRequest
 	ExecResponse           = toolshared.ExecResponse
 	SessionInfo            = toolshared.SessionInfo
 	Tool                   = toolshared.Tool

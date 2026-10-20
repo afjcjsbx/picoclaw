@@ -2066,6 +2066,25 @@ func TestDefaultConfig_SessionDimensions(t *testing.T) {
 	}
 }
 
+func TestSessionConfig_DurableWritesEnabled(t *testing.T) {
+	var cfg SessionConfig
+	if !cfg.DurableWritesEnabled() {
+		t.Error("DurableWritesEnabled() = false for zero config, want true (default)")
+	}
+
+	enabled := true
+	cfg.DurableWrites = &enabled
+	if !cfg.DurableWritesEnabled() {
+		t.Error("DurableWritesEnabled() = false with durable_writes=true, want true")
+	}
+
+	disabled := false
+	cfg.DurableWrites = &disabled
+	if cfg.DurableWritesEnabled() {
+		t.Error("DurableWritesEnabled() = true with durable_writes=false, want false")
+	}
+}
+
 func TestSessionConfig_ApplyDmScope(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -3675,4 +3694,19 @@ func TestSessionPruneConfig_EnvOverrides(t *testing.T) {
 	assert.Equal(t, 64, prune.MaxDBSizeMB)
 	assert.Equal(t, 5, prune.EffectiveCheckIntervalMinutes())
 	assert.False(t, prune.VacuumEnabled())
+}
+
+func TestSessionConfig_DurableWritesEnvOverride(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	data, err := json.Marshal(DefaultConfig())
+	assert.NoError(t, err)
+	assert.NoError(t, os.WriteFile(path, data, 0o600))
+
+	t.Setenv("PICOCLAW_HOME", dir)
+	t.Setenv("PICOCLAW_SESSION_DURABLE_WRITES", "false")
+
+	cfg, err := LoadConfig(path)
+	assert.NoError(t, err)
+	assert.False(t, cfg.Session.DurableWritesEnabled())
 }

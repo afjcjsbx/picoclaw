@@ -409,6 +409,20 @@ func ensureSessionMetadata(store session.SessionStore, key string, scope *sessio
 	metaStore.EnsureSessionMetadata(key, scope, aliases)
 }
 
+// warnSessionStoreError logs a failed session store operation and lets the
+// caller continue with its previous flow. Write failures are not fatal to a
+// turn, but silently dropping them hides persistence problems.
+func warnSessionStoreError(sessionKey, operation string, err error) {
+	if err == nil {
+		return
+	}
+	logger.WarnCF("agent", "Session store operation failed", map[string]any{
+		"session_key": sessionKey,
+		"operation":   operation,
+		"error":       err.Error(),
+	})
+}
+
 func sleepWithContext(ctx context.Context, d time.Duration) error {
 	timer := time.NewTimer(d)
 	defer timer.Stop()

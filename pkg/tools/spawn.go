@@ -3,8 +3,34 @@ package tools
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"strings"
+
+	"github.com/sipeed/picoclaw/pkg/logger"
 )
+
+// ChildTracker lets a turn count the async children it spawns so it can join
+// them before finishing. Begin is called synchronously, before the child
+// goroutine starts; the returned func is called exactly once with the child's
+// final result (errors included) and takes over delivering it to the turn.
+type ChildTracker interface {
+	Begin() (done func(*ToolResult))
+}
+
+type childTrackerKey struct{}
+
+// WithChildTracker returns a context whose async spawns are tracked by t.
+func WithChildTracker(ctx context.Context, t ChildTracker) context.Context {
+	return context.WithValue(ctx, childTrackerKey{}, t)
+}
+
+// beginChild returns nil when ctx has no tracker (untracked, fire-and-forget).
+func beginChild(ctx context.Context) func(*ToolResult) {
+	if t, ok := ctx.Value(childTrackerKey{}).(ChildTracker); ok {
+		return t.Begin()
+	}
+	return nil
+}
 
 type SpawnTool struct {
 	spawner        SubTurnSpawner
@@ -38,7 +64,9 @@ func (t *SpawnTool) Name() string {
 }
 
 func (t *SpawnTool) Description() string {
-	return "Spawn a subagent to handle a task in the background. Use this for complex or time-consuming tasks that can run independently. The subagent will complete the task and report back when done."
+	return "Spawn a subagent to handle a task in the background. Use this for complex or time-consuming tasks that can run independently. " +
+		"Call it several times in one step to run subagents in parallel. " +
+		"The result arrives automatically when the subagent is done; never poll or sleep to wait for it."
 }
 
 func (t *SpawnTool) Parameters() map[string]any {
@@ -113,20 +141,62 @@ func (t *SpawnTool) execute(
 
 	// Use spawner if available (direct SpawnSubTurn call)
 	if t.spawner != nil {
-		// Launch async sub-turn in goroutine
+		// Tracked children (sub-turn parents) are joined before the parent
+		// finishes and get their result through the tracker; untracked ones
+		// (root turns) deliver via the callback/bus as before.
+		track := beginChild(ctx)
 		go func() {
-			result, err := t.spawner.SpawnSubTurn(ctx, SubTurnConfig{
-				Model:         t.defaultModel,
-				Tools:         nil, // Will inherit from parent via context
-				SystemPrompt:  systemPrompt,
-				MaxTokens:     t.maxTokens,
-				Temperature:   t.temperature,
-				Async:         true, // Async execution
-				Critical:      true, // Background spawn should survive parent turn completion
-				TargetAgentID: targetAgentID,
-			})
-			if err != nil {
-				result = ErrorResult(fmt.Sprintf("Spawn failed: %v", err)).WithError(err)
+			// Recover panics in this goroutine: it outlives the registry's
+			// synchronous recover, so an unrecovered panic would crash the
+			// whole process instead of failing the spawned task.
+			result := func() (spawnResult *ToolResult) {
+				defer func() {
+					if r := recover(); r != nil {
+						logger.ErrorCF("spawn", "spawn goroutine panic recovered",
+							map[string]any{
+								"panic": fmt.Sprintf("%v", r),
+								"stack": string(debug.Stack()),
+							})
+						spawnResult = ErrorResult("spawn failed unexpectedly").
+							WithError(fmt.Errorf("spawn panic: %v", r))
+					}
+				}()
+
+				res, err := t.spawner.SpawnSubTurn(ctx, SubTurnConfig{
+					Model:         t.defaultModel,
+					Tools:         nil, // Will inherit from parent via context
+					SystemPrompt:  systemPrompt,
+					MaxTokens:     t.maxTokens,
+					Temperature:   t.temperature,
+					Async:         track == nil, // tracker delivers the result itself
+					Critical:      true,         // Background spawn should survive parent turn completion
+					TargetAgentID: targetAgentID,
+				})
+				if err != nil {
+					return ErrorResult(fmt.Sprintf("Spawn failed: %v", err)).WithError(err)
+				}
+				if res == nil {
+					return ErrorResult("spawn returned no result")
+				}
+				return res
+			}()
+
+			if result != nil && result.ForLLM != "" {
+				// Several children report back to the same parent: say who this is.
+				// Copy: with Async=true the same pointer was already delivered to the
+				// parent's pendingResults, so mutating it would race with the parent.
+				tagged := *result
+				tagged.ForLLM = fmt.Sprintf(
+					"[Result from subagent %s]\n%s",
+					spawnSource(label, targetAgentID),
+					result.ForLLM,
+				)
+				result = &tagged
+			}
+
+			if track != nil {
+				track(result)
+				return
 			}
 
 			// Call callback if provided
@@ -135,13 +205,32 @@ func (t *SpawnTool) execute(
 			}
 		}()
 
-		// Return immediate acknowledgment
-		if label != "" {
-			return AsyncResult(fmt.Sprintf("Spawned subagent '%s' for task: %s", label, task))
+		// Return immediate acknowledgment, saying what happens next so the model
+		// does not invent its own wait (exec sleep, polling).
+		next := "You will receive its result as a follow-up message; do not poll, sleep or use exec to wait."
+		if track != nil {
+			next = "Its result is delivered to you automatically before you finish; " +
+				"do not poll, sleep or use exec to wait."
 		}
-		return AsyncResult(fmt.Sprintf("Spawned subagent for task: %s", task))
+		if label != "" {
+			return AsyncResult(fmt.Sprintf("Spawned subagent '%s' for task: %s\n%s", label, task, next))
+		}
+		return AsyncResult(fmt.Sprintf("Spawned subagent for task: %s\n%s", task, next))
 	}
 
 	// Fallback: spawner not configured
 	return ErrorResult("Subagent manager not configured")
+}
+
+// spawnSource names a spawned subagent for result attribution.
+func spawnSource(label, agentID string) string {
+	switch {
+	case label != "" && agentID != "" && label != agentID:
+		return fmt.Sprintf("%q (agent %s)", label, agentID)
+	case label != "":
+		return fmt.Sprintf("%q", label)
+	case agentID != "":
+		return fmt.Sprintf("%q", agentID)
+	}
+	return "(unnamed)"
 }

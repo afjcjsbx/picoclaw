@@ -26,6 +26,8 @@ func TestSessionHeaderApply(t *testing.T) {
 		{"key beats fallback", "", withFallback, key("k"), "k"},
 		{"no key, no fallback", "", plain, nil, ""},
 		{"zero value disabled", "", SessionHeader{}, key("a"), ""},
+		{"max length truncates", "", SessionHeader{Name: "X-S", MaxLen: 3}, key("abcdef"), "abc"},
+		{"max length keeps short key", "", SessionHeader{Name: "X-S", MaxLen: 8}, key("abc"), "abc"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

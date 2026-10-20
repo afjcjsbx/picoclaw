@@ -156,23 +156,27 @@ func (p *Pipeline) CallLLM(
 		},
 	)
 
-	logger.DebugCF("agent", "LLM request",
-		map[string]any{
-			"agent_id":          ts.agent.ID,
-			"iteration":         iteration,
-			"model":             exec.llmModel,
-			"messages_count":    len(exec.callMessages),
-			"tools_count":       len(exec.providerToolDefs),
-			"max_tokens":        ts.agent.MaxTokens,
-			"temperature":       ts.agent.Temperature,
-			"system_prompt_len": len(exec.callMessages[0].Content),
-		})
-	logger.DebugCF("agent", "Full LLM request",
-		map[string]any{
-			"iteration":     iteration,
-			"messages_json": formatMessagesForLog(exec.callMessages),
-			"tools_json":    formatToolsForLog(exec.providerToolDefs),
-		})
+	// The full-log payload walks the whole conversation and tool set, so only
+	// build it when DEBUG is actually enabled.
+	if logger.IsDebugEnabled() {
+		logger.DebugCF("agent", "LLM request",
+			map[string]any{
+				"agent_id":          ts.agent.ID,
+				"iteration":         iteration,
+				"model":             exec.llmModel,
+				"messages_count":    len(exec.callMessages),
+				"tools_count":       len(exec.providerToolDefs),
+				"max_tokens":        ts.agent.MaxTokens,
+				"temperature":       ts.agent.Temperature,
+				"system_prompt_len": len(exec.callMessages[0].Content),
+			})
+		logger.DebugCF("agent", "Full LLM request",
+			map[string]any{
+				"iteration":     iteration,
+				"messages_json": formatMessagesForLog(exec.callMessages),
+				"tools_json":    formatToolsForLog(exec.providerToolDefs),
+			})
+	}
 
 	// LLM call closure with fallback support
 	callLLM := func(
@@ -434,6 +438,8 @@ func (p *Pipeline) CallLLM(
 			}); asmErr == nil && asmResp != nil {
 				exec.history = asmResp.History
 				exec.summary = asmResp.Summary
+			} else if asmErr != nil {
+				warnSessionStoreError(ts.sessionKey, "assemble", asmErr)
 			}
 			contextualSkills := ts.activeSkills
 			if ts.agent.ContextBuilder != nil {
@@ -626,6 +632,8 @@ func (p *Pipeline) CallLLM(
 		llmResponseFields["prompt_tokens"] = exec.response.Usage.PromptTokens
 		llmResponseFields["completion_tokens"] = exec.response.Usage.CompletionTokens
 		llmResponseFields["total_tokens"] = exec.response.Usage.TotalTokens
+		llmResponseFields["cache_read_tokens"] = exec.response.Usage.CacheReadTokens
+		llmResponseFields["cache_creation_tokens"] = exec.response.Usage.CacheCreationTokens
 	}
 	logger.DebugCF("agent", "LLM response", llmResponseFields)
 
@@ -645,6 +653,21 @@ func (p *Pipeline) CallLLM(
 				})
 			exec.pendingMessages = append(exec.pendingMessages, steerMsgs...)
 			return ControlContinue, nil
+		}
+		// A SubTurn may not finish before its async children: let the model
+		// react to their results instead of orphaning them.
+		if ts.parentTurnState != nil && !exec.gracefulTerminal {
+			if msgs := ts.joinChildren(turnCtx, al.cfg.FilterSensitiveData); len(msgs) > 0 {
+				cancelConfiguredStreamingLLM(turnCtx, exec)
+				logger.InfoCF("agent", "Joined async children after direct LLM response; continuing turn",
+					map[string]any{
+						"agent_id":  ts.agent.ID,
+						"iteration": iteration,
+						"results":   len(msgs),
+					})
+				exec.pendingMessages = append(exec.pendingMessages, msgs...)
+				return ControlContinue, nil
+			}
 		}
 
 		exec.finalContent = responseContent
@@ -716,7 +739,11 @@ func (p *Pipeline) CallLLM(
 	}
 	exec.messages = append(exec.messages, assistantMsg)
 	if !ts.opts.NoHistory {
-		ts.agent.Sessions.AddFullMessage(ts.sessionKey, assistantMsg)
+		warnSessionStoreError(
+			ts.sessionKey,
+			"add full message",
+			ts.agent.Sessions.AddFullMessage(ctx, ts.sessionKey, assistantMsg),
+		)
 		ts.recordPersistedMessage(assistantMsg)
 		ts.ingestMessage(turnCtx, al, assistantMsg)
 	}

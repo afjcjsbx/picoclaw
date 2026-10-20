@@ -40,6 +40,73 @@ func TestNewJSONLStore_CreatesDirectory(t *testing.T) {
 	}
 }
 
+func TestNewJSONLStore_DurableWritesOption(t *testing.T) {
+	store, err := NewJSONLStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewJSONLStore: %v", err)
+	}
+	defer store.Close()
+	if !store.durableWrites {
+		t.Error("durableWrites = false by default, want true")
+	}
+
+	fast, err := NewJSONLStore(t.TempDir(), WithDurableWrites(false))
+	if err != nil {
+		t.Fatalf("NewJSONLStore: %v", err)
+	}
+	defer fast.Close()
+	if fast.durableWrites {
+		t.Error("durableWrites = true with WithDurableWrites(false), want false")
+	}
+}
+
+func TestAddMessage_NonDurableWritesRoundtrip(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewJSONLStore(dir, WithDurableWrites(false))
+	if err != nil {
+		t.Fatalf("NewJSONLStore: %v", err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+
+	if err = store.AddMessage(ctx, "nondurable", "user", "hello"); err != nil {
+		t.Fatalf("AddMessage: %v", err)
+	}
+	if err = store.AddMessage(ctx, "nondurable", "assistant", "world"); err != nil {
+		t.Fatalf("AddMessage: %v", err)
+	}
+
+	meta, err := store.readMeta("nondurable")
+	if err != nil {
+		t.Fatalf("readMeta: %v", err)
+	}
+	if meta.Count != 2 {
+		t.Errorf("meta.Count = %d, want 2", meta.Count)
+	}
+
+	history, err := store.GetHistory(ctx, "nondurable")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if len(history) != 2 || history[0].Content != "hello" || history[1].Content != "world" {
+		t.Fatalf("history = %+v, want hello/world", history)
+	}
+
+	// A fresh store over the same directory must see the same state.
+	reopened, err := NewJSONLStore(dir, WithDurableWrites(false))
+	if err != nil {
+		t.Fatalf("NewJSONLStore(reopen): %v", err)
+	}
+	defer reopened.Close()
+	reopenedHistory, err := reopened.GetHistory(ctx, "nondurable")
+	if err != nil {
+		t.Fatalf("GetHistory(reopen): %v", err)
+	}
+	if len(reopenedHistory) != 2 {
+		t.Fatalf("reopened history length = %d, want 2", len(reopenedHistory))
+	}
+}
+
 func TestAddMessage_BasicRoundtrip(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
@@ -382,6 +449,66 @@ func TestResolveSessionKeyByAlias(t *testing.T) {
 	}
 	if resolved != "canonical" {
 		t.Fatalf("resolved = %q, want %q", resolved, "canonical")
+	}
+}
+
+func TestResolveSessionKey_CachesAliasesAndTracksUpdates(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	if err := store.AddMessage(ctx, "canonical", "user", "hello"); err != nil {
+		t.Fatalf("AddMessage(canonical) error = %v", err)
+	}
+	if err := store.UpsertSessionMeta(ctx, "canonical", nil, []string{"old:alias"}); err != nil {
+		t.Fatalf("UpsertSessionMeta(old) error = %v", err)
+	}
+
+	resolved, found, err := store.ResolveSessionKey(ctx, "old:alias")
+	if err != nil || !found || resolved != "canonical" {
+		t.Fatalf("ResolveSessionKey(old:alias) = %q, %v, %v; want canonical, true, nil", resolved, found, err)
+	}
+
+	// Build the index from a second session, then update the alias set.
+	if addErr := store.AddMessage(ctx, "second", "user", "hello"); addErr != nil {
+		t.Fatalf("AddMessage(second) error = %v", addErr)
+	}
+	if updateErr := store.UpsertSessionMeta(ctx, "canonical", nil, []string{"new:alias"}); updateErr != nil {
+		t.Fatalf("UpsertSessionMeta(new) error = %v", updateErr)
+	}
+
+	resolved, found, err = store.ResolveSessionKey(ctx, "new:alias")
+	if err != nil || !found || resolved != "canonical" {
+		t.Fatalf("ResolveSessionKey(new:alias) = %q, %v, %v; want canonical, true, nil", resolved, found, err)
+	}
+	if _, found, err = store.ResolveSessionKey(ctx, "old:alias"); err != nil || found {
+		t.Fatalf("ResolveSessionKey(old:alias) = found %v, err %v; want not found", found, err)
+	}
+
+	if deleteErr := store.DeleteSession(ctx, "canonical"); deleteErr != nil {
+		t.Fatalf("DeleteSession() error = %v", deleteErr)
+	}
+	if _, found, err = store.ResolveSessionKey(ctx, "new:alias"); err != nil || found {
+		t.Fatalf("ResolveSessionKey(new:alias) after delete = found %v, err %v; want not found", found, err)
+	}
+}
+
+func TestResolveSessionKey_SeesSessionsCreatedAfterIndexBuild(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	if err := store.AddMessage(ctx, "first", "user", "hello"); err != nil {
+		t.Fatalf("AddMessage(first) error = %v", err)
+	}
+	if _, _, err := store.ResolveSessionKey(ctx, "first"); err != nil {
+		t.Fatalf("ResolveSessionKey(first) error = %v", err)
+	}
+
+	if err := store.AddMessage(ctx, "late:key", "user", "hello"); err != nil {
+		t.Fatalf("AddMessage(late) error = %v", err)
+	}
+	resolved, found, err := store.ResolveSessionKey(ctx, "late:key")
+	if err != nil || !found || resolved != "late:key" {
+		t.Fatalf("ResolveSessionKey(late:key) = %q, %v, %v; want late:key, true, nil", resolved, found, err)
 	}
 }
 
@@ -1198,6 +1325,21 @@ func TestStore_PreservesExistingCreatedAt(t *testing.T) {
 func BenchmarkAddMessage(b *testing.B) {
 	dir := b.TempDir()
 	store, err := NewJSONLStore(dir)
+	if err != nil {
+		b.Fatalf("NewJSONLStore: %v", err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = store.AddMessage(ctx, "bench", "user", "benchmark message content")
+	}
+}
+
+func BenchmarkAddMessage_NonDurableWrites(b *testing.B) {
+	dir := b.TempDir()
+	store, err := NewJSONLStore(dir, WithDurableWrites(false))
 	if err != nil {
 		b.Fatalf("NewJSONLStore: %v", err)
 	}

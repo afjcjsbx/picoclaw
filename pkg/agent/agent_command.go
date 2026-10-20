@@ -472,7 +472,11 @@ func (al *AgentLoop) buildCommandsRuntime(
 			if usage == nil {
 				return nil
 			}
-			history := agent.Sessions.GetHistory(opts.SessionKey)
+			history, err := agent.Sessions.GetHistory(ctx, opts.SessionKey)
+			if err != nil {
+				warnSessionStoreError(opts.SessionKey, "get history", err)
+				history = nil
+			}
 			return &commands.ContextStats{
 				UsedTokens:        usage.UsedTokens,
 				TotalTokens:       usage.TotalTokens,
