@@ -125,6 +125,28 @@ func TestLoadSessions_NormalizesMissingCreatedAt(t *testing.T) {
 	}
 }
 
+func TestLoadSessions_SkipsCorruptAndKeylessFiles(t *testing.T) {
+	tmpDir := t.TempDir()
+	valid := `{"key":"telegram:valid","messages":[],"created":"2026-01-01T00:00:00Z","updated":"2026-01-01T00:00:00Z"}`
+	keyless := `{"messages":[],"created":"2026-01-01T00:00:00Z","updated":"2026-01-01T00:00:00Z"}`
+	files := map[string]string{
+		"telegram_valid.json":   valid,
+		"telegram_keyless.json": keyless,
+		"telegram_corrupt.json": "{not json",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(tmpDir, name), []byte(content), 0o644); err != nil {
+			t.Fatalf("WriteFile(%s): %v", name, err)
+		}
+	}
+
+	sm := NewSessionManager(tmpDir)
+	got := sm.ListSessions()
+	if len(got) != 1 || got[0] != "telegram:valid" {
+		t.Fatalf("ListSessions() = %v, want [telegram:valid]", got)
+	}
+}
+
 func TestLastActivity(t *testing.T) {
 	sm := NewSessionManager(t.TempDir())
 

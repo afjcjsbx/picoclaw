@@ -37,11 +37,11 @@ func TestParseLegacySessionKey(t *testing.T) {
 	if parsed == nil {
 		t.Fatal("expected parsed legacy key, got nil")
 	}
-	if parsed.AgentID != "sales" {
-		t.Fatalf("AgentID = %q, want sales", parsed.AgentID)
+	if parsed.agentID != "sales" {
+		t.Fatalf("agentID = %q, want sales", parsed.agentID)
 	}
-	if parsed.Rest != "telegram:direct:user123" {
-		t.Fatalf("Rest = %q, want telegram:direct:user123", parsed.Rest)
+	if parsed.rest != "telegram:direct:user123" {
+		t.Fatalf("rest = %q, want telegram:direct:user123", parsed.rest)
 	}
 
 	if got := parseLegacySessionKey("sk_v1_abc"); got != nil {
