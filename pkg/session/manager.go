@@ -176,6 +176,20 @@ func (sm *SessionManager) LastActivity(key string) time.Time {
 	return time.Time{}
 }
 
+// sessionPath returns the on-disk path of a session file. It validates the
+// sanitized filename so callers cannot escape the storage directory.
+func (sm *SessionManager) sessionPath(key string) (string, error) {
+	filename := schema.SanitizeKey(key)
+	// filepath.IsLocal rejects empty names, "..", absolute paths and
+	// OS-reserved device names (NUL, COM1 … on Windows). SanitizeKey has
+	// already replaced '/' and '\' with '_', so no subdirectories are
+	// created.
+	if filename == "." || !filepath.IsLocal(filename) {
+		return "", os.ErrInvalid
+	}
+	return filepath.Join(sm.storage, filename+".json"), nil
+}
+
 // DeleteSession removes a session from memory and deletes its backing file.
 // Used by automatic session pruning. Missing files are ignored.
 func (sm *SessionManager) DeleteSession(key string) error {
@@ -187,11 +201,10 @@ func (sm *SessionManager) DeleteSession(key string) error {
 		return nil
 	}
 
-	filename := schema.SanitizeKey(key)
-	if filename == "." || !filepath.IsLocal(filename) {
-		return os.ErrInvalid
+	path, err := sm.sessionPath(key)
+	if err != nil {
+		return err
 	}
-	path := filepath.Join(sm.storage, filename+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return err
 	}
@@ -203,13 +216,11 @@ func (sm *SessionManager) Save(_ context.Context, key string) error {
 		return nil
 	}
 
-	filename := schema.SanitizeKey(key)
-
-	// filepath.IsLocal rejects empty names, "..", absolute paths, and
-	// OS-reserved device names (NUL, COM1 … on Windows). SanitizeKey
-	// already replaced '/' and '\' with '_', so no subdirs are created.
-	if filename == "." || !filepath.IsLocal(filename) {
-		return os.ErrInvalid
+	// Validate the key before looking the session up so an invalid key fails
+	// even when the session does not exist.
+	sessionPath, err := sm.sessionPath(key)
+	if err != nil {
+		return err
 	}
 
 	// Snapshot under read lock, then perform slow file I/O after unlock.
@@ -238,7 +249,6 @@ func (sm *SessionManager) Save(_ context.Context, key string) error {
 		return err
 	}
 
-	sessionPath := filepath.Join(sm.storage, filename+".json")
 	tmpFile, err := os.CreateTemp(sm.storage, "session-*.tmp")
 	if err != nil {
 		return err

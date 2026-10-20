@@ -70,6 +70,29 @@ func TestSave_RejectsPathTraversal(t *testing.T) {
 	}
 }
 
+func TestSessionPath_ValidatesKeys(t *testing.T) {
+	dir := t.TempDir()
+	sm := NewSessionManager(dir)
+
+	for _, key := range []string{"", ".", ".."} {
+		path, err := sm.sessionPath(key)
+		if err != os.ErrInvalid {
+			t.Errorf("sessionPath(%q) error = %v, want os.ErrInvalid", key, err)
+		}
+		if path != "" {
+			t.Errorf("sessionPath(%q) path = %q, want empty", key, path)
+		}
+	}
+
+	path, err := sm.sessionPath("telegram:1")
+	if err != nil {
+		t.Fatalf("sessionPath(\"telegram:1\") unexpected error: %v", err)
+	}
+	if want := filepath.Join(dir, "telegram_1.json"); path != want {
+		t.Errorf("sessionPath(\"telegram:1\") = %q, want %q", path, want)
+	}
+}
+
 func TestLoadSessions_NormalizesMissingCreatedAt(t *testing.T) {
 	tmpDir := t.TempDir()
 	sessionPath := filepath.Join(tmpDir, "telegram_legacy.json")
