@@ -404,3 +404,112 @@ func TestSpawnStatusTool_ChannelFiltering_NoContext(t *testing.T) {
 		t.Errorf("Expected task visible from no-context caller, got:\n%s", result.ForLLM)
 	}
 }
+
+func TestSpawnStatusTool_SubTurnSource_MergedAndScoped(t *testing.T) {
+	manager := NewSubagentManager(&MockLLMProvider{}, "test-model", t.TempDir())
+
+	// Legacy manager task in this conversation, and one from another chat.
+	manager.mu.Lock()
+	manager.tasks["subagent-1"] = &SubagentTask{
+		ID: "subagent-1", Task: "legacy task", Status: "completed",
+		OriginChannel: "telegram", OriginChatID: "chat-A", Created: 1000,
+	}
+	manager.mu.Unlock()
+
+	tool := NewSpawnStatusTool(manager)
+	tool.SetSubTurnSource(func(ctx context.Context) []SubagentTask {
+		return []SubagentTask{
+			{
+				ID: "subturn-1", Task: "summarize page", AgentID: "main", Status: "running",
+				OriginChannel: "telegram", OriginChatID: "chat-A", Created: 2000,
+			},
+			{
+				ID: "subturn-2", Task: "other conversation", Status: "running",
+				OriginChannel: "telegram", OriginChatID: "chat-B", Created: 3000,
+			},
+		}
+	})
+
+	ctx := WithToolContext(context.Background(), "telegram", "chat-A")
+	result := tool.Execute(ctx, map[string]any{})
+	if result.IsError {
+		t.Fatalf("Unexpected error: %s", result.ForLLM)
+	}
+
+	if !strings.Contains(result.ForLLM, "2 total") {
+		t.Errorf("Expected merged total of 2, got:\n%s", result.ForLLM)
+	}
+	for _, id := range []string{"subagent-1", "subturn-1"} {
+		if !strings.Contains(result.ForLLM, id) {
+			t.Errorf("Expected %s in output, got:\n%s", id, result.ForLLM)
+		}
+	}
+	if strings.Contains(result.ForLLM, "subturn-2") {
+		t.Errorf("Should not leak another conversation's sub-turn, got:\n%s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "summarize page") {
+		t.Errorf("Expected live sub-turn task text, got:\n%s", result.ForLLM)
+	}
+}
+
+func TestSpawnStatusTool_SubTurnSource_DeduplicatedByID(t *testing.T) {
+	manager := NewSubagentManager(&MockLLMProvider{}, "test-model", t.TempDir())
+	manager.mu.Lock()
+	manager.tasks["subturn-1"] = &SubagentTask{
+		ID: "subturn-1", Task: "tracked by both sources", Status: "running", Created: 1000,
+	}
+	manager.mu.Unlock()
+
+	tool := NewSpawnStatusTool(manager)
+	tool.SetSubTurnSource(func(ctx context.Context) []SubagentTask {
+		return []SubagentTask{{ID: "subturn-1", Task: "tracked by both sources", Status: "running", Created: 1000}}
+	})
+
+	result := tool.Execute(context.Background(), map[string]any{})
+	if result.IsError {
+		t.Fatalf("Unexpected error: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "1 total") {
+		t.Errorf("Expected a single deduplicated entry, got:\n%s", result.ForLLM)
+	}
+	if strings.Count(result.ForLLM, "[subturn-1]") != 1 {
+		t.Errorf("Expected subturn-1 exactly once, got:\n%s", result.ForLLM)
+	}
+}
+
+func TestSpawnStatusTool_SubTurnSource_GetByID(t *testing.T) {
+	manager := NewSubagentManager(&MockLLMProvider{}, "test-model", t.TempDir())
+	tool := NewSpawnStatusTool(manager)
+	tool.SetSubTurnSource(func(ctx context.Context) []SubagentTask {
+		return []SubagentTask{
+			{
+				ID: "subturn-1", Task: "summarize page", AgentID: "main", Status: "running",
+				OriginChannel: "telegram", OriginChatID: "chat-A",
+			},
+			{
+				ID: "subturn-2", Task: "other conversation", Status: "running",
+				OriginChannel: "telegram", OriginChatID: "chat-B",
+			},
+		}
+	})
+
+	ctx := WithToolContext(context.Background(), "telegram", "chat-A")
+
+	result := tool.Execute(ctx, map[string]any{"task_id": "subturn-1"})
+	if result.IsError {
+		t.Fatalf("Expected live sub-turn lookup to succeed, got: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "summarize page") {
+		t.Errorf("Expected sub-turn details, got:\n%s", result.ForLLM)
+	}
+
+	crossChat := tool.Execute(ctx, map[string]any{"task_id": "subturn-2"})
+	if !crossChat.IsError {
+		t.Errorf("Expected cross-chat lookup to be blocked, got: %s", crossChat.ForLLM)
+	}
+
+	missing := tool.Execute(ctx, map[string]any{"task_id": "subturn-missing"})
+	if !missing.IsError {
+		t.Errorf("Expected unknown ID to error, got: %s", missing.ForLLM)
+	}
+}
