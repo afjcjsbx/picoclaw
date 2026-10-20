@@ -240,6 +240,86 @@ func (c *closeNotifier) Close() error {
 	return c.ReadCloser.Close()
 }
 
+func TestDrainAndCloseBody_LimitsReadAndCloses(t *testing.T) {
+	body := &trackedReadCloser{
+		reader: strings.NewReader(strings.Repeat("x", maxRetryDrainBytes+1024)),
+	}
+
+	drainAndCloseBody(&http.Response{Body: body})
+
+	assert.Equal(t, maxRetryDrainBytes, body.read)
+	assert.True(t, body.closed)
+}
+
+func TestDrainAndCloseBody_NilSafe(t *testing.T) {
+	drainAndCloseBody(nil)
+	drainAndCloseBody(&http.Response{})
+}
+
+func TestDoRequestWithRetry_DrainsBodyBeforeRetry(t *testing.T) {
+	retryDelayUnit = time.Millisecond
+	t.Cleanup(func() { retryDelayUnit = time.Second })
+
+	firstBody := &trackedReadCloser{
+		reader: strings.NewReader(strings.Repeat("x", maxRetryDrainBytes+1024)),
+	}
+	attempts := 0
+	client := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			attempts++
+			if attempts == 1 {
+				return &http.Response{
+					StatusCode: http.StatusInternalServerError,
+					Body:       firstBody,
+					Header:     make(http.Header),
+					Request:    req,
+				}, nil
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader("ok")),
+				Header:     make(http.Header),
+				Request:    req,
+			}, nil
+		}),
+	}
+
+	req, err := http.NewRequest(http.MethodGet, "http://example.com", nil)
+	require.NoError(t, err)
+
+	resp, err := DoRequestWithRetry(client, req)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	_ = resp.Body.Close()
+
+	assert.Equal(t, 2, attempts)
+	assert.Equal(t, maxRetryDrainBytes, firstBody.read)
+	assert.True(t, firstBody.closed)
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+type trackedReadCloser struct {
+	reader io.Reader
+	read   int
+	closed bool
+}
+
+func (t *trackedReadCloser) Read(p []byte) (int, error) {
+	n, err := t.reader.Read(p)
+	t.read += n
+	return n, err
+}
+
+func (t *trackedReadCloser) Close() error {
+	t.closed = true
+	return nil
+}
+
 func TestDoRequestWithRetry_Delay(t *testing.T) {
 	retryDelayUnit = time.Millisecond
 	t.Cleanup(func() { retryDelayUnit = time.Second })

@@ -37,7 +37,13 @@ type (
 	ReasoningDetail        = protocoltypes.ReasoningDetail
 )
 
-const DefaultRequestTimeout = 120 * time.Second
+const (
+	DefaultRequestTimeout = 120 * time.Second
+
+	providerMaxIdleConns        = 4
+	providerMaxIdleConnsPerHost = 2
+	providerIdleConnTimeout     = 30 * time.Second
+)
 
 // SessionOptionKey is the LLM options key carrying the stable conversation
 // session key, for providers that tag requests with a per-conversation header.
@@ -90,25 +96,32 @@ func SetOpenRouterAttribution(req *http.Request) {
 	req.Header.Set("X-Openrouter-Categories", "personal-agent,cli-agent")
 }
 
+// newBoundedTransport returns a transport with a small idle-connection pool.
+// It clones http.DefaultTransport to preserve TLS, HTTP/2 and dial timeouts.
+func newBoundedTransport() *http.Transport {
+	var tr *http.Transport
+	if base, ok := http.DefaultTransport.(*http.Transport); ok {
+		tr = base.Clone()
+	} else {
+		tr = &http.Transport{Proxy: http.ProxyFromEnvironment}
+	}
+	tr.MaxIdleConns = providerMaxIdleConns
+	tr.MaxIdleConnsPerHost = providerMaxIdleConnsPerHost
+	tr.IdleConnTimeout = providerIdleConnTimeout
+	return tr
+}
+
 // NewHTTPClient creates an *http.Client with an optional proxy and the default timeout.
 func NewHTTPClient(proxy string) *http.Client {
 	client := &http.Client{
-		Timeout: DefaultRequestTimeout,
+		Timeout:   DefaultRequestTimeout,
+		Transport: newBoundedTransport(),
 	}
 	if proxy != "" {
 		parsed, err := url.Parse(proxy)
 		if err == nil {
-			// Preserve http.DefaultTransport settings (TLS, HTTP/2, timeouts, etc.)
-			if base, ok := http.DefaultTransport.(*http.Transport); ok {
-				tr := base.Clone()
-				tr.Proxy = http.ProxyURL(parsed)
-				client.Transport = tr
-			} else {
-				// Fallback: minimal transport if DefaultTransport is not *http.Transport.
-				client.Transport = &http.Transport{
-					Proxy: http.ProxyURL(parsed),
-				}
-			}
+			transport := client.Transport.(*http.Transport)
+			transport.Proxy = http.ProxyURL(parsed)
 		} else {
 			log.Printf("common: invalid proxy URL %q: %v", proxy, err)
 		}

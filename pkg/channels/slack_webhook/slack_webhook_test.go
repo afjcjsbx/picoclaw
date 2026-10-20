@@ -133,6 +133,39 @@ func TestSlackWebhookChannel_Send(t *testing.T) {
 	require.Len(t, blocks, 1)
 }
 
+func TestSlackWebhookChannel_DrainsSuccessBody(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer server.Close()
+
+	cfg := &config.SlackWebhookSettings{
+		Webhooks: map[string]config.SlackWebhookTarget{
+			"default": {WebhookURL: *config.NewSecureString(server.URL)},
+		},
+	}
+	ch, err := NewSlackWebhookChannel(
+		&config.Channel{Enabled: true},
+		cfg,
+		bus.NewMessageBus(),
+	)
+	require.NoError(t, err)
+
+	baseClient := server.Client()
+	tracker := &trackingTransport{rt: baseClient.Transport}
+	baseClient.Transport = tracker
+	ch.client = baseClient
+
+	require.NoError(t, ch.Start(context.Background()))
+	_, err = ch.Send(context.Background(), bus.OutboundMessage{Content: "Test"})
+	require.NoError(t, err)
+
+	require.NotNil(t, tracker.body)
+	assert.Equal(t, len("ok"), tracker.body.read)
+	assert.True(t, tracker.body.closed)
+}
+
 func TestSlackWebhookChannel_FallbackToDefault(t *testing.T) {
 	var requestCount atomic.Int32
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -278,4 +311,37 @@ func TestSplitText_ShortText(t *testing.T) {
 	chunks := splitText(input, 3000)
 	require.Len(t, chunks, 1)
 	assert.Equal(t, input, chunks[0])
+}
+
+type trackingTransport struct {
+	rt   http.RoundTripper
+	body *trackedBody
+}
+
+func (t *trackingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.rt.RoundTrip(req)
+	if err != nil {
+		return resp, err
+	}
+	body := &trackedBody{ReadCloser: resp.Body}
+	resp.Body = body
+	t.body = body
+	return resp, nil
+}
+
+type trackedBody struct {
+	io.ReadCloser
+	read   int
+	closed bool
+}
+
+func (t *trackedBody) Read(p []byte) (int, error) {
+	n, err := t.ReadCloser.Read(p)
+	t.read += n
+	return n, err
+}
+
+func (t *trackedBody) Close() error {
+	t.closed = true
+	return t.ReadCloser.Close()
 }
