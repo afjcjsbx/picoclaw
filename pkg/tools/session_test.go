@@ -6,8 +6,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSessionManager_AddGet(t *testing.T) {
-	sm := NewSessionManager()
+func TestProcessSessionManager_AddGet(t *testing.T) {
+	sm := NewProcessSessionManager()
 	t.Cleanup(sm.Stop)
 	session := &ProcessSession{
 		ID:        "test-1",
@@ -23,8 +23,8 @@ func TestSessionManager_AddGet(t *testing.T) {
 	require.Equal(t, "test-1", got.ID)
 }
 
-func TestSessionManager_Remove(t *testing.T) {
-	sm := NewSessionManager()
+func TestProcessSessionManager_Remove(t *testing.T) {
+	sm := NewProcessSessionManager()
 	t.Cleanup(sm.Stop)
 	session := &ProcessSession{
 		ID:        "test-1",
@@ -39,8 +39,8 @@ func TestSessionManager_Remove(t *testing.T) {
 	require.ErrorIs(t, err, ErrSessionNotFound)
 }
 
-func TestSessionManager_List(t *testing.T) {
-	sm := NewSessionManager()
+func TestProcessSessionManager_List(t *testing.T) {
+	sm := NewProcessSessionManager()
 	t.Cleanup(sm.Stop)
 	sm.Add(&ProcessSession{
 		ID:        "test-1",

@@ -193,7 +193,7 @@ func TestShellTool_TimeoutArg_Background(t *testing.T) {
 	tool, err := NewExecTool("", false)
 	require.NoError(t, err)
 
-	sm := NewSessionManager()
+	sm := NewProcessSessionManager()
 	t.Cleanup(sm.Stop)
 	tool.sessionManager = sm
 
@@ -1198,7 +1198,7 @@ func TestShellTool_List_Empty(t *testing.T) {
 	tool, err := NewExecTool("", false)
 	require.NoError(t, err)
 
-	sm := NewSessionManager()
+	sm := NewProcessSessionManager()
 	t.Cleanup(sm.Stop)
 	tool.sessionManager = sm
 
@@ -1214,7 +1214,7 @@ func TestShellTool_RunBackground_List(t *testing.T) {
 	tool, err := NewExecTool("", false)
 	require.NoError(t, err)
 
-	sm := NewSessionManager()
+	sm := NewProcessSessionManager()
 	t.Cleanup(sm.Stop)
 	tool.sessionManager = sm
 
@@ -1254,7 +1254,7 @@ func TestShellTool_Read_Output(t *testing.T) {
 	tool, err := NewExecTool("", false)
 	require.NoError(t, err)
 
-	sm := NewSessionManager()
+	sm := NewProcessSessionManager()
 	t.Cleanup(sm.Stop)
 	tool.sessionManager = sm
 
@@ -1289,7 +1289,7 @@ func TestShellTool_Kill(t *testing.T) {
 	tool, err := NewExecTool("", false)
 	require.NoError(t, err)
 
-	sm := NewSessionManager()
+	sm := NewProcessSessionManager()
 	t.Cleanup(sm.Stop)
 	tool.sessionManager = sm
 
@@ -1329,7 +1329,7 @@ func TestShellTool_PTY_AllowedCommands(t *testing.T) {
 	tool, err := NewExecTool("", false)
 	require.NoError(t, err)
 
-	sm := NewSessionManager()
+	sm := NewProcessSessionManager()
 	t.Cleanup(sm.Stop)
 	tool.sessionManager = sm
 
@@ -1365,7 +1365,7 @@ func TestShellTool_PTY_WriteRead(t *testing.T) {
 	tool, err := NewExecTool("", false)
 	require.NoError(t, err)
 
-	sm := NewSessionManager()
+	sm := NewProcessSessionManager()
 	t.Cleanup(sm.Stop)
 	tool.sessionManager = sm
 
@@ -1425,7 +1425,7 @@ func TestShellTool_PTY_Poll(t *testing.T) {
 	tool, err := NewExecTool("", false)
 	require.NoError(t, err)
 
-	sm := NewSessionManager()
+	sm := NewProcessSessionManager()
 	t.Cleanup(sm.Stop)
 	tool.sessionManager = sm
 
@@ -1479,7 +1479,7 @@ func TestShellTool_PTY_Kill(t *testing.T) {
 	tool, err := NewExecTool("", false)
 	require.NoError(t, err)
 
-	sm := NewSessionManager()
+	sm := NewProcessSessionManager()
 	t.Cleanup(sm.Stop)
 	tool.sessionManager = sm
 
@@ -1525,7 +1525,7 @@ func TestShellTool_Write_Read_NonPTY(t *testing.T) {
 	tool, err := NewExecTool("", false)
 	require.NoError(t, err)
 
-	sm := NewSessionManager()
+	sm := NewProcessSessionManager()
 	t.Cleanup(sm.Stop)
 	tool.sessionManager = sm
 
@@ -1579,7 +1579,7 @@ func TestShellTool_Read_NonPTY_Running(t *testing.T) {
 	tool, err := NewExecTool("", false)
 	require.NoError(t, err)
 
-	sm := NewSessionManager()
+	sm := NewProcessSessionManager()
 	t.Cleanup(sm.Stop)
 	tool.sessionManager = sm
 
@@ -1648,7 +1648,7 @@ func TestShellTool_ProcessGroupKill(t *testing.T) {
 	tool, err := NewExecTool("", false)
 	require.NoError(t, err)
 
-	sm := NewSessionManager()
+	sm := NewProcessSessionManager()
 	t.Cleanup(sm.Stop)
 	tool.sessionManager = sm
 
@@ -1709,7 +1709,7 @@ func TestShellTool_PTY_ProcessGroupKill(t *testing.T) {
 	tool, err := NewExecTool("", false)
 	require.NoError(t, err)
 
-	sm := NewSessionManager()
+	sm := NewProcessSessionManager()
 	t.Cleanup(sm.Stop)
 	tool.sessionManager = sm
 
@@ -1762,7 +1762,7 @@ func TestShellTool_PTY_Background_Read(t *testing.T) {
 	tool, err := NewExecTool("", false)
 	require.NoError(t, err)
 
-	sm := NewSessionManager()
+	sm := NewProcessSessionManager()
 	t.Cleanup(sm.Stop)
 	tool.sessionManager = sm
 
@@ -1803,7 +1803,7 @@ func TestShellTool_PTY_Background_ReadNoBlock(t *testing.T) {
 	tool, err := NewExecTool("", false)
 	require.NoError(t, err)
 
-	sm := NewSessionManager()
+	sm := NewProcessSessionManager()
 	t.Cleanup(sm.Stop)
 	tool.sessionManager = sm
 
@@ -1848,7 +1848,7 @@ func TestShellTool_Poll_Status(t *testing.T) {
 	tool, err := NewExecTool("", false)
 	require.NoError(t, err)
 
-	sm := NewSessionManager()
+	sm := NewProcessSessionManager()
 	t.Cleanup(sm.Stop)
 	tool.sessionManager = sm
 
