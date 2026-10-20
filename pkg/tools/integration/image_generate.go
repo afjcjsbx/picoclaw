@@ -363,11 +363,15 @@ func (t *ImageGenerateTool) postJSON(
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		// Only a short snippet of an error body is useful, and it ends up in the
 		// tool result the LLM sees, so never buffer the whole thing.
-		snippet, readErr := io.ReadAll(io.LimitReader(resp.Body, imageErrorBodyLimit+1))
+		snippet, readErr := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes+1))
 		if readErr != nil {
 			return nil, fmt.Errorf("image model returned HTTP %d", resp.StatusCode)
 		}
-		return nil, fmt.Errorf("image model returned HTTP %d: %s", resp.StatusCode, errorBodySnippet(snippet))
+		return nil, fmt.Errorf(
+			"image model returned HTTP %d: %s",
+			resp.StatusCode,
+			errorBodySnippet(snippet, maxErrorBodyBytes),
+		)
 	}
 	// Bound the buffered response to what a base64-encoded image within the
 	// configured media limit can occupy, instead of always reading a fixed
@@ -381,24 +385,6 @@ func (t *ImageGenerateTool) postJSON(
 		return nil, fmt.Errorf("image model response exceeds the configured media size limit")
 	}
 	return responseBody, nil
-}
-
-// imageErrorBodyLimit is how many bytes of a non-2xx response body are kept for
-// the error message.
-const imageErrorBodyLimit = 1024
-
-// errorBodySnippet turns the start of an error response body into a short,
-// valid UTF-8 string, marking it with "..." when the body was cut.
-func errorBodySnippet(body []byte) string {
-	truncated := len(body) > imageErrorBodyLimit
-	if truncated {
-		body = body[:imageErrorBodyLimit]
-	}
-	snippet := strings.TrimSpace(strings.ToValidUTF8(string(body), ""))
-	if truncated {
-		snippet += "..."
-	}
-	return snippet
 }
 
 func (t *ImageGenerateTool) downloadImage(ctx context.Context, rawURL string, dst io.Writer) error {

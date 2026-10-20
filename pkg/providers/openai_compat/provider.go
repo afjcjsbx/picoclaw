@@ -208,6 +208,13 @@ func (p *Provider) buildRequestBody(
 		}
 	}
 
+	// OpenRouter only caches Anthropic models when asked to. A top-level
+	// cache_control lets it move the breakpoint forward as the conversation
+	// grows, covering tools, system prompt and history.
+	if isOpenRouterHost(p.apiBase) && isAnthropicModel(model) {
+		requestBody["cache_control"] = map[string]any{"type": "ephemeral"}
+	}
+
 	p.applyThinkingControl(requestBody, model, options)
 
 	// Merge extra body fields configured per-provider/model.
@@ -304,6 +311,18 @@ func (p *Provider) thinkingControlKind(model string) string {
 	return ""
 }
 
+// openRouterSession tags requests with x-session-id; OpenRouter caps it at 256 chars.
+var openRouterSession = common.SessionHeader{Name: "x-session-id", MaxLen: 256}
+
+func isOpenRouterHost(apiBase string) bool {
+	return normalizedHostname(apiBase) == "openrouter.ai"
+}
+
+func isAnthropicModel(model string) bool {
+	m := strings.ToLower(model)
+	return strings.HasPrefix(m, "anthropic/") || strings.HasPrefix(m, "~anthropic/")
+}
+
 func isVolcengineHost(apiBase string) bool {
 	host := normalizedHostname(apiBase)
 	return host == "volcengine.com" || strings.HasSuffix(host, ".volcengine.com") ||
@@ -332,6 +351,11 @@ func (p *Provider) applyCustomHeaders(req *http.Request, options map[string]any)
 		req.Header.Set(k, v)
 	}
 	p.session.Apply(req.Header, options)
+	if isOpenRouterHost(p.apiBase) {
+		// Sticky routing: keeps a conversation on the upstream provider that
+		// holds its prompt cache, from the first request on.
+		openRouterSession.Apply(req.Header, options)
+	}
 }
 
 func (p *Provider) SetProviderName(providerName string) {
@@ -656,7 +680,7 @@ func parseStreamResponse(
 				} `json:"delta"`
 				FinishReason *string `json:"finish_reason"`
 			} `json:"choices"`
-			Usage *UsageInfo `json:"usage"`
+			Usage *common.WireUsage `json:"usage"`
 		}
 
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
@@ -664,7 +688,7 @@ func parseStreamResponse(
 		}
 
 		if chunk.Usage != nil {
-			usage = chunk.Usage
+			usage = chunk.Usage.Info()
 		}
 
 		if len(chunk.Choices) == 0 {

@@ -419,12 +419,12 @@ func TestImageGenerateTruncatesErrorBody(t *testing.T) {
 		want string
 	}{
 		{"short body kept whole", " rate limited \n", "rate limited"},
-		{"long body cut", strings.Repeat("x", 1<<20), strings.Repeat("x", imageErrorBodyLimit) + "..."},
+		{"long body cut", strings.Repeat("x", 1<<20), strings.Repeat("x", maxErrorBodyBytes) + "..."},
 		// 1024 is not a multiple of 3, so the cut lands inside a multi-byte rune.
 		{
 			"cut inside a rune stays valid UTF-8",
 			strings.Repeat("€", 1<<18),
-			strings.Repeat("€", imageErrorBodyLimit/3) + "...",
+			strings.Repeat("€", maxErrorBodyBytes/3) + "...",
 		},
 	}
 	for _, tt := range tests {
