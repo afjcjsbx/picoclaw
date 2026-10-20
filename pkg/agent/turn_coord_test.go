@@ -606,6 +606,35 @@ func TestRunTurn_FinalizeSaveErrorEmitsErrorTurnEnd(t *testing.T) {
 	}
 }
 
+func TestRunTurn_ExecuteToolsSaveErrorPropagates(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &handledUserProvider{})
+	defer cleanup()
+
+	saveErr := errors.New("session save failed after tool delivery")
+	agent.Sessions = &saveFailingSessionStore{
+		SessionStore: session.NewSessionManager(""),
+		err:          saveErr,
+	}
+	al.RegisterTool(&handledUserTool{})
+
+	_, err := al.runAgentLoop(context.Background(), agent, processOptions{
+		Dispatch: DispatchRequest{
+			SessionKey:  "session-tool-save-fail",
+			UserMessage: "deliver the result",
+		},
+		DefaultResponse: defaultResponse,
+		EnableSummary:   false,
+		SendResponse:    false,
+		NoHistory:       false,
+	})
+	if err == nil {
+		t.Fatal("expected runAgentLoop to fail when the tool-delivery session save fails")
+	}
+	if !errors.Is(err, saveErr) {
+		t.Fatalf("runAgentLoop error = %v, want wrapped %v", err, saveErr)
+	}
+}
+
 func TestPipeline_CallLLM_WithToolCall(t *testing.T) {
 	provider := &toolCallRespProvider{
 		toolName: "web_search",

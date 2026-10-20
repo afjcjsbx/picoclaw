@@ -4,9 +4,12 @@ package agent
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
+	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
 )
 
@@ -66,14 +69,7 @@ func (p *Pipeline) Finalize(
 	}
 
 	if !ts.opts.NoHistory && ts.opts.EnableSummary {
-		al.contextManager.Compact(
-			turnCtx,
-			&CompactRequest{
-				SessionKey: ts.sessionKey,
-				Reason:     ContextCompressReasonSummarize,
-				Budget:     ts.agent.ContextWindow,
-			},
-		)
+		p.compactPostTurn(turnCtx, ts)
 	}
 
 	contextUsage := computeContextUsage(ts.agent, ts.sessionKey)
@@ -87,7 +83,32 @@ func (p *Pipeline) Finalize(
 		})
 		msg.ContextUsage = contextUsage
 		markFinalOutbound(&msg)
-		_ = al.bus.PublishOutbound(turnCtx, msg)
+		if err := al.bus.PublishOutbound(turnCtx, msg); err != nil {
+			al.emitEvent(
+				runtimeevents.KindAgentError,
+				ts.eventMeta("runTurn", "turn.error"),
+				ErrorPayload{
+					Stage:   "outbound_publish",
+					Message: err.Error(),
+				},
+			)
+			logger.WarnCF("agent", "Failed to publish final response", map[string]any{
+				"agent_id": ts.agent.ID,
+				"channel":  ts.channel,
+				"chat_id":  ts.chatID,
+				"error":    err.Error(),
+			})
+			if !errors.Is(err, context.Canceled) &&
+				!errors.Is(err, context.DeadlineExceeded) &&
+				!errors.Is(err, bus.ErrBusClosed) {
+				ts.setPhase(TurnPhaseCompleted)
+				return turnResult{
+					finalContent: finalContent,
+					status:       TurnEndStatusError,
+					followUps:    append([]bus.InboundMessage(nil), ts.followUps...),
+				}, fmt.Errorf("publish final response: %w", err)
+			}
+		}
 	}
 	if streamErr != nil && isConfiguredStreamingVisibleError(streamErr) {
 		ts.setPhase(TurnPhaseCompleted)
@@ -104,4 +125,32 @@ func (p *Pipeline) Finalize(
 		status:       turnStatus,
 		followUps:    append([]bus.InboundMessage(nil), ts.followUps...),
 	}, nil
+}
+
+// compactPostTurn runs the asynchronous post-turn summarization. Failure is
+// reported but does not fail the turn: the final answer has already been
+// produced and persisted.
+func (p *Pipeline) compactPostTurn(ctx context.Context, ts *turnState) {
+	if p.al.contextManager == nil {
+		return
+	}
+	if err := p.al.contextManager.Compact(ctx, &CompactRequest{
+		SessionKey: ts.sessionKey,
+		Reason:     ContextCompressReasonSummarize,
+		Budget:     ts.agent.ContextWindow,
+	}); err != nil {
+		p.al.emitEvent(
+			runtimeevents.KindAgentError,
+			ts.eventMeta("runTurn", "turn.error"),
+			ErrorPayload{
+				Stage:   "context_compact",
+				Message: err.Error(),
+			},
+		)
+		logger.WarnCF("agent", "Post-turn compaction failed", map[string]any{
+			"agent_id":    ts.agent.ID,
+			"session_key": ts.sessionKey,
+			"error":       err.Error(),
+		})
+	}
 }
