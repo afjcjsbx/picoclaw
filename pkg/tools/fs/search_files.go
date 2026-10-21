@@ -566,7 +566,11 @@ func (t *SearchFilesTool) scanSearchFile(
 			}
 			switch {
 			case opts.outputMode == "files_only" || opts.outputMode == "count":
-				// Counting only; the row is built after the scan.
+				// Counting only; the row is built after the scan. files_only
+				// needs a single hit, so it stops reading the file there.
+				if current.hit() && opts.outputMode == "files_only" {
+					done = true
+				}
 			case opts.context == 0:
 				if current.hit() {
 					emitMatchLine(current)

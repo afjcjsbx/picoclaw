@@ -425,3 +425,28 @@ func TestSearchFilesDiscoveryOrderSkipsFileStats(t *testing.T) {
 		}
 	}
 }
+
+func TestScanSearchFileFilesOnlyStopsAtFirstHit(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "big.txt")
+	const size = 4 << 20
+	body := "needle\n" + strings.Repeat("filler line\n", size/12)
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewSearchFilesTool(root, false)
+
+	rowsSeen := 0
+	result, err := tool.scanSearchFile(
+		path, regexp.MustCompile("needle"), searchFilesOptions{outputMode: "files_only"}, &rowsSeen, 10, 1<<30,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.rows) != 1 || result.rows[0] != path {
+		t.Fatalf("expected a single row for the file, got %v", result.rows)
+	}
+	if result.bytesRead >= int64(len(body))/2 {
+		t.Fatalf("files_only should stop at the first hit, read %d of %d bytes", result.bytesRead, len(body))
+	}
+}
