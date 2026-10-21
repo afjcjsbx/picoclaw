@@ -401,7 +401,7 @@ type searchFileResult struct {
 // treated as binary, and skipped silently, when its first bytes contain a
 // NUL byte; invalid UTF-8 is not a reason to skip, so text in other
 // encodings is searched as byte text. Rendered lines pass through
-// redactSearchSecrets, so credential-looking values in results are masked
+// redactSecrets, so credential-looking values in results are masked
 // (see redact.go).
 func (t *SearchFilesTool) scanSearchFile(
 	path string,
@@ -624,7 +624,7 @@ func (t *SearchFilesTool) scanSearchFile(
 // match position is recomputed on the redacted text because masking shifts
 // byte offsets.
 func renderSearchLine(line searchLine, pattern *regexp.Regexp) string {
-	text := redactSearchSecrets(line.text)
+	text := redactSecrets(line.text)
 	loc := line.loc
 	if loc != nil {
 		if found := pattern.FindStringIndex(text); found != nil {
