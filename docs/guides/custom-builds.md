@@ -46,6 +46,7 @@ Available channel tags:
 | `channel_feishu` | Feishu |
 | `channel_irc` | IRC |
 | `channel_line` | LINE |
+| `channel_mail` | Mail (IMAP/SMTP) |
 | `channel_matrix` | Matrix |
 | `channel_maixcam` | MaixCam |
 | `channel_mqtt` | MQTT |

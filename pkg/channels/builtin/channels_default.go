@@ -9,6 +9,7 @@ import (
 	_ "github.com/sipeed/picoclaw/pkg/channels/feishu"
 	_ "github.com/sipeed/picoclaw/pkg/channels/irc"
 	_ "github.com/sipeed/picoclaw/pkg/channels/line"
+	_ "github.com/sipeed/picoclaw/pkg/channels/mail"
 	_ "github.com/sipeed/picoclaw/pkg/channels/maixcam"
 	_ "github.com/sipeed/picoclaw/pkg/channels/mqtt"
 	_ "github.com/sipeed/picoclaw/pkg/channels/onebot"

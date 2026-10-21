@@ -39,6 +39,7 @@ const (
 	ChannelTeamsWebHook   = "teams_webhook"
 	ChannelMQTT           = "mqtt"
 	ChannelSlackWebHook   = "slack_webhook"
+	ChannelMail           = "mail"
 )
 
 func initChannel() {
@@ -682,6 +683,7 @@ var channelSettingsFactory = map[string]any{
 	ChannelTeamsWebHook:   (TeamsWebhookSettings{}),
 	ChannelMQTT:           (MQTTSettings{}),
 	ChannelSlackWebHook:   (SlackWebhookSettings{}),
+	ChannelMail:           (MailSettings{}),
 }
 
 // RegisterChannelSettings registers a settings struct prototype for a custom

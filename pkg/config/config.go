@@ -916,6 +916,33 @@ type MQTTSettings struct {
 	QoS         int          `json:"qos,omitempty"          yaml:"-"                  env:"PICOCLAW_CHANNELS_MQTT_QOS"`
 }
 
+// MailSettings configures the IMAP/SMTP mail channel.
+//
+// Inbound mail is read over IMAP (IDLE when the server supports it, polling
+// otherwise); replies are sent over SMTP. When OAuthToken is set it is used
+// for XOAUTH2 instead of the passwords.
+type MailSettings struct {
+	IMAPHost           string       `json:"imap_host"                      yaml:"-"                       env:"PICOCLAW_CHANNELS_MAIL_IMAP_HOST"`
+	IMAPPort           int          `json:"imap_port,omitempty"            yaml:"-"                       env:"PICOCLAW_CHANNELS_MAIL_IMAP_PORT"`
+	IMAPFolder         string       `json:"imap_folder,omitempty"          yaml:"-"                       env:"PICOCLAW_CHANNELS_MAIL_IMAP_FOLDER"`
+	IMAPPlaintext      bool         `json:"imap_plaintext,omitempty"       yaml:"-"                       env:"PICOCLAW_CHANNELS_MAIL_IMAP_PLAINTEXT"`
+	SMTPHost           string       `json:"smtp_host"                      yaml:"-"                       env:"PICOCLAW_CHANNELS_MAIL_SMTP_HOST"`
+	SMTPPort           int          `json:"smtp_port,omitempty"            yaml:"-"                       env:"PICOCLAW_CHANNELS_MAIL_SMTP_PORT"`
+	SMTPImplicitTLS    bool         `json:"smtp_implicit_tls,omitempty"    yaml:"-"                       env:"PICOCLAW_CHANNELS_MAIL_SMTP_IMPLICIT_TLS"`
+	Username           string       `json:"username"                       yaml:"-"                       env:"PICOCLAW_CHANNELS_MAIL_USERNAME"`
+	Password           SecureString `json:"password,omitzero"              yaml:"password,omitempty"      env:"PICOCLAW_CHANNELS_MAIL_PASSWORD"`
+	SMTPUsername       string       `json:"smtp_username,omitempty"        yaml:"-"                       env:"PICOCLAW_CHANNELS_MAIL_SMTP_USERNAME"`
+	SMTPPassword       SecureString `json:"smtp_password,omitzero"         yaml:"smtp_password,omitempty" env:"PICOCLAW_CHANNELS_MAIL_SMTP_PASSWORD"`
+	OAuthToken         SecureString `json:"oauth_token,omitzero"           yaml:"oauth_token,omitempty"   env:"PICOCLAW_CHANNELS_MAIL_OAUTH_TOKEN"`
+	FromAddress        string       `json:"from_address,omitempty"         yaml:"-"                       env:"PICOCLAW_CHANNELS_MAIL_FROM_ADDRESS"`
+	DefaultSubject     string       `json:"default_subject,omitempty"      yaml:"-"                       env:"PICOCLAW_CHANNELS_MAIL_DEFAULT_SUBJECT"`
+	PollIntervalSecs   int          `json:"poll_interval_secs,omitempty"   yaml:"-"                       env:"PICOCLAW_CHANNELS_MAIL_POLL_INTERVAL_SECS"`
+	IdleTimeoutSecs    int          `json:"idle_timeout_secs,omitempty"    yaml:"-"                       env:"PICOCLAW_CHANNELS_MAIL_IDLE_TIMEOUT_SECS"`
+	ObserverMode       bool         `json:"observer_mode,omitempty"        yaml:"-"                       env:"PICOCLAW_CHANNELS_MAIL_OBSERVER_MODE"`
+	PlainTextOnly      bool         `json:"plain_text_only,omitempty"      yaml:"-"                       env:"PICOCLAW_CHANNELS_MAIL_PLAIN_TEXT_ONLY"`
+	MaxAttachmentBytes int          `json:"max_attachment_bytes,omitempty" yaml:"-"                       env:"PICOCLAW_CHANNELS_MAIL_MAX_ATTACHMENT_BYTES"`
+}
+
 // SlackWebhookSettings configures the output-only Slack webhook channel.
 type SlackWebhookSettings struct {
 	Webhooks map[string]SlackWebhookTarget `json:"webhooks" yaml:"webhooks,omitempty"`

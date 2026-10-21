@@ -126,6 +126,12 @@ func hiddenValues(key string, value map[string]any, ch *config.Channel) {
 			value["username"] = settings.Username.String()
 			value["password"] = settings.Password.String()
 		}
+	case "mail":
+		if settings, ok := v.(*config.MailSettings); ok {
+			value["password"] = settings.Password.String()
+			value["smtp_password"] = settings.SMTPPassword.String()
+			value["oauth_token"] = settings.OAuthToken.String()
+		}
 	case "slack_webhook":
 		// Expose webhook URLs for hash computation (they contain secrets)
 		if settings, ok := v.(*config.SlackWebhookSettings); ok {
