@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"unicode/utf8"
 )
 
@@ -43,6 +44,12 @@ var (
 	errSearchByteLimit = errors.New("search byte limit reached")
 	errSearchSkipFile  = errors.New("skip unreadable search file")
 )
+
+// searchReaderPool recycles the 64 KiB read buffers, so scanning thousands of
+// files does not allocate one per file.
+var searchReaderPool = sync.Pool{
+	New: func() any { return bufio.NewReaderSize(nil, scanSearchReadBufferBytes) },
+}
 
 // SearchFilesTool searches content or filenames within the configured filesystem sandbox.
 type SearchFilesTool struct {
@@ -432,7 +439,12 @@ func (t *SearchFilesTool) scanSearchFile(
 	defer f.Close()
 
 	br := &budgetReader{reader: f, limit: remainingBytes}
-	reader := bufio.NewReaderSize(br, scanSearchReadBufferBytes)
+	reader := searchReaderPool.Get().(*bufio.Reader)
+	reader.Reset(br)
+	defer func() {
+		reader.Reset(nil) // drop the reference to the closed file
+		searchReaderPool.Put(reader)
+	}()
 
 	// Like ripgrep, binary detection inspects only the head of the file: a
 	// NUL byte there marks it as binary. Invalid UTF-8 is not a reason to
