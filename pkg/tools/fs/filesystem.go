@@ -33,6 +33,11 @@ const (
 	DefaultReadFileMaxLineLength = 2000
 	// lineTruncationMarker replaces the part of an oversized line that was cut.
 	lineTruncationMarker = " ... [truncated]"
+	// lineOutputPreallocLimit caps the output builder preallocation in line
+	// mode. Pre-sizing from the file size would allocate the whole read budget
+	// even when the caller asks for a handful of lines, so the hint is capped
+	// at this many bytes.
+	lineOutputPreallocLimit = 8 * 1024
 )
 
 func ValidatePathWithAllowPaths(
@@ -632,7 +637,7 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 
 	var content strings.Builder
 	if totalSize > 0 {
-		content.Grow(int(min(totalSize, t.maxSize)))
+		content.Grow(int(min(totalSize, t.maxSize, int64(lineOutputPreallocLimit))))
 	}
 	lineIndex := int64(1)
 	var linesRead int64
@@ -1189,9 +1194,18 @@ type fileAppender interface {
 
 func (h *hostFs) AppendFile(path string, data []byte) error {
 	// Match WriteFile: a new nested path gets its parent directories created.
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("failed to create directory: %w", err)
 	}
+	// A file created here only survives a power loss once its directory entry
+	// is synced, exactly like the rename in WriteFileAtomic.
+	_, statErr := os.Stat(path)
+	if statErr != nil && !errors.Is(statErr, fs.ErrNotExist) {
+		return fmt.Errorf("failed to stat file: %w", statErr)
+	}
+	created := errors.Is(statErr, fs.ErrNotExist)
+
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
 	if err != nil {
 		return fmt.Errorf("failed to open file for append: %w", err)
@@ -1205,7 +1219,16 @@ func (h *hostFs) AppendFile(path string, data []byte) error {
 		_ = f.Close()
 		return fmt.Errorf("failed to sync file: %w", err)
 	}
-	return f.Close()
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("failed to close file: %w", err)
+	}
+	if created {
+		if dirFile, err := os.Open(dir); err == nil {
+			_ = dirFile.Sync()
+			_ = dirFile.Close()
+		}
+	}
+	return nil
 }
 
 func (h *hostFs) Open(path string) (fs.File, error) {
@@ -1326,11 +1349,20 @@ func (r *sandboxFs) WriteFile(path string, data []byte) error {
 func (r *sandboxFs) AppendFile(path string, data []byte) error {
 	return r.execute(path, func(root *os.Root, relPath string) error {
 		dir := filepath.Dir(relPath)
-		if dir != "." && dir != "/" {
-			if err := root.MkdirAll(dir, 0o755); err != nil {
-				return fmt.Errorf("failed to create parent directories: %w", err)
-			}
+		openDir := dir
+		if openDir == "." || openDir == "/" || openDir == "" {
+			openDir = "."
+		} else if err := root.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("failed to create parent directories: %w", err)
 		}
+
+		// A file created here only survives a power loss once its directory
+		// entry is synced, exactly like the rename in WriteFile.
+		_, statErr := root.Stat(relPath)
+		if statErr != nil && !errors.Is(statErr, fs.ErrNotExist) {
+			return fmt.Errorf("failed to stat file: %w", statErr)
+		}
+		created := errors.Is(statErr, fs.ErrNotExist)
 
 		f, err := root.OpenFile(relPath, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
 		if err != nil {
@@ -1344,7 +1376,16 @@ func (r *sandboxFs) AppendFile(path string, data []byte) error {
 			_ = f.Close()
 			return fmt.Errorf("failed to sync file: %w", err)
 		}
-		return f.Close()
+		if err := f.Close(); err != nil {
+			return fmt.Errorf("failed to close file: %w", err)
+		}
+		if created {
+			if dirFile, err := root.Open(openDir); err == nil {
+				_ = dirFile.Sync()
+				_ = dirFile.Close()
+			}
+		}
+		return nil
 	})
 }
 
