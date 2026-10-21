@@ -105,6 +105,15 @@ export const splitSessionStatesAtom = atom<Record<string, SplitSessionState>>(
 )
 export const sessionTitlesAtom = atom<Record<string, string>>({})
 
+export interface PendingScrollTarget {
+  sessionId: string
+  messageIndex: number
+}
+
+// Set when a conversation search result is opened so the chat view can load
+// back to that message and scroll it into view.
+export const pendingScrollTargetAtom = atom<PendingScrollTarget | null>(null)
+
 type ChatStorePatch = Partial<ChatStoreState>
 
 const DEFAULT_CHAT_STATE: ChatStoreState = {

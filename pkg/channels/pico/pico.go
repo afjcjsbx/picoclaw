@@ -1232,16 +1232,21 @@ func (c *PicoChannel) handleMessageSend(pc *picoConn, msg PicoMessage) {
 		}))
 		return
 	}
-	uploadedFiles, err := c.storeInlineAttachments(attachmentsToStore)
-	if err != nil {
-		pc.writeJSON(newErrorWithPayload("upload_failed", err.Error(), map[string]any{
-			"request_id": msg.ID,
-		}))
-		return
-	}
-	if len(uploadedFiles) > 0 {
-		media = nil
-		content = appendUploadedFiles(content, uploadedFiles)
+	// Persisting uploads needs a workspace to write into. When none is
+	// configured, fall back to forwarding the inline media as-is instead of
+	// rejecting the message.
+	if strings.TrimSpace(c.workspace) != "" {
+		uploadedFiles, storeErr := c.storeInlineAttachments(attachmentsToStore)
+		if storeErr != nil {
+			pc.writeJSON(newErrorWithPayload("upload_failed", storeErr.Error(), map[string]any{
+				"request_id": msg.ID,
+			}))
+			return
+		}
+		if len(uploadedFiles) > 0 {
+			media = nil
+			content = appendUploadedFiles(content, uploadedFiles)
+		}
 	}
 
 	if strings.TrimSpace(content) == "" && len(media) == 0 {

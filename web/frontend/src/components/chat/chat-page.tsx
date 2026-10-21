@@ -80,6 +80,7 @@ import type {
 } from "@/store/chat"
 import {
   initializeSplitSessionState,
+  pendingScrollTargetAtom,
   sessionTitlesAtom,
   splitConversationsAtom,
   splitLayoutSizesAtom,
@@ -798,6 +799,9 @@ export function ChatPage() {
   const pendingReturnIndexRef = useRef<number | null>(null)
   const [splitGroups, setSplitGroups] = useAtom(splitConversationsAtom)
   const [splitLayouts, setSplitLayouts] = useAtom(splitLayoutsAtom)
+  const [pendingScrollTarget, setPendingScrollTarget] = useAtom(
+    pendingScrollTargetAtom,
+  )
   const sessionTitles = useAtomValue(sessionTitlesAtom)
   const splitSessionStates = useAtomValue(splitSessionStatesAtom)
 
@@ -915,6 +919,34 @@ export function ChatPage() {
     loadOlderHistory,
     messages,
     getActiveScroller,
+  ])
+
+  useEffect(() => {
+    if (!pendingScrollTarget) return
+    if (pendingScrollTarget.sessionId !== activeSessionId) return
+
+    const index = pendingScrollTarget.messageIndex
+    if (index < historyStart && hasMoreHistory) {
+      void loadOlderHistory(activeSessionId)
+      return
+    }
+
+    setPendingScrollTarget(null)
+    setIsAtBottom(false)
+    requestAnimationFrame(() => {
+      getActiveScroller()
+        ?.querySelector(`[data-chat-index="${index}"]`)
+        ?.scrollIntoView({ block: "center" })
+    })
+  }, [
+    pendingScrollTarget,
+    activeSessionId,
+    hasMoreHistory,
+    historyStart,
+    messages,
+    loadOlderHistory,
+    getActiveScroller,
+    setPendingScrollTarget,
   ])
 
   const handleFork = async (sessionId: string, messageIndex: number) => {
@@ -1339,7 +1371,7 @@ export function ChatPage() {
     <div className="chat-font relative flex h-full flex-col bg-[var(--conversation-background)]">
       <PageHeader
         title=""
-        className="bg-[var(--conversation-background)] justify-end"
+        className="justify-end bg-[var(--conversation-background)]"
       >
         <div className="flex items-center gap-0.5">
           <DropdownMenu>

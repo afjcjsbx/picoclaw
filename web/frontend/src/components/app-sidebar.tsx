@@ -12,8 +12,9 @@ import {
   IconSparkles,
   IconTools,
   IconTrash,
+  IconX,
 } from "@tabler/icons-react"
-import { Link, useRouterState } from "@tanstack/react-router"
+import { Link, useNavigate, useRouterState } from "@tanstack/react-router"
 import { useAtom, useSetAtom } from "jotai"
 import * as React from "react"
 import { useTranslation } from "react-i18next"
@@ -48,8 +49,13 @@ import {
 } from "@/features/chat/split-groups"
 import { usePicoChat } from "@/hooks/use-pico-chat"
 import { useSessionHistory } from "@/hooks/use-session-history"
+import { useSessionSearch } from "@/hooks/use-session-search"
 import { useSidebarChannels } from "@/hooks/use-sidebar-channels"
-import { sessionTitlesAtom, splitConversationsAtom } from "@/store/chat"
+import {
+  pendingScrollTargetAtom,
+  sessionTitlesAtom,
+  splitConversationsAtom,
+} from "@/store/chat"
 
 interface NavItem {
   title: string
@@ -98,6 +104,21 @@ function splitGroupKey(group: string[]) {
   return [...group].sort().join("\u0000")
 }
 
+function splitSnippetMatch(
+  snippet: string,
+  matchStart: number,
+  matchEnd: number,
+) {
+  const chars = Array.from(snippet)
+  const start = Math.max(0, Math.min(matchStart, chars.length))
+  const end = Math.max(start, Math.min(matchEnd, chars.length))
+  return {
+    before: chars.slice(0, start).join(""),
+    match: chars.slice(start, end).join(""),
+    after: chars.slice(end).join(""),
+  }
+}
+
 export function AppSidebar({
   sidebarWidth,
   onSidebarWidthChange,
@@ -110,6 +131,9 @@ export function AppSidebar({
   const { activeSessionId, messages, newChat, switchSession } = usePicoChat()
   const [splitGroups, setSplitGroups] = useAtom(splitConversationsAtom)
   const setSessionTitles = useSetAtom(sessionTitlesAtom)
+  const setPendingScrollTarget = useSetAtom(pendingScrollTargetAtom)
+  const navigate = useNavigate()
+  const sessionSearch = useSessionSearch()
   const [expandedSplitId, setExpandedSplitId] = React.useState<string | null>(
     null,
   )
@@ -235,9 +259,22 @@ export function AppSidebar({
     }
   }, [isMobile, setOpenMobile])
 
-  const handleSidebarResize = (
-    event: React.PointerEvent<HTMLDivElement>,
-  ) => {
+  const handleSearchResultClick = (result: {
+    session_id: string
+    message_index: number
+  }) => {
+    setPendingScrollTarget({
+      sessionId: result.session_id,
+      messageIndex: result.message_index,
+    })
+    if (result.session_id !== activeSessionId) {
+      void switchSession(result.session_id)
+    }
+    handleNavItemClick()
+    void navigate({ to: "/" })
+  }
+
+  const handleSidebarResize = (event: React.PointerEvent<HTMLDivElement>) => {
     const drag = sidebarResizeRef.current
     if (!drag || drag.pointerId !== event.pointerId) return
     const max = Math.min(MAX_SIDEBAR_WIDTH, window.innerWidth * 0.55)
@@ -339,7 +376,7 @@ export function AppSidebar({
       collapsible="icon"
       className="border-sidebar-border bg-sidebar border-r"
     >
-      <SidebarHeader className="px-4 pb-2 pt-3 group-data-[collapsible=icon]:px-2">
+      <SidebarHeader className="px-4 pt-3 pb-2 group-data-[collapsible=icon]:px-2">
         <Link
           to="/"
           onClick={handleNavItemClick}
@@ -381,7 +418,108 @@ export function AppSidebar({
             <SidebarGroupLabel className="px-2">
               {t("chat.history")}
             </SidebarGroupLabel>
-            <SidebarGroupContent className="pt-1">
+            <div className="px-2 pb-1">
+              <div className="relative">
+                <IconSearch className="text-muted-foreground pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={sessionSearch.query}
+                  onChange={(event) =>
+                    sessionSearch.setQuery(event.target.value)
+                  }
+                  placeholder={t("chat.searchPlaceholder")}
+                  aria-label={t("chat.searchPlaceholder")}
+                  className="bg-background/60 border-border/60 focus-visible:ring-ring h-8 w-full rounded-lg border pr-7 pl-7 text-xs outline-none focus-visible:ring-1"
+                />
+                {sessionSearch.query !== "" && (
+                  <button
+                    type="button"
+                    aria-label={t("chat.searchPlaceholder")}
+                    onClick={sessionSearch.clear}
+                    className="text-muted-foreground hover:text-foreground absolute top-1/2 right-1.5 -translate-y-1/2 rounded p-0.5"
+                  >
+                    <IconX className="size-3.5" />
+                  </button>
+                )}
+              </div>
+            </div>
+            {sessionSearch.isActive && (
+              <div className="max-h-[min(42vh,24rem)] overflow-y-auto">
+                <SidebarMenu>
+                  {sessionSearch.isSearching &&
+                  sessionSearch.results.length === 0 ? (
+                    <SidebarMenuItem>
+                      <div className="text-muted-foreground px-3 py-2 text-xs">
+                        {t("chat.loadingMore")}
+                      </div>
+                    </SidebarMenuItem>
+                  ) : sessionSearch.error ? (
+                    <SidebarMenuItem>
+                      <div className="text-muted-foreground px-3 py-2 text-xs">
+                        {t("chat.searchFailed")}
+                      </div>
+                    </SidebarMenuItem>
+                  ) : sessionSearch.results.length === 0 ? (
+                    <SidebarMenuItem>
+                      <div className="text-muted-foreground px-3 py-2 text-xs">
+                        {t("chat.searchNoResults")}
+                      </div>
+                    </SidebarMenuItem>
+                  ) : (
+                    <>
+                      {sessionSearch.results.map((result, index) => {
+                        const { before, match, after } = splitSnippetMatch(
+                          result.snippet,
+                          result.match_start,
+                          result.match_end,
+                        )
+                        return (
+                          <SidebarMenuItem
+                            key={`${result.session_id}-${result.message_index}-${index}`}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => handleSearchResultClick(result)}
+                              className="hover:bg-sidebar-accent/70 focus-visible:bg-sidebar-accent/70 w-full rounded-lg px-2 py-1.5 text-left outline-none"
+                            >
+                              <div className="flex items-center gap-2">
+                                <span className="text-foreground truncate text-xs font-medium">
+                                  {result.title}
+                                </span>
+                                <span className="bg-muted/60 text-muted-foreground ml-auto shrink-0 rounded px-1 py-0.5 text-[10px] uppercase">
+                                  {result.role === "user"
+                                    ? t("chat.you", { defaultValue: "You" })
+                                    : t("chat.assistant", {
+                                        defaultValue: "Assistant",
+                                      })}
+                                </span>
+                              </div>
+                              <p className="text-muted-foreground mt-0.5 line-clamp-2 text-xs leading-relaxed">
+                                {before}
+                                <mark className="bg-primary/20 text-foreground rounded-sm">
+                                  {match}
+                                </mark>
+                                {after}
+                              </p>
+                            </button>
+                          </SidebarMenuItem>
+                        )
+                      })}
+                      {sessionSearch.truncated && (
+                        <SidebarMenuItem>
+                          <div className="text-muted-foreground px-3 py-1 text-[11px]">
+                            {t("chat.searchTruncated")}
+                          </div>
+                        </SidebarMenuItem>
+                      )}
+                    </>
+                  )}
+                </SidebarMenu>
+              </div>
+            )}
+            <SidebarGroupContent
+              className={`pt-1 ${sessionSearch.isActive ? "hidden" : ""}`}
+            >
               <div className="max-h-[min(42vh,24rem)] overflow-y-auto">
                 <SidebarMenu>
                   {sessions.length > 0 ? (
@@ -586,8 +724,8 @@ export function AppSidebar({
                               <span
                                 className={
                                   isActive
-                                    ? "group-data-[collapsible=icon]:hidden opacity-100"
-                                    : "group-data-[collapsible=icon]:hidden opacity-80"
+                                    ? "opacity-100 group-data-[collapsible=icon]:hidden"
+                                    : "opacity-80 group-data-[collapsible=icon]:hidden"
                                 }
                               >
                                 {item.translateTitle === false
@@ -615,7 +753,7 @@ export function AppSidebar({
                           ) : (
                             <IconChevronsDown className="size-4 opacity-60" />
                           )}
-                          <span className="group-data-[collapsible=icon]:hidden opacity-80">
+                          <span className="opacity-80 group-data-[collapsible=icon]:hidden">
                             {showAllChannels
                               ? t("navigation.show_less_channels")
                               : t("navigation.show_more_channels")}
@@ -656,9 +794,7 @@ export function AppSidebar({
             pointerId: event.pointerId,
             x: event.clientX,
             width:
-              sidebarState === "collapsed"
-                ? SIDEBAR_ICON_WIDTH
-                : sidebarWidth,
+              sidebarState === "collapsed" ? SIDEBAR_ICON_WIDTH : sidebarWidth,
           }
         }}
         onPointerMove={handleSidebarResize}
