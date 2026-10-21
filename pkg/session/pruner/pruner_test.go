@@ -14,79 +14,79 @@ import (
 
 func TestSelectAge(t *testing.T) {
 	now := time.Date(2026, 1, 31, 12, 0, 0, 0, time.UTC)
-	infos := []Info{
+	infos := []sessionInfo{
 		{Key: "old", NewestAt: now.Add(-40 * 24 * time.Hour)},
 		{Key: "recent", NewestAt: now.Add(-2 * 24 * time.Hour)},
 		{Key: "unknown"},
 	}
-	got := Select(infos, config.SessionPruneConfig{MaxAgeDays: 30}, now)
+	got := selectSessions(infos, config.SessionPruneConfig{MaxAgeDays: 30}, now)
 
 	want := []string{"old"}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("Select() = %v, want %v", got, want)
+		t.Fatalf("selectSessions() = %v, want %v", got, want)
 	}
 }
 
 func TestSelectMaxSessionsKeepsNewest(t *testing.T) {
 	now := time.Now()
-	infos := []Info{
+	infos := []sessionInfo{
 		{Key: "a", NewestAt: now.Add(-10 * time.Hour)},
 		{Key: "b", NewestAt: now.Add(-1 * time.Hour)},
 		{Key: "c", NewestAt: now.Add(-5 * time.Hour)},
 	}
-	got := Select(infos, config.SessionPruneConfig{MaxSessions: 2}, now)
+	got := selectSessions(infos, config.SessionPruneConfig{MaxSessions: 2}, now)
 
 	// Oldest-first: "a" (10h) is dropped; "c" (5h) and "b" (1h) are kept.
 	want := []string{"a"}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("Select() = %v, want %v", got, want)
+		t.Fatalf("selectSessions() = %v, want %v", got, want)
 	}
 }
 
 func TestSelectCombinesAgeAndCount(t *testing.T) {
 	now := time.Date(2026, 1, 31, 12, 0, 0, 0, time.UTC)
-	infos := []Info{
+	infos := []sessionInfo{
 		{Key: "ancient", NewestAt: now.Add(-90 * 24 * time.Hour)},
 		{Key: "middle", NewestAt: now.Add(-3 * 24 * time.Hour)},
 		{Key: "fresh", NewestAt: now.Add(-1 * time.Hour)},
 	}
-	got := Select(infos, config.SessionPruneConfig{MaxAgeDays: 30, MaxSessions: 2}, now)
+	got := selectSessions(infos, config.SessionPruneConfig{MaxAgeDays: 30, MaxSessions: 2}, now)
 
 	// age deletes "ancient"; count keeps the 2 newest ("middle","fresh").
 	want := []string{"ancient"}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("Select() = %v, want %v", got, want)
+		t.Fatalf("selectSessions() = %v, want %v", got, want)
 	}
 }
 
 func TestSelectUndatedNeverDeleted(t *testing.T) {
 	now := time.Now()
-	infos := []Info{
+	infos := []sessionInfo{
 		{Key: "unknown"},
 		{Key: "fresh", NewestAt: now.Add(-1 * time.Hour)},
 		{Key: "stale", NewestAt: now.Add(-5 * time.Hour)},
 	}
 	// Age-only: an undated session must not be age-pruned.
-	if got := Select(infos, config.SessionPruneConfig{MaxAgeDays: 1}, now); len(got) != 0 {
-		t.Fatalf("Select(age) = %v, want none", got)
+	if got := selectSessions(infos, config.SessionPruneConfig{MaxAgeDays: 1}, now); len(got) != 0 {
+		t.Fatalf("selectSessions(age) = %v, want none", got)
 	}
 	// Count: the undated session occupies a slot but is never the one dropped;
 	// the oldest dated session goes instead.
-	got := Select(infos, config.SessionPruneConfig{MaxSessions: 2}, now)
+	got := selectSessions(infos, config.SessionPruneConfig{MaxSessions: 2}, now)
 	if !reflect.DeepEqual(got, []string{"stale"}) {
-		t.Fatalf("Select(count) = %v, want [stale]", got)
+		t.Fatalf("selectSessions(count) = %v, want [stale]", got)
 	}
 	// A tighter cap still never touches the undated session, and the newest
 	// dated one is always kept.
-	got = Select(infos, config.SessionPruneConfig{MaxSessions: 1}, now)
+	got = selectSessions(infos, config.SessionPruneConfig{MaxSessions: 1}, now)
 	if !reflect.DeepEqual(got, []string{"stale"}) {
-		t.Fatalf("Select(count=1) = %v, want [stale]", got)
+		t.Fatalf("selectSessions(count=1) = %v, want [stale]", got)
 	}
 }
 
 func TestSelectStoreActivityKeepsRecentSession(t *testing.T) {
 	now := time.Date(2026, 1, 31, 12, 0, 0, 0, time.UTC)
-	infos := []Info{
+	infos := []sessionInfo{
 		// Stale seahorse index, but the JSONL store was written an hour ago.
 		{Key: "lagging", NewestAt: now.Add(-90 * 24 * time.Hour), StoreAt: now.Add(-time.Hour)},
 		// Never indexed by seahorse; only the store knows it is old.
@@ -94,9 +94,9 @@ func TestSelectStoreActivityKeepsRecentSession(t *testing.T) {
 		// Never indexed and no activity info at all.
 		{Key: "jsonl-undated"},
 	}
-	got := Select(infos, config.SessionPruneConfig{MaxAgeDays: 30}, now)
+	got := selectSessions(infos, config.SessionPruneConfig{MaxAgeDays: 30}, now)
 	if !reflect.DeepEqual(got, []string{"jsonl-old"}) {
-		t.Fatalf("Select() = %v, want [jsonl-old]", got)
+		t.Fatalf("selectSessions() = %v, want [jsonl-old]", got)
 	}
 }
 
@@ -123,9 +123,9 @@ func TestRunUsesStoreActivityForJSONLOnlySessions(t *testing.T) {
 
 func TestSelectDisabledThresholds(t *testing.T) {
 	now := time.Now()
-	infos := []Info{{Key: "a", NewestAt: now.Add(-1000 * time.Hour)}}
-	if got := Select(infos, config.SessionPruneConfig{}, now); got != nil {
-		t.Fatalf("Select() = %v, want nil", got)
+	infos := []sessionInfo{{Key: "a", NewestAt: now.Add(-1000 * time.Hour)}}
+	if got := selectSessions(infos, config.SessionPruneConfig{}, now); got != nil {
+		t.Fatalf("selectSessions() = %v, want nil", got)
 	}
 }
 
@@ -159,6 +159,92 @@ func TestRunAppliesAgeCountAndVacuum(t *testing.T) {
 		if !contains(eng.deleted, key) {
 			t.Fatalf("engine did not delete %q; deleted=%v", key, eng.deleted)
 		}
+	}
+}
+
+// TestRun_PartialDeletion_EngineFails covers a deletion that succeeds in the
+// session store but fails in the seahorse database: the session is still in the
+// database, so it must be reported as partial rather than deleted.
+func TestRun_PartialDeletion_EngineFails(t *testing.T) {
+	now := time.Now()
+	eng := newFakeEngine(1 << 20)
+	eng.statuses = []seahorse.SessionStatus{
+		{SessionKey: "old", NewestAt: now.Add(-100 * 24 * time.Hour)},
+		{SessionKey: "new", NewestAt: now.Add(-time.Hour)},
+	}
+	eng.deleteErr = map[string]error{"old": errors.New("engine unavailable")}
+	store := newFakeStore("old", "new")
+
+	res := Run(context.Background(), eng, []Store{store}, config.SessionPruneConfig{
+		Enabled:    true,
+		MaxAgeDays: 30,
+	})
+
+	if !reflect.DeepEqual(res.Partial, []string{"old"}) {
+		t.Fatalf("Partial = %v, want [old]", res.Partial)
+	}
+	if len(res.Deleted) != 0 {
+		t.Fatalf("Deleted = %v, want none", res.Deleted)
+	}
+	if contains(store.ListSessions(), "old") {
+		t.Fatalf("store still lists old: %v", store.ListSessions())
+	}
+}
+
+// TestRun_PartialDeletion_StoreFails covers a deletion that succeeds in the
+// seahorse database and in one store but fails in another: the session still
+// exists on disk, so it must be reported as partial.
+func TestRun_PartialDeletion_StoreFails(t *testing.T) {
+	now := time.Now()
+	eng := newFakeEngine(1 << 20)
+	eng.statuses = []seahorse.SessionStatus{
+		{SessionKey: "old", NewestAt: now.Add(-100 * 24 * time.Hour)},
+		{SessionKey: "new", NewestAt: now.Add(-time.Hour)},
+	}
+	failing := newFakeStore("old", "new")
+	failing.deleteErr = map[string]error{"old": errors.New("disk full")}
+	healthy := newFakeStore("old")
+
+	res := Run(context.Background(), eng, []Store{failing, healthy}, config.SessionPruneConfig{
+		Enabled:    true,
+		MaxAgeDays: 30,
+	})
+
+	if !reflect.DeepEqual(res.Partial, []string{"old"}) {
+		t.Fatalf("Partial = %v, want [old]", res.Partial)
+	}
+	if len(res.Deleted) != 0 {
+		t.Fatalf("Deleted = %v, want none", res.Deleted)
+	}
+	if !contains(failing.ListSessions(), "old") {
+		t.Fatalf("failing store no longer lists old: %v", failing.ListSessions())
+	}
+	if contains(healthy.ListSessions(), "old") {
+		t.Fatalf("healthy store still lists old: %v", healthy.ListSessions())
+	}
+}
+
+// TestRun_CompleteDeletion covers the all-success path: the session is removed
+// from every target and reported as deleted, with no partial entries.
+func TestRun_CompleteDeletion(t *testing.T) {
+	now := time.Now()
+	eng := newFakeEngine(1 << 20)
+	eng.statuses = []seahorse.SessionStatus{
+		{SessionKey: "old", NewestAt: now.Add(-100 * 24 * time.Hour)},
+		{SessionKey: "new", NewestAt: now.Add(-time.Hour)},
+	}
+	store := newFakeStore("old", "new")
+
+	res := Run(context.Background(), eng, []Store{store}, config.SessionPruneConfig{
+		Enabled:    true,
+		MaxAgeDays: 30,
+	})
+
+	if !reflect.DeepEqual(res.Deleted, []string{"old"}) {
+		t.Fatalf("Deleted = %v, want [old]", res.Deleted)
+	}
+	if len(res.Partial) != 0 {
+		t.Fatalf("Partial = %v, want none", res.Partial)
 	}
 }
 
@@ -322,6 +408,9 @@ func TestRunSkipsVacuumWhenLittleReclaimable(t *testing.T) {
 	if eng.checkpointCount == 0 {
 		t.Fatal("expected a WAL checkpoint instead of VACUUM")
 	}
+	if res.Vacuumed {
+		t.Fatal("Vacuumed = true, want false when only a checkpoint ran")
+	}
 }
 
 func TestRunVacuumsWhenReclaimIsLarge(t *testing.T) {
@@ -334,9 +423,12 @@ func TestRunVacuumsWhenReclaimIsLarge(t *testing.T) {
 		{SessionKey: "new", NewestAt: now.Add(-time.Hour)},
 	}
 
-	Run(context.Background(), eng, nil, config.SessionPruneConfig{Enabled: true, MaxAgeDays: 30})
+	res := Run(context.Background(), eng, nil, config.SessionPruneConfig{Enabled: true, MaxAgeDays: 30})
 	if eng.vacuumCount != 1 {
 		t.Fatalf("VACUUM ran %d times, want exactly 1 (no redundant second vacuum)", eng.vacuumCount)
+	}
+	if !res.Vacuumed {
+		t.Fatal("Vacuumed = false, want true when VACUUM ran")
 	}
 }
 
@@ -348,9 +440,40 @@ func TestRunVacuumsWhenReclaimableUnknown(t *testing.T) {
 		{SessionKey: "old", NewestAt: now.Add(-100 * 24 * time.Hour)},
 		{SessionKey: "new", NewestAt: now.Add(-time.Hour)},
 	}
-	Run(context.Background(), eng, nil, config.SessionPruneConfig{Enabled: true, MaxAgeDays: 30})
+	res := Run(context.Background(), eng, nil, config.SessionPruneConfig{Enabled: true, MaxAgeDays: 30})
 	if eng.vacuumCount == 0 {
 		t.Fatal("expected VACUUM when reclaimable size is unknown")
+	}
+	if !res.Vacuumed {
+		t.Fatal("Vacuumed = false, want true when VACUUM ran")
+	}
+}
+
+// TestRun_ReclaimsOncePerPass covers the reclaim bookkeeping: a pass with the
+// database-size guard disabled reclaims once, right after the select-phase
+// deletions, and must not checkpoint again at the end of the pass.
+func TestRun_ReclaimsOncePerPass(t *testing.T) {
+	now := time.Now()
+	eng := newFakeEngine(1 << 20)
+	eng.statuses = []seahorse.SessionStatus{
+		{SessionKey: "old", NewestAt: now.Add(-100 * 24 * time.Hour)},
+		{SessionKey: "new", NewestAt: now.Add(-time.Hour)},
+	}
+	store := newFakeStore("old", "new")
+
+	res := Run(context.Background(), eng, []Store{store}, config.SessionPruneConfig{
+		Enabled:    true,
+		MaxAgeDays: 30,
+		Vacuum:     boolPtr(false),
+	})
+	if !reflect.DeepEqual(res.Deleted, []string{"old"}) {
+		t.Fatalf("Deleted = %v, want [old]", res.Deleted)
+	}
+	if eng.checkpointCount != 1 {
+		t.Fatalf("checkpointCount = %d, want exactly 1 (one reclaim per pass)", eng.checkpointCount)
+	}
+	if res.Vacuumed {
+		t.Fatal("Vacuumed = true, want false with Vacuum disabled")
 	}
 }
 
@@ -373,20 +496,20 @@ func TestRunStopsWhenContextCanceled(t *testing.T) {
 
 func TestSelectNeverDeletesNewestSession(t *testing.T) {
 	now := time.Date(2026, 1, 31, 12, 0, 0, 0, time.UTC)
-	infos := []Info{
+	infos := []sessionInfo{
 		{Key: "a", NewestAt: now.Add(-90 * 24 * time.Hour)},
 		{Key: "b", NewestAt: now.Add(-60 * 24 * time.Hour)},
 		{Key: "c", NewestAt: now.Add(-45 * 24 * time.Hour)},
 	}
 	// Everything is older than 30 days (e.g. the device was off for a while),
 	// yet the most recent session must survive.
-	got := Select(infos, config.SessionPruneConfig{MaxAgeDays: 30}, now)
+	got := selectSessions(infos, config.SessionPruneConfig{MaxAgeDays: 30}, now)
 	if !reflect.DeepEqual(got, []string{"a", "b"}) {
-		t.Fatalf("Select(age) = %v, want [a b]", got)
+		t.Fatalf("selectSessions(age) = %v, want [a b]", got)
 	}
-	got = Select(infos[2:], config.SessionPruneConfig{MaxAgeDays: 30}, now)
+	got = selectSessions(infos[2:], config.SessionPruneConfig{MaxAgeDays: 30}, now)
 	if len(got) != 0 {
-		t.Fatalf("Select(single stale session) = %v, want none", got)
+		t.Fatalf("selectSessions(single stale session) = %v, want none", got)
 	}
 }
 
@@ -440,36 +563,36 @@ func TestRunSizeGuardKeepsNewestJSONLOnlySession(t *testing.T) {
 func TestSelectSkipsAgePruningWithImplausibleClock(t *testing.T) {
 	// A board without an RTC boots at the epoch until NTP syncs.
 	epoch := time.Unix(0, 0)
-	infos := []Info{
+	infos := []sessionInfo{
 		{Key: "a", NewestAt: epoch.Add(-24 * time.Hour)},
 		{Key: "b", NewestAt: epoch},
 	}
-	if got := Select(infos, config.SessionPruneConfig{MaxAgeDays: 1}, epoch.Add(48*time.Hour)); len(got) != 0 {
-		t.Fatalf("Select with epoch clock = %v, want none", got)
+	if got := selectSessions(infos, config.SessionPruneConfig{MaxAgeDays: 1}, epoch.Add(48*time.Hour)); len(got) != 0 {
+		t.Fatalf("selectSessions with epoch clock = %v, want none", got)
 	}
 }
 
 func TestSelectIgnoresImplausibleTimestamps(t *testing.T) {
 	now := time.Date(2026, 1, 31, 12, 0, 0, 0, time.UTC)
-	infos := []Info{
+	infos := []sessionInfo{
 		// Written before NTP synced: the stamp says 1970, the session is live.
 		{Key: "offline-boot", NewestAt: time.Unix(3600, 0)},
 		{Key: "stale", NewestAt: now.Add(-90 * 24 * time.Hour)},
 		{Key: "fresh", NewestAt: now.Add(-time.Hour)},
 	}
-	got := Select(infos, config.SessionPruneConfig{MaxAgeDays: 30}, now)
+	got := selectSessions(infos, config.SessionPruneConfig{MaxAgeDays: 30}, now)
 	if !reflect.DeepEqual(got, []string{"stale"}) {
-		t.Fatalf("Select() = %v, want [stale]; the 1970-stamped session must be left alone", got)
+		t.Fatalf("selectSessions() = %v, want [stale]; the 1970-stamped session must be left alone", got)
 	}
 	// A newer, plausible store time rescues a bogus index timestamp.
-	infos = []Info{
+	infos = []sessionInfo{
 		{Key: "a", NewestAt: time.Unix(3600, 0), StoreAt: now.Add(-time.Hour)},
 		{Key: "b", NewestAt: now.Add(-90 * 24 * time.Hour)},
 		{Key: "c", NewestAt: now.Add(-2 * time.Hour)},
 	}
-	got = Select(infos, config.SessionPruneConfig{MaxAgeDays: 30}, now)
+	got = selectSessions(infos, config.SessionPruneConfig{MaxAgeDays: 30}, now)
 	if !reflect.DeepEqual(got, []string{"b"}) {
-		t.Fatalf("Select() = %v, want [b]", got)
+		t.Fatalf("selectSessions() = %v, want [b]", got)
 	}
 }
 
@@ -499,6 +622,9 @@ type fakeEngine struct {
 	freed int64
 	// reclaimableErr, when set, is returned by ReclaimableBytes.
 	reclaimableErr error
+	// deleteErr, when set, makes DeleteSession fail for the listed keys and
+	// leave the session in place.
+	deleteErr map[string]error
 }
 
 func newFakeEngine(perSessionBytes int64) *fakeEngine {
@@ -512,6 +638,9 @@ func (f *fakeEngine) SessionStatuses(context.Context) ([]seahorse.SessionStatus,
 }
 
 func (f *fakeEngine) DeleteSession(_ context.Context, sessionKey string) error {
+	if err := f.deleteErr[sessionKey]; err != nil {
+		return err
+	}
 	for i, s := range f.statuses {
 		if s.SessionKey == sessionKey {
 			f.statuses = append(f.statuses[:i], f.statuses[i+1:]...)
@@ -546,6 +675,9 @@ type fakeStore struct {
 	sessions []string
 	deleted  []string
 	activity map[string]time.Time
+	// deleteErr, when set, makes DeleteSession fail for the listed keys and
+	// leave the session in place.
+	deleteErr map[string]error
 }
 
 func (f *fakeStore) LastActivity(key string) time.Time {
@@ -563,6 +695,9 @@ func (f *fakeStore) ListSessions() []string {
 }
 
 func (f *fakeStore) DeleteSession(key string) error {
+	if err := f.deleteErr[key]; err != nil {
+		return err
+	}
 	for i, k := range f.sessions {
 		if k == key {
 			f.sessions = append(f.sessions[:i], f.sessions[i+1:]...)

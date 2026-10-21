@@ -47,19 +47,19 @@ type Store interface {
 	DeleteSession(key string) error
 }
 
-// ActivityStore is optionally implemented by stores that know when a session
+// activityStore is optionally implemented by stores that know when a session
 // was last written. The JSONL store is the canonical history, whereas the
 // seahorse database is only an index that can lag behind it (crash, session
 // not bootstrapped yet), so the store timestamp keeps recently active sessions
 // from looking stale or undated.
-type ActivityStore interface {
+type activityStore interface {
 	// LastActivity returns the last time the session was written, or the zero
 	// time when unknown.
 	LastActivity(key string) time.Time
 }
 
-// Info describes a single session for pruning decisions.
-type Info struct {
+// sessionInfo describes a single session for pruning decisions.
+type sessionInfo struct {
 	Key      string
 	NewestAt time.Time // newest message in the seahorse database
 	OldestAt time.Time // oldest message in the seahorse database
@@ -73,7 +73,7 @@ type Info struct {
 // time, falling back to the oldest seahorse message. Implausible timestamps (see
 // minPlausibleTime) are ignored. A zero value means the session is undated;
 // undated sessions are never selected for deletion.
-func (i Info) lastActivity() time.Time {
+func (i sessionInfo) lastActivity() time.Time {
 	var last time.Time
 	for _, at := range []time.Time{i.NewestAt, i.StoreAt} {
 		if plausibleTime(at) && at.After(last) {
@@ -88,9 +88,16 @@ func (i Info) lastActivity() time.Time {
 
 // Result reports what a prune pass did.
 type Result struct {
-	Deleted       []string
+	// Deleted lists sessions removed from every target that listed them.
+	Deleted []string
+	// Partial lists sessions removed from at least one target but still
+	// present in another (a deletion failed); a later pass retries them.
+	Partial       []string
 	DBBytesBefore int64
 	DBBytesAfter  int64
+	// Vacuumed reports whether the pass ran VACUUM (as opposed to only a WAL
+	// checkpoint) to release deleted space.
+	Vacuumed bool
 }
 
 // maxDBSizeIterations bounds the database-size enforcement loop.
@@ -126,7 +133,7 @@ const (
 	minVacuumReclaimRatio = 10      // ...or for less than 1/10th of the file
 )
 
-// Select returns the session keys that should be deleted for the age and
+// selectSessions returns the session keys that should be deleted for the age and
 // session-count thresholds, ordered oldest-first. The database-size guard is
 // handled separately by Run because it depends on the file size on disk.
 //
@@ -140,7 +147,7 @@ const (
 // activity is unknown (undated) are never selected: they still count toward MaxSessions, but
 // the sessions dropped to honor the cap are always the oldest dated ones, so a
 // session is never deleted on the basis of a timestamp we do not have.
-func Select(infos []Info, cfg config.SessionPruneConfig, now time.Time) []string {
+func selectSessions(infos []sessionInfo, cfg config.SessionPruneConfig, now time.Time) []string {
 	if len(infos) == 0 {
 		return nil
 	}
@@ -184,7 +191,7 @@ func Select(infos []Info, cfg config.SessionPruneConfig, now time.Time) []string
 
 // newestKeys returns the keys of the n most recently active sessions of an
 // oldest-first slice.
-func newestKeys(oldestFirst []Info, n int) map[string]struct{} {
+func newestKeys(oldestFirst []sessionInfo, n int) map[string]struct{} {
 	keys := make(map[string]struct{}, n)
 	for i := len(oldestFirst) - 1; i >= 0 && len(keys) < n; i-- {
 		keys[oldestFirst[i].Key] = struct{}{}
@@ -194,8 +201,8 @@ func newestKeys(oldestFirst []Info, n int) map[string]struct{} {
 
 // datedOldestFirst returns the sessions with a known activity time, ordered
 // oldest-first (ties broken by key for determinism).
-func datedOldestFirst(infos []Info) []Info {
-	dated := make([]Info, 0, len(infos))
+func datedOldestFirst(infos []sessionInfo) []sessionInfo {
+	dated := make([]sessionInfo, 0, len(infos))
 	for _, info := range infos {
 		if !info.lastActivity().IsZero() {
 			dated = append(dated, info)
@@ -237,11 +244,15 @@ func indexOwners(stores []Store) owners {
 // Run executes one prune pass: it applies the age and session-count thresholds,
 // then enforces the database-size guard by deleting the oldest remaining
 // sessions until the database fits (or nothing is left to delete). When Vacuum
-// is enabled the database is vacuumed after deletions to reclaim space.
+// is enabled the database is vacuumed after deletions to reclaim space; the
+// result reports whether a VACUUM ran.
 //
 // The seahorse database is shared by every agent while each agent has its own
 // session store, so stores must contain the store of every agent. A session is
 // deleted from the seahorse database and from each store that lists it.
+// Sessions removed from every target are reported in Result.Deleted; sessions
+// removed from only some of their targets (a deletion failed) are reported in
+// Result.Partial and retried by a later pass.
 func Run(ctx context.Context, eng Engine, stores []Store, cfg config.SessionPruneConfig) Result {
 	var result Result
 	if !cfg.Enabled || eng == nil {
@@ -255,35 +266,40 @@ func Run(ctx context.Context, eng Engine, stores []Store, cfg config.SessionPrun
 
 	idx := indexOwners(stores)
 	infos := collectInfos(ctx, eng, idx)
-	toDelete := Select(infos, cfg, time.Now())
+	toDelete := selectSessions(infos, cfg, time.Now())
 
-	deleted := 0
+	removals := 0
 	for _, key := range toDelete {
 		if ctx.Err() != nil {
 			break
 		}
-		if deleteSession(ctx, eng, idx, key) {
+		removed, complete := deleteSession(ctx, eng, idx, key)
+		if !removed {
+			continue
+		}
+		removals++
+		if complete {
 			result.Deleted = append(result.Deleted, key)
-			deleted++
+		} else {
+			result.Partial = append(result.Partial, key)
 		}
 	}
 
-	if deleted > 0 {
-		reclaim(ctx, eng, cfg, false)
+	// enforceDBSize reclaims after every deletion batch it runs, so the
+	// select-phase removals are the only ones that need a reclaim here.
+	if removals > 0 {
+		result.Vacuumed = reclaim(ctx, eng, cfg, false)
 	}
 
 	if cfg.MaxDBSizeMB > 0 && ctx.Err() == nil {
-		deleted += enforceDBSize(ctx, eng, idx, infos, cfg, &result)
-	}
-
-	if deleted > 0 {
-		reclaim(ctx, eng, cfg, false)
+		removals += enforceDBSize(ctx, eng, idx, infos, cfg, &result)
 	}
 
 	result.DBBytesAfter, _ = eng.DBFileSize()
-	if deleted > 0 {
+	if removals > 0 {
 		logger.InfoCF("session-prune", "Pruned chat sessions", map[string]any{
 			"deleted":         len(result.Deleted),
+			"partial":         len(result.Partial),
 			"max_age_days":    cfg.MaxAgeDays,
 			"max_sessions":    cfg.MaxSessions,
 			"max_db_size_mb":  cfg.MaxDBSizeMB,
@@ -295,19 +311,21 @@ func Run(ctx context.Context, eng Engine, stores []Store, cfg config.SessionPrun
 }
 
 // enforceDBSize deletes the oldest remaining sessions until the database is
-// under MaxDBSizeMB. Sessions are ranked exactly like Select ranks them (newest
+// under MaxDBSizeMB. Sessions are ranked exactly like selectSessions ranks them (newest
 // activity wins, undated sessions are never touched). It estimates how many
 // sessions to remove from the average session size, deletes them in a batch,
 // then reclaims and re-measures. The loop stops as soon as a pass makes no
 // progress, so a database that does not shrink (for example when Vacuum is
 // disabled) never causes runaway deletion. Only sessions that live in the
 // seahorse database are candidates, since JSONL-only sessions occupy no
-// database space. Returns the number of sessions deleted.
+// database space. Incomplete removals are recorded in Result.Partial instead of
+// Result.Deleted; both count toward the returned number of deletions, because
+// both free space. Returns the number of sessions deleted.
 func enforceDBSize(
 	ctx context.Context,
 	eng Engine,
 	idx owners,
-	infos []Info,
+	infos []sessionInfo,
 	cfg config.SessionPruneConfig,
 	result *Result,
 ) int {
@@ -317,7 +335,7 @@ func enforceDBSize(
 	for _, key := range result.Deleted {
 		gone[key] = struct{}{}
 	}
-	inDB := make([]Info, 0, len(infos))
+	inDB := make([]sessionInfo, 0, len(infos))
 	for _, info := range infos {
 		if _, deleted := gone[info.Key]; info.InDB && !deleted {
 			inDB = append(inDB, info)
@@ -326,7 +344,7 @@ func enforceDBSize(
 	// The kept sessions are chosen among all sessions, not only those in the
 	// database, so a JSONL-only session that is newer still counts.
 	protected := newestKeys(datedOldestFirst(infos), minKeptSessions)
-	var candidates []Info
+	var candidates []sessionInfo
 	for _, info := range datedOldestFirst(inDB) {
 		if _, keep := protected[info.Key]; !keep {
 			candidates = append(candidates, info)
@@ -350,27 +368,32 @@ func enforceDBSize(
 		need := int((over + avg - 1) / avg)
 		need = min(max(need, 1), len(candidates))
 
-		removed := 0
+		batchRemoved := 0
 		for _, info := range candidates[:need] {
 			if ctx.Err() != nil {
 				return deleted
 			}
-			if !deleteSession(ctx, eng, idx, info.Key) {
+			removed, complete := deleteSession(ctx, eng, idx, info.Key)
+			if !removed {
 				continue
 			}
-			result.Deleted = append(result.Deleted, info.Key)
+			if complete {
+				result.Deleted = append(result.Deleted, info.Key)
+			} else {
+				result.Partial = append(result.Partial, info.Key)
+			}
 			deleted++
-			removed++
+			batchRemoved++
 			remaining--
 		}
 		candidates = candidates[need:]
-		if removed == 0 {
+		if batchRemoved == 0 {
 			continue
 		}
 
 		// The guard needs the file to actually shrink to observe progress, so
 		// it vacuums regardless of how much space would be reclaimed.
-		reclaim(ctx, eng, cfg, true)
+		result.Vacuumed = result.Vacuumed || reclaim(ctx, eng, cfg, true)
 
 		after, err := eng.DBFileSize()
 		if err != nil || after >= size {
@@ -381,19 +404,21 @@ func enforceDBSize(
 }
 
 // reclaim gives deleted space back to the filesystem. With Vacuum enabled it
-// runs VACUUM, but unless force is set only when that would return a meaningful
-// share of the file (see minVacuumReclaimBytes); otherwise it just folds and
-// truncates the write-ahead log, which is cheap and does not block writers.
-func reclaim(ctx context.Context, eng Engine, cfg config.SessionPruneConfig, force bool) {
+// runs VACUUM, but unless force is set only when that would return a
+// meaningful share of the file (see minVacuumReclaimBytes); otherwise it
+// just folds and truncates the write-ahead log, which is cheap and does not
+// block writers. It reports whether a VACUUM ran.
+func reclaim(ctx context.Context, eng Engine, cfg config.SessionPruneConfig, force bool) bool {
 	if cfg.VacuumEnabled() && (force || worthVacuum(ctx, eng)) {
 		if err := eng.Vacuum(ctx); err != nil {
 			logger.WarnCF("session-prune", "VACUUM failed", map[string]any{"error": err.Error()})
 		}
-		return
+		return true
 	}
 	if err := eng.Checkpoint(ctx, true); err != nil {
 		logger.WarnCF("session-prune", "WAL checkpoint failed", map[string]any{"error": err.Error()})
 	}
+	return false
 }
 
 // worthVacuum reports whether a VACUUM would return enough space to justify
@@ -410,16 +435,16 @@ func worthVacuum(ctx context.Context, eng Engine) bool {
 	return reclaimable >= minVacuumReclaimBytes && reclaimable*minVacuumReclaimRatio >= size
 }
 
-func collectInfos(ctx context.Context, eng Engine, idx owners) []Info {
+func collectInfos(ctx context.Context, eng Engine, idx owners) []sessionInfo {
 	statuses, err := eng.SessionStatuses(ctx)
 	if err != nil {
 		logger.WarnCF("session-prune", "Failed to list seahorse sessions", map[string]any{"error": err.Error()})
 	}
 
-	infos := make([]Info, 0, len(statuses))
+	infos := make([]sessionInfo, 0, len(statuses))
 	known := make(map[string]struct{}, len(statuses))
 	for _, status := range statuses {
-		infos = append(infos, Info{
+		infos = append(infos, sessionInfo{
 			Key:      status.SessionKey,
 			NewestAt: status.NewestAt,
 			OldestAt: status.OldestAt,
@@ -441,7 +466,7 @@ func collectInfos(ctx context.Context, eng Engine, idx owners) []Info {
 		if _, ok := known[key]; ok {
 			continue
 		}
-		infos = append(infos, Info{Key: key, StoreAt: storeActivity(idx[key], key)})
+		infos = append(infos, sessionInfo{Key: key, StoreAt: storeActivity(idx[key], key)})
 	}
 	return infos
 }
@@ -451,7 +476,7 @@ func collectInfos(ctx context.Context, eng Engine, idx owners) []Info {
 func storeActivity(stores []Store, key string) time.Time {
 	var last time.Time
 	for _, store := range stores {
-		as, ok := store.(ActivityStore)
+		as, ok := store.(activityStore)
 		if !ok {
 			continue
 		}
@@ -462,18 +487,23 @@ func storeActivity(stores []Store, key string) time.Time {
 	return last
 }
 
-func deleteSession(ctx context.Context, eng Engine, idx owners, key string) bool {
+// deleteSession removes the session from the seahorse database and from every
+// store that lists it. It reports whether at least one target removed the
+// session and whether every target did; an incomplete removal means the
+// session still exists somewhere and is retried by a later pass.
+func deleteSession(ctx context.Context, eng Engine, idx owners, key string) (removed, complete bool) {
 	if key == "" {
-		return false
+		return false, false
 	}
-	ok := false
+	complete = true
 	if err := eng.DeleteSession(ctx, key); err != nil {
 		logger.WarnCF("session-prune", "Failed to delete seahorse session", map[string]any{
 			"session": key,
 			"error":   err.Error(),
 		})
+		complete = false
 	} else {
-		ok = true
+		removed = true
 	}
 	for _, store := range idx[key] {
 		if err := store.DeleteSession(key); err != nil {
@@ -481,9 +511,10 @@ func deleteSession(ctx context.Context, eng Engine, idx owners, key string) bool
 				"session": key,
 				"error":   err.Error(),
 			})
+			complete = false
 		} else {
-			ok = true
+			removed = true
 		}
 	}
-	return ok
+	return removed, complete && removed
 }
