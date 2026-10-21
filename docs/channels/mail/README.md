@@ -4,7 +4,7 @@ PicoClaw can talk over e-mail. It reads a mailbox over IMAP (IDLE push when the 
 
 ## 🚀 Quick Start
 
-**1. Add the channel to `~/.picoclaw/config.json`:**
+**1. Add the channel to `~/.picoclaw/config.json`** (no secrets here):
 
 ```json
 {
@@ -16,21 +16,31 @@ PicoClaw can talk over e-mail. It reads a mailbox over IMAP (IDLE push when the 
       "settings": {
         "imap_host": "imap.example.com",
         "smtp_host": "smtp.example.com",
-        "username": "bot@example.com",
-        "password": "app-password"
+        "username": "bot@example.com"
       }
     }
   }
 }
 ```
 
-**2. Start the gateway:**
+**2. Put the password in `~/.picoclaw/.security.yml`** (keep it out of `config.json` and out of version control, and restrict it with `chmod 600`):
+
+```yaml
+channel_list:
+  mail:
+    settings:
+      password: "app-password"
+```
+
+Alternatively export it as an environment variable, which takes precedence: `PICOCLAW_CHANNELS_MAIL_PASSWORD`. The same applies to `smtp_password` and `oauth_token`.
+
+**3. Start the gateway:**
 
 ```bash
 picoclaw gateway
 ```
 
-**3. Send a mail** from an allowed address to the mailbox. The reply arrives in the same thread. Each correspondent has one conversation (session), whatever the subject.
+**4. Send a mail** from an allowed address to the mailbox. The reply arrives in the same thread. Each correspondent has one conversation (session), whatever the subject.
 
 > `allow_from` is **mandatory**. The `From` header is trivially forged, so an open mailbox would let anyone drive the agent. Use `"*"` only if you really mean it.
 
@@ -48,9 +58,9 @@ picoclaw gateway
 | `smtp_port` | `587` | `465` or `smtp_implicit_tls` use implicit TLS; otherwise STARTTLS is used whenever the server offers it |
 | `smtp_implicit_tls` | `false` | Force implicit TLS on a non-465 port |
 | `username` | – | IMAP login; also the sender address when it is an address |
-| `password` | – | IMAP password (secret) |
-| `smtp_username`, `smtp_password` | `username`, `password` | Separate SMTP credentials (secret) |
-| `oauth_token` | – | OAuth2 access token. When set, XOAUTH2 replaces the passwords (secret) |
+| `password` | – | IMAP password. **Secret: never in `config.json`** |
+| `smtp_username`, `smtp_password` | `username`, `password` | Separate SMTP credentials. `smtp_password` is a **secret** |
+| `oauth_token` | – | OAuth2 access token. When set, XOAUTH2 replaces the passwords. **Secret** |
 | `from_address` | `username` | Sender address, e.g. `Support <support@example.com>` |
 | `default_subject` | `PicoClaw` | Subject for mails that do not answer another mail |
 | `poll_interval_secs` | `60` | Polling period when the server has no IDLE |
@@ -59,7 +69,7 @@ picoclaw gateway
 | `plain_text_only` | `false` | Send `text/plain` only, no HTML part |
 | `max_attachment_bytes` | `10485760` | Cap, in total, for attachments in either direction |
 
-Secrets can also live in `.security.yml` (`channel_list.mail.settings.password`, `smtp_password`, `oauth_token`) or in `PICOCLAW_CHANNELS_MAIL_*` environment variables.
+`password`, `smtp_password` and `oauth_token` are secrets: supply them through `.security.yml` (`channel_list.mail.settings.*`) or the `PICOCLAW_CHANNELS_MAIL_PASSWORD`, `..._SMTP_PASSWORD` and `..._OAUTH_TOKEN` environment variables. See the [security configuration guide](../../security/security_configuration.md).
 
 ---
 
