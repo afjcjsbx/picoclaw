@@ -466,9 +466,11 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string, timeout tim
 
 	prepareCommandForTermination(cmd)
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	capture := execOutputCaptureBytes(t.maxOutputChars)
+	stdout := newBoundedOutputBuffer(capture*3/4, capture-capture*3/4)
+	stderr := newBoundedOutputBuffer(capture*3/4, capture-capture*3/4)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 
 	// Route shell execution through the shared isolation entry point so exec tool
 	// subprocesses receive the same isolation policy as other integrations.
@@ -507,7 +509,7 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string, timeout tim
 	}
 
 	output := stdout.String()
-	if stderr.Len() > 0 {
+	if !stderr.Empty() {
 		output += "\nSTDERR:\n" + stderr.String()
 	}
 
@@ -553,7 +555,10 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string, timeout tim
 
 	// Attach the pre-truncation output so the large-result spill can save it
 	// instead of the cut view: the omitted middle stays readable from the
-	// artifact whenever the result is large enough to spill.
+	// artifact whenever the result is large enough to spill. The capture
+	// buffer itself is bounded (see execOutputCaptureBytes), so for a
+	// pathologically large stream the artifact holds the head/tail window
+	// with an explicit omission marker instead of the whole stream.
 	fullText := ""
 	if truncated {
 		fullText = fullOutput
