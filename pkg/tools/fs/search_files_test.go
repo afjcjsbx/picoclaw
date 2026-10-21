@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestSearchFilesStopsAcrossDirectories(t *testing.T) {
@@ -78,5 +79,25 @@ func TestSearchFilesOutputCapKeepsPagination(t *testing.T) {
 	}
 	if offset != len(lines) {
 		t.Fatalf("pagination advanced to %d, want %d", offset, len(lines))
+	}
+}
+
+func TestTruncateSearchLine(t *testing.T) {
+	short := "a plain line"
+	if got := truncateSearchLine(short); got != short {
+		t.Errorf("short line changed: %q", got)
+	}
+
+	ascii := strings.Repeat("a", maxSearchLineLength+20)
+	if got, want := truncateSearchLine(ascii), strings.Repeat("a", maxSearchLineLength)+"\u2026"; got != want {
+		t.Errorf("ASCII line cut to %q, want %q", got, want)
+	}
+
+	got := truncateSearchLine(strings.Repeat("\u6f22", maxSearchLineLength+5))
+	if want := strings.Repeat("\u6f22", maxSearchLineLength) + "\u2026"; got != want {
+		t.Errorf("CJK line cut to %d runes, want %d", utf8.RuneCountInString(got), maxSearchLineLength+1)
+	}
+	if !utf8.ValidString(got) {
+		t.Errorf("CJK line cut mid-rune: %q", got)
 	}
 }
