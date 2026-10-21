@@ -30,10 +30,11 @@ var secretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`\bAIza[0-9A-Za-z_-]{35}\b`),
 }
 
-// highEntropyRunPattern matches candidate machine-generated tokens:
-// runs of token characters at least secretHintMinLength long. Shorter
-// runs can never be masked, so the regexp starts at the smallest threshold.
-var highEntropyRunPattern = regexp.MustCompile(`[A-Za-z0-9+/=_-]{20,}`)
+// highEntropyRunPattern matches candidate machine-generated tokens: runs of
+// token characters at least as long as the smallest minimum length below
+// (secretHintMinLength and opaqueMinLength, both 32). Shorter runs can never
+// be masked, so the repetition count must not exceed that smallest length.
+var highEntropyRunPattern = regexp.MustCompile(`[A-Za-z0-9+/=_-]{32,}`)
 
 // secretHintPattern detects a secret-like identifier on the line
 // (api_key, token, password, ...), which lowers the entropy threshold: on a
@@ -81,9 +82,14 @@ func redactSecretLine(line string) string {
 }
 
 func redactHighEntropyRuns(line string) string {
-	hinted := secretHintPattern.MatchString(line)
+	// The hint regexp is costly and most lines hold no candidate run, so it
+	// runs lazily, once, on the first candidate.
+	var hinted, hintChecked bool
 	return highEntropyRunPattern.ReplaceAllStringFunc(line, func(token string) string {
 		minEntropy, minLength := opaqueMinEntropy, opaqueMinLength
+		if !hintChecked {
+			hinted, hintChecked = secretHintPattern.MatchString(line), true
+		}
 		if hinted {
 			minEntropy, minLength = secretHintMinEntropy, secretHintMinLength
 		}
