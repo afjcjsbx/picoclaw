@@ -1,6 +1,10 @@
 package session
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/sipeed/picoclaw/pkg/routing"
+)
 
 type testScopeReader struct {
 	scope *SessionScope
@@ -76,6 +80,36 @@ func TestBuildMainSessionKey(t *testing.T) {
 	}
 	if got != BuildOpaqueSessionKey("agent:main:main") {
 		t.Fatalf("BuildMainSessionKey() = %q, want stable main-key hash", got)
+	}
+}
+
+func TestIsMainSessionAlias(t *testing.T) {
+	tests := []struct {
+		name    string
+		agentID string
+		alias   string
+		want    bool
+	}{
+		{"legacy main for sales", "sales", "agent:sales:main", true},
+		{"legacy main for default agent", "main", "agent:main:main", true},
+		{"legacy main of another agent", "sales", "agent:other:main", true},
+		{"legacy main with case variations", "sales", "agent:Sales:MAIN", true},
+		{"legacy main with empty agent ID", "", "agent:main:main", true},
+		{"opaque main for sales", "sales", BuildMainSessionKey("sales"), true},
+		{"opaque main for default agent", "main", BuildMainSessionKey("main"), true},
+		{"opaque default main for another agent", "sales", BuildMainSessionKey(routing.DefaultAgentID), true},
+		{"empty alias", "sales", "", false},
+		{"direct main is not a main alias", "sales", "agent:sales:direct:main", false},
+		{"legacy direct alias", "sales", "agent:sales:direct:x", false},
+		{"opaque direct key", "sales", BuildOpaqueSessionKey("agent:sales:direct:x"), false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isMainSessionAlias(tt.agentID, tt.alias); got != tt.want {
+				t.Fatalf("isMainSessionAlias(%q, %q) = %v, want %v", tt.agentID, tt.alias, got, tt.want)
+			}
+		})
 	}
 }
 

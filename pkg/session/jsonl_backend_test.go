@@ -364,6 +364,63 @@ func TestJSONLBackend_EnsureSessionMetadata_DoesNotOverwriteNonEmptyCanonicalHis
 	}
 }
 
+// The main session is a shared fallback. Its history must never be promoted
+// into individual per-channel sessions, including for non-default agents whose
+// opaque main key is not recognized as the main session by hash alone.
+func TestJSONLBackend_EnsureSessionMetadata_DoesNotPromoteMainSessionAliases(t *testing.T) {
+	store, err := memory.NewJSONLStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	b := session.NewJSONLBackend(store)
+
+	mainKey := session.BuildMainSessionKey("sales")
+	individualKey := session.BuildOpaqueSessionKey("agent:sales:cli:chat:direct:peer")
+	mustAddMessage(t, b, mainKey, "user", "main history")
+
+	b.EnsureSessionMetadata(individualKey, &session.SessionScope{
+		Version: session.ScopeVersionV1,
+		AgentID: "sales",
+		Channel: "cli",
+	}, []string{mainKey, "agent:sales:main"})
+
+	if history := mustGetHistory(t, b, individualKey); len(history) != 0 {
+		t.Fatalf("main-session history promoted into individual session: %+v", history)
+	}
+
+	// Read shared main-session data directly from the store: the backend
+	// resolves mainKey as an alias of individualKey, which is unchanged
+	// metadata behavior and not what this test asserts.
+	history, err := store.GetHistory(context.Background(), mainKey)
+	if err != nil {
+		t.Fatalf("GetHistory(%q) failed: %v", mainKey, err)
+	}
+	if len(history) != 1 || history[0].Content != "main history" {
+		t.Fatalf("main session history = %+v, want it left intact", history)
+	}
+}
+
+// Control: excluding main-session aliases must not stop promotion from ordinary
+// aliases of a non-default agent.
+func TestJSONLBackend_EnsureSessionMetadata_PromotesNonMainAliasHistory(t *testing.T) {
+	b := newBackend(t)
+
+	aliasKey := "agent:sales:direct:legacy-user"
+	mustAddMessage(t, b, aliasKey, "user", "legacy history")
+
+	canonicalKey := session.BuildOpaqueSessionKey("agent:sales:cli:direct:legacy-user")
+	b.EnsureSessionMetadata(canonicalKey, &session.SessionScope{
+		Version: session.ScopeVersionV1,
+		AgentID: "sales",
+	}, []string{aliasKey})
+
+	history := mustGetHistory(t, b, canonicalKey)
+	if len(history) != 1 || history[0].Content != "legacy history" {
+		t.Fatalf("promoted history = %+v", history)
+	}
+}
+
 func TestJSONLBackend_LastActivity(t *testing.T) {
 	b := newBackend(t)
 

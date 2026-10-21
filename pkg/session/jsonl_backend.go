@@ -127,7 +127,21 @@ func (b *JSONLBackend) EnsureSessionMetadata(sessionKey string, scope *SessionSc
 	}
 
 	if promotingStore, ok := b.store.(aliasPromotingStore); ok {
-		if _, err := promotingStore.PromoteAliasHistory(ctx, sessionKey, rawScope, aliases); err != nil {
+		// The main session is a shared fallback, not this session's own
+		// history: exclude its aliases from promotion so stale messages
+		// from the fallback are not attached to new per-channel sessions.
+		agentID := ""
+		if scope != nil {
+			agentID = scope.AgentID
+		}
+		promotableAliases := make([]string, 0, len(aliases))
+		for _, alias := range aliases {
+			if isMainSessionAlias(agentID, strings.TrimSpace(alias)) {
+				continue
+			}
+			promotableAliases = append(promotableAliases, alias)
+		}
+		if _, err := promotingStore.PromoteAliasHistory(ctx, sessionKey, rawScope, promotableAliases); err != nil {
 			log.Printf("session: promote alias history: %v", err)
 		}
 	}

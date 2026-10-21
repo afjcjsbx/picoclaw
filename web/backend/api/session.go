@@ -19,6 +19,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/providers/messageutil"
 	"github.com/sipeed/picoclaw/pkg/session"
+	"github.com/sipeed/picoclaw/pkg/session/schema"
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
@@ -108,13 +109,6 @@ func extractLegacyPicoSessionID(key string) (string, bool) {
 	return "", false
 }
 
-func sanitizeSessionKey(key string) string {
-	key = strings.ReplaceAll(key, ":", "_")
-	key = strings.ReplaceAll(key, "/", "_")
-	key = strings.ReplaceAll(key, "\\", "_")
-	return key
-}
-
 func (h *Handler) readLegacySession(path string) (sessionFile, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -186,7 +180,7 @@ func (h *Handler) readSessionMessages(path string, skip int) ([]providers.Messag
 }
 
 func (h *Handler) readJSONLSession(dir, sessionKey string) (sessionFile, error) {
-	base := filepath.Join(dir, sanitizeSessionKey(sessionKey))
+	base := filepath.Join(dir, schema.SanitizeKey(sessionKey))
 	jsonlPath := base + ".jsonl"
 	metaPath := base + ".meta.json"
 
@@ -196,7 +190,7 @@ func (h *Handler) readJSONLSession(dir, sessionKey string) (sessionFile, error) 
 	}
 	if meta.ForkedFrom == "" {
 		for _, alias := range meta.Aliases {
-			aliasPath := filepath.Join(dir, sanitizeSessionKey(alias)+".meta.json")
+			aliasPath := filepath.Join(dir, schema.SanitizeKey(alias)+".meta.json")
 			aliasMeta, aliasErr := h.readSessionMeta(aliasPath, alias)
 			if aliasErr == nil && aliasMeta.ForkedFrom != "" {
 				meta.ForkedFrom = aliasMeta.ForkedFrom
@@ -276,7 +270,7 @@ func sessionRefFromMeta(meta memory.SessionMeta) (picoJSONLSessionRef, bool) {
 	// Cron runs persist the target chat's scope, so their pico ID would equal the
 	// real conversation's and shadow it. Use the sanitized key as ID instead.
 	if strings.HasPrefix(meta.Key, cronSessionKeyPrefix) {
-		return picoJSONLSessionRef{ID: sanitizeSessionKey(meta.Key), Key: meta.Key}, true
+		return picoJSONLSessionRef{ID: schema.SanitizeKey(meta.Key), Key: meta.Key}, true
 	}
 	if len(meta.Scope) == 0 {
 		if sessionID, ok := extractLegacyPicoSessionID(meta.Key); ok {
@@ -425,7 +419,7 @@ func jsonlSessionRefFromFilename(name string) (picoJSONLSessionRef, bool) {
 		return picoJSONLSessionRef{}, false
 	}
 
-	legacyPrefix := sanitizeSessionKey(legacyPicoSessionPrefix)
+	legacyPrefix := schema.SanitizeKey(legacyPicoSessionPrefix)
 	if strings.HasPrefix(base, legacyPrefix) {
 		sessionID := strings.TrimPrefix(base, legacyPrefix)
 		if sessionID == "" {
@@ -1142,7 +1136,7 @@ func (h *Handler) handleForkSession(w http.ResponseWriter, r *http.Request) {
 	id := hex.EncodeToString(idBytes[:])
 	id = id[:8] + "-" + id[8:12] + "-" + id[12:16] + "-" + id[16:20] + "-" + id[20:]
 	key := legacyPicoSessionPrefix + id
-	base := filepath.Join(dir, sanitizeSessionKey(key))
+	base := filepath.Join(dir, schema.SanitizeKey(key))
 	created := time.Now().UTC()
 	messages := parent.Messages[:cut+1]
 
@@ -1201,7 +1195,7 @@ func (h *Handler) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 
 	removed := false
 	if ref, err := h.findPicoJSONLSession(dir, sessionID); err == nil {
-		base := filepath.Join(dir, sanitizeSessionKey(ref.Key))
+		base := filepath.Join(dir, schema.SanitizeKey(ref.Key))
 		for _, path := range []string{base + ".jsonl", base + ".meta.json"} {
 			if err := os.Remove(path); err != nil {
 				if os.IsNotExist(err) {

@@ -4,8 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
@@ -20,6 +18,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/fileutil"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/providers/messageutil"
+	"github.com/sipeed/picoclaw/pkg/session/schema"
 )
 
 const (
@@ -90,23 +89,11 @@ func (s *JSONLStore) sessionLock(key string) *sync.Mutex {
 }
 
 func (s *JSONLStore) jsonlPath(key string) string {
-	return filepath.Join(s.dir, sanitizeKey(key)+".jsonl")
+	return filepath.Join(s.dir, schema.SanitizeKey(key)+".jsonl")
 }
 
 func (s *JSONLStore) metaPath(key string) string {
-	return filepath.Join(s.dir, sanitizeKey(key)+".meta.json")
-}
-
-// sanitizeKey converts a session key to a safe filename component.
-// Mirrors pkg/session.sanitizeFilename so that migration paths match.
-// Replaces ':' with '_' (session key separator) and '/' and '\' with '_'
-// so composite IDs (e.g. Telegram forum "chatID/threadID", Slack "channel/thread_ts")
-// do not create subdirectories or break on Windows.
-func sanitizeKey(key string) string {
-	s := strings.ReplaceAll(key, ":", "_")
-	s = strings.ReplaceAll(s, "/", "_")
-	s = strings.ReplaceAll(s, "\\", "_")
-	return s
+	return filepath.Join(s.dir, schema.SanitizeKey(key)+".meta.json")
 }
 
 // readMeta loads the metadata file for a session.
@@ -148,30 +135,6 @@ func cloneRawJSON(data json.RawMessage) json.RawMessage {
 		return nil
 	}
 	return append(json.RawMessage(nil), data...)
-}
-
-func normalizeAliases(canonicalKey string, aliases []string) []string {
-	if len(aliases) == 0 {
-		return nil
-	}
-	normalized := make([]string, 0, len(aliases))
-	seen := make(map[string]struct{}, len(aliases))
-	canonicalKey = strings.TrimSpace(canonicalKey)
-	for _, alias := range aliases {
-		alias = strings.TrimSpace(alias)
-		if alias == "" || alias == canonicalKey {
-			continue
-		}
-		if _, ok := seen[alias]; ok {
-			continue
-		}
-		seen[alias] = struct{}{}
-		normalized = append(normalized, alias)
-	}
-	if len(normalized) == 0 {
-		return nil
-	}
-	return normalized
 }
 
 func (s *JSONLStore) sessionExists(key string) bool {
@@ -267,7 +230,7 @@ func (s *JSONLStore) UpsertSessionMeta(
 		return err
 	}
 	meta.Scope = cloneRawJSON(scope)
-	meta.Aliases = normalizeAliases(sessionKey, aliases)
+	meta.Aliases = schema.NormalizeAliases(sessionKey, aliases)
 	now := time.Now()
 	if meta.CreatedAt.IsZero() {
 		meta.CreatedAt = now
@@ -280,10 +243,12 @@ func (s *JSONLStore) UpsertSessionMeta(
 // PromoteAliasHistory atomically promotes the first non-empty alias session
 // into the canonical session when the canonical session is still empty.
 //
-// Main-session aliases (e.g. "agent:main:main" or its opaque form) are
-// skipped during promotion.  The main session is a shared global fallback
-// and promoting its history into individual sessions would attach stale
-// messages to every new Web UI session (issue #2972).
+// Callers must exclude shared-fallback aliases — the main session of any agent
+// (e.g. "agent:main:main" or its opaque form) — before calling: promoting the
+// shared main-session history into individual sessions would attach stale
+// messages to every new session (issue #2972).
+// pkg/session.(*JSONLBackend).EnsureSessionMetadata applies this filter, since
+// it is the only caller that knows the agent ID.
 func (s *JSONLStore) PromoteAliasHistory(
 	_ context.Context,
 	sessionKey string,
@@ -295,11 +260,8 @@ func (s *JSONLStore) PromoteAliasHistory(
 		return false, nil
 	}
 
-	aliases = normalizeAliases(sessionKey, aliases)
+	aliases = schema.NormalizeAliases(sessionKey, aliases)
 	for _, alias := range aliases {
-		if isMainSessionAlias(alias) {
-			continue
-		}
 		unlock := s.lockSessionPair(sessionKey, alias)
 		promoted, err := s.promoteAliasHistoryLocked(sessionKey, alias, scope, aliases)
 		unlock()
@@ -309,34 +271,6 @@ func (s *JSONLStore) PromoteAliasHistory(
 	}
 
 	return false, nil
-}
-
-// isMainSessionAlias reports whether alias is the legacy or opaque main-session
-// key.  The main session ("agent:<agent>:main") is a shared fallback and should
-// not have its history promoted into individual per-channel sessions.
-func isMainSessionAlias(alias string) bool {
-	if alias == "" {
-		return false
-	}
-	// Legacy form: "agent:main:main" (exactly 3 colon-separated parts)
-	// Must not match "agent:sales:direct:main" etc.
-	if strings.HasPrefix(alias, "agent:") && strings.HasSuffix(alias, ":main") {
-		parts := strings.SplitN(alias, ":", 4)
-		if len(parts) == 3 {
-			return true
-		}
-	}
-	// Opaque form: "sk_v1_" + SHA256("agent:main:main")
-	if strings.HasPrefix(alias, "sk_v1_") {
-		for _, agentID := range []string{"main", "Main", "MAIN"} {
-			legacy := "agent:" + agentID + ":main"
-			hash := sha256.Sum256([]byte(legacy))
-			if "sk_v1_"+hex.EncodeToString(hash[:]) == alias {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // ResolveSessionKey returns the canonical session key for a candidate key.
@@ -474,7 +408,7 @@ func (s *JSONLStore) promoteAliasHistoryLocked(
 		canonicalMeta.CreatedAt = now
 	}
 	canonicalMeta.Scope = cloneRawJSON(scope)
-	canonicalMeta.Aliases = normalizeAliases(sessionKey, aliases)
+	canonicalMeta.Aliases = schema.NormalizeAliases(sessionKey, aliases)
 	canonicalMeta.ForkedFrom = aliasMeta.ForkedFrom
 	canonicalMeta.ForkIndex = aliasMeta.ForkIndex
 	canonicalMeta.ForkTitle = aliasMeta.ForkTitle

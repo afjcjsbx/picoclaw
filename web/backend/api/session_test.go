@@ -15,6 +15,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/memory"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/session"
+	"github.com/sipeed/picoclaw/pkg/session/schema"
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
@@ -128,7 +129,7 @@ func TestHandleListSessions_TransientThoughtDoesNotInflateMessageCount(t *testin
 
 	dir := sessionsTestDir(t, configPath)
 	sessionKey := legacyPicoSessionPrefix + "history-jsonl-transient"
-	base := filepath.Join(dir, sanitizeSessionKey(sessionKey))
+	base := filepath.Join(dir, schema.SanitizeKey(sessionKey))
 	now := time.Now().UTC()
 
 	rawJSONL := strings.Join([]string{
@@ -1694,7 +1695,7 @@ func TestHandleDeleteSession_JSONLStorage(t *testing.T) {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusNoContent, rec.Body.String())
 	}
 
-	base := filepath.Join(dir, sanitizeSessionKey(sessionKey))
+	base := filepath.Join(dir, schema.SanitizeKey(sessionKey))
 	for _, path := range []string{base + ".jsonl", base + ".meta.json"} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("expected %s to be removed, stat err = %v", path, err)
@@ -1737,7 +1738,7 @@ func TestHandleSessions_FiltersEmptyJSONLFiles(t *testing.T) {
 	defer cleanup()
 
 	dir := sessionsTestDir(t, configPath)
-	base := filepath.Join(dir, sanitizeSessionKey(legacyPicoSessionPrefix+"empty-jsonl"))
+	base := filepath.Join(dir, schema.SanitizeKey(legacyPicoSessionPrefix+"empty-jsonl"))
 	if err := os.WriteFile(base+".jsonl", []byte{}, 0o644); err != nil {
 		t.Fatalf("WriteFile(jsonl) error = %v", err)
 	}
@@ -1777,7 +1778,7 @@ func TestHandleSessions_ListsLegacyJSONLWithoutMeta(t *testing.T) {
 
 	dir := sessionsTestDir(t, configPath)
 	sessionKey := legacyPicoSessionPrefix + "missing-meta"
-	base := filepath.Join(dir, sanitizeSessionKey(sessionKey))
+	base := filepath.Join(dir, schema.SanitizeKey(sessionKey))
 	line, err := json.Marshal(providers.Message{Role: "user", Content: "recover me"})
 	if err != nil {
 		t.Fatalf("Marshal(message) error = %v", err)

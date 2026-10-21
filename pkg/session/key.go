@@ -93,6 +93,29 @@ func BuildMainSessionKey(agentID string) string {
 	return BuildOpaqueSessionKey(BuildLegacyMainAlias(agentID))
 }
 
+// isMainSessionAlias reports whether alias is the legacy or opaque main-session
+// key of agentID. The main session is a shared fallback: its history must not
+// be promoted into individual per-channel sessions.
+func isMainSessionAlias(agentID, alias string) bool {
+	alias = strings.TrimSpace(alias)
+	if alias == "" {
+		return false
+	}
+	if strings.EqualFold(alias, BuildLegacyMainAlias(agentID)) {
+		return true
+	}
+	if strings.EqualFold(alias, BuildMainSessionKey(agentID)) {
+		return true
+	}
+	// Any legacy main alias ("agent:<x>:main") counts, regardless of which
+	// agent it belongs to.
+	if parsed := ParseLegacyAgentSessionKey(alias); parsed != nil &&
+		strings.EqualFold(strings.TrimSpace(parsed.Rest), "main") {
+		return true
+	}
+	return strings.EqualFold(alias, BuildMainSessionKey(routing.DefaultAgentID))
+}
+
 func BuildLegacyDirectAliases(agentID, channel, account, peerID string) []string {
 	agentID = routing.NormalizeAgentID(agentID)
 	channel = normalizeLegacyChannel(channel)
