@@ -34,6 +34,8 @@ channel_list:
 
 Alternatively export it as an environment variable, which takes precedence: `PICOCLAW_CHANNELS_MAIL_PASSWORD`. The same applies to `smtp_password` and `oauth_token`.
 
+The value in `.security.yml` can also be a reference instead of the literal secret, for instance `password: "file://mail-password"` to read it from a file (the path is relative to the config directory, handy for mounted Docker/Kubernetes secrets). Encrypted `enc://` values are resolved by the same mechanism as for the other channels; see the [security configuration guide](../../security/security_configuration.md). Saving the config never writes these fields back to `config.json`.
+
 **3. Start the gateway:**
 
 ```bash

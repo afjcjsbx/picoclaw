@@ -2,6 +2,7 @@ package mail
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -186,5 +187,55 @@ func TestSecretsLoadFromSecurityFileAndEnvironment(t *testing.T) {
 	}
 	if s.IMAPHost != "imap.env.example.com" {
 		t.Errorf("env did not override imap_host: %q", s.IMAPHost)
+	}
+}
+
+// A secret may be a file:// reference instead of a literal, e.g. a mounted
+// Docker/Kubernetes secret. The password never appears in any config file.
+func TestPasswordFromFileReference(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "mail-password"), []byte("password-from-file\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfgJSON := fmt.Sprintf(`{"version": %d, "channel_list": {"mail": {"enabled": true, "type": "mail",
+		"allow_from": ["@example.org"],
+		"settings": {"imap_host": "imap.example.com", "smtp_host": "smtp.example.com", "username": "bot@example.com"}}}}`,
+		config.CurrentVersion)
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(cfgJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	security := "channel_list:\n  mail:\n    settings:\n      password: \"file://mail-password\"\n" // relative to the config directory
+	if err := os.WriteFile(filepath.Join(dir, ".security.yml"), []byte(security), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := config.LoadConfig(filepath.Join(dir, "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := cfg.Channels[config.ChannelMail].GetDecoded()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := decoded.(*config.MailSettings).Password.String(); got != "password-from-file" {
+		t.Errorf("password = %q, want the file content", got)
+	}
+}
+
+// Saving the config must never write the secret back into config.json.
+func TestPasswordIsNeverWrittenToConfigJSON(t *testing.T) {
+	s := &config.MailSettings{IMAPHost: "h", SMTPHost: "h", Username: "bot@example.com"}
+	s.Password = *config.NewSecureString("super-secret-password")
+	s.SMTPPassword = *config.NewSecureString("super-secret-smtp")
+	s.OAuthToken = *config.NewSecureString("super-secret-token")
+
+	b, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"super-secret-password", "super-secret-smtp", "super-secret-token"} {
+		if strings.Contains(string(b), secret) {
+			t.Errorf("config JSON leaks %q: %s", secret, b)
+		}
 	}
 }
