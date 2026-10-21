@@ -2904,3 +2904,22 @@ func TestWebTool_WebFetch_PerCallMaxCharsCannotDisableFloodGuard(t *testing.T) {
 		t.Fatalf("unexpected error: %s", smaller.ForLLM)
 	}
 }
+
+func TestLooksLikeHTMLPrefix(t *testing.T) {
+	for _, tc := range []struct {
+		body string
+		want bool
+	}{
+		{"<!DOCTYPE html><html><body>x</body></html>", true},
+		{"<HTML><body>x</body></HTML>", true},
+		{"<html>", true},
+		{"<htmlx>", true},
+		{"<htm>", false},
+		{"plain text", false},
+		{"", false},
+	} {
+		if got := looksLikeHTML(tc.body); got != tc.want {
+			t.Errorf("looksLikeHTML(%q) = %v, want %v", tc.body, got, tc.want)
+		}
+	}
+}
