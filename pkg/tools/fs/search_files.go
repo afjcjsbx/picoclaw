@@ -756,15 +756,15 @@ func (t *SearchFilesTool) walkPath(
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if set, ok := loadSearchIgnoreSet(t.fs, dir); ok {
-			ignore = append(ignore[:len(ignore):len(ignore)], set)
-		}
 		entries, err := t.fs.ReadDir(dir)
 		if err != nil {
 			if !isRoot {
 				return nil
 			}
 			return err
+		}
+		if set, ok := loadSearchIgnoreSet(t.fs, dir, entries); ok {
+			ignore = append(ignore[:len(ignore):len(ignore)], set)
 		}
 		for _, entry := range entries {
 			if err := ctx.Err(); err != nil {

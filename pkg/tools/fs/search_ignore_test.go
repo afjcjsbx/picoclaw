@@ -2,6 +2,7 @@ package fstools
 
 import (
 	"context"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -141,5 +142,34 @@ func TestSearchFilesRespectsIgnoreFile(t *testing.T) {
 	}
 	if !strings.Contains(result.ForLLM, "other.txt") {
 		t.Fatalf("expected other.txt in output:\n%s", result.ForLLM)
+	}
+}
+
+// statCountFs counts Stat calls so tests can assert on syscall traffic.
+type statCountFs struct {
+	fileSystem
+	stats []string
+}
+
+func (f *statCountFs) Stat(path string) (fs.FileInfo, error) {
+	f.stats = append(f.stats, filepath.Base(path))
+	return f.fileSystem.Stat(path)
+}
+
+func TestLoadSearchIgnoreSetOnlyTouchesListedFiles(t *testing.T) {
+	root := t.TempDir()
+	writeIgnoreTestFile(t, root, map[string]string{".gitignore": "*.log\n", "a.go": ""})
+	counting := &statCountFs{fileSystem: &hostFs{}}
+	entries, err := counting.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	set, ok := loadSearchIgnoreSet(counting, root, entries)
+	if !ok || len(set.rules) != 1 {
+		t.Fatalf("expected the .gitignore rule to load, got ok=%v rules=%d", ok, len(set.rules))
+	}
+	if len(counting.stats) != 1 || counting.stats[0] != ".gitignore" {
+		t.Fatalf("only the listed .gitignore should be stat'ed, got %v", counting.stats)
 	}
 }

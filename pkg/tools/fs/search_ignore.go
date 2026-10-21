@@ -2,9 +2,11 @@ package fstools
 
 import (
 	"io"
+	"os"
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -58,10 +60,14 @@ func (s searchIgnoreStack) ignored(candidate string, isDir bool) bool {
 
 // loadSearchIgnoreSet reads the .gitignore and .ignore files of dir, when
 // present, and returns their combined rules. .ignore is applied after
-// .gitignore so it can override it.
-func loadSearchIgnoreSet(fsys fileSystem, dir string) (searchIgnoreSet, bool) {
+// .gitignore so it can override it. entries are the listing of dir: only names
+// found there are opened, so directories without ignore files cost no syscall.
+func loadSearchIgnoreSet(fsys fileSystem, dir string, entries []os.DirEntry) (searchIgnoreSet, bool) {
 	var rules []searchIgnoreRule
 	for _, name := range []string{".gitignore", ".ignore"} {
+		if !slices.ContainsFunc(entries, func(e os.DirEntry) bool { return e.Name() == name }) {
+			continue
+		}
 		content, err := readIgnoreFile(fsys, filepath.Join(dir, name))
 		if err != nil || len(content) == 0 {
 			continue
