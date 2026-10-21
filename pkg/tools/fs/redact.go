@@ -3,6 +3,7 @@ package fstools
 import (
 	"math"
 	"regexp"
+	"strings"
 )
 
 // redactedMarker is the placeholder used by the pipeline-wide sensitive data
@@ -54,13 +55,25 @@ const (
 	opaqueMinLength      = 32
 )
 
-// redactSearchSecrets masks credential-looking values in one rendered result
-// line, so that secrets found in files do not reach the model even when they
-// are not part of the configured sensitive values covered by the pipeline
-// filter. Well-known token formats are always masked; other tokens are masked
+// redactSecrets masks credential-looking values in content rendered to the
+// model (search results and file reads), so that secrets found in files do not
+// reach the model even when they are not part of the configured sensitive
+// values covered by the pipeline filter. Well-known token formats are always masked; other tokens are masked
 // when they look machine-generated (long and high-entropy, and not a plain
 // hex hash such as a commit id or checksum).
-func redactSearchSecrets(line string) string {
+func redactSecrets(text string) string {
+	if !strings.Contains(text, "\n") {
+		return redactSecretLine(text)
+	}
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		lines[i] = redactSecretLine(line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// redactSecretLine masks credential-looking values in a single line.
+func redactSecretLine(line string) string {
 	for _, pattern := range secretPatterns {
 		line = pattern.ReplaceAllString(line, redactedMarker)
 	}

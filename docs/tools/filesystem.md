@@ -56,6 +56,8 @@ Using `offset`/`length` in line mode (or `limit`) is rejected with an error: eac
 
 Lines longer than `tools.read_file.max_line_length` characters are cut after that many characters with a ` ... [truncated]` marker and the read continues with the next line, so a single long line cannot consume the whole byte budget. If the byte budget itself runs out mid-line, the header reports the mid-line cut instead.
 
+Both modes scrub credential-looking values from the rendered content before it reaches the model: well-known token formats and long machine-generated high-entropy strings are replaced with `[FILTERED]`, while ordinary identifiers, prose, and hex hashes stay visible. Headers and line numbers still refer to the raw file, so reads continue normally after a masked value. See [Built-in redaction in search results and file reads](../security/sensitive_data_filtering.md#built-in-redaction-in-search-results-and-file-reads).
+
 Results larger than `tools.max_inline_result_chars` are spilled to a workspace artifact with a head+tail preview, exactly like every other tool result; see [Large tool results](../reference/tools_configuration.md#large-tool-results).
 
 ## `write_file`
