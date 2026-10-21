@@ -74,12 +74,12 @@ func loadSearchIgnoreSet(fsys fileSystem, dir string) (searchIgnoreSet, bool) {
 	return searchIgnoreSet{dir: dir, rules: rules}, true
 }
 
-func readIgnoreFile(fsys fileSystem, path string) ([]byte, error) {
-	info, err := fsys.Stat(path)
+func readIgnoreFile(fsys fileSystem, filePath string) ([]byte, error) {
+	info, err := fsys.Stat(filePath)
 	if err != nil || !info.Mode().IsRegular() || info.Size() > maxSearchIgnoreBytes {
 		return nil, err
 	}
-	f, err := fsys.Open(path)
+	f, err := fsys.Open(filePath)
 	if err != nil {
 		return nil, err
 	}

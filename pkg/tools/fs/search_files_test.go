@@ -1,6 +1,7 @@
 package fstools
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io/fs"
@@ -11,6 +12,24 @@ import (
 	"testing"
 	"unicode/utf8"
 )
+
+func TestReadSearchLineCapsLineLength(t *testing.T) {
+	r := bufio.NewReader(strings.NewReader(strings.Repeat("a", 50) + "\nnext\n"))
+	line, truncated, err := readSearchLine(r, 10)
+	if err != nil {
+		t.Fatalf("first line: %v", err)
+	}
+	if line != strings.Repeat("a", 10) || !truncated {
+		t.Fatalf("first line = %q truncated=%v, want 10 bytes and truncated", line, truncated)
+	}
+	line, truncated, err = readSearchLine(r, 10)
+	if err != nil {
+		t.Fatalf("second line: %v", err)
+	}
+	if line != "next\n" || truncated {
+		t.Fatalf("second line = %q truncated=%v, want next line intact", line, truncated)
+	}
+}
 
 func TestSearchFilesStopsAcrossDirectories(t *testing.T) {
 	root := t.TempDir()

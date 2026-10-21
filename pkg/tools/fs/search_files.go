@@ -30,6 +30,10 @@ const (
 	// scanSearchReadBufferBytes is the buffered reader size used to stream
 	// file contents line by line.
 	scanSearchReadBufferBytes = 64 * 1024
+	// maxSearchLineBytes caps the text retained for one line, so a minified
+	// file with a multi-megabyte line cannot allocate the whole global budget.
+	// Longer lines are truncated before matching.
+	maxSearchLineBytes = 1 << 20
 	// scanSearchBinarySniffBytes is how much of a file head is inspected for
 	// NUL bytes when deciding whether the file is binary.
 	scanSearchBinarySniffBytes = 8 * 1024
@@ -415,7 +419,7 @@ func (t *SearchFilesTool) scanSearchFile(
 		return result, err
 	}
 	if !entry.Mode().IsRegular() {
-		return result, fmt.Errorf("not a searchable regular file")
+		return result, errors.New("not a searchable regular file")
 	}
 	if entry.Size() > remainingBytes {
 		result.byteLimit = true
@@ -427,7 +431,6 @@ func (t *SearchFilesTool) scanSearchFile(
 	}
 	defer f.Close()
 
-	// The budget bounds the memory a single line may allocate.
 	br := &budgetReader{reader: f, limit: remainingBytes}
 	reader := bufio.NewReaderSize(br, scanSearchReadBufferBytes)
 
@@ -457,7 +460,7 @@ func (t *SearchFilesTool) scanSearchFile(
 		lastHit  int
 		nextEmit int
 		buf      []searchLine
-		ring     []searchLine
+		lookback []searchLine
 	)
 
 	emitChunk := func(lines []searchLine) {
@@ -495,9 +498,9 @@ func (t *SearchFilesTool) scanSearchFile(
 	}
 
 	pushRing := func(line searchLine) {
-		ring = append(ring, line)
-		if len(ring) > opts.context {
-			ring = ring[len(ring)-opts.context:]
+		lookback = append(lookback, line)
+		if len(lookback) > opts.context {
+			lookback = lookback[len(lookback)-opts.context:]
 		}
 	}
 
@@ -526,13 +529,13 @@ func (t *SearchFilesTool) scanSearchFile(
 		} else {
 			buf = buf[:0]
 		}
-		ring = append(ring[:0], buf...)
+		lookback = append(lookback[:0], buf...)
 		buf = buf[:0]
 		hunkOpen = false
 	}
 
 	for !done {
-		line, err := reader.ReadString('\n')
+		line, _, err := readSearchLine(reader, maxSearchLineBytes)
 		if err != nil {
 			if errors.Is(err, errSearchByteLimit) {
 				result.byteLimit = true
@@ -561,9 +564,9 @@ func (t *SearchFilesTool) scanSearchFile(
 					buf = append(buf, current)
 					lastHit = number
 				} else {
-					buf = append(buf[:0], ring...)
+					buf = append(buf[:0], lookback...)
 					buf = append(buf, current)
-					ring = ring[:0]
+					lookback = lookback[:0]
 					hunkOpen = true
 					lastHit = number
 					nextEmit = buf[0].number
@@ -631,6 +634,34 @@ func renderSearchLine(line searchLine, pattern *regexp.Regexp) string {
 		}
 	}
 	return truncateSearchLine(text, loc)
+}
+
+// readSearchLine reads one line, retaining at most limit bytes. Longer lines
+// are truncated and the rest of the line is drained, so line numbers stay
+// aligned. The error follows bufio.Reader semantics: io.EOF on the last line,
+// or errSearchByteLimit when the global byte budget runs out.
+func readSearchLine(r *bufio.Reader, limit int) (string, bool, error) {
+	var buf []byte
+	truncated := false
+	for {
+		frag, err := r.ReadSlice('\n')
+		if room := limit - len(buf); room > 0 {
+			keep := min(len(frag), room)
+			buf = append(buf, frag[:keep]...)
+			if keep < len(frag) {
+				truncated = true
+			}
+		} else if len(frag) > 0 {
+			truncated = true
+		}
+		if err == nil {
+			return string(buf), truncated, nil
+		}
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		return string(buf), truncated, err
+	}
 }
 
 func truncateSearchLine(line string, matchLoc []int) string {
