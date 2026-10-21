@@ -90,9 +90,10 @@ func normalizeToolResult(
 	result = &normalized
 
 	notes := make([]string, 0, 2)
-	seen := make(map[string]struct{})
+	var seen map[string]struct{}
 
 	if store != nil && channel != "" && chatID != "" {
+		seen = make(map[string]struct{})
 		var refs []string
 		var extractedNotes []string
 
@@ -179,8 +180,12 @@ func persistLargeResultArtifact(result *ToolResult, toolName, workspace string, 
 	}
 	result.FullText = ""
 
+	if text == "" || len(text) <= maxRunes {
+		// Bytes bound runes: a shorter byte length can never exceed the limit.
+		return
+	}
 	size := utf8.RuneCountInString(text)
-	if text == "" || size <= maxRunes {
+	if size <= maxRunes {
 		return
 	}
 

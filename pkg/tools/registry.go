@@ -19,6 +19,17 @@ type ToolEntry struct {
 	Tool   Tool
 	IsCore bool
 	TTL    int
+
+	// params is the schema captured at registration. Tool schemas are
+	// immutable for the lifetime of an entry (the registry version already
+	// assumes this for the provider-defs cache), so validation does not need
+	// to rebuild the map on every execution.
+	params map[string]any
+}
+
+// Parameters returns the schema captured at registration.
+func (e *ToolEntry) Parameters() map[string]any {
+	return e.params
 }
 
 type ToolRegistry struct {
@@ -54,7 +65,7 @@ func NewToolRegistry() *ToolRegistry {
 // storeEntryLocked stores an entry under name and applies the registry-wide
 // media store. Callers own the lock and decide the duplicate policy.
 func (r *ToolRegistry) storeEntryLocked(name string, tool Tool, isCore bool) {
-	r.tools[name] = &ToolEntry{Tool: tool, IsCore: isCore}
+	r.tools[name] = &ToolEntry{Tool: tool, IsCore: isCore, params: tool.Parameters()}
 	if aware, ok := tool.(mediaStoreAware); ok && r.mediaStore != nil {
 		aware.SetMediaStore(r.mediaStore)
 	}
@@ -302,17 +313,26 @@ func (r *ToolRegistry) SnapshotHiddenTools() HiddenToolSnapshot {
 }
 
 func (r *ToolRegistry) Get(name string) (Tool, bool) {
+	entry, ok := r.executableEntry(name)
+	if !ok {
+		return nil, false
+	}
+	return entry.Tool, true
+}
+
+// executableEntry returns the registry entry for a callable tool. Hidden tools
+// with an expired TTL are not callable.
+func (r *ToolRegistry) executableEntry(name string) (*ToolEntry, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	entry, ok := r.tools[name]
 	if !ok {
 		return nil, false
 	}
-	// Hidden tools with expired TTL are not callable.
 	if !entry.IsCore && entry.TTL <= 0 {
 		return nil, false
 	}
-	return entry.Tool, true
+	return entry, true
 }
 
 func (r *ToolRegistry) Execute(ctx context.Context, name string, args map[string]any) *ToolResult {
@@ -331,14 +351,18 @@ func (r *ToolRegistry) ExecuteWithContext(
 	channel, chatID string,
 	asyncCallback AsyncCallback,
 ) *ToolResult {
-	logger.InfoCF("tool", "Tool execution started",
-		map[string]any{
-			"tool":      name,
-			"arg_keys":  utils.SortedArgKeys(args),
-			"arg_count": len(args),
-		})
+	// Per-call start/complete lines fire on every tool invocation. Keep them
+	// at debug level and skip the payload construction unless debug is on.
+	if logger.IsDebugEnabled() {
+		logger.DebugCF("tool", "Tool execution started",
+			map[string]any{
+				"tool":      name,
+				"arg_keys":  utils.SortedArgKeys(args),
+				"arg_count": len(args),
+			})
+	}
 
-	tool, ok := r.Get(name)
+	entry, ok := r.executableEntry(name)
 	if !ok {
 		logger.ErrorCF("tool", "Tool not found",
 			map[string]any{
@@ -349,8 +373,10 @@ func (r *ToolRegistry) ExecuteWithContext(
 		).WithError(fmt.Errorf("tool not found"))
 	}
 
-	// Validate arguments against the tool's declared schema.
-	if err := validateToolArgs(tool.Parameters(), args); err != nil {
+	tool := entry.Tool
+
+	// Validate arguments against the schema captured at registration.
+	if err := validateToolArgs(entry.Parameters(), args); err != nil {
 		logger.WarnCF("tool", "Tool argument validation failed",
 			map[string]any{"tool": name, "error": err.Error()})
 		return ErrorResult(fmt.Sprintf("invalid arguments for tool %q: %s", name, err)).
@@ -433,13 +459,15 @@ func (r *ToolRegistry) ExecuteWithContext(
 				"error":    result.ForLLM,
 			})
 	} else if result.Async {
-		logger.InfoCF("tool", "Tool started (async)",
-			map[string]any{
-				"tool":     name,
-				"duration": duration.Milliseconds(),
-			})
-	} else {
-		logger.InfoCF("tool", "Tool execution completed",
+		if logger.IsDebugEnabled() {
+			logger.DebugCF("tool", "Tool started (async)",
+				map[string]any{
+					"tool":     name,
+					"duration": duration.Milliseconds(),
+				})
+		}
+	} else if logger.IsDebugEnabled() {
+		logger.DebugCF("tool", "Tool execution completed",
 			map[string]any{
 				"tool":          name,
 				"duration_ms":   duration.Milliseconds(),
@@ -613,6 +641,7 @@ func (r *ToolRegistry) Clone() *ToolRegistry {
 			Tool:   entry.Tool,
 			IsCore: entry.IsCore,
 			TTL:    entry.TTL,
+			params: entry.params,
 		}
 	}
 	return clone

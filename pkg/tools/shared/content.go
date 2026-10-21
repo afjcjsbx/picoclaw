@@ -54,7 +54,10 @@ func SanitizeToolLLMContent(text string) string {
 	if trimmed == "" {
 		return text
 	}
-	if inlineMarkdownDataURLRe.MatchString(trimmed) || inlineRawDataURLRe.MatchString(trimmed) {
+	// Both data-URL regexps require the literal "data:" prefix, so ordinary
+	// tool output can skip the regexp engine entirely.
+	if strings.Contains(trimmed, "data:") &&
+		(inlineMarkdownDataURLRe.MatchString(trimmed) || inlineRawDataURLRe.MatchString(trimmed)) {
 		cleaned := inlineMarkdownDataURLRe.ReplaceAllString(trimmed, "")
 		cleaned = inlineRawDataURLRe.ReplaceAllString(cleaned, "")
 		cleaned = strings.TrimSpace(cleaned)

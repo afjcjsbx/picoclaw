@@ -289,7 +289,7 @@ func extractContentText(content []mcp.Content) string {
 	for _, c := range content {
 		switch v := c.(type) {
 		case *mcp.TextContent:
-			parts = append(parts, toolshared.SanitizeToolLLMContent(v.Text))
+			parts = append(parts, v.Text)
 		case *mcp.ImageContent:
 			parts = append(parts, fmt.Sprintf("[Image: %s]", normalizedMIMEType(v.MIMEType)))
 		case *mcp.AudioContent:
