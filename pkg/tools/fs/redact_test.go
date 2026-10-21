@@ -41,6 +41,17 @@ func TestRedactSearchSecretsMasksKnownTokenFormats(t *testing.T) {
 	}
 }
 
+func TestRedactSecretsBearerIsCaseInsensitive(t *testing.T) {
+	// 20 characters: too short for the generic entropy rule, so only the
+	// bearer pattern can mask it.
+	token := fakeToken("8fJd92kL", "mQ73xPqR", "5tNv")
+	for _, word := range []string{"bearer", "Bearer", "BEARER", "bEaReR"} {
+		if got := redactSecrets("Authorization: " + word + " " + token); !strings.Contains(got, redactedMarker) {
+			t.Errorf("%s: expected %s in %q", word, redactedMarker, got)
+		}
+	}
+}
+
 func TestRedactSearchSecretsMasksHighEntropyTokens(t *testing.T) {
 	cases := []struct {
 		name string

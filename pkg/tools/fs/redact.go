@@ -11,23 +11,59 @@ import (
 // the same marker for consistency.
 const redactedMarker = "[FILTERED]"
 
+// secretPattern is a well-known credential format. Every match contains one
+// of lits, so a plain substring test lets most lines skip the regexp: the
+// patterns start with \b, which leaves Go's regexp without a literal prefix to
+// search for and makes each one scan the whole line.
+type secretPattern struct {
+	re   *regexp.Regexp
+	lits []string
+	// fold compares lits case-insensitively; lits must then be lowercase
+	// ASCII words.
+	fold bool
+}
+
+func (p secretPattern) mayMatch(line string) bool {
+	for _, lit := range p.lits {
+		if p.fold && containsFold(line, lit) || !p.fold && strings.Contains(line, lit) {
+			return true
+		}
+	}
+	return false
+}
+
+// containsFold reports whether s contains lit, a lowercase ASCII word,
+// ignoring case. It only compares at positions whose byte can start lit.
+func containsFold(s, lit string) bool {
+	for i := 0; i+len(lit) <= len(s); i++ {
+		if s[i]|0x20 == lit[0] && strings.EqualFold(s[i:i+len(lit)], lit) {
+			return true
+		}
+	}
+	return false
+}
+
 // secretPatterns match well-known credential formats with high
 // confidence, so they are always masked.
-var secretPatterns = []*regexp.Regexp{
+var secretPatterns = []secretPattern{
 	// Authorization: Bearer <token>
-	regexp.MustCompile(`(?i)\bbearer\s+[A-Za-z0-9\-._~+/]{16,}=*`),
+	{regexp.MustCompile(`(?i)\bbearer\s+[A-Za-z0-9\-._~+/]{16,}=*`), []string{"bearer"}, true},
 	// JSON Web Tokens: three dot-separated base64url segments starting with eyJ.
-	regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`),
+	{regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`), []string{"eyJ"}, false},
 	// OpenAI / Stripe style keys: sk-..., sk_..., rk-..., rk_...
-	regexp.MustCompile(`\b(?:sk|rk)[-_][A-Za-z0-9_-]{16,}`),
+	{regexp.MustCompile(`\b(?:sk|rk)[-_][A-Za-z0-9_-]{16,}`), []string{"sk-", "sk_", "rk-", "rk_"}, false},
 	// GitHub tokens: ghp_..., gho_..., ghu_..., ghs_..., ghr_..., github_pat_...
-	regexp.MustCompile(`\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})`),
+	{
+		regexp.MustCompile(`\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})`),
+		[]string{"ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_"},
+		false,
+	},
 	// AWS access key IDs.
-	regexp.MustCompile(`\b(?:AKIA|ASIA)[0-9A-Z]{16}\b`),
+	{regexp.MustCompile(`\b(?:AKIA|ASIA)[0-9A-Z]{16}\b`), []string{"AKIA", "ASIA"}, false},
 	// Slack tokens: xoxb-..., xoxa-, xoxp-, xoxr-, xoxs-...
-	regexp.MustCompile(`\bxox[baprs]-[A-Za-z0-9-]{10,}`),
+	{regexp.MustCompile(`\bxox[baprs]-[A-Za-z0-9-]{10,}`), []string{"xox"}, false},
 	// Google API keys.
-	regexp.MustCompile(`\bAIza[0-9A-Za-z_-]{35}\b`),
+	{regexp.MustCompile(`\bAIza[0-9A-Za-z_-]{35}\b`), []string{"AIza"}, false},
 }
 
 // highEntropyRunPattern matches candidate machine-generated tokens: runs of
@@ -75,8 +111,10 @@ func redactSecrets(text string) string {
 
 // redactSecretLine masks credential-looking values in a single line.
 func redactSecretLine(line string) string {
-	for _, pattern := range secretPatterns {
-		line = pattern.ReplaceAllString(line, redactedMarker)
+	for _, p := range secretPatterns {
+		if p.mayMatch(line) {
+			line = p.re.ReplaceAllString(line, redactedMarker)
+		}
 	}
 	return redactHighEntropyRuns(line)
 }
