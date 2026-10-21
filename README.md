@@ -11,7 +11,7 @@
 <h3>$10 Hardware · 10–20 MB RAM · ms Boot · Let's Go, PicoClaw!</h3>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Go-1.27.2+-00ADD8?style=flat&logo=go&logoColor=white" alt="Go">
+  <img src="https://img.shields.io/badge/Go-1.27.3+-00ADD8?style=flat&logo=go&logoColor=white" alt="Go">
   <img src="https://img.shields.io/badge/Arch-x86__64%2C%20ARM64%2C%20MIPS%2C%20RISC--V%2C%20LoongArch-blue" alt="Hardware">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
   <br>
@@ -216,7 +216,7 @@ Download the binary for your platform from this repository's [GitHub Releases](h
 
 Prerequisites:
 
-- Go 1.27.2+
+- Go 1.27.3+
 - Node.js 22+ and pnpm 10.33.0+ for Web UI / launcher builds
 
 ```bash
