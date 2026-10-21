@@ -25,12 +25,20 @@ func shouldRetry(statusCode int) bool {
 }
 
 // drainAndCloseBody reads a small prefix before closing so net/http can often
-// reuse the connection. It never drains an unbounded error response.
+// reuse the connection.
+//
+// The body is only read when its size is known and fits the cap. A chunked or
+// oversized error body can be streamed slowly or stall outright, and draining
+// it would spend the request budget before the backoff, so the retry would
+// never run. Closing without reading is enough to let net/http drop the
+// connection.
 func drainAndCloseBody(resp *http.Response) {
 	if resp == nil || resp.Body == nil {
 		return
 	}
-	_, _ = io.CopyN(io.Discard, resp.Body, maxRetryDrainBytes)
+	if resp.ContentLength > 0 && resp.ContentLength <= maxRetryDrainBytes {
+		_, _ = io.CopyN(io.Discard, resp.Body, maxRetryDrainBytes)
+	}
 	_ = resp.Body.Close()
 }
 

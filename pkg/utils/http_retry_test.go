@@ -240,14 +240,30 @@ func (c *closeNotifier) Close() error {
 	return c.ReadCloser.Close()
 }
 
-func TestDrainAndCloseBody_LimitsReadAndCloses(t *testing.T) {
-	body := &trackedReadCloser{
-		reader: strings.NewReader(strings.Repeat("x", maxRetryDrainBytes+1024)),
-	}
+func TestDrainAndCloseBody_DrainsSmallBody(t *testing.T) {
+	body := &trackedReadCloser{reader: strings.NewReader("error")}
 
-	drainAndCloseBody(&http.Response{Body: body})
+	drainAndCloseBody(&http.Response{Body: body, ContentLength: 5})
 
-	assert.Equal(t, maxRetryDrainBytes, body.read)
+	assert.Equal(t, 5, body.read)
+	assert.True(t, body.closed)
+}
+
+func TestDrainAndCloseBody_ClosesOversizedBodyWithoutReading(t *testing.T) {
+	body := &trackedReadCloser{reader: strings.NewReader(strings.Repeat("x", maxRetryDrainBytes+1024))}
+
+	drainAndCloseBody(&http.Response{Body: body, ContentLength: maxRetryDrainBytes + 1024})
+
+	assert.Equal(t, 0, body.read)
+	assert.True(t, body.closed)
+}
+
+func TestDrainAndCloseBody_ClosesUnknownLengthBodyWithoutReading(t *testing.T) {
+	body := &trackedReadCloser{reader: strings.NewReader("error")}
+
+	drainAndCloseBody(&http.Response{Body: body, ContentLength: -1})
+
+	assert.Equal(t, 0, body.read)
 	assert.True(t, body.closed)
 }
 
@@ -260,19 +276,18 @@ func TestDoRequestWithRetry_DrainsBodyBeforeRetry(t *testing.T) {
 	retryDelayUnit = time.Millisecond
 	t.Cleanup(func() { retryDelayUnit = time.Second })
 
-	firstBody := &trackedReadCloser{
-		reader: strings.NewReader(strings.Repeat("x", maxRetryDrainBytes+1024)),
-	}
+	firstBody := &trackedReadCloser{reader: strings.NewReader("error")}
 	attempts := 0
 	client := &http.Client{
 		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			attempts++
 			if attempts == 1 {
 				return &http.Response{
-					StatusCode: http.StatusInternalServerError,
-					Body:       firstBody,
-					Header:     make(http.Header),
-					Request:    req,
+					StatusCode:    http.StatusInternalServerError,
+					Body:          firstBody,
+					ContentLength: 5,
+					Header:        make(http.Header),
+					Request:       req,
 				}, nil
 			}
 			return &http.Response{
@@ -293,7 +308,51 @@ func TestDoRequestWithRetry_DrainsBodyBeforeRetry(t *testing.T) {
 	_ = resp.Body.Close()
 
 	assert.Equal(t, 2, attempts)
-	assert.Equal(t, maxRetryDrainBytes, firstBody.read)
+	assert.Equal(t, 5, firstBody.read)
+	assert.True(t, firstBody.closed)
+}
+
+func TestDoRequestWithRetry_DoesNotDrainUnknownLengthBody(t *testing.T) {
+	retryDelayUnit = time.Millisecond
+	t.Cleanup(func() { retryDelayUnit = time.Second })
+
+	// A chunked 5xx body has no known size: draining it could stall until the
+	// request times out and leave no budget for the retry.
+	firstBody := &trackedReadCloser{
+		reader: strings.NewReader(strings.Repeat("x", maxRetryDrainBytes+1024)),
+	}
+	attempts := 0
+	client := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			attempts++
+			if attempts == 1 {
+				return &http.Response{
+					StatusCode:    http.StatusInternalServerError,
+					Body:          firstBody,
+					ContentLength: -1,
+					Header:        make(http.Header),
+					Request:       req,
+				}, nil
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader("ok")),
+				Header:     make(http.Header),
+				Request:    req,
+			}, nil
+		}),
+	}
+
+	req, err := http.NewRequest(http.MethodGet, "http://example.com", nil)
+	require.NoError(t, err)
+
+	resp, err := DoRequestWithRetry(client, req)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	_ = resp.Body.Close()
+
+	assert.Equal(t, 2, attempts)
+	assert.Zero(t, firstBody.read, "unknown-length error body must not be drained")
 	assert.True(t, firstBody.closed)
 }
 
