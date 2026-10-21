@@ -350,7 +350,11 @@ func (al *AgentLoop) agentForSession(sessionKey string) *AgentInstance {
 		if !ok || agent == nil {
 			continue
 		}
-		resolvedAgentID := session.ResolveAgentID(agent.Sessions, sessionKey)
+		var scopeReader session.ScopeReader
+		if metaStore, ok := agent.Sessions.(sessionMetadataStore); ok {
+			scopeReader = metaStore
+		}
+		resolvedAgentID := session.ResolveAgentID(scopeReader, sessionKey)
 		if resolvedAgentID == "" {
 			continue
 		}
@@ -413,7 +417,7 @@ func (al *AgentLoop) Continue(ctx context.Context, sessionKey, channel, chatID s
 	}
 
 	var scope *session.SessionScope
-	if metaStore, ok := agent.Sessions.(session.MetadataAwareSessionStore); ok {
+	if metaStore, ok := agent.Sessions.(sessionMetadataStore); ok {
 		scope = metaStore.GetSessionScope(sessionKey)
 	}
 

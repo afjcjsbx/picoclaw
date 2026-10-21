@@ -62,15 +62,19 @@ func ParseLegacyAgentSessionKey(sessionKey string) *ParsedLegacySessionKey {
 	return &ParsedLegacySessionKey{AgentID: agentID, Rest: rest}
 }
 
+// ScopeReader is implemented by session stores that expose structured scope
+// metadata for a session key. It is the consumer-side contract used by
+// ResolveAgentID.
+type ScopeReader interface {
+	GetSessionScope(sessionKey string) *SessionScope
+}
+
 // ResolveAgentID returns the routed agent ID associated with a session. It
-// prefers structured session scope metadata when available and falls back to
-// legacy agent-scoped session keys for compatibility.
-func ResolveAgentID(store any, sessionKey string) string {
-	if scopeReader, ok := store.(interface {
-		GetSessionScope(sessionKey string) *SessionScope
-	}); ok {
-		scope := scopeReader.GetSessionScope(sessionKey)
-		if scope != nil && strings.TrimSpace(scope.AgentID) != "" {
+// prefers structured session scope metadata when the reader provides it and
+// falls back to legacy agent-scoped session keys for compatibility.
+func ResolveAgentID(reader ScopeReader, sessionKey string) string {
+	if reader != nil {
+		if scope := reader.GetSessionScope(sessionKey); scope != nil && strings.TrimSpace(scope.AgentID) != "" {
 			return routing.NormalizeAgentID(scope.AgentID)
 		}
 	}
