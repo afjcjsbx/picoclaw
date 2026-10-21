@@ -391,6 +391,24 @@ func TestAppendFileTool_AppendToNonExistent_Restricted(t *testing.T) {
 	assert.Equal(t, "first content", string(data))
 }
 
+// TestAppendFileTool_HostModeCreatesNestedPath verifies that the host append
+// path creates missing parent directories like the atomic write path did.
+func TestAppendFileTool_HostModeCreatesNestedPath(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nested", "new.txt")
+
+	tool := NewAppendFileTool("", false)
+	result := tool.Execute(context.Background(), map[string]any{
+		"path":    path,
+		"content": "first content",
+	})
+	assert.False(t, result.IsError, "unexpected error: %s", result.ForLLM)
+
+	data, err := os.ReadFile(path)
+	assert.NoError(t, err)
+	assert.Equal(t, "first content", string(data))
+}
+
 // TestAppendFileTool_Restricted_Success verifies that AppendFileTool in restricted mode
 // correctly appends to an existing file within the sandbox.
 func TestAppendFileTool_Restricted_Success(t *testing.T) {

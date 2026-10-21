@@ -610,8 +610,12 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 	}
 	defer file.Close()
 
-	if info, statErr := file.Stat(); statErr == nil && info.IsDir() {
-		return ErrorResult(fmt.Sprintf("failed to open file: path is a directory: %s", path))
+	totalSize := int64(-1)
+	if info, statErr := file.Stat(); statErr == nil {
+		if info.IsDir() {
+			return ErrorResult(fmt.Sprintf("failed to open file: path is a directory: %s", path))
+		}
+		totalSize = info.Size()
 	}
 
 	sample := make([]byte, 512)
@@ -627,6 +631,9 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 	reader := bufio.NewReaderSize(io.MultiReader(bytes.NewReader(sample), file), 32*1024)
 
 	var content strings.Builder
+	if totalSize > 0 {
+		content.Grow(int(min(totalSize, t.maxSize)))
+	}
 	lineIndex := int64(1)
 	var linesRead int64
 	var fileBytesRead int64
@@ -648,8 +655,13 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 		lineIndex++
 	}
 
+	// Reuse one line buffer and one prefix buffer across iterations: the line
+	// content is copied into content before the next read, so nothing aliases.
+	lineBuf := make([]byte, 0, 4096)
+	var prefixBuf [24]byte
 	for !reachedEOF && (limit < 0 || linesRead < limit) {
-		prefix := formatReadFileLinePrefix(lineIndex)
+		prefix := strconv.AppendInt(prefixBuf[:0], lineIndex, 10)
+		prefix = append(prefix, '|')
 		remaining := t.maxSize - outputBytesRead - int64(len(prefix))
 		if remaining <= 0 {
 			byteBudgetTruncated = true
@@ -669,7 +681,11 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 			}
 		}
 
-		line, complete, hasLine, restPending, consumedBytes, readLineErr := readNextLinePrefix(reader, allowance)
+		line, complete, hasLine, restPending, consumedBytes, readLineErr := readNextLinePrefix(
+			reader,
+			lineBuf,
+			allowance,
+		)
 		if readLineErr != nil {
 			return ErrorResult(fmt.Sprintf("failed to read file content: %v", readLineErr))
 		}
@@ -677,6 +693,7 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 			reachedEOF = true
 			break
 		}
+		lineBuf = line[:0]
 
 		hadTrailingNewline := len(line) > 0 && line[len(line)-1] == '\n'
 
@@ -705,7 +722,7 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 			displayLine = append(displayLine, '\n')
 		}
 
-		content.WriteString(prefix)
+		content.Write(prefix)
 		content.Write(displayLine)
 		fileBytesRead += consumedBytes
 		outputBytesRead += int64(len(prefix) + len(displayLine))
@@ -799,10 +816,6 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 	return NewToolResult(header + "\n\n" + content.String())
 }
 
-func formatReadFileLinePrefix(lineNumber int64) string {
-	return strconv.FormatInt(lineNumber, 10) + "|"
-}
-
 func isBinaryReadFileData(data []byte) bool {
 	if len(data) == 0 {
 		return false
@@ -876,13 +889,14 @@ func consumeNextLine(reader *bufio.Reader) (bool, int64, error) {
 // read past maxBytes.
 func readNextLinePrefix(
 	reader *bufio.Reader,
+	dst []byte,
 	maxBytes int64,
 ) (line []byte, complete, hasLine, restPending bool, consumed int64, err error) {
 	if maxBytes <= 0 {
 		return nil, false, false, false, 0, nil
 	}
 
-	var out bytes.Buffer
+	dst = dst[:0]
 	sawData := false
 	complete = true
 
@@ -891,13 +905,13 @@ func readNextLinePrefix(
 		consumed += int64(len(fragment))
 		if len(fragment) > 0 {
 			sawData = true
-			if remaining := maxBytes - int64(out.Len()); remaining > 0 {
+			if remaining := maxBytes - int64(len(dst)); remaining > 0 {
 				take := len(fragment)
 				if int64(take) > remaining {
 					take = int(remaining)
 					complete = false
 				}
-				out.Write(fragment[:take])
+				dst = append(dst, fragment[:take]...)
 			} else {
 				complete = false
 			}
@@ -907,18 +921,18 @@ func readNextLinePrefix(
 		case readErr == nil:
 			// The terminator (and any bytes after the returned prefix) has
 			// already been consumed, so the caller must not discard again.
-			return out.Bytes(), complete, sawData, false, consumed, nil
+			return dst, complete, sawData, false, consumed, nil
 		case errors.Is(readErr, bufio.ErrBufferFull):
 			if !complete {
 				// The terminator has not been reached yet.
-				return out.Bytes(), false, true, true, consumed, nil
+				return dst, false, true, true, consumed, nil
 			}
 			continue
 		case errors.Is(readErr, io.EOF):
 			if !sawData {
 				return nil, true, false, false, consumed, nil
 			}
-			return out.Bytes(), complete, true, false, consumed, nil
+			return dst, complete, true, false, consumed, nil
 		default:
 			return nil, false, false, false, consumed, readErr
 		}
@@ -1166,6 +1180,34 @@ func (h *hostFs) WriteFile(path string, data []byte) error {
 	return fileutil.WriteFileAtomic(path, data, 0o600)
 }
 
+// fileAppender is implemented by filesystems that can append without reading
+// and rewriting the whole file. Callers fall back to ReadFile+WriteFile when a
+// filesystem does not implement it.
+type fileAppender interface {
+	AppendFile(path string, data []byte) error
+}
+
+func (h *hostFs) AppendFile(path string, data []byte) error {
+	// Match WriteFile: a new nested path gets its parent directories created.
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("failed to create directory: %w", err)
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
+	if err != nil {
+		return fmt.Errorf("failed to open file for append: %w", err)
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("failed to append to file: %w", err)
+	}
+	// Explicit sync keeps the flash-storage durability guarantee of WriteFile.
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("failed to sync file: %w", err)
+	}
+	return f.Close()
+}
+
 func (h *hostFs) Open(path string) (fs.File, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -1281,6 +1323,31 @@ func (r *sandboxFs) WriteFile(path string, data []byte) error {
 	})
 }
 
+func (r *sandboxFs) AppendFile(path string, data []byte) error {
+	return r.execute(path, func(root *os.Root, relPath string) error {
+		dir := filepath.Dir(relPath)
+		if dir != "." && dir != "/" {
+			if err := root.MkdirAll(dir, 0o755); err != nil {
+				return fmt.Errorf("failed to create parent directories: %w", err)
+			}
+		}
+
+		f, err := root.OpenFile(relPath, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
+		if err != nil {
+			return fmt.Errorf("failed to open file for append: %w", err)
+		}
+		if _, err := f.Write(data); err != nil {
+			_ = f.Close()
+			return fmt.Errorf("failed to append to file: %w", err)
+		}
+		if err := f.Sync(); err != nil {
+			_ = f.Close()
+			return fmt.Errorf("failed to sync file: %w", err)
+		}
+		return f.Close()
+	})
+}
+
 func (r *sandboxFs) ReadDir(path string) ([]os.DirEntry, error) {
 	var entries []os.DirEntry
 	err := r.execute(path, func(root *os.Root, relPath string) error {
@@ -1348,6 +1415,13 @@ func (w *whitelistFs) WriteFile(path string, data []byte) error {
 		return w.host.WriteFile(path, data)
 	}
 	return w.sandbox.WriteFile(path, data)
+}
+
+func (w *whitelistFs) AppendFile(path string, data []byte) error {
+	if w.matches(path) {
+		return w.host.AppendFile(path, data)
+	}
+	return w.sandbox.AppendFile(path, data)
 }
 
 func (w *whitelistFs) ReadDir(path string) ([]os.DirEntry, error) {
