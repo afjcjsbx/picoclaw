@@ -2459,11 +2459,10 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 
 	switch {
 	case mediaType == "application/json":
-		// json.Indent validates and formats in place without building an
+		// json.Indent validates and formats the document without building an
 		// interface{} tree, so a large payload does not pay reflection and
 		// per-value allocations just to be re-marshaled.
 		var formatted bytes.Buffer
-		formatted.Grow(len(body) + len(body)/4)
 		if err := json.Indent(&formatted, body, "", "  "); err != nil {
 			text = bodyStr
 			extractor = "raw"
@@ -2539,9 +2538,9 @@ func hasHTMLPrefixFold(body, prefix string) bool {
 }
 
 func (t *WebFetchTool) extractText(htmlContent string) string {
-	// Single pass over the document: drop script/style bodies and tags while
-	// collapsing horizontal whitespace, instead of running five regexps that
-	// each allocate a full-size copy of the input.
+	// One tokenizer pass over the document drops script/style bodies and tags
+	// while collapsing horizontal whitespace, instead of running five regexps
+	// that each allocate a full-size copy of the input.
 	out := make([]byte, 0, len(htmlContent))
 	lastSpace := false
 	appendText := func(segment string) {
@@ -2563,6 +2562,13 @@ func (t *WebFetchTool) extractText(htmlContent string) string {
 		}
 	}
 
+	// A failed closing-tag lookup means no such closing tag exists anywhere in
+	// the rest of the document, so remember it and never rescan the suffix for
+	// the same element. Without this, a document full of unclosed <script>
+	// tags turns the walk quadratic.
+	noScriptClose := false
+	noStyleClose := false
+
 	for i := 0; i < len(htmlContent); {
 		if htmlContent[i] != '<' {
 			j := i + 1
@@ -2573,17 +2579,19 @@ func (t *WebFetchTool) extractText(htmlContent string) string {
 			i = j
 			continue
 		}
-		if hasTagPrefixFold(htmlContent[i:], "script") {
+		if !noScriptClose && hasTagPrefixFold(htmlContent[i:], "script") {
 			if end := indexClosingTag(htmlContent[i:], "script"); end >= 0 {
 				i += end + len("</script>")
 				continue
 			}
+			noScriptClose = true
 		}
-		if hasTagPrefixFold(htmlContent[i:], "style") {
+		if !noStyleClose && hasTagPrefixFold(htmlContent[i:], "style") {
 			if end := indexClosingTag(htmlContent[i:], "style"); end >= 0 {
 				i += end + len("</style>")
 				continue
 			}
+			noStyleClose = true
 		}
 		closing := strings.IndexByte(htmlContent[i:], '>')
 		if closing < 0 {
@@ -2601,23 +2609,7 @@ func (t *WebFetchTool) extractText(htmlContent string) string {
 
 	trimmed := strings.TrimSpace(string(out))
 
-	// Collapse runs of three or more newlines to a blank line.
-	collapsed := make([]byte, 0, len(trimmed))
-	newlines := 0
-	for i := 0; i < len(trimmed); i++ {
-		c := trimmed[i]
-		if c == '\n' {
-			newlines++
-			if newlines > 2 {
-				continue
-			}
-		} else {
-			newlines = 0
-		}
-		collapsed = append(collapsed, c)
-	}
-
-	lines := strings.Split(string(collapsed), "\n")
+	lines := strings.Split(trimmed, "\n")
 	cleanLines := make([]string, 0, len(lines))
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
