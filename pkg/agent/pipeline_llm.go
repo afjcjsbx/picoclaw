@@ -14,6 +14,7 @@ import (
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
+	cliprovider "github.com/sipeed/picoclaw/pkg/providers/cli"
 )
 
 // CallLLM performs an LLM call with fallback support, hook invocation, and retry logic.
@@ -27,11 +28,11 @@ func (p *Pipeline) CallLLM(
 	iteration int,
 ) (Control, error) {
 	al := p.al
-	maxMediaSize := p.Cfg.Agents.Defaults.GetMaxMediaSize()
+	mediaOpts := mediaResolveOptionsFor(p.Cfg)
 
 	// PreLLM: resolve media refs (except on iteration 1 where user media is already resolved)
 	if iteration > 1 {
-		exec.messages = resolveMediaRefs(exec.messages, p.MediaStore, maxMediaSize, exec.currentTurnStart)
+		exec.messages = resolveMediaRefsWithOptions(exec.messages, p.MediaStore, mediaOpts, exec.currentTurnStart)
 	}
 
 	// PreLLM: graceful terminal handling
@@ -72,6 +73,7 @@ func (p *Pipeline) CallLLM(
 		"max_tokens":       ts.agent.MaxTokens,
 		"temperature":      ts.agent.Temperature,
 		"prompt_cache_key": ts.agent.ID,
+		"session_key":      ts.sessionKey,
 	}
 	if exec.useNativeSearch {
 		exec.llmOpts["native_search"] = true
@@ -154,23 +156,27 @@ func (p *Pipeline) CallLLM(
 		},
 	)
 
-	logger.DebugCF("agent", "LLM request",
-		map[string]any{
-			"agent_id":          ts.agent.ID,
-			"iteration":         iteration,
-			"model":             exec.llmModel,
-			"messages_count":    len(exec.callMessages),
-			"tools_count":       len(exec.providerToolDefs),
-			"max_tokens":        ts.agent.MaxTokens,
-			"temperature":       ts.agent.Temperature,
-			"system_prompt_len": len(exec.callMessages[0].Content),
-		})
-	logger.DebugCF("agent", "Full LLM request",
-		map[string]any{
-			"iteration":     iteration,
-			"messages_json": formatMessagesForLog(exec.callMessages),
-			"tools_json":    formatToolsForLog(exec.providerToolDefs),
-		})
+	// The full-log payload walks the whole conversation and tool set, so only
+	// build it when DEBUG is actually enabled.
+	if logger.IsDebugEnabled() {
+		logger.DebugCF("agent", "LLM request",
+			map[string]any{
+				"agent_id":          ts.agent.ID,
+				"iteration":         iteration,
+				"model":             exec.llmModel,
+				"messages_count":    len(exec.callMessages),
+				"tools_count":       len(exec.providerToolDefs),
+				"max_tokens":        ts.agent.MaxTokens,
+				"temperature":       ts.agent.Temperature,
+				"system_prompt_len": len(exec.callMessages[0].Content),
+			})
+		logger.DebugCF("agent", "Full LLM request",
+			map[string]any{
+				"iteration":     iteration,
+				"messages_json": formatMessagesForLog(exec.callMessages),
+				"tools_json":    formatToolsForLog(exec.providerToolDefs),
+			})
+	}
 
 	// LLM call closure with fallback support
 	callLLM := func(
@@ -186,6 +192,27 @@ func (p *Pipeline) CallLLM(
 
 		al.activeRequestsInc()
 		defer al.activeRequestsDec()
+
+		// Honor the configured per-model RPM limit even when there is only one
+		// candidate. For multi-candidate configs the fallback chain acquires a
+		// token per candidate; configured streaming requires exactly one
+		// candidate, so acquire here to cover both streaming and the direct
+		// single-candidate call.
+		if p.Fallback != nil && len(exec.activeCandidates) == 1 {
+			acquireStart := time.Now()
+			acquireErr := p.Fallback.Acquire(providerCtx, exec.activeCandidates[0].StableKey())
+			if waited := time.Since(acquireStart); waited >= time.Second {
+				logger.InfoCF("agent", "Waited for local RPM rate limit token", map[string]any{
+					"agent_id": ts.agent.ID,
+					"model":    exec.llmModel,
+					"waited":   waited.String(),
+					"canceled": acquireErr != nil,
+				})
+			}
+			if acquireErr != nil {
+				return nil, acquireErr
+			}
+		}
 
 		if response, handled, streamErr := p.tryConfiguredStreamingLLM(
 			providerCtx,
@@ -411,6 +438,8 @@ func (p *Pipeline) CallLLM(
 			}); asmErr == nil && asmResp != nil {
 				exec.history = asmResp.History
 				exec.summary = asmResp.Summary
+			} else if asmErr != nil {
+				warnSessionStoreError(ts.sessionKey, "assemble", asmErr)
 			}
 			contextualSkills := ts.activeSkills
 			if ts.agent.ContextBuilder != nil {
@@ -426,11 +455,12 @@ func (p *Pipeline) CallLLM(
 				rebuildPromptReq := promptBuildRequestForTurn(ts, fullHistory, exec.summary, "", nil, p.Cfg)
 				rebuildPromptReq.ActiveSkills = append([]string(nil), contextualSkills...)
 				rebuilt := ts.agent.ContextBuilder.BuildMessagesFromPrompt(rebuildPromptReq)
-				return resolveMediaRefs(
+				rebuilt = append(rebuilt, exec.loopWarnings...)
+				return resolveMediaRefsWithOptions(
 					rebuilt,
 					p.MediaStore,
-					maxMediaSize,
-					len(rebuilt)-len(protectedTurnTail),
+					mediaOpts,
+					len(rebuilt)-len(protectedTurnTail)-len(exec.loopWarnings),
 				)
 			}
 			originalHistoryCount := len(exec.history)
@@ -451,7 +481,7 @@ func (p *Pipeline) CallLLM(
 			)
 			exec.history = append(trimmedStableHistory, protectedTurnTail...)
 			exec.messages = buildMessages(trimmedStableHistory)
-			exec.currentTurnStart = len(exec.messages) - len(protectedTurnTail)
+			exec.currentTurnStart = len(exec.messages) - len(protectedTurnTail) - len(exec.loopWarnings)
 			if exec.gracefulTerminal {
 				msgs := append([]providers.Message(nil), exec.messages...)
 				exec.callMessages = append(msgs, ts.interruptHintMessage())
@@ -593,6 +623,7 @@ func (p *Pipeline) CallLLM(
 		"iteration":      iteration,
 		"content_chars":  len(exec.response.Content),
 		"tool_calls":     len(exec.response.ToolCalls),
+		"finish_reason":  exec.response.FinishReason,
 		"reasoning":      exec.response.Reasoning,
 		"target_channel": al.targetReasoningChannelID(ts.channel),
 		"channel":        ts.channel,
@@ -601,6 +632,8 @@ func (p *Pipeline) CallLLM(
 		llmResponseFields["prompt_tokens"] = exec.response.Usage.PromptTokens
 		llmResponseFields["completion_tokens"] = exec.response.Usage.CompletionTokens
 		llmResponseFields["total_tokens"] = exec.response.Usage.TotalTokens
+		llmResponseFields["cache_read_tokens"] = exec.response.Usage.CacheReadTokens
+		llmResponseFields["cache_creation_tokens"] = exec.response.Usage.CacheCreationTokens
 	}
 	logger.DebugCF("agent", "LLM response", llmResponseFields)
 
@@ -621,6 +654,21 @@ func (p *Pipeline) CallLLM(
 			exec.pendingMessages = append(exec.pendingMessages, steerMsgs...)
 			return ControlContinue, nil
 		}
+		// A SubTurn may not finish before its async children: let the model
+		// react to their results instead of orphaning them.
+		if ts.parentTurnState != nil && !exec.gracefulTerminal {
+			if msgs := ts.joinChildren(turnCtx, al.cfg.FilterSensitiveData); len(msgs) > 0 {
+				cancelConfiguredStreamingLLM(turnCtx, exec)
+				logger.InfoCF("agent", "Joined async children after direct LLM response; continuing turn",
+					map[string]any{
+						"agent_id":  ts.agent.ID,
+						"iteration": iteration,
+						"results":   len(msgs),
+					})
+				exec.pendingMessages = append(exec.pendingMessages, msgs...)
+				return ControlContinue, nil
+			}
+		}
 
 		exec.finalContent = responseContent
 		logger.InfoCF("agent", "LLM response without tool calls (direct answer)",
@@ -636,7 +684,7 @@ func (p *Pipeline) CallLLM(
 	// Tool-call path: normalize and prepare for tool execution
 	exec.normalizedToolCalls = make([]providers.ToolCall, 0, len(exec.response.ToolCalls))
 	for _, tc := range exec.response.ToolCalls {
-		exec.normalizedToolCalls = append(exec.normalizedToolCalls, providers.NormalizeToolCall(tc))
+		exec.normalizedToolCalls = append(exec.normalizedToolCalls, cliprovider.NormalizeToolCall(tc))
 	}
 
 	toolNames := make([]string, 0, len(exec.normalizedToolCalls))
@@ -691,7 +739,11 @@ func (p *Pipeline) CallLLM(
 	}
 	exec.messages = append(exec.messages, assistantMsg)
 	if !ts.opts.NoHistory {
-		ts.agent.Sessions.AddFullMessage(ts.sessionKey, assistantMsg)
+		warnSessionStoreError(
+			ts.sessionKey,
+			"add full message",
+			ts.agent.Sessions.AddFullMessage(ctx, ts.sessionKey, assistantMsg),
+		)
 		ts.recordPersistedMessage(assistantMsg)
 		ts.ingestMessage(turnCtx, al, assistantMsg)
 	}

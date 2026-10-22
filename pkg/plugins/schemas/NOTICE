@@ -1,0 +1,11 @@
+Agent Plugins 1.0.0 JSON schemas
+Source: https://github.com/agentplugins/agent-plugins-spec
+Schema directory revision: d92e6f443b8edcea42c039727a82afdc565779e2
+Retrieved: 2026-09-30
+
+The two JSON schema files are unmodified upstream software material licensed
+under Apache-2.0. See Apache-2.0.txt and the upstream LICENSE.md.
+
+PicoClaw's Go validators implement these schemas plus the normative operational
+rules and non-fatal exceptions in spec/1.0.0.md. Schema URLs are identifiers;
+the runtime does not download schemas or execute code from schema references.

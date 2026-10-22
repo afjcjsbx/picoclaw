@@ -3,9 +3,9 @@ package integrationtools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/fnv"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -80,75 +80,23 @@ func (t *MCPTool) SetEventPublisher(eventBus runtimeevents.Bus) {
 
 const maxMCPInlineTextRunes = 16 * 1024
 
-// sanitizeIdentifierComponent normalizes a string so it can be safely used
-// as part of a tool/function identifier for downstream providers.
-// It:
-//   - lowercases the string
-//   - replaces any character not in [a-z0-9_-] with '_'
-//   - collapses multiple consecutive '_' into a single '_'
-//   - trims leading/trailing '_'
-//   - falls back to "unnamed" if the result is empty
-//   - truncates overly long components to a reasonable length
-func sanitizeIdentifierComponent(s string) string {
-	const maxLen = 64
-
-	s = strings.ToLower(s)
-	var b strings.Builder
-	b.Grow(len(s))
-
-	prevUnderscore := false
-	for _, r := range s {
-		isAllowed := (r >= 'a' && r <= 'z') ||
-			(r >= '0' && r <= '9') ||
-			r == '_' || r == '-'
-
-		if !isAllowed {
-			// Normalize any disallowed character to '_'
-			if !prevUnderscore {
-				b.WriteRune('_')
-				prevUnderscore = true
-			}
-			continue
-		}
-
-		if r == '_' {
-			if prevUnderscore {
-				continue
-			}
-			prevUnderscore = true
-		} else {
-			prevUnderscore = false
-		}
-
-		b.WriteRune(r)
-	}
-
-	result := strings.Trim(b.String(), "_")
-	if result == "" {
-		result = "unnamed"
-	}
-
-	if len(result) > maxLen {
-		result = result[:maxLen]
-	}
-
-	return result
-}
-
 // Name returns the tool name, prefixed with the server name.
 // The total length is capped at 64 characters (OpenAI-compatible API limit).
 // A short hash of the original (unsanitized) server and tool names is appended
 // whenever sanitization is lossy or the name is truncated, ensuring that two
-// names which differ only in disallowed characters remain distinct after sanitization.
+// names which differ only in disallowed characters or in case remain distinct
+// after sanitization.
 func (t *MCPTool) Name() string {
 	// Prefix with server name to avoid conflicts, and sanitize components
-	sanitizedServer := sanitizeIdentifierComponent(t.serverName)
-	sanitizedTool := sanitizeIdentifierComponent(t.tool.Name)
+	sanitizedServer := toolshared.SanitizeIdentifierComponent(t.serverName)
+	sanitizedTool := toolshared.SanitizeIdentifierComponent(t.tool.Name)
 	full := fmt.Sprintf("mcp_%s_%s", sanitizedServer, sanitizedTool)
 
-	// Check if sanitization was lossless (only lowercasing, no char replacement/truncation)
-	lossless := strings.ToLower(t.serverName) == sanitizedServer &&
-		strings.ToLower(t.tool.Name) == sanitizedTool
+	// Check if sanitization was lossless. Case folding counts as lossy:
+	// two servers (or tools) whose names differ only by case would otherwise
+	// produce the same identifier and silently overwrite each other in the
+	// registry.
+	lossless := t.serverName == sanitizedServer && t.tool.Name == sanitizedTool
 
 	const maxTotal = 64
 	if lossless && len(full) <= maxTotal {
@@ -182,7 +130,7 @@ func (t *MCPTool) PromptMetadata() toolshared.PromptMetadata {
 	return toolshared.PromptMetadata{
 		Layer:  toolshared.ToolPromptLayerCapability,
 		Slot:   toolshared.ToolPromptSlotMCP,
-		Source: "mcp:" + sanitizeIdentifierComponent(t.serverName),
+		Source: "mcp:" + toolshared.SanitizeIdentifierComponent(t.serverName),
 	}
 }
 
@@ -341,7 +289,7 @@ func extractContentText(content []mcp.Content) string {
 	for _, c := range content {
 		switch v := c.(type) {
 		case *mcp.TextContent:
-			parts = append(parts, sanitizeToolLLMContent(v.Text))
+			parts = append(parts, toolshared.SanitizeToolLLMContent(v.Text))
 		case *mcp.ImageContent:
 			parts = append(parts, fmt.Sprintf("[Image: %s]", normalizedMIMEType(v.MIMEType)))
 		case *mcp.AudioContent:
@@ -355,7 +303,7 @@ func extractContentText(content []mcp.Content) string {
 			parts = append(parts, fmt.Sprintf("[Content: %T]", v))
 		}
 	}
-	return sanitizeToolLLMContent(strings.Join(parts, "\n"))
+	return toolshared.SanitizeToolLLMContent(strings.Join(parts, "\n"))
 }
 
 func (t *MCPTool) normalizeResultContent(ctx context.Context, content []mcp.Content) *ToolResult {
@@ -370,7 +318,7 @@ func (t *MCPTool) normalizeResultContent(ctx context.Context, content []mcp.Cont
 			if rawText != "" {
 				rawTextParts = append(rawTextParts, rawText)
 			}
-			safeText := strings.TrimSpace(sanitizeToolLLMContent(v.Text))
+			safeText := strings.TrimSpace(toolshared.SanitizeToolLLMContent(v.Text))
 			if safeText != "" {
 				llmParts = append(llmParts, safeText)
 			}
@@ -422,7 +370,7 @@ func (t *MCPTool) normalizeResultContent(ctx context.Context, content []mcp.Cont
 
 	forLLM := strings.Join(compactStrings(llmParts), "\n")
 	rawText := strings.Join(compactStrings(rawTextParts), "\n")
-	if artifactResult := t.persistLargeTextArtifact(rawText); artifactResult != nil {
+	if artifactResult := t.persistLargeTextArtifact(rawText, forLLM); artifactResult != nil {
 		artifactResult.Media = mediaRefs
 		return artifactResult
 	}
@@ -434,7 +382,57 @@ func (t *MCPTool) normalizeResultContent(ctx context.Context, content []mcp.Cont
 	return result
 }
 
-func (t *MCPTool) persistLargeTextArtifact(text string) *ToolResult {
+// Model-facing notes for an oversized MCP text result: the text above stays a
+// bounded head+tail window, and the note says where the full payload lives (or
+// why it is unavailable).
+const (
+	mcpArtifactSavedNote = "[The full MCP text is saved as a local artifact (path listed below) — " +
+		"use read_file (offset/length) to read more.]"
+	mcpArtifactFailedNote = "[MCP artifact persistence failed; showing a bounded head+tail view.]"
+)
+
+// mcpTextResultMessage renders the model-facing text for an oversized MCP text
+// result: the sanitized inline text (llmText) cut to a 40% head / 60% tail
+// window at the configured inline limit — the notice carries the omission
+// counts when it cuts — followed by a one-line note about the full payload.
+func mcpTextResultMessage(llmText string, limit int, note string) string {
+	body := strings.TrimSpace(llmText)
+	if body != "" {
+		body, _ = toolshared.TruncateHeadTail(body, limit, "MCP RESULT")
+	}
+	if body == "" {
+		return note
+	}
+	return body + "\n\n" + note
+}
+
+// mcpSanitizedStandInMessage reports whether text is one of the sanitizer's
+// stand-in notices for large inline data, as opposed to the server's own
+// payload. A stand-in must never be unwrapped: the envelope around it is not
+// what the server delivered.
+func mcpSanitizedStandInMessage(text string) bool {
+	return text == toolshared.LargeBase64OmittedMessage ||
+		text == toolshared.InlineMediaOmittedMessage
+}
+
+// persistLargeTextArtifact persists an oversized MCP text payload to a workspace
+// artifact and returns the model-facing replacement result: a bounded head+tail
+// window of the sanitized text plus the artifact path. The full payload — the
+// raw text, or the pageable text for a recognized JSON payload — is what lands
+// on disk, so the window costs no cargo. Returns nil when the text fits, is
+// empty, or no workspace is configured.
+//
+// A recognizable JSON text payload ({"result": <text>, ...}, see
+// toolshared.PageableMCPServerText) is unwrapped before the write: servers
+// commonly deliver one minified JSON document, and storing it verbatim would
+// put the whole payload on ONE line with escaped newlines, so the read_file /
+// search_files pagination the artifact note recommends could not page it.
+// Siblings embedded in that text object survive in a <mcp-result-metadata>
+// block; the protocol-level structuredContent and _meta fields of
+// mcp.CallToolResult are separate from the text and are not included by this
+// rewrite. The size decision stays on the raw text, which is what would have
+// cost context.
+func (t *MCPTool) persistLargeTextArtifact(text, llmText string) *ToolResult {
 	text = strings.TrimSpace(text)
 	limit := t.maxInlineTextRunes
 	if limit <= 0 {
@@ -445,54 +443,77 @@ func (t *MCPTool) persistLargeTextArtifact(text string) *ToolResult {
 		return nil
 	}
 
-	dir := filepath.Join(t.workspace, ".artifacts", "mcp")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return t.largeTextArtifactFallback(text, err)
+	// The sanitized view can be a stand-in (for example the large-base64
+	// notice); never unwrap the payload around it. The artifact keeps the raw
+	// payload when the view is a stand-in; otherwise it stores pageable text.
+	persistedText := text
+	if !mcpSanitizedStandInMessage(strings.TrimSpace(llmText)) {
+		persistedText = toolshared.PageableMCPServerText(text)
 	}
-	// TODO: Add lifecycle cleanup/retention for MCP artifact files.
+	if persistedText != text && utf8.RuneCountInString(persistedText) <= limit {
+		// Unwrapping, not truncation, brought the payload back under the MCP
+		// budget: keep it whole inline and skip the artifact. Sanitize the raw
+		// text view because llmText reflects the envelope, not this rewrite.
+		return &ToolResult{ForLLM: toolshared.SanitizeToolLLMContent(persistedText)}
+	}
+
+	dir := filepath.Join(t.workspace, ".artifacts", "mcp")
 
 	pattern := fmt.Sprintf(
 		"%s_%s_*.txt",
-		sanitizeIdentifierComponent(t.serverName),
-		sanitizeIdentifierComponent(t.tool.Name),
+		toolshared.SanitizeIdentifierComponent(t.serverName),
+		toolshared.SanitizeIdentifierComponent(t.tool.Name),
 	)
-	tmpFile, err := os.CreateTemp(dir, pattern)
+	path, err := toolshared.PersistTextArtifact(dir, pattern, persistedText)
 	if err != nil {
-		return t.largeTextArtifactFallback(text, err)
-	}
-	path := tmpFile.Name()
-	if _, err = tmpFile.WriteString(text); err != nil {
-		_ = tmpFile.Close()
-		_ = os.Remove(path)
-		return t.largeTextArtifactFallback(text, err)
-	}
-	if err = tmpFile.Close(); err != nil {
-		_ = os.Remove(path)
-		return t.largeTextArtifactFallback(text, err)
+		return t.largeTextArtifactFallback(largeTextArtifactFallbackInput{
+			rawText:       text,
+			persistedText: persistedText,
+			llmText:       llmText,
+			limit:         limit,
+			err:           err,
+		})
 	}
 
 	return &ToolResult{
-		ForLLM: fmt.Sprintf(
-			"[MCP returned a large text result (%d chars); omitted from model context and saved as a local artifact.]",
-			size,
-		),
-		ArtifactTags: []string{"[file:" + path + "]"},
+		ForLLM:             mcpTextResultMessage(llmText, limit, mcpArtifactSavedNote),
+		ArtifactTags:       []string{"[file:" + path + "]"},
+		LargeResultSpilled: true,
 	}
 }
 
-func (t *MCPTool) largeTextArtifactFallback(text string, err error) *ToolResult {
-	size := utf8.RuneCountInString(text)
+// largeTextArtifactFallbackInput groups the three text views involved in the
+// fallback so callers cannot transpose them: rawText drives the log and size,
+// persistedText is handed to the generic spill, and llmText is the sanitized
+// view kept inline.
+type largeTextArtifactFallbackInput struct {
+	rawText       string
+	persistedText string
+	llmText       string
+	limit         int
+	err           error
+}
+
+// largeTextArtifactFallback keeps the bounded window inline, logs the failure,
+// and hands the full payload to the generic large-result spill under its own
+// artifact directory, so an unwritable .artifacts/mcp does not lose the text.
+// For an unwrapped envelope, the pageable text is handed over rather than the
+// JSON envelope, so the fallback artifact stays pageable too.
+func (t *MCPTool) largeTextArtifactFallback(in largeTextArtifactFallbackInput) *ToolResult {
+	size := utf8.RuneCountInString(in.rawText)
 	logger.WarnCF("tool", "Failed to persist large MCP text artifact", map[string]any{
 		"server": t.serverName,
 		"tool":   t.tool.Name,
 		"chars":  size,
-		"error":  err.Error(),
+		"error":  in.err.Error(),
 	})
+	// Keep the bounded head+tail view inline and hand the full payload to the
+	// generic large-result spill: it persists under a different artifact
+	// directory, so an unwritable .artifacts/mcp does not lose the text. If the
+	// spill cannot persist either, the bounded view above is what remains.
 	return &ToolResult{
-		ForLLM: fmt.Sprintf(
-			"[MCP returned a large text result (%d chars); omitted from model context because artifact persistence failed.]",
-			size,
-		),
+		ForLLM:   mcpTextResultMessage(in.llmText, in.limit, mcpArtifactFailedNote),
+		FullText: in.persistedText,
 	}
 }
 
@@ -515,7 +536,7 @@ func (t *MCPTool) storeEmbeddedResource(ctx context.Context, content *mcp.Embedd
 
 	rawText := strings.TrimSpace(resource.Text)
 	if rawText != "" {
-		return "", sanitizeToolLLMContent(resource.Text), rawText
+		return "", toolshared.SanitizeToolLLMContent(resource.Text), rawText
 	}
 
 	return "", summarizeEmbeddedResource(content), ""
@@ -556,57 +577,37 @@ func (t *MCPTool) storeBinaryContent(
 		)
 	}
 
-	dir := media.TempDir()
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", fmt.Sprintf("[MCP returned %s content (%s) but it could not be stored.]", kind, mimeType)
-	}
-
-	ext := extensionForMIMEType(mimeType)
-	tmpFile, err := os.CreateTemp(dir, "mcp-*"+ext)
-	if err != nil {
-		return "", fmt.Sprintf("[MCP returned %s content (%s) but it could not be stored.]", kind, mimeType)
-	}
-	tmpPath := tmpFile.Name()
-	if _, err = tmpFile.Write(data); err != nil {
-		_ = tmpFile.Close()
-		_ = os.Remove(tmpPath)
-		return "", fmt.Sprintf("[MCP returned %s content (%s) but it could not be stored.]", kind, mimeType)
-	}
-	if err = tmpFile.Close(); err != nil {
-		_ = os.Remove(tmpPath)
-		return "", fmt.Sprintf("[MCP returned %s content (%s) but it could not be stored.]", kind, mimeType)
-	}
-
-	scope := fmt.Sprintf(
-		"tool:mcp:%s:%s:%s:%d",
-		sanitizeIdentifierComponent(t.serverName),
-		channel,
-		chatID,
-		time.Now().UnixNano(),
-	)
-	filename := fmt.Sprintf(
-		"%s_%s%s",
-		sanitizeIdentifierComponent(t.serverName),
-		sanitizeIdentifierComponent(t.tool.Name),
-		ext,
-	)
-
-	ref, err := t.mediaStore.Store(tmpPath, media.MediaMeta{
-		Filename:    filename,
-		ContentType: mimeType,
-		Source: fmt.Sprintf(
-			"tool:mcp:%s:%s",
-			sanitizeIdentifierComponent(t.serverName),
-			sanitizeIdentifierComponent(t.tool.Name),
+	sanitizedServer := toolshared.SanitizeIdentifierComponent(t.serverName)
+	sanitizedTool := toolshared.SanitizeIdentifierComponent(t.tool.Name)
+	ref, err := toolshared.StoreTempMedia(toolshared.StoreTempMediaInput{
+		Store:      t.mediaStore,
+		Data:       data,
+		MIMEType:   mimeType,
+		TempPrefix: "mcp-",
+		Filename: fmt.Sprintf(
+			"%s_%s%s",
+			sanitizedServer,
+			sanitizedTool,
+			toolshared.ExtensionForMIMEType(mimeType),
 		),
-	}, scope)
+		Source: fmt.Sprintf("tool:mcp:%s:%s", sanitizedServer, sanitizedTool),
+		Scope: fmt.Sprintf(
+			"tool:mcp:%s:%s:%s:%d",
+			sanitizedServer,
+			channel,
+			chatID,
+			time.Now().UnixNano(),
+		),
+	})
 	if err != nil {
-		_ = os.Remove(tmpPath)
-		return "", fmt.Sprintf(
-			"[MCP returned %s content (%s) but it could not be registered as media.]",
-			kind,
-			mimeType,
-		)
+		if errors.Is(err, toolshared.ErrMediaStoreRegistration) {
+			return "", fmt.Sprintf(
+				"[MCP returned %s content (%s) but it could not be registered as media.]",
+				kind,
+				mimeType,
+			)
+		}
+		return "", fmt.Sprintf("[MCP returned %s content (%s) but it could not be stored.]", kind, mimeType)
 	}
 
 	return ref, fmt.Sprintf(

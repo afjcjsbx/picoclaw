@@ -1,0 +1,9 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "demo-plugin",
+  "version": "1.0.0",
+  "description": "A portable greeting skill and typed MCP greeting tool.",
+  "author": { "name": "PicoClaw contributors" },
+  "license": "MIT",
+  "keywords": ["demo", "greeting"]
+}

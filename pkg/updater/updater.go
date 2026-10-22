@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -274,14 +275,15 @@ func findAssetInfo(releaseURL, platform, arch string) (string, string, error) {
 		// no arch match exists among idxs, treat as no candidate.
 		var archIdx []int
 		if arch != "" {
-			aliases := archAliases(archLower)
-			for _, i := range idxs {
-				n := strings.ToLower(data.Assets[i].Name)
-				for _, ali := range aliases {
-					if strings.Contains(n, ali) {
+			// aliases are ordered by preference: the first one matching any asset wins
+			for _, ali := range archAliases(archLower) {
+				for _, i := range idxs {
+					if assetHasArchSuffix(data.Assets[i].Name, ali) {
 						archIdx = append(archIdx, i)
-						break
 					}
+				}
+				if len(archIdx) > 0 {
+					break
 				}
 			}
 			if len(archIdx) == 0 {
@@ -507,15 +509,14 @@ func humanBytes(n int64) string {
 	}
 }
 
-// archAliases returns common name variants for an architecture string
-// so we can match release asset names like "x86_64" vs Go's "amd64".
-// archAliases returns name variants for an architecture string.
-// If `arch` is empty or matches the local runtime.GOARCH, prefer the
-// compile-time architecture aliases provided by archAliasesForLocal
-// (implemented per-architecture via build tags). For other `arch`
-// values we use a small synonyms map.
+// archAliases returns the name variants a release asset may use for arch
+// (e.g. "x86_64" for Go's "amd64"), ordered by preference. The first alias
+// that matches any asset wins.
 func archAliases(arch string) []string {
 	a := strings.ToLower(arch)
+	if a == "arm" {
+		return armAliases(runningGOARM())
+	}
 	if syns, ok := archSynonyms[a]; ok {
 		return syns
 	}
@@ -526,11 +527,67 @@ var archSynonyms = map[string][]string{
 	"amd64":   {"amd64", "x86_64", "x64"},
 	"x86_64":  {"amd64", "x86_64", "x64"},
 	"x64":     {"amd64", "x86_64", "x64"},
-	"386":     {"386", "x86"},
-	"x86":     {"386", "x86"},
+	"386":     {"i386", "386", "x86"},
+	"x86":     {"i386", "386", "x86"},
 	"arm64":   {"arm64", "aarch64"},
 	"aarch64": {"arm64", "aarch64"},
-	"arm":     {"arm"},
+}
+
+// armAliases returns the 32-bit ARM variants usable on a host whose running
+// binary was built with the given GOARM value. Release assets are named
+// "armv6" / "armv7" (see .goreleaser.yaml).
+func armAliases(goarm string) []string {
+	switch goarm {
+	case "7":
+		// armv7 is preferred; an armv6 build also runs on v7 hardware.
+		return []string{"armv7", "armv6"}
+	case "5":
+		// No armv5 release exists; an armv6 build is hard-float and would not run.
+		return nil
+	default: // "6" or unknown
+		return []string{"armv6"}
+	}
+}
+
+// runningGOARM reports the GOARM the running binary was built with. It is a
+// variable so tests can override it.
+var runningGOARM = func() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return ""
+	}
+	return goarmFromSettings(info.Settings)
+}
+
+// goarmFromSettings extracts the GOARM value from build settings. Go may
+// record extra fields, e.g. "7,softfloat", of which only the first matters.
+func goarmFromSettings(settings []debug.BuildSetting) string {
+	for _, s := range settings {
+		if s.Key == "GOARM" {
+			v, _, _ := strings.Cut(s.Value, ",")
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
+}
+
+// archiveExtensions are stripped before matching an asset name against an
+// arch token.
+var archiveExtensions = []string{".tar.gz", ".tgz", ".tar", ".zip"}
+
+// assetHasArchSuffix reports whether the asset name, without its archive
+// extension, ends with "_<alias>" or "-<alias>". Matching the end of the name
+// (instead of a substring) keeps "arm" from matching "arm64" and "x86" from
+// matching "x86_64".
+func assetHasArchSuffix(name, alias string) bool {
+	stem := strings.ToLower(name)
+	for _, ext := range archiveExtensions {
+		if strings.HasSuffix(stem, ext) {
+			stem = strings.TrimSuffix(stem, ext)
+			break
+		}
+	}
+	return strings.HasSuffix(stem, "_"+alias) || strings.HasSuffix(stem, "-"+alias)
 }
 
 func extractArchive(archivePath, destDir string) error {

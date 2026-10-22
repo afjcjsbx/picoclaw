@@ -16,6 +16,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/sipeed/picoclaw/pkg/providers/common"
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
@@ -189,6 +190,7 @@ func (t *WhisperTranscriber) doRequest(
 	}
 
 	req.Header.Set("Content-Type", contentType)
+	common.SetOpenRouterAttribution(req)
 	if t.apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+t.apiKey)
 	}

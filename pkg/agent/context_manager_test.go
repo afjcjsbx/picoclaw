@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -248,7 +249,9 @@ func TestLegacyAssemble_Passthrough(t *testing.T) {
 		{Role: "user", Content: "hello"},
 		{Role: "assistant", Content: "hi there"},
 	}
-	agent.Sessions.SetHistory("test-session", history)
+	if err := agent.Sessions.SetHistory(context.Background(), "test-session", history); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
 
 	resp, err := al.contextManager.Assemble(context.Background(), &AssembleRequest{
 		SessionKey: "test-session",
@@ -305,7 +308,9 @@ func TestLegacyCompact_Overflow(t *testing.T) {
 		{Role: "assistant", Content: "resp 2"},
 		{Role: "user", Content: "msg 3"},
 	}
-	defaultAgent.Sessions.SetHistory("session-overflow", history)
+	if err := defaultAgent.Sessions.SetHistory(context.Background(), "session-overflow", history); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
 
 	runtimeCh, closeRuntimeEvents := subscribeRuntimeEventsForTest(
 		t,
@@ -324,13 +329,19 @@ func TestLegacyCompact_Overflow(t *testing.T) {
 	}
 
 	// After overflow compression, history should be shorter
-	newHistory := defaultAgent.Sessions.GetHistory("session-overflow")
+	newHistory, err := defaultAgent.Sessions.GetHistory(context.Background(), "session-overflow")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
 	if len(newHistory) >= len(history) {
 		t.Fatalf("expected compressed history, got %d messages (was %d)", len(newHistory), len(history))
 	}
 
 	// Summary should contain compression note
-	summary := defaultAgent.Sessions.GetSummary("session-overflow")
+	summary, err := defaultAgent.Sessions.GetSummary(context.Background(), "session-overflow")
+	if err != nil {
+		t.Fatalf("GetSummary: %v", err)
+	}
 	if !strings.Contains(summary, "Emergency compression") {
 		t.Fatalf("expected compression note in summary, got %q", summary)
 	}
@@ -350,6 +361,44 @@ func TestLegacyCompact_Overflow(t *testing.T) {
 	}
 }
 
+func TestLegacyCompact_PrunesOldToolResultsBeforeDroppingTurns(t *testing.T) {
+	cfg := testConfig(t)
+	al := newCMTestAgentLoop(cfg)
+	agent := al.registry.GetDefaultAgent()
+	largeOutput := strings.Repeat("tool output ", 30)
+	history := []providers.Message{
+		{Role: "user", Content: "read a file"},
+		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "old-call"}}},
+		{Role: "tool", ToolCallID: "old-call", Content: largeOutput},
+		{Role: "assistant", Content: "file read"},
+		{Role: "user", Content: "run a command"},
+		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "new-call"}}},
+		{Role: "tool", ToolCallID: "new-call", Content: "recent output"},
+		{Role: "assistant", Content: "done"},
+	}
+	if err := agent.Sessions.SetHistory(context.Background(), "session-prune-tools", history); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
+
+	result, ok := al.contextManager.(*legacyContextManager).forceCompression("session-prune-tools")
+	if !ok {
+		t.Fatal("expected old tool output to be pruned")
+	}
+	got, err := agent.Sessions.GetHistory(context.Background(), "session-prune-tools")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if len(got) != len(history) || result.DroppedMessages != 0 {
+		t.Fatalf("pruning dropped messages: got %d messages, dropped %d", len(got), result.DroppedMessages)
+	}
+	if got[2].Content != "[Old tool output cleared to save context space]" || got[2].ToolCallID != "old-call" {
+		t.Fatalf("old tool result not safely pruned: %+v", got[2])
+	}
+	if got[6].Content != "recent output" {
+		t.Fatalf("recent tool result should remain intact: %+v", got[6])
+	}
+}
+
 func TestLegacyCompact_Overflow_ProactiveReason(t *testing.T) {
 	cfg := testConfig(t)
 	al := newCMTestAgentLoop(cfg)
@@ -366,7 +415,9 @@ func TestLegacyCompact_Overflow_ProactiveReason(t *testing.T) {
 		{Role: "assistant", Content: "resp 2"},
 		{Role: "user", Content: "msg 3"},
 	}
-	defaultAgent.Sessions.SetHistory("session-proactive", history)
+	if err := defaultAgent.Sessions.SetHistory(context.Background(), "session-proactive", history); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
 
 	runtimeCh, closeRuntimeEvents := subscribeRuntimeEventsForTest(
 		t,
@@ -410,7 +461,9 @@ func TestLegacyCompact_Overflow_TooShortToCompress(t *testing.T) {
 	history := []providers.Message{
 		{Role: "user", Content: "only one"},
 	}
-	defaultAgent.Sessions.SetHistory("session-tiny", history)
+	if err := defaultAgent.Sessions.SetHistory(context.Background(), "session-tiny", history); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
 
 	err := al.contextManager.Compact(context.Background(), &CompactRequest{
 		SessionKey: "session-tiny",
@@ -421,7 +474,10 @@ func TestLegacyCompact_Overflow_TooShortToCompress(t *testing.T) {
 	}
 
 	// History should be unchanged (too short to compress)
-	newHistory := defaultAgent.Sessions.GetHistory("session-tiny")
+	newHistory, err := defaultAgent.Sessions.GetHistory(context.Background(), "session-tiny")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
 	if len(newHistory) != len(history) {
 		t.Fatalf("expected history unchanged, got %d messages (was %d)", len(newHistory), len(history))
 	}
@@ -445,7 +501,9 @@ func TestLegacyCompact_PostTurn_BelowThreshold(t *testing.T) {
 		{Role: "user", Content: "hi"},
 		{Role: "assistant", Content: "hello"},
 	}
-	defaultAgent.Sessions.SetHistory("session-small", history)
+	if err := defaultAgent.Sessions.SetHistory(context.Background(), "session-small", history); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
 
 	err := al.contextManager.Compact(context.Background(), &CompactRequest{
 		SessionKey: "session-small",
@@ -456,7 +514,10 @@ func TestLegacyCompact_PostTurn_BelowThreshold(t *testing.T) {
 	}
 
 	// History should remain unchanged
-	newHistory := defaultAgent.Sessions.GetHistory("session-small")
+	newHistory, err := defaultAgent.Sessions.GetHistory(context.Background(), "session-small")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
 	if len(newHistory) != len(history) {
 		t.Fatalf("expected unchanged history, got %d messages (was %d)", len(newHistory), len(history))
 	}
@@ -493,7 +554,9 @@ func TestLegacyCompact_PostTurn_ExceedsMessageThreshold(t *testing.T) {
 		{Role: "user", Content: "q3"},
 		{Role: "assistant", Content: "a3"},
 	}
-	defaultAgent.Sessions.SetHistory("session-threshold", history)
+	if err := defaultAgent.Sessions.SetHistory(context.Background(), "session-threshold", history); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
 
 	runtimeCh, closeRuntimeEvents := subscribeRuntimeEventsForTest(
 		t,
@@ -515,7 +578,10 @@ func TestLegacyCompact_PostTurn_ExceedsMessageThreshold(t *testing.T) {
 		return evt.Kind == runtimeevents.KindAgentSessionSummarize
 	})
 
-	newHistory := defaultAgent.Sessions.GetHistory("session-threshold")
+	newHistory, err := defaultAgent.Sessions.GetHistory(context.Background(), "session-threshold")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
 	if len(newHistory) >= len(history) {
 		t.Fatalf("expected summarization to reduce history from %d messages, got %d", len(history), len(newHistory))
 	}
@@ -762,7 +828,9 @@ func TestLegacyCompact_Overflow_SingleTurnKeepsLastUserMessage(t *testing.T) {
 		{Role: "user", Content: "first question"},
 		{Role: "assistant", Content: "first answer"},
 	}
-	defaultAgent.Sessions.SetHistory("session-2msg", history)
+	if err := defaultAgent.Sessions.SetHistory(context.Background(), "session-2msg", history); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
 
 	err := al.contextManager.Compact(context.Background(), &CompactRequest{
 		SessionKey: "session-2msg",
@@ -772,7 +840,10 @@ func TestLegacyCompact_Overflow_SingleTurnKeepsLastUserMessage(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	newHistory := defaultAgent.Sessions.GetHistory("session-2msg")
+	newHistory, err := defaultAgent.Sessions.GetHistory(context.Background(), "session-2msg")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
 	// With 2 messages, forceCompression returns false (len <= 2), so no compression
 	if len(newHistory) != len(history) {
 		t.Fatalf("expected no compression for 2-message history, got %d", len(newHistory))
@@ -873,4 +944,287 @@ func testConfig(t *testing.T) *config.Config {
 func newCMTestAgentLoop(cfg *config.Config) *AgentLoop {
 	msgBus := bus.NewMessageBus()
 	return NewAgentLoop(cfg, msgBus, &simpleMockProvider{response: "test"})
+}
+
+func TestContextFeedback_PublishedWhenToolFeedbackEnabled(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Agents.Defaults.ToolFeedback = config.ToolFeedbackConfig{Enabled: true}
+	msgBus := bus.NewMessageBus()
+	al := NewAgentLoop(cfg, msgBus, &simpleMockProvider{response: "test"})
+	agent := al.registry.GetDefaultAgent()
+	ts := &turnState{agent: agent, sessionKey: "sk-feedback", channel: "telegram", chatID: "chat-1"}
+
+	al.notifyContextFeedback(ts, "notice")
+
+	select {
+	case out := <-msgBus.OutboundChan():
+		if out.Channel != "telegram" || out.ChatID != "chat-1" {
+			t.Fatalf("unexpected target: %+v", out)
+		}
+		if out.Context.Raw[metadataKeyMessageKind] != messageKindToolFeedback {
+			t.Fatalf("kind = %q, want %q", out.Context.Raw[metadataKeyMessageKind], messageKindToolFeedback)
+		}
+		if out.Content != "notice" {
+			t.Fatalf("content = %q, want %q", out.Content, "notice")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected context feedback outbound")
+	}
+}
+
+func TestContextFeedback_PublishedOnPicoChannel(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Agents.Defaults.ToolFeedback = config.ToolFeedbackConfig{Enabled: true}
+	msgBus := bus.NewMessageBus()
+	al := NewAgentLoop(cfg, msgBus, &simpleMockProvider{response: "test"})
+	agent := al.registry.GetDefaultAgent()
+	ts := &turnState{agent: agent, sessionKey: "sk-feedback-pico", channel: "pico", chatID: "chat-pico"}
+
+	al.notifyContextFeedback(ts, "notice")
+
+	select {
+	case out := <-msgBus.OutboundChan():
+		if out.Channel != "pico" || out.ChatID != "chat-pico" {
+			t.Fatalf("unexpected target: %+v", out)
+		}
+		if out.Context.Raw[metadataKeyMessageKind] != messageKindToolFeedback {
+			t.Fatalf("kind = %q, want %q", out.Context.Raw[metadataKeyMessageKind], messageKindToolFeedback)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected context feedback outbound on pico")
+	}
+}
+
+func TestContextFeedback_SuppressedWhenToolFeedbackDisabled(t *testing.T) {
+	cfg := testConfig(t)
+	msgBus := bus.NewMessageBus()
+	al := NewAgentLoop(cfg, msgBus, &simpleMockProvider{response: "test"})
+	agent := al.registry.GetDefaultAgent()
+	ts := &turnState{agent: agent, sessionKey: "sk-feedback-off", channel: "telegram", chatID: "chat-1"}
+
+	al.notifyContextFeedback(ts, "notice")
+
+	select {
+	case out := <-msgBus.OutboundChan():
+		t.Fatalf("unexpected outbound when tool feedback disabled: %+v", out)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+func TestLegacyCompact_PublishesFeedbackWhenToolFeedbackEnabled(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Agents.Defaults.ToolFeedback = config.ToolFeedbackConfig{Enabled: true}
+	msgBus := bus.NewMessageBus()
+	al := NewAgentLoop(cfg, msgBus, &simpleMockProvider{response: "test"})
+	agent := al.registry.GetDefaultAgent()
+
+	history := []providers.Message{
+		{Role: "user", Content: "msg 1"},
+		{Role: "assistant", Content: "resp 1"},
+		{Role: "user", Content: "msg 2"},
+		{Role: "assistant", Content: "resp 2"},
+		{Role: "user", Content: "msg 3"},
+	}
+	if err := agent.Sessions.SetHistory(context.Background(), "session-feedback", history); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
+
+	ts := &turnState{
+		agent:      agent,
+		sessionKey: "session-feedback",
+		channel:    "telegram",
+		chatID:     "chat-1",
+	}
+	al.activeTurnStates.Store("session-feedback", ts)
+	defer al.activeTurnStates.Delete("session-feedback")
+
+	if err := al.contextManager.Compact(context.Background(), &CompactRequest{
+		SessionKey: "session-feedback",
+		Reason:     ContextCompressReasonRetry,
+	}); err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+
+	select {
+	case out := <-msgBus.OutboundChan():
+		if out.Channel != "telegram" || out.ChatID != "chat-1" {
+			t.Fatalf("unexpected target: %+v", out)
+		}
+		if out.Context.Raw[metadataKeyMessageKind] != messageKindToolFeedback {
+			t.Fatalf("kind = %q, want %q", out.Context.Raw[metadataKeyMessageKind], messageKindToolFeedback)
+		}
+		if !strings.Contains(out.Content, contextFeedbackToolCompact) {
+			t.Fatalf("content = %q, want compaction notice", out.Content)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected compaction feedback outbound")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Legacy manual compaction (/compact)
+// ---------------------------------------------------------------------------
+
+// promptRecordingProvider captures the prompts it is asked to summarize.
+type promptRecordingProvider struct {
+	mu      sync.Mutex
+	prompts []string
+}
+
+func (p *promptRecordingProvider) Chat(
+	_ context.Context,
+	messages []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, m := range messages {
+		p.prompts = append(p.prompts, m.Content)
+	}
+	return &providers.LLMResponse{Content: "manual summary"}, nil
+}
+
+func (p *promptRecordingProvider) GetDefaultModel() string { return "mock-model" }
+
+func newManualCompactLoop(t *testing.T) (*AgentLoop, *AgentInstance, *promptRecordingProvider) {
+	t.Helper()
+	provider := &promptRecordingProvider{}
+	al := NewAgentLoop(testConfig(t), bus.NewMessageBus(), provider)
+	agent := al.registry.GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("expected default agent")
+	}
+	return al, agent, provider
+}
+
+func TestLegacyCompact_Manual_AppliesFocus(t *testing.T) {
+	al, agent, provider := newManualCompactLoop(t)
+	history := []providers.Message{
+		{Role: "user", Content: "q1"},
+		{Role: "assistant", Content: "a1"},
+		{Role: "user", Content: "q2"},
+		{Role: "assistant", Content: "a2"},
+		{Role: "user", Content: "q3"},
+		{Role: "assistant", Content: "a3"},
+	}
+	if err := agent.Sessions.SetHistory(context.Background(), "session-manual", history); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
+
+	err := al.contextManager.Compact(context.Background(), &CompactRequest{
+		SessionKey:   "session-manual",
+		Reason:       ContextCompressReasonManual,
+		Instructions: "database migration",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	manualSummary, err := agent.Sessions.GetSummary(context.Background(), "session-manual")
+	if err != nil {
+		t.Fatalf("GetSummary: %v", err)
+	}
+	if manualSummary != "manual summary" {
+		t.Fatalf("summary = %q, want %q", manualSummary, "manual summary")
+	}
+	manualHistory, err := agent.Sessions.GetHistory(context.Background(), "session-manual")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if len(manualHistory) >= len(history) {
+		t.Fatalf("history len = %d, want fewer than %d", len(manualHistory), len(history))
+	}
+	if len(provider.prompts) == 0 || !strings.Contains(provider.prompts[0], "database migration") {
+		t.Fatalf("summarizer prompt missing focus: %q", provider.prompts)
+	}
+}
+
+func TestLegacyCompact_Manual_NothingToCompact(t *testing.T) {
+	al, agent, provider := newManualCompactLoop(t)
+	if err := agent.Sessions.SetHistory(context.Background(), "session-short", []providers.Message{
+		{Role: "user", Content: "q1"},
+		{Role: "assistant", Content: "a1"},
+	}); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
+
+	err := al.contextManager.Compact(context.Background(), &CompactRequest{
+		SessionKey: "session-short",
+		Reason:     ContextCompressReasonManual,
+	})
+	if !errors.Is(err, ErrNothingToCompact) {
+		t.Fatalf("err = %v, want ErrNothingToCompact", err)
+	}
+	if len(provider.prompts) != 0 {
+		t.Fatalf("summarizer must not run for short history, got %d calls", len(provider.prompts))
+	}
+	shortHistory, err := agent.Sessions.GetHistory(context.Background(), "session-short")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if len(shortHistory) != 2 {
+		t.Fatalf("history len = %d, want 2 (untouched)", len(shortHistory))
+	}
+}
+
+func TestLegacyCompact_Manual_RejectsConcurrentSummarization(t *testing.T) {
+	al, agent, _ := newManualCompactLoop(t)
+	lcm := al.contextManager.(*legacyContextManager)
+	lcm.summarizing.Store(agent.ID+":session-busy", true)
+
+	err := lcm.Compact(context.Background(), &CompactRequest{
+		SessionKey: "session-busy",
+		Reason:     ContextCompressReasonManual,
+	})
+	if err == nil || errors.Is(err, ErrNothingToCompact) {
+		t.Fatalf("err = %v, want in-progress error", err)
+	}
+}
+
+func TestProcessMessage_CompactCommand(t *testing.T) {
+	al, agent, provider := newManualCompactLoop(t)
+	msg := testInboundMessage(bus.InboundMessage{
+		Context: bus.InboundContext{Channel: "telegram", ChatID: "chat1", ChatType: "direct", SenderID: "user1"},
+		Content: "/compact focus on database migration",
+	})
+	route, _, err := al.resolveMessageRoute(msg)
+	if err != nil {
+		t.Fatalf("resolveMessageRoute() error = %v", err)
+	}
+	sessionKey := al.allocateRouteSession(route, msg).SessionKey
+
+	// Short history: nothing to compact, LLM untouched.
+	if err = agent.Sessions.SetHistory(context.Background(), sessionKey,
+		[]providers.Message{{Role: "user", Content: "hi"}}); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
+	resp, err := al.processMessage(context.Background(), msg)
+	if err != nil || resp != "Nothing to compact yet." {
+		t.Fatalf("short history: resp=%q err=%v", resp, err)
+	}
+	if len(provider.prompts) != 0 {
+		t.Fatalf("LLM must not be called, got %d calls", len(provider.prompts))
+	}
+
+	// Long history: compacted with the focus forwarded to the summarizer.
+	history := []providers.Message{
+		{Role: "user", Content: "q1"},
+		{Role: "assistant", Content: "a1"},
+		{Role: "user", Content: "q2"},
+		{Role: "assistant", Content: "a2"},
+		{Role: "user", Content: "q3"},
+		{Role: "assistant", Content: "a3"},
+	}
+	if err = agent.Sessions.SetHistory(context.Background(), sessionKey, history); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
+	resp, err = al.processMessage(context.Background(), msg)
+	if err != nil || resp != "Context compacted." {
+		t.Fatalf("long history: resp=%q err=%v", resp, err)
+	}
+	if len(provider.prompts) == 0 || !strings.Contains(provider.prompts[0], "focus on database migration") {
+		t.Fatalf("summarizer prompt missing focus: %q", provider.prompts)
+	}
 }

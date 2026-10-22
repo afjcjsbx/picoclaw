@@ -5,6 +5,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -13,7 +14,9 @@ import (
 	"github.com/sipeed/picoclaw/pkg/commands"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/plugins"
 	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/sipeed/picoclaw/pkg/tools"
 )
 
 func (al *AgentLoop) handleCommand(
@@ -135,6 +138,7 @@ func (al *AgentLoop) buildCommandsRuntime(
 	cfg := al.GetConfig()
 	rt := &commands.Runtime{
 		Config:          cfg,
+		VoiceMode:       al.voiceMode(opts.Dispatch.SessionKey),
 		ListAgentIDs:    registry.ListAgentIDs,
 		ListDefinitions: al.cmdRegistry.Definitions,
 		ListMCPServers: func(ctx context.Context) []commands.MCPServerInfo {
@@ -257,12 +261,45 @@ func (al *AgentLoop) buildCommandsRuntime(
 			}
 			return al.channelManager.GetEnabledChannels()
 		},
-		GetActiveTurn: func() any {
-			info := al.GetActiveTurn()
-			if info == nil {
+		ListPlugins: func(ctx context.Context) []commands.PluginInfo {
+			if cfg == nil {
 				return nil
 			}
-			return info
+
+			al.waitPlugins(ctx)
+			items := plugins.Inventory(cfg.Plugins, cfg.WorkspacePath(), al.PluginStatuses())
+			infos := make([]commands.PluginInfo, 0, len(items))
+			for _, item := range items {
+				infos = append(infos, commands.PluginInfo{
+					ID:          item.ID,
+					Name:        item.Name,
+					Root:        item.Root,
+					State:       item.State,
+					Diagnostics: item.Diagnostics,
+				})
+			}
+			return infos
+		},
+		GetActiveTurnTree: func() []commands.TurnInfo {
+			if opts == nil {
+				return nil
+			}
+			tree := al.GetActiveTurnTree(opts.Dispatch.SessionKey)
+			if len(tree) == 0 {
+				return nil
+			}
+			turns := make([]commands.TurnInfo, 0, len(tree))
+			for _, info := range tree {
+				turns = append(turns, commands.TurnInfo{
+					TurnID:       info.TurnID,
+					ParentTurnID: info.ParentTurnID,
+					AgentID:      info.AgentID,
+					UserMessage:  info.UserMessage,
+					Phase:        string(info.Phase),
+					StartedAt:    info.StartedAt,
+				})
+			}
+			return turns
 		},
 		SwitchChannel: func(value string) error {
 			if al.channelManager == nil {
@@ -272,6 +309,9 @@ func (al *AgentLoop) buildCommandsRuntime(
 				return fmt.Errorf("channel '%s' not found or not enabled", value)
 			}
 			return nil
+		},
+		SetVoiceMode: func(mode string) error {
+			return al.setVoiceMode(opts.Dispatch.SessionKey, mode)
 		},
 	}
 	rt.StopActiveTurn = func() (commands.StopResult, error) {
@@ -390,11 +430,38 @@ func (al *AgentLoop) buildCommandsRuntime(
 				opts.Dispatch.SessionScope,
 				opts.Dispatch.SessionAliases,
 			)
-			return al.contextManager.Clear(ctx, opts.SessionKey)
+			if err := al.contextManager.Clear(ctx, opts.SessionKey); err != nil {
+				return err
+			}
+			if tool, ok := agent.Tools.Get("todo"); ok {
+				if todo, ok := tool.(*tools.TodoTool); ok {
+					todo.ClearSession(agent.ID, opts.SessionKey)
+				}
+			}
+			return nil
 		}
 
-		rt.AskSideQuestion = func(ctx context.Context, question string) (string, error) {
-			return al.askSideQuestion(ctx, agent, opts, question)
+		rt.CompactContext = func(focus string) (bool, error) {
+			if opts == nil {
+				return false, fmt.Errorf("process options not available")
+			}
+			// Same as /clear: the owning agent must be resolvable from the session.
+			ensureSessionMetadata(
+				agent.Sessions,
+				opts.Dispatch.SessionKey,
+				opts.Dispatch.SessionScope,
+				opts.Dispatch.SessionAliases,
+			)
+			err := al.contextManager.Compact(ctx, &CompactRequest{
+				SessionKey:   opts.SessionKey,
+				Reason:       ContextCompressReasonManual,
+				Budget:       agent.ContextWindow,
+				Instructions: focus,
+			})
+			if errors.Is(err, ErrNothingToCompact) {
+				return false, nil
+			}
+			return err == nil, err
 		}
 
 		rt.GetContextStats = func() *commands.ContextStats {
@@ -405,7 +472,11 @@ func (al *AgentLoop) buildCommandsRuntime(
 			if usage == nil {
 				return nil
 			}
-			history := agent.Sessions.GetHistory(opts.SessionKey)
+			history, err := agent.Sessions.GetHistory(ctx, opts.SessionKey)
+			if err != nil {
+				warnSessionStoreError(opts.SessionKey, "get history", err)
+				history = nil
+			}
 			return &commands.ContextStats{
 				UsedTokens:        usage.UsedTokens,
 				TotalTokens:       usage.TotalTokens,

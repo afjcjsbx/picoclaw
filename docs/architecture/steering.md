@@ -109,7 +109,7 @@ Steering is checked at the following points in the agent cycle:
 1. **At loop start** — before the first LLM call, to catch messages enqueued during setup
 2. **After every tool completes** — including the first and the last. If steering is found and there are remaining tools, they are all skipped immediately
 3. **After a direct LLM response** — if a new steering message arrived while the model was generating a non-tool response, the loop continues instead of returning a stale answer
-4. **Right before the turn is finalized** — if steering arrived at the very end of the turn, the agent immediately starts a continuation turn instead of leaving the message orphaned in the queue
+4. **After the turn finishes** — when the agent runs under `Run()`, the dispatcher drains any steering queued after the last in-loop poll and immediately starts a continuation turn via `Continue()` instead of leaving the message orphaned. This drain lives in the `Run()` path: callers using `ProcessDirect...` directly must call `Continue()` themselves to pick up messages queued at the very end of a turn.
 
 ## Why remaining tools are skipped
 

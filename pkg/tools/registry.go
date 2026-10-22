@@ -12,6 +12,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/media"
 	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
 type ToolEntry struct {
@@ -21,11 +22,21 @@ type ToolEntry struct {
 }
 
 type ToolRegistry struct {
-	tools      map[string]*ToolEntry
-	mu         sync.RWMutex
-	version    atomic.Uint64 // incremented on Register/RegisterHidden for cache invalidation
-	mediaStore media.MediaStore
-	allowlist  map[string]struct{}
+	tools                map[string]*ToolEntry
+	mu                   sync.RWMutex
+	version              atomic.Uint64 // bumped whenever the visible tool set or its schemas may change
+	mediaStore           media.MediaStore
+	allowlist            map[string]struct{}
+	workspace            string
+	maxInlineResultRunes int
+
+	// defsMu guards the provider-defs memo. Conversions rebuild every tool's
+	// schema map, and the agent loop asks for the defs several times per
+	// turn, so they are cached until the registry version changes.
+	defsMu         sync.Mutex
+	defsCache      []providers.ToolDefinition
+	defsCacheVer   uint64
+	defsCacheValid bool
 }
 
 type mediaStoreAware interface {
@@ -35,6 +46,42 @@ type mediaStoreAware interface {
 func NewToolRegistry() *ToolRegistry {
 	return &ToolRegistry{
 		tools: make(map[string]*ToolEntry),
+	}
+}
+
+// RegisterUnique is the external-capability registration boundary. Unlike
+// Register it never replaces an existing tool. A filtered tool returns false.
+// storeEntryLocked stores an entry under name and applies the registry-wide
+// media store. Callers own the lock and decide the duplicate policy.
+func (r *ToolRegistry) storeEntryLocked(name string, tool Tool, isCore bool) {
+	r.tools[name] = &ToolEntry{Tool: tool, IsCore: isCore}
+	if aware, ok := tool.(mediaStoreAware); ok && r.mediaStore != nil {
+		aware.SetMediaStore(r.mediaStore)
+	}
+	r.version.Add(1)
+}
+
+func (r *ToolRegistry) RegisterUnique(tool Tool, hidden bool) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	name := tool.Name()
+	if !r.toolAllowedLocked(name) {
+		return false, nil
+	}
+	if _, exists := r.tools[name]; exists {
+		return false, fmt.Errorf("tool %q already registered", name)
+	}
+	r.storeEntryLocked(name, tool, !hidden)
+	return true, nil
+}
+
+// UnregisterOwned removes only the exact tool instance originally registered.
+func (r *ToolRegistry) UnregisterOwned(tool Tool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if entry, ok := r.tools[tool.Name()]; ok && entry.Tool == tool {
+		delete(r.tools, tool.Name())
+		r.version.Add(1)
 	}
 }
 
@@ -76,15 +123,7 @@ func (r *ToolRegistry) Register(tool Tool) {
 		logger.WarnCF("tools", "Tool registration overwrites existing tool",
 			map[string]any{"name": name})
 	}
-	r.tools[name] = &ToolEntry{
-		Tool:   tool,
-		IsCore: true,
-		TTL:    0, // Core tools do not use TTL
-	}
-	if aware, ok := tool.(mediaStoreAware); ok && r.mediaStore != nil {
-		aware.SetMediaStore(r.mediaStore)
-	}
-	r.version.Add(1)
+	r.storeEntryLocked(name, tool, true)
 	logger.DebugCF("tools", "Registered core tool", map[string]any{"name": name})
 }
 
@@ -105,15 +144,7 @@ func (r *ToolRegistry) RegisterHidden(tool Tool) {
 		logger.WarnCF("tools", "Hidden tool registration overwrites existing tool",
 			map[string]any{"name": name})
 	}
-	r.tools[name] = &ToolEntry{
-		Tool:   tool,
-		IsCore: false,
-		TTL:    0,
-	}
-	if aware, ok := tool.(mediaStoreAware); ok && r.mediaStore != nil {
-		aware.SetMediaStore(r.mediaStore)
-	}
-	r.version.Add(1)
+	r.storeEntryLocked(name, tool, false)
 	logger.DebugCF("tools", "Registered hidden tool", map[string]any{"name": name})
 }
 
@@ -131,6 +162,39 @@ func (r *ToolRegistry) SetMediaStore(store media.MediaStore) {
 	}
 }
 
+// SetWorkspace sets the workspace used to persist oversized tool-result
+// artifacts. An empty workspace disables large-result artifact persistence.
+func (r *ToolRegistry) SetWorkspace(workspace string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.workspace = strings.TrimSpace(workspace)
+}
+
+// SetMaxInlineResultRunes caps how much tool-result text stays inline in model
+// context, counted in Unicode characters. A non-positive value disables
+// large-result artifact persistence.
+func (r *ToolRegistry) SetMaxInlineResultRunes(limit int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.maxInlineResultRunes = limit
+}
+
+// SpillLargeResult re-applies the large-result artifact spill to a result that a
+// hook may have produced or replaced after tool execution. Execution already
+// spills the original result, but an AfterTool (or hook-respond) result bypasses
+// that path; calling this keeps every code path bounded. It is a no-op when
+// spilling is disabled or the result is already a bounded preview.
+func (r *ToolRegistry) SpillLargeResult(result *ToolResult, toolName string) {
+	if result == nil {
+		return
+	}
+	r.mu.RLock()
+	workspace := r.workspace
+	maxInlineResultRunes := r.maxInlineResultRunes
+	r.mu.RUnlock()
+	persistLargeResultArtifact(result, toolName, workspace, maxInlineResultRunes)
+}
+
 // PromoteTools atomically sets the TTL for multiple non-core tools.
 // This prevents a concurrent TickTTL from decrementing between promotions.
 func (r *ToolRegistry) PromoteTools(names []string, ttl int) {
@@ -145,6 +209,11 @@ func (r *ToolRegistry) PromoteTools(names []string, ttl int) {
 			}
 		}
 	}
+	if promoted > 0 {
+		// TTL changes the visible tool set, so caches keyed by the registry
+		// version (provider defs, hidden-tool snapshot) must invalidate.
+		r.version.Add(1)
+	}
 	logger.DebugCF(
 		"tools",
 		"PromoteTools completed",
@@ -156,10 +225,16 @@ func (r *ToolRegistry) PromoteTools(names []string, ttl int) {
 func (r *ToolRegistry) TickTTL() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	changed := false
 	for _, entry := range r.tools {
 		if !entry.IsCore && entry.TTL > 0 {
 			entry.TTL--
+			changed = true
 		}
+	}
+	if changed {
+		// A TTL reaching zero hides the tool; keep version-keyed caches in sync.
+		r.version.Add(1)
 	}
 }
 
@@ -245,9 +320,10 @@ func (r *ToolRegistry) Execute(ctx context.Context, name string, args map[string
 }
 
 // ExecuteWithContext executes a tool with channel/chatID context and optional async callback.
-// If the tool implements AsyncExecutor and a non-nil callback is provided,
-// ExecuteAsync is called instead of Execute — the callback is a parameter,
-// never stored as mutable state on the tool.
+// If the tool implements AsyncExecutor, ExecuteAsync is always called instead
+// of Execute — the callback is a parameter, never stored as mutable state on
+// the tool. When the caller provides no callback, a no-op callback is used so
+// that ExecuteAsync always receives a non-nil callback (see AsyncExecutor).
 func (r *ToolRegistry) ExecuteWithContext(
 	ctx context.Context,
 	name string,
@@ -257,8 +333,9 @@ func (r *ToolRegistry) ExecuteWithContext(
 ) *ToolResult {
 	logger.InfoCF("tool", "Tool execution started",
 		map[string]any{
-			"tool": name,
-			"args": args,
+			"tool":      name,
+			"arg_keys":  utils.SortedArgKeys(args),
+			"arg_count": len(args),
 		})
 
 	tool, ok := r.Get(name)
@@ -310,12 +387,16 @@ func (r *ToolRegistry) ExecuteWithContext(
 			}
 		}()
 
-		if asyncExec, ok := tool.(AsyncExecutor); ok && asyncCallback != nil {
+		if asyncExec, ok := tool.(AsyncExecutor); ok {
+			cb := asyncCallback
+			if cb == nil {
+				cb = func(context.Context, *ToolResult) {}
+			}
 			logger.DebugCF("tool", "Executing async tool via ExecuteAsync",
 				map[string]any{
 					"tool": name,
 				})
-			result = asyncExec.ExecuteAsync(ctx, args, asyncCallback)
+			result = asyncExec.ExecuteAsync(ctx, args, cb)
 		} else {
 			result = tool.Execute(ctx, args)
 		}
@@ -331,7 +412,15 @@ func (r *ToolRegistry) ExecuteWithContext(
 		}
 	}
 
-	result = normalizeToolResult(result, name, r.mediaStore, channel, chatID)
+	// Read the media store and result-spill settings under the registry lock:
+	// SetMediaStore may be called concurrently (e.g. config hot reload) while
+	// tools are executing.
+	r.mu.RLock()
+	mediaStore := r.mediaStore
+	workspace := r.workspace
+	maxInlineResultRunes := r.maxInlineResultRunes
+	r.mu.RUnlock()
+	result = normalizeToolResult(result, name, mediaStore, channel, chatID, workspace, maxInlineResultRunes)
 
 	duration := time.Since(start)
 
@@ -394,10 +483,44 @@ func (r *ToolRegistry) GetDefinitions() []map[string]any {
 
 // ToProviderDefs converts tool definitions to provider-compatible format.
 // This is the format expected by LLM provider APIs.
+//
+// The result is memoized per registry version: the conversion walks every
+// visible tool and rebuilds its schema map. Callers must treat the returned
+// slice and its nested maps as read-only (consumers already filter by
+// copying or clone the schema before transforming it).
 func (r *ToolRegistry) ToProviderDefs() []providers.ToolDefinition {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+	if defs, ok := r.cachedProviderDefs(); ok {
+		return defs
+	}
 
+	// Build under the registry lock so the captured version and the tool
+	// state used to build the defs always match.
+	r.mu.RLock()
+	version := r.version.Load()
+	defs := r.buildProviderDefsLocked()
+	r.mu.RUnlock()
+
+	r.defsMu.Lock()
+	r.defsCache = defs
+	r.defsCacheVer = version
+	r.defsCacheValid = true
+	r.defsMu.Unlock()
+
+	return defs
+}
+
+func (r *ToolRegistry) cachedProviderDefs() ([]providers.ToolDefinition, bool) {
+	r.defsMu.Lock()
+	defer r.defsMu.Unlock()
+	if r.defsCacheValid && r.defsCacheVer == r.version.Load() {
+		return r.defsCache, true
+	}
+	return nil, false
+}
+
+// buildProviderDefsLocked converts the visible tools to provider definitions.
+// The caller must hold r.mu for reading.
+func (r *ToolRegistry) buildProviderDefsLocked() []providers.ToolDefinition {
 	sorted := r.sortedToolNames()
 	definitions := make([]providers.ToolDefinition, 0, len(sorted))
 	for _, name := range sorted {
@@ -474,8 +597,10 @@ func (r *ToolRegistry) Clone() *ToolRegistry {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	clone := &ToolRegistry{
-		tools:      make(map[string]*ToolEntry, len(r.tools)),
-		mediaStore: r.mediaStore,
+		tools:                make(map[string]*ToolEntry, len(r.tools)),
+		mediaStore:           r.mediaStore,
+		workspace:            r.workspace,
+		maxInlineResultRunes: r.maxInlineResultRunes,
 	}
 	if r.allowlist != nil {
 		clone.allowlist = make(map[string]struct{}, len(r.allowlist))
@@ -490,6 +615,13 @@ func (r *ToolRegistry) Clone() *ToolRegistry {
 			TTL:    entry.TTL,
 		}
 	}
+	return clone
+}
+
+// CloneWithout creates a turn-local registry that omits one tool.
+func (r *ToolRegistry) CloneWithout(name string) *ToolRegistry {
+	clone := r.Clone()
+	delete(clone.tools, name)
 	return clone
 }
 
@@ -521,23 +653,4 @@ func (r *ToolRegistry) GetSummaries() []string {
 		)
 	}
 	return summaries
-}
-
-// GetAll returns all registered tools (both core and non-core with TTL > 0).
-// Used by SubTurn to inherit parent's tool set.
-func (r *ToolRegistry) GetAll() []Tool {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	sorted := r.sortedToolNames()
-	tools := make([]Tool, 0, len(sorted))
-	for _, name := range sorted {
-		entry := r.tools[name]
-
-		// Include core tools and non-core tools with active TTL
-		if entry.IsCore || entry.TTL > 0 {
-			tools = append(tools, entry.Tool)
-		}
-	}
-	return tools
 }

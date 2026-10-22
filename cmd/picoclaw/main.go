@@ -26,10 +26,12 @@ import (
 	"github.com/sipeed/picoclaw/cmd/picoclaw/internal/migrate"
 	"github.com/sipeed/picoclaw/cmd/picoclaw/internal/model"
 	"github.com/sipeed/picoclaw/cmd/picoclaw/internal/onboard"
+	"github.com/sipeed/picoclaw/cmd/picoclaw/internal/plugin"
 	"github.com/sipeed/picoclaw/cmd/picoclaw/internal/skills"
 	"github.com/sipeed/picoclaw/cmd/picoclaw/internal/status"
 	"github.com/sipeed/picoclaw/cmd/picoclaw/internal/version"
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/memlimit"
 	"github.com/sipeed/picoclaw/pkg/updater"
 )
 
@@ -136,6 +138,7 @@ picoclaw --no-color status`,
 		status.NewStatusCommand(),
 		cron.NewCronCommand(),
 		mcp.NewMCPCommand(),
+		plugin.NewPluginCommand(),
 		migrate.NewMigrateCommand(),
 		skills.NewSkillsCommand(),
 		model.NewModelCommand(),
@@ -170,6 +173,9 @@ const (
 func main() {
 	// Initialize Termux SSL certificate detection before anything else
 	initTermuxSSL()
+
+	// Apply memory/GC tuning from the environment before any work starts.
+	memlimit.Apply()
 
 	cliui.Init(earlyColorDisabled())
 

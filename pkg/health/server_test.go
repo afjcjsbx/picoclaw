@@ -190,8 +190,8 @@ func TestReloadHandler_Success(t *testing.T) {
 
 	s.reloadHandler(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Errorf("reload status = %d, want %d", w.Code, http.StatusOK)
+	if w.Code != http.StatusAccepted {
+		t.Errorf("reload status = %d, want %d", w.Code, http.StatusAccepted)
 	}
 	if !called {
 		t.Error("reload function was not called")

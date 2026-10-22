@@ -161,6 +161,27 @@ func TestExpandHomeCommandPath(t *testing.T) {
 	}
 }
 
+func TestInheritedMCPEnv(t *testing.T) {
+	parent := []string{
+		"PATH=/usr/bin", "HOME=/home/test", "XDG_CACHE_HOME=/tmp/cache",
+		"PICOCLAW_API_KEY=private", "CUSTOM_TOKEN=private", "EMPTY=", "INVALID",
+	}
+
+	filtered := inheritedMCPEnv(parent, false)
+	if len(filtered) != 3 || filtered["PATH"] != "/usr/bin" ||
+		filtered["HOME"] != "/home/test" || filtered["XDG_CACHE_HOME"] != "/tmp/cache" {
+		t.Fatalf("filtered environment = %v, want only safe process variables", filtered)
+	}
+	if _, ok := filtered["PICOCLAW_API_KEY"]; ok {
+		t.Fatal("PicoClaw credential leaked to MCP server")
+	}
+
+	full := inheritedMCPEnv(parent, true)
+	if len(full) != 6 || full["CUSTOM_TOKEN"] != "private" || full["EMPTY"] != "" {
+		t.Fatalf("inherited environment = %v, want all valid parent variables", full)
+	}
+}
+
 func TestEnvFilePriority(t *testing.T) {
 	// Create a temporary .env file
 	tmpDir := t.TempDir()
@@ -778,4 +799,123 @@ func (t *scriptedTransport) Close() error {
 
 func (t *scriptedTransport) SessionID() string {
 	return t.sessionID
+}
+
+// TestManager_CloseWaitsForInFlightCallTool verifies that Close does not close
+// server sessions until every in-flight CallTool has completed. This is the
+// guarantee that the locked closed-swap in Close must preserve.
+func TestManager_CloseWaitsForInFlightCallTool(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+
+	server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "srv", Version: "1"}, nil)
+	sdkmcp.AddTool(server, &sdkmcp.Tool{Name: "block"},
+		func(_ context.Context, _ *sdkmcp.CallToolRequest, _ map[string]any) (*sdkmcp.CallToolResult, any, error) {
+			close(started)
+			<-release
+			return &sdkmcp.CallToolResult{
+				Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: "done"}},
+			}, nil, nil
+		})
+
+	serverTransport, clientTransport := sdkmcp.NewInMemoryTransports()
+	ctx := t.Context()
+	serverSession, err := server.Connect(ctx, serverTransport, nil)
+	if err != nil {
+		t.Fatalf("server connect: %v", err)
+	}
+	defer serverSession.Close()
+
+	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "picoclaw", Version: "1"}, nil)
+	clientSession, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+
+	mgr := NewManager()
+	mgr.mu.Lock()
+	mgr.servers["srv"] = &ServerConnection{Name: "srv", Session: clientSession}
+	mgr.mu.Unlock()
+
+	callDone := make(chan error, 1)
+	go func() {
+		_, callErr := mgr.CallTool(ctx, "srv", "block", nil)
+		callDone <- callErr
+	}()
+	<-started
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- mgr.Close() }()
+
+	select {
+	case <-closeDone:
+		t.Fatal("Close returned while a CallTool was still in flight")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(release)
+
+	if callErr := <-callDone; callErr != nil {
+		t.Fatalf("CallTool error: %v", callErr)
+	}
+	select {
+	case closeErr := <-closeDone:
+		if closeErr != nil {
+			t.Fatalf("Close error: %v", closeErr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close did not return after the in-flight call completed")
+	}
+}
+
+func TestLoadFromMCPConfigBoundsConcurrentConnects(t *testing.T) {
+	originalConnectServerFunc := connectServerFunc
+	t.Cleanup(func() { connectServerFunc = originalConnectServerFunc })
+
+	var mu sync.Mutex
+	var current, maxObserved int
+	connectServerFunc = func(
+		_ context.Context,
+		name string,
+		cfg config.MCPServerConfig,
+	) (*ServerConnection, error) {
+		mu.Lock()
+		current++
+		if current > maxObserved {
+			maxObserved = current
+		}
+		mu.Unlock()
+
+		time.Sleep(20 * time.Millisecond)
+
+		mu.Lock()
+		current--
+		mu.Unlock()
+		return &ServerConnection{Name: name, Config: cfg}, nil
+	}
+
+	servers := make(map[string]config.MCPServerConfig, mcpMaxConcurrentConnect*3)
+	for i := 0; i < mcpMaxConcurrentConnect*3; i++ {
+		servers[fmt.Sprintf("server-%d", i)] = config.MCPServerConfig{
+			Enabled: true,
+			Type:    "stdio",
+			Command: "echo",
+		}
+	}
+
+	mgr := NewManager()
+	if err := mgr.LoadFromMCPConfig(
+		context.Background(),
+		config.MCPConfig{Enabled: true, Servers: servers},
+		"",
+	); err != nil {
+		t.Fatalf("LoadFromMCPConfig: %v", err)
+	}
+
+	if maxObserved > mcpMaxConcurrentConnect {
+		t.Fatalf("max concurrent connects = %d, want <= %d", maxObserved, mcpMaxConcurrentConnect)
+	}
+	if len(mgr.GetServers()) != len(servers) {
+		t.Fatalf("connected servers = %d, want %d", len(mgr.GetServers()), len(servers))
+	}
 }

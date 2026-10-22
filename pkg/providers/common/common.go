@@ -10,6 +10,7 @@ package common
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -36,27 +37,91 @@ type (
 	ReasoningDetail        = protocoltypes.ReasoningDetail
 )
 
-const DefaultRequestTimeout = 120 * time.Second
+const (
+	DefaultRequestTimeout = 120 * time.Second
+
+	providerMaxIdleConns        = 4
+	providerMaxIdleConnsPerHost = 2
+	providerIdleConnTimeout     = 30 * time.Second
+)
+
+// SessionOptionKey is the LLM options key carrying the stable conversation
+// session key, for providers that tag requests with a per-conversation header.
+const SessionOptionKey = "session_key"
+
+// SessionHeader tags requests with the conversation session key, for gateways
+// that route or cache per conversation. The zero value is disabled.
+type SessionHeader struct {
+	Name     string // header to set; empty disables
+	Fallback string // used when options carry no session key (summaries, subagents, ...)
+	MaxLen   int    // longest value the gateway accepts; longer ones are truncated, 0 = no limit
+}
+
+// Apply sets the header from options[SessionOptionKey], else Fallback. A value
+// already present (e.g. from custom_headers) is never overwritten. The value
+// is reduced to visible ASCII because net/http rejects the whole request on an
+// invalid header value.
+func (s SessionHeader) Apply(h http.Header, options map[string]any) {
+	if s.Name == "" || h.Get(s.Name) != "" {
+		return
+	}
+	key, _ := options[SessionOptionKey].(string)
+	if strings.TrimSpace(key) == "" {
+		key = s.Fallback
+	}
+	key = strings.Map(func(r rune) rune {
+		if r < 0x20 || r > 0x7e {
+			return '_'
+		}
+		return r
+	}, strings.TrimSpace(key))
+	if s.MaxLen > 0 && len(key) > s.MaxLen {
+		key = key[:s.MaxLen] // ASCII only after the Map above, so a byte cut is safe
+	}
+	if key != "" {
+		h.Set(s.Name, key)
+	}
+}
+
+// SetOpenRouterAttribution adds OpenRouter app attribution headers
+// (https://openrouter.ai/docs/app-attribution) when req targets openrouter.ai,
+// so PicoClaw shows up in OpenRouter rankings and analytics. Call it before
+// applying user custom headers so those can still override these defaults.
+func SetOpenRouterAttribution(req *http.Request) {
+	if req == nil || req.URL == nil || !strings.EqualFold(req.URL.Hostname(), "openrouter.ai") {
+		return
+	}
+	req.Header.Set("Http-Referer", "https://github.com/afjcjsbx/picoclaw")
+	req.Header.Set("X-Openrouter-Title", "PicoClaw")
+	req.Header.Set("X-Openrouter-Categories", "personal-agent,cli-agent")
+}
+
+// newBoundedTransport returns a transport with a small idle-connection pool.
+// It clones http.DefaultTransport to preserve TLS, HTTP/2 and dial timeouts.
+func newBoundedTransport() *http.Transport {
+	var tr *http.Transport
+	if base, ok := http.DefaultTransport.(*http.Transport); ok {
+		tr = base.Clone()
+	} else {
+		tr = &http.Transport{Proxy: http.ProxyFromEnvironment}
+	}
+	tr.MaxIdleConns = providerMaxIdleConns
+	tr.MaxIdleConnsPerHost = providerMaxIdleConnsPerHost
+	tr.IdleConnTimeout = providerIdleConnTimeout
+	return tr
+}
 
 // NewHTTPClient creates an *http.Client with an optional proxy and the default timeout.
 func NewHTTPClient(proxy string) *http.Client {
 	client := &http.Client{
-		Timeout: DefaultRequestTimeout,
+		Timeout:   DefaultRequestTimeout,
+		Transport: newBoundedTransport(),
 	}
 	if proxy != "" {
 		parsed, err := url.Parse(proxy)
 		if err == nil {
-			// Preserve http.DefaultTransport settings (TLS, HTTP/2, timeouts, etc.)
-			if base, ok := http.DefaultTransport.(*http.Transport); ok {
-				tr := base.Clone()
-				tr.Proxy = http.ProxyURL(parsed)
-				client.Transport = tr
-			} else {
-				// Fallback: minimal transport if DefaultTransport is not *http.Transport.
-				client.Transport = &http.Transport{
-					Proxy: http.ProxyURL(parsed),
-				}
-			}
+			transport := client.Transport.(*http.Transport)
+			transport.Proxy = http.ProxyURL(parsed)
 		} else {
 			log.Printf("common: invalid proxy URL %q: %v", proxy, err)
 		}
@@ -228,6 +293,29 @@ func ParseDataAudioURL(mediaURL string) (format, data string, ok bool) {
 
 // --- Response parsing ---
 
+// WireUsage is an OpenAI-compatible usage object, including the prompt-cache
+// breakdown that OpenAI and OpenRouter report under prompt_tokens_details.
+type WireUsage struct {
+	UsageInfo
+	PromptTokensDetails *struct {
+		CachedTokens     int `json:"cached_tokens"`
+		CacheWriteTokens int `json:"cache_write_tokens"`
+	} `json:"prompt_tokens_details"`
+}
+
+// Info converts u to a UsageInfo with the cache breakdown filled in. Nil-safe.
+func (u *WireUsage) Info() *UsageInfo {
+	if u == nil {
+		return nil
+	}
+	info := u.UsageInfo
+	if d := u.PromptTokensDetails; d != nil {
+		info.CacheReadTokens = d.CachedTokens
+		info.CacheCreationTokens = d.CacheWriteTokens
+	}
+	return &info
+}
+
 // ParseResponse parses a JSON chat completion response body into an LLMResponse.
 func ParseResponse(body io.Reader) (*LLMResponse, error) {
 	var apiResponse struct {
@@ -255,7 +343,7 @@ func ParseResponse(body io.Reader) (*LLMResponse, error) {
 			} `json:"message"`
 			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
-		Usage *UsageInfo `json:"usage"`
+		Usage *WireUsage `json:"usage"`
 	}
 
 	if err := json.NewDecoder(body).Decode(&apiResponse); err != nil {
@@ -322,7 +410,7 @@ func ParseResponse(body io.Reader) (*LLMResponse, error) {
 		ReasoningDetails: choice.Message.ReasoningDetails,
 		ToolCalls:        toolCalls,
 		FinishReason:     normalizeFinishReason(choice.FinishReason),
-		Usage:            apiResponse.Usage,
+		Usage:            apiResponse.Usage.Info(),
 	}, nil
 }
 
@@ -507,6 +595,66 @@ func AsInt(v any) (int, bool) {
 	default:
 		return 0, false
 	}
+}
+
+// NewStreamingJSONReader serializes v as JSON into an io.Pipe and returns the
+// read end, for use as an HTTP request body.
+//
+// json.Marshal builds the full JSON in a pooled encode buffer and then returns
+// a second, exact-size copy of it, which the old bytes.NewReader body kept alive
+// for the whole request. For vision requests that is tens of megabytes of base64
+// image data on top of what the message structs already hold.
+//
+// json.Encoder.Encode skips that second copy, but it is not incremental: it
+// still encodes the whole value into its internal buffer and hands it to the
+// pipe in a single Write, which returns only once the HTTP transport has read
+// it all. The saving is therefore one payload-sized copy (the peak while
+// marshaling), not a body that is never fully materialized.
+//
+// The HTTP transport closes the returned reader once the request is sent, which
+// unblocks the producer goroutine if it is still writing.
+//
+// Unlike json.Marshal, Encode terminates the value with a newline, so the body
+// is one byte longer. It is insignificant whitespace to any JSON parser.
+//
+// An encoding error is delivered to the reader as a read error, wrapped with
+// "serializing request body" since it no longer surfaces before the request is
+// sent the way a json.Marshal error did.
+func NewStreamingJSONReader(v any) io.ReadCloser {
+	pr, pw := io.Pipe()
+	go func() {
+		err := json.NewEncoder(pw).Encode(v)
+		if err != nil {
+			err = fmt.Errorf("serializing request body: %w", err)
+		}
+		_ = pw.CloseWithError(err)
+	}()
+	return pr
+}
+
+// NewJSONRequest builds a request whose body is v encoded as JSON via
+// NewStreamingJSONReader.
+//
+// A pipe body has no known length, so the request goes out with chunked
+// transfer encoding, and net/http cannot rewind it on its own. Unlike the
+// bytes.Reader body it replaces, that would stop the transport from retrying a
+// request on a stale keep-alive connection and from following 307/308
+// redirects. GetBody restores both by re-encoding v for each replay; v must not
+// be mutated while the request is in flight.
+//
+// If the request cannot be built, the body is closed so the encoder goroutine
+// does not stay blocked on a pipe nobody will ever read.
+func NewJSONRequest(ctx context.Context, method, endpoint string, v any) (*http.Request, error) {
+	body := NewStreamingJSONReader(v)
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, body)
+	if err != nil {
+		_ = body.Close()
+		return nil, err
+	}
+	req.GetBody = func() (io.ReadCloser, error) {
+		return NewStreamingJSONReader(v), nil
+	}
+	return req, nil
 }
 
 // AsFloat converts various numeric types to float64.

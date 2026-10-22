@@ -41,24 +41,32 @@ function toChatAttachments({
 
 export async function loadSessionMessages(
   sessionId: string,
-): Promise<ChatMessage[]> {
-  const detail = await getSessionHistory(sessionId)
-  return detail.messages.map((message, index) => ({
-    id: `hist-${index}-${Date.now()}`,
-    role: message.role,
-    content: message.content,
-    kind: message.role === "assistant" ? (message.kind ?? "normal") : undefined,
-    modelName: message.model_name,
-    toolCalls:
-      message.role === "assistant"
-        ? parseToolCallsValue(message.tool_calls)
-        : undefined,
-    attachments: toChatAttachments({
-      media: message.media,
-      attachments: message.attachments,
-    }),
-    timestamp: message.created_at ?? detail.updated,
-  }))
+  before?: number,
+): Promise<{ messages: ChatMessage[]; start: number; hasMore: boolean }> {
+  const detail = await getSessionHistory(sessionId, before)
+  return {
+    messages: detail.messages.map((message, index) => ({
+      id: `hist-${detail.start + index}`,
+      role: message.role,
+      content: message.content,
+      kind:
+        message.role === "assistant"
+          ? (message.kind ?? "normal")
+          : undefined,
+      modelName: message.model_name,
+      toolCalls:
+        message.role === "assistant"
+          ? parseToolCallsValue(message.tool_calls)
+          : undefined,
+      attachments: toChatAttachments({
+        media: message.media,
+        attachments: message.attachments,
+      }),
+      timestamp: message.created_at ?? detail.updated,
+    })),
+    start: detail.start,
+    hasMore: detail.start > 0,
+  }
 }
 
 function normalizeMessageTimestamp(timestamp: number | string): string {

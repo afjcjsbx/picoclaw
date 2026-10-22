@@ -2,11 +2,13 @@ package config
 
 import (
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"gopkg.in/yaml.v3"
@@ -295,6 +297,61 @@ func TestDefaultConfig_MCPMaxInlineTextChars(t *testing.T) {
 	}
 }
 
+func TestDefaultConfig_MaxInlineResultChars(t *testing.T) {
+	cfg := DefaultConfig()
+	if got := cfg.Tools.GetMaxInlineResultChars(); got != DefaultMaxInlineResultChars {
+		t.Fatalf(
+			"DefaultConfig().Tools.GetMaxInlineResultChars() = %d, want %d",
+			got,
+			DefaultMaxInlineResultChars,
+		)
+	}
+}
+
+func TestConfig_TruncationLimits(t *testing.T) {
+	cfg := DefaultConfig()
+	if got := cfg.Tools.Exec.GetMaxOutputChars(); got != DefaultExecMaxOutputChars {
+		t.Fatalf(
+			"DefaultConfig().Tools.Exec.GetMaxOutputChars() = %d, want %d",
+			got,
+			DefaultExecMaxOutputChars,
+		)
+	}
+	if got := cfg.Tools.ReadFile.GetMaxLines(); got != DefaultReadFileMaxLines {
+		t.Fatalf(
+			"DefaultConfig().Tools.ReadFile.GetMaxLines() = %d, want %d",
+			got,
+			DefaultReadFileMaxLines,
+		)
+	}
+	if got := cfg.Tools.ReadFile.GetMaxLineLength(); got != DefaultReadFileMaxLineLength {
+		t.Fatalf(
+			"DefaultConfig().Tools.ReadFile.GetMaxLineLength() = %d, want %d",
+			got,
+			DefaultReadFileMaxLineLength,
+		)
+	}
+
+	// Zero values fall back to the defaults instead of disabling the caps.
+	var (
+		zeroExec ExecConfig
+		zeroRead ReadFileToolConfig
+	)
+	if got := zeroExec.GetMaxOutputChars(); got != DefaultExecMaxOutputChars {
+		t.Fatalf("zero ExecConfig.GetMaxOutputChars() = %d, want %d", got, DefaultExecMaxOutputChars)
+	}
+	if got := zeroRead.GetMaxLines(); got != DefaultReadFileMaxLines {
+		t.Fatalf("zero ReadFileToolConfig.GetMaxLines() = %d, want %d", got, DefaultReadFileMaxLines)
+	}
+	if got := zeroRead.GetMaxLineLength(); got != DefaultReadFileMaxLineLength {
+		t.Fatalf(
+			"zero ReadFileToolConfig.GetMaxLineLength() = %d, want %d",
+			got,
+			DefaultReadFileMaxLineLength,
+		)
+	}
+}
+
 func TestDefaultConfig_EvolutionDefaults(t *testing.T) {
 	cfg := DefaultConfig()
 
@@ -453,7 +510,11 @@ func TestEvolutionConfig_ModeSemantics(t *testing.T) {
 }
 
 func TestEvolutionConfig_ColdPathTriggerMode(t *testing.T) {
-	assert.Equal(t, "after_turn", (EvolutionConfig{Enabled: true, Mode: "draft"}).ColdPathTriggerMode())
+	assert.Equal(
+		t,
+		"after_turn",
+		(EvolutionConfig{Enabled: true, Mode: "draft"}).ColdPathTriggerMode(),
+	)
 	assert.True(t, (EvolutionConfig{Enabled: true, Mode: "draft"}).RunsColdPathAfterTurn())
 	assert.False(t, (EvolutionConfig{Enabled: true, Mode: "draft"}).RunsColdPathScheduled())
 
@@ -472,8 +533,36 @@ func TestEvolutionConfig_ColdPathTriggerMode(t *testing.T) {
 	assert.False(t, manual.RunsColdPathAutomatically())
 }
 
+func TestEvolutionConfig_EffectiveMinSuccessRatioFallsBackOutsideValidRange(t *testing.T) {
+	above := EvolutionConfig{MinSuccessRatio: 1.5}
+	assert.Equal(t, 0.7, above.EffectiveMinSuccessRatio())
+
+	percent := EvolutionConfig{MinSuccessRatio: 70}
+	assert.Equal(t, 0.7, percent.EffectiveMinSuccessRatio())
+
+	legacyAbove := EvolutionConfig{MinSuccessRate: 2}
+	assert.Equal(t, 0.7, legacyAbove.EffectiveMinSuccessRatio())
+
+	negative := EvolutionConfig{MinSuccessRatio: -0.1}
+	assert.Equal(t, 0.7, negative.EffectiveMinSuccessRatio())
+
+	nan := EvolutionConfig{MinSuccessRatio: math.NaN()}
+	assert.Equal(t, 0.7, nan.EffectiveMinSuccessRatio())
+
+	upperBound := EvolutionConfig{MinSuccessRatio: 1}
+	assert.Equal(t, 1.0, upperBound.EffectiveMinSuccessRatio())
+
+	inRange := EvolutionConfig{MinSuccessRatio: 0.7}
+	assert.Equal(t, 0.7, inRange.EffectiveMinSuccessRatio())
+}
+
 func TestEvolutionConfig_NewThresholdNamesPreferLegacyAliases(t *testing.T) {
-	cfg := EvolutionConfig{MinTaskCount: 4, MinSuccessRatio: 0.9, MinCaseCount: 1, MinSuccessRate: 0.2}
+	cfg := EvolutionConfig{
+		MinTaskCount:    4,
+		MinSuccessRatio: 0.9,
+		MinCaseCount:    1,
+		MinSuccessRate:  0.2,
+	}
 	assert.Equal(t, 4, cfg.EffectiveMinTaskCount())
 	assert.Equal(t, 0.9, cfg.EffectiveMinSuccessRatio())
 
@@ -630,6 +719,54 @@ func TestLoadConfig_MCPMaxInlineTextChars(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_MaxInlineResultChars(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	raw := `{
+		"tools": {
+			"max_inline_result_chars": 2048
+		}
+	}`
+	if err := os.WriteFile(configPath, []byte(raw), 0o644); err != nil {
+		t.Fatalf("WriteFile(configPath): %v", err)
+	}
+
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error: %v", err)
+	}
+	if got := cfg.Tools.GetMaxInlineResultChars(); got != 2048 {
+		t.Fatalf("cfg.Tools.GetMaxInlineResultChars() = %d, want 2048", got)
+	}
+}
+
+func TestLoadConfig_MaxInlineResultCharsDefaultsWhenAbsent(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	raw := `{
+		"tools": {
+			"exec": {
+				"enabled": true
+			}
+		}
+	}`
+	if err := os.WriteFile(configPath, []byte(raw), 0o644); err != nil {
+		t.Fatalf("WriteFile(configPath): %v", err)
+	}
+
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error: %v", err)
+	}
+	if got := cfg.Tools.GetMaxInlineResultChars(); got != DefaultMaxInlineResultChars {
+		t.Fatalf(
+			"cfg.Tools.GetMaxInlineResultChars() = %d, want default %d",
+			got,
+			DefaultMaxInlineResultChars,
+		)
+	}
+}
+
 func TestConfig_BackwardCompat_NoAgentsList(t *testing.T) {
 	jsonData := `{
 		"agents": {
@@ -695,7 +832,8 @@ func TestAgentConfig_ParsesDispatchRules(t *testing.T) {
 	if rule.Name != "support-vip" || rule.Agent != "support" {
 		t.Fatalf("rule = %+v", rule)
 	}
-	if rule.When.Channel != "telegram" || rule.When.Chat != "group:-100123" || rule.When.Sender != "12345" {
+	if rule.When.Channel != "telegram" || rule.When.Chat != "group:-100123" ||
+		rule.When.Sender != "12345" {
 		t.Fatalf("rule.When = %+v", rule.When)
 	}
 	if rule.When.Mentioned == nil || !*rule.When.Mentioned {
@@ -839,7 +977,11 @@ func TestLoadConfig_PrefersDispatchRulesOverLegacyBindings(t *testing.T) {
 		t.Fatalf("Dispatch.Rules len = %d, want 1", len(cfg.Agents.Dispatch.Rules))
 	}
 	if cfg.Agents.Dispatch.Rules[0].Name != "explicit" {
-		t.Fatalf("Dispatch.Rules[0].Name = %q, want %q", cfg.Agents.Dispatch.Rules[0].Name, "explicit")
+		t.Fatalf(
+			"Dispatch.Rules[0].Name = %q, want %q",
+			cfg.Agents.Dispatch.Rules[0].Name,
+			"explicit",
+		)
 	}
 }
 
@@ -895,6 +1037,32 @@ func TestDefaultConfig_HeartbeatEnabled(t *testing.T) {
 
 	if !cfg.Heartbeat.Enabled {
 		t.Error("Heartbeat should be enabled by default")
+	}
+}
+
+func TestPowerConfigLowPowerProfile(t *testing.T) {
+	var power PowerConfig
+	if got := power.EffectiveHeartbeatInterval(30); got != 30 {
+		t.Fatalf("normal heartbeat interval = %d, want 30", got)
+	}
+	if got := power.ScalePollInterval(2 * time.Second); got != 2*time.Second {
+		t.Fatalf("normal poll interval = %v, want 2s", got)
+	}
+
+	power.LowPower = true
+	if got := power.EffectiveHeartbeatInterval(30); got != 120 {
+		t.Fatalf("default low-power heartbeat interval = %d, want 120", got)
+	}
+	if got := power.ScalePollInterval(2 * time.Second); got != 10*time.Second {
+		t.Fatalf("default low-power poll interval = %v, want 10s", got)
+	}
+	power.LowPowerHeartbeatInterval = 90
+	power.PollIntervalMultiplier = 3
+	if got := power.EffectiveHeartbeatInterval(120); got != 120 {
+		t.Fatalf("low-power profile shortened normal interval to %d", got)
+	}
+	if got := power.ScalePollInterval(2 * time.Second); got != 6*time.Second {
+		t.Fatalf("configured low-power poll interval = %v, want 6s", got)
 	}
 }
 
@@ -1041,7 +1209,10 @@ func TestDefaultConfig_DeltaChatExample(t *testing.T) {
 		t.Fatalf("deltachat settings type = %T, want *DeltaChatSettings", decoded)
 	}
 	if settings.Email != "@nine.testrun.org" {
-		t.Fatalf("DefaultConfig().deltachat.settings.email = %q, want @nine.testrun.org", settings.Email)
+		t.Fatalf(
+			"DefaultConfig().deltachat.settings.email = %q, want @nine.testrun.org",
+			settings.Email,
+		)
 	}
 	if settings.DisplayName == "" {
 		t.Fatal("DefaultConfig().deltachat.settings.display_name should be populated")
@@ -1071,7 +1242,11 @@ func TestConfigExample_DeltaChatExample(t *testing.T) {
 		t.Fatal("config.example.json deltachat channel should be disabled")
 	}
 	if deltachat.Type != ChannelDeltaChat {
-		t.Fatalf("config.example.json deltachat.type = %q, want %q", deltachat.Type, ChannelDeltaChat)
+		t.Fatalf(
+			"config.example.json deltachat.type = %q, want %q",
+			deltachat.Type,
+			ChannelDeltaChat,
+		)
 	}
 	if !deltachat.GroupTrigger.MentionOnly {
 		t.Fatal("config.example.json deltachat should use mention-only group trigger")
@@ -1262,7 +1437,9 @@ func TestSaveConfig_PreservesDisabledTelegramPlaceholder(t *testing.T) {
 	}
 	bc := loaded.Channels.Get("telegram")
 	if bc != nil && bc.Placeholder.Enabled {
-		t.Fatal("telegram placeholder should remain disabled after SaveConfig/LoadConfig round-trip")
+		t.Fatal(
+			"telegram placeholder should remain disabled after SaveConfig/LoadConfig round-trip",
+		)
 	}
 }
 
@@ -1284,8 +1461,12 @@ func TestSaveConfig_PreservesExplicitDisabledPicoStreaming(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile failed: %v", err)
 	}
-	if !strings.Contains(string(data), `"streaming"`) || !strings.Contains(string(data), `"enabled": false`) {
-		t.Fatalf("saved config should preserve explicit disabled pico streaming, got:\n%s", string(data))
+	if !strings.Contains(string(data), `"streaming"`) ||
+		!strings.Contains(string(data), `"enabled": false`) {
+		t.Fatalf(
+			"saved config should preserve explicit disabled pico streaming, got:\n%s",
+			string(data),
+		)
 	}
 
 	loaded, err := LoadConfig(path)
@@ -1305,7 +1486,9 @@ func TestSaveConfig_PreservesExplicitDisabledPicoStreaming(t *testing.T) {
 		t.Fatalf("pico settings type = %T, want *PicoSettings", decoded)
 	}
 	if settings.Streaming.Enabled {
-		t.Fatal("explicit disabled pico streaming should remain disabled after SaveConfig/LoadConfig round-trip")
+		t.Fatal(
+			"explicit disabled pico streaming should remain disabled after SaveConfig/LoadConfig round-trip",
+		)
 	}
 }
 
@@ -1458,7 +1641,9 @@ func TestLoadConfig_ToolFeedbackDefaultsFalseWhenUnset(t *testing.T) {
 		)
 	}
 	if cfg.Agents.Defaults.ToolFeedback.SeparateMessages {
-		t.Fatal("agents.defaults.tool_feedback.separate_messages should remain false when unset in config file")
+		t.Fatal(
+			"agents.defaults.tool_feedback.separate_messages should remain false when unset in config file",
+		)
 	}
 }
 
@@ -1555,7 +1740,8 @@ func TestLoadConfig_UnknownFieldsReportsExactPaths(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected unknown field error, got nil")
 	}
-	if !strings.Contains(err.Error(), "tools.weeb") || !strings.Contains(err.Error(), "tools.web.fatch_limit_bytes") {
+	if !strings.Contains(err.Error(), "tools.weeb") ||
+		!strings.Contains(err.Error(), "tools.web.fatch_limit_bytes") {
 		t.Fatalf("expected exact unknown field paths, got %q", err.Error())
 	}
 }
@@ -1735,11 +1921,19 @@ func TestLoadConfig_CronCommandAllowedRemotes(t *testing.T) {
 	}
 	want := []string{"telegram:1234567890", "discord"}
 	if len(cfg.Tools.Cron.CommandAllowedRemotes) != len(want) {
-		t.Fatalf("CommandAllowedRemotes = %#v, want %#v", cfg.Tools.Cron.CommandAllowedRemotes, want)
+		t.Fatalf(
+			"CommandAllowedRemotes = %#v, want %#v",
+			cfg.Tools.Cron.CommandAllowedRemotes,
+			want,
+		)
 	}
 	for i := range want {
 		if cfg.Tools.Cron.CommandAllowedRemotes[i] != want[i] {
-			t.Fatalf("CommandAllowedRemotes = %#v, want %#v", cfg.Tools.Cron.CommandAllowedRemotes, want)
+			t.Fatalf(
+				"CommandAllowedRemotes = %#v, want %#v",
+				cfg.Tools.Cron.CommandAllowedRemotes,
+				want,
+			)
 		}
 	}
 }
@@ -1869,6 +2063,25 @@ func TestDefaultConfig_SessionDimensions(t *testing.T) {
 
 	if len(cfg.Session.Dimensions) != 1 || cfg.Session.Dimensions[0] != "chat" {
 		t.Errorf("Session.Dimensions = %v, want [chat]", cfg.Session.Dimensions)
+	}
+}
+
+func TestSessionConfig_DurableWritesEnabled(t *testing.T) {
+	var cfg SessionConfig
+	if !cfg.DurableWritesEnabled() {
+		t.Error("DurableWritesEnabled() = false for zero config, want true (default)")
+	}
+
+	enabled := true
+	cfg.DurableWrites = &enabled
+	if !cfg.DurableWritesEnabled() {
+		t.Error("DurableWritesEnabled() = false with durable_writes=true, want true")
+	}
+
+	disabled := false
+	cfg.DurableWrites = &disabled
+	if cfg.DurableWritesEnabled() {
+		t.Error("DurableWritesEnabled() = true with durable_writes=false, want false")
 	}
 }
 
@@ -2093,7 +2306,8 @@ func TestConfig_UnmarshalIsolation(t *testing.T) {
 	if len(cfg.Isolation.ExposePaths) != 1 {
 		t.Fatalf("ExposePaths len = %d, want 1", len(cfg.Isolation.ExposePaths))
 	}
-	if got := cfg.Isolation.ExposePaths[0]; got.Source != "/src" || got.Target != "/dst" || got.Mode != "ro" {
+	if got := cfg.Isolation.ExposePaths[0]; got.Source != "/src" || got.Target != "/dst" ||
+		got.Mode != "ro" {
 		t.Fatalf("ExposePaths[0] = %+v, want source=/src target=/dst mode=ro", got)
 	}
 }
@@ -2752,7 +2966,37 @@ func TestResolveGatewayLogLevel_UsesEnvOverrideAndNormalizesInvalid(t *testing.T
 
 	t.Setenv("PICOCLAW_LOG_LEVEL", "garbage")
 	if got := ResolveGatewayLogLevel(cfgPath); got != DefaultGatewayLogLevel {
-		t.Fatalf("ResolveGatewayLogLevel() with invalid env override = %q, want %q", got, DefaultGatewayLogLevel)
+		t.Fatalf(
+			"ResolveGatewayLogLevel() with invalid env override = %q, want %q",
+			got,
+			DefaultGatewayLogLevel,
+		)
+	}
+}
+
+func TestResolveGatewayLogRotation(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(
+		cfgPath,
+		[]byte(`{"gateway":{"log_max_size_mb":8,"log_max_backups":7}}`),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if size, backups := ResolveGatewayLogRotation(cfgPath); size != 8 || backups != 7 {
+		t.Fatalf("rotation = (%d MiB, %d backups), want (8 MiB, 7 backups)", size, backups)
+	}
+	t.Setenv("PICOCLAW_GATEWAY_LOG_MAX_SIZE_MB", "4")
+	t.Setenv("PICOCLAW_GATEWAY_LOG_MAX_BACKUPS", "0")
+	if size, backups := ResolveGatewayLogRotation(cfgPath); size != 4 || backups != 0 {
+		t.Fatalf("env rotation = (%d MiB, %d backups), want (4 MiB, 0 backups)", size, backups)
+	}
+	t.Setenv("PICOCLAW_GATEWAY_LOG_MAX_SIZE_MB", "2048")
+	t.Setenv("PICOCLAW_GATEWAY_LOG_MAX_BACKUPS", "-1")
+	if size, backups := ResolveGatewayLogRotation(cfgPath); size != DefaultGatewayLogMaxSizeMB ||
+		backups != DefaultGatewayLogMaxBackups {
+		t.Fatalf("invalid rotation = (%d MiB, %d backups), want defaults (%d MiB, %d backups)",
+			size, backups, DefaultGatewayLogMaxSizeMB, DefaultGatewayLogMaxBackups)
 	}
 }
 
@@ -3064,7 +3308,10 @@ func TestFilterSensitiveData_AllTokenTypes(t *testing.T) {
 			Skills: SkillsToolsConfig{
 				Github: SkillsGithubConfig{Token: *NewSecureString("github-token-xyz")},
 				Registries: SkillsRegistriesConfig{
-					&SkillRegistryConfig{Name: "clawhub", AuthToken: *NewSecureString("clawhub-auth-token")},
+					&SkillRegistryConfig{
+						Name:      "clawhub",
+						AuthToken: *NewSecureString("clawhub-auth-token"),
+					},
 				},
 			},
 		},
@@ -3191,7 +3438,11 @@ func TestMakeBackup_AlsoBacksSecurityFile(t *testing.T) {
 	secPath := securityPath(configPath)
 
 	os.WriteFile(configPath, []byte(`{"version":2}`), 0o600)
-	os.WriteFile(secPath, []byte(`model_list:\n  test:0:\n    api_keys:\n      - "sk-test"\n`), 0o600)
+	os.WriteFile(
+		secPath,
+		[]byte(`model_list:\n  test:0:\n    api_keys:\n      - "sk-test"\n`),
+		0o600,
+	)
 
 	if err := MakeBackup(configPath); err != nil {
 		t.Fatalf("MakeBackup: %v", err)
@@ -3297,7 +3548,11 @@ func TestMakeBackup_SameDateSuffix(t *testing.T) {
 		t.Fatal("security backup file not found")
 	}
 	if configDate != secDate {
-		t.Errorf("config backup date = %q, security backup date = %q, should match", configDate, secDate)
+		t.Errorf(
+			"config backup date = %q, security backup date = %q, should match",
+			configDate,
+			secDate,
+		)
 	}
 }
 
@@ -3345,4 +3600,113 @@ func testChannelsConfigWithTokens() ChannelsConfig {
 		channels[def.name] = bc
 	}
 	return channels
+}
+
+func TestSessionPruneConfig_DefaultsAreDisabledAndOmittedFromJSON(t *testing.T) {
+	cfg := DefaultConfig()
+
+	assert.True(t, cfg.Session.Prune.IsZero())
+	assert.False(t, cfg.Session.Prune.Enabled)
+	assert.False(t, cfg.Session.Prune.IsActive())
+	assert.True(t, cfg.Session.Prune.VacuumEnabled(), "vacuum defaults to on")
+	assert.Equal(t, 60, cfg.Session.Prune.EffectiveCheckIntervalMinutes())
+
+	data, err := json.Marshal(cfg)
+	assert.NoError(t, err)
+	var raw map[string]any
+	assert.NoError(t, json.Unmarshal(data, &raw))
+	session, ok := raw["session"].(map[string]any)
+	assert.True(t, ok, "session section should be present for the default dimensions")
+	assert.NotContains(t, session, "prune", "an unconfigured prune block must not be saved")
+}
+
+func TestSessionPruneConfig_SurvivesMarshalWithoutOtherSessionSettings(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Session.Dimensions = nil
+	cfg.Session.Prune = SessionPruneConfig{Enabled: true, MaxAgeDays: 30}
+
+	data, err := json.Marshal(cfg)
+	assert.NoError(t, err)
+
+	var raw map[string]any
+	assert.NoError(t, json.Unmarshal(data, &raw))
+	session, ok := raw["session"].(map[string]any)
+	if !assert.True(t, ok, "session section with only prune settings must still be saved: %s", data) {
+		return
+	}
+	prune, ok := session["prune"].(map[string]any)
+	if !assert.True(t, ok, "prune block missing: %s", data) {
+		return
+	}
+	assert.Equal(t, true, prune["enabled"])
+	assert.EqualValues(t, 30, prune["max_age_days"])
+}
+
+func TestSessionPruneConfig_JSONRoundTrip(t *testing.T) {
+	vacuum := false
+	cfg := DefaultConfig()
+	cfg.Session.Prune = SessionPruneConfig{
+		Enabled:              true,
+		MaxAgeDays:           7,
+		MaxSessions:          50,
+		MaxDBSizeMB:          128,
+		CheckIntervalMinutes: 15,
+		Vacuum:               &vacuum,
+	}
+
+	data, err := json.Marshal(cfg)
+	assert.NoError(t, err)
+
+	var got Config
+	assert.NoError(t, json.Unmarshal(data, &got))
+	assert.Equal(t, cfg.Session.Prune.Enabled, got.Session.Prune.Enabled)
+	assert.Equal(t, 7, got.Session.Prune.MaxAgeDays)
+	assert.Equal(t, 50, got.Session.Prune.MaxSessions)
+	assert.Equal(t, 128, got.Session.Prune.MaxDBSizeMB)
+	assert.Equal(t, 15, got.Session.Prune.EffectiveCheckIntervalMinutes())
+	assert.False(t, got.Session.Prune.VacuumEnabled())
+	assert.True(t, got.Session.Prune.IsActive())
+	// Other session settings are unaffected by the custom marshaler.
+	assert.Equal(t, []string{"chat"}, got.Session.Dimensions)
+}
+
+func TestSessionPruneConfig_EnvOverrides(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	data, err := json.Marshal(DefaultConfig())
+	assert.NoError(t, err)
+	assert.NoError(t, os.WriteFile(path, data, 0o600))
+
+	t.Setenv("PICOCLAW_HOME", dir)
+	t.Setenv("PICOCLAW_SESSION_PRUNE_ENABLED", "true")
+	t.Setenv("PICOCLAW_SESSION_PRUNE_MAX_AGE_DAYS", "7")
+	t.Setenv("PICOCLAW_SESSION_PRUNE_MAX_SESSIONS", "25")
+	t.Setenv("PICOCLAW_SESSION_PRUNE_MAX_DB_SIZE_MB", "64")
+	t.Setenv("PICOCLAW_SESSION_PRUNE_CHECK_INTERVAL_MINUTES", "5")
+	t.Setenv("PICOCLAW_SESSION_PRUNE_VACUUM", "false")
+
+	cfg, err := LoadConfig(path)
+	assert.NoError(t, err)
+	prune := cfg.Session.Prune
+	assert.True(t, prune.Enabled)
+	assert.Equal(t, 7, prune.MaxAgeDays)
+	assert.Equal(t, 25, prune.MaxSessions)
+	assert.Equal(t, 64, prune.MaxDBSizeMB)
+	assert.Equal(t, 5, prune.EffectiveCheckIntervalMinutes())
+	assert.False(t, prune.VacuumEnabled())
+}
+
+func TestSessionConfig_DurableWritesEnvOverride(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	data, err := json.Marshal(DefaultConfig())
+	assert.NoError(t, err)
+	assert.NoError(t, os.WriteFile(path, data, 0o600))
+
+	t.Setenv("PICOCLAW_HOME", dir)
+	t.Setenv("PICOCLAW_SESSION_DURABLE_WRITES", "false")
+
+	cfg, err := LoadConfig(path)
+	assert.NoError(t, err)
+	assert.False(t, cfg.Session.DurableWritesEnabled())
 }

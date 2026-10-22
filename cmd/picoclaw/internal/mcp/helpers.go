@@ -64,11 +64,22 @@ const mcpConfigSchemaJSON = `{
                     "additionalProperties": { "type": "string" }
                   },
                   "env_file": { "type": "string" },
+                  "inherit_env": { "type": "boolean" },
                   "type": {
                     "type": "string",
                     "enum": ["stdio", "http", "sse"]
                   },
                   "url": { "type": "string" },
+                  "oauth": {
+                    "type": "object",
+                    "properties": {
+                      "client_id": { "type": "string" },
+                      "issuer": { "type": "string" },
+                      "scopes": { "type": "array", "items": { "type": "string" } },
+                      "callback_port": { "type": "integer", "minimum": 0, "maximum": 65535 }
+                    },
+                    "additionalProperties": false
+                  },
                   "headers": {
                     "type": "object",
                     "additionalProperties": { "type": "string" }

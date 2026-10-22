@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -46,9 +47,15 @@ type AssembleResponse struct {
 // CompactRequest is the input to Compact.
 type CompactRequest struct {
 	SessionKey string                // session identifier
-	Reason     ContextCompressReason // proactive_budget | llm_retry | summarize
+	Reason     ContextCompressReason // proactive_budget | llm_retry | summarize | manual
 	Budget     int                   // context window budget (used for retry aggressive compaction)
+	// Instructions optionally steers what the summary should focus on (manual only).
+	Instructions string
 }
+
+// ErrNothingToCompact is returned by Compact for a manual request when the
+// history is too short (or already compacted) for anything to be summarized.
+var ErrNothingToCompact = errors.New("nothing to compact")
 
 // IngestRequest is the input to Ingest.
 type IngestRequest struct {

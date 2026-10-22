@@ -8,10 +8,12 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/bus"
 	basechannels "github.com/sipeed/picoclaw/pkg/channels"
 	"github.com/sipeed/picoclaw/pkg/config"
 )
@@ -376,5 +378,221 @@ func TestSendUploadedMedia_SendsCaptionAsSeparateTextBeforeMedia(t *testing.T) {
 	}
 	if requests[1].Msg.ItemList[0].ImageItem == nil || requests[1].Msg.ItemList[0].ImageItem.Media == nil {
 		t.Fatalf("second request image media = %+v, want media ref", requests[1].Msg.ItemList[0].ImageItem)
+	}
+}
+
+// newSendTestChannel returns a running channel with a context token for "user-1"
+// whose iLink and CDN requests are served by transport.
+func newSendTestChannel(transport roundTripFunc) *WeixinChannel {
+	ch := &WeixinChannel{
+		BaseChannel: basechannels.NewBaseChannel("weixin", nil, nil, nil),
+		api: &ApiClient{
+			BaseURL:    "https://ilinkai.weixin.qq.com/",
+			HttpClient: &http.Client{Transport: transport},
+		},
+		config: &config.WeixinSettings{
+			CDNBaseURL: "https://cdn.example.com",
+		},
+		typingCache: make(map[string]typingTicketCacheEntry),
+	}
+	ch.SetRunning(true)
+	ch.contextTokens.Store("user-1", "ctx-1")
+	return ch
+}
+
+func iLinkResponse(status int, body string) *http.Response {
+	return &http.Response{
+		StatusCode: status,
+		Status:     http.StatusText(status),
+		Body:       io.NopCloser(bytes.NewReader([]byte(body))),
+		Header:     make(http.Header),
+	}
+}
+
+func TestSendClassifiesFailuresForRetry(t *testing.T) {
+	tests := []struct {
+		name      string
+		transport roundTripFunc
+		want      error
+		notWant   error
+	}{
+		{
+			name: "iLink rejection is not retried",
+			transport: func(*http.Request) (*http.Response, error) {
+				return iLinkResponse(http.StatusOK, `{"ret":-2,"errcode":0,"errmsg":"prepare failed"}`), nil
+			},
+			want:    basechannels.ErrSendFailed,
+			notWant: basechannels.ErrTemporary,
+		},
+		{
+			name: "other iLink error is retried",
+			transport: func(*http.Request) (*http.Response, error) {
+				return iLinkResponse(http.StatusOK, `{"ret":-1,"errcode":0,"errmsg":"system error"}`), nil
+			},
+			want:    basechannels.ErrTemporary,
+			notWant: basechannels.ErrSendFailed,
+		},
+		{
+			name: "iLink errcode without ret is retried",
+			transport: func(*http.Request) (*http.Response, error) {
+				return iLinkResponse(http.StatusOK, `{"ret":0,"errcode":-1,"errmsg":"busy"}`), nil
+			},
+			want:    basechannels.ErrTemporary,
+			notWant: basechannels.ErrSendFailed,
+		},
+		{
+			name: "network error is retried",
+			transport: func(*http.Request) (*http.Response, error) {
+				return nil, errors.New("connection reset by peer")
+			},
+			want:    basechannels.ErrTemporary,
+			notWant: basechannels.ErrSendFailed,
+		},
+		{
+			name: "HTTP 5xx is retried",
+			transport: func(*http.Request) (*http.Response, error) {
+				return iLinkResponse(http.StatusBadGateway, "bad gateway"), nil
+			},
+			want:    basechannels.ErrTemporary,
+			notWant: basechannels.ErrSendFailed,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			requests := 0
+			ch := newSendTestChannel(func(r *http.Request) (*http.Response, error) {
+				if r.URL.Path != "/ilink/bot/sendmessage" {
+					t.Fatalf("request path = %q, want /ilink/bot/sendmessage", r.URL.Path)
+				}
+				requests++
+				return tt.transport(r)
+			})
+
+			_, err := ch.Send(context.Background(), bus.OutboundMessage{ChatID: "user-1", Content: "hello"})
+
+			if !errors.Is(err, tt.want) {
+				t.Fatalf("Send() error = %v, want %v", err, tt.want)
+			}
+			if errors.Is(err, tt.notWant) {
+				t.Fatalf("Send() error = %v, must not be %v", err, tt.notWant)
+			}
+			if requests != 1 {
+				t.Fatalf("Send() made %d sendmessage requests, want 1", requests)
+			}
+		})
+	}
+}
+
+func TestSendMediaClassifiesFailuresForRetry(t *testing.T) {
+	const (
+		uploadURLOK       = `{"ret":0,"errcode":0,"upload_param":"upload-param"}`
+		uploadURLRejected = `{"ret":-2,"errcode":0,"errmsg":"prepare failed"}`
+		sendOK            = `{"ret":0,"errcode":0}`
+		sendRejected      = `{"ret":-2,"errcode":0,"errmsg":"prepare failed"}`
+		otherILinkError   = `{"ret":-1,"errcode":0,"errmsg":"system error"}`
+	)
+	tests := []struct {
+		name          string
+		uploadURLResp string
+		cdnStatus     int
+		sendResp      string
+		wantSends     int
+		want          error
+		notWant       error
+	}{
+		{
+			name:          "sendmessage rejection is not retried",
+			uploadURLResp: uploadURLOK,
+			cdnStatus:     http.StatusOK,
+			sendResp:      sendRejected,
+			wantSends:     1,
+			want:          basechannels.ErrSendFailed,
+			notWant:       basechannels.ErrTemporary,
+		},
+		{
+			name:          "getuploadurl rejection is not retried",
+			uploadURLResp: uploadURLRejected,
+			cdnStatus:     http.StatusOK,
+			sendResp:      sendOK,
+			wantSends:     0,
+			want:          basechannels.ErrSendFailed,
+			notWant:       basechannels.ErrTemporary,
+		},
+		{
+			name:          "other sendmessage error is retried",
+			uploadURLResp: uploadURLOK,
+			cdnStatus:     http.StatusOK,
+			sendResp:      otherILinkError,
+			wantSends:     1,
+			want:          basechannels.ErrTemporary,
+			notWant:       basechannels.ErrSendFailed,
+		},
+		{
+			name:          "other getuploadurl error is retried",
+			uploadURLResp: otherILinkError,
+			cdnStatus:     http.StatusOK,
+			sendResp:      sendOK,
+			wantSends:     0,
+			want:          basechannels.ErrTemporary,
+			notWant:       basechannels.ErrSendFailed,
+		},
+		{
+			name:          "CDN upload failure is retried",
+			uploadURLResp: uploadURLOK,
+			cdnStatus:     http.StatusInternalServerError,
+			sendResp:      sendOK,
+			wantSends:     0,
+			want:          basechannels.ErrTemporary,
+			notWant:       basechannels.ErrSendFailed,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			file := filepath.Join(t.TempDir(), "report.txt")
+			if err := os.WriteFile(file, []byte("weekly report"), 0o600); err != nil {
+				t.Fatalf("write test file: %v", err)
+			}
+
+			calls := map[string]int{}
+			ch := newSendTestChannel(func(r *http.Request) (*http.Response, error) {
+				calls[r.URL.Path]++
+				switch r.URL.Path {
+				case "/ilink/bot/getuploadurl":
+					return iLinkResponse(http.StatusOK, tt.uploadURLResp), nil
+				case "/upload":
+					resp := iLinkResponse(tt.cdnStatus, "")
+					resp.Header.Set("X-Encrypted-Param", "download-param")
+					return resp, nil
+				case "/ilink/bot/sendmessage":
+					return iLinkResponse(http.StatusOK, tt.sendResp), nil
+				}
+				t.Fatalf("unexpected request path %q", r.URL.Path)
+				return nil, nil
+			})
+
+			_, err := ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+				ChatID: "user-1",
+				Parts:  []bus.MediaPart{{Type: "file", Ref: file}},
+			})
+
+			if !errors.Is(err, tt.want) {
+				t.Fatalf("SendMedia() error = %v, want %v", err, tt.want)
+			}
+			if errors.Is(err, tt.notWant) {
+				t.Fatalf("SendMedia() error = %v, must not be %v", err, tt.notWant)
+			}
+			if calls["/ilink/bot/getuploadurl"] != 1 {
+				t.Fatalf("SendMedia() made %d getuploadurl requests, want 1", calls["/ilink/bot/getuploadurl"])
+			}
+			if calls["/ilink/bot/sendmessage"] != tt.wantSends {
+				t.Fatalf(
+					"SendMedia() made %d sendmessage requests, want %d",
+					calls["/ilink/bot/sendmessage"],
+					tt.wantSends,
+				)
+			}
+		})
 	}
 }

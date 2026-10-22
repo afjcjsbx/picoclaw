@@ -188,7 +188,6 @@ func (b *evolutionBridge) handleTurnEndAsync(meta EventMeta, payload TurnEndPayl
 
 	input := evolution.TurnCaseInput{
 		Workspace:             payload.Workspace,
-		WorkspaceID:           payload.Workspace,
 		TurnID:                meta.TurnID,
 		SessionKey:            meta.SessionKey,
 		AgentID:               meta.AgentID,

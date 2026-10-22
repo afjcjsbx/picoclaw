@@ -25,7 +25,6 @@ type RuntimeOptions struct {
 	Config              config.EvolutionConfig
 	Now                 func() time.Time
 	Store               *Store
-	Organizer           *Organizer
 	PatternClusterer    PatternClusterer
 	SuccessJudge        SuccessJudge
 	SkillsRecaller      *SkillsRecaller
@@ -42,7 +41,6 @@ type Runtime struct {
 	now                 func() time.Time
 	writer              *CaseWriter
 	store               *Store
-	organizer           *Organizer
 	patternClusterer    PatternClusterer
 	successJudge        SuccessJudge
 	skillsRecaller      *SkillsRecaller
@@ -55,7 +53,6 @@ type Runtime struct {
 
 type TurnCaseInput struct {
 	Workspace             string
-	WorkspaceID           string
 	TurnID                string
 	SessionKey            string
 	AgentID               string
@@ -76,15 +73,6 @@ func NewRuntime(opts RuntimeOptions) (*Runtime, error) {
 		now = time.Now
 	}
 
-	organizer := opts.Organizer
-	if organizer == nil {
-		organizer = NewOrganizer(OrganizerOptions{
-			MinCaseCount:   opts.Config.EffectiveMinTaskCount(),
-			MinSuccessRate: opts.Config.EffectiveMinSuccessRatio(),
-			Now:            now,
-		})
-	}
-
 	patternClusterer := opts.PatternClusterer
 	if patternClusterer == nil {
 		patternClusterer = NewHeuristicPatternClusterer(opts.Config.EffectiveMinTaskCount(), now)
@@ -94,7 +82,6 @@ func NewRuntime(opts RuntimeOptions) (*Runtime, error) {
 		cfg:                 opts.Config,
 		now:                 now,
 		store:               opts.Store,
-		organizer:           organizer,
 		patternClusterer:    patternClusterer,
 		successJudge:        opts.SuccessJudge,
 		skillsRecaller:      opts.SkillsRecaller,
@@ -581,9 +568,6 @@ func (rt *Runtime) filterRecordsByMinSuccessRatio(
 	admittedRecords []LearningRecord,
 ) []LearningRecord {
 	minRatio := rt.cfg.EffectiveMinSuccessRatio()
-	if minRatio <= 0 {
-		return admittedRecords
-	}
 
 	type successStats struct {
 		success int

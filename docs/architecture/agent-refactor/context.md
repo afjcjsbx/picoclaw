@@ -81,7 +81,7 @@ Turn is the atomic unit for compression. Cutting inside a Turn can orphan tool-c
 
 ## Compression paths
 
-Three compression paths exist, in order of preference:
+Three automatic compression paths exist, in order of preference. A fourth, user-triggered path (`/compact`) is described after them.
 
 ### 1. Async summarization
 
@@ -108,6 +108,17 @@ Drops the oldest ~50% of Turns. If the history is a single Turn with no safe spl
 Stores a compression note in the session summary (not in history messages) so `BuildMessages` can include it in the next system prompt.
 
 This is the fallback for when the token estimate undershoots reality.
+
+### 4. Manual compaction (`/compact`)
+
+`/compact [focus]` calls `ContextManager.Compact` with `Reason: ContextCompressReasonManual`. Unlike the automatic paths it runs synchronously inside the command turn, so the reply can report the outcome. The optional `focus` text travels in `CompactRequest.Instructions` and is added to the summarizer prompts as a priority hint.
+
+When nothing was summarized (history too short, or already compacted), `Compact` returns `ErrNothingToCompact` and the command replies "Nothing to compact yet." Other errors are reported as "Failed to compact context: ...".
+
+- **legacy**: runs `summarizeSession` directly, so the cut point, the last-four-messages tail and the `agent.session.summarize` event match the async path. It takes the same per-session dedup key as `maybeSummarize`; if an async summarization is in flight the command fails with "a summarization is already in progress" instead of racing it.
+- **seahorse**: calls `Engine.CompactNow`, which runs one leaf pass followed by the condensed loop synchronously (the automatic path runs the condensed loop in a background goroutine). The fresh tail stays protected. It shares the `condensing` dedup map with the async loop.
+
+Both implementations leave the automatic prompts unchanged when no focus is given.
 
 ---
 

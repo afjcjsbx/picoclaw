@@ -34,10 +34,17 @@ func DefaultConfig() *Config {
 				SummarizeMessageThreshold: 20,
 				SummarizeTokenPercent:     75,
 				SteeringMode:              "one-at-a-time",
+				MaxParallelTurns:          5,
 				ToolFeedback: ToolFeedbackConfig{
 					Enabled:          false,
 					MaxArgsLength:    300,
 					SeparateMessages: false,
+				},
+				LoopDetection: LoopDetectionConfig{
+					Enabled:           false,
+					RepeatThreshold:   DefaultLoopDetectionRepeatThreshold,
+					CriticalThreshold: DefaultLoopDetectionCriticalThreshold,
+					WindowSize:        DefaultLoopDetectionWindowSize,
 				},
 				SplitOnMarker:       false,
 				MaxLLMRetries:       2,
@@ -46,6 +53,12 @@ func DefaultConfig() *Config {
 		},
 		Session: SessionConfig{
 			Dimensions: []string{"chat"},
+			// Pruning is opt-in and left at its zero value (disabled, every
+			// threshold 0) so no data is ever deleted unexpectedly and an
+			// untouched config round-trips without a "prune" block. See the
+			// recommended values in the SessionPruneConfig documentation.
+			// Vacuum and the check interval fall back to their documented
+			// defaults through VacuumEnabled and EffectiveCheckIntervalMinutes.
 		},
 		Evolution: EvolutionConfig{
 			Enabled:         false,
@@ -306,17 +319,20 @@ func DefaultConfig() *Config {
 			},
 		},
 		Gateway: GatewayConfig{
-			Host:      "localhost",
-			Port:      18790,
-			HotReload: false,
-			LogLevel:  DefaultGatewayLogLevel,
+			Host:          "localhost",
+			Port:          18790,
+			HotReload:     false,
+			LogLevel:      DefaultGatewayLogLevel,
+			LogMaxSizeMB:  DefaultGatewayLogMaxSizeMB,
+			LogMaxBackups: DefaultGatewayLogMaxBackups,
 		},
 		Events: EventsConfig{
 			Logging: defaultEventLoggingConfig(),
 		},
 		Tools: ToolsConfig{
-			FilterSensitiveData: true,
-			FilterMinLength:     8,
+			FilterSensitiveData:  true,
+			FilterMinLength:      8,
+			MaxInlineResultChars: DefaultMaxInlineResultChars,
 			MediaCleanup: MediaCleanupConfig{
 				ToolConfig: ToolConfig{
 					Enabled: true,
@@ -399,6 +415,7 @@ func DefaultConfig() *Config {
 				EnableDenyPatterns: true,
 				AllowRemote:        true,
 				TimeoutSeconds:     60,
+				MaxOutputChars:     DefaultExecMaxOutputChars,
 			},
 			Skills: SkillsToolsConfig{
 				ToolConfig: ToolConfig{
@@ -475,13 +492,17 @@ func DefaultConfig() *Config {
 				Enabled:         true,
 				Mode:            ReadFileModeBytes,
 				MaxReadFileSize: 64 * 1024, // 64KB
+				MaxLines:        DefaultReadFileMaxLines,
+				MaxLineLength:   DefaultReadFileMaxLineLength,
 			},
 			Serial: ToolConfig{
 				Enabled: false, // Hardware tool - requires host serial ports
 			},
+			SearchFiles: ToolConfig{Enabled: true},
 			Spawn: ToolConfig{
 				Enabled: true,
 			},
+			Todo: ToolConfig{Enabled: true},
 			SpawnStatus: ToolConfig{
 				Enabled: false,
 			},
@@ -597,7 +618,6 @@ func defaultChannels() ChannelsConfig {
 			"settings": map[string]any{
 				"ping_interval":   30,
 				"read_timeout":    60,
-				"write_timeout":   10,
 				"max_connections": 100,
 				"streaming":       map[string]any{"enabled": true},
 			},

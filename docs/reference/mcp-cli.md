@@ -116,13 +116,14 @@ Supported flags:
 |------|---------|
 | `--env`, `-e` | Add a stdio environment variable in `KEY=value` format. Repeatable. Values are saved to config. |
 | `--env-file` | Attach an env file path to a stdio server. Recommended for secrets you do not want stored inline in `config.json`. |
+| `--inherit-env` | Pass the full PicoClaw process environment to this stdio server. By default, only basic process variables are inherited. |
 | `--header`, `-H` | Add an HTTP header in `Name: Value` or `Name=Value` format. Repeatable. |
 | `--transport`, `-t` | Transport type: `stdio` (default), `http` / `streamable-http`, or `sse`. |
 | `--force`, `-f` | Overwrite an existing server entry without confirmation. |
 | `--deferred` | Mark the server as deferred: tools are hidden and discoverable on demand. |
 | `--no-deferred` | Mark the server as non-deferred: tools are always loaded into context. |
 
-When neither `--deferred` nor `--no-deferred` is passed, the `deferred` field is omitted from the stored config and the global `discovery.enabled` value applies at runtime.
+When neither `--deferred` nor `--no-deferred` is passed, the `deferred` field is omitted from the stored config and the global `discovery.enabled` value applies at runtime. A stored `deferred: true` only takes effect when `discovery.enabled` is `true`; otherwise the server's tools stay visible.
 
 Supported forms:
 
@@ -195,6 +196,7 @@ For `stdio`:
 - `[args...]` are stored in `args`
 - `--env` is supported
 - `--env-file` is supported and stored in `env_file`
+- `--inherit-env` is supported and stored as `inherit_env: true`
 - `--header` is rejected
 - `-- <command> [args...]` is supported and recommended for unambiguous parsing
 
@@ -204,6 +206,7 @@ For `http` / `streamable-http` / `sse`:
 - extra command args are rejected
 - `--env` is rejected
 - `--env-file` is rejected
+- `--inherit-env` is rejected
 - `--header` is supported and stored in `headers`
 - `http` and `streamable-http` use streamable HTTP request-response mode
 - `sse` uses the same streamable HTTP transport, but also enables the optional standalone SSE listener for server-initiated notifications
@@ -328,6 +331,35 @@ It is useful when:
 - you want to debug one server without probing the whole list
 - the entry is currently disabled in config but you still want to validate its definition
 
+## `picoclaw mcp login` and `logout`
+
+Remote MCP servers can use browser OAuth instead of a static bearer header:
+
+```bash
+picoclaw mcp login remote
+picoclaw mcp logout remote
+```
+
+For a plugin server, add `"mcp_oauth": {"remote": {}}` to its plugin entry
+and use its qualified name:
+
+```bash
+picoclaw mcp login supermemory:supermemory
+picoclaw mcp logout supermemory:supermemory
+```
+
+Login discovers the server's OAuth metadata, opens the browser, and receives
+the callback on a local loopback port. Use `--no-browser` to print the URL,
+`--callback-port` for a fixed port, `--scope` for requested scopes, and
+`--client-id` with `--issuer` for a registered public client. The login timeout
+defaults to five minutes. Tokens are stored under `$PICOCLAW_HOME/auth/mcp/`
+with owner-only permissions, outside `config.json`; background connections
+reuse and refresh them. Logout removes local credentials but does not revoke
+server-side tokens. Restart a running gateway to close its active session.
+
+OAuth cannot be combined with an `Authorization` header. The MCP endpoint and
+OAuth URLs must use HTTPS, except for loopback development servers.
+
 ## `picoclaw mcp edit`
 
 Syntax:
@@ -359,5 +391,5 @@ For advanced cases:
 
 ## Related Docs
 
-- [Tools Configuration](tools_configuration.md#mcp-tool): MCP config structure, transports, discovery, and examples
+- [MCP tools](../tools/mcp.md): MCP config structure, transports, discovery, and examples
 - [README](../README.md): high-level overview

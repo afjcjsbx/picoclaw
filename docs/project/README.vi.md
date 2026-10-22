@@ -1,10 +1,12 @@
 <div align="center">
-<img src="../../assets/logo.webp" alt="PicoClaw" width="512">
+<p align="center">
+  <img src="../../assets/logo.webp" alt="PicoClaw" width="200">
+</p>
 
 <h1>PicoClaw: Trợ lý AI Siêu Nhẹ viết bằng Go</h1>
 
 <h3>Phần cứng $10 · RAM 10MB · Khởi động ms · Let's Go, PicoClaw!</h3>
-  <p>
+  <p align="center">
     <img src="https://img.shields.io/badge/Go-1.27.1+-00ADD8?style=flat&logo=go&logoColor=white" alt="Go">
     <img src="https://img.shields.io/badge/Arch-x86__64%2C%20ARM64%2C%20MIPS%2C%20RISC--V%2C%20LoongArch-blue" alt="Hardware">
     <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
@@ -18,7 +20,9 @@
     <a href="https://discord.gg/V4sAZ9XWpN"><img src="https://img.shields.io/badge/Discord-Community-4c60eb?style=flat&logo=discord&logoColor=white" alt="Discord"></a>
   </p>
 
-[中文](README.zh.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | [Português](README.pt-br.md) | **Tiếng Việt** | [Français](README.fr.md) | [Italiano](README.it.md) | [Bahasa Indonesia](README.id.md) | [Malay](README.ms.md) | [English](../../README.md)
+<p align="center">
+  <a href="README.zh.md">中文</a> | <a href="README.ja.md">日本語</a> | <a href="README.ko.md">한국어</a> | <a href="README.pt-br.md">Português</a> | <strong>Tiếng Việt</strong> | <a href="README.fr.md">Français</a> | <a href="README.it.md">Italiano</a> | <a href="README.id.md">Bahasa Indonesia</a> | <a href="README.ms.md">Malay</a> | <a href="../../README.md">English</a>
+</p>
 
 </div>
 
@@ -56,6 +60,13 @@
 
 ## 📢 Tin tức
 
+2026-09-29 🚀 **[v0.4.0 Released!](https://github.com/afjcjsbx/picoclaw/releases/tag/v0.4.0)** This substantial release adds MCP CLI management and Web UI configuration, native Anthropic Messages API support, configurable web search (including Keenable and Kagi), configurable logging and virtual models, cross-platform serial-tool support, enhanced hooks and isolation, plus numerous channel, provider, security, and build fixes.
+
+2026-09-28 🌱 **Project revived!** Development has resumed and will continue to be actively maintained in this fork.
+
+<details>
+<summary>Earlier news...</summary>
+
 2026-05-11 🛒 **LicheeRV-Claw đã có trên AliExpress!** Bạn hiện có thể mua LicheeRV-Claw trên [AliExpress](https://www.aliexpress.com/item/1005006519668532.html), giúp việc thử PicoClaw trên phần cứng RISC-V nhỏ gọn dễ dàng hơn.
 
 <p align="center">
@@ -64,7 +75,7 @@
   </a>
 </p>
 
-2026-03-31 📱 **Hỗ trợ Android!** PicoClaw giờ chạy trên Android! Tải APK tại [picoclaw.io](https://picoclaw.io/download)
+2026-03-31 📱 **Hỗ trợ Android!** PicoClaw giờ chạy trên Android! Tải APK tại [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases)
 
 2026-03-25 🚀 **v0.2.4 đã phát hành!** Tái cấu trúc kiến trúc Agent (SubTurn, Hooks, Steering, EventBus), tích hợp WeChat/WeCom, tăng cường bảo mật (.security.yml, lọc dữ liệu nhạy cảm), provider mới (AWS Bedrock, Azure, Xiaomi MiMo) và 35 bản vá lỗi. PicoClaw đã đạt **26K Stars**!
 
@@ -74,12 +85,9 @@
 
 2026-02-28 📦 **v0.2.0** phát hành với hỗ trợ Docker Compose và Web UI Launcher.
 
-<details>
-<summary>Tin tức trước đó...</summary>
-
 2026-02-26 🎉 PicoClaw đạt **20K Stars** chỉ trong 17 ngày! Tự động điều phối Channel và giao diện khả năng đã hoạt động.
 
-2026-02-16 🎉 PicoClaw vượt 12K Stars trong một tuần! Vai trò người duy trì cộng đồng và [Lộ trình](../../ROADMAP.md) chính thức ra mắt.
+2026-02-16 🎉 PicoClaw vượt 12K Stars trong một tuần! Vai trò người duy trì cộng đồng và Lộ trình chính thức ra mắt.
 
 2026-02-13 🎉 PicoClaw vượt 5000 Stars trong 4 ngày! Lộ trình dự án và nhóm nhà phát triển đang được xây dựng.
 
@@ -120,7 +128,7 @@ _*Các bản build gần đây có thể dùng 10-20MB do merge PR nhanh. Tối 
 
 </div>
 
-> **[Danh sách Tương thích Phần cứng](../guides/hardware-compatibility.vi.md)** — Xem tất cả các board đã được kiểm tra, từ RISC-V $5 đến Raspberry Pi đến điện thoại Android. Board của bạn chưa có trong danh sách? Gửi PR!
+> **[Danh sách Tương thích Phần cứng](../guides/hardware-compatibility.md)** — Xem tất cả các board đã được kiểm tra, từ RISC-V $5 đến Raspberry Pi đến điện thoại Android. Board của bạn chưa có trong danh sách? Gửi PR!
 
 <p align="center">
 <img src="../../assets/hardware-banner.jpg" alt="PicoClaw Hardware Compatibility" width="100%">
@@ -162,13 +170,9 @@ PicoClaw có thể được triển khai trên hầu hết mọi thiết bị Li
 
 ## 📦 Cài đặt
 
-### Tải xuống từ picoclaw.io (Khuyến nghị)
-
-Truy cập **[picoclaw.io](https://picoclaw.io)** — website chính thức tự động phát hiện nền tảng của bạn và cung cấp tải xuống một cú nhấp. Không cần chọn kiến trúc thủ công.
-
 ### Tải xuống binary đã biên dịch sẵn
 
-Ngoài ra, tải binary cho nền tảng của bạn từ trang [GitHub Releases](https://github.com/sipeed/picoclaw/releases).
+Ngoài ra, tải binary cho nền tảng của bạn từ trang [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases).
 
 ### Xây dựng từ mã nguồn (để phát triển)
 
@@ -178,7 +182,7 @@ Yêu cầu:
 - Node.js 22+ và pnpm 10.33.0+ cho các bản build Web UI / launcher
 
 ```bash
-git clone https://github.com/sipeed/picoclaw.git
+git clone https://github.com/afjcjsbx/picoclaw.git
 
 cd picoclaw
 make deps
@@ -212,7 +216,7 @@ WebUI Launcher cung cấp giao diện dựa trên trình duyệt để cấu hì
 
 **Tùy chọn 1: Nhấp đúp (Desktop)**
 
-Sau khi tải xuống từ [picoclaw.io](https://picoclaw.io), nhấp đúp vào `picoclaw-launcher` (hoặc `picoclaw-launcher.exe` trên Windows). Trình duyệt của bạn sẽ tự động mở tại `http://localhost:18800`.
+Sau khi tải xuống từ [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases), nhấp đúp vào `picoclaw-launcher` (hoặc `picoclaw-launcher.exe` trên Windows). Trình duyệt của bạn sẽ tự động mở tại `http://localhost:18800`.
 
 **Tùy chọn 2: Dòng lệnh**
 
@@ -242,7 +246,7 @@ Mở WebUI, sau đó: **1)** Cấu hình Provider (thêm API key LLM của bạn
 
 ```bash
 # 1. Clone this repo
-git clone https://github.com/sipeed/picoclaw.git
+git clone https://github.com/afjcjsbx/picoclaw.git
 cd picoclaw
 
 # 2. First run — auto-generates docker/data/config.json then exits
@@ -315,7 +319,7 @@ Xem trước:
   </tr>
 </table>
 
-Tải APK từ [picoclaw.io](https://picoclaw.io/download/) và cài đặt trực tiếp. Không cần Termux!
+Tải APK từ [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases) và cài đặt trực tiếp. Không cần Termux!
 
 **Tùy chọn 2: Termux**
 
@@ -327,7 +331,7 @@ Tải APK từ [picoclaw.io](https://picoclaw.io/download/) và cài đặt tr�
 
 ```bash
 # Download the latest release
-wget https://github.com/sipeed/picoclaw/releases/latest/download/picoclaw_Linux_arm64.tar.gz
+wget https://github.com/afjcjsbx/picoclaw/releases/latest/download/picoclaw_Linux_arm64.tar.gz
 tar xzf picoclaw_Linux_arm64.tar.gz
 pkg install proot
 termux-chroot ./picoclaw onboard   # chroot provides a standard Linux filesystem layout
@@ -442,7 +446,7 @@ PicoClaw hỗ trợ 30+ Provider LLM thông qua cấu hình `model_list`. Sử d
 }
 ```
 
-Để biết chi tiết cấu hình provider đầy đủ, xem [Providers & Models](../guides/providers.vi.md).
+Để biết chi tiết cấu hình provider đầy đủ, xem [Providers & Models](../guides/providers.md).
 
 </details>
 
@@ -454,8 +458,8 @@ Trò chuyện với PicoClaw của bạn qua 17+ nền tảng nhắn tin:
 |---------|-----------|----------|----------|
 | **Telegram** | Dễ (bot token) | Long polling | [Hướng dẫn](../channels/telegram/README.vi.md) |
 | **Discord** | Dễ (bot token + intents) | WebSocket | [Hướng dẫn](../channels/discord/README.vi.md) |
-| **WhatsApp** | Dễ (quét QR hoặc bridge URL) | Native / Bridge | [Hướng dẫn](../guides/chat-apps.vi.md#whatsapp) |
-| **Weixin** | Dễ (quét QR gốc) | iLink API | [Hướng dẫn](../guides/chat-apps.vi.md#weixin) |
+| **WhatsApp** | Dễ (quét QR hoặc bridge URL) | Native / Bridge | [Hướng dẫn](../guides/chat-apps.md#whatsapp) |
+| **Weixin** | Dễ (quét QR gốc) | iLink API | [Hướng dẫn](../guides/chat-apps.md#weixin) |
 | **QQ** | Dễ (AppID + AppSecret) | WebSocket | [Hướng dẫn](../channels/qq/README.vi.md) |
 | **Slack** | Dễ (bot + app token) | Socket Mode | [Hướng dẫn](../channels/slack/README.vi.md) |
 | **Matrix** | Trung bình (homeserver + token) | Sync API | [Hướng dẫn](../channels/matrix/README.vi.md) |
@@ -463,7 +467,7 @@ Trò chuyện với PicoClaw của bạn qua 17+ nền tảng nhắn tin:
 | **Feishu / Lark** | Trung bình (App ID + Secret) | WebSocket/SDK | [Hướng dẫn](../channels/feishu/README.vi.md) |
 | **LINE** | Trung bình (credentials + webhook) | Webhook | [Hướng dẫn](../channels/line/README.vi.md) |
 | **WeCom** | Dễ (đăng nhập QR hoặc thủ công) | WebSocket | [Hướng dẫn](../channels/wecom/README.vi.md) |
-| **IRC** | Trung bình (server + nick) | IRC protocol | [Hướng dẫn](../guides/chat-apps.vi.md#irc) |
+| **IRC** | Trung bình (server + nick) | IRC protocol | [Hướng dẫn](../guides/chat-apps.md#irc) |
 | **OneBot** | Trung bình (WebSocket URL) | OneBot v11 | [Hướng dẫn](../channels/onebot/README.vi.md) |
 | **MaixCam** | Dễ (bật) | TCP socket | [Hướng dẫn](../channels/maixcam/README.vi.md) |
 | **Pico** | Dễ (bật) | Native protocol | Tích hợp sẵn |
@@ -471,9 +475,9 @@ Trò chuyện với PicoClaw của bạn qua 17+ nền tảng nhắn tin:
 
 > Tất cả các Channel dựa trên webhook dùng chung một Gateway HTTP server (`gateway.host`:`gateway.port`, mặc định `127.0.0.1:18790`). Feishu sử dụng chế độ WebSocket/SDK và không dùng HTTP server chung.
 
-> Mức độ chi tiết log được kiểm soát bởi `gateway.log_level` (mặc định: `warn`). Các giá trị được hỗ trợ: `debug`, `info`, `warn`, `error`, `fatal`. Cũng có thể đặt qua `PICOCLAW_LOG_LEVEL`. Xem [Cấu hình](../guides/configuration.vi.md#mức-log-của-gateway) để biết thêm chi tiết.
+> Mức độ chi tiết log được kiểm soát bởi `gateway.log_level` (mặc định: `warn`). Các giá trị được hỗ trợ: `debug`, `info`, `warn`, `error`, `fatal`. Cũng có thể đặt qua `PICOCLAW_LOG_LEVEL`. Xem [Cấu hình](../guides/configuration.md#gateway-log-level) để biết thêm chi tiết.
 
-Để biết hướng dẫn thiết lập Channel chi tiết, xem [Cấu hình Ứng dụng Chat](../guides/chat-apps.vi.md).
+Để biết hướng dẫn thiết lập Channel chi tiết, xem [Cấu hình Ứng dụng Chat](../guides/chat-apps.md).
 
 ## 🔧 Tools
 
@@ -493,7 +497,7 @@ PicoClaw có thể tìm kiếm web để cung cấp thông tin cập nhật. C�
 
 ### ⚙️ Các Tools Khác
 
-PicoClaw bao gồm các tool tích hợp sẵn cho thao tác tệp, thực thi mã, lên lịch và nhiều hơn nữa. Xem [Cấu hình Tools](../reference/tools_configuration.vi.md) để biết chi tiết.
+PicoClaw bao gồm các tool tích hợp sẵn cho thao tác tệp, thực thi mã, lên lịch và nhiều hơn nữa. Xem [Cấu hình Tools](../reference/tools_configuration.md) để biết chi tiết.
 
 ## 🎯 Skills
 
@@ -523,11 +527,13 @@ Thêm vào `config.json` của bạn:
 }
 ```
 
-Để biết thêm chi tiết, xem [Cấu hình Tools - Skills](../reference/tools_configuration.vi.md#skills-tool).
+Để biết thêm chi tiết, xem [Cấu hình Tools - Skills](../tools/skills.md).
 
 ## 🔗 MCP (Model Context Protocol)
 
 PicoClaw hỗ trợ [MCP](https://modelcontextprotocol.io/) gốc — kết nối bất kỳ MCP server nào để mở rộng khả năng Agent của bạn với các tool và nguồn dữ liệu bên ngoài.
+
+PicoClaw là trợ lý nhẹ, vì vậy nên ưu tiên dùng MCP server từ xa. Với server cục bộ, hãy chọn binary được biên dịch native và tránh `npx`, `uvx` hoặc các trình quản lý dependency nặng khác.
 
 ```json
 {
@@ -535,10 +541,15 @@ PicoClaw hỗ trợ [MCP](https://modelcontextprotocol.io/) gốc — kết nố
     "mcp": {
       "enabled": true,
       "servers": {
-        "filesystem": {
+        "browserbase": {
           "enabled": true,
-          "command": "npx",
-          "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+          "deferred": false,
+          "command": "",
+          "type": "http",
+          "url": "https://mcp.browserbase.com/mcp?browserbaseApiKey=API_KEY",
+          "headers": {
+            "BROWSERBASE_PROJECT_ID": "********"
+          }
         }
       }
     }
@@ -546,7 +557,7 @@ PicoClaw hỗ trợ [MCP](https://modelcontextprotocol.io/) gốc — kết nố
 }
 ```
 
-Để biết cấu hình MCP đầy đủ (stdio, SSE, HTTP transports, Tool Discovery), xem [Cấu hình Tools - MCP](../reference/tools_configuration.vi.md#mcp-tool).
+Để biết cấu hình MCP đầy đủ (stdio, SSE, HTTP transports, Tool Discovery), xem [Cấu hình Tools - MCP](../tools/mcp.md).
 
 ## <img src="../../assets/clawdchat-icon.png" width="24" height="24" alt="ClawdChat"> Tham gia Mạng xã hội Agent
 
@@ -589,23 +600,23 @@ PicoClaw hỗ trợ nhắc nhở đã lên lịch và tác vụ định kỳ th�
 
 | Chủ đề | Mô tả |
 |--------|-------|
-| [Docker & Khởi động Nhanh](../guides/docker.vi.md) | Thiết lập Docker Compose, chế độ Launcher/Agent |
-| [Ứng dụng Chat](../guides/chat-apps.vi.md) | Hướng dẫn thiết lập 17+ Channel |
-| [Cấu hình](../guides/configuration.vi.md) | Biến môi trường, bố cục workspace, sandbox bảo mật |
-| [Providers & Models](../guides/providers.vi.md) | 30+ Provider LLM, định tuyến mô hình, cấu hình model_list |
-| [Spawn & Tác vụ Bất đồng bộ](../guides/spawn-tasks.vi.md) | Tác vụ nhanh, tác vụ dài với spawn, điều phối sub-agent bất đồng bộ |
+| [Docker & Khởi động Nhanh](../guides/docker.md) | Thiết lập Docker Compose, chế độ Launcher/Agent |
+| [Ứng dụng Chat](../guides/chat-apps.md) | Hướng dẫn thiết lập 17+ Channel |
+| [Cấu hình](../guides/configuration.md) | Biến môi trường, bố cục workspace, sandbox bảo mật |
+| [Providers & Models](../guides/providers.md) | 30+ Provider LLM, định tuyến mô hình, cấu hình model_list |
+| [Spawn & Tác vụ Bất đồng bộ](../guides/spawn-tasks.md) | Tác vụ nhanh, tác vụ dài với spawn, điều phối sub-agent bất đồng bộ |
 | [Hooks](../architecture/hooks/README.md) | Hệ thống hook hướng sự kiện: observer, interceptor, approval hook |
 | [Steering](../architecture/steering.md) | Chèn tin nhắn vào vòng lặp agent đang chạy |
 | [SubTurn](../architecture/subturn.md) | Điều phối subagent, kiểm soát đồng thời, vòng đời |
-| [Khắc phục sự cố](../operations/troubleshooting.vi.md) | Các vấn đề thường gặp và giải pháp |
-| [Cấu hình Tools](../reference/tools_configuration.vi.md) | Bật/tắt từng tool, chính sách exec, MCP, Skills |
-| [Tương thích Phần cứng](../guides/hardware-compatibility.vi.md) | Các board đã kiểm tra, yêu cầu tối thiểu |
+| [Khắc phục sự cố](../operations/troubleshooting.md) | Các vấn đề thường gặp và giải pháp |
+| [Cấu hình Tools](../reference/tools_configuration.md) | Bật/tắt từng tool, chính sách exec, MCP, Skills |
+| [Tương thích Phần cứng](../guides/hardware-compatibility.md) | Các board đã kiểm tra, yêu cầu tối thiểu |
 
 ## 🤝 Đóng góp & Lộ trình
 
 PR luôn được chào đón! Codebase được thiết kế nhỏ gọn và dễ đọc.
 
-Xem [Lộ trình Cộng đồng](https://github.com/sipeed/picoclaw/issues/988) và [CONTRIBUTING.md](../../CONTRIBUTING.md) để biết hướng dẫn.
+Xem [Lộ trình Cộng đồng](https://github.com/afjcjsbx/picoclaw/issues/988) và [CONTRIBUTING.md](../../CONTRIBUTING.md) để biết hướng dẫn.
 
 Nhóm nhà phát triển đang được xây dựng, tham gia sau khi PR đầu tiên của bạn được merge!
 

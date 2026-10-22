@@ -287,7 +287,7 @@ func (c *LLMPatternClusterer) BuildPatternsWithEvidence(
 			minSuccessRatio,
 		)
 	}
-	patterns, clusteredIDs := c.validateAndBuildPatternsWithEvidence(
+	patterns, clusteredIDs, complete := c.validateAndBuildPatternsWithEvidence(
 		workspace,
 		payload.Clusters,
 		successfulTasks,
@@ -295,6 +295,24 @@ func (c *LLMPatternClusterer) BuildPatternsWithEvidence(
 		existing,
 		minSuccessRatio,
 	)
+	if !complete {
+		// The LLM omitted some acceptable evidence tasks from its clusters.
+		// Keeping the partial result is unsafe: leaving failed tasks out of a
+		// cluster inflates its success ratio and lets it pass the threshold.
+		// Distrust the whole result and run the deterministic clusterer, which
+		// derives the ratio from the full evidence, instead of silently
+		// learning nothing for this run. The trade-off is that valid LLM
+		// clusters are discarded along with the incomplete ones.
+		return buildFallbackPatternsWithEvidence(
+			ctx,
+			fallback,
+			workspace,
+			successfulTasks,
+			evidenceTasks,
+			existing,
+			minSuccessRatio,
+		)
+	}
 	return patterns, clusteredIDs, nil
 }
 
@@ -464,7 +482,7 @@ func (c *LLMPatternClusterer) validateAndBuildPatternsWithEvidence(
 	evidenceTasks []LearningRecord,
 	existing []LearningRecord,
 	minSuccessRatio float64,
-) ([]LearningRecord, []string) {
+) ([]LearningRecord, []string, bool) {
 	evidenceByID := make(map[string]LearningRecord, len(evidenceTasks))
 	for _, task := range evidenceTasks {
 		evidenceByID[task.ID] = task
@@ -529,9 +547,9 @@ func (c *LLMPatternClusterer) validateAndBuildPatternsWithEvidence(
 		clusteredIDs = append(clusteredIDs, collectRecordIDs(clusterEvidence)...)
 	}
 	if len(assigned) != len(evidenceByID) {
-		return nil, nil
+		return nil, nil, false
 	}
-	return patterns, clusteredIDs
+	return patterns, clusteredIDs, true
 }
 
 func parseLLMClusterResponse(content string) (llmClusterResponse, bool) {

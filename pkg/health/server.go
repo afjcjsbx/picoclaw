@@ -202,9 +202,14 @@ func (s *Server) reloadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The reload itself runs asynchronously on the gateway loop, so the request
+	// is accepted for processing (202) rather than completed (200).
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "reload triggered"})
+	w.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"status": "reload scheduled",
+		"detail": "the reload runs asynchronously; check the logs or gateway.reload.* runtime events for the outcome",
+	})
 }
 
 func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {

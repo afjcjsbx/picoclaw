@@ -3,16 +3,18 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/sipeed/picoclaw/pkg/memory"
 	"github.com/sipeed/picoclaw/pkg/providers"
 )
 
 // JSONLBackend adapts a memory.Store into the SessionStore interface.
-// Write errors are logged rather than returned, matching the fire-and-forget
-// contract of SessionManager that the agent loop relies on.
+// Read and write methods take a context and return errors: the caller decides
+// whether to surface, retry or drop a failed operation.
 type JSONLBackend struct {
 	store memory.Store
 }
@@ -39,27 +41,32 @@ func NewJSONLBackend(store memory.Store) *JSONLBackend {
 	return &JSONLBackend{store: store}
 }
 
-func (b *JSONLBackend) resolveSessionKey(sessionKey string) string {
+func (b *JSONLBackend) resolveSessionKey(ctx context.Context, sessionKey string) (string, error) {
 	metaStore, ok := b.store.(metaAwareStore)
 	if !ok {
-		return sessionKey
+		return sessionKey, nil
 	}
-	resolved, found, err := metaStore.ResolveSessionKey(context.Background(), sessionKey)
+	resolved, found, err := metaStore.ResolveSessionKey(ctx, sessionKey)
 	if err != nil {
-		log.Printf("session: resolve session key: %v", err)
-		return sessionKey
+		return "", fmt.Errorf("session: resolve session key: %w", err)
 	}
 	if found && resolved != "" {
-		return resolved
+		return resolved, nil
 	}
-	return sessionKey
+	return sessionKey, nil
 }
 
 // ResolveSessionKey maps aliases onto their canonical session key when the
 // underlying store supports structured metadata. Unknown aliases fall back to
-// the original input so existing callers remain compatible.
+// the original input so existing callers remain compatible. Resolution failures
+// are logged and fall back to the input key.
 func (b *JSONLBackend) ResolveSessionKey(sessionKey string) string {
-	return b.resolveSessionKey(sessionKey)
+	resolved, err := b.resolveSessionKey(context.Background(), sessionKey)
+	if err != nil {
+		log.Printf("session: resolve session key: %v", err)
+		return sessionKey
+	}
+	return resolved
 }
 
 // EnsureSessionMetadata persists scope and alias metadata for a session.
@@ -101,7 +108,7 @@ func (b *JSONLBackend) GetSessionScope(sessionKey string) *SessionScope {
 	if !ok {
 		return nil
 	}
-	sessionKey = b.resolveSessionKey(sessionKey)
+	sessionKey = b.ResolveSessionKey(sessionKey)
 	meta, err := metaStore.GetSessionMeta(context.Background(), sessionKey)
 	if err != nil {
 		log.Printf("session: get session metadata: %v", err)
@@ -118,67 +125,104 @@ func (b *JSONLBackend) GetSessionScope(sessionKey string) *SessionScope {
 	return CloneScope(&scope)
 }
 
-func (b *JSONLBackend) AddMessage(sessionKey, role, content string) {
-	sessionKey = b.resolveSessionKey(sessionKey)
-	if err := b.store.AddMessage(context.Background(), sessionKey, role, content); err != nil {
-		log.Printf("session: add message: %v", err)
-	}
-}
-
-func (b *JSONLBackend) AddFullMessage(sessionKey string, msg providers.Message) {
-	sessionKey = b.resolveSessionKey(sessionKey)
-	if err := b.store.AddFullMessage(context.Background(), sessionKey, msg); err != nil {
-		log.Printf("session: add full message: %v", err)
-	}
-}
-
-func (b *JSONLBackend) GetHistory(key string) []providers.Message {
-	key = b.resolveSessionKey(key)
-	msgs, err := b.store.GetHistory(context.Background(), key)
+// AddMessage appends a simple role/content message to the session.
+func (b *JSONLBackend) AddMessage(ctx context.Context, sessionKey, role, content string) error {
+	sessionKey, err := b.resolveSessionKey(ctx, sessionKey)
 	if err != nil {
-		log.Printf("session: get history: %v", err)
-		return []providers.Message{}
+		return err
 	}
-	return msgs
+	if err := b.store.AddMessage(ctx, sessionKey, role, content); err != nil {
+		return fmt.Errorf("session: add message: %w", err)
+	}
+	return nil
 }
 
-func (b *JSONLBackend) GetSummary(key string) string {
-	key = b.resolveSessionKey(key)
-	summary, err := b.store.GetSummary(context.Background(), key)
+// AddFullMessage appends a complete message including tool calls.
+func (b *JSONLBackend) AddFullMessage(ctx context.Context, sessionKey string, msg providers.Message) error {
+	sessionKey, err := b.resolveSessionKey(ctx, sessionKey)
 	if err != nil {
-		log.Printf("session: get summary: %v", err)
-		return ""
+		return err
 	}
-	return summary
+	if err := b.store.AddFullMessage(ctx, sessionKey, msg); err != nil {
+		return fmt.Errorf("session: add full message: %w", err)
+	}
+	return nil
 }
 
-func (b *JSONLBackend) SetSummary(key, summary string) {
-	key = b.resolveSessionKey(key)
-	if err := b.store.SetSummary(context.Background(), key, summary); err != nil {
-		log.Printf("session: set summary: %v", err)
+// GetHistory returns the message history for the session.
+func (b *JSONLBackend) GetHistory(ctx context.Context, key string) ([]providers.Message, error) {
+	key, err := b.resolveSessionKey(ctx, key)
+	if err != nil {
+		return nil, err
 	}
+	msgs, err := b.store.GetHistory(ctx, key)
+	if err != nil {
+		return nil, fmt.Errorf("session: get history: %w", err)
+	}
+	return msgs, nil
 }
 
-func (b *JSONLBackend) SetHistory(key string, history []providers.Message) {
-	key = b.resolveSessionKey(key)
-	if err := b.store.SetHistory(context.Background(), key, history); err != nil {
-		log.Printf("session: set history: %v", err)
+// GetSummary returns the conversation summary, or "" when none is stored.
+func (b *JSONLBackend) GetSummary(ctx context.Context, key string) (string, error) {
+	key, err := b.resolveSessionKey(ctx, key)
+	if err != nil {
+		return "", err
 	}
+	summary, err := b.store.GetSummary(ctx, key)
+	if err != nil {
+		return "", fmt.Errorf("session: get summary: %w", err)
+	}
+	return summary, nil
 }
 
-func (b *JSONLBackend) TruncateHistory(key string, keepLast int) {
-	key = b.resolveSessionKey(key)
-	if err := b.store.TruncateHistory(context.Background(), key, keepLast); err != nil {
-		log.Printf("session: truncate history: %v", err)
+// SetSummary replaces the conversation summary.
+func (b *JSONLBackend) SetSummary(ctx context.Context, key, summary string) error {
+	key, err := b.resolveSessionKey(ctx, key)
+	if err != nil {
+		return err
 	}
+	if err := b.store.SetSummary(ctx, key, summary); err != nil {
+		return fmt.Errorf("session: set summary: %w", err)
+	}
+	return nil
+}
+
+// SetHistory replaces the full message history.
+func (b *JSONLBackend) SetHistory(ctx context.Context, key string, history []providers.Message) error {
+	key, err := b.resolveSessionKey(ctx, key)
+	if err != nil {
+		return err
+	}
+	if err := b.store.SetHistory(ctx, key, history); err != nil {
+		return fmt.Errorf("session: set history: %w", err)
+	}
+	return nil
+}
+
+// TruncateHistory keeps only the last keepLast messages.
+func (b *JSONLBackend) TruncateHistory(ctx context.Context, key string, keepLast int) error {
+	key, err := b.resolveSessionKey(ctx, key)
+	if err != nil {
+		return err
+	}
+	if err := b.store.TruncateHistory(ctx, key, keepLast); err != nil {
+		return fmt.Errorf("session: truncate history: %w", err)
+	}
+	return nil
 }
 
 // Save persists session state. Since the JSONL store fsyncs every write
 // immediately, the data is already durable. Save runs compaction to reclaim
 // space from logically truncated messages (no-op when there are none).
-func (b *JSONLBackend) Save(key string) error {
-	key = b.resolveSessionKey(key)
-	return b.store.Compact(context.Background(), key)
+func (b *JSONLBackend) Save(ctx context.Context, key string) error {
+	key, err := b.resolveSessionKey(ctx, key)
+	if err != nil {
+		return err
+	}
+	if err := b.store.Compact(ctx, key); err != nil {
+		return fmt.Errorf("session: compact: %w", err)
+	}
+	return nil
 }
 
 // Close releases resources held by the underlying store.
@@ -189,4 +233,40 @@ func (b *JSONLBackend) Close() error {
 // ListSessions returns all known session keys.
 func (b *JSONLBackend) ListSessions() []string {
 	return b.store.ListSessions()
+}
+
+// sessionDeletingStore is implemented by memory stores that can physically
+// remove a session. It is optional so alternative backends remain compatible.
+type sessionDeletingStore interface {
+	DeleteSession(ctx context.Context, sessionKey string) error
+}
+
+// sessionActivityStore is implemented by memory stores that can report when a
+// session was last written.
+type sessionActivityStore interface {
+	LastActivity(sessionKey string) time.Time
+}
+
+// LastActivity returns when the session was last written, or the zero time when
+// the backing store cannot tell. Used by automatic session pruning, which only
+// passes canonical keys, so no alias resolution is done here.
+func (b *JSONLBackend) LastActivity(key string) time.Time {
+	if store, ok := b.store.(sessionActivityStore); ok {
+		return store.LastActivity(key)
+	}
+	return time.Time{}
+}
+
+// DeleteSession removes a session and its metadata from the backing store.
+// Used by automatic session pruning, which only passes canonical keys (from
+// ListSessions or the seahorse index). The key is deliberately not resolved
+// through aliases: resolving costs a scan of every metadata file per call,
+// making a prune pass quadratic in the number of sessions, and an alias must
+// never cause the session it points to to be deleted.
+func (b *JSONLBackend) DeleteSession(key string) error {
+	deleter, ok := b.store.(sessionDeletingStore)
+	if !ok {
+		return fmt.Errorf("session: backing store does not support DeleteSession")
+	}
+	return deleter.DeleteSession(context.Background(), key)
 }

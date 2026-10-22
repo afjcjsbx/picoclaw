@@ -733,3 +733,34 @@ func TestFallbackExhaustedError_Message(t *testing.T) {
 		t.Error("expected non-empty error message")
 	}
 }
+
+func TestFallbackChain_AcquireEnforcesSingleCandidateRPM(t *testing.T) {
+	ct := NewCooldownTracker()
+	rl := NewRateLimiterRegistry()
+	rl.Register("model_name:solo", 1)
+	fc := NewFallbackChain(ct, rl)
+
+	// The first acquire consumes the only burst token.
+	if err := fc.Acquire(context.Background(), "model_name:solo"); err != nil {
+		t.Fatalf("first Acquire() error = %v", err)
+	}
+
+	// The second acquire must block; a short deadline surfaces the cancellation.
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := fc.Acquire(ctx, "model_name:solo"); err == nil {
+		t.Fatal("expected Acquire() to block when the local RPM token is exhausted")
+	}
+
+	// Keys without a registered limiter are unrestricted.
+	if err := fc.Acquire(context.Background(), "model_name:unlimited"); err != nil {
+		t.Fatalf("Acquire() for unregistered key error = %v", err)
+	}
+}
+
+func TestFallbackChain_AcquireNilChainIsNoop(t *testing.T) {
+	var fc *FallbackChain
+	if err := fc.Acquire(context.Background(), "any"); err != nil {
+		t.Fatalf("nil chain Acquire() error = %v, want nil", err)
+	}
+}

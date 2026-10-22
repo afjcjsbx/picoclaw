@@ -10,40 +10,49 @@ permissions:
   issues: write
   pull-requests: write
 
+# Tunable via repo/org variables (Settings > Secrets and variables > Actions > Variables).
+# Falls back to 14 days when the variable is not set.
+env:
+  STALE_DAYS_ISSUE_STALE: ${{ vars.STALE_DAYS_ISSUE_STALE || 14 }}  # inactivity days before issue is marked stale
+  STALE_DAYS_ISSUE_CLOSE: ${{ vars.STALE_DAYS_ISSUE_CLOSE || 14 }}  # extra days after stale before issue is closed
+  STALE_DAYS_PR_STALE: ${{ vars.STALE_DAYS_PR_STALE || 14 }}        # inactivity days before PR is marked stale
+  STALE_DAYS_PR_CLOSE: ${{ vars.STALE_DAYS_PR_CLOSE || 14 }}        # extra days after stale before PR is closed
+
 jobs:
   stale:
     runs-on: ubuntu-latest
 
     steps:
+      # Total inactivity (stale + close) used in the close messages
+      - name: Compute total inactivity days
+        id: totals
+        run: |
+          echo "issue=$((STALE_DAYS_ISSUE_STALE + STALE_DAYS_ISSUE_CLOSE))" >> "$GITHUB_OUTPUT"
+          echo "pr=$((STALE_DAYS_PR_STALE + STALE_DAYS_PR_CLOSE))" >> "$GITHUB_OUTPUT"
+
       - name: Mark and close stale issues and PRs
         uses: actions/stale@v11
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-          # ── Issue: 7 days inactive → stale; 7 more days → close ──
-          days-before-issue-stale: 7
-          days-before-issue-close: 7
+          # ── Issue ──
+          days-before-issue-stale: ${{ env.STALE_DAYS_ISSUE_STALE }}
+          days-before-issue-close: ${{ env.STALE_DAYS_ISSUE_CLOSE }}
           stale-issue-label: "stale"
           stale-issue-message: >
-            This issue has had no activity for 7 days and has been marked as stale.
-            If it is still relevant, please reply or update; otherwise it will be
-            closed automatically in 7 days.
+            ${{ format('This issue has had no activity for {0} days and has been marked as stale. If it is still relevant, please reply or update; otherwise it will be closed automatically in {1} days.', env.STALE_DAYS_ISSUE_STALE, env.STALE_DAYS_ISSUE_CLOSE) }}
           close-issue-message: >
-            This issue has been closed after 14 days of inactivity.
-            If it is still needed, feel free to reopen it anytime.
+            ${{ format('This issue has been closed after {0} days of inactivity. If it is still needed, feel free to reopen it anytime.', steps.totals.outputs.issue) }}
           close-issue-reason: "not_planned"
 
-          # ── PR: 7 days inactive → stale; 7 more days → close ──
-          days-before-pr-stale: 7
-          days-before-pr-close: 7
+          # ── PR ──
+          days-before-pr-stale: ${{ env.STALE_DAYS_PR_STALE }}
+          days-before-pr-close: ${{ env.STALE_DAYS_PR_CLOSE }}
           stale-pr-label: "stale"
           stale-pr-message: >
-            This PR has had no activity for 7 days and has been marked as stale.
-            If you are still working on it, please push an update or leave a comment;
-            otherwise it will be closed automatically in 7 days.
+            ${{ format('This PR has had no activity for {0} days and has been marked as stale. If you are still working on it, please push an update or leave a comment; otherwise it will be closed automatically in {1} days.', env.STALE_DAYS_PR_STALE, env.STALE_DAYS_PR_CLOSE) }}
           close-pr-message: >
-            This PR has been closed after 14 days of inactivity.
-            If you would like to continue, feel free to reopen it or submit a new PR.
+            ${{ format('This PR has been closed after {0} days of inactivity. If you would like to continue, feel free to reopen it or submit a new PR.', steps.totals.outputs.pr) }}
 
           # ── Protected labels (exempt from stale processing) ──
           exempt-issue-labels: "pinned,keep-open,wip,do-not-close,type: roadmap"

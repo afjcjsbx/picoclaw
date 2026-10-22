@@ -1,3 +1,5 @@
+//go:build !custom_channels || channel_weixin
+
 package auth
 
 import (
@@ -38,6 +40,10 @@ Example:
 	cmd.Flags().IntVar(&timeout, "timeout", 300, "Login timeout in seconds")
 
 	return cmd
+}
+
+func registerWeixinCommand(cmd *cobra.Command) {
+	cmd.AddCommand(newWeixinCommand())
 }
 
 func runWeixinOnboard(baseURL, proxy string, timeout time.Duration) error {

@@ -30,6 +30,22 @@ func TestTranslateMessages_SystemExtractedAsInstructions(t *testing.T) {
 	}
 }
 
+func TestTranslateMessages_MultipleSystemMessagesAreJoined(t *testing.T) {
+	msgs := []protocoltypes.Message{
+		{Role: "system", Content: "first"},
+		{Role: "system", Content: ""},
+		{Role: "user", Content: "Hi"},
+		{Role: "system", Content: "second"},
+	}
+	input, instructions := TranslateMessages(msgs)
+	if instructions != "first\n\nsecond" {
+		t.Errorf("instructions = %q, want %q", instructions, "first\n\nsecond")
+	}
+	if len(input) != 1 {
+		t.Errorf("len(input) = %d, want 1", len(input))
+	}
+}
+
 func TestTranslateMessages_UserTextMessage(t *testing.T) {
 	msgs := []protocoltypes.Message{
 		{Role: "user", Content: "Hello"},
@@ -60,8 +76,8 @@ func TestTranslateMessages_UserWithToolCallID(t *testing.T) {
 	if input[0].OfFunctionCallOutput == nil {
 		t.Fatal("expected FunctionCallOutput for user with ToolCallID")
 	}
-	if input[0].OfFunctionCallOutput.CallID != "call_1" {
-		t.Errorf("CallID = %q, want %q", input[0].OfFunctionCallOutput.CallID, "call_1")
+	if input[0].OfFunctionCallOutput.CallID.Value != "call_1" {
+		t.Errorf("CallID = %q, want %q", input[0].OfFunctionCallOutput.CallID.Value, "call_1")
 	}
 }
 
@@ -128,6 +144,18 @@ func TestTranslateMessages_AssistantWithoutToolCalls(t *testing.T) {
 	}
 }
 
+func TestTranslateMessages_SkipsEmptyAssistantMessage(t *testing.T) {
+	msgs := []protocoltypes.Message{
+		{Role: "user", Content: "Hi"},
+		{Role: "assistant", Content: "", ReasoningContent: "thinking only"},
+		{Role: "user", Content: "Again"},
+	}
+	input, _ := TranslateMessages(msgs)
+	if len(input) != 2 {
+		t.Fatalf("len(input) = %d, want 2 (empty assistant message dropped)", len(input))
+	}
+}
+
 func TestTranslateMessages_ToolMessage(t *testing.T) {
 	msgs := []protocoltypes.Message{
 		{Role: "tool", Content: "result data", ToolCallID: "call_99"},
@@ -139,8 +167,8 @@ func TestTranslateMessages_ToolMessage(t *testing.T) {
 	if input[0].OfFunctionCallOutput == nil {
 		t.Fatal("expected FunctionCallOutput")
 	}
-	if input[0].OfFunctionCallOutput.CallID != "call_99" {
-		t.Errorf("CallID = %q, want %q", input[0].OfFunctionCallOutput.CallID, "call_99")
+	if input[0].OfFunctionCallOutput.CallID.Value != "call_99" {
+		t.Errorf("CallID = %q, want %q", input[0].OfFunctionCallOutput.CallID.Value, "call_99")
 	}
 }
 
@@ -370,8 +398,66 @@ func TestParseResponseBody_FunctionCall(t *testing.T) {
 	if result.ToolCalls[0].ID != "call_abc" {
 		t.Errorf("ID = %q, want %q", result.ToolCalls[0].ID, "call_abc")
 	}
+	if result.ToolCalls[0].Arguments["city"] != "SF" {
+		t.Errorf("Arguments[city] = %v, want SF", result.ToolCalls[0].Arguments["city"])
+	}
 	if result.FinishReason != "tool_calls" {
 		t.Errorf("FinishReason = %q, want %q", result.FinishReason, "tool_calls")
+	}
+}
+
+func TestParseResponseBody_FunctionCallObjectArguments(t *testing.T) {
+	body := strings.NewReader(`{
+		"status":"completed",
+		"output":[{"type":"function_call","call_id":"call_abc","name":"get_weather","arguments":{"city":"SF"}}]
+	}`)
+	result, err := ParseResponseBody(body)
+	if err != nil {
+		t.Fatalf("ParseResponseBody error: %v", err)
+	}
+	if len(result.ToolCalls) != 1 {
+		t.Fatalf("len(ToolCalls) = %d, want 1", len(result.ToolCalls))
+	}
+	if result.ToolCalls[0].Arguments["city"] != "SF" {
+		t.Errorf("Arguments[city] = %v, want SF", result.ToolCalls[0].Arguments["city"])
+	}
+}
+
+func TestReasoningItemsRoundTripThroughToolCalls(t *testing.T) {
+	body := strings.NewReader(`{
+		"id": "resp_1", "object": "response", "status": "completed",
+		"output": [
+			{"type": "reasoning", "id": "rs_1", "encrypted_content": "enc-1",
+			 "summary": [{"type": "summary_text", "text": "plan"}]},
+			{"type": "reasoning", "id": "rs_2", "summary": []},
+			{"type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": "{}"}
+		]
+	}`)
+	result, err := ParseResponseBody(body)
+	if err != nil {
+		t.Fatalf("ParseResponseBody error: %v", err)
+	}
+	extra := result.ToolCalls[0].ExtraContent
+	if extra == nil || extra.OpenAI == nil || len(extra.OpenAI.ReasoningItems) != 1 {
+		t.Fatalf("ExtraContent = %+v, want only the reasoning item that has encrypted content", extra)
+	}
+
+	input, _ := TranslateMessages([]protocoltypes.Message{
+		{Role: "user", Content: "go"},
+		{Role: "assistant", ToolCalls: result.ToolCalls},
+		{Role: "tool", Content: "ok", ToolCallID: "call_1"},
+	})
+	if len(input) != 4 || input[1].OfReasoning == nil || input[2].OfFunctionCall == nil {
+		t.Fatalf("input = %+v, want user, reasoning, function_call, output", input)
+	}
+	raw, err := json.Marshal(input[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"id":"rs_1","summary":[{"text":"plan","type":"summary_text"}],` +
+		`"encrypted_content":"enc-1","type":"reasoning"}`
+	if string(raw) != want {
+		t.Errorf("reasoning item = %s, want %s", raw, want)
 	}
 }
 
@@ -409,6 +495,25 @@ func TestParseResponseBody_Reasoning(t *testing.T) {
 	}
 	if result.ReasoningContent != "Thinking about it..." {
 		t.Errorf("ReasoningContent = %q, want %q", result.ReasoningContent, "Thinking about it...")
+	}
+}
+
+func TestParseResponseBody_CachedTokens(t *testing.T) {
+	body := strings.NewReader(`{
+		"id": "resp_cache", "object": "response", "status": "completed",
+		"output": [{"type": "message", "content": [{"type": "output_text", "text": "hi"}]}],
+		"usage": {
+			"input_tokens": 100, "output_tokens": 5, "total_tokens": 105,
+			"input_tokens_details": {"cached_tokens": 64},
+			"output_tokens_details": {"reasoning_tokens": 0}
+		}
+	}`)
+	result, err := ParseResponseBody(body)
+	if err != nil {
+		t.Fatalf("ParseResponseBody error: %v", err)
+	}
+	if result.Usage == nil || result.Usage.CacheReadTokens != 64 || result.Usage.PromptTokens != 100 {
+		t.Errorf("Usage = %+v, want PromptTokens 100 and CacheReadTokens 64", result.Usage)
 	}
 }
 

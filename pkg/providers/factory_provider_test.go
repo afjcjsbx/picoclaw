@@ -15,6 +15,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/auth"
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/providers/httpapi"
 )
 
 func TestExtractProtocol(t *testing.T) {
@@ -99,7 +100,7 @@ func TestExtractProtocol(t *testing.T) {
 		{
 			name:         "empty provider segment",
 			config:       &config.ModelConfig{Model: "/gpt-4o"},
-			wantProtocol: "",
+			wantProtocol: "openai",
 			wantModelID:  "gpt-4o",
 		},
 		{
@@ -239,6 +240,7 @@ func TestCreateProviderFromConfig_DefaultAPIBase(t *testing.T) {
 		{"longcat", "longcat"},
 		{"modelscope", "modelscope"},
 		{"mimo", "mimo"},
+		{"byteplus", "byteplus"},
 	}
 
 	for _, tt := range tests {
@@ -254,9 +256,9 @@ func TestCreateProviderFromConfig_DefaultAPIBase(t *testing.T) {
 				t.Fatalf("CreateProviderFromConfig() error = %v", err)
 			}
 
-			// Verify we got an HTTPProvider for all these protocols
-			if _, ok := provider.(*HTTPProvider); !ok {
-				t.Fatalf("expected *HTTPProvider, got %T", provider)
+			// Verify we got an httpapi.HTTPProvider for all these protocols
+			if _, ok := provider.(*httpapi.HTTPProvider); !ok {
+				t.Fatalf("expected *httpapi.HTTPProvider, got %T", provider)
 			}
 		})
 	}
@@ -403,8 +405,8 @@ func TestCreateProviderFromConfig_LocalProviders(t *testing.T) {
 			if modelID != tt.wantModelID {
 				t.Errorf("modelID = %q, want %q", modelID, tt.wantModelID)
 			}
-			if _, ok := provider.(*HTTPProvider); !ok {
-				t.Fatalf("expected *HTTPProvider, got %T", provider)
+			if _, ok := provider.(*httpapi.HTTPProvider); !ok {
+				t.Fatalf("expected *httpapi.HTTPProvider, got %T", provider)
 			}
 		})
 	}
@@ -428,8 +430,8 @@ func TestCreateProviderFromConfig_LongCat(t *testing.T) {
 	if modelID != "LongCat-Flash-Thinking" {
 		t.Errorf("modelID = %q, want %q", modelID, "LongCat-Flash-Thinking")
 	}
-	if _, ok := provider.(*HTTPProvider); !ok {
-		t.Fatalf("expected *HTTPProvider, got %T", provider)
+	if _, ok := provider.(*httpapi.HTTPProvider); !ok {
+		t.Fatalf("expected *httpapi.HTTPProvider, got %T", provider)
 	}
 }
 
@@ -451,8 +453,8 @@ func TestCreateProviderFromConfig_ModelScope(t *testing.T) {
 	if modelID != "Qwen/Qwen3-235B-A22B-Instruct-2507" {
 		t.Errorf("modelID = %q, want %q", modelID, "Qwen/Qwen3-235B-A22B-Instruct-2507")
 	}
-	if _, ok := provider.(*HTTPProvider); !ok {
-		t.Fatalf("expected *HTTPProvider, got %T", provider)
+	if _, ok := provider.(*httpapi.HTTPProvider); !ok {
+		t.Fatalf("expected *httpapi.HTTPProvider, got %T", provider)
 	}
 }
 
@@ -479,8 +481,8 @@ func TestCreateProviderFromConfig_Novita(t *testing.T) {
 	if modelID != "deepseek/deepseek-v3.2" {
 		t.Errorf("modelID = %q, want %q", modelID, "deepseek/deepseek-v3.2")
 	}
-	if _, ok := provider.(*HTTPProvider); !ok {
-		t.Fatalf("expected *HTTPProvider, got %T", provider)
+	if _, ok := provider.(*httpapi.HTTPProvider); !ok {
+		t.Fatalf("expected *httpapi.HTTPProvider, got %T", provider)
 	}
 }
 
@@ -508,8 +510,8 @@ func TestCreateProviderFromConfig_Mimo(t *testing.T) {
 	if modelID != "mimo-v2-pro" {
 		t.Errorf("modelID = %q, want %q", modelID, "mimo-v2-pro")
 	}
-	if _, ok := provider.(*HTTPProvider); !ok {
-		t.Fatalf("expected *HTTPProvider, got %T", provider)
+	if _, ok := provider.(*httpapi.HTTPProvider); !ok {
+		t.Fatalf("expected *httpapi.HTTPProvider, got %T", provider)
 	}
 }
 
@@ -530,8 +532,8 @@ func TestCreateProviderFromConfig_Venice(t *testing.T) {
 	if modelID != "venice-uncensored" {
 		t.Errorf("modelID = %q, want %q", modelID, "venice-uncensored")
 	}
-	if _, ok := provider.(*HTTPProvider); !ok {
-		t.Fatalf("expected *HTTPProvider, got %T", provider)
+	if _, ok := provider.(*httpapi.HTTPProvider); !ok {
+		t.Fatalf("expected *httpapi.HTTPProvider, got %T", provider)
 	}
 }
 
@@ -552,8 +554,8 @@ func TestCreateProviderFromConfig_NearAI(t *testing.T) {
 	if modelID != "zai-org/GLM-5.1-FP8" {
 		t.Errorf("modelID = %q, want %q", modelID, "zai-org/GLM-5.1-FP8")
 	}
-	if _, ok := provider.(*HTTPProvider); !ok {
-		t.Fatalf("expected *HTTPProvider, got %T", provider)
+	if _, ok := provider.(*httpapi.HTTPProvider); !ok {
+		t.Fatalf("expected *httpapi.HTTPProvider, got %T", provider)
 	}
 }
 
@@ -574,14 +576,27 @@ func TestCreateProviderFromConfig_SiliconFlow(t *testing.T) {
 	if modelID != "deepseek-ai/DeepSeek-V3" {
 		t.Errorf("modelID = %q, want %q", modelID, "deepseek-ai/DeepSeek-V3")
 	}
-	if _, ok := provider.(*HTTPProvider); !ok {
-		t.Fatalf("expected *HTTPProvider, got %T", provider)
+	if _, ok := provider.(*httpapi.HTTPProvider); !ok {
+		t.Fatalf("expected *httpapi.HTTPProvider, got %T", provider)
 	}
 }
 
 func TestGetDefaultAPIBase_Mimo(t *testing.T) {
 	if got := getDefaultAPIBase("mimo"); got != "https://api.xiaomimimo.com/v1" {
 		t.Fatalf("getDefaultAPIBase(%q) = %q, want %q", "mimo", got, "https://api.xiaomimimo.com/v1")
+	}
+}
+
+func TestGetDefaultAPIBase_BytePlus(t *testing.T) {
+	if got := getDefaultAPIBase("byteplus"); got != "https://ark.ap-southeast.bytepluses.com/api/v3" {
+		t.Fatalf("getDefaultAPIBase(%q) = %q, want %q",
+			"byteplus", got, "https://ark.ap-southeast.bytepluses.com/api/v3")
+	}
+	if !IsSupportedModelProvider("byteplus") {
+		t.Fatal("byteplus should be a supported model provider")
+	}
+	if IsModelProviderFetchable("byteplus") {
+		t.Fatal("byteplus has no OpenAI-style /models endpoint and must not be fetchable")
 	}
 }
 
@@ -639,8 +654,8 @@ func TestCreateProviderFromConfig_Gemini(t *testing.T) {
 	if modelID != "gemini-2.5-flash" {
 		t.Errorf("modelID = %q, want %q", modelID, "gemini-2.5-flash")
 	}
-	if _, ok := provider.(*GeminiProvider); !ok {
-		t.Fatalf("expected *GeminiProvider, got %T", provider)
+	if _, ok := provider.(*httpapi.GeminiProvider); !ok {
+		t.Fatalf("expected *httpapi.GeminiProvider, got %T", provider)
 	}
 }
 
@@ -673,8 +688,8 @@ func TestCreateProviderFromConfig_GeminiCustomAPIBaseWithoutKey(t *testing.T) {
 	if modelID != "gemini-2.5-flash" {
 		t.Errorf("modelID = %q, want %q", modelID, "gemini-2.5-flash")
 	}
-	if _, ok := provider.(*GeminiProvider); !ok {
-		t.Fatalf("expected *GeminiProvider, got %T", provider)
+	if _, ok := provider.(*httpapi.GeminiProvider); !ok {
+		t.Fatalf("expected *httpapi.GeminiProvider, got %T", provider)
 	}
 }
 
@@ -952,8 +967,8 @@ func TestCreateProviderFromConfig_QwenInternationalAlias(t *testing.T) {
 			if modelID != wantModelID {
 				t.Errorf("modelID = %q, want %q", modelID, wantModelID)
 			}
-			if _, ok := provider.(*HTTPProvider); !ok {
-				t.Fatalf("expected *HTTPProvider, got %T", provider)
+			if _, ok := provider.(*httpapi.HTTPProvider); !ok {
+				t.Fatalf("expected *httpapi.HTTPProvider, got %T", provider)
 			}
 		})
 	}
@@ -987,8 +1002,8 @@ func TestCreateProviderFromConfig_QwenUSAlias(t *testing.T) {
 			if modelID != wantModelID {
 				t.Errorf("modelID = %q, want %q", modelID, wantModelID)
 			}
-			if _, ok := provider.(*HTTPProvider); !ok {
-				t.Fatalf("expected *HTTPProvider, got %T", provider)
+			if _, ok := provider.(*httpapi.HTTPProvider); !ok {
+				t.Fatalf("expected *httpapi.HTTPProvider, got %T", provider)
 			}
 		})
 	}

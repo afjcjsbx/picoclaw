@@ -27,6 +27,9 @@ type (
 const (
 	defaultBaseURL      = "https://api.anthropic.com"
 	anthropicBetaHeader = "oauth-2025-04-20"
+
+	// maxCacheBreakpoints is the number of cache_control blocks the API accepts per request.
+	maxCacheBreakpoints = 4
 )
 
 type Provider struct {
@@ -146,6 +149,7 @@ func buildParams(
 ) (anthropic.MessageNewParams, error) {
 	var system []anthropic.TextBlockParam
 	var anthropicMessages []anthropic.MessageParam
+	breakpoints := 0
 
 	for _, msg := range messages {
 		switch msg.Role {
@@ -158,6 +162,7 @@ func buildParams(
 					block := anthropic.TextBlockParam{Text: part.Text}
 					if part.CacheControl != nil && part.CacheControl.Type == "ephemeral" {
 						block.CacheControl = anthropic.NewCacheControlEphemeralParam()
+						breakpoints++
 					}
 					system = append(system, block)
 				}
@@ -241,6 +246,12 @@ func buildParams(
 
 	if len(tools) > 0 {
 		params.Tools = translateTools(tools)
+		// Tools come first in the cached prefix, so a breakpoint on the last
+		// one keeps them cached when the system prompt changes. The API
+		// rejects requests with more than maxCacheBreakpoints in total.
+		if breakpoints < maxCacheBreakpoints {
+			params.Tools[len(params.Tools)-1].OfTool.CacheControl = anthropic.NewCacheControlEphemeralParam()
+		}
 	}
 
 	// Extended Thinking / Adaptive Thinking
@@ -383,15 +394,23 @@ func parseResponse(resp *anthropic.Message) *LLMResponse {
 		finishReason = "stop"
 	}
 
+	// Anthropic's input_tokens excludes cached tokens; fold them into
+	// PromptTokens to match the OpenAI semantics used elsewhere.
+	cacheRead := resp.Usage.CacheReadInputTokens
+	cacheCreation := resp.Usage.CacheCreationInputTokens
+	promptTokens := resp.Usage.InputTokens + cacheRead + cacheCreation
+
 	return &LLMResponse{
 		Content:      content.String(),
 		Reasoning:    reasoning.String(),
 		ToolCalls:    toolCalls,
 		FinishReason: finishReason,
 		Usage: &UsageInfo{
-			PromptTokens:     int(resp.Usage.InputTokens),
-			CompletionTokens: int(resp.Usage.OutputTokens),
-			TotalTokens:      int(resp.Usage.InputTokens + resp.Usage.OutputTokens),
+			PromptTokens:        int(promptTokens),
+			CompletionTokens:    int(resp.Usage.OutputTokens),
+			TotalTokens:         int(promptTokens + resp.Usage.OutputTokens),
+			CacheReadTokens:     int(cacheRead),
+			CacheCreationTokens: int(cacheCreation),
 		},
 	}
 }

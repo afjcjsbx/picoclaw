@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -27,6 +26,7 @@ type GeminiProvider struct {
 	extraBody     map[string]any
 	customHeaders map[string]string
 	userAgent     string
+	session       common.SessionHeader
 }
 
 func NewGeminiProvider(
@@ -77,18 +77,13 @@ func (p *GeminiProvider) Chat(
 
 	model = normalizeGeminiModel(model)
 	requestBody := p.buildRequestBody(messages, tools, model, options)
-	jsonData, err := json.Marshal(requestBody)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
-	}
-
 	url := fmt.Sprintf("%s/models/%s:generateContent", p.apiBase, model)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(jsonData))
+	req, err := common.NewJSONRequest(ctx, http.MethodPost, url, requestBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	p.applyHeaders(req)
+	p.applyHeaders(req, options)
 
 	resp, err := p.httpClient.Do(req)
 	if err != nil {
@@ -144,18 +139,13 @@ func (p *GeminiProvider) ChatStreamEvents(
 
 	model = normalizeGeminiModel(model)
 	requestBody := p.buildRequestBody(messages, tools, model, options)
-	jsonData, err := json.Marshal(requestBody)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
-	}
-
 	url := fmt.Sprintf("%s/models/%s:streamGenerateContent?alt=sse", p.apiBase, model)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(jsonData))
+	req, err := common.NewJSONRequest(ctx, http.MethodPost, url, requestBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	p.applyHeaders(req)
+	p.applyHeaders(req, options)
 	req.Header.Set("Accept", "text/event-stream")
 
 	// Streaming should not use a whole-request timeout; context cancellation is the guard.
@@ -209,7 +199,13 @@ func (b *geminiStreamingReadIdleTimeoutBody) Close() error {
 	return b.body.Close()
 }
 
-func (p *GeminiProvider) applyHeaders(req *http.Request) {
+// SetSessionHeader makes every request carry options["session_key"] (or
+// fallback when absent) in the named header; an explicit custom header wins.
+func (p *GeminiProvider) SetSessionHeader(name, fallback string) {
+	p.session = common.SessionHeader{Name: strings.TrimSpace(name), Fallback: fallback}
+}
+
+func (p *GeminiProvider) applyHeaders(req *http.Request, options map[string]any) {
 	req.Header.Set("Content-Type", "application/json")
 	if p.apiKey != "" {
 		req.Header.Set("X-Goog-Api-Key", p.apiKey)
@@ -223,6 +219,7 @@ func (p *GeminiProvider) applyHeaders(req *http.Request) {
 		}
 		req.Header.Set(k, v)
 	}
+	p.session.Apply(req.Header, options)
 }
 
 func (p *GeminiProvider) buildRequestBody(

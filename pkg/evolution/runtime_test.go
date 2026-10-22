@@ -117,7 +117,6 @@ func TestRuntime_FinalizeTurnWritesRecordWithOverride(t *testing.T) {
 
 	if finalizeErr := rt.FinalizeTurn(context.Background(), evolution.TurnCaseInput{
 		Workspace:    workspace,
-		WorkspaceID:  "ws-explicit",
 		TurnID:       "turn-2",
 		SessionKey:   "session-2",
 		AgentID:      "agent-2",

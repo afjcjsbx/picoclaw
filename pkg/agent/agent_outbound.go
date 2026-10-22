@@ -12,7 +12,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
-	"github.com/sipeed/picoclaw/pkg/tools"
+	integrationtools "github.com/sipeed/picoclaw/pkg/tools/integration"
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
@@ -40,15 +40,19 @@ func (al *AgentLoop) publishResponseOrError(
 }
 
 func (al *AgentLoop) PublishResponseIfNeeded(ctx context.Context, channel, chatID, sessionKey, response string) {
+	al.publishResponseIfNeeded(ctx, channel, chatID, sessionKey, response)
+}
+
+func (al *AgentLoop) publishResponseIfNeeded(ctx context.Context, channel, chatID, sessionKey, response string) bool {
 	if response == "" {
-		return
+		return false
 	}
 
 	alreadySentToSameChat := false
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	if defaultAgent != nil {
 		if tool, ok := defaultAgent.Tools.Get("message"); ok {
-			if mt, ok := tool.(*tools.MessageTool); ok {
+			if mt, ok := tool.(*integrationtools.MessageTool); ok {
 				alreadySentToSameChat = mt.HasSentTo(sessionKey, channel, chatID)
 			}
 		}
@@ -70,7 +74,7 @@ func (al *AgentLoop) PublishResponseIfNeeded(ctx context.Context, channel, chatI
 			"Skipped outbound (message tool already sent to same chat)",
 			map[string]any{"channel": channel, "chat_id": chatID},
 		)
-		return
+		return false
 	}
 
 	msg := bus.OutboundMessage{
@@ -82,13 +86,16 @@ func (al *AgentLoop) PublishResponseIfNeeded(ctx context.Context, channel, chatI
 		msg.ContextUsage = computeContextUsage(al.agentForSession(sessionKey), sessionKey)
 	}
 	markFinalOutbound(&msg)
-	al.bus.PublishOutbound(ctx, msg)
+	if err := al.bus.PublishOutbound(ctx, msg); err != nil {
+		return false
+	}
 	logger.InfoCF("agent", "Published outbound response",
 		map[string]any{
 			"channel":     channel,
 			"chat_id":     chatID,
 			"content_len": len(response),
 		})
+	return true
 }
 
 func (al *AgentLoop) targetReasoningChannelID(channelName string) (chatID string) {

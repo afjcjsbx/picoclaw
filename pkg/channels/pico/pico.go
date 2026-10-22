@@ -332,6 +332,9 @@ func (c *PicoChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]stri
 		payload[PayloadKeyModelName] = modelName
 	}
 	switch {
+	case isToolFeedback:
+		payload[PayloadKeyKind] = "tool_feedback"
+
 	case isThought:
 		payload[PayloadKeyKind] = MessageKindThought
 

@@ -44,8 +44,10 @@ type Config struct {
 	Gateway   GatewayConfig   `json:"gateway"             yaml:"-"`
 	Events    EventsConfig    `json:"events,omitempty"    yaml:"-"`
 	Hooks     HooksConfig     `json:"hooks,omitempty"     yaml:"-"`
+	Plugins   PluginsConfig   `json:"plugins,omitempty"   yaml:"-"`
 	Tools     ToolsConfig     `json:"tools"               yaml:",inline"`
 	Heartbeat HeartbeatConfig `json:"heartbeat"           yaml:"-"`
+	Power     PowerConfig     `json:"power,omitzero"      yaml:"-"`
 	Devices   DevicesConfig   `json:"devices"             yaml:"-"`
 	Voice     VoiceConfig     `json:"voice"               yaml:"-"`
 	// BuildInfo contains build-time version information
@@ -150,11 +152,14 @@ func (c EvolutionConfig) EffectiveMinTaskCount() int {
 }
 
 func (c EvolutionConfig) EffectiveMinSuccessRatio() float64 {
-	if c.MinSuccessRatio > 0 {
-		return c.MinSuccessRatio
+	ratio := c.MinSuccessRatio
+	if ratio <= 0 {
+		ratio = c.MinSuccessRate
 	}
-	if c.MinSuccessRate > 0 {
-		return c.MinSuccessRate
+	// The documented range is (0, 1]; anything else (including NaN) falls back
+	// to the default instead of silently disabling pattern generation.
+	if ratio > 0 && ratio <= 1 {
+		return ratio
 	}
 	return 0.7
 }
@@ -183,7 +188,7 @@ type IsolationConfig struct {
 }
 
 // ExposePath describes a host path that should remain visible inside the isolated
-// child-process environment. This is currently implemented on Linux only.
+// child-process environment. macOS Seatbelt supports same-path access, not remapping.
 type ExposePath struct {
 	Source string `json:"source"`
 	Target string `json:"target,omitempty"`
@@ -258,7 +263,8 @@ func (c *Config) MarshalJSON() ([]byte, error) {
 		Alias: (*Alias)(c),
 	}
 
-	if len(c.Session.Dimensions) > 0 || len(c.Session.IdentityLinks) > 0 || c.Session.DmScope != "" {
+	if len(c.Session.Dimensions) > 0 || len(c.Session.IdentityLinks) > 0 ||
+		c.Session.DmScope != "" || !c.Session.Prune.IsZero() {
 		sessionCfg := c.Session
 		aux.Session = &sessionCfg
 	}
@@ -351,6 +357,117 @@ type SessionConfig struct {
 	Dimensions    []string            `json:"dimensions,omitempty"`
 	IdentityLinks map[string][]string `json:"identity_links,omitempty"`
 	DmScope       string              `json:"dm_scope,omitempty"`
+	Prune         SessionPruneConfig  `json:"prune"`
+
+	// DurableWrites controls whether session writes are fsynced before they
+	// are acknowledged. When disabled, message appends and metadata updates
+	// use atomic (temp + rename) writes without fsync: files stay consistent
+	// after a crash, but the most recent writes may be lost on power
+	// failure. Disabling it trades crash durability for lower latency and
+	// less flash wear on constrained devices. Defaults to true.
+	DurableWrites *bool `json:"durable_writes,omitempty" env:"PICOCLAW_SESSION_DURABLE_WRITES"`
+}
+
+// DurableWritesEnabled reports whether session writes must be fsynced.
+// It defaults to true when session.durable_writes is unset.
+func (s *SessionConfig) DurableWritesEnabled() bool {
+	return s.DurableWrites == nil || *s.DurableWrites
+}
+
+// MarshalJSON omits the prune block while it is unconfigured, so saving the
+// config does not litter it with an empty "prune" object (encoding/json's
+// omitempty never omits a struct value).
+func (s *SessionConfig) MarshalJSON() ([]byte, error) {
+	type alias SessionConfig
+	aux := struct {
+		alias
+		Prune *SessionPruneConfig `json:"prune,omitempty"`
+	}{alias: alias(*s)}
+	if !s.Prune.IsZero() {
+		prune := s.Prune
+		aux.Prune = &prune
+	}
+	return json.Marshal(aux)
+}
+
+// SessionPruneConfig controls automatic pruning of old chat sessions.
+//
+// The seahorse context manager bootstraps every session into SQLite on
+// startup, so the cost of a gateway start grows with the number of sessions
+// and the size of their history. Without pruning, a device can end up with
+// hundreds of sessions and a large seahorse.db, making startup take minutes.
+//
+// Pruning is opt-in (Enabled=false by default) because it deletes data.
+// A recommended, conservative configuration for a small device is:
+//
+//	"prune": {
+//	  "enabled": true,
+//	  "max_age_days": 30,
+//	  "max_sessions": 100,
+//	  "max_db_size_mb": 128,
+//	  "check_interval_minutes": 60,
+//	  "vacuum": true
+//	}
+//
+// A threshold of 0 disables that specific check. Sessions are always deleted
+// oldest-first by last activity, and the single most recently active session is
+// never deleted, whatever the thresholds are. Sessions without a usable
+// timestamp are never deleted either.
+type SessionPruneConfig struct {
+	// Enabled turns automatic session pruning on. Default false: nothing is
+	// deleted unless the user opts in.
+	Enabled bool `json:"enabled" env:"PICOCLAW_SESSION_PRUNE_ENABLED"`
+
+	// MaxAgeDays deletes sessions whose last activity is older than this many
+	// days. 0 disables age-based pruning.
+	MaxAgeDays int `json:"max_age_days,omitempty" env:"PICOCLAW_SESSION_PRUNE_MAX_AGE_DAYS"`
+
+	// MaxSessions keeps at most this many of the most recently active sessions.
+	// 0 disables the session-count cap.
+	MaxSessions int `json:"max_sessions,omitempty" env:"PICOCLAW_SESSION_PRUNE_MAX_SESSIONS"`
+
+	// MaxDBSizeMB is a safety net: when the seahorse SQLite database exceeds
+	// this size, the oldest remaining sessions are pruned (and the database is
+	// vacuumed) until it fits. 0 disables the size guard.
+	MaxDBSizeMB int `json:"max_db_size_mb,omitempty" env:"PICOCLAW_SESSION_PRUNE_MAX_DB_SIZE_MB"`
+
+	// CheckIntervalMinutes is how often the background prune pass runs.
+	// Defaults to 60 when 0.
+	CheckIntervalMinutes int `json:"check_interval_minutes,omitempty" env:"PICOCLAW_SESSION_PRUNE_CHECK_INTERVAL_MINUTES"`
+
+	// Vacuum gives freed space back to the filesystem (SQLite VACUUM, which
+	// blocks writers while it runs) after a prune pass that deleted sessions.
+	// A pass only vacuums when that returns a meaningful share of the file;
+	// the database-size guard always vacuums because it needs the file to
+	// shrink. Defaults to true when omitted.
+	Vacuum *bool `json:"vacuum,omitempty" env:"PICOCLAW_SESSION_PRUNE_VACUUM"`
+}
+
+// IsZero reports whether no pruning option has been set.
+func (p SessionPruneConfig) IsZero() bool {
+	return p == SessionPruneConfig{}
+}
+
+// IsActive reports whether any pruning threshold would be enforced.
+func (p SessionPruneConfig) IsActive() bool {
+	return p.MaxAgeDays > 0 || p.MaxSessions > 0 || p.MaxDBSizeMB > 0
+}
+
+// VacuumEnabled reports whether pruned sessions should be followed by a
+// SQLite VACUUM. Defaults to true when not explicitly configured.
+func (p SessionPruneConfig) VacuumEnabled() bool {
+	if p.Vacuum == nil {
+		return true
+	}
+	return *p.Vacuum
+}
+
+// EffectiveCheckIntervalMinutes returns the configured interval or the default.
+func (p SessionPruneConfig) EffectiveCheckIntervalMinutes() int {
+	if p.CheckIntervalMinutes > 0 {
+		return p.CheckIntervalMinutes
+	}
+	return 60
 }
 
 // ApplyDmScope translates the user-facing dm_scope value into the internal
@@ -420,33 +537,73 @@ type ToolFeedbackConfig struct {
 	SeparateMessages bool `json:"separate_messages" env:"PICOCLAW_AGENTS_DEFAULTS_TOOL_FEEDBACK_SEPARATE_MESSAGES"`
 }
 
+const (
+	DefaultLoopDetectionRepeatThreshold   = 3
+	DefaultLoopDetectionCriticalThreshold = 6
+	DefaultLoopDetectionWindowSize        = 20
+)
+
+// LoopDetectionConfig controls detection of consecutive identical tool calls.
+// It is disabled by default to preserve the existing tool-loop behavior.
+type LoopDetectionConfig struct {
+	Enabled           bool `json:"enabled"            env:"PICOCLAW_AGENTS_DEFAULTS_LOOP_DETECTION_ENABLED"`
+	RepeatThreshold   int  `json:"repeat_threshold"   env:"PICOCLAW_AGENTS_DEFAULTS_LOOP_DETECTION_REPEAT_THRESHOLD"`
+	CriticalThreshold int  `json:"critical_threshold" env:"PICOCLAW_AGENTS_DEFAULTS_LOOP_DETECTION_CRITICAL_THRESHOLD"`
+	WindowSize        int  `json:"window_size"        env:"PICOCLAW_AGENTS_DEFAULTS_LOOP_DETECTION_WINDOW_SIZE"`
+}
+
+// Normalized returns a safe, internally consistent loop-detection config.
+// Zero or invalid values fall back to defaults so programmatically constructed
+// configs behave the same way as configs loaded from DefaultConfig.
+func (c LoopDetectionConfig) Normalized() LoopDetectionConfig {
+	if c.RepeatThreshold < 2 {
+		c.RepeatThreshold = DefaultLoopDetectionRepeatThreshold
+	}
+	if c.CriticalThreshold <= c.RepeatThreshold {
+		c.CriticalThreshold = DefaultLoopDetectionCriticalThreshold
+		if c.CriticalThreshold <= c.RepeatThreshold {
+			c.CriticalThreshold = c.RepeatThreshold + 1
+		}
+	}
+	if c.WindowSize < c.CriticalThreshold {
+		c.WindowSize = DefaultLoopDetectionWindowSize
+		if c.WindowSize < c.CriticalThreshold {
+			c.WindowSize = c.CriticalThreshold
+		}
+	}
+	return c
+}
+
 type AgentDefaults struct {
-	Workspace                 string             `json:"workspace"                        env:"PICOCLAW_AGENTS_DEFAULTS_WORKSPACE"`
-	RestrictToWorkspace       bool               `json:"restrict_to_workspace"            env:"PICOCLAW_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE"`
-	AllowReadOutsideWorkspace bool               `json:"allow_read_outside_workspace"     env:"PICOCLAW_AGENTS_DEFAULTS_ALLOW_READ_OUTSIDE_WORKSPACE"`
-	Provider                  string             `json:"provider"                         env:"PICOCLAW_AGENTS_DEFAULTS_PROVIDER"`
-	ModelName                 string             `json:"model_name"                       env:"PICOCLAW_AGENTS_DEFAULTS_MODEL_NAME"`
-	ModelFallbacks            []string           `json:"model_fallbacks,omitempty"`
-	ImageModel                string             `json:"image_model,omitempty"            env:"PICOCLAW_AGENTS_DEFAULTS_IMAGE_MODEL"`
-	ImageModelFallbacks       []string           `json:"image_model_fallbacks,omitempty"`
-	MaxTokens                 int                `json:"max_tokens"                       env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOKENS"`
-	ContextWindow             int                `json:"context_window,omitempty"         env:"PICOCLAW_AGENTS_DEFAULTS_CONTEXT_WINDOW"`
-	Temperature               *float64           `json:"temperature,omitempty"            env:"PICOCLAW_AGENTS_DEFAULTS_TEMPERATURE"`
-	MaxToolIterations         int                `json:"max_tool_iterations"              env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOOL_ITERATIONS"`
-	SummarizeMessageThreshold int                `json:"summarize_message_threshold"      env:"PICOCLAW_AGENTS_DEFAULTS_SUMMARIZE_MESSAGE_THRESHOLD"`
-	SummarizeTokenPercent     int                `json:"summarize_token_percent"          env:"PICOCLAW_AGENTS_DEFAULTS_SUMMARIZE_TOKEN_PERCENT"`
-	MaxMediaSize              int                `json:"max_media_size,omitempty"         env:"PICOCLAW_AGENTS_DEFAULTS_MAX_MEDIA_SIZE"`
-	Routing                   *RoutingConfig     `json:"routing,omitempty"`
-	SteeringMode              string             `json:"steering_mode,omitempty"          env:"PICOCLAW_AGENTS_DEFAULTS_STEERING_MODE"`      // "one-at-a-time" (default) or "all"
-	MaxParallelTurns          int                `json:"max_parallel_turns,omitempty"     env:"PICOCLAW_AGENTS_DEFAULTS_MAX_PARALLEL_TURNS"` // Max concurrent turns (0 or 1 = sequential)
-	SubTurn                   SubTurnConfig      `json:"subturn"                                                                                      envPrefix:"PICOCLAW_AGENTS_DEFAULTS_SUBTURN_"`
-	ToolFeedback              ToolFeedbackConfig `json:"tool_feedback,omitempty"`
-	SplitOnMarker             bool               `json:"split_on_marker"                  env:"PICOCLAW_AGENTS_DEFAULTS_SPLIT_ON_MARKER"` // split messages on <|[SPLIT]|> marker
-	ContextManager            string             `json:"context_manager,omitempty"        env:"PICOCLAW_AGENTS_DEFAULTS_CONTEXT_MANAGER"`
-	ContextManagerConfig      json.RawMessage    `json:"context_manager_config,omitempty" env:"PICOCLAW_AGENTS_DEFAULTS_CONTEXT_MANAGER_CONFIG"`
-	TurnProfile               TurnProfileConfig  `json:"turn_profile,omitempty"`
-	MaxLLMRetries             int                `json:"max_llm_retries,omitempty"        env:"PICOCLAW_AGENTS_DEFAULTS_MAX_LLM_RETRIES"`
-	LLMRetryBackoffSecs       int                `json:"llm_retry_backoff_secs,omitempty" env:"PICOCLAW_AGENTS_DEFAULTS_LLM_RETRY_BACKOFF_SECS"`
+	Workspace                 string              `json:"workspace"                            env:"PICOCLAW_AGENTS_DEFAULTS_WORKSPACE"`
+	RestrictToWorkspace       bool                `json:"restrict_to_workspace"                env:"PICOCLAW_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE"`
+	AllowReadOutsideWorkspace bool                `json:"allow_read_outside_workspace"         env:"PICOCLAW_AGENTS_DEFAULTS_ALLOW_READ_OUTSIDE_WORKSPACE"`
+	Provider                  string              `json:"provider"                             env:"PICOCLAW_AGENTS_DEFAULTS_PROVIDER"`
+	ModelName                 string              `json:"model_name"                           env:"PICOCLAW_AGENTS_DEFAULTS_MODEL_NAME"`
+	ModelFallbacks            []string            `json:"model_fallbacks,omitempty"`
+	ImageModel                string              `json:"image_model,omitempty"                env:"PICOCLAW_AGENTS_DEFAULTS_IMAGE_MODEL"`
+	ImageModelFallbacks       []string            `json:"image_model_fallbacks,omitempty"`
+	MaxTokens                 int                 `json:"max_tokens"                           env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOKENS"`
+	ContextWindow             int                 `json:"context_window,omitempty"             env:"PICOCLAW_AGENTS_DEFAULTS_CONTEXT_WINDOW"`
+	Temperature               *float64            `json:"temperature,omitempty"                env:"PICOCLAW_AGENTS_DEFAULTS_TEMPERATURE"`
+	MaxToolIterations         int                 `json:"max_tool_iterations"                  env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOOL_ITERATIONS"`
+	SummarizeMessageThreshold int                 `json:"summarize_message_threshold"          env:"PICOCLAW_AGENTS_DEFAULTS_SUMMARIZE_MESSAGE_THRESHOLD"`
+	SummarizeTokenPercent     int                 `json:"summarize_token_percent"              env:"PICOCLAW_AGENTS_DEFAULTS_SUMMARIZE_TOKEN_PERCENT"`
+	MaxMediaSize              int                 `json:"max_media_size,omitempty"             env:"PICOCLAW_AGENTS_DEFAULTS_MAX_MEDIA_SIZE"`
+	VisionMaxImageDimension   int                 `json:"vision_max_image_dimension,omitempty" env:"PICOCLAW_AGENTS_DEFAULTS_VISION_MAX_IMAGE_DIMENSION"`
+	VisionJPEGQuality         int                 `json:"vision_jpeg_quality,omitempty"        env:"PICOCLAW_AGENTS_DEFAULTS_VISION_JPEG_QUALITY"`
+	Routing                   *RoutingConfig      `json:"routing,omitempty"`
+	SteeringMode              string              `json:"steering_mode,omitempty"              env:"PICOCLAW_AGENTS_DEFAULTS_STEERING_MODE"`      // "one-at-a-time" (default) or "all"
+	MaxParallelTurns          int                 `json:"max_parallel_turns,omitempty"         env:"PICOCLAW_AGENTS_DEFAULTS_MAX_PARALLEL_TURNS"` // Max concurrent turns (0 or 1 = sequential)
+	SubTurn                   SubTurnConfig       `json:"subturn"                                                                                          envPrefix:"PICOCLAW_AGENTS_DEFAULTS_SUBTURN_"`
+	ToolFeedback              ToolFeedbackConfig  `json:"tool_feedback,omitempty"`
+	LoopDetection             LoopDetectionConfig `json:"loop_detection,omitempty"`
+	SplitOnMarker             bool                `json:"split_on_marker"                      env:"PICOCLAW_AGENTS_DEFAULTS_SPLIT_ON_MARKER"` // split messages on <|[SPLIT]|> marker
+	ContextManager            string              `json:"context_manager,omitempty"            env:"PICOCLAW_AGENTS_DEFAULTS_CONTEXT_MANAGER"`
+	ContextManagerConfig      json.RawMessage     `json:"context_manager_config,omitempty"     env:"PICOCLAW_AGENTS_DEFAULTS_CONTEXT_MANAGER_CONFIG"`
+	TurnProfile               TurnProfileConfig   `json:"turn_profile,omitempty"`
+	MaxLLMRetries             int                 `json:"max_llm_retries,omitempty"            env:"PICOCLAW_AGENTS_DEFAULTS_MAX_LLM_RETRIES"`
+	LLMRetryBackoffSecs       int                 `json:"llm_retry_backoff_secs,omitempty"     env:"PICOCLAW_AGENTS_DEFAULTS_LLM_RETRY_BACKOFF_SECS"`
 }
 
 const DefaultMaxMediaSize = 20 * 1024 * 1024 // 20 MB
@@ -456,6 +613,44 @@ func (d *AgentDefaults) GetMaxMediaSize() int {
 		return d.MaxMediaSize
 	}
 	return DefaultMaxMediaSize
+}
+
+const (
+	// DefaultVisionMaxImageDimension is the longest edge, in pixels, that an
+	// inline image is downscaled to before being base64-encoded for a vision
+	// model. It matches the resolution most multimodal LLMs use internally,
+	// so shrinking larger images does not lose information the model would
+	// have seen anyway, while cutting the base64 payload (and its transient
+	// heap footprint) by an order of magnitude for photos from modern cameras.
+	DefaultVisionMaxImageDimension = 1568
+
+	// DefaultVisionJPEGQuality is the JPEG quality used when an oversized
+	// image is recompressed. 85 is visually high quality for LLM input.
+	DefaultVisionJPEGQuality = 85
+)
+
+// GetVisionMaxImageDimension returns the configured longest-edge cap for inline
+// images. When unset (0) the default cap is applied, so oversized images are
+// downscaled out of the box. Set a negative value (e.g. -1) to disable
+// downscaling and send images as-is (bounded only by GetMaxMediaSize).
+func (d *AgentDefaults) GetVisionMaxImageDimension() int {
+	switch {
+	case d.VisionMaxImageDimension == 0:
+		return DefaultVisionMaxImageDimension
+	case d.VisionMaxImageDimension < 0:
+		return 0
+	default:
+		return d.VisionMaxImageDimension
+	}
+}
+
+// GetVisionJPEGQuality returns the JPEG quality for recompressed images,
+// clamped to [1,100] with a default when unset.
+func (d *AgentDefaults) GetVisionJPEGQuality() int {
+	if d.VisionJPEGQuality <= 0 || d.VisionJPEGQuality > 100 {
+		return DefaultVisionJPEGQuality
+	}
+	return d.VisionJPEGQuality
 }
 
 // GetToolFeedbackMaxArgsLength returns the max visible text length for tool argument previews.
@@ -560,9 +755,8 @@ type FeishuSettings struct {
 }
 
 type DiscordSettings struct {
-	Token       SecureString `json:"token,omitzero" yaml:"token,omitempty" env:"PICOCLAW_CHANNELS_DISCORD_TOKEN"`
-	Proxy       string       `json:"proxy"          yaml:"-"               env:"PICOCLAW_CHANNELS_DISCORD_PROXY"`
-	MentionOnly bool         `json:"mention_only"   yaml:"-"               env:"PICOCLAW_CHANNELS_DISCORD_MENTION_ONLY"`
+	Token SecureString `json:"token,omitzero" yaml:"token,omitempty" env:"PICOCLAW_CHANNELS_DISCORD_TOKEN"`
+	Proxy string       `json:"proxy"          yaml:"-"               env:"PICOCLAW_CHANNELS_DISCORD_PROXY"`
 }
 
 type MaixCamSettings struct {
@@ -619,10 +813,9 @@ type LINESettings struct {
 }
 
 type OneBotSettings struct {
-	WSUrl              string       `json:"ws_url"                yaml:"-"                      env:"PICOCLAW_CHANNELS_ONEBOT_WS_URL"`
-	AccessToken        SecureString `json:"access_token,omitzero" yaml:"access_token,omitempty" env:"PICOCLAW_CHANNELS_ONEBOT_ACCESS_TOKEN"`
-	ReconnectInterval  int          `json:"reconnect_interval"    yaml:"-"                      env:"PICOCLAW_CHANNELS_ONEBOT_RECONNECT_INTERVAL"`
-	GroupTriggerPrefix []string     `json:"group_trigger_prefix"  yaml:"-"                      env:"PICOCLAW_CHANNELS_ONEBOT_GROUP_TRIGGER_PREFIX"`
+	WSUrl             string       `json:"ws_url"                yaml:"-"                      env:"PICOCLAW_CHANNELS_ONEBOT_WS_URL"`
+	AccessToken       SecureString `json:"access_token,omitzero" yaml:"access_token,omitempty" env:"PICOCLAW_CHANNELS_ONEBOT_ACCESS_TOKEN"`
+	ReconnectInterval int          `json:"reconnect_interval"    yaml:"-"                      env:"PICOCLAW_CHANNELS_ONEBOT_RECONNECT_INTERVAL"`
 }
 
 type WeComGroupConfig struct {
@@ -661,7 +854,6 @@ type PicoSettings struct {
 	Streaming       StreamingConfig `json:"streaming,omitzero"          yaml:"-"`
 	PingInterval    int             `json:"ping_interval,omitempty"     yaml:"-"`
 	ReadTimeout     int             `json:"read_timeout,omitempty"      yaml:"-"`
-	WriteTimeout    int             `json:"write_timeout,omitempty"     yaml:"-"`
 	MaxConnections  int             `json:"max_connections,omitempty"   yaml:"-"`
 }
 
@@ -739,6 +931,39 @@ type SlackWebhookTarget struct {
 type HeartbeatConfig struct {
 	Enabled  bool `json:"enabled"  env:"PICOCLAW_HEARTBEAT_ENABLED"`
 	Interval int  `json:"interval" env:"PICOCLAW_HEARTBEAT_INTERVAL"` // minutes, min 5
+}
+
+type PowerConfig struct {
+	LowPower                  bool `json:"low_power,omitempty"                    env:"PICOCLAW_POWER_LOW_POWER"`
+	LowPowerHeartbeatInterval int  `json:"low_power_heartbeat_interval,omitempty" env:"PICOCLAW_POWER_LOW_POWER_HEARTBEAT_INTERVAL"`
+	PollIntervalMultiplier    int  `json:"poll_interval_multiplier,omitempty"     env:"PICOCLAW_POWER_POLL_INTERVAL_MULTIPLIER"`
+}
+
+func (c PowerConfig) IsZero() bool { return c == (PowerConfig{}) }
+
+func (c PowerConfig) EffectiveHeartbeatInterval(normal int) int {
+	if !c.LowPower {
+		return normal
+	}
+	interval := c.LowPowerHeartbeatInterval
+	if interval <= 0 {
+		interval = 120
+	}
+	return max(normal, interval)
+}
+
+func (c PowerConfig) ScalePollInterval(interval time.Duration) time.Duration {
+	if !c.LowPower {
+		return interval
+	}
+	multiplier := c.PollIntervalMultiplier
+	if multiplier <= 0 {
+		multiplier = 5
+	}
+	if interval > time.Duration(1<<63-1)/time.Duration(multiplier) {
+		return time.Duration(1<<63 - 1)
+	}
+	return interval * time.Duration(multiplier)
 }
 
 type DevicesConfig struct {
@@ -1081,7 +1306,19 @@ type ExecConfig struct {
 	AllowRemote         bool     `                                 json:"allow_remote"          env:"PICOCLAW_TOOLS_EXEC_ALLOW_REMOTE"`
 	CustomDenyPatterns  []string `                                 json:"custom_deny_patterns"  env:"PICOCLAW_TOOLS_EXEC_CUSTOM_DENY_PATTERNS"`
 	CustomAllowPatterns []string `                                 json:"custom_allow_patterns" env:"PICOCLAW_TOOLS_EXEC_CUSTOM_ALLOW_PATTERNS"`
-	TimeoutSeconds      int      `                                 json:"timeout_seconds"       env:"PICOCLAW_TOOLS_EXEC_TIMEOUT_SECONDS"` // 0 means use default (60s)
+	TimeoutSeconds      int      `                                 json:"timeout_seconds"       env:"PICOCLAW_TOOLS_EXEC_TIMEOUT_SECONDS"`  // 0 means use default (60s)
+	MaxOutputChars      int      `                                 json:"max_output_chars"      env:"PICOCLAW_TOOLS_EXEC_MAX_OUTPUT_CHARS"` // 0 means use default (50000 chars)
+}
+
+// DefaultExecMaxOutputChars bounds foreground exec output before it is
+// truncated to a head+tail window with an omission notice.
+const DefaultExecMaxOutputChars = 50000
+
+func (c ExecConfig) GetMaxOutputChars() int {
+	if c.MaxOutputChars > 0 {
+		return c.MaxOutputChars
+	}
+	return DefaultExecMaxOutputChars
 }
 
 type SkillsToolsConfig struct {
@@ -1103,6 +1340,37 @@ type ReadFileToolConfig struct {
 	Enabled         bool   `json:"enabled"`
 	Mode            string `json:"mode"`
 	MaxReadFileSize int    `json:"max_read_file_size"`
+	// MaxLines caps how many lines a single line-mode read returns; requests
+	// above it are clamped. 0 means use the default (2000).
+	MaxLines int `json:"max_lines"`
+	// MaxLineLength caps how long any single line may be in the line-numbered
+	// view; the remainder is replaced by a " ... [truncated]" marker. 0 means
+	// use the default (2000).
+	MaxLineLength int `json:"max_line_length"`
+}
+
+const (
+	DefaultReadFileMaxLines      = 2000
+	DefaultReadFileMaxLineLength = 2000
+)
+
+func (c ReadFileToolConfig) GetMaxLines() int {
+	if c.MaxLines > 0 {
+		return c.MaxLines
+	}
+	return DefaultReadFileMaxLines
+}
+
+func (c ReadFileToolConfig) GetMaxLineLength() int {
+	if c.MaxLineLength > 0 {
+		return c.MaxLineLength
+	}
+	return DefaultReadFileMaxLineLength
+}
+
+type ImageGenerateToolConfig struct {
+	ToolConfig `       yaml:"-" envPrefix:"PICOCLAW_TOOLS_IMAGE_GENERATE_"`
+	ModelName  string `                                                    json:"model_name" env:"PICOCLAW_TOOLS_IMAGE_GENERATE_MODEL_NAME"`
 }
 
 const (
@@ -1131,31 +1399,40 @@ type ToolsConfig struct {
 	// FilterMinLength is the minimum content length required for filtering.
 	// Content shorter than this will be returned unchanged for performance.
 	// Default: 8
-	FilterMinLength int                `json:"filter_min_length" yaml:"-"                env:"PICOCLAW_TOOLS_FILTER_MIN_LENGTH"`
-	Web             WebToolsConfig     `json:"web"               yaml:"web,omitempty"`
-	Cron            CronToolsConfig    `json:"cron"              yaml:"-"`
-	Exec            ExecConfig         `json:"exec"              yaml:"-"`
-	Skills          SkillsToolsConfig  `json:"skills"            yaml:"skills,omitempty"`
-	MediaCleanup    MediaCleanupConfig `json:"media_cleanup"     yaml:"-"`
-	MCP             MCPConfig          `json:"mcp"               yaml:"-"`
-	AppendFile      ToolConfig         `json:"append_file"       yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_APPEND_FILE_"`
-	EditFile        ToolConfig         `json:"edit_file"         yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_EDIT_FILE_"`
-	FindSkills      ToolConfig         `json:"find_skills"       yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_FIND_SKILLS_"`
-	I2C             ToolConfig         `json:"i2c"               yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_I2C_"`
-	InstallSkill    ToolConfig         `json:"install_skill"     yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_INSTALL_SKILL_"`
-	ListDir         ToolConfig         `json:"list_dir"          yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_LIST_DIR_"`
-	LoadImage       ToolConfig         `json:"load_image"        yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_LOAD_IMAGE_"`
-	Message         MessageToolsConfig `json:"message"           yaml:"-"`
-	ReadFile        ReadFileToolConfig `json:"read_file"         yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_READ_FILE_"`
-	Serial          ToolConfig         `json:"serial"            yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_SERIAL_"`
-	SendFile        ToolConfig         `json:"send_file"         yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_SEND_FILE_"`
-	SendTTS         ToolConfig         `json:"send_tts"          yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_SEND_TTS_"`
-	Spawn           ToolConfig         `json:"spawn"             yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_SPAWN_"`
-	SpawnStatus     ToolConfig         `json:"spawn_status"      yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_SPAWN_STATUS_"`
-	SPI             ToolConfig         `json:"spi"               yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_SPI_"`
-	Subagent        ToolConfig         `json:"subagent"          yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_SUBAGENT_"`
-	WebFetch        ToolConfig         `json:"web_fetch"         yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_WEB_FETCH_"`
-	WriteFile       ToolConfig         `json:"write_file"        yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_WRITE_FILE_"`
+	FilterMinLength int `json:"filter_min_length" yaml:"-" env:"PICOCLAW_TOOLS_FILTER_MIN_LENGTH"`
+	// MaxInlineResultChars caps how much tool-result text stays inline in the
+	// model context. Larger results are saved as workspace artifacts and kept
+	// inline as a bounded head+tail preview plus a pointer to the full artifact.
+	// The limit is counted in Unicode characters (Go runes), not bytes.
+	// Default: 16384. A non-positive value disables the protection.
+	MaxInlineResultChars int                     `json:"max_inline_result_chars" yaml:"-"                env:"PICOCLAW_TOOLS_MAX_INLINE_RESULT_CHARS"`
+	Web                  WebToolsConfig          `json:"web"                     yaml:"web,omitempty"`
+	Cron                 CronToolsConfig         `json:"cron"                    yaml:"-"`
+	Exec                 ExecConfig              `json:"exec"                    yaml:"-"`
+	Skills               SkillsToolsConfig       `json:"skills"                  yaml:"skills,omitempty"`
+	MediaCleanup         MediaCleanupConfig      `json:"media_cleanup"           yaml:"-"`
+	MCP                  MCPConfig               `json:"mcp"                     yaml:"-"`
+	AppendFile           ToolConfig              `json:"append_file"             yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_APPEND_FILE_"`
+	EditFile             ToolConfig              `json:"edit_file"               yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_EDIT_FILE_"`
+	FindSkills           ToolConfig              `json:"find_skills"             yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_FIND_SKILLS_"`
+	I2C                  ToolConfig              `json:"i2c"                     yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_I2C_"`
+	ImageGenerate        ImageGenerateToolConfig `json:"image_generate"          yaml:"-"`
+	InstallSkill         ToolConfig              `json:"install_skill"           yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_INSTALL_SKILL_"`
+	ListDir              ToolConfig              `json:"list_dir"                yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_LIST_DIR_"`
+	LoadImage            ToolConfig              `json:"load_image"              yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_LOAD_IMAGE_"`
+	Message              MessageToolsConfig      `json:"message"                 yaml:"-"`
+	ReadFile             ReadFileToolConfig      `json:"read_file"               yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_READ_FILE_"`
+	SearchFiles          ToolConfig              `json:"search_files"            yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_SEARCH_FILES_"`
+	Serial               ToolConfig              `json:"serial"                  yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_SERIAL_"`
+	SendFile             ToolConfig              `json:"send_file"               yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_SEND_FILE_"`
+	SendTTS              ToolConfig              `json:"send_tts"                yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_SEND_TTS_"`
+	Spawn                ToolConfig              `json:"spawn"                   yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_SPAWN_"`
+	SpawnStatus          ToolConfig              `json:"spawn_status"            yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_SPAWN_STATUS_"`
+	SPI                  ToolConfig              `json:"spi"                     yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_SPI_"`
+	Subagent             ToolConfig              `json:"subagent"                yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_SUBAGENT_"`
+	Todo                 ToolConfig              `json:"todo"                    yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_TODO_"`
+	WebFetch             ToolConfig              `json:"web_fetch"               yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_WEB_FETCH_"`
+	WriteFile            ToolConfig              `json:"write_file"              yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_WRITE_FILE_"`
 }
 
 // IsFilterSensitiveDataEnabled returns true if sensitive data filtering is enabled
@@ -1169,6 +1446,17 @@ func (c *ToolsConfig) GetFilterMinLength() int {
 		return 8
 	}
 	return c.FilterMinLength
+}
+
+// DefaultMaxInlineResultChars is the default cap, in runes, on how much
+// tool-result text stays inline in model context. Larger results are spilled to
+// a workspace artifact.
+const DefaultMaxInlineResultChars = 16 * 1024
+
+// GetMaxInlineResultChars returns the inline tool-result cap in runes.
+// A non-positive value disables large-result artifact persistence.
+func (c *ToolsConfig) GetMaxInlineResultChars() int {
+	return c.MaxInlineResultChars
 }
 
 type SearchCacheConfig struct {
@@ -1260,6 +1548,15 @@ func (c *SkillRegistryConfig) DecodeParam(target any) error {
 	return json.Unmarshal(data, target)
 }
 
+// MCPOAuthConfig enables browser-based OAuth for a remote MCP server.
+// Empty client_id uses dynamic client registration.
+type MCPOAuthConfig struct {
+	ClientID     string   `json:"client_id,omitempty"`
+	Issuer       string   `json:"issuer,omitempty"`
+	Scopes       []string `json:"scopes,omitempty"`
+	CallbackPort int      `json:"callback_port,omitempty"`
+}
+
 // MCPServerConfig defines configuration for a single MCP server
 type MCPServerConfig struct {
 	// Enabled indicates whether this MCP server is active
@@ -1276,6 +1573,9 @@ type MCPServerConfig struct {
 	Env map[string]string `json:"env,omitempty"`
 	// EnvFile is the path to a file containing environment variables (stdio only)
 	EnvFile string `json:"env_file,omitempty"`
+	// InheritEnv passes the full parent environment to the stdio process when explicitly enabled.
+	// By default, only basic process variables and explicitly configured variables are passed.
+	InheritEnv bool `json:"inherit_env,omitempty"`
 	// Type is "stdio", "sse", "http", or "streamable-http".
 	// "http" and "streamable-http" both select streamable HTTP request-response
 	// mode, while "sse" keeps the standalone SSE listener enabled for
@@ -1286,6 +1586,8 @@ type MCPServerConfig struct {
 	URL string `json:"url,omitempty"`
 	// Headers are HTTP headers to send with requests (sse/http only)
 	Headers map[string]string `json:"headers,omitempty"`
+	// OAuth opts into browser login and persisted credentials.
+	OAuth *MCPOAuthConfig `json:"oauth,omitempty"`
 }
 
 // MCPConfig defines configuration for all MCP servers
@@ -1328,7 +1630,11 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if e := json.Unmarshal(data, &versionInfo); e != nil {
 		e = wrapJSONError(data, e, "config.json")
-		logger.ErrorCF("config", formatDiagnosticLogMessage("Malformed config file", e), map[string]any{"path": path})
+		logger.ErrorCF(
+			"config",
+			formatDiagnosticLogMessage("Malformed config file", e),
+			map[string]any{"path": path},
+		)
 		return nil, e
 	}
 	if len(data) <= 10 {
@@ -1864,6 +2170,8 @@ func expandMultiKeyModels(models []*ModelConfig) []*ModelConfig {
 
 func (t *ToolsConfig) IsToolEnabled(name string) bool {
 	switch name {
+	case "todo":
+		return t.Todo.Enabled
 	case "web":
 		return t.Web.Enabled
 	case "cron":
@@ -1882,6 +2190,8 @@ func (t *ToolsConfig) IsToolEnabled(name string) bool {
 		return t.FindSkills.Enabled
 	case "i2c":
 		return t.I2C.Enabled
+	case "image_generate":
+		return t.ImageGenerate.Enabled
 	case "install_skill":
 		return t.InstallSkill.Enabled
 	case "list_dir":
@@ -1892,6 +2202,8 @@ func (t *ToolsConfig) IsToolEnabled(name string) bool {
 		return t.Message.Enabled
 	case "read_file":
 		return t.ReadFile.Enabled
+	case "search_files":
+		return t.SearchFiles.Enabled
 	case "serial":
 		return t.Serial.Enabled
 	case "spawn":

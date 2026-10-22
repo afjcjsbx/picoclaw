@@ -71,51 +71,6 @@ func turnProfileNativeSearchCallable(
 	return ok && nativeProvider.SupportsNativeSearch()
 }
 
-func promptBuildRequestForProcessOptions(
-	agent *AgentInstance,
-	opts processOptions,
-	history []providers.Message,
-	summary string,
-	currentMessage string,
-	media []string,
-) PromptBuildRequest {
-	req := PromptBuildRequest{
-		History:           history,
-		Summary:           summary,
-		CurrentMessage:    currentMessage,
-		Media:             append([]string(nil), media...),
-		Channel:           opts.Channel,
-		ChatID:            opts.ChatID,
-		SenderID:          opts.SenderID,
-		SenderDisplayName: opts.SenderDisplayName,
-		ActiveSkills:      activeSkillNames(agent, opts),
-		Overlays:          promptOverlaysForOptions(opts),
-	}
-	profile := opts.TurnProfile
-	hasCallableTools := true
-	if profile.Enabled && agent != nil {
-		hasCallableTools = turnProfileHasCallableTools(profile, agent.Tools.ToProviderDefs())
-	}
-	if turnProfileSystemPromptOff(profile) {
-		req.SuppressDefaultSystemPrompt = true
-		req.SuppressSkillContext = true
-		req.ToolUseFallback = hasCallableTools
-	}
-	if profile.Enabled && !hasCallableTools {
-		req.SuppressToolUseRule = true
-	}
-	if turnProfileSkillsOff(profile) {
-		req.SuppressSkillContext = true
-	}
-	if turnProfileCustomSkills(profile) {
-		req.AllowedSkills = append([]string(nil), profile.AllowedSkills...)
-	}
-	if profile.Enabled && profile.ToolsMode == config.TurnProfileModeCustom {
-		req.AllowedTools = append([]string(nil), profile.AllowedTools...)
-	}
-	return req
-}
-
 func promptOverlaysForOptions(opts processOptions) []PromptPart {
 	systemPrompt := strings.TrimSpace(opts.SystemPromptOverride)
 	if systemPrompt == "" {

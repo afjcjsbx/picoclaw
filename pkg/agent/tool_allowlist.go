@@ -79,7 +79,7 @@ func unknownAgentToolNames(
 	unknown := make(map[string]struct{})
 	for _, raw := range definition.Agent.Frontmatter.Tools {
 		name := strings.ToLower(strings.TrimSpace(raw))
-		if name == "" || strings.HasPrefix(name, dynamicMCPToolPrefix) {
+		if name == "" || strings.HasPrefix(name, dynamicMCPToolPrefix) || strings.HasPrefix(name, "plugin_") {
 			continue
 		}
 		if _, ok := known[name]; ok {
@@ -120,6 +120,11 @@ func unknownAgentMCPServerNames(cfg *config.Config, definition AgentContextDefin
 		}
 		if _, ok := knownServers[name]; ok {
 			continue
+		}
+		if pluginID, _, qualified := strings.Cut(name, ":"); qualified && cfg.Plugins.Enabled {
+			if entry, ok := cfg.Plugins.Entries[pluginID]; ok && entry.Enabled {
+				continue
+			}
 		}
 		unknown[name] = struct{}{}
 	}

@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"sort"
 	"strings"
 	"sync/atomic"
 	"unicode"
@@ -46,15 +47,35 @@ func Truncate(s string, maxLen int) string {
 	if maxLen <= 0 {
 		return ""
 	}
-	runes := []rune(s)
-	if len(runes) <= maxLen {
+	// Fast path: the rune count never exceeds the byte count, so a string
+	// that fits in maxLen bytes cannot need truncation.
+	if len(s) <= maxLen {
 		return s
 	}
+
 	// Reserve 3 chars for "..."
-	if maxLen <= 3 {
-		return string(runes[:maxLen])
+	keep, suffix := maxLen, ""
+	if maxLen > 3 {
+		keep, suffix = maxLen-3, "..."
 	}
-	return string(runes[:maxLen-3]) + "..."
+
+	// Walk rune boundaries directly instead of converting the whole string to
+	// []rune: the byte offset of the cut point is only needed once, and long
+	// inputs (tool results, message contents) would otherwise pay a 4x-bytes
+	// conversion just to count runes.
+	count := 0
+	cut := len(s)
+	for i := range s {
+		if count == keep {
+			cut = i
+		}
+		if count == maxLen {
+			return s[:cut] + suffix
+		}
+		count++
+	}
+	// The string has fewer runes than keep after all: nothing to cut.
+	return s
 }
 
 // DerefStr dereferences a pointer to a string and
@@ -64,4 +85,16 @@ func DerefStr(s *string, fallback string) string {
 		return fallback
 	}
 	return *s
+}
+
+// SortedArgKeys returns the sorted key names of a tool argument map.
+// Logging only keys (never values) keeps secrets passed to tools out of log
+// files while still making tool calls traceable.
+func SortedArgKeys(args map[string]any) []string {
+	keys := make([]string, 0, len(args))
+	for key := range args {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }

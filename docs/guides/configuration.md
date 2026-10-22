@@ -40,14 +40,42 @@ PICOCLAW_HOME=/srv/picoclaw PICOCLAW_CONFIG=/srv/picoclaw/main.json picoclaw gat
 ```json
 {
   "gateway": {
-    "log_level": "warn"
+    "log_level": "warn",
+    "log_max_size_mb": 2,
+    "log_max_backups": 3
   }
 }
 ```
 
 When omitted, the default is `warn`. Supported values: `debug`, `info`, `warn`, `error`, `fatal`.
 
+`log_max_size_mb` sets the maximum size of each active log before rotation (default `2`, allowed `1`–`1024`). `log_max_backups` sets how many numbered archives to keep (default `3`, allowed `0`–`100`; `0` disables archives). Approximate disk usage per log is `(log_max_backups + 1) × log_max_size_mb`. These settings apply to `logs/gateway.log`, the workspace `heartbeat.log`, and any file selected with `PICOCLAW_LOG_FILE`; the panic log is trimmed to the configured size at startup. Existing oversized logs are trimmed to their latest content on startup. Environment overrides are `PICOCLAW_GATEWAY_LOG_MAX_SIZE_MB` and `PICOCLAW_GATEWAY_LOG_MAX_BACKUPS`. Restart the Gateway for changed rotation settings to take effect.
+
 You can also override this with the environment variable `PICOCLAW_LOG_LEVEL`.
+
+### Gateway Hot Reload
+
+The Gateway can reload `config.json` without a restart. Two independent triggers are available:
+
+- **Config file watching** — opt in with `gateway.hot_reload`:
+
+  ```json
+  {
+    "gateway": {
+      "hot_reload": true
+    }
+  }
+  ```
+
+  The default is `false`. When enabled, PicoClaw polls the config file (every 2 seconds, scaled by `power.poll_interval_multiplier`) and reloads after a change is written and validated. An invalid or partially written file is ignored and retried on the next poll; the last valid configuration stays in effect.
+
+- **`POST /reload`** — always available, regardless of `gateway.hot_reload`, on the shared Gateway HTTP server. It requires the Gateway auth token (`Authorization: Bearer <token>`) when one is configured and returns `202 Accepted` as soon as the reload is scheduled. The reload itself runs asynchronously; watch the `gateway.reload.started` / `gateway.reload.completed` / `gateway.reload.failed` runtime events, or the logs, for the outcome.
+
+A reload swaps the provider and the agent registry/configuration, restarts the cron, heartbeat, media, device and voice services, and restarts only the channels whose configuration changed. In-flight requests are allowed to drain before the previous provider is closed.
+
+**Not reloadable:** changing `gateway.host`, `gateway.port`, the log rotation settings (`log_max_size_mb`, `log_max_backups`) or the singleton PID file requires a full Gateway restart. Environment-variable overrides are also read only at startup.
+
+`gateway.hot_reload` can also be set with the environment variable `PICOCLAW_GATEWAY_HOT_RELOAD`.
 
 ### Workspace Layout
 
@@ -176,11 +204,11 @@ Once skills are installed, and MCP servers are configured, you can inspect and f
 
 - `/list skills` shows the installed skill names available to the current agent.
 - `/list mcp` shows configured MCP servers with enabled/deferred/connected status.
+- `/list plugins` shows installed plugin packages with their state (ready, degraded, failed, disabled, not enabled) and path.
 - `/show mcp <server>` shows the active tools exposed by a connected MCP server.
 - `/use <skill> <message>` forces a specific skill for a single request.
 - `/use <skill>` arms that skill for your next message in the same chat session.
 - `/use clear` cancels a pending skill override created by `/use <skill>`.
-- `/btw <question>` asks an immediate side question without changing the current session history. `/btw` is handled as a no-tool query and does not enter the normal tool-execution flow.
 
 Examples:
 
@@ -189,7 +217,6 @@ Examples:
 /list mcp
 /show mcp github
 /use git explain how to squash the last 3 commits
-/btw remind me what we already decided about the deploy plan
 /use italiapersonalfinance
 dammi le ultime news
 ```
@@ -197,7 +224,7 @@ dammi le ultime news
 ### Unified Command Execution Policy
 
 - Generic slash commands are executed through a single path in `pkg/agent/loop.go` via `commands.Executor`.
-- Channel adapters no longer consume generic commands locally; they forward inbound text to the bus/agent path. Telegram still auto-registers supported commands such as `/start`, `/help`, `/show`, `/list`, `/use`, and `/btw` at startup.
+- Channel adapters no longer consume generic commands locally; they forward inbound text to the bus/agent path. Telegram still auto-registers supported commands such as `/start`, `/help`, `/show`, `/list`, `/use` at startup.
 - Unknown slash command (for example `/foo`) passes through to normal LLM processing.
 - Registered but unsupported command on the current channel (for example `/show` on WhatsApp) returns an explicit user-facing error and stops further processing.
 
@@ -379,6 +406,7 @@ When `restrict_to_workspace: true`, the following tools are sandboxed:
 | `read_file`   | Read files       | Only files within workspace            |
 | `write_file`  | Write files      | Only files within workspace            |
 | `list_dir`    | List directories | Only directories within workspace      |
+| `search_files` | Search file contents or filenames | Uses the same read-path restrictions; paginated, bounded results |
 | `edit_file`   | Edit files       | Only files within workspace            |
 | `append_file` | Append to files  | Only files within workspace            |
 | `exec`        | Execute commands | Command paths must be within workspace |
@@ -400,6 +428,7 @@ Even with `restrict_to_workspace: false`, the `exec` tool blocks these dangerous
 |------------|------|---------|-------------|
 | `tools.allow_read_paths` | string[] | `[]` | Additional paths allowed for reading outside workspace |
 | `tools.allow_write_paths` | string[] | `[]` | Additional paths allowed for writing outside workspace |
+| `tools.search_files.enabled` | bool | `true` | Enables regex content search and glob/substring filename search |
 | `tools.message.media_enabled` | bool | `false` | Allows the `message` tool to attach local media files by path. This is separate from `tools.send_file.enabled`; enable it only when unified text/media/caption delivery is intended. |
 
 ### Read File Mode
@@ -411,6 +440,8 @@ Even with `restrict_to_workspace: false`, the `exec` tool blocks these dangerous
 | `tools.read_file.enabled` | bool | `true` | Enables the `read_file` tool |
 | `tools.read_file.mode` | string | `bytes` | Selects the `read_file` implementation: `bytes` or `lines` |
 | `tools.read_file.max_read_file_size` | int | `65536` | Maximum bytes returned by `read_file` |
+| `tools.read_file.max_lines` | int | `2000` | Upper bound on lines returned by a single line-mode read; larger `max_lines` requests are clamped |
+| `tools.read_file.max_line_length` | int | `2000` | Maximum characters per line in the line-numbered view; the remainder is replaced by a ` ... [truncated]` marker |
 
 #### Mode: `bytes`
 
@@ -435,12 +466,12 @@ Parameters:
 
 * `path` (required): File path
 * `start_line` (optional): Starting line number, 1-indexed and inclusive, default `1`
-* `max_lines` (optional): Maximum number of lines to read, default = all remaining lines until EOF or byte budget
+* `max_lines` (optional): Maximum number of lines to read, default = all remaining lines until EOF or byte budget; requests above `tools.read_file.max_lines` are clamped
 
 Behavior notes:
 
 * Binary-looking files are rejected with guidance to switch `read_file` to `mode = bytes`
-* Extremely long single lines are truncated rather than skipped
+* Extremely long single lines are cut after `tools.read_file.max_line_length` characters with a ` ... [truncated]` marker, and the read continues with the next line; if the byte budget runs out mid-line, the header reports that cut instead
 
 Use `mode = lines` when:
 
@@ -456,7 +487,9 @@ Use `mode = lines` when:
     "read_file": {
       "enabled": true,
       "mode": "lines",
-      "max_read_file_size": 65536
+      "max_read_file_size": 65536,
+      "max_lines": 2000,
+      "max_line_length": 2000
     }
   }
 }
@@ -550,6 +583,8 @@ PicoClaw can perform periodic tasks automatically. Create a `HEARTBEAT.md` file 
 
 The agent will read this file every 30 minutes (configurable) and execute any tasks using available tools.
 
+Tasks are read from the content that follows the `Add your heartbeat tasks below this line:` marker. If the marker is missing, the whole file is treated as a task list. The auto-generated template leaves that section empty, so an untouched `HEARTBEAT.md` keeps the heartbeat idle. Quick answers are delivered back to the last active channel; long tasks should use `spawn` (see below), and the subagent reports its own result with the `message` tool.
+
 #### Async Tasks with Spawn
 
 For long-running tasks (web search, API calls), use the `spawn` tool to create a **subagent**:
@@ -614,6 +649,20 @@ The subagent has access to tools (message, web_search, etc.) and can communicate
 
 * `PICOCLAW_HEARTBEAT_ENABLED=false` to disable
 * `PICOCLAW_HEARTBEAT_INTERVAL=60` to change interval
+
+For constrained devices, enable the static low-power profile:
+
+```json
+{
+  "power": {
+    "low_power": true,
+    "low_power_heartbeat_interval": 120,
+    "poll_interval_multiplier": 5
+  }
+}
+```
+
+With `low_power` enabled, the heartbeat interval defaults to 120 minutes (or the larger configured normal interval), and the agent loop blocks on inbound events instead of waking every 100 ms. `poll_interval_multiplier` scales maintenance intervals: `5` turns a 30-minute media cleanup interval into 150 minutes, a 10-second channel-maintenance interval into 50 seconds, and a 2-second config-file check into 10 seconds when hot reload is enabled. Set `low_power_heartbeat_interval` and `poll_interval_multiplier` to tune the profile. Channel protocol keepalives remain unchanged so connected integrations stay available.
 
 ### Providers
 
@@ -1086,7 +1135,7 @@ This keeps the runtime lightweight while making new OpenAI-compatible backends m
       "max_tokens": 8192,
       "temperature": 0.7,
       "max_tool_iterations": 20,
-      "max_parallel_turns": 1
+      "max_parallel_turns": 5
     }
   },
   "providers": {
@@ -1100,7 +1149,7 @@ This keeps the runtime lightweight while making new OpenAI-compatible backends m
 
 > **Note**: The `providers` format is deprecated. Use the new `model_list` format with `.security.yml` for better security.
 >
-> **`max_parallel_turns`**: Controls concurrent processing of messages from different sessions. `1` (default) = sequential; `>1` = parallel. Messages from the same session are always serialized. See [Steering docs](../architecture/steering.md) for details.
+> **`max_parallel_turns`**: Controls concurrent processing of messages from different sessions. `5` is the default; `0` or `1` = sequential; `>1` = parallel. Messages from the same session are always serialized. See [Steering docs](../architecture/steering.md) for details.
 
 </details>
 
@@ -1144,6 +1193,27 @@ This keeps the runtime lightweight while making new OpenAI-compatible backends m
 > **Note**: Sensitive fields (`api_key`, `token`, etc.) can be omitted and stored in `.security.yml` for better security.
 
 </details>
+
+### Tool Loop Detection
+
+Loop detection is an optional guard against consecutive identical tool calls within one turn:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "loop_detection": {
+        "enabled": true,
+        "repeat_threshold": 3,
+        "critical_threshold": 6,
+        "window_size": 20
+      }
+    }
+  }
+}
+```
+
+At `repeat_threshold`, PicoClaw adds a turn-local warning for the model. At `critical_threshold`, it stops the loop with a final response. `window_size` bounds the per-turn hash history and must cover the critical threshold. Calls are compared using the tool name and complete arguments, so legitimate pagination and different paths or IDs remain distinct. `spawn_status` polling is excluded because the same request can return a new task status; it also resets any preceding repeat streak. The feature is disabled by default and complements, rather than replaces, `max_tool_iterations`.
 
 ### Scheduled Tasks / Reminders
 

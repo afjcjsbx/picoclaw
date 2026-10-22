@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"sync"
 
+	"github.com/sipeed/picoclaw/pkg/isolation"
 	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
@@ -68,7 +69,7 @@ func startRPC(serverPath, dataDir string) (*rpcClient, error) {
 	// Let the server's logs flow to our stderr for easy diagnostics.
 	cmd.Stderr = logWriter{}
 
-	if err := cmd.Start(); err != nil {
+	if err := isolation.Start(cmd); err != nil {
 		return nil, fmt.Errorf("start deltachat-rpc-server (%s): %w", serverPath, err)
 	}
 

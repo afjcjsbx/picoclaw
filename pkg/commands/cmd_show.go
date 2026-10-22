@@ -13,13 +13,7 @@ func showCommand() Definition {
 			{
 				Name:        "model",
 				Description: "Current model and provider",
-				Handler: func(_ context.Context, req Request, rt *Runtime) error {
-					if rt == nil || rt.GetModelInfo == nil {
-						return req.Reply(unavailableMsg)
-					}
-					name, provider := rt.GetModelInfo()
-					return req.Reply(fmt.Sprintf("Current Model: %s (Provider: %s)", name, provider))
-				},
+				Handler:     currentModelHandler(),
 			},
 			{
 				Name:        "channel",
@@ -40,5 +34,15 @@ func showCommand() Definition {
 				Handler:     showMCPToolsHandler(),
 			},
 		},
+	}
+}
+
+func currentModelHandler() Handler {
+	return func(_ context.Context, req Request, rt *Runtime) error {
+		if rt == nil || rt.GetModelInfo == nil {
+			return req.Reply(unavailableMsg)
+		}
+		name, provider := rt.GetModelInfo()
+		return req.Reply(fmt.Sprintf("Current Model: %s (Provider: %s)", name, provider))
 	}
 }

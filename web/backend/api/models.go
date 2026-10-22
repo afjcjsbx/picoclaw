@@ -1262,6 +1262,9 @@ func fetchUpstreamModels(ctx context.Context, provider, apiBase, apiKey string) 
 	case "nearai":
 		fetchURL = apiBase + "/model/list"
 		return fetchNearAIModels(ctx, fetchURL, apiKey)
+	case "opencode-go":
+		// api_base is the family-agnostic root; the OpenAI-style list lives under /v1.
+		return fetchOpenAICompatibleModels(ctx, apiBase+"/v1/models", apiKey)
 	default:
 		// OpenAI-compatible: /v1/models
 		fetchURL = apiBase + "/models"

@@ -20,7 +20,25 @@ import (
 	"github.com/sipeed/picoclaw/pkg/skills"
 	"github.com/sipeed/picoclaw/pkg/state"
 	"github.com/sipeed/picoclaw/pkg/tools"
+	fstools "github.com/sipeed/picoclaw/pkg/tools/fs"
+	hardwaretools "github.com/sipeed/picoclaw/pkg/tools/hardware"
+	integrationtools "github.com/sipeed/picoclaw/pkg/tools/integration"
 )
+
+// newRateLimiterRegistry registers rate limiters for every candidate set an
+// agent can send requests through (primary, light-routing and image models) so
+// that RPM limits configured in ModelConfig are enforced before each LLM call.
+func newRateLimiterRegistry(registry *AgentRegistry) *providers.RateLimiterRegistry {
+	rl := providers.NewRateLimiterRegistry()
+	for _, agentID := range registry.ListAgentIDs() {
+		if agent, ok := registry.GetAgent(agentID); ok {
+			rl.RegisterCandidates(agent.Candidates)
+			rl.RegisterCandidates(agent.LightCandidates)
+			rl.RegisterCandidates(agent.ImageCandidates)
+		}
+	}
+	return rl
+}
 
 func NewAgentLoop(
 	cfg *config.Config,
@@ -30,18 +48,17 @@ func NewAgentLoop(
 ) *AgentLoop {
 	registry := NewAgentRegistry(cfg, provider)
 
+	// getSubTurnConfig clamps silently because it runs on every spawn; warn once here.
+	if n := cfg.Agents.Defaults.SubTurn.MaxConcurrent; n > maxSubTurnConcurrency {
+		logger.WarnCF("agent", "subturn.max_concurrent exceeds the hard cap and will be clamped", map[string]any{
+			"configured": n,
+			"effective":  maxSubTurnConcurrency,
+		})
+	}
+
 	// Set up shared fallback chain with rate limiting.
 	cooldown := providers.NewCooldownTracker()
-	rl := providers.NewRateLimiterRegistry()
-	// Register rate limiters for all agents' candidates so that RPM limits
-	// configured in ModelConfig are enforced before each LLM call.
-	for _, agentID := range registry.ListAgentIDs() {
-		if agent, ok := registry.GetAgent(agentID); ok {
-			rl.RegisterCandidates(agent.Candidates)
-			rl.RegisterCandidates(agent.LightCandidates)
-		}
-	}
-	fallbackChain := providers.NewFallbackChain(cooldown, rl)
+	fallbackChain := providers.NewFallbackChain(cooldown, newRateLimiterRegistry(registry))
 
 	// Create state manager using default agent's workspace for channel recording
 	defaultAgent := registry.GetDefaultAgent()
@@ -57,7 +74,7 @@ func NewAgentLoop(
 		})
 	}
 
-	// Determine worker pool size from config (default: 1 = sequential)
+	// A zero value in programmatically built configs keeps turns sequential.
 	workerPoolSize := cfg.Agents.Defaults.MaxParallelTurns
 	if workerPoolSize <= 0 {
 		workerPoolSize = 1
@@ -65,6 +82,7 @@ func NewAgentLoop(
 
 	al := &AgentLoop{
 		bus:               msgBus,
+		stopCh:            make(chan struct{}),
 		cfg:               cfg,
 		registry:          registry,
 		state:             stateManager,
@@ -120,6 +138,9 @@ func registerSharedTools(
 			logger.WarnCF("voice-tts", "send_tts enabled but no TTS provider configured", nil)
 		}
 	}
+	al.mu.Lock()
+	al.ttsProvider = ttsProvider
+	al.mu.Unlock()
 
 	for _, agentID := range registry.ListAgentIDs() {
 		agent, ok := registry.GetAgent(agentID)
@@ -128,7 +149,7 @@ func registerSharedTools(
 		}
 
 		if cfg.Tools.IsToolEnabled("web") {
-			searchTool, err := tools.NewWebSearchTool(tools.WebSearchToolOptionsFromConfig(cfg))
+			searchTool, err := integrationtools.NewWebSearchTool(integrationtools.WebSearchToolOptionsFromConfig(cfg))
 			if err != nil {
 				logger.ErrorCF("agent", "Failed to create web search tool", map[string]any{"error": err.Error()})
 			} else if searchTool != nil {
@@ -136,8 +157,8 @@ func registerSharedTools(
 			}
 		}
 		if cfg.Tools.IsToolEnabled("web_fetch") {
-			fetchTool, err := tools.NewWebFetchToolWithProxy(
-				50000,
+			fetchTool, err := integrationtools.NewWebFetchToolWithProxy(
+				0, // 0 = use the tool's flood-guard default; oversized pages are spilled, not cut
 				cfg.Tools.Web.Proxy,
 				cfg.Tools.Web.Format,
 				cfg.Tools.Web.FetchLimitBytes,
@@ -151,18 +172,18 @@ func registerSharedTools(
 
 		// Hardware tools (I2C, SPI) - Linux only, returns error on other platforms
 		if cfg.Tools.IsToolEnabled("i2c") {
-			agent.Tools.Register(tools.NewI2CTool())
+			agent.Tools.Register(hardwaretools.NewI2CTool())
 		}
 		if cfg.Tools.IsToolEnabled("spi") {
-			agent.Tools.Register(tools.NewSPITool())
+			agent.Tools.Register(hardwaretools.NewSPITool())
 		}
 		if cfg.Tools.IsToolEnabled("serial") {
-			agent.Tools.Register(tools.NewSerialTool())
+			agent.Tools.Register(hardwaretools.NewSerialTool())
 		}
 
 		// Message tool
 		if cfg.Tools.IsToolEnabled("message") {
-			messageTool := tools.NewMessageTool()
+			messageTool := integrationtools.NewMessageTool()
 			if cfg.Tools.Message.MediaEnabled {
 				messageTool.ConfigureLocalMedia(
 					agent.Workspace,
@@ -219,7 +240,7 @@ func registerSharedTools(
 			agent.Tools.Register(messageTool)
 		}
 		if cfg.Tools.IsToolEnabled("reaction") {
-			reactionTool := tools.NewReactionTool()
+			reactionTool := integrationtools.NewReactionTool()
 			reactionTool.SetReactionCallback(func(ctx context.Context, channel, chatID, messageID string) error {
 				if al.channelManager == nil {
 					return fmt.Errorf("channel manager not configured")
@@ -240,7 +261,7 @@ func registerSharedTools(
 
 		// Send file tool (outbound media via MediaStore — store injected later by SetMediaStore)
 		if cfg.Tools.IsToolEnabled("send_file") {
-			sendFileTool := tools.NewSendFileTool(
+			sendFileTool := fstools.NewSendFileTool(
 				agent.Workspace,
 				cfg.Agents.Defaults.RestrictToWorkspace,
 				cfg.Agents.Defaults.GetMaxMediaSize(),
@@ -250,12 +271,21 @@ func registerSharedTools(
 			agent.Tools.Register(sendFileTool)
 		}
 
+		if cfg.Tools.IsToolEnabled("image_generate") {
+			imageGenerateTool := integrationtools.NewImageGenerateTool(
+				cfg,
+				cfg.Agents.Defaults.GetMaxMediaSize(),
+				nil,
+			)
+			agent.Tools.Register(imageGenerateTool)
+		}
+
 		if ttsProvider != nil {
-			agent.Tools.Register(tools.NewSendTTSTool(ttsProvider, nil))
+			agent.Tools.Register(integrationtools.NewSendTTSTool(ttsProvider, nil))
 		}
 
 		if cfg.Tools.IsToolEnabled("load_image") {
-			loadImageTool := tools.NewLoadImageTool(
+			loadImageTool := fstools.NewLoadImageTool(
 				agent.Workspace,
 				cfg.Agents.Defaults.RestrictToWorkspace,
 				cfg.Agents.Defaults.GetMaxMediaSize(),
@@ -277,11 +307,11 @@ func registerSharedTools(
 					cfg.Tools.Skills.SearchCache.MaxSize,
 					time.Duration(cfg.Tools.Skills.SearchCache.TTLSeconds)*time.Second,
 				)
-				agent.Tools.Register(tools.NewFindSkillsTool(registryMgr, searchCache))
+				agent.Tools.Register(integrationtools.NewFindSkillsTool(registryMgr, searchCache))
 			}
 
 			if install_skills_enable {
-				agent.Tools.Register(tools.NewInstallSkillTool(registryMgr, agent.Workspace))
+				agent.Tools.Register(integrationtools.NewInstallSkillTool(registryMgr, agent.Workspace))
 			}
 		}
 
@@ -298,7 +328,7 @@ func registerSharedTools(
 			// This keeps subagent vision support working even when the optimized
 			// sub-turn spawner path is unavailable.
 			subagentManager.SetMediaResolver(func(msgs []providers.Message) []providers.Message {
-				return resolveMediaRefs(msgs, al.mediaStore, cfg.Agents.Defaults.GetMaxMediaSize(), 0)
+				return resolveMediaRefsWithOptions(msgs, al.mediaStore, mediaResolveOptionsFor(cfg), 0)
 			})
 
 			// Set the spawner that links into AgentLoop's turnState
@@ -320,8 +350,8 @@ func registerSharedTools(
 						turnID:         "adhoc-root",
 						depth:          0,
 						session:        nil, // Ephemeral session not needed for adhoc spawn
-						pendingResults: make(chan *tools.ToolResult, 16),
-						concurrencySem: make(chan struct{}, 5),
+						pendingResults: make(chan *tools.ToolResult, subTurnPendingResultsBuffer),
+						concurrencySem: make(chan struct{}, al.getSubTurnConfig().maxConcurrent),
 					}
 				}
 

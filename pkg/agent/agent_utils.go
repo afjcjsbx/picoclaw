@@ -409,6 +409,20 @@ func ensureSessionMetadata(store session.SessionStore, key string, scope *sessio
 	metaStore.EnsureSessionMetadata(key, scope, aliases)
 }
 
+// warnSessionStoreError logs a failed session store operation and lets the
+// caller continue with its previous flow. Write failures are not fatal to a
+// turn, but silently dropping them hides persistence problems.
+func warnSessionStoreError(sessionKey, operation string, err error) {
+	if err == nil {
+		return
+	}
+	logger.WarnCF("agent", "Session store operation failed", map[string]any{
+		"session_key": sessionKey,
+		"operation":   operation,
+		"error":       err.Error(),
+	})
+}
+
 func sleepWithContext(ctx context.Context, d time.Duration) error {
 	timer := time.NewTimer(d)
 	defer timer.Stop()
@@ -519,16 +533,6 @@ func activeSkillNames(agent *AgentInstance, opts processOptions) []string {
 	return resolved
 }
 
-func sideQuestionResponseContent(response *providers.LLMResponse) string {
-	if response == nil {
-		return ""
-	}
-	if strings.TrimSpace(response.Content) != "" {
-		return response.Content
-	}
-	return responseReasoningContent(response)
-}
-
 func responseReasoningContent(response *providers.LLMResponse) string {
 	if response == nil {
 		return ""
@@ -557,7 +561,7 @@ func hasMediaRefs(messages []providers.Message) bool {
 	return false
 }
 
-func sideQuestionModelName(agent *AgentInstance, usedLight bool) string {
+func lightModelName(agent *AgentInstance, usedLight bool) string {
 	if usedLight && len(agent.LightCandidates) > 0 {
 		if name := resolvedCandidateModelName(agent.LightCandidates, ""); name != "" {
 			return name
@@ -584,12 +588,6 @@ func modelAliasFromCandidateIdentityKey(identityKey string) string {
 		return ""
 	}
 	return strings.TrimSpace(strings.TrimPrefix(identityKey, prefix))
-}
-
-func closeProviderIfStateful(provider providers.LLMProvider) {
-	if stateful, ok := provider.(providers.StatefulProvider); ok {
-		stateful.Close()
-	}
 }
 
 // activeRequestsInc atomically increments the active request count.

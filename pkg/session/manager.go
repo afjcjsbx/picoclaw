@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -75,8 +76,8 @@ func normalizeHistoryCreatedAt(history []providers.Message) {
 	}
 }
 
-func (sm *SessionManager) AddMessage(sessionKey, role, content string) {
-	sm.AddFullMessage(sessionKey, providers.Message{
+func (sm *SessionManager) AddMessage(ctx context.Context, sessionKey, role, content string) error {
+	return sm.AddFullMessage(ctx, sessionKey, providers.Message{
 		Role:    role,
 		Content: content,
 	})
@@ -84,9 +85,9 @@ func (sm *SessionManager) AddMessage(sessionKey, role, content string) {
 
 // AddFullMessage adds a complete message with tool calls and tool call ID to the session.
 // This is used to save the full conversation flow including tool calls and tool results.
-func (sm *SessionManager) AddFullMessage(sessionKey string, msg providers.Message) {
+func (sm *SessionManager) AddFullMessage(_ context.Context, sessionKey string, msg providers.Message) error {
 	if messageutil.IsTransientAssistantThoughtMessage(msg) {
-		return
+		return nil
 	}
 
 	sm.mu.Lock()
@@ -107,34 +108,35 @@ func (sm *SessionManager) AddFullMessage(sessionKey string, msg providers.Messag
 
 	session.Messages = append(session.Messages, msg)
 	session.Updated = now
+	return nil
 }
 
-func (sm *SessionManager) GetHistory(key string) []providers.Message {
+func (sm *SessionManager) GetHistory(_ context.Context, key string) ([]providers.Message, error) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
 	session, ok := sm.sessions[key]
 	if !ok {
-		return []providers.Message{}
+		return []providers.Message{}, nil
 	}
 
 	history := make([]providers.Message, len(session.Messages))
 	copy(history, session.Messages)
-	return history
+	return history, nil
 }
 
-func (sm *SessionManager) GetSummary(key string) string {
+func (sm *SessionManager) GetSummary(_ context.Context, key string) (string, error) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
 	session, ok := sm.sessions[key]
 	if !ok {
-		return ""
+		return "", nil
 	}
-	return session.Summary
+	return session.Summary, nil
 }
 
-func (sm *SessionManager) SetSummary(key string, summary string) {
+func (sm *SessionManager) SetSummary(_ context.Context, key string, summary string) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
@@ -143,29 +145,31 @@ func (sm *SessionManager) SetSummary(key string, summary string) {
 		session.Summary = summary
 		session.Updated = time.Now()
 	}
+	return nil
 }
 
-func (sm *SessionManager) TruncateHistory(key string, keepLast int) {
+func (sm *SessionManager) TruncateHistory(_ context.Context, key string, keepLast int) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
 	session, ok := sm.sessions[key]
 	if !ok {
-		return
+		return nil
 	}
 
 	if keepLast <= 0 {
 		session.Messages = []providers.Message{}
 		session.Updated = time.Now()
-		return
+		return nil
 	}
 
 	if len(session.Messages) <= keepLast {
-		return
+		return nil
 	}
 
 	session.Messages = session.Messages[len(session.Messages)-keepLast:]
 	session.Updated = time.Now()
+	return nil
 }
 
 func (sm *SessionManager) ListSessions() []string {
@@ -176,6 +180,39 @@ func (sm *SessionManager) ListSessions() []string {
 		keys = append(keys, k)
 	}
 	return keys
+}
+
+// LastActivity returns when the session was last updated, or the zero time for
+// an unknown session. Used by automatic session pruning.
+func (sm *SessionManager) LastActivity(key string) time.Time {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	if stored, ok := sm.sessions[key]; ok {
+		return stored.Updated
+	}
+	return time.Time{}
+}
+
+// DeleteSession removes a session from memory and deletes its backing file.
+// Used by automatic session pruning. Missing files are ignored.
+func (sm *SessionManager) DeleteSession(key string) error {
+	sm.mu.Lock()
+	delete(sm.sessions, key)
+	sm.mu.Unlock()
+
+	if sm.storage == "" {
+		return nil
+	}
+
+	filename := sanitizeFilename(key)
+	if filename == "." || !filepath.IsLocal(filename) {
+		return os.ErrInvalid
+	}
+	path := filepath.Join(sm.storage, filename+".json")
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 // sanitizeFilename converts a session key into a cross-platform safe filename.
@@ -190,7 +227,7 @@ func sanitizeFilename(key string) string {
 	return s
 }
 
-func (sm *SessionManager) Save(key string) error {
+func (sm *SessionManager) Save(_ context.Context, key string) error {
 	if sm.storage == "" {
 		return nil
 	}
@@ -308,7 +345,7 @@ func (sm *SessionManager) Close() error {
 }
 
 // SetHistory updates the messages of a session.
-func (sm *SessionManager) SetHistory(key string, history []providers.Message) {
+func (sm *SessionManager) SetHistory(_ context.Context, key string, history []providers.Message) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
@@ -323,4 +360,5 @@ func (sm *SessionManager) SetHistory(key string, history []providers.Message) {
 		session.Messages = msgs
 		session.Updated = time.Now()
 	}
+	return nil
 }

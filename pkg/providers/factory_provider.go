@@ -15,7 +15,10 @@ import (
 	anthropicmessages "github.com/sipeed/picoclaw/pkg/providers/anthropic_messages"
 	"github.com/sipeed/picoclaw/pkg/providers/azure"
 	"github.com/sipeed/picoclaw/pkg/providers/bedrock"
+	cliprovider "github.com/sipeed/picoclaw/pkg/providers/cli"
 	"github.com/sipeed/picoclaw/pkg/providers/common"
+	"github.com/sipeed/picoclaw/pkg/providers/httpapi"
+	oauthprovider "github.com/sipeed/picoclaw/pkg/providers/oauth"
 )
 
 // createClaudeAuthProvider creates a Claude provider using OAuth credentials from auth store.
@@ -27,7 +30,10 @@ func createClaudeAuthProvider() (LLMProvider, error) {
 	if cred == nil {
 		return nil, fmt.Errorf("no credentials for anthropic. Run: picoclaw auth login --provider anthropic")
 	}
-	return NewClaudeProviderWithTokenSource(cred.AccessToken, createClaudeTokenSource()), nil
+	return oauthprovider.NewClaudeProviderWithTokenSource(
+		cred.AccessToken,
+		oauthprovider.CreateClaudeTokenSource(getCredential),
+	), nil
 }
 
 // createCodexAuthProvider creates a Codex provider using OAuth credentials from auth store.
@@ -39,7 +45,11 @@ func createCodexAuthProvider() (LLMProvider, error) {
 	if cred == nil {
 		return nil, fmt.Errorf("no credentials for openai. Run: picoclaw auth login --provider openai")
 	}
-	return NewCodexProviderWithTokenSource(cred.AccessToken, cred.AccountID, createCodexTokenSource()), nil
+	return oauthprovider.NewCodexProviderWithTokenSource(
+		cred.AccessToken,
+		cred.AccountID,
+		oauthprovider.CreateCodexTokenSource(),
+	), nil
 }
 
 // ExtractProtocol extracts the effective protocol and model identifier from a
@@ -123,7 +133,7 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 		if apiBase == "" {
 			apiBase = getDefaultAPIBase(protocol)
 		}
-		provider := NewHTTPProviderWithMaxTokensFieldAndRequestTimeout(
+		provider := httpapi.NewHTTPProviderWithMaxTokensFieldAndRequestTimeout(
 			cfg.APIKey(),
 			apiBase,
 			cfg.Proxy,
@@ -203,7 +213,7 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 	case "litellm", "lmstudio", "gpt4free", "openrouter", "groq", "zhipu", "nvidia", "venice",
 		"nearai", "ollama", "moonshot", "shengsuanyun", "siliconflow", "deepseek", "cerebras",
 		"vivgrid", "volcengine", "vllm", "qwen-portal", "qwen-intl", "qwen-us", "mistral",
-		"avian", "longcat", "modelscope", "novita", "alibaba-coding", "zai", "mimo":
+		"avian", "longcat", "modelscope", "novita", "byteplus", "alibaba-coding", "zai", "mimo":
 		// All other OpenAI-compatible HTTP providers
 		if cfg.APIKey() == "" && cfg.APIBase == "" && !isEmptyAPIKeyAllowed(protocol) {
 			return nil, "", fmt.Errorf("api_key or api_base is required for HTTP-based protocol %q", protocol)
@@ -212,7 +222,7 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 		if apiBase == "" {
 			apiBase = getDefaultAPIBase(protocol)
 		}
-		provider := NewHTTPProviderWithMaxTokensFieldAndRequestTimeout(
+		provider := httpapi.NewHTTPProviderWithMaxTokensFieldAndRequestTimeout(
 			cfg.APIKey(),
 			apiBase,
 			cfg.Proxy,
@@ -225,6 +235,13 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 		provider.SetProviderName(protocol)
 		return finalizeProviderFromConfig(provider, modelID, cfg)
 
+	case "opencode-go":
+		provider, err := newOpenCodeGoProvider(cfg, modelID, userAgent)
+		if err != nil {
+			return nil, "", err
+		}
+		return finalizeProviderFromConfig(provider, modelID, cfg)
+
 	case "gemini":
 		if cfg.APIKey() == "" && cfg.APIBase == "" {
 			return nil, "", fmt.Errorf("api_key or api_base is required for gemini protocol (model: %s)", cfg.Model)
@@ -233,7 +250,7 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 		if apiBase == "" {
 			apiBase = getDefaultAPIBase(protocol)
 		}
-		return finalizeProviderFromConfig(NewGeminiProvider(
+		return finalizeProviderFromConfig(httpapi.NewGeminiProvider(
 			cfg.APIKey(),
 			apiBase,
 			cfg.Proxy,
@@ -259,7 +276,7 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 		if _, ok := extraBody["reasoning_split"]; !ok {
 			extraBody["reasoning_split"] = true
 		}
-		provider := NewHTTPProviderWithMaxTokensFieldAndRequestTimeout(
+		provider := httpapi.NewHTTPProviderWithMaxTokensFieldAndRequestTimeout(
 			cfg.APIKey(),
 			apiBase,
 			cfg.Proxy,
@@ -286,7 +303,7 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 		if cfg.APIKey() == "" {
 			return nil, "", fmt.Errorf("api_key is required for anthropic protocol (model: %s)", cfg.Model)
 		}
-		provider := NewHTTPProviderWithMaxTokensFieldAndRequestTimeout(
+		provider := httpapi.NewHTTPProviderWithMaxTokensFieldAndRequestTimeout(
 			cfg.APIKey(),
 			apiBase,
 			cfg.Proxy,
@@ -332,21 +349,21 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 		), modelID, cfg)
 
 	case "antigravity":
-		return finalizeProviderFromConfig(NewAntigravityProvider(), modelID, cfg)
+		return finalizeProviderFromConfig(oauthprovider.NewAntigravityProvider(), modelID, cfg)
 
 	case "claude-cli":
 		workspace := cfg.Workspace
 		if workspace == "" {
 			workspace = "."
 		}
-		return finalizeProviderFromConfig(NewClaudeCliProvider(workspace), modelID, cfg)
+		return finalizeProviderFromConfig(cliprovider.NewClaudeCliProvider(workspace), modelID, cfg)
 
 	case "codex-cli":
 		workspace := cfg.Workspace
 		if workspace == "" {
 			workspace = "."
 		}
-		return finalizeProviderFromConfig(NewCodexCliProvider(workspace), modelID, cfg)
+		return finalizeProviderFromConfig(cliprovider.NewCodexCliProvider(workspace), modelID, cfg)
 
 	case "github-copilot":
 		apiBase := cfg.APIBase
@@ -357,7 +374,7 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 		if connectMode == "" {
 			connectMode = "grpc"
 		}
-		provider, err := NewGitHubCopilotProvider(apiBase, connectMode, modelID)
+		provider, err := cliprovider.NewGitHubCopilotProvider(apiBase, connectMode, modelID)
 		if err != nil {
 			return nil, "", err
 		}

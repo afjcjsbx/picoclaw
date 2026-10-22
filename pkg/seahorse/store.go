@@ -10,6 +10,16 @@ import (
 
 const sqliteTimeLayout = "2006-01-02 15:04:05"
 
+// sqlInPlaceholders returns a parenthesized list of n "?" bind markers, e.g.
+// "(?,?,?)", for use in SQL IN clauses. Only markers are generated; values
+// must always be supplied via bound query arguments.
+func sqlInPlaceholders(n int) string {
+	if n <= 0 {
+		return "()"
+	}
+	return "(?" + strings.Repeat(",?", n-1) + ")"
+}
+
 // Store provides SQLite storage for seahorse.
 type Store struct {
 	db *sql.DB
@@ -120,12 +130,25 @@ func (s *Store) GetAllSessionStatuses(ctx context.Context) ([]SessionStatus, err
 	}
 	defer rows.Close()
 
-	var statuses []SessionStatus
+	// Drain the cursor before running the per-session queries: an open cursor
+	// pins a pooled connection, and the pool is bounded (sqliteMaxOpenConns),
+	// so two callers each holding a cursor while waiting for a second
+	// connection would deadlock.
+	var sessionKeys []string
 	for rows.Next() {
 		var sessionKey string
 		if err := rows.Scan(&sessionKey); err != nil {
 			continue
 		}
+		sessionKeys = append(sessionKeys, sessionKey)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate sessions: %w", err)
+	}
+	_ = rows.Close()
+
+	var statuses []SessionStatus
+	for _, sessionKey := range sessionKeys {
 		status, err := s.GetSessionStatus(ctx, sessionKey)
 		if err != nil {
 			continue
@@ -133,9 +156,6 @@ func (s *Store) GetAllSessionStatuses(ctx context.Context) ([]SessionStatus, err
 		if status != nil {
 			statuses = append(statuses, *status)
 		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate sessions: %w", err)
 	}
 	return statuses, nil
 }
@@ -358,7 +378,7 @@ func (s *Store) GetMessages(ctx context.Context, convID int64, limit int, before
 	for rows.Next() {
 		var msg Message
 		var createdAt string
-		if err := rows.Scan(
+		if err = rows.Scan(
 			&msg.ID,
 			&msg.ConversationID,
 			&msg.Role,
@@ -373,17 +393,23 @@ func (s *Store) GetMessages(ctx context.Context, convID int64, limit int, before
 		msg.CreatedAt = parseSQLiteTime(createdAt)
 		msgs = append(msgs, msg)
 	}
-	if err := rows.Err(); err != nil {
+	if err = rows.Err(); err != nil {
 		return nil, err
 	}
 
-	// Load parts for all messages
+	// Load parts for all messages in a single batched query per chunk instead of
+	// one query per message. The per-message (N+1) pattern was the dominant
+	// startup cost of the seahorse bootstrap on slow single-core devices.
+	ids := make([]int64, len(msgs))
 	for i := range msgs {
-		parts, err := s.loadMessageParts(ctx, msgs[i].ID)
-		if err != nil {
-			return nil, err
-		}
-		msgs[i].Parts = parts
+		ids[i] = msgs[i].ID
+	}
+	partsByMsg, err := s.loadMessagePartsBatch(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	for i := range msgs {
+		msgs[i].Parts = partsByMsg[msgs[i].ID]
 	}
 
 	return msgs, nil
@@ -492,6 +518,63 @@ func (s *Store) loadMessageParts(ctx context.Context, msgID int64) ([]MessagePar
 		parts = append(parts, p)
 	}
 	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return parts, nil
+}
+
+// loadMessagePartsBatch loads parts for many messages using batched IN queries
+// (chunked to stay under SQLite's bound-variable limit). The returned map only
+// contains entries for messages that have parts; callers should treat a missing
+// key as "no parts". Parts within each message are ordered by ordinal.
+func (s *Store) loadMessagePartsBatch(ctx context.Context, msgIDs []int64) (map[int64][]MessagePart, error) {
+	result := make(map[int64][]MessagePart, len(msgIDs))
+	if len(msgIDs) == 0 {
+		return result, nil
+	}
+
+	const chunkSize = 800
+	for start := 0; start < len(msgIDs); start += chunkSize {
+		end := min(start+chunkSize, len(msgIDs))
+		parts, err := s.loadMessagePartsChunk(ctx, msgIDs[start:end])
+		if err != nil {
+			return nil, err
+		}
+		for i := range parts {
+			result[parts[i].MessageID] = append(result[parts[i].MessageID], parts[i])
+		}
+	}
+
+	return result, nil
+}
+
+// loadMessagePartsChunk loads the parts for one chunk of message IDs.
+func (s *Store) loadMessagePartsChunk(ctx context.Context, chunk []int64) ([]MessagePart, error) {
+	args := make([]any, len(chunk))
+	for i, id := range chunk {
+		args[i] = id
+	}
+
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT part_id, message_id, type, text, name, arguments, tool_call_id, media_uri, mime_type
+		 FROM message_parts WHERE message_id IN `+sqlInPlaceholders(len(chunk))+` ORDER BY message_id, ordinal`,
+		args...,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var parts []MessagePart
+	for rows.Next() {
+		var p MessagePart
+		if err = rows.Scan(&p.ID, &p.MessageID, &p.Type, &p.Text, &p.Name, &p.Arguments,
+			&p.ToolCallID, &p.MediaURI, &p.MimeType); err != nil {
+			return nil, err
+		}
+		parts = append(parts, p)
+	}
+	if err = rows.Err(); err != nil {
 		return nil, err
 	}
 	return parts, nil
@@ -902,6 +985,59 @@ func (s *Store) ClearConversation(ctx context.Context, convID int64) error {
 	return tx.Commit()
 }
 
+// DeleteConversation removes all data for a conversation and the conversation
+// row itself. Unlike ClearConversation (which keeps the row for /clear), this
+// is used by session pruning so no orphaned conversations accumulate.
+func (s *Store) DeleteConversation(ctx context.Context, convID int64) error {
+	if err := s.ClearConversation(ctx, convID); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx,
+		"DELETE FROM conversations WHERE conversation_id = ?", convID); err != nil {
+		return fmt.Errorf("delete conversation row: %w", err)
+	}
+	return nil
+}
+
+// ConversationCount returns the number of conversations in the database.
+func (s *Store) ConversationCount(ctx context.Context) (int, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM conversations").Scan(&count)
+	return count, err
+}
+
+// Vacuum reclaims unused disk space in the SQLite database. It is a no-op
+// cost-wise only when the database is small; call it after a prune that
+// deleted data.
+func (s *Store) Vacuum(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, "VACUUM")
+	return err
+}
+
+// ReclaimableBytes returns the size of the free pages inside the database file,
+// i.e. the space a VACUUM would give back to the filesystem.
+func (s *Store) ReclaimableBytes(ctx context.Context) (int64, error) {
+	var freePages, pageSize int64
+	if err := s.db.QueryRowContext(ctx, "PRAGMA freelist_count").Scan(&freePages); err != nil {
+		return 0, fmt.Errorf("freelist_count: %w", err)
+	}
+	if err := s.db.QueryRowContext(ctx, "PRAGMA page_size").Scan(&pageSize); err != nil {
+		return 0, fmt.Errorf("page_size: %w", err)
+	}
+	return freePages * pageSize, nil
+}
+
+// CheckpointWAL folds the write-ahead log back into the main database file.
+// Pass truncate=true to also shrink the -wal file to zero bytes.
+func (s *Store) CheckpointWAL(ctx context.Context, truncate bool) error {
+	if truncate {
+		_, err := s.db.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)")
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, "PRAGMA wal_checkpoint(PASSIVE)")
+	return err
+}
+
 // AppendContextMessage appends a single message to context_items at next ordinal.
 func (s *Store) AppendContextMessage(ctx context.Context, convID int64, messageID int64) error {
 	return s.appendContextItems(ctx, convID, []ContextItem{
@@ -1063,18 +1199,16 @@ func (s *Store) ReplaceContextItemsWithSummary(
 	defer tx.Rollback()
 
 	// Find the ordinals of items to delete and calculate midpoint
-	placeholders := make([]string, len(summaryIDs))
+	// Only "?" markers are ever concatenated into SQL; values are always bound.
+	inClause := sqlInPlaceholders(len(summaryIDs))
 	args := make([]any, len(summaryIDs)+1)
 	args[0] = convID
 	for i, sid := range summaryIDs {
-		placeholders[i] = "?"
 		args[i+1] = sid
 	}
 
-	query := fmt.Sprintf(
-		"SELECT ordinal FROM context_items WHERE conversation_id = ? AND summary_id IN (%s) ORDER BY ordinal",
-		strings.Join(placeholders, ","),
-	)
+	query := "SELECT ordinal FROM context_items WHERE conversation_id = ? AND summary_id IN " +
+		inClause + " ORDER BY ordinal"
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return err
@@ -1100,10 +1234,7 @@ func (s *Store) ReplaceContextItemsWithSummary(
 	midpoint := (ordinals[0] + ordinals[len(ordinals)-1]) / 2
 
 	// Delete the specific items by summary_id
-	deleteQuery := fmt.Sprintf(
-		"DELETE FROM context_items WHERE conversation_id = ? AND summary_id IN (%s)",
-		strings.Join(placeholders, ","),
-	)
+	deleteQuery := "DELETE FROM context_items WHERE conversation_id = ? AND summary_id IN " + inClause
 	_, err = tx.ExecContext(ctx, deleteQuery, args...)
 	if err != nil {
 		return err

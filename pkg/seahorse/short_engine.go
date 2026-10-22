@@ -98,6 +98,45 @@ func (r *RetrievalEngine) Store() *Store {
 	return r.store
 }
 
+// sqliteBusyTimeoutMS is how long a connection waits for a lock before failing
+// with SQLITE_BUSY.
+const sqliteBusyTimeoutMS = 5000
+
+const (
+	// sqliteMaxOpenConns bounds the connection pool. The pure-Go SQLite driver
+	// keeps a page cache per connection, so an unbounded pool lets memory grow
+	// with concurrent load. SQLite serializes writers, and in WAL mode a reader
+	// does not block the writer, so two connections let one writer run next to
+	// one reader (e.g. compaction alongside context assembly). Further
+	// concurrent callers queue for a free connection, bounded by their context,
+	// instead of opening another page cache, which keeps the memory footprint
+	// predictable on constrained devices.
+	sqliteMaxOpenConns = 2
+
+	// sqliteTempStoreFile tells SQLite to spill temporary tables and sort
+	// buffers to temporary files instead of the Go heap (temp_store = FILE),
+	// which bounds the peak heap used by large compaction/sort queries. It
+	// does not reduce total memory where the temp directory is RAM-backed
+	// (tmpfs): the spill then uses kernel memory instead of the heap.
+	sqliteTempStoreFile = 1
+)
+
+// sqliteDSN returns the driver DSN for path with the per-connection settings
+// every pooled connection must have. database/sql opens connections lazily and
+// recycles them, so running "PRAGMA busy_timeout" once via db.Exec only
+// configures a single connection and leaves the others failing immediately with
+// SQLITE_BUSY while a long write (such as a pruning VACUUM) holds the lock.
+func sqliteDSN(path string) string {
+	sep := "?"
+	if strings.Contains(path, "?") {
+		sep = "&"
+	}
+	return fmt.Sprintf(
+		"%s%s_busy_timeout=%d&_pragma=synchronous(NORMAL)&_pragma=temp_store(%d)",
+		path, sep, sqliteBusyTimeoutMS, sqliteTempStoreFile,
+	)
+}
+
 // NewEngine creates a new short-term memory engine.
 func NewEngine(config Config, completeFn CompleteFn) (*Engine, error) {
 	dir := filepath.Dir(config.DBPath)
@@ -107,23 +146,25 @@ func NewEngine(config Config, completeFn CompleteFn) (*Engine, error) {
 		}
 	}
 
-	db, err := sql.Open("sqlite", config.DBPath)
+	db, err := sql.Open("sqlite", sqliteDSN(config.DBPath))
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
 
-	// Configure SQLite for concurrent access
+	// Bound the pool so the per-connection page cache cannot grow unchecked on
+	// memory-constrained devices (see sqliteMaxOpenConns). Idle is tied to the
+	// cap rather than left at database/sql's default of 2, so changing the cap
+	// never makes the pool close and reopen connections (and re-run their
+	// pragmas) on every release.
+	db.SetMaxOpenConns(sqliteMaxOpenConns)
+	db.SetMaxIdleConns(sqliteMaxOpenConns)
+
+	// journal_mode is stored in the database file, so setting it once is
+	// enough. busy_timeout and synchronous are per-connection settings and
+	// are applied to every pooled connection through the DSN (see sqliteDSN).
 	if _, err := db.Exec("PRAGMA journal_mode = WAL;"); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("enable WAL: %w", err)
-	}
-	if _, err := db.Exec("PRAGMA busy_timeout = 5000;"); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("set busy_timeout: %w", err)
-	}
-	if _, err := db.Exec("PRAGMA synchronous = NORMAL;"); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("set synchronous: %w", err)
 	}
 
 	if err := runSchema(db); err != nil {
@@ -347,6 +388,22 @@ func (e *Engine) Compact(ctx context.Context, sessionKey string, input CompactIn
 	return e.compaction.Compact(ctx, conv.ConversationID, input)
 }
 
+// CompactNow synchronously compacts a session on user request (/compact).
+// instructions (may be empty) tells the summarizer which details to prioritize.
+func (e *Engine) CompactNow(ctx context.Context, sessionKey, instructions string) (*CompactResult, error) {
+	if e.shouldIgnoreSession(sessionKey) || e.isStatelessSession(sessionKey) {
+		return &CompactResult{}, nil
+	}
+
+	conv, err := e.store.GetOrCreateConversation(ctx, sessionKey)
+	if err != nil {
+		return nil, fmt.Errorf("get conversation: %w", err)
+	}
+
+	e.initCompactionOnce()
+	return e.compaction.CompactNow(ctx, conv.ConversationID, instructions)
+}
+
 // CompactUntilUnder aggressively compacts until context is under budget.
 // Used for emergency compaction after LLM overflow (retry reason).
 func (e *Engine) CompactUntilUnder(ctx context.Context, sessionKey string, budget int) (*CompactResult, error) {
@@ -408,6 +465,67 @@ func (e *Engine) ClearSession(ctx context.Context, sessionKey string) error {
 		return nil // session never ingested, nothing to clear
 	}
 	return e.store.ClearConversation(ctx, conv.ConversationID)
+}
+
+// DeleteSession removes all stored data for a session and the conversation row
+// itself. Used by session pruning so no orphaned conversation rows remain.
+func (e *Engine) DeleteSession(ctx context.Context, sessionKey string) error {
+	conv, err := e.store.GetConversationBySessionKey(ctx, sessionKey)
+	if err != nil {
+		return err
+	}
+	if conv == nil {
+		return nil // session never ingested, nothing to delete
+	}
+	return e.store.DeleteConversation(ctx, conv.ConversationID)
+}
+
+// SessionStatuses returns status for every conversation in the database.
+func (e *Engine) SessionStatuses(ctx context.Context) ([]SessionStatus, error) {
+	return e.store.GetAllSessionStatuses(ctx)
+}
+
+// ConversationCount returns the number of conversations in the database.
+func (e *Engine) ConversationCount(ctx context.Context) (int, error) {
+	return e.store.ConversationCount(ctx)
+}
+
+// DBFileSize returns the combined size in bytes of the SQLite database file and
+// its write-ahead log (if present).
+func (e *Engine) DBFileSize() (int64, error) {
+	path := e.config.DBPath
+	if strings.TrimSpace(path) == "" {
+		return 0, nil
+	}
+	var total int64
+	if info, err := os.Stat(path); err == nil {
+		total += info.Size()
+	} else if !os.IsNotExist(err) {
+		return 0, err
+	}
+	if info, err := os.Stat(path + "-wal"); err == nil {
+		total += info.Size()
+	} else if !os.IsNotExist(err) {
+		return 0, err
+	}
+	return total, nil
+}
+
+// Vacuum reclaims unused disk space in the underlying SQLite database.
+func (e *Engine) Vacuum(ctx context.Context) error {
+	return e.store.Vacuum(ctx)
+}
+
+// ReclaimableBytes reports how much of the database file is free space that a
+// Vacuum would return to the filesystem.
+func (e *Engine) ReclaimableBytes(ctx context.Context) (int64, error) {
+	return e.store.ReclaimableBytes(ctx)
+}
+
+// Checkpoint folds the write-ahead log into the database file. When truncate is
+// true the -wal file is also shrunk to zero bytes.
+func (e *Engine) Checkpoint(ctx context.Context, truncate bool) error {
+	return e.store.CheckpointWAL(ctx, truncate)
 }
 
 // Bootstrap reconciles a session's messages with the database.

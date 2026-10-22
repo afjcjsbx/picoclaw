@@ -286,6 +286,40 @@ func TestShutdownGatewayClosesMessageBus(t *testing.T) {
 	}
 }
 
+func TestHeartbeatToolResult(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		response    string
+		wantSilent  bool
+		wantForUser string
+	}{
+		{name: "ok sentinel", response: "HEARTBEAT_OK", wantSilent: true},
+		{name: "ok sentinel with spaces", response: "  HEARTBEAT_OK \n", wantSilent: true},
+		{name: "empty", response: "", wantSilent: true},
+		{name: "whitespace only", response: "   ", wantSilent: true},
+		{name: "quick task answer", response: "It is 12:00", wantSilent: false, wantForUser: "It is 12:00"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			result := heartbeatToolResult(tt.response)
+			if result == nil {
+				t.Fatal("heartbeatToolResult() = nil")
+			}
+			if result.Silent != tt.wantSilent {
+				t.Fatalf("Silent = %v, want %v", result.Silent, tt.wantSilent)
+			}
+			if result.ForUser != tt.wantForUser {
+				t.Fatalf("ForUser = %q, want %q", result.ForUser, tt.wantForUser)
+			}
+		})
+	}
+}
+
 func receiveGatewayRuntimeEvent(t *testing.T, ch <-chan runtimeevents.Event) runtimeevents.Event {
 	t.Helper()
 
@@ -295,5 +329,32 @@ func receiveGatewayRuntimeEvent(t *testing.T, ch <-chan runtimeevents.Event) run
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for gateway runtime event")
 		return runtimeevents.Event{}
+	}
+}
+
+func TestExecuteReload_RejectsInvalidConfigAndResetsFlag(t *testing.T) {
+	msgBus := bus.NewMessageBus()
+	al := agent.NewAgentLoop(
+		config.DefaultConfig(),
+		msgBus,
+		&startupBlockedProvider{reason: "not used"},
+	)
+	t.Cleanup(al.Close)
+
+	runningServices := &services{}
+	runningServices.reloading.Store(true)
+
+	badCfg := config.DefaultConfig()
+	badCfg.Gateway.Port = 0
+
+	err := executeReload(context.Background(), al, badCfg, nil, runningServices, msgBus, false, false)
+	if err == nil {
+		t.Fatal("executeReload() with an invalid config = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "config pre-check failed") {
+		t.Fatalf("executeReload() error = %v, want config pre-check failure", err)
+	}
+	if runningServices.reloading.Load() {
+		t.Fatal("reloading flag was not reset after a rejected reload")
 	}
 }

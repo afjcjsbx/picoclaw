@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"testing"
 	"time"
@@ -237,6 +238,160 @@ func TestFindAssetInfo_UsesChecksumAssetWhenDigestMissing(t *testing.T) {
 	}
 	if gotChecksum != checksum {
 		t.Fatalf("checksum = %q, want %q", gotChecksum, checksum)
+	}
+}
+
+// TestFindAssetInfo_SelectsArchVariant covers 32-bit ARM and 386 selection.
+// Linux_arm64 is listed first, as in real releases; it must never be picked
+// for arch "arm" (it used to match the "arm" substring).
+func TestFindAssetInfo_SelectsArchVariant(t *testing.T) {
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case testReleaseAPIPath:
+			writeReleasePayload(w, testReleasePayload{
+				TagName: "v0.3.1",
+				Assets: []testReleaseAsset{
+					{
+						Name:               "picoclaw_Linux_arm64.tar.gz",
+						BrowserDownloadURL: server.URL + "/assets/picoclaw_Linux_arm64.tar.gz",
+						Digest:             "sha256:" + strings.Repeat("a", 64),
+					},
+					{
+						Name:               "picoclaw_Linux_armv6.tar.gz",
+						BrowserDownloadURL: server.URL + "/assets/picoclaw_Linux_armv6.tar.gz",
+						Digest:             "sha256:" + strings.Repeat("b", 64),
+					},
+					{
+						Name:               "picoclaw_Linux_armv7.tar.gz",
+						BrowserDownloadURL: server.URL + "/assets/picoclaw_Linux_armv7.tar.gz",
+						Digest:             "sha256:" + strings.Repeat("c", 64),
+					},
+					{
+						Name:               "picoclaw_Linux_i386.tar.gz",
+						BrowserDownloadURL: server.URL + "/assets/picoclaw_Linux_i386.tar.gz",
+						Digest:             "sha256:" + strings.Repeat("d", 64),
+					},
+					{
+						Name:               "picoclaw_Linux_x86_64.tar.gz",
+						BrowserDownloadURL: server.URL + "/assets/picoclaw_Linux_x86_64.tar.gz",
+						Digest:             "sha256:" + strings.Repeat("e", 64),
+					},
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	withTestHTTPClient(t, server.Client())
+
+	origGOARM := runningGOARM
+	t.Cleanup(func() { runningGOARM = origGOARM })
+
+	tests := []struct {
+		name      string
+		arch      string
+		goarm     string
+		wantAsset string // empty means an error is expected
+	}{
+		{name: "arm GOARM=7 picks armv7", arch: "arm", goarm: "7", wantAsset: "picoclaw_Linux_armv7.tar.gz"},
+		{name: "arm GOARM=6 picks armv6", arch: "arm", goarm: "6", wantAsset: "picoclaw_Linux_armv6.tar.gz"},
+		{name: "arm unknown GOARM defaults to armv6", arch: "arm", goarm: "", wantAsset: "picoclaw_Linux_armv6.tar.gz"},
+		{name: "arm GOARM=5 has no asset", arch: "arm", goarm: "5", wantAsset: ""},
+		{name: "arm64 still picks arm64", arch: "arm64", wantAsset: "picoclaw_Linux_arm64.tar.gz"},
+		{name: "amd64 still picks x86_64", arch: "amd64", wantAsset: "picoclaw_Linux_x86_64.tar.gz"},
+		{name: "386 picks i386, not x86_64", arch: "386", wantAsset: "picoclaw_Linux_i386.tar.gz"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			runningGOARM = func() string { return tc.goarm }
+
+			gotURL, _, err := findAssetInfo(server.URL+testReleaseAPIPath, "linux", tc.arch)
+			if tc.wantAsset == "" {
+				if err == nil {
+					t.Fatalf("findAssetInfo(arch=%q) = %q, want error", tc.arch, gotURL)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("findAssetInfo(arch=%q) error: %v", tc.arch, err)
+			}
+			want := server.URL + "/assets/" + tc.wantAsset
+			if gotURL != want {
+				t.Fatalf("assetURL = %q, want %q", gotURL, want)
+			}
+		})
+	}
+}
+
+func TestAssetHasArchSuffix(t *testing.T) {
+	tests := []struct {
+		name  string
+		asset string
+		alias string
+		want  bool
+	}{
+		{name: "arm does not match arm64", asset: "picoclaw_Linux_arm64.tar.gz", alias: "arm", want: false},
+		{name: "armv7 matches armv7", asset: "picoclaw_Linux_armv7.tar.gz", alias: "armv7", want: true},
+		{name: "x86 does not match x86_64", asset: "picoclaw_Linux_x86_64.tar.gz", alias: "x86", want: false},
+		{name: "x86_64 matches x86_64", asset: "picoclaw_Linux_x86_64.zip", alias: "x86_64", want: true},
+		{name: "386 does not match i386", asset: "picoclaw_Linux_i386.tgz", alias: "386", want: false},
+		{name: "i386 matches i386", asset: "picoclaw_Linux_i386.tgz", alias: "i386", want: true},
+		{name: "dash separator matches", asset: "picoclaw-Linux-arm64.tar", alias: "arm64", want: true},
+		{
+			name:  "checksum file is not an archive",
+			asset: "picoclaw_Linux_arm64.tar.gz.sha256",
+			alias: "arm64",
+			want:  false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := assetHasArchSuffix(tc.asset, tc.alias); got != tc.want {
+				t.Fatalf("assetHasArchSuffix(%q, %q) = %v, want %v", tc.asset, tc.alias, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestArmAliases(t *testing.T) {
+	tests := []struct {
+		goarm string
+		want  []string
+	}{
+		{goarm: "7", want: []string{"armv7", "armv6"}},
+		{goarm: "6", want: []string{"armv6"}},
+		{goarm: "", want: []string{"armv6"}},
+		{goarm: "5", want: nil},
+	}
+	for _, tc := range tests {
+		got := armAliases(tc.goarm)
+		if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+			t.Fatalf("armAliases(%q) = %v, want %v", tc.goarm, got, tc.want)
+		}
+	}
+}
+
+func TestGoarmFromSettings(t *testing.T) {
+	tests := []struct {
+		name     string
+		settings []debug.BuildSetting
+		want     string
+	}{
+		{name: "plain GOARM", settings: []debug.BuildSetting{{Key: "GOARM", Value: "7"}}, want: "7"},
+		{name: "GOARM with softfloat", settings: []debug.BuildSetting{{Key: "GOARM", Value: "7,softfloat"}}, want: "7"},
+		{name: "no GOARM setting", settings: []debug.BuildSetting{{Key: "GOAMD64", Value: "v1"}}, want: ""},
+		{name: "no settings", settings: nil, want: ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := goarmFromSettings(tc.settings); got != tc.want {
+				t.Fatalf("goarmFromSettings() = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

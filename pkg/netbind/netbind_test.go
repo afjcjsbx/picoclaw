@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -193,6 +194,238 @@ func TestOpenPlan_WildcardRulesKeepIPv4AndIPv6AnyHosts(t *testing.T) {
 	requireHTTPReachable(t, "::1", port)
 	if len(result.BindHosts) != 2 {
 		t.Fatalf("len(BindHosts) = %d, want 2 (%#v)", len(result.BindHosts), result.BindHosts)
+	}
+}
+
+func TestOpenPlan_DegradedWhenSiblingFamilyBindFails(t *testing.T) {
+	hasIPv4, hasIPv6 := DetectIPFamilies()
+	if !hasIPv4 || !hasIPv6 {
+		t.Skip("dual-stack is unavailable in this environment")
+	}
+
+	// Occupy the IPv4 wildcard on a fixed port so the IPv4 half of the
+	// dual-stack bind fails while IPv6 still succeeds. Before this was reported,
+	// the IPv6 listener was kept and the lost IPv4 family went unnoticed.
+	blocker, err := net.Listen("tcp4", "0.0.0.0:0")
+	if err != nil {
+		t.Fatalf("net.Listen() error = %v", err)
+	}
+	defer blocker.Close()
+	port := strconv.Itoa(blocker.Addr().(*net.TCPAddr).Port)
+
+	plan, err := BuildPlan("", DefaultAny)
+	if err != nil {
+		t.Fatalf("BuildPlan() error = %v", err)
+	}
+	result, err := OpenPlan(plan, port)
+	if err != nil {
+		t.Fatalf("OpenPlan() error = %v", err)
+	}
+	t.Cleanup(func() {
+		for _, ln := range result.Listeners {
+			_ = ln.Close()
+		}
+	})
+
+	if len(result.Listeners) != 1 {
+		t.Fatalf("len(Listeners) = %d, want 1 (IPv6 should keep serving)", len(result.Listeners))
+	}
+	if len(result.Degraded) != 1 {
+		t.Fatalf("len(Degraded) = %d, want 1 (%#v)", len(result.Degraded), result.Degraded)
+	}
+	if !strings.Contains(result.Degraded[0], "0.0.0.0") {
+		t.Fatalf("Degraded[0] = %q, want it to name the failed IPv4 bind", result.Degraded[0])
+	}
+}
+
+func TestOpenPlan_LoopbackDegradedWhenSiblingFamilyBindFails(t *testing.T) {
+	probe, err := net.Listen("tcp6", "[::1]:0")
+	if err != nil {
+		t.Skipf("IPv6 loopback is unavailable in this environment: %v", err)
+	}
+	_ = probe.Close()
+
+	// Occupy 127.0.0.1 on a fixed port so the IPv4 half of the default
+	// loopback bind fails while ::1 still succeeds.
+	blocker, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen() error = %v", err)
+	}
+	defer blocker.Close()
+	port := strconv.Itoa(blocker.Addr().(*net.TCPAddr).Port)
+
+	plan, err := BuildPlan("", DefaultLoopback)
+	if err != nil {
+		t.Fatalf("BuildPlan() error = %v", err)
+	}
+	result, err := OpenPlan(plan, port)
+	if err != nil {
+		t.Fatalf("OpenPlan() error = %v", err)
+	}
+	t.Cleanup(func() {
+		for _, ln := range result.Listeners {
+			_ = ln.Close()
+		}
+	})
+
+	if len(result.Listeners) != 1 {
+		t.Fatalf("len(Listeners) = %d, want 1 (::1 should keep serving)", len(result.Listeners))
+	}
+	if len(result.Degraded) != 1 {
+		t.Fatalf("len(Degraded) = %d, want 1 (%#v)", len(result.Degraded), result.Degraded)
+	}
+	if !strings.Contains(result.Degraded[0], "127.0.0.1") {
+		t.Fatalf("Degraded[0] = %q, want it to name the failed IPv4 bind", result.Degraded[0])
+	}
+}
+
+func TestOpenPlan_ExactHostBindErrorIsNotWrapped(t *testing.T) {
+	blocker, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen() error = %v", err)
+	}
+	defer blocker.Close()
+	port := strconv.Itoa(blocker.Addr().(*net.TCPAddr).Port)
+
+	plan, err := BuildPlan("127.0.0.1", DefaultLoopback)
+	if err != nil {
+		t.Fatalf("BuildPlan() error = %v", err)
+	}
+	_, err = OpenPlan(plan, port)
+	if err == nil {
+		t.Fatal("OpenPlan() error = nil, want an error for an occupied exact host")
+	}
+	var opErr *net.OpError
+	if !errors.As(err, &opErr) {
+		t.Fatalf("OpenPlan() error = %v (%T), want the underlying *net.OpError", err, err)
+	}
+}
+
+func TestDescribeBindFailure_UsesGivenPortAndDropsListenPrefix(t *testing.T) {
+	err := &net.OpError{
+		Op:  "listen",
+		Net: "tcp6",
+		Err: errors.New("cannot assign requested address"),
+	}
+
+	got := describeBindFailure(exactBinding{host: "::", network: "tcp6"}, "54321", err)
+
+	want := "tcp6 [::]:54321: cannot assign requested address"
+	if got != want {
+		t.Fatalf("describeBindFailure() = %q, want %q", got, want)
+	}
+}
+
+func TestOpenPlan_ErrorsWhenNoFamilyBinds(t *testing.T) {
+	hasIPv4, hasIPv6 := DetectIPFamilies()
+	if !hasIPv4 || !hasIPv6 {
+		t.Skip("dual-stack is unavailable in this environment")
+	}
+
+	blocker4, err := net.Listen("tcp4", "0.0.0.0:0")
+	if err != nil {
+		t.Fatalf("net.Listen() error = %v", err)
+	}
+	defer blocker4.Close()
+	port := strconv.Itoa(blocker4.Addr().(*net.TCPAddr).Port)
+
+	blocker6, _, err := openExactListener(
+		exactBinding{host: "::", network: "tcp6", v6Only: true},
+		port,
+	)
+	if err != nil {
+		t.Fatalf("openExactListener() error = %v", err)
+	}
+	defer blocker6.Close()
+
+	plan, err := BuildPlan("", DefaultAny)
+	if err != nil {
+		t.Fatalf("BuildPlan() error = %v", err)
+	}
+	if _, err = OpenPlan(plan, port); err == nil {
+		t.Fatal("OpenPlan() error = nil, want an error when no family can bind")
+	}
+}
+
+func TestOpenPlan_HealthyDualStackHasNoDegradedEntries(t *testing.T) {
+	hasIPv4, hasIPv6 := DetectIPFamilies()
+	if !hasIPv4 || !hasIPv6 {
+		t.Skip("dual-stack is unavailable in this environment")
+	}
+
+	plan, err := BuildPlan("", DefaultAny)
+	if err != nil {
+		t.Fatalf("BuildPlan() error = %v", err)
+	}
+	result, err := OpenPlan(plan, "0")
+	if err != nil {
+		t.Fatalf("OpenPlan() error = %v", err)
+	}
+	t.Cleanup(func() {
+		for _, ln := range result.Listeners {
+			_ = ln.Close()
+		}
+	})
+
+	if len(result.Degraded) != 0 {
+		t.Fatalf("len(Degraded) = %d, want 0 (%#v)", len(result.Degraded), result.Degraded)
+	}
+}
+
+func TestOpenBindings_UnavailableFamilyIsNotDegraded(t *testing.T) {
+	// 192.0.2.1 (TEST-NET-1) is never assigned to a local interface, so binding
+	// it fails the same way a missing IP family does (EADDRNOTAVAIL).
+	unassigned := exactBinding{host: "192.0.2.1", network: "tcp4"}
+	ln, _, probeErr := openExactListener(unassigned, "0")
+	if probeErr == nil {
+		_ = ln.Close()
+		t.Skip("192.0.2.1 is bindable in this environment")
+	}
+	if !isFamilyUnavailable(probeErr) {
+		t.Skipf("binding an unassigned address did not report an unavailable family: %v", probeErr)
+	}
+
+	listeners, hosts, _, degraded, err := openBindings(
+		[]exactBinding{unassigned, {host: "127.0.0.1", network: "tcp4"}},
+		"0",
+	)
+	if err != nil {
+		t.Fatalf("openBindings() error = %v", err)
+	}
+	t.Cleanup(func() {
+		for _, l := range listeners {
+			_ = l.Close()
+		}
+	})
+
+	if len(listeners) != 1 || len(hosts) != 1 || hosts[0] != "127.0.0.1" {
+		t.Fatalf("listeners = %d, hosts = %v, want only 127.0.0.1", len(listeners), hosts)
+	}
+	if len(degraded) != 0 {
+		t.Fatalf("Degraded = %#v, want none for an unavailable IP family", degraded)
+	}
+}
+
+func TestOpenBindings_ErrorListsUnavailableFamilyWhenNothingBinds(t *testing.T) {
+	unassigned := exactBinding{host: "192.0.2.1", network: "tcp4"}
+	ln, _, probeErr := openExactListener(unassigned, "0")
+	if probeErr == nil {
+		_ = ln.Close()
+		t.Skip("192.0.2.1 is bindable in this environment")
+	}
+	if !isFamilyUnavailable(probeErr) {
+		t.Skipf("binding an unassigned address did not report an unavailable family: %v", probeErr)
+	}
+
+	listeners, hosts, boundPort, degraded, err := openBindings([]exactBinding{unassigned}, "0")
+	if err == nil {
+		t.Fatal("openBindings() error = nil, want an error when no binding opens")
+	}
+	if listeners != nil || hosts != nil || boundPort != "" || degraded != nil {
+		t.Fatalf("openBindings() = %v, %v, %q, %v, want zero values on error", listeners, hosts, boundPort, degraded)
+	}
+	if !strings.Contains(err.Error(), "192.0.2.1") {
+		t.Fatalf("openBindings() error = %q, want it to name the failed bind", err)
 	}
 }
 

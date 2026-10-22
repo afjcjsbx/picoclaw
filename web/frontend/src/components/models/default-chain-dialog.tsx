@@ -59,7 +59,7 @@ export function DefaultChainDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="grid-cols-1 max-w-2xl sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>{t("models.defaultChain.dialogTitle")}</DialogTitle>
           <DialogDescription>

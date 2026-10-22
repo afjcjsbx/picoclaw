@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,6 +24,15 @@ import (
 	"github.com/sipeed/picoclaw/pkg/constants"
 	"github.com/sipeed/picoclaw/pkg/isolation"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	fstools "github.com/sipeed/picoclaw/pkg/tools/fs"
+	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
+)
+
+// maxOutputBufferSize caps the output captured per session; outputTruncateMarker
+// is appended once the cap is reached.
+const (
+	maxOutputBufferSize  = 1 * 1024 * 1024 // 1MB
+	outputTruncateMarker = "\n... [output truncated, exceeded 1MB]\n"
 )
 
 var (
@@ -45,6 +55,7 @@ type ExecTool struct {
 	allowedPathPatterns []*regexp.Regexp
 	restrictToWorkspace bool
 	allowRemote         bool
+	maxOutputChars      int
 	sessionManager      *SessionManager
 }
 
@@ -198,6 +209,11 @@ func NewExecToolWithConfig(
 		timeout = time.Duration(cfg.Tools.Exec.TimeoutSeconds) * time.Second
 	}
 
+	maxOutputChars := config.DefaultExecMaxOutputChars
+	if cfg != nil {
+		maxOutputChars = cfg.Tools.Exec.GetMaxOutputChars()
+	}
+
 	return &ExecTool{
 		workingDir:          workingDir,
 		timeout:             timeout,
@@ -207,6 +223,7 @@ func NewExecToolWithConfig(
 		allowedPathPatterns: allowedPathPatterns,
 		restrictToWorkspace: restrict,
 		allowRemote:         allowRemote,
+		maxOutputChars:      maxOutputChars,
 		sessionManager:      getSessionManager(),
 	}, nil
 }
@@ -215,11 +232,39 @@ func (t *ExecTool) Name() string {
 	return "exec"
 }
 
+// execDescription only depends on runtime.GOOS, so build it once instead of on every call.
+var execDescription = buildExecDescription()
+
 func (t *ExecTool) Description() string {
-	return `Execute shell commands. Use background=true for long-running commands (returns sessionId). Use pty=true for interactive commands (can combine with background=true). Use poll/read/write/send-keys/kill with sessionId to manage background sessions. Sessions auto-cleanup 30 minutes after process exits; use kill to terminate early. Output buffer limit: 1MB.`
+	return execDescription
 }
 
-//nolint:dupl // Tool parameter schemas intentionally use similar JSON-schema map literals.
+func buildExecDescription() string {
+	shell := "sh"
+	chainGuidance := "If commands depend on each other, chain them with && so a failure stops the sequence."
+	if runtime.GOOS == "windows" {
+		shell = "PowerShell"
+		chainGuidance = "PowerShell does not support &&; use cmd1; if ($?) { cmd2 } when cmd2 depends on cmd1 succeeding."
+	}
+
+	return fmt.Sprintf(`Executes shell commands with PicoClaw's configured safety guards.
+
+Be aware: OS: %s, Shell: %s
+
+All commands run in the configured working directory by default. Use the cwd parameter to select another directory; do not use cd to change directories inside a command.
+
+IMPORTANT: Use this tool for terminal operations such as git, go, npm, and docker. For listing, searching, reading, or editing files, use PicoClaw's filesystem tools (list_dir, search_files, read_file, edit_file, append_file, and write_file) when available.
+
+Before a command explicitly creates files or directories, use list_dir when available to verify that the parent exists and is the intended location. Always quote paths containing spaces. Command output is returned by the tool.
+
+Usage notes:
+- action is required; command is required for action=run.
+- The optional timeout parameter is in seconds and overrides the configured timeout for foreground commands; 0 disables the timeout. It cannot be combined with background=true. Foreground output longer than the configured limit (default 50,000 chars) is truncated to the first 40%% and last 60%% around an omission notice; background session output is limited to 1 MB.
+- Use background=true for long-running commands. The result includes a sessionId. Use action=list to list sessions; use poll, read, write, send-keys, or kill with sessionId to manage one. write sends stdin; send-keys sends keys to a PTY. Sessions are cleaned up 30 minutes after the process exits.
+- Combine background=true with pty=true for interactive sessions when supported. PTY is not supported on Windows.
+- Run independent commands in separate tool calls. %s Use semicolons only when later commands may run even if an earlier one fails. Do not use newlines to separate commands; newlines inside quoted strings are fine.`, runtime.GOOS, shell, chainGuidance)
+}
+
 func (t *ExecTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
@@ -259,7 +304,7 @@ func (t *ExecTool) Parameters() map[string]any {
 			},
 			"timeout": map[string]any{
 				"type":        "integer",
-				"description": "Timeout in seconds (0 = no timeout)",
+				"description": "Optional timeout in seconds for foreground commands; overrides the configured timeout, and 0 disables the timeout. Not supported with background=true.",
 			},
 		},
 		"required": []string{"action"},
@@ -322,6 +367,21 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 	}
 	isPty := getBoolArg("pty")
 	isBackground := getBoolArg("background")
+	timeout := t.timeout
+	if raw, ok := args["timeout"]; ok {
+		const maxTimeoutSeconds = (1<<63 - 1) / int64(time.Second)
+		// JSON tool arguments always decode numbers as float64.
+		value, isNumber := raw.(float64)
+		if !isNumber || value != math.Trunc(value) || value < 0 || value > float64(maxTimeoutSeconds) {
+			return ErrorResult("timeout must be a non-negative integer number of seconds")
+		}
+		seconds := int64(value)
+		// timeout=0 means "no timeout", which is already how background sessions behave.
+		if isBackground && seconds != 0 {
+			return ErrorResult("timeout is only supported for foreground commands")
+		}
+		timeout = time.Duration(seconds) * time.Second
+	}
 
 	if isPty {
 		if runtime.GOOS == "windows" {
@@ -332,7 +392,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 	cwd := t.workingDir
 	if wd, ok := args["cwd"].(string); ok && wd != "" {
 		if t.restrictToWorkspace && t.workingDir != "" {
-			resolvedWD, err := validatePathWithAllowPaths(wd, t.workingDir, true, t.allowedPathPatterns)
+			resolvedWD, err := fstools.ValidatePathWithAllowPaths(wd, t.workingDir, true, t.allowedPathPatterns)
 			if err != nil {
 				return ErrorResult("Command blocked by safety guard (" + err.Error() + ")")
 			}
@@ -360,7 +420,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 		if err != nil {
 			return ErrorResult(fmt.Sprintf("Command blocked by safety guard (path resolution failed: %v)", err))
 		}
-		if isAllowedPath(resolved, t.allowedPathPatterns) {
+		if fstools.IsAllowedPath(resolved, t.allowedPathPatterns) {
 			cwd = resolved
 		} else {
 			absWorkspace, _ := filepath.Abs(t.workingDir)
@@ -380,15 +440,15 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 		return t.runBackground(ctx, command, cwd, isPty)
 	}
 
-	return t.runSync(ctx, command, cwd)
+	return t.runSync(ctx, command, cwd, timeout)
 }
 
-func (t *ExecTool) runSync(ctx context.Context, command, cwd string) *ToolResult {
+func (t *ExecTool) runSync(ctx context.Context, command, cwd string, timeout time.Duration) *ToolResult {
 	// timeout == 0 means no timeout
 	var cmdCtx context.Context
 	var cancel context.CancelFunc
-	if t.timeout > 0 {
-		cmdCtx, cancel = context.WithTimeout(ctx, t.timeout)
+	if timeout > 0 {
+		cmdCtx, cancel = context.WithTimeout(ctx, timeout)
 	} else {
 		cmdCtx, cancel = context.WithCancel(ctx)
 	}
@@ -453,7 +513,7 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string) *ToolResult
 
 	if err != nil {
 		if errors.Is(cmdCtx.Err(), context.DeadlineExceeded) {
-			msg := fmt.Sprintf("Command timed out after %v", t.timeout)
+			msg := fmt.Sprintf("Command timed out after %v", timeout)
 			if output != "" {
 				msg += "\n\nPartial output before timeout:\n" + output
 			}
@@ -484,23 +544,35 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string) *ToolResult
 		output = "(no output)"
 	}
 
-	maxLen := 10000
-	if len(output) > maxLen {
-		output = output[:maxLen] + fmt.Sprintf("\n... (truncated, %d more chars)", len(output)-maxLen)
+	maxOutputChars := t.maxOutputChars
+	if maxOutputChars <= 0 {
+		maxOutputChars = config.DefaultExecMaxOutputChars
+	}
+	fullOutput := output
+	output, truncated := toolshared.TruncateHeadTail(output, maxOutputChars, "OUTPUT")
+
+	// Attach the pre-truncation output so the large-result spill can save it
+	// instead of the cut view: the omitted middle stays readable from the
+	// artifact whenever the result is large enough to spill.
+	fullText := ""
+	if truncated {
+		fullText = fullOutput
 	}
 
 	if err != nil {
 		return &ToolResult{
-			ForLLM:  output,
-			ForUser: output,
-			IsError: true,
+			ForLLM:   output,
+			ForUser:  output,
+			IsError:  true,
+			FullText: fullText,
 		}
 	}
 
 	return &ToolResult{
-		ForLLM:  output,
-		ForUser: output,
-		IsError: false,
+		ForLLM:   output,
+		ForUser:  output,
+		IsError:  false,
+		FullText: fullText,
 	}
 }
 
@@ -514,6 +586,10 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 		StartTime:  time.Now().Unix(),
 		Status:     "running",
 		ptyKeyMode: PtyKeyModeCSI,
+		// Initialize the output buffer before the session is published to the
+		// manager: readers (session_read/list_sessions) must never observe a
+		// session whose buffer is still nil.
+		outputBuffer: &bytes.Buffer{},
 	}
 
 	var cmd *exec.Cmd
@@ -531,6 +607,7 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 	var stdoutReader io.ReadCloser
 	var stderrReader io.ReadCloser
 	var stdinWriter io.WriteCloser
+	var ptySlave *os.File
 
 	if ptyEnabled {
 		ptmx, tty, err := pty.Open()
@@ -547,6 +624,7 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 		setSysProcAttrForPty(cmd)
 
 		session.ptyMaster = ptmx
+		ptySlave = tty
 	} else {
 		var err error
 		stdoutReader, err = cmd.StdoutPipe()
@@ -568,16 +646,24 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 	// Background sessions use the same startup path so isolation stays consistent
 	// with synchronous exec runs.
 	if err := isolation.Start(cmd); err != nil {
+		if ptySlave != nil {
+			_ = ptySlave.Close()
+		}
 		if session.ptyMaster != nil {
 			_ = session.ptyMaster.Close()
 		}
 		return ErrorResult(fmt.Sprintf("failed to start command: %v", err))
 	}
 
+	// The child inherited its own copies of the PTY slave end. The parent must
+	// release its copy now, otherwise the master never observes EOF/EIO when
+	// the child exits and the reader goroutine would block forever.
+	if ptySlave != nil {
+		_ = ptySlave.Close()
+	}
+
 	session.PID = cmd.Process.Pid
 	t.sessionManager.Add(session)
-
-	session.outputBuffer = &bytes.Buffer{}
 
 	// PTY mode: read from ptyMaster and wait for process
 	// Note: On Linux, closing ptyMaster doesn't interrupt blocking Read() calls,
@@ -639,6 +725,9 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 					break
 				}
 			}
+			// The child side is gone (EOF/EIO) or the session was killed:
+			// release the master descriptor so no fd survives the session.
+			_ = session.ptyMaster.Close()
 		}()
 	} else {
 		// Non-PTY mode: single goroutine reads pipes.
@@ -1265,7 +1354,7 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 			if safePaths[p] {
 				continue
 			}
-			if isAllowedPath(p, t.allowedPathPatterns) {
+			if fstools.IsAllowedPath(p, t.allowedPathPatterns) {
 				continue
 			}
 

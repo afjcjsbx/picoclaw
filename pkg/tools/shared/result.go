@@ -1,7 +1,6 @@
 package toolshared
 
 import (
-	"encoding/json"
 	"strings"
 
 	"github.com/sipeed/picoclaw/pkg/providers"
@@ -59,6 +58,20 @@ type ToolResult struct {
 	// user's request at the channel/output level, so the agent loop can stop
 	// without a follow-up assistant response.
 	ResponseHandled bool `json:"response_handled,omitempty"`
+
+	// LargeResultSpilled marks a result whose ForLLM was already reduced to a
+	// bounded preview by the large-result spill. It is set by the tools package
+	// rather than inferred from ForLLM, because ForLLM is tool-controlled text
+	// that could otherwise forge the marker and bypass the spill.
+	LargeResultSpilled bool `json:"-"`
+
+	// FullText is the pre-truncation payload when a tool cut its own output
+	// before returning it (for example exec's max_output_chars or web_fetch's
+	// maxChars). The large-result spill persists this text instead of the
+	// truncated view, so the omitted middle stays readable from the artifact,
+	// and clears the field once handled. It is never part of the model-visible
+	// result itself.
+	FullText string `json:"-"`
 }
 
 // ContentForLLM returns the normalized textual content to append to the
@@ -192,17 +205,6 @@ func MediaResult(forLLM string, mediaRefs []string) *ToolResult {
 		ForLLM: forLLM,
 		Media:  mediaRefs,
 	}
-}
-
-// MarshalJSON implements custom JSON serialization.
-// The Err field is excluded from JSON output via the json:"-" tag.
-func (tr *ToolResult) MarshalJSON() ([]byte, error) {
-	type Alias ToolResult
-	return json.Marshal(&struct {
-		*Alias
-	}{
-		Alias: (*Alias)(tr),
-	})
 }
 
 // WithError sets the Err field and returns the result for chaining.

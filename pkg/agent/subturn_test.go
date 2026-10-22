@@ -200,7 +200,9 @@ func TestSpawnSubTurn_EphemeralSessionIsolation(t *testing.T) {
 
 	// Parent uses its own ephemeral store pre-seeded with one message
 	parentSession := &ephemeralSessionStore{}
-	parentSession.AddMessage("", "user", "parent msg")
+	if err := parentSession.AddMessage(context.Background(), "", "user", "parent msg"); err != nil {
+		t.Fatalf("AddMessage: %v", err)
+	}
 	parent := &turnState{
 		ctx:            context.Background(),
 		turnID:         "parent-1",
@@ -212,12 +214,20 @@ func TestSpawnSubTurn_EphemeralSessionIsolation(t *testing.T) {
 
 	cfg := SubTurnConfig{Model: "gpt-4o-mini", Tools: []tools.Tool{}}
 
-	originalParentLen := len(parentSession.GetHistory(""))
+	originalParentHistory, err := parentSession.GetHistory(context.Background(), "")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	originalParentLen := len(originalParentHistory)
 
 	_, _ = spawnSubTurn(context.Background(), al, parent, cfg)
 
 	// Parent session must be untouched — child used its own store
-	if got := len(parentSession.GetHistory("")); got != originalParentLen {
+	parentHistory, err := parentSession.GetHistory(context.Background(), "")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if got := len(parentHistory); got != originalParentLen {
 		t.Errorf("parent session polluted: expected %d messages, got %d", originalParentLen, got)
 	}
 
@@ -333,7 +343,11 @@ func TestSpawnSubTurn_OrphanResultRouting(t *testing.T) {
 	}
 
 	// Verify history is NOT polluted
-	if len(parent.session.GetHistory("")) != 0 {
+	parentHistory, err := parent.session.GetHistory(context.Background(), "")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if len(parentHistory) != 0 {
 		t.Error("Parent history was polluted by orphan result")
 	}
 }
@@ -453,6 +467,119 @@ func TestSubTurnConcurrencySemaphore(t *testing.T) {
 	}
 }
 
+// turnStateProbeProvider captures the turnState injected into the provider
+// context during an agent loop run.
+type turnStateProbeProvider struct {
+	response string
+	mu       sync.Mutex
+	ts       *turnState
+}
+
+func (p *turnStateProbeProvider) Chat(
+	ctx context.Context,
+	_ []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	p.mu.Lock()
+	p.ts = turnStateFromContext(ctx)
+	p.mu.Unlock()
+	return &providers.LLMResponse{Content: p.response}, nil
+}
+
+func (p *turnStateProbeProvider) GetDefaultModel() string { return "gpt-4o-mini" }
+
+func (p *turnStateProbeProvider) turnState() *turnState {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.ts
+}
+
+// TestRunAgentLoop_InitializesSubTurnChannels verifies that production root turns
+// own a SubTurn result channel and a concurrency semaphore, so that the
+// concurrency limit and async result delivery also work for root turns.
+func TestRunAgentLoop_InitializesSubTurnChannels(t *testing.T) {
+	probe := &turnStateProbeProvider{response: "ok"}
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         t.TempDir(),
+				ModelName:         "gpt-4o-mini",
+				Provider:          "mock",
+				MaxTokens:         1024,
+				MaxToolIterations: 2,
+			},
+		},
+	}
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), probe)
+	agent := al.registry.GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("expected default agent")
+	}
+
+	if _, err := al.runAgentLoop(context.Background(), agent, processOptions{
+		Dispatch:        DispatchRequest{SessionKey: "root-session", UserMessage: "hello"},
+		DefaultResponse: defaultResponse,
+	}); err != nil {
+		t.Fatalf("runAgentLoop() error = %v", err)
+	}
+
+	ts := probe.turnState()
+	if ts == nil {
+		t.Fatal("provider did not observe a turn state in context")
+	}
+	if ts.pendingResults == nil {
+		t.Error("root turn pendingResults channel is nil")
+	} else if cap(ts.pendingResults) != subTurnPendingResultsBuffer {
+		t.Errorf("pendingResults cap = %d, want %d", cap(ts.pendingResults), subTurnPendingResultsBuffer)
+	}
+	if ts.concurrencySem == nil {
+		t.Error("root turn concurrencySem is nil")
+	} else if cap(ts.concurrencySem) != defaultMaxConcurrentSubTurns {
+		t.Errorf("concurrencySem cap = %d, want %d", cap(ts.concurrencySem), defaultMaxConcurrentSubTurns)
+	}
+}
+
+// TestRunTurn_MarksTurnFinishedOnGracefulCompletion verifies that the turn
+// coordinator marks the turn finished when it ends naturally, so that late
+// SubTurn results become orphans and child turns see the parent as ended.
+func TestRunTurn_MarksTurnFinishedOnGracefulCompletion(t *testing.T) {
+	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled
+	defer cleanup()
+
+	agent := al.registry.GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("expected default agent")
+	}
+
+	turnScope := al.newTurnEventScope(agent.ID, "finish-session", newTurnContext(nil, nil, nil))
+	ts := newTurnState(agent, processOptions{
+		Dispatch:        DispatchRequest{SessionKey: "finish-session", UserMessage: "hello"},
+		DefaultResponse: defaultResponse,
+	}, turnScope)
+
+	if ts.isFinished.Load() {
+		t.Fatal("turn should not be finished before runTurn")
+	}
+
+	if _, err := al.runTurn(context.Background(), ts, NewPipeline(al)); err != nil {
+		t.Fatalf("runTurn() error = %v", err)
+	}
+
+	if !ts.isFinished.Load() {
+		t.Error("expected turn to be marked finished after graceful completion")
+	}
+	if !ts.parentEnded.Load() {
+		t.Error("expected graceful finish to signal parentEnded for child turns")
+	}
+	select {
+	case <-ts.Finished():
+	default:
+		t.Error("expected Finished() channel to be closed after turn completion")
+	}
+}
+
 // ====================== Extra Independent Test: Hard Abort Cascading ======================
 func TestHardAbortCascading(t *testing.T) {
 	al, _, _, provider, cleanup := newTestAgentLoop(t)
@@ -562,22 +689,33 @@ func TestHardAbortSessionRollback(t *testing.T) {
 	al.activeTurnStates.Store("test-session", rootTS)
 
 	// Simulate adding messages during the turn (e.g., user input + assistant response)
-	sess.AddMessage("", "user", "new user message")
-	sess.AddMessage("", "assistant", "new assistant response")
+	if err := sess.AddMessage(context.Background(), "", "user", "new user message"); err != nil {
+		t.Fatalf("AddMessage: %v", err)
+	}
+	if err := sess.AddMessage(context.Background(), "", "assistant", "new assistant response"); err != nil {
+		t.Fatalf("AddMessage: %v", err)
+	}
 
 	// Verify history grew to 4 messages
-	if len(sess.GetHistory("")) != 4 {
-		t.Fatalf("expected 4 messages before abort, got %d", len(sess.GetHistory("")))
+	preAbortHistory, err := sess.GetHistory(context.Background(), "")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if len(preAbortHistory) != 4 {
+		t.Fatalf("expected 4 messages before abort, got %d", len(preAbortHistory))
 	}
 
 	// Trigger HardAbort
-	err := al.HardAbort("test-session")
+	err = al.HardAbort("test-session")
 	if err != nil {
 		t.Fatalf("HardAbort failed: %v", err)
 	}
 
 	// Verify history rolled back to initial 2 messages
-	finalHistory := sess.GetHistory("")
+	finalHistory, err := sess.GetHistory(context.Background(), "")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
 	if len(finalHistory) != 2 {
 		t.Errorf("expected history to rollback to 2 messages, got %d", len(finalHistory))
 	}
@@ -760,7 +898,10 @@ func TestHardAbortOrderOfOperations(t *testing.T) {
 	}
 
 	// Verify history was rolled back
-	finalHistory := sess.GetHistory("")
+	finalHistory, err := sess.GetHistory(context.Background(), "")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
 	if len(finalHistory) != 1 {
 		t.Errorf("expected history to rollback to 1 message, got %d", len(finalHistory))
 	}
@@ -1313,19 +1454,16 @@ func TestDeliverSubTurnResult_RaceWithFinish(t *testing.T) {
 
 	t.Logf("Delivered: %d, Orphan: %d, Total: %d", finalDelivered, finalOrphan, finalDelivered+finalOrphan)
 
-	// With the new drainPendingResults behavior, the total events may be >= numResults
-	// because Finish() drains remaining results from the channel and emits them as orphans.
-	// So we expect:
-	// - Some results were delivered successfully (before Finish())
-	// - Some results became orphans (after Finish() or channel full)
-	// - Some results were in the channel when Finish() was called and got drained as orphans
-	// The total should be at least numResults (could be more due to drain)
+	// Deliveries that race the parent's Finish() are reported as orphans:
+	// either the sender observes Finished() while blocked, or it re-checks
+	// isFinished after a successful send. Every result should therefore be
+	// accounted for exactly once, as delivered or as orphan.
 	if finalDelivered+finalOrphan < numResults {
 		t.Errorf("Expected at least %d total events, got %d delivered + %d orphan = %d",
 			numResults, finalDelivered, finalOrphan, finalDelivered+finalOrphan)
 	}
 
-	// Should have at least some orphan results (those that arrived after Finish() or were drained)
+	// Should have at least some orphan results (those that arrived after Finish())
 	if finalOrphan == 0 {
 		t.Error("Expected at least some orphan results after Finish()")
 	}
@@ -1412,11 +1550,16 @@ func TestEphemeralSession_AutoTruncate(t *testing.T) {
 
 	// Add more messages than the limit
 	for i := 0; i < maxEphemeralHistorySize+20; i++ {
-		store.AddMessage("test", "user", fmt.Sprintf("message-%d", i))
+		if err := store.AddMessage(context.Background(), "test", "user", fmt.Sprintf("message-%d", i)); err != nil {
+			t.Fatalf("AddMessage: %v", err)
+		}
 	}
 
 	// Verify history is truncated to the limit
-	history := store.GetHistory("test")
+	history, err := store.GetHistory(context.Background(), "test")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
 	if len(history) != maxEphemeralHistorySize {
 		t.Errorf("Expected history length %d, got %d", maxEphemeralHistorySize, len(history))
 	}
@@ -2326,5 +2469,32 @@ func TestDelegateToolRegistered_MultiAgent(t *testing.T) {
 		if _, has := agent.Tools.Get("delegate"); !has {
 			t.Errorf("agent %q should have delegate tool in multi-agent setup", id)
 		}
+	}
+}
+
+func TestGetSubTurnConfig_MaxConcurrent(t *testing.T) {
+	tests := []struct {
+		name       string
+		configured int
+		want       int
+	}{
+		{"unset uses default", 0, defaultMaxConcurrentSubTurns},
+		{"negative uses default", -1, defaultMaxConcurrentSubTurns},
+		{"explicit value is kept", 7, 7},
+		{"value at the cap is kept", maxSubTurnConcurrency, maxSubTurnConcurrency},
+		{"value just above the cap is clamped", maxSubTurnConcurrency + 1, maxSubTurnConcurrency},
+		{"value far above the cap is clamped", maxSubTurnConcurrency * 4, maxSubTurnConcurrency},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{}
+			cfg.Agents.Defaults.SubTurn.MaxConcurrent = tt.configured
+			al := &AgentLoop{cfg: cfg}
+
+			if got := al.getSubTurnConfig().maxConcurrent; got != tt.want {
+				t.Fatalf("maxConcurrent = %d, want %d", got, tt.want)
+			}
+		})
 	}
 }

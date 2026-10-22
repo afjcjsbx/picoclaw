@@ -58,7 +58,22 @@ func (al *AgentLoop) runTurnWithSteering(ctx context.Context, initialMsg bus.Inb
 
 	// Publish final response
 	if finalResponse != "" {
-		al.PublishResponseIfNeeded(ctx, target.Channel, target.ChatID, target.SessionKey, finalResponse)
+		if al.publishResponseIfNeeded(ctx, target.Channel, target.ChatID, target.SessionKey, finalResponse) &&
+			al.voiceMode(target.SessionKey) != "off" {
+			msg := bus.NormalizeInboundMessage(initialMsg)
+			if al.hasAudioInput(msg) {
+				if msg.Context.Raw == nil {
+					msg.Context.Raw = make(map[string]string, 1)
+				}
+				msg.Context.Raw[metadataKeyInputAudio] = "true"
+			}
+			al.sendVoiceResponseIfEnabled(ctx, al.agentForSession(target.SessionKey), processOptions{
+				Dispatch: DispatchRequest{
+					SessionKey:     target.SessionKey,
+					InboundContext: &msg.Context,
+				},
+			}, finalResponse)
+		}
 	}
 }
 

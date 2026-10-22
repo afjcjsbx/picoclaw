@@ -93,7 +93,7 @@ The table below lists the current runtime event kinds, when they are emitted, an
 | `agent.llm.response` | After the LLM provider returns a complete response. | `content_len`, `tool_calls`, `has_reasoning` |
 | `agent.llm.retry` | Before retrying an LLM request after context, rate-limit, transient provider, or fallback handling. | `attempt`, `max_retries`, `reason`, `error`, `backoff_ms` |
 | `agent.context.compress` | Agent context history is compressed, for example during proactive budget checks or LLM retry handling. | `reason`, `dropped_messages`, `remaining_messages` |
-| `agent.session.summarize` | Async session history summarization completes. | `summarized_messages`, `kept_messages`, `summary_len`, `omitted_oversized` |
+| `agent.session.summarize` | Session history summarization completes, either asynchronously after a turn or on a manual `/compact` (legacy context manager). | `summarized_messages`, `kept_messages`, `summary_len`, `omitted_oversized` |
 | `agent.tool.exec_start` | Before the agent executes a tool call. | `tool`, `args_count`; full arguments are not logged by default |
 | `agent.tool.exec_end` | After a tool call completes, including successful results, tool errors, and async results. | `tool`, `duration_ms`, `for_llm_len`, `for_user_len`, `is_error`, `async` |
 | `agent.tool.exec_skipped` | A tool call is skipped because the tool is unavailable, arguments are invalid, or turn control logic requires skipping it. | `tool`, `reason` |
@@ -126,6 +126,7 @@ The table below lists the current runtime event kinds, when they are emitted, an
 | Event | Trigger | Details |
 | ----- | ------- | ------- |
 | `bus.publish.failed` | Publishing inbound, outbound, media, audio, or voice-control data fails, or required context is missing. | `stream`, `error`; scope is derived from message context when possible |
+| `bus.message.dropped` | A publish exceeds its backpressure wait budget while the queue is full, so the message is dropped. Audio chunks use a 150 ms default budget (overridable via `SetBackpressureTimeout`). | `stream`, `reason`, `wait_ms`, `queue_depth`, `queue_capacity`, `dropped_total`; severity is `warn`; scope is derived from the message context when possible |
 | `bus.close.started` | Message bus shutdown begins. | `drained` is usually `0` |
 | `bus.close.drained` | Shutdown waits for buffered messages to drain and at least one buffered message was drained. | `drained` |
 | `bus.close.completed` | Message bus shutdown completes. | `drained` |
@@ -145,12 +146,15 @@ The table below lists the current runtime event kinds, when they are emitted, an
 
 | Event | Trigger | Details |
 | ----- | ------- | ------- |
-| `mcp.server.connecting` | The MCP manager is about to connect to a server. | `server`, `type`, `url`, `command` |
-| `mcp.server.connected` | An MCP server connects and its tool list has been initialized. | `server`, `type`, `url`, `command`, `tool_count` |
-| `mcp.server.failed` | An MCP server connection fails, or the manager is closed before connecting. | `server`, `type`, `url`, `command`, `error`; severity is `error` |
-| `mcp.tool.discovered` | A tool from an MCP server is discovered and registered. | `server`, `type`, `url`, `command`, `tool` |
+| `mcp.server.connecting` | The MCP manager is about to connect to a server. | `server`, `type` |
+| `mcp.server.connected` | An MCP server connects and its tool list has been initialized. | `server`, `type`, `tool_count` |
+| `mcp.server.failed` | An MCP server connection fails, or the manager is closed before connecting. | `server`, `type`, `error`; severity is `error` |
+| `mcp.tool.discovered` | A tool from an MCP server is discovered and registered. | `server`, `type`, `tool` |
 | `mcp.tool.call.start` | The MCP tool wrapper starts a remote tool call. | `server`, `tool`; when emitted inside an agent turn, scope includes turn/chat information |
 | `mcp.tool.call.end` | The MCP tool wrapper finishes a remote tool call, including failures. | `server`, `tool`, `duration_ms`, `is_error`, `error` |
+
+The connection payload also carries `url` and `command`, but they are not flattened into log
+attributes: URLs may embed credentials (for example API keys in query strings).
 
 ## Log Fields
 
@@ -209,7 +213,7 @@ Runtime event kinds are defined in `pkg/events/kind.go`. Event logging can selec
 
 - `agent.*`: agent turn, LLM, tool, context, steering, interrupt, subturn, and error events.
 - `channel.*`: channel lifecycle, webhook registration, outbound queued/sent/failed, and rate limiting.
-- `bus.*`: publish failures and close lifecycle.
+- `bus.*`: publish failures, backpressure message drops, and close lifecycle.
 - `gateway.*`: start, ready, shutdown, and reload lifecycle.
 - `mcp.*`: MCP server connection, tool discovery, and tool call events.
 

@@ -416,14 +416,69 @@ func TestHookManager_BeforeLLMControlsToolDefinitionMutation(t *testing.T) {
 	if got.Model != "changed-model" {
 		t.Fatalf("model = %q, want changed-model", got.Model)
 	}
-	if len(got.Tools) != 1 {
-		t.Fatalf("tools len = %d, want original 1", len(got.Tools))
+	// Existing tools must be preserved verbatim; hook-added tools are appended.
+	if len(got.Tools) != 2 {
+		t.Fatalf("tools len = %d, want 2 (1 original + 1 injected)", len(got.Tools))
+	}
+	if got.Tools[0].Function.Name != "mcp_github_create_issue" {
+		t.Fatalf("tool[0] name = %q, want original", got.Tools[0].Function.Name)
 	}
 	if got.Tools[0].Function.Description != "create issue" {
 		t.Fatalf("tool description = %q, want original", got.Tools[0].Function.Description)
 	}
 	if got.Tools[0].PromptSource != "mcp:github" || got.Tools[0].PromptSlot != string(PromptSlotMCP) {
 		t.Fatalf("tool prompt metadata = %#v, want original mcp metadata", got.Tools[0])
+	}
+	if got.Tools[1].Function.Name != "hook_tool" {
+		t.Fatalf("tool[1] name = %q, want hook_tool", got.Tools[1].Function.Name)
+	}
+}
+
+type llmToolRemoveHook struct{}
+
+func (h *llmToolRemoveHook) BeforeLLM(
+	ctx context.Context,
+	req *LLMHookRequest,
+) (*LLMHookRequest, HookDecision, error) {
+	next := req.Clone()
+	next.Tools = nil
+	return next, HookDecision{Action: HookActionModify}, nil
+}
+
+func (h *llmToolRemoveHook) AfterLLM(
+	ctx context.Context,
+	resp *LLMHookResponse,
+) (*LLMHookResponse, HookDecision, error) {
+	return resp.Clone(), HookDecision{Action: HookActionContinue}, nil
+}
+
+func TestHookManager_BeforeLLMRejectsToolDefinitionRemoval(t *testing.T) {
+	hm := NewHookManager(nil)
+	if err := hm.Mount(NamedHook("remove-tool", &llmToolRemoveHook{})); err != nil {
+		t.Fatalf("Mount() error = %v", err)
+	}
+
+	req := &LLMHookRequest{
+		Model: "model",
+		Messages: []providers.Message{
+			{Role: "system", Content: "system"},
+			{Role: "user", Content: "hello"},
+		},
+		Tools: []providers.ToolDefinition{
+			{
+				Type: "function",
+				Function: providers.ToolFunctionDefinition{
+					Name:        "bash",
+					Description: "run shell",
+					Parameters:  map[string]any{"type": "object"},
+				},
+			},
+		},
+	}
+
+	got, _ := hm.BeforeLLM(context.Background(), req)
+	if len(got.Tools) != 1 || got.Tools[0].Function.Name != "bash" {
+		t.Fatalf("tools = %#v, want original bash tool preserved", got.Tools)
 	}
 }
 
@@ -560,91 +615,6 @@ func TestAgentLoop_Hooks_RuntimeObserverReceivesEvents(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for runtime observer event")
-	}
-}
-
-func TestAgentLoop_BtwCommand_UsesLLMHooks(t *testing.T) {
-	provider := &llmHookTestProvider{}
-	al, agent, cleanup := newHookTestLoop(t, provider)
-	defer cleanup()
-	useTestSideQuestionProvider(al, provider)
-
-	hook := &llmObserverHook{eventCh: make(chan runtimeevents.Event, 1)}
-	if err := al.MountHook(NamedHook("llm-observer", hook)); err != nil {
-		t.Fatalf("MountHook failed: %v", err)
-	}
-
-	response, handled := al.handleCommand(context.Background(), bus.InboundMessage{
-		Context: bus.InboundContext{
-			Channel:  "cli",
-			ChatID:   "direct",
-			ChatType: "direct",
-			SenderID: "hook-user",
-		},
-		Content: "/btw hello",
-	}, agent, &processOptions{
-		Dispatch: DispatchRequest{
-			SessionKey: "session-1",
-			InboundContext: &bus.InboundContext{
-				Channel:  "cli",
-				ChatID:   "direct",
-				ChatType: "direct",
-				SenderID: "hook-user",
-			},
-			RouteResult: &routing.ResolvedRoute{
-				AgentID:   "main",
-				Channel:   "cli",
-				AccountID: routing.DefaultAccountID,
-				SessionPolicy: routing.SessionPolicy{
-					Dimensions: []string{"sender"},
-				},
-				MatchedBy: "default",
-			},
-			SessionScope: &session.SessionScope{
-				Version:    session.ScopeVersionV1,
-				AgentID:    "main",
-				Channel:    "cli",
-				Account:    routing.DefaultAccountID,
-				Dimensions: []string{"sender"},
-				Values: map[string]string{
-					"sender": "hook-user",
-				},
-			},
-			UserMessage: "/btw hello",
-		},
-		SessionKey:        "session-1",
-		Channel:           "cli",
-		ChatID:            "direct",
-		SenderID:          "hook-user",
-		SenderDisplayName: "Hook User",
-	})
-	if !handled {
-		t.Fatal("expected /btw command to be handled")
-	}
-	if response != "hooked content" {
-		t.Fatalf("expected hooked content, got %q", response)
-	}
-
-	provider.mu.Lock()
-	lastModel := provider.lastModel
-	provider.mu.Unlock()
-	if lastModel != "hook-model" {
-		t.Fatalf("expected model hook-model, got %q", lastModel)
-	}
-	if hook.lastInbound == nil {
-		t.Fatal("expected hook to receive inbound context")
-	}
-	if hook.lastInbound.Channel != "cli" || hook.lastInbound.SenderID != "hook-user" {
-		t.Fatalf("hook inbound context = %+v", hook.lastInbound)
-	}
-	if hook.lastInbound.ChatID != "direct" {
-		t.Fatalf("hook inbound chat ID = %q, want direct", hook.lastInbound.ChatID)
-	}
-	if hook.lastRoute == nil || hook.lastRoute.AgentID != "main" {
-		t.Fatalf("expected hook route context for /btw, got %+v", hook.lastRoute)
-	}
-	if hook.lastScope == nil || hook.lastScope.Values["sender"] != "hook-user" {
-		t.Fatalf("expected hook session scope for /btw, got %+v", hook.lastScope)
 	}
 }
 

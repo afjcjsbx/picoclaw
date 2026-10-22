@@ -9,16 +9,25 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
 
+	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/logger"
 )
+
+// mcpMaxConcurrentConnect bounds how many MCP servers are started at the same
+// time during initialization. Each server is a separate child process (often a
+// Node or Python runtime), so connecting every configured server at once can
+// spike memory and CPU on constrained devices. All enabled servers are still
+// connected; only the startup burst is bounded.
+const mcpMaxConcurrentConnect = 4
 
 // headerTransport is an http.RoundTripper that adds custom headers to requests
 type headerTransport struct {
@@ -116,8 +125,43 @@ func loadEnvFile(path string) (map[string]string, error) {
 	return envVars, nil
 }
 
+func allowedMCPParentEnv(key string) bool {
+	// Keep the process usable without passing PicoClaw's unrelated credentials.
+	switch key {
+	case "PATH", "HOME", "USER", "LANG", "LC_ALL", "TERM", "SHELL", "TMPDIR":
+		return true
+	}
+	if strings.HasPrefix(key, "XDG_") {
+		return true
+	}
+	if runtime.GOOS == "windows" {
+		switch strings.ToUpper(key) {
+		case "PATH", "HOME", "USER", "LANG", "LC_ALL", "TERM", "SHELL", "TMPDIR",
+			"SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP",
+			"USERPROFILE", "APPDATA", "LOCALAPPDATA", "PROGRAMDATA", "HOMEDRIVE", "HOMEPATH":
+			return true
+		}
+	}
+	return false
+}
+
+func inheritedMCPEnv(environ []string, inheritAll bool) map[string]string {
+	env := make(map[string]string)
+	for _, entry := range environ {
+		if idx := strings.IndexByte(entry, '='); idx > 0 {
+			key := entry[:idx]
+			if inheritAll || allowedMCPParentEnv(key) {
+				env[key] = entry[idx+1:]
+			}
+		}
+	}
+	return env
+}
+
 // ServerConnection represents a connection to an MCP server
 type ServerConnection struct {
+	plugin      bool // Plugin calls are never automatically replayed after disconnect.
+	cancel      context.CancelFunc
 	Name        string
 	Config      config.MCPServerConfig
 	Client      *mcp.Client
@@ -206,6 +250,7 @@ func (m *Manager) LoadFromMCPConfig(
 
 	var wg sync.WaitGroup
 	errs := make(chan error, len(mcpCfg.Servers))
+	sem := make(chan struct{}, mcpMaxConcurrentConnect)
 	enabledCount := 0
 
 	for name, serverCfg := range mcpCfg.Servers {
@@ -221,6 +266,11 @@ func (m *Manager) LoadFromMCPConfig(
 		wg.Add(1)
 		go func(name string, serverCfg config.MCPServerConfig, workspace string) {
 			defer wg.Done()
+
+			// Bound the number of servers starting concurrently so a large
+			// configuration does not spawn all child processes at once.
+			sem <- struct{}{}
+			defer func() { <-sem }()
 
 			// Resolve relative envFile paths relative to workspace
 			if serverCfg.EnvFile != "" && !filepath.IsAbs(serverCfg.EnvFile) {
@@ -366,6 +416,22 @@ func connectServer(
 	name string,
 	cfg config.MCPServerConfig,
 ) (*ServerConnection, error) {
+	var handler auth.OAuthHandler
+	if cfg.OAuth != nil {
+		if err := validateOAuthConfig(cfg); err != nil {
+			return nil, err
+		}
+		handler = &storedOAuthHandler{name: name, store: newOAuthStore(name, cfg)}
+	}
+	return connectServerWithOAuth(ctx, name, cfg, handler)
+}
+
+func connectServerWithOAuth(
+	ctx context.Context,
+	name string,
+	cfg config.MCPServerConfig,
+	handler auth.OAuthHandler,
+) (*ServerConnection, error) {
 	logger.InfoCF("mcp", "Connecting to MCP server",
 		map[string]any{
 			"server":     name,
@@ -412,6 +478,7 @@ func connectServer(
 		sseTransport := &mcp.StreamableClientTransport{
 			Endpoint:             cfg.URL,
 			DisableStandaloneSSE: disableStandaloneSSE,
+			OAuthHandler:         handler,
 		}
 
 		// Add custom headers if provided
@@ -429,6 +496,12 @@ func connectServer(
 					"header_count": len(cfg.Headers),
 				})
 		}
+		if handler != nil {
+			sseTransport.HTTPClient = &http.Client{
+				Transport:     &headerTransport{base: oauthHTTPTransport{}, headers: cfg.Headers},
+				CheckRedirect: rejectOAuthRedirect,
+			}
+		}
 
 		transport = sseTransport
 	case "stdio":
@@ -445,14 +518,8 @@ func connectServer(
 
 		// Build environment variables with proper override semantics
 		// Use a map to ensure config variables override file variables
-		envMap := make(map[string]string)
-
-		// Start with parent process environment
-		for _, e := range cmd.Environ() {
-			if idx := strings.Index(e, "="); idx > 0 {
-				envMap[e[:idx]] = e[idx+1:]
-			}
-		}
+		// Inherit only basic process variables unless this server explicitly opts in.
+		envMap := inheritedMCPEnv(cmd.Environ(), cfg.InheritEnv)
 
 		// Load environment variables from file if specified
 		if cfg.EnvFile != "" {
@@ -578,7 +645,7 @@ func (m *Manager) CallTool(
 
 	result, err := conn.Session.CallTool(ctx, params)
 	if err != nil {
-		if shouldReconnectCallError(err) {
+		if !conn.plugin && shouldReconnectCallError(err) {
 			logger.WarnCF("mcp", "MCP server session was lost during tool call, reconnecting",
 				map[string]any{
 					"server": serverName,
@@ -719,14 +786,20 @@ func (m *Manager) reconnectServer(
 
 // Close closes all server connections
 func (m *Manager) Close() error {
-	// Use Swap to atomically set closed=true and get the previous value
-	// This prevents TOCTOU race with CallTool's closed check
+	// Set closed=true while holding the same lock CallTool holds across its
+	// closed check and wg.Add. This guarantees that once Swap returns, no
+	// CallTool can still be between the check and the Add, so wg.Wait below
+	// actually waits for every in-flight call. Setting closed without the lock
+	// would leave a TOCTOU window where a call passes the check and Adds after
+	// Wait already observed a zero counter.
+	m.mu.Lock()
 	if m.closed.Swap(true) {
+		m.mu.Unlock()
 		return nil // already closed
 	}
+	m.mu.Unlock()
 
-	// Wait for all in-flight CallTool calls to finish before closing sessions
-	// After closed=true is set, no new CallTool can start (they check closed first)
+	// Wait for all in-flight CallTool calls to finish before closing sessions.
 	m.wg.Wait()
 
 	m.mu.Lock()
@@ -738,10 +811,23 @@ func (m *Manager) Close() error {
 
 	var errs []error
 	for name, conn := range m.servers {
-		if conn == nil || conn.Session == nil {
+		if conn == nil {
+			continue
+		}
+		if conn.cancel != nil {
+			conn.cancel()
+		}
+		if conn.Session == nil {
 			continue
 		}
 		if err := conn.Session.Close(); err != nil {
+			// Plugin shutdown cancels process lifetime before joining sessions.
+			// A terminated child is expected here, not a new component failure.
+			var exitErr *exec.ExitError
+			if conn.plugin &&
+				(errors.As(err, &exitErr) || errors.Is(err, os.ErrClosed) || errors.Is(err, context.Canceled)) {
+				continue
+			}
 			logger.ErrorCF("mcp", "Failed to close server connection",
 				map[string]any{
 					"server": name,

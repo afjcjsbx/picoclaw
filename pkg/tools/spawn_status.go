@@ -6,6 +6,9 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
+
+	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
 // SpawnStatusTool reports the status of subagents that were spawned via the
@@ -167,9 +170,8 @@ func spawnStatusFormatTask(task *SubagentTask) string {
 	if task.Result != "" {
 		result := task.Result
 		const maxResultLen = 300
-		runes := []rune(result)
-		if len(runes) > maxResultLen {
-			result = string(runes[:maxResultLen]) + "…"
+		if utf8.RuneCountInString(result) > maxResultLen {
+			result = toolshared.RunePrefix(result, maxResultLen) + "…"
 		}
 		sb.WriteString(fmt.Sprintf("\n  result: %s", result))
 	}

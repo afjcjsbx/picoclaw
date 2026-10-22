@@ -19,6 +19,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/routing"
 	"github.com/sipeed/picoclaw/pkg/session"
 	"github.com/sipeed/picoclaw/pkg/tools"
+	fstools "github.com/sipeed/picoclaw/pkg/tools/fs"
 )
 
 // AgentInstance represents a fully configured agent with its own workspace,
@@ -38,6 +39,7 @@ type AgentInstance struct {
 	ContextWindow             int
 	SummarizeMessageThreshold int
 	SummarizeTokenPercent     int
+	LoopDetection             config.LoopDetectionConfig
 	Provider                  providers.LLMProvider
 	Sessions                  session.SessionStore
 	ContextBuilder            *ContextBuilder
@@ -120,26 +122,38 @@ func NewAgentInstance(
 
 	toolsRegistry := tools.NewToolRegistry()
 	toolsRegistry.SetAllowlist(agentToolAllowlist)
+	toolsRegistry.SetWorkspace(workspace)
+	toolsRegistry.SetMaxInlineResultRunes(cfg.Tools.GetMaxInlineResultChars())
+
+	if cfg.Tools.IsToolEnabled("todo") {
+		toolsRegistry.Register(tools.NewTodoTool())
+	}
 
 	if cfg.Tools.IsToolEnabled("read_file") {
 		maxReadFileSize := cfg.Tools.ReadFile.MaxReadFileSize
 		switch cfg.Tools.ReadFile.EffectiveMode() {
 		case config.ReadFileModeLines:
-			toolsRegistry.Register(tools.NewReadFileLinesTool(workspace, readRestrict, maxReadFileSize, allowReadPaths))
+			toolsRegistry.Register(fstools.NewReadFileLinesTool(
+				workspace, readRestrict, maxReadFileSize,
+				cfg.Tools.ReadFile.GetMaxLines(), cfg.Tools.ReadFile.GetMaxLineLength(),
+				allowReadPaths,
+			))
 		default:
-			toolsRegistry.Register(tools.NewReadFileBytesTool(workspace, readRestrict, maxReadFileSize, allowReadPaths))
+			toolsRegistry.Register(fstools.NewReadFileTool(
+				workspace, readRestrict, maxReadFileSize, allowReadPaths,
+			))
 		}
 	}
 	if cfg.Tools.IsToolEnabled("edit_file") {
-		toolsRegistry.Register(tools.NewEditFileTool(workspace, restrict, allowWritePaths))
+		toolsRegistry.Register(fstools.NewEditFileTool(workspace, restrict, allowWritePaths))
 	}
 	if cfg.Tools.IsToolEnabled("append_file") {
-		toolsRegistry.Register(tools.NewAppendFileTool(workspace, restrict, allowWritePaths))
+		toolsRegistry.Register(fstools.NewAppendFileTool(workspace, restrict, allowWritePaths))
 	}
 	// Build write_file's copy from the registered editors so it steers the agent
 	// to edit_file/append_file only when those tools are actually available.
 	if cfg.Tools.IsToolEnabled("write_file") {
-		writeTool := tools.NewWriteFileTool(workspace, restrict, allowWritePaths)
+		writeTool := fstools.NewWriteFileTool(workspace, restrict, allowWritePaths)
 		var altTools []string
 		if toolsRegistry.HasRegistered("append_file") {
 			altTools = append(altTools, "append_file")
@@ -151,7 +165,10 @@ func NewAgentInstance(
 		toolsRegistry.Register(writeTool)
 	}
 	if cfg.Tools.IsToolEnabled("list_dir") {
-		toolsRegistry.Register(tools.NewListDirTool(workspace, readRestrict, allowReadPaths))
+		toolsRegistry.Register(fstools.NewListDirTool(workspace, readRestrict, allowReadPaths))
+	}
+	if cfg.Tools.IsToolEnabled("search_files") {
+		toolsRegistry.Register(fstools.NewSearchFilesTool(workspace, readRestrict, allowReadPaths))
 	}
 	if cfg.Tools.IsToolEnabled("exec") {
 		execTool, err := tools.NewExecToolWithConfig(workspace, restrict, cfg, allowReadPaths)
@@ -164,7 +181,7 @@ func NewAgentInstance(
 	}
 
 	sessionsDir := filepath.Join(workspace, "sessions")
-	sessions := initSessionStore(sessionsDir)
+	sessions := initSessionStore(sessionsDir, cfg.Session.DurableWritesEnabled())
 
 	mcpDiscoveryActive := agentHasDiscoverableMCPServers(cfg, agentMCPServerAllowlist)
 	contextBuilder := NewContextBuilder(workspace).
@@ -336,6 +353,7 @@ func NewAgentInstance(
 		ContextWindow:             contextWindow,
 		SummarizeMessageThreshold: summarizeMessageThreshold,
 		SummarizeTokenPercent:     summarizeTokenPercent,
+		LoopDetection:             defaults.LoopDetection.Normalized(),
 		Provider:                  provider,
 		Sessions:                  sessions,
 		ContextBuilder:            contextBuilder,
@@ -763,8 +781,8 @@ func closeUnreferencedStatefulProviders(
 // It uses the JSONL store by default and auto-migrates legacy JSON sessions.
 // Falls back to SessionManager if the JSONL store cannot be initialized or
 // if migration fails (which indicates the store cannot write reliably).
-func initSessionStore(dir string) session.SessionStore {
-	store, err := memory.NewJSONLStore(dir)
+func initSessionStore(dir string, durableWrites bool) session.SessionStore {
+	store, err := memory.NewJSONLStore(dir, memory.WithDurableWrites(durableWrites))
 	if err != nil {
 		logger.WarnCF("agent", "Memory JSONL store init failed; falling back to json sessions",
 			map[string]any{"error": err.Error()})

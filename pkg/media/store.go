@@ -56,6 +56,9 @@ type mediaEntry struct {
 	path     string
 	meta     MediaMeta
 	storedAt time.Time
+	// lastAccess is refreshed on every Resolve so TTL cleanup is idle-based and
+	// cannot delete a file that is still being read.
+	lastAccess time.Time
 }
 
 type pathRefState struct {
@@ -120,12 +123,17 @@ func (s *FileMediaStore) Store(localPath string, meta MediaMeta, scope string) (
 	}
 
 	ref := "media://" + uuid.New().String()
-	meta.CleanupPolicy = normalizeCleanupPolicy(meta.CleanupPolicy)
+	normalized, err := normalizeCleanupPolicy(meta.CleanupPolicy)
+	if err != nil {
+		return "", err
+	}
+	meta.CleanupPolicy = normalized
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.refs[ref] = mediaEntry{path: localPath, meta: meta, storedAt: s.nowFunc()}
+	now := s.nowFunc()
+	s.refs[ref] = mediaEntry{path: localPath, meta: meta, storedAt: now, lastAccess: now}
 	if s.scopeToRefs[scope] == nil {
 		s.scopeToRefs[scope] = make(map[string]struct{})
 	}
@@ -149,25 +157,29 @@ func (s *FileMediaStore) Store(localPath string, meta MediaMeta, scope string) (
 
 // Resolve returns the local path for the given ref.
 func (s *FileMediaStore) Resolve(ref string) (string, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	entry, ok := s.refs[ref]
 	if !ok {
 		return "", fmt.Errorf("media store: unknown ref: %s", ref)
 	}
+	entry.lastAccess = s.nowFunc()
+	s.refs[ref] = entry
 	return entry.path, nil
 }
 
 // ResolveWithMeta returns the local path and metadata for the given ref.
 func (s *FileMediaStore) ResolveWithMeta(ref string) (string, MediaMeta, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	entry, ok := s.refs[ref]
 	if !ok {
 		return "", MediaMeta{}, fmt.Errorf("media store: unknown ref: %s", ref)
 	}
+	entry.lastAccess = s.nowFunc()
+	s.refs[ref] = entry
 	return entry.path, entry.meta, nil
 }
 
@@ -230,7 +242,7 @@ func (s *FileMediaStore) CleanExpired() int {
 	var expired []expiredEntry
 
 	for ref, entry := range s.refs {
-		if entry.storedAt.Before(cutoff) {
+		if entry.lastAccess.Before(cutoff) {
 			if scope, ok := s.refToScope[ref]; ok {
 				if scopeRefs, ok := s.scopeToRefs[scope]; ok {
 					delete(scopeRefs, ref)
@@ -265,14 +277,14 @@ func (s *FileMediaStore) CleanExpired() int {
 	return len(expired)
 }
 
-func normalizeCleanupPolicy(policy CleanupPolicy) CleanupPolicy {
+func normalizeCleanupPolicy(policy CleanupPolicy) (CleanupPolicy, error) {
 	switch policy {
 	case "", CleanupPolicyDeleteOnCleanup:
-		return CleanupPolicyDeleteOnCleanup
+		return CleanupPolicyDeleteOnCleanup, nil
 	case CleanupPolicyForgetOnly:
-		return CleanupPolicyForgetOnly
+		return CleanupPolicyForgetOnly, nil
 	default:
-		return CleanupPolicyDeleteOnCleanup
+		return "", fmt.Errorf("media store: invalid cleanup policy: %q", policy)
 	}
 }
 

@@ -12,12 +12,13 @@ func BuiltinDefinitions() []Definition {
 		showCommand(),
 		listCommand(),
 		useCommand(),
-		btwCommand(),
 		switchCommand(),
 		checkCommand(),
 		clearCommand(),
+		compactCommand(),
 		contextCommand(),
 		subagentsCommand(),
 		reloadCommand(),
+		voiceCommand(),
 	}
 }

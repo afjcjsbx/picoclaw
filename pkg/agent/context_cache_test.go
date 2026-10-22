@@ -105,8 +105,8 @@ func TestSingleSystemMessage(t *testing.T) {
 			if !strings.Contains(sys, "picoclaw") {
 				t.Error("system message missing identity")
 			}
-			if !strings.Contains(sys, "Current Time") {
-				t.Error("system message missing dynamic time context")
+			if !strings.Contains(sys, "Current Date") {
+				t.Error("system message missing dynamic date context")
 			}
 
 			// Summary handling
@@ -274,6 +274,42 @@ func TestMtimeAutoInvalidation(t *testing.T) {
 			t.Error("sourceFilesChangedLocked() should detect skills dir mtime change")
 		}
 	})
+
+	// Daily notes are folded into the cached prompt through GetMemoryContext.
+	// Creating one must invalidate the cache even though it is not a workspace
+	// bootstrap file.
+	t.Run("daily note change", func(t *testing.T) {
+		tmpDir := setupWorkspace(t, nil)
+		defer os.RemoveAll(tmpDir)
+
+		cb := NewContextBuilder(tmpDir)
+		sp1 := cb.BuildSystemPromptWithCache()
+
+		dailyPath := cb.memory.dailyNotePath(time.Now())
+		if err := os.MkdirAll(filepath.Dir(dailyPath), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(dailyPath, []byte("# Today\n\nWent for a run."), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		future := time.Now().Add(2 * time.Second)
+		os.Chtimes(dailyPath, future, future)
+
+		cb.systemPromptMutex.RLock()
+		changed := cb.sourceFilesChangedLocked()
+		cb.systemPromptMutex.RUnlock()
+		if !changed {
+			t.Fatal("sourceFilesChangedLocked() should detect daily note creation")
+		}
+
+		sp2 := cb.BuildSystemPromptWithCache()
+		if sp1 == sp2 {
+			t.Error("cache not rebuilt after daily note change")
+		}
+		if !strings.Contains(sp2, "Went for a run") {
+			t.Error("rebuilt prompt missing daily note content")
+		}
+	})
 }
 
 // TestExplicitInvalidateCache verifies that InvalidateCache() forces a rebuild
@@ -325,7 +361,7 @@ func TestCacheStability(t *testing.T) {
 	}
 
 	// Static prompt must NOT contain per-request data
-	if strings.Contains(results[0], "Current Time") {
+	if strings.Contains(results[0], "Current Date") {
 		t.Error("static cached prompt should not contain time (added dynamically)")
 	}
 }

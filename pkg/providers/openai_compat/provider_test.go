@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -18,6 +19,212 @@ import (
 	"github.com/sipeed/picoclaw/pkg/providers/common"
 	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
 )
+
+func TestOpenAIProviderUsesResponsesAPI(t *testing.T) {
+	var requestBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/chat/completions" {
+			_, _ = fmt.Fprint(w, `{"choices":[{"message":{"content":"compat"},"finish_reason":"stop"}]}`)
+			return
+		}
+		if r.URL.Path != "/responses" {
+			http.Error(w, "wrong endpoint", http.StatusNotFound)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		response := `{"id":"resp_1","object":"response","status":"completed","output":[{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"output_text","text":"ok","annotations":[]}]}]}`
+		if requestBody["stream"] == true {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = fmt.Fprint(w, "event: response.output_text.delta\n"+
+				"data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\n")
+			_, _ = fmt.Fprintf(w, "event: response.completed\n"+
+				"data: {\"type\":\"response.completed\",\"response\":%s}\n\n", response)
+			return
+		}
+		_, _ = fmt.Fprint(w, response)
+	}))
+	defer server.Close()
+
+	p := NewProvider("key", server.URL, "")
+	p.SetProviderName("openai")
+	messages := []Message{{Role: "system", Content: "system prompt"}, {Role: "user", Content: "hello"}}
+	result, err := p.responsesChat(t.Context(), messages, nil, "gpt-test", map[string]any{"max_tokens": 12})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Content != "ok" ||
+		requestBody["instructions"] != "system prompt" ||
+		requestBody["max_output_tokens"] != float64(12) {
+		t.Fatalf("response/request = %#v / %#v", result, requestBody)
+	}
+
+	var streamed string
+	result, err = p.responsesStream(t.Context(), messages, nil, "gpt-test", nil, func(chunk StreamChunk) {
+		streamed = chunk.Content
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Content != "ok" || streamed != "ok" || requestBody["stream"] != true {
+		t.Fatalf("stream response/request = %#v / %#v, delta=%q", result, requestBody, streamed)
+	}
+
+	result, err = p.Chat(t.Context(), messages, nil, "deepseek/deepseek-r1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Content != "compat" {
+		t.Fatalf("custom API base response = %#v, want Chat Completions", result)
+	}
+}
+
+func TestResponsesToolCallRoundTrip(t *testing.T) {
+	const response = `{"id":"resp_1","object":"response","status":"completed","output":[` +
+		`{"type":"reasoning","id":"rs_1","encrypted_content":"enc","summary":[]},` +
+		`{"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{\"q\":\"x\"}"}]}`
+	var requestBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestBody = nil // decoding into a non-nil map would keep keys from the previous request
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if requestBody["stream"] == true {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = fmt.Fprintf(w, "data: {\"type\":\"response.completed\",\"response\":%s}\n\n", response)
+			return
+		}
+		_, _ = fmt.Fprint(w, response)
+	}))
+	defer server.Close()
+
+	p := NewProvider("key", server.URL, "")
+	p.SetProviderName("openai")
+	tools := []ToolDefinition{{Type: "function", Function: protocoltypes.ToolFunctionDefinition{Name: "lookup"}}}
+	user := Message{Role: "user", Content: "find x"}
+
+	chat, err := p.responsesChat(t.Context(), []Message{user}, tools, "gpt-test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream, err := p.responsesStream(t.Context(), []Message{user}, tools, "gpt-test", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, result := range map[string]*LLMResponse{"chat": chat, "stream": stream} {
+		if result.FinishReason != "tool_calls" || len(result.ToolCalls) != 1 ||
+			result.ToolCalls[0].ID != "call_1" || result.ToolCalls[0].Name != "lookup" ||
+			result.ToolCalls[0].Arguments["q"] != "x" {
+			t.Fatalf("%s result = %+v, want one lookup tool call", name, result)
+		}
+	}
+
+	// The follow-up request must replay the reasoning item ahead of the function call.
+	followUp := []Message{
+		user,
+		{Role: "assistant", ToolCalls: chat.ToolCalls},
+		{Role: "tool", Content: "found", ToolCallID: "call_1"},
+	}
+	if _, err := p.responsesChat(t.Context(), followUp, tools, "gpt-test", nil); err != nil {
+		t.Fatal(err)
+	}
+	items := requestBody["input"].([]any)
+	types := make([]string, 0, len(items))
+	for _, item := range items {
+		typ, _ := item.(map[string]any)["type"].(string)
+		if typ == "" {
+			typ = "message"
+		}
+		types = append(types, typ)
+	}
+	if got, want := strings.Join(types, ","), "message,reasoning,function_call,function_call_output"; got != want {
+		t.Errorf("input item types = %s, want %s", got, want)
+	}
+}
+
+func TestResponsesChat_HTTPErrorIsReturned(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, `{"error":{"message":"bad request"}}`, http.StatusBadRequest)
+	}))
+	defer server.Close()
+
+	p := NewProvider("key", server.URL, "")
+	p.SetProviderName("openai")
+	messages := []Message{{Role: "user", Content: "hi"}}
+	if _, err := p.responsesChat(t.Context(), messages, nil, "gpt-test", nil); err == nil {
+		t.Error("responsesChat: want an error for a 400 response")
+	}
+	if _, err := p.responsesStream(t.Context(), messages, nil, "gpt-test", nil, nil); err == nil {
+		t.Error("responsesStream: want an error for a 400 response")
+	}
+}
+
+func TestResponsesStream_ErrorEventsKeepMessage(t *testing.T) {
+	for name, sse := range map[string]string{
+		"error": `data: {"type":"error","code":"server_error","message":"boom","param":null,"sequence_number":1}` +
+			"\n\n",
+		"response.failed": `data: {"type":"response.failed","response":{"id":"resp_1","object":"response",` +
+			`"status":"failed","error":{"code":"server_error","message":"boom"},"output":[]}}` + "\n\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = fmt.Fprint(w, sse)
+			}))
+			defer server.Close()
+
+			p := NewProvider("key", server.URL, "")
+			p.SetProviderName("openai")
+			_, err := p.responsesStream(
+				t.Context(), []Message{{Role: "user", Content: "hi"}}, nil, "gpt-test", nil, nil,
+			)
+			if err == nil || !strings.Contains(err.Error(), "boom") {
+				t.Fatalf("err = %v, want it to contain the API error message", err)
+			}
+		})
+	}
+}
+
+func TestResponsesRequestBody_NativeSearch(t *testing.T) {
+	p := NewProvider("key", "https://api.openai.com/v1", "")
+	p.SetProviderName("openai")
+	messages := []Message{{Role: "user", Content: "hello"}}
+
+	for name, tc := range map[string]struct {
+		value     any
+		wantTools bool
+	}{
+		"true":       {true, true},
+		"false":      {false, false},
+		"wrong type": {"true", false},
+	} {
+		body := p.responsesRequestBody(messages, nil, "gpt-4o", map[string]any{"native_search": tc.value})
+		if _, got := body["tools"]; got != tc.wantTools {
+			t.Errorf("native_search %s: tools present = %v, want %v", name, got, tc.wantTools)
+		}
+	}
+}
+
+func TestResponsesRequestBody_ThinkingLevel(t *testing.T) {
+	p := NewProvider("key", "https://api.openai.com/v1", "")
+	p.SetProviderName("openai")
+	messages := []Message{{Role: "user", Content: "hello"}}
+
+	for level, want := range map[string]any{
+		"off":      nil,
+		"adaptive": nil,
+		"low":      map[string]string{"effort": "low"},
+		"high":     map[string]string{"effort": "high"},
+	} {
+		body := p.responsesRequestBody(messages, nil, "gpt-4o", map[string]any{"thinking_level": level})
+		if got := body["reasoning"]; fmt.Sprint(got) != fmt.Sprint(want) {
+			t.Errorf("thinking_level %q: reasoning = %v, want %v", level, got, want)
+		}
+	}
+}
 
 func TestProviderChat_UsesMaxCompletionTokensForGLM(t *testing.T) {
 	var requestBody map[string]any
@@ -72,6 +279,26 @@ func TestBuildRequestBody_DisablesDoubaoThinkingWhenThinkingLevelOff(t *testing.
 		[]Message{{Role: "user", Content: "hi"}},
 		nil,
 		"doubao-seed-1-6-flash-250828",
+		map[string]any{"thinking_level": "off"},
+	)
+
+	thinking, ok := body["thinking"].(map[string]any)
+	if !ok {
+		t.Fatalf("thinking = %#v, want map", body["thinking"])
+	}
+	if got := thinking["type"]; got != "disabled" {
+		t.Fatalf("thinking.type = %#v, want %q", got, "disabled")
+	}
+}
+
+func TestBuildRequestBody_DisablesBytePlusThinkingWhenThinkingLevelOff(t *testing.T) {
+	p := NewProvider("key", "https://ark.ap-southeast.bytepluses.com/api/v3", "")
+	p.SetProviderName("byteplus")
+
+	body := p.buildRequestBody(
+		[]Message{{Role: "user", Content: "hi"}},
+		nil,
+		"seed-2-0-lite-260228",
 		map[string]any{"thinking_level": "off"},
 	)
 
@@ -2194,5 +2421,96 @@ func TestSerializeMessages_StripsSystemParts(t *testing.T) {
 	raw := string(data)
 	if strings.Contains(raw, "system_parts") {
 		t.Fatal("system_parts should not appear in serialized output")
+	}
+}
+
+func TestBuildRequestBody_OpenRouterAnthropicTopLevelCacheControl(t *testing.T) {
+	tests := []struct {
+		name    string
+		apiBase string
+		model   string
+		want    bool
+	}{
+		{"openrouter anthropic", "https://openrouter.ai/api/v1", "anthropic/claude-sonnet-4.5", true},
+		{"openrouter anthropic alias", "https://openrouter.ai/api/v1", "~anthropic/claude-sonnet-latest", true},
+		{"openrouter other vendor", "https://openrouter.ai/api/v1", "minimax/minimax-m3.1-flash:free", false},
+		{"anthropic model on other host", "https://example.com/v1", "anthropic/claude-sonnet-4.5", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewProvider("key", tt.apiBase, "")
+			body := p.buildRequestBody([]Message{{Role: "user", Content: "hi"}}, nil, tt.model, nil)
+
+			got, present := body["cache_control"]
+			if present != tt.want {
+				t.Fatalf("cache_control present = %v, want %v", present, tt.want)
+			}
+			if tt.want && !reflect.DeepEqual(got, map[string]any{"type": "ephemeral"}) {
+				t.Fatalf("cache_control = %#v, want ephemeral", got)
+			}
+		})
+	}
+}
+
+func TestApplyCustomHeaders_OpenRouterSessionID(t *testing.T) {
+	long := strings.Repeat("k", 300)
+	tests := []struct {
+		name    string
+		apiBase string
+		options map[string]any
+		want    string
+	}{
+		{
+			"openrouter sends session key",
+			"https://openrouter.ai/api/v1",
+			map[string]any{"session_key": "agent:main:42"},
+			"agent:main:42",
+		},
+		{
+			"openrouter truncates to 256",
+			"https://openrouter.ai/api/v1",
+			map[string]any{"session_key": long},
+			long[:256],
+		},
+		{"openrouter without session key", "https://openrouter.ai/api/v1", nil, ""},
+		{"other host sends nothing", "https://api.example.com/v1", map[string]any{"session_key": "agent:main:42"}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewProvider("key", tt.apiBase, "")
+			req, err := http.NewRequest(http.MethodPost, tt.apiBase+"/chat/completions", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			p.applyCustomHeaders(req, tt.options)
+			if got := req.Header.Get("X-Session-Id"); got != tt.want {
+				t.Fatalf("x-session-id = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestProviderChatStream_ParsesCacheUsage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n"))
+		_, _ = w.Write(
+			[]byte(
+				"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":5400,\"completion_tokens\":3,\"total_tokens\":5403," +
+					"\"prompt_tokens_details\":{\"cached_tokens\":5398,\"cache_write_tokens\":2}}}\n\n",
+			),
+		)
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	out, err := NewProvider("key", server.URL, "").ChatStream(
+		t.Context(), []Message{{Role: "user", Content: "hi"}}, nil, "gpt-4o", nil, nil,
+	)
+	if err != nil {
+		t.Fatalf("ChatStream() error = %v", err)
+	}
+	if u := out.Usage; u == nil || u.PromptTokens != 5400 || u.CacheReadTokens != 5398 || u.CacheCreationTokens != 2 {
+		t.Fatalf("Usage = %+v, want PromptTokens=5400 CacheReadTokens=5398 CacheCreationTokens=2", u)
 	}
 }

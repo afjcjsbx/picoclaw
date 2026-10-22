@@ -25,7 +25,7 @@
 
 1. 配置层：读取 `config.Config.Isolation`，并通过 `isolation.Configure(cfg)` 注入运行时。
 2. 实例目录层：解析 `config.GetHome()`，准备实例目录，并构建运行时用户环境目录。
-3. 平台后端层：Linux 使用 `bwrap`；Windows 使用受限 token、低完整性级别和 `Job Object`；其他平台未实现。
+3. 平台后端层：Linux 使用 `bwrap`；macOS 通过 `sandbox-exec` 使用 Seatbelt；Windows 使用受限 token、低完整性级别和 `Job Object`。
 4. 统一启动层：`PrepareCommand(cmd)`、`Start(cmd)`、`Run(cmd)`。
 
 所有启动子进程的接入点都应复用这组入口，而不是各自直接调用 `cmd.Start` 或 `cmd.Run`。
@@ -46,7 +46,7 @@
 字段说明：
 
 - `enabled`：是否启用子进程隔离。默认值：`false`。
-- `expose_paths`：显式把宿主路径带入隔离环境。仅在 `enabled=true` 时生效。目前只在 Linux 上支持。
+- `expose_paths`：显式把宿主路径带入隔离环境。仅在 `enabled=true` 时生效。Linux 支持路径重映射；macOS 仅支持源路径和目标路径相同。
 
 示例：
 
@@ -82,6 +82,7 @@
 平台说明：
 
 - Linux 会真实使用 `source -> target` 挂载视图。
+- macOS 要求 `target` 与 `source` 相同；Seatbelt 不支持路径重映射。
 - Windows 当前不支持 `expose_paths`。
 
 ## 实例根与目录
@@ -113,7 +114,7 @@ Windows 还会额外准备：
 
 隔离开启后，子进程会收到重定向到实例目录下的独立用户环境。
 
-Linux 注入变量：
+Linux 和 macOS 注入变量：
 
 - `HOME`
 - `TMPDIR`
@@ -186,9 +187,13 @@ Windows 后端当前使用：
 
 它当前不会实现真正的 `source -> target` 文件系统重映射。
 
-### macOS 与其他平台
+### macOS
 
-当前尚未实现。
+macOS 后端通过 `/usr/bin/sandbox-exec` 使用默认拒绝的 Seatbelt 配置文件。
+它允许在 PicoClaw 实例根目录和明确配置的 `rw` 路径下写入，并按需开放系统文件、命令、配置的工作目录和绝对路径参数。网络访问保持开启，与 Linux 行为一致。
+Apple 已弃用 `sandbox-exec`，未来 macOS 版本可能移除它；如果该命令不存在，隔离启动会失败。
+
+### 其他平台
 
 当在未支持的平台上显式开启隔离时，上层运行时应将其视为不支持的配置，而不是假装隔离成功。
 
@@ -204,6 +209,8 @@ Windows 日志名：
 
 - `windows isolation access rules`
 
+macOS 调试日志名：`macOS Seatbelt profile prepared`。
+
 如果你怀疑隔离未生效，先检查这些日志里是否出现了不应暴露的宿主路径。
 
 ## 与 `restrict_to_workspace` 的关系
@@ -218,7 +225,7 @@ Windows 日志名：
 - Linux 基于 `bwrap` 实现，而不是纯内建 isolation runtime。
 - Linux 当前没有默认启用独立的 `pid namespace`。
 - Windows 还没有对所有允许/拒绝路径做完整 ACL 落地。
-- macOS 尚未实现。
+- macOS Seatbelt 不支持 `source -> target` 路径重映射，并依赖 Apple 已弃用的 `sandbox-exec` 命令。
 - 当前隔离的是子进程，不是 `picoclaw` 主进程自身。
 
 ## 建议阅读顺序

@@ -2,10 +2,13 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/sipeed/picoclaw/pkg/providers"
 )
@@ -170,8 +173,9 @@ func (sm *SubagentManager) runTask(
 	task *SubagentTask,
 	callback AsyncCallback,
 ) {
-	task.Status = "running"
-	task.Created = time.Now().UnixMilli()
+	// Status/Created are initialized by the caller in Spawn before the task is
+	// published in sm.tasks; writing them here would race with readers that
+	// observe the task under the manager lock.
 	// TODO(eventbus): once subagents are modeled as child turns inside
 	// pkg/agent, emit SubTurnEnd and SubTurnResultDelivered from the parent
 	// AgentLoop instead of this legacy manager.
@@ -215,6 +219,21 @@ func (sm *SubagentManager) runTask(
 		)
 	} else {
 		// Fallback to legacy RunToolLoop
+		// Give stateful tools a child identity instead of inheriting the parent's
+		// session. This also supports legacy callers without session metadata.
+		childAgentID := ToolAgentID(ctx)
+		if childAgentID == "" {
+			childAgentID = "subagent"
+		}
+		childSessionKey := "subagent:" + uuid.NewString()
+		childCtx := WithToolSessionContext(ctx, childAgentID, childSessionKey, nil)
+		if tools != nil {
+			if tool, ok := tools.Get("todo"); ok {
+				if todo, ok := tool.(*TodoTool); ok {
+					defer todo.ClearSession(childAgentID, childSessionKey)
+				}
+			}
+		}
 		systemPrompt := `You are a subagent. Complete the given task independently and report the result.
 You have access to tools - use them as needed to complete your task.
 After completing the task, provide a clear summary of what was done.`
@@ -236,7 +255,7 @@ After completing the task, provide a clear summary of what was done.`
 		}
 
 		var loopResult *ToolLoopResult
-		loopResult, err = RunToolLoop(ctx, ToolLoopConfig{
+		loopResult, err = RunToolLoop(childCtx, ToolLoopConfig{
 			Provider:      sm.provider,
 			Model:         sm.defaultModel,
 			Tools:         tools,
@@ -245,7 +264,7 @@ After completing the task, provide a clear summary of what was done.`
 			MediaResolver: mediaResolver,
 		}, messages, task.OriginChannel, task.OriginChatID)
 
-		if err == nil {
+		if err == nil && loopResult != nil {
 			result = &ToolResult{
 				ForLLM: fmt.Sprintf(
 					"Subagent '%s' completed (iterations: %d): %s",
@@ -259,6 +278,13 @@ After completing the task, provide a clear summary of what was done.`
 				Async:   false,
 			}
 		}
+	}
+
+	// The spawner contract does not guarantee a result on success; guard the
+	// success path so a (nil, nil) return becomes an explicit error instead of
+	// a nil dereference.
+	if err == nil && result == nil {
+		err = errors.New("subagent returned no result")
 	}
 
 	sm.mu.Lock()
@@ -292,13 +318,6 @@ After completing the task, provide a clear summary of what was done.`
 	}
 }
 
-func (sm *SubagentManager) GetTask(taskID string) (*SubagentTask, bool) {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
-	task, ok := sm.tasks[taskID]
-	return task, ok
-}
-
 // GetTaskCopy returns a copy of the task with the given ID, taken under the
 // read lock, so the caller receives a consistent snapshot with no data race.
 func (sm *SubagentManager) GetTaskCopy(taskID string) (SubagentTask, bool) {
@@ -309,17 +328,6 @@ func (sm *SubagentManager) GetTaskCopy(taskID string) (SubagentTask, bool) {
 		return SubagentTask{}, false
 	}
 	return *task, true
-}
-
-func (sm *SubagentManager) ListTasks() []*SubagentTask {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
-
-	tasks := make([]*SubagentTask, 0, len(sm.tasks))
-	for _, task := range sm.tasks {
-		tasks = append(tasks, task)
-	}
-	return tasks
 }
 
 // ListTaskCopies returns value copies of all tasks, taken under the read lock,

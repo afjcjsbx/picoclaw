@@ -44,6 +44,7 @@ func (al *AgentLoop) ProcessDirectWithChannel(
 	ctx context.Context,
 	content, sessionKey, channel, chatID string,
 ) (string, error) {
+	al.waitPlugins(ctx)
 	if err := al.ensureHooksInitialized(ctx); err != nil {
 		return "", err
 	}
@@ -51,12 +52,17 @@ func (al *AgentLoop) ProcessDirectWithChannel(
 		return "", err
 	}
 
+	senderID := "direct"
+	if strings.HasPrefix(sessionKey, "agent:cron-") {
+		senderID = "cron"
+	}
+
 	msg := bus.InboundMessage{
 		Context: bus.InboundContext{
 			Channel:  channel,
 			ChatID:   chatID,
 			ChatType: "direct",
-			SenderID: "cron",
+			SenderID: senderID,
 		},
 		Content:    content,
 		SessionKey: sessionKey,
@@ -69,6 +75,7 @@ func (al *AgentLoop) ProcessHeartbeat(
 	ctx context.Context,
 	content, channel, chatID string,
 ) (string, error) {
+	al.waitPlugins(ctx)
 	if err := al.ensureHooksInitialized(ctx); err != nil {
 		return "", err
 	}
@@ -94,7 +101,7 @@ func (al *AgentLoop) ProcessHeartbeat(
 	}
 	return al.runAgentLoop(ctx, agent, processOptions{
 		Dispatch:             dispatch,
-		DefaultResponse:      defaultResponse,
+		DefaultResponse:      "",
 		EnableSummary:        false,
 		SendResponse:         false,
 		SuppressToolFeedback: true,
@@ -108,12 +115,23 @@ func (al *AgentLoop) prepareInboundMessageForAgent(
 ) bus.InboundMessage {
 	msg = bus.NormalizeInboundMessage(msg)
 
-	var hadAudio bool
-	msg, hadAudio = al.transcribeAudioInMessage(ctx, msg)
+	hasAudioAnnotation := audioAnnotationRe.MatchString(msg.Content)
+	if al.hasAudioInput(msg) {
+		if msg.Context.Raw == nil {
+			msg.Context.Raw = make(map[string]string, 1)
+		}
+		msg.Context.Raw[metadataKeyInputAudio] = "true"
+	}
 
-	// For audio messages the placeholder was deferred by the channel.
-	// Now that transcription (and optional feedback) is done, send it.
-	if hadAudio && al.channelManager != nil {
+	msg, hadAudio := al.transcribeAudioInMessage(ctx, msg)
+
+	// For audio messages the channel deferred the placeholder until after
+	// transcription (it skips it when the content matches audioAnnotationRe, see
+	// channels.BaseChannel.HandleMessageWithContext). Send it now whenever that
+	// same annotation was present, also when transcription could not run or
+	// failed, so an audio message always produces visible feedback instead of
+	// appearing silently lost.
+	if (hadAudio || hasAudioAnnotation) && al.channelManager != nil {
 		al.channelManager.SendPlaceholder(ctx, msg.Channel, msg.ChatID)
 	}
 
