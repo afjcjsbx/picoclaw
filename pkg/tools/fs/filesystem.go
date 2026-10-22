@@ -733,7 +733,7 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 		// Rendered content is scrubbed before it reaches the model; byte
 		// accounting below stays on the raw line, so read budgets are
 		// unaffected by redaction.
-		content.WriteString(prefix)
+		content.Write(prefix)
 		content.WriteString(redactSecrets(string(displayLine)))
 		fileBytesRead += consumedBytes
 		outputBytesRead += int64(len(prefix) + len(displayLine))
