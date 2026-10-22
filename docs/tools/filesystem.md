@@ -86,7 +86,9 @@ The call fails when `old_text` is not found, or when it appears more than once (
 
 ## `append_file`
 
-Appends content to the end of a file. The file is created if it does not exist.
+Appends content to the end of a file. The file is created if it does not exist, and missing parent directories are created.
+
+The write is an in-place append (`O_APPEND`, then `fsync`), not an atomic rewrite: it keeps the existing file mode, follows symbolic links to their target, and leaves the file in place. `write_file` and `edit_file` replace the file atomically instead. The read policy runs before the append and the write policy after it, so the set of refused paths is the same as for `write_file`.
 
 | Argument | Type | Required | Description |
 |----------|------|----------|-------------|
