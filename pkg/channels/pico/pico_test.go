@@ -778,6 +778,40 @@ func TestBroadcastToSession_SendsActivityToAllSessionsObserver(t *testing.T) {
 	}
 }
 
+func TestStartTyping_EmitsActivityWithoutSessionClient(t *testing.T) {
+	ch := newTestPicoChannel(t)
+	observerConn, observerMessages, cleanup := newTestPicoWebSocket(t)
+	defer cleanup()
+	ch.addConnForTest(&picoConn{
+		id:        "observer",
+		conn:      observerConn,
+		sessionID: allSessionsSessionID,
+	})
+
+	stop, err := ch.StartTyping(context.Background(), "pico:s-target")
+	if err != nil {
+		t.Fatalf("StartTyping() error = %v", err)
+	}
+	if stop == nil {
+		t.Fatal("StartTyping() returned a nil stop function")
+	}
+
+	started := mustReceivePicoMessage(t, observerMessages)
+	if started.Type != TypeSessionActivity {
+		t.Fatalf("activity type = %q, want %q", started.Type, TypeSessionActivity)
+	}
+	if got := started.Payload[PayloadKeyEvent]; got != TypeTypingStart {
+		t.Fatalf("activity event = %#v, want %q", got, TypeTypingStart)
+	}
+
+	stop()
+
+	stopped := mustReceivePicoMessage(t, observerMessages)
+	if got := stopped.Payload[PayloadKeyEvent]; got != TypeTypingStop {
+		t.Fatalf("activity event = %#v, want %q", got, TypeTypingStop)
+	}
+}
+
 func TestBroadcastToSession_ActivityCarriesFinalFlag(t *testing.T) {
 	ch := newTestPicoChannel(t)
 	observerConn, observerMessages, cleanup := newTestPicoWebSocket(t)
