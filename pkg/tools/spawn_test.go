@@ -115,6 +115,88 @@ func TestSpawnTool_Execute_NilManager(t *testing.T) {
 	}
 }
 
+// TestSubagentPromptText pins the exact system prompt handed to the sub-turn
+// spawner by both spawning tools, so the shared builder keeps the wording.
+func TestSubagentPromptText(t *testing.T) {
+	const task = "write the report"
+
+	tests := []struct {
+		name     string
+		label    string
+		expected string
+	}{
+		{
+			name: "without label",
+			expected: "You are a spawned subagent running in the background. " +
+				"Complete the given task independently and report back when done.\n\nTask: " + task,
+		},
+		{
+			name:  "with label",
+			label: "report-task",
+			expected: "You are a spawned subagent labeled \"report-task\" running in the background. " +
+				"Complete the given task independently and report back when done.\n\nTask: " + task,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run("spawn "+tt.name, func(t *testing.T) {
+			spawner := &mockSpawner{done: make(chan struct{})}
+			tool := NewSpawnTool(nil)
+			tool.SetSpawner(spawner)
+
+			args := map[string]any{"task": task}
+			if tt.label != "" {
+				args["label"] = tt.label
+			}
+			if result := tool.Execute(context.Background(), args); result == nil || result.IsError {
+				t.Fatalf("spawn failed: %v", result)
+			}
+
+			select {
+			case <-spawner.done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("the spawned subagent never ran")
+			}
+			if spawner.lastConfig.SystemPrompt != tt.expected {
+				t.Errorf("system prompt =\n%q\nwant\n%q", spawner.lastConfig.SystemPrompt, tt.expected)
+			}
+		})
+	}
+
+	subagentTests := []struct {
+		name     string
+		label    string
+		expected string
+	}{
+		{
+			name: "without label",
+			expected: "You are a subagent. " +
+				"Complete the given task independently and provide a clear, concise result.\n\nTask: " + task,
+		},
+		{
+			name:  "with label",
+			label: "report-task",
+			expected: "You are a subagent labeled \"report-task\". " +
+				"Complete the given task independently and provide a clear, concise result.\n\nTask: " + task,
+		},
+	}
+
+	for _, tt := range subagentTests {
+		t.Run("subagent "+tt.name, func(t *testing.T) {
+			spawner := &mockSpawner{}
+			tool := NewSubagentTool(nil)
+			tool.SetSpawner(spawner)
+
+			args := map[string]any{"task": task}
+			if tt.label != "" {
+				args["label"] = tt.label
+			}
+			tool.Execute(context.Background(), args)
+
+			if spawner.lastConfig.SystemPrompt != tt.expected {
+				t.Errorf("system prompt =\n%q\nwant\n%q", spawner.lastConfig.SystemPrompt, tt.expected)
+			}
+		})
 // panickingSpawner panics inside SpawnSubTurn to exercise goroutine recovery.
 type panickingSpawner struct{}
 

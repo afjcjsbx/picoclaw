@@ -343,6 +343,19 @@ func (sm *SubagentManager) ListTaskCopies() []SubagentTask {
 	return copies
 }
 
+// stringArg reads a string tool argument, returning "" when it is absent.
+func stringArg(args map[string]any, name string) string {
+	value, _ := args[name].(string)
+	return value
+}
+
+// subagentSystemPrompt renders the system prompt shared by the spawning tools:
+// the subagent's role, the one-sentence instruction and the task itself. The
+// label, when present, is part of the role.
+func subagentSystemPrompt(role, instruction, task string) string {
+	return fmt.Sprintf("%s. %s\n\nTask: %s", role, instruction, task)
+}
+
 // SubagentTool executes a subagent task synchronously and returns the result.
 // It directly calls SubTurnSpawner with Async=false for synchronous execution.
 type SubagentTool struct {
@@ -399,28 +412,18 @@ func (t *SubagentTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult("task is required").WithError(fmt.Errorf("task parameter is required"))
 	}
 
-	label, ok := args["label"].(string)
-	if !ok {
-		label = ""
-	}
+	label := stringArg(args, "label")
 
 	// Build system prompt for subagent
-	systemPrompt := fmt.Sprintf(
-		`You are a subagent. Complete the given task independently and provide a clear, concise result.
-
-Task: %s`,
+	role := "You are a subagent"
+	if label != "" {
+		role = fmt.Sprintf("You are a subagent labeled %q", label)
+	}
+	systemPrompt := subagentSystemPrompt(
+		role,
+		"Complete the given task independently and provide a clear, concise result.",
 		task,
 	)
-
-	if label != "" {
-		systemPrompt = fmt.Sprintf(
-			`You are a subagent labeled "%s". Complete the given task independently and provide a clear, concise result.
-
-Task: %s`,
-			label,
-			task,
-		)
-	}
 
 	// Use spawner if available (direct SpawnSubTurn call)
 	if t.spawner != nil {
