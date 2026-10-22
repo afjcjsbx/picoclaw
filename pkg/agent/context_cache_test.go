@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,7 +14,7 @@ import (
 
 // setupWorkspace creates a temporary workspace with standard directories and optional files.
 // Returns the tmpDir path; caller should defer os.RemoveAll(tmpDir).
-func setupWorkspace(t *testing.T, files map[string]string) string {
+func setupWorkspace(t testing.TB, files map[string]string) string {
 	t.Helper()
 	tmpDir, err := os.MkdirTemp("", "picoclaw-test-*")
 	if err != nil {
@@ -310,6 +311,47 @@ func TestMtimeAutoInvalidation(t *testing.T) {
 			t.Error("rebuilt prompt missing daily note content")
 		}
 	})
+}
+
+// TestSkillTreeWalkThrottled verifies that newly created nested skill files
+// invalidate the cache through the recursive tree walk, and that the walk is
+// throttled: right after a rebuild the cache check skips it, while once the
+// scan interval has elapsed the drift is detected.
+func TestSkillTreeWalkThrottled(t *testing.T) {
+	tmpDir := setupWorkspace(t, map[string]string{
+		"skills/test-skill/SKILL.md": "---\nname: test-skill\ndescription: \"A test skill\"\n---\n# Test Skill\n",
+	})
+	defer os.RemoveAll(tmpDir)
+
+	cb := NewContextBuilder(tmpDir)
+	_ = cb.BuildSystemPromptWithCache() // populate cache
+
+	// Create a nested file inside an existing skill directory. This does not
+	// update the skills root mtime, so only the recursive walk can see it.
+	newFile := filepath.Join(tmpDir, "skills", "test-skill", "references", "new.md")
+	if err := os.MkdirAll(filepath.Dir(newFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(newFile, []byte("new reference"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cb.systemPromptMutex.RLock()
+	changed := cb.sourceFilesChangedLocked()
+	cb.systemPromptMutex.RUnlock()
+	if changed {
+		t.Fatal("skill tree walk should be throttled right after a rebuild")
+	}
+
+	// Simulate the throttle window elapsing: the walk must now find the file.
+	cb.lastSkillScan.Store(time.Now().Add(-skillScanInterval - time.Second).UnixNano())
+
+	cb.systemPromptMutex.RLock()
+	changed = cb.sourceFilesChangedLocked()
+	cb.systemPromptMutex.RUnlock()
+	if !changed {
+		t.Fatal("sourceFilesChangedLocked() should detect the new nested skill file after the scan interval")
+	}
 }
 
 // TestExplicitInvalidateCache verifies that InvalidateCache() forces a rebuild
@@ -795,5 +837,29 @@ func BenchmarkBuildMessagesWithCache(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_ = cb.BuildMessages(history, "summary", "new message", nil, "cli", "test", "", "")
+	}
+}
+
+// BenchmarkSourceFilesChangedLocked measures the per-turn system prompt cache
+// check with a realistic skill tree (50 skills, 100 files).
+func BenchmarkSourceFilesChangedLocked(b *testing.B) {
+	files := make(map[string]string)
+	for i := 0; i < 50; i++ {
+		name := fmt.Sprintf("skill-%02d", i)
+		files[filepath.Join("skills", name, "SKILL.md")] =
+			"---\nname: " + name + "\ndescription: bench\n---\n"
+		files[filepath.Join("skills", name, "references", "ref.md")] = strings.Repeat("reference ", 20)
+	}
+	tmpDir := setupWorkspace(b, files)
+	b.Cleanup(func() { os.RemoveAll(tmpDir) })
+
+	cb := NewContextBuilder(tmpDir)
+	_ = cb.BuildSystemPromptWithCache()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		cb.systemPromptMutex.RLock()
+		_ = cb.sourceFilesChangedLocked()
+		cb.systemPromptMutex.RUnlock()
 	}
 }
