@@ -6,9 +6,37 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"github.com/sipeed/picoclaw/pkg/config"
 )
+
+// credentialRootsCacheTTL bounds how long the resolved credential roots are
+// reused. The roots only change when the app home or a protected symlink is
+// retargeted, which is rare; a short TTL keeps a retarget visible without
+// paying the resolution cost on every path check.
+const credentialRootsCacheTTL = 30 * time.Second
+
+// protectedRootRule is one "path must not be inside base/rel" rule. Keeping
+// the base and the relative components separate preserves the case-insensitive
+// fallback in matchesProtectedRelativePath, which a plain prefix check would
+// lose for paths that do not exist yet.
+type protectedRootRule struct {
+	base string
+	rels []string
+}
+
+// credentialRootsSnapshot holds the resolved protected roots shared by the
+// read and write policies. Entries are immutable once published.
+type credentialRootsSnapshot struct {
+	key         string
+	built       time.Time
+	appRules    []protectedRootRule
+	systemRules []protectedRootRule
+}
+
+var credentialRootsCache atomic.Pointer[credentialRootsSnapshot]
 
 // protectedReadFs denies reads from secret stores and delegates writes to a
 // policy that protects credentials and application state.
@@ -26,6 +54,16 @@ type protectedWriteFs struct {
 
 func (p *protectedReadFs) check(path string) error {
 	return checkSensitiveReadPath(path, p.workspace, p.restrict)
+}
+
+// absolutePath mirrors the workspace join that checkSensitiveReadPath applies,
+// so entry paths are compared against the same root the directory check used.
+func (p *protectedReadFs) absolutePath(path string) (string, error) {
+	path = stripExtendedDrivePrefix(path)
+	if !filepath.IsAbs(path) && p.restrict {
+		path = filepath.Join(p.workspace, path)
+	}
+	return filepath.Abs(path)
 }
 
 func (p *protectedReadFs) ReadFile(path string) ([]byte, error) {
@@ -65,10 +103,41 @@ func (p *protectedReadFs) ReadDir(path string) ([]os.DirEntry, error) {
 		return nil, err
 	}
 	visible := entries[:0]
-	for _, entry := range entries {
-		if p.check(filepath.Join(path, entry.Name())) == nil {
-			visible = append(visible, entry)
+	if len(entries) == 0 {
+		return visible, nil
+	}
+
+	// The directory itself passed the full check above, so its resolved form
+	// is safe to reuse for every child. A non-symlink child resolves to
+	// resolvedDir/name; only symlink entries need their own EvalSymlinks.
+	absDir, err := p.absolutePath(path)
+	if err != nil {
+		for _, entry := range entries {
+			if p.check(filepath.Join(path, entry.Name())) == nil {
+				visible = append(visible, entry)
+			}
 		}
+		return visible, nil
+	}
+	resolvedDir, err := filepath.EvalSymlinks(absDir)
+	if err != nil {
+		resolvedDir = absDir
+	}
+	sameDir := resolvedDir == absDir
+
+	for _, entry := range entries {
+		child := filepath.Join(absDir, entry.Name())
+		if isSensitiveReadPath(child) {
+			continue
+		}
+		if entry.Type()&fs.ModeSymlink != 0 {
+			if resolved, err := filepath.EvalSymlinks(child); err == nil && isSensitiveReadPath(resolved) {
+				continue
+			}
+		} else if !sameDir && isSensitiveReadPath(filepath.Join(resolvedDir, entry.Name())) {
+			continue
+		}
+		visible = append(visible, entry)
 	}
 	return visible, nil
 }
@@ -175,43 +244,41 @@ func isSensitiveWritePath(path string) bool {
 }
 
 func isSensitivePath(path string, blockEnvTemplates bool) bool {
-	parts := strings.Split(filepath.ToSlash(filepath.Clean(path)), "/")
+	return isSensitiveNamePath(path, blockEnvTemplates) || isAppCredentialPath(path)
+}
+
+// isSensitiveNamePath blocks well-known secret file and directory names. It
+// runs on every listed entry, so it lowercases the cleaned path once and
+// splits the result instead of allocating a lowercased copy per segment.
+func isSensitiveNamePath(path string, blockEnvTemplates bool) bool {
+	parts := strings.Split(strings.ToLower(filepath.ToSlash(filepath.Clean(path))), "/")
 	for i, part := range parts {
-		part = strings.ToLower(part)
-		if part == ".env" || (strings.HasPrefix(part, ".env.") && (blockEnvTemplates || part != ".env.example")) ||
-			part == ".envrc" || part == ".security.yml" || strings.HasPrefix(part, ".security.yml.") ||
+		if part == ".env" || part == ".envrc" || part == ".security.yml" ||
+			strings.HasPrefix(part, ".security.yml.") ||
 			part == ".ssh" || part == ".aws" || part == ".kube" || part == ".gnupg" ||
 			part == ".docker" || part == ".azure" || part == ".netrc" || part == ".npmrc" ||
 			part == ".pypirc" || part == ".pgpass" || part == ".git-credentials" {
 			return true
 		}
+		if strings.HasPrefix(part, ".env.") && (blockEnvTemplates || part != ".env.example") {
+			return true
+		}
 		if part == ".config" && i+1 < len(parts) {
-			next := strings.ToLower(parts[i+1])
+			next := parts[i+1]
 			if next == "gh" || next == "gcloud" {
 				return true
 			}
 		}
 	}
-	return isAppCredentialPath(path)
+	return false
 }
 
+// protectedSystemWriteRoots are the absolute system paths a tool must never
+// write to. They are resolved once per cache window instead of once per write.
 func isProtectedSystemWritePath(path string) bool {
-	protected := []string{
-		"/etc/sudoers",
-		"/etc/passwd",
-		"/etc/shadow",
-		"/etc/sudoers.d",
-		"/etc/systemd",
-	}
-	for _, target := range protected {
-		roots := []string{filepath.Clean(target)}
-		if resolved, err := resolvePathAgainstExistingAncestor(target); err == nil && resolved != roots[0] {
-			roots = append(roots, resolved)
-		}
-		for _, root := range roots {
-			if matchesProtectedRelativePath(filepath.Dir(root), path, []string{filepath.Base(root)}) {
-				return true
-			}
+	for _, rule := range credentialRoots().systemRules {
+		if protectedRuleMatches(path, rule) {
+			return true
 		}
 	}
 	return false
@@ -233,44 +300,123 @@ func isWorkspaceSessionPath(path, workspace string) bool {
 }
 
 func isAppCredentialPath(path string) bool {
-	if isWithinProtectedRoot(path, config.GetHome(), []string{
-		"auth.json",
-		"auth/mcp",
-		"plugin-data",
-		"channels/weixin/context-tokens",
-	}) {
-		return true
-	}
-
-	codexHome := os.Getenv("CODEX_HOME")
-	if codexHome == "" {
-		userHome, err := os.UserHomeDir()
-		if err != nil {
-			return false
-		}
-		codexHome = filepath.Join(userHome, ".codex")
-	}
-	return isWithinProtectedRoot(path, codexHome, []string{"auth.json"})
-}
-
-func isWithinProtectedRoot(path, root string, protectedPaths []string) bool {
-	if isNTNamespacePath(root) {
-		return false
-	}
-	home, err := filepath.Abs(root)
-	if err != nil {
-		return false
-	}
-	if matchesProtectedRelativePath(filepath.Clean(home), path, protectedPaths) {
-		return true
-	}
-	for _, protected := range protectedPaths {
-		resolved, err := resolvePathAgainstExistingAncestor(filepath.Join(home, filepath.FromSlash(protected)))
-		if err == nil && isWithinProtectedPath(path, resolved) {
+	for _, rule := range credentialRoots().appRules {
+		if protectedRuleMatches(path, rule) {
 			return true
 		}
 	}
 	return false
+}
+
+// credentialRoots returns the cached protected-root snapshot, rebuilding it
+// when the app home or CODEX_HOME changes or the entry expires.
+func credentialRoots() *credentialRootsSnapshot {
+	appHome := config.GetHome()
+	codexHome := codexHomeDir()
+	key := appHome + "\x00" + codexHome
+	if cached := credentialRootsCache.Load(); cached != nil &&
+		cached.key == key && time.Since(cached.built) < credentialRootsCacheTTL {
+		return cached
+	}
+	fresh := &credentialRootsSnapshot{
+		key:         key,
+		built:       time.Now(),
+		appRules:    buildAppCredentialRules(appHome, codexHome),
+		systemRules: buildProtectedSystemWriteRules(),
+	}
+	credentialRootsCache.Store(fresh)
+	return fresh
+}
+
+func codexHomeDir() string {
+	if codexHome := os.Getenv("CODEX_HOME"); codexHome != "" {
+		return codexHome
+	}
+	userHome, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(userHome, ".codex")
+}
+
+// buildAppCredentialRules expands each protected relative path under the app
+// and codex homes into a lexical rule plus a rule for the symlink-resolved
+// target. Resolving a protected root is only needed once per cache window: the
+// final path check still resolves the path being accessed.
+func buildAppCredentialRules(appHome, codexHome string) []protectedRootRule {
+	rules := make([]protectedRootRule, 0, 6)
+	add := func(root string, protectedPaths []string) {
+		if root == "" || isNTNamespacePath(root) {
+			return
+		}
+		home, err := filepath.Abs(root)
+		if err != nil {
+			return
+		}
+		home = filepath.Clean(home)
+		rules = append(rules, protectedRootRule{base: home, rels: protectedPaths})
+		for _, protected := range protectedPaths {
+			resolved, err := resolvePathAgainstExistingAncestor(filepath.Join(home, filepath.FromSlash(protected)))
+			if err != nil {
+				continue
+			}
+			resolved = filepath.Clean(resolved)
+			rules = append(rules, protectedRootRule{
+				base: filepath.Dir(resolved),
+				rels: []string{filepath.Base(resolved)},
+			})
+		}
+	}
+	add(appHome, []string{
+		"auth.json",
+		"auth/mcp",
+		"plugin-data",
+		"channels/weixin/context-tokens",
+	})
+	add(codexHome, []string{"auth.json"})
+	return rules
+}
+
+func buildProtectedSystemWriteRules() []protectedRootRule {
+	protected := []string{
+		"/etc/sudoers",
+		"/etc/passwd",
+		"/etc/shadow",
+		"/etc/sudoers.d",
+		"/etc/systemd",
+	}
+	rules := make([]protectedRootRule, 0, len(protected)*2)
+	add := func(target string) {
+		target = filepath.Clean(target)
+		rules = append(rules, protectedRootRule{
+			base: filepath.Dir(target),
+			rels: []string{filepath.Base(target)},
+		})
+	}
+	for _, target := range protected {
+		add(target)
+		if resolved, err := resolvePathAgainstExistingAncestor(target); err == nil {
+			add(resolved)
+		}
+	}
+	return rules
+}
+
+func protectedRuleMatches(path string, rule protectedRootRule) bool {
+	return hasPathPrefixFold(path, rule.base) &&
+		matchesProtectedRelativePath(rule.base, path, rule.rels)
+}
+
+// hasPathPrefixFold is a cheap case-insensitive prefix guard that avoids a
+// filepath.Rel call for the overwhelmingly common non-matching path.
+func hasPathPrefixFold(path, prefix string) bool {
+	if len(prefix) == 1 && os.IsPathSeparator(prefix[0]) {
+		return len(path) > 0 && os.IsPathSeparator(path[0])
+	}
+	if len(path) < len(prefix) || !strings.EqualFold(path[:len(prefix)], prefix) {
+		return false
+	}
+	return len(path) == len(prefix) || os.IsPathSeparator(path[len(prefix)])
 }
 
 func matchesProtectedRelativePath(root, path string, protectedPaths []string) bool {
