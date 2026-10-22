@@ -5,6 +5,7 @@ import {
   IconChevronsUp,
   IconKey,
   IconListDetails,
+  IconLoader2,
   IconMessageCircle,
   IconPlus,
   IconSearch,
@@ -15,7 +16,7 @@ import {
   IconX,
 } from "@tabler/icons-react"
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router"
-import { useAtom, useSetAtom } from "jotai"
+import { useAtom, useAtomValue, useSetAtom } from "jotai"
 import * as React from "react"
 import { useTranslation } from "react-i18next"
 
@@ -51,10 +52,14 @@ import { usePicoChat } from "@/hooks/use-pico-chat"
 import { useSessionHistory } from "@/hooks/use-session-history"
 import { useSessionSearch } from "@/hooks/use-session-search"
 import { useSidebarChannels } from "@/hooks/use-sidebar-channels"
+import { cn } from "@/lib/utils"
 import {
   pendingScrollTargetAtom,
+  sessionRunningAtom,
   sessionTitlesAtom,
   splitConversationsAtom,
+  splitSessionStatesAtom,
+  unreadSessionIdsAtom,
 } from "@/store/chat"
 
 interface NavItem {
@@ -119,6 +124,49 @@ function splitSnippetMatch(
   }
 }
 
+function SessionStatusIndicator({
+  isRunning,
+  isUnread,
+  className,
+}: {
+  isRunning: boolean
+  isUnread: boolean
+  className?: string
+}) {
+  const { t } = useTranslation()
+  if (!isRunning && !isUnread) {
+    return null
+  }
+
+  const label = isRunning
+    ? t("chat.sessionRunning", { defaultValue: "Generating response" })
+    : t("chat.sessionUnread", { defaultValue: "Unread update" })
+
+  return (
+    <span
+      role="status"
+      aria-label={label}
+      title={label}
+      className={cn(
+        "flex size-4 shrink-0 items-center justify-center",
+        className,
+      )}
+    >
+      {isRunning ? (
+        <IconLoader2
+          aria-hidden="true"
+          className="size-3.5 animate-spin text-violet-500"
+        />
+      ) : (
+        <span
+          aria-hidden="true"
+          className="size-2 rounded-full bg-emerald-500"
+        />
+      )}
+    </span>
+  )
+}
+
 export function AppSidebar({
   sidebarWidth,
   onSidebarWidthChange,
@@ -128,12 +176,16 @@ export function AppSidebar({
   const { i18n, t } = useTranslation()
   const { isMobile, setOpen, setOpenMobile, state: sidebarState } = useSidebar()
   const currentPath = routerState.location.pathname
-  const { activeSessionId, messages, newChat, switchSession } = usePicoChat()
+  const { activeSessionId, isTyping, messages, newChat, switchSession } =
+    usePicoChat()
   const [splitGroups, setSplitGroups] = useAtom(splitConversationsAtom)
   const setSessionTitles = useSetAtom(sessionTitlesAtom)
   const setPendingScrollTarget = useSetAtom(pendingScrollTargetAtom)
   const navigate = useNavigate()
   const sessionSearch = useSessionSearch()
+  const splitSessionStates = useAtomValue(splitSessionStatesAtom)
+  const sessionRunning = useAtomValue(sessionRunningAtom)
+  const unreadSessionIds = useAtomValue(unreadSessionIdsAtom)
   const [expandedSplitId, setExpandedSplitId] = React.useState<string | null>(
     null,
   )
@@ -167,6 +219,15 @@ export function AppSidebar({
     () => new Map(sessions.map((session) => [session.id, session])),
     [sessions],
   )
+  const isSessionRunning = (sessionId: string) => {
+    if (sessionId === activeSessionId) {
+      return isTyping || (sessionRunning[sessionId] ?? false)
+    }
+    return (
+      (splitSessionStates[sessionId]?.isTyping ?? false) ||
+      (sessionRunning[sessionId] ?? false)
+    )
+  }
   const visibleSplitGroups = React.useMemo(
     () =>
       splitGroups
@@ -232,8 +293,13 @@ export function AppSidebar({
       onDragOver={handleSessionDragOver}
       onDrop={(event) => handleSessionDrop(event, session.id)}
     >
-      <IconMessageCircle className="size-4 opacity-70" />
-      <span>{session.title}</span>
+      <IconMessageCircle className="size-4 shrink-0 opacity-70" />
+      <span className="min-w-0 flex-1 truncate">{session.title}</span>
+      <SessionStatusIndicator
+        className="ml-auto"
+        isRunning={isSessionRunning(session.id)}
+        isUnread={unreadSessionIds.has(session.id)}
+      />
     </Link>
   )
 
@@ -536,6 +602,12 @@ export function AppSidebar({
                             (splitGroup.ids.includes(activeSessionId)
                               ? sessionById.get(activeSessionId)?.title
                               : undefined) ?? splitGroup.sessions[0].title
+                          const groupRunning = splitGroup.sessions.some(
+                            (member) => isSessionRunning(member.id),
+                          )
+                          const groupUnread = splitGroup.sessions.some(
+                            (member) => unreadSessionIds.has(member.id),
+                          )
 
                           return (
                             <SidebarMenuItem key={groupKey}>
@@ -568,9 +640,17 @@ export function AppSidebar({
                                     className="text-muted-foreground hover:text-foreground h-9 rounded-lg px-3"
                                   >
                                     <IconChevronRight className="size-3.5 transition-transform group-data-[state=open]/collapsible:rotate-90" />
-                                    <span>{groupTitle}</span>
-                                    <span className="text-muted-foreground ml-auto text-xs">
-                                      {splitGroup.ids.length}
+                                    <span className="min-w-0 flex-1 truncate">
+                                      {groupTitle}
+                                    </span>
+                                    <span className="ml-auto flex shrink-0 items-center gap-1.5">
+                                      <SessionStatusIndicator
+                                        isRunning={groupRunning}
+                                        isUnread={groupUnread}
+                                      />
+                                      <span className="text-muted-foreground text-xs">
+                                        {splitGroup.ids.length}
+                                      </span>
                                     </span>
                                   </SidebarMenuButton>
                                 </CollapsibleTrigger>

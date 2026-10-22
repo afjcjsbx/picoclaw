@@ -74,6 +74,8 @@
     "expandCode": "Expand code",
     "collapseCode": "Collapse code",
     "history": "History",
+    "sessionRunning": "Generating response",
+    "sessionUnread": "Unread update",
     "splitConversation": "Conversation {{number}}",
     "activeSplitPane": "Active",
     "removeSplitPane": "Remove conversation from split",

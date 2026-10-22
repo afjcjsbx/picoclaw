@@ -74,6 +74,8 @@
     "expandCode": "展开代码",
     "collapseCode": "折叠代码",
     "history": "历史记录",
+    "sessionRunning": "正在生成回复",
+    "sessionUnread": "未读更新",
     "noHistory": "暂无对话历史",
     "historyLoadFailed": "加载历史记录失败",
     "historyOpenFailed": "打开该历史会话失败",
