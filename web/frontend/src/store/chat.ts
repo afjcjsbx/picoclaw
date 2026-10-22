@@ -105,6 +105,7 @@ export const splitSessionStatesAtom = atom<Record<string, SplitSessionState>>(
 )
 export const sessionTitlesAtom = atom<Record<string, string>>({})
 export const unreadSessionIdsAtom = atom<Set<string>>(new Set<string>())
+export const sessionRunningAtom = atom<Record<string, boolean>>({})
 
 export interface PendingScrollTarget {
   sessionId: string
@@ -150,6 +151,31 @@ export function markSessionRead(sessionId: string) {
     const next = new Set(current)
     next.delete(sessionId)
     return next
+  })
+}
+
+export function setSessionRunning(sessionId: string, isRunning: boolean) {
+  if (!sessionId) return
+
+  store.set(sessionRunningAtom, (current) => {
+    if (Boolean(current[sessionId]) === isRunning) return current
+    const next = { ...current }
+    if (isRunning) {
+      next[sessionId] = true
+    } else {
+      delete next[sessionId]
+    }
+    return next
+  })
+}
+
+export function clearSessionRunning(keepSessionId?: string) {
+  store.set(sessionRunningAtom, (current) => {
+    const keys = Object.keys(current)
+    if (keys.length === 0) return current
+    if (!keepSessionId || !current[keepSessionId]) return {}
+    if (keys.length === 1) return current
+    return { [keepSessionId]: true }
   })
 }
 

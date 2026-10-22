@@ -27,6 +27,10 @@ import (
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
+// allSessionsSessionID identifies observer connections that receive
+// lightweight activity events for every session.
+const allSessionsSessionID = "*"
+
 // picoConn represents a single WebSocket connection.
 type picoConn struct {
 	id        string
@@ -979,6 +983,31 @@ func (c *PicoChannel) broadcast(chatID string, msg PicoMessage) error {
 	return c.broadcastToSession(chatID, msg)
 }
 
+// broadcastSessionActivity sends a lightweight activity event to all-sessions
+// observer connections. Session-specific messages are still delivered only to
+// clients connected to that session.
+func (c *PicoChannel) broadcastSessionActivity(sessionID, eventType string, allowTypingStart bool) {
+	if sessionID == "" ||
+		sessionID == allSessionsSessionID ||
+		(eventType == TypeTypingStart && !allowTypingStart) {
+		return
+	}
+
+	activity := newMessage(TypeSessionActivity, map[string]any{
+		PayloadKeyEvent: eventType,
+	})
+	activity.SessionID = sessionID
+
+	for _, pc := range c.sessionConnectionsSnapshot(allSessionsSessionID) {
+		if err := pc.writeJSON(activity); err != nil {
+			logger.DebugCF("pico", "Write session activity failed", map[string]any{
+				"conn_id": pc.id,
+				"error":   err.Error(),
+			})
+		}
+	}
+}
+
 // broadcastToSession sends a message to all connections with a matching session.
 func (c *PicoChannel) broadcastToSession(chatID string, msg PicoMessage) error {
 	// chatID format: "pico:<sessionID>"
@@ -996,6 +1025,11 @@ func (c *PicoChannel) broadcastToSession(chatID string, msg PicoMessage) error {
 			sent = true
 		}
 	}
+
+	// Typing starts are only observable when the turn was actually delivered
+	// to a session client at least once; otherwise StartTyping returns an error
+	// and no matching typing.stop would ever be emitted.
+	c.broadcastSessionActivity(sessionID, msg.Type, sent)
 
 	if !sent {
 		return fmt.Errorf("no active connections for session %s: %w", sessionID, channels.ErrSendFailed)
@@ -1026,6 +1060,20 @@ func (c *PicoChannel) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Determine session ID from query param or generate one. The all_sessions
+	// observer connection is indexed under a reserved ID and only receives
+	// lightweight session.activity events.
+	sessionID := strings.TrimSpace(r.URL.Query().Get("session_id"))
+	allSessions := r.URL.Query().Get("all_sessions")
+	if allSessions == "1" || strings.EqualFold(allSessions, "true") {
+		sessionID = allSessionsSessionID
+	} else if sessionID == allSessionsSessionID {
+		http.Error(w, "invalid session_id", http.StatusBadRequest)
+		return
+	} else if sessionID == "" {
+		sessionID = uuid.New().String()
+	}
+
 	// Echo the matched subprotocol back so the browser accepts the upgrade.
 	var responseHeader http.Header
 	if proto := c.matchedSubprotocol(r); proto != "" {
@@ -1038,12 +1086,6 @@ func (c *PicoChannel) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			"error": err.Error(),
 		})
 		return
-	}
-
-	// Determine session ID from query param or generate one
-	sessionID := r.URL.Query().Get("session_id")
-	if sessionID == "" {
-		sessionID = uuid.New().String()
 	}
 
 	pc, err := c.createAndAddConnection(conn, sessionID, maxConns)
@@ -1216,6 +1258,11 @@ func (c *PicoChannel) handleMessage(pc *picoConn, msg PicoMessage) {
 
 // handleMessageSend processes an inbound message.send from a client.
 func (c *PicoChannel) handleMessageSend(pc *picoConn, msg PicoMessage) {
+	if pc.sessionID == allSessionsSessionID {
+		pc.writeJSON(newError("read_only", "all-sessions connections are read-only"))
+		return
+	}
+
 	content, _ := msg.Payload["content"].(string)
 	media, err := parseInlineImageMedia(msg.Payload)
 	if err != nil {

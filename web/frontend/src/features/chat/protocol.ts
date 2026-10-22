@@ -11,6 +11,7 @@ import {
   type SplitSessionState,
   getChatState,
   markSessionUnread,
+  setSessionRunning,
   updateChatStore,
   updateSplitSessionState,
 } from "@/store/chat"
@@ -99,6 +100,37 @@ function parseModelName(payload: Record<string, unknown>): string | undefined {
   }
   const modelName = payload.model_name.trim()
   return modelName || undefined
+}
+
+export function handlePicoActivityMessage(message: PicoMessage) {
+  if (message.type !== "session.activity") {
+    return
+  }
+
+  const sessionId = message.session_id
+  if (!sessionId) {
+    return
+  }
+
+  const event =
+    typeof message.payload?.event === "string" ? message.payload.event : ""
+
+  switch (event) {
+    case "typing.start":
+      setSessionRunning(sessionId, true)
+      break
+    case "typing.stop":
+    case "error":
+      setSessionRunning(sessionId, false)
+      break
+    case "message.create":
+    case "media.create":
+    case "message.update":
+      markSessionUnread(sessionId)
+      break
+    default:
+      break
+  }
 }
 
 export function handlePicoMessage(
@@ -239,10 +271,12 @@ export function handlePicoMessage(
     }
 
     case "typing.start":
+      setSessionRunning(expectedSessionId, true)
       updateSession({ isTyping: true })
       break
 
     case "typing.stop":
+      setSessionRunning(expectedSessionId, false)
       updateSession({ isTyping: false })
       break
 
@@ -252,6 +286,7 @@ export function handlePicoMessage(
       const errorMessage =
         typeof payload.message === "string" ? payload.message : ""
 
+      setSessionRunning(expectedSessionId, false)
       console.error("Pico error:", payload)
       if (errorMessage) {
         toast.error(errorMessage)

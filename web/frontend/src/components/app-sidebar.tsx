@@ -55,6 +55,7 @@ import { useSidebarChannels } from "@/hooks/use-sidebar-channels"
 import { cn } from "@/lib/utils"
 import {
   pendingScrollTargetAtom,
+  sessionRunningAtom,
   sessionTitlesAtom,
   splitConversationsAtom,
   splitSessionStatesAtom,
@@ -183,6 +184,7 @@ export function AppSidebar({
   const navigate = useNavigate()
   const sessionSearch = useSessionSearch()
   const splitSessionStates = useAtomValue(splitSessionStatesAtom)
+  const sessionRunning = useAtomValue(sessionRunningAtom)
   const unreadSessionIds = useAtomValue(unreadSessionIdsAtom)
   const [expandedSplitId, setExpandedSplitId] = React.useState<string | null>(
     null,
@@ -217,10 +219,15 @@ export function AppSidebar({
     () => new Map(sessions.map((session) => [session.id, session])),
     [sessions],
   )
-  const isSessionRunning = (sessionId: string) =>
-    sessionId === activeSessionId
-      ? isTyping
-      : (splitSessionStates[sessionId]?.isTyping ?? false)
+  const isSessionRunning = (sessionId: string) => {
+    if (sessionId === activeSessionId) {
+      return isTyping || (sessionRunning[sessionId] ?? false)
+    }
+    return (
+      (splitSessionStates[sessionId]?.isTyping ?? false) ||
+      (sessionRunning[sessionId] ?? false)
+    )
+  }
   const visibleSplitGroups = React.useMemo(
     () =>
       splitGroups

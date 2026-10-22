@@ -5,7 +5,11 @@ import {
   loadSessionMessages,
   mergeHistoryMessages,
 } from "@/features/chat/history"
-import { type PicoMessage, handlePicoMessage } from "@/features/chat/protocol"
+import {
+  type PicoMessage,
+  handlePicoActivityMessage,
+  handlePicoMessage,
+} from "@/features/chat/protocol"
 import {
   clearStoredSessionId,
   generateSessionId,
@@ -17,9 +21,11 @@ import {
   type ChatAttachment,
   type ChatStoreState,
   chatAtom,
+  clearSessionRunning,
   getChatState,
   initializeSplitSessionState,
   markSessionRead,
+  setSessionRunning,
   splitConversationsAtom,
   splitSessionStatesAtom,
   updateChatStore,
@@ -55,11 +61,143 @@ let unsubscribeChat: (() => void) | null = null
 let unsubscribeSplitConversations: (() => void) | null = null
 let lastSplitSyncKey = ""
 
+let activityWsRef: WebSocket | null = null
+let activityConnecting = false
+let activityGeneration = 0
+let activityReconnectTimer: number | null = null
+let activityReconnectAttempts = 0
+
 function clearReconnectTimer() {
   if (reconnectTimer !== null) {
     window.clearTimeout(reconnectTimer)
     reconnectTimer = null
   }
+}
+
+function clearActivityReconnectTimer() {
+  if (activityReconnectTimer !== null) {
+    window.clearTimeout(activityReconnectTimer)
+    activityReconnectTimer = null
+  }
+}
+
+function isCurrentActivitySocket(socket: WebSocket, generation: number) {
+  return (
+    initialized &&
+    activityWsRef === socket &&
+    activityGeneration === generation &&
+    store.get(gatewayAtom).status === "running"
+  )
+}
+
+function closeActivitySocket() {
+  activityGeneration += 1
+  clearActivityReconnectTimer()
+  const socket = activityWsRef
+  activityWsRef = null
+  activityConnecting = false
+  invalidateSocket(socket)
+  clearSessionRunning()
+}
+
+function scheduleActivityReconnect() {
+  if (
+    !initialized ||
+    store.get(gatewayAtom).status !== "running" ||
+    activityReconnectTimer !== null
+  ) {
+    return
+  }
+
+  const delay = Math.min(1000 * 2 ** activityReconnectAttempts, 5000)
+  activityReconnectAttempts += 1
+  activityReconnectTimer = window.setTimeout(() => {
+    activityReconnectTimer = null
+    connectActivitySocket()
+  }, delay)
+}
+
+function connectActivitySocket() {
+  if (
+    !initialized ||
+    store.get(gatewayAtom).status !== "running" ||
+    activityConnecting
+  ) {
+    return
+  }
+
+  if (activityWsRef) {
+    if (activityWsRef.readyState < WebSocket.CLOSING) {
+      return
+    }
+    activityWsRef = null
+  }
+
+  activityConnecting = true
+  const generation = ++activityGeneration
+
+  try {
+    const wsScheme = window.location.protocol === "https:" ? "wss:" : "ws:"
+    const socket = new WebSocket(
+      `${wsScheme}//${window.location.host}/pico/ws?all_sessions=1`,
+    )
+    activityWsRef = socket
+
+    socket.onopen = () => {
+      if (!isCurrentActivitySocket(socket, generation)) return
+      activityConnecting = false
+      activityReconnectAttempts = 0
+    }
+
+    socket.onmessage = (event) => {
+      if (!isCurrentActivitySocket(socket, generation)) return
+      try {
+        handlePicoActivityMessage(JSON.parse(event.data) as PicoMessage)
+      } catch {
+        console.warn("Non-JSON message from pico activity:", event.data)
+      }
+    }
+
+    socket.onclose = () => {
+      if (!isCurrentActivitySocket(socket, generation)) return
+      activityWsRef = null
+      activityConnecting = false
+      clearSessionRunning(
+        wsRef?.readyState === WebSocket.OPEN ? activeSessionIdRef : undefined,
+      )
+      scheduleActivityReconnect()
+    }
+
+    socket.onerror = () => {
+      if (!isCurrentActivitySocket(socket, generation)) return
+      activityWsRef = null
+      activityConnecting = false
+      clearSessionRunning(
+        wsRef?.readyState === WebSocket.OPEN ? activeSessionIdRef : undefined,
+      )
+      invalidateSocket(socket)
+      scheduleActivityReconnect()
+    }
+  } catch (error) {
+    activityConnecting = false
+    console.error("Failed to connect to pico activity stream:", error)
+    scheduleActivityReconnect()
+  }
+}
+
+function syncActivityConnection() {
+  if (!initialized || store.get(gatewayAtom).status !== "running") {
+    closeActivitySocket()
+    return
+  }
+  connectActivitySocket()
+}
+
+function clearRunningForClosedSocket(sessionId: string) {
+  if (activityWsRef?.readyState === WebSocket.OPEN) {
+    return
+  }
+  setSessionRunning(sessionId, false)
 }
 
 function shouldReconnectFor(generation: number, sessionId: string): boolean {
@@ -218,6 +356,7 @@ function attachSplitSocket(
       isConnecting = false
       updateChatStore({ connectionState: "disconnected", isTyping: false })
     }
+    clearRunningForClosedSocket(sessionId)
     scheduleSplitReconnect(sessionId, connection)
   }
 
@@ -231,6 +370,7 @@ function attachSplitSocket(
       isConnecting = false
       updateChatStore({ connectionState: "error" })
     }
+    clearRunningForClosedSocket(sessionId)
     invalidateSocket(socket)
     scheduleSplitReconnect(sessionId, connection)
   }
@@ -507,6 +647,7 @@ export async function connectChat() {
         connectionState: "disconnected",
         isTyping: false,
       })
+      clearRunningForClosedSocket(sessionId)
       scheduleReconnect(generation, sessionId)
     }
 
@@ -525,6 +666,7 @@ export async function connectChat() {
       }
       isConnecting = false
       updateChatStore({ connectionState: "error" })
+      clearRunningForClosedSocket(sessionId)
       scheduleReconnect(generation, sessionId)
     }
 
@@ -847,6 +989,7 @@ export function initializeChatStore() {
   const syncConnectionWithGateway = (force: boolean = false) => {
     const gatewayStatus = store.get(gatewayAtom).status
     syncSplitConnections()
+    syncActivityConnection()
     if (!force && gatewayStatus === lastGatewayStatus) {
       return
     }
@@ -873,6 +1016,7 @@ export function initializeChatStore() {
   )
   unsubscribeGateway = store.sub(gatewayAtom, syncConnectionWithGateway)
   syncSplitConnections()
+  syncActivityConnection()
 
   if (!readStoredSessionId()) {
     updateChatStore({ hasHydratedActiveSession: true })
@@ -900,5 +1044,6 @@ export function teardownChatStore() {
   for (const sessionId of splitConnections.keys()) {
     closeSplitConnection(sessionId)
   }
+  closeActivitySocket()
   disconnectChat()
 }
