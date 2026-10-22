@@ -138,7 +138,7 @@ _*Memory use varies by build and workload. Boot speed comparison is based on 0.8
 | ------------------------------ | -------- | ------- | ------------ |
 | **Language**                   | TypeScript | Python | **Go** |
 | **RAM reference**              | [2 GB host RAM recommended](https://docs.openclaw.ai/install/fly) | [~200–600 MB reported](https://github.com/HKUDS/nanobot/issues/3410) | **10–20 MB in recent builds** |
-| **Single executable**          | No (Node.js app) | No (Python app with native TUI component) | **[35.36 MiB](docs/guides/custom-builds.md#measured-binary-sizes)** |
+| **Single executable**          | No (Node.js app) | No (Python app with native TUI component) | **[41.4 MiB](docs/guides/custom-builds.md#measured-binary-sizes)** |
 | **Boot time**</br>(0.8GHz core) | >500s | >30s | **<1s** |
 | **Cost**                       | Mac Mini $599 | Most Linux boards ~$50 | **Any Linux board**</br>**from $10** |
 
@@ -149,6 +149,27 @@ _*Memory use varies by build and workload. Boot speed comparison is based on 0.8
 **RAM:** These are references, not a controlled comparison: OpenClaw's value is a deployment recommendation, NanoBot's is one Raspberry Pi 4 user report, and PicoClaw's is the estimate for recent builds.
 
 **Executable size:** OpenClaw and NanoBot do not distribute the complete agent as one executable. PicoClaw's size is the measured full default macOS ARM64 build; see the [measurement method and other profiles](docs/guides/custom-builds.md#measured-binary-sizes).
+
+### ⚡ Runtime footprint
+
+Measured on an Apple M1 Max (macOS arm64, Go 1.27.2) on 2026-10-15 with the scripts in [`scripts/`](scripts/). **First paint / ready** is the time until the interface is usable — for PicoClaw's headless core, until the gateway answers `GET /ready`. **Idle RSS** is the resident set once the process is sitting idle at its prompt.
+
+| Tool | Runtime | Install size | First paint / ready | Idle RSS | Processes |
+| --- | --- | ---: | ---: | ---: | :---: |
+| **PicoClaw** (core) | Go 1.27, single static binary | **41.4 MiB** | **≈66 ms** | **36.6 MiB** | **1** |
+| Claude Code 2.1.300 | Bun-compiled TS (native binary) | 240 MiB | ≈263 ms | ≈184 MiB | 1 |
+| pi 1.2.0 | Bun-compiled TS + pi-tui | 148 MiB | ≈369 ms | ≈169 MiB | 1 |
+| OpenCode 2.0.29 | Bun + OpenTUI | 239 MiB | ≈190 ms | ≈200 MiB | 1 |
+| Hermes 0.22.1 | Python + TUI | ≈1.9 GiB | ≈3.2 s | ≈214 MiB | 2 |
+
+PicoClaw's row is its **full default** macOS ARM64 build (`goolm,stdjson`); lighter channel profiles are listed in [measured binary sizes](docs/guides/custom-builds.md#measured-binary-sizes). Its idle RSS is 36.6 MiB, with a **≈19 MiB** memory footprint (`phys_footprint`, what Activity Monitor reports) — the metric behind the "10–20 MB" note above.
+
+Unlike the other rows, PicoClaw's core ships **no full-screen TUI**, so its "first paint / ready" is the time for the gateway to become ready, not a TUI render. The other agents are interactive TUIs and their figures are single-machine medians of a few runs, so expect them to drift between releases. Reproduce with:
+
+```bash
+python3 scripts/bench-picoclaw-runtime.py --binary ./build/picoclaw --runs 15
+python3 scripts/bench-agent-tui.py --cmd opencode --runs 3 --keys '\x03'
+```
 
 > **[Hardware Compatibility List](docs/guides/hardware-compatibility.md)** — See all tested boards, from $5 RISC-V to Raspberry Pi to Android phones. Your board not listed? Submit a PR!
 

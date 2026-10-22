@@ -149,19 +149,19 @@ declares SQLite because the default build and other repository targets need it.
 
 ## Measured Binary Sizes
 
-These reference measurements use Go 1.27.1 on macOS ARM64, with
+These reference measurements use Go 1.27.2 on macOS ARM64, with
 `CGO_ENABLED=0` and linker flags `-s -w` to strip symbols and DWARF debug data.
 All builds used the same target and linker settings:
 
 | Profile | Build tags | Size |
 | --- | --- | ---: |
-| Full default channels and Seahorse | `goolm,stdjson` | 37,078,802 bytes (35.36 MiB) |
-| Telegram only, with Seahorse | `goolm,stdjson,custom_channels,channel_telegram` | 28,806,514 bytes (27.47 MiB) |
-| Telegram only, without Seahorse | `goolm,stdjson,custom_channels,channel_telegram,no_seahorse` | 24,692,146 bytes (23.55 MiB) |
+| Full default channels and Seahorse | `goolm,stdjson` | 43,396,866 bytes (41.39 MiB) |
+| Telegram only, with Seahorse | `goolm,stdjson,custom_channels,channel_telegram` | 35,004,306 bytes (33.38 MiB) |
+| Telegram only, without Seahorse | `goolm,stdjson,custom_channels,channel_telegram,no_seahorse` | 30,823,250 bytes (29.40 MiB) |
 
-In this measurement, selecting Telegram alone reduced the binary by 7.89 MiB
-(22.3%). Omitting Seahorse from that profile saved a further 3.92 MiB (14.3%).
-The final profile was 11.81 MiB (33.4%) smaller than the full default build.
+In this measurement, selecting Telegram alone reduced the binary by 8.00 MiB
+(19.3%). Omitting Seahorse from that profile saved a further 3.99 MiB (11.9%).
+The final profile was 11.99 MiB (29.0%) smaller than the full default build.
 
 Sizes vary with Go version, operating system, architecture, linker settings,
 and selected features. Use these figures as a reproducible reference, not as a
