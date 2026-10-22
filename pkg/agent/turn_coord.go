@@ -189,7 +189,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 
 		// Inject pending steering messages
 		if len(pendingMessages) > 0 {
-			resolvedPending := resolveMediaRefsWithOptions(pendingMessages, al.mediaStore, mediaOpts, 0)
+			resolvedPending := resolveMediaRefsWithOptions(pendingMessages, al.mediaStoreRef(), mediaOpts, 0)
 			totalContentLen := 0
 			for i, pm := range pendingMessages {
 				messages = append(messages, resolvedPending[i])

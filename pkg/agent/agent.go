@@ -320,12 +320,12 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 					return
 				}
 
-				if al.mediaStore != nil && m.MediaScope != "" {
+				if store := al.mediaStoreRef(); store != nil && m.MediaScope != "" {
 					// Release inbound media only after the turn that consumes it
 					// completes. The previous TODO placed this in the dispatch
 					// loop, where it ran before the worker read the files.
 					defer func() {
-						if releaseErr := al.mediaStore.ReleaseAll(m.MediaScope); releaseErr != nil {
+						if releaseErr := store.ReleaseAll(m.MediaScope); releaseErr != nil {
 							logger.WarnCF("agent", "Failed to release media", map[string]any{
 								"scope": m.MediaScope,
 								"error": releaseErr.Error(),
