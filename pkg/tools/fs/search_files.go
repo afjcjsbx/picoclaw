@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -355,20 +356,57 @@ func formatContentMatches(
 	if len(content) == 0 {
 		return nil, 0
 	}
-	lines := strings.Split(strings.TrimSuffix(string(content), "\n"), "\n")
-	hits := make([]bool, len(lines))
+
+	// Split the content into logical lines once. lineStarts keeps byte offsets
+	// instead of materializing one string per line, and hits is the only
+	// per-line state the renderer needs.
+	trimmed := content
+	if trimmed[len(trimmed)-1] == '\n' {
+		trimmed = trimmed[:len(trimmed)-1]
+	}
+	lineStarts := make([]int, 0, bytes.Count(trimmed, []byte{'\n'})+1)
+	lineStarts = append(lineStarts, 0)
+	hits := make([]bool, 0, cap(lineStarts))
 	count := 0
-	for i, line := range lines {
-		lines[i] = strings.TrimSuffix(line, "\r")
-		line = lines[i]
-		if pattern.MatchString(line) {
-			hits[i] = true
+	// A literal regexp (no metacharacters, no case folding) is matched with
+	// bytes.Contains; for partially literal regexps the literal prefix is a
+	// safe prefilter that skips the regexp engine on most lines.
+	literal, complete := pattern.LiteralPrefix()
+	literalBytes := []byte(literal)
+	for start := 0; ; {
+		newline := bytes.IndexByte(trimmed[start:], '\n')
+		var line []byte
+		if newline < 0 {
+			line = trimmed[start:]
+		} else {
+			line = trimmed[start : start+newline]
+		}
+		if n := len(line); n > 0 && line[n-1] == '\r' {
+			line = line[:n-1]
+		}
+		var matched bool
+		switch {
+		case complete:
+			matched = len(literalBytes) == 0 || bytes.Contains(line, literalBytes)
+		case len(literalBytes) > 0:
+			matched = bytes.Contains(line, literalBytes) && pattern.Match(line)
+		default:
+			matched = pattern.Match(line)
+		}
+		hits = append(hits, matched)
+		if matched {
 			count++
 		}
+		if newline < 0 {
+			break
+		}
+		start += newline + 1
+		lineStarts = append(lineStarts, start)
 	}
 	if count == 0 {
 		return nil, 0
 	}
+
 	if opts.outputMode == "files_only" || opts.outputMode == "count" {
 		(*rowsSeen)++
 		if *rowsSeen <= opts.offset || remaining <= 0 {
@@ -377,10 +415,15 @@ func formatContentMatches(
 		if opts.outputMode == "files_only" {
 			return []string{path}, count
 		}
-		return []string{fmt.Sprintf("%s: %d", path, count)}, count
+		return []string{path + ": " + strconv.Itoa(count)}, count
 	}
 
-	var rows []string
+	capacity := min(remaining, count)
+	if capacity < 0 {
+		capacity = 0
+	}
+	rows := make([]string, 0, capacity)
+	var number [20]byte
 	for i, matched := range hits {
 		if !matched {
 			continue
@@ -389,29 +432,62 @@ func formatContentMatches(
 		if *rowsSeen <= opts.offset {
 			continue
 		}
-		start, end := max(0, i-opts.context), min(len(lines)-1, i+opts.context)
+		start, end := max(0, i-opts.context), min(len(hits)-1, i+opts.context)
 		var block strings.Builder
 		if opts.context > 0 {
-			block.WriteString(fmt.Sprintf("%s:\n", path))
+			block.WriteString(path)
+			block.WriteString(":\n")
 		}
 		for lineIndex := start; lineIndex <= end; lineIndex++ {
-			line := truncateSearchLine(lines[lineIndex])
 			if opts.context > 0 {
-				prefix := " "
 				if hits[lineIndex] {
-					prefix = ">"
+					block.WriteByte('>')
+				} else {
+					block.WriteByte(' ')
 				}
-				block.WriteString(fmt.Sprintf("%s %d: %s\n", prefix, lineIndex+1, line))
+				block.WriteByte(' ')
 			} else {
-				block.WriteString(fmt.Sprintf("%s:%d: %s\n", path, lineIndex+1, line))
+				block.WriteString(path)
+				block.WriteByte(':')
+			}
+			block.Write(strconv.AppendInt(number[:0], int64(lineIndex+1), 10))
+			block.WriteString(": ")
+			appendSearchLine(&block, searchLine(trimmed, lineStarts, lineIndex))
+			if lineIndex != end {
+				block.WriteByte('\n')
 			}
 		}
-		rows = append(rows, strings.TrimRight(block.String(), "\n"))
+		rows = append(rows, block.String())
 		if len(rows) >= remaining {
 			break
 		}
 	}
 	return rows, count
+}
+
+// searchLine returns the bytes of line i without its trailing carriage return.
+func searchLine(content []byte, starts []int, i int) []byte {
+	start := starts[i]
+	end := len(content)
+	if i+1 < len(starts) {
+		end = starts[i+1] - 1
+	}
+	line := content[start:end]
+	if n := len(line); n > 0 && line[n-1] == '\r' {
+		line = line[:n-1]
+	}
+	return line
+}
+
+// appendSearchLine writes a line with the same rune cap as truncateSearchLine,
+// without converting short lines to string first.
+func appendSearchLine(b *strings.Builder, line []byte) {
+	if utf8.RuneCount(line) <= maxSearchLineLength {
+		b.Write(line)
+		return
+	}
+	b.WriteString(toolshared.RunePrefix(string(line), maxSearchLineLength))
+	b.WriteString("…")
 }
 
 // truncateSearchLine bounds a result line to maxSearchLineLength runes so a
@@ -424,6 +500,8 @@ func truncateSearchLine(line string) string {
 }
 
 func readSearchFile(filesystem fileSystem, path string, remainingBytes int64) ([]byte, int64, error) {
+	// Stat before Open: opening a FIFO blocks until a writer appears, and a
+	// non-regular file must be rejected before any read.
 	entry, err := filesystem.Stat(path)
 	if err != nil {
 		return nil, 0, err
@@ -431,30 +509,29 @@ func readSearchFile(filesystem fileSystem, path string, remainingBytes int64) ([
 	if !entry.Mode().IsRegular() || entry.Size() > maxSearchFileBytes {
 		return nil, 0, fmt.Errorf("not a searchable regular file")
 	}
+	if entry.Size() > remainingBytes {
+		return nil, 0, errSearchByteLimit
+	}
 	f, err := filesystem.Open(path)
 	if err != nil {
 		return nil, 0, err
 	}
 	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
+
+	// Size the read buffer from the Stat result so a 64 KiB file does not grow
+	// a buffer through several geometric copies. The LimitReader still caps a
+	// file that grows between Stat and the read.
+	var buf bytes.Buffer
+	buf.Grow(int(entry.Size()) + 1)
+	if _, err := buf.ReadFrom(io.LimitReader(f, maxSearchFileBytes+1)); err != nil {
 		return nil, 0, err
 	}
-	if !info.Mode().IsRegular() || info.Size() > maxSearchFileBytes {
-		return nil, 0, fmt.Errorf("not a searchable regular file")
-	}
-	if info.Size() > remainingBytes {
-		return nil, 0, errSearchByteLimit
-	}
-	content, err := io.ReadAll(io.LimitReader(f, maxSearchFileBytes+1))
-	if err != nil {
-		return nil, 0, err
-	}
+	content := buf.Bytes()
 	if len(content) > maxSearchFileBytes {
 		return nil, int64(len(content)), fmt.Errorf("file exceeded search size limit")
 	}
 	if bytes.IndexByte(content, 0) >= 0 || !utf8.Valid(content) {
-		return nil, info.Size(), fmt.Errorf("binary file")
+		return nil, int64(len(content)), fmt.Errorf("binary file")
 	}
 	return content, int64(len(content)), nil
 }
