@@ -448,9 +448,17 @@ func (c *TelegramChannel) sendChunk(
 // Matches channels.Manager's typingStopTTL (5 min) so behavior is consistent.
 const maxTypingDuration = 5 * time.Minute
 
+// typingKeepaliveInterval is how often the typing chat action is re-sent while
+// a turn is running. Telegram's typing indicator expires after ~5 s, so a
+// shorter interval only adds API calls. It is a variable so tests can shorten
+// it.
+var typingKeepaliveInterval = 4 * time.Second
+
 // StartTyping implements channels.TypingCapable.
-// It sends ChatAction(typing) immediately and then repeats every 4 seconds
-// (Telegram's typing indicator expires after ~5s) in a background goroutine.
+// It sends ChatAction(typing) immediately and then, unless the keepalive is
+// disabled in the channel settings (settings.typing_keepalive: false), repeats
+// every typingKeepaliveInterval (Telegram's typing indicator expires after
+// ~5s) in a background goroutine.
 // The returned stop function is idempotent and cancels the goroutine.
 // The goroutine also exits automatically after maxTypingDuration if cancel is
 // never called (e.g. when the LLM fails or times out without publishing).
@@ -466,12 +474,18 @@ func (c *TelegramChannel) StartTyping(ctx context.Context, chatID string) (func(
 	// Send the first typing action immediately
 	_ = c.bot.SendChatAction(ctx, action)
 
+	// With the keepalive disabled the action above is all that is sent: the
+	// indicator fades ~5 s later and no background goroutine is started.
+	if !c.tgCfg.TypingKeepaliveEnabled() {
+		return func() {}, nil
+	}
+
 	typingCtx, cancel := context.WithCancel(ctx)
 	// Cap lifetime so the goroutine cannot run indefinitely if cancel is never called
 	maxCtx, maxCancel := context.WithTimeout(typingCtx, maxTypingDuration)
 	go func() {
 		defer maxCancel()
-		ticker := time.NewTicker(4 * time.Second)
+		ticker := time.NewTicker(typingKeepaliveInterval)
 		defer ticker.Stop()
 		for {
 			select {
