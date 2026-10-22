@@ -466,9 +466,14 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string, timeout tim
 
 	prepareCommandForTermination(cmd)
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	// Bound what a foreground command can buffer: without a cap a runaway
+	// command (for example `yes`) exhausts process memory long before the
+	// timeout fires. The window is large enough for the truncation below.
+	captureLimit := execCaptureLimit(t.maxOutputChars)
+	stdout := newHeadTailBuffer(captureLimit)
+	stderr := newHeadTailBuffer(captureLimit)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 
 	// Route shell execution through the shared isolation entry point so exec tool
 	// subprocesses receive the same isolation policy as other integrations.
@@ -506,9 +511,11 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string, timeout tim
 		}
 	}
 
-	output := stdout.String()
-	if stderr.Len() > 0 {
-		output += "\nSTDERR:\n" + stderr.String()
+	stdoutBytes := stdout.Bytes()
+	stderrBytes := stderr.Bytes()
+	output := string(stdoutBytes)
+	if len(stderrBytes) > 0 {
+		output += "\nSTDERR:\n" + string(stderrBytes)
 	}
 
 	if err != nil {

@@ -453,6 +453,35 @@ func TestShellTool_TruncatedOutputSpillsFullText(t *testing.T) {
 	}
 }
 
+// TestShellTool_LargeOutputStaysBounded verifies that a command producing far
+// more output than the capture budget yields a bounded result that still keeps
+// the true head and the true tail of the stream.
+func TestShellTool_LargeOutputStaysBounded(t *testing.T) {
+	tool, err := NewExecTool("", false)
+	if err != nil {
+		t.Fatalf("unable to configure exec tool: %s", err)
+	}
+
+	// ~3 MB of output, well above the 1 MiB per-stream capture budget.
+	command := "printf 'HEAD-MARKER\\n'; head -c 3000000 /dev/zero | tr '\\0' 'a'; printf '\\nTAIL-MARKER\\n'"
+	result := tool.Execute(context.Background(), map[string]any{
+		"action":  "run",
+		"command": command,
+	})
+	if result.IsError {
+		t.Fatalf("Execute() failed: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "HEAD-MARKER") {
+		t.Fatal("expected the output head in the result")
+	}
+	if !strings.Contains(result.ForLLM, "TAIL-MARKER") {
+		t.Fatal("expected the output tail in the result")
+	}
+	if len(result.ForLLM) > 100000 {
+		t.Fatalf("result not bounded: %d chars", len(result.ForLLM))
+	}
+}
+
 // TestShellTool_WorkingDir_OutsideWorkspace verifies that working_dir cannot escape the workspace directly
 func TestShellTool_WorkingDir_OutsideWorkspace(t *testing.T) {
 	root := t.TempDir()
