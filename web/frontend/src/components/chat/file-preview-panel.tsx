@@ -1,9 +1,10 @@
 import { IconFileText, IconX } from "@tabler/icons-react"
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import { type FilePreview, getFilePreview } from "@/api/files"
 import { Button } from "@/components/ui/button"
+import { detectFileLanguage, highlightCode } from "@/lib/code-highlight"
 
 type PreviewState =
   | { path: string; status: "loading" }
@@ -54,6 +55,12 @@ export function FilePreviewPanel({
     state.path === activePath
       ? state
       : { path: activePath, status: "loading" as const }
+  const language = useMemo(() => detectFileLanguage(activePath), [activePath])
+  const preview = currentState.status === "ready" ? currentState.preview : null
+  const highlightedHtml = useMemo(
+    () => (preview ? highlightCode(preview.content, language) : null),
+    [language, preview],
+  )
 
   return (
     <aside
@@ -102,7 +109,10 @@ export function FilePreviewPanel({
                 })}
               </div>
             )}
-            <div className="flex min-w-max font-mono text-xs leading-5">
+            <div
+              data-picoclaw-file-preview=""
+              className="flex min-w-max font-mono text-xs leading-5"
+            >
               <div
                 aria-hidden="true"
                 className="bg-background text-muted-foreground/60 border-border sticky left-0 z-10 shrink-0 border-r px-3 py-3 text-right select-none"
@@ -114,7 +124,14 @@ export function FilePreviewPanel({
                 ))}
               </div>
               <pre className="text-foreground m-0 min-w-max px-4 py-3 font-mono text-xs leading-5 whitespace-pre">
-                {currentState.preview.content}
+                {highlightedHtml ? (
+                  <code
+                    className="hljs"
+                    dangerouslySetInnerHTML={{ __html: highlightedHtml }}
+                  />
+                ) : (
+                  currentState.preview.content
+                )}
               </pre>
             </div>
           </>
