@@ -1369,10 +1369,7 @@ export function ChatPage() {
 
   return (
     <div className="chat-font relative flex h-full flex-col bg-[var(--conversation-background)]">
-      <PageHeader
-        title=""
-        className="justify-end bg-[var(--conversation-background)]"
-      >
+      <PageHeader title="" className="bg-[var(--conversation-background)]">
         <div className="flex items-center gap-0.5">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>

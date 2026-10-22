@@ -176,6 +176,7 @@ export function AppSidebar({
   const { i18n, t } = useTranslation()
   const { isMobile, setOpen, setOpenMobile, state: sidebarState } = useSidebar()
   const currentPath = routerState.location.pathname
+  const showSessionHistory = isMobile || sidebarState === "expanded"
   const { activeSessionId, isTyping, messages, newChat, switchSession } =
     usePicoChat()
   const [splitGroups, setSplitGroups] = useAtom(splitConversationsAtom)
@@ -304,10 +305,10 @@ export function AppSidebar({
   )
 
   React.useEffect(() => {
-    if (sidebarState === "expanded") {
+    if (showSessionHistory) {
       void loadSessions(true)
     }
-  }, [activeSessionId, latestMessageId, loadSessions, sidebarState])
+  }, [activeSessionId, latestMessageId, loadSessions, showSessionHistory])
 
   const {
     channelItems,
@@ -479,7 +480,7 @@ export function AppSidebar({
             </Link>
           </Button>
         </div>
-        {sidebarState === "expanded" && (
+        {showSessionHistory && (
           <SidebarGroup className="px-2 py-0">
             <SidebarGroupLabel className="px-2">
               {t("chat.history")}
