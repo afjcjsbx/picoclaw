@@ -104,6 +104,7 @@ export const splitSessionStatesAtom = atom<Record<string, SplitSessionState>>(
   {},
 )
 export const sessionTitlesAtom = atom<Record<string, string>>({})
+export const unreadSessionIdsAtom = atom<Set<string>>(new Set<string>())
 
 export interface PendingScrollTarget {
   sessionId: string
@@ -129,6 +130,28 @@ const DEFAULT_CHAT_STATE: ChatStoreState = {
 export const chatAtom = atom<ChatStoreState>(DEFAULT_CHAT_STATE)
 
 const store = getDefaultStore()
+
+export function markSessionUnread(sessionId: string) {
+  if (!sessionId || getChatState().activeSessionId === sessionId) {
+    return
+  }
+
+  store.set(unreadSessionIdsAtom, (current) => {
+    if (current.has(sessionId)) return current
+    const next = new Set(current)
+    next.add(sessionId)
+    return next
+  })
+}
+
+export function markSessionRead(sessionId: string) {
+  store.set(unreadSessionIdsAtom, (current) => {
+    if (!current.has(sessionId)) return current
+    const next = new Set(current)
+    next.delete(sessionId)
+    return next
+  })
+}
 
 export function updateSplitSessionState(
   sessionId: string,

@@ -10,6 +10,7 @@ import {
   type ContextUsage,
   type SplitSessionState,
   getChatState,
+  markSessionUnread,
   updateChatStore,
   updateSplitSessionState,
 } from "@/store/chat"
@@ -126,6 +127,7 @@ export function handlePicoMessage(
   switch (message.type) {
     case "message.create":
     case "media.create": {
+      markSessionUnread(expectedSessionId)
       const messageId = (payload.message_id as string) || `pico-${Date.now()}`
       const { content, kind, toolCalls } =
         parseAssistantMessageCreateState(payload)
@@ -164,6 +166,7 @@ export function handlePicoMessage(
     }
 
     case "message.update": {
+      markSessionUnread(expectedSessionId)
       const messageId = payload.message_id as string
       const attachments = parseAttachments(payload)
       const contextUsage = parseContextUsage(payload)

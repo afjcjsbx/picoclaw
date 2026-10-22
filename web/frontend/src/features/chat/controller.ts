@@ -19,6 +19,7 @@ import {
   chatAtom,
   getChatState,
   initializeSplitSessionState,
+  markSessionRead,
   splitConversationsAtom,
   splitSessionStatesAtom,
   updateChatStore,
@@ -99,6 +100,7 @@ function needsActiveSessionHydration(): boolean {
 
 function setActiveSessionId(sessionId: string, patch: Partial<ChatStoreState>) {
   activeSessionIdRef = sessionId
+  markSessionRead(sessionId)
   updateChatStore({ ...patch, activeSessionId: sessionId })
 }
 
