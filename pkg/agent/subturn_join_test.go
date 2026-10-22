@@ -207,6 +207,7 @@ func TestSubTurnOutlivesChildrenOnIterationCap(t *testing.T) {
 // root is blocked in a synchronous delegate.
 func TestRootHardAbortCancelsSubTurns(t *testing.T) {
 	var canceled, timedOut, bossCalls atomic.Int32
+	slowExited := make(chan struct{}, 2)
 	spawnSlow := func(id string) providers.ToolCall {
 		return providers.ToolCall{ID: id, Name: "spawn", Arguments: map[string]any{"task": "block", "agent_id": "slow"}}
 	}
@@ -233,6 +234,7 @@ func TestRootHardAbortCancelsSubTurns(t *testing.T) {
 			case <-ctx.Done():
 				canceled.Add(1)
 			}
+			slowExited <- struct{}{}
 			return &providers.LLMResponse{Content: "slow out"}
 		}
 	})
@@ -286,6 +288,20 @@ func TestRootHardAbortCancelsSubTurns(t *testing.T) {
 	case <-done:
 	case <-time.After(10 * time.Second):
 		t.Fatal("ProcessDirect did not return after HardAbort")
+	}
+	// Cancellation is asynchronous: the root loop can return before the child
+	// provider goroutines observe ctx.Done(). Wait for both leaves to exit
+	// before asserting on their counters.
+	for range 2 {
+		select {
+		case <-slowExited:
+		case <-time.After(5 * time.Second):
+			t.Fatalf(
+				"sub-turns did not stop after HardAbort (canceled=%d timedOut=%d)",
+				canceled.Load(),
+				timedOut.Load(),
+			)
+		}
 	}
 	if canceled.Load() != 2 {
 		t.Fatalf(
