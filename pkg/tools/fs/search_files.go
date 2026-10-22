@@ -1,6 +1,7 @@
 package fstools
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -12,26 +13,43 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"unicode/utf8"
-
-	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
 const (
 	maxSearchFilesScanned = 5000
-	maxSearchFileBytes    = 1024 * 1024
 	maxSearchBytesScanned = 64 * 1024 * 1024
 	maxSearchResults      = 200
 	maxSearchOffset       = 10000
 	maxSearchContext      = 20
 	maxSearchLineLength   = 240
 	maxSearchOutputBytes  = 64 * 1024
+	// maxSearchHunkLines bounds the number of lines in one merged context
+	// block so a single result row always stays well below the output cap.
+	maxSearchHunkLines = 50
+	// scanSearchReadBufferBytes is the buffered reader size used to stream
+	// file contents line by line.
+	scanSearchReadBufferBytes = 64 * 1024
+	// maxSearchLineBytes caps the text retained for one line, so a minified
+	// file with a multi-megabyte line cannot allocate the whole global budget.
+	// Longer lines are truncated before matching.
+	maxSearchLineBytes = 1 << 20
+	// scanSearchBinarySniffBytes is how much of a file head is inspected for
+	// NUL bytes when deciding whether the file is binary.
+	scanSearchBinarySniffBytes = 8 * 1024
 )
 
 var (
 	errSearchByteLimit = errors.New("search byte limit reached")
 	errSearchSkipFile  = errors.New("skip unreadable search file")
 )
+
+// searchReaderPool recycles the 64 KiB read buffers, so scanning thousands of
+// files does not allocate one per file.
+var searchReaderPool = sync.Pool{
+	New: func() any { return bufio.NewReaderSize(nil, scanSearchReadBufferBytes) },
+}
 
 // SearchFilesTool searches content or filenames within the configured filesystem sandbox.
 type SearchFilesTool struct {
@@ -49,7 +67,7 @@ func NewSearchFilesTool(workspace string, restrict bool, allowPaths ...[]*regexp
 func (t *SearchFilesTool) Name() string { return "search_files" }
 
 func (t *SearchFilesTool) Description() string {
-	return "Search file contents or find files by name. Use this instead of grep/rg/find/ls in terminal. target='content' does regex search with files_only, count, or context output; target='files' finds names by glob. Supports pagination. On macOS, searches above your home directory skip TCC-protected folders; target one directly to include it. Searches the configured readable filesystem sandbox."
+	return "Search file contents or find files by name. Use this instead of grep/rg/find/ls in terminal. target='content' does regex search with files_only, count, or context output; target='files' finds names by glob or substring (an empty pattern lists files). Skipped: paths ignored by .gitignore/.ignore or .git, and binary files (NUL byte in the first 8 KiB); other encodings are searched. Credential-looking tokens in results are replaced with [FILTERED]. Supports pagination. On macOS, searches above your home directory skip TCC-protected folders; target one directly to include it. Searches the configured readable filesystem sandbox."
 }
 
 func (t *SearchFilesTool) Parameters() map[string]any {
@@ -58,7 +76,7 @@ func (t *SearchFilesTool) Parameters() map[string]any {
 		"properties": map[string]any{
 			"pattern": map[string]any{
 				"type":        "string",
-				"description": "Regex for content search, or filename glob (for example *.go) for target=files",
+				"description": "Regex for content search (empty matches every line), or a filename pattern for target=files: a glob such as *.go, src/**/*.ts or *.{js,ts}, or a plain substring such as docker-compose (empty lists every file)",
 			},
 			"target": map[string]any{
 				"type":        "string",
@@ -71,7 +89,10 @@ func (t *SearchFilesTool) Parameters() map[string]any {
 				"description": "File or directory to search (default: .)",
 				"default":     ".",
 			},
-			"file_glob": map[string]any{"type": "string", "description": "Optional filename glob for content search"},
+			"file_glob": map[string]any{
+				"type":        "string",
+				"description": "Optional filename pattern for content search (same syntax as pattern for target=files)",
+			},
 			"limit": map[string]any{
 				"type":        "integer",
 				"description": "Maximum results to return (default: 50, maximum: 200)",
@@ -79,7 +100,7 @@ func (t *SearchFilesTool) Parameters() map[string]any {
 			},
 			"offset": map[string]any{
 				"type":        "integer",
-				"description": "Number of results to skip (default: 0)",
+				"description": "Number of results to skip (results are match lines, or merged context blocks when context > 0)",
 				"default":     0,
 			},
 			"order": map[string]any{
@@ -96,7 +117,7 @@ func (t *SearchFilesTool) Parameters() map[string]any {
 			},
 			"context": map[string]any{
 				"type":        "integer",
-				"description": "Lines before and after each content match (maximum: 20)",
+				"description": "Lines before and after each content match (maximum: 20); contiguous matches merge into one block",
 				"default":     0,
 			},
 		},
@@ -105,15 +126,17 @@ func (t *SearchFilesTool) Parameters() map[string]any {
 }
 
 type searchFilesOptions struct {
-	pattern    string
-	target     string
-	path       string
-	fileGlob   string
-	limit      int
-	offset     int
-	order      string
-	outputMode string
-	context    int
+	pattern     string
+	target      string
+	path        string
+	fileGlob    string
+	namePattern searchPattern
+	filePattern searchPattern
+	limit       int
+	offset      int
+	order       string
+	outputMode  string
+	context     int
 }
 
 type searchFileEntry struct {
@@ -134,8 +157,8 @@ func (t *SearchFilesTool) Execute(ctx context.Context, args map[string]any) *Too
 
 func parseSearchFilesOptions(args map[string]any) (searchFilesOptions, error) {
 	pattern, ok := args["pattern"].(string)
-	if !ok || strings.TrimSpace(pattern) == "" {
-		return searchFilesOptions{}, fmt.Errorf("pattern is required and must be a non-empty string")
+	if !ok {
+		return searchFilesOptions{}, fmt.Errorf("pattern is required and must be a string")
 	}
 	opts := searchFilesOptions{
 		pattern:    pattern,
@@ -174,12 +197,18 @@ func parseSearchFilesOptions(args map[string]any) (searchFilesOptions, error) {
 			return searchFilesOptions{}, fmt.Errorf("invalid regex pattern: %w", err)
 		}
 		if opts.fileGlob != "" {
-			if _, err := filepath.Match(opts.fileGlob, "example"); err != nil {
+			matcher, err := newSearchPattern(opts.fileGlob)
+			if err != nil {
 				return searchFilesOptions{}, fmt.Errorf("invalid file_glob: %w", err)
 			}
+			opts.filePattern = matcher
 		}
-	} else if _, err := filepath.Match(opts.pattern, "example"); err != nil {
-		return searchFilesOptions{}, fmt.Errorf("invalid filename glob: %w", err)
+	} else {
+		matcher, err := newSearchPattern(opts.pattern)
+		if err != nil {
+			return searchFilesOptions{}, fmt.Errorf("invalid filename pattern: %w", err)
+		}
+		opts.namePattern = matcher
 	}
 	if opts.limit, ok = intArg(args, "limit", opts.limit); !ok || opts.limit < 1 || opts.limit > maxSearchResults {
 		return searchFilesOptions{}, fmt.Errorf("limit must be between 1 and %d", maxSearchResults)
@@ -218,17 +247,24 @@ func (t *SearchFilesTool) searchNames(ctx context.Context, opts searchFilesOptio
 		opts.path,
 		opts.order == "modified",
 		func(path string) (bool, error) {
-			if !matchesFileGlob(opts.pattern, filepath.Base(path)) {
+			if !opts.namePattern.match(relativeSearchPath(opts.path, path)) {
 				return false, nil
 			}
-			info, err := t.fs.Stat(path)
-			if err != nil {
-				return false, errSearchSkipFile
+			// Only the modified order needs per-file metadata; in discovery
+			// order the walk's directory entries (already checked as regular
+			// files) are enough, so no extra stat is issued per file.
+			entry := searchFileEntry{path: path}
+			if opts.order == "modified" {
+				info, err := t.fs.Stat(path)
+				if err != nil {
+					return false, errSearchSkipFile
+				}
+				if !info.Mode().IsRegular() {
+					return false, errSearchSkipFile
+				}
+				entry.modTime = info.ModTime().UnixNano()
 			}
-			if !info.Mode().IsRegular() {
-				return false, errSearchSkipFile
-			}
-			entries = append(entries, searchFileEntry{path: path, modTime: info.ModTime().UnixNano()})
+			entries = append(entries, entry)
 			return opts.order == "discovery" && len(entries) > requested, nil
 		},
 	)
@@ -281,20 +317,22 @@ func (t *SearchFilesTool) searchContents(ctx context.Context, opts searchFilesOp
 	bytesScanned := int64(0)
 	var byteLimit bool
 	filesScanned, truncated, err := t.walkPath(ctx, opts.path, false, func(path string) (bool, error) {
-		if opts.fileGlob != "" && !matchesFileGlob(opts.fileGlob, filepath.Base(path)) {
+		if opts.fileGlob != "" && !opts.filePattern.match(relativeSearchPath(opts.path, path)) {
 			return false, nil
 		}
-		content, size, err := readSearchFile(t.fs, path, maxSearchBytesScanned-bytesScanned)
-		if errors.Is(err, errSearchByteLimit) {
-			byteLimit = true
-			return true, nil
-		}
-		bytesScanned += size
+		fileResult, err := t.scanSearchFile(
+			path, pattern, opts, &rowsSeen, opts.limit+1-len(rows), maxSearchBytesScanned-bytesScanned,
+		)
 		if err != nil {
 			return false, errSearchSkipFile
 		}
-		fileRows, _ := formatContentMatches(path, content, pattern, opts, &rowsSeen, opts.limit+1-len(rows))
-		rows = append(rows, fileRows...)
+		bytesScanned += fileResult.bytesRead
+		if fileResult.byteLimit {
+			// The file does not fit in the remaining scan budget: skip it
+			// and keep walking, so smaller files that still fit are reached.
+			byteLimit = true
+		}
+		rows = append(rows, fileResult.rows...)
 		return len(rows) > opts.limit, nil
 	})
 	if err != nil {
@@ -344,119 +382,355 @@ func capSearchRows(rows []string) (string, int, bool) {
 	return result.String(), shown, false
 }
 
-func formatContentMatches(
+// searchLine is one scanned line: its 1-based number, its text, and the
+// match position when the pattern matches (nil otherwise).
+type searchLine struct {
+	number int
+	text   string
+	loc    []int
+}
+
+func (l searchLine) hit() bool { return l.loc != nil }
+
+// searchFileResult carries the outcome of scanning one file.
+type searchFileResult struct {
+	rows      []string
+	matches   int
+	bytesRead int64
+	byteLimit bool
+}
+
+// scanSearchFile streams one file line by line and formats its matches as
+// result rows, reading at most remainingBytes of content and never holding
+// the whole file in memory. When the file cannot be scanned in full because
+// the global budget ran out mid-read, byteLimit is set and the partial
+// results are discarded, as if the file had not fit at all. A file is
+// treated as binary, and skipped silently, when its first bytes contain a
+// NUL byte; invalid UTF-8 is not a reason to skip, so text in other
+// encodings is searched as byte text. Rendered lines pass through
+// redactSecrets, so credential-looking values in results are masked
+// (see redact.go).
+func (t *SearchFilesTool) scanSearchFile(
 	path string,
-	content []byte,
 	pattern *regexp.Regexp,
 	opts searchFilesOptions,
 	rowsSeen *int,
-	remaining int,
-) ([]string, int) {
-	if len(content) == 0 {
-		return nil, 0
+	remainingRows int,
+	remainingBytes int64,
+) (searchFileResult, error) {
+	var result searchFileResult
+	// A single stat decides type and budget eligibility before opening; a
+	// file that grows past the budget after this is caught by budgetReader.
+	entry, err := t.fs.Stat(path)
+	if err != nil {
+		return result, err
 	}
-	lines := strings.Split(strings.TrimSuffix(string(content), "\n"), "\n")
-	hits := make([]bool, len(lines))
-	count := 0
-	for i, line := range lines {
-		lines[i] = strings.TrimSuffix(line, "\r")
-		line = lines[i]
-		if pattern.MatchString(line) {
-			hits[i] = true
-			count++
-		}
+	if !entry.Mode().IsRegular() {
+		return result, errors.New("not a searchable regular file")
 	}
-	if count == 0 {
-		return nil, 0
+	if entry.Size() > remainingBytes {
+		result.byteLimit = true
+		return result, nil
 	}
-	if opts.outputMode == "files_only" || opts.outputMode == "count" {
-		(*rowsSeen)++
-		if *rowsSeen <= opts.offset || remaining <= 0 {
-			return nil, count
-		}
-		if opts.outputMode == "files_only" {
-			return []string{path}, count
-		}
-		return []string{fmt.Sprintf("%s: %d", path, count)}, count
+	f, err := t.fs.Open(path)
+	if err != nil {
+		return result, err
+	}
+	defer f.Close()
+
+	br := &budgetReader{reader: f, limit: remainingBytes}
+	reader := searchReaderPool.Get().(*bufio.Reader)
+	reader.Reset(br)
+	defer func() {
+		reader.Reset(nil) // drop the reference to the closed file
+		searchReaderPool.Put(reader)
+	}()
+
+	// Like ripgrep, binary detection inspects only the head of the file: a
+	// NUL byte there marks it as binary. Invalid UTF-8 is not a reason to
+	// skip, so Latin-1 and other encodings are searched as byte text.
+	sniff, sniffErr := reader.Peek(scanSearchBinarySniffBytes)
+	switch {
+	case errors.Is(sniffErr, errSearchByteLimit):
+		result.byteLimit = true
+		result.bytesRead = br.read
+		return result, nil
+	case sniffErr != nil && !errors.Is(sniffErr, io.EOF):
+		return result, sniffErr
+	case bytes.IndexByte(sniff, 0) >= 0:
+		result.bytesRead = br.read
+		return result, nil
 	}
 
-	var rows []string
-	for i, matched := range hits {
-		if !matched {
-			continue
+	var (
+		rows   []string
+		seen   int // rows generated for this file, committed to rowsSeen when the file is scanned in full
+		number int
+		done   bool
+
+		hunkOpen bool
+		lastHit  int
+		nextEmit int
+		buf      []searchLine
+		lookback []searchLine
+	)
+
+	emitChunk := func(lines []searchLine) {
+		seen++
+		if *rowsSeen+seen <= opts.offset {
+			return
 		}
-		(*rowsSeen)++
-		if *rowsSeen <= opts.offset {
-			continue
-		}
-		start, end := max(0, i-opts.context), min(len(lines)-1, i+opts.context)
 		var block strings.Builder
-		if opts.context > 0 {
-			block.WriteString(fmt.Sprintf("%s:\n", path))
-		}
-		for lineIndex := start; lineIndex <= end; lineIndex++ {
-			line := truncateSearchLine(lines[lineIndex])
-			if opts.context > 0 {
-				prefix := " "
-				if hits[lineIndex] {
-					prefix = ">"
-				}
-				block.WriteString(fmt.Sprintf("%s %d: %s\n", prefix, lineIndex+1, line))
-			} else {
-				block.WriteString(fmt.Sprintf("%s:%d: %s\n", path, lineIndex+1, line))
+		block.WriteString(path)
+		block.WriteString(":\n")
+		for _, line := range lines {
+			prefix := " "
+			if line.hit() {
+				prefix = ">"
 			}
+			rendered := renderSearchLine(line, pattern)
+			block.WriteString(fmt.Sprintf("%s %d: %s\n", prefix, line.number, rendered))
 		}
 		rows = append(rows, strings.TrimRight(block.String(), "\n"))
-		if len(rows) >= remaining {
+		if len(rows) >= remainingRows {
+			done = true
+		}
+	}
+
+	emitMatchLine := func(line searchLine) {
+		seen++
+		if *rowsSeen+seen <= opts.offset {
+			return
+		}
+		rendered := renderSearchLine(line, pattern)
+		rows = append(rows, fmt.Sprintf("%s:%d: %s", path, line.number, rendered))
+		if len(rows) >= remainingRows {
+			done = true
+		}
+	}
+
+	pushRing := func(line searchLine) {
+		lookback = append(lookback, line)
+		if len(lookback) > opts.context {
+			lookback = lookback[len(lookback)-opts.context:]
+		}
+	}
+
+	flushChunks := func() {
+		for !done && len(buf) >= maxSearchHunkLines && nextEmit+maxSearchHunkLines-1 <= lastHit+opts.context {
+			emitChunk(buf[:maxSearchHunkLines])
+			buf = buf[maxSearchHunkLines:]
+			nextEmit += maxSearchHunkLines
+		}
+	}
+
+	closeHunk := func() {
+		confirmed := min(len(buf), lastHit+opts.context-nextEmit+1)
+		for confirmed > 0 && !done {
+			chunk := min(confirmed, maxSearchHunkLines)
+			emitChunk(buf[:chunk])
+			buf = buf[chunk:]
+			nextEmit += chunk
+			confirmed -= chunk
+		}
+		// The lines left after the confirmed hunk sit past the merge
+		// window: they can only serve as leading context for a later hunk,
+		// so drop the oldest one.
+		if len(buf) > 1 {
+			buf = buf[1:]
+		} else {
+			buf = buf[:0]
+		}
+		lookback = append(lookback[:0], buf...)
+		buf = buf[:0]
+		hunkOpen = false
+	}
+
+	for !done {
+		line, _, err := readSearchLine(reader, maxSearchLineBytes)
+		if err != nil {
+			if errors.Is(err, errSearchByteLimit) {
+				result.byteLimit = true
+				break
+			}
+			if !errors.Is(err, io.EOF) {
+				return result, err
+			}
+		}
+		if line != "" {
+			number++
+			text := strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
+			current := searchLine{number: number, text: text, loc: pattern.FindStringIndex(text)}
+			if current.hit() {
+				result.matches++
+			}
+			switch {
+			case opts.outputMode == "files_only" || opts.outputMode == "count":
+				// Counting only; the row is built after the scan. files_only
+				// needs a single hit, so it stops reading the file there.
+				if current.hit() && opts.outputMode == "files_only" {
+					done = true
+				}
+			case opts.context == 0:
+				if current.hit() {
+					emitMatchLine(current)
+				}
+			case current.hit():
+				if hunkOpen {
+					buf = append(buf, current)
+					lastHit = number
+				} else {
+					buf = append(buf[:0], lookback...)
+					buf = append(buf, current)
+					lookback = lookback[:0]
+					hunkOpen = true
+					lastHit = number
+					nextEmit = buf[0].number
+				}
+			case !hunkOpen:
+				pushRing(current)
+			case number < lastHit+2*opts.context+1:
+				buf = append(buf, current)
+			default:
+				closeHunk()
+				pushRing(current)
+			}
+			if opts.context > 0 {
+				flushChunks()
+			}
+		}
+		if errors.Is(err, io.EOF) {
 			break
 		}
 	}
-	return rows, count
+
+	result.bytesRead = br.read
+	if result.byteLimit {
+		// The file exceeded the remaining budget mid-read: drop its results.
+		result.matches = 0
+		return result, nil
+	}
+	if !done && hunkOpen && opts.context > 0 {
+		confirmed := min(len(buf), lastHit+opts.context-nextEmit+1)
+		if confirmed > 0 {
+			emitChunk(buf[:confirmed])
+		}
+	}
+	if opts.outputMode != "content" && result.matches > 0 {
+		seen++
+		if *rowsSeen+seen > opts.offset {
+			if opts.outputMode == "files_only" {
+				rows = append(rows, path)
+			} else {
+				rows = append(rows, fmt.Sprintf("%s: %d", path, result.matches))
+			}
+		}
+	}
+	*rowsSeen += seen
+	result.rows = rows
+	return result, nil
 }
 
-// truncateSearchLine bounds a result line to maxSearchLineLength runes so a
-// single long line cannot dominate the search output.
-func truncateSearchLine(line string) string {
-	if utf8.RuneCountInString(line) <= maxSearchLineLength {
+// truncateSearchLine bounds a line to maxSearchLineLength bytes. When
+// matchLoc places the match beyond the cut, the window starts shortly before
+// the match instead of at the line start, so the matched text stays visible;
+// "…" marks both cut sides.
+// renderSearchLine redacts credentials before truncation, so a secret crossing
+// the output window is masked in full instead of leaking a partial token. The
+// match position is recomputed on the redacted text because masking shifts
+// byte offsets.
+func renderSearchLine(line searchLine, pattern *regexp.Regexp) string {
+	text := redactSecrets(line.text)
+	loc := line.loc
+	if loc != nil {
+		if found := pattern.FindStringIndex(text); found != nil {
+			loc = found
+		} else if loc[0] > len(text) {
+			loc = nil
+		}
+	}
+	return truncateSearchLine(text, loc)
+}
+
+// readSearchLine reads one line, retaining at most limit bytes. Longer lines
+// are truncated and the rest of the line is drained, so line numbers stay
+// aligned. The error follows bufio.Reader semantics: io.EOF on the last line,
+// or errSearchByteLimit when the global byte budget runs out.
+func readSearchLine(r *bufio.Reader, limit int) (string, bool, error) {
+	var buf []byte
+	truncated := false
+	for {
+		frag, err := r.ReadSlice('\n')
+		if room := limit - len(buf); room > 0 {
+			keep := min(len(frag), room)
+			buf = append(buf, frag[:keep]...)
+			if keep < len(frag) {
+				truncated = true
+			}
+		} else if len(frag) > 0 {
+			truncated = true
+		}
+		if err == nil {
+			return string(buf), truncated, nil
+		}
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		return string(buf), truncated, err
+	}
+}
+
+func truncateSearchLine(line string, matchLoc []int) string {
+	if len(line) <= maxSearchLineLength {
 		return line
 	}
-	return toolshared.RunePrefix(line, maxSearchLineLength) + "…"
+	start := 0
+	if matchLoc != nil && matchLoc[0] > maxSearchLineLength {
+		start = matchLoc[0] - maxSearchLineLength/3
+		for start > 0 && !utf8.RuneStart(line[start]) {
+			start--
+		}
+	}
+	end := start + maxSearchLineLength
+	if end > len(line) {
+		end = len(line)
+	}
+	for end > start+1 && end < len(line) && !utf8.RuneStart(line[end]) {
+		end--
+	}
+	window := line[start:end]
+	if start > 0 {
+		window = "…" + window
+	}
+	if end < len(line) {
+		window += "…"
+	}
+	return window
 }
 
-func readSearchFile(filesystem fileSystem, path string, remainingBytes int64) ([]byte, int64, error) {
-	entry, err := filesystem.Stat(path)
-	if err != nil {
-		return nil, 0, err
+// budgetReader tracks how many bytes have been scanned and stops with
+// errSearchByteLimit once the remaining budget is exhausted, so one large
+// file cannot consume more than the search's global content budget.
+type budgetReader struct {
+	reader io.Reader
+	limit  int64
+	read   int64
+}
+
+func (b *budgetReader) Read(p []byte) (int, error) {
+	n, err := b.reader.Read(p)
+	if n > 0 {
+		b.read += int64(n)
+		if b.read > b.limit {
+			excess := b.read - b.limit
+			if excess > int64(n) {
+				excess = int64(n)
+			}
+			b.read = b.limit
+			return n - int(excess), errSearchByteLimit
+		}
 	}
-	if !entry.Mode().IsRegular() || entry.Size() > maxSearchFileBytes {
-		return nil, 0, fmt.Errorf("not a searchable regular file")
-	}
-	f, err := filesystem.Open(path)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return nil, 0, err
-	}
-	if !info.Mode().IsRegular() || info.Size() > maxSearchFileBytes {
-		return nil, 0, fmt.Errorf("not a searchable regular file")
-	}
-	if info.Size() > remainingBytes {
-		return nil, 0, errSearchByteLimit
-	}
-	content, err := io.ReadAll(io.LimitReader(f, maxSearchFileBytes+1))
-	if err != nil {
-		return nil, 0, err
-	}
-	if len(content) > maxSearchFileBytes {
-		return nil, int64(len(content)), fmt.Errorf("file exceeded search size limit")
-	}
-	if bytes.IndexByte(content, 0) >= 0 || !utf8.Valid(content) {
-		return nil, info.Size(), fmt.Errorf("binary file")
-	}
-	return content, int64(len(content)), nil
+	return n, err
 }
 
 func (t *SearchFilesTool) walkPath(
@@ -481,8 +755,8 @@ func (t *SearchFilesTool) walkPath(
 	}
 	filesScanned := 0
 	truncated := false
-	var walk func(string, bool) error
-	walk = func(dir string, isRoot bool) error {
+	var walk func(string, bool, searchIgnoreStack) error
+	walk = func(dir string, isRoot bool, ignore searchIgnoreStack) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -493,16 +767,19 @@ func (t *SearchFilesTool) walkPath(
 			}
 			return err
 		}
+		if set, ok := loadSearchIgnoreSet(t.fs, dir, entries); ok {
+			ignore = append(ignore[:len(ignore):len(ignore)], set)
+		}
 		for _, entry := range entries {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
 			child := filepath.Join(dir, entry.Name())
 			if entry.IsDir() {
-				if shouldSkipSearchDir(path, child, entry.Name()) {
+				if shouldSkipSearchDir(path, child, entry.Name()) || ignore.ignored(child, true) {
 					continue
 				}
-				if err := walk(child, false); err != nil {
+				if err := walk(child, false, ignore); err != nil {
 					return err
 				}
 				if truncated {
@@ -511,6 +788,9 @@ func (t *SearchFilesTool) walkPath(
 				continue
 			}
 			if !entry.Type().IsRegular() {
+				continue
+			}
+			if ignore.ignored(child, false) {
 				continue
 			}
 			filesScanned++
@@ -532,15 +812,21 @@ func (t *SearchFilesTool) walkPath(
 		}
 		return nil
 	}
-	if err := walk(path, true); err != nil {
+	if err := walk(path, true, nil); err != nil {
 		return filesScanned, truncated, err
 	}
 	return filesScanned, truncated, nil
 }
 
-func matchesFileGlob(pattern, name string) bool {
-	matched, _ := filepath.Match(pattern, name)
-	return matched
+// relativeSearchPath returns path relative to the search root for pattern
+// matching. When the search root is the candidate itself (a single-file
+// search), the base name is returned instead.
+func relativeSearchPath(root, path string) string {
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == "." || !filepath.IsLocal(rel) {
+		return filepath.Base(path)
+	}
+	return rel
 }
 
 func shouldSkipSearchDir(root, path, name string) bool {

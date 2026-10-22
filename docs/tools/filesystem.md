@@ -56,6 +56,8 @@ Using `offset`/`length` in line mode (or `limit`) is rejected with an error: eac
 
 Lines longer than `tools.read_file.max_line_length` characters are cut after that many characters with a ` ... [truncated]` marker and the read continues with the next line, so a single long line cannot consume the whole byte budget. If the byte budget itself runs out mid-line, the header reports the mid-line cut instead.
 
+Both modes scrub credential-looking values from the rendered content before it reaches the model: well-known token formats and long machine-generated high-entropy strings are replaced with `[FILTERED]`, while ordinary identifiers, prose, and hex hashes stay visible. Headers and line numbers still refer to the raw file, so reads continue normally after a masked value. See [Built-in redaction in search results and file reads](../security/sensitive_data_filtering.md#built-in-redaction-in-search-results-and-file-reads).
+
 Results larger than `tools.max_inline_result_chars` are spilled to a workspace artifact with a head+tail preview, exactly like every other tool result; see [Large tool results](../reference/tools_configuration.md#large-tool-results).
 
 ## `write_file`
@@ -101,18 +103,32 @@ Lists the entries of a directory. Protected entries (for example `.ssh` and cred
 
 ## `search_files`
 
-Searches file contents with a regular expression, or finds file names by glob. It is the intended replacement for `grep`, `rg`, `find`, and `ls` in the terminal tool.
+Searches file contents with a regular expression, or finds file names by glob or substring. It is the intended replacement for `grep`, `rg`, `find`, and `ls` in the terminal tool.
 
 | Argument | Type | Required | Description |
 |----------|------|----------|-------------|
-| `pattern` | string | yes | Regex for content search, or filename glob (for example `*.go`) for `target: "files"` |
+| `pattern` | string | yes | Regex for content search (an empty pattern matches every line), or a filename pattern for `target: "files"` (see below; an empty pattern lists all files) |
 | `target` | string | no | `content` (default) or `files` |
 | `path` | string | no | File or directory to search. Default: `.` |
-| `file_glob` | string | no | Optional filename glob applied to content searches |
+| `file_glob` | string | no | Optional filename pattern applied to content searches (same syntax as `pattern` for `target: "files"`) |
 | `limit` | integer | no | Maximum results to return. Default: `50`, maximum: `200` |
-| `offset` | integer | no | Number of results to skip (pagination). Default: `0` |
+| `offset` | integer | no | Number of results to skip (pagination); a result is a match line, or a merged context block when `context` > 0. Default: `0` |
 | `order` | string | no | `discovery` (default) or `modified` (newest modification time first; scans the full tree) |
 | `output_mode` | string | no | Content searches: `content` (default), `files_only`, or `count` |
 | `context` | integer | no | Lines before and after each content match (maximum: `20`). Default: `0` |
 
+Filename patterns accept three forms:
+
+* **Empty pattern** — matches every file, so `{"pattern": "", "target": "files"}` is an `ls -R`-style listing.
+* **Plain text** — a pattern without `*`, `?`, `[`, or `{` matches as a substring of the path relative to the search root, so `docker-compose` finds both `docker-compose.yml` and `deploy/docker-compose.prod.yml`.
+* **Glob** — a pattern with metacharacters is matched as a glob. A glob containing `/` is matched against the whole relative path; one without `/` is matched against the base name. `*` and `?` do not cross `/`, `**/` matches any number of directories (`src/**/*.ts` also matches `src/main.ts`), and `{a,b}` alternates (`*.{js,ts}`).
+
+Output lines are capped at 240 bytes each. When a match lies beyond that cut, the displayed window moves to keep the matched text visible, with `…` marking both cut sides, so reported matches are never silently dropped from the output.
+
+With `context` greater than zero, matches whose context ranges overlap or touch are merged into a single block (as ripgrep does) instead of reprinting shared lines, and blocks are split at 50 lines so each result row stays small. `offset` and `limit` count these blocks, which makes pagination duplicate-free.
+
+Content searches are bounded by a scan budget (5,000 files and 64 MiB of file content). Files are streamed line by line, so there is no per-file size limit: larger files are searched in full as long as they fit the global budget. A single line is retained up to 1 MiB; longer lines are truncated before matching, so a minified file cannot allocate the whole budget with one line. When a file no longer fits in the remaining byte budget it is skipped on its own and the walk continues with the files that still fit, instead of ending the search early. Binary detection looks only at the first 8 KiB: a NUL byte there marks the file as binary and it is skipped, while text in other encodings (Latin-1, mixed byte sequences) is still scanned. Matching runs on UTF-8, so a non-ASCII byte does not match a literal accented character. Matched and context lines are additionally scrubbed of credentials before they reach the model: well-known token formats (Bearer headers, JWTs, `sk-`/`rk-` keys, GitHub tokens, AWS key IDs, Slack and Google keys) and long machine-generated high-entropy strings are replaced with `[FILTERED]`, while ordinary identifiers, prose, and hex hashes stay visible. This redaction works without configuration and is independent of the configured sensitive-data filter.
+
 Searches run inside the readable sandbox. On macOS, searches above your home directory skip TCC-protected folders; target one directly to include it.
+
+Like `ripgrep`, directory walks honor `.gitignore` and `.ignore` files, including nested ones: patterns are gitignore-style (`!` negation, trailing `/` for directories, a leading or embedded `/` anchors to the declaring directory), `.ignore` overrides `.gitignore`, and a deeper file overrides a shallower one. `.git` is always skipped. An explicitly targeted file or directory (via `path`) is searched even when its ancestors are ignored.
