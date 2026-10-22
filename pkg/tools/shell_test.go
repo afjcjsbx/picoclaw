@@ -2278,3 +2278,22 @@ func TestShellTool_PTY_ReaderStopsAfterExit(t *testing.T) {
 	}, 5*time.Second, 50*time.Millisecond,
 		"PTY reader goroutines should stop after the process exits")
 }
+
+// TestShellTool_SessionActionsRequireSessionID verifies that every session
+// action reports a missing sessionId before touching the session manager.
+func TestShellTool_SessionActionsRequireSessionID(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("session actions are exercised on POSIX shells")
+	}
+
+	tool, err := NewExecTool("", false)
+	require.NoError(t, err)
+
+	for _, action := range []string{"poll", "read", "write", "kill", "send-keys"} {
+		t.Run(action, func(t *testing.T) {
+			result := tool.Execute(context.Background(), map[string]any{"action": action})
+			require.True(t, result.IsError, "action %s should fail without a sessionId", action)
+			require.Contains(t, result.ForLLM, "sessionId is required")
+		})
+	}
+}
