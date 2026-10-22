@@ -83,7 +83,7 @@ func BuildDashboardResponse(
 		}
 		redactor := newServerRedactor(cfg)
 		server := DashboardServer{
-			Name:              redactor.Redact(status.Name),
+			Name:              status.Name,
 			Enabled:           globalEnabled && cfg.Enabled,
 			ConfiguredEnabled: cfg.Enabled,
 			Deferred:          effectiveDeferred(discoveryEnabled, cfg),
@@ -139,7 +139,6 @@ func sanitizeDashboardResponse(response *DashboardResponse, knownValues []string
 	}
 	for i := range response.Servers {
 		server := &response.Servers[i]
-		server.Name = RedactText(server.Name, knownValues)
 		server.Transport = RedactText(server.Transport, knownValues)
 		server.Command = RedactText(server.Command, knownValues)
 		server.LaunchCommand = RedactText(server.LaunchCommand, knownValues)
@@ -181,15 +180,50 @@ func RestoreServerConfigRedactions(incoming, existing config.MCPServerConfig) co
 	if incoming.URL == redactedExisting.URL && incoming.URL != existing.URL {
 		incoming.URL = existing.URL
 	}
-	for i := range incoming.Args {
-		if i < len(existing.Args) && i < len(redactedExisting.Args) && incoming.Args[i] == redactedExisting.Args[i] &&
-			incoming.Args[i] != existing.Args[i] {
-			incoming.Args[i] = existing.Args[i]
-		}
-	}
+	incoming.Args = restoreArgRedactions(incoming.Args, existing.Args, redactedExisting.Args)
 	incoming.Env = restoreMapRedactions(incoming.Env, existing.Env)
 	incoming.Headers = restoreMapRedactions(incoming.Headers, existing.Headers)
 	return incoming
+}
+
+// restoreArgRedactions maps redacted arguments back to their stored values.
+// Matching is by full argument value, with standalone values (--flag secret)
+// matched through their preceding sensitive flag. This keeps restores correct
+// when arguments are reordered or unrelated arguments are added in the WebUI.
+// Duplicate redacted values are restored in order.
+func restoreArgRedactions(incoming, existing, redactedExisting []string) []string {
+	exact := make(map[string][]string)
+	standalone := make(map[string][]string)
+	for i, original := range existing {
+		if i >= len(redactedExisting) {
+			break
+		}
+		redactedArg := redactedExisting[i]
+		if redactedArg == original {
+			continue
+		}
+		if redactedArg == RedactedValue && i > 0 && isSensitiveStandaloneFlag(existing[i-1]) {
+			flag := existing[i-1]
+			standalone[flag] = append(standalone[flag], original)
+			continue
+		}
+		exact[redactedArg] = append(exact[redactedArg], original)
+	}
+	result := append([]string(nil), incoming...)
+	for i, arg := range result {
+		if arg == RedactedValue && i > 0 && isSensitiveStandaloneFlag(result[i-1]) {
+			if values := standalone[result[i-1]]; len(values) > 0 {
+				result[i] = values[0]
+				standalone[result[i-1]] = values[1:]
+			}
+			continue
+		}
+		if values := exact[arg]; len(values) > 0 {
+			result[i] = values[0]
+			exact[arg] = values[1:]
+		}
+	}
+	return result
 }
 
 func effectiveDeferred(global bool, cfg config.MCPServerConfig) bool {
@@ -205,11 +239,15 @@ type serverRedactor struct {
 
 func newServerRedactor(cfg config.MCPServerConfig) serverRedactor {
 	values := make([]string, 0, len(cfg.Env)+len(cfg.Headers))
-	for _, value := range cfg.Env {
-		values = appendKnownSecret(values, value)
+	for key, value := range cfg.Env {
+		if sensitiveNamePattern.MatchString(key) {
+			values = appendKnownSecret(values, value)
+		}
 	}
-	for _, value := range cfg.Headers {
-		values = appendKnownSecret(values, value)
+	for key, value := range cfg.Headers {
+		if sensitiveNamePattern.MatchString(key) {
+			values = appendKnownSecret(values, value)
+		}
 	}
 	for i, arg := range cfg.Args {
 		if key, value, ok := strings.Cut(arg, "="); ok && sensitiveNamePattern.MatchString(key) {

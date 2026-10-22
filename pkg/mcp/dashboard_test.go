@@ -143,6 +143,121 @@ func TestSanitizeDashboardResponseWithServersRedactsConfiguredValues(t *testing.
 	}
 }
 
+func TestBuildDashboardResponseKeepsNonSensitiveConfigValues(t *testing.T) {
+	const apiKey = "opaque-api-key-value"
+	cfg := config.MCPServerConfig{
+		Enabled: true,
+		Type:    "stdio",
+		Command: "npx",
+		Env: map[string]string{
+			"LOG_LEVEL":      "debug",
+			"NODE_ENV":       "production",
+			"OPENAI_API_KEY": apiKey,
+		},
+		Headers: map[string]string{
+			"Accept":        "application/json",
+			"Authorization": "opaque-header-secret",
+		},
+	}
+	response := BuildDashboardResponse(true, false, true, map[string]ServerStatus{
+		"debug-production-server": {
+			Name:   "debug-production-server",
+			Config: cfg,
+			State:  ConnectionConnected,
+			Tools: []*sdkmcp.Tool{{
+				Name:        "debug_tool",
+				Description: "debug production application/json information",
+			}},
+		},
+	})
+	server := response.Servers[0]
+	if server.Name != "debug-production-server" {
+		t.Fatalf("server name = %q, want %q", server.Name, "debug-production-server")
+	}
+	if server.Tools[0].Name != "debug_tool" {
+		t.Fatalf("tool name = %q, want %q", server.Tools[0].Name, "debug_tool")
+	}
+	if server.Tools[0].Description != "debug production application/json information" {
+		t.Fatalf("tool description = %q", server.Tools[0].Description)
+	}
+	data, err := json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{apiKey, "opaque-header-secret"} {
+		if strings.Contains(string(data), secret) {
+			t.Fatalf("dashboard response leaked %q: %s", secret, data)
+		}
+	}
+}
+
+func TestSanitizeDashboardResponseWithServersKeepsServerNames(t *testing.T) {
+	response := DashboardResponse{Servers: []DashboardServer{{
+		Name: "debug-server",
+	}}}
+	SanitizeDashboardResponseWithServers(&response, map[string]config.MCPServerConfig{
+		"debug-server": {Env: map[string]string{"LOG_LEVEL": "debug"}},
+	})
+	if response.Servers[0].Name != "debug-server" {
+		t.Fatalf("server name = %q, want %q", response.Servers[0].Name, "debug-server")
+	}
+}
+
+func TestRestoreServerConfigRedactionsMatchesReorderedArgs(t *testing.T) {
+	existing := config.MCPServerConfig{Args: []string{
+		"--token",
+		"standalone-secret",
+		"--safe",
+		"value",
+		"--url=https://example.test/mcp?token=query-secret",
+	}}
+	redacted := RedactServerConfig(existing)
+	incoming := existing
+	incoming.Args = []string{
+		redacted.Args[4],
+		"--new-flag",
+		"new-value",
+		redacted.Args[0],
+		redacted.Args[1],
+		redacted.Args[2],
+		redacted.Args[3],
+	}
+	restored := RestoreServerConfigRedactions(incoming, existing)
+	want := []string{
+		existing.Args[4],
+		"--new-flag",
+		"new-value",
+		existing.Args[0],
+		existing.Args[1],
+		existing.Args[2],
+		existing.Args[3],
+	}
+	if strings.Join(restored.Args, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("restored args = %#v, want %#v", restored.Args, want)
+	}
+}
+
+func TestRestoreServerConfigRedactionsKeepsStandaloneValuesWithTheirFlag(t *testing.T) {
+	existing := config.MCPServerConfig{Args: []string{
+		"--api-key", "secret-a",
+		"--db-password", "secret-b",
+	}}
+	redacted := RedactServerConfig(existing)
+	incoming := existing
+	incoming.Args = []string{
+		redacted.Args[2], redacted.Args[3],
+		redacted.Args[0], redacted.Args[1],
+	}
+	restored := RestoreServerConfigRedactions(incoming, existing)
+	want := []string{
+		"--db-password", "secret-b",
+		"--api-key", "secret-a",
+	}
+	if strings.Join(restored.Args, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("restored args = %#v, want %#v", restored.Args, want)
+	}
+}
+
 func TestRedactServerConfigMasksSensitiveFlagForms(t *testing.T) {
 	cfg := config.MCPServerConfig{
 		Args: []string{

@@ -23,7 +23,7 @@ func (m *Manager) publishServerEvent(
 	redactor := newServerRedactor(cfg)
 	safeCfg := RedactServerConfig(cfg)
 	payload := ServerEventPayload{
-		Server:    redactor.Redact(serverName),
+		Server:    serverName,
 		Type:      mcpTransportType(cfg),
 		URL:       safeCfg.URL,
 		Command:   redactor.Redact(cfg.Command),
@@ -49,7 +49,7 @@ func (m *Manager) publishToolDiscovered(serverName string, cfg config.MCPServerC
 	redactor := newServerRedactor(cfg)
 	safeCfg := RedactServerConfig(cfg)
 	payload := ServerEventPayload{
-		Server:  redactor.Redact(serverName),
+		Server:  serverName,
 		Type:    mcpTransportType(cfg),
 		URL:     safeCfg.URL,
 		Command: redactor.Redact(cfg.Command),

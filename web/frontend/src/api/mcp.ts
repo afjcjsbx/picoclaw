@@ -1,11 +1,7 @@
 import { launcherFetch } from "@/api/http"
 
 export type MCPConnectionStatus =
-  | "connected"
-  | "error"
-  | "disconnected"
-  | "connecting"
-  | "disabled"
+  "connected" | "error" | "disconnected" | "connecting" | "disabled"
 
 export interface MCPToolParameter {
   name: string
@@ -69,7 +65,6 @@ function sanitizeResponse(data: MCPDashboardResponse): MCPDashboardResponse {
     ...data,
     servers: (data.servers ?? []).map((server) => ({
       ...server,
-      name: redactMCPText(server.name),
       transport: redactMCPText(server.transport),
       command: redactMCPText(server.command),
       launch_command: redactMCPText(server.launch_command),
