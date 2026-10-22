@@ -175,6 +175,9 @@ func TestSend_ThoughtMessageDoesNotFinalizeTrackedToolFeedback(t *testing.T) {
 		if got := payload[PayloadKeyModelName]; got != "gpt-5.4-mini" {
 			t.Fatalf("thought model_name = %#v, want %q", got, "gpt-5.4-mini")
 		}
+		if _, ok := payload[PayloadKeyFinal]; ok {
+			t.Fatal("thought message must not be marked final")
+		}
 		if got := payload["message_id"]; got == "msg-progress" || got == nil || got == "" {
 			t.Fatalf("thought message_id = %#v, want new non-progress id", got)
 		}
@@ -194,6 +197,7 @@ func TestSend_ThoughtMessageDoesNotFinalizeTrackedToolFeedback(t *testing.T) {
 			ChatID:  "pico:sess-1",
 			Raw: map[string]string{
 				PayloadKeyModelName: "gpt-5.4",
+				"outbound_kind":     "final",
 			},
 		},
 		ContextUsage: &bus.ContextUsage{
@@ -220,6 +224,9 @@ func TestSend_ThoughtMessageDoesNotFinalizeTrackedToolFeedback(t *testing.T) {
 		}
 		if got := payload[PayloadKeyModelName]; got != "gpt-5.4" {
 			t.Fatalf("final model_name = %#v, want %q", got, "gpt-5.4")
+		}
+		if got := payload[PayloadKeyFinal]; got != true {
+			t.Fatalf("final flag = %#v, want true", got)
 		}
 		rawUsage, ok := payload["context_usage"].(map[string]any)
 		if !ok {
@@ -538,6 +545,9 @@ func TestBeginStream_ThrottlesIntermediateUpdatesAndFinalFlushes(t *testing.T) {
 	if first.Type != TypeMessageCreate {
 		t.Fatalf("first type = %q, want %q", first.Type, TypeMessageCreate)
 	}
+	if _, ok := first.Payload[PayloadKeyFinal]; ok {
+		t.Fatal("stream update must not be marked final")
+	}
 	msgID, _ := first.Payload["message_id"].(string)
 	assertNoPicoMessage(t, received)
 
@@ -562,6 +572,9 @@ func TestBeginStream_ThrottlesIntermediateUpdatesAndFinalFlushes(t *testing.T) {
 	}
 	if got := final.Payload[PayloadKeyContent]; got != "first plus final text" {
 		t.Fatalf("final content = %#v, want final text", got)
+	}
+	if got := final.Payload[PayloadKeyFinal]; got != true {
+		t.Fatalf("final flag = %#v, want true", got)
 	}
 	assertNoPicoMessage(t, received)
 }
@@ -765,7 +778,34 @@ func TestBroadcastToSession_SendsActivityToAllSessionsObserver(t *testing.T) {
 	}
 }
 
-func TestBroadcastToSession_DoesNotEmitTypingStartWithoutSessionClient(t *testing.T) {
+func TestBroadcastToSession_ActivityCarriesFinalFlag(t *testing.T) {
+	ch := newTestPicoChannel(t)
+	observerConn, observerMessages, cleanup := newTestPicoWebSocket(t)
+	defer cleanup()
+	ch.addConnForTest(&picoConn{
+		id:        "observer",
+		conn:      observerConn,
+		sessionID: allSessionsSessionID,
+	})
+
+	_ = ch.broadcastToSession("pico:s-target", newMessage(TypeMessageCreate, map[string]any{
+		PayloadKeyContent: "secret",
+		PayloadKeyFinal:   true,
+	}))
+
+	activity := mustReceivePicoMessage(t, observerMessages)
+	if activity.Type != TypeSessionActivity {
+		t.Fatalf("activity type = %q, want %q", activity.Type, TypeSessionActivity)
+	}
+	if got := activity.Payload[PayloadKeyFinal]; got != true {
+		t.Fatalf("activity final = %#v, want true", got)
+	}
+	if _, exists := activity.Payload[PayloadKeyContent]; exists {
+		t.Fatal("activity payload must not include message content")
+	}
+}
+
+func TestBroadcastToSession_EmitsTypingStartWithoutSessionClient(t *testing.T) {
 	ch := newTestPicoChannel(t)
 	observerConn, observerMessages, cleanup := newTestPicoWebSocket(t)
 	defer cleanup()
@@ -777,7 +817,16 @@ func TestBroadcastToSession_DoesNotEmitTypingStartWithoutSessionClient(t *testin
 
 	_ = ch.broadcastToSession("pico:s-target", newMessage(TypeTypingStart, nil))
 
-	assertNoPicoMessage(t, observerMessages)
+	activity := mustReceivePicoMessage(t, observerMessages)
+	if activity.Type != TypeSessionActivity {
+		t.Fatalf("activity type = %q, want %q", activity.Type, TypeSessionActivity)
+	}
+	if activity.SessionID != "s-target" {
+		t.Fatalf("activity session_id = %q, want %q", activity.SessionID, "s-target")
+	}
+	if got := activity.Payload[PayloadKeyEvent]; got != TypeTypingStart {
+		t.Fatalf("activity event = %#v, want %q", got, TypeTypingStart)
+	}
 }
 
 func TestHandleWebSocket_AllSessionsObserverReceivesActivity(t *testing.T) {

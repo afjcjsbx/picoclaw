@@ -50,7 +50,7 @@ Every frame is a JSON envelope:
 | Client → server | `message.send`, `media.send`, `ping` |
 | Server → client | `message.create`, `message.update`, `message.delete`, `media.create`, `typing.start`, `typing.stop`, `session.activity`, `error`, `pong` |
 
-Payload keys of interest: `content`, `message_id`, `kind` (`thought`, `tool_calls`, `tool_feedback`), `tool_calls`, `model_name`, `usage`, and the legacy `thought` boolean. `session.activity` events carry the originating `session_id` and an `event` payload equal to the underlying event type (for example, `typing.start` or `message.create`); observers use them to update unread and running indicators without receiving message content.
+Payload keys of interest: `content`, `message_id`, `kind` (`thought`, `tool_calls`, `tool_feedback`), `tool_calls`, `model_name`, `usage`, `final`, and the legacy `thought` boolean. `session.activity` events carry the originating `session_id` and an `event` payload equal to the underlying event type (for example, `typing.start` or `message.create`). The activity payload includes `final: true` when the underlying message is the turn's final response; observers use that flag to set unread state only after a completed answer, while non-final message activity and `typing.start` indicate a running turn. Observers never receive message content.
 
 ## Launcher API
 

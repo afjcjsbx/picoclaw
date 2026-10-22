@@ -114,6 +114,7 @@ export function handlePicoActivityMessage(message: PicoMessage) {
 
   const event =
     typeof message.payload?.event === "string" ? message.payload.event : ""
+  const isFinal = message.payload?.final === true
 
   switch (event) {
     case "typing.start":
@@ -126,7 +127,10 @@ export function handlePicoActivityMessage(message: PicoMessage) {
     case "message.create":
     case "media.create":
     case "message.update":
-      markSessionUnread(sessionId)
+      setSessionRunning(sessionId, !isFinal)
+      if (isFinal) {
+        markSessionUnread(sessionId)
+      }
       break
     default:
       break
@@ -142,6 +146,7 @@ export function handlePicoMessage(
   }
 
   const payload = message.payload || {}
+  const isFinal = payload.final === true
   const updateSession = (
     patch:
       | Partial<SplitSessionState>
@@ -159,7 +164,10 @@ export function handlePicoMessage(
   switch (message.type) {
     case "message.create":
     case "media.create": {
-      markSessionUnread(expectedSessionId)
+      if (isFinal) {
+        markSessionUnread(expectedSessionId)
+        setSessionRunning(expectedSessionId, false)
+      }
       const messageId = (payload.message_id as string) || `pico-${Date.now()}`
       const { content, kind, toolCalls } =
         parseAssistantMessageCreateState(payload)
@@ -188,8 +196,9 @@ export function handlePicoMessage(
           },
         ],
         isTyping:
-          !isPlaceholder &&
-          (kind === "normal" || message.type === "media.create")
+          isFinal ||
+          (!isPlaceholder &&
+            (kind === "normal" || message.type === "media.create"))
             ? false
             : prev.isTyping,
         ...(contextUsage ? { contextUsage } : {}),
@@ -198,7 +207,10 @@ export function handlePicoMessage(
     }
 
     case "message.update": {
-      markSessionUnread(expectedSessionId)
+      if (isFinal) {
+        markSessionUnread(expectedSessionId)
+        setSessionRunning(expectedSessionId, false)
+      }
       const messageId = payload.message_id as string
       const attachments = parseAttachments(payload)
       const contextUsage = parseContextUsage(payload)
@@ -253,6 +265,7 @@ export function handlePicoMessage(
             },
           ]
         })(),
+        ...(isFinal ? { isTyping: false } : {}),
         ...(contextUsage ? { contextUsage } : {}),
       }))
       break

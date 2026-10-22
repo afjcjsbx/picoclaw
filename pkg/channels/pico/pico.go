@@ -93,6 +93,15 @@ func outboundMessageFinalizesTrackedToolFeedback(msg bus.OutboundMessage) bool {
 		!outboundMessageIsToolCalls(msg)
 }
 
+// outboundMessageIsFinal reports whether the agent marked this message as the
+// final response for the turn.
+func outboundMessageIsFinal(msg bus.OutboundMessage) bool {
+	if len(msg.Context.Raw) == 0 {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(msg.Context.Raw["outbound_kind"]), "final")
+}
+
 // writeJSON sends a JSON message to the connection with write locking.
 func (pc *picoConn) writeJSON(v any) error {
 	if pc.closed.Load() {
@@ -371,6 +380,9 @@ func (c *PicoChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]stri
 			payload[PayloadKeyToolCalls] = toolCalls
 		}
 	}
+	if outboundMessageIsFinal(msg) {
+		payload[PayloadKeyFinal] = true
+	}
 	setContextUsagePayload(payload, msg.ContextUsage)
 	outMsg := newMessage(TypeMessageCreate, payload)
 
@@ -492,6 +504,9 @@ func (c *PicoChannel) FinalizeToolFeedbackMessage(ctx context.Context, msg bus.O
 	if modelName := strings.TrimSpace(msg.Context.Raw[PayloadKeyModelName]); modelName != "" {
 		payload[PayloadKeyModelName] = modelName
 	}
+	if outboundMessageIsFinal(msg) {
+		payload[PayloadKeyFinal] = true
+	}
 	return c.finalizeTrackedToolFeedbackMessage(
 		ctx,
 		msg.ChatID,
@@ -503,11 +518,16 @@ func (c *PicoChannel) FinalizeToolFeedbackMessage(ctx context.Context, msg bus.O
 }
 
 // StartTyping implements channels.TypingCapable.
+//
+// The activity event is sent even when no client is attached to this session,
+// so the sidebar can show a running indicator for background conversations.
+// The returned stop function is always registered and emits the matching
+// activity event when the turn ends.
 func (c *PicoChannel) StartTyping(ctx context.Context, chatID string) (func(), error) {
 	startMsg := newMessage(TypeTypingStart, nil)
-	if err := c.broadcastToSession(chatID, startMsg); err != nil {
-		return func() {}, err
-	}
+	// No session client is not an error: the all-sessions observer still needs
+	// the start event.
+	_ = c.broadcastToSession(chatID, startMsg)
 	return func() {
 		stopMsg := newMessage(TypeTypingStop, nil)
 		c.broadcastToSession(chatID, stopMsg)
@@ -597,7 +617,7 @@ func (s *picoStreamer) SetTurnUsage(inputTokens, outputTokens int) {
 func (s *picoStreamer) Update(ctx context.Context, content string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.updateLocked(ctx, content, false, nil)
+	return s.updateLocked(ctx, content, false, nil, false)
 }
 
 func (s *picoStreamer) Finalize(ctx context.Context, content string) error {
@@ -607,7 +627,7 @@ func (s *picoStreamer) Finalize(ctx context.Context, content string) error {
 func (s *picoStreamer) FinalizeWithContext(ctx context.Context, content string, contextUsage *bus.ContextUsage) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.updateLocked(ctx, content, true, contextUsage)
+	return s.updateLocked(ctx, content, true, contextUsage, true)
 }
 
 func (s *picoStreamer) UpdateReasoning(ctx context.Context, content string) error {
@@ -648,6 +668,7 @@ func (s *picoStreamer) updateLocked(
 	content string,
 	force bool,
 	contextUsage *bus.ContextUsage,
+	final bool,
 ) error {
 	if s == nil || s.channel == nil {
 		return fmt.Errorf("streamer is not initialized")
@@ -665,7 +686,7 @@ func (s *picoStreamer) updateLocked(
 		}
 	}
 
-	return s.sendLocked(ctx, content, contextUsage)
+	return s.sendLocked(ctx, content, contextUsage, final)
 }
 
 func (s *picoStreamer) updateReasoningLocked(ctx context.Context, content string, force bool) error {
@@ -688,7 +709,12 @@ func (s *picoStreamer) updateReasoningLocked(ctx context.Context, content string
 	return s.sendReasoningLocked(ctx, content)
 }
 
-func (s *picoStreamer) sendLocked(ctx context.Context, content string, contextUsage *bus.ContextUsage) error {
+func (s *picoStreamer) sendLocked(
+	ctx context.Context,
+	content string,
+	contextUsage *bus.ContextUsage,
+	final bool,
+) error {
 	now := time.Now()
 	contentLen := len([]rune(content))
 
@@ -700,6 +726,9 @@ func (s *picoStreamer) sendLocked(ctx context.Context, content string, contextUs
 		}
 		if s.modelName != "" {
 			payload[PayloadKeyModelName] = s.modelName
+		}
+		if final {
+			payload[PayloadKeyFinal] = true
 		}
 		setContextUsagePayload(payload, contextUsage)
 		setTurnUsagePayload(payload, s.turnInputTokens, s.turnOutputTokens)
@@ -714,6 +743,9 @@ func (s *picoStreamer) sendLocked(ctx context.Context, content string, contextUs
 		}
 		if s.modelName != "" {
 			payload[PayloadKeyModelName] = s.modelName
+		}
+		if final {
+			payload[PayloadKeyFinal] = true
 		}
 		setTurnUsagePayload(payload, s.turnInputTokens, s.turnOutputTokens)
 		if err := s.channel.editMessagePayload(ctx, s.chatID, s.messageID, payload, contextUsage); err != nil {
@@ -986,16 +1018,18 @@ func (c *PicoChannel) broadcast(chatID string, msg PicoMessage) error {
 // broadcastSessionActivity sends a lightweight activity event to all-sessions
 // observer connections. Session-specific messages are still delivered only to
 // clients connected to that session.
-func (c *PicoChannel) broadcastSessionActivity(sessionID, eventType string, allowTypingStart bool) {
-	if sessionID == "" ||
-		sessionID == allSessionsSessionID ||
-		(eventType == TypeTypingStart && !allowTypingStart) {
+func (c *PicoChannel) broadcastSessionActivity(sessionID string, msg PicoMessage) {
+	if sessionID == "" || sessionID == allSessionsSessionID {
 		return
 	}
 
-	activity := newMessage(TypeSessionActivity, map[string]any{
-		PayloadKeyEvent: eventType,
-	})
+	payload := map[string]any{
+		PayloadKeyEvent: msg.Type,
+	}
+	if final, _ := msg.Payload[PayloadKeyFinal].(bool); final {
+		payload[PayloadKeyFinal] = true
+	}
+	activity := newMessage(TypeSessionActivity, payload)
 	activity.SessionID = sessionID
 
 	for _, pc := range c.sessionConnectionsSnapshot(allSessionsSessionID) {
@@ -1026,10 +1060,9 @@ func (c *PicoChannel) broadcastToSession(chatID string, msg PicoMessage) error {
 		}
 	}
 
-	// Typing starts are only observable when the turn was actually delivered
-	// to a session client at least once; otherwise StartTyping returns an error
-	// and no matching typing.stop would ever be emitted.
-	c.broadcastSessionActivity(sessionID, msg.Type, sent)
+	// Activity is observer-only: it never carries message content and is sent
+	// even when no client is attached to this specific session.
+	c.broadcastSessionActivity(sessionID, msg)
 
 	if !sent {
 		return fmt.Errorf("no active connections for session %s: %w", sessionID, channels.ErrSendFailed)
