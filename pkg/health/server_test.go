@@ -266,6 +266,27 @@ func TestRegisterCheck_MultipleChecks(t *testing.T) {
 	}
 }
 
+func TestRegisterProtectedHandlerRequiresBearerToken(t *testing.T) {
+	s := NewServer("127.0.0.1", 0, "gateway-secret")
+	s.RegisterProtectedHandler("/internal/test", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	unauthorized := httptest.NewRecorder()
+	s.mux.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "/internal/test", nil))
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized status = %d, want %d", unauthorized.Code, http.StatusUnauthorized)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/internal/test", nil)
+	req.Header.Set("Authorization", "Bearer gateway-secret")
+	authorized := httptest.NewRecorder()
+	s.mux.ServeHTTP(authorized, req)
+	if authorized.Code != http.StatusNoContent {
+		t.Fatalf("authorized status = %d, want %d", authorized.Code, http.StatusNoContent)
+	}
+}
+
 func TestRegisterOnMux(t *testing.T) {
 	s := newTestServer()
 	s.SetReady(true)

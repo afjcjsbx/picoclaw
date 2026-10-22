@@ -328,6 +328,9 @@ func TestConnectServerPublishesRuntimeEvents(t *testing.T) {
 		connected.Attrs["tool_count"] != 1 {
 		t.Fatalf("connected attrs = %#v", connected.Attrs)
 	}
+	if status := mgr.GetServerStatuses()["good"]; status.State != ConnectionConnected || len(status.Tools) != 1 {
+		t.Fatalf("connected status = %#v", status)
+	}
 
 	err = mgr.ConnectServer(context.Background(), "bad", config.MCPServerConfig{
 		Type:    "stdio",
@@ -344,6 +347,9 @@ func TestConnectServerPublishesRuntimeEvents(t *testing.T) {
 	}
 	if failed.Attrs["server"] != "bad" || failed.Attrs["error"] != "connect failed" {
 		t.Fatalf("failed attrs = %#v", failed.Attrs)
+	}
+	if status := mgr.GetServerStatuses()["bad"]; status.State != ConnectionError || status.Error != "connect failed" {
+		t.Fatalf("failed status = %#v", status)
 	}
 }
 
