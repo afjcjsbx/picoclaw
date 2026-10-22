@@ -569,7 +569,10 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 			"has_more":   hasMore,
 		})
 
-	return NewToolResult(header + "\n\n" + string(data))
+	// Scrub credential-looking values found in the file before the content
+	// reaches the model. The header above is built from the raw byte counts,
+	// so the reported range and the pagination offsets stay valid.
+	return NewToolResult(header + "\n\n" + redactSecrets(string(data)))
 }
 
 func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
@@ -727,8 +730,11 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 			displayLine = append(displayLine, '\n')
 		}
 
-		content.Write(prefix)
-		content.Write(displayLine)
+		// Rendered content is scrubbed before it reaches the model; byte
+		// accounting below stays on the raw line, so read budgets are
+		// unaffected by redaction.
+		content.WriteString(prefix)
+		content.WriteString(redactSecrets(string(displayLine)))
 		fileBytesRead += consumedBytes
 		outputBytesRead += int64(len(prefix) + len(displayLine))
 		linesRead++
