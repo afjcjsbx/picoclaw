@@ -129,11 +129,14 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 	mediaOpts := mediaResolveOptionsFor(pipeline.Cfg)
 	finalContent := exec.finalContent
 
+	// The graceful terminal iteration runs without tools and only once, so it
+	// may use the iteration at the cap itself.
 	for ts.currentIteration() < ts.agent.MaxIterations ||
-		(ts.currentIteration() < iterationHardCap && (len(exec.pendingMessages) > 0 || func() bool {
+		(ts.currentIteration() < iterationHardCap && len(exec.pendingMessages) > 0) ||
+		(ts.currentIteration() <= iterationHardCap && func() bool {
 			graceful, _ := ts.gracefulInterruptRequested()
 			return graceful
-		}())) {
+		}()) {
 		if ts.hardAbortRequested() {
 			turnStatus = TurnEndStatusAborted
 			return al.abortTurn(ts)
@@ -310,6 +313,13 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 				return result, finalizeErr
 			}
 		}
+	}
+
+	// The hard cap can end the turn with steering already pulled off the
+	// queue. Hand it back so the post-turn continuation still delivers it.
+	if ts.parentTurnState == nil {
+		al.requeueSteeringMessagesForScope(ts.sessionKey, exec.pendingMessages)
+		exec.pendingMessages = nil
 	}
 
 	if ts.hardAbortRequested() {
