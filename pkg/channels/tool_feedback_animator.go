@@ -9,6 +9,12 @@ import (
 
 const toolFeedbackAnimationInterval = 3 * time.Second
 
+// maxTrackedToolFeedbackAge bounds how long a progress card may stay tracked
+// and be reused. A tracked card is normally consumed by the final reply of the
+// same turn; anything older was left behind by an aborted turn, a failed
+// delivery, or a terminal notice, and must never be edited into a later reply.
+const maxTrackedToolFeedbackAge = 5 * time.Minute
+
 const initialToolFeedbackAnimationFrame = ""
 
 var toolFeedbackAnimationFrames = []string{"..", "."}
@@ -28,6 +34,7 @@ func MaxToolFeedbackAnimationFrameLength() int {
 type toolFeedbackAnimationState struct {
 	messageID   string
 	baseContent string
+	createdAt   time.Time
 	stop        chan struct{}
 	done        chan struct{}
 }
@@ -74,6 +81,7 @@ func (a *ToolFeedbackAnimator) Record(chatID, messageID, content string) {
 	entry := &toolFeedbackAnimationState{
 		messageID:   messageID,
 		baseContent: content,
+		createdAt:   time.Now(),
 		stop:        make(chan struct{}),
 		done:        make(chan struct{}),
 	}
@@ -107,6 +115,11 @@ func (a *ToolFeedbackAnimator) Take(chatID string) (string, string, bool) {
 		return "", "", false
 	}
 	stopToolFeedbackAnimation(entry)
+	// A card that predates the current turn must not be reused: editing it
+	// would rewrite an older bubble instead of posting the reply in place.
+	if !entry.createdAt.IsZero() && time.Since(entry.createdAt) > maxTrackedToolFeedbackAge {
+		return "", "", false
+	}
 	return entry.messageID, entry.baseContent, true
 }
 

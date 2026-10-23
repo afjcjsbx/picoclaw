@@ -995,7 +995,7 @@
       "summarize_threshold": "Summarize Message Threshold",
       "summarize_threshold_hint": "Start summarization after this many messages.",
       "summarize_token_percent": "Summarize Token Percent",
-      "summarize_token_percent_hint": "Used when conversation summary is triggered.",
+      "summarize_token_percent_hint": "Summarize once the prompt (system, history, tools) reaches this percent of the usable context window (context window minus max tokens).",
       "turn_profile": "Request Context Policy",
       "turn_profile_hint": "Controls what context each request carries. Leave disabled to keep the normal chat behavior.",
       "turn_profile_enabled": "Enable policy",
