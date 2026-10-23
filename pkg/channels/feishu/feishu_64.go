@@ -162,7 +162,8 @@ func (c *FeishuChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]st
 	}
 
 	isToolFeedback := outboundMessageIsToolFeedback(msg)
-	if isToolFeedback {
+	terminalToolFeedback := isToolFeedback && channels.OutboundToolFeedbackIsTerminal(msg)
+	if isToolFeedback && !terminalToolFeedback {
 		if msgID, handled, err := c.progress.Update(ctx, msg.ChatID, msg.Content); handled {
 			if err != nil {
 				// Feishu can fall back to plain text for a previous progress
@@ -183,7 +184,7 @@ func (c *FeishuChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]st
 
 	// Build interactive card with markdown content
 	sendContent := msg.Content
-	if isToolFeedback {
+	if isToolFeedback && !terminalToolFeedback {
 		sendContent = channels.InitialAnimatedToolFeedbackContent(msg.Content)
 	}
 	cardContent, err := buildMarkdownCard(sendContent)
@@ -193,7 +194,7 @@ func (c *FeishuChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]st
 		if sendErr != nil {
 			return nil, sendErr
 		}
-		if isToolFeedback {
+		if isToolFeedback && !terminalToolFeedback {
 			c.RecordToolFeedbackMessage(msg.ChatID, msgID, msg.Content)
 		} else if hasTrackedMsg {
 			c.dismissTrackedToolFeedbackMessage(ctx, msg.ChatID, trackedMsgID)
@@ -204,7 +205,7 @@ func (c *FeishuChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]st
 	// First attempt: try sending as interactive card
 	msgID, err := c.sendCard(ctx, msg.ChatID, cardContent)
 	if err == nil {
-		if isToolFeedback {
+		if isToolFeedback && !terminalToolFeedback {
 			c.RecordToolFeedbackMessage(msg.ChatID, msgID, msg.Content)
 		} else if hasTrackedMsg {
 			c.dismissTrackedToolFeedbackMessage(ctx, msg.ChatID, trackedMsgID)
@@ -226,7 +227,7 @@ func (c *FeishuChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]st
 		// Second attempt: fall back to plain text message
 		msgID, textErr := c.sendText(ctx, msg.ChatID, sendContent)
 		if textErr == nil {
-			if isToolFeedback {
+			if isToolFeedback && !terminalToolFeedback {
 				c.RecordToolFeedbackMessage(msg.ChatID, msgID, msg.Content)
 			} else if hasTrackedMsg {
 				c.dismissTrackedToolFeedbackMessage(ctx, msg.ChatID, trackedMsgID)
@@ -408,6 +409,10 @@ func (c *FeishuChannel) finalizeTrackedToolFeedbackMessage(
 		c.RecordToolFeedbackMessage(chatID, msgID, baseContent)
 		return nil, false
 	}
+	logger.InfoCF("feishu", "Finalized tracked tool feedback into reply", map[string]any{
+		"chat_id":    chatID,
+		"message_id": msgID,
+	})
 	return []string{msgID}, true
 }
 
