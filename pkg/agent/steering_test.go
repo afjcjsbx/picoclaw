@@ -937,12 +937,18 @@ func TestAgentLoop_Run_QueuedVoiceMessageIsTranscribedBeforeSteering(t *testing.
 
 	close(provider.releaseFirstCall)
 
+	// The voice message reaches the provider either as steering or as a turn of
+	// its own once the first one is done; in the latter case "first response"
+	// goes out first, so wait for the reply to the second call.
 	subCtx, subCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer subCancel()
-	select {
-	case <-msgBus.OutboundChan():
-	case <-subCtx.Done():
-		t.Fatal("expected outbound response")
+	for continued := false; !continued; {
+		select {
+		case out := <-msgBus.OutboundChan():
+			continued = out.Content == "continued response"
+		case <-subCtx.Done():
+			t.Fatal("expected outbound response to the second provider call")
+		}
 	}
 
 	cancelRun()
