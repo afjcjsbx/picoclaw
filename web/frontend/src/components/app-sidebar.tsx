@@ -487,6 +487,52 @@ export function AppSidebar({
             </Link>
           </Button>
         </div>
+        <Collapsible
+          key="navigation.chat"
+          defaultOpen
+          className="group/collapsible mb-1"
+        >
+          <SidebarGroup className="px-2 py-0">
+            <SidebarGroupLabel asChild>
+              <CollapsibleTrigger className="text-muted-foreground/80 hover:text-foreground hover:bg-sidebar-accent/70 flex w-full cursor-pointer items-center justify-between rounded-md px-2 py-1.5 text-[11px] font-semibold tracking-wide uppercase transition-colors">
+                <span>{t("navigation.chat")}</span>
+                <IconChevronRight className="size-3.5 opacity-50 transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
+              </CollapsibleTrigger>
+            </SidebarGroupLabel>
+            <CollapsibleContent>
+              <SidebarGroupContent className="pt-1">
+                <SidebarMenu>
+                  <SidebarMenuItem key="navigation.chat">
+                    <SidebarMenuButton
+                      asChild
+                      isActive={currentPath === "/"}
+                      tooltip={t("navigation.chat")}
+                      onClick={handleNavItemClick}
+                      className="h-9 rounded-lg px-3"
+                    >
+                      <Link to="/">
+                        <IconMessageCircle
+                          className={`size-4 ${
+                            currentPath === "/" ? "opacity-100" : "opacity-60"
+                          }`}
+                        />
+                        <span
+                          className={
+                            currentPath === "/"
+                              ? "opacity-100 group-data-[collapsible=icon]:hidden"
+                              : "opacity-80 group-data-[collapsible=icon]:hidden"
+                          }
+                        >
+                          {t("navigation.chat")}
+                        </span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </CollapsibleContent>
+          </SidebarGroup>
+        </Collapsible>
         {showSessionHistory && (
           <SidebarGroup className="px-2 py-0">
             <SidebarGroupLabel className="px-2">
@@ -768,93 +814,97 @@ export function AppSidebar({
             </SidebarGroupContent>
           </SidebarGroup>
         )}
-        {navGroups.map((group) => (
-          <Collapsible
-            key={group.label}
-            defaultOpen={group.defaultOpen}
-            className="group/collapsible mb-1"
-          >
-            <SidebarGroup className="px-2 py-0">
-              <SidebarGroupLabel asChild>
-                <CollapsibleTrigger className="text-muted-foreground/80 hover:text-foreground hover:bg-sidebar-accent/70 flex w-full cursor-pointer items-center justify-between rounded-md px-2 py-1.5 text-[11px] font-semibold tracking-wide uppercase transition-colors">
-                  <span>{t(group.label)}</span>
-                  <IconChevronRight className="size-3.5 opacity-50 transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
-                </CollapsibleTrigger>
-              </SidebarGroupLabel>
-              <CollapsibleContent>
-                <SidebarGroupContent className="pt-1">
-                  <SidebarMenu>
-                    {group.items.map((item) => {
-                      const isActive =
-                        currentPath === item.url ||
-                        (item.url !== "/" &&
-                          currentPath.startsWith(`${item.url}/`))
-                      return (
-                        <SidebarMenuItem key={item.title}>
-                          <SidebarMenuButton
-                            asChild
-                            isActive={isActive}
-                            tooltip={
-                              item.translateTitle === false
-                                ? item.title
-                                : t(item.title)
-                            }
-                            onClick={handleNavItemClick}
-                            data-tour={
-                              item.url === "/models" ? "models-nav" : undefined
-                            }
-                            className={`h-9 rounded-lg px-3 ${isActive ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium" : "text-muted-foreground hover:bg-sidebar-accent/70 hover:text-foreground"}`}
-                          >
-                            <Link to={item.url}>
-                              <item.icon
-                                className={`size-4 ${isActive ? "opacity-100" : "opacity-60"}`}
-                              />
-                              <span
-                                className={
-                                  isActive
-                                    ? "opacity-100 group-data-[collapsible=icon]:hidden"
-                                    : "opacity-80 group-data-[collapsible=icon]:hidden"
-                                }
-                              >
-                                {item.translateTitle === false
+        {navGroups
+          .filter((group) => group.label !== "navigation.chat")
+          .map((group) => (
+            <Collapsible
+              key={group.label}
+              defaultOpen={group.defaultOpen}
+              className="group/collapsible mb-1"
+            >
+              <SidebarGroup className="px-2 py-0">
+                <SidebarGroupLabel asChild>
+                  <CollapsibleTrigger className="text-muted-foreground/80 hover:text-foreground hover:bg-sidebar-accent/70 flex w-full cursor-pointer items-center justify-between rounded-md px-2 py-1.5 text-[11px] font-semibold tracking-wide uppercase transition-colors">
+                    <span>{t(group.label)}</span>
+                    <IconChevronRight className="size-3.5 opacity-50 transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
+                  </CollapsibleTrigger>
+                </SidebarGroupLabel>
+                <CollapsibleContent>
+                  <SidebarGroupContent className="pt-1">
+                    <SidebarMenu>
+                      {group.items.map((item) => {
+                        const isActive =
+                          currentPath === item.url ||
+                          (item.url !== "/" &&
+                            currentPath.startsWith(`${item.url}/`))
+                        return (
+                          <SidebarMenuItem key={item.title}>
+                            <SidebarMenuButton
+                              asChild
+                              isActive={isActive}
+                              tooltip={
+                                item.translateTitle === false
                                   ? item.title
-                                  : t(item.title)}
-                              </span>
-                            </Link>
+                                  : t(item.title)
+                              }
+                              onClick={handleNavItemClick}
+                              data-tour={
+                                item.url === "/models"
+                                  ? "models-nav"
+                                  : undefined
+                              }
+                              className={`h-9 rounded-lg px-3 ${isActive ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium" : "text-muted-foreground hover:bg-sidebar-accent/70 hover:text-foreground"}`}
+                            >
+                              <Link to={item.url}>
+                                <item.icon
+                                  className={`size-4 ${isActive ? "opacity-100" : "opacity-60"}`}
+                                />
+                                <span
+                                  className={
+                                    isActive
+                                      ? "opacity-100 group-data-[collapsible=icon]:hidden"
+                                      : "opacity-80 group-data-[collapsible=icon]:hidden"
+                                  }
+                                >
+                                  {item.translateTitle === false
+                                    ? item.title
+                                    : t(item.title)}
+                                </span>
+                              </Link>
+                            </SidebarMenuButton>
+                          </SidebarMenuItem>
+                        )
+                      })}
+                      {group.isChannelsGroup && hasMoreChannels && (
+                        <SidebarMenuItem key="channels-more-toggle">
+                          <SidebarMenuButton
+                            onClick={toggleShowAllChannels}
+                            tooltip={
+                              showAllChannels
+                                ? t("navigation.show_less_channels")
+                                : t("navigation.show_more_channels")
+                            }
+                            className="text-muted-foreground hover:bg-muted/60 h-9 px-3"
+                          >
+                            {showAllChannels ? (
+                              <IconChevronsUp className="size-4 opacity-60" />
+                            ) : (
+                              <IconChevronsDown className="size-4 opacity-60" />
+                            )}
+                            <span className="opacity-80 group-data-[collapsible=icon]:hidden">
+                              {showAllChannels
+                                ? t("navigation.show_less_channels")
+                                : t("navigation.show_more_channels")}
+                            </span>
                           </SidebarMenuButton>
                         </SidebarMenuItem>
-                      )
-                    })}
-                    {group.isChannelsGroup && hasMoreChannels && (
-                      <SidebarMenuItem key="channels-more-toggle">
-                        <SidebarMenuButton
-                          onClick={toggleShowAllChannels}
-                          tooltip={
-                            showAllChannels
-                              ? t("navigation.show_less_channels")
-                              : t("navigation.show_more_channels")
-                          }
-                          className="text-muted-foreground hover:bg-muted/60 h-9 px-3"
-                        >
-                          {showAllChannels ? (
-                            <IconChevronsUp className="size-4 opacity-60" />
-                          ) : (
-                            <IconChevronsDown className="size-4 opacity-60" />
-                          )}
-                          <span className="opacity-80 group-data-[collapsible=icon]:hidden">
-                            {showAllChannels
-                              ? t("navigation.show_less_channels")
-                              : t("navigation.show_more_channels")}
-                          </span>
-                        </SidebarMenuButton>
-                      </SidebarMenuItem>
-                    )}
-                  </SidebarMenu>
-                </SidebarGroupContent>
-              </CollapsibleContent>
-            </SidebarGroup>
-          </Collapsible>
-        ))}
+                      )}
+                    </SidebarMenu>
+                  </SidebarGroupContent>
+                </CollapsibleContent>
+              </SidebarGroup>
+            </Collapsible>
+          ))}
       </SidebarContent>
       <SidebarFooter className="border-sidebar-border border-t">
         <AppSidebarControls />
