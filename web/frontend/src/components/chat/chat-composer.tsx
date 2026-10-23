@@ -1,9 +1,17 @@
-import { IconArrowUp, IconFileText, IconPlus, IconX } from "@tabler/icons-react"
+import {
+  IconArrowUp,
+  IconFileText,
+  IconMicrophone,
+  IconPlayerStop,
+  IconPlus,
+  IconX,
+} from "@tabler/icons-react"
 import {
   type ClipboardEvent as ReactClipboardEvent,
   type DragEvent as ReactDragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -11,11 +19,22 @@ import {
 } from "react"
 import { useTranslation } from "react-i18next"
 import TextareaAutosize from "react-textarea-autosize"
+import { toast } from "sonner"
 
 import type { SlashCommand } from "@/api/commands"
 import { ContextUsageRing } from "@/components/chat/context-usage-ring"
 import { SlashCommandPalette } from "@/components/chat/slash-command-palette"
 import { Button } from "@/components/ui/button"
+import {
+  AudioAttachmentTooLargeError,
+  MAX_AUDIO_ATTACHMENT_BYTES,
+  MAX_AUDIO_RECORDING_MS,
+  audioRecordingErrorKind,
+  audioRecordingNeedsSecureContext,
+  buildAudioAttachment,
+  formatRecordingDuration,
+  isAudioRecordingSupported,
+} from "@/features/chat/audio-recorder"
 import {
   type SlashPaletteEntry,
   type SlashPaletteItem,
@@ -28,6 +47,7 @@ import {
   slashQueryFromInput,
   storeSlashRecents,
 } from "@/features/chat/slash-commands"
+import { useAudioRecorder } from "@/hooks/use-audio-recorder"
 import { cn } from "@/lib/utils"
 import type { ChatAttachment, ContextUsage } from "@/store/chat"
 
@@ -55,6 +75,7 @@ interface ChatComposerProps {
   onDrop: (event: ReactDragEvent<HTMLDivElement>) => void
   onRemoveAttachment: (index: number) => void
   onSend: () => void
+  onSendAudio: (attachment: ChatAttachment) => boolean
   modelSelector?: ReactNode
   onContextDetail?: () => void
   inputDisabledReason: ChatInputDisabledReason | null
@@ -63,6 +84,13 @@ interface ChatComposerProps {
   contextUsage?: ContextUsage
   slashCommands?: SlashCommand[]
 }
+
+const AUDIO_RECORDING_ERROR_KEYS = {
+  permissionDenied: "chat.micPermissionDenied",
+  unavailable: "chat.microphoneUnavailable",
+  unsupported: "chat.recordingUnsupported",
+  failed: "chat.recordingFailed",
+} as const
 
 export function ChatComposer({
   input,
@@ -76,6 +104,7 @@ export function ChatComposer({
   onDrop,
   onRemoveAttachment,
   onSend,
+  onSendAudio,
   modelSelector,
   onContextDetail,
   inputDisabledReason,
@@ -93,6 +122,21 @@ export function ChatComposer({
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0)
   const [recentCommands, setRecentCommands] = useState<string[]>(() =>
     readSlashRecents(),
+  )
+  const {
+    isRecording,
+    isStarting: isStartingRecording,
+    elapsedMs: recordingElapsedMs,
+    start: startRecording,
+    stop: stopRecording,
+    cancel: cancelRecording,
+  } = useAudioRecorder()
+  const [isFinishingRecording, setIsFinishingRecording] = useState(false)
+  const finishingRecordingRef = useRef(false)
+  const audioRecordingSupported = useMemo(() => isAudioRecordingSupported(), [])
+  const audioRecordingNeedsHttps = useMemo(
+    () => audioRecordingNeedsSecureContext(),
+    [],
   )
   const hasInput = input.trim().length > 0
   const disabledMessage =
@@ -168,6 +212,59 @@ export function ChatComposer({
     textareaRef.current?.focus()
   }
 
+  const finishRecording = useCallback(async () => {
+    if (finishingRecordingRef.current) return
+    finishingRecordingRef.current = true
+    setIsFinishingRecording(true)
+    try {
+      const recorded = await stopRecording()
+      if (!recorded) return
+      const attachment = await buildAudioAttachment(recorded)
+      if (!onSendAudio(attachment)) {
+        toast.error(t("chat.audioSendFailed"))
+      }
+    } catch (error) {
+      if (error instanceof AudioAttachmentTooLargeError) {
+        const size = `${Math.round(MAX_AUDIO_ATTACHMENT_BYTES / (1024 * 1024))} MB`
+        toast.error(t("chat.audioTooLarge", { size }))
+      } else {
+        toast.error(t("chat.recordingFailed"))
+      }
+    } finally {
+      finishingRecordingRef.current = false
+      setIsFinishingRecording(false)
+    }
+  }, [onSendAudio, stopRecording, t])
+
+  useEffect(() => {
+    if (!isRecording || recordingElapsedMs < MAX_AUDIO_RECORDING_MS) return
+    void finishRecording()
+  }, [finishRecording, isRecording, recordingElapsedMs])
+
+  useEffect(() => {
+    if (canInput || (!isRecording && !isStartingRecording)) return
+    // The gateway or socket went away, so the recording could never be sent.
+    cancelRecording()
+  }, [canInput, cancelRecording, isRecording, isStartingRecording])
+
+  const handleMicrophoneClick = async () => {
+    if (!canInput) return
+    if (!audioRecordingSupported) {
+      toast.error(t("chat.recordingNeedsHttps"))
+      return
+    }
+    if (isRecording) {
+      await finishRecording()
+      return
+    }
+
+    try {
+      await startRecording()
+    } catch (error) {
+      toast.error(t(AUDIO_RECORDING_ERROR_KEYS[audioRecordingErrorKind(error)]))
+    }
+  }
+
   const handleKeyDown = (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     const nativeEvent = e.nativeEvent as Event & {
       isComposing?: boolean
@@ -178,6 +275,9 @@ export function ChatComposer({
       nativeEvent.isComposing ||
       nativeEvent.keyCode === 229
     ) {
+      return
+    }
+    if (isRecording) {
       return
     }
     if (showPalette) {
@@ -312,19 +412,44 @@ export function ChatComposer({
           />
 
           <div className="mt-2 flex items-center justify-between px-1">
-            <div className="flex items-center gap-1">
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="text-muted-foreground hover:text-foreground h-8 w-8 rounded-full"
-                onClick={onAddFiles}
-                disabled={!canInput}
-                aria-label={t("chat.attachFiles")}
-                title={t("chat.attachFiles")}
-              >
-                <IconPlus className="size-4" />
-              </Button>
+            <div className="flex min-w-0 items-center gap-1">
+              {isRecording ? (
+                <div className="flex items-center gap-2 rounded-full border border-red-500/30 bg-red-500/10 px-2.5 py-1 text-xs text-red-600 dark:text-red-400">
+                  <span
+                    aria-hidden="true"
+                    className="size-2 animate-pulse rounded-full bg-red-500"
+                  />
+                  <span className="tabular-nums">
+                    {formatRecordingDuration(recordingElapsedMs)}
+                  </span>
+                  <span className="hidden sm:inline">
+                    {t("chat.recording")}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={cancelRecording}
+                    disabled={isFinishingRecording}
+                    className="text-muted-foreground hover:text-foreground inline-flex size-4 items-center justify-center rounded-full"
+                    aria-label={t("chat.cancelRecording")}
+                    title={t("chat.cancelRecording")}
+                  >
+                    <IconX className="size-3.5" />
+                  </button>
+                </div>
+              ) : (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="text-muted-foreground hover:text-foreground h-8 w-8 rounded-full"
+                  onClick={onAddFiles}
+                  disabled={!canInput}
+                  aria-label={t("chat.attachFiles")}
+                  title={t("chat.attachFiles")}
+                >
+                  <IconPlus className="size-4" />
+                </Button>
+              )}
             </div>
 
             <div className="flex items-center gap-1.5">
@@ -335,6 +460,40 @@ export function ChatComposer({
                 />
               )}
               {modelSelector}
+              {canInput &&
+              (audioRecordingSupported || audioRecordingNeedsHttps) ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className={cn(
+                    "h-8 w-8 rounded-full",
+                    isRecording
+                      ? "bg-red-500 text-white hover:bg-red-600"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                  onClick={() => void handleMicrophoneClick()}
+                  disabled={isStartingRecording || isFinishingRecording}
+                  aria-label={
+                    isRecording
+                      ? t("chat.stopRecording")
+                      : t("chat.recordVoiceMessage")
+                  }
+                  title={
+                    isRecording
+                      ? t("chat.stopRecording")
+                      : audioRecordingNeedsHttps
+                        ? t("chat.recordingNeedsHttps")
+                        : t("chat.recordVoiceMessage")
+                  }
+                >
+                  {isRecording ? (
+                    <IconPlayerStop className="size-4" />
+                  ) : (
+                    <IconMicrophone className="size-4" />
+                  )}
+                </Button>
+              ) : null}
               {canInput ? (
                 <span tabIndex={!canSend ? 0 : undefined}>
                   <Button
@@ -342,7 +501,7 @@ export function ChatComposer({
                     size="icon"
                     className="size-8 rounded-full bg-violet-500 text-white transition-transform hover:bg-violet-600 active:scale-95"
                     onClick={onSend}
-                    disabled={!canSend}
+                    disabled={!canSend || isRecording}
                     aria-label={t("chat.sendMessage")}
                   >
                     <IconArrowUp className="size-4" />

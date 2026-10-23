@@ -23,6 +23,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/identity"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	mediastore "github.com/sipeed/picoclaw/pkg/media"
 	"github.com/sipeed/picoclaw/pkg/textutil"
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
@@ -60,10 +61,28 @@ var allowedInlineTextMIMETypes = map[string]struct{}{
 	"text/x-ruby": {}, "text/x-php": {},
 }
 
+var allowedInlineAudioMIMETypes = map[string]struct{}{
+	"audio/webm":  {},
+	"audio/ogg":   {},
+	"audio/mp4":   {},
+	"audio/mpeg":  {},
+	"audio/wav":   {},
+	"audio/x-wav": {},
+	"audio/flac":  {},
+	"audio/aac":   {},
+	"audio/x-m4a": {},
+}
+
 type picoUploadedFile struct {
 	Filename string `json:"filename"`
 	Path     string `json:"path"`
 	Type     string `json:"type"`
+}
+
+type picoInlineAudioAttachment struct {
+	DataURL     string
+	Filename    string
+	ContentType string
 }
 
 func outboundMessageIsThought(msg bus.OutboundMessage) bool {
@@ -1305,6 +1324,13 @@ func (c *PicoChannel) handleMessageSend(pc *picoConn, msg PicoMessage) {
 		pc.writeJSON(errMsg)
 		return
 	}
+	audioAttachments, err := parseInlineAudioAttachments(msg.Payload["attachments"])
+	if err != nil {
+		pc.writeJSON(newErrorWithPayload("invalid_media", err.Error(), map[string]any{
+			"request_id": msg.ID,
+		}))
+		return
+	}
 	attachmentsToStore, err := picoAttachmentsToStore(msg.Payload["attachments"], media)
 	if err != nil {
 		pc.writeJSON(newErrorWithPayload("invalid_media", err.Error(), map[string]any{
@@ -1312,6 +1338,29 @@ func (c *PicoChannel) handleMessageSend(pc *picoConn, msg PicoMessage) {
 		}))
 		return
 	}
+
+	sessionID := msg.SessionID
+	if sessionID == "" {
+		sessionID = pc.sessionID
+	}
+
+	chatID := "pico:" + sessionID
+
+	// Voice notes are registered with the media store so the agent can
+	// transcribe them before the turn starts, like other channels do.
+	audioMedia, err := c.storeInlineAudioAttachments(
+		channels.BuildMediaScope("pico", chatID, msg.ID),
+		audioAttachments,
+	)
+	if err != nil {
+		pc.writeJSON(newErrorWithPayload("upload_failed", err.Error(), map[string]any{
+			"request_id": msg.ID,
+		}))
+		return
+	}
+	content = appendAudioAnnotations(content, audioAttachments)
+	media = append(media, audioMedia...)
+
 	// Persisting uploads needs a workspace to write into. When none is
 	// configured, fall back to forwarding the inline media as-is instead of
 	// rejecting the message.
@@ -1324,7 +1373,7 @@ func (c *PicoChannel) handleMessageSend(pc *picoConn, msg PicoMessage) {
 			return
 		}
 		if len(uploadedFiles) > 0 {
-			media = nil
+			media = audioMedia
 			content = appendUploadedFiles(content, uploadedFiles)
 		}
 	}
@@ -1337,12 +1386,6 @@ func (c *PicoChannel) handleMessageSend(pc *picoConn, msg PicoMessage) {
 		return
 	}
 
-	sessionID := msg.SessionID
-	if sessionID == "" {
-		sessionID = pc.sessionID
-	}
-
-	chatID := "pico:" + sessionID
 	senderID := "pico-user"
 
 	metadata := map[string]string{
@@ -1432,6 +1475,164 @@ func appendUploadedFiles(content string, files []picoUploadedFile) string {
 	}
 	serialized, _ := json.Marshal(paths)
 	return content + "\n\n<uploaded_files>\n" + string(serialized) + "\n</uploaded_files>"
+}
+
+// parseInlineAudioAttachments extracts voice-note attachments carried as
+// base64 data URLs. Audio is registered with the media store instead of the
+// workspace so the agent can transcribe it before running the turn.
+func parseInlineAudioAttachments(raw any) ([]picoInlineAudioAttachment, error) {
+	if raw == nil {
+		return nil, nil
+	}
+
+	values, ok := raw.([]any)
+	if !ok {
+		return nil, fmt.Errorf("attachments must be an array")
+	}
+
+	attachments := make([]picoInlineAudioAttachment, 0, len(values))
+	for i, item := range values {
+		attachment, ok := item.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("attachments[%d]: attachment must be an object", i)
+		}
+
+		attachmentType, _ := attachment["type"].(string)
+		attachmentType = strings.ToLower(strings.TrimSpace(attachmentType))
+		if attachmentType != "audio" {
+			continue
+		}
+
+		dataURL, err := inlineImageValue(attachment)
+		if err != nil {
+			return nil, fmt.Errorf("attachments[%d]: %w", i, err)
+		}
+		contentType, _, err := decodeInlineAttachmentDataURL(dataURL)
+		if err != nil {
+			return nil, fmt.Errorf("attachments[%d]: %w", i, err)
+		}
+		if _, allowed := allowedInlineAudioMIMETypes[contentType]; !allowed {
+			return nil, fmt.Errorf("attachments[%d]: unsupported audio format: %s", i, contentType)
+		}
+
+		filename, _ := attachment["filename"].(string)
+		attachments = append(attachments, picoInlineAudioAttachment{
+			DataURL:     dataURL,
+			Filename:    picoAudioFilename(filename, contentType),
+			ContentType: contentType,
+		})
+	}
+
+	return attachments, nil
+}
+
+func appendAudioAnnotations(content string, attachments []picoInlineAudioAttachment) string {
+	if len(attachments) == 0 {
+		return content
+	}
+
+	tags := make([]string, 0, len(attachments))
+	for _, attachment := range attachments {
+		tags = append(tags, fmt.Sprintf("[audio: %s]", attachment.Filename))
+	}
+	tagLine := strings.Join(tags, " ")
+
+	if strings.TrimSpace(content) == "" {
+		return tagLine
+	}
+	return strings.TrimRight(content, " \t\r\n") + "\n" + tagLine
+}
+
+func picoAudioFilename(raw, contentType string) string {
+	name := filepath.Base(strings.ReplaceAll(strings.TrimSpace(raw), `\`, "/"))
+	// Keep the name from breaking the [audio: ...] annotation that the agent
+	// scans for when replacing voice notes with transcriptions.
+	name = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f || r == '[' || r == ']' {
+			return '_'
+		}
+		return r
+	}, name)
+	if name == "" || name == "." || name == ".." || name == string(filepath.Separator) {
+		name = "voice"
+	}
+	name = strings.TrimSuffix(name, filepath.Ext(name))
+	if name == "" {
+		name = "voice"
+	}
+	return name + picoAudioExtension(contentType)
+}
+
+func picoAudioExtension(contentType string) string {
+	switch strings.ToLower(strings.TrimSpace(contentType)) {
+	case "audio/webm":
+		return ".webm"
+	case "audio/ogg":
+		return ".ogg"
+	case "audio/mp4", "audio/x-m4a":
+		return ".m4a"
+	case "audio/mpeg":
+		return ".mp3"
+	case "audio/wav", "audio/x-wav":
+		return ".wav"
+	case "audio/flac":
+		return ".flac"
+	case "audio/aac":
+		return ".aac"
+	}
+	if extensions, err := mime.ExtensionsByType(contentType); err == nil && len(extensions) > 0 {
+		return extensions[0]
+	}
+	return ".bin"
+}
+
+func (c *PicoChannel) storeInlineAudioAttachments(
+	scope string,
+	attachments []picoInlineAudioAttachment,
+) ([]string, error) {
+	if len(attachments) == 0 {
+		return nil, nil
+	}
+
+	store := c.GetMediaStore()
+	if store == nil {
+		// Without a media store there is no transcription pipeline; forward the
+		// inline audio payload as-is rather than dropping the user's message.
+		refs := make([]string, 0, len(attachments))
+		for _, attachment := range attachments {
+			refs = append(refs, attachment.DataURL)
+		}
+		return refs, nil
+	}
+
+	audioDir := filepath.Join(mediastore.TempDir(), "pico-audio")
+	if err := os.MkdirAll(audioDir, 0o700); err != nil {
+		return nil, fmt.Errorf("create audio directory: %w", err)
+	}
+
+	refs := make([]string, 0, len(attachments))
+	for i, attachment := range attachments {
+		_, data, err := decodeInlineAttachmentDataURL(attachment.DataURL)
+		if err != nil {
+			return nil, fmt.Errorf("attachments[%d]: %w", i, err)
+		}
+		localPath := filepath.Join(audioDir, uuid.NewString()+picoAudioExtension(attachment.ContentType))
+		if writeErr := os.WriteFile(localPath, data, 0o600); writeErr != nil {
+			return nil, fmt.Errorf("save audio attachment: %w", writeErr)
+		}
+		ref, err := store.Store(localPath, mediastore.MediaMeta{
+			Filename:      attachment.Filename,
+			ContentType:   attachment.ContentType,
+			Source:        "pico",
+			CleanupPolicy: mediastore.CleanupPolicyDeleteOnCleanup,
+		}, scope)
+		if err != nil {
+			_ = os.Remove(localPath)
+			return nil, fmt.Errorf("store audio attachment: %w", err)
+		}
+		refs = append(refs, ref)
+	}
+	return refs, nil
 }
 
 func (c *PicoChannel) storeInlineAttachments(raw any) (files []picoUploadedFile, err error) {
@@ -1672,7 +1873,8 @@ func decodeInlineAttachmentDataURL(mediaURL string) (string, []byte, error) {
 	_, isImage := allowedInlineImageMIMETypes[mimeType]
 	_, isText := allowedInlineTextMIMETypes[mimeType]
 	isText = isText || strings.HasPrefix(mimeType, "text/")
-	if !isImage && !isText && mimeType != allowedInlinePDFMIMEType {
+	_, isAudio := allowedInlineAudioMIMETypes[mimeType]
+	if !isImage && !isText && !isAudio && mimeType != allowedInlinePDFMIMEType {
 		return "", nil, fmt.Errorf("unsupported attachment format: %s", mimeType)
 	}
 
