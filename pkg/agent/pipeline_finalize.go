@@ -48,10 +48,14 @@ func (p *Pipeline) Finalize(
 			ModelName:        exec.llmModelName,
 			ReasoningContent: responseReasoningContent(exec.response),
 		}
-		ts.agent.Sessions.AddFullMessage(ts.sessionKey, finalMsg)
+		warnSessionStoreError(
+			ts.sessionKey,
+			"add full message",
+			ts.agent.Sessions.AddFullMessage(ctx, ts.sessionKey, finalMsg),
+		)
 		ts.recordPersistedMessage(finalMsg)
 		ts.ingestMessage(turnCtx, al, finalMsg)
-		if err := ts.agent.Sessions.Save(ts.sessionKey); err != nil {
+		if err := ts.agent.Sessions.Save(ctx, ts.sessionKey); err != nil {
 			al.emitEvent(
 				runtimeevents.KindAgentError,
 				ts.eventMeta("runTurn", "turn.error"),

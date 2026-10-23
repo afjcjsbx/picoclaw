@@ -4,6 +4,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"strings"
 	"sync"
@@ -134,6 +135,11 @@ type turnExecution struct {
 	activeProvider    providers.LLMProvider
 	usedLight         bool
 
+	// Mid-turn routing guards. toolIterationStreak counts consecutive
+	// light-model responses that requested tools.
+	toolIterationStreak int
+	escalatedToPrimary  bool
+
 	// LLM call per-iteration state
 	response            *providers.LLMResponse
 	normalizedToolCalls []providers.ToolCall
@@ -229,7 +235,10 @@ type turnState struct {
 
 	restorePointHistory []providers.Message
 	restorePointSummary string
-	persistedMessages   []providers.Message
+	// restoreSummaryPinned freezes restorePointSummary once the session summary
+	// holds part of this turn, so a rollback does not keep the aborted work.
+	restoreSummaryPinned bool
+	persistedMessages    []providers.Message
 
 	// SubTurn support (from HEAD)
 	depth                int                    // SubTurn depth (0 for root turn)
@@ -306,10 +315,21 @@ func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScop
 	// Bind session store and capture initial history length for rollback logic
 	if agent != nil && agent.Sessions != nil {
 		ts.session = agent.Sessions
-		history := agent.Sessions.GetHistory(opts.Dispatch.SessionKey)
+		// newTurnState has no context of its own; the snapshot it takes only
+		// touches the local session store, so a background context is used.
+		history, err := agent.Sessions.GetHistory(context.Background(), opts.Dispatch.SessionKey)
+		if err != nil {
+			warnSessionStoreError(opts.Dispatch.SessionKey, "get history", err)
+			history = []providers.Message{}
+		}
 		ts.initialHistoryLength = len(history)
 		ts.restorePointHistory = append([]providers.Message(nil), history...)
-		ts.restorePointSummary = agent.Sessions.GetSummary(opts.Dispatch.SessionKey)
+		summary, err := agent.Sessions.GetSummary(context.Background(), opts.Dispatch.SessionKey)
+		if err != nil {
+			warnSessionStoreError(opts.Dispatch.SessionKey, "get summary", err)
+			summary = ""
+		}
+		ts.restorePointSummary = summary
 	}
 
 	return ts
@@ -707,13 +727,34 @@ func (ts *turnState) captureRestorePoint(history []providers.Message, summary st
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	ts.restorePointHistory = append([]providers.Message(nil), history...)
-	ts.restorePointSummary = summary
+	if !ts.restoreSummaryPinned {
+		ts.restorePointSummary = summary
+	}
+}
+
+// pinRestoreSummary sets the summary a rollback restores to summary, the last
+// one free of this turn, and keeps it there for the rest of the turn.
+func (ts *turnState) pinRestoreSummary(summary string) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if !ts.restoreSummaryPinned {
+		ts.restorePointSummary = summary
+		ts.restoreSummaryPinned = true
+	}
 }
 
 func (ts *turnState) recordPersistedMessage(msg providers.Message) {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	ts.persistedMessages = append(ts.persistedMessages, msg)
+}
+
+// replacePersistedMessages rewrites the turn's persisted-message record after
+// compaction replaced part of the turn in the session.
+func (ts *turnState) replacePersistedMessages(msgs []providers.Message) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.persistedMessages = append([]providers.Message(nil), msgs...)
 }
 
 func (ts *turnState) persistedMessagesSnapshot() []providers.Message {
@@ -723,8 +764,18 @@ func (ts *turnState) persistedMessagesSnapshot() []providers.Message {
 }
 
 func (ts *turnState) refreshRestorePointFromSession(agent *AgentInstance) {
-	history := agent.Sessions.GetHistory(ts.sessionKey)
-	summary := agent.Sessions.GetSummary(ts.sessionKey)
+	// The helper has no context of its own; refreshing the restore point only
+	// touches the local session store, so a background context is used.
+	history, err := agent.Sessions.GetHistory(context.Background(), ts.sessionKey)
+	if err != nil {
+		warnSessionStoreError(ts.sessionKey, "get history", err)
+		history = []providers.Message{}
+	}
+	summary, err := agent.Sessions.GetSummary(context.Background(), ts.sessionKey)
+	if err != nil {
+		warnSessionStoreError(ts.sessionKey, "get summary", err)
+		summary = ""
+	}
 
 	persisted := ts.persistedMessagesSnapshot()
 
@@ -733,6 +784,17 @@ func (ts *turnState) refreshRestorePointFromSession(agent *AgentInstance) {
 	}
 
 	ts.captureRestorePoint(history, summary)
+	// Compaction may have shrunk the history that precedes this turn; a hard
+	// abort rolls the session back to exactly that length.
+	ts.mu.Lock()
+	ts.initialHistoryLength = len(history)
+	ts.mu.Unlock()
+}
+
+func (ts *turnState) initialHistoryLen() int {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return ts.initialHistoryLength
 }
 
 // ingestMessage calls the ContextManager's Ingest method for a persisted message.
@@ -758,9 +820,16 @@ func (ts *turnState) restoreSession(agent *AgentInstance) error {
 	summary := ts.restorePointSummary
 	ts.mu.RUnlock()
 
-	agent.Sessions.SetHistory(ts.sessionKey, history)
-	agent.Sessions.SetSummary(ts.sessionKey, summary)
-	return agent.Sessions.Save(ts.sessionKey)
+	// restoreSession has no context of its own; restoring only touches the
+	// local session store, so a background context is used.
+	ctx := context.Background()
+	if err := agent.Sessions.SetHistory(ctx, ts.sessionKey, history); err != nil {
+		return fmt.Errorf("restore session history: %w", err)
+	}
+	if err := agent.Sessions.SetSummary(ctx, ts.sessionKey, summary); err != nil {
+		return fmt.Errorf("restore session summary: %w", err)
+	}
+	return agent.Sessions.Save(ctx, ts.sessionKey)
 }
 
 func matchingTurnMessageTail(history, persisted []providers.Message) int {
@@ -807,6 +876,9 @@ func normalizeMessageForComparison(msg providers.Message) providers.Message {
 	msg.PromptLayer = ""
 	msg.PromptSlot = ""
 	msg.PromptSource = ""
+	// The session store stamps CreatedAt on what it keeps; the turn's own record
+	// of the same message has none.
+	msg.CreatedAt = nil
 
 	if len(msg.Media) == 0 {
 		msg.Media = nil

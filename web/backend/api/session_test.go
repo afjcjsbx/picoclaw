@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -1708,9 +1709,13 @@ func TestHandleGetSession_LegacyJSONFallback(t *testing.T) {
 	dir := sessionsTestDir(t, configPath)
 	manager := session.NewSessionManager(dir)
 	sessionKey := legacyPicoSessionPrefix + "legacy-json"
-	manager.AddMessage(sessionKey, "user", "legacy user")
-	manager.AddMessage(sessionKey, "assistant", "legacy assistant")
-	if err := manager.Save(sessionKey); err != nil {
+	if err := manager.AddMessage(context.Background(), sessionKey, "user", "legacy user"); err != nil {
+		t.Fatalf("AddMessage() error = %v", err)
+	}
+	if err := manager.AddMessage(context.Background(), sessionKey, "assistant", "legacy assistant"); err != nil {
+		t.Fatalf("AddMessage() error = %v", err)
+	}
+	if err := manager.Save(context.Background(), sessionKey); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
 

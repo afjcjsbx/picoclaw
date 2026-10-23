@@ -51,6 +51,16 @@ func NewToolRegistry() *ToolRegistry {
 
 // RegisterUnique is the external-capability registration boundary. Unlike
 // Register it never replaces an existing tool. A filtered tool returns false.
+// storeEntryLocked stores an entry under name and applies the registry-wide
+// media store. Callers own the lock and decide the duplicate policy.
+func (r *ToolRegistry) storeEntryLocked(name string, tool Tool, isCore bool) {
+	r.tools[name] = &ToolEntry{Tool: tool, IsCore: isCore}
+	if aware, ok := tool.(mediaStoreAware); ok && r.mediaStore != nil {
+		aware.SetMediaStore(r.mediaStore)
+	}
+	r.version.Add(1)
+}
+
 func (r *ToolRegistry) RegisterUnique(tool Tool, hidden bool) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -61,11 +71,7 @@ func (r *ToolRegistry) RegisterUnique(tool Tool, hidden bool) (bool, error) {
 	if _, exists := r.tools[name]; exists {
 		return false, fmt.Errorf("tool %q already registered", name)
 	}
-	r.tools[name] = &ToolEntry{Tool: tool, IsCore: !hidden}
-	if aware, ok := tool.(mediaStoreAware); ok && r.mediaStore != nil {
-		aware.SetMediaStore(r.mediaStore)
-	}
-	r.version.Add(1)
+	r.storeEntryLocked(name, tool, !hidden)
 	return true, nil
 }
 
@@ -117,15 +123,7 @@ func (r *ToolRegistry) Register(tool Tool) {
 		logger.WarnCF("tools", "Tool registration overwrites existing tool",
 			map[string]any{"name": name})
 	}
-	r.tools[name] = &ToolEntry{
-		Tool:   tool,
-		IsCore: true,
-		TTL:    0, // Core tools do not use TTL
-	}
-	if aware, ok := tool.(mediaStoreAware); ok && r.mediaStore != nil {
-		aware.SetMediaStore(r.mediaStore)
-	}
-	r.version.Add(1)
+	r.storeEntryLocked(name, tool, true)
 	logger.DebugCF("tools", "Registered core tool", map[string]any{"name": name})
 }
 
@@ -146,15 +144,7 @@ func (r *ToolRegistry) RegisterHidden(tool Tool) {
 		logger.WarnCF("tools", "Hidden tool registration overwrites existing tool",
 			map[string]any{"name": name})
 	}
-	r.tools[name] = &ToolEntry{
-		Tool:   tool,
-		IsCore: false,
-		TTL:    0,
-	}
-	if aware, ok := tool.(mediaStoreAware); ok && r.mediaStore != nil {
-		aware.SetMediaStore(r.mediaStore)
-	}
-	r.version.Add(1)
+	r.storeEntryLocked(name, tool, false)
 	logger.DebugCF("tools", "Registered hidden tool", map[string]any{"name": name})
 }
 
@@ -663,23 +653,4 @@ func (r *ToolRegistry) GetSummaries() []string {
 		)
 	}
 	return summaries
-}
-
-// GetAll returns all registered tools (both core and non-core with TTL > 0).
-// Used by SubTurn to inherit parent's tool set.
-func (r *ToolRegistry) GetAll() []Tool {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	sorted := r.sortedToolNames()
-	tools := make([]Tool, 0, len(sorted))
-	for _, name := range sorted {
-		entry := r.tools[name]
-
-		// Include core tools and non-core tools with active TTL
-		if entry.IsCore || entry.TTL > 0 {
-			tools = append(tools, entry.Tool)
-		}
-	}
-	return tools
 }

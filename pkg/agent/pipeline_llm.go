@@ -81,7 +81,9 @@ func (p *Pipeline) CallLLM(
 	applyTurnThinkingOptions(exec, ts.agent, exec.activeProvider, true)
 
 	exec.llmModel = exec.activeModel
-	nativeSearchBeforeHook := exec.useNativeSearch
+	if exec.escalatedToPrimary {
+		exec.llmModelName = resolvedCandidateModelName(exec.activeCandidates, exec.activeModel)
+	}
 
 	// BeforeLLM hook
 	if p.Hooks != nil {
@@ -120,29 +122,36 @@ func (p *Pipeline) CallLLM(
 			return ControlBreak, nil
 		}
 	}
-	exec.useNativeSearch = webSearchEnabled && al.cfg.Tools.Web.PreferNative &&
-		func() bool {
-			if ns, ok := exec.activeProvider.(providers.NativeSearchCapable); ok {
-				return ns.SupportsNativeSearch()
-			}
-			return false
-		}()
-	if nativeSearchBeforeHook && !exec.useNativeSearch {
-		exec.providerToolDefs = restoreToolDefinition(
-			exec.providerToolDefs,
-			filterToolsByTurnProfile(ts.agent.Tools.ToProviderDefs(), ts.profile),
-			"web_search",
-		)
-	}
-	if exec.useNativeSearch {
-		exec.providerToolDefs = filterClientWebSearch(exec.providerToolDefs)
-		if exec.llmOpts == nil {
-			exec.llmOpts = make(map[string]any)
+	// refreshNativeSearch re-derives native search from the active provider and
+	// adjusts the tool definitions and options to match. It must run again
+	// whenever the active provider changes after the request was built.
+	refreshNativeSearch := func() {
+		wasNative := exec.useNativeSearch
+		exec.useNativeSearch = webSearchEnabled && al.cfg.Tools.Web.PreferNative &&
+			func() bool {
+				if ns, ok := exec.activeProvider.(providers.NativeSearchCapable); ok {
+					return ns.SupportsNativeSearch()
+				}
+				return false
+			}()
+		if wasNative && !exec.useNativeSearch && !exec.gracefulTerminal {
+			exec.providerToolDefs = restoreToolDefinition(
+				exec.providerToolDefs,
+				filterToolsByTurnProfile(ts.agent.Tools.ToProviderDefs(), ts.profile),
+				"web_search",
+			)
 		}
-		exec.llmOpts["native_search"] = true
-	} else {
-		delete(exec.llmOpts, "native_search")
+		if exec.useNativeSearch {
+			exec.providerToolDefs = filterClientWebSearch(exec.providerToolDefs)
+			if exec.llmOpts == nil {
+				exec.llmOpts = make(map[string]any)
+			}
+			exec.llmOpts["native_search"] = true
+		} else {
+			delete(exec.llmOpts, "native_search")
+		}
 	}
+	refreshNativeSearch()
 
 	al.emitEvent(
 		runtimeevents.KindAgentLLMRequest,
@@ -321,199 +330,196 @@ func (p *Pipeline) CallLLM(
 
 	// Retry loop
 	var err error
-	maxRetries := p.Cfg.Agents.Defaults.MaxLLMRetries
-	if maxRetries <= 0 {
-		maxRetries = 2
-	}
-	backoffSecs := p.Cfg.Agents.Defaults.LLMRetryBackoffSecs
-	if backoffSecs <= 0 {
-		backoffSecs = 2
-	}
-	for retry := 0; retry <= maxRetries; retry++ {
-		exec.response, err = callLLM(exec.callMessages, exec.providerToolDefs)
-		if err == nil {
-			break
-		}
-		if ts.hardAbortRequested() && errors.Is(err, context.Canceled) {
-			_ = ts.requestHardAbort()
-			exec.abortedByHardAbort = true
-			return ControlBreak, nil
-		}
-		if isConfiguredStreamingVisibleError(err) {
-			break
-		}
-
-		if hasMediaRefs(exec.callMessages) && isVisionUnsupportedError(err) {
-			return ControlBreak, visionUnsupportedModelError(
-				exec.llmModelName,
-				len(ts.agent.ImageCandidates) > 0,
-			)
-		}
-
-		errMsg := strings.ToLower(err.Error())
-		retryReason, isTransientError := transientLLMRetryReason(err)
-		isContextError := !isTransientError && (strings.Contains(errMsg, "context_length_exceeded") ||
-			strings.Contains(errMsg, "context window") ||
-			strings.Contains(errMsg, "context_window") ||
-			strings.Contains(errMsg, "maximum context length") ||
-			strings.Contains(errMsg, "token limit") ||
-			strings.Contains(errMsg, "too many tokens") ||
-			strings.Contains(errMsg, "max_tokens") ||
-			strings.Contains(errMsg, "invalidparameter") ||
-			strings.Contains(errMsg, "prompt is too long") ||
-			strings.Contains(errMsg, "request too large"))
-
-		if isTransientError && retry < maxRetries {
-			backoff := time.Duration(retry+1) * time.Duration(backoffSecs) * time.Second
-			al.emitEvent(
-				runtimeevents.KindAgentLLMRetry,
-				ts.eventMeta("runTurn", "turn.llm.retry"),
-				LLMRetryPayload{
-					Attempt:    retry + 1,
-					MaxRetries: maxRetries,
-					Reason:     retryReason,
-					Error:      err.Error(),
-					Backoff:    backoff,
-				},
-			)
-			logger.WarnCF("agent", "Transient LLM error, retrying after backoff", map[string]any{
-				"error":   err.Error(),
-				"reason":  retryReason,
-				"retry":   retry,
-				"backoff": backoff.String(),
-			})
-			if sleepErr := sleepWithContext(turnCtx, backoff); sleepErr != nil {
-				if ts.hardAbortRequested() {
-					_ = ts.requestHardAbort()
-					return ControlBreak, nil
-				}
-				err = sleepErr
+	llmRetrySettings := llmRetryFromConfig(p.Cfg)
+	maxRetries := llmRetrySettings.max
+	for {
+		skipPrimaryFallback := false
+		for retry := 0; retry <= maxRetries; retry++ {
+			exec.response, err = callLLM(exec.callMessages, exec.providerToolDefs)
+			if err == nil {
 				break
 			}
-			continue
-		}
-
-		if isContextError && retry < maxRetries && !ts.opts.NoHistory {
-			al.emitEvent(
-				runtimeevents.KindAgentLLMRetry,
-				ts.eventMeta("runTurn", "turn.llm.retry"),
-				LLMRetryPayload{
-					Attempt:    retry + 1,
-					MaxRetries: maxRetries,
-					Reason:     "context_limit",
-					Error:      err.Error(),
-				},
-			)
-			logger.WarnCF(
-				"agent",
-				"Context window error detected, attempting compression",
-				map[string]any{
-					"error": err.Error(),
-					"retry": retry,
-				},
-			)
-
-			if retry == 0 && !constants.IsInternalChannel(ts.channel) {
-				al.bus.PublishOutbound(ctx, outboundMessageForTurn(
-					ts,
-					"Context window exceeded. Compressing history and retrying...",
-				))
+			if ts.hardAbortRequested() && errors.Is(err, context.Canceled) {
+				_ = ts.requestHardAbort()
+				exec.abortedByHardAbort = true
+				return ControlBreak, nil
+			}
+			if isConfiguredStreamingVisibleError(err) {
+				// The user already saw partial output; switching models now would
+				// duplicate or contradict it.
+				skipPrimaryFallback = true
+				break
 			}
 
-			if compactErr := p.ContextManager.Compact(ctx, &CompactRequest{
-				SessionKey: ts.sessionKey,
-				Reason:     ContextCompressReasonRetry,
-				Budget:     ts.agent.ContextWindow,
-			}); compactErr != nil {
-				logger.WarnCF("agent", "Context overflow compact failed", map[string]any{
-					"session_key": ts.sessionKey,
-					"error":       compactErr.Error(),
-				})
-			}
-			ts.refreshRestorePointFromSession(ts.agent)
-			if asmResp, asmErr := p.ContextManager.Assemble(ctx, &AssembleRequest{
-				SessionKey: ts.sessionKey,
-				Budget:     ts.agent.ContextWindow,
-				MaxTokens:  ts.agent.MaxTokens,
-			}); asmErr == nil && asmResp != nil {
-				exec.history = asmResp.History
-				exec.summary = asmResp.Summary
-			}
-			contextualSkills := ts.activeSkills
-			if ts.agent.ContextBuilder != nil {
-				contextualSkills = ts.agent.ContextBuilder.ResolveActiveSkillsForContext(ts.activeSkills)
-			}
-			ts.recordSkillContextSnapshot(skillContextTriggerContextRetryRebuild, contextualSkills)
-			stableHistory, protectedTurnTail := splitHistoryForActiveTurn(
-				exec.history,
-				ts.persistedMessagesSnapshot(),
-			)
-			buildMessages := func(trimmedHistory []providers.Message) []providers.Message {
-				fullHistory := append(append([]providers.Message(nil), trimmedHistory...), protectedTurnTail...)
-				rebuildPromptReq := promptBuildRequestForTurn(ts, fullHistory, exec.summary, "", nil, p.Cfg)
-				rebuildPromptReq.ActiveSkills = append([]string(nil), contextualSkills...)
-				rebuilt := ts.agent.ContextBuilder.BuildMessagesFromPrompt(rebuildPromptReq)
-				rebuilt = append(rebuilt, exec.loopWarnings...)
-				return resolveMediaRefsWithOptions(
-					rebuilt,
-					p.MediaStore,
-					mediaOpts,
-					len(rebuilt)-len(protectedTurnTail)-len(exec.loopWarnings),
+			if hasMediaRefs(exec.callMessages) && isVisionUnsupportedError(err) {
+				return ControlBreak, visionUnsupportedModelError(
+					exec.llmModelName,
+					len(ts.agent.ImageCandidates) > 0,
 				)
 			}
-			originalHistoryCount := len(exec.history)
-			var fit bool
-			var trimmedStableHistory []providers.Message //nolint:prealloc // Replaced by the slice returned from trimming below.
-			trimmedStableHistory, exec.callMessages, fit = trimHistoryToFitContextWindow(
-				stableHistory,
-				func(trimmedHistory []providers.Message) []providers.Message {
-					rebuilt := buildMessages(trimmedHistory)
-					if exec.gracefulTerminal {
-						return append(append([]providers.Message(nil), rebuilt...), ts.interruptHintMessage())
+
+			errMsg := strings.ToLower(err.Error())
+			retryReason, isTransientError := transientLLMRetryReason(err)
+			isContextError := !isTransientError && (strings.Contains(errMsg, "context_length_exceeded") ||
+				strings.Contains(errMsg, "context window") ||
+				strings.Contains(errMsg, "context_window") ||
+				strings.Contains(errMsg, "maximum context length") ||
+				strings.Contains(errMsg, "token limit") ||
+				strings.Contains(errMsg, "too many tokens") ||
+				strings.Contains(errMsg, "max_tokens") ||
+				strings.Contains(errMsg, "invalidparameter") ||
+				strings.Contains(errMsg, "prompt is too long") ||
+				strings.Contains(errMsg, "request too large"))
+
+			if isTransientError && retry < maxRetries {
+				backoff := llmRetrySettings.wait(retry)
+				al.emitEvent(
+					runtimeevents.KindAgentLLMRetry,
+					ts.eventMeta("runTurn", "turn.llm.retry"),
+					LLMRetryPayload{
+						Attempt:    retry + 1,
+						MaxRetries: maxRetries,
+						Reason:     retryReason,
+						Error:      err.Error(),
+						Backoff:    backoff,
+					},
+				)
+				logger.WarnCF("agent", "Transient LLM error, retrying after backoff", map[string]any{
+					"error":   err.Error(),
+					"reason":  retryReason,
+					"retry":   retry,
+					"backoff": backoff.String(),
+				})
+				if sleepErr := sleepWithContext(turnCtx, backoff); sleepErr != nil {
+					if ts.hardAbortRequested() {
+						_ = ts.requestHardAbort()
+						return ControlBreak, nil
 					}
-					return rebuilt
-				},
-				ts.agent.ContextWindow,
-				exec.providerToolDefs,
-				ts.agent.MaxTokens,
-			)
-			exec.history = append(trimmedStableHistory, protectedTurnTail...)
-			exec.messages = buildMessages(trimmedStableHistory)
-			exec.currentTurnStart = len(exec.messages) - len(protectedTurnTail) - len(exec.loopWarnings)
-			if exec.gracefulTerminal {
-				msgs := append([]providers.Message(nil), exec.messages...)
-				exec.callMessages = append(msgs, ts.interruptHintMessage())
+					err = sleepErr
+					break
+				}
+				continue
 			}
-			if dropped := originalHistoryCount - len(exec.history); dropped > 0 {
-				logger.WarnCF("agent", "Trimmed rebuilt history after context retry compaction", map[string]any{
-					"session_key":     ts.sessionKey,
-					"retry":           retry,
-					"dropped_msgs":    dropped,
-					"remaining_msgs":  len(exec.history),
-					"context_window":  ts.agent.ContextWindow,
-					"max_tokens":      ts.agent.MaxTokens,
-					"still_overlimit": !fit,
-				})
-			} else if !fit {
-				logger.WarnCF("agent", "Context still exceeds budget after retry compaction rebuild", map[string]any{
-					"session_key":         ts.sessionKey,
-					"retry":               retry,
-					"history_msgs":        len(exec.history),
-					"protected_turn_msgs": len(protectedTurnTail),
-					"context_window":      ts.agent.ContextWindow,
-					"max_tokens":          ts.agent.MaxTokens,
-				})
-			}
-			if !fit {
-				err = fmt.Errorf(
-					"context window still exceeded after retry compaction; refusing to drop active turn messages: %w",
-					err,
+
+			if isContextError && retry < maxRetries && !ts.opts.NoHistory {
+				al.emitEvent(
+					runtimeevents.KindAgentLLMRetry,
+					ts.eventMeta("runTurn", "turn.llm.retry"),
+					LLMRetryPayload{
+						Attempt:    retry + 1,
+						MaxRetries: maxRetries,
+						Reason:     "context_limit",
+						Error:      err.Error(),
+					},
 				)
-				break
+				logger.WarnCF(
+					"agent",
+					"Context window error detected, attempting compression",
+					map[string]any{
+						"error": err.Error(),
+						"retry": retry,
+					},
+				)
+
+				if retry == 0 && !constants.IsInternalChannel(ts.channel) {
+					al.bus.PublishOutbound(ctx, outboundMessageForTurn(
+						ts,
+						"Context window exceeded. Compressing history and retrying...",
+					))
+				}
+
+				if compactErr := p.ContextManager.Compact(ctx, &CompactRequest{
+					SessionKey: ts.sessionKey,
+					Reason:     ContextCompressReasonRetry,
+					Budget:     ts.agent.ContextWindow,
+				}); compactErr != nil {
+					logger.WarnCF("agent", "Context overflow compact failed", map[string]any{
+						"session_key": ts.sessionKey,
+						"error":       compactErr.Error(),
+					})
+				}
+				rebuilt := p.reassembleActiveTurn(ctx, ts, exec, skillContextTriggerContextRetryRebuild)
+				stableHistory, protectedTurnTail, buildMessages := rebuilt.stable, rebuilt.protected, rebuilt.build
+				originalHistoryCount := len(exec.history)
+				var fit bool
+				var trimmedStableHistory []providers.Message //nolint:prealloc // Replaced by the slice returned from trimming below.
+				trimmedStableHistory, exec.callMessages, fit = trimHistoryToFitContextWindow(
+					stableHistory,
+					func(trimmedHistory []providers.Message) []providers.Message {
+						rebuilt := buildMessages(trimmedHistory)
+						if exec.gracefulTerminal {
+							return append(append([]providers.Message(nil), rebuilt...), ts.interruptHintMessage())
+						}
+						return rebuilt
+					},
+					ts.agent.ContextWindow,
+					exec.providerToolDefs,
+					ts.agent.MaxTokens,
+				)
+				exec.history = append(trimmedStableHistory, protectedTurnTail...)
+				exec.messages = buildMessages(trimmedStableHistory)
+				exec.currentTurnStart = len(exec.messages) - len(protectedTurnTail) - len(exec.loopWarnings)
+				if exec.gracefulTerminal {
+					msgs := append([]providers.Message(nil), exec.messages...)
+					exec.callMessages = append(msgs, ts.interruptHintMessage())
+				}
+				if dropped := originalHistoryCount - len(exec.history); dropped > 0 {
+					logger.WarnCF("agent", "Trimmed rebuilt history after context retry compaction", map[string]any{
+						"session_key":     ts.sessionKey,
+						"retry":           retry,
+						"dropped_msgs":    dropped,
+						"remaining_msgs":  len(exec.history),
+						"context_window":  ts.agent.ContextWindow,
+						"max_tokens":      ts.agent.MaxTokens,
+						"still_overlimit": !fit,
+					})
+				} else if !fit {
+					logger.WarnCF(
+						"agent",
+						"Context still exceeds budget after retry compaction rebuild",
+						map[string]any{
+							"session_key":         ts.sessionKey,
+							"retry":               retry,
+							"history_msgs":        len(exec.history),
+							"protected_turn_msgs": len(protectedTurnTail),
+							"context_window":      ts.agent.ContextWindow,
+							"max_tokens":          ts.agent.MaxTokens,
+						},
+					)
+				}
+				if !fit {
+					err = fmt.Errorf(
+						"context window still exceeded after retry compaction; refusing to drop active turn messages: %w",
+						err,
+					)
+					break
+				}
+				continue
 			}
-			continue
+			break
 		}
-		break
+
+		if err == nil || skipPrimaryFallback || !exec.usedLight {
+			break
+		}
+		// A canceled call or turn is not a light-model failure; the primary
+		// would be canceled too.
+		if turnCtx.Err() != nil || errors.Is(err, context.Canceled) {
+			break
+		}
+		if !p.promoteToPrimary(ts, exec, "light model candidates failed: "+err.Error()) {
+			break
+		}
+		exec.llmModel = exec.activeModel
+		exec.llmModelName = resolvedCandidateModelName(exec.activeCandidates, exec.activeModel)
+		applyTurnThinkingOptions(exec, ts.agent, exec.activeProvider, true)
+		refreshNativeSearch()
+		logger.WarnCF("agent", "Light model candidates failed; falling back to primary model", map[string]any{
+			"agent_id":  ts.agent.ID,
+			"iteration": iteration,
+			"error":     err.Error(),
+		})
+		err = nil
 	}
 
 	if err != nil {
@@ -572,6 +578,10 @@ func (p *Pipeline) CallLLM(
 			ts.SetLastUsage(exec.response.Usage)
 		}
 	}
+
+	// Mid-turn routing guard: a light-model turn that grows too large or keeps
+	// requesting tools moves the remaining iterations to the primary model.
+	p.maybeEscalateLightModel(ts, exec)
 
 	if exec.suppressReasoning {
 		exec.response.Reasoning = ""
@@ -737,7 +747,11 @@ func (p *Pipeline) CallLLM(
 	}
 	exec.messages = append(exec.messages, assistantMsg)
 	if !ts.opts.NoHistory {
-		ts.agent.Sessions.AddFullMessage(ts.sessionKey, assistantMsg)
+		warnSessionStoreError(
+			ts.sessionKey,
+			"add full message",
+			ts.agent.Sessions.AddFullMessage(ctx, ts.sessionKey, assistantMsg),
+		)
 		ts.recordPersistedMessage(assistantMsg)
 		ts.ingestMessage(turnCtx, al, assistantMsg)
 	}

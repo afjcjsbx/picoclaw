@@ -1,7 +1,10 @@
 package agent
 
 import (
+	"context"
+
 	"github.com/sipeed/picoclaw/pkg/bus"
+	"github.com/sipeed/picoclaw/pkg/providers"
 )
 
 // computeContextUsage estimates current context window consumption for the
@@ -23,8 +26,14 @@ func computeContextUsage(agent *AgentInstance, sessionKey string) *bus.ContextUs
 		return nil
 	}
 
-	// History tokens
-	history := agent.Sessions.GetHistory(sessionKey)
+	// History tokens. This is a best-effort estimator used by UI and command
+	// stats, so read failures are logged and the zero value is used instead of
+	// aborting the estimate.
+	history, err := agent.Sessions.GetHistory(context.Background(), sessionKey)
+	if err != nil {
+		warnSessionStoreError(sessionKey, "get history", err)
+		history = []providers.Message{}
+	}
 	historyTokens := 0
 	for _, m := range history {
 		historyTokens += EstimateMessageTokens(m)
@@ -35,7 +44,11 @@ func computeContextUsage(agent *AgentInstance, sessionKey string) *bus.ContextUs
 	// dynamic context, active skills, summary with wrapping prefix).
 	systemTokens := 0
 	if agent.ContextBuilder != nil {
-		summary := agent.Sessions.GetSummary(sessionKey)
+		summary, err := agent.Sessions.GetSummary(context.Background(), sessionKey)
+		if err != nil {
+			warnSessionStoreError(sessionKey, "get summary", err)
+			summary = ""
+		}
 		// Pass nil for active skills: skills are only injected when the user
 		// explicitly activates them via /use, which is rare. Using nil matches
 		// the common case and avoids over-counting all installed skills.
@@ -52,25 +65,15 @@ func computeContextUsage(agent *AgentInstance, sessionKey string) *bus.ContextUs
 	usedTokens := historyTokens + systemTokens + toolTokens
 
 	// Effective budget = contextWindow minus output reserve (maxTokens)
-	effectiveWindow := contextWindow - agent.MaxTokens
-	if effectiveWindow < 0 {
-		effectiveWindow = contextWindow
-	}
+	effectiveWindow := usableContextTokens(agent)
 
 	// compressAt = effectiveWindow: aligns with isOverContextBudget's
 	// proactive trigger (msgTokens + toolTokens + maxTokens > contextWindow).
 	compressAt := effectiveWindow
 
-	// summarizeAt = soft summarization trigger: matches maybeSummarize's
-	// threshold (contextWindow * SummarizeTokenPercent / 100).
-	//
-	// The engine compares this against history-message tokens ONLY (not
-	// UsedTokens).  HistoryTokens is exposed alongside UsedTokens so the
-	// UI can show both values and avoid user confusion.
-	summarizeAt := contextWindow * agent.SummarizeTokenPercent / 100
-	if summarizeAt <= 0 {
-		summarizeAt = compressAt
-	}
+	// summarizeAt = soft summarization trigger, compared against UsedTokens
+	// before every LLM call (see Pipeline.CompactBeforeLLM).
+	summarizeAt := summarizeThresholdTokens(agent)
 
 	usedPercent := 0
 	if compressAt > 0 {
@@ -88,4 +91,25 @@ func computeContextUsage(agent *AgentInstance, sessionKey string) *bus.ContextUs
 		SummarizeAtTokens: summarizeAt,
 		UsedPercent:       usedPercent,
 	}
+}
+
+// usableContextTokens is the prompt budget left once the output reserve
+// (MaxTokens) is taken out of the context window.
+func usableContextTokens(agent *AgentInstance) int {
+	if usable := agent.ContextWindow - agent.MaxTokens; usable >= 0 {
+		return usable
+	}
+	return agent.ContextWindow
+}
+
+// summarizeThresholdTokens is the prompt size at which summarization starts:
+// SummarizeTokenPercent of the usable window, capped at the window itself so
+// summarization never fires later than emergency compression.
+func summarizeThresholdTokens(agent *AgentInstance) int {
+	usable := usableContextTokens(agent)
+	threshold := usable * agent.SummarizeTokenPercent / 100
+	if threshold <= 0 || threshold > usable {
+		return usable
+	}
+	return threshold
 }

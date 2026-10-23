@@ -253,15 +253,28 @@ make install
 The normal build includes every channel. Custom channel selection, optional
 Seahorse builds, SQLite caveats, and measured binary sizes are documented in
 the [Custom Builds Guide](docs/guides/custom-builds.md). For example, this
-builds with Telegram and Discord only:
+builds with Telegram only:
 
 ```bash
-make build GO_BUILD_TAGS='goolm,stdjson,custom_channels,channel_telegram,channel_discord'
+make build GO_BUILD_TAGS='goolm,stdjson,custom_channels,channel_telegram'
 ```
 
-In the measured macOS ARM64 Telegram-only build, adding `no_seahorse` reduced
-the binary by 3.92 MiB (14.3%). See the guide for the full measurement details
-and the cases where Matrix or WhatsApp Native still require SQLite.
+[Seahorse](docs/architecture/session-startup-and-pruning.md) is PicoClaw's
+built-in memory system: the `seahorse` context manager keeps a local SQLite
+database with an FTS5 index over the session history, so the agent can recall
+and compact older context. To shrink the footprint further, build without it
+using the `no_seahorse` tag, which also drops the SQLite dependency when no
+other selected feature needs it:
+
+```bash
+make build GO_BUILD_TAGS='goolm,stdjson,custom_channels,channel_telegram,no_seahorse'
+```
+
+That is the right choice when an external system provides memory instead, for
+example the [Mem0 plugin](docs/guides/plugins.md#mem0). In the measured macOS
+ARM64 Telegram-only build, adding `no_seahorse` reduced the binary by 3.92 MiB
+(14.3%). See the guide for the full measurement details and the cases where
+Matrix or WhatsApp Native still require SQLite.
 
 ## 🚀 Quick Start Guide
 
@@ -514,16 +527,20 @@ picoclaw skills install <skill-name>
 
 **Configure skill registries**:
 
-Add to your `config.json`:
+Registries are configured under `tools.skills.registries`. Add to your `config.json`:
+
 ```json
 {
   "tools": {
     "skills": {
       "registries": {
         "clawhub": {
+          "enabled": true,
+          "base_url": "https://clawhub.ai",
           "auth_token": "your-clawhub-token"
         },
         "github": {
+          "enabled": true,
           "base_url": "https://github.com",
           "auth_token": "your-github-token",
           "proxy": ""
@@ -534,7 +551,7 @@ Add to your `config.json`:
 }
 ```
 
-`tools.skills.github.*` is deprecated. Use `tools.skills.registries.github.*` instead.
+The ClawHub token is optional and only raises the rate limit. The GitHub token is needed for searches and for private repositories. Pass them via `PICOCLAW_SKILLS_REGISTRIES_CLAWHUB_AUTH_TOKEN` and `PICOCLAW_SKILLS_REGISTRIES_GITHUB_AUTH_TOKEN`.
 
 For more details, see [Skills tools](docs/tools/skills.md).
 

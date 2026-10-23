@@ -340,6 +340,30 @@ func TestRouter_NegativeThresholdFallsBackToDefault(t *testing.T) {
 	}
 }
 
+func TestRouter_EscalationDefaults(t *testing.T) {
+	r := New(RouterConfig{LightModel: "gemini-flash"})
+	if got := r.EscalationPromptTokens(); got != defaultEscalationPromptTokens {
+		t.Errorf("default escalation prompt tokens = %d, want %d", got, defaultEscalationPromptTokens)
+	}
+	if got := r.EscalationToolIterations(); got != defaultEscalationToolIterations {
+		t.Errorf("default escalation tool iterations = %d, want %d", got, defaultEscalationToolIterations)
+	}
+}
+
+func TestRouter_EscalationOverrides(t *testing.T) {
+	r := New(RouterConfig{
+		LightModel:               "gemini-flash",
+		EscalationPromptTokens:   1234,
+		EscalationToolIterations: 7,
+	})
+	if got := r.EscalationPromptTokens(); got != 1234 {
+		t.Errorf("escalation prompt tokens = %d, want 1234", got)
+	}
+	if got := r.EscalationToolIterations(); got != 7 {
+		t.Errorf("escalation tool iterations = %d, want 7", got)
+	}
+}
+
 func TestRouter_SelectModel_SimpleMessageUsesLight(t *testing.T) {
 	r := New(RouterConfig{LightModel: "gemini-flash", Threshold: 0.35})
 	msg := "hi"

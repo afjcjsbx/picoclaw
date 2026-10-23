@@ -14,11 +14,25 @@ type ToolCall struct {
 
 type ExtraContent struct {
 	Google                  *GoogleExtra `json:"google,omitempty"`
+	OpenAI                  *OpenAIExtra `json:"openai,omitempty"`
 	ToolFeedbackExplanation string       `json:"tool_feedback_explanation,omitempty"`
 }
 
 type GoogleExtra struct {
 	ThoughtSignature string `json:"thought_signature,omitempty"`
+}
+
+// OpenAIExtra carries the Responses API reasoning items that preceded a tool
+// call. With store=false they are not kept server-side, so they have to be
+// sent back alongside the tool output on the next request.
+type OpenAIExtra struct {
+	ReasoningItems []OpenAIReasoningItem `json:"reasoning_items,omitempty"`
+}
+
+type OpenAIReasoningItem struct {
+	ID               string   `json:"id"`
+	EncryptedContent string   `json:"encrypted_content"`
+	Summary          []string `json:"summary,omitempty"`
 }
 
 type FunctionCall struct {
