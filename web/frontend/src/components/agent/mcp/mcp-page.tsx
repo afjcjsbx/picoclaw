@@ -66,7 +66,9 @@ import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 
+import { MCPCatalogTab } from "./mcp-catalog-tab"
 import { MCPStatusBadge } from "./mcp-status-badge"
+import { type MCPPageTab, MCPTabs } from "./mcp-tabs"
 
 type StatusFilter = "all" | MCPConnectionStatus
 
@@ -79,6 +81,7 @@ export function MCPPage() {
   const [editingServer, setEditingServer] = useState<MCPServer | null>(null)
   const [deletingServer, setDeletingServer] = useState<MCPServer | null>(null)
   const [addingServer, setAddingServer] = useState(false)
+  const [activeTab, setActiveTab] = useState<MCPPageTab>("servers")
   const query = useQuery({
     queryKey: ["agents", "mcp"],
     queryFn: getMCPDashboard,
@@ -182,156 +185,179 @@ export function MCPPage() {
       0,
     ) ?? 0
 
+  const installedNames = useMemo(
+    () => new Set((query.data?.servers ?? []).map((server) => server.name)),
+    [query.data?.servers],
+  )
+
   return (
     <div className="bg-background flex h-full flex-col">
       <PageHeader title={t("navigation.mcp", "MCP")}>
-        <Button
-          type="button"
-          size="sm"
-          disabled={createMutation.isPending}
-          onClick={() => setAddingServer(true)}
-        >
-          <IconPlus className="size-4" />
-          {t("pages.agent.mcp.add", "Add server")}
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled={query.isFetching}
-          onClick={() => void query.refetch()}
-        >
-          <IconRefresh
-            className={cn("size-4", query.isFetching && "animate-spin")}
-          />
-          {t("pages.agent.mcp.refresh", "Refresh")}
-        </Button>
+        {activeTab === "servers" && (
+          <>
+            <Button
+              type="button"
+              size="sm"
+              disabled={createMutation.isPending}
+              onClick={() => setAddingServer(true)}
+            >
+              <IconPlus className="size-4" />
+              {t("pages.agent.mcp.add", "Add server")}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={query.isFetching}
+              onClick={() => void query.refetch()}
+            >
+              <IconRefresh
+                className={cn("size-4", query.isFetching && "animate-spin")}
+              />
+              {t("pages.agent.mcp.refresh", "Refresh")}
+            </Button>
+          </>
+        )}
       </PageHeader>
 
-      <div className="flex-1 overflow-auto px-6 py-6 pb-20">
-        <div className="mx-auto w-full max-w-6xl space-y-6">
-          <div className="flex flex-col gap-5 md:flex-row md:items-end md:justify-between">
-            <div className="space-y-2">
-              <h1 className="text-foreground/90 text-2xl font-semibold tracking-tight">
-                {t("pages.agent.mcp.title", "MCP Servers")}
-              </h1>
-              <p className="text-muted-foreground/80 max-w-2xl text-sm leading-relaxed">
-                {t(
-                  "pages.agent.mcp.description",
-                  "Monitor configured Model Context Protocol servers and inspect their exposed tools.",
-                )}
-              </p>
-            </div>
-            <div className="flex w-full flex-col gap-3 sm:flex-row md:w-auto">
-              <div className="group relative sm:w-72">
-                <IconSearch className="text-muted-foreground/60 absolute top-1/2 left-3.5 size-4 -translate-y-1/2" />
-                <Input
-                  value={search}
-                  onChange={(event) => setSearch(event.target.value)}
-                  placeholder={t(
-                    "pages.agent.mcp.search_placeholder",
-                    "Search servers or tools...",
+      <MCPTabs activeTab={activeTab} onChange={setActiveTab} />
+
+      {activeTab === "catalog" ? (
+        <MCPCatalogTab
+          installedNames={installedNames}
+          onInstalled={refreshAfterMutation}
+        />
+      ) : (
+        <div className="flex-1 overflow-auto px-6 py-6 pb-20">
+          <div className="animate-in fade-in mx-auto w-full max-w-6xl space-y-6 pt-2 duration-300 md:duration-500">
+            <div className="flex flex-col gap-5 md:flex-row md:items-end md:justify-between">
+              <div className="hidden max-w-sm space-y-2 md:block">
+                <h1 className="text-foreground/90 text-2xl font-semibold tracking-tight">
+                  {t("pages.agent.mcp.title", "MCP Servers")}
+                </h1>
+                <p className="text-muted-foreground/80 text-[14px] leading-relaxed">
+                  {t(
+                    "pages.agent.mcp.description",
+                    "Monitor configured Model Context Protocol servers and inspect their exposed tools.",
                   )}
-                  className="bg-muted/40 h-11 rounded-xl border-transparent pl-10 shadow-none"
-                />
+                </p>
               </div>
-              <Select
-                value={statusFilter}
-                onValueChange={(value) =>
-                  setStatusFilter(value as StatusFilter)
-                }
-              >
-                <SelectTrigger className="bg-muted/40 h-11 w-full rounded-xl border-transparent shadow-none sm:w-40">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {(
-                    [
-                      "all",
-                      "connected",
-                      "connecting",
-                      "error",
-                      "disconnected",
-                      "disabled",
-                    ] as const
-                  ).map((status) => (
-                    <SelectItem key={status} value={status}>
-                      {t(`pages.agent.mcp.status.${status}`, status)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-
-          {query.data &&
-            (!query.data.enabled || !query.data.runtime_available) && (
-              <RuntimeNotice
-                enabled={query.data.enabled}
-                runtimeAvailable={query.data.runtime_available}
-              />
-            )}
-
-          <div className="grid gap-4 sm:grid-cols-3">
-            <SummaryCard
-              icon={IconServer}
-              label={t("pages.agent.mcp.summary.servers", "Configured servers")}
-              value={query.data?.servers.length ?? 0}
-            />
-            <SummaryCard
-              icon={IconPlugConnected}
-              label={t("pages.agent.mcp.summary.connected", "Connected")}
-              value={connectedCount}
-            />
-            <SummaryCard
-              icon={IconTool}
-              label={t("pages.agent.mcp.summary.tools", "Discovered tools")}
-              value={toolCount}
-            />
-          </div>
-
-          {query.isLoading ? (
-            <LoadingState />
-          ) : query.error ? (
-            <div className="border-destructive/20 bg-destructive/5 text-destructive rounded-xl border p-8 text-center text-sm">
-              {t("pages.agent.mcp.load_error", "Failed to load MCP status.")}
-            </div>
-          ) : servers.length === 0 ? (
-            <div className="border-border/60 rounded-xl border border-dashed p-12 text-center">
-              <IconServer className="text-muted-foreground/50 mx-auto mb-3 size-8" />
-              <p className="font-medium">
-                {t("pages.agent.mcp.empty", "No MCP servers found")}
-              </p>
-              <p className="text-muted-foreground mt-1 text-sm">
-                {t(
-                  "pages.agent.mcp.empty_hint",
-                  "Configure an MCP server in Settings to see it here.",
-                )}
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              {servers.map((server) => (
-                <ServerCard
-                  key={server.name}
-                  server={server}
-                  actionsDisabled={
-                    updateMutation.isPending ||
-                    removeMutation.isPending ||
-                    settingsMutation.isPending ||
-                    createMutation.isPending
+              <div className="flex w-full flex-col gap-3 sm:flex-row sm:items-center md:w-auto">
+                <div className="group relative flex-1 md:w-80">
+                  <IconSearch className="text-muted-foreground/60 group-focus-within:text-foreground/80 absolute top-1/2 left-3.5 size-4 -translate-y-1/2 transition-colors" />
+                  <Input
+                    value={search}
+                    onChange={(event) => setSearch(event.target.value)}
+                    placeholder={t(
+                      "pages.agent.mcp.search_placeholder",
+                      "Search servers or tools...",
+                    )}
+                    className="bg-muted/40 hover:bg-muted/60 focus-visible:bg-background focus-visible:border-border/80 focus-visible:ring-foreground/5 h-11 w-full rounded-xl border-transparent pl-10 shadow-none transition-all duration-300"
+                  />
+                </div>
+                <Select
+                  value={statusFilter}
+                  onValueChange={(value) =>
+                    setStatusFilter(value as StatusFilter)
                   }
-                  onEdit={setEditingServer}
-                  onRemove={setDeletingServer}
-                  onUpdateSettings={(settings) =>
-                    settingsMutation.mutate({ name: server.name, settings })
-                  }
+                >
+                  <SelectTrigger className="bg-muted/40 hover:bg-muted/60 focus:ring-foreground/5 focus:border-border/80 h-11 w-full rounded-xl border-transparent shadow-none transition-all duration-300 sm:w-40">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="border-border/40 rounded-xl shadow-lg">
+                    {(
+                      [
+                        "all",
+                        "connected",
+                        "connecting",
+                        "error",
+                        "disconnected",
+                        "disabled",
+                      ] as const
+                    ).map((status) => (
+                      <SelectItem key={status} value={status}>
+                        {t(`pages.agent.mcp.status.${status}`, status)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            {query.data &&
+              (!query.data.enabled || !query.data.runtime_available) && (
+                <RuntimeNotice
+                  enabled={query.data.enabled}
+                  runtimeAvailable={query.data.runtime_available}
                 />
-              ))}
+              )}
+
+            <div className="grid gap-4 sm:grid-cols-3">
+              <SummaryCard
+                icon={IconServer}
+                label={t(
+                  "pages.agent.mcp.summary.servers",
+                  "Configured servers",
+                )}
+                value={query.data?.servers.length ?? 0}
+              />
+              <SummaryCard
+                icon={IconPlugConnected}
+                label={t("pages.agent.mcp.summary.connected", "Connected")}
+                value={connectedCount}
+              />
+              <SummaryCard
+                icon={IconTool}
+                label={t("pages.agent.mcp.summary.tools", "Discovered tools")}
+                value={toolCount}
+              />
             </div>
-          )}
+
+            {query.isLoading ? (
+              <LoadingState />
+            ) : query.error ? (
+              <div className="border-destructive/20 bg-destructive/5 text-destructive rounded-2xl border p-8 text-center text-sm">
+                {t("pages.agent.mcp.load_error", "Failed to load MCP status.")}
+              </div>
+            ) : servers.length === 0 ? (
+              <div className="border-border/40 flex flex-col items-center justify-center rounded-2xl border border-dashed px-6 py-16 text-center">
+                <div className="bg-muted/30 ring-border/10 mb-6 rounded-full p-6 shadow-xs ring-1">
+                  <IconServer className="text-muted-foreground/60 size-8" />
+                </div>
+                <h3 className="text-foreground/80 mb-2 text-xl font-semibold tracking-tight">
+                  {t("pages.agent.mcp.empty", "No MCP servers found")}
+                </h3>
+                <p className="text-muted-foreground max-w-sm text-sm leading-relaxed">
+                  {t(
+                    "pages.agent.mcp.empty_hint",
+                    "Configure an MCP server in Settings to see it here.",
+                  )}
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {servers.map((server) => (
+                  <ServerCard
+                    key={server.name}
+                    server={server}
+                    actionsDisabled={
+                      updateMutation.isPending ||
+                      removeMutation.isPending ||
+                      settingsMutation.isPending ||
+                      createMutation.isPending
+                    }
+                    onEdit={setEditingServer}
+                    onRemove={setDeletingServer}
+                    onUpdateSettings={(settings) =>
+                      settingsMutation.mutate({ name: server.name, settings })
+                    }
+                  />
+                ))}
+              </div>
+            )}
+          </div>
         </div>
-      </div>
+      )}
 
       {editingServer && (
         <EditMCPServerDialog
@@ -517,7 +543,7 @@ function RuntimeNotice({
 }) {
   const { t } = useTranslation()
   return (
-    <div className="flex items-start gap-3 rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 text-sm">
+    <div className="flex items-start gap-3 rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4 text-sm">
       <IconAlertTriangle className="mt-0.5 size-5 shrink-0 text-amber-600 dark:text-amber-400" />
       <div className="space-y-1">
         <p className="font-medium">
@@ -564,9 +590,12 @@ function SummaryCard({
   value: number
 }) {
   return (
-    <Card size="sm" className="border-border/50 gap-2 shadow-none">
+    <Card
+      size="sm"
+      className="border-border/40 gap-2 shadow-none transition-all duration-300 sm:rounded-2xl"
+    >
       <CardContent className="flex items-center gap-3">
-        <div className="bg-muted flex size-9 items-center justify-center rounded-lg">
+        <div className="bg-muted/60 flex size-9 items-center justify-center rounded-lg">
           <Icon className="text-muted-foreground size-4" />
         </div>
         <div>
@@ -596,7 +625,7 @@ function ServerCard({
 }) {
   const { t } = useTranslation()
   return (
-    <Card className="border-border/50 gap-4 py-5 shadow-none">
+    <Card className="border-border/40 hover:border-border/80 gap-4 py-5 shadow-none transition-all duration-300 hover:shadow-[0_4px_20px_-4px_rgba(0,0,0,0.05)] sm:rounded-2xl dark:hover:shadow-[0_4px_20px_-4px_rgba(255,255,255,0.02)]">
       <CardHeader className="grid-cols-[1fr_auto] px-5">
         <div className="min-w-0 space-y-2">
           <div className="flex flex-wrap items-center gap-2">
@@ -942,7 +971,10 @@ function LoadingState() {
   return (
     <div className="space-y-4">
       {[0, 1].map((item) => (
-        <Card key={item} className="gap-4 py-5 shadow-none">
+        <Card
+          key={item}
+          className="border-border/40 gap-4 py-5 shadow-none sm:rounded-2xl"
+        >
           <CardContent className="space-y-4 px-5">
             <div className="flex gap-3">
               <Skeleton className="h-6 w-40" />
