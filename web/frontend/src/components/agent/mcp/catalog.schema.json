@@ -1,0 +1,233 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://picoclaw.dev/schemas/mcp-catalog.schema.json",
+  "title": "PicoClaw MCP server catalog",
+  "description": "One-click installable MCP server presets shown in the web dashboard.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["servers"],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "servers": {
+      "type": "array",
+      "description": "Catalog entries. The name field is also used as the tools.mcp.servers key.",
+      "items": {
+        "$ref": "#/$defs/server"
+      }
+    }
+  },
+  "$defs": {
+    "category": {
+      "enum": [
+        "browser",
+        "web",
+        "docs",
+        "code",
+        "database",
+        "productivity",
+        "research",
+        "design",
+        "cloud",
+        "utility"
+      ]
+    },
+    "target": {
+      "description": "Where the collected value is written in the generated MCP server config.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "name"],
+          "properties": {
+            "kind": {
+              "const": "env"
+            },
+            "name": {
+              "type": "string",
+              "description": "Environment variable name."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "name"],
+          "properties": {
+            "kind": {
+              "const": "header"
+            },
+            "name": {
+              "type": "string",
+              "description": "HTTP header name."
+            },
+            "prefix": {
+              "type": "string",
+              "description": "Optional prefix added before the value, for example 'Bearer '."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {
+            "kind": {
+              "const": "arg"
+            },
+            "flag": {
+              "type": "string",
+              "description": "Optional CLI flag emitted before the value."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "name"],
+          "properties": {
+            "kind": {
+              "const": "url"
+            },
+            "name": {
+              "type": "string",
+              "description": "Query parameter name appended to the server URL."
+            }
+          }
+        }
+      ]
+    },
+    "field": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "label", "target"],
+      "properties": {
+        "key": {
+          "type": "string",
+          "description": "Stable identifier used by the install dialog."
+        },
+        "label": {
+          "type": "string",
+          "description": "Input label shown in the install dialog."
+        },
+        "placeholder": {
+          "type": "string"
+        },
+        "required": {
+          "type": "boolean",
+          "default": false
+        },
+        "secret": {
+          "type": "boolean",
+          "default": false,
+          "description": "Render the input as a password field."
+        },
+        "target": {
+          "$ref": "#/$defs/target"
+        }
+      }
+    },
+    "server": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "displayName",
+        "description",
+        "category",
+        "docsUrl",
+        "transport"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$",
+          "description": "Unique server key written to tools.mcp.servers."
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "category": {
+          "$ref": "#/$defs/category"
+        },
+        "docsUrl": {
+          "type": "string",
+          "format": "uri"
+        },
+        "requires": {
+          "type": "string",
+          "description": "Short dependency hint shown on the catalog card."
+        },
+        "transport": {
+          "enum": ["stdio", "http"]
+        },
+        "command": {
+          "type": "string",
+          "description": "Executable for stdio servers."
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Base arguments for stdio servers."
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Environment variables for stdio servers."
+        },
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "description": "Endpoint URL for HTTP servers."
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "HTTP headers for HTTP servers."
+        },
+        "fields": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/field"
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "transport": {
+                "const": "stdio"
+              }
+            }
+          },
+          "then": {
+            "required": ["command"]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "transport": {
+                "const": "http"
+              }
+            }
+          },
+          "then": {
+            "required": ["url"]
+          }
+        }
+      ]
+    }
+  }
+}
