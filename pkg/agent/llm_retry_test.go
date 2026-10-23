@@ -42,30 +42,11 @@ func httpStatusError(code int) error {
 	return &common.HTTPError{StatusCode: code, BodyPreview: "{}"}
 }
 
-func TestIsOverloadStatus(t *testing.T) {
+func TestChatRetryingTransient(t *testing.T) {
+	fast := llmRetry{max: 2, backoff: time.Millisecond}
 	textual := func(code int) error {
 		return fmt.Errorf("API request failed:\n  Status: %d\n  Body:   {}", code)
 	}
-	for _, code := range []int{429, 502, 503} {
-		if !isOverloadStatus(httpStatusError(code)) || !isOverloadStatus(textual(code)) {
-			t.Errorf("status %d must be retryable", code)
-		}
-	}
-	// Other failures are not this retry's business: bad requests and auth never
-	// clear on their own, and 500/504/timeouts have their own handling.
-	for _, err := range []error{
-		nil,
-		httpStatusError(400), httpStatusError(401), httpStatusError(500), httpStatusError(504),
-		textual(404), errors.New("boom"), context.Canceled,
-	} {
-		if isOverloadStatus(err) {
-			t.Errorf("%v must not be retried as overload", err)
-		}
-	}
-}
-
-func TestChatRetryingOverload(t *testing.T) {
-	fast := llmRetry{max: 2, backoff: time.Millisecond}
 	cases := []struct {
 		name      string
 		errs      []error
@@ -74,6 +55,15 @@ func TestChatRetryingOverload(t *testing.T) {
 	}{
 		{"502 then success", []error{httpStatusError(502)}, 2, false},
 		{"503 and 429 then success", []error{httpStatusError(503), httpStatusError(429)}, 3, false},
+		{"status only in the message", []error{textual(502)}, 2, false},
+		{"500 then success", []error{httpStatusError(500)}, 2, false},
+		{"timeout then success", []error{context.DeadlineExceeded}, 2, false},
+		{
+			"network error then success",
+			[]error{errors.New("read tcp 10.0.0.1:443: connection reset by peer")},
+			2,
+			false,
+		},
 		{
 			"gives up after max retries",
 			[]error{httpStatusError(502), httpStatusError(502), httpStatusError(502), httpStatusError(502)},
@@ -81,12 +71,14 @@ func TestChatRetryingOverload(t *testing.T) {
 			true,
 		},
 		{"400 is not retried", []error{httpStatusError(400)}, 1, true},
+		{"401 is not retried", []error{httpStatusError(401)}, 1, true},
 		{"unknown error is not retried", []error{errors.New("boom")}, 1, true},
+		{"canceled is not retried", []error{context.Canceled}, 1, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			p := &overloadProvider{errs: tc.errs}
-			resp, err := chatRetryingOverload(context.Background(), p, nil, nil, "m", nil, fast)
+			resp, err := chatRetryingTransient(context.Background(), p, nil, nil, "m", nil, fast)
 			if p.calls != tc.wantCalls {
 				t.Fatalf("provider calls = %d, want %d", p.calls, tc.wantCalls)
 			}
@@ -101,7 +93,7 @@ func TestChatRetryingOverload(t *testing.T) {
 
 	t.Run("no retries when max is zero", func(t *testing.T) {
 		p := &overloadProvider{errs: []error{httpStatusError(502)}}
-		if _, err := chatRetryingOverload(context.Background(), p, nil, nil, "m", nil, llmRetry{}); err == nil {
+		if _, err := chatRetryingTransient(context.Background(), p, nil, nil, "m", nil, llmRetry{}); err == nil {
 			t.Fatal("expected the first failure to be returned")
 		}
 		if p.calls != 1 {
@@ -114,7 +106,7 @@ func TestChatRetryingOverload(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 		defer cancel()
 		start := time.Now()
-		_, err := chatRetryingOverload(ctx, p, nil, nil, "m", nil, llmRetry{max: 2, backoff: time.Hour})
+		_, err := chatRetryingTransient(ctx, p, nil, nil, "m", nil, llmRetry{max: 2, backoff: time.Hour})
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("err = %v, want the context error", err)
 		}
@@ -125,6 +117,15 @@ func TestChatRetryingOverload(t *testing.T) {
 			t.Fatalf("provider calls = %d, want 1", p.calls)
 		}
 	})
+}
+
+func TestLLMRetryWait(t *testing.T) {
+	retry := llmRetry{max: 3, backoff: 2 * time.Second}
+	for n, want := range []time.Duration{2 * time.Second, 4 * time.Second, 6 * time.Second} {
+		if got := retry.wait(n); got != want {
+			t.Errorf("wait(%d) = %v, want %v", n, got, want)
+		}
+	}
 }
 
 func TestLLMRetryFromConfig(t *testing.T) {

@@ -358,7 +358,7 @@ func (p *Pipeline) CallLLM(
 			strings.Contains(errMsg, "request too large"))
 
 		if isTransientError && retry < maxRetries {
-			backoff := time.Duration(retry+1) * llmRetrySettings.backoff
+			backoff := llmRetrySettings.wait(retry)
 			al.emitEvent(
 				runtimeevents.KindAgentLLMRetry,
 				ts.eventMeta("runTurn", "turn.llm.retry"),

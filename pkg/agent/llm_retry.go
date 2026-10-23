@@ -4,7 +4,6 @@ package agent
 
 import (
 	"context"
-	"net/http"
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/config"
@@ -34,26 +33,18 @@ func llmRetryFromConfig(cfg *config.Config) llmRetry {
 	return retry
 }
 
-// isOverloadStatus reports whether err is an upstream 429 (rate limited), 502
-// (bad gateway) or 503 (overloaded): failures that usually clear on their own.
-func isOverloadStatus(err error) bool {
-	failErr := providers.ClassifyError(err, "", "")
-	if failErr == nil {
-		return false
-	}
-	switch failErr.Status {
-	case http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable:
-		return true
-	}
-	return false
+// wait is the pause before retry number retry (0-based): backoff, 2*backoff, ...
+func (r llmRetry) wait(retry int) time.Duration {
+	return time.Duration(retry+1) * r.backoff
 }
 
-// chatRetryingOverload calls provider.Chat and retries while the upstream
-// answers 429, 502 or 503, waiting backoff, 2*backoff, ... between attempts and
-// giving up early when ctx is canceled. Any other outcome is returned as is.
-// It is meant for the background requests (summarization) that have no retry
-// loop of their own; the main loop classifies and retries errors itself.
-func chatRetryingOverload(
+// chatRetryingTransient calls provider.Chat and retries while the failure is
+// transient according to transientLLMRetryReason (rate limits, 5xx, timeouts,
+// network errors), the same classification the main loop uses. It waits
+// retry.wait between attempts and gives up early when ctx is canceled. Any other
+// outcome is returned as is. It is meant for the background requests
+// (summarization) that have no retry loop of their own.
+func chatRetryingTransient(
 	ctx context.Context,
 	provider providers.LLMProvider,
 	messages []providers.Message,
@@ -64,12 +55,17 @@ func chatRetryingOverload(
 ) (*providers.LLMResponse, error) {
 	for attempt := 0; ; attempt++ {
 		resp, err := provider.Chat(ctx, messages, toolDefs, model, opts)
-		if err == nil || attempt >= retry.max || !isOverloadStatus(err) {
+		if err == nil || attempt >= retry.max {
 			return resp, err
 		}
-		wait := time.Duration(attempt+1) * retry.backoff
-		logger.WarnCF("agent", "Upstream overloaded or rate limited, retrying after backoff", map[string]any{
+		reason, transient := transientLLMRetryReason(err)
+		if !transient {
+			return resp, err
+		}
+		wait := retry.wait(attempt)
+		logger.WarnCF("agent", "Transient LLM error, retrying after backoff", map[string]any{
 			"model":   model,
+			"reason":  reason,
 			"attempt": attempt + 1,
 			"backoff": wait.String(),
 			"error":   err.Error(),

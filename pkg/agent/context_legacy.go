@@ -431,7 +431,7 @@ func (m *legacyContextManager) retryLLMCall(
 		m.al.activeRequestsInc()
 		resp, err = func() (*providers.LLMResponse, error) {
 			defer m.al.activeRequestsDec()
-			return chatRetryingOverload(
+			return chatRetryingTransient(
 				ctx,
 				agent.Provider,
 				[]providers.Message{{Role: "user", Content: prompt}},
@@ -449,8 +449,8 @@ func (m *legacyContextManager) retryLLMCall(
 		if err == nil && resp != nil && resp.Content != "" {
 			return resp, nil
 		}
-		// An overloaded or rate-limited upstream was already retried with backoff.
-		if isOverloadStatus(err) {
+		// A transient failure was already retried with backoff.
+		if _, transient := transientLLMRetryReason(err); transient {
 			break
 		}
 		if attempt < maxRetries-1 {

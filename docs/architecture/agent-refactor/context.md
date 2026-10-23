@@ -101,7 +101,7 @@ When the threshold is reached it calls `ContextManager.Compact` with `Reason: Co
 
 The summary is stored via `SetSummary`; `BuildMessages` injects it into the system prompt.
 
-Summarization requests (legacy and seahorse) retry an upstream 429, 502 or 503 with the same `max_llm_retries` and `llm_retry_backoff_secs` backoff as the main loop, and stop waiting when the turn is canceled. Other failures are not retried this way: legacy keeps its short retries and then falls back to a truncated transcript, and a failed seahorse pass leaves the turn to continue uncompacted.
+Summarization requests (legacy and seahorse) retry transient failures (rate limits, 5xx, timeouts, network errors: the `transientLLMRetryReason` classification the main loop uses) with the same `max_llm_retries` and `llm_retry_backoff_secs` backoff, and stop waiting when the turn is canceled. Other failures are not retried this way: legacy keeps its short retries and then falls back to a truncated transcript, and a failed seahorse pass leaves the turn to continue uncompacted.
 
 ### 2. Proactive budget check
 

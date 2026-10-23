@@ -209,12 +209,12 @@ func (m *seahorseContextManager) Close() error {
 	return m.closeErr
 }
 
-// providerToCompleteFn wraps providers.LLMProvider as a seahorse.CompleteFn. An
-// upstream 429/502/503 is retried with backoff, since seahorse does not retry
-// a failed summarization itself.
+// providerToCompleteFn wraps providers.LLMProvider as a seahorse.CompleteFn. A
+// transient upstream failure is retried with backoff, since seahorse does not
+// retry a failed summarization itself.
 func providerToCompleteFn(provider providers.LLMProvider, model string, retry llmRetry) seahorse.CompleteFn {
 	return func(ctx context.Context, prompt string, opts seahorse.CompleteOptions) (string, error) {
-		resp, err := chatRetryingOverload(
+		resp, err := chatRetryingTransient(
 			ctx,
 			provider,
 			[]providers.Message{{Role: "user", Content: prompt}},
