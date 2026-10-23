@@ -89,6 +89,8 @@ func (m *legacyContextManager) summarizeActiveTurn(
 		return false
 	}
 
+	// The new summary holds part of this turn: a rollback must restore the old one.
+	ts.pinRestoreSummary(summary)
 	kept := append(append([]providers.Message(nil), active[:head]...), flattenRounds(rounds[cut:])...)
 	newHistory := append(append([]providers.Message(nil), history[:start]...), kept...)
 	warnSessionStoreError(sessionKey, "set summary", agent.Sessions.SetSummary(ctx, sessionKey, finalSummary))

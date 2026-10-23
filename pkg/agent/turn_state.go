@@ -230,7 +230,10 @@ type turnState struct {
 
 	restorePointHistory []providers.Message
 	restorePointSummary string
-	persistedMessages   []providers.Message
+	// restoreSummaryPinned freezes restorePointSummary once the session summary
+	// holds part of this turn, so a rollback does not keep the aborted work.
+	restoreSummaryPinned bool
+	persistedMessages    []providers.Message
 
 	// SubTurn support (from HEAD)
 	depth                int                    // SubTurn depth (0 for root turn)
@@ -719,7 +722,20 @@ func (ts *turnState) captureRestorePoint(history []providers.Message, summary st
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	ts.restorePointHistory = append([]providers.Message(nil), history...)
-	ts.restorePointSummary = summary
+	if !ts.restoreSummaryPinned {
+		ts.restorePointSummary = summary
+	}
+}
+
+// pinRestoreSummary sets the summary a rollback restores to summary, the last
+// one free of this turn, and keeps it there for the rest of the turn.
+func (ts *turnState) pinRestoreSummary(summary string) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if !ts.restoreSummaryPinned {
+		ts.restorePointSummary = summary
+		ts.restoreSummaryPinned = true
+	}
 }
 
 func (ts *turnState) recordPersistedMessage(msg providers.Message) {

@@ -586,3 +586,40 @@ func TestLegacyCompact_Threshold_PruneKeepsTurnRecordInStep(t *testing.T) {
 		t.Fatalf("restore point = %d messages, want 0 so a rollback drops the whole turn", n)
 	}
 }
+
+// Once the middle of the turn is folded into the session summary, rolling the
+// turn back must restore the summary it started from, not one describing the
+// aborted work.
+func TestLegacyCompact_Threshold_RollbackRestoresSummaryBeforeTurn(t *testing.T) {
+	al, agent, ts, turn := activeTurnFixture(t, 4)
+	ctx := context.Background()
+	if err := agent.Sessions.SetHistory(ctx, "active-turn", turn); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
+	if err := agent.Sessions.SetSummary(ctx, "active-turn", "BEFORE-TURN"); err != nil {
+		t.Fatalf("SetSummary: %v", err)
+	}
+	ts.captureRestorePoint(nil, "BEFORE-TURN")
+
+	if err := al.contextManager.Compact(withTurnState(ctx, ts), &CompactRequest{
+		SessionKey: "active-turn",
+		Reason:     ContextCompressReasonThreshold,
+	}); err != nil {
+		t.Fatalf("compaction: %v", err)
+	}
+	if summary, _ := agent.Sessions.GetSummary(ctx, "active-turn"); summary != midTurnSummary {
+		t.Fatalf("summary = %q, want the turn's middle folded in", summary)
+	}
+	// What CompactBeforeLLM does after every compaction.
+	ts.refreshRestorePointFromSession(agent)
+
+	if err := ts.restoreSession(agent); err != nil {
+		t.Fatalf("restoreSession: %v", err)
+	}
+	if summary, _ := agent.Sessions.GetSummary(ctx, "active-turn"); summary != "BEFORE-TURN" {
+		t.Fatalf("summary after rollback = %q, want %q", summary, "BEFORE-TURN")
+	}
+	if history, _ := agent.Sessions.GetHistory(ctx, "active-turn"); len(history) != 0 {
+		t.Fatalf("history after rollback = %d messages, want none", len(history))
+	}
+}
