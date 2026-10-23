@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
+	"github.com/sipeed/picoclaw/pkg/channels"
 	"github.com/sipeed/picoclaw/pkg/config"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/providers"
@@ -963,6 +964,12 @@ func TestContextFeedback_PublishedWhenToolFeedbackEnabled(t *testing.T) {
 		}
 		if out.Context.Raw[metadataKeyMessageKind] != messageKindToolFeedback {
 			t.Fatalf("kind = %q, want %q", out.Context.Raw[metadataKeyMessageKind], messageKindToolFeedback)
+		}
+		if out.Context.Raw[channels.ToolFeedbackTerminalKey] != "true" {
+			t.Fatalf(
+				"terminal flag = %q, want true: context notices must not seed reusable progress cards",
+				out.Context.Raw[channels.ToolFeedbackTerminalKey],
+			)
 		}
 		if out.Content != "notice" {
 			t.Fatalf("content = %q, want %q", out.Content, "notice")
