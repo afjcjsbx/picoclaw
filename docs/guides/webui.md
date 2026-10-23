@@ -58,6 +58,10 @@ Sessions last about 31 days but are invalidated when the launcher restarts, so a
 | `/config` | Edit agent defaults, self-evolution, exec/cron controls, heartbeat, device monitoring, and launcher networking/autostart |
 | `/logs` | Follow the in-memory Gateway log buffer and clear it |
 
+### Voice messages
+
+The chat composer has a microphone button to the left of the send button. Press it to record a voice message; press the stop button (or wait for the 5-minute limit) to send it immediately, so no extra send step is needed. The recording is uploaded to the Gateway and, when a voice transcription model is configured, transcribed before the agent replies. Audio never leaves your machine except for the transcription request to the configured provider. Browsers without `MediaRecorder` hide the button or show an error. The microphone API is only available in a secure context, so when the dashboard is opened over plain HTTP on a LAN address the button explains that HTTPS or localhost is required; use `http://localhost:18800` on the launcher machine or terminate TLS in front of it.
+
 The **Gateway** runs as a subprocess managed through the launcher (`picoclaw gateway -E`, with `-d` when debug logging is on). The top bar lets you start, stop, and restart it, and shows its state. Auto-start only happens when a usable default model is configured; otherwise use **Start Gateway** after adding credentials in `/models` or `/credentials`.
 
 ## Remote Access
