@@ -258,17 +258,8 @@ export function AppSidebarControls() {
             <DropdownMenuItem onClick={() => i18n.changeLanguage("en")}>
               English
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => i18n.changeLanguage("pt-BR")}>
-              Português (Brasil)
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => i18n.changeLanguage("bn-IN")}>
-              বাংলা
-            </DropdownMenuItem>
             <DropdownMenuItem onClick={() => i18n.changeLanguage("zh")}>
               简体中文
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => i18n.changeLanguage("cs")}>
-              Čeština
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
