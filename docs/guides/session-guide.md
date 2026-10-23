@@ -128,7 +128,7 @@ You usually do not need a special workaround for Telegram forums.
 
 ### Summaries happen per session
 
-`summarize_token_percent` applies inside each session independently: summarization starts once the prompt (system prompt, summary, history and tool definitions) reaches that percentage of the usable context window (`context_window - max_tokens`). The number of messages does not matter.
+`summarize_token_percent` applies inside each session independently: summarization starts once the prompt (system prompt, summary, history and tool definitions) reaches that percentage of the usable context window (`context_window - max_tokens`). The number of messages does not matter. The check runs right before every LLM call, including in the middle of a long tool loop, and the turn waits for the summary before continuing from the compacted context.
 If you create smaller sessions, each one stays further from the threshold. `summarize_message_threshold` is deprecated and ignored.
 
 ### Compact a session on demand

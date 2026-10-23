@@ -408,7 +408,7 @@ func TestProviderToCompleteFn(t *testing.T) {
 		},
 	}
 
-	completeFn := providerToCompleteFn(mp, "test-model-v1")
+	completeFn := providerToCompleteFn(mp, "test-model-v1", llmRetry{})
 	result, err := completeFn(context.Background(), "Summarize this text", seahorse.CompleteOptions{
 		MaxTokens:   500,
 		Temperature: 0.3,
@@ -479,7 +479,7 @@ func TestProviderToCompleteFnError(t *testing.T) {
 		},
 	}
 
-	completeFn := providerToCompleteFn(mp, "test-model")
+	completeFn := providerToCompleteFn(mp, "test-model", llmRetry{})
 	_, err := completeFn(context.Background(), "test prompt", seahorse.CompleteOptions{})
 	if err == nil {
 		t.Error("expected error from canceled context")

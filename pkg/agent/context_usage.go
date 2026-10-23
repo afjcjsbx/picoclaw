@@ -65,23 +65,15 @@ func computeContextUsage(agent *AgentInstance, sessionKey string) *bus.ContextUs
 	usedTokens := historyTokens + systemTokens + toolTokens
 
 	// Effective budget = contextWindow minus output reserve (maxTokens)
-	effectiveWindow := contextWindow - agent.MaxTokens
-	if effectiveWindow < 0 {
-		effectiveWindow = contextWindow
-	}
+	effectiveWindow := usableContextTokens(agent)
 
 	// compressAt = effectiveWindow: aligns with isOverContextBudget's
 	// proactive trigger (msgTokens + toolTokens + maxTokens > contextWindow).
 	compressAt := effectiveWindow
 
-	// summarizeAt = soft summarization trigger, a percentage of the same
-	// effective window compressAt uses, compared against UsedTokens by
-	// maybeSummarize. Capped at compressAt so summarization always fires no
-	// later than emergency compression.
-	summarizeAt := compressAt * agent.SummarizeTokenPercent / 100
-	if summarizeAt <= 0 || summarizeAt > compressAt {
-		summarizeAt = compressAt
-	}
+	// summarizeAt = soft summarization trigger, compared against UsedTokens
+	// before every LLM call (see Pipeline.CompactBeforeLLM).
+	summarizeAt := summarizeThresholdTokens(agent)
 
 	usedPercent := 0
 	if compressAt > 0 {
@@ -99,4 +91,25 @@ func computeContextUsage(agent *AgentInstance, sessionKey string) *bus.ContextUs
 		SummarizeAtTokens: summarizeAt,
 		UsedPercent:       usedPercent,
 	}
+}
+
+// usableContextTokens is the prompt budget left once the output reserve
+// (MaxTokens) is taken out of the context window.
+func usableContextTokens(agent *AgentInstance) int {
+	if usable := agent.ContextWindow - agent.MaxTokens; usable >= 0 {
+		return usable
+	}
+	return agent.ContextWindow
+}
+
+// summarizeThresholdTokens is the prompt size at which summarization starts:
+// SummarizeTokenPercent of the usable window, capped at the window itself so
+// summarization never fires later than emergency compression.
+func summarizeThresholdTokens(agent *AgentInstance) int {
+	usable := usableContextTokens(agent)
+	threshold := usable * agent.SummarizeTokenPercent / 100
+	if threshold <= 0 || threshold > usable {
+		return usable
+	}
+	return threshold
 }

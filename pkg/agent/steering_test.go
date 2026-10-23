@@ -733,6 +733,18 @@ func TestAgentLoop_Steering_InitialPoll(t *testing.T) {
 	}
 }
 
+// waitForSteeringPending blocks until the scope has a queued steering message.
+func waitForSteeringPending(t *testing.T, al *AgentLoop, scope string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for al.pendingSteeringCountForScope(scope) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("timeout waiting for late message to be queued as steering")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func TestAgentLoop_Run_AutoContinuesLateSteeringMessage(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "agent-test-*")
 	if err != nil {
@@ -800,6 +812,15 @@ func TestAgentLoop_Run_AutoContinuesLateSteeringMessage(t *testing.T) {
 	if err := msgBus.PublishInbound(pubCtx, late); err != nil {
 		t.Fatalf("publish late inbound: %v", err)
 	}
+
+	// PublishInbound only buffers the message. Wait until Run has routed it into
+	// the session's steering queue, or the first call may finish before the
+	// message arrives and the turn ends instead of continuing.
+	lateScope, _, ok := al.resolveSteeringTarget(late)
+	if !ok {
+		t.Fatal("expected late message to resolve a steering target")
+	}
+	waitForSteeringPending(t, al, lateScope)
 
 	close(provider.releaseFirstCall)
 
