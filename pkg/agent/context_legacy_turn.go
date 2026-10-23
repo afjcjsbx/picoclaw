@@ -144,6 +144,23 @@ func splitToolRounds(msgs []providers.Message) [][]providers.Message {
 	return rounds
 }
 
+// activeTurnPruneEnd is the index in history where the protected part of the
+// turn in progress starts: its newest keepActiveRounds rounds, or the whole turn
+// when it has no more rounds than that. It is len(history) when the turn is not
+// found in history.
+func activeTurnPruneEnd(history, persisted []providers.Message) int {
+	activeLen := matchingTurnMessageTail(history, persisted)
+	if activeLen == 0 {
+		return len(history)
+	}
+	start := len(history) - activeLen
+	rounds := splitToolRounds(history[start:])
+	if len(rounds) <= keepActiveRounds {
+		return start
+	}
+	return len(history) - len(flattenRounds(rounds[len(rounds)-keepActiveRounds:]))
+}
+
 func flattenRounds(rounds [][]providers.Message) []providers.Message {
 	var msgs []providers.Message
 	for _, round := range rounds {

@@ -512,3 +512,46 @@ func TestSummarizer_SendsResolvedModelID(t *testing.T) {
 		}
 	}
 }
+
+// The fallback that clears old tool outputs must spare the newest rounds of the
+// turn in progress: a round with many parallel calls is longer than the
+// protected tail, and the model has not seen its results yet.
+func TestLegacyCompact_Threshold_PruneKeepsNewestActiveRounds(t *testing.T) {
+	al, agent, _, _ := activeTurnFixture(t, 0)
+	turn := []providers.Message{
+		{Role: "user", Content: "run the bulky tool five times"},
+		{Role: "assistant"},
+	}
+	for i := 1; i <= 5; i++ {
+		id := fmt.Sprintf("p%d", i)
+		turn[1].ToolCalls = append(turn[1].ToolCalls, providers.ToolCall{
+			ID: id, Type: "function", Name: "bulky_tool",
+			Function: &providers.FunctionCall{Name: "bulky_tool", Arguments: "{}"},
+		})
+		turn = append(turn, providers.Message{
+			Role: "tool", ToolCallID: id,
+			Content: fmt.Sprintf("result-%d ", i) + strings.Repeat("lorem ipsum dolor ", 50),
+		})
+	}
+	ts := &turnState{agent: agent, sessionKey: "active-turn"}
+	for _, msg := range turn {
+		ts.recordPersistedMessage(msg)
+	}
+	if err := agent.Sessions.SetHistory(context.Background(), "active-turn", turn); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
+
+	err := al.contextManager.Compact(withTurnState(context.Background(), ts), &CompactRequest{
+		SessionKey: "active-turn",
+		Reason:     ContextCompressReasonThreshold,
+	})
+	if !errors.Is(err, ErrNothingToCompact) {
+		t.Fatalf("compaction err = %v, want ErrNothingToCompact", err)
+	}
+	got, _ := agent.Sessions.GetHistory(context.Background(), "active-turn")
+	for _, msg := range got {
+		if msg.Content == prunedToolResult {
+			t.Fatalf("a tool result of the newest round was cleared before the model saw it")
+		}
+	}
+}

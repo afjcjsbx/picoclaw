@@ -104,7 +104,7 @@ func (m *legacyContextManager) compactSession(ctx context.Context, agent *AgentI
 		if ts != nil && m.summarizeActiveTurn(ctx, agent, req.SessionKey, ts) {
 			return nil
 		}
-		if remaining, ok := m.pruneSessionToolResults(ctx, agent, req.SessionKey); ok {
+		if remaining, ok := m.pruneSessionToolResults(ctx, agent, req.SessionKey, ts); ok {
 			m.al.emitEvent(
 				runtimeevents.KindAgentContextCompress,
 				m.al.newTurnEventScope(agent.ID, req.SessionKey, nil).
@@ -145,8 +145,13 @@ const (
 // sit before the last protectedTail messages, in place. Media-carrying results
 // are kept. It reports whether anything changed.
 func pruneOldToolResults(history []providers.Message) bool {
+	return pruneToolResultsBefore(history, len(history)-protectedTail)
+}
+
+// pruneToolResultsBefore is pruneOldToolResults for history[:end].
+func pruneToolResultsBefore(history []providers.Message, end int) bool {
 	pruned := false
-	for i := 0; i < len(history)-protectedTail; i++ {
+	for i := 0; i < end; i++ {
 		if history[i].Role == "tool" && len(history[i].Content) > minToolResultChars &&
 			len(history[i].Media) == 0 && len(history[i].Attachments) == 0 {
 			history[i].Content = prunedToolResult
@@ -157,18 +162,25 @@ func pruneOldToolResults(history []providers.Message) bool {
 }
 
 // pruneSessionToolResults applies pruneOldToolResults to the stored history and
-// reports the resulting message count.
+// reports the resulting message count. When ts is the turn in progress, its
+// newest keepActiveRounds rounds are kept whole as well: the newest round holds
+// results the model has not seen yet.
 func (m *legacyContextManager) pruneSessionToolResults(
 	ctx context.Context,
 	agent *AgentInstance,
 	sessionKey string,
+	ts *turnState,
 ) (remaining int, ok bool) {
 	history, err := agent.Sessions.GetHistory(ctx, sessionKey)
 	if err != nil {
 		warnSessionStoreError(sessionKey, "get history", err)
 		return 0, false
 	}
-	if !pruneOldToolResults(history) {
+	end := len(history) - protectedTail
+	if ts != nil {
+		end = min(end, activeTurnPruneEnd(history, ts.persistedMessagesSnapshot()))
+	}
+	if !pruneToolResultsBefore(history, end) {
 		return 0, false
 	}
 	warnSessionStoreError(sessionKey, "set history", agent.Sessions.SetHistory(ctx, sessionKey, history))
