@@ -73,6 +73,7 @@ interface EditForm {
   streamingEnabled: boolean
   extraBody: string
   customHeaders: string
+  sessionHeader: string
 }
 
 interface EditModelSheetProps {
@@ -108,6 +109,7 @@ function buildInitialEditForm(model: ModelInfo): EditForm {
     customHeaders: model.custom_headers
       ? JSON.stringify(model.custom_headers, null, 2)
       : "",
+    sessionHeader: model.session_header ?? "",
   }
 }
 
@@ -139,6 +141,7 @@ export function EditModelSheet({
     streamingEnabled: false,
     extraBody: "",
     customHeaders: "",
+    sessionHeader: "",
   })
   const [saving, setSaving] = useState(false)
   const [setAsDefault, setSetAsDefault] = useState(false)
@@ -395,6 +398,7 @@ export function EditModelSheet({
         streaming,
         extra_body: extraBody,
         custom_headers: customHeaders,
+        session_header: form.sessionHeader.trim(),
       })
       onUpdated(response.reference_rename)
       if (setAsDefault && !model.is_default) {
@@ -737,6 +741,34 @@ export function EditModelSheet({
                     placeholder='{"X-Source": "coding-plan"}'
                     rows={3}
                   />
+                </Field>
+
+                <Field
+                  label={t("models.field.sessionHeader")}
+                  hint={t("models.field.sessionHeaderHint")}
+                >
+                  <div className="flex items-center gap-2">
+                    <Input
+                      value={form.sessionHeader}
+                      onChange={setField("sessionHeader")}
+                      placeholder="x-opencode-session"
+                      className="flex-1"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={form.sessionHeader === "x-opencode-session"}
+                      onClick={() =>
+                        setForm((f) => ({
+                          ...f,
+                          sessionHeader: "x-opencode-session",
+                        }))
+                      }
+                    >
+                      {t("models.field.sessionHeaderPreset")}
+                    </Button>
+                  </div>
                 </Field>
 
                 <Field
