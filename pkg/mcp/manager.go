@@ -709,7 +709,14 @@ func shouldReconnectCallError(err error) bool {
 	if errors.Is(err, mcp.ErrSessionMissing) {
 		return true
 	}
-	return strings.Contains(strings.ToLower(err.Error()), mcp.ErrSessionMissing.Error())
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, mcp.ErrSessionMissing.Error()) {
+		return true
+	}
+	// Servers answering a stale Mcp-Session-Id with HTTP 404 plus a JSON-RPC error
+	// body make the SDK return "<rpc error>: rejected by transport: Not Found"
+	// instead of ErrSessionMissing, and keep the dead session bound to the connection.
+	return strings.HasSuffix(msg, "rejected by transport: "+strings.ToLower(http.StatusText(http.StatusNotFound)))
 }
 
 func (m *Manager) reconnectServer(

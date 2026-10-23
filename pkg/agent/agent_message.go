@@ -27,7 +27,7 @@ func (al *AgentLoop) buildContinuationTarget(msg bus.InboundMessage) (*continuat
 	allocation := al.allocateRouteSession(route, msg)
 
 	return &continuationTarget{
-		SessionKey: resolveScopeKey(allocation.SessionKey, msg.SessionKey),
+		SessionKey: resolveScopeKey(allocation.SessionKey, effectiveSessionKey(msg)),
 		Channel:    msg.Channel,
 		ChatID:     msg.ChatID,
 	}, nil
@@ -53,7 +53,7 @@ func (al *AgentLoop) ProcessDirectWithChannel(
 	}
 
 	senderID := "direct"
-	if strings.HasPrefix(sessionKey, "agent:cron-") {
+	if strings.HasPrefix(sessionKey, cronSessionKeyPrefix) {
 		senderID = "cron"
 	}
 
@@ -140,6 +140,7 @@ func (al *AgentLoop) prepareInboundMessageForAgent(
 
 func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage) (string, error) {
 	msg = al.prepareInboundMessageForAgent(ctx, msg)
+	msg.SessionKey = effectiveSessionKey(msg)
 
 	// Add message preview to log (show full content for error messages)
 	var logContent string
