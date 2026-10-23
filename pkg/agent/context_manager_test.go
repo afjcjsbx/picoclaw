@@ -487,7 +487,7 @@ func TestLegacyCompact_Overflow_TooShortToCompress(t *testing.T) {
 // Legacy Compact post-turn tests
 // ---------------------------------------------------------------------------
 
-func TestLegacyCompact_PostTurn_BelowThreshold(t *testing.T) {
+func TestLegacyCompact_Threshold_NothingToSummarize(t *testing.T) {
 	cfg := testConfig(t)
 	al := newCMTestAgentLoop(cfg)
 
@@ -496,7 +496,6 @@ func TestLegacyCompact_PostTurn_BelowThreshold(t *testing.T) {
 		t.Fatal("expected default agent")
 	}
 
-	// Small history, below summarization thresholds
 	history := []providers.Message{
 		{Role: "user", Content: "hi"},
 		{Role: "assistant", Content: "hello"},
@@ -507,13 +506,12 @@ func TestLegacyCompact_PostTurn_BelowThreshold(t *testing.T) {
 
 	err := al.contextManager.Compact(context.Background(), &CompactRequest{
 		SessionKey: "session-small",
-		Reason:     ContextCompressReasonSummarize,
+		Reason:     ContextCompressReasonThreshold,
 	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if !errors.Is(err, ErrNothingToCompact) {
+		t.Fatalf("err = %v, want ErrNothingToCompact", err)
 	}
 
-	// History should remain unchanged
 	newHistory, err := defaultAgent.Sessions.GetHistory(context.Background(), "session-small")
 	if err != nil {
 		t.Fatalf("GetHistory: %v", err)
@@ -551,9 +549,7 @@ func alternatingHistory(turns int, content string) []providers.Message {
 	return history
 }
 
-func TestLegacyCompact_PostTurn_ExceedsTokenThreshold(t *testing.T) {
-	// Window 8000 - MaxTokens 4096 leaves 3904 usable; 75% is 2928 tokens.
-	// Six 2000-char messages are ~4800 tokens before the system prompt is counted.
+func TestLegacyCompact_Threshold_SummarizesSynchronously(t *testing.T) {
 	al := newSummarizeThresholdAgentLoop(t, 8000)
 	defaultAgent := al.registry.GetDefaultAgent()
 	if defaultAgent == nil {
@@ -565,26 +561,15 @@ func TestLegacyCompact_PostTurn_ExceedsTokenThreshold(t *testing.T) {
 		t.Fatalf("SetHistory: %v", err)
 	}
 
-	runtimeCh, closeRuntimeEvents := subscribeRuntimeEventsForTest(
-		t,
-		al,
-		16,
-		runtimeevents.KindAgentSessionSummarize,
-	)
-	defer closeRuntimeEvents()
-
 	err := al.contextManager.Compact(context.Background(), &CompactRequest{
 		SessionKey: "session-threshold",
-		Reason:     ContextCompressReasonSummarize,
+		Reason:     ContextCompressReasonThreshold,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	waitForRuntimeEvent(t, runtimeCh, 5*time.Second, func(evt runtimeevents.Event) bool {
-		return evt.Kind == runtimeevents.KindAgentSessionSummarize
-	})
-
+	// No waiting: the session is already compacted when Compact returns.
 	newHistory, err := defaultAgent.Sessions.GetHistory(context.Background(), "session-threshold")
 	if err != nil {
 		t.Fatalf("GetHistory: %v", err)
@@ -592,45 +577,85 @@ func TestLegacyCompact_PostTurn_ExceedsTokenThreshold(t *testing.T) {
 	if len(newHistory) >= len(history) {
 		t.Fatalf("expected summarization to reduce history from %d messages, got %d", len(history), len(newHistory))
 	}
+	summary, err := defaultAgent.Sessions.GetSummary(context.Background(), "session-threshold")
+	if err != nil {
+		t.Fatalf("GetSummary: %v", err)
+	}
+	if summary != "summary" {
+		t.Fatalf("summary = %q, want %q", summary, "summary")
+	}
 }
 
-// A long history of small messages must not be summarized while the prompt is
-// far below the token threshold: message count alone is not a trigger.
-func TestLegacyCompact_PostTurn_ManyMessagesBelowTokenThreshold(t *testing.T) {
-	al := newSummarizeThresholdAgentLoop(t, 1_000_000)
+// With nothing older than the active turn to summarize, the threshold path
+// clears old tool outputs instead, and reports a clean session as nothing to do.
+func TestLegacyCompact_Threshold_PrunesToolOutputsOfSingleTurn(t *testing.T) {
+	al := newSummarizeThresholdAgentLoop(t, 8000)
 	defaultAgent := al.registry.GetDefaultAgent()
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
 
-	history := alternatingHistory(30, "short")
-	if err := defaultAgent.Sessions.SetHistory(context.Background(), "session-many", history); err != nil {
+	bulky := strings.Repeat("z", 500)
+	history := []providers.Message{
+		{Role: "user", Content: "do the thing"},
+		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "c1", Name: "t"}}},
+		{Role: "tool", ToolCallID: "c1", Content: bulky},
+		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "c2", Name: "t"}}},
+		{Role: "tool", ToolCallID: "c2", Content: bulky},
+		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "c3", Name: "t"}}},
+		{Role: "tool", ToolCallID: "c3", Content: bulky},
+	}
+	if err := defaultAgent.Sessions.SetHistory(context.Background(), "session-single-turn", history); err != nil {
 		t.Fatalf("SetHistory: %v", err)
 	}
 
-	runtimeCh, closeRuntimeEvents := subscribeRuntimeEventsForTest(
-		t,
-		al,
-		16,
-		runtimeevents.KindAgentSessionSummarize,
-	)
-	defer closeRuntimeEvents()
+	req := &CompactRequest{SessionKey: "session-single-turn", Reason: ContextCompressReasonThreshold}
+	if err := al.contextManager.Compact(context.Background(), req); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got, err := defaultAgent.Sessions.GetHistory(context.Background(), "session-single-turn")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if len(got) != len(history) {
+		t.Fatalf("messages = %d, want %d (pruning must not drop messages)", len(got), len(history))
+	}
+	if got[2].Content != prunedToolResult {
+		t.Fatalf("old tool output = %q, want it cleared", got[2].Content)
+	}
+	if got[6].Content != bulky {
+		t.Fatalf("recent tool output must be kept, got %q", got[6].Content)
+	}
+
+	if err := al.contextManager.Compact(context.Background(), req); !errors.Is(err, ErrNothingToCompact) {
+		t.Fatalf("second compaction err = %v, want ErrNothingToCompact", err)
+	}
+}
+
+// Legacy no longer summarizes after the turn: the post-turn call is a no-op and
+// the work happens synchronously before the next LLM call.
+func TestLegacyCompact_PostTurnSummarizeIsNoOp(t *testing.T) {
+	al := newSummarizeThresholdAgentLoop(t, 8000)
+	defaultAgent := al.registry.GetDefaultAgent()
+	if defaultAgent == nil {
+		t.Fatal("expected default agent")
+	}
+
+	history := alternatingHistory(3, strings.Repeat("x", 2000))
+	if err := defaultAgent.Sessions.SetHistory(context.Background(), "session-post-turn", history); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
 
 	err := al.contextManager.Compact(context.Background(), &CompactRequest{
-		SessionKey: "session-many",
+		SessionKey: "session-post-turn",
 		Reason:     ContextCompressReasonSummarize,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	select {
-	case evt := <-runtimeCh:
-		t.Fatalf("unexpected summarize event for a below-threshold prompt: %+v", evt)
-	case <-time.After(200 * time.Millisecond):
-	}
-
-	newHistory, err := defaultAgent.Sessions.GetHistory(context.Background(), "session-many")
+	newHistory, err := defaultAgent.Sessions.GetHistory(context.Background(), "session-post-turn")
 	if err != nil {
 		t.Fatalf("GetHistory: %v", err)
 	}

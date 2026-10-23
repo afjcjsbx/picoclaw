@@ -47,7 +47,7 @@ func newSeahorseContextManager(_ json.RawMessage, al *AgentLoop) (ContextManager
 	dbPath := agent.Workspace + "/sessions/seahorse.db"
 
 	// Create CompleteFn from provider
-	completeFn := providerToCompleteFn(agent.Provider, agent.Model)
+	completeFn := providerToCompleteFn(agent.Provider, resolvedCandidateModel(agent.Candidates, agent.Model))
 
 	// Create engine
 	engine, err := seahorse.NewEngine(seahorse.Config{
@@ -298,6 +298,10 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 		return err
 	}
 	m.notifyCompaction(ctx, req, result)
+	if req.Reason == ContextCompressReasonThreshold &&
+		(result == nil || result.LeafSummaries+result.CondensedSummaries == 0) {
+		return ErrNothingToCompact
+	}
 	return nil
 }
 

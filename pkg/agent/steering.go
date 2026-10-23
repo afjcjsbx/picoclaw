@@ -527,7 +527,7 @@ func (al *AgentLoop) HardAbort(sessionKey string) error {
 		"session_key":            sessionKey,
 		"turn_id":                ts.turnID,
 		"depth":                  ts.depth,
-		"initial_history_length": ts.initialHistoryLength,
+		"initial_history_length": ts.initialHistoryLen(),
 	})
 
 	// Cancel the active provider/tool turn contexts immediately so long-running
@@ -548,9 +548,9 @@ func (al *AgentLoop) HardAbort(sessionKey string) error {
 		if err != nil {
 			return fmt.Errorf("hard abort: get history: %w", err)
 		}
-		if ts.initialHistoryLength < len(history) {
+		if initialLen := ts.initialHistoryLen(); initialLen < len(history) {
 			warnSessionStoreError(sessionKey, "set history",
-				ts.session.SetHistory(context.Background(), sessionKey, history[:ts.initialHistoryLength]))
+				ts.session.SetHistory(context.Background(), sessionKey, history[:initialLen]))
 		}
 	}
 

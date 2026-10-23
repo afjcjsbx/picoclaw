@@ -23,6 +23,7 @@ type TurnStartPayload struct {
 const (
 	skillContextTriggerInitialBuild        = "initial_build"
 	skillContextTriggerContextRetryRebuild = "context_retry_rebuild"
+	skillContextTriggerThresholdRebuild    = "threshold_rebuild"
 )
 
 type SkillContextSnapshot struct {
@@ -94,8 +95,11 @@ const (
 	ContextCompressReasonProactive ContextCompressReason = "proactive_budget"
 	// ContextCompressReasonRetry indicates compression during context-error retry handling.
 	ContextCompressReasonRetry ContextCompressReason = "llm_retry"
-	// ContextCompressReasonSummarize indicates post-turn async summarization.
+	// ContextCompressReasonSummarize indicates the post-turn compaction opportunity.
 	ContextCompressReasonSummarize ContextCompressReason = "summarize"
+	// ContextCompressReasonThreshold indicates synchronous compaction right before an
+	// LLM call, at turn start or mid-turn, once the prompt reached the summarize threshold.
+	ContextCompressReasonThreshold ContextCompressReason = "threshold"
 	// ContextCompressReasonManual indicates a user-requested /compact.
 	ContextCompressReasonManual ContextCompressReason = "manual"
 )
@@ -107,7 +111,7 @@ type ContextCompressPayload struct {
 	RemainingMessages int
 }
 
-// SessionSummarizePayload describes a completed async session summarization.
+// SessionSummarizePayload describes a completed session summarization.
 type SessionSummarizePayload struct {
 	SummarizedMessages int
 	KeptMessages       int

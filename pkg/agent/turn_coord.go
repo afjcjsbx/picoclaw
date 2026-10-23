@@ -223,6 +223,10 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 		// Always sync messages into exec.messages so CallLLM sees the updated state
 		exec.messages = messages
 
+		// Compact synchronously when the prompt reached the summarize threshold,
+		// at turn start or mid tool loop, so the turn continues from there.
+		pipeline.CompactBeforeLLM(turnCtx, ts, exec)
+
 		logger.DebugCF("agent", "LLM iteration",
 			map[string]any{
 				"agent_id":  ts.agent.ID,
