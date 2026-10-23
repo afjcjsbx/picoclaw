@@ -74,14 +74,12 @@ func computeContextUsage(agent *AgentInstance, sessionKey string) *bus.ContextUs
 	// proactive trigger (msgTokens + toolTokens + maxTokens > contextWindow).
 	compressAt := effectiveWindow
 
-	// summarizeAt = soft summarization trigger: matches maybeSummarize's
-	// threshold (contextWindow * SummarizeTokenPercent / 100).
-	//
-	// The engine compares this against history-message tokens ONLY (not
-	// UsedTokens).  HistoryTokens is exposed alongside UsedTokens so the
-	// UI can show both values and avoid user confusion.
-	summarizeAt := contextWindow * agent.SummarizeTokenPercent / 100
-	if summarizeAt <= 0 {
+	// summarizeAt = soft summarization trigger, a percentage of the same
+	// effective window compressAt uses, compared against UsedTokens by
+	// maybeSummarize. Capped at compressAt so summarization always fires no
+	// later than emergency compression.
+	summarizeAt := compressAt * agent.SummarizeTokenPercent / 100
+	if summarizeAt <= 0 || summarizeAt > compressAt {
 		summarizeAt = compressAt
 	}
 

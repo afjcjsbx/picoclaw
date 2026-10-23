@@ -107,23 +107,18 @@ func (m *legacyContextManager) Clear(ctx context.Context, sessionKey string) err
 	return agent.Sessions.Save(ctx, sessionKey)
 }
 
-// maybeSummarize triggers summarization if the session history exceeds thresholds.
-// It runs asynchronously in a goroutine.
+// maybeSummarize triggers summarization once the estimated prompt (system prompt,
+// summary, history and tool definitions) reaches summarize_token_percent of the
+// usable context window, the same budget isOverContextBudget enforces. Message
+// count plays no part. It runs asynchronously in a goroutine.
 func (m *legacyContextManager) maybeSummarize(ctx context.Context, sessionKey string) {
 	agent := m.al.registry.GetDefaultAgent()
 	if agent == nil {
 		return
 	}
 
-	newHistory, err := agent.Sessions.GetHistory(ctx, sessionKey)
-	if err != nil {
-		warnSessionStoreError(sessionKey, "get history", err)
-		newHistory = []providers.Message{}
-	}
-	tokenEstimate := m.estimateTokens(newHistory)
-	threshold := agent.ContextWindow * agent.SummarizeTokenPercent / 100
-
-	if len(newHistory) > agent.SummarizeMessageThreshold || tokenEstimate > threshold {
+	usage := computeContextUsage(agent, sessionKey)
+	if usage != nil && usage.UsedTokens >= usage.SummarizeAtTokens {
 		summarizeKey := agent.ID + ":" + sessionKey
 		if _, loading := m.summarizing.LoadOrStore(summarizeKey, true); !loading {
 			// Capture the active turn (if any) before going async so the
@@ -500,12 +495,4 @@ func focusInstruction(focus string) string {
 		return ""
 	}
 	return " Pay particular attention to preserving details about: " + focus + "."
-}
-
-func (m *legacyContextManager) estimateTokens(messages []providers.Message) int {
-	total := 0
-	for _, msg := range messages {
-		total += EstimateMessageTokens(msg)
-	}
-	return total
 }

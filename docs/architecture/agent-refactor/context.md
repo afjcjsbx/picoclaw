@@ -87,7 +87,7 @@ Three automatic compression paths exist, in order of preference. A fourth, user-
 
 `maybeSummarize` runs after each Turn completes.
 
-Triggers when message count exceeds a threshold, or when estimated history tokens exceed a percentage of `ContextWindow`. If triggered, a background goroutine calls the LLM to produce a summary of the oldest messages. The summary is stored via `SetSummary`; `BuildMessages` injects it into the system prompt on the next call.
+Triggers when the estimated prompt (system prompt, summary, history, tool definitions) reaches `summarize_token_percent` of the usable window, i.e. `(ContextWindow - MaxTokens) * summarize_token_percent / 100`. This is the same budget the proactive check enforces, so the soft threshold always sits at or below the hard one. Message count is not a trigger (`summarize_message_threshold` is deprecated and ignored). The same value is reported as `SummarizeAtTokens` in `/context` and the UI. If triggered, a background goroutine calls the LLM to produce a summary of the oldest messages. The summary is stored via `SetSummary`; `BuildMessages` injects it into the system prompt on the next call.
 
 Cut point uses `findSafeBoundary` so no Turn is split.
 
@@ -158,8 +158,6 @@ budget check --> compression decision --> mutate session --> BuildMessages reads
 ## Known gaps
 
 These are recognized limitations in the current implementation, documented here for visibility:
-
-- **Summarization trigger does not use the full budget formula.** `maybeSummarize` compares estimated history tokens against a percentage of `ContextWindow`. It does not account for system prompt size, tool definition overhead, or `MaxTokens` reserve. The proactive check covers the critical path (preventing 400 errors), but the summarization trigger could be aligned with the same budget model for more accurate early compression.
 
 - **Token estimation is heuristic.** It does not account for provider-specific tokenization, exact system prompt size (assembled separately), or variable image token costs. The two-path design (proactive + reactive) is intended to tolerate this imprecision.
 

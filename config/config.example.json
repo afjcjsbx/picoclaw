@@ -24,7 +24,6 @@
       },
       "vision_max_image_dimension": 1568,
       "vision_jpeg_quality": 85,
-      "summarize_message_threshold": 20,
       "summarize_token_percent": 75,
       "split_on_marker": false,
       "max_llm_retries": 2,
