@@ -84,7 +84,6 @@ func (p *Pipeline) CallLLM(
 	if exec.escalatedToPrimary {
 		exec.llmModelName = resolvedCandidateModelName(exec.activeCandidates, exec.activeModel)
 	}
-	nativeSearchBeforeHook := exec.useNativeSearch
 
 	// BeforeLLM hook
 	if p.Hooks != nil {
@@ -123,29 +122,36 @@ func (p *Pipeline) CallLLM(
 			return ControlBreak, nil
 		}
 	}
-	exec.useNativeSearch = webSearchEnabled && al.cfg.Tools.Web.PreferNative &&
-		func() bool {
-			if ns, ok := exec.activeProvider.(providers.NativeSearchCapable); ok {
-				return ns.SupportsNativeSearch()
-			}
-			return false
-		}()
-	if nativeSearchBeforeHook && !exec.useNativeSearch {
-		exec.providerToolDefs = restoreToolDefinition(
-			exec.providerToolDefs,
-			filterToolsByTurnProfile(ts.agent.Tools.ToProviderDefs(), ts.profile),
-			"web_search",
-		)
-	}
-	if exec.useNativeSearch {
-		exec.providerToolDefs = filterClientWebSearch(exec.providerToolDefs)
-		if exec.llmOpts == nil {
-			exec.llmOpts = make(map[string]any)
+	// refreshNativeSearch re-derives native search from the active provider and
+	// adjusts the tool definitions and options to match. It must run again
+	// whenever the active provider changes after the request was built.
+	refreshNativeSearch := func() {
+		wasNative := exec.useNativeSearch
+		exec.useNativeSearch = webSearchEnabled && al.cfg.Tools.Web.PreferNative &&
+			func() bool {
+				if ns, ok := exec.activeProvider.(providers.NativeSearchCapable); ok {
+					return ns.SupportsNativeSearch()
+				}
+				return false
+			}()
+		if wasNative && !exec.useNativeSearch && !exec.gracefulTerminal {
+			exec.providerToolDefs = restoreToolDefinition(
+				exec.providerToolDefs,
+				filterToolsByTurnProfile(ts.agent.Tools.ToProviderDefs(), ts.profile),
+				"web_search",
+			)
 		}
-		exec.llmOpts["native_search"] = true
-	} else {
-		delete(exec.llmOpts, "native_search")
+		if exec.useNativeSearch {
+			exec.providerToolDefs = filterClientWebSearch(exec.providerToolDefs)
+			if exec.llmOpts == nil {
+				exec.llmOpts = make(map[string]any)
+			}
+			exec.llmOpts["native_search"] = true
+		} else {
+			delete(exec.llmOpts, "native_search")
+		}
 	}
+	refreshNativeSearch()
 
 	al.emitEvent(
 		runtimeevents.KindAgentLLMRequest,
@@ -539,6 +545,7 @@ func (p *Pipeline) CallLLM(
 		exec.llmModel = exec.activeModel
 		exec.llmModelName = resolvedCandidateModelName(exec.activeCandidates, exec.activeModel)
 		applyTurnThinkingOptions(exec, ts.agent, exec.activeProvider, true)
+		refreshNativeSearch()
 		logger.WarnCF("agent", "Light model candidates failed; falling back to primary model", map[string]any{
 			"agent_id":  ts.agent.ID,
 			"iteration": iteration,

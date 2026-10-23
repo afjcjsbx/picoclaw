@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/sipeed/picoclaw/pkg/tools"
 )
 
 type issue3445FailingLightProvider struct {
@@ -61,5 +62,82 @@ func TestRunTurn_FallsBackToPrimaryWhenLightModelFails(t *testing.T) {
 	}
 	if got, want := result.finalContent, "primary answer"; got != want {
 		t.Fatalf("final content = %q, want %q", got, want)
+	}
+}
+
+type issue3445NativeSearchLightProvider struct {
+	issue3445FailingLightProvider
+}
+
+func (p *issue3445NativeSearchLightProvider) SupportsNativeSearch() bool { return true }
+
+type issue3445WebSearchTool struct{}
+
+func (issue3445WebSearchTool) Name() string        { return "web_search" }
+func (issue3445WebSearchTool) Description() string { return "client-side web search" }
+func (issue3445WebSearchTool) Parameters() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{}}
+}
+
+func (issue3445WebSearchTool) Execute(context.Context, map[string]any) *tools.ToolResult {
+	return tools.SilentResult("ok")
+}
+
+type issue3445CapturePrimaryProvider struct {
+	tools []providers.ToolDefinition
+	opts  map[string]any
+}
+
+func (p *issue3445CapturePrimaryProvider) Chat(
+	_ context.Context,
+	_ []providers.Message,
+	toolDefs []providers.ToolDefinition,
+	_ string,
+	opts map[string]any,
+) (*providers.LLMResponse, error) {
+	p.tools = append([]providers.ToolDefinition(nil), toolDefs...)
+	p.opts = shallowCloneLLMOptions(opts)
+	return &providers.LLMResponse{Content: "primary answer", FinishReason: "stop"}, nil
+}
+
+func (p *issue3445CapturePrimaryProvider) GetDefaultModel() string { return "primary-model" }
+
+func TestPipeline_CallLLM_LightFallbackRecomputesNativeSearchForPrimary(t *testing.T) {
+	primary := &issue3445CapturePrimaryProvider{}
+	light := &issue3445NativeSearchLightProvider{}
+	al, agent, cleanup := newTurnCoordTestLoop(t, primary)
+	defer cleanup()
+
+	agent.Tools.Register(issue3445WebSearchTool{})
+	al.cfg.Tools.Web.Enabled = true
+	al.cfg.Tools.Web.PreferNative = true
+	configureIssue3445Routing(agent, light, 0, 99)
+
+	pipeline := NewPipeline(al)
+	ts := newTurnState(agent, makeTestProcessOpts("test-light-fallback-native"), turnEventScope{
+		turnID:  "turn-light-fallback-native",
+		context: newTurnContext(nil, nil, nil),
+	})
+	exec, err := pipeline.SetupTurn(context.Background(), ts)
+	if err != nil {
+		t.Fatalf("SetupTurn failed: %v", err)
+	}
+	if !exec.usedLight {
+		t.Fatal("expected the turn to start on the light tier")
+	}
+
+	if _, err := pipeline.CallLLM(context.Background(), context.Background(), ts, exec, 1); err != nil {
+		t.Fatalf("CallLLM failed: %v", err)
+	}
+
+	if _, ok := primary.opts["native_search"]; ok {
+		t.Fatalf("primary does not support native search, got opts %#v", primary.opts)
+	}
+	hasWebSearch := false
+	for _, td := range primary.tools {
+		hasWebSearch = hasWebSearch || td.Function.Name == "web_search"
+	}
+	if !hasWebSearch {
+		t.Fatalf("primary should receive the client web_search tool, got %#v", primary.tools)
 	}
 }
