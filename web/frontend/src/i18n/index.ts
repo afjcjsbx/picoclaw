@@ -1,8 +1,5 @@
 import dayjs from "dayjs"
-import "dayjs/locale/bn"
-import "dayjs/locale/cs"
 import "dayjs/locale/en"
-import "dayjs/locale/pt-br"
 import "dayjs/locale/zh-cn"
 import localizedFormat from "dayjs/plugin/localizedFormat"
 import relativeTime from "dayjs/plugin/relativeTime"
@@ -11,10 +8,7 @@ import LanguageDetector from "i18next-browser-languagedetector"
 import { initReactI18next } from "react-i18next"
 
 import en from "./locales/en.json"
-import ptBr from "./locales/pt-br.json"
-import bnIn from "./locales/bn-in.json"
 import zh from "./locales/zh.json"
-import cs from "./locales/cs.json"
 
 dayjs.extend(relativeTime)
 dayjs.extend(localizedFormat)
@@ -32,17 +26,8 @@ i18n
       en: {
         translation: en,
       },
-      "pt-BR": {
-        translation: ptBr,
-      },
-      "bn-IN": {
-        translation: bnIn,
-      },
       zh: {
         translation: zh,
-      },
-      cs: {
-        translation: cs,
       },
     },
     fallbackLng: "en",
@@ -56,12 +41,6 @@ i18n
 i18n.on("languageChanged", (lng) => {
   if (lng.startsWith("zh")) {
     dayjs.locale("zh-cn")
-  } else if (lng.startsWith("pt")) {
-    dayjs.locale("pt-br")
-  } else if (lng.startsWith("bn")) {
-    dayjs.locale("bn")
-  } else if (lng.startsWith("cs")) {
-    dayjs.locale("cs")
   } else {
     dayjs.locale("en")
   }
