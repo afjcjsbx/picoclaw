@@ -1,7 +1,9 @@
 package pico
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/http"
@@ -66,6 +68,94 @@ func TestHandleMessageSend_ForwardsMessageMetadata(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("expected inbound pico message")
+	}
+}
+
+func TestHandleMessageSend_StoresAudioAttachmentWithMediaStore(t *testing.T) {
+	msgBus := bus.NewMessageBus()
+	bc := &config.Channel{Type: config.ChannelPico, Enabled: true}
+	cfg := &config.PicoSettings{}
+	cfg.SetToken("test-token")
+	ch, err := NewPicoChannel(bc, cfg, msgBus)
+	if err != nil {
+		t.Fatalf("NewPicoChannel: %v", err)
+	}
+	ch.ctx = context.Background()
+
+	store := media.NewFileMediaStore()
+	ch.SetMediaStore(store)
+
+	audioBytes := []byte("fake webm audio")
+	dataURL := "data:audio/webm;base64," + base64.StdEncoding.EncodeToString(audioBytes)
+
+	ch.handleMessageSend(&picoConn{id: "conn-audio", sessionID: "sess-audio"}, PicoMessage{
+		Type:      TypeMessageSend,
+		ID:        "msg-audio",
+		SessionID: "sess-audio",
+		Payload: map[string]any{
+			PayloadKeyContent: "",
+			"attachments": []any{
+				map[string]any{
+					"type":         "audio",
+					"filename":     "voice.webm",
+					"content_type": "audio/webm",
+					"url":          dataURL,
+				},
+			},
+		},
+	})
+
+	select {
+	case inbound := <-msgBus.InboundChan():
+		if !strings.Contains(inbound.Content, "[audio: voice.webm]") {
+			t.Fatalf("content = %q, want audio annotation", inbound.Content)
+		}
+		if len(inbound.Media) != 1 || !strings.HasPrefix(inbound.Media[0], "media://") {
+			t.Fatalf("media = %#v, want one media ref", inbound.Media)
+		}
+
+		localPath, meta, err := store.ResolveWithMeta(inbound.Media[0])
+		if err != nil {
+			t.Fatalf("ResolveWithMeta() error = %v", err)
+		}
+		data, err := os.ReadFile(localPath)
+		if err != nil {
+			t.Fatalf("ReadFile() error = %v", err)
+		}
+		if !bytes.Equal(data, audioBytes) {
+			t.Fatalf("stored audio = %q, want %q", data, audioBytes)
+		}
+		if meta.Filename != "voice.webm" {
+			t.Fatalf("filename = %q, want voice.webm", meta.Filename)
+		}
+		if meta.ContentType != "audio/webm" {
+			t.Fatalf("content type = %q, want audio/webm", meta.ContentType)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected inbound pico audio message")
+	}
+}
+
+func TestPicoAudioFilename(t *testing.T) {
+	tests := []struct {
+		name        string
+		raw         string
+		contentType string
+		want        string
+	}{
+		{name: "keeps webm", raw: "voice.webm", contentType: "audio/webm", want: "voice.webm"},
+		{name: "maps mp4 to m4a", raw: "voice.mp4", contentType: "audio/mp4", want: "voice.m4a"},
+		{name: "defaults empty name", raw: "", contentType: "audio/ogg", want: "voice.ogg"},
+		{name: "strips path and brackets", raw: "../evil[1].mp3", contentType: "audio/mpeg", want: "evil_1_.mp3"},
+		{name: "strips control characters", raw: "voice\nname", contentType: "audio/wav", want: "voice_name.wav"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := picoAudioFilename(tt.raw, tt.contentType); got != tt.want {
+				t.Fatalf("picoAudioFilename(%q, %q) = %q, want %q", tt.raw, tt.contentType, got, tt.want)
+			}
+		})
 	}
 }
 

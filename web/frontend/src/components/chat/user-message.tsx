@@ -26,6 +26,9 @@ export const UserMessage = memo(function UserMessage({
   const imageAttachments = attachments.filter(
     (attachment) => attachment.type === "image",
   )
+  const audioAttachments = attachments.filter(
+    (attachment) => attachment.type === "audio",
+  )
   const copyMessageLabel = isCopied
     ? t("chat.copiedLabel")
     : t("chat.copyMessage")
@@ -42,6 +45,21 @@ export const UserMessage = memo(function UserMessage({
               src={attachment.url}
               alt={attachment.filename || t("chat.uploadedImage")}
               className="max-h-72 max-w-full object-cover"
+            />
+          ))}
+        </div>
+      )}
+
+      {audioAttachments.length > 0 && (
+        <div className="flex max-w-[70%] flex-col items-end gap-2">
+          {audioAttachments.map((attachment, index) => (
+            <audio
+              key={`${attachment.url}-${index}`}
+              src={attachment.url}
+              controls
+              preload="metadata"
+              aria-label={attachment.filename || t("chat.uploadedAudio")}
+              className="h-10 max-w-full"
             />
           ))}
         </div>
@@ -71,10 +89,16 @@ export const UserMessage = memo(function UserMessage({
         </div>
       )}
 
-      {attachments.some((attachment) => attachment.type !== "image") && (
+      {attachments.some(
+        (attachment) =>
+          attachment.type !== "image" && attachment.type !== "audio",
+      ) && (
         <div className="flex max-w-[70%] flex-wrap justify-end gap-2">
           {attachments
-            .filter((attachment) => attachment.type !== "image")
+            .filter(
+              (attachment) =>
+                attachment.type !== "image" && attachment.type !== "audio",
+            )
             .map((attachment, index) => {
               const card = (
                 <>

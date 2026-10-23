@@ -16,7 +16,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/media"
 )
 
-var audioExtensions = []string{".mp3", ".wav", ".ogg", ".m4a", ".flac", ".aac", ".wma"}
+var audioExtensions = []string{".mp3", ".wav", ".ogg", ".m4a", ".flac", ".aac", ".wma", ".webm"}
 
 func AudioFormat(path string) (string, error) {
 	ext := strings.ToLower(filepath.Ext(path))

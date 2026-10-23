@@ -1210,6 +1210,23 @@ export function ChatPage() {
     }
   }
 
+  const handleSendAudio = (attachment: ChatAttachment) => {
+    if (
+      canInput &&
+      sendMessage({
+        content: input,
+        attachments: [...attachments, attachment],
+      })
+    ) {
+      setInput("")
+      setAttachments([])
+      return true
+    }
+    // Keep the recording attached so the user can retry instead of losing it.
+    setAttachments((current) => [...current, attachment])
+    return false
+  }
+
   const handleAddFiles = () => {
     if (!canInput) return
     fileInputRef.current?.click()
@@ -1501,6 +1518,7 @@ export function ChatPage() {
             onDrop={handleComposerDrop}
             onRemoveAttachment={handleRemoveAttachment}
             onSend={handleSend}
+            onSendAudio={handleSendAudio}
             modelSelector={
               hasAvailableModels ? (
                 <ModelSelector
