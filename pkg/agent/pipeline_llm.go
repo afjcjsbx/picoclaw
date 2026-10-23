@@ -330,14 +330,8 @@ func (p *Pipeline) CallLLM(
 
 	// Retry loop
 	var err error
-	maxRetries := p.Cfg.Agents.Defaults.MaxLLMRetries
-	if maxRetries <= 0 {
-		maxRetries = 2
-	}
-	backoffSecs := p.Cfg.Agents.Defaults.LLMRetryBackoffSecs
-	if backoffSecs <= 0 {
-		backoffSecs = 2
-	}
+	llmRetrySettings := llmRetryFromConfig(p.Cfg)
+	maxRetries := llmRetrySettings.max
 	for {
 		skipPrimaryFallback := false
 		for retry := 0; retry <= maxRetries; retry++ {
@@ -378,7 +372,7 @@ func (p *Pipeline) CallLLM(
 				strings.Contains(errMsg, "request too large"))
 
 			if isTransientError && retry < maxRetries {
-				backoff := time.Duration(retry+1) * time.Duration(backoffSecs) * time.Second
+				backoff := llmRetrySettings.wait(retry)
 				al.emitEvent(
 					runtimeevents.KindAgentLLMRetry,
 					ts.eventMeta("runTurn", "turn.llm.retry"),
@@ -444,39 +438,8 @@ func (p *Pipeline) CallLLM(
 						"error":       compactErr.Error(),
 					})
 				}
-				ts.refreshRestorePointFromSession(ts.agent)
-				if asmResp, asmErr := p.ContextManager.Assemble(ctx, &AssembleRequest{
-					SessionKey: ts.sessionKey,
-					Budget:     ts.agent.ContextWindow,
-					MaxTokens:  ts.agent.MaxTokens,
-				}); asmErr == nil && asmResp != nil {
-					exec.history = asmResp.History
-					exec.summary = asmResp.Summary
-				} else if asmErr != nil {
-					warnSessionStoreError(ts.sessionKey, "assemble", asmErr)
-				}
-				contextualSkills := ts.activeSkills
-				if ts.agent.ContextBuilder != nil {
-					contextualSkills = ts.agent.ContextBuilder.ResolveActiveSkillsForContext(ts.activeSkills)
-				}
-				ts.recordSkillContextSnapshot(skillContextTriggerContextRetryRebuild, contextualSkills)
-				stableHistory, protectedTurnTail := splitHistoryForActiveTurn(
-					exec.history,
-					ts.persistedMessagesSnapshot(),
-				)
-				buildMessages := func(trimmedHistory []providers.Message) []providers.Message {
-					fullHistory := append(append([]providers.Message(nil), trimmedHistory...), protectedTurnTail...)
-					rebuildPromptReq := promptBuildRequestForTurn(ts, fullHistory, exec.summary, "", nil, p.Cfg)
-					rebuildPromptReq.ActiveSkills = append([]string(nil), contextualSkills...)
-					rebuilt := ts.agent.ContextBuilder.BuildMessagesFromPrompt(rebuildPromptReq)
-					rebuilt = append(rebuilt, exec.loopWarnings...)
-					return resolveMediaRefsWithOptions(
-						rebuilt,
-						p.MediaStore,
-						mediaOpts,
-						len(rebuilt)-len(protectedTurnTail)-len(exec.loopWarnings),
-					)
-				}
+				rebuilt := p.reassembleActiveTurn(ctx, ts, exec, skillContextTriggerContextRetryRebuild)
+				stableHistory, protectedTurnTail, buildMessages := rebuilt.stable, rebuilt.protected, rebuilt.build
 				originalHistoryCount := len(exec.history)
 				var fit bool
 				var trimmedStableHistory []providers.Message //nolint:prealloc // Replaced by the slice returned from trimming below.

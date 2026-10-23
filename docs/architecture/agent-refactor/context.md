@@ -83,13 +83,25 @@ Turn is the atomic unit for compression. Cutting inside a Turn can orphan tool-c
 
 Three automatic compression paths exist, in order of preference. A fourth, user-triggered path (`/compact`) is described after them.
 
-### 1. Async summarization
+### 1. Threshold compaction (synchronous, before every LLM call)
 
-`maybeSummarize` runs after each Turn completes.
+`Pipeline.CompactBeforeLLM` runs before each LLM call of a turn, so it covers both the start of a turn and the middle of a tool loop. It only runs for turns with history and `EnableSummary` (not heartbeat, background or sub-turns).
 
-Triggers when message count exceeds a threshold, or when estimated history tokens exceed a percentage of `ContextWindow`. If triggered, a background goroutine calls the LLM to produce a summary of the oldest messages. The summary is stored via `SetSummary`; `BuildMessages` injects it into the system prompt on the next call.
+It estimates the prompt about to be sent (`exec.messages` plus tool definitions) and compares it with `summarize_token_percent` of the usable window, i.e. `(ContextWindow - MaxTokens) * summarize_token_percent / 100`. This is the same budget the proactive check enforces, so the soft threshold always sits at or below the hard one. Message count is not a trigger (`summarize_message_threshold` is deprecated and ignored). The same value is reported as `SummarizeAtTokens` in `/context` and the UI.
 
-Cut point uses `findSafeBoundary` so no Turn is split.
+When the threshold is reached it calls `ContextManager.Compact` with `Reason: ContextCompressReasonThreshold`, **blocking the turn** until it returns. If the session changed, it re-reads history and summary through `Assemble` and rebuilds `exec.messages` around the active turn (the same rebuild as the context-error retry, via `reassembleActiveTurn`; the active turn's messages are never dropped). The turn then carries on from the compacted context. `ErrNothingToCompact` means nothing changed and the prompt is kept. Compaction is best effort: any failure leaves the prompt as is, and the hard checks below remain the safety net.
+
+- **legacy**: compaction runs synchronously on the turn's context, so a hard abort cancels it and a canceled summarization is never applied. It works in this order, stopping at the first step that changes the session:
+  1. `summarizeSession` summarizes earlier Turns. The cut point is a Turn boundary (`findSafeBoundary`), so the active turn stays whole.
+  2. `summarizeActiveTurn` summarizes the **middle of the active turn**. The turn's opening user message and its newest two tool rounds (an assistant message plus its tool results, never split) stay verbatim; the rounds in between, with their tool calls and bounded tool outputs, are folded into the session summary on top of the existing one. The newest round is never summarized because the model has not seen its results yet. It is skipped when the middle would reclaim less than a tenth of the threshold, so an LLM call is never spent on a few hundred tokens.
+  3. Old tool outputs are cleared (`pruneOldToolResults`) when neither step applies.
+
+  `CompactBeforeLLM` chains up to three passes per LLM call, so one call can both summarize earlier Turns and the turn's own middle. The turn then continues with the kept rounds, the summary in the system prompt, and its original user message first. The post-turn `Compact(summarize)` is a no-op for legacy: the work moved here, and being synchronous it can no longer race with messages appended while the summary is generated.
+- **seahorse**: unchanged policy. A leaf compaction pass runs through `Engine.Compact`; if it creates no summary, `ErrNothingToCompact` is returned. Seahorse still compacts after the turn as before.
+
+The summary is stored via `SetSummary`; `BuildMessages` injects it into the system prompt.
+
+Summarization requests (legacy and seahorse) retry transient failures (rate limits, 5xx, timeouts, network errors: the `transientLLMRetryReason` classification the main loop uses) with the same `max_llm_retries` and `llm_retry_backoff_secs` backoff, and stop waiting when the turn is canceled. Other failures are not retried this way: legacy keeps its short retries and then falls back to a truncated transcript, and a failed seahorse pass leaves the turn to continue uncompacted.
 
 ### 2. Proactive budget check
 
@@ -115,7 +127,7 @@ This is the fallback for when the token estimate undershoots reality.
 
 When nothing was summarized (history too short, or already compacted), `Compact` returns `ErrNothingToCompact` and the command replies "Nothing to compact yet." Other errors are reported as "Failed to compact context: ...".
 
-- **legacy**: runs `summarizeSession` directly, so the cut point, the last-four-messages tail and the `agent.session.summarize` event match the async path. It takes the same per-session dedup key as `maybeSummarize`; if an async summarization is in flight the command fails with "a summarization is already in progress" instead of racing it.
+- **legacy**: runs `summarizeSession` directly, so the cut point, the last-four-messages tail and the `agent.session.summarize` event match threshold compaction. It takes the same per-session dedup key; if a summarization is already in flight the command fails with "a summarization is already in progress" instead of racing it.
 - **seahorse**: calls `Engine.CompactNow`, which runs one leaf pass followed by the condensed loop synchronously (the automatic path runs the condensed loop in a background goroutine). The fresh tail stays protected. It shares the `condensing` dedup map with the async loop.
 
 Both implementations leave the automatic prompts unchanged when no focus is given.
@@ -159,7 +171,7 @@ budget check --> compression decision --> mutate session --> BuildMessages reads
 
 These are recognized limitations in the current implementation, documented here for visibility:
 
-- **Summarization trigger does not use the full budget formula.** `maybeSummarize` compares estimated history tokens against a percentage of `ContextWindow`. It does not account for system prompt size, tool definition overhead, or `MaxTokens` reserve. The proactive check covers the critical path (preventing 400 errors), but the summarization trigger could be aligned with the same budget model for more accurate early compression.
+- **The newest tool rounds are never summarized.** A turn whose last two rounds alone exceed the threshold stays over it until those rounds age out; the context-error retry remains the safety net. Summarizing a turn needs more than two rounds.
 
 - **Token estimation is heuristic.** It does not account for provider-specific tokenization, exact system prompt size (assembled separately), or variable image token costs. The two-path design (proactive + reactive) is intended to tolerate this imprecision.
 

@@ -47,7 +47,11 @@ func newSeahorseContextManager(_ json.RawMessage, al *AgentLoop) (ContextManager
 	dbPath := agent.Workspace + "/sessions/seahorse.db"
 
 	// Create CompleteFn from provider
-	completeFn := providerToCompleteFn(agent.Provider, agent.Model)
+	completeFn := providerToCompleteFn(
+		agent.Provider,
+		resolvedCandidateModel(agent.Candidates, agent.Model),
+		llmRetryFromConfig(al.cfg),
+	)
 
 	// Create engine
 	engine, err := seahorse.NewEngine(seahorse.Config{
@@ -205,11 +209,14 @@ func (m *seahorseContextManager) Close() error {
 	return m.closeErr
 }
 
-// providerToCompleteFn wraps providers.LLMProvider as a seahorse.CompleteFn.
-func providerToCompleteFn(provider providers.LLMProvider, model string) seahorse.CompleteFn {
+// providerToCompleteFn wraps providers.LLMProvider as a seahorse.CompleteFn. A
+// transient upstream failure is retried with backoff, since seahorse does not
+// retry a failed summarization itself.
+func providerToCompleteFn(provider providers.LLMProvider, model string, retry llmRetry) seahorse.CompleteFn {
 	return func(ctx context.Context, prompt string, opts seahorse.CompleteOptions) (string, error) {
-		resp, err := provider.Chat(
+		resp, err := chatRetryingTransient(
 			ctx,
+			provider,
 			[]providers.Message{{Role: "user", Content: prompt}},
 			nil, // no tools for summarization
 			model,
@@ -218,6 +225,7 @@ func providerToCompleteFn(provider providers.LLMProvider, model string) seahorse
 				"temperature":      opts.Temperature,
 				"prompt_cache_key": "seahorse",
 			},
+			retry,
 		)
 		if err != nil {
 			return "", err
@@ -298,6 +306,10 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 		return err
 	}
 	m.notifyCompaction(ctx, req, result)
+	if req.Reason == ContextCompressReasonThreshold &&
+		(result == nil || result.LeafSummaries+result.CondensedSummaries == 0) {
+		return ErrNothingToCompact
+	}
 	return nil
 }
 

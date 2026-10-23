@@ -65,25 +65,15 @@ func computeContextUsage(agent *AgentInstance, sessionKey string) *bus.ContextUs
 	usedTokens := historyTokens + systemTokens + toolTokens
 
 	// Effective budget = contextWindow minus output reserve (maxTokens)
-	effectiveWindow := contextWindow - agent.MaxTokens
-	if effectiveWindow < 0 {
-		effectiveWindow = contextWindow
-	}
+	effectiveWindow := usableContextTokens(agent)
 
 	// compressAt = effectiveWindow: aligns with isOverContextBudget's
 	// proactive trigger (msgTokens + toolTokens + maxTokens > contextWindow).
 	compressAt := effectiveWindow
 
-	// summarizeAt = soft summarization trigger: matches maybeSummarize's
-	// threshold (contextWindow * SummarizeTokenPercent / 100).
-	//
-	// The engine compares this against history-message tokens ONLY (not
-	// UsedTokens).  HistoryTokens is exposed alongside UsedTokens so the
-	// UI can show both values and avoid user confusion.
-	summarizeAt := contextWindow * agent.SummarizeTokenPercent / 100
-	if summarizeAt <= 0 {
-		summarizeAt = compressAt
-	}
+	// summarizeAt = soft summarization trigger, compared against UsedTokens
+	// before every LLM call (see Pipeline.CompactBeforeLLM).
+	summarizeAt := summarizeThresholdTokens(agent)
 
 	usedPercent := 0
 	if compressAt > 0 {
@@ -101,4 +91,25 @@ func computeContextUsage(agent *AgentInstance, sessionKey string) *bus.ContextUs
 		SummarizeAtTokens: summarizeAt,
 		UsedPercent:       usedPercent,
 	}
+}
+
+// usableContextTokens is the prompt budget left once the output reserve
+// (MaxTokens) is taken out of the context window.
+func usableContextTokens(agent *AgentInstance) int {
+	if usable := agent.ContextWindow - agent.MaxTokens; usable >= 0 {
+		return usable
+	}
+	return agent.ContextWindow
+}
+
+// summarizeThresholdTokens is the prompt size at which summarization starts:
+// SummarizeTokenPercent of the usable window, capped at the window itself so
+// summarization never fires later than emergency compression.
+func summarizeThresholdTokens(agent *AgentInstance) int {
+	usable := usableContextTokens(agent)
+	threshold := usable * agent.SummarizeTokenPercent / 100
+	if threshold <= 0 || threshold > usable {
+		return usable
+	}
+	return threshold
 }
