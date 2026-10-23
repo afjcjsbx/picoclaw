@@ -5,17 +5,24 @@ import {
   IconChevronsUp,
   IconKey,
   IconListDetails,
+  IconLoader2,
   IconMessageCircle,
   IconPlugConnected,
+  IconPlus,
   IconSearch,
   IconSettings,
   IconSparkles,
   IconTools,
+  IconTrash,
+  IconX,
 } from "@tabler/icons-react"
-import { Link, useRouterState } from "@tanstack/react-router"
+import { Link, useNavigate, useRouterState } from "@tanstack/react-router"
+import { useAtom, useAtomValue, useSetAtom } from "jotai"
 import * as React from "react"
 import { useTranslation } from "react-i18next"
 
+import { AppSidebarControls } from "@/components/app-sidebar-controls"
+import { Button } from "@/components/ui/button"
 import {
   Collapsible,
   CollapsibleContent,
@@ -24,16 +31,37 @@ import {
 import {
   Sidebar,
   SidebarContent,
+  SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
   SidebarGroupLabel,
+  SidebarHeader,
   SidebarMenu,
+  SidebarMenuAction,
   SidebarMenuButton,
   SidebarMenuItem,
-  SidebarRail,
+  SidebarMenuSub,
+  SidebarMenuSubButton,
+  SidebarMenuSubItem,
   useSidebar,
 } from "@/components/ui/sidebar"
+import {
+  mergeSplitConversations,
+  removeSplitConversation,
+} from "@/features/chat/split-groups"
+import { usePicoChat } from "@/hooks/use-pico-chat"
+import { useSessionHistory } from "@/hooks/use-session-history"
+import { useSessionSearch } from "@/hooks/use-session-search"
 import { useSidebarChannels } from "@/hooks/use-sidebar-channels"
+import { cn } from "@/lib/utils"
+import {
+  pendingScrollTargetAtom,
+  sessionRunningAtom,
+  sessionTitlesAtom,
+  splitConversationsAtom,
+  splitSessionStatesAtom,
+  unreadSessionIdsAtom,
+} from "@/store/chat"
 
 interface NavItem {
   title: string
@@ -68,11 +96,221 @@ const baseNavGroups: Omit<NavGroup, "items">[] = [
   },
 ]
 
-export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
+const SESSION_DRAG_TYPE = "application/x-picoclaw-session"
+const SIDEBAR_ICON_WIDTH = 48
+const MIN_SIDEBAR_WIDTH = 184
+const MAX_SIDEBAR_WIDTH = 560
+
+interface AppSidebarProps extends React.ComponentProps<typeof Sidebar> {
+  sidebarWidth: number
+  onSidebarWidthChange: React.Dispatch<React.SetStateAction<number>>
+}
+
+function splitGroupKey(group: string[]) {
+  return [...group].sort().join("\u0000")
+}
+
+function splitSnippetMatch(
+  snippet: string,
+  matchStart: number,
+  matchEnd: number,
+) {
+  const chars = Array.from(snippet)
+  const start = Math.max(0, Math.min(matchStart, chars.length))
+  const end = Math.max(start, Math.min(matchEnd, chars.length))
+  return {
+    before: chars.slice(0, start).join(""),
+    match: chars.slice(start, end).join(""),
+    after: chars.slice(end).join(""),
+  }
+}
+
+function SessionStatusIndicator({
+  isRunning,
+  isUnread,
+  className,
+}: {
+  isRunning: boolean
+  isUnread: boolean
+  className?: string
+}) {
+  const { t } = useTranslation()
+  if (!isRunning && !isUnread) {
+    return null
+  }
+
+  const label = isRunning
+    ? t("chat.sessionRunning", { defaultValue: "Generating response" })
+    : t("chat.sessionUnread", { defaultValue: "Unread update" })
+
+  return (
+    <span
+      role="status"
+      aria-label={label}
+      title={label}
+      className={cn(
+        "flex size-4 shrink-0 items-center justify-center",
+        className,
+      )}
+    >
+      {isRunning ? (
+        <IconLoader2
+          aria-hidden="true"
+          className="size-3.5 animate-spin text-violet-500"
+        />
+      ) : (
+        <span
+          aria-hidden="true"
+          className="size-2 rounded-full bg-emerald-500"
+        />
+      )}
+    </span>
+  )
+}
+
+export function AppSidebar({
+  sidebarWidth,
+  onSidebarWidthChange,
+  ...props
+}: AppSidebarProps) {
   const routerState = useRouterState()
   const { i18n, t } = useTranslation()
-  const { isMobile, setOpenMobile } = useSidebar()
+  const { isMobile, setOpen, setOpenMobile, state: sidebarState } = useSidebar()
   const currentPath = routerState.location.pathname
+  const showSessionHistory = isMobile || sidebarState === "expanded"
+  const { activeSessionId, isTyping, messages, newChat, switchSession } =
+    usePicoChat()
+  const [splitGroups, setSplitGroups] = useAtom(splitConversationsAtom)
+  const setSessionTitles = useSetAtom(sessionTitlesAtom)
+  const setPendingScrollTarget = useSetAtom(pendingScrollTargetAtom)
+  const navigate = useNavigate()
+  const sessionSearch = useSessionSearch()
+  const splitSessionStates = useAtomValue(splitSessionStatesAtom)
+  const sessionRunning = useAtomValue(sessionRunningAtom)
+  const unreadSessionIds = useAtomValue(unreadSessionIdsAtom)
+  const [expandedSplitId, setExpandedSplitId] = React.useState<string | null>(
+    null,
+  )
+  const sidebarResizeRef = React.useRef<{
+    pointerId: number
+    x: number
+    width: number
+  } | null>(null)
+  const {
+    sessions,
+    hasMore,
+    isLoadingMore,
+    loadError,
+    loadErrorMessage,
+    observerRef,
+    loadSessions,
+    handleDeleteSession,
+  } = useSessionHistory({
+    activeSessionId,
+    onDeletedActiveSession: newChat,
+  })
+  const latestMessageId = messages[messages.length - 1]?.id
+
+  React.useEffect(() => {
+    setSessionTitles(
+      Object.fromEntries(sessions.map(({ id, title }) => [id, title])),
+    )
+  }, [sessions, setSessionTitles])
+
+  const sessionById = React.useMemo(
+    () => new Map(sessions.map((session) => [session.id, session])),
+    [sessions],
+  )
+  const isSessionRunning = (sessionId: string) => {
+    if (sessionId === activeSessionId) {
+      return isTyping || (sessionRunning[sessionId] ?? false)
+    }
+    return (
+      (splitSessionStates[sessionId]?.isTyping ?? false) ||
+      (sessionRunning[sessionId] ?? false)
+    )
+  }
+  const visibleSplitGroups = React.useMemo(
+    () =>
+      splitGroups
+        .map((group) => ({
+          ids: group,
+          sessions: group
+            .map((id) => sessionById.get(id))
+            .filter((session) => session !== undefined),
+        }))
+        .filter((group) => group.sessions.length > 0),
+    [sessionById, splitGroups],
+  )
+  const splitGroupBySession = React.useMemo(() => {
+    const lookup = new Map<string, (typeof visibleSplitGroups)[number]>()
+    for (const group of visibleSplitGroups) {
+      for (const session of group.sessions) lookup.set(session.id, group)
+    }
+    return lookup
+  }, [visibleSplitGroups])
+
+  React.useEffect(() => {
+    const group = splitGroups.find((item) => item.includes(activeSessionId))
+    if (group) setExpandedSplitId(splitGroupKey(group))
+  }, [activeSessionId, splitGroups])
+
+  const handleSessionDrop = (
+    event: React.DragEvent<HTMLButtonElement | HTMLAnchorElement>,
+    targetId: string,
+  ) => {
+    if (!event.dataTransfer.types.includes(SESSION_DRAG_TYPE)) return
+    event.preventDefault()
+    const sourceId = event.dataTransfer.getData(SESSION_DRAG_TYPE)
+    if (!sourceId) return
+
+    const nextGroups = mergeSplitConversations(splitGroups, sourceId, targetId)
+    if (nextGroups === splitGroups) return
+    setSplitGroups(nextGroups)
+    const group = nextGroups.find((item) => item.includes(targetId))
+    if (group) setExpandedSplitId(splitGroupKey(group))
+    void switchSession(targetId)
+  }
+
+  const handleSessionDragOver = (
+    event: React.DragEvent<HTMLButtonElement | HTMLAnchorElement>,
+  ) => {
+    if (!event.dataTransfer.types.includes(SESSION_DRAG_TYPE)) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = "move"
+  }
+
+  const renderSessionLink = (session: (typeof sessions)[number]) => (
+    <Link
+      to="/"
+      onClick={() => {
+        if (session.id !== activeSessionId) void switchSession(session.id)
+        handleNavItemClick()
+      }}
+      draggable
+      onDragStart={(event) => {
+        event.dataTransfer.setData(SESSION_DRAG_TYPE, session.id)
+        event.dataTransfer.effectAllowed = "move"
+      }}
+      onDragOver={handleSessionDragOver}
+      onDrop={(event) => handleSessionDrop(event, session.id)}
+    >
+      <IconMessageCircle className="size-4 shrink-0 opacity-70" />
+      <span className="min-w-0 flex-1 truncate">{session.title}</span>
+      <SessionStatusIndicator
+        className="ml-auto"
+        isRunning={isSessionRunning(session.id)}
+        isUnread={unreadSessionIds.has(session.id)}
+      />
+    </Link>
+  )
+
+  React.useEffect(() => {
+    if (showSessionHistory) {
+      void loadSessions(true)
+    }
+  }, [activeSessionId, latestMessageId, loadSessions, showSessionHistory])
+
   const {
     channelItems,
     hasMoreChannels,
@@ -88,6 +326,33 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       setOpenMobile(false)
     }
   }, [isMobile, setOpenMobile])
+
+  const handleSearchResultClick = (result: {
+    session_id: string
+    message_index: number
+  }) => {
+    setPendingScrollTarget({
+      sessionId: result.session_id,
+      messageIndex: result.message_index,
+    })
+    if (result.session_id !== activeSessionId) {
+      void switchSession(result.session_id)
+    }
+    handleNavItemClick()
+    void navigate({ to: "/" })
+  }
+
+  const handleSidebarResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = sidebarResizeRef.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+    const max = Math.min(MAX_SIDEBAR_WIDTH, window.innerWidth * 0.55)
+    const width = drag.width + event.clientX - drag.x
+    const expanded = width > MIN_SIDEBAR_WIDTH
+    if (expanded !== (sidebarState === "expanded")) setOpen(expanded)
+    if (width > MIN_SIDEBAR_WIDTH) {
+      onSidebarWidthChange(Math.min(max, width))
+    }
+  }
 
   const navGroups: NavGroup[] = React.useMemo(() => {
     return [
@@ -182,9 +447,327 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   return (
     <Sidebar
       {...props}
-      className="bg-background border-r-border/20 border-r pt-3"
+      collapsible="icon"
+      className="border-sidebar-border bg-sidebar border-r"
     >
-      <SidebarContent className="bg-background">
+      <SidebarHeader className="px-4 pt-3 pb-2 group-data-[collapsible=icon]:px-2">
+        <Link
+          to="/"
+          onClick={handleNavItemClick}
+          aria-label="PicoClaw"
+          className="flex h-8 w-full items-center overflow-hidden"
+        >
+          <img
+            className="h-auto w-36 shrink-0 object-left group-data-[collapsible=icon]:h-6 group-data-[collapsible=icon]:w-[115px] group-data-[collapsible=icon]:max-w-none"
+            src="/logo_with_text.png"
+            alt="PicoClaw"
+          />
+        </Link>
+      </SidebarHeader>
+      <SidebarContent className="bg-sidebar">
+        <div className="px-4 pb-3 group-data-[collapsible=icon]:px-1">
+          <Button
+            asChild
+            variant="outline"
+            className="bg-background h-10 w-full justify-start gap-2.5 rounded-xl shadow-none group-data-[collapsible=icon]:size-10 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0"
+          >
+            <Link
+              to="/"
+              aria-label={t("chat.newChat")}
+              title={t("chat.newChat")}
+              onClick={() => {
+                newChat()
+                handleNavItemClick()
+              }}
+            >
+              <IconPlus className="size-4" />
+              <span className="group-data-[collapsible=icon]:hidden">
+                {t("chat.newChat")}
+              </span>
+            </Link>
+          </Button>
+        </div>
+        {showSessionHistory && (
+          <SidebarGroup className="px-2 py-0">
+            <SidebarGroupLabel className="px-2">
+              {t("chat.history")}
+            </SidebarGroupLabel>
+            <div className="px-2 pb-1">
+              <div className="relative">
+                <IconSearch className="text-muted-foreground pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={sessionSearch.query}
+                  onChange={(event) =>
+                    sessionSearch.setQuery(event.target.value)
+                  }
+                  placeholder={t("chat.searchPlaceholder")}
+                  aria-label={t("chat.searchPlaceholder")}
+                  className="bg-background/60 border-border/60 focus-visible:ring-ring h-8 w-full rounded-lg border pr-7 pl-7 text-xs outline-none focus-visible:ring-1"
+                />
+                {sessionSearch.query !== "" && (
+                  <button
+                    type="button"
+                    aria-label={t("chat.searchPlaceholder")}
+                    onClick={sessionSearch.clear}
+                    className="text-muted-foreground hover:text-foreground absolute top-1/2 right-1.5 -translate-y-1/2 rounded p-0.5"
+                  >
+                    <IconX className="size-3.5" />
+                  </button>
+                )}
+              </div>
+            </div>
+            {sessionSearch.isActive && (
+              <div className="max-h-[min(42vh,24rem)] overflow-y-auto">
+                <SidebarMenu>
+                  {sessionSearch.isSearching &&
+                  sessionSearch.results.length === 0 ? (
+                    <SidebarMenuItem>
+                      <div className="text-muted-foreground px-3 py-2 text-xs">
+                        {t("chat.loadingMore")}
+                      </div>
+                    </SidebarMenuItem>
+                  ) : sessionSearch.error ? (
+                    <SidebarMenuItem>
+                      <div className="text-muted-foreground px-3 py-2 text-xs">
+                        {t("chat.searchFailed")}
+                      </div>
+                    </SidebarMenuItem>
+                  ) : sessionSearch.results.length === 0 ? (
+                    <SidebarMenuItem>
+                      <div className="text-muted-foreground px-3 py-2 text-xs">
+                        {t("chat.searchNoResults")}
+                      </div>
+                    </SidebarMenuItem>
+                  ) : (
+                    <>
+                      {sessionSearch.results.map((result, index) => {
+                        const { before, match, after } = splitSnippetMatch(
+                          result.snippet,
+                          result.match_start,
+                          result.match_end,
+                        )
+                        return (
+                          <SidebarMenuItem
+                            key={`${result.session_id}-${result.message_index}-${index}`}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => handleSearchResultClick(result)}
+                              className="hover:bg-sidebar-accent/70 focus-visible:bg-sidebar-accent/70 w-full rounded-lg px-2 py-1.5 text-left outline-none"
+                            >
+                              <div className="flex items-center gap-2">
+                                <span className="text-foreground truncate text-xs font-medium">
+                                  {result.title}
+                                </span>
+                                <span className="bg-muted/60 text-muted-foreground ml-auto shrink-0 rounded px-1 py-0.5 text-[10px] uppercase">
+                                  {result.role === "user"
+                                    ? t("chat.you", { defaultValue: "You" })
+                                    : t("chat.assistant", {
+                                        defaultValue: "Assistant",
+                                      })}
+                                </span>
+                              </div>
+                              <p className="text-muted-foreground mt-0.5 line-clamp-2 text-xs leading-relaxed">
+                                {before}
+                                <mark className="bg-primary/20 text-foreground rounded-sm">
+                                  {match}
+                                </mark>
+                                {after}
+                              </p>
+                            </button>
+                          </SidebarMenuItem>
+                        )
+                      })}
+                      {sessionSearch.truncated && (
+                        <SidebarMenuItem>
+                          <div className="text-muted-foreground px-3 py-1 text-[11px]">
+                            {t("chat.searchTruncated")}
+                          </div>
+                        </SidebarMenuItem>
+                      )}
+                    </>
+                  )}
+                </SidebarMenu>
+              </div>
+            )}
+            <SidebarGroupContent
+              className={`pt-1 ${sessionSearch.isActive ? "hidden" : ""}`}
+            >
+              <div className="max-h-[min(42vh,24rem)] overflow-y-auto">
+                <SidebarMenu>
+                  {sessions.length > 0 ? (
+                    sessions.map((session) =>
+                      (() => {
+                        const splitGroup = splitGroupBySession.get(session.id)
+                        if (splitGroup) {
+                          if (splitGroup.sessions[0]?.id !== session.id) {
+                            return null
+                          }
+
+                          const groupKey = splitGroupKey(splitGroup.ids)
+                          const groupTitle =
+                            (splitGroup.ids.includes(activeSessionId)
+                              ? sessionById.get(activeSessionId)?.title
+                              : undefined) ?? splitGroup.sessions[0].title
+                          const groupRunning = splitGroup.sessions.some(
+                            (member) => isSessionRunning(member.id),
+                          )
+                          const groupUnread = splitGroup.sessions.some(
+                            (member) => unreadSessionIds.has(member.id),
+                          )
+
+                          return (
+                            <SidebarMenuItem key={groupKey}>
+                              <Collapsible
+                                open={expandedSplitId === groupKey}
+                                onOpenChange={(open) =>
+                                  setExpandedSplitId(open ? groupKey : null)
+                                }
+                                className="group/collapsible"
+                              >
+                                <CollapsibleTrigger asChild>
+                                  <SidebarMenuButton
+                                    type="button"
+                                    isActive={splitGroup.ids.includes(
+                                      activeSessionId,
+                                    )}
+                                    tooltip={groupTitle}
+                                    draggable
+                                    onDragStart={(event) => {
+                                      event.dataTransfer.setData(
+                                        SESSION_DRAG_TYPE,
+                                        session.id,
+                                      )
+                                      event.dataTransfer.effectAllowed = "move"
+                                    }}
+                                    onDragOver={handleSessionDragOver}
+                                    onDrop={(event) =>
+                                      handleSessionDrop(event, session.id)
+                                    }
+                                    className="text-muted-foreground hover:text-foreground h-9 rounded-lg px-3"
+                                  >
+                                    <IconChevronRight className="size-3.5 transition-transform group-data-[state=open]/collapsible:rotate-90" />
+                                    <span className="min-w-0 flex-1 truncate">
+                                      {groupTitle}
+                                    </span>
+                                    <span className="ml-auto flex shrink-0 items-center gap-1.5">
+                                      <SessionStatusIndicator
+                                        isRunning={groupRunning}
+                                        isUnread={groupUnread}
+                                      />
+                                      <span className="text-muted-foreground text-xs">
+                                        {splitGroup.ids.length}
+                                      </span>
+                                    </span>
+                                  </SidebarMenuButton>
+                                </CollapsibleTrigger>
+                                <CollapsibleContent>
+                                  <SidebarMenuSub>
+                                    {splitGroup.sessions.map((member) => (
+                                      <SidebarMenuSubItem key={member.id}>
+                                        <SidebarMenuSubButton
+                                          asChild
+                                          isActive={
+                                            member.id === activeSessionId
+                                          }
+                                          className="pr-8"
+                                        >
+                                          {renderSessionLink(member)}
+                                        </SidebarMenuSubButton>
+                                        <button
+                                          type="button"
+                                          aria-label={t("chat.deleteSession")}
+                                          title={t("chat.deleteSession")}
+                                          onClick={() =>
+                                            void (async () => {
+                                              if (
+                                                await handleDeleteSession(
+                                                  member.id,
+                                                )
+                                              ) {
+                                                setSplitGroups((groups) =>
+                                                  removeSplitConversation(
+                                                    groups,
+                                                    member.id,
+                                                  ),
+                                                )
+                                              }
+                                            })()
+                                          }
+                                          className="text-muted-foreground hover:text-destructive absolute top-1 right-1 rounded p-1 opacity-0 group-hover/menu-sub-item:opacity-100 focus-visible:opacity-100"
+                                        >
+                                          <IconTrash className="size-3.5" />
+                                        </button>
+                                      </SidebarMenuSubItem>
+                                    ))}
+                                  </SidebarMenuSub>
+                                </CollapsibleContent>
+                              </Collapsible>
+                            </SidebarMenuItem>
+                          )
+                        }
+
+                        if (splitGroupBySession.has(session.id)) return null
+
+                        return (
+                          <SidebarMenuItem key={session.id}>
+                            <SidebarMenuButton
+                              asChild
+                              isActive={session.id === activeSessionId}
+                              tooltip={session.title}
+                              className="text-muted-foreground hover:text-foreground h-9 rounded-lg px-3"
+                            >
+                              {renderSessionLink(session)}
+                            </SidebarMenuButton>
+                            <SidebarMenuAction
+                              showOnHover
+                              aria-label={t("chat.deleteSession")}
+                              onClick={() =>
+                                void (async () => {
+                                  if (await handleDeleteSession(session.id)) {
+                                    setSplitGroups((groups) =>
+                                      removeSplitConversation(
+                                        groups,
+                                        session.id,
+                                      ),
+                                    )
+                                  }
+                                })()
+                              }
+                            >
+                              <IconTrash />
+                            </SidebarMenuAction>
+                          </SidebarMenuItem>
+                        )
+                      })(),
+                    )
+                  ) : (
+                    <SidebarMenuItem>
+                      <div className="text-muted-foreground px-3 py-2 text-xs">
+                        {loadError
+                          ? loadErrorMessage
+                          : isLoadingMore
+                            ? t("chat.loadingMore")
+                            : t("chat.noHistory")}
+                      </div>
+                    </SidebarMenuItem>
+                  )}
+                  {hasMore && sessions.length > 0 && (
+                    <SidebarMenuItem>
+                      <div
+                        ref={observerRef}
+                        className="text-muted-foreground min-h-2 px-3 py-1 text-center text-xs"
+                      >
+                        {isLoadingMore ? t("chat.loadingMore") : null}
+                      </div>
+                    </SidebarMenuItem>
+                  )}
+                </SidebarMenu>
+              </div>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        )}
         {navGroups.map((group) => (
           <Collapsible
             key={group.label}
@@ -193,7 +776,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           >
             <SidebarGroup className="px-2 py-0">
               <SidebarGroupLabel asChild>
-                <CollapsibleTrigger className="hover:bg-muted/60 flex w-full cursor-pointer items-center justify-between rounded-md px-2 py-1.5 transition-colors">
+                <CollapsibleTrigger className="text-muted-foreground/80 hover:text-foreground hover:bg-sidebar-accent/70 flex w-full cursor-pointer items-center justify-between rounded-md px-2 py-1.5 text-[11px] font-semibold tracking-wide uppercase transition-colors">
                   <span>{t(group.label)}</span>
                   <IconChevronRight className="size-3.5 opacity-50 transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
                 </CollapsibleTrigger>
@@ -211,11 +794,16 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                           <SidebarMenuButton
                             asChild
                             isActive={isActive}
+                            tooltip={
+                              item.translateTitle === false
+                                ? item.title
+                                : t(item.title)
+                            }
                             onClick={handleNavItemClick}
                             data-tour={
                               item.url === "/models" ? "models-nav" : undefined
                             }
-                            className={`h-9 px-3 ${isActive ? "bg-accent/80 text-foreground font-medium" : "text-muted-foreground hover:bg-muted/60"}`}
+                            className={`h-9 rounded-lg px-3 ${isActive ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium" : "text-muted-foreground hover:bg-sidebar-accent/70 hover:text-foreground"}`}
                           >
                             <Link to={item.url}>
                               <item.icon
@@ -223,7 +811,9 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                               />
                               <span
                                 className={
-                                  isActive ? "opacity-100" : "opacity-80"
+                                  isActive
+                                    ? "opacity-100 group-data-[collapsible=icon]:hidden"
+                                    : "opacity-80 group-data-[collapsible=icon]:hidden"
                                 }
                               >
                                 {item.translateTitle === false
@@ -239,6 +829,11 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                       <SidebarMenuItem key="channels-more-toggle">
                         <SidebarMenuButton
                           onClick={toggleShowAllChannels}
+                          tooltip={
+                            showAllChannels
+                              ? t("navigation.show_less_channels")
+                              : t("navigation.show_more_channels")
+                          }
                           className="text-muted-foreground hover:bg-muted/60 h-9 px-3"
                         >
                           {showAllChannels ? (
@@ -246,7 +841,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                           ) : (
                             <IconChevronsDown className="size-4 opacity-60" />
                           )}
-                          <span className="opacity-80">
+                          <span className="opacity-80 group-data-[collapsible=icon]:hidden">
                             {showAllChannels
                               ? t("navigation.show_less_channels")
                               : t("navigation.show_more_channels")}
@@ -261,7 +856,80 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           </Collapsible>
         ))}
       </SidebarContent>
-      <SidebarRail />
+      <SidebarFooter className="border-sidebar-border border-t">
+        <AppSidebarControls />
+      </SidebarFooter>
+      <div
+        role="separator"
+        aria-label={t("chat.resizeSidebar", {
+          defaultValue: "Resize sidebar",
+        })}
+        aria-orientation="vertical"
+        aria-valuemin={SIDEBAR_ICON_WIDTH}
+        aria-valuemax={MAX_SIDEBAR_WIDTH}
+        aria-valuenow={
+          sidebarState === "collapsed"
+            ? SIDEBAR_ICON_WIDTH
+            : Math.round(sidebarWidth)
+        }
+        tabIndex={0}
+        className="group hover:border-primary focus-visible:border-primary focus-visible:ring-ring absolute inset-y-0 right-0 z-30 hidden w-2 cursor-col-resize touch-none items-center justify-center border-r outline-none focus-visible:ring-2 focus-visible:ring-inset md:flex"
+        onPointerDown={(event) => {
+          if (event.button !== 0) return
+          event.preventDefault()
+          event.currentTarget.setPointerCapture(event.pointerId)
+          sidebarResizeRef.current = {
+            pointerId: event.pointerId,
+            x: event.clientX,
+            width:
+              sidebarState === "collapsed" ? SIDEBAR_ICON_WIDTH : sidebarWidth,
+          }
+        }}
+        onPointerMove={handleSidebarResize}
+        onPointerUp={(event) => {
+          sidebarResizeRef.current = null
+          if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+            event.currentTarget.releasePointerCapture(event.pointerId)
+          }
+        }}
+        onPointerCancel={() => {
+          sidebarResizeRef.current = null
+        }}
+        onLostPointerCapture={() => {
+          sidebarResizeRef.current = null
+        }}
+        onKeyDown={(event) => {
+          const max = Math.min(MAX_SIDEBAR_WIDTH, window.innerWidth * 0.55)
+          if (event.key === "ArrowLeft") {
+            if (sidebarState === "collapsed") {
+              event.preventDefault()
+              return
+            }
+            if (sidebarWidth <= MIN_SIDEBAR_WIDTH + 24) {
+              setOpen(false)
+            } else {
+              onSidebarWidthChange((width) => width - 24)
+            }
+          } else if (event.key === "ArrowRight") {
+            if (sidebarState === "collapsed") {
+              setOpen(true)
+              onSidebarWidthChange(MIN_SIDEBAR_WIDTH)
+            } else {
+              onSidebarWidthChange((width) => Math.min(width + 24, max))
+            }
+          } else if (event.key === "Home") {
+            setOpen(false)
+          } else if (event.key === "End") {
+            setOpen(true)
+            onSidebarWidthChange(max)
+          } else {
+            return
+          }
+          event.preventDefault()
+        }}
+      >
+        <span className="bg-border/80 group-hover:bg-primary group-focus-visible:bg-primary h-10 w-px transition-colors" />
+      </div>
     </Sidebar>
   )
 }

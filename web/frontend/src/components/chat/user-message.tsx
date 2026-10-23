@@ -1,4 +1,4 @@
-import { IconCheck, IconCopy } from "@tabler/icons-react"
+import { IconCheck, IconCopy, IconFileText } from "@tabler/icons-react"
 import { memo } from "react"
 import { useTranslation } from "react-i18next"
 
@@ -48,13 +48,13 @@ export const UserMessage = memo(function UserMessage({
       )}
 
       {hasText && (
-        <div className="relative max-w-[70%]">
+        <div className="max-w-[70%]">
           <div
             className={cn(
               "wrap-break-word whitespace-pre-wrap",
               isCommand
                 ? "rounded-xl border border-zinc-200 bg-transparent px-4 py-3 font-mono text-[14px] text-zinc-800 dark:border-zinc-800/60 dark:bg-[#121212] dark:text-zinc-200 dark:shadow-sm"
-                : "rounded-2xl rounded-tr-sm bg-violet-500 px-5 py-3 text-[15px] leading-relaxed text-white shadow-sm",
+                : "bg-muted text-foreground rounded-2xl rounded-tr-sm px-5 py-3 text-[16px] leading-[1.75]",
             )}
           >
             {isCommand ? (
@@ -68,33 +68,80 @@ export const UserMessage = memo(function UserMessage({
               content
             )}
           </div>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className={cn(
-              "bg-background/75 hover:bg-background absolute top-2 right-2 h-7 w-7 opacity-0 shadow-xs transition-opacity group-hover:opacity-100",
-              isCommand
-                ? "text-zinc-700 dark:text-zinc-200"
-                : "text-violet-700 dark:text-violet-100",
-            )}
-            onClick={() => void copy(content)}
-            aria-label={copyMessageLabel}
-            title={copyMessageLabel}
-          >
-            {isCopied ? (
-              <IconCheck className="h-4 w-4 text-green-500" />
-            ) : (
-              <IconCopy className="h-4 w-4" />
-            )}
-          </Button>
         </div>
       )}
 
-      {formattedTimestamp && (
-        <span className="px-1 text-[12px] text-zinc-400">
-          {formattedTimestamp}
-        </span>
+      {attachments.some((attachment) => attachment.type !== "image") && (
+        <div className="flex max-w-[70%] flex-wrap justify-end gap-2">
+          {attachments
+            .filter((attachment) => attachment.type !== "image")
+            .map((attachment, index) => {
+              const card = (
+                <>
+                  <span className="bg-background/70 text-muted-foreground flex size-9 shrink-0 items-center justify-center rounded-lg">
+                    <IconFileText className="size-4" />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block max-w-48 truncate text-sm font-medium">
+                      {attachment.filename || t("chat.uploadedFile")}
+                    </span>
+                    <span className="text-muted-foreground text-[11px]">
+                      {attachment.filename?.split(".").pop()?.toUpperCase() ||
+                        "FILE"}
+                    </span>
+                  </span>
+                </>
+              )
+              const className =
+                "bg-muted/50 border-border/60 flex w-fit max-w-full items-center gap-2 rounded-xl border px-3 py-2"
+
+              return attachment.url ? (
+                <a
+                  key={`${attachment.url}-${index}`}
+                  href={attachment.url}
+                  download={attachment.filename}
+                  className={`${className} hover:border-violet-500/40`}
+                >
+                  {card}
+                </a>
+              ) : (
+                <div
+                  key={`${attachment.filename}-${index}`}
+                  className={className}
+                >
+                  {card}
+                </div>
+              )
+            })}
+        </div>
+      )}
+
+      {(formattedTimestamp || hasText || attachments.length > 0) && (
+        <div className="flex items-center gap-1 px-1 text-[12px] text-zinc-400">
+          {formattedTimestamp && <span>{formattedTimestamp}</span>}
+          {hasText && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className={cn(
+                "size-6",
+                isCommand
+                  ? "text-zinc-700 dark:text-zinc-200"
+                  : "text-foreground",
+              )}
+              onClick={() => void copy(content)}
+              aria-label={copyMessageLabel}
+              title={copyMessageLabel}
+            >
+              {isCopied ? (
+                <IconCheck className="size-3.5 text-green-500" />
+              ) : (
+                <IconCopy className="size-3.5" />
+              )}
+            </Button>
+          )}
+        </div>
       )}
     </div>
   )

@@ -27,6 +27,10 @@ import (
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
+// allSessionsSessionID identifies observer connections that receive
+// lightweight activity events for every session.
+const allSessionsSessionID = "*"
+
 // picoConn represents a single WebSocket connection.
 type picoConn struct {
 	id        string
@@ -43,6 +47,23 @@ var allowedInlineImageMIMETypes = map[string]struct{}{
 	"image/gif":  {},
 	"image/webp": {},
 	"image/bmp":  {},
+}
+
+const allowedInlinePDFMIMEType = "application/pdf"
+
+var allowedInlineTextMIMETypes = map[string]struct{}{
+	"text/plain": {}, "text/markdown": {}, "application/yaml": {}, "application/json": {},
+	"text/csv": {}, "text/tab-separated-values": {}, "application/xml": {}, "text/html": {},
+	"application/toml": {}, "text/javascript": {}, "text/typescript": {}, "text/x-python": {},
+	"text/x-go": {}, "text/x-shellscript": {}, "application/sql": {}, "text/css": {},
+	"text/x-c": {}, "text/x-c++src": {}, "text/x-java-source": {}, "text/x-rust": {},
+	"text/x-ruby": {}, "text/x-php": {},
+}
+
+type picoUploadedFile struct {
+	Filename string `json:"filename"`
+	Path     string `json:"path"`
+	Type     string `json:"type"`
 }
 
 func outboundMessageIsThought(msg bus.OutboundMessage) bool {
@@ -72,6 +93,15 @@ func outboundMessageFinalizesTrackedToolFeedback(msg bus.OutboundMessage) bool {
 		!outboundMessageIsToolCalls(msg)
 }
 
+// outboundMessageIsFinal reports whether the agent marked this message as the
+// final response for the turn.
+func outboundMessageIsFinal(msg bus.OutboundMessage) bool {
+	if len(msg.Context.Raw) == 0 {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(msg.Context.Raw["outbound_kind"]), "final")
+}
+
 // writeJSON sends a JSON message to the connection with write locking.
 func (pc *picoConn) writeJSON(v any) error {
 	if pc.closed.Load() {
@@ -98,6 +128,7 @@ type PicoChannel struct {
 	*channels.BaseChannel
 	bc                 *config.Channel
 	config             *config.PicoSettings
+	workspace          string
 	upgrader           websocket.Upgrader
 	connections        map[string]*picoConn            // connID -> *picoConn
 	sessionConnections map[string]map[string]*picoConn // sessionID -> connID -> *picoConn
@@ -349,6 +380,9 @@ func (c *PicoChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]stri
 			payload[PayloadKeyToolCalls] = toolCalls
 		}
 	}
+	if outboundMessageIsFinal(msg) {
+		payload[PayloadKeyFinal] = true
+	}
 	setContextUsagePayload(payload, msg.ContextUsage)
 	outMsg := newMessage(TypeMessageCreate, payload)
 
@@ -470,6 +504,9 @@ func (c *PicoChannel) FinalizeToolFeedbackMessage(ctx context.Context, msg bus.O
 	if modelName := strings.TrimSpace(msg.Context.Raw[PayloadKeyModelName]); modelName != "" {
 		payload[PayloadKeyModelName] = modelName
 	}
+	if outboundMessageIsFinal(msg) {
+		payload[PayloadKeyFinal] = true
+	}
 	return c.finalizeTrackedToolFeedbackMessage(
 		ctx,
 		msg.ChatID,
@@ -481,11 +518,16 @@ func (c *PicoChannel) FinalizeToolFeedbackMessage(ctx context.Context, msg bus.O
 }
 
 // StartTyping implements channels.TypingCapable.
+//
+// The activity event is sent even when no client is attached to this session,
+// so the sidebar can show a running indicator for background conversations.
+// The returned stop function is always registered and emits the matching
+// activity event when the turn ends.
 func (c *PicoChannel) StartTyping(ctx context.Context, chatID string) (func(), error) {
 	startMsg := newMessage(TypeTypingStart, nil)
-	if err := c.broadcastToSession(chatID, startMsg); err != nil {
-		return func() {}, err
-	}
+	// No session client is not an error: the all-sessions observer still needs
+	// the start event.
+	_ = c.broadcastToSession(chatID, startMsg)
 	return func() {
 		stopMsg := newMessage(TypeTypingStop, nil)
 		c.broadcastToSession(chatID, stopMsg)
@@ -575,7 +617,7 @@ func (s *picoStreamer) SetTurnUsage(inputTokens, outputTokens int) {
 func (s *picoStreamer) Update(ctx context.Context, content string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.updateLocked(ctx, content, false, nil)
+	return s.updateLocked(ctx, content, false, nil, false)
 }
 
 func (s *picoStreamer) Finalize(ctx context.Context, content string) error {
@@ -585,7 +627,7 @@ func (s *picoStreamer) Finalize(ctx context.Context, content string) error {
 func (s *picoStreamer) FinalizeWithContext(ctx context.Context, content string, contextUsage *bus.ContextUsage) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.updateLocked(ctx, content, true, contextUsage)
+	return s.updateLocked(ctx, content, true, contextUsage, true)
 }
 
 func (s *picoStreamer) UpdateReasoning(ctx context.Context, content string) error {
@@ -626,6 +668,7 @@ func (s *picoStreamer) updateLocked(
 	content string,
 	force bool,
 	contextUsage *bus.ContextUsage,
+	final bool,
 ) error {
 	if s == nil || s.channel == nil {
 		return fmt.Errorf("streamer is not initialized")
@@ -643,7 +686,7 @@ func (s *picoStreamer) updateLocked(
 		}
 	}
 
-	return s.sendLocked(ctx, content, contextUsage)
+	return s.sendLocked(ctx, content, contextUsage, final)
 }
 
 func (s *picoStreamer) updateReasoningLocked(ctx context.Context, content string, force bool) error {
@@ -666,7 +709,12 @@ func (s *picoStreamer) updateReasoningLocked(ctx context.Context, content string
 	return s.sendReasoningLocked(ctx, content)
 }
 
-func (s *picoStreamer) sendLocked(ctx context.Context, content string, contextUsage *bus.ContextUsage) error {
+func (s *picoStreamer) sendLocked(
+	ctx context.Context,
+	content string,
+	contextUsage *bus.ContextUsage,
+	final bool,
+) error {
 	now := time.Now()
 	contentLen := len([]rune(content))
 
@@ -678,6 +726,9 @@ func (s *picoStreamer) sendLocked(ctx context.Context, content string, contextUs
 		}
 		if s.modelName != "" {
 			payload[PayloadKeyModelName] = s.modelName
+		}
+		if final {
+			payload[PayloadKeyFinal] = true
 		}
 		setContextUsagePayload(payload, contextUsage)
 		setTurnUsagePayload(payload, s.turnInputTokens, s.turnOutputTokens)
@@ -692,6 +743,9 @@ func (s *picoStreamer) sendLocked(ctx context.Context, content string, contextUs
 		}
 		if s.modelName != "" {
 			payload[PayloadKeyModelName] = s.modelName
+		}
+		if final {
+			payload[PayloadKeyFinal] = true
 		}
 		setTurnUsagePayload(payload, s.turnInputTokens, s.turnOutputTokens)
 		if err := s.channel.editMessagePayload(ctx, s.chatID, s.messageID, payload, contextUsage); err != nil {
@@ -961,6 +1015,33 @@ func (c *PicoChannel) broadcast(chatID string, msg PicoMessage) error {
 	return c.broadcastToSession(chatID, msg)
 }
 
+// broadcastSessionActivity sends a lightweight activity event to all-sessions
+// observer connections. Session-specific messages are still delivered only to
+// clients connected to that session.
+func (c *PicoChannel) broadcastSessionActivity(sessionID string, msg PicoMessage) {
+	if sessionID == "" || sessionID == allSessionsSessionID {
+		return
+	}
+
+	payload := map[string]any{
+		PayloadKeyEvent: msg.Type,
+	}
+	if final, _ := msg.Payload[PayloadKeyFinal].(bool); final {
+		payload[PayloadKeyFinal] = true
+	}
+	activity := newMessage(TypeSessionActivity, payload)
+	activity.SessionID = sessionID
+
+	for _, pc := range c.sessionConnectionsSnapshot(allSessionsSessionID) {
+		if err := pc.writeJSON(activity); err != nil {
+			logger.DebugCF("pico", "Write session activity failed", map[string]any{
+				"conn_id": pc.id,
+				"error":   err.Error(),
+			})
+		}
+	}
+}
+
 // broadcastToSession sends a message to all connections with a matching session.
 func (c *PicoChannel) broadcastToSession(chatID string, msg PicoMessage) error {
 	// chatID format: "pico:<sessionID>"
@@ -978,6 +1059,10 @@ func (c *PicoChannel) broadcastToSession(chatID string, msg PicoMessage) error {
 			sent = true
 		}
 	}
+
+	// Activity is observer-only: it never carries message content and is sent
+	// even when no client is attached to this specific session.
+	c.broadcastSessionActivity(sessionID, msg)
 
 	if !sent {
 		return fmt.Errorf("no active connections for session %s: %w", sessionID, channels.ErrSendFailed)
@@ -1008,6 +1093,20 @@ func (c *PicoChannel) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Determine session ID from query param or generate one. The all_sessions
+	// observer connection is indexed under a reserved ID and only receives
+	// lightweight session.activity events.
+	sessionID := strings.TrimSpace(r.URL.Query().Get("session_id"))
+	allSessions := r.URL.Query().Get("all_sessions")
+	if allSessions == "1" || strings.EqualFold(allSessions, "true") {
+		sessionID = allSessionsSessionID
+	} else if sessionID == allSessionsSessionID {
+		http.Error(w, "invalid session_id", http.StatusBadRequest)
+		return
+	} else if sessionID == "" {
+		sessionID = uuid.New().String()
+	}
+
 	// Echo the matched subprotocol back so the browser accepts the upgrade.
 	var responseHeader http.Header
 	if proto := c.matchedSubprotocol(r); proto != "" {
@@ -1020,12 +1119,6 @@ func (c *PicoChannel) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			"error": err.Error(),
 		})
 		return
-	}
-
-	// Determine session ID from query param or generate one
-	sessionID := r.URL.Query().Get("session_id")
-	if sessionID == "" {
-		sessionID = uuid.New().String()
 	}
 
 	pc, err := c.createAndAddConnection(conn, sessionID, maxConns)
@@ -1198,6 +1291,11 @@ func (c *PicoChannel) handleMessage(pc *picoConn, msg PicoMessage) {
 
 // handleMessageSend processes an inbound message.send from a client.
 func (c *PicoChannel) handleMessageSend(pc *picoConn, msg PicoMessage) {
+	if pc.sessionID == allSessionsSessionID {
+		pc.writeJSON(newError("read_only", "all-sessions connections are read-only"))
+		return
+	}
+
 	content, _ := msg.Payload["content"].(string)
 	media, err := parseInlineImageMedia(msg.Payload)
 	if err != nil {
@@ -1206,6 +1304,29 @@ func (c *PicoChannel) handleMessageSend(pc *picoConn, msg PicoMessage) {
 		})
 		pc.writeJSON(errMsg)
 		return
+	}
+	attachmentsToStore, err := picoAttachmentsToStore(msg.Payload["attachments"], media)
+	if err != nil {
+		pc.writeJSON(newErrorWithPayload("invalid_media", err.Error(), map[string]any{
+			"request_id": msg.ID,
+		}))
+		return
+	}
+	// Persisting uploads needs a workspace to write into. When none is
+	// configured, fall back to forwarding the inline media as-is instead of
+	// rejecting the message.
+	if strings.TrimSpace(c.workspace) != "" {
+		uploadedFiles, storeErr := c.storeInlineAttachments(attachmentsToStore)
+		if storeErr != nil {
+			pc.writeJSON(newErrorWithPayload("upload_failed", storeErr.Error(), map[string]any{
+				"request_id": msg.ID,
+			}))
+			return
+		}
+		if len(uploadedFiles) > 0 {
+			media = nil
+			content = appendUploadedFiles(content, uploadedFiles)
+		}
 	}
 
 	if strings.TrimSpace(content) == "" && len(media) == 0 {
@@ -1256,6 +1377,159 @@ func (c *PicoChannel) handleMessageSend(pc *picoConn, msg PicoMessage) {
 	}
 
 	c.HandleInboundContext(c.ctx, chatID, content, media, inboundCtx, sender)
+}
+
+func picoAttachmentsToStore(raw any, mediaURLs []string) ([]any, error) {
+	attachments := make([]any, 0, len(mediaURLs))
+	seenURLs := make(map[string]struct{}, len(mediaURLs))
+	if values, ok := raw.([]any); ok {
+		for _, value := range values {
+			attachment, ok := value.(map[string]any)
+			if !ok {
+				continue
+			}
+			kind, _ := attachment["type"].(string)
+			kind = strings.ToLower(strings.TrimSpace(kind))
+			if kind != "image" && kind != "file" {
+				continue
+			}
+			dataURL, err := inlineImageValue(attachment)
+			if err != nil {
+				return nil, err
+			}
+			seenURLs[dataURL] = struct{}{}
+			attachments = append(attachments, attachment)
+		}
+	}
+
+	for i, dataURL := range mediaURLs {
+		if _, exists := seenURLs[dataURL]; exists {
+			continue
+		}
+		header, _, _ := strings.Cut(dataURL, ",")
+		mediaType, _, _ := strings.Cut(strings.TrimPrefix(header, "data:"), ";")
+		kind := "file"
+		if _, isImage := allowedInlineImageMIMETypes[mediaType]; isImage {
+			kind = "image"
+		}
+		filename := fmt.Sprintf("attachment-%d", i+1)
+		if extensions, _ := mime.ExtensionsByType(mediaType); len(extensions) > 0 {
+			filename += extensions[0]
+		}
+		attachments = append(attachments, map[string]any{
+			"type":     kind,
+			"filename": filename,
+			"url":      dataURL,
+		})
+	}
+	return attachments, nil
+}
+
+func appendUploadedFiles(content string, files []picoUploadedFile) string {
+	paths := make([]picoUploadedFile, 0, len(files))
+	for _, file := range files {
+		paths = append(paths, picoUploadedFile{Filename: file.Filename, Path: file.Path, Type: file.Type})
+	}
+	serialized, _ := json.Marshal(paths)
+	return content + "\n\n<uploaded_files>\n" + string(serialized) + "\n</uploaded_files>"
+}
+
+func (c *PicoChannel) storeInlineAttachments(raw any) (files []picoUploadedFile, err error) {
+	if raw == nil {
+		return nil, nil
+	}
+	values, ok := raw.([]any)
+	if !ok {
+		return nil, fmt.Errorf("attachments must be an array")
+	}
+	if len(values) == 0 {
+		return nil, nil
+	}
+	if strings.TrimSpace(c.workspace) == "" {
+		return nil, fmt.Errorf("workspace is unavailable for saving uploaded files")
+	}
+
+	// ponytail: uploads persist so their workspace paths stay readable in later turns; add retention if storage growth becomes a concern.
+	createdDirs := make([]string, 0, len(values))
+	defer func() {
+		if err != nil {
+			for _, dir := range createdDirs {
+				_ = os.RemoveAll(dir)
+			}
+		}
+	}()
+
+	workspace, err := filepath.Abs(c.workspace)
+	if err != nil {
+		return nil, fmt.Errorf("resolve workspace: %w", err)
+	}
+	workspace, err = filepath.EvalSymlinks(workspace)
+	if err != nil {
+		return nil, fmt.Errorf("resolve workspace: %w", err)
+	}
+	artifactDir := filepath.Join(workspace, ".artifacts")
+	if err = os.Mkdir(artifactDir, 0o700); err != nil && !os.IsExist(err) {
+		return nil, fmt.Errorf("create artifact directory: %w", err)
+	}
+	artifactDir, err = filepath.EvalSymlinks(artifactDir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve artifact directory: %w", err)
+	}
+	if relative, relErr := filepath.Rel(workspace, artifactDir); relErr != nil || !filepath.IsLocal(relative) {
+		return nil, fmt.Errorf("artifact directory is outside the workspace")
+	}
+	uploadDir := filepath.Join(artifactDir, "uploads")
+	if err = os.Mkdir(uploadDir, 0o700); err != nil && !os.IsExist(err) {
+		return nil, fmt.Errorf("create upload directory: %w", err)
+	}
+	uploadDir, err = filepath.EvalSymlinks(uploadDir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve upload directory: %w", err)
+	}
+	if relative, relErr := filepath.Rel(workspace, uploadDir); relErr != nil || !filepath.IsLocal(relative) {
+		return nil, fmt.Errorf("upload directory is outside the workspace")
+	}
+
+	for i, value := range values {
+		attachment, ok := value.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("attachments[%d]: attachment must be an object", i)
+		}
+		kind, _ := attachment["type"].(string)
+		kind = strings.ToLower(strings.TrimSpace(kind))
+		if kind != "image" && kind != "file" {
+			continue
+		}
+		dataURL, valueErr := inlineImageValue(attachment)
+		if valueErr != nil {
+			return nil, fmt.Errorf("attachments[%d]: %w", i, valueErr)
+		}
+		_, data, decodeErr := decodeInlineAttachmentDataURL(dataURL)
+		if decodeErr != nil {
+			return nil, fmt.Errorf("attachments[%d]: %w", i, decodeErr)
+		}
+
+		filename, _ := attachment["filename"].(string)
+		filename = filepath.Base(strings.ReplaceAll(strings.TrimSpace(filename), `\`, "/"))
+		if filename == "" || filename == "." || filename == ".." || filename == string(filepath.Separator) {
+			filename = fmt.Sprintf("attachment-%d", i+1)
+		}
+		dir := filepath.Join(uploadDir, uuid.NewString())
+		if err = os.Mkdir(dir, 0o700); err != nil {
+			return nil, fmt.Errorf("create upload directory: %w", err)
+		}
+		createdDirs = append(createdDirs, dir)
+		path := filepath.Join(dir, filename)
+		if err = os.WriteFile(path, data, 0o600); err != nil {
+			return nil, fmt.Errorf("save uploaded file: %w", err)
+		}
+		files = append(files, picoUploadedFile{
+			Filename: filename,
+			Path:     path,
+			Type:     kind,
+		})
+	}
+	return files, nil
 }
 
 func parseInlineImageMedia(payload map[string]any) ([]string, error) {
@@ -1335,13 +1609,13 @@ func parseInlineImageAttachments(raw any) ([]string, error) {
 
 		attachmentType, _ := attachment["type"].(string)
 		attachmentType = strings.ToLower(strings.TrimSpace(attachmentType))
-		if attachmentType != "" && attachmentType != "image" {
+		if attachmentType != "" && attachmentType != "image" && attachmentType != "file" {
 			continue
 		}
 
 		value, err := inlineImageValue(attachment)
 		if err != nil {
-			if attachmentType == "image" {
+			if attachmentType == "image" || attachmentType == "file" {
 				return nil, fmt.Errorf("attachments[%d]: %w", i, err)
 			}
 			continue
@@ -1378,34 +1652,43 @@ func inlineImageValue(item any) (string, error) {
 }
 
 func validateInlineImageDataURL(mediaURL string) error {
+	_, _, err := decodeInlineAttachmentDataURL(mediaURL)
+	return err
+}
+
+func decodeInlineAttachmentDataURL(mediaURL string) (string, []byte, error) {
 	if mediaURL == "" {
-		return fmt.Errorf("image payload is empty")
-	}
-	if !strings.HasPrefix(mediaURL, "data:image/") {
-		return fmt.Errorf("only inline image data URLs are supported")
+		return "", nil, fmt.Errorf("attachment payload is empty")
 	}
 
 	header, data, found := strings.Cut(mediaURL, ",")
 	if !found || strings.TrimSpace(data) == "" {
-		return fmt.Errorf("image data URL is malformed")
+		return "", nil, fmt.Errorf("attachment data URL is malformed")
 	}
 	if !strings.Contains(header, ";base64") {
-		return fmt.Errorf("image data URL must be base64 encoded")
+		return "", nil, fmt.Errorf("attachment data URL must be base64 encoded")
 	}
 	mimeType, _, _ := strings.Cut(strings.TrimPrefix(header, "data:"), ";")
-	if _, ok := allowedInlineImageMIMETypes[mimeType]; !ok {
-		return fmt.Errorf("unsupported image format: %s", mimeType)
+	_, isImage := allowedInlineImageMIMETypes[mimeType]
+	_, isText := allowedInlineTextMIMETypes[mimeType]
+	isText = isText || strings.HasPrefix(mimeType, "text/")
+	if !isImage && !isText && mimeType != allowedInlinePDFMIMEType {
+		return "", nil, fmt.Errorf("unsupported attachment format: %s", mimeType)
 	}
 
 	data = strings.TrimSpace(data)
 	if base64.StdEncoding.DecodedLen(len(data)) > config.DefaultMaxMediaSize {
-		return fmt.Errorf("image exceeds %d byte limit", config.DefaultMaxMediaSize)
+		return "", nil, fmt.Errorf("attachment exceeds %d byte limit", config.DefaultMaxMediaSize)
 	}
-	if _, err := base64.StdEncoding.DecodeString(data); err != nil {
-		return fmt.Errorf("invalid base64 image data")
+	decoded, err := base64.StdEncoding.DecodeString(data)
+	if err != nil {
+		return "", nil, fmt.Errorf("invalid base64 attachment data")
+	}
+	if mimeType == allowedInlinePDFMIMEType && !strings.HasPrefix(string(decoded), "%PDF-") {
+		return "", nil, fmt.Errorf("invalid PDF signature")
 	}
 
-	return nil
+	return mimeType, decoded, nil
 }
 
 // setContextUsagePayload adds context window usage stats to a pico payload.
