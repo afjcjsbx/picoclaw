@@ -823,6 +823,40 @@
         "parameter_description": "Description",
         "required": "Required",
         "optional": "Optional",
+        "tabs": {
+          "servers": "Servers",
+          "catalog": "Catalog"
+        },
+        "catalog": {
+          "title": "MCP Catalog",
+          "description": "Install popular MCP servers with one click. Review or remove installed servers from the Servers tab.",
+          "search_placeholder": "Search the MCP catalog...",
+          "no_results": "No MCP servers match your search",
+          "no_results_hint": "Try a different keyword or category.",
+          "install": "Install",
+          "installed": "Installed",
+          "install_title": "Install {{name}}",
+          "install_description": "Fill in the credentials required by this MCP server. You can update them later in the configuration.",
+          "install_success": "{{name}} installed. Reload the gateway to apply it.",
+          "install_error": "Could not install the MCP server. Please try again.",
+          "requires": "Requires: {{value}}",
+          "docs": "Documentation",
+          "required": "Required",
+          "reload_hint": "After installing, reload the gateway to connect the new server.",
+          "categories": {
+            "all": "All categories",
+            "browser": "Browser",
+            "web": "Web",
+            "docs": "Docs",
+            "code": "Code",
+            "database": "Database",
+            "productivity": "Productivity",
+            "research": "Research",
+            "design": "Design",
+            "cloud": "Cloud",
+            "utility": "Utilities"
+          }
+        },
         "summary": {
           "servers": "Configured servers",
           "connected": "Connected",
