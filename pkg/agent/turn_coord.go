@@ -22,6 +22,12 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 	defer turnCancel()
 	ts.setTurnCancel(turnCancel)
 
+	// Steering and graceful interrupts may extend a turn past MaxIterations so
+	// the user can redirect a long task. Keep that extension bounded: without
+	// an absolute cap a steering message can keep a degenerate loop alive
+	// forever.
+	iterationHardCap := steeringIterationHardCap(ts.agent.MaxIterations)
+
 	// Inject turnState and AgentLoop into context so tools (e.g. spawn) can retrieve them.
 	turnCtx = withTurnState(turnCtx, ts)
 	turnCtx = WithAgentLoop(turnCtx, al)
@@ -123,10 +129,11 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 	mediaOpts := mediaResolveOptionsFor(pipeline.Cfg)
 	finalContent := exec.finalContent
 
-	for ts.currentIteration() < ts.agent.MaxIterations || len(exec.pendingMessages) > 0 || func() bool {
-		graceful, _ := ts.gracefulInterruptRequested()
-		return graceful
-	}() {
+	for ts.currentIteration() < ts.agent.MaxIterations ||
+		(ts.currentIteration() < iterationHardCap && (len(exec.pendingMessages) > 0 || func() bool {
+			graceful, _ := ts.gracefulInterruptRequested()
+			return graceful
+		}())) {
 		if ts.hardAbortRequested() {
 			turnStatus = TurnEndStatusAborted
 			return al.abortTurn(ts)
@@ -401,4 +408,19 @@ func (al *AgentLoop) resolveContextManager() ContextManager {
 		return &legacyContextManager{al: al}
 	}
 	return cm
+}
+
+// steeringIterationHardCap bounds how far steering/graceful interrupts can
+// extend a turn beyond MaxIterations. The extra room is intentionally generous
+// for normal redirects but finite, so a model that keeps looping cannot burn
+// tokens indefinitely.
+func steeringIterationHardCap(maxIterations int) int {
+	if maxIterations <= 0 {
+		return 0
+	}
+	hardCap := maxIterations * 3
+	if floor := maxIterations + 20; floor > hardCap {
+		hardCap = floor
+	}
+	return hardCap
 }
