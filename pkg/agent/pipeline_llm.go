@@ -321,14 +321,8 @@ func (p *Pipeline) CallLLM(
 
 	// Retry loop
 	var err error
-	maxRetries := p.Cfg.Agents.Defaults.MaxLLMRetries
-	if maxRetries <= 0 {
-		maxRetries = 2
-	}
-	backoffSecs := p.Cfg.Agents.Defaults.LLMRetryBackoffSecs
-	if backoffSecs <= 0 {
-		backoffSecs = 2
-	}
+	llmRetrySettings := llmRetryFromConfig(p.Cfg)
+	maxRetries := llmRetrySettings.max
 	for retry := 0; retry <= maxRetries; retry++ {
 		exec.response, err = callLLM(exec.callMessages, exec.providerToolDefs)
 		if err == nil {
@@ -364,7 +358,7 @@ func (p *Pipeline) CallLLM(
 			strings.Contains(errMsg, "request too large"))
 
 		if isTransientError && retry < maxRetries {
-			backoff := time.Duration(retry+1) * time.Duration(backoffSecs) * time.Second
+			backoff := time.Duration(retry+1) * llmRetrySettings.backoff
 			al.emitEvent(
 				runtimeevents.KindAgentLLMRetry,
 				ts.eventMeta("runTurn", "turn.llm.retry"),

@@ -431,8 +431,9 @@ func (m *legacyContextManager) retryLLMCall(
 		m.al.activeRequestsInc()
 		resp, err = func() (*providers.LLMResponse, error) {
 			defer m.al.activeRequestsDec()
-			return agent.Provider.Chat(
+			return chatRetryingOverload(
 				ctx,
+				agent.Provider,
 				[]providers.Message{{Role: "user", Content: prompt}},
 				nil,
 				model,
@@ -441,11 +442,16 @@ func (m *legacyContextManager) retryLLMCall(
 					"temperature":      llmTemperature,
 					"prompt_cache_key": agent.ID,
 				},
+				llmRetryFromConfig(m.al.cfg),
 			)
 		}()
 
 		if err == nil && resp != nil && resp.Content != "" {
 			return resp, nil
+		}
+		// An overloaded or rate-limited upstream was already retried with backoff.
+		if isOverloadStatus(err) {
+			break
 		}
 		if attempt < maxRetries-1 {
 			time.Sleep(time.Duration(attempt+1) * 100 * time.Millisecond)
