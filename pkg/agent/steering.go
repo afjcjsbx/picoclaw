@@ -82,6 +82,17 @@ func (sq *steeringQueue) pushScope(scope string, msg providers.Message) error {
 	return nil
 }
 
+// requeueScope puts already-dequeued messages back at the front of the scope's
+// queue, ahead of anything queued since. They were admitted once, so the size
+// cap is not applied again.
+func (sq *steeringQueue) requeueScope(scope string, msgs []providers.Message) {
+	sq.mu.Lock()
+	defer sq.mu.Unlock()
+
+	scope = normalizeSteeringScope(scope)
+	sq.queues[scope] = append(append([]providers.Message(nil), msgs...), sq.queues[scope]...)
+}
+
 // dequeue removes and returns pending steering messages from the legacy
 // fallback scope according to the configured mode.
 func (sq *steeringQueue) dequeue() []providers.Message {
@@ -293,6 +304,13 @@ func (al *AgentLoop) dequeueSteeringMessagesForScopeWithFallback(scope string) [
 		return nil
 	}
 	return al.steering.dequeueScopeWithFallback(scope)
+}
+
+func (al *AgentLoop) requeueSteeringMessagesForScope(scope string, msgs []providers.Message) {
+	if al.steering == nil || len(msgs) == 0 {
+		return
+	}
+	al.steering.requeueScope(scope, msgs)
 }
 
 func (al *AgentLoop) pendingSteeringCountForScope(scope string) int {

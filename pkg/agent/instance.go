@@ -318,8 +318,10 @@ func NewAgentInstance(
 						map[string]any{"light_model": rc.LightModel, "agent_id": agentID, "error": err.Error()})
 				} else {
 					router = routing.New(routing.RouterConfig{
-						LightModel: rc.LightModel,
-						Threshold:  rc.Threshold,
+						LightModel:               rc.LightModel,
+						Threshold:                rc.Threshold,
+						EscalationPromptTokens:   rc.EscalationPromptTokens,
+						EscalationToolIterations: rc.EscalationToolIterations,
 					})
 					lightCandidates = resolved
 					lightProvider = lp

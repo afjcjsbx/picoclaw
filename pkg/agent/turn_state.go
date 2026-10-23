@@ -135,6 +135,11 @@ type turnExecution struct {
 	activeProvider    providers.LLMProvider
 	usedLight         bool
 
+	// Mid-turn routing guards. toolIterationStreak counts consecutive
+	// light-model responses that requested tools.
+	toolIterationStreak int
+	escalatedToPrimary  bool
+
 	// LLM call per-iteration state
 	response            *providers.LLMResponse
 	normalizedToolCalls []providers.ToolCall

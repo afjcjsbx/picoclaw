@@ -520,6 +520,15 @@ type RoutingConfig struct {
 	Enabled    bool    `json:"enabled"`
 	LightModel string  `json:"light_model"` // model_name from model_list to use for simple tasks
 	Threshold  float64 `json:"threshold"`   // complexity score in [0,1]; score >= threshold → primary model
+
+	// EscalationPromptTokens moves the rest of the turn to the primary model
+	// after a light-model response reports more prompt tokens than this.
+	// Zero uses the routing.Router default (32768).
+	EscalationPromptTokens int `json:"escalation_prompt_tokens,omitempty"`
+	// EscalationToolIterations moves the rest of the turn to the primary model
+	// after this many consecutive light-model responses requested tools.
+	// Zero uses the routing.Router default (3).
+	EscalationToolIterations int `json:"escalation_tool_iterations,omitempty"`
 }
 
 // SubTurnConfig configures the SubTurn execution system.
