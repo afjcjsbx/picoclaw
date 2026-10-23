@@ -224,21 +224,6 @@ export function AgentDefaultsSection({
       </Field>
 
       <Field
-        label={t("pages.config.summarize_threshold")}
-        hint={t("pages.config.summarize_threshold_hint")}
-        layout="setting-row"
-      >
-        <Input
-          type="number"
-          min={1}
-          value={form.summarizeMessageThreshold}
-          onChange={(e) =>
-            onFieldChange("summarizeMessageThreshold", e.target.value)
-          }
-        />
-      </Field>
-
-      <Field
         label={t("pages.config.summarize_token_percent")}
         hint={t("pages.config.summarize_token_percent_hint")}
         layout="setting-row"

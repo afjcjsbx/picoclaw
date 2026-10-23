@@ -523,37 +523,44 @@ func TestLegacyCompact_PostTurn_BelowThreshold(t *testing.T) {
 	}
 }
 
-func TestLegacyCompact_PostTurn_ExceedsMessageThreshold(t *testing.T) {
+func newSummarizeThresholdAgentLoop(t *testing.T, contextWindow int) *AgentLoop {
+	t.Helper()
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:                 t.TempDir(),
-				ModelName:                 "test-model",
-				MaxTokens:                 4096,
-				MaxToolIterations:         10,
-				ContextWindow:             8000,
-				SummarizeMessageThreshold: 2,
-				SummarizeTokenPercent:     75,
+				Workspace:             t.TempDir(),
+				ModelName:             "test-model",
+				MaxTokens:             4096,
+				MaxToolIterations:     10,
+				ContextWindow:         contextWindow,
+				SummarizeTokenPercent: 75,
 			},
 		},
 	}
-	msgBus := bus.NewMessageBus()
-	al := NewAgentLoop(cfg, msgBus, &simpleMockProvider{response: "summary"})
+	return NewAgentLoop(cfg, bus.NewMessageBus(), &simpleMockProvider{response: "summary"})
+}
 
+func alternatingHistory(turns int, content string) []providers.Message {
+	history := make([]providers.Message, 0, turns*2)
+	for i := 0; i < turns; i++ {
+		history = append(history,
+			providers.Message{Role: "user", Content: content},
+			providers.Message{Role: "assistant", Content: content},
+		)
+	}
+	return history
+}
+
+func TestLegacyCompact_PostTurn_ExceedsTokenThreshold(t *testing.T) {
+	// Window 8000 - MaxTokens 4096 leaves 3904 usable; 75% is 2928 tokens.
+	// Six 2000-char messages are ~4800 tokens before the system prompt is counted.
+	al := newSummarizeThresholdAgentLoop(t, 8000)
 	defaultAgent := al.registry.GetDefaultAgent()
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
 
-	// 6 messages > threshold of 2
-	history := []providers.Message{
-		{Role: "user", Content: "q1"},
-		{Role: "assistant", Content: "a1"},
-		{Role: "user", Content: "q2"},
-		{Role: "assistant", Content: "a2"},
-		{Role: "user", Content: "q3"},
-		{Role: "assistant", Content: "a3"},
-	}
+	history := alternatingHistory(3, strings.Repeat("x", 2000))
 	if err := defaultAgent.Sessions.SetHistory(context.Background(), "session-threshold", history); err != nil {
 		t.Fatalf("SetHistory: %v", err)
 	}
@@ -584,6 +591,65 @@ func TestLegacyCompact_PostTurn_ExceedsMessageThreshold(t *testing.T) {
 	}
 	if len(newHistory) >= len(history) {
 		t.Fatalf("expected summarization to reduce history from %d messages, got %d", len(history), len(newHistory))
+	}
+}
+
+// A long history of small messages must not be summarized while the prompt is
+// far below the token threshold: message count alone is not a trigger.
+func TestLegacyCompact_PostTurn_ManyMessagesBelowTokenThreshold(t *testing.T) {
+	al := newSummarizeThresholdAgentLoop(t, 1_000_000)
+	defaultAgent := al.registry.GetDefaultAgent()
+	if defaultAgent == nil {
+		t.Fatal("expected default agent")
+	}
+
+	history := alternatingHistory(30, "short")
+	if err := defaultAgent.Sessions.SetHistory(context.Background(), "session-many", history); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
+
+	runtimeCh, closeRuntimeEvents := subscribeRuntimeEventsForTest(
+		t,
+		al,
+		16,
+		runtimeevents.KindAgentSessionSummarize,
+	)
+	defer closeRuntimeEvents()
+
+	err := al.contextManager.Compact(context.Background(), &CompactRequest{
+		SessionKey: "session-many",
+		Reason:     ContextCompressReasonSummarize,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	select {
+	case evt := <-runtimeCh:
+		t.Fatalf("unexpected summarize event for a below-threshold prompt: %+v", evt)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	newHistory, err := defaultAgent.Sessions.GetHistory(context.Background(), "session-many")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if len(newHistory) != len(history) {
+		t.Fatalf("expected history unchanged, got %d messages (was %d)", len(newHistory), len(history))
+	}
+}
+
+func TestComputeContextUsage_SummarizeAtIsPercentOfUsableWindow(t *testing.T) {
+	al := newSummarizeThresholdAgentLoop(t, 8000)
+	usage := computeContextUsage(al.registry.GetDefaultAgent(), "session-usage")
+	if usage == nil {
+		t.Fatal("expected usage")
+	}
+	if usage.CompressAtTokens != 8000-4096 {
+		t.Fatalf("CompressAtTokens = %d, want %d", usage.CompressAtTokens, 8000-4096)
+	}
+	if want := usage.CompressAtTokens * 75 / 100; usage.SummarizeAtTokens != want {
+		t.Fatalf("SummarizeAtTokens = %d, want %d", usage.SummarizeAtTokens, want)
 	}
 }
 
