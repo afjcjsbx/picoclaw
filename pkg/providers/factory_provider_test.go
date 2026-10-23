@@ -1597,6 +1597,36 @@ func TestCreateProviderFromConfig_ToolSchemaTransformWrapsProvider(t *testing.T)
 	}
 }
 
+func TestCreateProviderFromConfig_SessionHeaderFallback(t *testing.T) {
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get("X-Opencode-Session")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
+	}))
+	defer srv.Close()
+
+	cfg := &config.ModelConfig{
+		ModelName:     "relay",
+		Provider:      "openai",
+		Model:         "openai/mimo-v2.6-flash",
+		APIBase:       srv.URL,
+		SessionHeader: "x-opencode-session",
+	}
+	cfg.SetAPIKey("k")
+
+	provider, modelID, err := CreateProviderFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("CreateProviderFromConfig() error = %v", err)
+	}
+	if _, err := provider.Chat(t.Context(), []Message{{Role: "user", Content: "hi"}}, nil, modelID, nil); err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	if got != "picoclaw-relay" {
+		t.Fatalf("x-opencode-session = %q, want %q", got, "picoclaw-relay")
+	}
+}
+
 func TestCreateProviderFromConfig_InvalidToolSchemaTransform(t *testing.T) {
 	cfg := &config.ModelConfig{
 		ModelName:           "claude-cli-test",

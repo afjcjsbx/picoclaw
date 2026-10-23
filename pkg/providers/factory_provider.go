@@ -390,6 +390,22 @@ func finalizeProviderFromConfig(
 	modelID string,
 	cfg *config.ModelConfig,
 ) (LLMProvider, string, error) {
+	// Models can opt into a per-conversation session header. Providers that
+	// support the generic session-key header implement this setter.
+	if cfg != nil && strings.TrimSpace(cfg.SessionHeader) != "" {
+		if setter, ok := provider.(interface {
+			SetSessionHeader(name, fallback string)
+		}); ok {
+			// Background calls (summaries, subagents, ...) have no session_key.
+			// They still need a stable value, otherwise session-aware relays
+			// reject the request with a missing session ID.
+			fallback := "picoclaw-" + strings.TrimSpace(cfg.ModelName)
+			if fallback == "picoclaw-" {
+				fallback = "picoclaw"
+			}
+			setter.SetSessionHeader(cfg.SessionHeader, fallback)
+		}
+	}
 	wrapped, err := wrapProviderWithToolSchemaTransform(provider, cfg.ToolSchemaTransform)
 	if err != nil {
 		return nil, "", err

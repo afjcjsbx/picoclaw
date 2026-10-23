@@ -1037,6 +1037,12 @@ type ModelConfig struct {
 	// UserAgent is the user agent string to use for HTTP requests.
 	UserAgent string `json:"user_agent,omitempty" yaml:"-"`
 
+	// SessionHeader is the request header name that carries a stable
+	// per-conversation session ID. Providers supporting the generic session-key
+	// header receive it through SetSessionHeader during provider construction.
+	// Leave empty to disable the header for this model.
+	SessionHeader string `json:"session_header,omitempty" yaml:"-"`
+
 	// isVirtual marks this model as a virtual model generated from multi-key expansion.
 	// Virtual models should not be persisted to config files.
 	isVirtual bool
@@ -1080,6 +1086,11 @@ func (c *ModelConfig) Validate() error {
 	// Reject consecutive slashes
 	if strings.Contains(c.Model, "//") {
 		return fmt.Errorf("model identifier must not contain //")
+	}
+
+	// Reject whitespace in the session header name
+	if c.SessionHeader != "" && strings.ContainsAny(c.SessionHeader, " \t\n\r") {
+		return fmt.Errorf("session_header must not contain whitespace")
 	}
 	return nil
 }
