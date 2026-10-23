@@ -13,6 +13,8 @@ If you prefer not to edit JSON manually, PicoClaw also provides an MCP configura
 
 These commands manage the same `tools.mcp.servers` section documented below. See [MCP Server CLI](../reference/mcp-cli.md) for command syntax, examples, and behavior details.
 
+The web dashboard also provides an MCP page with a **Servers** tab for monitoring configured servers and a **Catalog** tab with one-click presets for popular servers. Presets that require credentials prompt for them during installation.
+
 ## Tool Discovery (Lazy Loading)
 
 When connecting to multiple MCP servers, exposing hundreds of tools simultaneously can exhaust the LLM's context window
