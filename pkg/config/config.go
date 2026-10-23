@@ -523,18 +523,13 @@ type RoutingConfig struct {
 
 	// EscalationPromptTokens moves the rest of the turn to the primary model
 	// after a light-model response reports more prompt tokens than this.
-	// Zero uses DefaultRoutingEscalationPromptTokens.
+	// Zero uses the routing.Router default (32768).
 	EscalationPromptTokens int `json:"escalation_prompt_tokens,omitempty"`
 	// EscalationToolIterations moves the rest of the turn to the primary model
 	// after this many consecutive light-model responses requested tools.
-	// Zero uses DefaultRoutingEscalationToolIterations.
+	// Zero uses the routing.Router default (3).
 	EscalationToolIterations int `json:"escalation_tool_iterations,omitempty"`
 }
-
-const (
-	DefaultRoutingEscalationPromptTokens   = 32768
-	DefaultRoutingEscalationToolIterations = 3
-)
 
 // SubTurnConfig configures the SubTurn execution system.
 type SubTurnConfig struct {
