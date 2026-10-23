@@ -361,6 +361,28 @@ func normalizedInboundContext(msg bus.InboundMessage) bus.InboundContext {
 	return bus.NormalizeInboundMessage(msg).Context
 }
 
+const (
+	cronSessionKeyPrefix = "agent:cron-"
+	// picoCronChatPrefix is the pico chat ID of a "[cron]" WebUI entry: the web
+	// backend lists a cron session under its key with ":" replaced by "_".
+	picoCronChatPrefix = "pico:agent_cron-"
+)
+
+// effectiveSessionKey returns the explicit session key of msg. A pico chat
+// opened from a "[cron]" WebUI entry maps back to that cron run's session, so
+// the conversation continues in place instead of forking into a new session
+// that shares the entry's pico ID and stays hidden behind the cron one.
+func effectiveSessionKey(msg bus.InboundMessage) string {
+	if msg.SessionKey != "" {
+		return msg.SessionKey
+	}
+	inbound := normalizedInboundContext(msg)
+	if inbound.Channel == "pico" && strings.HasPrefix(inbound.ChatID, picoCronChatPrefix) {
+		return cronSessionKeyPrefix + strings.TrimPrefix(inbound.ChatID, picoCronChatPrefix)
+	}
+	return ""
+}
+
 func resolveScopeKey(routeSessionKey, msgSessionKey string) string {
 	if isExplicitSessionKey(msgSessionKey) {
 		return msgSessionKey
