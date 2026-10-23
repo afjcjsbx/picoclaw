@@ -141,3 +141,62 @@ func TestPipeline_CallLLM_LightFallbackRecomputesNativeSearchForPrimary(t *testi
 		t.Fatalf("primary should receive the client web_search tool, got %#v", primary.tools)
 	}
 }
+
+type issue3445ErrLightProvider struct {
+	issue3445FailingLightProvider
+	err error
+}
+
+func (p *issue3445ErrLightProvider) Chat(
+	ctx context.Context,
+	msgs []providers.Message,
+	defs []providers.ToolDefinition,
+	model string,
+	opts map[string]any,
+) (*providers.LLMResponse, error) {
+	_, _ = p.issue3445FailingLightProvider.Chat(ctx, msgs, defs, model, opts)
+	return nil, p.err
+}
+
+func TestPipeline_CallLLM_NoPrimaryFallbackWhenCanceled(t *testing.T) {
+	canceledTurnCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	tests := []struct {
+		name    string
+		turnCtx context.Context
+		lightEr error
+	}{
+		{"provider call canceled", context.Background(), context.Canceled},
+		{"turn context canceled", canceledTurnCtx, errors.New("light model unavailable")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			primary := &issue3445FinalProvider{content: "primary answer"}
+			light := &issue3445ErrLightProvider{err: tt.lightEr}
+			al, agent, cleanup := newTurnCoordTestLoop(t, primary)
+			defer cleanup()
+			configureIssue3445Routing(agent, light, 0, 99)
+
+			pipeline := NewPipeline(al)
+			ts := newTurnState(agent, makeTestProcessOpts("test-light-canceled"), turnEventScope{
+				turnID:  "turn-light-canceled",
+				context: newTurnContext(nil, nil, nil),
+			})
+			exec, err := pipeline.SetupTurn(context.Background(), ts)
+			if err != nil {
+				t.Fatalf("SetupTurn failed: %v", err)
+			}
+
+			if _, err := pipeline.CallLLM(context.Background(), tt.turnCtx, ts, exec, 1); err == nil {
+				t.Fatal("expected the cancellation error to surface")
+			}
+			if got := primary.callCount(); got != 0 {
+				t.Fatalf("primary calls = %d, want 0", got)
+			}
+			if !exec.usedLight {
+				t.Fatal("exec must stay on the light tier when the call was canceled")
+			}
+		})
+	}
+}

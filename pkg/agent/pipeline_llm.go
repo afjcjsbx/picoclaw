@@ -539,6 +539,11 @@ func (p *Pipeline) CallLLM(
 		if err == nil || skipPrimaryFallback || !exec.usedLight {
 			break
 		}
+		// A canceled call or turn is not a light-model failure; the primary
+		// would be canceled too.
+		if turnCtx.Err() != nil || errors.Is(err, context.Canceled) {
+			break
+		}
 		if !p.promoteToPrimary(ts, exec, "light model candidates failed: "+err.Error()) {
 			break
 		}
