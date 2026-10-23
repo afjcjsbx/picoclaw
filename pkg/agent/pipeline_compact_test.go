@@ -623,3 +623,50 @@ func TestLegacyCompact_Threshold_RollbackRestoresSummaryBeforeTurn(t *testing.T)
 		t.Fatalf("history after rollback = %d messages, want none", len(history))
 	}
 }
+
+// A steering message is a user message inside the turn in progress. Summarizing
+// earlier Turns must not take it for a Turn boundary and cut the turn there.
+func TestLegacyCompact_Threshold_DoesNotCutActiveTurnAtSteering(t *testing.T) {
+	al, agent, ts, turn := activeTurnFixture(t, 2)
+	steering := providers.Message{Role: "user", Content: "also check the logs"}
+	ts.recordPersistedMessage(steering)
+	turn = append(turn, steering)
+	for _, msg := range append(activeTurnRound(3), activeTurnRound(4)...) {
+		ts.recordPersistedMessage(msg)
+		turn = append(turn, msg)
+	}
+	history := append([]providers.Message{
+		{Role: "user", Content: "earlier question"},
+		{Role: "assistant", Content: "earlier answer"},
+	}, turn...)
+	ctx := context.Background()
+	if err := agent.Sessions.SetHistory(ctx, "active-turn", history); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
+
+	if err := al.contextManager.Compact(withTurnState(ctx, ts), &CompactRequest{
+		SessionKey: "active-turn",
+		Reason:     ContextCompressReasonThreshold,
+	}); err != nil {
+		t.Fatalf("compaction: %v", err)
+	}
+	got, _ := agent.Sessions.GetHistory(ctx, "active-turn")
+	if len(got) != len(turn) || got[0].Content != turn[0].Content {
+		t.Fatalf("history = %d messages starting %q, want the whole turn (%d) from %q",
+			len(got), got[0].Content, len(turn), turn[0].Content)
+	}
+}
+
+func activeTurnRound(i int) []providers.Message {
+	id := fmt.Sprintf("c%d", i)
+	return []providers.Message{
+		{Role: "assistant", ToolCalls: []providers.ToolCall{{
+			ID: id, Type: "function", Name: "bulky_tool",
+			Function: &providers.FunctionCall{Name: "bulky_tool", Arguments: `{"q":"x"}`},
+		}}},
+		{
+			Role: "tool", ToolCallID: id,
+			Content: fmt.Sprintf("round-%d ", i) + strings.Repeat("lorem ipsum dolor ", 150),
+		},
+	}
+}

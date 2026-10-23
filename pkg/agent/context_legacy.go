@@ -315,8 +315,14 @@ func (m *legacyContextManager) summarizeSession(
 		return false
 	}
 
-	safeCut := findSafeBoundary(history, len(history)-4)
-	if safeCut <= 0 {
+	// The turn in progress is never cut: a steering message inside it is a user
+	// message too, and would otherwise look like a Turn boundary.
+	limit := len(history)
+	if ts != nil {
+		limit -= matchingTurnMessageTail(history, ts.persistedMessagesSnapshot())
+	}
+	safeCut := findSafeBoundary(history, min(len(history)-4, limit))
+	if safeCut <= 0 || safeCut > limit {
 		return false
 	}
 	keepCount := len(history) - safeCut
