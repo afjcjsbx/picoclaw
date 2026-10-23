@@ -379,6 +379,11 @@ picks the endpoint from the model ID prefix, so just name the model:
 > reject it). For a model PicoClaw routes wrongly, use `provider: "openai"` or
 > `"anthropic-messages"` with the full family URL as `api_base` instead.
 
+For a custom OpenAI-compatible relay that also requires this header, set
+`"session_header": "x-opencode-session"` on the model entry. The Web UI exposes
+the same field under **Models → Add/Edit → Advanced → Session Header**, with a
+one-click **x-opencode-session** preset.
+
 **Ollama (local)**
 
 ```json
