@@ -555,3 +555,34 @@ func TestLegacyCompact_Threshold_PruneKeepsNewestActiveRounds(t *testing.T) {
 		}
 	}
 }
+
+// Clearing tool outputs inside the turn in progress must keep the turn's record
+// in step with the session, so the active turn and the restore point still
+// cover the whole turn.
+func TestLegacyCompact_Threshold_PruneKeepsTurnRecordInStep(t *testing.T) {
+	al, agent, ts, turn := activeTurnFixture(t, 4)
+	if err := agent.Sessions.SetHistory(context.Background(), "active-turn", turn); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
+	// Too small a middle to be worth summarizing, so the prune fallback runs.
+	agent.ContextWindow = 1 << 20
+
+	err := al.contextManager.Compact(withTurnState(context.Background(), ts), &CompactRequest{
+		SessionKey: "active-turn",
+		Reason:     ContextCompressReasonThreshold,
+	})
+	if err != nil {
+		t.Fatalf("compaction: %v", err)
+	}
+	got, _ := agent.Sessions.GetHistory(context.Background(), "active-turn")
+	if got[2].Content != prunedToolResult {
+		t.Fatalf("round 1 result = %.12q, want it cleared", got[2].Content)
+	}
+	if matched := matchingTurnMessageTail(got, ts.persistedMessagesSnapshot()); matched != len(turn) {
+		t.Fatalf("turn record matches %d messages of the session, want all %d", matched, len(turn))
+	}
+	ts.refreshRestorePointFromSession(agent)
+	if n := ts.initialHistoryLen(); n != 0 {
+		t.Fatalf("restore point = %d messages, want 0 so a rollback drops the whole turn", n)
+	}
+}

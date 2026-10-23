@@ -176,12 +176,19 @@ func (m *legacyContextManager) pruneSessionToolResults(
 		warnSessionStoreError(sessionKey, "get history", err)
 		return 0, false
 	}
-	end := len(history) - protectedTail
+	end, activeLen := len(history)-protectedTail, 0
 	if ts != nil {
-		end = min(end, activeTurnPruneEnd(history, ts.persistedMessagesSnapshot()))
+		persisted := ts.persistedMessagesSnapshot()
+		activeLen = matchingTurnMessageTail(history, persisted)
+		end = min(end, activeTurnPruneEnd(history, persisted))
 	}
 	if !pruneToolResultsBefore(history, end) {
 		return 0, false
+	}
+	if activeLen > 0 {
+		// The turn's record must keep matching the session, or the active turn
+		// (and the hard-abort restore point) would shrink to the unpruned tail.
+		ts.replacePersistedMessages(history[len(history)-activeLen:])
 	}
 	warnSessionStoreError(sessionKey, "set history", agent.Sessions.SetHistory(ctx, sessionKey, history))
 	warnSessionStoreError(sessionKey, "save", agent.Sessions.Save(ctx, sessionKey))
