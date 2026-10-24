@@ -7,9 +7,11 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
+	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/providers"
 )
 
@@ -40,6 +42,13 @@ func TestSemanticRetryError_RetriableResponses(t *testing.T) {
 			name:     "truncated with partial content",
 			resp:     &providers.LLMResponse{Content: "partial", FinishReason: "length"},
 			contains: "finish_reason",
+		},
+		{
+			// openai_compat rewrites "length" to "truncated" on the
+			// non-streaming path, so the default config must cover both.
+			name:     "truncated spelling from openai-compatible path",
+			resp:     &providers.LLMResponse{Content: "partial", FinishReason: "truncated"},
+			contains: "truncated",
 		},
 	}
 
@@ -171,11 +180,11 @@ func (p *sequenceLLMProvider) callCount() int {
 	return p.calls
 }
 
-func newSemanticRetryPipeline(
+func newSemanticRetryLoop(
 	t *testing.T,
 	provider providers.LLMProvider,
 	retries int,
-) (*Pipeline, *turnState, func()) {
+) (*AgentLoop, *AgentInstance, *turnState, func()) {
 	t.Helper()
 
 	cfg := &config.Config{
@@ -205,7 +214,18 @@ func newSemanticRetryPipeline(
 		turnID:  "turn-1",
 		context: newTurnContext(nil, nil, nil),
 	})
-	return NewPipeline(al), ts, al.Close
+	return al, agent, ts, al.Close
+}
+
+func newSemanticRetryPipeline(
+	t *testing.T,
+	provider providers.LLMProvider,
+	retries int,
+) (*Pipeline, *turnState, func()) {
+	t.Helper()
+
+	al, _, ts, cleanup := newSemanticRetryLoop(t, provider, retries)
+	return NewPipeline(al), ts, cleanup
 }
 
 func runSemanticRetryTurn(t *testing.T, provider providers.LLMProvider, retries int) (*turnExecution, error) {
@@ -293,5 +313,135 @@ func TestPipeline_CallLLM_DoesNotRetryToolCallResponse(t *testing.T) {
 	}
 	if got := provider.callCount(); got != 1 {
 		t.Fatalf("callCount = %d, want 1", got)
+	}
+}
+
+func TestPipeline_CallLLM_EmptyPrimaryAdvancesFallbackChain(t *testing.T) {
+	primary := &sequenceLLMProvider{responses: []providers.LLMResponse{
+		{FinishReason: "stop"},
+	}}
+	backup := &sequenceLLMProvider{responses: []providers.LLMResponse{
+		{Content: "backup answer", FinishReason: "stop"},
+	}}
+
+	al, agent, ts, cleanup := newSemanticRetryLoop(t, primary, 2)
+	defer cleanup()
+
+	primaryCandidate := providers.FallbackCandidate{
+		Provider: "test", Model: "primary-model", DisplayName: "primary-model",
+	}
+	backupCandidate := providers.FallbackCandidate{
+		Provider: "test", Model: "backup-model", DisplayName: "backup-model",
+	}
+	agent.Model = "primary-model"
+	agent.Candidates = []providers.FallbackCandidate{primaryCandidate, backupCandidate}
+	agent.CandidateProviders = map[string]providers.LLMProvider{
+		candidateProviderKey(primaryCandidate): primary,
+		candidateProviderKey(backupCandidate):  backup,
+	}
+
+	pipeline := NewPipeline(al)
+	exec, err := pipeline.SetupTurn(context.Background(), ts)
+	if err != nil {
+		t.Fatalf("SetupTurn failed: %v", err)
+	}
+	if _, err := pipeline.CallLLM(context.Background(), context.Background(), ts, exec, 1); err != nil {
+		t.Fatalf("CallLLM failed: %v", err)
+	}
+
+	if got := primary.callCount(); got != 1 {
+		t.Fatalf("primary calls = %d, want 1", got)
+	}
+	if got := backup.callCount(); got != 1 {
+		t.Fatalf("backup calls = %d, want 1 (chain must advance on an unusable response)", got)
+	}
+	if exec.finalContent != "backup answer" {
+		t.Fatalf("finalContent = %q, want backup answer", exec.finalContent)
+	}
+}
+
+func TestPipeline_CallLLM_EmitsSemanticRetryEvent(t *testing.T) {
+	provider := &sequenceLLMProvider{responses: []providers.LLMResponse{
+		{FinishReason: "stop"},
+		{Content: "recovered answer", FinishReason: "stop"},
+	}}
+
+	al, _, ts, cleanup := newSemanticRetryLoop(t, provider, 1)
+	defer cleanup()
+
+	events, closeEvents := subscribeRuntimeEventsForTest(
+		t, al, 16, runtimeevents.KindAgentLLMRetry,
+	)
+	defer closeEvents()
+
+	pipeline := NewPipeline(al)
+	exec, err := pipeline.SetupTurn(context.Background(), ts)
+	if err != nil {
+		t.Fatalf("SetupTurn failed: %v", err)
+	}
+	if _, err := pipeline.CallLLM(context.Background(), context.Background(), ts, exec, 1); err != nil {
+		t.Fatalf("CallLLM failed: %v", err)
+	}
+
+	evt := waitForRuntimeEvent(t, events, 5*time.Second, func(e runtimeevents.Event) bool {
+		return e.Kind == runtimeevents.KindAgentLLMRetry
+	})
+	payload, ok := evt.Payload.(LLMRetryPayload)
+	if !ok {
+		t.Fatalf("expected LLMRetryPayload, got %T", evt.Payload)
+	}
+	if payload.Reason != "semantic" {
+		t.Fatalf("retry reason = %q, want semantic", payload.Reason)
+	}
+}
+
+func TestPipeline_CallLLM_KeepsPartialTruncatedResponseAfterBudget(t *testing.T) {
+	provider := &sequenceLLMProvider{responses: []providers.LLMResponse{
+		{Content: "partial answer", FinishReason: "length"},
+	}}
+
+	exec, err := runSemanticRetryTurn(t, provider, 1)
+	if err != nil {
+		t.Fatalf("exhausted retries should not fail the turn, got %v", err)
+	}
+	if got := provider.callCount(); got != 2 {
+		t.Fatalf("callCount = %d, want 2", got)
+	}
+	// The token-limit fallback from the upstream only speaks for empty
+	// content, so partial truncated text is returned as-is.
+	if exec.finalContent != "partial answer" {
+		t.Fatalf("finalContent = %q, want partial answer", exec.finalContent)
+	}
+}
+
+func TestStreamPublishedVisible(t *testing.T) {
+	tests := []struct {
+		name string
+		exec *turnExecution
+		want bool
+	}{
+		{name: "no streaming publisher", exec: &turnExecution{}},
+		{
+			name: "nothing published",
+			exec: &turnExecution{streamingPublisher: &streamingChunkPublisher{}},
+		},
+		{
+			name: "content published",
+			exec: &turnExecution{streamingPublisher: &streamingChunkPublisher{published: true}},
+			want: true,
+		},
+		{
+			name: "reasoning published",
+			exec: &turnExecution{streamingPublisher: &streamingChunkPublisher{reasoningPublished: true}},
+			want: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := streamPublishedVisible(tc.exec); got != tc.want {
+				t.Fatalf("streamPublishedVisible = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

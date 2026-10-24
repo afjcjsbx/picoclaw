@@ -234,6 +234,12 @@ func (p *Pipeline) CallLLM(
 			return response, streamErr
 		}
 
+		// The fallback chain treats any error as a candidate failure and moves
+		// to the next candidate. Keep the last response that was delivered but
+		// unusable so it can still be used as the final answer when every
+		// candidate returns nothing better.
+		var lastUnusableResponse *providers.LLMResponse
+
 		runCandidate := func(
 			ctx context.Context,
 			candidate providers.FallbackCandidate,
@@ -280,7 +286,26 @@ func (p *Pipeline) CallLLM(
 			candidateThinking := thinkingSettingsFromModelConfig(candidateCfg)
 			applyThinkingOption(callOpts, candidateProvider, candidateThinking, true, ts.agent.ID)
 			exec.suppressReasoning = shouldSuppressReasoningFor(candidateThinking)
-			return candidateProvider.Chat(ctx, messagesForCall, candidateTools, candidate.Model, callOpts)
+
+			resp, err := candidateProvider.Chat(
+				ctx, messagesForCall, candidateTools, candidate.Model, callOpts,
+			)
+			if err != nil {
+				return nil, err
+			}
+			// Reject an unusable response here, not after the chain returns:
+			// the chain only advances on an error, and a retry of the whole
+			// call would otherwise hit the same empty primary again.
+			if p.Cfg != nil {
+				if semanticErr := semanticRetryError(p.Cfg.Agents.Defaults, resp); semanticErr != nil {
+					lastUnusableResponse = resp
+					return nil, &providers.FailoverError{
+						Reason:  providers.FailoverUnusable,
+						Wrapped: semanticErr,
+					}
+				}
+			}
+			return resp, nil
 		}
 
 		if len(exec.activeCandidates) > 1 && p.Fallback != nil {
@@ -304,6 +329,12 @@ func (p *Pipeline) CallLLM(
 				)
 			}
 			if fbErr != nil {
+				// Every candidate was reachable but none returned anything
+				// usable: hand the last such response back so the retry loop
+				// keeps its usual budget and fallback messages.
+				if resp := unusableFallbackResponse(fbErr, lastUnusableResponse); resp != nil {
+					return resp, nil
+				}
 				return nil, fbErr
 			}
 			if fbResult.Provider != "" && len(fbResult.Attempts) > 0 {
@@ -970,11 +1001,57 @@ func semanticRetryError(defaults config.AgentDefaults, resp *providers.LLMRespon
 		return fmt.Errorf("%w: empty content (finish_reason=%q)", errSemanticRetry, resp.FinishReason)
 	}
 	for _, reason := range defaults.LLMRetryOnFinishReasons {
-		if reason != "" && resp.FinishReason == reason {
+		if finishReasonMatches(reason, resp.FinishReason) {
 			return fmt.Errorf("%w: finish_reason=%q", errSemanticRetry, resp.FinishReason)
 		}
 	}
 	return nil
+}
+
+// finishReasonMatches reports whether the response's finish_reason matches a
+// configured one. Providers spell truncation two ways: openai_compat rewrites
+// "length" to "truncated" on the non-streaming path, while the streaming path
+// and the other providers keep "length". Both mean the same thing, so a config
+// entry for either must match both.
+func finishReasonMatches(configured, actual string) bool {
+	if configured == "" || actual == "" {
+		return false
+	}
+	if configured == actual {
+		return true
+	}
+	return isTruncatedFinishReason(configured) && isTruncatedFinishReason(actual)
+}
+
+// unusableFallbackResponse returns the last unusable response when the chain
+// failed solely because every attempted candidate returned one, and nil when
+// the error came from anything else (so real failures still surface).
+func unusableFallbackResponse(
+	err error,
+	last *providers.LLMResponse,
+) *providers.LLMResponse {
+	if last == nil {
+		return nil
+	}
+	var exhausted *providers.FallbackExhaustedError
+	if !errors.As(err, &exhausted) {
+		return nil
+	}
+	attempted := false
+	for _, attempt := range exhausted.Attempts {
+		if attempt.Skipped {
+			continue
+		}
+		attempted = true
+		if attempt.Reason != providers.FailoverUnusable &&
+			!errors.Is(attempt.Error, errSemanticRetry) {
+			return nil
+		}
+	}
+	if !attempted {
+		return nil
+	}
+	return last
 }
 
 // streamPublishedVisible reports whether the current call already pushed
