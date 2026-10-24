@@ -617,9 +617,11 @@ type AgentDefaults struct {
 	// LLMRetryOnEmptyContent retries a successful response that carries no
 	// assistant text and no tool calls instead of surfacing it as the final
 	// answer. LLMRetryOnFinishReasons lists finish_reason values that are also
-	// retried (by default "length", i.e. the model hit max_tokens).
-	LLMRetryOnEmptyContent  bool     `json:"llm_retry_on_empty_content,omitempty"  env:"PICOCLAW_AGENTS_DEFAULTS_LLM_RETRY_ON_EMPTY_CONTENT"`
-	LLMRetryOnFinishReasons []string `json:"llm_retry_on_finish_reasons,omitempty" env:"PICOCLAW_AGENTS_DEFAULTS_LLM_RETRY_ON_FINISH_REASONS"`
+	// retried; the default "length" also covers the "truncated" spelling that
+	// some provider paths use for the same condition. Both fields are always
+	// serialized so an explicit false or empty list survives save and reload.
+	LLMRetryOnEmptyContent  bool     `json:"llm_retry_on_empty_content"  env:"PICOCLAW_AGENTS_DEFAULTS_LLM_RETRY_ON_EMPTY_CONTENT"`
+	LLMRetryOnFinishReasons []string `json:"llm_retry_on_finish_reasons" env:"PICOCLAW_AGENTS_DEFAULTS_LLM_RETRY_ON_FINISH_REASONS"`
 }
 
 const DefaultMaxMediaSize = 20 * 1024 * 1024 // 20 MB
