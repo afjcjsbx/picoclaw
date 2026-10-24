@@ -60,12 +60,12 @@ func (b *toolFeedbackBatch) publish(
 		}
 		calls := []utils.ToolFeedbackCall{{
 			Name:        toolName,
-			ArgsPreview: toolFeedbackArgsPreview(toolArgs, maxArgsLen),
+			ArgsPreview: toolFeedbackArgsPreview(toolArgs, maxArgsLen, b.al.cfg.Agents.Defaults.IsToolFeedbackHideArgsEnabled()),
 		}}
 		for _, next := range b.exec.normalizedToolCalls[index+1:] {
 			calls = append(calls, utils.ToolFeedbackCall{
 				Name:        next.Name,
-				ArgsPreview: toolFeedbackArgsPreview(next.Arguments, maxArgsLen),
+				ArgsPreview: toolFeedbackArgsPreview(next.Arguments, maxArgsLen, b.al.cfg.Agents.Defaults.IsToolFeedbackHideArgsEnabled()),
 			})
 		}
 		content = utils.FormatMergedToolFeedbackMessage(calls, explanation)
@@ -74,7 +74,7 @@ func (b *toolFeedbackBatch) publish(
 		content = utils.FormatToolFeedbackMessage(
 			toolName,
 			explanation,
-			toolFeedbackArgsPreview(toolArgs, maxArgsLen),
+			toolFeedbackArgsPreview(toolArgs, maxArgsLen, b.al.cfg.Agents.Defaults.IsToolFeedbackHideArgsEnabled()),
 		)
 	}
 
