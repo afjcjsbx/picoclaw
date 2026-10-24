@@ -297,6 +297,11 @@ func processHookObserveKindsFromConfig(observe []string) ([]string, bool, error)
 		switch kind {
 		case "", "*", "all":
 			return nil, true, nil
+		case "post_compaction":
+			normalized = append(normalized,
+				runtimeevents.KindAgentContextCompress.String(),
+				runtimeevents.KindAgentSessionSummarize.String(),
+			)
 		default:
 			normalizedKind, ok := validKinds[kind]
 			if !ok {
