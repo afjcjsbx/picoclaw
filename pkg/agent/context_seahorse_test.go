@@ -11,6 +11,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
+	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/memory"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
@@ -1419,8 +1420,18 @@ func TestSeahorseCompact_Manual(t *testing.T) {
 		t.Fatalf("NewEngine: %v", err)
 	}
 	defer engine.Close()
-	mgr := &seahorseContextManager{engine: engine}
+	runtimeBus := runtimeevents.NewBus()
+	defer runtimeBus.Close()
+	al := &AgentLoop{runtimeEvents: runtimeBus}
+	mgr := &seahorseContextManager{engine: engine, al: al}
 	ctx := context.Background()
+	runtimeCh, closeRuntimeEvents := subscribeRuntimeEventsForTest(
+		t,
+		al,
+		4,
+		runtimeevents.KindAgentContextCompress,
+	)
+	defer closeRuntimeEvents()
 
 	err = mgr.Compact(ctx, &CompactRequest{SessionKey: "manual-test", Reason: ContextCompressReasonManual})
 	if !errors.Is(err, ErrNothingToCompact) {
@@ -1447,5 +1458,16 @@ func TestSeahorseCompact_Manual(t *testing.T) {
 	}
 	if len(prompts) == 0 || !strings.Contains(prompts[0], "database migration") {
 		t.Fatalf("summarizer prompt missing focus: %q", prompts)
+	}
+	event := receiveRuntimeEvent(t, runtimeCh)
+	if event.Kind != runtimeevents.KindAgentContextCompress {
+		t.Fatalf("event kind = %q, want %q", event.Kind, runtimeevents.KindAgentContextCompress)
+	}
+	payload, ok := event.Payload.(ContextCompressPayload)
+	if !ok {
+		t.Fatalf("event payload = %T, want ContextCompressPayload", event.Payload)
+	}
+	if payload.Reason != ContextCompressReasonManual {
+		t.Fatalf("event reason = %q, want %q", payload.Reason, ContextCompressReasonManual)
 	}
 }

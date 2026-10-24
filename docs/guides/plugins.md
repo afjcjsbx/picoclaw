@@ -471,7 +471,10 @@ Each action names a server and tool from `mcp.json` or the entry's
 `observe` runs it for a runtime event. Supported intercept stages are
 `before_llm`, `after_llm`, `before_tool`, `after_tool`, and `approve_tool`.
 Observe accepts PicoClaw runtime event names such as `agent.turn.end`; the
-`turn_completed` alias runs only for successfully completed turns.
+`turn_completed` alias runs only for successfully completed turns. The
+`post_compaction` alias runs after successful history summarization or context
+compression, covering both `agent.session.summarize` and
+`agent.context.compress` events.
 
 Arguments support the event's available `${user_message}` and
 `${assistant_message}` values, `${tool_name}`, `${tool_arguments}`,

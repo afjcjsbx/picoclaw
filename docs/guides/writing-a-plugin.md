@@ -128,7 +128,8 @@ asking, for example to inject context before each LLM call. Put them in
 Rules the host enforces, and `validate` checks:
 
 - `intercept` takes `before_llm`, `after_llm`, `before_tool`, `after_tool` or `approve_tool`.
-  `observe` takes runtime event names such as `agent.turn.end` or `turn_completed`.
+  `observe` takes runtime event names such as `agent.turn.end`, `turn_completed` or
+  `post_compaction` (history summarization or context compression).
 - `result` is `ignore` (default), `append_to_user_message` or `approval`.
   `append_to_user_message` is valid only with `"intercept": ["before_llm"]` and no `observe`.
   `approval` is valid only with `"intercept": ["approve_tool"]`.

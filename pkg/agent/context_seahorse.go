@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
@@ -285,6 +286,7 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 		if result.LeafSummaries+result.CondensedSummaries == 0 {
 			return ErrNothingToCompact
 		}
+		m.notifyCompaction(ctx, req, result)
 		return nil
 	}
 
@@ -313,9 +315,8 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 	return nil
 }
 
-// notifyCompaction reports a summarization/compaction notice to the session's
-// channel when seahorse actually created summaries. It is a no-op unless tool
-// feedback is enabled (enforced by notifyContextFeedback).
+// notifyCompaction emits the runtime event and reports a notice to the
+// session's channel when seahorse actually created summaries.
 func (m *seahorseContextManager) notifyCompaction(
 	ctx context.Context,
 	req *CompactRequest,
@@ -327,6 +328,11 @@ func (m *seahorseContextManager) notifyCompaction(
 	if result.LeafSummaries+result.CondensedSummaries <= 0 {
 		return
 	}
+	m.al.emitEvent(
+		runtimeevents.KindAgentContextCompress,
+		m.al.newTurnEventScope("", req.SessionKey, nil).meta(0, "seahorseCompact", "turn.context.compress"),
+		ContextCompressPayload{Reason: req.Reason},
+	)
 	content := formatContextSummaryCounts(result.LeafSummaries, result.CondensedSummaries)
 	m.al.notifyContextFeedbackFromCtx(ctx, req.SessionKey, content)
 }
