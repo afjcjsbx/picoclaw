@@ -22,6 +22,7 @@ import {
   KeyInput,
   SwitchCardField,
 } from "@/components/shared-form"
+import { SessionHeaderField } from "@/components/models/session-header-field"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -743,33 +744,14 @@ export function EditModelSheet({
                   />
                 </Field>
 
-                <Field
+                <SessionHeaderField
                   label={t("models.field.sessionHeader")}
                   hint={t("models.field.sessionHeaderHint")}
-                >
-                  <div className="flex items-center gap-2">
-                    <Input
-                      value={form.sessionHeader}
-                      onChange={setField("sessionHeader")}
-                      placeholder="x-opencode-session"
-                      className="flex-1"
-                    />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      disabled={form.sessionHeader === "x-opencode-session"}
-                      onClick={() =>
-                        setForm((f) => ({
-                          ...f,
-                          sessionHeader: "x-opencode-session",
-                        }))
-                      }
-                    >
-                      {t("models.field.sessionHeaderPreset")}
-                    </Button>
-                  </div>
-                </Field>
+                  value={form.sessionHeader}
+                  onChange={(value) =>
+                    setForm((f) => ({ ...f, sessionHeader: value }))
+                  }
+                />
 
                 <Field
                   label={t("models.field.toolSchemaTransform")}

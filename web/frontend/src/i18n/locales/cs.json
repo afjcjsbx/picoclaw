@@ -358,7 +358,6 @@
       "customHeadersHint": "Dodatečné HTTP hlavičky vkládané do každého požadavku, např. {\"X-Source\": \"coding-plan\"}.",
       "sessionHeader": "Hlavička relace",
       "sessionHeaderHint": "Název hlavičky pro stabilní ID relace (vyžadují např. přenosy OpenCode Go). Každý požadavek ponese ID aktivní konverzace.",
-      "sessionHeaderPreset": "x-opencode-session",
       "invalidJson": "Neplatný formát JSON"
     },
     "edit": {

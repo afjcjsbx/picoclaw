@@ -68,6 +68,14 @@ func WithSessionHeader(name, fallback string) Option {
 	}
 }
 
+// SetSessionHeader makes every request carry options["session_key"] (or
+// fallback when absent) in the named header. It implements the generic
+// session-header setter used by the provider factory, so a configured
+// session_header overrides the default used by OpenCode Go routes.
+func (p *Provider) SetSessionHeader(name, fallback string) {
+	p.session = common.SessionHeader{Name: strings.TrimSpace(name), Fallback: fallback}
+}
+
 // NewProvider creates a new Anthropic Messages API provider.
 func NewProvider(apiKey, apiBase, userAgent string) *Provider {
 	return NewProviderWithTimeout(apiKey, apiBase, userAgent, 0)

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/logger"
 	anthropicmessages "github.com/sipeed/picoclaw/pkg/providers/anthropic_messages"
 	"github.com/sipeed/picoclaw/pkg/providers/azure"
 	"github.com/sipeed/picoclaw/pkg/providers/bedrock"
@@ -393,9 +394,8 @@ func finalizeProviderFromConfig(
 	// Models can opt into a per-conversation session header. Providers that
 	// support the generic session-key header implement this setter.
 	if cfg != nil && strings.TrimSpace(cfg.SessionHeader) != "" {
-		if setter, ok := provider.(interface {
-			SetSessionHeader(name, fallback string)
-		}); ok {
+		switch setter := provider.(type) {
+		case interface{ SetSessionHeader(name, fallback string) }:
 			// Background calls (summaries, subagents, ...) have no session_key.
 			// They still need a stable value, otherwise session-aware relays
 			// reject the request with a missing session ID.
@@ -404,6 +404,12 @@ func finalizeProviderFromConfig(
 				fallback = "picoclaw"
 			}
 			setter.SetSessionHeader(cfg.SessionHeader, fallback)
+		default:
+			logger.WarnCF("providers", "session_header ignored: provider does not support it", map[string]any{
+				"model":          cfg.ModelName,
+				"provider":       cfg.Provider,
+				"session_header": cfg.SessionHeader,
+			})
 		}
 	}
 	wrapped, err := wrapProviderWithToolSchemaTransform(provider, cfg.ToolSchemaTransform)

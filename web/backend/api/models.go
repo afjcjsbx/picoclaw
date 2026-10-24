@@ -811,8 +811,8 @@ func (h *Handler) handleUpdateModel(w http.ResponseWriter, r *http.Request) {
 	} else if len(mc.CustomHeaders) == 0 {
 		mc.CustomHeaders = nil
 	}
-	// Preserve the existing session_header when the caller omits it. The Web
-	// UI does not send this field yet, so an unconditional copy from the
+	// Preserve the existing session_header when the caller omits it. Older
+	// clients may leave the field out, and an unconditional copy from the
 	// decoded body would silently wipe it on every save. An explicit ""
 	// clears it.
 	if _, ok := rawFields["session_header"]; !ok {

@@ -1593,8 +1593,7 @@ func TestHandleUpdateModel_SessionHeaderPreserveAndClear(t *testing.T) {
 		return after.ModelList[0].SessionHeader
 	}
 
-	// Omitted session_header should preserve the existing value (the Web UI
-	// does not send this field yet).
+	// An older client that omits session_header must not wipe the value.
 	put(t, `{"model_name":"editable","model":"openai/gpt-4o-mini"}`)
 	if got := sessionHeaderAfter(t); got != "x-opencode-session" {
 		t.Fatalf("preserved session_header = %q, want %q", got, "x-opencode-session")

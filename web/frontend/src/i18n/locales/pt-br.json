@@ -360,7 +360,6 @@
       "customHeadersHint": "Headers HTTP adicionais para injetar em cada requisição, ex: {\"X-Source\": \"coding-plan\"}.",
       "sessionHeader": "Header de Sessão",
       "sessionHeaderHint": "Nome do header para um ID de sessão estável por conversa (exigido por relays como OpenCode Go). Cada requisição carrega o ID da conversa ativa.",
-      "sessionHeaderPreset": "x-opencode-session",
       "invalidJson": "Formato JSON inválido"
     },
     "edit": {

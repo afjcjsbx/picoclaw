@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/caarlos0/env/v11"
+	"golang.org/x/net/http/httpguts"
 
 	"github.com/sipeed/picoclaw/pkg"
 	"github.com/sipeed/picoclaw/pkg/fileutil"
@@ -1088,9 +1089,9 @@ func (c *ModelConfig) Validate() error {
 		return fmt.Errorf("model identifier must not contain //")
 	}
 
-	// Reject whitespace in the session header name
-	if c.SessionHeader != "" && strings.ContainsAny(c.SessionHeader, " \t\n\r") {
-		return fmt.Errorf("session_header must not contain whitespace")
+	// Reject header names that cannot be written on the wire
+	if c.SessionHeader != "" && !httpguts.ValidHeaderFieldName(c.SessionHeader) {
+		return fmt.Errorf("session_header must be a valid HTTP header name")
 	}
 	return nil
 }
@@ -2147,6 +2148,7 @@ func expandMultiKeyModels(models []*ModelConfig) []*ModelConfig {
 				ExtraBody:           m.ExtraBody,
 				CustomHeaders:       m.CustomHeaders,
 				UserAgent:           m.UserAgent,
+				SessionHeader:       m.SessionHeader,
 				isVirtual:           true,
 			}
 			expanded = append(expanded, additionalEntry)
@@ -2172,6 +2174,7 @@ func expandMultiKeyModels(models []*ModelConfig) []*ModelConfig {
 			ExtraBody:           m.ExtraBody,
 			CustomHeaders:       m.CustomHeaders,
 			UserAgent:           m.UserAgent,
+			SessionHeader:       m.SessionHeader,
 			APIKeys:             SimpleSecureStrings(keys[0]),
 		}
 
