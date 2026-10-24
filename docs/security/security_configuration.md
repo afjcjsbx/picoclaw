@@ -246,6 +246,17 @@ channel_list:
 - `channel_list.mqtt.settings.username` → `config.channel_list.mqtt.settings.username`
 - `channel_list.mqtt.settings.password` → `config.channel_list.mqtt.settings.password`
 
+The mail channel works the same way; its secrets are `password`, `smtp_password` and `oauth_token`:
+
+```yaml
+channel_list:
+  mail:
+    settings:
+      password: "value"
+      smtp_password: "value"   # only if SMTP uses different credentials
+      oauth_token: "value"     # only for XOAUTH2
+```
+
 ### Web Tools
 
 **Brave, Tavily, Perplexity, Kagi, Keenable:**
