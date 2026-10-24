@@ -330,7 +330,11 @@ func (m *seahorseContextManager) notifyCompaction(
 	}
 	m.al.emitEvent(
 		runtimeevents.KindAgentContextCompress,
-		m.al.newTurnEventScope("", req.SessionKey, nil).meta(0, "seahorseCompact", "turn.context.compress"),
+		m.al.newTurnEventScope(
+			m.al.eventAgentIDForSession(ctx, req.SessionKey),
+			req.SessionKey,
+			nil,
+		).meta(0, "seahorseCompact", "turn.context.compress"),
 		ContextCompressPayload{Reason: req.Reason},
 	)
 	content := formatContextSummaryCounts(result.LeafSummaries, result.CondensedSummaries)

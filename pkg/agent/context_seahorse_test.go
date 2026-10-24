@@ -1424,7 +1424,7 @@ func TestSeahorseCompact_Manual(t *testing.T) {
 	defer runtimeBus.Close()
 	al := &AgentLoop{runtimeEvents: runtimeBus}
 	mgr := &seahorseContextManager{engine: engine, al: al}
-	ctx := context.Background()
+	ctx := context.WithValue(context.Background(), turnStateKey, &turnState{agentID: "alpha"})
 	runtimeCh, closeRuntimeEvents := subscribeRuntimeEventsForTest(
 		t,
 		al,
@@ -1462,6 +1462,9 @@ func TestSeahorseCompact_Manual(t *testing.T) {
 	event := receiveRuntimeEvent(t, runtimeCh)
 	if event.Kind != runtimeevents.KindAgentContextCompress {
 		t.Fatalf("event kind = %q, want %q", event.Kind, runtimeevents.KindAgentContextCompress)
+	}
+	if event.Scope.AgentID != "alpha" {
+		t.Fatalf("event agent = %q, want alpha", event.Scope.AgentID)
 	}
 	payload, ok := event.Payload.(ContextCompressPayload)
 	if !ok {

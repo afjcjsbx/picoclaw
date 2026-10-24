@@ -441,6 +441,9 @@ func TestLegacyCompact_Overflow_ProactiveReason(t *testing.T) {
 	if !ok {
 		t.Fatal("expected context compress event")
 	}
+	if compressEvt.Scope.AgentID != defaultAgent.ID {
+		t.Fatalf("event agent = %q, want %q", compressEvt.Scope.AgentID, defaultAgent.ID)
+	}
 	payload, ok := compressEvt.Payload.(ContextCompressPayload)
 	if !ok {
 		t.Fatalf("expected ContextCompressPayload, got %T", compressEvt.Payload)

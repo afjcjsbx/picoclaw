@@ -49,7 +49,11 @@ func (m *legacyContextManager) Compact(ctx context.Context, req *CompactRequest)
 		if result, ok := m.forceCompression(req.SessionKey); ok {
 			m.al.emitEvent(
 				runtimeevents.KindAgentContextCompress,
-				m.al.newTurnEventScope("", req.SessionKey, nil).meta(0, "forceCompression", "turn.context.compress"),
+				m.al.newTurnEventScope(
+					m.al.eventAgentIDForSession(ctx, req.SessionKey),
+					req.SessionKey,
+					nil,
+				).meta(0, "forceCompression", "turn.context.compress"),
 				ContextCompressPayload{
 					Reason:            req.Reason,
 					DroppedMessages:   result.DroppedMessages,
