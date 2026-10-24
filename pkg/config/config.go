@@ -614,6 +614,12 @@ type AgentDefaults struct {
 	TurnProfile               TurnProfileConfig   `json:"turn_profile,omitempty"`
 	MaxLLMRetries             int                 `json:"max_llm_retries,omitempty"            env:"PICOCLAW_AGENTS_DEFAULTS_MAX_LLM_RETRIES"`
 	LLMRetryBackoffSecs       int                 `json:"llm_retry_backoff_secs,omitempty"     env:"PICOCLAW_AGENTS_DEFAULTS_LLM_RETRY_BACKOFF_SECS"`
+	// LLMRetryOnEmptyContent retries a successful response that carries no
+	// assistant text and no tool calls instead of surfacing it as the final
+	// answer. LLMRetryOnFinishReasons lists finish_reason values that are also
+	// retried (by default "length", i.e. the model hit max_tokens).
+	LLMRetryOnEmptyContent  bool     `json:"llm_retry_on_empty_content,omitempty"  env:"PICOCLAW_AGENTS_DEFAULTS_LLM_RETRY_ON_EMPTY_CONTENT"`
+	LLMRetryOnFinishReasons []string `json:"llm_retry_on_finish_reasons,omitempty" env:"PICOCLAW_AGENTS_DEFAULTS_LLM_RETRY_ON_FINISH_REASONS"`
 }
 
 const DefaultMaxMediaSize = 20 * 1024 * 1024 // 20 MB

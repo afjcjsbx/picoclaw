@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/constants"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/logger"
@@ -337,7 +338,30 @@ func (p *Pipeline) CallLLM(
 		for retry := 0; retry <= maxRetries; retry++ {
 			exec.response, err = callLLM(exec.callMessages, exec.providerToolDefs)
 			if err == nil {
-				break
+				// A provider can answer successfully with nothing usable:
+				// empty content or a truncating finish_reason. Retry those
+				// through the same budget as network errors, unless the model
+				// asked for a tool or the stream already reached the user
+				// (a second answer would duplicate it).
+				if !streamPublishedVisible(exec) && p.Cfg != nil {
+					err = semanticRetryError(p.Cfg.Agents.Defaults, exec.response)
+				}
+				if err == nil {
+					break
+				}
+				if retry >= maxRetries {
+					// Budget exhausted: keep the response and let the turn's
+					// normal empty/truncated fallback explain it, instead of
+					// turning a routine empty reply into a hard failure.
+					logger.WarnCF("agent", "LLM response still unusable after retries", map[string]any{
+						"agent_id":      ts.agent.ID,
+						"iteration":     iteration,
+						"finish_reason": exec.response.FinishReason,
+						"retries":       maxRetries,
+					})
+					err = nil
+					break
+				}
 			}
 			if ts.hardAbortRequested() && errors.Is(err, context.Canceled) {
 				_ = ts.requestHardAbort()
@@ -883,6 +907,12 @@ func transientLLMRetryReason(err error) (string, bool) {
 		return "", false
 	}
 
+	// Semantic retries (empty content, retriable finish_reason) use the same
+	// budget and backoff as transport failures.
+	if errors.Is(err, errSemanticRetry) {
+		return "semantic", true
+	}
+
 	if failErr := providers.ClassifyError(err, "", ""); failErr != nil {
 		switch failErr.Reason {
 		case providers.FailoverTimeout:
@@ -918,4 +948,40 @@ func transientLLMRetryReason(err error) (string, bool) {
 	}
 
 	return "", false
+}
+
+// errSemanticRetry marks a well-formed LLM response that should still be
+// retried: the model returned no usable answer, or stopped on a finish_reason
+// the operator listed in llm_retry_on_finish_reasons.
+var errSemanticRetry = errors.New("llm semantic retry")
+
+// semanticRetryError reports whether a successful LLM response should be
+// retried. It returns nil when the response is usable as-is.
+func semanticRetryError(defaults config.AgentDefaults, resp *providers.LLMResponse) error {
+	if resp == nil {
+		return nil
+	}
+	// A tool call carries no assistant text by design; retrying it would
+	// throw the call away.
+	if len(resp.ToolCalls) > 0 {
+		return nil
+	}
+	if defaults.LLMRetryOnEmptyContent && strings.TrimSpace(resp.Content) == "" {
+		return fmt.Errorf("%w: empty content (finish_reason=%q)", errSemanticRetry, resp.FinishReason)
+	}
+	for _, reason := range defaults.LLMRetryOnFinishReasons {
+		if reason != "" && resp.FinishReason == reason {
+			return fmt.Errorf("%w: finish_reason=%q", errSemanticRetry, resp.FinishReason)
+		}
+	}
+	return nil
+}
+
+// streamPublishedVisible reports whether the current call already pushed
+// content or reasoning to the user, in which case a retry would duplicate it.
+func streamPublishedVisible(exec *turnExecution) bool {
+	if exec == nil || exec.streamingPublisher == nil {
+		return false
+	}
+	return exec.streamingPublisher.Published() || exec.streamingPublisher.ReasoningPublished()
 }
