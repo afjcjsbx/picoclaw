@@ -20,6 +20,7 @@ import {
   KeyInput,
   SwitchCardField,
 } from "@/components/shared-form"
+import { SessionHeaderField } from "@/components/models/session-header-field"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -72,6 +73,7 @@ interface AddForm {
   streamingEnabled: boolean
   extraBody: string
   customHeaders: string
+  sessionHeader: string
 }
 
 const EMPTY_ADD_FORM: AddForm = {
@@ -92,6 +94,7 @@ const EMPTY_ADD_FORM: AddForm = {
   streamingEnabled: false,
   extraBody: "",
   customHeaders: "",
+  sessionHeader: "",
 }
 
 interface AddModelSheetProps {
@@ -409,6 +412,7 @@ export function AddModelSheet({
         streaming: form.streamingEnabled ? { enabled: true } : undefined,
         extra_body: extraBody,
         custom_headers: customHeaders,
+        session_header: form.sessionHeader.trim() || undefined,
       })
       if (setAsDefault) {
         await setDefaultModel(modelName)
@@ -785,6 +789,15 @@ export function AddModelSheet({
                     rows={3}
                   />
                 </Field>
+
+                <SessionHeaderField
+                  label={t("models.field.sessionHeader")}
+                  hint={t("models.field.sessionHeaderHint")}
+                  value={form.sessionHeader}
+                  onChange={(value) =>
+                    setForm((f) => ({ ...f, sessionHeader: value }))
+                  }
+                />
               </AdvancedSection>
 
               {serverError && (

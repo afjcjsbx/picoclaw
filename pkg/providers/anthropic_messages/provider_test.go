@@ -837,3 +837,14 @@ func TestProviderChatErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestSetSessionHeader(t *testing.T) {
+	p := NewProvider("key", "http://example.invalid", "")
+	p.SetSessionHeader(" x-opencode-session ", "picoclaw-zen")
+	if p.session.Name != "x-opencode-session" {
+		t.Fatalf("session.Name = %q, want x-opencode-session", p.session.Name)
+	}
+	if p.session.Fallback != "picoclaw-zen" {
+		t.Fatalf("session.Fallback = %q, want picoclaw-zen", p.session.Fallback)
+	}
+}

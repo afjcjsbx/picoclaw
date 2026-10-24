@@ -22,6 +22,7 @@ import {
   KeyInput,
   SwitchCardField,
 } from "@/components/shared-form"
+import { SessionHeaderField } from "@/components/models/session-header-field"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -73,6 +74,7 @@ interface EditForm {
   streamingEnabled: boolean
   extraBody: string
   customHeaders: string
+  sessionHeader: string
 }
 
 interface EditModelSheetProps {
@@ -108,6 +110,7 @@ function buildInitialEditForm(model: ModelInfo): EditForm {
     customHeaders: model.custom_headers
       ? JSON.stringify(model.custom_headers, null, 2)
       : "",
+    sessionHeader: model.session_header ?? "",
   }
 }
 
@@ -139,6 +142,7 @@ export function EditModelSheet({
     streamingEnabled: false,
     extraBody: "",
     customHeaders: "",
+    sessionHeader: "",
   })
   const [saving, setSaving] = useState(false)
   const [setAsDefault, setSetAsDefault] = useState(false)
@@ -395,6 +399,7 @@ export function EditModelSheet({
         streaming,
         extra_body: extraBody,
         custom_headers: customHeaders,
+        session_header: form.sessionHeader.trim(),
       })
       onUpdated(response.reference_rename)
       if (setAsDefault && !model.is_default) {
@@ -738,6 +743,15 @@ export function EditModelSheet({
                     rows={3}
                   />
                 </Field>
+
+                <SessionHeaderField
+                  label={t("models.field.sessionHeader")}
+                  hint={t("models.field.sessionHeaderHint")}
+                  value={form.sessionHeader}
+                  onChange={(value) =>
+                    setForm((f) => ({ ...f, sessionHeader: value }))
+                  }
+                />
 
                 <Field
                   label={t("models.field.toolSchemaTransform")}

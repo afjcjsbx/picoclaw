@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/caarlos0/env/v11"
+	"golang.org/x/net/http/httpguts"
 
 	"github.com/sipeed/picoclaw/pkg"
 	"github.com/sipeed/picoclaw/pkg/fileutil"
@@ -1037,6 +1038,12 @@ type ModelConfig struct {
 	// UserAgent is the user agent string to use for HTTP requests.
 	UserAgent string `json:"user_agent,omitempty" yaml:"-"`
 
+	// SessionHeader is the request header name that carries a stable
+	// per-conversation session ID. Providers supporting the generic session-key
+	// header receive it through SetSessionHeader during provider construction.
+	// Leave empty to disable the header for this model.
+	SessionHeader string `json:"session_header,omitempty" yaml:"-"`
+
 	// isVirtual marks this model as a virtual model generated from multi-key expansion.
 	// Virtual models should not be persisted to config files.
 	isVirtual bool
@@ -1080,6 +1087,11 @@ func (c *ModelConfig) Validate() error {
 	// Reject consecutive slashes
 	if strings.Contains(c.Model, "//") {
 		return fmt.Errorf("model identifier must not contain //")
+	}
+
+	// Reject header names that cannot be written on the wire
+	if c.SessionHeader != "" && !httpguts.ValidHeaderFieldName(c.SessionHeader) {
+		return fmt.Errorf("session_header must be a valid HTTP header name")
 	}
 	return nil
 }
@@ -2136,6 +2148,7 @@ func expandMultiKeyModels(models []*ModelConfig) []*ModelConfig {
 				ExtraBody:           m.ExtraBody,
 				CustomHeaders:       m.CustomHeaders,
 				UserAgent:           m.UserAgent,
+				SessionHeader:       m.SessionHeader,
 				isVirtual:           true,
 			}
 			expanded = append(expanded, additionalEntry)
@@ -2161,6 +2174,7 @@ func expandMultiKeyModels(models []*ModelConfig) []*ModelConfig {
 			ExtraBody:           m.ExtraBody,
 			CustomHeaders:       m.CustomHeaders,
 			UserAgent:           m.UserAgent,
+			SessionHeader:       m.SessionHeader,
 			APIKeys:             SimpleSecureStrings(keys[0]),
 		}
 
