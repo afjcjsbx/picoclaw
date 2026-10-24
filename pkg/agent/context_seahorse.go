@@ -315,8 +315,8 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 	return nil
 }
 
-// notifyCompaction emits the runtime event and reports a notice to the
-// session's channel when seahorse actually created summaries.
+// notifyCompaction emits the summarization runtime event and reports a notice
+// to the session's channel when seahorse actually created summaries.
 func (m *seahorseContextManager) notifyCompaction(
 	ctx context.Context,
 	req *CompactRequest,
@@ -329,13 +329,15 @@ func (m *seahorseContextManager) notifyCompaction(
 		return
 	}
 	m.al.emitEvent(
-		runtimeevents.KindAgentContextCompress,
+		runtimeevents.KindAgentSessionSummarize,
 		m.al.newTurnEventScope(
 			m.al.eventAgentIDForSession(ctx, req.SessionKey),
 			req.SessionKey,
 			nil,
-		).meta(0, "seahorseCompact", "turn.context.compress"),
-		ContextCompressPayload{Reason: req.Reason},
+		).meta(0, "seahorseCompact", "turn.session.summarize"),
+		SessionSummarizePayload{
+			SummarizedMessages: result.LeafSummaries + result.CondensedSummaries,
+		},
 	)
 	content := formatContextSummaryCounts(result.LeafSummaries, result.CondensedSummaries)
 	m.al.notifyContextFeedbackFromCtx(ctx, req.SessionKey, content)

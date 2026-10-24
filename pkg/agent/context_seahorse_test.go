@@ -1429,7 +1429,7 @@ func TestSeahorseCompact_Manual(t *testing.T) {
 		t,
 		al,
 		4,
-		runtimeevents.KindAgentContextCompress,
+		runtimeevents.KindAgentSessionSummarize,
 	)
 	defer closeRuntimeEvents()
 
@@ -1460,17 +1460,17 @@ func TestSeahorseCompact_Manual(t *testing.T) {
 		t.Fatalf("summarizer prompt missing focus: %q", prompts)
 	}
 	event := receiveRuntimeEvent(t, runtimeCh)
-	if event.Kind != runtimeevents.KindAgentContextCompress {
-		t.Fatalf("event kind = %q, want %q", event.Kind, runtimeevents.KindAgentContextCompress)
+	if event.Kind != runtimeevents.KindAgentSessionSummarize {
+		t.Fatalf("event kind = %q, want %q", event.Kind, runtimeevents.KindAgentSessionSummarize)
 	}
 	if event.Scope.AgentID != "alpha" {
 		t.Fatalf("event agent = %q, want alpha", event.Scope.AgentID)
 	}
-	payload, ok := event.Payload.(ContextCompressPayload)
+	payload, ok := event.Payload.(SessionSummarizePayload)
 	if !ok {
-		t.Fatalf("event payload = %T, want ContextCompressPayload", event.Payload)
+		t.Fatalf("event payload = %T, want SessionSummarizePayload", event.Payload)
 	}
-	if payload.Reason != ContextCompressReasonManual {
-		t.Fatalf("event reason = %q, want %q", payload.Reason, ContextCompressReasonManual)
+	if payload.SummarizedMessages == 0 {
+		t.Fatal("event payload missing summarized message count")
 	}
 }
