@@ -149,6 +149,105 @@ func TestCreateProviderFromConfig_OpenAI(t *testing.T) {
 	}
 }
 
+func TestCreateProviderFromConfig_RequiresAPIKeyForOfficialEndpoints(t *testing.T) {
+	tests := []struct {
+		name        string
+		model       string
+		provider    string
+		apiBase     string
+		apiKey      string
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:        "openrouter official endpoint without key",
+			model:       "openrouter/auto",
+			provider:    "openrouter",
+			apiBase:     "https://openrouter.ai/api/v1",
+			wantErr:     true,
+			errContains: "api_key is required",
+		},
+		{
+			name:        "openrouter official endpoint with trailing slash",
+			model:       "openrouter/auto",
+			provider:    "openrouter",
+			apiBase:     "https://openrouter.ai/api/v1/",
+			wantErr:     true,
+			errContains: "api_key is required",
+		},
+		{
+			name:     "openrouter official endpoint with key",
+			model:    "openrouter/auto",
+			provider: "openrouter",
+			apiBase:  "https://openrouter.ai/api/v1",
+			apiKey:   "sk-or-test",
+		},
+		{
+			name:     "openrouter custom endpoint without key",
+			model:    "openrouter/auto",
+			provider: "openrouter",
+			apiBase:  "http://127.0.0.1:9999/v1",
+		},
+		{
+			name:        "openai official endpoint without key",
+			model:       "openai/gpt-4o",
+			apiBase:     "https://api.openai.com/v1",
+			wantErr:     true,
+			errContains: "api_key is required",
+		},
+		{
+			name:    "openai custom endpoint without key",
+			model:   "openai/gpt-4o",
+			apiBase: "http://127.0.0.1:9999/v1",
+		},
+		{
+			name:        "gemini official endpoint without key",
+			model:       "gemini/gemini-2.0-flash",
+			apiBase:     "https://generativelanguage.googleapis.com/v1beta",
+			wantErr:     true,
+			errContains: "api_key is required",
+		},
+		{
+			name:    "gemini custom endpoint without key",
+			model:   "gemini/gemini-2.0-flash",
+			apiBase: "http://127.0.0.1:9999/v1beta",
+		},
+		{
+			name:    "vllm local endpoint without key",
+			model:   "vllm/local-model",
+			apiBase: "http://127.0.0.1:8000/v1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.ModelConfig{
+				ModelName: "test-endpoint-key",
+				Provider:  tt.provider,
+				Model:     tt.model,
+				APIBase:   tt.apiBase,
+			}
+			if tt.apiKey != "" {
+				cfg.SetAPIKey(tt.apiKey)
+			}
+
+			_, _, err := CreateProviderFromConfig(cfg)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("CreateProviderFromConfig() accepted an empty api_key")
+				}
+				if !strings.Contains(err.Error(), tt.errContains) {
+					t.Fatalf("error = %v, want it to contain %q", err, tt.errContains)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("CreateProviderFromConfig() error = %v", err)
+			}
+		})
+	}
+}
+
 func TestCreateProviderFromConfig_UsesExplicitProvider(t *testing.T) {
 	cfg := &config.ModelConfig{
 		ModelName: "test-explicit-provider",
