@@ -329,10 +329,14 @@ func (m *Manager) ConnectServer(
 		m.publishServerEvent(runtimeevents.KindMCPServerFailed, name, cfg, 0, err)
 		return err
 	}
-	m.registerConnection(name, conn)
+	replaced := m.replaceConnection(name, conn)
 	m.setServerStatusLocked(name, cfg, ConnectionConnected, nil, conn.Tools)
 	m.watchWG.Add(1)
 	m.mu.Unlock()
+
+	// Closing the replaced session can block on the network (a streamable
+	// session sends a DELETE on close), so it must never run under m.mu.
+	closeReplacedConnection(replaced)
 
 	// Publish observations after releasing the manager lock: the event bus must
 	// never run while the connection registry is locked.
@@ -348,19 +352,29 @@ func (m *Manager) ConnectServer(
 	return nil
 }
 
-// registerConnection stores conn under name. A previous connection with the
-// same name is closed first so its session and child process cannot leak.
-// Callers must hold m.mu.
-func (m *Manager) registerConnection(name string, conn *ServerConnection) {
-	if previous, ok := m.servers[name]; ok {
-		if previous.cancel != nil {
-			previous.cancel()
-		}
-		if previous.Session != nil {
-			_ = previous.Session.Close()
-		}
-	}
+// replaceConnection stores conn under name and returns the connection it
+// replaced, if any. Callers must hold m.mu and must hand the returned
+// connection to closeReplacedConnection after releasing the lock.
+func (m *Manager) replaceConnection(name string, conn *ServerConnection) *ServerConnection {
+	previous := m.servers[name]
 	m.servers[name] = conn
+	return previous
+}
+
+// closeReplacedConnection releases a connection that was swapped out of the
+// registry. Session.Close can block on the network, so callers must not hold
+// m.mu. A close error only matters for the connection being replaced; the
+// current one is unaffected, so it is not reported.
+func closeReplacedConnection(conn *ServerConnection) {
+	if conn == nil {
+		return
+	}
+	if conn.cancel != nil {
+		conn.cancel()
+	}
+	if conn.Session != nil {
+		_ = conn.Session.Close()
+	}
 }
 
 func (m *Manager) watchServerConnection(name string, conn *ServerConnection) {

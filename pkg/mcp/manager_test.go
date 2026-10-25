@@ -654,6 +654,73 @@ func transportClosed(transport *scriptedTransport) bool {
 	return transport.closed
 }
 
+// A streamable session sends a DELETE on close, so closing a replaced session
+// while holding m.mu would stall every MCP operation behind a network call.
+// This pins that the close runs after the registry lock is released.
+func TestConnectServer_ClosesReplacedSessionOutsideTheManagerLock(t *testing.T) {
+	originalConnectServerFunc := connectServerFunc
+	t.Cleanup(func() { connectServerFunc = originalConnectServerFunc })
+
+	closeEntered := make(chan struct{})
+	releaseClose := make(chan struct{})
+	var firstTransport bool
+	connectServerFunc = func(_ context.Context, _ string, _ config.MCPServerConfig) (*ServerConnection, error) {
+		conn, transport, err := newScriptedServerConnection("session", nil, nil)
+		if err != nil {
+			return nil, err
+		}
+		if !firstTransport {
+			firstTransport = true
+			transport.onClose = func() {
+				close(closeEntered)
+				<-releaseClose
+			}
+		}
+		return conn, nil
+	}
+
+	mgr := NewManager()
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	cfg := config.MCPServerConfig{Enabled: true, Type: "http", URL: "https://example.invalid/mcp"}
+	if err := mgr.ConnectServer(context.Background(), "dup", cfg); err != nil {
+		t.Fatalf("first ConnectServer() error = %v", err)
+	}
+
+	connectDone := make(chan error, 1)
+	go func() { connectDone <- mgr.ConnectServer(context.Background(), "dup", cfg) }()
+
+	select {
+	case <-closeEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("replaced session was not closed")
+	}
+
+	// If the manager lock were still held by the closing path, this read would
+	// block until releaseClose.
+	readDone := make(chan struct{})
+	go func() {
+		_ = mgr.GetServers()
+		close(readDone)
+	}()
+	select {
+	case <-readDone:
+	case <-time.After(2 * time.Second):
+		close(releaseClose)
+		t.Fatal("manager registry stayed locked while the replaced session was closing")
+	}
+
+	close(releaseClose)
+	select {
+	case err := <-connectDone:
+		if err != nil {
+			t.Fatalf("second ConnectServer() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("second ConnectServer() did not finish")
+	}
+}
+
 func TestCallTool_ReconnectsWhenHTTPServerLosesSession(t *testing.T) {
 	originalConnectServerFunc := connectServerFunc
 	t.Cleanup(func() {
@@ -782,6 +849,10 @@ type scriptedTransport struct {
 	toolCallCalls int
 	closed        bool
 	incoming      chan jsonrpc.Message
+	// onClose runs after the transport is marked closed and before Close
+	// returns. Tests use it to observe close timing, for example to prove the
+	// manager lock is not held while a replaced session is closed.
+	onClose func()
 }
 
 func (t *scriptedTransport) Connect(context.Context) (sdkmcp.Connection, error) {
@@ -876,12 +947,18 @@ func (t *scriptedTransport) Write(ctx context.Context, msg jsonrpc.Message) erro
 
 func (t *scriptedTransport) Close() error {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	if t.closed {
+		t.mu.Unlock()
 		return nil
 	}
 	t.closed = true
 	close(t.incoming)
+	hook := t.onClose
+	t.mu.Unlock()
+
+	if hook != nil {
+		hook()
+	}
 	return nil
 }
 
