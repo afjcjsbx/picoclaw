@@ -468,14 +468,9 @@ func (al *AgentLoop) buildCommandsRuntime(
 			if opts == nil || agent.Sessions == nil {
 				return nil
 			}
-			usage := computeContextUsage(agent, opts.SessionKey)
+			usage, messageCount := al.currentContextUsage(agent, opts.SessionKey)
 			if usage == nil {
 				return nil
-			}
-			history, err := agent.Sessions.GetHistory(ctx, opts.SessionKey)
-			if err != nil {
-				warnSessionStoreError(opts.SessionKey, "get history", err)
-				history = nil
 			}
 			return &commands.ContextStats{
 				UsedTokens:        usage.UsedTokens,
@@ -484,7 +479,7 @@ func (al *AgentLoop) buildCommandsRuntime(
 				CompressAtTokens:  usage.CompressAtTokens,
 				SummarizeAtTokens: usage.SummarizeAtTokens,
 				UsedPercent:       usage.UsedPercent,
-				MessageCount:      len(history),
+				MessageCount:      messageCount,
 			}
 		}
 	}

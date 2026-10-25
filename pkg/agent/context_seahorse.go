@@ -262,6 +262,10 @@ func (m *seahorseContextManager) Assemble(ctx context.Context, req *AssembleRequ
 	if err != nil {
 		return nil, fmt.Errorf("seahorse assemble: %w", err)
 	}
+	if result == nil {
+		// The engine returns nil for ignored session patterns (heartbeat).
+		return &AssembleResponse{}, nil
+	}
 
 	history := seahorseToProviderMessages(result)
 

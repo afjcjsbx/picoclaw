@@ -83,7 +83,7 @@ func (al *AgentLoop) publishResponseIfNeeded(ctx context.Context, channel, chatI
 		Content:    response,
 	}
 	if sessionKey != "" {
-		msg.ContextUsage = computeContextUsage(al.agentForSession(sessionKey), sessionKey)
+		msg.ContextUsage, _ = al.currentContextUsage(al.agentForSession(sessionKey), sessionKey)
 	}
 	markFinalOutbound(&msg)
 	if err := al.bus.PublishOutbound(ctx, msg); err != nil {
