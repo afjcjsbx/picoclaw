@@ -200,7 +200,9 @@ func TestSpawnSubTurn_EphemeralSessionIsolation(t *testing.T) {
 
 	// Parent uses its own ephemeral store pre-seeded with one message
 	parentSession := &ephemeralSessionStore{}
-	parentSession.AddMessage("", "user", "parent msg")
+	if err := parentSession.AddMessage(context.Background(), "", "user", "parent msg"); err != nil {
+		t.Fatalf("AddMessage: %v", err)
+	}
 	parent := &turnState{
 		ctx:            context.Background(),
 		turnID:         "parent-1",
@@ -212,12 +214,20 @@ func TestSpawnSubTurn_EphemeralSessionIsolation(t *testing.T) {
 
 	cfg := SubTurnConfig{Model: "gpt-4o-mini", Tools: []tools.Tool{}}
 
-	originalParentLen := len(parentSession.GetHistory(""))
+	originalParentHistory, err := parentSession.GetHistory(context.Background(), "")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	originalParentLen := len(originalParentHistory)
 
 	_, _ = spawnSubTurn(context.Background(), al, parent, cfg)
 
 	// Parent session must be untouched — child used its own store
-	if got := len(parentSession.GetHistory("")); got != originalParentLen {
+	parentHistory, err := parentSession.GetHistory(context.Background(), "")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if got := len(parentHistory); got != originalParentLen {
 		t.Errorf("parent session polluted: expected %d messages, got %d", originalParentLen, got)
 	}
 
@@ -333,7 +343,11 @@ func TestSpawnSubTurn_OrphanResultRouting(t *testing.T) {
 	}
 
 	// Verify history is NOT polluted
-	if len(parent.session.GetHistory("")) != 0 {
+	parentHistory, err := parent.session.GetHistory(context.Background(), "")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if len(parentHistory) != 0 {
 		t.Error("Parent history was polluted by orphan result")
 	}
 }
@@ -675,22 +689,33 @@ func TestHardAbortSessionRollback(t *testing.T) {
 	al.activeTurnStates.Store("test-session", rootTS)
 
 	// Simulate adding messages during the turn (e.g., user input + assistant response)
-	sess.AddMessage("", "user", "new user message")
-	sess.AddMessage("", "assistant", "new assistant response")
+	if err := sess.AddMessage(context.Background(), "", "user", "new user message"); err != nil {
+		t.Fatalf("AddMessage: %v", err)
+	}
+	if err := sess.AddMessage(context.Background(), "", "assistant", "new assistant response"); err != nil {
+		t.Fatalf("AddMessage: %v", err)
+	}
 
 	// Verify history grew to 4 messages
-	if len(sess.GetHistory("")) != 4 {
-		t.Fatalf("expected 4 messages before abort, got %d", len(sess.GetHistory("")))
+	preAbortHistory, err := sess.GetHistory(context.Background(), "")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if len(preAbortHistory) != 4 {
+		t.Fatalf("expected 4 messages before abort, got %d", len(preAbortHistory))
 	}
 
 	// Trigger HardAbort
-	err := al.HardAbort("test-session")
+	err = al.HardAbort("test-session")
 	if err != nil {
 		t.Fatalf("HardAbort failed: %v", err)
 	}
 
 	// Verify history rolled back to initial 2 messages
-	finalHistory := sess.GetHistory("")
+	finalHistory, err := sess.GetHistory(context.Background(), "")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
 	if len(finalHistory) != 2 {
 		t.Errorf("expected history to rollback to 2 messages, got %d", len(finalHistory))
 	}
@@ -873,7 +898,10 @@ func TestHardAbortOrderOfOperations(t *testing.T) {
 	}
 
 	// Verify history was rolled back
-	finalHistory := sess.GetHistory("")
+	finalHistory, err := sess.GetHistory(context.Background(), "")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
 	if len(finalHistory) != 1 {
 		t.Errorf("expected history to rollback to 1 message, got %d", len(finalHistory))
 	}
@@ -1522,11 +1550,16 @@ func TestEphemeralSession_AutoTruncate(t *testing.T) {
 
 	// Add more messages than the limit
 	for i := 0; i < maxEphemeralHistorySize+20; i++ {
-		store.AddMessage("test", "user", fmt.Sprintf("message-%d", i))
+		if err := store.AddMessage(context.Background(), "test", "user", fmt.Sprintf("message-%d", i)); err != nil {
+			t.Fatalf("AddMessage: %v", err)
+		}
 	}
 
 	// Verify history is truncated to the limit
-	history := store.GetHistory("test")
+	history, err := store.GetHistory(context.Background(), "test")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
 	if len(history) != maxEphemeralHistorySize {
 		t.Errorf("Expected history length %d, got %d", maxEphemeralHistorySize, len(history))
 	}

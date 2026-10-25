@@ -128,8 +128,8 @@ Telegram forum 消息在默认 `chat` 模式下就会保留 topic 隔离。
 
 ### 摘要是按 session 触发的
 
-`summarize_message_threshold` 和 `summarize_token_percent` 都是针对单个 session 生效。
-如果你把 session 切得更小，摘要也会按更小的历史范围触发。
+`summarize_token_percent` 针对单个 session 生效：当提示词（系统提示、摘要、历史消息和工具定义）达到可用上下文窗口（`context_window - max_tokens`）的该百分比时触发摘要，与消息条数无关。该检查在每次调用 LLM 之前执行（包括长工具循环的中途），回合会等待摘要完成后，从压缩后的上下文继续。
+如果你把 session 切得更小，每个 session 离阈值就更远。`summarize_message_threshold` 已弃用，不再生效。
 
 ## 常见配置方案
 

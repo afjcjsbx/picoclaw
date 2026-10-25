@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 )
 
 // mockSpawner implements SubTurnSpawner for testing.
@@ -111,5 +112,66 @@ func TestSpawnTool_Execute_NilManager(t *testing.T) {
 	}
 	if !strings.Contains(result.ForLLM, "Subagent manager not configured") {
 		t.Errorf("Error message should mention manager not configured, got: %s", result.ForLLM)
+	}
+}
+
+// panickingSpawner panics inside SpawnSubTurn to exercise goroutine recovery.
+type panickingSpawner struct{}
+
+func (m *panickingSpawner) SpawnSubTurn(ctx context.Context, cfg SubTurnConfig) (*ToolResult, error) {
+	panic("spawner exploded")
+}
+
+func TestSpawnTool_ExecuteAsync_PanicRecovered(t *testing.T) {
+	tool := NewSpawnTool(nil)
+	tool.SetSpawner(&panickingSpawner{})
+
+	results := make(chan *ToolResult, 1)
+	ack := tool.ExecuteAsync(
+		context.Background(),
+		map[string]any{"task": "do work"},
+		func(_ context.Context, result *ToolResult) { results <- result },
+	)
+
+	if ack == nil || ack.IsError {
+		t.Fatalf("spawn should be acknowledged, got: %+v", ack)
+	}
+	if !ack.Async {
+		t.Error("SpawnTool should return an async result")
+	}
+
+	select {
+	case result := <-results:
+		if result == nil || !result.IsError {
+			t.Fatalf("panic should surface as an error result, got: %+v", result)
+		}
+		if !strings.Contains(result.ForLLM, "spawn failed unexpectedly") {
+			t.Errorf("unexpected error message: %s", result.ForLLM)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("callback was not invoked after spawner panic")
+	}
+}
+
+func TestSpawnTool_ExecuteAsync_NilSpawnerResult(t *testing.T) {
+	tool := NewSpawnTool(nil)
+	tool.SetSpawner(&nilResultSpawner{})
+	results := make(chan *ToolResult, 1)
+	tool.ExecuteAsync(
+		context.Background(),
+		map[string]any{"task": "do work"},
+		func(_ context.Context, result *ToolResult) { results <- result },
+	)
+
+	select {
+	case result := <-results:
+		if result == nil || !result.IsError {
+			t.Fatalf("nil spawner result should surface as an error, got: %+v", result)
+		}
+		if !strings.Contains(result.ForLLM, "spawn returned no result") {
+			t.Errorf("unexpected error message: %s", result.ForLLM)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("callback was not invoked for nil spawner result")
 	}
 }

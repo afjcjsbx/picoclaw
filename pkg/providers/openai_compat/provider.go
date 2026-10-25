@@ -2,6 +2,7 @@ package openai_compat
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,9 +13,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/openai/openai-go/v3/responses"
+
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers/common"
 	"github.com/sipeed/picoclaw/pkg/providers/messageutil"
+	orc "github.com/sipeed/picoclaw/pkg/providers/openai_responses_common"
 	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
 )
 
@@ -142,18 +146,10 @@ func NewProviderWithMaxTokensFieldAndTimeout(
 	)
 }
 
-// buildRequestBody constructs the common request body for Chat and ChatStream.
-func (p *Provider) buildRequestBody(
-	messages []Message, tools []ToolDefinition, model string, options map[string]any,
-) map[string]any {
-	model = normalizeModel(model, p.apiBase)
-
-	requestBody := map[string]any{
-		"model":    model,
-		"messages": common.SerializeMessages(p.prepareMessagesForRequest(messages)),
-	}
-
-	// When fallback uses a different provider (e.g. DeepSeek), that provider must not inject web_search_preview.
+// nativeSearchEnabled reports whether the native web search tool should be injected.
+// When fallback uses a different provider (e.g. DeepSeek), that provider must not
+// inject web_search_preview.
+func (p *Provider) nativeSearchEnabled(options map[string]any) bool {
 	nativeSearch, ok := options["native_search"].(bool)
 	if !ok {
 		// If the option is present but not a bool, log a warning and
@@ -169,7 +165,21 @@ func (p *Provider) buildRequestBody(
 			)
 		}
 	}
-	nativeSearch = nativeSearch && isNativeSearchHost(p.apiBase)
+	return nativeSearch && isNativeSearchHost(p.apiBase)
+}
+
+// buildRequestBody constructs the common request body for Chat and ChatStream.
+func (p *Provider) buildRequestBody(
+	messages []Message, tools []ToolDefinition, model string, options map[string]any,
+) map[string]any {
+	model = normalizeModel(model, p.apiBase)
+
+	requestBody := map[string]any{
+		"model":    model,
+		"messages": common.SerializeMessages(p.prepareMessagesForRequest(messages)),
+	}
+
+	nativeSearch := p.nativeSearchEnabled(options)
 	if len(tools) > 0 || nativeSearch {
 		requestBody["tools"] = buildToolsList(tools, nativeSearch)
 		requestBody["tool_choice"] = "auto"
@@ -206,6 +216,13 @@ func (p *Provider) buildRequestBody(
 		if supportsPromptCacheKey(p.apiBase) {
 			requestBody["prompt_cache_key"] = cacheKey
 		}
+	}
+
+	// OpenRouter only caches Anthropic models when asked to. A top-level
+	// cache_control lets it move the breakpoint forward as the conversation
+	// grows, covering tools, system prompt and history.
+	if isOpenRouterHost(p.apiBase) && isAnthropicModel(model) {
+		requestBody["cache_control"] = map[string]any{"type": "ephemeral"}
 	}
 
 	p.applyThinkingControl(requestBody, model, options)
@@ -304,6 +321,18 @@ func (p *Provider) thinkingControlKind(model string) string {
 	return ""
 }
 
+// openRouterSession tags requests with x-session-id; OpenRouter caps it at 256 chars.
+var openRouterSession = common.SessionHeader{Name: "x-session-id", MaxLen: 256}
+
+func isOpenRouterHost(apiBase string) bool {
+	return normalizedHostname(apiBase) == "openrouter.ai"
+}
+
+func isAnthropicModel(model string) bool {
+	m := strings.ToLower(model)
+	return strings.HasPrefix(m, "anthropic/") || strings.HasPrefix(m, "~anthropic/")
+}
+
 func isVolcengineHost(apiBase string) bool {
 	host := normalizedHostname(apiBase)
 	return host == "volcengine.com" || strings.HasSuffix(host, ".volcengine.com") ||
@@ -332,6 +361,11 @@ func (p *Provider) applyCustomHeaders(req *http.Request, options map[string]any)
 		req.Header.Set(k, v)
 	}
 	p.session.Apply(req.Header, options)
+	if isOpenRouterHost(p.apiBase) {
+		// Sticky routing: keeps a conversation on the upstream provider that
+		// holds its prompt cache, from the first request on.
+		openRouterSession.Apply(req.Header, options)
+	}
 }
 
 func (p *Provider) SetProviderName(providerName string) {
@@ -475,6 +509,9 @@ func (p *Provider) Chat(
 	if p.apiBase == "" {
 		return nil, fmt.Errorf("API base not configured")
 	}
+	if p.usesResponsesAPI() {
+		return p.responsesChat(ctx, messages, tools, model, options)
+	}
 
 	requestBody := p.buildRequestBody(messages, tools, model, options)
 
@@ -503,6 +540,186 @@ func (p *Provider) Chat(
 	}
 
 	return common.ReadAndParseResponse(resp, p.apiBase)
+}
+
+func (p *Provider) usesResponsesAPI() bool {
+	u, err := url.Parse(strings.TrimSpace(p.apiBase))
+	return p.providerName == "openai" && err == nil && u.Hostname() == "api.openai.com"
+}
+
+func (p *Provider) responsesRequestBody(
+	messages []Message, tools []ToolDefinition, model string, options map[string]any,
+) map[string]any {
+	input, instructions := orc.TranslateMessages(messages)
+	body := map[string]any{
+		"model": model,
+		"input": input,
+		"store": false,
+	}
+	if instructions != "" {
+		body["instructions"] = instructions
+	}
+	if nativeSearch := p.nativeSearchEnabled(options); len(tools) > 0 || nativeSearch {
+		body["tools"] = orc.TranslateTools(tools, nativeSearch)
+		body["tool_choice"] = "auto"
+	}
+	if maxTokens, ok := common.AsInt(options["max_tokens"]); ok {
+		body["max_output_tokens"] = maxTokens
+	}
+	if temperature, ok := common.AsFloat(options["temperature"]); ok {
+		body["temperature"] = temperature
+	}
+	if topP, ok := common.AsFloat(options["top_p"]); ok {
+		body["top_p"] = topP
+	}
+	if cacheKey, ok := options["prompt_cache_key"].(string); ok && cacheKey != "" && supportsPromptCacheKey(p.apiBase) {
+		body["prompt_cache_key"] = cacheKey
+	}
+	// "off" and "adaptive" send nothing, as on Chat Completions: effort "none" is
+	// rejected by some reasoning models and `reasoning` by non-reasoning ones.
+	if level, ok := normalizedThinkingLevel(options); ok && level != "off" && level != "adaptive" {
+		body["reasoning"] = map[string]string{"effort": level}
+	}
+	maps.Copy(body, p.extraBody)
+	return body
+}
+
+func (p *Provider) responsesChat(
+	ctx context.Context, messages []Message, tools []ToolDefinition, model string, options map[string]any,
+) (*LLMResponse, error) {
+	body, err := json.Marshal(p.responsesRequestBody(messages, tools, model, options))
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.apiBase+"/responses", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	p.applyRequestHeaders(req, options)
+	resp, err := p.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, common.HandleErrorResponse(resp, p.apiBase)
+	}
+	return orc.ParseResponseBody(resp.Body)
+}
+
+func (p *Provider) responsesStream(
+	ctx context.Context, messages []Message, tools []ToolDefinition, model string,
+	options map[string]any, onChunk func(StreamChunk),
+) (*LLMResponse, error) {
+	body := p.responsesRequestBody(messages, tools, model, options)
+	body["stream"] = true
+	jsonData, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.apiBase+"/responses", bytes.NewReader(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	p.applyRequestHeaders(req, options)
+	streamClient := &http.Client{Transport: p.httpClient.Transport}
+	resp, err := streamClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, common.HandleErrorResponse(resp, p.apiBase)
+	}
+
+	var result *responses.Response
+	var textContent, reasoning strings.Builder
+	scanner := bufio.NewScanner(withStreamingReadIdleTimeout(resp.Body, defaultStreamingReadIdleTimeout))
+	scanner.Buffer(make([]byte, 4096), 10*1024*1024)
+	var event, data string
+	process := func() error {
+		if data == "" {
+			return nil
+		}
+		var payload struct {
+			Type     string              `json:"type"`
+			Delta    string              `json:"delta"`
+			Message  string              `json:"message"` // "error" events carry it top-level
+			Response *responses.Response `json:"response"`
+		}
+		if err := json.Unmarshal([]byte(data), &payload); err != nil {
+			return fmt.Errorf("failed to decode Responses stream event: %w", err)
+		}
+		typ := payload.Type
+		if typ == "" {
+			typ = event
+		}
+		switch typ {
+		case "response.output_text.delta":
+			textContent.WriteString(payload.Delta)
+			if onChunk != nil {
+				onChunk(StreamChunk{Content: textContent.String()})
+			}
+		case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
+			reasoning.WriteString(payload.Delta)
+			if onChunk != nil {
+				onChunk(StreamChunk{ReasoningContent: reasoning.String()})
+			}
+		case "response.completed", "response.incomplete":
+			if payload.Response != nil {
+				result = payload.Response
+			}
+		case "response.failed":
+			msg := ""
+			if payload.Response != nil {
+				msg = payload.Response.Error.Message
+			}
+			return fmt.Errorf("Responses API stream failed: %s", msg)
+		case "error":
+			return fmt.Errorf("Responses API stream error: %s", payload.Message)
+		}
+		return nil
+	}
+	for scanner.Scan() {
+		line := scanner.Text()
+		switch {
+		case strings.HasPrefix(line, "event:"):
+			event = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+		case strings.HasPrefix(line, "data:"):
+			if data != "" {
+				data += "\n"
+			}
+			data += strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		case line == "":
+			if err := process(); err != nil {
+				return nil, err
+			}
+			event, data = "", ""
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("reading Responses stream: %w", err)
+	}
+	if err := process(); err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return nil, fmt.Errorf("Responses API stream ended without a completed response")
+	}
+	return orc.ParseResponseFromStruct(result), nil
+}
+
+func (p *Provider) applyRequestHeaders(req *http.Request, options map[string]any) {
+	if p.userAgent != "" {
+		req.Header.Set("User-Agent", p.userAgent)
+	}
+	if p.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+p.apiKey)
+	}
+	p.applyCustomHeaders(req, options)
 }
 
 // ChatStream implements streaming via OpenAI-compatible SSE (stream: true).
@@ -539,6 +756,9 @@ func (p *Provider) ChatStreamEvents(
 ) (*LLMResponse, error) {
 	if p.apiBase == "" {
 		return nil, fmt.Errorf("API base not configured")
+	}
+	if p.usesResponsesAPI() {
+		return p.responsesStream(ctx, messages, tools, model, options, onChunk)
 	}
 
 	requestBody := p.buildRequestBody(messages, tools, model, options)
@@ -656,7 +876,7 @@ func parseStreamResponse(
 				} `json:"delta"`
 				FinishReason *string `json:"finish_reason"`
 			} `json:"choices"`
-			Usage *UsageInfo `json:"usage"`
+			Usage *common.WireUsage `json:"usage"`
 		}
 
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
@@ -664,7 +884,7 @@ func parseStreamResponse(
 		}
 
 		if chunk.Usage != nil {
-			usage = chunk.Usage
+			usage = chunk.Usage.Info()
 		}
 
 		if len(chunk.Choices) == 0 {

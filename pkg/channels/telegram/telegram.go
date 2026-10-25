@@ -284,7 +284,8 @@ func (c *TelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]
 		toolFeedbackContent = fitToolFeedbackForTelegram(msg.Content, useMarkdownV2, 4096)
 	}
 	trackedChatID := telegramToolFeedbackChatKey(msg.ChatID, &msg.Context)
-	if isToolFeedback {
+	terminalToolFeedback := isToolFeedback && channels.OutboundToolFeedbackIsTerminal(msg)
+	if isToolFeedback && !terminalToolFeedback {
 		if msgID, handled, err := c.progress.Update(ctx, trackedChatID, toolFeedbackContent); handled {
 			if err != nil {
 				return nil, err
@@ -305,7 +306,7 @@ func (c *TelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]
 	replyToID := msg.ReplyToMessageID
 	var messageIDs []string
 	queue := []string{msg.Content}
-	if isToolFeedback {
+	if isToolFeedback && !terminalToolFeedback {
 		queue = []string{channels.InitialAnimatedToolFeedbackContent(toolFeedbackContent)}
 	}
 	for len(queue) > 0 {
@@ -388,7 +389,7 @@ func (c *TelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]
 		replyToID = ""
 	}
 
-	if isToolFeedback && len(messageIDs) > 0 {
+	if isToolFeedback && !terminalToolFeedback && len(messageIDs) > 0 {
 		c.RecordToolFeedbackMessage(trackedChatID, messageIDs[0], toolFeedbackContent)
 	} else if !isToolFeedback && hasTrackedMsg {
 		c.dismissTrackedToolFeedbackMessage(ctx, trackedChatID, trackedMsgID)
@@ -626,6 +627,10 @@ func (c *TelegramChannel) finalizeTrackedToolFeedbackMessage(
 		c.RecordToolFeedbackMessage(chatID, msgID, baseContent)
 		return nil, false
 	}
+	logger.InfoCF("telegram", "Finalized tracked tool feedback into reply", map[string]any{
+		"chat_id":    chatID,
+		"message_id": msgID,
+	})
 	return []string{msgID}, true
 }
 

@@ -173,10 +173,12 @@ type ServerConnection struct {
 // Manager manages multiple MCP server connections
 type Manager struct {
 	servers       map[string]*ServerConnection
+	statuses      map[string]ServerStatus
 	runtimeEvents runtimeevents.Bus
 	mu            sync.RWMutex
 	closed        atomic.Bool    // changed from bool to atomic.Bool to avoid TOCTOU race
 	wg            sync.WaitGroup // tracks in-flight CallTool calls
+	watchWG       sync.WaitGroup // tracks session disconnect observers
 }
 
 var connectServerFunc = connectServer
@@ -205,7 +207,8 @@ type ServerEventPayload struct {
 // NewManager creates a new MCP manager
 func NewManager(opts ...ManagerOption) *Manager {
 	m := &Manager{
-		servers: make(map[string]*ServerConnection),
+		servers:  make(map[string]*ServerConnection),
+		statuses: make(map[string]ServerStatus),
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -227,6 +230,9 @@ func (m *Manager) LoadFromMCPConfig(
 	mcpCfg config.MCPConfig,
 	workspacePath string,
 ) error {
+	for name, serverCfg := range mcpCfg.Servers {
+		m.setServerStatus(name, serverCfg, initialServerState(mcpCfg.Enabled, serverCfg), nil, nil)
+	}
 	if !mcpCfg.Enabled {
 		logger.InfoCF("mcp", "MCP integration is disabled", nil)
 		return nil
@@ -280,6 +286,7 @@ func (m *Manager) LoadFromMCPConfig(
 							"env_file": serverCfg.EnvFile,
 							"error":    err.Error(),
 						})
+					m.setServerStatus(name, serverCfg, ConnectionError, err, nil)
 					errs <- err
 					return
 				}
@@ -343,23 +350,32 @@ func (m *Manager) ConnectServer(
 	name string,
 	cfg config.MCPServerConfig,
 ) error {
+	m.setServerStatus(name, cfg, ConnectionConnecting, nil, nil)
 	m.publishServerEvent(runtimeevents.KindMCPServerConnecting, name, cfg, 0, nil)
 	conn, err := connectServerFunc(ctx, name, cfg)
 	if err != nil {
+		m.setServerStatus(name, cfg, ConnectionError, err, nil)
 		m.publishServerEvent(runtimeevents.KindMCPServerFailed, name, cfg, 0, err)
 		return err
 	}
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	if m.closed.Load() {
-		_ = conn.Session.Close()
-		m.publishServerEvent(runtimeevents.KindMCPServerFailed, name, cfg, 0, fmt.Errorf("manager is closed"))
-		return fmt.Errorf("manager is closed")
+		m.mu.Unlock()
+		if conn.Session != nil {
+			_ = conn.Session.Close()
+		}
+		err := fmt.Errorf("manager is closed")
+		m.setServerStatus(name, cfg, ConnectionError, err, nil)
+		m.publishServerEvent(runtimeevents.KindMCPServerFailed, name, cfg, 0, err)
+		return err
 	}
 
 	m.servers[name] = conn
+	m.setServerStatusLocked(name, cfg, ConnectionConnected, nil, conn.Tools)
+	m.watchWG.Add(1)
+	m.mu.Unlock()
 	for _, tool := range conn.Tools {
 		toolName := ""
 		if tool != nil {
@@ -368,7 +384,31 @@ func (m *Manager) ConnectServer(
 		m.publishToolDiscovered(name, cfg, toolName)
 	}
 	m.publishServerEvent(runtimeevents.KindMCPServerConnected, name, cfg, len(conn.Tools), nil)
+	go m.watchServerConnection(name, conn)
 	return nil
+}
+
+func (m *Manager) watchServerConnection(name string, conn *ServerConnection) {
+	defer m.watchWG.Done()
+	if conn == nil || conn.Session == nil {
+		return
+	}
+	err := conn.Session.Wait()
+	m.mu.Lock()
+	current, ok := m.servers[name]
+	if !ok || current != conn {
+		m.mu.Unlock()
+		return
+	}
+	state := ConnectionDisconnected
+	if err != nil && !m.closed.Load() {
+		state = ConnectionError
+	}
+	m.setServerStatusLocked(name, conn.Config, state, err, conn.Tools)
+	m.mu.Unlock()
+	if err != nil && !m.closed.Load() {
+		m.publishServerEvent(runtimeevents.KindMCPServerFailed, name, conn.Config, len(conn.Tools), err)
+	}
 }
 
 func connectServer(
@@ -669,7 +709,14 @@ func shouldReconnectCallError(err error) bool {
 	if errors.Is(err, mcp.ErrSessionMissing) {
 		return true
 	}
-	return strings.Contains(strings.ToLower(err.Error()), mcp.ErrSessionMissing.Error())
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, mcp.ErrSessionMissing.Error()) {
+		return true
+	}
+	// Servers answering a stale Mcp-Session-Id with HTTP 404 plus a JSON-RPC error
+	// body make the SDK return "<rpc error>: rejected by transport: Not Found"
+	// instead of ErrSessionMissing, and keep the dead session bound to the connection.
+	return strings.HasSuffix(msg, "rejected by transport: "+strings.ToLower(http.StatusText(http.StatusNotFound)))
 }
 
 func (m *Manager) reconnectServer(
@@ -698,8 +745,12 @@ func (m *Manager) reconnectServer(
 		return currentConn, nil
 	}
 
+	m.setServerStatus(serverName, staleConn.Config, ConnectionConnecting, nil, staleConn.Tools)
+	m.publishServerEvent(runtimeevents.KindMCPServerConnecting, serverName, staleConn.Config, len(staleConn.Tools), nil)
 	freshConn, err := connectServerFunc(ctx, serverName, staleConn.Config)
 	if err != nil {
+		m.setServerStatus(serverName, staleConn.Config, ConnectionError, err, staleConn.Tools)
+		m.publishServerEvent(runtimeevents.KindMCPServerFailed, serverName, staleConn.Config, len(staleConn.Tools), err)
 		return nil, err
 	}
 
@@ -719,8 +770,18 @@ func (m *Manager) reconnectServer(
 
 	if currentConn == staleConn {
 		m.servers[serverName] = freshConn
+		m.setServerStatusLocked(serverName, freshConn.Config, ConnectionConnected, nil, freshConn.Tools)
+		m.watchWG.Add(1)
 		staleToClose := staleConn
 		m.mu.Unlock()
+		m.publishServerEvent(
+			runtimeevents.KindMCPServerConnected,
+			serverName,
+			freshConn.Config,
+			len(freshConn.Tools),
+			nil,
+		)
+		go m.watchServerConnection(serverName, freshConn)
 		_ = staleToClose.Session.Close()
 		return freshConn, nil
 	}
@@ -749,7 +810,6 @@ func (m *Manager) Close() error {
 	m.wg.Wait()
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	logger.InfoCF("mcp", "Closing all MCP server connections",
 		map[string]any{
@@ -758,8 +818,14 @@ func (m *Manager) Close() error {
 
 	var errs []error
 	for name, conn := range m.servers {
+		if conn == nil {
+			continue
+		}
 		if conn.cancel != nil {
 			conn.cancel()
+		}
+		if conn.Session == nil {
+			continue
 		}
 		if err := conn.Session.Close(); err != nil {
 			// Plugin shutdown cancels process lifetime before joining sessions.
@@ -779,6 +845,15 @@ func (m *Manager) Close() error {
 	}
 
 	m.servers = make(map[string]*ServerConnection)
+	for name, status := range m.statuses {
+		if status.State != ConnectionDisabled {
+			status.State = ConnectionDisconnected
+			status.Error = ""
+			m.statuses[name] = status
+		}
+	}
+	m.mu.Unlock()
+	m.watchWG.Wait()
 
 	if len(errs) > 0 {
 		return fmt.Errorf("failed to close %d server(s): %w", len(errs), errors.Join(errs...))

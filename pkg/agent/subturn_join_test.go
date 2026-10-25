@@ -133,6 +133,12 @@ func (f capProvider) GetDefaultModel() string { return "m-root" }
 // join point in the LLM loop) must still outlive its async children.
 func TestSubTurnOutlivesChildrenOnIterationCap(t *testing.T) {
 	var slowDone atomic.Int32
+	var slowStarted atomic.Int32
+	childrenStarted := make(chan struct{})
+	childrenDone := make(chan struct{})
+	releaseChildren := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseChildren) }) }
 	spawn := func(id, agent string) *providers.LLMResponse {
 		return &providers.LLMResponse{ToolCalls: []providers.ToolCall{{
 			ID: id, Name: "spawn", Arguments: map[string]any{"task": "go", "agent_id": agent},
@@ -143,6 +149,10 @@ func TestSubTurnOutlivesChildrenOnIterationCap(t *testing.T) {
 		case "m-root":
 			for _, m := range msgs {
 				if m.Role == "tool" {
+					select {
+					case <-childrenStarted:
+					case <-ctx.Done():
+					}
 					return &providers.LLMResponse{Content: "ack"}
 				}
 			}
@@ -151,11 +161,16 @@ func TestSubTurnOutlivesChildrenOnIterationCap(t *testing.T) {
 			time.Sleep(100 * time.Millisecond)
 			return spawn(fmt.Sprintf("b%d", time.Now().UnixNano()), "slow")
 		default: // slow
+			if slowStarted.Add(1) == 2 {
+				close(childrenStarted)
+			}
 			select {
-			case <-time.After(300 * time.Millisecond):
+			case <-releaseChildren:
 			case <-ctx.Done():
 			}
-			slowDone.Add(1)
+			if slowDone.Add(1) == 2 {
+				close(childrenDone)
+			}
 			return &providers.LLMResponse{Content: "slow done"}
 		}
 	})
@@ -177,9 +192,15 @@ func TestSubTurnOutlivesChildrenOnIterationCap(t *testing.T) {
 	cfg.Agents.List = []config.AgentConfig{root, ag("boss", "slow"), ag("slow")}
 	al := NewAgentLoop(cfg, bus.NewMessageBus(), prov)
 	defer al.Close()
+	defer release()
 
 	if _, err := al.ProcessDirect(context.Background(), "go", "cap-test"); err != nil {
 		t.Fatal(err)
+	}
+	select {
+	case <-childrenStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("boss did not start both children before the parent ended")
 	}
 	bossActive := func() bool {
 		found := false
@@ -191,15 +212,24 @@ func TestSubTurnOutlivesChildrenOnIterationCap(t *testing.T) {
 		})
 		return found
 	}
-	deadline := time.Now().Add(5 * time.Second)
-	for !bossActive() && time.Now().Before(deadline) {
-		time.Sleep(2 * time.Millisecond)
+	if !bossActive() {
+		t.Fatal("boss ended while its children were still blocked")
 	}
+	release()
+	select {
+	case <-childrenDone:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("children did not finish, completed %d/2", slowDone.Load())
+	}
+	deadline := time.Now().Add(5 * time.Second)
 	for bossActive() && time.Now().Before(deadline) {
 		time.Sleep(2 * time.Millisecond)
 	}
 	if got := slowDone.Load(); got != 2 {
 		t.Fatalf("boss ended with %d/2 children done: a SubTurn must not end before its async children", got)
+	}
+	if bossActive() {
+		t.Fatal("boss remained active after both children finished")
 	}
 }
 
@@ -207,6 +237,7 @@ func TestSubTurnOutlivesChildrenOnIterationCap(t *testing.T) {
 // root is blocked in a synchronous delegate.
 func TestRootHardAbortCancelsSubTurns(t *testing.T) {
 	var canceled, timedOut, bossCalls atomic.Int32
+	slowExited := make(chan struct{}, 2)
 	spawnSlow := func(id string) providers.ToolCall {
 		return providers.ToolCall{ID: id, Name: "spawn", Arguments: map[string]any{"task": "block", "agent_id": "slow"}}
 	}
@@ -233,6 +264,7 @@ func TestRootHardAbortCancelsSubTurns(t *testing.T) {
 			case <-ctx.Done():
 				canceled.Add(1)
 			}
+			slowExited <- struct{}{}
 			return &providers.LLMResponse{Content: "slow out"}
 		}
 	})
@@ -286,6 +318,20 @@ func TestRootHardAbortCancelsSubTurns(t *testing.T) {
 	case <-done:
 	case <-time.After(10 * time.Second):
 		t.Fatal("ProcessDirect did not return after HardAbort")
+	}
+	// Cancellation is asynchronous: the root loop can return before the child
+	// provider goroutines observe ctx.Done(). Wait for both leaves to exit
+	// before asserting on their counters.
+	for range 2 {
+		select {
+		case <-slowExited:
+		case <-time.After(5 * time.Second):
+			t.Fatalf(
+				"sub-turns did not stop after HardAbort (canceled=%d timedOut=%d)",
+				canceled.Load(),
+				timedOut.Load(),
+			)
+		}
 	}
 	if canceled.Load() != 2 {
 		t.Fatalf(

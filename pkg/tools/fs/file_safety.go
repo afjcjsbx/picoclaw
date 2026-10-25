@@ -1,6 +1,7 @@
 package fstools
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -56,6 +57,29 @@ func (p *protectedReadFs) Stat(path string) (fs.FileInfo, error) {
 	return p.fileSystem.Stat(path)
 }
 
+// AppendFile applies the write policy, then uses the underlying append
+// implementation when available so a long file is not read and rewritten just
+// to add a suffix.
+func (p *protectedReadFs) AppendFile(path string, data []byte) error {
+	// Keep the read policy in front of the append fast path: a path that the
+	// read tools refuse must not become writable just because the tool no
+	// longer reads it first.
+	if err := p.check(path); err != nil {
+		return err
+	}
+	if err := checkSensitiveWritePath(path, p.workspace, p.restrict); err != nil {
+		return err
+	}
+	if appender, ok := p.fileSystem.(fileAppender); ok {
+		return appender.AppendFile(path, data)
+	}
+	content, err := p.fileSystem.ReadFile(path)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return p.fileSystem.WriteFile(path, append(content, data...))
+}
+
 func (p *protectedReadFs) ReadDir(path string) ([]os.DirEntry, error) {
 	if err := p.check(path); err != nil {
 		return nil, err
@@ -85,6 +109,20 @@ func (p *protectedWriteFs) WriteFile(path string, data []byte) error {
 		return err
 	}
 	return p.fileSystem.WriteFile(path, data)
+}
+
+func (p *protectedWriteFs) AppendFile(path string, data []byte) error {
+	if err := checkSensitiveWritePath(path, p.workspace, p.restrict); err != nil {
+		return err
+	}
+	if appender, ok := p.fileSystem.(fileAppender); ok {
+		return appender.AppendFile(path, data)
+	}
+	content, err := p.fileSystem.ReadFile(path)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return p.fileSystem.WriteFile(path, append(content, data...))
 }
 
 func checkSensitiveReadPath(path, workspace string, restrict bool) error {

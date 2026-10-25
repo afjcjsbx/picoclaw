@@ -3,7 +3,10 @@ package tools
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"strings"
+
+	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
 // ChildTracker lets a turn count the async children it spawns so it can join
@@ -157,19 +160,41 @@ Task: %s`,
 		// (root turns) deliver via the callback/bus as before.
 		track := beginChild(ctx)
 		go func() {
-			result, err := t.spawner.SpawnSubTurn(ctx, SubTurnConfig{
-				Model:         t.defaultModel,
-				Tools:         nil, // Will inherit from parent via context
-				SystemPrompt:  systemPrompt,
-				MaxTokens:     t.maxTokens,
-				Temperature:   t.temperature,
-				Async:         track == nil, // tracker delivers the result itself
-				Critical:      true,         // Background spawn should survive parent turn completion
-				TargetAgentID: targetAgentID,
-			})
-			if err != nil {
-				result = ErrorResult(fmt.Sprintf("Spawn failed: %v", err)).WithError(err)
-			}
+			// Recover panics in this goroutine: it outlives the registry's
+			// synchronous recover, so an unrecovered panic would crash the
+			// whole process instead of failing the spawned task.
+			result := func() (spawnResult *ToolResult) {
+				defer func() {
+					if r := recover(); r != nil {
+						logger.ErrorCF("spawn", "spawn goroutine panic recovered",
+							map[string]any{
+								"panic": fmt.Sprintf("%v", r),
+								"stack": string(debug.Stack()),
+							})
+						spawnResult = ErrorResult("spawn failed unexpectedly").
+							WithError(fmt.Errorf("spawn panic: %v", r))
+					}
+				}()
+
+				res, err := t.spawner.SpawnSubTurn(ctx, SubTurnConfig{
+					Model:         t.defaultModel,
+					Tools:         nil, // Will inherit from parent via context
+					SystemPrompt:  systemPrompt,
+					MaxTokens:     t.maxTokens,
+					Temperature:   t.temperature,
+					Async:         track == nil, // tracker delivers the result itself
+					Critical:      true,         // Background spawn should survive parent turn completion
+					TargetAgentID: targetAgentID,
+				})
+				if err != nil {
+					return ErrorResult(fmt.Sprintf("Spawn failed: %v", err)).WithError(err)
+				}
+				if res == nil {
+					return ErrorResult("spawn returned no result")
+				}
+				return res
+			}()
+
 			if result != nil && result.ForLLM != "" {
 				// Several children report back to the same parent: say who this is.
 				// Copy: with Async=true the same pointer was already delivered to the

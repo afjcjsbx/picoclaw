@@ -798,6 +798,107 @@ func TestSessionMetaScopeAndAliasesPersist(t *testing.T) {
 	}
 }
 
+func TestUpsertSessionMeta_SkipsUnchangedWrite(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	scope := json.RawMessage(`{"version":1,"channel":"telegram"}`)
+
+	if err := store.UpsertSessionMeta(ctx, "canonical", scope, []string{"legacy:one"}); err != nil {
+		t.Fatalf("UpsertSessionMeta() error = %v", err)
+	}
+
+	old := time.Unix(1000, 0)
+	if err := os.Chtimes(store.metaPath("canonical"), old, old); err != nil {
+		t.Fatalf("Chtimes() error = %v", err)
+	}
+
+	if err := store.UpsertSessionMeta(ctx, "canonical", scope, []string{"legacy:one"}); err != nil {
+		t.Fatalf("UpsertSessionMeta(unchanged) error = %v", err)
+	}
+	info, err := os.Stat(store.metaPath("canonical"))
+	if err != nil {
+		t.Fatalf("Stat() error = %v", err)
+	}
+	if !info.ModTime().Equal(old) {
+		t.Fatalf("unchanged metadata was rewritten: modtime = %v, want %v", info.ModTime(), old)
+	}
+
+	changed := json.RawMessage(`{"version":1,"channel":"discord"}`)
+	if updateErr := store.UpsertSessionMeta(ctx, "canonical", changed, []string{"legacy:one"}); updateErr != nil {
+		t.Fatalf("UpsertSessionMeta(changed) error = %v", updateErr)
+	}
+	info, err = os.Stat(store.metaPath("canonical"))
+	if err != nil {
+		t.Fatalf("Stat() after change error = %v", err)
+	}
+	if info.ModTime().Equal(old) {
+		t.Fatal("changed metadata was not rewritten")
+	}
+}
+
+func TestPromoteAliasHistory_PromotesEmptyCanonical(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	if err := store.AddMessage(ctx, "legacy:key", "user", "from alias"); err != nil {
+		t.Fatalf("AddMessage(alias) error = %v", err)
+	}
+
+	promoted, err := store.PromoteAliasHistory(ctx, "canonical", nil, []string{"legacy:key"})
+	if err != nil {
+		t.Fatalf("PromoteAliasHistory() error = %v", err)
+	}
+	if !promoted {
+		t.Fatal("PromoteAliasHistory() did not promote alias history")
+	}
+
+	history, err := store.GetHistory(ctx, "canonical")
+	if err != nil {
+		t.Fatalf("GetHistory() error = %v", err)
+	}
+	if len(history) != 1 || history[0].Content != "from alias" {
+		t.Fatalf("canonical history = %#v, want one alias message", history)
+	}
+}
+
+func TestPromoteAliasHistory_RespectsLegacyNonEmptyCanonical(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	if err := store.AddMessage(ctx, "canonical", "user", "canonical message"); err != nil {
+		t.Fatalf("AddMessage(canonical) error = %v", err)
+	}
+	if err := store.AddMessage(ctx, "legacy:key", "user", "alias message"); err != nil {
+		t.Fatalf("AddMessage(alias) error = %v", err)
+	}
+
+	// Simulate legacy metadata that predates the Count field while the JSONL
+	// file still contains visible messages.
+	legacyMeta, err := json.Marshal(SessionMeta{Key: "canonical"})
+	if err != nil {
+		t.Fatalf("Marshal(legacy meta) error = %v", err)
+	}
+	if writeErr := os.WriteFile(store.metaPath("canonical"), legacyMeta, 0o644); writeErr != nil {
+		t.Fatalf("WriteFile(legacy meta) error = %v", writeErr)
+	}
+
+	promoted, err := store.PromoteAliasHistory(ctx, "canonical", nil, []string{"legacy:key"})
+	if err != nil {
+		t.Fatalf("PromoteAliasHistory() error = %v", err)
+	}
+	if promoted {
+		t.Fatal("PromoteAliasHistory() overwrote a legacy non-empty canonical session")
+	}
+
+	history, err := store.GetHistory(ctx, "canonical")
+	if err != nil {
+		t.Fatalf("GetHistory() error = %v", err)
+	}
+	if len(history) != 1 || history[0].Content != "canonical message" {
+		t.Fatalf("canonical history = %#v, want canonical message", history)
+	}
+}
+
 func TestResolveSessionKeyByAlias(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
@@ -818,6 +919,66 @@ func TestResolveSessionKeyByAlias(t *testing.T) {
 	}
 	if resolved != "canonical" {
 		t.Fatalf("resolved = %q, want %q", resolved, "canonical")
+	}
+}
+
+func TestResolveSessionKey_CachesAliasesAndTracksUpdates(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	if err := store.AddMessage(ctx, "canonical", "user", "hello"); err != nil {
+		t.Fatalf("AddMessage(canonical) error = %v", err)
+	}
+	if err := store.UpsertSessionMeta(ctx, "canonical", nil, []string{"old:alias"}); err != nil {
+		t.Fatalf("UpsertSessionMeta(old) error = %v", err)
+	}
+
+	resolved, found, err := store.ResolveSessionKey(ctx, "old:alias")
+	if err != nil || !found || resolved != "canonical" {
+		t.Fatalf("ResolveSessionKey(old:alias) = %q, %v, %v; want canonical, true, nil", resolved, found, err)
+	}
+
+	// Build the index from a second session, then update the alias set.
+	if addErr := store.AddMessage(ctx, "second", "user", "hello"); addErr != nil {
+		t.Fatalf("AddMessage(second) error = %v", addErr)
+	}
+	if updateErr := store.UpsertSessionMeta(ctx, "canonical", nil, []string{"new:alias"}); updateErr != nil {
+		t.Fatalf("UpsertSessionMeta(new) error = %v", updateErr)
+	}
+
+	resolved, found, err = store.ResolveSessionKey(ctx, "new:alias")
+	if err != nil || !found || resolved != "canonical" {
+		t.Fatalf("ResolveSessionKey(new:alias) = %q, %v, %v; want canonical, true, nil", resolved, found, err)
+	}
+	if _, found, err = store.ResolveSessionKey(ctx, "old:alias"); err != nil || found {
+		t.Fatalf("ResolveSessionKey(old:alias) = found %v, err %v; want not found", found, err)
+	}
+
+	if deleteErr := store.DeleteSession(ctx, "canonical"); deleteErr != nil {
+		t.Fatalf("DeleteSession() error = %v", deleteErr)
+	}
+	if _, found, err = store.ResolveSessionKey(ctx, "new:alias"); err != nil || found {
+		t.Fatalf("ResolveSessionKey(new:alias) after delete = found %v, err %v; want not found", found, err)
+	}
+}
+
+func TestResolveSessionKey_SeesSessionsCreatedAfterIndexBuild(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	if err := store.AddMessage(ctx, "first", "user", "hello"); err != nil {
+		t.Fatalf("AddMessage(first) error = %v", err)
+	}
+	if _, _, err := store.ResolveSessionKey(ctx, "first"); err != nil {
+		t.Fatalf("ResolveSessionKey(first) error = %v", err)
+	}
+
+	if err := store.AddMessage(ctx, "late:key", "user", "hello"); err != nil {
+		t.Fatalf("AddMessage(late) error = %v", err)
+	}
+	resolved, found, err := store.ResolveSessionKey(ctx, "late:key")
+	if err != nil || !found || resolved != "late:key" {
+		t.Fatalf("ResolveSessionKey(late:key) = %q, %v, %v; want late:key, true, nil", resolved, found, err)
 	}
 }
 

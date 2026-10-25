@@ -185,7 +185,9 @@ Config shape:
   "routing": {
     "enabled": true,
     "light_model": "gemini-2.0-flash",
-    "threshold": 0.35
+    "threshold": 0.35,
+    "escalation_prompt_tokens": 32768,
+    "escalation_tool_iterations": 3
   }
 }
 ```
@@ -200,6 +202,14 @@ If the score is below the threshold, the light model wins.
 Otherwise the agent's primary model is used.
 A `threshold` of `0` or a negative value is treated as "unset" and replaced by the default `0.35`, so the boundary cannot be lowered to "always primary" through config; use `enabled: false` instead.
 At runtime this only matters when the agent actually has light-model candidates configured; otherwise execution stays on the primary candidate set.
+
+A light-model turn can escalate to the primary model mid-turn. Two guards apply:
+the last response's prompt-token count exceeds `escalation_prompt_tokens` (default
+`32768`), or the light model has requested tools for
+`escalation_tool_iterations` consecutive responses (default `3`). Escalation
+happens at most once per turn and only affects the remaining iterations. If
+every light candidate fails, the turn falls back to the primary candidate set
+instead of failing outright.
 
 ## Complexity Features
 

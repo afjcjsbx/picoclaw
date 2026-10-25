@@ -45,15 +45,10 @@ Both tools are registered only while `tools.skills.enabled` (default `true`) is 
 | `registries.github.auth_token`     | string | `""`                | GitHub personal access token                  |
 | `registries.github.proxy`          | string | `""`                | HTTP proxy for GitHub API requests            |
 
-## Legacy GitHub Config
-
-`github.*` is deprecated. Use `registries.github.*` instead. The legacy fields are still supported for compatibility and will be removed later.
-
-| Config             | Type   | Default              | Description                    |
-|--------------------|--------|----------------------|--------------------------------|
-| `github.base_url`  | string | `https://github.com` | Deprecated GitHub base URL     |
-| `github.proxy`     | string | `""`                | Deprecated GitHub proxy        |
-| `github.token`     | string | `""`                | Deprecated GitHub token        |
+The ClawHub token is optional and only raises the rate limit. The GitHub token
+is needed for searches and for private repositories. Tokens are secrets: pass
+them through `PICOCLAW_SKILLS_REGISTRIES_CLAWHUB_AUTH_TOKEN` and
+`PICOCLAW_SKILLS_REGISTRIES_GITHUB_AUTH_TOKEN`.
 
 ## Search Settings
 
@@ -74,24 +69,19 @@ Both tools are registered only while `tools.skills.enabled` (default `true`) is 
           "enabled": true,
           "base_url": "https://clawhub.ai",
           "auth_token": "",
-	          "search_path": "",
-	          "skills_path": "",
-	          "download_path": "",
-	          "timeout": 0,
-	          "max_zip_size": 0,
-	          "max_response_size": 0
+          "search_path": "",
+          "skills_path": "",
+          "download_path": "",
+          "timeout": 0,
+          "max_zip_size": 0,
+          "max_response_size": 0
         },
         "github": {
           "enabled": true,
           "base_url": "https://github.com",
-	          "auth_token": "",
-	          "proxy": ""
+          "auth_token": "",
+          "proxy": ""
         }
-      },
-      "github": {
-	        "base_url": "https://github.com",
-        "proxy": "",
-        "token": ""
       },
       "max_concurrent_searches": 2,
       "search_cache": {

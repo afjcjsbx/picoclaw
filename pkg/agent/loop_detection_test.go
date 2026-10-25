@@ -198,7 +198,11 @@ func TestRunTurnLoopDetectionWarningGuidesNextCall(t *testing.T) {
 		t.Fatalf("provider calls = %d, want 4", provider.callCount)
 	}
 
-	for _, msg := range agent.Sessions.GetHistory(ts.sessionKey) {
+	warningHistory, err := agent.Sessions.GetHistory(context.Background(), ts.sessionKey)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	for _, msg := range warningHistory {
 		if strings.Contains(msg.Content, "[Loop Warning]") {
 			t.Fatal("loop warning must not persist in session history")
 		}
@@ -234,7 +238,11 @@ func TestRunTurnLoopDetectionWarningSurvivesContextRetry(t *testing.T) {
 			provider.warningOnRetrySeen,
 		)
 	}
-	for _, msg := range agent.Sessions.GetHistory(ts.sessionKey) {
+	retryHistory, err := agent.Sessions.GetHistory(context.Background(), ts.sessionKey)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	for _, msg := range retryHistory {
 		if strings.Contains(msg.Content, "[Loop Warning]") {
 			t.Fatal("loop warning must not persist in session history")
 		}
@@ -270,8 +278,11 @@ func TestRunTurnLoopDetectionCriticalStopsCleanly(t *testing.T) {
 		t.Fatalf("provider calls = %d, want 3", provider.callCount)
 	}
 
-	history := agent.Sessions.GetHistory(ts.sessionKey)
-	if len(history) == 0 || history[len(history)-1].Content != loopDetectionResponse {
+	criticalHistory, err := agent.Sessions.GetHistory(context.Background(), ts.sessionKey)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if len(criticalHistory) == 0 || criticalHistory[len(criticalHistory)-1].Content != loopDetectionResponse {
 		t.Fatal("critical stop response was not persisted")
 	}
 }

@@ -8,19 +8,34 @@ import (
 	"time"
 )
 
+const (
+	appMaxIdleConns        = 4
+	appMaxIdleConnsPerHost = 2
+	appIdleConnTimeout     = 30 * time.Second
+)
+
+// newBoundedTransport returns a transport with a small idle-connection pool.
+// It clones http.DefaultTransport to preserve TLS, HTTP/2 and dial timeouts.
+func newBoundedTransport() *http.Transport {
+	var tr *http.Transport
+	if base, ok := http.DefaultTransport.(*http.Transport); ok {
+		tr = base.Clone()
+	} else {
+		tr = &http.Transport{}
+	}
+	tr.MaxIdleConns = appMaxIdleConns
+	tr.MaxIdleConnsPerHost = appMaxIdleConnsPerHost
+	tr.IdleConnTimeout = appIdleConnTimeout
+	tr.DisableCompression = false
+	tr.TLSHandshakeTimeout = 15 * time.Second
+	return tr
+}
+
 // CreateHTTPClient creates an HTTP client with optional proxy support.
 // If proxyURL is empty, it uses the system environment proxy settings.
 // Supported proxy schemes: http, https, socks5, socks5h.
 func CreateHTTPClient(proxyURL string, timeout time.Duration) (*http.Client, error) {
-	client := &http.Client{
-		Timeout: timeout,
-		Transport: &http.Transport{
-			MaxIdleConns:        10,
-			IdleConnTimeout:     30 * time.Second,
-			DisableCompression:  false,
-			TLSHandshakeTimeout: 15 * time.Second,
-		},
-	}
+	tr := newBoundedTransport()
 
 	if proxyURL != "" {
 		proxy, err := url.Parse(proxyURL)
@@ -39,18 +54,10 @@ func CreateHTTPClient(proxyURL string, timeout time.Duration) (*http.Client, err
 		if proxy.Host == "" {
 			return nil, fmt.Errorf("invalid proxy URL: missing host")
 		}
-		tr, ok := client.Transport.(*http.Transport)
-		if !ok {
-			return nil, fmt.Errorf("internal error: transport is not *http.Transport")
-		}
 		tr.Proxy = http.ProxyURL(proxy)
 	} else {
-		tr, ok := client.Transport.(*http.Transport)
-		if !ok {
-			return nil, fmt.Errorf("internal error: transport is not *http.Transport")
-		}
 		tr.Proxy = http.ProxyFromEnvironment
 	}
 
-	return client, nil
+	return &http.Client{Timeout: timeout, Transport: tr}, nil
 }

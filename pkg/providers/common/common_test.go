@@ -44,8 +44,18 @@ func TestNewHTTPClient_WithProxy(t *testing.T) {
 
 func TestNewHTTPClient_NoProxy(t *testing.T) {
 	client := NewHTTPClient("")
-	if client.Transport != nil {
-		t.Errorf("expected nil transport without proxy, got %T", client.Transport)
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok || transport == nil {
+		t.Fatalf("expected bounded http.Transport without proxy, got %T", client.Transport)
+	}
+	if transport.MaxIdleConns != 4 {
+		t.Errorf("MaxIdleConns = %d, want 4", transport.MaxIdleConns)
+	}
+	if transport.MaxIdleConnsPerHost != 2 {
+		t.Errorf("MaxIdleConnsPerHost = %d, want 2", transport.MaxIdleConnsPerHost)
+	}
+	if transport.IdleConnTimeout != 30*time.Second {
+		t.Errorf("IdleConnTimeout = %v, want 30s", transport.IdleConnTimeout)
 	}
 }
 
@@ -324,6 +334,17 @@ func TestParseResponse_WithUsage(t *testing.T) {
 	}
 	if out.Usage.PromptTokens != 10 {
 		t.Errorf("PromptTokens = %d, want 10", out.Usage.PromptTokens)
+	}
+}
+
+func TestParseResponse_WithCachedTokens(t *testing.T) {
+	body := `{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":5,"total_tokens":105,"prompt_tokens_details":{"cached_tokens":80,"cache_write_tokens":15}}}`
+	out, err := ParseResponse(strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("ParseResponse() error = %v", err)
+	}
+	if u := out.Usage; u.PromptTokens != 100 || u.CacheReadTokens != 80 || u.CacheCreationTokens != 15 {
+		t.Errorf("Usage = %+v, want PromptTokens=100 CacheReadTokens=80 CacheCreationTokens=15", u)
 	}
 }
 
