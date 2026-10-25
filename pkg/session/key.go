@@ -71,6 +71,13 @@ type ScopeReader interface {
 	GetSessionScope(sessionKey string) *SessionScope
 }
 
+// ScopeReader is implemented by session stores that expose structured scope
+// metadata for a session key. It is the consumer-side contract used by
+// ResolveAgentID.
+type ScopeReader interface {
+	GetSessionScope(sessionKey string) *SessionScope
+}
+
 // ResolveAgentID returns the routed agent ID associated with a session. It
 // prefers structured session scope metadata when the reader provides it and
 // falls back to legacy agent-scoped session keys for compatibility.
