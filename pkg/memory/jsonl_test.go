@@ -398,6 +398,84 @@ func TestGroupCommit_MetaFailureRetriesWithoutDuplicating(t *testing.T) {
 	}
 }
 
+func TestGroupCommit_ReadsFlushOnlyRequestedSession(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewJSONLStore(dir, WithGroupCommit(true))
+	if err != nil {
+		t.Fatalf("NewJSONLStore: %v", err)
+	}
+	ctx := context.Background()
+
+	if addErr := store.AddMessage(ctx, "a", "user", "buffered"); addErr != nil {
+		t.Fatalf("AddMessage(a): %v", addErr)
+	}
+
+	// None of these reads target session "a", so its buffer must stay queued.
+	if _, err := store.GetHistory(ctx, "b"); err != nil {
+		t.Fatalf("GetHistory(b): %v", err)
+	}
+	if _, err := store.GetSummary(ctx, "b"); err != nil {
+		t.Fatalf("GetSummary(b): %v", err)
+	}
+	if _, err := store.GetSessionMeta(ctx, "b"); err != nil {
+		t.Fatalf("GetSessionMeta(b): %v", err)
+	}
+	_ = store.LastActivity("b")
+
+	if _, statErr := os.Stat(store.jsonlPath("a")); !os.IsNotExist(statErr) {
+		t.Fatalf("reading another session flushed session a: %v", statErr)
+	}
+
+	if flushErr := store.FlushSession(ctx, "a"); flushErr != nil {
+		t.Fatalf("FlushSession(a): %v", flushErr)
+	}
+	if _, statErr := os.Stat(store.jsonlPath("a")); statErr != nil {
+		t.Fatalf("FlushSession did not persist session a: %v", statErr)
+	}
+}
+
+func TestGroupCommit_BlockedSessionDoesNotBreakOtherReads(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewJSONLStore(dir, WithGroupCommit(true))
+	if err != nil {
+		t.Fatalf("NewJSONLStore: %v", err)
+	}
+	ctx := context.Background()
+
+	if addErr := store.AddMessage(ctx, "bad", "user", "bad message"); addErr != nil {
+		t.Fatalf("AddMessage(bad): %v", addErr)
+	}
+	if addErr := store.AddMessage(ctx, "good", "user", "good message"); addErr != nil {
+		t.Fatalf("AddMessage(good): %v", addErr)
+	}
+	if mkErr := os.Mkdir(store.jsonlPath("bad"), 0o755); mkErr != nil {
+		t.Fatalf("Mkdir: %v", mkErr)
+	}
+
+	history, err := store.GetHistory(ctx, "good")
+	if err != nil {
+		t.Fatalf("GetHistory(good) failed because of another session: %v", err)
+	}
+	if len(history) != 1 || history[0].Content != "good message" {
+		t.Fatalf("history(good) = %#v, want the buffered message", history)
+	}
+
+	// The blocked session still reports its own error and keeps the buffer.
+	if _, badErr := store.GetHistory(ctx, "bad"); badErr == nil {
+		t.Fatal("GetHistory(bad) succeeded with a blocked append, want error")
+	}
+	if rmErr := os.Remove(store.jsonlPath("bad")); rmErr != nil {
+		t.Fatalf("Remove: %v", rmErr)
+	}
+	history, err = store.GetHistory(ctx, "bad")
+	if err != nil {
+		t.Fatalf("GetHistory(bad) after unblock: %v", err)
+	}
+	if len(history) != 1 || history[0].Content != "bad message" {
+		t.Fatalf("history(bad) = %#v, want the buffered message", history)
+	}
+}
+
 func TestAddMessage_BasicRoundtrip(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()

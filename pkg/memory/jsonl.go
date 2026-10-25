@@ -262,7 +262,7 @@ func (s *JSONLStore) DeleteSession(_ context.Context, sessionKey string) error {
 	if sessionKey == "" {
 		return nil
 	}
-	if err := s.Flush(context.Background()); err != nil {
+	if err := s.FlushSession(context.Background(), sessionKey); err != nil {
 		return err
 	}
 
@@ -288,7 +288,7 @@ func (s *JSONLStore) LastActivity(sessionKey string) time.Time {
 	if sessionKey == "" {
 		return time.Time{}
 	}
-	if err := s.Flush(context.Background()); err != nil {
+	if err := s.FlushSession(context.Background(), sessionKey); err != nil {
 		log.Printf("memory: flush before last activity: %v", err)
 	}
 	l := s.sessionLock(sessionKey)
@@ -309,7 +309,7 @@ func (s *JSONLStore) LastActivity(sessionKey string) time.Time {
 
 // GetSessionMeta returns the current metadata snapshot for sessionKey.
 func (s *JSONLStore) GetSessionMeta(_ context.Context, sessionKey string) (SessionMeta, error) {
-	if err := s.Flush(context.Background()); err != nil {
+	if err := s.FlushSession(context.Background(), sessionKey); err != nil {
 		return SessionMeta{}, err
 	}
 
@@ -843,7 +843,8 @@ func (s *JSONLStore) ensurePendingLocked() {
 // Flush writes all buffered messages and their metadata. It is a no-op when
 // group commit is disabled. A failure in one session does not drop or block
 // the buffers of the other sessions: the failed lines stay queued for the next
-// flush and the errors are aggregated.
+// flush and the errors are aggregated. Readers that only need one session use
+// FlushSession instead.
 func (s *JSONLStore) Flush(_ context.Context) error {
 	if !s.groupCommit {
 		return nil
@@ -864,6 +865,22 @@ func (s *JSONLStore) Flush(_ context.Context) error {
 	}
 	s.pendingMu.Unlock()
 
+	return s.flushKeysLocked(keys)
+}
+
+// FlushSession writes the buffered messages of one session. Reads call it so a
+// session read neither blocks on nor fails because of unrelated sessions.
+func (s *JSONLStore) FlushSession(_ context.Context, sessionKey string) error {
+	if !s.groupCommit {
+		return nil
+	}
+
+	s.flushMu.Lock()
+	defer s.flushMu.Unlock()
+	return s.flushKeyLocked(sessionKey)
+}
+
+func (s *JSONLStore) flushKeysLocked(keys []string) error {
 	var errs []error
 	for _, key := range keys {
 		if err := s.flushKeyLocked(key); err != nil {
@@ -1078,7 +1095,7 @@ func totalLineBytes(lines [][]byte) int {
 func (s *JSONLStore) GetHistory(
 	_ context.Context, sessionKey string,
 ) ([]providers.Message, error) {
-	if err := s.Flush(context.Background()); err != nil {
+	if err := s.FlushSession(context.Background(), sessionKey); err != nil {
 		return nil, err
 	}
 
@@ -1104,7 +1121,7 @@ func (s *JSONLStore) GetHistory(
 func (s *JSONLStore) GetSummary(
 	_ context.Context, sessionKey string,
 ) (string, error) {
-	if err := s.Flush(context.Background()); err != nil {
+	if err := s.FlushSession(context.Background(), sessionKey); err != nil {
 		return "", err
 	}
 
@@ -1122,7 +1139,7 @@ func (s *JSONLStore) GetSummary(
 func (s *JSONLStore) SetSummary(
 	_ context.Context, sessionKey, summary string,
 ) error {
-	if err := s.Flush(context.Background()); err != nil {
+	if err := s.FlushSession(context.Background(), sessionKey); err != nil {
 		return err
 	}
 
@@ -1147,7 +1164,7 @@ func (s *JSONLStore) SetSummary(
 func (s *JSONLStore) TruncateHistory(
 	_ context.Context, sessionKey string, keepLast int,
 ) error {
-	if err := s.Flush(context.Background()); err != nil {
+	if err := s.FlushSession(context.Background(), sessionKey); err != nil {
 		return err
 	}
 
@@ -1193,7 +1210,7 @@ func (s *JSONLStore) SetHistory(
 ) error {
 	history = messageutil.FilterInvalidHistoryMessages(history)
 
-	if err := s.Flush(context.Background()); err != nil {
+	if err := s.FlushSession(context.Background(), sessionKey); err != nil {
 		return err
 	}
 
@@ -1240,7 +1257,7 @@ func (s *JSONLStore) SetHistory(
 func (s *JSONLStore) Compact(
 	_ context.Context, sessionKey string,
 ) error {
-	if err := s.Flush(context.Background()); err != nil {
+	if err := s.FlushSession(context.Background(), sessionKey); err != nil {
 		return err
 	}
 

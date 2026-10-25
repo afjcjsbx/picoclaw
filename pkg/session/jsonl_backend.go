@@ -175,15 +175,20 @@ func (b *JSONLBackend) TruncateHistory(key string, keepLast int) {
 	}
 }
 
-// Save persists session state. Since the JSONL store fsyncs every write
-// immediately, the data is already durable. Save runs compaction to reclaim
-// space from logically truncated messages (no-op when there are none).
+// sessionFlusher is implemented by stores that buffer appends and can flush one
+// session on demand.
+type sessionFlusher interface {
+	FlushSession(ctx context.Context, sessionKey string) error
+}
+
+// Save persists session state. Stores with write-behind appends may still hold
+// messages for the session in memory, so Save flushes it before compaction.
+// Compact then reclaims space from logically truncated messages (no-op when
+// there are none).
 func (b *JSONLBackend) Save(key string) error {
 	key = b.resolveSessionKey(key)
-	if flusher, ok := b.store.(interface {
-		Flush(ctx context.Context) error
-	}); ok {
-		if err := flusher.Flush(context.Background()); err != nil {
+	if flusher, ok := b.store.(sessionFlusher); ok {
+		if err := flusher.FlushSession(context.Background(), key); err != nil {
 			return err
 		}
 	}
