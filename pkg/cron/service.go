@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -694,12 +695,46 @@ func (cs *CronService) replaceStoreUnsafe(next *CronStore) {
 	}
 }
 
+// validateCronSchedule rejects schedules that cannot produce a next run.
+func validateCronSchedule(schedule CronSchedule) error {
+	switch schedule.Kind {
+	case "at":
+		if schedule.AtMS == nil {
+			return errors.New("at schedule requires atMs")
+		}
+	case "every":
+		if schedule.EveryMS == nil || *schedule.EveryMS <= 0 {
+			return errors.New("every schedule requires a positive everyMs")
+		}
+	case "cron":
+		expr := strings.TrimSpace(schedule.Expr)
+		if expr == "" {
+			return errors.New("cron schedule requires an expression")
+		}
+		if !gronx.IsValid(expr) {
+			return fmt.Errorf("invalid cron expression %q", schedule.Expr)
+		}
+		if schedule.TZ != "" {
+			if _, err := time.LoadLocation(schedule.TZ); err != nil {
+				return fmt.Errorf("invalid timezone %q: %w", schedule.TZ, err)
+			}
+		}
+	default:
+		return fmt.Errorf("unknown schedule kind %q", schedule.Kind)
+	}
+	return nil
+}
+
 func (cs *CronService) AddJob(
 	name string,
 	schedule CronSchedule,
 	message string,
 	channel, to string,
 ) (*CronJob, error) {
+	if err := validateCronSchedule(schedule); err != nil {
+		return nil, err
+	}
+
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
