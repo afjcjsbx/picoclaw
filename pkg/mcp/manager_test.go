@@ -677,6 +677,96 @@ func TestConnectServer_FollowsSameOriginRedirect(t *testing.T) {
 	}
 }
 
+func TestConnectServer_ClientProtocolHeadersWinOverConfigured(t *testing.T) {
+	t.Parallel()
+
+	server := sdkmcp.NewServer(&sdkmcp.Implementation{
+		Name:    "header-precedence-server",
+		Version: "1.0.0",
+	}, nil)
+	sdkmcp.AddTool(server, &sdkmcp.Tool{
+		Name:        "echo",
+		Description: "Echo test tool",
+	}, func(context.Context, *sdkmcp.CallToolRequest, map[string]any) (*sdkmcp.CallToolResult, any, error) {
+		return &sdkmcp.CallToolResult{
+			Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: "ok"}},
+		}, nil, nil
+	})
+	handler := sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server {
+		return server
+	}, nil)
+
+	var (
+		mu       sync.Mutex
+		observed []observedHeaderRequest
+	)
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		observed = append(observed, observedHeaderRequest{
+			method:      r.Method,
+			accept:      r.Header.Get("Accept"),
+			contentType: r.Header.Get("Content-Type"),
+			custom:      r.Header.Get("X-Custom"),
+		})
+		mu.Unlock()
+		handler.ServeHTTP(w, r)
+	}))
+	defer httpServer.Close()
+
+	conn, err := connectServer(context.Background(), "headers", config.MCPServerConfig{
+		Enabled: true,
+		Type:    "http",
+		URL:     httpServer.URL,
+		Headers: map[string]string{
+			"Accept":       "application/bogus",
+			"Content-Type": "application/bogus",
+			"X-Custom":     "configured",
+		},
+	})
+	if err != nil {
+		t.Fatalf("connectServer() error = %v", err)
+	}
+	if err := conn.Session.Close(); err != nil {
+		t.Fatalf("Session.Close() error = %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(observed) == 0 {
+		t.Fatal("no requests observed")
+	}
+	posts := 0
+	for _, header := range observed {
+		if header.custom != "configured" {
+			t.Fatalf("X-Custom = %q, want the configured value", header.custom)
+		}
+		if header.method != http.MethodPost {
+			continue
+		}
+		posts++
+		if header.contentType != "application/json" {
+			t.Fatalf("POST Content-Type = %q, want the client protocol header", header.contentType)
+		}
+		if !strings.Contains(header.accept, "application/json") ||
+			!strings.Contains(header.accept, "text/event-stream") {
+			t.Fatalf("POST Accept = %q, want the client protocol header", header.accept)
+		}
+	}
+	if posts == 0 {
+		t.Fatal("no POST requests observed during the handshake")
+	}
+}
+
+// observedHeaderRequest is the subset of request headers the precedence test
+// inspects, recorded per method because the SDK only generates some of them on
+// message-bearing requests.
+type observedHeaderRequest struct {
+	method      string
+	accept      string
+	contentType string
+	custom      string
+}
+
 func TestConnectServer_ClosesPreviousSessionWithSameName(t *testing.T) {
 	originalConnectServerFunc := connectServerFunc
 	t.Cleanup(func() { connectServerFunc = originalConnectServerFunc })
