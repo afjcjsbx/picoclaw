@@ -3710,3 +3710,40 @@ func TestSessionConfig_DurableWritesEnvOverride(t *testing.T) {
 	assert.NoError(t, err)
 	assert.False(t, cfg.Session.DurableWritesEnabled())
 }
+
+func TestSaveConfig_PreservesDisabledLLMRetryOptions(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "config.json")
+
+	cfg := DefaultConfig()
+	cfg.Agents.Defaults.LLMRetryOnEmptyContent = false
+	cfg.Agents.Defaults.LLMRetryOnFinishReasons = []string{}
+	if err := SaveConfig(path, cfg); err != nil {
+		t.Fatalf("SaveConfig failed: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile failed: %v", err)
+	}
+	if !strings.Contains(string(data), `"llm_retry_on_empty_content": false`) {
+		t.Fatalf("saved config should persist llm_retry_on_empty_content=false, got: %s", string(data))
+	}
+	if !strings.Contains(string(data), `"llm_retry_on_finish_reasons": []`) {
+		t.Fatalf("saved config should persist an empty finish-reason list, got: %s", string(data))
+	}
+
+	loaded, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+	if loaded.Agents.Defaults.LLMRetryOnEmptyContent {
+		t.Fatal("llm_retry_on_empty_content=false must survive a save/load round-trip")
+	}
+	if len(loaded.Agents.Defaults.LLMRetryOnFinishReasons) != 0 {
+		t.Fatalf(
+			"llm_retry_on_finish_reasons = %v after reload, want empty",
+			loaded.Agents.Defaults.LLMRetryOnFinishReasons,
+		)
+	}
+}

@@ -93,6 +93,11 @@ const (
 	FailoverContextOverflow FailoverReason = "context_overflow"
 	FailoverOverloaded      FailoverReason = "overloaded"
 	FailoverUnknown         FailoverReason = "unknown"
+	// FailoverUnusable marks a delivered response that cannot be used as an
+	// answer (for example empty content or a truncating finish_reason). The
+	// provider itself is healthy, so the candidate is tried again on the next
+	// request and the fallback chain advances to its backup.
+	FailoverUnusable FailoverReason = "unusable"
 )
 
 // FailoverError wraps an LLM provider error with classification metadata.
