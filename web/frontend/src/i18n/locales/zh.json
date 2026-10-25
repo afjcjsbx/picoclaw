@@ -433,6 +433,8 @@
       "extraBodyHint": "要注入到请求体中的额外 JSON 字段，例如 {\"reasoning_split\": true}。",
       "customHeaders": "Custom Headers",
       "customHeadersHint": "要注入到每个请求中的额外 HTTP Headers，例如 {\"X-Source\": \"coding-plan\"}。",
+      "sessionHeader": "会话请求头",
+      "sessionHeaderHint": "每对话稳定会话 ID 的请求头名称（OpenCode Go 等中转服务需要）。每个请求将自动携带当前对话的会话 ID。",
       "selectProviderFirst": "请先选择服务商",
       "invalidJson": "JSON 格式不正确"
     },

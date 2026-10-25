@@ -28,6 +28,8 @@
       "split_on_marker": false,
       "max_llm_retries": 2,
       "llm_retry_backoff_secs": 2,
+      "llm_retry_on_empty_content": true,
+      "llm_retry_on_finish_reasons": ["length"],
       "tool_feedback": {
         "enabled": false,
         "max_args_length": 300,

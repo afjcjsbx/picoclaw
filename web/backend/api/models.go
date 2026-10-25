@@ -56,6 +56,7 @@ type modelResponse struct {
 	Streaming           config.ModelStreamingConfig `json:"streaming,omitempty"`
 	ExtraBody           map[string]any              `json:"extra_body,omitempty"`
 	CustomHeaders       map[string]string           `json:"custom_headers,omitempty"`
+	SessionHeader       string                      `json:"session_header,omitempty"`
 	// Meta
 	Enabled             bool   `json:"enabled"`
 	Available           bool   `json:"available"`
@@ -636,6 +637,7 @@ func (h *Handler) handleListModels(w http.ResponseWriter, r *http.Request) {
 			Streaming:           m.Streaming,
 			ExtraBody:           m.ExtraBody,
 			CustomHeaders:       m.CustomHeaders,
+			SessionHeader:       m.SessionHeader,
 			Enabled:             m.Enabled,
 			Available:           modelStatuses[i].Available,
 			Status:              modelStatuses[i].Status,
@@ -808,6 +810,13 @@ func (h *Handler) handleUpdateModel(w http.ResponseWriter, r *http.Request) {
 		mc.CustomHeaders = cfg.ModelList[idx].CustomHeaders
 	} else if len(mc.CustomHeaders) == 0 {
 		mc.CustomHeaders = nil
+	}
+	// Preserve the existing session_header when the caller omits it. Older
+	// clients may leave the field out, and an unconditional copy from the
+	// decoded body would silently wipe it on every save. An explicit ""
+	// clears it.
+	if _, ok := rawFields["session_header"]; !ok {
+		mc.SessionHeader = cfg.ModelList[idx].SessionHeader
 	}
 	if _, ok := rawFields["tool_schema_transform"]; !ok {
 		mc.ToolSchemaTransform = cfg.ModelList[idx].ToolSchemaTransform

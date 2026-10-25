@@ -14,6 +14,8 @@ It does not describe launcher login cookies or dashboard authentication sessions
 > For how large session histories affect gateway startup and how to bound growth
 > with automatic pruning, see
 > [Session Startup Cost and Automatic Pruning](session-startup-and-pruning.md).
+> For the optional SQLite-backed context manager, its compaction and retrieval
+> behavior, and its limits, see [Seahorse Memory](seahorse-memory.md).
 
 ## Responsibilities
 

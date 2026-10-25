@@ -43,9 +43,9 @@ func TestPublishServerEventKeepsConfiguredServerName(t *testing.T) {
 	if event.Attrs["server"] != "debug-server" {
 		t.Fatalf("event attrs server = %v, want %q", event.Attrs["server"], "debug-server")
 	}
-	payload, ok := event.Payload.(ServerEventPayload)
+	payload, ok := event.Payload.(serverEventPayload)
 	if !ok {
-		t.Fatalf("event payload = %T, want ServerEventPayload", event.Payload)
+		t.Fatalf("event payload = %T, want serverEventPayload", event.Payload)
 	}
 	if payload.Server != "debug-server" {
 		t.Fatalf("event payload server = %q, want %q", payload.Server, "debug-server")

@@ -24,7 +24,9 @@ func (m *legacyContextManager) Assemble(ctx context.Context, req *AssembleReques
 	// Legacy: read history from session, return as-is.
 	// Budget enforcement happens in BuildMessages caller via
 	// isOverContextBudget + forceCompression.
-	agent := m.al.registry.GetDefaultAgent()
+	// Assemble the history of the agent that owns the session, like Compact and
+	// Clear do, so routed agents do not fall back to the default agent's store.
+	agent := m.al.agentForSession(req.SessionKey)
 	if agent == nil {
 		return &AssembleResponse{}, nil
 	}
@@ -49,7 +51,11 @@ func (m *legacyContextManager) Compact(ctx context.Context, req *CompactRequest)
 		if result, ok := m.forceCompression(req.SessionKey); ok {
 			m.al.emitEvent(
 				runtimeevents.KindAgentContextCompress,
-				m.al.newTurnEventScope("", req.SessionKey, nil).meta(0, "forceCompression", "turn.context.compress"),
+				m.al.newTurnEventScope(
+					m.al.eventAgentIDForSession(ctx, req.SessionKey),
+					req.SessionKey,
+					nil,
+				).meta(0, "forceCompression", "turn.context.compress"),
 				ContextCompressPayload{
 					Reason:            req.Reason,
 					DroppedMessages:   result.DroppedMessages,
@@ -67,7 +73,7 @@ func (m *legacyContextManager) Compact(ctx context.Context, req *CompactRequest)
 		// (ContextCompressReasonThreshold), never after the turn.
 	case ContextCompressReasonThreshold:
 		// Same agent as Assemble, so the rebuilt prompt reads what was compacted.
-		return m.compactSession(ctx, m.al.registry.GetDefaultAgent(), req)
+		return m.compactSession(ctx, m.al.agentForSession(req.SessionKey), req)
 	case ContextCompressReasonManual:
 		return m.compactSession(ctx, m.al.agentForSession(req.SessionKey), req)
 	}
@@ -204,7 +210,7 @@ type compressionResult struct {
 // It drops the oldest ~50% of Turns (a Turn is a complete user→LLM→response
 // cycle, as defined in #1316), so tool-call sequences are never split.
 func (m *legacyContextManager) forceCompression(sessionKey string) (compressionResult, bool) {
-	agent := m.al.registry.GetDefaultAgent()
+	agent := m.al.agentForSession(sessionKey)
 	if agent == nil {
 		return compressionResult{}, false
 	}

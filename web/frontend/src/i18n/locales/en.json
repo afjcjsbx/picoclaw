@@ -447,6 +447,8 @@
       "extraBodyHint": "Additional JSON fields to inject into the request body, e.g. {\"reasoning_split\": true}.",
       "customHeaders": "Custom Headers",
       "customHeadersHint": "Additional HTTP headers to inject into every request, e.g. {\"X-Source\": \"coding-plan\"}.",
+      "sessionHeader": "Session Header",
+      "sessionHeaderHint": "Header name for a per-conversation session ID (e.g. required by OpenCode Go relays). Every request carries the stable session ID of the active conversation.",
       "invalidJson": "Invalid JSON format"
     },
     "edit": {

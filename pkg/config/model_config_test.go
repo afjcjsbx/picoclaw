@@ -278,6 +278,14 @@ func TestConfig_ValidateModelList(t *testing.T) {
 			errMsg:  "model_name is required",
 		},
 		{
+			name: "null entry",
+			config: &Config{
+				ModelList: []*ModelConfig{nil},
+			},
+			wantErr: true,
+			errMsg:  "model entry is null",
+		},
+		{
 			name: "empty list",
 			config: &Config{
 				ModelList: []*ModelConfig{},

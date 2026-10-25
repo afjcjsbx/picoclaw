@@ -50,6 +50,7 @@ func TestReconcileMCPDashboardResponseUsesLatestConfiguration(t *testing.T) {
 	deferred := true
 	cfg := config.DefaultConfig()
 	cfg.Tools.MCP.Enabled = true
+	cfg.Tools.MCP.Discovery.Enabled = true
 	cfg.Tools.MCP.Servers = map[string]config.MCPServerConfig{
 		"disabled": {
 			Enabled:  false,

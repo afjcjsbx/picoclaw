@@ -11,6 +11,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
+	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/memory"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
@@ -1419,8 +1420,18 @@ func TestSeahorseCompact_Manual(t *testing.T) {
 		t.Fatalf("NewEngine: %v", err)
 	}
 	defer engine.Close()
-	mgr := &seahorseContextManager{engine: engine}
-	ctx := context.Background()
+	runtimeBus := runtimeevents.NewBus()
+	defer runtimeBus.Close()
+	al := &AgentLoop{runtimeEvents: runtimeBus}
+	mgr := &seahorseContextManager{engine: engine, al: al}
+	ctx := context.WithValue(context.Background(), turnStateKey, &turnState{agentID: "alpha"})
+	runtimeCh, closeRuntimeEvents := subscribeRuntimeEventsForTest(
+		t,
+		al,
+		4,
+		runtimeevents.KindAgentSessionSummarize,
+	)
+	defer closeRuntimeEvents()
 
 	err = mgr.Compact(ctx, &CompactRequest{SessionKey: "manual-test", Reason: ContextCompressReasonManual})
 	if !errors.Is(err, ErrNothingToCompact) {
@@ -1447,5 +1458,133 @@ func TestSeahorseCompact_Manual(t *testing.T) {
 	}
 	if len(prompts) == 0 || !strings.Contains(prompts[0], "database migration") {
 		t.Fatalf("summarizer prompt missing focus: %q", prompts)
+	}
+	event := receiveRuntimeEvent(t, runtimeCh)
+	if event.Kind != runtimeevents.KindAgentSessionSummarize {
+		t.Fatalf("event kind = %q, want %q", event.Kind, runtimeevents.KindAgentSessionSummarize)
+	}
+	if event.Scope.AgentID != "alpha" {
+		t.Fatalf("event agent = %q, want alpha", event.Scope.AgentID)
+	}
+	payload, ok := event.Payload.(SessionSummarizePayload)
+	if !ok {
+		t.Fatalf("event payload = %T, want SessionSummarizePayload", event.Payload)
+	}
+	if payload.SummarizedMessages == 0 {
+		t.Fatal("event payload missing summarized message count")
+	}
+}
+
+// Seahorse compaction rewrites its own SQLite context, not the JSONL history.
+// /context and outbound usage must read the assembled context, otherwise they
+// keep reporting the pre-compaction size forever.
+func TestSeahorseContextUsage_ReflectsManualCompaction(t *testing.T) {
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:             t.TempDir(),
+				ModelName:             "test-model",
+				MaxTokens:             4096,
+				MaxToolIterations:     10,
+				ContextWindow:         32000,
+				SummarizeTokenPercent: 75,
+				ContextManager:        "seahorse",
+			},
+		},
+	}
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), &simpleMockProvider{response: "summary"})
+	defer al.Close()
+
+	cm, ok := al.contextManager.(*seahorseContextManager)
+	if !ok {
+		t.Fatalf("context manager = %T, want seahorse", al.contextManager)
+	}
+	agent := al.registry.GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("expected default agent")
+	}
+
+	ctx := context.Background()
+	const sessionKey = "seahorse-context-usage"
+	history := alternatingHistory(30, strings.Repeat("word ", 200))
+	if err := agent.Sessions.SetHistory(ctx, sessionKey, history); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
+	for _, msg := range history {
+		if err := cm.Ingest(ctx, &IngestRequest{SessionKey: sessionKey, Message: msg}); err != nil {
+			t.Fatalf("Ingest: %v", err)
+		}
+	}
+
+	before, beforeCount := al.currentContextUsage(agent, sessionKey)
+	if before == nil {
+		t.Fatal("expected usage before compaction")
+	}
+	if beforeCount == 0 {
+		t.Fatal("expected assembled messages before compaction")
+	}
+
+	if err := cm.Compact(ctx, &CompactRequest{
+		SessionKey: sessionKey,
+		Reason:     ContextCompressReasonManual,
+		Budget:     agent.ContextWindow,
+	}); err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+
+	after, afterCount := al.currentContextUsage(agent, sessionKey)
+	if after == nil {
+		t.Fatal("expected usage after compaction")
+	}
+	if afterCount >= beforeCount {
+		t.Fatalf("assembled message count after compaction = %d, want fewer than %d", afterCount, beforeCount)
+	}
+	if after.HistoryTokens >= before.HistoryTokens {
+		t.Fatalf("history tokens after compaction = %d, want fewer than %d", after.HistoryTokens, before.HistoryTokens)
+	}
+	if after.UsedTokens >= before.UsedTokens {
+		t.Fatalf("used tokens after compaction = %d, want fewer than %d", after.UsedTokens, before.UsedTokens)
+	}
+
+	// The JSONL history is intentionally untouched; reading it directly is what
+	// used to make /context stale.
+	raw, err := agent.Sessions.GetHistory(ctx, sessionKey)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if len(raw) != len(history) {
+		t.Fatalf("JSONL history after compaction = %d messages, want %d", len(raw), len(history))
+	}
+}
+
+func TestSeahorseAssemble_IgnoredSession(t *testing.T) {
+	engine, err := seahorse.NewEngine(
+		seahorse.Config{
+			DBPath:                t.TempDir() + "/test.db",
+			IgnoreSessionPatterns: []string{"ignored:*"},
+		},
+		func(context.Context, string, seahorse.CompleteOptions) (string, error) {
+			return "summary", nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	defer engine.Close()
+
+	mgr := &seahorseContextManager{engine: engine}
+	resp, err := mgr.Assemble(context.Background(), &AssembleRequest{
+		SessionKey: "ignored:heartbeat",
+		Budget:     1000,
+		MaxTokens:  100,
+	})
+	if err != nil {
+		t.Fatalf("Assemble: %v", err)
+	}
+	if resp == nil {
+		t.Fatal("expected non-nil response")
+	}
+	if len(resp.History) != 0 || resp.Summary != "" {
+		t.Fatalf("ignored session context = %d messages, summary %q; want empty", len(resp.History), resp.Summary)
 	}
 }

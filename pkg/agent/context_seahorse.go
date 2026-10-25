@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
@@ -261,6 +262,10 @@ func (m *seahorseContextManager) Assemble(ctx context.Context, req *AssembleRequ
 	if err != nil {
 		return nil, fmt.Errorf("seahorse assemble: %w", err)
 	}
+	if result == nil {
+		// The engine returns nil for ignored session patterns (heartbeat).
+		return &AssembleResponse{}, nil
+	}
 
 	history := seahorseToProviderMessages(result)
 
@@ -285,6 +290,7 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 		if result.LeafSummaries+result.CondensedSummaries == 0 {
 			return ErrNothingToCompact
 		}
+		m.notifyCompaction(ctx, req, result)
 		return nil
 	}
 
@@ -313,9 +319,8 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 	return nil
 }
 
-// notifyCompaction reports a summarization/compaction notice to the session's
-// channel when seahorse actually created summaries. It is a no-op unless tool
-// feedback is enabled (enforced by notifyContextFeedback).
+// notifyCompaction emits the summarization runtime event and reports a notice
+// to the session's channel when seahorse actually created summaries.
 func (m *seahorseContextManager) notifyCompaction(
 	ctx context.Context,
 	req *CompactRequest,
@@ -327,6 +332,17 @@ func (m *seahorseContextManager) notifyCompaction(
 	if result.LeafSummaries+result.CondensedSummaries <= 0 {
 		return
 	}
+	m.al.emitEvent(
+		runtimeevents.KindAgentSessionSummarize,
+		m.al.newTurnEventScope(
+			m.al.eventAgentIDForSession(ctx, req.SessionKey),
+			req.SessionKey,
+			nil,
+		).meta(0, "seahorseCompact", "turn.session.summarize"),
+		SessionSummarizePayload{
+			SummarizedMessages: result.LeafSummaries + result.CondensedSummaries,
+		},
+	)
 	content := formatContextSummaryCounts(result.LeafSummaries, result.CondensedSummaries)
 	m.al.notifyContextFeedbackFromCtx(ctx, req.SessionKey, content)
 }

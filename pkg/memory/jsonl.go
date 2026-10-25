@@ -12,6 +12,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -419,8 +420,12 @@ func (s *JSONLStore) UpsertSessionMeta(
 	if err != nil {
 		return err
 	}
+	normalizedAliases := normalizeAliases(sessionKey, aliases)
+	if bytes.Equal(meta.Scope, scope) && slices.Equal(meta.Aliases, normalizedAliases) {
+		return nil
+	}
 	meta.Scope = cloneRawJSON(scope)
-	meta.Aliases = normalizeAliases(sessionKey, aliases)
+	meta.Aliases = normalizedAliases
 	now := time.Now()
 	if meta.CreatedAt.IsZero() {
 		meta.CreatedAt = now
@@ -453,6 +458,18 @@ func (s *JSONLStore) PromoteAliasHistory(
 	}
 
 	aliases = normalizeAliases(sessionKey, aliases)
+
+	// Fast path for the common case: the canonical session already has
+	// visible content, so promotion cannot do anything. This avoids reading
+	// the canonical JSONL and repeating the check for every alias.
+	hasContent, err := s.canonicalHasVisibleContent(sessionKey)
+	if err != nil {
+		return false, err
+	}
+	if hasContent {
+		return false, nil
+	}
+
 	for _, alias := range aliases {
 		if isMainSessionAlias(alias) {
 			continue
@@ -564,7 +581,7 @@ func (s *JSONLStore) promoteAliasHistoryLocked(
 	if err != nil {
 		return false, err
 	}
-	canonicalHasContent, err := s.sessionHasVisibleContentLocked(sessionKey, canonicalMeta)
+	canonicalHasContent, err := s.canonicalMetaHasVisibleContent(sessionKey, canonicalMeta)
 	if err != nil {
 		return false, err
 	}
@@ -619,15 +636,34 @@ func (s *JSONLStore) promoteAliasHistoryLocked(
 	return true, nil
 }
 
-func (s *JSONLStore) sessionHasVisibleContentLocked(sessionKey string, meta SessionMeta) (bool, error) {
-	if strings.TrimSpace(meta.Summary) != "" {
-		return true, nil
-	}
-	history, err := readMessages(s.jsonlPath(sessionKey), meta.Skip)
+func (s *JSONLStore) canonicalHasVisibleContent(sessionKey string) (bool, error) {
+	meta, err := s.readMeta(sessionKey)
 	if err != nil {
 		return false, err
 	}
-	return len(history) > 0, nil
+	return s.canonicalMetaHasVisibleContent(sessionKey, meta)
+}
+
+// canonicalMetaHasVisibleContent reports whether the canonical session has any
+// visible content without reading the whole JSONL. Count/Skip cover sessions
+// with current metadata; the file-size check keeps legacy metadata (where
+// Count may be missing) safe.
+func (s *JSONLStore) canonicalMetaHasVisibleContent(
+	sessionKey string,
+	meta SessionMeta,
+) (bool, error) {
+	if meta.Count > meta.Skip || strings.TrimSpace(meta.Summary) != "" {
+		return true, nil
+	}
+
+	info, err := os.Stat(s.jsonlPath(sessionKey))
+	if err == nil {
+		return info.Size() > 0, nil
+	}
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return false, fmt.Errorf("memory: stat canonical jsonl: %w", err)
 }
 
 func (s *JSONLStore) readRawJSONL(sessionKey string) ([]byte, bool, error) {

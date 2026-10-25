@@ -22,9 +22,9 @@ func (m *Manager) publishServerEvent(
 	}
 	redactor := newServerRedactor(cfg)
 	safeCfg := RedactServerConfig(cfg)
-	payload := ServerEventPayload{
+	payload := serverEventPayload{
 		Server:    serverName,
-		Type:      mcpTransportType(cfg),
+		Type:      config.EffectiveMCPTransportType(cfg),
 		URL:       safeCfg.URL,
 		Command:   redactor.Redact(cfg.Command),
 		ToolCount: toolCount,
@@ -48,9 +48,9 @@ func (m *Manager) publishToolDiscovered(serverName string, cfg config.MCPServerC
 	}
 	redactor := newServerRedactor(cfg)
 	safeCfg := RedactServerConfig(cfg)
-	payload := ServerEventPayload{
+	payload := serverEventPayload{
 		Server:  serverName,
-		Type:    mcpTransportType(cfg),
+		Type:    config.EffectiveMCPTransportType(cfg),
 		URL:     safeCfg.URL,
 		Command: redactor.Redact(cfg.Command),
 		Tool:    redactor.Redact(toolName),
@@ -64,7 +64,7 @@ func (m *Manager) publishToolDiscovered(serverName string, cfg config.MCPServerC
 	})
 }
 
-func mcpServerEventAttrs(payload ServerEventPayload) map[string]any {
+func mcpServerEventAttrs(payload serverEventPayload) map[string]any {
 	attrs := map[string]any{}
 	setMCPAttrString(attrs, "server", payload.Server)
 	setMCPAttrString(attrs, "type", payload.Type)
@@ -80,8 +80,4 @@ func setMCPAttrString(attrs map[string]any, key, value string) {
 	if value != "" {
 		attrs[key] = value
 	}
-}
-
-func mcpTransportType(cfg config.MCPServerConfig) string {
-	return config.EffectiveMCPTransportType(cfg)
 }
