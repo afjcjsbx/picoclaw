@@ -4,7 +4,6 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -17,6 +16,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/plugins"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/tools"
+	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
 func (al *AgentLoop) handleCommand(
@@ -170,7 +170,7 @@ func (al *AgentLoop) buildCommandsRuntime(
 				servers = append(servers, commands.MCPServerInfo{
 					Name:      serverName,
 					Enabled:   serverCfg.Enabled,
-					Deferred:  serverIsDeferred(cfg.Tools.MCP.Discovery.Enabled, serverCfg),
+					Deferred:  serverCfg.EffectiveDeferred(cfg.Tools.MCP.Discovery.Enabled),
 					Connected: isConnected,
 					ToolCount: toolCount,
 				})
@@ -487,93 +487,20 @@ func (al *AgentLoop) buildCommandsRuntime(
 }
 
 func summarizeMCPToolParameters(schema any) []commands.MCPToolParameterInfo {
-	schemaMap := normalizeMCPSchema(schema)
-	properties, ok := schemaMap["properties"].(map[string]any)
-	if !ok || len(properties) == 0 {
+	properties := toolshared.SchemaProperties(schema)
+	if len(properties) == 0 {
 		return nil
 	}
-
-	required := make(map[string]struct{})
-	switch raw := schemaMap["required"].(type) {
-	case []string:
-		for _, name := range raw {
-			required[name] = struct{}{}
-		}
-	case []any:
-		for _, value := range raw {
-			name, ok := value.(string)
-			if ok {
-				required[name] = struct{}{}
-			}
-		}
-	}
-
-	names := make([]string, 0, len(properties))
-	for name := range properties {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-
-	params := make([]commands.MCPToolParameterInfo, 0, len(names))
-	for _, name := range names {
-		param := commands.MCPToolParameterInfo{Name: name}
-		if propMap, ok := properties[name].(map[string]any); ok {
-			if typeName, ok := propMap["type"].(string); ok {
-				param.Type = strings.TrimSpace(typeName)
-			}
-			if desc, ok := propMap["description"].(string); ok {
-				param.Description = strings.TrimSpace(desc)
-			}
-		}
-		_, param.Required = required[name]
-		params = append(params, param)
+	params := make([]commands.MCPToolParameterInfo, 0, len(properties))
+	for _, property := range properties {
+		params = append(params, commands.MCPToolParameterInfo{
+			Name:        property.Name,
+			Type:        property.Type,
+			Description: property.Description,
+			Required:    property.Required,
+		})
 	}
 	return params
-}
-
-func normalizeMCPSchema(schema any) map[string]any {
-	if schema == nil {
-		return map[string]any{
-			"type":       "object",
-			"properties": map[string]any{},
-			"required":   []string{},
-		}
-	}
-
-	if schemaMap, ok := schema.(map[string]any); ok {
-		return schemaMap
-	}
-
-	var jsonData []byte
-	switch raw := schema.(type) {
-	case json.RawMessage:
-		jsonData = raw
-	case []byte:
-		jsonData = raw
-	}
-
-	if jsonData == nil {
-		var err error
-		jsonData, err = json.Marshal(schema)
-		if err != nil {
-			return map[string]any{
-				"type":       "object",
-				"properties": map[string]any{},
-				"required":   []string{},
-			}
-		}
-	}
-
-	var result map[string]any
-	if err := json.Unmarshal(jsonData, &result); err != nil {
-		return map[string]any{
-			"type":       "object",
-			"properties": map[string]any{},
-			"required":   []string{},
-		}
-	}
-
-	return result
 }
 
 func (al *AgentLoop) setPendingSkills(sessionKey string, skillNames []string) {

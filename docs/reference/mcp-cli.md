@@ -123,7 +123,7 @@ Supported flags:
 | `--deferred` | Mark the server as deferred: tools are hidden and discoverable on demand. |
 | `--no-deferred` | Mark the server as non-deferred: tools are always loaded into context. |
 
-When neither `--deferred` nor `--no-deferred` is passed, the `deferred` field is omitted from the stored config and the global `discovery.enabled` value applies at runtime. A stored `deferred: true` only takes effect when `discovery.enabled` is `true`; otherwise the server's tools stay visible.
+When neither `--deferred` nor `--no-deferred` is passed, the `deferred` field is omitted from the stored config and the global `discovery.enabled` value applies at runtime. A stored `deferred: true` only takes effect when `discovery.enabled` is `true`; otherwise the server's tools stay visible. Passing both flags in the same invocation is rejected as a conflict.
 
 Supported forms:
 
@@ -352,7 +352,8 @@ Login discovers the server's OAuth metadata, opens the browser, and receives
 the callback on a local loopback port. Use `--no-browser` to print the URL,
 `--callback-port` for a fixed port, `--scope` for requested scopes, and
 `--client-id` with `--issuer` for a registered public client. The login timeout
-defaults to five minutes. Tokens are stored under `$PICOCLAW_HOME/auth/mcp/`
+defaults to five minutes and can be changed with `--timeout`; the flow is
+cancelled when the deadline expires. Tokens are stored under `$PICOCLAW_HOME/auth/mcp/`
 with owner-only permissions, outside `config.json`; background connections
 reuse and refresh them. Logout removes local credentials but does not revoke
 server-side tokens. Restart a running gateway to close its active session.
@@ -373,6 +374,8 @@ This opens the config file in the editor pointed to by `$EDITOR`.
 Use it when you need to configure MCP fields that are not exposed directly by `picoclaw mcp add`.
 
 If `$EDITOR` is not set, the command fails with an explicit error.
+
+The config is validated against the schema after the editor exits: if the saved document is invalid, the command reports the error instead of leaving a broken config behind.
 
 ## Recommended Workflow
 

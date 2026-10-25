@@ -1,7 +1,6 @@
 package mcp
 
 import (
-	"encoding/json"
 	"net/url"
 	"regexp"
 	"sort"
@@ -9,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
 const RedactedValue = "********"
@@ -86,7 +86,7 @@ func BuildDashboardResponse(
 			Name:              status.Name,
 			Enabled:           globalEnabled && cfg.Enabled,
 			ConfiguredEnabled: cfg.Enabled,
-			Deferred:          effectiveDeferred(discoveryEnabled, cfg),
+			Deferred:          cfg.EffectiveDeferred(discoveryEnabled),
 			Transport:         config.EffectiveMCPTransportType(cfg),
 			Status:            state,
 			Command:           redactor.Command(cfg),
@@ -224,13 +224,6 @@ func restoreArgRedactions(incoming, existing, redactedExisting []string) []strin
 		}
 	}
 	return result
-}
-
-func effectiveDeferred(global bool, cfg config.MCPServerConfig) bool {
-	if cfg.Deferred != nil {
-		return *cfg.Deferred
-	}
-	return global
 }
 
 type serverRedactor struct {
@@ -421,7 +414,7 @@ func shellDisplayArg(value string) string {
 }
 
 func summarizeDashboardParameters(schema any, redactor serverRedactor) []DashboardParameter {
-	schemaMap := normalizeDashboardSchema(schema)
+	schemaMap := toolshared.SchemaMap(schema)
 	properties, ok := schemaMap["properties"].(map[string]any)
 	if !ok || len(properties) == 0 {
 		return []DashboardParameter{}
@@ -455,24 +448,6 @@ func summarizeDashboardParameters(schema any, redactor serverRedactor) []Dashboa
 			}
 		}
 		result = append(result, parameter)
-	}
-	return result
-}
-
-func normalizeDashboardSchema(schema any) map[string]any {
-	if schema == nil {
-		return map[string]any{}
-	}
-	if schemaMap, ok := schema.(map[string]any); ok {
-		return schemaMap
-	}
-	data, err := json.Marshal(schema)
-	if err != nil {
-		return map[string]any{}
-	}
-	var result map[string]any
-	if err := json.Unmarshal(data, &result); err != nil {
-		return map[string]any{}
 	}
 	return result
 }

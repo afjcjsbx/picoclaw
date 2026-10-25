@@ -9,12 +9,15 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	picomcp "github.com/sipeed/picoclaw/pkg/mcp"
+	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
 func TestNewMCPCommand(t *testing.T) {
@@ -459,11 +462,11 @@ func TestMCPListWithStatusUsesProbe(t *testing.T) {
 
 	originalProbe := serverProbe
 	defer func() { serverProbe = originalProbe }()
-	serverProbe = func(_ context.Context, name string, server config.MCPServerConfig, workspacePath string) (probeResult, error) {
+	serverProbe = func(_ context.Context, name string, server config.MCPServerConfig, workspacePath string) (int, error) {
 		assert.Equal(t, "filesystem", name)
 		assert.Equal(t, readMCPConfig(t, configPath).WorkspacePath(), workspacePath)
 		assert.Equal(t, "npx", server.Command)
-		return probeResult{ToolCount: 3}, nil
+		return 3, nil
 	}
 
 	cmd := NewMCPCommand()
@@ -527,10 +530,10 @@ func TestMCPTestUsesProbe(t *testing.T) {
 
 	originalProbe := serverProbe
 	defer func() { serverProbe = originalProbe }()
-	serverProbe = func(_ context.Context, name string, _ config.MCPServerConfig, workspacePath string) (probeResult, error) {
+	serverProbe = func(_ context.Context, name string, _ config.MCPServerConfig, workspacePath string) (int, error) {
 		assert.Equal(t, "filesystem", name)
 		assert.Equal(t, readMCPConfig(t, configPath).WorkspacePath(), workspacePath)
-		return probeResult{ToolCount: 2}, nil
+		return 2, nil
 	}
 
 	cmd := NewMCPCommand()
@@ -636,7 +639,7 @@ func TestMCPShowUsesProbe(t *testing.T) {
 			{
 				Name:        "read_file",
 				Description: "Read a file from the filesystem",
-				Parameters: []paramDetail{
+				Parameters: []toolshared.SchemaProperty{
 					{Name: "path", Type: "string", Description: "File path", Required: true},
 					{Name: "encoding", Type: "string", Description: "Character encoding", Required: false},
 				},
@@ -660,6 +663,66 @@ func TestMCPShowUsesProbe(t *testing.T) {
 	assert.Contains(t, output, "required")
 	assert.Contains(t, output, "list_dir")
 	assert.Contains(t, output, "none")
+}
+
+func TestMCPEditReportsInvalidConfigAfterEditorExit(t *testing.T) {
+	configPath := setupMCPConfigEnv(t)
+
+	originalEditor := editorCommand
+	defer func() { editorCommand = originalEditor }()
+
+	invalid := `{"tools":{"mcp":{"enabled":true,"servers":{"x":{"enabled":true,"command":"npx","bogus":1}}}}}`
+	editorCommand = func(string, ...string) *exec.Cmd {
+		return exec.Command("sh", "-c", `printf '%s' "$1" > "$2"`, "sh", invalid, configPath)
+	}
+	t.Setenv("EDITOR", "dummy-editor")
+
+	cmd := NewMCPCommand()
+	_, err := executeCommand(cmd, []string{"edit"}, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "edited config is not valid")
+}
+
+func TestMCPLoginUsesCallerTimeout(t *testing.T) {
+	configPath := setupMCPConfigEnv(t)
+	writeMCPConfig(t, configPath, &config.Config{
+		Tools: config.ToolsConfig{
+			MCP: config.MCPConfig{
+				ToolConfig: config.ToolConfig{Enabled: true},
+				Servers: map[string]config.MCPServerConfig{
+					"remote": {
+						Enabled: true,
+						Type:    "http",
+						URL:     "https://example.invalid/mcp",
+						OAuth:   &config.MCPOAuthConfig{},
+					},
+				},
+			},
+		},
+	})
+
+	originalLoginOAuth := loginOAuth
+	defer func() { loginOAuth = originalLoginOAuth }()
+
+	var remaining time.Duration
+	loginOAuth = func(
+		ctx context.Context,
+		_ string,
+		_ config.MCPServerConfig,
+		_ picomcp.OAuthLoginOptions,
+	) error {
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			t.Fatal("login context has no deadline")
+		}
+		remaining = time.Until(deadline)
+		return nil
+	}
+
+	cmd := NewMCPCommand()
+	_, err := executeCommand(cmd, []string{"login", "remote", "--timeout", "30s"}, "")
+	require.NoError(t, err)
+	assert.InDelta(t, float64(30*time.Second), float64(remaining), float64(5*time.Second))
 }
 
 func setupMCPConfigEnv(t *testing.T) string {

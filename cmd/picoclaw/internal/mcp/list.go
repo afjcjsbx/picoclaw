@@ -40,29 +40,23 @@ func newListCommand() *cobra.Command {
 				}
 
 				if includeStatus && server.Enabled {
-					ctx, cancel := context.WithTimeout(context.Background(), timeout)
-					result, probeErr := serverProbe(ctx, name, server, cfg.WorkspacePath())
+					ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
+					toolCount, probeErr := serverProbe(ctx, name, server, cfg.WorkspacePath())
 					cancel()
 					if probeErr != nil {
 						status = "error"
 					} else {
-						status = fmt.Sprintf("ok (%d tools)", result.ToolCount)
+						status = fmt.Sprintf("ok (%d tools)", toolCount)
 					}
-				}
-
-				effectiveDeferred := cfg.Tools.MCP.Discovery.Enabled
-				deferredExplicit := server.Deferred != nil
-				if deferredExplicit {
-					effectiveDeferred = *server.Deferred
 				}
 
 				rows = append(rows, cliui.MCPListRow{
 					Name:              name,
-					Type:              inferTransportType(server),
+					Type:              displayTransportType(server),
 					Target:            renderServerTarget(server),
 					Status:            status,
-					EffectiveDeferred: effectiveDeferred,
-					DeferredExplicit:  deferredExplicit,
+					EffectiveDeferred: server.EffectiveDeferred(cfg.Tools.MCP.Discovery.Enabled),
+					DeferredExplicit:  server.Deferred != nil,
 				})
 			}
 
