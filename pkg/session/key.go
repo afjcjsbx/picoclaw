@@ -15,8 +15,8 @@ const (
 )
 
 type parsedLegacySessionKey struct {
-	AgentID string
-	Rest    string
+	agentID string
+	rest    string
 }
 
 // BuildOpaqueSessionKey returns a stable opaque session key derived from a
@@ -61,7 +61,7 @@ func parseLegacySessionKey(sessionKey string) *parsedLegacySessionKey {
 	if agentID == "" || rest == "" {
 		return nil
 	}
-	return &parsedLegacySessionKey{AgentID: agentID, Rest: rest}
+	return &parsedLegacySessionKey{agentID: agentID, rest: rest}
 }
 
 // ScopeReader is implemented by session stores that expose structured scope
@@ -82,7 +82,7 @@ func ResolveAgentID(reader ScopeReader, sessionKey string) string {
 	}
 
 	if parsed := parseLegacySessionKey(sessionKey); parsed != nil {
-		return routing.NormalizeAgentID(parsed.AgentID)
+		return routing.NormalizeAgentID(parsed.agentID)
 	}
 
 	return ""
@@ -115,7 +115,7 @@ func isMainSessionAlias(agentID, alias string) bool {
 	// Any legacy main alias ("agent:<x>:main") counts, regardless of which
 	// agent it belongs to.
 	if parsed := parseLegacySessionKey(alias); parsed != nil &&
-		strings.EqualFold(strings.TrimSpace(parsed.Rest), "main") {
+		strings.EqualFold(strings.TrimSpace(parsed.rest), "main") {
 		return true
 	}
 	return strings.EqualFold(alias, BuildMainSessionKey(routing.DefaultAgentID))
