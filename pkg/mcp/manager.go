@@ -437,7 +437,7 @@ func connectServerWithOAuth(
 	switch transportType {
 	case "sse", "http":
 		var err error
-		transport, err = buildHTTPTransport(name, cfg, transportType, handler, false)
+		transport, err = buildHTTPTransport(name, cfg, transportType, handler, nativeHTTPTransport)
 		if err != nil {
 			return nil, err
 		}

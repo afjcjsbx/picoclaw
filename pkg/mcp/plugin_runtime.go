@@ -83,7 +83,7 @@ func (m *Manager) ConnectPluginServer(
 			transportType = "sse"
 		}
 		var err error
-		transport, err = buildHTTPTransport(name, cfg, transportType, oauthHandler, true)
+		transport, err = buildHTTPTransport(name, cfg, transportType, oauthHandler, pluginHTTPTransport)
 		if err != nil {
 			return err
 		}

@@ -39,17 +39,28 @@ func dialServer(
 	return dialedServer{Session: session, Tools: tools}, nil
 }
 
+// httpTransportMode selects which HTTP stack buildHTTPTransport returns.
+type httpTransportMode uint8
+
+const (
+	// nativeHTTPTransport uses the streamable transport for both "http" and
+	// "sse"; the historical "sse" meaning only applies to plugin packages.
+	nativeHTTPTransport httpTransportMode = iota
+	// pluginHTTPTransport keeps the historical plugin meaning of "sse": the
+	// legacy SSE client transport when no OAuth handler participates.
+	pluginHTTPTransport
+)
+
 // buildHTTPTransport builds the SSE/HTTP transport for one server.
-// transportType must already be normalized to "http" or "sse". legacySSE keeps
-// the historical plugin meaning of "sse": the legacy SSE client transport when
-// no OAuth handler participates; native configs use the streamable transport
-// with standalone SSE in both cases.
+// transportType must already be normalized to "http" or "sse". mode selects
+// the plugin legacy "sse" behavior; native configs use the streamable
+// transport with standalone SSE in both cases.
 func buildHTTPTransport(
 	name string,
 	cfg config.MCPServerConfig,
 	transportType string,
 	handler auth.OAuthHandler,
-	legacySSE bool,
+	mode httpTransportMode,
 ) (mcp.Transport, error) {
 	if cfg.URL == "" {
 		return nil, fmt.Errorf("URL is required for SSE/HTTP transport")
@@ -91,7 +102,7 @@ func buildHTTPTransport(
 		CheckRedirect: checkRedirect,
 	}
 
-	if legacySSE && transportType == "sse" && handler == nil {
+	if mode == pluginHTTPTransport && transportType == "sse" && handler == nil {
 		return &mcp.SSEClientTransport{Endpoint: cfg.URL, HTTPClient: client}, nil
 	}
 	return &mcp.StreamableClientTransport{
