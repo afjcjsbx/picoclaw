@@ -1,6 +1,7 @@
 # Session Startup Cost and Automatic Pruning
 
-> Back to [README](../README.md) · Related: [Session System](session-system.md)
+> Back to [README](../README.md) · Related: [Session System](session-system.md),
+> [Seahorse Memory](seahorse-memory.md)
 
 ## Symptom
 
