@@ -90,8 +90,10 @@ Seahorse is PicoClaw's built-in memory system. The `seahorse` context manager
 (enabled with `context_manager: seahorse` in the agent defaults) keeps a local
 SQLite database, `sessions/seahorse.db`, with an FTS5 index over the session
 history, so the agent can retrieve and compact older context. See
+[Seahorse Memory](../architecture/seahorse-memory.md) for how the index,
+compaction, and retrieval work, and
 [Session Startup Cost and Automatic Pruning](../architecture/session-startup-and-pruning.md)
-for how that index is built and maintained.
+for startup cost and pruning operations.
 
 The `no_seahorse` tag excludes the Seahorse context manager from the main
 `picoclaw` executable. This also removes the `pkg/seahorse` import and its
