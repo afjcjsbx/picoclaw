@@ -637,6 +637,24 @@ func TestMCPShowUsesProbe(t *testing.T) {
 	assert.Contains(t, output, "none")
 }
 
+func TestMCPEditReportsInvalidConfigAfterEditorExit(t *testing.T) {
+	configPath := setupMCPConfigEnv(t)
+
+	originalEditor := editorCommand
+	defer func() { editorCommand = originalEditor }()
+
+	invalid := `{"tools":{"mcp":{"enabled":true,"servers":{"x":{"enabled":true,"command":"npx","bogus":1}}}}}`
+	editorCommand = func(string, ...string) *exec.Cmd {
+		return exec.Command("sh", "-c", `printf '%s' "$1" > "$2"`, "sh", invalid, configPath)
+	}
+	t.Setenv("EDITOR", "dummy-editor")
+
+	cmd := NewMCPCommand()
+	_, err := executeCommand(cmd, []string{"edit"}, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "edited config is not valid")
+}
+
 func setupMCPConfigEnv(t *testing.T) string {
 	t.Helper()
 
