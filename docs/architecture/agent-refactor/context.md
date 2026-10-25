@@ -151,6 +151,8 @@ Estimation uses a heuristic of ~2.5 characters per token (`chars * 2 / 5`).
 
 These are deliberately heuristic. The proactive check handles the common case; the reactive path catches estimation errors.
 
+`/context` and the usage metadata attached to outbound messages estimate the prompt returned by `ContextManager.Assemble`, not the raw session store. This matters for seahorse: compaction folds old messages into summaries in its SQLite context while the JSONL history stays untouched, so reading the session store directly would keep reporting the pre-compaction size. If assembly fails, the estimate falls back to session history.
+
 ---
 
 ## Interface boundaries
