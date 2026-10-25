@@ -3711,6 +3711,25 @@ func TestSessionConfig_DurableWritesEnvOverride(t *testing.T) {
 	assert.False(t, cfg.Session.DurableWritesEnabled())
 }
 
+func TestLoadConfigRejectsNullModelListEntry(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	t.Setenv("PICOCLAW_HOME", dir)
+
+	data := []byte(`{"version":3,"agents":{"defaults":{"model_name":"x"}},"model_list":[null]}`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := LoadConfig(path)
+	if err == nil {
+		t.Fatal("LoadConfig accepted a null model_list entry")
+	}
+	if !strings.Contains(err.Error(), "model_list[0]: model entry is null") {
+		t.Fatalf("LoadConfig error = %v, want a null-entry error", err)
+	}
+}
+
 func TestSaveConfig_PreservesDisabledLLMRetryOptions(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "config.json")

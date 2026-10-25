@@ -1883,6 +1883,14 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("invalid gateway host: %w", err)
 	}
 
+	// Reject null entries before expansion: expandMultiKeyModels dereferences
+	// every entry, and a hand-edited or generated config can contain null.
+	for i, model := range cfg.ModelList {
+		if model == nil {
+			return nil, fmt.Errorf("model_list[%d]: model entry is null", i)
+		}
+	}
+
 	// Expand multi-key configs into separate entries for key-level failover
 	cfg.ModelList = expandMultiKeyModels(cfg.ModelList)
 
@@ -2089,6 +2097,9 @@ func (c *Config) findMatches(modelName string) []*ModelConfig {
 // Note: Multiple entries with the same model_name are allowed for load balancing.
 func (c *Config) ValidateModelList() error {
 	for i := range c.ModelList {
+		if c.ModelList[i] == nil {
+			return fmt.Errorf("model_list[%d]: model entry is null", i)
+		}
 		if err := c.ModelList[i].Validate(); err != nil {
 			return fmt.Errorf("model_list[%d]: %w", i, err)
 		}
