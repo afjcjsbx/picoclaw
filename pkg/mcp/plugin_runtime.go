@@ -60,16 +60,19 @@ func (m *Manager) ConnectPluginServer(
 		}
 	}
 	var transport sdk.Transport
-	switch cfg.Type {
+	transportType := config.NormalizeMCPTransportType(cfg.Type)
+	switch transportType {
 	case "stdio":
 		cmd := exec.CommandContext(sessionCtx, cfg.Command, cfg.Args...)
 		cmd.Dir = opts.Directory
 		cmd.Stderr = opts.Stderr
 		// The host supplies the exact child environment: no ambient
 		// inheritance and no cfg.Env merge, unlike native stdio servers.
+		// Commands are deliberately not home-expanded either: packages must
+		// use absolute paths (docs/guides/plugins.md).
 		cmd.Env = append([]string{}, opts.Environment...)
 		transport = &isolatedCommandTransport{Command: cmd, TerminateDuration: time.Second}
-	case "streamable-http", "sse":
+	case "http", "sse":
 		var oauthHandler auth.OAuthHandler
 		if cfg.OAuth != nil {
 			oauthName := opts.OAuthName
@@ -77,10 +80,6 @@ func (m *Manager) ConnectPluginServer(
 				oauthName = name
 			}
 			oauthHandler = newStoredOAuthHandler(oauthName, cfg)
-		}
-		transportType := "http"
-		if cfg.Type == "sse" {
-			transportType = "sse"
 		}
 		var err error
 		transport, err = buildHTTPTransport(name, cfg, transportType, oauthHandler, pluginHTTPTransport)

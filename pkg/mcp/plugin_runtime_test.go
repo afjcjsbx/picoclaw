@@ -17,7 +17,7 @@ import (
 )
 
 func TestPluginHTTPTransports(t *testing.T) {
-	for _, transport := range []string{"streamable-http", "sse"} {
+	for _, transport := range []string{"streamable-http", "streamable_http", "streamablehttp", "sse"} {
 		t.Run(transport, func(t *testing.T) {
 			server := sdk.NewServer(&sdk.Implementation{Name: "plugin-http", Version: "1"}, nil)
 			sdk.AddTool(
