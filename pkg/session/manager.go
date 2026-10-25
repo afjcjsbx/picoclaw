@@ -18,12 +18,16 @@ import (
 // shared schema package so the migration path reads the same struct.
 type sessionRecord = schema.Record
 
+// SessionManager keeps session history in memory and persists snapshots as
+// JSON files under storage. It is safe for concurrent use.
 type SessionManager struct {
 	sessions map[string]*sessionRecord
 	mu       sync.RWMutex
 	storage  string
 }
 
+// NewSessionManager returns a manager backed by storage, loading the snapshots
+// already present. An empty storage keeps sessions in memory only.
 func NewSessionManager(storage string) *SessionManager {
 	sm := &SessionManager{
 		sessions: make(map[string]*sessionRecord),
@@ -63,6 +67,7 @@ func normalizeHistoryCreatedAt(history []providers.Message) {
 	}
 }
 
+// AddMessage appends a role/content message to the session, creating it when needed.
 func (sm *SessionManager) AddMessage(ctx context.Context, sessionKey, role, content string) error {
 	return sm.AddFullMessage(ctx, sessionKey, providers.Message{
 		Role:    role,
@@ -94,6 +99,7 @@ func (sm *SessionManager) AddFullMessage(_ context.Context, sessionKey string, m
 	return nil
 }
 
+// GetHistory returns a copy of the session history; unknown sessions yield an empty slice.
 func (sm *SessionManager) GetHistory(_ context.Context, key string) ([]providers.Message, error) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
@@ -106,6 +112,7 @@ func (sm *SessionManager) GetHistory(_ context.Context, key string) ([]providers
 	return messageutil.CloneHistory(session.Messages), nil
 }
 
+// GetSummary returns the stored summary, or "" for an unknown session.
 func (sm *SessionManager) GetSummary(_ context.Context, key string) (string, error) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
@@ -117,6 +124,7 @@ func (sm *SessionManager) GetSummary(_ context.Context, key string) (string, err
 	return session.Summary, nil
 }
 
+// SetSummary replaces the summary of an existing session; unknown sessions are ignored.
 func (sm *SessionManager) SetSummary(_ context.Context, key string, summary string) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -129,6 +137,7 @@ func (sm *SessionManager) SetSummary(_ context.Context, key string, summary stri
 	return nil
 }
 
+// TruncateHistory keeps only the last keepLast messages; keepLast <= 0 clears the history. Unknown sessions are ignored.
 func (sm *SessionManager) TruncateHistory(_ context.Context, key string, keepLast int) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -155,6 +164,7 @@ func (sm *SessionManager) TruncateHistory(_ context.Context, key string, keepLas
 	return nil
 }
 
+// ListSessions returns the known session keys in unspecified order.
 func (sm *SessionManager) ListSessions() []string {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
@@ -187,7 +197,7 @@ func (sm *SessionManager) sessionPath(key string) (string, error) {
 	if filename == "." || !filepath.IsLocal(filename) {
 		return "", os.ErrInvalid
 	}
-	return filepath.Join(sm.storage, filename+".json"), nil
+	return schema.Path(sm.storage, key, ".json"), nil
 }
 
 // DeleteSession removes a session from memory and deletes its backing file.
@@ -211,6 +221,7 @@ func (sm *SessionManager) DeleteSession(key string) error {
 	return nil
 }
 
+// Save atomically writes the session snapshot to storage. In-memory managers and unknown sessions are no-ops.
 func (sm *SessionManager) Save(_ context.Context, key string) error {
 	if sm.storage == "" {
 		return nil

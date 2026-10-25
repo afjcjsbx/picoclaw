@@ -14,7 +14,7 @@ const (
 	legacyAgentSessionKeyPrefix = "agent:"
 )
 
-type ParsedLegacySessionKey struct {
+type parsedLegacySessionKey struct {
 	AgentID string
 	Rest    string
 }
@@ -37,15 +37,17 @@ func IsOpaqueSessionKey(key string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(key)), sessionKeyV1Prefix)
 }
 
-func IsLegacyAgentSessionKey(key string) bool {
+func isLegacyAgentSessionKey(key string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(key)), legacyAgentSessionKeyPrefix)
 }
 
+// IsExplicitSessionKey reports whether key uses the current opaque format or
+// the legacy "agent:..." format.
 func IsExplicitSessionKey(key string) bool {
-	return IsOpaqueSessionKey(key) || IsLegacyAgentSessionKey(key)
+	return IsOpaqueSessionKey(key) || isLegacyAgentSessionKey(key)
 }
 
-func ParseLegacyAgentSessionKey(sessionKey string) *ParsedLegacySessionKey {
+func parseLegacySessionKey(sessionKey string) *parsedLegacySessionKey {
 	raw := strings.TrimSpace(sessionKey)
 	if raw == "" {
 		return nil
@@ -59,7 +61,14 @@ func ParseLegacyAgentSessionKey(sessionKey string) *ParsedLegacySessionKey {
 	if agentID == "" || rest == "" {
 		return nil
 	}
-	return &ParsedLegacySessionKey{AgentID: agentID, Rest: rest}
+	return &parsedLegacySessionKey{AgentID: agentID, Rest: rest}
+}
+
+// ScopeReader is implemented by session stores that expose structured scope
+// metadata for a session key. It is the consumer-side contract used by
+// ResolveAgentID.
+type ScopeReader interface {
+	GetSessionScope(sessionKey string) *SessionScope
 }
 
 // ScopeReader is implemented by session stores that expose structured scope
@@ -79,22 +88,21 @@ func ResolveAgentID(reader ScopeReader, sessionKey string) string {
 		}
 	}
 
-	if parsed := ParseLegacyAgentSessionKey(sessionKey); parsed != nil {
+	if parsed := parseLegacySessionKey(sessionKey); parsed != nil {
 		return routing.NormalizeAgentID(parsed.AgentID)
 	}
 
 	return ""
 }
 
-func BuildLegacyMainAlias(agentID string) string {
+func buildLegacyMainAlias(agentID string) string {
 	return fmt.Sprintf("agent:%s:main", routing.NormalizeAgentID(agentID))
 }
 
 // BuildMainSessionKey returns the canonical opaque main-session key for an
-// agent. The corresponding legacy alias remains available via
-// BuildLegacyMainAlias for compatibility and migration logic.
+// agent. The legacy alias form remains accepted by the key parser.
 func BuildMainSessionKey(agentID string) string {
-	return BuildOpaqueSessionKey(BuildLegacyMainAlias(agentID))
+	return BuildOpaqueSessionKey(buildLegacyMainAlias(agentID))
 }
 
 // isMainSessionAlias reports whether alias is the legacy or opaque main-session
@@ -105,7 +113,7 @@ func isMainSessionAlias(agentID, alias string) bool {
 	if alias == "" {
 		return false
 	}
-	if strings.EqualFold(alias, BuildLegacyMainAlias(agentID)) {
+	if strings.EqualFold(alias, buildLegacyMainAlias(agentID)) {
 		return true
 	}
 	if strings.EqualFold(alias, BuildMainSessionKey(agentID)) {
@@ -113,14 +121,14 @@ func isMainSessionAlias(agentID, alias string) bool {
 	}
 	// Any legacy main alias ("agent:<x>:main") counts, regardless of which
 	// agent it belongs to.
-	if parsed := ParseLegacyAgentSessionKey(alias); parsed != nil &&
+	if parsed := parseLegacySessionKey(alias); parsed != nil &&
 		strings.EqualFold(strings.TrimSpace(parsed.Rest), "main") {
 		return true
 	}
 	return strings.EqualFold(alias, BuildMainSessionKey(routing.DefaultAgentID))
 }
 
-func BuildLegacyDirectAliases(agentID, channel, account, peerID string) []string {
+func buildLegacyDirectAliases(agentID, channel, account, peerID string) []string {
 	agentID = routing.NormalizeAgentID(agentID)
 	channel = normalizeLegacyChannel(channel)
 	account = routing.NormalizeAccountID(account)
@@ -135,7 +143,7 @@ func BuildLegacyDirectAliases(agentID, channel, account, peerID string) []string
 	}
 }
 
-func BuildLegacyPeerAlias(agentID, channel, peerKind, peerID string) string {
+func buildLegacyPeerAlias(agentID, channel, peerKind, peerID string) string {
 	agentID = routing.NormalizeAgentID(agentID)
 	channel = normalizeLegacyChannel(channel)
 	peerKind = strings.ToLower(strings.TrimSpace(peerKind))
@@ -149,9 +157,9 @@ func BuildLegacyPeerAlias(agentID, channel, peerKind, peerID string) string {
 	return fmt.Sprintf("agent:%s:%s:%s:%s", agentID, channel, peerKind, peerID)
 }
 
-// CanonicalSessionIdentityID collapses an identity using identity_links when
+// canonicalSessionIdentityID collapses an identity using identity_links when
 // possible, then returns a normalized lowercase identifier.
-func CanonicalSessionIdentityID(channel, rawID string, identityLinks map[string][]string) string {
+func canonicalSessionIdentityID(channel, rawID string, identityLinks map[string][]string) string {
 	normalizedID := strings.TrimSpace(rawID)
 	if normalizedID == "" {
 		return ""
@@ -207,8 +215,8 @@ func resolveLinkedPeerID(identityLinks map[string][]string, channel, peerID stri
 	return ""
 }
 
-// CanonicalScopeSignature returns a stable serialized representation of scope.
-func CanonicalScopeSignature(scope SessionScope) string {
+// canonicalScopeSignature returns a stable serialized representation of scope.
+func canonicalScopeSignature(scope SessionScope) string {
 	parts := []string{
 		fmt.Sprintf("v=%d", scope.Version),
 		fmt.Sprintf("agent=%s", strings.TrimSpace(strings.ToLower(scope.AgentID))),
@@ -226,7 +234,7 @@ func CanonicalScopeSignature(scope SessionScope) string {
 	return strings.Join(parts, "|")
 }
 
-// BuildSessionKey returns the current opaque key for a structured session scope.
-func BuildSessionKey(scope SessionScope) string {
-	return BuildOpaqueSessionKey(CanonicalScopeSignature(scope))
+// buildSessionKey returns the current opaque key for a structured session scope.
+func buildSessionKey(scope SessionScope) string {
+	return BuildOpaqueSessionKey(canonicalScopeSignature(scope))
 }

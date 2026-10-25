@@ -29,11 +29,11 @@ import (
 )
 
 var (
-	globalSessionManager = NewSessionManager()
+	globalSessionManager = NewProcessSessionManager()
 	sessionManagerMu     sync.RWMutex
 )
 
-func getSessionManager() *SessionManager {
+func getSessionManager() *ProcessSessionManager {
 	sessionManagerMu.RLock()
 	defer sessionManagerMu.RUnlock()
 	return globalSessionManager
@@ -49,7 +49,7 @@ type ExecTool struct {
 	restrictToWorkspace bool
 	allowRemote         bool
 	maxOutputChars      int
-	sessionManager      *SessionManager
+	sessionManager      *ProcessSessionManager
 }
 
 var (
