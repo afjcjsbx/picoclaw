@@ -557,21 +557,31 @@ func (m *Manager) CallTool(
 	return result, nil
 }
 
-// listServerTools lists the tools exposed by a session. Listing is
-// best-effort: per-iteration errors are logged and skipped.
+// listServerTools lists the tools exposed by a session. A single listing error
+// is logged and skipped so one bad tool does not hide the rest, but a server
+// that yields no tools and at least one error has failed to list, and the
+// caller must not report it as connected with an empty toolset.
 func listServerTools(
 	ctx context.Context,
 	name string,
 	session *mcp.ClientSession,
 	initResult *mcp.InitializeResult,
-) []*mcp.Tool {
-	var tools []*mcp.Tool
+) ([]*mcp.Tool, error) {
 	if initResult.Capabilities.Tools == nil {
-		return nil
+		return nil, nil
 	}
 
+	var (
+		tools      []*mcp.Tool
+		firstErr   error
+		listErrors int
+	)
 	for tool, err := range session.Tools(ctx, nil) {
 		if err != nil {
+			listErrors++
+			if firstErr == nil {
+				firstErr = err
+			}
 			logger.WarnCF("mcp", "Error listing tool",
 				map[string]any{
 					"server": name,
@@ -582,13 +592,18 @@ func listServerTools(
 		tools = append(tools, tool)
 	}
 
+	if len(tools) == 0 && firstErr != nil {
+		return nil, fmt.Errorf("failed to list tools from MCP server %s: %w", name, firstErr)
+	}
+
 	logger.InfoCF("mcp", "Listed tools from MCP server",
 		map[string]any{
 			"server":    name,
 			"toolCount": len(tools),
+			"errors":    listErrors,
 		})
 
-	return tools
+	return tools, nil
 }
 
 func shouldReconnectCallError(err error) bool {

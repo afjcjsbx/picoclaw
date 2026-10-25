@@ -876,6 +876,17 @@ func TestConnectServer_ClosesReplacedSessionOutsideTheManagerLock(t *testing.T) 
 	}
 }
 
+// A tool listing that yields no tools and at least one error must fail the
+// dial instead of registering the server as connected with an empty toolset.
+func TestDialServer_FailsWhenToolListingFails(t *testing.T) {
+	transport := &scriptedTransport{sessionID: "session"}
+	if _, err := dialServer(context.Background(), "test", transport, "broken"); err == nil {
+		t.Fatal("dialServer() error = nil, want a tool listing failure")
+	} else if !strings.Contains(err.Error(), "failed to list tools") {
+		t.Fatalf("dialServer() error = %v, want a tool listing failure", err)
+	}
+}
+
 func TestCallTool_ReconnectsWhenHTTPServerLosesSession(t *testing.T) {
 	originalConnectServerFunc := connectServerFunc
 	t.Cleanup(func() {

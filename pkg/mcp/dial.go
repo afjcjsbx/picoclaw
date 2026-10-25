@@ -35,7 +35,11 @@ func dialServer(
 	if err != nil {
 		return dialedServer{}, err
 	}
-	tools := listServerTools(ctx, serverName, session, session.InitializeResult())
+	tools, err := listServerTools(ctx, serverName, session, session.InitializeResult())
+	if err != nil {
+		_ = session.Close()
+		return dialedServer{}, err
+	}
 	return dialedServer{Session: session, Tools: tools}, nil
 }
 
