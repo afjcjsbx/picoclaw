@@ -8,6 +8,11 @@ If your bot "remembers too much" or "forgets too much", the first thing to check
 This guide is for users configuring session behavior in `config.json`.
 For implementation details, see the architecture docs instead.
 
+The optional `seahorse` context manager adds a SQLite index, multi-level
+summaries, and retrieval tools on top of the JSONL history. Its behavior,
+configuration, and limits are documented in
+[Seahorse Memory](../architecture/seahorse-memory.md).
+
 ## What Sessions Control
 
 A session controls:
@@ -143,9 +148,11 @@ Summarization normally starts by itself, but you can trigger it from any chat ch
 `/compact` summarizes the older part of the current session right away and keeps the most recent messages.
 Any text after the command is passed to the summarizer as a hint about which details to preserve.
 The command works with both the `legacy` and `seahorse` context managers and only affects the session it is sent in.
+With Seahorse, `/compact` runs one leaf pass and the condensed loop synchronously; see [Seahorse Memory](../architecture/seahorse-memory.md#compactnow-manual-compact) for the exact sequence and its edge cases.
 
 PicoClaw replies `Context compacted.` when it summarized something, or `Nothing to compact yet.` when the history is still too short.
-If an automatic summarization of the same session is already running, `/compact` reports that instead of starting a second one.
+With the `legacy` manager, if an automatic summarization of the same session is already running, `/compact` reports that instead of starting a second one.
+With Seahorse, a running background condensed loop is skipped and the command can report `Nothing to compact yet.` even though the session is still being compacted.
 
 ## Common Recipes
 

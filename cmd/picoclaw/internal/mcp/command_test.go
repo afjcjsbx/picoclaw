@@ -77,6 +77,32 @@ func TestMCPAddAddsGenericStdioServer(t *testing.T) {
 	assert.Equal(t, []string{"-y", "@modelcontextprotocol/server-sqlite", "--db", "./mydb.db"}, server.Args)
 }
 
+func TestMCPAddIgnoresLeadingGlobalFlags(t *testing.T) {
+	configPath := setupMCPConfigEnv(t)
+
+	root := &cobra.Command{Use: "picoclaw"}
+	root.PersistentFlags().Bool("no-color", false, "Disable colors")
+	root.AddCommand(NewMCPCommand())
+
+	output, err := executeCommand(root, []string{
+		"--no-color",
+		"mcp",
+		"add",
+		"demo",
+		"/bin/echo",
+		"hello",
+	}, "")
+	require.NoError(t, err)
+	assert.Contains(t, output, `MCP server "demo" saved`)
+
+	cfg := readMCPConfig(t, configPath)
+	server, ok := cfg.Tools.MCP.Servers["demo"]
+	require.True(t, ok)
+	assert.Equal(t, "/bin/echo", server.Command)
+	assert.Equal(t, []string{"hello"}, server.Args)
+	assert.NotContains(t, cfg.Tools.MCP.Servers, "--no-color")
+}
+
 func TestMCPAddSupportsHeadersAfterURL(t *testing.T) {
 	configPath := setupMCPConfigEnv(t)
 

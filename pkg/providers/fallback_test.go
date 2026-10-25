@@ -764,3 +764,32 @@ func TestFallbackChain_AcquireNilChainIsNoop(t *testing.T) {
 		t.Fatalf("nil chain Acquire() error = %v, want nil", err)
 	}
 }
+
+func TestFallback_UnusableResponseFallsBack(t *testing.T) {
+	assertFallbackErrorFallsBack(
+		t,
+		"openai",
+		"gpt-4",
+		&FailoverError{Reason: FailoverUnusable, Wrapped: errors.New("empty content")},
+		"fallback ok",
+		FailoverUnusable,
+	)
+}
+
+func TestFallback_UnusableResponseDoesNotCooldownCandidate(t *testing.T) {
+	ct := NewCooldownTracker()
+	fc := NewFallbackChain(ct, nil)
+	candidate := makeCandidate("openai", "gpt-4")
+
+	run := func(ctx context.Context, provider, model string) (*LLMResponse, error) {
+		return nil, &FailoverError{Reason: FailoverUnusable, Wrapped: errors.New("empty content")}
+	}
+	if _, err := fc.Execute(context.Background(), []FallbackCandidate{candidate}, run); err == nil {
+		t.Fatal("expected the chain to report exhaustion")
+	}
+	// A provider that answered but produced nothing usable is still healthy:
+	// the next request must try it again instead of skipping it on cooldown.
+	if !ct.IsAvailable(candidate.StableKey()) {
+		t.Fatal("unusable response must not put the candidate into cooldown")
+	}
+}

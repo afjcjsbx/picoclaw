@@ -259,7 +259,7 @@ builds with Telegram only:
 make build GO_BUILD_TAGS='goolm,stdjson,custom_channels,channel_telegram'
 ```
 
-[Seahorse](docs/architecture/session-startup-and-pruning.md) is PicoClaw's
+[Seahorse](docs/architecture/seahorse-memory.md) is PicoClaw's
 built-in memory system: the `seahorse` context manager keeps a local SQLite
 database with an FTS5 index over the session history, so the agent can recall
 and compact older context. To shrink the footprint further, build without it

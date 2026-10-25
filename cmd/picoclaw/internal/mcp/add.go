@@ -39,7 +39,7 @@ func newAddCommand() *cobra.Command {
 		Short:              "Add or update an MCP server",
 		DisableFlagParsing: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			opts, target, showHelp, err := parseAddArgs(args)
+			opts, target, showHelp, err := parseAddArgs(stripLeadingGlobalFlags(cmd, args))
 			if showHelp {
 				return cmd.Help()
 			}
@@ -95,6 +95,41 @@ func newAddCommand() *cobra.Command {
 	flags.Bool("no-deferred", false, "Mark server as non-deferred (tools always active)")
 
 	return cmd
+}
+
+// stripLeadingGlobalFlags removes root persistent flags that Cobra forwards as
+// positional arguments when a subcommand disables flag parsing. Only leading
+// flags are removed: after the first positional argument, a dash-prefixed value
+// belongs to the wrapped MCP server command line.
+func stripLeadingGlobalFlags(cmd *cobra.Command, args []string) []string {
+	if cmd == nil || len(args) == 0 {
+		return args
+	}
+
+	persistent := cmd.Root().PersistentFlags()
+	for len(args) > 0 {
+		arg := args[0]
+		if arg == "--" || !strings.HasPrefix(arg, "-") {
+			break
+		}
+
+		name := strings.TrimLeft(arg, "-")
+		hasValue := false
+		if key, _, ok := strings.Cut(name, "="); ok {
+			name, hasValue = key, true
+		}
+
+		flag := persistent.Lookup(name)
+		if flag == nil {
+			break
+		}
+
+		args = args[1:]
+		if !hasValue && flag.NoOptDefVal == "" && len(args) > 0 {
+			args = args[1:]
+		}
+	}
+	return args
 }
 
 func parseAddArgs(args []string) (addOptions, addTarget, bool, error) {
