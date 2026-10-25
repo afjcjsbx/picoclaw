@@ -9,12 +9,14 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	picomcp "github.com/sipeed/picoclaw/pkg/mcp"
 	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
@@ -653,6 +655,48 @@ func TestMCPEditReportsInvalidConfigAfterEditorExit(t *testing.T) {
 	_, err := executeCommand(cmd, []string{"edit"}, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "edited config is not valid")
+}
+
+func TestMCPLoginUsesCallerTimeout(t *testing.T) {
+	configPath := setupMCPConfigEnv(t)
+	writeMCPConfig(t, configPath, &config.Config{
+		Tools: config.ToolsConfig{
+			MCP: config.MCPConfig{
+				ToolConfig: config.ToolConfig{Enabled: true},
+				Servers: map[string]config.MCPServerConfig{
+					"remote": {
+						Enabled: true,
+						Type:    "http",
+						URL:     "https://example.invalid/mcp",
+						OAuth:   &config.MCPOAuthConfig{},
+					},
+				},
+			},
+		},
+	})
+
+	originalLoginOAuth := loginOAuth
+	defer func() { loginOAuth = originalLoginOAuth }()
+
+	var remaining time.Duration
+	loginOAuth = func(
+		ctx context.Context,
+		_ string,
+		_ config.MCPServerConfig,
+		_ picomcp.OAuthLoginOptions,
+	) error {
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			t.Fatal("login context has no deadline")
+		}
+		remaining = time.Until(deadline)
+		return nil
+	}
+
+	cmd := NewMCPCommand()
+	_, err := executeCommand(cmd, []string{"login", "remote", "--timeout", "30s"}, "")
+	require.NoError(t, err)
+	assert.InDelta(t, float64(30*time.Second), float64(remaining), float64(5*time.Second))
 }
 
 func setupMCPConfigEnv(t *testing.T) string {
