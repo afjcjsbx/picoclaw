@@ -19,16 +19,29 @@ type originBoundTransport struct {
 }
 
 func sameOrigin(a, b *url.URL) bool {
-	port := func(u *url.URL) string {
-		if p := u.Port(); p != "" {
-			return p
-		}
-		if u.Scheme == "https" {
-			return "443"
-		}
-		return "80"
+	if !strings.EqualFold(a.Hostname(), b.Hostname()) {
+		return false
 	}
-	return strings.EqualFold(a.Scheme, b.Scheme) && strings.EqualFold(a.Hostname(), b.Hostname()) && port(a) == port(b)
+	if strings.EqualFold(a.Scheme, b.Scheme) {
+		return originPort(a) == originPort(b)
+	}
+	// Allow the secured upgrade http -> https on the same host, including the
+	// implicit 80 -> 443 pair, so a server that redirects to TLS still works.
+	// Downgrades and non-HTTP schemes stay refused.
+	return strings.EqualFold(a.Scheme, "http") &&
+		strings.EqualFold(b.Scheme, "https") &&
+		(a.Port() == b.Port() || (originPort(a) == "80" && originPort(b) == "443"))
+}
+
+// originPort returns the explicit port or the scheme default.
+func originPort(u *url.URL) string {
+	if p := u.Port(); p != "" {
+		return p
+	}
+	if strings.EqualFold(u.Scheme, "https") {
+		return "443"
+	}
+	return "80"
 }
 
 // sameOriginRedirectPolicy follows redirects only while they stay on the

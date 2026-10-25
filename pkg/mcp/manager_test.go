@@ -612,6 +612,71 @@ func TestLoadFromMCPConfig_AllServersFailedAfterPreviousLoad(t *testing.T) {
 	}
 }
 
+func TestConnectServer_FollowsSameOriginRedirect(t *testing.T) {
+	t.Parallel()
+
+	server := sdkmcp.NewServer(&sdkmcp.Implementation{
+		Name:    "redirect-test-server",
+		Version: "1.0.0",
+	}, nil)
+	sdkmcp.AddTool(server, &sdkmcp.Tool{
+		Name:        "echo",
+		Description: "Echo test tool",
+	}, func(context.Context, *sdkmcp.CallToolRequest, map[string]any) (*sdkmcp.CallToolResult, any, error) {
+		return &sdkmcp.CallToolResult{
+			Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: "ok"}},
+		}, nil, nil
+	})
+	handler := sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server {
+		return server
+	}, nil)
+
+	var (
+		mu                sync.Mutex
+		redirectedAuth    []string
+		redirectedRequest int
+	)
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/mcp" {
+			http.Redirect(w, r, "/mcp2", http.StatusTemporaryRedirect)
+			return
+		}
+		mu.Lock()
+		redirectedRequest++
+		redirectedAuth = append(redirectedAuth, r.Header.Get("Authorization"))
+		mu.Unlock()
+		handler.ServeHTTP(w, r)
+	}))
+	defer httpServer.Close()
+
+	conn, err := connectServer(context.Background(), "redirect", config.MCPServerConfig{
+		Enabled: true,
+		Type:    "http",
+		URL:     httpServer.URL + "/mcp",
+		Headers: map[string]string{"Authorization": "Bearer test-token"},
+	})
+	if err != nil {
+		t.Fatalf("connectServer() error = %v", err)
+	}
+	if got := len(conn.Tools); got != 1 {
+		t.Fatalf("len(conn.Tools) = %d, want 1", got)
+	}
+	if err := conn.Session.Close(); err != nil {
+		t.Fatalf("Session.Close() error = %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if redirectedRequest == 0 {
+		t.Fatal("same-origin redirect target never received a request")
+	}
+	for _, header := range redirectedAuth {
+		if header != "Bearer test-token" {
+			t.Fatalf("redirect target Authorization = %q, want the configured header", header)
+		}
+	}
+}
+
 func TestConnectServer_ClosesPreviousSessionWithSameName(t *testing.T) {
 	originalConnectServerFunc := connectServerFunc
 	t.Cleanup(func() { connectServerFunc = originalConnectServerFunc })
