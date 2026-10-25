@@ -134,6 +134,29 @@ func TestBuildDashboardResponseResolvesDeferredAgainstDiscovery(t *testing.T) {
 	}
 }
 
+func TestBuildDashboardResponseDecodesRawInputSchema(t *testing.T) {
+	t.Parallel()
+
+	response := BuildDashboardResponse(true, true, true, map[string]ServerStatus{
+		"example": {
+			Name: "example",
+			Config: config.MCPServerConfig{
+				Enabled: true,
+			},
+			Tools: []*sdkmcp.Tool{{
+				Name: "search",
+				InputSchema: json.RawMessage(
+					`{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}`,
+				),
+			}},
+		},
+	})
+	params := response.Servers[0].Tools[0].Parameters
+	if len(params) != 1 || params[0].Name != "query" || params[0].Type != "string" || !params[0].Required {
+		t.Fatalf("unexpected parameter summary: %#v", params)
+	}
+}
+
 func TestRedactAndRestoreServerConfig(t *testing.T) {
 	original := config.MCPServerConfig{
 		Enabled: true,
