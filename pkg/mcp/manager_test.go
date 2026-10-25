@@ -386,12 +386,12 @@ func TestGetServers_ReturnsCopy(t *testing.T) {
 	}
 }
 
-func TestGetAllTools_FiltersEmptyTools(t *testing.T) {
+func TestAllTools_FiltersEmptyTools(t *testing.T) {
 	mgr := NewManager()
 	mgr.servers["empty"] = &ServerConnection{Tools: nil}
 	mgr.servers["with-tools"] = &ServerConnection{Tools: []*sdkmcp.Tool{{}}}
 
-	all := mgr.getAllTools()
+	all := allTools(mgr)
 	if _, ok := all["empty"]; ok {
 		t.Fatal("expected server without tools to be excluded")
 	}

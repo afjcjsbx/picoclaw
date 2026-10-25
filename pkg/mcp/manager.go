@@ -749,17 +749,3 @@ func (m *Manager) Close() error {
 
 	return nil
 }
-
-// getAllTools returns all tools from all connected servers.
-func (m *Manager) getAllTools() map[string][]*mcp.Tool {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	result := make(map[string][]*mcp.Tool)
-	for name, conn := range m.servers {
-		if len(conn.Tools) > 0 {
-			result[name] = conn.Tools
-		}
-	}
-	return result
-}

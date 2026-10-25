@@ -78,9 +78,9 @@ func TestIntegration_StreamableHTTPCompatibility(t *testing.T) {
 				t.Fatalf("ConnectServer() error = %v", err)
 			}
 
-			tools := mgr.getAllTools()
+			tools := allTools(mgr)
 			if got := len(tools["compat"]); got != 1 {
-				t.Fatalf("len(getAllTools()[\"compat\"]) = %d, want 1", got)
+				t.Fatalf("len(allTools(mgr)[\"compat\"]) = %d, want 1", got)
 			}
 
 			result, err := mgr.CallTool(ctx, "compat", "echo", map[string]any{
