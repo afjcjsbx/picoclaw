@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/caarlos0/env/v11"
+	"golang.org/x/net/http/httpguts"
 
 	"github.com/sipeed/picoclaw/pkg"
 	"github.com/sipeed/picoclaw/pkg/fileutil"
@@ -358,6 +359,20 @@ type SessionConfig struct {
 	IdentityLinks map[string][]string `json:"identity_links,omitempty"`
 	DmScope       string              `json:"dm_scope,omitempty"`
 	Prune         SessionPruneConfig  `json:"prune"`
+
+	// DurableWrites controls whether session writes are fsynced before they
+	// are acknowledged. When disabled, message appends and metadata updates
+	// use atomic (temp + rename) writes without fsync: files stay consistent
+	// after a crash, but the most recent writes may be lost on power
+	// failure. Disabling it trades crash durability for lower latency and
+	// less flash wear on constrained devices. Defaults to true.
+	DurableWrites *bool `json:"durable_writes,omitempty" env:"PICOCLAW_SESSION_DURABLE_WRITES"`
+}
+
+// DurableWritesEnabled reports whether session writes must be fsynced.
+// It defaults to true when session.durable_writes is unset.
+func (s *SessionConfig) DurableWritesEnabled() bool {
+	return s.DurableWrites == nil || *s.DurableWrites
 }
 
 // MarshalJSON omits the prune block while it is unconfigured, so saving the
@@ -506,6 +521,15 @@ type RoutingConfig struct {
 	Enabled    bool    `json:"enabled"`
 	LightModel string  `json:"light_model"` // model_name from model_list to use for simple tasks
 	Threshold  float64 `json:"threshold"`   // complexity score in [0,1]; score >= threshold → primary model
+
+	// EscalationPromptTokens moves the rest of the turn to the primary model
+	// after a light-model response reports more prompt tokens than this.
+	// Zero uses the routing.Router default (32768).
+	EscalationPromptTokens int `json:"escalation_prompt_tokens,omitempty"`
+	// EscalationToolIterations moves the rest of the turn to the primary model
+	// after this many consecutive light-model responses requested tools.
+	// Zero uses the routing.Router default (3).
+	EscalationToolIterations int `json:"escalation_tool_iterations,omitempty"`
 }
 
 // SubTurnConfig configures the SubTurn execution system.
@@ -573,7 +597,7 @@ type AgentDefaults struct {
 	ContextWindow             int                 `json:"context_window,omitempty"             env:"PICOCLAW_AGENTS_DEFAULTS_CONTEXT_WINDOW"`
 	Temperature               *float64            `json:"temperature,omitempty"                env:"PICOCLAW_AGENTS_DEFAULTS_TEMPERATURE"`
 	MaxToolIterations         int                 `json:"max_tool_iterations"                  env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOOL_ITERATIONS"`
-	SummarizeMessageThreshold int                 `json:"summarize_message_threshold"          env:"PICOCLAW_AGENTS_DEFAULTS_SUMMARIZE_MESSAGE_THRESHOLD"`
+	SummarizeMessageThreshold int                 `json:"summarize_message_threshold"          env:"PICOCLAW_AGENTS_DEFAULTS_SUMMARIZE_MESSAGE_THRESHOLD"` // Deprecated: ignored; summarization is driven by SummarizeTokenPercent
 	SummarizeTokenPercent     int                 `json:"summarize_token_percent"              env:"PICOCLAW_AGENTS_DEFAULTS_SUMMARIZE_TOKEN_PERCENT"`
 	MaxMediaSize              int                 `json:"max_media_size,omitempty"             env:"PICOCLAW_AGENTS_DEFAULTS_MAX_MEDIA_SIZE"`
 	VisionMaxImageDimension   int                 `json:"vision_max_image_dimension,omitempty" env:"PICOCLAW_AGENTS_DEFAULTS_VISION_MAX_IMAGE_DIMENSION"`
@@ -1014,6 +1038,12 @@ type ModelConfig struct {
 	// UserAgent is the user agent string to use for HTTP requests.
 	UserAgent string `json:"user_agent,omitempty" yaml:"-"`
 
+	// SessionHeader is the request header name that carries a stable
+	// per-conversation session ID. Providers supporting the generic session-key
+	// header receive it through SetSessionHeader during provider construction.
+	// Leave empty to disable the header for this model.
+	SessionHeader string `json:"session_header,omitempty" yaml:"-"`
+
 	// isVirtual marks this model as a virtual model generated from multi-key expansion.
 	// Virtual models should not be persisted to config files.
 	isVirtual bool
@@ -1057,6 +1087,11 @@ func (c *ModelConfig) Validate() error {
 	// Reject consecutive slashes
 	if strings.Contains(c.Model, "//") {
 		return fmt.Errorf("model identifier must not contain //")
+	}
+
+	// Reject header names that cannot be written on the wire
+	if c.SessionHeader != "" && !httpguts.ValidHeaderFieldName(c.SessionHeader) {
+		return fmt.Errorf("session_header must be a valid HTTP header name")
 	}
 	return nil
 }
@@ -2113,6 +2148,7 @@ func expandMultiKeyModels(models []*ModelConfig) []*ModelConfig {
 				ExtraBody:           m.ExtraBody,
 				CustomHeaders:       m.CustomHeaders,
 				UserAgent:           m.UserAgent,
+				SessionHeader:       m.SessionHeader,
 				isVirtual:           true,
 			}
 			expanded = append(expanded, additionalEntry)
@@ -2138,6 +2174,7 @@ func expandMultiKeyModels(models []*ModelConfig) []*ModelConfig {
 			ExtraBody:           m.ExtraBody,
 			CustomHeaders:       m.CustomHeaders,
 			UserAgent:           m.UserAgent,
+			SessionHeader:       m.SessionHeader,
 			APIKeys:             SimpleSecureStrings(keys[0]),
 		}
 

@@ -150,3 +150,16 @@ func TestLoadImage_SuccessPath(t *testing.T) {
 		t.Errorf("expected resolved path %q, got %q", imgPath, resolved)
 	}
 }
+
+// TestLoadImage_Directory verifies the directory error shared with send_file.
+func TestLoadImage_Directory(t *testing.T) {
+	dir := t.TempDir()
+
+	store := media.NewFileMediaStore()
+	tool := NewLoadImageTool(dir, false, 0, store)
+	ctx := WithToolContext(context.Background(), "test", "chat1")
+	result := tool.Execute(ctx, map[string]any{"path": dir})
+	if !result.IsError || !strings.Contains(result.ForLLM, "path is a directory, expected an image file") {
+		t.Fatalf("expected directory error, got: %s", result.ForLLM)
+	}
+}

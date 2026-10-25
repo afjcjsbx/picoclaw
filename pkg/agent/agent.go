@@ -613,6 +613,8 @@ func (al *AgentLoop) runAgentLoop(
 	rtCfg := al.getSubTurnConfig()
 	ts.pendingResults = make(chan *tools.ToolResult, subTurnPendingResultsBuffer)
 	ts.concurrencySem = make(chan struct{}, rtCfg.maxConcurrent)
+	// Needed by Finish(true) to cascade a hard abort to this turn's SubTurns.
+	ts.al = al
 
 	pipeline := NewPipeline(al)
 	result, err := al.runTurn(ctx, ts, pipeline)
@@ -639,6 +641,7 @@ func (al *AgentLoop) runAgentLoop(
 			opts.Dispatch.SessionKey,
 			opts.Dispatch.SessionScope,
 		)
+		contextUsage, _ := al.currentContextUsage(agent, opts.Dispatch.SessionKey)
 		msg := bus.OutboundMessage{
 			Context: outboundContextFromInbound(
 				opts.Dispatch.InboundContext,
@@ -650,7 +653,7 @@ func (al *AgentLoop) runAgentLoop(
 			SessionKey:   sessionKey,
 			Scope:        scope,
 			Content:      result.finalContent,
-			ContextUsage: computeContextUsage(agent, opts.Dispatch.SessionKey),
+			ContextUsage: contextUsage,
 		}
 		if modelName := strings.TrimSpace(result.modelName); modelName != "" {
 			if msg.Context.Raw == nil {

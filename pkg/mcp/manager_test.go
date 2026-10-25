@@ -312,6 +312,9 @@ func TestConnectServerPublishesRuntimeEvents(t *testing.T) {
 		connected.Attrs["tool_count"] != 1 {
 		t.Fatalf("connected attrs = %#v", connected.Attrs)
 	}
+	if status := mgr.GetServerStatuses()["good"]; status.State != ConnectionConnected || len(status.Tools) != 1 {
+		t.Fatalf("connected status = %#v", status)
+	}
 
 	err = mgr.ConnectServer(context.Background(), "bad", config.MCPServerConfig{
 		Type:    "stdio",
@@ -328,6 +331,9 @@ func TestConnectServerPublishesRuntimeEvents(t *testing.T) {
 	}
 	if failed.Attrs["server"] != "bad" || failed.Attrs["error"] != "connect failed" {
 		t.Fatalf("failed attrs = %#v", failed.Attrs)
+	}
+	if status := mgr.GetServerStatuses()["bad"]; status.State != ConnectionError || status.Error != "connect failed" {
+		t.Fatalf("failed status = %#v", status)
 	}
 }
 
@@ -999,5 +1005,121 @@ func TestLoadFromMCPConfigBoundsConcurrentConnects(t *testing.T) {
 	}
 	if len(mgr.GetServers()) != len(servers) {
 		t.Fatalf("connected servers = %d, want %d", len(mgr.GetServers()), len(servers))
+	}
+}
+
+func TestShouldReconnectCallError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"typed ErrSessionMissing", fmt.Errorf("sending: %w", sdkmcp.ErrSessionMissing), true},
+		{"ErrSessionMissing text only", fmt.Errorf("failed to connect: session not found"), true},
+		{
+			"404 with JSON-RPC error body",
+			fmt.Errorf(
+				`calling "tools/call": sending "tools/call": Unknown mcp-session-id: rejected by transport: Not Found`,
+			),
+			true,
+		},
+		{
+			"404 with other JSON-RPC error body",
+			fmt.Errorf(`sending "tools/call": Session terminated: rejected by transport: Not Found`),
+			true,
+		},
+		{"transient 503", fmt.Errorf(`rejected by transport: sending "tools/call": Service Unavailable`), false},
+		{
+			"401 with JSON-RPC error body",
+			fmt.Errorf(`sending "tools/call": Unauthorized: rejected by transport: Unauthorized`),
+			false,
+		},
+		{"unrelated protocol error", fmt.Errorf(`calling "tools/call": invalid params`), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldReconnectCallError(tt.err); got != tt.want {
+				t.Fatalf("shouldReconnectCallError(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
+// A server that expires a session answers the stale Mcp-Session-Id with HTTP 404
+// plus a JSON-RPC error body; CallTool must re-initialize and retry transparently.
+func TestCallTool_ReconnectsWhenServerExpiresSessionWith404JSONRPCBody(t *testing.T) {
+	server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "expiring-server", Version: "1.0.0"}, nil)
+	sdkmcp.AddTool(server, &sdkmcp.Tool{
+		Name:        "echo",
+		Description: "Echo test tool",
+	}, func(context.Context, *sdkmcp.CallToolRequest, map[string]any) (*sdkmcp.CallToolResult, any, error) {
+		return &sdkmcp.CallToolResult{Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: "ok"}}}, nil, nil
+	})
+	handler := sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server { return server }, nil)
+
+	var (
+		mu      sync.Mutex
+		expired string
+	)
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		isExpired := expired != "" && r.Header.Get("Mcp-Session-Id") == expired
+		mu.Unlock()
+		if isExpired {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(
+				w,
+				`{"jsonrpc":"2.0","error":{"code":-32000,"message":"Unknown mcp-session-id"},"id":1}`,
+			)
+			return
+		}
+		handler.ServeHTTP(w, r)
+	}))
+	defer httpServer.Close()
+
+	conn, err := connectServer(context.Background(), "expiring", config.MCPServerConfig{
+		Enabled: true,
+		Type:    "streamable-http",
+		URL:     httpServer.URL,
+	})
+	if err != nil {
+		t.Fatalf("connectServer() error = %v", err)
+	}
+	oldID := conn.Session.ID()
+	if oldID == "" {
+		t.Fatal("expected non-empty streamable session ID")
+	}
+
+	mgr := NewManager()
+	mgr.servers["expiring"] = conn
+	t.Cleanup(func() {
+		if current, ok := mgr.GetServer("expiring"); ok {
+			_ = current.Session.Close()
+		}
+	})
+
+	mu.Lock()
+	expired = oldID
+	mu.Unlock()
+
+	result, err := mgr.CallTool(context.Background(), "expiring", "echo", map[string]any{})
+	if err != nil {
+		t.Fatalf("CallTool() error = %v", err)
+	}
+	if result == nil || len(result.Content) != 1 {
+		t.Fatalf("CallTool() returned unexpected content: %#v", result)
+	}
+	if text, ok := result.Content[0].(*sdkmcp.TextContent); !ok || text.Text != "ok" {
+		t.Fatalf("CallTool() content = %#v, want text %q", result.Content[0], "ok")
+	}
+
+	current, ok := mgr.GetServer("expiring")
+	if !ok {
+		t.Fatal("expected server to remain registered after reconnect")
+	}
+	if newID := current.Session.ID(); newID == "" || newID == oldID {
+		t.Fatalf("Session.ID() = %q, want a fresh ID different from %q", newID, oldID)
 	}
 }

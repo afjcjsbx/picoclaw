@@ -128,6 +128,7 @@ This design also enables **multi-agent support** with flexible provider selectio
 | `api_base` | string | No | Override the default API endpoint URL                                                                                                                                                                                                       |
 | `proxy` | string | No | HTTP proxy URL for this model entry                                                                                                                                                                                                         |
 | `user_agent` | string | No | Custom `User-Agent` header sent with API requests (supported by OpenAI-compatible, Gemini, Anthropic, and Azure providers)                                                                                                                  |
+| `session_header` | string | No | HTTP header name that carries a stable per-conversation session ID. Supported by OpenAI-compatible, OpenAI Responses, Anthropic Messages, and OpenCode Go providers; other providers log a warning and ignore it. Leave empty to disable. |
 | `request_timeout` | int | No | Request timeout in seconds (default varies by provider)                                                                                                                                                                                     |
 | `max_tokens_field` | string | No | Override the max tokens field name in request body (e.g., `max_completion_tokens` for o1 models)                                                                                                                                            |
 | `thinking_level` | string | No | Extended thinking level: `off`, `low`, `medium`, `high`, `xhigh`, or `adaptive`                                                                                                                                                             |
@@ -378,6 +379,11 @@ picks the endpoint from the model ID prefix, so just name the model:
 > The Responses endpoint is called without `temperature` (reasoning models
 > reject it). For a model PicoClaw routes wrongly, use `provider: "openai"` or
 > `"anthropic-messages"` with the full family URL as `api_base` instead.
+
+For a custom OpenAI-compatible relay that also requires this header, set
+`"session_header": "x-opencode-session"` on the model entry. The Web UI exposes
+the same field under **Models → Add/Edit → Advanced → Session Header**, with a
+one-click **x-opencode-session** preset.
 
 **Ollama (local)**
 

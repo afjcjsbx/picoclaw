@@ -4,10 +4,8 @@ import (
 	"context"
 	"fmt"
 	"mime"
-	"os"
 	"path/filepath"
 	"regexp"
-	"strings"
 
 	"github.com/h2non/filetype"
 
@@ -83,45 +81,23 @@ func (t *SendFileTool) SetMediaStore(store media.MediaStore) {
 }
 
 func (t *SendFileTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
-	path, _ := args["path"].(string)
-	if strings.TrimSpace(path) == "" {
-		return ErrorResult("path is required")
+	path, errResult := requirePath(args)
+	if errResult != nil {
+		return errResult
 	}
 
-	// Prefer context-injected channel/chatID (set by ExecuteWithContext), fall back to SetContext values.
-	channel := ToolChannel(ctx)
-	if channel == "" {
-		channel = t.defaultChannel
-	}
-	chatID := ToolChatID(ctx)
-	if chatID == "" {
-		chatID = t.defaultChatID
-	}
-	if channel == "" || chatID == "" {
-		return ErrorResult("no target channel/chat available")
+	channel, chatID, errResult := mediaTarget(ctx, t.defaultChannel, t.defaultChatID)
+	if errResult != nil {
+		return errResult
 	}
 
 	if t.mediaStore == nil {
 		return ErrorResult("media store not configured")
 	}
 
-	resolved, err := ValidateReadablePathWithAllowPaths(path, t.workspace, t.restrict, t.allowPaths)
-	if err != nil {
-		return ErrorResult(fmt.Sprintf("invalid path: %v", err))
-	}
-
-	info, err := os.Stat(resolved)
-	if err != nil {
-		return ErrorResult(fmt.Sprintf("file not found: %v", err))
-	}
-	if info.IsDir() {
-		return ErrorResult("path is a directory, expected a file")
-	}
-	if info.Size() > int64(t.maxFileSize) {
-		return ErrorResult(fmt.Sprintf(
-			"file too large: %d bytes (max %d bytes)",
-			info.Size(), t.maxFileSize,
-		))
+	resolved, errResult := resolveMediaFile(path, t.workspace, t.restrict, t.allowPaths, t.maxFileSize, "a file")
+	if errResult != nil {
+		return errResult
 	}
 
 	filename, _ := args["filename"].(string)
@@ -132,12 +108,7 @@ func (t *SendFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	mediaType := detectMediaType(resolved)
 	scope := fmt.Sprintf("tool:send_file:%s:%s", channel, chatID)
 
-	ref, err := t.mediaStore.Store(resolved, media.MediaMeta{
-		Filename:      filename,
-		ContentType:   mediaType,
-		Source:        "tool:send_file",
-		CleanupPolicy: media.CleanupPolicyForgetOnly,
-	}, scope)
+	ref, err := storeMediaRef(t.mediaStore, resolved, filename, mediaType, "tool:send_file", scope)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("failed to register media: %v", err))
 	}

@@ -18,7 +18,10 @@ import (
 	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
-const maxTextBlockLength = 3000
+const (
+	maxTextBlockLength    = 3000
+	maxResponseDrainBytes = 8 << 10
+)
 
 // SlackWebhookChannel is an output-only channel that sends messages
 // to Slack via Incoming Webhooks using Block Kit formatting.
@@ -163,6 +166,9 @@ func (c *SlackWebhookChannel) Send(ctx context.Context, msg bus.OutboundMessage)
 		sendErr := fmt.Errorf("status %d: %s", resp.StatusCode, respText)
 		return nil, fmt.Errorf("slack_webhook: %w", channels.ClassifySendError(resp.StatusCode, sendErr))
 	}
+
+	// Drain the success body before closing so the connection can be reused.
+	_, _ = io.CopyN(io.Discard, resp.Body, maxResponseDrainBytes)
 
 	logger.DebugCF("slack_webhook", "Message sent successfully", map[string]any{
 		"target": targetName,

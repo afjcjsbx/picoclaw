@@ -23,7 +23,9 @@ The switches interact, and some tools depend on others:
 
 ## `spawn`
 
-Starts a subagent for a task in the background. The subagent completes the task independently and reports back; it never blocks the current turn.
+Starts a subagent for a task in the background. The subagent completes the task independently and reports back; it never blocks the current tool call. Several `spawn` calls in one step run in parallel, and each result is tagged with `[Result from subagent "<label>" (agent <id>)]`.
+
+When `spawn` is called from a sub-turn (for example a peer agent that was itself spawned or delegated to), that sub-turn waits for its spawned children before it finishes, and their results are handed back to its model. Root turns do not wait: results arrive as a follow-up message.
 
 | Argument | Type | Required | Description |
 |----------|------|----------|-------------|
@@ -88,5 +90,5 @@ Operational behavior that matters:
 
 - Subagents share the parent's workspace security boundary; they do not bypass sandbox or path restrictions.
 - `spawn_status` is scoped to the current conversation when channel/chat context exists.
-- Spawned background tasks are marked critical so they survive graceful parent completion; hard aborts still cascade to child and grandchild sub-turns.
+- Spawned background tasks are marked critical so they survive graceful parent completion; hard aborts (including `/stop` on a root turn) cascade to child and grandchild sub-turns.
 - In chat channels, `/subagents` shows the active subagent tree for the current session.

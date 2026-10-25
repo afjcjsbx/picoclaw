@@ -1194,6 +1194,37 @@ func TestShellTool_Background_ReturnsImmediately(t *testing.T) {
 	require.Contains(t, result.ForLLM, "sessionId")
 }
 
+// TestShellTool_BackgroundSessionReadableImmediately verifies that a background
+// session is safe to read as soon as it is visible in the session manager: the
+// output buffer must be initialized before the session is published, otherwise
+// ProcessSession.Read would dereference a nil buffer.
+func TestShellTool_BackgroundSessionReadableImmediately(t *testing.T) {
+	tool, err := NewExecTool("", false)
+	require.NoError(t, err)
+
+	sm := NewSessionManager()
+	t.Cleanup(sm.Stop)
+	tool.sessionManager = sm
+
+	ctx := WithToolContext(context.Background(), "cli", "test")
+	runResult := tool.Execute(ctx, map[string]any{
+		"action":     "run",
+		"command":    "sleep 10",
+		"background": "true",
+	})
+	require.False(t, runResult.IsError, "run should succeed: %s", runResult.ForLLM)
+
+	sessions := sm.List()
+	require.NotEmpty(t, sessions, "background session should be registered")
+
+	for _, info := range sessions {
+		session, err := sm.Get(info.ID)
+		require.NoError(t, err)
+		require.NotNil(t, session.outputBuffer, "output buffer must exist for published sessions")
+		require.NotPanics(t, func() { _ = session.Read() })
+	}
+}
+
 func TestShellTool_List_Empty(t *testing.T) {
 	tool, err := NewExecTool("", false)
 	require.NoError(t, err)
@@ -2194,4 +2225,56 @@ func TestShellTool_CustomAllowDoesNotBecomeStrictAllowlist(t *testing.T) {
 	if got != "" {
 		t.Fatalf("custom allow patterns should not become a strict allowlist, got: %q", got)
 	}
+}
+
+// TestShellTool_PTY_ReaderStopsAfterExit verifies that the PTY reader
+// goroutine and its descriptors are released once the process exits, instead
+// of staying blocked on the master end forever.
+func TestShellTool_PTY_ReaderStopsAfterExit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("PTY not supported on Windows")
+	}
+
+	tool, err := NewExecTool("", false)
+	require.NoError(t, err)
+
+	sm := NewSessionManager()
+	t.Cleanup(sm.Stop)
+	tool.sessionManager = sm
+
+	ctx := WithToolContext(context.Background(), "cli", "test")
+
+	runPTY := func() string {
+		result := tool.Execute(ctx, map[string]any{
+			"action":     "run",
+			"command":    "echo done",
+			"pty":        "true",
+			"background": "true",
+		})
+		require.False(t, result.IsError, "PTY run should succeed: %s", result.ForLLM)
+		var resp ExecResponse
+		require.NoError(t, json.Unmarshal([]byte(result.ForLLM), &resp))
+		return resp.SessionID
+	}
+
+	// Warm up so lazily created runtime goroutines are already accounted for.
+	runPTY()
+	time.Sleep(300 * time.Millisecond)
+	baseline := runtime.NumGoroutine()
+
+	for i := 0; i < 3; i++ {
+		id := runPTY()
+		session, err := sm.Get(id)
+		require.NoError(t, err)
+		require.Eventually(t, func() bool {
+			session.mu.Lock()
+			defer session.mu.Unlock()
+			return session.Status == "done"
+		}, 5*time.Second, 20*time.Millisecond, "session should finish")
+	}
+
+	require.Eventually(t, func() bool {
+		return runtime.NumGoroutine() <= baseline+1
+	}, 5*time.Second, 50*time.Millisecond,
+		"PTY reader goroutines should stop after the process exits")
 }

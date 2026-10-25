@@ -17,19 +17,27 @@ import (
 // ContextManager is configured.
 type legacyContextManager struct {
 	al          *AgentLoop
-	summarizing sync.Map // dedup for async Compact (post-turn)
+	summarizing sync.Map // dedup so /compact and threshold compaction never truncate one session concurrently
 }
 
-func (m *legacyContextManager) Assemble(_ context.Context, req *AssembleRequest) (*AssembleResponse, error) {
+func (m *legacyContextManager) Assemble(ctx context.Context, req *AssembleRequest) (*AssembleResponse, error) {
 	// Legacy: read history from session, return as-is.
 	// Budget enforcement happens in BuildMessages caller via
 	// isOverContextBudget + forceCompression.
-	agent := m.al.registry.GetDefaultAgent()
+	// Assemble the history of the agent that owns the session, like Compact and
+	// Clear do, so routed agents do not fall back to the default agent's store.
+	agent := m.al.agentForSession(req.SessionKey)
 	if agent == nil {
 		return &AssembleResponse{}, nil
 	}
-	history := agent.Sessions.GetHistory(req.SessionKey)
-	summary := agent.Sessions.GetSummary(req.SessionKey)
+	history, err := agent.Sessions.GetHistory(ctx, req.SessionKey)
+	if err != nil {
+		return nil, fmt.Errorf("assemble history: %w", err)
+	}
+	summary, err := agent.Sessions.GetSummary(ctx, req.SessionKey)
+	if err != nil {
+		return nil, fmt.Errorf("assemble summary: %w", err)
+	}
 	return &AssembleResponse{
 		History: history,
 		Summary: summary,
@@ -43,7 +51,11 @@ func (m *legacyContextManager) Compact(ctx context.Context, req *CompactRequest)
 		if result, ok := m.forceCompression(req.SessionKey); ok {
 			m.al.emitEvent(
 				runtimeevents.KindAgentContextCompress,
-				m.al.newTurnEventScope("", req.SessionKey, nil).meta(0, "forceCompression", "turn.context.compress"),
+				m.al.newTurnEventScope(
+					m.al.eventAgentIDForSession(ctx, req.SessionKey),
+					req.SessionKey,
+					nil,
+				).meta(0, "forceCompression", "turn.context.compress"),
 				ContextCompressPayload{
 					Reason:            req.Reason,
 					DroppedMessages:   result.DroppedMessages,
@@ -57,18 +69,23 @@ func (m *legacyContextManager) Compact(ctx context.Context, req *CompactRequest)
 			)
 		}
 	case ContextCompressReasonSummarize:
-		m.maybeSummarize(ctx, req.SessionKey)
+		// Legacy compacts synchronously right before an LLM call
+		// (ContextCompressReasonThreshold), never after the turn.
+	case ContextCompressReasonThreshold:
+		// Same agent as Assemble, so the rebuilt prompt reads what was compacted.
+		return m.compactSession(ctx, m.al.agentForSession(req.SessionKey), req)
 	case ContextCompressReasonManual:
-		return m.compactManually(req)
+		return m.compactSession(ctx, m.al.agentForSession(req.SessionKey), req)
 	}
 	return nil
 }
 
-// compactManually summarizes the session synchronously for /compact. It shares
-// the dedup key with the async post-turn summarization so the two never
-// truncate the same history concurrently.
-func (m *legacyContextManager) compactManually(req *CompactRequest) error {
-	agent := m.al.agentForSession(req.SessionKey)
+// compactSession summarizes the session synchronously, for /compact and for the
+// summarize threshold reached before an LLM call. When the threshold is what
+// triggered it, it summarizes earlier Turns first, then the middle of the turn
+// in progress, and as a last resort clears old tool outputs. ErrNothingToCompact
+// means the session did not change.
+func (m *legacyContextManager) compactSession(ctx context.Context, agent *AgentInstance, req *CompactRequest) error {
 	if agent == nil || agent.Sessions == nil {
 		return fmt.Errorf("sessions not initialized")
 	}
@@ -78,10 +95,32 @@ func (m *legacyContextManager) compactManually(req *CompactRequest) error {
 	}
 	defer m.summarizing.Delete(summarizeKey)
 
-	if !m.summarizeSession(agent, req.SessionKey, nil, req.Instructions) {
-		return ErrNothingToCompact
+	// /compact reports its own outcome; the threshold path notifies the turn's chat.
+	var ts *turnState
+	if req.Reason == ContextCompressReasonThreshold {
+		if ts = turnStateFromContext(ctx); ts == nil {
+			ts = m.al.getActiveTurnState(req.SessionKey)
+		}
 	}
-	return nil
+	if m.summarizeSession(ctx, agent, req.SessionKey, ts, req.Instructions) {
+		return nil
+	}
+	if req.Reason == ContextCompressReasonThreshold {
+		// Nothing older than the turn left: summarize the turn's own middle.
+		if ts != nil && m.summarizeActiveTurn(ctx, agent, req.SessionKey, ts) {
+			return nil
+		}
+		if remaining, ok := m.pruneSessionToolResults(ctx, agent, req.SessionKey, ts); ok {
+			m.al.emitEvent(
+				runtimeevents.KindAgentContextCompress,
+				m.al.newTurnEventScope(agent.ID, req.SessionKey, nil).
+					meta(0, "compactSession", "turn.context.compress"),
+				ContextCompressPayload{Reason: req.Reason, RemainingMessages: remaining},
+			)
+			return nil
+		}
+	}
+	return ErrNothingToCompact
 }
 
 func (m *legacyContextManager) Ingest(_ context.Context, _ *IngestRequest) error {
@@ -89,54 +128,77 @@ func (m *legacyContextManager) Ingest(_ context.Context, _ *IngestRequest) error
 	return nil
 }
 
-func (m *legacyContextManager) Clear(_ context.Context, sessionKey string) error {
+func (m *legacyContextManager) Clear(ctx context.Context, sessionKey string) error {
 	// Routed (non-default) agents keep history in their own session store,
 	// so resolve the owning agent instead of assuming the default one.
 	agent := m.al.agentForSession(sessionKey)
 	if agent == nil || agent.Sessions == nil {
 		return fmt.Errorf("sessions not initialized")
 	}
-	agent.Sessions.SetHistory(sessionKey, []providers.Message{})
-	agent.Sessions.SetSummary(sessionKey, "")
-	return agent.Sessions.Save(sessionKey)
+	warnSessionStoreError(sessionKey, "set history", agent.Sessions.SetHistory(ctx, sessionKey, []providers.Message{}))
+	warnSessionStoreError(sessionKey, "set summary", agent.Sessions.SetSummary(ctx, sessionKey, ""))
+	return agent.Sessions.Save(ctx, sessionKey)
 }
 
-// maybeSummarize triggers summarization if the session history exceeds thresholds.
-// It runs asynchronously in a goroutine.
-func (m *legacyContextManager) maybeSummarize(ctx context.Context, sessionKey string) {
-	agent := m.al.registry.GetDefaultAgent()
-	if agent == nil {
-		return
-	}
+const (
+	// prunedToolResult replaces bulky tool outputs outside the protected tail.
+	prunedToolResult   = "[Old tool output cleared to save context space]"
+	protectedTail      = 4
+	minToolResultChars = 200
+)
 
-	newHistory := agent.Sessions.GetHistory(sessionKey)
-	tokenEstimate := m.estimateTokens(newHistory)
-	threshold := agent.ContextWindow * agent.SummarizeTokenPercent / 100
+// pruneOldToolResults clears tool outputs longer than minToolResultChars that
+// sit before the last protectedTail messages, in place. Media-carrying results
+// are kept. It reports whether anything changed.
+func pruneOldToolResults(history []providers.Message) bool {
+	return pruneToolResultsBefore(history, len(history)-protectedTail)
+}
 
-	if len(newHistory) > agent.SummarizeMessageThreshold || tokenEstimate > threshold {
-		summarizeKey := agent.ID + ":" + sessionKey
-		if _, loading := m.summarizing.LoadOrStore(summarizeKey, true); !loading {
-			// Capture the active turn (if any) before going async so the
-			// resulting summarization notice can still be routed to the chat.
-			ts := turnStateFromContext(ctx)
-			if ts == nil {
-				ts = m.al.getActiveTurnState(sessionKey)
-			}
-			go func() {
-				defer m.summarizing.Delete(summarizeKey)
-				defer func() {
-					if r := recover(); r != nil {
-						logger.WarnCF("agent", "Summarization panic recovered", map[string]any{
-							"session_key": sessionKey,
-							"panic":       r,
-						})
-					}
-				}()
-				logger.Debug("Memory threshold reached. Optimizing conversation history...")
-				m.summarizeSession(agent, sessionKey, ts, "")
-			}()
+// pruneToolResultsBefore is pruneOldToolResults for history[:end].
+func pruneToolResultsBefore(history []providers.Message, end int) bool {
+	pruned := false
+	for i := 0; i < end; i++ {
+		if history[i].Role == "tool" && len(history[i].Content) > minToolResultChars &&
+			len(history[i].Media) == 0 && len(history[i].Attachments) == 0 {
+			history[i].Content = prunedToolResult
+			pruned = true
 		}
 	}
+	return pruned
+}
+
+// pruneSessionToolResults applies pruneOldToolResults to the stored history and
+// reports the resulting message count. When ts is the turn in progress, its
+// newest keepActiveRounds rounds are kept whole as well: the newest round holds
+// results the model has not seen yet.
+func (m *legacyContextManager) pruneSessionToolResults(
+	ctx context.Context,
+	agent *AgentInstance,
+	sessionKey string,
+	ts *turnState,
+) (remaining int, ok bool) {
+	history, err := agent.Sessions.GetHistory(ctx, sessionKey)
+	if err != nil {
+		warnSessionStoreError(sessionKey, "get history", err)
+		return 0, false
+	}
+	end, activeLen := len(history)-protectedTail, 0
+	if ts != nil {
+		persisted := ts.persistedMessagesSnapshot()
+		activeLen = matchingTurnMessageTail(history, persisted)
+		end = min(end, activeTurnPruneEnd(history, persisted))
+	}
+	if !pruneToolResultsBefore(history, end) {
+		return 0, false
+	}
+	if activeLen > 0 {
+		// The turn's record must keep matching the session, or the active turn
+		// (and the hard-abort restore point) would shrink to the unpruned tail.
+		ts.replacePersistedMessages(history[len(history)-activeLen:])
+	}
+	warnSessionStoreError(sessionKey, "set history", agent.Sessions.SetHistory(ctx, sessionKey, history))
+	warnSessionStoreError(sessionKey, "save", agent.Sessions.Save(ctx, sessionKey))
+	return len(history), true
 }
 
 type compressionResult struct {
@@ -148,26 +210,25 @@ type compressionResult struct {
 // It drops the oldest ~50% of Turns (a Turn is a complete user→LLM→response
 // cycle, as defined in #1316), so tool-call sequences are never split.
 func (m *legacyContextManager) forceCompression(sessionKey string) (compressionResult, bool) {
-	agent := m.al.registry.GetDefaultAgent()
+	agent := m.al.agentForSession(sessionKey)
 	if agent == nil {
 		return compressionResult{}, false
 	}
 
-	history := agent.Sessions.GetHistory(sessionKey)
-	const protectedTail = 4
-	const minToolResultChars = 200
-	const prunedToolResult = "[Old tool output cleared to save context space]"
-	pruned := false
-	for i := 0; i < len(history)-protectedTail; i++ {
-		if history[i].Role == "tool" && len(history[i].Content) > minToolResultChars &&
-			len(history[i].Media) == 0 && len(history[i].Attachments) == 0 {
-			history[i].Content = prunedToolResult
-			pruned = true
-		}
+	// forceCompression has no context of its own: it only reads and writes the
+	// local session store, so a background context is sufficient.
+	history, err := agent.Sessions.GetHistory(context.Background(), sessionKey)
+	if err != nil {
+		warnSessionStoreError(sessionKey, "get history", err)
+		history = []providers.Message{}
 	}
-	if pruned {
-		agent.Sessions.SetHistory(sessionKey, history)
-		agent.Sessions.Save(sessionKey)
+	if pruneOldToolResults(history) {
+		warnSessionStoreError(
+			sessionKey,
+			"set history",
+			agent.Sessions.SetHistory(context.Background(), sessionKey, history),
+		)
+		warnSessionStoreError(sessionKey, "save", agent.Sessions.Save(context.Background(), sessionKey))
 		return compressionResult{RemainingMessages: len(history)}, true
 	}
 	if len(history) <= 2 {
@@ -195,7 +256,11 @@ func (m *legacyContextManager) forceCompression(sessionKey string) (compressionR
 
 	droppedCount := len(history) - len(keptHistory)
 
-	existingSummary := agent.Sessions.GetSummary(sessionKey)
+	existingSummary, err := agent.Sessions.GetSummary(context.Background(), sessionKey)
+	if err != nil {
+		warnSessionStoreError(sessionKey, "get summary", err)
+		existingSummary = ""
+	}
 	compressionNote := fmt.Sprintf(
 		"[Emergency compression dropped %d oldest messages due to context limit]",
 		droppedCount,
@@ -203,10 +268,18 @@ func (m *legacyContextManager) forceCompression(sessionKey string) (compressionR
 	if existingSummary != "" {
 		compressionNote = existingSummary + "\n\n" + compressionNote
 	}
-	agent.Sessions.SetSummary(sessionKey, compressionNote)
+	warnSessionStoreError(
+		sessionKey,
+		"set summary",
+		agent.Sessions.SetSummary(context.Background(), sessionKey, compressionNote),
+	)
 
-	agent.Sessions.SetHistory(sessionKey, keptHistory)
-	agent.Sessions.Save(sessionKey)
+	warnSessionStoreError(
+		sessionKey,
+		"set history",
+		agent.Sessions.SetHistory(context.Background(), sessionKey, keptHistory),
+	)
+	warnSessionStoreError(sessionKey, "save", agent.Sessions.Save(context.Background(), sessionKey))
 
 	logger.WarnCF("agent", "Forced compression executed", map[string]any{
 		"session_key":  sessionKey,
@@ -220,27 +293,42 @@ func (m *legacyContextManager) forceCompression(sessionKey string) (compressionR
 	}, true
 }
 
-// summarizeSession summarizes all but the most recent messages. focus, when
+// summarizeSession summarizes all but the most recent messages, synchronously. focus, when
 // non-empty, tells the summarizer which details to preserve. It reports whether
 // a summary was applied.
 func (m *legacyContextManager) summarizeSession(
+	parent context.Context,
 	agent *AgentInstance,
 	sessionKey string,
 	ts *turnState,
 	focus string,
 ) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	ctx, cancel := context.WithTimeout(parent, 120*time.Second)
 	defer cancel()
 
-	history := agent.Sessions.GetHistory(sessionKey)
-	summary := agent.Sessions.GetSummary(sessionKey)
+	history, err := agent.Sessions.GetHistory(ctx, sessionKey)
+	if err != nil {
+		warnSessionStoreError(sessionKey, "get history", err)
+		history = []providers.Message{}
+	}
+	summary, err := agent.Sessions.GetSummary(ctx, sessionKey)
+	if err != nil {
+		warnSessionStoreError(sessionKey, "get summary", err)
+		summary = ""
+	}
 
 	if len(history) <= 4 {
 		return false
 	}
 
-	safeCut := findSafeBoundary(history, len(history)-4)
-	if safeCut <= 0 {
+	// The turn in progress is never cut: a steering message inside it is a user
+	// message too, and would otherwise look like a Turn boundary.
+	limit := len(history)
+	if ts != nil {
+		limit -= matchingTurnMessageTail(history, ts.persistedMessagesSnapshot())
+	}
+	safeCut := findSafeBoundary(history, min(len(history)-4, limit))
+	if safeCut <= 0 || safeCut > limit {
 		return false
 	}
 	keepCount := len(history) - safeCut
@@ -301,10 +389,20 @@ func (m *legacyContextManager) summarizeSession(
 		finalSummary += "\n[Note: Some oversized messages were omitted from this summary for efficiency.]"
 	}
 
+	// A canceled caller (hard abort) must not turn a half-finished summarization
+	// into a degraded summary that replaces the real history.
+	if parent.Err() != nil {
+		return false
+	}
+
 	if finalSummary != "" {
-		agent.Sessions.SetSummary(sessionKey, finalSummary)
-		agent.Sessions.TruncateHistory(sessionKey, keepCount)
-		agent.Sessions.Save(sessionKey)
+		warnSessionStoreError(sessionKey, "set summary", agent.Sessions.SetSummary(ctx, sessionKey, finalSummary))
+		warnSessionStoreError(
+			sessionKey,
+			"truncate history",
+			agent.Sessions.TruncateHistory(ctx, sessionKey, keepCount),
+		)
+		warnSessionStoreError(sessionKey, "save", agent.Sessions.Save(ctx, sessionKey))
 		m.al.emitEvent(
 			runtimeevents.KindAgentSessionSummarize,
 			m.al.newTurnEventScope(agent.ID, sessionKey, nil).meta(0, "summarizeSession", "turn.session.summarize"),
@@ -357,26 +455,34 @@ func (m *legacyContextManager) retryLLMCall(
 
 	var resp *providers.LLMResponse
 	var err error
+	// The provider wants the model ID, not the model_list alias agent.Model holds.
+	model := resolvedCandidateModel(agent.Candidates, agent.Model)
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		m.al.activeRequestsInc()
 		resp, err = func() (*providers.LLMResponse, error) {
 			defer m.al.activeRequestsDec()
-			return agent.Provider.Chat(
+			return chatRetryingTransient(
 				ctx,
+				agent.Provider,
 				[]providers.Message{{Role: "user", Content: prompt}},
 				nil,
-				agent.Model,
+				model,
 				map[string]any{
 					"max_tokens":       agent.MaxTokens,
 					"temperature":      llmTemperature,
 					"prompt_cache_key": agent.ID,
 				},
+				llmRetryFromConfig(m.al.cfg),
 			)
 		}()
 
 		if err == nil && resp != nil && resp.Content != "" {
 			return resp, nil
+		}
+		// A transient failure was already retried with backoff.
+		if _, transient := transientLLMRetryReason(err); transient {
+			break
 		}
 		if attempt < maxRetries-1 {
 			time.Sleep(time.Duration(attempt+1) * 100 * time.Millisecond)
@@ -420,6 +526,10 @@ func (m *legacyContextManager) summarizeBatch(
 	}
 
 	var fallback strings.Builder
+	if existingSummary != "" {
+		fallback.WriteString(existingSummary)
+		fallback.WriteString("\n\n")
+	}
 	fallback.WriteString("Conversation summary: ")
 	for i, msg := range batch {
 		if i > 0 {
@@ -456,12 +566,4 @@ func focusInstruction(focus string) string {
 		return ""
 	}
 	return " Pay particular attention to preserving details about: " + focus + "."
-}
-
-func (m *legacyContextManager) estimateTokens(messages []providers.Message) int {
-	total := 0
-	for _, msg := range messages {
-		total += EstimateMessageTokens(msg)
-	}
-	return total
 }

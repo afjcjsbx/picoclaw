@@ -174,7 +174,7 @@ func (t *SerialTool) read(ctx context.Context, args map[string]any) *ToolResult 
 		return ErrorResult(fmt.Sprintf("serial read failed on %s: %v", cfg.Port, err))
 	}
 
-	return SilentResult(formatSerialPayload("read", cfg, data, timeout))
+	return SilentResult(formatSerialPayload("read", cfg, data, timeout, nil))
 }
 
 func (t *SerialTool) write(ctx context.Context, args map[string]any) *ToolResult {
@@ -203,18 +203,9 @@ func (t *SerialTool) write(ctx context.Context, args map[string]any) *ToolResult
 		return ErrorResult(fmt.Sprintf("serial write failed on %s: %v", cfg.Port, err))
 	}
 
-	result, _ := json.MarshalIndent(map[string]any{
-		"action":     "write",
-		"port":       cfg.Port,
-		"baud":       cfg.Baud,
-		"data_bits":  cfg.DataBits,
-		"parity":     cfg.Parity,
-		"stop_bits":  cfg.StopBits,
-		"timeout_ms": timeout.Milliseconds(),
-		"written":    written,
-		"payload":    serialPayloadSummary(payload),
-	}, "", "  ")
-	return SilentResult(string(result))
+	return SilentResult(formatSerialPayload("write", cfg, payload, timeout, map[string]any{
+		"written": written,
+	}))
 }
 
 func parseSerialConfig(args map[string]any) (serialConfig, *ToolResult) {
@@ -323,8 +314,17 @@ func parseSerialWritePayload(args map[string]any) ([]byte, *ToolResult) {
 	return data, nil
 }
 
-func formatSerialPayload(action string, cfg serialConfig, data []byte, timeout time.Duration) string {
-	result, _ := json.MarshalIndent(map[string]any{
+// formatSerialPayload renders the JSON result shared by the serial actions.
+// extra carries the fields only some actions report, such as the byte count of
+// a write; encoding/json sorts map keys, so the output is deterministic.
+func formatSerialPayload(
+	action string,
+	cfg serialConfig,
+	data []byte,
+	timeout time.Duration,
+	extra map[string]any,
+) string {
+	fields := map[string]any{
 		"action":     action,
 		"port":       cfg.Port,
 		"baud":       cfg.Baud,
@@ -333,7 +333,12 @@ func formatSerialPayload(action string, cfg serialConfig, data []byte, timeout t
 		"stop_bits":  cfg.StopBits,
 		"timeout_ms": timeout.Milliseconds(),
 		"payload":    serialPayloadSummary(data),
-	}, "", "  ")
+	}
+	for key, value := range extra {
+		fields[key] = value
+	}
+
+	result, _ := json.MarshalIndent(fields, "", "  ")
 	return string(result)
 }
 

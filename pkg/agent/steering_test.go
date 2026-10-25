@@ -733,6 +733,18 @@ func TestAgentLoop_Steering_InitialPoll(t *testing.T) {
 	}
 }
 
+// waitForSteeringPending blocks until the scope has a queued steering message.
+func waitForSteeringPending(t *testing.T, al *AgentLoop, scope string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for al.pendingSteeringCountForScope(scope) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("timeout waiting for late message to be queued as steering")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func TestAgentLoop_Run_AutoContinuesLateSteeringMessage(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "agent-test-*")
 	if err != nil {
@@ -800,6 +812,15 @@ func TestAgentLoop_Run_AutoContinuesLateSteeringMessage(t *testing.T) {
 	if err := msgBus.PublishInbound(pubCtx, late); err != nil {
 		t.Fatalf("publish late inbound: %v", err)
 	}
+
+	// PublishInbound only buffers the message. Wait until Run has routed it into
+	// the session's steering queue, or the first call may finish before the
+	// message arrives and the turn ends instead of continuing.
+	lateScope, _, ok := al.resolveSteeringTarget(late)
+	if !ok {
+		t.Fatal("expected late message to resolve a steering target")
+	}
+	waitForSteeringPending(t, al, lateScope)
 
 	close(provider.releaseFirstCall)
 
@@ -937,12 +958,18 @@ func TestAgentLoop_Run_QueuedVoiceMessageIsTranscribedBeforeSteering(t *testing.
 
 	close(provider.releaseFirstCall)
 
+	// The voice message reaches the provider either as steering or as a turn of
+	// its own once the first one is done; in the latter case "first response"
+	// goes out first, so wait for the reply to the second call.
 	subCtx, subCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer subCancel()
-	select {
-	case <-msgBus.OutboundChan():
-	case <-subCtx.Done():
-		t.Fatal("expected outbound response")
+	for continued := false; !continued; {
+		select {
+		case out := <-msgBus.OutboundChan():
+			continued = out.Content == "continued response"
+		case <-subCtx.Done():
+			t.Fatal("expected outbound response to the second provider call")
+		}
 	}
 
 	cancelRun()
@@ -1395,7 +1422,10 @@ func TestAgentLoop_Continue_PreservesSteeringMedia(t *testing.T) {
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
-	history := defaultAgent.Sessions.GetHistory(sessionKey)
+	history, err := defaultAgent.Sessions.GetHistory(context.Background(), sessionKey)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
 	foundOriginalRef := false
 	for _, msg := range history {
 		if msg.Role == "user" && len(msg.Media) == 1 && msg.Media[0] == ref {
@@ -1631,9 +1661,14 @@ func TestAgentLoop_InterruptHard_RestoresSession(t *testing.T) {
 		{Role: "user", Content: "before"},
 		{Role: "assistant", Content: "after"},
 	}
-	defaultAgent.Sessions.SetHistory(sessionKey, originalHistory)
+	if err = defaultAgent.Sessions.SetHistory(context.Background(), sessionKey, originalHistory); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
 
-	originalHistory = defaultAgent.Sessions.GetHistory(sessionKey)
+	originalHistory, err = defaultAgent.Sessions.GetHistory(context.Background(), sessionKey)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
 
 	runtimeCh, closeRuntimeEvents := subscribeRuntimeEventsForTest(
 		t,
@@ -1650,14 +1685,14 @@ func TestAgentLoop_InterruptHard_RestoresSession(t *testing.T) {
 	}
 	resultCh := make(chan result, 1)
 	go func() {
-		resp, err := al.ProcessDirectWithChannel(
+		resp, callErr := al.ProcessDirectWithChannel(
 			context.Background(),
 			"do work",
 			sessionKey,
 			"test",
 			"chat1",
 		)
-		resultCh <- result{resp: resp, err: err}
+		resultCh <- result{resp: resp, err: callErr}
 	}()
 
 	select {
@@ -1670,7 +1705,7 @@ func TestAgentLoop_InterruptHard_RestoresSession(t *testing.T) {
 		t.Fatal("expected active turn before hard abort")
 	}
 
-	if err := al.InterruptHard(); err != nil {
+	if err = al.InterruptHard(); err != nil {
 		t.Fatalf("InterruptHard failed: %v", err)
 	}
 
@@ -1690,7 +1725,10 @@ func TestAgentLoop_InterruptHard_RestoresSession(t *testing.T) {
 		t.Fatalf("expected no active turn after hard abort, got %#v", active)
 	}
 
-	finalHistory := defaultAgent.Sessions.GetHistory(sessionKey)
+	finalHistory, err := defaultAgent.Sessions.GetHistory(context.Background(), sessionKey)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
 	if !reflect.DeepEqual(finalHistory, originalHistory) {
 		t.Fatalf("expected history rollback after hard abort, got %#v", finalHistory)
 	}

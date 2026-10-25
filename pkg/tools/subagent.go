@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -172,8 +173,9 @@ func (sm *SubagentManager) runTask(
 	task *SubagentTask,
 	callback AsyncCallback,
 ) {
-	task.Status = "running"
-	task.Created = time.Now().UnixMilli()
+	// Status/Created are initialized by the caller in Spawn before the task is
+	// published in sm.tasks; writing them here would race with readers that
+	// observe the task under the manager lock.
 	// TODO(eventbus): once subagents are modeled as child turns inside
 	// pkg/agent, emit SubTurnEnd and SubTurnResultDelivered from the parent
 	// AgentLoop instead of this legacy manager.
@@ -262,7 +264,7 @@ After completing the task, provide a clear summary of what was done.`
 			MediaResolver: mediaResolver,
 		}, messages, task.OriginChannel, task.OriginChatID)
 
-		if err == nil {
+		if err == nil && loopResult != nil {
 			result = &ToolResult{
 				ForLLM: fmt.Sprintf(
 					"Subagent '%s' completed (iterations: %d): %s",
@@ -276,6 +278,13 @@ After completing the task, provide a clear summary of what was done.`
 				Async:   false,
 			}
 		}
+	}
+
+	// The spawner contract does not guarantee a result on success; guard the
+	// success path so a (nil, nil) return becomes an explicit error instead of
+	// a nil dereference.
+	if err == nil && result == nil {
+		err = errors.New("subagent returned no result")
 	}
 
 	sm.mu.Lock()
@@ -309,13 +318,6 @@ After completing the task, provide a clear summary of what was done.`
 	}
 }
 
-func (sm *SubagentManager) GetTask(taskID string) (*SubagentTask, bool) {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
-	task, ok := sm.tasks[taskID]
-	return task, ok
-}
-
 // GetTaskCopy returns a copy of the task with the given ID, taken under the
 // read lock, so the caller receives a consistent snapshot with no data race.
 func (sm *SubagentManager) GetTaskCopy(taskID string) (SubagentTask, bool) {
@@ -326,17 +328,6 @@ func (sm *SubagentManager) GetTaskCopy(taskID string) (SubagentTask, bool) {
 		return SubagentTask{}, false
 	}
 	return *task, true
-}
-
-func (sm *SubagentManager) ListTasks() []*SubagentTask {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
-
-	tasks := make([]*SubagentTask, 0, len(sm.tasks))
-	for _, task := range sm.tasks {
-		tasks = append(tasks, task)
-	}
-	return tasks
 }
 
 // ListTaskCopies returns value copies of all tasks, taken under the read lock,

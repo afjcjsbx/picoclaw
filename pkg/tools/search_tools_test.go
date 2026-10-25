@@ -2,8 +2,10 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -48,6 +50,27 @@ func setupPopulatedRegistry() *ToolRegistry {
 	})
 
 	return reg
+}
+
+// discoveryResults parses the JSON payload of a tool-discovery result, so a test
+// can inspect the tools a search unlocked.
+func discoveryResults(t *testing.T, res *ToolResult) []ToolSearchResult {
+	t.Helper()
+	if res.IsError {
+		t.Fatalf("search failed: %s", res.ForLLM)
+	}
+
+	start := strings.Index(res.ForLLM, "\n")
+	end := strings.Index(res.ForLLM, "\n\nSUCCESS")
+	if start < 0 || end <= start {
+		t.Fatalf("unexpected discovery payload: %s", res.ForLLM)
+	}
+
+	var results []ToolSearchResult
+	if err := json.Unmarshal([]byte(res.ForLLM[start+1:end]), &results); err != nil {
+		t.Fatalf("invalid discovery payload: %v", err)
+	}
+	return results
 }
 
 func TestRegexSearchTool_Execute(t *testing.T) {
@@ -138,6 +161,40 @@ func TestBM25SearchTool_Execute(t *testing.T) {
 	})
 }
 
+func TestBM25SearchTool_ConcurrentExecute(t *testing.T) {
+	reg := setupPopulatedRegistry()
+	tool := NewBM25SearchTool(reg, 3, 10)
+	ctx := context.Background()
+
+	var wg sync.WaitGroup
+
+	// Readers keep hitting the lock-free cache fast path.
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 20; j++ {
+				_ = tool.Execute(ctx, map[string]any{"query": "read files"})
+			}
+		}()
+	}
+
+	// The writer bumps the registry version, forcing cache rebuilds while
+	// readers are on the fast path.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 20; i++ {
+			reg.RegisterHidden(&mockSearchableTool{
+				name: fmt.Sprintf("mcp_extra_%d", i),
+				desc: "extra hidden tool for cache invalidation",
+			})
+		}
+	}()
+
+	wg.Wait()
+}
+
 func TestRegexSearchTool_PatternTooLong(t *testing.T) {
 	reg := setupPopulatedRegistry()
 	tool := NewRegexSearchTool(reg, 5, 10)
@@ -162,12 +219,16 @@ func TestSearchRegex_ZeroMaxResults(t *testing.T) {
 	}
 }
 
-func TestSearchBM25_ZeroMaxResults(t *testing.T) {
+func TestBM25SearchTool_ZeroMaxResults(t *testing.T) {
 	reg := setupPopulatedRegistry()
+	tool := NewBM25SearchTool(reg, 5, 0)
 
-	res := reg.SearchBM25("read file", 0)
-	if len(res) != 0 {
-		t.Errorf("Expected 0 results with maxSearchResults=0, got %d", len(res))
+	res := tool.Execute(context.Background(), map[string]any{"query": "read file"})
+	if res.IsError {
+		t.Fatalf("BM25 search failed: %s", res.ForLLM)
+	}
+	if !strings.Contains(res.ForLLM, "No tools found") {
+		t.Errorf("Expected 0 results with maxSearchResults=0, got: %s", res.ForLLM)
 	}
 }
 
@@ -238,15 +299,17 @@ func TestToolRegistry_SearchLimitsAndCoreFiltering(t *testing.T) {
 
 	t.Run("BM25 limits and core filtering", func(t *testing.T) {
 		// Search with BM25 and a limit of maxSearchResults = 3
-		res := reg.SearchBM25("match", 3)
+		tool := NewBM25SearchTool(reg, 5, 3)
+		res := tool.Execute(context.Background(), map[string]any{"query": "match"})
 
-		if len(res) != 3 {
-			t.Errorf("Expected exactly 3 results due to limit, got %d", len(res))
+		results := discoveryResults(t, res)
+		if len(results) != 3 {
+			t.Errorf("Expected exactly 3 results due to limit, got %d", len(results))
 		}
 
-		for _, r := range res {
+		for _, r := range results {
 			if r.Name == "core_match" {
-				t.Errorf("SearchBM25 returned a Core tool, which should be excluded")
+				t.Errorf("BM25 search returned a Core tool, which should be excluded")
 			}
 		}
 	})

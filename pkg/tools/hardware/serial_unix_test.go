@@ -4,6 +4,7 @@ package hardwaretools
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -136,5 +137,53 @@ func TestSerialWriteTimesOutAfterRepeatedEmptyPolls(t *testing.T) {
 	}
 	if written != 0 {
 		t.Fatalf("serialWrite() wrote %d bytes, want 0", written)
+	}
+}
+
+// TestSerialWriteToolResultCarriesWrittenCount drives a write through the tool
+// and pins the JSON the caller receives: the common serial fields plus the byte
+// count, which the read path does not report.
+func TestSerialWriteToolResultCarriesWrittenCount(t *testing.T) {
+	now := time.Unix(0, 0)
+	stubUnixSerialIO(t, &now)
+
+	var sent []byte
+	unixSerialPollWrite = func(_ int, src []byte, _ time.Duration) (int, error) {
+		sent = append(sent, src...)
+		return len(src), nil
+	}
+
+	tool := NewSerialTool()
+	result := tool.Execute(context.Background(), map[string]any{
+		"action":  "write",
+		"port":    "/dev/ttyUSB0",
+		"text":    "AT",
+		"confirm": true,
+	})
+
+	if result.IsError {
+		t.Fatalf("write failed: %s", result.ForLLM)
+	}
+	if string(sent) != "AT" {
+		t.Fatalf("wrote %q, want %q", sent, "AT")
+	}
+
+	t.Logf("write result: %s", result.ForLLM)
+
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(result.ForLLM), &decoded); err != nil {
+		t.Fatalf("result is not JSON: %v (%q)", err, result.ForLLM)
+	}
+	if decoded["action"] != "write" {
+		t.Errorf("action = %v, want write", decoded["action"])
+	}
+	if decoded["port"] != "/dev/ttyUSB0" {
+		t.Errorf("port = %v, want /dev/ttyUSB0", decoded["port"])
+	}
+	if decoded["written"] != float64(2) {
+		t.Errorf("written = %v, want 2", decoded["written"])
+	}
+	if decoded["payload"] == nil {
+		t.Errorf("payload missing from %q", result.ForLLM)
 	}
 }

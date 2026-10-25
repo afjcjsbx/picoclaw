@@ -1,32 +1,47 @@
 package session
 
-import "github.com/sipeed/picoclaw/pkg/providers"
+import (
+	"context"
 
-// SessionStore defines the persistence operations used by the agent loop.
-// Both SessionManager (legacy JSON backend) and JSONLBackend satisfy this
-// interface, allowing the storage layer to be swapped without touching the
-// agent loop code.
-//
-// Write methods (Add*, Set*, Truncate*) are fire-and-forget: they do not
-// return errors. Implementations should log failures internally. This
-// matches the original SessionManager contract that the agent loop relies on.
-type SessionStore interface {
+	"github.com/sipeed/picoclaw/pkg/providers"
+)
+
+// SessionReader reads conversation state for a session.
+type SessionReader interface {
+	// GetHistory returns the message history for the session.
+	GetHistory(ctx context.Context, key string) ([]providers.Message, error)
+	// GetSummary returns the conversation summary, or "" when none is stored.
+	GetSummary(ctx context.Context, key string) (string, error)
+}
+
+// SessionWriter mutates conversation state. Implementations must be safe for
+// concurrent use. A returned error means the change was not persisted and the
+// caller decides whether to surface, retry or drop it.
+type SessionWriter interface {
 	// AddMessage appends a simple role/content message to the session.
-	AddMessage(sessionKey, role, content string)
+	AddMessage(ctx context.Context, sessionKey, role, content string) error
 	// AddFullMessage appends a complete message including tool calls.
-	AddFullMessage(sessionKey string, msg providers.Message)
-	// GetHistory returns the full message history for the session.
-	GetHistory(key string) []providers.Message
-	// GetSummary returns the conversation summary, or "" if none.
-	GetSummary(key string) string
+	AddFullMessage(ctx context.Context, sessionKey string, msg providers.Message) error
 	// SetSummary replaces the conversation summary.
-	SetSummary(key, summary string)
+	SetSummary(ctx context.Context, key, summary string) error
 	// SetHistory replaces the full message history.
-	SetHistory(key string, history []providers.Message)
+	SetHistory(ctx context.Context, key string, history []providers.Message) error
 	// TruncateHistory keeps only the last keepLast messages.
-	TruncateHistory(key string, keepLast int)
-	// Save persists any pending state to durable storage.
-	Save(key string) error
+	TruncateHistory(ctx context.Context, key string, keepLast int) error
+}
+
+// SessionStore is the persistence surface used by the agent loop: reads,
+// writes and lifecycle operations.
+//
+// DeleteSession and LastActivity are intentionally not part of this
+// interface: only the session pruner needs them, and it declares its own
+// minimal interfaces (pkg/session/pruner). Both SessionManager and
+// JSONLBackend still expose them as concrete methods.
+type SessionStore interface {
+	SessionReader
+	SessionWriter
+	// Save flushes pending state and compacts storage for the session.
+	Save(ctx context.Context, key string) error
 	// ListSessions returns all known session keys.
 	ListSessions() []string
 	// Close releases resources held by the store.
