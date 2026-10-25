@@ -658,10 +658,9 @@ func (m *Manager) reconnectServer(
 	}
 
 	if currentConn == staleConn {
-		m.servers[serverName] = freshConn
+		replaced := m.replaceConnection(serverName, freshConn)
 		m.setServerStatusLocked(serverName, freshConn.Config, ConnectionConnected, nil, freshConn.Tools)
 		m.watchWG.Add(1)
-		staleToClose := staleConn
 		m.mu.Unlock()
 		m.publishServerEvent(
 			runtimeevents.KindMCPServerConnected,
@@ -671,7 +670,7 @@ func (m *Manager) reconnectServer(
 			nil,
 		)
 		go m.watchServerConnection(serverName, freshConn)
-		_ = staleToClose.Session.Close()
+		closeReplacedConnection(replaced)
 		return freshConn, nil
 	}
 

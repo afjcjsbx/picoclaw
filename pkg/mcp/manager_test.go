@@ -759,6 +759,8 @@ func TestCallTool_ReconnectsWhenHTTPServerLosesSession(t *testing.T) {
 
 	mgr := NewManager()
 	mgr.servers["flaky"] = staleConn
+	cancelCalled := false
+	staleConn.cancel = func() { cancelCalled = true }
 
 	result, err := mgr.CallTool(context.Background(), "flaky", "echo", map[string]any{
 		"query": "hello",
@@ -793,6 +795,9 @@ func TestCallTool_ReconnectsWhenHTTPServerLosesSession(t *testing.T) {
 	}
 	if freshTransport.toolCallCalls != 1 {
 		t.Fatalf("fresh toolCallCalls = %d, want 1", freshTransport.toolCallCalls)
+	}
+	if !cancelCalled {
+		t.Fatal("stale connection cancel was not called on reconnect")
 	}
 }
 
