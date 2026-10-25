@@ -25,7 +25,16 @@ import (
 
 var (
 	editorCommand = exec.Command
-	serverProbe   = defaultServerProbe
+	serverProbe   = func(
+		ctx context.Context,
+		name string,
+		server config.MCPServerConfig,
+		workspacePath string,
+	) (int, error) {
+		return probeServer(ctx, name, server, workspacePath, func(conn *picomcp.ServerConnection) int {
+			return len(conn.Tools)
+		})
+	}
 
 	mcpConfigSchemaOnce sync.Once
 	mcpConfigSchema     *jsonschema.Resolved
@@ -353,18 +362,6 @@ func probeServer[T any](
 	}
 
 	return extract(conn), nil
-}
-
-// defaultServerProbe returns the number of tools the server exposes.
-func defaultServerProbe(
-	ctx context.Context,
-	name string,
-	server config.MCPServerConfig,
-	workspacePath string,
-) (int, error) {
-	return probeServer(ctx, name, server, workspacePath, func(conn *picomcp.ServerConnection) int {
-		return len(conn.Tools)
-	})
 }
 
 func confirmOverwrite(r io.Reader, w io.Writer, name string) (bool, error) {

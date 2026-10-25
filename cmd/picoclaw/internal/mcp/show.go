@@ -20,9 +20,7 @@ type toolDetail struct {
 	Parameters  []toolshared.SchemaProperty
 }
 
-var serverShowProbe = defaultServerShowProbe
-
-func defaultServerShowProbe(
+var serverShowProbe = func(
 	ctx context.Context,
 	name string,
 	server config.MCPServerConfig,
