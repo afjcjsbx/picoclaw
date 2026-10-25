@@ -17,14 +17,7 @@ import (
 type toolDetail struct {
 	Name        string
 	Description string
-	Parameters  []paramDetail
-}
-
-type paramDetail struct {
-	Name        string
-	Type        string
-	Description string
-	Required    bool
+	Parameters  []toolshared.SchemaProperty
 }
 
 var serverShowProbe = defaultServerShowProbe
@@ -41,28 +34,11 @@ func defaultServerShowProbe(
 			details = append(details, toolDetail{
 				Name:        tool.Name,
 				Description: tool.Description,
-				Parameters:  extractParameters(tool.InputSchema),
+				Parameters:  toolshared.SchemaProperties(tool.InputSchema),
 			})
 		}
 		return details
 	})
-}
-
-func extractParameters(schema any) []paramDetail {
-	properties := toolshared.SchemaProperties(schema)
-	if len(properties) == 0 {
-		return nil
-	}
-	params := make([]paramDetail, 0, len(properties))
-	for _, property := range properties {
-		params = append(params, paramDetail{
-			Name:        property.Name,
-			Type:        property.Type,
-			Description: property.Description,
-			Required:    property.Required,
-		})
-	}
-	return params
 }
 
 func newShowCommand() *cobra.Command {

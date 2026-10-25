@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
 func TestNewMCPCommand(t *testing.T) {
@@ -610,7 +611,7 @@ func TestMCPShowUsesProbe(t *testing.T) {
 			{
 				Name:        "read_file",
 				Description: "Read a file from the filesystem",
-				Parameters: []paramDetail{
+				Parameters: []toolshared.SchemaProperty{
 					{Name: "path", Type: "string", Description: "File path", Required: true},
 					{Name: "encoding", Type: "string", Description: "Character encoding", Required: false},
 				},
