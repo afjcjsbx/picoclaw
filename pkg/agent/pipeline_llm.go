@@ -298,7 +298,14 @@ func (p *Pipeline) CallLLM(
 			// call would otherwise hit the same empty primary again.
 			if p.Cfg != nil {
 				if semanticErr := semanticRetryError(p.Cfg.Agents.Defaults, resp); semanticErr != nil {
-					lastUnusableResponse = resp
+					// Prefer a candidate that returned partial text over an
+					// empty one: a cut-off answer is still better than losing
+					// it to a later candidate that returned nothing.
+					if lastUnusableResponse == nil ||
+						(strings.TrimSpace(lastUnusableResponse.Content) == "" &&
+							strings.TrimSpace(resp.Content) != "") {
+						lastUnusableResponse = resp
+					}
 					return nil, &providers.FailoverError{
 						Reason:  providers.FailoverUnusable,
 						Wrapped: semanticErr,

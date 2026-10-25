@@ -445,3 +445,68 @@ func TestStreamPublishedVisible(t *testing.T) {
 		})
 	}
 }
+
+func TestPipeline_CallLLM_KeepsPartialTextWhenEveryCandidateIsUnusable(t *testing.T) {
+	tests := []struct {
+		name            string
+		primaryResponse providers.LLMResponse
+		backupResponse  providers.LLMResponse
+	}{
+		{
+			name:            "partial primary, empty backup",
+			primaryResponse: providers.LLMResponse{Content: "partial answer", FinishReason: "length"},
+			backupResponse:  providers.LLMResponse{FinishReason: "stop"},
+		},
+		{
+			name:            "empty primary, partial backup",
+			primaryResponse: providers.LLMResponse{FinishReason: "stop"},
+			backupResponse:  providers.LLMResponse{Content: "partial answer", FinishReason: "length"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			primary := &sequenceLLMProvider{responses: []providers.LLMResponse{tc.primaryResponse}}
+			backup := &sequenceLLMProvider{responses: []providers.LLMResponse{tc.backupResponse}}
+
+			al, agent, ts, cleanup := newSemanticRetryLoop(t, primary, 1)
+			defer cleanup()
+
+			primaryCandidate := providers.FallbackCandidate{
+				Provider: "test", Model: "primary-model", DisplayName: "primary-model",
+			}
+			backupCandidate := providers.FallbackCandidate{
+				Provider: "test", Model: "backup-model", DisplayName: "backup-model",
+			}
+			agent.Model = "primary-model"
+			agent.Candidates = []providers.FallbackCandidate{primaryCandidate, backupCandidate}
+			agent.CandidateProviders = map[string]providers.LLMProvider{
+				candidateProviderKey(primaryCandidate): primary,
+				candidateProviderKey(backupCandidate):  backup,
+			}
+
+			pipeline := NewPipeline(al)
+			exec, err := pipeline.SetupTurn(context.Background(), ts)
+			if err != nil {
+				t.Fatalf("SetupTurn failed: %v", err)
+			}
+			if _, err := pipeline.CallLLM(context.Background(), context.Background(), ts, exec, 1); err != nil {
+				t.Fatalf("CallLLM failed: %v", err)
+			}
+
+			if exec.finalContent != "partial answer" {
+				t.Fatalf("finalContent = %q, want the partial answer", exec.finalContent)
+			}
+			if got := ts.GetLastFinishReason(); got != "length" {
+				t.Fatalf("lastFinishReason = %q, want length", got)
+			}
+			// One initial attempt plus one retry, each running both candidates.
+			if got := primary.callCount(); got != 2 {
+				t.Fatalf("primary calls = %d, want 2", got)
+			}
+			if got := backup.callCount(); got != 2 {
+				t.Fatalf("backup calls = %d, want 2", got)
+			}
+		})
+	}
+}
