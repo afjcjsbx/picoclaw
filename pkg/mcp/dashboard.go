@@ -86,7 +86,7 @@ func BuildDashboardResponse(
 			Name:              status.Name,
 			Enabled:           globalEnabled && cfg.Enabled,
 			ConfiguredEnabled: cfg.Enabled,
-			Deferred:          effectiveDeferred(discoveryEnabled, cfg),
+			Deferred:          cfg.EffectiveDeferred(discoveryEnabled),
 			Transport:         config.EffectiveMCPTransportType(cfg),
 			Status:            state,
 			Command:           redactor.Command(cfg),
@@ -224,13 +224,6 @@ func restoreArgRedactions(incoming, existing, redactedExisting []string) []strin
 		}
 	}
 	return result
-}
-
-func effectiveDeferred(global bool, cfg config.MCPServerConfig) bool {
-	if cfg.Deferred != nil {
-		return *cfg.Deferred
-	}
-	return global
 }
 
 type serverRedactor struct {

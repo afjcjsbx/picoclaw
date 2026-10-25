@@ -95,6 +95,45 @@ func TestBuildDashboardResponseKeepsConfiguredEnabledWhenIntegrationDisabled(t *
 	}
 }
 
+func TestBuildDashboardResponseResolvesDeferredAgainstDiscovery(t *testing.T) {
+	t.Parallel()
+
+	explicitDeferred := true
+	explicitVisible := false
+	tests := []struct {
+		name             string
+		discoveryEnabled bool
+		deferred         *bool
+		want             bool
+	}{
+		{"discovery off overrides deferred true", false, &explicitDeferred, false},
+		{"discovery off keeps explicit visible", false, &explicitVisible, false},
+		{"discovery on follows deferred nil", true, nil, true},
+		{"discovery on follows deferred true", true, &explicitDeferred, true},
+		{"discovery on follows deferred false", true, &explicitVisible, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			response := BuildDashboardResponse(true, tt.discoveryEnabled, false, map[string]ServerStatus{
+				"example": {
+					Name: "example",
+					Config: config.MCPServerConfig{
+						Enabled:  true,
+						Deferred: tt.deferred,
+					},
+				},
+			})
+			if len(response.Servers) != 1 {
+				t.Fatalf("servers = %#v", response.Servers)
+			}
+			if got := response.Servers[0].Deferred; got != tt.want {
+				t.Fatalf("Deferred = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRedactAndRestoreServerConfig(t *testing.T) {
 	original := config.MCPServerConfig{
 		Enabled: true,
