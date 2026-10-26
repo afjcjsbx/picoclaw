@@ -30,6 +30,8 @@ import termios
 import threading
 import time
 
+from bench_common import phys_footprint_bytes, process_tree
+
 
 DEBUG = os.environ.get("TUI_BENCH_DEBUG") == "1"
 
@@ -50,50 +52,6 @@ def ps_field(pid, field):
         return out or None
     except Exception:
         return None
-
-
-def process_tree(pid):
-    try:
-        out = subprocess.check_output(["ps", "-axo", "pid=,ppid="], text=True, timeout=8)
-    except Exception:
-        return [pid]
-    children = {}
-    for line in out.splitlines():
-        p = line.split()
-        if len(p) != 2:
-            continue
-        children.setdefault(int(p[1]), []).append(int(p[0]))
-    seen, stack = [], [pid]
-    while stack:
-        cur = stack.pop()
-        if cur in seen:
-            continue
-        seen.append(cur)
-        stack.extend(children.get(cur, []))
-    return seen
-
-
-def phys_footprint_bytes(pid):
-    try:
-        out = subprocess.check_output(["footprint", "-p", str(pid)], text=True,
-                                      stderr=subprocess.DEVNULL, timeout=20)
-    except Exception:
-        return None
-    for line in out.splitlines():
-        line = line.strip()
-        if line.startswith("phys_footprint:"):
-            toks = line.split(":", 1)[1].strip().split()
-            if not toks:
-                continue
-            try:
-                val = float(toks[0])
-                unit = toks[1].upper() if len(toks) > 1 else "MB"
-            except Exception:
-                continue
-            mult = {"B": 1, "KB": 1024, "MB": 1024 ** 2, "GB": 1024 ** 3}.get(unit)
-            if mult:
-                return int(val * mult)
-    return None
 
 
 def run(cmd, cwd, env, rows, cols, paint_bytes, quiet_ms, settle, max_s, keys,

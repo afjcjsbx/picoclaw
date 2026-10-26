@@ -29,6 +29,8 @@ import threading
 import time
 import urllib.request
 
+from bench_common import phys_footprint_bytes, process_tree
+
 BIN = os.environ.get("PICOCLAW_BIN", "")
 
 
@@ -46,30 +48,6 @@ def ps_rss_kib(pid):
         return int(out) if out else None
     except Exception:
         return None
-
-
-def phys_footprint_bytes(pid):
-    """macOS phys_footprint (what Activity Monitor shows)."""
-    try:
-        out = subprocess.check_output(["footprint", "-p", str(pid)], text=True,
-                                      stderr=subprocess.DEVNULL)
-    except Exception:
-        return None
-    for line in out.splitlines():
-        line = line.strip()
-        if line.startswith("phys_footprint:"):
-            toks = line.split(":", 1)[1].strip().split()
-            if not toks:
-                continue
-            try:
-                val = float(toks[0])
-                unit = toks[1].upper() if len(toks) > 1 else "MB"
-            except Exception:
-                continue
-            mult = {"B": 1, "KB": 1024, "MB": 1024 ** 2, "GB": 1024 ** 3}.get(unit)
-            if mult:
-                return int(val * mult)
-    return None
 
 
 def ps_vsz_kib(pid):
@@ -94,29 +72,6 @@ def ps_cputime_seconds(pid):
     for p in parts:
         secs = secs * 60 + p
     return secs
-
-
-def process_tree(pid):
-    """Return list of pids in the process tree rooted at pid (inclusive)."""
-    try:
-        out = subprocess.check_output(["ps", "-axo", "pid=,ppid="], text=True)
-    except Exception:
-        return [pid]
-    children = {}
-    for line in out.splitlines():
-        line = line.split()
-        if len(line) != 2:
-            continue
-        cpid, ppid = int(line[0]), int(line[1])
-        children.setdefault(ppid, []).append(cpid)
-    seen, stack = [], [pid]
-    while stack:
-        cur = stack.pop()
-        if cur in seen:
-            continue
-        seen.append(cur)
-        stack.extend(children.get(cur, []))
-    return seen
 
 
 def descendants_count(pid):
