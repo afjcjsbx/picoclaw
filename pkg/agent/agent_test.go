@@ -7390,15 +7390,25 @@ func TestParallelMessageProcessing_SameSessionProcessedSequentially(t *testing.T
 		al,
 		64,
 		runtimeevents.KindAgentTurnStart,
+		runtimeevents.KindAgentTurnEnd,
 	)
 	defer closeRuntimeEvents()
 
+	// Events reach this collector asynchronously, so the provider being called
+	// does not mean the turn start was recorded yet. Events arrive in publish
+	// order, so once the first turn end is seen every turn start published
+	// before it has been recorded.
+	turnEnded := make(chan struct{})
+	var endOnce sync.Once
 	go func() {
 		for evt := range runtimeCh {
-			if evt.Kind == runtimeevents.KindAgentTurnStart {
+			switch evt.Kind {
+			case runtimeevents.KindAgentTurnStart:
 				mu.Lock()
 				turnIDs[evt.Scope.TurnID] = true
 				mu.Unlock()
+			case runtimeevents.KindAgentTurnEnd:
+				endOnce.Do(func() { close(turnEnded) })
 			}
 		}
 	}()
@@ -7447,6 +7457,12 @@ func TestParallelMessageProcessing_SameSessionProcessedSequentially(t *testing.T
 		// Turn completed successfully
 	case <-time.After(5 * time.Second):
 		t.Fatal("timeout waiting for turn to complete")
+	}
+
+	select {
+	case <-turnEnded:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for turn end event")
 	}
 
 	mu.Lock()
