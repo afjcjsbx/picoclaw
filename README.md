@@ -7,7 +7,7 @@
 
 <h3>$10 Hardware · 10–20 MB RAM · ms Boot · Let's Go, PicoClaw!</h3>
   <p>
-    <img src="https://img.shields.io/badge/Go-1.27.2+-00ADD8?style=flat&logo=go&logoColor=white" alt="Go">
+    <img src="https://img.shields.io/badge/Go-1.27.3+-00ADD8?style=flat&logo=go&logoColor=white" alt="Go">
     <img src="https://img.shields.io/badge/Arch-x86__64%2C%20ARM64%2C%20MIPS%2C%20RISC--V%2C%20LoongArch-blue" alt="Hardware">
     <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
     <br>
@@ -134,7 +134,7 @@ _*Memory use varies by build and workload. Boot speed comparison is based on 0.8
 | ------------------------------ | -------- | ------- | ------------ |
 | **Language**                   | TypeScript | Python | **Go** |
 | **RAM reference**              | [2 GB host RAM recommended](https://docs.openclaw.ai/install/fly) | [~200–600 MB reported](https://github.com/HKUDS/nanobot/issues/3410) | **10–20 MB in recent builds** |
-| **Single executable**          | No (Node.js app) | No (Python app with native TUI component) | **[41.4 MiB](docs/guides/custom-builds.md#measured-binary-sizes)** |
+| **Single executable**          | No (Node.js app) | No (Python app with native TUI component) | **[48.1 MiB](docs/guides/custom-builds.md#measured-binary-sizes)** |
 | **Boot time**</br>(0.8GHz core) | >500s | >30s | **<1s** |
 | **Cost**                       | Mac Mini $599 | Most Linux boards ~$50 | **Any Linux board**</br>**from $10** |
 
@@ -148,17 +148,17 @@ _*Memory use varies by build and workload. Boot speed comparison is based on 0.8
 
 ### ⚡ Runtime footprint
 
-Measured on an Apple M1 Max (macOS arm64, Go 1.27.2) on 2026-10-15. **First paint / ready**, **idle RSS**, and **processes** come from the scripts in [`scripts/`](scripts/); **install size** is the size of each tool's own installation (for PicoClaw, its measured full default macOS ARM64 binary, see [measured binary sizes](docs/guides/custom-builds.md#measured-binary-sizes)) and is not measured by these scripts. **First paint / ready** is the time until the interface is usable — for PicoClaw's headless core, until the gateway answers `GET /ready`. **Idle RSS** is the resident set summed across the process tree once it is idle.
+Measured on an Apple M1 Max (macOS arm64, Go 1.27.3) on 2026-10-26. **First paint / ready**, **idle RSS**, and **processes** come from the scripts in [`scripts/`](scripts/); **install size** is the size of each tool's own installation (for PicoClaw, its measured full default macOS ARM64 binary, see [measured binary sizes](docs/guides/custom-builds.md#measured-binary-sizes)) and is not measured by these scripts. **First paint / ready** is the time until the interface is usable — for PicoClaw's headless core, until the gateway answers `GET /ready`. **Idle RSS** is the resident set summed across the process tree once it is idle.
 
 | Tool | Runtime | Install size | First paint / ready | Idle RSS | Processes |
 | --- | --- | ---: | ---: | ---: | :---: |
-| **PicoClaw** (core) | Go 1.27, single static binary | **41.4 MiB** | **≈66 ms** | **36.6 MiB** | **1** |
+| **PicoClaw** (core) | Go 1.27, single static binary | **48.1 MiB** | **≈66 ms** | **37.9 MiB** | **1** |
 | Claude Code 2.1.300 | Bun-compiled TS (native binary) | 240 MiB | ≈263 ms | ≈184 MiB | 1 |
 | pi 1.2.0 | Bun-compiled TS + pi-tui | 148 MiB | ≈369 ms | ≈169 MiB | 1 |
 | OpenCode 2.0.29 | Bun + OpenTUI | 239 MiB | ≈190 ms | ≈200 MiB | 1 |
 | Hermes 0.22.1 | Python + TUI | ≈1.9 GiB | ≈3.2 s | ≈214 MiB | 2 |
 
-PicoClaw's row is its **full default** macOS ARM64 build (`goolm,stdjson`); lighter channel profiles are listed in [measured binary sizes](docs/guides/custom-builds.md#measured-binary-sizes). Its idle RSS is 36.6 MiB, with a memory footprint of **≈19 MiB** (`phys_footprint`, what Activity Monitor reports) — the metric behind the "10–20 MB" note above.
+PicoClaw's row is its **full default** macOS ARM64 build (`goolm,stdjson`); lighter channel profiles are listed in [measured binary sizes](docs/guides/custom-builds.md#measured-binary-sizes). Its idle RSS is 37.9 MiB, with a memory footprint of **≈19 MiB** (`phys_footprint`, what Activity Monitor reports) — the metric behind the "10–20 MB" note above.
 
 Unlike the other rows, PicoClaw's core ships **no full-screen TUI**, so its "first paint / ready" is the time for the gateway to become ready, not a TUI render. The other agents are interactive TUIs and their figures are single-machine medians of a few runs, so expect them to drift between releases. Reproduce the runtime columns with:
 
@@ -233,7 +233,7 @@ Download the binary for your platform from this repository's [GitHub Releases](h
 
 Prerequisites:
 
-- Go 1.27.2+
+- Go 1.27.3+
 - Node.js 22+ and pnpm 10.33.0+ for Web UI / launcher builds
 
 ```bash
@@ -277,7 +277,7 @@ make build GO_BUILD_TAGS='goolm,stdjson,custom_channels,channel_telegram,channel
 ```
 
 In the measured macOS ARM64 Telegram-only build, adding `no_seahorse` reduced
-the binary by 3.92 MiB (14.3%). See the guide for the full measurement details
+the binary by 4.00 MiB (10.0%). See the guide for the full measurement details
 and the cases where Matrix or WhatsApp Native still require SQLite.
 
 ## 🚀 Quick Start Guide
