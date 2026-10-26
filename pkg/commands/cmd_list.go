@@ -12,6 +12,7 @@ func listCommand() Definition {
 	return Definition{
 		Name:        "list",
 		Description: "List available options",
+		ReadOnly:    true,
 		SubCommands: []SubCommand{
 			{
 				Name:        "model",

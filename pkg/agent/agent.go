@@ -226,6 +226,11 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 
 				msg = al.prepareInboundMessageForAgent(ctx, msg)
 
+				// Slash commands must not be injected as plain steering text.
+				if al.tryHandleActiveTurnCommand(ctx, msg, sessionKey, agentID) {
+					continue
+				}
+
 				// Another turn is already active (or reserved) for this session — enqueue
 				if err := al.enqueueSteeringMessage(sessionKey, agentID, providers.Message{
 					Role:    "user",
