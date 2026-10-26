@@ -20,6 +20,7 @@ Example:
 import argparse
 import json
 import os
+import shutil
 import socket
 import statistics
 import subprocess
@@ -81,93 +82,100 @@ def descendants_count(pid):
 def run_once(settle, long_idle=0.0):
     port = free_port()
     d = tempfile.mkdtemp(prefix="pcbench-")
-    cfg = os.path.join(d, "config.json")
-    with open(cfg, "w") as f:
-        json.dump({"version": 1, "gateway": {"host": "127.0.0.1", "port": port, "log_level": "error"}}, f)
-    env = dict(os.environ, PICOCLAW_HOME=os.path.join(d, "home"), PICOCLAW_CONFIG=cfg)
-    log = open(os.path.join(d, "gw.log"), "w")
-
-    peak = {"rss": 0}
-    stop = threading.Event()
-
-    t0 = time.perf_counter()
-    proc = subprocess.Popen([BIN, "--no-color", "gateway", "--allow-empty"],
-                            env=env, stdout=log, stderr=subprocess.STDOUT)
-    pid = proc.pid
-
-    def sampler():
-        while not stop.is_set():
-            r = ps_rss_kib(pid)
-            if r:
-                peak["rss"] = max(peak["rss"], r)
-            time.sleep(0.005)
-
-    th = threading.Thread(target=sampler, daemon=True)
-    th.start()
-
-    url = f"http://127.0.0.1:{port}/ready"
-    ready = False
-    deadline = t0 + 60
-    while time.perf_counter() < deadline:
-        if proc.poll() is not None:
-            break
-        try:
-            with urllib.request.urlopen(url, timeout=0.5) as resp:
-                if resp.status == 200:
-                    ready = True
-                    break
-        except Exception:
-            pass
-        time.sleep(0.002)
-    t_ready = time.perf_counter()
-
-    if not ready:
-        stop.set()
-        proc.kill()
-        proc.wait()
-        log.close()
-        raise RuntimeError("gateway did not become ready; see " + os.path.join(d, "gw.log"))
-
-    cpu_ready = ps_cputime_seconds(pid)
-    rss_ready = ps_rss_kib(pid)
-    time.sleep(settle)
-    cpu_settled = ps_cputime_seconds(pid)
-    rss_idle = ps_rss_kib(pid)
-    vsz_idle = ps_vsz_kib(pid)
-    fp = phys_footprint_bytes(pid)
-    nproc = len(process_tree(pid))
-    ndesc = descendants_count(pid)
-
-    if long_idle:
-        time.sleep(long_idle)
-        rss_long = ps_rss_kib(pid)
-        cpu_long = ps_cputime_seconds(pid)
-    else:
-        rss_long = cpu_long = None
-
-    stop.set()
-    proc.terminate()
+    keep = False
+    log = None
     try:
-        proc.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait()
-    log.close()
+        cfg = os.path.join(d, "config.json")
+        with open(cfg, "w") as f:
+            json.dump({"version": 1, "gateway": {"host": "127.0.0.1", "port": port, "log_level": "error"}}, f)
+        env = dict(os.environ, PICOCLAW_HOME=os.path.join(d, "home"), PICOCLAW_CONFIG=cfg)
+        log = open(os.path.join(d, "gw.log"), "w")
 
-    return {
-        "startup_ms": (t_ready - t0) * 1000.0,
-        "peak_rss_kib": peak["rss"],
-        "rss_ready_kib": rss_ready,
-        "rss_idle_kib": rss_idle,
-        "vsz_idle_kib": vsz_idle,
-        "footprint_idle_bytes": fp,
-        "cpu_ready_s": cpu_ready,
-        "cpu_settled_s": cpu_settled,
-        "rss_long_kib": rss_long,
-        "cpu_long_s": cpu_long,
-        "processes": nproc,
-        "descendants": ndesc,
-    }
+        peak = {"rss": 0}
+        stop = threading.Event()
+
+        t0 = time.perf_counter()
+        proc = subprocess.Popen([BIN, "--no-color", "gateway", "--allow-empty"],
+                                env=env, stdout=log, stderr=subprocess.STDOUT)
+        pid = proc.pid
+
+        def sampler():
+            while not stop.is_set():
+                r = ps_rss_kib(pid)
+                if r:
+                    peak["rss"] = max(peak["rss"], r)
+                time.sleep(0.005)
+
+        th = threading.Thread(target=sampler, daemon=True)
+        th.start()
+
+        url = f"http://127.0.0.1:{port}/ready"
+        ready = False
+        deadline = t0 + 60
+        while time.perf_counter() < deadline:
+            if proc.poll() is not None:
+                break
+            try:
+                with urllib.request.urlopen(url, timeout=0.5) as resp:
+                    if resp.status == 200:
+                        ready = True
+                        break
+            except Exception:
+                pass
+            time.sleep(0.002)
+        t_ready = time.perf_counter()
+
+        if not ready:
+            stop.set()
+            proc.kill()
+            proc.wait()
+            keep = True
+            raise RuntimeError("gateway did not become ready; see " + os.path.join(d, "gw.log"))
+
+        cpu_ready = ps_cputime_seconds(pid)
+        rss_ready = ps_rss_kib(pid)
+        time.sleep(settle)
+        cpu_settled = ps_cputime_seconds(pid)
+        rss_idle = ps_rss_kib(pid)
+        vsz_idle = ps_vsz_kib(pid)
+        fp = phys_footprint_bytes(pid)
+        nproc = len(process_tree(pid))
+        ndesc = descendants_count(pid)
+
+        if long_idle:
+            time.sleep(long_idle)
+            rss_long = ps_rss_kib(pid)
+            cpu_long = ps_cputime_seconds(pid)
+        else:
+            rss_long = cpu_long = None
+
+        stop.set()
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+
+        return {
+            "startup_ms": (t_ready - t0) * 1000.0,
+            "peak_rss_kib": peak["rss"],
+            "rss_ready_kib": rss_ready,
+            "rss_idle_kib": rss_idle,
+            "vsz_idle_kib": vsz_idle,
+            "footprint_idle_bytes": fp,
+            "cpu_ready_s": cpu_ready,
+            "cpu_settled_s": cpu_settled,
+            "rss_long_kib": rss_long,
+            "cpu_long_s": cpu_long,
+            "processes": nproc,
+            "descendants": ndesc,
+        }
+    finally:
+        if log is not None:
+            log.close()
+        if not keep:
+            shutil.rmtree(d, ignore_errors=True)
 
 
 def cli_coldstart(n, args):
