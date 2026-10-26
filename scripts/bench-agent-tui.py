@@ -156,7 +156,7 @@ def run(cmd, cwd, env, rows, cols, paint_bytes, quiet_ms, settle, max_s, keys,
     def shutdown():
         if proc.poll() is not None:
             return
-        for sig in (signal.SIGTERM, signal.SIGKILL, signal.SIGKILL):
+        for sig in (signal.SIGTERM, signal.SIGKILL):
             try:
                 os.killpg(os.getpgid(proc.pid), sig)
             except Exception:
