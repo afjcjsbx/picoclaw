@@ -135,6 +135,11 @@ type turnExecution struct {
 	activeProvider    providers.LLMProvider
 	usedLight         bool
 
+	// Mid-turn routing guards. toolIterationStreak counts consecutive
+	// light-model responses that requested tools.
+	toolIterationStreak int
+	escalatedToPrimary  bool
+
 	// LLM call per-iteration state
 	response            *providers.LLMResponse
 	normalizedToolCalls []providers.ToolCall
@@ -230,7 +235,10 @@ type turnState struct {
 
 	restorePointHistory []providers.Message
 	restorePointSummary string
-	persistedMessages   []providers.Message
+	// restoreSummaryPinned freezes restorePointSummary once the session summary
+	// holds part of this turn, so a rollback does not keep the aborted work.
+	restoreSummaryPinned bool
+	persistedMessages    []providers.Message
 
 	// SubTurn support (from HEAD)
 	depth                int                    // SubTurn depth (0 for root turn)
@@ -276,9 +284,11 @@ type turnState struct {
 
 func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScope) *turnState {
 	// Cron origin survives in SenderID when a scheduled turn spawns a subturn.
-	// The session key also identifies a scheduled root turn if sender metadata is absent.
+	// The session key also identifies a scheduled root turn if sender metadata is absent;
+	// with a real sender it is a user continuing a cron session, who keeps the tool.
+	senderID := opts.Dispatch.SenderID()
 	if agent != nil && agent.Tools != nil &&
-		(opts.Dispatch.SenderID() == "cron" || strings.HasPrefix(opts.Dispatch.SessionKey, "agent:cron-")) {
+		(senderID == "cron" || (senderID == "" && strings.HasPrefix(opts.Dispatch.SessionKey, cronSessionKeyPrefix))) {
 		cronAgent := *agent
 		cronAgent.Tools = agent.Tools.CloneWithout("cron")
 		agent = &cronAgent
@@ -719,13 +729,34 @@ func (ts *turnState) captureRestorePoint(history []providers.Message, summary st
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	ts.restorePointHistory = append([]providers.Message(nil), history...)
-	ts.restorePointSummary = summary
+	if !ts.restoreSummaryPinned {
+		ts.restorePointSummary = summary
+	}
+}
+
+// pinRestoreSummary sets the summary a rollback restores to summary, the last
+// one free of this turn, and keeps it there for the rest of the turn.
+func (ts *turnState) pinRestoreSummary(summary string) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if !ts.restoreSummaryPinned {
+		ts.restorePointSummary = summary
+		ts.restoreSummaryPinned = true
+	}
 }
 
 func (ts *turnState) recordPersistedMessage(msg providers.Message) {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	ts.persistedMessages = append(ts.persistedMessages, msg)
+}
+
+// replacePersistedMessages rewrites the turn's persisted-message record after
+// compaction replaced part of the turn in the session.
+func (ts *turnState) replacePersistedMessages(msgs []providers.Message) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.persistedMessages = append([]providers.Message(nil), msgs...)
 }
 
 func (ts *turnState) persistedMessagesSnapshot() []providers.Message {
@@ -755,6 +786,17 @@ func (ts *turnState) refreshRestorePointFromSession(agent *AgentInstance) {
 	}
 
 	ts.captureRestorePoint(history, summary)
+	// Compaction may have shrunk the history that precedes this turn; a hard
+	// abort rolls the session back to exactly that length.
+	ts.mu.Lock()
+	ts.initialHistoryLength = len(history)
+	ts.mu.Unlock()
+}
+
+func (ts *turnState) initialHistoryLen() int {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return ts.initialHistoryLength
 }
 
 // ingestMessage calls the ContextManager's Ingest method for a persisted message.
@@ -836,6 +878,9 @@ func normalizeMessageForComparison(msg providers.Message) providers.Message {
 	msg.PromptLayer = ""
 	msg.PromptSlot = ""
 	msg.PromptSource = ""
+	// The session store stamps CreatedAt on what it keeps; the turn's own record
+	// of the same message has none.
+	msg.CreatedAt = nil
 
 	if len(msg.Media) == 0 {
 		msg.Media = nil

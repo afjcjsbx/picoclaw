@@ -64,11 +64,7 @@ const (
 
 // Pre-compiled regexes for HTML text extraction
 var (
-	reScript     = regexp.MustCompile(`<script[\s\S]*?</script>`)
-	reStyle      = regexp.MustCompile(`<style[\s\S]*?</style>`)
-	reTags       = regexp.MustCompile(`<[^>]+>`)
-	reWhitespace = regexp.MustCompile(`[^\S\n]+`)
-	reBlankLines = regexp.MustCompile(`\n{3,}`)
+	reTags = regexp.MustCompile(`<[^>]+>`)
 
 	// DuckDuckGo result extraction
 	reDDGLink = regexp.MustCompile(
@@ -2463,21 +2459,17 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 
 	switch {
 	case mediaType == "application/json":
-		var jsonData any
-		if err := json.Unmarshal(body, &jsonData); err != nil {
+		// json.Indent validates and formats the document without building an
+		// interface{} tree, so a large payload does not pay reflection and
+		// per-value allocations just to be re-marshaled.
+		var formatted bytes.Buffer
+		if err := json.Indent(&formatted, body, "", "  "); err != nil {
 			text = bodyStr
 			extractor = "raw"
 			break
 		}
 
-		formatted, err := json.MarshalIndent(jsonData, "", "  ")
-		if err != nil {
-			text = bodyStr
-			extractor = "raw"
-			break
-		}
-
-		text = string(formatted)
+		text = formatted.String()
 		extractor = "json"
 
 	case mediaType == "text/html" || looksLikeHTML(bodyStr):
@@ -2536,34 +2528,122 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 }
 
 func looksLikeHTML(body string) bool {
-	if body == "" {
-		return false
-	}
+	// Only the first tag matters, so compare a short prefix case-insensitively
+	// instead of lowercasing the whole (possibly 10 MiB) response body.
+	return hasHTMLPrefixFold(body, "<!doctype") || hasHTMLPrefixFold(body, "<html")
+}
 
-	lower := strings.ToLower(body)
-
-	return strings.HasPrefix(body, "<!doctype") ||
-		strings.HasPrefix(lower, "<html")
+func hasHTMLPrefixFold(body, prefix string) bool {
+	return len(body) >= len(prefix) && strings.EqualFold(body[:len(prefix)], prefix)
 }
 
 func (t *WebFetchTool) extractText(htmlContent string) string {
-	result := reScript.ReplaceAllLiteralString(htmlContent, "")
-	result = reStyle.ReplaceAllLiteralString(result, "")
-	result = reTags.ReplaceAllLiteralString(result, "")
+	// One tokenizer pass over the document drops script/style bodies and tags
+	// while collapsing horizontal whitespace, instead of running five regexps
+	// that each allocate a full-size copy of the input.
+	out := make([]byte, 0, len(htmlContent))
+	lastSpace := false
+	appendText := func(segment string) {
+		for i := 0; i < len(segment); i++ {
+			c := segment[i]
+			switch {
+			case c == '\n':
+				out = append(out, '\n')
+				lastSpace = false
+			case c == ' ' || c == '\t' || c == '\r' || c == '\v' || c == '\f':
+				if !lastSpace {
+					out = append(out, ' ')
+					lastSpace = true
+				}
+			default:
+				out = append(out, c)
+				lastSpace = false
+			}
+		}
+	}
 
-	result = strings.TrimSpace(result)
+	// A failed closing-tag lookup means no such closing tag exists anywhere in
+	// the rest of the document, so remember it and never rescan the suffix for
+	// the same element. Without this, a document full of unclosed <script>
+	// tags turns the walk quadratic.
+	noScriptClose := false
+	noStyleClose := false
 
-	result = reWhitespace.ReplaceAllString(result, " ")
-	result = reBlankLines.ReplaceAllString(result, "\n\n")
+	for i := 0; i < len(htmlContent); {
+		if htmlContent[i] != '<' {
+			j := i + 1
+			for j < len(htmlContent) && htmlContent[j] != '<' {
+				j++
+			}
+			appendText(htmlContent[i:j])
+			i = j
+			continue
+		}
+		if !noScriptClose && hasTagPrefixFold(htmlContent[i:], "script") {
+			if end := indexClosingTag(htmlContent[i:], "script"); end >= 0 {
+				i += end + len("</script>")
+				continue
+			}
+			noScriptClose = true
+		}
+		if !noStyleClose && hasTagPrefixFold(htmlContent[i:], "style") {
+			if end := indexClosingTag(htmlContent[i:], "style"); end >= 0 {
+				i += end + len("</style>")
+				continue
+			}
+			noStyleClose = true
+		}
+		closing := strings.IndexByte(htmlContent[i:], '>')
+		if closing < 0 {
+			appendText(htmlContent[i:])
+			break
+		}
+		if closing == 1 {
+			// "<>" has no tag name, so the original <[^>]+> kept it as text.
+			appendText("<")
+			i++
+			continue
+		}
+		i += closing + 1
+	}
 
-	lines := strings.Split(result, "\n")
-	var cleanLines []string
+	trimmed := strings.TrimSpace(string(out))
+
+	lines := strings.Split(trimmed, "\n")
+	cleanLines := make([]string, 0, len(lines))
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line != "" {
 			cleanLines = append(cleanLines, line)
 		}
 	}
-
 	return strings.Join(cleanLines, "\n")
+}
+
+// hasTagPrefixFold reports whether s starts with "<name" followed by a tag
+// delimiter, without allocating a lowercased copy.
+func hasTagPrefixFold(s, name string) bool {
+	if len(s) < len(name)+2 || s[0] != '<' || !strings.EqualFold(s[1:1+len(name)], name) {
+		return false
+	}
+	switch s[1+len(name)] {
+	case ' ', '\t', '\r', '\n', '>', '/':
+		return true
+	default:
+		return false
+	}
+}
+
+// indexClosingTag returns the offset of "</name>" in s, or -1 when absent.
+func indexClosingTag(s, name string) int {
+	needleLen := len(name) + 3
+	for i := 0; i+needleLen <= len(s); i++ {
+		if s[i] != '<' || s[i+1] != '/' {
+			continue
+		}
+		if strings.EqualFold(s[i+2:i+2+len(name)], name) && s[i+2+len(name)] == '>' {
+			return i
+		}
+	}
+	return -1
 }

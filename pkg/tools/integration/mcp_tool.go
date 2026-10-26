@@ -2,7 +2,6 @@ package integrationtools
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -136,67 +135,12 @@ func (t *MCPTool) PromptMetadata() toolshared.PromptMetadata {
 
 // Parameters returns the tool parameters schema
 func (t *MCPTool) Parameters() map[string]any {
-	// The InputSchema is already a JSON Schema object
-	schema := t.tool.InputSchema
-
-	// Handle nil schema
-	if schema == nil {
-		return map[string]any{
-			"type":       "object",
-			"properties": map[string]any{},
-			"required":   []string{},
-		}
+	// The InputSchema is a JSON Schema object exposed by the server.
+	schema := toolshared.SchemaMap(t.tool.InputSchema)
+	if len(schema) == 0 {
+		return toolshared.EmptyObjectSchema()
 	}
-
-	// Try direct conversion first (fast path)
-	if schemaMap, ok := schema.(map[string]any); ok {
-		return schemaMap
-	}
-
-	// Handle json.RawMessage and []byte - unmarshal directly
-	var jsonData []byte
-	if rawMsg, ok := schema.(json.RawMessage); ok {
-		jsonData = rawMsg
-	} else if bytes, ok := schema.([]byte); ok {
-		jsonData = bytes
-	}
-
-	if jsonData != nil {
-		var result map[string]any
-		if err := json.Unmarshal(jsonData, &result); err == nil {
-			return result
-		}
-		// Fallback on error
-		return map[string]any{
-			"type":       "object",
-			"properties": map[string]any{},
-			"required":   []string{},
-		}
-	}
-
-	// For other types (structs, etc.), convert via JSON marshal/unmarshal
-	var err error
-	jsonData, err = json.Marshal(schema)
-	if err != nil {
-		// Fallback to empty schema if marshaling fails
-		return map[string]any{
-			"type":       "object",
-			"properties": map[string]any{},
-			"required":   []string{},
-		}
-	}
-
-	var result map[string]any
-	if err := json.Unmarshal(jsonData, &result); err != nil {
-		// Fallback to empty schema if unmarshaling fails
-		return map[string]any{
-			"type":       "object",
-			"properties": map[string]any{},
-			"required":   []string{},
-		}
-	}
-
-	return result
+	return schema
 }
 
 // Execute executes the MCP tool

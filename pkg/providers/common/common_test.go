@@ -44,8 +44,18 @@ func TestNewHTTPClient_WithProxy(t *testing.T) {
 
 func TestNewHTTPClient_NoProxy(t *testing.T) {
 	client := NewHTTPClient("")
-	if client.Transport != nil {
-		t.Errorf("expected nil transport without proxy, got %T", client.Transport)
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok || transport == nil {
+		t.Fatalf("expected bounded http.Transport without proxy, got %T", client.Transport)
+	}
+	if transport.MaxIdleConns != 4 {
+		t.Errorf("MaxIdleConns = %d, want 4", transport.MaxIdleConns)
+	}
+	if transport.MaxIdleConnsPerHost != 2 {
+		t.Errorf("MaxIdleConnsPerHost = %d, want 2", transport.MaxIdleConnsPerHost)
+	}
+	if transport.IdleConnTimeout != 30*time.Second {
+		t.Errorf("IdleConnTimeout = %v, want 30s", transport.IdleConnTimeout)
 	}
 }
 

@@ -20,7 +20,7 @@ This is the documentation home. For the project overview, feature comparison, re
 | [Reference](reference/README.md) | CLI, tools, MCP, cron, gateway API, config versioning, rate limiting |
 | [Operations](operations/README.md) | Troubleshooting and debugging |
 | [Security](security/README.md) | Hardening, credentials, sensitive data, provider auth |
-| [Architecture](architecture/README.md) | Runtime internals: sessions, routing, events, hooks, steering, sub-turns |
+| [Architecture](architecture/README.md) | Runtime internals: sessions, Seahorse memory, routing, events, hooks, steering, sub-turns |
 | [Channels](guides/chat-apps.md) | Per-platform chat setup guides (`channels/<name>/README.md`) |
 | [Tools](tools/README.md) | Documentation for every tool family, with switches and parameters |
 | [Design Notes](design/README.md) | Proposals and investigations |

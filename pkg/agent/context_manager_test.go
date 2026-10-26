@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
+	"github.com/sipeed/picoclaw/pkg/channels"
 	"github.com/sipeed/picoclaw/pkg/config"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/providers"
@@ -440,6 +441,9 @@ func TestLegacyCompact_Overflow_ProactiveReason(t *testing.T) {
 	if !ok {
 		t.Fatal("expected context compress event")
 	}
+	if compressEvt.Scope.AgentID != defaultAgent.ID {
+		t.Fatalf("event agent = %q, want %q", compressEvt.Scope.AgentID, defaultAgent.ID)
+	}
 	payload, ok := compressEvt.Payload.(ContextCompressPayload)
 	if !ok {
 		t.Fatalf("expected ContextCompressPayload, got %T", compressEvt.Payload)
@@ -487,7 +491,7 @@ func TestLegacyCompact_Overflow_TooShortToCompress(t *testing.T) {
 // Legacy Compact post-turn tests
 // ---------------------------------------------------------------------------
 
-func TestLegacyCompact_PostTurn_BelowThreshold(t *testing.T) {
+func TestLegacyCompact_Threshold_NothingToSummarize(t *testing.T) {
 	cfg := testConfig(t)
 	al := newCMTestAgentLoop(cfg)
 
@@ -496,7 +500,6 @@ func TestLegacyCompact_PostTurn_BelowThreshold(t *testing.T) {
 		t.Fatal("expected default agent")
 	}
 
-	// Small history, below summarization thresholds
 	history := []providers.Message{
 		{Role: "user", Content: "hi"},
 		{Role: "assistant", Content: "hello"},
@@ -507,13 +510,12 @@ func TestLegacyCompact_PostTurn_BelowThreshold(t *testing.T) {
 
 	err := al.contextManager.Compact(context.Background(), &CompactRequest{
 		SessionKey: "session-small",
-		Reason:     ContextCompressReasonSummarize,
+		Reason:     ContextCompressReasonThreshold,
 	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if !errors.Is(err, ErrNothingToCompact) {
+		t.Fatalf("err = %v, want ErrNothingToCompact", err)
 	}
 
-	// History should remain unchanged
 	newHistory, err := defaultAgent.Sessions.GetHistory(context.Background(), "session-small")
 	if err != nil {
 		t.Fatalf("GetHistory: %v", err)
@@ -523,67 +525,160 @@ func TestLegacyCompact_PostTurn_BelowThreshold(t *testing.T) {
 	}
 }
 
-func TestLegacyCompact_PostTurn_ExceedsMessageThreshold(t *testing.T) {
+func newSummarizeThresholdAgentLoop(t *testing.T, contextWindow int) *AgentLoop {
+	t.Helper()
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:                 t.TempDir(),
-				ModelName:                 "test-model",
-				MaxTokens:                 4096,
-				MaxToolIterations:         10,
-				ContextWindow:             8000,
-				SummarizeMessageThreshold: 2,
-				SummarizeTokenPercent:     75,
+				Workspace:             t.TempDir(),
+				ModelName:             "test-model",
+				MaxTokens:             4096,
+				MaxToolIterations:     10,
+				ContextWindow:         contextWindow,
+				SummarizeTokenPercent: 75,
 			},
 		},
 	}
-	msgBus := bus.NewMessageBus()
-	al := NewAgentLoop(cfg, msgBus, &simpleMockProvider{response: "summary"})
+	return NewAgentLoop(cfg, bus.NewMessageBus(), &simpleMockProvider{response: "summary"})
+}
 
+func alternatingHistory(turns int, content string) []providers.Message {
+	history := make([]providers.Message, 0, turns*2)
+	for i := 0; i < turns; i++ {
+		history = append(history,
+			providers.Message{Role: "user", Content: content},
+			providers.Message{Role: "assistant", Content: content},
+		)
+	}
+	return history
+}
+
+func TestLegacyCompact_Threshold_SummarizesSynchronously(t *testing.T) {
+	al := newSummarizeThresholdAgentLoop(t, 8000)
 	defaultAgent := al.registry.GetDefaultAgent()
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
 
-	// 6 messages > threshold of 2
-	history := []providers.Message{
-		{Role: "user", Content: "q1"},
-		{Role: "assistant", Content: "a1"},
-		{Role: "user", Content: "q2"},
-		{Role: "assistant", Content: "a2"},
-		{Role: "user", Content: "q3"},
-		{Role: "assistant", Content: "a3"},
-	}
+	history := alternatingHistory(3, strings.Repeat("x", 2000))
 	if err := defaultAgent.Sessions.SetHistory(context.Background(), "session-threshold", history); err != nil {
 		t.Fatalf("SetHistory: %v", err)
 	}
 
-	runtimeCh, closeRuntimeEvents := subscribeRuntimeEventsForTest(
-		t,
-		al,
-		16,
-		runtimeevents.KindAgentSessionSummarize,
-	)
-	defer closeRuntimeEvents()
-
 	err := al.contextManager.Compact(context.Background(), &CompactRequest{
 		SessionKey: "session-threshold",
-		Reason:     ContextCompressReasonSummarize,
+		Reason:     ContextCompressReasonThreshold,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	waitForRuntimeEvent(t, runtimeCh, 5*time.Second, func(evt runtimeevents.Event) bool {
-		return evt.Kind == runtimeevents.KindAgentSessionSummarize
-	})
-
+	// No waiting: the session is already compacted when Compact returns.
 	newHistory, err := defaultAgent.Sessions.GetHistory(context.Background(), "session-threshold")
 	if err != nil {
 		t.Fatalf("GetHistory: %v", err)
 	}
 	if len(newHistory) >= len(history) {
 		t.Fatalf("expected summarization to reduce history from %d messages, got %d", len(history), len(newHistory))
+	}
+	summary, err := defaultAgent.Sessions.GetSummary(context.Background(), "session-threshold")
+	if err != nil {
+		t.Fatalf("GetSummary: %v", err)
+	}
+	if summary != "summary" {
+		t.Fatalf("summary = %q, want %q", summary, "summary")
+	}
+}
+
+// With nothing older than the active turn to summarize, the threshold path
+// clears old tool outputs instead, and reports a clean session as nothing to do.
+func TestLegacyCompact_Threshold_PrunesToolOutputsOfSingleTurn(t *testing.T) {
+	al := newSummarizeThresholdAgentLoop(t, 8000)
+	defaultAgent := al.registry.GetDefaultAgent()
+	if defaultAgent == nil {
+		t.Fatal("expected default agent")
+	}
+
+	bulky := strings.Repeat("z", 500)
+	history := []providers.Message{
+		{Role: "user", Content: "do the thing"},
+		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "c1", Name: "t"}}},
+		{Role: "tool", ToolCallID: "c1", Content: bulky},
+		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "c2", Name: "t"}}},
+		{Role: "tool", ToolCallID: "c2", Content: bulky},
+		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "c3", Name: "t"}}},
+		{Role: "tool", ToolCallID: "c3", Content: bulky},
+	}
+	if err := defaultAgent.Sessions.SetHistory(context.Background(), "session-single-turn", history); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
+
+	req := &CompactRequest{SessionKey: "session-single-turn", Reason: ContextCompressReasonThreshold}
+	if err := al.contextManager.Compact(context.Background(), req); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got, err := defaultAgent.Sessions.GetHistory(context.Background(), "session-single-turn")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if len(got) != len(history) {
+		t.Fatalf("messages = %d, want %d (pruning must not drop messages)", len(got), len(history))
+	}
+	if got[2].Content != prunedToolResult {
+		t.Fatalf("old tool output = %q, want it cleared", got[2].Content)
+	}
+	if got[6].Content != bulky {
+		t.Fatalf("recent tool output must be kept, got %q", got[6].Content)
+	}
+
+	if err := al.contextManager.Compact(context.Background(), req); !errors.Is(err, ErrNothingToCompact) {
+		t.Fatalf("second compaction err = %v, want ErrNothingToCompact", err)
+	}
+}
+
+// Legacy no longer summarizes after the turn: the post-turn call is a no-op and
+// the work happens synchronously before the next LLM call.
+func TestLegacyCompact_PostTurnSummarizeIsNoOp(t *testing.T) {
+	al := newSummarizeThresholdAgentLoop(t, 8000)
+	defaultAgent := al.registry.GetDefaultAgent()
+	if defaultAgent == nil {
+		t.Fatal("expected default agent")
+	}
+
+	history := alternatingHistory(3, strings.Repeat("x", 2000))
+	if err := defaultAgent.Sessions.SetHistory(context.Background(), "session-post-turn", history); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
+
+	err := al.contextManager.Compact(context.Background(), &CompactRequest{
+		SessionKey: "session-post-turn",
+		Reason:     ContextCompressReasonSummarize,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	newHistory, err := defaultAgent.Sessions.GetHistory(context.Background(), "session-post-turn")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if len(newHistory) != len(history) {
+		t.Fatalf("expected history unchanged, got %d messages (was %d)", len(newHistory), len(history))
+	}
+}
+
+func TestComputeContextUsage_SummarizeAtIsPercentOfUsableWindow(t *testing.T) {
+	al := newSummarizeThresholdAgentLoop(t, 8000)
+	usage := computeContextUsage(al.registry.GetDefaultAgent(), "session-usage")
+	if usage == nil {
+		t.Fatal("expected usage")
+	}
+	if usage.CompressAtTokens != 8000-4096 {
+		t.Fatalf("CompressAtTokens = %d, want %d", usage.CompressAtTokens, 8000-4096)
+	}
+	if want := usage.CompressAtTokens * 75 / 100; usage.SummarizeAtTokens != want {
+		t.Fatalf("SummarizeAtTokens = %d, want %d", usage.SummarizeAtTokens, want)
 	}
 }
 
@@ -963,6 +1058,12 @@ func TestContextFeedback_PublishedWhenToolFeedbackEnabled(t *testing.T) {
 		}
 		if out.Context.Raw[metadataKeyMessageKind] != messageKindToolFeedback {
 			t.Fatalf("kind = %q, want %q", out.Context.Raw[metadataKeyMessageKind], messageKindToolFeedback)
+		}
+		if out.Context.Raw[channels.ToolFeedbackTerminalKey] != "true" {
+			t.Fatalf(
+				"terminal flag = %q, want true: context notices must not seed reusable progress cards",
+				out.Context.Raw[channels.ToolFeedbackTerminalKey],
+			)
 		}
 		if out.Content != "notice" {
 			t.Fatalf("content = %q, want %q", out.Content, "notice")

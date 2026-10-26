@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
@@ -47,7 +48,11 @@ func newSeahorseContextManager(_ json.RawMessage, al *AgentLoop) (ContextManager
 	dbPath := agent.Workspace + "/sessions/seahorse.db"
 
 	// Create CompleteFn from provider
-	completeFn := providerToCompleteFn(agent.Provider, agent.Model)
+	completeFn := providerToCompleteFn(
+		agent.Provider,
+		resolvedCandidateModel(agent.Candidates, agent.Model),
+		llmRetryFromConfig(al.cfg),
+	)
 
 	// Create engine
 	engine, err := seahorse.NewEngine(seahorse.Config{
@@ -205,11 +210,14 @@ func (m *seahorseContextManager) Close() error {
 	return m.closeErr
 }
 
-// providerToCompleteFn wraps providers.LLMProvider as a seahorse.CompleteFn.
-func providerToCompleteFn(provider providers.LLMProvider, model string) seahorse.CompleteFn {
+// providerToCompleteFn wraps providers.LLMProvider as a seahorse.CompleteFn. A
+// transient upstream failure is retried with backoff, since seahorse does not
+// retry a failed summarization itself.
+func providerToCompleteFn(provider providers.LLMProvider, model string, retry llmRetry) seahorse.CompleteFn {
 	return func(ctx context.Context, prompt string, opts seahorse.CompleteOptions) (string, error) {
-		resp, err := provider.Chat(
+		resp, err := chatRetryingTransient(
 			ctx,
+			provider,
 			[]providers.Message{{Role: "user", Content: prompt}},
 			nil, // no tools for summarization
 			model,
@@ -218,6 +226,7 @@ func providerToCompleteFn(provider providers.LLMProvider, model string) seahorse
 				"temperature":      opts.Temperature,
 				"prompt_cache_key": "seahorse",
 			},
+			retry,
 		)
 		if err != nil {
 			return "", err
@@ -253,6 +262,10 @@ func (m *seahorseContextManager) Assemble(ctx context.Context, req *AssembleRequ
 	if err != nil {
 		return nil, fmt.Errorf("seahorse assemble: %w", err)
 	}
+	if result == nil {
+		// The engine returns nil for ignored session patterns (heartbeat).
+		return &AssembleResponse{}, nil
+	}
 
 	history := seahorseToProviderMessages(result)
 
@@ -277,6 +290,7 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 		if result.LeafSummaries+result.CondensedSummaries == 0 {
 			return ErrNothingToCompact
 		}
+		m.notifyCompaction(ctx, req, result)
 		return nil
 	}
 
@@ -298,12 +312,15 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 		return err
 	}
 	m.notifyCompaction(ctx, req, result)
+	if req.Reason == ContextCompressReasonThreshold &&
+		(result == nil || result.LeafSummaries+result.CondensedSummaries == 0) {
+		return ErrNothingToCompact
+	}
 	return nil
 }
 
-// notifyCompaction reports a summarization/compaction notice to the session's
-// channel when seahorse actually created summaries. It is a no-op unless tool
-// feedback is enabled (enforced by notifyContextFeedback).
+// notifyCompaction emits the summarization runtime event and reports a notice
+// to the session's channel when seahorse actually created summaries.
 func (m *seahorseContextManager) notifyCompaction(
 	ctx context.Context,
 	req *CompactRequest,
@@ -315,6 +332,17 @@ func (m *seahorseContextManager) notifyCompaction(
 	if result.LeafSummaries+result.CondensedSummaries <= 0 {
 		return
 	}
+	m.al.emitEvent(
+		runtimeevents.KindAgentSessionSummarize,
+		m.al.newTurnEventScope(
+			m.al.eventAgentIDForSession(ctx, req.SessionKey),
+			req.SessionKey,
+			nil,
+		).meta(0, "seahorseCompact", "turn.session.summarize"),
+		SessionSummarizePayload{
+			SummarizedMessages: result.LeafSummaries + result.CondensedSummaries,
+		},
+	)
 	content := formatContextSummaryCounts(result.LeafSummaries, result.CondensedSummaries)
 	m.al.notifyContextFeedbackFromCtx(ctx, req.SessionKey, content)
 }

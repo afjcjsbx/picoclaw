@@ -335,11 +335,19 @@ func (hm *HookManager) BeforeLLM(ctx context.Context, req *LLMHookRequest) (*LLM
 		return req, HookDecision{Action: HookActionContinue}
 	}
 
-	current := req.Clone()
-	for _, reg := range hm.snapshotHooks() {
+	hooks := hm.snapshotHooks()
+	if len(hooks) == 0 {
+		return req, HookDecision{Action: HookActionContinue}
+	}
+
+	var current *LLMHookRequest
+	for _, reg := range hooks {
 		interceptor, ok := reg.Hook.(LLMInterceptor)
 		if !ok {
 			continue
+		}
+		if current == nil {
+			current = req.Clone()
 		}
 
 		next, decision, ok := hm.callBeforeLLM(ctx, reg.Name, interceptor, current.Clone())
@@ -359,6 +367,9 @@ func (hm *HookManager) BeforeLLM(ctx context.Context, req *LLMHookRequest) (*LLM
 			hm.logUnsupportedAction(reg.Name, "before_llm", decision.Action)
 		}
 	}
+	if current == nil {
+		return req, HookDecision{Action: HookActionContinue}
+	}
 	return current, HookDecision{Action: HookActionContinue}
 }
 
@@ -367,27 +378,54 @@ func (hm *HookManager) AfterLLM(ctx context.Context, resp *LLMHookResponse) (*LL
 		return resp, HookDecision{Action: HookActionContinue}
 	}
 
-	current := resp.Clone()
-	for _, reg := range hm.snapshotHooks() {
-		interceptor, ok := reg.Hook.(LLMInterceptor)
-		if !ok {
-			continue
-		}
+	return runAfterHooks(
+		hm.snapshotHooks(),
+		resp,
+		(*LLMHookResponse).Clone,
+		func(v *LLMHookResponse) bool { return v == nil },
+		func(reg HookRegistration, current *LLMHookResponse) (*LLMHookResponse, HookDecision, bool) {
+			interceptor, ok := reg.Hook.(LLMInterceptor)
+			if !ok {
+				return nil, HookDecision{}, false
+			}
+			return hm.callAfterLLM(ctx, reg.Name, interceptor, current.Clone())
+		},
+		"after_llm",
+		hm.logUnsupportedAction,
+	)
+}
 
-		next, decision, ok := hm.callAfterLLM(ctx, reg.Name, interceptor, current.Clone())
+// runAfterHooks applies after-stage interceptors in order. It clones the
+// original value only when at least one hook is mounted.
+func runAfterHooks[T any](
+	hooks []HookRegistration,
+	original T,
+	clone func(T) T,
+	isNil func(T) bool,
+	run func(reg HookRegistration, current T) (T, HookDecision, bool),
+	stage string,
+	logUnsupported func(name, stage string, action HookAction),
+) (T, HookDecision) {
+	if len(hooks) == 0 {
+		return original, HookDecision{Action: HookActionContinue}
+	}
+
+	current := clone(original)
+	for _, reg := range hooks {
+		next, decision, ok := run(reg, current)
 		if !ok {
 			continue
 		}
 
 		switch decision.normalizedAction() {
 		case HookActionContinue, HookActionModify:
-			if next != nil {
+			if !isNil(next) {
 				current = next
 			}
 		case HookActionAbortTurn, HookActionHardAbort:
 			return current, decision
 		default:
-			hm.logUnsupportedAction(reg.Name, "after_llm", decision.Action)
+			logUnsupported(reg.Name, stage, decision.Action)
 		}
 	}
 	return current, HookDecision{Action: HookActionContinue}
@@ -523,11 +561,19 @@ func (hm *HookManager) BeforeTool(
 		return call, HookDecision{Action: HookActionContinue}
 	}
 
-	current := call.Clone()
-	for _, reg := range hm.snapshotHooks() {
+	hooks := hm.snapshotHooks()
+	if len(hooks) == 0 {
+		return call, HookDecision{Action: HookActionContinue}
+	}
+
+	var current *ToolCallHookRequest
+	for _, reg := range hooks {
 		interceptor, ok := reg.Hook.(ToolInterceptor)
 		if !ok {
 			continue
+		}
+		if current == nil {
+			current = call.Clone()
 		}
 
 		next, decision, ok := hm.callBeforeTool(ctx, reg.Name, interceptor, current.Clone())
@@ -550,6 +596,9 @@ func (hm *HookManager) BeforeTool(
 			hm.logUnsupportedAction(reg.Name, "before_tool", decision.Action)
 		}
 	}
+	if current == nil {
+		return call, HookDecision{Action: HookActionContinue}
+	}
 	return current, HookDecision{Action: HookActionContinue}
 }
 
@@ -561,30 +610,21 @@ func (hm *HookManager) AfterTool(
 		return result, HookDecision{Action: HookActionContinue}
 	}
 
-	current := result.Clone()
-	for _, reg := range hm.snapshotHooks() {
-		interceptor, ok := reg.Hook.(ToolInterceptor)
-		if !ok {
-			continue
-		}
-
-		next, decision, ok := hm.callAfterTool(ctx, reg.Name, interceptor, current.Clone())
-		if !ok {
-			continue
-		}
-
-		switch decision.normalizedAction() {
-		case HookActionContinue, HookActionModify:
-			if next != nil {
-				current = next
+	return runAfterHooks(
+		hm.snapshotHooks(),
+		result,
+		(*ToolResultHookResponse).Clone,
+		func(v *ToolResultHookResponse) bool { return v == nil },
+		func(reg HookRegistration, current *ToolResultHookResponse) (*ToolResultHookResponse, HookDecision, bool) {
+			interceptor, ok := reg.Hook.(ToolInterceptor)
+			if !ok {
+				return nil, HookDecision{}, false
 			}
-		case HookActionAbortTurn, HookActionHardAbort:
-			return current, decision
-		default:
-			hm.logUnsupportedAction(reg.Name, "after_tool", decision.Action)
-		}
-	}
-	return current, HookDecision{Action: HookActionContinue}
+			return hm.callAfterTool(ctx, reg.Name, interceptor, current.Clone())
+		},
+		"after_tool",
+		hm.logUnsupportedAction,
+	)
 }
 
 func (hm *HookManager) ApproveTool(ctx context.Context, req *ToolApprovalRequest) ApprovalDecision {
@@ -592,7 +632,12 @@ func (hm *HookManager) ApproveTool(ctx context.Context, req *ToolApprovalRequest
 		return ApprovalDecision{Approved: true}
 	}
 
-	for _, reg := range hm.snapshotHooks() {
+	hooks := hm.snapshotHooks()
+	if len(hooks) == 0 {
+		return ApprovalDecision{Approved: true}
+	}
+
+	for _, reg := range hooks {
 		approver, ok := reg.Hook.(ToolApprover)
 		if !ok {
 			continue
@@ -633,6 +678,9 @@ func (hm *HookManager) snapshotHooks() []HookRegistration {
 	hm.mu.RLock()
 	defer hm.mu.RUnlock()
 
+	if len(hm.ordered) == 0 {
+		return nil
+	}
 	snapshot := make([]HookRegistration, len(hm.ordered))
 	copy(snapshot, hm.ordered)
 	return snapshot

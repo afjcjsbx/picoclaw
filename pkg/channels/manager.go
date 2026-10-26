@@ -177,6 +177,23 @@ func outboundMessageIsToolFeedback(msg bus.OutboundMessage) bool {
 	return strings.EqualFold(strings.TrimSpace(msg.Context.Raw["message_kind"]), "tool_feedback")
 }
 
+// ToolFeedbackTerminalKey marks a tool-feedback message as a one-shot notice
+// (for example a post-turn "conversation summarized" report). Such notices are
+// not followed by a final reply, so channels must deliver them as plain
+// messages instead of tracking them as a reusable progress card. Leaving them
+// tracked makes a later slash-command reply replace an old bubble instead of
+// posting a fresh message.
+const ToolFeedbackTerminalKey = "tool_feedback_terminal"
+
+// OutboundToolFeedbackIsTerminal reports whether the outbound message is a
+// terminal (one-shot) tool-feedback notice.
+func OutboundToolFeedbackIsTerminal(msg bus.OutboundMessage) bool {
+	if len(msg.Context.Raw) == 0 {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(msg.Context.Raw[ToolFeedbackTerminalKey]), "true")
+}
+
 func outboundMessageIsToolCalls(msg bus.OutboundMessage) bool {
 	if len(msg.Context.Raw) == 0 {
 		return false
@@ -471,6 +488,22 @@ func (m *Manager) preSend(ctx context.Context, name string, msg bus.OutboundMess
 	// 5. Try editing placeholder
 	if v, loaded := m.placeholders.LoadAndDelete(key); loaded {
 		if entry, ok := v.(placeholderEntry); ok && entry.id != "" {
+			// A stale placeholder belongs to an earlier turn: the current turn's
+			// placeholder was never delivered. Editing it would move the reply
+			// above the message that triggered it, so drop the leftover bubble
+			// and fall through to a normal send instead.
+			if !entry.createdAt.IsZero() && time.Since(entry.createdAt) > placeholderTTL {
+				logger.WarnCF("channels", "Dropping stale placeholder instead of editing it", map[string]any{
+					"channel":    name,
+					"chat_id":    chatID,
+					"message_id": entry.id,
+					"age":        time.Since(entry.createdAt).String(),
+				})
+				if deleter, ok := ch.(MessageDeleter); ok {
+					deleter.DeleteMessage(ctx, chatID, entry.id) // best effort
+				}
+				return nil, false
+			}
 			if isToolFeedback && separateToolFeedbackMessages {
 				if deleter, ok := ch.(MessageDeleter); ok {
 					deleter.DeleteMessage(ctx, chatID, entry.id) // best effort

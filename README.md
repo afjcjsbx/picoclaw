@@ -11,7 +11,7 @@
 <h3>$10 Hardware · 10–20 MB RAM · ms Boot · Let's Go, PicoClaw!</h3>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Go-1.27.2+-00ADD8?style=flat&logo=go&logoColor=white" alt="Go">
+  <img src="https://img.shields.io/badge/Go-1.27.3+-00ADD8?style=flat&logo=go&logoColor=white" alt="Go">
   <img src="https://img.shields.io/badge/Arch-x86__64%2C%20ARM64%2C%20MIPS%2C%20RISC--V%2C%20LoongArch-blue" alt="Hardware">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
   <br>
@@ -216,7 +216,7 @@ Download the binary for your platform from this repository's [GitHub Releases](h
 
 Prerequisites:
 
-- Go 1.27.2+
+- Go 1.27.3+
 - Node.js 22+ and pnpm 10.33.0+ for Web UI / launcher builds
 
 ```bash
@@ -259,7 +259,7 @@ builds with Telegram only:
 make build GO_BUILD_TAGS='goolm,stdjson,custom_channels,channel_telegram'
 ```
 
-[Seahorse](docs/architecture/session-startup-and-pruning.md) is PicoClaw's
+[Seahorse](docs/architecture/seahorse-memory.md) is PicoClaw's
 built-in memory system: the `seahorse` context manager keeps a local SQLite
 database with an FTS5 index over the session history, so the agent can recall
 and compact older context. To shrink the footprint further, build without it

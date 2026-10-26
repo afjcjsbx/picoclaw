@@ -237,6 +237,35 @@ Session scope controls how much memory is shared between chats, users, threads, 
 
 For step-by-step recipes and isolation patterns, see the [Session Guide](session-guide.md).
 
+### Context Manager (Seahorse)
+
+By default PicoClaw uses the `legacy` context manager, which summarizes history
+inside the session store. Setting `context_manager` to `seahorse` enables the
+optional SQLite-backed manager:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "context_manager": "seahorse"
+    }
+  }
+}
+```
+
+Seahorse keeps `sessions/seahorse.db` in the default agent workspace, builds an
+FTS5 index over session history, compacts old turns into multi-level summaries,
+and registers the `short_grep` and `short_expand` retrieval tools. The
+`context_manager_config` field is accepted but ignored by Seahorse, so the
+database path and session filters are not configurable.
+
+Pruning under `session.prune` only runs when Seahorse is active. With the legacy
+manager the pruning configuration is accepted but does nothing.
+
+For activation and fallback rules, storage schema, compaction algorithms,
+retrieval semantics, pruning, security properties, and implementation gaps, see
+[Seahorse Memory](../architecture/seahorse-memory.md).
+
 ### Routing
 
 Routing is configured through `agents.dispatch.rules`.
@@ -428,7 +457,7 @@ Even with `restrict_to_workspace: false`, the `exec` tool blocks these dangerous
 |------------|------|---------|-------------|
 | `tools.allow_read_paths` | string[] | `[]` | Additional paths allowed for reading outside workspace |
 | `tools.allow_write_paths` | string[] | `[]` | Additional paths allowed for writing outside workspace |
-| `tools.search_files.enabled` | bool | `true` | Enables regex content search and glob-based filename search |
+| `tools.search_files.enabled` | bool | `true` | Enables regex content search and glob/substring filename search |
 | `tools.message.media_enabled` | bool | `false` | Allows the `message` tool to attach local media files by path. This is separate from `tools.send_file.enabled`; enable it only when unified text/media/caption delivery is intended. |
 
 ### Read File Mode

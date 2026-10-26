@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -142,22 +143,6 @@ func TestLoadEnvFileNotFound(t *testing.T) {
 	_, err := loadEnvFile("/nonexistent/file.env")
 	if err == nil {
 		t.Error("Expected error for nonexistent file")
-	}
-}
-
-func TestExpandHomeCommandPath(t *testing.T) {
-	homeDir := t.TempDir()
-	t.Setenv("HOME", homeDir)
-	t.Setenv("USERPROFILE", homeDir)
-
-	want := filepath.Join(homeDir, "bin", "my-mcp")
-	got := expandHomeCommandPath("~" + string(os.PathSeparator) + filepath.Join("bin", "my-mcp"))
-	if got != want {
-		t.Fatalf("expandHomeCommandPath() = %q, want %q", got, want)
-	}
-
-	if got := expandHomeCommandPath("npx"); got != "npx" {
-		t.Fatalf("expandHomeCommandPath() should leave bare commands unchanged, got %q", got)
 	}
 }
 
@@ -303,7 +288,6 @@ func TestConnectServerPublishesRuntimeEvents(t *testing.T) {
 			return nil, fmt.Errorf("connect failed")
 		}
 		return &ServerConnection{
-			Name:   name,
 			Config: cfg,
 			Tools:  []*sdkmcp.Tool{{Name: "echo"}},
 		}, nil
@@ -328,6 +312,9 @@ func TestConnectServerPublishesRuntimeEvents(t *testing.T) {
 		connected.Attrs["tool_count"] != 1 {
 		t.Fatalf("connected attrs = %#v", connected.Attrs)
 	}
+	if status := mgr.GetServerStatuses()["good"]; status.State != ConnectionConnected || len(status.Tools) != 1 {
+		t.Fatalf("connected status = %#v", status)
+	}
 
 	err = mgr.ConnectServer(context.Background(), "bad", config.MCPServerConfig{
 		Type:    "stdio",
@@ -344,6 +331,9 @@ func TestConnectServerPublishesRuntimeEvents(t *testing.T) {
 	}
 	if failed.Attrs["server"] != "bad" || failed.Attrs["error"] != "connect failed" {
 		t.Fatalf("failed attrs = %#v", failed.Attrs)
+	}
+	if status := mgr.GetServerStatuses()["bad"]; status.State != ConnectionError || status.Error != "connect failed" {
+		t.Fatalf("failed status = %#v", status)
 	}
 }
 
@@ -386,7 +376,7 @@ func TestLoadFromMCPConfig_DisabledOrEmptyServers(t *testing.T) {
 
 func TestGetServers_ReturnsCopy(t *testing.T) {
 	mgr := NewManager()
-	mgr.servers["s1"] = &ServerConnection{Name: "s1"}
+	mgr.servers["s1"] = &ServerConnection{}
 
 	servers := mgr.GetServers()
 	delete(servers, "s1")
@@ -396,12 +386,12 @@ func TestGetServers_ReturnsCopy(t *testing.T) {
 	}
 }
 
-func TestGetAllTools_FiltersEmptyTools(t *testing.T) {
+func TestAllTools_FiltersEmptyTools(t *testing.T) {
 	mgr := NewManager()
-	mgr.servers["empty"] = &ServerConnection{Name: "empty", Tools: nil}
-	mgr.servers["with-tools"] = &ServerConnection{Name: "with-tools", Tools: []*sdkmcp.Tool{{}}}
+	mgr.servers["empty"] = &ServerConnection{Tools: nil}
+	mgr.servers["with-tools"] = &ServerConnection{Tools: []*sdkmcp.Tool{{}}}
 
-	all := mgr.GetAllTools()
+	all := allTools(mgr)
 	if _, ok := all["empty"]; ok {
 		t.Fatal("expected server without tools to be excluded")
 	}
@@ -558,6 +548,345 @@ func TestConnectServer_StreamableHTTPRequestResponseMode(t *testing.T) {
 	}
 }
 
+func TestConnectServer_DoesNotForwardHeadersToRedirectTargets(t *testing.T) {
+	t.Parallel()
+
+	leaked := make(chan string, 1)
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		leaked <- r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer target.Close()
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+"/mcp", http.StatusTemporaryRedirect)
+	}))
+	defer origin.Close()
+
+	conn, err := connectServer(context.Background(), "redirect", config.MCPServerConfig{
+		Enabled: true,
+		Type:    "http",
+		URL:     origin.URL + "/mcp",
+		Headers: map[string]string{"Authorization": "Bearer secret-token"},
+	})
+	if conn != nil {
+		_ = conn.Session.Close()
+	}
+	if err == nil {
+		t.Fatal("connectServer() followed a cross-origin redirect, want error")
+	}
+	select {
+	case header := <-leaked:
+		t.Fatalf("redirect target received a request; Authorization header = %q", header)
+	default:
+	}
+}
+
+func TestLoadFromMCPConfig_AllServersFailedAfterPreviousLoad(t *testing.T) {
+	originalConnectServerFunc := connectServerFunc
+	t.Cleanup(func() { connectServerFunc = originalConnectServerFunc })
+
+	connectServerFunc = func(_ context.Context, name string, _ config.MCPServerConfig) (*ServerConnection, error) {
+		if name == "failing" {
+			return nil, errors.New("connect refused")
+		}
+		conn, _, err := newScriptedServerConnection("session-"+name, nil, nil)
+		return conn, err
+	}
+
+	mgr := NewManager()
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	preexisting := config.MCPServerConfig{Enabled: true}
+	if err := mgr.ConnectServer(context.Background(), "preexisting", preexisting); err != nil {
+		t.Fatalf("ConnectServer(preexisting) error = %v", err)
+	}
+
+	err := mgr.LoadFromMCPConfig(context.Background(), config.MCPConfig{
+		ToolConfig: config.ToolConfig{Enabled: true},
+		Servers: map[string]config.MCPServerConfig{
+			"failing": {Enabled: true, Type: "http", URL: "https://example.invalid/mcp"},
+		},
+	}, "")
+	if err == nil {
+		t.Fatal("expected an aggregated error when every configured server failed, got nil")
+	}
+}
+
+func TestConnectServer_FollowsSameOriginRedirect(t *testing.T) {
+	t.Parallel()
+
+	server := sdkmcp.NewServer(&sdkmcp.Implementation{
+		Name:    "redirect-test-server",
+		Version: "1.0.0",
+	}, nil)
+	sdkmcp.AddTool(server, &sdkmcp.Tool{
+		Name:        "echo",
+		Description: "Echo test tool",
+	}, func(context.Context, *sdkmcp.CallToolRequest, map[string]any) (*sdkmcp.CallToolResult, any, error) {
+		return &sdkmcp.CallToolResult{
+			Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: "ok"}},
+		}, nil, nil
+	})
+	handler := sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server {
+		return server
+	}, nil)
+
+	var (
+		mu                sync.Mutex
+		redirectedAuth    []string
+		redirectedRequest int
+	)
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/mcp" {
+			http.Redirect(w, r, "/mcp2", http.StatusTemporaryRedirect)
+			return
+		}
+		mu.Lock()
+		redirectedRequest++
+		redirectedAuth = append(redirectedAuth, r.Header.Get("Authorization"))
+		mu.Unlock()
+		handler.ServeHTTP(w, r)
+	}))
+	defer httpServer.Close()
+
+	conn, err := connectServer(context.Background(), "redirect", config.MCPServerConfig{
+		Enabled: true,
+		Type:    "http",
+		URL:     httpServer.URL + "/mcp",
+		Headers: map[string]string{"Authorization": "Bearer test-token"},
+	})
+	if err != nil {
+		t.Fatalf("connectServer() error = %v", err)
+	}
+	if got := len(conn.Tools); got != 1 {
+		t.Fatalf("len(conn.Tools) = %d, want 1", got)
+	}
+	if err := conn.Session.Close(); err != nil {
+		t.Fatalf("Session.Close() error = %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if redirectedRequest == 0 {
+		t.Fatal("same-origin redirect target never received a request")
+	}
+	for _, header := range redirectedAuth {
+		if header != "Bearer test-token" {
+			t.Fatalf("redirect target Authorization = %q, want the configured header", header)
+		}
+	}
+}
+
+func TestConnectServer_ClientProtocolHeadersWinOverConfigured(t *testing.T) {
+	t.Parallel()
+
+	server := sdkmcp.NewServer(&sdkmcp.Implementation{
+		Name:    "header-precedence-server",
+		Version: "1.0.0",
+	}, nil)
+	sdkmcp.AddTool(server, &sdkmcp.Tool{
+		Name:        "echo",
+		Description: "Echo test tool",
+	}, func(context.Context, *sdkmcp.CallToolRequest, map[string]any) (*sdkmcp.CallToolResult, any, error) {
+		return &sdkmcp.CallToolResult{
+			Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: "ok"}},
+		}, nil, nil
+	})
+	handler := sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server {
+		return server
+	}, nil)
+
+	var (
+		mu       sync.Mutex
+		observed []observedHeaderRequest
+	)
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		observed = append(observed, observedHeaderRequest{
+			method:      r.Method,
+			accept:      r.Header.Get("Accept"),
+			contentType: r.Header.Get("Content-Type"),
+			custom:      r.Header.Get("X-Custom"),
+		})
+		mu.Unlock()
+		handler.ServeHTTP(w, r)
+	}))
+	defer httpServer.Close()
+
+	conn, err := connectServer(context.Background(), "headers", config.MCPServerConfig{
+		Enabled: true,
+		Type:    "http",
+		URL:     httpServer.URL,
+		Headers: map[string]string{
+			"Accept":       "application/bogus",
+			"Content-Type": "application/bogus",
+			"X-Custom":     "configured",
+		},
+	})
+	if err != nil {
+		t.Fatalf("connectServer() error = %v", err)
+	}
+	if err := conn.Session.Close(); err != nil {
+		t.Fatalf("Session.Close() error = %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(observed) == 0 {
+		t.Fatal("no requests observed")
+	}
+	posts := 0
+	for _, header := range observed {
+		if header.custom != "configured" {
+			t.Fatalf("X-Custom = %q, want the configured value", header.custom)
+		}
+		if header.method != http.MethodPost {
+			continue
+		}
+		posts++
+		if header.contentType != "application/json" {
+			t.Fatalf("POST Content-Type = %q, want the client protocol header", header.contentType)
+		}
+		if !strings.Contains(header.accept, "application/json") ||
+			!strings.Contains(header.accept, "text/event-stream") {
+			t.Fatalf("POST Accept = %q, want the client protocol header", header.accept)
+		}
+	}
+	if posts == 0 {
+		t.Fatal("no POST requests observed during the handshake")
+	}
+}
+
+// observedHeaderRequest is the subset of request headers the precedence test
+// inspects, recorded per method because the SDK only generates some of them on
+// message-bearing requests.
+type observedHeaderRequest struct {
+	method      string
+	accept      string
+	contentType string
+	custom      string
+}
+
+func TestConnectServer_ClosesPreviousSessionWithSameName(t *testing.T) {
+	originalConnectServerFunc := connectServerFunc
+	t.Cleanup(func() { connectServerFunc = originalConnectServerFunc })
+
+	var transports []*scriptedTransport
+	connectServerFunc = func(_ context.Context, _ string, _ config.MCPServerConfig) (*ServerConnection, error) {
+		conn, transport, err := newScriptedServerConnection("session", nil, nil)
+		if err != nil {
+			return nil, err
+		}
+		transports = append(transports, transport)
+		return conn, nil
+	}
+
+	mgr := NewManager()
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	cfg := config.MCPServerConfig{Enabled: true, Type: "http", URL: "https://example.invalid/mcp"}
+	if err := mgr.ConnectServer(context.Background(), "dup", cfg); err != nil {
+		t.Fatalf("first ConnectServer() error = %v", err)
+	}
+	if err := mgr.ConnectServer(context.Background(), "dup", cfg); err != nil {
+		t.Fatalf("second ConnectServer() error = %v", err)
+	}
+
+	if len(transports) != 2 {
+		t.Fatalf("connect calls = %d, want 2", len(transports))
+	}
+	if !transportClosed(transports[0]) {
+		t.Fatal("previous connection session was not closed")
+	}
+	if transportClosed(transports[1]) {
+		t.Fatal("current connection session must stay open")
+	}
+}
+
+func transportClosed(transport *scriptedTransport) bool {
+	transport.mu.Lock()
+	defer transport.mu.Unlock()
+	return transport.closed
+}
+
+// A streamable session sends a DELETE on close, so closing a replaced session
+// while holding m.mu would stall every MCP operation behind a network call.
+// This pins that the close runs after the registry lock is released.
+func TestConnectServer_ClosesReplacedSessionOutsideTheManagerLock(t *testing.T) {
+	originalConnectServerFunc := connectServerFunc
+	t.Cleanup(func() { connectServerFunc = originalConnectServerFunc })
+
+	closeEntered := make(chan struct{})
+	releaseClose := make(chan struct{})
+	var firstTransport bool
+	connectServerFunc = func(_ context.Context, _ string, _ config.MCPServerConfig) (*ServerConnection, error) {
+		conn, transport, err := newScriptedServerConnection("session", nil, nil)
+		if err != nil {
+			return nil, err
+		}
+		if !firstTransport {
+			firstTransport = true
+			transport.onClose = func() {
+				close(closeEntered)
+				<-releaseClose
+			}
+		}
+		return conn, nil
+	}
+
+	mgr := NewManager()
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	cfg := config.MCPServerConfig{Enabled: true, Type: "http", URL: "https://example.invalid/mcp"}
+	if err := mgr.ConnectServer(context.Background(), "dup", cfg); err != nil {
+		t.Fatalf("first ConnectServer() error = %v", err)
+	}
+
+	connectDone := make(chan error, 1)
+	go func() { connectDone <- mgr.ConnectServer(context.Background(), "dup", cfg) }()
+
+	select {
+	case <-closeEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("replaced session was not closed")
+	}
+
+	// If the manager lock were still held by the closing path, this read would
+	// block until releaseClose.
+	readDone := make(chan struct{})
+	go func() {
+		_ = mgr.GetServers()
+		close(readDone)
+	}()
+	select {
+	case <-readDone:
+	case <-time.After(2 * time.Second):
+		close(releaseClose)
+		t.Fatal("manager registry stayed locked while the replaced session was closing")
+	}
+
+	close(releaseClose)
+	select {
+	case err := <-connectDone:
+		if err != nil {
+			t.Fatalf("second ConnectServer() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("second ConnectServer() did not finish")
+	}
+}
+
+// A tool listing that yields no tools and at least one error must fail the
+// dial instead of registering the server as connected with an empty toolset.
+func TestDialServer_FailsWhenToolListingFails(t *testing.T) {
+	transport := &scriptedTransport{sessionID: "session"}
+	if _, err := dialServer(context.Background(), "test", transport, "broken"); err == nil {
+		t.Fatal("dialServer() error = nil, want a tool listing failure")
+	} else if !strings.Contains(err.Error(), "failed to list tools") {
+		t.Fatalf("dialServer() error = %v, want a tool listing failure", err)
+	}
+}
+
 func TestCallTool_ReconnectsWhenHTTPServerLosesSession(t *testing.T) {
 	originalConnectServerFunc := connectServerFunc
 	t.Cleanup(func() {
@@ -596,6 +925,8 @@ func TestCallTool_ReconnectsWhenHTTPServerLosesSession(t *testing.T) {
 
 	mgr := NewManager()
 	mgr.servers["flaky"] = staleConn
+	cancelCalled := false
+	staleConn.cancel = func() { cancelCalled = true }
 
 	result, err := mgr.CallTool(context.Background(), "flaky", "echo", map[string]any{
 		"query": "hello",
@@ -631,6 +962,9 @@ func TestCallTool_ReconnectsWhenHTTPServerLosesSession(t *testing.T) {
 	if freshTransport.toolCallCalls != 1 {
 		t.Fatalf("fresh toolCallCalls = %d, want 1", freshTransport.toolCallCalls)
 	}
+	if !cancelCalled {
+		t.Fatal("stale connection cancel was not called on reconnect")
+	}
 }
 
 func TestClose_IdempotentOnEmptyManager(t *testing.T) {
@@ -665,9 +999,7 @@ func newScriptedServerConnection(
 	}
 
 	return &ServerConnection{
-		Name:    "flaky",
 		Config:  config.MCPServerConfig{Enabled: true, Type: "http", URL: "https://example.invalid/mcp"},
-		Client:  client,
 		Session: session,
 		Tools: []*sdkmcp.Tool{
 			{
@@ -688,6 +1020,10 @@ type scriptedTransport struct {
 	toolCallCalls int
 	closed        bool
 	incoming      chan jsonrpc.Message
+	// onClose runs after the transport is marked closed and before Close
+	// returns. Tests use it to observe close timing, for example to prove the
+	// manager lock is not held while a replaced session is closed.
+	onClose func()
 }
 
 func (t *scriptedTransport) Connect(context.Context) (sdkmcp.Connection, error) {
@@ -782,12 +1118,18 @@ func (t *scriptedTransport) Write(ctx context.Context, msg jsonrpc.Message) erro
 
 func (t *scriptedTransport) Close() error {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	if t.closed {
+		t.mu.Unlock()
 		return nil
 	}
 	t.closed = true
 	close(t.incoming)
+	hook := t.onClose
+	t.mu.Unlock()
+
+	if hook != nil {
+		hook()
+	}
 	return nil
 }
 
@@ -828,7 +1170,7 @@ func TestManager_CloseWaitsForInFlightCallTool(t *testing.T) {
 
 	mgr := NewManager()
 	mgr.mu.Lock()
-	mgr.servers["srv"] = &ServerConnection{Name: "srv", Session: clientSession}
+	mgr.servers["srv"] = &ServerConnection{Session: clientSession}
 	mgr.mu.Unlock()
 
 	callDone := make(chan error, 1)
@@ -885,7 +1227,7 @@ func TestLoadFromMCPConfigBoundsConcurrentConnects(t *testing.T) {
 		mu.Lock()
 		current--
 		mu.Unlock()
-		return &ServerConnection{Name: name, Config: cfg}, nil
+		return &ServerConnection{Config: cfg}, nil
 	}
 
 	servers := make(map[string]config.MCPServerConfig, mcpMaxConcurrentConnect*3)
@@ -911,5 +1253,121 @@ func TestLoadFromMCPConfigBoundsConcurrentConnects(t *testing.T) {
 	}
 	if len(mgr.GetServers()) != len(servers) {
 		t.Fatalf("connected servers = %d, want %d", len(mgr.GetServers()), len(servers))
+	}
+}
+
+func TestShouldReconnectCallError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"typed ErrSessionMissing", fmt.Errorf("sending: %w", sdkmcp.ErrSessionMissing), true},
+		{"ErrSessionMissing text only", fmt.Errorf("failed to connect: session not found"), true},
+		{
+			"404 with JSON-RPC error body",
+			fmt.Errorf(
+				`calling "tools/call": sending "tools/call": Unknown mcp-session-id: rejected by transport: Not Found`,
+			),
+			true,
+		},
+		{
+			"404 with other JSON-RPC error body",
+			fmt.Errorf(`sending "tools/call": Session terminated: rejected by transport: Not Found`),
+			true,
+		},
+		{"transient 503", fmt.Errorf(`rejected by transport: sending "tools/call": Service Unavailable`), false},
+		{
+			"401 with JSON-RPC error body",
+			fmt.Errorf(`sending "tools/call": Unauthorized: rejected by transport: Unauthorized`),
+			false,
+		},
+		{"unrelated protocol error", fmt.Errorf(`calling "tools/call": invalid params`), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldReconnectCallError(tt.err); got != tt.want {
+				t.Fatalf("shouldReconnectCallError(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
+// A server that expires a session answers the stale Mcp-Session-Id with HTTP 404
+// plus a JSON-RPC error body; CallTool must re-initialize and retry transparently.
+func TestCallTool_ReconnectsWhenServerExpiresSessionWith404JSONRPCBody(t *testing.T) {
+	server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "expiring-server", Version: "1.0.0"}, nil)
+	sdkmcp.AddTool(server, &sdkmcp.Tool{
+		Name:        "echo",
+		Description: "Echo test tool",
+	}, func(context.Context, *sdkmcp.CallToolRequest, map[string]any) (*sdkmcp.CallToolResult, any, error) {
+		return &sdkmcp.CallToolResult{Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: "ok"}}}, nil, nil
+	})
+	handler := sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server { return server }, nil)
+
+	var (
+		mu      sync.Mutex
+		expired string
+	)
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		isExpired := expired != "" && r.Header.Get("Mcp-Session-Id") == expired
+		mu.Unlock()
+		if isExpired {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(
+				w,
+				`{"jsonrpc":"2.0","error":{"code":-32000,"message":"Unknown mcp-session-id"},"id":1}`,
+			)
+			return
+		}
+		handler.ServeHTTP(w, r)
+	}))
+	defer httpServer.Close()
+
+	conn, err := connectServer(context.Background(), "expiring", config.MCPServerConfig{
+		Enabled: true,
+		Type:    "streamable-http",
+		URL:     httpServer.URL,
+	})
+	if err != nil {
+		t.Fatalf("connectServer() error = %v", err)
+	}
+	oldID := conn.Session.ID()
+	if oldID == "" {
+		t.Fatal("expected non-empty streamable session ID")
+	}
+
+	mgr := NewManager()
+	mgr.servers["expiring"] = conn
+	t.Cleanup(func() {
+		if current, ok := mgr.GetServer("expiring"); ok {
+			_ = current.Session.Close()
+		}
+	})
+
+	mu.Lock()
+	expired = oldID
+	mu.Unlock()
+
+	result, err := mgr.CallTool(context.Background(), "expiring", "echo", map[string]any{})
+	if err != nil {
+		t.Fatalf("CallTool() error = %v", err)
+	}
+	if result == nil || len(result.Content) != 1 {
+		t.Fatalf("CallTool() returned unexpected content: %#v", result)
+	}
+	if text, ok := result.Content[0].(*sdkmcp.TextContent); !ok || text.Text != "ok" {
+		t.Fatalf("CallTool() content = %#v, want text %q", result.Content[0], "ok")
+	}
+
+	current, ok := mgr.GetServer("expiring")
+	if !ok {
+		t.Fatal("expected server to remain registered after reconnect")
+	}
+	if newID := current.Session.ID(); newID == "" || newID == oldID {
+		t.Fatalf("Session.ID() = %q, want a fresh ID different from %q", newID, oldID)
 	}
 }

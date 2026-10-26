@@ -3,9 +3,43 @@ package hardwaretools
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"syscall"
 	"unsafe"
 )
+
+// Helper functions for I2C operations (used by platform-specific implementations)
+
+// isValidBusID checks that a bus identifier is a simple number (prevents path injection)
+func isValidBusID(id string) bool {
+	matched, _ := regexp.MatchString(`^\d+$`, id)
+	return matched
+}
+
+// parseI2CAddress extracts and validates an I2C address from args
+func parseI2CAddress(args map[string]any) (int, *ToolResult) {
+	addrFloat, ok := args["address"].(float64)
+	if !ok {
+		return 0, ErrorResult("address is required (e.g. 0x38 for AHT20)")
+	}
+	addr := int(addrFloat)
+	if addr < 0x03 || addr > 0x77 {
+		return 0, ErrorResult("address must be in valid 7-bit range (0x03-0x77)")
+	}
+	return addr, nil
+}
+
+// parseI2CBus extracts and validates an I2C bus from args
+func parseI2CBus(args map[string]any) (string, *ToolResult) {
+	bus, ok := args["bus"].(string)
+	if !ok || bus == "" {
+		return "", ErrorResult("bus is required (e.g. \"1\" for /dev/i2c-1)")
+	}
+	if !isValidBusID(bus) {
+		return "", ErrorResult("invalid bus identifier: must be a number (e.g. \"1\")")
+	}
+	return bus, nil
+}
 
 // I2C ioctl constants from Linux kernel headers (<linux/i2c-dev.h>, <linux/i2c.h>)
 const (

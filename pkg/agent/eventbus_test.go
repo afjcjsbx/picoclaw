@@ -526,13 +526,12 @@ func TestAgentLoop_EmitsSessionSummarizeEvent(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:                 tmpDir,
-				ModelName:                 "test-model",
-				MaxTokens:                 4096,
-				MaxToolIterations:         10,
-				ContextWindow:             8000,
-				SummarizeMessageThreshold: 2,
-				SummarizeTokenPercent:     75,
+				Workspace:             tmpDir,
+				ModelName:             "test-model",
+				MaxTokens:             4096,
+				MaxToolIterations:     10,
+				ContextWindow:         8000,
+				SummarizeTokenPercent: 75,
 			},
 		},
 	}
@@ -564,7 +563,7 @@ func TestAgentLoop_EmitsSessionSummarizeEvent(t *testing.T) {
 	defer closeRuntimeEvents()
 
 	lcm := &legacyContextManager{al: al}
-	lcm.summarizeSession(defaultAgent, "session-1", nil, "")
+	lcm.summarizeSession(context.Background(), defaultAgent, "session-1", nil, "")
 
 	events := collectRuntimeEventStream(runtimeCh)
 	summaryEvt, ok := findRuntimeEvent(events, runtimeevents.KindAgentSessionSummarize)

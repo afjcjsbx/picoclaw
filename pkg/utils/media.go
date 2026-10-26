@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -118,19 +117,12 @@ func DownloadFile(urlStr, filename string, opts DownloadOptions) string {
 			return ""
 		}
 	} else {
-		client = &http.Client{Timeout: opts.Timeout}
-		if opts.ProxyURL != "" {
-			proxyURL, parseErr := url.Parse(opts.ProxyURL)
-			if parseErr != nil {
-				logger.ErrorCF(opts.LoggerPrefix, "Invalid proxy URL for download", map[string]any{
-					"error": parseErr.Error(),
-					"proxy": opts.ProxyURL,
-				})
-				return ""
-			}
-			client.Transport = &http.Transport{
-				Proxy: http.ProxyURL(proxyURL),
-			}
+		client, err = CreateHTTPClient(opts.ProxyURL, opts.Timeout)
+		if err != nil {
+			logger.ErrorCF(opts.LoggerPrefix, "Failed to create download client", map[string]any{
+				"error": err.Error(),
+			})
+			return ""
 		}
 	}
 

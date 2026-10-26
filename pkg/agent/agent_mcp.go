@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"sync"
 
+	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
+
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/mcp"
@@ -23,6 +25,7 @@ type mcpRuntime struct {
 	mu       sync.Mutex
 	manager  *mcp.Manager
 	initErr  error
+	statuses map[string]mcp.ServerStatus
 }
 
 func (r *mcpRuntime) reset() *mcp.Manager {
@@ -30,6 +33,7 @@ func (r *mcpRuntime) reset() *mcp.Manager {
 	manager := r.manager
 	r.manager = nil
 	r.initErr = nil
+	r.statuses = nil
 	r.initOnce = sync.Once{}
 	r.mu.Unlock()
 	return manager
@@ -39,6 +43,7 @@ func (r *mcpRuntime) setManager(manager *mcp.Manager) {
 	r.mu.Lock()
 	r.manager = manager
 	r.initErr = nil
+	r.statuses = nil
 	r.mu.Unlock()
 }
 
@@ -46,6 +51,34 @@ func (r *mcpRuntime) setInitErr(err error) {
 	r.mu.Lock()
 	r.initErr = err
 	r.mu.Unlock()
+}
+
+func (r *mcpRuntime) setFailure(err error, statuses map[string]mcp.ServerStatus) {
+	r.mu.Lock()
+	r.initErr = err
+	r.statuses = cloneMCPStatuses(statuses)
+	r.mu.Unlock()
+}
+
+func (r *mcpRuntime) getStatuses() map[string]mcp.ServerStatus {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.manager != nil {
+		return r.manager.GetServerStatuses()
+	}
+	return cloneMCPStatuses(r.statuses)
+}
+
+func cloneMCPStatuses(statuses map[string]mcp.ServerStatus) map[string]mcp.ServerStatus {
+	if statuses == nil {
+		return nil
+	}
+	result := make(map[string]mcp.ServerStatus, len(statuses))
+	for name, status := range statuses {
+		status.Tools = append([]*sdkmcp.Tool(nil), status.Tools...)
+		result[name] = status
+	}
+	return result
 }
 
 func (r *mcpRuntime) getInitErr() error {
@@ -117,7 +150,8 @@ func (al *AgentLoop) ensureMCPInitialized(ctx context.Context) error {
 		}
 
 		if err := mcpManager.LoadFromMCPConfig(ctx, mcpCfg, workspacePath); err != nil {
-			al.mcp.setInitErr(fmt.Errorf("failed to load MCP servers: %w", err))
+			wrappedErr := fmt.Errorf("failed to load MCP servers: %w", err)
+			al.mcp.setFailure(wrappedErr, mcpManager.GetServerStatuses())
 			logger.WarnCF("agent", "Failed to load MCP servers, MCP tools will not be available",
 				map[string]any{
 					"error": err.Error(),
@@ -144,7 +178,7 @@ func (al *AgentLoop) ensureMCPInitialized(ctx context.Context) error {
 			// Determine whether this server's tools should be deferred (hidden).
 			// Per-server "deferred" field takes precedence over the global Discovery.Enabled.
 			serverCfg := mcpCfg.Servers[serverName]
-			registerAsHidden := serverIsDeferred(al.cfg.Tools.MCP.Discovery.Enabled, serverCfg)
+			registerAsHidden := serverCfg.EffectiveDeferred(al.cfg.Tools.MCP.Discovery.Enabled)
 			registeredToolsByAgent := make(map[string]map[string]struct{}, len(agentIDs))
 
 			for _, tool := range conn.Tools {
@@ -270,6 +304,35 @@ func (al *AgentLoop) ensureMCPInitialized(ctx context.Context) error {
 	return al.mcp.getInitErr()
 }
 
+// MCPServerStatuses returns a read-only snapshot for runtime diagnostics. It
+// never initializes servers and therefore cannot spawn MCP processes merely
+// because a dashboard endpoint was requested.
+func (al *AgentLoop) MCPServerStatuses() map[string]mcp.ServerStatus {
+	cfg := al.GetConfig()
+	if cfg == nil {
+		return nil
+	}
+	statuses := al.mcp.getStatuses()
+	if statuses == nil {
+		statuses = make(map[string]mcp.ServerStatus, len(cfg.Tools.MCP.Servers))
+	}
+	for name, serverCfg := range cfg.Tools.MCP.Servers {
+		if _, ok := statuses[name]; ok {
+			continue
+		}
+		state := mcp.ConnectionDisconnected
+		if !cfg.Tools.MCP.Enabled || !serverCfg.Enabled {
+			state = mcp.ConnectionDisabled
+		}
+		statuses[name] = mcp.ServerStatus{
+			Name:   name,
+			Config: serverCfg,
+			State:  state,
+		}
+	}
+	return statuses
+}
+
 func registerMCPServerPromptContributor(
 	agentID string,
 	agent *AgentInstance,
@@ -345,25 +408,10 @@ func agentHasDiscoverableMCPServers(cfg *config.Config, allowed map[string]struc
 
 	filtered := filterMCPConfigServers(cfg.Tools.MCP, allowed)
 	for _, serverCfg := range filtered.Servers {
-		if serverCfg.Enabled && serverIsDeferred(cfg.Tools.MCP.Discovery.Enabled, serverCfg) {
+		if serverCfg.Enabled && serverCfg.EffectiveDeferred(cfg.Tools.MCP.Discovery.Enabled) {
 			return true
 		}
 	}
 
 	return false
-}
-
-// serverIsDeferred reports whether an MCP server's tools should be registered
-// as hidden (deferred/discovery mode).
-//
-// The per-server Deferred field takes precedence over the global discoveryEnabled
-// default. When Deferred is nil, discoveryEnabled is used as the fallback.
-func serverIsDeferred(discoveryEnabled bool, serverCfg config.MCPServerConfig) bool {
-	if !discoveryEnabled {
-		return false
-	}
-	if serverCfg.Deferred != nil {
-		return *serverCfg.Deferred
-	}
-	return true
 }
