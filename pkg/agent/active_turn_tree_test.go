@@ -57,3 +57,42 @@ func TestGetActiveTurnTree(t *testing.T) {
 		t.Fatalf("expected nil tree for unknown session, got %d entries", len(tree))
 	}
 }
+
+// TestGetActiveTurnTree_AttachesOrphanedAsyncChildren verifies that a subagent
+// whose parent turn already finished is listed under the session's current root.
+func TestGetActiveTurnTree_AttachesOrphanedAsyncChildren(t *testing.T) {
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{ModelName: "gpt-4o-mini", Provider: "mock"},
+		},
+	}
+	al := NewAgentLoop(cfg, nil, &simpleMockProviderAPI{response: "ok"})
+
+	sessionKey := "orphan-session"
+	finished := &turnState{turnID: "finished", sessionKey: sessionKey, childTurnIDs: []string{"async-child"}}
+	al.activeTurnStates.Store(sessionKey, &turnState{turnID: "current", sessionKey: sessionKey})
+	al.activeTurnStates.Store("async-child", &turnState{
+		turnID:          "async-child",
+		parentTurnID:    "finished",
+		parentTurnState: finished,
+		depth:           1,
+	})
+	al.activeTurnStates.Store("other-child", &turnState{
+		turnID:          "other-child",
+		parentTurnState: &turnState{turnID: "x", sessionKey: "another-session"},
+		depth:           1,
+	})
+	defer func() {
+		for _, key := range []string{sessionKey, "async-child", "other-child"} {
+			al.activeTurnStates.Delete(key)
+		}
+	}()
+
+	tree := al.GetActiveTurnTree(sessionKey)
+	if len(tree) != 2 || tree[0].TurnID != "current" || tree[1].TurnID != "async-child" {
+		t.Fatalf("tree = %+v, want [current async-child]", tree)
+	}
+	if tree[1].ParentTurnID != "current" {
+		t.Errorf("orphan ParentTurnID = %q, want %q", tree[1].ParentTurnID, "current")
+	}
+}
