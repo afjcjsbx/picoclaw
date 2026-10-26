@@ -406,6 +406,7 @@ func spawnSubTurn(
 		DefaultResponse:         "",
 		EnableSummary:           false,
 		SendResponse:            false,
+		SuppressToolFeedback:    true, // child inherits the parent's chat context; don't leak its tool calls there
 		NoHistory:               true, // SubTurns don't use session history
 		SkipInitialSteeringPoll: true,
 	}
