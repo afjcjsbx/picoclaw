@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/caarlos0/env/v11"
+	"golang.org/x/net/http/httpguts"
 
 	"github.com/sipeed/picoclaw/pkg"
 	"github.com/sipeed/picoclaw/pkg/fileutil"
@@ -358,6 +359,20 @@ type SessionConfig struct {
 	IdentityLinks map[string][]string `json:"identity_links,omitempty"`
 	DmScope       string              `json:"dm_scope,omitempty"`
 	Prune         SessionPruneConfig  `json:"prune"`
+
+	// DurableWrites controls whether session writes are fsynced before they
+	// are acknowledged. When disabled, message appends and metadata updates
+	// use atomic (temp + rename) writes without fsync: files stay consistent
+	// after a crash, but the most recent writes may be lost on power
+	// failure. Disabling it trades crash durability for lower latency and
+	// less flash wear on constrained devices. Defaults to true.
+	DurableWrites *bool `json:"durable_writes,omitempty" env:"PICOCLAW_SESSION_DURABLE_WRITES"`
+}
+
+// DurableWritesEnabled reports whether session writes must be fsynced.
+// It defaults to true when session.durable_writes is unset.
+func (s *SessionConfig) DurableWritesEnabled() bool {
+	return s.DurableWrites == nil || *s.DurableWrites
 }
 
 // MarshalJSON omits the prune block while it is unconfigured, so saving the
@@ -506,6 +521,15 @@ type RoutingConfig struct {
 	Enabled    bool    `json:"enabled"`
 	LightModel string  `json:"light_model"` // model_name from model_list to use for simple tasks
 	Threshold  float64 `json:"threshold"`   // complexity score in [0,1]; score >= threshold → primary model
+
+	// EscalationPromptTokens moves the rest of the turn to the primary model
+	// after a light-model response reports more prompt tokens than this.
+	// Zero uses the routing.Router default (32768).
+	EscalationPromptTokens int `json:"escalation_prompt_tokens,omitempty"`
+	// EscalationToolIterations moves the rest of the turn to the primary model
+	// after this many consecutive light-model responses requested tools.
+	// Zero uses the routing.Router default (3).
+	EscalationToolIterations int `json:"escalation_tool_iterations,omitempty"`
 }
 
 // SubTurnConfig configures the SubTurn execution system.
@@ -573,7 +597,7 @@ type AgentDefaults struct {
 	ContextWindow             int                 `json:"context_window,omitempty"             env:"PICOCLAW_AGENTS_DEFAULTS_CONTEXT_WINDOW"`
 	Temperature               *float64            `json:"temperature,omitempty"                env:"PICOCLAW_AGENTS_DEFAULTS_TEMPERATURE"`
 	MaxToolIterations         int                 `json:"max_tool_iterations"                  env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOOL_ITERATIONS"`
-	SummarizeMessageThreshold int                 `json:"summarize_message_threshold"          env:"PICOCLAW_AGENTS_DEFAULTS_SUMMARIZE_MESSAGE_THRESHOLD"`
+	SummarizeMessageThreshold int                 `json:"summarize_message_threshold"          env:"PICOCLAW_AGENTS_DEFAULTS_SUMMARIZE_MESSAGE_THRESHOLD"` // Deprecated: ignored; summarization is driven by SummarizeTokenPercent
 	SummarizeTokenPercent     int                 `json:"summarize_token_percent"              env:"PICOCLAW_AGENTS_DEFAULTS_SUMMARIZE_TOKEN_PERCENT"`
 	MaxMediaSize              int                 `json:"max_media_size,omitempty"             env:"PICOCLAW_AGENTS_DEFAULTS_MAX_MEDIA_SIZE"`
 	VisionMaxImageDimension   int                 `json:"vision_max_image_dimension,omitempty" env:"PICOCLAW_AGENTS_DEFAULTS_VISION_MAX_IMAGE_DIMENSION"`
@@ -590,6 +614,14 @@ type AgentDefaults struct {
 	TurnProfile               TurnProfileConfig   `json:"turn_profile,omitempty"`
 	MaxLLMRetries             int                 `json:"max_llm_retries,omitempty"            env:"PICOCLAW_AGENTS_DEFAULTS_MAX_LLM_RETRIES"`
 	LLMRetryBackoffSecs       int                 `json:"llm_retry_backoff_secs,omitempty"     env:"PICOCLAW_AGENTS_DEFAULTS_LLM_RETRY_BACKOFF_SECS"`
+	// LLMRetryOnEmptyContent retries a successful response that carries no
+	// assistant text and no tool calls instead of surfacing it as the final
+	// answer. LLMRetryOnFinishReasons lists finish_reason values that are also
+	// retried; the default "length" also covers the "truncated" spelling that
+	// some provider paths use for the same condition. Both fields are always
+	// serialized so an explicit false or empty list survives save and reload.
+	LLMRetryOnEmptyContent  bool     `json:"llm_retry_on_empty_content"  env:"PICOCLAW_AGENTS_DEFAULTS_LLM_RETRY_ON_EMPTY_CONTENT"`
+	LLMRetryOnFinishReasons []string `json:"llm_retry_on_finish_reasons" env:"PICOCLAW_AGENTS_DEFAULTS_LLM_RETRY_ON_FINISH_REASONS"`
 }
 
 const DefaultMaxMediaSize = 20 * 1024 * 1024 // 20 MB
@@ -1014,6 +1046,12 @@ type ModelConfig struct {
 	// UserAgent is the user agent string to use for HTTP requests.
 	UserAgent string `json:"user_agent,omitempty" yaml:"-"`
 
+	// SessionHeader is the request header name that carries a stable
+	// per-conversation session ID. Providers supporting the generic session-key
+	// header receive it through SetSessionHeader during provider construction.
+	// Leave empty to disable the header for this model.
+	SessionHeader string `json:"session_header,omitempty" yaml:"-"`
+
 	// isVirtual marks this model as a virtual model generated from multi-key expansion.
 	// Virtual models should not be persisted to config files.
 	isVirtual bool
@@ -1057,6 +1095,11 @@ func (c *ModelConfig) Validate() error {
 	// Reject consecutive slashes
 	if strings.Contains(c.Model, "//") {
 		return fmt.Errorf("model identifier must not contain //")
+	}
+
+	// Reject header names that cannot be written on the wire
+	if c.SessionHeader != "" && !httpguts.ValidHeaderFieldName(c.SessionHeader) {
+		return fmt.Errorf("session_header must be a valid HTTP header name")
 	}
 	return nil
 }
@@ -1292,7 +1335,19 @@ type ExecConfig struct {
 	AllowRemote         bool     `                                 json:"allow_remote"          env:"PICOCLAW_TOOLS_EXEC_ALLOW_REMOTE"`
 	CustomDenyPatterns  []string `                                 json:"custom_deny_patterns"  env:"PICOCLAW_TOOLS_EXEC_CUSTOM_DENY_PATTERNS"`
 	CustomAllowPatterns []string `                                 json:"custom_allow_patterns" env:"PICOCLAW_TOOLS_EXEC_CUSTOM_ALLOW_PATTERNS"`
-	TimeoutSeconds      int      `                                 json:"timeout_seconds"       env:"PICOCLAW_TOOLS_EXEC_TIMEOUT_SECONDS"` // 0 means use default (60s)
+	TimeoutSeconds      int      `                                 json:"timeout_seconds"       env:"PICOCLAW_TOOLS_EXEC_TIMEOUT_SECONDS"`  // 0 means use default (60s)
+	MaxOutputChars      int      `                                 json:"max_output_chars"      env:"PICOCLAW_TOOLS_EXEC_MAX_OUTPUT_CHARS"` // 0 means use default (50000 chars)
+}
+
+// DefaultExecMaxOutputChars bounds foreground exec output before it is
+// truncated to a head+tail window with an omission notice.
+const DefaultExecMaxOutputChars = 50000
+
+func (c ExecConfig) GetMaxOutputChars() int {
+	if c.MaxOutputChars > 0 {
+		return c.MaxOutputChars
+	}
+	return DefaultExecMaxOutputChars
 }
 
 type SkillsToolsConfig struct {
@@ -1314,6 +1369,32 @@ type ReadFileToolConfig struct {
 	Enabled         bool   `json:"enabled"`
 	Mode            string `json:"mode"`
 	MaxReadFileSize int    `json:"max_read_file_size"`
+	// MaxLines caps how many lines a single line-mode read returns; requests
+	// above it are clamped. 0 means use the default (2000).
+	MaxLines int `json:"max_lines"`
+	// MaxLineLength caps how long any single line may be in the line-numbered
+	// view; the remainder is replaced by a " ... [truncated]" marker. 0 means
+	// use the default (2000).
+	MaxLineLength int `json:"max_line_length"`
+}
+
+const (
+	DefaultReadFileMaxLines      = 2000
+	DefaultReadFileMaxLineLength = 2000
+)
+
+func (c ReadFileToolConfig) GetMaxLines() int {
+	if c.MaxLines > 0 {
+		return c.MaxLines
+	}
+	return DefaultReadFileMaxLines
+}
+
+func (c ReadFileToolConfig) GetMaxLineLength() int {
+	if c.MaxLineLength > 0 {
+		return c.MaxLineLength
+	}
+	return DefaultReadFileMaxLineLength
 }
 
 type ImageGenerateToolConfig struct {
@@ -1802,6 +1883,14 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("invalid gateway host: %w", err)
 	}
 
+	// Reject null entries before expansion: expandMultiKeyModels dereferences
+	// every entry, and a hand-edited or generated config can contain null.
+	for i, model := range cfg.ModelList {
+		if model == nil {
+			return nil, fmt.Errorf("model_list[%d]: model entry is null", i)
+		}
+	}
+
 	// Expand multi-key configs into separate entries for key-level failover
 	cfg.ModelList = expandMultiKeyModels(cfg.ModelList)
 
@@ -2008,6 +2097,9 @@ func (c *Config) findMatches(modelName string) []*ModelConfig {
 // Note: Multiple entries with the same model_name are allowed for load balancing.
 func (c *Config) ValidateModelList() error {
 	for i := range c.ModelList {
+		if c.ModelList[i] == nil {
+			return fmt.Errorf("model_list[%d]: model entry is null", i)
+		}
 		if err := c.ModelList[i].Validate(); err != nil {
 			return fmt.Errorf("model_list[%d]: %w", i, err)
 		}
@@ -2075,6 +2167,7 @@ func expandMultiKeyModels(models []*ModelConfig) []*ModelConfig {
 				ExtraBody:           m.ExtraBody,
 				CustomHeaders:       m.CustomHeaders,
 				UserAgent:           m.UserAgent,
+				SessionHeader:       m.SessionHeader,
 				isVirtual:           true,
 			}
 			expanded = append(expanded, additionalEntry)
@@ -2100,6 +2193,7 @@ func expandMultiKeyModels(models []*ModelConfig) []*ModelConfig {
 			ExtraBody:           m.ExtraBody,
 			CustomHeaders:       m.CustomHeaders,
 			UserAgent:           m.UserAgent,
+			SessionHeader:       m.SessionHeader,
 			APIKeys:             SimpleSecureStrings(keys[0]),
 		}
 

@@ -46,9 +46,11 @@ func DefaultConfig() *Config {
 					CriticalThreshold: DefaultLoopDetectionCriticalThreshold,
 					WindowSize:        DefaultLoopDetectionWindowSize,
 				},
-				SplitOnMarker:       false,
-				MaxLLMRetries:       2,
-				LLMRetryBackoffSecs: 2,
+				SplitOnMarker:           false,
+				MaxLLMRetries:           2,
+				LLMRetryBackoffSecs:     2,
+				LLMRetryOnEmptyContent:  true,
+				LLMRetryOnFinishReasons: []string{"length"},
 			},
 		},
 		Session: SessionConfig{
@@ -415,6 +417,7 @@ func DefaultConfig() *Config {
 				EnableDenyPatterns: true,
 				AllowRemote:        true,
 				TimeoutSeconds:     60,
+				MaxOutputChars:     DefaultExecMaxOutputChars,
 			},
 			Skills: SkillsToolsConfig{
 				ToolConfig: ToolConfig{
@@ -491,6 +494,8 @@ func DefaultConfig() *Config {
 				Enabled:         true,
 				Mode:            ReadFileModeBytes,
 				MaxReadFileSize: 64 * 1024, // 64KB
+				MaxLines:        DefaultReadFileMaxLines,
+				MaxLineLength:   DefaultReadFileMaxLineLength,
 			},
 			Serial: ToolConfig{
 				Enabled: false, // Hardware tool - requires host serial ports

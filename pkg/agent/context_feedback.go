@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/channels"
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
@@ -32,10 +33,16 @@ func (al *AgentLoop) notifyContextFeedback(ts *turnState, content string) {
 
 	pubCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
+	// The notice is published after the turn's final reply, so no later message
+	// will consume a tracked progress card. Mark it terminal so channels deliver
+	// it as a plain one-shot message instead of tracking it for reuse.
 	_ = al.bus.PublishOutbound(pubCtx, outboundMessageForTurnWithOptions(
 		ts,
 		content,
-		outboundTurnMessageOptions{kind: messageKindToolFeedback},
+		outboundTurnMessageOptions{
+			kind: messageKindToolFeedback,
+			raw:  map[string]string{channels.ToolFeedbackTerminalKey: "true"},
+		},
 	))
 }
 
@@ -72,11 +79,36 @@ func formatContextCompactFeedback(dropped, remaining int) string {
 	)
 }
 
-// formatContextSummaryCounts reports seahorse summary creation counts.
+// formatContextSummaryCounts reports seahorse summary creation counts in plain
+// language, for example:
+//
+//	"Compacted context: summarized 2 blocks of older messages and merged 3
+//	summaries into a higher-level summary to free up space."
+//
+// A "block" is a chunk of older messages collapsed into one compact summary; a
+// merge folds several summaries into a higher-level one. The notice only shows
+// the steps that actually ran, so leaf-only compactions omit the merge clause.
 func formatContextSummaryCounts(leaf, condensed int) string {
-	detail := "Compacted context: created " + strconv.Itoa(leaf) + " leaf summaries"
-	if condensed > 0 {
-		detail += " and " + strconv.Itoa(condensed) + " condensed summaries"
+	detail := "Compacted context: "
+	switch {
+	case leaf > 0 && condensed > 0:
+		detail += "summarized " + countLabel(leaf, "block", "blocks") +
+			" of older messages and merged " + countLabel(condensed, "summary", "summaries") +
+			" into a higher-level summary"
+	case leaf > 0:
+		detail += "summarized " + countLabel(leaf, "block", "blocks") + " of older messages"
+	default:
+		detail += "merged " + countLabel(condensed, "summary", "summaries") + " into a higher-level summary"
 	}
-	return utils.FormatToolFeedbackMessage(contextFeedbackToolCompact, detail+".", "")
+	return utils.FormatToolFeedbackMessage(contextFeedbackToolCompact, detail+" to free up space.", "")
+}
+
+// countLabel renders a count with its correctly pluralized noun, e.g.
+// "1 block" or "3 blocks".
+func countLabel(n int, singular, plural string) string {
+	word := plural
+	if n == 1 {
+		word = singular
+	}
+	return strconv.Itoa(n) + " " + word
 }

@@ -5,23 +5,65 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.5.1] - 2026-10-18
 
 ### Added
 
+- Configurable head+tail truncation for oversized tool output: `tools.exec.max_output_chars` (default 50,000), `tools.read_file.max_lines` (default 2,000) and `tools.read_file.max_line_length` (default 2,000), plus a 40/60 head+tail window for `web_fetch` and MCP text results.
+- Large tool results above `tools.max_inline_result_chars` (default 16,384) are spilled to `<workspace>/.artifacts/` with a bounded inline preview; recognized `web_fetch` and MCP JSON envelopes are rewritten as pageable text.
+- `/compact [focus]` command to compact the current session on demand, with an optional priority hint for the summarizer.
+- Cron tool `run` action to execute a job immediately without changing its schedule, and hot-reload of `cron/jobs.json` while the gateway is running.
+- `opencode-go` provider with per-model-family routing across OpenAI Chat Completions, OpenAI Responses, Anthropic Messages and Google Gemini endpoints.
+- `picoclaw plugin` CLI with `list`, `show`, `add`, `remove`, `enable`, `disable`, `edit`, `validate`, `init` and `test`, plus `plugins.Validate` for package linting.
 - BytePlus (`byteplus`) as an OpenAI-compatible provider, including `thinking_level: "off"` support.
+- Additive tool-definition injection in `before_llm` plugin hooks.
+- Configurable per-stream message-bus backpressure budgets, including the audio chunk stream, and `HealthCheckWithThreshold` for readiness checks.
+- Runtime memory tuning via `PICOCLAW_MEMORY_LIMIT_MB` and `PICOCLAW_GOGC`, with transient heap release after large media payloads.
 
 ### Changed
 
-- Removed unused channel settings fields (`discord.settings.mention_only`, `onebot.settings.group_trigger_prefix`, `pico.settings.write_timeout`); group triggering is configured through `group_trigger`.
-- Per-model `rpm` is now enforced for single-candidate calls, configured streaming and image-model candidates, not only inside the fallback chain. Existing configs that set `rpm` on a model without fallbacks will now be throttled; waits of one second or more are logged.
+- Default SubTurns per parent turn lowered from 5 to 3 to reduce memory use on low-RAM devices; set `agents.defaults.subturn.max_concurrent` to restore 5. Values above 32 are clamped to 32.
+- Per-model `rpm` is now enforced for single-candidate calls and configured streaming and image-model candidates, not only inside the fallback chain. Existing configs that set `rpm` on a model without fallbacks are now throttled; waits of one second or more are logged.
+- Cron: a job no longer runs concurrently with itself. A scheduled occurrence that falls due while the previous run of the same job is still executing is skipped while the schedule still advances.
+- Cron `cron_expr` schedules honor the process time zone (`TZ`); the agent prompt now shows the zone, and the docs explain that there is no per-job time zone.
+- Tool feedback is merged per LLM response on channels that cannot edit messages, so repeated tool updates do not flood the chat.
+- Vision: inline images are downscaled, EXIF orientation is baked in, and pixel/size limits are enforced before decoding; image generation streams decoded images to disk.
+- Providers stream JSON request bodies instead of buffering them.
+- Seahorse bounds its SQLite connection pool, applies pragmas to every connection and moves temporary storage to disk; MCP server startup concurrency is bounded and isolation preflight is cached per configuration generation.
+- Media cleanup uses an idle-based TTL and rejects invalid cleanup policies.
+- Documentation restructured with a new landing page and Web UI guide, reorganized navigation and dedicated tool pages; README sections trimmed.
+- Updated dependencies, including `openai-go` v3.77.0, `anthropic-sdk-go`, `slack-go` v0.30.1, `copilot-sdk` v1.0.19, `aws-sdk-go-v2` v1.47.3, Lark SDK v3.12.0, Pion RTP v1.10.5, `golang.org/x/net` v0.61.0, `golang.org/x/sync` v0.24.0 and `golang.org/x/oauth2` v0.37.0, plus frontend dependencies.
 - Documented that round-robin load balancing is applied when a model is resolved (agent startup or `/model` switch), not per request.
+
+### Removed
+
+- Unused channel settings fields (`discord.settings.mention_only`, `onebot.settings.group_trigger_prefix`, `pico.settings.write_timeout`); group triggering is configured through `group_trigger`.
+- Android section from the documentation and Android library builds from CI.
+- `ROADMAP.md` and its dangling references.
 
 ### Fixed
 
-- A model written with a leading slash (for example `/gpt-4o`) now resolves to the default provider instead of failing with `unknown protocol ""`.
+- Gateway hot-reload: changed channels no longer lose their worker, the config race is fixed and the watcher is repaired.
+- Agent routing now scores real history and media and hardens attachment detection; the self-evolution runtime is aligned with the documented spec.
+- Agent surfaces token-limit truncation instead of a generic empty response, clarifies compaction feedback and releases inbound media after the consuming turn completes.
+- Cron: one-time jobs that expired while the service was down are finalized, due jobs run concurrently, recurring runs are anchored to the scheduled time to avoid drift, `wakeChan` is buffered, `ListJobs`/`EnableJob` return deep copies, the job handler is read under lock, and Pico jobs are scoped to the channel instead of a single chat.
+- MCP: case-only server names stay distinct in tool identifiers, discovery TTL advances once per turn, the closed flag is set under lock to drain in-flight calls, and large-text artifacts are bounded.
+- Plugin hooks: the `turn_completed` alias is honored for process hooks, hooks are closed outside the manager lock, the effective observer timeout is logged, a `respond` hook that bypasses approval for registered tools logs a warning, hook text is truncated safely and the plugin MCP hook turn cache is bounded.
+- Plugins: `read_resource` is exposed for references-only plugins.
+- Seahorse and media: the session cursor is drained before per-session queries, fallback summaries truncate without splitting UTF-8 runes, and DeltaChat/Weixin subprocesses are routed through isolation.
+- Isolation: absolute path arguments are exposed read-only.
+- Security: writes to sensitive files are protected; filesystem reads block case variants of protected paths, resolved credential symlink targets and Windows extended drive paths; large tool-result artifacts are documented as unfiltered.
+- Providers: a model written with a leading slash (for example `/gpt-4o`) resolves to the default provider instead of failing with `unknown protocol ""`; streamed JSON request bodies are replayable; serialization context is preserved on JSON encoding errors; the encoder goroutine stops when request build fails; image generation caps the provider error body kept in messages.
+- Web search: oversized responses return an explicit error, SearXNG decoding is bounded, and upstream error bodies are truncated.
+- Channels: Telegram retries media downloads and reports failed attachments instead of dropping them; QQ auth is restored with a pinned botgo fork; Weixin treats only `ret=-2` as a final failure, reserves reply slots for the final answer and does not retry API-rejected messages.
+- Heartbeat: synchronous responses are delivered, state is reloaded before resolving the last channel, startup is only announced when enabled and the first-run timer is canceled on service stop.
+- Events: the `Crash` panic policy is honored and recovered panics are counted; `bus.message.dropped` is documented.
+- Netbind: partial listener binds are reported instead of silently dropping an IP family.
+- Web UI: cron run sessions no longer shadow Pico chats in the session list.
+- Installer: the latest release tag is resolved from the redirect.
+- Frontend: vulnerable transitive dependencies are patched.
+- Config migration preserves the default `tools.max_inline_result_chars` for migrated configs.
 - Providers guide: the Z.AI Coding Plan provider id is `zai`, not `zai-coding`.
-- Lowered the default number of concurrent SubTurns per parent turn from 5 to 3 to reduce memory use on low-RAM devices; set `agents.defaults.subturn.max_concurrent` to restore the previous value. Values above 32 are now clamped to 32.
 
 ## [0.5.0] - 2026-10-11
 
@@ -90,5 +132,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Authentication: use configured scopes when refreshing OAuth tokens and adapt the Copilot provider to SDK v1.
 - Updater: use fork releases for self-update and select the matching arch asset.
 
-[unreleased]: https://github.com/afjcjsbx/picoclaw/compare/v0.4.0...HEAD
+[0.5.1]: https://github.com/afjcjsbx/picoclaw/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/afjcjsbx/picoclaw/compare/v0.4.0...v0.5.0

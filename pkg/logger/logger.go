@@ -143,6 +143,13 @@ func GetLevel() LogLevel {
 	return currentLevel
 }
 
+// IsDebugEnabled reports whether DEBUG-level messages are currently emitted.
+// Call sites use it to skip building expensive debug payloads when the level
+// is above DEBUG.
+func IsDebugEnabled() bool {
+	return GetLevel() <= DEBUG
+}
+
 // ParseLevel converts a case-insensitive level name to a LogLevel.
 // Returns the level and true if valid, or (INFO, false) if unrecognized.
 func ParseLevel(s string) (LogLevel, bool) {

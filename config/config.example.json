@@ -24,11 +24,12 @@
       },
       "vision_max_image_dimension": 1568,
       "vision_jpeg_quality": 85,
-      "summarize_message_threshold": 20,
       "summarize_token_percent": 75,
       "split_on_marker": false,
       "max_llm_retries": 2,
       "llm_retry_backoff_secs": 2,
+      "llm_retry_on_empty_content": true,
+      "llm_retry_on_finish_reasons": ["length"],
       "tool_feedback": {
         "enabled": false,
         "max_args_length": 300,
@@ -63,6 +64,12 @@
     "cold_path_times": []
   },
   "model_list": [
+    {
+      "_comment": "OpenCode Go - one key for all models; PicoClaw picks the right endpoint per model (api_base optional, defaults to https://opencode.ai/inference/go)",
+      "model_name": "go-kimi",
+      "model": "opencode-go/kimi-k3",
+      "api_keys": ["your-opencode-go-api-key"]
+    },
     {
       "model_name": "gpt-5.4",
       "model": "openai/gpt-5.4",

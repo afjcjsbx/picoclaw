@@ -86,6 +86,15 @@ make build GO_BUILD_TAGS='goolm,stdjson,custom_channels,channel_telegram,channel
 
 ## Omit Seahorse
 
+Seahorse is PicoClaw's built-in memory system. The `seahorse` context manager
+(enabled with `context_manager: seahorse` in the agent defaults) keeps a local
+SQLite database, `sessions/seahorse.db`, with an FTS5 index over the session
+history, so the agent can retrieve and compact older context. See
+[Seahorse Memory](../architecture/seahorse-memory.md) for how the index,
+compaction, and retrieval work, and
+[Session Startup Cost and Automatic Pruning](../architecture/session-startup-and-pruning.md)
+for startup cost and pruning operations.
+
 The `no_seahorse` tag excludes the Seahorse context manager from the main
 `picoclaw` executable. This also removes the `pkg/seahorse` import and its
 `modernc.org/sqlite` dependency from that executable when no other selected
@@ -96,6 +105,11 @@ For a Telegram-only build without Seahorse:
 ```bash
 make build GO_BUILD_TAGS='goolm,stdjson,custom_channels,channel_telegram,no_seahorse'
 ```
+
+Building without Seahorse also lowers the runtime footprint: the agent skips
+the SQLite bootstrap of every known session at startup, and no `seahorse.db`
+has to be written or maintained. This is the right choice when an external
+system provides memory instead, for example the [Mem0 plugin](plugins.md#mem0).
 
 When Seahorse is omitted, PicoClaw still recognizes `context_manager: seahorse`
 as a configured manager, but its factory reports that Seahorse is absent from

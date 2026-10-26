@@ -25,6 +25,14 @@ import (
 	"github.com/sipeed/picoclaw/pkg/isolation"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	fstools "github.com/sipeed/picoclaw/pkg/tools/fs"
+	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
+)
+
+// maxOutputBufferSize caps the output captured per session; outputTruncateMarker
+// is appended once the cap is reached.
+const (
+	maxOutputBufferSize  = 1 * 1024 * 1024 // 1MB
+	outputTruncateMarker = "\n... [output truncated, exceeded 1MB]\n"
 )
 
 var (
@@ -47,6 +55,7 @@ type ExecTool struct {
 	allowedPathPatterns []*regexp.Regexp
 	restrictToWorkspace bool
 	allowRemote         bool
+	maxOutputChars      int
 	sessionManager      *SessionManager
 }
 
@@ -200,6 +209,11 @@ func NewExecToolWithConfig(
 		timeout = time.Duration(cfg.Tools.Exec.TimeoutSeconds) * time.Second
 	}
 
+	maxOutputChars := config.DefaultExecMaxOutputChars
+	if cfg != nil {
+		maxOutputChars = cfg.Tools.Exec.GetMaxOutputChars()
+	}
+
 	return &ExecTool{
 		workingDir:          workingDir,
 		timeout:             timeout,
@@ -209,6 +223,7 @@ func NewExecToolWithConfig(
 		allowedPathPatterns: allowedPathPatterns,
 		restrictToWorkspace: restrict,
 		allowRemote:         allowRemote,
+		maxOutputChars:      maxOutputChars,
 		sessionManager:      getSessionManager(),
 	}, nil
 }
@@ -244,21 +259,22 @@ Before a command explicitly creates files or directories, use list_dir when avai
 
 Usage notes:
 - action is required; command is required for action=run.
-- The optional timeout parameter is in seconds and overrides the configured timeout for foreground commands; 0 disables the timeout. It cannot be combined with background=true. Foreground output is truncated after 10,000 bytes; background session output is limited to 1 MB.
-- Use background=true for long-running commands. The result includes a sessionId. Use action=list to list sessions; use poll, read, write, send-keys, or kill with sessionId to manage one. write sends stdin; send-keys sends keys to a PTY. Sessions are cleaned up 30 minutes after the process exits.
+- The optional timeout parameter is in seconds and overrides the configured timeout for foreground commands; 0 disables the timeout. It cannot be combined with background=true. Foreground output longer than the configured limit (default 50,000 chars) is truncated to the first 40%% and last 60%% around an omission notice; background session output is limited to 1 MB.
+- Use background=true for long-running commands. The result includes a sessionId. Use action=list to list sessions; use poll, wait, read, write, send-keys, or kill with sessionId to manage one. poll returns immediately; to wait for a session to finish use wait instead of polling in a loop. write sends stdin; send-keys sends keys to a PTY. Sessions are cleaned up 30 minutes after the process exits.
 - Combine background=true with pty=true for interactive sessions when supported. PTY is not supported on Windows.
 - Run independent commands in separate tool calls. %s Use semicolons only when later commands may run even if an earlier one fails. Do not use newlines to separate commands; newlines inside quoted strings are fine.`, runtime.GOOS, shell, chainGuidance)
 }
 
-//nolint:dupl // Tool parameter schemas intentionally use similar JSON-schema map literals.
+var execActions = []string{"run", "list", "poll", "wait", "read", "write", "kill", "send-keys"}
+
 func (t *ExecTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"action": map[string]any{
 				"type":        "string",
-				"enum":        []string{"run", "list", "poll", "read", "write", "kill", "send-keys"},
-				"description": "Action: run (execute command), list (show sessions), poll (check status), read (get output), write (send input), kill (terminate), send-keys (send keys to PTY)",
+				"enum":        execActions,
+				"description": "Action: run (execute command), list (show sessions), poll (check status, returns immediately), wait (block until a session exits or timeout), read (get output), write (send input), kill (terminate), send-keys (send keys to PTY)",
 			},
 			"command": map[string]any{
 				"type":        "string",
@@ -266,7 +282,7 @@ func (t *ExecTool) Parameters() map[string]any {
 			},
 			"sessionId": map[string]any{
 				"type":        "string",
-				"description": "Session ID (required for poll/read/write/kill/send-keys)",
+				"description": "Session ID (required for poll/wait/read/write/kill/send-keys)",
 			},
 			"keys": map[string]any{
 				"type":        "string",
@@ -290,7 +306,7 @@ func (t *ExecTool) Parameters() map[string]any {
 			},
 			"timeout": map[string]any{
 				"type":        "integer",
-				"description": "Optional timeout in seconds for foreground commands; overrides the configured timeout, and 0 disables the timeout. Not supported with background=true.",
+				"description": "Optional timeout in seconds for foreground commands; overrides the configured timeout, and 0 disables the timeout. Not supported with background=true. For wait: maximum seconds to block (default and cap: the configured timeout).",
 			},
 		},
 		"required": []string{"action"},
@@ -310,6 +326,8 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 		return t.executeList()
 	case "poll":
 		return t.executePoll(args)
+	case "wait":
+		return t.executeWait(ctx, args)
 	case "read":
 		return t.executeRead(args)
 	case "write":
@@ -530,23 +548,35 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string, timeout tim
 		output = "(no output)"
 	}
 
-	maxLen := 10000
-	if len(output) > maxLen {
-		output = output[:maxLen] + fmt.Sprintf("\n... (truncated, %d more chars)", len(output)-maxLen)
+	maxOutputChars := t.maxOutputChars
+	if maxOutputChars <= 0 {
+		maxOutputChars = config.DefaultExecMaxOutputChars
+	}
+	fullOutput := output
+	output, truncated := toolshared.TruncateHeadTail(output, maxOutputChars, "OUTPUT")
+
+	// Attach the pre-truncation output so the large-result spill can save it
+	// instead of the cut view: the omitted middle stays readable from the
+	// artifact whenever the result is large enough to spill.
+	fullText := ""
+	if truncated {
+		fullText = fullOutput
 	}
 
 	if err != nil {
 		return &ToolResult{
-			ForLLM:  output,
-			ForUser: output,
-			IsError: true,
+			ForLLM:   output,
+			ForUser:  output,
+			IsError:  true,
+			FullText: fullText,
 		}
 	}
 
 	return &ToolResult{
-		ForLLM:  output,
-		ForUser: output,
-		IsError: false,
+		ForLLM:   output,
+		ForUser:  output,
+		IsError:  false,
+		FullText: fullText,
 	}
 }
 
@@ -560,6 +590,10 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 		StartTime:  time.Now().Unix(),
 		Status:     "running",
 		ptyKeyMode: PtyKeyModeCSI,
+		// Initialize the output buffer before the session is published to the
+		// manager: readers (session_read/list_sessions) must never observe a
+		// session whose buffer is still nil.
+		outputBuffer: &bytes.Buffer{},
 	}
 
 	var cmd *exec.Cmd
@@ -577,6 +611,7 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 	var stdoutReader io.ReadCloser
 	var stderrReader io.ReadCloser
 	var stdinWriter io.WriteCloser
+	var ptySlave *os.File
 
 	if ptyEnabled {
 		ptmx, tty, err := pty.Open()
@@ -593,6 +628,7 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 		setSysProcAttrForPty(cmd)
 
 		session.ptyMaster = ptmx
+		ptySlave = tty
 	} else {
 		var err error
 		stdoutReader, err = cmd.StdoutPipe()
@@ -614,16 +650,24 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 	// Background sessions use the same startup path so isolation stays consistent
 	// with synchronous exec runs.
 	if err := isolation.Start(cmd); err != nil {
+		if ptySlave != nil {
+			_ = ptySlave.Close()
+		}
 		if session.ptyMaster != nil {
 			_ = session.ptyMaster.Close()
 		}
 		return ErrorResult(fmt.Sprintf("failed to start command: %v", err))
 	}
 
+	// The child inherited its own copies of the PTY slave end. The parent must
+	// release its copy now, otherwise the master never observes EOF/EIO when
+	// the child exits and the reader goroutine would block forever.
+	if ptySlave != nil {
+		_ = ptySlave.Close()
+	}
+
 	session.PID = cmd.Process.Pid
 	t.sessionManager.Add(session)
-
-	session.outputBuffer = &bytes.Buffer{}
 
 	// PTY mode: read from ptyMaster and wait for process
 	// Note: On Linux, closing ptyMaster doesn't interrupt blocking Read() calls,
@@ -685,6 +729,9 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 					break
 				}
 			}
+			// The child side is gone (EOF/EIO) or the session was killed:
+			// release the master descriptor so no fd survives the session.
+			_ = session.ptyMaster.Close()
 		}()
 	} else {
 		// Non-PTY mode: single goroutine reads pipes.
@@ -807,6 +854,9 @@ func (t *ExecTool) executePoll(args map[string]any) *ToolResult {
 		Status:    session.GetStatus(),
 		ExitCode:  session.GetExitCode(),
 	}
+	if !session.IsDone() && session.noteCheck() >= idleCheckLimit {
+		resp.Note = pollIdleNote
+	}
 	data, err := json.Marshal(resp)
 	if err != nil {
 		return ErrorResult(err.Error())
@@ -815,6 +865,91 @@ func (t *ExecTool) executePoll(args map[string]any) *ToolResult {
 		ForLLM:  string(data),
 		IsError: false,
 	}
+}
+
+const (
+	// idleCheckLimit is how many consecutive poll/wait calls on a silent running
+	// session it takes to tell the model to stop checking.
+	idleCheckLimit = 2
+	pollIdleNote   = "Still running with no new output since your last checks. poll returns " +
+		"immediately, so repeating it will not help: use action=wait (with timeout) to block " +
+		"until it exits, or do other work."
+	waitIdleNote = "No new output after repeated waits. If that is not expected, read the " +
+		"output or kill the session instead of waiting again."
+	// defaultWaitMax caps one wait when no exec timeout is configured.
+	defaultWaitMax = 60 * time.Second
+)
+
+// executeWait blocks until the session exits, the timeout elapses, or ctx is
+// canceled. A wait that times out is not a failure: the response says so, since
+// models otherwise misread it and re-issue the same call.
+func (t *ExecTool) executeWait(ctx context.Context, args map[string]any) *ToolResult {
+	sessionID, ok := args["sessionId"].(string)
+	if !ok {
+		return ErrorResult("sessionId is required")
+	}
+
+	maxWait := t.timeout
+	if maxWait <= 0 {
+		maxWait = defaultWaitMax
+	}
+	window, clampNote := maxWait, ""
+	if raw, ok := args["timeout"]; ok {
+		// JSON tool arguments always decode numbers as float64.
+		value, isNumber := raw.(float64)
+		if !isNumber || value != math.Trunc(value) || value < 1 {
+			return ErrorResult("timeout must be a positive integer number of seconds")
+		}
+		if requested := time.Duration(value) * time.Second; requested <= maxWait {
+			window = requested
+		} else {
+			clampNote = fmt.Sprintf("Requested wait of %ds was clamped to the configured limit of %ds. ",
+				int64(value), int64(maxWait/time.Second))
+		}
+	}
+
+	session, err := t.sessionManager.Get(sessionID)
+	if err != nil {
+		if errors.Is(err, ErrSessionNotFound) {
+			return ErrorResult(fmt.Sprintf("session not found: %s", sessionID))
+		}
+		return ErrorResult(err.Error())
+	}
+
+	// ponytail: polls IsDone every 100ms instead of a done channel; a queued
+	// steering message does not release the wait, only ctx cancellation does.
+	deadline := time.NewTimer(window)
+	defer deadline.Stop()
+	tick := time.NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
+
+	timedOut := false
+	for !timedOut && !session.IsDone() {
+		select {
+		case <-ctx.Done():
+			return ErrorResult(fmt.Sprintf("wait interrupted: %v", ctx.Err()))
+		case <-deadline.C:
+			timedOut = true
+		case <-tick.C:
+		}
+	}
+
+	resp := ExecResponse{SessionID: sessionID, Status: session.GetStatus(), ExitCode: session.GetExitCode()}
+	if session.IsDone() {
+		resp.Output = session.Read()
+	} else {
+		resp.Note = clampNote + fmt.Sprintf(
+			"Wait window of %ds elapsed. The process is still running; this is not an error.",
+			int64(window/time.Second))
+		if session.noteCheck() >= idleCheckLimit {
+			resp.Note += " " + waitIdleNote
+		}
+	}
+	data, err := json.Marshal(resp)
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
+	return &ToolResult{ForLLM: string(data)}
 }
 
 func (t *ExecTool) executeRead(args map[string]any) *ToolResult {

@@ -449,13 +449,15 @@ func TestAgentLoop_EmitsContextCompressEventOnRetry(t *testing.T) {
 		t.Fatal("expected default agent")
 	}
 
-	defaultAgent.Sessions.SetHistory("session-1", []providers.Message{
+	if err = defaultAgent.Sessions.SetHistory(context.Background(), "session-1", []providers.Message{
 		{Role: "user", Content: "Old message 1"},
 		{Role: "assistant", Content: "Old response 1"},
 		{Role: "user", Content: "Old message 2"},
 		{Role: "assistant", Content: "Old response 2"},
 		{Role: "user", Content: "Trigger message"},
-	})
+	}); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
 
 	runtimeCh, closeRuntimeEvents := subscribeRuntimeEventsForTest(
 		t,
@@ -524,13 +526,12 @@ func TestAgentLoop_EmitsSessionSummarizeEvent(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:                 tmpDir,
-				ModelName:                 "test-model",
-				MaxTokens:                 4096,
-				MaxToolIterations:         10,
-				ContextWindow:             8000,
-				SummarizeMessageThreshold: 2,
-				SummarizeTokenPercent:     75,
+				Workspace:             tmpDir,
+				ModelName:             "test-model",
+				MaxTokens:             4096,
+				MaxToolIterations:     10,
+				ContextWindow:         8000,
+				SummarizeTokenPercent: 75,
 			},
 		},
 	}
@@ -542,14 +543,16 @@ func TestAgentLoop_EmitsSessionSummarizeEvent(t *testing.T) {
 		t.Fatal("expected default agent")
 	}
 
-	defaultAgent.Sessions.SetHistory("session-1", []providers.Message{
+	if err := defaultAgent.Sessions.SetHistory(context.Background(), "session-1", []providers.Message{
 		{Role: "user", Content: "Question one"},
 		{Role: "assistant", Content: "Answer one"},
 		{Role: "user", Content: "Question two"},
 		{Role: "assistant", Content: "Answer two"},
 		{Role: "user", Content: "Question three"},
 		{Role: "assistant", Content: "Answer three"},
-	})
+	}); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
 
 	runtimeCh, closeRuntimeEvents := subscribeRuntimeEventsForTest(
 		t,
@@ -560,7 +563,7 @@ func TestAgentLoop_EmitsSessionSummarizeEvent(t *testing.T) {
 	defer closeRuntimeEvents()
 
 	lcm := &legacyContextManager{al: al}
-	lcm.summarizeSession(defaultAgent, "session-1", nil)
+	lcm.summarizeSession(context.Background(), defaultAgent, "session-1", nil, "")
 
 	events := collectRuntimeEventStream(runtimeCh)
 	summaryEvt, ok := findRuntimeEvent(events, runtimeevents.KindAgentSessionSummarize)

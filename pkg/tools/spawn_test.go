@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 )
 
 // mockSpawner implements SubTurnSpawner for testing.
@@ -111,5 +112,151 @@ func TestSpawnTool_Execute_NilManager(t *testing.T) {
 	}
 	if !strings.Contains(result.ForLLM, "Subagent manager not configured") {
 		t.Errorf("Error message should mention manager not configured, got: %s", result.ForLLM)
+	}
+}
+
+// TestSubagentPromptText pins the exact system prompt handed to the sub-turn
+// spawner by both spawning tools, so the shared builder keeps the wording.
+func TestSubagentPromptText(t *testing.T) {
+	const task = "write the report"
+
+	tests := []struct {
+		name     string
+		label    string
+		expected string
+	}{
+		{
+			name: "without label",
+			expected: "You are a spawned subagent running in the background. " +
+				"Complete the given task independently and report back when done.\n\nTask: " + task,
+		},
+		{
+			name:  "with label",
+			label: "report-task",
+			expected: "You are a spawned subagent labeled \"report-task\" running in the background. " +
+				"Complete the given task independently and report back when done.\n\nTask: " + task,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run("spawn "+tt.name, func(t *testing.T) {
+			spawner := &mockSpawner{done: make(chan struct{})}
+			tool := NewSpawnTool(nil)
+			tool.SetSpawner(spawner)
+
+			args := map[string]any{"task": task}
+			if tt.label != "" {
+				args["label"] = tt.label
+			}
+			if result := tool.Execute(context.Background(), args); result == nil || result.IsError {
+				t.Fatalf("spawn failed: %v", result)
+			}
+
+			select {
+			case <-spawner.done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("the spawned subagent never ran")
+			}
+			if spawner.lastConfig.SystemPrompt != tt.expected {
+				t.Errorf("system prompt =\n%q\nwant\n%q", spawner.lastConfig.SystemPrompt, tt.expected)
+			}
+		})
+	}
+
+	subagentTests := []struct {
+		name     string
+		label    string
+		expected string
+	}{
+		{
+			name: "without label",
+			expected: "You are a subagent. " +
+				"Complete the given task independently and provide a clear, concise result.\n\nTask: " + task,
+		},
+		{
+			name:  "with label",
+			label: "report-task",
+			expected: "You are a subagent labeled \"report-task\". " +
+				"Complete the given task independently and provide a clear, concise result.\n\nTask: " + task,
+		},
+	}
+
+	for _, tt := range subagentTests {
+		t.Run("subagent "+tt.name, func(t *testing.T) {
+			spawner := &mockSpawner{}
+			tool := NewSubagentTool(nil)
+			tool.SetSpawner(spawner)
+
+			args := map[string]any{"task": task}
+			if tt.label != "" {
+				args["label"] = tt.label
+			}
+			tool.Execute(context.Background(), args)
+
+			if spawner.lastConfig.SystemPrompt != tt.expected {
+				t.Errorf("system prompt =\n%q\nwant\n%q", spawner.lastConfig.SystemPrompt, tt.expected)
+			}
+		})
+	}
+}
+
+// panickingSpawner panics inside SpawnSubTurn to exercise goroutine recovery.
+type panickingSpawner struct{}
+
+func (m *panickingSpawner) SpawnSubTurn(ctx context.Context, cfg SubTurnConfig) (*ToolResult, error) {
+	panic("spawner exploded")
+}
+
+func TestSpawnTool_ExecuteAsync_PanicRecovered(t *testing.T) {
+	tool := NewSpawnTool(nil)
+	tool.SetSpawner(&panickingSpawner{})
+
+	results := make(chan *ToolResult, 1)
+	ack := tool.ExecuteAsync(
+		context.Background(),
+		map[string]any{"task": "do work"},
+		func(_ context.Context, result *ToolResult) { results <- result },
+	)
+
+	if ack == nil || ack.IsError {
+		t.Fatalf("spawn should be acknowledged, got: %+v", ack)
+	}
+	if !ack.Async {
+		t.Error("SpawnTool should return an async result")
+	}
+
+	select {
+	case result := <-results:
+		if result == nil || !result.IsError {
+			t.Fatalf("panic should surface as an error result, got: %+v", result)
+		}
+		if !strings.Contains(result.ForLLM, "spawn failed unexpectedly") {
+			t.Errorf("unexpected error message: %s", result.ForLLM)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("callback was not invoked after spawner panic")
+	}
+}
+
+func TestSpawnTool_ExecuteAsync_NilSpawnerResult(t *testing.T) {
+	tool := NewSpawnTool(nil)
+	tool.SetSpawner(&nilResultSpawner{})
+	results := make(chan *ToolResult, 1)
+	tool.ExecuteAsync(
+		context.Background(),
+		map[string]any{"task": "do work"},
+		func(_ context.Context, result *ToolResult) { results <- result },
+	)
+
+	select {
+	case result := <-results:
+		if result == nil || !result.IsError {
+			t.Fatalf("nil spawner result should surface as an error, got: %+v", result)
+		}
+		if !strings.Contains(result.ForLLM, "spawn returned no result") {
+			t.Errorf("unexpected error message: %s", result.ForLLM)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("callback was not invoked for nil spawner result")
 	}
 }

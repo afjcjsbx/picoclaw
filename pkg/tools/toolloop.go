@@ -19,6 +19,12 @@ import (
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
+// maxParallelToolCalls bounds how many tool calls from a single assistant
+// response run at the same time. The count is model-controlled, and every call
+// can spawn a process or open network connections, so the fan-out must not be
+// unbounded.
+const maxParallelToolCalls = 8
+
 // ToolLoopConfig configures the tool execution loop.
 type ToolLoopConfig struct {
 	Provider      providers.LLMProvider
@@ -152,7 +158,9 @@ func RunToolLoop(
 		}
 		messages = append(messages, assistantMsg)
 
-		// 7. Execute tool calls in parallel
+		// 7. Execute tool calls in parallel with a bounded fan-out: the call
+		// count comes from the model and each call may spawn a process or open
+		// network connections.
 		type indexedResult struct {
 			result *ToolResult
 			tc     providers.ToolCall
@@ -160,13 +168,18 @@ func RunToolLoop(
 
 		results := make([]indexedResult, len(normalizedToolCalls))
 		var wg sync.WaitGroup
+		sem := make(chan struct{}, maxParallelToolCalls)
 
 		for i, tc := range normalizedToolCalls {
 			results[i].tc = tc
 
+			// Block until a slot is free so the loop cannot start an
+			// unbounded number of tool executions at once.
+			sem <- struct{}{}
 			wg.Add(1)
 			go func(idx int, tc providers.ToolCall) {
 				defer wg.Done()
+				defer func() { <-sem }()
 				defer func() {
 					if r := recover(); r != nil {
 						logger.ErrorCF("toolloop", "tool execution goroutine panic recovered",

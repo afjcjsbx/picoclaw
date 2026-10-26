@@ -22,6 +22,12 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 	defer turnCancel()
 	ts.setTurnCancel(turnCancel)
 
+	// Steering and graceful interrupts may extend a turn past MaxIterations so
+	// the user can redirect a long task. Keep that extension bounded: without
+	// an absolute cap a steering message can keep a degenerate loop alive
+	// forever.
+	iterationHardCap := steeringIterationHardCap(ts.agent.MaxIterations)
+
 	// Inject turnState and AgentLoop into context so tools (e.g. spawn) can retrieve them.
 	turnCtx = withTurnState(turnCtx, ts)
 	turnCtx = WithAgentLoop(turnCtx, al)
@@ -35,6 +41,20 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 
 	turnStatus := TurnEndStatusCompleted
 	defer func() {
+		// A SubTurn never ends before its async children, whatever the exit path
+		// (iteration cap, loop guard, hook abort, ...). The direct-answer path has
+		// already fed their results to the model; here nobody can read them any
+		// more, so they are dropped.
+		if ts.parentTurnState != nil {
+			if dropped := ts.joinChildren(turnCtx, func(s string) string { return s }); len(dropped) > 0 {
+				logger.WarnCF("agent", "SubTurn ended with unread child results", map[string]any{
+					"agent_id": ts.agentID,
+					"turn_id":  ts.turnID,
+					"dropped":  len(dropped),
+				})
+			}
+		}
+
 		attemptedSkills := ts.attemptedSkillsSnapshot()
 		skillContextSnapshots := ts.skillContextSnapshotsSnapshot()
 		finalSuccessfulPath := []string(nil)
@@ -109,10 +129,14 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 	mediaOpts := mediaResolveOptionsFor(pipeline.Cfg)
 	finalContent := exec.finalContent
 
-	for ts.currentIteration() < ts.agent.MaxIterations || len(exec.pendingMessages) > 0 || func() bool {
-		graceful, _ := ts.gracefulInterruptRequested()
-		return graceful
-	}() {
+	// The graceful terminal iteration runs without tools and only once, so it
+	// may use the iteration at the cap itself.
+	for ts.currentIteration() < ts.agent.MaxIterations ||
+		(ts.currentIteration() < iterationHardCap && len(exec.pendingMessages) > 0) ||
+		(ts.currentIteration() <= iterationHardCap && func() bool {
+			graceful, _ := ts.gracefulInterruptRequested()
+			return graceful
+		}()) {
 		if ts.hardAbortRequested() {
 			turnStatus = TurnEndStatusAborted
 			return al.abortTurn(ts)
@@ -181,7 +205,8 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 				messages = append(messages, resolvedPending[i])
 				totalContentLen += len(pm.Content)
 				if !ts.opts.NoHistory {
-					ts.agent.Sessions.AddFullMessage(ts.sessionKey, pm)
+					warnSessionStoreError(ts.sessionKey, "add full message",
+						ts.agent.Sessions.AddFullMessage(ctx, ts.sessionKey, pm))
 					ts.recordPersistedMessage(pm)
 					ts.ingestMessage(turnCtx, al, pm)
 				}
@@ -207,6 +232,10 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 		}
 		// Always sync messages into exec.messages so CallLLM sees the updated state
 		exec.messages = messages
+
+		// Compact synchronously when the prompt reached the summarize threshold,
+		// at turn start or mid tool loop, so the turn continues from there.
+		pipeline.CompactBeforeLLM(turnCtx, ts, exec)
 
 		logger.DebugCF("agent", "LLM iteration",
 			map[string]any{
@@ -240,9 +269,10 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 				turnStatus = TurnEndStatusError
 				return turnResult{}, fmt.Errorf("hook requested turn abort")
 			}
-			// Ensure empty response falls back to DefaultResponse
+			// Ensure an empty response falls back to a user-facing message,
+			// with a dedicated hint when the model was cut off by max_tokens.
 			if finalContent == "" {
-				finalContent = ts.opts.DefaultResponse
+				finalContent = emptyResponseFallback(ts)
 			}
 			result, finalizeErr := pipeline.Finalize(ctx, turnCtx, ts, exec, turnStatus, finalContent)
 			if finalizeErr != nil {
@@ -289,6 +319,13 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 		}
 	}
 
+	// The hard cap can end the turn with steering already pulled off the
+	// queue. Hand it back so the post-turn continuation still delivers it.
+	if ts.parentTurnState == nil {
+		al.requeueSteeringMessagesForScope(ts.sessionKey, exec.pendingMessages)
+		exec.pendingMessages = nil
+	}
+
 	if ts.hardAbortRequested() {
 		turnStatus = TurnEndStatusAborted
 		return al.abortTurn(ts)
@@ -298,7 +335,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 		if ts.currentIteration() >= ts.agent.MaxIterations && ts.agent.MaxIterations > 0 {
 			finalContent = toolLimitResponse
 		} else {
-			finalContent = ts.opts.DefaultResponse
+			finalContent = emptyResponseFallback(ts)
 		}
 	}
 
@@ -385,4 +422,19 @@ func (al *AgentLoop) resolveContextManager() ContextManager {
 		return &legacyContextManager{al: al}
 	}
 	return cm
+}
+
+// steeringIterationHardCap bounds how far steering/graceful interrupts can
+// extend a turn beyond MaxIterations. The extra room is intentionally generous
+// for normal redirects but finite, so a model that keeps looping cannot burn
+// tokens indefinitely.
+func steeringIterationHardCap(maxIterations int) int {
+	if maxIterations <= 0 {
+		return 0
+	}
+	hardCap := maxIterations * 3
+	if floor := maxIterations + 20; floor > hardCap {
+		hardCap = floor
+	}
+	return hardCap
 }

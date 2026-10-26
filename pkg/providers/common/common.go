@@ -37,27 +37,91 @@ type (
 	ReasoningDetail        = protocoltypes.ReasoningDetail
 )
 
-const DefaultRequestTimeout = 120 * time.Second
+const (
+	DefaultRequestTimeout = 120 * time.Second
+
+	providerMaxIdleConns        = 4
+	providerMaxIdleConnsPerHost = 2
+	providerIdleConnTimeout     = 30 * time.Second
+)
+
+// SessionOptionKey is the LLM options key carrying the stable conversation
+// session key, for providers that tag requests with a per-conversation header.
+const SessionOptionKey = "session_key"
+
+// SessionHeader tags requests with the conversation session key, for gateways
+// that route or cache per conversation. The zero value is disabled.
+type SessionHeader struct {
+	Name     string // header to set; empty disables
+	Fallback string // used when options carry no session key (summaries, subagents, ...)
+	MaxLen   int    // longest value the gateway accepts; longer ones are truncated, 0 = no limit
+}
+
+// Apply sets the header from options[SessionOptionKey], else Fallback. A value
+// already present (e.g. from custom_headers) is never overwritten. The value
+// is reduced to visible ASCII because net/http rejects the whole request on an
+// invalid header value.
+func (s SessionHeader) Apply(h http.Header, options map[string]any) {
+	if s.Name == "" || h.Get(s.Name) != "" {
+		return
+	}
+	key, _ := options[SessionOptionKey].(string)
+	if strings.TrimSpace(key) == "" {
+		key = s.Fallback
+	}
+	key = strings.Map(func(r rune) rune {
+		if r < 0x20 || r > 0x7e {
+			return '_'
+		}
+		return r
+	}, strings.TrimSpace(key))
+	if s.MaxLen > 0 && len(key) > s.MaxLen {
+		key = key[:s.MaxLen] // ASCII only after the Map above, so a byte cut is safe
+	}
+	if key != "" {
+		h.Set(s.Name, key)
+	}
+}
+
+// SetOpenRouterAttribution adds OpenRouter app attribution headers
+// (https://openrouter.ai/docs/app-attribution) when req targets openrouter.ai,
+// so PicoClaw shows up in OpenRouter rankings and analytics. Call it before
+// applying user custom headers so those can still override these defaults.
+func SetOpenRouterAttribution(req *http.Request) {
+	if req == nil || req.URL == nil || !strings.EqualFold(req.URL.Hostname(), "openrouter.ai") {
+		return
+	}
+	req.Header.Set("Http-Referer", "https://github.com/afjcjsbx/picoclaw")
+	req.Header.Set("X-Openrouter-Title", "PicoClaw")
+	req.Header.Set("X-Openrouter-Categories", "personal-agent,cli-agent")
+}
+
+// newBoundedTransport returns a transport with a small idle-connection pool.
+// It clones http.DefaultTransport to preserve TLS, HTTP/2 and dial timeouts.
+func newBoundedTransport() *http.Transport {
+	var tr *http.Transport
+	if base, ok := http.DefaultTransport.(*http.Transport); ok {
+		tr = base.Clone()
+	} else {
+		tr = &http.Transport{Proxy: http.ProxyFromEnvironment}
+	}
+	tr.MaxIdleConns = providerMaxIdleConns
+	tr.MaxIdleConnsPerHost = providerMaxIdleConnsPerHost
+	tr.IdleConnTimeout = providerIdleConnTimeout
+	return tr
+}
 
 // NewHTTPClient creates an *http.Client with an optional proxy and the default timeout.
 func NewHTTPClient(proxy string) *http.Client {
 	client := &http.Client{
-		Timeout: DefaultRequestTimeout,
+		Timeout:   DefaultRequestTimeout,
+		Transport: newBoundedTransport(),
 	}
 	if proxy != "" {
 		parsed, err := url.Parse(proxy)
 		if err == nil {
-			// Preserve http.DefaultTransport settings (TLS, HTTP/2, timeouts, etc.)
-			if base, ok := http.DefaultTransport.(*http.Transport); ok {
-				tr := base.Clone()
-				tr.Proxy = http.ProxyURL(parsed)
-				client.Transport = tr
-			} else {
-				// Fallback: minimal transport if DefaultTransport is not *http.Transport.
-				client.Transport = &http.Transport{
-					Proxy: http.ProxyURL(parsed),
-				}
-			}
+			transport := client.Transport.(*http.Transport)
+			transport.Proxy = http.ProxyURL(parsed)
 		} else {
 			log.Printf("common: invalid proxy URL %q: %v", proxy, err)
 		}
@@ -229,6 +293,29 @@ func ParseDataAudioURL(mediaURL string) (format, data string, ok bool) {
 
 // --- Response parsing ---
 
+// WireUsage is an OpenAI-compatible usage object, including the prompt-cache
+// breakdown that OpenAI and OpenRouter report under prompt_tokens_details.
+type WireUsage struct {
+	UsageInfo
+	PromptTokensDetails *struct {
+		CachedTokens     int `json:"cached_tokens"`
+		CacheWriteTokens int `json:"cache_write_tokens"`
+	} `json:"prompt_tokens_details"`
+}
+
+// Info converts u to a UsageInfo with the cache breakdown filled in. Nil-safe.
+func (u *WireUsage) Info() *UsageInfo {
+	if u == nil {
+		return nil
+	}
+	info := u.UsageInfo
+	if d := u.PromptTokensDetails; d != nil {
+		info.CacheReadTokens = d.CachedTokens
+		info.CacheCreationTokens = d.CacheWriteTokens
+	}
+	return &info
+}
+
 // ParseResponse parses a JSON chat completion response body into an LLMResponse.
 func ParseResponse(body io.Reader) (*LLMResponse, error) {
 	var apiResponse struct {
@@ -256,7 +343,7 @@ func ParseResponse(body io.Reader) (*LLMResponse, error) {
 			} `json:"message"`
 			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
-		Usage *UsageInfo `json:"usage"`
+		Usage *WireUsage `json:"usage"`
 	}
 
 	if err := json.NewDecoder(body).Decode(&apiResponse); err != nil {
@@ -323,7 +410,7 @@ func ParseResponse(body io.Reader) (*LLMResponse, error) {
 		ReasoningDetails: choice.Message.ReasoningDetails,
 		ToolCalls:        toolCalls,
 		FinishReason:     normalizeFinishReason(choice.FinishReason),
-		Usage:            apiResponse.Usage,
+		Usage:            apiResponse.Usage.Info(),
 	}, nil
 }
 

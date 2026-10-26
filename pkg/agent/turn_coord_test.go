@@ -274,7 +274,7 @@ type saveFailingSessionStore struct {
 	err error
 }
 
-func (s *saveFailingSessionStore) Save(_ string) error {
+func (s *saveFailingSessionStore) Save(_ context.Context, _ string) error {
 	return s.err
 }
 

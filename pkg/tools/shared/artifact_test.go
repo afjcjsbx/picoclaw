@@ -79,3 +79,107 @@ func TestPruneArtifacts_EnforcesMaxFiles(t *testing.T) {
 		}
 	}
 }
+
+// seedArtifactDir creates n artifact files with fresh modification times, so
+// only the max-files retention rule can remove them.
+func seedArtifactDir(t *testing.T, n int) string {
+	t.Helper()
+	dir := t.TempDir()
+	for i := range n {
+		path := filepath.Join(dir, fmt.Sprintf("seed_%03d.txt", i))
+		if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+			t.Fatalf("seed %s: %v", path, err)
+		}
+	}
+	return dir
+}
+
+// forgetArtifactPruneState drops the process-global throttle entry for dir so
+// the test does not inherit a prune from an earlier PersistTextArtifact call.
+func forgetArtifactPruneState(t *testing.T, dir string) {
+	t.Helper()
+	t.Cleanup(func() { artifactPruneStates.Delete(dir) })
+}
+
+func persistArtifact(t *testing.T, dir string) {
+	t.Helper()
+	if _, err := PersistTextArtifact(dir, "artifact_*.txt", "payload"); err != nil {
+		t.Fatalf("PersistTextArtifact: %v", err)
+	}
+}
+
+func countArtifacts(t *testing.T, dir string) int {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read dir: %v", err)
+	}
+	return len(entries)
+}
+
+// TestPersistTextArtifact_PrunesAfterBurstWrite covers the write-count arm of
+// the throttle: the first write prunes, the next artifactPruneMaxWrites writes
+// skip the scan, and the following write clears the backlog.
+func TestPersistTextArtifact_PrunesAfterBurstWrite(t *testing.T) {
+	dir := seedArtifactDir(t, DefaultArtifactMaxFiles+72)
+	forgetArtifactPruneState(t, dir)
+
+	persistArtifact(t, dir)
+	if got := countArtifacts(t, dir); got != DefaultArtifactMaxFiles {
+		t.Fatalf("after first write: %d artifacts, want %d", got, DefaultArtifactMaxFiles)
+	}
+
+	for i := 1; i <= artifactPruneMaxWrites; i++ {
+		persistArtifact(t, dir)
+		want := DefaultArtifactMaxFiles + i
+		if got := countArtifacts(t, dir); got != want {
+			t.Fatalf("write %d after prune: %d artifacts, want %d (scan should be skipped)", i+1, got, want)
+		}
+	}
+
+	persistArtifact(t, dir)
+	if got := countArtifacts(t, dir); got != DefaultArtifactMaxFiles {
+		t.Fatalf("burst prune: %d artifacts, want %d", got, DefaultArtifactMaxFiles)
+	}
+}
+
+// TestPersistTextArtifact_PrunesAfterInterval covers the time arm of the
+// throttle: a directory that grew while the scan was skipped is pruned again
+// once artifactPruneMinInterval has elapsed.
+func TestPersistTextArtifact_PrunesAfterInterval(t *testing.T) {
+	dir := seedArtifactDir(t, DefaultArtifactMaxFiles+72)
+	forgetArtifactPruneState(t, dir)
+
+	persistArtifact(t, dir)
+	if got := countArtifacts(t, dir); got != DefaultArtifactMaxFiles {
+		t.Fatalf("after first write: %d artifacts, want %d", got, DefaultArtifactMaxFiles)
+	}
+
+	// Within the interval the scan is skipped even when the directory is over
+	// the retention target.
+	for i := range 10 {
+		path := filepath.Join(dir, fmt.Sprintf("extra_%02d.txt", i))
+		if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	persistArtifact(t, dir)
+	if got, want := countArtifacts(t, dir), DefaultArtifactMaxFiles+11; got != want {
+		t.Fatalf("within interval: %d artifacts, want %d (scan should be skipped)", got, want)
+	}
+
+	// Pretend the interval elapsed instead of sleeping for a minute.
+	value, ok := artifactPruneStates.Load(dir)
+	if !ok {
+		t.Fatal("missing prune state for the test directory")
+	}
+	state := value.(*artifactPruneState)
+	state.mu.Lock()
+	state.last = time.Now().Add(-2 * artifactPruneMinInterval)
+	state.mu.Unlock()
+
+	persistArtifact(t, dir)
+	if got := countArtifacts(t, dir); got != DefaultArtifactMaxFiles {
+		t.Fatalf("after interval: %d artifacts, want %d", got, DefaultArtifactMaxFiles)
+	}
+}

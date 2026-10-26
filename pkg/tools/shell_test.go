@@ -358,25 +358,98 @@ func TestShellTool_StderrCapture(t *testing.T) {
 	}
 }
 
-// TestShellTool_OutputTruncation verifies long output is truncated
+// TestShellTool_OutputTruncation verifies foreground output is bounded by the
+// configured cap and keeps a head+tail window around the omission notice.
 func TestShellTool_OutputTruncation(t *testing.T) {
 	tool, err := NewExecTool("", false)
 	if err != nil {
-		t.Errorf("unable to configure exec tool: %s", err)
+		t.Fatalf("unable to configure exec tool: %s", err)
 	}
 
 	ctx := context.Background()
-	// Generate long output (>10000 chars)
+	// 20000 chars is under the default 50,000-char cap: the output must stay intact.
 	args := map[string]any{
 		"action":  "run",
 		"command": "python3 -c \"print('x' * 20000)\" || echo " + strings.Repeat("x", 20000),
 	}
 
 	result := tool.Execute(ctx, args)
+	if result.IsError {
+		t.Fatalf("Execute() failed: %s", result.ForLLM)
+	}
+	if strings.Contains(result.ForLLM, "[OUTPUT TRUNCATED") {
+		t.Fatalf("output under the default cap should not be truncated")
+	}
+	if len(result.ForLLM) < 20000 {
+		t.Fatalf("expected full output, got length: %d", len(result.ForLLM))
+	}
 
-	// Should have truncation message or be truncated
-	if len(result.ForLLM) > 15000 {
-		t.Errorf("Expected output to be truncated, got length: %d", len(result.ForLLM))
+	// With a small configured cap, the first 40% and the last 60% are kept.
+	cfg := &config.Config{}
+	cfg.Tools.Exec.AllowRemote = true
+	cfg.Tools.Exec.MaxOutputChars = 1000
+	cappedTool, err := NewExecToolWithConfig("", false, cfg)
+	if err != nil {
+		t.Fatalf("unable to configure exec tool: %s", err)
+	}
+
+	capped := cappedTool.Execute(ctx, args)
+	if !strings.Contains(capped.ForLLM, "[OUTPUT TRUNCATED") {
+		t.Fatalf("expected truncation notice, got length: %d", len(capped.ForLLM))
+	}
+	if !strings.HasPrefix(capped.ForLLM, strings.Repeat("x", 400)) {
+		t.Fatal("expected the first 40% of the output to be kept")
+	}
+	if !strings.HasSuffix(capped.ForLLM, strings.Repeat("x", 599)+"\n") {
+		t.Fatal("expected the last 60% of the output to be kept")
+	}
+}
+
+// TestShellTool_TruncatedOutputSpillsFullText verifies that foreground output
+// beyond the configured cap stays recoverable: the large-result spill saves the
+// pre-truncation output, so the omitted middle is readable from the artifact.
+func TestShellTool_TruncatedOutputSpillsFullText(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Tools.Exec.AllowRemote = true
+	cfg.Tools.Exec.MaxOutputChars = 1000
+
+	tool, err := NewExecToolWithConfig("", false, cfg)
+	if err != nil {
+		t.Fatalf("unable to configure exec tool: %s", err)
+	}
+
+	workspace := t.TempDir()
+	reg := NewToolRegistry()
+	reg.SetWorkspace(workspace)
+	reg.SetMaxInlineResultRunes(512)
+	reg.Register(tool)
+
+	full := strings.Repeat("A", 900) + strings.Repeat("M", 20000) + strings.Repeat("Z", 900)
+	result := reg.Execute(context.Background(), "exec", map[string]any{
+		"action":  "run",
+		"command": "python3 -c \"print('A' * 900 + 'M' * 20000 + 'Z' * 900)\" || echo " + full,
+	})
+	if result.IsError {
+		t.Fatalf("Execute() failed: %s", result.ForLLM)
+	}
+
+	if len(result.ArtifactTags) != 1 {
+		t.Fatalf("expected the full output spilled as one artifact, got %+v", result.ArtifactTags)
+	}
+	path := strings.TrimSuffix(strings.TrimPrefix(result.ArtifactTags[0], "[file:"), "]")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("expected artifact readable: %v", err)
+	}
+	if got := strings.TrimSpace(string(data)); got != full {
+		t.Fatalf("expected the artifact to hold the full output, got %d chars (want %d)", len(got), len(full))
+	}
+	// Inline stays bounded and keeps the real head and tail of the full output.
+	if !strings.Contains(result.ForLLM, strings.Repeat("A", 100)) {
+		t.Fatal("expected the real output head in the preview")
+	}
+	if !strings.Contains(result.ForLLM, strings.Repeat("Z", 100)) {
+		t.Fatal("expected the real output tail in the preview")
 	}
 }
 
@@ -1119,6 +1192,37 @@ func TestShellTool_Background_ReturnsImmediately(t *testing.T) {
 	require.False(t, result.IsError, "background run should not error: %s", result.ForLLM)
 	require.Less(t, elapsed, time.Second, "background run should return immediately")
 	require.Contains(t, result.ForLLM, "sessionId")
+}
+
+// TestShellTool_BackgroundSessionReadableImmediately verifies that a background
+// session is safe to read as soon as it is visible in the session manager: the
+// output buffer must be initialized before the session is published, otherwise
+// ProcessSession.Read would dereference a nil buffer.
+func TestShellTool_BackgroundSessionReadableImmediately(t *testing.T) {
+	tool, err := NewExecTool("", false)
+	require.NoError(t, err)
+
+	sm := NewSessionManager()
+	t.Cleanup(sm.Stop)
+	tool.sessionManager = sm
+
+	ctx := WithToolContext(context.Background(), "cli", "test")
+	runResult := tool.Execute(ctx, map[string]any{
+		"action":     "run",
+		"command":    "sleep 10",
+		"background": "true",
+	})
+	require.False(t, runResult.IsError, "run should succeed: %s", runResult.ForLLM)
+
+	sessions := sm.List()
+	require.NotEmpty(t, sessions, "background session should be registered")
+
+	for _, info := range sessions {
+		session, err := sm.Get(info.ID)
+		require.NoError(t, err)
+		require.NotNil(t, session.outputBuffer, "output buffer must exist for published sessions")
+		require.NotPanics(t, func() { _ = session.Read() })
+	}
 }
 
 func TestShellTool_List_Empty(t *testing.T) {
@@ -2121,4 +2225,168 @@ func TestShellTool_CustomAllowDoesNotBecomeStrictAllowlist(t *testing.T) {
 	if got != "" {
 		t.Fatalf("custom allow patterns should not become a strict allowlist, got: %q", got)
 	}
+}
+
+// TestShellTool_PTY_ReaderStopsAfterExit verifies that the PTY reader
+// goroutine and its descriptors are released once the process exits, instead
+// of staying blocked on the master end forever.
+func TestShellTool_PTY_ReaderStopsAfterExit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("PTY not supported on Windows")
+	}
+
+	tool, err := NewExecTool("", false)
+	require.NoError(t, err)
+
+	sm := NewSessionManager()
+	t.Cleanup(sm.Stop)
+	tool.sessionManager = sm
+
+	ctx := WithToolContext(context.Background(), "cli", "test")
+
+	runPTY := func() string {
+		result := tool.Execute(ctx, map[string]any{
+			"action":     "run",
+			"command":    "echo done",
+			"pty":        "true",
+			"background": "true",
+		})
+		require.False(t, result.IsError, "PTY run should succeed: %s", result.ForLLM)
+		var resp ExecResponse
+		require.NoError(t, json.Unmarshal([]byte(result.ForLLM), &resp))
+		return resp.SessionID
+	}
+
+	// Warm up so lazily created runtime goroutines are already accounted for.
+	runPTY()
+	time.Sleep(300 * time.Millisecond)
+	baseline := runtime.NumGoroutine()
+
+	for i := 0; i < 3; i++ {
+		id := runPTY()
+		session, err := sm.Get(id)
+		require.NoError(t, err)
+		require.Eventually(t, func() bool {
+			session.mu.Lock()
+			defer session.mu.Unlock()
+			return session.Status == "done"
+		}, 5*time.Second, 20*time.Millisecond, "session should finish")
+	}
+
+	require.Eventually(t, func() bool {
+		return runtime.NumGoroutine() <= baseline+1
+	}, 5*time.Second, 50*time.Millisecond,
+		"PTY reader goroutines should stop after the process exits")
+}
+
+func startBackgroundSession(t *testing.T, command string) (*ExecTool, context.Context, string) {
+	t.Helper()
+	tool, err := NewExecTool("", false)
+	require.NoError(t, err)
+
+	sm := NewSessionManager()
+	t.Cleanup(sm.Stop)
+	tool.sessionManager = sm
+
+	ctx := WithToolContext(context.Background(), "cli", "test")
+	result := tool.Execute(ctx, map[string]any{"action": "run", "command": command, "background": "true"})
+	require.False(t, result.IsError, result.ForLLM)
+
+	var resp ExecResponse
+	require.NoError(t, json.Unmarshal([]byte(result.ForLLM), &resp))
+	t.Cleanup(func() {
+		tool.Execute(ctx, map[string]any{"action": "kill", "sessionId": resp.SessionID})
+	})
+	return tool, ctx, resp.SessionID
+}
+
+func execResp(t *testing.T, result *ToolResult) ExecResponse {
+	t.Helper()
+	require.False(t, result.IsError, result.ForLLM)
+	var resp ExecResponse
+	require.NoError(t, json.Unmarshal([]byte(result.ForLLM), &resp))
+	return resp
+}
+
+func TestShellTool_Wait_ReturnsOutputOnExit(t *testing.T) {
+	tool, ctx, id := startBackgroundSession(t, "sleep 1 && echo ok")
+
+	start := time.Now()
+	resp := execResp(t, tool.Execute(ctx, map[string]any{
+		"action": "wait", "sessionId": id, "timeout": float64(10),
+	}))
+
+	require.Equal(t, "done", resp.Status)
+	require.Contains(t, resp.Output, "ok")
+	require.Empty(t, resp.Note)
+	require.Less(t, time.Since(start), 5*time.Second)
+}
+
+func TestShellTool_Wait_TimeoutIsNotAnError(t *testing.T) {
+	tool, ctx, id := startBackgroundSession(t, "sleep 30")
+
+	resp := execResp(t, tool.Execute(ctx, map[string]any{
+		"action": "wait", "sessionId": id, "timeout": float64(1),
+	}))
+
+	require.Equal(t, "running", resp.Status)
+	require.Contains(t, resp.Note, "not an error")
+}
+
+func TestShellTool_Wait_ClampsToConfiguredTimeout(t *testing.T) {
+	tool, ctx, id := startBackgroundSession(t, "sleep 30")
+	tool.SetTimeout(time.Second)
+
+	resp := execResp(t, tool.Execute(ctx, map[string]any{
+		"action": "wait", "sessionId": id, "timeout": float64(600),
+	}))
+
+	require.Equal(t, "running", resp.Status)
+	require.Contains(t, resp.Note, "clamped to the configured limit of 1s")
+}
+
+func TestShellTool_Wait_InvalidArgs(t *testing.T) {
+	tool, ctx, id := startBackgroundSession(t, "sleep 30")
+
+	for _, timeout := range []any{float64(0), float64(-1), float64(1.5), "5"} {
+		result := tool.Execute(ctx, map[string]any{"action": "wait", "sessionId": id, "timeout": timeout})
+		require.True(t, result.IsError, "timeout=%v", timeout)
+	}
+	require.True(t, tool.Execute(ctx, map[string]any{"action": "wait"}).IsError)
+	require.True(t, tool.Execute(ctx, map[string]any{"action": "wait", "sessionId": "nope"}).IsError)
+}
+
+func TestShellTool_Wait_CanceledContext(t *testing.T) {
+	tool, ctx, id := startBackgroundSession(t, "sleep 30")
+	cctx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+	defer cancel()
+
+	result := tool.Execute(cctx, map[string]any{"action": "wait", "sessionId": id, "timeout": float64(30)})
+
+	require.True(t, result.IsError)
+	require.Contains(t, result.ForLLM, "wait interrupted")
+}
+
+func TestShellTool_Poll_IdleNoteAfterTwoSilentChecks(t *testing.T) {
+	tool, ctx, id := startBackgroundSession(t, "sleep 30")
+	poll := func() ExecResponse {
+		return execResp(t, tool.Execute(ctx, map[string]any{"action": "poll", "sessionId": id}))
+	}
+
+	require.Empty(t, poll().Note)
+	require.Contains(t, poll().Note, "action=wait")
+}
+
+func TestShellTool_Poll_NewOutputResetsIdleCount(t *testing.T) {
+	tool, ctx, id := startBackgroundSession(t, "echo first; sleep 1; echo second; sleep 30")
+	poll := func() ExecResponse {
+		return execResp(t, tool.Execute(ctx, map[string]any{"action": "poll", "sessionId": id}))
+	}
+
+	time.Sleep(300 * time.Millisecond)
+	require.Empty(t, poll().Note) // sees "first": output changed
+	time.Sleep(1500 * time.Millisecond)
+	require.Empty(t, poll().Note) // sees "second": output changed again
+	require.Empty(t, poll().Note) // first silent check
+	require.Contains(t, poll().Note, "action=wait")
 }

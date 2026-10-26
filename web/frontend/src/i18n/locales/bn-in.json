@@ -357,6 +357,8 @@
       "extraBodyHint": "অনুরোধ বডিতে ইনজেক্ট করার অতিরিক্ত JSON ক্ষেত্র, যেমন {\"reasoning_split\": true}।",
       "customHeaders": "Custom Headers",
       "customHeadersHint": "প্রতিটি অনুরোধে ইনজেক্ট করার অতিরিক্ত HTTP হেডার, যেমন {\"X-Source\": \"coding-plan\"}।",
+      "sessionHeader": "সেশন হেডার",
+      "sessionHeaderHint": "প্রতি কথোপকথনের স্থিতিশীল সেশন আইডির হেডার নাম (OpenCode Go-এর মতো রিলে প্রয়োজন)। প্রতিটি অনুরোধে সক্রিয় কথোপকথনের সেশন আইডি যাবে।",
       "invalidJson": "অবৈধ JSON ফর্ম্যাট"
     },
     "edit": {

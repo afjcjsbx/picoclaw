@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestSpawnStatusTool_Name(t *testing.T) {
@@ -402,5 +403,36 @@ func TestSpawnStatusTool_ChannelFiltering_NoContext(t *testing.T) {
 	}
 	if !strings.Contains(result.ForLLM, "subagent-1") {
 		t.Errorf("Expected task visible from no-context caller, got:\n%s", result.ForLLM)
+	}
+}
+
+func TestSpawnStatusFormatTask_TruncatesLongResult(t *testing.T) {
+	short := strings.Repeat("ok ", 10)
+	rendered := spawnStatusFormatTask(&SubagentTask{ID: "task-1", Status: "completed", Result: short})
+	if !strings.Contains(rendered, "result: "+short) {
+		t.Errorf("short result should be kept verbatim, got %q", rendered)
+	}
+
+	got := spawnStatusFormatTask(&SubagentTask{
+		ID:     "task-2",
+		Status: "completed",
+		Result: strings.Repeat("\u6f22", 400),
+	})
+
+	idx := strings.Index(got, "result: ")
+	if idx < 0 {
+		t.Fatalf("rendered task has no result line: %q", got)
+	}
+	result := got[idx+len("result: "):]
+
+	if !strings.HasSuffix(result, "\u2026") {
+		t.Errorf("expected ellipsis on truncated result, got %q", result)
+	}
+	// 300 kept runes plus the ellipsis; a byte-oriented cut would keep ~100.
+	if n := utf8.RuneCountInString(result); n != 301 {
+		t.Errorf("truncated result has %d runes, want 301", n)
+	}
+	if !utf8.ValidString(result) {
+		t.Errorf("truncated result is not valid UTF-8: %q", result)
 	}
 }

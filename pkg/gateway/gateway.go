@@ -156,6 +156,12 @@ func Run(debug bool, homePath, configPath string, allowEmptyStartup bool) (runEr
 	if err != nil {
 		return fmt.Errorf("error opening gateway listeners: %w", err)
 	}
+	for _, degraded := range listenResult.Degraded {
+		logger.Warnf(
+			"Gateway is listening on fewer interfaces than requested; some clients may be unable to connect: %s",
+			degraded,
+		)
+	}
 
 	// Enforce singleton: write PID file with generated token.
 	pidData, err := pid.WritePidFile(homePath, bindPlan.ProbeHost, cfg.Gateway.Port)
@@ -479,6 +485,7 @@ func setupAndStartServices(
 
 	runningServices.authToken = authToken
 	runningServices.HealthServer = health.NewServer(listenResult.ProbeHost, cfg.Gateway.Port, authToken)
+	runningServices.HealthServer.RegisterProtectedHandler(mcpStatusPath, mcpStatusHandler(agentLoop))
 
 	var listenAddr string
 	if len(listenResult.Listeners) > 0 {
@@ -865,6 +872,8 @@ func setupCronTool(
 	cronStorePath := filepath.Join(workspace, "cron", "jobs.json")
 
 	cronService := cron.NewCronService(cronStorePath, nil)
+	// Pick up hand edits and `picoclaw cron` CLI changes to jobs.json without a restart.
+	cronService.SetReloadInterval(cfg.Power.ScalePollInterval(2 * time.Second))
 
 	var cronTool *tools.CronTool
 	if cfg.Tools.IsToolEnabled("cron") {
@@ -879,8 +888,9 @@ func setupCronTool(
 
 	if cronTool != nil {
 		cronService.SetOnJob(func(job *cron.CronJob) (string, error) {
-			result := cronTool.ExecuteJob(context.Background(), job)
-			return result, nil
+			// Propagate the failure so the job state records lastStatus=error
+			// instead of reporting a broken run as "ok".
+			return cronTool.ExecuteJob(context.Background(), job)
 		})
 	}
 

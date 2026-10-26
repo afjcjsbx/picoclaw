@@ -1,10 +1,12 @@
 <div align="center">
-<img src="../../assets/logo.webp" alt="PicoClaw" width="512">
+<p align="center">
+  <img src="../../assets/logo.webp" alt="PicoClaw" width="200">
+</p>
 
 <h1>PicoClaw: Assistente IA Ultra-Efficiente in Go</h1>
 
 <h3>Hardware da $10 · 10MB di RAM · Avvio in ms · Let's Go, PicoClaw!</h3>
-  <p>
+  <p align="center">
     <img src="https://img.shields.io/badge/Go-1.27.1+-00ADD8?style=flat&logo=go&logoColor=white" alt="Go">
     <img src="https://img.shields.io/badge/Arch-x86__64%2C%20ARM64%2C%20MIPS%2C%20RISC--V%2C%20LoongArch-blue" alt="Hardware">
     <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
@@ -18,7 +20,9 @@
     <a href="https://discord.gg/V4sAZ9XWpN"><img src="https://img.shields.io/badge/Discord-Community-4c60eb?style=flat&logo=discord&logoColor=white" alt="Discord"></a>
   </p>
 
-[中文](README.zh.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | [Português](README.pt-br.md) | [Tiếng Việt](README.vi.md) | [Français](README.fr.md) | **Italiano** | [Bahasa Indonesia](README.id.md) | [Malay](README.ms.md) | [English](../../README.md)
+<p align="center">
+  <a href="README.zh.md">中文</a> | <a href="README.ja.md">日本語</a> | <a href="README.ko.md">한국어</a> | <a href="README.pt-br.md">Português</a> | <a href="README.vi.md">Tiếng Việt</a> | <a href="README.fr.md">Français</a> | <strong>Italiano</strong> | <a href="README.id.md">Bahasa Indonesia</a> | <a href="README.ms.md">Malay</a> | <a href="../../README.md">English</a>
+</p>
 
 </div>
 
@@ -83,7 +87,7 @@
 
 2026-02-26 🎉 PicoClaw raggiunge **20K stelle** in soli 17 giorni! Orchestrazione automatica dei canali e interfacce di capacità sono attive.
 
-2026-02-16 🎉 PicoClaw supera 12K stelle in una settimana! Ruoli di maintainer della community e [Roadmap](../../ROADMAP.md) pubblicati ufficialmente.
+2026-02-16 🎉 PicoClaw supera 12K stelle in una settimana! Ruoli di maintainer della community e Roadmap pubblicati ufficialmente.
 
 2026-02-13 🎉 PicoClaw supera 5000 stelle in 4 giorni! Roadmap del progetto e gruppi sviluppatori in fase di avvio.
 
@@ -526,7 +530,7 @@ Aggiungi al tuo `config.json`:
 }
 ```
 
-Per maggiori dettagli, vedi [Configurazione degli Strumenti - Skill](../reference/tools_configuration.md#skills-tool).
+Per maggiori dettagli, vedi [Configurazione degli Strumenti - Skill](../tools/skills.md).
 
 ## 🔗 MCP (Model Context Protocol)
 
@@ -568,7 +572,7 @@ picoclaw mcp test browserbase
 Usa `picoclaw mcp edit` quando ti servono campi avanzati che non sono coperti da `picoclaw mcp add`.
 Per esempio, `picoclaw mcp add` supporta `--deferred` e `--env-file`, mentre `picoclaw mcp edit` resta utile per modifiche JSON dirette e opzioni MCP meno comuni.
 
-Per la configurazione MCP completa (trasporti stdio, SSE, HTTP, Tool Discovery), vedi [Configurazione degli Strumenti - MCP](../reference/tools_configuration.md#mcp-tool). Per la reference della CLI, vedi [MCP Server CLI](../reference/mcp-cli.md).
+Per la configurazione MCP completa (trasporti stdio, SSE, HTTP, Tool Discovery), vedi [Configurazione degli Strumenti - MCP](../tools/mcp.md). Per la reference della CLI, vedi [MCP Server CLI](../reference/mcp-cli.md).
 
 ## <img src="../../assets/clawdchat-icon.png" width="24" height="24" alt="ClawdChat"> Unisciti al Social Network degli Agent
 

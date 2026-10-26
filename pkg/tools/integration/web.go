@@ -9,7 +9,6 @@ import (
 	"html"
 	"io"
 	"mime"
-	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -22,6 +21,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
@@ -35,7 +35,12 @@ const (
 	perplexityTimeout = 30 * time.Second // Perplexity (LLM-based, slower)
 	fetchTimeout      = 60 * time.Second // WebFetchTool
 
-	defaultMaxChars = 50000
+	// defaultMaxChars is a flood guard, not a context budget: content under it
+	// reaches the generic spillover path intact, which keeps a head+tail
+	// preview inline and stores the full page as a pageable workspace
+	// artifact. Only floods are lossy. Callers can request a smaller maxChars
+	// per call; the same head+tail truncation then applies at that cap.
+	defaultMaxChars = 2_000_000
 	maxRedirects    = 5
 
 	// maxSearchResponseBytes caps how much of a search provider's HTTP response
@@ -59,11 +64,7 @@ const (
 
 // Pre-compiled regexes for HTML text extraction
 var (
-	reScript     = regexp.MustCompile(`<script[\s\S]*?</script>`)
-	reStyle      = regexp.MustCompile(`<style[\s\S]*?</style>`)
-	reTags       = regexp.MustCompile(`<[^>]+>`)
-	reWhitespace = regexp.MustCompile(`[^\S\n]+`)
-	reBlankLines = regexp.MustCompile(`\n{3,}`)
+	reTags = regexp.MustCompile(`<[^>]+>`)
 
 	// DuckDuckGo result extraction
 	reDDGLink = regexp.MustCompile(
@@ -304,6 +305,36 @@ func mapKagiLensTimeFilter(rangeCode string, now time.Time) *kagiopenapi.SearchR
 	return lens
 }
 
+// retryableSearchStatus reports whether a failed search response is worth
+// retrying with another API key: rate limits, rejected keys and upstream
+// failures are key- or quota-related, every other status is final.
+func retryableSearchStatus(status int) bool {
+	return status == http.StatusTooManyRequests ||
+		status == http.StatusUnauthorized ||
+		status == http.StatusForbidden ||
+		status >= 500
+}
+
+// sendSearchRequest performs one search request and returns its status code
+// with the bounded body, already read and closed: the response itself never
+// escapes, so no caller can reach a closed body. Providers keep their own
+// status handling, error texts and retry decisions; this only removes the
+// repeated send/read/close sequence, with the two standard transport errors
+// spelled once.
+func sendSearchRequest(client *http.Client, req *http.Request) (body []byte, status int, err error) {
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, 0, fmt.Errorf("request failed: %w", err)
+	}
+
+	body, err = readSearchBody(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil {
+		return nil, resp.StatusCode, fmt.Errorf("failed to read response: %w", err)
+	}
+	return body, resp.StatusCode, nil
+}
+
 // readSearchBody reads a search provider response, failing loudly when it is
 // larger than maxSearchResponseBytes instead of handing a silently truncated
 // body to the parser (which would surface as a misleading JSON error).
@@ -318,13 +349,20 @@ func readSearchBody(r io.Reader) ([]byte, error) {
 	return body, nil
 }
 
-// errorBody renders an upstream response body for an error message, cut to
-// maxErrorBodyBytes so a large error page doesn't flood logs or the model.
-func errorBody(body []byte) string {
-	if len(body) <= maxErrorBodyBytes {
-		return string(body)
+// errorBodySnippet renders an upstream response body for an error message:
+// trimmed, cut to limit bytes and marked with "..." when it was cut, so a large
+// error page doesn't flood logs or the model. A multi-byte rune straddling the
+// cut is dropped rather than split.
+func errorBodySnippet(body []byte, limit int) string {
+	truncated := len(body) > limit
+	if truncated {
+		body = body[:limit]
 	}
-	return strings.ToValidUTF8(string(body[:maxErrorBodyBytes]), "") + "..."
+	snippet := strings.TrimSpace(strings.ToValidUTF8(string(body), ""))
+	if truncated {
+		snippet += "..."
+	}
+	return snippet
 }
 
 type BraveSearchProvider struct {
@@ -366,26 +404,19 @@ func (p *BraveSearchProvider) Search(
 		req.Header.Set("Accept", "application/json")
 		req.Header.Set("X-Subscription-Token", apiKey)
 
-		resp, err := p.client.Do(req)
+		body, status, err := sendSearchRequest(p.client, req)
 		if err != nil {
-			lastErr = fmt.Errorf("request failed: %w", err)
+			lastErr = err
 			continue
 		}
 
-		body, err := readSearchBody(resp.Body)
-		_ = resp.Body.Close()
-
-		if err != nil {
-			lastErr = fmt.Errorf("failed to read response: %w", err)
-			continue
-		}
-
-		if resp.StatusCode != http.StatusOK {
-			lastErr = fmt.Errorf("API error (status %d): %s", resp.StatusCode, errorBody(body))
-			if resp.StatusCode == http.StatusTooManyRequests ||
-				resp.StatusCode == http.StatusUnauthorized ||
-				resp.StatusCode == http.StatusForbidden ||
-				resp.StatusCode >= 500 {
+		if status != http.StatusOK {
+			lastErr = fmt.Errorf(
+				"API error (status %d): %s",
+				status,
+				errorBodySnippet(body, maxErrorBodyBytes),
+			)
+			if retryableSearchStatus(status) {
 				continue
 			}
 			return "", lastErr
@@ -418,7 +449,7 @@ func (p *BraveSearchProvider) Search(
 			logger.WarnCF("web_search", "Brave API returned empty results",
 				map[string]any{
 					"query":        query,
-					"status":       resp.StatusCode,
+					"status":       status,
 					"body_preview": bodyPreview,
 				})
 			return fmt.Sprintf("No results for: %s", query), nil
@@ -499,26 +530,19 @@ func (p *TavilySearchProvider) Search(
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("User-Agent", userAgent)
 
-		resp, err := p.client.Do(req)
+		body, status, err := sendSearchRequest(p.client, req)
 		if err != nil {
-			lastErr = fmt.Errorf("request failed: %w", err)
+			lastErr = err
 			continue
 		}
 
-		body, err := readSearchBody(resp.Body)
-		_ = resp.Body.Close()
-
-		if err != nil {
-			lastErr = fmt.Errorf("failed to read response: %w", err)
-			continue
-		}
-
-		if resp.StatusCode != http.StatusOK {
-			lastErr = fmt.Errorf("tavily api error (status %d): %s", resp.StatusCode, errorBody(body))
-			if resp.StatusCode == http.StatusTooManyRequests ||
-				resp.StatusCode == http.StatusUnauthorized ||
-				resp.StatusCode == http.StatusForbidden ||
-				resp.StatusCode >= 500 {
+		if status != http.StatusOK {
+			lastErr = fmt.Errorf(
+				"tavily api error (status %d): %s",
+				status,
+				errorBodySnippet(body, maxErrorBodyBytes),
+			)
+			if retryableSearchStatus(status) {
 				continue
 			}
 			return "", lastErr
@@ -706,35 +730,25 @@ func (p *KeenableSearchProvider) Search(
 			req.Header.Set("X-Api-Key", apiKey)
 		}
 
-		resp, err := p.client.Do(req)
+		body, status, err := sendSearchRequest(p.client, req)
 		if err != nil {
-			lastErr = fmt.Errorf("request failed: %w", err)
+			lastErr = err
 			continue
 		}
 
-		body, err := readSearchBody(resp.Body)
-		_ = resp.Body.Close()
-		if err != nil {
-			lastErr = fmt.Errorf("failed to read response: %w", err)
-			continue
-		}
-
-		if resp.StatusCode != http.StatusOK {
+		if status != http.StatusOK {
 			lastErr = fmt.Errorf(
 				"keenable api error (status %d): %s",
-				resp.StatusCode,
-				strings.TrimSpace(errorBody(body)),
+				status,
+				errorBodySnippet(body, maxErrorBodyBytes),
 			)
-			if resp.StatusCode == http.StatusTooManyRequests && keyless {
+			if status == http.StatusTooManyRequests && keyless {
 				lastErr = fmt.Errorf(
 					"keenable api error (status %d): public rate limit reached, retry later or configure an API key",
-					resp.StatusCode,
+					status,
 				)
 			}
-			if resp.StatusCode == http.StatusTooManyRequests ||
-				resp.StatusCode == http.StatusUnauthorized ||
-				resp.StatusCode == http.StatusForbidden ||
-				resp.StatusCode >= 500 {
+			if retryableSearchStatus(status) {
 				continue
 			}
 			return "", lastErr
@@ -1020,18 +1034,16 @@ func (p *GeminiSearchProvider) Search(
 	req.Header.Set("X-Goog-Api-Key", p.apiKey)
 	req.Header.Set("User-Agent", fmt.Sprintf(userAgentHonest, config.Version))
 
-	resp, err := p.client.Do(req)
+	body, status, err := sendSearchRequest(p.client, req)
 	if err != nil {
-		return "", fmt.Errorf("request failed: %w", err)
+		return "", err
 	}
-	defer resp.Body.Close()
-
-	body, err := readSearchBody(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("failed to read response: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("gemini search api error (status %d): %s", resp.StatusCode, errorBody(body))
+	if status != http.StatusOK {
+		return "", fmt.Errorf(
+			"gemini search api error (status %d): %s",
+			status,
+			errorBodySnippet(body, maxErrorBodyBytes),
+		)
 	}
 
 	var searchResp struct {
@@ -1107,18 +1119,12 @@ func (p *SogouSearchProvider) Search(
 		}
 		req.Header.Set("User-Agent", sogouUserAgent)
 
-		resp, err := p.client.Do(req)
+		body, status, err := sendSearchRequest(p.client, req)
 		if err != nil {
-			return "", fmt.Errorf("request failed: %w", err)
+			return "", err
 		}
-
-		body, err := readSearchBody(resp.Body)
-		_ = resp.Body.Close()
-		if err != nil {
-			return "", fmt.Errorf("failed to read response: %w", err)
-		}
-		if resp.StatusCode != http.StatusOK {
-			return "", fmt.Errorf("Sogou returned status %d", resp.StatusCode)
+		if status != http.StatusOK {
+			return "", fmt.Errorf("Sogou returned status %d", status)
 		}
 
 		html := string(body)
@@ -1199,15 +1205,9 @@ func (p *DuckDuckGoSearchProvider) Search(
 
 	req.Header.Set("User-Agent", userAgent)
 
-	resp, err := p.client.Do(req)
+	body, _, err := sendSearchRequest(p.client, req)
 	if err != nil {
-		return "", fmt.Errorf("request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := readSearchBody(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("failed to read response: %w", err)
+		return "", err
 	}
 
 	return p.extractResults(string(body), count, query)
@@ -1347,26 +1347,15 @@ func (p *PerplexitySearchProvider) Search(
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 		req.Header.Set("User-Agent", userAgent)
 
-		resp, err := p.client.Do(req)
+		body, status, err := sendSearchRequest(p.client, req)
 		if err != nil {
-			lastErr = fmt.Errorf("request failed: %w", err)
+			lastErr = err
 			continue
 		}
 
-		body, err := readSearchBody(resp.Body)
-		_ = resp.Body.Close()
-
-		if err != nil {
-			lastErr = fmt.Errorf("failed to read response: %w", err)
-			continue
-		}
-
-		if resp.StatusCode != http.StatusOK {
-			lastErr = fmt.Errorf("Perplexity API error: %s", errorBody(body))
-			if resp.StatusCode == http.StatusTooManyRequests ||
-				resp.StatusCode == http.StatusUnauthorized ||
-				resp.StatusCode == http.StatusForbidden ||
-				resp.StatusCode >= 500 {
+		if status != http.StatusOK {
+			lastErr = fmt.Errorf("Perplexity API error: %s", errorBodySnippet(body, maxErrorBodyBytes))
+			if retryableSearchStatus(status) {
 				continue
 			}
 			return "", lastErr
@@ -1528,19 +1517,17 @@ func (p *GLMSearchProvider) Search(
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+p.apiKey)
 
-	resp, err := p.client.Do(req)
+	body, status, err := sendSearchRequest(p.client, req)
 	if err != nil {
-		return "", fmt.Errorf("request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := readSearchBody(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("failed to read response: %w", err)
+		return "", err
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("GLM Search API error (status %d): %s", resp.StatusCode, errorBody(body))
+	if status != http.StatusOK {
+		return "", fmt.Errorf(
+			"GLM Search API error (status %d): %s",
+			status,
+			errorBodySnippet(body, maxErrorBodyBytes),
+		)
 	}
 
 	var searchResp struct {
@@ -1636,7 +1623,11 @@ func (p *BaiduSearchProvider) Search(
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("baidu search API error %d: %s", resp.StatusCode, errorBody(body))
+		return "", fmt.Errorf(
+			"baidu search API error %d: %s",
+			resp.StatusCode,
+			errorBodySnippet(body, maxErrorBodyBytes),
+		)
 	}
 
 	var result struct {
@@ -2209,7 +2200,7 @@ func (t *WebSearchTool) Execute(ctx context.Context, args map[string]any) *ToolR
 		return ErrorResult("search provider is not configured")
 	}
 
-	count64, err := getInt64Arg(args, "count", int64(maxResults))
+	count64, err := toolshared.Int64Arg(args, "count", int64(maxResults))
 	if err != nil {
 		return ErrorResult(err.Error())
 	}
@@ -2357,7 +2348,7 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	}
 
 	// Lightweight pre-flight: block obvious localhost/literal-IP without DNS resolution.
-	// The real SSRF guard is newSafeDialContext at connect time.
+	// The real SSRF guard is utils.NewSafeDialContext at connect time.
 	hostname := parsedURL.Hostname()
 	if utils.IsObviousPrivateHost(hostname, t.whitelist, func() bool {
 		return allowPrivateWebFetchHosts.Load()
@@ -2365,11 +2356,15 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult("fetching private or local network hosts is not allowed")
 	}
 
+	// A per-call maxChars may only lower the configured flood guard: the value
+	// comes from the model, so an out-of-range number must not be able to
+	// disable truncation entirely.
 	maxChars := t.maxChars
-	if mc, ok := args["maxChars"].(float64); ok {
-		if int(mc) > 100 {
-			maxChars = int(mc)
+	if mc, ok := args["maxChars"].(float64); ok && mc > 100 {
+		if mc > float64(maxChars) {
+			mc = float64(maxChars)
 		}
+		maxChars = int(mc)
 	}
 
 	doFetch := func(ua string) (*http.Response, []byte, error) {
@@ -2464,21 +2459,17 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 
 	switch {
 	case mediaType == "application/json":
-		var jsonData any
-		if err := json.Unmarshal(body, &jsonData); err != nil {
+		// json.Indent validates and formats the document without building an
+		// interface{} tree, so a large payload does not pay reflection and
+		// per-value allocations just to be re-marshaled.
+		var formatted bytes.Buffer
+		if err := json.Indent(&formatted, body, "", "  "); err != nil {
 			text = bodyStr
 			extractor = "raw"
 			break
 		}
 
-		formatted, err := json.MarshalIndent(jsonData, "", "  ")
-		if err != nil {
-			text = bodyStr
-			extractor = "raw"
-			break
-		}
-
-		text = string(formatted)
+		text = formatted.String()
 		extractor = "json"
 
 	case mediaType == "text/html" || looksLikeHTML(bodyStr):
@@ -2501,10 +2492,8 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		extractor = "raw"
 	}
 
-	truncated := len(text) > maxChars
-	if truncated {
-		text = text[:maxChars] + "\n[Content truncated due to size limit]"
-	}
+	fullText := text
+	text, truncated := toolshared.TruncateHeadTail(text, maxChars, "CONTENT")
 
 	result := map[string]any{
 		"url":       urlStr,
@@ -2520,7 +2509,7 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult(fmt.Sprintf("failed to marshal result: %v", marshalErr))
 	}
 
-	return &ToolResult{
+	toolResult := &ToolResult{
 		ForLLM: string(resultJSON),
 		ForUser: fmt.Sprintf(
 			"Fetched %d bytes from %s (extractor: %s, truncated: %v)",
@@ -2530,54 +2519,131 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 			truncated,
 		),
 	}
+	if truncated {
+		// Hand the large-result spill the full page so a capped fetch stays
+		// pageable from the artifact instead of losing the omitted middle.
+		toolResult.FullText = fullText
+	}
+	return toolResult
 }
 
 func looksLikeHTML(body string) bool {
-	if body == "" {
-		return false
-	}
+	// Only the first tag matters, so compare a short prefix case-insensitively
+	// instead of lowercasing the whole (possibly 10 MiB) response body.
+	return hasHTMLPrefixFold(body, "<!doctype") || hasHTMLPrefixFold(body, "<html")
+}
 
-	lower := strings.ToLower(body)
-
-	return strings.HasPrefix(body, "<!doctype") ||
-		strings.HasPrefix(lower, "<html")
+func hasHTMLPrefixFold(body, prefix string) bool {
+	return len(body) >= len(prefix) && strings.EqualFold(body[:len(prefix)], prefix)
 }
 
 func (t *WebFetchTool) extractText(htmlContent string) string {
-	result := reScript.ReplaceAllLiteralString(htmlContent, "")
-	result = reStyle.ReplaceAllLiteralString(result, "")
-	result = reTags.ReplaceAllLiteralString(result, "")
+	// One tokenizer pass over the document drops script/style bodies and tags
+	// while collapsing horizontal whitespace, instead of running five regexps
+	// that each allocate a full-size copy of the input.
+	out := make([]byte, 0, len(htmlContent))
+	lastSpace := false
+	appendText := func(segment string) {
+		for i := 0; i < len(segment); i++ {
+			c := segment[i]
+			switch {
+			case c == '\n':
+				out = append(out, '\n')
+				lastSpace = false
+			case c == ' ' || c == '\t' || c == '\r' || c == '\v' || c == '\f':
+				if !lastSpace {
+					out = append(out, ' ')
+					lastSpace = true
+				}
+			default:
+				out = append(out, c)
+				lastSpace = false
+			}
+		}
+	}
 
-	result = strings.TrimSpace(result)
+	// A failed closing-tag lookup means no such closing tag exists anywhere in
+	// the rest of the document, so remember it and never rescan the suffix for
+	// the same element. Without this, a document full of unclosed <script>
+	// tags turns the walk quadratic.
+	noScriptClose := false
+	noStyleClose := false
 
-	result = reWhitespace.ReplaceAllString(result, " ")
-	result = reBlankLines.ReplaceAllString(result, "\n\n")
+	for i := 0; i < len(htmlContent); {
+		if htmlContent[i] != '<' {
+			j := i + 1
+			for j < len(htmlContent) && htmlContent[j] != '<' {
+				j++
+			}
+			appendText(htmlContent[i:j])
+			i = j
+			continue
+		}
+		if !noScriptClose && hasTagPrefixFold(htmlContent[i:], "script") {
+			if end := indexClosingTag(htmlContent[i:], "script"); end >= 0 {
+				i += end + len("</script>")
+				continue
+			}
+			noScriptClose = true
+		}
+		if !noStyleClose && hasTagPrefixFold(htmlContent[i:], "style") {
+			if end := indexClosingTag(htmlContent[i:], "style"); end >= 0 {
+				i += end + len("</style>")
+				continue
+			}
+			noStyleClose = true
+		}
+		closing := strings.IndexByte(htmlContent[i:], '>')
+		if closing < 0 {
+			appendText(htmlContent[i:])
+			break
+		}
+		if closing == 1 {
+			// "<>" has no tag name, so the original <[^>]+> kept it as text.
+			appendText("<")
+			i++
+			continue
+		}
+		i += closing + 1
+	}
 
-	lines := strings.Split(result, "\n")
-	var cleanLines []string
+	trimmed := strings.TrimSpace(string(out))
+
+	lines := strings.Split(trimmed, "\n")
+	cleanLines := make([]string, 0, len(lines))
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line != "" {
 			cleanLines = append(cleanLines, line)
 		}
 	}
-
 	return strings.Join(cleanLines, "\n")
 }
 
-func newSafeDialContext(
-	dialer *net.Dialer,
-	whitelist *utils.PrivateHostWhitelist,
-) func(context.Context, string, string) (net.Conn, error) {
-	return utils.NewSafeDialContext(dialer, whitelist, func() bool {
-		return allowPrivateWebFetchHosts.Load()
-	})
+// hasTagPrefixFold reports whether s starts with "<name" followed by a tag
+// delimiter, without allocating a lowercased copy.
+func hasTagPrefixFold(s, name string) bool {
+	if len(s) < len(name)+2 || s[0] != '<' || !strings.EqualFold(s[1:1+len(name)], name) {
+		return false
+	}
+	switch s[1+len(name)] {
+	case ' ', '\t', '\r', '\n', '>', '/':
+		return true
+	default:
+		return false
+	}
 }
 
-func newPrivateHostWhitelist(entries []string) (*utils.PrivateHostWhitelist, error) {
-	return utils.NewPrivateHostWhitelist(entries)
-}
-
-func isPrivateOrRestrictedIP(ip net.IP) bool {
-	return utils.IsPrivateOrRestrictedIP(ip)
+// indexClosingTag returns the offset of "</name>" in s, or -1 when absent.
+func indexClosingTag(s, name string) int {
+	needleLen := len(name) + 3
+	for i := 0; i+needleLen <= len(s); i++ {
+		if s[i] != '<' || s[i+1] != '/' {
+			continue
+		}
+		if strings.EqualFold(s[i+2:i+2+len(name)], name) && s[i+2+len(name)] == '>' {
+			return i
+		}
+	}
+	return -1
 }

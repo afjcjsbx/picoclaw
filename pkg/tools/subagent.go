@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -172,8 +173,9 @@ func (sm *SubagentManager) runTask(
 	task *SubagentTask,
 	callback AsyncCallback,
 ) {
-	task.Status = "running"
-	task.Created = time.Now().UnixMilli()
+	// Status/Created are initialized by the caller in Spawn before the task is
+	// published in sm.tasks; writing them here would race with readers that
+	// observe the task under the manager lock.
 	// TODO(eventbus): once subagents are modeled as child turns inside
 	// pkg/agent, emit SubTurnEnd and SubTurnResultDelivered from the parent
 	// AgentLoop instead of this legacy manager.
@@ -262,7 +264,7 @@ After completing the task, provide a clear summary of what was done.`
 			MediaResolver: mediaResolver,
 		}, messages, task.OriginChannel, task.OriginChatID)
 
-		if err == nil {
+		if err == nil && loopResult != nil {
 			result = &ToolResult{
 				ForLLM: fmt.Sprintf(
 					"Subagent '%s' completed (iterations: %d): %s",
@@ -276,6 +278,13 @@ After completing the task, provide a clear summary of what was done.`
 				Async:   false,
 			}
 		}
+	}
+
+	// The spawner contract does not guarantee a result on success; guard the
+	// success path so a (nil, nil) return becomes an explicit error instead of
+	// a nil dereference.
+	if err == nil && result == nil {
+		err = errors.New("subagent returned no result")
 	}
 
 	sm.mu.Lock()
@@ -309,13 +318,6 @@ After completing the task, provide a clear summary of what was done.`
 	}
 }
 
-func (sm *SubagentManager) GetTask(taskID string) (*SubagentTask, bool) {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
-	task, ok := sm.tasks[taskID]
-	return task, ok
-}
-
 // GetTaskCopy returns a copy of the task with the given ID, taken under the
 // read lock, so the caller receives a consistent snapshot with no data race.
 func (sm *SubagentManager) GetTaskCopy(taskID string) (SubagentTask, bool) {
@@ -326,17 +328,6 @@ func (sm *SubagentManager) GetTaskCopy(taskID string) (SubagentTask, bool) {
 		return SubagentTask{}, false
 	}
 	return *task, true
-}
-
-func (sm *SubagentManager) ListTasks() []*SubagentTask {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
-
-	tasks := make([]*SubagentTask, 0, len(sm.tasks))
-	for _, task := range sm.tasks {
-		tasks = append(tasks, task)
-	}
-	return tasks
 }
 
 // ListTaskCopies returns value copies of all tasks, taken under the read lock,
@@ -350,6 +341,19 @@ func (sm *SubagentManager) ListTaskCopies() []SubagentTask {
 		copies = append(copies, *task)
 	}
 	return copies
+}
+
+// stringArg reads a string tool argument, returning "" when it is absent.
+func stringArg(args map[string]any, name string) string {
+	value, _ := args[name].(string)
+	return value
+}
+
+// subagentSystemPrompt renders the system prompt shared by the spawning tools:
+// the subagent's role, the one-sentence instruction and the task itself. The
+// label, when present, is part of the role.
+func subagentSystemPrompt(role, instruction, task string) string {
+	return fmt.Sprintf("%s. %s\n\nTask: %s", role, instruction, task)
 }
 
 // SubagentTool executes a subagent task synchronously and returns the result.
@@ -408,28 +412,18 @@ func (t *SubagentTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult("task is required").WithError(fmt.Errorf("task parameter is required"))
 	}
 
-	label, ok := args["label"].(string)
-	if !ok {
-		label = ""
-	}
+	label := stringArg(args, "label")
 
 	// Build system prompt for subagent
-	systemPrompt := fmt.Sprintf(
-		`You are a subagent. Complete the given task independently and provide a clear, concise result.
-
-Task: %s`,
+	role := "You are a subagent"
+	if label != "" {
+		role = fmt.Sprintf("You are a subagent labeled %q", label)
+	}
+	systemPrompt := subagentSystemPrompt(
+		role,
+		"Complete the given task independently and provide a clear, concise result.",
 		task,
 	)
-
-	if label != "" {
-		systemPrompt = fmt.Sprintf(
-			`You are a subagent labeled "%s". Complete the given task independently and provide a clear, concise result.
-
-Task: %s`,
-			label,
-			task,
-		)
-	}
 
 	// Use spawner if available (direct SpawnSubTurn call)
 	if t.spawner != nil {

@@ -14,6 +14,8 @@ It does not describe launcher login cookies or dashboard authentication sessions
 > For how large session histories affect gateway startup and how to bound growth
 > with automatic pruning, see
 > [Session Startup Cost and Automatic Pruning](session-startup-and-pruning.md).
+> For the optional SQLite-backed context manager, its compaction and retrieval
+> behavior, and its limits, see [Seahorse Memory](seahorse-memory.md).
 
 ## Responsibilities
 
@@ -188,6 +190,10 @@ The files store:
 The JSONL store is designed around append-first durability and stale-over-loss recovery:
 
 - `AddMessage` and `AddFullMessage` append one JSON line, `fsync`, then update metadata.
+  Setting `session.durable_writes` to `false` (or `PICOCLAW_SESSION_DURABLE_WRITES=false`)
+  skips the `fsync` calls while keeping the writes atomic (temp file + rename): files are
+  never left torn, but a power failure may lose the most recent writes. This trades crash
+  durability for lower write latency and less flash wear on constrained devices.
 - `TruncateHistory` is logical first: it only advances `meta.Skip`.
 - `Compact` physically rewrites the JSONL file to remove skipped lines.
 - `SetHistory` and `Compact` write metadata before rewriting JSONL so a crash may temporarily expose old data, but should not lose data.

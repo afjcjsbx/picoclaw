@@ -3465,3 +3465,52 @@ func TestUnregisterChannel_ConcurrentSendNoPanic(t *testing.T) {
 	close(stop)
 	<-done
 }
+
+func TestPreSendDropsStalePlaceholder(t *testing.T) {
+	m := newTestManager()
+	ch := &mockDeletingMessageEditor{
+		mockMessageEditor: mockMessageEditor{
+			mockChannel: mockChannel{
+				sendFn: func(_ context.Context, _ bus.OutboundMessage) error { return nil },
+			},
+			editFn: func(_ context.Context, _, _, _ string) error {
+				t.Fatal("a stale placeholder must never be edited into the reply")
+				return nil
+			},
+		},
+	}
+
+	m.RecordPlaceholder("test", "chat-stale", "ph_old")
+	if v, ok := m.placeholders.Load("test:chat-stale"); ok {
+		entry := v.(placeholderEntry)
+		entry.createdAt = time.Now().Add(-placeholderTTL - time.Minute)
+		m.placeholders.Store("test:chat-stale", entry)
+	}
+
+	msg := testOutboundMessage(bus.OutboundMessage{Channel: "test", ChatID: "chat-stale", Content: "reply"})
+	_, handled := m.preSend(context.Background(), "test", msg, ch)
+
+	if handled {
+		t.Fatal("stale placeholder should not handle delivery")
+	}
+	if ch.deleteCalls != 1 || ch.deletedMessageID != "ph_old" {
+		t.Fatalf("expected stale placeholder to be deleted, got calls=%d id=%q", ch.deleteCalls, ch.deletedMessageID)
+	}
+}
+
+func TestOutboundToolFeedbackIsTerminal(t *testing.T) {
+	terminal := bus.OutboundMessage{Context: bus.InboundContext{Raw: map[string]string{
+		"message_kind":          "tool_feedback",
+		ToolFeedbackTerminalKey: "true",
+	}}}
+	if !outboundMessageIsToolFeedback(terminal) || !OutboundToolFeedbackIsTerminal(terminal) {
+		t.Fatal("expected terminal tool feedback to be detected")
+	}
+
+	reusable := bus.OutboundMessage{Context: bus.InboundContext{Raw: map[string]string{
+		"message_kind": "tool_feedback",
+	}}}
+	if !outboundMessageIsToolFeedback(reusable) || OutboundToolFeedbackIsTerminal(reusable) {
+		t.Fatal("regular tool feedback must stay reusable")
+	}
+}

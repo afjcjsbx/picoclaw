@@ -41,11 +41,15 @@ PicoClaw 的工具配置位于 `config.json` 的 `tools` 字段中。
 
 ## 大型工具结果
 
-超过 `max_inline_result_chars`（按 Unicode 字符数，而非字节数）的工具结果不会完整注入模型上下文。PicoClaw 会将完整文本保存为 agent 工作区中的本地产物（`<workspace>/.artifacts/tool/`），同时在上下文中保留**有界的头尾预览**：先是一条诚实、前置的截断提示（包含真实的省略字符数），随后是输出的前若干千字符与最后若干千字符，最后是指向完整产物的指针。保留有用的内联内容意味着模型通常无需重新读取产物即可作答——这对 `read_file` 等内容工具尤其重要，因为重新读取被转存的产物会再次转存并陷入循环。产物路径同时以结构化 `[file:...]` 标签暴露，模型可用 `read_file`（配合 `offset`/`length`）读取，或用 `send_file` 转发。预览不会移除工具自身的截断提示（例如 `read_file` 的“使用 offset=… 再次调用”提示会保留在头部）。此行为与 MCP 工具已有的大文本处理一致，并适用于所有工具，包括由 `AfterTool` 钩子产生或替换的结果；产物会自动清理（早于 24 小时，或超出每个目录最新的 128 个文件）。
+超过 `max_inline_result_chars`（按 Unicode 字符数，而非字节数）的工具结果不会完整注入模型上下文。PicoClaw 会将完整文本保存为 agent 工作区中的本地产物（`<workspace>/.artifacts/tool/`），同时在上下文中保留**有界的头尾预览**：先是一条诚实、前置的截断提示（包含真实的省略字符数），随后是输出的前若干千字符与最后若干千字符，最后是指向完整产物的指针。保留有用的内联内容意味着模型通常无需重新读取产物即可作答——这对 `read_file` 等内容工具尤其重要，因为重新读取被转存的产物会再次转存并陷入循环。产物路径同时以结构化 `[file:...]` 标签暴露，模型可用 `read_file`（配合 `offset`/`length`）读取，或用 `send_file` 转发。预览不会移除工具自身的截断提示（例如 `read_file` 的“使用 offset=… 再次调用”提示会保留在头部）。可识别的 JSON 信封——`web_fetch` 的 `{url, status, extractor, truncated, length, text}` 结果，以及 MCP 工具形如 `{"result": <text>, ...}` 的文本载荷——会以其正文（即信封包裹的文本）保存：包裹内容保留真实换行，后接携带该对象中其余字段的 `<web-fetch-metadata>` 或 `<mcp-result-metadata>` 块。MCP 文本载荷仅对名称以 `mcp_` 开头的工具识别；`CallToolResult` 协议层的 `structuredContent` 与 `_meta` 字段独立于文本内容，不包含在此重写中。这样产物仍可被 `read_file`/`search_files` 分页，而不会变成一整行转义换行；无法识别的 JSON 载荷（例如 `exec`）则原样保存。此行为与 MCP 工具已有的大文本处理一致，并适用于所有工具，包括由 `AfterTool` 钩子产生或替换的结果；产物会自动清理（早于 24 小时，或超出每个目录最新的 128 个文件）。清理是尽力而为的，并按目录节流：每个目录最多每分钟重新扫描一次，连续跳过扫描的写入达到 8 次后会强制重新扫描，因此一次密集转存的回合不会在每次写入时都扫描整个目录。
 
 | 配置项 | 类型 | 默认值 | 描述 |
 |--------|------|--------|------|
 | `max_inline_result_chars` | int | `16384` | 保留在上下文中的工具结果文本上限（Go rune）。更大的结果会被转存为工作区产物，并附带头尾预览。设为 `0` 或负值可禁用。 |
+
+截断与转存是两个不同的环节。部分工具会在进入上述转存层之前先限制自身的原始输出：`exec` 对超过 `tools.exec.max_output_chars`（默认 `50000`）的前台输出保留前 40% 与后 60%，并以 `[OUTPUT TRUNCATED - N chars omitted out of T total]` 提示分隔；行模式的 `read_file` 会把 `max_lines` 请求钳制到 `tools.read_file.max_lines`，并将超过 `tools.read_file.max_line_length` 的行截断为 ` ... [truncated]` 标记；MCP 文本结果在超过 `tools.mcp.max_inline_text_chars` 时对脱敏文本保留前 40% 与后 60%，并以 `[MCP RESULT TRUNCATED - N chars omitted out of T total]` 提示分隔，完整原文仍写入自身的 `.artifacts/mcp` 产物。
+
+当工具自行截断输出时（`exec`、`web_fetch`，以及自身产物写入失败的 MCP 文本结果），转存保存的是**截断前的原文**而非截断视图，内联预览显示完整输出的真实开头与结尾——被省略的中间部分仍可从产物中读取。未超过 `max_inline_result_chars` 的结果不会被转存，因此刻意设置的小上限（例如较小的 `maxChars`）仍保留工具自身的截断视图。
 
 > **安全提示 —— 产物未经过滤。** 产物文件在工具结果规范化阶段写入，该阶段**早于** `filter_sensitive_data` 的应用。过滤器只对随后注入模型上下文的内容进行脱敏，因此磁盘上的产物保留了**未过滤**的原始输出（MCP 大文本产物一直如此，现在适用于所有工具）。例如，一个很大的 `exec` 结果即使启用了过滤，也可能把明文凭据写入工作区。目录（`0700`）与文件（`0600`）权限受限，但内容未脱敏，且产物路径会暴露给模型——模型可以读取它，或用 `send_file` 转发原始文件。请将工作区产物视为敏感数据。详见[敏感数据过滤](../security/sensitive_data_filtering.zh.md#大型工具结果产物)。
 
@@ -261,7 +265,10 @@ LLM 不会加载所有工具，而是获得一个轻量级搜索工具（使用 
 |-------------|--------|--------|--------------------------------------|
 | `enabled`   | bool   | false  | 全局启用 MCP 集成                    |
 | `discovery` | object | `{}`   | 工具发现配置（见下文）               |
+| `max_inline_text_chars` | int | 16384 | MCP 文本的内联头尾预算：超过后保留脱敏文本的前 40% 与后 60%（附省略提示），完整原文保存为工作区产物 |
 | `servers`   | object | `{}`   | 服务器名称到服务器配置的映射         |
+
+超过 `max_inline_text_chars` 的 MCP 文本结果不会被丢弃：模型上下文保留脱敏文本的前 40% 与后 60%（以 `[MCP RESULT TRUNCATED - N chars omitted out of T total]` 提示分隔），完整原始载荷保存到 `<workspace>/.artifacts/mcp/` 并通过 `[file:...]` 产物路径暴露。若该产物写入失败，内联仍保留有界的头尾视图，完整载荷则交给上层转存（`<workspace>/.artifacts/tool/`）保存。
 
 ### Discovery 配置（`discovery`）
 

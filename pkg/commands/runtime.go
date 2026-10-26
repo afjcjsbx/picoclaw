@@ -40,7 +40,7 @@ type PluginInfo struct {
 type ContextStats struct {
 	UsedTokens        int
 	TotalTokens       int // model context window
-	HistoryTokens     int // history-only tokens (what maybeSummarize checks)
+	HistoryTokens     int // history-only tokens
 	CompressAtTokens  int // hard budget compression threshold
 	SummarizeAtTokens int // soft summarization trigger
 	UsedPercent       int // 0-100
@@ -73,6 +73,7 @@ type Runtime struct {
 	SwitchModel        func(value string) (oldModel string, err error)
 	SwitchChannel      func(value string) error
 	ClearHistory       func() error
+	CompactContext     func(focus string) (compacted bool, err error) // false when nothing to summarize
 	ReloadConfig       func() error
 	StopActiveTurn     func() (StopResult, error)
 }

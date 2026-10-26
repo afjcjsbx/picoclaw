@@ -27,6 +27,8 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 		}); err == nil && resp != nil {
 			history = resp.History
 			summary = resp.Summary
+		} else if err != nil {
+			warnSessionStoreError(ts.sessionKey, "assemble", err)
 		}
 	}
 	ts.captureRestorePoint(history, summary)
@@ -69,6 +71,8 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 			}); err == nil && resp != nil {
 				history = resp.History
 				summary = resp.Summary
+			} else if err != nil {
+				warnSessionStoreError(ts.sessionKey, "assemble", err)
 			}
 			originalHistoryCount := len(history)
 			var fit bool
@@ -119,9 +123,11 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 	if !ts.opts.NoHistory && (strings.TrimSpace(ts.userMessage) != "" || len(ts.media) > 0) {
 		rootMsg := userPromptMessage(ts.userMessage, ts.media)
 		if len(rootMsg.Media) > 0 {
-			ts.agent.Sessions.AddFullMessage(ts.sessionKey, rootMsg)
+			warnSessionStoreError(ts.sessionKey, "add full message",
+				ts.agent.Sessions.AddFullMessage(ctx, ts.sessionKey, rootMsg))
 		} else {
-			ts.agent.Sessions.AddMessage(ts.sessionKey, rootMsg.Role, rootMsg.Content)
+			warnSessionStoreError(ts.sessionKey, "add message",
+				ts.agent.Sessions.AddMessage(ctx, ts.sessionKey, rootMsg.Role, rootMsg.Content))
 		}
 		ts.recordPersistedMessage(rootMsg)
 		ts.ingestMessage(ctx, p.al, rootMsg)

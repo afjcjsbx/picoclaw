@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -498,6 +499,88 @@ func TestHandleSessions_JSONLScopeDiscovery(t *testing.T) {
 	mux.ServeHTTP(deleteRec, deleteReq)
 	if deleteRec.Code != http.StatusNoContent {
 		t.Fatalf("delete status = %d, want %d, body=%s", deleteRec.Code, http.StatusNoContent, deleteRec.Body.String())
+	}
+}
+
+func TestHandleSessions_CronRunListedSeparatelyFromPicoChat(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	dir := sessionsTestDir(t, configPath)
+	store, storeErr := memory.NewJSONLStore(dir)
+	if storeErr != nil {
+		t.Fatalf("NewJSONLStore() error = %v", storeErr)
+	}
+
+	// Cron runs persist the same chat scope as the conversation they deliver to.
+	scopeData, err := json.Marshal(session.SessionScope{
+		Version:    session.ScopeVersionV1,
+		AgentID:    "main",
+		Channel:    "pico",
+		Dimensions: []string{"chat"},
+		Values:     map[string]string{"chat": "direct:pico:shared-chat"},
+	})
+	if err != nil {
+		t.Fatalf("Marshal(scope) error = %v", err)
+	}
+
+	// "agent_cron-*" sorts before "sk_v1_*", so the cron meta is visited first.
+	for key, content := range map[string]string{
+		"agent:cron-job1-run1": "cron prompt",
+		"sk_v1_real_chat":      "real conversation",
+	} {
+		if err := store.AddFullMessage(nil, key, providers.Message{Role: "user", Content: content}); err != nil {
+			t.Fatalf("AddFullMessage(%s) error = %v", key, err)
+		}
+		if err := store.UpsertSessionMeta(nil, key, scopeData, nil); err != nil {
+			t.Fatalf("UpsertSessionMeta(%s) error = %v", key, err)
+		}
+	}
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/sessions", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var items []sessionListItem
+	if err := json.Unmarshal(rec.Body.Bytes(), &items); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	titles := make(map[string]string, len(items))
+	for _, item := range items {
+		titles[item.ID] = item.Title
+	}
+	want := map[string]string{
+		"shared-chat":          "real conversation",
+		"agent_cron-job1-run1": "[cron] cron prompt",
+	}
+	if len(titles) != len(want) {
+		t.Fatalf("items = %#v, want IDs/titles %v", items, want)
+	}
+	for id, title := range want {
+		if titles[id] != title {
+			t.Fatalf("title[%q] = %q, want %q (items=%#v)", id, titles[id], title, items)
+		}
+	}
+
+	detailRec := httptest.NewRecorder()
+	mux.ServeHTTP(detailRec, httptest.NewRequest(http.MethodGet, "/api/sessions/agent_cron-job1-run1", nil))
+	if detailRec.Code != http.StatusOK || !strings.Contains(detailRec.Body.String(), "cron prompt") {
+		t.Fatalf("cron detail status = %d, body=%s", detailRec.Code, detailRec.Body.String())
+	}
+
+	deleteRec := httptest.NewRecorder()
+	mux.ServeHTTP(deleteRec, httptest.NewRequest(http.MethodDelete, "/api/sessions/agent_cron-job1-run1", nil))
+	if deleteRec.Code != http.StatusNoContent {
+		t.Fatalf("cron delete status = %d, body=%s", deleteRec.Code, deleteRec.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "sk_v1_real_chat.jsonl")); err != nil {
+		t.Fatalf("real chat file removed by cron delete: %v", err)
 	}
 }
 
@@ -1626,9 +1709,13 @@ func TestHandleGetSession_LegacyJSONFallback(t *testing.T) {
 	dir := sessionsTestDir(t, configPath)
 	manager := session.NewSessionManager(dir)
 	sessionKey := legacyPicoSessionPrefix + "legacy-json"
-	manager.AddMessage(sessionKey, "user", "legacy user")
-	manager.AddMessage(sessionKey, "assistant", "legacy assistant")
-	if err := manager.Save(sessionKey); err != nil {
+	if err := manager.AddMessage(context.Background(), sessionKey, "user", "legacy user"); err != nil {
+		t.Fatalf("AddMessage() error = %v", err)
+	}
+	if err := manager.AddMessage(context.Background(), sessionKey, "assistant", "legacy assistant"); err != nil {
+		t.Fatalf("AddMessage() error = %v", err)
+	}
+	if err := manager.Save(context.Background(), sessionKey); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
 

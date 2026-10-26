@@ -112,6 +112,11 @@ plugin in `config.json`, using the `name` from its `plugin.json` as the entry ID
 Restart PicoClaw or reload its configuration to activate the plugin. Review
 packages before enabling them; local plugin servers run as subprocesses.
 
+The same steps from the command line: `picoclaw plugin add <name> --enable` writes
+the entry, `picoclaw plugin list` shows what is configured and what sits on disk, and
+`picoclaw plugin test <name>` loads it once to check it. See the
+[plugin CLI reference](../reference/plugins-cli.md).
+
 An entry ID follows the plugin name syntax. Without `path`, it selects a
 discovered manifest name. With `path`, it is a stable installation alias and may
 differ from the manifest name. Ambiguous names require an explicit path; the
@@ -120,6 +125,191 @@ same resolved package root cannot be activated under multiple aliases.
 Relative `directories` and entry paths resolve against the workspace. Use
 absolute paths when installing dependencies or enabling the repository demo.
 Paths do not use shell expansion; write an absolute home path instead of `~`.
+
+## Installing a repository that is not a plugin
+
+Many repositories ship skills or MCP servers for some other agent without being
+Agent Plugins. PicoClaw only loads a directory that has a `plugin.json` **at its root**
+with the Agent Plugins `$schema`. A manifest inside another tool's folder (for example
+`.<tool>-plugin/plugin.json`) does not count, even if it is also called `plugin.json`.
+
+You rarely need to port anything. If the repository already keeps skills in
+`skills/<name>/SKILL.md` or declares MCP servers, adding a manifest and, at most,
+converting an MCP file is enough. Work through the steps below in order; each ends with a
+command that tells you whether it worked.
+
+### 1. Recognize the situation
+
+| What you see | What it means |
+|--------------|---------------|
+| `plugin list` shows nothing for a directory you cloned | There is no root `plugin.json`, or the directory is not an immediate child of a plugin directory |
+| `plugin validate <dir>`: `plugin.json: lstat …/plugin.json: no such file or directory` | No manifest in that directory |
+| `plugin validate <dir>`: `missing or unsupported $schema ""` | A manifest exists but is for another tool, or has no `$schema` |
+| `plugin list` shows a row with an empty `NAME` | The root manifest was rejected; the row is named after the directory. Run `plugin validate` on it |
+| `plugin validate` succeeds with `0 skills, 0 MCP servers` | The manifest is fine but the layout does not match; continue with step 2 |
+
+### 2. Take stock of what the repository offers
+
+| You find | Portable? | What to do |
+|----------|-----------|------------|
+| `skills/<name>/SKILL.md` at the root | Yes | Nothing; they load as they are |
+| Skills in another directory, or nested deeper than `skills/<name>/` | Yes, once moved | Put them directly under `skills/` of the package root. Only immediate children of `skills/` are discovered |
+| An MCP server list in another tool's format | After conversion | Write an `mcp.json` (step 5) |
+| Hooks written for another agent | No | Leave them out. PicoClaw hooks use a different schema and protocol, see [Optional PicoClaw hooks](#optional-picoclaw-hooks) |
+| Commands, sub-agent definitions, themes and other per-tool files | No | Ignored by Agent Plugins 1.0.0; they do no harm |
+| Helper scripts and binaries next to a skill | Shipped, never run by the host | The agent can read them as text through the plugin's resource tool. Whether it can execute them depends on your `exec` and workspace settings |
+| A plugin inside a subdirectory of a larger repository | Yes | Put the manifest in that subdirectory and point `path` at it (step 7) |
+
+Skill text may name tools that exist only in the agent it was written for. PicoClaw
+skills are plain instructions, so the agent maps them to the tools it has. If you want
+to steer that, add a skill or `references/` file of your own instead of editing the
+upstream ones.
+
+### 3. Decide where the manifest lives
+
+- **In place (recommended).** Clone the repository into a plugin directory and add
+  `plugin.json` next to the existing files. Updating is a `git pull`. Keep `git status`
+  clean by running `echo plugin.json >> .git/info/exclude` in the clone. If upstream later adds its own
+  root `plugin.json`, git refuses to overwrite yours: delete yours and use theirs.
+- **Wrapper package.** Create a new directory with your `plugin.json` and *copy* what
+  you need into it (`skills/`, `mcp.json`). Use this when you must not touch the clone
+  or the useful files are scattered. Updates are manual. A symlink works only if it
+  resolves **inside** the package root; one that points out of it is reported as
+  `path escapes plugin boundary`.
+
+### 4. Write the manifest
+
+```json
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "my-plugin",
+  "version": "1.0.0",
+  "description": "What it provides, in one line.",
+  "homepage": "https://example.org/my-plugin",
+  "repository": "https://github.com/example/my-plugin",
+  "license": "MIT",
+  "keywords": ["skills"]
+}
+```
+
+Only `$schema` and `name` are required. If the repository has a manifest for another tool,
+copy its metadata but keep only these fields; anything else becomes a warning
+(`ignored unknown field "x"`). `author` is stricter: it accepts only `name`, `email` and
+`url`, and any other key rejects the plugin (`unknown author field "x"`).
+
+Pick the **id** deliberately. Skills are published as `<id>:<skill>`, and skill texts
+that refer to each other by that prefix only work if your id matches it. With a `path`
+the id may differ from the manifest `name`; without one it must equal it.
+
+### 5. Convert MCP servers (if any)
+
+Other tools commonly accept a looser format. The portable one needs the `$schema`, an
+explicit `type` and a bare or `./` command:
+
+```json
+{ "mcpServers": { "docs": { "command": "npx", "args": ["-y", "some-mcp-server"] } } }
+```
+
+becomes `mcp.json`:
+
+```json
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "docs": { "type": "stdio", "command": "npx", "args": ["-y", "some-mcp-server"] }
+  }
+}
+```
+
+Remote servers use `"type": "streamable-http"` (or `"sse"`) and a `url`; see
+[MCP servers](#mcp-servers) for the rules. Do not put keys or tokens in `mcp.json`;
+supply them from the host as described in step 8.
+
+### 6. Validate and read the diagnostics
+
+```bash
+picoclaw plugin validate <dir> --strict
+```
+
+Without `--strict`, only a rejected manifest fails; every other finding is a warning
+because the host would still load the rest. The usual ones:
+
+| Diagnostic | Cause and fix |
+|------------|---------------|
+| `unknown author field "x"` (error) | Remove the extra key from `author` |
+| `ignored unknown field "x"` | A manifest field PicoClaw does not know; remove it |
+| `skill:<dir>: skill name must match directory and contain 1-64 characters` | `name:` in `SKILL.md` differs from its directory, or uses characters outside `a-z`, `0-9`, `-` (no leading, trailing or doubled hyphen) |
+| `skill:<dir>: YAML frontmatter is required` / `invalid skill description` | `SKILL.md` needs frontmatter with a non-empty `description` of at most 1,024 characters |
+| `mcp: missing or unsupported MCP $schema` | `mcp.json` is in a foreign format or lacks `$schema`; the whole file is skipped |
+| `mcp:<server>: type: unexpected end of JSON input` | That server has no `type` |
+| `mcp:<server>: command must be bare or begin with ./` | Use a command found on `PATH`, or a path inside the package starting with `./`; absolute paths are refused |
+| `path escapes plugin boundary` | A symlink leaves the package root; copy the files in instead |
+
+Extra frontmatter keys in `SKILL.md` do not fail validation. `allowed-tools`,
+`license` and `compatibility` must be strings, and `metadata` a map of strings.
+
+### 7. Add the entry and check it loads
+
+```bash
+picoclaw plugin add my-plugin --enable              # found by name under a plugin directory
+picoclaw plugin add my-plugin --path /abs/dir --enable   # explicit location
+picoclaw plugin show my-plugin
+picoclaw plugin test my-plugin
+```
+
+`plugin test` loads the plugin the way the gateway will and lists the skills and tools
+it publishes. Restart the gateway afterwards.
+
+`plugin "x" matches no single package under the plugin directories` means either that
+nothing with that manifest name was found, or that two directories share it. Both are
+solved with `--path`. Discovery only looks at the immediate children of the plugin
+directories, so a plugin in a subdirectory of a repository always needs `--path`.
+
+### 8. Configure it by hand
+
+The CLI writes `enabled` and `path`. Everything else is edited in `config.json`; open it
+with `picoclaw plugin edit`. A fuller entry:
+
+```json
+{
+  "plugins": {
+    "enabled": true,
+    "entries": {
+      "my-plugin": {
+        "enabled": true,
+        "path": "/abs/path/to/my-plugin",
+        "skill_names": ["review", "debug"],
+        "agents": ["main"],
+        "config": { "format": "short" },
+        "mcp_overrides": {
+          "docs": { "type": "streamable-http", "url": "https://example.org/mcp" }
+        },
+        "mcp_bearer_token_files": { "docs": "api-key" }
+      }
+    }
+  }
+}
+```
+
+| Field | Use |
+|-------|-----|
+| `skill_names` | Load only these skills, written **without** the `<id>:` prefix. `null` (what `plugin add` writes) loads all; `[]` loads none |
+| `agents` | Agents that may use the plugin. `null` means all; `[]` means none |
+| `allow_hooks` | Grant for the plugin's PicoClaw hooks. Off by default; `plugin show` lists hooks as inactive until it is set |
+| `config` | String values handed to the plugin's process hooks |
+| `mcp_overrides` | Replace or add MCP servers from the host, without editing the package. This is where headers that read host environment variables belong |
+| `mcp_bearer_token_files` | Bearer tokens kept in a file under `plugin-data/<id>/`, never in the package |
+| `mcp_oauth` | Use saved browser OAuth credentials for named HTTP servers |
+
+After editing, run `picoclaw plugin validate <id> --strict`; validating by id applies the
+entry's `mcp_overrides`, so a hook that targets a server defined only there passes.
+See [Host configuration](#host-configuration) for the remaining top-level settings.
+
+### 9. Keep it updated
+
+Run `git pull` in the clone, then `plugin validate` and `plugin test` again, because
+upstream may rename or restructure skills. Keep the id unchanged: the entry and the
+plugin's data directory `plugin-data/<id>` are keyed by it.
 
 ## Host configuration
 
@@ -281,7 +471,10 @@ Each action names a server and tool from `mcp.json` or the entry's
 `observe` runs it for a runtime event. Supported intercept stages are
 `before_llm`, `after_llm`, `before_tool`, `after_tool`, and `approve_tool`.
 Observe accepts PicoClaw runtime event names such as `agent.turn.end`; the
-`turn_completed` alias runs only for successfully completed turns.
+`turn_completed` alias runs only for successfully completed turns. The
+`post_compaction` alias runs after successful history summarization or context
+compression, covering both `agent.session.summarize` and
+`agent.context.compress` events.
 
 Arguments support the event's available `${user_message}` and
 `${assistant_message}` values, `${tool_name}`, `${tool_arguments}`,
@@ -536,6 +729,9 @@ disable it first, then remove its package directory. Remove its dedicated data
 directory separately only if you want to discard persisted state.
 
 ## Development and validation
+
+To write a package, follow [Writing a Plugin](writing-a-plugin.md) and lint it with
+`picoclaw plugin validate`.
 
 Implement tools with an MCP SDK in any language. Keep stdout exclusively for the
 stdio protocol and log to stderr. Declare accurate input schemas and return MCP

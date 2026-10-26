@@ -1,25 +1,29 @@
 <div align="center">
-<img src="assets/logo.webp" alt="PicoClaw" width="512">
+
+<p align="center">
+  <img src="assets/logo.webp" alt="PicoClaw" width="200">
+</p>
 
 <h1>PicoClaw: An Ultra-Lightweight Go AI Agent for RISC-V, SBCs, and Embedded Systems — Actively Maintained Fork</h1>
 
 > PicoClaw is small on purpose. Small is not lesser. Small is enough.
 
 <h3>$10 Hardware · 10–20 MB RAM · ms Boot · Let's Go, PicoClaw!</h3>
-  <p>
-    <img src="https://img.shields.io/badge/Go-1.27.3+-00ADD8?style=flat&logo=go&logoColor=white" alt="Go">
-    <img src="https://img.shields.io/badge/Arch-x86__64%2C%20ARM64%2C%20MIPS%2C%20RISC--V%2C%20LoongArch-blue" alt="Hardware">
-    <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
-    <br>
-    <a href="https://afjcjsbx.github.io/picoclaw/"><img src="https://img.shields.io/badge/Docs-Official-007acc?style=flat&logo=read-the-docs&logoColor=white" alt="Docs"></a>
-    <a href="https://github.com/afjcjsbx/picoclaw/releases/latest"><img src="https://img.shields.io/github/v/release/afjcjsbx/picoclaw?style=flat&label=Latest%20release" alt="Latest release"></a>
-    <a href="https://discord.gg/bEuEDnKpf"><img src="https://img.shields.io/badge/Discord-Community-5865F2?style=flat&logo=discord&logoColor=white" alt="Discord"></a>
-    <a href="https://deepwiki.com/afjcjsbx/picoclaw"><img src="https://img.shields.io/badge/Wiki-DeepWiki-FFA500?style=flat&logo=wikipedia&logoColor=white" alt="Wiki"></a>
-    <br>
 
-  </p>
+<p align="center">
+  <img src="https://img.shields.io/badge/Go-1.27.3+-00ADD8?style=flat&logo=go&logoColor=white" alt="Go">
+  <img src="https://img.shields.io/badge/Arch-x86__64%2C%20ARM64%2C%20MIPS%2C%20RISC--V%2C%20LoongArch-blue" alt="Hardware">
+  <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
+  <br>
+  <a href="https://afjcjsbx.github.io/picoclaw/"><img src="https://img.shields.io/badge/Docs-Official-007acc?style=flat&logo=read-the-docs&logoColor=white" alt="Docs"></a>
+  <a href="https://github.com/afjcjsbx/picoclaw/releases/latest"><img src="https://img.shields.io/github/v/release/afjcjsbx/picoclaw?style=flat&label=Latest%20release" alt="Latest release"></a>
+  <a href="https://discord.gg/bEuEDnKpf"><img src="https://img.shields.io/badge/Discord-Community-5865F2?style=flat&logo=discord&logoColor=white" alt="Discord"></a>
+  <a href="https://deepwiki.com/afjcjsbx/picoclaw"><img src="https://img.shields.io/badge/Wiki-DeepWiki-FFA500?style=flat&logo=wikipedia&logoColor=white" alt="Wiki"></a>
+</p>
 
-[中文](docs/project/README.zh.md) | [日本語](docs/project/README.ja.md) | [한국어](docs/project/README.ko.md) | [Português](docs/project/README.pt-br.md) | [Tiếng Việt](docs/project/README.vi.md) | [Français](docs/project/README.fr.md) | [Italiano](docs/project/README.it.md) | [Bahasa Indonesia](docs/project/README.id.md) | [Malay](docs/project/README.ms.md) | **English**
+<p align="center">
+  <a href="docs/project/README.zh.md">中文</a> | <a href="docs/project/README.ja.md">日本語</a> | <a href="docs/project/README.ko.md">한국어</a> | <a href="docs/project/README.pt-br.md">Português</a> | <a href="docs/project/README.vi.md">Tiếng Việt</a> | <a href="docs/project/README.fr.md">Français</a> | <a href="docs/project/README.it.md">Italiano</a> | <a href="docs/project/README.id.md">Bahasa Indonesia</a> | <a href="docs/project/README.ms.md">Malay</a> | <strong>English</strong>
+</p>
 
 </div>
 
@@ -98,7 +102,7 @@ This repository is an actively maintained fork of PicoClaw. Development continue
 
 2026-02-26 🎉 PicoClaw hits **20K Stars** in just 17 days! Channel auto-orchestration and capability interfaces are live.
 
-2026-02-16 🎉 PicoClaw breaks 12K Stars in one week! Community maintainer roles and [Roadmap](ROADMAP.md) officially launched.
+2026-02-16 🎉 PicoClaw breaks 12K Stars in one week! Community maintainer roles and Roadmap officially launched.
 
 2026-02-13 🎉 PicoClaw breaks 5000 Stars in 4 days! Project roadmap and developer groups in progress.
 
@@ -270,15 +274,28 @@ make install
 The normal build includes every channel. Custom channel selection, optional
 Seahorse builds, SQLite caveats, and measured binary sizes are documented in
 the [Custom Builds Guide](docs/guides/custom-builds.md). For example, this
-builds with Telegram and Discord only:
+builds with Telegram only:
 
 ```bash
-make build GO_BUILD_TAGS='goolm,stdjson,custom_channels,channel_telegram,channel_discord'
+make build GO_BUILD_TAGS='goolm,stdjson,custom_channels,channel_telegram'
 ```
 
-In the measured macOS ARM64 Telegram-only build, adding `no_seahorse` reduced
-the binary by 4.00 MiB (10.0%). See the guide for the full measurement details
-and the cases where Matrix or WhatsApp Native still require SQLite.
+[Seahorse](docs/architecture/seahorse-memory.md) is PicoClaw's
+built-in memory system: the `seahorse` context manager keeps a local SQLite
+database with an FTS5 index over the session history, so the agent can recall
+and compact older context. To shrink the footprint further, build without it
+using the `no_seahorse` tag, which also drops the SQLite dependency when no
+other selected feature needs it:
+
+```bash
+make build GO_BUILD_TAGS='goolm,stdjson,custom_channels,channel_telegram,no_seahorse'
+```
+
+That is the right choice when an external system provides memory instead, for
+example the [Mem0 plugin](docs/guides/plugins.md#mem0). In the measured macOS
+ARM64 Telegram-only build, adding `no_seahorse` reduced the binary by 4.00 MiB
+(10.0%). See the guide for the full measurement details and the cases where
+Matrix or WhatsApp Native still require SQLite.
 
 ## 🚀 Quick Start Guide
 
@@ -311,7 +328,7 @@ picoclaw-launcher
 
 Open the WebUI, then: **1)** Configure a Provider (add your LLM API key) -> **2)** Configure a Channel (e.g., Telegram) -> **3)** Start the Gateway -> **4)** Chat!
 
-For detailed WebUI documentation, see [PicoClaw documentation](https://afjcjsbx.github.io/picoclaw/).
+For detailed WebUI documentation, see the [Web UI & Launcher Guide](docs/guides/webui.md).
 
 <details>
 <summary><b>Docker (alternative)</b></summary>
@@ -509,7 +526,7 @@ PicoClaw can search the web to provide up-to-date information. Configure in `too
 
 ### ⚙️ Other Tools
 
-PicoClaw includes built-in tools for file operations, code execution, scheduling, and more. See [Tools Configuration](docs/reference/tools_configuration.md) for details.
+PicoClaw includes built-in tools for file operations, code execution, scheduling, and more. See [Tools](docs/tools/README.md) for details.
 
 ## 🎯 Skills
 
@@ -531,16 +548,20 @@ picoclaw skills install <skill-name>
 
 **Configure skill registries**:
 
-Add to your `config.json`:
+Registries are configured under `tools.skills.registries`. Add to your `config.json`:
+
 ```json
 {
   "tools": {
     "skills": {
       "registries": {
         "clawhub": {
+          "enabled": true,
+          "base_url": "https://clawhub.ai",
           "auth_token": "your-clawhub-token"
         },
         "github": {
+          "enabled": true,
           "base_url": "https://github.com",
           "auth_token": "your-github-token",
           "proxy": ""
@@ -551,9 +572,9 @@ Add to your `config.json`:
 }
 ```
 
-`tools.skills.github.*` is deprecated. Use `tools.skills.registries.github.*` instead.
+The ClawHub token is optional and only raises the rate limit. The GitHub token is needed for searches and for private repositories. Pass them via `PICOCLAW_SKILLS_REGISTRIES_CLAWHUB_AUTH_TOKEN` and `PICOCLAW_SKILLS_REGISTRIES_GITHUB_AUTH_TOKEN`.
 
-For more details, see [Tools Configuration - Skills](docs/reference/tools_configuration.md#skills-tool).
+For more details, see [Skills tools](docs/tools/skills.md).
 
 ## 🔗 MCP (Model Context Protocol)
 
@@ -595,7 +616,7 @@ picoclaw mcp test browserbase
 Use `picoclaw mcp edit` when you need advanced fields that are not covered by `picoclaw mcp add`.
 For example, `picoclaw mcp add` supports `--deferred` and `--env-file`, while `picoclaw mcp edit` is still useful for direct JSON editing and uncommon MCP settings.
 
-For full MCP configuration (stdio, SSE, HTTP transports, Tool Discovery), see [Tools Configuration - MCP](docs/reference/tools_configuration.md#mcp-tool). For CLI usage and examples, see [MCP Server CLI](docs/reference/mcp-cli.md).
+For full MCP configuration (stdio, SSE, HTTP transports, Tool Discovery), see [MCP tools](docs/tools/mcp.md). For CLI usage and examples, see [MCP Server CLI](docs/reference/mcp-cli.md).
 
 ## <img src="assets/clawdchat-icon.png" width="24" height="24" alt="ClawdChat"> Join the Agent Social Network
 
@@ -649,6 +670,8 @@ For detailed guides beyond this README:
 | [Chat Apps](docs/guides/chat-apps.md) | All 18+ channel setup guides |
 | [Configuration](docs/guides/configuration.md) | Environment variables, workspace layout, security sandbox |
 | [Plugin Installation](docs/guides/plugins.md) | Install and activate Agent Plugin packages |
+| [Writing a Plugin](docs/guides/writing-a-plugin.md) | Scaffold, validate, test, and share an Agent Plugin package |
+| [Plugin CLI](docs/reference/plugins-cli.md) | Add, list, validate, scaffold, test, and remove plugin entries from the CLI |
 | [MCP Server CLI](docs/reference/mcp-cli.md) | Add, list, test, edit, and remove MCP server entries from the CLI |
 | [Scheduled Tasks and Cron Jobs](docs/reference/cron.md) | Cron schedule types, deliver modes, command gates, job storage |
 | [Providers & Models](docs/guides/providers.md) | 30+ LLM providers, model routing, model_list configuration |
@@ -657,7 +680,7 @@ For detailed guides beyond this README:
 | [Steering](docs/architecture/steering.md) | Inject messages into a running agent loop between tool calls |
 | [SubTurn](docs/architecture/subturn.md) | Subagent coordination, concurrency control, lifecycle |
 | [Troubleshooting](docs/operations/troubleshooting.md) | Common issues and solutions |
-| [Tools Configuration](docs/reference/tools_configuration.md) | Per-tool enable/disable, exec policies, MCP, Skills |
+| [Tools Configuration](docs/reference/tools_configuration.md) | Tool switches, exec policies, path policies, MCP, Skills |
 | [Hardware Compatibility](docs/guides/hardware-compatibility.md) | Tested boards, minimum requirements |
 
 ## 🤝 Contribute & Roadmap

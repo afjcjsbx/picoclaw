@@ -122,6 +122,7 @@
 | `api_base` | string | 否 | 覆盖默认的 API 端点 URL |
 | `proxy` | string | 否 | 此模型条目的 HTTP 代理 URL |
 | `user_agent` | string | 否 | 自定义 `User-Agent` 请求头（支持 OpenAI 兼容、Gemini、Anthropic 和 Azure provider） |
+| `session_header` | string | 否 | 携带稳定会话 ID 的 HTTP 请求头名称。支持 OpenAI 兼容、OpenAI Responses、Anthropic Messages 和 OpenCode Go provider；其他 provider 会记录警告并忽略。留空表示不启用。 |
 | `request_timeout` | int | 否 | 请求超时时间（秒），默认值因 provider 而异 |
 | `streaming.enabled` | bool | 否 | 是否允许此模型条目尝试 provider 流式请求，默认 `false`。它只表达模型/端点能力 opt-in，实际还需要当前 channel 的 `settings.streaming.enabled` 同时开启 |
 | `max_tokens_field` | string | 否 | 覆盖请求体中 max tokens 的字段名（如 o1 模型使用 `max_completion_tokens`） |

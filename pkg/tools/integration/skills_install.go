@@ -137,6 +137,17 @@ func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) *To
 		}
 		backupDir = ""
 	}
+	cleanupFailedInstall := func(removeLogMessage string) {
+		if rmErr := os.RemoveAll(targetDir); rmErr != nil {
+			logger.ErrorCF("tool", removeLogMessage,
+				map[string]any{
+					"tool":       "install_skill",
+					"target_dir": targetDir,
+					"error":      rmErr.Error(),
+				})
+		}
+		restorePreviousInstall()
+	}
 
 	if !force {
 		if _, statErr := os.Stat(targetDir); statErr == nil {
@@ -165,45 +176,18 @@ func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) *To
 	result, err := registry.DownloadAndInstall(ctx, slug, version, targetDir)
 	if err != nil {
 		// Clean up partial install.
-		rmErr := os.RemoveAll(targetDir)
-		if rmErr != nil {
-			logger.ErrorCF("tool", "Failed to remove partial install",
-				map[string]any{
-					"tool":       "install_skill",
-					"target_dir": targetDir,
-					"error":      rmErr.Error(),
-				})
-		}
-		restorePreviousInstall()
+		cleanupFailedInstall("Failed to remove partial install")
 		return ErrorResult(fmt.Sprintf("failed to install %q: %v", slug, err))
 	}
 
 	// Moderation: block malware.
 	if result.IsMalwareBlocked {
-		rmErr := os.RemoveAll(targetDir)
-		if rmErr != nil {
-			logger.ErrorCF("tool", "Failed to remove partial install",
-				map[string]any{
-					"tool":       "install_skill",
-					"target_dir": targetDir,
-					"error":      rmErr.Error(),
-				})
-		}
-		restorePreviousInstall()
+		cleanupFailedInstall("Failed to remove partial install")
 		return ErrorResult(fmt.Sprintf("skill %q is flagged as malicious and cannot be installed", slug))
 	}
 
 	if !workspaceHasValidInstalledSkill(t.workspace, dirName) {
-		rmErr := os.RemoveAll(targetDir)
-		if rmErr != nil {
-			logger.ErrorCF("tool", "Failed to remove invalid installed skill",
-				map[string]any{
-					"tool":       "install_skill",
-					"target_dir": targetDir,
-					"error":      rmErr.Error(),
-				})
-		}
-		restorePreviousInstall()
+		cleanupFailedInstall("Failed to remove invalid installed skill")
 		return ErrorResult(fmt.Sprintf("failed to install %q: registry archive is not a valid skill", slug))
 	}
 
@@ -218,16 +202,7 @@ func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) *To
 				"slug":     slug,
 				"version":  result.Version,
 			})
-		rmErr := os.RemoveAll(targetDir)
-		if rmErr != nil {
-			logger.ErrorCF("tool", "Failed to roll back install after metadata write failure",
-				map[string]any{
-					"tool":       "install_skill",
-					"target_dir": targetDir,
-					"error":      rmErr.Error(),
-				})
-		}
-		restorePreviousInstall()
+		cleanupFailedInstall("Failed to roll back install after metadata write failure")
 		return ErrorResult(fmt.Sprintf("failed to persist skill metadata for %q: %v", slug, err))
 	}
 	if backupDir != "" {

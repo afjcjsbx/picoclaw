@@ -1,11 +1,13 @@
 package cron
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -433,13 +435,38 @@ func TestCronService_PersistenceIntegrity(t *testing.T) {
 }
 
 func TestCronService_SlowHandlerDoesNotBlockScheduler(t *testing.T) {
-	var mu sync.Mutex
-	fires := 0
+	const wantConcurrent = 3
+
+	var (
+		mu      sync.Mutex
+		stopped bool
+		wg      sync.WaitGroup
+	)
+	started := make(chan struct{}, wantConcurrent)
+	release := make(chan struct{})
+	releaseHandlers := sync.OnceFunc(func() { close(release) })
+	defer releaseHandlers() // never leave handlers blocked if the test fails early
+
 	handler := func(job *CronJob) (string, error) {
-		time.Sleep(200 * time.Millisecond)
+		// Runs spawned by a scheduler tick that raced with Stop are ignored so
+		// wg.Add never overlaps wg.Wait.
 		mu.Lock()
-		fires++
+		if stopped {
+			mu.Unlock()
+			return "ok", nil
+		}
+		wg.Add(1)
 		mu.Unlock()
+		defer wg.Done()
+
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		// Block until the test has seen enough concurrent runs. A scheduler
+		// that ran due jobs synchronously (or serialized them behind the
+		// handler) would stall here and never dispatch another run.
+		<-release
 		return "ok", nil
 	}
 
@@ -451,25 +478,44 @@ func TestCronService_SlowHandlerDoesNotBlockScheduler(t *testing.T) {
 	}
 	defer cs.Stop()
 
-	everyMS := int64(50)
-	if _, err := cs.AddJob(
-		"Slow",
-		CronSchedule{Kind: "every", EveryMS: &everyMS},
-		"msg",
-		"cli",
-		"direct",
-	); err != nil {
-		t.Fatalf("AddJob failed: %v", err)
+	// A job never runs concurrently with itself, so concurrency is proven with
+	// one job per expected run.
+	everyMS := int64(20)
+	for i := range wantConcurrent {
+		if _, err := cs.AddJob(
+			fmt.Sprintf("Slow%d", i),
+			CronSchedule{Kind: "every", EveryMS: &everyMS},
+			"msg",
+			"cli",
+			"direct",
+		); err != nil {
+			t.Fatalf("AddJob failed: %v", err)
+		}
 	}
 
-	time.Sleep(1200 * time.Millisecond)
+	// Handlers stay blocked until released, so receiving wantConcurrent start
+	// signals proves the scheduler keeps ticking while earlier runs are still in
+	// flight. Waiting on events rather than sleeping makes this independent of
+	// wall-clock timing on a loaded runner.
+	for got := 0; got < wantConcurrent; got++ {
+		select {
+		case <-started:
+		case <-time.After(5 * time.Second):
+			t.Fatalf(
+				"slow handler blocked the scheduler: only %d concurrent runs (want >= %d)",
+				got, wantConcurrent,
+			)
+		}
+	}
 
+	// Stop dispatching, then release and wait for every started handler so none
+	// is still running when the test removes the store file.
+	cs.Stop()
 	mu.Lock()
-	got := fires
+	stopped = true
 	mu.Unlock()
-	if got < 10 {
-		t.Fatalf("slow handler blocked the scheduler: only %d fires in 1.2s (want >=10)", got)
-	}
+	releaseHandlers()
+	wg.Wait()
 }
 
 func TestCronService_HandlerPanicKeepsScheduleAlive(t *testing.T) {
@@ -678,4 +724,269 @@ func TestCronService_ConcurrentAccess(t *testing.T) {
 	}
 
 	wg.Wait()
+}
+
+// newBlockingService returns a started service whose handler counts calls and
+// blocks until release is closed, so tests can hold a job "in flight".
+func newBlockingService(t *testing.T) (cs *CronService, calls *atomic.Int32, started chan struct{}, release func()) {
+	t.Helper()
+	calls = &atomic.Int32{}
+	started = make(chan struct{}, 16)
+	gate := make(chan struct{})
+	release = sync.OnceFunc(func() { close(gate) })
+	t.Cleanup(release) // never leave handlers blocked if the test fails early
+
+	cs, path := setupService(func(job *CronJob) (string, error) {
+		calls.Add(1)
+		started <- struct{}{}
+		<-gate
+		return "ok", nil
+	})
+	t.Cleanup(func() { os.Remove(path) })
+	if err := cs.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	t.Cleanup(cs.Stop)
+	return cs, calls, started, release
+}
+
+func waitStarted(t *testing.T, started <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("handler never started")
+	}
+}
+
+func waitIdle(t *testing.T, cs *CronService, jobID string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		cs.mu.RLock()
+		_, busy := cs.inFlight[jobID]
+		cs.mu.RUnlock()
+		if !busy {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("job never finished")
+}
+
+func TestCronService_RunJobExecutesWithoutTouchingSchedule(t *testing.T) {
+	ran := make(chan string, 1)
+	cs, path := setupService(func(job *CronJob) (string, error) {
+		ran <- job.ID
+		return "ok", nil
+	})
+	defer os.Remove(path)
+	if err := cs.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer cs.Stop()
+
+	everyMS := time.Hour.Milliseconds()
+	job, err := cs.AddJob("Hourly", CronSchedule{Kind: "every", EveryMS: &everyMS}, "msg", "cli", "direct")
+	if err != nil {
+		t.Fatalf("AddJob failed: %v", err)
+	}
+	wantNext := *job.State.NextRunAtMS
+
+	if err := cs.RunJob(job.ID); err != nil {
+		t.Fatalf("RunJob failed: %v", err)
+	}
+	select {
+	case id := <-ran:
+		if id != job.ID {
+			t.Fatalf("ran job %s, want %s", id, job.ID)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("manual run never executed")
+	}
+	waitIdle(t, cs, job.ID)
+
+	got, _ := cs.GetJob(job.ID)
+	if got.State.LastStatus != "ok" || got.State.LastRunAtMS == nil {
+		t.Fatalf("manual run not recorded: %+v", got.State)
+	}
+	if got.State.NextRunAtMS == nil || *got.State.NextRunAtMS != wantNext {
+		t.Fatalf("manual run changed next run: got %v, want %d", got.State.NextRunAtMS, wantNext)
+	}
+}
+
+func TestCronService_RunJobRunsDisabledJob(t *testing.T) {
+	cs, calls, started, release := newBlockingService(t)
+	everyMS := time.Hour.Milliseconds()
+	job, _ := cs.AddJob("Off", CronSchedule{Kind: "every", EveryMS: &everyMS}, "msg", "cli", "direct")
+	cs.EnableJob(job.ID, false)
+
+	if err := cs.RunJob(job.ID); err != nil {
+		t.Fatalf("RunJob failed: %v", err)
+	}
+	waitStarted(t, started)
+	release()
+	waitIdle(t, cs, job.ID)
+
+	if calls.Load() != 1 {
+		t.Fatalf("calls = %d, want 1", calls.Load())
+	}
+	if got, _ := cs.GetJob(job.ID); got.Enabled || got.State.NextRunAtMS != nil {
+		t.Fatalf("manual run re-enabled job: %+v", got)
+	}
+}
+
+func TestCronService_RunJobErrors(t *testing.T) {
+	cs, path := setupService(nil)
+	defer os.Remove(path)
+	everyMS := time.Hour.Milliseconds()
+	job, _ := cs.AddJob("Idle", CronSchedule{Kind: "every", EveryMS: &everyMS}, "msg", "cli", "direct")
+
+	if err := cs.RunJob(job.ID); err == nil {
+		t.Fatal("RunJob on a stopped service should fail")
+	}
+
+	if err := cs.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer cs.Stop()
+	if err := cs.RunJob("missing"); err == nil {
+		t.Fatal("RunJob on unknown job should fail")
+	}
+}
+
+func TestCronService_RunJobRejectsConcurrentManualRun(t *testing.T) {
+	cs, calls, started, release := newBlockingService(t)
+	everyMS := time.Hour.Milliseconds()
+	job, _ := cs.AddJob("Busy", CronSchedule{Kind: "every", EveryMS: &everyMS}, "msg", "cli", "direct")
+
+	if err := cs.RunJob(job.ID); err != nil {
+		t.Fatalf("first RunJob failed: %v", err)
+	}
+	waitStarted(t, started)
+
+	if err := cs.RunJob(job.ID); !errors.Is(err, ErrJobRunning) {
+		t.Fatalf("second RunJob error = %v, want ErrJobRunning", err)
+	}
+
+	release()
+	waitIdle(t, cs, job.ID)
+	if err := cs.RunJob(job.ID); err != nil {
+		t.Fatalf("RunJob after completion failed: %v", err)
+	}
+	waitIdle(t, cs, job.ID)
+	if calls.Load() != 2 {
+		t.Fatalf("calls = %d, want 2", calls.Load())
+	}
+}
+
+// A scheduler tick that finds a job due while a manual run is in flight must
+// skip it (and still advance the schedule) instead of running it twice.
+func TestCronService_SchedulerSkipsJobRunningManually(t *testing.T) {
+	cs, calls, started, release := newBlockingService(t)
+	everyMS := time.Hour.Milliseconds()
+	job, _ := cs.AddJob("Raced", CronSchedule{Kind: "every", EveryMS: &everyMS}, "msg", "cli", "direct")
+
+	if err := cs.RunJob(job.ID); err != nil {
+		t.Fatalf("RunJob failed: %v", err)
+	}
+	waitStarted(t, started)
+
+	// Make the job due right now and run a scheduler tick by hand.
+	cs.mu.Lock()
+	past := time.Now().UnixMilli() - 1
+	cs.store.Jobs[0].State.NextRunAtMS = &past
+	cs.mu.Unlock()
+	cs.checkJobs()
+
+	got, _ := cs.GetJob(job.ID)
+	if got.State.NextRunAtMS == nil || *got.State.NextRunAtMS <= time.Now().UnixMilli() {
+		t.Fatalf("skipped tick did not advance schedule: %v", got.State.NextRunAtMS)
+	}
+
+	release()
+	waitIdle(t, cs, job.ID)
+	if calls.Load() != 1 {
+		t.Fatalf("calls = %d, want 1 (scheduler duplicated the manual run)", calls.Load())
+	}
+}
+
+// And the other way round: a manual run requested while the scheduler already
+// started the job is rejected.
+func TestCronService_RunJobRejectedWhileScheduledRunInFlight(t *testing.T) {
+	cs, _, started, release := newBlockingService(t)
+	everyMS := time.Hour.Milliseconds()
+	job, _ := cs.AddJob("Raced", CronSchedule{Kind: "every", EveryMS: &everyMS}, "msg", "cli", "direct")
+
+	cs.mu.Lock()
+	past := time.Now().UnixMilli() - 1
+	cs.store.Jobs[0].State.NextRunAtMS = &past
+	cs.mu.Unlock()
+	cs.checkJobs()
+	waitStarted(t, started)
+
+	if err := cs.RunJob(job.ID); !errors.Is(err, ErrJobRunning) {
+		t.Fatalf("RunJob error = %v, want ErrJobRunning", err)
+	}
+	release()
+	waitIdle(t, cs, job.ID)
+}
+
+// Hammer RunJob and scheduler ticks together (run with -race): the handler must
+// never observe two overlapping executions of the same job.
+func TestCronService_ManualAndScheduledRunsNeverOverlap(t *testing.T) {
+	var active, maxActive, total atomic.Int32
+	cs, path := setupService(func(job *CronJob) (string, error) {
+		n := active.Add(1)
+		for {
+			m := maxActive.Load()
+			if n <= m || maxActive.CompareAndSwap(m, n) {
+				break
+			}
+		}
+		total.Add(1)
+		time.Sleep(2 * time.Millisecond)
+		active.Add(-1)
+		return "ok", nil
+	})
+	defer os.Remove(path)
+	if err := cs.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer cs.Stop()
+
+	everyMS := time.Hour.Milliseconds()
+	job, _ := cs.AddJob("Hammered", CronSchedule{Kind: "every", EveryMS: &everyMS}, "msg", "cli", "direct")
+
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			for range 20 {
+				_ = cs.RunJob(job.ID)
+				time.Sleep(time.Millisecond)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			for range 20 {
+				cs.mu.Lock()
+				past := time.Now().UnixMilli() - 1
+				cs.store.Jobs[0].State.NextRunAtMS = &past
+				cs.mu.Unlock()
+				cs.checkJobs()
+				time.Sleep(time.Millisecond)
+			}
+		}()
+	}
+	wg.Wait()
+	waitIdle(t, cs, job.ID)
+
+	if maxActive.Load() != 1 {
+		t.Fatalf("max concurrent executions = %d, want 1 (total runs: %d)", maxActive.Load(), total.Load())
+	}
+	if total.Load() == 0 {
+		t.Fatal("handler never ran")
+	}
 }

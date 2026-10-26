@@ -53,6 +53,21 @@ func TestLogLevelFiltering(t *testing.T) {
 	SetLevel(INFO)
 }
 
+func TestIsDebugEnabled(t *testing.T) {
+	initialLevel := GetLevel()
+	defer SetLevel(initialLevel)
+
+	SetLevel(DEBUG)
+	if !IsDebugEnabled() {
+		t.Fatal("IsDebugEnabled() = false at DEBUG level, want true")
+	}
+
+	SetLevel(INFO)
+	if IsDebugEnabled() {
+		t.Fatal("IsDebugEnabled() = true at INFO level, want false")
+	}
+}
+
 func TestLoggerWithComponent(t *testing.T) {
 	initialLevel := GetLevel()
 	defer SetLevel(initialLevel)

@@ -150,15 +150,20 @@ func editFile(sysFs fileSystem, path, oldText, newText string) ([]byte, []byte, 
 	return content, newContent, nil
 }
 
-// appendFile reads the existing content (if any) via sysFs, appends new content, and writes back.
+// appendFile appends content through the filesystem's append implementation
+// when available, falling back to read+write for filesystems that cannot
+// append in place.
 func appendFile(sysFs fileSystem, path, appendContent string) error {
+	if appender, ok := sysFs.(fileAppender); ok {
+		return appender.AppendFile(path, []byte(appendContent))
+	}
+
 	content, err := sysFs.ReadFile(path)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
 
-	newContent := append(content, []byte(appendContent)...)
-	return sysFs.WriteFile(path, newContent)
+	return sysFs.WriteFile(path, append(content, []byte(appendContent)...))
 }
 
 // replaceEditContent handles the core logic of finding and replacing a single occurrence of oldText.

@@ -27,7 +27,7 @@ func (al *AgentLoop) buildContinuationTarget(msg bus.InboundMessage) (*continuat
 	allocation := al.allocateRouteSession(route, msg)
 
 	return &continuationTarget{
-		SessionKey: resolveScopeKey(allocation.SessionKey, msg.SessionKey),
+		SessionKey: resolveScopeKey(allocation.SessionKey, effectiveSessionKey(msg)),
 		Channel:    msg.Channel,
 		ChatID:     msg.ChatID,
 	}, nil
@@ -53,7 +53,7 @@ func (al *AgentLoop) ProcessDirectWithChannel(
 	}
 
 	senderID := "direct"
-	if strings.HasPrefix(sessionKey, "agent:cron-") {
+	if strings.HasPrefix(sessionKey, cronSessionKeyPrefix) {
 		senderID = "cron"
 	}
 
@@ -114,6 +114,8 @@ func (al *AgentLoop) prepareInboundMessageForAgent(
 	msg bus.InboundMessage,
 ) bus.InboundMessage {
 	msg = bus.NormalizeInboundMessage(msg)
+
+	hasAudioAnnotation := audioAnnotationRe.MatchString(msg.Content)
 	if al.hasAudioInput(msg) {
 		if msg.Context.Raw == nil {
 			msg.Context.Raw = make(map[string]string, 1)
@@ -121,12 +123,15 @@ func (al *AgentLoop) prepareInboundMessageForAgent(
 		msg.Context.Raw[metadataKeyInputAudio] = "true"
 	}
 
-	var hadAudio bool
-	msg, hadAudio = al.transcribeAudioInMessage(ctx, msg)
+	msg, hadAudio := al.transcribeAudioInMessage(ctx, msg)
 
-	// For audio messages the placeholder was deferred by the channel.
-	// Now that transcription (and optional feedback) is done, send it.
-	if hadAudio && al.channelManager != nil {
+	// For audio messages the channel deferred the placeholder until after
+	// transcription (it skips it when the content matches audioAnnotationRe, see
+	// channels.BaseChannel.HandleMessageWithContext). Send it now whenever that
+	// same annotation was present, also when transcription could not run or
+	// failed, so an audio message always produces visible feedback instead of
+	// appearing silently lost.
+	if (hadAudio || hasAudioAnnotation) && al.channelManager != nil {
 		al.channelManager.SendPlaceholder(ctx, msg.Channel, msg.ChatID)
 	}
 
@@ -135,6 +140,7 @@ func (al *AgentLoop) prepareInboundMessageForAgent(
 
 func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage) (string, error) {
 	msg = al.prepareInboundMessageForAgent(ctx, msg)
+	msg.SessionKey = effectiveSessionKey(msg)
 
 	// Add message preview to log (show full content for error messages)
 	var logContent string

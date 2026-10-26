@@ -20,7 +20,10 @@ func TestReadFileLinesTool_RegistryValidationSupportsMaxLinesAndRejectsLimit(t *
 	}
 
 	reg := NewToolRegistry()
-	reg.Register(fstools.NewReadFileLinesTool(tmpDir, false, fstools.MaxReadFileSize))
+	reg.Register(fstools.NewReadFileLinesTool(
+		tmpDir, false, fstools.MaxReadFileSize,
+		fstools.DefaultReadFileMaxLines, fstools.DefaultReadFileMaxLineLength,
+	))
 
 	result := reg.Execute(context.Background(), "read_file", map[string]any{
 		"path":       testFile,

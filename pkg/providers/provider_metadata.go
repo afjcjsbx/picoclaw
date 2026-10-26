@@ -545,6 +545,18 @@ var modelProviderOptionsByName = map[string]ModelProviderOption{
 		Aliases:             []string{"coding-plan-anthropic"},
 		httpAPI:             true,
 	},
+	"opencode-go": {
+		ID:                  "opencode-go",
+		DisplayName:         "OpenCode Go",
+		Domain:              "opencode.ai",
+		DefaultAPIBase:      "https://opencode.ai/inference/go",
+		CreateAllowed:       true,
+		DefaultModelAllowed: true,
+		SupportsFetch:       true,
+		Priority:            33,
+		CommonModels:        []string{"kimi-k3", "glm-5.3", "deepseek-v4-pro", "qwen3.8-max", "minimax-m3", "grok-4.7"},
+		httpAPI:             true,
+	},
 	"novita": {
 		ID:                  "novita",
 		DisplayName:         "Novita AI",

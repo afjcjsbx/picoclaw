@@ -3,6 +3,7 @@
 package netbind
 
 import (
+	"errors"
 	"syscall"
 
 	"golang.org/x/sys/windows"
@@ -22,4 +23,10 @@ func applyIPv6OnlyControl(enabled bool) func(string, string, syscall.RawConn) er
 		}
 		return controlErr
 	}
+}
+
+// isFamilyUnavailable reports whether err means the host cannot use the IP
+// family of the requested address, as opposed to the address being busy.
+func isFamilyUnavailable(err error) bool {
+	return errors.Is(err, windows.WSAEADDRNOTAVAIL) || errors.Is(err, windows.WSAEAFNOSUPPORT)
 }
