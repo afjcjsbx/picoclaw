@@ -24,7 +24,6 @@ import shutil
 import socket
 import statistics
 import subprocess
-import sys
 import tempfile
 import threading
 import time
