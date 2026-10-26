@@ -197,6 +197,9 @@ func TestSubagentPromptText(t *testing.T) {
 				t.Errorf("system prompt =\n%q\nwant\n%q", spawner.lastConfig.SystemPrompt, tt.expected)
 			}
 		})
+	}
+}
+
 // panickingSpawner panics inside SpawnSubTurn to exercise goroutine recovery.
 type panickingSpawner struct{}
 
