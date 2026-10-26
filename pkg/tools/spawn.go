@@ -118,15 +118,8 @@ func (t *SpawnTool) execute(
 		return ErrorResult("task is required and must be a non-empty string")
 	}
 
-	label, ok := args["label"].(string)
-	if !ok {
-		label = ""
-	}
-	agentID, ok := args["agent_id"].(string)
-	if !ok {
-		agentID = ""
-	}
-	targetAgentID := strings.TrimSpace(agentID)
+	label := stringArg(args, "label")
+	targetAgentID := strings.TrimSpace(stringArg(args, "agent_id"))
 
 	// Check allowlist if targeting a specific agent
 	if targetAgentID != "" && t.allowlistCheck != nil {
@@ -136,22 +129,15 @@ func (t *SpawnTool) execute(
 	}
 
 	// Build system prompt for spawned subagent
-	systemPrompt := fmt.Sprintf(
-		`You are a spawned subagent running in the background. Complete the given task independently and report back when done.
-
-Task: %s`,
+	role := "You are a spawned subagent running in the background"
+	if label != "" {
+		role = fmt.Sprintf("You are a spawned subagent labeled %q running in the background", label)
+	}
+	systemPrompt := subagentSystemPrompt(
+		role,
+		"Complete the given task independently and report back when done.",
 		task,
 	)
-
-	if label != "" {
-		systemPrompt = fmt.Sprintf(
-			`You are a spawned subagent labeled "%s" running in the background. Complete the given task independently and report back when done.
-
-Task: %s`,
-			label,
-			task,
-		)
-	}
 
 	// Use spawner if available (direct SpawnSubTurn call)
 	if t.spawner != nil {
