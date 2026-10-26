@@ -204,12 +204,19 @@ def run_once(settle, long_idle=0.0):
 def cli_coldstart(n, args):
     """Wall time for a short-lived non-interactive CLI invocation (exec -> exit)."""
     samples = []
-    for _ in range(n):
-        env = dict(os.environ, PICOCLAW_HOME="/tmp/pc-bench/home")
-        t0 = time.perf_counter()
-        subprocess.run([BIN, "--no-color", *args], env=env,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        samples.append((time.perf_counter() - t0) * 1000.0)
+    d = tempfile.mkdtemp(prefix="pcbench-cli-")
+    try:
+        cfg = os.path.join(d, "config.json")
+        with open(cfg, "w") as f:
+            json.dump({"version": 1, "gateway": {"host": "127.0.0.1", "log_level": "error"}}, f)
+        env = dict(os.environ, PICOCLAW_HOME=os.path.join(d, "home"), PICOCLAW_CONFIG=cfg)
+        for _ in range(n):
+            t0 = time.perf_counter()
+            subprocess.run([BIN, "--no-color", *args], env=env,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            samples.append((time.perf_counter() - t0) * 1000.0)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
     return samples
 
 
