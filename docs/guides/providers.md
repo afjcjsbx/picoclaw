@@ -147,25 +147,32 @@ speech routes, for example custom `voice` names or `response_format: "mp3"`.
 
 #### Tool Schema Compatibility
 
-By default, PicoClaw now forwards tool JSON Schemas unchanged.
+By default, PicoClaw forwards tool JSON Schemas unchanged, with automatic handling for the native Gemini provider.
 
-Some providers reject advanced JSON Schema features such as `$ref`, `$defs`, `anyOf`, `oneOf`, `allOf`, `pattern`, or numeric/string constraints inside tool declarations. For those models, you can opt into a compatibility transform per model entry with `tool_schema_transform`.
+##### Native Gemini endpoints
 
-Use `simple` when the upstream provider expects the conservative style function schema subset:
+When the `gemini` provider targets Google AI Studio (`generativelanguage.googleapis.com`, API version `v1beta`, `v1`, or `v1alpha`), PicoClaw sends tool parameters through Gemini's `parametersJsonSchema` field, which accepts full JSON Schema. Before sending, PicoClaw deep-copies the schema, inlines same-document `$ref` values, drops `$defs` and `definitions`, removes a root `$schema`, and guarantees an object root. If a reference is circular or cannot be resolved, PicoClaw logs a debug message and forwards the schema unchanged so the upstream error stays visible instead of silently truncating the tool definition.
+
+Vertex AI and custom Gemini-compatible proxies keep the legacy `parameters` field, which only accepts the conservative OpenAPI subset. PicoClaw sanitizes those schemas automatically: local refs are dereferenced, `anyOf`, `oneOf`, and `allOf` are flattened, and keywords such as `additionalProperties`, `pattern`, or numeric bounds are removed.
+
+`tool_schema_transform` is therefore unnecessary for native Gemini. It remains available for other providers that reject advanced JSON Schema features such as `$ref`, `$defs`, `anyOf`, `oneOf`, `allOf`, `pattern`, or numeric and string constraints inside tool declarations.
+
+Use `simple` when such a provider expects the conservative function schema subset:
 
 ```json
 {
-  "model_name": "gemini-2.5-flash-safe-tools",
-  "provider": "gemini",
-  "model": "gemini-2.5-flash",
-  "api_keys": ["your-gemini-key"],
+  "model_name": "custom-relay-safe-tools",
+  "provider": "openai",
+  "model": "my-model",
+  "api_keys": ["your-key"],
   "tool_schema_transform": "simple"
 }
 ```
 
 Notes:
 
-- Default behavior is disabled. If you omit `tool_schema_transform`, PicoClaw sends the original tool schema.
+- For non-Gemini providers the transform is disabled by default. If you omit `tool_schema_transform`, PicoClaw sends the original tool schema.
+- Native Gemini endpoints are handled automatically; the transform is not needed there.
 - The setting is per model entry, so you can enable it only for the providers that need it.
 
 #### Provider / Model Resolution

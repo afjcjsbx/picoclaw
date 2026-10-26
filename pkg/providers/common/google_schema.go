@@ -236,14 +236,18 @@ func (s geminiSchemaSanitizer) mergeUnionBranches(
 }
 
 func (s geminiSchemaSanitizer) resolveLocalSchemaRef(ref string) (map[string]any, bool) {
+	return resolveGeminiSchemaRef(s.root, ref)
+}
+
+func resolveGeminiSchemaRef(root map[string]any, ref string) (map[string]any, bool) {
 	if ref == "#" {
-		return s.root, true
+		return root, true
 	}
 	if !strings.HasPrefix(ref, "#/") {
 		return nil, false
 	}
 
-	var current any = s.root
+	var current any = root
 	for _, rawToken := range strings.Split(strings.TrimPrefix(ref, "#/"), "/") {
 		token := strings.ReplaceAll(strings.ReplaceAll(rawToken, "~1", "/"), "~0", "~")
 		switch value := current.(type) {
