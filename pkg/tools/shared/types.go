@@ -6,6 +6,7 @@ type ExecResponse struct {
 	ExitCode  int           `json:"exitCode,omitempty"`
 	Output    string        `json:"output,omitempty"`
 	Error     string        `json:"error,omitempty"`
+	Note      string        `json:"note,omitempty"`
 	Sessions  []SessionInfo `json:"sessions,omitempty"`
 }
 
