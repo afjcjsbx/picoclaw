@@ -6,8 +6,8 @@ Drives a TUI in a pseudo-terminal of a fixed size (default 200x50) and records:
   - first_byte_ms   : spawn -> first byte of output
   - first_paint_ms  : spawn -> first substantial frame (cumulative output > paint_bytes)
   - settled_ms      : spawn -> UI stopped changing (no output for quiet_ms after paint)
-  - idle_rss_kib    : resident set after settle + extra settle
-  - idle_footprint  : macOS phys_footprint (empty elsewhere)
+  - idle_rss_kib    : resident set summed over the process tree after settle + extra settle
+  - idle_footprint  : macOS phys_footprint of the main process (empty elsewhere)
   - processes       : number of OS processes in the tree (main + descendants)
 
 Portable: RSS/tree use `ps`; phys_footprint is macOS-only and omitted elsewhere.
@@ -129,14 +129,15 @@ def run(cmd, cwd, env, rows, cols, paint_bytes, quiet_ms, settle, max_s, keys,
     # let it idle a bit more before sampling memory
     if not exited_early:
         time.sleep(settle)
-    rss = ps_field(proc.pid, "rss")
-    dprint("rss=", rss)
-    footprint = phys_footprint_bytes(proc.pid) if not exited_early else None
-    dprint("footprint=", footprint)
     tree = process_tree(proc.pid) if not exited_early else []
     dprint("tree=", len(tree))
     nproc = len(tree)
     desc = max(0, nproc - 1)
+    rss_values = [ps_field(pid, "rss") for pid in tree]
+    rss = sum(int(v) for v in rss_values if v) if tree else None
+    dprint("rss=", rss)
+    footprint = phys_footprint_bytes(proc.pid) if not exited_early else None
+    dprint("footprint=", footprint)
 
     # capture any trailing output, then shut down
     stop.set()

@@ -148,7 +148,7 @@ _*Memory use varies by build and workload. Boot speed comparison is based on 0.8
 
 ### ⚡ Runtime footprint
 
-Measured on an Apple M1 Max (macOS arm64, Go 1.27.2) on 2026-10-15 with the scripts in [`scripts/`](scripts/). **First paint / ready** is the time until the interface is usable — for PicoClaw's headless core, until the gateway answers `GET /ready`. **Idle RSS** is the resident set once the process is sitting idle at its prompt.
+Measured on an Apple M1 Max (macOS arm64, Go 1.27.2) on 2026-10-15 with the scripts in [`scripts/`](scripts/). **First paint / ready** is the time until the interface is usable — for PicoClaw's headless core, until the gateway answers `GET /ready`. **Idle RSS** is the resident set summed across the process tree once it is idle.
 
 | Tool | Runtime | Install size | First paint / ready | Idle RSS | Processes |
 | --- | --- | ---: | ---: | ---: | :---: |
