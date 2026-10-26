@@ -35,12 +35,24 @@ from bench_common import phys_footprint_bytes, process_tree
 BIN = os.environ.get("PICOCLAW_BIN", "")
 
 
+class PortInUseError(RuntimeError):
+    pass
+
+
 def free_port():
     s = socket.socket()
     s.bind(("127.0.0.1", 0))
     p = s.getsockname()[1]
     s.close()
     return p
+
+
+def log_has_port_conflict(path):
+    try:
+        with open(path, "r", errors="replace") as f:
+            return "address already in use" in f.read().lower()
+    except OSError:
+        return False
 
 
 def ps_rss_kib(pid):
@@ -79,7 +91,7 @@ def descendants_count(pid):
     return max(0, len(process_tree(pid)) - 1)
 
 
-def run_once(settle, long_idle=0.0):
+def _run_once(settle, long_idle=0.0):
     port = free_port()
     d = tempfile.mkdtemp(prefix="pcbench-")
     keep = False
@@ -129,6 +141,8 @@ def run_once(settle, long_idle=0.0):
             stop.set()
             proc.kill()
             proc.wait()
+            if log_has_port_conflict(os.path.join(d, "gw.log")):
+                raise PortInUseError("gateway could not bind the benchmark port")
             keep = True
             raise RuntimeError("gateway did not become ready; see " + os.path.join(d, "gw.log"))
 
@@ -176,6 +190,15 @@ def run_once(settle, long_idle=0.0):
             log.close()
         if not keep:
             shutil.rmtree(d, ignore_errors=True)
+
+
+def run_once(settle, long_idle=0.0):
+    for _ in range(3):
+        try:
+            return _run_once(settle, long_idle)
+        except PortInUseError:
+            pass
+    raise RuntimeError("gateway could not bind a free port after 3 attempts")
 
 
 def cli_coldstart(n, args):
