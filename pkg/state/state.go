@@ -139,6 +139,21 @@ func (sm *Manager) GetTimestamp() time.Time {
 	return sm.state.Timestamp
 }
 
+// Reload refreshes the in-memory state from disk.
+// Manager instances are independent and only load once at construction, so
+// callers that rely on reads (for example the heartbeat service) must reload
+// to observe writes performed by another Manager instance.
+func (sm *Manager) Reload() {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	if err := sm.load(); err != nil {
+		logger.WarnCF("state", "failed to reload state", map[string]any{
+			"error": err.Error(),
+		})
+	}
+}
+
 // saveAtomic performs an atomic save using temp file + rename.
 // This ensures that the state file is never corrupted:
 // 1. Write to a temp file

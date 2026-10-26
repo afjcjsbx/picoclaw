@@ -2,16 +2,22 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
+	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
+	"github.com/sipeed/picoclaw/pkg/memory"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
 	"github.com/sipeed/picoclaw/pkg/seahorse"
+	"github.com/sipeed/picoclaw/pkg/session"
+	"github.com/sipeed/picoclaw/pkg/session/pruner"
 )
 
 // seahorseTestProvider implements providers.LLMProvider for seahorse tests.
@@ -403,7 +409,7 @@ func TestProviderToCompleteFn(t *testing.T) {
 		},
 	}
 
-	completeFn := providerToCompleteFn(mp, "test-model-v1")
+	completeFn := providerToCompleteFn(mp, "test-model-v1", llmRetry{})
 	result, err := completeFn(context.Background(), "Summarize this text", seahorse.CompleteOptions{
 		MaxTokens:   500,
 		Temperature: 0.3,
@@ -474,7 +480,7 @@ func TestProviderToCompleteFnError(t *testing.T) {
 		},
 	}
 
-	completeFn := providerToCompleteFn(mp, "test-model")
+	completeFn := providerToCompleteFn(mp, "test-model", llmRetry{})
 	_, err := completeFn(context.Background(), "test prompt", seahorse.CompleteOptions{})
 	if err == nil {
 		t.Error("expected error from canceled context")
@@ -1163,5 +1169,422 @@ func TestSeahorseSummarizeSkipsCondensedWhenBelowThreshold(t *testing.T) {
 
 	if tokensBefore < threshold && condensedCount > 0 {
 		t.Errorf("BUG: condensed created when tokens (%d) < threshold (%d)", tokensBefore, threshold)
+	}
+}
+
+// noDeleteStore hides DeleteSession so it cannot be pruned.
+type noDeleteStore struct{ session.SessionStore }
+
+func TestSeahorsePruneStoresSkipsWhenStoreCannotDelete(t *testing.T) {
+	mgr := &seahorseContextManager{sessions: noDeleteStore{session.NewSessionManager("")}}
+
+	stores, ok := mgr.pruneStores()
+	if ok {
+		t.Fatal("pruneStores ok = true for a store without DeleteSession, want false")
+	}
+	if len(stores) != 0 {
+		t.Fatalf("pruneStores returned %d stores, want none so nothing is half-pruned", len(stores))
+	}
+	// Asking again must stay false (and not panic on the warn-once).
+	if _, ok := mgr.pruneStores(); ok {
+		t.Fatal("second pruneStores ok = true, want false")
+	}
+}
+
+func TestSeahorsePruneStoresAcceptsDeletableStore(t *testing.T) {
+	mgr := &seahorseContextManager{sessions: session.NewSessionManager("")}
+
+	stores, ok := mgr.pruneStores()
+	if !ok || len(stores) != 1 {
+		t.Fatalf("pruneStores = (%d stores, ok=%v), want (1, true)", len(stores), ok)
+	}
+}
+
+func newPruneTestManager(t *testing.T) (*seahorseContextManager, *session.JSONLBackend) {
+	t.Helper()
+	dir := t.TempDir()
+	store, err := memory.NewJSONLStore(filepath.Join(dir, "sessions"))
+	if err != nil {
+		t.Fatalf("NewJSONLStore: %v", err)
+	}
+	backend := session.NewJSONLBackend(store)
+	eng, err := seahorse.NewEngine(seahorse.Config{DBPath: filepath.Join(dir, "sessions", "seahorse.db")}, nil)
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	mgr := &seahorseContextManager{engine: eng, sessions: backend}
+	t.Cleanup(func() { _ = mgr.Close() })
+	return mgr, backend
+}
+
+func waitForSessionCount(t *testing.T, backend *session.JSONLBackend, want int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(backend.ListSessions()) == want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("sessions = %v, want %d", backend.ListSessions(), want)
+}
+
+func TestSeahorsePruneLoopRunsInBackgroundUntilClose(t *testing.T) {
+	mgr, backend := newPruneTestManager(t)
+	for _, key := range []string{"agent:main:a", "agent:main:b", "agent:main:c"} {
+		if err := backend.AddMessage(context.Background(), key, "user", "hello"); err != nil {
+			t.Fatalf("AddMessage(%s): %v", key, err)
+		}
+		time.Sleep(2 * time.Millisecond) // distinct activity times
+	}
+
+	mgr.startPruneLoop(config.SessionPruneConfig{Enabled: true, MaxSessions: 1}, 10*time.Millisecond)
+	waitForSessionCount(t, backend, 1)
+	if got := backend.ListSessions(); len(got) != 1 || got[0] != "agent:main:c" {
+		t.Fatalf("remaining sessions = %v, want only the newest (agent:main:c)", got)
+	}
+
+	if err := mgr.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if mgr.stopPrune != nil || mgr.pruneDone != nil {
+		t.Fatal("Close should clear the prune loop state")
+	}
+
+	// The loop is gone: new surplus sessions are no longer pruned.
+	if err := backend.AddMessage(context.Background(), "agent:main:d", "user", "hello"); err != nil {
+		t.Fatalf("AddMessage: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if got := len(backend.ListSessions()); got != 2 {
+		t.Fatalf("sessions after Close = %d, want 2 (loop must have stopped)", got)
+	}
+
+	// Close is idempotent.
+	if err := mgr.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+}
+
+func TestSeahorseCloseWithoutPruneLoop(t *testing.T) {
+	mgr, _ := newPruneTestManager(t)
+	if err := mgr.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	var nilEngine seahorseContextManager
+	if err := nilEngine.Close(); err != nil {
+		t.Fatalf("Close with no engine: %v", err)
+	}
+}
+
+func TestSeahorseStartupPrunesBeforeBootstrap(t *testing.T) {
+	workspace := t.TempDir()
+
+	// Sessions left behind by a previous run, oldest first.
+	pre, err := memory.NewJSONLStore(filepath.Join(workspace, "sessions"))
+	if err != nil {
+		t.Fatalf("NewJSONLStore: %v", err)
+	}
+	backend := session.NewJSONLBackend(pre)
+	keys := []string{"agent:main:old1", "agent:main:old2", "agent:main:newest"}
+	for _, key := range keys {
+		if err = backend.AddMessage(context.Background(), key, "user", "hello "+key); err != nil {
+			t.Fatalf("AddMessage(%s): %v", key, err)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	if closeErr := backend.Close(); closeErr != nil {
+		t.Fatalf("Close: %v", closeErr)
+	}
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:      workspace,
+				ModelName:      "test-model",
+				MaxTokens:      4096,
+				ContextManager: "seahorse",
+			},
+		},
+		Session: config.SessionConfig{
+			Prune: config.SessionPruneConfig{Enabled: true, MaxSessions: 1},
+		},
+	}
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), &simpleMockProvider{response: "ok"})
+	defer al.Close()
+
+	mgr, ok := al.contextManager.(*seahorseContextManager)
+	if !ok {
+		t.Fatal("expected seahorseContextManager")
+	}
+
+	sessions := al.registry.GetDefaultAgent().Sessions.ListSessions()
+	if len(sessions) != 1 || sessions[0] != "agent:main:newest" {
+		t.Fatalf("JSONL sessions after startup = %v, want only agent:main:newest", sessions)
+	}
+	statuses, err := mgr.engine.SessionStatuses(context.Background())
+	if err != nil {
+		t.Fatalf("SessionStatuses: %v", err)
+	}
+	if len(statuses) != 1 || statuses[0].SessionKey != "agent:main:newest" {
+		t.Fatalf("seahorse sessions after startup = %v, want only agent:main:newest "+
+			"(pruned sessions must not be bootstrapped)", statuses)
+	}
+}
+
+func TestSeahorsePruneReachesEveryAgentStore(t *testing.T) {
+	workspace := t.TempDir()
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:      filepath.Join(workspace, "default"),
+				ModelName:      "test-model",
+				MaxTokens:      4096,
+				ContextManager: "seahorse",
+			},
+			List: []config.AgentConfig{
+				{ID: "main", Default: true, Workspace: filepath.Join(workspace, "main")},
+				{ID: "support", Workspace: filepath.Join(workspace, "support")},
+			},
+		},
+	}
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), &simpleMockProvider{response: "ok"})
+	defer al.Close()
+
+	mgr, ok := al.contextManager.(*seahorseContextManager)
+	if !ok {
+		t.Fatal("expected seahorseContextManager")
+	}
+	mainAgent, _ := al.registry.GetAgent("main")
+	supportAgent, _ := al.registry.GetAgent("support")
+	if mainAgent == nil || supportAgent == nil {
+		t.Fatal("expected main and support agents")
+	}
+
+	ctx := context.Background()
+	// Oldest to newest; the middle one belongs to the routed agent.
+	seed := []struct {
+		agent *AgentInstance
+		key   string
+	}{
+		{mainAgent, "agent:main:oldest"},
+		{supportAgent, "agent:support:middle"},
+		{mainAgent, "agent:main:newest"},
+	}
+	for _, item := range seed {
+		if err := item.agent.Sessions.AddMessage(ctx, item.key, "user", "hello"); err != nil {
+			t.Fatalf("AddMessage %s: %v", item.key, err)
+		}
+		if _, err := mgr.engine.Ingest(ctx, item.key, []seahorse.Message{
+			{Role: "user", Content: "hello", TokenCount: 2, CreatedAt: time.Now().UTC().Truncate(time.Second)},
+		}); err != nil {
+			t.Fatalf("Ingest %s: %v", item.key, err)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	stores, ok := mgr.pruneStores()
+	if !ok || len(stores) < 2 {
+		t.Fatalf("pruneStores = (%d stores, ok=%v), want a store per agent", len(stores), ok)
+	}
+	res := pruner.Run(ctx, mgr.engine, stores, config.SessionPruneConfig{Enabled: true, MaxSessions: 1})
+	if len(res.Deleted) != 2 {
+		t.Fatalf("Deleted = %v, want the two oldest sessions", res.Deleted)
+	}
+
+	// The routed agent's JSONL history must be removed along with its seahorse
+	// conversation, not left behind.
+	if got := supportAgent.Sessions.ListSessions(); len(got) != 0 {
+		t.Fatalf("support agent sessions = %v, want none", got)
+	}
+	if got := mainAgent.Sessions.ListSessions(); len(got) != 1 || got[0] != "agent:main:newest" {
+		t.Fatalf("main agent sessions = %v, want [agent:main:newest]", got)
+	}
+	statuses, err := mgr.engine.SessionStatuses(ctx)
+	if err != nil {
+		t.Fatalf("SessionStatuses: %v", err)
+	}
+	if len(statuses) != 1 || statuses[0].SessionKey != "agent:main:newest" {
+		t.Fatalf("seahorse sessions = %v, want only agent:main:newest", statuses)
+	}
+}
+
+func TestSeahorseCompact_Manual(t *testing.T) {
+	var prompts []string
+	engine, err := seahorse.NewEngine(seahorse.Config{DBPath: t.TempDir() + "/test.db"},
+		func(_ context.Context, prompt string, _ seahorse.CompleteOptions) (string, error) {
+			prompts = append(prompts, prompt)
+			return "short summary", nil
+		})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	defer engine.Close()
+	runtimeBus := runtimeevents.NewBus()
+	defer runtimeBus.Close()
+	al := &AgentLoop{runtimeEvents: runtimeBus}
+	mgr := &seahorseContextManager{engine: engine, al: al}
+	ctx := context.WithValue(context.Background(), turnStateKey, &turnState{agentID: "alpha"})
+	runtimeCh, closeRuntimeEvents := subscribeRuntimeEventsForTest(
+		t,
+		al,
+		4,
+		runtimeevents.KindAgentSessionSummarize,
+	)
+	defer closeRuntimeEvents()
+
+	err = mgr.Compact(ctx, &CompactRequest{SessionKey: "manual-test", Reason: ContextCompressReasonManual})
+	if !errors.Is(err, ErrNothingToCompact) {
+		t.Fatalf("empty session: err = %v, want ErrNothingToCompact", err)
+	}
+
+	for i := 0; i < 40; i++ {
+		for _, role := range []string{"user", "assistant"} {
+			content := fmt.Sprintf("%s message %d with some body text", role, i)
+			_ = mgr.Ingest(ctx, &IngestRequest{
+				SessionKey: "manual-test",
+				Message:    protocoltypes.Message{Role: role, Content: content},
+			})
+		}
+	}
+
+	err = mgr.Compact(ctx, &CompactRequest{
+		SessionKey:   "manual-test",
+		Reason:       ContextCompressReasonManual,
+		Instructions: "database migration",
+	})
+	if err != nil {
+		t.Fatalf("Compact manual: %v", err)
+	}
+	if len(prompts) == 0 || !strings.Contains(prompts[0], "database migration") {
+		t.Fatalf("summarizer prompt missing focus: %q", prompts)
+	}
+	event := receiveRuntimeEvent(t, runtimeCh)
+	if event.Kind != runtimeevents.KindAgentSessionSummarize {
+		t.Fatalf("event kind = %q, want %q", event.Kind, runtimeevents.KindAgentSessionSummarize)
+	}
+	if event.Scope.AgentID != "alpha" {
+		t.Fatalf("event agent = %q, want alpha", event.Scope.AgentID)
+	}
+	payload, ok := event.Payload.(SessionSummarizePayload)
+	if !ok {
+		t.Fatalf("event payload = %T, want SessionSummarizePayload", event.Payload)
+	}
+	if payload.SummarizedMessages == 0 {
+		t.Fatal("event payload missing summarized message count")
+	}
+}
+
+// Seahorse compaction rewrites its own SQLite context, not the JSONL history.
+// /context and outbound usage must read the assembled context, otherwise they
+// keep reporting the pre-compaction size forever.
+func TestSeahorseContextUsage_ReflectsManualCompaction(t *testing.T) {
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:             t.TempDir(),
+				ModelName:             "test-model",
+				MaxTokens:             4096,
+				MaxToolIterations:     10,
+				ContextWindow:         32000,
+				SummarizeTokenPercent: 75,
+				ContextManager:        "seahorse",
+			},
+		},
+	}
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), &simpleMockProvider{response: "summary"})
+	defer al.Close()
+
+	cm, ok := al.contextManager.(*seahorseContextManager)
+	if !ok {
+		t.Fatalf("context manager = %T, want seahorse", al.contextManager)
+	}
+	agent := al.registry.GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("expected default agent")
+	}
+
+	ctx := context.Background()
+	const sessionKey = "seahorse-context-usage"
+	history := alternatingHistory(30, strings.Repeat("word ", 200))
+	if err := agent.Sessions.SetHistory(ctx, sessionKey, history); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
+	for _, msg := range history {
+		if err := cm.Ingest(ctx, &IngestRequest{SessionKey: sessionKey, Message: msg}); err != nil {
+			t.Fatalf("Ingest: %v", err)
+		}
+	}
+
+	before, beforeCount := al.currentContextUsage(agent, sessionKey)
+	if before == nil {
+		t.Fatal("expected usage before compaction")
+	}
+	if beforeCount == 0 {
+		t.Fatal("expected assembled messages before compaction")
+	}
+
+	if err := cm.Compact(ctx, &CompactRequest{
+		SessionKey: sessionKey,
+		Reason:     ContextCompressReasonManual,
+		Budget:     agent.ContextWindow,
+	}); err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+
+	after, afterCount := al.currentContextUsage(agent, sessionKey)
+	if after == nil {
+		t.Fatal("expected usage after compaction")
+	}
+	if afterCount >= beforeCount {
+		t.Fatalf("assembled message count after compaction = %d, want fewer than %d", afterCount, beforeCount)
+	}
+	if after.HistoryTokens >= before.HistoryTokens {
+		t.Fatalf("history tokens after compaction = %d, want fewer than %d", after.HistoryTokens, before.HistoryTokens)
+	}
+	if after.UsedTokens >= before.UsedTokens {
+		t.Fatalf("used tokens after compaction = %d, want fewer than %d", after.UsedTokens, before.UsedTokens)
+	}
+
+	// The JSONL history is intentionally untouched; reading it directly is what
+	// used to make /context stale.
+	raw, err := agent.Sessions.GetHistory(ctx, sessionKey)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if len(raw) != len(history) {
+		t.Fatalf("JSONL history after compaction = %d messages, want %d", len(raw), len(history))
+	}
+}
+
+func TestSeahorseAssemble_IgnoredSession(t *testing.T) {
+	engine, err := seahorse.NewEngine(
+		seahorse.Config{
+			DBPath:                t.TempDir() + "/test.db",
+			IgnoreSessionPatterns: []string{"ignored:*"},
+		},
+		func(context.Context, string, seahorse.CompleteOptions) (string, error) {
+			return "summary", nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	defer engine.Close()
+
+	mgr := &seahorseContextManager{engine: engine}
+	resp, err := mgr.Assemble(context.Background(), &AssembleRequest{
+		SessionKey: "ignored:heartbeat",
+		Budget:     1000,
+		MaxTokens:  100,
+	})
+	if err != nil {
+		t.Fatalf("Assemble: %v", err)
+	}
+	if resp == nil {
+		t.Fatal("expected non-nil response")
+	}
+	if len(resp.History) != 0 || resp.Summary != "" {
+		t.Fatalf("ignored session context = %d messages, summary %q; want empty", len(resp.History), resp.Summary)
 	}
 }

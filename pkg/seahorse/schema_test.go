@@ -350,6 +350,93 @@ func TestTriggerMigration(t *testing.T) {
 	}
 }
 
+func TestMessagesFTSRowidMigration(t *testing.T) {
+	db := openTestDB(t)
+	if err := runSchema(db); err != nil {
+		t.Fatalf("initial runSchema: %v", err)
+	}
+
+	// Simulate a legacy database: messages_fts with an auto-assigned rowid and
+	// legacy triggers that delete by scanning on message_id.
+	legacy := []string{
+		`DROP TRIGGER IF EXISTS messages_ai`,
+		`DROP TRIGGER IF EXISTS messages_ad`,
+		`DROP TRIGGER IF EXISTS messages_au`,
+		`DROP TABLE IF EXISTS messages_fts`,
+		`CREATE VIRTUAL TABLE messages_fts USING fts5(message_id, content, tokenize="trigram")`,
+		`CREATE TRIGGER messages_ai AFTER INSERT ON messages BEGIN
+			INSERT INTO messages_fts (message_id, content) VALUES (new.message_id, new.content);
+		END`,
+		`CREATE TRIGGER messages_ad AFTER DELETE ON messages BEGIN
+			DELETE FROM messages_fts WHERE message_id = old.message_id;
+		END`,
+		`CREATE TRIGGER messages_au AFTER UPDATE ON messages BEGIN
+			DELETE FROM messages_fts WHERE message_id = old.message_id;
+			INSERT INTO messages_fts (message_id, content) VALUES (new.message_id, new.content);
+		END`,
+		`INSERT INTO conversations (session_key) VALUES ('legacy-fts')`,
+		`INSERT INTO messages (conversation_id, role, content) VALUES (1, 'user', 'alpha legacy marker')`,
+		`INSERT INTO messages (conversation_id, role, content) VALUES (1, 'assistant', 'beta legacy marker')`,
+		`INSERT INTO messages (conversation_id, role, content) VALUES (1, 'user', 'gamma legacy marker')`,
+		// Delete the middle rows so FTS rowids drift from message_ids on the
+		// next insert (FTS reuses max+1, AUTOINCREMENT does not).
+		`DELETE FROM messages WHERE message_id = 2`,
+		`DELETE FROM messages WHERE message_id = 3`,
+		`INSERT INTO messages (conversation_id, role, content) VALUES (1, 'assistant', 'delta legacy marker')`,
+	}
+	for _, sql := range legacy {
+		if _, err := db.Exec(sql); err != nil {
+			t.Fatalf("legacy setup %q: %v", sql, err)
+		}
+	}
+
+	// Precondition: the legacy table must be misaligned.
+	var misaligned int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM messages_fts WHERE rowid != message_id`).Scan(&misaligned); err != nil {
+		t.Fatalf("precondition query: %v", err)
+	}
+	if misaligned == 0 {
+		t.Fatal("test setup failed to produce a misaligned legacy FTS table")
+	}
+
+	// Migration should rebuild the table and align rowid with message_id.
+	if err := runSchema(db); err != nil {
+		t.Fatalf("migrating runSchema: %v", err)
+	}
+
+	if err := db.QueryRow(`SELECT COUNT(*) FROM messages_fts WHERE rowid != message_id`).Scan(&misaligned); err != nil {
+		t.Fatalf("post-migration query: %v", err)
+	}
+	if misaligned != 0 {
+		t.Fatalf("after migration, %d messages_fts rows still have rowid != message_id", misaligned)
+	}
+
+	// FTS search must still work through the message_id join.
+	var content string
+	err := db.QueryRow(
+		`SELECT m.content FROM messages_fts f JOIN messages m ON f.message_id = m.message_id
+		 WHERE messages_fts MATCH 'delta legacy'`,
+	).Scan(&content)
+	if err != nil {
+		t.Fatalf("FTS search after migration: %v", err)
+	}
+	if !strings.Contains(content, "delta") {
+		t.Fatalf("FTS search returned wrong content: %q", content)
+	}
+
+	// The new delete trigger must remove the FTS row by rowid.
+	if _, err := db.Exec(`DELETE FROM messages WHERE content LIKE 'delta legacy%'`); err != nil {
+		t.Fatalf("delete after migration: %v", err)
+	}
+	var remaining int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM messages_fts`).Scan(&remaining); err != nil {
+		t.Fatalf("count messages_fts: %v", err)
+	}
+	if remaining != 1 {
+		t.Fatalf("messages_fts rows after delete = %d, want 1", remaining)
+	}
+}
+
 func TestFTS5SQLConstants(t *testing.T) {
 	db := openTestDB(t)
 

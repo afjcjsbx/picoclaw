@@ -11,10 +11,12 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/auth"
 	"golang.org/x/oauth2"
 
 	"github.com/sipeed/picoclaw/pkg/config"
@@ -31,8 +33,13 @@ type (
 	}
 )
 
+// oauthStoreLocks serializes token-store access per store path across
+// goroutines in this process. Entries are never evicted: one mutex per distinct
+// store path, and paths are derived from configured server identities, so the
+// map is bounded by the configuration rather than by request volume.
 var oauthStoreLocks sync.Map
 
+// lock acquires the per-store mutex and returns the release function.
 func (s oauthStore) lock() func() {
 	value, _ := oauthStoreLocks.LoadOrStore(s.path, new(sync.Mutex))
 	mu := value.(*sync.Mutex)
@@ -55,7 +62,7 @@ func (s oauthStore) load() (*oauthSession, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
+	if !info.Mode().IsRegular() || (runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0) {
 		return nil, errors.New("MCP OAuth token file must be a regular file with owner-only permissions")
 	}
 	data, err := os.ReadFile(s.path)
@@ -96,18 +103,22 @@ func (s oauthStore) save(session *oauthSession) error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(file.Name())
-	defer file.Close()
+	tmpPath := file.Name()
+	// Any failure before the rename leaves a partial file behind: drop it.
+	// After a successful rename the path no longer exists.
+	defer os.Remove(tmpPath)
 	if _, err := file.Write(data); err != nil {
+		_ = file.Close()
 		return err
 	}
 	if err := file.Sync(); err != nil {
+		_ = file.Close()
 		return err
 	}
 	if err := file.Close(); err != nil {
 		return err
 	}
-	return os.Rename(file.Name(), s.path)
+	return os.Rename(tmpPath, s.path)
 }
 
 // LogoutOAuth removes local credentials. Already issued server-side tokens are
@@ -120,6 +131,13 @@ func LogoutOAuth(name string, cfg config.MCPServerConfig) error {
 		return nil
 	}
 	return err
+}
+
+// newStoredOAuthHandler builds the persisted-credential handler used by
+// background connections. name selects the credential store identity and may
+// be qualified by the caller (for example "pluginID:serverName").
+func newStoredOAuthHandler(name string, cfg config.MCPServerConfig) auth.OAuthHandler {
+	return &storedOAuthHandler{name: name, store: newOAuthStore(name, cfg)}
 }
 
 type storedOAuthHandler struct {
@@ -140,6 +158,10 @@ func loginRequired(name string) error {
 	return fmt.Errorf("MCP OAuth authorization required; run picoclaw mcp login %q", name)
 }
 
+// storedTokenSource refreshes a persisted token on demand. The context is
+// retained because the oauth2.TokenSource interface has no context parameter:
+// the connection's context must still flow into refresh requests and their
+// cancellation.
 type storedTokenSource struct {
 	ctx   context.Context
 	name  string
@@ -193,7 +215,7 @@ func validateOAuthURL(raw string) error {
 		return nil
 	}
 	if u.Scheme == "http" &&
-		(u.Hostname() == "127.0.0.1" || u.Hostname() == "[::1]" || u.Hostname() == "::1" || u.Hostname() == "localhost") {
+		(u.Hostname() == "127.0.0.1" || u.Hostname() == "::1" || strings.EqualFold(u.Hostname(), "localhost")) {
 		return nil
 	}
 	return errors.New("OAuth requires HTTPS (HTTP is allowed only on loopback)")

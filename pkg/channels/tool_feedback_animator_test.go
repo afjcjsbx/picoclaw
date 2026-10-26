@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestFormatAnimatedToolFeedbackContent(t *testing.T) {
@@ -117,5 +118,25 @@ func TestToolFeedbackAnimator_UpdateFailureRestoresTracking(t *testing.T) {
 	}
 	if currentID, ok := animator.Current("chat-1"); !ok || currentID != "msg-1" {
 		t.Fatalf("Current() after failed Update = (%q, %v), want (msg-1, true)", currentID, ok)
+	}
+}
+
+func TestToolFeedbackAnimator_TakeRejectsStaleEntry(t *testing.T) {
+	animator := NewToolFeedbackAnimator(nil)
+	animator.Record("chat-stale", "msg-old", "🔧 `exec`")
+
+	// Age the tracked card past the reuse window: a leftover notice from an
+	// earlier turn must never be edited into a later reply.
+	animator.mu.Lock()
+	if entry, ok := animator.entries["chat-stale"]; ok {
+		entry.createdAt = time.Now().Add(-maxTrackedToolFeedbackAge - time.Second)
+	}
+	animator.mu.Unlock()
+
+	if msgID, _, ok := animator.Take("chat-stale"); ok {
+		t.Fatalf("Take() returned stale card %q, want rejected", msgID)
+	}
+	if _, ok := animator.Current("chat-stale"); ok {
+		t.Fatal("stale entry should be detached after Take")
 	}
 }

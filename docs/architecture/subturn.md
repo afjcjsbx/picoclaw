@@ -13,7 +13,7 @@ By using a SubTurn, an agent can break down a problem and run a separate LLM inv
 - **Context Isolation**: Each SubTurn uses an `ephemeralSessionStore`. Its message history does not leak into the parent task and is destroyed upon completion. The ephemeral session holds at most **50 messages**; older messages are automatically truncated when this limit is reached.
 - **Depth & Concurrency Limits**: Prevents infinite loops and resource exhaustion.
   - **Maximum Depth**: Up to 3 nested levels.
-  - **Maximum Concurrency**: Up to 5 concurrent sub-turns per parent turn (managed via a semaphore with a 30-second timeout).
+  - **Maximum Concurrency**: Up to 3 concurrent sub-turns per parent turn by default (managed via a semaphore with a 30-second timeout). Each concurrent sub-turn holds its own context, so the default is kept low for low-RAM devices. Raise it with `agents.defaults.subturn.max_concurrent`; values above 32 are capped at 32.
 - **Context Protection**: Supports soft context limits (`MaxContextRunes`). It proactively truncates old messages (while preserving system prompts and recent context) before hitting the provider's hard context window limit.
 - **Error Recovery**: Automatically detects and recovers from provider context length exceeded errors and truncation errors by compressing history and retrying.
 
@@ -101,13 +101,22 @@ When the provider returns a context length error (e.g., `context_length_exceeded
 SubTurns operate within an independent context but maintain a structural link to their parent `turnState`.
 
 ### Graceful Parent Finish
-When the parent task finishes naturally (`Finish(false)`):
+When the parent task finishes naturally, the turn coordinator calls `Finish(false)` during turn teardown:
 - **Non-critical** sub-turns receive a signal to exit gracefully without throwing an error.
 - **Critical** (`Critical: true`) sub-turns continue running in the background. Once finished, their results are emitted as **Orphan Results** so the data is not lost.
 
+### Joining Async Children
+A SubTurn never finishes before the async children it spawned (via `spawn`), so a nested result is never orphaned by a parent that ended too early. Root turns are not joined: they keep the fire-and-forget behavior, and their children report back through a follow-up message.
+
+- `spawn` registers each child on the calling turn synchronously (`tools.ChildTracker`, installed in the tool context for SubTurns only), before the child goroutine starts. The child then runs with `Async=false` and its final result, including failures that happen before the child exists (depth limit, concurrency timeout), is delivered exactly once through the tracker.
+- When a SubTurn answers without tool calls while children are outstanding, the turn waits for them, injects their results as `[SubTurn Result]` messages and lets the model answer again. While waiting it drains `pendingResults`, so more than 16 children cannot block on a full channel.
+- Any other exit path (iteration cap, loop guard, hook abort) also waits for the children before the turn ends. Results nobody can read any more are dropped with a warning.
+- A hard abort or context cancellation ends the wait immediately.
+- Each result is prefixed with `[Result from subagent "<label>" (agent <id>)]`, so a parent with several children can tell them apart.
+
 ### Hard Abort
 When the parent task is forcefully aborted (e.g., user interrupts with `/stop`):
-- A cascading cancellation is triggered, instantly terminating all child and grandchild sub-turns.
+- A cascading cancellation is triggered, instantly terminating all child and grandchild sub-turns. This applies to root turns as well: every turn keeps a back-reference to the `AgentLoop` so `Finish(true)` can reach its children.
 - The root turn's session history rolls back to the snapshot taken at turn start (`initialHistoryLength`), preventing dirty context. SubTurns are not affected by this rollback as they use ephemeral sessions that are discarded anyway.
 
 ## Agent Loop Integration
@@ -130,6 +139,8 @@ The agent loop polls for async SubTurn results at two points per iteration:
 1. **Before the LLM call**: injects any arrived results as `[SubTurn Result]` messages into the conversation context.
 2. **After all tool executions**: polls again during the tool loop to catch results that arrived during tool execution.
 3. **After the final iteration**: one last poll before the turn ends to avoid losing late-arriving results.
+
+Every turn owns its own 16-slot `pendingResults` channel and concurrency semaphore, including root turns created by the inbound message loop, so async delivery and the concurrency limit apply at every nesting level.
 
 ### Turn State Tracking
 
@@ -221,7 +232,7 @@ ctx = withTurnState(ctx, turnState)
 |:------|:----------|
 | `ErrDepthLimitExceeded` | SubTurn depth exceeds 3 levels |
 | `ErrInvalidSubTurnConfig` | Required field `Model` is empty |
-| `ErrConcurrencyTimeout` | All 5 concurrency slots occupied for 30+ seconds |
+| `ErrConcurrencyTimeout` | All concurrency slots (3 by default) occupied for 30+ seconds |
 | Context errors | Parent context cancelled during semaphore acquisition |
 
 ## Thread Safety
@@ -231,20 +242,21 @@ SubTurns are designed for concurrent execution:
 - **Parent-child relationships**: Managed under mutex (`parentTS.mu.Lock()`)
 - **Active turn tracking**: Uses `sync.Map` for concurrent access to `activeTurnStates`
 - **ID generation**: Uses `atomic.Int64` for unique SubTurn IDs (format: `subturn-N`, globally monotonic per `AgentLoop` instance)
-- **Result delivery**: Reads parent state under lock, releases before channel send (small race window acceptable)
+- **Result delivery**: Reads parent state under lock, releases before the channel send, then re-checks `isFinished`. A result that lands after the parent finished is reported as an orphan (`parent_finished`) instead of being silently dropped. `Finish` does not close `pendingResults` — it only closes `finishedChan` — so concurrent deliveries cannot panic with `send on closed channel`.
 
 ## Orphan Results
 
 An orphan result occurs when:
-1. Parent turn finishes before the SubTurn completes
-2. The `pendingResults` channel is full (buffer size: 16)
+1. The parent turn has finished before the SubTurn result could be delivered (`parent_finished`), including the case where the parent finishes while the sender is blocked waiting for room in a full channel (`parent_finished_waiting`).
+2. An unexpected channel state triggers a recovered panic during delivery (`panic`; safety net only).
 
-When a result becomes orphan:
+A full `pendingResults` channel (buffer size: 16) does **not** orphan a result by itself: the sender blocks until space is available or the parent finishes. When a result becomes orphan:
 - `agent.subturn.orphan` is emitted to the runtime event bus
 - The result is **NOT** delivered to the LLM context
 - External systems can listen to this event for custom handling
 
 ### Preventing Orphan Results
+- SubTurns already join their async children (see [Joining Async Children](#joining-async-children)); orphans for them only happen on abort or cancellation
 - Use `Critical: true` for important SubTurns that must complete
 - Monitor `agent.subturn.orphan` for observability
 - Consider the 16-buffer limit when spawning many async SubTurns
@@ -275,7 +287,8 @@ cfg := agent.SubTurnConfig{
 | Constant | Value |
 |:---------|:------|
 | `maxSubTurnDepth` | 3 |
-| `maxConcurrentSubTurns` | 5 |
+| `defaultMaxConcurrentSubTurns` | 3 |
+| `maxSubTurnConcurrency` (hard cap per parent turn) | 32 |
 | `concurrencyTimeout` | 30s |
 | `defaultSubTurnTimeout` | 5m |
 | `maxEphemeralHistorySize` | 50 messages |

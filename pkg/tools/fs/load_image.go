@@ -3,7 +3,6 @@ package fstools
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -86,44 +85,25 @@ func (t *LoadImageTool) SetMediaStore(store media.MediaStore) {
 }
 
 func (t *LoadImageTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
-	path, _ := args["path"].(string)
-	if strings.TrimSpace(path) == "" {
-		return ErrorResult("path is required")
+	path, errResult := requirePath(args)
+	if errResult != nil {
+		return errResult
 	}
 
-	// Prefer context-injected channel/chatID (set by ExecuteWithContext), fall back to SetContext values.
-	channel := ToolChannel(ctx)
-	if channel == "" {
-		channel = t.defaultChannel
-	}
-	chatID := ToolChatID(ctx)
-	if chatID == "" {
-		chatID = t.defaultChatID
-	}
-	if channel == "" || chatID == "" {
-		return ErrorResult("no target channel/chat available")
+	channel, chatID, errResult := mediaTarget(ctx, t.defaultChannel, t.defaultChatID)
+	if errResult != nil {
+		return errResult
 	}
 
 	if t.mediaStore == nil {
 		return ErrorResult("media store not configured")
 	}
 
-	resolved, err := validatePathWithAllowPaths(path, t.workspace, t.restrict, t.allowPaths)
-	if err != nil {
-		return ErrorResult(fmt.Sprintf("invalid path: %v", err))
-	}
-
-	info, err := os.Stat(resolved)
-	if err != nil {
-		return ErrorResult(fmt.Sprintf("file not found: %v", err))
-	}
-	if info.IsDir() {
-		return ErrorResult("path is a directory, expected an image file")
-	}
-	if info.Size() > int64(t.maxFileSize) {
-		return ErrorResult(fmt.Sprintf(
-			"file too large: %d bytes (max %d bytes)", info.Size(), t.maxFileSize,
-		))
+	resolved, errResult := resolveMediaFile(
+		path, t.workspace, t.restrict, t.allowPaths, t.maxFileSize, "an image file",
+	)
+	if errResult != nil {
+		return errResult
 	}
 
 	// Detect MIME type — reuse the helper already in send_file.go
@@ -137,12 +117,7 @@ func (t *LoadImageTool) Execute(ctx context.Context, args map[string]any) *ToolR
 	filename := filepath.Base(resolved)
 	scope := fmt.Sprintf("tool:load_image:%s:%s", channel, chatID)
 
-	ref, err := t.mediaStore.Store(resolved, media.MediaMeta{
-		Filename:      filename,
-		ContentType:   mediaType,
-		Source:        "tool:load_image",
-		CleanupPolicy: media.CleanupPolicyForgetOnly,
-	}, scope)
+	ref, err := storeMediaRef(t.mediaStore, resolved, filename, mediaType, "tool:load_image", scope)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("failed to register image in media store: %v", err))
 	}

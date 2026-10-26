@@ -164,6 +164,39 @@ func (m *mockFailingInstallRegistry) DownloadAndInstall(
 	return nil, assert.AnError
 }
 
+type mockMalwareRegistry struct{}
+
+func (m *mockMalwareRegistry) Name() string { return "clawhub" }
+
+func (m *mockMalwareRegistry) ResolveInstallDirName(target string) (string, error) {
+	return target, nil
+}
+
+func (m *mockMalwareRegistry) SkillURL(slug, _ string) string { return slug }
+
+func (m *mockMalwareRegistry) Search(context.Context, string, int) ([]skills.SearchResult, error) {
+	return nil, nil
+}
+
+func (m *mockMalwareRegistry) GetSkillMeta(context.Context, string) (*skills.SkillMeta, error) {
+	return nil, nil
+}
+
+func (m *mockMalwareRegistry) DownloadAndInstall(
+	_ context.Context,
+	_ string,
+	_ string,
+	targetDir string,
+) (*skills.InstallResult, error) {
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(filepath.Join(targetDir, "SKILL.md"), []byte(validSkillMarkdown), 0o600); err != nil {
+		return nil, err
+	}
+	return &skills.InstallResult{Version: "test", IsMalwareBlocked: true}, nil
+}
+
 func TestInstallSkillToolName(t *testing.T) {
 	tool := NewInstallSkillTool(skills.NewRegistryManager(), t.TempDir())
 	assert.Equal(t, "install_skill", tool.Name())
@@ -364,29 +397,42 @@ func TestInstallSkillToolRollsBackOnOriginMetadataWriteFailure(t *testing.T) {
 	assert.True(t, os.IsNotExist(err))
 }
 
-func TestInstallSkillToolForceReinstallRestoresPreviousSkillAfterDownloadFailure(t *testing.T) {
-	workspace := t.TempDir()
-	skillDir := filepath.Join(workspace, "skills", "existing-skill")
-	require.NoError(t, os.MkdirAll(skillDir, 0o755))
-	oldContent := []byte("---\nname: existing-skill\ndescription: Existing skill\n---\n# Existing\n")
-	require.NoError(t, os.WriteFile(filepath.Join(skillDir, "SKILL.md"), oldContent, 0o600))
+func TestInstallSkillToolForceReinstallRestoresPreviousSkillOnInstallFailure(t *testing.T) {
+	tests := []struct {
+		name       string
+		registry   skills.SkillRegistry
+		wantErrMsg string
+	}{
+		{name: "download failure", registry: &mockFailingInstallRegistry{}, wantErrMsg: "failed to install"},
+		{name: "malware blocked", registry: &mockMalwareRegistry{}, wantErrMsg: "flagged as malicious"},
+	}
 
-	registryMgr := skills.NewRegistryManager()
-	registryMgr.AddRegistry(&mockFailingInstallRegistry{})
-	tool := NewInstallSkillTool(registryMgr, workspace)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			workspace := t.TempDir()
+			skillDir := filepath.Join(workspace, "skills", "existing-skill")
+			require.NoError(t, os.MkdirAll(skillDir, 0o755))
+			oldContent := []byte("---\nname: existing-skill\ndescription: Existing skill\n---\n# Existing\n")
+			require.NoError(t, os.WriteFile(filepath.Join(skillDir, "SKILL.md"), oldContent, 0o600))
 
-	result := tool.Execute(context.Background(), map[string]any{
-		"slug":     "existing-skill",
-		"registry": "clawhub",
-		"force":    true,
-	})
+			registryMgr := skills.NewRegistryManager()
+			registryMgr.AddRegistry(tc.registry)
+			tool := NewInstallSkillTool(registryMgr, workspace)
 
-	assert.True(t, result.IsError)
-	assert.Contains(t, result.ForLLM, "failed to install")
+			result := tool.Execute(context.Background(), map[string]any{
+				"slug":     "existing-skill",
+				"registry": "clawhub",
+				"force":    true,
+			})
 
-	gotContent, err := os.ReadFile(filepath.Join(skillDir, "SKILL.md"))
-	require.NoError(t, err)
-	assert.Equal(t, oldContent, gotContent)
+			assert.True(t, result.IsError)
+			assert.Contains(t, result.ForLLM, tc.wantErrMsg)
+
+			gotContent, err := os.ReadFile(filepath.Join(skillDir, "SKILL.md"))
+			require.NoError(t, err)
+			assert.Equal(t, oldContent, gotContent)
+		})
+	}
 }
 
 func TestInstallSkillToolForceReinstallRestoresPreviousSkillAfterMetadataFailure(t *testing.T) {

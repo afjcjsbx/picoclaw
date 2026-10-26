@@ -42,7 +42,20 @@ type UserEnv struct {
 var (
 	isolationMu      sync.RWMutex
 	currentIsolation = config.DefaultConfig().Isolation
+	isolationGen     uint64
+
+	// preflightCache memoizes the expensive Preflight work (instance dir
+	// creation and expose-path validation) so it is not repeated for every
+	// child process. It is invalidated whenever Configure changes the config.
+	preflightMu    sync.Mutex
+	preflightCache preflightResult
 )
+
+type preflightResult struct {
+	done bool
+	gen  uint64
+	err  error
+}
 
 // Configure updates the process-wide isolation state used by subsequent child
 // process launches.
@@ -52,9 +65,10 @@ func Configure(cfg *config.Config) {
 	if cfg == nil {
 		defaults := config.DefaultConfig()
 		currentIsolation = defaults.Isolation
-		return
+	} else {
+		currentIsolation = cfg.Isolation
 	}
-	currentIsolation = cfg.Isolation
+	isolationGen++
 }
 
 // CurrentConfig returns the currently active isolation settings.
@@ -304,6 +318,20 @@ func validateWindowsExposePaths(items []config.ExposePath) error {
 	return fmt.Errorf("windows isolation does not yet support expose_paths filesystem rules")
 }
 
+func validateDarwinExposePaths(items []config.ExposePath) error {
+	for _, item := range items {
+		path := NormalizeExposePath(item)
+		if path.Source != path.Target {
+			return fmt.Errorf(
+				"macOS Seatbelt does not support expose_paths remapping: %s -> %s",
+				path.Source,
+				path.Target,
+			)
+		}
+	}
+	return nil
+}
+
 // IsSupported reports whether the current platform has an implemented isolation
 // backend.
 func IsSupported() bool {
@@ -312,7 +340,7 @@ func IsSupported() bool {
 
 func isSupportedOn(goos string) bool {
 	switch goos {
-	case "linux", "windows":
+	case "linux", "windows", "darwin":
 		return true
 	default:
 		return false
@@ -322,7 +350,29 @@ func isSupportedOn(goos string) bool {
 // Preflight validates the configured isolation state and prepares the instance
 // runtime directories before any child process is launched.
 func Preflight() error {
-	isolation := CurrentConfig()
+	return preflight(CurrentConfig())
+}
+
+// preflightCached runs Preflight at most once per configuration generation.
+// Failures are cached too: if isolation cannot be prepared, it will not become
+// possible later in the same process without a Configure call.
+func preflightCached() error {
+	isolationMu.RLock()
+	gen := isolationGen
+	isolation := currentIsolation
+	isolationMu.RUnlock()
+
+	preflightMu.Lock()
+	defer preflightMu.Unlock()
+	if preflightCache.done && preflightCache.gen == gen {
+		return preflightCache.err
+	}
+	err := preflight(isolation)
+	preflightCache = preflightResult{done: true, gen: gen, err: err}
+	return err
+}
+
+func preflight(isolation config.IsolationConfig) error {
 	if !isolation.Enabled {
 		return nil
 	}
@@ -354,6 +404,11 @@ func Preflight() error {
 			if rule.Path == "" {
 				return fmt.Errorf("invalid windows access rule")
 			}
+		}
+	}
+	if runtime.GOOS == "darwin" {
+		if err := validateDarwinExposePaths(isolation.ExposePaths); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -426,7 +481,7 @@ func terminateStartedCommand(cmd *exec.Cmd) {
 // isolated environment before being started by the caller.
 func PrepareCommand(cmd *exec.Cmd) error {
 	isolation := CurrentConfig()
-	if err := Preflight(); err != nil {
+	if err := preflightCached(); err != nil {
 		return err
 	}
 	if isolation.Enabled {

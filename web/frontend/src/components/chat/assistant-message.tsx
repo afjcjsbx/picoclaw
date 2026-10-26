@@ -7,7 +7,7 @@ import {
   IconFileText,
   IconTool,
 } from "@tabler/icons-react"
-import { useState } from "react"
+import { memo, useState } from "react"
 import { useTranslation } from "react-i18next"
 import ReactMarkdown from "react-markdown"
 import rehypeHighlight from "rehype-highlight"
@@ -16,12 +16,12 @@ import rehypeSanitize from "rehype-sanitize"
 import remarkGfm from "remark-gfm"
 
 import {
-  MessageCodeBlock,
   MarkdownCodeBlock,
+  MessageCodeBlock,
 } from "@/components/chat/message-code-block"
 import { Button } from "@/components/ui/button"
-import { formatMessageTime } from "@/hooks/use-pico-chat"
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard"
+import { formatMessageTime } from "@/hooks/use-pico-chat"
 import { cn } from "@/lib/utils"
 import {
   type AssistantMessageKind,
@@ -38,7 +38,7 @@ interface AssistantMessageProps {
   timestamp?: string | number
 }
 
-export function AssistantMessage({
+export const AssistantMessage = memo(function AssistantMessage({
   content,
   attachments = [],
   kind = "normal",
@@ -73,7 +73,7 @@ export function AssistantMessage({
   return (
     <div className="group flex w-full flex-col gap-1.5">
       {!isCollapsedBlock && (
-          <div className="text-muted-foreground/60 flex items-center justify-between gap-2 px-1 text-xs opacity-70">
+        <div className="text-muted-foreground/60 flex items-center justify-between gap-2 px-1 text-xs opacity-70">
           <div className="flex items-center gap-2">
             <span>PicoClaw</span>
             {trimmedModelName && (
@@ -114,7 +114,9 @@ export function AssistantMessage({
                 )}
                 <span>{collapsedLabel}</span>
                 {trimmedModelName && (
-                  <span className="text-muted-foreground/45">{trimmedModelName}</span>
+                  <span className="text-muted-foreground/45">
+                    {trimmedModelName}
+                  </span>
                 )}
               </div>
               <div className="flex items-center gap-2">
@@ -194,7 +196,9 @@ export function AssistantMessage({
                             <MessageCodeBlock
                               code={toolArguments}
                               language="json"
-                              label={toolName || t("chat.toolCallArgumentsLabel")}
+                              label={
+                                toolName || t("chat.toolCallArgumentsLabel")
+                              }
                               className="my-0 shadow-none"
                               bodyClassName="px-3 py-2 text-[12px] leading-relaxed"
                             />
@@ -300,4 +304,4 @@ export function AssistantMessage({
       )}
     </div>
   )
-}
+})

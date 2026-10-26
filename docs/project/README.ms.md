@@ -1,10 +1,12 @@
 <div align="center">
-<img src="../../assets/logo.webp" alt="PicoClaw" width="512">
+<p align="center">
+  <img src="../../assets/logo.webp" alt="PicoClaw" width="200">
+</p>
 
 <h1>PicoClaw: Pembantu AI Ultra-Cekap dalam Go</h1>
 
 <h3>Perkakasan $10 · RAM 10MB · Boot ms · Jom, PicoClaw!</h3>
-  <p>
+  <p align="center">
     <img src="https://img.shields.io/badge/Go-1.27.1+-00ADD8?style=flat&logo=go&logoColor=white" alt="Go">
     <img src="https://img.shields.io/badge/Arch-x86__64%2C%20ARM64%2C%20MIPS%2C%20RISC--V%2C%20LoongArch-blue" alt="Hardware">
     <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
@@ -18,7 +20,9 @@
     <a href="https://discord.gg/V4sAZ9XWpN"><img src="https://img.shields.io/badge/Discord-Community-4c60eb?style=flat&logo=discord&logoColor=white" alt="Discord"></a>
   </p>
 
-[中文](README.zh.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | [Português](README.pt-br.md) | [Tiếng Việt](README.vi.md) | [Français](README.fr.md) | [Italiano](README.it.md) | [Bahasa Indonesia](README.id.md) | **Malay** | [English](../../README.md)
+<p align="center">
+  <a href="README.zh.md">中文</a> | <a href="README.ja.md">日本語</a> | <a href="README.ko.md">한국어</a> | <a href="README.pt-br.md">Português</a> | <a href="README.vi.md">Tiếng Việt</a> | <a href="README.fr.md">Français</a> | <a href="README.it.md">Italiano</a> | <a href="README.id.md">Bahasa Indonesia</a> | <strong>Malay</strong> | <a href="../../README.md">English</a>
+</p>
 
 </div>
 
@@ -56,6 +60,13 @@
 
 ## 📢 Berita
 
+2026-09-29 🚀 **[v0.4.0 Released!](https://github.com/afjcjsbx/picoclaw/releases/tag/v0.4.0)** This substantial release adds MCP CLI management and Web UI configuration, native Anthropic Messages API support, configurable web search (including Keenable and Kagi), configurable logging and virtual models, cross-platform serial-tool support, enhanced hooks and isolation, plus numerous channel, provider, security, and build fixes.
+
+2026-09-28 🌱 **Project revived!** Development has resumed and will continue to be actively maintained in this fork.
+
+<details>
+<summary>Earlier news...</summary>
+
 2026-05-11 🛒 **LicheeRV-Claw tersedia di AliExpress!** Anda kini boleh membeli LicheeRV-Claw di [AliExpress](https://www.aliexpress.com/item/1005006519668532.html), menjadikannya lebih mudah untuk mencuba PicoClaw pada perkakasan RISC-V yang kompak.
 
 <p align="center">
@@ -64,7 +75,7 @@
   </a>
 </p>
 
-2026-03-31 📱 **Sokongan Android!** PicoClaw sekarang berjalan di Android! Muat turun APK di [picoclaw.io](https://picoclaw.io/download)
+2026-03-31 📱 **Sokongan Android!** PicoClaw sekarang berjalan di Android! Muat turun APK di [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases)
 
 2026-03-25 🚀 **v0.2.4 Dikeluarkan!** Penstrukturan semula seni bina Agent (SubTurn, Hooks, Steering, EventBus), integrasi WeChat/WeCom, penguatan keselamatan (.security.yml, penapisan data sensitif), penyedia baharu (AWS Bedrock, Azure, Xiaomi MiMo), dan 35 pembetulan pepijat. PicoClaw mencapai **26K Stars**!
 
@@ -74,12 +85,9 @@
 
 2026-02-28 📦 **v0.2.0** dikeluarkan dengan sokongan Docker Compose dan Pelancar Web UI.
 
-<details>
-<summary>Berita terdahulu...</summary>
-
 2026-02-26 🎉 PicoClaw mencapai **20K Stars** hanya dalam 17 hari! Orkestrasi saluran automatik dan antara muka keupayaan kini aktif.
 
-2026-02-16 🎉 PicoClaw melepasi 12K Stars dalam seminggu! Peranan penyelenggara komuniti dan [Peta Jalan](../../ROADMAP.md) dilancarkan secara rasmi.
+2026-02-16 🎉 PicoClaw melepasi 12K Stars dalam seminggu! Peranan penyelenggara komuniti dan Peta Jalan dilancarkan secara rasmi.
 
 2026-02-13 🎉 PicoClaw melepasi 5000 Stars dalam 4 hari! Peta jalan projek dan kumpulan pembangun sedang dalam proses.
 
@@ -163,13 +171,9 @@ PicoClaw boleh digunakan pada hampir mana-mana peranti Linux!
 
 ## 📦 Pemasangan
 
-### Muat turun dari picoclaw.io (Disyorkan)
-
-Lawati **[picoclaw.io](https://picoclaw.io)** — laman web rasmi mengesan platform anda secara automatik dan menyediakan muat turun satu klik.
-
 ### Muat turun binari pra-kompil
 
-Muat turun binari untuk platform anda dari halaman [GitHub Releases](https://github.com/sipeed/picoclaw/releases).
+Muat turun binari untuk platform anda dari halaman [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases).
 
 ### Bina dari sumber (untuk pembangunan)
 
@@ -179,7 +183,7 @@ Prasyarat:
 - Node.js 22+ dan pnpm 10.33.0+ untuk binaan Web UI / launcher
 
 ```bash
-git clone https://github.com/sipeed/picoclaw.git
+git clone https://github.com/afjcjsbx/picoclaw.git
 cd picoclaw
 make deps
 
@@ -212,7 +216,7 @@ Pelancar WebUI menyediakan antara muka berasaskan pelayar untuk konfigurasi dan 
 
 **Pilihan 1: Klik dua kali (Desktop)**
 
-Selepas memuat turun dari [picoclaw.io](https://picoclaw.io), klik dua kali `picoclaw-launcher` (atau `picoclaw-launcher.exe` pada Windows). Pelayar anda akan dibuka secara automatik di `http://localhost:18800`.
+Selepas memuat turun dari [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases), klik dua kali `picoclaw-launcher` (atau `picoclaw-launcher.exe` pada Windows). Pelayar anda akan dibuka secara automatik di `http://localhost:18800`.
 
 **Pilihan 2: Baris arahan**
 
@@ -240,7 +244,7 @@ Untuk dokumentasi WebUI terperinci, lihat [docs.picoclaw.io](https://docs.picocl
 
 ```bash
 # 1. Klon repo ini
-git clone https://github.com/sipeed/picoclaw.git
+git clone https://github.com/afjcjsbx/picoclaw.git
 cd picoclaw
 
 # 2. Jalankan pertama kali — jana docker/data/config.json secara automatik kemudian keluar
@@ -311,7 +315,7 @@ Pratonton:
   </tr>
 </table>
 
-Muat turun APK dari [picoclaw.io](https://picoclaw.io/download/) dan pasang secara langsung. Tiada Termux diperlukan!
+Muat turun APK dari [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases) dan pasang secara langsung. Tiada Termux diperlukan!
 
 **Pilihan 2: Termux**
 
@@ -323,7 +327,7 @@ Muat turun APK dari [picoclaw.io](https://picoclaw.io/download/) dan pasang seca
 
 ```bash
 # Muat turun keluaran terkini
-wget https://github.com/sipeed/picoclaw/releases/latest/download/picoclaw_Linux_arm64.tar.gz
+wget https://github.com/afjcjsbx/picoclaw/releases/latest/download/picoclaw_Linux_arm64.tar.gz
 tar xzf picoclaw_Linux_arm64.tar.gz
 pkg install proot
 termux-chroot ./picoclaw onboard   # chroot menyediakan susun atur sistem fail Linux standard
@@ -452,8 +456,8 @@ Bercakap dengan PicoClaw anda melalui 17+ platform pemesejan:
 |---------|-----------|----------|-----|
 | **Telegram** | Mudah (token bot) | Long polling | [Panduan](../channels/telegram/README.md) |
 | **Discord** | Mudah (token bot + intents) | WebSocket | [Panduan](../channels/discord/README.md) |
-| **WhatsApp** | Mudah (imbas QR atau URL jambatan) | Natif / Jambatan | [Panduan](../guides/chat-apps.ms.md#whatsapp) |
-| **Weixin** | Mudah (imbas QR natif) | iLink API | [Panduan](../guides/chat-apps.ms.md#weixin) |
+| **WhatsApp** | Mudah (imbas QR atau URL jambatan) | Natif / Jambatan | [Panduan](../guides/chat-apps.md#whatsapp) |
+| **Weixin** | Mudah (imbas QR natif) | iLink API | [Panduan](../guides/chat-apps.md#weixin) |
 | **QQ** | Mudah (AppID + AppSecret) | WebSocket | [Panduan](../channels/qq/README.md) |
 | **Slack** | Mudah (token bot + app) | Socket Mode | [Panduan](../channels/slack/README.md) |
 | **Matrix** | Sederhana (homeserver + token) | Sync API | [Panduan](../channels/matrix/README.md) |
@@ -461,7 +465,7 @@ Bercakap dengan PicoClaw anda melalui 17+ platform pemesejan:
 | **Feishu / Lark** | Sederhana (App ID + Secret) | WebSocket/SDK | [Panduan](../channels/feishu/README.md) |
 | **LINE** | Sederhana (kelayakan + webhook) | Webhook | [Panduan](../channels/line/README.md) |
 | **WeCom** | Mudah (log masuk QR atau manual) | WebSocket | [Panduan](../channels/wecom/README.md) |
-| **IRC** | Sederhana (pelayan + nick) | Protokol IRC | [Panduan](../guides/chat-apps.ms.md#irc) |
+| **IRC** | Sederhana (pelayan + nick) | Protokol IRC | [Panduan](../guides/chat-apps.md#irc) |
 | **OneBot** | Sederhana (URL WebSocket) | OneBot v11 | [Panduan](../channels/onebot/README.md) |
 | **MaixCam** | Mudah (aktifkan) | TCP socket | [Panduan](../channels/maixcam/README.md) |
 | **Pico** | Mudah (aktifkan) | Protokol natif | Terbina dalam |
@@ -469,9 +473,9 @@ Bercakap dengan PicoClaw anda melalui 17+ platform pemesejan:
 
 > Semua saluran berasaskan webhook berkongsi satu pelayan HTTP Gateway (`gateway.host`:`gateway.port`, lalai `127.0.0.1:18790`). Feishu menggunakan mod WebSocket/SDK dan tidak menggunakan pelayan HTTP yang dikongsi.
 
-> Tahap perincian log dikawal oleh `gateway.log_level` (lalai: `warn`). Nilai yang disokong: `debug`, `info`, `warn`, `error`, `fatal`. Boleh juga ditetapkan melalui `PICOCLAW_LOG_LEVEL`. Lihat [Konfigurasi](../guides/configuration.ms.md#gateway-log-level) untuk butiran.
+> Tahap perincian log dikawal oleh `gateway.log_level` (lalai: `warn`). Nilai yang disokong: `debug`, `info`, `warn`, `error`, `fatal`. Boleh juga ditetapkan melalui `PICOCLAW_LOG_LEVEL`. Lihat [Konfigurasi](../guides/configuration.md#gateway-log-level) untuk butiran.
 
-Untuk arahan persediaan saluran terperinci, lihat [Konfigurasi Aplikasi Sembang](../guides/chat-apps.ms.md).
+Untuk arahan persediaan saluran terperinci, lihat [Konfigurasi Aplikasi Sembang](../guides/chat-apps.md).
 
 ## 🔧 Alat
 
@@ -521,11 +525,13 @@ Tambah ke `config.json` anda:
 }
 ```
 
-Untuk butiran lanjut, lihat [Konfigurasi Alat - Kemahiran](../reference/tools_configuration.md#skills-tool).
+Untuk butiran lanjut, lihat [Konfigurasi Alat - Kemahiran](../tools/skills.md).
 
 ## 🔗 MCP (Protokol Konteks Model)
 
 PicoClaw menyokong [MCP](https://modelcontextprotocol.io/) secara natif — sambungkan mana-mana pelayan MCP untuk melanjutkan keupayaan Agent anda dengan alat dan sumber data luaran.
+
+PicoClaw ialah pembantu yang ringan, jadi pilihan terbaik ialah menggunakan pelayan MCP jauh. Untuk pelayan setempat, utamakan binari yang dikompil secara natif dan elakkan `npx`, `uvx` atau pengurus kebergantungan berat yang lain.
 
 ```json
 {
@@ -533,10 +539,15 @@ PicoClaw menyokong [MCP](https://modelcontextprotocol.io/) secara natif — samb
     "mcp": {
       "enabled": true,
       "servers": {
-        "filesystem": {
+        "browserbase": {
           "enabled": true,
-          "command": "npx",
-          "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+          "deferred": false,
+          "command": "",
+          "type": "http",
+          "url": "https://mcp.browserbase.com/mcp?browserbaseApiKey=API_KEY",
+          "headers": {
+            "BROWSERBASE_PROJECT_ID": "********"
+          }
         }
       }
     }
@@ -544,7 +555,7 @@ PicoClaw menyokong [MCP](https://modelcontextprotocol.io/) secara natif — samb
 }
 ```
 
-Untuk konfigurasi MCP penuh (pengangkutan stdio, SSE, HTTP, Penemuan Alat), lihat [Konfigurasi Alat - MCP](../reference/tools_configuration.md#mcp-tool).
+Untuk konfigurasi MCP penuh (pengangkutan stdio, SSE, HTTP, Penemuan Alat), lihat [Konfigurasi Alat - MCP](../tools/mcp.md).
 
 ## <img src="../../assets/clawdchat-icon.png" width="24" height="24" alt="ClawdChat"> Sertai Rangkaian Sosial Agent
 
@@ -587,12 +598,12 @@ Untuk panduan terperinci melebihi README ini:
 
 | Topik | Penerangan |
 |-------|------------|
-| [Docker & Permulaan Pantas](../guides/docker.ms.md) | Persediaan Docker Compose, mod Launcher/Agent |
-| [Aplikasi Sembang](../guides/chat-apps.ms.md) | Panduan persediaan 17+ saluran |
-| [Konfigurasi](../guides/configuration.ms.md) | Pemboleh ubah persekitaran, susun atur ruang kerja |
+| [Docker & Permulaan Pantas](../guides/docker.md) | Persediaan Docker Compose, mod Launcher/Agent |
+| [Aplikasi Sembang](../guides/chat-apps.md) | Panduan persediaan 17+ saluran |
+| [Konfigurasi](../guides/configuration.md) | Pemboleh ubah persekitaran, susun atur ruang kerja |
 | [Penyedia & Model](../guides/providers.md) | 30+ penyedia LLM, penghalaan model |
-| [Spawn & Tugasan Async](../guides/spawn-tasks.ms.md) | Tugasan pantas, tugasan panjang dengan spawn |
-| [Penyelesaian Masalah](../operations/troubleshooting.ms.md) | Isu biasa dan penyelesaian |
+| [Spawn & Tugasan Async](../guides/spawn-tasks.md) | Tugasan pantas, tugasan panjang dengan spawn |
+| [Penyelesaian Masalah](../operations/troubleshooting.md) | Isu biasa dan penyelesaian |
 | [Konfigurasi Alat](../reference/tools_configuration.md) | Aktif/nyahaktif alat, dasar exec, MCP, Kemahiran |
 | [Keserasian Perkakasan](../guides/hardware-compatibility.md) | Papan yang diuji, keperluan minimum |
 
@@ -600,7 +611,7 @@ Untuk panduan terperinci melebihi README ini:
 
 PR dialu-alukan! Kod sumber sengaja dibuat kecil dan mudah dibaca.
 
-Lihat [Peta Jalan Komuniti](https://github.com/sipeed/picoclaw/issues/988) dan [CONTRIBUTING.md](../../CONTRIBUTING.md) untuk panduan.
+Lihat [Peta Jalan Komuniti](https://github.com/afjcjsbx/picoclaw/issues/988) dan [CONTRIBUTING.md](../../CONTRIBUTING.md) untuk panduan.
 
 Kumpulan pembangun sedang dibina, sertai selepas PR pertama anda digabungkan!
 

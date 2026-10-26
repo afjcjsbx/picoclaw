@@ -15,7 +15,7 @@ import (
 // It replaces lines 56-145 of the original runTurn.
 func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution, error) {
 	cfg := p.Cfg
-	maxMediaSize := cfg.Agents.Defaults.GetMaxMediaSize()
+	mediaOpts := mediaResolveOptionsFor(cfg)
 
 	var history []providers.Message
 	var summary string
@@ -27,6 +27,8 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 		}); err == nil && resp != nil {
 			history = resp.History
 			summary = resp.Summary
+		} else if err != nil {
+			warnSessionStoreError(ts.sessionKey, "assemble", err)
 		}
 	}
 	ts.captureRestorePoint(history, summary)
@@ -44,7 +46,7 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 		currentTurnStart = len(messages) - 1
 	}
 
-	messages = resolveMediaRefs(messages, p.MediaStore, maxMediaSize, currentTurnStart)
+	messages = resolveMediaRefsWithOptions(messages, p.MediaStore, mediaOpts, currentTurnStart)
 
 	if !ts.opts.NoHistory {
 		toolDefs := filterToolsByTurnProfile(ts.agent.Tools.ToProviderDefs(), ts.profile)
@@ -69,6 +71,8 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 			}); err == nil && resp != nil {
 				history = resp.History
 				summary = resp.Summary
+			} else if err != nil {
+				warnSessionStoreError(ts.sessionKey, "assemble", err)
 			}
 			originalHistoryCount := len(history)
 			var fit bool
@@ -89,7 +93,7 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 					if strings.TrimSpace(ts.userMessage) != "" || len(ts.media) > 0 {
 						rebuiltCurrentTurnStart = len(rebuilt) - 1
 					}
-					return resolveMediaRefs(rebuilt, p.MediaStore, maxMediaSize, rebuiltCurrentTurnStart)
+					return resolveMediaRefsWithOptions(rebuilt, p.MediaStore, mediaOpts, rebuiltCurrentTurnStart)
 				},
 				ts.agent.ContextWindow,
 				toolDefs,
@@ -119,22 +123,34 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 	if !ts.opts.NoHistory && (strings.TrimSpace(ts.userMessage) != "" || len(ts.media) > 0) {
 		rootMsg := userPromptMessage(ts.userMessage, ts.media)
 		if len(rootMsg.Media) > 0 {
-			ts.agent.Sessions.AddFullMessage(ts.sessionKey, rootMsg)
+			warnSessionStoreError(ts.sessionKey, "add full message",
+				ts.agent.Sessions.AddFullMessage(ctx, ts.sessionKey, rootMsg))
 		} else {
-			ts.agent.Sessions.AddMessage(ts.sessionKey, rootMsg.Role, rootMsg.Content)
+			warnSessionStoreError(ts.sessionKey, "add message",
+				ts.agent.Sessions.AddMessage(ctx, ts.sessionKey, rootMsg.Role, rootMsg.Content))
 		}
 		ts.recordPersistedMessage(rootMsg)
 		ts.ingestMessage(ctx, p.al, rootMsg)
 	}
 
-	activeCandidates, activeModel, usedLight := p.al.selectCandidates(ts.agent, ts.userMessage, messages)
+	// Model routing scores the turn against the assembled session history
+	// (not the rendered prompt): ConversationDepth and RecentToolCalls must
+	// reflect real prior conversation, not the system prompt or the current
+	// user message that BuildMessagesFromPrompt injects. hasMedia carries the
+	// structured attachments, which the classifier cannot see in the text.
+	activeCandidates, activeModel, usedLight := p.al.selectCandidates(
+		ts.agent,
+		ts.userMessage,
+		history,
+		len(ts.media) > 0,
+	)
 	activeProvider := ts.agent.Provider
 	if usedLight && ts.agent.LightProvider != nil {
 		activeProvider = ts.agent.LightProvider
 	}
 	activeModelName := strings.TrimSpace(ts.agent.Model)
 	if usedLight {
-		activeModelName = strings.TrimSpace(sideQuestionModelName(ts.agent, true))
+		activeModelName = strings.TrimSpace(lightModelName(ts.agent, true))
 	}
 	activeModelName = resolvedCandidateModelName(activeCandidates, activeModelName)
 

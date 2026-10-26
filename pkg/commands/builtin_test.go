@@ -39,7 +39,7 @@ func TestBuiltinHelpHandler_ReturnsFormattedMessage(t *testing.T) {
 	if !strings.Contains(reply, "/show [model|channel|agents|mcp <server>]") {
 		t.Fatalf("/help reply missing /show usage, got %q", reply)
 	}
-	if !strings.Contains(reply, "/list [models|channels|agents|skills|mcp]") {
+	if !strings.Contains(reply, "/list [model|models|channels|agents|skills|mcp|plugins]") {
 		t.Fatalf("/help reply missing /list usage, got %q", reply)
 	}
 	if !strings.Contains(reply, "/stop") {
@@ -328,81 +328,5 @@ func TestBuiltinUseCommand_PassthroughsToAgentLogic(t *testing.T) {
 	}
 	if res.Command != "use" {
 		t.Fatalf("/use command=%q, want=%q", res.Command, "use")
-	}
-}
-
-func TestBuiltinBtwCommand_UsesSideQuestionRuntime(t *testing.T) {
-	rt := &Runtime{
-		AskSideQuestion: func(ctx context.Context, question string) (string, error) {
-			if question != "what is 2+2?" {
-				t.Fatalf("question=%q, want %q", question, "what is 2+2?")
-			}
-			return "4", nil
-		},
-	}
-	defs := BuiltinDefinitions()
-	ex := NewExecutor(NewRegistry(defs), rt)
-
-	var reply string
-	res := ex.Execute(context.Background(), Request{
-		Text: "/btw what is 2+2?",
-		Reply: func(text string) error {
-			reply = text
-			return nil
-		},
-	})
-	if res.Outcome != OutcomeHandled {
-		t.Fatalf("/btw outcome=%v, want=%v", res.Outcome, OutcomeHandled)
-	}
-	if reply != "4" {
-		t.Fatalf("/btw reply=%q, want=%q", reply, "4")
-	}
-}
-
-func TestBuiltinBtwCommand_MissingQuestion(t *testing.T) {
-	defs := BuiltinDefinitions()
-	ex := NewExecutor(NewRegistry(defs), &Runtime{
-		AskSideQuestion: func(context.Context, string) (string, error) {
-			return "", nil
-		},
-	})
-
-	var reply string
-	res := ex.Execute(context.Background(), Request{
-		Text: "/btw",
-		Reply: func(text string) error {
-			reply = text
-			return nil
-		},
-	})
-	if res.Outcome != OutcomeHandled {
-		t.Fatalf("/btw outcome=%v, want=%v", res.Outcome, OutcomeHandled)
-	}
-	if reply != "Usage: /btw <question>" {
-		t.Fatalf("/btw reply=%q, want usage message", reply)
-	}
-}
-
-func TestBuiltinBtwCommand_PreservesQuestionWhitespace(t *testing.T) {
-	const want = "explain:\n    fmt.Println(\"hi\")"
-	rt := &Runtime{
-		AskSideQuestion: func(ctx context.Context, question string) (string, error) {
-			if question != want {
-				t.Fatalf("question=%q, want %q", question, want)
-			}
-			return "ok", nil
-		},
-	}
-	defs := BuiltinDefinitions()
-	ex := NewExecutor(NewRegistry(defs), rt)
-
-	res := ex.Execute(context.Background(), Request{
-		Text: "/btw " + want,
-		Reply: func(text string) error {
-			return nil
-		},
-	})
-	if res.Outcome != OutcomeHandled {
-		t.Fatalf("/btw outcome=%v, want=%v", res.Outcome, OutcomeHandled)
 	}
 }

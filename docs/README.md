@@ -10,11 +10,14 @@ These conventions are intended as contributor guidance for new or moved docs. Ex
 
 If you are browsing docs rather than reorganizing them, start with these directory indexes:
 
+- [Documentation Home](index.md): user-facing landing page with quick start and reading paths.
 - [Guides](guides/README.md): setup, configuration, provider, and workflow guides.
 - [Reference](reference/README.md): precise configuration and behavior reference.
 - [Operations](operations/README.md): debugging and troubleshooting material.
 - [Security](security/README.md): security-focused guides and controls.
 - [Architecture](architecture/README.md): implementation notes and internal design docs.
+- [Tools](tools/README.md): tool-specific deep dives.
+- [Design Notes](design/README.md): proposals and investigations.
 - [Migration](migration/README.md): upgrade and migration notes.
 
 For channel-specific setup, start with [Chat Apps Configuration](guides/chat-apps.md) and then drill into `docs/channels/<name>/README.md` as needed.
@@ -25,11 +28,13 @@ For channel-specific setup, start with [Chat Apps Configuration](guides/chat-app
 - Keep each translated document next to its English source document.
 - Use English as the base filename with no locale suffix.
 - Use lowercase locale suffixes for translations, for example `configuration.zh.md` or `README.pt-br.md`.
+- Keep the main documentation set in English and Chinese. README-style entry documents may keep translations in additional languages.
 - Keep module-specific docs next to the code they describe instead of moving them into `docs/`.
 
 ## Recommended Directories
 
 - `README.md`: English project entry document at the repository root.
+- `docs/index.md`: user-facing documentation homepage, allowed alongside `docs/README.md`.
 - `docs/project/`: translated project entry documents such as `README.zh.md` and `CONTRIBUTING.zh.md`.
 - `docs/guides/`: setup and usage guides.
 - `docs/reference/`: reference material and detailed configuration docs.
@@ -39,6 +44,7 @@ For channel-specific setup, start with [Chat Apps Configuration](guides/chat-app
 - `docs/channels/`: channel-specific integration guides.
 - `docs/design/`: design proposals and investigations.
 - `docs/migration/`: migration notes.
+- `docs/tools/`: tool-specific deep dives that go beyond configuration snippets.
 
 ## Recommended Naming
 
@@ -47,7 +53,7 @@ For channel-specific setup, start with [Chat Apps Configuration](guides/chat-app
   - `configuration.md`
 - Translations use `.<locale>.md`:
   - `README.zh.md`
-  - `configuration.fr.md`
+  - `configuration.zh.md`
   - `README.pt-br.md`
 - Code-adjacent translated READMEs follow the same rule:
   - `pkg/audio/asr/README.zh.md`
@@ -55,8 +61,8 @@ For channel-specific setup, start with [Chat Apps Configuration](guides/chat-app
 
 ## Common Patterns To Avoid
 
-- Root-level translated entry docs such as `README.zh.md` or `CONTRIBUTING.fr.md`
-  - Use `docs/project/README.zh.md` or `docs/project/CONTRIBUTING.fr.md` instead.
+- Root-level translated entry docs such as `README.zh.md` or `CONTRIBUTING.zh.md`
+  - Use `docs/project/README.zh.md` or `docs/project/CONTRIBUTING.zh.md` instead.
 - Language directories under `docs/` such as `docs/zh/`, `docs/ZH/`, `docs/ja/`, or `docs/fr/`
   - Use `docs/<type>/<name>.<locale>.md` instead.
 - Nested locale buckets such as `docs/guides/zh/configuration.md` or `docs/channels/telegram/zh/README.md`
@@ -68,7 +74,7 @@ For channel-specific setup, start with [Chat Apps Configuration](guides/chat-app
 
 ## Translation Placement
 
-- For docs under `docs/guides`, `docs/reference`, `docs/operations`, `docs/security`, `docs/architecture`, `docs/channels`, and `docs/migration`, keep translations beside the English source file.
+- For docs under `docs/guides`, `docs/reference`, `docs/operations`, `docs/security`, `docs/architecture`, `docs/channels`, `docs/migration`, and `docs/tools`, keep translations beside the English source file.
 - For project entry translations, keep translated files in `docs/project/` and keep the English source in the repository root.
 - In most cases, each translated file should have an English source document:
   - `docs/guides/configuration.zh.md` usually sits beside `docs/guides/configuration.md`
@@ -121,7 +127,7 @@ The local docs linter currently checks these common cases:
 - no nested locale buckets under typed docs directories
 - no legacy `README_*.md` filenames
 - no non-canonical translation-like filenames such as `_zh.md` or `.ZH.md`
-- no extra Markdown files directly under `docs/` except `docs/README.md`
+- no extra Markdown files directly under `docs/` except `docs/README.md` and `docs/index.md`
 - every translated Markdown file has a matching English source file
   - except for locale-specific working notes under `docs/design/`
 

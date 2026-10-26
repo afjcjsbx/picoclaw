@@ -733,3 +733,63 @@ func TestFallbackExhaustedError_Message(t *testing.T) {
 		t.Error("expected non-empty error message")
 	}
 }
+
+func TestFallbackChain_AcquireEnforcesSingleCandidateRPM(t *testing.T) {
+	ct := NewCooldownTracker()
+	rl := NewRateLimiterRegistry()
+	rl.Register("model_name:solo", 1)
+	fc := NewFallbackChain(ct, rl)
+
+	// The first acquire consumes the only burst token.
+	if err := fc.Acquire(context.Background(), "model_name:solo"); err != nil {
+		t.Fatalf("first Acquire() error = %v", err)
+	}
+
+	// The second acquire must block; a short deadline surfaces the cancellation.
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := fc.Acquire(ctx, "model_name:solo"); err == nil {
+		t.Fatal("expected Acquire() to block when the local RPM token is exhausted")
+	}
+
+	// Keys without a registered limiter are unrestricted.
+	if err := fc.Acquire(context.Background(), "model_name:unlimited"); err != nil {
+		t.Fatalf("Acquire() for unregistered key error = %v", err)
+	}
+}
+
+func TestFallbackChain_AcquireNilChainIsNoop(t *testing.T) {
+	var fc *FallbackChain
+	if err := fc.Acquire(context.Background(), "any"); err != nil {
+		t.Fatalf("nil chain Acquire() error = %v, want nil", err)
+	}
+}
+
+func TestFallback_UnusableResponseFallsBack(t *testing.T) {
+	assertFallbackErrorFallsBack(
+		t,
+		"openai",
+		"gpt-4",
+		&FailoverError{Reason: FailoverUnusable, Wrapped: errors.New("empty content")},
+		"fallback ok",
+		FailoverUnusable,
+	)
+}
+
+func TestFallback_UnusableResponseDoesNotCooldownCandidate(t *testing.T) {
+	ct := NewCooldownTracker()
+	fc := NewFallbackChain(ct, nil)
+	candidate := makeCandidate("openai", "gpt-4")
+
+	run := func(ctx context.Context, provider, model string) (*LLMResponse, error) {
+		return nil, &FailoverError{Reason: FailoverUnusable, Wrapped: errors.New("empty content")}
+	}
+	if _, err := fc.Execute(context.Background(), []FallbackCandidate{candidate}, run); err == nil {
+		t.Fatal("expected the chain to report exhaustion")
+	}
+	// A provider that answered but produced nothing usable is still healthy:
+	// the next request must try it again instead of skipping it on cooldown.
+	if !ct.IsAvailable(candidate.StableKey()) {
+		t.Fatal("unusable response must not put the candidate into cooldown")
+	}
+}

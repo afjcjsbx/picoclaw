@@ -4,7 +4,7 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -13,7 +13,10 @@ import (
 	"github.com/sipeed/picoclaw/pkg/commands"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/plugins"
 	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/sipeed/picoclaw/pkg/tools"
+	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
 func (al *AgentLoop) handleCommand(
@@ -135,6 +138,7 @@ func (al *AgentLoop) buildCommandsRuntime(
 	cfg := al.GetConfig()
 	rt := &commands.Runtime{
 		Config:          cfg,
+		VoiceMode:       al.voiceMode(opts.Dispatch.SessionKey),
 		ListAgentIDs:    registry.ListAgentIDs,
 		ListDefinitions: al.cmdRegistry.Definitions,
 		ListMCPServers: func(ctx context.Context) []commands.MCPServerInfo {
@@ -166,7 +170,7 @@ func (al *AgentLoop) buildCommandsRuntime(
 				servers = append(servers, commands.MCPServerInfo{
 					Name:      serverName,
 					Enabled:   serverCfg.Enabled,
-					Deferred:  serverIsDeferred(cfg.Tools.MCP.Discovery.Enabled, serverCfg),
+					Deferred:  serverCfg.EffectiveDeferred(cfg.Tools.MCP.Discovery.Enabled),
 					Connected: isConnected,
 					ToolCount: toolCount,
 				})
@@ -257,12 +261,45 @@ func (al *AgentLoop) buildCommandsRuntime(
 			}
 			return al.channelManager.GetEnabledChannels()
 		},
-		GetActiveTurn: func() any {
-			info := al.GetActiveTurn()
-			if info == nil {
+		ListPlugins: func(ctx context.Context) []commands.PluginInfo {
+			if cfg == nil {
 				return nil
 			}
-			return info
+
+			al.waitPlugins(ctx)
+			items := plugins.Inventory(cfg.Plugins, cfg.WorkspacePath(), al.PluginStatuses())
+			infos := make([]commands.PluginInfo, 0, len(items))
+			for _, item := range items {
+				infos = append(infos, commands.PluginInfo{
+					ID:          item.ID,
+					Name:        item.Name,
+					Root:        item.Root,
+					State:       item.State,
+					Diagnostics: item.Diagnostics,
+				})
+			}
+			return infos
+		},
+		GetActiveTurnTree: func() []commands.TurnInfo {
+			if opts == nil {
+				return nil
+			}
+			tree := al.GetActiveTurnTree(opts.Dispatch.SessionKey)
+			if len(tree) == 0 {
+				return nil
+			}
+			turns := make([]commands.TurnInfo, 0, len(tree))
+			for _, info := range tree {
+				turns = append(turns, commands.TurnInfo{
+					TurnID:       info.TurnID,
+					ParentTurnID: info.ParentTurnID,
+					AgentID:      info.AgentID,
+					UserMessage:  info.UserMessage,
+					Phase:        string(info.Phase),
+					StartedAt:    info.StartedAt,
+				})
+			}
+			return turns
 		},
 		SwitchChannel: func(value string) error {
 			if al.channelManager == nil {
@@ -272,6 +309,9 @@ func (al *AgentLoop) buildCommandsRuntime(
 				return fmt.Errorf("channel '%s' not found or not enabled", value)
 			}
 			return nil
+		},
+		SetVoiceMode: func(mode string) error {
+			return al.setVoiceMode(opts.Dispatch.SessionKey, mode)
 		},
 	}
 	rt.StopActiveTurn = func() (commands.StopResult, error) {
@@ -390,22 +430,48 @@ func (al *AgentLoop) buildCommandsRuntime(
 				opts.Dispatch.SessionScope,
 				opts.Dispatch.SessionAliases,
 			)
-			return al.contextManager.Clear(ctx, opts.SessionKey)
+			if err := al.contextManager.Clear(ctx, opts.SessionKey); err != nil {
+				return err
+			}
+			if tool, ok := agent.Tools.Get("todo"); ok {
+				if todo, ok := tool.(*tools.TodoTool); ok {
+					todo.ClearSession(agent.ID, opts.SessionKey)
+				}
+			}
+			return nil
 		}
 
-		rt.AskSideQuestion = func(ctx context.Context, question string) (string, error) {
-			return al.askSideQuestion(ctx, agent, opts, question)
+		rt.CompactContext = func(focus string) (bool, error) {
+			if opts == nil {
+				return false, fmt.Errorf("process options not available")
+			}
+			// Same as /clear: the owning agent must be resolvable from the session.
+			ensureSessionMetadata(
+				agent.Sessions,
+				opts.Dispatch.SessionKey,
+				opts.Dispatch.SessionScope,
+				opts.Dispatch.SessionAliases,
+			)
+			err := al.contextManager.Compact(ctx, &CompactRequest{
+				SessionKey:   opts.SessionKey,
+				Reason:       ContextCompressReasonManual,
+				Budget:       agent.ContextWindow,
+				Instructions: focus,
+			})
+			if errors.Is(err, ErrNothingToCompact) {
+				return false, nil
+			}
+			return err == nil, err
 		}
 
 		rt.GetContextStats = func() *commands.ContextStats {
 			if opts == nil || agent.Sessions == nil {
 				return nil
 			}
-			usage := computeContextUsage(agent, opts.SessionKey)
+			usage, messageCount := al.currentContextUsage(agent, opts.SessionKey)
 			if usage == nil {
 				return nil
 			}
-			history := agent.Sessions.GetHistory(opts.SessionKey)
 			return &commands.ContextStats{
 				UsedTokens:        usage.UsedTokens,
 				TotalTokens:       usage.TotalTokens,
@@ -413,7 +479,7 @@ func (al *AgentLoop) buildCommandsRuntime(
 				CompressAtTokens:  usage.CompressAtTokens,
 				SummarizeAtTokens: usage.SummarizeAtTokens,
 				UsedPercent:       usage.UsedPercent,
-				MessageCount:      len(history),
+				MessageCount:      messageCount,
 			}
 		}
 	}
@@ -421,93 +487,20 @@ func (al *AgentLoop) buildCommandsRuntime(
 }
 
 func summarizeMCPToolParameters(schema any) []commands.MCPToolParameterInfo {
-	schemaMap := normalizeMCPSchema(schema)
-	properties, ok := schemaMap["properties"].(map[string]any)
-	if !ok || len(properties) == 0 {
+	properties := toolshared.SchemaProperties(schema)
+	if len(properties) == 0 {
 		return nil
 	}
-
-	required := make(map[string]struct{})
-	switch raw := schemaMap["required"].(type) {
-	case []string:
-		for _, name := range raw {
-			required[name] = struct{}{}
-		}
-	case []any:
-		for _, value := range raw {
-			name, ok := value.(string)
-			if ok {
-				required[name] = struct{}{}
-			}
-		}
-	}
-
-	names := make([]string, 0, len(properties))
-	for name := range properties {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-
-	params := make([]commands.MCPToolParameterInfo, 0, len(names))
-	for _, name := range names {
-		param := commands.MCPToolParameterInfo{Name: name}
-		if propMap, ok := properties[name].(map[string]any); ok {
-			if typeName, ok := propMap["type"].(string); ok {
-				param.Type = strings.TrimSpace(typeName)
-			}
-			if desc, ok := propMap["description"].(string); ok {
-				param.Description = strings.TrimSpace(desc)
-			}
-		}
-		_, param.Required = required[name]
-		params = append(params, param)
+	params := make([]commands.MCPToolParameterInfo, 0, len(properties))
+	for _, property := range properties {
+		params = append(params, commands.MCPToolParameterInfo{
+			Name:        property.Name,
+			Type:        property.Type,
+			Description: property.Description,
+			Required:    property.Required,
+		})
 	}
 	return params
-}
-
-func normalizeMCPSchema(schema any) map[string]any {
-	if schema == nil {
-		return map[string]any{
-			"type":       "object",
-			"properties": map[string]any{},
-			"required":   []string{},
-		}
-	}
-
-	if schemaMap, ok := schema.(map[string]any); ok {
-		return schemaMap
-	}
-
-	var jsonData []byte
-	switch raw := schema.(type) {
-	case json.RawMessage:
-		jsonData = raw
-	case []byte:
-		jsonData = raw
-	}
-
-	if jsonData == nil {
-		var err error
-		jsonData, err = json.Marshal(schema)
-		if err != nil {
-			return map[string]any{
-				"type":       "object",
-				"properties": map[string]any{},
-				"required":   []string{},
-			}
-		}
-	}
-
-	var result map[string]any
-	if err := json.Unmarshal(jsonData, &result); err != nil {
-		return map[string]any{
-			"type":       "object",
-			"properties": map[string]any{},
-			"required":   []string{},
-		}
-	}
-
-	return result
 }
 
 func (al *AgentLoop) setPendingSkills(sessionKey string, skillNames []string) {

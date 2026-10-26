@@ -17,6 +17,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/agent/interfaces"
 	"github.com/sipeed/picoclaw/pkg/audio/asr"
+	"github.com/sipeed/picoclaw/pkg/audio/tts"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/commands"
 	"github.com/sipeed/picoclaw/pkg/config"
@@ -28,6 +29,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/routing"
 	"github.com/sipeed/picoclaw/pkg/session"
 	"github.com/sipeed/picoclaw/pkg/state"
+	"github.com/sipeed/picoclaw/pkg/tools"
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
@@ -48,17 +50,22 @@ type AgentLoop struct {
 
 	// Runtime state
 	running        atomic.Bool
+	stopCh         chan struct{}
+	stopOnce       sync.Once
 	contextManager ContextManager
 	fallback       *providers.FallbackChain
 	channelManager interfaces.ChannelManager
 	mediaStore     media.MediaStore
 	transcriber    asr.Transcriber
+	ttsProvider    tts.TTSProvider
 	cmdRegistry    *commands.Registry
 	mcp            mcpRuntime
+	plugins        pluginRuntime
 	evolution      *evolutionBridge
 	hookRuntime    hookRuntime
 	steering       *steeringQueue
 	pendingSkills  sync.Map
+	voiceModes     sync.Map
 	pendingStops   sync.Map
 	mu             sync.RWMutex
 
@@ -120,7 +127,9 @@ type continuationTarget struct {
 
 const (
 	defaultResponse            = "The model returned an empty response. This may indicate a provider error or token limit."
+	truncatedResponse          = "The model hit the token limit (`max_tokens`) and the response was truncated before any final text. Increase `max_tokens` in config.json or shorten the request, then try again."
 	toolLimitResponse          = "I've reached `max_tool_iterations` without a final response. Increase `max_tool_iterations` in config.json if this task needs more tool steps."
+	loopDetectionResponse      = "I stopped because the same tool call was repeated too many times without making progress. Try refining the request or adjusting `loop_detection` in config.json."
 	handledToolResponseSummary = "Requested output delivered via tool attachment."
 	sessionKeyAgentPrefix      = "agent:"
 	pendingTurnPrefix          = "pending-"
@@ -138,12 +147,39 @@ const (
 	metadataKeyReplyToMessage  = "reply_to_message_id"
 	metadataKeyParentPeerKind  = "parent_peer_kind"
 	metadataKeyParentPeerID    = "parent_peer_id"
+	metadataKeyInputAudio      = "voice_input_audio"
 )
+
+// emptyResponseFallback selects the user-facing content used when a turn ends
+// without any assistant text or tool calls. When the model was cut off by the
+// output token limit, a dedicated message is returned so the user knows to raise
+// max_tokens instead of seeing the generic provider-error hint.
+func emptyResponseFallback(ts *turnState) string {
+	// Internal turns (heartbeat, subturn) opt out of user-facing fallbacks by
+	// leaving DefaultResponse empty; preserve that behavior.
+	if ts.opts.DefaultResponse == "" {
+		return ""
+	}
+	if isTruncatedFinishReason(ts.GetLastFinishReason()) {
+		return truncatedResponse
+	}
+	return ts.opts.DefaultResponse
+}
+
+// isTruncatedFinishReason reports whether a provider finish_reason means the
+// model stopped because it reached the output token limit. Providers normalize
+// the raw value to "length" (Anthropic/Bedrock/Gemini, and the OpenAI-compatible
+// streaming path) or "truncated" (OpenAI-compatible non-streaming).
+func isTruncatedFinishReason(reason string) bool {
+	return reason == "length" || reason == "truncated"
+}
 
 // registerSharedTools registers tools that are shared across all agents (web, message, spawn).
 
 func (al *AgentLoop) Run(ctx context.Context) error {
 	al.running.Store(true)
+	al.startPlugins()
+	defer al.running.Store(false)
 
 	if err := al.ensureHooksInitialized(ctx); err != nil {
 		return err
@@ -152,17 +188,12 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 		return err
 	}
 
-	idleTicker := time.NewTicker(100 * time.Millisecond)
-	defer idleTicker.Stop()
-
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-idleTicker.C:
-			if !al.running.Load() {
-				return nil
-			}
+		case <-al.stopCh:
+			return nil
 		case msg, ok := <-al.bus.InboundChan():
 			if !ok {
 				return nil
@@ -289,21 +320,22 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 					return
 				}
 
+				if al.mediaStore != nil && m.MediaScope != "" {
+					// Release inbound media only after the turn that consumes it
+					// completes. The previous TODO placed this in the dispatch
+					// loop, where it ran before the worker read the files.
+					defer func() {
+						if releaseErr := al.mediaStore.ReleaseAll(m.MediaScope); releaseErr != nil {
+							logger.WarnCF("agent", "Failed to release media", map[string]any{
+								"scope": m.MediaScope,
+								"error": releaseErr.Error(),
+							})
+						}
+					}()
+				}
+
 				al.runTurnWithSteering(ctx, m)
 			}(msg, placeholder)
-
-			// TODO: Re-enable media cleanup after inbound media is properly consumed by the agent.
-			// Currently disabled because files are deleted before the LLM can access their content.
-			// defer func() {
-			// 	if al.mediaStore != nil && msg.MediaScope != "" {
-			// 		if releaseErr := al.mediaStore.ReleaseAll(msg.MediaScope); releaseErr != nil {
-			// 			logger.WarnCF("agent", "Failed to release media", map[string]any{
-			// 				"scope": msg.MediaScope,
-			// 				"error": releaseErr.Error(),
-			// 			})
-			// 		}
-			// 	}
-			// }()
 		}
 	}
 }
@@ -320,10 +352,16 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 
 func (al *AgentLoop) Stop() {
 	al.running.Store(false)
+	al.stopOnce.Do(func() {
+		if al.stopCh != nil {
+			close(al.stopCh)
+		}
+	})
 }
 
 // Close releases resources held by agent session stores. Call after Stop.
 func (al *AgentLoop) Close() {
+	al.closePlugins(true)
 	mcpManager := al.mcp.takeManager()
 
 	if mcpManager != nil {
@@ -352,6 +390,15 @@ func (al *AgentLoop) Close() {
 	if al.runtimeEvents != nil && al.ownsRuntimeEvents {
 		if err := al.runtimeEvents.Close(); err != nil {
 			logger.ErrorCF("agent", "Failed to close runtime event bus",
+				map[string]any{
+					"error": err.Error(),
+				})
+		}
+	}
+
+	if closer, ok := al.contextManager.(interface{ Close() error }); ok {
+		if err := closer.Close(); err != nil {
+			logger.ErrorCF("agent", "Failed to close context manager",
 				map[string]any{
 					"error": err.Error(),
 				})
@@ -438,19 +485,13 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	al.evolution = newEvolution
 
 	// Also update fallback chain with new config; rebuild rate limiter registry.
-	newRL := providers.NewRateLimiterRegistry()
-	for _, agentID := range registry.ListAgentIDs() {
-		if agent, ok := registry.GetAgent(agentID); ok {
-			newRL.RegisterCandidates(agent.Candidates)
-			newRL.RegisterCandidates(agent.LightCandidates)
-		}
-	}
-	al.fallback = providers.NewFallbackChain(providers.NewCooldownTracker(), newRL)
+	al.fallback = providers.NewFallbackChain(providers.NewCooldownTracker(), newRateLimiterRegistry(registry))
 
 	al.mu.Unlock()
 	al.refreshRuntimeEventLogger(cfg)
 
 	oldMCPManager := al.mcp.reset()
+	al.closePlugins(false)
 	al.hookRuntime.reset(al)
 	configureHookManagerFromConfig(al.hooks, cfg)
 	if err := al.ensureHooksInitialized(ctx); err != nil {
@@ -473,6 +514,7 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 		logger.WarnCF("agent", "MCP failed to reinitialize after reload",
 			map[string]any{"error": err.Error()})
 	}
+	al.startPlugins()
 
 	// Close old provider after releasing the lock
 	// This prevents blocking readers while closing
@@ -564,6 +606,16 @@ func (al *AgentLoop) runAgentLoop(
 		newTurnContext(opts.Dispatch.InboundContext, opts.Dispatch.RouteResult, opts.Dispatch.SessionScope),
 	)
 	ts := newTurnState(agent, opts, turnScope)
+
+	// Every turn owns its SubTurn result channel and concurrency semaphore.
+	// Without them, SubTurns spawned by root turns bypass the concurrency limit
+	// and async results can never be delivered back to the turn.
+	rtCfg := al.getSubTurnConfig()
+	ts.pendingResults = make(chan *tools.ToolResult, subTurnPendingResultsBuffer)
+	ts.concurrencySem = make(chan struct{}, rtCfg.maxConcurrent)
+	// Needed by Finish(true) to cascade a hard abort to this turn's SubTurns.
+	ts.al = al
+
 	pipeline := NewPipeline(al)
 	result, err := al.runTurn(ctx, ts, pipeline)
 	if err != nil {
@@ -589,6 +641,7 @@ func (al *AgentLoop) runAgentLoop(
 			opts.Dispatch.SessionKey,
 			opts.Dispatch.SessionScope,
 		)
+		contextUsage, _ := al.currentContextUsage(agent, opts.Dispatch.SessionKey)
 		msg := bus.OutboundMessage{
 			Context: outboundContextFromInbound(
 				opts.Dispatch.InboundContext,
@@ -600,7 +653,7 @@ func (al *AgentLoop) runAgentLoop(
 			SessionKey:   sessionKey,
 			Scope:        scope,
 			Content:      result.finalContent,
-			ContextUsage: computeContextUsage(agent, opts.Dispatch.SessionKey),
+			ContextUsage: contextUsage,
 		}
 		if modelName := strings.TrimSpace(result.modelName); modelName != "" {
 			if msg.Context.Raw == nil {
@@ -610,6 +663,9 @@ func (al *AgentLoop) runAgentLoop(
 		}
 		markFinalOutbound(&msg)
 		al.bus.PublishOutbound(ctx, msg)
+		if opts.Dispatch.InboundContext != nil {
+			al.sendVoiceResponseIfEnabled(ctx, agent, opts, result.finalContent)
+		}
 	}
 
 	if result.finalContent != "" {
@@ -652,24 +708,12 @@ func (al *AgentLoop) runAgentLoop(
 // Counts Content, ToolCalls arguments, and ToolCallID metadata so that
 // tool-heavy conversations are not systematically undercounted.
 
-// askSideQuestion handles /btw commands by creating an isolated provider instance
-// that doesn't share state with the main conversation provider.
-
 // shallowCloneLLMOptions creates a shallow copy of LLM options map.
 // Note: This is a shallow copy - nested maps/slices are shared.
 
 // hasMediaRefs checks if any message has media references.
 
-// isolatedSideQuestionProvider creates a separate provider instance for /btw commands
-// to avoid sharing state with the main conversation provider.
-
-// sideQuestionModelConfig resolves the model config for side questions.
-
-// sideQuestionModelName determines which model name to use for side questions.
-
 // modelNameFromIdentityKey extracts the model name from an identity key.
-
-// closeProviderIfStateful closes a provider if it implements StatefulProvider.
 
 // makePendingTurnID generates a unique turn ID for placeholder turns.
 // Format: "pending-{sessionKey}-{sequence}"

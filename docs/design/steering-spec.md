@@ -287,7 +287,7 @@ flowchart TD
   "agents": {
     "defaults": {
       "steering_mode": "one-at-a-time",
-      "max_parallel_turns": 1
+      "max_parallel_turns": 5
     }
   }
 }
@@ -296,7 +296,7 @@ flowchart TD
 | Field | Type | Default | Env var | Description |
 |-------|------|---------|---------|-------------|
 | `steering_mode` | `string` | `"one-at-a-time"` | `PICOCLAW_AGENTS_DEFAULTS_STEERING_MODE` | How the steering queue is drained per poll |
-| `max_parallel_turns` | `int` | `1` | `PICOCLAW_AGENTS_DEFAULTS_MAX_PARALLEL_TURNS` | Max concurrent turns. `0` or `1` = sequential; `>1` = parallel across sessions |
+| `max_parallel_turns` | `int` | `5` | `PICOCLAW_AGENTS_DEFAULTS_MAX_PARALLEL_TURNS` | Max concurrent turns. `0` or `1` = sequential; `>1` = parallel across sessions |
 
 
 ## Design decisions and trade-offs

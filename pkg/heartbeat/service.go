@@ -44,6 +44,7 @@ type HeartbeatService struct {
 	enabled   bool
 	mu        sync.RWMutex
 	stopChan  chan struct{}
+	firstRun  *time.Timer
 }
 
 // NewHeartbeatService creates a new heartbeat service
@@ -95,7 +96,19 @@ func (hs *HeartbeatService) Start() error {
 	}
 
 	hs.stopChan = make(chan struct{})
-	go hs.runLoop(hs.stopChan)
+	stopChan := hs.stopChan
+
+	// Run first heartbeat after a short initial delay. The timer is armed
+	// while holding the lock so Stop can always cancel it.
+	hs.firstRun = time.AfterFunc(time.Second, func() {
+		select {
+		case <-stopChan:
+			return
+		default:
+			hs.executeHeartbeat()
+		}
+	})
+	go hs.runLoop(stopChan)
 
 	logger.InfoCF("heartbeat", "Heartbeat service started", map[string]any{
 		"interval_minutes": hs.interval.Minutes(),
@@ -116,6 +129,10 @@ func (hs *HeartbeatService) Stop() {
 	logger.InfoC("heartbeat", "Stopping heartbeat service")
 	close(hs.stopChan)
 	hs.stopChan = nil
+	if hs.firstRun != nil {
+		hs.firstRun.Stop()
+		hs.firstRun = nil
+	}
 }
 
 // IsRunning returns whether the service is running
@@ -129,11 +146,6 @@ func (hs *HeartbeatService) IsRunning() bool {
 func (hs *HeartbeatService) runLoop(stopChan chan struct{}) {
 	ticker := time.NewTicker(hs.interval)
 	defer ticker.Stop()
-
-	// Run first heartbeat after initial delay
-	time.AfterFunc(time.Second, func() {
-		hs.executeHeartbeat()
-	})
 
 	for {
 		select {
@@ -173,7 +185,9 @@ func (hs *HeartbeatService) executeHeartbeat() {
 		return
 	}
 
-	// Get last channel info for context
+	// Get last channel info for context. Reload first so writes performed by
+	// the agent loop's state manager instance are visible here.
+	hs.state.Reload()
 	lastChannel := hs.state.GetLastChannel()
 	channel, chatID := hs.parseLastChannel(lastChannel)
 
@@ -322,7 +336,8 @@ func (hs *HeartbeatService) sendResponse(response string) {
 		return
 	}
 
-	// Get last channel from state
+	// Get last channel from state (reload so agent-loop writes are visible)
+	hs.state.Reload()
 	lastChannel := hs.state.GetLastChannel()
 	if lastChannel == "" {
 		hs.logInfof("No last channel recorded, heartbeat result not sent")
@@ -384,12 +399,9 @@ func (hs *HeartbeatService) logErrorf(format string, args ...any) {
 // logf writes a message to the heartbeat log file
 func (hs *HeartbeatService) logf(level, format string, args ...any) {
 	logFile := filepath.Join(hs.workspace, "heartbeat.log")
-	f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-
 	timestamp := time.Now().Format("2006-01-02 15:04:05")
-	fmt.Fprintf(f, "[%s] [%s] %s\n", timestamp, level, fmt.Sprintf(format, args...))
+	line := fmt.Sprintf("[%s] [%s] %s\n", timestamp, level, fmt.Sprintf(format, args...))
+	if err := logger.AppendToFile(logFile, []byte(line)); err != nil {
+		logger.WarnCF("heartbeat", "Failed to write heartbeat log", map[string]any{"error": err.Error()})
+	}
 }

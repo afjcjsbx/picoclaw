@@ -27,11 +27,20 @@ type MCPToolInfo struct {
 	Parameters  []MCPToolParameterInfo
 }
 
+// PluginInfo describes an installed plugin package or configured plugin entry.
+type PluginInfo struct {
+	ID          string
+	Name        string
+	Root        string
+	State       string
+	Diagnostics int
+}
+
 // ContextStats describes current session context window usage.
 type ContextStats struct {
 	UsedTokens        int
 	TotalTokens       int // model context window
-	HistoryTokens     int // history-only tokens (what maybeSummarize checks)
+	HistoryTokens     int // history-only tokens
 	CompressAtTokens  int // hard budget compression threshold
 	SummarizeAtTokens int // soft summarization trigger
 	UsedPercent       int // 0-100
@@ -49,19 +58,22 @@ type StopResult struct {
 // can coexist with long-lived callbacks (like GetModelInfo).
 type Runtime struct {
 	Config             *config.Config
+	VoiceMode          string
+	SetVoiceMode       func(mode string) error
 	GetModelInfo       func() (name, provider string)
-	AskSideQuestion    func(ctx context.Context, question string) (string, error)
 	ListAgentIDs       func() []string
 	ListDefinitions    func() []Definition
 	ListSkillNames     func() []string
 	ListMCPServers     func(ctx context.Context) []MCPServerInfo
 	ListMCPTools       func(ctx context.Context, serverName string) ([]MCPToolInfo, error)
+	ListPlugins        func(ctx context.Context) []PluginInfo
 	GetEnabledChannels func() []string
-	GetActiveTurn      func() any // Returning any to avoid circular dependency with agent package
+	GetActiveTurnTree  func() []TurnInfo // Active root turn of the session followed by its subagents
 	GetContextStats    func() *ContextStats
 	SwitchModel        func(value string) (oldModel string, err error)
 	SwitchChannel      func(value string) error
 	ClearHistory       func() error
+	CompactContext     func(focus string) (compacted bool, err error) // false when nothing to summarize
 	ReloadConfig       func() error
 	StopActiveTurn     func() (StopResult, error)
 }

@@ -8,6 +8,11 @@ If your bot "remembers too much" or "forgets too much", the first thing to check
 This guide is for users configuring session behavior in `config.json`.
 For implementation details, see the architecture docs instead.
 
+The optional `seahorse` context manager adds a SQLite index, multi-level
+summaries, and retrieval tools on top of the JSONL history. Its behavior,
+configuration, and limits are documented in
+[Seahorse Memory](../architecture/seahorse-memory.md).
+
 ## What Sessions Control
 
 A session controls:
@@ -128,8 +133,26 @@ You usually do not need a special workaround for Telegram forums.
 
 ### Summaries happen per session
 
-`summarize_message_threshold` and `summarize_token_percent` apply inside each session independently.
-If you create smaller sessions, summarization also happens on smaller per-session histories.
+`summarize_token_percent` applies inside each session independently: summarization starts once the prompt (system prompt, summary, history and tool definitions) reaches that percentage of the usable context window (`context_window - max_tokens`). The number of messages does not matter. The check runs right before every LLM call, including in the middle of a long tool loop, and the turn waits for the summary before continuing from the compacted context.
+If you create smaller sessions, each one stays further from the threshold. `summarize_message_threshold` is deprecated and ignored.
+
+### Compact a session on demand
+
+Summarization normally starts by itself, but you can trigger it from any chat channel with `/compact`:
+
+```text
+/compact
+/compact focus on database migration
+```
+
+`/compact` summarizes the older part of the current session right away and keeps the most recent messages.
+Any text after the command is passed to the summarizer as a hint about which details to preserve.
+The command works with both the `legacy` and `seahorse` context managers and only affects the session it is sent in.
+With Seahorse, `/compact` runs one leaf pass and the condensed loop synchronously; see [Seahorse Memory](../architecture/seahorse-memory.md#compactnow-manual-compact) for the exact sequence and its edge cases.
+
+PicoClaw replies `Context compacted.` when it summarized something, or `Nothing to compact yet.` when the history is still too short.
+With the `legacy` manager, if an automatic summarization of the same session is already running, `/compact` reports that instead of starting a second one.
+With Seahorse, a running background condensed loop is skipped and the command can report `Nothing to compact yet.` even though the session is still being compacted.
 
 ## Common Recipes
 

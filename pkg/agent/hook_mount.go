@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -243,6 +244,7 @@ func processHookOptionsFromConfig(spec config.ProcessHookConfig) (ProcessHookOpt
 	}
 	opts.Observe = observeEnabled
 	opts.ObserveKinds = observeKinds
+	opts.CompletedOnly = slices.Contains(spec.Observe, "turn_completed")
 
 	for _, intercept := range spec.Intercept {
 		switch intercept {
@@ -295,6 +297,11 @@ func processHookObserveKindsFromConfig(observe []string) ([]string, bool, error)
 		switch kind {
 		case "", "*", "all":
 			return nil, true, nil
+		case "post_compaction":
+			normalized = append(normalized,
+				runtimeevents.KindAgentContextCompress.String(),
+				runtimeevents.KindAgentSessionSummarize.String(),
+			)
 		default:
 			normalizedKind, ok := validKinds[kind]
 			if !ok {
@@ -318,6 +325,7 @@ func validHookEventKinds() map[string]string {
 	}
 	kinds["turn_start"] = runtimeevents.KindAgentTurnStart.String()
 	kinds["turn_end"] = runtimeevents.KindAgentTurnEnd.String()
+	kinds["turn_completed"] = runtimeevents.KindAgentTurnEnd.String()
 	kinds["llm_request"] = runtimeevents.KindAgentLLMRequest.String()
 	kinds["llm_delta"] = runtimeevents.KindAgentLLMDelta.String()
 	kinds["llm_response"] = runtimeevents.KindAgentLLMResponse.String()

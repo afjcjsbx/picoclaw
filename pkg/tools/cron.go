@@ -13,6 +13,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/constants"
 	"github.com/sipeed/picoclaw/pkg/cron"
+	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
@@ -89,16 +90,14 @@ Use 'command' to execute shell commands directly.`
 }
 
 // Parameters returns the tool parameters schema
-//
-//nolint:dupl // Tool parameter schemas intentionally use similar JSON-schema map literals.
 func (t *CronTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"action": map[string]any{
 				"type":        "string",
-				"enum":        []string{"add", "list", "get", "update", "remove", "enable", "disable"},
-				"description": "Action to perform. Use 'get' before editing and 'update' to change existing jobs without losing their payload. Remote channels can only list/get/update jobs for the current channel/chat_id.",
+				"enum":        []string{"add", "list", "get", "update", "remove", "enable", "disable", "run"},
+				"description": "Action to perform. Use 'get' before editing and 'update' to change existing jobs without losing their payload. Use 'run' to execute an existing job right now, on demand, without changing its schedule. Remote channels can only list/get/update/run jobs for the current channel/chat_id; on single-owner channels such as the Pico WebUI, jobs are scoped to the whole channel.",
 			},
 			"name": map[string]any{
 				"type":        "string",
@@ -130,7 +129,7 @@ func (t *CronTool) Parameters() map[string]any {
 			},
 			"job_id": map[string]any{
 				"type":        "string",
-				"description": "Job ID (for get/update/remove/enable/disable)",
+				"description": "Job ID (for get/update/remove/enable/disable/run)",
 			},
 		},
 		"required": []string{"action"},
@@ -159,6 +158,8 @@ func (t *CronTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 		return t.enableJob(ctx, args, true)
 	case "disable":
 		return t.enableJob(ctx, args, false)
+	case "run":
+		return t.runJob(ctx, args)
 	default:
 		return ErrorResult(fmt.Sprintf("unknown action: %s", action))
 	}
@@ -252,7 +253,9 @@ func (t *CronTool) addJob(ctx context.Context, args map[string]any) *ToolResult 
 		needsUpdate = true
 	}
 	if needsUpdate {
-		t.cronService.UpdateJob(job)
+		if err := t.cronService.UpdateJob(job); err != nil {
+			return ErrorResult(fmt.Sprintf("Cron job %s was created but saving its payload failed: %v", job.ID, err))
+		}
 	}
 
 	return SilentResult(fmt.Sprintf("Cron job added: %s (id: %s)", job.Name, job.ID))
@@ -283,13 +286,33 @@ func (t *CronTool) listJobs(ctx context.Context) *ToolResult {
 			scheduleInfo = j.Schedule.Expr
 		} else if j.Schedule.Kind == "at" {
 			scheduleInfo = "one-time"
+			if at := formatLocalTimeMS(j.Schedule.AtMS); at != "" {
+				scheduleInfo += " at " + at
+			}
 		} else {
 			scheduleInfo = "unknown"
 		}
-		result.WriteString(fmt.Sprintf("- %s (id: %s, %s)\n", j.Name, j.ID, scheduleInfo))
+		line := fmt.Sprintf("- %s (id: %s, %s", j.Name, j.ID, scheduleInfo)
+		if timing := jobTimingSummary(&j); timing != "" {
+			line += ", " + timing
+		}
+		result.WriteString(line + ")\n")
 	}
 
 	return SilentResult(result.String())
+}
+
+// accessibleJob loads jobID and verifies that the caller's channel may access
+// it. A non-nil *ToolResult is the ready-to-return error result.
+func (t *CronTool) accessibleJob(ctx context.Context, jobID string) (*cron.CronJob, *ToolResult) {
+	job, ok := t.cronService.GetJob(jobID)
+	if !ok {
+		return nil, ErrorResult(fmt.Sprintf("Job %s not found", jobID))
+	}
+	if !t.canAccessJob(ctx, job) {
+		return nil, ErrorResult(fmt.Sprintf("Job %s is not accessible from this channel", jobID))
+	}
+	return job, nil
 }
 
 func (t *CronTool) getJob(ctx context.Context, args map[string]any) *ToolResult {
@@ -298,12 +321,9 @@ func (t *CronTool) getJob(ctx context.Context, args map[string]any) *ToolResult 
 		return errResult
 	}
 
-	job, ok := t.cronService.GetJob(jobID)
-	if !ok {
-		return ErrorResult(fmt.Sprintf("Job %s not found", jobID))
-	}
-	if !t.canAccessJob(ctx, job) {
-		return ErrorResult(fmt.Sprintf("Job %s is not accessible from this channel", jobID))
+	job, errResult := t.accessibleJob(ctx, jobID)
+	if errResult != nil {
+		return errResult
 	}
 
 	return SilentResult(formatCronJobJSON(job))
@@ -315,12 +335,9 @@ func (t *CronTool) updateJob(ctx context.Context, args map[string]any) *ToolResu
 		return errResult
 	}
 
-	job, ok := t.cronService.GetJob(jobID)
-	if !ok {
-		return ErrorResult(fmt.Sprintf("Job %s not found", jobID))
-	}
-	if !t.canAccessJob(ctx, job) {
-		return ErrorResult(fmt.Sprintf("Job %s is not accessible from this channel", jobID))
+	job, errResult := t.accessibleJob(ctx, jobID)
+	if errResult != nil {
+		return errResult
 	}
 
 	patches := 0
@@ -358,8 +375,10 @@ func (t *CronTool) updateJob(ctx context.Context, args map[string]any) *ToolResu
 		return errResult
 	}
 	if commandPresent {
-		if errResult := t.validateCommandMutation(ctx, args); errResult != nil {
-			return errResult
+		if command != "" {
+			if errResult := t.validateCommandMutation(ctx, args); errResult != nil {
+				return errResult
+			}
 		}
 		job.Payload.Command = command
 		patches++
@@ -373,7 +392,10 @@ func (t *CronTool) updateJob(ctx context.Context, args map[string]any) *ToolResu
 		return ErrorResult(fmt.Sprintf("Error updating job: %v", err))
 	}
 
-	updated, _ := t.cronService.GetJob(jobID)
+	updated, ok := t.cronService.GetJob(jobID)
+	if !ok {
+		return ErrorResult(fmt.Sprintf("Job %s not found after update", jobID))
+	}
 	return SilentResult(fmt.Sprintf("Cron job updated:\n%s", formatCronJobJSON(updated)))
 }
 
@@ -383,12 +405,8 @@ func (t *CronTool) removeJob(ctx context.Context, args map[string]any) *ToolResu
 		return ErrorResult("job_id is required for remove")
 	}
 
-	job, ok := t.cronService.GetJob(jobID)
-	if !ok {
-		return ErrorResult(fmt.Sprintf("Job %s not found", jobID))
-	}
-	if !t.canAccessJob(ctx, job) {
-		return ErrorResult(fmt.Sprintf("Job %s is not accessible from this channel", jobID))
+	if _, errResult := t.accessibleJob(ctx, jobID); errResult != nil {
+		return errResult
 	}
 
 	if t.cronService.RemoveJob(jobID) {
@@ -537,6 +555,20 @@ func isCommandAllowedRemote(channel, chatID string, allowed []string) bool {
 	return false
 }
 
+// singleOwnerChannels are remote channels where every chat belongs to the same
+// owner: the channel is protected by one shared auth token and always sends as
+// a fixed sender identity. Job access on these channels is scoped to the whole
+// channel instead of a single chat, so a job created in one chat stays visible
+// from the owner's other chats (for example a new Pico WebUI conversation).
+var singleOwnerChannels = map[string]struct{}{
+	config.ChannelPico: {},
+}
+
+func isSingleOwnerChannel(channel string) bool {
+	_, ok := singleOwnerChannels[channel]
+	return ok
+}
+
 func (t *CronTool) canAccessJob(ctx context.Context, job *cron.CronJob) bool {
 	channel := ToolChannel(ctx)
 	if constants.IsInternalChannel(channel) {
@@ -547,7 +579,10 @@ func (t *CronTool) canAccessJob(ctx context.Context, job *cron.CronJob) bool {
 	if channel == "" || chatID == "" {
 		return false
 	}
-	if job.Payload.Channel != channel || job.Payload.To != chatID {
+	if job.Payload.Channel != channel {
+		return false
+	}
+	if !isSingleOwnerChannel(channel) && job.Payload.To != chatID {
 		return false
 	}
 	if job.Payload.Command != "" {
@@ -556,8 +591,89 @@ func (t *CronTool) canAccessJob(ctx context.Context, job *cron.CronJob) bool {
 	return true
 }
 
+// cronLocalTimeLayout is the timestamp format used for rendered run times. It
+// is ISO 8601 (RFC 3339) in the process time zone, so every value carries a
+// numeric UTC offset and stays unambiguous and machine-parseable. The zone is
+// the same one used to evaluate cron expressions, so agents do not need to
+// shell out to `date` to interpret epoch milliseconds.
+const cronLocalTimeLayout = time.RFC3339
+
+// formatLocalTimeMS renders an epoch-millisecond timestamp as local time.
+// Nil or non-positive values have no meaningful time and render as "".
+func formatLocalTimeMS(ms *int64) string {
+	return formatTimeMSInLocation(ms, time.Local)
+}
+
+// formatTimeMSInLocation renders an epoch-millisecond timestamp in loc as
+// RFC 3339. Nil or non-positive values have no meaningful time and render as "".
+func formatTimeMSInLocation(ms *int64, loc *time.Location) string {
+	if ms == nil || *ms <= 0 {
+		return ""
+	}
+	return time.UnixMilli(*ms).In(loc).Format(cronLocalTimeLayout)
+}
+
+// localTimesForJob renders the last and next run of a job in the process time
+// zone. Missing or non-positive timestamps render as empty strings.
+func localTimesForJob(job *cron.CronJob) cronJobLocalTimes {
+	return cronJobLocalTimes{
+		LastRun: formatLocalTimeMS(job.State.LastRunAtMS),
+		NextRun: formatLocalTimeMS(job.State.NextRunAtMS),
+	}
+}
+
+// jobTimingSummary renders the last and next run of a job as local times for
+// the human-readable list output. The next run is skipped for one-time jobs
+// when it duplicates the scheduled time shown with the schedule.
+func jobTimingSummary(job *cron.CronJob) string {
+	times := localTimesForJob(job)
+
+	parts := make([]string, 0, 2)
+	if times.LastRun != "" {
+		entry := "last run: " + times.LastRun
+		if job.State.LastStatus != "" {
+			entry += " (" + job.State.LastStatus + ")"
+		}
+		parts = append(parts, entry)
+	}
+
+	if job.Schedule.Kind == "at" && job.State.NextRunAtMS != nil && job.Schedule.AtMS != nil &&
+		*job.State.NextRunAtMS == *job.Schedule.AtMS {
+		times.NextRun = ""
+	}
+	if times.NextRun != "" {
+		parts = append(parts, "next run: "+times.NextRun)
+	}
+
+	return strings.Join(parts, ", ")
+}
+
+// cronJobLocalTimes holds the derived, human-readable local times for a job.
+// Missing timestamps are omitted from the JSON payload.
+type cronJobLocalTimes struct {
+	LastRun string `json:"lastRun,omitempty"`
+	NextRun string `json:"nextRun,omitempty"`
+}
+
+// cronJobLocalView decorates a CronJob with derived, human-readable local
+// times. The original epoch-millisecond fields stay in the payload.
+type cronJobLocalView struct {
+	*cron.CronJob
+	LocalTimes *cronJobLocalTimes `json:"localTimes,omitempty"`
+}
+
 func formatCronJobJSON(job *cron.CronJob) string {
-	data, err := json.Marshal(job)
+	if job == nil {
+		return ""
+	}
+
+	view := cronJobLocalView{CronJob: job}
+	times := localTimesForJob(job)
+	if times.LastRun != "" || times.NextRun != "" {
+		view.LocalTimes = &times
+	}
+
+	data, err := json.Marshal(view)
 	if err != nil {
 		return fmt.Sprintf("%+v", *job)
 	}
@@ -570,12 +686,8 @@ func (t *CronTool) enableJob(ctx context.Context, args map[string]any, enable bo
 		return ErrorResult("job_id is required for enable/disable")
 	}
 
-	job, ok := t.cronService.GetJob(jobID)
-	if !ok {
-		return ErrorResult(fmt.Sprintf("Job %s not found", jobID))
-	}
-	if !t.canAccessJob(ctx, job) {
-		return ErrorResult(fmt.Sprintf("Job %s is not accessible from this channel", jobID))
+	if _, errResult := t.accessibleJob(ctx, jobID); errResult != nil {
+		return errResult
 	}
 
 	updatedJob := t.cronService.EnableJob(jobID, enable)
@@ -590,8 +702,33 @@ func (t *CronTool) enableJob(ctx context.Context, args map[string]any, enable bo
 	return SilentResult(fmt.Sprintf("Cron job '%s' %s", updatedJob.Name, status))
 }
 
-// ExecuteJob executes a cron job through the agent
-func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
+// runJob triggers a job on demand. Execution is asynchronous (same path as the
+// scheduler, detached from the tool call context) and its output goes to the
+// job's own channel. The service guarantees it cannot overlap a scheduled run.
+func (t *CronTool) runJob(ctx context.Context, args map[string]any) *ToolResult {
+	jobID, errResult := requiredCronJobID(args, "run")
+	if errResult != nil {
+		return errResult
+	}
+
+	job, errResult := t.accessibleJob(ctx, jobID)
+	if errResult != nil {
+		return errResult
+	}
+
+	if err := t.cronService.RunJob(jobID); err != nil {
+		return ErrorResult(fmt.Sprintf("Error running job %s: %v", jobID, err))
+	}
+	return SilentResult(
+		fmt.Sprintf("Cron job '%s' triggered; its output will be delivered to the job's channel", job.Name),
+	)
+}
+
+// ExecuteJob runs a cron job through the agent (or through the exec tool for
+// command jobs) and reports its outcome. A non-nil error means the job did not
+// do its work; the cron service stores it in the job state, so a failed run no
+// longer looks like a successful one.
+func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) (string, error) {
 	// Get channel/chatID from job payload
 	channel := job.Payload.Channel
 	chatID := job.Payload.To
@@ -608,13 +745,8 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 	if job.Payload.Command != "" {
 		if !t.execEnabled || t.execTool == nil {
 			output := "Error executing scheduled command: command execution is disabled"
-			pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer pubCancel()
-			t.msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
-				Context: bus.NewOutboundContext(channel, chatID, ""),
-				Content: output,
-			})
-			return "ok"
+			t.publishJobOutput(channel, chatID, output)
+			return output, fmt.Errorf("scheduled command not executed: command execution is disabled")
 		}
 
 		args := map[string]any{
@@ -625,20 +757,15 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 		}
 
 		result := t.execTool.Execute(ctx, args)
-		var output string
 		if result.IsError {
-			output = fmt.Sprintf("Error executing scheduled command: %s", result.ForLLM)
-		} else {
-			output = fmt.Sprintf("Scheduled command '%s' executed:\n%s", job.Payload.Command, result.ForLLM)
+			output := fmt.Sprintf("Error executing scheduled command: %s", result.ForLLM)
+			t.publishJobOutput(channel, chatID, output)
+			return output, fmt.Errorf("scheduled command failed: %s", result.ForLLM)
 		}
 
-		pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer pubCancel()
-		t.msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
-			Context: bus.NewOutboundContext(channel, chatID, ""),
-			Content: output,
-		})
-		return "ok"
+		output := fmt.Sprintf("Scheduled command '%s' executed:\n%s", job.Payload.Command, result.ForLLM)
+		t.publishJobOutput(channel, chatID, output)
+		return "ok", nil
 	}
 
 	sessionKey := fmt.Sprintf("agent:cron-%s-%s", job.ID, uuid.New().String())
@@ -652,11 +779,34 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 		chatID,
 	)
 	if err != nil {
-		return fmt.Sprintf("Error: %v", err)
+		return "", fmt.Errorf("cron job %s: %w", job.ID, err)
 	}
 
 	if response != "" {
 		t.executor.PublishResponseIfNeeded(ctx, channel, chatID, sessionKey, response)
 	}
-	return "ok"
+	return "ok", nil
+}
+
+// cronOutputPublishTimeout bounds a single job-output publish.
+const cronOutputPublishTimeout = 5 * time.Second
+
+// publishJobOutput reports a command job result to the job's channel.
+//
+// The publish deliberately does not inherit the run's context: a job that
+// failed or was canceled still has to report its outcome, so it gets its own
+// budget instead of a context that may already be done.
+func (t *CronTool) publishJobOutput(channel, chatID, content string) {
+	pubCtx, pubCancel := context.WithTimeout(context.Background(), cronOutputPublishTimeout)
+	defer pubCancel()
+	if err := t.msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
+		Context: bus.NewOutboundContext(channel, chatID, ""),
+		Content: content,
+	}); err != nil {
+		logger.WarnCF("cron", "Failed to publish job output", map[string]any{
+			"channel": channel,
+			"chat_id": chatID,
+			"error":   err.Error(),
+		})
+	}
 }

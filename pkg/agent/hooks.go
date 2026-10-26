@@ -58,10 +58,11 @@ const (
 )
 
 type HookRegistration struct {
-	Name     string
-	Priority int
-	Source   HookSource
-	Hook     any
+	Name            string
+	Priority        int
+	Source          HookSource
+	ObserverTimeout time.Duration
+	Hook            any
 }
 
 func NamedHook(name string, hook any) HookRegistration {
@@ -283,13 +284,17 @@ func (hm *HookManager) Mount(reg HookRegistration) error {
 	}
 
 	hm.mu.Lock()
-	defer hm.mu.Unlock()
-
-	if existing, ok := hm.hooks[reg.Name]; ok {
-		closeHookIfPossible(existing.Hook)
-	}
+	existing, hadExisting := hm.hooks[reg.Name]
 	hm.hooks[reg.Name] = reg
 	hm.rebuildOrdered()
+	hm.mu.Unlock()
+
+	// Close the replaced hook outside the lock: ProcessHook.Close can block
+	// while it waits for or kills the child process, and holding the write
+	// lock would stall every concurrent hook invocation.
+	if hadExisting {
+		closeHookIfPossible(existing.Hook)
+	}
 	return nil
 }
 
@@ -299,13 +304,16 @@ func (hm *HookManager) Unmount(name string) {
 	}
 
 	hm.mu.Lock()
-	defer hm.mu.Unlock()
+	existing, existed := hm.hooks[name]
+	if existed {
+		delete(hm.hooks, name)
+		hm.rebuildOrdered()
+	}
+	hm.mu.Unlock()
 
-	if existing, ok := hm.hooks[name]; ok {
+	if existed {
 		closeHookIfPossible(existing.Hook)
 	}
-	delete(hm.hooks, name)
-	hm.rebuildOrdered()
 }
 
 func (hm *HookManager) dispatchRuntimeEvents(ch <-chan runtimeevents.Event) {
@@ -317,7 +325,7 @@ func (hm *HookManager) dispatchRuntimeEvents(ch <-chan runtimeevents.Event) {
 			if !ok {
 				continue
 			}
-			hm.runRuntimeObserver(reg.Name, observer, evt)
+			hm.runRuntimeObserver(reg.Name, observer, evt, reg.ObserverTimeout)
 		}
 	}
 }
@@ -327,11 +335,19 @@ func (hm *HookManager) BeforeLLM(ctx context.Context, req *LLMHookRequest) (*LLM
 		return req, HookDecision{Action: HookActionContinue}
 	}
 
-	current := req.Clone()
-	for _, reg := range hm.snapshotHooks() {
+	hooks := hm.snapshotHooks()
+	if len(hooks) == 0 {
+		return req, HookDecision{Action: HookActionContinue}
+	}
+
+	var current *LLMHookRequest
+	for _, reg := range hooks {
 		interceptor, ok := reg.Hook.(LLMInterceptor)
 		if !ok {
 			continue
+		}
+		if current == nil {
+			current = req.Clone()
 		}
 
 		next, decision, ok := hm.callBeforeLLM(ctx, reg.Name, interceptor, current.Clone())
@@ -351,6 +367,9 @@ func (hm *HookManager) BeforeLLM(ctx context.Context, req *LLMHookRequest) (*LLM
 			hm.logUnsupportedAction(reg.Name, "before_llm", decision.Action)
 		}
 	}
+	if current == nil {
+		return req, HookDecision{Action: HookActionContinue}
+	}
 	return current, HookDecision{Action: HookActionContinue}
 }
 
@@ -359,27 +378,54 @@ func (hm *HookManager) AfterLLM(ctx context.Context, resp *LLMHookResponse) (*LL
 		return resp, HookDecision{Action: HookActionContinue}
 	}
 
-	current := resp.Clone()
-	for _, reg := range hm.snapshotHooks() {
-		interceptor, ok := reg.Hook.(LLMInterceptor)
-		if !ok {
-			continue
-		}
+	return runAfterHooks(
+		hm.snapshotHooks(),
+		resp,
+		(*LLMHookResponse).Clone,
+		func(v *LLMHookResponse) bool { return v == nil },
+		func(reg HookRegistration, current *LLMHookResponse) (*LLMHookResponse, HookDecision, bool) {
+			interceptor, ok := reg.Hook.(LLMInterceptor)
+			if !ok {
+				return nil, HookDecision{}, false
+			}
+			return hm.callAfterLLM(ctx, reg.Name, interceptor, current.Clone())
+		},
+		"after_llm",
+		hm.logUnsupportedAction,
+	)
+}
 
-		next, decision, ok := hm.callAfterLLM(ctx, reg.Name, interceptor, current.Clone())
+// runAfterHooks applies after-stage interceptors in order. It clones the
+// original value only when at least one hook is mounted.
+func runAfterHooks[T any](
+	hooks []HookRegistration,
+	original T,
+	clone func(T) T,
+	isNil func(T) bool,
+	run func(reg HookRegistration, current T) (T, HookDecision, bool),
+	stage string,
+	logUnsupported func(name, stage string, action HookAction),
+) (T, HookDecision) {
+	if len(hooks) == 0 {
+		return original, HookDecision{Action: HookActionContinue}
+	}
+
+	current := clone(original)
+	for _, reg := range hooks {
+		next, decision, ok := run(reg, current)
 		if !ok {
 			continue
 		}
 
 		switch decision.normalizedAction() {
 		case HookActionContinue, HookActionModify:
-			if next != nil {
+			if !isNil(next) {
 				current = next
 			}
 		case HookActionAbortTurn, HookActionHardAbort:
 			return current, decision
 		default:
-			hm.logUnsupportedAction(reg.Name, "after_llm", decision.Action)
+			logUnsupported(reg.Name, stage, decision.Action)
 		}
 	}
 	return current, HookDecision{Action: HookActionContinue}
@@ -400,12 +446,56 @@ func (hm *HookManager) applyBeforeLLMControls(
 		next.Messages = cloneProviderMessages(current.Messages)
 	}
 	if !llmHookToolDefinitionsUnchanged(current.Tools, next.Tools) {
-		logger.WarnCF("hooks", "Hook attempted to modify tool definitions; preserving original tools", map[string]any{
-			"hook": hookName,
-		})
-		next.Tools = cloneToolDefinitions(current.Tools)
+		if existingToolDefinitionsChanged(current.Tools, next.Tools) {
+			logger.WarnCF(
+				"hooks",
+				"Hook attempted to modify or remove existing tool definitions; preserving originals",
+				map[string]any{"hook": hookName},
+			)
+		}
+		next.Tools = mergeHookAddedToolDefinitions(current.Tools, next.Tools)
 	}
 	return next
+}
+
+// mergeHookAddedToolDefinitions keeps the original tool definitions untouched
+// and appends only tools that the hook newly introduced. Existing tools can
+// never be removed or rewritten by a hook; additive injection (used for
+// plugin tool injection in before_llm) is allowed.
+func mergeHookAddedToolDefinitions(existing, updated []providers.ToolDefinition) []providers.ToolDefinition {
+	merged := cloneToolDefinitions(existing)
+	known := make(map[string]struct{}, len(existing))
+	for _, def := range existing {
+		known[def.Function.Name] = struct{}{}
+	}
+	for _, def := range updated {
+		name := def.Function.Name
+		if name == "" {
+			continue
+		}
+		if _, ok := known[name]; ok {
+			continue
+		}
+		known[name] = struct{}{}
+		merged = append(merged, def)
+	}
+	return merged
+}
+
+// existingToolDefinitionsChanged reports whether the hook removed or rewrote
+// any tool definition that already existed. Pure additions return false.
+func existingToolDefinitionsChanged(existing, updated []providers.ToolDefinition) bool {
+	byName := make(map[string]providers.ToolDefinition, len(updated))
+	for _, def := range providerVisibleToolDefinitions(updated) {
+		byName[def.Function.Name] = def
+	}
+	for _, def := range providerVisibleToolDefinitions(existing) {
+		other, ok := byName[def.Function.Name]
+		if !ok || !reflect.DeepEqual(def, other) {
+			return true
+		}
+	}
+	return false
 }
 
 func llmHookSystemMessagesUnchanged(before, after []providers.Message) bool {
@@ -471,11 +561,19 @@ func (hm *HookManager) BeforeTool(
 		return call, HookDecision{Action: HookActionContinue}
 	}
 
-	current := call.Clone()
-	for _, reg := range hm.snapshotHooks() {
+	hooks := hm.snapshotHooks()
+	if len(hooks) == 0 {
+		return call, HookDecision{Action: HookActionContinue}
+	}
+
+	var current *ToolCallHookRequest
+	for _, reg := range hooks {
 		interceptor, ok := reg.Hook.(ToolInterceptor)
 		if !ok {
 			continue
+		}
+		if current == nil {
+			current = call.Clone()
 		}
 
 		next, decision, ok := hm.callBeforeTool(ctx, reg.Name, interceptor, current.Clone())
@@ -498,6 +596,9 @@ func (hm *HookManager) BeforeTool(
 			hm.logUnsupportedAction(reg.Name, "before_tool", decision.Action)
 		}
 	}
+	if current == nil {
+		return call, HookDecision{Action: HookActionContinue}
+	}
 	return current, HookDecision{Action: HookActionContinue}
 }
 
@@ -509,30 +610,21 @@ func (hm *HookManager) AfterTool(
 		return result, HookDecision{Action: HookActionContinue}
 	}
 
-	current := result.Clone()
-	for _, reg := range hm.snapshotHooks() {
-		interceptor, ok := reg.Hook.(ToolInterceptor)
-		if !ok {
-			continue
-		}
-
-		next, decision, ok := hm.callAfterTool(ctx, reg.Name, interceptor, current.Clone())
-		if !ok {
-			continue
-		}
-
-		switch decision.normalizedAction() {
-		case HookActionContinue, HookActionModify:
-			if next != nil {
-				current = next
+	return runAfterHooks(
+		hm.snapshotHooks(),
+		result,
+		(*ToolResultHookResponse).Clone,
+		func(v *ToolResultHookResponse) bool { return v == nil },
+		func(reg HookRegistration, current *ToolResultHookResponse) (*ToolResultHookResponse, HookDecision, bool) {
+			interceptor, ok := reg.Hook.(ToolInterceptor)
+			if !ok {
+				return nil, HookDecision{}, false
 			}
-		case HookActionAbortTurn, HookActionHardAbort:
-			return current, decision
-		default:
-			hm.logUnsupportedAction(reg.Name, "after_tool", decision.Action)
-		}
-	}
-	return current, HookDecision{Action: HookActionContinue}
+			return hm.callAfterTool(ctx, reg.Name, interceptor, current.Clone())
+		},
+		"after_tool",
+		hm.logUnsupportedAction,
+	)
 }
 
 func (hm *HookManager) ApproveTool(ctx context.Context, req *ToolApprovalRequest) ApprovalDecision {
@@ -540,7 +632,12 @@ func (hm *HookManager) ApproveTool(ctx context.Context, req *ToolApprovalRequest
 		return ApprovalDecision{Approved: true}
 	}
 
-	for _, reg := range hm.snapshotHooks() {
+	hooks := hm.snapshotHooks()
+	if len(hooks) == 0 {
+		return ApprovalDecision{Approved: true}
+	}
+
+	for _, reg := range hooks {
 		approver, ok := reg.Hook.(ToolApprover)
 		if !ok {
 			continue
@@ -581,6 +678,9 @@ func (hm *HookManager) snapshotHooks() []HookRegistration {
 	hm.mu.RLock()
 	defer hm.mu.RUnlock()
 
+	if len(hm.ordered) == 0 {
+		return nil
+	}
 	snapshot := make([]HookRegistration, len(hm.ordered))
 	copy(snapshot, hm.ordered)
 	return snapshot
@@ -588,21 +688,29 @@ func (hm *HookManager) snapshotHooks() []HookRegistration {
 
 func (hm *HookManager) closeAllHooks() {
 	hm.mu.Lock()
-	defer hm.mu.Unlock()
-
+	hooks := make([]any, 0, len(hm.hooks))
 	for name, reg := range hm.hooks {
-		closeHookIfPossible(reg.Hook)
+		hooks = append(hooks, reg.Hook)
 		delete(hm.hooks, name)
 	}
 	hm.ordered = nil
+	hm.mu.Unlock()
+
+	for _, hook := range hooks {
+		closeHookIfPossible(hook)
+	}
 }
 
 func (hm *HookManager) runRuntimeObserver(
 	name string,
 	observer RuntimeEventObserver,
 	evt runtimeevents.Event,
+	timeout time.Duration,
 ) {
-	ctx, cancel := context.WithTimeout(context.Background(), hm.observerTimeout)
+	if timeout <= 0 {
+		timeout = hm.observerTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	done := make(chan error, 1)
@@ -623,7 +731,7 @@ func (hm *HookManager) runRuntimeObserver(
 		logger.WarnCF("hooks", "Runtime event observer timed out", map[string]any{
 			"hook":       name,
 			"event":      evt.Kind.String(),
-			"timeout_ms": hm.observerTimeout.Milliseconds(),
+			"timeout_ms": timeout.Milliseconds(),
 		})
 	}
 }

@@ -216,6 +216,35 @@ func TestNewManager_EmptyWorkspace(t *testing.T) {
 	}
 }
 
+func TestManager_ReloadObservesExternalWrites(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "state-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	reader := NewManager(tmpDir)
+	writer := NewManager(tmpDir)
+
+	if got := reader.GetLastChannel(); got != "" {
+		t.Fatalf("initial GetLastChannel() = %q, want empty", got)
+	}
+
+	if err := writer.SetLastChannel("telegram:123456"); err != nil {
+		t.Fatalf("SetLastChannel failed: %v", err)
+	}
+
+	if got := reader.GetLastChannel(); got != "" {
+		t.Fatalf("GetLastChannel() before Reload() = %q, want stale empty", got)
+	}
+
+	reader.Reload()
+
+	if got := reader.GetLastChannel(); got != "telegram:123456" {
+		t.Fatalf("GetLastChannel() after Reload() = %q, want %q", got, "telegram:123456")
+	}
+}
+
 func TestNewManager_MkdirFailureDoesNotCrash(t *testing.T) {
 	if os.Getenv("BE_CRASHER") == "1" {
 		tmpDir := os.Getenv("CRASH_DIR")

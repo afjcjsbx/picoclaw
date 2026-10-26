@@ -4,7 +4,6 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -121,6 +120,50 @@ func (p *Pipeline) ExecuteTools(
 	ts.setPhase(TurnPhaseTools)
 	messages := exec.messages
 	handledAttachments := make([]providers.Attachment, 0)
+	loopDetectionStatus := loopStatusNone
+	loopDetectionCount := 0
+	loopDetectionTool := ""
+	recordLoopCall := func(toolName string, toolArgs map[string]any) bool {
+		status, count := ts.recordToolCall(toolName, toolArgs)
+		if status > loopDetectionStatus {
+			loopDetectionStatus = status
+			loopDetectionCount = count
+			loopDetectionTool = toolName
+		}
+		return status == loopStatusCritical
+	}
+	// persistSkippedToolCall emits the skip event, appends the synthetic tool
+	// message to the turn and persists it to the session store.
+	persistSkippedToolCall := func(tc providers.ToolCall, reason, message string) {
+		al.emitEvent(
+			runtimeevents.KindAgentToolExecSkipped,
+			ts.eventMeta("runTurn", "turn.tool.skipped"),
+			ToolExecSkippedPayload{Tool: tc.Name, Reason: reason},
+		)
+		skippedMsg := providers.Message{
+			Role:       "tool",
+			Content:    message,
+			ToolCallID: tc.ID,
+		}
+		messages = append(messages, skippedMsg)
+		if !ts.opts.NoHistory {
+			warnSessionStoreError(
+				ts.sessionKey,
+				"add full message",
+				ts.agent.Sessions.AddFullMessage(ctx, ts.sessionKey, skippedMsg),
+			)
+			ts.recordPersistedMessage(skippedMsg)
+		}
+	}
+	skipRemainingForLoop := func(start int) {
+		const reason = "critical repeated tool-call loop detected"
+		const message = "Skipped because a repeated tool-call loop was detected."
+		for j := start; j < len(normalizedToolCalls); j++ {
+			persistSkippedToolCall(normalizedToolCalls[j], reason, message)
+		}
+	}
+
+	feedback := newToolFeedbackBatch(al, ts, exec)
 
 toolLoop:
 	for i, tc := range normalizedToolCalls {
@@ -152,7 +195,7 @@ toolLoop:
 			}
 			messages = append(messages, deniedMsg)
 			if !ts.opts.NoHistory {
-				ts.agent.Sessions.AddFullMessage(ts.sessionKey, deniedMsg)
+				warnSessionStoreError(ts.sessionKey, "add full message", ts.agent.Sessions.AddFullMessage(ctx, ts.sessionKey, deniedMsg))
 				ts.recordPersistedMessage(deniedMsg)
 			}
 			return true
@@ -179,12 +222,25 @@ toolLoop:
 				if toolReq != nil && toolReq.HookResult != nil {
 					hookResult := toolReq.HookResult
 
-					argsJSON, _ := json.Marshal(toolArgs)
-					argsPreview := utils.Truncate(string(argsJSON), 200)
-					logger.InfoCF("agent", fmt.Sprintf("Tool call (hook respond): %s(%s)", toolName, argsPreview),
+					// respond bypasses approve_tool by design (used for plugin
+					// tool injection). Surface the risky case where a hook
+					// shadows a tool that is actually registered, so operators
+					// can audit which sensitive tools were answered by a hook.
+					if _, registered := ts.agent.Tools.Get(toolName); registered {
+						logger.WarnCF("agent", "Hook respond shadows a registered tool and bypasses approval",
+							map[string]any{
+								"agent_id": ts.agent.ID,
+								"tool":     toolName,
+								"channel":  ts.channel,
+							})
+					}
+
+					logger.InfoCF("agent", fmt.Sprintf("Tool call (hook respond): %s", toolName),
 						map[string]any{
 							"agent_id":  ts.agent.ID,
 							"tool":      toolName,
+							"arg_keys":  utils.SortedArgKeys(toolArgs),
+							"arg_count": len(toolArgs),
 							"iteration": iteration,
 						})
 
@@ -197,26 +253,7 @@ toolLoop:
 						},
 					)
 
-					if shouldPublishToolFeedback(al.cfg, ts) && ts.channel != "pico" {
-						toolFeedbackMaxLen := al.cfg.Agents.Defaults.GetToolFeedbackMaxArgsLength()
-						toolFeedbackExplanation := toolFeedbackExplanationForToolCall(
-							exec.response,
-							tc,
-							messages,
-						)
-						feedbackMsg := utils.FormatToolFeedbackMessage(
-							toolName,
-							toolFeedbackExplanation,
-							toolFeedbackArgsPreview(toolArgs, toolFeedbackMaxLen),
-						)
-						fbCtx, fbCancel := context.WithTimeout(turnCtx, 3*time.Second)
-						_ = al.bus.PublishOutbound(fbCtx, outboundMessageForTurnWithOptions(
-							ts,
-							feedbackMsg,
-							outboundTurnMessageOptions{kind: messageKindToolFeedback},
-						))
-						fbCancel()
-					}
+					feedback.publish(turnCtx, i, tc, toolName, toolArgs, messages)
 
 					toolDuration := time.Duration(0)
 
@@ -290,6 +327,10 @@ toolLoop:
 						exec.allResponsesHandled = false
 					}
 
+					// A hook-respond result bypasses tool execution, so apply the
+					// large-result spill here too (no-op for already-bounded results).
+					ts.agent.Tools.SpillLargeResult(hookResult, toolName)
+
 					contentForLLM := hookResult.ContentForLLM()
 					if al.cfg.Tools.IsFilterSensitiveDataEnabled() {
 						contentForLLM = al.cfg.FilterSensitiveData(contentForLLM)
@@ -297,7 +338,10 @@ toolLoop:
 
 					var toolResultMedia []string
 					if len(hookResult.Media) > 0 && !hookResult.ResponseHandled {
-						hookResult.ArtifactTags = buildArtifactTags(al.mediaStore, hookResult.Media)
+						hookResult.ArtifactTags = appendArtifactTags(
+							hookResult.ArtifactTags,
+							buildArtifactTags(al.mediaStore, hookResult.Media),
+						)
 						contentForLLM = hookResult.ContentForLLM()
 						if al.cfg.Tools.IsFilterSensitiveDataEnabled() {
 							contentForLLM = al.cfg.FilterSensitiveData(contentForLLM)
@@ -327,9 +371,13 @@ toolLoop:
 
 					messages = append(messages, toolResultMsg)
 					if !ts.opts.NoHistory {
-						ts.agent.Sessions.AddFullMessage(ts.sessionKey, toolResultMsg)
+						warnSessionStoreError(ts.sessionKey, "add full message", ts.agent.Sessions.AddFullMessage(ctx, ts.sessionKey, toolResultMsg))
 						ts.recordPersistedMessage(toolResultMsg)
 						ts.ingestMessage(turnCtx, al, toolResultMsg)
+					}
+					if recordLoopCall(toolName, toolArgs) {
+						skipRemainingForLoop(i + 1)
+						break toolLoop
 					}
 
 					if steerMsgs := al.dequeueSteeringMessagesForScope(ts.sessionKey); len(steerMsgs) > 0 {
@@ -357,25 +405,7 @@ toolLoop:
 									"reason":    skipReason,
 								})
 							for j := i + 1; j < len(normalizedToolCalls); j++ {
-								skippedTC := normalizedToolCalls[j]
-								al.emitEvent(
-									runtimeevents.KindAgentToolExecSkipped,
-									ts.eventMeta("runTurn", "turn.tool.skipped"),
-									ToolExecSkippedPayload{
-										Tool:   skippedTC.Name,
-										Reason: skipReason,
-									},
-								)
-								skippedMsg := providers.Message{
-									Role:       "tool",
-									Content:    skipMessage,
-									ToolCallID: skippedTC.ID,
-								}
-								messages = append(messages, skippedMsg)
-								if !ts.opts.NoHistory {
-									ts.agent.Sessions.AddFullMessage(ts.sessionKey, skippedMsg)
-									ts.recordPersistedMessage(skippedMsg)
-								}
+								persistSkippedToolCall(normalizedToolCalls[j], skipReason, skipMessage)
 							}
 						}
 						break toolLoop
@@ -389,7 +419,7 @@ toolLoop:
 								msg := subTurnResultPromptMessage(content)
 								messages = append(messages, msg)
 								if !ts.opts.NoHistory {
-									ts.agent.Sessions.AddFullMessage(ts.sessionKey, msg)
+									warnSessionStoreError(ts.sessionKey, "add full message", ts.agent.Sessions.AddFullMessage(ctx, ts.sessionKey, msg))
 								}
 							}
 						default:
@@ -422,7 +452,7 @@ toolLoop:
 				}
 				messages = append(messages, deniedMsg)
 				if !ts.opts.NoHistory {
-					ts.agent.Sessions.AddFullMessage(ts.sessionKey, deniedMsg)
+					warnSessionStoreError(ts.sessionKey, "add full message", ts.agent.Sessions.AddFullMessage(ctx, ts.sessionKey, deniedMsg))
 					ts.recordPersistedMessage(deniedMsg)
 				}
 				continue
@@ -461,7 +491,7 @@ toolLoop:
 				}
 				messages = append(messages, deniedMsg)
 				if !ts.opts.NoHistory {
-					ts.agent.Sessions.AddFullMessage(ts.sessionKey, deniedMsg)
+					warnSessionStoreError(ts.sessionKey, "add full message", ts.agent.Sessions.AddFullMessage(ctx, ts.sessionKey, deniedMsg))
 					ts.recordPersistedMessage(deniedMsg)
 				}
 				continue
@@ -472,12 +502,12 @@ toolLoop:
 			continue
 		}
 
-		argsJSON, _ := json.Marshal(toolArgs)
-		argsPreview := utils.Truncate(string(argsJSON), 200)
-		logger.InfoCF("agent", fmt.Sprintf("Tool call: %s(%s)", toolName, argsPreview),
+		logger.InfoCF("agent", fmt.Sprintf("Tool call: %s", toolName),
 			map[string]any{
 				"agent_id":  ts.agent.ID,
 				"tool":      toolName,
+				"arg_keys":  utils.SortedArgKeys(toolArgs),
+				"arg_count": len(toolArgs),
 				"iteration": iteration,
 			})
 		al.emitEvent(
@@ -489,26 +519,7 @@ toolLoop:
 			},
 		)
 
-		if shouldPublishToolFeedback(al.cfg, ts) && ts.channel != "pico" {
-			toolFeedbackMaxLen := al.cfg.Agents.Defaults.GetToolFeedbackMaxArgsLength()
-			toolFeedbackExplanation := toolFeedbackExplanationForToolCall(
-				exec.response,
-				tc,
-				messages,
-			)
-			feedbackMsg := utils.FormatToolFeedbackMessage(
-				toolName,
-				toolFeedbackExplanation,
-				toolFeedbackArgsPreview(toolArgs, toolFeedbackMaxLen),
-			)
-			fbCtx, fbCancel := context.WithTimeout(turnCtx, 3*time.Second)
-			_ = al.bus.PublishOutbound(fbCtx, outboundMessageForTurnWithOptions(
-				ts,
-				feedbackMsg,
-				outboundTurnMessageOptions{kind: messageKindToolFeedback},
-			))
-			fbCancel()
-		}
+		feedback.publish(turnCtx, i, tc, toolName, toolArgs, messages)
 
 		toolCallID := tc.ID
 		asyncToolName := toolName
@@ -554,6 +565,8 @@ toolLoop:
 		}
 
 		toolStart := time.Now()
+		executedToolName := toolName
+		executedToolArgs := cloneStringAnyMap(toolArgs)
 		execCtx := tools.WithToolInboundContext(
 			turnCtx,
 			ts.channel,
@@ -567,6 +580,11 @@ toolLoop:
 			ts.sessionKey,
 			ts.opts.Dispatch.SessionScope,
 		)
+		if ts.parentTurnState != nil {
+			// SubTurns join their async children before finishing; root turns
+			// keep the fire-and-forget follow-up via the bus.
+			execCtx = tools.WithChildTracker(execCtx, ts)
+		}
 		toolResult := ts.agent.Tools.ExecuteWithContext(
 			execCtx,
 			toolName,
@@ -614,6 +632,11 @@ toolLoop:
 		if toolResult == nil {
 			toolResult = tools.ErrorResult("hook returned nil tool result")
 		}
+
+		// Re-apply the large-result spill: the registry already spilled the
+		// original result, but an AfterTool hook may have replaced it with a
+		// fresh oversized payload. Spilling here keeps every code path bounded.
+		ts.agent.Tools.SpillLargeResult(toolResult, toolName)
 
 		if len(toolResult.Media) > 0 && toolResult.ResponseHandled {
 			parts := make([]bus.MediaPart, 0, len(toolResult.Media))
@@ -666,7 +689,10 @@ toolLoop:
 		}
 
 		if len(toolResult.Media) > 0 && !toolResult.ResponseHandled {
-			toolResult.ArtifactTags = buildArtifactTags(al.mediaStore, toolResult.Media)
+			toolResult.ArtifactTags = appendArtifactTags(
+				toolResult.ArtifactTags,
+				buildArtifactTags(al.mediaStore, toolResult.Media),
+			)
 		}
 
 		if !toolResult.ResponseHandled {
@@ -715,9 +741,13 @@ toolLoop:
 		)
 		messages = append(messages, toolResultMsg)
 		if !ts.opts.NoHistory {
-			ts.agent.Sessions.AddFullMessage(ts.sessionKey, toolResultMsg)
+			warnSessionStoreError(ts.sessionKey, "add full message", ts.agent.Sessions.AddFullMessage(ctx, ts.sessionKey, toolResultMsg))
 			ts.recordPersistedMessage(toolResultMsg)
 			ts.ingestMessage(turnCtx, al, toolResultMsg)
+		}
+		if recordLoopCall(executedToolName, executedToolArgs) {
+			skipRemainingForLoop(i + 1)
+			break toolLoop
 		}
 
 		if steerMsgs := al.dequeueSteeringMessagesForScope(ts.sessionKey); len(steerMsgs) > 0 {
@@ -745,25 +775,7 @@ toolLoop:
 						"reason":    skipReason,
 					})
 				for j := i + 1; j < len(normalizedToolCalls); j++ {
-					skippedTC := normalizedToolCalls[j]
-					al.emitEvent(
-						runtimeevents.KindAgentToolExecSkipped,
-						ts.eventMeta("runTurn", "turn.tool.skipped"),
-						ToolExecSkippedPayload{
-							Tool:   skippedTC.Name,
-							Reason: skipReason,
-						},
-					)
-					skippedMsg := providers.Message{
-						Role:       "tool",
-						Content:    skipMessage,
-						ToolCallID: skippedTC.ID,
-					}
-					messages = append(messages, skippedMsg)
-					if !ts.opts.NoHistory {
-						ts.agent.Sessions.AddFullMessage(ts.sessionKey, skippedMsg)
-						ts.recordPersistedMessage(skippedMsg)
-					}
+					persistSkippedToolCall(normalizedToolCalls[j], skipReason, skipMessage)
 				}
 			}
 			break toolLoop
@@ -777,7 +789,7 @@ toolLoop:
 					msg := subTurnResultPromptMessage(content)
 					messages = append(messages, msg)
 					if !ts.opts.NoHistory {
-						ts.agent.Sessions.AddFullMessage(ts.sessionKey, msg)
+						warnSessionStoreError(ts.sessionKey, "add full message", ts.agent.Sessions.AddFullMessage(ctx, ts.sessionKey, msg))
 					}
 				}
 			default:
@@ -786,6 +798,47 @@ toolLoop:
 	}
 
 	exec.messages = messages
+	if loopDetectionStatus == loopStatusCritical {
+		// A steering message that arrived while the repeated tool was running
+		// takes precedence over loop termination: the user asked for a change
+		// of direction, so let the model react to it. The loop guard still
+		// applies on the next iteration if the model keeps repeating the call.
+		if steerMsgs := al.dequeueSteeringMessagesForScope(ts.sessionKey); len(steerMsgs) > 0 {
+			logger.InfoCF("agent", "Steering arrived during critical loop detection; continuing turn",
+				map[string]any{
+					"agent_id":       ts.agent.ID,
+					"steering_count": len(steerMsgs),
+				})
+			exec.pendingMessages = append(exec.pendingMessages, steerMsgs...)
+			exec.allResponsesHandled = false
+			return ToolControlContinue
+		}
+		logger.WarnCF("agent", "Critical repeated tool-call loop detected; stopping turn",
+			map[string]any{
+				"agent_id": ts.agent.ID,
+				"turn_id":  ts.turnID,
+				"tool":     loopDetectionTool,
+				"repeats":  loopDetectionCount,
+			})
+		exec.allResponsesHandled = false
+		exec.finalContent = loopDetectionResponse
+		return ToolControlBreak
+	}
+	if loopDetectionStatus == loopStatusWarning {
+		warning := providers.Message{
+			Role: "system",
+			Content: fmt.Sprintf(
+				"[Loop Warning] Tool %q was called %d consecutive times with identical arguments. If you are stuck, try a different approach.",
+				loopDetectionTool,
+				loopDetectionCount,
+			),
+		}
+		// The warning is deliberately turn-local: it guides the next LLM call but
+		// is not persisted into session history after the loop has been resolved.
+		messages = append(messages, warning)
+		exec.loopWarnings = append(exec.loopWarnings, warning)
+		exec.messages = messages
+	}
 
 	// Continue if pending steering exists (regardless of allResponsesHandled).
 	// This covers the case where tools were partially executed and skipped due to steering,
@@ -821,10 +874,14 @@ toolLoop:
 			Attachments: append([]providers.Attachment(nil), handledAttachments...),
 		}
 		if !ts.opts.NoHistory {
-			ts.agent.Sessions.AddFullMessage(ts.sessionKey, summaryMsg)
+			warnSessionStoreError(
+				ts.sessionKey,
+				"add full message",
+				ts.agent.Sessions.AddFullMessage(ctx, ts.sessionKey, summaryMsg),
+			)
 			ts.recordPersistedMessage(summaryMsg)
 			ts.ingestMessage(turnCtx, al, summaryMsg)
-			if err := ts.agent.Sessions.Save(ts.sessionKey); err != nil {
+			if err := ts.agent.Sessions.Save(ctx, ts.sessionKey); err != nil {
 				logger.WarnCF("agent", "Failed to save session after tool delivery",
 					map[string]any{
 						"agent_id": ts.agent.ID,
@@ -856,9 +913,9 @@ toolLoop:
 	// allResponsesHandled=false and no pending steering: continue so coordinator
 	// makes another LLM call. The tool result is in messages and the LLM will
 	// return it as finalContent in the next iteration.
-	ts.agent.Tools.TickTTL()
-	logger.DebugCF("agent", "TTL tick after tool execution", map[string]any{
-		"agent_id": ts.agent.ID, "iteration": iteration,
-	})
+	//
+	// Discovery TTL is intentionally NOT ticked here: it advances once per
+	// conversational turn in runTurn, so a tool discovered in this turn stays
+	// callable across the remaining tool-loop iterations of the same turn.
 	return ToolControlContinue
 }

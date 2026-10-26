@@ -3,6 +3,7 @@ package seahorse
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 
 	"github.com/sipeed/picoclaw/pkg/logger"
 )
@@ -15,7 +16,7 @@ const (
 		tokenize="trigram"
 	)`
 	sqlCreateMessagesFTS = `CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
-		message_id,
+		message_id UNINDEXED,
 		content,
 		tokenize="trigram"
 	)`
@@ -114,6 +115,7 @@ func runSchema(db *sql.DB) error {
 		// Indexes for common query patterns
 		`CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(conversation_id, created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_message_parts_message ON message_parts(message_id, ordinal)`,
 		`CREATE INDEX IF NOT EXISTS idx_summaries_conversation ON summaries(conversation_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_summaries_kind_depth ON summaries(conversation_id, kind, depth)`,
 		`CREATE INDEX IF NOT EXISTS idx_summary_parents_parent ON summary_parents(parent_summary_id)`,
@@ -141,16 +143,18 @@ func runSchema(db *sql.DB) error {
 			INSERT INTO summaries_fts (summary_id, content) VALUES (new.summary_id, new.content);
 		END`,
 
-		// FTS5 triggers to keep messages_fts in sync with messages table
+		// FTS5 triggers to keep messages_fts in sync with messages table.
+		// messages_fts uses the message_id as its FTS5 rowid so DELETE/UPDATE
+		// target a row in O(log n) instead of scanning the whole FTS table.
 		`CREATE TRIGGER messages_ai AFTER INSERT ON messages BEGIN
-			INSERT INTO messages_fts (message_id, content) VALUES (new.message_id, new.content);
+			INSERT INTO messages_fts (rowid, message_id, content) VALUES (new.message_id, new.message_id, new.content);
 		END`,
 		`CREATE TRIGGER messages_ad AFTER DELETE ON messages BEGIN
-			DELETE FROM messages_fts WHERE message_id = old.message_id;
+			DELETE FROM messages_fts WHERE rowid = old.message_id;
 		END`,
 		`CREATE TRIGGER messages_au AFTER UPDATE ON messages BEGIN
-			DELETE FROM messages_fts WHERE message_id = old.message_id;
-			INSERT INTO messages_fts (message_id, content) VALUES (new.message_id, new.content);
+			DELETE FROM messages_fts WHERE rowid = old.message_id;
+			INSERT INTO messages_fts (rowid, message_id, content) VALUES (new.message_id, new.message_id, new.content);
 		END`,
 	}
 
@@ -164,6 +168,9 @@ func runSchema(db *sql.DB) error {
 		return err
 	}
 	if err := ensureMessagesModelNameColumn(db); err != nil {
+		return err
+	}
+	if err := ensureMessagesFTSRowid(db); err != nil {
 		return err
 	}
 	return nil
@@ -199,33 +206,68 @@ func ensureMessagesModelNameColumn(db *sql.DB) error {
 	return nil
 }
 
-func tableHasColumn(db *sql.DB, tableName, columnName string) (bool, error) {
-	rows, err := db.Query(fmt.Sprintf(`PRAGMA table_info(%s)`, tableName))
+// ensureMessagesFTSRowid migrates legacy messages_fts tables to use the
+// message_id as the FTS5 rowid. Legacy tables stored message_id only as an
+// indexed column, so the DELETE trigger had to run
+// "DELETE FROM messages_fts WHERE message_id = ?" which scans the entire FTS
+// table per deleted row (O(n^2)). Making message_id the rowid lets the trigger
+// delete by rowid in O(log n).
+//
+// Detection is based on the table DDL: only tables created or rebuilt by the
+// current schema declare message_id as UNINDEXED, and those always keep
+// rowid == message_id.
+func ensureMessagesFTSRowid(db *sql.DB) error {
+	var ddl string
+	err := db.QueryRow(
+		`SELECT COALESCE(sql, '') FROM sqlite_master WHERE type = 'table' AND name = 'messages_fts'`,
+	).Scan(&ddl)
+	if err == sql.ErrNoRows {
+		return nil // table not created yet; schema will create the current form
+	}
 	if err != nil {
-		return false, err
+		return fmt.Errorf("read messages_fts schema: %w", err)
 	}
-	defer rows.Close()
+	if strings.Contains(ddl, "UNINDEXED") {
+		return nil // already migrated
+	}
+	return rebuildMessagesFTS(db)
+}
 
-	for rows.Next() {
-		var (
-			cid        int
-			name       string
-			columnType string
-			notNull    int
-			defaultVal sql.NullString
-			pk         int
-		)
-		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultVal, &pk); err != nil {
-			return false, err
-		}
-		if name == columnName {
-			return true, nil
-		}
+// rebuildMessagesFTS drops and recreates messages_fts with the current
+// definition and repopulates it from the messages table, aligning rowid with
+// message_id.
+func rebuildMessagesFTS(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin messages_fts rebuild: %w", err)
 	}
-	if err := rows.Err(); err != nil {
-		return false, err
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`DROP TABLE IF EXISTS messages_fts`); err != nil {
+		return fmt.Errorf("drop messages_fts: %w", err)
 	}
-	return false, nil
+	if _, err := tx.Exec(sqlCreateMessagesFTS); err != nil {
+		return fmt.Errorf("recreate messages_fts: %w", err)
+	}
+	if _, err := tx.Exec(
+		`INSERT INTO messages_fts (rowid, message_id, content)
+		 SELECT message_id, message_id, content FROM messages`,
+	); err != nil {
+		return fmt.Errorf("repopulate messages_fts: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit messages_fts rebuild: %w", err)
+	}
+	return nil
+}
+
+func tableHasColumn(db *sql.DB, tableName, columnName string) (bool, error) {
+	// pragma_table_info() table-valued function accepts bound parameters, unlike PRAGMA.
+	var found int
+	err := db.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?`, tableName, columnName,
+	).Scan(&found)
+	return found > 0, err
 }
 
 // checkFTS5Support verifies that SQLite has FTS5 with trigram tokenizer enabled.

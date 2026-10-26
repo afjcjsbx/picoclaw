@@ -274,7 +274,7 @@ type saveFailingSessionStore struct {
 	err error
 }
 
-func (s *saveFailingSessionStore) Save(_ string) error {
+func (s *saveFailingSessionStore) Save(_ context.Context, _ string) error {
 	return s.err
 }
 
@@ -407,6 +407,86 @@ func TestPipeline_CallLLM_UsesSuccessfulFallbackIdentityAlias(t *testing.T) {
 	}
 	if exec.llmModelName != "secondary" {
 		t.Fatalf("exec.llmModelName = %q, want %q", exec.llmModelName, "secondary")
+	}
+}
+
+func TestNewRateLimiterRegistry_CoversImageCandidates(t *testing.T) {
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         t.TempDir(),
+				ModelName:         "text-model",
+				ImageModel:        "vision-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 3,
+			},
+		},
+		ModelList: []*config.ModelConfig{
+			{ModelName: "text-model", Model: "openai/text-model"},
+			{ModelName: "vision-model", Model: "openai/vision-model", RPM: 1},
+		},
+	}
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), &simpleConvProvider{})
+	defer al.Close()
+
+	agent := al.registry.GetDefaultAgent()
+	if agent == nil || len(agent.ImageCandidates) != 1 {
+		t.Fatalf("expected one image candidate, got %+v", agent)
+	}
+	key := agent.ImageCandidates[0].StableKey()
+
+	// The first acquire consumes the only burst token.
+	if err := al.fallback.Acquire(context.Background(), key); err != nil {
+		t.Fatalf("first Acquire() error = %v", err)
+	}
+	// The second must block: the image candidate's RPM limiter is registered.
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := al.fallback.Acquire(ctx, key); err == nil {
+		t.Fatal("expected Acquire() to block once the image candidate's RPM token is exhausted")
+	}
+}
+
+func TestPipeline_CallLLM_EnforcesRPMForSingleCandidate(t *testing.T) {
+	provider := &sequenceProvider{}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+
+	agent.Model = "solo-model"
+	agent.Candidates = []providers.FallbackCandidate{
+		{Provider: "openai", Model: "gpt-5.4", IdentityKey: "model_name:solo", RPM: 1},
+	}
+	rl := providers.NewRateLimiterRegistry()
+	rl.RegisterCandidates(agent.Candidates)
+	al.fallback = providers.NewFallbackChain(providers.NewCooldownTracker(), rl)
+
+	pipeline := NewPipeline(al)
+	ts := newTurnState(agent, makeTestProcessOpts("test-session"), turnEventScope{
+		turnID:  "turn-1",
+		context: newTurnContext(nil, nil, nil),
+	})
+	exec, err := pipeline.SetupTurn(context.Background(), ts)
+	if err != nil {
+		t.Fatalf("SetupTurn failed: %v", err)
+	}
+
+	// The first call consumes the only burst token and reaches the provider.
+	if _, err = pipeline.CallLLM(context.Background(), context.Background(), ts, exec, 1); err != nil {
+		t.Fatalf("first CallLLM failed: %v", err)
+	}
+	if provider.callCount != 1 {
+		t.Fatalf("provider calls after first CallLLM = %d, want 1", provider.callCount)
+	}
+
+	// The second call must wait for a token and never reach the provider.
+	waitCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, err = pipeline.CallLLM(context.Background(), waitCtx, ts, exec, 2)
+	if err == nil {
+		t.Fatal("expected second CallLLM to fail while waiting for the local RPM token")
+	}
+	if provider.callCount != 1 {
+		t.Fatalf("provider calls after rate-limited CallLLM = %d, want 1", provider.callCount)
 	}
 }
 

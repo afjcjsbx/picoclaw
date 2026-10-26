@@ -116,13 +116,14 @@ Supported flags:
 |------|---------|
 | `--env`, `-e` | Add a stdio environment variable in `KEY=value` format. Repeatable. Values are saved to config. |
 | `--env-file` | Attach an env file path to a stdio server. Recommended for secrets you do not want stored inline in `config.json`. |
+| `--inherit-env` | Pass the full PicoClaw process environment to this stdio server. By default, only basic process variables are inherited. |
 | `--header`, `-H` | Add an HTTP header in `Name: Value` or `Name=Value` format. Repeatable. |
 | `--transport`, `-t` | Transport type: `stdio` (default), `http` / `streamable-http`, or `sse`. |
 | `--force`, `-f` | Overwrite an existing server entry without confirmation. |
 | `--deferred` | Mark the server as deferred: tools are hidden and discoverable on demand. |
 | `--no-deferred` | Mark the server as non-deferred: tools are always loaded into context. |
 
-When neither `--deferred` nor `--no-deferred` is passed, the `deferred` field is omitted from the stored config and the global `discovery.enabled` value applies at runtime.
+When neither `--deferred` nor `--no-deferred` is passed, the `deferred` field is omitted from the stored config and the global `discovery.enabled` value applies at runtime. A stored `deferred: true` only takes effect when `discovery.enabled` is `true`; otherwise the server's tools stay visible. Passing both flags in the same invocation is rejected as a conflict.
 
 Supported forms:
 
@@ -195,6 +196,7 @@ For `stdio`:
 - `[args...]` are stored in `args`
 - `--env` is supported
 - `--env-file` is supported and stored in `env_file`
+- `--inherit-env` is supported and stored as `inherit_env: true`
 - `--header` is rejected
 - `-- <command> [args...]` is supported and recommended for unambiguous parsing
 
@@ -204,6 +206,7 @@ For `http` / `streamable-http` / `sse`:
 - extra command args are rejected
 - `--env` is rejected
 - `--env-file` is rejected
+- `--inherit-env` is rejected
 - `--header` is supported and stored in `headers`
 - `http` and `streamable-http` use streamable HTTP request-response mode
 - `sse` uses the same streamable HTTP transport, but also enables the optional standalone SSE listener for server-initiated notifications
@@ -330,65 +333,33 @@ It is useful when:
 
 ## `picoclaw mcp login` and `logout`
 
-Remote HTTP/SSE servers can use OAuth instead of a static Authorization header:
+Remote MCP servers can use browser OAuth instead of a static bearer header:
 
 ```bash
-picoclaw mcp add remote https://mcp.example.com/mcp --transport http
 picoclaw mcp login remote
-picoclaw mcp test remote
 picoclaw mcp logout remote
 ```
 
-Login discovers the server's OAuth metadata, opens your browser, and receives the
-OAuth callback on `http://127.0.0.1:<port>/callback`. It uses authorization code
-flow with S256 PKCE and state validation. Dynamic client registration is used by
-default. For a pre-registered **public** client, use:
+For a plugin server, add `"mcp_oauth": {"remote": {}}` to its plugin entry
+and use its qualified name:
 
 ```bash
-picoclaw mcp login remote --client-id YOUR_CLIENT_ID \
-  --issuer https://auth.example.com --callback-port 8123
+picoclaw mcp login supermemory:supermemory
+picoclaw mcp logout supermemory:supermemory
 ```
 
-Register `http://127.0.0.1:8123/callback` with that authorization server. Without
-`--callback-port`, login selects a free port. Confidential clients requiring a
-client secret are not configurable through this command.
+Login discovers the server's OAuth metadata, opens the browser, and receives
+the callback on a local loopback port. Use `--no-browser` to print the URL,
+`--callback-port` for a fixed port, `--scope` for requested scopes, and
+`--client-id` with `--issuer` for a registered public client. The login timeout
+defaults to five minutes and can be changed with `--timeout`; the flow is
+cancelled when the deadline expires. Tokens are stored under `$PICOCLAW_HOME/auth/mcp/`
+with owner-only permissions, outside `config.json`; background connections
+reuse and refresh them. Logout removes local credentials but does not revoke
+server-side tokens. Restart a running gateway to close its active session.
 
-Additional options:
-
-- `--scope tools,offline_access`: override discovered scopes.
-- `--no-browser`: print the authorization URL without launching a browser.
-- `--timeout 5m`: bound the login wait (maximum five minutes).
-
-For SSH/headless use, select a fixed callback port and forward that port to your
-local browser machine, for example `ssh -L 8123:127.0.0.1:8123 host`, then run login
-with `--no-browser --callback-port 8123`. The callback listener binds only to IPv4
-loopback. Browser launch failures also leave the URL available for manual use.
-
-A successful login saves the `oauth` configuration on that server. The gateway,
-`mcp test`, and other connection probes reuse stored tokens and refresh expired
-access tokens automatically. They never initiate an interactive login: missing,
-rejected, or unrefreshable credentials produce an instruction to run `mcp login`.
-Re-login also obtains additional scopes when server requirements change.
-
-Credentials are stored separately from `config.json`, under
-`$PICOCLAW_HOME/auth/mcp/` (default `~/.picoclaw/auth/mcp/`), using hashed filenames
-bound to the server name, URL and OAuth configuration. Changing those settings
-requires another login. On Unix, token files have mode `0600` and the store
-directory has mode `0700`; writes use atomic replacement. Tokens are local JSON
-files, not encrypted or stored in an OS keychain. Protect this directory and its
-backups as credentials. Refresh and logout are serialized within each process;
-avoid multiple processes refreshing the same server credentials concurrently.
-
-Logout removes credentials for the current server configuration. It does not
-revoke tokens at the provider; restart running gateways to close existing
-sessions. Log out before renaming a server or changing its URL/OAuth settings to
-remove the corresponding old credentials.
-
-OAuth requires HTTPS, except for local loopback development servers. Combining
-`oauth` with any case variant of the `Authorization` header is rejected. Custom
-non-Authorization headers still work and are sent only to the MCP endpoint.
-OAuth requests do not follow HTTP redirects; configure the final endpoint URL.
-Existing static Bearer headers and stdio servers continue to work without OAuth.
+OAuth cannot be combined with an `Authorization` header. The MCP endpoint and
+OAuth URLs must use HTTPS, except for loopback development servers.
 
 ## `picoclaw mcp edit`
 
@@ -403,6 +374,8 @@ This opens the config file in the editor pointed to by `$EDITOR`.
 Use it when you need to configure MCP fields that are not exposed directly by `picoclaw mcp add`.
 
 If `$EDITOR` is not set, the command fails with an explicit error.
+
+The config is validated against the schema after the editor exits: if the saved document is invalid, the command reports the error instead of leaving a broken config behind.
 
 ## Recommended Workflow
 
@@ -421,5 +394,5 @@ For advanced cases:
 
 ## Related Docs
 
-- [Tools Configuration](tools_configuration.md#mcp-tool): MCP config structure, transports, discovery, and examples
+- [MCP tools](../tools/mcp.md): MCP config structure, transports, discovery, and examples
 - [README](../README.md): high-level overview

@@ -84,6 +84,10 @@
     "noHistory": "Nenhum histórico de chat ainda",
     "historyLoadFailed": "Falha ao carregar histórico de chat",
     "historyOpenFailed": "Falha ao abrir este histórico de chat",
+    "forkAtMessage": "Criar ramificação a partir desta mensagem",
+    "forkedConversation": "Esta conversa é uma ramificação de outra",
+    "backToOriginal": "Voltar à conversa original",
+    "forkFailed": "Falha ao criar ramificação da conversa",
     "loadingMore": "Carregando mais...",
     "deleteSession": "Excluir sessão",
     "messagesCount": "{{count}} mensagens",
@@ -354,6 +358,8 @@
       "extraBodyHint": "Campos JSON adicionais para injetar no body da requisição, ex: {\"reasoning_split\": true}.",
       "customHeaders": "Headers Customizados",
       "customHeadersHint": "Headers HTTP adicionais para injetar em cada requisição, ex: {\"X-Source\": \"coding-plan\"}.",
+      "sessionHeader": "Header de Sessão",
+      "sessionHeaderHint": "Nome do header para um ID de sessão estável por conversa (exigido por relays como OpenCode Go). Cada requisição carrega o ID da conversa ativa.",
       "invalidJson": "Formato JSON inválido"
     },
     "edit": {

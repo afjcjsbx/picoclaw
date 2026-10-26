@@ -4,6 +4,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"strings"
 	"sync"
@@ -115,6 +116,7 @@ type ActiveTurnInfo struct {
 type turnExecution struct {
 	// Core message state (accumulates throughout the turn)
 	messages         []providers.Message // built from ContextBuilder, grows per-iteration
+	loopWarnings     []providers.Message // turn-local warnings restored after context compaction
 	pendingMessages  []providers.Message // steering/SubTurn messages awaiting injection
 	history          []providers.Message // from ContextManager.Assemble
 	summary          string
@@ -132,6 +134,11 @@ type turnExecution struct {
 	activeModelConfig *config.ModelConfig
 	activeProvider    providers.LLMProvider
 	usedLight         bool
+
+	// Mid-turn routing guards. toolIterationStreak counts consecutive
+	// light-model responses that requested tools.
+	toolIterationStreak int
+	escalatedToPrimary  bool
 
 	// LLM call per-iteration state
 	response            *providers.LLMResponse
@@ -228,7 +235,10 @@ type turnState struct {
 
 	restorePointHistory []providers.Message
 	restorePointSummary string
-	persistedMessages   []providers.Message
+	// restoreSummaryPinned freezes restorePointSummary once the session summary
+	// holds part of this turn, so a rollback does not keep the aborted work.
+	restoreSummaryPinned bool
+	persistedMessages    []providers.Message
 
 	// SubTurn support (from HEAD)
 	depth                int                    // SubTurn depth (0 for root turn)
@@ -236,6 +246,7 @@ type turnState struct {
 	childTurnIDs         []string               // Child turn IDs
 	pendingResults       chan *tools.ToolResult // Channel for SubTurn results
 	concurrencySem       chan struct{}          // Semaphore for limiting concurrent SubTurns
+	children             sync.WaitGroup         // Async children a SubTurn must join before finishing
 	isFinished           atomic.Bool            // Whether this turn has finished
 	session              session.SessionStore   // Session store reference
 	initialHistoryLength int                    // Snapshot of history length at turn start
@@ -254,8 +265,17 @@ type turnState struct {
 	lastFinishReason string               // Last LLM finish_reason
 	lastUsage        *providers.UsageInfo // Last LLM usage info
 
-	// Back-reference to the owning AgentLoop (set for SubTurns only, used for hard abort cascade)
+	// Back-reference to the owning AgentLoop (set on every turn, used for hard abort cascade)
 	al *AgentLoop
+
+	// Tool-loop detection is scoped to a single turn.
+	loopDetectionHistory []uint64
+	loopDetectionNext    int
+	loopDetectionConfig  config.LoopDetectionConfig
+
+	// Latest explanation shown in compact tool feedback (channels that cannot
+	// edit messages), used to avoid repeating it on every tool call.
+	lastToolFeedbackExplanation string
 }
 
 // =============================================================================
@@ -263,32 +283,55 @@ type turnState struct {
 // =============================================================================
 
 func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScope) *turnState {
+	// Cron origin survives in SenderID when a scheduled turn spawns a subturn.
+	// The session key also identifies a scheduled root turn if sender metadata is absent;
+	// with a real sender it is a user continuing a cron session, who keeps the tool.
+	senderID := opts.Dispatch.SenderID()
+	if agent != nil && agent.Tools != nil &&
+		(senderID == "cron" || (senderID == "" && strings.HasPrefix(opts.Dispatch.SessionKey, cronSessionKeyPrefix))) {
+		cronAgent := *agent
+		cronAgent.Tools = agent.Tools.CloneWithout("cron")
+		agent = &cronAgent
+	}
+
 	ts := &turnState{
-		agent:        agent,
-		opts:         opts,
-		profile:      opts.TurnProfile,
-		scope:        scope,
-		turnID:       scope.turnID,
-		agentID:      agent.ID,
-		sessionKey:   opts.Dispatch.SessionKey,
-		activeSkills: activeSkillNames(agent, opts),
-		turnCtx:      cloneTurnContext(scope.context),
-		channel:      opts.Dispatch.Channel(),
-		chatID:       opts.Dispatch.ChatID(),
-		workspace:    agent.Workspace,
-		userMessage:  opts.Dispatch.UserMessage,
-		media:        append([]string(nil), opts.Dispatch.Media...),
-		phase:        TurnPhaseSetup,
-		startedAt:    time.Now(),
+		agent:               agent,
+		opts:                opts,
+		profile:             opts.TurnProfile,
+		scope:               scope,
+		turnID:              scope.turnID,
+		agentID:             agent.ID,
+		sessionKey:          opts.Dispatch.SessionKey,
+		activeSkills:        activeSkillNames(agent, opts),
+		turnCtx:             cloneTurnContext(scope.context),
+		channel:             opts.Dispatch.Channel(),
+		chatID:              opts.Dispatch.ChatID(),
+		workspace:           agent.Workspace,
+		userMessage:         opts.Dispatch.UserMessage,
+		media:               append([]string(nil), opts.Dispatch.Media...),
+		phase:               TurnPhaseSetup,
+		startedAt:           time.Now(),
+		loopDetectionConfig: agent.LoopDetection.Normalized(),
 	}
 
 	// Bind session store and capture initial history length for rollback logic
 	if agent != nil && agent.Sessions != nil {
 		ts.session = agent.Sessions
-		history := agent.Sessions.GetHistory(opts.Dispatch.SessionKey)
+		// newTurnState has no context of its own; the snapshot it takes only
+		// touches the local session store, so a background context is used.
+		history, err := agent.Sessions.GetHistory(context.Background(), opts.Dispatch.SessionKey)
+		if err != nil {
+			warnSessionStoreError(opts.Dispatch.SessionKey, "get history", err)
+			history = []providers.Message{}
+		}
 		ts.initialHistoryLength = len(history)
 		ts.restorePointHistory = append([]providers.Message(nil), history...)
-		ts.restorePointSummary = agent.Sessions.GetSummary(opts.Dispatch.SessionKey)
+		summary, err := agent.Sessions.GetSummary(context.Background(), opts.Dispatch.SessionKey)
+		if err != nil {
+			warnSessionStoreError(opts.Dispatch.SessionKey, "get summary", err)
+			summary = ""
+		}
+		ts.restorePointSummary = summary
 	}
 
 	return ts
@@ -366,6 +409,36 @@ func (al *AgentLoop) GetActiveTurnBySession(sessionKey string) *ActiveTurnInfo {
 // =============================================================================
 // turnState - getters and setters
 // =============================================================================
+
+// GetActiveTurnTree returns the active root turn of sessionKey followed by its
+// still-running descendant SubTurns (subagents), depth-first. The root is always
+// the first element. Children that already finished are skipped. Returns nil when
+// the session has no active turn.
+func (al *AgentLoop) GetActiveTurnTree(sessionKey string) []ActiveTurnInfo {
+	root := al.getActiveTurnState(sessionKey)
+	if root == nil {
+		return nil
+	}
+
+	var tree []ActiveTurnInfo
+	var walk func(ts *turnState)
+	walk = func(ts *turnState) {
+		info := ts.snapshot()
+		tree = append(tree, info)
+		for _, childID := range info.ChildTurnIDs {
+			// SubTurns are registered under their own turn ID, not the session key.
+			val, ok := al.activeTurnStates.Load(childID)
+			if !ok {
+				continue
+			}
+			if child, ok := val.(*turnState); ok {
+				walk(child)
+			}
+		}
+	}
+	walk(root)
+	return tree
+}
 
 func (ts *turnState) snapshot() ActiveTurnInfo {
 	ts.mu.RLock()
@@ -641,13 +714,14 @@ func (ts *turnState) hardAbortRequested() bool {
 func (ts *turnState) eventMeta(source, tracePath string) HookMeta {
 	snap := ts.snapshot()
 	return HookMeta{
-		AgentID:     snap.AgentID,
-		TurnID:      snap.TurnID,
-		SessionKey:  snap.SessionKey,
-		Iteration:   snap.Iteration,
-		Source:      source,
-		TracePath:   tracePath,
-		turnContext: cloneTurnContext(ts.turnCtx),
+		AgentID:              snap.AgentID,
+		TurnID:               snap.TurnID,
+		SessionKey:           snap.SessionKey,
+		Iteration:            snap.Iteration,
+		Source:               source,
+		TracePath:            tracePath,
+		turnContext:          cloneTurnContext(ts.turnCtx),
+		suppressToolFeedback: ts.opts.SuppressToolFeedback,
 	}
 }
 
@@ -655,13 +729,34 @@ func (ts *turnState) captureRestorePoint(history []providers.Message, summary st
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	ts.restorePointHistory = append([]providers.Message(nil), history...)
-	ts.restorePointSummary = summary
+	if !ts.restoreSummaryPinned {
+		ts.restorePointSummary = summary
+	}
+}
+
+// pinRestoreSummary sets the summary a rollback restores to summary, the last
+// one free of this turn, and keeps it there for the rest of the turn.
+func (ts *turnState) pinRestoreSummary(summary string) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if !ts.restoreSummaryPinned {
+		ts.restorePointSummary = summary
+		ts.restoreSummaryPinned = true
+	}
 }
 
 func (ts *turnState) recordPersistedMessage(msg providers.Message) {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	ts.persistedMessages = append(ts.persistedMessages, msg)
+}
+
+// replacePersistedMessages rewrites the turn's persisted-message record after
+// compaction replaced part of the turn in the session.
+func (ts *turnState) replacePersistedMessages(msgs []providers.Message) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.persistedMessages = append([]providers.Message(nil), msgs...)
 }
 
 func (ts *turnState) persistedMessagesSnapshot() []providers.Message {
@@ -671,8 +766,18 @@ func (ts *turnState) persistedMessagesSnapshot() []providers.Message {
 }
 
 func (ts *turnState) refreshRestorePointFromSession(agent *AgentInstance) {
-	history := agent.Sessions.GetHistory(ts.sessionKey)
-	summary := agent.Sessions.GetSummary(ts.sessionKey)
+	// The helper has no context of its own; refreshing the restore point only
+	// touches the local session store, so a background context is used.
+	history, err := agent.Sessions.GetHistory(context.Background(), ts.sessionKey)
+	if err != nil {
+		warnSessionStoreError(ts.sessionKey, "get history", err)
+		history = []providers.Message{}
+	}
+	summary, err := agent.Sessions.GetSummary(context.Background(), ts.sessionKey)
+	if err != nil {
+		warnSessionStoreError(ts.sessionKey, "get summary", err)
+		summary = ""
+	}
 
 	persisted := ts.persistedMessagesSnapshot()
 
@@ -681,6 +786,17 @@ func (ts *turnState) refreshRestorePointFromSession(agent *AgentInstance) {
 	}
 
 	ts.captureRestorePoint(history, summary)
+	// Compaction may have shrunk the history that precedes this turn; a hard
+	// abort rolls the session back to exactly that length.
+	ts.mu.Lock()
+	ts.initialHistoryLength = len(history)
+	ts.mu.Unlock()
+}
+
+func (ts *turnState) initialHistoryLen() int {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return ts.initialHistoryLength
 }
 
 // ingestMessage calls the ContextManager's Ingest method for a persisted message.
@@ -706,9 +822,16 @@ func (ts *turnState) restoreSession(agent *AgentInstance) error {
 	summary := ts.restorePointSummary
 	ts.mu.RUnlock()
 
-	agent.Sessions.SetHistory(ts.sessionKey, history)
-	agent.Sessions.SetSummary(ts.sessionKey, summary)
-	return agent.Sessions.Save(ts.sessionKey)
+	// restoreSession has no context of its own; restoring only touches the
+	// local session store, so a background context is used.
+	ctx := context.Background()
+	if err := agent.Sessions.SetHistory(ctx, ts.sessionKey, history); err != nil {
+		return fmt.Errorf("restore session history: %w", err)
+	}
+	if err := agent.Sessions.SetSummary(ctx, ts.sessionKey, summary); err != nil {
+		return fmt.Errorf("restore session summary: %w", err)
+	}
+	return agent.Sessions.Save(ctx, ts.sessionKey)
 }
 
 func matchingTurnMessageTail(history, persisted []providers.Message) int {
@@ -755,6 +878,9 @@ func normalizeMessageForComparison(msg providers.Message) providers.Message {
 	msg.PromptLayer = ""
 	msg.PromptSlot = ""
 	msg.PromptSource = ""
+	// The session store stamps CreatedAt on what it keeps; the turn's own record
+	// of the same message has none.
+	msg.CreatedAt = nil
 
 	if len(msg.Media) == 0 {
 		msg.Media = nil
@@ -804,15 +930,17 @@ func (ts *turnState) interruptHintMessage() providers.Message {
 // SubTurn-related methods
 // =============================================================================
 
-// Finish marks the turn as finished and closes the pendingResults channel
+// Finish marks the turn as finished, signals waiting SubTurns and cancels the
+// turn context.
 func (ts *turnState) Finish(isHardAbort bool) {
 	ts.isFinished.Store(true)
 
-	// Close pendingResults channel exactly once
+	// Close the finished signal exactly once. pendingResults is intentionally
+	// left open: concurrent SubTurn deliveries may still be sending on it and
+	// closing it here would race with deliverSubTurnResult, turning valid
+	// deliveries into recovered "send on closed channel" panics. The channel is
+	// reclaimed by the GC together with the turn state.
 	ts.closeOnce.Do(func() {
-		if ts.pendingResults != nil {
-			close(ts.pendingResults)
-		}
 		ts.mu.Lock()
 		if ts.finishedChan == nil {
 			ts.finishedChan = make(chan struct{})
@@ -913,4 +1041,19 @@ func turnStateFromContext(ctx context.Context) *turnState {
 // TurnStateFromContext retrieves turnState from context (exported for tools)
 func TurnStateFromContext(ctx context.Context) *turnState {
 	return turnStateFromContext(ctx)
+}
+
+// repeatsToolFeedbackExplanation records explanation as the latest tool
+// feedback explanation of this turn and reports whether it equals the previous
+// one. Empty explanations are ignored.
+func (ts *turnState) repeatsToolFeedbackExplanation(explanation string) bool {
+	explanation = strings.TrimSpace(explanation)
+	if explanation == "" {
+		return false
+	}
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	repeated := explanation == ts.lastToolFeedbackExplanation
+	ts.lastToolFeedbackExplanation = explanation
+	return repeated
 }

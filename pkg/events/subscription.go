@@ -230,6 +230,10 @@ func (s *eventSubscription) dispatch(ctx context.Context, evt Event) {
 			defer s.wg.Done()
 			defer func() {
 				if r := recover(); r != nil {
+					if s.opts.PanicPolicy == Crash {
+						panic(r)
+					}
+					s.counters.panicked.Add(1)
 					log.Printf("events: subscriber %q goroutine panic recovered: %v\n%s", s.name, r, debug.Stack())
 				}
 			}()
@@ -261,6 +265,10 @@ func (s *eventSubscription) handle(ctx context.Context, evt Event) {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
+				if s.opts.PanicPolicy == Crash {
+					panic(r)
+				}
+				s.counters.panicked.Add(1)
 				log.Printf(
 					"events: subscriber %q timeout-handler goroutine panic recovered: %v\n%s",
 					s.name, r, debug.Stack(),
@@ -286,7 +294,6 @@ func (s *eventSubscription) invokeHandler(ctx context.Context, evt Event) (resul
 	if s.opts.PanicPolicy != Crash {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				s.counters.panicked.Add(1)
 				result.panicked = true
 				log.Printf("events: subscriber %q recovered panic: %v", s.name, recovered)
 			}
@@ -299,6 +306,7 @@ func (s *eventSubscription) invokeHandler(ctx context.Context, evt Event) (resul
 
 func (s *eventSubscription) recordHandlerResult(ctx context.Context, result handlerResult) {
 	if result.panicked {
+		s.counters.panicked.Add(1)
 		return
 	}
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {

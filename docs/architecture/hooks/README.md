@@ -36,7 +36,7 @@ Hooks can return different actions to control the flow:
 | --- | --- | --- |
 | `continue` | All interceptors | Pass through without modification |
 | `modify` | `before_llm`, `after_llm`, `before_tool`, `after_tool` | Modify request/response and continue |
-| `respond` | `before_tool` | Return a tool result directly, skip actual tool execution |
+| `respond` | `before_tool` | Return a tool result directly, skip actual tool execution. Also skips `approve_tool` and `after_tool`. |
 | `deny_tool` | `before_tool` | Deny tool execution, return error message |
 | `abort_turn` | All interceptors | Abort the current turn |
 | `hard_abort` | All interceptors | Force stop the entire agent loop |
@@ -53,6 +53,16 @@ When a hook returns `respond` with a `HookResult`, the agent loop:
 1. Skips the actual tool execution
 2. Uses the provided result as if the tool had executed
 3. Continues the turn normally with the result
+
+Because `respond` provides the final result, both `approve_tool` and `after_tool`
+are skipped for that tool call. This is a deliberate design decision (the hook
+supplies the answer), and it also means `respond` bypasses `ApproveTool`
+approval checks. Use `deny_tool` when you want to reject a tool instead of
+answering it.
+
+Note on `before_llm` tool injection: a hook may add new tool definitions in
+`before_llm` (additive injection). It cannot remove or rewrite definitions that
+were already present; those are preserved by the host.
 
 Example (Go in-process hook):
 

@@ -47,6 +47,7 @@ Skill-related commands:
 
 - `/list skills` lists the installed skills visible to the current agent.
 - `/list mcp` lists configured MCP servers and whether they are deferred/connected.
+- `/list plugins` lists installed plugin packages and their state.
 - `/show mcp <server>` lists the active tools for a connected MCP server.
 - `/use <skill> <message>` forces a skill for a single request.
 - `/use <skill>` arms the skill for your next message in the same chat.

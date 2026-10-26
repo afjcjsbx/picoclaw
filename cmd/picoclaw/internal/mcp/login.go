@@ -3,15 +3,29 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	picomcp "github.com/sipeed/picoclaw/pkg/mcp"
+	"github.com/sipeed/picoclaw/pkg/plugins"
 )
 
 var loginOAuth = picomcp.LoginOAuth
+
+func oauthServer(cfg *config.Config, name string) (config.MCPServerConfig, string, string, error) {
+	if server, ok := cfg.Tools.MCP.Servers[name]; ok {
+		return server, "", "", nil
+	}
+	pluginID, serverName, qualified := strings.Cut(name, ":")
+	if !qualified || pluginID == "" || serverName == "" {
+		return config.MCPServerConfig{}, "", "", fmt.Errorf("MCP server %q not found", name)
+	}
+	server, err := plugins.ResolveOAuthServer(cfg.Plugins, cfg.WorkspacePath(), pluginID, serverName)
+	return server, pluginID, serverName, err
+}
 
 func newLoginCommand() *cobra.Command {
 	var noBrowser bool
@@ -27,9 +41,9 @@ func newLoginCommand() *cobra.Command {
 				return err
 			}
 			name := args[0]
-			server, ok := cfg.Tools.MCP.Servers[name]
-			if !ok {
-				return fmt.Errorf("MCP server %q not found", name)
+			server, pluginID, serverName, err := oauthServer(cfg, name)
+			if err != nil {
+				return err
 			}
 			oauthCfg := config.MCPOAuthConfig{}
 			if server.OAuth != nil {
@@ -51,6 +65,8 @@ func newLoginCommand() *cobra.Command {
 			if timeout <= 0 {
 				return fmt.Errorf("timeout must be positive")
 			}
+			// This deadline drives the login flow; pkg/mcp only applies a
+			// default when the context has no deadline of its own.
 			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 			defer cancel()
 			if err := loginOAuth(
@@ -61,7 +77,13 @@ func newLoginCommand() *cobra.Command {
 			); err != nil {
 				return err
 			}
-			cfg.Tools.MCP.Servers[name] = server
+			if pluginID == "" {
+				cfg.Tools.MCP.Servers[name] = server
+			} else {
+				entry := cfg.Plugins.Entries[pluginID]
+				entry.MCPOAuth[serverName] = oauthCfg
+				cfg.Plugins.Entries[pluginID] = entry
+			}
 			if err := saveValidatedConfig(cfg); err != nil {
 				return err
 			}
@@ -87,9 +109,9 @@ func newLogoutCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			server, ok := cfg.Tools.MCP.Servers[args[0]]
-			if !ok {
-				return fmt.Errorf("MCP server %q not found", args[0])
+			server, _, _, err := oauthServer(cfg, args[0])
+			if err != nil {
+				return err
 			}
 			if err := picomcp.LogoutOAuth(args[0], server); err != nil {
 				return err

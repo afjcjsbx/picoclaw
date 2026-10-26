@@ -209,7 +209,7 @@ func inferCombinedSkillName(rule LearningRecord) string {
 		}
 	}
 	if len(tokens) >= 2 {
-		prefix := strings.Join(tokens[:minInt(len(tokens), 4)], "-")
+		prefix := strings.Join(tokens[:min(len(tokens), 4)], "-")
 		if suffix != "" {
 			if candidate := validSkillNameOrEmpty(prefix + "-via-" + pluralizeSuffix(suffix)); candidate != "" {
 				return candidate

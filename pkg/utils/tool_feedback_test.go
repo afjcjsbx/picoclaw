@@ -154,3 +154,44 @@ func jsonValEq(a, b any) bool {
 	bJSON, _ := json.Marshal(b)
 	return string(aJSON) == string(bJSON)
 }
+
+func TestFormatMergedToolFeedbackMessage_SingleCallMatchesFormatToolFeedbackMessage(t *testing.T) {
+	args := "{\n  \"path\": \"README.md\"\n}"
+	for _, explanation := range []string{"Read the README first.", ""} {
+		got := FormatMergedToolFeedbackMessage(
+			[]ToolFeedbackCall{{Name: "read_file", ArgsPreview: args}},
+			explanation,
+		)
+		want := FormatToolFeedbackMessage("read_file", explanation, args)
+		if got != want {
+			t.Fatalf("FormatMergedToolFeedbackMessage() = %q, want %q", got, want)
+		}
+	}
+}
+
+func TestFormatMergedToolFeedbackMessage_ListsEveryCall(t *testing.T) {
+	got := FormatMergedToolFeedbackMessage([]ToolFeedbackCall{
+		{Name: "read_file", ArgsPreview: "{\n  \"path\": \"config.json\"\n}"},
+		{Name: "exec", ArgsPreview: "{\n  \"command\": \"date\"\n}"},
+		{Name: "exec", ArgsPreview: "{\n  \"command\": \"uptime\"\n}"},
+	}, "Check the config and the clock.")
+	want := "\U0001f527 `read_file` · `exec` ×2\n" +
+		"Check the config and the clock.\n" +
+		"\n`read_file`\n```json\n{\n  \"path\": \"config.json\"\n}\n```\n" +
+		"\n`exec`\n```json\n{\n  \"command\": \"date\"\n}\n```\n" +
+		"\n`exec`\n```json\n{\n  \"command\": \"uptime\"\n}\n```"
+	if got != want {
+		t.Fatalf("FormatMergedToolFeedbackMessage() = %q, want %q", got, want)
+	}
+}
+
+func TestFormatMergedToolFeedbackMessage_OmitsEmptyExplanationAndArgs(t *testing.T) {
+	got := FormatMergedToolFeedbackMessage([]ToolFeedbackCall{
+		{Name: "list_dir"},
+		{Name: "exec", ArgsPreview: "{\n  \"command\": \"date\"\n}"},
+	}, "  ")
+	want := "\U0001f527 `list_dir` · `exec`\n\n`list_dir`\n\n`exec`\n```json\n{\n  \"command\": \"date\"\n}\n```"
+	if got != want {
+		t.Fatalf("FormatMergedToolFeedbackMessage() = %q, want %q", got, want)
+	}
+}

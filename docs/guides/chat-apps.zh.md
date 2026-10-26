@@ -66,7 +66,7 @@ picoclaw gateway
 
 **4. Telegram 命令菜单（启动时自动注册）**
 
-PicoClaw 使用统一的命令定义来源。启动时会自动将 Telegram 支持的命令（例如 `/start`、`/help`、`/show`、`/list`、`/use`、`/btw`）注册到 Bot 命令菜单，确保菜单展示与实际行为一致。
+PicoClaw 使用统一的命令定义来源。启动时会自动将 Telegram 支持的命令（例如 `/start`、`/help`、`/show`、`/list`、`/use`）注册到 Bot 命令菜单，确保菜单展示与实际行为一致。
 Telegram 侧保留的是命令菜单注册能力；通用命令的实际执行统一走 Agent Loop 中的 commands executor。
 
 如果注册因网络或 API 短暂异常失败，不会阻塞 channel 启动；系统会在后台自动重试。
@@ -77,7 +77,6 @@ Telegram 侧保留的是命令菜单注册能力；通用命令的实际执行�
 - `/use <skill> <message>`
 - `/use <skill>`，然后在下一条消息里发送真正的请求
 - `/use clear`
-- `/btw <question>`，用于发起一个不改动当前会话历史的即时旁支提问；`/btw` 会按一次无工具的直接问答处理，不会进入常规的工具执行流程
 
 </details>
 

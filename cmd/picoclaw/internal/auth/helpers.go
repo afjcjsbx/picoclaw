@@ -14,6 +14,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/auth"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/providers"
+	oauthprovider "github.com/sipeed/picoclaw/pkg/providers/oauth"
 )
 
 const (
@@ -112,7 +113,7 @@ func authLoginGoogleAntigravity(noBrowser bool) error {
 	}
 
 	// Fetch Cloud Code Assist project ID
-	projectID, err := providers.FetchAntigravityProjectID(cred.AccessToken)
+	projectID, err := oauthprovider.FetchAntigravityProjectID(cred.AccessToken)
 	if err != nil {
 		fmt.Printf("Warning: could not fetch project ID: %v\n", err)
 		fmt.Println("You may need Google Cloud Code Assist enabled on your account.")
@@ -458,7 +459,7 @@ func authModelsCmd() error {
 
 	fmt.Printf("Fetching models for project: %s\n\n", projectID)
 
-	models, err := providers.FetchAntigravityModels(cred.AccessToken, projectID)
+	models, err := oauthprovider.FetchAntigravityModels(cred.AccessToken, projectID)
 	if err != nil {
 		return fmt.Errorf("error fetching models: %w", err)
 	}

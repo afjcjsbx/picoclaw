@@ -1224,5 +1224,9 @@ func (c ToolsConfig) ToStandardTools() config.ToolsConfig {
 			CustomDenyPatterns: c.Exec.CustomDenyPatterns,
 			AllowRemote:        config.DefaultConfig().Tools.Exec.AllowRemote,
 		},
+		// ToStandardConfig replaces the whole Tools section, so defaults that
+		// are not derived from the OpenClaw config must be restored here. A zero
+		// value would silently disable large tool-result spilling.
+		MaxInlineResultChars: config.DefaultMaxInlineResultChars,
 	}
 }

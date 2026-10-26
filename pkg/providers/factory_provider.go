@@ -12,10 +12,14 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/logger"
 	anthropicmessages "github.com/sipeed/picoclaw/pkg/providers/anthropic_messages"
 	"github.com/sipeed/picoclaw/pkg/providers/azure"
 	"github.com/sipeed/picoclaw/pkg/providers/bedrock"
+	cliprovider "github.com/sipeed/picoclaw/pkg/providers/cli"
 	"github.com/sipeed/picoclaw/pkg/providers/common"
+	"github.com/sipeed/picoclaw/pkg/providers/httpapi"
+	oauthprovider "github.com/sipeed/picoclaw/pkg/providers/oauth"
 )
 
 // createClaudeAuthProvider creates a Claude provider using OAuth credentials from auth store.
@@ -27,7 +31,10 @@ func createClaudeAuthProvider() (LLMProvider, error) {
 	if cred == nil {
 		return nil, fmt.Errorf("no credentials for anthropic. Run: picoclaw auth login --provider anthropic")
 	}
-	return NewClaudeProviderWithTokenSource(cred.AccessToken, createClaudeTokenSource()), nil
+	return oauthprovider.NewClaudeProviderWithTokenSource(
+		cred.AccessToken,
+		oauthprovider.CreateClaudeTokenSource(getCredential),
+	), nil
 }
 
 // createCodexAuthProvider creates a Codex provider using OAuth credentials from auth store.
@@ -39,7 +46,11 @@ func createCodexAuthProvider() (LLMProvider, error) {
 	if cred == nil {
 		return nil, fmt.Errorf("no credentials for openai. Run: picoclaw auth login --provider openai")
 	}
-	return NewCodexProviderWithTokenSource(cred.AccessToken, cred.AccountID, createCodexTokenSource()), nil
+	return oauthprovider.NewCodexProviderWithTokenSource(
+		cred.AccessToken,
+		cred.AccountID,
+		oauthprovider.CreateCodexTokenSource(),
+	), nil
 }
 
 // ExtractProtocol extracts the effective protocol and model identifier from a
@@ -116,14 +127,14 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 			return finalizeProviderFromConfig(provider, modelID, cfg)
 		}
 		// OpenAI with API key
-		if cfg.APIKey() == "" && cfg.APIBase == "" {
-			return nil, "", fmt.Errorf("api_key or api_base is required for HTTP-based protocol %q", protocol)
-		}
 		apiBase := cfg.APIBase
 		if apiBase == "" {
 			apiBase = getDefaultAPIBase(protocol)
 		}
-		provider := NewHTTPProviderWithMaxTokensFieldAndRequestTimeout(
+		if cfg.APIKey() == "" && requiresAPIKeyForEndpoint(protocol, apiBase) {
+			return nil, "", missingAPIKeyError(protocol, apiBase)
+		}
+		provider := httpapi.NewHTTPProviderWithMaxTokensFieldAndRequestTimeout(
 			cfg.APIKey(),
 			apiBase,
 			cfg.Proxy,
@@ -203,16 +214,16 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 	case "litellm", "lmstudio", "gpt4free", "openrouter", "groq", "zhipu", "nvidia", "venice",
 		"nearai", "ollama", "moonshot", "shengsuanyun", "siliconflow", "deepseek", "cerebras",
 		"vivgrid", "volcengine", "vllm", "qwen-portal", "qwen-intl", "qwen-us", "mistral",
-		"avian", "longcat", "modelscope", "novita", "alibaba-coding", "zai", "mimo":
+		"avian", "longcat", "modelscope", "novita", "byteplus", "alibaba-coding", "zai", "mimo":
 		// All other OpenAI-compatible HTTP providers
-		if cfg.APIKey() == "" && cfg.APIBase == "" && !isEmptyAPIKeyAllowed(protocol) {
-			return nil, "", fmt.Errorf("api_key or api_base is required for HTTP-based protocol %q", protocol)
-		}
 		apiBase := cfg.APIBase
 		if apiBase == "" {
 			apiBase = getDefaultAPIBase(protocol)
 		}
-		provider := NewHTTPProviderWithMaxTokensFieldAndRequestTimeout(
+		if cfg.APIKey() == "" && requiresAPIKeyForEndpoint(protocol, apiBase) {
+			return nil, "", missingAPIKeyError(protocol, apiBase)
+		}
+		provider := httpapi.NewHTTPProviderWithMaxTokensFieldAndRequestTimeout(
 			cfg.APIKey(),
 			apiBase,
 			cfg.Proxy,
@@ -225,15 +236,22 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 		provider.SetProviderName(protocol)
 		return finalizeProviderFromConfig(provider, modelID, cfg)
 
-	case "gemini":
-		if cfg.APIKey() == "" && cfg.APIBase == "" {
-			return nil, "", fmt.Errorf("api_key or api_base is required for gemini protocol (model: %s)", cfg.Model)
+	case "opencode-go":
+		provider, err := newOpenCodeGoProvider(cfg, modelID, userAgent)
+		if err != nil {
+			return nil, "", err
 		}
+		return finalizeProviderFromConfig(provider, modelID, cfg)
+
+	case "gemini":
 		apiBase := cfg.APIBase
 		if apiBase == "" {
 			apiBase = getDefaultAPIBase(protocol)
 		}
-		return finalizeProviderFromConfig(NewGeminiProvider(
+		if cfg.APIKey() == "" && requiresAPIKeyForEndpoint(protocol, apiBase) {
+			return nil, "", missingAPIKeyError(protocol, apiBase)
+		}
+		return finalizeProviderFromConfig(httpapi.NewGeminiProvider(
 			cfg.APIKey(),
 			apiBase,
 			cfg.Proxy,
@@ -245,12 +263,12 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 
 	case "minimax":
 		// Minimax requires reasoning_split: true in the request body
-		if cfg.APIKey() == "" && cfg.APIBase == "" {
-			return nil, "", fmt.Errorf("api_key or api_base is required for HTTP-based protocol %q", protocol)
-		}
 		apiBase := cfg.APIBase
 		if apiBase == "" {
 			apiBase = getDefaultAPIBase(protocol)
+		}
+		if cfg.APIKey() == "" && requiresAPIKeyForEndpoint(protocol, apiBase) {
+			return nil, "", missingAPIKeyError(protocol, apiBase)
 		}
 		extraBody := cfg.ExtraBody
 		if extraBody == nil {
@@ -259,7 +277,7 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 		if _, ok := extraBody["reasoning_split"]; !ok {
 			extraBody["reasoning_split"] = true
 		}
-		provider := NewHTTPProviderWithMaxTokensFieldAndRequestTimeout(
+		provider := httpapi.NewHTTPProviderWithMaxTokensFieldAndRequestTimeout(
 			cfg.APIKey(),
 			apiBase,
 			cfg.Proxy,
@@ -286,7 +304,7 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 		if cfg.APIKey() == "" {
 			return nil, "", fmt.Errorf("api_key is required for anthropic protocol (model: %s)", cfg.Model)
 		}
-		provider := NewHTTPProviderWithMaxTokensFieldAndRequestTimeout(
+		provider := httpapi.NewHTTPProviderWithMaxTokensFieldAndRequestTimeout(
 			cfg.APIKey(),
 			apiBase,
 			cfg.Proxy,
@@ -332,21 +350,21 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 		), modelID, cfg)
 
 	case "antigravity":
-		return finalizeProviderFromConfig(NewAntigravityProvider(), modelID, cfg)
+		return finalizeProviderFromConfig(oauthprovider.NewAntigravityProvider(), modelID, cfg)
 
 	case "claude-cli":
 		workspace := cfg.Workspace
 		if workspace == "" {
 			workspace = "."
 		}
-		return finalizeProviderFromConfig(NewClaudeCliProvider(workspace), modelID, cfg)
+		return finalizeProviderFromConfig(cliprovider.NewClaudeCliProvider(workspace), modelID, cfg)
 
 	case "codex-cli":
 		workspace := cfg.Workspace
 		if workspace == "" {
 			workspace = "."
 		}
-		return finalizeProviderFromConfig(NewCodexCliProvider(workspace), modelID, cfg)
+		return finalizeProviderFromConfig(cliprovider.NewCodexCliProvider(workspace), modelID, cfg)
 
 	case "github-copilot":
 		apiBase := cfg.APIBase
@@ -357,7 +375,7 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 		if connectMode == "" {
 			connectMode = "grpc"
 		}
-		provider, err := NewGitHubCopilotProvider(apiBase, connectMode, modelID)
+		provider, err := cliprovider.NewGitHubCopilotProvider(apiBase, connectMode, modelID)
 		if err != nil {
 			return nil, "", err
 		}
@@ -373,6 +391,27 @@ func finalizeProviderFromConfig(
 	modelID string,
 	cfg *config.ModelConfig,
 ) (LLMProvider, string, error) {
+	// Models can opt into a per-conversation session header. Providers that
+	// support the generic session-key header implement this setter.
+	if cfg != nil && strings.TrimSpace(cfg.SessionHeader) != "" {
+		switch setter := provider.(type) {
+		case interface{ SetSessionHeader(name, fallback string) }:
+			// Background calls (summaries, subagents, ...) have no session_key.
+			// They still need a stable value, otherwise session-aware relays
+			// reject the request with a missing session ID.
+			fallback := "picoclaw-" + strings.TrimSpace(cfg.ModelName)
+			if fallback == "picoclaw-" {
+				fallback = "picoclaw"
+			}
+			setter.SetSessionHeader(cfg.SessionHeader, fallback)
+		default:
+			logger.WarnCF("providers", "session_header ignored: provider does not support it", map[string]any{
+				"model":          cfg.ModelName,
+				"provider":       cfg.Provider,
+				"session_header": cfg.SessionHeader,
+			})
+		}
+	}
 	wrapped, err := wrapProviderWithToolSchemaTransform(provider, cfg.ToolSchemaTransform)
 	if err != nil {
 		return nil, "", err
@@ -383,6 +422,39 @@ func finalizeProviderFromConfig(
 func isEmptyAPIKeyAllowed(protocol string) bool {
 	option, ok := modelProviderOptionForName(protocol)
 	return ok && option.EmptyAPIKeyAllowed
+}
+
+// requiresAPIKeyForEndpoint reports whether an empty api_key is invalid for the
+// given endpoint. Providers that explicitly support keyless local endpoints
+// (vllm, lmstudio, ollama, ...) keep working. For all others an empty key is
+// only accepted when api_base points at a custom endpoint, which may be a
+// keyless local proxy; the provider's official endpoint requires a key.
+func requiresAPIKeyForEndpoint(protocol, apiBase string) bool {
+	if isEmptyAPIKeyAllowed(protocol) {
+		return false
+	}
+
+	apiBase = strings.TrimRight(strings.TrimSpace(apiBase), "/")
+	if apiBase == "" {
+		return true
+	}
+
+	defaultBase := strings.TrimRight(strings.TrimSpace(getDefaultAPIBase(protocol)), "/")
+	if defaultBase == "" {
+		return false
+	}
+	return strings.EqualFold(apiBase, defaultBase)
+}
+
+func missingAPIKeyError(protocol, apiBase string) error {
+	if apiBase == "" {
+		return fmt.Errorf("api_key is required for HTTP-based protocol %q", protocol)
+	}
+	return fmt.Errorf(
+		"api_key is required for protocol %q when using its official endpoint %s; "+
+			"set api_keys or use a keyless custom api_base",
+		protocol, apiBase,
+	)
 }
 
 // IsEmptyAPIKeyAllowedForProtocol reports whether a protocol allows requests

@@ -1,9 +1,13 @@
 package providers
 
-import "testing"
+import (
+	"testing"
+
+	cliprovider "github.com/sipeed/picoclaw/pkg/providers/cli"
+)
 
 func TestNormalizeToolCall_PreservesExtraContentGoogleThoughtSignature(t *testing.T) {
-	tc := NormalizeToolCall(ToolCall{
+	tc := cliprovider.NormalizeToolCall(ToolCall{
 		ID:        "call_1",
 		Name:      "search",
 		Arguments: map[string]any{"q": "pico"},

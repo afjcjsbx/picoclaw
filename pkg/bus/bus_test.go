@@ -538,6 +538,42 @@ func TestPublishAudioChunk_BackpressureDropPublishesRuntimeEvent(t *testing.T) {
 	}
 }
 
+func TestSetBackpressureTimeoutOverridesAudioDefault(t *testing.T) {
+	mb := NewMessageBus()
+	defer mb.Close()
+
+	mb.SetBackpressureTimeout(StreamAudioChunk, 5*time.Millisecond)
+
+	for i := range cap(mb.audioChunks) {
+		if err := mb.PublishAudioChunk(context.Background(), AudioChunk{
+			Channel:  "discord",
+			ChatID:   "voice-room",
+			Sequence: uint64(i),
+			Data:     []byte("fill"),
+		}); err != nil {
+			t.Fatalf("fill audio buffer at %d: %v", i, err)
+		}
+	}
+
+	err := mb.PublishAudioChunk(context.Background(), AudioChunk{
+		Channel:  "discord",
+		ChatID:   "voice-room",
+		Sequence: 999,
+		Data:     []byte("overflow"),
+	})
+	if !errors.Is(err, ErrBusBackpressure) {
+		t.Fatalf("PublishAudioChunk() error = %v, want %v", err, ErrBusBackpressure)
+	}
+
+	stats := mb.Stats()
+	if stats.AudioChunks.DroppedTotal != 1 {
+		t.Fatalf("AudioChunks dropped = %d, want 1", stats.AudioChunks.DroppedTotal)
+	}
+	if stats.AudioChunks.LastDropWaitMillis != 5 {
+		t.Fatalf("AudioChunks last wait ms = %d, want 5", stats.AudioChunks.LastDropWaitMillis)
+	}
+}
+
 func TestPublishVoiceControlSubscribe(t *testing.T) {
 	mb := NewMessageBus()
 	defer mb.Close()
@@ -837,6 +873,38 @@ func TestPublishInbound_FullBufferUsesBusBackpressureBudget(t *testing.T) {
 	}
 }
 
+func TestSetBackpressureTimeoutDropsFullCriticalStream(t *testing.T) {
+	mb := NewMessageBus()
+	defer mb.Close()
+
+	mb.SetBackpressureTimeout(StreamInbound, 20*time.Millisecond)
+
+	for i := range defaultBusBufferSize {
+		if err := mb.PublishInbound(context.Background(), InboundMessage{
+			Context: InboundContext{Channel: "test", ChatID: "chat-fill", SenderID: "user-fill"},
+			Content: "fill",
+		}); err != nil {
+			t.Fatalf("fill failed at %d: %v", i, err)
+		}
+	}
+
+	err := mb.PublishInbound(context.Background(), InboundMessage{
+		Context: InboundContext{Channel: "test", ChatID: "chat-overflow", SenderID: "user-overflow"},
+		Content: "overflow",
+	})
+	if !errors.Is(err, ErrBusBackpressure) {
+		t.Fatalf("PublishInbound() error = %v, want %v", err, ErrBusBackpressure)
+	}
+
+	stats := mb.Stats()
+	if stats.Inbound.DroppedTotal != 1 {
+		t.Fatalf("Inbound dropped = %d, want 1", stats.Inbound.DroppedTotal)
+	}
+	if stats.Inbound.LastDropWaitMillis != 20 {
+		t.Fatalf("Inbound last wait ms = %d, want 20", stats.Inbound.LastDropWaitMillis)
+	}
+}
+
 func TestMessageBusHealthCheckIncludesQueueDepthAndDrops(t *testing.T) {
 	mb := NewMessageBus()
 	defer mb.Close()
@@ -872,6 +940,47 @@ func TestMessageBusHealthCheckIncludesQueueDepthAndDrops(t *testing.T) {
 	}
 	if stats.AudioChunks.DroppedTotal != 1 {
 		t.Fatalf("audio dropped = %d, want 1", stats.AudioChunks.DroppedTotal)
+	}
+}
+
+func TestMessageBusHealthCheckWithThreshold(t *testing.T) {
+	mb := NewMessageBus()
+	defer mb.Close()
+
+	ok, msg := mb.HealthCheckWithThreshold(0)
+	if !ok {
+		t.Fatal("HealthCheckWithThreshold should be ok with no drops")
+	}
+	if msg == "" {
+		t.Fatal("HealthCheckWithThreshold message should not be empty")
+	}
+
+	for i := range cap(mb.audioChunks) {
+		if err := mb.PublishAudioChunk(context.Background(), AudioChunk{
+			Channel:  "discord",
+			ChatID:   "voice-room",
+			Sequence: uint64(i),
+			Data:     []byte("fill"),
+		}); err != nil {
+			t.Fatalf("fill audio buffer at %d: %v", i, err)
+		}
+	}
+	if err := mb.PublishAudioChunk(context.Background(), AudioChunk{
+		Channel:  "discord",
+		ChatID:   "voice-room",
+		Sequence: 999,
+		Data:     []byte("overflow"),
+	}); !errors.Is(err, ErrBusBackpressure) {
+		t.Fatalf("expected backpressure drop, got %v", err)
+	}
+	if ok, _ := mb.HealthCheckWithThreshold(0); ok {
+		t.Fatal("HealthCheckWithThreshold(0) should not be ok after a drop")
+	}
+	if ok, _ := mb.HealthCheckWithThreshold(1); !ok {
+		t.Fatal("HealthCheckWithThreshold(1) should be ok with a single drop")
+	}
+	if ok, _ := mb.HealthCheck(); !ok {
+		t.Fatal("HealthCheck should remain ok for backpressure telemetry")
 	}
 }
 

@@ -268,13 +268,16 @@ func printMCPListPlain(w io.Writer, rows []MCPListRow) {
 		}
 		tableRows[i] = []string{r.Name, r.Type, r.Target, r.Status, deferred}
 	}
-	// reuse the ASCII table renderer already in helpers.go via the caller
-	// (list.go still uses renderTable for the plain path)
+	printPlainTable(w, headers, tableRows)
+}
+
+// printPlainTable renders an ASCII table sized to its widest cells.
+func printPlainTable(w io.Writer, headers []string, rows [][]string) {
 	widths := make([]int, len(headers))
 	for i, h := range headers {
 		widths[i] = len(h)
 	}
-	for _, row := range tableRows {
+	for _, row := range rows {
 		for i, cell := range row {
 			if len(cell) > widths[i] {
 				widths[i] = len(cell)
@@ -298,7 +301,7 @@ func printMCPListPlain(w io.Writer, rows []MCPListRow) {
 	border()
 	writeRow(headers)
 	border()
-	for _, row := range tableRows {
+	for _, row := range rows {
 		writeRow(row)
 	}
 	border()
