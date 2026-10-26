@@ -458,3 +458,86 @@ func TestOllamaModelMatches_WithTagRequiresExactTag(t *testing.T) {
 		t.Fatal("ollamaModelMatches() = false, want true when both candidate and request omit tag (latest)")
 	}
 }
+
+func TestProbeGeminiModel_HeaderAuth(t *testing.T) {
+	const apiKey = "test-gemini-key"
+	called := 0
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called++
+		if r.URL.Path != "/v1beta/models" {
+			t.Fatalf("path = %q, want %q", r.URL.Path, "/v1beta/models")
+		}
+		if got := r.Header.Get("x-goog-api-key"); got != apiKey {
+			http.Error(w, "missing auth", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"models":[{"name":"models/gemini-3-flash-preview"},{"name":"models/gemini-2.5-flash"}]}`))
+	}))
+	defer srv.Close()
+
+	got := probeGeminiModel(srv.URL+"/v1beta", "gemini-3-flash-preview", apiKey)
+	if !got {
+		t.Fatal("probeGeminiModel() = false, want true with valid x-goog-api-key header")
+	}
+	if called != 1 {
+		t.Fatalf("handler called %d times, want 1", called)
+	}
+}
+
+func TestProbeGeminiModel_QueryParamAuth(t *testing.T) {
+	const apiKey = "test-gemini-key"
+	called := 0
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called++
+		if r.URL.Path != "/v1beta/models" {
+			t.Fatalf("path = %q, want %q", r.URL.Path, "/v1beta/models")
+		}
+		// First call: header auth (no key header) -> 401
+		// Second call: query param auth -> success
+		if r.Header.Get("x-goog-api-key") != "" {
+			http.Error(w, "missing auth", http.StatusUnauthorized)
+			return
+		}
+		if got := r.URL.Query().Get("key"); got != apiKey {
+			http.Error(w, "missing auth", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"models":[{"name":"models/gemini-3.5-flash-lite"}]}`))
+	}))
+	defer srv.Close()
+
+	got := probeGeminiModel(srv.URL+"/v1beta", "gemini-3.5-flash-lite", apiKey)
+	if !got {
+		t.Fatal("probeGeminiModel() = false, want true with valid key query param")
+	}
+	if called != 2 {
+		t.Fatalf("handler called %d times, want 2 (header auth fails, then query param succeeds)", called)
+	}
+}
+
+func TestProbeGeminiModel_WithModelsPrefix(t *testing.T) {
+	const apiKey = "test-gemini-key"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"models":[{"name":"models/gemini-3.1-flash-lite"}]}`))
+	}))
+	defer srv.Close()
+
+	// Should match with models/ prefix stripped
+	got := probeGeminiModel(srv.URL+"/v1beta", "gemini-3.1-flash-lite", apiKey)
+	if !got {
+		t.Fatal("probeGeminiModel() = false, want true when API returns models/ prefix")
+	}
+}
+
+func TestProbeGeminiModel_EmptyKeyFails(t *testing.T) {
+	got := probeGeminiModel("https://generativelanguage.googleapis.com/v1beta", "gemini-3-flash-preview", "")
+	if got {
+		t.Fatal("probeGeminiModel() = true, want false when api key is empty")
+	}
+}

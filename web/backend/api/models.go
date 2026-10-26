@@ -1613,8 +1613,10 @@ func probeModelConnectivity(m *config.ModelConfig) bool {
 		return probeCommandAvailable("claude")
 	case "codex-cli":
 		return probeCommandAvailable("codex")
+	case "gemini":
+		return probeGeminiModel(apiBase, modelID, m.APIKey())
 	default:
-		// For remote providers (OpenAI, Anthropic, Gemini, DeepSeek, etc.),
+		// For remote providers (OpenAI, Anthropic, DeepSeek, etc.),
 		// make a real GET /models request to verify connectivity and credentials.
 		if apiBase != "" {
 			return probeOpenAICompatibleModel(apiBase, modelID, m.APIKey())
