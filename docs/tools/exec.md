@@ -20,21 +20,22 @@ The `exec` tool executes shell commands and manages **background sessions** (lon
 
 | Argument | Type | Required for | Description |
 |----------|------|--------------|-------------|
-| `action` | string | every call | `run` (execute a command), `list` (show sessions), `poll` (check a session's status), `read` (get a session's output), `write` (send input to a session's stdin), `kill` (terminate a session), `send-keys` (send keys to a PTY session) |
+| `action` | string | every call | `run` (execute a command), `list` (show sessions), `poll` (check a session's status; returns immediately), `wait` (block until a session exits or the timeout elapses), `read` (get a session's output), `write` (send input to a session's stdin), `kill` (terminate a session), `send-keys` (send keys to a PTY session) |
 | `command` | string | `run` | Shell command to execute |
-| `sessionId` | string | `poll`, `read`, `write`, `kill`, `send-keys` | Session ID returned by a background `run` |
+| `sessionId` | string | `poll`, `wait`, `read`, `write`, `kill`, `send-keys` | Session ID returned by a background `run` |
 | `data` | string | `write` | Data to write to the session's stdin |
 | `keys` | string | `send-keys` | Key names: `up`, `down`, `left`, `right`, `enter`, `tab`, `escape`, `backspace`, `ctrl-c`, `ctrl-d`, `home`, `end`, `pageup`, `pagedown`, `f1`–`f12` |
 | `background` | bool | — | With `run`, start the command in the background immediately; the result includes a `sessionId` |
 | `pty` | bool | — | Allocate a pseudo-terminal for interactive programs; not supported on Windows |
 | `cwd` | string | — | Working directory for the command; defaults to the agent workspace |
-| `timeout` | int | — | Timeout in seconds for foreground commands; overrides `tools.exec.timeout_seconds`, and `0` disables it. Cannot be combined with `background=true` |
+| `timeout` | int | — | Timeout in seconds for foreground commands; overrides `tools.exec.timeout_seconds`, and `0` disables it. Cannot be combined with `background=true`. With `wait`: maximum seconds to block (a positive integer), defaulting to and capped by `tools.exec.timeout_seconds` |
 
 Behavior notes:
 
 - Run one independent command per tool call and chain dependent commands with `&&` (`;` when later commands must run regardless of earlier failures). Do not separate commands with newlines.
 - Prefer `cwd` over `cd` inside the command, and the filesystem tools over shell file operations.
 - Foreground output longer than `max_output_chars` (default 50,000 chars) is truncated to the first 40% and the last 60% around a `[OUTPUT TRUNCATED - N chars omitted out of T total]` notice; background session output is limited to 1 MB. When the result is oversized, the large-result spillover saves the full pre-truncation output as a workspace artifact and the preview points to it, so the omitted middle stays readable.
+- `poll` never blocks. To wait for a background session, call `wait` once instead of polling in a loop: it returns the exit status and the output when the process exits. If the window elapses first, the result has status `running` and a note saying this is not an error; call `wait` again if the job is expected to take longer. After two consecutive `poll`/`wait` calls with no new output the note also tells the model to stop checking (use `wait`, read the output, or kill the session).
 - Sessions are cleaned up 30 minutes after the process exits. `write` sends stdin, `send-keys` sends keys to a PTY session; combine `background=true` with `pty=true` for interactive sessions such as a REPL.
 
 ## Disabling the Exec Tool

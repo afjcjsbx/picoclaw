@@ -2278,3 +2278,115 @@ func TestShellTool_PTY_ReaderStopsAfterExit(t *testing.T) {
 	}, 5*time.Second, 50*time.Millisecond,
 		"PTY reader goroutines should stop after the process exits")
 }
+
+func startBackgroundSession(t *testing.T, command string) (*ExecTool, context.Context, string) {
+	t.Helper()
+	tool, err := NewExecTool("", false)
+	require.NoError(t, err)
+
+	sm := NewSessionManager()
+	t.Cleanup(sm.Stop)
+	tool.sessionManager = sm
+
+	ctx := WithToolContext(context.Background(), "cli", "test")
+	result := tool.Execute(ctx, map[string]any{"action": "run", "command": command, "background": "true"})
+	require.False(t, result.IsError, result.ForLLM)
+
+	var resp ExecResponse
+	require.NoError(t, json.Unmarshal([]byte(result.ForLLM), &resp))
+	t.Cleanup(func() {
+		tool.Execute(ctx, map[string]any{"action": "kill", "sessionId": resp.SessionID})
+	})
+	return tool, ctx, resp.SessionID
+}
+
+func execResp(t *testing.T, result *ToolResult) ExecResponse {
+	t.Helper()
+	require.False(t, result.IsError, result.ForLLM)
+	var resp ExecResponse
+	require.NoError(t, json.Unmarshal([]byte(result.ForLLM), &resp))
+	return resp
+}
+
+func TestShellTool_Wait_ReturnsOutputOnExit(t *testing.T) {
+	tool, ctx, id := startBackgroundSession(t, "sleep 1 && echo ok")
+
+	start := time.Now()
+	resp := execResp(t, tool.Execute(ctx, map[string]any{
+		"action": "wait", "sessionId": id, "timeout": float64(10),
+	}))
+
+	require.Equal(t, "done", resp.Status)
+	require.Contains(t, resp.Output, "ok")
+	require.Empty(t, resp.Note)
+	require.Less(t, time.Since(start), 5*time.Second)
+}
+
+func TestShellTool_Wait_TimeoutIsNotAnError(t *testing.T) {
+	tool, ctx, id := startBackgroundSession(t, "sleep 30")
+
+	resp := execResp(t, tool.Execute(ctx, map[string]any{
+		"action": "wait", "sessionId": id, "timeout": float64(1),
+	}))
+
+	require.Equal(t, "running", resp.Status)
+	require.Contains(t, resp.Note, "not an error")
+}
+
+func TestShellTool_Wait_ClampsToConfiguredTimeout(t *testing.T) {
+	tool, ctx, id := startBackgroundSession(t, "sleep 30")
+	tool.SetTimeout(time.Second)
+
+	resp := execResp(t, tool.Execute(ctx, map[string]any{
+		"action": "wait", "sessionId": id, "timeout": float64(600),
+	}))
+
+	require.Equal(t, "running", resp.Status)
+	require.Contains(t, resp.Note, "clamped to the configured limit of 1s")
+}
+
+func TestShellTool_Wait_InvalidArgs(t *testing.T) {
+	tool, ctx, id := startBackgroundSession(t, "sleep 30")
+
+	for _, timeout := range []any{float64(0), float64(-1), float64(1.5), "5"} {
+		result := tool.Execute(ctx, map[string]any{"action": "wait", "sessionId": id, "timeout": timeout})
+		require.True(t, result.IsError, "timeout=%v", timeout)
+	}
+	require.True(t, tool.Execute(ctx, map[string]any{"action": "wait"}).IsError)
+	require.True(t, tool.Execute(ctx, map[string]any{"action": "wait", "sessionId": "nope"}).IsError)
+}
+
+func TestShellTool_Wait_CanceledContext(t *testing.T) {
+	tool, ctx, id := startBackgroundSession(t, "sleep 30")
+	cctx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+	defer cancel()
+
+	result := tool.Execute(cctx, map[string]any{"action": "wait", "sessionId": id, "timeout": float64(30)})
+
+	require.True(t, result.IsError)
+	require.Contains(t, result.ForLLM, "wait interrupted")
+}
+
+func TestShellTool_Poll_IdleNoteAfterTwoSilentChecks(t *testing.T) {
+	tool, ctx, id := startBackgroundSession(t, "sleep 30")
+	poll := func() ExecResponse {
+		return execResp(t, tool.Execute(ctx, map[string]any{"action": "poll", "sessionId": id}))
+	}
+
+	require.Empty(t, poll().Note)
+	require.Contains(t, poll().Note, "action=wait")
+}
+
+func TestShellTool_Poll_NewOutputResetsIdleCount(t *testing.T) {
+	tool, ctx, id := startBackgroundSession(t, "echo first; sleep 1; echo second; sleep 30")
+	poll := func() ExecResponse {
+		return execResp(t, tool.Execute(ctx, map[string]any{"action": "poll", "sessionId": id}))
+	}
+
+	time.Sleep(300 * time.Millisecond)
+	require.Empty(t, poll().Note) // sees "first": output changed
+	time.Sleep(1500 * time.Millisecond)
+	require.Empty(t, poll().Note) // sees "second": output changed again
+	require.Empty(t, poll().Note) // first silent check
+	require.Contains(t, poll().Note, "action=wait")
+}
