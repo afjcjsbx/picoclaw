@@ -219,7 +219,7 @@ def main():
     args = ap.parse_args()
 
     env = dict(os.environ)
-    env.setdefault("TERM", args.term)
+    env["TERM"] = args.term
     env.setdefault("COLORTERM", "truecolor")
 
     keys = [k.encode().decode("unicode_escape").encode("latin1") for k in args.keys.split(",")]
