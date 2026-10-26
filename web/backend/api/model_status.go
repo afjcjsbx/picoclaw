@@ -666,7 +666,7 @@ func getJSONGemini(rawURL string, out any, apiKey string) error {
 		return err
 	}
 	if apiKey = strings.TrimSpace(apiKey); apiKey != "" {
-		req.Header.Set("x-goog-api-key", apiKey)
+		req.Header.Set("X-Goog-Api-Key", apiKey)
 	}
 
 	client := &http.Client{}

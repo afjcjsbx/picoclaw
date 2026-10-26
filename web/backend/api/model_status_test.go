@@ -468,12 +468,14 @@ func TestProbeGeminiModel_HeaderAuth(t *testing.T) {
 		if r.URL.Path != "/v1beta/models" {
 			t.Fatalf("path = %q, want %q", r.URL.Path, "/v1beta/models")
 		}
-		if got := r.Header.Get("x-goog-api-key"); got != apiKey {
+		if got := r.Header.Get("X-Goog-Api-Key"); got != apiKey {
 			http.Error(w, "missing auth", http.StatusUnauthorized)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"models":[{"name":"models/gemini-3-flash-preview"},{"name":"models/gemini-2.5-flash"}]}`))
+		_, _ = w.Write([]byte(
+			`{"models":[{"name":"models/gemini-3-flash-preview"},{"name":"models/gemini-2.5-flash"}]}`,
+		))
 	}))
 	defer srv.Close()
 
@@ -497,7 +499,7 @@ func TestProbeGeminiModel_QueryParamAuth(t *testing.T) {
 		}
 		// First call: header auth (no key header) -> 401
 		// Second call: query param auth -> success
-		if r.Header.Get("x-goog-api-key") != "" {
+		if r.Header.Get("X-Goog-Api-Key") != "" {
 			http.Error(w, "missing auth", http.StatusUnauthorized)
 			return
 		}
