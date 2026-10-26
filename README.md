@@ -158,7 +158,7 @@ Measured on an Apple M1 Max (macOS arm64, Go 1.27.2) on 2026-10-15. **First pain
 | OpenCode 2.0.29 | Bun + OpenTUI | 239 MiB | ≈190 ms | ≈200 MiB | 1 |
 | Hermes 0.22.1 | Python + TUI | ≈1.9 GiB | ≈3.2 s | ≈214 MiB | 2 |
 
-PicoClaw's row is its **full default** macOS ARM64 build (`goolm,stdjson`); lighter channel profiles are listed in [measured binary sizes](docs/guides/custom-builds.md#measured-binary-sizes). Its idle RSS is 36.6 MiB, with a **≈19 MiB** memory footprint (`phys_footprint`, what Activity Monitor reports) — the metric behind the "10–20 MB" note above.
+PicoClaw's row is its **full default** macOS ARM64 build (`goolm,stdjson`); lighter channel profiles are listed in [measured binary sizes](docs/guides/custom-builds.md#measured-binary-sizes). Its idle RSS is 36.6 MiB, with a memory footprint of **≈19 MiB** (`phys_footprint`, what Activity Monitor reports) — the metric behind the "10–20 MB" note above.
 
 Unlike the other rows, PicoClaw's core ships **no full-screen TUI**, so its "first paint / ready" is the time for the gateway to become ready, not a TUI render. The other agents are interactive TUIs and their figures are single-machine medians of a few runs, so expect them to drift between releases. Reproduce the runtime columns with:
 
