@@ -115,7 +115,9 @@ def run(cmd, cwd, env, rows, cols, paint_bytes, quiet_ms, settle, max_s, keys,
                 except OSError:
                     pass
             prekeys_sent = True
-            last_out[0] = time.perf_counter()  # restart the quiet timer
+            # Prekeys extend the interaction: restart the quiet timer and re-arm settle.
+            last_out[0] = time.perf_counter()
+            settled[0] = None
         if first_paint[0] is not None and settled[0] is None:
             if (time.perf_counter() - last_out[0]) * 1000 >= quiet_ms:
                 settled[0] = last_out[0]
