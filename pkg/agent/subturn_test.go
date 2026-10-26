@@ -2498,3 +2498,49 @@ func TestGetSubTurnConfig_MaxConcurrent(t *testing.T) {
 		})
 	}
 }
+
+// TestSpawnSubTurn_SuppressesToolFeedback verifies that a child turn inherits the
+// parent's chat context but never publishes its own tool feedback to that chat.
+func TestSpawnSubTurn_SuppressesToolFeedback(t *testing.T) {
+	probe := &turnStateProbeProvider{response: "ok"}
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         t.TempDir(),
+				ModelName:         "gpt-4o-mini",
+				Provider:          "mock",
+				MaxTokens:         1024,
+				MaxToolIterations: 2,
+			},
+		},
+	}
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), probe)
+	parent := &turnState{
+		ctx:            context.Background(),
+		turnID:         "parent-feedback",
+		pendingResults: make(chan *tools.ToolResult, 10),
+		session:        &ephemeralSessionStore{},
+		agent:          al.registry.GetDefaultAgent(),
+		opts: processOptions{Dispatch: DispatchRequest{
+			InboundContext: &bus.InboundContext{Channel: "telegram", ChatID: "42"},
+		}},
+	}
+
+	if _, err := spawnSubTurn(context.Background(), al, parent, SubTurnConfig{Model: "gpt-4o-mini"}); err != nil {
+		t.Fatalf("spawnSubTurn() error = %v", err)
+	}
+
+	child := probe.turnState()
+	if child == nil {
+		t.Fatal("provider did not observe a turn state in context")
+	}
+	if child.channel != "telegram" {
+		t.Fatalf("child channel = %q, want inherited %q", child.channel, "telegram")
+	}
+	if !child.opts.SuppressToolFeedback {
+		t.Error("child turn must suppress tool feedback")
+	}
+	if shouldPublishToolFeedback(cfg, child) {
+		t.Error("shouldPublishToolFeedback() = true for child turn")
+	}
+}
