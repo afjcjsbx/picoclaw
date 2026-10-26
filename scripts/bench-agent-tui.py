@@ -22,6 +22,7 @@ import fcntl
 import json
 import os
 import select
+import shlex
 import signal
 import struct
 import subprocess
@@ -201,7 +202,8 @@ def run(cmd, cwd, env, rows, cols, paint_bytes, quiet_ms, settle, max_s, keys,
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--cmd", required=True, help="shell-free command line; use -- to separate")
+    ap.add_argument("--cmd", required=True,
+                    help="command line; shell-like quoting is supported, but no shell is invoked")
     ap.add_argument("--cwd", default=os.getcwd())
     ap.add_argument("--rows", type=int, default=50)
     ap.add_argument("--cols", type=int, default=200)
@@ -228,7 +230,7 @@ def main():
 
     results = []
     for i in range(args.runs):
-        r = run(args.cmd.split(), args.cwd, env, args.rows, args.cols,
+        r = run(shlex.split(args.cmd), args.cwd, env, args.rows, args.cols,
                 args.paint_bytes, args.quiet_ms, args.settle, args.max_s, keys,
                 prekeys, args.prekeys_delay)
         raw = r.pop("_raw", b"")
