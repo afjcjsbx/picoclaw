@@ -761,6 +761,23 @@ type TelegramSettings struct {
 	Streaming         StreamingConfig `json:"streaming,omitzero"   yaml:"-"`
 	UseMarkdownV2     bool            `json:"use_markdown_v2"      yaml:"-"               env:"PICOCLAW_CHANNELS_TELEGRAM_USE_MARKDOWN_V2"`
 	MediaGroupDelayMS int             `json:"media_group_delay_ms" yaml:"-"               env:"PICOCLAW_CHANNELS_TELEGRAM_MEDIA_GROUP_DELAY_MS"`
+
+	// TypingKeepalive keeps re-sending the typing chat action while a turn is
+	// running, so the indicator does not fade before the reply arrives.
+	// Disabling it saves one API call every few seconds per active chat; the
+	// indicator then fades ~5 s after the turn starts. Defaults to true when
+	// not explicitly configured.
+	TypingKeepalive *bool `json:"typing_keepalive,omitempty" yaml:"-" env:"PICOCLAW_CHANNELS_TELEGRAM_TYPING_KEEPALIVE"`
+}
+
+// TypingKeepaliveEnabled reports whether the typing chat action should be
+// re-sent while a turn is running. Defaults to true when not explicitly
+// configured.
+func (t TelegramSettings) TypingKeepaliveEnabled() bool {
+	if t.TypingKeepalive == nil {
+		return true
+	}
+	return *t.TypingKeepalive
 }
 
 type FeishuSettings struct {

@@ -30,6 +30,7 @@ The Telegram channel uses long polling via the Telegram Bot API for bot-based co
 | proxy            | string | No       | Proxy URL for connecting to the Telegram API (e.g. http://127.0.0.1:7890) |
 | use_markdown_v2 | bool   | No       | Enable Telegram MarkdownV2 formatting                              |
 | media_group_delay_ms | int | No       | Idle delay before processing Telegram media groups/albums. Defaults to 500 ms |
+| typing_keepalive | bool   | No       | Re-send the typing chat action while a turn is running, so the indicator does not fade before the reply arrives. Defaults to true; disable it to save one API call every few seconds per active chat |
 
 ## Setup
 
