@@ -32,6 +32,15 @@ type PromptMetadataProvider interface {
 	PromptMetadata() PromptMetadata
 }
 
+// ValidationSchemaProvider optionally supplies a schema for runtime argument
+// validation that differs from the schema advertised to the model. Tools that
+// mark a field required only for the model (because some providers drop
+// optional properties from generated calls) can relax it here for actions that
+// do not need it.
+type ValidationSchemaProvider interface {
+	ValidationParameters() map[string]any
+}
+
 // --- Request-scoped tool context (channel / chatID) ---
 //
 // Carried via context.Value so that concurrent tool calls each receive

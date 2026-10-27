@@ -30,6 +30,8 @@ The `exec` tool executes shell commands and manages **background sessions** (lon
 | `cwd` | string | — | Working directory for the command; defaults to the agent workspace |
 | `timeout` | int | — | Timeout in seconds for foreground commands; overrides `tools.exec.timeout_seconds`, and `0` disables it. Cannot be combined with `background=true`. With `wait`: maximum seconds to block (a positive integer), defaulting to and capped by `tools.exec.timeout_seconds` |
 
+Some providers only generate properties listed in the tool schema's `required` array and silently omit optional ones. The wire schema therefore marks `command` as required for every call; for non-`run` actions pass an empty string (for example `{"action":"list","command":""}`). Runtime validation still accepts non-`run` calls that omit `command`, and `action=run` rejects an empty command.
+
 Behavior notes:
 
 - Run one independent command per tool call and chain dependent commands with `&&` (`;` when later commands must run regardless of earlier failures). Do not separate commands with newlines.
