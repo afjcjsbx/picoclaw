@@ -59,10 +59,14 @@ func paymentRequiredResult(urlStr string, resp *http.Response, body []byte) *Too
 			resp.StatusCode, err))
 	}
 
+	paymentOptions := 0
+	if challenge != nil {
+		paymentOptions = len(challenge.Accepts)
+	}
 	logger.WarnCF("tool", "web_fetch received HTTP 402 Payment Required", map[string]any{
 		"url":               urlStr,
 		"has_payment_info":  challenge != nil,
-		"payment_options":   len(challengeOptions(challenge)),
+		"payment_options":   paymentOptions,
 		"payment_error_len": len(paymentError),
 	})
 
@@ -91,11 +95,4 @@ func paymentRequiredUserMessage(urlStr string, challenge *x402.Challenge, parseE
 
 	builder.WriteString("\nPicoClaw did not send a payment and cannot access this resource until it is paid for.")
 	return x402.CleanText(builder.String(), paymentRequiredUserLimit, true)
-}
-
-func challengeOptions(challenge *x402.Challenge) []x402.Requirement {
-	if challenge == nil {
-		return nil
-	}
-	return challenge.Accepts
 }
