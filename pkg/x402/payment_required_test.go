@@ -221,6 +221,21 @@ func TestParseMalformedHeader(t *testing.T) {
 	}
 }
 
+func TestParseHeaderAndBodyErrorsKeepBothChains(t *testing.T) {
+	header := http.Header{HeaderPaymentRequired: []string{"{" + strings.Repeat("A", MaxChallengeBytes)}}
+
+	challenge, err := Parse(header, []byte(`{"x402Version":2,"accepts":`))
+	if challenge != nil {
+		t.Fatalf("expected nil challenge, got %+v", challenge)
+	}
+	if !errors.Is(err, ErrChallengeTooLarge) {
+		t.Errorf("error = %v, want header ErrChallengeTooLarge in the chain", err)
+	}
+	if !errors.Is(err, ErrMalformedChallenge) {
+		t.Errorf("error = %v, want body ErrMalformedChallenge in the chain", err)
+	}
+}
+
 func TestParseNoChallenge(t *testing.T) {
 	for _, body := range [][]byte{
 		nil,

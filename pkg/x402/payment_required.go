@@ -108,7 +108,7 @@ func Parse(header http.Header, body []byte) (*Challenge, error) {
 	}
 	if bodyErr != nil {
 		if headerErr != nil {
-			return nil, fmt.Errorf("%s; %w", headerErr, bodyErr)
+			return nil, fmt.Errorf("%w; %w", headerErr, bodyErr)
 		}
 		return nil, bodyErr
 	}
