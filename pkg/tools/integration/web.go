@@ -23,6 +23,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/logger"
 	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 	"github.com/sipeed/picoclaw/pkg/utils"
+	"github.com/sipeed/picoclaw/pkg/x402"
 )
 
 const (
@@ -2378,7 +2379,13 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		if doErr != nil {
 			return nil, nil, fmt.Errorf("request failed: %w", doErr)
 		}
-		resp.Body = http.MaxBytesReader(nil, resp.Body, t.fetchLimitBytes)
+		readLimit := t.fetchLimitBytes
+		if resp.StatusCode == http.StatusPaymentRequired {
+			// Payment details live in headers, so a huge 402 body must not
+			// prevent parsing them or force buffering the whole error page.
+			readLimit = int64(x402.MaxChallengeBytes)
+		}
+		resp.Body = http.MaxBytesReader(nil, resp.Body, readLimit)
 
 		b, readErr := io.ReadAll(resp.Body)
 		return resp, b, readErr
@@ -2387,6 +2394,13 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	resp, body, err := doFetch(userAgent)
 	if resp != nil && resp.Body != nil {
 		defer resp.Body.Close()
+	}
+
+	if resp != nil && resp.StatusCode == http.StatusPaymentRequired {
+		// A 402 is not a generic fetch failure: the server has told us the
+		// resource is paid. Parse the challenge even when the bounded body read
+		// was truncated, because the canonical details are in the headers.
+		return paymentRequiredResult(urlStr, resp, body)
 	}
 
 	if err != nil {
@@ -2414,9 +2428,14 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 			defer resp2.Body.Close()
 		}
 
-		if err2 == nil {
+		switch {
+		case resp2 != nil && resp2.StatusCode == http.StatusPaymentRequired:
+			// The retry hit a paid resource. Keep the response so the payment
+			// challenge can be parsed even if the bounded body read failed.
 			resp, body = resp2, body2
-		} else {
+		case err2 == nil:
+			resp, body = resp2, body2
+		default:
 			var maxBytesErr *http.MaxBytesError
 			if errors.As(err2, &maxBytesErr) {
 				return ErrorResult(
@@ -2425,6 +2444,13 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 			}
 			return ErrorResult(err2.Error())
 		}
+	}
+
+	if resp.StatusCode == http.StatusPaymentRequired {
+		// A 402 is not a generic fetch failure: the server has told us the
+		// resource is paid. Parse the challenge so the agent can explain the
+		// terms instead of reporting an opaque "request failed".
+		return paymentRequiredResult(urlStr, resp, body)
 	}
 
 	bodyStr := string(body)

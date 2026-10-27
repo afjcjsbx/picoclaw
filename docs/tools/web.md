@@ -251,3 +251,14 @@ For Kagi, `d`, `w`, and `m` map to Kagi lens `time_relative`; `y` maps to a lens
 The default cap is a flood guard, not a context budget: pages fetched without `maxChars` (or under it) keep their full text, which the generic [large tool result handling](../reference/tools_configuration.md#large-tool-results) turns into a head+tail preview plus a pageable workspace artifact instead of a lossy cut. When the cap does apply, the spillover saves the full pre-truncation page (when the result is oversized), so the omitted middle stays readable.
 
 When an intact `web_fetch` envelope is spilled to a workspace artifact (`<workspace>/.artifacts/tool/`), it is stored as its pageable text: the extracted content with real newlines, followed by a `<web-fetch-metadata>` block holding the other result fields (URL, status, extractor, truncation flag, length). This keeps the artifact usable with `read_file` (`offset`/`length`) and `search_files`. A payload is recognized only when it carries the full envelope shape (only known keys, a non-empty `url`, a numeric `status`, and a non-empty `text`); unrecognized JSON from other tools is stored verbatim. When `maxChars` did truncate the page, the artifact stores the full pre-truncation page text instead (see above).
+
+### Payment-required resources (HTTP 402)
+
+`web_fetch` does not treat `402 Payment Required` as an opaque HTTP failure. When the server returns an [x402](https://x402.org) payment challenge, PicoClaw parses it and exposes the payment details to both the model and the user:
+
+- x402 v2: base64-encoded JSON in the `PAYMENT-REQUIRED` response header.
+- x402 v1: JSON in the 402 response body, used as a fallback when the header is absent or malformed.
+
+The result is a structured JSON object with `url`, `status` (`402`), an optional `payment_required` object, `payment_details_error` when a challenge was present but could not be decoded, a bounded `body` snippet, and a message telling the model not to retry automatically. `payment_required` normalizes v1 and v2 into `x402Version`, `error`, `resource`, and `accepts[]` entries with `scheme`, `network`, `amount`, `asset`, `payTo`, `maxTimeoutSeconds`, `resource`, and `extra`. The amount stays in atomic token units because the challenge does not always advertise the token decimals. The user-facing message lists the price, asset, network, recipient, and scheme for each accepted option.
+
+PicoClaw never creates, signs, or sends a payment: it does not add `X-PAYMENT` or `PAYMENT-SIGNATURE` headers. A protected resource remains inaccessible until the payment is handled outside PicoClaw. A malformed or missing challenge still produces a clear "payment required" result instead of a generic request failure.
