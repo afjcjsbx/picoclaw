@@ -1,7 +1,9 @@
 package pico
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/http"
@@ -66,6 +68,94 @@ func TestHandleMessageSend_ForwardsMessageMetadata(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("expected inbound pico message")
+	}
+}
+
+func TestHandleMessageSend_StoresAudioAttachmentWithMediaStore(t *testing.T) {
+	msgBus := bus.NewMessageBus()
+	bc := &config.Channel{Type: config.ChannelPico, Enabled: true}
+	cfg := &config.PicoSettings{}
+	cfg.SetToken("test-token")
+	ch, err := NewPicoChannel(bc, cfg, msgBus)
+	if err != nil {
+		t.Fatalf("NewPicoChannel: %v", err)
+	}
+	ch.ctx = context.Background()
+
+	store := media.NewFileMediaStore()
+	ch.SetMediaStore(store)
+
+	audioBytes := []byte("fake webm audio")
+	dataURL := "data:audio/webm;base64," + base64.StdEncoding.EncodeToString(audioBytes)
+
+	ch.handleMessageSend(&picoConn{id: "conn-audio", sessionID: "sess-audio"}, PicoMessage{
+		Type:      TypeMessageSend,
+		ID:        "msg-audio",
+		SessionID: "sess-audio",
+		Payload: map[string]any{
+			PayloadKeyContent: "",
+			"attachments": []any{
+				map[string]any{
+					"type":         "audio",
+					"filename":     "voice.webm",
+					"content_type": "audio/webm",
+					"url":          dataURL,
+				},
+			},
+		},
+	})
+
+	select {
+	case inbound := <-msgBus.InboundChan():
+		if !strings.Contains(inbound.Content, "[audio: voice.webm]") {
+			t.Fatalf("content = %q, want audio annotation", inbound.Content)
+		}
+		if len(inbound.Media) != 1 || !strings.HasPrefix(inbound.Media[0], "media://") {
+			t.Fatalf("media = %#v, want one media ref", inbound.Media)
+		}
+
+		localPath, meta, err := store.ResolveWithMeta(inbound.Media[0])
+		if err != nil {
+			t.Fatalf("ResolveWithMeta() error = %v", err)
+		}
+		data, err := os.ReadFile(localPath)
+		if err != nil {
+			t.Fatalf("ReadFile() error = %v", err)
+		}
+		if !bytes.Equal(data, audioBytes) {
+			t.Fatalf("stored audio = %q, want %q", data, audioBytes)
+		}
+		if meta.Filename != "voice.webm" {
+			t.Fatalf("filename = %q, want voice.webm", meta.Filename)
+		}
+		if meta.ContentType != "audio/webm" {
+			t.Fatalf("content type = %q, want audio/webm", meta.ContentType)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected inbound pico audio message")
+	}
+}
+
+func TestPicoAudioFilename(t *testing.T) {
+	tests := []struct {
+		name        string
+		raw         string
+		contentType string
+		want        string
+	}{
+		{name: "keeps webm", raw: "voice.webm", contentType: "audio/webm", want: "voice.webm"},
+		{name: "maps mp4 to m4a", raw: "voice.mp4", contentType: "audio/mp4", want: "voice.m4a"},
+		{name: "defaults empty name", raw: "", contentType: "audio/ogg", want: "voice.ogg"},
+		{name: "strips path and brackets", raw: "../evil[1].mp3", contentType: "audio/mpeg", want: "evil_1_.mp3"},
+		{name: "strips control characters", raw: "voice\nname", contentType: "audio/wav", want: "voice_name.wav"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := picoAudioFilename(tt.raw, tt.contentType); got != tt.want {
+				t.Fatalf("picoAudioFilename(%q, %q) = %q, want %q", tt.raw, tt.contentType, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -175,6 +265,9 @@ func TestSend_ThoughtMessageDoesNotFinalizeTrackedToolFeedback(t *testing.T) {
 		if got := payload[PayloadKeyModelName]; got != "gpt-5.4-mini" {
 			t.Fatalf("thought model_name = %#v, want %q", got, "gpt-5.4-mini")
 		}
+		if _, ok := payload[PayloadKeyFinal]; ok {
+			t.Fatal("thought message must not be marked final")
+		}
 		if got := payload["message_id"]; got == "msg-progress" || got == nil || got == "" {
 			t.Fatalf("thought message_id = %#v, want new non-progress id", got)
 		}
@@ -194,6 +287,7 @@ func TestSend_ThoughtMessageDoesNotFinalizeTrackedToolFeedback(t *testing.T) {
 			ChatID:  "pico:sess-1",
 			Raw: map[string]string{
 				PayloadKeyModelName: "gpt-5.4",
+				"outbound_kind":     "final",
 			},
 		},
 		ContextUsage: &bus.ContextUsage{
@@ -220,6 +314,9 @@ func TestSend_ThoughtMessageDoesNotFinalizeTrackedToolFeedback(t *testing.T) {
 		}
 		if got := payload[PayloadKeyModelName]; got != "gpt-5.4" {
 			t.Fatalf("final model_name = %#v, want %q", got, "gpt-5.4")
+		}
+		if got := payload[PayloadKeyFinal]; got != true {
+			t.Fatalf("final flag = %#v, want true", got)
 		}
 		rawUsage, ok := payload["context_usage"].(map[string]any)
 		if !ok {
@@ -538,6 +635,9 @@ func TestBeginStream_ThrottlesIntermediateUpdatesAndFinalFlushes(t *testing.T) {
 	if first.Type != TypeMessageCreate {
 		t.Fatalf("first type = %q, want %q", first.Type, TypeMessageCreate)
 	}
+	if _, ok := first.Payload[PayloadKeyFinal]; ok {
+		t.Fatal("stream update must not be marked final")
+	}
 	msgID, _ := first.Payload["message_id"].(string)
 	assertNoPicoMessage(t, received)
 
@@ -562,6 +662,9 @@ func TestBeginStream_ThrottlesIntermediateUpdatesAndFinalFlushes(t *testing.T) {
 	}
 	if got := final.Payload[PayloadKeyContent]; got != "first plus final text" {
 		t.Fatalf("final content = %#v, want final text", got)
+	}
+	if got := final.Payload[PayloadKeyFinal]; got != true {
+		t.Fatalf("final flag = %#v, want true", got)
 	}
 	assertNoPicoMessage(t, received)
 }
@@ -730,6 +833,227 @@ func TestBroadcastToSession_TargetsOnlyRequestedSession(t *testing.T) {
 	}
 	if !errors.Is(err, channels.ErrSendFailed) {
 		t.Fatalf("expected ErrSendFailed, got %v", err)
+	}
+}
+
+func TestBroadcastToSession_SendsActivityToAllSessionsObserver(t *testing.T) {
+	ch := newTestPicoChannel(t)
+	observerConn, observerMessages, cleanup := newTestPicoWebSocket(t)
+	defer cleanup()
+	ch.addConnForTest(&picoConn{
+		id:        "observer",
+		conn:      observerConn,
+		sessionID: allSessionsSessionID,
+	})
+
+	err := ch.broadcastToSession("pico:s-target", newMessage(TypeMessageCreate, map[string]any{
+		PayloadKeyContent: "secret",
+	}))
+	if !errors.Is(err, channels.ErrSendFailed) {
+		t.Fatalf("broadcastToSession() error = %v, want ErrSendFailed", err)
+	}
+
+	activity := mustReceivePicoMessage(t, observerMessages)
+	if activity.Type != TypeSessionActivity {
+		t.Fatalf("activity type = %q, want %q", activity.Type, TypeSessionActivity)
+	}
+	if activity.SessionID != "s-target" {
+		t.Fatalf("activity session_id = %q, want %q", activity.SessionID, "s-target")
+	}
+	if got := activity.Payload[PayloadKeyEvent]; got != TypeMessageCreate {
+		t.Fatalf("activity event = %#v, want %q", got, TypeMessageCreate)
+	}
+	if _, exists := activity.Payload[PayloadKeyContent]; exists {
+		t.Fatal("activity payload must not include message content")
+	}
+}
+
+func TestStartTyping_EmitsActivityWithoutSessionClient(t *testing.T) {
+	ch := newTestPicoChannel(t)
+	observerConn, observerMessages, cleanup := newTestPicoWebSocket(t)
+	defer cleanup()
+	ch.addConnForTest(&picoConn{
+		id:        "observer",
+		conn:      observerConn,
+		sessionID: allSessionsSessionID,
+	})
+
+	stop, err := ch.StartTyping(context.Background(), "pico:s-target")
+	if err != nil {
+		t.Fatalf("StartTyping() error = %v", err)
+	}
+	if stop == nil {
+		t.Fatal("StartTyping() returned a nil stop function")
+	}
+
+	started := mustReceivePicoMessage(t, observerMessages)
+	if started.Type != TypeSessionActivity {
+		t.Fatalf("activity type = %q, want %q", started.Type, TypeSessionActivity)
+	}
+	if got := started.Payload[PayloadKeyEvent]; got != TypeTypingStart {
+		t.Fatalf("activity event = %#v, want %q", got, TypeTypingStart)
+	}
+
+	stop()
+
+	stopped := mustReceivePicoMessage(t, observerMessages)
+	if got := stopped.Payload[PayloadKeyEvent]; got != TypeTypingStop {
+		t.Fatalf("activity event = %#v, want %q", got, TypeTypingStop)
+	}
+}
+
+func TestBroadcastToSession_ActivityCarriesFinalFlag(t *testing.T) {
+	ch := newTestPicoChannel(t)
+	observerConn, observerMessages, cleanup := newTestPicoWebSocket(t)
+	defer cleanup()
+	ch.addConnForTest(&picoConn{
+		id:        "observer",
+		conn:      observerConn,
+		sessionID: allSessionsSessionID,
+	})
+
+	_ = ch.broadcastToSession("pico:s-target", newMessage(TypeMessageCreate, map[string]any{
+		PayloadKeyContent: "secret",
+		PayloadKeyFinal:   true,
+	}))
+
+	activity := mustReceivePicoMessage(t, observerMessages)
+	if activity.Type != TypeSessionActivity {
+		t.Fatalf("activity type = %q, want %q", activity.Type, TypeSessionActivity)
+	}
+	if got := activity.Payload[PayloadKeyFinal]; got != true {
+		t.Fatalf("activity final = %#v, want true", got)
+	}
+	if _, exists := activity.Payload[PayloadKeyContent]; exists {
+		t.Fatal("activity payload must not include message content")
+	}
+}
+
+func TestBroadcastToSession_EmitsTypingStartWithoutSessionClient(t *testing.T) {
+	ch := newTestPicoChannel(t)
+	observerConn, observerMessages, cleanup := newTestPicoWebSocket(t)
+	defer cleanup()
+	ch.addConnForTest(&picoConn{
+		id:        "observer",
+		conn:      observerConn,
+		sessionID: allSessionsSessionID,
+	})
+
+	_ = ch.broadcastToSession("pico:s-target", newMessage(TypeTypingStart, nil))
+
+	activity := mustReceivePicoMessage(t, observerMessages)
+	if activity.Type != TypeSessionActivity {
+		t.Fatalf("activity type = %q, want %q", activity.Type, TypeSessionActivity)
+	}
+	if activity.SessionID != "s-target" {
+		t.Fatalf("activity session_id = %q, want %q", activity.SessionID, "s-target")
+	}
+	if got := activity.Payload[PayloadKeyEvent]; got != TypeTypingStart {
+		t.Fatalf("activity event = %#v, want %q", got, TypeTypingStart)
+	}
+}
+
+func TestHandleWebSocket_AllSessionsObserverReceivesActivity(t *testing.T) {
+	ch := newTestPicoChannel(t)
+	if err := ch.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	defer ch.Stop(context.Background())
+
+	server := httptest.NewServer(ch)
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/pico/ws?all_sessions=1"
+	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, http.Header{
+		"Authorization": {"Bearer test-token"},
+	})
+	if err != nil {
+		t.Fatalf("Dial() error = %v", err)
+	}
+	defer resp.Body.Close()
+	defer conn.Close()
+
+	deadline := time.Now().Add(time.Second)
+	for ch.currentConnCount() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := ch.currentConnCount(); got != 1 {
+		t.Fatalf("currentConnCount() = %d, want 1", got)
+	}
+
+	_ = ch.broadcastToSession("pico:s-target", newMessage(TypeMessageCreate, map[string]any{
+		PayloadKeyContent: "secret",
+	}))
+
+	_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+	var activity PicoMessage
+	if err := conn.ReadJSON(&activity); err != nil {
+		t.Fatalf("ReadJSON() error = %v", err)
+	}
+	if activity.Type != TypeSessionActivity {
+		t.Fatalf("activity type = %q, want %q", activity.Type, TypeSessionActivity)
+	}
+	if activity.SessionID != "s-target" {
+		t.Fatalf("activity session_id = %q, want %q", activity.SessionID, "s-target")
+	}
+	if got := activity.Payload[PayloadKeyEvent]; got != TypeMessageCreate {
+		t.Fatalf("activity event = %#v, want %q", got, TypeMessageCreate)
+	}
+}
+
+func TestHandleMessageSend_RejectsAllSessionsConnection(t *testing.T) {
+	ch := newTestPicoChannel(t)
+	conn, received, cleanup := newTestPicoWebSocket(t)
+	defer cleanup()
+
+	pc := &picoConn{id: "observer", conn: conn, sessionID: allSessionsSessionID}
+	ch.handleMessageSend(pc, newMessage(TypeMessageSend, map[string]any{
+		PayloadKeyContent: "hello",
+	}))
+
+	errMsg := mustReceivePicoMessage(t, received)
+	if errMsg.Type != TypeError {
+		t.Fatalf("message type = %q, want %q", errMsg.Type, TypeError)
+	}
+	if got := errMsg.Payload["code"]; got != "read_only" {
+		t.Fatalf("error code = %#v, want %q", got, "read_only")
+	}
+}
+
+func TestBroadcastToSession_EmitsTypingStartWithSessionClient(t *testing.T) {
+	ch := newTestPicoChannel(t)
+
+	observerConn, observerMessages, observerCleanup := newTestPicoWebSocket(t)
+	defer observerCleanup()
+	ch.addConnForTest(&picoConn{
+		id:        "observer",
+		conn:      observerConn,
+		sessionID: allSessionsSessionID,
+	})
+
+	targetConn, targetMessages, targetCleanup := newTestPicoWebSocket(t)
+	defer targetCleanup()
+	ch.addConnForTest(&picoConn{
+		id:        "target",
+		conn:      targetConn,
+		sessionID: "s-target",
+	})
+
+	if err := ch.broadcastToSession("pico:s-target", newMessage(TypeTypingStart, nil)); err != nil {
+		t.Fatalf("broadcastToSession() error = %v", err)
+	}
+
+	direct := mustReceivePicoMessage(t, targetMessages)
+	if direct.Type != TypeTypingStart {
+		t.Fatalf("direct type = %q, want %q", direct.Type, TypeTypingStart)
+	}
+
+	activity := mustReceivePicoMessage(t, observerMessages)
+	if activity.Type != TypeSessionActivity {
+		t.Fatalf("activity type = %q, want %q", activity.Type, TypeSessionActivity)
+	}
+	if got := activity.Payload[PayloadKeyEvent]; got != TypeTypingStart {
+		t.Fatalf("activity event = %#v, want %q", got, TypeTypingStart)
 	}
 }
 

@@ -1,10 +1,27 @@
-import { IconArrowBackUp, IconGitFork, IconPlus } from "@tabler/icons-react"
-import { useAtom } from "jotai"
+import {
+  IconActivity,
+  IconArrowBackUp,
+  IconChevronDown,
+  IconGitFork,
+  IconLayoutColumns,
+  IconLayoutDashboard,
+  IconLayoutGrid,
+  IconLayoutRows,
+  IconLayoutSidebarRight,
+  IconPlus,
+  IconX,
+} from "@tabler/icons-react"
+import type { TFunction } from "i18next"
+import { useAtom, useAtomValue } from "jotai"
 import {
   type ChangeEvent,
+  Children,
   type ClipboardEvent,
   type DragEvent,
+  type ReactNode,
+  useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react"
@@ -18,37 +35,411 @@ import {
   type ChatInputDisabledReason,
 } from "@/components/chat/chat-composer"
 import { ChatEmptyState } from "@/components/chat/chat-empty-state"
+import { FilePreviewPanel } from "@/components/chat/file-preview-panel"
 import { ModelSelector } from "@/components/chat/model-selector"
-import { SessionHistoryMenu } from "@/components/chat/session-history-menu"
 import { TypingIndicator } from "@/components/chat/typing-indicator"
 import { UserMessage } from "@/components/chat/user-message"
 import { PageHeader } from "@/components/page-header"
 import { Button } from "@/components/ui/button"
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible"
 import {
-  CHAT_IMAGE_ACCEPT,
-  buildChatImageAttachments,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { loadSessionMessages } from "@/features/chat/history"
+import {
+  CHAT_ATTACHMENT_ACCEPT,
+  buildChatAttachments,
   getTransferredFiles,
   hasFileTransfer,
 } from "@/features/chat/image-input"
+import {
+  mergeSplitConversations,
+  removeSplitConversation,
+} from "@/features/chat/split-groups"
 import { useChatModels } from "@/hooks/use-chat-models"
 import { useGateway } from "@/hooks/use-gateway"
 import { usePicoChat } from "@/hooks/use-pico-chat"
-import { useSessionHistory } from "@/hooks/use-session-history"
-import type { AssistantDetailVisibility } from "@/store/chat"
-import type { ConnectionState } from "@/store/chat"
-import type { ChatAttachment } from "@/store/chat"
+import { useSlashCommands } from "@/hooks/use-slash-commands"
+import type {
+  ChatAttachment,
+  ChatMessage,
+  ConnectionState,
+  SplitLayout,
+  SplitLayoutSizes,
+  SplitSessionState,
+} from "@/store/chat"
 import {
-  assistantDetailVisibilityAtom,
-  shouldShowAssistantMessage,
+  initializeSplitSessionState,
+  pendingScrollTargetAtom,
+  sessionTitlesAtom,
+  splitConversationsAtom,
+  splitLayoutSizesAtom,
+  splitLayoutsAtom,
+  splitSessionStatesAtom,
 } from "@/store/chat"
 import type { GatewayState } from "@/store/gateway"
+
+const SPLIT_LAYOUTS: Array<{
+  value: SplitLayout
+  label: string
+  icon: typeof IconLayoutColumns
+}> = [
+  { value: "columns", label: "Columns", icon: IconLayoutColumns },
+  { value: "rows", label: "Rows", icon: IconLayoutRows },
+  { value: "grid", label: "Grid", icon: IconLayoutGrid },
+  { value: "bsp", label: "BSP", icon: IconLayoutDashboard },
+  {
+    value: "main-stack",
+    label: "Main and stack",
+    icon: IconLayoutSidebarRight,
+  },
+]
+
+function AssistantActivityGroup({
+  label,
+  status,
+  children,
+  isActive,
+}: {
+  label: string
+  status?: ReactNode
+  children: ReactNode
+  isActive: boolean
+}) {
+  const [open, setOpen] = useState(false)
+  useEffect(() => {
+    if (!isActive) setOpen(false)
+  }, [isActive])
+  const hasDetails = Children.count(children) > 0
+
+  return (
+    <Collapsible
+      open={isActive || open}
+      onOpenChange={setOpen}
+      className="group/activity w-full"
+    >
+      {hasDetails ? (
+        <CollapsibleTrigger className="text-muted-foreground hover:text-foreground focus-visible:ring-ring flex w-full min-w-0 items-center gap-1 rounded-sm text-left focus-visible:ring-2 focus-visible:outline-none">
+          {status ?? (
+            <span className="flex min-w-0 flex-1 items-center gap-1.5 py-0.5 text-[12px] leading-4">
+              <IconActivity aria-hidden="true" className="size-3.5 shrink-0" />
+              <span className="truncate">{label}</span>
+            </span>
+          )}
+          <IconChevronDown className="size-3.5 shrink-0 transition-transform group-data-[state=open]/activity:rotate-180" />
+        </CollapsibleTrigger>
+      ) : (
+        status
+      )}
+      {hasDetails && (
+        <CollapsibleContent>
+          <div className="mt-0.5 space-y-0.75">{children}</div>
+        </CollapsibleContent>
+      )}
+    </Collapsible>
+  )
+}
+
+function splitGroupKey(sessions: string[]) {
+  return [...sessions].sort().join("\u0000")
+}
+
+type SplitAxis = "columns" | "rows"
+
+interface SplitDivider {
+  axis: SplitAxis
+  index: number
+  style: React.CSSProperties
+}
+
+function getDefaultSplitSizes(
+  layout: SplitLayout,
+  count: number,
+): SplitLayoutSizes {
+  if (layout === "rows") {
+    return {
+      columns: [1],
+      rows: Array.from({ length: count }, () => 1 / count),
+    }
+  }
+
+  if (layout === "grid") {
+    const columns = Math.ceil(Math.sqrt(count))
+    const rows = Math.ceil(count / columns)
+    return {
+      columns: Array.from({ length: columns }, () => 1 / columns),
+      rows: Array.from({ length: rows }, () => 1 / rows),
+    }
+  }
+
+  if (layout === "main-stack") {
+    return {
+      columns: [1.65 / 2.65, 1 / 2.65],
+      rows: Array.from({ length: count - 1 }, () => 1 / (count - 1)),
+    }
+  }
+
+  if (layout === "bsp" && count === 3) {
+    return { columns: [0.5, 0.5], rows: [0.5, 0.5] }
+  }
+
+  if (layout === "bsp" && count >= 4) {
+    return { columns: [0.5, 0.25, 0.25], rows: [0.5, 0.5] }
+  }
+
+  return {
+    columns: Array.from({ length: count }, () => 1 / count),
+    rows: [1],
+  }
+}
+
+function normalizeSplitSizes(sizes: number[] | undefined, defaults: number[]) {
+  if (
+    !sizes ||
+    sizes.length !== defaults.length ||
+    sizes.some((size) => !Number.isFinite(size) || size <= 0)
+  ) {
+    return defaults
+  }
+  const total = sizes.reduce((sum, size) => sum + size, 0)
+  return sizes.map((size) => size / total)
+}
+
+function getSplitLayoutGeometry(
+  layout: SplitLayout,
+  count: number,
+  savedSizes?: SplitLayoutSizes,
+) {
+  const defaults = getDefaultSplitSizes(layout, count)
+  const sizes = {
+    columns: normalizeSplitSizes(savedSizes?.columns, defaults.columns),
+    rows: normalizeSplitSizes(savedSizes?.rows, defaults.rows),
+  }
+  const gridStyle: React.CSSProperties = {
+    gridTemplateColumns: sizes.columns
+      .map((size) => `minmax(0, ${size}fr)`)
+      .join(" "),
+    gridTemplateRows: sizes.rows
+      .map((size) => `minmax(0, ${size}fr)`)
+      .join(" "),
+  }
+  const paneStyles: Array<React.CSSProperties | undefined> = []
+  const dividers: SplitDivider[] = []
+  const columnOffset = (index: number) =>
+    `${sizes.columns.slice(0, index).reduce((sum, size) => sum + size, 0) * 100}%`
+  const rowOffset = (index: number) =>
+    `${sizes.rows.slice(0, index).reduce((sum, size) => sum + size, 0) * 100}%`
+  const addColumnDividers = (first = 1, last = sizes.columns.length - 1) => {
+    for (let index = first; index <= last; index += 1) {
+      dividers.push({
+        axis: "columns",
+        index: index - 1,
+        style: { left: columnOffset(index), top: 0, bottom: 0 },
+      })
+    }
+  }
+  const addRowDividers = (left = "0%") => {
+    for (let index = 1; index < sizes.rows.length; index += 1) {
+      dividers.push({
+        axis: "rows",
+        index: index - 1,
+        style: { top: rowOffset(index), left, right: 0 },
+      })
+    }
+  }
+
+  if (layout === "rows") {
+    addRowDividers()
+  } else if (layout === "grid") {
+    addColumnDividers()
+    addRowDividers()
+  } else if (layout === "main-stack") {
+    addColumnDividers()
+    addRowDividers(columnOffset(1))
+  } else if (layout === "bsp" && count === 3) {
+    addColumnDividers()
+    addRowDividers(columnOffset(1))
+  } else if (layout === "bsp" && count >= 4) {
+    addColumnDividers(1, 1)
+    dividers.push({
+      axis: "columns",
+      index: 1,
+      style: { left: columnOffset(2), top: rowOffset(1), bottom: 0 },
+    })
+    dividers.push({
+      axis: "rows",
+      index: 0,
+      style: { top: rowOffset(1), left: columnOffset(1), right: 0 },
+    })
+  } else {
+    addColumnDividers()
+  }
+
+  if (layout === "main-stack") {
+    paneStyles.push({ gridColumn: "1", gridRow: `1 / ${count}` })
+    for (let index = 0; index < count - 1; index += 1) {
+      paneStyles.push({ gridColumn: "2", gridRow: index + 1 })
+    }
+  } else if (layout === "bsp" && count === 3) {
+    paneStyles.push(
+      { gridColumn: "1", gridRow: "1 / 3" },
+      { gridColumn: "2", gridRow: "1" },
+      { gridColumn: "2", gridRow: "2" },
+    )
+  } else if (layout === "bsp" && count >= 4) {
+    paneStyles.push(
+      { gridColumn: "1", gridRow: "1 / 3" },
+      { gridColumn: "2 / 4", gridRow: "1" },
+      { gridColumn: "2", gridRow: "2" },
+      { gridColumn: "3", gridRow: "2" },
+    )
+  }
+
+  return { gridStyle, paneStyles, dividers, sizes }
+}
+
+const MIN_SPLIT_PANE_SIZE = 160
+const MIN_FILE_PREVIEW_WIDTH = 280
+
+function resizeSplitSizes(
+  sizes: SplitLayoutSizes,
+  axis: SplitAxis,
+  index: number,
+  delta: number,
+  extent: number,
+): SplitLayoutSizes {
+  const tracks = [...sizes[axis]]
+  const pairSize = tracks[index] + tracks[index + 1]
+  const minimum = Math.min(
+    MIN_SPLIT_PANE_SIZE / Math.max(extent, 1),
+    pairSize / 2,
+  )
+  tracks[index] = Math.max(
+    minimum,
+    Math.min(pairSize - minimum, tracks[index] + delta),
+  )
+  tracks[index + 1] = pairSize - tracks[index]
+  return { ...sizes, [axis]: tracks }
+}
+
+interface SplitResizeHandleProps extends SplitDivider {
+  sizes: SplitLayoutSizes
+  onResize: (sizes: SplitLayoutSizes) => void
+  label: string
+}
+
+function SplitResizeHandle({
+  axis,
+  index,
+  style,
+  sizes,
+  onResize,
+  label,
+}: SplitResizeHandleProps) {
+  const dragRef = useRef<{
+    pointerId: number
+    position: number
+    extent: number
+    sizes: SplitLayoutSizes
+  } | null>(null)
+  const orientation = axis === "columns" ? "vertical" : "horizontal"
+  const currentSize = sizes[axis][index]
+
+  const getExtent = (element: HTMLElement) => {
+    const rect = element.parentElement?.getBoundingClientRect()
+    return rect ? (axis === "columns" ? rect.width : rect.height) : 0
+  }
+  const getPosition = (event: React.PointerEvent) =>
+    axis === "columns" ? event.clientX : event.clientY
+
+  return (
+    <div
+      role="separator"
+      aria-label={label}
+      aria-orientation={orientation}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={Math.round(currentSize * 100)}
+      tabIndex={0}
+      style={style}
+      onPointerDown={(event) => {
+        if (event.button !== 0) return
+        const extent = getExtent(event.currentTarget)
+        if (!extent) return
+        event.preventDefault()
+        event.currentTarget.setPointerCapture(event.pointerId)
+        dragRef.current = {
+          pointerId: event.pointerId,
+          position: getPosition(event),
+          extent,
+          sizes,
+        }
+      }}
+      onPointerMove={(event) => {
+        const drag = dragRef.current
+        if (!drag || drag.pointerId !== event.pointerId) return
+        const delta = (getPosition(event) - drag.position) / drag.extent
+        onResize(resizeSplitSizes(drag.sizes, axis, index, delta, drag.extent))
+      }}
+      onPointerUp={(event) => {
+        dragRef.current = null
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+          event.currentTarget.releasePointerCapture(event.pointerId)
+        }
+      }}
+      onPointerCancel={() => {
+        dragRef.current = null
+      }}
+      onLostPointerCapture={() => {
+        dragRef.current = null
+      }}
+      onKeyDown={(event) => {
+        const extent = getExtent(event.currentTarget)
+        const pairSize = currentSize + sizes[axis][index + 1]
+        const minimum = Math.min(
+          MIN_SPLIT_PANE_SIZE / Math.max(extent, 1),
+          pairSize / 2,
+        )
+        let delta: number
+        if (event.key === "Home") {
+          delta = minimum - currentSize
+        } else if (event.key === "End") {
+          delta = pairSize - minimum - currentSize
+        } else if (
+          (axis === "columns" && event.key === "ArrowLeft") ||
+          (axis === "rows" && event.key === "ArrowUp")
+        ) {
+          delta = -24 / Math.max(extent, 1)
+        } else if (
+          (axis === "columns" && event.key === "ArrowRight") ||
+          (axis === "rows" && event.key === "ArrowDown")
+        ) {
+          delta = 24 / Math.max(extent, 1)
+        } else {
+          return
+        }
+        event.preventDefault()
+        onResize(resizeSplitSizes(sizes, axis, index, delta, extent))
+      }}
+      className={`group focus-visible:ring-ring absolute z-20 flex touch-none items-center justify-center outline-none select-none focus-visible:ring-2 ${axis === "columns" ? "top-0 bottom-0 w-2 -translate-x-1/2 cursor-col-resize" : "right-0 left-0 h-2 -translate-y-1/2 cursor-row-resize"}`}
+    >
+      <span
+        aria-hidden="true"
+        className={`${axis === "columns" ? "h-full w-px" : "h-px w-full"} bg-border/70 group-hover:bg-primary group-focus-visible:bg-primary transition-colors`}
+      />
+    </div>
+  )
+}
 
 function resolveChatInputDisabledReason({
   hasDefaultModel,
@@ -102,35 +493,317 @@ function resolveChatInputDisabledReason({
   return null
 }
 
+interface SplitConversationViewProps {
+  sessions: string[]
+  layout: SplitLayout
+  activeSessionId: string
+  activeHistoryStart: number
+  hasHydratedActiveSession: boolean
+  sessionTitles: Record<string, string>
+  splitSessionStates: Record<string, SplitSessionState>
+  messages: ChatMessage[]
+  isTyping: boolean
+  renderMessages: (
+    messages: ChatMessage[],
+    sessionId: string,
+    historyStart: number,
+    isTyping: boolean,
+  ) => React.ReactNode
+  onActivate: (sessionId: string) => void
+  onRemove: (sessionId: string) => void
+  onScroll: (event: React.UIEvent<HTMLDivElement>) => void
+  activeEmptyState: React.ReactNode
+  t: TFunction
+}
+
+function SplitConversationView({
+  sessions,
+  layout,
+  activeSessionId,
+  activeHistoryStart,
+  hasHydratedActiveSession,
+  sessionTitles,
+  splitSessionStates,
+  messages,
+  isTyping,
+  renderMessages,
+  onActivate,
+  onRemove,
+  onScroll,
+  activeEmptyState,
+  t,
+}: SplitConversationViewProps) {
+  const [storedSizes, setStoredSizes] = useAtom(splitLayoutSizesAtom)
+  const sizeKey = `${splitGroupKey(sessions)}\u0001${layout}`
+  const { gridStyle, paneStyles, dividers, sizes } = getSplitLayoutGeometry(
+    layout,
+    sessions.length,
+    storedSizes[sizeKey],
+  )
+  const [history, setHistory] = useState<Record<string, ChatMessage[] | null>>(
+    {},
+  )
+  const activeSessionRef = useRef(activeSessionId)
+  const hydratedSessionRef = useRef(hasHydratedActiveSession)
+  const sessionSnapshotsRef = useRef(new Set<string>())
+  const sessionsKey = JSON.stringify(sessions)
+
+  useLayoutEffect(() => {
+    activeSessionRef.current = activeSessionId
+    hydratedSessionRef.current = hasHydratedActiveSession
+  }, [activeSessionId, hasHydratedActiveSession])
+
+  useEffect(() => {
+    let cancelled = false
+    for (const sessionId of JSON.parse(sessionsKey) as string[]) {
+      void loadSessionMessages(sessionId)
+        .then((page) => {
+          if (
+            cancelled ||
+            sessionSnapshotsRef.current.has(sessionId) ||
+            (sessionId === activeSessionRef.current &&
+              hydratedSessionRef.current)
+          ) {
+            return
+          }
+          initializeSplitSessionState(sessionId, page)
+          setHistory((current) => ({ ...current, [sessionId]: page.messages }))
+        })
+        .catch((error) => {
+          console.error("Failed to load split conversation:", error)
+          if (
+            cancelled ||
+            sessionSnapshotsRef.current.has(sessionId) ||
+            (sessionId === activeSessionRef.current &&
+              hydratedSessionRef.current)
+          ) {
+            return
+          }
+          setHistory((current) => ({ ...current, [sessionId]: null }))
+        })
+    }
+    return () => {
+      cancelled = true
+    }
+  }, [sessionsKey])
+
+  useEffect(() => {
+    if (!hasHydratedActiveSession) return
+    sessionSnapshotsRef.current.add(activeSessionId)
+    setHistory((current) => ({ ...current, [activeSessionId]: messages }))
+  }, [activeSessionId, hasHydratedActiveSession, messages])
+
+  return (
+    <div
+      className="relative grid h-full min-h-0 min-w-0 gap-0 overflow-hidden"
+      style={gridStyle}
+    >
+      {sessions.map((sessionId, index) => {
+        const isActive = sessionId === activeSessionId
+        const paneMessages =
+          isActive && hasHydratedActiveSession
+            ? messages
+            : (splitSessionStates[sessionId]?.messages ??
+              history[sessionId] ??
+              (isActive ? messages : undefined))
+        const title =
+          sessionTitles[sessionId] ||
+          t("chat.splitConversation", { number: index + 1 })
+
+        return (
+          <SplitConversationPane
+            key={sessionId}
+            sessionId={sessionId}
+            index={index}
+            title={title}
+            style={paneStyles[index]}
+            showActiveIndicator={sessions.length > 1}
+            messages={paneMessages ?? []}
+            historyStart={isActive ? activeHistoryStart : 0}
+            isLoaded={
+              (isActive && hasHydratedActiveSession) ||
+              sessionId in splitSessionStates ||
+              sessionId in history ||
+              (isActive && messages.length > 0)
+            }
+            isActive={isActive}
+            isTyping={
+              isActive
+                ? isTyping
+                : (splitSessionStates[sessionId]?.isTyping ?? false)
+            }
+            renderMessages={renderMessages}
+            onActivate={onActivate}
+            onRemove={onRemove}
+            onScroll={onScroll}
+            emptyContent={isActive ? activeEmptyState : null}
+            loadError={paneMessages === null}
+            t={t}
+          />
+        )
+      })}
+      {dividers.map((divider) => (
+        <SplitResizeHandle
+          key={`${divider.axis}-${divider.index}`}
+          {...divider}
+          sizes={sizes}
+          onResize={(nextSizes) =>
+            setStoredSizes((current) => ({ ...current, [sizeKey]: nextSizes }))
+          }
+          label={t("chat.resizeSplitPane", {
+            defaultValue: "Resize conversation panes",
+          })}
+        />
+      ))}
+    </div>
+  )
+}
+
+interface SplitConversationPaneProps {
+  sessionId: string
+  index: number
+  title: string
+  style?: React.CSSProperties
+  showActiveIndicator: boolean
+  messages: ChatMessage[]
+  historyStart: number
+  isLoaded: boolean
+  isActive: boolean
+  isTyping: boolean
+  renderMessages: SplitConversationViewProps["renderMessages"]
+  onActivate: SplitConversationViewProps["onActivate"]
+  onRemove: SplitConversationViewProps["onRemove"]
+  onScroll: SplitConversationViewProps["onScroll"]
+  emptyContent: React.ReactNode
+  loadError: boolean
+  t: SplitConversationViewProps["t"]
+}
+
+function SplitConversationPane({
+  sessionId,
+  index,
+  title,
+  style,
+  showActiveIndicator,
+  messages,
+  historyStart,
+  isLoaded,
+  isActive,
+  isTyping,
+  renderMessages,
+  onActivate,
+  onRemove,
+  onScroll,
+  emptyContent,
+  loadError,
+  t,
+}: SplitConversationPaneProps) {
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const stickToBottomRef = useRef(true)
+
+  useEffect(() => {
+    if (isLoaded && stickToBottomRef.current && scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+    }
+  }, [isLoaded, messages, isTyping])
+
+  return (
+    <section
+      aria-label={
+        isActive && showActiveIndicator
+          ? `${title}, ${index + 1}, ${t("chat.activeSplitPane", { defaultValue: "Active" })}`
+          : `${title}, ${index + 1}`
+      }
+      tabIndex={0}
+      style={style}
+      onClick={(event) => {
+        const target = event.target as HTMLElement
+        if (target.closest("[data-pane-close]")) return
+        if (!isActive) onActivate(sessionId)
+      }}
+      onFocusCapture={(event) => {
+        if (
+          !isActive &&
+          !(event.target as HTMLElement).closest("[data-pane-close]")
+        ) {
+          onActivate(sessionId)
+        }
+      }}
+      className="bg-background relative flex min-h-0 min-w-0 flex-col overflow-hidden"
+    >
+      <button
+        type="button"
+        data-pane-close
+        aria-label={t("chat.removeSplitPane")}
+        title={t("chat.removeSplitPane")}
+        onClick={() => onRemove(sessionId)}
+        className="text-muted-foreground hover:text-foreground bg-background/85 absolute top-12 right-1 z-30 rounded p-1"
+      >
+        <IconX className="size-4" />
+      </button>
+      {isActive && showActiveIndicator && (
+        <span
+          aria-hidden="true"
+          className="bg-foreground/35 pointer-events-none absolute bottom-3 left-1/2 z-20 h-[3px] w-9 -translate-x-1/2 rounded-full"
+        />
+      )}
+      <div
+        ref={scrollRef}
+        data-session-scroll={sessionId}
+        onScroll={onScroll}
+        onScrollCapture={(event) => {
+          const element = event.currentTarget
+          stickToBottomRef.current =
+            element.scrollHeight - element.scrollTop <=
+            element.clientHeight + 10
+        }}
+        className="chat-scroll-fade min-h-0 flex-1 overflow-y-auto px-3"
+      >
+        {!isLoaded ? (
+          <div className="text-muted-foreground py-6 text-center text-sm">
+            {t("chat.loadingMore")}
+          </div>
+        ) : loadError ? (
+          <div className="text-muted-foreground py-6 text-center text-sm">
+            {t("chat.historyLoadFailed")}
+          </div>
+        ) : (
+          <div className="mx-auto flex w-full max-w-[49.5rem] flex-col gap-6">
+            {messages.length === 0 && !isTyping && emptyContent}
+            {renderMessages(messages, sessionId, historyStart, isTyping)}
+          </div>
+        )}
+      </div>
+    </section>
+  )
+}
+
 export function ChatPage() {
   const { t } = useTranslation()
   const scrollRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const dragDepthRef = useRef(0)
   const [isAtBottom, setIsAtBottom] = useState(true)
-  const [hasScrolled, setHasScrolled] = useState(false)
   const [input, setInput] = useState("")
+  const [filePreviewPath, setFilePreviewPath] = useState("")
+  const [filePreviewWidth, setFilePreviewWidth] = useState(420)
+  const fileResizeRef = useRef<{
+    pointerId: number
+    x: number
+    width: number
+  } | null>(null)
   const [attachments, setAttachments] = useState<ChatAttachment[]>([])
   const [isDragActive, setIsDragActive] = useState(false)
   const [forkedFrom, setForkedFrom] = useState<string>()
   const [forkIndex, setForkIndex] = useState(0)
   const pendingReturnIndexRef = useRef<number | null>(null)
-  const [assistantDetailVisibility, setAssistantDetailVisibility] = useAtom(
-    assistantDetailVisibilityAtom,
+  const [splitGroups, setSplitGroups] = useAtom(splitConversationsAtom)
+  const [splitLayouts, setSplitLayouts] = useAtom(splitLayoutsAtom)
+  const [pendingScrollTarget, setPendingScrollTarget] = useAtom(
+    pendingScrollTargetAtom,
   )
-
-  const assistantDetailVisibilityOptions: Array<{
-    value: AssistantDetailVisibility
-    label: string
-  }> = [
-    { value: "none", label: t("chat.assistantDetailVisibility.none") },
-    { value: "thought", label: t("chat.assistantDetailVisibility.thought") },
-    {
-      value: "tool_calls",
-      label: t("chat.assistantDetailVisibility.toolCalls"),
-    },
-    { value: "all", label: t("chat.assistantDetailVisibility.all") },
-  ]
+  const sessionTitles = useAtomValue(sessionTitlesAtom)
+  const splitSessionStates = useAtomValue(splitSessionStatesAtom)
 
   const {
     messages,
@@ -138,6 +811,7 @@ export function ChatPage() {
     isTyping,
     activeSessionId,
     historyStart,
+    hasHydratedActiveSession,
     hasMoreHistory,
     contextUsage,
     sendMessage,
@@ -146,6 +820,28 @@ export function ChatPage() {
     newChat,
   } = usePicoChat()
 
+  const activeSplitGroup = splitGroups.find((group) =>
+    group.includes(activeSessionId),
+  )
+  const activeSplitLayout = activeSplitGroup
+    ? (splitLayouts[splitGroupKey(activeSplitGroup)] ?? "columns")
+    : "columns"
+  const ActiveSplitLayoutIcon =
+    SPLIT_LAYOUTS.find((option) => option.value === activeSplitLayout)?.icon ??
+    IconLayoutColumns
+  const getActiveScroller = useCallback(() => {
+    const root = scrollRef.current
+    if (!root) return null
+    if (root.dataset.sessionScroll === activeSessionId) return root
+    return (
+      Array.from(
+        root.querySelectorAll<HTMLDivElement>("[data-session-scroll]"),
+      ).find((element) => element.dataset.sessionScroll === activeSessionId) ??
+      null
+    )
+  }, [activeSessionId])
+
+  const slashCommands = useSlashCommands()
   const { state: gwState } = useGateway()
   const isGatewayRunning = gwState === "running"
 
@@ -165,6 +861,24 @@ export function ChatPage() {
     gatewayState: gwState,
   })
   const canInput = inputDisabledReason === null
+
+  const handleOpenFile = (path: string) => {
+    setFilePreviewPath(path)
+  }
+
+  const handleResizeFilePreview = (
+    event: React.PointerEvent<HTMLDivElement>,
+  ) => {
+    const drag = fileResizeRef.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+    const max = Math.min(window.innerWidth * 0.72, 900)
+    setFilePreviewWidth(
+      Math.max(
+        MIN_FILE_PREVIEW_WIDTH,
+        Math.min(max, drag.width + drag.x - event.clientX),
+      ),
+    )
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -194,44 +908,268 @@ export function ChatPage() {
     }
     pendingReturnIndexRef.current = null
     requestAnimationFrame(() => {
-      scrollRef.current
+      getActiveScroller()
         ?.querySelector(`[data-chat-index="${index}"]`)
         ?.scrollIntoView({ block: "center" })
     })
-  }, [activeSessionId, hasMoreHistory, historyStart, loadOlderHistory, messages])
+  }, [
+    activeSessionId,
+    hasMoreHistory,
+    historyStart,
+    loadOlderHistory,
+    messages,
+    getActiveScroller,
+  ])
 
-  const handleFork = async (messageIndex: number) => {
+  useEffect(() => {
+    if (!pendingScrollTarget) return
+    if (pendingScrollTarget.sessionId !== activeSessionId) return
+
+    const index = pendingScrollTarget.messageIndex
+    if (index < historyStart && hasMoreHistory) {
+      void loadOlderHistory(activeSessionId)
+      return
+    }
+
+    setPendingScrollTarget(null)
+    setIsAtBottom(false)
+    requestAnimationFrame(() => {
+      getActiveScroller()
+        ?.querySelector(`[data-chat-index="${index}"]`)
+        ?.scrollIntoView({ block: "center" })
+    })
+  }, [
+    pendingScrollTarget,
+    activeSessionId,
+    hasMoreHistory,
+    historyStart,
+    messages,
+    loadOlderHistory,
+    getActiveScroller,
+    setPendingScrollTarget,
+  ])
+
+  const handleFork = async (sessionId: string, messageIndex: number) => {
     try {
-      const fork = await forkSession(activeSessionId, messageIndex)
+      const fork = await forkSession(sessionId, messageIndex)
       await switchSession(fork.id)
-      void loadSessions(true)
     } catch (error) {
       console.error("Failed to fork conversation:", error)
       toast.error(t("chat.forkFailed"))
     }
   }
 
-  const {
-    sessions,
-    hasMore,
-    loadError,
-    loadErrorMessage,
-    observerRef,
-    loadSessions,
-    handleDeleteSession,
-  } = useSessionHistory({
-    activeSessionId,
-    onDeletedActiveSession: newChat,
-  })
+  const renderMessages = (
+    renderedMessages: ChatMessage[],
+    sessionId: string,
+    start: number,
+    isTyping: boolean,
+  ) => {
+    const filePathAliasesByMessage = new Map<string, Record<string, string>>()
+    const filePathAliases: Record<string, string> = {}
+    renderedMessages.forEach((message) => {
+      if (message.role === "assistant") {
+        message.toolCalls?.forEach((toolCall) => {
+          try {
+            const args: unknown = JSON.parse(toolCall.function?.arguments ?? "")
+            if (!args || typeof args !== "object") return
+            const path = (args as { path?: unknown }).path
+            if (typeof path !== "string") return
+            const filename = path.replaceAll("\\", "/").split("/").at(-1)
+            if (filename) filePathAliases[filename] = path
+          } catch {
+            // Ignore malformed tool arguments while building file links.
+          }
+        })
+        filePathAliasesByMessage.set(message.id, { ...filePathAliases })
+      }
+    })
+
+    const messagesToRender: {
+      message: ChatMessage
+      offset: number
+      toolName?: string
+    }[] = []
+
+    renderedMessages.forEach((message, offset) => {
+      const firstToolName =
+        message.kind === "tool_calls"
+          ? message.toolCalls?.[0]?.function?.name?.trim()
+          : undefined
+      const toolName =
+        firstToolName &&
+        message.toolCalls?.every(
+          (call) => call.function?.name?.trim() === firstToolName,
+        )
+          ? firstToolName
+          : undefined
+      const previous = messagesToRender.at(-1)
+
+      if (toolName && previous?.toolName === toolName) {
+        previous.message = {
+          ...previous.message,
+          toolCalls: [
+            ...(previous.message.toolCalls ?? []),
+            ...(message.toolCalls ?? []),
+          ],
+        }
+      } else {
+        messagesToRender.push({ message, offset, toolName })
+      }
+    })
+
+    const visibleMessages = messagesToRender
+    const lastUserIndex = visibleMessages.reduce(
+      (lastIndex, { message }, index) =>
+        message.role === "user" ? index : lastIndex,
+      -1,
+    )
+    const turnKey =
+      visibleMessages[lastUserIndex]?.message.id ?? `session-${sessionId}`
+    const renderItems: Array<
+      | {
+          type: "message"
+          item: (typeof visibleMessages)[number]
+        }
+      | {
+          type: "activity"
+          items: Array<(typeof visibleMessages)[number]>
+          label: string
+          startIndex: number
+        }
+    > = []
+
+    visibleMessages.forEach((item, index) => {
+      const kind = item.message.kind
+      const isActivity =
+        item.message.role === "assistant" &&
+        ["thought", "tool_calls", "tool_feedback"].includes(kind ?? "")
+      const previous = renderItems.at(-1)
+
+      if (isActivity && previous?.type === "activity") {
+        previous.items.push(item)
+      } else if (isActivity) {
+        renderItems.push({
+          type: "activity",
+          items: [item],
+          label: "",
+          startIndex: index,
+        })
+      } else {
+        renderItems.push({ type: "message", item })
+      }
+    })
+    renderItems.forEach((item) => {
+      if (item.type !== "activity") return
+      const kinds = new Set(item.items.map(({ message }) => message.kind))
+      item.label = [
+        kinds.has("thought") ? t("chat.reasoningLabel") : "",
+        kinds.has("tool_calls") || kinds.has("tool_feedback")
+          ? t("chat.toolCallsLabel")
+          : "",
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    })
+
+    let statusActivityIndex = renderItems.reduce(
+      (lastIndex, item, index) =>
+        item.type === "activity" && item.startIndex > lastUserIndex
+          ? index
+          : lastIndex,
+      -1,
+    )
+    if (statusActivityIndex < 0 && (lastUserIndex >= 0 || isTyping)) {
+      renderItems.push({
+        type: "activity",
+        items: [],
+        label: "",
+        startIndex: visibleMessages.length,
+      })
+      statusActivityIndex = renderItems.length - 1
+    }
+
+    const renderMessage = (
+      { message: msg, offset: messageOffset }: (typeof visibleMessages)[number],
+      activityChild = false,
+    ) => {
+      const storedIndex = msg.id.match(/^hist-(\d+)$/)
+      const messageIndex = storedIndex
+        ? Number(storedIndex[1])
+        : start + messageOffset
+      const canFork =
+        msg.role === "assistant" && (!msg.kind || msg.kind === "normal")
+
+      return (
+        <div
+          key={msg.id}
+          data-chat-index={messageIndex}
+          className={`group flex w-full flex-col ${activityChild ? "gap-0" : "gap-1"}`}
+        >
+          {msg.role === "assistant" ? (
+            <>
+              <AssistantMessage
+                content={msg.content}
+                attachments={msg.attachments}
+                kind={msg.kind}
+                onOpenFile={handleOpenFile}
+                filePathAliases={filePathAliasesByMessage.get(msg.id)}
+                onFork={
+                  canFork
+                    ? () => void handleFork(sessionId, messageIndex)
+                    : undefined
+                }
+                toolCalls={msg.toolCalls}
+                timestamp={msg.timestamp}
+              />
+            </>
+          ) : (
+            <UserMessage
+              content={msg.content}
+              attachments={msg.attachments}
+              timestamp={msg.timestamp}
+            />
+          )}
+        </div>
+      )
+    }
+
+    return renderItems.map((item, index) => {
+      if (item.type === "message") return renderMessage(item.item)
+
+      const isStatusGroup = index === statusActivityIndex
+      const firstMessageId = item.items[0]?.message.id ?? turnKey
+      return (
+        <AssistantActivityGroup
+          key={
+            isStatusGroup ? `activity-${turnKey}` : `activity-${firstMessageId}`
+          }
+          label={item.label}
+          isActive={isStatusGroup && isTyping}
+          status={
+            isStatusGroup ? (
+              <TypingIndicator
+                key={sessionId}
+                isTyping={isTyping}
+                fallbackLabel={item.label}
+              />
+            ) : undefined
+          }
+        >
+          {item.items.map((activityItem) => renderMessage(activityItem, true))}
+        </AssistantActivityGroup>
+      )
+    })
+  }
 
   const syncScrollState = (element: HTMLDivElement) => {
     const { clientHeight, scrollHeight, scrollTop } = element
-    setHasScrolled(scrollTop > 0)
     setIsAtBottom(scrollHeight - scrollTop <= clientHeight + 10)
   }
 
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
     const element = e.currentTarget
+    if (element.dataset.sessionScroll !== activeSessionId) return
     syncScrollState(element)
     if (element.scrollTop > 16 || !hasMoreHistory) {
       return
@@ -241,7 +1179,7 @@ export function ChatPage() {
     void loadOlderHistory(activeSessionId).then((loaded) => {
       if (!loaded) return
       requestAnimationFrame(() => {
-        if (scrollRef.current !== element) return
+        if (getActiveScroller() !== element) return
         element.scrollTop += element.scrollHeight - previousHeight
         syncScrollState(element)
       })
@@ -249,13 +1187,15 @@ export function ChatPage() {
   }
 
   useEffect(() => {
-    if (scrollRef.current) {
+    if (activeSplitGroup) return
+    const activeScroller = getActiveScroller()
+    if (activeScroller) {
       if (isAtBottom) {
-        scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+        activeScroller.scrollTop = activeScroller.scrollHeight
       }
-      syncScrollState(scrollRef.current)
+      syncScrollState(activeScroller)
     }
-  }, [messages, isTyping, isAtBottom])
+  }, [messages, isTyping, isAtBottom, activeSplitGroup, getActiveScroller])
 
   const handleSend = () => {
     if ((!input.trim() && attachments.length === 0) || !canInput) return
@@ -270,7 +1210,24 @@ export function ChatPage() {
     }
   }
 
-  const handleAddImages = () => {
+  const handleSendAudio = (attachment: ChatAttachment) => {
+    if (
+      canInput &&
+      sendMessage({
+        content: input,
+        attachments: [...attachments, attachment],
+      })
+    ) {
+      setInput("")
+      setAttachments([])
+      return true
+    }
+    // Keep the recording attached so the user can retry instead of losing it.
+    setAttachments((current) => [...current, attachment])
+    return false
+  }
+
+  const handleAddFiles = () => {
     if (!canInput) return
     fileInputRef.current?.click()
   }
@@ -279,12 +1236,12 @@ export function ChatPage() {
     setAttachments((prev) => prev.filter((_, itemIndex) => itemIndex !== index))
   }
 
-  const appendImageFiles = async (files: readonly File[]) => {
+  const appendFiles = async (files: readonly File[]) => {
     if (!canInput || files.length === 0) {
       return
     }
 
-    const nextAttachments = await buildChatImageAttachments(files, t)
+    const nextAttachments = await buildChatAttachments(files, t)
     if (nextAttachments.length === 0) {
       return
     }
@@ -292,7 +1249,7 @@ export function ChatPage() {
     setAttachments((prev) => [...prev, ...nextAttachments])
   }
 
-  const handleImageSelection = async (event: ChangeEvent<HTMLInputElement>) => {
+  const handleFileSelection = async (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files ?? [])
     event.target.value = ""
 
@@ -300,7 +1257,7 @@ export function ChatPage() {
       return
     }
 
-    await appendImageFiles(files)
+    await appendFiles(files)
   }
 
   const resetDragState = () => {
@@ -316,7 +1273,7 @@ export function ChatPage() {
       return
     }
 
-    await appendImageFiles(files)
+    await appendFiles(files)
   }
 
   const handleComposerDragEnter = (event: DragEvent<HTMLDivElement>) => {
@@ -370,84 +1327,109 @@ export function ChatPage() {
       return
     }
 
-    await appendImageFiles(files)
+    await appendFiles(files)
   }
 
   const canSubmit =
     canInput && (Boolean(input.trim()) || attachments.length > 0)
 
+  const handleRemoveSplitPane = (sessionId: string) => {
+    const remaining = activeSplitGroup?.filter((id) => id !== sessionId)
+    const removePane = () =>
+      setSplitGroups((groups) => removeSplitConversation(groups, sessionId))
+
+    if (sessionId === activeSessionId && remaining?.[0]) {
+      setIsAtBottom(true)
+      void switchSession(remaining[0]).finally(removePane)
+      return
+    }
+    removePane()
+  }
+
+  const handleAddSplitPane = async (
+    layout: SplitLayout = activeSplitLayout,
+  ) => {
+    if (activeSplitGroup && activeSplitGroup.length >= 4) return
+
+    const newSessionId = await newChat(true)
+    if (!newSessionId) return
+
+    const nextGroup = [...(activeSplitGroup ?? [activeSessionId]), newSessionId]
+    setSplitGroups((groups) =>
+      mergeSplitConversations(groups, newSessionId, activeSessionId),
+    )
+    setSplitLayouts((layouts) => ({
+      ...layouts,
+      [splitGroupKey(nextGroup)]: layout,
+    }))
+  }
+
+  const handleSplitLayoutChange = (value: string) => {
+    const layout = value as SplitLayout
+    if (!activeSplitGroup) {
+      void handleAddSplitPane(layout)
+      return
+    }
+    setSplitLayouts((layouts) => ({
+      ...layouts,
+      [splitGroupKey(activeSplitGroup)]: layout,
+    }))
+  }
+
+  const activeEmptyState = (
+    <ChatEmptyState
+      hasAvailableModels={hasAvailableModels}
+      defaultModelName={defaultModelName}
+      isConnected={isGatewayRunning}
+    />
+  )
+
   return (
-    <div className="bg-background/95 flex h-full flex-col">
-      <PageHeader
-        title={t("navigation.chat")}
-        className={`transition-shadow ${
-          hasScrolled ? "shadow-xs" : "shadow-none"
-        }`}
-        titleExtra={
-          hasAvailableModels && (
-            <ModelSelector
-              defaultModelName={defaultModelName}
-              apiKeyModels={apiKeyModels}
-              oauthModels={oauthModels}
-              localModels={localModels}
-              disabled={settingDefault}
-              onValueChange={handleSetDefault}
-            />
-          )
-        }
-      >
-        <div className="border-border/60 hidden items-center gap-2 rounded-lg border px-3 py-1.5 sm:flex">
-          <span className="text-muted-foreground text-sm">
-            {t("chat.showAssistantDetails")}
-          </span>
-          <Select
-            value={assistantDetailVisibility}
-            onValueChange={(value) =>
-              setAssistantDetailVisibility(value as AssistantDetailVisibility)
-            }
+    <div className="chat-font relative flex h-full flex-col bg-[var(--conversation-background)]">
+      <PageHeader title="" className="bg-[var(--conversation-background)]">
+        <div className="flex items-center gap-0.5">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label={t("chat.paneLayout")}
+                title={t("chat.paneLayout")}
+                className="text-muted-foreground hover:text-foreground h-8 w-8 rounded-full"
+              >
+                <ActiveSplitLayoutIcon className="size-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuLabel>{t("chat.paneLayout")}</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuRadioGroup
+                value={activeSplitGroup ? activeSplitLayout : ""}
+                onValueChange={handleSplitLayoutChange}
+              >
+                {SPLIT_LAYOUTS.map(({ value, label, icon: LayoutIcon }) => (
+                  <DropdownMenuRadioItem key={value} value={value}>
+                    <LayoutIcon className="size-4" />
+                    {t(`chat.splitLayouts.${value}`, { defaultValue: label })}
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            disabled={activeSplitGroup?.length === 4}
+            aria-label={t("chat.addSplitPane")}
+            title={t("chat.addSplitPane")}
+            onClick={() => void handleAddSplitPane()}
+            className="text-muted-foreground hover:text-foreground h-8 w-8 rounded-full"
           >
-            <SelectTrigger
-              size="sm"
-              aria-label={t("chat.showAssistantDetails")}
-              className="text-muted-foreground hover:text-foreground focus-visible:border-input h-8 min-w-[104px] bg-transparent shadow-none focus-visible:ring-0"
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent align="end">
-              {assistantDetailVisibilityOptions.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+            <IconPlus className="size-4" />
+          </Button>
         </div>
-
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={newChat}
-          className="h-9 gap-2"
-        >
-          <IconPlus className="size-4" />
-          <span className="hidden sm:inline">{t("chat.newChat")}</span>
-        </Button>
-
-        <SessionHistoryMenu
-          sessions={sessions}
-          activeSessionId={activeSessionId}
-          hasMore={hasMore}
-          loadError={loadError}
-          loadErrorMessage={loadErrorMessage}
-          observerRef={observerRef}
-          onOpenChange={(open) => {
-            if (open) {
-              void loadSessions(true)
-            }
-          }}
-          onSwitchSession={switchSession}
-          onDeleteSession={handleDeleteSession}
-        />
       </PageHeader>
 
       {forkedFrom && (
@@ -472,111 +1454,159 @@ export function ChatPage() {
         </div>
       )}
 
-      <div
-        ref={scrollRef}
-        onScroll={handleScroll}
-        className="min-h-0 flex-1 [scrollbar-gutter:stable] overflow-y-auto px-4 py-6 md:px-8 lg:px-24 xl:px-48"
-      >
-        <div className="mx-auto flex w-full max-w-250 flex-col gap-8 pb-8">
-          {messages.length === 0 && !isTyping && (
-            <ChatEmptyState
-              hasAvailableModels={hasAvailableModels}
-              defaultModelName={defaultModelName}
-              isConnected={isGatewayRunning}
-            />
-          )}
-
-          {messages.map((msg, messageOffset) => {
-            if (
-              !shouldShowAssistantMessage(assistantDetailVisibility, msg.kind)
-            ) {
-              return null
-            }
-
-            const storedIndex = msg.id.match(/^hist-(\d+)$/)
-            const messageIndex = storedIndex
-              ? Number(storedIndex[1])
-              : historyStart + messageOffset
-            const canFork =
-              msg.role === "assistant" &&
-              (!msg.kind || msg.kind === "normal")
-            return (
-              <div
-                key={msg.id}
-                data-chat-index={messageIndex}
-                className="group flex w-full flex-col gap-1"
-              >
-                {msg.role === "assistant" ? (
-                  <>
-                    <AssistantMessage
-                      content={msg.content}
-                      attachments={msg.attachments}
-                      kind={msg.kind}
-                      modelName={msg.modelName}
-                      toolCalls={msg.toolCalls}
-                      timestamp={msg.timestamp}
-                    />
-                    {canFork && (
-                      <div className="flex justify-end">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          aria-label={t("chat.forkAtMessage")}
-                          title={t("chat.forkAtMessage")}
-                          className="size-8 opacity-50 hover:opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
-                          onClick={() => void handleFork(messageIndex)}
-                        >
-                          <IconGitFork className="size-4" />
-                        </Button>
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <UserMessage
-                    content={msg.content}
-                    attachments={msg.attachments}
-                    timestamp={msg.timestamp}
-                  />
+      <div className="relative flex min-h-0 flex-1">
+        <section className="flex min-h-0 min-w-0 flex-1 flex-col">
+          {activeSplitGroup ? (
+            <div ref={scrollRef} className="min-h-0 flex-1 overflow-hidden">
+              <SplitConversationView
+                sessions={activeSplitGroup}
+                layout={activeSplitLayout}
+                activeSessionId={activeSessionId}
+                activeHistoryStart={historyStart}
+                hasHydratedActiveSession={hasHydratedActiveSession}
+                sessionTitles={sessionTitles}
+                splitSessionStates={splitSessionStates}
+                messages={messages}
+                isTyping={isTyping}
+                renderMessages={renderMessages}
+                onActivate={(sessionId) => {
+                  void switchSession(sessionId)
+                }}
+                onRemove={handleRemoveSplitPane}
+                onScroll={handleScroll}
+                activeEmptyState={activeEmptyState}
+                t={t}
+              />
+            </div>
+          ) : (
+            <div
+              ref={scrollRef}
+              data-session-scroll={activeSessionId}
+              onScroll={handleScroll}
+              className="chat-scroll-fade min-h-0 flex-1 [scrollbar-gutter:stable] overflow-y-auto px-4 md:px-8 lg:px-24 xl:px-48"
+            >
+              <div className="mx-auto flex w-full max-w-[49.5rem] flex-col gap-8">
+                {messages.length === 0 && !isTyping && activeEmptyState}
+                {renderMessages(
+                  messages,
+                  activeSessionId,
+                  historyStart,
+                  isTyping,
                 )}
               </div>
-            )
-          })}
+            </div>
+          )}
 
-          {isTyping && <TypingIndicator />}
-        </div>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept={CHAT_ATTACHMENT_ACCEPT}
+            multiple
+            className="hidden"
+            onChange={handleFileSelection}
+          />
+
+          <ChatComposer
+            input={input}
+            attachments={attachments}
+            onInputChange={setInput}
+            onAddFiles={handleAddFiles}
+            onPaste={handleComposerPaste}
+            onDragEnter={handleComposerDragEnter}
+            onDragLeave={handleComposerDragLeave}
+            onDragOver={handleComposerDragOver}
+            onDrop={handleComposerDrop}
+            onRemoveAttachment={handleRemoveAttachment}
+            onSend={handleSend}
+            onSendAudio={handleSendAudio}
+            modelSelector={
+              hasAvailableModels ? (
+                <ModelSelector
+                  defaultModelName={defaultModelName}
+                  apiKeyModels={apiKeyModels}
+                  oauthModels={oauthModels}
+                  localModels={localModels}
+                  disabled={settingDefault}
+                  onValueChange={handleSetDefault}
+                />
+              ) : null
+            }
+            onContextDetail={() => {
+              if (sendMessage({ content: "/context", attachments: [] })) {
+                setInput("")
+              }
+            }}
+            inputDisabledReason={inputDisabledReason}
+            canSend={canSubmit}
+            isDragActive={isDragActive}
+            contextUsage={contextUsage}
+            slashCommands={slashCommands}
+          />
+        </section>
+
+        {filePreviewPath && (
+          <>
+            <div
+              role="separator"
+              aria-label={t("chat.resizeFilePreview", {
+                defaultValue: "Resize file preview",
+              })}
+              aria-orientation="vertical"
+              aria-valuemin={MIN_FILE_PREVIEW_WIDTH}
+              aria-valuemax={900}
+              aria-valuenow={Math.round(filePreviewWidth)}
+              tabIndex={0}
+              className="group border-border/70 hover:border-primary focus-visible:border-primary focus-visible:ring-ring relative z-10 hidden w-2 shrink-0 cursor-col-resize touch-none items-center justify-center border-l outline-none focus-visible:ring-2 focus-visible:ring-inset sm:flex"
+              onPointerDown={(event) => {
+                if (event.button !== 0) return
+                event.preventDefault()
+                event.currentTarget.setPointerCapture(event.pointerId)
+                fileResizeRef.current = {
+                  pointerId: event.pointerId,
+                  x: event.clientX,
+                  width: filePreviewWidth,
+                }
+              }}
+              onPointerMove={handleResizeFilePreview}
+              onPointerUp={(event) => {
+                fileResizeRef.current = null
+                if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+                  event.currentTarget.releasePointerCapture(event.pointerId)
+                }
+              }}
+              onPointerCancel={() => {
+                fileResizeRef.current = null
+              }}
+              onLostPointerCapture={() => {
+                fileResizeRef.current = null
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "ArrowLeft") {
+                  setFilePreviewWidth((width) => Math.min(width + 24, 900))
+                } else if (event.key === "ArrowRight") {
+                  setFilePreviewWidth((width) =>
+                    Math.max(width - 24, MIN_FILE_PREVIEW_WIDTH),
+                  )
+                } else if (event.key === "Home") {
+                  setFilePreviewWidth(MIN_FILE_PREVIEW_WIDTH)
+                } else if (event.key === "End") {
+                  setFilePreviewWidth(900)
+                } else {
+                  return
+                }
+                event.preventDefault()
+              }}
+            >
+              <span className="bg-border/80 group-hover:bg-primary group-focus-visible:bg-primary h-10 w-px transition-colors" />
+            </div>
+            <FilePreviewPanel
+              activePath={filePreviewPath}
+              onClose={() => setFilePreviewPath("")}
+              width={filePreviewWidth}
+            />
+          </>
+        )}
       </div>
-
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept={CHAT_IMAGE_ACCEPT}
-        multiple
-        className="hidden"
-        onChange={handleImageSelection}
-      />
-
-      <ChatComposer
-        input={input}
-        attachments={attachments}
-        onInputChange={setInput}
-        onAddImages={handleAddImages}
-        onPaste={handleComposerPaste}
-        onDragEnter={handleComposerDragEnter}
-        onDragLeave={handleComposerDragLeave}
-        onDragOver={handleComposerDragOver}
-        onDrop={handleComposerDrop}
-        onRemoveAttachment={handleRemoveAttachment}
-        onSend={handleSend}
-        onContextDetail={() => {
-          if (sendMessage({ content: "/context", attachments: [] })) {
-            setInput("")
-          }
-        }}
-        inputDisabledReason={inputDisabledReason}
-        canSend={canSubmit}
-        isDragActive={isDragActive}
-        contextUsage={contextUsage}
-      />
     </div>
   )
 }

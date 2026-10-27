@@ -45,7 +45,7 @@
       "gatewayStarting": "Unable to chat: Gateway is starting. Wait for startup to complete, then try again.",
       "gatewayRestarting": "Unable to chat: Gateway is restarting. Please wait for restart to finish.",
       "gatewayStopping": "Unable to chat: Gateway is stopping. Wait for it to stop, then start Gateway again.",
-      "gatewayStopped": "Unable to chat: Gateway is not started. Click Start Gateway in the top bar, then retry.",
+      "gatewayStopped": "Unable to chat: Gateway is not started. Click Start Gateway in the sidebar, then retry.",
       "gatewayError": "Unable to chat: Gateway is in an error state. Check logs, then restart Gateway or Launcher.",
       "websocketConnecting": "Connecting to chat service... Please wait.",
       "websocketDisconnected": "Unable to chat: WebSocket connection is disconnected. Check network and gateway status, then refresh the page or restart Launcher.",
@@ -65,13 +65,6 @@
     "toolCallExplanationLabel": "Call note",
     "toolCallFunctionLabel": "Call summary",
     "toolCallArgumentsLabel": "Arguments",
-    "showAssistantDetails": "Reasoning and tool calls",
-    "assistantDetailVisibility": {
-      "none": "Show neither",
-      "thought": "Show reasoning only",
-      "toolCalls": "Show tool calls only",
-      "all": "Show both"
-    },
     "toolLabel": "Tool",
     "codeLabel": "Code",
     "copyMessage": "Copy message",
@@ -82,9 +75,29 @@
     "expandCode": "Expand code",
     "collapseCode": "Collapse code",
     "history": "History",
+    "sessionRunning": "Generating response",
+    "sessionUnread": "Unread update",
+    "splitConversation": "Conversation {{number}}",
+    "activeSplitPane": "Active",
+    "removeSplitPane": "Remove conversation from split",
+    "resizeSplitPane": "Resize conversation panes",
+    "paneLayout": "Pane layout",
+    "addSplitPane": "Add pane",
+    "splitLayouts": {
+      "columns": "Columns",
+      "rows": "Rows",
+      "grid": "Grid",
+      "bsp": "BSP",
+      "main-stack": "Main and stack"
+    },
     "noHistory": "No chat history yet",
     "historyLoadFailed": "Failed to load chat history",
     "historyOpenFailed": "Failed to open this chat history",
+    "searchPlaceholder": "Search conversations...",
+    "searchNoResults": "No matching messages",
+    "searchFailed": "Search failed",
+    "searchTruncated": "Partial results. Refine your search.",
+    "searchResultTitle": "Search results",
     "forkAtMessage": "Fork from this message",
     "forkedConversation": "This is a fork of another conversation",
     "backToOriginal": "Back to original conversation",
@@ -99,17 +112,92 @@
     },
     "sendMessage": "Send message",
     "composeHint": "Press Enter to send, Shift + Enter for a new line",
+    "slash": {
+      "ariaLabel": "Slash commands",
+      "recent": "Recent",
+      "commands": {
+        "start": {
+          "title": "Start",
+          "description": "Start the bot"
+        },
+        "help": {
+          "title": "Help",
+          "description": "Show this help message"
+        },
+        "stop": {
+          "title": "Stop",
+          "description": "Stop the current task"
+        },
+        "show": {
+          "title": "Show config",
+          "description": "Show current configuration"
+        },
+        "list": {
+          "title": "List",
+          "description": "List available options"
+        },
+        "use": {
+          "title": "Use skill",
+          "description": "Force a specific installed skill for one request"
+        },
+        "btw": {
+          "title": "Side question",
+          "description": "Ask a side question without changing session history"
+        },
+        "switch": {
+          "title": "Switch model",
+          "description": "Switch model"
+        },
+        "check": {
+          "title": "Check channel",
+          "description": "Check channel availability"
+        },
+        "clear": {
+          "title": "Clear chat",
+          "description": "Clear the chat history"
+        },
+        "context": {
+          "title": "Context",
+          "description": "Show current session context and token usage"
+        },
+        "subagents": {
+          "title": "Subagents",
+          "description": "Show running tasks and subagents in this chat"
+        },
+        "reload": {
+          "title": "Reload config",
+          "description": "Reload the configuration file"
+        },
+        "voice": {
+          "title": "Voice",
+          "description": "Set automatic text-to-speech mode"
+        }
+      }
+    },
     "contextTitle": "Context",
     "contextDetail": "View Details",
     "contextCompressAt": "Compress at",
     "contextSummarizeAt": "Summarize at",
-    "attachImage": "Add images",
-    "dropImagesActive": "Release to add images",
-    "removeImage": "Remove image",
+    "attachFiles": "Add files",
+    "recordVoiceMessage": "Record voice message",
+    "stopRecording": "Stop recording",
+    "recording": "Recording",
+    "cancelRecording": "Cancel recording",
+    "uploadedAudio": "Voice message",
+    "micPermissionDenied": "Microphone access was denied.",
+    "microphoneUnavailable": "No microphone is available.",
+    "recordingUnsupported": "Audio recording is not supported by this browser.",
+    "recordingNeedsHttps": "Voice recording requires HTTPS or localhost. Open the dashboard over HTTPS (or on localhost) to enable the microphone.",
+    "recordingFailed": "Failed to record audio.",
+    "audioTooLarge": "The recording exceeds the {{size}} limit.",
+    "audioSendFailed": "Voice message not sent. It is attached to the composer so you can retry.",
+    "dropFilesActive": "Release to add files",
+    "removeAttachment": "Remove attachment",
     "uploadedImage": "Attached image",
-    "invalidImage": "\"{{name}}\" is not a supported image file.",
-    "imageTooLarge": "\"{{name}}\" exceeds the {{size}} limit.",
-    "imageReadFailed": "Failed to read \"{{name}}\".",
+    "uploadedFile": "Attached file",
+    "invalidFile": "\"{{name}}\" is not a supported file type.",
+    "fileTooLarge": "\"{{name}}\" exceeds the {{size}} limit.",
+    "fileReadFailed": "Failed to read \"{{name}}\".",
     "empty": {
       "noConfiguredModel": "No Model Configured",
       "noConfiguredModelDescription": "You need to configure at least one AI model with an API key before you can start chatting.",
@@ -117,7 +205,7 @@
       "noSelectedModel": "No Model Selected",
       "noSelectedModelDescription": "You have configured models, but none is set as default. Select a model before starting chat.",
       "notRunning": "Gateway Not Running",
-      "notRunningDescription": "Start the gateway service to begin chatting. Use the Start Gateway button in the top bar."
+      "notRunningDescription": "Start the gateway service to begin chatting. Use the Start Gateway button in the sidebar."
     },
     "modelGroup": {
       "apikey": "API Key",
@@ -825,6 +913,40 @@
         "parameter_description": "Description",
         "required": "Required",
         "optional": "Optional",
+        "tabs": {
+          "servers": "Servers",
+          "catalog": "Catalog"
+        },
+        "catalog": {
+          "title": "MCP Catalog",
+          "description": "Install popular MCP servers with one click. Review or remove installed servers from the Servers tab.",
+          "search_placeholder": "Search the MCP catalog...",
+          "no_results": "No MCP servers match your search",
+          "no_results_hint": "Try a different keyword or category.",
+          "install": "Install",
+          "installed": "Installed",
+          "install_title": "Install {{name}}",
+          "install_description": "Fill in the credentials required by this MCP server. You can update them later in the configuration.",
+          "install_success": "{{name}} installed. Reload the gateway to apply it.",
+          "install_error": "Could not install the MCP server. Please try again.",
+          "requires": "Requires: {{value}}",
+          "docs": "Documentation",
+          "required": "Required",
+          "reload_hint": "After installing, reload the gateway to connect the new server.",
+          "categories": {
+            "all": "All categories",
+            "browser": "Browser",
+            "web": "Web",
+            "docs": "Docs",
+            "code": "Code",
+            "database": "Database",
+            "productivity": "Productivity",
+            "research": "Research",
+            "design": "Design",
+            "cloud": "Cloud",
+            "utility": "Utilities"
+          }
+        },
         "summary": {
           "servers": "Configured servers",
           "connected": "Connected",
@@ -1053,11 +1175,11 @@
     },
     "gateway": {
       "title": "Start Gateway",
-      "description": "After configuring models, click the \"Start Gateway\" button at the top to begin chatting with AI."
+      "description": "After configuring models, click the \"Start Gateway\" button at the bottom of the sidebar to begin chatting with AI."
     },
     "docs": {
       "title": "View Documentation",
-      "description": "Need more help? Click the documentation button in the top right corner to view detailed guides and configuration docs."
+      "description": "Need more help? Click the documentation button at the bottom of the sidebar to view detailed guides and configuration docs."
     }
   }
 }

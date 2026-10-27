@@ -225,7 +225,7 @@ func TestInstallSkillToolUnsafeSlug(t *testing.T) {
 
 	cases := []string{
 		"../etc/passwd",
-		"path/traversal",
+		"foo/../etc/passwd",
 		"path\\traversal",
 	}
 

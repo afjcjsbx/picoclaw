@@ -2,13 +2,6 @@ import { atom, getDefaultStore } from "jotai"
 import { atomWithStorage } from "jotai/utils"
 
 import {
-  ASSISTANT_DETAIL_VISIBILITY_STORAGE_KEY,
-  type AssistantDetailVisibility,
-  DEFAULT_ASSISTANT_DETAIL_VISIBILITY,
-  assistantDetailVisibilityStorage,
-  shouldShowAssistantMessage,
-} from "@/features/chat/detail-visibility"
-import {
   getInitialActiveSessionId,
   writeStoredSessionId,
 } from "@/features/chat/state"
@@ -79,6 +72,50 @@ export interface ChatStoreState {
   contextUsage?: ContextUsage
 }
 
+export interface SplitSessionState {
+  messages: ChatMessage[]
+  isTyping: boolean
+  contextUsage?: ContextUsage
+  historyStart: number
+  hasMoreHistory: boolean
+}
+
+export const splitConversationsAtom = atomWithStorage<string[][]>(
+  "picoclaw:split-conversations",
+  [],
+  undefined,
+  { getOnInit: true },
+)
+export type SplitLayout = "columns" | "rows" | "grid" | "bsp" | "main-stack"
+export interface SplitLayoutSizes {
+  columns: number[]
+  rows: number[]
+}
+export const splitLayoutsAtom = atomWithStorage<Record<string, SplitLayout>>(
+  "picoclaw:split-layouts",
+  {},
+  undefined,
+  { getOnInit: true },
+)
+export const splitLayoutSizesAtom = atomWithStorage<
+  Record<string, SplitLayoutSizes>
+>("picoclaw:split-layout-sizes", {}, undefined, { getOnInit: true })
+export const splitSessionStatesAtom = atom<Record<string, SplitSessionState>>(
+  {},
+)
+export const sessionTitlesAtom = atom<Record<string, string>>({})
+export const unreadSessionIdsAtom = atom<Set<string>>(new Set<string>())
+export const sessionRunningAtom = atom<Record<string, boolean>>({})
+
+export interface PendingScrollTarget {
+  sessionId: string
+  messageIndex: number
+}
+
+// Set when a conversation search result is opened so the chat view can load
+// back to that message and scroll it into view.
+export const pendingScrollTargetAtom = atom<PendingScrollTarget | null>(null)
+
 type ChatStorePatch = Partial<ChatStoreState>
 
 const DEFAULT_CHAT_STATE: ChatStoreState = {
@@ -92,18 +129,92 @@ const DEFAULT_CHAT_STATE: ChatStoreState = {
 }
 
 export const chatAtom = atom<ChatStoreState>(DEFAULT_CHAT_STATE)
-export const assistantDetailVisibilityAtom =
-  atomWithStorage<AssistantDetailVisibility>(
-    ASSISTANT_DETAIL_VISIBILITY_STORAGE_KEY,
-    DEFAULT_ASSISTANT_DETAIL_VISIBILITY,
-    assistantDetailVisibilityStorage,
-    { getOnInit: true },
-  )
-export const showAssistantDetailsAtom = atom(
-  (get) => get(assistantDetailVisibilityAtom) !== "none",
-)
 
 const store = getDefaultStore()
+
+export function markSessionUnread(sessionId: string) {
+  if (!sessionId || getChatState().activeSessionId === sessionId) {
+    return
+  }
+
+  store.set(unreadSessionIdsAtom, (current) => {
+    if (current.has(sessionId)) return current
+    const next = new Set(current)
+    next.add(sessionId)
+    return next
+  })
+}
+
+export function markSessionRead(sessionId: string) {
+  store.set(unreadSessionIdsAtom, (current) => {
+    if (!current.has(sessionId)) return current
+    const next = new Set(current)
+    next.delete(sessionId)
+    return next
+  })
+}
+
+export function setSessionRunning(sessionId: string, isRunning: boolean) {
+  if (!sessionId) return
+
+  store.set(sessionRunningAtom, (current) => {
+    if (Boolean(current[sessionId]) === isRunning) return current
+    const next = { ...current }
+    if (isRunning) {
+      next[sessionId] = true
+    } else {
+      delete next[sessionId]
+    }
+    return next
+  })
+}
+
+export function clearSessionRunning(keepSessionId?: string) {
+  store.set(sessionRunningAtom, (current) => {
+    const keys = Object.keys(current)
+    if (keys.length === 0) return current
+    if (!keepSessionId || !current[keepSessionId]) return {}
+    if (keys.length === 1) return current
+    return { [keepSessionId]: true }
+  })
+}
+
+export function updateSplitSessionState(
+  sessionId: string,
+  patch:
+    | Partial<SplitSessionState>
+    | ((prev: SplitSessionState) => Partial<SplitSessionState>),
+) {
+  store.set(splitSessionStatesAtom, (states) => {
+    const prev = states[sessionId] ?? {
+      messages: [],
+      isTyping: false,
+      historyStart: 0,
+      hasMoreHistory: false,
+    }
+    const nextPatch = typeof patch === "function" ? patch(prev) : patch
+    return { ...states, [sessionId]: { ...prev, ...nextPatch } }
+  })
+}
+
+export function initializeSplitSessionState(
+  sessionId: string,
+  history: { messages: ChatMessage[]; start: number; hasMore: boolean },
+) {
+  store.set(splitSessionStatesAtom, (states) =>
+    sessionId in states
+      ? states
+      : {
+          ...states,
+          [sessionId]: {
+            messages: history.messages,
+            isTyping: false,
+            historyStart: history.start,
+            hasMoreHistory: history.hasMore,
+          },
+        },
+  )
+}
 
 export function getChatState() {
   return store.get(chatAtom)
@@ -125,6 +236,3 @@ export function updateChatStore(
     return next
   })
 }
-
-export { shouldShowAssistantMessage, DEFAULT_ASSISTANT_DETAIL_VISIBILITY }
-export type { AssistantDetailVisibility }
