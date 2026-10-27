@@ -808,6 +808,13 @@ func currentDateLine(now time.Time) string {
 	return fmt.Sprintf("%s (%s)", now.Format("Monday, January 2, 2006"), zone)
 }
 
+func formatSystemMemory(ram uint64) string {
+	if ram < 1<<30 {
+		return fmt.Sprintf("%.1f MiB RAM", float64(ram)/(1<<20))
+	}
+	return fmt.Sprintf("%.1f GiB RAM", float64(ram)/(1<<30))
+}
+
 func (cb *ContextBuilder) buildDynamicContext(
 	channel, chatID, senderID, senderDisplayName string,
 ) string {
@@ -816,7 +823,7 @@ func (cb *ContextBuilder) buildDynamicContext(
 		runtime.GOOS, runtime.GOARCH, runtime.Version(), runtime.NumCPU(),
 	)
 	if ram := totalSystemMemory(); ram > 0 {
-		rt += fmt.Sprintf(", %.1f GiB RAM", float64(ram)/(1<<30))
+		rt += ", " + formatSystemMemory(ram)
 	}
 
 	var sb strings.Builder
