@@ -299,6 +299,46 @@ func BuildLinuxMountPlan(root string, overrides []config.ExposePath) []MountRule
 	return plan
 }
 
+// appendLinuxCommandMountRules exposes an executable to the bubblewrap sandbox.
+// It always mounts the parent directory so the command path exists in the new
+// root. A symlink path itself is not mounted: bubblewrap 0.10 refuses to bind
+// over a symlink destination ("Can't mount on symlink destination"), so the
+// link is made visible through its parent and the resolved target is mounted
+// instead when it lives outside that parent.
+func appendLinuxCommandMountRules(plan []MountRule, resolvedPath string) []MountRule {
+	if !isSymlinkPath(resolvedPath) {
+		plan = ensureLinuxMountRule(plan, resolvedPath, resolvedPath, "ro")
+	}
+	plan = ensureLinuxMountRule(plan, filepath.Dir(resolvedPath), filepath.Dir(resolvedPath), "ro")
+
+	resolved, err := filepath.EvalSymlinks(resolvedPath)
+	if err != nil || resolved == resolvedPath {
+		return plan
+	}
+	if !isSymlinkPath(resolved) {
+		plan = ensureLinuxMountRule(plan, resolved, resolved, "ro")
+	}
+	return ensureLinuxMountRule(plan, filepath.Dir(resolved), filepath.Dir(resolved), "ro")
+}
+
+func isSymlinkPath(path string) bool {
+	info, err := os.Lstat(path)
+	return err == nil && info.Mode()&os.ModeSymlink != 0
+}
+
+// ensureLinuxMountRule appends a mount rule unless another rule already owns
+// the same target path.
+func ensureLinuxMountRule(plan []MountRule, source, target, mode string) []MountRule {
+	cleanSource := filepath.Clean(source)
+	cleanTarget := filepath.Clean(target)
+	for _, rule := range plan {
+		if filepath.Clean(rule.Target) == cleanTarget {
+			return plan
+		}
+	}
+	return append(plan, MountRule{Source: cleanSource, Target: cleanTarget, Mode: mode})
+}
+
 // BuildWindowsAccessRules derives the host-path access policy used by the
 // Windows restricted-token backend.
 func BuildWindowsAccessRules(root string, overrides []config.ExposePath) []AccessRule {

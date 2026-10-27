@@ -63,12 +63,7 @@ func applyPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, roo
 	// resolved path, the effective working directory, and any absolute path
 	// arguments needed to preserve the original command semantics.
 	plan := BuildLinuxMountPlan(root, isolation.ExposePaths)
-	plan = ensureLinuxMountRule(plan, resolvedPath, resolvedPath, "ro")
-	plan = ensureLinuxMountRule(plan, filepath.Dir(resolvedPath), filepath.Dir(resolvedPath), "ro")
-	if resolved, resolveErr := filepath.EvalSymlinks(resolvedPath); resolveErr == nil && resolved != resolvedPath {
-		plan = ensureLinuxMountRule(plan, resolved, resolved, "ro")
-		plan = ensureLinuxMountRule(plan, filepath.Dir(resolved), filepath.Dir(resolved), "ro")
-	}
+	plan = appendLinuxCommandMountRules(plan, resolvedPath)
 	if execDir != "" {
 		plan = ensureLinuxMountRule(plan, execDir, execDir, "rw")
 		if resolved, resolveErr := filepath.EvalSymlinks(execDir); resolveErr == nil && resolved != execDir {
@@ -313,19 +308,6 @@ func linuxArgumentPath(arg string) (string, bool) {
 
 func isRelativeCommandPath(path string) bool {
 	return !filepath.IsAbs(path) && strings.ContainsRune(path, filepath.Separator)
-}
-
-// ensureLinuxMountRule appends a mount rule unless another rule already owns
-// the same target path.
-func ensureLinuxMountRule(plan []MountRule, source, target, mode string) []MountRule {
-	cleanSource := filepath.Clean(source)
-	cleanTarget := filepath.Clean(target)
-	for _, rule := range plan {
-		if filepath.Clean(rule.Target) == cleanTarget {
-			return plan
-		}
-	}
-	return append(plan, MountRule{Source: cleanSource, Target: cleanTarget, Mode: mode})
 }
 
 // linuxBindFlag selects the correct bubblewrap bind flag based on mount mode.
