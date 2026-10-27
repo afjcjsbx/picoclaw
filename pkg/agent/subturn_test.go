@@ -1543,6 +1543,41 @@ func TestConcurrencySemaphore_Timeout(t *testing.T) {
 	}
 }
 
+// TestSubTurnCanceledParentStillUsesFreeSlot covers the race where an async
+// spawn's goroutine starts only after the parent turn has finished. The parent
+// context is already canceled at that point, but a concurrency slot is free and
+// the tool call was acknowledged, so the SubTurn must still run instead of
+// failing with context.Canceled.
+func TestSubTurnCanceledParentStillUsesFreeSlot(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Agents.Defaults.ModelName = "gpt-4o-mini"
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), &simpleMockProviderAPI{response: "ok"})
+
+	parentCtx, cancelParent := context.WithCancel(context.Background())
+	cancelParent()
+
+	parent := &turnState{
+		ctx:            parentCtx,
+		turnID:         "parent-canceled",
+		depth:          0,
+		session:        newEphemeralSession(nil),
+		pendingResults: make(chan *tools.ToolResult, 16),
+		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
+	}
+
+	result, err := spawnSubTurn(parentCtx, al, parent, SubTurnConfig{Model: "gpt-4o-mini"})
+	if errors.Is(err, context.Canceled) {
+		t.Fatalf("free slot rejected because parent context was canceled: %v", err)
+	}
+	if err != nil {
+		t.Fatalf("spawnSubTurn: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+}
+
 // TestEphemeralSession_AutoTruncate verifies that ephemeral sessions automatically
 // truncate their history to prevent memory accumulation.
 func TestEphemeralSession_AutoTruncate(t *testing.T) {
