@@ -803,7 +803,13 @@ func (cb *ContextBuilder) buildDynamicContext(
 	channel, chatID, senderID, senderDisplayName string,
 ) string {
 	now := time.Now().Format("2006-01-02 15:04 (Monday)")
-	rt := fmt.Sprintf("%s %s, Go %s", runtime.GOOS, runtime.GOARCH, runtime.Version())
+	rt := fmt.Sprintf(
+		"%s %s, Go %s, %d logical CPUs",
+		runtime.GOOS, runtime.GOARCH, runtime.Version(), runtime.NumCPU(),
+	)
+	if ram := totalSystemMemory(); ram > 0 {
+		rt += fmt.Sprintf(", %.1f GiB RAM", float64(ram)/(1<<30))
+	}
 
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "## Current Time\n%s\n\n## Runtime\n%s", now, rt)
