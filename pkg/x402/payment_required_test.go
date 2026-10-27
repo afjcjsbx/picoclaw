@@ -222,7 +222,15 @@ func TestParseMalformedHeader(t *testing.T) {
 }
 
 func TestParseNoChallenge(t *testing.T) {
-	for _, body := range [][]byte{nil, []byte(""), []byte("plain error"), []byte(`{"error":"payment required"}`)} {
+	for _, body := range [][]byte{
+		nil,
+		[]byte(""),
+		[]byte("plain error"),
+		[]byte(`{"error":"payment required"}`),
+		// "accepts" is not specific to x402 and must not flag the body as a broken challenge.
+		[]byte(`{"error":"payment required","accepts":["bearer"]}`),
+		[]byte(`{"error":"payment required","accepts":[{"type":"bearer"}]}`),
+	} {
 		challenge, err := Parse(nil, body)
 		if challenge != nil || err != nil {
 			t.Errorf("Parse(nil, %q) = (%+v, %v), want (nil, nil)", body, challenge, err)

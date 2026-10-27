@@ -295,8 +295,7 @@ func decodeBody(body []byte) (*Challenge, error) {
 }
 
 func looksLikeX402(body []byte) bool {
-	return bytes.Contains(body, []byte(`"x402Version"`)) ||
-		bytes.Contains(body, []byte(`"accepts"`))
+	return bytes.Contains(body, []byte(`"x402Version"`))
 }
 
 type flexString string
