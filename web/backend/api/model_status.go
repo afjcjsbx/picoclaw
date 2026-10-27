@@ -613,6 +613,99 @@ func probeOpenAICompatibleModel(apiBase, modelID, apiKey string) bool {
 	return false
 }
 
+func probeGeminiModel(apiBase, modelID, apiKey string) bool {
+	if strings.TrimSpace(apiBase) == "" {
+		return false
+	}
+	if strings.TrimSpace(apiKey) == "" {
+		return false
+	}
+
+	// Gemini uses x-goog-api-key header or query parameter, not Bearer token.
+	// The models endpoint is /v1beta/models?key=API_KEY (or using x-goog-api-key header)
+	baseURL := strings.TrimRight(strings.TrimSpace(apiBase), "/")
+
+	// Try with x-goog-api-key header first (more secure, doesn't log key in URLs)
+	var respEnvelope struct {
+		Models []struct {
+			Name string `json:"name"`
+		} `json:"models"`
+	}
+	fetchURL := baseURL + "/models"
+	if err := getJSONGemini(fetchURL, &respEnvelope, apiKey); err == nil {
+		for _, model := range respEnvelope.Models {
+			if strings.EqualFold(strings.TrimSpace(model.Name), modelID) ||
+				strings.EqualFold(strings.TrimSpace(strings.TrimPrefix(model.Name, "models/")), modelID) {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Fallback: try with key as query parameter
+	fetchURL = baseURL + "/models?key=" + url.QueryEscape(apiKey)
+	if err := getJSONRaw(fetchURL, &respEnvelope); err == nil {
+		for _, model := range respEnvelope.Models {
+			if strings.EqualFold(strings.TrimSpace(model.Name), modelID) ||
+				strings.EqualFold(strings.TrimSpace(strings.TrimPrefix(model.Name, "models/")), modelID) {
+				return true
+			}
+		}
+		return false
+	}
+
+	return false
+}
+
+func getJSONGemini(rawURL string, out any, apiKey string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), modelProbeTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return err
+	}
+	if apiKey = strings.TrimSpace(apiKey); apiKey != "" {
+		req.Header.Set("X-Goog-Api-Key", apiKey)
+	}
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("unexpected status %d", resp.StatusCode)
+	}
+
+	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+func getJSONRaw(rawURL string, out any) error {
+	ctx, cancel := context.WithTimeout(context.Background(), modelProbeTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return err
+	}
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("unexpected status %d", resp.StatusCode)
+	}
+
+	return json.NewDecoder(resp.Body).Decode(out)
+}
+
 func getJSON(rawURL string, out any, apiKey string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), modelProbeTimeout)
 	defer cancel()

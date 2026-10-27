@@ -138,7 +138,7 @@ _*Memory use varies by build and workload. Boot speed comparison is based on 0.8
 | ------------------------------ | -------- | ------- | ------------ |
 | **Language**                   | TypeScript | Python | **Go** |
 | **RAM reference**              | [2 GB host RAM recommended](https://docs.openclaw.ai/install/fly) | [~200–600 MB reported](https://github.com/HKUDS/nanobot/issues/3410) | **10–20 MB in recent builds** |
-| **Single executable**          | No (Node.js app) | No (Python app with native TUI component) | **[35.36 MiB](docs/guides/custom-builds.md#measured-binary-sizes)** |
+| **Single executable**          | No (Node.js app) | No (Python app with native TUI component) | **[48.1 MiB](docs/guides/custom-builds.md#measured-binary-sizes)** |
 | **Boot time**</br>(0.8GHz core) | >500s | >30s | **<1s** |
 | **Cost**                       | Mac Mini $599 | Most Linux boards ~$50 | **Any Linux board**</br>**from $10** |
 
@@ -149,6 +149,27 @@ _*Memory use varies by build and workload. Boot speed comparison is based on 0.8
 **RAM:** These are references, not a controlled comparison: OpenClaw's value is a deployment recommendation, NanoBot's is one Raspberry Pi 4 user report, and PicoClaw's is the estimate for recent builds.
 
 **Executable size:** OpenClaw and NanoBot do not distribute the complete agent as one executable. PicoClaw's size is the measured full default macOS ARM64 build; see the [measurement method and other profiles](docs/guides/custom-builds.md#measured-binary-sizes).
+
+### ⚡ Runtime footprint
+
+Measured on an Apple M1 Max (macOS arm64) with the scripts in [`scripts/`](scripts/): PicoClaw's figures use Go 1.27.3 and were refreshed on 2026-10-26, while the other tools were measured on 2026-10-15. **First paint / ready**, **idle RSS**, and **processes** come from the scripts; **install size** is the size of each tool's own installation (for PicoClaw, its measured full default macOS ARM64 binary, see [measured binary sizes](docs/guides/custom-builds.md#measured-binary-sizes)) and is not measured by these scripts. **First paint / ready** is the time until the interface is usable — for PicoClaw's headless core, until the gateway answers `GET /ready`. **Idle RSS** is the resident set summed across the process tree once it is idle.
+
+| Tool | Runtime | Install size | First paint / ready | Idle RSS | Processes |
+| --- | --- | ---: | ---: | ---: | :---: |
+| **PicoClaw** (core) | Go 1.27, single static binary | **48.1 MiB** | **≈66 ms** | **37.9 MiB** | **1** |
+| Claude Code 2.1.300 | Bun-compiled TS (native binary) | 240 MiB | ≈263 ms | ≈184 MiB | 1 |
+| pi 1.2.0 | Bun-compiled TS + pi-tui | 148 MiB | ≈369 ms | ≈169 MiB | 1 |
+| OpenCode 2.0.29 | Bun + OpenTUI | 239 MiB | ≈190 ms | ≈200 MiB | 1 |
+| Hermes 0.22.1 | Python + TUI | ≈1.9 GiB | ≈3.2 s | ≈214 MiB | 2 |
+
+PicoClaw's row is its **full default** macOS ARM64 build (`goolm,stdjson`); lighter channel profiles are listed in [measured binary sizes](docs/guides/custom-builds.md#measured-binary-sizes). Its idle RSS is 37.9 MiB, with a memory footprint of **≈19 MiB** (`phys_footprint`, what Activity Monitor reports) — the metric behind the "10–20 MB" note above.
+
+Unlike the other rows, PicoClaw's core ships **no full-screen TUI**, so its "first paint / ready" is the time for the gateway to become ready, not a TUI render. The other agents are interactive TUIs and their figures are single-machine medians of a few runs, so expect them to drift between releases. Reproduce the runtime columns with:
+
+```bash
+python3 scripts/bench-picoclaw-runtime.py --binary ./build/picoclaw --runs 15
+python3 scripts/bench-agent-tui.py --cmd opencode --runs 3 --keys '\x03'
+```
 
 > **[Hardware Compatibility List](docs/guides/hardware-compatibility.md)** — See all tested boards, from $5 RISC-V to Raspberry Pi to Android phones. Your board not listed? Submit a PR!
 
@@ -272,8 +293,8 @@ make build GO_BUILD_TAGS='goolm,stdjson,custom_channels,channel_telegram,no_seah
 
 That is the right choice when an external system provides memory instead, for
 example the [Mem0 plugin](docs/guides/plugins.md#mem0). In the measured macOS
-ARM64 Telegram-only build, adding `no_seahorse` reduced the binary by 3.92 MiB
-(14.3%). See the guide for the full measurement details and the cases where
+ARM64 Telegram-only build, adding `no_seahorse` reduced the binary by 4.00 MiB
+(10.0%). See the guide for the full measurement details and the cases where
 Matrix or WhatsApp Native still require SQLite.
 
 ## 🚀 Quick Start Guide

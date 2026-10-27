@@ -11,6 +11,7 @@ func helpCommand() Definition {
 		Name:        "help",
 		Description: "Show this help message",
 		Usage:       "/help",
+		ReadOnly:    true,
 		Handler: func(_ context.Context, req Request, rt *Runtime) error {
 			var defs []Definition
 			if rt != nil && rt.ListDefinitions != nil {

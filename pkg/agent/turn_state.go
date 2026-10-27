@@ -437,6 +437,24 @@ func (al *AgentLoop) GetActiveTurnTree(sessionKey string) []ActiveTurnInfo {
 		}
 	}
 	walk(root)
+
+	// Async spawns outlive the turn that started them, so a later root (e.g. the
+	// /subagents command itself) no longer lists them in childTurnIDs. Attach
+	// them to the current root.
+	al.activeTurnStates.Range(func(_, val any) bool {
+		child, ok := val.(*turnState)
+		if !ok || child.parentTurnState == nil {
+			return true
+		}
+		prev := child.parentTurnState
+		if prev == root || prev.parentTurnState != nil || prev.sessionKey != sessionKey {
+			return true
+		}
+		start := len(tree)
+		walk(child)
+		tree[start].ParentTurnID = tree[0].TurnID
+		return true
+	})
 	return tree
 }
 

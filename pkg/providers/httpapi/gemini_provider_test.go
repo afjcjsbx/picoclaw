@@ -284,6 +284,114 @@ func TestGeminiProvider_ChatStreamEventsStreamsThoughtBeforeContent(t *testing.T
 	}
 }
 
+type geminiRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f geminiRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func TestGeminiProvider_ChatStreamUsesParametersJSONSchemaOnGoogleEndpoint(t *testing.T) {
+	var captured map[string]any
+	provider := NewGeminiProvider(
+		"test-key",
+		"https://generativelanguage.googleapis.com/v1beta",
+		"",
+		"",
+		0,
+		nil,
+		nil,
+	)
+	provider.httpClient.Transport = geminiRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if !strings.Contains(req.URL.Path, ":streamGenerateContent") {
+			t.Fatalf("path = %s, expected streamGenerateContent endpoint", req.URL.Path)
+		}
+		if err := json.NewDecoder(req.Body).Decode(&captured); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+
+		chunk := map[string]any{
+			"candidates": []any{map[string]any{
+				"content": map[string]any{
+					"parts": []any{map[string]any{"text": "ok"}},
+				},
+				"finishReason": "STOP",
+			}},
+		}
+		raw, err := json.Marshal(chunk)
+		if err != nil {
+			t.Fatalf("marshal chunk: %v", err)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       io.NopCloser(strings.NewReader(fmt.Sprintf("data: %s\n\ndata: [DONE]\n\n", raw))),
+		}, nil
+	})
+
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"item": map[string]any{"$ref": "#/$defs/Item"},
+		},
+		"$defs": map[string]any{
+			"Item": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"name": map[string]any{"type": "string"},
+				},
+			},
+		},
+	}
+	resp, err := provider.ChatStream(
+		t.Context(),
+		[]Message{{Role: "user", Content: "hello"}},
+		[]ToolDefinition{{
+			Type: "function",
+			Function: ToolFunctionDefinition{
+				Name:        "probe",
+				Description: "probe tool",
+				Parameters:  schema,
+			},
+		}},
+		"gemini-3.6-flash",
+		nil,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("ChatStream() error = %v", err)
+	}
+	if resp.Content != "ok" {
+		t.Fatalf("Content = %q, want %q", resp.Content, "ok")
+	}
+
+	tools, ok := captured["tools"].([]any)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("tools = %#v, want one entry", captured["tools"])
+	}
+	tool, ok := tools[0].(map[string]any)
+	if !ok {
+		t.Fatalf("tools[0] = %#v, want map", tools[0])
+	}
+	decls, ok := tool["functionDeclarations"].([]any)
+	if !ok || len(decls) != 1 {
+		t.Fatalf("functionDeclarations = %#v, want one entry", tool["functionDeclarations"])
+	}
+	decl, ok := decls[0].(map[string]any)
+	if !ok {
+		t.Fatalf("functionDeclarations[0] = %#v, want map", decls[0])
+	}
+	if _, found := decl["parameters"]; found {
+		t.Fatalf("parameters = %#v, want absent on Google endpoints", decl["parameters"])
+	}
+	jsonSchema, ok := decl["parametersJsonSchema"].(map[string]any)
+	if !ok {
+		t.Fatalf("parametersJsonSchema = %#v, want map", decl["parametersJsonSchema"])
+	}
+	if _, found := jsonSchema["$defs"]; found {
+		t.Fatalf("parametersJsonSchema = %#v, want $defs inlined and dropped", jsonSchema)
+	}
+}
+
 type geminiBlockingReadCloser struct {
 	closeOnce sync.Once
 	closed    chan struct{}
@@ -365,61 +473,180 @@ func TestGeminiProvider_ChatStreamSkipsEmptyDataFrames(t *testing.T) {
 	}
 }
 
-func TestGeminiProvider_BuildRequestBody_PreservesComplexToolSchemasByDefault(t *testing.T) {
-	provider := NewGeminiProvider("test-key", "https://example.com/v1beta", "", "", 0, nil, nil)
-	schema := map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"parent": map[string]any{
-				"anyOf": []any{
-					map[string]any{"$ref": "#/$defs/pageParent"},
-					map[string]any{"$ref": "#/$defs/databaseParent"},
-				},
-			},
-		},
-		"$defs": map[string]any{
-			"pageParent": map[string]any{
-				"type": "object",
+func TestGeminiProvider_BuildRequestBody_UsesParametersJSONSchemaOnGoogleEndpoints(t *testing.T) {
+	for _, baseURL := range []string{
+		"https://generativelanguage.googleapis.com/v1beta",
+		"https://generativelanguage.googleapis.com/v1",
+		"https://generativelanguage.googleapis.com/v1alpha",
+	} {
+		t.Run(baseURL, func(t *testing.T) {
+			provider := NewGeminiProvider("test-key", baseURL, "", "", 0, nil, nil)
+			schema := map[string]any{
+				"$schema": "https://json-schema.org/draft/2020-12/schema",
+				"type":    "object",
 				"properties": map[string]any{
-					"page_id": map[string]any{"type": "string"},
+					"parent": map[string]any{
+						"anyOf": []any{
+							map[string]any{"$ref": "#/$defs/pageParent"},
+							map[string]any{"$ref": "#/$defs/databaseParent"},
+						},
+					},
 				},
-				"required": []any{"page_id"},
-			},
-			"databaseParent": map[string]any{
-				"type": "object",
+				"$defs": map[string]any{
+					"pageParent": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"page_id": map[string]any{"type": "string"},
+						},
+						"required": []any{"page_id"},
+					},
+					"databaseParent": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"database_id": map[string]any{"type": "string"},
+						},
+						"required": []any{"database_id"},
+					},
+				},
+			}
+
+			body := provider.buildRequestBody(
+				[]Message{{Role: "user", Content: "hello"}},
+				[]ToolDefinition{{
+					Type: "function",
+					Function: ToolFunctionDefinition{
+						Name:        "mcp_notion_create",
+						Description: "Create a Notion object",
+						Parameters:  schema,
+					},
+				}},
+				"gemini-3-flash-preview",
+				nil,
+			)
+
+			tools, ok := body["tools"].([]geminiTool)
+			if !ok || len(tools) != 1 {
+				t.Fatalf("tools = %#v, want one geminiTool", body["tools"])
+			}
+			decl := tools[0].FunctionDeclarations[0]
+			if decl.Parameters != nil {
+				t.Fatalf("parameters = %#v, want nil when parametersJsonSchema is used", decl.Parameters)
+			}
+			got, ok := decl.ParametersJSONSchema.(map[string]any)
+			if !ok {
+				t.Fatalf("parametersJsonSchema = %#v, want map", decl.ParametersJSONSchema)
+			}
+			if _, found := got["$schema"]; found {
+				t.Fatalf("parametersJsonSchema = %#v, want root $schema dropped", got)
+			}
+			if _, found := got["$defs"]; found {
+				t.Fatalf("parametersJsonSchema = %#v, want $defs inlined and dropped", got)
+			}
+			parent, ok := got["properties"].(map[string]any)["parent"].(map[string]any)
+			if !ok {
+				t.Fatalf("parent = %#v, want map", got["properties"])
+			}
+			branches, ok := parent["anyOf"].([]any)
+			if !ok || len(branches) != 2 {
+				t.Fatalf("parent.anyOf = %#v, want two inlined branches", parent["anyOf"])
+			}
+			for i, branch := range branches {
+				branchSchema, ok := branch.(map[string]any)
+				if !ok {
+					t.Fatalf("parent.anyOf[%d] = %#v, want map", i, branch)
+				}
+				if _, found := branchSchema["$ref"]; found {
+					t.Fatalf("parent.anyOf[%d] = %#v, want $ref inlined", i, branchSchema)
+				}
+				if _, ok := branchSchema["properties"].(map[string]any); !ok {
+					t.Fatalf("parent.anyOf[%d] = %#v, want inlined object", i, branchSchema)
+				}
+			}
+		})
+	}
+}
+
+func TestGeminiProvider_BuildRequestBody_SanitizesLegacyParametersOnOtherEndpoints(t *testing.T) {
+	for _, baseURL := range []string{
+		"https://example.com/v1beta",
+		"https://aiplatform.googleapis.com/v1beta1/publishers/google",
+	} {
+		t.Run(baseURL, func(t *testing.T) {
+			provider := NewGeminiProvider("test-key", baseURL, "", "", 0, nil, nil)
+			schema := map[string]any{
+				"type":                 "object",
+				"additionalProperties": false,
 				"properties": map[string]any{
-					"database_id": map[string]any{"type": "string"},
+					"parent": map[string]any{
+						"anyOf": []any{
+							map[string]any{"$ref": "#/$defs/pageParent"},
+							map[string]any{"$ref": "#/$defs/databaseParent"},
+						},
+					},
 				},
-				"required": []any{"database_id"},
-			},
-		},
-	}
+				"$defs": map[string]any{
+					"pageParent": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"page_id": map[string]any{"type": "string"},
+						},
+						"required": []any{"page_id"},
+					},
+					"databaseParent": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"database_id": map[string]any{"type": "string"},
+						},
+						"required": []any{"database_id"},
+					},
+				},
+			}
 
-	body := provider.buildRequestBody(
-		[]Message{{Role: "user", Content: "hello"}},
-		[]ToolDefinition{{
-			Type: "function",
-			Function: ToolFunctionDefinition{
-				Name:        "mcp_notion_create",
-				Description: "Create a Notion object",
-				Parameters:  schema,
-			},
-		}},
-		"gemini-3-flash-preview",
-		nil,
-	)
+			body := provider.buildRequestBody(
+				[]Message{{Role: "user", Content: "hello"}},
+				[]ToolDefinition{{
+					Type: "function",
+					Function: ToolFunctionDefinition{
+						Name:        "mcp_notion_create",
+						Description: "Create a Notion object",
+						Parameters:  schema,
+					},
+				}},
+				"gemini-3-flash-preview",
+				nil,
+			)
 
-	tools, ok := body["tools"].([]geminiTool)
-	if !ok || len(tools) != 1 {
-		t.Fatalf("tools = %#v, want one geminiTool", body["tools"])
-	}
-	got, ok := tools[0].FunctionDeclarations[0].Parameters.(map[string]any)
-	if !ok {
-		t.Fatalf("parameters = %#v, want map", tools[0].FunctionDeclarations[0].Parameters)
-	}
-
-	if got["$defs"] == nil {
-		t.Fatalf("parameters = %#v, want raw schema with $defs preserved by default", got)
+			tools, ok := body["tools"].([]geminiTool)
+			if !ok || len(tools) != 1 {
+				t.Fatalf("tools = %#v, want one geminiTool", body["tools"])
+			}
+			decl := tools[0].FunctionDeclarations[0]
+			if decl.ParametersJSONSchema != nil {
+				t.Fatalf("parametersJsonSchema = %#v, want nil on legacy endpoints", decl.ParametersJSONSchema)
+			}
+			got, ok := decl.Parameters.(map[string]any)
+			if !ok {
+				t.Fatalf("parameters = %#v, want map", decl.Parameters)
+			}
+			for _, key := range []string{"$defs", "$ref", "anyOf", "additionalProperties"} {
+				if _, found := got[key]; found {
+					t.Fatalf("parameters = %#v, want %q sanitized away", got, key)
+				}
+			}
+			parent, ok := got["properties"].(map[string]any)["parent"].(map[string]any)
+			if !ok {
+				t.Fatalf("parent = %#v, want map", got["properties"])
+			}
+			parentProps, ok := parent["properties"].(map[string]any)
+			if !ok {
+				t.Fatalf("parent.properties = %#v, want merged anyOf branches", parent)
+			}
+			for _, key := range []string{"page_id", "database_id"} {
+				if _, found := parentProps[key]; !found {
+					t.Fatalf("parent.properties = %#v, want %q from dereferenced branch", parentProps, key)
+				}
+			}
+		})
 	}
 }
 
