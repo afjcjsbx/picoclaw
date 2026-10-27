@@ -302,27 +302,41 @@ func spawnSubTurn(
 	// blocked delivering results — a deadlock.
 	var semAcquired bool
 	if parentTS.concurrencySem != nil {
-		// Create a timeout context for semaphore acquisition
-		timeoutCtx, cancel := context.WithTimeout(ctx, rtCfg.concurrencyTimeout)
-		defer cancel()
-
+		// An async spawn acknowledges the tool call before its goroutine is
+		// guaranteed to run. The parent turn may end (canceling ctx) in that
+		// window while a slot is still free: taking a free slot must win over
+		// the cancellation, otherwise an already-acknowledged SubTurn is
+		// silently dropped. Only block (and honor ctx) when no slot is free.
 		select {
 		case parentTS.concurrencySem <- struct{}{}:
 			semAcquired = true
-			defer func() {
-				if semAcquired {
-					<-parentTS.concurrencySem
-				}
-			}()
-		case <-timeoutCtx.Done():
-			// Check parent context first - if it was canceled, propagate that error
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
-			}
-			// Otherwise it's our timeout
-			return nil, fmt.Errorf("%w: all %d slots occupied for %v",
-				ErrConcurrencyTimeout, rtCfg.maxConcurrent, rtCfg.concurrencyTimeout)
+		default:
 		}
+
+		if !semAcquired {
+			// Create a timeout context for semaphore acquisition
+			timeoutCtx, cancel := context.WithTimeout(ctx, rtCfg.concurrencyTimeout)
+			defer cancel()
+
+			select {
+			case parentTS.concurrencySem <- struct{}{}:
+				semAcquired = true
+			case <-timeoutCtx.Done():
+				// Check parent context first - if it was canceled, propagate that error
+				if ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
+				// Otherwise it's our timeout
+				return nil, fmt.Errorf("%w: all %d slots occupied for %v",
+					ErrConcurrencyTimeout, rtCfg.maxConcurrent, rtCfg.concurrencyTimeout)
+			}
+		}
+
+		defer func() {
+			if semAcquired {
+				<-parentTS.concurrencySem
+			}
+		}()
 	}
 
 	// 1. Depth limit check

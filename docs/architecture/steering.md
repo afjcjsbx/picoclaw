@@ -184,6 +184,12 @@ This design enables **parallel processing of messages from different sessions** 
 - Audio messages are transcribed within the worker that processes the turn, so the agent receives text
 - `system` inbound messages are processed immediately and do not trigger steering
 
+## Slash commands during an active turn
+
+Registered commands marked `ReadOnly` (`/start`, `/help`, `/show`, `/list`, `/check`, `/context`, `/subagents`) execute immediately and publish their normal reply. They are not added to the steering queue.
+
+`/stop` remains a special hard-abort path. Commands that change session or runtime state (`/clear`, `/compact`, `/switch`, `/use`, `/voice`, `/reload`) are rejected with a message asking the user to run `/stop` first. Unknown slash-prefixed text is still treated as a normal message, so it follows the steering or idle passthrough path.
+
 ## Steering with media
 
 Steering messages can include `Media` refs, just like normal inbound user

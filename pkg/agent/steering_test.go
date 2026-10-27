@@ -745,6 +745,126 @@ func waitForSteeringPending(t *testing.T, al *AgentLoop, scope string) {
 	}
 }
 
+func TestAgentLoop_Run_ReadOnlyCommandDuringActiveTurn(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				ModelName:         "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+		},
+	}
+
+	msgBus := bus.NewMessageBus()
+	provider := &lateSteeringProvider{
+		firstCallStarted: make(chan struct{}),
+		releaseFirstCall: make(chan struct{}),
+	}
+	al := NewAgentLoop(cfg, msgBus, provider)
+
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	runErrCh := make(chan error, 1)
+	go func() {
+		runErrCh <- al.Run(runCtx)
+	}()
+	defer func() {
+		cancelRun()
+		select {
+		case err := <-runErrCh:
+			if err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("timeout waiting for Run to stop")
+		}
+	}()
+
+	first := bus.InboundMessage{
+		Context: bus.InboundContext{
+			Channel:  "test",
+			ChatID:   "chat1",
+			ChatType: "direct",
+			SenderID: "user1",
+		},
+		Content: "first message",
+	}
+	help := bus.InboundMessage{
+		Context: bus.InboundContext{
+			Channel:  "test",
+			ChatID:   "chat1",
+			ChatType: "direct",
+			SenderID: "user1",
+		},
+		Content: "/help",
+	}
+
+	pubCtx, pubCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer pubCancel()
+	if err := msgBus.PublishInbound(pubCtx, first); err != nil {
+		t.Fatalf("publish first inbound: %v", err)
+	}
+
+	select {
+	case <-provider.firstCallStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for first provider call to start")
+	}
+
+	scope, _, ok := al.resolveSteeringTarget(first)
+	if !ok {
+		t.Fatal("expected first message to resolve a steering target")
+	}
+
+	if err := msgBus.PublishInbound(pubCtx, help); err != nil {
+		t.Fatalf("publish /help inbound: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	helpReply := ""
+	for helpReply == "" {
+		select {
+		case out := <-msgBus.OutboundChan():
+			if strings.Contains(out.Content, "/help - Show this help message") {
+				helpReply = out.Content
+			}
+		case <-time.After(10 * time.Millisecond):
+			if time.Now().After(deadline) {
+				t.Fatal("timeout waiting for /help command reply")
+			}
+		}
+	}
+	if !strings.Contains(helpReply, "/stop - Stop the current task") {
+		t.Fatalf("/help reply does not list /stop: %q", helpReply)
+	}
+	if got := al.pendingSteeringCountForScope(scope); got != 0 {
+		t.Fatalf("/help was queued as steering, queue depth = %d", got)
+	}
+
+	close(provider.releaseFirstCall)
+
+	deadline = time.Now().Add(2 * time.Second)
+	for {
+		if al.GetActiveTurnBySession(scope) == nil && al.pendingSteeringCountForScope(scope) == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timeout waiting for first turn to finish")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	provider.mu.Lock()
+	calls := provider.calls
+	provider.mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("expected /help to avoid a continuation turn, provider calls = %d", calls)
+	}
+}
+
 func TestAgentLoop_Run_AutoContinuesLateSteeringMessage(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "agent-test-*")
 	if err != nil {

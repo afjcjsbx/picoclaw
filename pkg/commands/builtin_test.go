@@ -17,6 +17,39 @@ func findDefinitionByName(t *testing.T, defs []Definition, name string) Definiti
 	return Definition{}
 }
 
+func TestBuiltinDefinitions_ReadOnlyClassification(t *testing.T) {
+	readOnly := map[string]bool{
+		"start":     true,
+		"help":      true,
+		"show":      true,
+		"list":      true,
+		"check":     true,
+		"context":   true,
+		"subagents": true,
+		"stop":      false,
+		"clear":     false,
+		"compact":   false,
+		"switch":    false,
+		"reload":    false,
+		"use":       false,
+		"voice":     false,
+	}
+
+	defs := BuiltinDefinitions()
+	if len(defs) != len(readOnly) {
+		t.Fatalf("builtin definitions = %d, want %d", len(defs), len(readOnly))
+	}
+	for _, def := range defs {
+		want, ok := readOnly[def.Name]
+		if !ok {
+			t.Fatalf("unexpected builtin command /%s", def.Name)
+		}
+		if def.ReadOnly != want {
+			t.Errorf("/%s ReadOnly = %v, want %v", def.Name, def.ReadOnly, want)
+		}
+	}
+}
+
 func TestBuiltinHelpHandler_ReturnsFormattedMessage(t *testing.T) {
 	defs := BuiltinDefinitions()
 	helpDef := findDefinitionByName(t, defs, "help")
