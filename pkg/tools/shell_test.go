@@ -16,6 +16,47 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 )
 
+func TestExecToolSchemaRequiresCommand(t *testing.T) {
+	tool, err := NewExecTool("", false)
+	require.NoError(t, err)
+
+	required, ok := tool.Parameters()["required"].([]string)
+	require.True(t, ok)
+	require.Contains(t, required, "action")
+	require.Contains(t, required, "command")
+
+	validationRequired, ok := tool.ValidationParameters()["required"].([]string)
+	require.True(t, ok)
+	require.Contains(t, validationRequired, "action")
+	require.NotContains(t, validationRequired, "command")
+}
+
+func TestExecToolEmptyRunCommandIsRejected(t *testing.T) {
+	tool, err := NewExecTool("", false)
+	require.NoError(t, err)
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"action":  "run",
+		"command": "   ",
+	})
+	require.True(t, result.IsError)
+	require.Contains(t, result.ForLLM, "command is required")
+}
+
+func TestExecToolRegistryValidationKeepsNonRunCallsWorking(t *testing.T) {
+	registry := NewToolRegistry()
+	tool, err := NewExecTool("", false)
+	require.NoError(t, err)
+	registry.Register(tool)
+
+	listResult := registry.Execute(context.Background(), "exec", map[string]any{"action": "list"})
+	require.False(t, listResult.IsError)
+
+	runResult := registry.Execute(context.Background(), "exec", map[string]any{"action": "run"})
+	require.True(t, runResult.IsError)
+	require.Contains(t, runResult.ForLLM, "command is required")
+}
+
 // TestShellTool_Success verifies successful command execution
 func TestShellTool_Success(t *testing.T) {
 	tool, err := NewExecTool("", false)
