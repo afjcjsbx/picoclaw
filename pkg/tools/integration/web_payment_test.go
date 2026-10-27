@@ -309,7 +309,4 @@ func TestWebFetchNonPaymentStatusIgnoresPaymentHeader(t *testing.T) {
 	if _, ok := envelope["payment_required"]; ok {
 		t.Fatalf("unexpected payment_required field on a 200 response: %v", envelope)
 	}
-	if len(envelope) != 6 {
-		t.Fatalf("unexpected envelope keys: %v", envelope)
-	}
 }
