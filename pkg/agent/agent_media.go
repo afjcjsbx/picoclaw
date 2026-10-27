@@ -16,8 +16,10 @@ import (
 
 	"github.com/h2non/filetype"
 
+	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/media"
+	"github.com/sipeed/picoclaw/pkg/memlimit"
 	"github.com/sipeed/picoclaw/pkg/providers"
 )
 
@@ -56,11 +58,48 @@ func currentTurnMessages(messages []providers.Message, currentTurnStart int) []p
 // Only tool messages from the current turn may emit the synthetic user
 // follow-up; historical tool results stay as plain path-tagged history.
 // Non-image files always get path tags regardless of role.
-// Returns a new slice; original messages are not mutated.
+// Original messages are never mutated. Returns a new slice when any message
+// carries media; with a nil store or no media at all there is nothing to
+// resolve and the input slice itself is returned, so callers must not assume
+// the result is an independent copy.
 func resolveMediaRefs(
 	messages []providers.Message,
 	store media.MediaStore,
 	maxSize int,
+	currentTurnStart int,
+) []providers.Message {
+	return resolveMediaRefsWithOptions(messages, store, mediaResolveOptions{maxSize: maxSize}, currentTurnStart)
+}
+
+// mediaResolveOptionsFor builds media resolution options from configuration.
+func mediaResolveOptionsFor(cfg *config.Config) mediaResolveOptions {
+	d := cfg.Agents.Defaults
+	return mediaResolveOptions{
+		maxSize:           d.GetMaxMediaSize(),
+		maxImageDimension: d.GetVisionMaxImageDimension(),
+		jpegQuality:       d.GetVisionJPEGQuality(),
+	}
+}
+
+// mediaResolveOptions controls how media references are turned into model input.
+type mediaResolveOptions struct {
+	// maxSize is the maximum size, in bytes, of an image payload that may be
+	// inlined. It applies after downscaling, so a large original that shrinks
+	// below it is still sent.
+	maxSize int
+	// maxImageDimension is the longest-edge cap applied to inlined images.
+	// 0 disables downscaling and sends the original bytes.
+	maxImageDimension int
+	// jpegQuality is the JPEG quality used when an oversized image is
+	// recompressed. Ignored when maxImageDimension is 0.
+	jpegQuality int
+}
+
+// resolveMediaRefsWithOptions is resolveMediaRefs with explicit vision options.
+func resolveMediaRefsWithOptions(
+	messages []providers.Message,
+	store media.MediaStore,
+	opts mediaResolveOptions,
 	currentTurnStart int,
 ) []providers.Message {
 	if store == nil {
@@ -68,8 +107,25 @@ func resolveMediaRefs(
 	}
 	currentTurnStart = normalizeCurrentTurnStart(messages, currentTurnStart)
 
+	// Fast path: with no media references there is nothing to resolve, so avoid
+	// allocating and copying the whole message slice (this function runs over
+	// the full history on every LLM iteration).
+	hasMedia := false
+	for i := range messages {
+		if len(messages[i].Media) > 0 {
+			hasMedia = true
+			break
+		}
+	}
+	if !hasMedia {
+		return messages
+	}
+
 	result := make([]providers.Message, 0, len(messages))
 	var pendingToolImages []string
+	// encoded dedups data-URL encoding within this call so the same file is not
+	// read and base64-encoded more than once.
+	encoded := make(map[string]string)
 
 	for idx, m := range messages {
 		// When leaving a tool-message block, flush any accumulated images
@@ -125,7 +181,11 @@ func resolveMediaRefs(
 			pathTags = append(pathTags, buildPathTag(mime, localPath))
 
 			if m.Role == "tool" && idx >= currentTurnStart && strings.HasPrefix(mime, "image/") {
-				dataURL := encodeImageToDataURL(localPath, mime, info, maxSize)
+				dataURL, ok := encoded[localPath]
+				if !ok {
+					dataURL = encodeImageToDataURL(localPath, mime, info, opts)
+					encoded[localPath] = dataURL
+				}
 				if dataURL != "" {
 					pendingToolImages = append(pendingToolImages, dataURL)
 				}
@@ -148,14 +208,21 @@ func resolveMediaRefs(
 	return result
 }
 
-// encodeImageToDataURL base64-encodes an image file into a data URL.
-// Returns empty string if the file exceeds maxSize or encoding fails.
-func encodeImageToDataURL(localPath, mime string, info os.FileInfo, maxSize int) string {
-	if info.Size() > int64(maxSize) {
+// encodeImageToDataURL base64-encodes an image file into a data URL, first
+// downscaling it when a vision dimension cap is configured. The size limit
+// applies to the payload actually sent, so an oversized original that
+// downscales under opts.maxSize is still inlined. Returns empty string if the
+// payload exceeds opts.maxSize or encoding fails.
+func encodeImageToDataURL(localPath, mime string, info os.FileInfo, opts mediaResolveOptions) string {
+	if dataURL, ok := downscaleToDataURL(localPath, mime, opts); ok {
+		return dataURL
+	}
+
+	if info.Size() > int64(opts.maxSize) {
 		logger.WarnCF("agent", "Media file too large, skipping", map[string]any{
 			"path":     localPath,
 			"size":     info.Size(),
-			"max_size": maxSize,
+			"max_size": opts.maxSize,
 		})
 		return ""
 	}
@@ -194,7 +261,12 @@ func encodeImageToDataURL(localPath, mime string, info os.FileInfo, maxSize int)
 		return ""
 	}
 
-	return buf.String()
+	dataURL := buf.String()
+	// Encoding a large image produces a transient allocation roughly twice the
+	// data URL size; return it to the OS immediately so the resident set does
+	// not stay inflated until the next scheduled GC.
+	memlimit.ReleaseToOS(len(dataURL))
+	return dataURL
 }
 
 func buildArtifactTags(store media.MediaStore, refs []string) []string {
@@ -213,6 +285,32 @@ func buildArtifactTags(store media.MediaStore, refs []string) []string {
 	}
 
 	return tags
+}
+
+// appendArtifactTags merges media-derived tags with any tags already present on
+// a tool result (for example the path of a spilled large-result artifact).
+// Order is preserved and duplicates are dropped.
+func appendArtifactTags(existing, added []string) []string {
+	if len(added) == 0 {
+		return existing
+	}
+	seen := make(map[string]struct{}, len(existing)+len(added))
+	merged := make([]string, 0, len(existing)+len(added))
+	for _, tag := range existing {
+		if _, ok := seen[tag]; ok {
+			continue
+		}
+		seen[tag] = struct{}{}
+		merged = append(merged, tag)
+	}
+	for _, tag := range added {
+		if _, ok := seen[tag]; ok {
+			continue
+		}
+		seen[tag] = struct{}{}
+		merged = append(merged, tag)
+	}
+	return merged
 }
 
 func buildProviderAttachments(store media.MediaStore, refs []string) []providers.Attachment {

@@ -10,17 +10,6 @@ import (
 	"github.com/sipeed/picoclaw/pkg/providers"
 )
 
-func ensureProtocolModel(model string) string {
-	model = strings.TrimSpace(model)
-	if model == "" {
-		return ""
-	}
-	if strings.Contains(model, "/") {
-		return model
-	}
-	return "openai/" + model
-}
-
 func modelConfigIdentityKey(mc *config.ModelConfig) string {
 	if mc == nil {
 		return ""

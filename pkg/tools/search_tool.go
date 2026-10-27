@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/utils"
@@ -87,10 +88,12 @@ type BM25SearchTool struct {
 	ttl              int
 	maxSearchResults int
 
-	// Cache: rebuilt only when the registry version changes.
+	// Cache: rebuilt only when the registry version changes. The fast path is
+	// lock-free, so both fields are read and written atomically; cacheMu still
+	// serializes rebuilds.
 	cacheMu      sync.Mutex
-	cachedEngine *bm25CachedEngine
-	cacheVersion uint64
+	cachedEngine atomic.Pointer[bm25CachedEngine]
+	cacheVersion atomic.Uint64
 }
 
 func NewBM25SearchTool(r *ToolRegistry, ttl int, maxSearchResults int) *BM25SearchTool {
@@ -265,9 +268,9 @@ func buildBM25Engine(docs []searchDoc) *utils.BM25Engine[searchDoc] {
 // getOrBuildEngine returns a cached BM25 engine, rebuilding it only when
 // the registry version has changed (new tools registered).
 func (t *BM25SearchTool) getOrBuildEngine() *bm25CachedEngine {
-	// Fast path: optimistic check without locking.
-	if t.cachedEngine != nil && t.cacheVersion == t.registry.Version() {
-		return t.cachedEngine
+	// Fast path: lock-free optimistic check.
+	if cached := t.cachedEngine.Load(); cached != nil && t.cacheVersion.Load() == t.registry.Version() {
+		return cached
 	}
 
 	t.cacheMu.Lock()
@@ -278,20 +281,20 @@ func (t *BM25SearchTool) getOrBuildEngine() *bm25CachedEngine {
 	snap := t.registry.SnapshotHiddenTools()
 
 	// Re-check: another goroutine may have rebuilt while we waited for cacheMu.
-	if t.cachedEngine != nil && t.cacheVersion == snap.Version {
-		return t.cachedEngine
+	if cached := t.cachedEngine.Load(); cached != nil && t.cacheVersion.Load() == snap.Version {
+		return cached
 	}
 
 	docs := snapshotToSearchDocs(snap)
 	if len(docs) == 0 {
-		t.cachedEngine = nil
-		t.cacheVersion = snap.Version
+		t.cachedEngine.Store(nil)
+		t.cacheVersion.Store(snap.Version)
 		return nil
 	}
 
 	cached := &bm25CachedEngine{engine: buildBM25Engine(docs)}
-	t.cachedEngine = cached
-	t.cacheVersion = snap.Version
+	t.cachedEngine.Store(cached)
+	t.cacheVersion.Store(snap.Version)
 	logger.DebugCF("discovery", "BM25 engine rebuilt", map[string]any{"docs": len(docs), "version": snap.Version})
 	return cached
 }
@@ -303,29 +306,4 @@ func isToolDiscoveryToolName(name string) bool {
 	default:
 		return false
 	}
-}
-
-// SearchBM25 ranks hidden tools against query using BM25 via utils.BM25Engine.
-// This non-cached variant rebuilds the engine on every call. Used by tests
-// and any code that doesn't hold a BM25SearchTool instance.
-func (r *ToolRegistry) SearchBM25(query string, maxSearchResults int) []ToolSearchResult {
-	snap := r.SnapshotHiddenTools()
-	docs := snapshotToSearchDocs(snap)
-	if len(docs) == 0 {
-		return nil
-	}
-
-	ranked := buildBM25Engine(docs).Search(query, maxSearchResults)
-	if len(ranked) == 0 {
-		return nil
-	}
-
-	out := make([]ToolSearchResult, len(ranked))
-	for i, r := range ranked {
-		out[i] = ToolSearchResult{
-			Name:        r.Document.Name,
-			Description: r.Document.Description,
-		}
-	}
-	return out
 }

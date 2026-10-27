@@ -64,6 +64,21 @@ func NewFallbackChain(cooldown *CooldownTracker, rl *RateLimiterRegistry) *Fallb
 	return &FallbackChain{cooldown: cooldown, rl: rl}
 }
 
+// Acquire enforces the local rate limit for a candidate identity. It blocks
+// until a token is available or ctx is canceled, and is a no-op when no limiter
+// is registered for the key (RPM == 0).
+//
+// ExecuteCandidate already acquires a token per candidate for multi-candidate
+// configs. Callers use Acquire for the single-candidate path, where the fallback
+// chain is not otherwise involved, so a configured RPM limit is honored even
+// without fallbacks and while streaming.
+func (fc *FallbackChain) Acquire(ctx context.Context, key string) error {
+	if fc == nil || fc.rl == nil {
+		return nil
+	}
+	return fc.rl.Wait(ctx, key)
+}
+
 // ResolveCandidates parses model config into a deduplicated candidate list.
 func ResolveCandidates(cfg ModelConfig, defaultProvider string) []FallbackCandidate {
 	return ResolveCandidatesWithLookup(cfg, defaultProvider, nil)
@@ -257,7 +272,12 @@ func (fc *FallbackChain) ExecuteCandidate(
 		}
 
 		// Retriable error: mark failure and continue to next candidate.
-		fc.cooldown.MarkFailure(cooldownKey, failErr.Reason)
+		// An unusable response means the provider answered but produced nothing
+		// we can use, so it is not put into cooldown: the next request should
+		// try it again instead of silently skipping it for a while.
+		if failErr.Reason != FailoverUnusable {
+			fc.cooldown.MarkFailure(cooldownKey, failErr.Reason)
+		}
 		result.Attempts = append(result.Attempts, FallbackAttempt{
 			Provider: candidate.Provider,
 			Model:    candidate.Model,

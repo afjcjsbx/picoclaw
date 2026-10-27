@@ -65,6 +65,8 @@ func IsSingletonChannel(channelType string) bool {
 // RawNode stores raw configuration data as JSON bytes, supporting both JSON and YAML.
 // Internally uses json.RawMessage, so Decode always uses json.Unmarshal
 // which correctly respects json struct tags.
+//
+//nolint:recvcheck // Marshaling uses a value receiver; unmarshaling updates the raw bytes.
 type RawNode json.RawMessage
 
 // UnmarshalJSON implements json.Unmarshaler: stores raw JSON bytes.
@@ -401,8 +403,6 @@ func (b Channel) CollectSensitiveValues() []string {
 // ChannelsConfig maps channel name to its Channel configuration.
 // Each Channel stores the full channel config in Settings and handles
 // JSON/YAML serialization (removing/keeping secure fields automatically).
-//
-//nolint:recvcheck
 type ChannelsConfig map[string]*Channel
 
 // UnmarshalYAML implements yaml.Unmarshaler for ChannelsConfig.
@@ -554,7 +554,7 @@ var BaseFieldNames = map[string]struct{}{
 // SecureString or SecureStrings and returns their JSON field names.
 func extractSecureFieldNames(target any) map[string]struct{} {
 	v := reflect.ValueOf(target)
-	if v.Kind() == reflect.Ptr {
+	if v.Kind() == reflect.Pointer {
 		v = v.Elem()
 	}
 	if v.Kind() != reflect.Struct {

@@ -15,6 +15,10 @@ func InitPanic(filePath string) (func(), error) {
 	if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
 		return nil, fmt.Errorf("failed to create log directory: %w", err)
 	}
+	maxBytes, _ := fileRotationLimits()
+	if err := trimLogFile(filePath, maxBytes); err != nil {
+		return nil, fmt.Errorf("failed to bound panic log: %w", err)
+	}
 	writer := initPanicFile(filePath)
 	if writer == nil {
 		return nil, fmt.Errorf("failed to create log file: %s", filePath)

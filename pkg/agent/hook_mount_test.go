@@ -163,6 +163,7 @@ func TestProcessHookObserveKindsFromConfigAcceptsRuntimeNames(t *testing.T) {
 	kinds, enabled, err := processHookObserveKindsFromConfig([]string{
 		"tool_exec_start",
 		"agent.tool.exec_end",
+		"post_compaction",
 		"gateway.ready",
 		"mcp.server.failed",
 	})
@@ -173,9 +174,45 @@ func TestProcessHookObserveKindsFromConfigAcceptsRuntimeNames(t *testing.T) {
 		t.Fatal("expected observe to be enabled")
 	}
 
-	want := []string{"agent.tool.exec_start", "agent.tool.exec_end", "gateway.ready", "mcp.server.failed"}
+	want := []string{
+		"agent.tool.exec_start",
+		"agent.tool.exec_end",
+		"agent.context.compress",
+		"agent.session.summarize",
+		"gateway.ready",
+		"mcp.server.failed",
+	}
 	if !slices.Equal(kinds, want) {
 		t.Fatalf("observe kinds = %v, want %v", kinds, want)
+	}
+}
+
+func TestProcessHookOptionsFromConfigMarksCompletedOnly(t *testing.T) {
+	opts, err := processHookOptionsFromConfig(config.ProcessHookConfig{
+		Enabled: true,
+		Command: []string{"echo"},
+		Observe: []string{"turn_completed"},
+	})
+	if err != nil {
+		t.Fatalf("processHookOptionsFromConfig failed: %v", err)
+	}
+	if !opts.Observe {
+		t.Fatal("expected observe enabled")
+	}
+	if !opts.CompletedOnly {
+		t.Fatal("expected CompletedOnly for turn_completed alias")
+	}
+
+	raw, err := processHookOptionsFromConfig(config.ProcessHookConfig{
+		Enabled: true,
+		Command: []string{"echo"},
+		Observe: []string{"agent.turn.end"},
+	})
+	if err != nil {
+		t.Fatalf("processHookOptionsFromConfig failed: %v", err)
+	}
+	if raw.CompletedOnly {
+		t.Fatal("did not expect CompletedOnly for raw agent.turn.end")
 	}
 }
 

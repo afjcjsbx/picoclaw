@@ -11,7 +11,7 @@
 | ------------ | --------------------------------------- | ------------------------------------------------------------ |
 | `gemini`     | LLM (Gemini direct)                     | [aistudio.google.com](https://aistudio.google.com)           |
 | `zhipu`      | LLM (Zhipu direct)                      | [bigmodel.cn](https://bigmodel.cn)                           |
-| `zai-coding` | LLM (Z.AI Coding Plan)                | [z.ai](https://z.ai/manage-apikey/apikey-list)           |
+| `zai`        | LLM (Z.AI Coding Plan)                | [z.ai](https://z.ai/manage-apikey/apikey-list)           |
 | `volcengine` | LLM(Volcengine direct)                  | [volcengine.com](https://www.volcengine.com/activity/codingplan?utm_campaign=PicoClaw&utm_content=PicoClaw&utm_medium=devrel&utm_source=OWO&utm_term=PicoClaw)                 |
 | `openrouter` | LLM (recommended, access to all models) | [openrouter.ai](https://openrouter.ai)                       |
 | `anthropic`  | LLM (Claude direct)                     | [console.anthropic.com](https://console.anthropic.com)       |
@@ -77,6 +77,7 @@ This design also enables **multi-agent support** with flexible provider selectio
 | **Azure OpenAI**    | `azure`           | `https://{resource}.openai.azure.com`               | Azure     | [Get Key](https://portal.azure.com)                              |
 | **Antigravity**     | `antigravity`     | Google Cloud                                        | Custom    | OAuth only                                                       |
 | **GitHub Copilot**  | `github-copilot`  | `localhost:4321`                                    | gRPC      | -                                                                |
+| **OpenCode Go**     | `opencode-go`     | `https://opencode.ai/inference/go`                  | Multi     | [Get Key](https://opencode.ai/docs/go/)                          |
 
 #### Basic Configuration
 
@@ -127,6 +128,7 @@ This design also enables **multi-agent support** with flexible provider selectio
 | `api_base` | string | No | Override the default API endpoint URL                                                                                                                                                                                                       |
 | `proxy` | string | No | HTTP proxy URL for this model entry                                                                                                                                                                                                         |
 | `user_agent` | string | No | Custom `User-Agent` header sent with API requests (supported by OpenAI-compatible, Gemini, Anthropic, and Azure providers)                                                                                                                  |
+| `session_header` | string | No | HTTP header name that carries a stable per-conversation session ID. Supported by OpenAI-compatible, OpenAI Responses, Anthropic Messages, and OpenCode Go providers; other providers log a warning and ignore it. Leave empty to disable. |
 | `request_timeout` | int | No | Request timeout in seconds (default varies by provider)                                                                                                                                                                                     |
 | `max_tokens_field` | string | No | Override the max tokens field name in request body (e.g., `max_completion_tokens` for o1 models)                                                                                                                                            |
 | `thinking_level` | string | No | Extended thinking level: `off`, `low`, `medium`, `high`, `xhigh`, or `adaptive`                                                                                                                                                             |
@@ -145,25 +147,32 @@ speech routes, for example custom `voice` names or `response_format: "mp3"`.
 
 #### Tool Schema Compatibility
 
-By default, PicoClaw now forwards tool JSON Schemas unchanged.
+By default, PicoClaw forwards tool JSON Schemas unchanged, with automatic handling for the native Gemini provider.
 
-Some providers reject advanced JSON Schema features such as `$ref`, `$defs`, `anyOf`, `oneOf`, `allOf`, `pattern`, or numeric/string constraints inside tool declarations. For those models, you can opt into a compatibility transform per model entry with `tool_schema_transform`.
+##### Native Gemini endpoints
 
-Use `simple` when the upstream provider expects the conservative style function schema subset:
+When the `gemini` provider targets Google AI Studio (`generativelanguage.googleapis.com`, API version `v1beta`, `v1`, or `v1alpha`), PicoClaw sends tool parameters through Gemini's `parametersJsonSchema` field, which accepts full JSON Schema. Before sending, PicoClaw deep-copies the schema, inlines same-document `$ref` values, drops `$defs` and `definitions`, removes a root `$schema`, and guarantees an object root. If a reference is circular or cannot be resolved, PicoClaw logs a debug message and forwards the schema unchanged so the upstream error stays visible instead of silently truncating the tool definition.
+
+Vertex AI and custom Gemini-compatible proxies keep the legacy `parameters` field, which only accepts the conservative OpenAPI subset. PicoClaw sanitizes those schemas automatically: local refs are dereferenced, `anyOf`, `oneOf`, and `allOf` are flattened, and keywords such as `additionalProperties`, `pattern`, or numeric bounds are removed.
+
+`tool_schema_transform` is therefore unnecessary for native Gemini. It remains available for other providers that reject advanced JSON Schema features such as `$ref`, `$defs`, `anyOf`, `oneOf`, `allOf`, `pattern`, or numeric and string constraints inside tool declarations.
+
+Use `simple` when such a provider expects the conservative function schema subset:
 
 ```json
 {
-  "model_name": "gemini-2.5-flash-safe-tools",
-  "provider": "gemini",
-  "model": "gemini-2.5-flash",
-  "api_keys": ["your-gemini-key"],
+  "model_name": "custom-relay-safe-tools",
+  "provider": "openai",
+  "model": "my-model",
+  "api_keys": ["your-key"],
   "tool_schema_transform": "simple"
 }
 ```
 
 Notes:
 
-- Default behavior is disabled. If you omit `tool_schema_transform`, PicoClaw sends the original tool schema.
+- For non-Gemini providers the transform is disabled by default. If you omit `tool_schema_transform`, PicoClaw sends the original tool schema.
+- Native Gemini endpoints are handled automatically; the transform is not needed there.
 - The setting is per model entry, so you can enable it only for the providers that need it.
 
 #### Provider / Model Resolution
@@ -348,6 +357,41 @@ For direct Anthropic API access or custom endpoints that only support Anthropic'
 >
 > **Note:** The `anthropic` protocol uses OpenAI-compatible format (`/v1/chat/completions`), while `anthropic-messages` uses Anthropic's native format (`/v1/messages`). Choose based on your endpoint's supported format.
 
+**OpenCode Go**
+
+One OpenCode Go key serves models on four different wire protocols. PicoClaw
+picks the endpoint from the model ID prefix, so just name the model:
+
+| Model ID prefix                  | Protocol                    | Endpoint under `api_base`          |
+|----------------------------------|-----------------------------|------------------------------------|
+| `grok-`, `gpt-`, `muse-spark-`   | OpenAI Responses            | `/openai/v1/responses`             |
+| `claude-`, `minimax-`, `qwen`    | Anthropic Messages          | `/anthropic/v1/messages`           |
+| `gemini-`                        | Google Gemini               | `/google/v1beta/models/{id}:…`     |
+| anything else (`kimi-`, `glm-`, `deepseek-`, …) | OpenAI Chat Completions | `/openai/v1/chat/completions` |
+
+```json
+{
+  "model_name": "go-kimi",
+  "model": "opencode-go/kimi-k3",
+  "api_keys": ["your-opencode-go-key"]
+}
+```
+
+> `api_base` is optional and defaults to `https://opencode.ai/inference/go`.
+> OpenCode Go rejects requests without an `x-opencode-session` header, so
+> PicoClaw always sends it: the conversation session key during a chat turn, or
+> `picoclaw-<model_name>` for background calls such as summarization. An
+> explicit `custom_headers` entry for that header takes precedence.
+>
+> The Responses endpoint is called without `temperature` (reasoning models
+> reject it). For a model PicoClaw routes wrongly, use `provider: "openai"` or
+> `"anthropic-messages"` with the full family URL as `api_base` instead.
+
+For a custom OpenAI-compatible relay that also requires this header, set
+`"session_header": "x-opencode-session"` on the model entry. The Web UI exposes
+the same field under **Models → Add/Edit → Advanced → Session Header**, with a
+one-click **x-opencode-session** preset.
+
 **Ollama (local)**
 
 ```json
@@ -417,7 +461,11 @@ If the standard Zhipu endpoint (`https://open.bigmodel.cn/api/paas/v4`) returns 
 
 #### Load Balancing
 
-Configure multiple endpoints for the same model name—PicoClaw will automatically round-robin between them:
+Configure multiple endpoints for the same model name. PicoClaw selects one of
+them round-robin when the model is resolved (at agent startup or when switching
+models with `/model`), then reuses the resolved candidate set for the agent's
+subsequent turns, so the rotation is not per-request. The round-robin counter is
+process-wide, so selection is shared across all agents:
 
 ```json
 {

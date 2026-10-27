@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/fileutil"
 	"github.com/sipeed/picoclaw/pkg/isolation"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/media"
@@ -18,35 +19,36 @@ import (
 	"github.com/sipeed/picoclaw/pkg/routing"
 	"github.com/sipeed/picoclaw/pkg/session"
 	"github.com/sipeed/picoclaw/pkg/tools"
+	fstools "github.com/sipeed/picoclaw/pkg/tools/fs"
 )
 
 // AgentInstance represents a fully configured agent with its own workspace,
 // session manager, context builder, and tool registry.
 type AgentInstance struct {
-	modelMu                   *sync.RWMutex
-	ID                        string
-	Name                      string
-	Model                     string
-	Fallbacks                 []string
-	Workspace                 string
-	MaxIterations             int
-	MaxTokens                 int
-	Temperature               float64
-	ThinkingLevel             ThinkingLevel
-	ThinkingLevelConfigured   bool
-	ContextWindow             int
-	SummarizeMessageThreshold int
-	SummarizeTokenPercent     int
-	Provider                  providers.LLMProvider
-	Sessions                  session.SessionStore
-	ContextBuilder            *ContextBuilder
-	Tools                     *tools.ToolRegistry
-	Definition                AgentContextDefinition
-	Subagents                 *config.SubagentsConfig
-	SkillsFilter              []string
-	MCPServerAllowlist        map[string]struct{}
-	Candidates                []providers.FallbackCandidate
-	ImageCandidates           []providers.FallbackCandidate
+	modelMu                 *sync.RWMutex
+	ID                      string
+	Name                    string
+	Model                   string
+	Fallbacks               []string
+	Workspace               string
+	MaxIterations           int
+	MaxTokens               int
+	Temperature             float64
+	ThinkingLevel           ThinkingLevel
+	ThinkingLevelConfigured bool
+	ContextWindow           int
+	SummarizeTokenPercent   int
+	LoopDetection           config.LoopDetectionConfig
+	Provider                providers.LLMProvider
+	Sessions                session.SessionStore
+	ContextBuilder          *ContextBuilder
+	Tools                   *tools.ToolRegistry
+	Definition              AgentContextDefinition
+	Subagents               *config.SubagentsConfig
+	SkillsFilter            []string
+	MCPServerAllowlist      map[string]struct{}
+	Candidates              []providers.FallbackCandidate
+	ImageCandidates         []providers.FallbackCandidate
 
 	// Router is non-nil when model routing is configured and the light model
 	// was successfully resolved. It scores each incoming message and decides
@@ -119,26 +121,38 @@ func NewAgentInstance(
 
 	toolsRegistry := tools.NewToolRegistry()
 	toolsRegistry.SetAllowlist(agentToolAllowlist)
+	toolsRegistry.SetWorkspace(workspace)
+	toolsRegistry.SetMaxInlineResultRunes(cfg.Tools.GetMaxInlineResultChars())
+
+	if cfg.Tools.IsToolEnabled("todo") {
+		toolsRegistry.Register(tools.NewTodoTool())
+	}
 
 	if cfg.Tools.IsToolEnabled("read_file") {
 		maxReadFileSize := cfg.Tools.ReadFile.MaxReadFileSize
 		switch cfg.Tools.ReadFile.EffectiveMode() {
 		case config.ReadFileModeLines:
-			toolsRegistry.Register(tools.NewReadFileLinesTool(workspace, readRestrict, maxReadFileSize, allowReadPaths))
+			toolsRegistry.Register(fstools.NewReadFileLinesTool(
+				workspace, readRestrict, maxReadFileSize,
+				cfg.Tools.ReadFile.GetMaxLines(), cfg.Tools.ReadFile.GetMaxLineLength(),
+				allowReadPaths,
+			))
 		default:
-			toolsRegistry.Register(tools.NewReadFileBytesTool(workspace, readRestrict, maxReadFileSize, allowReadPaths))
+			toolsRegistry.Register(fstools.NewReadFileTool(
+				workspace, readRestrict, maxReadFileSize, allowReadPaths,
+			))
 		}
 	}
 	if cfg.Tools.IsToolEnabled("edit_file") {
-		toolsRegistry.Register(tools.NewEditFileTool(workspace, restrict, allowWritePaths))
+		toolsRegistry.Register(fstools.NewEditFileTool(workspace, restrict, allowWritePaths))
 	}
 	if cfg.Tools.IsToolEnabled("append_file") {
-		toolsRegistry.Register(tools.NewAppendFileTool(workspace, restrict, allowWritePaths))
+		toolsRegistry.Register(fstools.NewAppendFileTool(workspace, restrict, allowWritePaths))
 	}
 	// Build write_file's copy from the registered editors so it steers the agent
 	// to edit_file/append_file only when those tools are actually available.
 	if cfg.Tools.IsToolEnabled("write_file") {
-		writeTool := tools.NewWriteFileTool(workspace, restrict, allowWritePaths)
+		writeTool := fstools.NewWriteFileTool(workspace, restrict, allowWritePaths)
 		var altTools []string
 		if toolsRegistry.HasRegistered("append_file") {
 			altTools = append(altTools, "append_file")
@@ -150,7 +164,10 @@ func NewAgentInstance(
 		toolsRegistry.Register(writeTool)
 	}
 	if cfg.Tools.IsToolEnabled("list_dir") {
-		toolsRegistry.Register(tools.NewListDirTool(workspace, readRestrict, allowReadPaths))
+		toolsRegistry.Register(fstools.NewListDirTool(workspace, readRestrict, allowReadPaths))
+	}
+	if cfg.Tools.IsToolEnabled("search_files") {
+		toolsRegistry.Register(fstools.NewSearchFilesTool(workspace, readRestrict, allowReadPaths))
 	}
 	if cfg.Tools.IsToolEnabled("exec") {
 		execTool, err := tools.NewExecToolWithConfig(workspace, restrict, cfg, allowReadPaths)
@@ -163,7 +180,7 @@ func NewAgentInstance(
 	}
 
 	sessionsDir := filepath.Join(workspace, "sessions")
-	sessions := initSessionStore(sessionsDir)
+	sessions := initSessionStore(sessionsDir, cfg.Session.DurableWritesEnabled())
 
 	mcpDiscoveryActive := agentHasDiscoverableMCPServers(cfg, agentMCPServerAllowlist)
 	contextBuilder := NewContextBuilder(workspace).
@@ -221,11 +238,6 @@ func NewAgentInstance(
 	}
 	thinkingLevel := parseThinkingLevel(thinkingLevelStr)
 	thinkingLevelConfigured := isConfiguredThinkingLevel(thinkingLevelStr)
-
-	summarizeMessageThreshold := defaults.SummarizeMessageThreshold
-	if summarizeMessageThreshold == 0 {
-		summarizeMessageThreshold = 20
-	}
 
 	summarizeTokenPercent := defaults.SummarizeTokenPercent
 	if summarizeTokenPercent == 0 {
@@ -306,8 +318,10 @@ func NewAgentInstance(
 						map[string]any{"light_model": rc.LightModel, "agent_id": agentID, "error": err.Error()})
 				} else {
 					router = routing.New(routing.RouterConfig{
-						LightModel: rc.LightModel,
-						Threshold:  rc.Threshold,
+						LightModel:               rc.LightModel,
+						Threshold:                rc.Threshold,
+						EscalationPromptTokens:   rc.EscalationPromptTokens,
+						EscalationToolIterations: rc.EscalationToolIterations,
 					})
 					lightCandidates = resolved
 					lightProvider = lp
@@ -321,34 +335,34 @@ func NewAgentInstance(
 	}
 
 	return &AgentInstance{
-		modelMu:                   &sync.RWMutex{},
-		ID:                        agentID,
-		Name:                      agentName,
-		Model:                     model,
-		Fallbacks:                 fallbacks,
-		Workspace:                 workspace,
-		MaxIterations:             maxIter,
-		MaxTokens:                 maxTokens,
-		Temperature:               temperature,
-		ThinkingLevel:             thinkingLevel,
-		ThinkingLevelConfigured:   thinkingLevelConfigured,
-		ContextWindow:             contextWindow,
-		SummarizeMessageThreshold: summarizeMessageThreshold,
-		SummarizeTokenPercent:     summarizeTokenPercent,
-		Provider:                  provider,
-		Sessions:                  sessions,
-		ContextBuilder:            contextBuilder,
-		Tools:                     toolsRegistry,
-		Definition:                definition,
-		Subagents:                 subagents,
-		SkillsFilter:              skillsFilter,
-		MCPServerAllowlist:        agentMCPServerAllowlist,
-		Candidates:                candidates,
-		ImageCandidates:           imageCandidates,
-		Router:                    router,
-		LightCandidates:           lightCandidates,
-		LightProvider:             lightProvider,
-		CandidateProviders:        candidateProviders,
+		modelMu:                 &sync.RWMutex{},
+		ID:                      agentID,
+		Name:                    agentName,
+		Model:                   model,
+		Fallbacks:               fallbacks,
+		Workspace:               workspace,
+		MaxIterations:           maxIter,
+		MaxTokens:               maxTokens,
+		Temperature:             temperature,
+		ThinkingLevel:           thinkingLevel,
+		ThinkingLevelConfigured: thinkingLevelConfigured,
+		ContextWindow:           contextWindow,
+		SummarizeTokenPercent:   summarizeTokenPercent,
+		LoopDetection:           defaults.LoopDetection.Normalized(),
+		Provider:                provider,
+		Sessions:                sessions,
+		ContextBuilder:          contextBuilder,
+		Tools:                   toolsRegistry,
+		Definition:              definition,
+		Subagents:               subagents,
+		SkillsFilter:            skillsFilter,
+		MCPServerAllowlist:      agentMCPServerAllowlist,
+		Candidates:              candidates,
+		ImageCandidates:         imageCandidates,
+		Router:                  router,
+		LightCandidates:         lightCandidates,
+		LightProvider:           lightProvider,
+		CandidateProviders:      candidateProviders,
 	}
 }
 
@@ -585,16 +599,16 @@ func resolvePrimaryProviderForCandidate(
 // resolveAgentWorkspace determines the workspace directory for an agent.
 func resolveAgentWorkspace(agentCfg *config.AgentConfig, defaults *config.AgentDefaults) string {
 	if agentCfg != nil && strings.TrimSpace(agentCfg.Workspace) != "" {
-		return expandHome(strings.TrimSpace(agentCfg.Workspace))
+		return fileutil.ExpandHome(strings.TrimSpace(agentCfg.Workspace))
 	}
 	// Use the configured default workspace (respects PICOCLAW_HOME)
 	if agentCfg == nil || agentCfg.Default || agentCfg.ID == "" ||
 		routing.NormalizeAgentID(agentCfg.ID) == "main" {
-		return expandHome(defaults.Workspace)
+		return fileutil.ExpandHome(defaults.Workspace)
 	}
 	// For named agents without explicit workspace, use default workspace with agent ID suffix
 	id := routing.NormalizeAgentID(agentCfg.ID)
-	return filepath.Join(expandHome(defaults.Workspace), "..", "workspace-"+id)
+	return filepath.Join(fileutil.ExpandHome(defaults.Workspace), "..", "workspace-"+id)
 }
 
 // resolveAgentModel resolves the primary model for an agent.
@@ -762,8 +776,8 @@ func closeUnreferencedStatefulProviders(
 // It uses the JSONL store by default and auto-migrates legacy JSON sessions.
 // Falls back to SessionManager if the JSONL store cannot be initialized or
 // if migration fails (which indicates the store cannot write reliably).
-func initSessionStore(dir string) session.SessionStore {
-	store, err := memory.NewJSONLStore(dir)
+func initSessionStore(dir string, durableWrites bool) session.SessionStore {
+	store, err := memory.NewJSONLStore(dir, memory.WithDurableWrites(durableWrites))
 	if err != nil {
 		logger.WarnCF("agent", "Memory JSONL store init failed; falling back to json sessions",
 			map[string]any{"error": err.Error()})
@@ -783,18 +797,4 @@ func initSessionStore(dir string) session.SessionStore {
 	}
 
 	return session.NewJSONLBackend(store)
-}
-
-func expandHome(path string) string {
-	if path == "" {
-		return path
-	}
-	if path[0] == '~' {
-		home, _ := os.UserHomeDir()
-		if len(path) > 1 && path[1] == '/' {
-			return home + path[1:]
-		}
-		return home
-	}
-	return path
 }

@@ -126,6 +126,7 @@ PICOCLAW_EVENTS_LOGGING_INCLUDE_PAYLOAD=false
 | 事件名 | 触发时机 | 主要详情 |
 | ------ | -------- | -------- |
 | `bus.publish.failed` | inbound、outbound、media、audio 或 voice control 发布失败，或缺少必要 context 时 | `stream`, `error`; scope 尽量来自消息 context |
+| `bus.message.dropped` | publish 在队列已满时超过背压等待预算，消息被丢弃。audio chunk 默认预算为 150 ms（可通过 `SetBackpressureTimeout` 覆盖） | `stream`, `reason`, `wait_ms`, `queue_depth`, `queue_capacity`, `dropped_total`; severity 为 `warn`; scope 尽量来自消息 context |
 | `bus.close.started` | message bus 开始关闭时 | `drained` 通常为 `0` |
 | `bus.close.drained` | close 期间等待队列 drain，并且 drain 到至少一条 buffered message 时 | `drained` |
 | `bus.close.completed` | message bus 完成关闭时 | `drained` |
@@ -209,7 +210,7 @@ agent 事件还会追加 payload 摘要字段：
 
 - `agent.*`：agent turn、LLM、tool、context、steering、interrupt、subturn、error。
 - `channel.*`：channel lifecycle、webhook 注册、outbound queued/sent/failed、rate limited。
-- `bus.*`：publish failed、close started/drained/completed。
+- `bus.*`：publish failed、背压消息丢弃、close started/drained/completed。
 - `gateway.*`：start、ready、shutdown、reload started/completed/failed。
 - `mcp.*`：server connecting/connected/failed、tool discovered、tool call start/end。
 

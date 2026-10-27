@@ -68,7 +68,30 @@ func TestExtractFeatures_CodeBlocks(t *testing.T) {
 		{"no code here", 0},
 		{"```go\nfmt.Println()\n```", 1},
 		{"```python\npass\n```\n```js\nconsole.log()\n```", 2},
-		{"```unclosed", 0}, // odd number of fences = 0 complete blocks
+		{"```unclosed", 0},                       // odd number of fences = 0 complete blocks
+		{"Try this: ```go\nfunc f() {}\n```", 1}, // opening fence mid-line
+		{"inline ```x``` span", 1},
+	}
+	for _, tc := range cases {
+		f := ExtractFeatures(tc.msg, nil)
+		if f.CodeBlockCount != tc.want {
+			t.Errorf("msg=%q: CodeBlockCount got %d, want %d", tc.msg, f.CodeBlockCount, tc.want)
+		}
+	}
+}
+
+func TestExtractFeatures_CodeBlocks_TildeFence(t *testing.T) {
+	cases := []struct {
+		msg  string
+		want int
+	}{
+		{"~~~\ncode\n~~~", 1},
+		{"~~~python\npass\n~~~\n~~~js\nconsole.log()\n~~~", 2},
+		{"~~~unclosed", 0},
+		{"\\~~~ is not a fence line", 0},
+		{"```\ncode\n~~~", 0}, // mismatched fence types never form a block
+		{"~~~\ncode\n```", 0},
+		{"~~~\n```\n~~~", 1}, // a different fence inside a block is plain content
 	}
 	for _, tc := range cases {
 		f := ExtractFeatures(tc.msg, nil)
@@ -114,6 +137,9 @@ func TestExtractFeatures_HasAttachments_DataURI(t *testing.T) {
 		{"here is an image: data:image/png;base64,abc123", true},
 		{"audio: data:audio/mp3;base64,xyz", true},
 		{"video: data:video/mp4;base64,xyz", true},
+		// A sample data URI inside a code block is code, not an attachment.
+		{"```html\n<img src=\"data:image/png;base64,abc123\">\n```", false},
+		{"~~~\ndata:audio/mp3;base64,xyz\n~~~\nthanks", false},
 	}
 	for _, tc := range cases {
 		f := ExtractFeatures(tc.msg, nil)
@@ -132,8 +158,67 @@ func TestExtractFeatures_HasAttachments_Extension(t *testing.T) {
 		{"see screenshot.png", true},
 		{"listen to audio.mp3", true},
 		{"watch clip.mp4", true},
+		{"mixed case SCREENSHOT.PNG", true},
 		{"just a .go file", false},
 		{"document.pdf", false}, // pdf is not in the media list
+	}
+	for _, tc := range cases {
+		f := ExtractFeatures(tc.msg, nil)
+		if f.HasAttachments != tc.want {
+			t.Errorf("msg=%q: HasAttachments got %v, want %v", tc.msg, f.HasAttachments, tc.want)
+		}
+	}
+}
+
+func TestExtractFeatures_HasAttachments_IgnoresFencedCode(t *testing.T) {
+	cases := []struct {
+		msg  string
+		want bool
+	}{
+		{"plan:\n```go\nurl := \"clip.mp4\"\n```\n", false},
+		{"plan:\n~~~bash\ncp photo.png /tmp\n~~~\n", false},
+		{"plan:\n```\nsee photo.png\n```\n", false},
+		{"attachment: photo.png", true},                  // outside the fence
+		{"plan: ```go\nurl := \"clip.mp4\"\n```", false}, // opening fence mid-line
+		{"```\nreal.png\n~~~\nother.png\n```\n", false},  // ~~~ does not end a ``` block
+	}
+	for _, tc := range cases {
+		f := ExtractFeatures(tc.msg, nil)
+		if f.HasAttachments != tc.want {
+			t.Errorf("msg=%q: HasAttachments got %v, want %v", tc.msg, f.HasAttachments, tc.want)
+		}
+	}
+}
+
+func TestStripFencedCodeBlocks_KeepsOutsideTextVerbatim(t *testing.T) {
+	cases := []struct {
+		msg  string
+		want string
+	}{
+		{"```\nx\n```\ntext\n", "\ntext\n"},
+		{"before\n```\nx\n```\nafter", "before\n\nafter"},
+		{"no fences\n", "no fences\n"},
+		{"see ```x.png``` ok", "see  ok"},
+		{"keep ```unclosed.png", "keep "},
+		{"```\na\n~~~\nb\n```\nc", "\nc"}, // ~~~ inside a ``` block is content
+		{"~~~\na\n```\nb\n~~~\nc", "\nc"},
+	}
+	for _, tc := range cases {
+		if got := stripFencedCodeBlocks(tc.msg); got != tc.want {
+			t.Errorf("msg=%q: got %q, want %q", tc.msg, got, tc.want)
+		}
+	}
+}
+
+func TestExtractFeatures_HasAttachments_FilenameBoundary(t *testing.T) {
+	cases := []struct {
+		msg  string
+		want bool
+	}{
+		{"the token .png alone is not an attachment", false},
+		{"photo.jpgx is not a media file", false},
+		{"see photo.jpg in the folder", true},
+		{"download report.png)", true},
 	}
 	for _, tc := range cases {
 		f := ExtractFeatures(tc.msg, nil)
@@ -255,6 +340,30 @@ func TestRouter_NegativeThresholdFallsBackToDefault(t *testing.T) {
 	}
 }
 
+func TestRouter_EscalationDefaults(t *testing.T) {
+	r := New(RouterConfig{LightModel: "gemini-flash"})
+	if got := r.EscalationPromptTokens(); got != defaultEscalationPromptTokens {
+		t.Errorf("default escalation prompt tokens = %d, want %d", got, defaultEscalationPromptTokens)
+	}
+	if got := r.EscalationToolIterations(); got != defaultEscalationToolIterations {
+		t.Errorf("default escalation tool iterations = %d, want %d", got, defaultEscalationToolIterations)
+	}
+}
+
+func TestRouter_EscalationOverrides(t *testing.T) {
+	r := New(RouterConfig{
+		LightModel:               "gemini-flash",
+		EscalationPromptTokens:   1234,
+		EscalationToolIterations: 7,
+	})
+	if got := r.EscalationPromptTokens(); got != 1234 {
+		t.Errorf("escalation prompt tokens = %d, want 1234", got)
+	}
+	if got := r.EscalationToolIterations(); got != 7 {
+		t.Errorf("escalation tool iterations = %d, want 7", got)
+	}
+}
+
 func TestRouter_SelectModel_SimpleMessageUsesLight(t *testing.T) {
 	r := New(RouterConfig{LightModel: "gemini-flash", Threshold: 0.35})
 	msg := "hi"
@@ -288,6 +397,33 @@ func TestRouter_SelectModel_AttachmentUsesPrimary(t *testing.T) {
 	}
 	if model != "claude-sonnet-4-6" {
 		t.Errorf("attachment: model got %q, want %q", model, "claude-sonnet-4-6")
+	}
+}
+
+func TestRouter_SelectModelWithMedia_EmptyTextWithRealMediaUsesPrimary(t *testing.T) {
+	r := New(RouterConfig{LightModel: "gemini-flash", Threshold: 0.35})
+	// The attachment is delivered as a structured field, so the message text
+	// is empty and text-only detection alone would score the turn as trivial.
+	model, usedLight, score := r.SelectModelWithMedia("", nil, "claude-sonnet-4-6", true)
+	if usedLight {
+		t.Error("real media: expected primary model to be selected")
+	}
+	if model != "claude-sonnet-4-6" {
+		t.Errorf("real media: model got %q, want %q", model, "claude-sonnet-4-6")
+	}
+	if score != 1.0 {
+		t.Errorf("real media: score got %f, want 1.0", score)
+	}
+}
+
+func TestRouter_SelectModel_EmptyTextWithoutMediaStaysLight(t *testing.T) {
+	r := New(RouterConfig{LightModel: "gemini-flash", Threshold: 0.35})
+	model, usedLight, _ := r.SelectModel("", nil, "claude-sonnet-4-6")
+	if !usedLight {
+		t.Error("no media, empty text: expected light model to be selected")
+	}
+	if model != "gemini-flash" {
+		t.Errorf("no media, empty text: model got %q, want %q", model, "gemini-flash")
 	}
 }
 

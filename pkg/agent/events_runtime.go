@@ -74,12 +74,15 @@ func runtimeSeverityForAgentEvent(kind runtimeevents.Kind, payload any) runtimee
 }
 
 func runtimeAttrsFromHookMeta(meta HookMeta) map[string]any {
-	attrs := make(map[string]any, 2)
+	attrs := make(map[string]any, 3)
 	if meta.Source != "" {
 		attrs["agent_source"] = meta.Source
 	}
 	if meta.Iteration != 0 {
 		attrs["iteration"] = meta.Iteration
+	}
+	if meta.suppressToolFeedback {
+		attrs["suppress_tool_feedback"] = true
 	}
 	if len(attrs) == 0 {
 		return nil

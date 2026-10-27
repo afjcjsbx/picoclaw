@@ -1,5 +1,13 @@
 {
   "version": 3,
+  "plugins": {
+    "enabled": false,
+    "concurrency": 4,
+    "init_timeout_ms": 15000,
+    "call_timeout_ms": 60000,
+    "startup_wait_ms": 15000,
+    "entries": {}
+  },
   "agents": {
     "defaults": {
       "workspace": "~/.picoclaw/workspace",
@@ -9,16 +17,41 @@
       "context_window": 131072,
       "temperature": 0.7,
       "max_tool_iterations": 20,
-      "summarize_message_threshold": 20,
+      "max_parallel_turns": 5,
+      "subturn": {
+        "max_depth": 3,
+        "max_concurrent": 3
+      },
+      "vision_max_image_dimension": 1568,
+      "vision_jpeg_quality": 85,
       "summarize_token_percent": 75,
       "split_on_marker": false,
       "max_llm_retries": 2,
       "llm_retry_backoff_secs": 2,
+      "llm_retry_on_empty_content": true,
+      "llm_retry_on_finish_reasons": ["length"],
       "tool_feedback": {
         "enabled": false,
         "max_args_length": 300,
         "separate_messages": false
+      },
+      "loop_detection": {
+        "enabled": false,
+        "repeat_threshold": 3,
+        "critical_threshold": 6,
+        "window_size": 20
       }
+    }
+  },
+  "session": {
+    "dimensions": ["chat"],
+    "prune": {
+      "enabled": false,
+      "max_age_days": 30,
+      "max_sessions": 100,
+      "max_db_size_mb": 128,
+      "check_interval_minutes": 60,
+      "vacuum": true
     }
   },
   "evolution": {
@@ -31,6 +64,12 @@
     "cold_path_times": []
   },
   "model_list": [
+    {
+      "_comment": "OpenCode Go - one key for all models; PicoClaw picks the right endpoint per model (api_base optional, defaults to https://opencode.ai/inference/go)",
+      "model_name": "go-kimi",
+      "model": "opencode-go/kimi-k3",
+      "api_keys": ["your-opencode-go-api-key"]
+    },
     {
       "model_name": "gpt-5.4",
       "model": "openai/gpt-5.4",
@@ -226,6 +265,25 @@
         "crypto_passphrase": "YOUR_MATRIX_CRYPTO_PICKLE_KEY"
       }
     },
+    "deltachat": {
+      "enabled": false,
+      "type": "deltachat",
+      "allow_from": [],
+      "group_trigger": {
+        "mention_only": true
+      },
+      "reasoning_channel_id": "",
+      "settings": {
+        "email": "@nine.testrun.org",
+        "display_name": "PicoClaw Bot",
+        "avatar_image": "",
+        "data_dir": "",
+        "rpc_server_path": "",
+        "join_invite_link": "",
+        "show_invite_link": true,
+        "allow_crosspost": false
+      }
+    },
     "line": {
       "enabled": false,
       "type": "line",
@@ -339,6 +397,12 @@
         "api_key": "",
         "api_keys": ["YOUR_KAGI_API_KEY"],
         "base_url": "https://kagi.com/api/v1/search",
+        "max_results": 5
+      },
+      "keenable": {
+        "enabled": false,
+        "api_keys": [],
+        "base_url": "https://api.keenable.ai",
         "max_results": 5
       },
       "provider": "auto",
@@ -491,6 +555,10 @@
       "max_age_minutes": 30,
       "interval_minutes": 5
     },
+    "image_generate": {
+      "enabled": false,
+      "model_name": ""
+    },
     "append_file": {
       "enabled": true
     },
@@ -509,6 +577,9 @@
     "list_dir": {
       "enabled": true
     },
+    "search_files": {
+      "enabled": true
+    },
     "message": {
       "enabled": true
     },
@@ -521,6 +592,9 @@
     },
     "send_tts": {
       "enabled": false
+    },
+    "todo": {
+      "enabled": true
     },
     "spawn": {
       "enabled": true
@@ -541,6 +615,11 @@
   "heartbeat": {
     "enabled": true,
     "interval": 30
+  },
+  "power": {
+    "low_power": false,
+    "low_power_heartbeat_interval": 120,
+    "poll_interval_multiplier": 5
   },
   "devices": {
     "enabled": false,
@@ -572,6 +651,8 @@
     "host": "localhost",
     "port": 18790,
     "hot_reload": false,
-    "log_level": "fatal"
+    "log_level": "fatal",
+    "log_max_size_mb": 2,
+    "log_max_backups": 3
   }
 }

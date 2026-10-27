@@ -10,6 +10,8 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	anthropicoption "github.com/anthropics/anthropic-sdk-go/option"
+
+	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
 )
 
 func TestBuildParams_BasicMessage(t *testing.T) {
@@ -219,6 +221,60 @@ func TestBuildParams_WithTools(t *testing.T) {
 	}
 	if len(params.Tools) != 1 {
 		t.Fatalf("len(Tools) = %d, want 1", len(params.Tools))
+	}
+}
+
+func TestBuildParams_ToolCacheBreakpoint(t *testing.T) {
+	tools := []ToolDefinition{
+		{Type: "function", Function: ToolFunctionDefinition{Name: "a", Parameters: map[string]any{}}},
+		{Type: "function", Function: ToolFunctionDefinition{Name: "b", Parameters: map[string]any{}}},
+	}
+	eph := &protocoltypes.CacheControl{Type: "ephemeral"}
+	systemWith := func(n int) []Message {
+		parts := make([]protocoltypes.ContentBlock, n)
+		for i := range parts {
+			parts[i] = protocoltypes.ContentBlock{Type: "text", Text: "s", CacheControl: eph}
+		}
+		return []Message{{Role: "system", SystemParts: parts}, {Role: "user", Content: "Hi"}}
+	}
+
+	for _, tc := range []struct {
+		systemBreakpoints int
+		wantLastMarked    bool
+	}{
+		{0, true},
+		{1, true},
+		{3, true},
+		{4, false}, // API allows 4 breakpoints in total
+	} {
+		params, err := buildParams(systemWith(tc.systemBreakpoints), tools, "claude-sonnet-4.6", map[string]any{})
+		if err != nil {
+			t.Fatalf("buildParams() error: %v", err)
+		}
+		if first := params.Tools[0].OfTool.CacheControl; first.Type != "" {
+			t.Errorf("system=%d: first tool has cache_control %q, want none", tc.systemBreakpoints, first.Type)
+		}
+		if got := params.Tools[1].OfTool.CacheControl.Type != ""; got != tc.wantLastMarked {
+			t.Errorf("system=%d: last tool marked = %v, want %v", tc.systemBreakpoints, got, tc.wantLastMarked)
+		}
+	}
+}
+
+func TestParseResponse_CacheUsage(t *testing.T) {
+	resp := &anthropic.Message{
+		Usage: anthropic.Usage{
+			InputTokens:              10,
+			CacheReadInputTokens:     80,
+			CacheCreationInputTokens: 20,
+			OutputTokens:             5,
+		},
+	}
+	u := parseResponse(resp).Usage
+	if u.PromptTokens != 110 || u.TotalTokens != 115 {
+		t.Errorf("PromptTokens/TotalTokens = %d/%d, want 110/115", u.PromptTokens, u.TotalTokens)
+	}
+	if u.CacheReadTokens != 80 || u.CacheCreationTokens != 20 {
+		t.Errorf("cache read/creation = %d/%d, want 80/20", u.CacheReadTokens, u.CacheCreationTokens)
 	}
 }
 

@@ -56,7 +56,7 @@ graph TD
 Channels (Telegram, Discord, etc.) publish messages to the `MessageBus` via `PublishInbound`. The `Run()` loop consumes messages from the bus and routes each one based on its **session key**:
 
 - **No active turn for the session**: The session key is atomically reserved via `LoadOrStore(sessionKey, struct{}{})`, and a **worker goroutine** is spawned to process the full turn lifecycle.
-- **Active turn exists for the session**: The message is enqueued directly into the steering queue via `enqueueSteeringMessage`. It will be picked up by the existing worker's steering drain loop.
+- **Active turn exists for the session**: Registered read-only commands execute immediately without entering the steering queue. Commands that mutate session or runtime state are rejected with a `/stop` hint. All other messages are enqueued directly into the steering queue via `enqueueSteeringMessage` and picked up by the existing worker's steering drain loop.
 - **Non-routable (system)**: Processed synchronously in the main loop.
 
 This enables **parallel processing of messages from different sessions** (up to `max_parallel_turns`) while keeping same-session messages strictly sequential.
@@ -287,7 +287,7 @@ flowchart TD
   "agents": {
     "defaults": {
       "steering_mode": "one-at-a-time",
-      "max_parallel_turns": 1
+      "max_parallel_turns": 5
     }
   }
 }
@@ -296,7 +296,7 @@ flowchart TD
 | Field | Type | Default | Env var | Description |
 |-------|------|---------|---------|-------------|
 | `steering_mode` | `string` | `"one-at-a-time"` | `PICOCLAW_AGENTS_DEFAULTS_STEERING_MODE` | How the steering queue is drained per poll |
-| `max_parallel_turns` | `int` | `1` | `PICOCLAW_AGENTS_DEFAULTS_MAX_PARALLEL_TURNS` | Max concurrent turns. `0` or `1` = sequential; `>1` = parallel across sessions |
+| `max_parallel_turns` | `int` | `5` | `PICOCLAW_AGENTS_DEFAULTS_MAX_PARALLEL_TURNS` | Max concurrent turns. `0` or `1` = sequential; `>1` = parallel across sessions |
 
 
 ## Design decisions and trade-offs

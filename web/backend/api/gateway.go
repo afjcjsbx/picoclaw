@@ -84,7 +84,7 @@ func (h *Handler) gatewayCommandArgs() []string {
 }
 
 const (
-	protocolKey = "Sec-Websocket-Protocol"
+	protocolKey = "Sec-WebSocket-Protocol"
 	tokenPrefix = "token."
 )
 

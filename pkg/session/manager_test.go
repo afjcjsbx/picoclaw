@@ -1,9 +1,11 @@
 package session
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestSanitizeFilename(t *testing.T) {
@@ -37,10 +39,12 @@ func TestSave_WithColonInKey(t *testing.T) {
 	// Create a session with a key containing colon (typical channel session key).
 	key := "telegram:123456"
 	sm.GetOrCreate(key)
-	sm.AddMessage(key, "user", "hello")
+	if err := sm.AddMessage(context.Background(), key, "user", "hello"); err != nil {
+		t.Fatalf("AddMessage(%q) failed: %v", key, err)
+	}
 
 	// Save should succeed even though the key contains ':'
-	if err := sm.Save(key); err != nil {
+	if err := sm.Save(context.Background(), key); err != nil {
 		t.Fatalf("Save(%q) failed: %v", key, err)
 	}
 
@@ -52,7 +56,10 @@ func TestSave_WithColonInKey(t *testing.T) {
 
 	// Load into a fresh manager and verify the session round-trips.
 	sm2 := NewSessionManager(tmpDir)
-	history := sm2.GetHistory(key)
+	history, err := sm2.GetHistory(context.Background(), key)
+	if err != nil {
+		t.Fatalf("GetHistory(%q) failed: %v", key, err)
+	}
 	if len(history) != 1 {
 		t.Fatalf("expected 1 message after reload, got %d", len(history))
 	}
@@ -69,14 +76,14 @@ func TestSave_RejectsPathTraversal(t *testing.T) {
 	badKeys := []string{"", ".", ".."}
 	for _, key := range badKeys {
 		sm.GetOrCreate(key)
-		if err := sm.Save(key); err == nil {
+		if err := sm.Save(context.Background(), key); err == nil {
 			t.Errorf("Save(%q) should have failed but didn't", key)
 		}
 	}
 
 	// Keys containing path separators are sanitized (no subdirs created).
 	sm.GetOrCreate("foo/bar")
-	if err := sm.Save("foo/bar"); err != nil {
+	if err := sm.Save(context.Background(), "foo/bar"); err != nil {
 		t.Fatalf("Save(\"foo/bar\") after sanitize should succeed: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(tmpDir, "foo_bar.json")); os.IsNotExist(err) {
@@ -104,11 +111,90 @@ func TestLoadSessions_NormalizesMissingCreatedAt(t *testing.T) {
 	}
 
 	sm := NewSessionManager(tmpDir)
-	history := sm.GetHistory("telegram:legacy")
+	history, err := sm.GetHistory(context.Background(), "telegram:legacy")
+	if err != nil {
+		t.Fatalf("GetHistory(telegram:legacy) failed: %v", err)
+	}
 	if len(history) != 1 {
 		t.Fatalf("history = %d, want 1", len(history))
 	}
 	if history[0].CreatedAt == nil || history[0].CreatedAt.IsZero() {
 		t.Fatalf("history[0].CreatedAt = %v, want non-zero timestamp", history[0].CreatedAt)
+	}
+}
+
+func TestLastActivity(t *testing.T) {
+	sm := NewSessionManager(t.TempDir())
+
+	if got := sm.LastActivity("missing"); !got.IsZero() {
+		t.Fatalf("LastActivity(missing) = %v, want zero", got)
+	}
+
+	before := time.Now().Add(-time.Second)
+	sm.GetOrCreate("s1")
+	if err := sm.AddMessage(context.Background(), "s1", "user", "hello"); err != nil {
+		t.Fatalf("AddMessage(s1) failed: %v", err)
+	}
+	if got := sm.LastActivity("s1"); got.Before(before) {
+		t.Fatalf("LastActivity = %v, want >= %v", got, before)
+	}
+}
+
+func TestDeleteSession(t *testing.T) {
+	dir := t.TempDir()
+	sm := NewSessionManager(dir)
+
+	for _, key := range []string{"telegram:1", "telegram:2"} {
+		sm.GetOrCreate(key)
+		if err := sm.AddMessage(context.Background(), key, "user", "hello"); err != nil {
+			t.Fatalf("AddMessage(%q): %v", key, err)
+		}
+		if err := sm.Save(context.Background(), key); err != nil {
+			t.Fatalf("Save(%q): %v", key, err)
+		}
+	}
+
+	if err := sm.DeleteSession("telegram:1"); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "telegram_1.json")); !os.IsNotExist(err) {
+		t.Fatalf("session file still exists after delete (err=%v)", err)
+	}
+	if got := sm.ListSessions(); len(got) != 1 || got[0] != "telegram:2" {
+		t.Fatalf("ListSessions = %v, want [telegram:2]", got)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "telegram_2.json")); err != nil {
+		t.Fatalf("other session file was affected: %v", err)
+	}
+
+	// A reloaded manager must not resurrect the deleted session.
+	if got := NewSessionManager(dir).ListSessions(); len(got) != 1 || got[0] != "telegram:2" {
+		t.Fatalf("reloaded ListSessions = %v, want [telegram:2]", got)
+	}
+
+	// Unknown and already-deleted sessions are a no-op.
+	if err := sm.DeleteSession("telegram:1"); err != nil {
+		t.Fatalf("DeleteSession(again): %v", err)
+	}
+	if err := sm.DeleteSession("never-existed"); err != nil {
+		t.Fatalf("DeleteSession(missing): %v", err)
+	}
+}
+
+func TestDeleteSession_RejectsInvalidKey(t *testing.T) {
+	sm := NewSessionManager(t.TempDir())
+	if err := sm.DeleteSession("."); err != os.ErrInvalid {
+		t.Fatalf("DeleteSession(\".\") = %v, want os.ErrInvalid", err)
+	}
+}
+
+func TestDeleteSession_InMemoryManager(t *testing.T) {
+	sm := NewSessionManager("")
+	sm.GetOrCreate("s1")
+	if err := sm.DeleteSession("s1"); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	if got := sm.ListSessions(); len(got) != 0 {
+		t.Fatalf("ListSessions = %v, want none", got)
 	}
 }

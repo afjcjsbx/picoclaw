@@ -361,6 +361,28 @@ func normalizedInboundContext(msg bus.InboundMessage) bus.InboundContext {
 	return bus.NormalizeInboundMessage(msg).Context
 }
 
+const (
+	cronSessionKeyPrefix = "agent:cron-"
+	// picoCronChatPrefix is the pico chat ID of a "[cron]" WebUI entry: the web
+	// backend lists a cron session under its key with ":" replaced by "_".
+	picoCronChatPrefix = "pico:agent_cron-"
+)
+
+// effectiveSessionKey returns the explicit session key of msg. A pico chat
+// opened from a "[cron]" WebUI entry maps back to that cron run's session, so
+// the conversation continues in place instead of forking into a new session
+// that shares the entry's pico ID and stays hidden behind the cron one.
+func effectiveSessionKey(msg bus.InboundMessage) string {
+	if msg.SessionKey != "" {
+		return msg.SessionKey
+	}
+	inbound := normalizedInboundContext(msg)
+	if inbound.Channel == "pico" && strings.HasPrefix(inbound.ChatID, picoCronChatPrefix) {
+		return cronSessionKeyPrefix + strings.TrimPrefix(inbound.ChatID, picoCronChatPrefix)
+	}
+	return ""
+}
+
 func resolveScopeKey(routeSessionKey, msgSessionKey string) string {
 	if isExplicitSessionKey(msgSessionKey) {
 		return msgSessionKey
@@ -407,6 +429,20 @@ func ensureSessionMetadata(store session.SessionStore, key string, scope *sessio
 		return
 	}
 	metaStore.EnsureSessionMetadata(key, scope, aliases)
+}
+
+// warnSessionStoreError logs a failed session store operation and lets the
+// caller continue with its previous flow. Write failures are not fatal to a
+// turn, but silently dropping them hides persistence problems.
+func warnSessionStoreError(sessionKey, operation string, err error) {
+	if err == nil {
+		return
+	}
+	logger.WarnCF("agent", "Session store operation failed", map[string]any{
+		"session_key": sessionKey,
+		"operation":   operation,
+		"error":       err.Error(),
+	})
 }
 
 func sleepWithContext(ctx context.Context, d time.Duration) error {
@@ -519,16 +555,6 @@ func activeSkillNames(agent *AgentInstance, opts processOptions) []string {
 	return resolved
 }
 
-func sideQuestionResponseContent(response *providers.LLMResponse) string {
-	if response == nil {
-		return ""
-	}
-	if strings.TrimSpace(response.Content) != "" {
-		return response.Content
-	}
-	return responseReasoningContent(response)
-}
-
 func responseReasoningContent(response *providers.LLMResponse) string {
 	if response == nil {
 		return ""
@@ -557,7 +583,7 @@ func hasMediaRefs(messages []providers.Message) bool {
 	return false
 }
 
-func sideQuestionModelName(agent *AgentInstance, usedLight bool) string {
+func lightModelName(agent *AgentInstance, usedLight bool) string {
 	if usedLight && len(agent.LightCandidates) > 0 {
 		if name := resolvedCandidateModelName(agent.LightCandidates, ""); name != "" {
 			return name
@@ -584,12 +610,6 @@ func modelAliasFromCandidateIdentityKey(identityKey string) string {
 		return ""
 	}
 	return strings.TrimSpace(strings.TrimPrefix(identityKey, prefix))
-}
-
-func closeProviderIfStateful(provider providers.LLMProvider) {
-	if stateful, ok := provider.(providers.StatefulProvider); ok {
-		stateful.Close()
-	}
 }
 
 // activeRequestsInc atomically increments the active request count.

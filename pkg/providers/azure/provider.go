@@ -1,9 +1,7 @@
 package azure
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -169,12 +167,7 @@ func (p *Provider) Chat(
 		requestBody.PromptCacheKey = openai.Opt(cacheKey)
 	}
 
-	jsonData, err := json.Marshal(requestBody)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", requestURL, bytes.NewReader(jsonData))
+	req, err := common.NewJSONRequest(ctx, "POST", requestURL, requestBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}

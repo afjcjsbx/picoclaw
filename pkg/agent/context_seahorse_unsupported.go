@@ -1,4 +1,4 @@
-//go:build mipsle || netbsd || (freebsd && arm)
+//go:build !no_seahorse && (mipsle || netbsd || (freebsd && arm))
 
 package agent
 

@@ -143,7 +143,7 @@ func summarizeDraftTaskEvidence(evidence DraftEvidence) string {
 	if len(evidence.TaskRecords) == 0 {
 		return "none"
 	}
-	lines := make([]string, 0, minInt(len(evidence.TaskRecords), 5))
+	lines := make([]string, 0, min(len(evidence.TaskRecords), 5))
 	for i, task := range evidence.TaskRecords {
 		if i >= 5 {
 			break

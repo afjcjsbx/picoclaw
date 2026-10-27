@@ -7,15 +7,19 @@ export interface SessionSummary {
   message_count: number
   created: string
   updated: string
+  forked_from?: string
+  fork_index?: number
 }
 
 export interface SessionDetail {
   id: string
+  start: number
+  total: number
   messages: {
     role: "user" | "assistant"
     content: string
     created_at?: string
-    kind?: "normal" | "thought" | "tool_calls"
+    kind?: "normal" | "thought" | "tool_calls" | "tool_feedback"
     model_name?: string
     media?: string[]
     attachments?: {
@@ -39,6 +43,24 @@ export interface SessionDetail {
   summary: string
   created: string
   updated: string
+  forked_from?: string
+  fork_index?: number
+}
+
+export async function forkSession(
+  id: string,
+  messageIndex: number,
+): Promise<{ id: string; forked_from: string; fork_index: number }> {
+  const res = await launcherFetch(
+    `/api/sessions/${encodeURIComponent(id)}/fork`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message_index: messageIndex }),
+    },
+  )
+  if (!res.ok) throw new Error(`Failed to fork session: ${res.status}`)
+  return res.json()
 }
 
 export async function getSessions(
@@ -57,8 +79,17 @@ export async function getSessions(
   return res.json()
 }
 
-export async function getSessionHistory(id: string): Promise<SessionDetail> {
-  const res = await launcherFetch(`/api/sessions/${encodeURIComponent(id)}`)
+export async function getSessionHistory(
+  id: string,
+  before?: number,
+): Promise<SessionDetail> {
+  const params = new URLSearchParams({ limit: "50" })
+  if (before !== undefined) {
+    params.set("before", String(before))
+  }
+  const res = await launcherFetch(
+    `/api/sessions/${encodeURIComponent(id)}?${params.toString()}`,
+  )
   if (!res.ok) {
     throw new Error(`Failed to fetch session ${id}: ${res.status}`)
   }

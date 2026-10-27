@@ -1,11 +1,13 @@
 <div align="center">
-<img src="../../assets/logo.webp" alt="PicoClaw" width="512">
+<p align="center">
+  <img src="../../assets/logo.webp" alt="PicoClaw" width="200">
+</p>
 
 <h1>PicoClaw: Assistente IA Ultra-Efficiente in Go</h1>
 
 <h3>Hardware da $10 · 10MB di RAM · Avvio in ms · Let's Go, PicoClaw!</h3>
-  <p>
-    <img src="https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat&logo=go&logoColor=white" alt="Go">
+  <p align="center">
+    <img src="https://img.shields.io/badge/Go-1.27.1+-00ADD8?style=flat&logo=go&logoColor=white" alt="Go">
     <img src="https://img.shields.io/badge/Arch-x86__64%2C%20ARM64%2C%20MIPS%2C%20RISC--V%2C%20LoongArch-blue" alt="Hardware">
     <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
     <br>
@@ -18,7 +20,9 @@
     <a href="https://discord.gg/V4sAZ9XWpN"><img src="https://img.shields.io/badge/Discord-Community-4c60eb?style=flat&logo=discord&logoColor=white" alt="Discord"></a>
   </p>
 
-[中文](README.zh.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | [Português](README.pt-br.md) | [Tiếng Việt](README.vi.md) | [Français](README.fr.md) | **Italiano** | [Bahasa Indonesia](README.id.md) | [Malay](README.ms.md) | [English](../../README.md)
+<p align="center">
+  <a href="README.zh.md">中文</a> | <a href="README.ja.md">日本語</a> | <a href="README.ko.md">한국어</a> | <a href="README.pt-br.md">Português</a> | <a href="README.vi.md">Tiếng Việt</a> | <a href="README.fr.md">Français</a> | <strong>Italiano</strong> | <a href="README.id.md">Bahasa Indonesia</a> | <a href="README.ms.md">Malay</a> | <a href="../../README.md">English</a>
+</p>
 
 </div>
 
@@ -56,6 +60,13 @@
 
 ## 📢 Novità
 
+2026-09-29 🚀 **[v0.4.0 Released!](https://github.com/afjcjsbx/picoclaw/releases/tag/v0.4.0)** This substantial release adds MCP CLI management and Web UI configuration, native Anthropic Messages API support, configurable web search (including Keenable and Kagi), configurable logging and virtual models, cross-platform serial-tool support, enhanced hooks and isolation, plus numerous channel, provider, security, and build fixes.
+
+2026-09-28 🌱 **Project revived!** Development has resumed and will continue to be actively maintained in this fork.
+
+<details>
+<summary>Earlier news...</summary>
+
 2026-05-11 🛒 **LicheeRV-Claw disponibile su AliExpress!** Ora puoi acquistare LicheeRV-Claw su [AliExpress](https://www.aliexpress.com/item/1005006519668532.html), rendendo più semplice provare PicoClaw su hardware RISC-V compatto.
 
 <p align="center">
@@ -64,7 +75,7 @@
   </a>
 </p>
 
-2026-03-31 📱 **Supporto Android!** PicoClaw ora funziona su Android! Scarica l'APK su [picoclaw.io](https://picoclaw.io/download)
+2026-03-31 📱 **Supporto Android!** PicoClaw ora funziona su Android! Scarica l'APK su [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases)
 
 2026-03-25 🚀 **v0.2.4 rilasciata!** Revisione dell'architettura Agent (SubTurn, Hooks, Steering, EventBus), integrazione WeChat/WeCom, rafforzamento della sicurezza (.security.yml, filtraggio dati sensibili), nuovi provider (AWS Bedrock, Azure, Xiaomi MiMo) e 35 correzioni di bug. PicoClaw raggiunge **26K Stars**!
 
@@ -74,12 +85,9 @@
 
 2026-02-28 📦 **v0.2.0** rilasciata con supporto Docker Compose e Web UI Launcher.
 
-<details>
-<summary>Notizie precedenti...</summary>
-
 2026-02-26 🎉 PicoClaw raggiunge **20K stelle** in soli 17 giorni! Orchestrazione automatica dei canali e interfacce di capacità sono attive.
 
-2026-02-16 🎉 PicoClaw supera 12K stelle in una settimana! Ruoli di maintainer della community e [Roadmap](../../ROADMAP.md) pubblicati ufficialmente.
+2026-02-16 🎉 PicoClaw supera 12K stelle in una settimana! Ruoli di maintainer della community e Roadmap pubblicati ufficialmente.
 
 2026-02-13 🎉 PicoClaw supera 5000 stelle in 4 giorni! Roadmap del progetto e gruppi sviluppatori in fase di avvio.
 
@@ -100,6 +108,8 @@
 🤖 **Auto-Costruito dall'IA**: Implementazione nativa in Go — il 95% del codice core è stato generato da un Agent e perfezionato tramite revisione umana nel ciclo.
 
 🔌 **Supporto MCP**: Integrazione nativa del [Model Context Protocol](https://modelcontextprotocol.io/) — connetti qualsiasi server MCP per estendere le capacità dell'Agent.
+
+🧩 **Plugin Agent**: Installa e attiva pacchetti Agent Plugins 1.0.0 che includono Skill e server MCP. Consulta la [guida all'installazione dei plugin](../guides/plugins.md).
 
 👁️ **Pipeline di Visione**: Invia immagini e file direttamente all'Agent — codifica base64 automatica per LLM multimodali.
 
@@ -162,23 +172,19 @@ PicoClaw può essere distribuito su quasi qualsiasi dispositivo Linux!
 
 ## 📦 Installazione
 
-### Scarica da picoclaw.io (Consigliato)
-
-Visita **[picoclaw.io](https://picoclaw.io)** — il sito ufficiale rileva automaticamente la tua piattaforma e fornisce il download con un clic. Non è necessario scegliere manualmente l'architettura.
-
 ### Scarica il binario precompilato
 
-In alternativa, scarica il binario per la tua piattaforma dalla pagina delle [GitHub Releases](https://github.com/sipeed/picoclaw/releases).
+In alternativa, scarica il binario per la tua piattaforma dalla pagina delle [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases).
 
 ### Compila dai sorgenti (per lo sviluppo)
 
 Prerequisiti:
 
-- Go 1.25+
+- Go 1.27.1+
 - Node.js 22+ e pnpm 10.33.0+ per le build Web UI / launcher
 
 ```bash
-git clone https://github.com/sipeed/picoclaw.git
+git clone https://github.com/afjcjsbx/picoclaw.git
 
 cd picoclaw
 make deps
@@ -212,7 +218,7 @@ Il WebUI Launcher fornisce un'interfaccia basata su browser per la configurazion
 
 **Opzione 1: Doppio clic (Desktop)**
 
-Dopo aver scaricato da [picoclaw.io](https://picoclaw.io), fai doppio clic su `picoclaw-launcher` (o `picoclaw-launcher.exe` su Windows). Il browser si aprirà automaticamente su `http://localhost:18800`.
+Dopo aver scaricato da [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases), fai doppio clic su `picoclaw-launcher` (o `picoclaw-launcher.exe` su Windows). Il browser si aprirà automaticamente su `http://localhost:18800`.
 
 **Opzione 2: Riga di comando**
 
@@ -242,7 +248,7 @@ Per la documentazione dettagliata del WebUI, vedi [docs.picoclaw.io](https://doc
 
 ```bash
 # 1. Clona questo repo
-git clone https://github.com/sipeed/picoclaw.git
+git clone https://github.com/afjcjsbx/picoclaw.git
 cd picoclaw
 
 # 2. Prima esecuzione — genera automaticamente docker/data/config.json poi si ferma
@@ -314,7 +320,7 @@ Anteprima:
   </tr>
 </table>
 
-Scarica l'APK da [picoclaw.io](https://picoclaw.io/download/) e installa direttamente. Senza Termux!
+Scarica l'APK da [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases) e installa direttamente. Senza Termux!
 
 **Opzione 2: Termux**
 
@@ -326,7 +332,7 @@ Scarica l'APK da [picoclaw.io](https://picoclaw.io/download/) e installa diretta
 
 ```bash
 # Scarica l'ultima release
-wget https://github.com/sipeed/picoclaw/releases/latest/download/picoclaw_Linux_arm64.tar.gz
+wget https://github.com/afjcjsbx/picoclaw/releases/latest/download/picoclaw_Linux_arm64.tar.gz
 tar xzf picoclaw_Linux_arm64.tar.gz
 pkg install proot
 termux-chroot ./picoclaw onboard   # chroot fornisce un layout standard del filesystem Linux
@@ -496,6 +502,8 @@ PicoClaw include strumenti integrati per operazioni su file, esecuzione di codic
 
 ## 🎯 Skill
 
+PicoClaw supporta anche l'installazione di pacchetti Agent Plugins 1.0.0, che possono includere Skill e server MCP. Consulta la [guida completa ai plugin](../guides/plugins.md).
+
 Le Skill sono capacità modulari che estendono il tuo Agent. Vengono caricate dai file `SKILL.md` nel tuo workspace.
 
 **Installa skill da ClawHub:**
@@ -522,11 +530,13 @@ Aggiungi al tuo `config.json`:
 }
 ```
 
-Per maggiori dettagli, vedi [Configurazione degli Strumenti - Skill](../reference/tools_configuration.md#skills-tool).
+Per maggiori dettagli, vedi [Configurazione degli Strumenti - Skill](../tools/skills.md).
 
 ## 🔗 MCP (Model Context Protocol)
 
 PicoClaw supporta nativamente [MCP](https://modelcontextprotocol.io/) — connetti qualsiasi server MCP per estendere le capacità del tuo Agent con strumenti e sorgenti di dati esterni.
+
+Dato che PicoClaw è un assistente leggero, la scelta migliore è usare server MCP remoti. Per i server locali, preferisci binari compilati in modo nativo ed evita `npx`, `uvx` o altri gestori di dipendenze pesanti.
 
 ```json
 {
@@ -534,10 +544,15 @@ PicoClaw supporta nativamente [MCP](https://modelcontextprotocol.io/) — connet
     "mcp": {
       "enabled": true,
       "servers": {
-        "filesystem": {
+        "browserbase": {
           "enabled": true,
-          "command": "npx",
-          "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+          "deferred": false,
+          "command": "",
+          "type": "http",
+          "url": "https://mcp.browserbase.com/mcp?browserbaseApiKey=API_KEY",
+          "headers": {
+            "BROWSERBASE_PROJECT_ID": "********"
+          }
         }
       }
     }
@@ -548,9 +563,8 @@ PicoClaw supporta nativamente [MCP](https://modelcontextprotocol.io/) — connet
 Puoi gestire i casi MCP più comuni direttamente dalla CLI senza modificare a mano il JSON:
 
 ```bash
-picoclaw mcp add filesystem -- npx -y @modelcontextprotocol/server-filesystem /tmp
 picoclaw mcp list
-picoclaw mcp test filesystem
+picoclaw mcp test browserbase
 ```
 
 `picoclaw mcp` agisce come configuration manager: aggiorna `config.json` sotto `tools.mcp.servers`, ma non mantiene in esecuzione il processo del server.
@@ -558,7 +572,7 @@ picoclaw mcp test filesystem
 Usa `picoclaw mcp edit` quando ti servono campi avanzati che non sono coperti da `picoclaw mcp add`.
 Per esempio, `picoclaw mcp add` supporta `--deferred` e `--env-file`, mentre `picoclaw mcp edit` resta utile per modifiche JSON dirette e opzioni MCP meno comuni.
 
-Per la configurazione MCP completa (trasporti stdio, SSE, HTTP, Tool Discovery), vedi [Configurazione degli Strumenti - MCP](../reference/tools_configuration.md#mcp-tool). Per la reference della CLI, vedi [MCP Server CLI](../reference/mcp-cli.md).
+Per la configurazione MCP completa (trasporti stdio, SSE, HTTP, Tool Discovery), vedi [Configurazione degli Strumenti - MCP](../tools/mcp.md). Per la reference della CLI, vedi [MCP Server CLI](../reference/mcp-cli.md).
 
 ## <img src="../../assets/clawdchat-icon.png" width="24" height="24" alt="ClawdChat"> Unisciti al Social Network degli Agent
 
@@ -623,7 +637,7 @@ Per guide dettagliate oltre questo README:
 
 Le PR sono benvenute! Il codice è volutamente piccolo e leggibile.
 
-Consulta la nostra [Roadmap della Community](https://github.com/sipeed/picoclaw/issues/988) e [CONTRIBUTING.md](../../CONTRIBUTING.md) per le linee guida.
+Consulta la nostra [Roadmap della Community](https://github.com/afjcjsbx/picoclaw/issues/988) e [CONTRIBUTING.md](../../CONTRIBUTING.md) per le linee guida.
 
 Gruppo sviluppatori in costruzione, unisciti dopo la tua prima PR accettata!
 

@@ -1,6 +1,9 @@
 package utils
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestTruncate(t *testing.T) {
 	tests := []struct {
@@ -93,6 +96,30 @@ func TestTruncate(t *testing.T) {
 			maxLen: 5,
 			want:   "Go...",
 		},
+		{
+			name:   "multibyte longer in bytes than maxLen but not in runes",
+			input:  "\u65e5\u672c\u8a9e",
+			maxLen: 5,
+			want:   "\u65e5\u672c\u8a9e",
+		},
+		{
+			name:   "multibyte runes equal to maxLen are not cut",
+			input:  "\u65e5\u672c",
+			maxLen: 2,
+			want:   "\u65e5\u672c",
+		},
+		{
+			name:   "multibyte runes above maxLen are cut on a rune boundary",
+			input:  "\u65e5\u672c\u8a9e",
+			maxLen: 2,
+			want:   "\u65e5\u672c",
+		},
+		{
+			name:   "multibyte truncated with ellipsis",
+			input:  "\u65e5\u672c\u8a9e\u304c\u597d\u304d",
+			maxLen: 4,
+			want:   "\u65e5...",
+		},
 	}
 
 	for _, tt := range tests {
@@ -102,6 +129,14 @@ func TestTruncate(t *testing.T) {
 				t.Errorf("Truncate(%q, %d) = %q, want %q", tt.input, tt.maxLen, got, tt.want)
 			}
 		})
+	}
+}
+
+func BenchmarkTruncate(b *testing.B) {
+	s := strings.Repeat("a", 1<<20)
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		Truncate(s, 200)
 	}
 }
 
@@ -126,5 +161,22 @@ func TestSanitizeMessageContent(t *testing.T) {
 				t.Errorf("SanitizeMessageContent(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestSortedArgKeys(t *testing.T) {
+	if got := SortedArgKeys(nil); len(got) != 0 {
+		t.Fatalf("SortedArgKeys(nil) = %v, want empty", got)
+	}
+
+	got := SortedArgKeys(map[string]any{"b": 1, "a": 2, "c": 3})
+	want := []string{"a", "b", "c"}
+	if len(got) != len(want) {
+		t.Fatalf("SortedArgKeys len = %d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("SortedArgKeys[%d] = %q, want %q", i, got[i], want[i])
+		}
 	}
 }

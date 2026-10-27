@@ -50,6 +50,22 @@ import (
 //	// Public readable file
 //	err := utils.WriteFileAtomic("public.txt", data, 0o644)
 func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
+	return writeFileAtomic(path, data, perm, true)
+}
+
+// WriteFileAtomicNoSync writes data atomically like WriteFileAtomic (temp file
+// + rename), but skips the fsync calls on the temp file and its directory.
+// Readers never observe a torn or partially written file because the rename is
+// still atomic; only durability across a hard power failure is given up, and
+// the most recent writes may be lost.
+//
+// Reserve this variant for high-frequency updates where that trade-off is
+// intentional, such as session metadata on flash-constrained devices.
+func WriteFileAtomicNoSync(path string, data []byte, perm os.FileMode) error {
+	return writeFileAtomic(path, data, perm, false)
+}
+
+func writeFileAtomic(path string, data []byte, perm os.FileMode, sync bool) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("failed to create directory: %w", err)
@@ -85,8 +101,10 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	// CRITICAL: Force sync to storage medium before any other operations.
 	// This ensures data is physically written to disk, not just cached.
 	// Essential for SD cards, eMMC, and other flash storage on edge devices.
-	if err := tmpFile.Sync(); err != nil {
-		return fmt.Errorf("failed to sync temp file: %w", err)
+	if sync {
+		if err := tmpFile.Sync(); err != nil {
+			return fmt.Errorf("failed to sync temp file: %w", err)
+		}
 	}
 
 	// Set file permissions before closing
@@ -108,9 +126,11 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 
 	// Sync directory to ensure rename is durable
 	// This prevents the renamed file from disappearing after a crash
-	if dirFile, err := os.Open(dir); err == nil {
-		_ = dirFile.Sync()
-		_ = dirFile.Close()
+	if sync {
+		if dirFile, err := os.Open(dir); err == nil {
+			_ = dirFile.Sync()
+			_ = dirFile.Close()
+		}
 	}
 
 	// Success: skip cleanup (file was renamed, no temp to remove)

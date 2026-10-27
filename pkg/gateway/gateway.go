@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -19,26 +20,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/audio/tts"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/channels"
-	_ "github.com/sipeed/picoclaw/pkg/channels/deltachat"
-	_ "github.com/sipeed/picoclaw/pkg/channels/dingtalk"
-	_ "github.com/sipeed/picoclaw/pkg/channels/discord"
-	_ "github.com/sipeed/picoclaw/pkg/channels/feishu"
-	_ "github.com/sipeed/picoclaw/pkg/channels/irc"
-	_ "github.com/sipeed/picoclaw/pkg/channels/line"
-	_ "github.com/sipeed/picoclaw/pkg/channels/maixcam"
-	_ "github.com/sipeed/picoclaw/pkg/channels/mqtt"
-	_ "github.com/sipeed/picoclaw/pkg/channels/onebot"
-	_ "github.com/sipeed/picoclaw/pkg/channels/pico"
-	_ "github.com/sipeed/picoclaw/pkg/channels/qq"
-	_ "github.com/sipeed/picoclaw/pkg/channels/slack"
-	_ "github.com/sipeed/picoclaw/pkg/channels/slack_webhook"
-	_ "github.com/sipeed/picoclaw/pkg/channels/teams_webhook"
-	_ "github.com/sipeed/picoclaw/pkg/channels/telegram"
-	_ "github.com/sipeed/picoclaw/pkg/channels/vk"
-	_ "github.com/sipeed/picoclaw/pkg/channels/wecom"
-	_ "github.com/sipeed/picoclaw/pkg/channels/weixin"
-	_ "github.com/sipeed/picoclaw/pkg/channels/whatsapp"
-	_ "github.com/sipeed/picoclaw/pkg/channels/whatsapp_native"
+	_ "github.com/sipeed/picoclaw/pkg/channels/builtin"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/cron"
 	"github.com/sipeed/picoclaw/pkg/devices"
@@ -119,6 +101,10 @@ func (p *startupBlockedProvider) GetDefaultModel() string {
 // Run starts the gateway runtime using the configuration loaded from configPath.
 func Run(debug bool, homePath, configPath string, allowEmptyStartup bool) (runErr error) {
 	startedAt := time.Now()
+	logSizeMB, logBackups := config.ResolveGatewayLogRotation(configPath)
+	if err := logger.SetFileRotation(int64(logSizeMB)<<20, logBackups); err != nil {
+		return fmt.Errorf("invalid log rotation settings: %w", err)
+	}
 	panicPath := filepath.Join(homePath, logPath, panicFile)
 	panicFunc, err := logger.InitPanic(panicPath)
 	if err != nil {
@@ -127,7 +113,7 @@ func Run(debug bool, homePath, configPath string, allowEmptyStartup bool) (runEr
 	defer panicFunc()
 
 	if err = logger.EnableFileLogging(filepath.Join(homePath, logPath, logFile)); err != nil {
-		logger.Fatal(fmt.Sprintf("error enabling file logging: %v", err))
+		return fmt.Errorf("error enabling file logging: %w", err)
 	}
 	defer logger.DisableFileLogging()
 
@@ -169,6 +155,12 @@ func Run(debug bool, homePath, configPath string, allowEmptyStartup bool) (runEr
 	bindPlan, listenResult, err := openGatewayListeners(cfg.Gateway.Host, cfg.Gateway.Port)
 	if err != nil {
 		return fmt.Errorf("error opening gateway listeners: %w", err)
+	}
+	for _, degraded := range listenResult.Degraded {
+		logger.Warnf(
+			"Gateway is listening on fewer interfaces than requested; some clients may be unable to connect: %s",
+			degraded,
+		)
 	}
 
 	// Enforce singleton: write PID file with generated token.
@@ -256,7 +248,9 @@ func Run(debug bool, homePath, configPath string, allowEmptyStartup bool) (runEr
 	var configReloadChan <-chan *config.Config
 	stopWatch := func() {}
 	if cfg.Gateway.HotReload {
-		configReloadChan, stopWatch = setupConfigWatcherPolling(configPath, debug)
+		configReloadChan, stopWatch = setupConfigWatcherPolling(
+			configPath, debug, cfg.Power.ScalePollInterval(2*time.Second),
+		)
 		logger.Info("Config hot reload enabled")
 	}
 	defer stopWatch()
@@ -378,6 +372,12 @@ func executeReload(
 		publishGatewayEvent(agentLoop, runtimeevents.KindGatewayReloadCompleted, startedAt, nil)
 	}()
 
+	// Apply the same sanity checks as startup so a reload cannot install a
+	// config that startup would have rejected.
+	if err = preCheckConfig(newCfg); err != nil {
+		return fmt.Errorf("config pre-check failed: %w", err)
+	}
+
 	err = handleConfigReload(ctx, agentLoop, newCfg, provider, runningServices, msgBus, allowEmptyStartup, debug)
 	return err
 }
@@ -432,7 +432,7 @@ func setupAndStartServices(
 
 	runningServices.HeartbeatService = heartbeat.NewHeartbeatService(
 		cfg.WorkspacePath(),
-		cfg.Heartbeat.Interval,
+		cfg.Power.EffectiveHeartbeatInterval(cfg.Heartbeat.Interval),
 		cfg.Heartbeat.Enabled,
 	)
 	runningServices.HeartbeatService.SetBus(msgBus)
@@ -440,12 +440,13 @@ func setupAndStartServices(
 	if err = runningServices.HeartbeatService.Start(); err != nil {
 		return nil, fmt.Errorf("error starting heartbeat service: %w", err)
 	}
-	fmt.Println("✓ Heartbeat service started")
-
+	if cfg.Heartbeat.Enabled {
+		fmt.Println("✓ Heartbeat service started")
+	}
 	runningServices.MediaStore = media.NewFileMediaStoreWithCleanup(media.MediaCleanerConfig{
 		Enabled:  cfg.Tools.MediaCleanup.Enabled,
 		MaxAge:   time.Duration(cfg.Tools.MediaCleanup.MaxAge) * time.Minute,
-		Interval: time.Duration(cfg.Tools.MediaCleanup.Interval) * time.Minute,
+		Interval: cfg.Power.ScalePollInterval(time.Duration(cfg.Tools.MediaCleanup.Interval) * time.Minute),
 	})
 	if fms, ok := runningServices.MediaStore.(*media.FileMediaStore); ok {
 		fms.Start()
@@ -484,6 +485,7 @@ func setupAndStartServices(
 
 	runningServices.authToken = authToken
 	runningServices.HealthServer = health.NewServer(listenResult.ProbeHost, cfg.Gateway.Port, authToken)
+	runningServices.HealthServer.RegisterProtectedHandler(mcpStatusPath, mcpStatusHandler(agentLoop))
 
 	var listenAddr string
 	if len(listenResult.Listeners) > 0 {
@@ -680,7 +682,7 @@ func restartServices(
 
 	runningServices.HeartbeatService = heartbeat.NewHeartbeatService(
 		cfg.WorkspacePath(),
-		cfg.Heartbeat.Interval,
+		cfg.Power.EffectiveHeartbeatInterval(cfg.Heartbeat.Interval),
 		cfg.Heartbeat.Enabled,
 	)
 	runningServices.HeartbeatService.SetBus(msgBus)
@@ -688,12 +690,13 @@ func restartServices(
 	if err = runningServices.HeartbeatService.Start(); err != nil {
 		return fmt.Errorf("error restarting heartbeat service: %w", err)
 	}
-	fmt.Println("  ✓ Heartbeat service restarted")
-
+	if cfg.Heartbeat.Enabled {
+		fmt.Println("  ✓ Heartbeat service restarted")
+	}
 	runningServices.MediaStore = media.NewFileMediaStoreWithCleanup(media.MediaCleanerConfig{
 		Enabled:  cfg.Tools.MediaCleanup.Enabled,
 		MaxAge:   time.Duration(cfg.Tools.MediaCleanup.MaxAge) * time.Minute,
-		Interval: time.Duration(cfg.Tools.MediaCleanup.Interval) * time.Minute,
+		Interval: cfg.Power.ScalePollInterval(time.Duration(cfg.Tools.MediaCleanup.Interval) * time.Minute),
 	})
 	if fms, ok := runningServices.MediaStore.(*media.FileMediaStore); ok {
 		fms.Start()
@@ -751,7 +754,7 @@ func restartServices(
 	return nil
 }
 
-func setupConfigWatcherPolling(configPath string, debug bool) (chan *config.Config, func()) {
+func setupConfigWatcherPolling(configPath string, debug bool, interval time.Duration) (chan *config.Config, func()) {
 	configChan := make(chan *config.Config, 1)
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
@@ -763,7 +766,24 @@ func setupConfigWatcherPolling(configPath string, debug bool) (chan *config.Conf
 		lastModTime := getFileModTime(configPath)
 		lastSize := getFileSize(configPath)
 
-		ticker := time.NewTicker(2 * time.Second)
+		// A rejected file is retried on every tick (see below), so only log
+		// a rejection when it differs from the previous one; otherwise an
+		// invalid file would repeat the same error forever.
+		var lastRejection string
+		reject := func(format string, err error) {
+			msg := fmt.Sprintf(format, err)
+			if msg == lastRejection {
+				return
+			}
+			lastRejection = msg
+			logger.Error(msg)
+			logger.Warn("  Using previous valid config")
+		}
+
+		if interval <= 0 {
+			interval = 2 * time.Second
+		}
+		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 
 		for {
@@ -772,36 +792,44 @@ func setupConfigWatcherPolling(configPath string, debug bool) (chan *config.Conf
 				currentModTime := getFileModTime(configPath)
 				currentSize := getFileSize(configPath)
 
-				if currentModTime.After(lastModTime) || currentSize != lastSize {
-					if debug {
-						logger.Debugf("🔍 Config file change detected")
-					}
+				if !currentModTime.After(lastModTime) && currentSize == lastSize {
+					continue
+				}
 
-					time.Sleep(500 * time.Millisecond)
+				if debug {
+					logger.Debugf("🔍 Config file change detected")
+				}
 
-					lastModTime = currentModTime
-					lastSize = currentSize
+				// Debounce: wait for the write to settle, then re-stat so the
+				// watermark reflects the version that is about to be loaded.
+				time.Sleep(500 * time.Millisecond)
+				currentModTime = getFileModTime(configPath)
+				currentSize = getFileSize(configPath)
 
-					newCfg, err := config.LoadConfig(configPath)
-					if err != nil {
-						logger.Errorf("⚠ Error loading new config: %v", err)
-						logger.Warn("  Using previous valid config")
-						continue
-					}
+				newCfg, err := config.LoadConfig(configPath)
+				if err != nil {
+					reject("⚠ Error loading new config: %v", err)
+					continue
+				}
 
-					if err := newCfg.ValidateModelList(); err != nil {
-						logger.Errorf("  ⚠ New config validation failed: %v", err)
-						logger.Warn("  Using previous valid config")
-						continue
-					}
+				if err := newCfg.ValidateModelList(); err != nil {
+					reject("  ⚠ New config validation failed: %v", err)
+					continue
+				}
 
-					logger.Info("✓ Config file validated and loaded")
+				// Advance the watermark only after a successful load, so a
+				// partially written or invalid file is retried on the next tick
+				// instead of being silently skipped.
+				lastModTime = currentModTime
+				lastSize = currentSize
+				lastRejection = ""
 
-					select {
-					case configChan <- newCfg:
-					default:
-						logger.Warn("⚠ Previous config reload still in progress, skipping")
-					}
+				logger.Info("✓ Config file validated and loaded")
+
+				select {
+				case configChan <- newCfg:
+				default:
+					logger.Warn("⚠ Previous config reload still in progress, skipping")
 				}
 			case <-stop:
 				return
@@ -844,6 +872,8 @@ func setupCronTool(
 	cronStorePath := filepath.Join(workspace, "cron", "jobs.json")
 
 	cronService := cron.NewCronService(cronStorePath, nil)
+	// Pick up hand edits and `picoclaw cron` CLI changes to jobs.json without a restart.
+	cronService.SetReloadInterval(cfg.Power.ScalePollInterval(2 * time.Second))
 
 	var cronTool *tools.CronTool
 	if cfg.Tools.IsToolEnabled("cron") {
@@ -858,8 +888,9 @@ func setupCronTool(
 
 	if cronTool != nil {
 		cronService.SetOnJob(func(job *cron.CronJob) (string, error) {
-			result := cronTool.ExecuteJob(context.Background(), job)
-			return result, nil
+			// Propagate the failure so the job state records lastStatus=error
+			// instead of reporting a broken run as "ok".
+			return cronTool.ExecuteJob(context.Background(), job)
 		})
 	}
 
@@ -876,9 +907,18 @@ func createHeartbeatHandler(agentLoop *agent.AgentLoop) func(prompt, channel, ch
 		if err != nil {
 			return tools.ErrorResult(fmt.Sprintf("Heartbeat error: %v", err))
 		}
-		if response == "HEARTBEAT_OK" {
-			return tools.SilentResult("Heartbeat OK")
-		}
-		return tools.SilentResult(response)
+		return heartbeatToolResult(response)
 	}
+}
+
+// heartbeatToolResult maps the raw heartbeat response into a ToolResult.
+// A non-empty response that is not the HEARTBEAT_OK sentinel is a quick task
+// answer and must reach the user, so it is returned as a user-facing result.
+// Everything else stays silent.
+func heartbeatToolResult(response string) *tools.ToolResult {
+	response = strings.TrimSpace(response)
+	if response == "" || response == "HEARTBEAT_OK" {
+		return tools.SilentResult("Heartbeat OK")
+	}
+	return tools.UserResult(response)
 }

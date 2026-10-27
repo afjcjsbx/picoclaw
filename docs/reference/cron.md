@@ -12,6 +12,21 @@ PicoClaw currently uses three schedule forms in the cron tool:
 - `every_seconds`: recurring interval, in seconds.
 - `cron_expr`: recurring cron expression such as `0 9 * * *`.
 
+`cron_expr` is evaluated in the time zone of the PicoClaw process, which is set
+by the `TZ` environment variable (for example `TZ=Europe/Rome`). When `TZ` is
+unset, the system time zone is used, which is usually UTC in containers and on
+servers, so `0 9 * * *` would fire at 09:00 UTC. Set `TZ` before starting the
+gateway; changing it requires a restart. There is no per-job time zone in the
+agent tool or the CLI.
+
+The agent sees the current date and the active zone in the `Current Date` line
+of its prompt, for example `Thursday, October 15, 2026 (Europe/Rome, CEST,
+UTC+02:00)`. The zone name is taken from `TZ`; when `TZ` is unset the name is
+omitted and a warning is logged. The time of day is left out on purpose, so the
+system prompt stays identical all day and LLM prompt caches keep hitting; the
+agent has to look it up (for example with `date` through the exec tool) when it
+needs it.
+
 The CLI command `picoclaw cron add` currently supports recurring jobs only:
 
 - `--every <seconds>`
@@ -23,7 +38,7 @@ Examples:
 
 ```bash
 picoclaw cron add --name "Daily summary" --message "Summarize today's logs" --cron "0 18 * * *"
-picoclaw cron add --name "Ping" --message "heartbeat" --every 300 --deliver
+picoclaw cron add --name "Ping" --message "heartbeat" --every 300
 ```
 
 ## Agent Tool Actions
@@ -31,20 +46,36 @@ picoclaw cron add --name "Ping" --message "heartbeat" --every 300 --deliver
 The agent-facing `cron` tool supports these actions:
 
 - `add`: create a new job.
-- `list`: show accessible job names, ids, and schedules.
-- `get`: fetch one accessible persisted job by `job_id`, including its saved payload.
+- `list`: show accessible job names, ids, and schedules, with the last and next run as ISO 8601 timestamps when known.
+- `get`: fetch one accessible persisted job by `job_id`, including its saved payload and derived ISO 8601 local times.
 - `update`: partially update one accessible job by `job_id`; omitted fields are preserved.
+- `run`: execute one accessible job right now by `job_id`, without waiting for its schedule.
 - `remove`, `enable`, `disable`: existing management actions.
+
+`list` renders run times as ISO 8601 (RFC 3339) timestamps with the process
+time zone's UTC offset (the same zone used to evaluate cron expressions), for
+example `2026-10-19T09:00:00+02:00`; `get` and `update` return the raw job JSON —
+epoch fields `state.nextRunAtMs` and `state.lastRunAtMs` included — together
+with a derived `localTimes` object (`lastRun`, `nextRun`) in that same format.
+Rendered times are informational; scheduling and storage always use the raw
+epoch fields.
 
 When rescheduling an existing task, use `list -> get -> update`. Do not use
 `remove -> add` just to change the schedule, because recreating a job can drop
 the original prompt, delivery target, or command payload.
 
 Remote channel access is scoped to the current `channel/chat_id`: remote callers
-can only list, get, or update jobs whose saved `payload.channel` and `payload.to`
-match the current conversation. Command jobs include a shell command payload, so
-they can only be listed, inspected, or updated from internal channels or remote
-channels allowed by `tools.cron.command_allowed_remotes`.
+can only act on jobs whose saved `payload.channel` and `payload.to` match the
+current conversation. This applies to `list`, `get`, `update`, `run`, `remove`,
+`enable`, and `disable`. Single-owner channels are the exception: the Pico WebUI
+is authenticated with one shared token and always sends as the fixed `pico-user`
+sender, so its jobs are scoped to the whole channel — a job created in one WebUI
+conversation remains visible and manageable from every other one. Because all of
+its chats belong to the same owner, this does not widen access to anyone else.
+Command jobs include a shell command payload, so they can only be listed,
+inspected, updated, or run from internal channels or remote channels allowed by
+`tools.cron.command_allowed_remotes`; that command gate applies on single-owner
+channels as well.
 
 Example tool calls:
 
@@ -59,32 +90,46 @@ Example tool calls:
 `update` accepts `name`, `message`, `command`, and exactly one schedule field
 (`at_seconds`, `every_seconds`, or `cron_expr`).
 Omit `command` to preserve it, set `command` to a non-empty string to replace
-it, or set `command` to `""` to clear it. Command updates require the same
-channel allowlist and confirmation gates as command creation.
+it, or set `command` to `""` to clear it. Setting or replacing a command
+requires the same channel allowlist and confirmation gates as command
+creation; clearing it does not.
+
+### Running a job on demand
+
+The agent tool's `run` action starts a job immediately and returns without
+waiting for it to finish; output is delivered to the job's own channel, exactly
+like a scheduled run.
+
+- The schedule is not changed: an `every`/`cron` job keeps its next run time.
+  A one-time `at` job is consumed like after any run (deleted, or disabled when
+  `deleteAfterRun` is false).
+- Disabled jobs can be run; they stay disabled.
+- A job never runs concurrently with itself. If a manual `run` finds the job
+  already executing, it fails with `job is already running`. If the scheduler
+  finds the job due while a run is in flight, it skips that occurrence and
+  advances the schedule. Whichever side claims the job first wins. This also
+  means a recurring job whose run is slower than its interval no longer
+  overlaps itself: the occurrences that fall during the run are skipped.
+
+```json
+{"action":"run","job_id":"79095b2f5685a0f2"}
+```
 
 ## Execution Modes
 
-Jobs are stored with a message payload and can execute in three stable user-facing modes:
-
-### `deliver: false`
-
-This is the default for the cron tool.
-
-When the job fires, PicoClaw sends the saved message back through the agent loop as a new agent turn. Use this for scheduled work that may need reasoning, tools, or a generated reply.
-
-### `deliver: true`
-
-When the job fires, PicoClaw publishes the saved message directly to the target channel and recipient without agent processing.
-
-The CLI `picoclaw cron add --deliver` flag uses this mode.
+Jobs are stored with a message payload. When a job fires, PicoClaw picks one of two execution paths based on the payload.
 
 ### `command`
 
-When a cron-tool job includes `command`, PicoClaw runs that shell command through the `exec` tool and publishes the command output back to the channel.
-
-For command jobs, `deliver` is forced to `false` when the job is created. The saved `message` becomes descriptive text only; the scheduled action is the shell command.
+When a cron-tool job includes `command`, PicoClaw runs that shell command through the `exec` tool and publishes the command output directly to the job's channel and recipient. The saved `message` becomes descriptive text only; the scheduled action is the shell command. Command jobs do not go through the agent.
 
 The current CLI `picoclaw cron add` command does not expose a `command` flag.
+
+### Agent turn
+
+Without a `command`, PicoClaw sends the saved message through the agent loop as a new agent turn. Use this for scheduled work that may need reasoning, tools, or a generated reply. This is the default for the cron tool.
+
+A turn started by a cron job receives a tool registry without `cron`, so the agent cannot call it to manage jobs. This also applies to subagents spawned by that turn.
 
 ## Config and Security Gates
 
@@ -92,7 +137,7 @@ The current CLI `picoclaw cron add` command does not expose a `command` flag.
 
 `tools.cron.enabled` controls whether the agent-facing `cron` tool is registered. Default: `true`.
 
-If you disable `tools.cron`, users can no longer create or manage jobs through the agent tool. The gateway still starts `CronService`, but it does not install the job execution callback. As a result, due jobs do not actually run; one-time jobs may be deleted and recurring jobs may be rescheduled without executing their payload. The CLI still uses the same job store.
+If you disable `tools.cron`, users can no longer create or manage jobs through the agent tool. The gateway still starts `CronService`, but it does not install the job execution callback. As a result, due jobs do not actually run; one-time jobs may be deleted and recurring jobs may be rescheduled without executing their payload. Jobs that fire without a callback are recorded with `state.lastStatus: "skipped"`. The CLI still uses the same job store.
 
 `tools.cron.exec_timeout_minutes` sets the timeout used for scheduled command execution. Default: `5`. Set `0` for no timeout.
 
@@ -173,8 +218,18 @@ $PICOCLAW_HOME/workspace
 
 Both the gateway and `picoclaw cron` CLI subcommands use the same `cron/jobs.json` file.
 
+The running gateway watches this file (a `stat` every 2 seconds, scaled up in low-power mode). Hand edits and `picoclaw cron add/remove/enable/disable` take effect without a restart:
+
+- the file replaces the in-memory job list; jobs whose schedule and enabled flag are unchanged keep their next run time, all others are rescheduled
+- an invalid JSON file is logged once and ignored; the gateway keeps its current jobs until the next valid edit
+- a deleted file is ignored; the gateway keeps its jobs and recreates the file on the next change
+- a job removed from the file while it is running finishes, but is not written back
+- one-time jobs already in the past are dropped or disabled, same as at startup
+
 Notes:
 
 - one-time `at_seconds` jobs are deleted after they run
+- one-time jobs whose scheduled time elapsed while the gateway was down are dropped on the next startup (or disabled when they are not marked for deletion), instead of lingering as enabled jobs that never fire
 - recurring jobs stay in the store until removed
 - disabled jobs stay in the store and still appear in `picoclaw cron list`
+- each run records its outcome in the job state: `state.lastStatus` is `"ok"` on success, `"error"` with the reason in `state.lastError` when the agent turn failed or a scheduled command was disabled or failed, and `"skipped"` when no execution callback is installed (see `tools.cron`)

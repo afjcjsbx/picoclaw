@@ -10,8 +10,10 @@ linters:
     - dupword
     - err113
     - exhaustruct
+    - exhaustruct_v5
     - funcorder
     - gochecknoglobals
+    - gomodguard # Replaced by gomodguard_v2, enabled through default: all.
     - gosmopolitan  # Project legitimately uses CJK text in tests (FTS5, token counting)
     - godot
     - intrange
@@ -65,6 +67,8 @@ linters:
     gomoddirectives:
       replace-allow-list:
         - github.com/bwmarrin/discordgo
+        # QQ channel auth fix, upstream pending (tencent-connect/botgo#60).
+        - github.com/tencent-connect/botgo
     errcheck:
       check-type-assertions: true
       check-blank: true

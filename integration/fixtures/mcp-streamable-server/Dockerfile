@@ -1,4 +1,4 @@
-FROM golang:1.25-bookworm AS build
+FROM golang:1.27.3-bookworm AS build
 
 WORKDIR /src
 
@@ -9,7 +9,7 @@ COPY . .
 
 RUN CGO_ENABLED=0 go build -o /out/mcp-streamable-server ./integration/fixtures/mcp-streamable-server
 
-FROM alpine:3.22
+FROM alpine:3.24
 
 RUN adduser -D -u 10001 appuser
 

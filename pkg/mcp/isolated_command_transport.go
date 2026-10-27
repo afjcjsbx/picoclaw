@@ -16,10 +16,17 @@ import (
 	"github.com/sipeed/picoclaw/pkg/isolation"
 )
 
-var isolatedCommandTerminateDuration = 5 * time.Second
+// isolatedCommandTerminateDuration bounds how long a stdio child may take to
+// exit after stdin closes, before it is signaled and finally killed.
+const isolatedCommandTerminateDuration = 5 * time.Second
 
 // isolatedCommandTransport mirrors the SDK command transport but routes
 // process startup through pkg/isolation so Windows post-start hooks run too.
+//
+// It is a deliberate fork of github.com/modelcontextprotocol/go-sdk/mcp
+// CommandTransport for that single reason. When the SDK dependency is
+// upgraded, keep the wire behavior (pipes, framing, terminate sequence) in
+// sync with the upstream transport.
 type isolatedCommandTransport struct {
 	Command           *exec.Cmd
 	TerminateDuration time.Duration
@@ -94,9 +101,12 @@ func (s *isolatedPipeRWC) Close() error {
 }
 
 type isolatedIOConn struct {
-	writeMu   sync.Mutex
-	rwc       io.ReadWriteCloser
-	incoming  <-chan isolatedMsgOrErr
+	writeMu  sync.Mutex
+	rwc      io.ReadWriteCloser
+	incoming <-chan isolatedMsgOrErr
+	// queue holds the remaining messages of a decoded batch. Read is invoked
+	// from a single goroutine, so queue needs no lock; writes are serialized
+	// separately by writeMu.
 	queue     []jsonrpc.Message
 	closeOnce sync.Once
 	closed    chan struct{}

@@ -9,14 +9,15 @@ import (
 // HookMeta contains correlation fields shared by agent hook requests and
 // runtime events emitted from turn processing.
 type HookMeta struct {
-	AgentID      string
-	TurnID       string
-	ParentTurnID string
-	SessionKey   string
-	Iteration    int
-	TracePath    string
-	Source       string
-	turnContext  *TurnContext
+	AgentID              string
+	TurnID               string
+	ParentTurnID         string
+	SessionKey           string
+	Iteration            int
+	TracePath            string
+	Source               string
+	turnContext          *TurnContext
+	suppressToolFeedback bool
 }
 
 // EventKind is the legacy in-agent event kind alias kept for tests and

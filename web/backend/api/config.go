@@ -41,7 +41,7 @@ func (h *Handler) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(cfg); err != nil {
+	if err := json.NewEncoder(w).Encode(redactMCPConfigForWeb(cfg)); err != nil {
 		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
 	}
 }
@@ -81,6 +81,12 @@ func (h *Handler) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	if execAllowRemoteOmitted(body) {
 		cfg.Tools.Exec.AllowRemote = config.DefaultConfig().Tools.Exec.AllowRemote
 	}
+	existingCfg, loadErr := config.LoadConfig(h.configPath)
+	if loadErr != nil {
+		http.Error(w, fmt.Sprintf("Failed to load existing config: %v", loadErr), http.StatusInternalServerError)
+		return
+	}
+	preserveMCPConfigRedactions(&cfg, existingCfg)
 
 	// Load existing config and copy security credentials before validation,
 	// so that security-managed fields (e.g. pico token) are available.
@@ -199,6 +205,7 @@ func (h *Handler) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	newCfg.Session.ApplyDmScope()
 	newCfg.Session.DeriveDmScope()
+	preserveMCPConfigRedactions(&newCfg, cfg)
 
 	// Restore security fields (tokens/keys) from the loaded config before validation,
 	// because private fields are lost during JSON round-trip.
@@ -561,7 +568,7 @@ func channelSettingsType(
 }
 
 func derefType(typ reflect.Type) reflect.Type {
-	for typ != nil && typ.Kind() == reflect.Ptr {
+	for typ != nil && typ.Kind() == reflect.Pointer {
 		typ = typ.Elem()
 	}
 	return typ
@@ -671,7 +678,7 @@ func applyConfigSecretsFromMap(cfg *config.Config, raw map[string]any) {
 			continue
 		}
 		rv := reflect.ValueOf(decoded)
-		if rv.Kind() == reflect.Ptr {
+		if rv.Kind() == reflect.Pointer {
 			rv = rv.Elem()
 		}
 		if rv.Kind() != reflect.Struct {
@@ -786,7 +793,7 @@ func applySecureStringsToStruct(rv reflect.Value, rawMap map[string]any) {
 							if existing.Kind() == reflect.Interface {
 								existing = existing.Elem()
 							}
-							if existing.Kind() == reflect.Ptr && !existing.IsNil() {
+							if existing.Kind() == reflect.Pointer && !existing.IsNil() {
 								elem = reflect.New(elemType)
 								elem.Elem().Set(existing.Elem())
 							} else if existing.Kind() == reflect.Struct {

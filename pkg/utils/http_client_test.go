@@ -7,6 +7,27 @@ import (
 	"time"
 )
 
+func TestCreateHTTPClient_BoundedIdlePool(t *testing.T) {
+	client, err := CreateHTTPClient("", 10*time.Second)
+	if err != nil {
+		t.Fatalf("CreateHTTPClient() error: %v", err)
+	}
+
+	tr, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("client.Transport type = %T, want *http.Transport", client.Transport)
+	}
+	if tr.MaxIdleConns != 4 {
+		t.Errorf("MaxIdleConns = %d, want 4", tr.MaxIdleConns)
+	}
+	if tr.MaxIdleConnsPerHost != 2 {
+		t.Errorf("MaxIdleConnsPerHost = %d, want 2", tr.MaxIdleConnsPerHost)
+	}
+	if tr.IdleConnTimeout != 30*time.Second {
+		t.Errorf("IdleConnTimeout = %v, want 30s", tr.IdleConnTimeout)
+	}
+}
+
 func TestCreateHTTPClient_ProxyConfigured(t *testing.T) {
 	client, err := CreateHTTPClient("http://127.0.0.1:7890", 12*time.Second)
 	if err != nil {

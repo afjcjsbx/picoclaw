@@ -11,10 +11,6 @@ import (
 	"github.com/google/uuid"
 )
 
-const maxOutputBufferSize = 1 * 1024 * 1024 // 1MB
-
-const outputTruncateMarker = "\n... [output truncated, exceeded 1MB]\n"
-
 // PtyKeyMode represents arrow key encoding mode for PTY sessions.
 // Programs send smkx/rmkx sequences to switch between CSI and SS3 modes.
 type PtyKeyMode uint8
@@ -51,6 +47,26 @@ type ProcessSession struct {
 
 	// ptyKeyMode tracks arrow key encoding mode (CSI vs SS3)
 	ptyKeyMode PtyKeyMode
+
+	// idleChecks counts consecutive poll/wait calls that saw no new output;
+	// lastCheckLen is the buffer length they compared against.
+	idleChecks   int
+	lastCheckLen int
+}
+
+// noteCheck records one poll/wait of a still-running session and returns how
+// many consecutive checks in a row saw no new output (the first check on a
+// silent session already counts).
+func (s *ProcessSession) noteCheck() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if n := s.outputBuffer.Len(); n != s.lastCheckLen {
+		s.lastCheckLen, s.idleChecks = n, 0
+	} else {
+		s.idleChecks++
+	}
+	return s.idleChecks
 }
 
 func (s *ProcessSession) IsDone() bool {
@@ -112,6 +128,15 @@ func (s *ProcessSession) killProcess() error {
 		return err
 	}
 
+	// Release the session's own descriptors: the reader goroutine can then
+	// observe the closure and stop, and a dead session keeps no fd open.
+	if s.ptyMaster != nil {
+		_ = s.ptyMaster.Close()
+	}
+	if closer, ok := s.stdinWriter.(io.Closer); ok {
+		_ = closer.Close()
+	}
+
 	s.Status = "done"
 	s.ExitCode = -1
 	return nil
@@ -146,6 +171,8 @@ func (s *ProcessSession) Read() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Reading drains the buffer, so the idle count starts over.
+	s.idleChecks, s.lastCheckLen = 0, 0
 	if s.outputBuffer.Len() == 0 {
 		return ""
 	}

@@ -82,6 +82,10 @@
     "noHistory": "Zatím žádná historie chatu",
     "historyLoadFailed": "Načtení historie chatu selhalo",
     "historyOpenFailed": "Otevření historie chatu selhalo",
+    "forkAtMessage": "Vytvořit větev od této zprávy",
+    "forkedConversation": "Toto je větev jiné konverzace",
+    "backToOriginal": "Zpět na původní konverzaci",
+    "forkFailed": "Vytvoření větve konverzace selhalo",
     "loadingMore": "Načítám další...",
     "deleteSession": "Smazat relaci",
     "messagesCount": "{{count}} zpráv",
@@ -352,6 +356,8 @@
       "extraBodyHint": "Dodatečná JSON pole pro vložení do těla požadavku, např. {\"reasoning_split\": true}.",
       "customHeaders": "Vlastní hlavičky",
       "customHeadersHint": "Dodatečné HTTP hlavičky vkládané do každého požadavku, např. {\"X-Source\": \"coding-plan\"}.",
+      "sessionHeader": "Hlavička relace",
+      "sessionHeaderHint": "Název hlavičky pro stabilní ID relace (vyžadují např. přenosy OpenCode Go). Každý požadavek ponese ID aktivní konverzace.",
       "invalidJson": "Neplatný formát JSON"
     },
     "edit": {

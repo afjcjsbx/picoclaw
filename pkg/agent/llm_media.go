@@ -11,29 +11,6 @@ import (
 
 var resolvedImagePathTagRegex = regexp.MustCompile(`\[image:[^\s\]][^\]]*\]`)
 
-func messagesContainMedia(messages []providers.Message) bool {
-	for _, msg := range messages {
-		for _, ref := range msg.Media {
-			if strings.TrimSpace(ref) != "" {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func stripMessageMedia(messages []providers.Message) []providers.Message {
-	if !messagesContainMedia(messages) {
-		return messages
-	}
-	stripped := make([]providers.Message, len(messages))
-	for i, msg := range messages {
-		stripped[i] = msg
-		stripped[i].Media = nil
-	}
-	return stripped
-}
-
 func isVisionUnsupportedError(err error) bool {
 	if err == nil {
 		return false

@@ -292,7 +292,7 @@ func (t *MessageTool) buildMediaParts(
 	scope := fmt.Sprintf("tool:message:%s:%s", channel, chatID)
 	parts := make([]bus.MediaPart, 0, len(mediaArgs))
 	for i, item := range mediaArgs {
-		resolved, err := fstools.ValidatePathWithAllowPaths(item.Path, t.workspace, t.restrict, t.allowPaths)
+		resolved, err := fstools.ValidateReadablePathWithAllowPaths(item.Path, t.workspace, t.restrict, t.allowPaths)
 		if err != nil {
 			return nil, fmt.Errorf("invalid media[%d].path: %w", i, err)
 		}

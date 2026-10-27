@@ -10,7 +10,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -24,9 +23,11 @@ import (
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/media"
 	"github.com/sipeed/picoclaw/pkg/providers"
+	cliprovider "github.com/sipeed/picoclaw/pkg/providers/cli"
 	"github.com/sipeed/picoclaw/pkg/routing"
 	"github.com/sipeed/picoclaw/pkg/session"
 	"github.com/sipeed/picoclaw/pkg/tools"
+	integrationtools "github.com/sipeed/picoclaw/pkg/tools/integration"
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
@@ -256,30 +257,6 @@ func (p *reasoningResponseProvider) GetDefaultModel() string {
 	return "mock-model"
 }
 
-type sideQuestionFallbackTestProvider struct {
-	model string
-}
-
-func (p *sideQuestionFallbackTestProvider) Chat(
-	ctx context.Context,
-	messages []providers.Message,
-	tools []providers.ToolDefinition,
-	model string,
-	opts map[string]any,
-) (*providers.LLMResponse, error) {
-	if p.model == "test-model" {
-		return nil, context.DeadlineExceeded
-	}
-	return &providers.LLMResponse{
-		ReasoningContent: "thinking trace",
-		ToolCalls:        []providers.ToolCall{},
-	}, nil
-}
-
-func (p *sideQuestionFallbackTestProvider) GetDefaultModel() string {
-	return p.model
-}
-
 type modelRewriteHook struct {
 	model string
 }
@@ -316,18 +293,6 @@ func (h modelRewriteHook) AfterLLM(
 	resp *LLMHookResponse,
 ) (*LLMHookResponse, HookDecision, error) {
 	return resp.Clone(), HookDecision{Action: HookActionContinue}, nil
-}
-
-func useTestSideQuestionProvider(al *AgentLoop, provider providers.LLMProvider) {
-	al.providerFactory = func(mc *config.ModelConfig) (providers.LLMProvider, string, error) {
-		model := provider.GetDefaultModel()
-		if mc != nil {
-			if _, modelID := providers.ExtractProtocol(mc); modelID != "" {
-				model = modelID
-			}
-		}
-		return provider, model, nil
-	}
 }
 
 func newTestAgentLoop(
@@ -420,7 +385,7 @@ func TestPublishResponseIfNeeded_DismissesToolFeedbackWhenMessageToolAlreadySent
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
-	mt := tools.NewMessageTool()
+	mt := integrationtools.NewMessageTool()
 	mt.SetSendCallback(func(
 		ctx context.Context,
 		channel, chatID, content, replyToMessageID string,
@@ -846,204 +811,6 @@ func TestProcessMessage_BeforeLLMModelRewriteDoesNotLeakThinkingOff(t *testing.T
 	}
 }
 
-func TestProcessMessage_BtwCommandSuppressesReasoningWhenThinkingOff(t *testing.T) {
-	tmpDir := t.TempDir()
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
-				ModelName:         "test-model",
-				MaxTokens:         4096,
-				MaxToolIterations: 10,
-			},
-		},
-		ModelList: []*config.ModelConfig{{
-			ModelName:     "test-model",
-			Model:         "openai/test-model",
-			ThinkingLevel: "off",
-		}},
-	}
-
-	al := NewAgentLoop(cfg, bus.NewMessageBus(), &sideQuestionFallbackTestProvider{model: "test-model"})
-	al.providerFactory = func(mc *config.ModelConfig) (providers.LLMProvider, string, error) {
-		model := ""
-		if mc != nil {
-			_, model = providers.ExtractProtocol(mc)
-		}
-		if model == "" {
-			model = "test-model"
-		}
-		return &sideQuestionFallbackTestProvider{model: model}, model, nil
-	}
-
-	response, err := al.processMessage(context.Background(), bus.InboundMessage{
-		Channel:  "telegram",
-		SenderID: "telegram:123",
-		ChatID:   "chat-1",
-		Content:  "/btw explain privately",
-	})
-	if err != nil {
-		t.Fatalf("processMessage() error = %v", err)
-	}
-	if strings.Contains(response, "thinking trace") {
-		t.Fatalf("processMessage() response = %q, should not expose reasoning with thinking off", response)
-	}
-}
-
-func TestProcessMessage_BtwHookModelRewriteReevaluatesThinkingOff(t *testing.T) {
-	tmpDir := t.TempDir()
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
-				ModelName:         "plain-model",
-				MaxTokens:         4096,
-				MaxToolIterations: 10,
-			},
-		},
-		ModelList: []*config.ModelConfig{
-			{
-				ModelName: "plain-model",
-				Model:     "openai/plain-model",
-			},
-			{
-				ModelName:     "off-model",
-				Model:         "openai/off-model",
-				ThinkingLevel: "off",
-			},
-		},
-	}
-
-	al := NewAgentLoop(cfg, bus.NewMessageBus(), &sideQuestionFallbackTestProvider{model: "plain-model"})
-	al.providerFactory = func(mc *config.ModelConfig) (providers.LLMProvider, string, error) {
-		model := ""
-		if mc != nil {
-			_, model = providers.ExtractProtocol(mc)
-		}
-		if model == "" {
-			model = "plain-model"
-		}
-		return &sideQuestionFallbackTestProvider{model: model}, model, nil
-	}
-	if err := al.MountHook(NamedHook("rewrite-model", modelRewriteHook{model: "off-model"})); err != nil {
-		t.Fatalf("MountHook failed: %v", err)
-	}
-
-	response, err := al.processMessage(context.Background(), bus.InboundMessage{
-		Channel:  "telegram",
-		SenderID: "telegram:123",
-		ChatID:   "chat-1",
-		Content:  "/btw explain privately",
-	})
-	if err != nil {
-		t.Fatalf("processMessage() error = %v", err)
-	}
-	if strings.Contains(response, "thinking trace") {
-		t.Fatalf(
-			"processMessage() response = %q, should not expose reasoning after hook rewrote to off model",
-			response,
-		)
-	}
-}
-
-func TestProcessMessage_BtwHookModelRewriteDoesNotLeakThinkingOff(t *testing.T) {
-	tmpDir := t.TempDir()
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
-				ModelName:         "off-model",
-				MaxTokens:         4096,
-				MaxToolIterations: 10,
-			},
-		},
-		ModelList: []*config.ModelConfig{
-			{
-				ModelName:     "off-model",
-				Model:         "openai/off-model",
-				ThinkingLevel: "off",
-			},
-			{
-				ModelName: "plain-model",
-				Model:     "openai/plain-model",
-			},
-		},
-	}
-
-	al := NewAgentLoop(cfg, bus.NewMessageBus(), &sideQuestionFallbackTestProvider{model: "off-model"})
-	al.providerFactory = func(mc *config.ModelConfig) (providers.LLMProvider, string, error) {
-		model := ""
-		if mc != nil {
-			_, model = providers.ExtractProtocol(mc)
-		}
-		if model == "" {
-			model = "off-model"
-		}
-		return &sideQuestionFallbackTestProvider{model: model}, model, nil
-	}
-	if err := al.MountHook(NamedHook("rewrite-model", modelRewriteHook{model: "plain-model"})); err != nil {
-		t.Fatalf("MountHook failed: %v", err)
-	}
-
-	response, err := al.processMessage(context.Background(), bus.InboundMessage{
-		Channel:  "telegram",
-		SenderID: "telegram:123",
-		ChatID:   "chat-1",
-		Content:  "/btw explain privately",
-	})
-	if err != nil {
-		t.Fatalf("processMessage() error = %v", err)
-	}
-	if response != "thinking trace" {
-		t.Fatalf("processMessage() response = %q, want reasoning after hook rewrote away from off model", response)
-	}
-}
-
-func TestProcessMessage_BtwFallbackDoesNotInheritPrimaryThinkingOff(t *testing.T) {
-	tmpDir := t.TempDir()
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
-				ModelName:         "test-model",
-				ModelFallbacks:    []string{"openai/fallback-model"},
-				MaxTokens:         4096,
-				MaxToolIterations: 10,
-			},
-		},
-		ModelList: []*config.ModelConfig{{
-			ModelName:     "test-model",
-			Model:         "openai/test-model",
-			ThinkingLevel: "off",
-		}},
-	}
-
-	al := NewAgentLoop(cfg, bus.NewMessageBus(), &sideQuestionFallbackTestProvider{model: "test-model"})
-	al.providerFactory = func(mc *config.ModelConfig) (providers.LLMProvider, string, error) {
-		model := ""
-		if mc != nil {
-			_, model = providers.ExtractProtocol(mc)
-		}
-		if model == "" {
-			model = "test-model"
-		}
-		return &sideQuestionFallbackTestProvider{model: model}, model, nil
-	}
-
-	response, err := al.processMessage(context.Background(), bus.InboundMessage{
-		Channel:  "telegram",
-		SenderID: "telegram:123",
-		ChatID:   "chat-1",
-		Content:  "/btw explain fallback reasoning",
-	})
-	if err != nil {
-		t.Fatalf("processMessage() error = %v", err)
-	}
-	if response != "thinking trace" {
-		t.Fatalf("processMessage() response = %q, want fallback reasoning when fallback has no off", response)
-	}
-}
-
 func TestProcessMessage_UseCommandLoadsRequestedSkill(t *testing.T) {
 	tmpDir := t.TempDir()
 	skillDir := filepath.Join(tmpDir, "skills", "shell")
@@ -1099,334 +866,6 @@ func TestProcessMessage_UseCommandLoadsRequestedSkill(t *testing.T) {
 	lastMessage := provider.lastMessages[len(provider.lastMessages)-1]
 	if lastMessage.Role != "user" || lastMessage.Content != "explain how to list files" {
 		t.Fatalf("last provider message = %+v, want rewritten user message", lastMessage)
-	}
-}
-
-func TestProcessMessage_BtwCommandRunsWithoutPersistingHistory(t *testing.T) {
-	tmpDir := t.TempDir()
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
-				ModelName:         "test-model",
-				MaxTokens:         4096,
-				MaxToolIterations: 10,
-			},
-		},
-		// Add model list so isolated provider can resolve the model
-		ModelList: []*config.ModelConfig{
-			{ModelName: "test-model", Model: "openai/test-model"},
-		},
-	}
-
-	msgBus := bus.NewMessageBus()
-	provider := &recordingProvider{}
-	al := NewAgentLoop(cfg, msgBus, provider)
-	useTestSideQuestionProvider(al, provider)
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
-	if defaultAgent == nil {
-		t.Fatal("expected default agent")
-	}
-
-	msg := bus.InboundMessage{
-		Channel:  "telegram",
-		SenderID: "telegram:123",
-		ChatID:   "chat-1",
-		Content:  "/btw explain side effects",
-	}
-	route, _, err := al.resolveMessageRoute(msg)
-	if err != nil {
-		t.Fatalf("resolveMessageRoute() error = %v", err)
-	}
-	allocation := al.allocateRouteSession(route, msg)
-	sessionKey := resolveScopeKey(allocation.SessionKey, msg.SessionKey)
-	initialHistory := []providers.Message{
-		{Role: "user", Content: "We decided to avoid global state."},
-		{Role: "assistant", Content: "Right, keep it request-scoped."},
-	}
-	defaultAgent.Sessions.SetHistory(sessionKey, initialHistory)
-	defaultAgent.Sessions.SetSummary(sessionKey, "The team decided to keep state request-scoped.")
-
-	initialHistory = defaultAgent.Sessions.GetHistory(sessionKey)
-
-	response, err := al.processMessage(context.Background(), msg)
-	if err != nil {
-		t.Fatalf("processMessage() error = %v", err)
-	}
-	if response != "Mock response" {
-		t.Fatalf("processMessage() response = %q, want %q", response, "Mock response")
-	}
-	if len(provider.lastMessages) == 0 {
-		t.Fatal("provider did not receive any messages")
-	}
-	if len(provider.lastMessages) != 4 {
-		t.Fatalf("provider messages len = %d, want 4 (system + prior history + user)", len(provider.lastMessages))
-	}
-
-	if !reflect.DeepEqual(provider.lastMessages[1:3], initialHistory) {
-		t.Fatalf("provider history = %#v, want %#v", provider.lastMessages[1:3], initialHistory)
-	}
-
-	lastMessage := provider.lastMessages[len(provider.lastMessages)-1]
-	if lastMessage.Role != "user" || lastMessage.Content != "explain side effects" {
-		t.Fatalf("last provider message = %+v, want stripped /btw question", lastMessage)
-	}
-
-	history := al.GetRegistry().GetDefaultAgent().Sessions.GetHistory(sessionKey)
-	if !reflect.DeepEqual(history, initialHistory) {
-		t.Fatalf("session history = %#v, want %#v", history, initialHistory)
-	}
-}
-
-func TestProcessMessage_BtwCommandIncludesRequestContextAndMedia(t *testing.T) {
-	tmpDir := t.TempDir()
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
-				ModelName:         "test-model",
-				MaxTokens:         4096,
-				MaxToolIterations: 10,
-			},
-		},
-	}
-
-	msgBus := bus.NewMessageBus()
-	provider := &recordingProvider{}
-	al := NewAgentLoop(cfg, msgBus, provider)
-	useTestSideQuestionProvider(al, provider)
-
-	response, err := al.processMessage(context.Background(), testInboundMessage(bus.InboundMessage{
-		Channel:  "discord",
-		SenderID: "discord:123",
-		Sender: bus.SenderInfo{
-			DisplayName: "Alice",
-		},
-		ChatID:  "group-1",
-		Content: "/btw describe this image",
-		Media:   []string{"media://image-1"},
-	}))
-	if err != nil {
-		t.Fatalf("processMessage() error = %v", err)
-	}
-	if response != "Mock response" {
-		t.Fatalf("processMessage() response = %q, want %q", response, "Mock response")
-	}
-	if len(provider.lastMessages) == 0 {
-		t.Fatal("provider did not receive any messages")
-	}
-
-	systemPrompt := provider.lastMessages[0].Content
-	if !strings.Contains(systemPrompt, "## Current Session\nChannel: discord\nChat ID: group-1") {
-		t.Fatalf("system prompt missing current session context:\n%s", systemPrompt)
-	}
-	if !strings.Contains(systemPrompt, "## Current Sender\nCurrent sender: Alice (ID: discord:123)") {
-		t.Fatalf("system prompt missing current sender context:\n%s", systemPrompt)
-	}
-
-	lastMessage := provider.lastMessages[len(provider.lastMessages)-1]
-	if lastMessage.Role != "user" || lastMessage.Content != "describe this image" {
-		t.Fatalf("last provider message = %+v, want stripped /btw question", lastMessage)
-	}
-	if !reflect.DeepEqual(lastMessage.Media, []string{"media://image-1"}) {
-		t.Fatalf("last provider media = %#v, want media ref", lastMessage.Media)
-	}
-}
-
-func TestProcessMessage_BtwCommandUsesIsolatedProvider(t *testing.T) {
-	tmpDir := t.TempDir()
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
-				ModelName:         "test-model",
-				MaxTokens:         4096,
-				MaxToolIterations: 10,
-			},
-		},
-		// Add model list so isolated provider can resolve the model
-		ModelList: []*config.ModelConfig{
-			{ModelName: "test-model", Model: "openai/test-model"},
-		},
-	}
-
-	msgBus := bus.NewMessageBus()
-	provider := &recordingProvider{}
-	al := NewAgentLoop(cfg, msgBus, provider)
-	useTestSideQuestionProvider(al, provider)
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
-	if defaultAgent == nil {
-		t.Fatal("expected default agent")
-	}
-
-	// Set up initial history for the main session
-	mainSessionKey := "telegram:123:chat-1"
-	initialHistory := []providers.Message{
-		{Role: "user", Content: "We decided to avoid global state."},
-		{Role: "assistant", Content: "Right, keep it request-scoped."},
-	}
-	defaultAgent.Sessions.SetHistory(mainSessionKey, initialHistory)
-
-	initialHistory = defaultAgent.Sessions.GetHistory(mainSessionKey)
-
-	// Process a /btw command
-	response, err := al.processMessage(context.Background(), bus.InboundMessage{
-		Channel:    "telegram",
-		SenderID:   "telegram:123",
-		ChatID:     "chat-1",
-		SessionKey: mainSessionKey,
-		Content:    "/btw explain isolation",
-	})
-	if err != nil {
-		t.Fatalf("processMessage() error = %v", err)
-	}
-	if response != "Mock response" {
-		t.Fatalf("processMessage() response = %q, want %q", response, "Mock response")
-	}
-
-	// Verify the provider received the side question
-	if len(provider.lastMessages) == 0 {
-		t.Fatal("provider did not receive any messages for /btw command")
-	}
-
-	// Verify the question was stripped of /btw prefix
-	lastMessage := provider.lastMessages[len(provider.lastMessages)-1]
-	if lastMessage.Role != "user" || lastMessage.Content != "explain isolation" {
-		t.Fatalf("last provider message = %+v, want stripped /btw question", lastMessage)
-	}
-
-	// Verify main session history was NOT modified
-	currentHistory := defaultAgent.Sessions.GetHistory(mainSessionKey)
-	if !reflect.DeepEqual(currentHistory, initialHistory) {
-		t.Fatalf("main session history was modified:\ngot  %#v\nwant %#v", currentHistory, initialHistory)
-	}
-}
-
-func TestProcessMessage_BtwCommandRetriesWithoutMediaOnVisionUnsupported(t *testing.T) {
-	tmpDir := t.TempDir()
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
-				ModelName:         "test-model",
-				MaxTokens:         4096,
-				MaxToolIterations: 10,
-			},
-		},
-		// Add model list so isolated provider can resolve the model
-		ModelList: []*config.ModelConfig{
-			{ModelName: "test-model", Model: "openai/test-model"},
-		},
-	}
-
-	msgBus := bus.NewMessageBus()
-	provider := &visionUnsupportedMediaProvider{}
-	al := NewAgentLoop(cfg, msgBus, provider)
-	useTestSideQuestionProvider(al, provider)
-
-	response, err := al.processMessage(context.Background(), testInboundMessage(bus.InboundMessage{
-		Channel:  "telegram",
-		SenderID: "telegram:123",
-		ChatID:   "chat-1",
-		Content:  "/btw describe this image",
-		Media:    []string{"data:image/png;base64,abc123"},
-	}))
-	if err != nil {
-		t.Fatalf("processMessage() error = %v", err)
-	}
-	if response != "ok" {
-		t.Fatalf("processMessage() response = %q, want %q", response, "ok")
-	}
-	// Note: With isolated providers, each /btw creates a new provider instance,
-	// so we can't track calls across retries in the same way.
-	// The retry logic happens within askSideQuestion, creating separate isolated providers.
-	// For now, we just verify the command succeeds.
-	if provider.calls < 1 {
-		t.Fatalf("provider was not called for /btw command")
-	}
-}
-
-func TestProcessMessage_BtwCommandUsesProviderFactoryModel(t *testing.T) {
-	tmpDir := t.TempDir()
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
-				ModelName:         "lb-model",
-				MaxTokens:         4096,
-				MaxToolIterations: 10,
-			},
-		},
-		ModelList: []*config.ModelConfig{
-			{ModelName: "lb-model", Model: "openai/lb-model-a"},
-			{ModelName: "lb-model", Model: "openai/lb-model-b"},
-		},
-	}
-
-	msgBus := bus.NewMessageBus()
-	provider := &recordingProvider{}
-	al := NewAgentLoop(cfg, msgBus, provider)
-	useTestSideQuestionProvider(al, provider)
-
-	response, err := al.processMessage(context.Background(), bus.InboundMessage{
-		Channel:  "telegram",
-		SenderID: "telegram:123",
-		ChatID:   "chat-1",
-		Content:  "/btw explain load balancing",
-	})
-	if err != nil {
-		t.Fatalf("processMessage() error = %v", err)
-	}
-	if response != "Mock response" {
-		t.Fatalf("processMessage() response = %q, want %q", response, "Mock response")
-	}
-
-	// Verify that /btw used the configured model from ModelList
-	// The provider should have been called with one of the lb-model variants
-	if provider.lastModel == "" {
-		t.Fatal("provider was not called for /btw command")
-	}
-	if !strings.HasPrefix(provider.lastModel, "lb-model") {
-		t.Fatalf("/btw used model %q, expected lb-model variant", provider.lastModel)
-	}
-}
-
-func TestProcessMessage_BtwCommandHookModelBypassesFallbackCandidates(t *testing.T) {
-	tmpDir := t.TempDir()
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
-				ModelName:         "primary-model",
-				ModelFallbacks:    []string{"fallback-model"},
-				MaxTokens:         4096,
-				MaxToolIterations: 10,
-			},
-		},
-	}
-
-	msgBus := bus.NewMessageBus()
-	provider := &recordingProvider{}
-	al := NewAgentLoop(cfg, msgBus, provider)
-	useTestSideQuestionProvider(al, provider)
-	if err := al.MountHook(NamedHook("rewrite-model", modelRewriteHook{model: "hook-model"})); err != nil {
-		t.Fatalf("MountHook failed: %v", err)
-	}
-
-	response, err := al.processMessage(context.Background(), bus.InboundMessage{
-		Channel:  "telegram",
-		SenderID: "telegram:123",
-		ChatID:   "chat-1",
-		Content:  "/btw explain hook routing",
-	})
-	if err != nil {
-		t.Fatalf("processMessage() error = %v", err)
-	}
-	if response != "Mock response" {
-		t.Fatalf("processMessage() response = %q, want %q", response, "Mock response")
-	}
-	if provider.lastModel != "hook-model" {
-		t.Fatalf("/btw model = %q, want hook-selected model", provider.lastModel)
 	}
 }
 
@@ -1878,7 +1317,10 @@ func TestProcessMessage_MediaToolHandledSkipsFollowUpLLMAndFinalText(t *testing.
 		SenderID: "user1",
 		Content:  "take a screenshot of the screen and send it to me",
 	})).SessionKey, "")
-	history := defaultAgent.Sessions.GetHistory(sessionKey)
+	history, err := defaultAgent.Sessions.GetHistory(context.Background(), sessionKey)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
 	if len(history) == 0 {
 		t.Fatal("expected session history to be saved")
 	}
@@ -2344,7 +1786,8 @@ func TestAgentLoop_Stop(t *testing.T) {
 // Mock implementations for testing
 
 type simpleMockProvider struct {
-	response string
+	response     string
+	finishReason string
 }
 
 func (m *simpleMockProvider) Chat(
@@ -2355,8 +1798,9 @@ func (m *simpleMockProvider) Chat(
 	opts map[string]any,
 ) (*providers.LLMResponse, error) {
 	return &providers.LLMResponse{
-		Content:   m.response,
-		ToolCalls: []providers.ToolCall{},
+		Content:      m.response,
+		FinishReason: m.finishReason,
+		ToolCalls:    []providers.ToolCall{},
 	}, nil
 }
 
@@ -2682,17 +2126,6 @@ func TestToolFeedbackExplanationFromResponse_UsesCurrentContentFirst(t *testing.
 	got := toolFeedbackExplanationFromResponse(response, messages)
 	if got != "Read README.md first" {
 		t.Fatalf("toolFeedbackExplanationFromResponse() = %q, want current content", got)
-	}
-}
-
-func TestSideQuestionResponseContent_FallsBackWhenContentIsWhitespace(t *testing.T) {
-	response := &providers.LLMResponse{
-		Content:          " \n\t ",
-		ReasoningContent: "reasoning fallback",
-	}
-
-	if got := sideQuestionResponseContent(response); got != "reasoning fallback" {
-		t.Fatalf("sideQuestionResponseContent() = %q, want %q", got, "reasoning fallback")
 	}
 }
 
@@ -3290,7 +2723,10 @@ func TestProcessMessage_UsesRouteSessionKey(t *testing.T) {
 	helper := testHelper{al: al}
 	_ = helper.executeAndGetResponse(t, context.Background(), msg)
 
-	history := defaultAgent.Sessions.GetHistory(sessionKey)
+	history, err := defaultAgent.Sessions.GetHistory(context.Background(), sessionKey)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
 	if len(history) != 2 {
 		t.Fatalf("expected session history len=2, got %d", len(history))
 	}
@@ -3421,6 +2857,7 @@ func TestProcessMessage_ClearCommandClearsRoutedAgentSession(t *testing.T) {
 		},
 	}
 
+	cfg.Tools.Todo.Enabled = true
 	al := NewAgentLoop(cfg, bus.NewMessageBus(), &countingMockProvider{response: "LLM reply"})
 	mainAgent, ok := al.registry.GetAgent("main")
 	if !ok {
@@ -3451,10 +2888,27 @@ func TestProcessMessage_ClearCommandClearsRoutedAgentSession(t *testing.T) {
 
 	mainHistory := []providers.Message{{Role: "user", Content: "main history"}}
 	supportHistory := []providers.Message{{Role: "user", Content: "support history"}}
-	mainAgent.Sessions.SetHistory(sessionKey, mainHistory)
-	mainAgent.Sessions.SetSummary(sessionKey, "main summary")
-	supportAgent.Sessions.SetHistory(sessionKey, supportHistory)
-	supportAgent.Sessions.SetSummary(sessionKey, "support summary")
+	if err = mainAgent.Sessions.SetHistory(context.Background(), sessionKey, mainHistory); err != nil {
+		t.Fatalf("main SetHistory: %v", err)
+	}
+	if err = mainAgent.Sessions.SetSummary(context.Background(), sessionKey, "main summary"); err != nil {
+		t.Fatalf("main SetSummary: %v", err)
+	}
+	if err = supportAgent.Sessions.SetHistory(context.Background(), sessionKey, supportHistory); err != nil {
+		t.Fatalf("support SetHistory: %v", err)
+	}
+	if err = supportAgent.Sessions.SetSummary(context.Background(), sessionKey, "support summary"); err != nil {
+		t.Fatalf("support SetSummary: %v", err)
+	}
+
+	for _, a := range []*AgentInstance{mainAgent, supportAgent} {
+		tool, _ := a.Tools.Get("todo")
+		r := tool.Execute(tools.WithToolSessionContext(context.Background(), a.ID, sessionKey, nil),
+			map[string]any{"action": "write", "todos": []any{map[string]any{"id": "1", "content": "keep working"}}})
+		if r.IsError {
+			t.Fatal(r.ForLLM)
+		}
+	}
 
 	response, err := al.processMessage(context.Background(), msg)
 	if err != nil {
@@ -3464,21 +2918,52 @@ func TestProcessMessage_ClearCommandClearsRoutedAgentSession(t *testing.T) {
 		t.Fatalf("response = %q, want clear confirmation", response)
 	}
 
-	if got := supportAgent.Sessions.GetHistory(sessionKey); len(got) != 0 {
-		t.Fatalf("support history len = %d, want 0", len(got))
+	for _, a := range []*AgentInstance{mainAgent, supportAgent} {
+		tool, _ := a.Tools.Get("todo")
+		r := tool.Execute(
+			tools.WithToolSessionContext(context.Background(), a.ID, sessionKey, nil),
+			map[string]any{"action": "read"},
+		)
+		want := `"total_count":1`
+		if a == supportAgent {
+			want = `"total_count":0`
+		}
+		if r.IsError || !strings.Contains(r.ForLLM, want) {
+			t.Fatalf("%s todo: %+v", a.ID, r)
+		}
 	}
-	if got := supportAgent.Sessions.GetSummary(sessionKey); got != "" {
-		t.Fatalf("support summary = %q, want empty", got)
+
+	supportHist, err := supportAgent.Sessions.GetHistory(context.Background(), sessionKey)
+	if err != nil {
+		t.Fatalf("support GetHistory: %v", err)
 	}
-	if got := mainAgent.Sessions.GetHistory(sessionKey); len(got) != len(mainHistory) {
-		t.Fatalf("main history len = %d, want %d", len(got), len(mainHistory))
-	} else if got[0].Role != mainHistory[0].Role {
-		t.Fatalf("main history[0].Role = %q, want %q", got[0].Role, mainHistory[0].Role)
-	} else if got[0].Content != mainHistory[0].Content {
-		t.Fatalf("main history[0].Content = %q, want %q", got[0].Content, mainHistory[0].Content)
+	if len(supportHist) != 0 {
+		t.Fatalf("support history len = %d, want 0", len(supportHist))
 	}
-	if got := mainAgent.Sessions.GetSummary(sessionKey); got != "main summary" {
-		t.Fatalf("main summary = %q, want %q", got, "main summary")
+	supportSummary, err := supportAgent.Sessions.GetSummary(context.Background(), sessionKey)
+	if err != nil {
+		t.Fatalf("support GetSummary: %v", err)
+	}
+	if supportSummary != "" {
+		t.Fatalf("support summary = %q, want empty", supportSummary)
+	}
+	mainHist, err := mainAgent.Sessions.GetHistory(context.Background(), sessionKey)
+	if err != nil {
+		t.Fatalf("main GetHistory: %v", err)
+	}
+	if len(mainHist) != len(mainHistory) {
+		t.Fatalf("main history len = %d, want %d", len(mainHist), len(mainHistory))
+	} else if mainHist[0].Role != mainHistory[0].Role {
+		t.Fatalf("main history[0].Role = %q, want %q", mainHist[0].Role, mainHistory[0].Role)
+	} else if mainHist[0].Content != mainHistory[0].Content {
+		t.Fatalf("main history[0].Content = %q, want %q", mainHist[0].Content, mainHistory[0].Content)
+	}
+	mainSummary, err := mainAgent.Sessions.GetSummary(context.Background(), sessionKey)
+	if err != nil {
+		t.Fatalf("main GetSummary: %v", err)
+	}
+	if mainSummary != "main summary" {
+		t.Fatalf("main summary = %q, want %q", mainSummary, "main summary")
 	}
 }
 
@@ -3548,6 +3033,59 @@ func TestProcessMessage_MCPCommandsHandledWithoutLLMCall(t *testing.T) {
 	}
 	if provider.calls != 0 {
 		t.Fatalf("LLM should not be called for /show mcp, calls=%d", provider.calls)
+	}
+}
+
+func TestProcessMessage_ListPluginsCommandReportsInstalledPackages(t *testing.T) {
+	tmpDir := t.TempDir()
+	pluginDir := filepath.Join(tmpDir, "plugins", "demo")
+	if err := os.MkdirAll(pluginDir, 0o700); err != nil {
+		t.Fatalf("Failed to create plugin dir: %v", err)
+	}
+	manifest := `{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"demo"}`
+	if err := os.WriteFile(filepath.Join(pluginDir, "plugin.json"), []byte(manifest), 0o600); err != nil {
+		t.Fatalf("Failed to write plugin manifest: %v", err)
+	}
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				ModelName:         "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+		},
+		Session: config.SessionConfig{
+			Dimensions: []string{"chat"},
+		},
+		Plugins: config.PluginsConfig{
+			Enabled:     true,
+			Directories: []string{filepath.Join(tmpDir, "plugins")},
+			Entries:     map[string]config.PluginEntryConfig{"demo": {Enabled: true}},
+		},
+	}
+
+	msgBus := bus.NewMessageBus()
+	provider := &countingMockProvider{response: "LLM reply"}
+	al := NewAgentLoop(cfg, msgBus, provider)
+	t.Cleanup(al.Close)
+	helper := testHelper{al: al}
+
+	resp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
+		Context: bus.InboundContext{
+			Channel:  "whatsapp",
+			ChatID:   "chat1",
+			ChatType: "direct",
+			SenderID: "user1",
+		},
+		Content: "/list plugins",
+	})
+	if !strings.Contains(resp, "- `demo`\n  State: ready\n  Path: ") {
+		t.Fatalf("unexpected /list plugins reply: %q", resp)
+	}
+	if provider.calls != 0 {
+		t.Fatalf("LLM should not be called for /list plugins, calls=%d", provider.calls)
 	}
 }
 
@@ -3928,6 +3466,120 @@ func TestProcessMessage_ModelRoutingUsesLightProvider(t *testing.T) {
 	}
 	if heavyCalls != 0 {
 		t.Fatalf("heavy calls = %d, want 0", heavyCalls)
+	}
+	if lightCalls != 1 {
+		t.Fatalf("light calls = %d, want 1", lightCalls)
+	}
+}
+
+// TestProcessMessage_ModelRoutingScoresSessionHistoryNotRenderedPrompt is the
+// regression test for the ConversationDepth signal: the router must be scored
+// against the assembled session history, not the rendered prompt (which
+// additionally carries the system prompt and the current user message).
+//
+// The agent is seeded with nine history messages. Scoring the real history
+// yields ConversationDepth = 9 (below the >10 boundary), so the light model is
+// used. Scoring the rendered prompt would yield 11 and cross the boundary,
+// pushing the turn onto the heavy model.
+//
+// The depth signal adds 0.10 to the score, so the threshold is set to 0.05:
+// strictly between the real-history score (0.00) and the rendered-prompt score
+// (0.10). A threshold equal to the signal weight would make the test pass or
+// fail on a floating-point/weight tie instead of on the behavior under test.
+func TestProcessMessage_ModelRoutingScoresSessionHistoryNotRenderedPrompt(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "agent-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	heavyCalls := 0
+	heavyServer := newStrictChatCompletionTestServer(
+		t,
+		"heavy",
+		"gemini-2.5-flash",
+		"heavy reply",
+		&heavyCalls,
+	)
+	defer heavyServer.Close()
+
+	lightCalls := 0
+	lightServer := newStrictChatCompletionTestServer(
+		t,
+		"light",
+		"qwen2.5:0.5b",
+		"light reply",
+		&lightCalls,
+	)
+	defer lightServer.Close()
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				ModelName:         "gemini-main",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+				Routing: &config.RoutingConfig{
+					Enabled:    true,
+					LightModel: "qwen-light",
+					Threshold:  0.05,
+				},
+			},
+		},
+		ModelList: []*config.ModelConfig{
+			{
+				ModelName: "gemini-main",
+				Model:     "gemini/gemini-2.5-flash",
+				APIBase:   heavyServer.URL,
+				APIKeys:   config.SimpleSecureStrings("heavy-key"),
+			},
+			{
+				ModelName: "qwen-light",
+				Model:     "ollama/qwen2.5:0.5b",
+				APIBase:   lightServer.URL,
+				APIKeys:   config.SimpleSecureStrings("light-key"),
+			},
+		},
+	}
+
+	msgBus := bus.NewMessageBus()
+	provider, _, err := providers.CreateProvider(cfg)
+	if err != nil {
+		t.Fatalf("CreateProvider() error = %v", err)
+	}
+	al := NewAgentLoop(cfg, msgBus, provider)
+
+	agent := al.registry.GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("No default agent found")
+	}
+
+	msg := bus.InboundMessage{
+		Context: bus.InboundContext{
+			Channel:  "telegram",
+			ChatID:   "chat1",
+			ChatType: "direct",
+			SenderID: "user1",
+		},
+		Content: "hi",
+	}
+	route := al.registry.ResolveRoute(bus.NormalizeInboundMessage(msg).Context)
+	sessionKey := al.allocateRouteSession(route, msg).SessionKey
+	for i := 0; i < 9; i++ {
+		if err := agent.Sessions.AddFullMessage(context.Background(), sessionKey,
+			providers.Message{Role: "user", Content: "prior turn"}); err != nil {
+			t.Fatalf("AddFullMessage: %v", err)
+		}
+	}
+
+	helper := testHelper{al: al}
+	resp := helper.executeAndGetResponse(t, context.Background(), msg)
+	if resp != "light reply" {
+		t.Fatalf("response = %q, want %q", resp, "light reply")
+	}
+	if heavyCalls != 0 {
+		t.Fatalf("heavy calls = %d, want 0 (depth must come from real history)", heavyCalls)
 	}
 	if lightCalls != 1 {
 		t.Fatalf("light calls = %d, want 1", lightCalls)
@@ -4543,7 +4195,9 @@ func TestAgentLoop_ContextExhaustionRetry(t *testing.T) {
 	if defaultAgent == nil {
 		t.Fatal("No default agent found")
 	}
-	defaultAgent.Sessions.SetHistory(sessionKey, history)
+	if err = defaultAgent.Sessions.SetHistory(context.Background(), sessionKey, history); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
 
 	// Call ProcessDirectWithChannel
 	// Note: ProcessDirectWithChannel calls processMessage which will execute runLLMIteration
@@ -4568,7 +4222,10 @@ func TestAgentLoop_ContextExhaustionRetry(t *testing.T) {
 	}
 
 	// Check final history length
-	finalHistory := defaultAgent.Sessions.GetHistory(sessionKey)
+	finalHistory, err := defaultAgent.Sessions.GetHistory(context.Background(), sessionKey)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
 	// We verify that the history has been modified (compressed)
 	// Original length: 5
 	// Expected behavior: compression drops ~50% of Turns
@@ -4919,7 +4576,10 @@ func TestAgentLoop_VisionUnsupportedErrorReturnsClearFailure(t *testing.T) {
 	if agent == nil {
 		t.Fatal("expected default agent")
 	}
-	history := agent.Sessions.GetHistory(sessionKey)
+	history, err := agent.Sessions.GetHistory(context.Background(), sessionKey)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
 	if len(history) == 0 {
 		t.Fatal("expected user message to remain in session history")
 	}
@@ -5463,6 +5123,62 @@ func TestAgentLoop_EmptyModelResponseUsesAccurateFallback(t *testing.T) {
 	}
 }
 
+func TestAgentLoop_TruncatedModelResponseUsesDedicatedFallback(t *testing.T) {
+	// Providers report the token-limit stop as "truncated" (OpenAI-compatible,
+	// non-streaming) or "length" (Anthropic/Bedrock/Gemini and the
+	// OpenAI-compatible streaming path); both must map to the dedicated
+	// token-limit message instead of the generic one.
+	for _, finishReason := range []string{"truncated", "length"} {
+		t.Run(finishReason, func(t *testing.T) {
+			tmpDir, err := os.MkdirTemp("", "agent-test-*")
+			if err != nil {
+				t.Fatalf("Failed to create temp dir: %v", err)
+			}
+			defer os.RemoveAll(tmpDir)
+
+			cfg := &config.Config{
+				Agents: config.AgentsConfig{
+					Defaults: config.AgentDefaults{
+						Workspace:         tmpDir,
+						ModelName:         "test-model",
+						MaxTokens:         4096,
+						MaxToolIterations: 3,
+					},
+				},
+			}
+
+			msgBus := bus.NewMessageBus()
+			provider := &simpleMockProvider{response: "", finishReason: finishReason}
+			al := NewAgentLoop(cfg, msgBus, provider)
+
+			response, err := al.ProcessDirectWithChannel(
+				context.Background(), "hello", "truncated-response", "test", "chat1",
+			)
+			if err != nil {
+				t.Fatalf("ProcessDirectWithChannel failed: %v", err)
+			}
+			if response != truncatedResponse {
+				t.Fatalf("response = %q, want %q", response, truncatedResponse)
+			}
+		})
+	}
+}
+
+func TestIsTruncatedFinishReason(t *testing.T) {
+	tests := map[string]bool{
+		"":           false,
+		"stop":       false,
+		"tool_calls": false,
+		"length":     true,
+		"truncated":  true,
+	}
+	for reason, want := range tests {
+		if got := isTruncatedFinishReason(reason); got != want {
+			t.Errorf("isTruncatedFinishReason(%q) = %v, want %v", reason, got, want)
+		}
+	}
+}
+
 func TestAgentLoop_ToolLimitUsesDedicatedFallback(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "agent-test-*")
 	if err != nil {
@@ -5501,13 +5217,19 @@ func TestAgentLoop_ToolLimitUsesDedicatedFallback(t *testing.T) {
 	route := al.registry.ResolveRoute(bus.InboundContext{
 		Channel:  "test",
 		ChatType: "direct",
-		SenderID: "cron",
+		SenderID: "direct",
 	})
-	history := defaultAgent.Sessions.GetHistory(al.allocateRouteSession(route, testInboundMessage(bus.InboundMessage{
-		Channel:  "test",
-		SenderID: "cron",
-		ChatID:   "chat1",
-	})).SessionKey)
+	history, err := defaultAgent.Sessions.GetHistory(
+		context.Background(),
+		al.allocateRouteSession(route, testInboundMessage(bus.InboundMessage{
+			Channel:  "test",
+			SenderID: "direct",
+			ChatID:   "chat1",
+		})).SessionKey,
+	)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
 	if len(history) != 4 {
 		t.Fatalf("history len = %d, want 4", len(history))
 	}
@@ -6103,7 +5825,10 @@ func TestProcessMessage_PersistsReasoningContentInSessionHistory(t *testing.T) {
 	if len(sessionKeys) != 1 {
 		t.Fatalf("session keys = %v, want exactly 1 active session", sessionKeys)
 	}
-	history := store.GetHistory(sessionKeys[0])
+	history, err := store.GetHistory(context.Background(), sessionKeys[0])
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
 	if len(history) < 2 {
 		t.Fatalf("session history len = %d, want at least 2", len(history))
 	}
@@ -6156,7 +5881,10 @@ func TestProcessMessage_PersistsReasoningToolResponseAsSingleAssistantRecord(t *
 		t.Fatalf("session keys = %v, want exactly 1 active session", sessionKeys)
 	}
 
-	history := store.GetHistory(sessionKeys[0])
+	history, err := store.GetHistory(context.Background(), sessionKeys[0])
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
 	if len(history) < 3 {
 		t.Fatalf("session history len = %d, want at least 3", len(history))
 	}
@@ -6181,7 +5909,7 @@ func TestProcessMessage_PersistsReasoningToolResponseAsSingleAssistantRecord(t *
 	if len(assistantWithToolCall.ToolCalls) != 1 {
 		t.Fatalf("assistant tool calls = %+v, want single read_file tool", assistantWithToolCall.ToolCalls)
 	}
-	if got := providers.NormalizeToolCall(assistantWithToolCall.ToolCalls[0]).Name; got != "read_file" {
+	if got := cliprovider.NormalizeToolCall(assistantWithToolCall.ToolCalls[0]).Name; got != "read_file" {
 		t.Fatalf("assistant tool calls = %+v, want single read_file tool", assistantWithToolCall.ToolCalls)
 	}
 
@@ -6226,7 +5954,7 @@ func TestProcessMessage_PersistsReasoningToolResponseAsSingleAssistantRecord(t *
 			matchingRecords++
 			toolName := ""
 			if len(msg.ToolCalls) == 1 {
-				toolName = providers.NormalizeToolCall(msg.ToolCalls[0]).Name
+				toolName = cliprovider.NormalizeToolCall(msg.ToolCalls[0]).Name
 			}
 			if msg.Content != "I'll inspect that file now." ||
 				msg.ReasoningContent != "Read the file before answering." ||
@@ -7428,8 +7156,14 @@ func TestProcessMessage_ContextOverflowRecovery(t *testing.T) {
 	agent := al.GetRegistry().GetDefaultAgent()
 
 	for i := 0; i < 5; i++ {
-		agent.Sessions.AddFullMessage(sessionKey, providers.Message{Role: "user", Content: "heavy message"})
-		agent.Sessions.AddFullMessage(sessionKey, providers.Message{Role: "assistant", Content: "response"})
+		if err := agent.Sessions.AddFullMessage(context.Background(), sessionKey,
+			providers.Message{Role: "user", Content: "heavy message"}); err != nil {
+			t.Fatalf("AddFullMessage: %v", err)
+		}
+		if err := agent.Sessions.AddFullMessage(context.Background(), sessionKey,
+			providers.Message{Role: "assistant", Content: "response"}); err != nil {
+			t.Fatalf("AddFullMessage: %v", err)
+		}
 	}
 
 	response, err := al.processMessage(context.Background(), testInboundMessage(bus.InboundMessage{
@@ -7656,15 +7390,25 @@ func TestParallelMessageProcessing_SameSessionProcessedSequentially(t *testing.T
 		al,
 		64,
 		runtimeevents.KindAgentTurnStart,
+		runtimeevents.KindAgentTurnEnd,
 	)
 	defer closeRuntimeEvents()
 
+	// Events reach this collector asynchronously, so the provider being called
+	// does not mean the turn start was recorded yet. Events arrive in publish
+	// order, so once the first turn end is seen every turn start published
+	// before it has been recorded.
+	turnEnded := make(chan struct{})
+	var endOnce sync.Once
 	go func() {
 		for evt := range runtimeCh {
-			if evt.Kind == runtimeevents.KindAgentTurnStart {
+			switch evt.Kind {
+			case runtimeevents.KindAgentTurnStart:
 				mu.Lock()
 				turnIDs[evt.Scope.TurnID] = true
 				mu.Unlock()
+			case runtimeevents.KindAgentTurnEnd:
+				endOnce.Do(func() { close(turnEnded) })
 			}
 		}
 	}()
@@ -7713,6 +7457,12 @@ func TestParallelMessageProcessing_SameSessionProcessedSequentially(t *testing.T
 		// Turn completed successfully
 	case <-time.After(5 * time.Second):
 		t.Fatal("timeout waiting for turn to complete")
+	}
+
+	select {
+	case <-turnEnded:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for turn end event")
 	}
 
 	mu.Lock()
@@ -7830,6 +7580,74 @@ func TestRunWorkerPanicReleasesSessionTurnState(t *testing.T) {
 		}
 		if time.Now().After(deadline) {
 			t.Fatal("second message did not start a new turn after panic cleanup")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestAgentLoop_Run_ReleasesMediaScopeAfterTurn(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				ModelName:         "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+		},
+	}
+
+	store := media.NewFileMediaStore()
+	mediaPath := filepath.Join(tmpDir, "inbound.png")
+	if err := os.WriteFile(mediaPath, []byte{0x89, 0x50, 0x4E, 0x47}, 0o644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+	scope := "test:media-release-scope"
+	ref, err := store.Store(mediaPath, media.MediaMeta{Filename: "inbound.png", ContentType: "image/png"}, scope)
+	if err != nil {
+		t.Fatalf("Store failed: %v", err)
+	}
+
+	msgBus := bus.NewMessageBus()
+	provider := &simpleMockProvider{response: "ack"}
+	al := NewAgentLoop(cfg, msgBus, provider)
+	al.SetMediaStore(store)
+
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	defer cancelRun()
+
+	runErrCh := make(chan error, 1)
+	go func() {
+		runErrCh <- al.Run(runCtx)
+	}()
+
+	pubCtx, pubCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer pubCancel()
+	if err := msgBus.PublishInbound(pubCtx, bus.InboundMessage{
+		Context: bus.InboundContext{
+			Channel:  "test",
+			ChatID:   "chat1",
+			ChatType: "direct",
+			SenderID: "user1",
+		},
+		Content:    "describe this image",
+		Media:      []string{ref},
+		MediaScope: scope,
+	}); err != nil {
+		t.Fatalf("PublishInbound failed: %v", err)
+	}
+
+	deadline := time.Now().Add(responseTimeout)
+	for {
+		_, resolveErr := store.Resolve(ref)
+		_, statErr := os.Stat(mediaPath)
+		if resolveErr != nil && os.IsNotExist(statErr) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("media scope not released after turn: resolveErr=%v statErr=%v", resolveErr, statErr)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

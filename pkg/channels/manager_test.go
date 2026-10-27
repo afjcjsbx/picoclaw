@@ -350,7 +350,7 @@ func TestStartAllPublishesLifecycleRuntimeEvents(t *testing.T) {
 
 	m := newTestManager()
 	m.runtimeEvents = eventBus
-	m.config = &config.Config{Channels: config.ChannelsConfig{}}
+	m.config.Store(&config.Config{Channels: config.ChannelsConfig{}})
 	m.channels["good"] = &mockChannel{}
 	m.channels["bad"] = &mockChannel{
 		startFn: func(_ context.Context) error { return errors.New("bad start") },
@@ -1297,7 +1297,7 @@ func TestPreSend_NonToolFeedbackDefersTrackedMessageFinalizationToChannelSend(t 
 
 func TestPreSend_ToolFeedbackSeparateMessagesDeletesPlaceholderAndSkipsEdit(t *testing.T) {
 	m := newTestManager()
-	m.config = &config.Config{
+	m.config.Store(&config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				ToolFeedback: config.ToolFeedbackConfig{
@@ -1306,7 +1306,7 @@ func TestPreSend_ToolFeedbackSeparateMessagesDeletesPlaceholderAndSkipsEdit(t *t
 				},
 			},
 		},
-	}
+	})
 
 	ch := &mockDeletingMessageEditor{
 		mockMessageEditor: mockMessageEditor{
@@ -1453,7 +1453,7 @@ func TestSendWithRetry_ToolCallsPlaceholderDeleteAndFallsThroughToSend(t *testin
 
 func TestPreSend_NonToolFeedbackSeparateMessagesClearsTrackedMessageWithoutDismiss(t *testing.T) {
 	m := newTestManager()
-	m.config = &config.Config{
+	m.config.Store(&config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				ToolFeedback: config.ToolFeedbackConfig{
@@ -1462,7 +1462,7 @@ func TestPreSend_NonToolFeedbackSeparateMessagesClearsTrackedMessageWithoutDismi
 				},
 			},
 		},
-	}
+	})
 
 	ch := &mockMessageEditor{}
 
@@ -1787,7 +1787,7 @@ func TestPreSendMedia_LeavesTrackedMessageForChannelSend(t *testing.T) {
 
 func TestPreSendMedia_SeparateMessagesClearsTrackedMessageWithoutDismiss(t *testing.T) {
 	m := newTestManager()
-	m.config = &config.Config{
+	m.config.Store(&config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				ToolFeedback: config.ToolFeedbackConfig{
@@ -1796,7 +1796,7 @@ func TestPreSendMedia_SeparateMessagesClearsTrackedMessageWithoutDismiss(t *test
 				},
 			},
 		},
-	}
+	})
 
 	ch := &mockMessageEditor{}
 
@@ -2120,13 +2120,13 @@ func TestGetStreamer_PreservesModelNameSetter(t *testing.T) {
 
 func TestGetStreamer_SplitOnMarkerStreamsSeparateSegments(t *testing.T) {
 	m := newTestManager()
-	m.config = &config.Config{
+	m.config.Store(&config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				SplitOnMarker: true,
 			},
 		},
-	}
+	})
 
 	var segments []*recordingStreamSegment
 	ch := &mockStreamingChannel{
@@ -2190,13 +2190,13 @@ func TestGetStreamer_SplitOnMarkerStreamsSeparateSegments(t *testing.T) {
 
 func TestGetStreamer_SplitOnMarkerKeepsReasoningOnInitialStreamer(t *testing.T) {
 	m := newTestManager()
-	m.config = &config.Config{
+	m.config.Store(&config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				SplitOnMarker: true,
 			},
 		},
-	}
+	})
 
 	initial := &mockReasoningStreamer{}
 	next := &recordingStreamSegment{}
@@ -2240,13 +2240,13 @@ func TestGetStreamer_SplitOnMarkerKeepsReasoningOnInitialStreamer(t *testing.T) 
 
 func TestGetStreamer_SplitOnMarkerPreservesModelNameSetter(t *testing.T) {
 	m := newTestManager()
-	m.config = &config.Config{
+	m.config.Store(&config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				SplitOnMarker: true,
 			},
 		},
-	}
+	})
 
 	initial := &modelTrackingReasoningStreamer{}
 	next := &recordingStreamSegment{}
@@ -2292,7 +2292,7 @@ func TestGetStreamer_SplitOnMarkerPreservesModelNameSetter(t *testing.T) {
 
 func TestGetStreamer_FinalizeSeparateMessagesClearsTrackedToolFeedback(t *testing.T) {
 	m := newTestManager()
-	m.config = &config.Config{
+	m.config.Store(&config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				ToolFeedback: config.ToolFeedbackConfig{
@@ -2301,7 +2301,7 @@ func TestGetStreamer_FinalizeSeparateMessagesClearsTrackedToolFeedback(t *testin
 				},
 			},
 		},
-	}
+	})
 	ch := &mockStreamingChannel{
 		mockMessageEditor: mockMessageEditor{},
 		streamer: &mockStreamer{
@@ -2443,13 +2443,13 @@ func TestGetStreamer_FinalizeFailureDoesNotDismissTrackedToolFeedback(t *testing
 
 func TestRunWorker_ToolFeedbackSkipsMarkerSplitting(t *testing.T) {
 	m := newTestManager()
-	m.config = &config.Config{
+	m.config.Store(&config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				SplitOnMarker: true,
 			},
 		},
-	}
+	})
 
 	var (
 		mu       sync.Mutex
@@ -2506,13 +2506,13 @@ func TestRunWorker_ToolFeedbackSkipsMarkerSplitting(t *testing.T) {
 
 func TestRunWorker_FinalizedStreamSuppressesMarkerSplitBeforeSending(t *testing.T) {
 	m := newTestManager()
-	m.config = &config.Config{
+	m.config.Store(&config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				SplitOnMarker: true,
 			},
 		},
-	}
+	})
 
 	var (
 		mu       sync.Mutex
@@ -3434,5 +3434,83 @@ func TestSplitMarkerStreamerForwardsTurnUsage(t *testing.T) {
 	}
 	if inner.inputTokens != 1234 || inner.outputTokens != 567 {
 		t.Errorf("inner usage = (%d, %d), want (1234, 567)", inner.inputTokens, inner.outputTokens)
+	}
+}
+
+func TestUnregisterChannel_ConcurrentSendNoPanic(t *testing.T) {
+	m := newTestManager()
+	ch := &mockChannel{}
+	w := newChannelWorker("test", ch, "")
+	m.channels["test"] = ch
+	m.workers["test"] = w
+	ctx := context.Background()
+	go m.runWorker(ctx, "test", w)
+	go m.runMediaWorker(ctx, "test", w)
+
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				_ = m.SendToChannel(ctx, "test", "chat", "hi")
+			}
+		}
+	}()
+	time.Sleep(10 * time.Millisecond)
+	m.UnregisterChannel("test") // used to panic: send on closed channel
+	close(stop)
+	<-done
+}
+
+func TestPreSendDropsStalePlaceholder(t *testing.T) {
+	m := newTestManager()
+	ch := &mockDeletingMessageEditor{
+		mockMessageEditor: mockMessageEditor{
+			mockChannel: mockChannel{
+				sendFn: func(_ context.Context, _ bus.OutboundMessage) error { return nil },
+			},
+			editFn: func(_ context.Context, _, _, _ string) error {
+				t.Fatal("a stale placeholder must never be edited into the reply")
+				return nil
+			},
+		},
+	}
+
+	m.RecordPlaceholder("test", "chat-stale", "ph_old")
+	if v, ok := m.placeholders.Load("test:chat-stale"); ok {
+		entry := v.(placeholderEntry)
+		entry.createdAt = time.Now().Add(-placeholderTTL - time.Minute)
+		m.placeholders.Store("test:chat-stale", entry)
+	}
+
+	msg := testOutboundMessage(bus.OutboundMessage{Channel: "test", ChatID: "chat-stale", Content: "reply"})
+	_, handled := m.preSend(context.Background(), "test", msg, ch)
+
+	if handled {
+		t.Fatal("stale placeholder should not handle delivery")
+	}
+	if ch.deleteCalls != 1 || ch.deletedMessageID != "ph_old" {
+		t.Fatalf("expected stale placeholder to be deleted, got calls=%d id=%q", ch.deleteCalls, ch.deletedMessageID)
+	}
+}
+
+func TestOutboundToolFeedbackIsTerminal(t *testing.T) {
+	terminal := bus.OutboundMessage{Context: bus.InboundContext{Raw: map[string]string{
+		"message_kind":          "tool_feedback",
+		ToolFeedbackTerminalKey: "true",
+	}}}
+	if !outboundMessageIsToolFeedback(terminal) || !OutboundToolFeedbackIsTerminal(terminal) {
+		t.Fatal("expected terminal tool feedback to be detected")
+	}
+
+	reusable := bus.OutboundMessage{Context: bus.InboundContext{Raw: map[string]string{
+		"message_kind": "tool_feedback",
+	}}}
+	if !outboundMessageIsToolFeedback(reusable) || OutboundToolFeedbackIsTerminal(reusable) {
+		t.Fatal("regular tool feedback must stay reusable")
 	}
 }

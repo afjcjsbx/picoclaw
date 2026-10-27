@@ -366,7 +366,7 @@ func TestReplaceEditContent(t *testing.T) {
 
 // TestAppendFileTool_AppendToNonExistent_Restricted verifies that AppendFileTool in restricted mode
 // can append to a file that does not yet exist — it should silently create the file.
-// This exercises the errors.Is(err, fs.ErrNotExist) path in appendFileWithRW + rootRW.
+// This exercises the sandbox append path creating the file with O_CREATE.
 func TestAppendFileTool_AppendToNonExistent_Restricted(t *testing.T) {
 	workspace := t.TempDir()
 	tool := NewAppendFileTool(workspace, true)
@@ -387,6 +387,42 @@ func TestAppendFileTool_AppendToNonExistent_Restricted(t *testing.T) {
 
 	// Verify the file was created with correct content
 	data, err := os.ReadFile(filepath.Join(workspace, "brand_new_file.txt"))
+	assert.NoError(t, err)
+	assert.Equal(t, "first content", string(data))
+}
+
+// TestAppendFileTool_HostModeCreatesNestedPath verifies that the host append
+// path creates missing parent directories like the atomic write path did.
+func TestAppendFileTool_HostModeCreatesNestedPath(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nested", "new.txt")
+
+	tool := NewAppendFileTool("", false)
+	result := tool.Execute(context.Background(), map[string]any{
+		"path":    path,
+		"content": "first content",
+	})
+	assert.False(t, result.IsError, "unexpected error: %s", result.ForLLM)
+
+	data, err := os.ReadFile(path)
+	assert.NoError(t, err)
+	assert.Equal(t, "first content", string(data))
+}
+
+// TestAppendFileTool_RestrictedCreatesNestedPath covers the same creation
+// behavior inside the sandbox, where the parent directories are created
+// through os.Root.
+func TestAppendFileTool_RestrictedCreatesNestedPath(t *testing.T) {
+	workspace := t.TempDir()
+	tool := NewAppendFileTool(workspace, true)
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"path":    filepath.Join("nested", "deeper", "new.txt"),
+		"content": "first content",
+	})
+	assert.False(t, result.IsError, "unexpected error: %s", result.ForLLM)
+
+	data, err := os.ReadFile(filepath.Join(workspace, "nested", "deeper", "new.txt"))
 	assert.NoError(t, err)
 	assert.Equal(t, "first content", string(data))
 }

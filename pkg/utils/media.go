@@ -1,10 +1,10 @@
 package utils
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -117,23 +117,22 @@ func DownloadFile(urlStr, filename string, opts DownloadOptions) string {
 			return ""
 		}
 	} else {
-		client = &http.Client{Timeout: opts.Timeout}
-		if opts.ProxyURL != "" {
-			proxyURL, parseErr := url.Parse(opts.ProxyURL)
-			if parseErr != nil {
-				logger.ErrorCF(opts.LoggerPrefix, "Invalid proxy URL for download", map[string]any{
-					"error": parseErr.Error(),
-					"proxy": opts.ProxyURL,
-				})
-				return ""
-			}
-			client.Transport = &http.Transport{
-				Proxy: http.ProxyURL(proxyURL),
-			}
+		client, err = CreateHTTPClient(opts.ProxyURL, opts.Timeout)
+		if err != nil {
+			logger.ErrorCF(opts.LoggerPrefix, "Failed to create download client", map[string]any{
+				"error": err.Error(),
+			})
+			return ""
 		}
 	}
 
-	req, err := http.NewRequest(http.MethodGet, urlStr, nil)
+	// opts.Timeout bounds the whole download, retries and backoff included, so
+	// the shared retry policy cannot stretch a hung endpoint to several times
+	// the configured timeout. It also makes the retry sleeps cancellable.
+	ctx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, nil)
 	if err != nil {
 		logger.ErrorCF(opts.LoggerPrefix, "Failed to create download request", map[string]any{
 			"error": err.Error(),
@@ -149,7 +148,9 @@ func DownloadFile(urlStr, filename string, opts DownloadOptions) string {
 		AllowConfiguredProxyFirstHop(req, client.Transport)
 	}
 
-	resp, err := client.Do(req)
+	// Reuse the shared HTTP retry policy (transient network errors, 429 and
+	// 5xx) instead of issuing a single request.
+	resp, err := DoRequestWithRetry(client, req)
 	if err != nil {
 		logger.ErrorCF(opts.LoggerPrefix, "Failed to download file", map[string]any{
 			"error": err.Error(),
@@ -196,11 +197,4 @@ func DownloadFile(urlStr, filename string, opts DownloadOptions) string {
 	})
 
 	return localPath
-}
-
-// DownloadFileSimple is a simplified version of DownloadFile without options
-func DownloadFileSimple(url, filename string) string {
-	return DownloadFile(url, filename, DownloadOptions{
-		LoggerPrefix: "media",
-	})
 }

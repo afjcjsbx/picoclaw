@@ -679,7 +679,7 @@ func TestChannel_MultipleChannels_PartialYAMLMerge(t *testing.T) {
 		"channels": {
 			"tg1": {"enabled": true, "type": "telegram", "settings": {"base_url": "https://api.telegram.org", "token": "[NOT_HERE]"}},
 			"tg2": {"enabled": true, "type": "telegram", "settings": {"base_url": "https://custom-api.example.com", "token": "[NOT_HERE]"}},
-			"discord1": {"enabled": true, "type": "discord", "settings": {"mention_only": true, "token": "[NOT_HERE]"}}
+			"discord1": {"enabled": true, "type": "discord", "settings": {"proxy": "http://proxy.example.com:8080", "token": "[NOT_HERE]"}}
 		}
 	}`
 	var wrapper ChannelsWrapper
@@ -734,7 +734,7 @@ channels:
 	var disc DiscordSettings
 	require.NoError(t, wrapper.Channels["discord1"].Decode(&disc))
 	assert.Equal(t, "DISCORD_TOKEN", disc.Token.String())
-	assert.True(t, disc.MentionOnly)
+	assert.Equal(t, "http://proxy.example.com:8080", disc.Proxy)
 }
 
 // ═══════════════════════════════════════════════════

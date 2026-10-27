@@ -6,10 +6,14 @@ import (
 )
 
 func channelTypeForEvent(m *Manager, channelName string) string {
-	if m == nil || m.config == nil {
+	if m == nil {
 		return channelName
 	}
-	if bc := m.config.Channels.Get(channelName); bc != nil && bc.Type != "" {
+	cfg := m.config.Load()
+	if cfg == nil {
+		return channelName
+	}
+	if bc := cfg.Channels.Get(channelName); bc != nil && bc.Type != "" {
 		return bc.Type
 	}
 	return channelName

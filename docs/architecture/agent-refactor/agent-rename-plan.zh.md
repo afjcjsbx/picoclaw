@@ -79,7 +79,6 @@ pkg/agent/
 │              Turn Coordinator (turn_coord.go)           │
 │  - runTurn(): 主协调器                                  │
 │  - abortTurn(): 中止                                  │
-│  - askSideQuestion(): 侧问                             │
 │  - selectCandidates(): 模型选择                        │
 └─────────────────────────────────────────────────────────┘
                           │

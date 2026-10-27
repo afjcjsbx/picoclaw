@@ -187,6 +187,7 @@ func (t *OpenAITTSProvider) doSpeechRequest(
 	}
 
 	req.Header.Set("Content-Type", "application/json")
+	common.SetOpenRouterAttribution(req)
 	req.Header.Set("Authorization", "Bearer "+t.apiKey)
 
 	resp, err := t.httpClient.Do(req)

@@ -14,6 +14,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/textutil"
 )
 
 // Config holds engine configuration.
@@ -97,6 +98,45 @@ func (r *RetrievalEngine) Store() *Store {
 	return r.store
 }
 
+// sqliteBusyTimeoutMS is how long a connection waits for a lock before failing
+// with SQLITE_BUSY.
+const sqliteBusyTimeoutMS = 5000
+
+const (
+	// sqliteMaxOpenConns bounds the connection pool. The pure-Go SQLite driver
+	// keeps a page cache per connection, so an unbounded pool lets memory grow
+	// with concurrent load. SQLite serializes writers, and in WAL mode a reader
+	// does not block the writer, so two connections let one writer run next to
+	// one reader (e.g. compaction alongside context assembly). Further
+	// concurrent callers queue for a free connection, bounded by their context,
+	// instead of opening another page cache, which keeps the memory footprint
+	// predictable on constrained devices.
+	sqliteMaxOpenConns = 2
+
+	// sqliteTempStoreFile tells SQLite to spill temporary tables and sort
+	// buffers to temporary files instead of the Go heap (temp_store = FILE),
+	// which bounds the peak heap used by large compaction/sort queries. It
+	// does not reduce total memory where the temp directory is RAM-backed
+	// (tmpfs): the spill then uses kernel memory instead of the heap.
+	sqliteTempStoreFile = 1
+)
+
+// sqliteDSN returns the driver DSN for path with the per-connection settings
+// every pooled connection must have. database/sql opens connections lazily and
+// recycles them, so running "PRAGMA busy_timeout" once via db.Exec only
+// configures a single connection and leaves the others failing immediately with
+// SQLITE_BUSY while a long write (such as a pruning VACUUM) holds the lock.
+func sqliteDSN(path string) string {
+	sep := "?"
+	if strings.Contains(path, "?") {
+		sep = "&"
+	}
+	return fmt.Sprintf(
+		"%s%s_busy_timeout=%d&_pragma=synchronous(NORMAL)&_pragma=temp_store(%d)",
+		path, sep, sqliteBusyTimeoutMS, sqliteTempStoreFile,
+	)
+}
+
 // NewEngine creates a new short-term memory engine.
 func NewEngine(config Config, completeFn CompleteFn) (*Engine, error) {
 	dir := filepath.Dir(config.DBPath)
@@ -106,23 +146,25 @@ func NewEngine(config Config, completeFn CompleteFn) (*Engine, error) {
 		}
 	}
 
-	db, err := sql.Open("sqlite", config.DBPath)
+	db, err := sql.Open("sqlite", sqliteDSN(config.DBPath))
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
 
-	// Configure SQLite for concurrent access
+	// Bound the pool so the per-connection page cache cannot grow unchecked on
+	// memory-constrained devices (see sqliteMaxOpenConns). Idle is tied to the
+	// cap rather than left at database/sql's default of 2, so changing the cap
+	// never makes the pool close and reopen connections (and re-run their
+	// pragmas) on every release.
+	db.SetMaxOpenConns(sqliteMaxOpenConns)
+	db.SetMaxIdleConns(sqliteMaxOpenConns)
+
+	// journal_mode is stored in the database file, so setting it once is
+	// enough. busy_timeout and synchronous are per-connection settings and
+	// are applied to every pooled connection through the DSN (see sqliteDSN).
 	if _, err := db.Exec("PRAGMA journal_mode = WAL;"); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("enable WAL: %w", err)
-	}
-	if _, err := db.Exec("PRAGMA busy_timeout = 5000;"); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("set busy_timeout: %w", err)
-	}
-	if _, err := db.Exec("PRAGMA synchronous = NORMAL;"); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("set synchronous: %w", err)
 	}
 
 	if err := runSchema(db); err != nil {
@@ -346,6 +388,22 @@ func (e *Engine) Compact(ctx context.Context, sessionKey string, input CompactIn
 	return e.compaction.Compact(ctx, conv.ConversationID, input)
 }
 
+// CompactNow synchronously compacts a session on user request (/compact).
+// instructions (may be empty) tells the summarizer which details to prioritize.
+func (e *Engine) CompactNow(ctx context.Context, sessionKey, instructions string) (*CompactResult, error) {
+	if e.shouldIgnoreSession(sessionKey) || e.isStatelessSession(sessionKey) {
+		return &CompactResult{}, nil
+	}
+
+	conv, err := e.store.GetOrCreateConversation(ctx, sessionKey)
+	if err != nil {
+		return nil, fmt.Errorf("get conversation: %w", err)
+	}
+
+	e.initCompactionOnce()
+	return e.compaction.CompactNow(ctx, conv.ConversationID, instructions)
+}
+
 // CompactUntilUnder aggressively compacts until context is under budget.
 // Used for emergency compaction after LLM overflow (retry reason).
 func (e *Engine) CompactUntilUnder(ctx context.Context, sessionKey string, budget int) (*CompactResult, error) {
@@ -407,6 +465,67 @@ func (e *Engine) ClearSession(ctx context.Context, sessionKey string) error {
 		return nil // session never ingested, nothing to clear
 	}
 	return e.store.ClearConversation(ctx, conv.ConversationID)
+}
+
+// DeleteSession removes all stored data for a session and the conversation row
+// itself. Used by session pruning so no orphaned conversation rows remain.
+func (e *Engine) DeleteSession(ctx context.Context, sessionKey string) error {
+	conv, err := e.store.GetConversationBySessionKey(ctx, sessionKey)
+	if err != nil {
+		return err
+	}
+	if conv == nil {
+		return nil // session never ingested, nothing to delete
+	}
+	return e.store.DeleteConversation(ctx, conv.ConversationID)
+}
+
+// SessionStatuses returns status for every conversation in the database.
+func (e *Engine) SessionStatuses(ctx context.Context) ([]SessionStatus, error) {
+	return e.store.GetAllSessionStatuses(ctx)
+}
+
+// ConversationCount returns the number of conversations in the database.
+func (e *Engine) ConversationCount(ctx context.Context) (int, error) {
+	return e.store.ConversationCount(ctx)
+}
+
+// DBFileSize returns the combined size in bytes of the SQLite database file and
+// its write-ahead log (if present).
+func (e *Engine) DBFileSize() (int64, error) {
+	path := e.config.DBPath
+	if strings.TrimSpace(path) == "" {
+		return 0, nil
+	}
+	var total int64
+	if info, err := os.Stat(path); err == nil {
+		total += info.Size()
+	} else if !os.IsNotExist(err) {
+		return 0, err
+	}
+	if info, err := os.Stat(path + "-wal"); err == nil {
+		total += info.Size()
+	} else if !os.IsNotExist(err) {
+		return 0, err
+	}
+	return total, nil
+}
+
+// Vacuum reclaims unused disk space in the underlying SQLite database.
+func (e *Engine) Vacuum(ctx context.Context) error {
+	return e.store.Vacuum(ctx)
+}
+
+// ReclaimableBytes reports how much of the database file is free space that a
+// Vacuum would return to the filesystem.
+func (e *Engine) ReclaimableBytes(ctx context.Context) (int64, error) {
+	return e.store.ReclaimableBytes(ctx)
+}
+
+// Checkpoint folds the write-ahead log into the database file. When truncate is
+// true the -wal file is also shrunk to zero bytes.
+func (e *Engine) Checkpoint(ctx context.Context, truncate bool) error {
+	return e.store.CheckpointWAL(ctx, truncate)
 }
 
 // Bootstrap reconciles a session's messages with the database.
@@ -492,11 +611,11 @@ func (e *Engine) Bootstrap(ctx context.Context, sessionKey string, messages []Me
 				"conv_id":        conv.ConversationID,
 				"index":          i,
 				"db_role":        dbMsgs[i].Role,
-				"db_content":     truncate(dbMsgs[i].Content, 50),
+				"db_content":     textutil.TruncateRunes(dbMsgs[i].Content, 50),
 				"db_parts":       len(dbMsgs[i].Parts),
 				"db_model_name":  dbMsgs[i].ModelName,
 				"msg_role":       messages[i].Role,
-				"msg_content":    truncate(messages[i].Content, 50),
+				"msg_content":    textutil.TruncateRunes(messages[i].Content, 50),
 				"msg_parts":      len(messages[i].Parts),
 				"msg_model_name": messages[i].ModelName,
 			})
@@ -571,20 +690,36 @@ func (e *Engine) Bootstrap(ctx context.Context, sessionKey string, messages []Me
 	return nil
 }
 
-func (e *Engine) repairBootstrapReasoningContent(ctx context.Context, dbMsgs, messages []Message) (bool, error) {
+type bootstrapFieldRepair[T comparable] struct {
+	want          func(Message) T
+	have          func(Message) T
+	equal         func(T, T) bool
+	onlyIfMissing bool
+	// created_at requires a timestamp on every overlapping message before applying any updates.
+	rejectZeroBeforeEqual bool
+	apply                 func(context.Context, int64, T) error
+	set                   func(*Message, T)
+	logKind               string
+}
+
+func repairBootstrapField[T comparable](
+	ctx context.Context,
+	dbMsgs, messages []Message,
+	r bootstrapFieldRepair[T],
+) (bool, error) {
 	if len(dbMsgs) == 0 || len(messages) == 0 {
 		return false, nil
 	}
 
-	overlap := min(len(messages), len(dbMsgs))
-
-	var updates []struct {
-		index            int
-		messageID        int64
-		reasoningContent string
+	type update struct {
+		index     int
+		messageID int64
+		value     T
 	}
+	var updates []update
+	var zero T
 
-	for i := range overlap {
+	for i := range min(len(messages), len(dbMsgs)) {
 		if !messagesMatch(dbMsgs[i], messages[i], messageMatchOptions{
 			IgnoreReasoningContent: true,
 			IgnoreModelName:        true,
@@ -592,159 +727,71 @@ func (e *Engine) repairBootstrapReasoningContent(ctx context.Context, dbMsgs, me
 		}) {
 			return false, nil
 		}
-		if dbMsgs[i].ReasoningContent == messages[i].ReasoningContent {
-			continue
-		}
-		if dbMsgs[i].ReasoningContent != "" || messages[i].ReasoningContent == "" {
+
+		want, have := r.want(messages[i]), r.have(dbMsgs[i])
+		if r.rejectZeroBeforeEqual && want == zero {
 			return false, nil
 		}
-		updates = append(updates, struct {
-			index            int
-			messageID        int64
-			reasoningContent string
-		}{
-			index:            i,
-			messageID:        dbMsgs[i].ID,
-			reasoningContent: messages[i].ReasoningContent,
-		})
+		if r.equal != nil {
+			if r.equal(have, want) {
+				continue
+			}
+		} else if have == want {
+			continue
+		}
+		if want == zero || (r.onlyIfMissing && have != zero) {
+			return false, nil
+		}
+		updates = append(updates, update{index: i, messageID: dbMsgs[i].ID, value: want})
 	}
 
 	if len(updates) == 0 {
 		return false, nil
 	}
-
 	for _, update := range updates {
-		if err := e.store.UpdateMessageReasoningContent(ctx, update.messageID, update.reasoningContent); err != nil {
+		if err := r.apply(ctx, update.messageID, update.value); err != nil {
 			return false, err
 		}
-		dbMsgs[update.index].ReasoningContent = update.reasoningContent
+		r.set(&dbMsgs[update.index], update.value)
 	}
 
-	logger.InfoCF("seahorse", "bootstrap: repaired missing reasoning_content", map[string]any{
+	logger.InfoCF("seahorse", "bootstrap: repaired "+r.logKind, map[string]any{
 		"messages": len(updates),
 	})
 	return true, nil
+}
+
+func (e *Engine) repairBootstrapReasoningContent(ctx context.Context, dbMsgs, messages []Message) (bool, error) {
+	return repairBootstrapField(ctx, dbMsgs, messages, bootstrapFieldRepair[string]{
+		want:          func(m Message) string { return m.ReasoningContent },
+		have:          func(m Message) string { return m.ReasoningContent },
+		onlyIfMissing: true,
+		apply:         e.store.UpdateMessageReasoningContent,
+		set:           func(m *Message, v string) { m.ReasoningContent = v },
+		logKind:       "missing reasoning_content",
+	})
 }
 
 func (e *Engine) repairBootstrapModelName(ctx context.Context, dbMsgs, messages []Message) (bool, error) {
-	if len(dbMsgs) == 0 || len(messages) == 0 {
-		return false, nil
-	}
-
-	overlap := min(len(messages), len(dbMsgs))
-
-	var updates []struct {
-		index     int
-		messageID int64
-		modelName string
-	}
-
-	for i := range overlap {
-		if !messagesMatch(dbMsgs[i], messages[i], messageMatchOptions{
-			IgnoreReasoningContent: true,
-			IgnoreModelName:        true,
-			IgnoreCreatedAt:        true,
-		}) {
-			return false, nil
-		}
-		if dbMsgs[i].ModelName == messages[i].ModelName {
-			continue
-		}
-		if messages[i].ModelName == "" {
-			return false, nil
-		}
-		updates = append(updates, struct {
-			index     int
-			messageID int64
-			modelName string
-		}{
-			index:     i,
-			messageID: dbMsgs[i].ID,
-			modelName: messages[i].ModelName,
-		})
-	}
-
-	if len(updates) == 0 {
-		return false, nil
-	}
-
-	for _, update := range updates {
-		if err := e.store.UpdateMessageModelName(ctx, update.messageID, update.modelName); err != nil {
-			return false, err
-		}
-		dbMsgs[update.index].ModelName = update.modelName
-	}
-
-	logger.InfoCF("seahorse", "bootstrap: repaired missing model_name", map[string]any{
-		"messages": len(updates),
+	return repairBootstrapField(ctx, dbMsgs, messages, bootstrapFieldRepair[string]{
+		want:    func(m Message) string { return m.ModelName },
+		have:    func(m Message) string { return m.ModelName },
+		apply:   e.store.UpdateMessageModelName,
+		set:     func(m *Message, v string) { m.ModelName = v },
+		logKind: "missing model_name",
 	})
-	return true, nil
 }
 
 func (e *Engine) repairBootstrapCreatedAt(ctx context.Context, dbMsgs, messages []Message) (bool, error) {
-	if len(dbMsgs) == 0 || len(messages) == 0 {
-		return false, nil
-	}
-
-	overlap := min(len(messages), len(dbMsgs))
-
-	var updates []struct {
-		index     int
-		messageID int64
-		createdAt time.Time
-	}
-
-	for i := range overlap {
-		if !messagesMatch(dbMsgs[i], messages[i], messageMatchOptions{
-			IgnoreReasoningContent: true,
-			IgnoreModelName:        true,
-			IgnoreCreatedAt:        true,
-		}) {
-			return false, nil
-		}
-
-		wantCreatedAt := normalizeMessageCreatedAt(messages[i].CreatedAt)
-		if wantCreatedAt.IsZero() {
-			return false, nil
-		}
-		if dbMsgs[i].CreatedAt.Equal(wantCreatedAt) {
-			continue
-		}
-
-		updates = append(updates, struct {
-			index     int
-			messageID int64
-			createdAt time.Time
-		}{
-			index:     i,
-			messageID: dbMsgs[i].ID,
-			createdAt: wantCreatedAt,
-		})
-	}
-
-	if len(updates) == 0 {
-		return false, nil
-	}
-
-	for _, update := range updates {
-		if err := e.store.UpdateMessageCreatedAt(ctx, update.messageID, update.createdAt); err != nil {
-			return false, err
-		}
-		dbMsgs[update.index].CreatedAt = update.createdAt
-	}
-
-	logger.InfoCF("seahorse", "bootstrap: repaired message created_at", map[string]any{
-		"messages": len(updates),
+	return repairBootstrapField(ctx, dbMsgs, messages, bootstrapFieldRepair[time.Time]{
+		want:                  func(m Message) time.Time { return normalizeMessageCreatedAt(m.CreatedAt) },
+		have:                  func(m Message) time.Time { return m.CreatedAt },
+		equal:                 time.Time.Equal,
+		rejectZeroBeforeEqual: true,
+		apply:                 e.store.UpdateMessageCreatedAt,
+		set:                   func(m *Message, v time.Time) { m.CreatedAt = v },
+		logKind:               "message created_at",
 	})
-	return true, nil
-}
-
-// truncate shortens a string for logging.
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
 }
 
 type messageMatchOptions struct {

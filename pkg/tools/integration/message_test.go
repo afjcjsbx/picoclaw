@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
@@ -465,5 +466,25 @@ func TestMessageTool_Execute_WithMedia(t *testing.T) {
 	}
 	if gotParts[0].Type == "" {
 		t.Fatal("expected media type to be inferred")
+	}
+}
+
+func TestMessageTool_Execute_RejectsProtectedMedia(t *testing.T) {
+	tool := NewMessageTool()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("TOP_SECRET"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tool.ConfigureLocalMedia(dir, true, 1024*1024, nil)
+	tool.SetMediaStore(media.NewFileMediaStore())
+	called := false
+	tool.SetSendCallback(func(context.Context, string, string, string, string, []bus.MediaPart) error {
+		called = true
+		return nil
+	})
+	ctx := WithToolContext(context.Background(), "telegram", "chat")
+	result := tool.Execute(ctx, map[string]any{"media": []any{map[string]any{"path": ".env"}}})
+	if !result.IsError || !strings.Contains(result.ForLLM, "access denied") || called {
+		t.Fatalf("protected media was sent: %+v, callback called: %v", result, called)
 	}
 }

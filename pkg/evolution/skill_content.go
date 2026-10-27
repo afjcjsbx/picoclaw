@@ -21,7 +21,7 @@ type matchedSkillExcerpt struct {
 }
 
 func loadMatchedSkillExcerpts(matches []skills.SkillInfo) []matchedSkillExcerpt {
-	excerpts := make([]matchedSkillExcerpt, 0, minInt(len(matches), maxMatchedSkillExcerptCount))
+	excerpts := make([]matchedSkillExcerpt, 0, min(len(matches), maxMatchedSkillExcerptCount))
 	for _, match := range matches {
 		if len(excerpts) >= maxMatchedSkillExcerptCount {
 			break

@@ -82,6 +82,17 @@ func (sq *steeringQueue) pushScope(scope string, msg providers.Message) error {
 	return nil
 }
 
+// requeueScope puts already-dequeued messages back at the front of the scope's
+// queue, ahead of anything queued since. They were admitted once, so the size
+// cap is not applied again.
+func (sq *steeringQueue) requeueScope(scope string, msgs []providers.Message) {
+	sq.mu.Lock()
+	defer sq.mu.Unlock()
+
+	scope = normalizeSteeringScope(scope)
+	sq.queues[scope] = append(append([]providers.Message(nil), msgs...), sq.queues[scope]...)
+}
+
 // dequeue removes and returns pending steering messages from the legacy
 // fallback scope according to the configured mode.
 func (sq *steeringQueue) dequeue() []providers.Message {
@@ -293,6 +304,13 @@ func (al *AgentLoop) dequeueSteeringMessagesForScopeWithFallback(scope string) [
 		return nil
 	}
 	return al.steering.dequeueScopeWithFallback(scope)
+}
+
+func (al *AgentLoop) requeueSteeringMessagesForScope(scope string, msgs []providers.Message) {
+	if al.steering == nil || len(msgs) == 0 {
+		return
+	}
+	al.steering.requeueScope(scope, msgs)
 }
 
 func (al *AgentLoop) pendingSteeringCountForScope(scope string) int {
@@ -527,7 +545,7 @@ func (al *AgentLoop) HardAbort(sessionKey string) error {
 		"session_key":            sessionKey,
 		"turn_id":                ts.turnID,
 		"depth":                  ts.depth,
-		"initial_history_length": ts.initialHistoryLength,
+		"initial_history_length": ts.initialHistoryLen(),
 	})
 
 	// Cancel the active provider/tool turn contexts immediately so long-running
@@ -542,9 +560,15 @@ func (al *AgentLoop) HardAbort(sessionKey string) error {
 
 	// Roll back session history to the state before the turn started.
 	if ts.session != nil {
-		history := ts.session.GetHistory(sessionKey)
-		if ts.initialHistoryLength < len(history) {
-			ts.session.SetHistory(sessionKey, history[:ts.initialHistoryLength])
+		// HardAbort has no context of its own; the rollback only touches the
+		// local session store, so a background context is used.
+		history, err := ts.session.GetHistory(context.Background(), sessionKey)
+		if err != nil {
+			return fmt.Errorf("hard abort: get history: %w", err)
+		}
+		if initialLen := ts.initialHistoryLen(); initialLen < len(history) {
+			warnSessionStoreError(sessionKey, "set history",
+				ts.session.SetHistory(context.Background(), sessionKey, history[:initialLen]))
 		}
 	}
 

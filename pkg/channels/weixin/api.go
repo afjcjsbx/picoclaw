@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -130,6 +131,38 @@ func (c *ApiClient) GetUpdates(ctx context.Context, req GetUpdatesReq) (*GetUpda
 		return nil, err
 	}
 	return &resp, nil
+}
+
+// apiError is a well-formed iLink response that rejected the request with a
+// non-zero ret or errcode. isAPIRejection decides which of these are final.
+type apiError struct {
+	op      string
+	ret     int
+	errcode int
+	errmsg  string
+}
+
+func (e *apiError) Error() string {
+	return fmt.Sprintf("%s failed: ret=%d errcode=%d errmsg=%s", e.op, e.ret, e.errcode, e.errmsg)
+}
+
+// iLinkRetPrepareFailed is what iLink returns ("prepare failed") once a chat
+// has used up its reply allowance. The message is not delivered, and sending
+// it again fails the same way.
+const iLinkRetPrepareFailed = -2
+
+// isAPIRejection reports whether err is, or wraps, an iLink rejection that
+// resending cannot fix. Only ret=-2 is treated that way; other non-zero
+// ret/errcode values may be transient and stay retryable.
+func isAPIRejection(err error) bool {
+	var apiErr *apiError
+	return errors.As(err, &apiErr) && apiErr.ret == iLinkRetPrepareFailed
+}
+
+// sendFailureIsPermanent reports whether retrying a failed send is pointless:
+// the session is paused, or iLink rejected the request for good.
+func (c *WeixinChannel) sendFailureIsPermanent(err error) bool {
+	return c.remainingPause() > 0 || isAPIRejection(err)
 }
 
 func (c *ApiClient) SendMessage(ctx context.Context, req SendMessageReq) (*SendMessageResp, error) {

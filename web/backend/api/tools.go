@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/sipeed/picoclaw/pkg/config"
-	picotools "github.com/sipeed/picoclaw/pkg/tools"
+	integrationtools "github.com/sipeed/picoclaw/pkg/tools/integration"
 )
 
 type toolCatalogEntry struct {
@@ -153,6 +153,12 @@ var toolCatalog = []toolCatalogEntry{
 		Description: "Launch a background subagent for long-running or delegated work.",
 		Category:    "agents",
 		ConfigKey:   "spawn",
+	},
+	{
+		Name:        "todo",
+		Description: "Track a session-local plan for multi-step work.",
+		Category:    "agents",
+		ConfigKey:   "todo",
 	},
 	{
 		Name:        "spawn_status",
@@ -373,6 +379,8 @@ func applyToolState(cfg *config.Config, toolName string, enabled bool) error {
 		if enabled {
 			cfg.Tools.Subagent.Enabled = true
 		}
+	case "todo":
+		cfg.Tools.Todo.Enabled = enabled
 	case "spawn_status":
 		cfg.Tools.SpawnStatus.Enabled = enabled
 		if enabled {
@@ -478,6 +486,14 @@ func (h *Handler) handleUpdateWebSearchConfig(w http.ResponseWriter, r *http.Req
 			cfg.Tools.Web.Kagi.SetAPIKeys(keys)
 		}
 	}
+	if settings, ok := req.Settings["keenable"]; ok {
+		cfg.Tools.Web.Keenable.Enabled = settings.Enabled
+		cfg.Tools.Web.Keenable.MaxResults = settings.MaxResults
+		cfg.Tools.Web.Keenable.BaseURL = strings.TrimSpace(settings.BaseURL)
+		if keys, ok := normalizeWebSearchAPIKeys(settings.APIKeys, settings.APIKey); ok {
+			cfg.Tools.Web.Keenable.SetAPIKeys(keys)
+		}
+	}
 	if settings, ok := req.Settings["perplexity"]; ok {
 		cfg.Tools.Web.Perplexity.Enabled = settings.Enabled
 		cfg.Tools.Web.Perplexity.MaxResults = settings.MaxResults
@@ -526,6 +542,7 @@ func normalizeWebSearchProvider(provider string) string {
 		"brave",
 		"tavily",
 		"kagi",
+		"keenable",
 		"duckduckgo",
 		"gemini",
 		"perplexity",
@@ -564,7 +581,7 @@ func normalizeWebSearchAPIKeys(apiKeys []string, apiKey string) ([]string, bool)
 }
 
 func buildWebSearchConfigResponse(cfg *config.Config) webSearchConfigResponse {
-	opts := picotools.WebSearchToolOptionsFromConfig(cfg)
+	opts := integrationtools.WebSearchToolOptionsFromConfig(cfg)
 	current := resolveCurrentWebSearchProvider(cfg)
 	settings := map[string]webSearchProviderConfig{
 		"sogou": {
@@ -597,6 +614,12 @@ func buildWebSearchConfigResponse(cfg *config.Config) webSearchConfigResponse {
 			MaxResults: cfg.Tools.Web.Kagi.MaxResults,
 			BaseURL:    cfg.Tools.Web.Kagi.BaseURL,
 			APIKeySet:  len(cfg.Tools.Web.Kagi.APIKeys.Values()) > 0,
+		},
+		"keenable": {
+			Enabled:    cfg.Tools.Web.Keenable.Enabled,
+			MaxResults: cfg.Tools.Web.Keenable.MaxResults,
+			BaseURL:    cfg.Tools.Web.Keenable.BaseURL,
+			APIKeySet:  len(cfg.Tools.Web.Keenable.APIKeys.Values()) > 0,
 		},
 		"perplexity": {
 			Enabled:    cfg.Tools.Web.Perplexity.Enabled,
@@ -633,67 +656,73 @@ func buildWebSearchConfigResponse(cfg *config.Config) webSearchConfigResponse {
 		{
 			ID:         "sogou",
 			Label:      "Sogou",
-			Configured: picotools.WebSearchProviderReady(opts, "sogou"),
+			Configured: integrationtools.WebSearchProviderReady(opts, "sogou"),
 			Current:    current == "sogou",
 		},
 		{
 			ID:         "duckduckgo",
 			Label:      "DuckDuckGo",
-			Configured: picotools.WebSearchProviderReady(opts, "duckduckgo"),
+			Configured: integrationtools.WebSearchProviderReady(opts, "duckduckgo"),
 			Current:    current == "duckduckgo",
 		},
 		{
 			ID:           "gemini",
 			Label:        "Gemini (Google Search)",
-			Configured:   picotools.WebSearchProviderReady(opts, "gemini"),
+			Configured:   integrationtools.WebSearchProviderReady(opts, "gemini"),
 			Current:      current == "gemini",
 			RequiresAuth: true,
 		},
 		{
 			ID:           "brave",
 			Label:        "Brave Search",
-			Configured:   picotools.WebSearchProviderReady(opts, "brave"),
+			Configured:   integrationtools.WebSearchProviderReady(opts, "brave"),
 			Current:      current == "brave",
 			RequiresAuth: true,
 		},
 		{
 			ID:           "tavily",
 			Label:        "Tavily",
-			Configured:   picotools.WebSearchProviderReady(opts, "tavily"),
+			Configured:   integrationtools.WebSearchProviderReady(opts, "tavily"),
 			Current:      current == "tavily",
 			RequiresAuth: true,
 		},
 		{
 			ID:           "kagi",
 			Label:        "Kagi Search",
-			Configured:   picotools.WebSearchProviderReady(opts, "kagi"),
+			Configured:   integrationtools.WebSearchProviderReady(opts, "kagi"),
 			Current:      current == "kagi",
 			RequiresAuth: true,
 		},
 		{
+			ID:         "keenable",
+			Label:      "Keenable",
+			Configured: integrationtools.WebSearchProviderReady(opts, "keenable"),
+			Current:    current == "keenable",
+		},
+		{
 			ID:           "perplexity",
 			Label:        "Perplexity",
-			Configured:   picotools.WebSearchProviderReady(opts, "perplexity"),
+			Configured:   integrationtools.WebSearchProviderReady(opts, "perplexity"),
 			Current:      current == "perplexity",
 			RequiresAuth: true,
 		},
 		{
 			ID:         "searxng",
 			Label:      "SearXNG",
-			Configured: picotools.WebSearchProviderReady(opts, "searxng"),
+			Configured: integrationtools.WebSearchProviderReady(opts, "searxng"),
 			Current:    current == "searxng",
 		},
 		{
 			ID:           "glm_search",
 			Label:        "GLM Search",
-			Configured:   picotools.WebSearchProviderReady(opts, "glm_search"),
+			Configured:   integrationtools.WebSearchProviderReady(opts, "glm_search"),
 			Current:      current == "glm_search",
 			RequiresAuth: true,
 		},
 		{
 			ID:           "baidu_search",
 			Label:        "Baidu Search",
-			Configured:   picotools.WebSearchProviderReady(opts, "baidu_search"),
+			Configured:   integrationtools.WebSearchProviderReady(opts, "baidu_search"),
 			Current:      current == "baidu_search",
 			RequiresAuth: true,
 		},
@@ -718,7 +747,9 @@ func resolveCurrentWebSearchProvider(cfg *config.Config) string {
 	if cfg == nil || !cfg.Tools.IsToolEnabled("web") {
 		return ""
 	}
-	selected, err := picotools.ResolveWebSearchProviderName(picotools.WebSearchToolOptionsFromConfig(cfg), "")
+	selected, err := integrationtools.ResolveWebSearchProviderName(
+		integrationtools.WebSearchToolOptionsFromConfig(cfg), "",
+	)
 	if err != nil {
 		return ""
 	}

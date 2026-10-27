@@ -18,13 +18,27 @@ import (
 // ====================== Config & Constants ======================
 const (
 	// Default values for SubTurn configuration (used when config is not set or is zero)
-	defaultMaxSubTurnDepth       = 3
-	defaultMaxConcurrentSubTurns = 5
-	defaultConcurrencyTimeout    = 30 * time.Second
-	defaultSubTurnTimeout        = 5 * time.Minute
+	defaultMaxSubTurnDepth = 3
+	// defaultMaxConcurrentSubTurns is the default number of SubTurns a single
+	// parent turn may run at once. It is intentionally small: each concurrent
+	// SubTurn runs an in-process agent loop with its own context and history, so
+	// concurrency multiplies memory use. On the low-RAM devices PicoClaw targets
+	// a high default is counterproductive; deployments that can afford more can
+	// raise it via agents.defaults.subturn.max_concurrent.
+	defaultMaxConcurrentSubTurns = 3
+	// maxSubTurnConcurrency is a hard upper bound on the configured per-parent
+	// limit, so a misconfiguration cannot let one turn fan out without bound.
+	// It is not a global cap: every turn owns its own semaphore, so nested
+	// SubTurns each get their own limit (bounded by the max depth).
+	maxSubTurnConcurrency     = 32
+	defaultConcurrencyTimeout = 30 * time.Second
+	defaultSubTurnTimeout     = 5 * time.Minute
 	// maxEphemeralHistorySize limits the number of messages stored in ephemeral sessions.
 	// This prevents memory accumulation in long-running sub-turns.
 	maxEphemeralHistorySize = 50
+	// subTurnPendingResultsBuffer is the buffer size of the per-turn SubTurn
+	// result channel used to deliver async SubTurn results back to their parent.
+	subTurnPendingResultsBuffer = 16
 )
 
 var (
@@ -45,6 +59,9 @@ func (al *AgentLoop) getSubTurnConfig() subTurnRuntimeConfig {
 	maxConcurrent := cfg.MaxConcurrent
 	if maxConcurrent <= 0 {
 		maxConcurrent = defaultMaxConcurrentSubTurns
+	}
+	if maxConcurrent > maxSubTurnConcurrency {
+		maxConcurrent = maxSubTurnConcurrency
 	}
 
 	concurrencyTimeout := time.Duration(cfg.ConcurrencyTimeoutSec) * time.Second
@@ -285,27 +302,41 @@ func spawnSubTurn(
 	// blocked delivering results — a deadlock.
 	var semAcquired bool
 	if parentTS.concurrencySem != nil {
-		// Create a timeout context for semaphore acquisition
-		timeoutCtx, cancel := context.WithTimeout(ctx, rtCfg.concurrencyTimeout)
-		defer cancel()
-
+		// An async spawn acknowledges the tool call before its goroutine is
+		// guaranteed to run. The parent turn may end (canceling ctx) in that
+		// window while a slot is still free: taking a free slot must win over
+		// the cancellation, otherwise an already-acknowledged SubTurn is
+		// silently dropped. Only block (and honor ctx) when no slot is free.
 		select {
 		case parentTS.concurrencySem <- struct{}{}:
 			semAcquired = true
-			defer func() {
-				if semAcquired {
-					<-parentTS.concurrencySem
-				}
-			}()
-		case <-timeoutCtx.Done():
-			// Check parent context first - if it was canceled, propagate that error
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
-			}
-			// Otherwise it's our timeout
-			return nil, fmt.Errorf("%w: all %d slots occupied for %v",
-				ErrConcurrencyTimeout, rtCfg.maxConcurrent, rtCfg.concurrencyTimeout)
+		default:
 		}
+
+		if !semAcquired {
+			// Create a timeout context for semaphore acquisition
+			timeoutCtx, cancel := context.WithTimeout(ctx, rtCfg.concurrencyTimeout)
+			defer cancel()
+
+			select {
+			case parentTS.concurrencySem <- struct{}{}:
+				semAcquired = true
+			case <-timeoutCtx.Done():
+				// Check parent context first - if it was canceled, propagate that error
+				if ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
+				// Otherwise it's our timeout
+				return nil, fmt.Errorf("%w: all %d slots occupied for %v",
+					ErrConcurrencyTimeout, rtCfg.maxConcurrent, rtCfg.concurrencyTimeout)
+			}
+		}
+
+		defer func() {
+			if semAcquired {
+				<-parentTS.concurrencySem
+			}
+		}()
 	}
 
 	// 1. Depth limit check
@@ -365,6 +396,11 @@ func spawnSubTurn(
 	// don't pollute the parent's registry.
 	if baseAgent.Tools != nil {
 		agent.Tools = baseAgent.Tools.Clone()
+		if tool, ok := agent.Tools.Get("todo"); ok {
+			if todo, ok := tool.(*tools.TodoTool); ok {
+				defer todo.ClearSession(agent.ID, childID)
+			}
+		}
 	}
 
 	// Create processOptions for the child turn
@@ -384,6 +420,7 @@ func spawnSubTurn(
 		DefaultResponse:         "",
 		EnableSummary:           false,
 		SendResponse:            false,
+		SuppressToolFeedback:    true, // child inherits the parent's chat context; don't leak its tool calls there
 		NoHistory:               true, // SubTurns don't use session history
 		SkipInitialSteeringPoll: true,
 	}
@@ -407,7 +444,7 @@ func spawnSubTurn(
 	childTS.depth = parentTS.depth + 1
 	childTS.parentTurnID = parentTS.turnID
 	childTS.parentTurnState = parentTS
-	childTS.pendingResults = make(chan *tools.ToolResult, 16)
+	childTS.pendingResults = make(chan *tools.ToolResult, subTurnPendingResultsBuffer)
 	childTS.concurrencySem = make(chan struct{}, rtCfg.maxConcurrent)
 	childTS.al = al                  // back-ref for hard abort cascade
 	childTS.session = ephemeralStore // same store as agent.Sessions
@@ -514,6 +551,55 @@ func spawnSubTurn(
 	return result, err
 }
 
+// ====================== Child Join ======================
+
+// Begin implements tools.ChildTracker. The returned func delivers the child's
+// result to this turn and releases the join, so a result is never lost between
+// "child done" and "parent finished".
+func (ts *turnState) Begin() func(*tools.ToolResult) {
+	ts.children.Add(1)
+	return func(result *tools.ToolResult) {
+		defer ts.children.Done()
+		deliverSubTurnResult(ts.al, ts, "", result)
+	}
+}
+
+// joinChildren blocks until every tracked async child has delivered (or ctx
+// ends) and returns their results as prompt messages. It drains pendingResults
+// while waiting, so more than subTurnPendingResultsBuffer children cannot
+// block on a full channel.
+func (ts *turnState) joinChildren(ctx context.Context, filter func(string) string) []providers.Message {
+	done := make(chan struct{})
+	go func() {
+		ts.children.Wait()
+		close(done)
+	}()
+
+	var msgs []providers.Message
+	collect := func(r *tools.ToolResult) {
+		if r != nil && r.ForLLM != "" {
+			msgs = append(msgs, subTurnResultPromptMessage(filter(r.ForLLM)))
+		}
+	}
+	for {
+		select {
+		case r := <-ts.pendingResults:
+			collect(r)
+		case <-done:
+			for {
+				select {
+				case r := <-ts.pendingResults:
+					collect(r)
+				default:
+					return msgs
+				}
+			}
+		case <-ctx.Done():
+			return msgs
+		}
+	}
+}
+
 // ====================== Result Delivery ======================
 
 // deliverSubTurnResult delivers a sub-turn result to the parent turn's pendingResults channel.
@@ -524,19 +610,22 @@ func spawnSubTurn(
 //
 // Delivery behavior:
 //   - If parent turn is still running: attempts to deliver to pendingResults channel
-//   - If channel is full: emits agent.subturn.orphan (result is lost from channel but tracked)
+//   - If channel is full: blocks until space is available or the parent finishes
 //   - If parent turn has finished: emits agent.subturn.orphan (late arrival)
 //
 // Thread safety:
 //   - Reads parent state under lock, then releases lock before channel send
-//   - Small race window exists but is acceptable (worst case: result becomes orphan)
+//   - A send can race with the parent finishing; results that land after the
+//     finish are reported as orphans instead of being silently dropped
 //
 // Event emissions:
 //   - agent.subturn.result_delivered: successful delivery to channel
-//   - agent.subturn.orphan: delivery failed (parent finished or channel full)
+//   - agent.subturn.orphan: delivery failed (parent finished or delivery raced
+//     with the parent finishing)
 func deliverSubTurnResult(al *AgentLoop, parentTS *turnState, childID string, result *tools.ToolResult) {
-	// Let GC clean up the pendingResults channel; parent Finish will no longer close it.
-	// We use defer/recover to catch any unlikely channel panics if it were ever closed.
+	// pendingResults is never closed (Finish only closes finishedChan), so
+	// send-on-closed-channel panics should not happen. The recover remains as
+	// a safety net for unexpected nil/closed channel states.
 	defer func() {
 		if r := recover(); r != nil {
 			logger.RecoverPanicNoExit(r)
@@ -575,8 +664,29 @@ func deliverSubTurnResult(al *AgentLoop, parentTS *turnState, childID string, re
 	// is full), we don't leak this goroutine by blocking forever.
 	select {
 	case resultChan <- result:
+		// The parent may have finished between the isFinished check above and
+		// this send. Such results are no longer consumed by the parent loop, so
+		// report them as orphans instead of silently dropping them.
+		if parentTS.isFinished.Load() {
+			logger.WarnCF("subturn", "parent finished while result was being delivered", map[string]any{
+				"parent_id": parentTS.turnID,
+				"child_id":  childID,
+			})
+			if result != nil && al != nil {
+				al.emitEvent(
+					runtimeevents.KindAgentSubTurnOrphan,
+					parentTS.eventMeta("deliverSubTurnResult", "subturn.orphan"),
+					SubTurnOrphanPayload{
+						ParentTurnID: parentTS.turnID,
+						ChildTurnID:  childID,
+						Reason:       "parent_finished",
+					},
+				)
+			}
+			return
+		}
 		// Successfully delivered
-		if al != nil {
+		if al != nil && result != nil {
 			al.emitEvent(runtimeevents.KindAgentSubTurnResultDelivered,
 				parentTS.eventMeta("deliverSubTurnResult", "subturn.result_delivered"),
 				SubTurnResultDeliveredPayload{ContentLen: len(result.ForLLM)},
@@ -624,82 +734,87 @@ func newEphemeralSession(initial []providers.Message) ephemeralSessionStoreIface
 // ephemeralSessionStoreIface is satisfied by *ephemeralSessionStore.
 // Declared so newEphemeralSession can return a typed interface.
 type ephemeralSessionStoreIface interface {
-	AddMessage(sessionKey, role, content string)
-	AddFullMessage(sessionKey string, msg providers.Message)
-	GetHistory(key string) []providers.Message
-	GetSummary(key string) string
-	SetSummary(key, summary string)
-	SetHistory(key string, history []providers.Message)
-	TruncateHistory(key string, keepLast int)
-	Save(key string) error
+	AddMessage(ctx context.Context, sessionKey, role, content string) error
+	AddFullMessage(ctx context.Context, sessionKey string, msg providers.Message) error
+	GetHistory(ctx context.Context, key string) ([]providers.Message, error)
+	GetSummary(ctx context.Context, key string) (string, error)
+	SetSummary(ctx context.Context, key, summary string) error
+	SetHistory(ctx context.Context, key string, history []providers.Message) error
+	TruncateHistory(ctx context.Context, key string, keepLast int) error
+	Save(ctx context.Context, key string) error
 	ListSessions() []string
 	Close() error
 }
 
-func (e *ephemeralSessionStore) AddMessage(_, role, content string) {
+func (e *ephemeralSessionStore) AddMessage(_ context.Context, _, role, content string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.history = append(e.history, providers.Message{Role: role, Content: content})
 	e.truncateLocked()
+	return nil
 }
 
-func (e *ephemeralSessionStore) AddFullMessage(_ string, msg providers.Message) {
+func (e *ephemeralSessionStore) AddFullMessage(_ context.Context, _ string, msg providers.Message) error {
 	if messageutil.IsTransientAssistantThoughtMessage(msg) {
-		return
+		return nil
 	}
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.history = append(e.history, msg)
 	e.truncateLocked()
+	return nil
 }
 
-func (e *ephemeralSessionStore) GetHistory(_ string) []providers.Message {
+func (e *ephemeralSessionStore) GetHistory(_ context.Context, _ string) ([]providers.Message, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	out := make([]providers.Message, len(e.history))
 	copy(out, e.history)
-	return out
+	return out, nil
 }
 
-func (e *ephemeralSessionStore) GetSummary(_ string) string {
+func (e *ephemeralSessionStore) GetSummary(_ context.Context, _ string) (string, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.summary
+	return e.summary, nil
 }
 
-func (e *ephemeralSessionStore) SetSummary(_, summary string) {
+func (e *ephemeralSessionStore) SetSummary(_ context.Context, _, summary string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.summary = summary
+	return nil
 }
 
-func (e *ephemeralSessionStore) SetHistory(_ string, history []providers.Message) {
+func (e *ephemeralSessionStore) SetHistory(_ context.Context, _ string, history []providers.Message) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	history = messageutil.FilterInvalidHistoryMessages(history)
 	e.history = make([]providers.Message, len(history))
 	copy(e.history, history)
 	e.truncateLocked()
+	return nil
 }
 
-func (e *ephemeralSessionStore) TruncateHistory(_ string, keepLast int) {
+func (e *ephemeralSessionStore) TruncateHistory(_ context.Context, _ string, keepLast int) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if keepLast <= 0 {
 		e.history = nil
-		return
+		return nil
 	}
 
 	if keepLast >= len(e.history) {
-		return
+		return nil
 	}
 	e.history = e.history[len(e.history)-keepLast:]
+	return nil
 }
 
-func (e *ephemeralSessionStore) Save(_ string) error    { return nil }
-func (e *ephemeralSessionStore) Close() error           { return nil }
-func (e *ephemeralSessionStore) ListSessions() []string { return nil }
+func (e *ephemeralSessionStore) Save(_ context.Context, _ string) error { return nil }
+func (e *ephemeralSessionStore) Close() error                           { return nil }
+func (e *ephemeralSessionStore) ListSessions() []string                 { return nil }
 
 func (e *ephemeralSessionStore) truncateLocked() {
 	if len(e.history) > maxEphemeralHistorySize {

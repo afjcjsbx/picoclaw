@@ -1,11 +1,13 @@
 <div align="center">
-<img src="../../assets/logo.webp" alt="PicoClaw" width="512">
+<p align="center">
+  <img src="../../assets/logo.webp" alt="PicoClaw" width="200">
+</p>
 
 <h1>PicoClaw: Assistente de IA Ultra-Eficiente em Go</h1>
 
 <h3>Hardware de $10 · 10MB de RAM · Boot em ms · Let's Go, PicoClaw!</h3>
-  <p>
-    <img src="https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat&logo=go&logoColor=white" alt="Go">
+  <p align="center">
+    <img src="https://img.shields.io/badge/Go-1.27.1+-00ADD8?style=flat&logo=go&logoColor=white" alt="Go">
     <img src="https://img.shields.io/badge/Arch-x86__64%2C%20ARM64%2C%20MIPS%2C%20RISC--V%2C%20LoongArch-blue" alt="Hardware">
     <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
     <br>
@@ -18,7 +20,9 @@
     <a href="https://discord.gg/V4sAZ9XWpN"><img src="https://img.shields.io/badge/Discord-Community-4c60eb?style=flat&logo=discord&logoColor=white" alt="Discord"></a>
   </p>
 
-[中文](README.zh.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | **Português** | [Tiếng Việt](README.vi.md) | [Français](README.fr.md) | [Italiano](README.it.md) | [Bahasa Indonesia](README.id.md) | [Malay](README.ms.md) | [English](../../README.md)
+<p align="center">
+  <a href="README.zh.md">中文</a> | <a href="README.ja.md">日本語</a> | <a href="README.ko.md">한국어</a> | <strong>Português</strong> | <a href="README.vi.md">Tiếng Việt</a> | <a href="README.fr.md">Français</a> | <a href="README.it.md">Italiano</a> | <a href="README.id.md">Bahasa Indonesia</a> | <a href="README.ms.md">Malay</a> | <a href="../../README.md">English</a>
+</p>
 
 </div>
 
@@ -56,6 +60,13 @@
 
 ## 📢 Novidades
 
+2026-09-29 🚀 **[v0.4.0 Released!](https://github.com/afjcjsbx/picoclaw/releases/tag/v0.4.0)** This substantial release adds MCP CLI management and Web UI configuration, native Anthropic Messages API support, configurable web search (including Keenable and Kagi), configurable logging and virtual models, cross-platform serial-tool support, enhanced hooks and isolation, plus numerous channel, provider, security, and build fixes.
+
+2026-09-28 🌱 **Project revived!** Development has resumed and will continue to be actively maintained in this fork.
+
+<details>
+<summary>Earlier news...</summary>
+
 2026-05-11 🛒 **LicheeRV-Claw no AliExpress!** Agora você pode comprar o LicheeRV-Claw no [AliExpress](https://www.aliexpress.com/item/1005006519668532.html), facilitando testar o PicoClaw em hardware RISC-V compacto.
 
 <p align="center">
@@ -64,7 +75,7 @@
   </a>
 </p>
 
-2026-03-31 📱 **Suporte Android!** PicoClaw agora roda no Android! Baixe o APK em [picoclaw.io](https://picoclaw.io/download)
+2026-03-31 📱 **Suporte Android!** PicoClaw agora roda no Android! Baixe o APK em [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases)
 
 2026-03-25 🚀 **v0.2.4 Lançada!** Reformulação da arquitetura Agent (SubTurn, Hooks, Steering, EventBus), integração WeChat/WeCom, fortalecimento de segurança (.security.yml, filtragem de dados sensíveis), novos providers (AWS Bedrock, Azure, Xiaomi MiMo) e 35 correções de bugs. O PicoClaw atingiu **26K Stars**!
 
@@ -74,12 +85,9 @@
 
 2026-02-28 📦 **v0.2.0** lançada com suporte a Docker Compose e Web UI Launcher.
 
-<details>
-<summary>Notícias anteriores...</summary>
-
 2026-02-26 🎉 O PicoClaw atinge **20K Stars** em apenas 17 dias! Orquestração automática de channels e interfaces de capacidade estão disponíveis.
 
-2026-02-16 🎉 O PicoClaw ultrapassa 12K Stars em uma semana! Funções de mantenedor da comunidade e [Roadmap](../../ROADMAP.md) lançados oficialmente.
+2026-02-16 🎉 O PicoClaw ultrapassa 12K Stars em uma semana! Funções de mantenedor da comunidade e Roadmap lançados oficialmente.
 
 2026-02-13 🎉 O PicoClaw ultrapassa 5000 Stars em 4 dias! Roadmap do projeto e grupos de desenvolvedores em andamento.
 
@@ -120,7 +128,7 @@ _*Builds recentes podem usar 10-20MB devido a merges rápidos de PRs. Otimizaç�
 
 </div>
 
-> **[Lista de Compatibilidade de Hardware](../guides/hardware-compatibility.pt-br.md)** — Veja todas as placas testadas, de RISC-V de $5 ao Raspberry Pi e celulares Android. Sua placa não está listada? Envie um PR!
+> **[Lista de Compatibilidade de Hardware](../guides/hardware-compatibility.md)** — Veja todas as placas testadas, de RISC-V de $5 ao Raspberry Pi e celulares Android. Sua placa não está listada? Envie um PR!
 
 <p align="center">
 <img src="../../assets/hardware-banner.jpg" alt="PicoClaw Hardware Compatibility" width="100%">
@@ -162,23 +170,19 @@ O PicoClaw pode ser implantado em praticamente qualquer dispositivo Linux!
 
 ## 📦 Instalação
 
-### Download pelo picoclaw.io (Recomendado)
-
-Acesse **[picoclaw.io](https://picoclaw.io)** — o site oficial detecta automaticamente sua plataforma e fornece download com um clique. Não é necessário selecionar a arquitetura manualmente.
-
 ### Download do binário pré-compilado
 
-Alternativamente, baixe o binário para sua plataforma na página de [GitHub Releases](https://github.com/sipeed/picoclaw/releases).
+Alternativamente, baixe o binário para sua plataforma na página de [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases).
 
 ### Compilar a partir do código-fonte (para desenvolvimento)
 
 Pré-requisitos:
 
-- Go 1.25+
+- Go 1.27.1+
 - Node.js 22+ e pnpm 10.33.0+ para builds do Web UI / launcher
 
 ```bash
-git clone https://github.com/sipeed/picoclaw.git
+git clone https://github.com/afjcjsbx/picoclaw.git
 
 cd picoclaw
 make deps
@@ -212,7 +216,7 @@ O WebUI Launcher fornece uma interface baseada em navegador para configuração 
 
 **Opção 1: Duplo clique (Desktop)**
 
-Após baixar de [picoclaw.io](https://picoclaw.io), dê duplo clique em `picoclaw-launcher` (ou `picoclaw-launcher.exe` no Windows). Seu navegador abrirá automaticamente em `http://localhost:18800`.
+Após baixar de [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases), dê duplo clique em `picoclaw-launcher` (ou `picoclaw-launcher.exe` no Windows). Seu navegador abrirá automaticamente em `http://localhost:18800`.
 
 **Opção 2: Linha de comando**
 
@@ -242,7 +246,7 @@ Para documentação detalhada do WebUI, veja [docs.picoclaw.io](https://docs.pic
 
 ```bash
 # 1. Clone este repositório
-git clone https://github.com/sipeed/picoclaw.git
+git clone https://github.com/afjcjsbx/picoclaw.git
 cd picoclaw
 
 # 2. Primeira execução — gera automaticamente docker/data/config.json e encerra
@@ -315,7 +319,7 @@ Pré-visualização:
   </tr>
 </table>
 
-Baixe o APK de [picoclaw.io](https://picoclaw.io/download/) e instale diretamente. Sem necessidade de Termux!
+Baixe o APK de [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases) e instale diretamente. Sem necessidade de Termux!
 
 **Opção 2: Termux**
 
@@ -327,7 +331,7 @@ Baixe o APK de [picoclaw.io](https://picoclaw.io/download/) e instale diretament
 
 ```bash
 # Baixar a versão mais recente
-wget https://github.com/sipeed/picoclaw/releases/latest/download/picoclaw_Linux_arm64.tar.gz
+wget https://github.com/afjcjsbx/picoclaw/releases/latest/download/picoclaw_Linux_arm64.tar.gz
 tar xzf picoclaw_Linux_arm64.tar.gz
 pkg install proot
 termux-chroot ./picoclaw onboard   # chroot fornece um layout padrão de sistema de arquivos Linux
@@ -442,7 +446,7 @@ O PicoClaw suporta mais de 30 providers de LLM através da configuração `model
 }
 ```
 
-Para detalhes completos de configuração de providers, veja [Providers & Models](../guides/providers.pt-br.md).
+Para detalhes completos de configuração de providers, veja [Providers & Models](../guides/providers.md).
 
 </details>
 
@@ -454,8 +458,8 @@ Converse com seu PicoClaw por meio de mais de 17 plataformas de mensagens:
 |---------|--------------|-----------|------|
 | **Telegram** | Fácil (bot token) | Long polling | [Guia](../channels/telegram/README.pt-br.md) |
 | **Discord** | Fácil (bot token + intents) | WebSocket | [Guia](../channels/discord/README.pt-br.md) |
-| **WhatsApp** | Fácil (QR scan ou bridge URL) | Nativo / Bridge | [Guia](../guides/chat-apps.pt-br.md#whatsapp) |
-| **Weixin** | Fácil (scan QR nativo) | iLink API | [Guia](../guides/chat-apps.pt-br.md#weixin) |
+| **WhatsApp** | Fácil (QR scan ou bridge URL) | Nativo / Bridge | [Guia](../guides/chat-apps.md#whatsapp) |
+| **Weixin** | Fácil (scan QR nativo) | iLink API | [Guia](../guides/chat-apps.md#weixin) |
 | **QQ** | Fácil (AppID + AppSecret) | WebSocket | [Guia](../channels/qq/README.pt-br.md) |
 | **Slack** | Fácil (bot + app token) | Socket Mode | [Guia](../channels/slack/README.pt-br.md) |
 | **Matrix** | Médio (homeserver + token) | Sync API | [Guia](../channels/matrix/README.pt-br.md) |
@@ -463,7 +467,7 @@ Converse com seu PicoClaw por meio de mais de 17 plataformas de mensagens:
 | **Feishu / Lark** | Médio (App ID + Secret) | WebSocket/SDK | [Guia](../channels/feishu/README.pt-br.md) |
 | **LINE** | Médio (credenciais + webhook) | Webhook | [Guia](../channels/line/README.pt-br.md) |
 | **WeCom** | Fácil (login QR ou manual) | WebSocket | [Guia](../channels/wecom/README.pt-br.md) |
-| **IRC** | Médio (servidor + nick) | Protocolo IRC | [Guia](../guides/chat-apps.pt-br.md#irc) |
+| **IRC** | Médio (servidor + nick) | Protocolo IRC | [Guia](../guides/chat-apps.md#irc) |
 | **OneBot** | Médio (WebSocket URL) | OneBot v11 | [Guia](../channels/onebot/README.pt-br.md) |
 | **MaixCam** | Fácil (habilitar) | TCP socket | [Guia](../channels/maixcam/README.pt-br.md) |
 | **Pico** | Fácil (habilitar) | Protocolo nativo | Integrado |
@@ -471,9 +475,9 @@ Converse com seu PicoClaw por meio de mais de 17 plataformas de mensagens:
 
 > Todos os channels baseados em webhook compartilham um único servidor HTTP do Gateway (`gateway.host`:`gateway.port`, padrão `127.0.0.1:18790`). O Feishu usa modo WebSocket/SDK e não utiliza o servidor HTTP compartilhado.
 
-> A verbosidade dos logs é controlada por `gateway.log_level` (padrão: `warn`). Valores suportados: `debug`, `info`, `warn`, `error`, `fatal`. Também pode ser definido via `PICOCLAW_LOG_LEVEL`. Veja [Configuração](../guides/configuration.pt-br.md#nível-de-log-do-gateway) para detalhes.
+> A verbosidade dos logs é controlada por `gateway.log_level` (padrão: `warn`). Valores suportados: `debug`, `info`, `warn`, `error`, `fatal`. Também pode ser definido via `PICOCLAW_LOG_LEVEL`. Veja [Configuração](../guides/configuration.md#gateway-log-level) para detalhes.
 
-Para instruções detalhadas de configuração de channels, veja [Configuração de Apps de Chat](../guides/chat-apps.pt-br.md).
+Para instruções detalhadas de configuração de channels, veja [Configuração de Apps de Chat](../guides/chat-apps.md).
 
 ## 🔧 Ferramentas
 
@@ -493,7 +497,7 @@ O PicoClaw pode pesquisar na web para fornecer informações atualizadas. Config
 
 ### ⚙️ Outras Ferramentas
 
-O PicoClaw inclui ferramentas integradas para operações de arquivo, execução de código, agendamento e mais. Veja [Configuração de Ferramentas](../reference/tools_configuration.pt-br.md) para detalhes.
+O PicoClaw inclui ferramentas integradas para operações de arquivo, execução de código, agendamento e mais. Veja [Configuração de Ferramentas](../reference/tools_configuration.md) para detalhes.
 
 ## 🎯 Skills
 
@@ -523,11 +527,13 @@ Adicione ao seu `config.json`:
 }
 ```
 
-Para mais detalhes, veja [Configuração de Ferramentas - Skills](../reference/tools_configuration.pt-br.md#skills-tool).
+Para mais detalhes, veja [Configuração de Ferramentas - Skills](../tools/skills.md).
 
 ## 🔗 MCP (Model Context Protocol)
 
 O PicoClaw suporta nativamente o [MCP](https://modelcontextprotocol.io/) — conecte qualquer servidor MCP para estender as capacidades do seu Agent com ferramentas externas e fontes de dados.
+
+Como o PicoClaw é um assistente leve, a melhor opção é usar servidores MCP remotos. Para servidores locais, prefira binários compilados nativamente e evite `npx`, `uvx` ou outros gerenciadores de dependências pesados.
 
 ```json
 {
@@ -535,10 +541,15 @@ O PicoClaw suporta nativamente o [MCP](https://modelcontextprotocol.io/) — con
     "mcp": {
       "enabled": true,
       "servers": {
-        "filesystem": {
+        "browserbase": {
           "enabled": true,
-          "command": "npx",
-          "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+          "deferred": false,
+          "command": "",
+          "type": "http",
+          "url": "https://mcp.browserbase.com/mcp?browserbaseApiKey=API_KEY",
+          "headers": {
+            "BROWSERBASE_PROJECT_ID": "********"
+          }
         }
       }
     }
@@ -546,7 +557,7 @@ O PicoClaw suporta nativamente o [MCP](https://modelcontextprotocol.io/) — con
 }
 ```
 
-Para configuração completa de MCP (transportes stdio, SSE, HTTP, Tool Discovery), veja [Configuração de Ferramentas - MCP](../reference/tools_configuration.pt-br.md#mcp-tool).
+Para configuração completa de MCP (transportes stdio, SSE, HTTP, Tool Discovery), veja [Configuração de Ferramentas - MCP](../tools/mcp.md).
 
 ## <img src="../../assets/clawdchat-icon.png" width="24" height="24" alt="ClawdChat"> Junte-se à Rede Social de Agents
 
@@ -589,23 +600,23 @@ Para guias detalhados além deste README:
 
 | Tópico | Descrição |
 |--------|-----------|
-| [Docker & Início Rápido](../guides/docker.pt-br.md) | Configuração do Docker Compose, modos Launcher/Agent |
-| [Apps de Chat](../guides/chat-apps.pt-br.md) | Guias de configuração para todos os 17+ channels |
-| [Configuração](../guides/configuration.pt-br.md) | Variáveis de ambiente, layout do workspace, sandbox de segurança |
-| [Providers & Models](../guides/providers.pt-br.md) | 30+ providers de LLM, roteamento de modelos, configuração de model_list |
-| [Spawn & Tarefas Assíncronas](../guides/spawn-tasks.pt-br.md) | Tarefas rápidas, tarefas longas com spawn, orquestração assíncrona de sub-agents |
+| [Docker & Início Rápido](../guides/docker.md) | Configuração do Docker Compose, modos Launcher/Agent |
+| [Apps de Chat](../guides/chat-apps.md) | Guias de configuração para todos os 17+ channels |
+| [Configuração](../guides/configuration.md) | Variáveis de ambiente, layout do workspace, sandbox de segurança |
+| [Providers & Models](../guides/providers.md) | 30+ providers de LLM, roteamento de modelos, configuração de model_list |
+| [Spawn & Tarefas Assíncronas](../guides/spawn-tasks.md) | Tarefas rápidas, tarefas longas com spawn, orquestração assíncrona de sub-agents |
 | [Hooks](../architecture/hooks/README.md) | Sistema de hooks orientado a eventos: observadores, interceptores, hooks de aprovação |
 | [Steering](../architecture/steering.md) | Injetar mensagens em um loop de agente em execução |
 | [SubTurn](../architecture/subturn.md) | Coordenação de subagentes, controle de concorrência, ciclo de vida |
-| [Solução de Problemas](../operations/troubleshooting.pt-br.md) | Problemas comuns e soluções |
-| [Configuração de Ferramentas](../reference/tools_configuration.pt-br.md) | Habilitar/desabilitar por ferramenta, políticas de exec, MCP, Skills |
-| [Compatibilidade de Hardware](../guides/hardware-compatibility.pt-br.md) | Placas testadas, requisitos mínimos |
+| [Solução de Problemas](../operations/troubleshooting.md) | Problemas comuns e soluções |
+| [Configuração de Ferramentas](../reference/tools_configuration.md) | Habilitar/desabilitar por ferramenta, políticas de exec, MCP, Skills |
+| [Compatibilidade de Hardware](../guides/hardware-compatibility.md) | Placas testadas, requisitos mínimos |
 
 ## 🤝 Contribuir & Roadmap
 
 PRs são bem-vindos! O código-fonte é intencionalmente pequeno e legível.
 
-Veja nosso [Roadmap da Comunidade](https://github.com/sipeed/picoclaw/issues/988) e [CONTRIBUTING.md](../../CONTRIBUTING.md) para diretrizes.
+Veja nosso [Roadmap da Comunidade](https://github.com/afjcjsbx/picoclaw/issues/988) e [CONTRIBUTING.md](../../CONTRIBUTING.md) para diretrizes.
 
 Grupo de desenvolvedores em formação, entre após seu primeiro PR mesclado!
 

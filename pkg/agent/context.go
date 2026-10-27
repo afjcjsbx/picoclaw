@@ -211,7 +211,7 @@ func formatToolDiscoveryRule(useBM25, useRegex bool) string {
 	}
 
 	return fmt.Sprintf(
-		`5. **Tool Discovery** - Your visible tools are limited to save memory, but a vast hidden library exists. If you lack the right tool for a task, BEFORE giving up, you MUST search using the %s tool. Do not refuse a request unless the search returns nothing. Found tools will temporarily unlock for your next turn.`,
+		`5. **Tool Discovery** - Some MCP tools may be deferred and absent from your visible tool list. If a needed capability is not visible, search using the %s tool before giving up. Found tools will temporarily unlock for your next turn.`,
 		strings.Join(toolNames, " or "),
 	)
 }
@@ -287,7 +287,7 @@ func (cb *ContextBuilder) buildSystemPromptParts(opts systemPromptBuildOptions) 
 			"read_file",
 		)
 		if opts.IncludeToolUseRule && readFileAllowed {
-			skillIntro += " To use a skill, read its SKILL.md file using the read_file tool."
+			skillIntro += " To use a workspace skill, read its SKILL.md file using the read_file tool; plugin skills are read with their bundled resource tool instead."
 		}
 		add(PromptPart{
 			ID:     "capability.skill_catalog",
@@ -443,35 +443,13 @@ func (cb *ContextBuilder) buildSkillsSummary(allowed []string) string {
 		if _, ok := allowedSet[strings.ToLower(strings.TrimSpace(s.Name))]; !ok {
 			continue
 		}
-		lines = append(lines, "  <skill>")
-		lines = append(lines, fmt.Sprintf("    <name>%s</name>", xmlEscapeForPrompt(s.Name)))
-		lines = append(
-			lines,
-			fmt.Sprintf("    <description>%s</description>", xmlEscapeForPrompt(s.Description)),
-		)
-		lines = append(
-			lines,
-			fmt.Sprintf("    <location>%s</location>", xmlEscapeForPrompt(s.Path)),
-		)
-		lines = append(lines, fmt.Sprintf("    <source>%s</source>", xmlEscapeForPrompt(s.Source)))
-		lines = append(lines, "  </skill>")
+		lines = append(lines, s.CatalogLines()...)
 	}
 	if len(lines) == 1 {
 		return ""
 	}
 	lines = append(lines, "</skills>")
 	return strings.Join(lines, "\n")
-}
-
-func xmlEscapeForPrompt(s string) string {
-	replacer := strings.NewReplacer(
-		"&", "&amp;",
-		"<", "&lt;",
-		">", "&gt;",
-		"\"", "&quot;",
-		"'", "&apos;",
-	)
-	return replacer.Replace(s)
 }
 
 // EstimateSystemTokens estimates the token count of the full system message
@@ -539,6 +517,12 @@ func (cb *ContextBuilder) sourcePaths() []string {
 	agentDefinition := cb.LoadAgentDefinition()
 	paths := agentDefinition.trackedPaths(cb.workspace)
 	paths = append(paths, filepath.Join(cb.workspace, "memory", "MEMORY.md"))
+	// Daily notes are folded into the cached system prompt via
+	// GetMemoryContext. Track the exact files it reads so edits and newly
+	// created notes invalidate the cache like MEMORY.md does.
+	if cb.memory != nil {
+		paths = append(paths, cb.memory.RecentDailyNotePaths(recentDailyNotesDays)...)
+	}
 	return uniquePaths(paths)
 }
 
@@ -799,10 +783,34 @@ func formatCurrentSenderLine(senderID, senderDisplayName string) string {
 	}
 }
 
+// warnTZUnsetOnce limits the unset-TZ warning to one per process: the date line
+// is rebuilt on every LLM request.
+var warnTZUnsetOnce sync.Once
+
+// currentDateLine renders the date and zone without the time of day, so the
+// system prompt stays byte-identical all day and LLM prompt caches keep hitting.
+// The zone name comes only from the TZ variable, e.g.
+// "Tuesday, October 20, 2026 (Europe/Rome, CEST, UTC+02:00)".
+func currentDateLine(now time.Time) string {
+	abbr, _ := now.Zone()
+	zone := fmt.Sprintf("%s, UTC%s", abbr, now.Format("-07:00"))
+	if tz := strings.TrimSpace(os.Getenv("TZ")); tz != "" {
+		zone = tz + ", " + zone
+	} else {
+		warnTZUnsetOnce.Do(func() {
+			logger.WarnCF(
+				"agent",
+				"TZ environment variable is not set; the system prompt date has no time zone name",
+				nil,
+			)
+		})
+	}
+	return fmt.Sprintf("%s (%s)", now.Format("Monday, January 2, 2006"), zone)
+}
+
 func (cb *ContextBuilder) buildDynamicContext(
 	channel, chatID, senderID, senderDisplayName string,
 ) string {
-	now := time.Now().Format("2006-01-02 15:04 (Monday)")
 	rt := fmt.Sprintf(
 		"%s %s, Go %s, %d logical CPUs",
 		runtime.GOOS, runtime.GOARCH, runtime.Version(), runtime.NumCPU(),
@@ -812,7 +820,7 @@ func (cb *ContextBuilder) buildDynamicContext(
 	}
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "## Current Time\n%s\n\n## Runtime\n%s", now, rt)
+	fmt.Fprintf(&sb, "## Current Date\n%s\n\n## Runtime\n%s", currentDateLine(time.Now()), rt)
 
 	if channel != "" && chatID != "" {
 		fmt.Fprintf(&sb, "\n\n## Current Session\nChannel: %s\nChat ID: %s", channel, chatID)

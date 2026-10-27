@@ -80,6 +80,10 @@ When `enabled` is `true`, every tool call sends a short message to the chat befo
 {"query": "picoclaw release notes"}
 ```
 
+On channels that cannot edit messages (for example Weixin, QQ, Slack or WhatsApp), every feedback is a new chat message. To keep the chat readable there, the tool calls of one model response are merged into a single message that lists every tool with its arguments, and an explanation that repeats the previous feedback of the same turn is left out. Channels that update one progress message in place (Telegram, Discord, Feishu, Matrix) are unchanged.
+
+Weixin also limits how many messages a bot may send after each user message (about 10). The Weixin channel counts every message it sends after the latest user message, of any kind. Tool feedback is only sent while fewer than 6 messages have gone out; the next one is replaced by a single "⏳ More steps are running …" notice, and later feedback is dropped until the user writes again. This keeps at least 3 messages for the final reply. A reply long enough to be split into more than 3 parts, or extra media sent in the same turn, can still run past the limit.
+
 
 ### Options
 

@@ -9,6 +9,7 @@ func checkCommand() Definition {
 	return Definition{
 		Name:        "check",
 		Description: "Check channel availability",
+		ReadOnly:    true,
 		SubCommands: []SubCommand{
 			{
 				Name:        "channel",

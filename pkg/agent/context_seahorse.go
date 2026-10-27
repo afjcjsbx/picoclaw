@@ -1,4 +1,4 @@
-//go:build !mipsle && !netbsd && !(freebsd && arm)
+//go:build !no_seahorse && !mipsle && !netbsd && !(freebsd && arm)
 
 package agent
 
@@ -6,13 +6,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"sync"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/config"
+	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
 	"github.com/sipeed/picoclaw/pkg/seahorse"
 	"github.com/sipeed/picoclaw/pkg/session"
+	"github.com/sipeed/picoclaw/pkg/session/pruner"
 	"github.com/sipeed/picoclaw/pkg/tokenizer"
 )
 
@@ -21,6 +26,14 @@ type seahorseContextManager struct {
 	engine   *seahorse.Engine
 	sessions session.SessionStore // for startup bootstrap
 	al       *AgentLoop           // for resolving the agent that owns a session
+
+	warnUnprunable sync.Once // log once when a session store cannot be pruned
+
+	pruneMu   sync.Mutex         // guards stopPrune and pruneDone
+	stopPrune context.CancelFunc // stops the background prune loop on Close
+	pruneDone chan struct{}      // closed when the prune loop has exited
+	closeOnce sync.Once
+	closeErr  error
 }
 
 // newSeahorseContextManager creates a seahorse-backed ContextManager.
@@ -35,7 +48,11 @@ func newSeahorseContextManager(_ json.RawMessage, al *AgentLoop) (ContextManager
 	dbPath := agent.Workspace + "/sessions/seahorse.db"
 
 	// Create CompleteFn from provider
-	completeFn := providerToCompleteFn(agent.Provider, agent.Model)
+	completeFn := providerToCompleteFn(
+		agent.Provider,
+		resolvedCandidateModel(agent.Candidates, agent.Model),
+		llmRetryFromConfig(al.cfg),
+	)
 
 	// Create engine
 	engine, err := seahorse.NewEngine(seahorse.Config{
@@ -49,6 +66,20 @@ func newSeahorseContextManager(_ json.RawMessage, al *AgentLoop) (ContextManager
 		engine:   engine,
 		sessions: agent.Sessions,
 		al:       al,
+	}
+
+	// Prune old sessions before the (expensive) startup bootstrap so the
+	// gateway becomes ready faster once history has grown large. Pruning is
+	// opt-in and disabled by default.
+	if al.cfg != nil {
+		pruneCfg := al.cfg.Session.Prune
+		if pruneCfg.Enabled && pruneCfg.IsActive() {
+			if stores, ok := mgr.pruneStores(); ok {
+				pruner.Run(context.Background(), engine, stores, pruneCfg)
+
+				mgr.startPruneLoop(pruneCfg, time.Duration(pruneCfg.EffectiveCheckIntervalMinutes())*time.Minute)
+			}
+		}
 	}
 
 	// Register seahorse tools with the agent's tool registry
@@ -67,11 +98,126 @@ func newSeahorseContextManager(_ json.RawMessage, al *AgentLoop) (ContextManager
 	return mgr, nil
 }
 
-// providerToCompleteFn wraps providers.LLMProvider as a seahorse.CompleteFn.
-func providerToCompleteFn(provider providers.LLMProvider, model string) seahorse.CompleteFn {
+// pruneStores returns the session store of every agent. The seahorse database
+// is shared, but each agent keeps its own JSONL store, so pruning must reach
+// all of them or routed agents would lose their seahorse context while their
+// JSONL history stays behind. The registry is re-read on every call so agents
+// added after startup are covered.
+//
+// ok is false when some agent's store cannot delete sessions. Pruning is then
+// skipped altogether: removing only the seahorse side would not shrink the
+// history (the next startup bootstrap re-imports it from the JSONL files) and
+// would throw away the retrieval context of the sessions concerned.
+func (m *seahorseContextManager) pruneStores() (stores []pruner.Store, ok bool) {
+	ok = true
+	add := func(store session.SessionStore) {
+		if store == nil {
+			return
+		}
+		ps := asPruneStore(store)
+		if ps == nil {
+			ok = false
+			return
+		}
+		stores = append(stores, ps)
+	}
+	add(m.sessions)
+	if m.al != nil {
+		if registry := m.al.GetRegistry(); registry != nil {
+			ids := registry.ListAgentIDs()
+			sort.Strings(ids)
+			for _, id := range ids {
+				if agent, found := registry.GetAgent(id); found && agent != nil {
+					add(agent.Sessions)
+				}
+			}
+		}
+	}
+	if !ok {
+		m.warnUnprunable.Do(func() {
+			logger.WarnCF("session-prune",
+				"Session pruning is enabled but a session store cannot delete sessions; pruning skipped",
+				nil)
+		})
+		return nil, false
+	}
+	return stores, true
+}
+
+// asPruneStore returns the session store as a pruning store when its dynamic
+// type supports deletion (JSONLBackend and SessionManager do).
+func asPruneStore(store session.SessionStore) pruner.Store {
+	if store == nil {
+		return nil
+	}
+	if s, ok := store.(pruner.Store); ok {
+		return s
+	}
+	return nil
+}
+
+// startPruneLoop runs a prune pass every interval in the background until Close.
+func (m *seahorseContextManager) startPruneLoop(cfg config.SessionPruneConfig, interval time.Duration) {
+	if interval <= 0 {
+		interval = time.Hour
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+
+	m.pruneMu.Lock()
+	m.stopPrune = cancel
+	m.pruneDone = done
+	m.pruneMu.Unlock()
+
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if stores, ok := m.pruneStores(); ok {
+					pruner.Run(ctx, m.engine, stores, cfg)
+				}
+			}
+		}
+	}()
+}
+
+// Close stops the background prune loop, waits for a pass that is already
+// running to unwind (so it never touches a closed database) and releases the
+// seahorse engine. It is safe to call more than once.
+func (m *seahorseContextManager) Close() error {
+	m.pruneMu.Lock()
+	stop, done := m.stopPrune, m.pruneDone
+	m.stopPrune, m.pruneDone = nil, nil
+	m.pruneMu.Unlock()
+
+	if stop != nil {
+		stop()
+	}
+	if done != nil {
+		<-done
+	}
+
+	m.closeOnce.Do(func() {
+		if m.engine != nil {
+			m.closeErr = m.engine.Close()
+		}
+	})
+	return m.closeErr
+}
+
+// providerToCompleteFn wraps providers.LLMProvider as a seahorse.CompleteFn. A
+// transient upstream failure is retried with backoff, since seahorse does not
+// retry a failed summarization itself.
+func providerToCompleteFn(provider providers.LLMProvider, model string, retry llmRetry) seahorse.CompleteFn {
 	return func(ctx context.Context, prompt string, opts seahorse.CompleteOptions) (string, error) {
-		resp, err := provider.Chat(
+		resp, err := chatRetryingTransient(
 			ctx,
+			provider,
 			[]providers.Message{{Role: "user", Content: prompt}},
 			nil, // no tools for summarization
 			model,
@@ -80,6 +226,7 @@ func providerToCompleteFn(provider providers.LLMProvider, model string) seahorse
 				"temperature":      opts.Temperature,
 				"prompt_cache_key": "seahorse",
 			},
+			retry,
 		)
 		if err != nil {
 			return "", err
@@ -115,6 +262,10 @@ func (m *seahorseContextManager) Assemble(ctx context.Context, req *AssembleRequ
 	if err != nil {
 		return nil, fmt.Errorf("seahorse assemble: %w", err)
 	}
+	if result == nil {
+		// The engine returns nil for ignored session patterns (heartbeat).
+		return &AssembleResponse{}, nil
+	}
 
 	history := seahorseToProviderMessages(result)
 
@@ -131,18 +282,69 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 		return nil
 	}
 
-	// For retry (LLM overflow), use aggressive CompactUntilUnder to guarantee
-	// context shrinks below budget (spec lines ~1410).
-	if req.Reason == ContextCompressReasonRetry && req.Budget > 0 {
-		_, err := m.engine.CompactUntilUnder(ctx, req.SessionKey, req.Budget)
-		return err
+	if req.Reason == ContextCompressReasonManual {
+		result, err := m.engine.CompactNow(ctx, req.SessionKey, req.Instructions)
+		if err != nil {
+			return err
+		}
+		if result.LeafSummaries+result.CondensedSummaries == 0 {
+			return ErrNothingToCompact
+		}
+		m.notifyCompaction(ctx, req, result)
+		return nil
 	}
 
-	_, err := m.engine.Compact(ctx, req.SessionKey, seahorse.CompactInput{
-		Force:  req.Reason == ContextCompressReasonRetry,
-		Budget: &req.Budget,
-	})
-	return err
+	// For retry (LLM overflow), use aggressive CompactUntilUnder to guarantee
+	// context shrinks below budget (spec lines ~1410).
+	var (
+		result *seahorse.CompactResult
+		err    error
+	)
+	if req.Reason == ContextCompressReasonRetry && req.Budget > 0 {
+		result, err = m.engine.CompactUntilUnder(ctx, req.SessionKey, req.Budget)
+	} else {
+		result, err = m.engine.Compact(ctx, req.SessionKey, seahorse.CompactInput{
+			Force:  req.Reason == ContextCompressReasonRetry,
+			Budget: &req.Budget,
+		})
+	}
+	if err != nil {
+		return err
+	}
+	m.notifyCompaction(ctx, req, result)
+	if req.Reason == ContextCompressReasonThreshold &&
+		(result == nil || result.LeafSummaries+result.CondensedSummaries == 0) {
+		return ErrNothingToCompact
+	}
+	return nil
+}
+
+// notifyCompaction emits the summarization runtime event and reports a notice
+// to the session's channel when seahorse actually created summaries.
+func (m *seahorseContextManager) notifyCompaction(
+	ctx context.Context,
+	req *CompactRequest,
+	result *seahorse.CompactResult,
+) {
+	if m.al == nil || result == nil {
+		return
+	}
+	if result.LeafSummaries+result.CondensedSummaries <= 0 {
+		return
+	}
+	m.al.emitEvent(
+		runtimeevents.KindAgentSessionSummarize,
+		m.al.newTurnEventScope(
+			m.al.eventAgentIDForSession(ctx, req.SessionKey),
+			req.SessionKey,
+			nil,
+		).meta(0, "seahorseCompact", "turn.session.summarize"),
+		SessionSummarizePayload{
+			SummarizedMessages: result.LeafSummaries + result.CondensedSummaries,
+		},
+	)
+	content := formatContextSummaryCounts(result.LeafSummaries, result.CondensedSummaries)
+	m.al.notifyContextFeedbackFromCtx(ctx, req.SessionKey, content)
 }
 
 // Ingest records a message into seahorse SQLite.
@@ -171,9 +373,9 @@ func (m *seahorseContextManager) Clear(ctx context.Context, sessionKey string) e
 		}
 	}
 	if sessions != nil {
-		sessions.SetHistory(sessionKey, []providers.Message{})
-		sessions.SetSummary(sessionKey, "")
-		return sessions.Save(sessionKey)
+		warnSessionStoreError(sessionKey, "set history", sessions.SetHistory(ctx, sessionKey, []providers.Message{}))
+		warnSessionStoreError(sessionKey, "set summary", sessions.SetSummary(ctx, sessionKey, ""))
+		return sessions.Save(ctx, sessionKey)
 	}
 	return nil
 }
@@ -184,7 +386,11 @@ func (m *seahorseContextManager) bootstrapSession(ctx context.Context, sessionKe
 		return
 	}
 
-	history := m.sessions.GetHistory(sessionKey)
+	history, err := m.sessions.GetHistory(ctx, sessionKey)
+	if err != nil {
+		warnSessionStoreError(sessionKey, "get history", err)
+		history = nil
+	}
 	if len(history) == 0 {
 		return
 	}
