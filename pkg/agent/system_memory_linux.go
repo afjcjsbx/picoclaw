@@ -9,5 +9,5 @@ func totalSystemMemory() uint64 {
 	if err := unix.Sysinfo(&info); err != nil {
 		return 0
 	}
-	return uint64(info.Totalram) * uint64(info.Unit)
+	return info.Totalram * uint64(info.Unit)
 }
