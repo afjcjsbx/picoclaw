@@ -404,7 +404,7 @@ func parseChallenge(payload []byte) (*Challenge, error) {
 
 	challenge := &Challenge{
 		Version:    int(wire.Version),
-		Error:      cleanText(string(wire.Error), maxErrorLength),
+		Error:      CleanText(string(wire.Error), maxErrorLength, false),
 		Resource:   parseResourceInfo(wire.Resource),
 		Accepts:    make([]Requirement, 0, len(wire.Accepts)),
 		Extensions: wire.Extensions,
@@ -444,15 +444,15 @@ func normalizeRequirement(wire wireRequirement) Requirement {
 	}
 
 	return Requirement{
-		Scheme:            cleanText(string(wire.Scheme), maxLabelLength),
-		Network:           cleanText(string(wire.Network), maxLabelLength),
-		Amount:            cleanText(amount, maxLabelLength),
-		Asset:             cleanText(string(wire.Asset), maxAddressLength),
-		PayTo:             cleanText(string(wire.PayTo), maxAddressLength),
+		Scheme:            CleanText(string(wire.Scheme), maxLabelLength, false),
+		Network:           CleanText(string(wire.Network), maxLabelLength, false),
+		Amount:            CleanText(amount, maxLabelLength, false),
+		Asset:             CleanText(string(wire.Asset), maxAddressLength, false),
+		PayTo:             CleanText(string(wire.PayTo), maxAddressLength, false),
 		MaxTimeoutSeconds: max(int(wire.MaxTimeoutSeconds), 0),
-		Resource:          cleanText(resource.URL, maxURLLength),
-		Description:       cleanText(description, maxDescriptionLength),
-		MIMEType:          cleanText(mimeType, maxLabelLength),
+		Resource:          CleanText(resource.URL, maxURLLength, false),
+		Description:       CleanText(description, maxDescriptionLength, false),
+		MIMEType:          CleanText(mimeType, maxLabelLength, false),
 		Extra:             wire.Extra,
 	}
 }
@@ -477,7 +477,7 @@ func parseResourceInfo(raw json.RawMessage) ResourceInfo {
 		if err := json.Unmarshal(trimmed, &value); err != nil {
 			return ResourceInfo{}
 		}
-		return ResourceInfo{URL: cleanText(value, maxURLLength)}
+		return ResourceInfo{URL: CleanText(value, maxURLLength, false)}
 	}
 	if trimmed[0] != '{' {
 		return ResourceInfo{}
@@ -492,17 +492,17 @@ func parseResourceInfo(raw json.RawMessage) ResourceInfo {
 		if len(tags) >= maxTags {
 			break
 		}
-		if cleaned := cleanText(string(tag), maxLabelLength); cleaned != "" {
+		if cleaned := CleanText(string(tag), maxLabelLength, false); cleaned != "" {
 			tags = append(tags, cleaned)
 		}
 	}
 	return ResourceInfo{
-		URL:         cleanText(string(wire.URL), maxURLLength),
-		Description: cleanText(string(wire.Description), maxDescriptionLength),
-		MIMEType:    cleanText(string(wire.MIMEType), maxLabelLength),
-		ServiceName: cleanText(string(wire.ServiceName), maxLabelLength),
+		URL:         CleanText(string(wire.URL), maxURLLength, false),
+		Description: CleanText(string(wire.Description), maxDescriptionLength, false),
+		MIMEType:    CleanText(string(wire.MIMEType), maxLabelLength, false),
+		ServiceName: CleanText(string(wire.ServiceName), maxLabelLength, false),
 		Tags:        tags,
-		IconURL:     cleanText(string(wire.IconURL), maxURLLength),
+		IconURL:     CleanText(string(wire.IconURL), maxURLLength, false),
 	}
 }
 
@@ -547,25 +547,36 @@ func extraString(extra map[string]json.RawMessage, key string) string {
 	if err := json.Unmarshal(raw, &value); err != nil {
 		return ""
 	}
-	return cleanText(value, maxLabelLength)
+	return CleanText(value, maxLabelLength, false)
 }
 
-func cleanText(value string, limit int) string {
+// CleanText sanitizes untrusted text: invalid UTF-8 and control characters are
+// dropped, whitespace is collapsed, and the result is truncated to limit runes.
+// With preserveNewlines each line is cleaned separately and kept on its own
+// line; otherwise newlines collapse into spaces.
+func CleanText(value string, limit int, preserveNewlines bool) string {
 	if limit <= 0 {
 		return ""
 	}
 	value = strings.ToValidUTF8(strings.TrimSpace(value), "")
-	value = strings.Map(func(char rune) rune {
-		switch {
-		case char == '\n' || char == '\r' || char == '\t':
-			return ' '
-		case char < 0x20 || char == 0x7f:
-			return -1
-		default:
-			return char
-		}
-	}, value)
-	value = strings.Join(strings.Fields(value), " ")
+	lines := []string{value}
+	if preserveNewlines {
+		lines = strings.Split(value, "\n")
+	}
+	for index, line := range lines {
+		line = strings.Map(func(char rune) rune {
+			switch {
+			case char == '\n' || char == '\r' || char == '\t':
+				return ' '
+			case char < 0x20 || char == 0x7f:
+				return -1
+			default:
+				return char
+			}
+		}, line)
+		lines[index] = strings.Join(strings.Fields(line), " ")
+	}
+	value = strings.TrimSpace(strings.Join(lines, "\n"))
 	runes := []rune(value)
 	if len(runes) <= limit {
 		return value

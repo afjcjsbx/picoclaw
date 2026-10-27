@@ -415,3 +415,19 @@ func FuzzDecode(f *testing.F) {
 		_ = challenge.Describe()
 	})
 }
+
+func TestCleanText(t *testing.T) {
+	const input = " a\tb \r\n\x00\n c\x7f\xff d "
+	if got, want := CleanText(input, 100, false), "a b c d"; got != want {
+		t.Errorf("CleanText(flat) = %q, want %q", got, want)
+	}
+	if got, want := CleanText(input, 100, true), "a b\n\nc d"; got != want {
+		t.Errorf("CleanText(multiline) = %q, want %q", got, want)
+	}
+	if got, want := CleanText("abcdef", 3, false), "abc..."; got != want {
+		t.Errorf("CleanText(truncate) = %q, want %q", got, want)
+	}
+	if got := CleanText("abc", 0, true); got != "" {
+		t.Errorf("CleanText(limit 0) = %q, want empty", got)
+	}
+}

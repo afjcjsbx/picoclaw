@@ -38,7 +38,7 @@ func paymentRequiredResult(urlStr string, resp *http.Response, body []byte) *Too
 
 	paymentError := ""
 	if parseErr != nil {
-		paymentError = cleanPaymentText(parseErr.Error(), maxPaymentErrorLength)
+		paymentError = x402.CleanText(parseErr.Error(), maxPaymentErrorLength, true)
 	}
 
 	result := webFetchPaymentResult{
@@ -84,13 +84,13 @@ func paymentRequiredUserMessage(urlStr string, challenge *x402.Challenge, parseE
 		}
 	case parseErr != nil:
 		builder.WriteString("\nThe server's payment details could not be parsed: ")
-		builder.WriteString(cleanPaymentText(parseErr.Error(), maxPaymentErrorLength))
+		builder.WriteString(x402.CleanText(parseErr.Error(), maxPaymentErrorLength, true))
 	default:
 		builder.WriteString("\nThe server did not provide x402 payment details.")
 	}
 
 	builder.WriteString("\nPicoClaw did not send a payment and cannot access this resource until it is paid for.")
-	return cleanPaymentText(builder.String(), paymentRequiredUserLimit)
+	return x402.CleanText(builder.String(), paymentRequiredUserLimit, true)
 }
 
 func challengeOptions(challenge *x402.Challenge) []x402.Requirement {
@@ -98,28 +98,4 @@ func challengeOptions(challenge *x402.Challenge) []x402.Requirement {
 		return nil
 	}
 	return challenge.Accepts
-}
-
-func cleanPaymentText(value string, limit int) string {
-	value = strings.ToValidUTF8(strings.TrimSpace(value), "")
-	lines := strings.Split(value, "\n")
-	for index, line := range lines {
-		line = strings.Map(func(char rune) rune {
-			switch {
-			case char == '\r' || char == '\t':
-				return ' '
-			case char < 0x20 || char == 0x7f:
-				return -1
-			default:
-				return char
-			}
-		}, line)
-		lines[index] = strings.Join(strings.Fields(line), " ")
-	}
-	value = strings.TrimSpace(strings.Join(lines, "\n"))
-	runes := []rune(value)
-	if len(runes) <= limit {
-		return value
-	}
-	return string(runes[:limit]) + "..."
 }
