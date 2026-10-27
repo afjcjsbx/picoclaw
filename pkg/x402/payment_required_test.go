@@ -192,9 +192,9 @@ func TestParseFallsBackToBody(t *testing.T) {
 	}
 }
 
-func TestParseHeaderCaseInsensitive(t *testing.T) {
+func TestParseHeaderSkipsEmptyValues(t *testing.T) {
 	header := http.Header{
-		"payment-required": []string{
+		HeaderPaymentRequired: []string{
 			"",
 			base64.RawURLEncoding.EncodeToString([]byte(testV2Challenge)),
 		},

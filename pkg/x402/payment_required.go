@@ -201,14 +201,9 @@ func (c *Challenge) Describe() string {
 }
 
 func paymentRequiredHeader(header http.Header) string {
-	for key, values := range header {
-		if !strings.EqualFold(key, HeaderPaymentRequired) {
-			continue
-		}
-		for _, value := range values {
-			if strings.TrimSpace(value) != "" {
-				return value
-			}
+	for _, value := range header.Values(HeaderPaymentRequired) {
+		if strings.TrimSpace(value) != "" {
+			return value
 		}
 	}
 	return ""
