@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers/common"
 )
 
@@ -313,16 +314,29 @@ func (p *GeminiProvider) buildRequestBody(
 	}
 
 	if len(tools) > 0 {
+		useJSONSchema := common.GeminiAcceptsParametersJSONSchema(p.apiBase)
 		funcDecls := make([]geminiFunctionDeclaration, 0, len(tools))
 		for _, t := range tools {
 			if t.Type != "function" {
 				continue
 			}
-			funcDecls = append(funcDecls, geminiFunctionDeclaration{
+			decl := geminiFunctionDeclaration{
 				Name:        t.Function.Name,
 				Description: t.Function.Description,
-				Parameters:  t.Function.Parameters,
-			})
+			}
+			if useJSONSchema {
+				schema, err := common.PrepareSchemaForGeminiJSONSchema(t.Function.Parameters)
+				if err != nil {
+					logger.DebugCF("gemini", "tool schema sent without $ref inlining", map[string]any{
+						"tool":  t.Function.Name,
+						"error": err.Error(),
+					})
+				}
+				decl.ParametersJSONSchema = schema
+			} else {
+				decl.Parameters = common.SanitizeSchemaForGoogle(t.Function.Parameters)
+			}
+			funcDecls = append(funcDecls, decl)
 		}
 		if len(funcDecls) > 0 {
 			body["tools"] = []geminiTool{{FunctionDeclarations: funcDecls}}
@@ -850,7 +864,8 @@ type geminiTool struct {
 }
 
 type geminiFunctionDeclaration struct {
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-	Parameters  any    `json:"parameters,omitempty"`
+	Name                 string `json:"name"`
+	Description          string `json:"description,omitempty"`
+	Parameters           any    `json:"parameters,omitempty"`
+	ParametersJSONSchema any    `json:"parametersJsonSchema,omitempty"`
 }
