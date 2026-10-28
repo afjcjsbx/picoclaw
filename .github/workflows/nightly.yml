@@ -1,8 +1,8 @@
 name: Nightly Build
 
 on:
-  schedule:
-    - cron: '0 0 * * *'
+  # schedule:
+  #   - cron: '0 0 * * *'  # Disabled: development only, no daily releases
   workflow_dispatch:
 
 permissions:
