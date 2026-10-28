@@ -182,6 +182,13 @@ func (p *CodexProvider) SupportsNativeSearch() bool {
 	return p.enableWebSearch
 }
 
+// SupportsThinking implements providers.ThinkingCapable. The Codex backend
+// accepts the Responses API reasoning effort, so configured thinking levels are
+// forwarded instead of being dropped by the agent loop.
+func (p *CodexProvider) SupportsThinking() bool {
+	return true
+}
+
 func resolveCodexModel(model string) (string, string) {
 	m := strings.ToLower(strings.TrimSpace(model))
 	if m == "" {
@@ -255,7 +262,34 @@ func buildCodexParams(
 		params.Tools = orc.TranslateTools(tools, enableWebSearch)
 	}
 
+	applyCodexThinkingControl(&params, model, options)
+
 	return params
+}
+
+// applyCodexThinkingControl maps PicoClaw thinking levels to the Responses API
+// reasoning effort understood by the Codex backend. "off" and "adaptive" are
+// omitted, matching the OpenAI Responses mapping used elsewhere: effort "none"
+// is rejected by some reasoning models, and "adaptive" has no OpenAI equivalent.
+func applyCodexThinkingControl(params *responses.ResponseNewParams, model string, options map[string]any) {
+	raw, ok := options["thinking_level"].(string)
+	if !ok {
+		return
+	}
+
+	switch level := strings.ToLower(strings.TrimSpace(raw)); level {
+	case "low", "medium", "high", "xhigh":
+		params.Reasoning.Effort = responses.ReasoningEffort(level)
+	case "adaptive":
+		logger.WarnCF(
+			"provider.codex",
+			`thinking_level="adaptive" is not supported by the OpenAI Codex backend; using model default reasoning effort`,
+			map[string]any{
+				"model":          model,
+				"thinking_level": level,
+			},
+		)
+	}
 }
 
 func CreateCodexTokenSource() func() (string, string, error) {
