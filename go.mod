@@ -48,7 +48,7 @@ require (
 	go.mau.fi/util v0.11.0
 	go.mau.fi/whatsmeow v0.0.0-20260219150138-7ae702b1eed4
 	golang.org/x/crypto v0.58.0
-	golang.org/x/net v0.61.0
+	golang.org/x/net v0.62.0
 	golang.org/x/oauth2 v0.37.0
 	golang.org/x/sync v0.24.0
 	golang.org/x/sys v0.49.0
