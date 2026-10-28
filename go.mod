@@ -152,7 +152,7 @@ require (
 	modernc.org/memory v1.12.1 // indirect
 )
 
-replace github.com/bwmarrin/discordgo => github.com/yeongaori/discordgo-fork v0.0.0-20260319072544-e8e546f5d532
+replace github.com/bwmarrin/discordgo => github.com/yeongaori/discordgo-fork v0.0.0-20260929102729-a10ba9c7ec13
 
 // The QQ OpenAPI requires "Authorization: QQBot <token>". botgo v0.2.1 sets the
 // resty auth scheme on the *Client* from inside OnBeforeRequest, but resty >= v2.17
