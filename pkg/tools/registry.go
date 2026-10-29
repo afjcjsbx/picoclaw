@@ -349,8 +349,17 @@ func (r *ToolRegistry) ExecuteWithContext(
 		).WithError(fmt.Errorf("tool not found"))
 	}
 
-	// Validate arguments against the tool's declared schema.
-	if err := validateToolArgs(tool.Parameters(), args); err != nil {
+	// Validate arguments against the tool's declared schema. Tools may expose a
+	// relaxed schema for validation when a model-facing required field is only
+	// needed for some actions. A provider returning a nil or empty schema must
+	// not disable validation entirely: fall back to the model-facing schema.
+	schema := tool.Parameters()
+	if provider, ok := tool.(ValidationSchemaProvider); ok {
+		if relaxed := provider.ValidationParameters(); len(relaxed) > 0 {
+			schema = relaxed
+		}
+	}
+	if err := validateToolArgs(schema, args); err != nil {
 		logger.WarnCF("tool", "Tool argument validation failed",
 			map[string]any{"tool": name, "error": err.Error()})
 		return ErrorResult(fmt.Sprintf("invalid arguments for tool %q: %s", name, err)).
