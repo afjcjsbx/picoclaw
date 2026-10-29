@@ -65,6 +65,25 @@ jobs:
       - name: Run go test
         run: go test -tags goolm,stdjson ./...
 
+  cross_build:
+    name: Cross-Platform Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      # Linter and unit tests run on the amd64 host, so code that only breaks on
+      # 32-bit or exotic targets (e.g. a uint32 vs uint64 mismatch in a syscall
+      # field) passes PR checks and only fails once it lands on main. Build every
+      # target the release pipeline builds, before merging.
+      - name: Build core binaries for all target platforms
+        run: make build-all
+
   integration:
     name: Integration Tests
     runs-on: ubuntu-latest
