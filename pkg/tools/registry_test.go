@@ -1027,3 +1027,63 @@ func TestToolRegistry_ExecuteWithContext_DoesNotMutateToolResult(t *testing.T) {
 		t.Fatal("normalized result must not be the tool-owned pointer")
 	}
 }
+
+// mockNilValidationSchemaTool implements ValidationSchemaProvider but returns a
+// nil relaxed schema. Validation must fall back to Parameters() instead of
+// being silently skipped.
+type mockNilValidationSchemaTool struct {
+	mockRegistryTool
+	relaxed map[string]any
+}
+
+func (m *mockNilValidationSchemaTool) ValidationParameters() map[string]any {
+	return m.relaxed
+}
+
+func TestToolRegistry_Execute_EmptyValidationSchemaFallsBackToParameters(t *testing.T) {
+	strictParams := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"command": map[string]any{"type": "string"},
+		},
+		"required": []string{"command"},
+	}
+
+	for _, tc := range []struct {
+		name    string
+		relaxed map[string]any
+	}{
+		{name: "nil schema", relaxed: nil},
+		{name: "empty schema", relaxed: map[string]any{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := NewToolRegistry()
+			r.Register(&mockNilValidationSchemaTool{
+				mockRegistryTool: mockRegistryTool{
+					name:   "guarded",
+					desc:   "tool with an empty validation schema",
+					params: strictParams,
+					result: SilentResult("ran"),
+				},
+				relaxed: tc.relaxed,
+			})
+
+			// Missing required "command": must be rejected, not silently accepted.
+			result := r.Execute(context.Background(), "guarded", map[string]any{})
+			if !result.IsError {
+				t.Fatalf("expected validation error, got success: %+v", result)
+			}
+			if !strings.Contains(result.ForLLM, "command") {
+				t.Fatalf("expected error to mention the missing field, got %q", result.ForLLM)
+			}
+			if result.Err == nil {
+				t.Fatal("expected Err to be set via WithError")
+			}
+			// A valid call still goes through.
+			ok := r.Execute(context.Background(), "guarded", map[string]any{"command": "ls"})
+			if ok.IsError {
+				t.Fatalf("expected success, got error: %s", ok.ForLLM)
+			}
+		})
+	}
+}

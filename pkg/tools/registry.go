@@ -351,10 +351,13 @@ func (r *ToolRegistry) ExecuteWithContext(
 
 	// Validate arguments against the tool's declared schema. Tools may expose a
 	// relaxed schema for validation when a model-facing required field is only
-	// needed for some actions.
+	// needed for some actions. A provider returning a nil or empty schema must
+	// not disable validation entirely: fall back to the model-facing schema.
 	schema := tool.Parameters()
 	if provider, ok := tool.(ValidationSchemaProvider); ok {
-		schema = provider.ValidationParameters()
+		if relaxed := provider.ValidationParameters(); len(relaxed) > 0 {
+			schema = relaxed
+		}
 	}
 	if err := validateToolArgs(schema, args); err != nil {
 		logger.WarnCF("tool", "Tool argument validation failed",
