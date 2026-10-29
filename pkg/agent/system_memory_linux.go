@@ -10,16 +10,17 @@ func totalSystemMemory() uint64 {
 		return 0
 	}
 
-	// Totalram is uint64 on 64-bit architectures but uint32 on 32-bit ones
-	// (arm, 386, mipsle), so widen both operands before multiplying.
-	//
-	// Unit (mem_unit) is documented as the size in bytes of the memory unit.
-	// Legacy kernels can report 0 when the value is expressed in bytes; glibc
-	// treats that as 1, so do the same instead of returning 0.
+	// Unit (mem_unit) is the size in bytes of the memory unit. Legacy kernels
+	// can report 0 when the value is already expressed in bytes; glibc treats
+	// that as 1, so do the same instead of returning 0 and silently dropping
+	// the RAM line from the runtime prompt.
 	unit := uint64(info.Unit)
 	if unit == 0 {
 		unit = 1
 	}
 
-	return uint64(info.Totalram) * unit
+	// Totalram is uint32 on 32-bit targets (arm, 386, mipsle) and uint64 on
+	// 64-bit ones, so the widening cast is required there and redundant here,
+	// where the linter only ever sees the 64-bit build.
+	return uint64(info.Totalram) * unit //nolint:unconvert // Required on 32-bit targets.
 }
