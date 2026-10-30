@@ -1674,3 +1674,231 @@ func TestGetMessagesBatchesParts(t *testing.T) {
 		}
 	}
 }
+
+// --- Batch ingest atomicity ---
+
+// abortsOnPartNamed creates a trigger on message_parts that aborts the
+// statement when a part with the given name is inserted. It is used to make an
+// insert fail deterministically at a chosen point of a batch without adding a
+// test seam to the store. The trigger fires inside the transaction, so it
+// exercises the rollback path of addMessagesChunk.
+func abortsOnPartNamed(t *testing.T, s *Store, name string) {
+	t.Helper()
+	stmt := fmt.Sprintf(
+		`CREATE TRIGGER reject_part AFTER INSERT ON message_parts
+		 WHEN new.name = '%s'
+		 BEGIN SELECT RAISE(ABORT, 'rejected part'); END`, name)
+	if _, err := s.db.Exec(stmt); err != nil {
+		t.Fatalf("create reject trigger: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := s.db.Exec("DROP TRIGGER IF EXISTS reject_part"); err != nil {
+			t.Errorf("drop reject trigger: %v", err)
+		}
+	})
+}
+
+// TestStoreAddMessagesBatchRollsBackOnError verifies that a batch which fails
+// halfway leaves no trace: no message rows, no part rows, no context items,
+// and no gap in the autoincrement IDs consumed by the aborted attempt.
+func TestStoreAddMessagesBatchRollsBackOnError(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	conv, err := s.GetOrCreateConversation(ctx, "agent:batch-rollback")
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+
+	abortsOnPartNamed(t, s, "grep")
+
+	msgs := []Message{
+		{Role: "user", Content: "first", TokenCount: 3},
+		{Role: "user", Content: "second", TokenCount: 3},
+		{Role: "assistant", TokenCount: 5, Parts: []MessagePart{
+			{Type: "tool_use", Name: "grep", Arguments: `{"pattern":"x"}`, ToolCallID: "call-1"},
+		}},
+		{Role: "user", Content: "after the failure", TokenCount: 4},
+	}
+
+	ids, err := s.AddMessagesBatch(ctx, conv.ConversationID, msgs)
+	if err == nil {
+		t.Fatal("AddMessagesBatch succeeded, want error from the rejected part")
+	}
+	if ids != nil {
+		t.Errorf("AddMessagesBatch returned ids %v alongside an error, want nil", ids)
+	}
+
+	stored, err := s.GetMessages(ctx, conv.ConversationID, 0, 0)
+	if err != nil {
+		t.Fatalf("GetMessages: %v", err)
+	}
+	if len(stored) != 0 {
+		t.Fatalf("stored %d messages after a failed batch, want 0: %+v", len(stored), stored)
+	}
+
+	items, err := s.GetContextItems(ctx, conv.ConversationID)
+	if err != nil {
+		t.Fatalf("GetContextItems: %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("stored %d context items after a failed batch, want 0: %+v", len(items), items)
+	}
+
+	var parts int
+	partsErr := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM message_parts").Scan(&parts)
+	if partsErr != nil {
+		t.Fatalf("count message_parts: %v", partsErr)
+	}
+	if parts != 0 {
+		t.Fatalf("stored %d message parts after a failed batch, want 0", parts)
+	}
+
+	// The FTS trigger on messages must have been rolled back as well.
+	results, err := s.SearchMessages(ctx, SearchInput{Pattern: "first", Limit: 10})
+	if err != nil {
+		t.Fatalf("SearchMessages: %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("FTS index has %d results after a failed batch, want 0", len(results))
+	}
+
+	// A smaller batch that fits in a single chunk must also stay atomic: the
+	// rejected part is in the second message, so the first must not survive.
+	small := msgs[:3]
+	smallIDs, err := s.AddMessagesBatch(ctx, conv.ConversationID, small)
+	if err == nil {
+		t.Fatal("AddMessagesBatch(small) succeeded, want error")
+	}
+	if smallIDs != nil {
+		t.Errorf("single-chunk batch returned ids %v with the error, want nil", smallIDs)
+	}
+	stored, err = s.GetMessages(ctx, conv.ConversationID, 0, 0)
+	if err != nil {
+		t.Fatalf("GetMessages: %v", err)
+	}
+	if len(stored) != 0 {
+		t.Fatalf("single-chunk batch left %d messages after a failure, want 0", len(stored))
+	}
+}
+
+// TestStoreAddMessagesBatchChunkBoundary verifies chunking at the
+// IngestBatchChunkSize boundary. Chunks before the failing one stay committed
+// (the documented trade-off), the failing chunk and everything after it are
+// rolled back, and each surviving chunk has complete context membership.
+func TestStoreAddMessagesBatchChunkBoundary(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	conv, err := s.GetOrCreateConversation(ctx, "agent:batch-chunks")
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+
+	// The rejected part sits in the first message of the second chunk.
+	const total = IngestBatchChunkSize + 10
+	msgs := make([]Message, total)
+	for i := range msgs {
+		msgs[i] = Message{Role: "user", Content: fmt.Sprintf("chunk message %d", i), TokenCount: 1}
+		if i == IngestBatchChunkSize {
+			msgs[i].Parts = []MessagePart{{Type: "tool_use", Name: "grep", ToolCallID: "call-x"}}
+		}
+	}
+
+	abortsOnPartNamed(t, s, "grep")
+
+	ids, err := s.AddMessagesBatch(ctx, conv.ConversationID, msgs)
+	if err == nil {
+		t.Fatal("AddMessagesBatch succeeded, want error in the second chunk")
+	}
+	if ids != nil {
+		t.Errorf("AddMessagesBatch returned a non-nil ID slice with the error")
+	}
+
+	stored, err := s.GetMessages(ctx, conv.ConversationID, 0, 0)
+	if err != nil {
+		t.Fatalf("GetMessages: %v", err)
+	}
+	if len(stored) != IngestBatchChunkSize {
+		t.Fatalf("stored %d messages, want %d (first chunk only)", len(stored), IngestBatchChunkSize)
+	}
+	for i, m := range stored {
+		if want := fmt.Sprintf("chunk message %d", i); m.Content != want {
+			t.Fatalf("message %d content = %q, want %q", i, m.Content, want)
+		}
+	}
+
+	items, err := s.GetContextItems(ctx, conv.ConversationID)
+	if err != nil {
+		t.Fatalf("GetContextItems: %v", err)
+	}
+	if len(items) != IngestBatchChunkSize {
+		t.Fatalf("context has %d items, want %d", len(items), IngestBatchChunkSize)
+	}
+	for i, item := range items {
+		if item.ItemType != "message" || item.MessageID != stored[i].ID {
+			t.Fatalf("context item %d = %+v, want message id %d", i, item, stored[i].ID)
+		}
+	}
+}
+
+// TestStoreAddMessagesBatchSpansMultipleChunks verifies a batch larger than one
+// chunk lands completely, in input order, with ordered context items.
+func TestStoreAddMessagesBatchSpansMultipleChunks(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	conv, err := s.GetOrCreateConversation(ctx, "agent:batch-multi")
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+
+	const total = 2*IngestBatchChunkSize + 7
+	msgs := make([]Message, total)
+	for i := range msgs {
+		msgs[i] = Message{Role: "user", Content: fmt.Sprintf("multi %d", i), TokenCount: 2}
+	}
+
+	ids, err := s.AddMessagesBatch(ctx, conv.ConversationID, msgs)
+	if err != nil {
+		t.Fatalf("AddMessagesBatch: %v", err)
+	}
+	if len(ids) != total {
+		t.Fatalf("returned %d ids, want %d", len(ids), total)
+	}
+	for i := 1; i < len(ids); i++ {
+		if ids[i] <= ids[i-1] {
+			t.Fatalf("ids not in insertion order at %d: %v", i, ids)
+		}
+	}
+
+	stored, err := s.GetMessages(ctx, conv.ConversationID, 0, 0)
+	if err != nil {
+		t.Fatalf("GetMessages: %v", err)
+	}
+	if len(stored) != total {
+		t.Fatalf("stored %d messages, want %d", len(stored), total)
+	}
+	for i, m := range stored {
+		if want := fmt.Sprintf("multi %d", i); m.Content != want {
+			t.Fatalf("message %d content = %q, want %q", i, m.Content, want)
+		}
+	}
+
+	items, err := s.GetContextItems(ctx, conv.ConversationID)
+	if err != nil {
+		t.Fatalf("GetContextItems: %v", err)
+	}
+	if len(items) != total {
+		t.Fatalf("context has %d items, want %d", len(items), total)
+	}
+	// Ordinals must increase monotonically across chunk boundaries.
+	for i := 1; i < len(items); i++ {
+		if items[i].Ordinal <= items[i-1].Ordinal {
+			t.Fatalf("context ordinal not increasing at %d: %d <= %d", i, items[i].Ordinal, items[i-1].Ordinal)
+		}
+		if items[i].MessageID != ids[i] {
+			t.Fatalf("context item %d maps to message %d, want %d", i, items[i].MessageID, ids[i])
+		}
+	}
+}
