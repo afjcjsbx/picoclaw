@@ -381,14 +381,46 @@ func insertMessageTx(ctx context.Context, tx *sql.Tx, convID int64, msg Message)
 }
 
 // AddMessagesBatch inserts a batch of messages (with optional parts) and
-// appends them to the conversation context in a single transaction, so a
-// batch of N messages costs one commit instead of N (plus one for the context
-// append). It returns the inserted message IDs in input order.
+// appends them to the conversation context, returning the inserted message IDs
+// in input order.
+//
+// The batch is written in chunks of at most IngestBatchChunkSize messages. Each
+// chunk is a single transaction that covers both the message rows and their
+// context items, so a chunk is either fully visible or not visible at all. A
+// batch that fits in one chunk therefore costs one commit instead of N+1.
+//
+// Chunking bounds how long the SQLite write lock is held: a whole-history
+// bootstrap would otherwise block concurrent writers (another session's ingest,
+// compaction) for the entire duration and push them into SQLITE_BUSY.
+//
+// An error returned for a chunk rolls back only that chunk. Chunks committed
+// before it stay visible, so the caller must not treat a partial error as if
+// nothing was written.
 func (s *Store) AddMessagesBatch(ctx context.Context, convID int64, msgs []Message) ([]int64, error) {
 	if len(msgs) == 0 {
 		return nil, nil
 	}
 
+	chunkSize := IngestBatchChunkSize
+	if chunkSize <= 0 {
+		chunkSize = len(msgs)
+	}
+
+	ids := make([]int64, 0, len(msgs))
+	for start := 0; start < len(msgs); start += chunkSize {
+		end := min(start+chunkSize, len(msgs))
+		chunkIDs, err := s.addMessagesChunk(ctx, convID, msgs[start:end])
+		if err != nil {
+			return nil, fmt.Errorf("chunk %d-%d of %d: %w", start, end-1, len(msgs), err)
+		}
+		ids = append(ids, chunkIDs...)
+	}
+	return ids, nil
+}
+
+// addMessagesChunk writes one chunk of messages and its context items in a
+// single transaction. Either the whole chunk is committed or nothing is.
+func (s *Store) addMessagesChunk(ctx context.Context, convID int64, msgs []Message) ([]int64, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin tx: %w", err)

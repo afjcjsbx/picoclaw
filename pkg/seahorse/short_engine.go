@@ -290,9 +290,12 @@ func (e *Engine) Ingest(ctx context.Context, sessionKey string, messages []Messa
 		return nil, fmt.Errorf("get conversation: %w", err)
 	}
 
-	// Insert the whole batch and append it to the context in one transaction:
-	// a commit per message (plus one for the context append) is the dominant
-	// cost with the pure-Go sqlite driver on low-end hardware.
+	// Insert the batch and append it to the context in the same transaction per
+	// chunk (see AddMessagesBatch): a commit per message, plus one for the
+	// context append, is the dominant cost with the pure-Go sqlite driver on
+	// low-end hardware. The adapter ingests one message at a time, so the hot
+	// path goes from two commits to one; bootstrap passes the remaining history
+	// and gets one commit per IngestBatchChunkSize messages instead of N+1.
 	var totalTokens int
 	for _, msg := range messages {
 		totalTokens += msg.TokenCount
