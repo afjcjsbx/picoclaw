@@ -9,7 +9,7 @@ import type { ModelProviderOption } from "@/api/models"
 
 import {
   findClosestProvider,
-  getCanonicalProviderKey,
+  findProviderAlias,
   getKnownProviderKeys,
 } from "./provider-registry"
 
@@ -83,14 +83,29 @@ export function validateModelField(
   }
 
   if (!knownProviderKeys.has(provider)) {
-    // Check aliases
-    const alias = getCanonicalProviderKey(provider, backendOptions)
+    // Resolve aliases strictly: findProviderAlias returns undefined when the
+    // prefix is not registered by the backend. getCanonicalProviderKey falls
+    // back to the input instead, which made an arbitrary prefix look like a
+    // resolved alias and surfaced a destructive one-click fix.
+    const alias = findProviderAlias(provider, backendOptions)
     if (alias && alias !== provider) {
       return {
         level: "warning",
         messageKey: "models.validation.shouldUse",
         messageParams: { provider, alias },
         fix: `${alias}/${model}`,
+      }
+    }
+    // A provider is already selected, so this field holds the canonical model
+    // ID for that provider, and the UI documents that a slash inside the ID is
+    // preserved as-is instead of being split again. Case-sensitive upstream
+    // namespaces (ACME/gpt-4o-mini) must survive untouched: rewriting them to
+    // lower case breaks routing at the provider.
+    if (selectedProvider) {
+      return {
+        level: "success",
+        messageKey: "models.validation.parsed",
+        messageParams: { provider: selectedProvider, model: trimmed },
       }
     }
     // Typo check
