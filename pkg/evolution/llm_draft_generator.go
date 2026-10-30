@@ -2,7 +2,6 @@ package evolution
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -78,13 +77,8 @@ func (g *LLMDraftGenerator) GenerateDraftWithEvidence(
 		return g.generateFallback(ctx, rule, matches, evidence)
 	}
 
-	content := strings.TrimSpace(resp.Content)
-	if content == "" {
-		return g.generateFallback(ctx, rule, matches, evidence)
-	}
-
-	draft, ok := parseLLMDraft(content)
-	if !ok || len(ValidateDraft(draft)) > 0 {
+	draft, ok := parseLLMDraft(resp.Content)
+	if !ok {
 		return g.generateFallback(ctx, rule, matches, evidence)
 	}
 
@@ -171,18 +165,17 @@ func combinedSkillGuidance(rule LearningRecord) string {
 }
 
 func parseLLMDraft(content string) (SkillDraft, bool) {
-	normalized := strings.TrimSpace(content)
-	normalized = strings.TrimPrefix(normalized, "```json")
-	normalized = strings.TrimPrefix(normalized, "```")
-	normalized = strings.TrimSuffix(normalized, "```")
-	normalized = strings.TrimSpace(normalized)
-
-	var payload llmDraftResponse
-	if err := json.Unmarshal([]byte(normalized), &payload); err != nil {
+	payload, ok := decodeLLMObject("draft", content, func(payload llmDraftResponse) bool {
+		return len(ValidateDraft(payload.draft())) == 0
+	})
+	if !ok {
 		return SkillDraft{}, false
 	}
+	return payload.draft(), true
+}
 
-	draft := SkillDraft{
+func (payload llmDraftResponse) draft() SkillDraft {
+	return SkillDraft{
 		TargetSkillName:    strings.TrimSpace(payload.TargetSkillName),
 		DraftType:          DraftType(strings.TrimSpace(payload.DraftType)),
 		ChangeKind:         ChangeKind(strings.TrimSpace(payload.ChangeKind)),
@@ -192,7 +185,6 @@ func parseLLMDraft(content string) (SkillDraft, bool) {
 		AvoidPatterns:      append([]string(nil), payload.AvoidPatterns...),
 		BodyOrPatch:        strings.TrimSpace(payload.BodyOrPatch),
 	}
-	return draft, true
 }
 
 func summarizeSkillMatches(matches []skills.SkillInfo) string {
