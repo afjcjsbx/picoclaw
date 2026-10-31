@@ -1472,6 +1472,34 @@ func commandPathAbs(pathText, cwdPath string) (string, error) {
 }
 
 func commandPathTextFromMatch(cmd string, start, end int) string {
+	return trimShellPathMatch(commandPathTextFromMatchRaw(cmd, start, end))
+}
+
+// shellPathSeparators are bytes that end a path token in shell syntax.
+const shellPathSeparators = ";|&<>`"
+
+// trimShellPathMatch removes shell syntax that absolutePathPattern swallows
+// because the regex only stops at whitespace or quotes. For "2>/dev/null;echo b"
+// the match is "/dev/null;echo", which is not in safePaths and is therefore
+// reported as a path outside the working directory (issue #435).
+//
+// Truncation is safe by construction: it only ever shortens a match, so it can
+// turn an allowed path into a different allowed path, but never makes an
+// outside-workspace path pass the containment check.
+//
+// Windows-style matches (drive letter, backslashes) are left untouched because
+// the same bytes can legitimately appear inside a Windows path.
+func trimShellPathMatch(pathText string) string {
+	if !strings.HasPrefix(pathText, "/") {
+		return pathText
+	}
+	if idx := strings.IndexAny(pathText, shellPathSeparators); idx > 0 {
+		pathText = pathText[:idx]
+	}
+	return strings.TrimRight(pathText, ";,)]}:|&")
+}
+
+func commandPathTextFromMatchRaw(cmd string, start, end int) string {
 	raw := cmd[start:end]
 	if !strings.HasPrefix(raw, "/") || isUnixAbsolutePathMatchStart(cmd, start) {
 		return raw

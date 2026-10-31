@@ -743,6 +743,95 @@ func TestShellTool_DevNullAllowed(t *testing.T) {
 	}
 }
 
+// TestShellTool_DevNullAllowedWithSeparator verifies that /dev/null redirections
+// are not blocked when immediately followed by a shell separator (issue #435).
+// The absolute-path regex only stops at whitespace or quotes, so it used to
+// swallow the separator and produce a bogus path such as "/dev/null;".
+func TestShellTool_DevNullAllowedWithSeparator(t *testing.T) {
+	tmpDir := t.TempDir()
+	tool, err := NewExecTool(tmpDir, true)
+	if err != nil {
+		t.Fatalf("unable to configure exec tool: %s", err)
+	}
+
+	commands := []string{
+		"echo a 2>/dev/null; echo b",
+		"echo a 2>/dev/null;echo b",
+		"echo a 2>/dev/null|cat",
+		"echo a 2>/dev/null&&echo b",
+		"echo a 2>/dev/null||echo b",
+		"echo a 2>/dev/null &",
+		"echo a >/dev/null;echo b",
+		"echo a 2>/dev/null,",
+		"echo a 2>/dev/null)",
+		"echo a 2>/dev/null]",
+		"echo a 2>/dev/null}",
+		"echo a 2>/dev/null:",
+		"cat /dev/urandom | head -c 16 | od;echo done",
+	}
+
+	for _, cmd := range commands {
+		result := tool.Execute(context.Background(), map[string]any{"action": "run", "command": cmd})
+		if result.IsError && strings.Contains(result.ForLLM, "blocked") {
+			t.Errorf("command should not be blocked: %s\n  error: %s", cmd, result.ForLLM)
+		}
+	}
+}
+
+// TestShellTool_SeparatorTrimmingKeepsRealPathsBlocked verifies that the
+// separator trimming cannot be used to sneak an outside-workspace path past
+// the containment check.
+func TestShellTool_SeparatorTrimmingKeepsRealPathsBlocked(t *testing.T) {
+	tmpDir := t.TempDir()
+	tool, err := NewExecTool(tmpDir, true)
+	if err != nil {
+		t.Fatalf("unable to configure exec tool: %s", err)
+	}
+
+	commands := []string{
+		"cat /etc/passwd;echo done",
+		"cat /etc/passwd;echo done 2>/dev/null",
+		"cat /etc/passwd&&echo done",
+		"cat /etc/passwd|cat",
+		"cat /etc/shadow)",
+		"cat /etc/shadow,",
+	}
+
+	for _, cmd := range commands {
+		result := tool.Execute(context.Background(), map[string]any{"action": "run", "command": cmd})
+		if !result.IsError || !strings.Contains(result.ForLLM, "path outside working dir") {
+			t.Errorf("outside path should still be blocked: %s\n  result: %s", cmd, result.ForLLM)
+		}
+	}
+}
+
+// TestTrimShellPathMatch exercises the trimming helper directly.
+func TestTrimShellPathMatch(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"/dev/null", "/dev/null"},
+		{"/dev/null;", "/dev/null"},
+		{"/dev/null;echo b", "/dev/null"},
+		{"/dev/null&&echo b", "/dev/null"},
+		{"/dev/null||echo b", "/dev/null"},
+		{"/dev/null|cat", "/dev/null"},
+		{"/dev/null)", "/dev/null"},
+		{"/dev/null]", "/dev/null"},
+		{"/dev/null}", "/dev/null"},
+		{"/dev/null,", "/dev/null"},
+		{"/dev/null:", "/dev/null"},
+		{"/etc/passwd;echo", "/etc/passwd"},
+		{"/etc/passwd", "/etc/passwd"},
+		// Windows matches are intentionally left untouched.
+		{`C:\dev\null;x`, `C:\dev\null;x`},
+	}
+
+	for _, tc := range cases {
+		if got := trimShellPathMatch(tc.in); got != tc.want {
+			t.Errorf("trimShellPathMatch(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 // TestShellTool_BlockDevices verifies that writes to block devices are blocked (issue #965).
 func TestShellTool_BlockDevices(t *testing.T) {
 	tool, err := NewExecTool("", false)
