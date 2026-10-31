@@ -18,6 +18,22 @@ jobs:
   build:
     needs: integration
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux/amd64
+          - target: linux/arm
+            goarm: "7"
+          - target: linux/arm64
+          - target: linux/loong64
+          - target: linux/riscv64
+          - target: linux/mipsle
+            gomips: softfloat
+          - target: darwin/arm64
+          - target: windows/amd64
+          - target: netbsd/amd64
+          - target: netbsd/arm64
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -26,6 +42,18 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+          cache: false
 
-      - name: Build core binaries
-        run: make build-all
+      - name: Restore Go caches
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-${{ runner.os }}-${{ matrix.target }}-
+            go-${{ runner.os }}-
+
+      - name: Build ${{ matrix.target }}
+        run: make build-target TARGET=${{ matrix.target }} GOARM=${{ matrix.goarm }} GOMIPS=${{ matrix.gomips }}
