@@ -184,13 +184,13 @@ func RunToolLoop(
 			maxParallel = maxParallelToolCalls
 		}
 		for _, seg := range PlanBatch(config.Tools, normalizedToolCalls) {
-			if seg.Parallel && maxParallel > 1 {
-				RunConcurrent(len(seg.Calls), maxParallel, func(n int) { runCall(seg.Calls[n]) })
-				continue
+			// Limit 1 runs the calls in order and, like the parallel case, turns
+			// a tool panic into a nil result slot handled below.
+			limit := 1
+			if seg.Parallel {
+				limit = maxParallel
 			}
-			for _, i := range seg.Calls {
-				runCall(i)
-			}
+			RunConcurrent(len(seg.Calls), limit, func(n int) { runCall(seg.Calls[n]) })
 		}
 
 		// Append results in original order

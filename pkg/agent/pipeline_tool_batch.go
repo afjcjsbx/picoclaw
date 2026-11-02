@@ -111,6 +111,14 @@ func (b *toolBatch) persistSkippedToolCall(tc providers.ToolCall, reason, messag
 	}, false)
 }
 
+// abandon closes call i when the turn ends before it is finished (hard abort
+// or hook abort): the call gets a terminal event, so no ToolExecStart stays
+// open, and a tool message, so its tool_call ID is not left unanswered in the
+// history that a hook abort keeps.
+func (b *toolBatch) abandon(i int) {
+	b.persistSkippedToolCall(b.calls[i], "turn aborted", "No result recorded: the turn was aborted.")
+}
+
 func (b *toolBatch) skipRemainingForLoop(start int) {
 	const reason = "critical repeated tool-call loop detected"
 	const message = "Skipped because a repeated tool-call loop was detected."
@@ -399,6 +407,10 @@ func (b *toolBatch) runParallel(indexes []int, maxParallel int) toolStep {
 	for _, i := range indexes {
 		pc, step := b.prepare(i)
 		if step != toolStepContinue {
+			// Nothing of the segment has run: close the calls prepared so far.
+			for _, j := range indexes {
+				b.abandon(j)
+			}
 			return step
 		}
 		pcs = append(pcs, pc)
@@ -427,9 +439,12 @@ func (b *toolBatch) runParallel(indexes []int, maxParallel int) toolStep {
 func (b *toolBatch) conclude(pcs []*preparedCall) toolStep {
 	critical := false
 	checkpoint := false
-	for _, pc := range pcs {
+	for n, pc := range pcs {
 		step, c := b.finish(pc)
 		if step == toolStepBreak {
+			for _, rest := range pcs[n:] {
+				b.abandon(rest.index)
+			}
 			return step
 		}
 		critical = critical || c
