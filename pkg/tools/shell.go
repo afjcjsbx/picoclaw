@@ -1496,7 +1496,7 @@ func trimShellPathMatch(pathText string) string {
 	if idx := strings.IndexAny(pathText, shellPathSeparators); idx > 0 {
 		pathText = pathText[:idx]
 	}
-	return strings.TrimRight(pathText, ";,)]}:|&")
+	return strings.TrimRight(pathText, ",)]}:")
 }
 
 func commandPathTextFromMatchRaw(cmd string, start, end int) string {
