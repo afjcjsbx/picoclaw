@@ -15,6 +15,12 @@ func newReloadService(t *testing.T, handler JobHandler) (*CronService, string) {
 	path := filepath.Join(t.TempDir(), "cron", "jobs.json")
 	cs := NewCronService(path, handler)
 	cs.SetReloadInterval(testReloadInterval)
+	// Stop the scheduler and drain in-flight handlers before t.TempDir removes
+	// the directory, so a late store write cannot fail the cleanup.
+	t.Cleanup(func() {
+		cs.Stop()
+		waitAllIdle(t, cs)
+	})
 	return cs, path
 }
 

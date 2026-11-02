@@ -199,7 +199,7 @@ func (p *Provider) buildRequestBody(
 		requestBody[fieldName] = maxTokens
 	}
 
-	if temperature, ok := common.AsFloat(options["temperature"]); ok {
+	if temperature, ok := common.AsFloat(options["temperature"]); ok && !common.ModelDeprecatesTemperature(model) {
 		lowerModel := strings.ToLower(model)
 		if strings.Contains(lowerModel, "kimi") && strings.Contains(lowerModel, "k2") {
 			requestBody["temperature"] = 1.0
@@ -566,7 +566,7 @@ func (p *Provider) responsesRequestBody(
 	if maxTokens, ok := common.AsInt(options["max_tokens"]); ok {
 		body["max_output_tokens"] = maxTokens
 	}
-	if temperature, ok := common.AsFloat(options["temperature"]); ok {
+	if temperature, ok := common.AsFloat(options["temperature"]); ok && !common.ModelDeprecatesTemperature(model) {
 		body["temperature"] = temperature
 	}
 	if topP, ok := common.AsFloat(options["top_p"]); ok {

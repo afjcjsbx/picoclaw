@@ -5,7 +5,7 @@ go 1.27.3
 require (
 	fyne.io/systray v1.12.2
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.23.3
-	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.14.1
+	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.15.0
 	github.com/SevereCloud/vksdk/v3 v3.3.1
 	github.com/adhocore/gronx v1.20.5
 	github.com/anthropics/anthropic-sdk-go v1.84.0
@@ -35,12 +35,12 @@ require (
 	github.com/muesli/termenv v0.16.0
 	github.com/mymmrac/telego v1.12.1
 	github.com/open-dingtalk/dingtalk-stream-sdk-go v0.9.1
-	github.com/openai/openai-go/v3 v3.86.0
-	github.com/pion/rtp v1.10.5
+	github.com/openai/openai-go/v3 v3.90.0
+	github.com/pion/rtp v1.10.6
 	github.com/pion/webrtc/v3 v3.3.6
 	github.com/pmezard/go-difflib v1.0.0
 	github.com/rs/zerolog v1.35.1
-	github.com/slack-go/slack v0.30.1
+	github.com/slack-go/slack v0.32.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
 	github.com/stretchr/testify v1.12.1
@@ -48,7 +48,7 @@ require (
 	go.mau.fi/util v0.11.0
 	go.mau.fi/whatsmeow v0.0.0-20260219150138-7ae702b1eed4
 	golang.org/x/crypto v0.58.0
-	golang.org/x/net v0.61.0
+	golang.org/x/net v0.62.0
 	golang.org/x/oauth2 v0.37.0
 	golang.org/x/sync v0.24.0
 	golang.org/x/sys v0.49.0
@@ -65,7 +65,7 @@ require (
 	aead.dev/minisign v0.2.0 // indirect
 	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/internal v1.13.0 // indirect
-	github.com/AzureAD/microsoft-authentication-library-for-go v1.8.0 // indirect
+	github.com/AzureAD/microsoft-authentication-library-for-go v1.10.1 // indirect
 	github.com/andybalholm/brotli v1.2.2 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.24 // indirect
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.10 // indirect
@@ -152,7 +152,7 @@ require (
 	modernc.org/memory v1.12.1 // indirect
 )
 
-replace github.com/bwmarrin/discordgo => github.com/yeongaori/discordgo-fork v0.0.0-20260319072544-e8e546f5d532
+replace github.com/bwmarrin/discordgo => github.com/yeongaori/discordgo-fork v0.0.0-20260929102729-a10ba9c7ec13
 
 // The QQ OpenAPI requires "Authorization: QQBot <token>". botgo v0.2.1 sets the
 // resty auth scheme on the *Client* from inside OnBeforeRequest, but resty >= v2.17

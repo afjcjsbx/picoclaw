@@ -62,7 +62,7 @@ func TestFormatSubagentsReply_Tree(t *testing.T) {
 		`  │  "Find sources"`,
 		"  │  └─ Subagent 2 · agent: fetcher · thinking · 5s",
 		`  │     "Fetch page"`,
-		"  └─ Subagent 3 · agent: writer · starting · 2s",
+		"  └─ Subagent 3 · agent: writer · active · 2s",
 		"```",
 	}, "\n")
 	if got != want {

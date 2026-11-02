@@ -1609,6 +1609,13 @@ func probeModelConnectivity(m *config.ModelConfig) bool {
 		return probeOpenAICompatibleModel(apiBase, modelID, m.APIKey())
 	case "github-copilot":
 		return probeTCPService(apiBase)
+	case "anthropic", "anthropic-messages", "alibaba-coding-anthropic":
+		if hasLocalAPIBase(apiBase) {
+			// Local Anthropic-compatible endpoint (for example a proxy): the
+			// model listing contract may not be implemented, so only check TCP.
+			return probeTCPService(apiBase)
+		}
+		return probeAnthropicModel(apiBase, modelID, m.APIKey())
 	case "claude-cli":
 		return probeCommandAvailable("claude")
 	case "codex-cli":

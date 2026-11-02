@@ -115,6 +115,9 @@ type PromptBuildRequest struct {
 	SenderID          string
 	SenderDisplayName string
 
+	// SessionKey scopes the frozen memory snapshot; empty reads memory live.
+	SessionKey string
+
 	ActiveSkills []string
 	Overlays     []PromptPart
 

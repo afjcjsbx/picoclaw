@@ -541,6 +541,59 @@ type SubTurnConfig struct {
 	ConcurrencyTimeoutSec int `json:"concurrency_timeout_sec" env:"PICOCLAW_AGENTS_DEFAULTS_SUBTURN_CONCURRENCY_TIMEOUT_SEC"`
 }
 
+// MemoryConfig bounds the persistent memory injected into the system prompt.
+// Limits are counted in Unicode characters (Go runes), not bytes. A
+// non-positive limit falls back to its default.
+//
+// The prompt carries a snapshot taken when a session starts: memory written
+// mid-session reaches the file at once but shows up from the next session on,
+// which keeps the provider prompt cache warm.
+type MemoryConfig struct {
+	// Enabled injects MEMORY.md into the prompt and registers the memory tool.
+	// USER.md is injected either way.
+	Enabled bool `json:"memory_enabled" env:"PICOCLAW_AGENTS_DEFAULTS_MEMORY_ENABLED"`
+	// MemoryCharLimit caps MEMORY.md. The memory tool refuses writes past it.
+	MemoryCharLimit int `json:"memory_char_limit" env:"PICOCLAW_AGENTS_DEFAULTS_MEMORY_CHAR_LIMIT"`
+	// UserCharLimit caps USER.md, enforced like MemoryCharLimit.
+	UserCharLimit int `json:"user_char_limit" env:"PICOCLAW_AGENTS_DEFAULTS_MEMORY_USER_CHAR_LIMIT"`
+	// DailyNotesEnabled injects the recent daily notes (memory/YYYYMM/YYYYMMDD.md).
+	DailyNotesEnabled bool `json:"daily_notes_enabled" env:"PICOCLAW_AGENTS_DEFAULTS_MEMORY_DAILY_NOTES_ENABLED"`
+	// RecentDailyNotesCount is how many days of daily notes are injected.
+	RecentDailyNotesCount int `json:"recent_daily_notes_count" env:"PICOCLAW_AGENTS_DEFAULTS_MEMORY_RECENT_DAILY_NOTES_COUNT"`
+	// DailyNotesCharLimit caps each injected daily note; the newest lines win.
+	DailyNotesCharLimit int `json:"daily_notes_char_limit" env:"PICOCLAW_AGENTS_DEFAULTS_MEMORY_DAILY_NOTES_CHAR_LIMIT"`
+}
+
+const (
+	DefaultMemoryCharLimit       = 2200
+	DefaultUserCharLimit         = 1375
+	DefaultRecentDailyNotesCount = 3
+	DefaultDailyNotesCharLimit   = 1000
+)
+
+func positiveOr(v, def int) int {
+	if v > 0 {
+		return v
+	}
+	return def
+}
+
+func (m MemoryConfig) GetMemoryCharLimit() int {
+	return positiveOr(m.MemoryCharLimit, DefaultMemoryCharLimit)
+}
+
+func (m MemoryConfig) GetUserCharLimit() int {
+	return positiveOr(m.UserCharLimit, DefaultUserCharLimit)
+}
+
+func (m MemoryConfig) GetRecentDailyNotesCount() int {
+	return positiveOr(m.RecentDailyNotesCount, DefaultRecentDailyNotesCount)
+}
+
+func (m MemoryConfig) GetDailyNotesCharLimit() int {
+	return positiveOr(m.DailyNotesCharLimit, DefaultDailyNotesCharLimit)
+}
+
 type ToolFeedbackConfig struct {
 	Enabled          bool `json:"enabled"           env:"PICOCLAW_AGENTS_DEFAULTS_TOOL_FEEDBACK_ENABLED"`
 	MaxArgsLength    int  `json:"max_args_length"   env:"PICOCLAW_AGENTS_DEFAULTS_TOOL_FEEDBACK_MAX_ARGS_LENGTH"`
@@ -603,8 +656,9 @@ type AgentDefaults struct {
 	VisionMaxImageDimension   int                 `json:"vision_max_image_dimension,omitempty" env:"PICOCLAW_AGENTS_DEFAULTS_VISION_MAX_IMAGE_DIMENSION"`
 	VisionJPEGQuality         int                 `json:"vision_jpeg_quality,omitempty"        env:"PICOCLAW_AGENTS_DEFAULTS_VISION_JPEG_QUALITY"`
 	Routing                   *RoutingConfig      `json:"routing,omitempty"`
-	SteeringMode              string              `json:"steering_mode,omitempty"              env:"PICOCLAW_AGENTS_DEFAULTS_STEERING_MODE"`      // "one-at-a-time" (default) or "all"
-	MaxParallelTurns          int                 `json:"max_parallel_turns,omitempty"         env:"PICOCLAW_AGENTS_DEFAULTS_MAX_PARALLEL_TURNS"` // Max concurrent turns (0 or 1 = sequential)
+	SteeringMode              string              `json:"steering_mode,omitempty"              env:"PICOCLAW_AGENTS_DEFAULTS_STEERING_MODE"`           // "one-at-a-time" (default) or "all"
+	MaxParallelTurns          int                 `json:"max_parallel_turns,omitempty"         env:"PICOCLAW_AGENTS_DEFAULTS_MAX_PARALLEL_TURNS"`      // Max concurrent turns (0 or 1 = sequential)
+	MaxParallelToolCalls      int                 `json:"max_parallel_tool_calls,omitempty"    env:"PICOCLAW_AGENTS_DEFAULTS_MAX_PARALLEL_TOOL_CALLS"` // Max concurrent tool calls of one LLM response (0 or 1 = sequential)
 	SubTurn                   SubTurnConfig       `json:"subturn"                                                                                          envPrefix:"PICOCLAW_AGENTS_DEFAULTS_SUBTURN_"`
 	ToolFeedback              ToolFeedbackConfig  `json:"tool_feedback,omitempty"`
 	LoopDetection             LoopDetectionConfig `json:"loop_detection,omitempty"`
@@ -612,6 +666,7 @@ type AgentDefaults struct {
 	ContextManager            string              `json:"context_manager,omitempty"            env:"PICOCLAW_AGENTS_DEFAULTS_CONTEXT_MANAGER"`
 	ContextManagerConfig      json.RawMessage     `json:"context_manager_config,omitempty"     env:"PICOCLAW_AGENTS_DEFAULTS_CONTEXT_MANAGER_CONFIG"`
 	TurnProfile               TurnProfileConfig   `json:"turn_profile,omitempty"`
+	Memory                    MemoryConfig        `json:"memory,omitempty"`
 	MaxLLMRetries             int                 `json:"max_llm_retries,omitempty"            env:"PICOCLAW_AGENTS_DEFAULTS_MAX_LLM_RETRIES"`
 	LLMRetryBackoffSecs       int                 `json:"llm_retry_backoff_secs,omitempty"     env:"PICOCLAW_AGENTS_DEFAULTS_LLM_RETRY_BACKOFF_SECS"`
 	// LLMRetryOnEmptyContent retries a successful response that carries no

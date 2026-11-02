@@ -861,6 +861,13 @@ func TestCreateProviderFromConfig_OpenAIMixedCaseAuthMethodUsesOAuthBranch(t *te
 	if modelID != "gpt-5.4" {
 		t.Errorf("modelID = %q, want %q", modelID, "gpt-5.4")
 	}
+	tc, ok := provider.(ThinkingCapable)
+	if !ok {
+		t.Fatalf("provider %T should implement ThinkingCapable for OpenAI OAuth", provider)
+	}
+	if !tc.SupportsThinking() {
+		t.Fatal("OpenAI OAuth provider SupportsThinking() = false, want true")
+	}
 }
 
 func TestCreateProviderFromConfig_MissingAPIKey(t *testing.T) {

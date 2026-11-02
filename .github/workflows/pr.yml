@@ -65,6 +65,58 @@ jobs:
       - name: Run go test
         run: go test -tags goolm,stdjson ./...
 
+  cross_build:
+    name: Cross-Platform Build (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      # One slow or broken target must not hide the result of the others.
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux/amd64
+          - target: linux/arm
+            goarm: "7"
+          - target: linux/arm64
+          - target: linux/loong64
+          - target: linux/riscv64
+          - target: linux/mipsle
+            gomips: softfloat
+          - target: darwin/arm64
+          - target: windows/amd64
+          - target: netbsd/amd64
+          - target: netbsd/arm64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          # The build cache is keyed per target below, so let actions/cache own it
+          # instead of setup-go's single shared key.
+          cache: false
+
+      # Each target compiles the same dependency graph for a different
+      # GOOS/GOARCH, so the cache has to be keyed by target to be reusable.
+      - name: Restore Go caches
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-${{ runner.os }}-${{ matrix.target }}-
+            go-${{ runner.os }}-
+
+      # Linter and unit tests run on the amd64 host, so code that only breaks on
+      # 32-bit or exotic targets (e.g. a uint32 vs uint64 mismatch in a syscall
+      # field) passes PR checks and only fails once it lands on main. Build every
+      # target the release pipeline builds, before merging.
+      - name: Build ${{ matrix.target }}
+        run: make build-target TARGET=${{ matrix.target }} GOARM=${{ matrix.goarm }} GOMIPS=${{ matrix.gomips }}
+
   integration:
     name: Integration Tests
     runs-on: ubuntu-latest

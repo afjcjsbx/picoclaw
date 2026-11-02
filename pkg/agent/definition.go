@@ -123,7 +123,6 @@ func (definition AgentContextDefinition) trackedPaths(workspace string) []string
 	paths := []string{
 		filepath.Join(workspace, string(AgentDefinitionSourceAgent)),
 		filepath.Join(workspace, "SOUL.md"),
-		filepath.Join(workspace, "USER.md"),
 	}
 	if definition.Source != AgentDefinitionSourceAgent {
 		paths = append(paths,

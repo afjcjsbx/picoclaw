@@ -607,6 +607,44 @@ func TestSendWithRetry_RateLimitRetry(t *testing.T) {
 	}
 }
 
+func TestSendWithRetry_HonorsRetryAfter(t *testing.T) {
+	m := newTestManager()
+	var callCount int
+	requested := 100 * time.Millisecond
+	ch := &mockChannel{
+		sendFn: func(_ context.Context, _ bus.OutboundMessage) error {
+			callCount++
+			if callCount == 1 {
+				return fmt.Errorf("429: %w", &RateLimitError{
+					RetryAfter: requested,
+					Err:        errors.New("Too Many Requests"),
+				})
+			}
+			return nil
+		},
+	}
+	w := &channelWorker{
+		ch:      ch,
+		limiter: rate.NewLimiter(rate.Inf, 1),
+	}
+
+	msg := testOutboundMessage(bus.OutboundMessage{Channel: "test", ChatID: "1", Content: "hello"})
+
+	start := time.Now()
+	m.sendWithRetry(context.Background(), "test", w, msg)
+	elapsed := time.Since(start)
+
+	if callCount != 2 {
+		t.Fatalf("expected 2 Send calls (1 rate limit + 1 success), got %d", callCount)
+	}
+	if elapsed < requested-20*time.Millisecond {
+		t.Fatalf("expected wait of at least %v from retry_after, got %v", requested, elapsed)
+	}
+	if elapsed >= rateLimitDelay {
+		t.Fatalf("expected retry_after (%v) to override default delay (%v), got %v", requested, rateLimitDelay, elapsed)
+	}
+}
+
 func TestSendWithRetry_MaxRetriesExhausted(t *testing.T) {
 	m := newTestManager()
 	var callCount int
@@ -917,7 +955,8 @@ func TestRunWorker_MessageSplitting(t *testing.T) {
 	// Send a message that should be split
 	w.queue <- testOutboundMessage(bus.OutboundMessage{Channel: "test", ChatID: "1", Content: "hello world"})
 
-	time.Sleep(100 * time.Millisecond)
+	// Chunks are deliberately spaced by chunkSpacing.
+	time.Sleep(600 * time.Millisecond)
 
 	mu.Lock()
 	count := len(received)
@@ -3379,6 +3418,54 @@ func TestSendMessage_WithSplitting(t *testing.T) {
 
 	if len(received) < 2 {
 		t.Fatalf("expected message to be split into at least 2 chunks, got %d", len(received))
+	}
+}
+
+func TestSendMessage_SpacesChunks(t *testing.T) {
+	m := newTestManager()
+
+	var mu sync.Mutex
+	var sentAt []time.Time
+	ch := &mockChannelWithLength{
+		mockChannel: mockChannel{
+			sendFn: func(_ context.Context, _ bus.OutboundMessage) error {
+				mu.Lock()
+				sentAt = append(sentAt, time.Now())
+				mu.Unlock()
+				return nil
+			},
+		},
+		maxLen: 5,
+	}
+
+	w := &channelWorker{
+		ch:      ch,
+		limiter: rate.NewLimiter(rate.Inf, 1),
+	}
+	m.channels["test"] = ch
+	m.workers["test"] = w
+
+	msg := testOutboundMessage(bus.OutboundMessage{
+		Channel: "test",
+		ChatID:  "123",
+		Content: "hello world",
+	})
+
+	if err := m.SendMessage(context.Background(), msg); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	mu.Lock()
+	times := append([]time.Time(nil), sentAt...)
+	mu.Unlock()
+
+	if len(times) < 2 {
+		t.Fatalf("expected message to be split into at least 2 chunks, got %d", len(times))
+	}
+	for i := 1; i < len(times); i++ {
+		if gap := times[i].Sub(times[i-1]); gap < chunkSpacing-50*time.Millisecond {
+			t.Fatalf("chunk %d sent after %v, want >= %v", i, gap, chunkSpacing)
+		}
 	}
 }
 

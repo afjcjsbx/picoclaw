@@ -438,6 +438,7 @@ func (al *AgentLoop) buildCommandsRuntime(
 					todo.ClearSession(agent.ID, opts.SessionKey)
 				}
 			}
+			agent.ContextBuilder.ForgetMemorySnapshot(opts.SessionKey)
 			return nil
 		}
 

@@ -35,6 +35,7 @@ func DefaultConfig() *Config {
 				SummarizeTokenPercent:     75,
 				SteeringMode:              "one-at-a-time",
 				MaxParallelTurns:          5,
+				MaxParallelToolCalls:      4,
 				ToolFeedback: ToolFeedbackConfig{
 					Enabled:          false,
 					MaxArgsLength:    300,
@@ -45,6 +46,14 @@ func DefaultConfig() *Config {
 					RepeatThreshold:   DefaultLoopDetectionRepeatThreshold,
 					CriticalThreshold: DefaultLoopDetectionCriticalThreshold,
 					WindowSize:        DefaultLoopDetectionWindowSize,
+				},
+				Memory: MemoryConfig{
+					Enabled:               true,
+					MemoryCharLimit:       DefaultMemoryCharLimit,
+					UserCharLimit:         DefaultUserCharLimit,
+					DailyNotesEnabled:     true,
+					RecentDailyNotesCount: DefaultRecentDailyNotesCount,
+					DailyNotesCharLimit:   DefaultDailyNotesCharLimit,
 				},
 				SplitOnMarker:           false,
 				MaxLLMRetries:           2,

@@ -25,6 +25,7 @@ func promptBuildRequestForTurn(
 		ChatID:            ts.chatID,
 		SenderID:          ts.opts.Dispatch.SenderID(),
 		SenderDisplayName: ts.opts.SenderDisplayName,
+		SessionKey:        ts.sessionKey,
 		ActiveSkills:      activeSkillNames(ts.agent, ts.opts),
 		Overlays:          promptOverlaysForOptions(ts.opts),
 	}

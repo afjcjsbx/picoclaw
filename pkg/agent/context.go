@@ -46,6 +46,13 @@ type ContextBuilder struct {
 	// build time. This catches nested file creations/deletions/mtime changes
 	// that may not update the top-level skill root directory mtime.
 	skillFilesAtCache map[string]time.Time
+
+	// memorySnapshots freezes the memory block of the prompt per session. The
+	// memory files change on disk at once, but a session keeps the block it
+	// started with, so its provider prompt cache survives memory writes; the
+	// next session (or /clear) sees the new content.
+	memoryMu        sync.Mutex
+	memorySnapshots map[string]string
 }
 
 func (cb *ContextBuilder) WithToolDiscovery(useBM25, useRegex bool) *ContextBuilder {
@@ -63,6 +70,12 @@ func (cb *ContextBuilder) WithToolDiscovery(useBM25, useRegex bool) *ContextBuil
 			)
 		}
 	}
+	return cb
+}
+
+// WithMemoryConfig sets the limits and switches of the injected memory block.
+func (cb *ContextBuilder) WithMemoryConfig(cfg config.MemoryConfig) *ContextBuilder {
+	cb.memory.cfg = cfg
 	return cb
 }
 
@@ -160,11 +173,15 @@ func (cb *ContextBuilder) getIdentity(includeToolUseRule bool) string {
 		accuracyRule,
 		"**Context summaries** - Conversation summaries provided as context are approximate references only. They may be incomplete or outdated. Always defer to explicit user instructions over summary content.",
 	)
-	if includeToolUseRule {
+	if includeToolUseRule && cb.memory.cfg.Enabled {
 		rules = append(
 			rules,
 			fmt.Sprintf(
-				"**Memory** - When interacting with me if something seems memorable, update %s/memory/MEMORY.md",
+				"**Memory** - Save durable, reusable facts with the memory tool, 1-2 compact lines each "+
+					"(target memory = lasting facts, target user = who I am). Put the day's work, technical details, "+
+					"investigations and logs in the daily note %s/memory/YYYYMM/YYYYMMDD.md instead. "+
+					"A write shows up in your prompt from the next session. "+
+					"If memory is shown as truncated or the tool refuses a write, consolidate or remove entries.",
 				workspacePath,
 			),
 		)
@@ -305,21 +322,6 @@ func (cb *ContextBuilder) buildSystemPromptParts(opts systemPromptBuildOptions) 
 		})
 	}
 
-	// Memory context
-	memoryContext := cb.memory.GetMemoryContext()
-	if memoryContext != "" {
-		add(PromptPart{
-			ID:      "context.memory",
-			Layer:   PromptLayerContext,
-			Slot:    PromptSlotMemory,
-			Source:  PromptSource{ID: PromptSourceMemory, Name: "memory:workspace"},
-			Title:   "memory",
-			Content: "# Memory\n\n" + memoryContext,
-			Stable:  true,
-			Cache:   PromptCacheEphemeral,
-		})
-	}
-
 	// Multi-Message Sending (if enabled)
 	if cb.splitOnMarker {
 		add(PromptPart{
@@ -339,6 +341,61 @@ Each part separated by the marker will be sent as an independent message.`,
 
 	stack.Seal()
 	return stack.Parts()
+}
+
+// maxMemorySnapshots bounds the per-session snapshot map. ponytail: past it the
+// map is reset, so live sessions just pick up fresh memory once; add an LRU if
+// that churn ever shows.
+const maxMemorySnapshots = 256
+
+// memoryPromptPart returns the memory block for a session, frozen at the first
+// build of that session. An empty sessionKey (no session) reads live.
+func (cb *ContextBuilder) memoryPromptPart(sessionKey string) (PromptPart, bool) {
+	var snapshot string
+	if sessionKey == "" {
+		snapshot = cb.memory.Snapshot()
+	} else {
+		var ok bool
+		cb.memoryMu.Lock()
+		snapshot, ok = cb.memorySnapshots[sessionKey]
+		cb.memoryMu.Unlock()
+		if !ok {
+			// Read outside the lock so slow disk never stalls other sessions.
+			fresh := cb.memory.Snapshot()
+			cb.memoryMu.Lock()
+			// A concurrent build of the same session may have stored first; keep
+			// that one so the session sees a single frozen snapshot.
+			if snapshot, ok = cb.memorySnapshots[sessionKey]; !ok {
+				snapshot = fresh
+				if cb.memorySnapshots == nil || len(cb.memorySnapshots) >= maxMemorySnapshots {
+					cb.memorySnapshots = make(map[string]string)
+				}
+				cb.memorySnapshots[sessionKey] = snapshot
+			}
+			cb.memoryMu.Unlock()
+		}
+	}
+	if snapshot == "" {
+		return PromptPart{}, false
+	}
+	return PromptPart{
+		ID:      "context.memory",
+		Layer:   PromptLayerContext,
+		Slot:    PromptSlotMemory,
+		Source:  PromptSource{ID: PromptSourceMemory, Name: "memory:workspace"},
+		Title:   "memory",
+		Content: "# Memory\n\n" + snapshot,
+		Stable:  true,
+		Cache:   PromptCacheEphemeral,
+	}, true
+}
+
+// ForgetMemorySnapshot drops a session's frozen memory, so its next turn picks
+// up what was written meanwhile. Call it when the conversation is cleared.
+func (cb *ContextBuilder) ForgetMemorySnapshot(sessionKey string) {
+	cb.memoryMu.Lock()
+	delete(cb.memorySnapshots, sessionKey)
+	cb.memoryMu.Unlock()
 }
 
 // BuildSystemPromptWithCache returns the cached system prompt if available
@@ -465,6 +522,7 @@ func (cb *ContextBuilder) EstimateSystemTokens(summary string, activeSkills []st
 	const dynamicContextChars = 300
 
 	totalChars := utf8.RuneCountInString(staticPrompt) + dynamicContextChars
+	totalChars += utf8.RuneCountInString(cb.memory.Snapshot())
 
 	if skillsText := cb.buildActiveSkillsContext(activeSkills); skillsText != "" {
 		totalChars += utf8.RuneCountInString(skillsText)
@@ -511,19 +569,12 @@ func (cb *ContextBuilder) InvalidateCache() {
 }
 
 // sourcePaths returns non-skill workspace source files tracked for cache
-// invalidation (bootstrap files + memory). Skill roots are handled separately
-// because they require both directory-level and recursive file-level checks.
+// invalidation (bootstrap files). Memory files are deliberately not tracked:
+// they are injected through a per-session snapshot, so writing them must not
+// rebuild the shared prompt. Skill roots are handled separately because they
+// require both directory-level and recursive file-level checks.
 func (cb *ContextBuilder) sourcePaths() []string {
-	agentDefinition := cb.LoadAgentDefinition()
-	paths := agentDefinition.trackedPaths(cb.workspace)
-	paths = append(paths, filepath.Join(cb.workspace, "memory", "MEMORY.md"))
-	// Daily notes are folded into the cached system prompt via
-	// GetMemoryContext. Track the exact files it reads so edits and newly
-	// created notes invalidate the cache like MEMORY.md does.
-	if cb.memory != nil {
-		paths = append(paths, cb.memory.RecentDailyNotePaths(recentDailyNotesDays)...)
-	}
-	return uniquePaths(paths)
+	return uniquePaths(cb.LoadAgentDefinition().trackedPaths(cb.workspace))
 }
 
 // skillRoots returns all skill root directories that can affect
@@ -610,7 +661,7 @@ func (cb *ContextBuilder) sourceFilesChangedLocked() bool {
 		return true
 	}
 
-	// Check tracked source files (bootstrap + memory).
+	// Check tracked source files (bootstrap).
 	if slices.ContainsFunc(cb.sourcePaths(), cb.fileChangedSince) {
 		return true
 	}
@@ -745,10 +796,6 @@ func (cb *ContextBuilder) LoadBootstrapFiles() string {
 			agentDefinition.Soul.Content,
 		)
 	}
-	if agentDefinition.User != nil {
-		fmt.Fprintf(&sb, "## %s\n\n%s\n\n", "USER.md", agentDefinition.User.Content)
-	}
-
 	if agentDefinition.Source != AgentDefinitionSourceAgent {
 		filePath := filepath.Join(cb.workspace, "IDENTITY.md")
 		if data, err := os.ReadFile(filePath); err == nil {
@@ -808,10 +855,23 @@ func currentDateLine(now time.Time) string {
 	return fmt.Sprintf("%s (%s)", now.Format("Monday, January 2, 2006"), zone)
 }
 
+func formatSystemMemory(ram uint64) string {
+	if ram < 1<<30 {
+		return fmt.Sprintf("%.1f MiB RAM", float64(ram)/(1<<20))
+	}
+	return fmt.Sprintf("%.1f GiB RAM", float64(ram)/(1<<30))
+}
+
 func (cb *ContextBuilder) buildDynamicContext(
 	channel, chatID, senderID, senderDisplayName string,
 ) string {
-	rt := fmt.Sprintf("%s %s, Go %s", runtime.GOOS, runtime.GOARCH, runtime.Version())
+	rt := fmt.Sprintf(
+		"%s %s, Go %s, %d logical CPUs",
+		runtime.GOOS, runtime.GOARCH, runtime.Version(), runtime.NumCPU(),
+	)
+	if ram := totalSystemMemory(); ram > 0 {
+		rt += ", " + formatSystemMemory(ram)
+	}
 
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "## Current Date\n%s\n\n## Runtime\n%s", currentDateLine(time.Now()), rt)
@@ -875,6 +935,15 @@ func (cb *ContextBuilder) BuildMessagesFromPrompt(req PromptBuildRequest) []prov
 	var stringParts []string
 	if strings.TrimSpace(staticPrompt) != "" {
 		stringParts = append(stringParts, staticPrompt)
+	}
+
+	// Memory is a per-session snapshot kept out of the shared static prompt, so
+	// a memory write never rebuilds it.
+	if !req.SuppressDefaultSystemPrompt {
+		if memPart, ok := cb.memoryPromptPart(req.SessionKey); ok {
+			stringParts = append(stringParts, memPart.Content)
+			contentBlocks = append(contentBlocks, promptContentBlock(memPart, nil))
+		}
 	}
 
 	promptParts := append([]PromptPart(nil), req.Overlays...)

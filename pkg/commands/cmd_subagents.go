@@ -113,7 +113,7 @@ func subagentCountLabel(n int) string {
 func phaseLabel(phase string) string {
 	switch phase {
 	case "setup":
-		return "starting"
+		return "active"
 	case "running":
 		return "thinking"
 	case "tools":
