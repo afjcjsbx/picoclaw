@@ -36,10 +36,22 @@ type MemoryTool struct {
 }
 
 func NewMemoryTool(workspace string, memoryLimit, userLimit int) *MemoryTool {
+	memoryPath, userPath := memoryFilePaths(workspace)
 	return &MemoryTool{files: map[string]memoryFile{
-		MemoryTargetMemory: {filepath.Join(workspace, "memory", "MEMORY.md"), memoryLimit},
-		MemoryTargetUser:   {filepath.Join(workspace, "USER.md"), userLimit},
+		MemoryTargetMemory: {memoryPath, memoryLimit},
+		MemoryTargetUser:   {userPath, userLimit},
 	}}
+}
+
+func memoryFilePaths(workspace string) (memoryPath, userPath string) {
+	return filepath.Join(workspace, "memory", "MEMORY.md"), filepath.Join(workspace, "USER.md")
+}
+
+// MemoryFileLimits maps the two memory files to their character limits, for
+// write tools that must not let the agent bypass the memory tool's limits.
+func MemoryFileLimits(workspace string, memoryLimit, userLimit int) map[string]int {
+	memoryPath, userPath := memoryFilePaths(workspace)
+	return map[string]int{memoryPath: memoryLimit, userPath: userLimit}
 }
 
 func (t *MemoryTool) Name() string { return "memory" }

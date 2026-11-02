@@ -143,16 +143,29 @@ func NewAgentInstance(
 			))
 		}
 	}
+	// The file tools must not let the agent grow MEMORY.md or USER.md past the
+	// limits the memory tool enforces.
+	var memoryLimits map[string]int
+	if defaults.Memory.Enabled {
+		memoryLimits = tools.MemoryFileLimits(
+			workspace, defaults.Memory.GetMemoryCharLimit(), defaults.Memory.GetUserCharLimit(),
+		)
+	}
 	if cfg.Tools.IsToolEnabled("edit_file") {
-		toolsRegistry.Register(fstools.NewEditFileTool(workspace, restrict, allowWritePaths))
+		editTool := fstools.NewEditFileTool(workspace, restrict, allowWritePaths)
+		editTool.SetCharLimits(memoryLimits)
+		toolsRegistry.Register(editTool)
 	}
 	if cfg.Tools.IsToolEnabled("append_file") {
-		toolsRegistry.Register(fstools.NewAppendFileTool(workspace, restrict, allowWritePaths))
+		appendTool := fstools.NewAppendFileTool(workspace, restrict, allowWritePaths)
+		appendTool.SetCharLimits(memoryLimits)
+		toolsRegistry.Register(appendTool)
 	}
 	// Build write_file's copy from the registered editors so it steers the agent
 	// to edit_file/append_file only when those tools are actually available.
 	if cfg.Tools.IsToolEnabled("write_file") {
 		writeTool := fstools.NewWriteFileTool(workspace, restrict, allowWritePaths)
+		writeTool.SetCharLimits(memoryLimits)
 		var altTools []string
 		if toolsRegistry.HasRegistered("append_file") {
 			altTools = append(altTools, "append_file")

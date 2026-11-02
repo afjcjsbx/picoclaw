@@ -17,12 +17,24 @@ type protectedReadFs struct {
 	fileSystem
 	workspace string
 	restrict  bool
+	limits    charLimits
 }
 
 type protectedWriteFs struct {
 	fileSystem
 	workspace string
 	restrict  bool
+	limits    charLimits
+}
+
+// checkLimits applies the character limits to a write of data to path.
+func checkLimits(
+	limits charLimits, fsys fileSystem, path, workspace string, restrict, appending bool, data []byte,
+) error {
+	return limits.check(path, workspace, restrict, appending, data, func() []byte {
+		cur, _ := fsys.ReadFile(path) // a missing or unreadable file counts as empty
+		return cur
+	})
 }
 
 func (p *protectedReadFs) check(path string) error {
@@ -38,6 +50,9 @@ func (p *protectedReadFs) ReadFile(path string) ([]byte, error) {
 
 func (p *protectedReadFs) WriteFile(path string, data []byte) error {
 	if err := checkSensitiveWritePath(path, p.workspace, p.restrict); err != nil {
+		return err
+	}
+	if err := checkLimits(p.limits, p.fileSystem, path, p.workspace, p.restrict, false, data); err != nil {
 		return err
 	}
 	return p.fileSystem.WriteFile(path, data)
@@ -68,6 +83,9 @@ func (p *protectedReadFs) AppendFile(path string, data []byte) error {
 		return err
 	}
 	if err := checkSensitiveWritePath(path, p.workspace, p.restrict); err != nil {
+		return err
+	}
+	if err := checkLimits(p.limits, p.fileSystem, path, p.workspace, p.restrict, true, data); err != nil {
 		return err
 	}
 	if appender, ok := p.fileSystem.(fileAppender); ok {
@@ -108,11 +126,17 @@ func (p *protectedWriteFs) WriteFile(path string, data []byte) error {
 	if err := checkSensitiveWritePath(path, p.workspace, p.restrict); err != nil {
 		return err
 	}
+	if err := checkLimits(p.limits, p.fileSystem, path, p.workspace, p.restrict, false, data); err != nil {
+		return err
+	}
 	return p.fileSystem.WriteFile(path, data)
 }
 
 func (p *protectedWriteFs) AppendFile(path string, data []byte) error {
 	if err := checkSensitiveWritePath(path, p.workspace, p.restrict); err != nil {
+		return err
+	}
+	if err := checkLimits(p.limits, p.fileSystem, path, p.workspace, p.restrict, true, data); err != nil {
 		return err
 	}
 	if appender, ok := p.fileSystem.(fileAppender); ok {
