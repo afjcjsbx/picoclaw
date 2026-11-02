@@ -1483,9 +1483,9 @@ const shellPathSeparators = ";|&<>`"
 // the match is "/dev/null;echo", which is not in safePaths and is therefore
 // reported as a path outside the working directory (issue #435).
 //
-// Truncation is safe by construction: it only ever shortens a match, so it can
-// turn an allowed path into a different allowed path, but never makes an
-// outside-workspace path pass the containment check.
+// Truncation only shortens the match; it does not validate what follows the
+// separator, so a path glued to the separator without whitespace (for example
+// "f>/etc/x") is not checked on its own here.
 //
 // Windows-style matches (drive letter, backslashes) are left untouched because
 // the same bytes can legitimately appear inside a Windows path.
