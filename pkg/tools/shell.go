@@ -258,7 +258,7 @@ IMPORTANT: Use this tool for terminal operations such as git, go, npm, and docke
 Before a command explicitly creates files or directories, use list_dir when available to verify that the parent exists and is the intended location. Always quote paths containing spaces. Command output is returned by the tool.
 
 Usage notes:
-- action is required; command is required for action=run.
+- action is required; command is required for action=run (pass an empty string for the other actions).
 - The optional timeout parameter is in seconds and overrides the configured timeout for foreground commands; 0 disables the timeout. It cannot be combined with background=true. Foreground output longer than the configured limit (default 50,000 chars) is truncated to the first 40%% and last 60%% around an omission notice; background session output is limited to 1 MB.
 - Use background=true for long-running commands. The result includes a sessionId. Use action=list to list sessions; use poll, wait, read, write, send-keys, or kill with sessionId to manage one. poll returns immediately; to wait for a session to finish use wait instead of polling in a loop. write sends stdin; send-keys sends keys to a PTY. Sessions are cleaned up 30 minutes after the process exits.
 - Combine background=true with pty=true for interactive sessions when supported. PTY is not supported on Windows.
@@ -267,7 +267,26 @@ Usage notes:
 
 var execActions = []string{"run", "list", "poll", "wait", "read", "write", "kill", "send-keys"}
 
+// Parameters returns the schema advertised to the model. command is required
+// for every action because some providers only generate properties listed in
+// "required"; non-run actions pass an empty value.
 func (t *ExecTool) Parameters() map[string]any {
+	return execParameters(true)
+}
+
+// ValidationParameters is the schema used by the registry to validate incoming
+// arguments. It keeps command optional so list/poll/read/write/kill/send-keys
+// calls that omit it still reach Execute; action=run enforces it there.
+func (t *ExecTool) ValidationParameters() map[string]any {
+	return execParameters(false)
+}
+
+func execParameters(requireCommand bool) map[string]any {
+	required := []string{"action"}
+	if requireCommand {
+		required = append(required, "command")
+	}
+
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -277,8 +296,9 @@ func (t *ExecTool) Parameters() map[string]any {
 				"description": "Action: run (execute command), list (show sessions), poll (check status, returns immediately), wait (block until a session exits or timeout), read (get output), write (send input), kill (terminate), send-keys (send keys to PTY)",
 			},
 			"command": map[string]any{
-				"type":        "string",
-				"description": "Shell command to execute (required for run)",
+				"type": "string",
+				"description": "Shell command to execute (required for run; pass an empty string for " +
+					"list, poll, wait, read, write, kill, and send-keys)",
 			},
 			"sessionId": map[string]any{
 				"type":        "string",
@@ -309,7 +329,7 @@ func (t *ExecTool) Parameters() map[string]any {
 				"description": "Optional timeout in seconds for foreground commands; overrides the configured timeout, and 0 disables the timeout. Not supported with background=true. For wait: maximum seconds to block (default and cap: the configured timeout).",
 			},
 		},
-		"required": []string{"action"},
+		"required": required,
 	}
 }
 
@@ -343,7 +363,7 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 
 func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolResult {
 	command, ok := args["command"].(string)
-	if !ok {
+	if !ok || strings.TrimSpace(command) == "" {
 		return ErrorResult("command is required")
 	}
 
