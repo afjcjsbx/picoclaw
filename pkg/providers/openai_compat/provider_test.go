@@ -1261,6 +1261,36 @@ func TestProviderChat_LargeHTMLResponsePreviewIsTruncated(t *testing.T) {
 	}
 }
 
+func TestBuildRequestBody_OmitsTemperatureForTemperatureDeprecatedModels(t *testing.T) {
+	p := NewProvider("key", "http://example.invalid", "")
+	for _, model := range []string{
+		"claude-sonnet-5-5",
+		"claude-sonnet-5.5",
+		"anthropic/claude-sonnet-5-5",
+		"claude-haiku-5-5",
+	} {
+		t.Run(model, func(t *testing.T) {
+			body := p.buildRequestBody(nil, nil, model, map[string]any{"temperature": 0.7})
+			if _, ok := body["temperature"]; ok {
+				t.Fatalf("temperature must be omitted for %s", model)
+			}
+
+			responsesBody := p.responsesRequestBody(nil, nil, model, map[string]any{"temperature": 0.7})
+			if _, ok := responsesBody["temperature"]; ok {
+				t.Fatalf("responses temperature must be omitted for %s", model)
+			}
+		})
+	}
+}
+
+func TestBuildRequestBody_KeepsTemperatureForSupportedModel(t *testing.T) {
+	p := NewProvider("key", "http://example.invalid", "")
+	body := p.buildRequestBody(nil, nil, "claude-sonnet-4-6", map[string]any{"temperature": 0.7})
+	if got := body["temperature"]; got != 0.7 {
+		t.Fatalf("temperature = %v, want 0.7", got)
+	}
+}
+
 func TestProviderChat_StripsMoonshotPrefixAndNormalizesKimiTemperature(t *testing.T) {
 	var requestBody map[string]any
 

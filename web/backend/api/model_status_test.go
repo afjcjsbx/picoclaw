@@ -99,6 +99,82 @@ func TestModelProbeAPIBase_GPT4FreeDefault(t *testing.T) {
 	}
 }
 
+func TestProbeLocalModelAvailability_AnthropicUsesTCPProbe(t *testing.T) {
+	originalTCPProbe := probeTCPServiceFunc
+	originalOpenAIProbe := probeOpenAICompatibleModelFunc
+	defer func() {
+		probeTCPServiceFunc = originalTCPProbe
+		probeOpenAICompatibleModelFunc = originalOpenAIProbe
+	}()
+
+	const apiBase = "http://127.0.0.1:18099"
+	tcpCalled := false
+	openAICalled := false
+	probeTCPServiceFunc = func(got string) bool {
+		tcpCalled = true
+		if got != apiBase {
+			t.Fatalf("TCP probe apiBase = %q, want %q", got, apiBase)
+		}
+		return true
+	}
+	probeOpenAICompatibleModelFunc = func(string, string, string) bool {
+		openAICalled = true
+		return true
+	}
+
+	model := &config.ModelConfig{
+		ModelName: "local-claude-5",
+		Model:     "anthropic-messages/claude-sonnet-5-5",
+		APIBase:   apiBase,
+	}
+	model.SetAPIKey("test-key")
+
+	if !probeLocalModelAvailability(model) {
+		t.Fatal("probeLocalModelAvailability(anthropic-messages) = false, want true")
+	}
+	if !tcpCalled {
+		t.Fatal("TCP probe was not called for a local Anthropic endpoint")
+	}
+	if openAICalled {
+		t.Fatal("OpenAI /models probe must not be used for a local Anthropic endpoint")
+	}
+}
+
+func TestProbeModelConnectivity_AnthropicUsesNativeHeaders(t *testing.T) {
+	const apiKey = "test-key"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			t.Fatalf("path = %q, want %q", r.URL.Path, "/v1/models")
+		}
+		if got := r.URL.Query().Get("limit"); got != "1000" {
+			t.Fatalf("limit = %q, want %q", got, "1000")
+		}
+		if got := r.Header.Get("X-Api-Key"); got != apiKey {
+			t.Fatalf("X-Api-Key = %q, want %q", got, apiKey)
+		}
+		if got := r.Header.Get("Anthropic-Version"); got != anthropicAPIVersion {
+			t.Fatalf("Anthropic-Version = %q, want %q", got, anthropicAPIVersion)
+		}
+		if got := r.Header.Get("Authorization"); got != "" {
+			t.Fatalf("Authorization = %q, want empty", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"data":[{"id":"claude-sonnet-5-5"}]}`)
+	}))
+	defer srv.Close()
+
+	model := &config.ModelConfig{
+		ModelName: "anthropic-5",
+		Model:     "anthropic-messages/claude-sonnet-5-5",
+		APIBase:   srv.URL,
+	}
+	model.SetAPIKey(apiKey)
+
+	if !probeModelConnectivity(model) {
+		t.Fatal("probeModelConnectivity(anthropic) = false, want true")
+	}
+}
+
 func TestProbeLocalModelAvailability_LMStudioUsesOpenAICompatibleProbe(t *testing.T) {
 	originalProbe := probeOpenAICompatibleModelFunc
 	defer func() { probeOpenAICompatibleModelFunc = originalProbe }()

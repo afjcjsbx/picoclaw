@@ -13,6 +13,45 @@ import (
 	"testing"
 )
 
+func TestBuildRequestBody_OmitsTemperatureForTemperatureDeprecatedModels(t *testing.T) {
+	for _, model := range []string{
+		"claude-sonnet-5-5",
+		"claude-sonnet-5.5",
+		"claude-haiku-5-5",
+		"claude-opus-5",
+	} {
+		t.Run(model, func(t *testing.T) {
+			body, err := buildRequestBody(
+				[]Message{{Role: "user", Content: "hello"}},
+				nil,
+				model,
+				map[string]any{"max_tokens": 1024, "temperature": 0.7},
+			)
+			if err != nil {
+				t.Fatalf("buildRequestBody() error = %v", err)
+			}
+			if _, ok := body["temperature"]; ok {
+				t.Fatalf("temperature must be omitted for %s", model)
+			}
+		})
+	}
+}
+
+func TestBuildRequestBody_KeepsTemperatureForSupportedModel(t *testing.T) {
+	body, err := buildRequestBody(
+		[]Message{{Role: "user", Content: "hello"}},
+		nil,
+		"claude-sonnet-4-6",
+		map[string]any{"max_tokens": 1024, "temperature": 0.7},
+	)
+	if err != nil {
+		t.Fatalf("buildRequestBody() error = %v", err)
+	}
+	if got := body["temperature"]; got != 0.7 {
+		t.Fatalf("temperature = %v, want 0.7", got)
+	}
+}
+
 func TestBuildRequestBody(t *testing.T) {
 	tests := []struct {
 		name     string
