@@ -555,7 +555,9 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string, timeout tim
 			if output != "" {
 				msg += "\n\nPartial output before timeout:\n" + output
 			}
-			return newExecResult(msg, true, fmt.Errorf("command timeout: %w", err), truncated, artifactPath, spillCapped)
+			return newExecResult(
+				msg, true, fmt.Errorf("command timeout: %w", err), truncated, artifactPath, spillCapped,
+			)
 		}
 
 		// Extract detailed exit information

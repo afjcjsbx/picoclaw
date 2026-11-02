@@ -42,14 +42,14 @@ type boundedOutput struct {
 	artifact  bool
 }
 
-func newBoundedOutput(max int, spillDir string) *boundedOutput {
-	if max <= 0 {
-		max = 1
+func newBoundedOutput(maxChars int, spillDir string) *boundedOutput {
+	if maxChars <= 0 {
+		maxChars = 1
 	}
-	headLimit := int(float64(max) * toolshared.HeadTailHeadRatio)
-	tailLimit := max - headLimit
+	headLimit := int(float64(maxChars) * toolshared.HeadTailHeadRatio)
+	tailLimit := maxChars - headLimit
 	return &boundedOutput{
-		max:       max,
+		max:       maxChars,
 		headLimit: headLimit,
 		tailLimit: tailLimit,
 		spillDir:  spillDir,
