@@ -524,6 +524,38 @@ func TestShellTool_TruncatedOutputSpillsFullText(t *testing.T) {
 	}
 }
 
+// TestShellTool_ForegroundSpillUsesWorkspaceArtifact verifies that an oversized
+// foreground stream is spilled into the workspace artifact directory instead of
+// being retained in memory.
+func TestShellTool_ForegroundSpillUsesWorkspaceArtifact(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses POSIX yes/head")
+	}
+
+	workspace := t.TempDir()
+	cfg := &config.Config{}
+	cfg.Tools.Exec.AllowRemote = true
+	cfg.Tools.Exec.MaxOutputChars = 100
+
+	tool, err := NewExecToolWithConfig(workspace, false, cfg)
+	require.NoError(t, err)
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"action":  "run",
+		"command": "yes x | head -1000",
+	})
+	require.False(t, result.IsError, result.ForLLM)
+	require.True(t, result.LargeResultSpilled)
+	require.Len(t, result.ArtifactTags, 1)
+
+	path := strings.TrimSuffix(strings.TrimPrefix(result.ArtifactTags[0], "[file:"), "]")
+	require.Contains(t, path, filepath.Join(workspace, ".artifacts", "tool"))
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Greater(t, len(data), cfg.Tools.Exec.MaxOutputChars)
+}
+
 // TestShellTool_WorkingDir_OutsideWorkspace verifies that working_dir cannot escape the workspace directly
 func TestShellTool_WorkingDir_OutsideWorkspace(t *testing.T) {
 	root := t.TempDir()

@@ -25,7 +25,6 @@ import (
 	"github.com/sipeed/picoclaw/pkg/isolation"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	fstools "github.com/sipeed/picoclaw/pkg/tools/fs"
-	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
 // maxOutputBufferSize caps the output captured per session; outputTruncateMarker
@@ -470,6 +469,12 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string, timeout tim
 
 	prepareCommandForTermination(cmd)
 
+	maxOutputChars := t.maxOutputChars
+	if maxOutputChars <= 0 {
+		maxOutputChars = config.DefaultExecMaxOutputChars
+	}
+	collector := newBoundedOutput(maxOutputChars, t.outputSpillDir())
+
 	// stdout and stderr share one pipe so the result preserves the order in
 	// which the child wrote them and a large stderr stream cannot block a
 	// separate pipe reader.
@@ -492,11 +497,10 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string, timeout tim
 	// copy so the reader observes EOF when the child exits.
 	_ = outputWriter.Close()
 
-	var outputBuf bytes.Buffer
 	readDone := make(chan struct{})
 	go func() {
 		defer close(readDone)
-		_, _ = io.Copy(&outputBuf, outputReader)
+		_, _ = io.Copy(collector, outputReader)
 		_ = outputReader.Close()
 	}()
 
@@ -540,7 +544,10 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string, timeout tim
 		<-readDone
 	}
 
-	output := outputBuf.String()
+	output, truncated := collector.Render()
+	artifactPath := collector.SpillPath()
+	spillCapped := collector.SpillCapped()
+	_ = collector.Close()
 
 	if err != nil {
 		if errors.Is(cmdCtx.Err(), context.DeadlineExceeded) {
@@ -548,12 +555,7 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string, timeout tim
 			if output != "" {
 				msg += "\n\nPartial output before timeout:\n" + output
 			}
-			return &ToolResult{
-				ForLLM:  msg,
-				ForUser: msg,
-				IsError: true,
-				Err:     fmt.Errorf("command timeout: %w", err),
-			}
+			return newExecResult(msg, true, fmt.Errorf("command timeout: %w", err), truncated, artifactPath, spillCapped)
 		}
 
 		// Extract detailed exit information
@@ -575,36 +577,48 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string, timeout tim
 		output = "(no output)"
 	}
 
-	maxOutputChars := t.maxOutputChars
-	if maxOutputChars <= 0 {
-		maxOutputChars = config.DefaultExecMaxOutputChars
-	}
-	fullOutput := output
-	output, truncated := toolshared.TruncateHeadTail(output, maxOutputChars, "OUTPUT")
+	return newExecResult(output, err != nil, nil, truncated, artifactPath, spillCapped)
+}
 
-	// Attach the pre-truncation output so the large-result spill can save it
-	// instead of the cut view: the omitted middle stays readable from the
-	// artifact whenever the result is large enough to spill.
-	fullText := ""
+func newExecResult(
+	forLLM string,
+	isError bool,
+	err error,
+	truncated bool,
+	artifactPath string,
+	spillCapped bool,
+) *ToolResult {
+	result := &ToolResult{
+		ForLLM:  forLLM,
+		ForUser: forLLM,
+		IsError: isError,
+		Err:     err,
+	}
 	if truncated {
-		fullText = fullOutput
+		// The tool already reduced the output to a bounded view. Prevent the
+		// generic large-result spill from persisting that view as if it were
+		// the full payload.
+		result.LargeResultSpilled = true
 	}
+	if artifactPath != "" {
+		result.ArtifactTags = append(result.ArtifactTags, "[file:"+artifactPath+"]")
+	}
+	if spillCapped {
+		note := fmt.Sprintf(
+			"\n\n[Full output artifact capped at %s bytes]",
+			formatCount64(maxOutputSpillBytes),
+		)
+		result.ForLLM += note
+		result.ForUser += note
+	}
+	return result
+}
 
-	if err != nil {
-		return &ToolResult{
-			ForLLM:   output,
-			ForUser:  output,
-			IsError:  true,
-			FullText: fullText,
-		}
+func (t *ExecTool) outputSpillDir() string {
+	if t.workingDir == "" {
+		return ""
 	}
-
-	return &ToolResult{
-		ForLLM:   output,
-		ForUser:  output,
-		IsError:  false,
-		FullText: fullText,
-	}
+	return filepath.Join(t.workingDir, ".artifacts", "tool")
 }
 
 func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEnabled bool) *ToolResult {
