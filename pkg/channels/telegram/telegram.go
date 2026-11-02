@@ -407,6 +407,29 @@ type sendChunkParams struct {
 	useMarkdownV2 bool
 }
 
+// classifyTelegramError maps a telego API error to the channel sentinel that
+// Manager's retry loop keys on. Rate limits keep the platform-provided retry
+// window instead of being flattened to ErrTemporary.
+func classifyTelegramError(err error) error {
+	if err == nil {
+		return nil
+	}
+
+	var apiErr *ta.Error
+	if errors.As(err, &apiErr) {
+		if apiErr.ErrorCode == http.StatusTooManyRequests {
+			var retryAfter time.Duration
+			if apiErr.Parameters != nil && apiErr.Parameters.RetryAfter > 0 {
+				retryAfter = time.Duration(apiErr.Parameters.RetryAfter) * time.Second
+			}
+			return &channels.RateLimitError{RetryAfter: retryAfter, Err: err}
+		}
+		return channels.ClassifySendError(apiErr.ErrorCode, err)
+	}
+
+	return channels.ClassifyNetError(err)
+}
+
 // sendChunk sends a single HTML/MarkdownV2 message, falling back to the original
 // markdown as plain text on parse failure so users never see raw HTML/MarkdownV2 tags.
 func (c *TelegramChannel) sendChunk(
@@ -431,13 +454,23 @@ func (c *TelegramChannel) sendChunk(
 
 	pMsg, err := c.bot.SendMessage(ctx, tgMsg)
 	if err != nil {
+		firstErr := classifyTelegramError(err)
+
+		// Only retry as plain text when Telegram rejected the payload itself
+		// (typically malformed HTML/MarkdownV2). Rate limits and transient
+		// failures must keep their classification and retry window; an
+		// immediate second call would just burn another token.
+		if !errors.Is(firstErr, channels.ErrSendFailed) {
+			return "", fmt.Errorf("telegram send: %w", firstErr)
+		}
+
 		logParseFailed(err, params.useMarkdownV2)
 
 		tgMsg.Text = params.mdFallback
 		tgMsg.ParseMode = ""
 		pMsg, err = c.bot.SendMessage(ctx, tgMsg)
 		if err != nil {
-			return "", fmt.Errorf("telegram send: %w", channels.ErrTemporary)
+			return "", fmt.Errorf("telegram send: %w", classifyTelegramError(err))
 		}
 	}
 
@@ -711,7 +744,7 @@ func (c *TelegramChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMe
 				"count": len(msg.Parts),
 				"error": err.Error(),
 			})
-			return nil, fmt.Errorf("telegram send media group: %w", channels.ErrTemporary)
+			return nil, fmt.Errorf("telegram send media group: %w", classifyTelegramError(err))
 		}
 		if len(groupIDs) > 0 {
 			messageIDs = append(messageIDs, groupIDs...)
@@ -754,7 +787,11 @@ func (c *TelegramChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMe
 			if err != nil && strings.Contains(err.Error(), "PHOTO_INVALID_DIMENSIONS") {
 				if _, seekErr := file.Seek(0, io.SeekStart); seekErr != nil {
 					file.Close()
-					return nil, fmt.Errorf("telegram rewind media after photo failure: %w", channels.ErrTemporary)
+					return nil, fmt.Errorf(
+						"telegram rewind media after photo failure: %w: %w",
+						channels.ErrTemporary,
+						seekErr,
+					)
 				}
 
 				docParams := &telego.SendDocumentParams{
@@ -814,7 +851,7 @@ func (c *TelegramChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMe
 				"type":  part.Type,
 				"error": err.Error(),
 			})
-			return nil, fmt.Errorf("telegram send media: %w", channels.ErrTemporary)
+			return nil, fmt.Errorf("telegram send media: %w", classifyTelegramError(err))
 		}
 	}
 

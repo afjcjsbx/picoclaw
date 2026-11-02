@@ -130,6 +130,15 @@ func successUserResponse(t *testing.T, user *telego.User) *ta.Response {
 	return &ta.Response{Ok: true, Result: b}
 }
 
+// telegramAPIErrorResponse builds the API error Telegram returns for a failed method.
+func telegramAPIErrorResponse(code int, description string, retryAfter int) *ta.Response {
+	apiErr := &ta.Error{ErrorCode: code, Description: description}
+	if retryAfter > 0 {
+		apiErr.Parameters = &ta.ResponseParameters{RetryAfter: retryAfter}
+	}
+	return &ta.Response{Ok: false, Error: apiErr}
+}
+
 // newTestChannel creates a TelegramChannel with a mocked bot for unit testing.
 func newTestChannel(t *testing.T, caller *stubCaller) *TelegramChannel {
 	return newTestChannelWithConstructor(t, caller, &stubConstructor{})
@@ -275,6 +284,42 @@ func TestSendMedia_ImageNonDimensionErrorDoesNotFallback(t *testing.T) {
 	assert.Contains(t, caller.calls[0].URL, "sendPhoto")
 	require.Len(t, constructor.calls, 1)
 	assert.NotContains(t, caller.calls[0].URL, "sendDocument")
+}
+
+func TestSendMedia_RateLimitClassifiedForRetry(t *testing.T) {
+	caller := &stubCaller{
+		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
+			if !strings.Contains(url, "sendPhoto") {
+				t.Fatalf("unexpected API call: %s", url)
+			}
+			return telegramAPIErrorResponse(429, "Too Many Requests: retry after 14", 14), nil
+		},
+	}
+	ch := newTestChannel(t, caller)
+
+	store := media.NewFileMediaStore()
+	ch.SetMediaStore(store)
+
+	tmpDir := t.TempDir()
+	localPath := filepath.Join(tmpDir, "image.png")
+	require.NoError(t, os.WriteFile(localPath, []byte("fake-png-content"), 0o644))
+
+	ref, err := store.Store(localPath, media.MediaMeta{Filename: "image.png", ContentType: "image/png"}, "scope-1")
+	require.NoError(t, err)
+
+	_, err = ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+		ChatID: "12345",
+		Parts:  []bus.MediaPart{{Type: "image", Ref: ref}},
+	})
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, channels.ErrRateLimit)
+	assert.False(t, errors.Is(err, channels.ErrTemporary))
+
+	var rateErr *channels.RateLimitError
+	require.ErrorAs(t, err, &rateErr)
+	assert.Equal(t, 14*time.Second, rateErr.RetryAfter)
+	assert.Len(t, caller.calls, 1)
 }
 
 func TestSendMedia_MultipleImagesUseMediaGroup(t *testing.T) {
@@ -782,7 +827,7 @@ func TestSend_HTMLFallback_PerChunk(t *testing.T) {
 			callCount++
 			// Fail on odd calls (HTML attempt), succeed on even calls (plain text fallback)
 			if callCount%2 == 1 {
-				return nil, errors.New("Bad Request: can't parse entities")
+				return telegramAPIErrorResponse(400, "Bad Request: can't parse entities", 0), nil
 			}
 			return successResponse(t), nil
 		},
@@ -802,7 +847,7 @@ func TestSend_HTMLFallback_PerChunk(t *testing.T) {
 func TestSend_HTMLFallback_BothFail(t *testing.T) {
 	caller := &stubCaller{
 		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
-			return nil, errors.New("send failed")
+			return telegramAPIErrorResponse(400, "Bad Request: can't parse entities", 0), nil
 		},
 	}
 	ch := newTestChannel(t, caller)
@@ -813,8 +858,70 @@ func TestSend_HTMLFallback_BothFail(t *testing.T) {
 	})
 
 	assert.Error(t, err)
-	assert.True(t, errors.Is(err, channels.ErrTemporary), "error should wrap ErrTemporary")
+	assert.ErrorIs(t, err, channels.ErrSendFailed, "400 after fallback should be permanent")
 	assert.Equal(t, 2, len(caller.calls), "should have HTML attempt + plain text attempt")
+}
+
+func TestSend_RateLimitClassifiedForRetry(t *testing.T) {
+	caller := &stubCaller{
+		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
+			return telegramAPIErrorResponse(429, "Too Many Requests: retry after 14", 14), nil
+		},
+	}
+	ch := newTestChannel(t, caller)
+
+	_, err := ch.Send(context.Background(), bus.OutboundMessage{
+		ChatID:  "12345",
+		Content: "Hello",
+	})
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, channels.ErrRateLimit, "429 must reach Manager as a rate limit")
+	assert.False(t, errors.Is(err, channels.ErrTemporary), "429 must not be flattened to ErrTemporary")
+
+	var rateErr *channels.RateLimitError
+	require.ErrorAs(t, err, &rateErr)
+	assert.Equal(t, 14*time.Second, rateErr.RetryAfter)
+
+	// No immediate plain-text fallback: it would burn another token inside the
+	// same rate-limit window.
+	assert.Len(t, caller.calls, 1, "429 must not trigger the plain-text fallback")
+}
+
+func TestSend_ServerErrorDoesNotFallbackToPlainText(t *testing.T) {
+	caller := &stubCaller{
+		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
+			return telegramAPIErrorResponse(500, "Internal Server Error", 0), nil
+		},
+	}
+	ch := newTestChannel(t, caller)
+
+	_, err := ch.Send(context.Background(), bus.OutboundMessage{
+		ChatID:  "12345",
+		Content: "Hello",
+	})
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, channels.ErrTemporary)
+	assert.Len(t, caller.calls, 1, "transient failures must not trigger the plain-text fallback")
+}
+
+func TestSend_NetworkErrorDoesNotFallbackToPlainText(t *testing.T) {
+	caller := &stubCaller{
+		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
+			return nil, errors.New("connection reset by peer")
+		},
+	}
+	ch := newTestChannel(t, caller)
+
+	_, err := ch.Send(context.Background(), bus.OutboundMessage{
+		ChatID:  "12345",
+		Content: "Hello",
+	})
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, channels.ErrTemporary)
+	assert.Len(t, caller.calls, 1, "network errors must not trigger the plain-text fallback")
 }
 
 func TestSend_LongMessage_HTMLFallback_StopsOnError(t *testing.T) {
@@ -822,7 +929,7 @@ func TestSend_LongMessage_HTMLFallback_StopsOnError(t *testing.T) {
 	// plain text fail on the first chunk, Send should return early.
 	caller := &stubCaller{
 		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
-			return nil, errors.New("send failed")
+			return telegramAPIErrorResponse(400, "Bad Request: can't parse entities", 0), nil
 		},
 	}
 	ch := newTestChannel(t, caller)

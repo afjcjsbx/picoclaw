@@ -37,8 +37,15 @@ const (
 	defaultRateLimit        = 10 // default 10 msg/s
 	maxRetries              = 3
 	rateLimitDelay          = 1 * time.Second
+	maxRateLimitDelay       = 1 * time.Minute
 	baseBackoff             = 500 * time.Millisecond
 	maxBackoff              = 8 * time.Second
+
+	// chunkSpacing is the minimum pause between chunks of the same logical
+	// message. Without it, a long reply split by the Manager is sent back to
+	// back and can trip per-chat platform limits even though the channel-wide
+	// rate limiter allows it.
+	chunkSpacing = 250 * time.Millisecond
 
 	janitorInterval = 10 * time.Second
 	typingStopTTL   = 5 * time.Minute
@@ -1538,8 +1545,13 @@ func (m *Manager) runWorker(ctx context.Context, name string, w *channelWorker) 
 				chunks = splitOutboundMessageContent(msg, maxLen)
 			}
 
-			// Step 3: Send all chunks
-			for _, chunk := range chunks {
+			// Step 3: Send all chunks with a minimum gap between them so a
+			// long reply does not consume the platform's per-chat budget in
+			// one burst.
+			for i, chunk := range chunks {
+				if i > 0 && !waitChunkSpacing(ctx) {
+					return
+				}
 				chunkMsg := msg
 				chunkMsg.Content = chunk
 				m.sendWithRetry(ctx, name, w, chunkMsg)
@@ -1585,6 +1597,28 @@ func splitOutboundMessageContent(msg bus.OutboundMessage, maxLen int) []string {
 		}
 	}
 	return []string{msg.Content}
+}
+
+// rateLimitBackoff returns the wait before retrying a rate-limited send.
+// Channels that report the platform-requested retry window get it honored,
+// capped so a long server-side ban cannot stall a worker indefinitely.
+func rateLimitBackoff(err error) time.Duration {
+	delay := rateLimitDelay
+	if requested, ok := RateLimitRetryAfter(err); ok {
+		delay = requested
+	}
+	return min(delay, maxRateLimitDelay)
+}
+
+// waitChunkSpacing pauses between chunks of the same logical message.
+// Returns false when the context ends before the pause completes.
+func waitChunkSpacing(ctx context.Context) bool {
+	select {
+	case <-time.After(chunkSpacing):
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 // sendWithRetry sends a message through the channel with rate limiting and
@@ -1640,10 +1674,10 @@ func (m *Manager) sendWithRetry(
 			break
 		}
 
-		// Rate limit error — fixed delay
+		// Rate limit error — honor the platform-requested delay when present
 		if errors.Is(lastErr, ErrRateLimit) {
 			select {
-			case <-time.After(rateLimitDelay):
+			case <-time.After(rateLimitBackoff(lastErr)):
 				continue
 			case <-ctx.Done():
 				return nil, false
@@ -1840,10 +1874,10 @@ func (m *Manager) sendMediaWithRetry(
 			break
 		}
 
-		// Rate limit error — fixed delay
+		// Rate limit error — honor the platform-requested delay when present
 		if errors.Is(lastErr, ErrRateLimit) {
 			select {
-			case <-time.After(rateLimitDelay):
+			case <-time.After(rateLimitBackoff(lastErr)):
 				continue
 			case <-ctx.Done():
 				return nil, ctx.Err()
@@ -2168,7 +2202,10 @@ func (m *Manager) SendMessage(ctx context.Context, msg bus.OutboundMessage) erro
 		maxLen = mlp.MaxMessageLength()
 	}
 	if chunks := splitOutboundMessageContent(msg, maxLen); len(chunks) > 1 {
-		for _, chunk := range chunks {
+		for i, chunk := range chunks {
+			if i > 0 && !waitChunkSpacing(ctx) {
+				return ctx.Err()
+			}
 			chunkMsg := msg
 			chunkMsg.Content = chunk
 			m.sendWithRetry(ctx, channelName, w, chunkMsg)
