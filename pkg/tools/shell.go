@@ -1487,6 +1487,10 @@ const shellPathSeparators = ";|&<>`"
 // separator, so a path glued to the separator without whitespace (for example
 // "f>/etc/x") is not checked on its own here.
 //
+// Trailing ",)]}:" is stripped too, so a real file whose name ends in one of
+// those characters (for example "/workspace/backup,") is checked as the name
+// without it. Rare, and accepted in exchange for not blocking "(... /dev/null)".
+//
 // Windows-style matches (drive letter, backslashes) are left untouched because
 // the same bytes can legitimately appear inside a Windows path.
 func trimShellPathMatch(pathText string) string {

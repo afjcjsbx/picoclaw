@@ -825,6 +825,8 @@ func TestTrimShellPathMatch(t *testing.T) {
 		{"/dev/null`echo", "/dev/null"},
 		{"/etc/passwd;echo", "/etc/passwd"},
 		{"/etc/passwd", "/etc/passwd"},
+		// Known trade-off: trailing punctuation is stripped even from real names.
+		{"/workspace/backup,", "/workspace/backup"},
 		// Windows matches are intentionally left untouched.
 		{`C:\dev\null;x`, `C:\dev\null;x`},
 	}
