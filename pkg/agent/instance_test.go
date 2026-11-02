@@ -1373,3 +1373,17 @@ func TestNewAgentInstance_ExplicitEmptyToolsFieldBlocksAllTools(t *testing.T) {
 		})
 	}
 }
+
+func TestNewAgentInstance_RegistersMemoryToolWhenEnabled(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		cfg := &config.Config{Agents: config.AgentsConfig{Defaults: config.AgentDefaults{
+			Workspace: t.TempDir(),
+			ModelName: "test-model",
+			Memory:    config.MemoryConfig{Enabled: enabled},
+		}}}
+		agent := NewAgentInstance(nil, &cfg.Agents.Defaults, cfg, &mockProvider{})
+		if _, ok := agent.Tools.Get("memory"); ok != enabled {
+			t.Errorf("memory_enabled=%v: tool registered = %v", enabled, ok)
+		}
+	}
+}

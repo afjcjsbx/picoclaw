@@ -23,6 +23,14 @@
         "max_depth": 3,
         "max_concurrent": 3
       },
+      "memory": {
+        "memory_enabled": true,
+        "memory_char_limit": 2200,
+        "user_char_limit": 1375,
+        "daily_notes_enabled": true,
+        "recent_daily_notes_count": 3,
+        "daily_notes_char_limit": 1000
+      },
       "vision_max_image_dimension": 1568,
       "vision_jpeg_quality": 85,
       "summarize_token_percent": 75,
