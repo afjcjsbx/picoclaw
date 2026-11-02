@@ -778,10 +778,10 @@ func TestShellTool_DevNullAllowedWithSeparator(t *testing.T) {
 	}
 }
 
-// TestShellTool_SeparatorTrimmingKeepsRealPathsBlocked verifies that the
-// separator trimming cannot be used to sneak an outside-workspace path past
-// the containment check.
-func TestShellTool_SeparatorTrimmingKeepsRealPathsBlocked(t *testing.T) {
+// TestShellTool_SeparatorKeepsRealPathsBlocked verifies that shell syntax stuck
+// to a path cannot be used to sneak an outside-workspace path past the
+// containment check, whether the real path comes before or after the separator.
+func TestShellTool_SeparatorKeepsRealPathsBlocked(t *testing.T) {
 	tmpDir := t.TempDir()
 	tool, err := NewExecTool(tmpDir, true)
 	if err != nil {
@@ -795,6 +795,16 @@ func TestShellTool_SeparatorTrimmingKeepsRealPathsBlocked(t *testing.T) {
 		"cat /etc/passwd|cat",
 		"cat /etc/shadow)",
 		"cat /etc/shadow,",
+		// A safe pseudo-device must not act as an allowlist prefix: every
+		// separator-delimited token is validated, so the path that follows is
+		// still checked (regression test for the prefix-only trimming bug).
+		"cat /dev/null;cat</etc/shadow",
+		"cat /dev/null&&cat</etc/shadow",
+		"cat /dev/null|cat</etc/shadow",
+		"cat /dev/null;cat</etc/passwd",
+		"echo hi>/dev/null;cat</etc/shadow",
+		"cat /dev/null;echo;/etc/motd",
+		"cat /dev/null>/tmp/out",
 	}
 
 	for _, cmd := range commands {
@@ -805,36 +815,39 @@ func TestShellTool_SeparatorTrimmingKeepsRealPathsBlocked(t *testing.T) {
 	}
 }
 
-// TestTrimShellPathMatch exercises the trimming helper directly.
-func TestTrimShellPathMatch(t *testing.T) {
-	cases := []struct{ in, want string }{
-		{"/dev/null", "/dev/null"},
-		{"/dev/null;", "/dev/null"},
-		{"/dev/null;echo b", "/dev/null"},
-		{"/dev/null&&echo b", "/dev/null"},
-		{"/dev/null||echo b", "/dev/null"},
-		{"/dev/null|cat", "/dev/null"},
-		{"/dev/null)", "/dev/null"},
-		{"/dev/null]", "/dev/null"},
-		{"/dev/null}", "/dev/null"},
-		{"/dev/null,", "/dev/null"},
-		{"/dev/null:", "/dev/null"},
+// TestSplitShellPathMatch exercises the splitting helper directly.
+func TestSplitShellPathMatch(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []string
+	}{
+		{"/dev/null", []string{"/dev/null"}},
+		{"/dev/null;", []string{"/dev/null"}},
+		{"/dev/null;echo b", []string{"/dev/null", "echo b"}},
+		{"/dev/null&&echo b", []string{"/dev/null", "echo b"}},
+		{"/dev/null||echo b", []string{"/dev/null", "echo b"}},
+		{"/dev/null|cat", []string{"/dev/null", "cat"}},
+		{"/dev/null)", []string{"/dev/null"}},
+		{"/dev/null]", []string{"/dev/null"}},
+		{"/dev/null}", []string{"/dev/null"}},
+		{"/dev/null,", []string{"/dev/null"}},
+		{"/dev/null:", []string{"/dev/null"}},
 		// Backticks are covered here only: a full command containing them is
 		// rejected earlier by the dangerous-pattern check.
-		{"/dev/null`", "/dev/null"},
-		{"/dev/null`echo", "/dev/null"},
-		{"/etc/passwd;echo", "/etc/passwd"},
-		{"/etc/passwd", "/etc/passwd"},
+		{"/dev/null`", []string{"/dev/null"}},
+		{"/dev/null`echo", []string{"/dev/null", "echo"}},
+		{"/etc/passwd;echo", []string{"/etc/passwd", "echo"}},
+		{"/etc/passwd", []string{"/etc/passwd"}},
+		// Every segment after a separator is kept so it can be validated.
+		{"/dev/null;cat</etc/shadow", []string{"/dev/null", "cat", "/etc/shadow"}},
 		// Known trade-off: trailing punctuation is stripped even from real names.
-		{"/workspace/backup,", "/workspace/backup"},
+		{"/workspace/backup,", []string{"/workspace/backup"}},
 		// Windows matches are intentionally left untouched.
-		{`C:\dev\null;x`, `C:\dev\null;x`},
+		{`C:\dev\null;x`, []string{`C:\dev\null;x`}},
 	}
 
 	for _, tc := range cases {
-		if got := trimShellPathMatch(tc.in); got != tc.want {
-			t.Errorf("trimShellPathMatch(%q) = %q, want %q", tc.in, got, tc.want)
-		}
+		require.Equal(t, tc.want, splitShellPathMatch(tc.in), "splitShellPathMatch(%q)", tc.in)
 	}
 }
 
