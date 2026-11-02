@@ -819,6 +819,10 @@ func TestTrimShellPathMatch(t *testing.T) {
 		{"/dev/null}", "/dev/null"},
 		{"/dev/null,", "/dev/null"},
 		{"/dev/null:", "/dev/null"},
+		// Backticks are covered here only: a full command containing them is
+		// rejected earlier by the dangerous-pattern check.
+		{"/dev/null`", "/dev/null"},
+		{"/dev/null`echo", "/dev/null"},
 		{"/etc/passwd;echo", "/etc/passwd"},
 		{"/etc/passwd", "/etc/passwd"},
 		// Windows matches are intentionally left untouched.
