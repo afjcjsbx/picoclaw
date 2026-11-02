@@ -743,6 +743,114 @@ func TestShellTool_DevNullAllowed(t *testing.T) {
 	}
 }
 
+// TestShellTool_DevNullAllowedWithSeparator verifies that /dev/null redirections
+// are not blocked when immediately followed by a shell separator (issue #435).
+// The absolute-path regex only stops at whitespace or quotes, so it used to
+// swallow the separator and produce a bogus path such as "/dev/null;".
+func TestShellTool_DevNullAllowedWithSeparator(t *testing.T) {
+	tmpDir := t.TempDir()
+	tool, err := NewExecTool(tmpDir, true)
+	if err != nil {
+		t.Fatalf("unable to configure exec tool: %s", err)
+	}
+
+	commands := []string{
+		"echo a 2>/dev/null; echo b",
+		"echo a 2>/dev/null;echo b",
+		"echo a 2>/dev/null|cat",
+		"echo a 2>/dev/null&&echo b",
+		"echo a 2>/dev/null||echo b",
+		"echo a 2>/dev/null&echo b",
+		"echo a >/dev/null;echo b",
+		"echo a 2>/dev/null,",
+		"echo a 2>/dev/null)",
+		"echo a 2>/dev/null]",
+		"echo a 2>/dev/null}",
+		"echo a 2>/dev/null:",
+		"cat /dev/urandom|head -c 16|od;echo done",
+	}
+
+	for _, cmd := range commands {
+		result := tool.Execute(context.Background(), map[string]any{"action": "run", "command": cmd})
+		if result.IsError && strings.Contains(result.ForLLM, "blocked") {
+			t.Errorf("command should not be blocked: %s\n  error: %s", cmd, result.ForLLM)
+		}
+	}
+}
+
+// TestShellTool_SeparatorKeepsRealPathsBlocked verifies that shell syntax stuck
+// to a path cannot be used to sneak an outside-workspace path past the
+// containment check, whether the real path comes before or after the separator.
+func TestShellTool_SeparatorKeepsRealPathsBlocked(t *testing.T) {
+	tmpDir := t.TempDir()
+	tool, err := NewExecTool(tmpDir, true)
+	if err != nil {
+		t.Fatalf("unable to configure exec tool: %s", err)
+	}
+
+	commands := []string{
+		"cat /etc/passwd;echo done",
+		"cat /etc/passwd;echo done 2>/dev/null",
+		"cat /etc/passwd&&echo done",
+		"cat /etc/passwd|cat",
+		"cat /etc/shadow)",
+		"cat /etc/shadow,",
+		// A safe pseudo-device must not act as an allowlist prefix: every
+		// separator-delimited token is validated, so the path that follows is
+		// still checked (regression test for the prefix-only trimming bug).
+		"cat /dev/null;cat</etc/shadow",
+		"cat /dev/null&&cat</etc/shadow",
+		"cat /dev/null|cat</etc/shadow",
+		"cat /dev/null;cat</etc/passwd",
+		"echo hi>/dev/null;cat</etc/shadow",
+		"cat /dev/null;echo;/etc/motd",
+		"cat /dev/null>/tmp/out",
+	}
+
+	for _, cmd := range commands {
+		result := tool.Execute(context.Background(), map[string]any{"action": "run", "command": cmd})
+		if !result.IsError || !strings.Contains(result.ForLLM, "path outside working dir") {
+			t.Errorf("outside path should still be blocked: %s\n  result: %s", cmd, result.ForLLM)
+		}
+	}
+}
+
+// TestSplitShellPathMatch exercises the splitting helper directly.
+func TestSplitShellPathMatch(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []string
+	}{
+		{"/dev/null", []string{"/dev/null"}},
+		{"/dev/null;", []string{"/dev/null"}},
+		{"/dev/null;echo b", []string{"/dev/null", "echo b"}},
+		{"/dev/null&&echo b", []string{"/dev/null", "echo b"}},
+		{"/dev/null||echo b", []string{"/dev/null", "echo b"}},
+		{"/dev/null|cat", []string{"/dev/null", "cat"}},
+		{"/dev/null)", []string{"/dev/null"}},
+		{"/dev/null]", []string{"/dev/null"}},
+		{"/dev/null}", []string{"/dev/null"}},
+		{"/dev/null,", []string{"/dev/null"}},
+		{"/dev/null:", []string{"/dev/null"}},
+		// Backticks are covered here only: a full command containing them is
+		// rejected earlier by the dangerous-pattern check.
+		{"/dev/null`", []string{"/dev/null"}},
+		{"/dev/null`echo", []string{"/dev/null", "echo"}},
+		{"/etc/passwd;echo", []string{"/etc/passwd", "echo"}},
+		{"/etc/passwd", []string{"/etc/passwd"}},
+		// Every segment after a separator is kept so it can be validated.
+		{"/dev/null;cat</etc/shadow", []string{"/dev/null", "cat", "/etc/shadow"}},
+		// Known trade-off: trailing punctuation is stripped even from real names.
+		{"/workspace/backup,", []string{"/workspace/backup"}},
+		// Windows matches are intentionally left untouched.
+		{`C:\dev\null;x`, []string{`C:\dev\null;x`}},
+	}
+
+	for _, tc := range cases {
+		require.Equal(t, tc.want, splitShellPathMatch(tc.in), "splitShellPathMatch(%q)", tc.in)
+	}
+}
+
 // TestShellTool_BlockDevices verifies that writes to block devices are blocked (issue #965).
 func TestShellTool_BlockDevices(t *testing.T) {
 	tool, err := NewExecTool("", false)
