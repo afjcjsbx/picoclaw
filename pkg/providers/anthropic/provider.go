@@ -240,14 +240,15 @@ func buildParams(
 		params.System = system
 	}
 
-	// Skip temperature for thinking-always models (Claude 5 family) which reject it.
-	// Also skip if thinking is being injected via thinking_level.
-	thinkingAlways := isThinkingAlwaysModel(apiModel)
+	// Skip temperature for models that reject it (Claude 5 family and newer
+	// thinking-always models). Also skip if thinking is being injected via
+	// thinking_level.
+	deprecatesTemperature := common.ModelDeprecatesTemperature(apiModel)
 	hasThinkingLevel := false
 	if level, ok := options["thinking_level"].(string); ok && level != "" && level != "off" {
 		hasThinkingLevel = true
 	}
-	if !thinkingAlways && !hasThinkingLevel {
+	if !deprecatesTemperature && !hasThinkingLevel {
 		if temp, ok := options["temperature"].(float64); ok {
 			params.Temperature = anthropic.Float(temp)
 		}
@@ -337,19 +338,6 @@ func levelToBudget(level string) int {
 	default:
 		return 0
 	}
-}
-
-// isThinkingAlwaysModel returns true for models that have thinking enabled by default
-// and reject explicit temperature. These are the Claude 5 family models.
-func isThinkingAlwaysModel(model string) bool {
-	// Model IDs use hyphens (normalized earlier): claude-haiku-5-5, claude-sonnet-5, etc.
-	prefixes := []string{"claude-haiku-5", "claude-sonnet-5", "claude-opus-5", "claude-opus-4-5", "claude-sonnet-4-5"}
-	for _, p := range prefixes {
-		if strings.HasPrefix(model, p) {
-			return true
-		}
-	}
-	return false
 }
 
 func translateTools(tools []ToolDefinition) []anthropic.ToolUnionParam {
