@@ -17,6 +17,7 @@ PicoClaw registers its tools dynamically at runtime. Each one can be enabled or 
 | MCP | `mcp_<server>_<tool>`, `tool_search_tool_bm25`, `tool_search_tool_regex` | [MCP tools](mcp.md) |
 | Hardware | `i2c`, `spi`, `serial` | [Hardware tools](hardware.md) |
 | Planning | `todo` | [Todo planning tool](todo.md) |
+| Clarification | `ask_user` | [Ask User tool](ask-user.md) |
 
 ## Global settings
 

@@ -131,6 +131,12 @@ var toolCatalog = []toolCatalogEntry{
 		ConfigKey:   "message",
 	},
 	{
+		Name:        "ask_user",
+		Description: "Ask the user clarifying questions and wait for the answers.",
+		Category:    "communication",
+		ConfigKey:   "ask_user",
+	},
+	{
 		Name:        "send_file",
 		Description: "Send an outbound file or media attachment to the active chat.",
 		Category:    "communication",
@@ -362,6 +368,8 @@ func applyToolState(cfg *config.Config, toolName string, enabled bool) error {
 		cfg.Tools.WebFetch.Enabled = enabled
 	case "message":
 		cfg.Tools.Message.Enabled = enabled
+	case "ask_user":
+		cfg.Tools.AskUser.Enabled = enabled
 	case "send_file":
 		cfg.Tools.SendFile.Enabled = enabled
 	case "find_skills":

@@ -64,6 +64,9 @@ func TestHandleListTools(t *testing.T) {
 	if gotTools["cron"].Status != "enabled" {
 		t.Fatalf("cron status = %q, want enabled", gotTools["cron"].Status)
 	}
+	if gotTools["ask_user"].Status != "enabled" {
+		t.Fatalf("ask_user status = %q, want enabled", gotTools["ask_user"].Status)
+	}
 	if gotTools["spawn"].Status != "blocked" || gotTools["spawn"].ReasonCode != "requires_subagent" {
 		t.Fatalf("spawn = %#v, want blocked/requires_subagent", gotTools["spawn"])
 	}
@@ -251,6 +254,22 @@ func TestHandleUpdateToolState(t *testing.T) {
 	}
 	if !updated.Tools.Serial.Enabled {
 		t.Fatalf("serial should be enabled: %#v", updated.Tools.Serial)
+	}
+}
+
+func TestApplyToolState_AskUser(t *testing.T) {
+	cfg := config.DefaultConfig()
+	if err := applyToolState(cfg, "ask_user", false); err != nil {
+		t.Fatalf("applyToolState() error = %v", err)
+	}
+	if cfg.Tools.AskUser.Enabled {
+		t.Fatal("ask_user should be disabled")
+	}
+	if err := applyToolState(cfg, "ask_user", true); err != nil {
+		t.Fatalf("applyToolState() error = %v", err)
+	}
+	if !cfg.Tools.AskUser.Enabled {
+		t.Fatal("ask_user should be enabled")
 	}
 }
 

@@ -20,6 +20,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/skills"
 	"github.com/sipeed/picoclaw/pkg/state"
 	"github.com/sipeed/picoclaw/pkg/tools"
+	askusertools "github.com/sipeed/picoclaw/pkg/tools/askuser"
 	fstools "github.com/sipeed/picoclaw/pkg/tools/fs"
 	hardwaretools "github.com/sipeed/picoclaw/pkg/tools/hardware"
 	integrationtools "github.com/sipeed/picoclaw/pkg/tools/integration"
@@ -90,6 +91,7 @@ func NewAgentLoop(
 		cmdRegistry:       commands.NewRegistry(commands.BuiltinDefinitions()),
 		evolution:         bridge,
 		steering:          newSteeringQueue(parseSteeringMode(cfg.Agents.Defaults.SteeringMode)),
+		askUserBroker:     askusertools.NewBroker(),
 		workerSem:         make(chan struct{}, workerPoolSize),
 		ownsRuntimeEvents: true,
 	}
@@ -257,6 +259,12 @@ func registerSharedTools(
 				return err
 			})
 			agent.Tools.Register(reactionTool)
+		}
+
+		// Ask User tool. Questions are delivered through the current
+		// chat and answers are routed back by AgentLoop.Run.
+		if cfg.Tools.IsToolEnabled("ask_user") {
+			agent.Tools.Register(al.newAskUserTool(msgBus))
 		}
 
 		// Send file tool (outbound media via MediaStore — store injected later by SetMediaStore)

@@ -30,6 +30,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/session"
 	"github.com/sipeed/picoclaw/pkg/state"
 	"github.com/sipeed/picoclaw/pkg/tools"
+	askusertools "github.com/sipeed/picoclaw/pkg/tools/askuser"
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
@@ -64,6 +65,7 @@ type AgentLoop struct {
 	evolution      *evolutionBridge
 	hookRuntime    hookRuntime
 	steering       *steeringQueue
+	askUserBroker  *askusertools.Broker
 	pendingSkills  sync.Map
 	voiceModes     sync.Map
 	pendingStops   sync.Map
@@ -231,6 +233,12 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 					continue
 				}
 
+				// A pending ask_user interaction consumes the next user message
+				// for this conversation instead of starting/steering another turn.
+				if al.deliverAskUserReply(sessionKey, msg) {
+					continue
+				}
+
 				// Another turn is already active (or reserved) for this session — enqueue
 				if err := al.enqueueSteeringMessage(sessionKey, agentID, providers.Message{
 					Role:    "user",
@@ -339,7 +347,7 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 					}()
 				}
 
-				al.runTurnWithSteering(ctx, m)
+				al.runTurnWithSteering(askusertools.WithInteractiveSession(ctx), m)
 			}(msg, placeholder)
 		}
 	}
