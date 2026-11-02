@@ -16,6 +16,11 @@ import "strings"
 // accept temperature alongside thinking. Bedrock uses the same markers because
 // its model IDs and inference-profile ARNs embed the Anthropic model name.
 var temperatureDeprecatedModelMarkers = []string{
+	// Claude 5.5 models.
+	"claude-haiku-5-5",
+	"claude-sonnet-5-5",
+	"claude-opus-5-5",
+	// Claude 5 models and newer 5.x minor versions.
 	"claude-haiku-5",
 	"claude-sonnet-5",
 	"claude-opus-5",

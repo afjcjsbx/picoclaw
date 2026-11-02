@@ -13,11 +13,17 @@ func TestModelDeprecatesTemperature(t *testing.T) {
 		model string
 		want  bool
 	}{
-		{"sonnet 5 bare", "claude-sonnet-5-5", true},
-		{"sonnet 5 dotted", "claude-sonnet-5.5", true},
-		{"sonnet 5 provider prefix", "anthropic/claude-sonnet-5-5", true},
-		{"sonnet 5 uppercase", "Anthropic/Claude-Sonnet-5-5", true},
-		{"haiku 5", "claude-haiku-5-5", true},
+		{"sonnet 5.5 bare", "claude-sonnet-5-5", true},
+		{"sonnet 5.5 dotted", "claude-sonnet-5.5", true},
+		{"sonnet 5.5 provider prefix", "anthropic/claude-sonnet-5-5", true},
+		{"sonnet 5.5 uppercase", "Anthropic/Claude-Sonnet-5-5", true},
+		{"haiku 5.5 bare", "claude-haiku-5-5", true},
+		{"haiku 5.5 dotted", "claude-haiku-5.5", true},
+		{"opus 5.5 bare", "claude-opus-5-5", true},
+		{"opus 5.5 dotted", "claude-opus-5.5", true},
+		{"opus 5.5 provider prefix", "anthropic/claude-opus-5-5", true},
+		{"sonnet 5", "claude-sonnet-5", true},
+		{"haiku 5", "claude-haiku-5", true},
 		{"opus 5", "claude-opus-5", true},
 		{"sonnet 4.5", "claude-sonnet-4-5-20250929", true},
 		{"opus 4.5", "claude-opus-4-5", true},
