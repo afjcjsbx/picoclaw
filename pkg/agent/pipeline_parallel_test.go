@@ -13,6 +13,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
+	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/tools"
 	fstools "github.com/sipeed/picoclaw/pkg/tools/fs"
@@ -433,24 +434,63 @@ func TestExecuteTools_WriteThenReadSamePathStaysOrdered(t *testing.T) {
 	}
 }
 
-// hardAbortAfterHook hard-aborts the turn once the named tool finished.
-type hardAbortAfterHook struct{ tool string }
+// abortHook ends the turn with action when the tool named in before is about
+// to run, or the tool named in after has just finished.
+type abortHook struct {
+	before, after string
+	action        HookAction
+}
 
-func (h *hardAbortAfterHook) BeforeTool(
+func (h *abortHook) BeforeTool(
 	_ context.Context,
 	call *ToolCallHookRequest,
 ) (*ToolCallHookRequest, HookDecision, error) {
+	if call.Tool == h.before {
+		return call, HookDecision{Action: h.action}, nil
+	}
 	return call, HookDecision{Action: HookActionContinue}, nil
 }
 
-func (h *hardAbortAfterHook) AfterTool(
+func (h *abortHook) AfterTool(
 	_ context.Context,
 	result *ToolResultHookResponse,
 ) (*ToolResultHookResponse, HookDecision, error) {
-	if result.Tool == h.tool {
-		return result, HookDecision{Action: HookActionHardAbort}, nil
+	if result.Tool == h.after {
+		return result, HookDecision{Action: h.action}, nil
 	}
 	return result, HookDecision{Action: HookActionContinue}, nil
+}
+
+// assertToolEventsClosed fails when a tool start event has no end or skipped
+// event for the same tool, which would leave the call open for subscribers.
+func assertToolEventsClosed(t *testing.T, events []runtimeevents.Event) {
+	t.Helper()
+	open := map[string]int{}
+	for _, evt := range events {
+		switch p := evt.Payload.(type) {
+		case ToolExecStartPayload:
+			open[p.Tool]++
+		case ToolExecEndPayload:
+			open[p.Tool]--
+		case ToolExecSkippedPayload:
+			open[p.Tool]--
+		}
+	}
+	for tool, n := range open {
+		if n > 0 {
+			t.Errorf("tool %q has %d start event(s) without an end or skipped event", tool, n)
+		}
+	}
+}
+
+func subscribeToolEvents(t *testing.T, h *parHarness) (<-chan runtimeevents.Event, func()) {
+	t.Helper()
+	return subscribeRuntimeEventsForTest(
+		t, h.al, 64,
+		runtimeevents.KindAgentToolExecStart,
+		runtimeevents.KindAgentToolExecEnd,
+		runtimeevents.KindAgentToolExecSkipped,
+	)
 }
 
 func TestExecuteTools_HardAbortAfterParallelSegmentEndsTheTurn(t *testing.T) {
@@ -461,9 +501,11 @@ func TestExecuteTools_HardAbortAfterParallelSegmentEndsTheTurn(t *testing.T) {
 	})
 	h.al.RegisterTool(&parTool{name: "par_a", rec: rec})
 	h.al.RegisterTool(&parTool{name: "par_b", rec: rec})
-	if err := h.al.MountHook(NamedHook("abort", &hardAbortAfterHook{tool: "par_a"})); err != nil {
+	if err := h.al.MountHook(NamedHook("abort", &abortHook{after: "par_a", action: HookActionHardAbort})); err != nil {
 		t.Fatalf("MountHook: %v", err)
 	}
+	events, closeEvents := subscribeToolEvents(t, h)
+	defer closeEvents()
 
 	_, _ = h.al.ProcessDirectWithChannel(context.Background(), "go", "par-session", "test", "chat1")
 
@@ -476,4 +518,63 @@ func TestExecuteTools_HardAbortAfterParallelSegmentEndsTheTurn(t *testing.T) {
 	if calls != 1 {
 		t.Errorf("LLM calls = %d, want 1: a hard abort must not start another iteration", calls)
 	}
+	// Both calls started; the abort hit while finishing the first one, so the
+	// whole segment must be closed, not just the call being finished.
+	collected := collectRuntimeEventStream(events)
+	if got := len(filterRuntimeEvents(collected, runtimeevents.KindAgentToolExecStart)); got != 2 {
+		t.Errorf("start events = %d, want 2", got)
+	}
+	assertToolEventsClosed(t, collected)
+}
+
+// A hook abort keeps the session (a hard abort restores it), so every call of
+// the aborted segment must still have its tool message.
+func TestExecuteTools_HookAbortAfterParallelSegmentAnswersEveryCall(t *testing.T) {
+	rec := newParRecorder()
+	h := newParHarness(t, 4, []providers.ToolCall{
+		parCall("c1", "par_a", map[string]any{"ms": 30.0, "label": "a"}),
+		parCall("c2", "par_b", map[string]any{"ms": 30.0, "label": "b"}),
+	})
+	h.al.RegisterTool(&parTool{name: "par_a", rec: rec})
+	h.al.RegisterTool(&parTool{name: "par_b", rec: rec})
+	if err := h.al.MountHook(NamedHook("abort", &abortHook{after: "par_a", action: HookActionAbortTurn})); err != nil {
+		t.Fatalf("MountHook: %v", err)
+	}
+	events, closeEvents := subscribeToolEvents(t, h)
+	defer closeEvents()
+
+	_, _ = h.al.ProcessDirectWithChannel(context.Background(), "go", "par-session", "test", "chat1")
+
+	const abandoned = "No result recorded: the turn was aborted."
+	assertToolMessages(t, h.toolMessages(), toolMsg{"c1", abandoned}, toolMsg{"c2", abandoned})
+	assertToolEventsClosed(t, collectRuntimeEventStream(events))
+}
+
+// The abort hits while preparing the second call, after the first one already
+// emitted its start event and before anything ran.
+func TestExecuteTools_HookAbortWhilePreparingParallelSegmentRunsNothing(t *testing.T) {
+	rec := newParRecorder()
+	h := newParHarness(t, 4, []providers.ToolCall{
+		parCall("c1", "par_a", map[string]any{"ms": 30.0, "label": "a"}),
+		parCall("c2", "par_b", map[string]any{"ms": 30.0, "label": "b"}),
+		parCall("c3", "par_c", map[string]any{"ms": 30.0, "label": "c"}),
+	})
+	for _, name := range []string{"par_a", "par_b", "par_c"} {
+		h.al.RegisterTool(&parTool{name: name, rec: rec})
+	}
+	if err := h.al.MountHook(NamedHook("abort", &abortHook{before: "par_b", action: HookActionAbortTurn})); err != nil {
+		t.Fatalf("MountHook: %v", err)
+	}
+	events, closeEvents := subscribeToolEvents(t, h)
+	defer closeEvents()
+
+	_, _ = h.al.ProcessDirectWithChannel(context.Background(), "go", "par-session", "test", "chat1")
+
+	if got := rec.maxConcurrent(); got != 0 {
+		t.Errorf("max concurrent executions = %d, want 0: no tool may run once the segment is aborted", got)
+	}
+	const abandoned = "No result recorded: the turn was aborted."
+	assertToolMessages(t, h.toolMessages(),
+		toolMsg{"c1", abandoned}, toolMsg{"c2", abandoned}, toolMsg{"c3", abandoned})
+	assertToolEventsClosed(t, collectRuntimeEventStream(events))
 }

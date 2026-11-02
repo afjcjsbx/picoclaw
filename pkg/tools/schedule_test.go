@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -137,6 +138,21 @@ func TestPlanBatch_NilRegistryIsSequential(t *testing.T) {
 	calls := []providers.ToolCall{{Name: "net"}, {Name: "net"}}
 	if got := formatSegments(PlanBatch(nil, calls)); got != "S[0 1]" {
 		t.Fatalf("PlanBatch(nil) = %q, want S[0 1]", got)
+	}
+}
+
+// RunToolLoop runs sequential segments with limit 1 and relies on it keeping
+// the call order and surviving a panic in the middle.
+func TestRunConcurrent_LimitOneRunsInOrderAndRecovers(t *testing.T) {
+	var order []int // no lock: limit 1 must never overlap calls
+	RunConcurrent(5, 1, func(i int) {
+		order = append(order, i)
+		if i == 2 {
+			panic("boom")
+		}
+	})
+	if want := []int{0, 1, 2, 3, 4}; !slices.Equal(order, want) {
+		t.Errorf("order = %v, want %v", order, want)
 	}
 }
 
