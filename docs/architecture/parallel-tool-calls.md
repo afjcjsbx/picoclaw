@@ -1,6 +1,6 @@
 # Parallel Tool Calls
 
-When the model requests several tools in one response, PicoClaw can run compatible ones concurrently. The design record is in [`../design/parallel-tool-calls-spec.it.md`](../design/parallel-tool-calls-spec.it.md); this page describes the behavior that shipped.
+When the model requests several tools in one response, PicoClaw can run compatible ones concurrently. The design record is in [`../design/parallel-tool-calls-spec.md`](../design/parallel-tool-calls-spec.md); this page describes the behavior that shipped.
 
 ## Configuration
 
