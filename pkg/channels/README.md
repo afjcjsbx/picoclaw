@@ -271,6 +271,10 @@ func (c *TelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]
         // Or manually wrap:
         // return nil, fmt.Errorf("%w: %v", channels.ErrTemporary, err)
         // return nil, fmt.Errorf("%w: %v", channels.ErrRateLimit, err)
+        // Better for 429: keep the platform retry window
+        // return nil, fmt.Errorf("send: %w", &channels.RateLimitError{
+        //     RetryAfter: retryAfter, Err: err,
+        // })
         // return nil, fmt.Errorf("%w: %v", channels.ErrSendFailed, err)
     }
     return []string{deliveredID}, nil // or return nil, nil if IDs are unavailable
@@ -1011,10 +1015,17 @@ The factory registry is protected by `sync.RWMutex` and registrations occur duri
 ```go
 var (
     ErrNotRunning = errors.New("channel not running")   // Permanent: do not retry
-    ErrRateLimit  = errors.New("rate limited")           // Fixed delay: retry after 1s
+    ErrRateLimit  = errors.New("rate limited")           // Retry after platform retry_after, else 1s
     ErrTemporary  = errors.New("temporary failure")      // Exponential backoff: 500ms * 2^attempt, max 8s
     ErrSendFailed = errors.New("send failed")            // Permanent: do not retry
 )
+
+// Optional: carry the platform retry window on a 429
+type RateLimitError struct {
+    RetryAfter time.Duration
+    Err        error
+}
+// Unwraps to both ErrRateLimit and Err, so errors.Is/As keep working.
 ```
 
 #### Error Classification Helpers
@@ -1037,14 +1048,16 @@ func ClassifyNetError(err error) error {
 
 ```
 Max retries:      3
-Rate limit delay:  1 second
+Rate limit delay:  platform retry_after when provided, else 1 second
+Max rate limit:    1 minute (cap)
 Base backoff:      500 milliseconds
 Max backoff:       8 seconds
+Chunk spacing:     250 milliseconds between chunks of one logical message
 
 Retry logic:
   ErrNotRunning → Fail immediately, no retry
   ErrSendFailed → Fail immediately, no retry
-  ErrRateLimit  → Wait 1s → retry
+  ErrRateLimit  → Wait retry_after (default 1s, capped at 1m) → retry
   ErrTemporary  → Wait 500ms * 2^attempt (max 8s) → retry
   Other unknown → Wait 500ms * 2^attempt (max 8s) → retry
 ```
@@ -1284,7 +1297,7 @@ make test                                       # Full test suite
 | `pkg/channels/interfaces.go` | TypingCapable, MessageEditor, ReactionCapable, PlaceholderCapable, PlaceholderRecorder interfaces |
 | `pkg/channels/media.go` | MediaSender interface |
 | `pkg/channels/webhook.go` | WebhookHandler, HealthChecker interfaces |
-| `pkg/channels/errors.go` | ErrNotRunning, ErrRateLimit, ErrTemporary, ErrSendFailed sentinels |
+| `pkg/channels/errors.go` | ErrNotRunning, ErrRateLimit, ErrTemporary, ErrSendFailed sentinels; RateLimitError carries retry_after |
 | `pkg/channels/errutil.go` | ClassifySendError, ClassifyNetError helpers |
 | `pkg/channels/registry.go` | RegisterFactory, getFactory factory registry |
 | `pkg/channels/manager.go` | Manager: Worker queues, rate limiting, retries, preSend, shared HTTP, TTL janitor |

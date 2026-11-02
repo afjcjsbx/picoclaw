@@ -1423,52 +1423,65 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 				}
 			}
 
-			p, err := commandPathAbs(commandPathTextFromMatch(cmd, loc[0], loc[1]), cwdPath)
-			if err != nil {
-				continue
-			}
-
-			// Windows-specific: normalize paths to block ADS and extended-length paths
-			if runtime.GOOS == "windows" {
-				// Strip \\?\ prefix (extended-length path)
-				p = strings.TrimPrefix(p, `\\?\`)
-				// Strip NTFS alternate data streams (only if colon is not at position 1 = drive letter)
-				if idx := strings.Index(p, ":"); idx > 1 {
-					p = p[:idx]
+			// A single regex match can contain several path tokens when shell
+			// separators are not surrounded by whitespace ("2>/dev/null;echo b"),
+			// so every token is checked instead of only the leading one.
+			pathTexts := commandPathTextsFromMatch(cmd, loc[0], loc[1])
+			searchFrom, _ := shellTokenBounds(cmd, loc[0])
+			for _, pathText := range pathTexts {
+				pathOffset := -1
+				if idx := strings.Index(cmd[searchFrom:loc[1]], pathText); idx >= 0 {
+					pathOffset = searchFrom + idx
+					searchFrom = pathOffset + len(pathText)
 				}
-			}
 
-			// Executables are resolved by the shell, not by the guard. A
-			// workspace-local interpreter symlink (.venv/bin/python, nvm shims,
-			// rustup proxies, ...) may legitimately point outside the
-			// workspace, exactly like a bare command resolved through PATH.
-			// Keep the symlink check for every non-executable operand.
-			tokenStart, _ := shellTokenBounds(cmd, loc[0])
-			if parsedShell && isExecutableShellWord(executableWords, tokenStart) &&
-				isPathWithin(cwdPath, p) {
-				continue
-			}
+				p, err := commandPathAbs(pathText, cwdPath)
+				if err != nil {
+					continue
+				}
 
-			// Check symlinks and junctions
-			resolved, err := filepath.EvalSymlinks(p)
-			if err == nil {
-				p = resolved
-			}
+				// Windows-specific: normalize paths to block ADS and extended-length paths
+				if runtime.GOOS == "windows" {
+					// Strip \\?\ prefix (extended-length path)
+					p = strings.TrimPrefix(p, `\\?\`)
+					// Strip NTFS alternate data streams (only if colon is not at position 1 = drive letter)
+					if idx := strings.Index(p, ":"); idx > 1 {
+						p = p[:idx]
+					}
+				}
 
-			if safePaths[p] {
-				continue
-			}
-			if fstools.IsAllowedPath(p, t.allowedPathPatterns) {
-				continue
-			}
+				// Executables are resolved by the shell, not by the guard. A
+				// workspace-local interpreter symlink (.venv/bin/python, nvm
+				// shims, rustup proxies, ...) may legitimately point outside
+				// the workspace, exactly like a bare command resolved through
+				// PATH. Keep the symlink check for every non-executable operand.
+				if pathOffset >= 0 && parsedShell &&
+					isExecutableShellWord(executableWords, pathOffset) &&
+					isPathWithin(cwdPath, p) {
+					continue
+				}
 
-			rel, err := filepath.Rel(cwdPath, p)
-			if err != nil {
-				continue
-			}
+				// Check symlinks and junctions
+				resolved, err := filepath.EvalSymlinks(p)
+				if err == nil {
+					p = resolved
+				}
 
-			if strings.HasPrefix(rel, "..") {
-				return "Command blocked by safety guard (path outside working dir)"
+				if safePaths[p] {
+					continue
+				}
+				if fstools.IsAllowedPath(p, t.allowedPathPatterns) {
+					continue
+				}
+
+				rel, err := filepath.Rel(cwdPath, p)
+				if err != nil {
+					continue
+				}
+
+				if strings.HasPrefix(rel, "..") {
+					return "Command blocked by safety guard (path outside working dir)"
+				}
 			}
 		}
 	}
@@ -1483,7 +1496,48 @@ func commandPathAbs(pathText, cwdPath string) (string, error) {
 	return filepath.Abs(filepath.Join(cwdPath, pathText))
 }
 
-func commandPathTextFromMatch(cmd string, start, end int) string {
+func commandPathTextsFromMatch(cmd string, start, end int) []string {
+	return splitShellPathMatch(commandPathTextFromMatchRaw(cmd, start, end))
+}
+
+// shellPathSeparators are bytes that end a path token in shell syntax.
+const shellPathSeparators = ";|&<>`"
+
+// splitShellPathMatch splits text that absolutePathPattern swallows because the
+// regex only stops at whitespace or quotes. For "2>/dev/null;echo b" the match is
+// "/dev/null;echo", which is not in safePaths and is therefore reported as a path
+// outside the working directory (issue #435). Splitting on shell separators turns
+// it into "/dev/null" and "echo", so the safe pseudo-device is recognized while
+// the rest of the token is still validated: "/dev/null;cat</etc/shadow" also
+// yields "/etc/shadow", which keeps the containment check effective.
+//
+// Trailing ",)]}:" is stripped from every segment, so a real file whose name ends
+// in one of those characters (for example "/workspace/backup,") is checked as the
+// name without it. Rare, and accepted in exchange for not blocking "(... /dev/null)".
+//
+// Windows-style matches (drive letter, backslashes) are left untouched because
+// the same bytes can legitimately appear inside a Windows path.
+func splitShellPathMatch(pathText string) []string {
+	if !strings.HasPrefix(pathText, "/") {
+		return []string{pathText}
+	}
+
+	segments := strings.FieldsFunc(pathText, func(r rune) bool {
+		return strings.ContainsRune(shellPathSeparators, r)
+	})
+	paths := make([]string, 0, len(segments))
+	for _, segment := range segments {
+		if segment = strings.TrimRight(segment, ",)]}:"); segment != "" {
+			paths = append(paths, segment)
+		}
+	}
+	if len(paths) == 0 {
+		return []string{pathText}
+	}
+	return paths
+}
+
+func commandPathTextFromMatchRaw(cmd string, start, end int) string {
 	raw := cmd[start:end]
 	if !strings.HasPrefix(raw, "/") || isUnixAbsolutePathMatchStart(cmd, start) {
 		return raw

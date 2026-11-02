@@ -120,6 +120,7 @@ func TestShellGuard_ExecutableSymlinkPositionsAllowed(t *testing.T) {
 
 	for _, command := range []string{
 		".venv/bin/python",
+		".venv/bin/python;true",
 		"env -i .venv/bin/python",
 		"env -u NAME .venv/bin/python",
 		"env --chdir=. .venv/bin/python",
@@ -153,6 +154,7 @@ func TestShellGuard_SymlinkOperandsStillBlocked(t *testing.T) {
 
 	for _, command := range []string{
 		"cat .venv/bin/python",
+		".venv/bin/python;cat .venv/bin/python",
 		"echo .venv/bin/python",
 		"echo > .venv/bin/python",
 		"echo 2>.venv/bin/python",
