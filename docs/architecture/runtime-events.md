@@ -95,7 +95,7 @@ The table below lists the current runtime event kinds, when they are emitted, an
 | `agent.context.compress` | Agent context history is compressed, for example during proactive budget checks or LLM retry handling. | `reason`, `dropped_messages`, `remaining_messages` |
 | `agent.session.summarize` | Session history summarization completes, either asynchronously after a turn or on a manual `/compact` (legacy context manager). | `summarized_messages`, `kept_messages`, `summary_len`, `omitted_oversized` |
 | `agent.tool.exec_start` | Before the agent executes a tool call. | `tool`, `args_count`; full arguments are not logged by default |
-| `agent.tool.exec_end` | After a tool call completes, including successful results, tool errors, and async results. | `tool`, `duration_ms`, `for_llm_len`, `for_user_len`, `is_error`, `async` |
+| `agent.tool.exec_end` | After a tool call completes, including successful results, tool errors, and async results. For tools that ran concurrently it is emitted in call order once the whole parallel segment finished. | `tool`, `duration_ms`, `for_llm_len`, `for_user_len`, `is_error`, `async` |
 | `agent.tool.exec_skipped` | A tool call is skipped because the tool is unavailable, arguments are invalid, or turn control logic requires skipping it. | `tool`, `reason` |
 | `agent.steering.injected` | Queued steering messages are injected into the next LLM context. | `count`, `total_content_len` |
 | `agent.follow_up.queued` | An async tool result is queued back into the inbound/follow-up flow. | `source_tool`, `content_len` |

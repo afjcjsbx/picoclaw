@@ -10,8 +10,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"runtime/debug"
-	"sync"
 
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
@@ -32,6 +30,10 @@ type ToolLoopConfig struct {
 	Tools         *ToolRegistry
 	MaxIterations int
 	LLMOptions    map[string]any
+
+	// MaxParallel caps how many parallel-safe tool calls of one response run
+	// at once. 0 uses maxParallelToolCalls, 1 runs every call sequentially.
+	MaxParallel int
 
 	// MediaResolver resolves media:// refs in messages before each LLM call.
 	// This is optional and is mainly used by subagent legacy fallback execution
@@ -158,70 +160,52 @@ func RunToolLoop(
 		}
 		messages = append(messages, assistantMsg)
 
-		// 7. Execute tool calls in parallel with a bounded fan-out: the call
-		// count comes from the model and each call may spawn a process or open
-		// network connections.
-		type indexedResult struct {
-			result *ToolResult
-			tc     providers.ToolCall
+		// 7. Execute the tool calls segment by segment: consecutive calls that
+		// declare themselves parallel-safe run concurrently (bounded), everything
+		// else runs one by one in the model's order.
+		results := make([]*ToolResult, len(normalizedToolCalls))
+		runCall := func(i int) {
+			tc := normalizedToolCalls[i]
+			logger.InfoCF("toolloop", fmt.Sprintf("Tool call: %s", tc.Name),
+				map[string]any{
+					"tool":      tc.Name,
+					"arg_keys":  utils.SortedArgKeys(tc.Arguments),
+					"arg_count": len(tc.Arguments),
+					"iteration": iteration,
+				})
+			if config.Tools == nil {
+				results[i] = ErrorResult("No tools available")
+				return
+			}
+			results[i] = config.Tools.ExecuteWithContext(ctx, tc.Name, tc.Arguments, channel, chatID, nil)
 		}
-
-		results := make([]indexedResult, len(normalizedToolCalls))
-		var wg sync.WaitGroup
-		sem := make(chan struct{}, maxParallelToolCalls)
-
-		for i, tc := range normalizedToolCalls {
-			results[i].tc = tc
-
-			// Block until a slot is free so the loop cannot start an
-			// unbounded number of tool executions at once.
-			sem <- struct{}{}
-			wg.Add(1)
-			go func(idx int, tc providers.ToolCall) {
-				defer wg.Done()
-				defer func() { <-sem }()
-				defer func() {
-					if r := recover(); r != nil {
-						logger.ErrorCF("toolloop", "tool execution goroutine panic recovered",
-							map[string]any{
-								"tool":  tc.Name,
-								"panic": fmt.Sprintf("%v", r),
-								"stack": string(debug.Stack()),
-							})
-						results[idx].result = ErrorResult(fmt.Sprintf("internal panic in tool %s", tc.Name))
-					}
-				}()
-
-				logger.InfoCF("toolloop", fmt.Sprintf("Tool call: %s", tc.Name),
-					map[string]any{
-						"tool":      tc.Name,
-						"arg_keys":  utils.SortedArgKeys(tc.Arguments),
-						"arg_count": len(tc.Arguments),
-						"iteration": iteration,
-					})
-
-				var toolResult *ToolResult
-				if config.Tools != nil {
-					toolResult = config.Tools.ExecuteWithContext(ctx, tc.Name, tc.Arguments, channel, chatID, nil)
-				} else {
-					toolResult = ErrorResult("No tools available")
-				}
-				results[idx].result = toolResult
-			}(i, tc)
+		maxParallel := config.MaxParallel
+		if maxParallel == 0 {
+			maxParallel = maxParallelToolCalls
 		}
-		wg.Wait()
+		for _, seg := range PlanBatch(config.Tools, normalizedToolCalls) {
+			if seg.Parallel && maxParallel > 1 {
+				RunConcurrent(len(seg.Calls), maxParallel, func(n int) { runCall(seg.Calls[n]) })
+				continue
+			}
+			for _, i := range seg.Calls {
+				runCall(i)
+			}
+		}
 
 		// Append results in original order
-		for _, r := range results {
-			contentForLLM := r.result.ContentForLLM()
-
+		for i, tc := range normalizedToolCalls {
+			result := results[i]
+			if result == nil {
+				result = ErrorResult(fmt.Sprintf("internal panic in tool %s", tc.Name))
+			}
 			toolMsg := providers.Message{
 				Role:       "tool",
-				Content:    contentForLLM,
-				ToolCallID: r.tc.ID,
+				Content:    result.ContentForLLM(),
+				ToolCallID: tc.ID,
 			}
-			if len(r.result.Media) > 0 && !r.result.ResponseHandled {
-				toolMsg.Media = append(toolMsg.Media, r.result.Media...)
+			if len(result.Media) > 0 && !result.ResponseHandled {
+				toolMsg.Media = append(toolMsg.Media, result.Media...)
 			}
 			messages = append(messages, toolMsg)
 		}

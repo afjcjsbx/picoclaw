@@ -53,7 +53,8 @@ var searchReaderPool = sync.Pool{
 
 // SearchFilesTool searches content or filenames within the configured filesystem sandbox.
 type SearchFilesTool struct {
-	fs fileSystem
+	fs        fileSystem
+	workspace string
 }
 
 func NewSearchFilesTool(workspace string, restrict bool, allowPaths ...[]*regexp.Regexp) *SearchFilesTool {
@@ -61,7 +62,7 @@ func NewSearchFilesTool(workspace string, restrict bool, allowPaths ...[]*regexp
 	if len(allowPaths) > 0 {
 		patterns = allowPaths[0]
 	}
-	return &SearchFilesTool{fs: buildFs(workspace, restrict, patterns)}
+	return &SearchFilesTool{fs: buildFs(workspace, restrict, patterns), workspace: workspace}
 }
 
 func (t *SearchFilesTool) Name() string { return "search_files" }

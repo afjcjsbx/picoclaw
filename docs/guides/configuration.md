@@ -1178,6 +1178,8 @@ This keeps the runtime lightweight while making new OpenAI-compatible backends m
 
 > **Note**: The `providers` format is deprecated. Use the new `model_list` format with `.security.yml` for better security.
 >
+> **`max_parallel_tool_calls`**: Maximum number of tool calls from one model response that may run concurrently. `4` is the default; `0` or `1` = sequential. Only consecutive, compatible calls (read-only web tools and non-conflicting file operations) run together; see [Parallel tool calls](../architecture/parallel-tool-calls.md).
+>
 > **`max_parallel_turns`**: Controls concurrent processing of messages from different sessions. `5` is the default; `0` or `1` = sequential; `>1` = parallel. Messages from the same session are always serialized. See [Steering docs](../architecture/steering.md) for details.
 
 </details>
