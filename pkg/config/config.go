@@ -549,8 +549,8 @@ type SubTurnConfig struct {
 // mid-session reaches the file at once but shows up from the next session on,
 // which keeps the provider prompt cache warm.
 type MemoryConfig struct {
-	// Enabled injects MEMORY.md and USER.md into the prompt and registers the
-	// memory tool.
+	// Enabled injects MEMORY.md into the prompt and registers the memory tool.
+	// USER.md is injected either way.
 	Enabled bool `json:"memory_enabled" env:"PICOCLAW_AGENTS_DEFAULTS_MEMORY_ENABLED"`
 	// MemoryCharLimit caps MEMORY.md. The memory tool refuses writes past it.
 	MemoryCharLimit int `json:"memory_char_limit" env:"PICOCLAW_AGENTS_DEFAULTS_MEMORY_CHAR_LIMIT"`
