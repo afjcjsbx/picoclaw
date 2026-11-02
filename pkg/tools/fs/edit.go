@@ -12,7 +12,8 @@ import (
 // EditFileTool edits a file by replacing old_text with new_text.
 // The old_text must exist exactly in the file.
 type EditFileTool struct {
-	fs fileSystem
+	fs        fileSystem
+	workspace string
 }
 
 // NewEditFileTool creates a new EditFileTool with optional directory restriction.
@@ -21,7 +22,7 @@ func NewEditFileTool(workspace string, restrict bool, allowPaths ...[]*regexp.Re
 	if len(allowPaths) > 0 {
 		patterns = allowPaths[0]
 	}
-	return &EditFileTool{fs: buildFs(workspace, restrict, patterns)}
+	return &EditFileTool{fs: buildFs(workspace, restrict, patterns), workspace: workspace}
 }
 
 func (t *EditFileTool) Name() string {
@@ -77,7 +78,8 @@ func (t *EditFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 }
 
 type AppendFileTool struct {
-	fs fileSystem
+	fs        fileSystem
+	workspace string
 }
 
 func NewAppendFileTool(workspace string, restrict bool, allowPaths ...[]*regexp.Regexp) *AppendFileTool {
@@ -85,7 +87,7 @@ func NewAppendFileTool(workspace string, restrict bool, allowPaths ...[]*regexp.
 	if len(allowPaths) > 0 {
 		patterns = allowPaths[0]
 	}
-	return &AppendFileTool{fs: buildFs(workspace, restrict, patterns)}
+	return &AppendFileTool{fs: buildFs(workspace, restrict, patterns), workspace: workspace}
 }
 
 func (t *AppendFileTool) Name() string {

@@ -3,6 +3,7 @@
 Internal architecture notes for major runtime mechanisms and subsystem design.
 
 - [Steering](steering.md): injecting messages into a running agent loop between tool calls.
+- [Parallel Tool Calls](parallel-tool-calls.md): planner and execution phases for running compatible tool calls of one response concurrently.
 - [SubTurn Mechanism](subturn.md): sub-agent coordination, concurrency control, and lifecycle handling.
 - [Session System](session-system.md): session scope allocation, JSONL persistence, alias compatibility, and migration. ([ZH](session-system.zh.md))
 - [Seahorse Memory](seahorse-memory.md): SQLite-backed context manager, bootstrap, compaction, retrieval tools, configuration, pruning, and known gaps.

@@ -305,12 +305,14 @@ func isWithinWorkspace(candidate, workspace string) bool {
 }
 
 type ReadFileTool struct {
-	fs      fileSystem
-	maxSize int64
+	fs        fileSystem
+	workspace string
+	maxSize   int64
 }
 
 type ReadFileLinesTool struct {
 	fs            fileSystem
+	workspace     string
 	maxSize       int64
 	maxLines      int
 	maxLineLength int
@@ -333,8 +335,9 @@ func NewReadFileTool(
 	}
 
 	return &ReadFileTool{
-		fs:      buildFs(workspace, restrict, patterns),
-		maxSize: maxSize,
+		fs:        buildFs(workspace, restrict, patterns),
+		workspace: workspace,
+		maxSize:   maxSize,
 	}
 }
 
@@ -364,6 +367,7 @@ func NewReadFileLinesTool(
 
 	return &ReadFileLinesTool{
 		fs:            buildFs(workspace, restrict, patterns),
+		workspace:     workspace,
 		maxSize:       maxSize,
 		maxLines:      maxLines,
 		maxLineLength: maxLineLength,
@@ -963,8 +967,9 @@ func readerHasMoreContent(reader *bufio.Reader) (bool, error) {
 }
 
 type WriteFileTool struct {
-	fs       fileSystem
-	altTools []string
+	fs        fileSystem
+	workspace string
+	altTools  []string
 }
 
 func NewWriteFileTool(
@@ -984,7 +989,8 @@ func NewWriteFileTool(
 			workspace:  workspace,
 			restrict:   restrict,
 		},
-		altTools: []string{"append_file", "edit_file"},
+		workspace: workspace,
+		altTools:  []string{"append_file", "edit_file"},
 	}
 }
 
@@ -1093,7 +1099,8 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *ToolR
 }
 
 type ListDirTool struct {
-	fs fileSystem
+	fs        fileSystem
+	workspace string
 }
 
 func NewListDirTool(workspace string, restrict bool, allowPaths ...[]*regexp.Regexp) *ListDirTool {
@@ -1101,7 +1108,7 @@ func NewListDirTool(workspace string, restrict bool, allowPaths ...[]*regexp.Reg
 	if len(allowPaths) > 0 {
 		patterns = allowPaths[0]
 	}
-	return &ListDirTool{fs: buildFs(workspace, restrict, patterns)}
+	return &ListDirTool{fs: buildFs(workspace, restrict, patterns), workspace: workspace}
 }
 
 func (t *ListDirTool) Name() string {
