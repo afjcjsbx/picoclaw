@@ -1388,28 +1388,32 @@ func TestNewAgentInstance_RegistersMemoryToolWhenEnabled(t *testing.T) {
 	}
 }
 
-func TestNewAgentInstance_FileToolsKeepMemoryLimits(t *testing.T) {
+func TestNewAgentInstance_FileToolsLeaveMemoryFilesToTheMemoryTool(t *testing.T) {
 	for _, enabled := range []bool{true, false} {
 		ws := t.TempDir()
 		cfg := &config.Config{Agents: config.AgentsConfig{Defaults: config.AgentDefaults{
 			Workspace: ws,
 			ModelName: "test-model",
-			Memory:    config.MemoryConfig{Enabled: enabled, MemoryCharLimit: 50},
+			Memory:    config.MemoryConfig{Enabled: enabled},
 		}}}
 		cfg.Tools.WriteFile.Enabled = true
+		cfg.Tools.AppendFile.Enabled = true
+		cfg.Tools.EditFile.Enabled = true
 		agent := NewAgentInstance(nil, &cfg.Agents.Defaults, cfg, &mockProvider{})
 
-		write, ok := agent.Tools.Get("write_file")
-		if !ok {
-			t.Fatal("write_file not registered")
-		}
-		res := write.Execute(context.Background(), map[string]any{
-			"path":    filepath.Join(ws, "memory", "MEMORY.md"),
-			"content": strings.Repeat("x", 100),
-		})
-		if res.IsError != enabled {
-			t.Errorf("memory_enabled=%v: write_file past the memory limit refused = %v (%s)",
-				enabled, res.IsError, res.ForLLM)
+		for name, args := range map[string]map[string]any{
+			"write_file":  {"content": "x"},
+			"append_file": {"content": "x"},
+		} {
+			tool, ok := agent.Tools.Get(name)
+			if !ok {
+				t.Fatalf("%s not registered", name)
+			}
+			args["path"] = filepath.Join(ws, "memory", "MEMORY.md")
+			res := tool.Execute(context.Background(), args)
+			if res.IsError != enabled {
+				t.Errorf("memory_enabled=%v: %s on MEMORY.md refused = %v (%s)", enabled, name, res.IsError, res.ForLLM)
+			}
 		}
 	}
 }
