@@ -258,6 +258,10 @@ make build-launcher
 # Build core binaries for all Makefile-managed platforms
 make build-all
 
+# Build a single target (used by the CI matrix)
+make build-target TARGET=linux/arm64
+make build-target TARGET=linux/arm GOARM=7
+
 # Build for Raspberry Pi Zero 2 W
 # 32-bit: make build-linux-arm
 # 64-bit: make build-linux-arm64
