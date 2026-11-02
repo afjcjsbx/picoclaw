@@ -767,7 +767,7 @@ func TestShellTool_DevNullAllowedWithSeparator(t *testing.T) {
 		"echo a 2>/dev/null]",
 		"echo a 2>/dev/null}",
 		"echo a 2>/dev/null:",
-		"cat /dev/urandom | head -c 16 | od;echo done",
+		"cat /dev/urandom|head -c 16|od;echo done",
 	}
 
 	for _, cmd := range commands {
