@@ -358,6 +358,77 @@ func TestShellTool_StderrCapture(t *testing.T) {
 	}
 }
 
+// TestShellTool_ForegroundMergesStdoutStderrInOrder verifies stdout and stderr
+// share one stream, so their relative write order is preserved.
+func TestShellTool_ForegroundMergesStdoutStderrInOrder(t *testing.T) {
+	tool, err := NewExecTool("", false)
+	require.NoError(t, err)
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"action":  "run",
+		"command": "sh -c 'echo one; echo two >&2; echo three'",
+	})
+	require.False(t, result.IsError, result.ForLLM)
+	require.Equal(t, []string{"one", "two", "three"}, strings.Split(strings.TrimSpace(result.ForLLM), "\n"))
+}
+
+// TestShellTool_BackgroundMergesStderrWithoutBlocking reproduces the old
+// deadlock: stderr was read only after stdout reached EOF, so a child that
+// filled the stderr pipe blocked forever while no stdout was produced.
+func TestShellTool_BackgroundMergesStderrWithoutBlocking(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses POSIX yes/head")
+	}
+
+	tool, err := NewExecTool("", false)
+	require.NoError(t, err)
+
+	sm := NewSessionManager()
+	t.Cleanup(sm.Stop)
+	tool.sessionManager = sm
+
+	runResult := tool.Execute(context.Background(), map[string]any{
+		"action":     "run",
+		"command":    "yes errline | head -20000 >&2; sleep 0.2; echo done",
+		"background": true,
+	})
+	require.False(t, runResult.IsError, runResult.ForLLM)
+
+	var started ExecResponse
+	require.NoError(t, json.Unmarshal([]byte(runResult.ForLLM), &started))
+	require.NotEmpty(t, started.SessionID)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		pollResult := tool.Execute(context.Background(), map[string]any{
+			"action":    "poll",
+			"sessionId": started.SessionID,
+		})
+		require.False(t, pollResult.IsError, pollResult.ForLLM)
+
+		var pollResp ExecResponse
+		require.NoError(t, json.Unmarshal([]byte(pollResult.ForLLM), &pollResp))
+		if pollResp.Status == "done" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("background process did not finish; stderr pipe likely blocked")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	readResult := tool.Execute(context.Background(), map[string]any{
+		"action":    "read",
+		"sessionId": started.SessionID,
+	})
+	require.False(t, readResult.IsError, readResult.ForLLM)
+
+	var readResp ExecResponse
+	require.NoError(t, json.Unmarshal([]byte(readResult.ForLLM), &readResp))
+	require.Contains(t, readResp.Output, "errline")
+	require.Contains(t, readResp.Output, "done")
+}
+
 // TestShellTool_OutputTruncation verifies foreground output is bounded by the
 // configured cap and keeps a head+tail window around the omission notice.
 func TestShellTool_OutputTruncation(t *testing.T) {

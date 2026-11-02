@@ -470,15 +470,35 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string, timeout tim
 
 	prepareCommandForTermination(cmd)
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	// stdout and stderr share one pipe so the result preserves the order in
+	// which the child wrote them and a large stderr stream cannot block a
+	// separate pipe reader.
+	outputReader, outputWriter, pipeErr := os.Pipe()
+	if pipeErr != nil {
+		return ErrorResult(fmt.Sprintf("failed to create output pipe: %v", pipeErr))
+	}
+	cmd.Stdout = outputWriter
+	cmd.Stderr = outputWriter
 
 	// Route shell execution through the shared isolation entry point so exec tool
 	// subprocesses receive the same isolation policy as other integrations.
 	if err := isolation.Start(cmd); err != nil {
+		_ = outputWriter.Close()
+		_ = outputReader.Close()
 		return ErrorResult(fmt.Sprintf("failed to start command: %v", err))
 	}
+
+	// The child inherited its own copy of the write end. Release the parent's
+	// copy so the reader observes EOF when the child exits.
+	_ = outputWriter.Close()
+
+	var outputBuf bytes.Buffer
+	readDone := make(chan struct{})
+	go func() {
+		defer close(readDone)
+		_, _ = io.Copy(&outputBuf, outputReader)
+		_ = outputReader.Close()
+	}()
 
 	done := make(chan error, 1)
 	go func() {
@@ -510,10 +530,17 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string, timeout tim
 		}
 	}
 
-	output := stdout.String()
-	if stderr.Len() > 0 {
-		output += "\nSTDERR:\n" + stderr.String()
+	// Drain the merged stream. A surviving grandchild can keep the write end
+	// open after the direct child exits, so bound the wait instead of hanging
+	// the tool call.
+	select {
+	case <-readDone:
+	case <-time.After(2 * time.Second):
+		_ = outputReader.Close()
+		<-readDone
 	}
+
+	output := outputBuf.String()
 
 	if err != nil {
 		if errors.Is(cmdCtx.Err(), context.DeadlineExceeded) {
@@ -608,8 +635,8 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 
 	prepareCommandForTermination(cmd)
 
-	var stdoutReader io.ReadCloser
-	var stderrReader io.ReadCloser
+	var outputReader io.ReadCloser
+	var outputWriter *os.File
 	var stdinWriter io.WriteCloser
 	var ptySlave *os.File
 
@@ -631,25 +658,31 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 		ptySlave = tty
 	} else {
 		var err error
-		stdoutReader, err = cmd.StdoutPipe()
+		outputReader, outputWriter, err = os.Pipe()
 		if err != nil {
-			return ErrorResult(fmt.Sprintf("failed to create stdout pipe: %v", err))
+			return ErrorResult(fmt.Sprintf("failed to create output pipe: %v", err))
 		}
-		stderrReader, err = cmd.StderrPipe()
-		if err != nil {
-			return ErrorResult(fmt.Sprintf("failed to create stderr pipe: %v", err))
-		}
+		cmd.Stdout = outputWriter
+		cmd.Stderr = outputWriter
 		stdinWriter, err = cmd.StdinPipe()
 		if err != nil {
+			_ = outputReader.Close()
+			_ = outputWriter.Close()
 			return ErrorResult(fmt.Sprintf("failed to create stdin pipe: %v", err))
 		}
-		session.stdoutPipe = io.MultiReader(stdoutReader, stderrReader)
+		session.stdoutPipe = outputReader
 		session.stdinWriter = stdinWriter
 	}
 
 	// Background sessions use the same startup path so isolation stays consistent
 	// with synchronous exec runs.
 	if err := isolation.Start(cmd); err != nil {
+		if outputReader != nil {
+			_ = outputReader.Close()
+		}
+		if outputWriter != nil {
+			_ = outputWriter.Close()
+		}
 		if ptySlave != nil {
 			_ = ptySlave.Close()
 		}
@@ -659,9 +692,12 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 		return ErrorResult(fmt.Sprintf("failed to start command: %v", err))
 	}
 
-	// The child inherited its own copies of the PTY slave end. The parent must
-	// release its copy now, otherwise the master never observes EOF/EIO when
-	// the child exits and the reader goroutine would block forever.
+	// The child inherited its own copies of the pipe/PTY write ends. The parent
+	// must release its copy now, otherwise the readers never observe EOF/EIO
+	// when the child exits and the goroutines would block forever.
+	if outputWriter != nil {
+		_ = outputWriter.Close()
+	}
 	if ptySlave != nil {
 		_ = ptySlave.Close()
 	}
@@ -734,9 +770,8 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 			_ = session.ptyMaster.Close()
 		}()
 	} else {
-		// Non-PTY mode: single goroutine reads pipes.
-		// When Read() returns EOF (pipe closed), we break.
-		// When process exits, OS closes pipe write end → Read() returns EOF → we exit.
+		// Non-PTY mode: one goroutine reads the merged stdout/stderr pipe.
+		// When process exits, OS closes the pipe write end → Read() returns EOF.
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
@@ -749,9 +784,8 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 			}()
 			buf := make([]byte, 4096)
 
-			// Read stdout
 			for {
-				n, err := stdoutReader.Read(buf)
+				n, err := outputReader.Read(buf)
 				if n > 0 {
 					session.mu.Lock()
 					if session.outputBuffer.Len() >= maxOutputBufferSize {
@@ -769,27 +803,7 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 				}
 			}
 
-			// Read stderr
-			for {
-				n, err := stderrReader.Read(buf)
-				if n > 0 {
-					session.mu.Lock()
-					if session.outputBuffer.Len() >= maxOutputBufferSize {
-						if !session.outputTruncated {
-							session.outputBuffer.WriteString(outputTruncateMarker)
-							session.outputTruncated = true
-						}
-					} else {
-						session.outputBuffer.Write(buf[:n])
-					}
-					session.mu.Unlock()
-				}
-				if err != nil {
-					break
-				}
-			}
-
-			// All pipes closed, get exit status
+			_ = outputReader.Close()
 			if stdinWriter != nil {
 				_ = stdinWriter.Close()
 			}
