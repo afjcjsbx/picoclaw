@@ -355,16 +355,25 @@ func (cb *ContextBuilder) memoryPromptPart(sessionKey string) (PromptPart, bool)
 	if sessionKey == "" {
 		snapshot = cb.memory.Snapshot()
 	} else {
-		cb.memoryMu.Lock()
 		var ok bool
-		if snapshot, ok = cb.memorySnapshots[sessionKey]; !ok {
-			snapshot = cb.memory.Snapshot()
-			if cb.memorySnapshots == nil || len(cb.memorySnapshots) >= maxMemorySnapshots {
-				cb.memorySnapshots = make(map[string]string)
-			}
-			cb.memorySnapshots[sessionKey] = snapshot
-		}
+		cb.memoryMu.Lock()
+		snapshot, ok = cb.memorySnapshots[sessionKey]
 		cb.memoryMu.Unlock()
+		if !ok {
+			// Read outside the lock so slow disk never stalls other sessions.
+			fresh := cb.memory.Snapshot()
+			cb.memoryMu.Lock()
+			// A concurrent build of the same session may have stored first; keep
+			// that one so the session sees a single frozen snapshot.
+			if snapshot, ok = cb.memorySnapshots[sessionKey]; !ok {
+				snapshot = fresh
+				if cb.memorySnapshots == nil || len(cb.memorySnapshots) >= maxMemorySnapshots {
+					cb.memorySnapshots = make(map[string]string)
+				}
+				cb.memorySnapshots[sessionKey] = snapshot
+			}
+			cb.memoryMu.Unlock()
+		}
 	}
 	if snapshot == "" {
 		return PromptPart{}, false
