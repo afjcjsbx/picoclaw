@@ -46,6 +46,13 @@ func setupService(t *testing.T, handler JobHandler) (*CronService, string) {
 	tmpDir := t.TempDir()
 	tmpFile := filepath.Join(tmpDir, fmt.Sprintf("test_cron_%d.json", time.Now().UnixNano()))
 	cs := NewCronService(tmpFile, handler)
+	// Stop the scheduler and drain in-flight handlers before t.TempDir removes
+	// the directory: a run that persists its state afterwards recreates the
+	// store file and makes the cleanup fail with "directory not empty".
+	t.Cleanup(func() {
+		cs.Stop()
+		waitAllIdle(t, cs)
+	})
 	return cs, tmpFile
 }
 
@@ -718,7 +725,6 @@ func newBlockingService(t *testing.T) (cs *CronService, calls *atomic.Int32, sta
 	started = make(chan struct{}, 16)
 	gate := make(chan struct{})
 	release = sync.OnceFunc(func() { close(gate) })
-	t.Cleanup(release) // never leave handlers blocked if the test fails early
 
 	cs, _ = setupService(t, func(job *CronJob) (string, error) {
 		calls.Add(1)
@@ -726,6 +732,9 @@ func newBlockingService(t *testing.T) (cs *CronService, calls *atomic.Int32, sta
 		<-gate
 		return "ok", nil
 	})
+	// Registered after setupService so it runs before the service's cleanup,
+	// which waits for in-flight handlers to drain.
+	t.Cleanup(release) // never leave handlers blocked if the test fails early
 	if err := cs.Start(); err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -739,6 +748,23 @@ func waitStarted(t *testing.T, started <-chan struct{}) {
 	case <-started:
 	case <-time.After(5 * time.Second):
 		t.Fatal("handler never started")
+	}
+}
+
+func waitAllIdle(t *testing.T, cs *CronService) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		cs.mu.RLock()
+		busy := len(cs.inFlight)
+		cs.mu.RUnlock()
+		if busy == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d job handler(s) still running after Stop", busy)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 
