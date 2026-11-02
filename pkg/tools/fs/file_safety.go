@@ -15,14 +15,16 @@ import (
 // policy that protects credentials and application state.
 type protectedReadFs struct {
 	fileSystem
-	workspace string
-	restrict  bool
+	workspace   string
+	restrict    bool
+	memoryFiles memoryFiles
 }
 
 type protectedWriteFs struct {
 	fileSystem
-	workspace string
-	restrict  bool
+	workspace   string
+	restrict    bool
+	memoryFiles memoryFiles
 }
 
 func (p *protectedReadFs) check(path string) error {
@@ -38,6 +40,9 @@ func (p *protectedReadFs) ReadFile(path string) ([]byte, error) {
 
 func (p *protectedReadFs) WriteFile(path string, data []byte) error {
 	if err := checkSensitiveWritePath(path, p.workspace, p.restrict); err != nil {
+		return err
+	}
+	if err := p.memoryFiles.check(path, p.workspace, p.restrict); err != nil {
 		return err
 	}
 	return p.fileSystem.WriteFile(path, data)
@@ -68,6 +73,9 @@ func (p *protectedReadFs) AppendFile(path string, data []byte) error {
 		return err
 	}
 	if err := checkSensitiveWritePath(path, p.workspace, p.restrict); err != nil {
+		return err
+	}
+	if err := p.memoryFiles.check(path, p.workspace, p.restrict); err != nil {
 		return err
 	}
 	if appender, ok := p.fileSystem.(fileAppender); ok {
@@ -108,11 +116,17 @@ func (p *protectedWriteFs) WriteFile(path string, data []byte) error {
 	if err := checkSensitiveWritePath(path, p.workspace, p.restrict); err != nil {
 		return err
 	}
+	if err := p.memoryFiles.check(path, p.workspace, p.restrict); err != nil {
+		return err
+	}
 	return p.fileSystem.WriteFile(path, data)
 }
 
 func (p *protectedWriteFs) AppendFile(path string, data []byte) error {
 	if err := checkSensitiveWritePath(path, p.workspace, p.restrict); err != nil {
+		return err
+	}
+	if err := p.memoryFiles.check(path, p.workspace, p.restrict); err != nil {
 		return err
 	}
 	if appender, ok := p.fileSystem.(fileAppender); ok {

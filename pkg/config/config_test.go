@@ -3766,3 +3766,31 @@ func TestSaveConfig_PreservesDisabledLLMRetryOptions(t *testing.T) {
 		)
 	}
 }
+
+func TestMemoryConfigDefaultsAndOverrides(t *testing.T) {
+	load := func(t *testing.T, body string) MemoryConfig {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "config.json")
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := LoadConfig(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cfg.Agents.Defaults.Memory
+	}
+
+	// A config written before the memory block existed keeps memory on.
+	m := load(t, `{"version": 3, "agents": {"defaults": {"model_name": "x"}}}`)
+	if !m.Enabled || !m.DailyNotesEnabled || m.GetMemoryCharLimit() != 2200 || m.GetUserCharLimit() != 1375 ||
+		m.GetRecentDailyNotesCount() != 3 || m.GetDailyNotesCharLimit() != 1000 {
+		t.Errorf("unexpected defaults: %+v", m)
+	}
+
+	m = load(t, `{"version": 3, "agents": {"defaults": {"model_name": "x",
+		"memory": {"memory_enabled": false, "memory_char_limit": 500, "recent_daily_notes_count": 2}}}}`)
+	if m.Enabled || m.GetMemoryCharLimit() != 500 || m.GetRecentDailyNotesCount() != 2 || m.GetUserCharLimit() != 1375 {
+		t.Errorf("unexpected overrides: %+v", m)
+	}
+}
