@@ -391,8 +391,13 @@ func (t *ExecTool) ExecuteAsync(
 	session.SetCompletion(func() {
 		cb(context.Background(), t.completionResult(session))
 	})
-	if boolArg(args, "notify") {
-		session.StartNotify()
+	if boolArg(args, "notify") && session.StartNotify() {
+		// Only advertise the notification after the watcher is armed. Direct
+		// Execute calls have no callback, so they must not promise one.
+		resp.Note = notifyEnabledNote
+		if data, err := json.Marshal(resp); err == nil {
+			result.ForLLM = string(data)
+		}
 	}
 	return result
 }
@@ -506,7 +511,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 	}
 
 	if isBackground {
-		return t.runBackground(ctx, command, cwd, isPty, notify)
+		return t.runBackground(ctx, command, cwd, isPty)
 	}
 
 	return t.runSync(ctx, command, cwd, timeout)
@@ -695,7 +700,7 @@ func (t *ExecTool) outputSpillDir() string {
 	return filepath.Join(t.workingDir, ".artifacts", "tool")
 }
 
-func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEnabled, notify bool) *ToolResult {
+func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEnabled bool) *ToolResult {
 	sessionID := generateSessionID()
 	session := &ProcessSession{
 		ID:         sessionID,
@@ -887,9 +892,6 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 	resp := ExecResponse{
 		SessionID: sessionID,
 		Status:    "running",
-	}
-	if notify {
-		resp.Note = notifyEnabledNote
 	}
 	data, err := json.Marshal(resp)
 	if err != nil {

@@ -2697,6 +2697,35 @@ func TestShellTool_NotifyRequiresBackground(t *testing.T) {
 	require.Contains(t, result.ForLLM, "background=true")
 }
 
+func TestShellTool_NotifyNoteRequiresAsyncCallback(t *testing.T) {
+	tool, err := NewExecTool("", false)
+	require.NoError(t, err)
+
+	sm := NewSessionManager()
+	t.Cleanup(sm.Stop)
+	tool.sessionManager = sm
+
+	ctx := WithToolContext(context.Background(), "cli", "test")
+	result := tool.Execute(ctx, map[string]any{
+		"action":     "run",
+		"command":    "sleep 5",
+		"background": true,
+		"notify":     true,
+	})
+	require.False(t, result.IsError, result.ForLLM)
+
+	var resp ExecResponse
+	require.NoError(t, json.Unmarshal([]byte(result.ForLLM), &resp))
+	t.Cleanup(func() {
+		tool.Execute(ctx, map[string]any{"action": "kill", "sessionId": resp.SessionID})
+	})
+	require.Empty(t, resp.Note, "direct Execute cannot deliver a completion callback")
+
+	session, err := sm.Get(resp.SessionID)
+	require.NoError(t, err)
+	require.False(t, session.NotifyEnabled())
+}
+
 func TestShellTool_ReadIsPagedAndNonDestructive(t *testing.T) {
 	tool, ctx, id := startBackgroundSession(t, "sh -c 'printf abcdefghij; sleep 5'")
 	time.Sleep(200 * time.Millisecond)
