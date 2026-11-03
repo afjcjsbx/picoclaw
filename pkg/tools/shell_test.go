@@ -2607,3 +2607,86 @@ func TestShellTool_Poll_NewOutputResetsIdleCount(t *testing.T) {
 	require.Empty(t, poll().Note) // first silent check
 	require.Contains(t, poll().Note, "action=wait")
 }
+
+func TestShellTool_ExecuteAsync_NotifiesOnCompletion(t *testing.T) {
+	tool, err := NewExecTool("", false)
+	require.NoError(t, err)
+
+	sm := NewSessionManager()
+	t.Cleanup(sm.Stop)
+	tool.sessionManager = sm
+
+	ctx := WithToolContext(context.Background(), "cli", "test")
+	done := make(chan *ToolResult, 1)
+	runResult := tool.ExecuteAsync(ctx, map[string]any{
+		"action":     "run",
+		"command":    "sh -c 'sleep 0.1; echo background-done'",
+		"background": true,
+		"notify":     true,
+	}, func(_ context.Context, result *ToolResult) {
+		done <- result
+	})
+	require.False(t, runResult.IsError, runResult.ForLLM)
+
+	var started ExecResponse
+	require.NoError(t, json.Unmarshal([]byte(runResult.ForLLM), &started))
+	require.Equal(t, notifyEnabledNote, started.Note)
+
+	select {
+	case result := <-done:
+		require.Contains(t, result.ForLLM, "background-done")
+		require.Contains(t, result.ForLLM, "exitCode: 0")
+	case <-time.After(3 * time.Second):
+		t.Fatal("completion notification did not arrive")
+	}
+}
+
+func TestShellTool_AutoNotifyAfterSilentPolls(t *testing.T) {
+	tool, err := NewExecTool("", false)
+	require.NoError(t, err)
+
+	sm := NewSessionManager()
+	t.Cleanup(sm.Stop)
+	tool.sessionManager = sm
+
+	ctx := WithToolContext(context.Background(), "cli", "test")
+	done := make(chan *ToolResult, 1)
+	runResult := tool.ExecuteAsync(ctx, map[string]any{
+		"action":     "run",
+		"command":    "sh -c 'sleep 1; echo auto-done'",
+		"background": true,
+	}, func(_ context.Context, result *ToolResult) {
+		done <- result
+	})
+	require.False(t, runResult.IsError, runResult.ForLLM)
+
+	var started ExecResponse
+	require.NoError(t, json.Unmarshal([]byte(runResult.ForLLM), &started))
+
+	first := execResp(t, tool.Execute(ctx, map[string]any{"action": "poll", "sessionId": started.SessionID}))
+	require.Empty(t, first.Note)
+
+	second := execResp(t, tool.Execute(ctx, map[string]any{"action": "poll", "sessionId": started.SessionID}))
+	require.Contains(t, second.Note, "completion notification")
+	require.Contains(t, second.Note, "follow-up message")
+
+	select {
+	case result := <-done:
+		require.Contains(t, result.ForLLM, "auto-done")
+	case <-time.After(4 * time.Second):
+		t.Fatal("auto-enabled completion notification did not arrive")
+	}
+}
+
+func TestShellTool_NotifyRequiresBackground(t *testing.T) {
+	tool, err := NewExecTool("", false)
+	require.NoError(t, err)
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"action":  "run",
+		"command": "echo foreground",
+		"notify":  true,
+	})
+	require.True(t, result.IsError)
+	require.Contains(t, result.ForLLM, "background=true")
+}

@@ -29,13 +29,14 @@ The `exec` tool executes shell commands and manages **background sessions** (lon
 | `pty` | bool | — | Allocate a pseudo-terminal for interactive programs; not supported on Windows |
 | `cwd` | string | — | Working directory for the command; defaults to the agent workspace |
 | `timeout` | int | — | Timeout in seconds for foreground commands; overrides `tools.exec.timeout_seconds`, and `0` disables it. Cannot be combined with `background=true`. With `wait`: maximum seconds to block (a positive integer), defaulting to and capped by `tools.exec.timeout_seconds` |
+| `notify` | bool | `false` | With `background=true`, send a completion message when the process exits. Use it for jobs with a defined end; do not poll or wait in a loop |
 
 Behavior notes:
 
 - Run one independent command per tool call and chain dependent commands with `&&` (`;` when later commands must run regardless of earlier failures). Do not separate commands with newlines.
 - Prefer `cwd` over `cd` inside the command, and the filesystem tools over shell file operations.
 - Foreground output is bounded while the command runs: the first 40% and the last 60% of `max_output_chars` (default 50,000, also capped by `tools.max_inline_result_chars`) stay in memory around a `[OUTPUT TRUNCATED - N chars omitted out of T total]` notice, and the full stream is spilled to a workspace artifact (up to 5,000,000 bytes) as soon as the cap is exceeded. The result includes the artifact path, so the omitted middle stays readable. Background session output is limited to 1 MB.
-- `poll` never blocks. To wait for a background session, call `wait` once instead of polling in a loop: it returns the exit status and the output when the process exits. If the window elapses first, the result has status `running` and a note saying this is not an error; call `wait` again if the job is expected to take longer. After two consecutive `poll`/`wait` calls with no new output the note also tells the model to stop checking (use `wait`, read the output, or kill the session).
+- `poll` never blocks. To wait for a background session, call `wait` once instead of polling in a loop: it returns the exit status and the output when the process exits. If the window elapses first, the result has status `running` and a note saying this is not an error; call `wait` again if the job is expected to take longer. After two consecutive `poll`/`wait` calls with no new output the tool enables a completion notification and tells the model to stop checking (use `wait`, read the output, or kill the session).
 - Sessions are cleaned up 30 minutes after the process exits. `write` sends stdin, `send-keys` sends keys to a PTY session; combine `background=true` with `pty=true` for interactive sessions such as a REPL.
 
 ## Disabling the Exec Tool

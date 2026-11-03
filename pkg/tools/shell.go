@@ -59,6 +59,8 @@ type ExecTool struct {
 	sessionManager       *SessionManager
 }
 
+var _ AsyncExecutor = (*ExecTool)(nil)
+
 var (
 	defaultDenyPatterns = []*regexp.Regexp{
 		regexp.MustCompile(`\brm\s+-[rf]{1,2}\b`),
@@ -263,7 +265,7 @@ Before a command explicitly creates files or directories, use list_dir when avai
 Usage notes:
 - action is required; command is required for action=run.
 - The optional timeout parameter is in seconds and overrides the configured timeout for foreground commands; 0 disables the timeout. It cannot be combined with background=true. Foreground output longer than the configured limit (default 50,000 chars) is truncated to the first 40%% and last 60%% around an omission notice; background session output is limited to 1 MB.
-- Use background=true for long-running commands. The result includes a sessionId. Use action=list to list sessions; use poll, wait, read, write, send-keys, or kill with sessionId to manage one. poll returns immediately; to wait for a session to finish use wait instead of polling in a loop. write sends stdin; send-keys sends keys to a PTY. Sessions are cleaned up 30 minutes after the process exits.
+- Use background=true for long-running commands. The result includes a sessionId. Use action=list to list sessions; use poll, wait, read, write, send-keys, or kill with sessionId to manage one. poll returns immediately; to wait for a session to finish use wait instead of polling in a loop. write sends stdin; send-keys sends keys to a PTY. Set notify=true for a job that ends so its completion arrives as a follow-up message; after two silent poll/wait calls the tool enables that notification automatically. Sessions are cleaned up 30 minutes after the process exits.
 - Combine background=true with pty=true for interactive sessions when supported. PTY is not supported on Windows.
 - Run independent commands in separate tool calls. %s Use semicolons only when later commands may run even if an earlier one fails. Do not use newlines to separate commands; newlines inside quoted strings are fine.`, runtime.GOOS, shell, chainGuidance)
 }
@@ -311,9 +313,23 @@ func (t *ExecTool) Parameters() map[string]any {
 				"type":        "integer",
 				"description": "Optional timeout in seconds for foreground commands; overrides the configured timeout, and 0 disables the timeout. Not supported with background=true. For wait: maximum seconds to block (default and cap: the configured timeout).",
 			},
+			"notify": map[string]any{
+				"type":        "boolean",
+				"description": "With background=true, send a completion message when the process exits. Use it for jobs with a defined end; do not poll or wait in a loop.",
+			},
 		},
 		"required": []string{"action"},
 	}
+}
+
+func boolArg(args map[string]any, key string) bool {
+	switch v := args[key].(type) {
+	case bool:
+		return v
+	case string:
+		return v == "true"
+	}
+	return false
 }
 
 func (t *ExecTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
@@ -344,6 +360,52 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 	}
 }
 
+// ExecuteAsync installs the completion callback for background runs. The
+// callback is stored even when notify is false so repeated silent poll/wait
+// calls can promote the session to notify-on-complete later.
+func (t *ExecTool) ExecuteAsync(
+	ctx context.Context,
+	args map[string]any,
+	cb AsyncCallback,
+) *ToolResult {
+	result := t.Execute(ctx, args)
+	if result == nil || result.IsError || cb == nil {
+		return result
+	}
+	if action, _ := args["action"].(string); action != "run" || !boolArg(args, "background") {
+		return result
+	}
+
+	var resp ExecResponse
+	if err := json.Unmarshal([]byte(result.ForLLM), &resp); err != nil || resp.SessionID == "" {
+		return result
+	}
+	session, err := t.sessionManager.Get(resp.SessionID)
+	if err != nil {
+		return result
+	}
+	session.SetCompletion(func() {
+		cb(context.Background(), t.completionResult(session))
+	})
+	if boolArg(args, "notify") {
+		session.StartNotify()
+	}
+	return result
+}
+
+func (t *ExecTool) completionResult(session *ProcessSession) *ToolResult {
+	status := session.GetStatus()
+	output := session.Tail(completionOutputChars)
+	msg := fmt.Sprintf(
+		"Background command completed.\nsessionId: %s\ncommand: %s\nstatus: %s\nexitCode: %d",
+		session.ID, session.Command, status, session.GetExitCode(),
+	)
+	if output != "" {
+		msg += "\n\nOutput tail:\n" + output
+	}
+	return NewToolResult(msg)
+}
+
 func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolResult {
 	command, ok := args["command"].(string)
 	if !ok {
@@ -363,17 +425,9 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 		}
 	}
 
-	getBoolArg := func(key string) bool {
-		switch v := args[key].(type) {
-		case bool:
-			return v
-		case string:
-			return v == "true"
-		}
-		return false
-	}
-	isPty := getBoolArg("pty")
-	isBackground := getBoolArg("background")
+	isPty := boolArg(args, "pty")
+	isBackground := boolArg(args, "background")
+	notify := boolArg(args, "notify")
 	timeout := t.timeout
 	if raw, ok := args["timeout"]; ok {
 		const maxTimeoutSeconds = (1<<63 - 1) / int64(time.Second)
@@ -394,6 +448,10 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 		if runtime.GOOS == "windows" {
 			return ErrorResult("PTY is not supported on Windows. Use background=true without pty.")
 		}
+	}
+
+	if notify && !isBackground {
+		return ErrorResult("notify is only supported with background=true")
 	}
 
 	cwd := t.workingDir
@@ -444,7 +502,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 	}
 
 	if isBackground {
-		return t.runBackground(ctx, command, cwd, isPty)
+		return t.runBackground(ctx, command, cwd, isPty, notify)
 	}
 
 	return t.runSync(ctx, command, cwd, timeout)
@@ -633,7 +691,7 @@ func (t *ExecTool) outputSpillDir() string {
 	return filepath.Join(t.workingDir, ".artifacts", "tool")
 }
 
-func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEnabled bool) *ToolResult {
+func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEnabled, notify bool) *ToolResult {
 	sessionID := generateSessionID()
 	session := &ProcessSession{
 		ID:         sessionID,
@@ -743,18 +801,15 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 							"panic": fmt.Sprintf("%v", r),
 							"stack": string(debug.Stack()),
 						})
-					session.mu.Lock()
-					session.Status = "error"
-					session.mu.Unlock()
+					session.finish(-1)
 				}
 			}()
 			cmd.Wait() // Wait for process to exit
-			session.mu.Lock()
+			exitCode := -1
 			if cmd.ProcessState != nil {
-				session.ExitCode = cmd.ProcessState.ExitCode()
+				exitCode = cmd.ProcessState.ExitCode()
 			}
-			session.Status = "done"
-			session.mu.Unlock()
+			session.finish(exitCode)
 		}()
 
 		go func() {
@@ -835,18 +890,20 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 			}
 			cmd.Wait()
 
-			session.mu.Lock()
+			exitCode := -1
 			if cmd.ProcessState != nil {
-				session.ExitCode = cmd.ProcessState.ExitCode()
+				exitCode = cmd.ProcessState.ExitCode()
 			}
-			session.Status = "done"
-			session.mu.Unlock()
+			session.finish(exitCode)
 		}()
 	}
 
 	resp := ExecResponse{
 		SessionID: sessionID,
 		Status:    "running",
+	}
+	if notify {
+		resp.Note = notifyEnabledNote
 	}
 	data, err := json.Marshal(resp)
 	if err != nil {
@@ -896,6 +953,9 @@ func (t *ExecTool) executePoll(args map[string]any) *ToolResult {
 	}
 	if !session.IsDone() && session.noteCheck() >= idleCheckLimit {
 		resp.Note = pollIdleNote
+		if session.StartNotify() || session.NotifyEnabled() {
+			resp.Note += " " + autoNotifyNote
+		}
 	}
 	data, err := json.Marshal(resp)
 	if err != nil {
@@ -918,6 +978,11 @@ const (
 		"output or kill the session instead of waiting again."
 	// defaultWaitMax caps one wait when no exec timeout is configured.
 	defaultWaitMax = 60 * time.Second
+	// completionOutputChars bounds the output tail in a completion notice.
+	completionOutputChars = 1000
+
+	notifyEnabledNote = "You will be notified when this session exits; do not poll or wait in a loop."
+	autoNotifyNote    = "A completion notification is enabled; the result will arrive as a follow-up message."
 )
 
 // executeWait blocks until the session exits, the timeout elapses, or ctx is
@@ -983,6 +1048,9 @@ func (t *ExecTool) executeWait(ctx context.Context, args map[string]any) *ToolRe
 			int64(window/time.Second))
 		if session.noteCheck() >= idleCheckLimit {
 			resp.Note += " " + waitIdleNote
+			if session.StartNotify() || session.NotifyEnabled() {
+				resp.Note += " " + autoNotifyNote
+			}
 		}
 	}
 	data, err := json.Marshal(resp)

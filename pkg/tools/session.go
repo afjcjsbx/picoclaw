@@ -48,6 +48,16 @@ type ProcessSession struct {
 	// ptyKeyMode tracks arrow key encoding mode (CSI vs SS3)
 	ptyKeyMode PtyKeyMode
 
+	// done is closed exactly once when the session reaches a terminal state.
+	done       chan struct{}
+	doneClosed bool
+	killed     bool
+
+	// onComplete is installed by ExecuteAsync so a background run can notify
+	// the agent when it exits. notifyStarted guards the one-shot watcher.
+	onComplete    func()
+	notifyStarted bool
+
 	// idleChecks counts consecutive poll/wait calls that saw no new output;
 	// lastCheckLen is the buffer length they compared against.
 	idleChecks   int
@@ -137,13 +147,113 @@ func (s *ProcessSession) killProcess() error {
 		_ = closer.Close()
 	}
 
-	s.Status = "done"
-	s.ExitCode = -1
+	s.killed = true
+	s.finishLocked(-1)
 	return nil
 }
 
 func (s *ProcessSession) Kill() error {
 	return s.killProcess()
+}
+
+// finish records a terminal state and closes Done exactly once. A killed
+// session keeps the -1 exit code set by killProcess; a late reader cannot
+// overwrite it with the signal-derived status.
+func (s *ProcessSession) finish(exitCode int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.finishLocked(exitCode)
+}
+
+func (s *ProcessSession) finishLocked(exitCode int) {
+	if s.Status == "done" || s.Status == "exited" {
+		return
+	}
+	s.ExitCode = exitCode
+	s.Status = "done"
+	s.ensureDoneLocked()
+	if !s.doneClosed {
+		close(s.done)
+		s.doneClosed = true
+	}
+}
+
+func (s *ProcessSession) ensureDoneLocked() {
+	if s.done == nil {
+		s.done = make(chan struct{})
+	}
+}
+
+// Done returns a channel closed when the session exits or is killed.
+func (s *ProcessSession) Done() <-chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ensureDoneLocked()
+	if (s.Status == "done" || s.Status == "exited") && !s.doneClosed {
+		close(s.done)
+		s.doneClosed = true
+	}
+	return s.done
+}
+
+// SetCompletion installs the one-shot completion callback. The first caller
+// wins; ExecuteAsync installs it right after a background session starts.
+func (s *ProcessSession) SetCompletion(fn func()) {
+	if fn == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.onComplete == nil {
+		s.onComplete = fn
+	}
+}
+
+// StartNotify arms the completion watcher. It returns false when no callback
+// was installed or the watcher was already armed. A killed session does not
+// emit a completion notification.
+func (s *ProcessSession) StartNotify() bool {
+	s.mu.Lock()
+	if s.notifyStarted || s.onComplete == nil {
+		s.mu.Unlock()
+		return false
+	}
+	s.notifyStarted = true
+	fn := s.onComplete
+	s.mu.Unlock()
+
+	go func() {
+		<-s.Done()
+		s.mu.Lock()
+		killed := s.killed
+		s.mu.Unlock()
+		if !killed {
+			fn()
+		}
+	}()
+	return true
+}
+
+// NotifyEnabled reports whether the completion watcher was armed.
+func (s *ProcessSession) NotifyEnabled() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.notifyStarted
+}
+
+// Tail returns the last n bytes retained by the session without consuming
+// them. Callers use it for poll/wait/completion previews.
+func (s *ProcessSession) Tail(n int) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if n <= 0 || s.outputBuffer == nil || s.outputBuffer.Len() == 0 {
+		return ""
+	}
+	data := s.outputBuffer.Bytes()
+	if len(data) > n {
+		data = data[len(data)-n:]
+	}
+	return string(data)
 }
 
 func (s *ProcessSession) Write(data string) error {
