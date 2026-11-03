@@ -10,7 +10,7 @@ The exec tool is used to execute shell commands.
 | `custom_allow_patterns` | string[] | `[]` | Allow patterns (regular expressions) that explicitly permit matching commands. Deny patterns still win, so this cannot unlock a denied command |
 | `allow_remote` | bool | `true` | When `false`, exec only accepts commands that originate from internal channels (`cli`, `system`, `subagent`). Remote channels are then blocked (fail-closed): an empty channel is also rejected |
 | `timeout_seconds` | int | `60` | Command timeout in seconds. `0` means the default (60s) |
-| `max_output_chars` | int | `50000` | Foreground output cap in characters. Longer output keeps the first 40% and the last 60% around a `[OUTPUT TRUNCATED - N chars omitted out of T total]` notice. `0` means the default (50000) |
+| `max_output_chars` | int | `50000` | Foreground output cap. Longer output keeps the first 40% and the last 60% around a `[OUTPUT TRUNCATED - N chars omitted out of T total]` notice, while the full stream is spilled to a workspace artifact (up to 5,000,000 bytes). The inline view is also bounded by `tools.max_inline_result_chars`; the artifact preserves the full stream. `0` means the default (50000) |
 
 Environment variables use the `PICOCLAW_TOOLS_EXEC_` prefix: `PICOCLAW_TOOLS_EXEC_ENABLED`, `PICOCLAW_TOOLS_EXEC_ENABLE_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_ALLOW_REMOTE`, `PICOCLAW_TOOLS_EXEC_CUSTOM_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_CUSTOM_ALLOW_PATTERNS`, `PICOCLAW_TOOLS_EXEC_TIMEOUT_SECONDS`, `PICOCLAW_TOOLS_EXEC_MAX_OUTPUT_CHARS`.
 
@@ -34,7 +34,7 @@ Behavior notes:
 
 - Run one independent command per tool call and chain dependent commands with `&&` (`;` when later commands must run regardless of earlier failures). Do not separate commands with newlines.
 - Prefer `cwd` over `cd` inside the command, and the filesystem tools over shell file operations.
-- Foreground output longer than `max_output_chars` (default 50,000 chars) is truncated to the first 40% and the last 60% around a `[OUTPUT TRUNCATED - N chars omitted out of T total]` notice; background session output is limited to 1 MB. When the result is oversized, the large-result spillover saves the full pre-truncation output as a workspace artifact and the preview points to it, so the omitted middle stays readable.
+- Foreground output is bounded while the command runs: the first 40% and the last 60% of `max_output_chars` (default 50,000, also capped by `tools.max_inline_result_chars`) stay in memory around a `[OUTPUT TRUNCATED - N chars omitted out of T total]` notice, and the full stream is spilled to a workspace artifact (up to 5,000,000 bytes) as soon as the cap is exceeded. The result includes the artifact path, so the omitted middle stays readable. Background session output is limited to 1 MB.
 - `poll` never blocks. To wait for a background session, call `wait` once instead of polling in a loop: it returns the exit status and the output when the process exits. If the window elapses first, the result has status `running` and a note saying this is not an error; call `wait` again if the job is expected to take longer. After two consecutive `poll`/`wait` calls with no new output the note also tells the model to stop checking (use `wait`, read the output, or kill the session).
 - Sessions are cleaned up 30 minutes after the process exits. `write` sends stdin, `send-keys` sends keys to a PTY session; combine `background=true` with `pty=true` for interactive sessions such as a REPL.
 

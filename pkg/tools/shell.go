@@ -25,7 +25,6 @@ import (
 	"github.com/sipeed/picoclaw/pkg/isolation"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	fstools "github.com/sipeed/picoclaw/pkg/tools/fs"
-	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
 // maxOutputBufferSize caps the output captured per session; outputTruncateMarker
@@ -47,16 +46,17 @@ func getSessionManager() *SessionManager {
 }
 
 type ExecTool struct {
-	workingDir          string
-	timeout             time.Duration
-	denyPatterns        []*regexp.Regexp
-	allowPatterns       []*regexp.Regexp
-	customAllowPatterns []*regexp.Regexp
-	allowedPathPatterns []*regexp.Regexp
-	restrictToWorkspace bool
-	allowRemote         bool
-	maxOutputChars      int
-	sessionManager      *SessionManager
+	workingDir           string
+	timeout              time.Duration
+	denyPatterns         []*regexp.Regexp
+	allowPatterns        []*regexp.Regexp
+	customAllowPatterns  []*regexp.Regexp
+	allowedPathPatterns  []*regexp.Regexp
+	restrictToWorkspace  bool
+	allowRemote          bool
+	maxOutputChars       int
+	maxInlineResultChars int
+	sessionManager       *SessionManager
 }
 
 var (
@@ -210,21 +210,24 @@ func NewExecToolWithConfig(
 	}
 
 	maxOutputChars := config.DefaultExecMaxOutputChars
+	maxInlineResultChars := 0
 	if cfg != nil {
 		maxOutputChars = cfg.Tools.Exec.GetMaxOutputChars()
+		maxInlineResultChars = cfg.Tools.GetMaxInlineResultChars()
 	}
 
 	return &ExecTool{
-		workingDir:          workingDir,
-		timeout:             timeout,
-		denyPatterns:        denyPatterns,
-		allowPatterns:       nil,
-		customAllowPatterns: customAllowPatterns,
-		allowedPathPatterns: allowedPathPatterns,
-		restrictToWorkspace: restrict,
-		allowRemote:         allowRemote,
-		maxOutputChars:      maxOutputChars,
-		sessionManager:      getSessionManager(),
+		workingDir:           workingDir,
+		timeout:              timeout,
+		denyPatterns:         denyPatterns,
+		allowPatterns:        nil,
+		customAllowPatterns:  customAllowPatterns,
+		allowedPathPatterns:  allowedPathPatterns,
+		restrictToWorkspace:  restrict,
+		allowRemote:          allowRemote,
+		maxOutputChars:       maxOutputChars,
+		maxInlineResultChars: maxInlineResultChars,
+		sessionManager:       getSessionManager(),
 	}, nil
 }
 
@@ -470,15 +473,46 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string, timeout tim
 
 	prepareCommandForTermination(cmd)
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	maxOutputChars := t.maxOutputChars
+	if maxOutputChars <= 0 {
+		maxOutputChars = config.DefaultExecMaxOutputChars
+	}
+	// The inline view also respects the global tool-result cap. The artifact
+	// keeps the full stream, so a smaller in-memory window does not lose the
+	// omitted middle.
+	if t.maxInlineResultChars > 0 && t.maxInlineResultChars < maxOutputChars {
+		maxOutputChars = t.maxInlineResultChars
+	}
+	collector := newBoundedOutput(maxOutputChars, t.outputSpillDir())
+
+	// stdout and stderr share one pipe so the result preserves the order in
+	// which the child wrote them and a large stderr stream cannot block a
+	// separate pipe reader.
+	outputReader, outputWriter, pipeErr := os.Pipe()
+	if pipeErr != nil {
+		return ErrorResult(fmt.Sprintf("failed to create output pipe: %v", pipeErr))
+	}
+	cmd.Stdout = outputWriter
+	cmd.Stderr = outputWriter
 
 	// Route shell execution through the shared isolation entry point so exec tool
 	// subprocesses receive the same isolation policy as other integrations.
 	if err := isolation.Start(cmd); err != nil {
+		_ = outputWriter.Close()
+		_ = outputReader.Close()
 		return ErrorResult(fmt.Sprintf("failed to start command: %v", err))
 	}
+
+	// The child inherited its own copy of the write end. Release the parent's
+	// copy so the reader observes EOF when the child exits.
+	_ = outputWriter.Close()
+
+	readDone := make(chan struct{})
+	go func() {
+		defer close(readDone)
+		_, _ = io.Copy(collector, outputReader)
+		_ = outputReader.Close()
+	}()
 
 	done := make(chan error, 1)
 	go func() {
@@ -510,10 +544,20 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string, timeout tim
 		}
 	}
 
-	output := stdout.String()
-	if stderr.Len() > 0 {
-		output += "\nSTDERR:\n" + stderr.String()
+	// Drain the merged stream. A surviving grandchild can keep the write end
+	// open after the direct child exits, so bound the wait instead of hanging
+	// the tool call.
+	select {
+	case <-readDone:
+	case <-time.After(2 * time.Second):
+		_ = outputReader.Close()
+		<-readDone
 	}
+
+	output, truncated := collector.Render()
+	artifactPath := collector.SpillPath()
+	spillCapped := collector.SpillCapped()
+	_ = collector.Close()
 
 	if err != nil {
 		if errors.Is(cmdCtx.Err(), context.DeadlineExceeded) {
@@ -521,12 +565,9 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string, timeout tim
 			if output != "" {
 				msg += "\n\nPartial output before timeout:\n" + output
 			}
-			return &ToolResult{
-				ForLLM:  msg,
-				ForUser: msg,
-				IsError: true,
-				Err:     fmt.Errorf("command timeout: %w", err),
-			}
+			return newExecResult(
+				msg, true, fmt.Errorf("command timeout: %w", err), truncated, artifactPath, spillCapped,
+			)
 		}
 
 		// Extract detailed exit information
@@ -548,36 +589,48 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string, timeout tim
 		output = "(no output)"
 	}
 
-	maxOutputChars := t.maxOutputChars
-	if maxOutputChars <= 0 {
-		maxOutputChars = config.DefaultExecMaxOutputChars
-	}
-	fullOutput := output
-	output, truncated := toolshared.TruncateHeadTail(output, maxOutputChars, "OUTPUT")
+	return newExecResult(output, err != nil, nil, truncated, artifactPath, spillCapped)
+}
 
-	// Attach the pre-truncation output so the large-result spill can save it
-	// instead of the cut view: the omitted middle stays readable from the
-	// artifact whenever the result is large enough to spill.
-	fullText := ""
+func newExecResult(
+	forLLM string,
+	isError bool,
+	err error,
+	truncated bool,
+	artifactPath string,
+	spillCapped bool,
+) *ToolResult {
+	result := &ToolResult{
+		ForLLM:  forLLM,
+		ForUser: forLLM,
+		IsError: isError,
+		Err:     err,
+	}
 	if truncated {
-		fullText = fullOutput
+		// The tool already reduced the output to a bounded view. Prevent the
+		// generic large-result spill from persisting that view as if it were
+		// the full payload.
+		result.LargeResultSpilled = true
 	}
+	if artifactPath != "" {
+		result.ArtifactTags = append(result.ArtifactTags, "[file:"+artifactPath+"]")
+	}
+	if spillCapped {
+		note := fmt.Sprintf(
+			"\n\n[Full output artifact capped at %s bytes]",
+			formatCount64(maxOutputSpillBytes),
+		)
+		result.ForLLM += note
+		result.ForUser += note
+	}
+	return result
+}
 
-	if err != nil {
-		return &ToolResult{
-			ForLLM:   output,
-			ForUser:  output,
-			IsError:  true,
-			FullText: fullText,
-		}
+func (t *ExecTool) outputSpillDir() string {
+	if t.workingDir == "" {
+		return ""
 	}
-
-	return &ToolResult{
-		ForLLM:   output,
-		ForUser:  output,
-		IsError:  false,
-		FullText: fullText,
-	}
+	return filepath.Join(t.workingDir, ".artifacts", "tool")
 }
 
 func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEnabled bool) *ToolResult {
@@ -608,8 +661,8 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 
 	prepareCommandForTermination(cmd)
 
-	var stdoutReader io.ReadCloser
-	var stderrReader io.ReadCloser
+	var outputReader io.ReadCloser
+	var outputWriter *os.File
 	var stdinWriter io.WriteCloser
 	var ptySlave *os.File
 
@@ -631,25 +684,31 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 		ptySlave = tty
 	} else {
 		var err error
-		stdoutReader, err = cmd.StdoutPipe()
+		outputReader, outputWriter, err = os.Pipe()
 		if err != nil {
-			return ErrorResult(fmt.Sprintf("failed to create stdout pipe: %v", err))
+			return ErrorResult(fmt.Sprintf("failed to create output pipe: %v", err))
 		}
-		stderrReader, err = cmd.StderrPipe()
-		if err != nil {
-			return ErrorResult(fmt.Sprintf("failed to create stderr pipe: %v", err))
-		}
+		cmd.Stdout = outputWriter
+		cmd.Stderr = outputWriter
 		stdinWriter, err = cmd.StdinPipe()
 		if err != nil {
+			_ = outputReader.Close()
+			_ = outputWriter.Close()
 			return ErrorResult(fmt.Sprintf("failed to create stdin pipe: %v", err))
 		}
-		session.stdoutPipe = io.MultiReader(stdoutReader, stderrReader)
+		session.stdoutPipe = outputReader
 		session.stdinWriter = stdinWriter
 	}
 
 	// Background sessions use the same startup path so isolation stays consistent
 	// with synchronous exec runs.
 	if err := isolation.Start(cmd); err != nil {
+		if outputReader != nil {
+			_ = outputReader.Close()
+		}
+		if outputWriter != nil {
+			_ = outputWriter.Close()
+		}
 		if ptySlave != nil {
 			_ = ptySlave.Close()
 		}
@@ -659,9 +718,12 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 		return ErrorResult(fmt.Sprintf("failed to start command: %v", err))
 	}
 
-	// The child inherited its own copies of the PTY slave end. The parent must
-	// release its copy now, otherwise the master never observes EOF/EIO when
-	// the child exits and the reader goroutine would block forever.
+	// The child inherited its own copies of the pipe/PTY write ends. The parent
+	// must release its copy now, otherwise the readers never observe EOF/EIO
+	// when the child exits and the goroutines would block forever.
+	if outputWriter != nil {
+		_ = outputWriter.Close()
+	}
 	if ptySlave != nil {
 		_ = ptySlave.Close()
 	}
@@ -734,9 +796,8 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 			_ = session.ptyMaster.Close()
 		}()
 	} else {
-		// Non-PTY mode: single goroutine reads pipes.
-		// When Read() returns EOF (pipe closed), we break.
-		// When process exits, OS closes pipe write end → Read() returns EOF → we exit.
+		// Non-PTY mode: one goroutine reads the merged stdout/stderr pipe.
+		// When process exits, OS closes the pipe write end → Read() returns EOF.
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
@@ -749,9 +810,8 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 			}()
 			buf := make([]byte, 4096)
 
-			// Read stdout
 			for {
-				n, err := stdoutReader.Read(buf)
+				n, err := outputReader.Read(buf)
 				if n > 0 {
 					session.mu.Lock()
 					if session.outputBuffer.Len() >= maxOutputBufferSize {
@@ -769,27 +829,7 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 				}
 			}
 
-			// Read stderr
-			for {
-				n, err := stderrReader.Read(buf)
-				if n > 0 {
-					session.mu.Lock()
-					if session.outputBuffer.Len() >= maxOutputBufferSize {
-						if !session.outputTruncated {
-							session.outputBuffer.WriteString(outputTruncateMarker)
-							session.outputTruncated = true
-						}
-					} else {
-						session.outputBuffer.Write(buf[:n])
-					}
-					session.mu.Unlock()
-				}
-				if err != nil {
-					break
-				}
-			}
-
-			// All pipes closed, get exit status
+			_ = outputReader.Close()
 			if stdinWriter != nil {
 				_ = stdinWriter.Close()
 			}
