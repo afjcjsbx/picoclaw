@@ -2,7 +2,6 @@ package evolution
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 
 	"github.com/sipeed/picoclaw/pkg/providers"
@@ -48,7 +47,7 @@ type LLMTaskSuccessJudge struct {
 }
 
 type llmTaskSuccessResponse struct {
-	Success bool   `json:"success"`
+	Success *bool  `json:"success"`
 	Reason  string `json:"reason"`
 }
 
@@ -95,23 +94,24 @@ func (j *LLMTaskSuccessJudge) JudgeTaskRecord(
 		return j.fallbackDecision(ctx, record)
 	}
 
-	content := strings.TrimSpace(resp.Content)
-	content = strings.TrimPrefix(content, "```json")
-	content = strings.TrimPrefix(content, "```")
-	content = strings.TrimSuffix(content, "```")
-	content = strings.TrimSpace(content)
-	if content == "" {
+	decision, ok := parseLLMTaskSuccess(resp.Content)
+	if !ok {
 		return j.fallbackDecision(ctx, record)
 	}
+	return decision, nil
+}
 
-	var payload llmTaskSuccessResponse
-	if err := json.Unmarshal([]byte(content), &payload); err != nil {
-		return j.fallbackDecision(ctx, record)
+func parseLLMTaskSuccess(content string) (TaskSuccessDecision, bool) {
+	payload, ok := decodeLLMObject("success_judge", content, func(payload llmTaskSuccessResponse) bool {
+		return payload.Success != nil
+	})
+	if !ok {
+		return TaskSuccessDecision{}, false
 	}
 	return TaskSuccessDecision{
-		Success: payload.Success,
+		Success: *payload.Success,
 		Reason:  strings.TrimSpace(payload.Reason),
-	}, nil
+	}, true
 }
 
 func (j *LLMTaskSuccessJudge) fallbackDecision(

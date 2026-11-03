@@ -553,16 +553,9 @@ func (c *LLMPatternClusterer) validateAndBuildPatternsWithEvidence(
 }
 
 func parseLLMClusterResponse(content string) (llmClusterResponse, bool) {
-	normalized := strings.TrimSpace(content)
-	normalized = strings.TrimPrefix(normalized, "```json")
-	normalized = strings.TrimPrefix(normalized, "```")
-	normalized = strings.TrimSuffix(normalized, "```")
-	normalized = strings.TrimSpace(normalized)
-	var payload llmClusterResponse
-	if err := json.Unmarshal([]byte(normalized), &payload); err != nil {
-		return llmClusterResponse{}, false
-	}
-	return payload, true
+	return decodeLLMObject("cluster", content, func(payload llmClusterResponse) bool {
+		return payload.Clusters != nil
+	})
 }
 
 func buildPatternClusterPrompt(workspace string, tasks []LearningRecord, existing []LearningRecord) string {
