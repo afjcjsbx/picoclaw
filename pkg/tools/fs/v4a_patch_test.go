@@ -241,6 +241,15 @@ func TestEditFileTool_V4APatch_TrailingWhitespaceTolerance(t *testing.T) {
 	assert.Equal(t, "new\n", got)
 }
 
+func TestEditFileTool_V4APatch_PreservesContextTrailingWhitespace(t *testing.T) {
+	// The context line differs from the file only by trailing whitespace. The
+	// tolerant match must keep the bytes in the file, not copy the patch form.
+	result, got := applyPatchToTempFile(t, "alpha \nbeta\n", " alpha\n-beta\n+BETA\n")
+
+	assert.False(t, result.IsError, result.ForLLM)
+	assert.Equal(t, "alpha \nBETA\n", got)
+}
+
 func TestEditFileTool_V4APatch_PreservesCRLF(t *testing.T) {
 	result, got := applyPatchToTempFile(t, "a\r\nb\r\n", "-b\n+c\n")
 

@@ -24,12 +24,50 @@ type v4aPatch struct {
 	hunks []v4aHunk
 }
 
-// v4aHunk is one update hunk. Before holds context and removed lines, After
-// holds context and added lines, both in file order.
+// v4aOpKind identifies one line in a hunk.
+type v4aOpKind byte
+
+const (
+	v4aContextOp v4aOpKind = ' '
+	v4aRemoveOp  v4aOpKind = '-'
+	v4aAddOp     v4aOpKind = '+'
+)
+
+// v4aOp is one context, removed, or added line. Keeping the operation kind
+// lets the applier reuse the real file line for context entries, including its
+// trailing whitespace, instead of substituting the patch text.
+type v4aOp struct {
+	kind v4aOpKind
+	text string
+}
+
+// v4aHunk is one update hunk in patch order.
 type v4aHunk struct {
-	before    []string
-	after     []string
+	ops       []v4aOp
 	endOfFile bool
+}
+
+// beforeLines returns the context and removed lines used for matching.
+func (h v4aHunk) beforeLines() []string {
+	lines := make([]string, 0, len(h.ops))
+	for _, op := range h.ops {
+		if op.kind != v4aAddOp {
+			lines = append(lines, op.text)
+		}
+	}
+	return lines
+}
+
+// afterLines returns the context and added lines used for a context-free
+// append at end of file.
+func (h v4aHunk) afterLines() []string {
+	lines := make([]string, 0, len(h.ops))
+	for _, op := range h.ops {
+		if op.kind != v4aRemoveOp {
+			lines = append(lines, op.text)
+		}
+	}
+	return lines
 }
 
 // applyV4APatch applies a V4A-formatted patch to content. The patch may include
@@ -119,23 +157,21 @@ func parseV4APatch(patch string) (v4aPatch, error) {
 			if current == nil {
 				current = &v4aHunk{}
 			}
-			current.after = append(current.after, line[1:])
+			current.ops = append(current.ops, v4aOp{kind: v4aAddOp, text: line[1:]})
 		case strings.HasPrefix(line, "-"):
 			if current == nil {
 				current = &v4aHunk{}
 			}
-			current.before = append(current.before, line[1:])
+			current.ops = append(current.ops, v4aOp{kind: v4aRemoveOp, text: line[1:]})
 		case strings.HasPrefix(line, " "):
 			if current == nil {
 				current = &v4aHunk{}
 			}
-			current.before = append(current.before, line[1:])
-			current.after = append(current.after, line[1:])
+			current.ops = append(current.ops, v4aOp{kind: v4aContextOp, text: line[1:]})
 		case line == "":
 			// Inside a hunk a blank line is an empty context line.
 			if current != nil {
-				current.before = append(current.before, "")
-				current.after = append(current.after, "")
+				current.ops = append(current.ops, v4aOp{kind: v4aContextOp})
 			}
 		case strings.HasPrefix(line, "*** "):
 			return v4aPatch{}, fmt.Errorf("line %d: unsupported patch directive %q", lineNumber, line)
@@ -163,10 +199,15 @@ func parseV4APatch(patch string) (v4aPatch, error) {
 func finishHunk(parsed *v4aPatch, current **v4aHunk) {
 	hunk := *current
 	*current = nil
-	if hunk == nil || len(hunk.before) == 0 && len(hunk.after) == 0 {
+	if hunk == nil {
 		return
 	}
-	if len(hunk.before) == len(hunk.after) && slices.Equal(hunk.before, hunk.after) {
+	before := hunk.beforeLines()
+	after := hunk.afterLines()
+	if len(before) == 0 && len(after) == 0 {
+		return
+	}
+	if len(before) == len(after) && slices.Equal(before, after) {
 		return
 	}
 	parsed.hunks = append(parsed.hunks, *hunk)
@@ -187,7 +228,8 @@ func applyV4AHunks(content []byte, hunks []v4aHunk) ([]byte, error) {
 	lines := strings.Split(text, "\n")
 	cursor := 0
 	for index, hunk := range hunks {
-		if len(hunk.before) == 0 {
+		before := hunk.beforeLines()
+		if len(before) == 0 {
 			if !hunk.endOfFile {
 				return nil, fmt.Errorf(
 					"hunk %d: hunk has no context; add a context or removed line so the insertion point is unambiguous",
@@ -195,23 +237,25 @@ func applyV4AHunks(content []byte, hunks []v4aHunk) ([]byte, error) {
 				)
 			}
 			position := endOfFileInsertPosition(lines)
-			lines = replaceLines(lines, position, position, hunk.after)
-			cursor = position + len(hunk.after)
+			after := hunk.afterLines()
+			lines = replaceLines(lines, position, position, after)
+			cursor = position + len(after)
 			continue
 		}
 
-		start, err := findHunkMatch(lines, hunk.before, cursor)
+		start, err := findHunkMatch(lines, before, cursor)
 		if err != nil {
 			return nil, fmt.Errorf("hunk %d: %w", index+1, err)
 		}
 
-		end := start + len(hunk.before)
+		end := start + len(before)
 		if hunk.endOfFile && !isFileEnd(lines, end) {
 			return nil, fmt.Errorf("hunk %d: %q does not match the end of the file", index+1, v4aEndOfFile)
 		}
 
-		lines = replaceLines(lines, start, end, hunk.after)
-		cursor = start + len(hunk.after)
+		replacement := hunkReplacement(hunk, lines, start)
+		lines = replaceLines(lines, start, end, replacement)
+		cursor = start + len(replacement)
 	}
 
 	result := strings.Join(lines, "\n")
@@ -219,6 +263,26 @@ func applyV4AHunks(content []byte, hunks []v4aHunk) ([]byte, error) {
 		result = strings.ReplaceAll(result, "\n", "\r\n")
 	}
 	return []byte(result), nil
+}
+
+// hunkReplacement builds the output lines for a matched hunk. Context lines
+// come from the file itself, so a tolerant match never rewrites trailing
+// whitespace the patch did not explicitly remove or add.
+func hunkReplacement(hunk v4aHunk, lines []string, start int) []string {
+	replacement := make([]string, 0, len(hunk.ops))
+	fileIndex := start
+	for _, op := range hunk.ops {
+		switch op.kind {
+		case v4aContextOp:
+			replacement = append(replacement, lines[fileIndex])
+			fileIndex++
+		case v4aRemoveOp:
+			fileIndex++
+		case v4aAddOp:
+			replacement = append(replacement, op.text)
+		}
+	}
+	return replacement
 }
 
 // errHunkNotFound reports that no position matched a hunk's context.
