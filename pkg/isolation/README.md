@@ -233,6 +233,30 @@ If you suspect isolation is ineffective, check whether unexpected host paths app
 
 They complement each other and do not replace each other.
 
+## Prompt Boundary Notice
+
+When isolation is enabled and supported, the agent system prompt includes a
+`Sandbox Boundaries` section. It is generated from `DescribeBoundary` when the
+agent is created and lists:
+
+- the workspace and the PicoClaw instance root;
+- the scratch directory (`$TMPDIR`);
+- user-configured `expose_paths`, split into writable and read-only targets;
+- whether subprocess network access remains available.
+
+The notice also tells the model that a `Read-only file system`, missing path, or
+permission error at the boundary is not a broken host. The model should report
+it and ask the user to add the path to `isolation.expose_paths` instead of
+retrying with `sudo`, another absolute path, or another tool.
+
+The notice describes child-process isolation only. File tools follow
+`restrict_to_workspace` and `allow_read_outside_workspace` independently. On
+Windows the notice has no path list because that backend applies process-level
+restrictions without path-level filesystem remapping.
+
+Config reload rebuilds the agent registry, so a changed isolation configuration
+is reflected in the next system prompt.
+
 ## Current Limits
 
 - Linux isolation is implemented with `bwrap`, not a custom in-process isolation runtime.

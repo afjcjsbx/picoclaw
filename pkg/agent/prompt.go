@@ -47,6 +47,7 @@ type PromptSourceID string
 const (
 	PromptSourceKernel         PromptSourceID = "runtime.kernel"
 	PromptSourceHierarchy      PromptSourceID = "runtime.hierarchy"
+	PromptSourceIsolation      PromptSourceID = "runtime.isolation"
 	PromptSourceWorkspace      PromptSourceID = "workspace.definition"
 	PromptSourceRuntime        PromptSourceID = "runtime.context"
 	PromptSourceSummary        PromptSourceID = "context.summary"
@@ -171,6 +172,13 @@ func builtinPromptSources() []PromptSourceDescriptor {
 			Owner:           "agent",
 			Description:     "Prompt hierarchy rules",
 			Allowed:         []PromptPlacement{{Layer: PromptLayerKernel, Slot: PromptSlotHierarchy}},
+			StableByDefault: true,
+		},
+		{
+			ID:              PromptSourceIsolation,
+			Owner:           "isolation",
+			Description:     "Active subprocess sandbox boundaries",
+			Allowed:         []PromptPlacement{{Layer: PromptLayerKernel, Slot: PromptSlotIdentity}},
 			StableByDefault: true,
 		},
 		{
