@@ -129,11 +129,20 @@ func TestEditFileTool_V4APatch_HunkBodyWithoutWrapper(t *testing.T) {
 	assert.Equal(t, "one\nTWO\n", got)
 }
 
-func TestEditFileTool_V4APatch_InsertionWithoutContext(t *testing.T) {
+func TestEditFileTool_V4APatch_RejectsInsertionWithoutContext(t *testing.T) {
 	result, got := applyPatchToTempFile(t, "one\ntwo\n", "+zero\n")
 
-	assert.False(t, result.IsError, result.ForLLM)
-	assert.Equal(t, "zero\none\ntwo\n", got)
+	assert.True(t, result.IsError)
+	assert.Contains(t, result.ForLLM, "no context")
+	assert.Equal(t, "one\ntwo\n", got, "file must not change on error")
+}
+
+func TestEditFileTool_V4APatch_RejectsHunkWithoutContext(t *testing.T) {
+	result, got := applyPatchToTempFile(t, "one\ntwo\n", "@@\n+zero\n")
+
+	assert.True(t, result.IsError)
+	assert.Contains(t, result.ForLLM, "no context")
+	assert.Equal(t, "one\ntwo\n", got, "file must not change on error")
 }
 
 func TestEditFileTool_V4APatch_AppendWithContext(t *testing.T) {

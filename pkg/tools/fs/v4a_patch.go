@@ -187,6 +187,13 @@ func applyV4AHunks(content []byte, hunks []v4aHunk) ([]byte, error) {
 	lines := strings.Split(text, "\n")
 	cursor := 0
 	for index, hunk := range hunks {
+		if len(hunk.before) == 0 {
+			return nil, fmt.Errorf(
+				"hunk %d: hunk has no context; add a context or removed line so the insertion point is unambiguous",
+				index+1,
+			)
+		}
+
 		start, err := findHunkMatch(lines, hunk.before, cursor)
 		if err != nil {
 			return nil, fmt.Errorf("hunk %d: %w", index+1, err)
@@ -212,10 +219,6 @@ func applyV4AHunks(content []byte, hunks []v4aHunk) ([]byte, error) {
 var errHunkNotFound = errors.New("hunk context not found")
 
 func findHunkMatch(lines, before []string, cursor int) (int, error) {
-	if len(before) == 0 {
-		return cursor, nil
-	}
-
 	start, err := findUniqueHunkMatch(lines, before, cursor)
 	if err == nil {
 		return start, nil

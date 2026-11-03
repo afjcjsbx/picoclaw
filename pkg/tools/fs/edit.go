@@ -34,7 +34,7 @@ func (t *EditFileTool) Description() string {
 	return "Edit a file by replacing old_text with new_text, or by applying a V4A patch through patch. " +
 		"The old_text must exist exactly in the file. Prefer patch for multi-hunk edits: it accepts " +
 		"'*** Begin Patch' / '*** End Patch' with an optional '*** Update File: <path>' header, and hunk lines " +
-		"starting with ' ' (context), '-' (remove), or '+' (add). Hunks may be given in any order. Provide either patch or old_text/new_text, not both. " +
+		"starting with ' ' (context), '-' (remove), or '+' (add). Hunks may be given in any order and each needs at least one context or removed line. Provide either patch or old_text/new_text, not both. " +
 		"Standard JSON escaping applies: \\n for newline and \\\\n for literal backslash-n."
 }
 
@@ -59,7 +59,7 @@ func (t *EditFileTool) Parameters() map[string]any {
 				"description": "A V4A patch for this file: optional \"*** Begin Patch\" / \"*** End Patch\" wrapper, " +
 					"an optional \"*** Update File: <path>\" header, then hunks whose lines start with ' ' (context), " +
 					"'-' (remove), or '+' (add). '@@' starts a hunk and \"*** End of File\" anchors the last hunk to EOF. " +
-					"Each hunk's context must match exactly once, and hunks may be given in any order. " +
+					"Each hunk needs a context or removed line; that context must match exactly once, and hunks may be given in any order. " +
 					"Use instead of old_text/new_text.",
 			},
 		},
