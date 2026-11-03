@@ -257,6 +257,44 @@ func TestEditFileTool_V4APatch_PreservesCRLF(t *testing.T) {
 	assert.Equal(t, "a\r\nc\r\n", got)
 }
 
+func TestEditFileTool_V4APatch_PreservesMixedLineEndings(t *testing.T) {
+	tests := map[string]struct {
+		content string
+		patch   string
+		want    string
+	}{
+		"CRLF context and LF removal": {
+			content: "alpha\r\nbeta\n",
+			patch:   " alpha\n-beta\n+BETA\n",
+			want:    "alpha\r\nBETA\n",
+		},
+		"LF context and CRLF removal": {
+			content: "alpha\nbeta\r\n",
+			patch:   " alpha\n-beta\n+BETA\n",
+			want:    "alpha\nBETA\r\n",
+		},
+		"insert copies previous CRLF": {
+			content: "alpha\r\nbeta\n",
+			patch:   " alpha\n+inserted\n",
+			want:    "alpha\r\ninserted\r\nbeta\n",
+		},
+		"replacement without context uses removed EOL": {
+			content: "alpha\nbeta\r\ngamma\n",
+			patch:   "-beta\n+BETA\n",
+			want:    "alpha\nBETA\r\ngamma\n",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			result, got := applyPatchToTempFile(t, tc.content, tc.patch)
+
+			assert.False(t, result.IsError, result.ForLLM)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
 func TestEditFileTool_V4APatch_HeaderMustMatchPath(t *testing.T) {
 	patch := `*** Begin Patch
 *** Update File: other.txt

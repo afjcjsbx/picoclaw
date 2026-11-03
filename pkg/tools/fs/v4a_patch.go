@@ -213,6 +213,76 @@ func finishHunk(parsed *v4aPatch, current **v4aHunk) {
 	parsed.hunks = append(parsed.hunks, *hunk)
 }
 
+// fileLine is one logical line with its original terminator. Keeping the
+// terminator separate lets matching ignore CRLF while the writer preserves a
+// file that mixes LF and CRLF.
+type fileLine struct {
+	text string
+	eol  string // "\n", "\r\n", or "" for a final line without a newline
+}
+
+func splitFileLines(content string) []fileLine {
+	var lines []fileLine
+	for len(content) > 0 {
+		index := strings.IndexByte(content, '\n')
+		if index < 0 {
+			lines = append(lines, fileLine{text: content})
+			break
+		}
+		text := content[:index]
+		eol := "\n"
+		if strings.HasSuffix(text, "\r") {
+			text = strings.TrimSuffix(text, "\r")
+			eol = "\r\n"
+		}
+		lines = append(lines, fileLine{text: text, eol: eol})
+		content = content[index+1:]
+	}
+	return lines
+}
+
+func renderFileLines(lines []fileLine) []byte {
+	var builder strings.Builder
+	for _, line := range lines {
+		builder.WriteString(line.text)
+		builder.WriteString(line.eol)
+	}
+	return []byte(builder.String())
+}
+
+// defaultEOL returns the first line ending used by the file, or LF when the
+// file has no line ending to copy.
+func defaultEOL(lines []fileLine) string {
+	for _, line := range lines {
+		if line.eol != "" {
+			return line.eol
+		}
+	}
+	return "\n"
+}
+
+// normalizeFinalEOL keeps the original trailing-newline state while making
+// sure every non-final line has a separator.
+func normalizeFinalEOL(lines []fileLine, trailingNewline bool) {
+	if len(lines) == 0 {
+		return
+	}
+	fallback := defaultEOL(lines)
+	for index := 0; index < len(lines)-1; index++ {
+		if lines[index].eol == "" {
+			lines[index].eol = fallback
+		}
+	}
+	last := &lines[len(lines)-1]
+	if trailingNewline {
+		if last.eol == "" {
+			last.eol = fallback
+		}
+		return
+	}
+	last.eol = ""
+}
+
 // applyV4AHunks locates every hunk in content and applies the replacements.
 // Matching starts at the end of the previous hunk and falls back to the whole
 // file so out-of-order hunks still apply. Either search must produce a unique
@@ -220,12 +290,11 @@ func finishHunk(parsed *v4aPatch, current **v4aHunk) {
 // occurrence.
 func applyV4AHunks(content []byte, hunks []v4aHunk) ([]byte, error) {
 	text := string(content)
-	crlf := usesOnlyCRLF(text)
-	if crlf {
-		text = strings.ReplaceAll(text, "\r\n", "\n")
-	}
+	lines := splitFileLines(text)
+	// Preserve the historical empty-file append result ("tail\n") while still
+	// honoring an explicit missing trailing newline for non-empty files.
+	trailingNewline := strings.HasSuffix(text, "\n") || len(lines) == 0
 
-	lines := strings.Split(text, "\n")
 	cursor := 0
 	for index, hunk := range hunks {
 		before := hunk.beforeLines()
@@ -238,8 +307,16 @@ func applyV4AHunks(content []byte, hunks []v4aHunk) ([]byte, error) {
 			}
 			position := endOfFileInsertPosition(lines)
 			after := hunk.afterLines()
-			lines = replaceLines(lines, position, position, after)
-			cursor = position + len(after)
+			added := make([]fileLine, 0, len(after))
+			eol := eolForAppend(lines)
+			if len(lines) > 0 && lines[len(lines)-1].eol == "" {
+				lines[len(lines)-1].eol = eol
+			}
+			for _, line := range after {
+				added = append(added, fileLine{text: line, eol: eol})
+			}
+			lines = replaceLines(lines, position, position, added)
+			cursor = position + len(added)
 			continue
 		}
 
@@ -258,28 +335,53 @@ func applyV4AHunks(content []byte, hunks []v4aHunk) ([]byte, error) {
 		cursor = start + len(replacement)
 	}
 
-	result := strings.Join(lines, "\n")
-	if crlf {
-		result = strings.ReplaceAll(result, "\n", "\r\n")
+	normalizeFinalEOL(lines, trailingNewline)
+	return renderFileLines(lines), nil
+}
+
+// eolForAppend picks the line ending for lines appended at end of file.
+func eolForAppend(lines []fileLine) string {
+	if len(lines) > 0 && lines[len(lines)-1].eol != "" {
+		return lines[len(lines)-1].eol
 	}
-	return []byte(result), nil
+	return defaultEOL(lines)
 }
 
 // hunkReplacement builds the output lines for a matched hunk. Context lines
 // come from the file itself, so a tolerant match never rewrites trailing
-// whitespace the patch did not explicitly remove or add.
-func hunkReplacement(hunk v4aHunk, lines []string, start int) []string {
-	replacement := make([]string, 0, len(hunk.ops))
+// whitespace the patch did not explicitly remove or add. Added lines copy the
+// line ending of the replaced line, then the preceding context, then the next
+// line, so a mixed-ending file keeps its local style.
+func hunkReplacement(hunk v4aHunk, lines []fileLine, start int) []fileLine {
+	replacement := make([]fileLine, 0, len(hunk.ops))
 	fileIndex := start
+	lastRemovedEOL := ""
+	lastEmittedEOL := ""
+	fallback := defaultEOL(lines)
 	for _, op := range hunk.ops {
 		switch op.kind {
 		case v4aContextOp:
-			replacement = append(replacement, lines[fileIndex])
+			line := lines[fileIndex]
 			fileIndex++
+			replacement = append(replacement, line)
+			lastEmittedEOL = line.eol
+			lastRemovedEOL = ""
 		case v4aRemoveOp:
+			lastRemovedEOL = lines[fileIndex].eol
 			fileIndex++
 		case v4aAddOp:
-			replacement = append(replacement, op.text)
+			eol := lastRemovedEOL
+			if eol == "" {
+				eol = lastEmittedEOL
+			}
+			if eol == "" && fileIndex < len(lines) {
+				eol = lines[fileIndex].eol
+			}
+			if eol == "" {
+				eol = fallback
+			}
+			replacement = append(replacement, fileLine{text: op.text, eol: eol})
+			lastEmittedEOL = eol
 		}
 	}
 	return replacement
@@ -288,7 +390,7 @@ func hunkReplacement(hunk v4aHunk, lines []string, start int) []string {
 // errHunkNotFound reports that no position matched a hunk's context.
 var errHunkNotFound = errors.New("hunk context not found")
 
-func findHunkMatch(lines, before []string, cursor int) (int, error) {
+func findHunkMatch(lines []fileLine, before []string, cursor int) (int, error) {
 	start, err := findUniqueHunkMatch(lines, before, cursor)
 	if err == nil {
 		return start, nil
@@ -314,7 +416,7 @@ func findHunkMatch(lines, before []string, cursor int) (int, error) {
 	return 0, fmt.Errorf("context not found; check that the context lines match the current file")
 }
 
-func findUniqueHunkMatch(lines, before []string, start int) (int, error) {
+func findUniqueHunkMatch(lines []fileLine, before []string, start int) (int, error) {
 	for _, tolerant := range []bool{false, true} {
 		matches := findLineSequence(lines, before, start, tolerant)
 		switch len(matches) {
@@ -333,7 +435,7 @@ func findUniqueHunkMatch(lines, before []string, start int) (int, error) {
 	return 0, errHunkNotFound
 }
 
-func findLineSequence(lines, sequence []string, start int, tolerant bool) []int {
+func findLineSequence(lines []fileLine, sequence []string, start int, tolerant bool) []int {
 	if len(sequence) == 0 || start < 0 || start+len(sequence) > len(lines) {
 		return nil
 	}
@@ -347,7 +449,7 @@ func findLineSequence(lines, sequence []string, start int, tolerant bool) []int 
 	return matches
 }
 
-func linesMatchAt(lines, sequence []string, start int, tolerant bool) bool {
+func linesMatchAt(lines []fileLine, sequence []string, start int, tolerant bool) bool {
 	for offset, want := range sequence {
 		if !patchLineMatches(lines[start+offset], want, tolerant) {
 			return false
@@ -356,44 +458,34 @@ func linesMatchAt(lines, sequence []string, start int, tolerant bool) bool {
 	return true
 }
 
-func patchLineMatches(have, want string, tolerant bool) bool {
-	have = strings.TrimSuffix(have, "\r")
-	if tolerant {
-		return strings.TrimRight(have, " \t") == strings.TrimRight(want, " \t")
+func patchLineMatches(have fileLine, want string, tolerant bool) bool {
+	haveText := have.text
+	if have.eol == "" {
+		// Preserve the old behavior for a final line followed by a bare CR.
+		haveText = strings.TrimSuffix(haveText, "\r")
 	}
-	return have == want
+	if tolerant {
+		return strings.TrimRight(haveText, " \t") == strings.TrimRight(want, " \t")
+	}
+	return haveText == want
 }
 
-func replaceLines(lines []string, start, end int, replacement []string) []string {
-	result := make([]string, 0, len(lines)-(end-start)+len(replacement))
+func replaceLines(lines []fileLine, start, end int, replacement []fileLine) []fileLine {
+	result := make([]fileLine, 0, len(lines)-(end-start)+len(replacement))
 	result = append(result, lines[:start]...)
 	result = append(result, replacement...)
 	result = append(result, lines[end:]...)
 	return result
 }
 
-// endOfFileInsertPosition returns the index just before the empty element that
-// a trailing newline produces, so appended lines land after the last real line.
-func endOfFileInsertPosition(lines []string) int {
-	position := len(lines)
-	if position > 0 && lines[position-1] == "" {
-		position--
-	}
-	return position
+// endOfFileInsertPosition is the position after the last logical line.
+func endOfFileInsertPosition(lines []fileLine) int {
+	return len(lines)
 }
 
-// isFileEnd reports whether position sits at the end of the file, tolerating
-// the empty trailing element produced by a final newline.
-func isFileEnd(lines []string, position int) bool {
-	if position == len(lines) {
-		return true
-	}
-	return position == len(lines)-1 && lines[position] == ""
-}
-
-func usesOnlyCRLF(content string) bool {
-	newlines := strings.Count(content, "\n")
-	return newlines > 0 && strings.Count(content, "\r\n") == newlines
+// isFileEnd reports whether position sits at the end of the file.
+func isFileEnd(lines []fileLine, position int) bool {
+	return position == len(lines)
 }
 
 func patchHeaderMatchesPath(header, path string) bool {
