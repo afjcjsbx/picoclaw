@@ -27,12 +27,8 @@ import (
 	fstools "github.com/sipeed/picoclaw/pkg/tools/fs"
 )
 
-// maxOutputBufferSize caps the output captured per session; outputTruncateMarker
-// is appended once the cap is reached.
-const (
-	maxOutputBufferSize  = 1 * 1024 * 1024 // 1MB
-	outputTruncateMarker = "\n... [output truncated, exceeded 1MB]\n"
-)
+// maxOutputBufferSize caps the rolling output retained per session.
+const maxOutputBufferSize = 1 * 1024 * 1024 // 1MB
 
 var (
 	globalSessionManager = NewSessionManager()
@@ -265,7 +261,7 @@ Before a command explicitly creates files or directories, use list_dir when avai
 Usage notes:
 - action is required; command is required for action=run.
 - The optional timeout parameter is in seconds and overrides the configured timeout for foreground commands; 0 disables the timeout. It cannot be combined with background=true. Foreground output longer than the configured limit (default 50,000 chars) is truncated to the first 40%% and last 60%% around an omission notice; background session output is limited to 1 MB.
-- Use background=true for long-running commands. The result includes a sessionId. Use action=list to list sessions; use poll, wait, read, write, send-keys, or kill with sessionId to manage one. poll returns immediately; to wait for a session to finish use wait instead of polling in a loop. write sends stdin; send-keys sends keys to a PTY. Set notify=true for a job that ends so its completion arrives as a follow-up message; after two silent poll/wait calls the tool enables that notification automatically. Sessions are cleaned up 30 minutes after the process exits.
+- Use background=true for long-running commands. The result includes a sessionId. Use action=list to list sessions; use poll, wait, read, write, send-keys, or kill with sessionId to manage one. poll returns immediately with a short output preview. read is non-destructive and accepts offset/limit byte ranges; by default it returns the most recent output. wait returns a partial output tail when its window expires. kill returns the final tail and keeps the session readable for 30 minutes. To wait for a session to finish use wait instead of polling in a loop. write sends stdin; send-keys sends keys to a PTY. Set notify=true for a job that ends so its completion arrives as a follow-up message; after two silent poll/wait calls the tool enables that notification automatically.
 - Combine background=true with pty=true for interactive sessions when supported. PTY is not supported on Windows.
 - Run independent commands in separate tool calls. %s Use semicolons only when later commands may run even if an earlier one fails. Do not use newlines to separate commands; newlines inside quoted strings are fine.`, runtime.GOOS, shell, chainGuidance)
 }
@@ -316,6 +312,14 @@ func (t *ExecTool) Parameters() map[string]any {
 			"notify": map[string]any{
 				"type":        "boolean",
 				"description": "With background=true, send a completion message when the process exits. Use it for jobs with a defined end; do not poll or wait in a loop.",
+			},
+			"offset": map[string]any{
+				"type":        "integer",
+				"description": "With read: absolute byte offset into the retained session log. Defaults to the start of the most recent limit bytes; use 0 for the oldest retained byte.",
+			},
+			"limit": map[string]any{
+				"type":        "integer",
+				"description": "With read: maximum bytes to return. Defaults to the configured foreground output cap.",
 			},
 		},
 		"required": []string{"action"},
@@ -831,16 +835,7 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 						session.SetPtyKeyMode(mode)
 					}
 
-					session.mu.Lock()
-					if session.outputBuffer.Len() >= maxOutputBufferSize {
-						if !session.outputTruncated {
-							session.outputBuffer.WriteString(outputTruncateMarker)
-							session.outputTruncated = true
-						}
-					} else {
-						session.outputBuffer.Write(buf[:n])
-					}
-					session.mu.Unlock()
+					session.appendOutput(buf[:n])
 				}
 				if err != nil {
 					break
@@ -868,16 +863,7 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 			for {
 				n, err := outputReader.Read(buf)
 				if n > 0 {
-					session.mu.Lock()
-					if session.outputBuffer.Len() >= maxOutputBufferSize {
-						if !session.outputTruncated {
-							session.outputBuffer.WriteString(outputTruncateMarker)
-							session.outputTruncated = true
-						}
-					} else {
-						session.outputBuffer.Write(buf[:n])
-					}
-					session.mu.Unlock()
+					session.appendOutput(buf[:n])
 				}
 				if err != nil {
 					break
@@ -947,9 +933,12 @@ func (t *ExecTool) executePoll(args map[string]any) *ToolResult {
 	}
 
 	resp := ExecResponse{
-		SessionID: sessionID,
-		Status:    session.GetStatus(),
-		ExitCode:  session.GetExitCode(),
+		SessionID:    sessionID,
+		Status:       session.GetStatus(),
+		ExitCode:     session.GetExitCode(),
+		Output:       session.Tail(pollOutputChars),
+		TotalBytes:   session.TotalBytes(),
+		DroppedBytes: session.DroppedBytes(),
 	}
 	if !session.IsDone() && session.noteCheck() >= idleCheckLimit {
 		resp.Note = pollIdleNote
@@ -980,6 +969,9 @@ const (
 	defaultWaitMax = 60 * time.Second
 	// completionOutputChars bounds the output tail in a completion notice.
 	completionOutputChars = 1000
+	pollOutputChars       = 1000
+	waitOutputChars       = 1000
+	killOutputChars       = 1000
 
 	notifyEnabledNote = "You will be notified when this session exits; do not poll or wait in a loop."
 	autoNotifyNote    = "A completion notification is enabled; the result will arrive as a follow-up message."
@@ -1039,10 +1031,17 @@ func (t *ExecTool) executeWait(ctx context.Context, args map[string]any) *ToolRe
 		}
 	}
 
-	resp := ExecResponse{SessionID: sessionID, Status: session.GetStatus(), ExitCode: session.GetExitCode()}
+	resp := ExecResponse{
+		SessionID:    sessionID,
+		Status:       session.GetStatus(),
+		ExitCode:     session.GetExitCode(),
+		TotalBytes:   session.TotalBytes(),
+		DroppedBytes: session.DroppedBytes(),
+	}
 	if session.IsDone() {
 		resp.Output = session.Read()
 	} else {
+		resp.Output = session.Tail(waitOutputChars)
 		resp.Note = clampNote + fmt.Sprintf(
 			"Wait window of %ds elapsed. The process is still running; this is not an error.",
 			int64(window/time.Second))
@@ -1074,12 +1073,50 @@ func (t *ExecTool) executeRead(args map[string]any) *ToolResult {
 		return ErrorResult(err.Error())
 	}
 
-	output := session.Read()
+	offset := int64(0)
+	offsetProvided := false
+	if raw, ok := args["offset"]; ok {
+		value, isNumber := raw.(float64)
+		if !isNumber || value != math.Trunc(value) || value < 0 {
+			return ErrorResult("offset must be a non-negative integer number of bytes")
+		}
+		offset = int64(value)
+		offsetProvided = true
+	}
 
+	limit := int64(t.maxOutputChars)
+	if limit <= 0 {
+		limit = config.DefaultExecMaxOutputChars
+	}
+	if raw, ok := args["limit"]; ok {
+		value, isNumber := raw.(float64)
+		if !isNumber || value != math.Trunc(value) || value < 1 {
+			return ErrorResult("limit must be a positive integer number of bytes")
+		}
+		limit = int64(value)
+	}
+	if !offsetProvided {
+		if total := session.TotalBytes(); total > limit {
+			offset = total - limit
+		}
+	}
+
+	output, next, total, dropped, hasMore := session.ReadRange(offset, limit)
 	resp := ExecResponse{
-		SessionID: sessionID,
-		Output:    output,
-		Status:    session.GetStatus(),
+		SessionID:    sessionID,
+		Output:       output,
+		Status:       session.GetStatus(),
+		TotalBytes:   total,
+		Offset:       offset + dropped,
+		NextOffset:   next,
+		HasMore:      hasMore,
+		DroppedBytes: dropped,
+	}
+	if dropped > 0 {
+		resp.Note = fmt.Sprintf(
+			"Requested offset %d predates the retained output window; starting at byte %d.",
+			offset, offset+dropped,
+		)
 	}
 	data, err := json.Marshal(resp)
 	if err != nil {
@@ -1157,11 +1194,13 @@ func (t *ExecTool) executeKill(args map[string]any) *ToolResult {
 		return ErrorResult(fmt.Sprintf("failed to kill session: %v", err))
 	}
 
-	t.sessionManager.Remove(sessionID)
-
 	resp := ExecResponse{
-		SessionID: sessionID,
-		Status:    "done",
+		SessionID:    sessionID,
+		Status:       session.GetStatus(),
+		ExitCode:     session.GetExitCode(),
+		Output:       session.Tail(killOutputChars),
+		TotalBytes:   session.TotalBytes(),
+		DroppedBytes: session.DroppedBytes(),
 	}
 	data, err := json.Marshal(resp)
 	if err != nil {
@@ -1169,7 +1208,7 @@ func (t *ExecTool) executeKill(args map[string]any) *ToolResult {
 	}
 	return &ToolResult{
 		ForLLM:  string(data),
-		ForUser: fmt.Sprintf("Session %s killed", sessionID),
+		ForUser: fmt.Sprintf("Session %s killed; output retained for 30 minutes", sessionID),
 		IsError: false,
 	}
 }

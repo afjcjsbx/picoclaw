@@ -42,6 +42,8 @@ type ProcessSession struct {
 	stdinWriter     io.Writer
 	stdoutPipe      io.Reader
 	outputBuffer    *bytes.Buffer
+	outputBase      int64
+	totalOutput     int64
 	outputTruncated bool
 	ptyMaster       *os.File
 
@@ -59,9 +61,9 @@ type ProcessSession struct {
 	notifyStarted bool
 
 	// idleChecks counts consecutive poll/wait calls that saw no new output;
-	// lastCheckLen is the buffer length they compared against.
+	// lastCheckLen is the total output length they compared against.
 	idleChecks   int
-	lastCheckLen int
+	lastCheckLen int64
 }
 
 // noteCheck records one poll/wait of a still-running session and returns how
@@ -71,7 +73,7 @@ func (s *ProcessSession) noteCheck() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if n := s.outputBuffer.Len(); n != s.lastCheckLen {
+	if n := s.totalOutput; n != s.lastCheckLen {
 		s.lastCheckLen, s.idleChecks = n, 0
 	} else {
 		s.idleChecks++
@@ -277,19 +279,92 @@ func (s *ProcessSession) Write(data string) error {
 	return err
 }
 
+// appendOutput appends p to the rolling session log. The retained window is
+// capped at maxOutputBufferSize; dropped prefixes move outputBase forward so
+// absolute offsets remain stable for ReadRange callers.
+func (s *ProcessSession) appendOutput(p []byte) {
+	if len(p) == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.outputBuffer == nil {
+		s.outputBuffer = &bytes.Buffer{}
+	}
+	s.totalOutput += int64(len(p))
+	_, _ = s.outputBuffer.Write(p)
+	if s.outputBuffer.Len() > maxOutputBufferSize {
+		drop := s.outputBuffer.Len() - maxOutputBufferSize
+		s.outputBuffer.Next(drop)
+		s.outputBase += int64(drop)
+		s.outputTruncated = true
+	}
+}
+
+// Read returns the retained output without consuming it. The idle counter is
+// reset so a read counts as observing the current output.
 func (s *ProcessSession) Read() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Reading drains the buffer, so the idle count starts over.
-	s.idleChecks, s.lastCheckLen = 0, 0
-	if s.outputBuffer.Len() == 0 {
+	s.idleChecks, s.lastCheckLen = 0, s.totalOutput
+	if s.outputBuffer == nil || s.outputBuffer.Len() == 0 {
 		return ""
 	}
+	return s.outputBuffer.String()
+}
 
-	data := s.outputBuffer.String()
-	s.outputBuffer.Reset()
-	return data
+// ReadRange returns at most limit bytes starting at absolute byte offset. It
+// never consumes the log. When offset predates the retained window, dropped
+// reports how many bytes were skipped and the returned text starts at the
+// oldest retained byte.
+func (s *ProcessSession) ReadRange(offset, limit int64) (
+	text string,
+	next int64,
+	total int64,
+	dropped int64,
+	hasMore bool,
+) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.idleChecks, s.lastCheckLen = 0, s.totalOutput
+	total = s.totalOutput
+	if s.outputBuffer == nil || s.outputBuffer.Len() == 0 {
+		return "", offset, total, 0, false
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	if offset < s.outputBase {
+		dropped = s.outputBase - offset
+		offset = s.outputBase
+	}
+	data := s.outputBuffer.Bytes()
+	rel := offset - s.outputBase
+	if rel >= int64(len(data)) {
+		return "", offset, total, dropped, false
+	}
+	if limit <= 0 || limit > int64(len(data))-rel {
+		limit = int64(len(data)) - rel
+	}
+	end := rel + limit
+	text = string(data[rel:end])
+	next = offset + int64(len(text))
+	return text, next, total, dropped, next < total
+}
+
+func (s *ProcessSession) TotalBytes() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.totalOutput
+}
+
+func (s *ProcessSession) DroppedBytes() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.outputBase
 }
 
 func (s *ProcessSession) ToSessionInfo() SessionInfo {

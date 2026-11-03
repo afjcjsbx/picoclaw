@@ -1566,7 +1566,8 @@ func TestShellTool_Kill(t *testing.T) {
 	var listResp ExecResponse
 	err = json.Unmarshal([]byte(listResult.ForLLM), &listResp)
 	require.NoError(t, err)
-	require.Len(t, listResp.Sessions, 0)
+	require.Len(t, listResp.Sessions, 1)
+	require.Equal(t, "done", listResp.Sessions[0].Status)
 }
 
 func TestShellTool_PTY_AllowedCommands(t *testing.T) {
@@ -1759,14 +1760,15 @@ func TestShellTool_PTY_Kill(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "done", killResp.Status)
 
-	// Poll should return error since session is removed after kill
+	// The session is retained after kill so its final output stays readable.
 	pollResult := tool.Execute(ctx, map[string]any{
 		"action":    "poll",
 		"sessionId": resp.SessionID,
 	})
-	// Session is removed after kill, so poll returns error with "session not found"
-	require.True(t, pollResult.IsError, "poll should error after kill (session removed)")
-	require.Contains(t, pollResult.ForLLM, "session not found")
+	require.False(t, pollResult.IsError, "poll should still find the retained session: %s", pollResult.ForLLM)
+	var pollResp ExecResponse
+	require.NoError(t, json.Unmarshal([]byte(pollResult.ForLLM), &pollResp))
+	require.Equal(t, "done", pollResp.Status)
 }
 
 func TestShellTool_Write_Read_NonPTY(t *testing.T) {
@@ -1932,13 +1934,15 @@ func TestShellTool_ProcessGroupKill(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "done", killResp.Status)
 
-	// Poll should return error since session is removed after kill
+	// The session is retained after kill so its final output stays readable.
 	pollResult := tool.Execute(ctx, map[string]any{
 		"action":    "poll",
 		"sessionId": resp.SessionID,
 	})
-	require.True(t, pollResult.IsError, "poll should error after kill (session removed)")
-	require.Contains(t, pollResult.ForLLM, "session not found")
+	require.False(t, pollResult.IsError, "poll should still find the retained session: %s", pollResult.ForLLM)
+	var pollResp ExecResponse
+	require.NoError(t, json.Unmarshal([]byte(pollResult.ForLLM), &pollResp))
+	require.Equal(t, "done", pollResp.Status)
 }
 
 func TestShellTool_PTY_ProcessGroupKill(t *testing.T) {
@@ -1993,13 +1997,15 @@ func TestShellTool_PTY_ProcessGroupKill(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "done", killResp.Status)
 
-	// Poll should return error since session is removed after kill
+	// The session is retained after kill so its final output stays readable.
 	pollResult := tool.Execute(ctx, map[string]any{
 		"action":    "poll",
 		"sessionId": resp.SessionID,
 	})
-	require.True(t, pollResult.IsError, "poll should error after kill (session removed)")
-	require.Contains(t, pollResult.ForLLM, "session not found")
+	require.False(t, pollResult.IsError, "poll should still find the retained session: %s", pollResult.ForLLM)
+	var pollResp ExecResponse
+	require.NoError(t, json.Unmarshal([]byte(pollResult.ForLLM), &pollResp))
+	require.Equal(t, "done", pollResp.Status)
 }
 
 func TestShellTool_PTY_Background_Read(t *testing.T) {
@@ -2689,4 +2695,61 @@ func TestShellTool_NotifyRequiresBackground(t *testing.T) {
 	})
 	require.True(t, result.IsError)
 	require.Contains(t, result.ForLLM, "background=true")
+}
+
+func TestShellTool_ReadIsPagedAndNonDestructive(t *testing.T) {
+	tool, ctx, id := startBackgroundSession(t, "sh -c 'printf abcdefghij; sleep 5'")
+	time.Sleep(200 * time.Millisecond)
+
+	first := execResp(t, tool.Execute(ctx, map[string]any{
+		"action": "read", "sessionId": id, "offset": float64(0), "limit": float64(3),
+	}))
+	require.Equal(t, "abc", first.Output)
+	require.Equal(t, int64(3), first.NextOffset)
+	require.True(t, first.HasMore)
+
+	second := execResp(t, tool.Execute(ctx, map[string]any{
+		"action": "read", "sessionId": id, "offset": float64(3), "limit": float64(4),
+	}))
+	require.Equal(t, "defg", second.Output)
+	require.Equal(t, int64(7), second.NextOffset)
+
+	again := execResp(t, tool.Execute(ctx, map[string]any{
+		"action": "read", "sessionId": id, "offset": float64(0), "limit": float64(3),
+	}))
+	require.Equal(t, "abc", again.Output)
+}
+
+func TestShellTool_PollReturnsOutputPreview(t *testing.T) {
+	tool, ctx, id := startBackgroundSession(t, "sh -c 'echo preview-line; sleep 5'")
+	time.Sleep(200 * time.Millisecond)
+
+	resp := execResp(t, tool.Execute(ctx, map[string]any{"action": "poll", "sessionId": id}))
+	require.Equal(t, "running", resp.Status)
+	require.Contains(t, resp.Output, "preview-line")
+	require.Positive(t, resp.TotalBytes)
+}
+
+func TestShellTool_WaitReturnsPartialOutputOnTimeout(t *testing.T) {
+	tool, ctx, id := startBackgroundSession(t, "sh -c 'echo before-timeout; sleep 5'")
+	time.Sleep(200 * time.Millisecond)
+
+	resp := execResp(t, tool.Execute(ctx, map[string]any{
+		"action": "wait", "sessionId": id, "timeout": float64(1),
+	}))
+	require.Equal(t, "running", resp.Status)
+	require.Contains(t, resp.Output, "before-timeout")
+	require.Contains(t, resp.Note, "not an error")
+}
+
+func TestShellTool_KillRetainsOutput(t *testing.T) {
+	tool, ctx, id := startBackgroundSession(t, "sh -c 'echo before-stop; sleep 5'")
+	time.Sleep(200 * time.Millisecond)
+
+	killResp := execResp(t, tool.Execute(ctx, map[string]any{"action": "kill", "sessionId": id}))
+	require.Equal(t, "done", killResp.Status)
+	require.Contains(t, killResp.Output, "before-stop")
+
+	readResp := execResp(t, tool.Execute(ctx, map[string]any{"action": "read", "sessionId": id}))
+	require.Contains(t, readResp.Output, "before-stop")
 }
