@@ -94,10 +94,13 @@ type PromptSource struct {
 }
 
 type PromptPart struct {
-	ID      string
-	Layer   PromptLayer
-	Slot    PromptSlot
-	Source  PromptSource
+	ID     string
+	Layer  PromptLayer
+	Slot   PromptSlot
+	Source PromptSource
+	// Order breaks ties within the same layer and slot. Lower values render
+	// first; the zero value keeps the default source-ID ordering.
+	Order   int
 	Title   string
 	Content string
 	Stable  bool
@@ -460,6 +463,9 @@ func sortPromptParts(parts []PromptPart) []PromptPart {
 		}
 		if d := slotPriority(b.Slot) - slotPriority(a.Slot); d != 0 {
 			return d
+		}
+		if a.Order != b.Order {
+			return a.Order - b.Order
 		}
 		if a.Source.ID != b.Source.ID {
 			return strings.Compare(string(a.Source.ID), string(b.Source.ID))

@@ -237,6 +237,10 @@ Your workspace is at: %s
 	)
 }
 
+// isolationPromptOrder keeps the sandbox notice after the core identity when
+// both parts share the kernel identity slot.
+const isolationPromptOrder = 10
+
 func (cb *ContextBuilder) buildIsolationPrompt() string {
 	boundary := cb.isolationBoundary
 	if boundary == nil {
@@ -414,6 +418,7 @@ func (cb *ContextBuilder) buildSystemPromptParts(opts systemPromptBuildOptions) 
 			Layer:   PromptLayerKernel,
 			Slot:    PromptSlotIdentity,
 			Source:  PromptSource{ID: PromptSourceIsolation, Name: "isolation"},
+			Order:   isolationPromptOrder,
 			Title:   "sandbox boundaries",
 			Content: isolationPrompt,
 			Stable:  true,

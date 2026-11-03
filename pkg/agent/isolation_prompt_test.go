@@ -99,6 +99,26 @@ func TestWithIsolationInvalidatesSystemPromptCache(t *testing.T) {
 	}
 }
 
+func TestSystemPromptRendersIdentityBeforeIsolation(t *testing.T) {
+	cb := NewContextBuilder(t.TempDir())
+	cb.isolationBoundary = &isolation.Boundary{
+		Backend:      "test backend",
+		Workspace:    "/tmp/workspace",
+		Network:      true,
+		PathBoundary: true,
+	}
+
+	prompt := cb.BuildSystemPrompt()
+	identity := strings.Index(prompt, "# picoclaw")
+	isolationSection := strings.Index(prompt, "## Sandbox Boundaries")
+	if identity < 0 || isolationSection < 0 {
+		t.Fatalf("system prompt missing identity or isolation section:\n%s", prompt)
+	}
+	if identity > isolationSection {
+		t.Fatalf("sandbox boundaries render before the picoclaw identity:\n%s", prompt)
+	}
+}
+
 func TestFormatBoundaryPathList(t *testing.T) {
 	paths := []string{
 		"/p1", "/p2", "/p3", "/p4", "/p5", "/p6", "/p7", "/p8", "/p9",
