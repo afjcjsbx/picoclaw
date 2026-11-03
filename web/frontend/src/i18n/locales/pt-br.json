@@ -13,7 +13,8 @@
     "show_more_channels": "Mais",
     "show_less_channels": "Menos",
     "config": "Configuração",
-    "logs": "Logs"
+    "logs": "Logs",
+    "subagents": "Subagentes"
   },
   "launcherLogin": {
     "title": "Entrar",
@@ -772,6 +773,84 @@
           "requires_subagent": "Habilite `tools.subagent` antes que a ferramenta de spawn possa delegar trabalho.",
           "requires_mcp_discovery": "Habilite `tools.mcp.discovery` antes que as ferramentas de descoberta MCP fiquem disponíveis.",
           "requires_web_search_provider": "Configure ao menos um provedor externo de pesquisa web pronto para uso."
+        }
+      },
+      "subagents": {
+        "title": "Subagentes",
+        "description": "Veja a lista de agentes, permissões de delegação e limites de execução compartilhados por todos os sub-turnos.",
+        "save": "Salvar alterações",
+        "saving": "Salvando...",
+        "reset": "Redefinir",
+        "refresh": "Atualizar",
+        "retry": "Tentar novamente",
+        "load_error": "Falha ao carregar a configuração de subagentes.",
+        "save_success": "Configuração de subagentes salva.",
+        "save_error": "Falha ao salvar a configuração de subagentes.",
+        "stats": {
+          "agents": "Agentes",
+          "delegations": "Delegações permitidas",
+          "concurrency": "Profundidade / concorrência",
+          "active_subagents": "Subagentes ativos"
+        },
+        "tools": {
+          "title": "Ferramentas de subagente",
+          "description": "Controle como os agentes delegam trabalho para sub-turnos e agentes pares.",
+          "subagent": "Runtime de subagente",
+          "subagent_hint": "Runtime compartilhado por spawn, subagent e spawn_status.",
+          "spawn": "Execução em segundo plano",
+          "spawn_hint": "Permite que um agente inicie um sub-turno em segundo plano e continue trabalhando.",
+          "spawn_status": "Status de spawn",
+          "spawn_status_hint": "Expõe a ferramenta que lista e inspeciona tarefas ativas de subagentes."
+        },
+        "limits": {
+          "title": "Limites de execução",
+          "description": "Limites globais aplicados a cada sub-turno. Zero mantém o padrão interno.",
+          "max_depth": "Profundidade máxima",
+          "max_depth_hint": "Padrão: 3",
+          "max_concurrent": "Concorrência máxima",
+          "max_concurrent_hint": "Padrão: 3, limite de 32",
+          "concurrency_timeout_sec": "Espera por concorrência (segundos)",
+          "concurrency_timeout_hint": "Padrão: 30",
+          "default_timeout_minutes": "Tempo limite da tarefa (minutos)",
+          "default_timeout_hint": "Padrão: 5",
+          "default_token_budget": "Orçamento de tokens",
+          "default_token_budget_hint": "0 = sem limite de tokens por sub-turno"
+        },
+        "agents": {
+          "title": "Lista de agentes",
+          "description": "Configure para quais pares cada agente pode executar spawn ou delegar.",
+          "default_badge": "Padrão",
+          "implicit_badge": "Implícito",
+          "allowed_title": "Pares permitidos",
+          "allowed_hint": "Pares que este agente pode alvo com spawn ou delegate.",
+          "peer_count": "{{count}} permitidos",
+          "all_allowed": "Todos os agentes",
+          "all_allowed_hint": "Permite que este agente use qualquer par configurado.",
+          "no_peers": "Nenhum outro agente configurado.",
+          "subagent_model": "Substituição de modelo do subagente",
+          "subagent_model_hint": "Use um modelo diferente quando este agente roda como subagente.",
+          "inherit_model": "Herdar modelo do agente",
+          "fallbacks_placeholder": "Modelos de fallback, separados por vírgula",
+          "implicit_hint": "Adicione agents.list à configuração para gerenciar permissões de pares.",
+          "only_agent_hint": "O PicoClaw está usando um agente principal implícito. Adicione agents.list para configurar agentes pares.",
+          "open_config": "Abrir configuração bruta"
+        },
+        "live": {
+          "title": "Subagentes ativos",
+          "description": "Tarefas de sub-turno em execução no gateway.",
+          "refresh": "Atualizar",
+          "count": "{{count}} em execução",
+          "runtime_unavailable": "Runtime do gateway indisponível",
+          "runtime_unavailable_hint": "Inicie o gateway para ver tarefas de subagentes ao vivo.",
+          "empty": "Nenhum subagente ativo",
+          "empty_hint": "Tarefas iniciadas aparecem aqui enquanto estão em execução.",
+          "load_error": "Falha ao carregar o status dos subagentes ativos.",
+          "load_error_hint": "O gateway pode estar reiniciando. A nova tentativa é automática.",
+          "task_missing": "Detalhes da tarefa indisponíveis.",
+          "depth": "Profundidade {{count}}",
+          "iteration": "Iteração {{count}}",
+          "elapsed": "{{duration}} decorridos",
+          "parent": "Pai {{id}}"
         }
       }
     },

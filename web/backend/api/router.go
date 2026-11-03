@@ -101,6 +101,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	h.registerSkillRoutes(mux)
 	h.registerToolRoutes(mux)
 	h.registerMCPRoutes(mux)
+	h.registerSubagentRoutes(mux)
 
 	// OS startup / launch-at-login
 	h.registerStartupRoutes(mux)
