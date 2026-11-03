@@ -69,6 +69,40 @@ func TestEditFileTool_V4APatch_MultipleHunks(t *testing.T) {
 	assert.Equal(t, "alpha\nBETA\ngamma\ndelta\nEPSILON\n", got)
 }
 
+func TestEditFileTool_V4APatch_OutOfOrderHunks(t *testing.T) {
+	patch := `*** Begin Patch
+*** Update File: target.txt
+@@ second
+ delta
+-epsilon
++EPSILON
+@@ first
+ alpha
+-beta
++BETA
+*** End Patch`
+
+	result, got := applyPatchToTempFile(t, "alpha\nbeta\ngamma\ndelta\nepsilon\n", patch)
+
+	assert.False(t, result.IsError, result.ForLLM)
+	assert.Equal(t, "alpha\nBETA\ngamma\ndelta\nEPSILON\n", got)
+}
+
+func TestEditFileTool_V4APatch_OutOfOrderAmbiguousContextFails(t *testing.T) {
+	patch := `@@
+-mid
++MID
+@@
+-dup
++DUP`
+
+	result, got := applyPatchToTempFile(t, "dup\ndup\nmid\n", patch)
+
+	assert.True(t, result.IsError)
+	assert.Contains(t, result.ForLLM, "matches 2 times")
+	assert.Equal(t, "dup\ndup\nmid\n", got, "file must not change on error")
+}
+
 func TestEditFileTool_V4APatch_WrapperWithoutHeader(t *testing.T) {
 	patch := `*** Begin Patch
 @@

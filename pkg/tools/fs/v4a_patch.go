@@ -1,6 +1,7 @@
 package fstools
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -172,8 +173,10 @@ func finishHunk(parsed *v4aPatch, current **v4aHunk) {
 }
 
 // applyV4AHunks locates every hunk in content and applies the replacements.
-// Matching starts at the end of the previous hunk and must be unique, so a
-// hunk with too little context fails instead of editing the wrong occurrence.
+// Matching starts at the end of the previous hunk and falls back to the whole
+// file so out-of-order hunks still apply. Either search must produce a unique
+// match, so a hunk with too little context fails instead of editing the wrong
+// occurrence.
 func applyV4AHunks(content []byte, hunks []v4aHunk) ([]byte, error) {
 	text := string(content)
 	crlf := usesOnlyCRLF(text)
@@ -205,13 +208,42 @@ func applyV4AHunks(content []byte, hunks []v4aHunk) ([]byte, error) {
 	return []byte(result), nil
 }
 
+// errHunkNotFound reports that no position matched a hunk's context.
+var errHunkNotFound = errors.New("hunk context not found")
+
 func findHunkMatch(lines, before []string, cursor int) (int, error) {
 	if len(before) == 0 {
 		return cursor, nil
 	}
 
+	start, err := findUniqueHunkMatch(lines, before, cursor)
+	if err == nil {
+		return start, nil
+	}
+	if !errors.Is(err, errHunkNotFound) {
+		return 0, err
+	}
+
+	// Hunks normally describe the file from top to bottom, but models sometimes
+	// emit them out of order. Retry on the whole file and still require a single
+	// match, so an ambiguous context keeps failing instead of editing the wrong
+	// occurrence.
+	if cursor > 0 {
+		start, err = findUniqueHunkMatch(lines, before, 0)
+		if err == nil {
+			return start, nil
+		}
+		if !errors.Is(err, errHunkNotFound) {
+			return 0, err
+		}
+	}
+
+	return 0, fmt.Errorf("context not found; check that the context lines match the current file")
+}
+
+func findUniqueHunkMatch(lines, before []string, start int) (int, error) {
 	for _, tolerant := range []bool{false, true} {
-		matches := findLineSequence(lines, before, cursor, tolerant)
+		matches := findLineSequence(lines, before, start, tolerant)
 		switch len(matches) {
 		case 1:
 			return matches[0], nil
@@ -225,7 +257,7 @@ func findHunkMatch(lines, before []string, cursor int) (int, error) {
 		}
 	}
 
-	return 0, fmt.Errorf("context not found; check that the context lines match the current file")
+	return 0, errHunkNotFound
 }
 
 func findLineSequence(lines, sequence []string, start int, tolerant bool) []int {
