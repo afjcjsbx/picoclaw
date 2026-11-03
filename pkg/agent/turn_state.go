@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -459,6 +460,29 @@ func (al *AgentLoop) GetActiveTurnTree(sessionKey string) []ActiveTurnInfo {
 		return true
 	})
 	return tree
+}
+
+// ListActiveTurns returns snapshots of every registered active turn, including
+// root turns and nested SubTurns. Callers that only care about subagents should
+// filter on Depth > 0. The result is ordered by start time, then turn ID, so a
+// status endpoint can render a stable list while polling.
+func (al *AgentLoop) ListActiveTurns() []ActiveTurnInfo {
+	turns := make([]ActiveTurnInfo, 0)
+	al.activeTurnStates.Range(func(_, value any) bool {
+		ts, ok := value.(*turnState)
+		if !ok {
+			return true
+		}
+		turns = append(turns, ts.snapshot())
+		return true
+	})
+	sort.Slice(turns, func(i, j int) bool {
+		if !turns[i].StartedAt.Equal(turns[j].StartedAt) {
+			return turns[i].StartedAt.Before(turns[j].StartedAt)
+		}
+		return turns[i].TurnID < turns[j].TurnID
+	})
+	return turns
 }
 
 func (ts *turnState) snapshot() ActiveTurnInfo {

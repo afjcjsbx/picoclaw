@@ -102,6 +102,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	h.registerSkillRoutes(mux)
 	h.registerToolRoutes(mux)
 	h.registerMCPRoutes(mux)
+	h.registerSubagentRoutes(mux)
 
 	// Slash command metadata for the chat composer palette
 	h.registerCommandRoutes(mux)

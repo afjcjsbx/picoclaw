@@ -14,7 +14,8 @@
     "show_more_channels": "Více",
     "show_less_channels": "Méně",
     "config": "Nastavení",
-    "logs": "Logy"
+    "logs": "Logy",
+    "subagents": "Subagenti"
   },
   "launcherLogin": {
     "title": "Přihlášení",
@@ -782,6 +783,84 @@
           "requires_spawn": "Před spuštěním nástroje subagent povolte `tools.spawn` nebo `tools.spawn_status`."
         },
         "automatic": "Automatické"
+      },
+      "subagents": {
+        "title": "Subagenti",
+        "description": "Zobrazte seznam agentů, oprávnění delegování a runtime limity společné pro všechny sub-turny.",
+        "save": "Uložit změny",
+        "saving": "Ukládám...",
+        "reset": "Obnovit",
+        "refresh": "Obnovit",
+        "retry": "Zkusit znovu",
+        "load_error": "Nepodařilo se načíst konfiguraci subagentů.",
+        "save_success": "Konfigurace subagentů byla uložena.",
+        "save_error": "Konfiguraci subagentů se nepodařilo uložit.",
+        "stats": {
+          "agents": "Agenti",
+          "delegations": "Povolená delegování",
+          "concurrency": "Hloubka / souběžnost",
+          "active_subagents": "Aktivní subagenti"
+        },
+        "tools": {
+          "title": "Nástroje subagentů",
+          "description": "Určete, jak agenti delegují práci na sub-turny a partnerské agenty.",
+          "subagent": "Runtime subagentů",
+          "subagent_hint": "Společný runtime pro spawn, subagent a spawn_status.",
+          "spawn": "Spuštění na pozadí",
+          "spawn_hint": "Umožňuje agentu spustit sub-turn na pozadí a pokračovat v práci.",
+          "spawn_status": "Stav spawnu",
+          "spawn_status_hint": "Zpřístupní nástroj pro výpis a kontrolu aktivních úloh subagentů."
+        },
+        "limits": {
+          "title": "Runtime limity",
+          "description": "Globální limity pro každý sub-turn. Nula ponechá vestavěný výchozí stav.",
+          "max_depth": "Maximální hloubka",
+          "max_depth_hint": "Výchozí: 3",
+          "max_concurrent": "Maximální souběžnost",
+          "max_concurrent_hint": "Výchozí: 3, max. 32",
+          "concurrency_timeout_sec": "Čekání na souběžnost (sekundy)",
+          "concurrency_timeout_hint": "Výchozí: 30",
+          "default_timeout_minutes": "Časový limit úlohy (minuty)",
+          "default_timeout_hint": "Výchozí: 5",
+          "default_token_budget": "Tokenový rozpočet",
+          "default_token_budget_hint": "0 = bez limitu tokenů pro sub-turn"
+        },
+        "agents": {
+          "title": "Seznam agentů",
+          "description": "Nastavte, které partnerské agenty může každý agent spustit nebo na ně delegovat.",
+          "default_badge": "Výchozí",
+          "implicit_badge": "Implicitní",
+          "allowed_title": "Povolení partneři",
+          "allowed_hint": "Partneři, které tento agent může cílit pomocí spawn nebo delegate.",
+          "peer_count": "{{count}} povoleno",
+          "all_allowed": "Všichni agenti",
+          "all_allowed_hint": "Umožní tomuto agentu cílit na libovolného nakonfigurovaného partnera.",
+          "no_peers": "Nejsou nakonfigurováni žádní další agenti.",
+          "subagent_model": "Přepsání modelu subagenta",
+          "subagent_model_hint": "Použít jiný model, když tento agent běží jako subagent.",
+          "inherit_model": "Zdědit model agenta",
+          "fallbacks_placeholder": "Záložní modely, oddělené čárkou",
+          "implicit_hint": "Pro správu oprávnění partnerů přidejte agents.list do konfigurace.",
+          "only_agent_hint": "PicoClaw používá implicitního hlavního agenta. Pro konfiguraci partnerských agentů přidejte agents.list.",
+          "open_config": "Otevřít raw konfiguraci"
+        },
+        "live": {
+          "title": "Aktivní subagenti",
+          "description": "Úlohy sub-turnů aktuálně běžící v gatewayi.",
+          "refresh": "Obnovit",
+          "count": "{{count}} běží",
+          "runtime_unavailable": "Runtime gatewaye není dostupný",
+          "runtime_unavailable_hint": "Spusťte gateway, abyste viděli živé úlohy subagentů.",
+          "empty": "Žádní aktivní subagenti",
+          "empty_hint": "Spuštěné úlohy se zde zobrazí, dokud běží.",
+          "load_error": "Nepodařilo se načíst stav aktivních subagentů.",
+          "load_error_hint": "Gateway se může restartovat. Nový pokus proběhne automaticky.",
+          "task_missing": "Podrobnosti úlohy nejsou dostupné.",
+          "depth": "Hloubka {{count}}",
+          "iteration": "Iterace {{count}}",
+          "elapsed": "Uplynulo {{duration}}",
+          "parent": "Rodič {{id}}"
+        }
       }
     },
     "config": {

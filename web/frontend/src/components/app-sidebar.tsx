@@ -14,6 +14,7 @@ import {
   IconSparkles,
   IconTools,
   IconTrash,
+  IconUsers,
   IconX,
 } from "@tabler/icons-react"
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router"
@@ -414,6 +415,12 @@ export function AppSidebar({
             title: "navigation.tools",
             url: "/agent/tools",
             icon: IconTools,
+            translateTitle: true,
+          },
+          {
+            title: "navigation.subagents",
+            url: "/agent/subagents",
+            icon: IconUsers,
             translateTitle: true,
           },
           {

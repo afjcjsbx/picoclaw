@@ -55,6 +55,7 @@ Sessions last about 31 days but are invalidated when the launcher restarts, so a
 | `/credentials` | Manage provider credentials (OpenAI, Anthropic, Google Antigravity) |
 | `/channels` | Configure any supported channel from a shared catalog; QR-based binding for WeChat and WeCom |
 | `/agent/hub`, `/agent/skills`, `/agent/tools` | Browse and import skills; view and toggle agent tools |
+| `/agent/subagents` | Review the agent roster, configure spawn/delegate permissions and subagent model overrides, tune global sub-turn limits, and watch active subagent tasks live |
 | `/config` | Edit agent defaults, self-evolution, exec/cron controls, heartbeat, device monitoring, and launcher networking/autostart |
 | `/logs` | Follow the in-memory Gateway log buffer and clear it |
 
