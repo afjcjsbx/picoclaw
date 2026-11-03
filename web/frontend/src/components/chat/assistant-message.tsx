@@ -416,7 +416,11 @@ function MarkdownFileLink({
       </button>
     )
   }
-  return <a href={href}>{children}</a>
+  return (
+    <a href={href} target="_blank" rel="noreferrer noopener">
+      {children}
+    </a>
+  )
 }
 
 function WebFavicon({ src }: { src: string }) {
