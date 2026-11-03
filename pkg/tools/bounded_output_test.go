@@ -2,6 +2,7 @@ package tools
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -190,4 +191,40 @@ func TestBoundedOutputCapsSpillFile(t *testing.T) {
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
 	require.Contains(t, string(data), "[spill capped at")
+}
+
+// TestBoundedOutputFallsBackToTempArtifactDir keeps spills with no workspace in
+// the dedicated temp artifact directory so Close retains and prunes them.
+func TestBoundedOutputFallsBackToTempArtifactDir(t *testing.T) {
+	out := newBoundedOutput(10, "")
+
+	_, err := out.Write([]byte(strings.Repeat("x", 100)))
+	require.NoError(t, err)
+
+	path := out.SpillPath()
+	require.NotEmpty(t, path)
+	require.Contains(t, path, tempArtifactDir())
+	t.Cleanup(func() { _ = os.Remove(path) })
+
+	require.NoError(t, out.Close())
+}
+
+// TestBoundedOutputFallbackWhenWorkspaceUnwritable covers the same fallback when
+// the workspace artifact directory cannot be created.
+func TestBoundedOutputFallbackWhenWorkspaceUnwritable(t *testing.T) {
+	root := t.TempDir()
+	notADir := filepath.Join(root, "workspace-file")
+	require.NoError(t, os.WriteFile(notADir, []byte("x"), 0o600))
+
+	out := newBoundedOutput(10, filepath.Join(notADir, ".artifacts", "tool"))
+
+	_, err := out.Write([]byte(strings.Repeat("x", 100)))
+	require.NoError(t, err)
+
+	path := out.SpillPath()
+	require.NotEmpty(t, path)
+	require.Contains(t, path, tempArtifactDir())
+	t.Cleanup(func() { _ = os.Remove(path) })
+
+	require.NoError(t, out.Close())
 }

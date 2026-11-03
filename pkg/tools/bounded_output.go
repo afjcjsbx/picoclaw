@@ -3,6 +3,7 @@ package tools
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"unicode/utf8"
@@ -126,11 +127,23 @@ func (b *boundedOutput) createSpillFile() (*os.File, string, error) {
 }
 
 func (b *boundedOutput) createTempSpillFile() (*os.File, string, error) {
-	file, err := os.CreateTemp("", "picoclaw-exec-*.log")
+	dir := tempArtifactDir()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, "", err
+	}
+	file, err := os.CreateTemp(dir, "exec_*.log")
 	if err != nil {
 		return nil, "", err
 	}
-	return file, "", nil
+	return file, dir, nil
+}
+
+// tempArtifactDir is the fallback for workspaces that cannot receive artifacts.
+// Keeping spills in a dedicated directory lets Close prune them with the same
+// retention policy as workspace artifacts instead of leaking files in the
+// system temp directory.
+func tempArtifactDir() string {
+	return filepath.Join(os.TempDir(), "picoclaw-artifacts", "tool")
 }
 
 func (b *boundedOutput) writeSpillLocked(p []byte) error {
