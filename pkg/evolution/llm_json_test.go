@@ -17,7 +17,12 @@ func TestDecodeLLMObject(t *testing.T) {
 	}{
 		{"bare object", `{"success":true,"reason":"a"}`, true, "a"},
 		{"fenced", "```json\n{\"success\":true,\"reason\":\"a\"}\n```", true, "a"},
-		{"prose around a fence", "Here you go:\n```json\n{\"success\":true,\"reason\":\"a\"}\n```\nHope that helps.", true, "a"},
+		{
+			"prose around a fence",
+			"Here you go:\n```json\n{\"success\":true,\"reason\":\"a\"}\n```\nHope that helps.",
+			true,
+			"a",
+		},
 		{"prose around a bare object", `The answer is {"success":false,"reason":"a"} as asked.`, true, "a"},
 		{"brace in prose first", `Using {name} here: {"success":true,"reason":"a"}`, true, "a"},
 		{"wrong shape first", `For example {"foo":1}, so: {"success":true,"reason":"a"}`, true, "a"},
@@ -64,7 +69,8 @@ func TestParseLLMDraftSkipsAnInvalidExample(t *testing.T) {
 }
 
 func TestParseLLMClusterResponse(t *testing.T) {
-	payload, ok := parseLLMClusterResponse(`Clusters: {"label":"x"} then {"clusters":[{"label":"a-b","task_record_ids":["1"]}]} done`)
+	reply := `Clusters: {"label":"x"} then {"clusters":[{"label":"a-b","task_record_ids":["1"]}]} done`
+	payload, ok := parseLLMClusterResponse(reply)
 	if !ok || len(payload.Clusters) != 1 || payload.Clusters[0].Label != "a-b" {
 		t.Fatalf("got %+v, ok=%v", payload, ok)
 	}
@@ -77,7 +83,8 @@ func TestParseLLMClusterResponse(t *testing.T) {
 }
 
 func TestParseLLMTaskSuccess(t *testing.T) {
-	decision, ok := parseLLMTaskSuccess("Verdict:\n```json\n{\"success\":false,\"reason\":\" not done \"}\n```\nThanks.")
+	reply := "Verdict:\n```json\n{\"success\":false,\"reason\":\" not done \"}\n```\nThanks."
+	decision, ok := parseLLMTaskSuccess(reply)
 	if !ok || decision.Success || decision.Reason != "not done" {
 		t.Fatalf("got %+v, ok=%v", decision, ok)
 	}
