@@ -689,14 +689,20 @@ func (p *Pipeline) CallLLM(
 			al.targetReasoningChannelID(ts.channel),
 		)
 	}
+	llmResponsePayload := LLMResponsePayload{
+		ContentLen:   len(exec.response.Content),
+		ToolCalls:    len(exec.response.ToolCalls),
+		HasReasoning: exec.response.Reasoning != "" || exec.response.ReasoningContent != "",
+	}
+	if exec.response.Usage != nil {
+		llmResponsePayload.InputTokens = exec.response.Usage.PromptTokens
+		llmResponsePayload.OutputTokens = exec.response.Usage.CompletionTokens
+		llmResponsePayload.TotalTokens = exec.response.Usage.TotalTokens
+	}
 	al.emitEvent(
 		runtimeevents.KindAgentLLMResponse,
 		ts.eventMeta("runTurn", "turn.llm.response"),
-		LLMResponsePayload{
-			ContentLen:   len(exec.response.Content),
-			ToolCalls:    len(exec.response.ToolCalls),
-			HasReasoning: exec.response.Reasoning != "" || exec.response.ReasoningContent != "",
-		},
+		llmResponsePayload,
 	)
 
 	llmResponseFields := map[string]any{
