@@ -23,6 +23,7 @@ Every built-in tool is enabled or disabled individually through `tools.<key>.ena
 | `exec` | `tools.exec.enabled` | `true` | See [Exec tool](../tools/exec.md) |
 | `cron` | `tools.cron.enabled` | `true` | See [Cron tool](../tools/cron.md) |
 | `todo` | `tools.todo.enabled` | `true` | See [Todo planning tool](../tools/todo.md) |
+| `ask_user` | `tools.ask_user.enabled` | `true` | Asks the user questions and waits for answers; timeout under `tools.ask_user.timeout_seconds` (`300`); see [Ask User tool](../tools/ask-user.md) |
 | `message` | `tools.message.enabled` | `true` | Media attachments gated by `tools.message.media_enabled` (`false`); see [Messaging tools](../tools/messaging.md) |
 | `reaction` | — | always on | No switch; fails gracefully on channels without reaction support |
 | `spawn` | `tools.spawn.enabled` | `true` | Requires `tools.subagent.enabled`; see [Subagent tools](../tools/subagents.md) |

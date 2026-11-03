@@ -419,6 +419,10 @@ func DefaultConfig() *Config {
 				ExecTimeoutMinutes: 5,
 				AllowCommand:       true,
 			},
+			AskUser: AskUserToolsConfig{
+				ToolConfig:     ToolConfig{Enabled: true},
+				TimeoutSeconds: DefaultAskUserTimeoutSeconds,
+			},
 			Exec: ExecConfig{
 				ToolConfig: ToolConfig{
 					Enabled: true,
