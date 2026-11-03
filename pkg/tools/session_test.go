@@ -3,6 +3,7 @@ package tools
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -144,4 +145,60 @@ func TestProcessSession_ReadRangeReportsDroppedPrefix(t *testing.T) {
 	require.Equal(t, dropped+10, next)
 	require.Equal(t, int64(len(payload)), total)
 	require.True(t, hasMore)
+}
+
+func TestSessionManager_CleanupUsesExitTime(t *testing.T) {
+	sm := NewSessionManager()
+	t.Cleanup(sm.Stop)
+
+	now := time.Now()
+	sm.Add(&ProcessSession{
+		ID:        "long-job",
+		Status:    "done",
+		StartTime: now.Add(-2 * time.Hour).Unix(),
+		ExitTime:  now.Add(-time.Minute).Unix(),
+	})
+	sm.Add(&ProcessSession{
+		ID:        "old-result",
+		Status:    "done",
+		StartTime: now.Add(-time.Hour).Unix(),
+		ExitTime:  now.Add(-31 * time.Minute).Unix(),
+	})
+
+	sm.cleanupOldSessions()
+
+	_, err := sm.Get("long-job")
+	require.NoError(t, err, "a long job keeps its full post-exit retention window")
+	_, err = sm.Get("old-result")
+	require.ErrorIs(t, err, ErrSessionNotFound)
+}
+
+func TestSessionManager_CleanupFallsBackToStartTime(t *testing.T) {
+	sm := NewSessionManager()
+	t.Cleanup(sm.Stop)
+
+	sm.Add(&ProcessSession{
+		ID:        "legacy-done",
+		Status:    "done",
+		StartTime: time.Now().Add(-time.Hour).Unix(),
+	})
+
+	sm.cleanupOldSessions()
+
+	_, err := sm.Get("legacy-done")
+	require.ErrorIs(t, err, ErrSessionNotFound)
+}
+
+func TestProcessSession_FinishSetsExitTimeAndClosesDone(t *testing.T) {
+	session := &ProcessSession{Status: "running"}
+	session.finish(7)
+
+	require.Equal(t, 7, session.GetExitCode())
+	require.Equal(t, "done", session.GetStatus())
+	require.Positive(t, session.ExitTime)
+	select {
+	case <-session.Done():
+	default:
+		t.Fatal("Done channel should be closed after finish")
+	}
 }

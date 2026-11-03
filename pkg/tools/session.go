@@ -30,22 +30,22 @@ var (
 )
 
 type ProcessSession struct {
-	mu              sync.Mutex
-	ID              string
-	PID             int
-	Command         string
-	PTY             bool
-	Background      bool
-	StartTime       int64
-	ExitCode        int
-	Status          string
-	stdinWriter     io.Writer
-	stdoutPipe      io.Reader
-	outputBuffer    *bytes.Buffer
-	outputBase      int64
-	totalOutput     int64
-	outputTruncated bool
-	ptyMaster       *os.File
+	mu           sync.Mutex
+	ID           string
+	PID          int
+	Command      string
+	PTY          bool
+	Background   bool
+	StartTime    int64
+	ExitTime     int64
+	ExitCode     int
+	Status       string
+	stdinWriter  io.Writer
+	stdoutPipe   io.Reader
+	outputBuffer *bytes.Buffer
+	outputBase   int64
+	totalOutput  int64
+	ptyMaster    *os.File
 
 	// ptyKeyMode tracks arrow key encoding mode (CSI vs SS3)
 	ptyKeyMode PtyKeyMode
@@ -173,6 +173,9 @@ func (s *ProcessSession) finishLocked(exitCode int) {
 	}
 	s.ExitCode = exitCode
 	s.Status = "done"
+	if s.ExitTime == 0 {
+		s.ExitTime = time.Now().Unix()
+	}
 	s.ensureDoneLocked()
 	if !s.doneClosed {
 		close(s.done)
@@ -298,7 +301,6 @@ func (s *ProcessSession) appendOutput(p []byte) {
 		drop := s.outputBuffer.Len() - maxOutputBufferSize
 		s.outputBuffer.Next(drop)
 		s.outputBase += int64(drop)
-		s.outputTruncated = true
 	}
 }
 
@@ -377,7 +379,23 @@ func (s *ProcessSession) ToSessionInfo() SessionInfo {
 		Status:    s.Status,
 		PID:       s.PID,
 		StartedAt: s.StartTime,
+		ExitCode:  s.ExitCode,
+		ExitedAt:  s.ExitTime,
 	}
+}
+
+// retentionTime returns the session's terminal state and the timestamp the
+// retention window should start from: exit time for completed sessions,
+// start time as a fallback for manually constructed or legacy records.
+func (s *ProcessSession) retentionTime() (done bool, ts int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	done = s.Status == "done" || s.Status == "exited"
+	ts = s.ExitTime
+	if ts == 0 {
+		ts = s.StartTime
+	}
+	return done, ts
 }
 
 type SessionManager struct {
@@ -419,14 +437,17 @@ func (sm *SessionManager) Stop() {
 	})
 }
 
-// cleanupOldSessions removes sessions that are done and older than 30 minutes
+// cleanupOldSessions removes sessions whose retention window has elapsed.
+// The window starts when the session exits, not when it started, so a long
+// job keeps its final output readable for the full period.
 func (sm *SessionManager) cleanupOldSessions() {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
 	cutoff := time.Now().Add(-30 * time.Minute)
 	for id, session := range sm.sessions {
-		if session.IsDone() && session.StartTime < cutoff.Unix() {
+		done, ts := session.retentionTime()
+		if done && ts < cutoff.Unix() {
 			delete(sm.sessions, id)
 		}
 	}
