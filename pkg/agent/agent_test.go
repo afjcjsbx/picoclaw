@@ -2802,20 +2802,20 @@ func TestProcessMessage_CommandOutcomes(t *testing.T) {
 		t.Fatalf("LLM should be called exactly once after /foo passthrough, calls=%d", provider.calls)
 	}
 
-	newResp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
+	unknownResp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
 		Context: bus.InboundContext{
 			Channel:  baseMsg.Context.Channel,
 			ChatID:   baseMsg.Context.ChatID,
 			ChatType: baseMsg.Context.ChatType,
 			SenderID: baseMsg.Context.SenderID,
 		},
-		Content: "/new",
+		Content: "/unknowncommand",
 	})
-	if newResp != "LLM reply" {
-		t.Fatalf("unexpected /new reply: %q", newResp)
+	if unknownResp != "LLM reply" {
+		t.Fatalf("unexpected /unknowncommand reply: %q", unknownResp)
 	}
 	if provider.calls != 2 {
-		t.Fatalf("LLM should be called for passthrough /new command, calls=%d", provider.calls)
+		t.Fatalf("LLM should be called for passthrough /unknowncommand command, calls=%d", provider.calls)
 	}
 }
 
