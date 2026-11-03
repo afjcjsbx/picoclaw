@@ -331,9 +331,6 @@ func isolationBoundaryError(location, action string) string {
 
 func formatBoundaryPathList(paths []string) string {
 	const maxPaths = 8
-	if len(paths) == 0 {
-		return ""
-	}
 
 	shown := paths
 	if len(shown) > maxPaths {

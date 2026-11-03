@@ -56,8 +56,6 @@ func DescribeBoundary(workspace string, cfg config.IsolationConfig) (Boundary, b
 
 		customTargets := customExposeTargets(cfg.ExposePaths)
 		rootMode := "rw"
-		writableSeen := make(map[string]struct{}, len(cfg.ExposePaths))
-		readOnlySeen := make(map[string]struct{}, len(cfg.ExposePaths))
 
 		for _, rule := range MergeExposePaths(DefaultExposePaths(boundary.Root), cfg.ExposePaths) {
 			target := filepath.Clean(rule.Target)
@@ -72,9 +70,9 @@ func DescribeBoundary(workspace string, cfg config.IsolationConfig) (Boundary, b
 			}
 			switch rule.Mode {
 			case "rw":
-				boundary.Writable = appendBoundaryPath(boundary.Writable, writableSeen, target)
+				boundary.Writable = append(boundary.Writable, target)
 			case "ro":
-				boundary.ReadOnly = appendBoundaryPath(boundary.ReadOnly, readOnlySeen, target)
+				boundary.ReadOnly = append(boundary.ReadOnly, target)
 			}
 		}
 
@@ -121,15 +119,4 @@ func customExposeTargets(items []config.ExposePath) map[string]struct{} {
 		targets[NormalizeExposePath(item).Target] = struct{}{}
 	}
 	return targets
-}
-
-func appendBoundaryPath(paths []string, seen map[string]struct{}, path string) []string {
-	if path == "" {
-		return paths
-	}
-	if _, ok := seen[path]; ok {
-		return paths
-	}
-	seen[path] = struct{}{}
-	return append(paths, path)
 }
