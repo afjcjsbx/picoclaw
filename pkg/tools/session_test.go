@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -101,6 +102,18 @@ func TestProcessSession_ToSessionInfo(t *testing.T) {
 	require.Equal(t, "running", info.Status)
 	require.Equal(t, 12345, info.PID)
 	require.Equal(t, int64(1000), info.StartedAt)
+}
+
+func TestSessionInfo_ExitCodeZeroIsSerialized(t *testing.T) {
+	info := (&ProcessSession{
+		ID:       "done",
+		Status:   "done",
+		ExitCode: 0,
+	}).ToSessionInfo()
+
+	data, err := json.Marshal(info)
+	require.NoError(t, err)
+	require.Contains(t, string(data), `"exitCode":0`)
 }
 
 func TestProcessSession_ReadIsNonDestructive(t *testing.T) {

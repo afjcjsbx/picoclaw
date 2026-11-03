@@ -22,6 +22,6 @@ type SessionInfo struct {
 	Status    string `json:"status"`
 	PID       int    `json:"pid"`
 	StartedAt int64  `json:"startedAt"`
-	ExitCode  int    `json:"exitCode,omitempty"`
+	ExitCode  int    `json:"exitCode"`
 	ExitedAt  int64  `json:"exitedAt,omitempty"`
 }
