@@ -145,6 +145,29 @@ func TestEditFileTool_V4APatch_RejectsHunkWithoutContext(t *testing.T) {
 	assert.Equal(t, "one\ntwo\n", got, "file must not change on error")
 }
 
+func TestEditFileTool_V4APatch_AppendWithoutContextAtEndOfFile(t *testing.T) {
+	tests := map[string]struct {
+		content string
+		patch   string
+		want    string
+	}{
+		"trailing newline":    {"a\nb\n", "@@\n+tail\n*** End of File", "a\nb\ntail\n"},
+		"no trailing newline": {"a\nb", "@@\n+tail\n*** End of File", "a\nb\ntail"},
+		"blank final line":    {"a\n\n", "@@\n+tail\n*** End of File", "a\n\ntail\n"},
+		"empty file":          {"", "@@\n+tail\n*** End of File", "tail\n"},
+		"multiple lines":      {"a\n", "@@\n+c\n+d\n*** End of File", "a\nc\nd\n"},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			result, got := applyPatchToTempFile(t, tc.content, tc.patch)
+
+			assert.False(t, result.IsError, result.ForLLM)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
 func TestEditFileTool_V4APatch_AppendWithContext(t *testing.T) {
 	patch := `@@
  b

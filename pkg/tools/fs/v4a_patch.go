@@ -188,10 +188,16 @@ func applyV4AHunks(content []byte, hunks []v4aHunk) ([]byte, error) {
 	cursor := 0
 	for index, hunk := range hunks {
 		if len(hunk.before) == 0 {
-			return nil, fmt.Errorf(
-				"hunk %d: hunk has no context; add a context or removed line so the insertion point is unambiguous",
-				index+1,
-			)
+			if !hunk.endOfFile {
+				return nil, fmt.Errorf(
+					"hunk %d: hunk has no context; add a context or removed line so the insertion point is unambiguous",
+					index+1,
+				)
+			}
+			position := endOfFileInsertPosition(lines)
+			lines = replaceLines(lines, position, position, hunk.after)
+			cursor = position + len(hunk.after)
+			continue
 		}
 
 		start, err := findHunkMatch(lines, hunk.before, cursor)
@@ -300,6 +306,16 @@ func replaceLines(lines []string, start, end int, replacement []string) []string
 	result = append(result, replacement...)
 	result = append(result, lines[end:]...)
 	return result
+}
+
+// endOfFileInsertPosition returns the index just before the empty element that
+// a trailing newline produces, so appended lines land after the last real line.
+func endOfFileInsertPosition(lines []string) int {
+	position := len(lines)
+	if position > 0 && lines[position-1] == "" {
+		position--
+	}
+	return position
 }
 
 // isFileEnd reports whether position sits at the end of the file, tolerating
