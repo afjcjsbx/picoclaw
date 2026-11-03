@@ -200,7 +200,12 @@ func NewAgentInstance(
 			mcpDiscoveryActive && cfg.Tools.MCP.Discovery.UseRegex,
 		).
 		WithSplitOnMarker(cfg.Agents.Defaults.SplitOnMarker).
-		WithMemoryConfig(defaults.Memory)
+		WithMemoryConfig(defaults.Memory).
+		WithIsolation(
+			cfg.Isolation,
+			defaults.RestrictToWorkspace,
+			defaults.AllowReadOutsideWorkspace,
+		)
 	if defaults.Memory.Enabled {
 		toolsRegistry.Register(tools.NewMemoryTool(
 			workspace, defaults.Memory.GetMemoryCharLimit(), defaults.Memory.GetUserCharLimit(),
