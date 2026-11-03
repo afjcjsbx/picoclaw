@@ -477,12 +477,14 @@ func TestShellTool_OutputTruncation(t *testing.T) {
 }
 
 // TestShellTool_TruncatedOutputSpillsFullText verifies that foreground output
-// beyond the configured cap stays recoverable: the large-result spill saves the
-// pre-truncation output, so the omitted middle is readable from the artifact.
+// beyond the configured cap stays recoverable and that the inline view honors
+// the global max_inline_result_chars cap: the artifact keeps the full stream,
+// so the omitted middle remains readable without expanding model context.
 func TestShellTool_TruncatedOutputSpillsFullText(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Tools.Exec.AllowRemote = true
 	cfg.Tools.Exec.MaxOutputChars = 1000
+	cfg.Tools.MaxInlineResultChars = 512
 
 	tool, err := NewExecToolWithConfig("", false, cfg)
 	if err != nil {
@@ -516,6 +518,10 @@ func TestShellTool_TruncatedOutputSpillsFullText(t *testing.T) {
 		t.Fatalf("expected the artifact to hold the full output, got %d chars (want %d)", len(got), len(full))
 	}
 	// Inline stays bounded and keeps the real head and tail of the full output.
+	if got := len([]rune(result.ForLLM)); got > cfg.Tools.MaxInlineResultChars+200 {
+		t.Fatalf("inline output has %d runes, want at most %d plus the truncation notice",
+			got, cfg.Tools.MaxInlineResultChars)
+	}
 	if !strings.Contains(result.ForLLM, strings.Repeat("A", 100)) {
 		t.Fatal("expected the real output head in the preview")
 	}

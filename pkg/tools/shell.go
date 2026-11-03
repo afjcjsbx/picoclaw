@@ -46,16 +46,17 @@ func getSessionManager() *SessionManager {
 }
 
 type ExecTool struct {
-	workingDir          string
-	timeout             time.Duration
-	denyPatterns        []*regexp.Regexp
-	allowPatterns       []*regexp.Regexp
-	customAllowPatterns []*regexp.Regexp
-	allowedPathPatterns []*regexp.Regexp
-	restrictToWorkspace bool
-	allowRemote         bool
-	maxOutputChars      int
-	sessionManager      *SessionManager
+	workingDir           string
+	timeout              time.Duration
+	denyPatterns         []*regexp.Regexp
+	allowPatterns        []*regexp.Regexp
+	customAllowPatterns  []*regexp.Regexp
+	allowedPathPatterns  []*regexp.Regexp
+	restrictToWorkspace  bool
+	allowRemote          bool
+	maxOutputChars       int
+	maxInlineResultChars int
+	sessionManager       *SessionManager
 }
 
 var (
@@ -209,21 +210,24 @@ func NewExecToolWithConfig(
 	}
 
 	maxOutputChars := config.DefaultExecMaxOutputChars
+	maxInlineResultChars := 0
 	if cfg != nil {
 		maxOutputChars = cfg.Tools.Exec.GetMaxOutputChars()
+		maxInlineResultChars = cfg.Tools.GetMaxInlineResultChars()
 	}
 
 	return &ExecTool{
-		workingDir:          workingDir,
-		timeout:             timeout,
-		denyPatterns:        denyPatterns,
-		allowPatterns:       nil,
-		customAllowPatterns: customAllowPatterns,
-		allowedPathPatterns: allowedPathPatterns,
-		restrictToWorkspace: restrict,
-		allowRemote:         allowRemote,
-		maxOutputChars:      maxOutputChars,
-		sessionManager:      getSessionManager(),
+		workingDir:           workingDir,
+		timeout:              timeout,
+		denyPatterns:         denyPatterns,
+		allowPatterns:        nil,
+		customAllowPatterns:  customAllowPatterns,
+		allowedPathPatterns:  allowedPathPatterns,
+		restrictToWorkspace:  restrict,
+		allowRemote:          allowRemote,
+		maxOutputChars:       maxOutputChars,
+		maxInlineResultChars: maxInlineResultChars,
+		sessionManager:       getSessionManager(),
 	}, nil
 }
 
@@ -472,6 +476,12 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string, timeout tim
 	maxOutputChars := t.maxOutputChars
 	if maxOutputChars <= 0 {
 		maxOutputChars = config.DefaultExecMaxOutputChars
+	}
+	// The inline view also respects the global tool-result cap. The artifact
+	// keeps the full stream, so a smaller in-memory window does not lose the
+	// omitted middle.
+	if t.maxInlineResultChars > 0 && t.maxInlineResultChars < maxOutputChars {
+		maxOutputChars = t.maxInlineResultChars
 	}
 	collector := newBoundedOutput(maxOutputChars, t.outputSpillDir())
 
