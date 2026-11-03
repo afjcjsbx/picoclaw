@@ -74,15 +74,31 @@ For targeted changes, prefer `edit_file` or `append_file`: PicoClaw advertises t
 
 ## `edit_file`
 
-Replaces a single, exact occurrence of `old_text` with `new_text` and returns a diff of the change.
+Edits an existing file by replacing a single, exact occurrence of `old_text` with `new_text`, or by applying a V4A patch, and returns a diff of the change. Provide either `old_text` + `new_text` or `patch`, never both.
 
 | Argument | Type | Required | Description |
 |----------|------|----------|-------------|
 | `path` | string | yes | Path to the file to edit |
-| `old_text` | string | yes | Exact text to replace; must appear exactly once |
-| `new_text` | string | yes | Replacement text |
+| `old_text` | string | when `patch` is absent | Exact text to replace; must appear exactly once |
+| `new_text` | string | when `patch` is absent | Replacement text |
+| `patch` | string | when `old_text`/`new_text` are absent | V4A patch body for this file (see below) |
 
-The call fails when `old_text` is not found, or when it appears more than once (add more context to make the match unique). The file is rewritten in place.
+With `old_text`/`new_text`, the call fails when `old_text` is not found, or when it appears more than once (add more context to make the match unique).
+
+With `patch`, `edit_file` applies one or more hunks to the file. The patch may be wrapped in `*** Begin Patch` / `*** End Patch` and may include a `*** Update File: <path>` header; the header path must match `path`. Each hunk starts with `@@` (its text is informational) and uses lines prefixed with a space (context), `-` (removed), or `+` (added). `*** End of File` anchors the preceding hunk to the end of the file. Context matching starts after the previous hunk, falls back to the whole file when hunks are not in file order, and must be unique; trailing whitespace differences are tolerated, and matched context lines keep the bytes already in the file. A line containing only a single space is an empty context line; blank lines immediately before a closing directive are treated as formatting. A hunk with no context or removed lines must end with `*** End of File`, which appends its added lines at the end of the file; otherwise the call is rejected because the insertion point is ambiguous. Add, delete, move, and multi-file sections are rejected because `edit_file` edits exactly one existing file. Each matched line keeps its original LF or CRLF ending; inserted lines follow the replaced or adjacent line, so files with mixed line endings are preserved.
+
+```text
+*** Begin Patch
+*** Update File: internal/server.go
+@@ func Start(
+ func Start(cfg Config) error {
+-	 return oldServer(cfg)
++	 return newServer(cfg)
+ }
+*** End Patch
+```
+
+The file is rewritten in place for both modes.
 
 ## `append_file`
 
