@@ -116,19 +116,23 @@ func TestProcessSession_ReadRangePages(t *testing.T) {
 	session := &ProcessSession{Status: "running"}
 	session.appendOutput([]byte("abcdefghij"))
 
-	text, next, total, dropped, hasMore := session.ReadRange(2, 3)
-	require.Equal(t, "cde", text)
-	require.Equal(t, int64(5), next)
-	require.Equal(t, int64(10), total)
-	require.Zero(t, dropped)
-	require.True(t, hasMore)
+	page := session.ReadRange(2, 3)
+	require.Equal(t, "cde", page.Text)
+	require.Equal(t, int64(2), page.Offset)
+	require.Equal(t, int64(5), page.NextOffset)
+	require.Equal(t, int64(10), page.TotalBytes)
+	require.Zero(t, page.DroppedBytes)
+	require.Zero(t, page.SkippedBytes)
+	require.True(t, page.HasMore)
 
-	text, next, total, dropped, hasMore = session.ReadRange(8, 10)
-	require.Equal(t, "ij", text)
-	require.Equal(t, int64(10), next)
-	require.Equal(t, int64(10), total)
-	require.Zero(t, dropped)
-	require.False(t, hasMore)
+	page = session.ReadRange(8, 10)
+	require.Equal(t, "ij", page.Text)
+	require.Equal(t, int64(8), page.Offset)
+	require.Equal(t, int64(10), page.NextOffset)
+	require.Equal(t, int64(10), page.TotalBytes)
+	require.Zero(t, page.DroppedBytes)
+	require.Zero(t, page.SkippedBytes)
+	require.False(t, page.HasMore)
 }
 
 func TestProcessSession_ReadRangeReportsDroppedPrefix(t *testing.T) {
@@ -139,12 +143,20 @@ func TestProcessSession_ReadRangeReportsDroppedPrefix(t *testing.T) {
 	dropped := session.DroppedBytes()
 	require.Positive(t, dropped)
 
-	text, next, total, skipped, hasMore := session.ReadRange(0, 10)
-	require.Len(t, text, 10)
-	require.Equal(t, dropped, skipped)
-	require.Equal(t, dropped+10, next)
-	require.Equal(t, int64(len(payload)), total)
-	require.True(t, hasMore)
+	page := session.ReadRange(0, 10)
+	require.Len(t, page.Text, 10)
+	require.Equal(t, dropped, page.DroppedBytes)
+	require.Equal(t, dropped, page.SkippedBytes)
+	require.Equal(t, dropped, page.Offset)
+	require.Equal(t, dropped+10, page.NextOffset)
+	require.Equal(t, int64(len(payload)), page.TotalBytes)
+	require.True(t, page.HasMore)
+
+	page = session.ReadRange(dropped, 10)
+	require.Len(t, page.Text, 10)
+	require.Equal(t, dropped, page.DroppedBytes)
+	require.Zero(t, page.SkippedBytes)
+	require.Equal(t, dropped, page.Offset)
 }
 
 func TestSessionManager_CleanupUsesExitTime(t *testing.T) {

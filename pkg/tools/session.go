@@ -317,44 +317,58 @@ func (s *ProcessSession) Read() string {
 	return s.outputBuffer.String()
 }
 
+// SessionOutputPage is one page of retained session output. Offsets and byte
+// counts are absolute from the start of the session log.
+type SessionOutputPage struct {
+	Text         string
+	Offset       int64
+	NextOffset   int64
+	TotalBytes   int64
+	DroppedBytes int64
+	SkippedBytes int64
+	HasMore      bool
+}
+
 // ReadRange returns at most limit bytes starting at absolute byte offset. It
-// never consumes the log. When offset predates the retained window, dropped
-// reports how many bytes were skipped and the returned text starts at the
-// oldest retained byte.
-func (s *ProcessSession) ReadRange(offset, limit int64) (
-	text string,
-	next int64,
-	total int64,
-	dropped int64,
-	hasMore bool,
-) {
+// never consumes the log. DroppedBytes is the total evicted from the rolling
+// window; SkippedBytes is how much of the request was unavailable because the
+// offset predates that window.
+func (s *ProcessSession) ReadRange(offset, limit int64) SessionOutputPage {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.idleChecks, s.lastCheckLen = 0, s.totalOutput
-	total = s.totalOutput
-	if s.outputBuffer == nil || s.outputBuffer.Len() == 0 {
-		return "", offset, total, 0, false
-	}
 	if offset < 0 {
 		offset = 0
 	}
+	page := SessionOutputPage{
+		Offset:       offset,
+		NextOffset:   offset,
+		TotalBytes:   s.totalOutput,
+		DroppedBytes: s.outputBase,
+	}
+	if s.outputBuffer == nil || s.outputBuffer.Len() == 0 {
+		return page
+	}
 	if offset < s.outputBase {
-		dropped = s.outputBase - offset
+		page.SkippedBytes = s.outputBase - offset
 		offset = s.outputBase
+		page.Offset = offset
+		page.NextOffset = offset
 	}
 	data := s.outputBuffer.Bytes()
 	rel := offset - s.outputBase
 	if rel >= int64(len(data)) {
-		return "", offset, total, dropped, false
+		return page
 	}
 	if limit <= 0 || limit > int64(len(data))-rel {
 		limit = int64(len(data)) - rel
 	}
 	end := rel + limit
-	text = string(data[rel:end])
-	next = offset + int64(len(text))
-	return text, next, total, dropped, next < total
+	page.Text = string(data[rel:end])
+	page.NextOffset = offset + int64(len(page.Text))
+	page.HasMore = page.NextOffset < page.TotalBytes
+	return page
 }
 
 func (s *ProcessSession) TotalBytes() int64 {

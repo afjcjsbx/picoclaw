@@ -2749,6 +2749,38 @@ func TestShellTool_ReadIsPagedAndNonDestructive(t *testing.T) {
 	require.Equal(t, "abc", again.Output)
 }
 
+func TestShellTool_ReadReportsCumulativeDroppedBytes(t *testing.T) {
+	tool, err := NewExecTool("", false)
+	require.NoError(t, err)
+
+	sm := NewSessionManager()
+	t.Cleanup(sm.Stop)
+	tool.sessionManager = sm
+
+	session := &ProcessSession{ID: "paged", Status: "running"}
+	payload := strings.Repeat("x", maxOutputBufferSize+100)
+	session.appendOutput([]byte(payload))
+	sm.Add(session)
+
+	resp := execResp(t, tool.Execute(context.Background(), map[string]any{
+		"action": "read", "sessionId": "paged",
+	}))
+	require.Equal(t, int64(len(payload)), resp.TotalBytes)
+	require.Equal(t, int64(100), resp.DroppedBytes)
+	require.Zero(t, resp.SkippedBytes)
+	require.Equal(t, resp.TotalBytes-int64(len(resp.Output)), resp.Offset)
+
+	resp = execResp(t, tool.Execute(context.Background(), map[string]any{
+		"action": "read", "sessionId": "paged", "offset": float64(0),
+	}))
+	require.Equal(t, int64(100), resp.DroppedBytes)
+	require.Equal(t, int64(100), resp.SkippedBytes)
+	require.Equal(t, int64(100), resp.Offset)
+	require.Equal(t, int64(100+len(resp.Output)), resp.NextOffset)
+	require.True(t, resp.HasMore)
+	require.Contains(t, resp.Note, "skipped 100 bytes")
+}
+
 func TestShellTool_PollReturnsOutputPreview(t *testing.T) {
 	tool, ctx, id := startBackgroundSession(t, "sh -c 'echo preview-line; sleep 5'")
 	time.Sleep(200 * time.Millisecond)

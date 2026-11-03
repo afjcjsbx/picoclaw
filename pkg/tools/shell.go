@@ -1103,21 +1103,22 @@ func (t *ExecTool) executeRead(args map[string]any) *ToolResult {
 		}
 	}
 
-	output, next, total, dropped, hasMore := session.ReadRange(offset, limit)
+	page := session.ReadRange(offset, limit)
 	resp := ExecResponse{
 		SessionID:    sessionID,
-		Output:       output,
+		Output:       page.Text,
 		Status:       session.GetStatus(),
-		TotalBytes:   total,
-		Offset:       offset + dropped,
-		NextOffset:   next,
-		HasMore:      hasMore,
-		DroppedBytes: dropped,
+		TotalBytes:   page.TotalBytes,
+		Offset:       page.Offset,
+		NextOffset:   page.NextOffset,
+		HasMore:      page.HasMore,
+		DroppedBytes: page.DroppedBytes,
+		SkippedBytes: page.SkippedBytes,
 	}
-	if dropped > 0 {
+	if page.SkippedBytes > 0 {
 		resp.Note = fmt.Sprintf(
-			"Requested offset %d predates the retained output window; starting at byte %d.",
-			offset, offset+dropped,
+			"Requested offset %d predates the retained output window; skipped %d bytes, starting at byte %d.",
+			offset, page.SkippedBytes, page.Offset,
 		)
 	}
 	data, err := json.Marshal(resp)

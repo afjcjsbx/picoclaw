@@ -12,6 +12,7 @@ type ExecResponse struct {
 	NextOffset   int64         `json:"nextOffset,omitempty"`
 	HasMore      bool          `json:"hasMore,omitempty"`
 	DroppedBytes int64         `json:"droppedBytes,omitempty"`
+	SkippedBytes int64         `json:"skippedBytes,omitempty"`
 	Sessions     []SessionInfo `json:"sessions,omitempty"`
 }
 
