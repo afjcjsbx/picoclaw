@@ -121,11 +121,21 @@ func (m *scriptedToolProvider) Chat(
 					Arguments: map[string]any{"task": "ping"},
 				},
 			},
+			Usage: &providers.UsageInfo{
+				PromptTokens:     120,
+				CompletionTokens: 30,
+				TotalTokens:      150,
+			},
 		}, nil
 	}
 
 	return &providers.LLMResponse{
 		Content: "done",
+		Usage: &providers.UsageInfo{
+			PromptTokens:     200,
+			CompletionTokens: 50,
+			TotalTokens:      250,
+		},
 	}, nil
 }
 
@@ -272,6 +282,26 @@ func TestAgentLoop_EmitsMinimalTurnEvents(t *testing.T) {
 	}
 	if toolEndPayload.IsError {
 		t.Fatal("expected mock_custom tool to succeed")
+	}
+
+	firstResponsePayload, ok := events[2].Payload.(LLMResponsePayload)
+	if !ok {
+		t.Fatalf("expected LLMResponsePayload, got %T", events[2].Payload)
+	}
+	if firstResponsePayload.InputTokens != 120 ||
+		firstResponsePayload.OutputTokens != 30 ||
+		firstResponsePayload.TotalTokens != 150 {
+		t.Fatalf("unexpected first LLM token usage: %+v", firstResponsePayload)
+	}
+
+	secondResponsePayload, ok := events[6].Payload.(LLMResponsePayload)
+	if !ok {
+		t.Fatalf("expected LLMResponsePayload, got %T", events[6].Payload)
+	}
+	if secondResponsePayload.InputTokens != 200 ||
+		secondResponsePayload.OutputTokens != 50 ||
+		secondResponsePayload.TotalTokens != 250 {
+		t.Fatalf("unexpected second LLM token usage: %+v", secondResponsePayload)
 	}
 
 	turnEndPayload, ok := events[len(events)-1].Payload.(TurnEndPayload)
