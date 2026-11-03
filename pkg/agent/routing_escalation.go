@@ -17,9 +17,28 @@ func (p *Pipeline) promoteToPrimary(ts *turnState, exec *turnExecution, reason s
 	}
 
 	lightModel := exec.llmModelName
+	primaryModelName := p.useBaseCandidates(ts, exec)
+	exec.usedLight = false
+	exec.escalatedToPrimary = true
+
+	logger.InfoCF("agent", "Model routing: escalated to primary model", map[string]any{
+		"agent_id":      ts.agent.ID,
+		"turn_id":       ts.turnID,
+		"from_model":    lightModel,
+		"to_model":      primaryModelName,
+		"reason":        reason,
+		"iteration":     ts.currentIteration(),
+		"prompt_tokens": exec.lastPromptTokens(),
+		"tool_streak":   exec.toolIterationStreak,
+	})
+	return true
+}
+
+// useBaseCandidates points the turn at the agent's primary candidates and
+// returns the resolved primary model name.
+func (p *Pipeline) useBaseCandidates(ts *turnState, exec *turnExecution) string {
 	candidates := append([]providers.FallbackCandidate(nil), ts.agent.Candidates...)
 	model := resolvedCandidateModel(candidates, ts.agent.Model)
-	primaryModelName := resolvedCandidateModelName(candidates, ts.agent.Model)
 	defaultProvider := ""
 	if p.Cfg != nil {
 		defaultProvider = p.Cfg.Agents.Defaults.Provider
@@ -35,20 +54,7 @@ func (p *Pipeline) promoteToPrimary(ts *turnState, exec *turnExecution, reason s
 		defaultProvider,
 	)
 	exec.activeProvider = ts.agent.Provider
-	exec.usedLight = false
-	exec.escalatedToPrimary = true
-
-	logger.InfoCF("agent", "Model routing: escalated to primary model", map[string]any{
-		"agent_id":      ts.agent.ID,
-		"turn_id":       ts.turnID,
-		"from_model":    lightModel,
-		"to_model":      primaryModelName,
-		"reason":        reason,
-		"iteration":     ts.currentIteration(),
-		"prompt_tokens": exec.lastPromptTokens(),
-		"tool_streak":   exec.toolIterationStreak,
-	})
-	return true
+	return resolvedCandidateModelName(candidates, ts.agent.Model)
 }
 
 // lastPromptTokens returns the prompt-token count reported by the last light

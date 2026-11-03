@@ -358,6 +358,77 @@ func TestShellTool_StderrCapture(t *testing.T) {
 	}
 }
 
+// TestShellTool_ForegroundMergesStdoutStderrInOrder verifies stdout and stderr
+// share one stream, so their relative write order is preserved.
+func TestShellTool_ForegroundMergesStdoutStderrInOrder(t *testing.T) {
+	tool, err := NewExecTool("", false)
+	require.NoError(t, err)
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"action":  "run",
+		"command": "sh -c 'echo one; echo two >&2; echo three'",
+	})
+	require.False(t, result.IsError, result.ForLLM)
+	require.Equal(t, []string{"one", "two", "three"}, strings.Split(strings.TrimSpace(result.ForLLM), "\n"))
+}
+
+// TestShellTool_BackgroundMergesStderrWithoutBlocking reproduces the old
+// deadlock: stderr was read only after stdout reached EOF, so a child that
+// filled the stderr pipe blocked forever while no stdout was produced.
+func TestShellTool_BackgroundMergesStderrWithoutBlocking(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses POSIX yes/head")
+	}
+
+	tool, err := NewExecTool("", false)
+	require.NoError(t, err)
+
+	sm := NewSessionManager()
+	t.Cleanup(sm.Stop)
+	tool.sessionManager = sm
+
+	runResult := tool.Execute(context.Background(), map[string]any{
+		"action":     "run",
+		"command":    "yes errline | head -20000 >&2; sleep 0.2; echo done",
+		"background": true,
+	})
+	require.False(t, runResult.IsError, runResult.ForLLM)
+
+	var started ExecResponse
+	require.NoError(t, json.Unmarshal([]byte(runResult.ForLLM), &started))
+	require.NotEmpty(t, started.SessionID)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		pollResult := tool.Execute(context.Background(), map[string]any{
+			"action":    "poll",
+			"sessionId": started.SessionID,
+		})
+		require.False(t, pollResult.IsError, pollResult.ForLLM)
+
+		var pollResp ExecResponse
+		require.NoError(t, json.Unmarshal([]byte(pollResult.ForLLM), &pollResp))
+		if pollResp.Status == "done" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("background process did not finish; stderr pipe likely blocked")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	readResult := tool.Execute(context.Background(), map[string]any{
+		"action":    "read",
+		"sessionId": started.SessionID,
+	})
+	require.False(t, readResult.IsError, readResult.ForLLM)
+
+	var readResp ExecResponse
+	require.NoError(t, json.Unmarshal([]byte(readResult.ForLLM), &readResp))
+	require.Contains(t, readResp.Output, "errline")
+	require.Contains(t, readResp.Output, "done")
+}
+
 // TestShellTool_OutputTruncation verifies foreground output is bounded by the
 // configured cap and keeps a head+tail window around the omission notice.
 func TestShellTool_OutputTruncation(t *testing.T) {
@@ -406,12 +477,14 @@ func TestShellTool_OutputTruncation(t *testing.T) {
 }
 
 // TestShellTool_TruncatedOutputSpillsFullText verifies that foreground output
-// beyond the configured cap stays recoverable: the large-result spill saves the
-// pre-truncation output, so the omitted middle is readable from the artifact.
+// beyond the configured cap stays recoverable and that the inline view honors
+// the global max_inline_result_chars cap: the artifact keeps the full stream,
+// so the omitted middle remains readable without expanding model context.
 func TestShellTool_TruncatedOutputSpillsFullText(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Tools.Exec.AllowRemote = true
 	cfg.Tools.Exec.MaxOutputChars = 1000
+	cfg.Tools.MaxInlineResultChars = 512
 
 	tool, err := NewExecToolWithConfig("", false, cfg)
 	if err != nil {
@@ -445,12 +518,48 @@ func TestShellTool_TruncatedOutputSpillsFullText(t *testing.T) {
 		t.Fatalf("expected the artifact to hold the full output, got %d chars (want %d)", len(got), len(full))
 	}
 	// Inline stays bounded and keeps the real head and tail of the full output.
+	if got := len([]rune(result.ForLLM)); got > cfg.Tools.MaxInlineResultChars+200 {
+		t.Fatalf("inline output has %d runes, want at most %d plus the truncation notice",
+			got, cfg.Tools.MaxInlineResultChars)
+	}
 	if !strings.Contains(result.ForLLM, strings.Repeat("A", 100)) {
 		t.Fatal("expected the real output head in the preview")
 	}
 	if !strings.Contains(result.ForLLM, strings.Repeat("Z", 100)) {
 		t.Fatal("expected the real output tail in the preview")
 	}
+}
+
+// TestShellTool_ForegroundSpillUsesWorkspaceArtifact verifies that an oversized
+// foreground stream is spilled into the workspace artifact directory instead of
+// being retained in memory.
+func TestShellTool_ForegroundSpillUsesWorkspaceArtifact(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses POSIX yes/head")
+	}
+
+	workspace := t.TempDir()
+	cfg := &config.Config{}
+	cfg.Tools.Exec.AllowRemote = true
+	cfg.Tools.Exec.MaxOutputChars = 100
+
+	tool, err := NewExecToolWithConfig(workspace, false, cfg)
+	require.NoError(t, err)
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"action":  "run",
+		"command": "yes x | head -1000",
+	})
+	require.False(t, result.IsError, result.ForLLM)
+	require.True(t, result.LargeResultSpilled)
+	require.Len(t, result.ArtifactTags, 1)
+
+	path := strings.TrimSuffix(strings.TrimPrefix(result.ArtifactTags[0], "[file:"), "]")
+	require.Contains(t, path, filepath.Join(workspace, ".artifacts", "tool"))
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Greater(t, len(data), cfg.Tools.Exec.MaxOutputChars)
 }
 
 // TestShellTool_WorkingDir_OutsideWorkspace verifies that working_dir cannot escape the workspace directly
@@ -1457,7 +1566,8 @@ func TestShellTool_Kill(t *testing.T) {
 	var listResp ExecResponse
 	err = json.Unmarshal([]byte(listResult.ForLLM), &listResp)
 	require.NoError(t, err)
-	require.Len(t, listResp.Sessions, 0)
+	require.Len(t, listResp.Sessions, 1)
+	require.Equal(t, "done", listResp.Sessions[0].Status)
 }
 
 func TestShellTool_PTY_AllowedCommands(t *testing.T) {
@@ -1650,14 +1760,15 @@ func TestShellTool_PTY_Kill(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "done", killResp.Status)
 
-	// Poll should return error since session is removed after kill
+	// The session is retained after kill so its final output stays readable.
 	pollResult := tool.Execute(ctx, map[string]any{
 		"action":    "poll",
 		"sessionId": resp.SessionID,
 	})
-	// Session is removed after kill, so poll returns error with "session not found"
-	require.True(t, pollResult.IsError, "poll should error after kill (session removed)")
-	require.Contains(t, pollResult.ForLLM, "session not found")
+	require.False(t, pollResult.IsError, "poll should still find the retained session: %s", pollResult.ForLLM)
+	var pollResp ExecResponse
+	require.NoError(t, json.Unmarshal([]byte(pollResult.ForLLM), &pollResp))
+	require.Equal(t, "done", pollResp.Status)
 }
 
 func TestShellTool_Write_Read_NonPTY(t *testing.T) {
@@ -1823,13 +1934,15 @@ func TestShellTool_ProcessGroupKill(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "done", killResp.Status)
 
-	// Poll should return error since session is removed after kill
+	// The session is retained after kill so its final output stays readable.
 	pollResult := tool.Execute(ctx, map[string]any{
 		"action":    "poll",
 		"sessionId": resp.SessionID,
 	})
-	require.True(t, pollResult.IsError, "poll should error after kill (session removed)")
-	require.Contains(t, pollResult.ForLLM, "session not found")
+	require.False(t, pollResult.IsError, "poll should still find the retained session: %s", pollResult.ForLLM)
+	var pollResp ExecResponse
+	require.NoError(t, json.Unmarshal([]byte(pollResult.ForLLM), &pollResp))
+	require.Equal(t, "done", pollResp.Status)
 }
 
 func TestShellTool_PTY_ProcessGroupKill(t *testing.T) {
@@ -1884,13 +1997,15 @@ func TestShellTool_PTY_ProcessGroupKill(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "done", killResp.Status)
 
-	// Poll should return error since session is removed after kill
+	// The session is retained after kill so its final output stays readable.
 	pollResult := tool.Execute(ctx, map[string]any{
 		"action":    "poll",
 		"sessionId": resp.SessionID,
 	})
-	require.True(t, pollResult.IsError, "poll should error after kill (session removed)")
-	require.Contains(t, pollResult.ForLLM, "session not found")
+	require.False(t, pollResult.IsError, "poll should still find the retained session: %s", pollResult.ForLLM)
+	var pollResp ExecResponse
+	require.NoError(t, json.Unmarshal([]byte(pollResult.ForLLM), &pollResp))
+	require.Equal(t, "done", pollResp.Status)
 }
 
 func TestShellTool_PTY_Background_Read(t *testing.T) {
@@ -2497,4 +2612,205 @@ func TestShellTool_Poll_NewOutputResetsIdleCount(t *testing.T) {
 	require.Empty(t, poll().Note) // sees "second": output changed again
 	require.Empty(t, poll().Note) // first silent check
 	require.Contains(t, poll().Note, "action=wait")
+}
+
+func TestShellTool_ExecuteAsync_NotifiesOnCompletion(t *testing.T) {
+	tool, err := NewExecTool("", false)
+	require.NoError(t, err)
+
+	sm := NewSessionManager()
+	t.Cleanup(sm.Stop)
+	tool.sessionManager = sm
+
+	ctx := WithToolContext(context.Background(), "cli", "test")
+	done := make(chan *ToolResult, 1)
+	runResult := tool.ExecuteAsync(ctx, map[string]any{
+		"action":     "run",
+		"command":    "sh -c 'sleep 0.1; echo background-done'",
+		"background": true,
+		"notify":     true,
+	}, func(_ context.Context, result *ToolResult) {
+		done <- result
+	})
+	require.False(t, runResult.IsError, runResult.ForLLM)
+
+	var started ExecResponse
+	require.NoError(t, json.Unmarshal([]byte(runResult.ForLLM), &started))
+	require.Equal(t, notifyEnabledNote, started.Note)
+
+	select {
+	case result := <-done:
+		require.Contains(t, result.ForLLM, "background-done")
+		require.Contains(t, result.ForLLM, "exitCode: 0")
+	case <-time.After(3 * time.Second):
+		t.Fatal("completion notification did not arrive")
+	}
+}
+
+func TestShellTool_AutoNotifyAfterSilentPolls(t *testing.T) {
+	tool, err := NewExecTool("", false)
+	require.NoError(t, err)
+
+	sm := NewSessionManager()
+	t.Cleanup(sm.Stop)
+	tool.sessionManager = sm
+
+	ctx := WithToolContext(context.Background(), "cli", "test")
+	done := make(chan *ToolResult, 1)
+	runResult := tool.ExecuteAsync(ctx, map[string]any{
+		"action":     "run",
+		"command":    "sh -c 'sleep 1; echo auto-done'",
+		"background": true,
+	}, func(_ context.Context, result *ToolResult) {
+		done <- result
+	})
+	require.False(t, runResult.IsError, runResult.ForLLM)
+
+	var started ExecResponse
+	require.NoError(t, json.Unmarshal([]byte(runResult.ForLLM), &started))
+
+	first := execResp(t, tool.Execute(ctx, map[string]any{"action": "poll", "sessionId": started.SessionID}))
+	require.Empty(t, first.Note)
+
+	second := execResp(t, tool.Execute(ctx, map[string]any{"action": "poll", "sessionId": started.SessionID}))
+	require.Contains(t, second.Note, "completion notification")
+	require.Contains(t, second.Note, "follow-up message")
+
+	select {
+	case result := <-done:
+		require.Contains(t, result.ForLLM, "auto-done")
+	case <-time.After(4 * time.Second):
+		t.Fatal("auto-enabled completion notification did not arrive")
+	}
+}
+
+func TestShellTool_NotifyRequiresBackground(t *testing.T) {
+	tool, err := NewExecTool("", false)
+	require.NoError(t, err)
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"action":  "run",
+		"command": "echo foreground",
+		"notify":  true,
+	})
+	require.True(t, result.IsError)
+	require.Contains(t, result.ForLLM, "background=true")
+}
+
+func TestShellTool_NotifyNoteRequiresAsyncCallback(t *testing.T) {
+	tool, err := NewExecTool("", false)
+	require.NoError(t, err)
+
+	sm := NewSessionManager()
+	t.Cleanup(sm.Stop)
+	tool.sessionManager = sm
+
+	ctx := WithToolContext(context.Background(), "cli", "test")
+	result := tool.Execute(ctx, map[string]any{
+		"action":     "run",
+		"command":    "sleep 5",
+		"background": true,
+		"notify":     true,
+	})
+	require.False(t, result.IsError, result.ForLLM)
+
+	var resp ExecResponse
+	require.NoError(t, json.Unmarshal([]byte(result.ForLLM), &resp))
+	t.Cleanup(func() {
+		tool.Execute(ctx, map[string]any{"action": "kill", "sessionId": resp.SessionID})
+	})
+	require.Empty(t, resp.Note, "direct Execute cannot deliver a completion callback")
+
+	session, err := sm.Get(resp.SessionID)
+	require.NoError(t, err)
+	require.False(t, session.NotifyEnabled())
+}
+
+func TestShellTool_ReadIsPagedAndNonDestructive(t *testing.T) {
+	tool, ctx, id := startBackgroundSession(t, "sh -c 'printf abcdefghij; sleep 5'")
+	time.Sleep(200 * time.Millisecond)
+
+	first := execResp(t, tool.Execute(ctx, map[string]any{
+		"action": "read", "sessionId": id, "offset": float64(0), "limit": float64(3),
+	}))
+	require.Equal(t, "abc", first.Output)
+	require.Equal(t, int64(3), first.NextOffset)
+	require.True(t, first.HasMore)
+
+	second := execResp(t, tool.Execute(ctx, map[string]any{
+		"action": "read", "sessionId": id, "offset": float64(3), "limit": float64(4),
+	}))
+	require.Equal(t, "defg", second.Output)
+	require.Equal(t, int64(7), second.NextOffset)
+
+	again := execResp(t, tool.Execute(ctx, map[string]any{
+		"action": "read", "sessionId": id, "offset": float64(0), "limit": float64(3),
+	}))
+	require.Equal(t, "abc", again.Output)
+}
+
+func TestShellTool_ReadReportsCumulativeDroppedBytes(t *testing.T) {
+	tool, err := NewExecTool("", false)
+	require.NoError(t, err)
+
+	sm := NewSessionManager()
+	t.Cleanup(sm.Stop)
+	tool.sessionManager = sm
+
+	session := &ProcessSession{ID: "paged", Status: "running"}
+	payload := strings.Repeat("x", maxOutputBufferSize+100)
+	session.appendOutput([]byte(payload))
+	sm.Add(session)
+
+	resp := execResp(t, tool.Execute(context.Background(), map[string]any{
+		"action": "read", "sessionId": "paged",
+	}))
+	require.Equal(t, int64(len(payload)), resp.TotalBytes)
+	require.Equal(t, int64(100), resp.DroppedBytes)
+	require.Zero(t, resp.SkippedBytes)
+	require.Equal(t, resp.TotalBytes-int64(len(resp.Output)), resp.Offset)
+
+	resp = execResp(t, tool.Execute(context.Background(), map[string]any{
+		"action": "read", "sessionId": "paged", "offset": float64(0),
+	}))
+	require.Equal(t, int64(100), resp.DroppedBytes)
+	require.Equal(t, int64(100), resp.SkippedBytes)
+	require.Equal(t, int64(100), resp.Offset)
+	require.Equal(t, int64(100+len(resp.Output)), resp.NextOffset)
+	require.True(t, resp.HasMore)
+	require.Contains(t, resp.Note, "skipped 100 bytes")
+}
+
+func TestShellTool_PollReturnsOutputPreview(t *testing.T) {
+	tool, ctx, id := startBackgroundSession(t, "sh -c 'echo preview-line; sleep 5'")
+	time.Sleep(200 * time.Millisecond)
+
+	resp := execResp(t, tool.Execute(ctx, map[string]any{"action": "poll", "sessionId": id}))
+	require.Equal(t, "running", resp.Status)
+	require.Contains(t, resp.Output, "preview-line")
+	require.Positive(t, resp.TotalBytes)
+}
+
+func TestShellTool_WaitReturnsPartialOutputOnTimeout(t *testing.T) {
+	tool, ctx, id := startBackgroundSession(t, "sh -c 'echo before-timeout; sleep 5'")
+	time.Sleep(200 * time.Millisecond)
+
+	resp := execResp(t, tool.Execute(ctx, map[string]any{
+		"action": "wait", "sessionId": id, "timeout": float64(1),
+	}))
+	require.Equal(t, "running", resp.Status)
+	require.Contains(t, resp.Output, "before-timeout")
+	require.Contains(t, resp.Note, "not an error")
+}
+
+func TestShellTool_KillRetainsOutput(t *testing.T) {
+	tool, ctx, id := startBackgroundSession(t, "sh -c 'echo before-stop; sleep 5'")
+	time.Sleep(200 * time.Millisecond)
+
+	killResp := execResp(t, tool.Execute(ctx, map[string]any{"action": "kill", "sessionId": id}))
+	require.Equal(t, "done", killResp.Status)
+	require.Contains(t, killResp.Output, "before-stop")
+
+	readResp := execResp(t, tool.Execute(ctx, map[string]any{"action": "read", "sessionId": id}))
+	require.Contains(t, readResp.Output, "before-stop")
 }

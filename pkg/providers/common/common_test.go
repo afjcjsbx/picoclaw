@@ -495,6 +495,28 @@ func TestHandleErrorResponse_JSONError(t *testing.T) {
 	}
 }
 
+func TestHandleErrorResponse_KeepsLongJSONReason(t *testing.T) {
+	reason := "google/gemini-2.5-flash-lite is temporarily rate-limited upstream, please retry shortly"
+	body := `{"error":{"message":"Provider returned error","code":429,"metadata":{"raw":"` +
+		strings.Repeat("x", 400) + reason + `"}}}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		w.Write([]byte(body))
+	}))
+	defer server.Close()
+
+	resp, err := http.Get(server.URL)
+	if err != nil {
+		t.Fatalf("http.Get() error = %v", err)
+	}
+	defer resp.Body.Close()
+	err = HandleErrorResponse(resp, server.URL)
+	if err == nil || !strings.Contains(err.Error(), reason) {
+		t.Fatalf("upstream reason lost from error: %v", err)
+	}
+}
+
 func TestHandleErrorResponse_HTMLError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")

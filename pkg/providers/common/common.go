@@ -489,10 +489,18 @@ func (e *HTTPError) Error() string {
 	)
 }
 
+const (
+	// errorBodyPreviewLen is large enough to keep a provider's JSON error
+	// message intact (OpenRouter nests the upstream reason inside metadata.raw).
+	errorBodyPreviewLen = 2048
+	// errorBodyReadLimit reads past the preview so a longer body still shows "...".
+	errorBodyReadLimit = errorBodyPreviewLen * 2
+)
+
 // HandleErrorResponse reads a non-200 response body and returns an appropriate error.
 func HandleErrorResponse(resp *http.Response, apiBase string) error {
 	contentType := resp.Header.Get("Content-Type")
-	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 256))
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, errorBodyReadLimit))
 	if readErr != nil {
 		return fmt.Errorf("failed to read response: %w", readErr)
 	}
@@ -501,7 +509,7 @@ func HandleErrorResponse(resp *http.Response, apiBase string) error {
 	}
 	return &HTTPError{
 		StatusCode:  resp.StatusCode,
-		BodyPreview: ResponsePreview(body, 128),
+		BodyPreview: ResponsePreview(body, errorBodyPreviewLen),
 		ContentType: contentType,
 		APIBase:     apiBase,
 	}

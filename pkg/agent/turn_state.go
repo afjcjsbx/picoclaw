@@ -139,6 +139,9 @@ type turnExecution struct {
 	// light-model responses that requested tools.
 	toolIterationStreak int
 	escalatedToPrimary  bool
+	// imageRouteDisabled is set once the image model failed and the turn fell
+	// back to the base model, so later iterations do not route to it again.
+	imageRouteDisabled bool
 
 	// LLM call per-iteration state
 	response            *providers.LLMResponse
