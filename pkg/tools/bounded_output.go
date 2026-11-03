@@ -12,25 +12,33 @@ import (
 
 const (
 	// maxOutputSpillBytes caps the artifact written for oversized foreground
-	// output. Memory stays bounded by maxOutputChars; the artifact keeps the
-	// beginning of the stream up to this limit.
+	// output. Memory stays bounded by max_output_chars runes; the artifact
+	// keeps the beginning of the stream up to this limit.
 	maxOutputSpillBytes = 5_000_000
 )
 
 // boundedOutput is an io.Writer that retains a head/tail window in memory and
 // spills the full stream to a file once the window is exceeded. It is safe for
 // concurrent writers because stdout and stderr share one pipe.
+//
+// The window is measured in runes, matching the max_output_chars contract: the
+// first 40% and the last 60% of the configured cap are kept. Each side is
+// stored in a byte slice with room for utf8.UTFMax bytes per rune, plus one
+// rune of slack for a trailing partial rune, so memory stays bounded by
+// 4x max_output_chars bytes even for four-byte runes.
 type boundedOutput struct {
 	mu sync.Mutex
 
-	max        int
-	headLimit  int
-	tailLimit  int
-	head       []byte
-	tail       []byte
-	total      int64
-	totalRunes int64
-	runeCarry  []byte
+	maxRunes       int
+	headRunes      int
+	tailRunes      int
+	headLimitBytes int
+	tailLimitBytes int
+	head           []byte
+	tail           []byte
+	totalBytes     int64
+	totalRunes     int64
+	runeCarry      []byte
 
 	spillDir  string
 	spill     *os.File
@@ -39,21 +47,22 @@ type boundedOutput struct {
 	spillCap  int64
 	capped    bool
 	failed    bool
-	artifact  bool
 }
 
 func newBoundedOutput(maxChars int, spillDir string) *boundedOutput {
 	if maxChars <= 0 {
 		maxChars = 1
 	}
-	headLimit := int(float64(maxChars) * toolshared.HeadTailHeadRatio)
-	tailLimit := maxChars - headLimit
+	headRunes := int(float64(maxChars) * toolshared.HeadTailHeadRatio)
+	tailRunes := maxChars - headRunes
 	return &boundedOutput{
-		max:       maxChars,
-		headLimit: headLimit,
-		tailLimit: tailLimit,
-		spillDir:  spillDir,
-		spillCap:  maxOutputSpillBytes,
+		maxRunes:       maxChars,
+		headRunes:      headRunes,
+		tailRunes:      tailRunes,
+		headLimitBytes: headRunes * utf8.UTFMax,
+		tailLimitBytes: tailRunes*utf8.UTFMax + utf8.UTFMax,
+		spillDir:       spillDir,
+		spillCap:       maxOutputSpillBytes,
 	}
 }
 
@@ -68,11 +77,11 @@ func (b *boundedOutput) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	b.total += int64(len(p))
 	b.countRunesLocked(p)
-	if b.spill == nil && !b.failed && b.total > int64(b.max) {
+	if b.spill == nil && !b.failed && b.totalRunes > int64(b.maxRunes) {
 		b.openSpillLocked()
 	}
+	b.totalBytes += int64(len(p))
 	if err := b.writeSpillLocked(p); err != nil {
 		b.abortSpillLocked()
 	}
@@ -85,45 +94,43 @@ func (b *boundedOutput) openSpillLocked() {
 		return
 	}
 
-	file, artifact, err := b.createSpillFile()
+	file, dir, err := b.createSpillFile()
 	if err != nil {
 		b.failed = true
 		return
 	}
 	b.spill = file
+	b.spillDir = dir
 	b.spillPath = file.Name()
-	b.artifact = artifact
 	b.spillSize = 0
 
-	// The first overflow happens while total was still <= max, so head+tail
-	// contains every byte written so far.
-	if err := b.writeSpillLocked(b.head); err != nil {
-		b.abortSpillLocked()
-		return
-	}
-	if err := b.writeSpillLocked(b.tail); err != nil {
+	// The first overflow happens while the stream was still within maxRunes,
+	// so the head and tail windows reconstruct every byte written so far.
+	if err := b.writeSpillLocked(b.snapshotLocked()); err != nil {
 		b.abortSpillLocked()
 	}
 }
 
-func (b *boundedOutput) createSpillFile() (*os.File, bool, error) {
-	if b.spillDir != "" {
-		if err := os.MkdirAll(b.spillDir, 0o700); err == nil {
-			file, err := os.CreateTemp(b.spillDir, "exec_*.log")
-			if err == nil {
-				return file, true, nil
-			}
-		}
+func (b *boundedOutput) createSpillFile() (*os.File, string, error) {
+	if b.spillDir == "" {
+		return b.createTempSpillFile()
 	}
-	return b.createTempSpillFile()
+	if err := os.MkdirAll(b.spillDir, 0o700); err != nil {
+		return b.createTempSpillFile()
+	}
+	file, err := os.CreateTemp(b.spillDir, "exec_*.log")
+	if err != nil {
+		return b.createTempSpillFile()
+	}
+	return file, b.spillDir, nil
 }
 
-func (b *boundedOutput) createTempSpillFile() (*os.File, bool, error) {
+func (b *boundedOutput) createTempSpillFile() (*os.File, string, error) {
 	file, err := os.CreateTemp("", "picoclaw-exec-*.log")
 	if err != nil {
-		return nil, false, err
+		return nil, "", err
 	}
-	return file, false, nil
+	return file, "", nil
 }
 
 func (b *boundedOutput) writeSpillLocked(p []byte) error {
@@ -156,28 +163,52 @@ func (b *boundedOutput) writeSpillLocked(p []byte) error {
 	return nil
 }
 
+// appendLocked keeps the first headLimitBytes bytes and, independently, the
+// last tailLimitBytes bytes. The windows may overlap while the stream is short;
+// snapshotLocked joins them without duplicating bytes.
 func (b *boundedOutput) appendLocked(p []byte) {
-	if len(b.head) < b.headLimit {
-		take := b.headLimit - len(b.head)
-		if take > len(p) {
-			take = len(p)
+	if remaining := b.headLimitBytes - len(b.head); remaining > 0 {
+		take := len(p)
+		if take > remaining {
+			take = remaining
 		}
 		b.head = append(b.head, p[:take]...)
-		p = p[take:]
 	}
-	if len(p) == 0 || b.tailLimit == 0 {
+	if b.tailLimitBytes == 0 {
 		return
 	}
 
-	if len(p) >= b.tailLimit {
-		b.tail = append(b.tail[:0], p[len(p)-b.tailLimit:]...)
-		return
-	}
 	b.tail = append(b.tail, p...)
-	if len(b.tail) > b.tailLimit {
-		copy(b.tail, b.tail[len(b.tail)-b.tailLimit:])
-		b.tail = b.tail[:b.tailLimit]
+	if len(b.tail) > b.tailLimitBytes {
+		b.tail = b.tail[len(b.tail)-b.tailLimitBytes:]
 	}
+}
+
+// snapshotLocked reconstructs every byte written so far. It is valid while the
+// stream fits in the combined head and tail windows, which is guaranteed before
+// the first overflow: both windows together hold utf8.UTFMax*maxRunes plus one
+// rune of slack, and a stream with at most maxRunes runes holds at most
+// utf8.UTFMax bytes per rune plus a trailing partial rune.
+func (b *boundedOutput) snapshotLocked() []byte {
+	total := b.totalBytes
+	if total <= int64(len(b.head)) {
+		return b.head
+	}
+	if total <= int64(len(b.tail)) {
+		return b.tail
+	}
+
+	overlap := int64(len(b.head)+len(b.tail)) - total
+	if overlap < 0 {
+		overlap = 0
+	}
+	if overlap > int64(len(b.tail)) {
+		overlap = int64(len(b.tail))
+	}
+	out := make([]byte, 0, int(total))
+	out = append(out, b.head...)
+	out = append(out, b.tail[overlap:]...)
+	return out
 }
 
 // Render returns the bounded view and whether the stream was truncated. The
@@ -186,14 +217,17 @@ func (b *boundedOutput) Render() (string, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	if b.total <= int64(b.max) {
-		return string(b.head) + string(b.tail), false
+	if b.totalRunes <= int64(b.maxRunes) {
+		return string(b.snapshotLocked()), false
 	}
 
 	b.finishRuneCountLocked()
-	head := trimPartialRuneSuffix(b.head)
-	tail := trimPartialRunePrefix(b.tail)
-	omitted := b.totalRunes - int64(utf8.RuneCount(head)) - int64(utf8.RuneCount(tail))
+	head := toolshared.RunePrefix(string(trimPartialRuneSuffix(b.head)), b.headRunes)
+	tail := toolshared.RuneSuffix(
+		string(trimPartialRuneSuffix(trimPartialRunePrefix(b.tail))),
+		b.tailRunes,
+	)
+	omitted := b.totalRunes - int64(utf8.RuneCountInString(head)) - int64(utf8.RuneCountInString(tail))
 	if omitted < 0 {
 		omitted = 0
 	}
@@ -201,7 +235,7 @@ func (b *boundedOutput) Render() (string, bool) {
 		"\n\n... [OUTPUT TRUNCATED - %s chars omitted out of %s total] ...\n\n",
 		formatCount64(omitted), formatCount64(b.totalRunes),
 	)
-	return string(head) + notice + string(tail), true
+	return head + notice + tail, true
 }
 
 // SpillPath returns the artifact path when the full stream overflowed the
@@ -228,7 +262,7 @@ func (b *boundedOutput) Close() error {
 	}
 	err := b.spill.Close()
 	b.spill = nil
-	if b.artifact {
+	if b.spillDir != "" {
 		toolshared.PruneArtifacts(b.spillDir, toolshared.DefaultArtifactMaxAge, toolshared.DefaultArtifactMaxFiles)
 	}
 	return err

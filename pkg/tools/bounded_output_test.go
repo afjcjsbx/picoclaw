@@ -32,6 +32,79 @@ func TestBoundedOutputSpillsFullStream(t *testing.T) {
 	require.Equal(t, data, string(got))
 }
 
+// TestBoundedOutputSpillsAcrossWritesInOrder overflows after several writes so
+// the spill replay exercises the head/tail reconstruction on a live window.
+func TestBoundedOutputSpillsAcrossWritesInOrder(t *testing.T) {
+	out := newBoundedOutput(10, t.TempDir())
+	chunks := []string{"abcd", "èèè", "efghij"}
+
+	var data strings.Builder
+	for _, chunk := range chunks {
+		data.WriteString(chunk)
+		_, err := out.Write([]byte(chunk))
+		require.NoError(t, err)
+	}
+
+	_, truncated := out.Render()
+	require.True(t, truncated)
+
+	path := out.SpillPath()
+	require.NotEmpty(t, path)
+	require.NoError(t, out.Close())
+
+	got, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, data.String(), string(got))
+}
+
+// TestBoundedOutputSpillReplaysOverlappingWindows covers a first overflow where
+// the head and tail byte windows overlap and both cut through a multi-byte rune.
+func TestBoundedOutputSpillReplaysOverlappingWindows(t *testing.T) {
+	out := newBoundedOutput(10, t.TempDir())
+	prior := strings.Repeat("€", 10) // 10 runes, 30 bytes
+
+	_, err := out.Write([]byte(prior))
+	require.NoError(t, err)
+	_, err = out.Write([]byte("€"))
+	require.NoError(t, err)
+
+	_, truncated := out.Render()
+	require.True(t, truncated)
+
+	path := out.SpillPath()
+	require.NotEmpty(t, path)
+	require.NoError(t, out.Close())
+
+	got, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, prior+"€", string(got))
+}
+
+// TestBoundedOutputSpillPreservesTrailingPartialRune overflows after a write
+// that ended mid-rune, so the spill replay must include the carried bytes.
+func TestBoundedOutputSpillPreservesTrailingPartialRune(t *testing.T) {
+	out := newBoundedOutput(1, t.TempDir())
+	emoji := []byte("😀")
+
+	_, err := out.Write(emoji)
+	require.NoError(t, err)
+	_, err = out.Write(emoji[:3])
+	require.NoError(t, err)
+	_, err = out.Write(emoji[3:])
+	require.NoError(t, err)
+
+	_, truncated := out.Render()
+	require.True(t, truncated)
+
+	path := out.SpillPath()
+	require.NotEmpty(t, path)
+	require.NoError(t, out.Close())
+
+	got, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, string(emoji)+string(emoji), string(got))
+}
+
 func TestBoundedOutputDoesNotSpillWithinLimit(t *testing.T) {
 	out := newBoundedOutput(100, t.TempDir())
 
@@ -46,13 +119,45 @@ func TestBoundedOutputDoesNotSpillWithinLimit(t *testing.T) {
 	require.NoError(t, out.Close())
 }
 
+// TestBoundedOutputCountsRunesNotBytes keeps the max_output_chars contract:
+// 1000 two-byte runes fit a 1500-character cap even though they are 2000 bytes.
+func TestBoundedOutputCountsRunesNotBytes(t *testing.T) {
+	out := newBoundedOutput(1500, t.TempDir())
+	data := strings.Repeat("è", 1000)
+
+	n, err := out.Write([]byte(data))
+	require.NoError(t, err)
+	require.Equal(t, len(data), n)
+
+	text, truncated := out.Render()
+	require.False(t, truncated)
+	require.Equal(t, data, text)
+	require.Empty(t, out.SpillPath())
+	require.NoError(t, out.Close())
+}
+
+// TestBoundedOutputKeepsFourByteRunesWithinCap covers the worst case for the
+// byte-window sizing: 100 four-byte runes exactly fit a 100-character cap.
+func TestBoundedOutputKeepsFourByteRunesWithinCap(t *testing.T) {
+	out := newBoundedOutput(100, t.TempDir())
+	data := strings.Repeat("😀", 100)
+
+	_, err := out.Write([]byte(data))
+	require.NoError(t, err)
+
+	text, truncated := out.Render()
+	require.False(t, truncated)
+	require.Equal(t, data, text)
+	require.NoError(t, out.Close())
+}
+
 // TestBoundedOutputTruncatesOnRuneBoundary writes one byte at a time so the
 // UTF-8 carry path is exercised across write boundaries.
 func TestBoundedOutputTruncatesOnRuneBoundary(t *testing.T) {
 	out := newBoundedOutput(10, t.TempDir())
 	data := strings.Repeat("è", 100)
 
-	for i := range data {
+	for i := 0; i < len(data); i++ {
 		_, err := out.Write([]byte{data[i]})
 		require.NoError(t, err)
 	}
@@ -60,6 +165,8 @@ func TestBoundedOutputTruncatesOnRuneBoundary(t *testing.T) {
 	text, truncated := out.Render()
 	require.True(t, truncated)
 	require.True(t, utf8.ValidString(text))
+	require.True(t, strings.HasPrefix(text, strings.Repeat("è", 4)))
+	require.True(t, strings.HasSuffix(text, strings.Repeat("è", 6)))
 	require.Contains(t, text, "chars omitted")
 	require.NoError(t, out.Close())
 }
