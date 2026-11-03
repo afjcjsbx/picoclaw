@@ -50,6 +50,38 @@ func TestBuiltinDefinitions_ReadOnlyClassification(t *testing.T) {
 	}
 }
 
+func TestBuiltinNewAlias_ClearsHistory(t *testing.T) {
+	cleared := false
+	rt := &Runtime{
+		ClearHistory: func() error {
+			cleared = true
+			return nil
+		},
+	}
+	ex := NewExecutor(NewRegistry(BuiltinDefinitions()), rt)
+
+	var reply string
+	res := ex.Execute(context.Background(), Request{
+		Text: "/new",
+		Reply: func(text string) error {
+			reply = text
+			return nil
+		},
+	})
+	if res.Outcome != OutcomeHandled {
+		t.Fatalf("/new: outcome=%v, want=%v", res.Outcome, OutcomeHandled)
+	}
+	if res.Command != "clear" {
+		t.Fatalf("/new: command=%q, want=%q", res.Command, "clear")
+	}
+	if !cleared {
+		t.Fatal("/new did not clear chat history")
+	}
+	if reply != "Chat history cleared!" {
+		t.Fatalf("/new reply=%q, want cleared message", reply)
+	}
+}
+
 func TestBuiltinHelpHandler_ReturnsFormattedMessage(t *testing.T) {
 	defs := BuiltinDefinitions()
 	helpDef := findDefinitionByName(t, defs, "help")
