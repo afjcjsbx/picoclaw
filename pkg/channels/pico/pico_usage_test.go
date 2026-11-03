@@ -58,7 +58,7 @@ func TestStreamerEmitsUsageOnFinalize(t *testing.T) {
 	// sendLocked with empty messageID takes the create branch, which attaches
 	// usage from the streamer's stored counts.
 	s.mu.Lock()
-	err := s.sendLocked(context.Background(), "answer", nil)
+	err := s.sendLocked(context.Background(), "answer", nil, false)
 	s.mu.Unlock()
 	if err != nil {
 		t.Fatalf("sendLocked: %v", err)

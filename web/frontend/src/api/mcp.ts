@@ -93,13 +93,11 @@ export async function getMCPDashboard(): Promise<MCPDashboardResponse> {
   return sanitizeResponse((await response.json()) as MCPDashboardResponse)
 }
 
-async function patchMCPServers(
-  servers: Record<string, Record<string, unknown> | null>,
-): Promise<void> {
+async function patchMCPConfig(patch: Record<string, unknown>): Promise<void> {
   const response = await launcherFetch("/api/config", {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ tools: { mcp: { servers } } }),
+    body: JSON.stringify({ tools: { mcp: patch } }),
   })
   if (response.ok) return
 
@@ -107,6 +105,32 @@ async function patchMCPServers(
   throw new Error(
     detail || `API error: ${response.status} ${response.statusText}`,
   )
+}
+
+async function patchMCPServers(
+  servers: Record<string, unknown>,
+): Promise<void> {
+  return patchMCPConfig({ servers })
+}
+
+export type MCPServerTransport = "stdio" | "http" | "sse"
+
+export interface MCPServerConfigInput {
+  enabled: boolean
+  deferred?: boolean
+  type: MCPServerTransport
+  command?: string
+  args?: string[]
+  env?: Record<string, string>
+  url?: string
+  headers?: Record<string, string>
+}
+
+export function installMCPServer(
+  name: string,
+  server: MCPServerConfigInput,
+): Promise<void> {
+  return patchMCPConfig({ enabled: true, servers: { [name]: server } })
 }
 
 export function updateMCPServerCommand(

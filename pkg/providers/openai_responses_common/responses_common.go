@@ -131,7 +131,7 @@ func appendReasoningItems(
 }
 
 // BuildMultipartContent constructs a ResponseInputMessageContentListParam from
-// text content and media URLs (data:image/... and data:audio/... URIs).
+// text content and inline image and audio data URLs.
 func BuildMultipartContent(text string, media []string) responses.ResponseInputMessageContentListParam {
 	parts := make(responses.ResponseInputMessageContentListParam, 0, 1+len(media))
 

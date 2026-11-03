@@ -8,6 +8,7 @@
     "hub": "Hub",
     "skills": "দক্ষতা",
     "tools": "সরঞ্জাম",
+    "mcp": "MCP",
     "services": "সার্ভিস",
     "channels_group": "চ্যানেল",
     "show_more_channels": "আরও",
@@ -65,13 +66,6 @@
     "toolCallExplanationLabel": "কল নোট",
     "toolCallFunctionLabel": "কল সারাংশ",
     "toolCallArgumentsLabel": "আর্গুমেন্ট",
-    "showAssistantDetails": "যুক্তি এবং টুল কল",
-    "assistantDetailVisibility": {
-      "none": "কোনোটিই দেখাবেন না",
-      "thought": "শুধু যুক্তি দেখান",
-      "toolCalls": "শুধু টুল কল দেখান",
-      "all": "উভয়ই দেখান"
-    },
     "toolLabel": "টুল",
     "codeLabel": "কোড",
     "copyMessage": "বার্তা কপি করুন",
@@ -103,12 +97,26 @@
     "contextDetail": "বিস্তারিত দেখুন",
     "contextCompressAt": "Compress at",
     "contextSummarizeAt": "Summarize at",
-    "attachImage": "ছবি যোগ করুন",
-    "removeImage": "ছবি সরান",
+    "attachFiles": "ফাইল যোগ করুন",
+    "recordVoiceMessage": "ভয়েস বার্তা রেকর্ড করুন",
+    "stopRecording": "রেকর্ডিং থামান",
+    "recording": "রেকর্ডিং হচ্ছে",
+    "cancelRecording": "রেকর্ডিং বাতিল করুন",
+    "uploadedAudio": "ভয়েস বার্তা",
+    "micPermissionDenied": "মাইক্রোফোনে প্রবেশাধিকার প্রত্যাখ্যাত হয়েছে।",
+    "microphoneUnavailable": "কোনো মাইক্রোফোন পাওয়া যায়নি।",
+    "recordingUnsupported": "এই ব্রাউজার অডিও রেকর্ডিং সমর্থন করে না।",
+    "recordingNeedsHttps": "ভয়েস রেকর্ডিংয়ের জন্য HTTPS বা localhost প্রয়োজন। মাইক্রোফোন সক্রিয় করতে ড্যাশবোর্ডটি HTTPS-এ (বা localhost-এ) খুলুন।",
+    "recordingFailed": "অডিও রেকর্ড করতে ব্যর্থ হয়েছে।",
+    "audioTooLarge": "রেকর্ডিং {{size}} সীমা অতিক্রম করেছে।",
+    "audioSendFailed": "ভয়েস বার্তা পাঠানো যায়নি। আবার চেষ্টা করার জন্য এটি কম্পোজারে সংযুক্ত করা হয়েছে।",
+    "dropFilesActive": "ফাইল যোগ করতে ছেড়ে দিন",
+    "removeAttachment": "সংযুক্তি সরান",
     "uploadedImage": "আপলোড করা ছবি",
-    "invalidImage": "\"{{name}}\" একটি সমর্থিত ছবি ফাইল নয়।",
-    "imageTooLarge": "\"{{name}}\" {{size}} সীমা অতিক্রম করেছে।",
-    "imageReadFailed": "\"{{name}}\" পড়তে ব্যর্থ হয়েছে।",
+    "uploadedFile": "সংযুক্ত ফাইল",
+    "invalidFile": "\"{{name}}\" সমর্থিত ফাইলের ধরন নয়।",
+    "fileTooLarge": "\"{{name}}\" {{size}} সীমা অতিক্রম করেছে।",
+    "fileReadFailed": "\"{{name}}\" পড়তে ব্যর্থ হয়েছে।",
     "empty": {
       "noConfiguredModel": "কোনো মডেল কনফিগার করা নেই",
       "noConfiguredModelDescription": "চ্যাট শুরু করার আগে আপনাকে কমপক্ষে একটি AI মডেল API কী দিয়ে কনফিগার করতে হবে।",
@@ -763,7 +771,9 @@
           "skills": "দক্ষতা",
           "agents": "এজেন্ট",
           "hardware": "হার্ডওয়্যার",
-          "discovery": "আবিষ্কার"
+          "discovery": "আবিষ্কার",
+          "media": "মিডিয়া",
+          "memory": "মেমরি"
         },
         "reasons": {
           "requires_linux": "এই টুল শুধুমাত্র Linux হোস্টে কাজ করে যেখানে প্রয়োজনীয় ডিভাইস ফাইল উন্মুক্ত আছে।",
@@ -771,8 +781,10 @@
           "requires_skills": "এই দক্ষতা-রেজিস্ট্রি টুল ব্যবহার করার আগে `tools.skills` সক্ষম করুন।",
           "requires_subagent": "স্প্যান টুল কাজ অর্পণ করার আগে `tools.subagent` সক্ষম করুন।",
           "requires_mcp_discovery": "MCP আবিষ্কার টুল উপলব্ধ হওয়ার আগে `tools.mcp.discovery` সক্ষম করুন।",
-          "requires_web_search_provider": "কমপক্ষে একটি প্রস্তুত বাহ্যিক ওয়েব-অনুসন্ধান প্রোভাইডার কনফিগার করুন।"
-        }
+          "requires_web_search_provider": "কমপক্ষে একটি প্রস্তুত বাহ্যিক ওয়েব-অনুসন্ধান প্রোভাইডার কনফিগার করুন।",
+          "requires_spawn": "`subagent` টুল চালানোর আগে `tools.spawn` বা `tools.spawn_status` সক্ষম করুন।"
+        },
+        "automatic": "স্বয়ংক্রিয়"
       },
       "subagents": {
         "title": "সাবএজেন্ট",

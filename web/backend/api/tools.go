@@ -16,6 +16,9 @@ type toolCatalogEntry struct {
 	Description string
 	Category    string
 	ConfigKey   string
+	// ReadOnly marks tools that follow runtime state instead of a config
+	// switch, so the UI must not offer a toggle for them.
+	ReadOnly bool
 }
 
 type toolSupportItem struct {
@@ -25,6 +28,7 @@ type toolSupportItem struct {
 	ConfigKey   string `json:"config_key"`
 	Status      string `json:"status"`
 	ReasonCode  string `json:"reason_code,omitempty"`
+	ReadOnly    bool   `json:"read_only,omitempty"`
 }
 
 type toolSupportResponse struct {
@@ -69,6 +73,10 @@ type webSearchConfigRequest struct {
 	Settings     map[string]webSearchProviderConfig `json:"settings"`
 }
 
+// toolCatalog mirrors the built-in tool families documented in
+// docs/tools/README.md. Keep it in sync when tools are added or removed.
+// Runtime-only tools (mcp_*, plugin_*) are discovered dynamically and are not
+// part of this static catalog.
 var toolCatalog = []toolCatalogEntry{
 	{
 		Name:        "read_file",
@@ -87,6 +95,12 @@ var toolCatalog = []toolCatalogEntry{
 		Description: "Inspect directories and enumerate files available to the agent.",
 		Category:    "filesystem",
 		ConfigKey:   "list_dir",
+	},
+	{
+		Name:        "search_files",
+		Description: "Find files and content matches inside the workspace.",
+		Category:    "filesystem",
+		ConfigKey:   "search_files",
 	},
 	{
 		Name:        "edit_file",
@@ -131,10 +145,35 @@ var toolCatalog = []toolCatalogEntry{
 		ConfigKey:   "message",
 	},
 	{
+		Name:        "reaction",
+		Description: "React to a message on channels that support reactions.",
+		Category:    "communication",
+		ConfigKey:   "reaction",
+		ReadOnly:    true,
+	},
+	{
 		Name:        "send_file",
 		Description: "Send an outbound file or media attachment to the active chat.",
 		Category:    "communication",
 		ConfigKey:   "send_file",
+	},
+	{
+		Name:        "load_image",
+		Description: "Load a local image so the model can inspect its contents.",
+		Category:    "media",
+		ConfigKey:   "load_image",
+	},
+	{
+		Name:        "send_tts",
+		Description: "Synthesize a spoken audio reply and send it to the active chat.",
+		Category:    "media",
+		ConfigKey:   "send_tts",
+	},
+	{
+		Name:        "image_generate",
+		Description: "Generate an image from a text prompt and send it to the chat.",
+		Category:    "media",
+		ConfigKey:   "image_generate",
 	},
 	{
 		Name:        "find_skills",
@@ -155,6 +194,12 @@ var toolCatalog = []toolCatalogEntry{
 		ConfigKey:   "spawn",
 	},
 	{
+		Name:        "subagent",
+		Description: "Run a subagent task synchronously and return its result.",
+		Category:    "agents",
+		ConfigKey:   "subagent",
+	},
+	{
 		Name:        "todo",
 		Description: "Track a session-local plan for multi-step work.",
 		Category:    "agents",
@@ -165,6 +210,33 @@ var toolCatalog = []toolCatalogEntry{
 		Description: "Query the status of spawned subagents.",
 		Category:    "agents",
 		ConfigKey:   "spawn_status",
+	},
+	{
+		Name:        "delegate",
+		Description: "Hand a task to another configured agent and wait for its result. Registered automatically when more than one agent exists.",
+		Category:    "agents",
+		ConfigKey:   "delegate",
+		ReadOnly:    true,
+	},
+	{
+		Name:        "memory",
+		Description: "Read and update long-term memory and user profile files.",
+		Category:    "memory",
+		ConfigKey:   "memory",
+	},
+	{
+		Name:        "short_grep",
+		Description: "Search compressed session history when the seahorse context manager is active.",
+		Category:    "memory",
+		ConfigKey:   "context_manager",
+		ReadOnly:    true,
+	},
+	{
+		Name:        "short_expand",
+		Description: "Expand matches from compressed session history when the seahorse context manager is active.",
+		Category:    "memory",
+		ConfigKey:   "context_manager",
+		ReadOnly:    true,
 	},
 	{
 		Name:        "i2c",
@@ -270,6 +342,22 @@ func buildToolSupport(cfg *config.Config) []toolSupportItem {
 					reasonCode = "requires_subagent"
 				}
 			}
+		case "subagent":
+			status, reasonCode = resolveSubagentToolSupport(cfg)
+		case "memory":
+			if cfg.Agents.Defaults.Memory.Enabled {
+				status = "enabled"
+			}
+		case "delegate":
+			if len(cfg.Agents.List) > 1 {
+				status = "enabled"
+			}
+		case "reaction":
+			status = "enabled"
+		case "short_grep", "short_expand":
+			if isSeahorseContextManager(cfg) {
+				status = "enabled"
+			}
 		case "tool_search_tool_regex":
 			status, reasonCode = resolveDiscoveryToolSupport(cfg, cfg.Tools.MCP.Discovery.UseRegex)
 		case "tool_search_tool_bm25":
@@ -293,9 +381,24 @@ func buildToolSupport(cfg *config.Config) []toolSupportItem {
 			ConfigKey:   entry.ConfigKey,
 			Status:      status,
 			ReasonCode:  reasonCode,
+			ReadOnly:    entry.ReadOnly,
 		})
 	}
 	return items
+}
+
+func resolveSubagentToolSupport(cfg *config.Config) (string, string) {
+	if !cfg.Tools.IsToolEnabled("subagent") {
+		return "disabled", ""
+	}
+	if !cfg.Tools.IsToolEnabled("spawn") && !cfg.Tools.IsToolEnabled("spawn_status") {
+		return "blocked", "requires_spawn"
+	}
+	return "enabled", ""
+}
+
+func isSeahorseContextManager(cfg *config.Config) bool {
+	return strings.EqualFold(strings.TrimSpace(cfg.Agents.Defaults.ContextManager), "seahorse")
 }
 
 func resolveHardwareToolSupport(enabled bool) (string, string) {
@@ -348,6 +451,8 @@ func applyToolState(cfg *config.Config, toolName string, enabled bool) error {
 		cfg.Tools.WriteFile.Enabled = enabled
 	case "list_dir":
 		cfg.Tools.ListDir.Enabled = enabled
+	case "search_files":
+		cfg.Tools.SearchFiles.Enabled = enabled
 	case "edit_file":
 		cfg.Tools.EditFile.Enabled = enabled
 	case "append_file":
@@ -364,6 +469,12 @@ func applyToolState(cfg *config.Config, toolName string, enabled bool) error {
 		cfg.Tools.Message.Enabled = enabled
 	case "send_file":
 		cfg.Tools.SendFile.Enabled = enabled
+	case "load_image":
+		cfg.Tools.LoadImage.Enabled = enabled
+	case "send_tts":
+		cfg.Tools.SendTTS.Enabled = enabled
+	case "image_generate":
+		cfg.Tools.ImageGenerate.Enabled = enabled
 	case "find_skills":
 		cfg.Tools.FindSkills.Enabled = enabled
 		if enabled {
@@ -379,8 +490,15 @@ func applyToolState(cfg *config.Config, toolName string, enabled bool) error {
 		if enabled {
 			cfg.Tools.Subagent.Enabled = true
 		}
+	case "subagent":
+		cfg.Tools.Subagent.Enabled = enabled
+		if enabled && !cfg.Tools.Spawn.Enabled && !cfg.Tools.SpawnStatus.Enabled {
+			cfg.Tools.Spawn.Enabled = true
+		}
 	case "todo":
 		cfg.Tools.Todo.Enabled = enabled
+	case "memory":
+		cfg.Agents.Defaults.Memory.Enabled = enabled
 	case "spawn_status":
 		cfg.Tools.SpawnStatus.Enabled = enabled
 		if enabled {
