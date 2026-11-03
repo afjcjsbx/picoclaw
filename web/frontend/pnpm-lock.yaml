@@ -13,6 +13,11 @@ overrides:
   postcss-selector-parser: '>=7.1.6'
   undici: 7.30.1
 
+patchedDependencies:
+  deepmerge@4.3.1:
+    hash: 1af2c6da425945ded22d8b5eddbfc6e8e6bed69203f737d8b5b4a30e9d78e777
+    path: patches/deepmerge@4.3.1.patch
+
 importers:
 
   .:
@@ -5193,7 +5198,7 @@ snapshots:
       '@dotenvx/dotenvx': 1.75.1
       cn: 0.2.6
       code-block-writer: 13.0.3
-      deepmerge: 4.3.1
+      deepmerge: 4.3.1(patch_hash=1af2c6da425945ded22d8b5eddbfc6e8e6bed69203f737d8b5b4a30e9d78e777)
       execa: 9.6.1
       fast-glob: 3.3.3
       fs-extra: 11.4.1
@@ -5802,7 +5807,7 @@ snapshots:
 
   deep-is@0.1.4: {}
 
-  deepmerge@4.3.1: {}
+  deepmerge@4.3.1(patch_hash=1af2c6da425945ded22d8b5eddbfc6e8e6bed69203f737d8b5b4a30e9d78e777): {}
 
   default-browser-id@5.0.1: {}
 
@@ -7518,7 +7523,7 @@ snapshots:
       cn: 0.2.6
       commander: 14.0.3
       dedent: 1.7.2
-      deepmerge: 4.3.1
+      deepmerge: 4.3.1(patch_hash=1af2c6da425945ded22d8b5eddbfc6e8e6bed69203f737d8b5b4a30e9d78e777)
       diff: 8.0.4
       execa: 9.6.1
       fast-glob: 3.3.3
