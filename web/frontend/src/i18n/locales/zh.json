@@ -839,7 +839,9 @@
           "skills": "技能",
           "agents": "Agent",
           "hardware": "硬件",
-          "discovery": "发现"
+          "discovery": "发现",
+          "media": "媒体",
+          "memory": "记忆"
         },
         "reasons": {
           "requires_linux": "该工具仅在 Linux 主机上可用，并且需要暴露对应的设备文件。",
@@ -847,8 +849,10 @@
           "requires_skills": "需要先启用 `tools.skills`，该技能注册表工具才能使用。",
           "requires_subagent": "需要先启用 `tools.subagent`，`spawn` 才能委派任务。",
           "requires_mcp_discovery": "需要先启用 `tools.mcp.discovery`，MCP 发现工具才会可用。",
-          "requires_web_search_provider": "请至少配置一个可用的外部网络搜索 provider。"
-        }
+          "requires_web_search_provider": "请至少配置一个可用的外部网络搜索 provider。",
+          "requires_spawn": "需要先启用 `tools.spawn` 或 `tools.spawn_status`，`subagent` 工具才能运行。"
+        },
+        "automatic": "自动"
       },
       "mcp": {
         "title": "MCP 服务器",

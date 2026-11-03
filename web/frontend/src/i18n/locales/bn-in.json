@@ -770,7 +770,9 @@
           "skills": "দক্ষতা",
           "agents": "এজেন্ট",
           "hardware": "হার্ডওয়্যার",
-          "discovery": "আবিষ্কার"
+          "discovery": "আবিষ্কার",
+          "media": "মিডিয়া",
+          "memory": "মেমরি"
         },
         "reasons": {
           "requires_linux": "এই টুল শুধুমাত্র Linux হোস্টে কাজ করে যেখানে প্রয়োজনীয় ডিভাইস ফাইল উন্মুক্ত আছে।",
@@ -778,8 +780,10 @@
           "requires_skills": "এই দক্ষতা-রেজিস্ট্রি টুল ব্যবহার করার আগে `tools.skills` সক্ষম করুন।",
           "requires_subagent": "স্প্যান টুল কাজ অর্পণ করার আগে `tools.subagent` সক্ষম করুন।",
           "requires_mcp_discovery": "MCP আবিষ্কার টুল উপলব্ধ হওয়ার আগে `tools.mcp.discovery` সক্ষম করুন।",
-          "requires_web_search_provider": "কমপক্ষে একটি প্রস্তুত বাহ্যিক ওয়েব-অনুসন্ধান প্রোভাইডার কনফিগার করুন।"
-        }
+          "requires_web_search_provider": "কমপক্ষে একটি প্রস্তুত বাহ্যিক ওয়েব-অনুসন্ধান প্রোভাইডার কনফিগার করুন।",
+          "requires_spawn": "`subagent` টুল চালানোর আগে `tools.spawn` বা `tools.spawn_status` সক্ষম করুন।"
+        },
+        "automatic": "স্বয়ংক্রিয়"
       }
     },
     "config": {

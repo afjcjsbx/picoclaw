@@ -631,3 +631,120 @@ func TestTodoToolSupportAndToggle(t *testing.T) {
 		}
 	}
 }
+
+func TestToolCatalogIncludesRuntimeTools(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agents.List = []config.AgentConfig{{ID: "main"}, {ID: "helper"}}
+	cfg.Agents.Defaults.ContextManager = "seahorse"
+
+	items := make(map[string]toolSupportItem, len(toolCatalog))
+	for _, item := range buildToolSupport(cfg) {
+		items[item.Name] = item
+	}
+
+	for _, name := range []string{
+		"read_file", "write_file", "edit_file", "append_file", "list_dir", "search_files", "exec",
+		"cron", "web_search", "web_fetch", "message", "reaction", "send_file", "load_image",
+		"send_tts", "image_generate", "find_skills", "install_skill", "spawn", "subagent",
+		"spawn_status", "delegate", "todo", "memory", "short_grep", "short_expand",
+		"i2c", "spi", "serial", "tool_search_tool_regex", "tool_search_tool_bm25",
+	} {
+		if _, ok := items[name]; !ok {
+			t.Errorf("tool %q missing from catalog", name)
+		}
+	}
+
+	for _, name := range []string{"reaction", "delegate", "short_grep", "short_expand"} {
+		item, ok := items[name]
+		if !ok {
+			continue
+		}
+		if !item.ReadOnly {
+			t.Errorf("%s should be read-only", name)
+		}
+	}
+
+	if items["reaction"].Status != "enabled" {
+		t.Errorf("reaction status = %q, want enabled", items["reaction"].Status)
+	}
+	if items["delegate"].Status != "enabled" {
+		t.Errorf("delegate status = %q, want enabled with multiple agents", items["delegate"].Status)
+	}
+	if items["short_grep"].Status != "enabled" || items["short_expand"].Status != "enabled" {
+		t.Errorf("seahorse tools should be enabled: grep=%q expand=%q",
+			items["short_grep"].Status, items["short_expand"].Status)
+	}
+	if items["subagent"].Status != "enabled" {
+		t.Errorf("subagent status = %q, want enabled", items["subagent"].Status)
+	}
+}
+
+func TestToolCatalogDerivedStates(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Tools.Spawn.Enabled = false
+	cfg.Tools.SpawnStatus.Enabled = false
+	cfg.Tools.Subagent.Enabled = true
+
+	items := make(map[string]toolSupportItem, len(toolCatalog))
+	for _, item := range buildToolSupport(cfg) {
+		items[item.Name] = item
+	}
+	if items["subagent"].Status != "blocked" || items["subagent"].ReasonCode != "requires_spawn" {
+		t.Fatalf("subagent = %#v, want blocked/requires_spawn", items["subagent"])
+	}
+	if items["delegate"].Status != "disabled" {
+		t.Fatalf("delegate status = %q, want disabled with a single agent", items["delegate"].Status)
+	}
+	if items["short_grep"].Status != "disabled" {
+		t.Fatalf("short_grep status = %q, want disabled without seahorse", items["short_grep"].Status)
+	}
+
+	if err := applyToolState(cfg, "subagent", true); err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Tools.Spawn.Enabled {
+		t.Fatal("enabling subagent should re-enable spawn when no other subagent tool is active")
+	}
+}
+
+func TestToolCatalogNewToggles(t *testing.T) {
+	tests := []struct {
+		name    string
+		enabled func(*config.Config) bool
+	}{
+		{name: "search_files", enabled: func(c *config.Config) bool { return c.Tools.SearchFiles.Enabled }},
+		{name: "load_image", enabled: func(c *config.Config) bool { return c.Tools.LoadImage.Enabled }},
+		{name: "send_tts", enabled: func(c *config.Config) bool { return c.Tools.SendTTS.Enabled }},
+		{name: "image_generate", enabled: func(c *config.Config) bool { return c.Tools.ImageGenerate.Enabled }},
+		{name: "memory", enabled: func(c *config.Config) bool { return c.Agents.Defaults.Memory.Enabled }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := config.DefaultConfig()
+			for _, enabled := range []bool{false, true} {
+				if err := applyToolState(cfg, tt.name, enabled); err != nil {
+					t.Fatalf("applyToolState(%q, %v): %v", tt.name, enabled, err)
+				}
+				if got := tt.enabled(cfg); got != enabled {
+					t.Fatalf("enabled(%q) = %v, want %v", tt.name, got, enabled)
+				}
+
+				var status string
+				for _, item := range buildToolSupport(cfg) {
+					if item.Name == tt.name {
+						status = item.Status
+						break
+					}
+				}
+				want := "enabled"
+				if !enabled {
+					want = "disabled"
+				}
+				if status != want {
+					t.Fatalf("status = %q, want %q", status, want)
+				}
+			}
+		})
+	}
+}

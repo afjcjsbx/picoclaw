@@ -202,15 +202,21 @@ function ToolCard({
                 <IconSettings className="size-4" />
               </Button>
             )}
-            <Switch
-              checked={isToggledOn}
-              disabled={isPending}
-              onCheckedChange={(checked) => onToggleTool(tool.name, checked)}
-              className={cn(
-                "shrink-0",
-                isEnabled && "shadow-xs ring-1 ring-emerald-500/20",
-              )}
-            />
+            {tool.read_only ? (
+              <span className="text-muted-foreground/70 bg-muted/50 rounded-full px-2.5 py-1 text-[11px] font-medium">
+                {t("pages.agent.tools.automatic", "Automatic")}
+              </span>
+            ) : (
+              <Switch
+                checked={isToggledOn}
+                disabled={isPending}
+                onCheckedChange={(checked) => onToggleTool(tool.name, checked)}
+                className={cn(
+                  "shrink-0",
+                  isEnabled && "shadow-xs ring-1 ring-emerald-500/20",
+                )}
+              />
+            )}
           </div>
         </div>
 

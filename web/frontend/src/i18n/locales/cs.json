@@ -768,7 +768,9 @@
           "skills": "Dovednosti",
           "agents": "Agenti",
           "hardware": "Hardware",
-          "discovery": "Discovery"
+          "discovery": "Discovery",
+          "media": "Média",
+          "memory": "Paměť"
         },
         "reasons": {
           "requires_linux": "Tento nástroj funguje pouze na Linux hostech s potřebnými soubory zařízení.",
@@ -776,8 +778,10 @@
           "requires_skills": "Nejprve aktivujte `tools.skills`, aby byl tento nástroj registru dovedností dostupný.",
           "requires_subagent": "Nejprve aktivujte `tools.subagent`, aby nástroj spawn mohl delegovat práci.",
           "requires_mcp_discovery": "Nejprve aktivujte `tools.mcp.discovery`, aby byly nástroje MCP discovery dostupné.",
-          "requires_web_search_provider": "Nakonfigurujte alespoň jednoho připraveného externího providera webového vyhledávání."
-        }
+          "requires_web_search_provider": "Nakonfigurujte alespoň jednoho připraveného externího providera webového vyhledávání.",
+          "requires_spawn": "Před spuštěním nástroje subagent povolte `tools.spawn` nebo `tools.spawn_status`."
+        },
+        "automatic": "Automatické"
       }
     },
     "config": {
