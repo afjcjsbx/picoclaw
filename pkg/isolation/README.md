@@ -90,6 +90,8 @@ Platform note:
 - Linux uses a real `source -> target` mount view.
 - Linux probes optional bubblewrap namespace flags once. If the kernel rejects one with `Creating new namespace failed` (EINVAL), that namespace isolation is dropped with a warning while the mount namespace, filesystem view, and user environment remain active. This weakens isolation for that namespace; other probe failures stop startup.
 - macOS requires `target` to match `source`; Seatbelt does not remap paths.
+  Read-only rules under the instance root are rejected because Seatbelt cannot
+  revoke the root's write access.
 - Windows does not currently support `expose_paths`.
 
 ## Instance Root And Directories
@@ -201,8 +203,10 @@ It does not currently implement true `source -> target` filesystem remapping.
 The macOS backend uses `/usr/bin/sandbox-exec` with a Seatbelt default-deny profile.
 It allows writes under the PicoClaw instance root and explicit `rw` paths, while
 exposing system files, the command, its configured working directory, and
-absolute path arguments as needed. Network access remains available, matching
-Linux behavior.
+absolute path arguments as needed. A read-only `expose_paths` rule under the
+instance root is rejected: Seatbelt rules are additive, so a later read-only
+allow cannot revoke the root's write access. Network access remains available,
+matching Linux behavior.
 Because Apple deprecated `sandbox-exec`, macOS may remove it in a future release;
 when it is missing, isolation fails closed.
 

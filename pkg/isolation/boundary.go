@@ -50,7 +50,7 @@ func DescribeBoundary(workspace string, cfg config.IsolationConfig) (Boundary, b
 	}
 
 	switch runtime.GOOS {
-	case "linux", "darwin":
+	case "linux":
 		boundary.PathBoundary = true
 		boundary.Scratch = filepath.Join(boundary.Root, "runtime-user-env", "tmp")
 
@@ -79,6 +79,35 @@ func DescribeBoundary(workspace string, cfg config.IsolationConfig) (Boundary, b
 
 		boundary.RootWritable = effectiveBoundaryMode(merged, boundary.Root) == "rw"
 		boundary.ScratchWritable = effectiveBoundaryMode(merged, boundary.Scratch) == "rw"
+	case "darwin":
+		boundary.PathBoundary = true
+		boundary.Scratch = filepath.Join(boundary.Root, "runtime-user-env", "tmp")
+		// The Seatbelt profile always allows writes under the instance root.
+		// Seatbelt rules are additive, so a later read-only allow cannot revoke
+		// that write access; report the enforced mode, not the requested one.
+		boundary.RootWritable = true
+		boundary.ScratchWritable = true
+
+		customTargets := customExposeTargets(cfg.ExposePaths)
+		for _, rule := range MergeExposePaths(DefaultExposePaths(boundary.Root), cfg.ExposePaths) {
+			target := filepath.Clean(rule.Target)
+			if target == boundary.Root || target == boundary.Scratch {
+				continue
+			}
+			if _, custom := customTargets[target]; !custom {
+				continue
+			}
+			switch rule.Mode {
+			case "rw":
+				boundary.Writable = append(boundary.Writable, target)
+			case "ro":
+				if boundaryPathWithin(boundary.Root, target) {
+					boundary.Writable = append(boundary.Writable, target)
+					continue
+				}
+				boundary.ReadOnly = append(boundary.ReadOnly, target)
+			}
+		}
 	case "windows":
 		// The Windows backend applies restricted tokens, low integrity, and a
 		// job object, but does not implement path-level filesystem remapping.
@@ -135,7 +164,7 @@ func effectiveBoundaryMode(rules []config.ExposePath, path string) string {
 	return mode
 }
 
-// boundaryPathWithin reports whether child is parent or below it.
+// boundaryPathWithin reports whether child is parent or below parent.
 func boundaryPathWithin(parent, child string) bool {
 	parent = filepath.Clean(parent)
 	child = filepath.Clean(child)
