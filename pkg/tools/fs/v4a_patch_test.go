@@ -179,6 +179,54 @@ func TestEditFileTool_V4APatch_AppendWithContext(t *testing.T) {
 	assert.Equal(t, "a\nb\nc\n", got)
 }
 
+func TestEditFileTool_V4APatch_IgnoresBlankLineBeforeClosingDirective(t *testing.T) {
+	tests := map[string]struct {
+		content string
+		patch   string
+		want    string
+	}{
+		"before end patch": {
+			content: "old",
+			patch:   "*** Begin Patch\n*** Update File: target.txt\n-old\n+new\n\n*** End Patch",
+			want:    "new",
+		},
+		"before end of file": {
+			content: "a\nb",
+			patch:   "*** Begin Patch\n@@\n b\n+c\n\n*** End of File\n*** End Patch",
+			want:    "a\nb\nc",
+		},
+		"unwrapped patch": {
+			content: "old\n",
+			patch:   "-old\n+new\n\n",
+			want:    "new\n",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			result, got := applyPatchToTempFile(t, tc.content, tc.patch)
+
+			assert.False(t, result.IsError, result.ForLLM)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestEditFileTool_V4APatch_KeepsEmptyContextLines(t *testing.T) {
+	// A single space is the explicit empty context line, unlike a raw blank
+	// formatting line. It must still match and stay in the output.
+	explicit := "*** Begin Patch\n@@\n a\n \n-b\n+B\n*** End Patch"
+	result, got := applyPatchToTempFile(t, "a\n\nb\n", explicit)
+	assert.False(t, result.IsError, result.ForLLM)
+	assert.Equal(t, "a\n\nB\n", got)
+
+	// A raw blank line in the middle is not trailing, so it remains context.
+	implicit := "*** Begin Patch\n@@\n a\n\n-b\n+B\n*** End Patch"
+	result, got = applyPatchToTempFile(t, "a\n\nb\n", implicit)
+	assert.False(t, result.IsError, result.ForLLM)
+	assert.Equal(t, "a\n\nB\n", got)
+}
+
 func TestEditFileTool_V4APatch_EndOfFile(t *testing.T) {
 	patch := `@@
  b

@@ -37,8 +37,9 @@ const (
 // lets the applier reuse the real file line for context entries, including its
 // trailing whitespace, instead of substituting the patch text.
 type v4aOp struct {
-	kind v4aOpKind
-	text string
+	kind          v4aOpKind
+	text          string
+	implicitBlank bool // raw blank patch line, kept only when it is real context
 }
 
 // v4aHunk is one update hunk in patch order.
@@ -169,9 +170,11 @@ func parseV4APatch(patch string) (v4aPatch, error) {
 			}
 			current.ops = append(current.ops, v4aOp{kind: v4aContextOp, text: line[1:]})
 		case line == "":
-			// Inside a hunk a blank line is an empty context line.
+			// A raw blank line is an empty context line when it sits inside a
+			// hunk, but models also use it as formatting before a closing
+			// directive. Mark it so finishHunk can drop trailing formatting.
 			if current != nil {
-				current.ops = append(current.ops, v4aOp{kind: v4aContextOp})
+				current.ops = append(current.ops, v4aOp{kind: v4aContextOp, implicitBlank: true})
 			}
 		case strings.HasPrefix(line, "*** "):
 			return v4aPatch{}, fmt.Errorf("line %d: unsupported patch directive %q", lineNumber, line)
@@ -201,6 +204,16 @@ func finishHunk(parsed *v4aPatch, current **v4aHunk) {
 	*current = nil
 	if hunk == nil {
 		return
+	}
+	// Blank lines immediately before "*** End Patch", "*** End of File", or
+	// the end of an unwrapped patch are formatting, not empty context. An
+	// explicit empty context line is written as a single space.
+	for len(hunk.ops) > 0 {
+		last := hunk.ops[len(hunk.ops)-1]
+		if last.kind != v4aContextOp || !last.implicitBlank {
+			break
+		}
+		hunk.ops = hunk.ops[:len(hunk.ops)-1]
 	}
 	before := hunk.beforeLines()
 	after := hunk.afterLines()

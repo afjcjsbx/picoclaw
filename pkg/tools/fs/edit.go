@@ -60,7 +60,7 @@ func (t *EditFileTool) Parameters() map[string]any {
 					"an optional \"*** Update File: <path>\" header, then hunks whose lines start with ' ' (context), " +
 					"'-' (remove), or '+' (add). '@@' starts a hunk and \"*** End of File\" anchors the last hunk to EOF, " +
 					"or appends a hunk without context at EOF. Each hunk needs a context or removed line, unless it ends with \"*** End of File\" to append; " +
-					"the context must match exactly once, and hunks may be given in any order. " +
+					"the context must match exactly once, and hunks may be given in any order. A line containing a single space is an empty context line; blank lines before a closing directive are ignored. " +
 					"Use instead of old_text/new_text.",
 			},
 		},
