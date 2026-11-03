@@ -852,7 +852,9 @@
           "skills": "Skills",
           "agents": "Agents",
           "hardware": "Hardware",
-          "discovery": "Discovery"
+          "discovery": "Discovery",
+          "media": "Media",
+          "memory": "Memory"
         },
         "reasons": {
           "requires_linux": "This tool only works on Linux hosts with the required device files exposed.",
@@ -860,8 +862,10 @@
           "requires_skills": "Enable `tools.skills` before this skill-registry tool can be used.",
           "requires_subagent": "Enable `tools.subagent` before the spawn tool can delegate work.",
           "requires_mcp_discovery": "Enable `tools.mcp.discovery` before MCP discovery tools become available.",
-          "requires_web_search_provider": "Configure at least one ready external web-search provider."
-        }
+          "requires_web_search_provider": "Configure at least one ready external web-search provider.",
+          "requires_spawn": "Enable `tools.spawn` or `tools.spawn_status` before the subagent tool can run."
+        },
+        "automatic": "Automatic"
       },
       "mcp": {
         "title": "MCP Servers",

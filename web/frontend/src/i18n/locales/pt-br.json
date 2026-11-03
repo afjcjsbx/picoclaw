@@ -770,7 +770,9 @@
           "skills": "Skills",
           "agents": "Agentes",
           "hardware": "Hardware",
-          "discovery": "Descoberta"
+          "discovery": "Descoberta",
+          "media": "Mídia",
+          "memory": "Memória"
         },
         "reasons": {
           "requires_linux": "Esta ferramenta só funciona em hosts Linux com os arquivos de dispositivo necessários expostos.",
@@ -778,8 +780,10 @@
           "requires_skills": "Habilite `tools.skills` antes que esta ferramenta de skill-registry possa ser usada.",
           "requires_subagent": "Habilite `tools.subagent` antes que a ferramenta de spawn possa delegar trabalho.",
           "requires_mcp_discovery": "Habilite `tools.mcp.discovery` antes que as ferramentas de descoberta MCP fiquem disponíveis.",
-          "requires_web_search_provider": "Configure ao menos um provedor externo de pesquisa web pronto para uso."
-        }
+          "requires_web_search_provider": "Configure ao menos um provedor externo de pesquisa web pronto para uso.",
+          "requires_spawn": "Habilite `tools.spawn` ou `tools.spawn_status` antes que a ferramenta subagent possa ser executada."
+        },
+        "automatic": "Automático"
       }
     },
     "config": {
