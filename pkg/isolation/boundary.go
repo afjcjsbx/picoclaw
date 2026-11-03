@@ -55,12 +55,13 @@ func DescribeBoundary(workspace string, cfg config.IsolationConfig) (Boundary, b
 		boundary.Scratch = filepath.Join(boundary.Root, "runtime-user-env", "tmp")
 
 		customTargets := customExposeTargets(cfg.ExposePaths)
-		rootMode := "rw"
+		merged := MergeExposePaths(DefaultExposePaths(boundary.Root), cfg.ExposePaths)
 
-		for _, rule := range MergeExposePaths(DefaultExposePaths(boundary.Root), cfg.ExposePaths) {
+		for _, rule := range merged {
 			target := filepath.Clean(rule.Target)
-			if target == boundary.Root {
-				rootMode = rule.Mode
+			if target == boundary.Root || target == boundary.Scratch {
+				// Root and scratch have dedicated prompt lines; their
+				// effective mode is derived from the merged mount order below.
 				continue
 			}
 			if _, custom := customTargets[target]; !custom {
@@ -76,8 +77,8 @@ func DescribeBoundary(workspace string, cfg config.IsolationConfig) (Boundary, b
 			}
 		}
 
-		boundary.RootWritable = rootMode == "rw"
-		boundary.ScratchWritable = boundary.RootWritable
+		boundary.RootWritable = effectiveBoundaryMode(merged, boundary.Root) == "rw"
+		boundary.ScratchWritable = effectiveBoundaryMode(merged, boundary.Scratch) == "rw"
 	case "windows":
 		// The Windows backend applies restricted tokens, low integrity, and a
 		// job object, but does not implement path-level filesystem remapping.
@@ -119,4 +120,31 @@ func customExposeTargets(items []config.ExposePath) map[string]struct{} {
 		targets[NormalizeExposePath(item).Target] = struct{}{}
 	}
 	return targets
+}
+
+// effectiveBoundaryMode returns the mode of the last merged rule whose target
+// is path or one of its ancestors. Mount rules are applied in merge order, so a
+// later parent mount overrides an earlier child mount and vice versa.
+func effectiveBoundaryMode(rules []config.ExposePath, path string) string {
+	mode := ""
+	for _, rule := range rules {
+		if boundaryPathWithin(rule.Target, path) {
+			mode = rule.Mode
+		}
+	}
+	return mode
+}
+
+// boundaryPathWithin reports whether child is parent or below it.
+func boundaryPathWithin(parent, child string) bool {
+	parent = filepath.Clean(parent)
+	child = filepath.Clean(child)
+	if parent == child {
+		return true
+	}
+	rel, err := filepath.Rel(parent, child)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }

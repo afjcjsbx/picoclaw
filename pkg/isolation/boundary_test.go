@@ -125,6 +125,75 @@ func TestDescribeBoundaryRootOverrideReadOnly(t *testing.T) {
 	}
 }
 
+func TestDescribeBoundaryScratchOverride(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("scratch mount overrides are Linux-specific; macOS keeps the instance root writable")
+	}
+
+	home := t.TempDir()
+	t.Setenv(config.EnvHome, home)
+	scratch := filepath.Join(home, "runtime-user-env", "tmp")
+	workspace := filepath.Join(home, "workspace")
+
+	boundary, ok := DescribeBoundary(workspace, config.IsolationConfig{
+		Enabled: true,
+		ExposePaths: []config.ExposePath{
+			{Source: home, Target: home, Mode: "ro"},
+			{Source: scratch, Target: scratch, Mode: "rw"},
+		},
+	})
+	if !ok {
+		t.Fatal("DescribeBoundary() = false, want true")
+	}
+	if boundary.RootWritable {
+		t.Fatal("RootWritable = true, want false")
+	}
+	if !boundary.ScratchWritable {
+		t.Fatal("ScratchWritable = false, want true")
+	}
+	if slices.Contains(boundary.Writable, scratch) || slices.Contains(boundary.ReadOnly, scratch) {
+		t.Fatalf("scratch must not be duplicated in expose lists: writable=%v read-only=%v",
+			boundary.Writable, boundary.ReadOnly)
+	}
+
+	boundary, ok = DescribeBoundary(workspace, config.IsolationConfig{
+		Enabled: true,
+		ExposePaths: []config.ExposePath{
+			{Source: scratch, Target: scratch, Mode: "ro"},
+		},
+	})
+	if !ok {
+		t.Fatal("DescribeBoundary() = false, want true")
+	}
+	if !boundary.RootWritable {
+		t.Fatal("RootWritable = false, want true")
+	}
+	if boundary.ScratchWritable {
+		t.Fatal("ScratchWritable = true, want false")
+	}
+	if slices.Contains(boundary.Writable, scratch) || slices.Contains(boundary.ReadOnly, scratch) {
+		t.Fatalf("scratch must not be duplicated in expose lists: writable=%v read-only=%v",
+			boundary.Writable, boundary.ReadOnly)
+	}
+}
+
+func TestEffectiveBoundaryModeUsesLastAncestor(t *testing.T) {
+	rules := []config.ExposePath{
+		{Target: "/root", Mode: "rw"},
+		{Target: "/root/runtime-user-env", Mode: "ro"},
+		{Target: "/root/runtime-user-env/tmp", Mode: "rw"},
+	}
+	if got := effectiveBoundaryMode(rules, "/root/runtime-user-env/tmp"); got != "rw" {
+		t.Fatalf("effectiveBoundaryMode() = %q, want rw", got)
+	}
+	if got := effectiveBoundaryMode(rules, "/root/other"); got != "rw" {
+		t.Fatalf("effectiveBoundaryMode() = %q, want rw", got)
+	}
+	if got := effectiveBoundaryMode(rules, "/outside"); got != "" {
+		t.Fatalf("effectiveBoundaryMode() = %q, want empty", got)
+	}
+}
+
 func TestBackendLabel(t *testing.T) {
 	tests := map[string]string{
 		"linux":   "Linux bubblewrap",
