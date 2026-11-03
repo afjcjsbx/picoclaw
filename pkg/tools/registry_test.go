@@ -968,6 +968,30 @@ func TestToolRegistry_ExecuteWithContext_ExtractsInlineMediaDataURL(t *testing.T
 	}
 }
 
+func TestToolRegistry_ExecuteWithContext_WebFetchDataURLIsNotRegisteredAsMedia(t *testing.T) {
+	r := NewToolRegistry()
+	r.SetMediaStore(media.NewFileMediaStore())
+
+	r.Register(&mockRegistryTool{
+		name:   "web_fetch",
+		desc:   "returns a page with an embedded image",
+		params: map[string]any{},
+		result: SilentResult("page text ![](data:image/png;base64,aGVsbG8=)"),
+	})
+
+	result := r.ExecuteWithContext(context.Background(), "web_fetch", nil, "telegram", "chat-42", nil)
+
+	if len(result.Media) != 0 {
+		t.Fatalf("fetched page data URL must not become media, got %v", result.Media)
+	}
+	if strings.Contains(result.ForLLM, "data:image/png;base64") {
+		t.Fatalf("expected data URL to be stripped from ForLLM, got %q", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "page text") {
+		t.Fatalf("expected page text to be kept, got %q", result.ForLLM)
+	}
+}
+
 func TestToolRegistry_ExecuteWithContext_SanitizesInlineMediaWithoutStore(t *testing.T) {
 	r := NewToolRegistry()
 

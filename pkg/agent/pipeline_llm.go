@@ -561,12 +561,23 @@ func (p *Pipeline) CallLLM(
 			break
 		}
 
-		if err == nil || skipPrimaryFallback || !exec.usedLight {
+		if err == nil || skipPrimaryFallback {
 			break
 		}
-		// A canceled call or turn is not a light-model failure; the primary
+		// A canceled call or turn is not a model failure; the next model
 		// would be canceled too.
 		if turnCtx.Err() != nil || errors.Is(err, context.Canceled) {
+			break
+		}
+		if baseModelName := p.degradeFromImageModel(ts, exec, err); baseModelName != "" {
+			exec.llmModel = exec.activeModel
+			exec.llmModelName = baseModelName
+			applyTurnThinkingOptions(exec, ts.agent, exec.activeProvider, true)
+			refreshNativeSearch()
+			err = nil
+			continue
+		}
+		if !exec.usedLight {
 			break
 		}
 		if !p.promoteToPrimary(ts, exec, "light model candidates failed: "+err.Error()) {
