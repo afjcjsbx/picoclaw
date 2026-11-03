@@ -92,7 +92,11 @@ func normalizeToolResult(
 	notes := make([]string, 0, 2)
 	seen := make(map[string]struct{})
 
-	if store != nil && channel != "" && chatID != "" {
+	// A fetched page is untrusted content, not tool-produced media: a data: URL
+	// in it is a decorative asset. Registering it would send the image to the
+	// user and switch the whole turn to the image model, so it is only stripped
+	// below by SanitizeToolLLMContent.
+	if store != nil && channel != "" && chatID != "" && toolName != "web_fetch" {
 		var refs []string
 		var extractedNotes []string
 
