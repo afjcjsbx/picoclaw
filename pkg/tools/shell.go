@@ -1526,6 +1526,7 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 		}
 
 		matchIndices := absolutePathPattern.FindAllStringIndex(cmd, -1)
+		executableWords, parsedShell := shellExecutableWords(cmd)
 
 		for _, loc := range matchIndices {
 			raw := cmd[loc[0]:loc[1]]
@@ -1575,7 +1576,15 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 			// A single regex match can contain several path tokens when shell
 			// separators are not surrounded by whitespace ("2>/dev/null;echo b"),
 			// so every token is checked instead of only the leading one.
-			for _, pathText := range commandPathTextsFromMatch(cmd, loc[0], loc[1]) {
+			pathTexts := commandPathTextsFromMatch(cmd, loc[0], loc[1])
+			searchFrom, _ := shellTokenBounds(cmd, loc[0])
+			for _, pathText := range pathTexts {
+				pathOffset := -1
+				if idx := strings.Index(cmd[searchFrom:loc[1]], pathText); idx >= 0 {
+					pathOffset = searchFrom + idx
+					searchFrom = pathOffset + len(pathText)
+				}
+
 				p, err := commandPathAbs(pathText, cwdPath)
 				if err != nil {
 					continue
@@ -1589,6 +1598,17 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 					if idx := strings.Index(p, ":"); idx > 1 {
 						p = p[:idx]
 					}
+				}
+
+				// Executables are resolved by the shell, not by the guard. A
+				// workspace-local interpreter symlink (.venv/bin/python, nvm
+				// shims, rustup proxies, ...) may legitimately point outside
+				// the workspace, exactly like a bare command resolved through
+				// PATH. Keep the symlink check for every non-executable operand.
+				if pathOffset >= 0 && parsedShell &&
+					isExecutableShellWord(executableWords, pathOffset) &&
+					isPathWithin(cwdPath, p) {
+					continue
 				}
 
 				// Check symlinks and junctions
