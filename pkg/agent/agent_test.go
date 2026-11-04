@@ -436,6 +436,81 @@ func TestPublishResponseIfNeeded_MarksFinalOutbound(t *testing.T) {
 	}
 }
 
+func TestPublishResponseIfNeeded_IncludesMatchingAssistantUsage(t *testing.T) {
+	al, _, msgBus, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+
+	agent := al.registry.GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("expected default agent")
+	}
+	sessionKey := session.BuildMainSessionKey(agent.ID)
+	usage := &providers.UsageInfo{
+		PromptTokens:        120,
+		CompletionTokens:    30,
+		TotalTokens:         150,
+		CacheReadTokens:     20,
+		CacheCreationTokens: 10,
+	}
+	if err := agent.Sessions.AddFullMessage(context.Background(), sessionKey, providers.Message{
+		Role:    "assistant",
+		Content: "final reply",
+		Usage:   usage,
+	}); err != nil {
+		t.Fatalf("AddFullMessage() error = %v", err)
+	}
+
+	al.PublishResponseIfNeeded(context.Background(), "pico", "pico:"+sessionKey, sessionKey, "final reply")
+
+	select {
+	case outbound := <-msgBus.OutboundChan():
+		if outbound.Usage == nil {
+			t.Fatal("expected outbound usage")
+		}
+		want := bus.TokenUsage{
+			InputTokens:         120,
+			OutputTokens:        30,
+			TotalTokens:         150,
+			CacheReadTokens:     20,
+			CacheCreationTokens: 10,
+		}
+		if *outbound.Usage != want {
+			t.Fatalf("outbound usage = %+v, want %+v", *outbound.Usage, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected final outbound")
+	}
+}
+
+func TestPublishResponseIfNeeded_OmitsUsageForDifferentResponse(t *testing.T) {
+	al, _, msgBus, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+
+	agent := al.registry.GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("expected default agent")
+	}
+	sessionKey := session.BuildMainSessionKey(agent.ID)
+	if err := agent.Sessions.AddFullMessage(context.Background(), sessionKey, providers.Message{
+		Role:    "assistant",
+		Content: "final reply",
+		Usage:   &providers.UsageInfo{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15},
+	}); err != nil {
+		t.Fatalf("AddFullMessage() error = %v", err)
+	}
+
+	al.PublishResponseIfNeeded(context.Background(), "pico", "pico:"+sessionKey, sessionKey, "Stopped.")
+
+	select {
+	case outbound := <-msgBus.OutboundChan():
+		if outbound.Usage != nil {
+			t.Fatalf("outbound usage = %+v, want nil", *outbound.Usage)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected final outbound")
+	}
+}
+
 func TestPublishPicoReasoningIncludesSessionKey(t *testing.T) {
 	al, _, msgBus, provider, cleanup := newTestAgentLoop(t)
 	defer cleanup()

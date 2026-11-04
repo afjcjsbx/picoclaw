@@ -91,6 +91,7 @@ func (p *Pipeline) Finalize(
 			modelName: exec.llmModelName,
 		})
 		msg.ContextUsage = contextUsage
+		msg.Usage = tokenUsageFromProviders(responseUsageInfo(exec.response))
 		markFinalOutbound(&msg)
 		_ = al.bus.PublishOutbound(turnCtx, msg)
 	}

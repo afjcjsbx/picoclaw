@@ -385,6 +385,56 @@ func TestSend_ToolCallsMessageIncludesModelName(t *testing.T) {
 	}
 }
 
+func TestSend_IncludesOutboundTokenUsage(t *testing.T) {
+	ch := newTestPicoChannel(t)
+
+	if err := ch.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	defer ch.Stop(context.Background())
+
+	clientConn, received, cleanup := newTestPicoWebSocket(t)
+	defer cleanup()
+	ch.addConnForTest(&picoConn{id: "conn-1", conn: clientConn, sessionID: "sess-1"})
+
+	if _, err := ch.Send(context.Background(), bus.OutboundMessage{
+		ChatID:  "pico:sess-1",
+		Content: "answer",
+		Usage: &bus.TokenUsage{
+			InputTokens:         1234,
+			OutputTokens:        567,
+			TotalTokens:         1801,
+			CacheReadTokens:     120,
+			CacheCreationTokens: 80,
+		},
+	}); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+
+	select {
+	case msg := <-received:
+		rawUsage, ok := msg.Payload[PayloadKeyUsage].(map[string]any)
+		if !ok {
+			t.Fatalf("usage payload = %#v, want map", msg.Payload[PayloadKeyUsage])
+		}
+		assertUsagePayloadNumber(t, rawUsage, "input_tokens", 1234)
+		assertUsagePayloadNumber(t, rawUsage, "output_tokens", 567)
+		assertUsagePayloadNumber(t, rawUsage, "total_tokens", 1801)
+		assertUsagePayloadNumber(t, rawUsage, "cache_read_tokens", 120)
+		assertUsagePayloadNumber(t, rawUsage, "cache_creation_tokens", 80)
+	case <-time.After(time.Second):
+		t.Fatal("expected answer message to be delivered")
+	}
+}
+
+func assertUsagePayloadNumber(t *testing.T, payload map[string]any, key string, want float64) {
+	t.Helper()
+	got, ok := payload[key].(float64)
+	if !ok || got != want {
+		t.Fatalf("%s = %#v, want %v", key, payload[key], want)
+	}
+}
+
 func TestSendPlaceholder_EmitsNormalMessageWithoutKind(t *testing.T) {
 	ch := newTestPicoChannel(t)
 	ch.bc.Placeholder.Enabled = true
