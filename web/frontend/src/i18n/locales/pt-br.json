@@ -85,6 +85,9 @@
     "forkFailed": "Falha ao criar ramificação da conversa",
     "loadingMore": "Carregando mais...",
     "deleteSession": "Excluir sessão",
+    "deleteSessionTitle": "Excluir sessão?",
+    "deleteSessionConfirm": "\"{{title}}\" e seu histórico de mensagens serão excluídos permanentemente. Esta ação não pode ser desfeita.",
+    "deleteSessionFailed": "Não foi possível excluir a sessão",
     "messagesCount": "{{count}} mensagens",
     "usage": {
       "summary": "{{input}} entrada · {{output}} saída",

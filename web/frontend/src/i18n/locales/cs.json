@@ -83,6 +83,9 @@
     "forkFailed": "Vytvoření větve konverzace selhalo",
     "loadingMore": "Načítám další...",
     "deleteSession": "Smazat relaci",
+    "deleteSessionTitle": "Smazat relaci?",
+    "deleteSessionConfirm": "\"{{title}}\" a její historie zpráv budou trvale smazány. Tuto akci nelze vrátit.",
+    "deleteSessionFailed": "Relaci se nepodařilo smazat",
     "messagesCount": "{{count}} zpráv",
     "usage": {
       "summary": "{{input}} vstup · {{output}} výstup",

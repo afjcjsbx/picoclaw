@@ -92,6 +92,9 @@
     "forkFailed": "创建对话分支失败",
     "loadingMore": "加载更多...",
     "deleteSession": "删除会话",
+    "deleteSessionTitle": "删除会话？",
+    "deleteSessionConfirm": "“{{title}}”及其消息历史将被永久删除，此操作无法撤销。",
+    "deleteSessionFailed": "无法删除会话",
     "messagesCount": "{{count}} 条消息",
     "usage": {
       "summary": "输入 {{input}} · 输出 {{output}}",
