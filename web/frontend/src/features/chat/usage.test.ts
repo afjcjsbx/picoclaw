@@ -70,6 +70,12 @@ expectEqual(
   },
 )
 
+// A provider can report cost without token counters.
+expectEqual(parseTokenUsage({ usage: { cost_usd: 0.0123 } }), {
+  total_tokens: 0,
+  cost_usd: 0.0123,
+})
+
 // Missing, malformed and zeroed usage objects are ignored.
 expectEqual(parseTokenUsage(undefined), undefined)
 expectEqual(parseTokenUsage({}), undefined)

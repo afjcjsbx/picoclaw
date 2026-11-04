@@ -406,6 +406,7 @@ func TestSend_IncludesOutboundTokenUsage(t *testing.T) {
 			TotalTokens:         1801,
 			CacheReadTokens:     120,
 			CacheCreationTokens: 80,
+			CostUSD:             0.0123,
 		},
 	}); err != nil {
 		t.Fatalf("Send() error = %v", err)
@@ -422,6 +423,7 @@ func TestSend_IncludesOutboundTokenUsage(t *testing.T) {
 		assertUsagePayloadNumber(t, rawUsage, "total_tokens", 1801)
 		assertUsagePayloadNumber(t, rawUsage, "cache_read_tokens", 120)
 		assertUsagePayloadNumber(t, rawUsage, "cache_creation_tokens", 80)
+		assertUsagePayloadNumber(t, rawUsage, "cost_usd", 0.0123)
 	case <-time.After(time.Second):
 		t.Fatal("expected answer message to be delivered")
 	}

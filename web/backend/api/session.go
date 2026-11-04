@@ -70,18 +70,19 @@ type sessionChatMessage struct {
 }
 
 type sessionUsage struct {
-	InputTokens         int `json:"input_tokens"`
-	OutputTokens        int `json:"output_tokens"`
-	TotalTokens         int `json:"total_tokens"`
-	CacheReadTokens     int `json:"cache_read_tokens,omitempty"`
-	CacheCreationTokens int `json:"cache_creation_tokens,omitempty"`
+	InputTokens         int     `json:"input_tokens"`
+	OutputTokens        int     `json:"output_tokens"`
+	TotalTokens         int     `json:"total_tokens"`
+	CacheReadTokens     int     `json:"cache_read_tokens,omitempty"`
+	CacheCreationTokens int     `json:"cache_creation_tokens,omitempty"`
+	CostUSD             float64 `json:"cost_usd,omitempty"`
 }
 
 func sessionMessageUsage(usage *providers.UsageInfo) *sessionUsage {
 	if usage == nil {
 		return nil
 	}
-	if usage.PromptTokens <= 0 && usage.CompletionTokens <= 0 && usage.TotalTokens <= 0 {
+	if usage.PromptTokens <= 0 && usage.CompletionTokens <= 0 && usage.TotalTokens <= 0 && usage.CostUSD <= 0 {
 		return nil
 	}
 	return &sessionUsage{
@@ -90,6 +91,7 @@ func sessionMessageUsage(usage *providers.UsageInfo) *sessionUsage {
 		TotalTokens:         usage.TotalTokens,
 		CacheReadTokens:     usage.CacheReadTokens,
 		CacheCreationTokens: usage.CacheCreationTokens,
+		CostUSD:             usage.CostUSD,
 	}
 }
 

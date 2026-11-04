@@ -27,6 +27,7 @@ export interface SessionDetail {
       total_tokens?: number
       cache_read_tokens?: number
       cache_creation_tokens?: number
+      cost_usd?: number
     }
     media?: string[]
     attachments?: {

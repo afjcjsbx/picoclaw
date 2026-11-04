@@ -49,6 +49,7 @@ func TestSetTokenUsagePayload(t *testing.T) {
 			TotalTokens:         150,
 			CacheReadTokens:     40,
 			CacheCreationTokens: 10,
+			CostUSD:             0.0123,
 		})
 
 		raw, ok := payload[PayloadKeyUsage].(map[string]any)
@@ -60,6 +61,9 @@ func TestSetTokenUsagePayload(t *testing.T) {
 		}
 		if raw["cache_creation_tokens"] != 10 {
 			t.Errorf("cache_creation_tokens = %v, want 10", raw["cache_creation_tokens"])
+		}
+		if raw["cost_usd"] != 0.0123 {
+			t.Errorf("cost_usd = %v, want 0.0123", raw["cost_usd"])
 		}
 	})
 

@@ -579,7 +579,7 @@ func tokenUsageFromProviders(usage *providers.UsageInfo) *bus.TokenUsage {
 	if usage == nil {
 		return nil
 	}
-	if usage.PromptTokens <= 0 && usage.CompletionTokens <= 0 && usage.TotalTokens <= 0 {
+	if usage.PromptTokens <= 0 && usage.CompletionTokens <= 0 && usage.TotalTokens <= 0 && usage.CostUSD <= 0 {
 		return nil
 	}
 	return &bus.TokenUsage{
@@ -588,6 +588,7 @@ func tokenUsageFromProviders(usage *providers.UsageInfo) *bus.TokenUsage {
 		TotalTokens:         usage.TotalTokens,
 		CacheReadTokens:     usage.CacheReadTokens,
 		CacheCreationTokens: usage.CacheCreationTokens,
+		CostUSD:             usage.CostUSD,
 	}
 }
 

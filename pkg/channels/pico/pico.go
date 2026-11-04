@@ -1930,7 +1930,7 @@ func setTokenUsagePayload(payload map[string]any, usage *bus.TokenUsage) {
 	if total <= 0 {
 		total = usage.InputTokens + usage.OutputTokens
 	}
-	if usage.InputTokens <= 0 && usage.OutputTokens <= 0 && total <= 0 {
+	if usage.InputTokens <= 0 && usage.OutputTokens <= 0 && total <= 0 && usage.CostUSD <= 0 {
 		return
 	}
 	block := map[string]any{
@@ -1943,6 +1943,9 @@ func setTokenUsagePayload(payload map[string]any, usage *bus.TokenUsage) {
 	}
 	if usage.CacheCreationTokens > 0 {
 		block["cache_creation_tokens"] = usage.CacheCreationTokens
+	}
+	if usage.CostUSD > 0 {
+		block["cost_usd"] = usage.CostUSD
 	}
 	payload[PayloadKeyUsage] = block
 }

@@ -236,6 +236,7 @@ func TestAddFullMessage_PreservesUsage(t *testing.T) {
 			TotalTokens:         1801,
 			CacheReadTokens:     120,
 			CacheCreationTokens: 80,
+			CostUSD:             0.0123,
 		},
 	}
 

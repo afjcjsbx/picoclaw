@@ -587,7 +587,9 @@ export const AssistantMessage = memo(function AssistantMessage({
     .replace(/\s+/g, " ")
     .replace(/^🔧\s*/, "")
     .trim()
-  const hasUsage = usage !== undefined && usage.total_tokens > 0
+  const hasUsage =
+    usage !== undefined &&
+    (usage.total_tokens > 0 || usage.cost_usd !== undefined)
   const usageInput = usage?.input_tokens
   const usageOutput = usage?.output_tokens
   const usageCostUsd = usage

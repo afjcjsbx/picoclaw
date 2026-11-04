@@ -451,6 +451,7 @@ func TestPublishResponseIfNeeded_IncludesMatchingAssistantUsage(t *testing.T) {
 		TotalTokens:         150,
 		CacheReadTokens:     20,
 		CacheCreationTokens: 10,
+		CostUSD:             0.0123,
 	}
 	if err := agent.Sessions.AddFullMessage(context.Background(), sessionKey, providers.Message{
 		Role:    "assistant",
@@ -473,6 +474,7 @@ func TestPublishResponseIfNeeded_IncludesMatchingAssistantUsage(t *testing.T) {
 			TotalTokens:         150,
 			CacheReadTokens:     20,
 			CacheCreationTokens: 10,
+			CostUSD:             0.0123,
 		}
 		if *outbound.Usage != want {
 			t.Fatalf("outbound usage = %+v, want %+v", *outbound.Usage, want)

@@ -79,11 +79,11 @@ export function parseTokenUsage(
     reportedTotal && reportedTotal > 0
       ? reportedTotal
       : (input ?? 0) + (output ?? 0)
-  if (total <= 0) {
+  const cost = toCostUsd(usage.cost_usd)
+  if (total <= 0 && cost === undefined) {
     return undefined
   }
 
-  const cost = toCostUsd(usage.cost_usd)
   const cacheRead = toTokenCount(usage.cache_read_tokens)
   const cacheCreation = toTokenCount(usage.cache_creation_tokens)
 
