@@ -1,18 +1,12 @@
+import { describe, expect, it } from "vitest"
+
 import {
   type SlashPaletteEntry,
   filterSlashPaletteItems,
   nextSlashRecents,
   slashCommandInsertion,
   slashQueryFromInput,
-} from "./slash-commands.ts"
-
-function expectEqual(actual: unknown, expected: unknown) {
-  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
-    throw new Error(
-      `Expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`,
-    )
-  }
-}
+} from "./slash-commands"
 
 const ENTRIES: SlashPaletteEntry[] = [
   {
@@ -41,75 +35,96 @@ const ENTRIES: SlashPaletteEntry[] = [
   },
 ]
 
-// slashQueryFromInput: only a single leading "/" token opens the palette.
-expectEqual(slashQueryFromInput(""), null)
-expectEqual(slashQueryFromInput("hello /help"), null)
-expectEqual(slashQueryFromInput("/"), "")
-expectEqual(slashQueryFromInput("/HeL"), "hel")
-expectEqual(slashQueryFromInput("/help "), null)
-expectEqual(slashQueryFromInput("/btw what"), null)
-
-// filterSlashPaletteItems: empty query keeps all entries (catalog order).
-expectEqual(
-  filterSlashPaletteItems(ENTRIES, "", []).map((item) => item.command),
-  ["/help", "/btw", "/clear", "/voice"],
-)
-
-// Non-empty query matches command, title, description and argument hint.
-expectEqual(
-  filterSlashPaletteItems(ENTRIES, "cl", []).map((item) => item.command),
-  ["/clear"],
-)
-expectEqual(
-  filterSlashPaletteItems(ENTRIES, "tts", []).map((item) => item.command),
-  ["/voice"],
-)
-expectEqual(
-  filterSlashPaletteItems(ENTRIES, "question", []).map((item) => item.command),
-  ["/btw"],
-)
-expectEqual(filterSlashPaletteItems(ENTRIES, "nope", []), [])
-
-// Recent commands float to the top of the blank menu and are flagged.
-expectEqual(
-  filterSlashPaletteItems(ENTRIES, "", ["/voice", "/clear"]).map((item) => [
-    item.command,
-    item.recent,
-  ]),
-  [
-    ["/voice", true],
-    ["/clear", true],
-    ["/help", false],
-    ["/btw", false],
-  ],
-)
-
-// A typed query keeps catalog order even when recents exist.
-expectEqual(
-  filterSlashPaletteItems(ENTRIES, "e", ["/voice"]).map((item) => item.command),
-  ["/help", "/btw", "/clear", "/voice"],
-)
-
-// The menu is capped to 8 visible entries.
 const MANY: SlashPaletteEntry[] = Array.from({ length: 12 }, (_, index) => ({
   command: `/cmd${index}`,
   title: `Cmd ${index}`,
   description: "",
   argHint: "",
 }))
-expectEqual(filterSlashPaletteItems(MANY, "", []).length, 8)
 
-// nextSlashRecents: most recent first, no duplicates, capped to 5.
-expectEqual(nextSlashRecents([], "/help"), ["/help"])
-expectEqual(nextSlashRecents(["/help", "/btw"], "/btw"), ["/btw", "/help"])
-expectEqual(nextSlashRecents(["/a", "/b", "/c", "/d", "/e"], "/f"), [
-  "/f",
-  "/a",
-  "/b",
-  "/c",
-  "/d",
-])
+describe("slashQueryFromInput", () => {
+  it("only opens the palette for a single leading slash token", () => {
+    expect(slashQueryFromInput("")).toBeNull()
+    expect(slashQueryFromInput("hello /help")).toBeNull()
+    expect(slashQueryFromInput("/")).toBe("")
+    expect(slashQueryFromInput("/HeL")).toBe("hel")
+    expect(slashQueryFromInput("/help ")).toBeNull()
+    expect(slashQueryFromInput("/btw what")).toBeNull()
+  })
+})
 
-// slashCommandInsertion: arguments get a trailing space.
-expectEqual(slashCommandInsertion(ENTRIES[0]), "/help")
-expectEqual(slashCommandInsertion(ENTRIES[1]), "/btw ")
+describe("filterSlashPaletteItems", () => {
+  it("keeps all entries in catalog order for an empty query", () => {
+    expect(
+      filterSlashPaletteItems(ENTRIES, "", []).map((item) => item.command),
+    ).toEqual(["/help", "/btw", "/clear", "/voice"])
+  })
+
+  it("matches command, title, description and argument hint", () => {
+    expect(
+      filterSlashPaletteItems(ENTRIES, "cl", []).map((item) => item.command),
+    ).toEqual(["/clear"])
+    expect(
+      filterSlashPaletteItems(ENTRIES, "tts", []).map((item) => item.command),
+    ).toEqual(["/voice"])
+    expect(
+      filterSlashPaletteItems(ENTRIES, "question", []).map(
+        (item) => item.command,
+      ),
+    ).toEqual(["/btw"])
+    expect(filterSlashPaletteItems(ENTRIES, "nope", [])).toEqual([])
+  })
+
+  it("floats recent commands to the top of the blank menu and flags them", () => {
+    expect(
+      filterSlashPaletteItems(ENTRIES, "", ["/voice", "/clear"]).map((item) => [
+        item.command,
+        item.recent,
+      ]),
+    ).toEqual([
+      ["/voice", true],
+      ["/clear", true],
+      ["/help", false],
+      ["/btw", false],
+    ])
+  })
+
+  it("keeps catalog order for a typed query even when recents exist", () => {
+    expect(
+      filterSlashPaletteItems(ENTRIES, "e", ["/voice"]).map(
+        (item) => item.command,
+      ),
+    ).toEqual(["/help", "/btw", "/clear", "/voice"])
+  })
+
+  it("caps the menu to eight visible entries", () => {
+    expect(filterSlashPaletteItems(MANY, "", [])).toHaveLength(8)
+  })
+})
+
+describe("nextSlashRecents", () => {
+  it("puts the most recent command first without duplicates", () => {
+    expect(nextSlashRecents([], "/help")).toEqual(["/help"])
+    expect(nextSlashRecents(["/help", "/btw"], "/btw")).toEqual([
+      "/btw",
+      "/help",
+    ])
+  })
+
+  it("caps the recent list to five entries", () => {
+    expect(nextSlashRecents(["/a", "/b", "/c", "/d", "/e"], "/f")).toEqual([
+      "/f",
+      "/a",
+      "/b",
+      "/c",
+      "/d",
+    ])
+  })
+})
+
+describe("slashCommandInsertion", () => {
+  it("adds a trailing space only when the command takes arguments", () => {
+    expect(slashCommandInsertion(ENTRIES[0])).toBe("/help")
+    expect(slashCommandInsertion(ENTRIES[1])).toBe("/btw ")
+  })
+})

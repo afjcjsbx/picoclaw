@@ -14,6 +14,7 @@ beforeEach(() => {
     messages: [],
     isTyping: false,
     contextUsage: undefined,
+    activeSessionId: SESSION,
   })
   vi.mocked(toast.error).mockClear()
 })

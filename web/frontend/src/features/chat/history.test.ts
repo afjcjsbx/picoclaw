@@ -65,10 +65,20 @@ describe("mergeHistoryMessages", () => {
 
   it("sorts by normalized timestamp across seconds, milliseconds and ISO strings", () => {
     const history = [
-      message({ id: "seconds", timestamp: 1_700_000_000 }),
-      message({ id: "iso", timestamp: "2023-11-14T22:13:21.000Z" }),
+      message({ id: "seconds", content: "seconds", timestamp: 1_700_000_000 }),
+      message({
+        id: "iso",
+        content: "iso",
+        timestamp: "2023-11-14T22:13:21.000Z",
+      }),
     ]
-    const current = [message({ id: "millis", timestamp: 1_699_999_999_000 })]
+    const current = [
+      message({
+        id: "millis",
+        content: "millis",
+        timestamp: 1_699_999_999_000,
+      }),
+    ]
 
     expect(
       mergeHistoryMessages(history, current).map((item) => item.id),

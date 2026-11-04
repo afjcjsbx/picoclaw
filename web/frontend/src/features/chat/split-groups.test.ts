@@ -1,31 +1,45 @@
+import { describe, expect, it } from "vitest"
+
 import {
   mergeSplitConversations,
   removeSplitConversation,
-} from "./split-groups.ts"
+} from "./split-groups"
 
-function expectEqual(actual: unknown, expected: unknown) {
-  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
-    throw new Error(
-      `Expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`,
-    )
-  }
-}
+describe("mergeSplitConversations", () => {
+  it("appends the conversation to the target group", () => {
+    expect(mergeSplitConversations([["a", "b"]], "c", "a")).toEqual([
+      ["a", "b", "c"],
+    ])
+  })
 
-const pair = [["a", "b"]]
-expectEqual(mergeSplitConversations(pair, "c", "a"), [["a", "b", "c"]])
-expectEqual(
-  mergeSplitConversations(
-    [
-      ["a", "b"],
-      ["c", "d"],
-    ],
-    "c",
-    "b",
-  ),
-  [["a", "b", "c", "d"]],
-)
-expectEqual(mergeSplitConversations([["a", "b", "c", "d"]], "e", "b"), [
-  ["a", "b", "c", "d"],
-])
-expectEqual(removeSplitConversation([["a", "b", "c"]], "b"), [["a", "c"]])
-expectEqual(removeSplitConversation([["a", "b"]], "b"), [])
+  it("merges two groups when the target moves across groups", () => {
+    expect(
+      mergeSplitConversations(
+        [
+          ["a", "b"],
+          ["c", "d"],
+        ],
+        "c",
+        "b",
+      ),
+    ).toEqual([["a", "b", "c", "d"]])
+  })
+
+  it("leaves the layout unchanged when the pair is already grouped", () => {
+    expect(mergeSplitConversations([["a", "b", "c", "d"]], "e", "b")).toEqual([
+      ["a", "b", "c", "d"],
+    ])
+  })
+})
+
+describe("removeSplitConversation", () => {
+  it("removes the conversation from its group", () => {
+    expect(removeSplitConversation([["a", "b", "c"]], "b")).toEqual([
+      ["a", "c"],
+    ])
+  })
+
+  it("drops groups that become empty", () => {
+    expect(removeSplitConversation([["a", "b"]], "b")).toEqual([])
+  })
+})
