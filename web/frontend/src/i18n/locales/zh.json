@@ -98,6 +98,7 @@
       "noModel": "未设置默认模型，请前往模型页面进行配置。"
     },
     "sendMessage": "发送消息",
+    "stopGeneration": "停止生成",
     "composeHint": "按 Enter 发送，Shift + Enter 换行",
     "slash": {
       "ariaLabel": "斜杠命令",
