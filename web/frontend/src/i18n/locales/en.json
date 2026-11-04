@@ -1265,5 +1265,21 @@
       "title": "View Documentation",
       "description": "Need more help? Click the documentation button at the bottom of the sidebar to view detailed guides and configuration docs."
     }
+  },
+  "commandPalette": {
+    "title": "Command palette",
+    "description": "Search commands, conversations, models, and pages.",
+    "placeholder": "Type a command or search…",
+    "empty": "No matching results.",
+    "groups": {
+      "actions": "Actions",
+      "sessions": "Conversations",
+      "models": "Models",
+      "pages": "Pages",
+      "slashCommands": "Slash commands"
+    },
+    "newChat": "New chat",
+    "newChatDescription": "Start a conversation",
+    "current": "Current"
   }
 }
