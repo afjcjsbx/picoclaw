@@ -1255,7 +1255,14 @@
     "logs": {
       "log_level_error": "Failed to update log level.",
       "clear": "Clear logs",
-      "empty": "Waiting for logs..."
+      "empty": "Waiting for logs...",
+      "search": "Search logs",
+      "search_clear": "Clear search",
+      "download": "Download logs",
+      "pause_tail": "Pause tail",
+      "resume_tail": "Resume tail",
+      "new_lines": "New lines: {{total}}",
+      "no_matches": "No logs match your search."
     }
   },
   "tour": {

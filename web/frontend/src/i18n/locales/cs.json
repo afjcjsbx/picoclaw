@@ -1073,7 +1073,14 @@
     "logs": {
       "log_level_error": "Aktualizace úrovně logování selhala.",
       "clear": "Vymazat logy",
-      "empty": "Čekám na logy..."
+      "empty": "Čekám na logy...",
+      "search": "Hledat v lozích",
+      "search_clear": "Vymazat hledání",
+      "download": "Stáhnout logy",
+      "pause_tail": "Pozastavit sledování",
+      "resume_tail": "Obnovit sledování",
+      "new_lines": "Nové řádky: {{total}}",
+      "no_matches": "Hledání neodpovídá žádný log."
     }
   },
   "tour": {
