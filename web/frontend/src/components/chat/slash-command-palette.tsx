@@ -98,7 +98,7 @@ export function SlashCommandPalette({
                 onChoose(item)
               }}
               className={cn(
-                "rounded-control flex min-h-[44px] w-full items-center gap-3 px-3 py-2 text-left text-[13px] transition-colors outline-none select-none",
+                "rounded-control flex min-h-[44px] w-full items-start gap-3 px-3 py-2 text-left text-[13px] transition-colors outline-none select-none",
                 selected
                   ? "bg-foreground/[0.065] text-foreground dark:bg-white/[0.09]"
                   : "text-foreground/90 hover:bg-foreground/[0.045] dark:hover:bg-white/[0.065]",
@@ -106,30 +106,30 @@ export function SlashCommandPalette({
             >
               <span
                 className={cn(
-                  "text-muted-foreground flex h-7 w-7 shrink-0 items-center justify-center transition-colors",
+                  "text-muted-foreground mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center transition-colors",
                   selected && "text-foreground",
                 )}
               >
                 <Icon className="h-4 w-4" />
               </span>
-              <span className="flex min-w-0 flex-1 flex-col gap-0.5 sm:flex-row sm:items-baseline sm:gap-2">
-                <span className="text-foreground min-w-0 truncate text-[13.5px] font-semibold tracking-normal">
-                  {item.title}
-                </span>
-                <span className="text-muted-foreground min-w-0 truncate text-[13px]">
-                  {item.description}
-                </span>
-              </span>
-              <span className="ml-2 flex max-w-[42%] shrink-0 items-center gap-1.5 sm:max-w-none">
-                {item.recent ? (
-                  <span className="bg-foreground/[0.055] text-muted-foreground hidden rounded-full px-2 py-1 text-[11px] font-medium sm:inline-flex">
-                    {t("chat.slash.recent")}
+              <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                  <span className="text-foreground min-w-0 text-[13.5px] font-semibold tracking-normal break-words">
+                    {item.title}
                   </span>
-                ) : null}
-                <span className="text-muted-foreground/60 font-mono text-[12px]">
-                  {item.argHint
-                    ? `${item.command} ${item.argHint}`
-                    : item.command}
+                  {item.recent ? (
+                    <span className="bg-foreground/[0.055] text-muted-foreground hidden shrink-0 rounded-full px-2 py-1 text-[11px] font-medium sm:inline-flex">
+                      {t("chat.slash.recent")}
+                    </span>
+                  ) : null}
+                  <span className="text-muted-foreground/60 ml-auto min-w-0 font-mono text-[12px] break-words">
+                    {item.argHint
+                      ? `${item.command} ${item.argHint}`
+                      : item.command}
+                  </span>
+                </span>
+                <span className="text-muted-foreground min-w-0 text-[13px] break-words">
+                  {item.description}
                 </span>
               </span>
             </button>
