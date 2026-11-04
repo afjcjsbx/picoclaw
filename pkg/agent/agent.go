@@ -487,6 +487,13 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	}
 
 	if err := al.hookRuntime.replace(al, newHooks); err != nil {
+		if newEvolution != nil {
+			if closeErr := newEvolution.Close(); closeErr != nil {
+				logger.WarnCF("agent", "Failed to close reinitialized evolution bridge after hook replacement failure",
+					map[string]any{"error": closeErr.Error()})
+			}
+		}
+		registry.Close()
 		return fmt.Errorf("reinitialize hooks: %w", err)
 	}
 	newHooks = nil
