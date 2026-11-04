@@ -438,6 +438,14 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 		return fmt.Errorf("config cannot be nil")
 	}
 
+	// Build the new hook set before mutating live state. A broken hook must
+	// abort the reload while the previous gate is still mounted.
+	newHooks, err := al.buildConfiguredHooks(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("configure hooks: %w", err)
+	}
+	defer func() { closeHookRegistrations(newHooks) }()
+
 	var registry *AgentRegistry
 	func() {
 		defer func() {
@@ -478,6 +486,12 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 		}
 	}
 
+	configureHookManagerFromConfig(al.hooks, cfg)
+	if err := al.hookRuntime.replace(al, newHooks); err != nil {
+		return fmt.Errorf("reinitialize hooks: %w", err)
+	}
+	newHooks = nil
+
 	// Atomically swap the config and registry under write lock
 	// This ensures readers see a consistent pair
 	al.mu.Lock()
@@ -497,12 +511,6 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 
 	oldMCPManager := al.mcp.reset()
 	al.closePlugins(false)
-	al.hookRuntime.reset(al)
-	configureHookManagerFromConfig(al.hooks, cfg)
-	if err := al.ensureHooksInitialized(ctx); err != nil {
-		logger.WarnCF("agent", "Configured hooks failed to reinitialize after reload",
-			map[string]any{"error": err.Error()})
-	}
 	if oldMCPManager != nil {
 		if err := oldMCPManager.Close(); err != nil {
 			logger.WarnCF("agent", "Failed to close previous MCP manager during reload",

@@ -41,13 +41,11 @@ func (h *builtinAutoHook) AfterLLM(
 	return next, HookDecision{Action: HookActionModify}, nil
 }
 
-func newConfiguredHookLoop(t *testing.T, provider *llmHookTestProvider, hooks config.HooksConfig) *AgentLoop {
-	t.Helper()
-
-	cfg := &config.Config{
+func newHookLoopConfig(workspace string, hooks config.HooksConfig) *config.Config {
+	return &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         t.TempDir(),
+				Workspace:         workspace,
 				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
@@ -55,8 +53,24 @@ func newConfiguredHookLoop(t *testing.T, provider *llmHookTestProvider, hooks co
 		},
 		Hooks: hooks,
 	}
+}
 
-	return NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+func newReloadableHookLoop(
+	t *testing.T,
+	provider *llmHookTestProvider,
+	hooks config.HooksConfig,
+) (*AgentLoop, *config.Config) {
+	t.Helper()
+
+	cfg := newHookLoopConfig(t.TempDir(), hooks)
+	return NewAgentLoop(cfg, bus.NewMessageBus(), provider), cfg
+}
+
+func newConfiguredHookLoop(t *testing.T, provider *llmHookTestProvider, hooks config.HooksConfig) *AgentLoop {
+	t.Helper()
+
+	al, _ := newReloadableHookLoop(t, provider, hooks)
+	return al
 }
 
 func TestAgentLoop_ProcessDirectWithChannel_AutoMountsBuiltinHook(t *testing.T) {
@@ -233,5 +247,97 @@ func TestAgentLoop_ProcessDirectWithChannel_InvalidConfiguredHookFails(t *testin
 	_, err := al.ProcessDirectWithChannel(context.Background(), "hello", "session-1", "cli", "direct")
 	if err == nil {
 		t.Fatal("expected invalid configured hook error")
+	}
+}
+
+func registerDenyApprovalBuiltin(t *testing.T, name string) {
+	t.Helper()
+
+	if err := RegisterBuiltinHook(name, func(
+		context.Context,
+		config.BuiltinHookConfig,
+	) (any, error) {
+		return &denyApprovalHook{}, nil
+	}); err != nil {
+		t.Fatalf("RegisterBuiltinHook(%q) failed: %v", name, err)
+	}
+	t.Cleanup(func() { unregisterBuiltinHook(name) })
+}
+
+func TestReloadProviderAndConfigKeepsApprovalHookWhenReinitializationFails(t *testing.T) {
+	const hookName = "test-reload-approval-gate"
+
+	registerDenyApprovalBuiltin(t, hookName)
+
+	provider := &llmHookTestProvider{}
+	al, cfg := newReloadableHookLoop(t, provider, config.HooksConfig{
+		Enabled: true,
+		Builtins: map[string]config.BuiltinHookConfig{
+			hookName: {Enabled: true},
+		},
+	})
+	defer al.Close()
+
+	if err := al.ensureHooksInitialized(context.Background()); err != nil {
+		t.Fatalf("ensureHooksInitialized failed: %v", err)
+	}
+	if decision := al.hooks.ApproveTool(context.Background(), &ToolApprovalRequest{Tool: "exec"}); decision.Approved {
+		t.Fatal("baseline: approval hook should deny exec")
+	}
+
+	// Make the configured hook unavailable, then reload.
+	unregisterBuiltinHook(hookName)
+
+	if err := al.ReloadProviderAndConfig(context.Background(), provider, cfg); err == nil {
+		t.Fatal("expected reload to fail when the approval hook cannot be rebuilt")
+	}
+
+	if decision := al.hooks.ApproveTool(context.Background(), &ToolApprovalRequest{Tool: "exec"}); decision.Approved {
+		t.Fatal("approval gate disappeared after a failed reload")
+	}
+	if got := al.hookRuntime.mountedNames(); !slices.Equal(got, []string{hookName}) {
+		t.Fatalf("mounted hooks = %v, want %q", got, hookName)
+	}
+}
+
+func TestReloadProviderAndConfigReplacesConfiguredHooks(t *testing.T) {
+	const oldHookName = "test-reload-approval-gate-old"
+	const newHookName = "test-reload-approval-gate-new"
+
+	registerDenyApprovalBuiltin(t, oldHookName)
+	registerDenyApprovalBuiltin(t, newHookName)
+
+	provider := &llmHookTestProvider{}
+	al, cfg := newReloadableHookLoop(t, provider, config.HooksConfig{
+		Enabled: true,
+		Builtins: map[string]config.BuiltinHookConfig{
+			oldHookName: {Enabled: true},
+		},
+	})
+	defer al.Close()
+
+	if err := al.ensureHooksInitialized(context.Background()); err != nil {
+		t.Fatalf("ensureHooksInitialized failed: %v", err)
+	}
+
+	reloadedCfg := newHookLoopConfig(cfg.Agents.Defaults.Workspace, config.HooksConfig{
+		Enabled: true,
+		Builtins: map[string]config.BuiltinHookConfig{
+			newHookName: {Enabled: true},
+		},
+	})
+	if err := al.ReloadProviderAndConfig(context.Background(), provider, reloadedCfg); err != nil {
+		t.Fatalf("ReloadProviderAndConfig failed: %v", err)
+	}
+
+	if got := al.hookRuntime.mountedNames(); !slices.Equal(got, []string{newHookName}) {
+		t.Fatalf("mounted hooks = %v, want %q", got, newHookName)
+	}
+	hooks := al.hooks.snapshotHooks()
+	if len(hooks) != 1 || hooks[0].Name != newHookName {
+		t.Fatalf("mounted hook registrations = %+v, want only %q", hooks, newHookName)
+	}
+	if decision := al.hooks.ApproveTool(context.Background(), &ToolApprovalRequest{Tool: "exec"}); decision.Approved {
+		t.Fatal("replacement approval hook should deny exec")
 	}
 }
