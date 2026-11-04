@@ -26,6 +26,8 @@
     "build": "tsc -b && vite build",
     "build:backend": "tsc -b && vite build --outDir ../backend/dist --emptyOutDir && node ./scripts/ensure-backend-gitkeep.cjs",
     "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "preview": "vite preview",
     "format": "prettier --check .",
     "check": "prettier --write . && eslint --fix"
@@ -67,6 +69,9 @@
     "@eslint/js": "^10.0.1",
     "@tailwindcss/typography": "^0.5.20",
     "@tanstack/router-plugin": "^1.168.46",
+    "@testing-library/dom": "^10.4.2",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.3",
     "@trivago/prettier-plugin-sort-imports": "^6.0.2",
     "@types/node": "^26.6.5",
     "@types/react": "^19.2.7",
@@ -78,10 +83,12 @@
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.7",
     "globals": "^17.13.0",
+    "jsdom": "^29.1.1",
     "prettier": "^3.8.3",
     "prettier-plugin-tailwindcss": "^0.8.0",
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.72.1",
-    "vite": "^8.3.4"
+    "vite": "^8.3.4",
+    "vitest": "^4.1.12"
   }
 }

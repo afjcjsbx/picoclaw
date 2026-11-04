@@ -76,6 +76,7 @@ make test                                    # Run all tests
 make integration-test                        # Run Docker-backed integration suites
 go test -run TestName -v ./pkg/session/      # Run a single test
 go test -bench=. -benchmem -run='^$' ./...  # Run benchmarks
+cd web/frontend && pnpm test                 # Run frontend unit tests (Vitest)
 ```
 
 Docker-backed integration suites are auto-discovered from [`integration/suites/`](integration/suites/). See [`integration/README.md`](integration/README.md) for the suite layout and the conventions used by CI.

@@ -298,6 +298,8 @@ What they do today:
 - `make test`
   - Runs backend Go tests.
   - Runs frontend `pnpm lint`.
+  - Runs frontend unit tests with Vitest and Testing Library (`pnpm test`).
+  - Use `pnpm test:watch` from `frontend/` for watch mode.
 - `make lint`
   - Runs backend `go vet`.
   - Runs frontend `pnpm check`.
@@ -326,7 +328,9 @@ web/
 │   ├── src/lib/         # generic library utilities
 │   ├── src/routes/      # TanStack file routes
 │   ├── src/store/       # global state management
-│   └── vite.config.ts   # dev server and build config
+│   ├── src/test/        # Vitest setup (Testing Library + jsdom)
+│   ├── vite.config.ts   # dev server and build config
+│   └── vitest.config.ts # unit test runner config
 ├── Makefile
 └── README.md
 ```
