@@ -19,6 +19,7 @@ import { invalidateSocket, isCurrentSocket } from "@/features/chat/websocket"
 import i18n from "@/i18n"
 import {
   type ChatAttachment,
+  type ChatMessage,
   type ChatStoreState,
   chatAtom,
   clearSessionRunning,
@@ -66,6 +67,20 @@ let activityConnecting = false
 let activityGeneration = 0
 let activityReconnectTimer: number | null = null
 let activityReconnectAttempts = 0
+let onlineListener: (() => void) | null = null
+
+const RECONNECT_BASE_DELAY_MS = 1000
+const RECONNECT_MAX_DELAY_MS = 5000
+const RECONNECT_JITTER_RATIO = 0.25
+
+function reconnectDelay(attempts: number): number {
+  const capped = Math.min(
+    RECONNECT_BASE_DELAY_MS * 2 ** attempts,
+    RECONNECT_MAX_DELAY_MS,
+  )
+  const jitter = capped * RECONNECT_JITTER_RATIO
+  return Math.round(capped - jitter + Math.random() * jitter * 2)
+}
 
 function clearReconnectTimer() {
   if (reconnectTimer !== null) {
@@ -109,7 +124,7 @@ function scheduleActivityReconnect() {
     return
   }
 
-  const delay = Math.min(1000 * 2 ** activityReconnectAttempts, 5000)
+  const delay = reconnectDelay(activityReconnectAttempts)
   activityReconnectAttempts += 1
   activityReconnectTimer = window.setTimeout(() => {
     activityReconnectTimer = null
@@ -214,7 +229,7 @@ function scheduleReconnect(generation: number, sessionId: string) {
     return
   }
 
-  const delay = Math.min(1000 * 2 ** reconnectAttempts, 5000)
+  const delay = reconnectDelay(reconnectAttempts)
   reconnectAttempts += 1
   reconnectTimer = window.setTimeout(() => {
     reconnectTimer = null
@@ -223,6 +238,48 @@ function scheduleReconnect(generation: number, sessionId: string) {
     }
     void connectChat()
   }, delay)
+}
+
+function reconnectNow() {
+  if (!initialized || store.get(gatewayAtom).status !== "running") {
+    return
+  }
+
+  reconnectAttempts = 0
+  activityReconnectAttempts = 0
+  clearReconnectTimer()
+  clearActivityReconnectTimer()
+
+  for (const connection of splitConnections.values()) {
+    connection.attempts = 0
+    if (connection.timer !== null) {
+      window.clearTimeout(connection.timer)
+      connection.timer = null
+    }
+    if (
+      connection.socket &&
+      connection.socket.readyState >= WebSocket.CLOSING
+    ) {
+      connection.socket = null
+    }
+  }
+
+  // The socket may still look open after a sleep/network switch, so refetch
+  // history even when no reconnect is needed.
+  void resyncSessionHistory(activeSessionIdRef, () => {
+    return getChatState().activeSessionId === activeSessionIdRef
+  })
+  for (const [sessionId, connection] of splitConnections) {
+    void resyncSessionHistory(sessionId, () => {
+      return splitConnections.get(sessionId) === connection
+    })
+  }
+
+  void connectChat()
+  for (const [sessionId, connection] of splitConnections) {
+    void connectSplitSession(sessionId, connection)
+  }
+  connectActivitySocket()
 }
 
 function needsActiveSessionHydration(): boolean {
@@ -254,6 +311,62 @@ function splitSessionIds(): Set<string> {
 
 function isManagedSplitSession(sessionId: string): boolean {
   return splitSessionIds().has(sessionId) || sessionId === activeSessionIdRef
+}
+
+function mergeHistoryPage(
+  page: { messages: ChatMessage[]; start: number; hasMore: boolean },
+  previous: { messages: ChatMessage[]; historyStart: number },
+) {
+  const historyStart =
+    previous.messages.length > 0
+      ? Math.min(previous.historyStart, page.start)
+      : page.start
+
+  return {
+    messages: mergeHistoryMessages(page.messages, previous.messages),
+    historyStart,
+    hasMoreHistory: historyStart > 0,
+  }
+}
+
+function cachedSessionMessages(sessionId: string): ChatMessage[] | undefined {
+  if (getChatState().activeSessionId === sessionId) {
+    return getChatState().messages
+  }
+  return store.get(splitSessionStatesAtom)[sessionId]?.messages
+}
+
+// Reconnects can miss messages sent while the socket was down. Refetch the
+// newest history page and merge it into the cached messages so a final answer
+// produced during the drop is not lost.
+async function resyncSessionHistory(
+  sessionId: string,
+  isStillCurrent: () => boolean,
+) {
+  // A fresh session has nothing to resync and no server-side history yet.
+  if ((cachedSessionMessages(sessionId)?.length ?? 0) === 0) {
+    return
+  }
+
+  try {
+    const page = await loadSessionMessages(sessionId)
+    if (!isStillCurrent()) {
+      return
+    }
+
+    if (getChatState().activeSessionId === sessionId) {
+      updateChatStore((prev) =>
+        prev.activeSessionId === sessionId
+          ? mergeHistoryPage(page, prev)
+          : prev,
+      )
+      return
+    }
+
+    updateSplitSessionState(sessionId, (prev) => mergeHistoryPage(page, prev))
+  } catch (error) {
+    console.error("Failed to resync session history:", error)
+  }
 }
 
 function isCurrentSplitConnection(
@@ -296,7 +409,7 @@ function scheduleSplitReconnect(
     return
   }
 
-  const delay = Math.min(1000 * 2 ** connection.attempts, 5000)
+  const delay = reconnectDelay(connection.attempts)
   connection.attempts += 1
   connection.timer = window.setTimeout(() => {
     connection.timer = null
@@ -344,6 +457,9 @@ function attachSplitSocket(
       reconnectAttempts = 0
       updateChatStore({ connectionState: "connected" })
     }
+    void resyncSessionHistory(sessionId, () =>
+      isCurrentSplitConnection(sessionId, connection, socket, generation),
+    )
   }
 
   socket.onclose = () => {
@@ -604,6 +720,16 @@ export async function connectChat() {
       updateChatStore({ connectionState: "connected" })
       isConnecting = false
       reconnectAttempts = 0
+      void resyncSessionHistory(sessionId, () =>
+        isCurrentSocket({
+          socket,
+          currentSocket: wsRef,
+          generation,
+          currentGeneration: connectionGeneration,
+          sessionId,
+          currentSessionId: activeSessionIdRef,
+        }),
+      )
     }
 
     socket.onmessage = (event) => {
@@ -986,6 +1112,11 @@ export function initializeChatStore() {
   activeSessionIdRef = getChatState().activeSessionId
   let lastGatewayStatus: GatewayState | null = null
 
+  onlineListener = () => {
+    reconnectNow()
+  }
+  window.addEventListener("online", onlineListener)
+
   const syncConnectionWithGateway = (force: boolean = false) => {
     const gatewayStatus = store.get(gatewayAtom).status
     syncSplitConnections()
@@ -1033,6 +1164,10 @@ export function initializeChatStore() {
 }
 
 export function teardownChatStore() {
+  if (onlineListener) {
+    window.removeEventListener("online", onlineListener)
+    onlineListener = null
+  }
   unsubscribeGateway?.()
   unsubscribeGateway = null
   unsubscribeChat?.()
