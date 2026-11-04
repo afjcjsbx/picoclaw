@@ -1228,7 +1228,14 @@
     "logs": {
       "log_level_error": "更新日志等级失败。",
       "clear": "清空日志",
-      "empty": "等待日志中..."
+      "empty": "等待日志中...",
+      "search": "搜索日志",
+      "search_clear": "清除搜索",
+      "download": "下载日志",
+      "pause_tail": "暂停跟踪",
+      "resume_tail": "恢复跟踪",
+      "new_lines": "新日志：{{total}} 条",
+      "no_matches": "没有匹配的日志。"
     }
   },
   "tour": {

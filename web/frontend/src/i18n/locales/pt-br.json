@@ -1061,7 +1061,14 @@
     "logs": {
       "log_level_error": "Falha ao atualizar nível de log.",
       "clear": "Limpar logs",
-      "empty": "Aguardando logs..."
+      "empty": "Aguardando logs...",
+      "search": "Pesquisar logs",
+      "search_clear": "Limpar pesquisa",
+      "download": "Baixar logs",
+      "pause_tail": "Pausar acompanhamento",
+      "resume_tail": "Retomar acompanhamento",
+      "new_lines": "Novas linhas: {{total}}",
+      "no_matches": "Nenhum log corresponde à sua pesquisa."
     }
   },
   "tour": {
