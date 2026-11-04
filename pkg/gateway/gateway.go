@@ -363,8 +363,15 @@ func executeReload(
 ) (err error) {
 	startedAt := time.Now()
 	publishGatewayEvent(agentLoop, runtimeevents.KindGatewayReloadStarted, startedAt, nil)
+	var reloadGeneration uint64
+	if runningServices.HealthServer != nil {
+		reloadGeneration = runningServices.HealthServer.BeginReload()
+	}
 	defer runningServices.reloading.Store(false)
 	defer func() {
+		if runningServices.HealthServer != nil {
+			runningServices.HealthServer.FinishReload(reloadGeneration, err)
+		}
 		if err != nil {
 			publishGatewayEvent(agentLoop, runtimeevents.KindGatewayReloadFailed, startedAt, err)
 			return

@@ -14,13 +14,15 @@ There are no generic REST chat endpoints — chat traffic uses the Pico protocol
 | `GET` | `/health` | Liveness check; JSON `{status:"ok", uptime, pid}` | None |
 | `GET` | `/ready` | Readiness check; returns 503 until the Gateway reports ready | None |
 | `POST` | `/reload` | Schedule an asynchronous config reload; returns `202 {"status":"reload scheduled",...}` (503 when reload is unavailable, 405 for other methods) | Bearer token |
+| `GET` | `/reload/status` | Latest reload state: `{generation, in_progress, last_error, started_at, finished_at}` (405 for other methods) | Bearer token |
 | `GET` | `/pico/ws` | Pico channel WebSocket (only when the `pico` channel is enabled) | Pico token |
 | `GET`/`HEAD` | `/pico/media/{id}` | Attachment download (`content-disposition: inline` for images) | Pico token |
 | `POST` | `/webhook/line` | LINE channel webhook; path configurable via `LINE.webhook_path` | LINE signature |
 
 Notes:
 
-- **`/reload` auth**: the Gateway generates a token at startup and stores it in the PID file (`.picoclaw.pid`). Send it as `Authorization: Bearer <token>`. An empty token disables the check.
+- **`/reload` auth**: the Gateway generates a token at startup and stores it in the PID file (`.picoclaw.pid`). Send it as `Authorization: Bearer <token>`. An empty token disables the check. `/reload/status` uses the same token.
+- **Reload status**: `generation` increases when a reload starts. Callers that triggered a reload can poll `/reload/status` until `generation` advances and `in_progress` is `false`; a non-empty `last_error` means the reload failed and the previous configuration is still active.
 - **Channel handlers**: HTTP-based channels register their own routes on the same server (for example the LINE webhook above). A channel that is not enabled does not expose its routes.
 - **Docker**: the `gateway` compose profile exposes only webhooks and health endpoints; use the `launcher` profile (or `PICOCLAW_GATEWAY_HOST=0.0.0.0`) for host access. See the [Docker & Quick Start Guide](../guides/docker.md).
 
@@ -79,7 +81,7 @@ Unauthenticated requests behave as follows: dashboard pages redirect to `/launch
 | Surface | Endpoints | Condition |
 | --- | --- | --- |
 | Gateway health | `/health`, `/ready` | Always |
-| Gateway reload | `/reload` | Always (requires the PID-file token when set) |
+| Gateway reload | `/reload`, `/reload/status` | Always (requires the PID-file token when set) |
 | Pico | `/pico/ws`, `/pico/media/{id}` | `pico` channel enabled with a non-empty token (the launcher auto-enables it) |
 | Channel webhooks | `/webhook/*` | The respective channel enabled |
 | Launcher API | `/api/*`, `/pico/*` proxy | Launcher running; dashboard cookie required (503 when the Gateway is down for the Pico proxy) |

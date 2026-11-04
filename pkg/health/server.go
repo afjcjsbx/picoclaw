@@ -14,15 +14,28 @@ import (
 )
 
 type Server struct {
-	server     *http.Server
-	mux        *http.ServeMux
-	mu         sync.RWMutex
-	ready      bool
-	checks     map[string]Check
-	startTime  time.Time
-	reloadFunc func() error
-	authToken  string // optional bearer token for protected endpoints
-	protected  map[string]http.Handler
+	server       *http.Server
+	mux          *http.ServeMux
+	mu           sync.RWMutex
+	ready        bool
+	checks       map[string]Check
+	startTime    time.Time
+	reloadFunc   func() error
+	authToken    string // optional bearer token for protected endpoints
+	protected    map[string]http.Handler
+	reloadMu     sync.Mutex
+	reloadStatus ReloadStatus
+}
+
+// ReloadStatus describes the most recent configuration reload handled by the
+// gateway loop. Generation increases when a reload starts, so callers can wait
+// for a reload they triggered instead of matching timestamps.
+type ReloadStatus struct {
+	Generation uint64     `json:"generation"`
+	InProgress bool       `json:"in_progress"`
+	LastError  string     `json:"last_error,omitempty"`
+	StartedAt  *time.Time `json:"started_at,omitempty"`
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
 }
 
 type Check struct {
@@ -53,6 +66,7 @@ func NewServer(host string, port int, token string) *Server {
 	mux.HandleFunc("/health", s.healthHandler)
 	mux.HandleFunc("/ready", s.readyHandler)
 	mux.HandleFunc("/reload", s.reloadHandler)
+	mux.HandleFunc("/reload/status", s.reloadStatusHandler)
 
 	addr := net.JoinHostPort(host, strconv.Itoa(port))
 	s.server = &http.Server{
@@ -161,6 +175,87 @@ func (s *Server) SetReloadFunc(fn func() error) {
 	s.reloadFunc = fn
 }
 
+// BeginReload marks a reload as started and returns its generation. The
+// gateway loop calls this before validating the new configuration, so a failed
+// reload is still visible to callers polling GetReloadStatus.
+func (s *Server) BeginReload() uint64 {
+	s.reloadMu.Lock()
+	defer s.reloadMu.Unlock()
+
+	now := time.Now()
+	s.reloadStatus.Generation++
+	s.reloadStatus.InProgress = true
+	s.reloadStatus.LastError = ""
+	s.reloadStatus.StartedAt = &now
+	s.reloadStatus.FinishedAt = nil
+	return s.reloadStatus.Generation
+}
+
+// FinishReload marks the reload with the given generation as finished.
+// Reloads with a stale generation are ignored.
+func (s *Server) FinishReload(generation uint64, reloadErr error) {
+	s.reloadMu.Lock()
+	defer s.reloadMu.Unlock()
+
+	if generation == 0 || generation != s.reloadStatus.Generation {
+		return
+	}
+	now := time.Now()
+	s.reloadStatus.InProgress = false
+	s.reloadStatus.FinishedAt = &now
+	if reloadErr != nil {
+		s.reloadStatus.LastError = reloadErr.Error()
+	}
+}
+
+// GetReloadStatus returns a snapshot of the most recent reload state.
+func (s *Server) GetReloadStatus() ReloadStatus {
+	s.reloadMu.Lock()
+	defer s.reloadMu.Unlock()
+
+	status := s.reloadStatus
+	if s.reloadStatus.StartedAt != nil {
+		startedAt := *s.reloadStatus.StartedAt
+		status.StartedAt = &startedAt
+	}
+	if s.reloadStatus.FinishedAt != nil {
+		finishedAt := *s.reloadStatus.FinishedAt
+		status.FinishedAt = &finishedAt
+	}
+	return status
+}
+
+func (s *Server) authorizedReloadRequest(r *http.Request) bool {
+	s.mu.RLock()
+	requiredToken := s.authToken
+	s.mu.RUnlock()
+
+	if requiredToken == "" {
+		return true
+	}
+	given := extractBearerToken(r.Header.Get("Authorization"))
+	return given != "" && subtle.ConstantTimeCompare([]byte(given), []byte(requiredToken)) == 1
+}
+
+func (s *Server) reloadStatusHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		json.NewEncoder(w).Encode(map[string]string{"error": "method not allowed, use GET"})
+		return
+	}
+
+	if !s.authorizedReloadRequest(r) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(s.GetReloadStatus())
+}
+
 func (s *Server) reloadHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Content-Type", "application/json")
@@ -169,19 +264,11 @@ func (s *Server) reloadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Token check
-	s.mu.RLock()
-	requiredToken := s.authToken
-	s.mu.RUnlock()
-
-	if requiredToken != "" {
-		given := extractBearerToken(r.Header.Get("Authorization"))
-		if given == "" || subtle.ConstantTimeCompare([]byte(given), []byte(requiredToken)) != 1 {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
-			return
-		}
+	if !s.authorizedReloadRequest(r) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
+		return
 	}
 
 	s.mu.Lock()
@@ -278,6 +365,7 @@ func (s *Server) RegisterOnMux(mux HandlerMux) {
 	mux.HandleFunc("/health", s.healthHandler)
 	mux.HandleFunc("/ready", s.readyHandler)
 	mux.HandleFunc("/reload", s.reloadHandler)
+	mux.HandleFunc("/reload/status", s.reloadStatusHandler)
 	s.mu.RLock()
 	protected := make(map[string]http.Handler, len(s.protected))
 	maps.Copy(protected, s.protected)

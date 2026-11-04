@@ -69,7 +69,9 @@ The Gateway can reload `config.json` without a restart. Two independent triggers
 
   The default is `false`. When enabled, PicoClaw polls the config file (every 2 seconds, scaled by `power.poll_interval_multiplier`) and reloads after a change is written and validated. An invalid or partially written file is ignored and retried on the next poll; the last valid configuration stays in effect.
 
-- **`POST /reload`** — always available, regardless of `gateway.hot_reload`, on the shared Gateway HTTP server. It requires the Gateway auth token (`Authorization: Bearer <token>`) when one is configured and returns `202 Accepted` as soon as the reload is scheduled. The reload itself runs asynchronously; watch the `gateway.reload.started` / `gateway.reload.completed` / `gateway.reload.failed` runtime events, or the logs, for the outcome.
+- **`POST /reload`** — always available, regardless of `gateway.hot_reload`, on the shared Gateway HTTP server. It requires the Gateway auth token (`Authorization: Bearer <token>`) when one is configured and returns `202 Accepted` as soon as the reload is scheduled. The reload itself runs asynchronously; watch the `gateway.reload.started` / `gateway.reload.completed` / `gateway.reload.failed` runtime events, or the logs, for the outcome. `GET /reload/status` reports the latest reload generation and outcome so callers can wait for completion.
+
+Saving model settings from the Web UI triggers a reload automatically and clears the dashboard's restart-required banner once the reload succeeds. Failed reloads leave the previous configuration active and keep the banner visible.
 
 A reload swaps the provider and the agent registry/configuration, restarts the cron, heartbeat, media, device and voice services, and restarts only the channels whose configuration changed. In-flight requests are allowed to drain before the previous provider is closed.
 
