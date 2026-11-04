@@ -175,6 +175,12 @@ func TestClassifyError_Billing400OverridesFormat(t *testing.T) {
 				BodyPreview: `{"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API."}}`,
 			},
 		},
+		{
+			name: "extra usage",
+			err: fmt.Errorf(
+				`bad request (400): {"type":"error","error":{"type":"invalid_request_error","message":"You're out of extra usage. Add more at claude.ai/settings/usage and keep going."}}`,
+			),
+		},
 	}
 
 	for _, tt := range tests {
@@ -192,7 +198,28 @@ func TestClassifyError_Billing400OverridesFormat(t *testing.T) {
 			if !result.IsRetriable() {
 				t.Fatal("billing error must be retriable")
 			}
+			wantUnverified := tt.name == "extra usage"
+			if result.BillingUnverified != wantUnverified {
+				t.Fatalf("billing unverified = %v, want %v", result.BillingUnverified, wantUnverified)
+			}
 		})
+	}
+}
+
+func TestClassifyError_StatuslessExtraUsageIsUnverified(t *testing.T) {
+	result := ClassifyError(
+		errors.New("You're out of extra usage. Add more at claude.ai/settings/usage and keep going."),
+		"anthropic",
+		"claude-sonnet-5-5",
+	)
+	if result == nil {
+		t.Fatal("expected non-nil")
+	}
+	if result.Reason != FailoverBilling {
+		t.Fatalf("reason = %q, want billing", result.Reason)
+	}
+	if !result.BillingUnverified {
+		t.Fatal("status-less extra-usage error should stay unverified")
 	}
 }
 
