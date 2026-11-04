@@ -168,7 +168,7 @@ function normalizeMessageTimestamp(timestamp: number | string): string {
   return Number.isNaN(parsed) ? trimmed : String(parsed)
 }
 
-function messageSignature(message: ChatMessage): string {
+function messageContentSignature(message: ChatMessage): string {
   const attachmentSignature = (message.attachments ?? [])
     .map(
       (attachment) =>
@@ -176,9 +176,7 @@ function messageSignature(message: ChatMessage): string {
     )
     .join("\u0002")
 
-  return `${message.role}\u0000${message.content}\u0000${normalizeMessageTimestamp(
-    message.timestamp,
-  )}\u0000${message.kind ?? ""}\u0000${message.modelName ?? ""}\u0000${attachmentSignature}\u0000${toolCallsSignature(
+  return `${message.role}\u0000${message.content}\u0000${message.kind ?? ""}\u0000${attachmentSignature}\u0000${toolCallsSignature(
     message.toolCalls,
   )}`
 }
@@ -189,25 +187,73 @@ function comparableTimestamp(timestamp: number | string): number {
   return Number.isFinite(numeric) ? numeric : 0
 }
 
+// Client-side timestamps (Date.now at send/receive) and server timestamps
+// (created_at) rarely match to the millisecond, so persisted messages are
+// matched by content plus a tolerance window instead of exact timestamp.
+const MERGE_TIMESTAMP_TOLERANCE_MS = 2 * 60 * 1000
+
 export function mergeHistoryMessages(
   historyMessages: ChatMessage[],
   currentMessages: ChatMessage[],
 ): ChatMessage[] {
   const currentIds = new Set(currentMessages.map((message) => message.id))
-  const currentSignatures = new Set(
-    currentMessages.map((message) => messageSignature(message)),
+  const liveMessages = currentMessages.filter(
+    (message) => !message.id.startsWith("hist-"),
   )
+  const liveIndexesByContent = new Map<string, number[]>()
+  liveMessages.forEach((message, index) => {
+    const key = messageContentSignature(message)
+    const indexes = liveIndexesByContent.get(key)
+    if (indexes) {
+      indexes.push(index)
+    } else {
+      liveIndexesByContent.set(key, [index])
+    }
+  })
+  const matchedLiveIndexes = new Set<number>()
 
-  const merged = [
-    ...historyMessages.filter(
-      (message) =>
-        !currentIds.has(message.id) &&
-        !currentSignatures.has(messageSignature(message)),
-    ),
-    ...currentMessages,
-  ]
+  const merged = historyMessages.filter((message) => {
+    if (currentIds.has(message.id)) {
+      return false
+    }
 
-  return merged.sort(
+    const candidates = liveIndexesByContent.get(
+      messageContentSignature(message),
+    )
+    if (!candidates) {
+      return true
+    }
+
+    const historyTimestamp = comparableTimestamp(message.timestamp)
+    const tolerance =
+      message.role === "user"
+        ? Number.POSITIVE_INFINITY
+        : MERGE_TIMESTAMP_TOLERANCE_MS
+
+    let bestIndex = -1
+    let bestDelta = Number.POSITIVE_INFINITY
+    for (const index of candidates) {
+      if (matchedLiveIndexes.has(index)) {
+        continue
+      }
+      const delta = Math.abs(
+        comparableTimestamp(liveMessages[index].timestamp) - historyTimestamp,
+      )
+      if (delta < bestDelta) {
+        bestDelta = delta
+        bestIndex = index
+      }
+    }
+
+    if (bestIndex >= 0 && bestDelta <= tolerance) {
+      matchedLiveIndexes.add(bestIndex)
+      return false
+    }
+
+    return true
+  })
+
+  return [...merged, ...currentMessages].sort(
     (left, right) =>
       comparableTimestamp(left.timestamp) -
       comparableTimestamp(right.timestamp),
