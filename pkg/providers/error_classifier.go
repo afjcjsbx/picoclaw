@@ -87,6 +87,11 @@ var (
 		substr("credit balance"),
 		substr("plans & billing"),
 		substr("insufficient balance"),
+		// Anthropic returns 400 invalid_request_error for organization and
+		// workspace spend limits, not just for malformed requests.
+		rxp(`reached\s+(?:your\s+)?specified\s+(?:api\s+|workspace\s+)?usage\s+limits?`),
+		rxp(`(?:organization|workspace)\s+spend\s+limit`),
+		substr("spend limit reached"),
 	}
 
 	authPatterns = []errorPattern{
@@ -201,10 +206,13 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 		}
 	}
 
-	// Try HTTP status code extraction first.
+	// Try HTTP status code extraction first. A 400 is normally a format error,
+	// but some providers (notably Anthropic) also use 400 for billing and spend
+	// limit failures. In that case the message must win over the status code so
+	// the fallback chain can move to the next model instead of stopping.
 	var httpErr *common.HTTPError
 	if errors.As(err, &httpErr) && httpErr != nil {
-		if reason := classifyByStatus(httpErr.StatusCode); reason != "" {
+		if reason := classifyStatusWithBilling(httpErr.StatusCode, msg); reason != "" {
 			return &FailoverError{
 				Reason:   reason,
 				Provider: provider,
@@ -215,7 +223,7 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 		}
 	}
 	if status := extractHTTPStatus(msg); status > 0 {
-		if reason := classifyByStatus(status); reason != "" {
+		if reason := classifyStatusWithBilling(status, msg); reason != "" {
 			return &FailoverError{
 				Reason:   reason,
 				Provider: provider,
@@ -291,6 +299,17 @@ func classifyByStatus(status int) FailoverReason {
 		return FailoverTimeout
 	}
 	return ""
+}
+
+// classifyStatusWithBilling maps an HTTP status code to a FailoverReason. A
+// 400 that carries a billing or spend-limit message is classified as billing
+// instead of format, because it is retriable through the fallback chain.
+func classifyStatusWithBilling(status int, msg string) FailoverReason {
+	reason := classifyByStatus(status)
+	if reason == FailoverFormat && matchesAny(msg, billingPatterns) {
+		return FailoverBilling
+	}
+	return reason
 }
 
 // classifyByMessage matches error messages against patterns.

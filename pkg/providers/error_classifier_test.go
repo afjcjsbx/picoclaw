@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"syscall"
 	"testing"
+
+	"github.com/sipeed/picoclaw/pkg/providers/common"
 )
 
 type stubNetError struct {
@@ -143,6 +145,54 @@ func TestClassifyError_BillingPatterns(t *testing.T) {
 		if result.Reason != FailoverBilling {
 			t.Errorf("pattern %q: reason = %q, want billing", msg, result.Reason)
 		}
+	}
+}
+
+// Anthropic reports exhausted credits and spend limits as HTTP 400
+// invalid_request_error. The billing message must override the generic
+// status-based format classification so fallback remains available.
+func TestClassifyError_Billing400OverridesFormat(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{
+			name: "credit balance",
+			err: fmt.Errorf(
+				`bad request (400): {"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits."}}`,
+			),
+		},
+		{
+			name: "workspace spend limit",
+			err: fmt.Errorf(
+				`bad request (400): {"type":"error","error":{"type":"invalid_request_error","message":"You have reached your specified API usage limits. You will regain access on 2026-12-01 at 00:00 UTC."}}`,
+			),
+		},
+		{
+			name: "structured HTTP error",
+			err: &common.HTTPError{
+				StatusCode:  400,
+				BodyPreview: `{"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API."}}`,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ClassifyError(tt.err, "anthropic-messages", "claude-sonnet-5-5")
+			if result == nil {
+				t.Fatal("expected non-nil")
+			}
+			if result.Reason != FailoverBilling {
+				t.Fatalf("reason = %q, want billing", result.Reason)
+			}
+			if result.Status != 400 {
+				t.Fatalf("status = %d, want 400", result.Status)
+			}
+			if !result.IsRetriable() {
+				t.Fatal("billing error must be retriable")
+			}
+		})
 	}
 }
 
