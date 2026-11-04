@@ -85,6 +85,9 @@
     "forkFailed": "কথোপকথন ফর্ক করতে ব্যর্থ",
     "loadingMore": "আরও লোড হচ্ছে...",
     "deleteSession": "সেশন মুছুন",
+    "deleteSessionTitle": "সেশন মুছবেন?",
+    "deleteSessionConfirm": "\"{{title}}\" এবং এর বার্তা ইতিহাস স্থায়ীভাবে মুছে যাবে। এটি ফিরিয়ে আনা যাবে না।",
+    "deleteSessionFailed": "সেশনটি মুছে ফেলা যায়নি",
     "messagesCount": "{{count}}টি বার্তা",
     "noModel": "মডেল নির্বাচন করুন",
     "inputDisabled": {

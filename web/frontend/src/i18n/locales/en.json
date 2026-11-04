@@ -105,6 +105,9 @@
     "forkFailed": "Failed to fork this conversation",
     "loadingMore": "Loading more...",
     "deleteSession": "Delete session",
+    "deleteSessionTitle": "Delete session?",
+    "deleteSessionConfirm": "\"{{title}}\" and its message history will be permanently deleted. This cannot be undone.",
+    "deleteSessionFailed": "Could not delete the session",
     "messagesCount": "{{count}} messages",
     "noModel": "Select model",
     "inputDisabled": {

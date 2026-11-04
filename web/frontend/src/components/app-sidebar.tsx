@@ -22,7 +22,9 @@ import { useAtom, useAtomValue, useSetAtom } from "jotai"
 import * as React from "react"
 import { useTranslation } from "react-i18next"
 
+import type { SessionSummary } from "@/api/sessions"
 import { AppSidebarControls } from "@/components/app-sidebar-controls"
+import { DeleteSessionDialog } from "@/components/chat/delete-session-dialog"
 import { Button } from "@/components/ui/button"
 import {
   Collapsible,
@@ -192,6 +194,8 @@ export function AppSidebar({
   const [expandedSplitId, setExpandedSplitId] = React.useState<string | null>(
     null,
   )
+  const [pendingDeleteSession, setPendingDeleteSession] =
+    React.useState<SessionSummary | null>(null)
   const sidebarResizeRef = React.useRef<{
     pointerId: number
     x: number
@@ -733,22 +737,9 @@ export function AppSidebar({
                                           aria-label={t("chat.deleteSession")}
                                           title={t("chat.deleteSession")}
                                           onClick={() =>
-                                            void (async () => {
-                                              if (
-                                                await handleDeleteSession(
-                                                  member.id,
-                                                )
-                                              ) {
-                                                setSplitGroups((groups) =>
-                                                  removeSplitConversation(
-                                                    groups,
-                                                    member.id,
-                                                  ),
-                                                )
-                                              }
-                                            })()
+                                            setPendingDeleteSession(member)
                                           }
-                                          className="text-muted-foreground hover:text-destructive absolute top-1 right-1 rounded p-1 opacity-0 group-hover/menu-sub-item:opacity-100 focus-visible:opacity-100"
+                                          className="text-muted-foreground hover:text-destructive focus-visible:text-destructive focus-visible:ring-sidebar-ring absolute top-1 right-1 rounded p-1 focus-visible:ring-2 focus-visible:outline-hidden md:opacity-0 md:group-hover/menu-sub-item:opacity-100 md:focus-visible:opacity-100"
                                         >
                                           <IconTrash className="size-3.5" />
                                         </button>
@@ -776,18 +767,8 @@ export function AppSidebar({
                             <SidebarMenuAction
                               showOnHover
                               aria-label={t("chat.deleteSession")}
-                              onClick={() =>
-                                void (async () => {
-                                  if (await handleDeleteSession(session.id)) {
-                                    setSplitGroups((groups) =>
-                                      removeSplitConversation(
-                                        groups,
-                                        session.id,
-                                      ),
-                                    )
-                                  }
-                                })()
-                              }
+                              title={t("chat.deleteSession")}
+                              onClick={() => setPendingDeleteSession(session)}
                             >
                               <IconTrash />
                             </SidebarMenuAction>
@@ -987,6 +968,14 @@ export function AppSidebar({
       >
         <span className="bg-border/80 group-hover:bg-primary group-focus-visible:bg-primary h-10 w-px transition-colors" />
       </div>
+      <DeleteSessionDialog
+        session={pendingDeleteSession}
+        onClose={() => setPendingDeleteSession(null)}
+        onDelete={handleDeleteSession}
+        onDeleted={(id) =>
+          setSplitGroups((groups) => removeSplitConversation(groups, id))
+        }
+      />
     </Sidebar>
   )
 }
