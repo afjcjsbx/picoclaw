@@ -69,7 +69,7 @@ While the agent is generating a response, the send button becomes a stop button.
 
 ### Token usage
 
-Assistant replies show input, output, and total token counts when the provider reports usage. Hover the usage badge for the full breakdown. When pricing is available, the badge also shows a per-turn cost: a leading `~` marks an estimate derived from public list prices, while a cost reported by the backend is shown as-is. Usage is stored with session history, so the badge remains visible after reloading the page or reopening the conversation.
+Assistant replies show input, output, and total token counts when the provider reports usage. Hover the usage badge for the full breakdown. Usage is aggregated across all model calls in a turn, including tool-call iterations. When pricing is available, the badge also shows a per-turn cost: a leading `~` marks an estimate derived from public list prices, while a cost reported by the backend is shown as-is. Usage is stored with session history, so the badge remains visible after reloading the page or reopening the conversation.
 
 The **Gateway** runs as a subprocess managed through the launcher (`picoclaw gateway -E`, with `-d` when debug logging is on). The top bar lets you start, stop, and restart it, and shows its state. Auto-start only happens when a usable default model is configured; otherwise use **Start Gateway** after adding credentials in `/models` or `/credentials`.
 

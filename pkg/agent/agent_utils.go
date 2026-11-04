@@ -568,13 +568,6 @@ func responseReasoningContent(response *providers.LLMResponse) string {
 	return ""
 }
 
-func responseUsageInfo(response *providers.LLMResponse) *providers.UsageInfo {
-	if response == nil {
-		return nil
-	}
-	return response.Usage
-}
-
 func tokenUsageFromProviders(usage *providers.UsageInfo) *bus.TokenUsage {
 	if usage == nil {
 		return nil
