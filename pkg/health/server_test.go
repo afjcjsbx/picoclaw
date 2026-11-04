@@ -215,6 +215,73 @@ func TestReloadHandler_Error(t *testing.T) {
 	}
 }
 
+func TestReloadStatusHandler_ReportsGenerationAndOutcome(t *testing.T) {
+	s := newTestServer()
+
+	generation := s.BeginReload()
+	if generation != 1 {
+		t.Fatalf("BeginReload() generation = %d, want 1", generation)
+	}
+	s.FinishReload(generation, errors.New("boom"))
+
+	req := httptest.NewRequest(http.MethodGet, "/reload/status", nil)
+	req.Header.Set("Authorization", "Bearer test")
+	w := httptest.NewRecorder()
+	s.reloadStatusHandler(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("reload status = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	var status ReloadStatus
+	if err := json.NewDecoder(w.Body).Decode(&status); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if status.Generation != generation {
+		t.Fatalf("generation = %d, want %d", status.Generation, generation)
+	}
+	if status.InProgress {
+		t.Fatal("in_progress = true, want false")
+	}
+	if status.LastError != "boom" {
+		t.Fatalf("last_error = %q, want %q", status.LastError, "boom")
+	}
+	if status.StartedAt == nil || status.FinishedAt == nil {
+		t.Fatal("started_at and finished_at should be set")
+	}
+}
+
+func TestReloadStatusHandler_RequiresAuth(t *testing.T) {
+	s := newTestServer()
+
+	req := httptest.NewRequest(http.MethodGet, "/reload/status", nil)
+	w := httptest.NewRecorder()
+	s.reloadStatusHandler(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("reload status without token = %d, want %d", w.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestFinishReload_IgnoresStaleGeneration(t *testing.T) {
+	s := newTestServer()
+
+	first := s.BeginReload()
+	second := s.BeginReload()
+	s.FinishReload(first, errors.New("stale"))
+
+	status := s.GetReloadStatus()
+	if status.Generation != second {
+		t.Fatalf("generation = %d, want %d", status.Generation, second)
+	}
+	if !status.InProgress {
+		t.Fatal("in_progress = false, want true after stale finish")
+	}
+	if status.LastError != "" {
+		t.Fatalf("last_error = %q, want empty", status.LastError)
+	}
+}
+
 func TestSetReady_Toggle(t *testing.T) {
 	s := newTestServer()
 
