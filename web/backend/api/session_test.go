@@ -52,6 +52,53 @@ func assertVisibleToolCallMessage(
 	return msg.ToolCalls[0]
 }
 
+func TestSessionTranscriptMessagesPreservesUsage(t *testing.T) {
+	transcript := sessionTranscriptMessages([]providers.Message{{
+		Role:    "assistant",
+		Content: "answer",
+		Usage: &providers.UsageInfo{
+			PromptTokens:        1234,
+			CompletionTokens:    567,
+			TotalTokens:         1801,
+			CacheReadTokens:     120,
+			CacheCreationTokens: 80,
+		},
+	}}, 0, false)
+
+	if len(transcript) != 1 {
+		t.Fatalf("len(transcript) = %d, want 1", len(transcript))
+	}
+	usage := transcript[0].Usage
+	if usage == nil {
+		t.Fatal("Usage = nil, want session usage")
+	}
+	want := sessionUsage{
+		InputTokens:         1234,
+		OutputTokens:        567,
+		TotalTokens:         1801,
+		CacheReadTokens:     120,
+		CacheCreationTokens: 80,
+	}
+	if *usage != want {
+		t.Fatalf("Usage = %+v, want %+v", *usage, want)
+	}
+}
+
+func TestSessionTranscriptMessagesOmitsZeroUsage(t *testing.T) {
+	transcript := sessionTranscriptMessages([]providers.Message{{
+		Role:    "assistant",
+		Content: "answer",
+		Usage:   &providers.UsageInfo{},
+	}}, 0, false)
+
+	if len(transcript) != 1 {
+		t.Fatalf("len(transcript) = %d, want 1", len(transcript))
+	}
+	if transcript[0].Usage != nil {
+		t.Fatalf("Usage = %+v, want nil", transcript[0].Usage)
+	}
+}
+
 func TestHandleListSessions_JSONLStorage(t *testing.T) {
 	configPath, cleanup := setupOAuthTestEnv(t)
 	defer cleanup()

@@ -47,6 +47,7 @@ func (p *Pipeline) Finalize(
 			Content:          finalContent,
 			ModelName:        exec.llmModelName,
 			ReasoningContent: responseReasoningContent(exec.response),
+			Usage:            responseUsageInfo(exec.response),
 		}
 		warnSessionStoreError(
 			ts.sessionKey,

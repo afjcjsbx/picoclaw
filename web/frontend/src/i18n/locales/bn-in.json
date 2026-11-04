@@ -86,6 +86,17 @@
     "loadingMore": "আরও লোড হচ্ছে...",
     "deleteSession": "সেশন মুছুন",
     "messagesCount": "{{count}}টি বার্তা",
+    "usage": {
+      "summary": "{{input}} ইনপুট · {{output}} আউটপুট",
+      "costValue": "{{cost}}",
+      "estimatedCostValue": "~{{cost}}",
+      "input": "ইনপুট টোকেন",
+      "output": "আউটপুট টোকেন",
+      "total": "মোট টোকেন",
+      "cost": "খরচ",
+      "estimatedCost": "আনুমানিক খরচ",
+      "estimated": "সর্বজনীন তালিকা মূল্য থেকে আনুমানিক।"
+    },
     "noModel": "মডেল নির্বাচন করুন",
     "inputDisabled": {
       "notConnected": "গেটওয়ে চলছে না। চ্যাট করতে এটি চালু করুন।",

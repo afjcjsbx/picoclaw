@@ -568,6 +568,13 @@ func responseReasoningContent(response *providers.LLMResponse) string {
 	return ""
 }
 
+func responseUsageInfo(response *providers.LLMResponse) *providers.UsageInfo {
+	if response == nil {
+		return nil
+	}
+	return response.Usage
+}
+
 func shallowCloneLLMOptions(opts map[string]any) map[string]any {
 	clone := make(map[string]any, len(opts))
 	maps.Copy(clone, opts)

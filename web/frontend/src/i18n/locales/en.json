@@ -106,6 +106,17 @@
     "loadingMore": "Loading more...",
     "deleteSession": "Delete session",
     "messagesCount": "{{count}} messages",
+    "usage": {
+      "summary": "{{input}} in · {{output}} out",
+      "costValue": "{{cost}}",
+      "estimatedCostValue": "~{{cost}}",
+      "input": "Input tokens",
+      "output": "Output tokens",
+      "total": "Total tokens",
+      "cost": "Cost",
+      "estimatedCost": "Estimated cost",
+      "estimated": "Estimated from public list prices."
+    },
     "noModel": "Select model",
     "inputDisabled": {
       "notConnected": "Gateway is not running. Start it to chat.",

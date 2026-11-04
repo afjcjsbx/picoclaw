@@ -3,6 +3,7 @@ import {
   IconCheck,
   IconClockHour4,
   IconCode,
+  IconCoins,
   IconCopy,
   IconDownload,
   IconFileText,
@@ -36,6 +37,11 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import {
+  estimateUsageCostUsd,
+  formatTokenCount,
+  formatUsageCostUsd,
+} from "@/features/chat/usage"
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard"
 import { formatMessageTime } from "@/hooks/use-pico-chat"
 import { cn } from "@/lib/utils"
@@ -43,17 +49,20 @@ import {
   type AssistantMessageKind,
   type ChatAttachment,
   type ChatToolCall,
+  type TokenUsage,
 } from "@/store/chat"
 
 interface AssistantMessageProps {
   content: string
   attachments?: ChatAttachment[]
   kind?: AssistantMessageKind
+  modelName?: string
   onFork?: () => void
   onOpenFile?: (path: string) => void
   filePathAliases?: Record<string, string>
   toolCalls?: ChatToolCall[]
   timestamp?: string | number
+  usage?: TokenUsage
 }
 
 function ForkArrowIcon({ className }: { className?: string }) {
@@ -538,11 +547,13 @@ export const AssistantMessage = memo(function AssistantMessage({
   content,
   attachments = [],
   kind = "normal",
+  modelName,
   onFork,
   onOpenFile,
   filePathAliases,
   toolCalls = [],
   timestamp = "",
+  usage,
 }: AssistantMessageProps) {
   const { t } = useTranslation()
   const { copy, isCopied } = useCopyToClipboard()
@@ -576,6 +587,16 @@ export const AssistantMessage = memo(function AssistantMessage({
     .replace(/\s+/g, " ")
     .replace(/^🔧\s*/, "")
     .trim()
+  const hasUsage = usage !== undefined && usage.total_tokens > 0
+  const usageInput = usage?.input_tokens
+  const usageOutput = usage?.output_tokens
+  const usageCostUsd = usage
+    ? estimateUsageCostUsd(usage, modelName)
+    : undefined
+  const usageCostIsEstimated =
+    usage !== undefined &&
+    usage.cost_usd === undefined &&
+    usageCostUsd !== undefined
 
   return (
     <div
@@ -805,8 +826,8 @@ export const AssistantMessage = memo(function AssistantMessage({
       {!isThought &&
         !isToolFeedback &&
         !isToolCalls &&
-        (formattedTimestamp || hasText) && (
-          <div className="text-muted-foreground/60 flex items-center gap-1 px-1 text-xs">
+        (formattedTimestamp || hasText || hasUsage) && (
+          <div className="text-muted-foreground/60 flex flex-wrap items-center gap-1 px-1 text-xs">
             {formattedTimestamp && <span>{formattedTimestamp}</span>}
             {hasText && (
               <>
@@ -837,6 +858,93 @@ export const AssistantMessage = memo(function AssistantMessage({
                   </Button>
                 )}
               </>
+            )}
+            {hasUsage && usage && (
+              <TooltipProvider delayDuration={120} skipDelayDuration={0}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span
+                      tabIndex={0}
+                      className="text-muted-foreground/70 flex cursor-default items-center gap-1 tabular-nums"
+                    >
+                      <IconCoins
+                        className="size-3.5 shrink-0"
+                        aria-hidden="true"
+                      />
+                      <span>
+                        {t("chat.usage.summary", {
+                          input: formatTokenCount(usageInput ?? 0),
+                          output: formatTokenCount(usageOutput ?? 0),
+                        })}
+                      </span>
+                      {usageCostUsd !== undefined && (
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <span>
+                            {t(
+                              usageCostIsEstimated
+                                ? "chat.usage.estimatedCostValue"
+                                : "chat.usage.costValue",
+                              {
+                                cost: formatUsageCostUsd(usageCostUsd),
+                              },
+                            )}
+                          </span>
+                        </>
+                      )}
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="max-w-[260px]">
+                    <div className="grid grid-cols-[auto_auto] gap-x-5 gap-y-0.5">
+                      {usageInput !== undefined && (
+                        <>
+                          <span className="opacity-70">
+                            {t("chat.usage.input")}
+                          </span>
+                          <span className="text-right tabular-nums">
+                            {formatTokenCount(usageInput)}
+                          </span>
+                        </>
+                      )}
+                      {usageOutput !== undefined && (
+                        <>
+                          <span className="opacity-70">
+                            {t("chat.usage.output")}
+                          </span>
+                          <span className="text-right tabular-nums">
+                            {formatTokenCount(usageOutput)}
+                          </span>
+                        </>
+                      )}
+                      <span className="opacity-70">
+                        {t("chat.usage.total")}
+                      </span>
+                      <span className="text-right tabular-nums">
+                        {formatTokenCount(usage.total_tokens)}
+                      </span>
+                      {usageCostUsd !== undefined && (
+                        <>
+                          <span className="opacity-70">
+                            {t(
+                              usageCostIsEstimated
+                                ? "chat.usage.estimatedCost"
+                                : "chat.usage.cost",
+                            )}
+                          </span>
+                          <span className="text-right tabular-nums">
+                            {formatUsageCostUsd(usageCostUsd)}
+                          </span>
+                        </>
+                      )}
+                    </div>
+                    {usageCostIsEstimated && (
+                      <p className="mt-1.5 text-[11px] leading-4 opacity-70">
+                        {t("chat.usage.estimated")}
+                      </p>
+                    )}
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             )}
           </div>
         )}

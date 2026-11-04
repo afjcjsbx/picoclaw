@@ -4,6 +4,7 @@ import {
   parseToolCallsValue,
   toolCallsSignature,
 } from "@/features/chat/tool-calls"
+import { parseTokenUsage } from "@/features/chat/usage"
 import type { ChatAttachment, ChatMessage } from "@/store/chat"
 
 const pendingHistoryLoads = new Map<
@@ -125,6 +126,7 @@ export function loadSessionMessages(
         }) ?? []),
         ...(uploadedFiles.attachments ?? []),
       ]
+      const usage = parseTokenUsage({ usage: message.usage })
 
       return {
         id: `hist-${detail.start + index}`,
@@ -138,6 +140,7 @@ export function loadSessionMessages(
             ? parseToolCallsValue(message.tool_calls)
             : undefined,
         attachments: attachments.length > 0 ? attachments : undefined,
+        ...(usage ? { usage } : {}),
         timestamp: message.created_at ?? detail.updated,
       }
     }),

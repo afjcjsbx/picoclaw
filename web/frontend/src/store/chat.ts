@@ -44,6 +44,17 @@ export interface ChatMessage {
   modelName?: string
   attachments?: ChatAttachment[]
   toolCalls?: ChatToolCall[]
+  usage?: TokenUsage
+}
+
+export interface TokenUsage {
+  input_tokens?: number
+  output_tokens?: number
+  total_tokens: number
+  cache_read_tokens?: number
+  cache_creation_tokens?: number
+  /** Absolute turn cost in USD when the backend reports it. */
+  cost_usd?: number
 }
 
 export interface ContextUsage {

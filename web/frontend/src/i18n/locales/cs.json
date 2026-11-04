@@ -84,6 +84,17 @@
     "loadingMore": "Načítám další...",
     "deleteSession": "Smazat relaci",
     "messagesCount": "{{count}} zpráv",
+    "usage": {
+      "summary": "{{input}} vstup · {{output}} výstup",
+      "costValue": "{{cost}}",
+      "estimatedCostValue": "~{{cost}}",
+      "input": "Vstupní tokeny",
+      "output": "Výstupní tokeny",
+      "total": "Celkem tokenů",
+      "cost": "Náklady",
+      "estimatedCost": "Odhadované náklady",
+      "estimated": "Odhad na základě veřejných ceníkových cen."
+    },
     "noModel": "Vyberte model",
     "inputDisabled": {
       "notConnected": "Gateway není spuštěna. Spusťte ji pro zahájení chatu.",

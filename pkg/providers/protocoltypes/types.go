@@ -115,6 +115,10 @@ type Message struct {
 	SystemParts      []ContentBlock `json:"system_parts,omitempty"` // structured system blocks for cache-aware adapters
 	ToolCalls        []ToolCall     `json:"tool_calls,omitempty"`
 	ToolCallID       string         `json:"tool_call_id,omitempty"`
+	// Usage records the provider-reported token usage for a finalized assistant
+	// message. It is persisted with session history, but provider adapters must
+	// not send it upstream because it is not part of any provider wire format.
+	Usage *UsageInfo `json:"usage,omitempty"`
 
 	// Prompt metadata is internal to the agent runtime. It records where a
 	// message or system part came from without changing provider/session JSON.

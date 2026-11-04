@@ -1112,6 +1112,7 @@ export function ChatPage() {
                 content={msg.content}
                 attachments={msg.attachments}
                 kind={msg.kind}
+                modelName={msg.modelName}
                 onOpenFile={handleOpenFile}
                 filePathAliases={filePathAliasesByMessage.get(msg.id)}
                 onFork={
@@ -1121,6 +1122,7 @@ export function ChatPage() {
                 }
                 toolCalls={msg.toolCalls}
                 timestamp={msg.timestamp}
+                usage={msg.usage}
               />
             </>
           ) : (

@@ -93,6 +93,17 @@
     "loadingMore": "加载更多...",
     "deleteSession": "删除会话",
     "messagesCount": "{{count}} 条消息",
+    "usage": {
+      "summary": "输入 {{input}} · 输出 {{output}}",
+      "costValue": "{{cost}}",
+      "estimatedCostValue": "~{{cost}}",
+      "input": "输入 tokens",
+      "output": "输出 tokens",
+      "total": "总 tokens",
+      "cost": "费用",
+      "estimatedCost": "预估费用",
+      "estimated": "基于公开标价估算。"
+    },
     "noModel": "选择模型",
     "inputDisabled": {
       "notConnected": "服务未运行，请先启动以进行对话。",
