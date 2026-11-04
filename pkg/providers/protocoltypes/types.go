@@ -72,6 +72,11 @@ type UsageInfo struct {
 	// A persistent zero CacheReadTokens means the cache is not being hit.
 	CacheReadTokens     int `json:"cache_read_tokens,omitempty"`     // prompt tokens served from cache
 	CacheCreationTokens int `json:"cache_creation_tokens,omitempty"` // prompt tokens written to cache (Anthropic)
+
+	// CostUSD is the provider-reported cost for the request in US dollars.
+	// Zero means the provider did not report a cost (for example most HTTP
+	// providers); the web UI falls back to an approximate list-price estimate.
+	CostUSD float64 `json:"cost_usd,omitempty"`
 }
 
 // CacheControl marks a content block for LLM-side prefix caching.
@@ -115,6 +120,10 @@ type Message struct {
 	SystemParts      []ContentBlock `json:"system_parts,omitempty"` // structured system blocks for cache-aware adapters
 	ToolCalls        []ToolCall     `json:"tool_calls,omitempty"`
 	ToolCallID       string         `json:"tool_call_id,omitempty"`
+	// Usage records the provider-reported token usage for a finalized assistant
+	// message. It is persisted with session history, but provider adapters must
+	// not send it upstream because it is not part of any provider wire format.
+	Usage *UsageInfo `json:"usage,omitempty"`
 
 	// Prompt metadata is internal to the agent runtime. It records where a
 	// message or system part came from without changing provider/session JSON.

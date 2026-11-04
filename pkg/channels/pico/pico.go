@@ -403,6 +403,7 @@ func (c *PicoChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]stri
 		payload[PayloadKeyFinal] = true
 	}
 	setContextUsagePayload(payload, msg.ContextUsage)
+	setTokenUsagePayload(payload, msg.Usage)
 	outMsg := newMessage(TypeMessageCreate, payload)
 
 	if err := c.broadcastToSession(msg.ChatID, outMsg); err != nil {
@@ -1912,14 +1913,41 @@ func setContextUsagePayload(payload map[string]any, u *bus.ContextUsage) {
 // Input and output are kept separate (billed at different rates); total is a
 // convenience sum. Omitted entirely when both counts are zero.
 func setTurnUsagePayload(payload map[string]any, inputTokens, outputTokens int) {
-	if inputTokens <= 0 && outputTokens <= 0 {
+	setTokenUsagePayload(payload, &bus.TokenUsage{
+		InputTokens:  inputTokens,
+		OutputTokens: outputTokens,
+		TotalTokens:  inputTokens + outputTokens,
+	})
+}
+
+// setTokenUsagePayload attaches provider-reported usage carried on an outbound
+// message, so non-streaming replies get the same badge as streamed ones.
+func setTokenUsagePayload(payload map[string]any, usage *bus.TokenUsage) {
+	if usage == nil {
 		return
 	}
-	payload[PayloadKeyUsage] = map[string]any{
-		"input_tokens":  inputTokens,
-		"output_tokens": outputTokens,
-		"total_tokens":  inputTokens + outputTokens,
+	total := usage.TotalTokens
+	if total <= 0 {
+		total = usage.InputTokens + usage.OutputTokens
 	}
+	if usage.InputTokens <= 0 && usage.OutputTokens <= 0 && total <= 0 && usage.CostUSD <= 0 {
+		return
+	}
+	block := map[string]any{
+		"input_tokens":  usage.InputTokens,
+		"output_tokens": usage.OutputTokens,
+		"total_tokens":  total,
+	}
+	if usage.CacheReadTokens > 0 {
+		block["cache_read_tokens"] = usage.CacheReadTokens
+	}
+	if usage.CacheCreationTokens > 0 {
+		block["cache_creation_tokens"] = usage.CacheCreationTokens
+	}
+	if usage.CostUSD > 0 {
+		block["cost_usd"] = usage.CostUSD
+	}
+	payload[PayloadKeyUsage] = block
 }
 
 func picoToolCallsPayload(msg bus.OutboundMessage) ([]utils.VisibleToolCall, bool) {

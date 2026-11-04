@@ -86,6 +86,17 @@
     "loadingMore": "Carregando mais...",
     "deleteSession": "Excluir sessão",
     "messagesCount": "{{count}} mensagens",
+    "usage": {
+      "summary": "{{input}} entrada · {{output}} saída",
+      "costValue": "{{cost}}",
+      "estimatedCostValue": "~{{cost}}",
+      "input": "Tokens de entrada",
+      "output": "Tokens de saída",
+      "total": "Total de tokens",
+      "cost": "Custo",
+      "estimatedCost": "Custo estimado",
+      "estimated": "Estimado com base em preços públicos de tabela."
+    },
     "noModel": "Selecionar modelo",
     "inputDisabled": {
       "notConnected": "O Gateway não está rodando. Inicie-o para conversar.",

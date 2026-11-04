@@ -3,6 +3,8 @@ package pico
 import (
 	"context"
 	"testing"
+
+	"github.com/sipeed/picoclaw/pkg/bus"
 )
 
 func TestSetTurnUsagePayload(t *testing.T) {
@@ -34,6 +36,42 @@ func TestSetTurnUsagePayload(t *testing.T) {
 		setTurnUsagePayload(payload, 0, 0)
 		if _, ok := payload[PayloadKeyUsage]; ok {
 			t.Errorf("expected no %q key when counts are zero", PayloadKeyUsage)
+		}
+	})
+}
+
+func TestSetTokenUsagePayload(t *testing.T) {
+	t.Run("includes cache counters", func(t *testing.T) {
+		payload := map[string]any{PayloadKeyContent: "hi"}
+		setTokenUsagePayload(payload, &bus.TokenUsage{
+			InputTokens:         100,
+			OutputTokens:        50,
+			TotalTokens:         150,
+			CacheReadTokens:     40,
+			CacheCreationTokens: 10,
+			CostUSD:             0.0123,
+		})
+
+		raw, ok := payload[PayloadKeyUsage].(map[string]any)
+		if !ok {
+			t.Fatalf("usage block is not a map: %T", payload[PayloadKeyUsage])
+		}
+		if raw["cache_read_tokens"] != 40 {
+			t.Errorf("cache_read_tokens = %v, want 40", raw["cache_read_tokens"])
+		}
+		if raw["cache_creation_tokens"] != 10 {
+			t.Errorf("cache_creation_tokens = %v, want 10", raw["cache_creation_tokens"])
+		}
+		if raw["cost_usd"] != 0.0123 {
+			t.Errorf("cost_usd = %v, want 0.0123", raw["cost_usd"])
+		}
+	})
+
+	t.Run("omits nil usage", func(t *testing.T) {
+		payload := map[string]any{PayloadKeyContent: "hi"}
+		setTokenUsagePayload(payload, nil)
+		if _, ok := payload[PayloadKeyUsage]; ok {
+			t.Errorf("expected no %q key for nil usage", PayloadKeyUsage)
 		}
 	})
 }

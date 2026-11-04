@@ -5,6 +5,7 @@ import {
   parseAssistantMessageUpdateState,
 } from "@/features/chat/assistant-message-state"
 import { normalizeUnixTimestamp } from "@/features/chat/state"
+import { parseTokenUsage } from "@/features/chat/usage"
 import {
   type ChatAttachment,
   type ContextUsage,
@@ -173,6 +174,7 @@ export function handlePicoMessage(
         parseAssistantMessageCreateState(payload)
       const attachments = parseAttachments(payload)
       const contextUsage = parseContextUsage(payload)
+      const usage = parseTokenUsage(payload)
       const isPlaceholder = payload.placeholder === true
       const modelName = parseModelName(payload)
       const timestamp =
@@ -191,6 +193,7 @@ export function handlePicoMessage(
             kind,
             ...(modelName ? { modelName } : {}),
             ...(toolCalls ? { toolCalls } : {}),
+            ...(usage ? { usage } : {}),
             attachments,
             timestamp,
           },
@@ -214,6 +217,7 @@ export function handlePicoMessage(
       const messageId = payload.message_id as string
       const attachments = parseAttachments(payload)
       const contextUsage = parseContextUsage(payload)
+      const usage = parseTokenUsage(payload)
       const modelName = parseModelName(payload)
       const timestamp =
         message.timestamp !== undefined &&
@@ -242,6 +246,7 @@ export function handlePicoMessage(
               toolCalls,
               ...(modelName ? { modelName } : {}),
               ...(attachments ? { attachments } : {}),
+              ...(usage ? { usage } : {}),
             }
           })
           if (found) {
@@ -261,6 +266,7 @@ export function handlePicoMessage(
               toolCalls,
               ...(modelName ? { modelName } : {}),
               ...(attachments ? { attachments } : {}),
+              ...(usage ? { usage } : {}),
               timestamp,
             },
           ]

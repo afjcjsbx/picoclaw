@@ -40,10 +40,28 @@ func (al *AgentLoop) publishResponseOrError(
 }
 
 func (al *AgentLoop) PublishResponseIfNeeded(ctx context.Context, channel, chatID, sessionKey, response string) {
-	al.publishResponseIfNeeded(ctx, channel, chatID, sessionKey, response)
+	al.publishFinalResponse(ctx, channel, chatID, sessionKey, response)
 }
 
-func (al *AgentLoop) publishResponseIfNeeded(ctx context.Context, channel, chatID, sessionKey, response string) bool {
+func (al *AgentLoop) publishFinalResponse(
+	ctx context.Context,
+	channel, chatID, sessionKey, response string,
+) bool {
+	return al.publishResponseIfNeeded(
+		ctx,
+		channel,
+		chatID,
+		sessionKey,
+		response,
+		al.latestAssistantUsage(ctx, sessionKey, response),
+	)
+}
+
+func (al *AgentLoop) publishResponseIfNeeded(
+	ctx context.Context,
+	channel, chatID, sessionKey, response string,
+	usage *bus.TokenUsage,
+) bool {
 	if response == "" {
 		return false
 	}
@@ -81,6 +99,7 @@ func (al *AgentLoop) publishResponseIfNeeded(ctx context.Context, channel, chatI
 		Context:    bus.NewOutboundContext(channel, chatID, ""),
 		SessionKey: sessionKey,
 		Content:    response,
+		Usage:      usage,
 	}
 	if sessionKey != "" {
 		msg.ContextUsage, _ = al.currentContextUsage(al.agentForSession(sessionKey), sessionKey)
@@ -96,6 +115,38 @@ func (al *AgentLoop) publishResponseIfNeeded(ctx context.Context, channel, chatI
 			"content_len": len(response),
 		})
 	return true
+}
+
+// latestAssistantUsage returns the usage attached to the persisted assistant
+// reply that matches response. Matching on content prevents command replies,
+// stop messages, and errors from picking up stale usage from an earlier turn.
+func (al *AgentLoop) latestAssistantUsage(
+	ctx context.Context,
+	sessionKey, response string,
+) *bus.TokenUsage {
+	if sessionKey == "" || strings.TrimSpace(response) == "" {
+		return nil
+	}
+	agent := al.agentForSession(sessionKey)
+	if agent == nil || agent.Sessions == nil {
+		return nil
+	}
+	history, err := agent.Sessions.GetHistory(ctx, sessionKey)
+	if err != nil {
+		warnSessionStoreError(sessionKey, "read assistant usage", err)
+		return nil
+	}
+	for i := len(history) - 1; i >= 0; i-- {
+		msg := history[i]
+		if msg.Role != "assistant" {
+			continue
+		}
+		if strings.TrimSpace(msg.Content) != strings.TrimSpace(response) {
+			return nil
+		}
+		return tokenUsageFromProviders(msg.Usage)
+	}
+	return nil
 }
 
 func (al *AgentLoop) targetReasoningChannelID(channelName string) (chatID string) {

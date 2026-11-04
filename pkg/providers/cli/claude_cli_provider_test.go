@@ -159,6 +159,9 @@ func TestChat_Success(t *testing.T) {
 	if resp.Usage.TotalTokens != 115 { // 110 + 5
 		t.Errorf("TotalTokens = %d, want 115", resp.Usage.TotalTokens)
 	}
+	if resp.Usage.CostUSD != 0.005 {
+		t.Errorf("CostUSD = %v, want 0.005", resp.Usage.CostUSD)
+	}
 }
 
 func TestChat_IsErrorResponse(t *testing.T) {
@@ -647,6 +650,9 @@ func TestParseClaudeCliResponse_TextOnly(t *testing.T) {
 	}
 	if resp.Usage.CompletionTokens != 20 {
 		t.Errorf("CompletionTokens = %d, want 20", resp.Usage.CompletionTokens)
+	}
+	if resp.Usage.CostUSD != 0.01 {
+		t.Errorf("CostUSD = %v, want 0.01", resp.Usage.CostUSD)
 	}
 }
 

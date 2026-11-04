@@ -639,17 +639,15 @@ func (p *Pipeline) CallLLM(
 		}
 	}
 
-	// Save finishReason and usage on the turn state. Use ts directly (the
-	// authoritative turn state for this call) rather than a context lookup:
+	// Save finishReason and accumulate usage on the turn state. Use ts directly
+	// (the authoritative turn state for this call) rather than a context lookup:
 	// the raw ctx passed to CallLLM is not seeded with turnState (only turnCtx
 	// is), so turnStateFromContext(ctx) returns nil here and silently dropped
 	// both the finish reason and the per-turn token usage. ts is also exactly
-	// what the streaming publisher reads via GetLastUsage at finalize.
+	// what the streaming publisher reads via GetTurnUsage at finalize.
 	if ts != nil {
 		ts.SetLastFinishReason(exec.response.FinishReason)
-		if exec.response.Usage != nil {
-			ts.SetLastUsage(exec.response.Usage)
-		}
+		ts.AddUsage(exec.response.Usage)
 	}
 
 	// Mid-turn routing guard: a light-model turn that grows too large or keeps

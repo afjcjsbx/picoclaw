@@ -73,6 +73,18 @@ type ContextUsage struct {
 	UsedPercent       int `json:"used_percent"`        // 0-100, relative to compressAt
 }
 
+// TokenUsage describes provider-reported token counts for an assistant reply.
+// It is carried on outbound messages so non-streaming channels can display the
+// same usage metadata that streaming channels receive from their streamer.
+type TokenUsage struct {
+	InputTokens         int     `json:"input_tokens"`
+	OutputTokens        int     `json:"output_tokens"`
+	TotalTokens         int     `json:"total_tokens"`
+	CacheReadTokens     int     `json:"cache_read_tokens,omitempty"`
+	CacheCreationTokens int     `json:"cache_creation_tokens,omitempty"`
+	CostUSD             float64 `json:"cost_usd,omitempty"`
+}
+
 type OutboundMessage struct {
 	Channel          string         `json:"channel"`
 	ChatID           string         `json:"chat_id"`
@@ -83,6 +95,7 @@ type OutboundMessage struct {
 	Content          string         `json:"content"`
 	ReplyToMessageID string         `json:"reply_to_message_id,omitempty"`
 	ContextUsage     *ContextUsage  `json:"context_usage,omitempty"`
+	Usage            *TokenUsage    `json:"usage,omitempty"`
 }
 
 // MediaPart describes a single media attachment to send.
