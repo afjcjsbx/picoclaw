@@ -1083,5 +1083,21 @@
       "title": "Zobrazit dokumentaci",
       "description": "Potřebujete další pomoc? Klikněte na tlačítko dokumentace v pravém horním rohu pro zobrazení podrobných průvodců a dokumentace ke konfiguraci."
     }
+  },
+  "commandPalette": {
+    "title": "Paleta příkazů",
+    "description": "Hledejte příkazy, konverzace, modely a stránky.",
+    "placeholder": "Zadejte příkaz nebo hledejte…",
+    "empty": "Žádné odpovídající výsledky.",
+    "groups": {
+      "actions": "Akce",
+      "sessions": "Konverzace",
+      "models": "Modely",
+      "pages": "Stránky",
+      "slashCommands": "Lomítkové příkazy"
+    },
+    "newChat": "Nový chat",
+    "newChatDescription": "Zahájit konverzaci",
+    "current": "Aktuální"
   }
 }

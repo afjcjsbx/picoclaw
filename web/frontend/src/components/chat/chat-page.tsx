@@ -79,6 +79,7 @@ import type {
   SplitSessionState,
 } from "@/store/chat"
 import {
+  composerInsertionAtom,
   initializeSplitSessionState,
   pendingScrollTargetAtom,
   sessionTitlesAtom,
@@ -802,6 +803,10 @@ export function ChatPage() {
   const [pendingScrollTarget, setPendingScrollTarget] = useAtom(
     pendingScrollTargetAtom,
   )
+  const [composerInsertion, setComposerInsertion] = useAtom(
+    composerInsertionAtom,
+  )
+  const [composerFocusSignal, setComposerFocusSignal] = useState(0)
   const sessionTitles = useAtomValue(sessionTitlesAtom)
   const splitSessionStates = useAtomValue(splitSessionStatesAtom)
 
@@ -861,6 +866,13 @@ export function ChatPage() {
     gatewayState: gwState,
   })
   const canInput = inputDisabledReason === null
+
+  useEffect(() => {
+    if (!composerInsertion) return
+    setInput(composerInsertion.text)
+    setComposerFocusSignal((signal) => signal + 1)
+    setComposerInsertion(null)
+  }, [composerInsertion, setComposerInsertion])
 
   const handleOpenFile = (path: string) => {
     setFilePreviewPath(path)
@@ -1548,6 +1560,7 @@ export function ChatPage() {
             isDragActive={isDragActive}
             contextUsage={contextUsage}
             slashCommands={slashCommands}
+            focusSignal={composerFocusSignal}
           />
         </section>
 

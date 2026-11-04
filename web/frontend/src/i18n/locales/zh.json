@@ -1252,5 +1252,21 @@
       "title": "查看文档",
       "description": "需要更多帮助？点击右上角的文档按钮，查看详细的使用文档和配置指南。"
     }
+  },
+  "commandPalette": {
+    "title": "命令面板",
+    "description": "搜索命令、对话、模型和页面。",
+    "placeholder": "输入命令或搜索…",
+    "empty": "没有匹配结果。",
+    "groups": {
+      "actions": "操作",
+      "sessions": "对话",
+      "models": "模型",
+      "pages": "页面",
+      "slashCommands": "斜杠命令"
+    },
+    "newChat": "新建对话",
+    "newChatDescription": "开始一段对话",
+    "current": "当前"
   }
 }

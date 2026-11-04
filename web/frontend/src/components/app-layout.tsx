@@ -2,6 +2,7 @@ import { useState, type CSSProperties, type ReactNode } from "react"
 import { Toaster } from "sonner"
 
 import { AppSidebar } from "@/components/app-sidebar"
+import { CommandPalette } from "@/components/command-palette"
 import { TourGuide } from "@/components/tour/tour-guide"
 import { SidebarProvider } from "@/components/ui/sidebar"
 import { TooltipProvider } from "@/components/ui/tooltip"
@@ -28,6 +29,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
         </div>
         <Toaster position="bottom-center" />
         <TourGuide />
+        <CommandPalette />
       </SidebarProvider>
     </TooltipProvider>
   )

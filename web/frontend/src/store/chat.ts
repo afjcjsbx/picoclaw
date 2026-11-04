@@ -107,6 +107,14 @@ export const sessionTitlesAtom = atom<Record<string, string>>({})
 export const unreadSessionIdsAtom = atom<Set<string>>(new Set<string>())
 export const sessionRunningAtom = atom<Record<string, boolean>>({})
 
+export interface ComposerInsertion {
+  text: string
+}
+
+// Set by the command palette to drop a slash command into the composer. The
+// chat page consumes the request and clears it once the input is updated.
+export const composerInsertionAtom = atom<ComposerInsertion | null>(null)
+
 export interface PendingScrollTarget {
   sessionId: string
   messageIndex: number

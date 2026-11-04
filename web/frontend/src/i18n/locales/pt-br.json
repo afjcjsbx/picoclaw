@@ -1085,5 +1085,21 @@
       "title": "Ver Documentação",
       "description": "Precisa de mais ajuda? Clique no botão de documentação no canto superior direito para ver guias detalhados e documentação de configuração."
     }
+  },
+  "commandPalette": {
+    "title": "Paleta de comandos",
+    "description": "Pesquise comandos, conversas, modelos e páginas.",
+    "placeholder": "Digite um comando ou pesquise…",
+    "empty": "Nenhum resultado encontrado.",
+    "groups": {
+      "actions": "Ações",
+      "sessions": "Conversas",
+      "models": "Modelos",
+      "pages": "Páginas",
+      "slashCommands": "Comandos de barra"
+    },
+    "newChat": "Novo chat",
+    "newChatDescription": "Iniciar uma conversa",
+    "current": "Atual"
   }
 }

@@ -85,6 +85,7 @@ interface ChatComposerProps {
   isDragActive: boolean
   contextUsage?: ContextUsage
   slashCommands?: SlashCommand[]
+  focusSignal?: number
 }
 
 const AUDIO_RECORDING_ERROR_KEYS = {
@@ -116,6 +117,7 @@ export function ChatComposer({
   isDragActive,
   contextUsage,
   slashCommands = [],
+  focusSignal = 0,
 }: ChatComposerProps) {
   const { t } = useTranslation()
   const canInput = inputDisabledReason === null
@@ -199,6 +201,11 @@ export function ChatComposer({
       document.removeEventListener("pointerdown", dismissOnPointerDown, true)
     }
   }, [showPalette])
+
+  useEffect(() => {
+    if (!focusSignal) return
+    textareaRef.current?.focus()
+  }, [focusSignal])
 
   const handleInputChange = (value: string) => {
     setPaletteDismissed(false)
