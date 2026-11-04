@@ -211,6 +211,14 @@ func buildRequestBody(
 		"messages":   []any{},
 	}
 
+	// Automatic prompt caching: Anthropic places one breakpoint on the last
+	// cacheable block and moves it forward as the conversation grows. This
+	// covers tool definitions and the system prompt on every turn without
+	// tracking individual block breakpoints.
+	if supportsAutomaticPromptCaching(model) {
+		result["cache_control"] = map[string]any{"type": "ephemeral"}
+	}
+
 	// Set temperature from options, except for models that reject it.
 	if temp, ok := common.AsFloat(options["temperature"]); ok && !common.ModelDeprecatesTemperature(model) {
 		result["temperature"] = temp
@@ -346,6 +354,14 @@ func buildRequestBody(
 	return result, nil
 }
 
+// supportsAutomaticPromptCaching reports whether the model belongs to the
+// Anthropic Claude family, which accepts the top-level cache_control field
+// used for automatic prompt caching. Non-Claude models served through
+// Anthropic-compatible endpoints may not understand the field.
+func supportsAutomaticPromptCaching(model string) bool {
+	return strings.Contains(strings.ToLower(strings.TrimSpace(model)), "claude")
+}
+
 // buildTools converts tool definitions to Anthropic format.
 func buildTools(tools []ToolDefinition) []any {
 	result := make([]any, len(tools))
@@ -402,14 +418,23 @@ func parseResponseBody(body []byte) (*LLMResponse, error) {
 		finishReason = "stop"
 	}
 
+	// Anthropic's input_tokens excludes cache-read and cache-creation tokens;
+	// fold them into the headline counters to match the OpenAI semantics used
+	// elsewhere and keep cached requests visible to provider-agnostic callers.
+	cacheRead := resp.Usage.CacheReadInputTokens
+	cacheCreation := resp.Usage.CacheCreationInputTokens
+	promptTokens := resp.Usage.InputTokens + cacheRead + cacheCreation
+
 	return &LLMResponse{
 		Content:      content.String(),
 		ToolCalls:    toolCalls,
 		FinishReason: finishReason,
 		Usage: &UsageInfo{
-			PromptTokens:     int(resp.Usage.InputTokens),
-			CompletionTokens: int(resp.Usage.OutputTokens),
-			TotalTokens:      int(resp.Usage.InputTokens + resp.Usage.OutputTokens),
+			PromptTokens:        int(promptTokens),
+			CompletionTokens:    int(resp.Usage.OutputTokens),
+			TotalTokens:         int(promptTokens + resp.Usage.OutputTokens),
+			CacheReadTokens:     int(cacheRead),
+			CacheCreationTokens: int(cacheCreation),
 		},
 	}, nil
 }
@@ -435,6 +460,8 @@ type contentBlock struct {
 }
 
 type usageInfo struct {
-	InputTokens  int64 `json:"input_tokens"`
-	OutputTokens int64 `json:"output_tokens"`
+	InputTokens              int64 `json:"input_tokens"`
+	OutputTokens             int64 `json:"output_tokens"`
+	CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
 }
