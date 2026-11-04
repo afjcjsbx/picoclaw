@@ -93,7 +93,7 @@ export async function getMCPDashboard(): Promise<MCPDashboardResponse> {
   return sanitizeResponse((await response.json()) as MCPDashboardResponse)
 }
 
-async function patchMCPConfig(patch: Record<string, unknown>): Promise<void> {
+async function patchMCPConfig(patch: object): Promise<void> {
   const response = await launcherFetch("/api/config", {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
@@ -122,8 +122,23 @@ export interface MCPServerConfigInput {
   command?: string
   args?: string[]
   env?: Record<string, string>
+  env_file?: string
+  inherit_env?: boolean
   url?: string
   headers?: Record<string, string>
+}
+
+export interface MCPDiscoverySettings {
+  enabled: boolean
+  ttl?: number
+  max_search_results?: number
+  use_bm25: boolean
+  use_regex: boolean
+}
+
+export interface MCPRuntimeSettings {
+  enabled: boolean
+  discovery: MCPDiscoverySettings
 }
 
 export function installMCPServer(
@@ -133,32 +148,24 @@ export function installMCPServer(
   return patchMCPConfig({ enabled: true, servers: { [name]: server } })
 }
 
-export function updateMCPServerCommand(
-  name: string,
-  command: string,
-  args: string[],
+export function updateMCPRuntimeSettings(
+  settings: MCPRuntimeSettings,
 ): Promise<void> {
-  return patchMCPServers({ [name]: { command, args } })
+  return patchMCPConfig(settings)
+}
+
+export function updateMCPServer(
+  name: string,
+  server: Record<string, unknown>,
+): Promise<void> {
+  return patchMCPServers({ [name]: server })
 }
 
 export function updateMCPServerSettings(
   name: string,
-  settings: { enabled?: boolean; deferred?: boolean },
+  settings: { enabled?: boolean; deferred?: boolean | null },
 ): Promise<void> {
-  return patchMCPServers({ [name]: settings })
-}
-
-export function createMCPServer(
-  name: string,
-  server: {
-    enabled: boolean
-    deferred: boolean
-    type: "stdio"
-    command: string
-    args: string[]
-  },
-): Promise<void> {
-  return patchMCPServers({ [name]: server })
+  return updateMCPServer(name, settings)
 }
 
 export function removeMCPServer(name: string): Promise<void> {

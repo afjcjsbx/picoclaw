@@ -13,7 +13,7 @@ If you prefer not to edit JSON manually, PicoClaw also provides an MCP configura
 
 These commands manage the same `tools.mcp.servers` section documented below. See [MCP Server CLI](../reference/mcp-cli.md) for command syntax, examples, and behavior details.
 
-The web dashboard also provides an MCP page with a **Servers** tab for monitoring configured servers and a **Catalog** tab with one-click presets for popular servers. Presets that require credentials prompt for them during installation.
+The web dashboard also provides an MCP page with a **Servers** tab for adding, editing, and monitoring configured stdio/SSE/HTTP servers, a **Catalog** tab with one-click presets for popular servers, and a **Settings** tab for the global MCP integration and tool discovery options. Presets that require credentials prompt for them during installation.
 
 ## Tool Discovery (Lazy Loading)
 

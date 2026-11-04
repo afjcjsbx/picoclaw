@@ -2,7 +2,7 @@ import { useTranslation } from "react-i18next"
 
 import { cn } from "@/lib/utils"
 
-export type MCPPageTab = "servers" | "catalog"
+export type MCPPageTab = "servers" | "catalog" | "settings"
 
 interface MCPTabsProps {
   activeTab: MCPPageTab
@@ -23,6 +23,11 @@ const tabs: Array<{
     key: "catalog",
     translationKey: "pages.agent.mcp.tabs.catalog",
     defaultLabel: "Catalog",
+  },
+  {
+    key: "settings",
+    translationKey: "pages.agent.mcp.tabs.settings",
+    defaultLabel: "Settings",
   },
 ]
 

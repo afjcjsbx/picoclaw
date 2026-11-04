@@ -13,17 +13,16 @@ import {
   IconTrash,
 } from "@tabler/icons-react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Link } from "@tanstack/react-router"
 import { useDeferredValue, useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 
+import { getAppConfig } from "@/api/channels"
 import type { MCPConnectionStatus, MCPServer, MCPTool } from "@/api/mcp"
 import {
-  createMCPServer,
   getMCPDashboard,
   removeMCPServer,
-  updateMCPServerCommand,
+  updateMCPServer,
   updateMCPServerSettings,
 } from "@/api/mcp"
 import { PageHeader } from "@/components/page-header"
@@ -45,14 +44,6 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import {
   Select,
@@ -63,10 +54,16 @@ import {
 } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
-import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 
 import { MCPCatalogTab } from "./mcp-catalog-tab"
+import {
+  type MCPServerForm,
+  buildMCPConfigForm,
+  buildMCPServerPatch,
+} from "./mcp-form"
+import { MCPServerDialog } from "./mcp-server-dialog"
+import { MCPSettingsTab } from "./mcp-settings-tab"
 import { MCPStatusBadge } from "./mcp-status-badge"
 import { type MCPPageTab, MCPTabs } from "./mcp-tabs"
 
@@ -88,27 +85,49 @@ export function MCPPage() {
     refetchInterval: 3000,
     refetchOnWindowFocus: true,
   })
+  const configQuery = useQuery({
+    queryKey: ["config"],
+    queryFn: getAppConfig,
+  })
+  const mcpConfig = useMemo(
+    () => buildMCPConfigForm(configQuery.data),
+    [configQuery.data],
+  )
+  const configReady = configQuery.isSuccess
 
   const refreshAfterMutation = () => {
     void queryClient.invalidateQueries({ queryKey: ["agents", "mcp"] })
     void queryClient.invalidateQueries({ queryKey: ["config"] })
   }
-  const updateMutation = useMutation({
+  const saveServerMutation = useMutation({
     mutationFn: ({
       name,
-      command,
-      args,
+      form,
     }: {
+      mode: "add" | "edit"
       name: string
-      command: string
-      args: string[]
-    }) => updateMCPServerCommand(name, command, args),
-    onSuccess: () => {
+      form: MCPServerForm
+    }) =>
+      updateMCPServer(
+        name,
+        buildMCPServerPatch(name, form, mcpConfig.servers[name]),
+      ),
+    onSuccess: (_data, variables) => {
       setEditingServer(null)
+      setAddingServer(false)
       refreshAfterMutation()
-      toast.success(t("pages.agent.mcp.save_success"))
+      toast.success(
+        variables.mode === "add"
+          ? t("pages.agent.mcp.create_success")
+          : t("pages.agent.mcp.save_success"),
+      )
     },
-    onError: () => toast.error(t("pages.agent.mcp.mutation_error")),
+    onError: (error) =>
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : t("pages.agent.mcp.mutation_error"),
+      ),
   })
   const removeMutation = useMutation({
     mutationFn: (name: string) => removeMCPServer(name),
@@ -125,39 +144,11 @@ export function MCPPage() {
       settings,
     }: {
       name: string
-      settings: { enabled?: boolean; deferred?: boolean }
+      settings: { enabled?: boolean; deferred?: boolean | null }
     }) => updateMCPServerSettings(name, settings),
     onSuccess: () => {
       refreshAfterMutation()
       toast.success(t("pages.agent.mcp.settings_success"))
-    },
-    onError: () => toast.error(t("pages.agent.mcp.mutation_error")),
-  })
-  const createMutation = useMutation({
-    mutationFn: ({
-      name,
-      command,
-      args,
-      enabled,
-      deferred,
-    }: {
-      name: string
-      command: string
-      args: string[]
-      enabled: boolean
-      deferred: boolean
-    }) =>
-      createMCPServer(name, {
-        type: "stdio",
-        command,
-        args,
-        enabled,
-        deferred,
-      }),
-    onSuccess: () => {
-      setAddingServer(false)
-      refreshAfterMutation()
-      toast.success(t("pages.agent.mcp.create_success"))
     },
     onError: () => toast.error(t("pages.agent.mcp.mutation_error")),
   })
@@ -198,7 +189,7 @@ export function MCPPage() {
             <Button
               type="button"
               size="sm"
-              disabled={createMutation.isPending}
+              disabled={saveServerMutation.isPending || !configReady}
               onClick={() => setAddingServer(true)}
             >
               <IconPlus className="size-4" />
@@ -227,6 +218,8 @@ export function MCPPage() {
           installedNames={installedNames}
           onInstalled={refreshAfterMutation}
         />
+      ) : activeTab === "settings" ? (
+        <MCPSettingsTab />
       ) : (
         <div className="flex-1 overflow-auto px-6 py-6 pb-20">
           <div className="animate-in fade-in mx-auto w-full max-w-6xl space-y-6 pt-2 duration-300 md:duration-500">
@@ -288,7 +281,7 @@ export function MCPPage() {
               (!query.data.enabled || !query.data.runtime_available) && (
                 <RuntimeNotice
                   enabled={query.data.enabled}
-                  runtimeAvailable={query.data.runtime_available}
+                  onOpenSettings={() => setActiveTab("settings")}
                 />
               )}
 
@@ -330,29 +323,42 @@ export function MCPPage() {
                 <p className="text-muted-foreground max-w-sm text-sm leading-relaxed">
                   {t(
                     "pages.agent.mcp.empty_hint",
-                    "Configure an MCP server in Settings to see it here.",
+                    "Add an MCP server from the Servers tab to see it here.",
                   )}
                 </p>
               </div>
             ) : (
               <div className="space-y-4">
-                {servers.map((server) => (
-                  <ServerCard
-                    key={server.name}
-                    server={server}
-                    actionsDisabled={
-                      updateMutation.isPending ||
-                      removeMutation.isPending ||
-                      settingsMutation.isPending ||
-                      createMutation.isPending
-                    }
-                    onEdit={setEditingServer}
-                    onRemove={setDeletingServer}
-                    onUpdateSettings={(settings) =>
-                      settingsMutation.mutate({ name: server.name, settings })
-                    }
-                  />
-                ))}
+                {servers.map((server) => {
+                  const configured = mcpConfig.servers[server.name]
+                  const deferredMode =
+                    configured?.deferred === true
+                      ? "deferred"
+                      : configured?.deferred === false
+                        ? "eager"
+                        : "inherit"
+                  return (
+                    <ServerCard
+                      key={server.name}
+                      server={server}
+                      deferredMode={deferredMode}
+                      actionsDisabled={
+                        !configReady ||
+                        saveServerMutation.isPending ||
+                        removeMutation.isPending ||
+                        settingsMutation.isPending
+                      }
+                      onEdit={setEditingServer}
+                      onRemove={setDeletingServer}
+                      onUpdateSettings={(settings) =>
+                        settingsMutation.mutate({
+                          name: server.name,
+                          settings,
+                        })
+                      }
+                    />
+                  )
+                })}
               </div>
             )}
           </div>
@@ -360,27 +366,36 @@ export function MCPPage() {
       )}
 
       {editingServer && (
-        <EditMCPServerDialog
+        <MCPServerDialog
           key={editingServer.name}
-          server={editingServer}
-          saving={updateMutation.isPending}
+          mode="edit"
+          server={
+            mcpConfig.servers[editingServer.name] ??
+            dashboardServerToForm(editingServer)
+          }
+          saving={saveServerMutation.isPending}
           onClose={() => setEditingServer(null)}
-          onSave={(command, args) =>
-            updateMutation.mutate({
+          onSave={(form) =>
+            saveServerMutation.mutate({
+              mode: "edit",
               name: editingServer.name,
-              command,
-              args,
+              form,
             })
           }
         />
       )}
       {addingServer && (
-        <AddMCPServerDialog
+        <MCPServerDialog
+          mode="add"
           existingNames={query.data?.servers.map((server) => server.name) ?? []}
-          saving={createMutation.isPending}
+          saving={saveServerMutation.isPending}
           onClose={() => setAddingServer(false)}
-          onSave={(name, command, args, enabled, deferred) =>
-            createMutation.mutate({ name, command, args, enabled, deferred })
+          onSave={(form) =>
+            saveServerMutation.mutate({
+              mode: "add",
+              name: form.name,
+              form,
+            })
           }
         />
       )}
@@ -396,150 +411,12 @@ export function MCPPage() {
   )
 }
 
-function AddMCPServerDialog({
-  existingNames,
-  saving,
-  onClose,
-  onSave,
-}: {
-  existingNames: string[]
-  saving: boolean
-  onClose: () => void
-  onSave: (
-    name: string,
-    command: string,
-    args: string[],
-    enabled: boolean,
-    deferred: boolean,
-  ) => void
-}) {
-  const { t } = useTranslation()
-  const [name, setName] = useState("")
-  const [command, setCommand] = useState("")
-  const [argsText, setArgsText] = useState("")
-  const [enabled, setEnabled] = useState(true)
-  const [deferred, setDeferred] = useState(false)
-  const trimmedName = name.trim()
-  const trimmedCommand = command.trim()
-  const nameInUse = existingNames.includes(trimmedName)
-
-  const submit = (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    if (!trimmedName || !trimmedCommand || nameInUse) return
-    onSave(
-      trimmedName,
-      trimmedCommand,
-      argsText
-        .split(/\r?\n/)
-        .map((arg) => arg.trim())
-        .filter((arg) => arg !== ""),
-      enabled,
-      deferred,
-    )
-  }
-
-  return (
-    <Dialog open onOpenChange={(open) => !open && !saving && onClose()}>
-      <DialogContent className="max-w-xl">
-        <DialogHeader>
-          <DialogTitle>{t("pages.agent.mcp.add_title")}</DialogTitle>
-          <DialogDescription>
-            {t("pages.agent.mcp.add_description")}
-          </DialogDescription>
-        </DialogHeader>
-        <form className="grid gap-4" onSubmit={submit}>
-          <label className="grid gap-2 text-sm font-medium" htmlFor="mcp-name">
-            {t("pages.agent.mcp.name_label", "Name")}
-            <Input
-              id="mcp-name"
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              disabled={saving}
-              autoFocus
-            />
-            {nameInUse && (
-              <span className="text-destructive text-xs font-normal">
-                {t("pages.agent.mcp.name_in_use")}
-              </span>
-            )}
-          </label>
-          <label
-            className="grid gap-2 text-sm font-medium"
-            htmlFor="mcp-new-command"
-          >
-            {t("pages.agent.mcp.command_label", "Command")}
-            <Input
-              id="mcp-new-command"
-              value={command}
-              onChange={(event) => setCommand(event.target.value)}
-              disabled={saving}
-            />
-          </label>
-          <label
-            className="grid gap-2 text-sm font-medium"
-            htmlFor="mcp-new-args"
-          >
-            {t("pages.agent.mcp.args_label", "Arguments")}
-            <Textarea
-              id="mcp-new-args"
-              value={argsText}
-              onChange={(event) => setArgsText(event.target.value)}
-              disabled={saving}
-              className="min-h-28 font-mono text-xs"
-            />
-            <span className="text-muted-foreground text-xs font-normal">
-              {t("pages.agent.mcp.args_hint", "One argument per line.")}
-            </span>
-          </label>
-          <div className="bg-muted/30 flex flex-wrap items-center gap-x-5 gap-y-3 rounded-lg px-3 py-2.5">
-            <label className="flex cursor-pointer items-center gap-2 text-sm">
-              <Switch
-                size="sm"
-                checked={enabled}
-                disabled={saving}
-                onCheckedChange={setEnabled}
-              />
-              {t("pages.agent.mcp.server_enabled", "Server enabled")}
-            </label>
-            <label className="flex cursor-pointer items-center gap-2 text-sm">
-              <Switch
-                size="sm"
-                checked={deferred}
-                disabled={saving}
-                onCheckedChange={setDeferred}
-              />
-              {t("pages.agent.mcp.deferred_mode", "Deferred discovery")}
-            </label>
-          </div>
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={onClose}
-              disabled={saving}
-            >
-              {t("common.cancel")}
-            </Button>
-            <Button
-              type="submit"
-              disabled={saving || !trimmedName || !trimmedCommand || nameInUse}
-            >
-              {saving && <IconLoader2 className="size-4 animate-spin" />}
-              {t("pages.agent.mcp.add", "Add server")}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
 function RuntimeNotice({
   enabled,
-  runtimeAvailable,
+  onOpenSettings,
 }: {
   enabled: boolean
-  runtimeAvailable: boolean
+  onOpenSettings: () => void
 }) {
   const { t } = useTranslation()
   return (
@@ -561,19 +438,24 @@ function RuntimeNotice({
           {!enabled
             ? t(
                 "pages.agent.mcp.integration_disabled_hint",
-                "Enable MCP in Config, then restart or reload the gateway.",
+                "Enable MCP in MCP Settings, then restart or reload the gateway.",
               )
             : t(
                 "pages.agent.mcp.runtime_unavailable_hint",
                 "Configured servers are shown, but live connection and tool data are unavailable.",
               )}
-          {!runtimeAvailable && " "}
-          <Link
-            to="/config"
-            className="text-primary underline underline-offset-4"
-          >
-            {t("pages.agent.mcp.open_config", "Open Config")}
-          </Link>
+          {!enabled && (
+            <>
+              {" "}
+              <button
+                type="button"
+                onClick={onOpenSettings}
+                className="text-primary underline underline-offset-4"
+              >
+                {t("pages.agent.mcp.open_settings", "Open Settings")}
+              </button>
+            </>
+          )}
         </p>
       </div>
     </div>
@@ -609,18 +491,20 @@ function SummaryCard({
 
 function ServerCard({
   server,
+  deferredMode,
   actionsDisabled,
   onEdit,
   onRemove,
   onUpdateSettings,
 }: {
   server: MCPServer
+  deferredMode: "inherit" | "deferred" | "eager"
   actionsDisabled: boolean
   onEdit: (server: MCPServer) => void
   onRemove: (server: MCPServer) => void
   onUpdateSettings: (settings: {
     enabled?: boolean
-    deferred?: boolean
+    deferred?: boolean | null
   }) => void
 }) {
   const { t } = useTranslation()
@@ -659,18 +543,16 @@ function ServerCard({
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {server.transport === "stdio" && (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={actionsDisabled}
-              onClick={() => onEdit(server)}
-            >
-              <IconPencil className="size-4" />
-              {t("pages.agent.mcp.edit", "Edit")}
-            </Button>
-          )}
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={actionsDisabled}
+            onClick={() => onEdit(server)}
+          >
+            <IconPencil className="size-4" />
+            {t("pages.agent.mcp.edit", "Edit")}
+          </Button>
           <Button
             type="button"
             variant="outline"
@@ -695,14 +577,35 @@ function ServerCard({
             />
             {t("pages.agent.mcp.server_enabled", "Server enabled")}
           </label>
-          <label className="flex cursor-pointer items-center gap-2 text-sm">
-            <Switch
-              size="sm"
-              checked={server.deferred}
+          <label className="flex items-center gap-2 text-sm">
+            {t("pages.agent.mcp.deferred_mode_label", "Discovery mode")}
+            <Select
+              value={deferredMode}
               disabled={actionsDisabled}
-              onCheckedChange={(deferred) => onUpdateSettings({ deferred })}
-            />
-            {t("pages.agent.mcp.deferred_mode", "Deferred discovery")}
+              onValueChange={(value) =>
+                onUpdateSettings({
+                  deferred: value === "inherit" ? null : value === "deferred",
+                })
+              }
+            >
+              <SelectTrigger className="h-9 w-52">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="inherit">
+                  {t(
+                    "pages.agent.mcp.deferred_inherit",
+                    "Follow global discovery mode",
+                  )}
+                </SelectItem>
+                <SelectItem value="deferred">
+                  {t("pages.agent.mcp.deferred_true", "Deferred discovery")}
+                </SelectItem>
+                <SelectItem value="eager">
+                  {t("pages.agent.mcp.deferred_false", "Eager registration")}
+                </SelectItem>
+              </SelectContent>
+            </Select>
           </label>
         </div>
         {server.command && (
@@ -731,88 +634,27 @@ function ServerCard({
   )
 }
 
-function EditMCPServerDialog({
-  server,
-  saving,
-  onClose,
-  onSave,
-}: {
-  server: MCPServer
-  saving: boolean
-  onClose: () => void
-  onSave: (command: string, args: string[]) => void
-}) {
-  const { t } = useTranslation()
-  const [command, setCommand] = useState(server.launch_command ?? "")
-  const [argsText, setArgsText] = useState((server.args ?? []).join("\n"))
-  const trimmedCommand = command.trim()
+function dashboardServerToForm(server: MCPServer): MCPServerForm {
+  const transport =
+    server.transport === "http" || server.transport === "streamable-http"
+      ? "http"
+      : server.transport === "sse"
+        ? "sse"
+        : "stdio"
 
-  const submit = (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    if (!trimmedCommand) return
-    onSave(
-      trimmedCommand,
-      argsText
-        .split(/\r?\n/)
-        .map((arg) => arg.trim())
-        .filter((arg) => arg !== ""),
-    )
+  return {
+    name: server.name,
+    enabled: server.configured_enabled ?? server.enabled,
+    deferred: null,
+    type: transport,
+    url: "",
+    command: server.launch_command ?? server.command ?? "",
+    argsText: (server.args ?? []).join("\n"),
+    envText: "{}",
+    envFile: "",
+    inheritEnv: false,
+    headersText: "{}",
   }
-
-  return (
-    <Dialog open onOpenChange={(open) => !open && !saving && onClose()}>
-      <DialogContent className="max-w-xl">
-        <DialogHeader>
-          <DialogTitle>{t("pages.agent.mcp.edit_title")}</DialogTitle>
-          <DialogDescription>
-            {t("pages.agent.mcp.edit_description", { name: server.name })}
-          </DialogDescription>
-        </DialogHeader>
-        <form className="grid gap-4" onSubmit={submit}>
-          <label
-            className="grid gap-2 text-sm font-medium"
-            htmlFor="mcp-command"
-          >
-            {t("pages.agent.mcp.command_label", "Command")}
-            <Input
-              id="mcp-command"
-              value={command}
-              onChange={(event) => setCommand(event.target.value)}
-              disabled={saving}
-              autoFocus
-            />
-          </label>
-          <label className="grid gap-2 text-sm font-medium" htmlFor="mcp-args">
-            {t("pages.agent.mcp.args_label", "Arguments")}
-            <Textarea
-              id="mcp-args"
-              value={argsText}
-              onChange={(event) => setArgsText(event.target.value)}
-              disabled={saving}
-              className="min-h-32 font-mono text-xs"
-            />
-            <span className="text-muted-foreground text-xs font-normal">
-              {t("pages.agent.mcp.args_hint", "One argument per line.")}
-            </span>
-          </label>
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={onClose}
-              disabled={saving}
-            >
-              {t("common.cancel")}
-            </Button>
-            <Button type="submit" disabled={saving || !trimmedCommand}>
-              {saving && <IconLoader2 className="size-4 animate-spin" />}
-              {t("pages.agent.mcp.save", "Save changes")}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-  )
 }
 
 function RemoveMCPServerDialog({
