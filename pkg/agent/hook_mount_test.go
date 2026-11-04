@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
@@ -339,5 +340,46 @@ func TestReloadProviderAndConfigReplacesConfiguredHooks(t *testing.T) {
 	}
 	if decision := al.hooks.ApproveTool(context.Background(), &ToolApprovalRequest{Tool: "exec"}); decision.Approved {
 		t.Fatal("replacement approval hook should deny exec")
+	}
+}
+
+func TestReloadProviderAndConfigKeepsHookTimeoutsWhenReplacementFails(t *testing.T) {
+	const hookName = "test-reload-nil-hook"
+
+	if err := RegisterBuiltinHook(hookName, func(
+		context.Context,
+		config.BuiltinHookConfig,
+	) (any, error) {
+		// A factory that yields no hook passes construction but fails validation
+		// when the pre-built set is applied.
+		return nil, nil
+	}); err != nil {
+		t.Fatalf("RegisterBuiltinHook(%q) failed: %v", hookName, err)
+	}
+	t.Cleanup(func() { unregisterBuiltinHook(hookName) })
+
+	provider := &llmHookTestProvider{}
+	al, cfg := newReloadableHookLoop(t, provider, config.HooksConfig{Enabled: true})
+	defer al.Close()
+
+	sentinel := time.Duration(1234) * time.Millisecond
+	al.hooks.ConfigureTimeouts(0, 0, sentinel)
+
+	reloadedCfg := newHookLoopConfig(cfg.Agents.Defaults.Workspace, config.HooksConfig{
+		Enabled: true,
+		Defaults: config.HookDefaultsConfig{
+			ApprovalTimeoutMS: 9000,
+		},
+		Builtins: map[string]config.BuiltinHookConfig{
+			hookName: {Enabled: true},
+		},
+	})
+
+	if err := al.ReloadProviderAndConfig(context.Background(), provider, reloadedCfg); err == nil {
+		t.Fatal("expected reload to fail when the hook set cannot be applied")
+	}
+
+	if got := al.hooks.approvalTimeout; got != sentinel {
+		t.Fatalf("approval timeout = %v, want %v", got, sentinel)
 	}
 }

@@ -486,11 +486,11 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 		}
 	}
 
-	configureHookManagerFromConfig(al.hooks, cfg)
 	if err := al.hookRuntime.replace(al, newHooks); err != nil {
 		return fmt.Errorf("reinitialize hooks: %w", err)
 	}
 	newHooks = nil
+	configureHookManagerFromConfig(al.hooks, cfg)
 
 	// Atomically swap the config and registry under write lock
 	// This ensures readers see a consistent pair
