@@ -90,6 +90,7 @@
       "noModel": "Žádný výchozí model není nastaven. Přejděte na stránku Modely."
     },
     "sendMessage": "Odeslat zprávu",
+    "stopGeneration": "Zastavit generování",
     "composeHint": "Enter pro odeslání, Shift + Enter pro nový řádek",
     "contextTitle": "Kontext",
     "contextDetail": "Zobrazit detail",

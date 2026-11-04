@@ -1210,6 +1210,11 @@ export function ChatPage() {
     }
   }
 
+  const handleStop = () => {
+    if (!isTyping || !canInput) return
+    sendMessage({ content: "/stop", attachments: [] })
+  }
+
   const handleSendAudio = (attachment: ChatAttachment) => {
     if (
       canInput &&
@@ -1518,6 +1523,7 @@ export function ChatPage() {
             onDrop={handleComposerDrop}
             onRemoveAttachment={handleRemoveAttachment}
             onSend={handleSend}
+            onStop={handleStop}
             onSendAudio={handleSendAudio}
             modelSelector={
               hasAvailableModels ? (
@@ -1538,6 +1544,7 @@ export function ChatPage() {
             }}
             inputDisabledReason={inputDisabledReason}
             canSend={canSubmit}
+            isTyping={isTyping}
             isDragActive={isDragActive}
             contextUsage={contextUsage}
             slashCommands={slashCommands}

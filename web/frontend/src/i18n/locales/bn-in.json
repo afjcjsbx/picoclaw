@@ -92,6 +92,7 @@
       "noModel": "কোনো ডিফল্ট মডেল কনফিগার করা নেই। একটি সেট করতে মডেল পৃষ্ঠায় যান।"
     },
     "sendMessage": "বার্তা পাঠান",
+    "stopGeneration": "জেনারেশন বন্ধ করুন",
     "composeHint": "পাঠাতে Enter চাপুন, নতুন লাইনের জন্য Shift + Enter",
     "contextTitle": "প্রসঙ্গ",
     "contextDetail": "বিস্তারিত দেখুন",

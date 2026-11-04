@@ -112,6 +112,7 @@
       "noModel": "No default model configured. Go to Models page to set one."
     },
     "sendMessage": "Send message",
+    "stopGeneration": "Stop generating",
     "composeHint": "Press Enter to send, Shift + Enter for a new line",
     "slash": {
       "ariaLabel": "Slash commands",

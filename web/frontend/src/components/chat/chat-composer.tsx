@@ -75,11 +75,13 @@ interface ChatComposerProps {
   onDrop: (event: ReactDragEvent<HTMLDivElement>) => void
   onRemoveAttachment: (index: number) => void
   onSend: () => void
+  onStop: () => void
   onSendAudio: (attachment: ChatAttachment) => boolean
   modelSelector?: ReactNode
   onContextDetail?: () => void
   inputDisabledReason: ChatInputDisabledReason | null
   canSend: boolean
+  isTyping: boolean
   isDragActive: boolean
   contextUsage?: ContextUsage
   slashCommands?: SlashCommand[]
@@ -104,11 +106,13 @@ export function ChatComposer({
   onDrop,
   onRemoveAttachment,
   onSend,
+  onStop,
   onSendAudio,
   modelSelector,
   onContextDetail,
   inputDisabledReason,
   canSend,
+  isTyping,
   isDragActive,
   contextUsage,
   slashCommands = [],
@@ -494,7 +498,19 @@ export function ChatComposer({
                   )}
                 </Button>
               ) : null}
-              {canInput ? (
+              {isTyping ? (
+                <Button
+                  type="button"
+                  size="icon"
+                  className="size-8 rounded-full bg-red-500 text-white transition-transform hover:bg-red-600 active:scale-95"
+                  onClick={onStop}
+                  disabled={!canInput}
+                  aria-label={t("chat.stopGeneration")}
+                  title={t("chat.stopGeneration")}
+                >
+                  <IconPlayerStop className="size-4" />
+                </Button>
+              ) : canInput ? (
                 <span tabIndex={!canSend ? 0 : undefined}>
                   <Button
                     type="button"
