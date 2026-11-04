@@ -90,7 +90,7 @@ PICOCLAW_EVENTS_LOGGING_INCLUDE_PAYLOAD=false
 | `agent.turn.end` | 一次 turn 退出时，无论完成、报错还是 hard abort | `status` (`completed`/`error`/`aborted`), `iterations_total`, `duration_ms`, `final_len` |
 | `agent.llm.request` | 每次调用 LLM provider 前 | `model`, `messages`, `tools`, `max_tokens` |
 | `agent.llm.delta` | 预留给流式 LLM delta；当前实现已定义但没有自然发送点 | `content_delta_len`, `reasoning_delta_len` |
-| `agent.llm.response` | LLM provider 返回完整响应后 | `content_len`, `tool_calls`, `has_reasoning` |
+| `agent.llm.response` | LLM provider 返回完整响应后 | `content_len`, `tool_calls`, `has_reasoning`, `input_tokens`, `output_tokens`, `total_tokens` |
 | `agent.llm.retry` | LLM 请求因上下文、限流、临时错误等原因准备重试前 | `attempt`, `max_retries`, `reason`, `error`, `backoff_ms` |
 | `agent.context.compress` | 上下文历史被压缩时，例如主动预算检查或 LLM retry 处理 | `reason`, `dropped_messages`, `remaining_messages` |
 | `agent.session.summarize` | 会话历史异步摘要完成时 | `summarized_messages`, `kept_messages`, `summary_len`, `omitted_oversized` |
@@ -105,6 +105,8 @@ PICOCLAW_EVENTS_LOGGING_INCLUDE_PAYLOAD=false
 | `agent.subturn.result_delivered` | 子 turn 结果成功投递到目标 channel/chat 时 | `target_channel`, `target_chat_id`, `content_len` |
 | `agent.subturn.orphan` | 子 turn 结果无法投递或无法关联回父 turn 时 | `parent_turn_id`, `child_turn_id`, `reason` |
 | `agent.error` | agent 执行流程报告错误时 | `stage`, `error` |
+
+`agent.llm.response` 的 token 数量来自 provider 返回的 usage 信息；如果 provider 未返回 usage，这些字段保持为 `0`。
 
 ### Channel
 
@@ -188,7 +190,7 @@ agent 事件还会追加 payload 摘要字段：
 | `agent.turn.end` | `status`, `iterations_total`, `duration_ms`, `final_len` |
 | `agent.llm.request` | `model`, `messages`, `tools`, `max_tokens` |
 | `agent.llm.delta` | `content_delta_len`, `reasoning_delta_len` |
-| `agent.llm.response` | `content_len`, `tool_calls`, `has_reasoning` |
+| `agent.llm.response` | `content_len`, `tool_calls`, `has_reasoning`, `input_tokens`, `output_tokens`, `total_tokens` |
 | `agent.llm.retry` | `attempt`, `max_retries`, `reason`, `error`, `backoff_ms` |
 | `agent.context.compress` | `reason`, `dropped_messages`, `remaining_messages` |
 | `agent.session.summarize` | `summarized_messages`, `kept_messages`, `summary_len`, `omitted_oversized` |

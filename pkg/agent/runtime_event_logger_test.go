@@ -105,6 +105,30 @@ func TestRuntimeEventLogFieldsSummarizeAgentPayload(t *testing.T) {
 	}
 }
 
+func TestRuntimeEventLogFieldsSummarizeLLMTokenUsage(t *testing.T) {
+	fields := runtimeEventLogFields(runtimeevents.Event{
+		Kind:     runtimeevents.KindAgentLLMResponse,
+		Severity: runtimeevents.SeverityInfo,
+		Payload: LLMResponsePayload{
+			ContentLen:   42,
+			ToolCalls:    1,
+			HasReasoning: true,
+			InputTokens:  120,
+			OutputTokens: 30,
+			TotalTokens:  150,
+		},
+	})
+
+	if fields["content_len"] != 42 || fields["tool_calls"] != 1 || fields["has_reasoning"] != true {
+		t.Fatalf("missing LLM response summary fields: %#v", fields)
+	}
+	if fields["input_tokens"] != 120 ||
+		fields["output_tokens"] != 30 ||
+		fields["total_tokens"] != 150 {
+		t.Fatalf("missing LLM token usage summary fields: %#v", fields)
+	}
+}
+
 func TestRuntimeEventLogFieldsIncludeSafeAttrs(t *testing.T) {
 	fields := runtimeEventLogFields(runtimeevents.Event{
 		ID:       "evt-gateway",

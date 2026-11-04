@@ -356,6 +356,8 @@ For direct Anthropic API access or custom endpoints that only support Anthropic'
 > - The existing `anthropic` protocol returns 404 errors (indicating the endpoint doesn't support OpenAI-compatible format)
 >
 > **Note:** The `anthropic` protocol uses OpenAI-compatible format (`/v1/chat/completions`), while `anthropic-messages` uses Anthropic's native format (`/v1/messages`). Choose based on your endpoint's supported format.
+>
+> Requests to Claude models enable Anthropic automatic prompt caching with a top-level `cache_control: {"type": "ephemeral"}`. The cache covers tool definitions and the system prompt, and the breakpoint advances with the conversation. Anthropic applies its normal minimum-prefix rules, so short prompts are processed uncached without an error.
 
 **OpenCode Go**
 

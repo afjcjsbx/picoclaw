@@ -90,7 +90,7 @@ The table below lists the current runtime event kinds, when they are emitted, an
 | `agent.turn.end` | A turn exits, whether it completed, errored, or was hard-aborted. | `status` (`completed`/`error`/`aborted`), `iterations_total`, `duration_ms`, `final_len` |
 | `agent.llm.request` | Before each LLM provider request. | `model`, `messages`, `tools`, `max_tokens` |
 | `agent.llm.delta` | Reserved for streaming LLM deltas; the kind is defined, but the current implementation has no natural emit site. | `content_delta_len`, `reasoning_delta_len` |
-| `agent.llm.response` | After the LLM provider returns a complete response. | `content_len`, `tool_calls`, `has_reasoning` |
+| `agent.llm.response` | After the LLM provider returns a complete response. | `content_len`, `tool_calls`, `has_reasoning`, `input_tokens`, `output_tokens`, `total_tokens` |
 | `agent.llm.retry` | Before retrying an LLM request after context, rate-limit, transient provider, or fallback handling. | `attempt`, `max_retries`, `reason`, `error`, `backoff_ms` |
 | `agent.context.compress` | Agent context history is compressed, for example during proactive budget checks or LLM retry handling. | `reason`, `dropped_messages`, `remaining_messages` |
 | `agent.session.summarize` | Session history summarization completes, either asynchronously after a turn or on a manual `/compact` (legacy context manager). | `summarized_messages`, `kept_messages`, `summary_len`, `omitted_oversized` |
@@ -105,6 +105,8 @@ The table below lists the current runtime event kinds, when they are emitted, an
 | `agent.subturn.result_delivered` | A child turn result is delivered to the target channel/chat. | `target_channel`, `target_chat_id`, `content_len` |
 | `agent.subturn.orphan` | A child turn result cannot be delivered or cannot be associated back to its parent turn. | `parent_turn_id`, `child_turn_id`, `reason` |
 | `agent.error` | Agent execution reports an error. | `stage`, `error` |
+
+Token counts on `agent.llm.response` come from the provider usage report. They stay `0` when the provider does not return usage information.
 
 ### Channel
 
@@ -191,7 +193,7 @@ Agent events add safe payload summaries:
 | `agent.turn.end` | `status`, `iterations_total`, `duration_ms`, `final_len` |
 | `agent.llm.request` | `model`, `messages`, `tools`, `max_tokens` |
 | `agent.llm.delta` | `content_delta_len`, `reasoning_delta_len` |
-| `agent.llm.response` | `content_len`, `tool_calls`, `has_reasoning` |
+| `agent.llm.response` | `content_len`, `tool_calls`, `has_reasoning`, `input_tokens`, `output_tokens`, `total_tokens` |
 | `agent.llm.retry` | `attempt`, `max_retries`, `reason`, `error`, `backoff_ms` |
 | `agent.context.compress` | `reason`, `dropped_messages`, `remaining_messages` |
 | `agent.session.summarize` | `summarized_messages`, `kept_messages`, `summary_len`, `omitted_oversized` |

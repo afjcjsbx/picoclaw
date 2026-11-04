@@ -352,7 +352,9 @@ func (b *toolBatch) asyncCallback(toolName string) tools.AsyncCallback {
 				ChatType: "direct",
 				SenderID: fmt.Sprintf("async:%s", toolName),
 			},
-			Content: content,
+			SessionKey: ts.sessionKey,
+			AgentID:    ts.agent.ID,
+			Content:    content,
 		})
 	}
 }

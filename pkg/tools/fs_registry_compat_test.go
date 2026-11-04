@@ -49,3 +49,31 @@ func TestReadFileLinesTool_RegistryValidationSupportsMaxLinesAndRejectsLimit(t *
 		t.Fatalf("expected registry validation error for limit, got: %s", result.ForLLM)
 	}
 }
+
+func TestEditFileTool_RegistryValidationAcceptsPatchWithoutOldText(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "patch_registry.txt")
+	if err := os.WriteFile(testFile, []byte("before\n"), 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	reg := NewToolRegistry()
+	reg.Register(fstools.NewEditFileTool(tmpDir, true))
+
+	patch := "*** Begin Patch\n*** Update File: " + testFile + "\n@@\n-before\n+after\n*** End Patch"
+	result := reg.Execute(context.Background(), "edit_file", map[string]any{
+		"path":  testFile,
+		"patch": patch,
+	})
+	if result.IsError {
+		t.Fatalf("expected patch-only edit_file call to pass registry validation, got: %s", result.ForLLM)
+	}
+
+	content, err := os.ReadFile(testFile)
+	if err != nil {
+		t.Fatalf("Failed to read edited file: %v", err)
+	}
+	if strings.TrimSpace(string(content)) != "after" {
+		t.Fatalf("expected patched content, got: %q", content)
+	}
+}

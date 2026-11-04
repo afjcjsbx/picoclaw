@@ -106,7 +106,12 @@ type FailoverError struct {
 	Provider string
 	Model    string
 	Status   int
-	Wrapped  error
+	// BillingUnverified marks a billing classification inferred from a message
+	// that can also describe a non-billing rejection. The fallback still runs,
+	// but the candidate gets a standard cooldown instead of the long billing
+	// bench.
+	BillingUnverified bool
+	Wrapped           error
 }
 
 func (e *FailoverError) Error() string {
