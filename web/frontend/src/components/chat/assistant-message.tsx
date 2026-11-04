@@ -711,7 +711,7 @@ export const AssistantMessage = memo(function AssistantMessage({
             <div
               className={cn(
                 "prose dark:prose-invert prose-pre:my-2 prose-pre:overflow-x-auto prose-pre:rounded-lg prose-pre:border prose-pre:bg-zinc-100 prose-pre:p-0 prose-pre:text-zinc-900 dark:prose-pre:bg-zinc-950 dark:prose-pre:text-zinc-100 max-w-none [overflow-wrap:anywhere] break-words",
-                "prose-p:my-2 prose-p:whitespace-pre-wrap py-1 text-[15px] leading-relaxed",
+                "prose-p:my-2 prose-p:whitespace-pre-wrap py-1 text-[16px] leading-relaxed",
               )}
             >
               <ReactMarkdown
