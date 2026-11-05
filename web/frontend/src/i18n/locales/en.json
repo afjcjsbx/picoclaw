@@ -128,6 +128,10 @@
     "sendMessage": "Send message",
     "stopGeneration": "Stop generating",
     "composeHint": "Press Enter to send, Shift + Enter for a new line",
+    "queuedFollowUp": "Queued follow-up",
+    "queuedFollowUpHint": "Sends when the current turn finishes",
+    "steerNow": "Steer",
+    "removeQueuedMessage": "Remove queued message",
     "slash": {
       "ariaLabel": "Slash commands",
       "recent": "Recent",
