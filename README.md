@@ -21,16 +21,8 @@ _Small on purpose. Small is not lesser. Small is enough._
 </p>
 
 <p>
-  <a href="docs/project/README.zh.md">中文</a> |
-  <a href="docs/project/README.ja.md">日本語</a> |
-  <a href="docs/project/README.ko.md">한국어</a> |
-  <a href="docs/project/README.pt-br.md">Português</a> |
-  <a href="docs/project/README.vi.md">Tiếng Việt</a> |
-  <a href="docs/project/README.fr.md">Français</a> |
-  <a href="docs/project/README.it.md">Italiano</a> |
-  <a href="docs/project/README.id.md">Bahasa Indonesia</a> |
-  <a href="docs/project/README.ms.md">Malay</a> |
-  <strong>English</strong>
+  <strong>English</strong> |
+  <a href="docs/project/README.zh.md">中文</a>
 </p>
 
 </div>

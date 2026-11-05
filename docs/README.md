@@ -27,8 +27,8 @@ For channel-specific setup, start with [Chat Apps Configuration](guides/chat-app
 - Choose the document type directory first. Do not create language buckets such as `docs/zh/` or `docs/fr/`.
 - Keep each translated document next to its English source document.
 - Use English as the base filename with no locale suffix.
-- Use lowercase locale suffixes for translations, for example `configuration.zh.md` or `README.pt-br.md`.
-- Keep the main documentation set in English and Chinese. README-style entry documents may keep translations in additional languages.
+- Use lowercase locale suffixes for translations, for example `configuration.zh.md` or `README.zh.md`.
+- Keep the documentation set in English and Chinese. README translations are limited to Chinese.
 - Keep module-specific docs next to the code they describe instead of moving them into `docs/`.
 
 ## Recommended Directories
@@ -54,7 +54,7 @@ For channel-specific setup, start with [Chat Apps Configuration](guides/chat-app
 - Translations use `.<locale>.md`:
   - `README.zh.md`
   - `configuration.zh.md`
-  - `README.pt-br.md`
+  - `pkg/channels/README.zh.md`
 - Code-adjacent translated READMEs follow the same rule:
   - `pkg/audio/asr/README.zh.md`
   - `pkg/isolation/README.zh.md`
