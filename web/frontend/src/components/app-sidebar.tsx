@@ -3,6 +3,7 @@ import {
   IconAtom,
   IconChevronsDown,
   IconChevronsUp,
+  IconClock,
   IconKey,
   IconListDetails,
   IconLoader2,
@@ -25,7 +26,6 @@ import { useTranslation } from "react-i18next"
 import type { SessionSummary } from "@/api/sessions"
 import { AppSidebarControls } from "@/components/app-sidebar-controls"
 import { DeleteSessionDialog } from "@/components/chat/delete-session-dialog"
-import { SidebarCronCard } from "@/components/sidebar-cron-card"
 import { Button } from "@/components/ui/button"
 import {
   Collapsible,
@@ -434,6 +434,12 @@ export function AppSidebar({
             icon: IconPlugConnected,
             translateTitle: true,
           },
+          {
+            title: "navigation.cron",
+            url: "/agent/cron",
+            icon: IconClock,
+            translateTitle: true,
+          },
         ],
       },
       {
@@ -803,7 +809,6 @@ export function AppSidebar({
             </SidebarGroupContent>
           </SidebarGroup>
         )}
-        {showSessionHistory && <SidebarCronCard />}
         {navGroups
           .filter((group) => group.label !== "navigation.chat")
           .map((group) => (

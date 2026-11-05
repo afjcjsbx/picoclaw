@@ -10,6 +10,7 @@
     "tools": "Tools",
     "subagents": "Subagents",
     "mcp": "MCP",
+    "cron": "Cron",
     "services": "Services",
     "channels_group": "Channels",
     "show_more_channels": "More",
@@ -18,11 +19,6 @@
     "logs": "Logs"
   },
   "cron": {
-    "title": "Cron jobs",
-    "refresh": "Refresh cron jobs",
-    "loading": "Loading cron jobs...",
-    "empty": "No cron jobs configured",
-    "loadFailed": "Could not load cron jobs",
     "gatewayUnavailable": "Gateway is not running",
     "scheduleAt": "Once at {{time}}",
     "scheduleEvery": "Every {{duration}}",
@@ -30,8 +26,6 @@
     "scheduleCronWithTz": "Cron {{expr}} ({{tz}})",
     "scheduleUnknown": "Unknown schedule ({{kind}})",
     "paused": "Paused",
-    "nextRun": "Next {{time}}",
-    "lastRun": "Last run {{time}}",
     "neverRun": "Not run yet",
     "runNow": "Run now",
     "pause": "Pause",
@@ -39,14 +33,10 @@
     "delete": "Delete",
     "deleteTitle": "Delete cron job",
     "deleteConfirm": "Delete \"{{name}}\"? This cannot be undone.",
-    "history": "Run history",
     "noHistory": "No runs recorded",
     "statusOk": "OK",
     "statusError": "Error",
-    "statusSkipped": "Skipped",
-    "runFailed": "Could not run the cron job",
-    "toggleFailed": "Could not update the cron job",
-    "deleteFailed": "Could not delete the cron job"
+    "statusSkipped": "Skipped"
   },
   "launcherLogin": {
     "title": "Sign in",
@@ -991,6 +981,36 @@
           "only_agent_hint": "PicoClaw is using an implicit main agent. Add agents.list to configure peer agents.",
           "open_config": "Open raw config"
         }
+      },
+      "cron": {
+        "title": "Cron jobs",
+        "description": "Inspect scheduled jobs, their cadence, and recent runs. Pause, resume, trigger, or delete jobs without leaving the dashboard.",
+        "refresh": "Refresh",
+        "retry": "Retry",
+        "load_error": "Failed to load cron jobs.",
+        "empty": "No cron jobs configured",
+        "empty_hint": "Jobs created by the agent or the CLI will appear here.",
+        "active": "Active",
+        "not_set": "Not set",
+        "not_scheduled": "Not scheduled",
+        "next_run": "Next run",
+        "last_run": "Last run",
+        "channel": "Channel",
+        "target": "Target",
+        "command": "Command",
+        "message": "Message",
+        "history": "Recent runs",
+        "stats": {
+          "total": "Total jobs",
+          "active": "Active",
+          "paused": "Paused",
+          "runs": "Recorded runs"
+        },
+        "run_success": "Requested a run for {{name}}.",
+        "run_error": "Could not run the cron job.",
+        "toggle_error": "Could not update the cron job.",
+        "delete_success": "Cron job deleted.",
+        "delete_error": "Could not delete the cron job."
       },
       "mcp": {
         "title": "MCP Servers",
