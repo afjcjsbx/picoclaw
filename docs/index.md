@@ -25,7 +25,7 @@ This is the documentation home. For the project overview, feature comparison, re
 | [Tools](tools/README.md) | Documentation for every tool family, with switches and parameters |
 | [Design Notes](design/README.md) | Proposals and investigations |
 | [Migration](migration/README.md) | Breaking changes and upgrade notes |
-| [Project Translations](https://github.com/afjcjsbx/picoclaw/tree/main/docs/project) | Translated versions of the repository README and contributing guide |
+| [Project Translations](https://github.com/afjcjsbx/picoclaw/tree/main/docs/project) | Chinese translations of the repository README and contributing guide |
 
 ## Popular Pages
 
