@@ -39,7 +39,7 @@ _Small on purpose. Small is not lesser. Small is enough._
 
 <p align="center">
   <a href="https://discord.gg/bEuEDnKpf">
-    <img src="assets/discord-banner.png" alt="PicoClaw on Discord — meet builders, share ideas, get help" width="100%">
+    <img src="assets/discord-banner.png" alt="PicoClaw on Discord — meet builders, share ideas, get help" width="80%">
   </a>
 </p>
 
@@ -51,52 +51,7 @@ This repository is the actively maintained, community-driven continuation of the
 
 **Runs on $10 hardware. Uses 10–20 MB of RAM. Boots in under a second.**
 
-> [!CAUTION]
-> **Security notice**
->
-> - **No crypto:** PicoClaw has **not** issued any official tokens or cryptocurrency. All claims on `pump.fun` or other trading platforms are **scams**.
-> - **Official domain:** The **only** official website is **[picoclaw.io](https://picoclaw.io)**. Many `.ai/.org/.com/.net/...` domains have been registered by third parties — do not trust them.
-> - **Early development:** PicoClaw is evolving quickly. There may be unresolved security issues. Do not deploy to production before v1.0.
-> - **Resource use:** Recent builds typically use 10–20 MB of RAM. Resource optimization is planned after feature stabilization.
-
-## News
-
-**2026-09-29** 🚀 **[v0.4.0 released!](https://github.com/afjcjsbx/picoclaw/releases/tag/v0.4.0)** MCP CLI management and Web UI configuration, native Anthropic Messages API support, configurable web search (including Keenable and Kagi), configurable logging and virtual models, cross-platform serial-tool support, enhanced hooks and isolation, plus numerous channel, provider, security, and build fixes.
-
-**2026-09-28** 🌱 **Project revived!** Development has resumed and continues actively in this fork.
-
-<details>
-<summary><b>Earlier news</b></summary>
-
-**2026-05-28** 🚀 **v0.2.9 released!** MCP server management in the Web UI, configurable Sogou-backed web search, tool feedback animation in channels, `pretty_print` and `disable_escape_html` defaults, and numerous bug fixes across providers and channels.
-
-**2026-05-14** 🚀 **v0.2.8 released!** MCP CLI commands (`show`, `add`, `list`, `remove`, `test`, `edit`), empty object instead of null for MCP tool parameters, and build fixes.
-
-**2026-05-07** 🚀 **v0.2.7 released!** Configurable Sogou-backed web search, channel tool feedback animation, and linter fixes.
-
-**2026-04-23** 🚀 **v0.2.6 released!** Hooks with a respond action and comprehensive documentation, isolation support, and a help banner fix.
-
-**2026-04-11** 🚀 **v0.2.5 released!** Zoneinfo from `TZ`/`ZONEINFO` environment variables, Matrix CommonMark rendering alignment, and line-based `read_file`.
-
-**2026-03-31** 📱 **Android support!** PicoClaw now runs on Android. Download the APK from [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases).
-
-**2026-03-25** 🚀 **v0.2.4 released!** Agent architecture overhaul (SubTurn, Hooks, Steering, EventBus), WeChat/WeCom integration, security hardening (`.security.yml`, sensitive data filtering), new providers (AWS Bedrock, Azure, Xiaomi MiMo), and 35 bug fixes.
-
-**2026-03-17** 🚀 **v0.2.3 released!** System tray UI (Windows & Linux), sub-agent status query (`spawn_status`), experimental Gateway hot-reload, Cron security gating, and two security fixes.
-
-**2026-03-09** 🎉 **v0.2.1 — the biggest update yet!** MCP protocol support, four new channels (Matrix/IRC/WeCom/Discord Proxy), three new providers (Kimi/Minimax/Avian), vision pipeline, JSONL memory store, and model routing.
-
-**2026-02-28** 📦 **v0.2.0** released with Docker Compose and Web UI Launcher support.
-
-**2026-02-26** 🎉 PicoClaw reaches **20K stars** in 17 days. Channel auto-orchestration and capability interfaces ship.
-
-**2026-02-16** 🎉 PicoClaw breaks **12K stars** in one week. Community maintainer roles and the roadmap launch.
-
-**2026-02-13** 🎉 PicoClaw breaks **5,000 stars** in four days.
-
-**2026-02-09** 🎉 **PicoClaw released!** Built in one day to bring AI agents to $10 hardware with less than 10 MB of RAM.
-
-</details>
+**Don't let your old hardware gather dust in the basement — give it a second life with PicoClaw!**
 
 ## Features
 
@@ -595,10 +550,6 @@ PRs are welcome! The codebase is intentionally small and readable.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
-<div align="center">
-
 **PicoClaw is built in the open. Come build it with us.**
 
 [⭐ Star PicoClaw](https://github.com/afjcjsbx/picoclaw) · [💬 Join Discord](https://discord.gg/bEuEDnKpf) · [🐛 Report an issue](https://github.com/afjcjsbx/picoclaw/issues)
-
-</div>
