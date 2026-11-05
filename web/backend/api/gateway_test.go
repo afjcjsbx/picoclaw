@@ -667,6 +667,93 @@ func TestGatewayStartReady_LocalModelWithoutAPIKey(t *testing.T) {
 	}
 }
 
+func TestGatewayStartReady_LocalModelUnreachableWithReadyFallback(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+	resetModelProbeHooks(t)
+
+	probeOpenAICompatibleModelFunc = func(apiBase, modelID, apiKey string) bool {
+		return false
+	}
+
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	cfg.ModelList = []*config.ModelConfig{
+		{
+			ModelName: "local-vllm",
+			Model:     "vllm/custom-model",
+			APIBase:   "http://localhost:8000/v1",
+		},
+		{
+			ModelName: "remote-fallback",
+			Provider:  "openai",
+			Model:     "gpt-4o",
+			APIBase:   "https://api.example.com/v1",
+		},
+	}
+	cfg.ModelList[1].SetAPIKey("remote-key")
+	cfg.Agents.Defaults.ModelName = "local-vllm"
+	cfg.Agents.Defaults.ModelFallbacks = []string{"remote-fallback"}
+	if err = config.SaveConfig(configPath, cfg); err != nil {
+		t.Fatalf("SaveConfig() error = %v", err)
+	}
+
+	h := NewHandler(configPath)
+	ready, reason, err := h.gatewayStartReady()
+	if err != nil {
+		t.Fatalf("gatewayStartReady() error = %v", err)
+	}
+	if !ready {
+		t.Fatalf("gatewayStartReady() ready = false, want true with a ready fallback (reason=%q)", reason)
+	}
+}
+
+func TestGatewayStartReady_LocalModelUnreachableWithUnreadyFallback(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+	resetModelProbeHooks(t)
+
+	probeOpenAICompatibleModelFunc = func(apiBase, modelID, apiKey string) bool {
+		return false
+	}
+
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	cfg.ModelList = []*config.ModelConfig{
+		{
+			ModelName: "local-vllm",
+			Model:     "vllm/custom-model",
+			APIBase:   "http://localhost:8000/v1",
+		},
+		{
+			ModelName: "local-fallback",
+			Model:     "lmstudio/custom-model",
+			APIBase:   "http://localhost:1234/v1",
+		},
+	}
+	cfg.Agents.Defaults.ModelName = "local-vllm"
+	cfg.Agents.Defaults.ModelFallbacks = []string{"local-fallback"}
+	if err = config.SaveConfig(configPath, cfg); err != nil {
+		t.Fatalf("SaveConfig() error = %v", err)
+	}
+
+	h := NewHandler(configPath)
+	ready, reason, err := h.gatewayStartReady()
+	if err != nil {
+		t.Fatalf("gatewayStartReady() error = %v", err)
+	}
+	if ready {
+		t.Fatal("gatewayStartReady() ready = true, want false when no fallback is reachable")
+	}
+	if !strings.Contains(reason, "not reachable") {
+		t.Fatalf("gatewayStartReady() reason = %q, want contains %q", reason, "not reachable")
+	}
+}
+
 func TestGatewayStartReady_LocalModelWithRunningService(t *testing.T) {
 	configPath, cleanup := setupOAuthTestEnv(t)
 	defer cleanup()
