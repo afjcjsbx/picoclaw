@@ -1359,6 +1359,75 @@ func TestWebTool_TavilySearch_Success(t *testing.T) {
 	}
 }
 
+func TestNormalizeSearchSnippet(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"empty", "", ""},
+		{"whitespace only", " \t\n\n ", ""},
+		{"plain", "plain text", "plain text"},
+		{"single newline preserved", "a\nb", "a\nb"},
+		{"repeated newlines collapsed", "a\n\nb\n\n\nc", "a\nb\nc"},
+		{"blank lines with spaces and tabs", "a\n \n\t\nb", "a\nb"},
+		{"internal spaces preserved", "a   b", "a   b"},
+		{"tabs preserved", "a\tb\t\tc", "a\tb\t\tc"},
+		{"markdown list preserved", "- one\n- two\n\n\n- three", "- one\n- two\n- three"},
+		{"crlf normalized", "a\r\n\r\nb", "a\nb"},
+		{"leading and trailing blank lines trimmed", "\n\na\n\nb\n\n", "a\nb"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := normalizeSearchSnippet(tt.input); got != tt.want {
+				t.Fatalf("normalizeSearchSnippet(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWebTool_TavilySearch_CollapsesBlankLines(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]any{
+			"results": []map[string]any{
+				{
+					"title":   "Test\nResult 1",
+					"url":     "https://example.com/1",
+					"content": "First passage.\n\nSecond\tpassage.\n\n\nThird passage.",
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	tool, err := NewWebSearchTool(WebSearchToolOptions{
+		TavilyEnabled:    true,
+		TavilyAPIKeys:    []string{"test-key"},
+		TavilyBaseURL:    server.URL,
+		TavilyMaxResults: 5,
+	})
+	if err != nil {
+		t.Fatalf("NewWebSearchTool() error: %v", err)
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{"query": "test query"})
+	if result.IsError {
+		t.Fatalf("expected success, got error: %s", result.ForLLM)
+	}
+
+	want := "Results for: test query (via Tavily)\n" +
+		"1. Test Result 1\n" +
+		"   https://example.com/1\n" +
+		"   First passage.\n" +
+		"Second\tpassage.\n" +
+		"Third passage."
+	if result.ForUser != want {
+		t.Fatalf("ForUser = %q, want %q", result.ForUser, want)
+	}
+}
+
 func TestWebTool_TavilySearch_RangeMapping(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var payload map[string]any
@@ -2703,7 +2772,7 @@ func TestWebTool_KeenableSearch_Endpoints(t *testing.T) {
 				"Snippet for result 1",
 				"Test Result 2",
 				"Description for result 2",
-				"3. Test Result 3\n   https://example.com/3\n   First passage. Second passage.",
+				"3. Test Result 3\n   https://example.com/3\n   First passage.\nSecond   passage.",
 			} {
 				if !strings.Contains(result.ForUser, want) {
 					t.Errorf("output missing %q:\n%s", want, result.ForUser)

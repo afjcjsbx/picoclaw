@@ -231,6 +231,8 @@ At runtime, the `web_search` tool accepts the following parameters:
 If `range` is omitted, PicoClaw performs an unrestricted search.
 For Kagi, `d`, `w`, and `m` map to Kagi lens `time_relative`; `y` maps to a lens `time_after` date one year before the current day.
 
+Search results are normalized before they are returned: runs of blank lines in provider snippets are collapsed to a single newline, so repeated hard wraps cannot bloat the result layout or its large-result artifact. Single line breaks, tabs, indentation, and markdown structure are preserved.
+
 ## Example `web_search` Call
 
 ```json
