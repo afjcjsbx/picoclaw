@@ -343,6 +343,8 @@
       "workspaceHint": "Diretório de trabalho para providers baseados em CLI (ex: GitHub Copilot).",
       "requestTimeout": "Timeout da Requisição (s)",
       "requestTimeoutHint": "Tempo máximo em segundos para aguardar uma resposta. 0 = usar padrão.",
+      "providerSort": "Ordenação de Provider",
+      "providerSortHint": "Preferência de roteamento de provider do OpenRouter: price, throughput ou latency. Deixe em branco para usar o roteamento padrão.",
       "rpm": "Limite de Taxa (RPM)",
       "rpmHint": "Máximo de requisições por minuto. 0 = sem limite.",
       "thinkingLevel": "Nível de Pensamento",

@@ -412,6 +412,13 @@ func finalizeProviderFromConfig(
 			})
 		}
 	}
+	// OpenRouter supports provider routing preferences on OpenAI-compatible
+	// chat completions. Providers without this setter ignore the setting.
+	if cfg != nil && strings.TrimSpace(cfg.ProviderSort) != "" {
+		if setter, ok := provider.(interface{ SetProviderSort(providerSort string) }); ok {
+			setter.SetProviderSort(cfg.ProviderSort)
+		}
+	}
 	wrapped, err := wrapProviderWithToolSchemaTransform(provider, cfg.ToolSchemaTransform)
 	if err != nil {
 		return nil, "", err

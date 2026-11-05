@@ -130,6 +130,7 @@ This design also enables **multi-agent support** with flexible provider selectio
 | `user_agent` | string | No | Custom `User-Agent` header sent with API requests (supported by OpenAI-compatible, Gemini, Anthropic, and Azure providers)                                                                                                                  |
 | `session_header` | string | No | HTTP header name that carries a stable per-conversation session ID. Supported by OpenAI-compatible, OpenAI Responses, Anthropic Messages, and OpenCode Go providers; other providers log a warning and ignore it. Leave empty to disable. |
 | `request_timeout` | int | No | Request timeout in seconds (default varies by provider)                                                                                                                                                                                     |
+| `provider_sort` | string | No | OpenRouter provider routing preference: `price`, `throughput`, or `latency`. Ignored by other providers. Leave empty to use OpenRouter's default routing.                                                                                 |
 | `max_tokens_field` | string | No | Override the max tokens field name in request body (e.g., `max_completion_tokens` for o1 models)                                                                                                                                            |
 | `thinking_level` | string | No | Extended thinking level: `off`, `low`, `medium`, `high`, `xhigh`, or `adaptive`                                                                                                                                                             |
 | `tool_schema_transform` | string | No | Optional compatibility transform for tool parameter schemas. Default: disabled. Supported values: `simple`.                                                                                             |
@@ -144,6 +145,35 @@ When streaming is disabled, omit the `streaming` block. Writing `"streaming": {"
 
 `extra_body` is especially useful for model-specific TTS fields on OpenAI-compatible
 speech routes, for example custom `voice` names or `response_format: "mp3"`.
+
+#### OpenRouter Provider Routing
+
+OpenRouter can route one model to several upstream providers. Set `provider_sort`
+on the model entry to choose how PicoClaw asks OpenRouter to rank those
+providers:
+
+| `provider_sort` | Optimizes |
+|-----------------|-----------|
+| `latency` | Lowest time to first token (TTFT), best for interactive streaming chat |
+| `throughput` | Highest generated tokens per second, best for long generations, coding, and batch work |
+| `price` | Lowest price, best for cost-sensitive workloads |
+
+```json
+{
+  "model_name": "openrouter-fast",
+  "provider": "openrouter",
+  "model": "openai/gpt-5.4",
+  "provider_sort": "throughput",
+  "api_keys": ["sk-or-your-key"]
+}
+```
+
+PicoClaw sends this as `"provider": {"sort": "<value>"}` in the chat
+completions request. The setting only applies to OpenRouter (the `openrouter`
+provider or an `openrouter.ai` API base) and is ignored by other providers. If
+`extra_body` already contains a `provider` object, PicoClaw merges the sort
+value into it and keeps existing routing fields such as `order` or `only`; an
+explicit `extra_body.provider.sort` takes precedence.
 
 #### Tool Schema Compatibility
 

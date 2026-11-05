@@ -18,6 +18,7 @@ export interface ModelInfo {
   rpm?: number
   max_tokens_field?: string
   request_timeout?: number
+  provider_sort?: string
   thinking_level?: string
   tool_schema_transform?: string
   streaming?: {

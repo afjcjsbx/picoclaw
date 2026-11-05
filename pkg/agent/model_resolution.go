@@ -45,6 +45,7 @@ func modelConfigResolutionKey(defaultProvider string, mc *config.ModelConfig) st
 		RPM                 int                         `json:"rpm"`
 		RequestTimeout      int                         `json:"request_timeout"`
 		MaxTokensField      string                      `json:"max_tokens_field"`
+		ProviderSort        string                      `json:"provider_sort"`
 		ThinkingLevel       string                      `json:"thinking_level"`
 		ToolSchemaTransform string                      `json:"tool_schema_transform"`
 		Streaming           config.ModelStreamingConfig `json:"streaming"`
@@ -56,6 +57,7 @@ func modelConfigResolutionKey(defaultProvider string, mc *config.ModelConfig) st
 		ConnectMode: mc.ConnectMode, Workspace: mc.Workspace, APIKeys: apiKeys,
 		Enabled: mc.Enabled, UserAgent: mc.UserAgent, RPM: mc.RPM,
 		RequestTimeout: mc.RequestTimeout, MaxTokensField: mc.MaxTokensField,
+		ProviderSort:  mc.ProviderSort,
 		ThinkingLevel: mc.ThinkingLevel, ToolSchemaTransform: mc.ToolSchemaTransform,
 		Streaming: mc.Streaming, ExtraBody: mc.ExtraBody, CustomHeaders: mc.CustomHeaders,
 	})

@@ -124,6 +124,7 @@
 | `user_agent` | string | 否 | 自定义 `User-Agent` 请求头（支持 OpenAI 兼容、Gemini、Anthropic 和 Azure provider） |
 | `session_header` | string | 否 | 携带稳定会话 ID 的 HTTP 请求头名称。支持 OpenAI 兼容、OpenAI Responses、Anthropic Messages 和 OpenCode Go provider；其他 provider 会记录警告并忽略。留空表示不启用。 |
 | `request_timeout` | int | 否 | 请求超时时间（秒），默认值因 provider 而异 |
+| `provider_sort` | string | 否 | OpenRouter provider 路由偏好：`price`、`throughput` 或 `latency`。其他 provider 会忽略该字段。留空使用 OpenRouter 默认路由。 |
 | `streaming.enabled` | bool | 否 | 是否允许此模型条目尝试 provider 流式请求，默认 `false`。它只表达模型/端点能力 opt-in，实际还需要当前 channel 的 `settings.streaming.enabled` 同时开启 |
 | `max_tokens_field` | string | 否 | 覆盖请求体中 max tokens 的字段名（如 o1 模型使用 `max_completion_tokens`） |
 | `thinking_level` | string | 否 | 扩展思考级别：`off`、`low`、`medium`、`high`、`xhigh` 或 `adaptive` |
@@ -134,6 +135,33 @@
 | `enabled` | bool | 否 | 是否启用此模型条目（默认：`true`） |
 
 不需要流式时请省略 `streaming` 配置块。写 `"streaming": {"enabled": false}` 是可选的，手写或生成配置时都不需要。
+
+#### OpenRouter Provider 路由
+
+OpenRouter 可以将同一个模型路由到多个上游 provider。在模型条目中设置
+`provider_sort` 即可指定 PicoClaw 请求 OpenRouter 使用的排序策略：
+
+| `provider_sort` | 优化目标 |
+|-----------------|----------|
+| `latency` | 最低首 token 延迟（TTFT），适合交互式流式聊天 |
+| `throughput` | 最高每秒生成 token 数，适合长文本生成、编程和批处理 |
+| `price` | 最低价格，适合成本敏感的场景 |
+
+```json
+{
+  "model_name": "openrouter-fast",
+  "provider": "openrouter",
+  "model": "openai/gpt-5.4",
+  "provider_sort": "throughput",
+  "api_keys": ["sk-or-your-key"]
+}
+```
+
+PicoClaw 会在 chat completions 请求中发送 `"provider": {"sort": "<value>"}`。
+该设置仅对 OpenRouter 生效（`openrouter` provider 或 `openrouter.ai` API
+base），其他 provider 会忽略。若 `extra_body` 中已有 `provider` 对象，
+PicoClaw 会将排序值合并进去并保留 `order`、`only` 等现有路由字段；显式设置的
+`extra_body.provider.sort` 优先级更高。
 
 #### `provider` / `model` 解析规则
 

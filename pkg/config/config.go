@@ -1086,6 +1086,7 @@ type ModelConfig struct {
 	RPM                 int                  `json:"rpm,omitempty"`              // Requests per minute limit
 	MaxTokensField      string               `json:"max_tokens_field,omitempty"` // Field name for max tokens (e.g., "max_completion_tokens")
 	RequestTimeout      int                  `json:"request_timeout,omitempty"`
+	ProviderSort        string               `json:"provider_sort,omitempty"`         // OpenRouter provider routing: price|throughput|latency
 	ThinkingLevel       string               `json:"thinking_level,omitempty"`        // Extended thinking: off|low|medium|high|xhigh|adaptive
 	ToolSchemaTransform string               `json:"tool_schema_transform,omitempty"` // Optional tool schema compatibility transform (e.g. "simple")
 	Streaming           ModelStreamingConfig `json:"streaming,omitzero"`              // Opt-in for provider streaming on this model entry
@@ -1134,6 +1135,9 @@ func (c *ModelConfig) Validate() error {
 		return fmt.Errorf("model is required")
 	}
 	if _, err := providercommon.NormalizeToolSchemaTransform(c.ToolSchemaTransform); err != nil {
+		return err
+	}
+	if _, err := providercommon.NormalizeProviderSort(c.ProviderSort); err != nil {
 		return err
 	}
 
@@ -2216,6 +2220,7 @@ func expandMultiKeyModels(models []*ModelConfig) []*ModelConfig {
 				RPM:                 m.RPM,
 				MaxTokensField:      m.MaxTokensField,
 				RequestTimeout:      m.RequestTimeout,
+				ProviderSort:        m.ProviderSort,
 				ThinkingLevel:       m.ThinkingLevel,
 				ToolSchemaTransform: m.ToolSchemaTransform,
 				Streaming:           m.Streaming,
@@ -2242,6 +2247,7 @@ func expandMultiKeyModels(models []*ModelConfig) []*ModelConfig {
 			RPM:                 m.RPM,
 			MaxTokensField:      m.MaxTokensField,
 			RequestTimeout:      m.RequestTimeout,
+			ProviderSort:        m.ProviderSort,
 			ThinkingLevel:       m.ThinkingLevel,
 			ToolSchemaTransform: m.ToolSchemaTransform,
 			Streaming:           m.Streaming,

@@ -13,6 +13,7 @@ import {
   setDefaultModel,
 } from "@/api/models"
 import { ConfigChangeNotice } from "@/components/config-change-notice"
+import { SessionHeaderField } from "@/components/models/session-header-field"
 import { maskedSecretPlaceholder } from "@/components/secret-placeholder"
 import {
   AdvancedSection,
@@ -20,7 +21,6 @@ import {
   KeyInput,
   SwitchCardField,
 } from "@/components/shared-form"
-import { SessionHeaderField } from "@/components/models/session-header-field"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -68,6 +68,7 @@ interface AddForm {
   rpm: string
   maxTokensField: string
   requestTimeout: string
+  providerSort: string
   thinkingLevel: string
   toolSchemaTransform: string
   streamingEnabled: boolean
@@ -89,6 +90,7 @@ const EMPTY_ADD_FORM: AddForm = {
   rpm: "",
   maxTokensField: "",
   requestTimeout: "",
+  providerSort: "",
   thinkingLevel: "",
   toolSchemaTransform: "",
   streamingEnabled: false,
@@ -407,6 +409,7 @@ export function AddModelSheet({
         request_timeout: form.requestTimeout
           ? Number(form.requestTimeout)
           : undefined,
+        provider_sort: form.providerSort.trim().toLowerCase() || undefined,
         thinking_level: form.thinkingLevel.trim() || undefined,
         tool_schema_transform: form.toolSchemaTransform.trim() || undefined,
         streaming: form.streamingEnabled ? { enabled: true } : undefined,
@@ -707,6 +710,17 @@ export function AddModelSheet({
                     placeholder="60"
                     type="number"
                     min={0}
+                  />
+                </Field>
+
+                <Field
+                  label={t("models.field.providerSort")}
+                  hint={t("models.field.providerSortHint")}
+                >
+                  <Input
+                    value={form.providerSort}
+                    onChange={setField("providerSort")}
+                    placeholder={t("models.field.providerDefault")}
                   />
                 </Field>
 

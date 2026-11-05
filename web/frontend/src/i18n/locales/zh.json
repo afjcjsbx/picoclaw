@@ -343,6 +343,8 @@
       "workspaceHint": "CLI 型服务商的工作目录路径（如 GitHub Copilot）。",
       "requestTimeout": "请求超时（秒）",
       "requestTimeoutHint": "等待响应的最大秒数，0 表示使用默认值。",
+      "providerSort": "Provider 排序",
+      "providerSortHint": "OpenRouter provider 路由偏好：price、throughput 或 latency。留空使用默认路由。",
       "rpm": "速率限制（RPM）",
       "rpmHint": "每分钟最大请求数，0 表示不限制。",
       "thinkingLevel": "思考级别",
