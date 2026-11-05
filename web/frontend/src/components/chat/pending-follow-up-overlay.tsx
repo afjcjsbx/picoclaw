@@ -1,4 +1,9 @@
-import { IconArrowUp, IconClock, IconX } from "@tabler/icons-react"
+import {
+  IconArrowUp,
+  IconClock,
+  IconPaperclip,
+  IconX,
+} from "@tabler/icons-react"
 import { useTranslation } from "react-i18next"
 
 import { Button } from "@/components/ui/button"
@@ -29,6 +34,28 @@ function attachmentLabel(
   return t("chat.uploadedFile")
 }
 
+function followUpSummary(
+  followUp: PendingFollowUp,
+  t: (key: string) => string,
+): string {
+  const content = followUp.content.trim()
+  if (content) {
+    return content
+  }
+  return followUp.attachments
+    .map((_, index) => attachmentLabel(followUp, index, t))
+    .join(", ")
+}
+
+function attachmentTitle(
+  followUp: PendingFollowUp,
+  t: (key: string) => string,
+): string {
+  return followUp.attachments
+    .map((_, index) => attachmentLabel(followUp, index, t))
+    .join(", ")
+}
+
 export function PendingFollowUpOverlay({
   followUps,
   canSteer,
@@ -42,64 +69,62 @@ export function PendingFollowUpOverlay({
   }
 
   return (
-    <div className="mb-2 flex w-full flex-col gap-1.5" aria-live="polite">
-      {followUps.map((followUp) => (
-        <div
-          key={followUp.id}
-          className="bg-background/95 border-border/60 flex items-start gap-2 rounded-2xl border px-3 py-2 shadow-sm backdrop-blur"
-        >
-          <IconClock
-            className="text-muted-foreground mt-0.5 size-3.5 shrink-0"
-            aria-hidden="true"
-          />
-          <div className="min-w-0 flex-1">
-            <div className="text-muted-foreground text-[11px] font-medium">
-              {t("chat.queuedFollowUp")}
-            </div>
-            {followUp.content && (
-              <div className="text-foreground mt-0.5 max-h-20 overflow-y-auto text-sm break-words whitespace-pre-wrap">
-                {followUp.content}
-              </div>
-            )}
+    <div
+      className="border-border/50 bg-background/40 divide-border/40 -mx-3 -mt-3 mb-2 flex flex-col divide-y overflow-hidden rounded-t-3xl border-b"
+      aria-live="polite"
+      title={t("chat.queuedFollowUpHint")}
+    >
+      {followUps.map((followUp) => {
+        const summary = followUpSummary(followUp, t)
+        return (
+          <div
+            key={followUp.id}
+            className="flex min-w-0 items-center gap-1.5 px-3 py-1.5"
+          >
+            <IconClock
+              className="text-muted-foreground size-3.5 shrink-0"
+              aria-hidden="true"
+            />
+            <span
+              className="text-foreground/90 min-w-0 flex-1 truncate text-xs"
+              title={followUp.content || attachmentTitle(followUp, t)}
+            >
+              {summary}
+            </span>
             {followUp.attachments.length > 0 && (
-              <div className="mt-1 flex flex-wrap gap-1">
-                {followUp.attachments.map((attachment, index) => (
-                  <span
-                    key={`${attachment.url}-${index}`}
-                    className="bg-muted text-muted-foreground max-w-52 truncate rounded px-1.5 py-0.5 text-[11px]"
-                  >
-                    {attachmentLabel(followUp, index, t)}
-                  </span>
-                ))}
-              </div>
+              <span
+                className="text-muted-foreground inline-flex shrink-0 items-center gap-0.5 text-[10px] tabular-nums"
+                title={attachmentTitle(followUp, t)}
+              >
+                <IconPaperclip className="size-3" aria-hidden="true" />
+                {followUp.attachments.length}
+              </span>
             )}
-            <div className="text-muted-foreground/80 mt-0.5 text-[10px]">
-              {t("chat.queuedFollowUpHint")}
-            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => onSteer(followUp.id)}
+              disabled={!canSteer}
+              className="h-6 shrink-0 gap-1 rounded-full px-2 text-[11px] font-medium text-violet-600 hover:bg-violet-500/10 hover:text-violet-700 dark:text-violet-400 dark:hover:text-violet-300"
+              aria-label={t("chat.steerNow")}
+              title={t("chat.steerNow")}
+            >
+              <IconArrowUp className="size-3" />
+              {t("chat.steerNow")}
+            </Button>
+            <button
+              type="button"
+              onClick={() => onRemove(followUp.id)}
+              className="text-muted-foreground hover:text-foreground inline-flex size-6 shrink-0 items-center justify-center rounded-full"
+              aria-label={t("chat.removeQueuedMessage")}
+              title={t("chat.removeQueuedMessage")}
+            >
+              <IconX className="size-3.5" />
+            </button>
           </div>
-          <Button
-            type="button"
-            size="sm"
-            onClick={() => onSteer(followUp.id)}
-            disabled={!canSteer}
-            className="h-7 shrink-0 gap-1 rounded-full bg-violet-500 px-2.5 text-xs text-white hover:bg-violet-600"
-            aria-label={t("chat.steerNow")}
-            title={t("chat.steerNow")}
-          >
-            <IconArrowUp className="size-3.5" />
-            {t("chat.steerNow")}
-          </Button>
-          <button
-            type="button"
-            onClick={() => onRemove(followUp.id)}
-            className="text-muted-foreground hover:text-foreground inline-flex size-7 shrink-0 items-center justify-center rounded-full"
-            aria-label={t("chat.removeQueuedMessage")}
-            title={t("chat.removeQueuedMessage")}
-          >
-            <IconX className="size-3.5" />
-          </button>
-        </div>
-      ))}
+        )
+      })}
     </div>
   )
 }

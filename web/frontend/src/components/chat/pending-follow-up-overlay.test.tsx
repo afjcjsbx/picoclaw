@@ -39,8 +39,33 @@ describe("PendingFollowUpOverlay", () => {
     )
 
     expect(screen.getByText("Please adjust the colors")).toBeInTheDocument()
-    expect(screen.getByText("report.pdf")).toBeInTheDocument()
-    expect(screen.getByText("chat.queuedFollowUp")).toBeInTheDocument()
+    expect(screen.getByTitle("report.pdf")).toBeInTheDocument()
+    expect(screen.getByTitle("chat.queuedFollowUpHint")).toBeInTheDocument()
+  })
+
+  it("uses the attachment name when the queued message has no text", () => {
+    render(
+      <PendingFollowUpOverlay
+        followUps={[
+          {
+            ...FOLLOW_UP,
+            content: "",
+            attachments: [
+              {
+                type: "audio",
+                url: "blob:voice",
+                filename: "voice-note.webm",
+              },
+            ],
+          },
+        ]}
+        canSteer
+        onSteer={() => {}}
+        onRemove={() => {}}
+      />,
+    )
+
+    expect(screen.getByText("voice-note.webm")).toBeInTheDocument()
   })
 
   it("steers and removes the selected follow-up", () => {

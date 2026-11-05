@@ -345,12 +345,6 @@ export function ChatComposer({
   return (
     <div className="pointer-events-none relative z-10 mt-0 shrink-0 bg-[var(--conversation-background)] px-4 pb-[calc(0.5rem+env(safe-area-inset-bottom))] md:px-8 md:pb-4 lg:px-24 xl:px-48">
       <div className="pointer-events-auto mx-auto flex max-w-[49.5rem] flex-col items-end">
-        <PendingFollowUpOverlay
-          followUps={pendingFollowUps}
-          canSteer={canInput}
-          onSteer={onSteerFollowUp}
-          onRemove={onRemoveFollowUp}
-        />
         <div
           ref={surfaceRef}
           className={cn(
@@ -369,6 +363,13 @@ export function ChatComposer({
               </div>
             </div>
           )}
+
+          <PendingFollowUpOverlay
+            followUps={pendingFollowUps}
+            canSteer={canInput}
+            onSteer={onSteerFollowUp}
+            onRemove={onRemoveFollowUp}
+          />
 
           {attachments.length > 0 && (
             <div className="mb-3 flex flex-wrap gap-2 px-2">
