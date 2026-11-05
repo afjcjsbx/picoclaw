@@ -104,6 +104,9 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	h.registerMCPRoutes(mux)
 	h.registerSubagentRoutes(mux)
 
+	// Cron job management (proxied to the gateway scheduler)
+	h.registerCronRoutes(mux)
+
 	// Slash command metadata for the chat composer palette
 	h.registerCommandRoutes(mux)
 

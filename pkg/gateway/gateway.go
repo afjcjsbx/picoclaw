@@ -47,7 +47,8 @@ const (
 )
 
 type services struct {
-	CronService      *cron.CronService
+	cronMu           sync.RWMutex
+	cronService      *cron.CronService
 	HeartbeatService *heartbeat.HeartbeatService
 	MediaStore       media.MediaStore
 	ChannelManager   *channels.Manager
@@ -57,6 +58,21 @@ type services struct {
 	manualReloadChan chan struct{}
 	reloading        atomic.Bool
 	authToken        string
+}
+
+// setCronService swaps the running cron service. The health HTTP server keeps
+// serving while a config reload replaces the scheduler, so readers must go
+// through getCronService instead of capturing the pointer once.
+func (s *services) setCronService(cs *cron.CronService) {
+	s.cronMu.Lock()
+	s.cronService = cs
+	s.cronMu.Unlock()
+}
+
+func (s *services) getCronService() *cron.CronService {
+	s.cronMu.RLock()
+	defer s.cronMu.RUnlock()
+	return s.cronService
 }
 
 type startupBlockedProvider struct {
@@ -421,7 +437,7 @@ func setupAndStartServices(
 
 	execTimeout := time.Duration(cfg.Tools.Cron.ExecTimeoutMinutes) * time.Minute
 	var err error
-	runningServices.CronService, err = setupCronTool(
+	cronService, err := setupCronTool(
 		agentLoop,
 		msgBus,
 		cfg.WorkspacePath(),
@@ -432,7 +448,8 @@ func setupAndStartServices(
 	if err != nil {
 		return nil, fmt.Errorf("error setting up cron service: %w", err)
 	}
-	if err = runningServices.CronService.Start(); err != nil {
+	runningServices.setCronService(cronService)
+	if err = cronService.Start(); err != nil {
 		return nil, fmt.Errorf("error starting cron service: %w", err)
 	}
 	fmt.Println("✓ Cron service started")
@@ -494,6 +511,7 @@ func setupAndStartServices(
 	runningServices.HealthServer = health.NewServer(listenResult.ProbeHost, cfg.Gateway.Port, authToken)
 	runningServices.HealthServer.RegisterProtectedHandler(mcpStatusPath, mcpStatusHandler(agentLoop))
 	runningServices.HealthServer.RegisterProtectedHandler(subagentsStatusPath, subagentsStatusHandler(agentLoop))
+	registerCronHandlers(runningServices.HealthServer, runningServices.getCronService)
 
 	var listenAddr string
 	if len(listenResult.Listeners) > 0 {
@@ -559,8 +577,8 @@ func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Dura
 	if runningServices.HeartbeatService != nil {
 		runningServices.HeartbeatService.Stop()
 	}
-	if runningServices.CronService != nil {
-		runningServices.CronService.Stop()
+	if cs := runningServices.getCronService(); cs != nil {
+		cs.Stop()
 	}
 	if runningServices.MediaStore != nil {
 		if fms, ok := runningServices.MediaStore.(*media.FileMediaStore); ok {
@@ -672,7 +690,7 @@ func restartServices(
 
 	execTimeout := time.Duration(cfg.Tools.Cron.ExecTimeoutMinutes) * time.Minute
 	var err error
-	runningServices.CronService, err = setupCronTool(
+	cronService, err := setupCronTool(
 		al,
 		msgBus,
 		cfg.WorkspacePath(),
@@ -683,7 +701,8 @@ func restartServices(
 	if err != nil {
 		return fmt.Errorf("error restarting cron service: %w", err)
 	}
-	if err = runningServices.CronService.Start(); err != nil {
+	runningServices.setCronService(cronService)
+	if err = cronService.Start(); err != nil {
 		return fmt.Errorf("error restarting cron service: %w", err)
 	}
 	fmt.Println("  ✓ Cron service restarted")
