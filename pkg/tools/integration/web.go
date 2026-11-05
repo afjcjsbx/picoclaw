@@ -79,6 +79,11 @@ var (
 	)
 	reSogouSnippet = regexp.MustCompile(`<div class="clamp\d*[^"]*">\s*(.*?)\s*</div>`)
 	reSogouRealURL = regexp.MustCompile(`url=([^&]+)`)
+
+	// reBlankLineRuns matches two or more newlines, allowing spaces and tabs
+	// on the blank lines between them. Search snippets are collapsed with it
+	// without flattening their line structure.
+	reBlankLineRuns = regexp.MustCompile(`\n(?:[ \t]*\n)+`)
 )
 
 type APIKeyPool struct {
@@ -128,6 +133,48 @@ type SearchResultItem struct {
 	URL       string
 	Snippet   string
 	Published string
+}
+
+// appendSearchResult appends one result using the shared layout: a numbered
+// title, the indented URL, then each non-empty detail block indented. Provider
+// snippets are excerpts from arbitrary pages, so they may contain hard wraps,
+// tabs, and markdown structure. Blank-line runs are collapsed, but line breaks,
+// indentation, and tabs are preserved so lists, code, and tables keep meaning.
+func appendSearchResult(lines []string, index int, title, resultURL string, details ...string) []string {
+	lines = append(lines, fmt.Sprintf(
+		"%d. %s\n   %s",
+		index,
+		singleLineSearchTitle(title),
+		strings.TrimSpace(resultURL),
+	))
+	for _, detail := range details {
+		if detail = normalizeSearchSnippet(detail); detail != "" {
+			lines = append(lines, "   "+detail)
+		}
+	}
+	return lines
+}
+
+// singleLineSearchTitle flattens a result title. A title is a label, not
+// markdown content, so a provider-supplied line break must not split the
+// numbered header.
+func singleLineSearchTitle(text string) string {
+	return strings.Join(strings.Fields(text), " ")
+}
+
+// normalizeSearchSnippet collapses runs of blank lines to a single newline and
+// normalizes CRLF, while preserving single line breaks, tabs, and indentation.
+// Search snippets are not documents, but their markdown structure still
+// matters; flattening every whitespace run would turn lists and code samples
+// into one unreadable line.
+func normalizeSearchSnippet(text string) string {
+	if strings.TrimSpace(text) == "" {
+		return ""
+	}
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	text = reBlankLineRuns.ReplaceAllString(text, "\n")
+	return strings.Trim(text, "\n")
 }
 
 func extractSogouURL(href string) string {
@@ -462,10 +509,7 @@ func (p *BraveSearchProvider) Search(
 			if i >= count {
 				break
 			}
-			lines = append(lines, fmt.Sprintf("%d. %s\n   %s", i+1, item.Title, item.URL))
-			if item.Description != "" {
-				lines = append(lines, fmt.Sprintf("   %s", item.Description))
-			}
+			lines = appendSearchResult(lines, i+1, item.Title, item.URL, item.Description)
 		}
 
 		return strings.Join(lines, "\n"), nil
@@ -572,10 +616,7 @@ func (p *TavilySearchProvider) Search(
 			if i >= count {
 				break
 			}
-			lines = append(lines, fmt.Sprintf("%d. %s\n   %s", i+1, item.Title, item.URL))
-			if item.Content != "" {
-				lines = append(lines, fmt.Sprintf("   %s", item.Content))
-			}
+			lines = appendSearchResult(lines, i+1, item.Title, item.URL, item.Content)
 		}
 
 		return strings.Join(lines, "\n"), nil
@@ -778,16 +819,11 @@ func (p *KeenableSearchProvider) Search(
 			if i >= count {
 				break
 			}
-			lines = append(lines, fmt.Sprintf("%d. %s\n   %s", i+1, item.Title, item.URL))
 			content := item.Snippet
 			if content == "" {
 				content = item.Description
 			}
-			// Snippets can span several passages; keep one line per result.
-			content = strings.Join(strings.Fields(content), " ")
-			if content != "" {
-				lines = append(lines, fmt.Sprintf("   %s", content))
-			}
+			lines = appendSearchResult(lines, i+1, item.Title, item.URL, content)
 		}
 
 		return strings.Join(lines, "\n"), nil
@@ -820,13 +856,11 @@ func formatKagiSearchResults(query string, results []SearchResultItem) string {
 		if title == "" {
 			title = item.URL
 		}
-		lines = append(lines, fmt.Sprintf("%d. %s\n   %s", i+1, title, item.URL))
+		published := ""
 		if item.Published != "" {
-			lines = append(lines, fmt.Sprintf("   Published: %s", item.Published))
+			published = "Published: " + item.Published
 		}
-		if item.Snippet != "" {
-			lines = append(lines, fmt.Sprintf("   %s", item.Snippet))
-		}
+		lines = appendSearchResult(lines, i+1, title, item.URL, published, item.Snippet)
 	}
 	return strings.Join(lines, "\n")
 }
@@ -1088,7 +1122,7 @@ func (p *GeminiSearchProvider) Search(
 		if title == "" {
 			title = chunk.Web.URI
 		}
-		lines = append(lines, fmt.Sprintf("%d. %s\n   %s", citationCount, title, chunk.Web.URI))
+		lines = appendSearchResult(lines, citationCount, title, chunk.Web.URI)
 		if citationCount >= count {
 			break
 		}
@@ -1175,10 +1209,7 @@ func (p *SogouSearchProvider) Search(
 
 	lines := []string{fmt.Sprintf("Results for: %s (via Sogou)", query)}
 	for i, item := range results {
-		lines = append(lines, fmt.Sprintf("%d. %s\n   %s", i+1, item.Title, item.URL))
-		if item.Snippet != "" {
-			lines = append(lines, fmt.Sprintf("   %s", item.Snippet))
-		}
+		lines = appendSearchResult(lines, i+1, item.Title, item.URL, item.Snippet)
 	}
 	return strings.Join(lines, "\n"), nil
 }
@@ -1261,16 +1292,12 @@ func (p *DuckDuckGoSearchProvider) extractResults(
 			}
 		}
 
-		lines = append(lines, fmt.Sprintf("%d. %s\n   %s", i+1, title, urlStr))
-
+		snippet := ""
 		// Attempt to attach snippet if available and index aligns
 		if i < len(snippetMatches) {
-			snippet := stripTags(snippetMatches[i][1])
-			snippet = strings.TrimSpace(snippet)
-			if snippet != "" {
-				lines = append(lines, fmt.Sprintf("   %s", snippet))
-			}
+			snippet = stripTags(snippetMatches[i][1])
 		}
+		lines = appendSearchResult(lines, i+1, title, urlStr, snippet)
 	}
 
 	return strings.Join(lines, "\n"), nil
@@ -1458,17 +1485,12 @@ func (p *SearXNGSearchProvider) Search(
 	}
 
 	// Format results in standard PicoClaw format
-	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Results for: %s (via SearXNG)\n", query))
+	lines := []string{fmt.Sprintf("Results for: %s (via SearXNG)", query)}
 	for i, r := range result.Results {
-		b.WriteString(fmt.Sprintf("%d. %s\n", i+1, r.Title))
-		b.WriteString(fmt.Sprintf("   %s\n", r.URL))
-		if r.Content != "" {
-			b.WriteString(fmt.Sprintf("   %s\n", r.Content))
-		}
+		lines = appendSearchResult(lines, i+1, r.Title, r.URL, r.Content)
 	}
 
-	return b.String(), nil
+	return strings.Join(lines, "\n"), nil
 }
 
 type GLMSearchProvider struct {
@@ -1554,10 +1576,7 @@ func (p *GLMSearchProvider) Search(
 		if i >= count {
 			break
 		}
-		lines = append(lines, fmt.Sprintf("%d. %s\n   %s", i+1, item.Title, item.Link))
-		if item.Content != "" {
-			lines = append(lines, fmt.Sprintf("   %s", item.Content))
-		}
+		lines = appendSearchResult(lines, i+1, item.Title, item.Link, item.Content)
 	}
 
 	return strings.Join(lines, "\n"), nil
@@ -1651,10 +1670,7 @@ func (p *BaiduSearchProvider) Search(
 		if i >= count {
 			break
 		}
-		lines = append(lines, fmt.Sprintf("%d. %s\n   %s", i+1, item.Title, item.URL))
-		if item.Content != "" {
-			lines = append(lines, fmt.Sprintf("   %s", item.Content))
-		}
+		lines = appendSearchResult(lines, i+1, item.Title, item.URL, item.Content)
 	}
 
 	return strings.Join(lines, "\n"), nil
