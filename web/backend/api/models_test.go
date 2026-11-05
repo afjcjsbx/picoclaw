@@ -1486,6 +1486,101 @@ func TestHandleAddModel_PersistsToolSchemaTransform(t *testing.T) {
 	}
 }
 
+func TestHandleAddModel_PersistsProviderSort(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/models", bytes.NewBufferString(`{
+		"model_name":"openrouter-fast",
+		"provider":"openrouter",
+		"model":"openai/gpt-4o-mini",
+		"provider_sort":"Throughput"
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	added := cfg.ModelList[len(cfg.ModelList)-1]
+	if got := added.ProviderSort; got != "throughput" {
+		t.Fatalf("provider_sort = %q, want %q", got, "throughput")
+	}
+
+	listRec := httptest.NewRecorder()
+	listReq := httptest.NewRequest(http.MethodGet, "/api/models", nil)
+	mux.ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list status = %d, want %d, body=%s", listRec.Code, http.StatusOK, listRec.Body.String())
+	}
+	if !bytes.Contains(listRec.Body.Bytes(), []byte(`"provider_sort":"throughput"`)) {
+		t.Fatalf("list response missing provider_sort: %s", listRec.Body.String())
+	}
+}
+
+func TestHandleUpdateModel_ProviderSortPreserveAndClear(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	cfg.ModelList = []*config.ModelConfig{{
+		ModelName:    "editable",
+		Provider:     "openrouter",
+		Model:        "openai/gpt-4o-mini",
+		APIKeys:      config.SimpleSecureStrings("sk-existing"),
+		ProviderSort: "latency",
+	}}
+	if err = config.SaveConfig(configPath, cfg); err != nil {
+		t.Fatalf("SaveConfig() error = %v", err)
+	}
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	put := func(body string) {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPut, "/api/models/0", bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+		}
+	}
+
+	put(`{"model_name":"editable","provider":"openrouter","model":"openai/gpt-4o-mini"}`)
+	afterPreserve, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() after preserve error = %v", err)
+	}
+	if got := afterPreserve.ModelList[0].ProviderSort; got != "latency" {
+		t.Fatalf("preserved provider_sort = %q, want %q", got, "latency")
+	}
+
+	put(`{"model_name":"editable","provider":"openrouter","model":"openai/gpt-4o-mini","provider_sort":""}`)
+	afterClear, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() after clear error = %v", err)
+	}
+	if got := afterClear.ModelList[0].ProviderSort; got != "" {
+		t.Fatalf("cleared provider_sort = %q, want empty", got)
+	}
+}
+
 func TestHandleUpdateModel_CustomHeadersPreserveAndClear(t *testing.T) {
 	configPath, cleanup := setupOAuthTestEnv(t)
 	defer cleanup()

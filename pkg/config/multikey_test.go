@@ -195,6 +195,7 @@ func TestExpandMultiKeyModels_PreservesOtherFields(t *testing.T) {
 		RPM:                 60,
 		MaxTokensField:      "max_completion_tokens",
 		RequestTimeout:      30,
+		ProviderSort:        "throughput",
 		ThinkingLevel:       "high",
 		ToolSchemaTransform: "simple",
 		Streaming:           ModelStreamingConfig{Enabled: true},
@@ -224,6 +225,9 @@ func TestExpandMultiKeyModels_PreservesOtherFields(t *testing.T) {
 	if primary.RequestTimeout != 30 {
 		t.Errorf("expected request_timeout preserved, got %d", primary.RequestTimeout)
 	}
+	if primary.ProviderSort != "throughput" {
+		t.Errorf("expected provider_sort preserved, got %q", primary.ProviderSort)
+	}
 	if primary.ThinkingLevel != "high" {
 		t.Errorf("expected thinking_level preserved, got %q", primary.ThinkingLevel)
 	}
@@ -244,6 +248,9 @@ func TestExpandMultiKeyModels_PreservesOtherFields(t *testing.T) {
 	}
 	if additional.RPM != 60 {
 		t.Errorf("expected additional rpm preserved, got %d", additional.RPM)
+	}
+	if additional.ProviderSort != "throughput" {
+		t.Errorf("expected provider_sort preserved, got %q", additional.ProviderSort)
 	}
 	if additional.ToolSchemaTransform != "simple" {
 		t.Errorf("expected additional tool_schema_transform preserved, got %q", additional.ToolSchemaTransform)

@@ -448,6 +448,8 @@
       "workspaceHint": "Working directory for CLI-based providers (e.g. GitHub Copilot).",
       "requestTimeout": "Request Timeout (s)",
       "requestTimeoutHint": "Maximum seconds to wait for a response. 0 = use default.",
+      "providerSort": "Provider Sort",
+      "providerSortHint": "OpenRouter provider routing preference: price, throughput, or latency. Leave blank to use the default routing.",
       "rpm": "Rate Limit (RPM)",
       "rpmHint": "Maximum requests per minute. 0 = no limit.",
       "thinkingLevel": "Thinking Level",

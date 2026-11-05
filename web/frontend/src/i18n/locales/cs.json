@@ -364,6 +364,8 @@
       "workspaceHint": "Pracovní adresář pro CLI-based providery (např. GitHub Copilot).",
       "requestTimeout": "Timeout požadavku (s)",
       "requestTimeoutHint": "Maximální počet sekund čekání na odpověď. 0 = použít výchozí.",
+      "providerSort": "Řazení providera",
+      "providerSortHint": "Předvolba směrování providera OpenRouter: price, throughput nebo latency. Ponechte prázdné pro výchozí směrování.",
       "rpm": "Rate Limit (RPM)",
       "rpmHint": "Maximální počet požadavků za minutu. 0 = bez omezení.",
       "thinkingLevel": "Úroveň uvažování",

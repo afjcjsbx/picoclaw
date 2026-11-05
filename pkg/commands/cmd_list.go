@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-
-	"github.com/sipeed/picoclaw/pkg/providers"
 )
 
 func listCommand() Definition {
@@ -21,32 +19,17 @@ func listCommand() Definition {
 			},
 			{
 				Name:        "models",
-				Description: "Configured models",
+				Description: "Configured models (numbered, use with /switch)",
 				Handler: func(_ context.Context, req Request, rt *Runtime) error {
 					if rt == nil || rt.Config == nil {
 						return req.Reply(unavailableMsg)
 					}
-					defaultProvider := rt.Config.Agents.Defaults.Provider
-					if strings.TrimSpace(defaultProvider) == "" {
-						defaultProvider = "openai"
-					}
-					models := make([]string, 0, len(rt.Config.ModelList))
-					for _, model := range rt.Config.ModelList {
-						if model == nil || model.IsVirtual() {
-							continue
-						}
-						provider := strings.TrimSpace(model.Provider)
-						if provider == "" {
-							provider, _ = providers.SplitModelProviderAndID(model.Model, defaultProvider)
-						} else {
-							provider = providers.NormalizeProvider(provider)
-						}
-						models = append(models, fmt.Sprintf("%s (Provider: %s)", model.ModelName, provider))
-					}
-					if len(models) == 0 {
+					options := CollectModelOptions(rt.Config)
+					if len(options) == 0 {
 						return req.Reply("No models configured")
 					}
-					return req.Reply("Configured Models:\n- " + strings.Join(models, "\n- "))
+					return req.Reply(FormatModelOptions(options) +
+						"\n\nSwitch with /switch model <index> or /switch model <name>.")
 				},
 			},
 			{

@@ -366,6 +366,8 @@
       "workspaceHint": "CLI-ভিত্তিক প্রোভাইডারদের জন্য কাজের ডিরেক্টরি (যেমন GitHub Copilot)।",
       "requestTimeout": "অনুরোধ টাইমআউট (সেকেন্ড)",
       "requestTimeoutHint": "উত্তরের জন্য অপেক্ষা করার সর্বাধিক সেকেন্ড। 0 = ডিফল্ট ব্যবহার করুন।",
+      "providerSort": "Provider Sort",
+      "providerSortHint": "OpenRouter provider routing preference: price, throughput, or latency. Leave blank to use the default routing.",
       "rpm": "রেট সীমা (RPM)",
       "rpmHint": "প্রতি মিনিটে সর্বাধিক অনুরোধ। 0 = কোনো সীমা নেই।",
       "thinkingLevel": "চিন্তার স্তর",
