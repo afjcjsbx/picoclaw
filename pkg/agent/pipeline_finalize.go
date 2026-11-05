@@ -47,6 +47,7 @@ func (p *Pipeline) Finalize(
 			Content:          finalContent,
 			ModelName:        exec.llmModelName,
 			ReasoningContent: responseReasoningContent(exec.response),
+			Usage:            ts.GetTurnUsage(),
 		}
 		warnSessionStoreError(
 			ts.sessionKey,
@@ -90,6 +91,7 @@ func (p *Pipeline) Finalize(
 			modelName: exec.llmModelName,
 		})
 		msg.ContextUsage = contextUsage
+		msg.Usage = tokenUsageFromProviders(ts.GetTurnUsage())
 		markFinalOutbound(&msg)
 		_ = al.bus.PublishOutbound(turnCtx, msg)
 	}

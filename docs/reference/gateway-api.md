@@ -32,6 +32,7 @@ Notes:
 
 - **Authentication**: `Authorization: Bearer <pico-token>`, or `Sec-WebSocket-Protocol: token.<token>` (echoed back on upgrade), or `?token=` only when `allow_token_query` is enabled.
 - **Session**: pass `?session_id=<id>` on the URL to continue an existing session; otherwise the server generates one. The channel treats the conversation as `pico:<sessionID>`.
+- **All-session observer**: pass `?all_sessions=1` to open a read-only observer connection that receives lightweight `session.activity` events for every session. Observer connections do not receive message content and reject `message.send`/`media.send` frames.
 - **Limits**: the endpoint returns 503 when the channel is not running or the connection limit (`max_connections`, default 100) is exceeded.
 
 Every frame is a JSON envelope:
@@ -49,9 +50,9 @@ Every frame is a JSON envelope:
 | Direction | `type` values |
 | --- | --- |
 | Client → server | `message.send`, `media.send`, `ping` |
-| Server → client | `message.create`, `message.update`, `message.delete`, `media.create`, `typing.start`, `typing.stop`, `error`, `pong` |
+| Server → client | `message.create`, `message.update`, `message.delete`, `media.create`, `typing.start`, `typing.stop`, `session.activity`, `error`, `pong` |
 
-Payload keys of interest: `content`, `message_id`, `kind` (`thought`, `tool_calls`, `tool_feedback`), `tool_calls`, `model_name`, `usage`, and the legacy `thought` boolean.
+Payload keys of interest: `content`, `message_id`, `kind` (`thought`, `tool_calls`, `tool_feedback`), `tool_calls`, `model_name`, `usage`, `final`, and the legacy `thought` boolean. `session.activity` events carry the originating `session_id` and an `event` payload equal to the underlying event type (for example, `typing.start` or `message.create`). The activity payload includes `final: true` when the underlying message is the turn's final response; observers use that flag to set unread state only after a completed answer, while non-final message activity and `typing.start` indicate a running turn. Observers never receive message content.
 
 ## Launcher API
 
@@ -68,6 +69,7 @@ The launcher serves the dashboard SPA and a REST API for everything the UI does.
 | Sessions | `/api/sessions`, `/api/sessions/{id}`, `/api/sessions/{id}/fork` | Chat history |
 | Skills | `/api/skills*` | Browse, import, and remove skills |
 | Tools | `/api/tools`, `/api/tools/{name}/state`, `/api/tools/web-search-config` | Tool availability and settings |
+| Subagents | `/api/agents/subagents`, `/api/agents/subagents/active` | Agent roster, delegation permissions, sub-turn limits, and live subagent tasks |
 | OAuth | `/api/oauth/providers`, `/login`, `/flows/{id}`, `/flows/{id}/poll`, `/logout`, `/oauth/callback` | Provider OAuth flows |
 | QR flows | `/api/weixin/flows*`, `/api/wecom/flows*` | WeChat/WeCom QR binding |
 | System | `/api/system/launcher-config`, `/api/system/autostart`, `/api/system/version`, `POST /api/update` | Launcher settings and self-update |

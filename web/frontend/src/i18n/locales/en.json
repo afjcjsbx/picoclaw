@@ -8,13 +8,35 @@
     "hub": "Hub",
     "skills": "Skills",
     "tools": "Tools",
+    "subagents": "Subagents",
     "mcp": "MCP",
+    "cron": "Cron",
     "services": "Services",
     "channels_group": "Channels",
     "show_more_channels": "More",
     "show_less_channels": "Less",
     "config": "Config",
     "logs": "Logs"
+  },
+  "cron": {
+    "gatewayUnavailable": "Gateway is not running",
+    "scheduleAt": "Once at {{time}}",
+    "scheduleEvery": "Every {{duration}}",
+    "scheduleCron": "Cron {{expr}}",
+    "scheduleCronWithTz": "Cron {{expr}} ({{tz}})",
+    "scheduleUnknown": "Unknown schedule ({{kind}})",
+    "paused": "Paused",
+    "neverRun": "Not run yet",
+    "runNow": "Run now",
+    "pause": "Pause",
+    "resume": "Resume",
+    "delete": "Delete",
+    "deleteTitle": "Delete cron job",
+    "deleteConfirm": "Delete \"{{name}}\"? This cannot be undone.",
+    "noHistory": "No runs recorded",
+    "statusOk": "OK",
+    "statusError": "Error",
+    "statusSkipped": "Skipped"
   },
   "launcherLogin": {
     "title": "Sign in",
@@ -45,7 +67,7 @@
       "gatewayStarting": "Unable to chat: Gateway is starting. Wait for startup to complete, then try again.",
       "gatewayRestarting": "Unable to chat: Gateway is restarting. Please wait for restart to finish.",
       "gatewayStopping": "Unable to chat: Gateway is stopping. Wait for it to stop, then start Gateway again.",
-      "gatewayStopped": "Unable to chat: Gateway is not started. Click Start Gateway in the top bar, then retry.",
+      "gatewayStopped": "Unable to chat: Gateway is not started. Click Start Gateway in the sidebar, then retry.",
       "gatewayError": "Unable to chat: Gateway is in an error state. Check logs, then restart Gateway or Launcher.",
       "websocketConnecting": "Connecting to chat service... Please wait.",
       "websocketDisconnected": "Unable to chat: WebSocket connection is disconnected. Check network and gateway status, then refresh the page or restart Launcher.",
@@ -65,13 +87,6 @@
     "toolCallExplanationLabel": "Call note",
     "toolCallFunctionLabel": "Call summary",
     "toolCallArgumentsLabel": "Arguments",
-    "showAssistantDetails": "Reasoning and tool calls",
-    "assistantDetailVisibility": {
-      "none": "Show neither",
-      "thought": "Show reasoning only",
-      "toolCalls": "Show tool calls only",
-      "all": "Show both"
-    },
     "toolLabel": "Tool",
     "codeLabel": "Code",
     "copyMessage": "Copy message",
@@ -82,34 +97,148 @@
     "expandCode": "Expand code",
     "collapseCode": "Collapse code",
     "history": "History",
+    "sessionRunning": "Generating response",
+    "sessionUnread": "Unread update",
+    "splitConversation": "Conversation {{number}}",
+    "activeSplitPane": "Active",
+    "removeSplitPane": "Remove conversation from split",
+    "resizeSplitPane": "Resize conversation panes",
+    "paneLayout": "Pane layout",
+    "addSplitPane": "Add pane",
+    "splitLayouts": {
+      "columns": "Columns",
+      "rows": "Rows",
+      "grid": "Grid",
+      "bsp": "BSP",
+      "main-stack": "Main and stack"
+    },
     "noHistory": "No chat history yet",
     "historyLoadFailed": "Failed to load chat history",
     "historyOpenFailed": "Failed to open this chat history",
+    "searchPlaceholder": "Search conversations...",
+    "searchNoResults": "No matching messages",
+    "searchFailed": "Search failed",
+    "searchTruncated": "Partial results. Refine your search.",
+    "searchResultTitle": "Search results",
     "forkAtMessage": "Fork from this message",
     "forkedConversation": "This is a fork of another conversation",
     "backToOriginal": "Back to original conversation",
     "forkFailed": "Failed to fork this conversation",
     "loadingMore": "Loading more...",
     "deleteSession": "Delete session",
+    "deleteSessionTitle": "Delete session?",
+    "deleteSessionConfirm": "\"{{title}}\" and its message history will be permanently deleted. This cannot be undone.",
+    "deleteSessionFailed": "Could not delete the session",
     "messagesCount": "{{count}} messages",
+    "usage": {
+      "summary": "{{input}} in · {{output}} out",
+      "costValue": "{{cost}}",
+      "estimatedCostValue": "~{{cost}}",
+      "input": "Input tokens",
+      "output": "Output tokens",
+      "total": "Total tokens",
+      "cost": "Cost",
+      "estimatedCost": "Estimated cost",
+      "estimated": "Estimated from public list prices."
+    },
     "noModel": "Select model",
     "inputDisabled": {
       "notConnected": "Gateway is not running. Start it to chat.",
       "noModel": "No default model configured. Go to Models page to set one."
     },
     "sendMessage": "Send message",
+    "stopGeneration": "Stop generating",
     "composeHint": "Press Enter to send, Shift + Enter for a new line",
+    "queuedFollowUp": "Queued follow-up",
+    "queuedFollowUpHint": "Sends when the current turn finishes",
+    "steerNow": "Steer",
+    "removeQueuedMessage": "Remove queued message",
+    "slash": {
+      "ariaLabel": "Slash commands",
+      "recent": "Recent",
+      "commands": {
+        "start": {
+          "title": "Start",
+          "description": "Start the bot"
+        },
+        "help": {
+          "title": "Help",
+          "description": "Show this help message"
+        },
+        "stop": {
+          "title": "Stop",
+          "description": "Stop the current task"
+        },
+        "show": {
+          "title": "Show config",
+          "description": "Show current configuration"
+        },
+        "list": {
+          "title": "List",
+          "description": "List available options"
+        },
+        "use": {
+          "title": "Use skill",
+          "description": "Force a specific installed skill for one request"
+        },
+        "btw": {
+          "title": "Side question",
+          "description": "Ask a side question without changing session history"
+        },
+        "switch": {
+          "title": "Switch model",
+          "description": "Switch model"
+        },
+        "check": {
+          "title": "Check channel",
+          "description": "Check channel availability"
+        },
+        "clear": {
+          "title": "Clear chat",
+          "description": "Clear the chat history"
+        },
+        "context": {
+          "title": "Context",
+          "description": "Show current session context and token usage"
+        },
+        "subagents": {
+          "title": "Subagents",
+          "description": "Show running tasks and subagents in this chat"
+        },
+        "reload": {
+          "title": "Reload config",
+          "description": "Reload the configuration file"
+        },
+        "voice": {
+          "title": "Voice",
+          "description": "Set automatic text-to-speech mode"
+        }
+      }
+    },
     "contextTitle": "Context",
     "contextDetail": "View Details",
     "contextCompressAt": "Compress at",
     "contextSummarizeAt": "Summarize at",
-    "attachImage": "Add images",
-    "dropImagesActive": "Release to add images",
-    "removeImage": "Remove image",
+    "attachFiles": "Add files",
+    "recordVoiceMessage": "Record voice message",
+    "stopRecording": "Stop recording",
+    "recording": "Recording",
+    "cancelRecording": "Cancel recording",
+    "uploadedAudio": "Voice message",
+    "micPermissionDenied": "Microphone access was denied.",
+    "microphoneUnavailable": "No microphone is available.",
+    "recordingUnsupported": "Audio recording is not supported by this browser.",
+    "recordingNeedsHttps": "Voice recording requires HTTPS or localhost. Open the dashboard over HTTPS (or on localhost) to enable the microphone.",
+    "recordingFailed": "Failed to record audio.",
+    "audioTooLarge": "The recording exceeds the {{size}} limit.",
+    "audioSendFailed": "Voice message not sent. It is attached to the composer so you can retry.",
+    "dropFilesActive": "Release to add files",
+    "removeAttachment": "Remove attachment",
     "uploadedImage": "Attached image",
-    "invalidImage": "\"{{name}}\" is not a supported image file.",
-    "imageTooLarge": "\"{{name}}\" exceeds the {{size}} limit.",
-    "imageReadFailed": "Failed to read \"{{name}}\".",
+    "uploadedFile": "Attached file",
+    "invalidFile": "\"{{name}}\" is not a supported file type.",
+    "fileTooLarge": "\"{{name}}\" exceeds the {{size}} limit.",
+    "fileReadFailed": "Failed to read \"{{name}}\".",
     "empty": {
       "noConfiguredModel": "No Model Configured",
       "noConfiguredModelDescription": "You need to configure at least one AI model with an API key before you can start chatting.",
@@ -117,7 +246,7 @@
       "noSelectedModel": "No Model Selected",
       "noSelectedModelDescription": "You have configured models, but none is set as default. Select a model before starting chat.",
       "notRunning": "Gateway Not Running",
-      "notRunningDescription": "Start the gateway service to begin chatting. Use the Start Gateway button in the top bar."
+      "notRunningDescription": "Start the gateway service to begin chatting. Use the Start Gateway button in the sidebar."
     },
     "modelGroup": {
       "apikey": "API Key",
@@ -766,7 +895,9 @@
           "skills": "Skills",
           "agents": "Agents",
           "hardware": "Hardware",
-          "discovery": "Discovery"
+          "discovery": "Discovery",
+          "media": "Media",
+          "memory": "Memory"
         },
         "reasons": {
           "requires_linux": "This tool only works on Linux hosts with the required device files exposed.",
@@ -774,8 +905,120 @@
           "requires_skills": "Enable `tools.skills` before this skill-registry tool can be used.",
           "requires_subagent": "Enable `tools.subagent` before the spawn tool can delegate work.",
           "requires_mcp_discovery": "Enable `tools.mcp.discovery` before MCP discovery tools become available.",
-          "requires_web_search_provider": "Configure at least one ready external web-search provider."
+          "requires_web_search_provider": "Configure at least one ready external web-search provider.",
+          "requires_spawn": "Enable `tools.spawn` or `tools.spawn_status` before the subagent tool can run."
+        },
+        "automatic": "Automatic"
+      },
+      "subagents": {
+        "title": "Subagents",
+        "description": "Inspect the agent roster, delegate permissions, and the runtime limits shared by every sub-turn.",
+        "save": "Save changes",
+        "saving": "Saving...",
+        "reset": "Reset",
+        "refresh": "Refresh",
+        "retry": "Retry",
+        "load_error": "Failed to load subagent configuration.",
+        "save_success": "Subagent configuration saved.",
+        "save_error": "Failed to save subagent configuration.",
+        "stats": {
+          "agents": "Agents",
+          "delegations": "Allowed delegations",
+          "active_subagents": "Active subagents",
+          "concurrency": "Depth / concurrency"
+        },
+        "live": {
+          "title": "Active subagents",
+          "description": "Live sub-turn tasks spawned by the gateway.",
+          "refresh": "Refresh",
+          "count": "{{count}} running",
+          "runtime_unavailable": "Gateway runtime unavailable",
+          "runtime_unavailable_hint": "Start the gateway to see live subagent tasks.",
+          "empty": "No active subagents",
+          "empty_hint": "Spawned tasks appear here while they are running.",
+          "load_error": "Failed to load live subagent status.",
+          "load_error_hint": "The gateway may be restarting. Retrying automatically.",
+          "task_missing": "Task details unavailable.",
+          "depth": "Depth {{count}}",
+          "iteration": "Iteration {{count}}",
+          "elapsed": "{{duration}} elapsed",
+          "parent": "Parent {{id}}"
+        },
+        "tools": {
+          "title": "Subagent tools",
+          "description": "Control how agents delegate work to sub-turns and peer agents.",
+          "subagent": "Subagent runtime",
+          "subagent_hint": "Shared runtime used by spawn, subagent, and spawn_status.",
+          "spawn": "Background spawn",
+          "spawn_hint": "Let an agent launch a background sub-turn and keep working.",
+          "spawn_status": "Spawn status",
+          "spawn_status_hint": "Expose the tool that lists and inspects active subagent tasks."
+        },
+        "limits": {
+          "title": "Runtime limits",
+          "description": "Global bounds applied to every sub-turn. Zero keeps the built-in default.",
+          "max_depth": "Max depth",
+          "max_depth_hint": "Default: 3",
+          "max_concurrent": "Max concurrent",
+          "max_concurrent_hint": "Default: 3, capped at 32",
+          "concurrency_timeout_sec": "Concurrency wait (seconds)",
+          "concurrency_timeout_hint": "Default: 30",
+          "default_timeout_minutes": "Task timeout (minutes)",
+          "default_timeout_hint": "Default: 5",
+          "default_token_budget": "Token budget",
+          "default_token_budget_hint": "0 = no sub-turn token budget"
+        },
+        "agents": {
+          "title": "Agent roster",
+          "description": "Configure which peers each agent can spawn or delegate to.",
+          "default_badge": "Default",
+          "implicit_badge": "Implicit",
+          "allowed_title": "Allowed peers",
+          "allowed_hint": "Peers this agent may target with spawn or delegate.",
+          "peer_count": "{{count}} allowed",
+          "all_allowed": "All agents",
+          "all_allowed_hint": "Allow this agent to target every configured peer.",
+          "no_peers": "No other agents are configured.",
+          "subagent_model": "Subagent model override",
+          "subagent_model_hint": "Use a different model when this agent runs as a subagent.",
+          "inherit_model": "Inherit agent model",
+          "fallbacks_placeholder": "Fallback models, comma separated",
+          "implicit_hint": "Add agents.list to the configuration to manage peer permissions.",
+          "only_agent_hint": "PicoClaw is using an implicit main agent. Add agents.list to configure peer agents.",
+          "open_config": "Open raw config"
         }
+      },
+      "cron": {
+        "title": "Cron jobs",
+        "description": "Inspect scheduled jobs, their cadence, and recent runs. Pause, resume, trigger, or delete jobs without leaving the dashboard.",
+        "refresh": "Refresh",
+        "retry": "Retry",
+        "load_error": "Failed to load cron jobs.",
+        "empty": "No cron jobs configured",
+        "empty_hint": "Jobs created by the agent or the CLI will appear here.",
+        "active": "Active",
+        "not_set": "Not set",
+        "not_scheduled": "Not scheduled",
+        "next_run": "Next run",
+        "last_run": "Last run",
+        "channel": "Channel",
+        "target": "Target",
+        "command": "Command",
+        "message": "Message",
+        "show_full": "Show full message",
+        "show_less": "Show less",
+        "history": "Recent runs",
+        "stats": {
+          "total": "Total jobs",
+          "active": "Active",
+          "paused": "Paused",
+          "runs": "Recorded runs"
+        },
+        "run_success": "Requested a run for {{name}}.",
+        "run_error": "Could not run the cron job.",
+        "toggle_error": "Could not update the cron job.",
+        "delete_success": "Cron job deleted.",
+        "delete_error": "Could not delete the cron job."
       },
       "mcp": {
         "title": "MCP Servers",
@@ -784,15 +1027,13 @@
         "search_placeholder": "Search servers or tools...",
         "load_error": "Failed to load MCP status.",
         "empty": "No MCP servers found",
-        "empty_hint": "Configure an MCP server in Settings to see it here.",
+        "empty_hint": "Add an MCP server from the Servers tab to see it here.",
         "integration_disabled": "MCP integration is disabled",
-        "integration_disabled_hint": "Enable MCP in Config, then restart or reload the gateway.",
+        "integration_disabled_hint": "Enable MCP in MCP Settings, then restart or reload the gateway.",
         "runtime_unavailable": "Gateway runtime is unavailable",
         "runtime_unavailable_hint": "Configured servers are shown, but live connection and tool data are unavailable.",
-        "open_config": "Open Config",
         "deferred": "Deferred",
         "server_enabled": "Server enabled",
-        "deferred_mode": "Deferred discovery",
         "enabled": "Enabled",
         "disabled": "Disabled",
         "tool_count": "{{count}} tools",
@@ -800,13 +1041,13 @@
         "command": "Launch command",
         "add": "Add server",
         "add_title": "Add MCP server",
-        "add_description": "Add a local stdio MCP server. You can edit its launch command later.",
+        "add_description": "Add an MCP server. Local stdio commands and remote HTTP/SSE endpoints are supported.",
         "name_label": "Name",
         "name_in_use": "A server with this name already exists.",
         "edit": "Edit",
         "remove": "Remove",
         "edit_title": "Edit MCP server",
-        "edit_description": "Update the launch command and arguments for {{name}}.",
+        "edit_description": "Update the connection settings for {{name}}.",
         "command_label": "Command",
         "args_label": "Arguments",
         "args_hint": "One argument per line.",
@@ -839,6 +1080,77 @@
           "error": "Error",
           "disconnected": "Disconnected",
           "disabled": "Disabled"
+        },
+        "transport_label": "Transport",
+        "url_label": "Server URL",
+        "headers_label": "Headers (JSON)",
+        "env_label": "Environment variables (JSON)",
+        "env_file_label": "Environment file",
+        "inherit_env_label": "Inherit parent environment",
+        "deferred_mode_label": "Discovery mode",
+        "deferred_inherit": "Follow global discovery mode",
+        "deferred_true": "Deferred discovery",
+        "deferred_false": "Eager registration",
+        "command_placeholder": "e.g. npx",
+        "url_placeholder": "https://example.com/mcp",
+        "env_file_placeholder": "Environment file path (optional)",
+        "open_settings": "Open Settings",
+        "settings": {
+          "description": "Configure MCP servers without editing config.json manually.",
+          "enabled": "Enable MCP",
+          "enabled_hint": "Turn MCP server integration on or off.",
+          "discovery_enabled": "Enable MCP Discovery",
+          "discovery_enabled_hint": "Allow MCP discovery tools to search registered MCP servers.",
+          "discovery_ttl": "Discovered tool unlock TTL",
+          "discovery_ttl_hint": "How many tool-execution TTL ticks discovered tools remain available after search.",
+          "discovery_max_results": "Discovery Max Results",
+          "discovery_max_results_hint": "Maximum MCP discovery matches returned per query.",
+          "discovery_use_bm25": "Use BM25 Ranking",
+          "discovery_use_bm25_hint": "Use BM25 lexical scoring for MCP discovery results.",
+          "discovery_use_regex": "Enable Regex Search",
+          "discovery_use_regex_hint": "Allow regex-based matching in MCP discovery.",
+          "title": "MCP Settings",
+          "integration": "Integration",
+          "integration_hint": "Turn the MCP runtime on or off for the gateway.",
+          "saved": "MCP settings saved.",
+          "save_error": "Could not save MCP settings.",
+          "load_error": "Failed to load MCP settings.",
+          "reload_hint": "Restart or reload the gateway to apply changes to the running process."
+        },
+        "tabs": {
+          "servers": "Servers",
+          "catalog": "Catalog",
+          "settings": "Settings"
+        },
+        "catalog": {
+          "title": "MCP Catalog",
+          "description": "Install popular MCP servers with one click. Review or remove installed servers from the Servers tab.",
+          "search_placeholder": "Search the MCP catalog...",
+          "no_results": "No MCP servers match your search",
+          "no_results_hint": "Try a different keyword or category.",
+          "install": "Install",
+          "installed": "Installed",
+          "install_title": "Install {{name}}",
+          "install_description": "Fill in the credentials required by this MCP server. You can update them later in the configuration.",
+          "install_success": "{{name}} installed. Reload the gateway to apply it.",
+          "install_error": "Could not install the MCP server. Please try again.",
+          "requires": "Requires: {{value}}",
+          "docs": "Documentation",
+          "required": "Required",
+          "reload_hint": "After installing, reload the gateway to connect the new server.",
+          "categories": {
+            "all": "All categories",
+            "browser": "Browser",
+            "web": "Web",
+            "docs": "Docs",
+            "code": "Code",
+            "database": "Database",
+            "productivity": "Productivity",
+            "research": "Research",
+            "design": "Design",
+            "cloud": "Cloud",
+            "utility": "Utilities"
+          }
         }
       }
     },
@@ -973,41 +1285,10 @@
       "evolution_cold_path_manual": "Off",
       "evolution_cold_path_times": "Scheduled Times",
       "evolution_cold_path_times_hint": "Run times for scheduled cold-path processing. Enter one HH:MM value per line.",
-      "mcp_section_hint": "Configure MCP servers without editing config.json manually.",
-      "mcp_enabled": "Enable MCP",
-      "mcp_enabled_hint": "Turn MCP server integration on or off.",
-      "mcp_discovery_enabled": "Enable MCP Discovery",
-      "mcp_discovery_enabled_hint": "Allow MCP discovery tools to search registered MCP servers.",
-      "mcp_discovery_ttl": "Discovered tool unlock TTL",
-      "mcp_discovery_ttl_hint": "How many tool-execution TTL ticks discovered tools remain available after search.",
-      "mcp_discovery_max_results": "Discovery Max Results",
-      "mcp_discovery_max_results_hint": "Maximum MCP discovery matches returned per query.",
-      "mcp_discovery_use_bm25": "Use BM25 Ranking",
-      "mcp_discovery_use_bm25_hint": "Use BM25 lexical scoring for MCP discovery results.",
-      "mcp_discovery_use_regex": "Enable Regex Search",
-      "mcp_discovery_use_regex_hint": "Allow regex-based matching in MCP discovery.",
-      "mcp_servers": "MCP Servers",
-      "mcp_servers_hint": "Add, edit, or remove MCP servers.",
-      "mcp_server_new": "New MCP server",
-      "mcp_server_add": "Add server",
-      "mcp_server_remove": "Remove",
-      "mcp_server_enabled": "Enabled",
-      "mcp_server_discovery_mode": "Discovery mode",
-      "mcp_server_discovery_mode_inherit": "Follow global discovery mode",
-      "mcp_server_discovery_mode_deferred": "Deferred discovery",
-      "mcp_server_discovery_mode_eager": "Eager registration",
-      "mcp_server_name_placeholder": "Server name (e.g. github)",
-      "mcp_server_url_placeholder": "Server URL (e.g. https://example.com/mcp)",
-      "mcp_server_command_placeholder": "Command (e.g. npx)",
-      "mcp_server_env_file_placeholder": "Environment file path (optional)",
-      "mcp_server_args_placeholder": "Args, one per line",
-      "mcp_server_env_placeholder": "Environment JSON object",
-      "mcp_server_headers_placeholder": "Headers JSON object",
       "sections": {
         "agent": "Agent",
         "runtime": "Runtime",
         "evolution": "Evolution",
-        "mcp": "MCP",
         "exec": "Run Commands",
         "cron": "Cron Tasks",
         "launcher": "Launcher",
@@ -1037,7 +1318,14 @@
     "logs": {
       "log_level_error": "Failed to update log level.",
       "clear": "Clear logs",
-      "empty": "Waiting for logs..."
+      "empty": "Waiting for logs...",
+      "search": "Search logs",
+      "search_clear": "Clear search",
+      "download": "Download logs",
+      "pause_tail": "Pause tail",
+      "resume_tail": "Resume tail",
+      "new_lines": "New lines: {{total}}",
+      "no_matches": "No logs match your search."
     }
   },
   "tour": {
@@ -1055,11 +1343,27 @@
     },
     "gateway": {
       "title": "Start Gateway",
-      "description": "After configuring models, click the \"Start Gateway\" button at the top to begin chatting with AI."
+      "description": "After configuring models, click the \"Start Gateway\" button at the bottom of the sidebar to begin chatting with AI."
     },
     "docs": {
       "title": "View Documentation",
-      "description": "Need more help? Click the documentation button in the top right corner to view detailed guides and configuration docs."
+      "description": "Need more help? Click the documentation button at the bottom of the sidebar to view detailed guides and configuration docs."
     }
+  },
+  "commandPalette": {
+    "title": "Command palette",
+    "description": "Search commands, conversations, models, and pages.",
+    "placeholder": "Type a command or search…",
+    "empty": "No matching results.",
+    "groups": {
+      "actions": "Actions",
+      "sessions": "Conversations",
+      "models": "Models",
+      "pages": "Pages",
+      "slashCommands": "Slash commands"
+    },
+    "newChat": "New chat",
+    "newChatDescription": "Start a conversation",
+    "current": "Current"
   }
 }

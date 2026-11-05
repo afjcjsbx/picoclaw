@@ -88,6 +88,31 @@ func TestSerializeMessages_PlainText(t *testing.T) {
 	}
 }
 
+func TestSerializeMessages_OmitsInternalUsage(t *testing.T) {
+	messages := []Message{{
+		Role:    "assistant",
+		Content: "hi",
+		Usage: &UsageInfo{
+			PromptTokens:     10,
+			CompletionTokens: 5,
+			TotalTokens:      15,
+		},
+	}}
+	result := SerializeMessages(messages)
+
+	data, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	var msgs []map[string]any
+	if err := json.Unmarshal(data, &msgs); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	if _, ok := msgs[0]["usage"]; ok {
+		t.Fatalf("usage must not be sent to providers: %s", data)
+	}
+}
+
 func TestSerializeMessages_WithMedia(t *testing.T) {
 	messages := []Message{
 		{Role: "user", Content: "describe this", Media: []string{"data:image/png;base64,abc123"}},

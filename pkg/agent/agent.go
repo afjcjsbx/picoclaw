@@ -674,6 +674,7 @@ func (al *AgentLoop) runAgentLoop(
 			Scope:        scope,
 			Content:      result.finalContent,
 			ContextUsage: contextUsage,
+			Usage:        al.latestAssistantUsage(ctx, opts.Dispatch.SessionKey, result.finalContent),
 		}
 		if modelName := strings.TrimSpace(result.modelName); modelName != "" {
 			if msg.Context.Raw == nil {

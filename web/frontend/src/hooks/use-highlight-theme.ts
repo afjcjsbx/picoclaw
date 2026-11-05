@@ -17,6 +17,13 @@ const CHAT_CODE_BLOCK_OVERRIDES = `
   padding: 0 !important;
   background: transparent !important;
 }
+
+[data-picoclaw-file-preview] .hljs {
+  display: inline;
+  overflow: visible;
+  padding: 0 !important;
+  background: transparent !important;
+}
 `
 
 function getOrCreateThemeStyleElement(): HTMLStyleElement {

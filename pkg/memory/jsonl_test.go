@@ -223,6 +223,43 @@ func TestAddFullMessage_PreservesModelName(t *testing.T) {
 	}
 }
 
+func TestAddFullMessage_PreservesUsage(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	msg := providers.Message{
+		Role:    "assistant",
+		Content: "done",
+		Usage: &providers.UsageInfo{
+			PromptTokens:        1234,
+			CompletionTokens:    567,
+			TotalTokens:         1801,
+			CacheReadTokens:     120,
+			CacheCreationTokens: 80,
+			CostUSD:             0.0123,
+		},
+	}
+
+	if err := store.AddFullMessage(ctx, "usage", msg); err != nil {
+		t.Fatalf("AddFullMessage: %v", err)
+	}
+
+	history, err := store.GetHistory(ctx, "usage")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if len(history) != 1 {
+		t.Fatalf("expected 1, got %d", len(history))
+	}
+	usage := history[0].Usage
+	if usage == nil {
+		t.Fatal("Usage = nil, want persisted usage")
+	}
+	if *usage != *msg.Usage {
+		t.Fatalf("Usage = %+v, want %+v", *usage, *msg.Usage)
+	}
+}
+
 func TestAddFullMessage_ToolCallID(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()

@@ -25,6 +25,7 @@ import (
 // registerSessionRoutes binds session list and detail endpoints to the ServeMux.
 func (h *Handler) registerSessionRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sessions", h.handleListSessions)
+	mux.HandleFunc("GET /api/sessions/search", h.handleSearchSessions)
 	mux.HandleFunc("GET /api/sessions/{id}", h.handleGetSession)
 	mux.HandleFunc("POST /api/sessions/{id}/fork", h.handleForkSession)
 	mux.HandleFunc("DELETE /api/sessions/{id}", h.handleDeleteSession)
@@ -65,6 +66,33 @@ type sessionChatMessage struct {
 	Media       []string                `json:"media,omitempty"`
 	Attachments []sessionChatAttachment `json:"attachments,omitempty"`
 	ToolCalls   []utils.VisibleToolCall `json:"tool_calls,omitempty"`
+	Usage       *sessionUsage           `json:"usage,omitempty"`
+}
+
+type sessionUsage struct {
+	InputTokens         int     `json:"input_tokens"`
+	OutputTokens        int     `json:"output_tokens"`
+	TotalTokens         int     `json:"total_tokens"`
+	CacheReadTokens     int     `json:"cache_read_tokens,omitempty"`
+	CacheCreationTokens int     `json:"cache_creation_tokens,omitempty"`
+	CostUSD             float64 `json:"cost_usd,omitempty"`
+}
+
+func sessionMessageUsage(usage *providers.UsageInfo) *sessionUsage {
+	if usage == nil {
+		return nil
+	}
+	if usage.PromptTokens <= 0 && usage.CompletionTokens <= 0 && usage.TotalTokens <= 0 && usage.CostUSD <= 0 {
+		return nil
+	}
+	return &sessionUsage{
+		InputTokens:         usage.PromptTokens,
+		OutputTokens:        usage.CompletionTokens,
+		TotalTokens:         usage.TotalTokens,
+		CacheReadTokens:     usage.CacheReadTokens,
+		CacheCreationTokens: usage.CacheCreationTokens,
+		CostUSD:             usage.CostUSD,
+	}
 }
 
 type sessionChatAttachment struct {
@@ -658,6 +686,7 @@ func sessionTranscriptMessages(
 				CreatedAt:   msg.CreatedAt,
 				Media:       append([]string(nil), msg.Media...),
 				Attachments: attachments,
+				Usage:       sessionMessageUsage(msg.Usage),
 			}
 			if !sessionChatMessageVisible(chatMsg) {
 				if hasToolCallsMsg {

@@ -5,10 +5,16 @@ import {
   parseAssistantMessageUpdateState,
 } from "@/features/chat/assistant-message-state"
 import { normalizeUnixTimestamp } from "@/features/chat/state"
+import { parseTokenUsage } from "@/features/chat/usage"
 import {
   type ChatAttachment,
   type ContextUsage,
+  type SplitSessionState,
+  getChatState,
+  markSessionUnread,
+  setSessionRunning,
   updateChatStore,
+  updateSplitSessionState,
 } from "@/store/chat"
 
 export interface PicoMessage {
@@ -78,9 +84,13 @@ function parseContextUsage(
   return {
     used_tokens: used,
     total_tokens: total,
-    history_tokens: obj.history_tokens != null ? Number(obj.history_tokens) : undefined,
+    history_tokens:
+      obj.history_tokens != null ? Number(obj.history_tokens) : undefined,
     compress_at_tokens: Number(obj.compress_at_tokens) || 0,
-    summarize_at_tokens: obj.summarize_at_tokens != null ? Number(obj.summarize_at_tokens) : undefined,
+    summarize_at_tokens:
+      obj.summarize_at_tokens != null
+        ? Number(obj.summarize_at_tokens)
+        : undefined,
     used_percent: Number(obj.used_percent) || 0,
   }
 }
@@ -93,6 +103,41 @@ function parseModelName(payload: Record<string, unknown>): string | undefined {
   return modelName || undefined
 }
 
+export function handlePicoActivityMessage(message: PicoMessage) {
+  if (message.type !== "session.activity") {
+    return
+  }
+
+  const sessionId = message.session_id
+  if (!sessionId) {
+    return
+  }
+
+  const event =
+    typeof message.payload?.event === "string" ? message.payload.event : ""
+  const isFinal = message.payload?.final === true
+
+  switch (event) {
+    case "typing.start":
+      setSessionRunning(sessionId, true)
+      break
+    case "typing.stop":
+    case "error":
+      setSessionRunning(sessionId, false)
+      break
+    case "message.create":
+    case "media.create":
+    case "message.update":
+      setSessionRunning(sessionId, !isFinal)
+      if (isFinal) {
+        markSessionUnread(sessionId)
+      }
+      break
+    default:
+      break
+  }
+}
+
 export function handlePicoMessage(
   message: PicoMessage,
   expectedSessionId: string,
@@ -102,15 +147,34 @@ export function handlePicoMessage(
   }
 
   const payload = message.payload || {}
+  const isFinal = payload.final === true
+  const updateSession = (
+    patch:
+      | Partial<SplitSessionState>
+      | ((prev: SplitSessionState) => Partial<SplitSessionState>),
+  ) => {
+    if (getChatState().activeSessionId === expectedSessionId) {
+      updateChatStore((prev) =>
+        typeof patch === "function" ? patch(prev) : patch,
+      )
+    } else {
+      updateSplitSessionState(expectedSessionId, patch)
+    }
+  }
 
   switch (message.type) {
     case "message.create":
     case "media.create": {
+      if (isFinal) {
+        markSessionUnread(expectedSessionId)
+        setSessionRunning(expectedSessionId, false)
+      }
       const messageId = (payload.message_id as string) || `pico-${Date.now()}`
       const { content, kind, toolCalls } =
         parseAssistantMessageCreateState(payload)
       const attachments = parseAttachments(payload)
       const contextUsage = parseContextUsage(payload)
+      const usage = parseTokenUsage(payload)
       const isPlaceholder = payload.placeholder === true
       const modelName = parseModelName(payload)
       const timestamp =
@@ -119,7 +183,7 @@ export function handlePicoMessage(
           ? normalizeUnixTimestamp(Number(message.timestamp))
           : Date.now()
 
-      updateChatStore((prev) => ({
+      updateSession((prev) => ({
         messages: [
           ...prev.messages,
           {
@@ -129,13 +193,15 @@ export function handlePicoMessage(
             kind,
             ...(modelName ? { modelName } : {}),
             ...(toolCalls ? { toolCalls } : {}),
+            ...(usage ? { usage } : {}),
             attachments,
             timestamp,
           },
         ],
         isTyping:
-          !isPlaceholder &&
-          (kind === "normal" || message.type === "media.create")
+          isFinal ||
+          (!isPlaceholder &&
+            (kind === "normal" || message.type === "media.create"))
             ? false
             : prev.isTyping,
         ...(contextUsage ? { contextUsage } : {}),
@@ -144,9 +210,14 @@ export function handlePicoMessage(
     }
 
     case "message.update": {
+      if (isFinal) {
+        markSessionUnread(expectedSessionId)
+        setSessionRunning(expectedSessionId, false)
+      }
       const messageId = payload.message_id as string
       const attachments = parseAttachments(payload)
       const contextUsage = parseContextUsage(payload)
+      const usage = parseTokenUsage(payload)
       const modelName = parseModelName(payload)
       const timestamp =
         message.timestamp !== undefined &&
@@ -157,7 +228,7 @@ export function handlePicoMessage(
         break
       }
 
-      updateChatStore((prev) => ({
+      updateSession((prev) => ({
         messages: (() => {
           let found = false
           const messages = prev.messages.map((msg) => {
@@ -175,6 +246,7 @@ export function handlePicoMessage(
               toolCalls,
               ...(modelName ? { modelName } : {}),
               ...(attachments ? { attachments } : {}),
+              ...(usage ? { usage } : {}),
             }
           })
           if (found) {
@@ -194,10 +266,12 @@ export function handlePicoMessage(
               toolCalls,
               ...(modelName ? { modelName } : {}),
               ...(attachments ? { attachments } : {}),
+              ...(usage ? { usage } : {}),
               timestamp,
             },
           ]
         })(),
+        ...(isFinal ? { isTyping: false } : {}),
         ...(contextUsage ? { contextUsage } : {}),
       }))
       break
@@ -209,18 +283,20 @@ export function handlePicoMessage(
         break
       }
 
-      updateChatStore((prev) => ({
+      updateSession((prev) => ({
         messages: prev.messages.filter((msg) => msg.id !== messageId),
       }))
       break
     }
 
     case "typing.start":
-      updateChatStore({ isTyping: true })
+      setSessionRunning(expectedSessionId, true)
+      updateSession({ isTyping: true })
       break
 
     case "typing.stop":
-      updateChatStore({ isTyping: false })
+      setSessionRunning(expectedSessionId, false)
+      updateSession({ isTyping: false })
       break
 
     case "error": {
@@ -229,11 +305,12 @@ export function handlePicoMessage(
       const errorMessage =
         typeof payload.message === "string" ? payload.message : ""
 
+      setSessionRunning(expectedSessionId, false)
       console.error("Pico error:", payload)
       if (errorMessage) {
         toast.error(errorMessage)
       }
-      updateChatStore((prev) => ({
+      updateSession((prev) => ({
         messages: requestId
           ? prev.messages.filter((msg) => msg.id !== requestId)
           : prev.messages,

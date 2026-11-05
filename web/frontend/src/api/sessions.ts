@@ -21,6 +21,14 @@ export interface SessionDetail {
     created_at?: string
     kind?: "normal" | "thought" | "tool_calls" | "tool_feedback"
     model_name?: string
+    usage?: {
+      input_tokens?: number
+      output_tokens?: number
+      total_tokens?: number
+      cache_read_tokens?: number
+      cache_creation_tokens?: number
+      cost_usd?: number
+    }
     media?: string[]
     attachments?: {
       type?: "image" | "audio" | "video" | "file"
@@ -45,6 +53,26 @@ export interface SessionDetail {
   updated: string
   forked_from?: string
   fork_index?: number
+}
+
+export interface SessionSearchResult {
+  session_id: string
+  title: string
+  role: "user" | "assistant"
+  snippet: string
+  match_start: number
+  match_end: number
+  message_index: number
+  updated: string
+}
+
+export interface SessionSearchResponse {
+  query: string
+  results: SessionSearchResult[]
+  limit: number
+  offset: number
+  has_more: boolean
+  truncated: boolean
 }
 
 export async function forkSession(
@@ -103,4 +131,24 @@ export async function deleteSession(id: string): Promise<void> {
   if (!res.ok) {
     throw new Error(`Failed to delete session ${id}: ${res.status}`)
   }
+}
+
+export async function searchSessions(
+  query: string,
+  limit: number = 20,
+  offset: number = 0,
+  signal?: AbortSignal,
+): Promise<SessionSearchResponse> {
+  const params = new URLSearchParams({
+    q: query,
+    limit: String(limit),
+    offset: String(offset),
+  })
+  const res = await launcherFetch(`/api/sessions/search?${params.toString()}`, {
+    signal,
+  })
+  if (!res.ok) {
+    throw new Error(`Failed to search sessions: ${res.status}`)
+  }
+  return res.json()
 }

@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -266,7 +267,7 @@ type turnState struct {
 	// Token budget tracking
 	tokenBudget      *atomic.Int64        // Shared token budget counter
 	lastFinishReason string               // Last LLM finish_reason
-	lastUsage        *providers.UsageInfo // Last LLM usage info
+	turnUsage        *providers.UsageInfo // Aggregated usage across all LLM calls in the turn
 
 	// Back-reference to the owning AgentLoop (set on every turn, used for hard abort cascade)
 	al *AgentLoop
@@ -459,6 +460,29 @@ func (al *AgentLoop) GetActiveTurnTree(sessionKey string) []ActiveTurnInfo {
 		return true
 	})
 	return tree
+}
+
+// ListActiveTurns returns snapshots of every registered active turn, including
+// root turns and nested SubTurns. Callers that only care about subagents should
+// filter on Depth > 0. The result is ordered by start time, then turn ID, so a
+// status endpoint can render a stable list while polling.
+func (al *AgentLoop) ListActiveTurns() []ActiveTurnInfo {
+	turns := make([]ActiveTurnInfo, 0)
+	al.activeTurnStates.Range(func(_, value any) bool {
+		ts, ok := value.(*turnState)
+		if !ok {
+			return true
+		}
+		turns = append(turns, ts.snapshot())
+		return true
+	})
+	sort.Slice(turns, func(i, j int) bool {
+		if !turns[i].StartedAt.Equal(turns[j].StartedAt) {
+			return turns[i].StartedAt.Before(turns[j].StartedAt)
+		}
+		return turns[i].TurnID < turns[j].TurnID
+	})
+	return turns
 }
 
 func (ts *turnState) snapshot() ActiveTurnInfo {
@@ -1028,18 +1052,40 @@ func (ts *turnState) SetLastFinishReason(reason string) {
 	ts.lastFinishReason = reason
 }
 
-// GetLastUsage returns the last LLM usage info
-func (ts *turnState) GetLastUsage() *providers.UsageInfo {
-	ts.mu.RLock()
-	defer ts.mu.RUnlock()
-	return ts.lastUsage
-}
-
-// SetLastUsage sets the last LLM usage info
-func (ts *turnState) SetLastUsage(usage *providers.UsageInfo) {
+// AddUsage accumulates provider-reported usage across the LLM calls that make
+// up this turn, including tool-call iterations.
+func (ts *turnState) AddUsage(usage *providers.UsageInfo) {
+	if ts == nil || usage == nil {
+		return
+	}
+	if usage.PromptTokens <= 0 && usage.CompletionTokens <= 0 && usage.TotalTokens <= 0 && usage.CostUSD <= 0 {
+		return
+	}
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
-	ts.lastUsage = usage
+	if ts.turnUsage == nil {
+		ts.turnUsage = &providers.UsageInfo{}
+	}
+	ts.turnUsage.PromptTokens += usage.PromptTokens
+	ts.turnUsage.CompletionTokens += usage.CompletionTokens
+	ts.turnUsage.TotalTokens += usage.TotalTokens
+	ts.turnUsage.CacheReadTokens += usage.CacheReadTokens
+	ts.turnUsage.CacheCreationTokens += usage.CacheCreationTokens
+	ts.turnUsage.CostUSD += usage.CostUSD
+}
+
+// GetTurnUsage returns a copy of the aggregated usage for this turn.
+func (ts *turnState) GetTurnUsage() *providers.UsageInfo {
+	if ts == nil {
+		return nil
+	}
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	if ts.turnUsage == nil {
+		return nil
+	}
+	usage := *ts.turnUsage
+	return &usage
 }
 
 // =============================================================================

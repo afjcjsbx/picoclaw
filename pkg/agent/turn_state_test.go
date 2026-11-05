@@ -76,6 +76,43 @@ func TestSplitHistoryForActiveTurn_ProtectsPersistedTail(t *testing.T) {
 	}
 }
 
+func TestTurnStateAddUsageAggregatesCalls(t *testing.T) {
+	ts := &turnState{}
+	ts.AddUsage(nil)
+	ts.AddUsage(&providers.UsageInfo{})
+	if got := ts.GetTurnUsage(); got != nil {
+		t.Fatalf("GetTurnUsage() = %+v, want nil for empty usage", got)
+	}
+
+	ts.AddUsage(&providers.UsageInfo{
+		PromptTokens:        120,
+		CompletionTokens:    30,
+		TotalTokens:         150,
+		CacheReadTokens:     10,
+		CacheCreationTokens: 5,
+		CostUSD:             0.001,
+	})
+	ts.AddUsage(&providers.UsageInfo{
+		PromptTokens:     200,
+		CompletionTokens: 50,
+		TotalTokens:      250,
+		CacheReadTokens:  20,
+		CostUSD:          0.002,
+	})
+
+	want := providers.UsageInfo{
+		PromptTokens:        320,
+		CompletionTokens:    80,
+		TotalTokens:         400,
+		CacheReadTokens:     30,
+		CacheCreationTokens: 5,
+		CostUSD:             0.003,
+	}
+	if got := ts.GetTurnUsage(); got == nil || *got != want {
+		t.Fatalf("GetTurnUsage() = %+v, want %+v", got, want)
+	}
+}
+
 func TestTrimHistoryToFitContextWindow_WithProtectedTurnTailKeepsActiveTurn(t *testing.T) {
 	current := strings.Repeat("current turn ", 80)
 	history := []providers.Message{

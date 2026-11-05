@@ -568,6 +568,23 @@ func responseReasoningContent(response *providers.LLMResponse) string {
 	return ""
 }
 
+func tokenUsageFromProviders(usage *providers.UsageInfo) *bus.TokenUsage {
+	if usage == nil {
+		return nil
+	}
+	if usage.PromptTokens <= 0 && usage.CompletionTokens <= 0 && usage.TotalTokens <= 0 && usage.CostUSD <= 0 {
+		return nil
+	}
+	return &bus.TokenUsage{
+		InputTokens:         usage.PromptTokens,
+		OutputTokens:        usage.CompletionTokens,
+		TotalTokens:         usage.TotalTokens,
+		CacheReadTokens:     usage.CacheReadTokens,
+		CacheCreationTokens: usage.CacheCreationTokens,
+		CostUSD:             usage.CostUSD,
+	}
+}
+
 func shallowCloneLLMOptions(opts map[string]any) map[string]any {
 	clone := make(map[string]any, len(opts))
 	maps.Copy(clone, opts)

@@ -55,8 +55,21 @@ Sessions last about 31 days but are invalidated when the launcher restarts, so a
 | `/credentials` | Manage provider credentials (OpenAI, Anthropic, Google Antigravity) |
 | `/channels` | Configure any supported channel from a shared catalog; QR-based binding for WeChat and WeCom |
 | `/agent/hub`, `/agent/skills`, `/agent/tools` | Browse and import skills; view and toggle agent tools |
+| `/agent/subagents` | Review the agent roster, configure spawn/delegate permissions and subagent model overrides, tune global sub-turn limits, and watch active subagent tasks live |
 | `/config` | Edit agent defaults, self-evolution, exec/cron controls, heartbeat, device monitoring, and launcher networking/autostart |
 | `/logs` | Follow the in-memory Gateway log buffer and clear it |
+
+### Voice messages
+
+The chat composer has a microphone button to the left of the send button. Press it to record a voice message; press the stop button (or wait for the 5-minute limit) to send it immediately, so no extra send step is needed. The recording is uploaded to the Gateway and, when a voice transcription model is configured, transcribed before the agent replies. Audio never leaves your machine except for the transcription request to the configured provider. Browsers without `MediaRecorder` hide the button or show an error. The microphone API is only available in a secure context, so when the dashboard is opened over plain HTTP on a LAN address the button explains that HTTPS or localhost is required; use `http://localhost:18800` on the launcher machine or terminate TLS in front of it.
+
+### Stopping a reply
+
+While the agent is generating a response, the send button becomes a stop button. Clicking it sends the existing `/stop` command to cancel the active turn; the composer text and pending attachments are kept.
+
+### Token usage
+
+Assistant replies show input, output, and total token counts when the provider reports usage. Hover the usage badge for the full breakdown. Usage is aggregated across all model calls in a turn, including tool-call iterations. When pricing is available, the badge also shows a per-turn cost: a leading `~` marks an estimate derived from public list prices, while a cost reported by the backend is shown as-is. Usage is stored with session history, so the badge remains visible after reloading the page or reopening the conversation.
 
 The **Gateway** runs as a subprocess managed through the launcher (`picoclaw gateway -E`, with `-d` when debug logging is on). The top bar lets you start, stop, and restart it, and shows its state. Auto-start only happens when a usable default model is configured; otherwise use **Start Gateway** after adding credentials in `/models` or `/credentials`.
 

@@ -447,7 +447,7 @@ func (p *streamingChunkPublisher) Finalize(ctx context.Context, content string, 
 	if setter, ok := p.streamer.(interface{ SetModelName(modelName string) }); ok {
 		setter.SetModelName(p.modelName)
 	}
-	if usage := p.ts.GetLastUsage(); usage != nil {
+	if usage := p.ts.GetTurnUsage(); usage != nil {
 		if setter, ok := p.streamer.(interface{ SetTurnUsage(in, out int) }); ok {
 			setter.SetTurnUsage(usage.PromptTokens, usage.CompletionTokens)
 		}
