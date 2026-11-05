@@ -51,7 +51,7 @@ func TestHelpCommand_FocusedHelpIncludesDescriptionUsageAndSubcommands(t *testin
 		"Usage: /list [model|models|channels|agents|skills|mcp|plugins]",
 		"Subcommands:",
 		"/list model - Current model and provider",
-		"/list models - Configured models",
+		"/list models - Configured models (numbered, use with /switch)",
 		"/list channels - Enabled channels",
 		"/list agents - Registered agents",
 		"/list skills - Installed skills",
