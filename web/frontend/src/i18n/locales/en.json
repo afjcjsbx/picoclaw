@@ -999,6 +999,8 @@
         "target": "Target",
         "command": "Command",
         "message": "Message",
+        "show_full": "Show full message",
+        "show_less": "Show less",
         "history": "Recent runs",
         "stats": {
           "total": "Total jobs",

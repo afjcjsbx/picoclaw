@@ -182,6 +182,10 @@ function CronJobCard({
     ? dayjs(job.state.lastRunAtMs).fromNow()
     : t("cron.neverRun")
   const notSet = t("pages.agent.cron.not_set")
+  const [messageExpanded, setMessageExpanded] = useState(false)
+  const message = job.payload.message ?? ""
+  const isLongMessage =
+    message.length > 160 || message.split(/\r?\n/).length > 3
 
   return (
     <Card className="shadow-none">
@@ -278,14 +282,33 @@ function CronJobCard({
                   {job.payload.command}
                 </code>
               </div>
-            ) : job.payload.message ? (
+            ) : message ? (
               <div className="mt-3">
                 <p className="text-muted-foreground mb-1 text-[11px] font-medium tracking-wide uppercase">
                   {t("pages.agent.cron.message")}
                 </p>
-                <p className="text-muted-foreground line-clamp-3 text-xs leading-relaxed">
-                  {job.payload.message}
+                <p
+                  className={cn(
+                    "text-muted-foreground text-xs leading-relaxed break-words whitespace-pre-wrap",
+                    !messageExpanded && "line-clamp-3",
+                  )}
+                >
+                  {message}
                 </p>
+                {isLongMessage && (
+                  <Button
+                    type="button"
+                    variant="link"
+                    size="xs"
+                    className="mt-1 h-auto p-0 text-xs"
+                    aria-expanded={messageExpanded}
+                    onClick={() => setMessageExpanded((expanded) => !expanded)}
+                  >
+                    {messageExpanded
+                      ? t("pages.agent.cron.show_less")
+                      : t("pages.agent.cron.show_full")}
+                  </Button>
+                )}
               </div>
             ) : null}
           </div>
