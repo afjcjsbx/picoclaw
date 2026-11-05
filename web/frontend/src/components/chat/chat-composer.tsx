@@ -23,6 +23,7 @@ import { toast } from "sonner"
 
 import type { SlashCommand } from "@/api/commands"
 import { ContextUsageRing } from "@/components/chat/context-usage-ring"
+import { PendingFollowUpOverlay } from "@/components/chat/pending-follow-up-overlay"
 import { SlashCommandPalette } from "@/components/chat/slash-command-palette"
 import { Button } from "@/components/ui/button"
 import {
@@ -35,6 +36,8 @@ import {
   formatRecordingDuration,
   isAudioRecordingSupported,
 } from "@/features/chat/audio-recorder"
+import { resolveComposerPrimaryAction } from "@/features/chat/composer-action"
+import type { PendingFollowUp } from "@/features/chat/follow-up"
 import {
   type SlashPaletteEntry,
   type SlashPaletteItem,
@@ -77,6 +80,9 @@ interface ChatComposerProps {
   onSend: () => void
   onStop: () => void
   onSendAudio: (attachment: ChatAttachment) => boolean
+  pendingFollowUps: PendingFollowUp[]
+  onSteerFollowUp: (id: string) => void
+  onRemoveFollowUp: (id: string) => void
   modelSelector?: ReactNode
   onContextDetail?: () => void
   inputDisabledReason: ChatInputDisabledReason | null
@@ -109,6 +115,9 @@ export function ChatComposer({
   onSend,
   onStop,
   onSendAudio,
+  pendingFollowUps,
+  onSteerFollowUp,
+  onRemoveFollowUp,
   modelSelector,
   onContextDetail,
   inputDisabledReason,
@@ -145,6 +154,11 @@ export function ChatComposer({
     [],
   )
   const hasInput = input.trim().length > 0
+  const primaryAction = resolveComposerPrimaryAction({
+    isTyping,
+    canInput,
+    canSend,
+  })
   const disabledMessage =
     inputDisabledReason === null
       ? null
@@ -331,6 +345,12 @@ export function ChatComposer({
   return (
     <div className="pointer-events-none relative z-10 mt-0 shrink-0 bg-[var(--conversation-background)] px-4 pb-[calc(0.5rem+env(safe-area-inset-bottom))] md:px-8 md:pb-4 lg:px-24 xl:px-48">
       <div className="pointer-events-auto mx-auto flex max-w-[49.5rem] flex-col items-end">
+        <PendingFollowUpOverlay
+          followUps={pendingFollowUps}
+          canSteer={canInput}
+          onSteer={onSteerFollowUp}
+          onRemove={onRemoveFollowUp}
+        />
         <div
           ref={surfaceRef}
           className={cn(
@@ -505,7 +525,7 @@ export function ChatComposer({
                   )}
                 </Button>
               ) : null}
-              {isTyping ? (
+              {primaryAction === "stop" ? (
                 <Button
                   type="button"
                   size="icon"
@@ -517,7 +537,7 @@ export function ChatComposer({
                 >
                   <IconPlayerStop className="size-4" />
                 </Button>
-              ) : canInput ? (
+              ) : primaryAction === "send" ? (
                 <span tabIndex={!canSend ? 0 : undefined}>
                   <Button
                     type="button"

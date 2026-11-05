@@ -55,6 +55,13 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import {
+  type PendingFollowUp,
+  enqueuePendingFollowUp,
+  nextPendingFollowUp,
+  pendingFollowUpsForSession,
+  removePendingFollowUp,
+} from "@/features/chat/follow-up"
 import { loadSessionMessages } from "@/features/chat/history"
 import {
   CHAT_ATTACHMENT_ACCEPT,
@@ -82,6 +89,7 @@ import {
   composerInsertionAtom,
   initializeSplitSessionState,
   pendingScrollTargetAtom,
+  sessionRunningAtom,
   sessionTitlesAtom,
   splitConversationsAtom,
   splitLayoutSizesAtom,
@@ -105,6 +113,13 @@ const SPLIT_LAYOUTS: Array<{
     icon: IconLayoutSidebarRight,
   },
 ]
+
+let pendingFollowUpCounter = 0
+
+function createPendingFollowUpId() {
+  pendingFollowUpCounter += 1
+  return `follow-up-${Date.now()}-${pendingFollowUpCounter}`
+}
 
 function AssistantActivityGroup({
   label,
@@ -786,6 +801,9 @@ export function ChatPage() {
   const dragDepthRef = useRef(0)
   const [isAtBottom, setIsAtBottom] = useState(true)
   const [input, setInput] = useState("")
+  const [pendingFollowUps, setPendingFollowUps] = useState<PendingFollowUp[]>(
+    [],
+  )
   const [filePreviewPath, setFilePreviewPath] = useState("")
   const [filePreviewWidth, setFilePreviewWidth] = useState(420)
   const fileResizeRef = useRef<{
@@ -809,6 +827,7 @@ export function ChatPage() {
   const [composerFocusSignal, setComposerFocusSignal] = useState(0)
   const sessionTitles = useAtomValue(sessionTitlesAtom)
   const splitSessionStates = useAtomValue(splitSessionStatesAtom)
+  const sessionRunning = useAtomValue(sessionRunningAtom)
 
   const {
     messages,
@@ -824,6 +843,10 @@ export function ChatPage() {
     loadOlderHistory,
     newChat,
   } = usePicoChat()
+
+  // isTyping only tracks the "waiting for the model" phase, while the activity
+  // stream keeps reporting the session as running until the turn is complete.
+  const isAgentRunning = isTyping || Boolean(sessionRunning[activeSessionId])
 
   const activeSplitGroup = splitGroups.find((group) =>
     group.includes(activeSessionId),
@@ -873,6 +896,20 @@ export function ChatPage() {
     setComposerFocusSignal((signal) => signal + 1)
     setComposerInsertion(null)
   }, [composerInsertion, setComposerInsertion])
+
+  // Follow-ups composed while the agent was running are sent as a regular
+  // next turn once the current one finishes, unless the user steered them.
+  useEffect(() => {
+    if (isAgentRunning || !canInput) return
+    const next = nextPendingFollowUp(pendingFollowUps, activeSessionId)
+    if (!next) return
+    if (
+      !sendMessage({ content: next.content, attachments: next.attachments })
+    ) {
+      return
+    }
+    setPendingFollowUps((current) => removePendingFollowUp(current, next.id))
+  }, [activeSessionId, canInput, isAgentRunning, pendingFollowUps, sendMessage])
 
   const handleOpenFile = (path: string) => {
     setFilePreviewPath(path)
@@ -1213,30 +1250,84 @@ export function ChatPage() {
 
   const handleSend = () => {
     if ((!input.trim() && attachments.length === 0) || !canInput) return
-    if (
-      sendMessage({
-        content: input,
-        attachments,
-      })
-    ) {
+
+    const content = input
+    const nextAttachments = attachments
+    const shouldQueue =
+      isAgentRunning ||
+      Boolean(nextPendingFollowUp(pendingFollowUps, activeSessionId))
+
+    if (shouldQueue) {
+      setPendingFollowUps((current) =>
+        enqueuePendingFollowUp(current, {
+          id: createPendingFollowUpId(),
+          sessionId: activeSessionId,
+          content,
+          attachments: nextAttachments,
+        }),
+      )
+      setInput("")
+      setAttachments([])
+      return
+    }
+
+    if (sendMessage({ content, attachments: nextAttachments })) {
       setInput("")
       setAttachments([])
     }
   }
 
   const handleStop = () => {
-    if (!isTyping || !canInput) return
+    if (!isAgentRunning || !canInput) return
     sendMessage({ content: "/stop", attachments: [] })
   }
 
-  const handleSendAudio = (attachment: ChatAttachment) => {
+  const handleSteerFollowUp = (id: string) => {
+    if (!canInput) return
+    const followUp = pendingFollowUps.find((item) => item.id === id)
+    if (!followUp || followUp.sessionId !== activeSessionId) return
     if (
-      canInput &&
       sendMessage({
-        content: input,
-        attachments: [...attachments, attachment],
+        content: followUp.content,
+        attachments: followUp.attachments,
       })
     ) {
+      setPendingFollowUps((current) => removePendingFollowUp(current, id))
+    }
+  }
+
+  const handleRemoveFollowUp = (id: string) => {
+    setPendingFollowUps((current) => removePendingFollowUp(current, id))
+  }
+
+  const handleSendAudio = (attachment: ChatAttachment) => {
+    if (!canInput) {
+      // Keep the recording attached so the user can retry instead of losing it.
+      setAttachments((current) => [...current, attachment])
+      return false
+    }
+
+    const content = input
+    const nextAttachments = [...attachments, attachment]
+    const shouldQueue =
+      isAgentRunning ||
+      Boolean(nextPendingFollowUp(pendingFollowUps, activeSessionId))
+
+    if (shouldQueue) {
+      setPendingFollowUps((current) =>
+        enqueuePendingFollowUp(current, {
+          id: createPendingFollowUpId(),
+          sessionId: activeSessionId,
+          content,
+          attachments: nextAttachments,
+        }),
+      )
+      setInput("")
+      setAttachments([])
+      return true
+    }
+
+    if (sendMessage({ content, attachments: nextAttachments })) {
       setInput("")
       setAttachments([])
       return true
@@ -1351,6 +1442,10 @@ export function ChatPage() {
 
   const canSubmit =
     canInput && (Boolean(input.trim()) || attachments.length > 0)
+  const activePendingFollowUps = pendingFollowUpsForSession(
+    pendingFollowUps,
+    activeSessionId,
+  )
 
   const handleRemoveSplitPane = (sessionId: string) => {
     const remaining = activeSplitGroup?.filter((id) => id !== sessionId)
@@ -1539,6 +1634,9 @@ export function ChatPage() {
             onSend={handleSend}
             onStop={handleStop}
             onSendAudio={handleSendAudio}
+            pendingFollowUps={activePendingFollowUps}
+            onSteerFollowUp={handleSteerFollowUp}
+            onRemoveFollowUp={handleRemoveFollowUp}
             modelSelector={
               hasAvailableModels ? (
                 <ModelSelector
@@ -1558,7 +1656,7 @@ export function ChatPage() {
             }}
             inputDisabledReason={inputDisabledReason}
             canSend={canSubmit}
-            isTyping={isTyping}
+            isTyping={isAgentRunning}
             isDragActive={isDragActive}
             contextUsage={contextUsage}
             slashCommands={slashCommands}
