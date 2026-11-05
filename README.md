@@ -599,8 +599,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 **PicoClaw is built in the open. Come build it with us.**
 
-[![Join the PicoClaw Discord community](assets/discord-banner.png)](https://discord.gg/bEuEDnKpf)
-
 [⭐ Star PicoClaw](https://github.com/afjcjsbx/picoclaw) · [💬 Join Discord](https://discord.gg/bEuEDnKpf) · [🐛 Report an issue](https://github.com/afjcjsbx/picoclaw/issues)
 
 </div>
