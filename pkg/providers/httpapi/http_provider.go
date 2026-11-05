@@ -103,6 +103,14 @@ func (p *HTTPProvider) SetProviderName(providerName string) {
 	p.delegate.SetProviderName(providerName)
 }
 
+// SetProviderSort sets the OpenRouter provider routing sort order.
+func (p *HTTPProvider) SetProviderSort(providerSort string) {
+	if p == nil || p.delegate == nil {
+		return
+	}
+	p.delegate.SetProviderSort(providerSort)
+}
+
 func (p *HTTPProvider) SetSessionHeader(name, fallback string) {
 	if p == nil || p.delegate == nil {
 		return

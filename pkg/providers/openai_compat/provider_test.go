@@ -1625,6 +1625,146 @@ func TestProviderChat_ExtraBodyOverridesOptions(t *testing.T) {
 	}
 }
 
+func TestBuildRequestBody_OpenRouterProviderSort(t *testing.T) {
+	t.Run("applies to openrouter host", func(t *testing.T) {
+		p := NewProvider(
+			"key",
+			"https://openrouter.ai/api/v1",
+			"",
+			WithProviderSort("throughput"),
+		)
+
+		body := p.buildRequestBody(
+			[]Message{{Role: "user", Content: "hi"}},
+			nil,
+			"openai/gpt-4o",
+			nil,
+		)
+
+		provider, ok := body["provider"].(map[string]any)
+		if !ok {
+			t.Fatalf("provider = %#v, want map", body["provider"])
+		}
+		if got := provider["sort"]; got != "throughput" {
+			t.Fatalf("provider.sort = %#v, want throughput", got)
+		}
+	})
+
+	t.Run("applies to openrouter provider name with custom host", func(t *testing.T) {
+		p := NewProvider("key", "https://gateway.example.com/v1", "", WithProviderSort("latency"))
+		p.SetProviderName("openrouter")
+
+		body := p.buildRequestBody(
+			[]Message{{Role: "user", Content: "hi"}},
+			nil,
+			"openai/gpt-4o",
+			nil,
+		)
+
+		provider, ok := body["provider"].(map[string]any)
+		if !ok {
+			t.Fatalf("provider = %#v, want map", body["provider"])
+		}
+		if got := provider["sort"]; got != "latency" {
+			t.Fatalf("provider.sort = %#v, want latency", got)
+		}
+	})
+
+	t.Run("ignored for other providers", func(t *testing.T) {
+		p := NewProvider("key", "https://api.example.com/v1", "", WithProviderSort("price"))
+		p.SetProviderName("openai")
+
+		body := p.buildRequestBody(
+			[]Message{{Role: "user", Content: "hi"}},
+			nil,
+			"gpt-4o",
+			nil,
+		)
+
+		if _, ok := body["provider"]; ok {
+			t.Fatalf("provider = %#v, want omitted", body["provider"])
+		}
+	})
+
+	t.Run("merges with extra body provider routing", func(t *testing.T) {
+		extraBody := map[string]any{
+			"provider": map[string]any{"order": []any{"openai", "azure"}},
+		}
+		p := NewProvider(
+			"key",
+			"https://openrouter.ai/api/v1",
+			"",
+			WithExtraBody(extraBody),
+			WithProviderSort("price"),
+		)
+
+		body := p.buildRequestBody(
+			[]Message{{Role: "user", Content: "hi"}},
+			nil,
+			"openai/gpt-4o",
+			nil,
+		)
+
+		provider, ok := body["provider"].(map[string]any)
+		if !ok {
+			t.Fatalf("provider = %#v, want map", body["provider"])
+		}
+		if got := provider["sort"]; got != "price" {
+			t.Fatalf("provider.sort = %#v, want price", got)
+		}
+		if _, ok := provider["order"]; !ok {
+			t.Fatalf("provider.order missing from merged provider config: %#v", provider)
+		}
+
+		configuredProvider := extraBody["provider"].(map[string]any)
+		if _, mutated := configuredProvider["sort"]; mutated {
+			t.Fatalf("extra_body provider map was mutated: %#v", configuredProvider)
+		}
+	})
+
+	t.Run("extra body sort wins", func(t *testing.T) {
+		p := NewProvider(
+			"key",
+			"https://openrouter.ai/api/v1",
+			"",
+			WithExtraBody(map[string]any{
+				"provider": map[string]any{"sort": "price"},
+			}),
+			WithProviderSort("throughput"),
+		)
+
+		body := p.buildRequestBody(
+			[]Message{{Role: "user", Content: "hi"}},
+			nil,
+			"openai/gpt-4o",
+			nil,
+		)
+
+		provider, ok := body["provider"].(map[string]any)
+		if !ok {
+			t.Fatalf("provider = %#v, want map", body["provider"])
+		}
+		if got := provider["sort"]; got != "price" {
+			t.Fatalf("provider.sort = %#v, want explicit extra_body price", got)
+		}
+	})
+
+	t.Run("invalid sort is ignored", func(t *testing.T) {
+		p := NewProvider("key", "https://openrouter.ai/api/v1", "", WithProviderSort("fastest"))
+
+		body := p.buildRequestBody(
+			[]Message{{Role: "user", Content: "hi"}},
+			nil,
+			"openai/gpt-4o",
+			nil,
+		)
+
+		if _, ok := body["provider"]; ok {
+			t.Fatalf("provider = %#v, want omitted for invalid sort", body["provider"])
+		}
+	})
+}
+
 func TestProviderChat_CustomHeadersInjected(t *testing.T) {
 	var gotSource, gotAuth, gotUserAgent string
 
