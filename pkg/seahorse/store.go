@@ -425,15 +425,21 @@ func (s *Store) addMessagesChunk(ctx context.Context, convID int64, msgs []Messa
 	}
 	defer tx.Rollback()
 
-	ids := make([]int64, 0, len(msgs))
+	ids := make([]int64, len(msgs))
+	items := make([]ContextItem, len(msgs))
 	for i := range msgs {
 		id, err := insertMessageTx(ctx, tx, convID, msgs[i])
 		if err != nil {
 			return nil, fmt.Errorf("message %d: %w", i, err)
 		}
-		ids = append(ids, id)
+		ids[i] = id
+		items[i] = ContextItem{
+			ItemType:   "message",
+			MessageID:  id,
+			TokenCount: msgs[i].TokenCount,
+		}
 	}
-	if err := s.appendContextMessagesTx(ctx, tx, convID, ids); err != nil {
+	if err := s.appendContextItemsTx(ctx, tx, convID, items); err != nil {
 		return nil, fmt.Errorf("append context: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -1160,16 +1166,6 @@ func (s *Store) appendContextItems(ctx context.Context, convID int64, items []Co
 		return err
 	}
 	return tx.Commit()
-}
-
-// appendContextMessagesTx appends message-backed items at the next ordinals
-// inside an existing transaction.
-func (s *Store) appendContextMessagesTx(ctx context.Context, tx *sql.Tx, convID int64, messageIDs []int64) error {
-	items := make([]ContextItem, len(messageIDs))
-	for i, id := range messageIDs {
-		items[i] = ContextItem{ItemType: "message", MessageID: id}
-	}
-	return s.appendContextItemsTx(ctx, tx, convID, items)
 }
 
 // appendContextItemsTx is the transaction-scoped implementation of context

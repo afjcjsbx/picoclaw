@@ -659,8 +659,8 @@ func TestStoreAddMessagesBatch(t *testing.T) {
 		t.Fatalf("context has %d items, want %d", len(items), len(msgs))
 	}
 	for i, item := range items {
-		if item.ItemType != "message" || item.MessageID != ids[i] {
-			t.Fatalf("context item %d = %+v, want message id %d", i, item, ids[i])
+		if item.ItemType != "message" || item.MessageID != ids[i] || item.TokenCount != msgs[i].TokenCount {
+			t.Fatalf("context item %d = %+v, want message id %d with %d tokens", i, item, ids[i], msgs[i].TokenCount)
 		}
 	}
 
