@@ -439,7 +439,12 @@ func TestScanSearchFileFilesOnlyStopsAtFirstHit(t *testing.T) {
 
 	rowsSeen := 0
 	result, err := tool.scanSearchFile(
-		path, regexp.MustCompile("needle"), searchFilesOptions{outputMode: "files_only"}, &rowsSeen, 10, 1<<30,
+		path,
+		newSearchMatcher(regexp.MustCompile("needle")),
+		searchFilesOptions{outputMode: "files_only"},
+		&rowsSeen,
+		10,
+		1<<30,
 	)
 	if err != nil {
 		t.Fatal(err)

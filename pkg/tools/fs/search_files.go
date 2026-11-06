@@ -314,6 +314,7 @@ func (t *SearchFilesTool) searchNames(ctx context.Context, opts searchFilesOptio
 
 func (t *SearchFilesTool) searchContents(ctx context.Context, opts searchFilesOptions) *ToolResult {
 	pattern, _ := regexp.Compile(opts.pattern) // validated in parseSearchFilesOptions
+	matcher := newSearchMatcher(pattern)
 	rows := make([]string, 0, opts.limit+1)
 	rowsSeen := 0
 	bytesScanned := int64(0)
@@ -323,7 +324,7 @@ func (t *SearchFilesTool) searchContents(ctx context.Context, opts searchFilesOp
 			return false, nil
 		}
 		fileResult, err := t.scanSearchFile(
-			path, pattern, opts, &rowsSeen, opts.limit+1-len(rows), maxSearchBytesScanned-bytesScanned,
+			path, matcher, opts, &rowsSeen, opts.limit+1-len(rows), maxSearchBytesScanned-bytesScanned,
 		)
 		if err != nil {
 			return false, errSearchSkipFile
@@ -414,14 +415,13 @@ type searchFileResult struct {
 // (see redact.go).
 func (t *SearchFilesTool) scanSearchFile(
 	path string,
-	pattern *regexp.Regexp,
+	matcher searchMatcher,
 	opts searchFilesOptions,
 	rowsSeen *int,
 	remainingRows int,
 	remainingBytes int64,
 ) (searchFileResult, error) {
 	var result searchFileResult
-	matcher := newSearchMatcher(pattern)
 	// A single stat decides type and budget eligibility before opening; a
 	// file that grows past the budget after this is caught by budgetReader.
 	entry, err := t.fs.Stat(path)
