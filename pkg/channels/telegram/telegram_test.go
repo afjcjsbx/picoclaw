@@ -224,6 +224,19 @@ func TestSendMedia_ImageFallbacksToDocumentOnInvalidDimensions(t *testing.T) {
 	assert.Equal(t, "caption", constructor.calls[1].Parameters["caption"])
 }
 
+func TestBlockPrivateMediaDownloads(t *testing.T) {
+	assert.True(t, (*TelegramChannel)(nil).blockPrivateMediaDownloads())
+
+	ch := &TelegramChannel{}
+	assert.True(t, ch.blockPrivateMediaDownloads())
+
+	ch.tgCfg = &config.TelegramSettings{}
+	assert.True(t, ch.blockPrivateMediaDownloads())
+
+	ch.tgCfg.BaseURL = "http://127.0.0.1:8081"
+	assert.False(t, ch.blockPrivateMediaDownloads())
+}
+
 func TestDownloadFileWithInfo_AllowsLocalConfiguredBaseURL(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got, want := r.URL.Path, "/file/bot"+testToken+"/photos/image"; got != want {
