@@ -513,13 +513,24 @@ func protectedRuleMatches(path string, rule protectedRootRule) bool {
 // hasPathPrefixFold is a cheap case-insensitive prefix guard that avoids a
 // filepath.Rel call for the overwhelmingly common non-matching path.
 func hasPathPrefixFold(path, prefix string) bool {
-	if len(prefix) == 1 && os.IsPathSeparator(prefix[0]) {
-		return len(path) > 0 && os.IsPathSeparator(path[0])
+	return hasPathPrefixFoldSep(path, prefix, os.IsPathSeparator)
+}
+
+// hasPathPrefixFoldSep is hasPathPrefixFold with an injectable separator test
+// so Windows volume and UNC roots can be covered on every platform. A prefix
+// that already ends with a separator (C:\, \\server\share\, /) must not demand
+// another separator at the boundary.
+func hasPathPrefixFoldSep(path, prefix string, isSeparator func(byte) bool) bool {
+	if prefix == "" {
+		return path == ""
+	}
+	if isSeparator(prefix[len(prefix)-1]) {
+		return len(path) >= len(prefix) && strings.EqualFold(path[:len(prefix)], prefix)
 	}
 	if len(path) < len(prefix) || !strings.EqualFold(path[:len(prefix)], prefix) {
 		return false
 	}
-	return len(path) == len(prefix) || os.IsPathSeparator(path[len(prefix)])
+	return len(path) == len(prefix) || isSeparator(path[len(prefix)])
 }
 
 func matchesProtectedRelativePath(root, path string, protectedPaths []string) bool {
