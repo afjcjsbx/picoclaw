@@ -107,6 +107,13 @@ func (r *mcpRuntime) getManager() *mcp.Manager {
 	return r.manager
 }
 
+// warnMCPInitFailure reports an MCP initialization failure without making it
+// fatal: the agent can still serve turns without MCP tools.
+func (al *AgentLoop) warnMCPInitFailure(err error) {
+	logger.WarnCF("agent", "MCP initialization failed, continuing without MCP tools",
+		map[string]any{"error": err.Error()})
+}
+
 // ensureMCPInitialized loads MCP servers/tools once so both Run() and direct
 // agent mode share the same initialization path.
 func (al *AgentLoop) ensureMCPInitialized(ctx context.Context) error {
