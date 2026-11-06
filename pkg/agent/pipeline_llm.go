@@ -639,6 +639,11 @@ func (p *Pipeline) CallLLM(
 		}
 	}
 
+	// Some OpenAI-compatible providers return a native tool_calls payload and
+	// duplicate the same call in assistant content as "[tool_use: ...]".
+	// Normalize it here, after hooks and before any publishing or persistence.
+	sanitizeLLMResponseToolProtocol(exec.response)
+
 	// Save finishReason and accumulate usage on the turn state. Use ts directly
 	// (the authoritative turn state for this call) rather than a context lookup:
 	// the raw ctx passed to CallLLM is not seeded with turnState (only turnCtx
