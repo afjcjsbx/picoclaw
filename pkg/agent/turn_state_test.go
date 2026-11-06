@@ -107,6 +107,8 @@ func TestTurnStateAddUsageAggregatesCalls(t *testing.T) {
 		CacheReadTokens:     30,
 		CacheCreationTokens: 5,
 		CostUSD:             0.003,
+		Requests:            2,
+		ContextTokens:       200,
 	}
 	if got := ts.GetTurnUsage(); got == nil || *got != want {
 		t.Fatalf("GetTurnUsage() = %+v, want %+v", got, want)

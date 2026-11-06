@@ -1072,6 +1072,11 @@ func (ts *turnState) AddUsage(usage *providers.UsageInfo) {
 	ts.turnUsage.CacheReadTokens += usage.CacheReadTokens
 	ts.turnUsage.CacheCreationTokens += usage.CacheCreationTokens
 	ts.turnUsage.CostUSD += usage.CostUSD
+	// Requests and ContextTokens describe the turn rather than a single
+	// provider response: count every call, but keep the last prompt size so
+	// callers can distinguish billed input from the live context window.
+	ts.turnUsage.Requests++
+	ts.turnUsage.ContextTokens = usage.PromptTokens
 }
 
 // GetTurnUsage returns a copy of the aggregated usage for this turn.

@@ -63,6 +63,8 @@ func TestSessionTranscriptMessagesPreservesUsage(t *testing.T) {
 			CacheReadTokens:     120,
 			CacheCreationTokens: 80,
 			CostUSD:             0.0123,
+			Requests:            3,
+			ContextTokens:       900,
 		},
 	}}, 0, false)
 
@@ -80,6 +82,8 @@ func TestSessionTranscriptMessagesPreservesUsage(t *testing.T) {
 		CacheReadTokens:     120,
 		CacheCreationTokens: 80,
 		CostUSD:             0.0123,
+		Requests:            3,
+		ContextTokens:       900,
 	}
 	if *usage != want {
 		t.Fatalf("Usage = %+v, want %+v", *usage, want)

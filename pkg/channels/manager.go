@@ -753,33 +753,32 @@ func setStreamerModelName(streamer any, modelName string) {
 }
 
 type turnUsageStreamer interface {
-	SetTurnUsage(inputTokens, outputTokens int)
+	SetTurnUsage(usage bus.TokenUsage)
 }
 
 // setStreamerTurnUsage forwards real per-turn token usage to a streamer that
 // supports it, transparently unwrapping the manager's streamer wrappers.
-func setStreamerTurnUsage(streamer any, inputTokens, outputTokens int) {
+func setStreamerTurnUsage(streamer any, usage bus.TokenUsage) {
 	setter, ok := streamer.(turnUsageStreamer)
 	if !ok {
 		return
 	}
-	setter.SetTurnUsage(inputTokens, outputTokens)
+	setter.SetTurnUsage(usage)
 }
 
 // splitMarkerStreamer turns accumulated streaming text containing
 // MessageSplitMarker into separate channel stream messages.
 type splitMarkerStreamer struct {
-	mu               sync.Mutex
-	current          bus.Streamer
-	reasoning        bus.ReasoningStreamer
-	begin            func(context.Context) (bus.Streamer, error)
-	completedParts   int
-	finalized        bool
-	onFinalize       func(context.Context, string)
-	clearMarker      func()
-	modelName        string
-	turnInputTokens  int
-	turnOutputTokens int
+	mu             sync.Mutex
+	current        bus.Streamer
+	reasoning      bus.ReasoningStreamer
+	begin          func(context.Context) (bus.Streamer, error)
+	completedParts int
+	finalized      bool
+	onFinalize     func(context.Context, string)
+	clearMarker    func()
+	modelName      string
+	turnUsage      bus.TokenUsage
 }
 
 func (s *splitMarkerStreamer) Update(ctx context.Context, content string) error {
@@ -830,12 +829,11 @@ func (s *splitMarkerStreamer) SetModelName(modelName string) {
 	setStreamerModelName(s.reasoning, s.modelName)
 }
 
-func (s *splitMarkerStreamer) SetTurnUsage(inputTokens, outputTokens int) {
+func (s *splitMarkerStreamer) SetTurnUsage(usage bus.TokenUsage) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.turnInputTokens = inputTokens
-	s.turnOutputTokens = outputTokens
-	setStreamerTurnUsage(s.current, s.turnInputTokens, s.turnOutputTokens)
+	s.turnUsage = usage
+	setStreamerTurnUsage(s.current, s.turnUsage)
 }
 
 func (s *splitMarkerStreamer) Cancel(ctx context.Context) {
@@ -917,7 +915,7 @@ func (s *splitMarkerStreamer) ensureCurrentLocked(ctx context.Context) error {
 	}
 	s.current = streamer
 	setStreamerModelName(s.current, s.modelName)
-	setStreamerTurnUsage(s.current, s.turnInputTokens, s.turnOutputTokens)
+	setStreamerTurnUsage(s.current, s.turnUsage)
 	return nil
 }
 
@@ -1006,8 +1004,8 @@ func (s *finalizeHookStreamer) SetModelName(modelName string) {
 	setStreamerModelName(s.Streamer, strings.TrimSpace(modelName))
 }
 
-func (s *finalizeHookStreamer) SetTurnUsage(inputTokens, outputTokens int) {
-	setStreamerTurnUsage(s.Streamer, inputTokens, outputTokens)
+func (s *finalizeHookStreamer) SetTurnUsage(usage bus.TokenUsage) {
+	setStreamerTurnUsage(s.Streamer, usage)
 }
 
 func (s *finalizeHookStreamer) runFinalizeHook(ctx context.Context, content string) {

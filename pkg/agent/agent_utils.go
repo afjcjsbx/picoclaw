@@ -582,6 +582,8 @@ func tokenUsageFromProviders(usage *providers.UsageInfo) *bus.TokenUsage {
 		CacheReadTokens:     usage.CacheReadTokens,
 		CacheCreationTokens: usage.CacheCreationTokens,
 		CostUSD:             usage.CostUSD,
+		Requests:            usage.Requests,
+		ContextTokens:       usage.ContextTokens,
 	}
 }
 

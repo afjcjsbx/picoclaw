@@ -83,6 +83,12 @@ type TokenUsage struct {
 	CacheReadTokens     int     `json:"cache_read_tokens,omitempty"`
 	CacheCreationTokens int     `json:"cache_creation_tokens,omitempty"`
 	CostUSD             float64 `json:"cost_usd,omitempty"`
+
+	// Requests is the number of LLM calls aggregated into InputTokens (a turn
+	// can issue several calls when it uses tools). ContextTokens is the prompt
+	// size of the last call, which is the context currently in the window.
+	Requests      int `json:"requests,omitempty"`
+	ContextTokens int `json:"context_tokens,omitempty"`
 }
 
 type OutboundMessage struct {
