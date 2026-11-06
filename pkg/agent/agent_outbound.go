@@ -26,6 +26,7 @@ func (al *AgentLoop) maybePublishError(ctx context.Context, channel, chatID, ses
 
 func (al *AgentLoop) publishResponseOrError(
 	ctx context.Context,
+	inbound *bus.InboundContext,
 	channel, chatID, sessionKey string,
 	response string,
 	err error,
@@ -36,19 +37,40 @@ func (al *AgentLoop) publishResponseOrError(
 		}
 		response = ""
 	}
-	al.PublishResponseIfNeeded(ctx, channel, chatID, sessionKey, response)
+	al.PublishResponseForInbound(ctx, inbound, channel, chatID, sessionKey, response)
 }
 
+// PublishResponseIfNeeded publishes the response for turns that have no
+// inbound message context (cron, CLI). The reply target is lost for those.
 func (al *AgentLoop) PublishResponseIfNeeded(ctx context.Context, channel, chatID, sessionKey, response string) {
-	al.publishFinalResponse(ctx, channel, chatID, sessionKey, response)
+	al.PublishResponseForInbound(ctx, nil, channel, chatID, sessionKey, response)
+}
+
+// PublishResponseForInbound publishes the turn response, threading it to the
+// originating message when the inbound context provides one.
+func (al *AgentLoop) PublishResponseForInbound(
+	ctx context.Context,
+	inbound *bus.InboundContext,
+	channel, chatID, sessionKey, response string,
+) bool {
+	return al.publishFinalResponseForInbound(ctx, inbound, channel, chatID, sessionKey, response)
 }
 
 func (al *AgentLoop) publishFinalResponse(
 	ctx context.Context,
 	channel, chatID, sessionKey, response string,
 ) bool {
+	return al.publishFinalResponseForInbound(ctx, nil, channel, chatID, sessionKey, response)
+}
+
+func (al *AgentLoop) publishFinalResponseForInbound(
+	ctx context.Context,
+	inbound *bus.InboundContext,
+	channel, chatID, sessionKey, response string,
+) bool {
 	return al.publishResponseIfNeeded(
 		ctx,
+		inbound,
 		channel,
 		chatID,
 		sessionKey,
@@ -59,6 +81,7 @@ func (al *AgentLoop) publishFinalResponse(
 
 func (al *AgentLoop) publishResponseIfNeeded(
 	ctx context.Context,
+	inbound *bus.InboundContext,
 	channel, chatID, sessionKey, response string,
 	usage *bus.TokenUsage,
 ) bool {
@@ -96,7 +119,7 @@ func (al *AgentLoop) publishResponseIfNeeded(
 	}
 
 	msg := bus.OutboundMessage{
-		Context:    bus.NewOutboundContext(channel, chatID, ""),
+		Context:    outboundContextFromInbound(inbound, channel, chatID, ""),
 		SessionKey: sessionKey,
 		Content:    response,
 		Usage:      usage,
