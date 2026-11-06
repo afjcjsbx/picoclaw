@@ -598,3 +598,40 @@ func TestRefreshAccessTokenCollapsesConcurrentRefreshes(t *testing.T) {
 		t.Fatal("callers share one credential pointer; want independent copies")
 	}
 }
+
+func TestOAuthTokenRequestsRespectClientTimeout(t *testing.T) {
+	if oauthHTTPClient.Timeout <= 0 {
+		t.Fatalf("oauthHTTPClient.Timeout = %v, want a positive timeout", oauthHTTPClient.Timeout)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(500 * time.Millisecond)
+		_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "late-token"})
+	}))
+	defer server.Close()
+
+	original := oauthHTTPClient
+	oauthHTTPClient = &http.Client{Timeout: 50 * time.Millisecond}
+	t.Cleanup(func() { oauthHTTPClient = original })
+
+	cfg := OAuthProviderConfig{
+		Issuer:   server.URL,
+		ClientID: "test-client",
+	}
+
+	if _, err := RequestDeviceCode(cfg); err == nil {
+		t.Fatal("RequestDeviceCode() error = nil, want timeout error")
+	}
+	if _, err := ExchangeCodeForTokens(cfg, "code", "verifier", "http://localhost/callback"); err == nil {
+		t.Fatal("ExchangeCodeForTokens() error = nil, want timeout error")
+	}
+
+	cred := &AuthCredential{
+		RefreshToken: "timeout-refresh-token",
+		Provider:     "openai",
+		AuthMethod:   "oauth",
+	}
+	if _, err := RefreshAccessToken(cred, cfg); err == nil {
+		t.Fatal("RefreshAccessToken() error = nil, want timeout error")
+	}
+}
