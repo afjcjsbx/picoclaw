@@ -217,7 +217,7 @@ func TestSerializeMessages_StripsInternalToolCallExtraContent(t *testing.T) {
 				},
 				ExtraContent: &ExtraContent{
 					Google: &GoogleExtra{
-						ThoughtSignature: "sig-ignored-here",
+						ThoughtSignature: "sig-1",
 					},
 					ToolFeedbackExplanation: "Read README.md first.",
 				},
@@ -232,11 +232,13 @@ func TestSerializeMessages_StripsInternalToolCallExtraContent(t *testing.T) {
 		t.Fatalf("json.Marshal() error = %v", err)
 	}
 	payload := string(data)
-	if strings.Contains(payload, "extra_content") {
-		t.Fatalf("serialized payload should not include internal extra_content: %s", payload)
+	// The internal ToolFeedbackExplanation must never leak to the wire.
+	if strings.Contains(payload, "tool_feedback_explanation") {
+		t.Fatalf("serialized payload should not include internal tool_feedback_explanation: %s", payload)
 	}
-	if !strings.Contains(payload, "thought_signature") {
-		t.Fatalf("serialized payload should preserve function thought_signature: %s", payload)
+	// The Google thought signature must be echoed back for Gemini 3.
+	if !strings.Contains(payload, `"extra_content":{"google":{"thought_signature":"sig-1"}}`) {
+		t.Fatalf("serialized payload should include google thought_signature in extra_content: %s", payload)
 	}
 }
 
@@ -293,11 +295,8 @@ func TestSerializeMessages_PreservesGoogleExtraThoughtSignature(t *testing.T) {
 		t.Fatalf("json.Marshal() error = %v", err)
 	}
 	payload := string(data)
-	if strings.Contains(payload, "extra_content") {
-		t.Fatalf("serialized payload should not include extra_content: %s", payload)
-	}
-	if !strings.Contains(payload, `"thought_signature":"sig-1"`) {
-		t.Fatalf("serialized payload should preserve google thought signature: %s", payload)
+	if !strings.Contains(payload, `"extra_content":{"google":{"thought_signature":"sig-1"}}`) {
+		t.Fatalf("serialized payload should include google thought signature in extra_content: %s", payload)
 	}
 }
 
@@ -1076,5 +1075,192 @@ func TestSetOpenRouterAttribution(t *testing.T) {
 			req.Header.Get("Http-Referer") != ""; got != want {
 			t.Errorf("%s: attribution set = %v, want %v", rawURL, got, want)
 		}
+	}
+}
+
+// --- Gemini thought_signature wire serialization tests ---
+
+// Gemini 3 rejects requests where the thought_signature is only sent under
+// function.thought_signature; it must be echoed back inside
+// extra_content.google.thought_signature.
+func TestSerializeMessages_ToolCallEmitsExtraContentGoogleThoughtSignature(t *testing.T) {
+	messages := []Message{
+		{
+			Role: "assistant",
+			ToolCalls: []ToolCall{
+				{
+					ID:   "call_1",
+					Type: "function",
+					Function: &FunctionCall{
+						Name:             "get_weather",
+						Arguments:        `{"city":"Caracas"}`,
+						ThoughtSignature: "sig-abc",
+					},
+					ExtraContent:     &ExtraContent{Google: &GoogleExtra{ThoughtSignature: "sig-abc"}},
+					ThoughtSignature: "sig-abc",
+				},
+			},
+		},
+	}
+
+	data, err := json.Marshal(SerializeMessages(messages))
+	if err != nil {
+		t.Fatalf("marshal error = %v", err)
+	}
+	got := string(data)
+
+	if !strings.Contains(got, `"extra_content":{"google":{"thought_signature":"sig-abc"}}`) {
+		t.Fatalf("expected extra_content.google.thought_signature in wire payload, got %s", got)
+	}
+}
+
+// The signature must be echoed even when only the internal ThoughtSignature
+// field is populated (e.g. after a streaming round that never built
+// ExtraContent explicitly).
+func TestSerializeMessages_ToolCallSignatureFromTopLevelField(t *testing.T) {
+	messages := []Message{
+		{
+			Role: "assistant",
+			ToolCalls: []ToolCall{
+				{
+					ID:               "call_2",
+					Type:             "function",
+					Name:             "search",
+					Arguments:        map[string]any{"q": "go"},
+					ThoughtSignature: "sig-top",
+				},
+			},
+		},
+	}
+
+	data, err := json.Marshal(SerializeMessages(messages))
+	if err != nil {
+		t.Fatalf("marshal error = %v", err)
+	}
+	got := string(data)
+
+	if !strings.Contains(got, `"extra_content":{"google":{"thought_signature":"sig-top"}}`) {
+		t.Fatalf("expected extra_content.google.thought_signature from top-level field, got %s", got)
+	}
+}
+
+// A tool call with no signature must not emit an empty extra_content block.
+func TestSerializeMessages_ToolCallWithoutSignatureOmitsExtraContent(t *testing.T) {
+	messages := []Message{
+		{
+			Role: "assistant",
+			ToolCalls: []ToolCall{
+				{
+					ID:        "call_3",
+					Type:      "function",
+					Name:      "ping",
+					Arguments: map[string]any{},
+				},
+			},
+		},
+	}
+
+	data, err := json.Marshal(SerializeMessages(messages))
+	if err != nil {
+		t.Fatalf("marshal error = %v", err)
+	}
+	if strings.Contains(string(data), "extra_content") {
+		t.Fatalf("did not expect extra_content for signature-less tool call, got %s", string(data))
+	}
+}
+
+// When a tool call has no captured signature (e.g. the turn started on another
+// provider and later fell back to Gemini), the serializer must inject the
+// documented sentinel inside extra_content.google.thought_signature so Gemini 3
+// accepts the request instead of returning HTTP 400.
+func TestSerializeMessagesWithOptions_GeminiFallbackInjectsSentinel(t *testing.T) {
+	messages := []Message{
+		{
+			Role: "assistant",
+			ToolCalls: []ToolCall{
+				{
+					ID:        "call_9",
+					Type:      "function",
+					Name:      "get_weather",
+					Arguments: map[string]any{"city": "Caracas"},
+				},
+			},
+		},
+	}
+
+	data, err := json.Marshal(SerializeMessagesWithOptions(
+		messages,
+		SerializeOptions{GeminiThoughtSignatureFallback: true},
+	))
+	if err != nil {
+		t.Fatalf("marshal error = %v", err)
+	}
+	got := string(data)
+
+	want := `"extra_content":{"google":{"thought_signature":"` + GeminiThoughtSignatureSentinel + `"}}`
+	if !strings.Contains(got, want) {
+		t.Fatalf("expected sentinel extra_content %s in wire payload, got %s", want, got)
+	}
+}
+
+// A real captured signature must never be replaced by the sentinel.
+func TestSerializeMessagesWithOptions_GeminiFallbackKeepsRealSignature(t *testing.T) {
+	messages := []Message{
+		{
+			Role: "assistant",
+			ToolCalls: []ToolCall{
+				{
+					ID:   "call_10",
+					Type: "function",
+					Function: &FunctionCall{
+						Name:             "get_weather",
+						Arguments:        `{"city":"Caracas"}`,
+						ThoughtSignature: "real-sig",
+					},
+				},
+			},
+		},
+	}
+
+	data, err := json.Marshal(SerializeMessagesWithOptions(
+		messages,
+		SerializeOptions{GeminiThoughtSignatureFallback: true},
+	))
+	if err != nil {
+		t.Fatalf("marshal error = %v", err)
+	}
+	got := string(data)
+
+	if !strings.Contains(got, `"thought_signature":"real-sig"`) {
+		t.Fatalf("expected real signature preserved, got %s", got)
+	}
+	if strings.Contains(got, GeminiThoughtSignatureSentinel) {
+		t.Fatalf("sentinel must not override a real signature, got %s", got)
+	}
+}
+
+// Without the option the legacy behavior is preserved: no signature, no
+// extra_content block.
+func TestSerializeMessagesWithOptions_NoGeminiFallbackOmitsExtraContent(t *testing.T) {
+	messages := []Message{
+		{
+			Role: "assistant",
+			ToolCalls: []ToolCall{
+				{
+					ID:        "call_11",
+					Type:      "function",
+					Name:      "ping",
+					Arguments: map[string]any{},
+				},
+			},
+		},
+	}
+
+	data, err := json.Marshal(SerializeMessagesWithOptions(messages, SerializeOptions{}))
+	if err != nil {
+		t.Fatalf("marshal error = %v", err)
+	}
+	if strings.Contains(string(data), "extra_content") {
+		t.Fatalf("did not expect extra_content without Gemini fallback, got %s", string(data))
 	}
 }
