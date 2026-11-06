@@ -84,16 +84,6 @@ func (p *protectedReadFs) check(path string) error {
 	return checkSensitiveReadPath(path, p.workspace, p.restrict)
 }
 
-// absolutePath mirrors the workspace join that checkSensitiveReadPath applies,
-// so entry paths are compared against the same root the directory check used.
-func (p *protectedReadFs) absolutePath(path string) (string, error) {
-	path = stripExtendedDrivePrefix(path)
-	if !filepath.IsAbs(path) && p.restrict {
-		path = filepath.Join(p.workspace, path)
-	}
-	return filepath.Abs(path)
-}
-
 func (p *protectedReadFs) ReadFile(path string) ([]byte, error) {
 	if err := p.check(path); err != nil {
 		return nil, err
@@ -167,7 +157,7 @@ func (p *protectedReadFs) ReadDir(path string) ([]os.DirEntry, error) {
 	// The directory itself passed the full check above, so its resolved form
 	// is safe to reuse for every child. A non-symlink child resolves to
 	// resolvedDir/name; only symlink entries need their own EvalSymlinks.
-	absDir, err := p.absolutePath(path)
+	absDir, err := resolveAccessPath(path, p.workspace, p.restrict)
 	if err != nil {
 		for _, entry := range entries {
 			if p.check(filepath.Join(path, entry.Name())) == nil {
@@ -233,15 +223,21 @@ func (p *protectedWriteFs) AppendFile(path string, data []byte) error {
 	return p.fileSystem.WriteFile(path, append(content, data...))
 }
 
-func checkSensitiveReadPath(path, workspace string, restrict bool) error {
-	if err := checkNTNamespacePath(path); err != nil {
-		return err
-	}
+// resolveAccessPath applies the same workspace join and absolute-path cleanup
+// to the read and write policies, so their checks cannot drift apart.
+func resolveAccessPath(path, workspace string, restrict bool) (string, error) {
 	path = stripExtendedDrivePrefix(path)
 	if !filepath.IsAbs(path) && restrict {
 		path = filepath.Join(workspace, path)
 	}
-	abs, err := filepath.Abs(path)
+	return filepath.Abs(path)
+}
+
+func checkSensitiveReadPath(path, workspace string, restrict bool) error {
+	if err := checkNTNamespacePath(path); err != nil {
+		return err
+	}
+	abs, err := resolveAccessPath(path, workspace, restrict)
 	if err != nil {
 		return err
 	}
@@ -258,11 +254,7 @@ func checkSensitiveWritePath(path, workspace string, restrict bool) error {
 	if err := checkNTNamespacePath(path); err != nil {
 		return err
 	}
-	path = stripExtendedDrivePrefix(path)
-	if !filepath.IsAbs(path) && restrict {
-		path = filepath.Join(workspace, path)
-	}
-	abs, err := filepath.Abs(path)
+	abs, err := resolveAccessPath(path, workspace, restrict)
 	if err != nil {
 		return err
 	}
