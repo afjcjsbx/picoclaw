@@ -384,6 +384,9 @@ func insertMessageTx(ctx context.Context, tx *sql.Tx, convID int64, msg Message)
 // appends them to the conversation context, returning the inserted message IDs
 // in input order.
 //
+// When a message has Parts, the stored content is derived from those parts for
+// FTS5 indexing and summary formatting, and Message.Content is ignored.
+//
 // The batch is written in chunks of at most IngestBatchChunkSize messages. Each
 // chunk is a single transaction that covers both the message rows and their
 // context items, so a chunk is either fully visible or not visible at all. A
