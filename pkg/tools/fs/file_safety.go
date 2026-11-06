@@ -28,13 +28,38 @@ type protectedRootRule struct {
 	rels []string
 }
 
+// protectedLiveRoot is a protected path whose resolved target may legitimately
+// change while the snapshot is alive: a symlink can be retargeted and a path
+// that does not exist yet can appear as one. When the path was missing at build
+// time, resolved holds the target computed from its existing ancestor, so the
+// common still-missing case costs one Lstat and no symlink walk.
+type protectedLiveRoot struct {
+	path     string
+	missing  bool
+	resolved string
+}
+
+func (r protectedLiveRoot) matches(path string) bool {
+	if r.missing {
+		if _, err := os.Lstat(r.path); os.IsNotExist(err) {
+			return hasPathPrefixFold(path, r.resolved)
+		}
+	}
+	resolved, err := resolvePathAgainstExistingAncestor(r.path)
+	if err != nil {
+		return false
+	}
+	return hasPathPrefixFold(path, filepath.Clean(resolved))
+}
+
 // credentialRootsSnapshot holds the resolved protected roots shared by the
 // read and write policies. Entries are immutable once published.
 type credentialRootsSnapshot struct {
-	key         string
-	built       time.Time
-	appRules    []protectedRootRule
-	systemRules []protectedRootRule
+	key          string
+	built        time.Time
+	appRules     []protectedRootRule
+	appLivePaths []protectedLiveRoot
+	systemRules  []protectedRootRule
 }
 
 var credentialRootsCache atomic.Pointer[credentialRootsSnapshot]
@@ -352,8 +377,14 @@ func isWorkspaceSessionPath(path, workspace string) bool {
 }
 
 func isAppCredentialPath(path string) bool {
-	for _, rule := range credentialRoots().appRules {
+	snapshot := credentialRoots()
+	for _, rule := range snapshot.appRules {
 		if protectedRuleMatches(path, rule) {
+			return true
+		}
+	}
+	for _, protected := range snapshot.appLivePaths {
+		if protected.matches(path) {
 			return true
 		}
 	}
@@ -370,11 +401,13 @@ func credentialRoots() *credentialRootsSnapshot {
 		cached.key == key && time.Since(cached.built) < credentialRootsCacheTTL {
 		return cached
 	}
+	appRules, appLivePaths := buildAppCredentialRules(appHome, codexHome)
 	fresh := &credentialRootsSnapshot{
-		key:         key,
-		built:       time.Now(),
-		appRules:    buildAppCredentialRules(appHome, codexHome),
-		systemRules: buildProtectedSystemWriteRules(),
+		key:          key,
+		built:        time.Now(),
+		appRules:     appRules,
+		appLivePaths: appLivePaths,
+		systemRules:  buildProtectedSystemWriteRules(),
 	}
 	credentialRootsCache.Store(fresh)
 	return fresh
@@ -392,11 +425,17 @@ func codexHomeDir() string {
 }
 
 // buildAppCredentialRules expands each protected relative path under the app
-// and codex homes into a lexical rule plus a rule for the symlink-resolved
-// target. Resolving a protected root is only needed once per cache window: the
-// final path check still resolves the path being accessed.
-func buildAppCredentialRules(appHome, codexHome string) []protectedRootRule {
+// and codex homes into a lexical rule, plus a live path for entries whose
+// resolved target could change after this snapshot was built.
+//
+// A path that exists as a regular file and resolves to itself is covered by the
+// lexical rule alone, so it is safe to cache. A symlinked or missing entry is
+// resolved on every check: its target may be retargeted or created at any time,
+// and caching that target for the whole TTL would let a direct read of the new
+// target bypass the policy.
+func buildAppCredentialRules(appHome, codexHome string) ([]protectedRootRule, []protectedLiveRoot) {
 	rules := make([]protectedRootRule, 0, 6)
+	var live []protectedLiveRoot
 	add := func(root string, protectedPaths []string) {
 		if root == "" || isNTNamespacePath(root) {
 			return
@@ -408,15 +447,27 @@ func buildAppCredentialRules(appHome, codexHome string) []protectedRootRule {
 		home = filepath.Clean(home)
 		rules = append(rules, protectedRootRule{base: home, rels: protectedPaths})
 		for _, protected := range protectedPaths {
-			resolved, err := resolvePathAgainstExistingAncestor(filepath.Join(home, filepath.FromSlash(protected)))
+			target := filepath.Join(home, filepath.FromSlash(protected))
+			info, err := os.Lstat(target)
 			if err != nil {
+				resolved, resolveErr := resolvePathAgainstExistingAncestor(target)
+				if resolveErr != nil {
+					resolved = target
+				}
+				live = append(live, protectedLiveRoot{
+					path:     target,
+					missing:  true,
+					resolved: filepath.Clean(resolved),
+				})
 				continue
 			}
-			resolved = filepath.Clean(resolved)
-			rules = append(rules, protectedRootRule{
-				base: filepath.Dir(resolved),
-				rels: []string{filepath.Base(resolved)},
-			})
+			if info.Mode()&fs.ModeSymlink == 0 {
+				resolved, err := filepath.EvalSymlinks(target)
+				if err == nil && filepath.Clean(resolved) == filepath.Clean(target) {
+					continue
+				}
+			}
+			live = append(live, protectedLiveRoot{path: target})
 		}
 	}
 	add(appHome, []string{
@@ -426,7 +477,7 @@ func buildAppCredentialRules(appHome, codexHome string) []protectedRootRule {
 		"channels/weixin/context-tokens",
 	})
 	add(codexHome, []string{"auth.json"})
-	return rules
+	return rules, live
 }
 
 func buildProtectedSystemWriteRules() []protectedRootRule {
