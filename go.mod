@@ -46,7 +46,7 @@ require (
 	github.com/stretchr/testify v1.12.1
 	github.com/tencent-connect/botgo v0.2.1
 	go.mau.fi/util v0.11.0
-	go.mau.fi/whatsmeow v0.0.0-20260219150138-7ae702b1eed4
+	go.mau.fi/whatsmeow v0.0.0-20261105212532-307a2edf117d
 	golang.org/x/crypto v0.58.0
 	golang.org/x/net v0.62.0
 	golang.org/x/oauth2 v0.37.0
@@ -137,7 +137,7 @@ require (
 	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
-	go.mau.fi/libsignal v0.2.1 // indirect
+	go.mau.fi/libsignal v0.2.2 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
 	go.opentelemetry.io/otel v1.35.0 // indirect
 	go.opentelemetry.io/otel/metric v1.35.0 // indirect

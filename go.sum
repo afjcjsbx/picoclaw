@@ -351,12 +351,12 @@ github.com/yosida95/uritemplate/v3 v3.0.2/go.mod h1:ILOh0sOhIJR3+L/8afwt/kE++YT0
 github.com/yuin/goldmark v1.1.27/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
 github.com/yuin/goldmark v1.2.1/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
 github.com/yuin/goldmark v1.4.13/go.mod h1:6yULJ656Px+3vBD8DxQVa3kxgyrAnzto9xy5taEt/CY=
-go.mau.fi/libsignal v0.2.1 h1:vRZG4EzTn70XY6Oh/pVKrQGuMHBkAWlGRC22/85m9L0=
-go.mau.fi/libsignal v0.2.1/go.mod h1:iVvjrHyfQqWajOUaMEsIfo3IqgVMrhWcPiiEzk7NgoU=
+go.mau.fi/libsignal v0.2.2 h1:QV+XdzQkm3x3aSG7FcqfGSZuFXz83pRZPBFaPygHbOU=
+go.mau.fi/libsignal v0.2.2/go.mod h1:CRlIQg2J8uYTfDFvNoO8/KcZjs5cey0vbc6oj/bssY0=
 go.mau.fi/util v0.11.0 h1:JNEpkVRxfTdJUC0DIGKiRlLKzl4G/qLX/eVzoP7QuwY=
 go.mau.fi/util v0.11.0/go.mod h1:04AEFVsc4zNdIkDC1gkdqbg/nZFolHY50pyXh2DSy7s=
-go.mau.fi/whatsmeow v0.0.0-20260219150138-7ae702b1eed4 h1:hsmlwsM+VqfF70cpdZEeIUKer2XWCQmQPK0u0tHy3ZQ=
-go.mau.fi/whatsmeow v0.0.0-20260219150138-7ae702b1eed4/go.mod h1:mXCRFyPEPn4jqWz6Afirn8vY7DpHCPnlKq6I2cWwFHM=
+go.mau.fi/whatsmeow v0.0.0-20261105212532-307a2edf117d h1:yBpGTVxrobMHqZH2ZPFpsjtqyVEUAiqsDNN1qEwpHu0=
+go.mau.fi/whatsmeow v0.0.0-20261105212532-307a2edf117d/go.mod h1:iY4lm61nTLWsNiIE1EmHUZwhKGBeoV4dhnVE2uMtNoQ=
 go.opencensus.io v0.24.0 h1:y73uSU6J157QMP2kn2r30vwW1A2W2WFwSCGnAVxeaD0=
 go.opencensus.io v0.24.0/go.mod h1:vNK8G9p7aAivkbmorf4v+7Hgx+Zs0yY+0fOtgBfjQKo=
 go.opentelemetry.io/auto/sdk v1.1.0 h1:cH53jehLUN6UFLY71z+NDOiNJqDdPRaXzTel0sJySYA=
