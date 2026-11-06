@@ -401,14 +401,9 @@ func (s *Store) AddMessagesBatch(ctx context.Context, convID int64, msgs []Messa
 		return nil, nil
 	}
 
-	chunkSize := IngestBatchChunkSize
-	if chunkSize <= 0 {
-		chunkSize = len(msgs)
-	}
-
 	ids := make([]int64, 0, len(msgs))
-	for start := 0; start < len(msgs); start += chunkSize {
-		end := min(start+chunkSize, len(msgs))
+	for start := 0; start < len(msgs); start += IngestBatchChunkSize {
+		end := min(start+IngestBatchChunkSize, len(msgs))
 		chunkIDs, err := s.addMessagesChunk(ctx, convID, msgs[start:end])
 		if err != nil {
 			return nil, fmt.Errorf("chunk %d-%d of %d: %w", start, end-1, len(msgs), err)
