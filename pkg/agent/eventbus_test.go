@@ -328,6 +328,8 @@ func TestAgentLoop_EmitsMinimalTurnEvents(t *testing.T) {
 		TotalTokens:      150 + 250,
 		CacheReadTokens:  10 + 20,
 		CostUSD:          0.001 + 0.002,
+		Requests:         2,
+		ContextTokens:    200,
 	}); got != want {
 		t.Fatalf("final message usage = %+v, want %+v", got, want)
 	}

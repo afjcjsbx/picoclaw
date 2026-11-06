@@ -77,6 +77,13 @@ type UsageInfo struct {
 	// Zero means the provider did not report a cost (for example most HTTP
 	// providers); the web UI falls back to an approximate list-price estimate.
 	CostUSD float64 `json:"cost_usd,omitempty"`
+
+	// Requests and ContextTokens are turn-level aggregates, not per-request
+	// provider values. Requests counts the LLM calls (including tool-call
+	// iterations) aggregated into a turn; ContextTokens is the prompt size of
+	// the last call, i.e. the context actually in the window at the end.
+	Requests      int `json:"requests,omitempty"`
+	ContextTokens int `json:"context_tokens,omitempty"`
 }
 
 // CacheControl marks a content block for LLM-side prefix caching.

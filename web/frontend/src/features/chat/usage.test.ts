@@ -47,6 +47,26 @@ describe("parseTokenUsage", () => {
     })
   })
 
+  it("keeps turn call count and last-call context", () => {
+    expect(
+      parseTokenUsage({
+        usage: {
+          input_tokens: 103_631,
+          output_tokens: 3_207,
+          total_tokens: 106_838,
+          requests: 5,
+          context_tokens: 24_310,
+        },
+      }),
+    ).toEqual({
+      input_tokens: 103_631,
+      output_tokens: 3_207,
+      total_tokens: 106_838,
+      requests: 5,
+      context_tokens: 24_310,
+    })
+  })
+
   it("preserves backend-reported cost", () => {
     expect(
       parseTokenUsage({
