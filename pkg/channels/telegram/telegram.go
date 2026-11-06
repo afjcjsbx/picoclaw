@@ -1218,6 +1218,12 @@ func (c *TelegramChannel) handleMessages(ctx context.Context, messages []*telego
 	isMentioned := false
 	if message.Chat.Type != "private" {
 		isMentioned = c.isBotMentioned(message)
+		// Replying directly to one of the bot's own messages is an implicit
+		// mention: users expect the conversation to continue without having
+		// to @mention the bot on every follow-up.
+		if !isMentioned && c.isReplyToSelf(message) {
+			isMentioned = true
+		}
 		if isMentioned {
 			content = c.stripBotMention(content)
 		}
@@ -1823,6 +1829,15 @@ func logParseFailed(err error, useMarkdownV2 bool) {
 			"error": err.Error(),
 		},
 	)
+}
+
+// isReplyToSelf reports whether the message is a direct reply to one of the
+// bot's own messages, which users treat as talking to the bot.
+func (c *TelegramChannel) isReplyToSelf(message *telego.Message) bool {
+	if message == nil || message.ReplyToMessage == nil {
+		return false
+	}
+	return c.isOwnBotUser(message.ReplyToMessage.From)
 }
 
 // isBotMentioned checks if the bot is mentioned in the message via entities.
