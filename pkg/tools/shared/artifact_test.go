@@ -80,6 +80,24 @@ func TestPruneArtifacts_EnforcesMaxFiles(t *testing.T) {
 	}
 }
 
+func TestSetArtifactRetention_AppliesToPersistTextArtifact(t *testing.T) {
+	oldMaxAge, oldMaxFiles := ArtifactRetention()
+	t.Cleanup(func() { SetArtifactRetention(oldMaxAge, oldMaxFiles) })
+	SetArtifactRetention(time.Hour, 3)
+
+	if gotAge, gotFiles := ArtifactRetention(); gotAge != time.Hour || gotFiles != 3 {
+		t.Fatalf("ArtifactRetention() = (%s, %d), want (1h, 3)", gotAge, gotFiles)
+	}
+
+	dir := seedArtifactDir(t, 9)
+	forgetArtifactPruneState(t, dir)
+
+	persistArtifact(t, dir)
+	if got := countArtifacts(t, dir); got != 3 {
+		t.Fatalf("after configured prune: %d artifacts, want 3", got)
+	}
+}
+
 // seedArtifactDir creates n artifact files with fresh modification times, so
 // only the max-files retention rule can remove them.
 func seedArtifactDir(t *testing.T, n int) string {
