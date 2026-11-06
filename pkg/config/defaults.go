@@ -499,6 +499,9 @@ func DefaultConfig() *Config {
 				},
 				MediaEnabled: false,
 			},
+			Reaction: ToolConfig{
+				Enabled: true,
+			},
 			ReadFile: ReadFileToolConfig{
 				Enabled:         true,
 				Mode:            ReadFileModeBytes,
