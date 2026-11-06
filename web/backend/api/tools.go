@@ -149,7 +149,6 @@ var toolCatalog = []toolCatalogEntry{
 		Description: "React to a message on channels that support reactions.",
 		Category:    "communication",
 		ConfigKey:   "reaction",
-		ReadOnly:    true,
 	},
 	{
 		Name:        "send_file",
@@ -352,8 +351,6 @@ func buildToolSupport(cfg *config.Config) []toolSupportItem {
 			if len(cfg.Agents.List) > 1 {
 				status = "enabled"
 			}
-		case "reaction":
-			status = "enabled"
 		case "short_grep", "short_expand":
 			if isSeahorseContextManager(cfg) {
 				status = "enabled"
@@ -467,6 +464,8 @@ func applyToolState(cfg *config.Config, toolName string, enabled bool) error {
 		cfg.Tools.WebFetch.Enabled = enabled
 	case "message":
 		cfg.Tools.Message.Enabled = enabled
+	case "reaction":
+		cfg.Tools.Reaction.Enabled = enabled
 	case "send_file":
 		cfg.Tools.SendFile.Enabled = enabled
 	case "load_image":
