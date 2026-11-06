@@ -231,12 +231,17 @@ but the database is a shared trust boundary.
 | Temp store | `FILE` (1) | DSN pragma, spills sorts and temp tables to disk |
 | Max open connections | `2` | `sqliteMaxOpenConns` |
 | Max idle connections | `2` | Same as open cap |
+| Ingest chunk size | `200` messages | `IngestBatchChunkSize` |
 | Foreign keys | Not enabled | No `PRAGMA foreign_keys = ON` |
 
 Two connections allow one writer next to one reader; further callers wait. The
 cap bounds the per-connection page cache on memory-constrained devices. A long
 `VACUUM` or prune pass can hold the write lock, and writers then fail after the
 busy timeout. Readers in WAL mode are not blocked by a writer.
+
+Batch ingest is chunked to `IngestBatchChunkSize` messages per transaction for
+the same reason: one transaction for a whole-history bootstrap would hold the
+single write lock long enough to starve other writers on slow storage.
 
 ### Tables
 
@@ -373,22 +378,38 @@ history enabled, so they are indexed normally.
 3. Locks one of 256 FNV-1a sharded mutexes for the session key. Different
    sessions can ingest concurrently; the same session is serialized.
 4. Gets or creates the `conversations` row.
-5. Inserts each message. Messages with parts use
-   `AddMessageWithPartsAndReasoning`, which inserts the message and all parts in
-   one transaction. Messages without parts use `AddMessageWithReasoning`.
-6. Appends all inserted IDs to `context_items` in one transaction, using
-   `max(ordinal) + 100`, `+200`, and so on.
-7. Returns the message count and the sum of the input token estimates.
+5. Writes the messages with `AddMessagesBatch`, which inserts each message and
+   its parts and appends the resulting IDs to `context_items` in the same
+   transaction. Context ordinals continue from `max(ordinal) + 100`, `+200`, and
+   so on.
+6. Returns the message count and the sum of the input token estimates.
 
-The whole multi-message loop is **not** one transaction. If the third insert
-fails, the first two messages stay in `messages` without context items, and a
-later bootstrap does not repair them. The adapter normally sends one message at
-a time, so this matters for direct engine use and for bootstrap delta ingestion.
+`AddMessagesBatch` splits the batch into chunks of `IngestBatchChunkSize` (200)
+messages, one transaction per chunk. Two properties follow:
+
+- A chunk is atomic. A failure rolls back that chunk completely, including the
+  FTS entries written by the `messages_ai` trigger, so a chunk never leaves
+  messages without context items.
+- A batch is **not** atomic across chunks. Chunks committed before the failing
+  one stay visible. `AddMessagesBatch` returns a nil ID slice with the error, so
+  callers must not read a partial failure as "nothing was written".
+
+The chunk size is a write-lock bound, not a memory bound. SQLite serializes
+writers, so a whole-history bootstrap in one transaction would hold the lock for
+the entire batch and push concurrent writers (another session's ingest,
+compaction) into `SQLITE_BUSY` after the busy timeout. Chunking keeps the lock
+window short while still removing the per-message commit.
+
+The adapter sends one message per `Ingest`, so the hot path is one chunk of one
+message: two commits before this change (message, then context append), one
+after. Bootstrap delta ingestion passes the remaining history and gets one
+commit per 200 messages instead of one per message plus a context append.
 
 Ingest errors are logged by the agent and do not fail the turn. Because assembly
 reads SQLite, a message that failed to ingest is missing from the next prompt
 even though it exists in JSONL. It reappears only after a successful restart
-bootstrap.
+bootstrap. A chunk lost to a mid-batch failure behaves the same way: the
+messages stay in JSONL and the next bootstrap re-ingests them.
 
 ### Provider message conversion
 
@@ -1421,8 +1442,10 @@ the work when it has something to delete.
 
 ### Per turn
 
-- Ingest inserts one message and its parts in one transaction per message, then
-  appends context items in a second transaction.
+- Ingest writes one message and its parts and appends the context item in a
+  single transaction per chunk (one message for the adapter path, up to
+  `IngestBatchChunkSize` for bootstrap), so the hot path costs one commit per
+  message instead of two.
 - Assembly loads all context items and resolves each one with a separate query.
   Messages also load their parts with a per-message query. This is an N+1 query
   pattern, so prompt assembly cost grows with context size.
@@ -1579,9 +1602,10 @@ can decide whether they matter for a deployment.
 
 ### Ingestion and durability
 
-13. **Multi-message ingestion is not atomic.**
-    A failure mid-loop can leave messages without context items. Bootstrap does
-    not repair missing context membership.
+13. **Multi-chunk ingestion is not atomic across chunks.**
+    Chunks are atomic individually, but a failure in a later chunk leaves the
+    earlier chunks committed. The lost chunk stays in JSONL and is re-ingested
+    by the next bootstrap.
 14. **Ingest failures are only logged.**
     The message remains in JSONL but is absent from SQLite and therefore from
     the next assembled prompt until a restart bootstrap succeeds.
