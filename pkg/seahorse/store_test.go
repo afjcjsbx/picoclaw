@@ -1698,9 +1698,10 @@ func abortsOnPartNamed(t *testing.T, s *Store, name string) {
 	})
 }
 
-// TestStoreAddMessagesBatchRollsBackOnError verifies that a batch which fails
-// halfway leaves no trace: no message rows, no part rows, no context items,
-// and no gap in the autoincrement IDs consumed by the aborted attempt.
+// TestStoreAddMessagesBatchRollsBackOnError verifies that a single-chunk batch
+// which fails halfway leaves no trace: no message rows, no part rows, no
+// context items, and no orphaned FTS rows. Multi-chunk failure semantics are
+// covered by TestStoreAddMessagesBatchChunkBoundary.
 func TestStoreAddMessagesBatchRollsBackOnError(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
@@ -1763,8 +1764,8 @@ func TestStoreAddMessagesBatchRollsBackOnError(t *testing.T) {
 		t.Fatalf("FTS index has %d results after a failed batch, want 0", len(results))
 	}
 
-	// A smaller batch that fits in a single chunk must also stay atomic: the
-	// rejected part is in the second message, so the first must not survive.
+	// A failure later in the same chunk must also stay atomic: the rejected
+	// part is in the third message, so the first two must not survive.
 	small := msgs[:3]
 	smallIDs, err := s.AddMessagesBatch(ctx, conv.ConversationID, small)
 	if err == nil {
