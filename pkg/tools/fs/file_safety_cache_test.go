@@ -50,6 +50,27 @@ func TestCredentialRootsCacheInvalidation(t *testing.T) {
 	}
 }
 
+func TestCredentialRootsCacheTracksUserHome(t *testing.T) {
+	t.Setenv("PICOCLAW_HOME", "")
+	t.Setenv("CODEX_HOME", "")
+	userA := t.TempDir()
+	userB := t.TempDir()
+	t.Setenv("HOME", userA)
+	t.Setenv("USERPROFILE", userA)
+
+	if !isSensitiveReadPath(filepath.Join(userA, ".picoclaw", "auth.json")) {
+		t.Fatal("default app home under user A was not protected")
+	}
+	t.Setenv("HOME", userB)
+	t.Setenv("USERPROFILE", userB)
+	if !isSensitiveReadPath(filepath.Join(userB, ".picoclaw", "auth.json")) {
+		t.Fatal("default app home under user B was not protected")
+	}
+	if isSensitiveReadPath(filepath.Join(userA, ".picoclaw", "auth.json")) {
+		t.Fatal("default app home under user A stayed protected after the switch")
+	}
+}
+
 func TestCredentialRootsCacheExpiry(t *testing.T) {
 	t.Setenv("PICOCLAW_HOME", t.TempDir())
 	t.Setenv("CODEX_HOME", t.TempDir())

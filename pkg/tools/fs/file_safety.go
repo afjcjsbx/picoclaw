@@ -55,7 +55,9 @@ func (r protectedLiveRoot) matches(path string) bool {
 // credentialRootsSnapshot holds the resolved protected roots shared by the
 // read and write policies. Entries are immutable once published.
 type credentialRootsSnapshot struct {
-	key          string
+	envHome      string
+	codexEnv     string
+	userHome     string
 	built        time.Time
 	appRules     []protectedRootRule
 	appLivePaths []protectedLiveRoot
@@ -384,18 +386,28 @@ func isAppCredentialPath(path string) bool {
 }
 
 // credentialRoots returns the cached protected-root snapshot, rebuilding it
-// when the app home or CODEX_HOME changes or the entry expires.
+// when the app home or CODEX_HOME changes or the entry expires. The raw
+// environment inputs are kept in the snapshot so a cache hit does not build a
+// composite key on every path check.
 func credentialRoots() *credentialRootsSnapshot {
-	appHome := config.GetHome()
-	codexHome := codexHomeDir()
-	key := appHome + "\x00" + codexHome
+	envHome := os.Getenv(config.EnvHome)
+	codexEnv := os.Getenv("CODEX_HOME")
+	userHome := ""
+	if envHome == "" || codexEnv == "" {
+		userHome, _ = os.UserHomeDir()
+	}
 	if cached := credentialRootsCache.Load(); cached != nil &&
-		cached.key == key && time.Since(cached.built) < credentialRootsCacheTTL {
+		cached.envHome == envHome && cached.codexEnv == codexEnv &&
+		cached.userHome == userHome && time.Since(cached.built) < credentialRootsCacheTTL {
 		return cached
 	}
+	appHome := config.GetHome()
+	codexHome := codexHomeDir(codexEnv, userHome)
 	appRules, appLivePaths := buildAppCredentialRules(appHome, codexHome)
 	fresh := &credentialRootsSnapshot{
-		key:          key,
+		envHome:      envHome,
+		codexEnv:     codexEnv,
+		userHome:     userHome,
 		built:        time.Now(),
 		appRules:     appRules,
 		appLivePaths: appLivePaths,
@@ -405,12 +417,11 @@ func credentialRoots() *credentialRootsSnapshot {
 	return fresh
 }
 
-func codexHomeDir() string {
-	if codexHome := os.Getenv("CODEX_HOME"); codexHome != "" {
-		return codexHome
+func codexHomeDir(codexEnv, userHome string) string {
+	if codexEnv != "" {
+		return codexEnv
 	}
-	userHome, err := os.UserHomeDir()
-	if err != nil {
+	if userHome == "" {
 		return ""
 	}
 	return filepath.Join(userHome, ".codex")
