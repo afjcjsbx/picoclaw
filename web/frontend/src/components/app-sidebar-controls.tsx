@@ -261,6 +261,9 @@ export function AppSidebarControls() {
             <DropdownMenuItem onClick={() => i18n.changeLanguage("zh")}>
               简体中文
             </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => i18n.changeLanguage("cs")}>
+              Čeština
+            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
 
