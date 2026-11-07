@@ -370,6 +370,19 @@ func (al *AgentLoop) getActiveTurnState(sessionKey string) *turnState {
 	return nil
 }
 
+// activeTurnMessageCountForSession returns the active turn's protected message
+// count for a session, or zero when no turn is running.
+func (al *AgentLoop) activeTurnMessageCountForSession(sessionKey string) int {
+	if al == nil {
+		return 0
+	}
+	ts := al.getActiveTurnState(sessionKey)
+	if ts == nil {
+		return 0
+	}
+	return activeTurnMessageCount(ts, nil)
+}
+
 // getAnyActiveTurnState returns any active turn state (for backward compatibility)
 func (al *AgentLoop) getAnyActiveTurnState() *turnState {
 	var firstTS *turnState

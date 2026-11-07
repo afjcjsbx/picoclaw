@@ -16,6 +16,10 @@ import (
 type CompactInput struct {
 	Budget *int // Token budget override
 	Force  bool // Force compaction even if below threshold
+	// ProtectTailMessages is the number of newest messages that must stay
+	// verbatim. The agent sets it to the active turn's persisted message count
+	// so compaction can never fold the instructions being worked on.
+	ProtectTailMessages int
 }
 
 // CompactResult describes what was compacted.
@@ -48,7 +52,7 @@ func (e *CompactionEngine) Compact(ctx context.Context, convID int64, input Comp
 	result := &CompactResult{}
 
 	// Phase 1: leaf compaction (synchronous, every turn)
-	summaryID, err := e.compactLeaf(ctx, convID, "")
+	summaryID, err := e.compactLeafProtected(ctx, convID, "", input.ProtectTailMessages, false)
 	if err != nil {
 		return nil, fmt.Errorf("compact leaf: %w", err)
 	}
@@ -95,13 +99,23 @@ func (e *CompactionEngine) Compact(ctx context.Context, convID int64, input Comp
 
 // CompactNow runs one leaf pass followed by the condensed loop, all synchronously,
 // so the caller can report what actually happened. Unlike Compact it ignores
-// thresholds beyond the per-pass minimums. instructions (may be empty) tells the
-// summarizer which details to prioritize.
-func (e *CompactionEngine) CompactNow(ctx context.Context, convID int64, instructions string) (*CompactResult, error) {
+// thresholds beyond the per-pass minimums. protectTailMessages keeps the active
+// turn verbatim. instructions (may be empty) tells the summarizer which details
+// to prioritize.
+func (e *CompactionEngine) CompactNow(
+	ctx context.Context,
+	convID int64,
+	instructions string,
+	protectTailMessages ...int,
+) (*CompactResult, error) {
+	protect := 0
+	if len(protectTailMessages) > 0 {
+		protect = protectTailMessages[0]
+	}
 	result := &CompactResult{}
 	tokensBefore, _ := e.store.GetContextTokenCount(ctx, convID)
 
-	summaryID, err := e.compactLeaf(ctx, convID, instructions)
+	summaryID, err := e.compactLeafProtected(ctx, convID, instructions, protect, false)
 	if err != nil {
 		return nil, fmt.Errorf("compact leaf: %w", err)
 	}
@@ -123,7 +137,16 @@ func (e *CompactionEngine) CompactNow(ctx context.Context, convID int64, instruc
 }
 
 // CompactUntilUnder aggressively compacts until context is under budget.
-func (e *CompactionEngine) CompactUntilUnder(ctx context.Context, convID int64, budget int) (*CompactResult, error) {
+func (e *CompactionEngine) CompactUntilUnder(
+	ctx context.Context,
+	convID int64,
+	budget int,
+	protectTailMessages ...int,
+) (*CompactResult, error) {
+	protect := 0
+	if len(protectTailMessages) > 0 {
+		protect = protectTailMessages[0]
+	}
 	result := &CompactResult{}
 	prevTokens := 0
 	logger.InfoCF("seahorse", "compact_until_under: start", map[string]any{"conv_id": convID, "budget": budget})
@@ -144,8 +167,9 @@ func (e *CompactionEngine) CompactUntilUnder(ctx context.Context, convID int64, 
 			return result, nil
 		}
 
-		// Try leaf first
-		summaryID, err := e.compactLeaf(ctx, convID, "", true)
+		// Try leaf first. Force bypasses the fresh tail but never the
+		// active-turn boundary.
+		summaryID, err := e.compactLeafProtected(ctx, convID, "", protect, true)
 		if err != nil {
 			return result, err
 		}
@@ -196,14 +220,28 @@ func (e *CompactionEngine) CompactUntilUnder(ctx context.Context, convID int64, 
 	return result, nil
 }
 
-// compactLeaf compresses the oldest contiguous message chunk into a leaf summary.
-// When force is true, FreshTailCount protection is bypassed (used by CompactUntilUnder).
-// instructions optionally tells the summarizer which details to prioritize.
+// compactLeaf compresses the oldest contiguous message chunk into a leaf
+// summary. It is the backwards-compatible entry point without active-turn
+// protection; force bypasses FreshTailCount.
 func (e *CompactionEngine) compactLeaf(
 	ctx context.Context,
 	convID int64,
 	instructions string,
 	force ...bool,
+) (*string, error) {
+	useForce := len(force) > 0 && force[0]
+	return e.compactLeafProtected(ctx, convID, instructions, 0, useForce)
+}
+
+// compactLeafProtected is compactLeaf with an explicit active-turn boundary.
+// protectTailMessages always wins over force: the newest messages of the
+// active turn can never be summarized.
+func (e *CompactionEngine) compactLeafProtected(
+	ctx context.Context,
+	convID int64,
+	instructions string,
+	protectTailMessages int,
+	force bool,
 ) (*string, error) {
 	items, err := e.store.GetContextItems(ctx, convID)
 	if err != nil {
@@ -225,15 +263,9 @@ func (e *CompactionEngine) compactLeaf(
 		return nil, nil
 	}
 
-	// Calculate fresh tail boundary (bypass when forced)
-	useForce := len(force) > 0 && force[0]
-	tailStartIdx := len(items) - FreshTailCount
-	if useForce {
-		tailStartIdx = len(items) // allow compacting everything
-	}
-	if tailStartIdx < 0 {
-		tailStartIdx = 0
-	}
+	// Calculate the protected tail boundary. Force bypasses the normal fresh
+	// tail, but the active-turn boundary is always enforced.
+	tailStartIdx := compactionTailStart(items, protectTailMessages, force)
 
 	// Find oldest contiguous message chunk, accumulating up to LeafChunkTokens
 	var chunk []ContextItem
@@ -337,6 +369,39 @@ func (e *CompactionEngine) compactLeaf(
 	}
 
 	return &summary.SummaryID, nil
+}
+
+// compactionTailStart returns the first context item index that must not be
+// summarized. Without force, the normal FreshTailCount applies. When
+// protectTailMessages is positive, it extends protection back until that many
+// message items are covered, which keeps the active turn whole.
+func compactionTailStart(items []ContextItem, protectTailMessages int, force bool) int {
+	start := len(items)
+	if !force {
+		start = len(items) - FreshTailCount
+		if start < 0 {
+			start = 0
+		}
+	}
+	if protectTailMessages <= 0 {
+		return start
+	}
+
+	seen := 0
+	for i := len(items) - 1; i >= 0; i-- {
+		if items[i].ItemType != "message" {
+			continue
+		}
+		seen++
+		if seen >= protectTailMessages {
+			if i < start {
+				return i
+			}
+			return start
+		}
+	}
+	// Fewer messages than requested: protect the whole context.
+	return 0
 }
 
 // compactCondensed compresses multiple summaries into one higher-level summary.

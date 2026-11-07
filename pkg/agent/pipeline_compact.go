@@ -45,9 +45,10 @@ func (p *Pipeline) CompactBeforeLLM(ctx context.Context, ts *turnState, exec *tu
 				"pass":          pass + 1,
 			})
 		if err := p.ContextManager.Compact(ctx, &CompactRequest{
-			SessionKey: ts.sessionKey,
-			Reason:     ContextCompressReasonThreshold,
-			Budget:     ts.agent.ContextWindow,
+			SessionKey:         ts.sessionKey,
+			Reason:             ContextCompressReasonThreshold,
+			Budget:             ts.agent.ContextWindow,
+			ActiveTurnMessages: activeTurnMessageCount(ts, exec),
 		}); err != nil {
 			if !errors.Is(err, ErrNothingToCompact) {
 				logger.WarnCF("agent", "Threshold compaction failed", map[string]any{
@@ -66,6 +67,21 @@ func (p *Pipeline) CompactBeforeLLM(ctx context.Context, ts *turnState, exec *tu
 		exec.messages = rebuilt.build(rebuilt.stable)
 		exec.currentTurnStart = len(exec.messages) - len(rebuilt.protected) - len(exec.loopWarnings)
 	}
+}
+
+// activeTurnMessageCount returns how many trailing messages belong to the turn
+// in progress. Compaction uses it as a hard boundary: those messages are never
+// folded into a summary, so the user's instructions cannot disappear mid-turn.
+func activeTurnMessageCount(ts *turnState, exec *turnExecution) int {
+	if ts != nil {
+		if n := len(ts.persistedMessagesSnapshot()); n > 0 {
+			return n
+		}
+	}
+	if exec != nil && exec.currentTurnStart >= 0 && exec.currentTurnStart <= len(exec.messages) {
+		return len(exec.messages) - exec.currentTurnStart
+	}
+	return 0
 }
 
 // activeTurnPrompt is the prompt input re-read from the session after a

@@ -283,7 +283,7 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 	}
 
 	if req.Reason == ContextCompressReasonManual {
-		result, err := m.engine.CompactNow(ctx, req.SessionKey, req.Instructions)
+		result, err := m.engine.CompactNow(ctx, req.SessionKey, req.Instructions, req.ActiveTurnMessages)
 		if err != nil {
 			return err
 		}
@@ -301,11 +301,12 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 		err    error
 	)
 	if req.Reason == ContextCompressReasonRetry && req.Budget > 0 {
-		result, err = m.engine.CompactUntilUnder(ctx, req.SessionKey, req.Budget)
+		result, err = m.engine.CompactUntilUnder(ctx, req.SessionKey, req.Budget, req.ActiveTurnMessages)
 	} else {
 		result, err = m.engine.Compact(ctx, req.SessionKey, seahorse.CompactInput{
-			Force:  req.Reason == ContextCompressReasonRetry,
-			Budget: &req.Budget,
+			Force:               req.Reason == ContextCompressReasonRetry,
+			Budget:              &req.Budget,
+			ProtectTailMessages: req.ActiveTurnMessages,
 		})
 	}
 	if err != nil {

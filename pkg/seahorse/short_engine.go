@@ -364,7 +364,12 @@ func (e *Engine) Compact(ctx context.Context, sessionKey string, input CompactIn
 
 // CompactNow synchronously compacts a session on user request (/compact).
 // instructions (may be empty) tells the summarizer which details to prioritize.
-func (e *Engine) CompactNow(ctx context.Context, sessionKey, instructions string) (*CompactResult, error) {
+func (e *Engine) CompactNow(
+	ctx context.Context,
+	sessionKey string,
+	instructions string,
+	protectTailMessages ...int,
+) (*CompactResult, error) {
 	if e.shouldIgnoreSession(sessionKey) || e.isStatelessSession(sessionKey) {
 		return &CompactResult{}, nil
 	}
@@ -375,12 +380,17 @@ func (e *Engine) CompactNow(ctx context.Context, sessionKey, instructions string
 	}
 
 	e.initCompactionOnce()
-	return e.compaction.CompactNow(ctx, conv.ConversationID, instructions)
+	return e.compaction.CompactNow(ctx, conv.ConversationID, instructions, protectTailMessages...)
 }
 
 // CompactUntilUnder aggressively compacts until context is under budget.
 // Used for emergency compaction after LLM overflow (retry reason).
-func (e *Engine) CompactUntilUnder(ctx context.Context, sessionKey string, budget int) (*CompactResult, error) {
+func (e *Engine) CompactUntilUnder(
+	ctx context.Context,
+	sessionKey string,
+	budget int,
+	protectTailMessages ...int,
+) (*CompactResult, error) {
 	if e.shouldIgnoreSession(sessionKey) || e.isStatelessSession(sessionKey) {
 		return &CompactResult{}, nil
 	}
@@ -391,7 +401,7 @@ func (e *Engine) CompactUntilUnder(ctx context.Context, sessionKey string, budge
 	}
 
 	e.initCompactionOnce()
-	return e.compaction.CompactUntilUnder(ctx, conv.ConversationID, budget)
+	return e.compaction.CompactUntilUnder(ctx, conv.ConversationID, budget, protectTailMessages...)
 }
 
 // initCompactionOnce lazily initializes the compaction engine.
