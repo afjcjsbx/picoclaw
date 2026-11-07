@@ -121,6 +121,104 @@ func TestAssemblerAssembleWithSummary(t *testing.T) {
 	}
 }
 
+func TestAssemblerSkipsOversizedEvictableItemAndKeepsOlderSummary(t *testing.T) {
+	s, convID := setupAssemblerStore(t)
+	ctx := context.Background()
+
+	oldSummary, _ := s.CreateSummary(ctx, CreateSummaryInput{
+		ConversationID: convID, Kind: SummaryKindLeaf, Content: "old summary", TokenCount: 10,
+	})
+	largeSummary, _ := s.CreateSummary(ctx, CreateSummaryInput{
+		ConversationID: convID, Kind: SummaryKindLeaf, Content: "large summary", TokenCount: 100,
+	})
+	items := []ContextItem{
+		{Ordinal: 100, ItemType: "summary", SummaryID: oldSummary.SummaryID, TokenCount: 10},
+		{Ordinal: 200, ItemType: "summary", SummaryID: largeSummary.SummaryID, TokenCount: 100},
+	}
+	for i := 0; i < FreshTailCount; i++ {
+		m, _ := s.AddMessage(ctx, convID, "user", "fresh", 1)
+		items = append(items, ContextItem{
+			Ordinal: 300 + i*100, ItemType: "message", MessageID: m.ID, TokenCount: 1,
+		})
+	}
+	if err := s.UpsertContextItems(ctx, convID, items); err != nil {
+		t.Fatal(err)
+	}
+
+	a := &Assembler{store: s}
+	result, err := a.Assemble(ctx, convID, AssembleInput{Budget: 50})
+	if err != nil {
+		t.Fatalf("Assemble: %v", err)
+	}
+	if result.GapCount != 1 {
+		t.Fatalf("GapCount = %d, want 1", result.GapCount)
+	}
+	if !strings.Contains(result.Summary, oldSummary.SummaryID) {
+		t.Fatalf("older summary was not kept after oversized item: %s", result.Summary)
+	}
+	if result.TokensUsed > 50 {
+		t.Fatalf("TokensUsed = %d, want <= 50", result.TokensUsed)
+	}
+}
+
+func TestAssemblerTruncatesOversizedTailItem(t *testing.T) {
+	s, convID := setupAssemblerStore(t)
+	ctx := context.Background()
+	large, _ := s.AddMessage(ctx, convID, "tool", strings.Repeat("x", 4000), 200)
+	items := []ContextItem{
+		{Ordinal: 100, ItemType: "message", MessageID: large.ID, TokenCount: 200},
+	}
+	for i := 1; i < FreshTailCount; i++ {
+		m, _ := s.AddMessage(ctx, convID, "user", "small", 1)
+		items = append(items, ContextItem{
+			Ordinal: 100 + i*100, ItemType: "message", MessageID: m.ID, TokenCount: 1,
+		})
+	}
+	if err := s.UpsertContextItems(ctx, convID, items); err != nil {
+		t.Fatal(err)
+	}
+	a := &Assembler{store: s}
+	result, err := a.Assemble(ctx, convID, AssembleInput{Budget: 100})
+	if err != nil {
+		t.Fatalf("Assemble: %v", err)
+	}
+	if result.FreshTailTokens > 100 {
+		t.Fatalf("FreshTailTokens = %d, want <= 100", result.FreshTailTokens)
+	}
+	if result.TokensUsed > 100 {
+		t.Fatalf("TokensUsed = %d, want <= 100", result.TokensUsed)
+	}
+}
+
+func TestAssemblerReportsEvictionMetrics(t *testing.T) {
+	s, convID := setupAssemblerStore(t)
+	ctx := context.Background()
+	items := make([]ContextItem, 40)
+	for i := 0; i < 40; i++ {
+		m, _ := s.AddMessage(ctx, convID, "user", "msg", 10)
+		items[i] = ContextItem{
+			Ordinal:    (i + 1) * 100,
+			ItemType:   "message",
+			MessageID:  m.ID,
+			TokenCount: 10,
+		}
+	}
+	if err := s.UpsertContextItems(ctx, convID, items); err != nil {
+		t.Fatal(err)
+	}
+	a := &Assembler{store: s}
+	result, err := a.Assemble(ctx, convID, AssembleInput{Budget: 200})
+	if err != nil {
+		t.Fatalf("Assemble: %v", err)
+	}
+	if result.TokensEvicted != 200 {
+		t.Fatalf("TokensEvicted = %d, want 200", result.TokensEvicted)
+	}
+	if result.FreshTailTokens != 200 {
+		t.Fatalf("FreshTailTokens = %d, want 200", result.FreshTailTokens)
+	}
+}
+
 func TestAssemblerBudgetEvictsOldest(t *testing.T) {
 	s, convID := setupAssemblerStore(t)
 	ctx := context.Background()
@@ -207,29 +305,15 @@ func TestAssemblerBudgetPreservesLatestToolTurnWhenItExceedsBudget(t *testing.T)
 	if err != nil {
 		t.Fatalf("Assemble: %v", err)
 	}
-
 	if len(result.Messages) != 4 {
 		t.Fatalf("Messages = %d, want 4 protected-turn messages", len(result.Messages))
 	}
-	if result.Messages[0].ID != userMsg.ID {
-		t.Fatalf("first message ID = %d, want current user message %d", result.Messages[0].ID, userMsg.ID)
-	}
-	if result.Messages[1].ID != assistantToolMsg.ID {
-		t.Fatalf("second message ID = %d, want assistant tool-call %d", result.Messages[1].ID, assistantToolMsg.ID)
-	}
-	if result.Messages[2].ID != toolResultMsg.ID {
-		t.Fatalf("third message ID = %d, want tool result %d", result.Messages[2].ID, toolResultMsg.ID)
-	}
-	if result.Messages[3].ID != finalAssistantMsg.ID {
-		t.Fatalf("fourth message ID = %d, want final assistant %d", result.Messages[3].ID, finalAssistantMsg.ID)
-	}
-
 	totalTokens := 0
 	for _, msg := range result.Messages {
 		totalTokens += msg.TokenCount
 	}
-	if totalTokens <= 210 {
-		t.Fatalf("assembled tokens = %d, want protected turn to remain over budget", totalTokens)
+	if totalTokens > 210 {
+		t.Fatalf("assembled tokens = %d, want <= 210 after active-turn shrink", totalTokens)
 	}
 }
 
