@@ -1,4 +1,4 @@
-> Back to [README](../../../README.md)
+> Back to [README](https://github.com/afjcjsbx/picoclaw/blob/main/README.md)
 
 # Slack
 

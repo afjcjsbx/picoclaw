@@ -216,4 +216,4 @@ agent 事件还会追加 payload 摘要字段：
 - `gateway.*`：start、ready、shutdown、reload started/completed/failed。
 - `mcp.*`：server connecting/connected/failed、tool discovered、tool call start/end。
 
-默认事件日志示例见 [`../../config/config.example.json`](../../config/config.example.json)。
+默认事件日志示例见 [`../../config/config.example.json`](https://github.com/afjcjsbx/picoclaw/blob/main/config/config.example.json)。

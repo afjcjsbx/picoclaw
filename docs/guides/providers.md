@@ -773,5 +773,5 @@ picoclaw agent -m "Hello"
 ---
 
 <div align="center">
-  <img src="../../assets/logo.jpg" alt="PicoClaw Meme" width="512">
+  <img src="https://raw.githubusercontent.com/afjcjsbx/picoclaw/main/assets/logo.jpg" alt="PicoClaw Meme" width="512">
 </div>
