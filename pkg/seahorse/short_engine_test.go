@@ -101,7 +101,13 @@ func TestCompileSessionPattern(t *testing.T) {
 		}
 		got := re.MatchString(tt.input)
 		if got != tt.want {
-			t.Errorf("compileSessionPattern(%q).Match(%q) = %v, want %v", tt.pattern, tt.input, got, tt.want)
+			t.Errorf(
+				"compileSessionPattern(%q).Match(%q) = %v, want %v",
+				tt.pattern,
+				tt.input,
+				got,
+				tt.want,
+			)
 		}
 	}
 }
@@ -319,7 +325,12 @@ func TestEngineIngestWithParts(t *testing.T) {
 			Content:    "",
 			TokenCount: 10,
 			Parts: []MessagePart{
-				{Type: "tool_use", Name: "read_file", Arguments: `{"path":"/tmp/test"}`, ToolCallID: "tc_123"},
+				{
+					Type:       "tool_use",
+					Name:       "read_file",
+					Arguments:  `{"path":"/tmp/test"}`,
+					ToolCallID: "tc_123",
+				},
 				{Type: "text", Text: "here is the file content"},
 			},
 		},
@@ -460,7 +471,11 @@ func TestBootstrapRepairsReasoningContentAndModelNameTogether(t *testing.T) {
 		t.Fatalf("AddMessage assistant: %v", err)
 	}
 
-	err = eng.store.AppendContextMessages(ctx, conv.ConversationID, []int64{userMsg.ID, assistantMsg.ID})
+	err = eng.store.AppendContextMessages(
+		ctx,
+		conv.ConversationID,
+		[]int64{userMsg.ID, assistantMsg.ID},
+	)
 	if err != nil {
 		t.Fatalf("AppendContextMessages: %v", err)
 	}
@@ -493,7 +508,11 @@ func TestBootstrapRepairsReasoningContentAndModelNameTogether(t *testing.T) {
 		t.Fatalf("stored messages = %d, want 2", len(stored))
 	}
 	if stored[1].ReasoningContent != "let me think this through" {
-		t.Fatalf("stored[1].ReasoningContent = %q, want %q", stored[1].ReasoningContent, "let me think this through")
+		t.Fatalf(
+			"stored[1].ReasoningContent = %q, want %q",
+			stored[1].ReasoningContent,
+			"let me think this through",
+		)
 	}
 	if stored[1].ModelName != "gpt-5.4" {
 		t.Fatalf("stored[1].ModelName = %q, want %q", stored[1].ModelName, "gpt-5.4")
@@ -529,7 +548,11 @@ func TestBootstrapRepairsIncorrectNonEmptyModelName(t *testing.T) {
 		t.Fatalf("AddMessageWithReasoning assistant: %v", err)
 	}
 
-	err = eng.store.AppendContextMessages(ctx, conv.ConversationID, []int64{userMsg.ID, assistantMsg.ID})
+	err = eng.store.AppendContextMessages(
+		ctx,
+		conv.ConversationID,
+		[]int64{userMsg.ID, assistantMsg.ID},
+	)
 	if err != nil {
 		t.Fatalf("AppendContextMessages: %v", err)
 	}
@@ -622,7 +645,12 @@ func TestEngineIngestWithPartsPreservesReasoningContent(t *testing.T) {
 			ReasoningContent: "I need to inspect the file first",
 			TokenCount:       10,
 			Parts: []MessagePart{
-				{Type: "tool_use", Name: "read_file", Arguments: `{"path":"/tmp/test"}`, ToolCallID: "tc_123"},
+				{
+					Type:       "tool_use",
+					Name:       "read_file",
+					Arguments:  `{"path":"/tmp/test"}`,
+					ToolCallID: "tc_123",
+				},
 			},
 		},
 	}
@@ -1017,7 +1045,12 @@ func TestBootstrapRepairsMissingReasoningContentOnPrefixBeforeAppendingDelta(t *
 
 	err = eng.Bootstrap(ctx, sessionKey, []Message{
 		{Role: "user", Content: "hello", TokenCount: 3},
-		{Role: "assistant", Content: "world", ReasoningContent: "let me think this through", TokenCount: 3},
+		{
+			Role:             "assistant",
+			Content:          "world",
+			ReasoningContent: "let me think this through",
+			TokenCount:       3,
+		},
 		{Role: "user", Content: "follow-up", TokenCount: 2},
 	})
 	if err != nil {
@@ -1353,7 +1386,9 @@ func TestAssemblerSummaryRoleNotUser(t *testing.T) {
 	for _, msg := range result.Messages {
 		if strings.Contains(msg.Content, "<summary") {
 			if msg.Role == "user" {
-				t.Error("summary message should NOT use 'user' role - use 'system' or dedicated role instead")
+				t.Error(
+					"summary message should NOT use 'user' role - use 'system' or dedicated role instead",
+				)
 			}
 			// Expected: role should be "system" or similar
 			return
@@ -1733,7 +1768,12 @@ func TestBootstrapToolPartsIdempotent(t *testing.T) {
 	// Verify messages are identical (not rebuilt)
 	for i := range stored1 {
 		if stored1[i].ID != stored2[i].ID {
-			t.Errorf("message %d was rebuilt (ID changed from %d to %d)", i, stored1[i].ID, stored2[i].ID)
+			t.Errorf(
+				"message %d was rebuilt (ID changed from %d to %d)",
+				i,
+				stored1[i].ID,
+				stored2[i].ID,
+			)
 		}
 	}
 }
@@ -1802,7 +1842,10 @@ func TestBootstrapAnchorWithDuplicateContent(t *testing.T) {
 	// Verify: should have exactly 6 messages in DB, not 11 (5 old + 6 new - duplicates)
 	stored, _ := e.store.GetMessages(ctx, conv.ConversationID, 20, 0)
 	if len(stored) != 6 {
-		t.Errorf("BUG: expected 6 messages after history edit, got %d (possible duplicates)", len(stored))
+		t.Errorf(
+			"BUG: expected 6 messages after history edit, got %d (possible duplicates)",
+			len(stored),
+		)
 	}
 
 	// Verify context_items also has 6 items
@@ -1963,7 +2006,11 @@ func TestSelectShallowestCondensationWithNonConsecutiveDepths(t *testing.T) {
 	e.initCompactionOnce()
 
 	// Call selectShallowestCondensationCandidate
-	candidates, err := e.compaction.selectShallowestCondensationCandidate(ctx, conv.ConversationID, false)
+	candidates, err := e.compaction.selectShallowestCondensationCandidate(
+		ctx,
+		conv.ConversationID,
+		false,
+	)
 	if err != nil {
 		t.Fatalf("selectShallowestCondensationCandidate: %v", err)
 	}
@@ -2019,19 +2066,36 @@ func TestNewEngineAppliesPragmasToEveryConnection(t *testing.T) {
 				t.Fatalf("round %d conn %d busy_timeout: %v", round, i, scanErr)
 			}
 			if busy != sqliteBusyTimeoutMS {
-				t.Errorf("round %d conn %d busy_timeout = %d, want %d", round, i, busy, sqliteBusyTimeoutMS)
+				t.Errorf(
+					"round %d conn %d busy_timeout = %d, want %d",
+					round,
+					i,
+					busy,
+					sqliteBusyTimeoutMS,
+				)
 			}
 			if scanErr := c.QueryRowContext(ctx, "PRAGMA synchronous").Scan(&synchronous); scanErr != nil {
 				t.Fatalf("round %d conn %d synchronous: %v", round, i, scanErr)
 			}
 			if synchronous != 1 { // 1 == NORMAL
-				t.Errorf("round %d conn %d synchronous = %d, want 1 (NORMAL)", round, i, synchronous)
+				t.Errorf(
+					"round %d conn %d synchronous = %d, want 1 (NORMAL)",
+					round,
+					i,
+					synchronous,
+				)
 			}
 			if scanErr := c.QueryRowContext(ctx, "PRAGMA temp_store").Scan(&tempStore); scanErr != nil {
 				t.Fatalf("round %d conn %d temp_store: %v", round, i, scanErr)
 			}
 			if tempStore != sqliteTempStoreFile {
-				t.Errorf("round %d conn %d temp_store = %d, want %d (FILE)", round, i, tempStore, sqliteTempStoreFile)
+				t.Errorf(
+					"round %d conn %d temp_store = %d, want %d (FILE)",
+					round,
+					i,
+					tempStore,
+					sqliteTempStoreFile,
+				)
 			}
 		}
 	}
@@ -2105,7 +2169,10 @@ func TestStoreWaitingForPooledConnectionHonoursContext(t *testing.T) {
 	callCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
 	defer cancel()
 	if _, err = eng.store.GetMessageCount(callCtx, 1); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("GetMessageCount with exhausted pool: err = %v, want context.DeadlineExceeded", err)
+		t.Fatalf(
+			"GetMessageCount with exhausted pool: err = %v, want context.DeadlineExceeded",
+			err,
+		)
 	}
 }
 
@@ -2141,17 +2208,21 @@ func TestGetAllSessionStatusesDoesNotNeedSecondConnectionWhileScanning(t *testin
 		t.Fatalf("GetAllSessionStatuses: %v", err)
 	}
 	if len(statuses) != 1 {
-		t.Fatalf("got %d statuses, want 1 (per-session query starved for a connection)", len(statuses))
+		t.Fatalf(
+			"got %d statuses, want 1 (per-session query starved for a connection)",
+			len(statuses),
+		)
 	}
 }
 
 func TestSQLiteDSN(t *testing.T) {
-	if got, want := sqliteDSN("/tmp/a.db"),
-		"/tmp/a.db?_busy_timeout=5000&_pragma=synchronous(NORMAL)&_pragma=temp_store(1)"; got != want {
+	const suffix = "&_busy_timeout=5000&_txlock=immediate&_pragma=synchronous(NORMAL)" +
+		"&_pragma=temp_store(1)&_pragma=foreign_keys(1)" +
+		"&_pragma=journal_size_limit(67108864)&_pragma=wal_autocheckpoint(1000)"
+	if got, want := sqliteDSN("/tmp/a.db"), "/tmp/a.db?"+suffix[1:]; got != want {
 		t.Errorf("sqliteDSN(plain) = %q, want %q", got, want)
 	}
-	if got, want := sqliteDSN("file:a.db?mode=rwc"),
-		"file:a.db?mode=rwc&_busy_timeout=5000&_pragma=synchronous(NORMAL)&_pragma=temp_store(1)"; got != want {
+	if got, want := sqliteDSN("file:a.db?mode=rwc"), "file:a.db?mode=rwc"+suffix; got != want {
 		t.Errorf("sqliteDSN(uri) = %q, want %q", got, want)
 	}
 }
@@ -2168,7 +2239,10 @@ func TestEngineDeleteSessionFreesSpaceThatVacuumReclaims(t *testing.T) {
 	payload := strings.Repeat("lorem ipsum dolor sit amet ", 40)
 	msgs := make([]Message, 0, 400)
 	for i := 0; i < 400; i++ {
-		msgs = append(msgs, Message{Role: "user", Content: fmt.Sprintf("%d %s", i, payload), TokenCount: 10})
+		msgs = append(
+			msgs,
+			Message{Role: "user", Content: fmt.Sprintf("%d %s", i, payload), TokenCount: 10},
+		)
 	}
 	if _, ingestErr := eng.Ingest(ctx, "agent:main:big", msgs); ingestErr != nil {
 		t.Fatalf("Ingest: %v", ingestErr)
