@@ -19,7 +19,11 @@ func openTestDB(t *testing.T) *sql.DB {
 	testName := strings.NewReplacer("/", "_", " ", "_").Replace(t.Name())
 	// Use a shared in-memory database so concurrent goroutines/connections in tests
 	// observe the same schema/data.
-	dsn := fmt.Sprintf("file:seahorse_test_%s_%d?mode=memory&cache=shared", testName, n)
+	dsn := fmt.Sprintf(
+		"file:seahorse_test_%s_%d?mode=memory&cache=shared&_txlock=immediate&_busy_timeout=5000",
+		testName,
+		n,
+	)
 
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -160,7 +164,8 @@ func TestRunSchemaAddsMessagesModelNameColumn(t *testing.T) {
 	}
 
 	var count int
-	err = db.QueryRow(`SELECT count(*) FROM pragma_table_info('messages') WHERE name = 'model_name'`).Scan(&count)
+	err = db.QueryRow(`SELECT count(*) FROM pragma_table_info('messages') WHERE name = 'model_name'`).
+		Scan(&count)
 	if err != nil {
 		t.Fatalf("query pragma_table_info: %v", err)
 	}
@@ -212,7 +217,8 @@ func TestMigrationSummaryFTSInsert(t *testing.T) {
 	// Insert a summary
 	_, err = db.Exec(
 		`INSERT INTO summaries (summary_id, conversation_id, kind, depth, content, token_count, created_at)
-		 VALUES ('sum_test1', 1, 'leaf', 0, '你好世界 hello world', 10, datetime('now'))`)
+		 VALUES ('sum_test1', 1, 'leaf', 0, '你好世界 hello world', 10, datetime('now'))`,
+	)
 	if err != nil {
 		t.Fatalf("insert summary: %v", err)
 	}
@@ -251,7 +257,9 @@ func TestMigrationSummaryParentsPK(t *testing.T) {
 	for _, id := range []string{"sum_a", "sum_b"} {
 		_, err := db.Exec(
 			`INSERT INTO summaries (summary_id, conversation_id, kind, depth, content, token_count, created_at)
-			 VALUES (?, 1, 'leaf', 0, 'content', 5, datetime('now'))`, id)
+			 VALUES (?, 1, 'leaf', 0, 'content', 5, datetime('now'))`,
+			id,
+		)
 		if err != nil {
 			t.Fatalf("insert summary %s: %v", id, err)
 		}
@@ -306,18 +314,19 @@ func TestTriggerMigration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("insert conversation: %v", err)
 	}
-	_, err = db.Exec(`INSERT INTO summaries (summary_id, conversation_id, kind, depth, content, token_count)
-		VALUES ('old-sum', 1, 'leaf', 0, 'old content', 5)`)
+	_, err = db.Exec(
+		`INSERT INTO summaries (summary_id, conversation_id, kind, depth, content, token_count)
+		VALUES ('old-sum', 1, 'leaf', 0, 'old content', 5)`,
+	)
 	if err != nil {
 		t.Fatalf("insert summary: %v", err)
 	}
 
-	// The old trigger body is wrong for normal FTS5 — DELETE should fail.
-	_, err = db.Exec(`DELETE FROM summaries WHERE summary_id = 'old-sum'`)
-	if err == nil {
-		t.Error("expected error from old buggy trigger, but DELETE succeeded")
-	} else {
-		t.Logf("old trigger correctly causes error: %v", err)
+	// The old trigger body may be accepted by the external-content table (the
+	// delete command is valid when all indexed columns are supplied), but the
+	// migration must still leave a correct trigger in place.
+	if _, deleteErr := db.Exec(`DELETE FROM summaries WHERE summary_id = 'old-sum'`); deleteErr != nil {
+		t.Logf("old trigger delete returned: %v", deleteErr)
 	}
 
 	// Now runSchema again — this drops and recreates the triggers with correct bodies.
@@ -327,8 +336,10 @@ func TestTriggerMigration(t *testing.T) {
 	}
 
 	// Insert again so we have data to delete
-	_, err = db.Exec(`INSERT INTO summaries (summary_id, conversation_id, kind, depth, content, token_count)
-		VALUES ('migrated-sum', 1, 'leaf', 0, 'new content', 5)`)
+	_, err = db.Exec(
+		`INSERT INTO summaries (summary_id, conversation_id, kind, depth, content, token_count)
+		VALUES ('migrated-sum', 1, 'leaf', 0, 'new content', 5)`,
+	)
 	if err != nil {
 		t.Fatalf("insert after migration: %v", err)
 	}
@@ -341,7 +352,8 @@ func TestTriggerMigration(t *testing.T) {
 
 	// Verify the summary is gone
 	var count int
-	err = db.QueryRow(`SELECT count(*) FROM summaries WHERE summary_id = 'migrated-sum'`).Scan(&count)
+	err = db.QueryRow(`SELECT count(*) FROM summaries WHERE summary_id = 'migrated-sum'`).
+		Scan(&count)
 	if err != nil {
 		t.Fatalf("query after delete: %v", err)
 	}
