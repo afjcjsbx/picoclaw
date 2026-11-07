@@ -38,14 +38,7 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 		contextualSkills = ts.agent.ContextBuilder.ResolveActiveSkillsForContext(ts.activeSkills)
 	}
 	ts.recordSkillContextSnapshot(skillContextTriggerInitialBuild, contextualSkills)
-	initialPromptReq := promptBuildRequestForTurn(
-		ts,
-		history,
-		summary,
-		ts.userMessage,
-		ts.media,
-		cfg,
-	)
+	initialPromptReq := promptBuildRequestForTurn(ts, history, summary, ts.userMessage, ts.media, cfg)
 	initialPromptReq.ActiveSkills = append([]string(nil), contextualSkills...)
 	messages := ts.agent.ContextBuilder.BuildMessagesFromPrompt(initialPromptReq)
 	currentTurnStart := len(messages)
@@ -107,30 +100,21 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 					if strings.TrimSpace(ts.userMessage) != "" || len(ts.media) > 0 {
 						rebuiltCurrentTurnStart = len(rebuilt) - 1
 					}
-					return resolveMediaRefsWithOptions(
-						rebuilt,
-						p.MediaStore,
-						mediaOpts,
-						rebuiltCurrentTurnStart,
-					)
+					return resolveMediaRefsWithOptions(rebuilt, p.MediaStore, mediaOpts, rebuiltCurrentTurnStart)
 				},
 				ts.agent.ContextWindow,
 				toolDefs,
 				ts.agent.MaxTokens,
 			)
 			if dropped := originalHistoryCount - len(history); dropped > 0 {
-				logger.WarnCF(
-					"agent",
-					"Trimmed rebuilt history after proactive compaction",
-					map[string]any{
-						"session_key":     ts.sessionKey,
-						"dropped_msgs":    dropped,
-						"remaining_msgs":  len(history),
-						"context_window":  ts.agent.ContextWindow,
-						"max_tokens":      ts.agent.MaxTokens,
-						"still_overlimit": !fit,
-					},
-				)
+				logger.WarnCF("agent", "Trimmed rebuilt history after proactive compaction", map[string]any{
+					"session_key":     ts.sessionKey,
+					"dropped_msgs":    dropped,
+					"remaining_msgs":  len(history),
+					"context_window":  ts.agent.ContextWindow,
+					"max_tokens":      ts.agent.MaxTokens,
+					"still_overlimit": !fit,
+				})
 			} else if !fit {
 				logger.WarnCF("agent", "Context still exceeds budget "+
 					"after proactive compaction rebuild", map[string]any{
