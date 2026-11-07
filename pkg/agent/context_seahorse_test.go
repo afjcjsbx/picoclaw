@@ -601,6 +601,59 @@ func TestSeahorseCompactRetryUsesCompactUntilUnder(t *testing.T) {
 	_ = result.Summary
 }
 
+func TestSeahorseCompactProtectsActiveTurnMessages(t *testing.T) {
+	engine, err := seahorse.NewEngine(seahorse.Config{
+		DBPath: t.TempDir() + "/test.db",
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	defer engine.Close()
+
+	mgr := &seahorseContextManager{engine: engine}
+	ctx := context.Background()
+
+	for i := 0; i < 40; i++ {
+		_ = mgr.Ingest(ctx, &IngestRequest{
+			SessionKey: "active-turn-boundary",
+			Message:    protocoltypes.Message{Role: "assistant", Content: fmt.Sprintf("old context %d", i)},
+		})
+	}
+	_ = mgr.Ingest(ctx, &IngestRequest{
+		SessionKey: "active-turn-boundary",
+		Message:    protocoltypes.Message{Role: "user", Content: "APRI LA PR ADESSO"},
+	})
+	for i := 0; i < 39; i++ {
+		_ = mgr.Ingest(ctx, &IngestRequest{
+			SessionKey: "active-turn-boundary",
+			Message:    protocoltypes.Message{Role: "tool", Content: fmt.Sprintf("tool result %d", i)},
+		})
+	}
+
+	if err := mgr.Compact(ctx, &CompactRequest{
+		SessionKey:         "active-turn-boundary",
+		Reason:             ContextCompressReasonThreshold,
+		Budget:             100000,
+		ActiveTurnMessages: 40,
+	}); err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+
+	assembled, err := engine.Assemble(ctx, "active-turn-boundary", seahorse.AssembleInput{Budget: 100000})
+	if err != nil {
+		t.Fatalf("Assemble: %v", err)
+	}
+	if assembled == nil {
+		t.Fatal("expected non-nil assemble result")
+	}
+	for _, msg := range assembled.Messages {
+		if msg.Content == "APRI LA PR ADESSO" {
+			return
+		}
+	}
+	t.Fatal("active-turn user message missing after compaction")
+}
+
 // TestSeahorseRealLoopNoDuplicateMessages tests the real-world scenario:
 // 1. Start AgentLoop with seahorse context manager
 // 2. Run a turn (user message -> LLM response)

@@ -185,6 +185,110 @@ func TestCompactLeafNoCandidate(t *testing.T) {
 	}
 }
 
+func TestCompactLeafProtectsActiveTurnMessages(t *testing.T) {
+	ce, s, convID := newTestCompactionEngine(t)
+	ctx := context.Background()
+
+	// Older history that may be summarized.
+	for i := 0; i < 40; i++ {
+		m, _ := s.AddMessage(ctx, convID, "assistant", fmt.Sprintf("old context %d", i), 100)
+		s.AppendContextMessage(ctx, convID, m.ID)
+	}
+
+	// Active turn: the user instruction followed by many tool results. The
+	// instruction must survive even though it is older than FreshTailCount.
+	instruction, _ := s.AddMessage(ctx, convID, "user", "APRI LA PR ADESSO", 20)
+	s.AppendContextMessage(ctx, convID, instruction.ID)
+	for i := 0; i < 39; i++ {
+		m, _ := s.AddMessage(ctx, convID, "tool", fmt.Sprintf("tool result %d", i), 100)
+		s.AppendContextMessage(ctx, convID, m.ID)
+	}
+
+	result, err := ce.Compact(ctx, convID, CompactInput{ProtectTailMessages: 40})
+	if err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	if result.LeafSummaries == 0 {
+		t.Fatal("expected the older history to be compacted")
+	}
+
+	items, err := s.GetContextItems(ctx, convID)
+	if err != nil {
+		t.Fatalf("GetContextItems: %v", err)
+	}
+	foundInstruction := false
+	for _, item := range items {
+		if item.ItemType == "message" && item.MessageID == instruction.ID {
+			foundInstruction = true
+			break
+		}
+	}
+	if !foundInstruction {
+		t.Fatal("active-turn user message was folded into a summary")
+	}
+}
+
+func TestCompactUntilUnderProtectsActiveTurnMessages(t *testing.T) {
+	ce, s, convID := newTestCompactionEngine(t)
+	ctx := context.Background()
+
+	for i := 0; i < 40; i++ {
+		m, _ := s.AddMessage(ctx, convID, "assistant", fmt.Sprintf("old context %d", i), 100)
+		s.AppendContextMessage(ctx, convID, m.ID)
+	}
+	instruction, _ := s.AddMessage(ctx, convID, "user", "ISTRUZIONE ATTIVA", 20)
+	s.AppendContextMessage(ctx, convID, instruction.ID)
+	for i := 0; i < 39; i++ {
+		m, _ := s.AddMessage(ctx, convID, "tool", fmt.Sprintf("tool result %d", i), 100)
+		s.AppendContextMessage(ctx, convID, m.ID)
+	}
+
+	// Force path (context-overflow retry) must still respect the active turn.
+	if _, err := ce.CompactUntilUnder(ctx, convID, 1, 40); err != nil {
+		t.Fatalf("CompactUntilUnder: %v", err)
+	}
+
+	items, err := s.GetContextItems(ctx, convID)
+	if err != nil {
+		t.Fatalf("GetContextItems: %v", err)
+	}
+	for _, item := range items {
+		if item.ItemType == "message" && item.MessageID == instruction.ID {
+			return
+		}
+	}
+	t.Fatal("active-turn user message was compacted by CompactUntilUnder")
+}
+
+func TestTruncateSummaryPreservesLatestUserAndToolResults(t *testing.T) {
+	var messages []Message
+	for i := 0; i < 30; i++ {
+		messages = append(messages, Message{
+			Role:    "assistant",
+			Content: strings.Repeat("old output that should be truncated first ", 80),
+		})
+	}
+	messages = append(messages,
+		Message{Role: "user", Content: "ULTIMA ISTRUZIONE: apri la PR " + strings.Repeat("dettaglio ", 500)},
+		Message{Role: "assistant", Content: "STATO TASK: branch pushato, manca la PR"},
+		Message{Role: "tool", Content: "ULTIMO TOOL RESULT: ec8a3be4a"},
+	)
+
+	got := truncateSummary(messages)
+	if !strings.Contains(got, "ULTIMA ISTRUZIONE") {
+		t.Fatalf("latest user message missing from fallback summary:\n%s", got)
+	}
+	if !strings.Contains(got, "STATO TASK") {
+		t.Fatalf("latest task state missing from fallback summary:\n%s", got)
+	}
+	if !strings.Contains(got, "ULTIMO TOOL RESULT") {
+		t.Fatalf("latest tool result missing from fallback summary:\n%s", got)
+	}
+	if len(got) > maxTruncatedSummaryBytes+64 {
+		t.Fatalf("fallback summary too large: %d bytes", len(got))
+	}
+}
+
 func TestCompactCondensed(t *testing.T) {
 	ce, s, convID := newTestCompactionEngine(t)
 	ctx := context.Background()
