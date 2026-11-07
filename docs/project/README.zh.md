@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="../../assets/logo.webp" alt="PicoClaw" width="200">
+<img src="https://raw.githubusercontent.com/afjcjsbx/picoclaw/main/assets/logo.webp" alt="PicoClaw" width="200">
 
 <h1>PicoClaw</h1>
 
@@ -21,7 +21,7 @@ _刻意保持小巧。小巧不等于简陋。小巧，已然足够。_
 </p>
 
 <p>
-  <a href="../../README.md">English</a> |
+  <a href="https://github.com/afjcjsbx/picoclaw/blob/main/docs/README.md">English</a> |
   <strong>中文</strong>
 </p>
 
@@ -31,7 +31,7 @@ _刻意保持小巧。小巧不等于简陋。小巧，已然足够。_
 
 <p align="center">
   <a href="https://discord.gg/bEuEDnKpf">
-    <img src="../../assets/discord-banner.png" alt="PicoClaw Discord —— 结识开发者、分享想法、获取帮助" width="80%">
+    <img src="https://raw.githubusercontent.com/afjcjsbx/picoclaw/main/assets/discord-banner.png" alt="PicoClaw Discord —— 结识开发者、分享想法、获取帮助" width="80%">
   </a>
 </p>
 
@@ -61,11 +61,11 @@ _刻意保持小巧。小巧不等于简陋。小巧，已然足够。_
 | ------------------------------ | ------------------------------------------------------------ | --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
 | **语言**                       | TypeScript                                                   | Python                                                                      | **Go**                                                                                        |
 | **内存参考**                   | [建议主机内存 2 GB](https://docs.openclaw.ai/install/fly)    | [报告约 200–600 MB](https://github.com/HKUDS/nanobot/issues/3410)           | **近期版本为 10–20 MB**                                                                       |
-| **单一可执行文件**             | 否（Node.js 应用）                                           | 否（带原生 TUI 组件的 Python 应用）                                         | **[48.1 MiB](../../docs/guides/custom-builds.md#measured-binary-sizes)**                            |
+| **单一可执行文件**             | 否（Node.js 应用）                                           | 否（带原生 TUI 组件的 Python 应用）                                         | **[48.1 MiB](https://afjcjsbx.github.io/picoclaw/guides/custom-builds.html#measured-binary-sizes)**                            |
 | **启动时间**</br>（0.8 GHz 核心） | >500 秒                                                   | >30 秒                                                                      | **<1 秒**                                                                                     |
 | **成本**                       | Mac mini $599                                                | 大多数 Linux 开发板约 $50                                                   | **任意 Linux 开发板**</br>**低至 $10**                                                        |
 
-> 这些是参考数据，并非受控基准测试。OpenClaw 的数据来自部署建议，NanoBot 的数据来自一位 Raspberry Pi 4 用户报告，PicoClaw 的数据来自近期版本的估算。OpenClaw 和 NanoBot 并未将完整智能体打包为单一可执行文件；PicoClaw 的体积是实测的完整默认 macOS ARM64 构建——请参阅[测量方法及其他配置](../../docs/guides/custom-builds.md#measured-binary-sizes)。
+> 这些是参考数据，并非受控基准测试。OpenClaw 的数据来自部署建议，NanoBot 的数据来自一位 Raspberry Pi 4 用户报告，PicoClaw 的数据来自近期版本的估算。OpenClaw 和 NanoBot 并未将完整智能体打包为单一可执行文件；PicoClaw 的体积是实测的完整默认 macOS ARM64 构建——请参阅[测量方法及其他配置](https://afjcjsbx.github.io/picoclaw/guides/custom-builds.html#measured-binary-sizes)。
 
 ### 运行时资源占用
 
@@ -77,12 +77,12 @@ _刻意保持小巧。小巧不等于简陋。小巧，已然足够。_
 | OpenCode 2.0.29 | Bun + OpenTUI | 239 MiB | ≈190 ms | ≈200 MiB | 1 |
 | Hermes 0.22.1 | Python + TUI | ≈1.9 GiB | ≈3.2 s | ≈214 MiB | 2 |
 
-PicoClaw 的空闲 RSS 为 37.9 MiB，内存占用约为 **≈19 MiB**（`phys_footprint`，即活动监视器显示的值）——这正是上文“10–20 MB”说法的依据。其核心不包含全屏 TUI，因此“首次绘制 / 就绪”是指网关响应 `GET /ready` 所需的时间。更轻量的渠道配置列于[实测二进制体积](../../docs/guides/custom-builds.md#measured-binary-sizes)。
+PicoClaw 的空闲 RSS 为 37.9 MiB，内存占用约为 **≈19 MiB**（`phys_footprint`，即活动监视器显示的值）——这正是上文“10–20 MB”说法的依据。其核心不包含全屏 TUI，因此“首次绘制 / 就绪”是指网关响应 `GET /ready` 所需的时间。更轻量的渠道配置列于[实测二进制体积](https://afjcjsbx.github.io/picoclaw/guides/custom-builds.html#measured-binary-sizes)。
 
 <details>
 <summary><b>基准测试方法</b></summary>
 
-在 Apple M1 Max（macOS arm64）上使用 [`scripts/`](../../scripts/) 中的脚本测量。PicoClaw 的数据使用 Go 1.27.3，于 2026-10-26 刷新；其他工具于 2026-10-15 测量。**首次绘制 / 就绪**、**空闲 RSS** 和**进程数**来自这些脚本；**安装体积**是各工具自身安装目录的大小，并非由这些脚本测量。**空闲 RSS** 是进程树空闲后各进程常驻内存之和。其他智能体是交互式 TUI，其数据为单机多次运行的中位数，因此不同版本之间可能存在偏差。
+在 Apple M1 Max（macOS arm64）上使用 [`scripts/`](https://github.com/afjcjsbx/picoclaw/tree/main/scripts/) 中的脚本测量。PicoClaw 的数据使用 Go 1.27.3，于 2026-10-26 刷新；其他工具于 2026-10-15 测量。**首次绘制 / 就绪**、**空闲 RSS** 和**进程数**来自这些脚本；**安装体积**是各工具自身安装目录的大小，并非由这些脚本测量。**空闲 RSS** 是进程树空闲后各进程常驻内存之和。其他智能体是交互式 TUI，其数据为单机多次运行的中位数，因此不同版本之间可能存在偏差。
 
 使用以下命令复现运行时列：
 
@@ -93,7 +93,7 @@ python3 scripts/bench-agent-tui.py --cmd opencode --runs 3 --keys '\x03'
 
 </details>
 
-> **[硬件兼容列表](../../docs/guides/hardware-compatibility.md)** —— 从 5 美元的 RISC-V 设备到 Raspberry Pi 和 Android 手机，均已测试。没有你的开发板？欢迎提交 PR！
+> **[硬件兼容列表](https://afjcjsbx.github.io/picoclaw/guides/hardware-compatibility.html)** —— 从 5 美元的 RISC-V 设备到 Raspberry Pi 和 Android 手机，均已测试。没有你的开发板？欢迎提交 PR！
 
 ## 安装
 
@@ -156,19 +156,19 @@ make install
 <details>
 <summary><b>自定义渠道构建</b></summary>
 
-默认构建包含所有渠道。自定义渠道选择、可选的 Seahorse 构建、SQLite 注意事项以及实测二进制体积记录在[自定义构建指南](../../docs/guides/custom-builds.md)中。例如，以下命令仅使用 Telegram 构建：
+默认构建包含所有渠道。自定义渠道选择、可选的 Seahorse 构建、SQLite 注意事项以及实测二进制体积记录在[自定义构建指南](https://afjcjsbx.github.io/picoclaw/guides/custom-builds.html)中。例如，以下命令仅使用 Telegram 构建：
 
 ```bash
 make build GO_BUILD_TAGS='goolm,stdjson,custom_channels,channel_telegram'
 ```
 
-[Seahorse](../../docs/architecture/seahorse-memory.md) 是 PicoClaw 内置的记忆系统：`seahorse` 上下文管理器维护一个本地 SQLite 数据库，并对会话历史建立 FTS5 索引，使智能体能够回忆并压缩较早的上下文。若要进一步缩小体积，可使用 `no_seahorse` 标签构建；当其他已选功能不需要 SQLite 时，这也会移除 SQLite 依赖：
+[Seahorse](https://afjcjsbx.github.io/picoclaw/architecture/seahorse-memory.html) 是 PicoClaw 内置的记忆系统：`seahorse` 上下文管理器维护一个本地 SQLite 数据库，并对会话历史建立 FTS5 索引，使智能体能够回忆并压缩较早的上下文。若要进一步缩小体积，可使用 `no_seahorse` 标签构建；当其他已选功能不需要 SQLite 时，这也会移除 SQLite 依赖：
 
 ```bash
 make build GO_BUILD_TAGS='goolm,stdjson,custom_channels,channel_telegram,no_seahorse'
 ```
 
-如果记忆由外部系统提供，例如 [Mem0 插件](../../docs/guides/plugins.md#mem0)，这就是合适的选择。在实测的 macOS ARM64 仅 Telegram 构建中，添加 `no_seahorse` 使二进制文件减小了 4.00 MiB（10.0%）。完整测量细节以及 Matrix 或 WhatsApp Native 仍需要 SQLite 的情况，请参阅该指南。
+如果记忆由外部系统提供，例如 [Mem0 插件](https://afjcjsbx.github.io/picoclaw/guides/plugins.html#mem0)，这就是合适的选择。在实测的 macOS ARM64 仅 Telegram 构建中，添加 `no_seahorse` 使二进制文件减小了 4.00 MiB（10.0%）。完整测量细节以及 Matrix 或 WhatsApp Native 仍需要 SQLite 的情况，请参阅该指南。
 
 </details>
 
@@ -198,7 +198,7 @@ picoclaw-launcher
 
 **开始使用：** 打开 Web UI，然后 **1)** 配置 Provider（填入你的 LLM API Key）→ **2)** 配置渠道（例如 Telegram）→ **3)** 启动网关 → **4)** 开始聊天。
 
-详细文档请参阅 [Web UI 与 Launcher 指南](../../docs/guides/webui.md)。
+详细文档请参阅 [Web UI 与 Launcher 指南](https://afjcjsbx.github.io/picoclaw/guides/webui.html)。
 
 <details>
 <summary><b>Docker（备选方案）</b></summary>
@@ -318,7 +318,7 @@ PicoClaw 通过 `model_list` 配置支持 30+ LLM Provider。使用 `protocol/mo
 }
 ```
 
-完整的 Provider 配置详情请参阅 [Providers 与模型](../../docs/guides/providers.md)。
+完整的 Provider 配置详情请参阅 [Providers 与模型](https://afjcjsbx.github.io/picoclaw/guides/providers.html)。
 
 </details>
 
@@ -333,31 +333,31 @@ PicoClaw 通过 `model_list` 配置支持 30+ LLM Provider。使用 `protocol/mo
 
 | Channel | 配置难度 | 协议 | 文档 |
 |---------|-------|----------|------|
-| **Telegram** | 简单（bot token） | 长轮询 | [指南](../../docs/channels/telegram/README.md) |
-| **Discord** | 简单（bot token + intents） | WebSocket | [指南](../../docs/channels/discord/README.md) |
-| **WhatsApp** | 简单（扫码或 bridge URL） | 原生 / Bridge | [指南](../../docs/guides/chat-apps.md#whatsapp) |
-| **微信** | 简单（原生扫码） | iLink API | [指南](../../docs/guides/chat-apps.md#weixin) |
-| **QQ** | 简单（AppID + AppSecret） | WebSocket | [指南](../../docs/channels/qq/README.md) |
-| **Slack** | 简单（bot + app token） | Socket Mode | [指南](../../docs/channels/slack/README.md) |
-| **Matrix** | 中等（homeserver + token） | Sync API | [指南](../../docs/channels/matrix/README.md) |
-| **Delta Chat** | 简单（chatmail 或现有账户） | JSON-RPC（email/E2EE） | [指南](../../docs/channels/deltachat/README.md) |
-| **钉钉** | 中等（client credentials） | Stream | [指南](../../docs/channels/dingtalk/README.md) |
-| **飞书 / Lark** | 中等（App ID + Secret） | WebSocket/SDK | [指南](../../docs/channels/feishu/README.md) |
-| **LINE** | 中等（credentials + webhook） | Webhook | [指南](../../docs/channels/line/README.md) |
-| **企业微信** | 简单（扫码登录或手动配置） | WebSocket | [指南](../../docs/channels/wecom/README.md) |
-| **VK** | 简单（群组 token） | Long Poll | [指南](../../docs/channels/vk/README.md) |
-| **IRC** | 中等（server + nick） | IRC 协议 | [指南](../../docs/guides/chat-apps.md#irc) |
-| **OneBot** | 中等（WebSocket URL） | OneBot v11 | [指南](../../docs/channels/onebot/README.md) |
-| **MQTT** | 简单（broker + agent_id） | MQTT pub/sub | [指南](../../docs/channels/mqtt/README.md) |
-| **MaixCam** | 简单（启用即可） | TCP socket | [指南](../../docs/channels/maixcam/README.md) |
+| **Telegram** | 简单（bot token） | 长轮询 | [指南](https://afjcjsbx.github.io/picoclaw/channels/telegram/) |
+| **Discord** | 简单（bot token + intents） | WebSocket | [指南](https://afjcjsbx.github.io/picoclaw/channels/discord/) |
+| **WhatsApp** | 简单（扫码或 bridge URL） | 原生 / Bridge | [指南](https://afjcjsbx.github.io/picoclaw/guides/chat-apps.html#whatsapp) |
+| **微信** | 简单（原生扫码） | iLink API | [指南](https://afjcjsbx.github.io/picoclaw/guides/chat-apps.html#weixin) |
+| **QQ** | 简单（AppID + AppSecret） | WebSocket | [指南](https://afjcjsbx.github.io/picoclaw/channels/qq/) |
+| **Slack** | 简单（bot + app token） | Socket Mode | [指南](https://afjcjsbx.github.io/picoclaw/channels/slack/) |
+| **Matrix** | 中等（homeserver + token） | Sync API | [指南](https://afjcjsbx.github.io/picoclaw/channels/matrix/) |
+| **Delta Chat** | 简单（chatmail 或现有账户） | JSON-RPC（email/E2EE） | [指南](https://afjcjsbx.github.io/picoclaw/channels/deltachat/) |
+| **钉钉** | 中等（client credentials） | Stream | [指南](https://afjcjsbx.github.io/picoclaw/channels/dingtalk/) |
+| **飞书 / Lark** | 中等（App ID + Secret） | WebSocket/SDK | [指南](https://afjcjsbx.github.io/picoclaw/channels/feishu/) |
+| **LINE** | 中等（credentials + webhook） | Webhook | [指南](https://afjcjsbx.github.io/picoclaw/channels/line/) |
+| **企业微信** | 简单（扫码登录或手动配置） | WebSocket | [指南](https://afjcjsbx.github.io/picoclaw/channels/wecom/) |
+| **VK** | 简单（群组 token） | Long Poll | [指南](https://afjcjsbx.github.io/picoclaw/channels/vk/) |
+| **IRC** | 中等（server + nick） | IRC 协议 | [指南](https://afjcjsbx.github.io/picoclaw/guides/chat-apps.html#irc) |
+| **OneBot** | 中等（WebSocket URL） | OneBot v11 | [指南](https://afjcjsbx.github.io/picoclaw/channels/onebot/) |
+| **MQTT** | 简单（broker + agent_id） | MQTT pub/sub | [指南](https://afjcjsbx.github.io/picoclaw/channels/mqtt/) |
+| **MaixCam** | 简单（启用即可） | TCP socket | [指南](https://afjcjsbx.github.io/picoclaw/channels/maixcam/) |
 | **Pico** | 简单（启用即可） | 原生协议 | 内置 |
 | **Pico Client** | 简单（WebSocket URL） | WebSocket | 内置 |
 
 > 所有基于 Webhook 的渠道共用同一个 Gateway HTTP 服务器（`gateway.host`:`gateway.port`，默认 `127.0.0.1:18790`）。飞书使用 WebSocket/SDK 模式，不使用共享 HTTP 服务器。
 
-> 日志详细程度由 `gateway.log_level` 控制（默认：`warn`）。支持的值：`debug`、`info`、`warn`、`error`、`fatal`。也可通过 `PICOCLAW_LOG_LEVEL` 设置。详情请参阅[配置](../../docs/guides/configuration.md#gateway-log-level)。
+> 日志详细程度由 `gateway.log_level` 控制（默认：`warn`）。支持的值：`debug`、`info`、`warn`、`error`、`fatal`。也可通过 `PICOCLAW_LOG_LEVEL` 设置。详情请参阅[配置](https://afjcjsbx.github.io/picoclaw/guides/configuration.html#gateway-log-level)。
 
-详细的渠道配置说明请参阅[聊天应用配置](../../docs/guides/chat-apps.md)。
+详细的渠道配置说明请参阅[聊天应用配置](https://afjcjsbx.github.io/picoclaw/guides/chat-apps.html)。
 
 </details>
 
@@ -387,7 +387,7 @@ PicoClaw 可以搜索网络以提供最新信息。在 `tools.web` 中配置：
 
 ### 其他工具
 
-PicoClaw 内置文件操作、代码执行、定时任务等工具。详情请参阅 [Tools](../../docs/tools/README.md)。
+PicoClaw 内置文件操作、代码执行、定时任务等工具。详情请参阅 [Tools](https://afjcjsbx.github.io/picoclaw/tools/)。
 
 ## Skills
 
@@ -426,9 +426,9 @@ picoclaw skills install <skill-name>
 
 ClawHub token 是可选的，仅用于提高速率限制。GitHub token 用于搜索和私有仓库。请通过 `PICOCLAW_SKILLS_REGISTRIES_CLAWHUB_AUTH_TOKEN` 和 `PICOCLAW_SKILLS_REGISTRIES_GITHUB_AUTH_TOKEN` 传入。
 
-Skills 和 MCP 服务器也可以一起打包为可移植的 **Agent Plugins 1.0.0**。请参阅[插件指南](../../docs/guides/plugins.md)和[可用的演示插件](../../examples/plugins/demo-plugin)。Mem0 发布了自己的 [Agent Plugin](https://github.com/mem0ai/mem0/tree/main/integrations/mem0-agent-plugin)；启用前请阅读[兼容性说明](../../docs/guides/plugins.md#mem0)。
+Skills 和 MCP 服务器也可以一起打包为可移植的 **Agent Plugins 1.0.0**。请参阅[插件指南](https://afjcjsbx.github.io/picoclaw/guides/plugins.html)和[可用的演示插件](https://github.com/afjcjsbx/picoclaw/tree/main/examples/plugins/demo-plugin/)。Mem0 发布了自己的 [Agent Plugin](https://github.com/mem0ai/mem0/tree/main/integrations/mem0-agent-plugin)；启用前请阅读[兼容性说明](https://afjcjsbx.github.io/picoclaw/guides/plugins.html#mem0)。
 
-更多详情请参阅 [Skills 工具](../../docs/tools/skills.md)。
+更多详情请参阅 [Skills 工具](https://afjcjsbx.github.io/picoclaw/tools/skills.html)。
 
 ## MCP（Model Context Protocol）
 
@@ -469,7 +469,7 @@ picoclaw mcp test browserbase
 
 当你需要 `picoclaw mcp add` 未覆盖的高级字段时，请使用 `picoclaw mcp edit`。例如，`picoclaw mcp add` 支持 `--deferred` 和 `--env-file`，而 `picoclaw mcp edit` 仍适用于直接编辑 JSON 和不常见的 MCP 设置。
 
-完整的 MCP 配置（stdio、SSE、HTTP 传输、工具发现）请参阅 [MCP 工具](../../docs/tools/mcp.md)。CLI 用法和示例请参阅 [MCP Server CLI](../../docs/reference/mcp-cli.md)。
+完整的 MCP 配置（stdio、SSE、HTTP 传输、工具发现）请参阅 [MCP 工具](https://afjcjsbx.github.io/picoclaw/tools/mcp.html)。CLI 用法和示例请参阅 [MCP Server CLI](https://afjcjsbx.github.io/picoclaw/reference/mcp-cli.html)。
 
 ## 加入 Agent 社交网络
 
@@ -511,7 +511,7 @@ PicoClaw 通过 `cron` 工具支持定时提醒和重复任务：
 - **重复任务：**“每 2 小时提醒我”→ 每 2 小时触发一次。
 - **Cron 表达式：**“每天上午 9 点提醒我”→ 使用 cron 表达式。
 
-当前支持的调度类型、执行模式、命令任务门控和持久化细节请参阅 [docs/reference/cron.md](../../docs/reference/cron.md)。
+当前支持的调度类型、执行模式、命令任务门控和持久化细节请参阅 [docs/reference/cron.md](https://afjcjsbx.github.io/picoclaw/reference/cron.html)。
 
 ## 文档
 
@@ -519,28 +519,28 @@ PicoClaw 通过 `cron` 工具支持定时提醒和重复任务：
 
 | 主题 | 说明 |
 |-------|-------------|
-| [Docker 与快速开始](../../docs/guides/docker.md) | Docker Compose 配置、launcher/agent 模式 |
-| [聊天应用](../../docs/guides/chat-apps.md) | 全部 19+ 渠道配置指南 |
-| [配置](../../docs/guides/configuration.md) | 环境变量、工作区布局、安全沙箱 |
-| [插件安装](../../docs/guides/plugins.md) | 安装并激活 Agent Plugin 包 |
-| [编写插件](../../docs/guides/writing-a-plugin.md) | 脚手架、验证、测试并分享 Agent Plugin 包 |
-| [插件 CLI](../../docs/reference/plugins-cli.md) | 添加、列出、验证、搭建、测试和删除插件条目 |
-| [MCP Server CLI](../../docs/reference/mcp-cli.md) | 添加、列出、测试、编辑和删除 MCP 服务器条目 |
-| [定时任务与 Cron 作业](../../docs/reference/cron.md) | Cron 调度类型、投递模式、命令门控、任务存储 |
-| [Providers 与模型](../../docs/guides/providers.md) | 30+ LLM Provider、模型路由、`model_list` 配置 |
-| [Spawn 与异步任务](../../docs/guides/spawn-tasks.md) | 快速任务、使用 spawn 的长任务、异步子智能体编排 |
-| [Hooks](../../docs/architecture/hooks/README.md) | 事件驱动 Hook 系统：观察者、拦截器、审批 Hook |
-| [Steering](../../docs/architecture/steering.md) | 在工具调用之间向运行中的智能体循环注入消息 |
-| [SubTurn](../../docs/architecture/subturn.md) | 子智能体协调、并发控制、生命周期 |
-| [疑难解答](../../docs/operations/troubleshooting.md) | 常见问题与解决方案 |
-| [工具配置](../../docs/reference/tools_configuration.md) | 工具开关、执行策略、路径策略、MCP、Skills |
-| [硬件兼容性](../../docs/guides/hardware-compatibility.md) | 已测试的开发板、最低要求 |
+| [Docker 与快速开始](https://afjcjsbx.github.io/picoclaw/guides/docker.html) | Docker Compose 配置、launcher/agent 模式 |
+| [聊天应用](https://afjcjsbx.github.io/picoclaw/guides/chat-apps.html) | 全部 19+ 渠道配置指南 |
+| [配置](https://afjcjsbx.github.io/picoclaw/guides/configuration.html) | 环境变量、工作区布局、安全沙箱 |
+| [插件安装](https://afjcjsbx.github.io/picoclaw/guides/plugins.html) | 安装并激活 Agent Plugin 包 |
+| [编写插件](https://afjcjsbx.github.io/picoclaw/guides/writing-a-plugin.html) | 脚手架、验证、测试并分享 Agent Plugin 包 |
+| [插件 CLI](https://afjcjsbx.github.io/picoclaw/reference/plugins-cli.html) | 添加、列出、验证、搭建、测试和删除插件条目 |
+| [MCP Server CLI](https://afjcjsbx.github.io/picoclaw/reference/mcp-cli.html) | 添加、列出、测试、编辑和删除 MCP 服务器条目 |
+| [定时任务与 Cron 作业](https://afjcjsbx.github.io/picoclaw/reference/cron.html) | Cron 调度类型、投递模式、命令门控、任务存储 |
+| [Providers 与模型](https://afjcjsbx.github.io/picoclaw/guides/providers.html) | 30+ LLM Provider、模型路由、`model_list` 配置 |
+| [Spawn 与异步任务](https://afjcjsbx.github.io/picoclaw/guides/spawn-tasks.html) | 快速任务、使用 spawn 的长任务、异步子智能体编排 |
+| [Hooks](https://afjcjsbx.github.io/picoclaw/architecture/hooks/) | 事件驱动 Hook 系统：观察者、拦截器、审批 Hook |
+| [Steering](https://afjcjsbx.github.io/picoclaw/architecture/steering.html) | 在工具调用之间向运行中的智能体循环注入消息 |
+| [SubTurn](https://afjcjsbx.github.io/picoclaw/architecture/subturn.html) | 子智能体协调、并发控制、生命周期 |
+| [疑难解答](https://afjcjsbx.github.io/picoclaw/operations/troubleshooting.html) | 常见问题与解决方案 |
+| [工具配置](https://afjcjsbx.github.io/picoclaw/reference/tools_configuration.html) | 工具开关、执行策略、路径策略、MCP、Skills |
+| [硬件兼容性](https://afjcjsbx.github.io/picoclaw/guides/hardware-compatibility.html) | 已测试的开发板、最低要求 |
 
 ## 贡献
 
 欢迎提交 PR！代码库刻意保持小巧和可读。
 
-请参阅 [CONTRIBUTING.md](../../CONTRIBUTING.md) 了解指南。
+请参阅 [CONTRIBUTING.md](https://github.com/afjcjsbx/picoclaw/blob/main/CONTRIBUTING.md) 了解指南。
 
 **PicoClaw 在开放中构建。来和我们一起构建它吧。**
 

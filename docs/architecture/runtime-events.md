@@ -219,4 +219,4 @@ Runtime event kinds are defined in `pkg/events/kind.go`. Event logging can selec
 - `gateway.*`: start, ready, shutdown, and reload lifecycle.
 - `mcp.*`: MCP server connection, tool discovery, and tool call events.
 
-See [`../../config/config.example.json`](../../config/config.example.json) for the default event logging example.
+See [`../../config/config.example.json`](https://github.com/afjcjsbx/picoclaw/blob/main/config/config.example.json) for the default event logging example.

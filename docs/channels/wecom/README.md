@@ -1,4 +1,4 @@
-> Back to [README](../../../README.md)
+> Back to [README](https://github.com/afjcjsbx/picoclaw/blob/main/README.md)
 
 # WeCom
 
@@ -25,7 +25,7 @@ This replaces the legacy `wecom`, `wecom_app`, and `wecom_aibot` split with one 
 Open the Web UI, navigate to **Channels → WeCom**, and click the QR binding button. Scan the QR code with WeCom and confirm in the app — credentials are saved automatically.
 
 <p align="center">
-<img src="../../../assets/wecom-qr-binding.jpg" alt="WeCom QR binding in Web UI" width="600">
+<img src="https://raw.githubusercontent.com/afjcjsbx/picoclaw/main/assets/wecom-qr-binding.jpg" alt="WeCom QR binding in Web UI" width="600">
 </p>
 
 ### Option 2: CLI QR Login
