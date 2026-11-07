@@ -3,7 +3,7 @@ description: "PicoClaw includes an mcp CLI command group for managing MCP server
 ---
 # MCP Server CLI
 
-> Back to [README](../README.md)
+> Back to [Reference](./)
 
 PicoClaw includes an `mcp` CLI command group for managing MCP server entries in `config.json`.
 
@@ -398,4 +398,4 @@ For advanced cases:
 ## Related Docs
 
 - [MCP tools](../tools/mcp.md): MCP config structure, transports, discovery, and examples
-- [README](../README.md): high-level overview
+- [README](../): high-level overview

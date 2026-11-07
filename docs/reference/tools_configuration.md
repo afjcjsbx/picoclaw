@@ -3,7 +3,7 @@ description: "Reference for the tools block of config.json: global tool switches
 ---
 # Tools Configuration
 
-PicoClaw's tool settings live under the `tools` field of `config.json`. This page is the reference for global tool behavior, path policy, and the master tool-switch table. Every tool family has a dedicated page under [docs/tools](../tools/README.md).
+PicoClaw's tool settings live under the `tools` field of `config.json`. This page is the reference for global tool behavior, path policy, and the master tool-switch table. Every tool family has a dedicated page under [docs/tools](../tools/).
 
 ## Tool switches
 

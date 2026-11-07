@@ -3,7 +3,7 @@ description: "Seahorse is PicoClaw's optional, SQLite-backed short-term context 
 ---
 # Seahorse Memory System
 
-> Back to [README](README.md) · Related: [Session System](session-system.md),
+> Back to [Architecture](./) · Related: [Session System](session-system.md),
 > [Session Startup Cost and Pruning](session-startup-and-pruning.md),
 > [Context Compression](agent-refactor/context.md)
 
@@ -1740,5 +1740,5 @@ can decide whether they matter for a deployment.
   sessions, routing.
 - [Custom Builds](../guides/custom-builds.md): `no_seahorse`, SQLite
   dependencies, binary sizes.
-- [Security](../security/README.md): sensitive-data filtering and deployment
+- [Security](../security/): sensitive-data filtering and deployment
   hardening.

@@ -14,14 +14,15 @@ These conventions are intended as contributor guidance for new or moved docs. Ex
 If you are browsing docs rather than reorganizing them, start with these directory indexes:
 
 - [Documentation Home](index.md): user-facing landing page with quick start and reading paths.
-- [Guides](guides/README.md): setup, configuration, provider, and workflow guides.
-- [Reference](reference/README.md): precise configuration and behavior reference.
-- [Operations](operations/README.md): debugging and troubleshooting material.
-- [Security](security/README.md): security-focused guides and controls.
-- [Architecture](architecture/README.md): implementation notes and internal design docs.
-- [Tools](tools/README.md): tool-specific deep dives.
-- [Design Notes](design/README.md): proposals and investigations.
-- [Migration](migration/README.md): upgrade and migration notes.
+- [Guides](guides/): setup, configuration, provider, and workflow guides.
+- [Reference](reference/): precise configuration and behavior reference.
+- [Operations](operations/): debugging and troubleshooting material.
+- [Security](security/): security-focused guides and controls.
+- [Architecture](architecture/): implementation notes and internal design docs.
+- [Tools](tools/): tool-specific deep dives.
+- [Design Notes](design/): proposals and investigations.
+- [Migration](migration/): upgrade and migration notes.
+- [Maintenance status](project/maintenance-status.md): upstream vs fork release dates and the migration path.
 
 For channel-specific setup, start with [Chat Apps Configuration](guides/chat-apps.md) and then drill into `docs/channels/<name>/README.md` as needed.
 
@@ -104,6 +105,12 @@ These files still follow the same translation naming rules.
 3. Add translated siblings after the English source exists when that source is part of the same docs set.
 4. Update links from existing docs when the new doc becomes a navigation target.
 5. Run `make lint-docs` locally when adding or moving docs.
+
+## GitHub Pages Notes
+
+- Section indexes are `README.md` files kept as directory indexes by `readme_index.with_frontmatter` in `docs/_config.yml`. If you add front matter to a section `README.md`, keep that setting; do not add a separate `permalink`.
+- Chinese pages are paired with their English source in `docs/_data/i18n.yml`. Update that file when adding or renaming a `.zh.md` page. `hreflang` alternates are emitted only for reciprocal pairs.
+- `jekyll-sitemap` generates `sitemap.xml` and a `robots.txt` that points to it. Crawlers only read `robots.txt` at the host root (`https://afjcjsbx.github.io/robots.txt`), not at the project path, so submit `https://afjcjsbx.github.io/picoclaw/sitemap.xml` directly in Google Search Console and Bing Webmaster Tools.
 
 ## Examples
 

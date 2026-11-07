@@ -4,7 +4,7 @@ description: "PicoClaw 运行时的 Session 系统如何完成以下事情：Pkg
 ---
 # Session 系统
 
-> 返回 [README](../README.md)
+> 返回 [README](../)
 
 本文说明 PicoClaw 运行时的 Session 系统如何完成以下事情：
 

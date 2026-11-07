@@ -3,7 +3,7 @@ description: "How PicoClaw stores and loads sessions: the runtime path across pk
 ---
 # Session System
 
-> Back to [README](../README.md)
+> Back to [Architecture](./)
 
 This document describes the runtime session system used by PicoClaw to:
 

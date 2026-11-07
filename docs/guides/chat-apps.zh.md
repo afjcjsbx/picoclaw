@@ -259,7 +259,7 @@ picoclaw gateway
 picoclaw gateway
 ```
 
-完整选项（`device_id`、`join_on_invite`、`group_trigger`、`placeholder`、`reasoning_channel_id`）请参考 [Matrix 渠道配置指南](../channels/matrix/README.md)。
+完整选项（`device_id`、`join_on_invite`、`group_trigger`、`placeholder`、`reasoning_channel_id`）请参考 [Matrix 渠道配置指南](../channels/matrix/)。
 
 </details>
 

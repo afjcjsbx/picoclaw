@@ -3,7 +3,7 @@ description: "Why the PicoClaw gateway can stay unresponsive for minutes after a
 ---
 # Session Startup Cost and Automatic Pruning
 
-> Back to [README](../README.md) · Related: [Session System](session-system.md),
+> Back to [Architecture](./) · Related: [Session System](session-system.md),
 > [Seahorse Memory](seahorse-memory.md)
 
 ## Symptom

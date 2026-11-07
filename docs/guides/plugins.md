@@ -693,7 +693,7 @@ protocol: `hook.hello`, `hook.runtime_event`, and the requested interception
 methods. `entries.<id>.config` is delivered as `config` in the hello payload.
 Only declared stages and allowed agents are forwarded.
 
-See [the hook protocol](../architecture/hooks/README.md). Hook failures use the
+See [the hook protocol](../architecture/hooks/). Hook failures use the
 existing hook manager's timeout and error policies. In particular, approval
 errors can deny a tool call; they do not crash the runtime. Trusted interception
 hooks can alter or short-circuit execution, so `allow_hooks` is a separate grant.

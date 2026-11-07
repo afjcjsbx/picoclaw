@@ -4,7 +4,7 @@ title: "Docker & Quick Start Guide"
 ---
 # 🐳 Docker & Quick Start Guide
 
-> Back to [README](../README.md)
+> Back to [Guides](./)
 
 ## 🐳 Docker Compose
 

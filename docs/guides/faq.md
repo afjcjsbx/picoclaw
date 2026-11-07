@@ -58,7 +58,7 @@ picoclaw gateway --debug --no-truncate
 ```
 
 **How do I connect Telegram, Discord, WhatsApp, or another chat app?**
-Start with [Chat Apps Configuration](chat-apps.md); per-channel guides live under `docs/channels/<name>/README.md` (for example [Telegram](../channels/telegram/README.md)).
+Start with [Chat Apps Configuration](chat-apps.md); per-channel guides live under `docs/channels/<name>/README.md` (for example [Telegram](../channels/telegram/)).
 
 **How do I run PicoClaw at boot?**
 Run it with Docker, or enable **launch at login** in the launcher config page (macOS, Linux, Windows). For the raw Gateway without the launcher, run it under your init system, for example a systemd service.

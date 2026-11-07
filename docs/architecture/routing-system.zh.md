@@ -4,7 +4,7 @@ description: "在 PicoClaw 里，“路由系统”不是单一判断。 它实�
 ---
 # 路由系统
 
-> 返回 [README](../README.md)
+> 返回 [README](../)
 
 在 PicoClaw 里，“路由系统”不是单一判断。
 它实际上是组合起来的一条运行时决策链，负责决定：

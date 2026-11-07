@@ -4,7 +4,7 @@ description: "The SubTurn mechanism is a core feature in PicoClaw that allows to
 ---
 # 🔄 SubTurn Mechanism
 
-> Back to [README](../README.md)
+> Back to [Architecture](./)
 
 ## Overview
 

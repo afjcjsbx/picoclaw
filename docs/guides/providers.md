@@ -4,7 +4,7 @@ title: "Providers & Model Configuration"
 ---
 # 🔌 Providers & Model Configuration
 
-> Back to [README](../README.md)
+> Back to [Guides](./)
 
 ### Providers
 

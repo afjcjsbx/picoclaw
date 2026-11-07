@@ -3,7 +3,7 @@ description: "PicoClaw includes a plugin CLI command group for managing Agent Pl
 ---
 # Plugin CLI
 
-> Back to [README](../README.md)
+> Back to [Reference](./)
 
 PicoClaw includes a `plugin` CLI command group for managing [Agent Plugin](../guides/plugins.md)
 entries in `config.json` and for checking plugin packages while you write them.

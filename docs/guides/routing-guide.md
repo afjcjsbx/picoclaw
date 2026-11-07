@@ -3,7 +3,7 @@ description: "Configure PicoClaw routing for real deployments: rule matching, mo
 ---
 # Routing Guide
 
-> Back to [README](../README.md)
+> Back to [Guides](./)
 
 In PicoClaw, routing has two user-facing parts:
 
