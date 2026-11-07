@@ -38,6 +38,7 @@ type SpawnTool struct {
 	maxTokens      int
 	temperature    float64
 	allowlistCheck func(targetAgentID string) bool
+	tools          *ToolRegistry
 }
 
 // Compile-time check: SpawnTool implements AsyncExecutor.
@@ -51,6 +52,7 @@ func NewSpawnTool(manager *SubagentManager) *SpawnTool {
 		defaultModel: manager.defaultModel,
 		maxTokens:    manager.maxTokens,
 		temperature:  manager.temperature,
+		tools:        manager.tools,
 	}
 }
 
@@ -85,6 +87,10 @@ func (t *SpawnTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Optional target agent ID to delegate the task to",
 			},
+			"allow_direct_message": map[string]any{
+				"type":        "boolean",
+				"description": "Optional. Whether the subagent is allowed to message the user directly (default true). When false, the message tool is filtered out and results must be returned to the parent agent.",
+			},
 		},
 		"required": []string{"task"},
 	}
@@ -92,6 +98,13 @@ func (t *SpawnTool) Parameters() map[string]any {
 
 func (t *SpawnTool) SetAllowlistChecker(check func(targetAgentID string) bool) {
 	t.allowlistCheck = check
+}
+
+// SetTools sets the parent's tool registry so spawned subagents can inherit a
+// filtered tool set (e.g. without the message tool when direct messaging is
+// disabled).
+func (t *SpawnTool) SetTools(tools *ToolRegistry) {
+	t.tools = tools
 }
 
 func (t *SpawnTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
@@ -120,6 +133,10 @@ func (t *SpawnTool) execute(
 
 	label := stringArg(args, "label")
 	targetAgentID := strings.TrimSpace(stringArg(args, "agent_id"))
+	allowDirectMessage := true
+	if v, ok := args["allow_direct_message"].(bool); ok {
+		allowDirectMessage = v
+	}
 
 	// Check allowlist if targeting a specific agent
 	if targetAgentID != "" && t.allowlistCheck != nil {
@@ -162,9 +179,22 @@ func (t *SpawnTool) execute(
 					}
 				}()
 
+				// Build child tool set: inherit parent tools, but filter out
+				// the message tool when direct messaging is disabled so the
+				// subagent cannot message the user directly.
+				var childTools []Tool
+				if t.tools != nil && !allowDirectMessage {
+					parentRegistry := t.tools.CloneWithout("message")
+					for _, name := range parentRegistry.List() {
+						if tool, ok := parentRegistry.Get(name); ok {
+							childTools = append(childTools, tool)
+						}
+					}
+				}
+
 				res, err := t.spawner.SpawnSubTurn(ctx, SubTurnConfig{
 					Model:         t.defaultModel,
-					Tools:         nil, // Will inherit from parent via context
+					Tools:         childTools,
 					SystemPrompt:  systemPrompt,
 					MaxTokens:     t.maxTokens,
 					Temperature:   t.temperature,
