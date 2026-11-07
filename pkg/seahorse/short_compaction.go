@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -987,17 +988,120 @@ func truncateUTF8Bytes(s string, maxBytes int) string {
 }
 
 func truncateSummary(messages []Message) string {
-	content := ""
+	var full strings.Builder
 	for _, m := range messages {
-		c := m.Content
-		if c == "" && len(m.Parts) > 0 {
-			c = partsToReadableContent(m.Parts)
-		}
-		content += c + "\n"
+		full.WriteString(messageSummaryText(m))
+		full.WriteByte('\n')
 	}
-	content = truncateUTF8Bytes(content, maxTruncatedSummaryBytes)
-	content += fmt.Sprintf("\n[Truncated from %d messages]", len(messages))
-	return content
+	if full.Len() <= maxTruncatedSummaryBytes {
+		return full.String() + fmt.Sprintf("\n[Truncated from %d messages]", len(messages))
+	}
+
+	// The deterministic fallback used to keep only the oldest 2048 bytes,
+	// which could drop the user's latest instruction. Keep the newest user
+	// message and the assistant's latest task state first, then the newest
+	// tool results, and fill the rest with older context.
+	marker := fmt.Sprintf("\n[Truncated from %d messages]", len(messages))
+	budget := maxTruncatedSummaryBytes - len(marker)
+	if budget < 0 {
+		budget = 0
+	}
+
+	var out strings.Builder
+	used := make(map[int]bool)
+	write := func(i, limit int) {
+		if i < 0 || i >= len(messages) || used[i] || limit <= 0 {
+			return
+		}
+		text := strings.TrimSpace(messageSummaryText(messages[i]))
+		if text == "" {
+			return
+		}
+		prefix := ""
+		if out.Len() > 0 {
+			prefix = "\n"
+		}
+		limit -= len(prefix)
+		if limit <= 0 {
+			return
+		}
+		text = truncateUTF8Bytes(messages[i].Role+": "+text, limit)
+		if text == "" {
+			return
+		}
+		out.WriteString(prefix)
+		out.WriteString(text)
+		used[i] = true
+	}
+
+	lastUser, lastAssistant := -1, -1
+	var lastTools []int
+	for i := len(messages) - 1; i >= 0; i-- {
+		if strings.TrimSpace(messageSummaryText(messages[i])) == "" {
+			continue
+		}
+		switch messages[i].Role {
+		case "user":
+			if lastUser < 0 {
+				lastUser = i
+			}
+		case "assistant":
+			if lastAssistant < 0 {
+				lastAssistant = i
+			}
+		case "tool":
+			if len(lastTools) < 3 {
+				lastTools = append(lastTools, i)
+			}
+		}
+		if lastUser >= 0 && lastAssistant >= 0 && len(lastTools) >= 3 {
+			break
+		}
+	}
+
+	userBudget := budget * 2 / 5
+	assistantBudget := budget / 4
+	toolBudget := budget - userBudget - assistantBudget
+	write(lastUser, userBudget)
+	write(lastAssistant, assistantBudget)
+	if len(lastTools) > 0 {
+		perTool := toolBudget / len(lastTools)
+		extra := toolBudget % len(lastTools)
+		for i, idx := range lastTools {
+			limit := perTool
+			if i < extra {
+				limit++
+			}
+			write(idx, limit)
+		}
+	}
+
+	// Fill leftover space with the oldest remaining messages.
+	remaining := budget - out.Len()
+	for i := 0; i < len(messages) && remaining > 0; i++ {
+		if used[i] {
+			continue
+		}
+		before := out.Len()
+		write(i, remaining)
+		if out.Len() == before {
+			continue
+		}
+		remaining = budget - out.Len()
+	}
+
+	out.WriteString(marker)
+	return out.String()
+}
+
+func messageSummaryText(m Message) string {
+	if m.Content != "" {
+		return m.Content
+	}
+	if len(m.Parts) > 0 {
+		return partsToReadableContent(m.Parts)
+	}
+	return ""
 }
 
 func truncateCondensedSummaries(summaries []Summary) string {
