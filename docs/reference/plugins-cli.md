@@ -1,6 +1,9 @@
+---
+description: "PicoClaw includes a plugin CLI command group for managing Agent Plugin entries in config.json and for checking plugin packages while you write them."
+---
 # Plugin CLI
 
-> Back to [README](../README.md)
+> Back to [Reference](./)
 
 PicoClaw includes a `plugin` CLI command group for managing [Agent Plugin](../guides/plugins.md)
 entries in `config.json` and for checking plugin packages while you write them.

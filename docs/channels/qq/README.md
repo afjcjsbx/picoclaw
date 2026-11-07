@@ -1,4 +1,7 @@
-> Back to [README](../../../README.md)
+---
+description: "PicoClaw provides QQ support via the official Bot API from the QQ Open Platform."
+---
+> Back to [README](https://github.com/afjcjsbx/picoclaw/blob/main/README.md)
 
 # QQ
 

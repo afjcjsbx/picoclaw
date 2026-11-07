@@ -1,3 +1,7 @@
+---
+lang: zh
+description: "Antigravity 使用 OAuth 2.0 with PKCE（Proof Key for Code Exchange） 进行安全认证：."
+---
 > 返回 [README](../project/README.zh.md)
 
 # Antigravity 认证与集成指南

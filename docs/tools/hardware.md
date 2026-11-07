@@ -1,3 +1,6 @@
+---
+description: "Hardware tools expose real devices to the agent. They are disabled by default and intended for boards and machines where PicoClaw has direct device access."
+---
 # Hardware tools
 
 Hardware tools expose real devices to the agent. They are disabled by default and intended for boards and machines where PicoClaw has direct device access.

@@ -1,3 +1,6 @@
+---
+description: "Fixes for common PicoClaw problems: model_list errors, OpenRouter free-tier routing, channels that fail to connect, and how to read the logs."
+---
 # Troubleshooting
 
 ## "model ... not found in model_list" or OpenRouter "free is not a valid model ID"

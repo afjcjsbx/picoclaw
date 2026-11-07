@@ -1,3 +1,6 @@
+---
+description: "PicoClaw security: hardening configuration, credential and secret handling, sensitive data redaction, and provider authentication."
+---
 # Security
 
 Security-focused docs covering configuration, secrets handling, and provider auth.

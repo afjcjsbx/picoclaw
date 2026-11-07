@@ -1,3 +1,5 @@
+<!-- Google Search Console verification: paste the verification meta tag here. -->
+
 <!-- Dark mode for the PicoClaw docs (GitHub Pages / jekyll-theme-primer). -->
 <style>
   :root {
@@ -258,3 +260,32 @@
     });
   })();
 </script>
+{%- comment -%}
+Language alternates for translated pages.
+
+_data/i18n.yml holds two reciprocal maps keyed by page.url (no baseurl):
+  zh_to_en: /guides/x.zh.html -> /guides/x.html
+  en_to_zh: /guides/x.html    -> /guides/x.zh.html
+
+The page itself is always one of the two languages, so the direction of the
+lookup tells us which one we are on. Pages without a counterpart emit
+nothing: hreflang must be reciprocal, and a lone tag is worse than no tag.
+{%- endcomment -%}
+{%- assign en_from_zh = site.data.i18n.zh_to_en[page.url] -%}
+{%- assign zh_from_en = site.data.i18n.en_to_zh[page.url] -%}
+{%- if en_from_zh -%}
+  {%- assign this_lang = "zh" -%}
+  {%- assign other_lang = "en" -%}
+  {%- assign other_url = en_from_zh -%}
+  {%- assign default_url = en_from_zh -%}
+{%- elsif zh_from_en -%}
+  {%- assign this_lang = "en" -%}
+  {%- assign other_lang = "zh" -%}
+  {%- assign other_url = zh_from_en -%}
+  {%- assign default_url = page.url -%}
+{%- endif -%}
+{%- if this_lang %}
+<link rel="alternate" hreflang="{{ this_lang }}" href="{{ page.url | absolute_url }}" />
+<link rel="alternate" hreflang="{{ other_lang }}" href="{{ other_url | absolute_url }}" />
+<link rel="alternate" hreflang="x-default" href="{{ default_url | absolute_url }}" />
+{%- endif %}

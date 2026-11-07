@@ -1,3 +1,6 @@
+---
+description: "How to migrate from the legacy providers configuration to the new model_list format."
+---
 # Migration Guide: From `providers` to `model_list`
 
 This guide explains how to migrate from the legacy `providers` configuration to the new `model_list` format.

@@ -1,6 +1,9 @@
+---
+description: "Configure PicoClaw routing for real deployments: rule matching, model selection, fallbacks, and how the two user-facing routing layers interact."
+---
 # Routing Guide
 
-> Back to [README](../README.md)
+> Back to [Guides](./)
 
 In PicoClaw, routing has two user-facing parts:
 

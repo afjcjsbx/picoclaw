@@ -1,3 +1,6 @@
+---
+description: "This document demonstrates how to use PicoClaw's hook system to implement external plugin tool injection."
+---
 # Plugin Tool Injection Example
 
 This document demonstrates how to use PicoClaw's hook system to implement external plugin tool injection, allowing LLM to call tools implemented by external hook processes.

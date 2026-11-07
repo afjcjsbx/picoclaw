@@ -1,3 +1,6 @@
+---
+description: "This guide takes a plugin from an empty directory to a working install."
+---
 # Writing a Plugin
 
 This guide takes a plugin from an empty directory to a working install. A PicoClaw plugin is

@@ -1,3 +1,8 @@
+---
+lang: zh
+title: "疑难解答"
+description: "PicoClaw 常见故障排查：model_list 缺失、OpenRouter 免费层路由、通道连接失败、日志定位与调试步骤。"
+---
 # 🐛 疑难解答
 
 > 返回 [README](../project/README.zh.md)

@@ -1,3 +1,6 @@
+---
+description: "PicoClaw supports encrypting api_key/api_keys values in model_list configuration entries."
+---
 # Credential Encryption
 
 PicoClaw supports encrypting `api_key`/`api_keys` values in `model_list` configuration entries.
