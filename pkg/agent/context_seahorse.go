@@ -429,7 +429,9 @@ func providerToSeahorseMessage(msg protocoltypes.Message) seahorse.Message {
 
 // providerToSeahorseMessageWithProvider counts only what the provider will
 // send, so reasoning that is stripped on replay does not inflate seahorse's
-// budgets or make compaction run earlier than necessary.
+// budgets or make compaction run earlier than necessary. ReasoningContent is
+// always stored: DeepSeek/MiMo replay it for tool rounds and it is part of the
+// audit trail. Only TokenCount is provider-dependent.
 func providerToSeahorseMessageWithProvider(
 	provider providers.LLMProvider,
 	msg protocoltypes.Message,

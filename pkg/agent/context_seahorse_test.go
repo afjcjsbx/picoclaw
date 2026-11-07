@@ -198,6 +198,60 @@ func TestProviderToSeahorseMessageWithReasoning(t *testing.T) {
 	}
 }
 
+func TestProviderToSeahorseMessagePreservesReasoningWhenProviderStrips(t *testing.T) {
+	msg := protocoltypes.Message{
+		Role:             "assistant",
+		Content:          "answer",
+		ReasoningContent: strings.Repeat("reasoning ", 1000),
+	}
+
+	converted := providerToSeahorseMessageWithProvider(
+		reasoningReplayTestProvider{replay: false},
+		msg,
+	)
+	if converted.ReasoningContent != msg.ReasoningContent {
+		t.Fatal("provider token accounting must not drop ReasoningContent")
+	}
+	if converted.TokenCount >= EstimateMessageTokens(msg) {
+		t.Fatalf(
+			"stripped-provider token count = %d, want below full estimate %d",
+			converted.TokenCount,
+			EstimateMessageTokens(msg),
+		)
+	}
+
+	engine, err := seahorse.NewEngine(seahorse.Config{
+		DBPath: t.TempDir() + "/test.db",
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	defer engine.Close()
+
+	const sessionKey = "audit-reasoning"
+	if _, ingestErr := engine.Ingest(
+		context.Background(),
+		sessionKey,
+		[]seahorse.Message{converted},
+	); ingestErr != nil {
+		t.Fatalf("Ingest: %v", ingestErr)
+	}
+	assembled, err := engine.Assemble(
+		context.Background(),
+		sessionKey,
+		seahorse.AssembleInput{Budget: 100000},
+	)
+	if err != nil {
+		t.Fatalf("Assemble: %v", err)
+	}
+	if len(assembled.Messages) != 1 {
+		t.Fatalf("assembled messages = %d, want 1", len(assembled.Messages))
+	}
+	if assembled.Messages[0].ReasoningContent != msg.ReasoningContent {
+		t.Fatal("ReasoningContent was not preserved in the Seahorse DB")
+	}
+}
+
 func TestSeahorseToProviderMessagesWithReasoning(t *testing.T) {
 	result := &seahorse.AssembleResult{
 		Messages: []seahorse.Message{
