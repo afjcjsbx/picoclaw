@@ -49,6 +49,11 @@ type CompactRequest struct {
 	SessionKey string                // session identifier
 	Reason     ContextCompressReason // proactive_budget | llm_retry | summarize | manual
 	Budget     int                   // context window budget (used for retry aggressive compaction)
+	// ActiveTurnMessages is the number of trailing messages persisted by the
+	// turn in progress. Compaction must never fold these messages into a
+	// summary; it is zero when no turn is active (for example post-turn
+	// compaction).
+	ActiveTurnMessages int
 	// Instructions optionally steers what the summary should focus on (manual only).
 	Instructions string
 }

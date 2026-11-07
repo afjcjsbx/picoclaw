@@ -1390,21 +1390,24 @@ func TestNewAgentInstance_RegistersMemoryToolWhenEnabled(t *testing.T) {
 
 func TestNewAgentInstance_FileToolsLeaveMemoryFilesToTheMemoryTool(t *testing.T) {
 	for _, enabled := range []bool{true, false} {
-		ws := t.TempDir()
-		cfg := &config.Config{Agents: config.AgentsConfig{Defaults: config.AgentDefaults{
-			Workspace: ws,
-			ModelName: "test-model",
-			Memory:    config.MemoryConfig{Enabled: enabled},
-		}}}
-		cfg.Tools.WriteFile.Enabled = true
-		cfg.Tools.AppendFile.Enabled = true
-		cfg.Tools.EditFile.Enabled = true
-		agent := NewAgentInstance(nil, &cfg.Agents.Defaults, cfg, &mockProvider{})
-
 		for name, args := range map[string]map[string]any{
 			"write_file":  {"content": "x"},
 			"append_file": {"content": "x"},
 		} {
+			// Each tool gets its own workspace: append_file creates MEMORY.md,
+			// so sharing it would make write_file fail with "already exists"
+			// depending on map iteration order.
+			ws := t.TempDir()
+			cfg := &config.Config{Agents: config.AgentsConfig{Defaults: config.AgentDefaults{
+				Workspace: ws,
+				ModelName: "test-model",
+				Memory:    config.MemoryConfig{Enabled: enabled},
+			}}}
+			cfg.Tools.WriteFile.Enabled = true
+			cfg.Tools.AppendFile.Enabled = true
+			cfg.Tools.EditFile.Enabled = true
+			agent := NewAgentInstance(nil, &cfg.Agents.Defaults, cfg, &mockProvider{})
+
 			tool, ok := agent.Tools.Get(name)
 			if !ok {
 				t.Fatalf("%s not registered", name)

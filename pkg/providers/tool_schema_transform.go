@@ -95,6 +95,16 @@ func (p *toolSchemaTransformProvider) SupportsThinking() bool {
 	return ok && tc.SupportsThinking()
 }
 
+func (p *toolSchemaTransformProvider) ReplaysReasoningContent() bool {
+	if p == nil || p.delegate == nil {
+		return true
+	}
+	if capable, ok := p.delegate.(ReasoningReplayCapable); ok {
+		return capable.ReplaysReasoningContent()
+	}
+	return true
+}
+
 func (p *toolSchemaTransformProvider) SupportsNativeSearch() bool {
 	ns, ok := p.delegate.(NativeSearchCapable)
 	return ok && ns.SupportsNativeSearch()
