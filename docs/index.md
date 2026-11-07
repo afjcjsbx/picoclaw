@@ -1,3 +1,6 @@
+---
+description: "PicoClaw documentation home: install the ultra-lightweight Go AI assistant, add model providers, connect chat apps, and run it on any Linux board."
+---
 # PicoClaw Documentation
 
 PicoClaw is an ultra-lightweight personal AI assistant written in Go. It runs on $10 hardware with 10–20 MB RAM, boots in under a second, and ships as a single binary across RISC-V, ARM, MIPS, LoongArch, and x86.

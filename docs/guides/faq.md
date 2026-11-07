@@ -1,3 +1,6 @@
+---
+description: "Short answers to the PicoClaw questions that come up most often, each pointing to the full document when you need the details."
+---
 # FAQ
 
 Short answers to questions that come up often. When an answer points to a full document, start there for details.

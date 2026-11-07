@@ -1,3 +1,6 @@
+---
+description: "PicoClaw includes an mcp CLI command group for managing MCP server entries in config.json."
+---
 # MCP Server CLI
 
 > Back to [README](../README.md)

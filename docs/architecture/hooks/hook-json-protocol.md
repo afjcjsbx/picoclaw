@@ -1,3 +1,6 @@
+---
+description: "All hooks use JSON-RPC 2.0 format, with one JSON message per line, transmitted via stdio."
+---
 # Hook JSON-RPC Protocol Details
 
 All hooks use `JSON-RPC 2.0` format, with one JSON message per line, transmitted via stdio.

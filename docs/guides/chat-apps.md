@@ -1,3 +1,7 @@
+---
+description: "Connect PicoClaw to chat apps: Telegram, Discord, Slack, Matrix, Feishu, WeCom, Weixin, QQ, LINE, MQTT, and more."
+title: "Chat Apps Configuration"
+---
 # 💬 Chat Apps Configuration
 
 > Back to [README](../README.md)

@@ -1,3 +1,6 @@
+---
+description: "Discord is a free voice, video, and text chat application designed for communities."
+---
 > Back to [README](https://github.com/afjcjsbx/picoclaw/blob/main/README.md)
 
 # Discord

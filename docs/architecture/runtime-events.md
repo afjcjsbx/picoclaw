@@ -1,3 +1,6 @@
+---
+description: "PicoClaw runtime events are the read-only observation surface for agent, channel, gateway, message bus, and MCP activity."
+---
 # Runtime Events And Event Logging
 
 PicoClaw runtime events are the read-only observation surface for agent, channel, gateway, message bus, and MCP activity. Publishing events and printing logs are separate responsibilities:

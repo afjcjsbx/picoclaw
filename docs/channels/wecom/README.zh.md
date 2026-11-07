@@ -1,3 +1,7 @@
+---
+lang: zh
+description: "PicoClaw 将企业微信整合为单一的 channels.wecom 渠道，基于腾讯官方企业微信 AI Bot WebSocket API 实现。 原有的 wecom、wecom_app、wecom_aibot 三个独立渠道已合并为统一配置模型。"
+---
 > 返回 [README](../../project/README.zh.md)
 
 # 企业微信（WeCom）

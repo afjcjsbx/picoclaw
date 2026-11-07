@@ -1,3 +1,6 @@
+---
+description: "PicoClaw sessions decide which messages share the same conversation history."
+---
 # Session Guide
 
 > Back to [README](../README.md)

@@ -1,3 +1,6 @@
+---
+description: "The todo tool: how the agent keeps a structured task list per session, when it uses one, and how to disable it."
+---
 # Todo planning tool
 
 `todo` is enabled by default. Disable it with `"tools": {"todo": {"enabled": false}}`

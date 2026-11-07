@@ -1,3 +1,7 @@
+---
+title: "Spawn & Async Tasks"
+description: "PicoClaw supports asynchronous task execution via the spawn tool. This is primarily used by the Heartbeat system to run long-running tasks without blocking."
+---
 # 🔄 Spawn & Async Tasks
 
 > Back to [README](../README.md)

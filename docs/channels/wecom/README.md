@@ -1,3 +1,6 @@
+---
+description: "PicoClaw exposes WeCom as a single channels.wecom channel built on the official WeCom AI Bot WebSocket API."
+---
 > Back to [README](https://github.com/afjcjsbx/picoclaw/blob/main/README.md)
 
 # WeCom

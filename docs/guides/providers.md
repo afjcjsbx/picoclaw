@@ -1,3 +1,7 @@
+---
+description: "Configure PicoClaw model providers: OpenAI-compatible endpoints, Anthropic, Gemini, local models, routing, and per-task model choice."
+title: "Providers & Model Configuration"
+---
 # 🔌 Providers & Model Configuration
 
 > Back to [README](../README.md)

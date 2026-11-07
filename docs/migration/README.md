@@ -1,3 +1,6 @@
+---
+description: "PicoClaw migration notes: configuration and behaviour changes between versions, with upgrade steps."
+---
 # Migration
 
 Migration notes for major configuration and behavior changes across PicoClaw versions.

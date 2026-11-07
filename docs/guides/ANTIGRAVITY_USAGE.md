@@ -1,3 +1,6 @@
+---
+description: "How to set up and use the Antigravity (Google Cloud Code Assist) provider in PicoClaw."
+---
 # Using Antigravity Provider in PicoClaw
 
 This guide explains how to set up and use the **Antigravity** (Google Cloud Code Assist) provider in PicoClaw.

@@ -1,3 +1,6 @@
+---
+description: "PicoClaw documentation is organized by document type first and language second."
+---
 # PicoClaw Documentation
 
 PicoClaw documentation is organized by document type first and language second.

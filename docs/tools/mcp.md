@@ -1,3 +1,6 @@
+---
+description: "The MCP tool enables integration with external Model Context Protocol servers."
+---
 # MCP tools
 
 The MCP tool enables integration with external Model Context Protocol servers. Every tool exposed by a connected server becomes an individual agent tool named `mcp_<server>_<tool>`; the components are sanitized into valid identifiers, and a short hash suffix keeps names distinct (and within the 64-character API limit) when sanitization or truncation would collide.

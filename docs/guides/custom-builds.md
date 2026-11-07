@@ -1,3 +1,6 @@
+---
+description: "Build PicoClaw yourself: channel selection tags, the seahorse and sqlite build options, and the measured binary size for each configuration."
+---
 # Custom Builds
 
 PicoClaw's standard builds keep the full built-in channel set and Seahorse

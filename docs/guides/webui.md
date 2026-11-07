@@ -1,3 +1,6 @@
+---
+description: "Use the PicoClaw launcher and Web UI: browser-based configuration, chat, first-run setup, remote access, tray, and logs."
+---
 # Web UI & Launcher Guide
 
 The **PicoClaw Launcher** (`picoclaw-launcher`) is the browser-based interface for configuring and chatting with PicoClaw. It is the recommended way to get started on desktop: no command-line knowledge required.

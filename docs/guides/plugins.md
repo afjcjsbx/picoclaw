@@ -1,3 +1,6 @@
+---
+description: "PicoClaw supports Agent Plugins 1.0.0, including skills, stdio MCP, Streamable HTTP MCP and legacy HTTP+SSE MCP. The 1.1.0 draft is not enabled."
+---
 # Agent Plugin Installation and Reference
 
 PicoClaw supports **Agent Plugins 1.0.0**, including skills, stdio MCP,

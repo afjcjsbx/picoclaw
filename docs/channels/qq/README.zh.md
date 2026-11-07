@@ -1,3 +1,7 @@
+---
+lang: zh
+description: "将 PicoClaw 接入 QQ：使用 QQ 开放平台官方机器人 API 完成配置、鉴权、事件接收与消息回复。"
+---
 > 返回 [README](../../project/README.zh.md)
 
 # QQ
