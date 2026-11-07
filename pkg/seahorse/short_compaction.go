@@ -95,7 +95,15 @@ func (e *CompactionEngine) Compact(
 	} else if input.ContextWindow > 0 {
 		// Direct engine callers that do not have a precomputed budget can still
 		// use the documented threshold semantics.
-		budget = int(float64(input.ContextWindow) * ContextThreshold)
+		needed, err := e.NeedsCompaction(ctx, convID, input.ContextWindow)
+		if err != nil {
+			return nil, err
+		}
+		if needed {
+			budget = int(float64(input.ContextWindow) * ContextThreshold)
+		} else {
+			budget = tokensBefore
+		}
 	} else {
 		// No target means no automatic condensed pass. The previous fallback
 		// compared tokens with 75% of themselves, which was always true.
