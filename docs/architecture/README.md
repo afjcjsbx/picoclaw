@@ -1,3 +1,6 @@
+---
+description: "PicoClaw internals: session storage, Seahorse memory, routing, runtime events, hooks, steering, sub-turns, and tool orchestration."
+---
 # Architecture
 
 Internal architecture notes for major runtime mechanisms and subsystem design.

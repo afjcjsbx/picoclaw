@@ -1,3 +1,7 @@
+---
+lang: zh
+description: "PicoClaw 的 runtime event 是运行时观察面，用来描述 agent、channel、gateway、message bus、MCP 等组件发生了什么。事件发布和日志打印是两件事：."
+---
 # Runtime Events 与事件日志
 
 PicoClaw 的 runtime event 是运行时观察面，用来描述 agent、channel、gateway、message bus、MCP 等组件发生了什么。事件发布和日志打印是两件事：

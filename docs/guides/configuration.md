@@ -1,3 +1,7 @@
+---
+description: "PicoClaw configuration reference: environment variables, workspace layout, routing rules, sandbox and isolation settings."
+title: "Configuration Guide"
+---
 # ⚙️ Configuration Guide
 
 > Back to [README](../README.md)

@@ -1,3 +1,6 @@
+---
+description: "Seahorse is PicoClaw's optional, SQLite-backed short-term context manager."
+---
 # Seahorse Memory System
 
 > Back to [README](README.md) · Related: [Session System](session-system.md),

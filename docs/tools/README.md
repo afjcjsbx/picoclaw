@@ -1,3 +1,6 @@
+---
+description: "PicoClaw tools reference: every tool family, its config.json switch, parameters, and runtime behaviour."
+---
 # Tools
 
 PicoClaw registers its tools dynamically at runtime. Each one can be enabled or disabled under `tools` in `config.json`; the [tool switch table](../reference/tools_configuration.md#tool-switches) lists every tool with its switch, default state, and documentation.

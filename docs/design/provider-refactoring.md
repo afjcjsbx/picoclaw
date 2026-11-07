@@ -1,3 +1,6 @@
+---
+description: "Design note on refactoring the provider layer, with the manual work each new OpenAI-compatible provider required before the change."
+---
 # Provider Architecture Refactoring Design
 
 > Issue: #283

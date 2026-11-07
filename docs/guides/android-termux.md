@@ -1,3 +1,6 @@
+---
+description: "Running the PicoClaw terminal binary on an ARM64 Android phone with Termux."
+---
 # Android Termux Guide
 
 > Back to [Guides](README.md)

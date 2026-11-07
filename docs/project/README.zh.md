@@ -1,3 +1,7 @@
+---
+lang: zh
+description: "PicoClaw 中文项目说明：超轻量 Go 个人 AI 助手，可在 10 美元的开发板上以 10 到 20 MB 内存运行，支持 RISC-V、ARM、MIPS、LoongArch 和 x86。"
+---
 <div align="center">
 
 <img src="https://raw.githubusercontent.com/afjcjsbx/picoclaw/main/assets/logo.webp" alt="PicoClaw" width="200">

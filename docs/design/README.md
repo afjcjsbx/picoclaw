@@ -1,3 +1,6 @@
+---
+description: "PicoClaw design notes: proposals and investigations kept for historical context and implementation rationale."
+---
 # Design Notes
 
 Proposal-style and exploratory documents kept for historical context and implementation rationale. For settled behavior, see [`../architecture/`](../architecture/README.md). Locale-specific working notes are allowed here without an English source document.

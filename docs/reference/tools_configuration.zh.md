@@ -1,3 +1,8 @@
+---
+lang: zh
+title: "工具配置"
+description: "PicoClaw 的工具配置位于 config.json 的 tools 字段中。在将工具结果发送给 LLM 之前，PicoClaw 可以从输出中过滤敏感值（API 密钥、令牌、密码）。这可以防止 LLM 看到自己的凭据。"
+---
 # 🔧 工具配置
 
 > 返回 [README](../project/README.zh.md)

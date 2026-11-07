@@ -1,3 +1,6 @@
+---
+description: "PicoClaw ships a filesystem tool family for reading, writing, and searching files. Relative paths are resolved from the agent workspace."
+---
 # Filesystem tools
 
 PicoClaw ships a filesystem tool family for reading, writing, and searching files. Relative paths are resolved from the agent workspace.

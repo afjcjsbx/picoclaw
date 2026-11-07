@@ -1,3 +1,6 @@
+---
+description: "Schedule work in PicoClaw: cron expressions, one-shot reminders, agent turns, and shell commands stored in the workspace."
+---
 # Scheduled Tasks and Cron Jobs
 
 > Back to [README](../README.md)

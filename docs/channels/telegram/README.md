@@ -1,3 +1,6 @@
+---
+description: "The Telegram channel uses long polling via the Telegram Bot API for bot-based communication."
+---
 > Back to [README](https://github.com/afjcjsbx/picoclaw/blob/main/README.md)
 
 # Telegram
