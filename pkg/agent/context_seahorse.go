@@ -18,7 +18,6 @@ import (
 	"github.com/sipeed/picoclaw/pkg/seahorse"
 	"github.com/sipeed/picoclaw/pkg/session"
 	"github.com/sipeed/picoclaw/pkg/session/pruner"
-	"github.com/sipeed/picoclaw/pkg/tokenizer"
 )
 
 // seahorseContextManager adapts seahorse.Engine to agent.ContextManager.
@@ -355,9 +354,21 @@ func (m *seahorseContextManager) Ingest(ctx context.Context, req *IngestRequest)
 		return nil
 	}
 
-	msg := providerToSeahorseMessage(req.Message)
+	msg := providerToSeahorseMessageWithProvider(m.providerForSession(req.SessionKey), req.Message)
 	_, err := m.engine.Ingest(ctx, req.SessionKey, []seahorse.Message{msg})
 	return err
+}
+
+// providerForSession resolves the provider that will send the session's next
+// prompt, so seahorse token counts match what the provider actually receives.
+func (m *seahorseContextManager) providerForSession(sessionKey string) providers.LLMProvider {
+	if m == nil || m.al == nil {
+		return nil
+	}
+	if agent := m.al.agentForSession(sessionKey); agent != nil {
+		return agent.Provider
+	}
+	return nil
 }
 
 // Clear removes all stored context for a session (seahorse DB + JSONL).
@@ -397,9 +408,10 @@ func (m *seahorseContextManager) bootstrapSession(ctx context.Context, sessionKe
 	}
 
 	// Convert provider messages to seahorse messages
+	provider := m.providerForSession(sessionKey)
 	msgs := make([]seahorse.Message, len(history))
 	for i, h := range history {
-		msgs[i] = providerToSeahorseMessage(h)
+		msgs[i] = providerToSeahorseMessageWithProvider(provider, h)
 	}
 
 	if err := m.engine.Bootstrap(ctx, sessionKey, msgs); err != nil {
@@ -412,12 +424,22 @@ func (m *seahorseContextManager) bootstrapSession(ctx context.Context, sessionKe
 
 // providerToSeahorseMessage converts a providers.Message to a seahorse.Message.
 func providerToSeahorseMessage(msg protocoltypes.Message) seahorse.Message {
+	return providerToSeahorseMessageWithProvider(nil, msg)
+}
+
+// providerToSeahorseMessageWithProvider counts only what the provider will
+// send, so reasoning that is stripped on replay does not inflate seahorse's
+// budgets or make compaction run earlier than necessary.
+func providerToSeahorseMessageWithProvider(
+	provider providers.LLMProvider,
+	msg protocoltypes.Message,
+) seahorse.Message {
 	result := seahorse.Message{
 		Role:             msg.Role,
 		Content:          msg.Content,
 		ModelName:        msg.ModelName,
 		ReasoningContent: msg.ReasoningContent,
-		TokenCount:       tokenizer.EstimateMessageTokens(msg),
+		TokenCount:       estimateMessageTokensForProvider(provider, msg),
 		CreatedAt:        normalizeSeahorseMessageCreatedAt(msg.CreatedAt),
 	}
 

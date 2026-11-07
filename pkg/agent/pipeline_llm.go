@@ -504,9 +504,14 @@ func (p *Pipeline) CallLLM(
 				rebuilt := p.reassembleActiveTurn(ctx, ts, exec, skillContextTriggerContextRetryRebuild)
 				stableHistory, protectedTurnTail, buildMessages := rebuilt.stable, rebuilt.protected, rebuilt.build
 				originalHistoryCount := len(exec.history)
+				trimProvider := exec.activeProvider
+				if trimProvider == nil {
+					trimProvider = ts.agent.Provider
+				}
 				var fit bool
 				var trimmedStableHistory []providers.Message //nolint:prealloc // Replaced by the slice returned from trimming below.
-				trimmedStableHistory, exec.callMessages, fit = trimHistoryToFitContextWindow(
+				trimmedStableHistory, exec.callMessages, fit = trimHistoryToFitContextWindowForProvider(
+					trimProvider,
 					stableHistory,
 					func(trimmedHistory []providers.Message) []providers.Message {
 						rebuilt := buildMessages(trimmedHistory)

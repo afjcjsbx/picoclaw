@@ -26,12 +26,17 @@ func (p *Pipeline) CompactBeforeLLM(ctx context.Context, ts *turnState, exec *tu
 		return
 	}
 
-	toolTokens := EstimateToolDefsTokens(filterToolsByTurnProfile(ts.agent.Tools.ToProviderDefs(), ts.profile))
+	toolDefs := filterToolsByTurnProfile(ts.agent.Tools.ToProviderDefs(), ts.profile)
+	provider := exec.activeProvider
+	if provider == nil {
+		provider = ts.agent.Provider
+	}
+	toolTokens := EstimateToolDefsTokens(toolDefs)
 	threshold := summarizeThresholdTokens(ts.agent)
 	for pass := 0; pass < maxCompactionPasses; pass++ {
 		promptTokens := toolTokens
 		for _, m := range exec.messages {
-			promptTokens += EstimateMessageTokens(m)
+			promptTokens += estimateMessageTokensForProvider(provider, m)
 		}
 		if promptTokens < threshold {
 			return
