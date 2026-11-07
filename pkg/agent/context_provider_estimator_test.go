@@ -40,7 +40,11 @@ func TestEstimateMessageTokensForProviderSkipsStrippedReasoning(t *testing.T) {
 	stripped := estimateMessageTokensForProvider(reasoningReplayTestProvider{replay: false}, msg)
 
 	if replayed <= stripped {
-		t.Fatalf("replayed tokens = %d, stripped = %d; reasoning should add tokens only when replayed", replayed, stripped)
+		t.Fatalf(
+			"replayed tokens = %d, stripped = %d; reasoning should add tokens only when replayed",
+			replayed,
+			stripped,
+		)
 	}
 	if want := EstimateMessageTokens(providers.Message{Role: "assistant", Content: "ok"}); stripped != want {
 		t.Fatalf("stripped tokens = %d, want content-only %d", stripped, want)
@@ -55,10 +59,18 @@ func TestEstimatePromptTokensUsesProviderReasoningCapability(t *testing.T) {
 	}
 	const threshold = 1_000
 
-	if got := estimatePromptTokens(reasoningReplayTestProvider{replay: false}, []providers.Message{msg}, nil); got >= threshold {
+	if got := estimatePromptTokens(
+		reasoningReplayTestProvider{replay: false},
+		[]providers.Message{msg},
+		nil,
+	); got >= threshold {
 		t.Fatalf("stripped-reasoning prompt = %d tokens, want below threshold %d", got, threshold)
 	}
-	if got := estimatePromptTokens(reasoningReplayTestProvider{replay: true}, []providers.Message{msg}, nil); got < threshold {
+	if got := estimatePromptTokens(
+		reasoningReplayTestProvider{replay: true},
+		[]providers.Message{msg},
+		nil,
+	); got < threshold {
 		t.Fatalf("replayed-reasoning prompt = %d tokens, want at least threshold %d", got, threshold)
 	}
 }

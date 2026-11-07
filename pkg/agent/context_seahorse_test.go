@@ -630,13 +630,13 @@ func TestSeahorseCompactProtectsActiveTurnMessages(t *testing.T) {
 		})
 	}
 
-	if err := mgr.Compact(ctx, &CompactRequest{
+	if compactErr := mgr.Compact(ctx, &CompactRequest{
 		SessionKey:         "active-turn-boundary",
 		Reason:             ContextCompressReasonThreshold,
 		Budget:             100000,
 		ActiveTurnMessages: 40,
-	}); err != nil {
-		t.Fatalf("Compact: %v", err)
+	}); compactErr != nil {
+		t.Fatalf("Compact: %v", compactErr)
 	}
 
 	assembled, err := engine.Assemble(ctx, "active-turn-boundary", seahorse.AssembleInput{Budget: 100000})

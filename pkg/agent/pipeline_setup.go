@@ -50,7 +50,13 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 
 	if !ts.opts.NoHistory {
 		toolDefs := filterToolsByTurnProfile(ts.agent.Tools.ToProviderDefs(), ts.profile)
-		if isOverContextBudgetForProvider(ts.agent.Provider, ts.agent.ContextWindow, messages, toolDefs, ts.agent.MaxTokens) {
+		if isOverContextBudgetForProvider(
+			ts.agent.Provider,
+			ts.agent.ContextWindow,
+			messages,
+			toolDefs,
+			ts.agent.MaxTokens,
+		) {
 			logger.WarnCF("agent", "Proactive compression: context budget exceeded before LLM call",
 				map[string]any{"session_key": ts.sessionKey})
 			if err := p.ContextManager.Compact(ctx, &CompactRequest{

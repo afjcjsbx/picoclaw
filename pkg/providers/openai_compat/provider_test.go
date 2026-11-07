@@ -27,7 +27,12 @@ func TestReplaysReasoningContent(t *testing.T) {
 		apiBase      string
 		want         bool
 	}{
-		{name: "opencode-go strips", providerName: "opencode-go", apiBase: "https://opencode.ai/inference/go/openai/v1", want: false},
+		{
+			name:         "opencode-go strips",
+			providerName: "opencode-go",
+			apiBase:      "https://opencode.ai/inference/go/openai/v1",
+			want:         false,
+		},
 		{name: "openai strips", providerName: "openai", apiBase: "https://api.openai.com/v1", want: false},
 		{name: "deepseek replays", providerName: "deepseek", apiBase: "https://api.deepseek.com", want: true},
 		{name: "deepseek host replays", providerName: "", apiBase: "https://api.deepseek.com/v1", want: true},
