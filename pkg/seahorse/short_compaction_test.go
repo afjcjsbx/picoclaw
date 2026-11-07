@@ -268,8 +268,12 @@ func TestTruncateSummaryPreservesLatestUserAndToolResults(t *testing.T) {
 			Content: strings.Repeat("old output that should be truncated first ", 80),
 		})
 	}
-	messages = append(messages,
-		Message{Role: "user", Content: "ULTIMA ISTRUZIONE: apri la PR " + strings.Repeat("dettaglio ", 500)},
+	messages = append(
+		messages,
+		Message{
+			Role:    "user",
+			Content: "ULTIMA ISTRUZIONE: apri la PR " + strings.Repeat("dettaglio ", 500),
+		},
 		Message{Role: "assistant", Content: "STATO TASK: branch pushato, manca la PR"},
 		Message{Role: "tool", Content: "ULTIMO TOOL RESULT: ec8a3be4a"},
 	)
@@ -439,7 +443,10 @@ func TestCompactCondensedDoesNotOrphanSummaryWhenCandidatesRemovedConcurrently(t
 	// With the bug: returns non-nil summaryID even though context_items has no matching ordinals
 	// The fix: should return nil when startOrd == -1
 	if res.summaryID != nil {
-		t.Errorf("compactCondensed returned summaryID=%s, want nil (orphan created)", *res.summaryID)
+		t.Errorf(
+			"compactCondensed returned summaryID=%s, want nil (orphan created)",
+			*res.summaryID,
+		)
 
 		// Verify the orphan exists in DB
 		summary, _ := s.GetSummary(context.Background(), *res.summaryID)
@@ -454,7 +461,9 @@ func TestCompactCondensedDoesNotOrphanSummaryWhenCandidatesRemovedConcurrently(t
 				}
 			}
 			if !found {
-				t.Error("condensed summary exists in DB but not in context_items — orphan confirmed")
+				t.Error(
+					"condensed summary exists in DB but not in context_items — orphan confirmed",
+				)
 			}
 		}
 	}
@@ -625,6 +634,87 @@ func TestCompactCondensedUsesOrdinalAwareSelection(t *testing.T) {
 		if s.Depth != 0 {
 			t.Errorf("got depth %d, want 0", s.Depth)
 		}
+	}
+}
+
+func TestSelectOldestChunkAtDepthSkipsOversizedSummary(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	conv, _ := s.GetOrCreateConversation(ctx, "test:oversized-condense")
+	convID := conv.ConversationID
+
+	huge, _ := s.CreateSummary(ctx, CreateSummaryInput{
+		ConversationID: convID, Kind: SummaryKindLeaf, Content: "huge", TokenCount: LeafChunkTokens + 1,
+	})
+	if err := s.AppendContextSummary(ctx, convID, huge.SummaryID); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < CondensedMinFanout; i++ {
+		sum, _ := s.CreateSummary(ctx, CreateSummaryInput{
+			ConversationID: convID, Kind: SummaryKindLeaf, Content: "leaf", TokenCount: 500,
+		})
+		if err := s.AppendContextSummary(ctx, convID, sum.SummaryID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < FreshTailCount; i++ {
+		m, _ := s.AddMessage(ctx, convID, "user", "fresh", 1)
+		if err := s.AppendContextMessage(ctx, convID, m.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ce, cancel := newTestCompactionEngineWithStore(s, mockCompleteFn)
+	defer cancel()
+	chunk, err := ce.selectOldestChunkAtDepth(ctx, convID, 0)
+	if err != nil {
+		t.Fatalf("selectOldestChunkAtDepth: %v", err)
+	}
+	if len(chunk) != CondensedMinFanout {
+		t.Fatalf(
+			"chunk len = %d, want %d after skipping oversized summary",
+			len(chunk),
+			CondensedMinFanout,
+		)
+	}
+}
+
+func TestCompactCondensedDiscardsNonShrinkingSummary(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	conv, _ := s.GetOrCreateConversation(ctx, "test:no-shrink")
+	convID := conv.ConversationID
+	for i := 0; i < CondensedMinFanout; i++ {
+		sum, _ := s.CreateSummary(ctx, CreateSummaryInput{
+			ConversationID: convID, Kind: SummaryKindLeaf, Content: "leaf", TokenCount: 500,
+		})
+		if err := s.AppendContextSummary(ctx, convID, sum.SummaryID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < FreshTailCount; i++ {
+		m, _ := s.AddMessage(ctx, convID, "user", "fresh", 1)
+		if err := s.AppendContextMessage(ctx, convID, m.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	largeComplete := func(ctx context.Context, prompt string, opts CompleteOptions) (string, error) {
+		return strings.Repeat("x", 10000), nil
+	}
+	ce, cancel := newTestCompactionEngineWithStore(s, largeComplete)
+	defer cancel()
+	before, _ := s.GetSummariesByConversation(ctx, convID)
+	id, err := ce.compactCondensed(ctx, convID, "")
+	if err != nil {
+		t.Fatalf("compactCondensed: %v", err)
+	}
+	if id != nil {
+		t.Fatal("expected non-shrinking condensed summary to be discarded")
+	}
+	after, _ := s.GetSummariesByConversation(ctx, convID)
+	if len(after) != len(before) {
+		t.Fatalf("non-shrinking summary was persisted: before=%d after=%d", len(before), len(after))
 	}
 }
 
