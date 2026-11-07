@@ -99,7 +99,10 @@ func (al *AgentLoop) applyExplicitSkillCommand(
 
 	skillName, ok := agent.ContextBuilder.ResolveSkillName(arg)
 	if !ok {
-		return true, true, fmt.Sprintf("Unknown skill: %s\nUse /list skills to see installed skills.", arg)
+		return true, true, fmt.Sprintf(
+			"Unknown skill: %s\nUse /list skills to see installed skills.",
+			arg,
+		)
 	}
 
 	if len(parts) < 3 {
@@ -221,12 +224,18 @@ func (al *AgentLoop) buildCommandsRuntime(
 
 			manager := al.mcp.getManager()
 			if manager == nil {
-				return nil, fmt.Errorf("MCP server '%s' is configured but not connected", resolvedName)
+				return nil, fmt.Errorf(
+					"MCP server '%s' is configured but not connected",
+					resolvedName,
+				)
 			}
 
 			conn, ok := manager.GetServer(resolvedName)
 			if !ok {
-				return nil, fmt.Errorf("MCP server '%s' is configured but not connected", resolvedName)
+				return nil, fmt.Errorf(
+					"MCP server '%s' is configured but not connected",
+					resolvedName,
+				)
 			}
 
 			toolInfos := make([]commands.MCPToolInfo, 0, len(conn.Tools))
@@ -337,7 +346,10 @@ func (al *AgentLoop) buildCommandsRuntime(
 			modelMu := agent.modelStateMutex()
 			modelMu.RLock()
 			defer modelMu.RUnlock()
-			return agent.Model, resolvedCandidateProvider(agent.Candidates, cfg.Agents.Defaults.Provider)
+			return agent.Model, resolvedCandidateProvider(
+				agent.Candidates,
+				cfg.Agents.Defaults.Provider,
+			)
 		}
 		rt.SwitchModel = func(value string) (string, error) {
 			value = strings.TrimSpace(value)
@@ -355,7 +367,12 @@ func (al *AgentLoop) buildCommandsRuntime(
 				return "", fmt.Errorf("model %q not found in model_list or providers", value)
 			}
 
-			nextCandidates := resolveModelCandidates(cfg, cfg.Agents.Defaults.Provider, value, agent.Fallbacks)
+			nextCandidates := resolveModelCandidates(
+				cfg,
+				cfg.Agents.Defaults.Provider,
+				value,
+				agent.Fallbacks,
+			)
 			if len(nextCandidates) == 0 {
 				return "", fmt.Errorf("model %q did not resolve to any provider candidates", value)
 			}
@@ -396,7 +413,10 @@ func (al *AgentLoop) buildCommandsRuntime(
 			oldModel := agent.Model
 			oldProvider := agent.Provider
 			oldCandidateProviders := agent.CandidateProviders
-			previousProviders := make(map[string]providers.LLMProvider, len(oldCandidateProviders)+1)
+			previousProviders := make(
+				map[string]providers.LLMProvider,
+				len(oldCandidateProviders)+1,
+			)
 			for key, provider := range oldCandidateProviders {
 				previousProviders[key] = provider
 			}
@@ -456,7 +476,7 @@ func (al *AgentLoop) buildCommandsRuntime(
 			err := al.contextManager.Compact(ctx, &CompactRequest{
 				SessionKey:         opts.SessionKey,
 				Reason:             ContextCompressReasonManual,
-				Budget:             agent.ContextWindow,
+				Budget:             usableContextTokens(agent),
 				ActiveTurnMessages: al.activeTurnMessageCountForSession(opts.SessionKey),
 				Instructions:       focus,
 			})

@@ -161,11 +161,14 @@ toolLoop:
 		// of direction, so let the model react to it. The loop guard still
 		// applies on the next iteration if the model keeps repeating the call.
 		if steerMsgs := al.dequeueSteeringMessagesForScope(ts.sessionKey); len(steerMsgs) > 0 {
-			logger.InfoCF("agent", "Steering arrived during critical loop detection; continuing turn",
+			logger.InfoCF(
+				"agent",
+				"Steering arrived during critical loop detection; continuing turn",
 				map[string]any{
 					"agent_id":       ts.agent.ID,
 					"steering_count": len(steerMsgs),
-				})
+				},
+			)
 			exec.pendingMessages = append(exec.pendingMessages, steerMsgs...)
 			exec.allResponsesHandled = false
 			return ToolControlContinue
@@ -252,13 +255,18 @@ toolLoop:
 			al.contextManager.Compact(turnCtx, &CompactRequest{
 				SessionKey: ts.sessionKey,
 				Reason:     ContextCompressReasonSummarize,
-				Budget:     ts.agent.ContextWindow,
+				Budget:     usableContextTokens(ts.agent),
 			})
 		}
 		ts.setPhase(TurnPhaseCompleted)
 		ts.setFinalContent("")
 		if al.channelManager != nil && ts.channel != "" {
-			al.channelManager.DismissToolFeedback(ctx, ts.channel, ts.chatID, ts.opts.InboundContext)
+			al.channelManager.DismissToolFeedback(
+				ctx,
+				ts.channel,
+				ts.chatID,
+				ts.opts.InboundContext,
+			)
 		}
 		logger.InfoCF("agent", "Tool output satisfied delivery; ending turn without follow-up LLM",
 			map[string]any{

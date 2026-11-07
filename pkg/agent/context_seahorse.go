@@ -76,7 +76,10 @@ func newSeahorseContextManager(_ json.RawMessage, al *AgentLoop) (ContextManager
 			if stores, ok := mgr.pruneStores(); ok {
 				pruner.Run(context.Background(), engine, stores, pruneCfg)
 
-				mgr.startPruneLoop(pruneCfg, time.Duration(pruneCfg.EffectiveCheckIntervalMinutes())*time.Minute)
+				mgr.startPruneLoop(
+					pruneCfg,
+					time.Duration(pruneCfg.EffectiveCheckIntervalMinutes())*time.Minute,
+				)
 			}
 		}
 	}
@@ -134,9 +137,11 @@ func (m *seahorseContextManager) pruneStores() (stores []pruner.Store, ok bool) 
 	}
 	if !ok {
 		m.warnUnprunable.Do(func() {
-			logger.WarnCF("session-prune",
+			logger.WarnCF(
+				"session-prune",
 				"Session pruning is enabled but a session store cannot delete sessions; pruning skipped",
-				nil)
+				nil,
+			)
 		})
 		return nil, false
 	}
@@ -156,7 +161,10 @@ func asPruneStore(store session.SessionStore) pruner.Store {
 }
 
 // startPruneLoop runs a prune pass every interval in the background until Close.
-func (m *seahorseContextManager) startPruneLoop(cfg config.SessionPruneConfig, interval time.Duration) {
+func (m *seahorseContextManager) startPruneLoop(
+	cfg config.SessionPruneConfig,
+	interval time.Duration,
+) {
 	if interval <= 0 {
 		interval = time.Hour
 	}
@@ -212,7 +220,11 @@ func (m *seahorseContextManager) Close() error {
 // providerToCompleteFn wraps providers.LLMProvider as a seahorse.CompleteFn. A
 // transient upstream failure is retried with backoff, since seahorse does not
 // retry a failed summarization itself.
-func providerToCompleteFn(provider providers.LLMProvider, model string, retry llmRetry) seahorse.CompleteFn {
+func providerToCompleteFn(
+	provider providers.LLMProvider,
+	model string,
+	retry llmRetry,
+) seahorse.CompleteFn {
 	return func(ctx context.Context, prompt string, opts seahorse.CompleteOptions) (string, error) {
 		resp, err := chatRetryingTransient(
 			ctx,
@@ -234,8 +246,47 @@ func providerToCompleteFn(provider providers.LLMProvider, model string, retry ll
 	}
 }
 
+// staticPromptReserve estimates the prompt envelope (system prompt and tool
+// definitions) that is added around assembled history. Keeping this out of the
+// history budget prevents an assembly that is within budget only until the
+// system prompt is prepended.
+func (m *seahorseContextManager) staticPromptReserve(sessionKey string) int {
+	if m == nil || m.al == nil {
+		return 0
+	}
+	agent := m.al.agentForSession(sessionKey)
+	if agent == nil {
+		return 0
+	}
+	reserve := 0
+	if agent.Tools != nil {
+		reserve += EstimateToolDefsTokens(agent.Tools.ToProviderDefs())
+	}
+	if agent.ContextBuilder != nil {
+		// Active skills are deliberately omitted: this is the stable envelope.
+		reserve += agent.ContextBuilder.EstimateSystemTokens("", nil)
+	}
+	return reserve
+}
+
+// ContextTokens reports the token size of the stored context, if the manager
+// can expose it. It lets the agent decide to compact based on storage rather
+// than only on the prompt after assembly eviction.
+func (m *seahorseContextManager) ContextTokens(
+	ctx context.Context,
+	sessionKey string,
+) (int, error) {
+	if m == nil || m.engine == nil {
+		return 0, nil
+	}
+	return m.engine.ContextTokens(ctx, sessionKey)
+}
+
 // Assemble builds budget-aware context from seahorse SQLite.
-func (m *seahorseContextManager) Assemble(ctx context.Context, req *AssembleRequest) (*AssembleResponse, error) {
+func (m *seahorseContextManager) Assemble(
+	ctx context.Context,
+	req *AssembleRequest,
+) (*AssembleResponse, error) {
 	if req == nil {
 		return nil, fmt.Errorf("seahorse assemble: nil request")
 	}
@@ -253,6 +304,16 @@ func (m *seahorseContextManager) Assemble(ctx context.Context, req *AssembleRequ
 		logger.WarnCF("agent", "MaxTokens >= budget, using 50% fallback",
 			map[string]any{"budget": budget, "max_tokens": req.MaxTokens})
 		effectiveBudget = budget / 2
+	}
+
+	// The assembly budget is for history only. Subtract the static system
+	// prompt and tool definitions here so the assembler does not fill the
+	// entire window with history and leave no room for the prompt envelope.
+	if reserve := m.staticPromptReserve(req.SessionKey); reserve > 0 {
+		effectiveBudget -= reserve
+		if effectiveBudget < 1 {
+			effectiveBudget = 1
+		}
 	}
 
 	result, err := m.engine.Assemble(ctx, req.SessionKey, seahorse.AssembleInput{
@@ -282,7 +343,12 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 	}
 
 	if req.Reason == ContextCompressReasonManual {
-		result, err := m.engine.CompactNow(ctx, req.SessionKey, req.Instructions, req.ActiveTurnMessages)
+		result, err := m.engine.CompactNow(
+			ctx,
+			req.SessionKey,
+			req.Instructions,
+			req.ActiveTurnMessages,
+		)
 		if err != nil {
 			return err
 		}
@@ -300,7 +366,12 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 		err    error
 	)
 	if req.Reason == ContextCompressReasonRetry && req.Budget > 0 {
-		result, err = m.engine.CompactUntilUnder(ctx, req.SessionKey, req.Budget, req.ActiveTurnMessages)
+		result, err = m.engine.CompactUntilUnder(
+			ctx,
+			req.SessionKey,
+			req.Budget,
+			req.ActiveTurnMessages,
+		)
 	} else {
 		result, err = m.engine.Compact(ctx, req.SessionKey, seahorse.CompactInput{
 			Force:               req.Reason == ContextCompressReasonRetry,
@@ -385,7 +456,11 @@ func (m *seahorseContextManager) Clear(ctx context.Context, sessionKey string) e
 		}
 	}
 	if sessions != nil {
-		warnSessionStoreError(sessionKey, "set history", sessions.SetHistory(ctx, sessionKey, []providers.Message{}))
+		warnSessionStoreError(
+			sessionKey,
+			"set history",
+			sessions.SetHistory(ctx, sessionKey, []providers.Message{}),
+		)
 		warnSessionStoreError(sessionKey, "set summary", sessions.SetSummary(ctx, sessionKey, ""))
 		return sessions.Save(ctx, sessionKey)
 	}

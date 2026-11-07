@@ -38,8 +38,28 @@ func (p *Pipeline) CompactBeforeLLM(ctx context.Context, ts *turnState, exec *tu
 		for _, m := range exec.messages {
 			promptTokens += estimateMessageTokensForProvider(provider, m)
 		}
-		if promptTokens < threshold {
+		// Assembly may already have evicted old items from the prompt. In that
+		// case promptTokens can be below the threshold while the stored context
+		// is still huge; compacting based only on the prompt would let the
+		// eviction silently discard history without ever summarizing it.
+		storedTokens := 0
+		if reporter, ok := p.ContextManager.(ContextTokenReporter); ok {
+			if n, err := reporter.ContextTokens(ctx, ts.sessionKey); err == nil {
+				storedTokens = n
+			}
+		}
+		if promptTokens < threshold && storedTokens < threshold {
 			return
+		}
+		if storedTokens > promptTokens {
+			logger.InfoCF("agent", "Stored context exceeds assembled prompt; compacting",
+				map[string]any{
+					"session_key":   ts.sessionKey,
+					"prompt_tokens": promptTokens,
+					"stored_tokens": storedTokens,
+					"threshold":     threshold,
+					"pass":          pass + 1,
+				})
 		}
 
 		logger.InfoCF("agent", "Prompt reached summarize threshold, compacting before LLM call",
@@ -52,7 +72,7 @@ func (p *Pipeline) CompactBeforeLLM(ctx context.Context, ts *turnState, exec *tu
 		if err := p.ContextManager.Compact(ctx, &CompactRequest{
 			SessionKey:         ts.sessionKey,
 			Reason:             ContextCompressReasonThreshold,
-			Budget:             ts.agent.ContextWindow,
+			Budget:             usableContextTokens(ts.agent),
 			ActiveTurnMessages: activeTurnMessageCount(ts, exec),
 		}); err != nil {
 			if !errors.Is(err, ErrNothingToCompact) {

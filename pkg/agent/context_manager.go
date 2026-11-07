@@ -58,6 +58,13 @@ type CompactRequest struct {
 	Instructions string
 }
 
+// ContextTokenReporter is an optional extension implemented by context managers
+// that can report the token size of their stored context independently of the
+// currently assembled prompt.
+type ContextTokenReporter interface {
+	ContextTokens(ctx context.Context, sessionKey string) (int, error)
+}
+
 // ErrNothingToCompact is returned by Compact for a manual request when the
 // history is too short (or already compacted) for anything to be summarized.
 var ErrNothingToCompact = errors.New("nothing to compact")
