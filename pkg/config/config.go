@@ -1493,34 +1493,42 @@ type ToolsConfig struct {
 	// inline as a bounded head+tail preview plus a pointer to the full artifact.
 	// The limit is counted in Unicode characters (Go runes), not bytes.
 	// Default: 16384. A non-positive value disables the protection.
-	MaxInlineResultChars int                     `json:"max_inline_result_chars" yaml:"-"                env:"PICOCLAW_TOOLS_MAX_INLINE_RESULT_CHARS"`
-	Web                  WebToolsConfig          `json:"web"                     yaml:"web,omitempty"`
-	Cron                 CronToolsConfig         `json:"cron"                    yaml:"-"`
-	Exec                 ExecConfig              `json:"exec"                    yaml:"-"`
-	Skills               SkillsToolsConfig       `json:"skills"                  yaml:"skills,omitempty"`
-	MediaCleanup         MediaCleanupConfig      `json:"media_cleanup"           yaml:"-"`
-	MCP                  MCPConfig               `json:"mcp"                     yaml:"-"`
-	AppendFile           ToolConfig              `json:"append_file"             yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_APPEND_FILE_"`
-	EditFile             ToolConfig              `json:"edit_file"               yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_EDIT_FILE_"`
-	FindSkills           ToolConfig              `json:"find_skills"             yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_FIND_SKILLS_"`
-	I2C                  ToolConfig              `json:"i2c"                     yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_I2C_"`
-	ImageGenerate        ImageGenerateToolConfig `json:"image_generate"          yaml:"-"`
-	InstallSkill         ToolConfig              `json:"install_skill"           yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_INSTALL_SKILL_"`
-	ListDir              ToolConfig              `json:"list_dir"                yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_LIST_DIR_"`
-	LoadImage            ToolConfig              `json:"load_image"              yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_LOAD_IMAGE_"`
-	Message              MessageToolsConfig      `json:"message"                 yaml:"-"`
-	ReadFile             ReadFileToolConfig      `json:"read_file"               yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_READ_FILE_"`
-	SearchFiles          ToolConfig              `json:"search_files"            yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_SEARCH_FILES_"`
-	Serial               ToolConfig              `json:"serial"                  yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_SERIAL_"`
-	SendFile             ToolConfig              `json:"send_file"               yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_SEND_FILE_"`
-	SendTTS              ToolConfig              `json:"send_tts"                yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_SEND_TTS_"`
-	Spawn                ToolConfig              `json:"spawn"                   yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_SPAWN_"`
-	SpawnStatus          ToolConfig              `json:"spawn_status"            yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_SPAWN_STATUS_"`
-	SPI                  ToolConfig              `json:"spi"                     yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_SPI_"`
-	Subagent             ToolConfig              `json:"subagent"                yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_SUBAGENT_"`
-	Todo                 ToolConfig              `json:"todo"                    yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_TODO_"`
-	WebFetch             ToolConfig              `json:"web_fetch"               yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_WEB_FETCH_"`
-	WriteFile            ToolConfig              `json:"write_file"              yaml:"-"                                                             envPrefix:"PICOCLAW_TOOLS_WRITE_FILE_"`
+	MaxInlineResultChars int `json:"max_inline_result_chars" yaml:"-" env:"PICOCLAW_TOOLS_MAX_INLINE_RESULT_CHARS"`
+	// ArtifactMaxFiles caps how many files are kept in each artifact directory
+	// (for example <workspace>/.artifacts/tool and .artifacts/mcp) after
+	// age-based pruning. Default: 128. A non-positive value disables the count
+	// bound.
+	ArtifactMaxFiles int `json:"artifact_max_files" yaml:"-" env:"PICOCLAW_TOOLS_ARTIFACT_MAX_FILES"`
+	// ArtifactMaxAgeHours caps how old an artifact file may be before it is
+	// pruned. Default: 24. A non-positive value disables age-based pruning.
+	ArtifactMaxAgeHours int                     `json:"artifact_max_age_hours" yaml:"-"                env:"PICOCLAW_TOOLS_ARTIFACT_MAX_AGE_HOURS"`
+	Web                 WebToolsConfig          `json:"web"                    yaml:"web,omitempty"`
+	Cron                CronToolsConfig         `json:"cron"                   yaml:"-"`
+	Exec                ExecConfig              `json:"exec"                   yaml:"-"`
+	Skills              SkillsToolsConfig       `json:"skills"                 yaml:"skills,omitempty"`
+	MediaCleanup        MediaCleanupConfig      `json:"media_cleanup"          yaml:"-"`
+	MCP                 MCPConfig               `json:"mcp"                    yaml:"-"`
+	AppendFile          ToolConfig              `json:"append_file"            yaml:"-"                                                            envPrefix:"PICOCLAW_TOOLS_APPEND_FILE_"`
+	EditFile            ToolConfig              `json:"edit_file"              yaml:"-"                                                            envPrefix:"PICOCLAW_TOOLS_EDIT_FILE_"`
+	FindSkills          ToolConfig              `json:"find_skills"            yaml:"-"                                                            envPrefix:"PICOCLAW_TOOLS_FIND_SKILLS_"`
+	I2C                 ToolConfig              `json:"i2c"                    yaml:"-"                                                            envPrefix:"PICOCLAW_TOOLS_I2C_"`
+	ImageGenerate       ImageGenerateToolConfig `json:"image_generate"         yaml:"-"`
+	InstallSkill        ToolConfig              `json:"install_skill"          yaml:"-"                                                            envPrefix:"PICOCLAW_TOOLS_INSTALL_SKILL_"`
+	ListDir             ToolConfig              `json:"list_dir"               yaml:"-"                                                            envPrefix:"PICOCLAW_TOOLS_LIST_DIR_"`
+	LoadImage           ToolConfig              `json:"load_image"             yaml:"-"                                                            envPrefix:"PICOCLAW_TOOLS_LOAD_IMAGE_"`
+	Message             MessageToolsConfig      `json:"message"                yaml:"-"`
+	ReadFile            ReadFileToolConfig      `json:"read_file"              yaml:"-"                                                            envPrefix:"PICOCLAW_TOOLS_READ_FILE_"`
+	SearchFiles         ToolConfig              `json:"search_files"           yaml:"-"                                                            envPrefix:"PICOCLAW_TOOLS_SEARCH_FILES_"`
+	Serial              ToolConfig              `json:"serial"                 yaml:"-"                                                            envPrefix:"PICOCLAW_TOOLS_SERIAL_"`
+	SendFile            ToolConfig              `json:"send_file"              yaml:"-"                                                            envPrefix:"PICOCLAW_TOOLS_SEND_FILE_"`
+	SendTTS             ToolConfig              `json:"send_tts"               yaml:"-"                                                            envPrefix:"PICOCLAW_TOOLS_SEND_TTS_"`
+	Spawn               ToolConfig              `json:"spawn"                  yaml:"-"                                                            envPrefix:"PICOCLAW_TOOLS_SPAWN_"`
+	SpawnStatus         ToolConfig              `json:"spawn_status"           yaml:"-"                                                            envPrefix:"PICOCLAW_TOOLS_SPAWN_STATUS_"`
+	SPI                 ToolConfig              `json:"spi"                    yaml:"-"                                                            envPrefix:"PICOCLAW_TOOLS_SPI_"`
+	Subagent            ToolConfig              `json:"subagent"               yaml:"-"                                                            envPrefix:"PICOCLAW_TOOLS_SUBAGENT_"`
+	Todo                ToolConfig              `json:"todo"                   yaml:"-"                                                            envPrefix:"PICOCLAW_TOOLS_TODO_"`
+	WebFetch            ToolConfig              `json:"web_fetch"              yaml:"-"                                                            envPrefix:"PICOCLAW_TOOLS_WEB_FETCH_"`
+	WriteFile           ToolConfig              `json:"write_file"             yaml:"-"                                                            envPrefix:"PICOCLAW_TOOLS_WRITE_FILE_"`
 }
 
 // IsFilterSensitiveDataEnabled returns true if sensitive data filtering is enabled
@@ -1545,6 +1553,27 @@ const DefaultMaxInlineResultChars = 16 * 1024
 // A non-positive value disables large-result artifact persistence.
 func (c *ToolsConfig) GetMaxInlineResultChars() int {
 	return c.MaxInlineResultChars
+}
+
+const (
+	// DefaultArtifactMaxFiles is the default cap on files kept per artifact
+	// directory after age-based pruning.
+	DefaultArtifactMaxFiles = 128
+	// DefaultArtifactMaxAgeHours is the default retention window for artifact
+	// files, in hours.
+	DefaultArtifactMaxAgeHours = 24
+)
+
+// GetArtifactMaxFiles returns the per-directory artifact file cap.
+// A non-positive value disables the count bound.
+func (c *ToolsConfig) GetArtifactMaxFiles() int {
+	return c.ArtifactMaxFiles
+}
+
+// GetArtifactMaxAge returns the artifact retention window.
+// A non-positive duration disables age-based pruning.
+func (c *ToolsConfig) GetArtifactMaxAge() time.Duration {
+	return time.Duration(c.ArtifactMaxAgeHours) * time.Hour
 }
 
 type SearchCacheConfig struct {

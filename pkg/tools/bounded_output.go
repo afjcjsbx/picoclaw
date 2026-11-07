@@ -276,7 +276,8 @@ func (b *boundedOutput) Close() error {
 	err := b.spill.Close()
 	b.spill = nil
 	if b.spillDir != "" {
-		toolshared.PruneArtifacts(b.spillDir, toolshared.DefaultArtifactMaxAge, toolshared.DefaultArtifactMaxFiles)
+		maxAge, maxFiles := toolshared.ArtifactRetention()
+		toolshared.PruneArtifacts(b.spillDir, maxAge, maxFiles)
 	}
 	return err
 }

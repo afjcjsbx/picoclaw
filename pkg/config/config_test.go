@@ -308,6 +308,17 @@ func TestDefaultConfig_MaxInlineResultChars(t *testing.T) {
 	}
 }
 
+func TestDefaultConfig_ArtifactRetention(t *testing.T) {
+	cfg := DefaultConfig()
+	if got := cfg.Tools.GetArtifactMaxFiles(); got != DefaultArtifactMaxFiles {
+		t.Fatalf("DefaultConfig().Tools.GetArtifactMaxFiles() = %d, want %d", got, DefaultArtifactMaxFiles)
+	}
+	if got := cfg.Tools.GetArtifactMaxAge(); got != DefaultArtifactMaxAgeHours*time.Hour {
+		t.Fatalf("DefaultConfig().Tools.GetArtifactMaxAge() = %s, want %s",
+			got, DefaultArtifactMaxAgeHours*time.Hour)
+	}
+}
+
 func TestConfig_TruncationLimits(t *testing.T) {
 	cfg := DefaultConfig()
 	if got := cfg.Tools.Exec.GetMaxOutputChars(); got != DefaultExecMaxOutputChars {
@@ -764,6 +775,52 @@ func TestLoadConfig_MaxInlineResultCharsDefaultsWhenAbsent(t *testing.T) {
 			got,
 			DefaultMaxInlineResultChars,
 		)
+	}
+}
+
+func TestLoadConfig_ArtifactRetention(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	raw := `{
+		"tools": {
+			"artifact_max_files": 12,
+			"artifact_max_age_hours": 3
+		}
+	}`
+	if err := os.WriteFile(configPath, []byte(raw), 0o644); err != nil {
+		t.Fatalf("WriteFile(configPath): %v", err)
+	}
+
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error: %v", err)
+	}
+	if got := cfg.Tools.GetArtifactMaxFiles(); got != 12 {
+		t.Fatalf("cfg.Tools.GetArtifactMaxFiles() = %d, want 12", got)
+	}
+	if got := cfg.Tools.GetArtifactMaxAge(); got != 3*time.Hour {
+		t.Fatalf("cfg.Tools.GetArtifactMaxAge() = %s, want 3h", got)
+	}
+}
+
+func TestLoadConfig_ArtifactRetentionDefaultsWhenAbsent(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	raw := `{"tools": {"exec": {"enabled": true}}}`
+	if err := os.WriteFile(configPath, []byte(raw), 0o644); err != nil {
+		t.Fatalf("WriteFile(configPath): %v", err)
+	}
+
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error: %v", err)
+	}
+	if got := cfg.Tools.GetArtifactMaxFiles(); got != DefaultArtifactMaxFiles {
+		t.Fatalf("cfg.Tools.GetArtifactMaxFiles() = %d, want default %d", got, DefaultArtifactMaxFiles)
+	}
+	if got := cfg.Tools.GetArtifactMaxAge(); got != DefaultArtifactMaxAgeHours*time.Hour {
+		t.Fatalf("cfg.Tools.GetArtifactMaxAge() = %s, want default %s",
+			got, DefaultArtifactMaxAgeHours*time.Hour)
 	}
 }
 

@@ -6,11 +6,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/media"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/tools"
+	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
 type countingStatefulProvider struct {
@@ -79,6 +81,37 @@ func TestNewAgentInstance_UsesDefaultsTemperatureAndMaxTokens(t *testing.T) {
 	}
 	if agent.Temperature != 1.0 {
 		t.Fatalf("Temperature = %f, want %f", agent.Temperature, 1.0)
+	}
+}
+
+func TestNewAgentInstance_ConfiguresArtifactRetention(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				ModelName:         "test-model",
+				MaxTokens:         1234,
+				MaxToolIterations: 5,
+			},
+		},
+	}
+	cfg.Tools.ArtifactMaxFiles = 7
+	cfg.Tools.ArtifactMaxAgeHours = 2
+
+	oldMaxAge, oldMaxFiles := toolshared.ArtifactRetention()
+	t.Cleanup(func() { toolshared.SetArtifactRetention(oldMaxAge, oldMaxFiles) })
+
+	provider := &mockProvider{}
+	NewAgentInstance(nil, &cfg.Agents.Defaults, cfg, provider)
+
+	maxAge, maxFiles := toolshared.ArtifactRetention()
+	if maxAge != 2*time.Hour {
+		t.Fatalf("artifact max age = %s, want 2h", maxAge)
+	}
+	if maxFiles != 7 {
+		t.Fatalf("artifact max files = %d, want 7", maxFiles)
 	}
 }
 

@@ -344,6 +344,8 @@ func DefaultConfig() *Config {
 			FilterSensitiveData:  true,
 			FilterMinLength:      8,
 			MaxInlineResultChars: DefaultMaxInlineResultChars,
+			ArtifactMaxFiles:     DefaultArtifactMaxFiles,
+			ArtifactMaxAgeHours:  DefaultArtifactMaxAgeHours,
 			MediaCleanup: MediaCleanupConfig{
 				ToolConfig: ToolConfig{
 					Enabled: true,
