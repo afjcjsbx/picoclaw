@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/textutil"
 	"github.com/sipeed/picoclaw/pkg/tools"
 )
 
@@ -114,16 +115,33 @@ func (t *GrepTool) Parameters() map[string]any {
 func (t *GrepTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	pattern, ok := args["pattern"].(string)
 	if !ok || pattern == "" {
-		return tools.ErrorResult("Missing required 'pattern' argument. Example: {\"pattern\": \"authentication\"}")
+		return tools.ErrorResult(
+			"Missing required 'pattern' argument. Example: {\"pattern\": \"authentication\"}",
+		)
+	}
+	if len(pattern) > 4096 {
+		return tools.ErrorResult("'pattern' is too long (maximum 4096 bytes)")
 	}
 
 	input := GrepInput{Pattern: pattern}
 
 	if scope, ok := args["scope"].(string); ok && scope != "" {
-		input.Scope = scope
+		switch scope {
+		case "both", "summary", "message":
+			input.Scope = scope
+		default:
+			return tools.ErrorResult("Invalid 'scope'. Use 'both', 'summary', or 'message'.")
+		}
 	}
 	if role, ok := args["role"].(string); ok && role != "" {
-		input.Role = role
+		switch role {
+		case "user", "assistant", "tool", "system":
+			input.Role = role
+		default:
+			return tools.ErrorResult(
+				"Invalid 'role'. Use 'user', 'assistant', 'tool', or 'system'.",
+			)
+		}
 	}
 	if last, ok := args["last"].(string); ok && last != "" {
 		input.Last = last
@@ -132,13 +150,21 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 		input.AllConversations = allConv
 	}
 	if limit, ok := args["limit"].(float64); ok {
+		if limit < 0 {
+			return tools.ErrorResult("'limit' must be zero or positive")
+		}
+		if limit > 100 {
+			limit = 100
+		}
 		input.Limit = int(limit)
 	}
 	if sinceStr, ok := args["since"].(string); ok && sinceStr != "" {
 		parsed, err := time.Parse(time.RFC3339, sinceStr)
 		if err != nil {
 			return tools.ErrorResult(fmt.Sprintf(
-				"Invalid 'since' timestamp. Use RFC3339 format like '2024-01-15T10:00:00Z'. Error: %v", err))
+				"Invalid 'since' timestamp. Use RFC3339 format like '2024-01-15T10:00:00Z'. Error: %v",
+				err,
+			))
 		}
 		input.Since = &parsed
 	}
@@ -156,10 +182,15 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 	}
 
 	// Build response
+	for i := range result.Summaries {
+		result.Summaries[i].Content = textutil.TruncateRunes(result.Summaries[i].Content, 1024)
+	}
 	output := map[string]any{
-		"success":   result.Success,
-		"summaries": result.Summaries,
-		"messages":  result.Messages,
+		"success":        result.Success,
+		"summaries":      result.Summaries,
+		"messages":       result.Messages,
+		"totalSummaries": result.TotalSummaries,
+		"totalMessages":  result.TotalMessages,
 	}
 
 	// Add hint if provided
