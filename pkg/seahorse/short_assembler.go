@@ -35,7 +35,11 @@ type resolvedItem struct {
 //  2. Split into evictable prefix + protected fresh tail
 //  3. If evictable fits in remaining budget → include all
 //  4. Else walk evictable from newest to oldest, keep while fits
-func (a *Assembler) Assemble(ctx context.Context, convID int64, input AssembleInput) (*AssembleResult, error) {
+func (a *Assembler) Assemble(
+	ctx context.Context,
+	convID int64,
+	input AssembleInput,
+) (*AssembleResult, error) {
 	items, err := a.store.GetContextItems(ctx, convID)
 	if err != nil {
 		return nil, fmt.Errorf("get context items: %w", err)
@@ -61,24 +65,57 @@ func (a *Assembler) Assemble(ctx context.Context, convID int64, input AssembleIn
 	}
 	evictable := resolved[:tailStart]
 	freshTail := resolved[tailStart:]
+	allTokens := 0
+	for _, r := range resolved {
+		allTokens += r.tokenCount
+	}
 
-	// Calculate fresh tail tokens
+	// Calculate fresh tail tokens. The tail has both an item-count limit and a
+	// token limit: 32 small tool results are safe, 32 giant tool results are
+	// not. Reserve most of the budget for the tail but keep the latest user turn
+	// whole when it alone is larger than the normal tail share.
 	freshTailTokens := 0
 	for _, r := range freshTail {
 		freshTailTokens += r.tokenCount
 	}
 
-	// If the protected tail alone exceeds budget, trim from the oldest end at
-	// provider-safe boundaries. The rebuild path later sanitizes leading
-	// assistant(tool_calls)/tool messages, so splitting the active turn here can
-	// silently discard the very context we are trying to protect.
-	if freshTailTokens > input.Budget {
+	hardCap := input.Budget
+	if hardCap < 1 {
+		hardCap = 1
+	}
+	truncatedTail := false
+	for i := range freshTail {
+		if freshTail[i].tokenCount > hardCap {
+			freshTailTokens -= freshTail[i].tokenCount
+			freshTail[i] = truncateResolvedItem(freshTail[i], hardCap)
+			freshTailTokens += freshTail[i].tokenCount
+			truncatedTail = true
+		}
+	}
+
+	tailBudget := input.Budget
+	if tailBudget < 1 {
+		tailBudget = 1
+	}
+	if idx := lastUserMessageIndex(freshTail); idx >= 0 {
+		if latestTurnTokens := resolvedItemsTokenCount(freshTail[idx:]); latestTurnTokens > tailBudget {
+			// Do not cut the active instruction merely to satisfy the tail
+			// share; the hard overall budget still applies below.
+			tailBudget = input.Budget
+		}
+	}
+
+	if freshTailTokens > tailBudget {
 		originalTailCount := len(freshTail)
 		originalFreshTailTokens := freshTailTokens
 		var preservedActiveTurn bool
-		freshTail, freshTailTokens, preservedActiveTurn = trimFreshTailToSafeBudget(freshTail, input.Budget)
+		freshTail, freshTailTokens, preservedActiveTurn = trimFreshTailToSafeBudget(
+			freshTail,
+			tailBudget,
+		)
 		logFields := map[string]any{
 			"budget":                input.Budget,
+			"tail_budget":           tailBudget,
 			"fresh_tail_tokens":     freshTailTokens,
 			"fresh_tail_count":      len(freshTail),
 			"trimmed_fresh_items":   originalTailCount - len(freshTail),
@@ -91,6 +128,25 @@ func (a *Assembler) Assemble(ctx context.Context, convID int64, input AssembleIn
 			logger.InfoCF("seahorse", "assemble: trimmed fresh tail to safe boundary", logFields)
 		}
 	}
+	if freshTailTokens > input.Budget {
+		// The active turn cannot be dropped. Shrink its largest non-user
+		// items first, then fall back to an explicit error if even the
+		// instruction itself cannot fit.
+		freshTail, freshTailTokens = shrinkActiveTurnToBudget(
+			freshTail,
+			input.Budget,
+			freshTailTokens,
+		)
+	}
+	if freshTailTokens > input.Budget {
+		return nil, fmt.Errorf("%w: fresh tail uses %d tokens, budget %d",
+			ErrContextBudgetExceeded, freshTailTokens, input.Budget)
+	}
+	if truncatedTail {
+		logger.InfoCF("seahorse", "assemble: truncated oversized tail item", map[string]any{
+			"budget": input.Budget,
+		})
+	}
 	remainingBudget := input.Budget - freshTailTokens
 	if remainingBudget < 0 {
 		remainingBudget = 0
@@ -102,11 +158,13 @@ func (a *Assembler) Assemble(ctx context.Context, convID int64, input AssembleIn
 		evictableTokens += r.tokenCount
 	}
 
+	gapCount := 0
 	if evictableTokens <= remainingBudget {
 		// All evictable fit
 		selected = append(selected, evictable...)
 	} else {
-		// Walk from newest to oldest, keep while fits
+		// Walk from newest to oldest. A single oversized summary or tool result
+		// must not hide every older item; skip it, record the gap, and continue.
 		var kept []resolvedItem
 		accum := 0
 		for i := len(evictable) - 1; i >= 0; i-- {
@@ -114,7 +172,7 @@ func (a *Assembler) Assemble(ctx context.Context, convID int64, input AssembleIn
 				kept = append(kept, evictable[i])
 				accum += evictable[i].tokenCount
 			} else {
-				break
+				gapCount++
 			}
 		}
 		// Reverse to restore chronological order
@@ -134,7 +192,6 @@ func (a *Assembler) Assemble(ctx context.Context, convID int64, input AssembleIn
 	totalTokens := 0
 	maxDepth := 0
 	condensedCount := 0
-
 	for _, r := range final {
 		totalTokens += r.tokenCount
 		if r.itemType == "message" && r.message != nil {
@@ -191,10 +248,16 @@ func (a *Assembler) Assemble(ctx context.Context, convID int64, input AssembleIn
 		}
 		summary += systemPromptAddition
 	}
+	summaryTokens := EstimateMessageTokens(Message{Content: summary})
 
 	return &AssembleResult{
-		Messages: messages,
-		Summary:  summary,
+		Messages:        messages,
+		Summary:         summary,
+		FreshTailTokens: freshTailTokens,
+		SummaryTokens:   summaryTokens,
+		TokensUsed:      totalTokens,
+		TokensEvicted:   allTokens - totalTokens,
+		GapCount:        gapCount,
 	}, nil
 }
 
@@ -231,6 +294,50 @@ func resolvedItemsTokenCount(items []resolvedItem) int {
 		total += item.tokenCount
 	}
 	return total
+}
+
+// shrinkActiveTurnToBudget truncates the largest non-user items in the active
+// turn until the turn fits. The user instruction is preserved whenever
+// possible; if it alone exceeds the budget it is truncated last.
+func shrinkActiveTurnToBudget(tail []resolvedItem, budget, current int) ([]resolvedItem, int) {
+	if current <= budget {
+		return tail, current
+	}
+	start := lastUserMessageIndex(tail)
+	if start < 0 {
+		start = 0
+	}
+	for current > budget {
+		largest := -1
+		for i := start; i < len(tail); i++ {
+			if tail[i].message != nil && tail[i].message.Role == "user" {
+				continue
+			}
+			if largest == -1 || tail[i].tokenCount > tail[largest].tokenCount {
+				largest = i
+			}
+		}
+		if largest == -1 {
+			// Only user messages remain.
+			for i := start; i < len(tail); i++ {
+				if largest == -1 || tail[i].tokenCount > tail[largest].tokenCount {
+					largest = i
+				}
+			}
+		}
+		if largest == -1 || tail[largest].tokenCount <= 1 {
+			break
+		}
+		excess := current - budget
+		target := tail[largest].tokenCount - excess
+		if target < 1 {
+			target = 1
+		}
+		before := tail[largest].tokenCount
+		tail[largest] = truncateResolvedItem(tail[largest], target)
+		current += tail[largest].tokenCount - before
+	}
+	return tail, current
 }
 
 func lastUserMessageIndex(items []resolvedItem) int {
@@ -271,6 +378,47 @@ func messageHasToolUse(msg *Message) bool {
 		}
 	}
 	return false
+}
+
+// truncateResolvedItem enforces the per-item hard cap. It keeps the structure
+// (tool calls, tool-result IDs) but truncates user-visible text and tool-result
+// payloads, and appends an explicit marker so the model knows the content is
+// incomplete. The canonical rows in SQLite are not modified.
+func truncateResolvedItem(item resolvedItem, maxTokens int) resolvedItem {
+	if maxTokens < 1 {
+		maxTokens = 1
+	}
+	// The estimator is roughly 2.5 characters per token; use a generous byte
+	// limit and then clamp the accounting token count to the hard cap.
+	byteLimit := maxTokens * 4
+	if item.message != nil {
+		msg := *item.message
+		msg.Content = truncateUTF8Bytes(msg.Content, byteLimit)
+		parts := make([]MessagePart, len(msg.Parts))
+		copy(parts, msg.Parts)
+		for i := range parts {
+			switch parts[i].Type {
+			case "text", "tool_result":
+				parts[i].Text = truncateUTF8Bytes(parts[i].Text, byteLimit)
+			}
+		}
+		msg.Parts = parts
+		msg.TokenCount = EstimateMessageTokens(msg)
+		item.message = &msg
+		item.tokenCount = msg.TokenCount
+	}
+	if item.summary != nil {
+		sum := *item.summary
+		sum.Content = truncateUTF8Bytes(sum.Content, byteLimit)
+		sum.TokenCount = EstimateMessageTokens(Message{Content: sum.Content})
+		item.summary = &sum
+		item.tokenCount = sum.TokenCount
+	}
+	if item.tokenCount > maxTokens {
+		// The estimator is not exact; the hard cap is a safety boundary.
+		item.tokenCount = maxTokens
+	}
+	return item
 }
 
 // resolveItem loads the full message or summary for a context item.
