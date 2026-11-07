@@ -43,14 +43,12 @@ This repository is the actively maintained, community-driven continuation of [`s
 
 ### Maintenance status
 
-As of **2026-11-07**:
-
 | | Upstream `sipeed/picoclaw` | This fork |
 | --- | --- | --- |
-| Latest release | v0.3.1 (2026-07-03) | v0.5.3 (2026-11-01) |
-| Last commit on `main` | 2026-08-19 | 2026-11-07 |
+| Latest release | [![upstream release](https://img.shields.io/github/v/release/sipeed/picoclaw?label=release&color=blue)](https://github.com/sipeed/picoclaw/releases) | [![fork release](https://img.shields.io/github/v/release/afjcjsbx/picoclaw?label=release&color=green)](https://github.com/afjcjsbx/picoclaw/releases) |
+| Last commit on `main` | [![upstream last commit](https://img.shields.io/github/last-commit/sipeed/picoclaw/main?label=last%20commit)](https://github.com/sipeed/picoclaw/commits/main) | [![fork last commit](https://img.shields.io/github/last-commit/afjcjsbx/picoclaw/main?label=last%20commit)](https://github.com/afjcjsbx/picoclaw/commits/main) |
 
-Upstream still receives issue and pull-request activity; the table describes release and `main`-branch activity, not whether the upstream project is archived.
+The badges are rendered by shields.io from GitHub, so the table updates automatically. Upstream still receives issue and pull-request activity; the badges describe release and `main`-branch activity, not whether the upstream project is archived.
 
 See [maintenance status](docs/project/maintenance-status.md) for the current comparison and [migration notes](docs/migration/from-sipeed-picoclaw.md) if you are switching from upstream.
 
