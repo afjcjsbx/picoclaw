@@ -185,7 +185,7 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 		return err
 	}
 	if err := al.ensureMCPInitialized(ctx); err != nil {
-		return err
+		al.warnMCPInitFailure(err)
 	}
 
 	for {

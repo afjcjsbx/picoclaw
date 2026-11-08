@@ -592,6 +592,8 @@ export const AssistantMessage = memo(function AssistantMessage({
     (usage.total_tokens > 0 || usage.cost_usd !== undefined)
   const usageInput = usage?.input_tokens
   const usageOutput = usage?.output_tokens
+  const usageRequests = usage?.requests
+  const usageContextTokens = usage?.context_tokens
   const usageCostUsd = usage
     ? estimateUsageCostUsd(usage, modelName)
     : undefined
@@ -901,7 +903,11 @@ export const AssistantMessage = memo(function AssistantMessage({
                       {usageInput !== undefined && (
                         <>
                           <span className="opacity-70">
-                            {t("chat.usage.input")}
+                            {t(
+                              usageRequests !== undefined && usageRequests > 1
+                                ? "chat.usage.inputTurnTotal"
+                                : "chat.usage.input",
+                            )}
                           </span>
                           <span className="text-right tabular-nums">
                             {formatTokenCount(usageInput)}
@@ -915,6 +921,26 @@ export const AssistantMessage = memo(function AssistantMessage({
                           </span>
                           <span className="text-right tabular-nums">
                             {formatTokenCount(usageOutput)}
+                          </span>
+                        </>
+                      )}
+                      {usageRequests !== undefined && (
+                        <>
+                          <span className="opacity-70">
+                            {t("chat.usage.requests")}
+                          </span>
+                          <span className="text-right tabular-nums">
+                            {formatTokenCount(usageRequests)}
+                          </span>
+                        </>
+                      )}
+                      {usageContextTokens !== undefined && (
+                        <>
+                          <span className="opacity-70">
+                            {t("chat.usage.contextTokens")}
+                          </span>
+                          <span className="text-right tabular-nums">
+                            {formatTokenCount(usageContextTokens)}
                           </span>
                         </>
                       )}

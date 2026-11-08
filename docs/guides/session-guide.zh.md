@@ -1,3 +1,7 @@
+---
+lang: zh
+description: "PicoClaw 的 Session 决定了哪些消息会共享同一段对话历史。 如果你的 bot 表现为“记得太多”或“忘得太快”，首先就该检查 session 配置。"
+---
 # Session 使用指南
 
 > 返回 [README](../project/README.zh.md)

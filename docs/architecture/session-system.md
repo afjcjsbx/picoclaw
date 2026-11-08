@@ -1,6 +1,9 @@
+---
+description: "How PicoClaw stores and loads sessions: the runtime path across pkg/session, pkg/memory and pkg/agent, message history, and per-session state."
+---
 # Session System
 
-> Back to [README](../README.md)
+> Back to [Architecture](./)
 
 This document describes the runtime session system used by PicoClaw to:
 

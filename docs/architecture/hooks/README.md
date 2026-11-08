@@ -1,3 +1,6 @@
+---
+description: "How the PicoClaw hook system works as implemented today: hook kinds, the lifecycle events they observe, and how to register one."
+---
 # Hook System Guide
 
 This document describes the hook system that is implemented in the current repository, not the older design draft.

@@ -1663,6 +1663,77 @@ func TestQuotedTelegramMediaRefs_QuotedDocumentDownloadFailureReported(t *testin
 
 	assert.Empty(t, refs)
 	assert.Equal(t, []string{"file"}, failed)
+func TestHandleMessage_GroupMentionOnly_ReplyToOwnBotMessageTriggers(t *testing.T) {
+	ch, messageBus := newGroupMentionOnlyChannel(t, "testbot")
+
+	msg := &telego.Message{
+		Text:      "e adesso?",
+		MessageID: 44,
+		Chat: telego.Chat{
+			ID:   123,
+			Type: "group",
+		},
+		From: &telego.User{
+			ID:        7,
+			FirstName: "Alice",
+		},
+		ReplyToMessage: &telego.Message{
+			MessageID: 43,
+			Text:      "resposta anterior do bot",
+			From: &telego.User{
+				ID:        555,
+				IsBot:     true,
+				FirstName: "Test",
+				Username:  "testbot",
+			},
+		},
+	}
+
+	if err := ch.handleMessage(context.Background(), msg); err != nil {
+		t.Fatalf("handleMessage error: %v", err)
+	}
+
+	inbound, ok := <-messageBus.InboundChan()
+	require.True(t, ok)
+	assert.Equal(t, "43", inbound.Context.ReplyToMessageID)
+	assert.True(t, inbound.Context.Mentioned)
+	assert.Contains(t, inbound.Content, "[quoted assistant message from testbot]: resposta anterior do bot")
+	assert.Contains(t, inbound.Content, "e adesso?")
+}
+
+func TestHandleMessage_GroupMentionOnly_ReplyToOtherUserDoesNotTrigger(t *testing.T) {
+	ch, messageBus := newGroupMentionOnlyChannel(t, "testbot")
+
+	msg := &telego.Message{
+		Text:      "mensagem comum para outro membro",
+		MessageID: 45,
+		Chat: telego.Chat{
+			ID:   123,
+			Type: "group",
+		},
+		From: &telego.User{
+			ID:        7,
+			FirstName: "Alice",
+		},
+		ReplyToMessage: &telego.Message{
+			MessageID: 44,
+			Text:      "mensagem de outro usuario",
+			From: &telego.User{
+				ID:        8,
+				FirstName: "Bob",
+			},
+		},
+	}
+
+	if err := ch.handleMessage(context.Background(), msg); err != nil {
+		t.Fatalf("handleMessage error: %v", err)
+	}
+
+	select {
+	case inbound := <-messageBus.InboundChan():
+		t.Fatalf("message should have been ignored, got: %+v", inbound.Content)
+	default:
+	}
 }
 
 func TestHandleMessage_EmptyContent_Ignored(t *testing.T) {

@@ -23,6 +23,10 @@ jobs:
         uses: golangci/golangci-lint-action@v9
         with:
           version: v2.14.0
+          # Install from the Go module proxy instead of downloading the release
+          # tarball from GitHub, which intermittently returns 504 and fails the
+          # linter job before it runs.
+          install-mode: goinstall
           args: --build-tags=goolm,stdjson
 
   vuln_check:

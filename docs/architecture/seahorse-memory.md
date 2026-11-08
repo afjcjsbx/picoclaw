@@ -1,6 +1,9 @@
+---
+description: "Seahorse is PicoClaw's optional, SQLite-backed short-term context manager."
+---
 # Seahorse Memory System
 
-> Back to [README](README.md) · Related: [Session System](session-system.md),
+> Back to [Architecture](./) · Related: [Session System](session-system.md),
 > [Session Startup Cost and Pruning](session-startup-and-pruning.md),
 > [Context Compression](agent-refactor/context.md)
 
@@ -185,7 +188,7 @@ the sessions known to the default agent.
 | Method | Seahorse implementation |
 | --- | --- |
 | `Assemble` | Computes the effective budget, calls `Engine.Assemble`, converts messages back to provider messages, and returns summary XML separately |
-| `Compact` | Dispatches on `Reason`: manual uses `CompactNow`, retry uses `CompactUntilUnder`, everything else uses `Engine.Compact` |
+| `Compact` | Dispatches on `Reason`: manual uses `CompactNowWithBudget` or `CompactNow` with `--force`; retry uses `CompactUntilUnder`; everything else uses `Engine.Compact` |
 | `Ingest` | Converts one provider message and calls `Engine.Ingest` |
 | `Clear` | Calls `Engine.ClearSession`, then clears the owning agent's JSONL history and summary |
 | `Close` | Optional method detected by the agent loop; stops the prune loop and closes the engine |
@@ -227,62 +230,103 @@ but the database is a shared trust boundary.
 | --- | --- | --- |
 | Journal mode | `WAL` | Set once with `PRAGMA journal_mode = WAL` |
 | Busy timeout | `5000` ms | DSN, applied to every pooled connection |
+| Transaction mode | `IMMEDIATE` | DSN `_txlock=immediate` |
 | Synchronous | `NORMAL` | DSN pragma |
 | Temp store | `FILE` (1) | DSN pragma, spills sorts and temp tables to disk |
+| Foreign keys | Enabled | DSN `_pragma=foreign_keys(1)`, per connection |
+| Journal size limit | 64 MiB | DSN `_pragma=journal_size_limit(...)` |
+| WAL autocheckpoint | 1000 pages | DSN `_pragma=wal_autocheckpoint(...)` |
 | Max open connections | `2` | `sqliteMaxOpenConns` |
 | Max idle connections | `2` | Same as open cap |
-| Foreign keys | Not enabled | No `PRAGMA foreign_keys = ON` |
+| Ingest chunk size | `200` messages | `IngestBatchChunkSize` |
+
+Before opening the database, `NewEngine` takes an advisory exclusive lock on
+`<db>.lock` on Unix. A second gateway process cannot open the same database; the
+lock is released by `Close` and by the operating system on process exit. On
+non-Unix platforms the lock is a no-op and multi-process operation must be
+avoided.
 
 Two connections allow one writer next to one reader; further callers wait. The
 cap bounds the per-connection page cache on memory-constrained devices. A long
-`VACUUM` or prune pass can hold the write lock, and writers then fail after the
-busy timeout. Readers in WAL mode are not blocked by a writer.
+`VACUUM` or prune pass can hold the write lock past the busy timeout; transient
+`SQLITE_BUSY`/`SQLITE_LOCKED` failures in self-contained write operations are
+retried up to four times with jittered backoff. Readers in WAL mode are not
+blocked by a writer.
+
+Batch ingest is chunked to `IngestBatchChunkSize` messages per transaction for
+the same reason: one transaction for a whole-history bootstrap would hold the
+single write lock long enough to starve other writers on slow storage.
 
 ### Tables
 
 | Table | Purpose |
 | --- | --- |
-| `conversations` | One row per session key, with `created_at` and `updated_at` |
-| `messages` | Raw message rows: role, content, model, reasoning, token count, timestamp |
+| `conversations` | One row per session key, with `created_at`, maintained `updated_at`, and context `version` |
+| `messages` | Raw message rows: role, content, model, reasoning, external ID, token count, timestamp |
 | `message_parts` | Structured parts: `text`, `tool_use`, `tool_result`, `media` |
-| `summaries` | Leaf and condensed summaries with depth and descendant metadata |
+| `summaries` | Leaf and condensed summaries with depth, descendant metadata, and `invalidated_at` |
 | `summary_parents` | Edges from a condensed summary to the summaries it was built from |
 | `summary_messages` | Edges from a leaf summary to its source messages |
 | `context_items` | The ordered list of messages and summaries that form the current context |
-| `summaries_fts` | FTS5 index over summary content |
-| `messages_fts` | FTS5 index over message content |
+| `summaries_fts` | External-content FTS5 index over summary content |
+| `messages_fts` | External-content FTS5 index over message content |
 
 `context_items` has primary key `(conversation_id, ordinal)` and stores either a
-`message_id` or a `summary_id`. It is the only table compaction rewrites.
+`message_id` or a `summary_id`. It is the only table compaction rewrites. It has
+foreign keys to `conversations`, `messages`, and `summaries`, all with
+`ON DELETE CASCADE`, plus the item-type/payload `CHECK`. Startup orphan cleanup
+remains a fallback for databases that predate the constraints.
 
 `messages_fts` uses `message_id` as the FTS5 `rowid` and keeps `message_id` as an
 `UNINDEXED` column, so the delete trigger is a rowid lookup instead of a full
-scan. `summaries_fts` stores `summary_id` as an indexed column and joins on it.
+scan. `summaries_fts` is external-content too: it uses `summaries.rowid` as the
+FTS5 `rowid` and keeps `summary_id` `UNINDEXED`; searches join `summaries` on
+`rowid`. Both tables cap indexed text at 65536 characters.
 
 ### Triggers and indexes
 
-Six triggers keep the FTS tables in sync:
+Seven triggers keep derived state in sync:
 
 - `summaries_ai`, `summaries_ad`, `summaries_au` insert, delete, and reinsert
   summary rows in `summaries_fts`.
 - `messages_ai`, `messages_ad`, `messages_au` do the same for `messages_fts`,
   using `rowid = message_id`.
+- `messages_touch` updates `conversations.updated_at` when a message is
+  inserted. Context rewrites bump `updated_at` directly.
 
 Indexes cover conversation and time lookups on messages, message parts,
-summaries, summary parents, and context items.
+summaries, summary parents, and context items, plus a partial unique index on
+`messages(conversation_id, external_id)` for idempotent bootstrap retries and
+indexes for context-item deletion and summary lookups.
 
 ### Migrations
 
-`runSchema` is idempotent. It creates missing tables and then runs three
+`runSchema` is idempotent. It creates missing tables, advances
+`PRAGMA user_version` to the current schema version (`3`), and runs these
 migrations:
 
 1. Add `messages.reasoning_content` if missing.
 2. Add `messages.model_name` if missing.
-3. Rebuild a legacy `messages_fts` table that did not declare `message_id` as
-   `UNINDEXED`, repopulating it from `messages` with `rowid = message_id`.
+3. Add `messages.external_id` and its partial unique index.
+4. Add `conversations.version`.
+5. Add `summaries.invalidated_at`.
+6. Rebuild a legacy `messages_fts` table to the external-content form with
+   `message_id` as `rowid`.
+7. Rebuild a legacy `summaries_fts` table to the external-content form with
+   `summaries.rowid` as `rowid`.
+8. Rebuild any table whose definition lacks the current foreign keys, cascade
+   rules, or `CHECK` constraints. SQLite cannot add these with `ALTER TABLE`, so
+   the migration runs a transactional table rebuild with foreign keys disabled,
+   copies the data, cleans orphan rows, and verifies `PRAGMA foreign_key_check`
+   before committing.
 
-Migration 3 is a full rebuild of the message FTS index and can be expensive on a
-large database. It runs synchronously at startup.
+Before a version upgrade, `NewEngine` writes a consistent snapshot to
+`<db>.bak` with `VACUUM INTO`. The snapshot includes committed WAL pages and is
+created with mode `0600`; the previous backup is replaced only after the new
+one succeeds.
+
+The two FTS rebuilds are full index rebuilds and can be expensive on a large
+database. They run synchronously at startup.
 
 ### FTS5 availability
 
@@ -370,25 +414,41 @@ history enabled, so they are indexed normally.
 
 1. Returns `nil, nil` for an ignored session (`heartbeat`).
 2. Returns `nil, nil` for a stateless session (never configured in practice).
-3. Locks one of 256 FNV-1a sharded mutexes for the session key. Different
-   sessions can ingest concurrently; the same session is serialized.
-4. Gets or creates the `conversations` row.
-5. Inserts each message. Messages with parts use
-   `AddMessageWithPartsAndReasoning`, which inserts the message and all parts in
-   one transaction. Messages without parts use `AddMessageWithReasoning`.
-6. Appends all inserted IDs to `context_items` in one transaction, using
-   `max(ordinal) + 100`, `+200`, and so on.
-7. Returns the message count and the sum of the input token estimates.
+3. Gets or creates the `conversations` row, then acquires the conversation-keyed
+   lock shared by ingest, bootstrap, clear, delete, and compaction apply. The
+   same conversation is serialized; different conversations can proceed.
+4. Writes the messages with `AddMessagesBatch`, which inserts each message and
+   its parts and appends the resulting IDs to `context_items` in the same
+   transaction. Context ordinals continue from `max(ordinal) + 100`, `+200`, and
+   so on.
+5. Returns the message count and the sum of the input token estimates.
 
-The whole multi-message loop is **not** one transaction. If the third insert
-fails, the first two messages stay in `messages` without context items, and a
-later bootstrap does not repair them. The adapter normally sends one message at
-a time, so this matters for direct engine use and for bootstrap delta ingestion.
+`AddMessagesBatch` splits the batch into chunks of `IngestBatchChunkSize` (200)
+messages, one transaction per chunk. Two properties follow:
+
+- A chunk is atomic. A failure rolls back that chunk completely, including the
+  FTS entries written by the `messages_ai` trigger, so a chunk never leaves
+  messages without context items.
+- A batch is **not** atomic across chunks. Chunks committed before the failing
+  one stay visible. `AddMessagesBatch` returns a nil ID slice with the error, so
+  callers must not read a partial failure as "nothing was written".
+
+The chunk size is a write-lock bound, not a memory bound. SQLite serializes
+writers, so a whole-history bootstrap in one transaction would hold the lock for
+the entire batch and push concurrent writers (another session's ingest,
+compaction) into `SQLITE_BUSY` after the busy timeout. Chunking keeps the lock
+window short while still removing the per-message commit.
+
+The adapter sends one message per `Ingest`, so the hot path is one chunk of one
+message: two commits before this change (message, then context append), one
+after. Bootstrap delta ingestion passes the remaining history and gets one
+commit per 200 messages instead of one per message plus a context append.
 
 Ingest errors are logged by the agent and do not fail the turn. Because assembly
 reads SQLite, a message that failed to ingest is missing from the next prompt
 even though it exists in JSONL. It reappears only after a successful restart
-bootstrap.
+bootstrap. A chunk lost to a mid-batch failure behaves the same way: the
+messages stay in JSONL and the next bootstrap re-ingests them.
 
 ### Provider message conversion
 
@@ -488,22 +548,28 @@ ingested.
 SQLite:
 
 1. Ignore and stateless sessions return immediately.
-2. Empty JSONL returns immediately. Any existing rows for that session are left
-   untouched, so a session whose JSONL was emptied or deleted keeps stale data.
+2. Empty JSONL invalidates the stored conversation: summaries and context are
+   removed, and the conversation row is kept. A failed history read is not
+   treated as empty, so transient JSONL errors do not delete SQLite state.
 3. Get or create the conversation.
-4. Read at most `len(jsonlMessages)` database messages, oldest first.
-5. Run in-place repair for `reasoning_content`, `model_name`, and `created_at`.
-6. If the counts match and every message matches (including reasoning, model,
+4. Read up to `len(jsonlMessages) + 1` database messages, oldest first. The
+   extra row detects a database tail that is longer than the canonical JSONL.
+5. Assign each incoming message a stable external ID derived from its position
+   and content hash, unless the caller already supplied one. Repeated inserts
+   are idempotent through the partial unique index.
+6. Run in-place repair for `reasoning_content`, `model_name`, and `created_at`.
+7. If the counts match and every message matches (including reasoning, model,
    and timestamp after truncation to whole seconds), stop. This is the fast
    no-op path.
-7. Otherwise compute the longest matching prefix from index 0.
-8. If the mismatch is in the middle and the DB has messages after the anchor,
-   delete all messages after the anchor and re-ingest the JSONL tail.
-9. If the DB has no messages after the anchor and the JSONL has a longer tail,
-   ingest only the tail.
-10. If the first message does not match and the DB is non-empty, delete all
-    messages and re-ingest the whole history.
-11. If the DB is empty, ingest everything.
+8. Otherwise compute the longest matching prefix from index 0.
+9. If a mismatch or an extra database tail is found, invalidate derived state
+   (summaries and context items), delete all messages, and re-ingest the whole
+   JSONL history.
+10. If the DB has no messages after the anchor and the JSONL has a longer tail,
+    ingest only the tail.
+11. If the first message does not match and the DB is non-empty, use the same
+    invalidate-and-rebuild path.
+12. If the DB is empty, ingest everything.
 
 Matching compares role, content or parts, model name, reasoning content, and
 timestamps. Timestamps are normalized to UTC seconds. A missing timestamp on
@@ -562,9 +628,9 @@ API, would index its old history. Bootstrap is not exposed as a command.
 
 ## Context assembly
 
-`seahorseContextManager.Assemble` receives `Budget = ContextWindow` and
-`MaxTokens` from the agent. If the incoming budget is zero or negative, it uses
-`100000` instead. It then computes:
+`seahorseContextManager.Assemble` receives `Budget` and `MaxTokens` from the
+agent. If the incoming budget is zero or negative, it uses `100000` instead. It
+then computes:
 
 ```
 effectiveBudget = Budget - MaxTokens
@@ -572,7 +638,9 @@ effectiveBudget = Budget - MaxTokens
 
 If the result is less than or equal to zero (a configuration where the output
 reserve is at least the whole window), it logs a warning and uses
-`Budget / 2`.
+`Budget / 2`. It then subtracts `staticPromptReserve`, an estimate of the tool
+definitions and the stable system prompt, so the assembler's budget is for
+history only.
 
 ### Selection algorithm
 
@@ -580,37 +648,65 @@ reserve is at least the whole window), it logs a warning and uses
    are none, return an empty result.
 2. Resolve every item to a message or summary and a token count.
 3. Split into an evictable prefix and a protected fresh tail:
-   `tailStart = len(items) - 32`.
+   `tailStart = len(items) - 32`. If the latest user message is older than that
+   boundary, move `tailStart` back to it so the active instruction can never be
+   evicted, even when more than 32 items follow it.
 4. Sum the fresh-tail tokens.
-5. If the fresh tail alone exceeds the budget, trim it (see below).
-6. Compute `remainingBudget = budget - freshTailTokens`, clamped to zero.
-7. If all evictable items fit in the remaining budget, include all of them.
-8. Otherwise walk the evictable prefix from newest to oldest, keeping each item
-   that fits and **stopping at the first item that does not fit**. Older items
-   are not reconsidered even if a smaller one would fit.
-9. Combine the kept evictable prefix with the fresh tail, preserving
+5. Separate the evictable prefix into generated summaries and raw messages.
+   Summaries are considered first, so recent tool output cannot evict them.
+6. Compute the summary reservation: `min(totalSummaryTokens,
+   budget - max(budget/2, latestUserTokens))`. The fresh tail keeps at least
+   half the budget, or the full latest user message when it is larger. A large
+   summary therefore cannot starve the active instruction or its newest tool
+   results. Select summaries newest first within the reservation.
+7. Set the tail budget to `budget - reservedSummaryTokens`. If the fresh tail
+   alone exceeds it, truncate oversized items, trim the oldest items, and shrink
+   an oversized active turn (see below). If the tail still cannot reach its
+   share, reduce the summary reservation to `budget - freshTailTokens` and
+   reselect summaries before giving up.
+8. Give the remaining budget to the rest of the evictable prefix, newest first,
+   skipping items that do not fit while continuing with older items. Each
+   skipped item is counted as a context gap.
+9. Combine the selected evictable items with the fresh tail, preserving
    chronological order.
 10. Return messages in `AssembleResult.Messages` and the XML for summaries in
     `AssembleResult.Summary`.
 
 The fresh tail is measured in **context items**, not messages. A summary counts
 as one item, so compacted sessions can protect a longer span of raw history than
-an uncompacted one.
+an uncompacted one. The latest user message extends the tail regardless of the
+item count. It is also token-aware: any item larger than the budget is truncated
+before the tail is trimmed.
 
 ### Fresh-tail trimming
 
-If the fresh tail exceeds the budget:
+The fresh tail is trimmed against `budget - reservedSummaryTokens`, not the
+whole budget. If it exceeds that share:
 
-1. If there is a user message in the tail, and the slice from the latest user
-   message to the end of the tail is itself over budget, keep that slice and
-   return it even though it is over budget. This preserves the active turn.
-2. Otherwise drop items from the oldest end until the tail fits.
-3. Then advance the start until the remaining history begins at a
+1. Truncate any single item larger than the hard budget: content, reasoning,
+   text/tool-result parts, and summary text are shortened with an explicit
+   marker; oversized tool arguments are replaced with a valid
+   `{"_truncated":true}` JSON object. The token cap is split across the
+   token-bearing fields so their combined estimate stays at or below the cap
+   whenever the fixed message overhead allows. The reported token count is
+   re-estimated from the shortened item, not clamped. Canonical rows are not
+   modified.
+2. If there is a user message in the tail, and the slice from the latest user
+   message to the end of the tail is itself over budget, try to preserve that
+   active turn rather than dropping it.
+3. Otherwise drop items from the oldest end until the tail fits.
+4. Then advance the start until the remaining history begins at a
    provider-safe boundary: not a `tool` message and not an assistant message
    with tool calls.
+5. If the active turn still exceeds its share, shrink its largest non-user
+   items. If it still cannot fit, reduce the summary reservation and reselect
+   summaries. If the tail alone still exceeds the whole budget, return
+   `ErrContextBudgetExceeded`.
 
-The assembler logs `assemble: preserving active turn over budget` or
-`assemble: trimmed fresh tail to safe boundary`.
+The assembler logs `assemble: preserving active turn over budget`,
+`assemble: trimmed fresh tail to safe boundary`, or
+`assemble: truncated oversized tail item`. When a summary does not fit even
+after the fallback, it logs `assemble: summaries evicted by budget`.
 
 The provider layer also sanitizes history in `sanitizeHistoryForProvider`:
 leading tool messages, leading assistant tool-call messages, orphaned tool
@@ -684,12 +780,12 @@ sources. It never deletes raw messages or summary rows.
 | `OrdinalStep` | 100 | Context ordering |
 | `FreshTailCount` | 32 items | Leaf and condensed selection, assembly |
 | `LeafMinFanout` | 8 messages | Leaf trigger and minimum chunk |
-| `CondensedMinFanout` | 4 summaries | Condensed fallback selection |
-| `CondensedMinFanoutHard` | 2 | **Unused** |
+| `CondensedMinFanout` | 4 summaries | Condensed selection |
+| `CondensedMinFanoutHard` | 2 | Forced condensed passes (`CompactUntilUnder`) |
 | `LeafChunkTokens` | 20000 tokens | Leaf chunk cap and condensed run cap |
 | `LeafTargetTokens` | 1200 tokens | Leaf summary target |
 | `CondensedTargetTokens` | 2000 tokens | Condensed target and minimum run size |
-| `ContextThreshold` | 0.75 | Only when `CompactInput.Budget` is nil, plus the unused `NeedsCompaction` |
+| `ContextThreshold` | 0.75 | `NeedsCompaction` only; no internal caller uses it |
 | `MaxCompactIterations` | 20 | `CompactUntilUnder` cap |
 | `MaxExpandTokens` | 4000 | **Unused** |
 | `maxTruncatedSummaryBytes` | 2048 bytes | Deterministic fallback |
@@ -701,20 +797,22 @@ sources. It never deletes raw messages or summary rows.
 | Post-turn | `summarize` | `pipeline_finalize.go`, `pipeline_execute.go` | `Engine.Compact`, leaf sync, condensed async only if over budget |
 | Pre-LLM threshold | `threshold` | `pipeline_compact.go` via `CompactBeforeLLM` | `Engine.Compact`, blocking; returns `ErrNothingToCompact` if no summary |
 | Proactive budget | `proactive_budget` | `pipeline_setup.go` | `Engine.Compact` before the first LLM call if the hard budget is exceeded |
-| Overflow retry | `llm_retry` | `pipeline_llm.go` | `CompactUntilUnder(ContextWindow)`, up to 20 iterations |
-| Manual | `manual` | `/compact` command | `CompactNow`, leaf and condensed synchronously |
+| Overflow retry | `llm_retry` | `pipeline_llm.go` | `CompactUntilUnder(usableContextTokens)`, up to 20 iterations |
+| Manual | `manual` | `/compact [--force]` command | `CompactNowWithBudget`, leaf and condensed synchronously; `--force` ignores the target |
 
-The agent passes `Budget = ContextWindow` on every automatic path. Therefore the
-internal 75 percent threshold is not the normal trigger: the agent's own
-`summarize_token_percent` threshold (default 75 percent of the usable window)
-decides when to call `CompactBeforeLLM`, and `Engine.Compact` always attempts a
-leaf pass when called.
+The agent passes `Budget = ContextWindow - MaxTokens` (the usable prompt
+budget) on every automatic path. Therefore the internal 75 percent threshold is
+not the normal trigger: the agent's own `summarize_token_percent` threshold
+(default 75 percent of the usable window) decides when to call
+`CompactBeforeLLM`, and `Engine.Compact` always attempts a leaf pass when called.
 
 `CompactBeforeLLM` runs before every LLM call, including inside a tool loop, and
 chains up to three passes per call. It estimates the prompt from `exec.messages`
-plus tool definitions and compares it with
-`(ContextWindow - MaxTokens) * summarize_token_percent / 100`. If the prompt is
-below the threshold, it does nothing.
+plus tool definitions and also reads the stored context token count. It
+compacts when either the prompt or the stored context reaches
+`(ContextWindow - MaxTokens) * summarize_token_percent / 100`. Reading stored
+tokens matters because assembly may already have evicted history from the
+prompt.
 
 The post-turn call happens after the final assistant message is persisted. It is
 best effort: the return value is discarded, so errors are not logged at this
@@ -727,11 +825,14 @@ call site and the turn continues.
 2. `tokensBefore` is read **after** the leaf pass.
 3. Budget resolution:
    - `input.Budget != nil`: use it. A zero value logs an error but is still used.
-   - `input.Budget == nil`: `int(tokensBefore * 0.75)`.
+   - `input.Budget == nil`: no automatic target; `budget = tokensBefore`.
 4. If `Force` is true, or `tokensBefore > budget` and `budget > 0`, launch
    condensed compaction in a goroutine. Deduplicate per conversation with the
-   `condensing` map.
-5. Read `tokensAfter` and set `TokensSaved = tokensBefore - tokensAfter` if
+   `condensing` map. The loop stops once the stored context is within `budget`;
+   forced passes ignore the target and use the hard fanout.
+5. Condensed results that do not reduce the token count are discarded rather
+   than written.
+6. Read `tokensAfter` and set `TokensSaved = tokensBefore - tokensAfter` if
    positive.
 
 Because `tokensBefore` is measured after the leaf pass, `TokensSaved` does not
@@ -766,10 +867,15 @@ for the goroutine, so a database close can race with an in-flight compaction.
 8. Walks backward from the chunk start and collects up to two prior summaries
    as `<previous_context>`, regardless of adjacency.
 9. Generates the summary with the three-level escalation described below.
-10. Creates a `leaf` summary at depth 0 with token count, earliest and latest
+10. Verifies, inside one transaction, that the conversation generation and the
+    candidate message IDs are still the ones that were selected.
+11. Creates a `leaf` summary at depth 0 with token count, earliest and latest
     source timestamps, and source message token total.
-11. Links the summary to its source messages in `summary_messages`.
-12. Replaces the ordinal range with one summary context item at the midpoint.
+12. Links the summary to its source messages in `summary_messages`.
+13. Replaces the ordinal range with one summary context item at the start of the
+    range, resequencing if that ordinal is occupied, and bumps the conversation
+    version. A stale candidate set returns `ErrStaleCandidates` without writing
+    a summary.
 
 Important edge cases:
 
@@ -849,23 +955,24 @@ oversized responses.
 1. Reads distinct summary depths currently in context, ascending.
 2. For each depth, tries `selectOldestChunkAtDepth`.
 3. If no candidates, falls back to `selectShallowestCondensationCandidate`.
-4. If still none, returns `nil`.
-5. Generates the condensed summary with three-level escalation.
+4. If still none, or fewer than the required fanout, returns `nil`.
+5. Generates the condensed summary with three-level escalation. If the result is
+   not smaller than the input, it is discarded and `nil` is returned.
 6. Computes merged metadata:
    - `depth = max(parent depth) + 1`
    - `descendant_count = sum(parent descendant count + 1)`
    - `descendant_token_count = sum(parent token count + parent descendant tokens)`
    - `source_message_tokens = sum(parent source message tokens)`
    - earliest and latest timestamps are merged
-7. Creates a `condensed` summary and parent edges in `summary_parents`.
-8. Replaces the candidate items in `context_items`:
-   - If the candidates are consecutive, replace the ordinal range with one
-     summary at the midpoint.
-   - If non-candidate items sit between candidates, delete each candidate by
-     summary ID and insert the new summary at the midpoint of the candidate
-     ordinals. If that midpoint is occupied by a non-candidate item, the context
-     is resequenced and the new summary is appended at the end, which breaks
-     chronological order.
+7. Verifies the conversation generation and every candidate ID in one
+   transaction, then creates a `condensed` summary and parent edges in
+   `summary_parents`.
+8. Deletes the candidate context items by summary ID and inserts the new summary
+   at the last candidate ordinal. Using the last ordinal keeps a skipped
+   oversized summary that sits between candidates before the new summary. If
+   that ordinal is occupied, the context is resequenced and the summary is
+   inserted at the same position. A stale candidate set returns
+   `ErrStaleCandidates` without writing a summary.
 
 #### `selectOldestChunkAtDepth`
 
@@ -876,8 +983,12 @@ This is the primary selector:
   the context must begin with summaries.
 - All collected summaries must have the same depth.
 - A different depth breaks the scan.
+- A summary larger than 20000 tokens is skipped instead of blocking older
+  candidates.
 - The run stops before exceeding 20000 summary tokens.
-- The accumulated token count must be at least 2000; otherwise no candidates.
+- The number of candidates must reach the fanout (4 normally, 2 when forced),
+  and their token count must be at least 2000; otherwise there are no
+  candidates.
 
 A single large summary can satisfy the 2000-token minimum. A context that starts
 with a message, or with a leaf summary followed by a message, fails this
@@ -890,9 +1001,10 @@ The fallback:
 - Groups summaries by depth, ignoring non-summary items and adjacency.
 - Only considers items before the fresh-tail boundary.
 - Sorts depths ascending.
-- Picks the shallowest depth with at least 4 summaries.
-- Takes the first 4 in context order.
-- Never uses the hard fanout of 2; the `forced` parameter is always false.
+- Picks the shallowest depth with at least the fanout (4 normally, 2 when
+  forced).
+- Takes the first fanout-sized run in context order.
+- Also skips summaries larger than 20000 tokens.
 
 This is why condensed compaction still works after a normal leaf summary: the
 fallback groups non-consecutive leaf summaries at depth 0.
@@ -919,40 +1031,57 @@ The loop:
 
 1. Returns if the context is canceled.
 2. Reads the current context token count.
-3. Tries `compactCondensed`.
-4. Returns if no candidate was found.
-5. Records one created summary.
-6. Returns if tokens did not decrease.
-7. Returns if tokens did not improve compared with the previous iteration.
-8. Repeats.
-
-Despite the comment, the loop has **no budget check**. It keeps condensing until
-there is no candidate or no progress. Each iteration reduces the number of
-summaries, so it terminates, but it can create more summaries than needed.
+3. Returns if a positive budget was supplied and the context already fits.
+4. Tries `compactCondensed`.
+5. Returns if no candidate was found, or if the generated summary did not
+   shrink the input.
+6. Records one created summary.
+7. Returns if tokens did not decrease.
+8. Returns if tokens did not improve compared with the previous iteration.
+9. Repeats.
 
 The loop is deduplicated per conversation through `CompactionEngine.condensing`.
 Only condensed loops share this map. Leaf passes are not deduplicated.
 
 ### `CompactNow` (manual `/compact`)
 
-`CompactNow`:
+`CompactNow` / `CompactNowWithBudget`:
 
 1. Reads the token count before any work.
 2. Runs one leaf pass synchronously.
 3. If the condensed dedup slot is free, runs the condensed loop synchronously
-   and holds the slot.
+   and holds the slot. With a positive budget the loop stops as soon as the
+   stored context fits; zero keeps the older "condense until no progress"
+   behavior. The agent adapter passes the assembly budget minus the static
+   system/tool prompt reserve.
 4. Computes `TokensSaved` across both phases.
 5. Returns counts of created leaf and condensed summaries.
 
-If an asynchronous condensed loop already holds the slot, the manual condensed
-phase is skipped. The command can then report "Nothing to compact yet" when the
-leaf pass also created nothing, even though a condensed loop is running.
+The manual command is budget-aware by default. If the stored context already
+fits the target, it reports a reason and the measured tokens instead of a
+generic failure:
 
-The agent adapter treats zero created summaries as `ErrNothingToCompact`, which
-the `/compact` command renders as "Nothing to compact yet." A successful manual
-compaction replies "Context compacted." and sends a channel notice such as
-"Compacted context: summarized 2 blocks of older messages and merged 3
-summaries into a higher-level summary to free up space."
+```text
+Context already within the compaction target (3300/3327 history tokens).
+No new summary was needed. Use /compact --force to compact anyway.
+```
+
+`/compact --force` uses `CompactNow` with a zero budget, ignoring the target and
+running the condensed loop until no further progress is possible. The command
+also distinguishes `too_short`, `no_candidates`, and `in_progress` outcomes and
+returns token/summary details on success.
+
+If an asynchronous condensed loop already holds the slot, the manual condensed
+phase is skipped and `CompactResult.CondensedInProgress` is set. The command
+then reports `A compaction is already running. Try again shortly.` instead of
+claiming there is nothing to compact.
+
+The agent adapter treats zero created summaries as `ErrNothingToCompact` and
+fills `CompactOutcome` with the reason and token counts. A successful manual
+compaction reports the created summaries and the before/after history tokens,
+and sends a channel notice such as "Compacted context: summarized 2 blocks of
+older messages and merged 3 summaries into a higher-level summary to free up
+space."
 
 ### `CompactUntilUnder` (overflow retry)
 
@@ -964,10 +1093,10 @@ It loops up to 20 times:
 3. If no leaf summary, try condensed compaction.
 4. If neither made progress, stop.
 
-It never sets `TokensSaved`. The budget passed by the adapter is
-`ContextWindow`, not `ContextWindow - MaxTokens`, so the prompt can still be too
-large for the output reserve. The agent then trims history with
-`trimHistoryToFitContextWindow` around the compacted context.
+It never sets `TokensSaved`. The adapter passes `ContextWindow - MaxTokens`
+minus the static system/tool prompt reserve, matching the assembly budget. The
+agent then trims history with `trimHistoryToFitContextWindow` around the
+compacted context if needed.
 
 ### What compaction preserves and removes
 
@@ -984,9 +1113,13 @@ Removed or rewritten:
 - `summary_messages` rows only when the underlying message is deleted by
   bootstrap, not by compaction.
 
+Updated:
+
+- `conversations.updated_at` is refreshed when a message is inserted and when a
+  context rewrite or compaction apply bumps the conversation version.
+
 Not updated:
 
-- `conversations.updated_at` is never maintained after insert.
 - `summaries.model` is never populated; the summarizer model name is not stored.
 - The JSONL summary field. Seahorse summaries exist only in SQLite.
 
@@ -1085,7 +1218,8 @@ FTS5 query handling (`SanitizeFTS5Query`):
 - `AND`, `OR`, `NOT`, `NEAR`, `*`, `+`, `-`, `^`, `:`, and parentheses are
   treated as literal text, not operators.
 - With the trigram tokenizer, queries shorter than 3 characters may not match
-  through FTS5. Messages still get the LIKE fallback; summaries do not.
+  through FTS5. Both messages and summaries fall back to LIKE; summaries also
+  retry with LIKE when an FTS query returns no rows.
 - `%` cannot be searched literally, because it switches the whole search to LIKE
   and is then used as a wildcard.
 
@@ -1119,7 +1253,7 @@ Output:
   "summaries": [
     {
       "id": "sum_18f...",
-      "content": "full summary text",
+      "content": "summary text, truncated to 1024 runes",
       "depth": 0,
       "kind": "leaf",
       "conversationId": 1,
@@ -1129,25 +1263,30 @@ Output:
   "messages": [
     {
       "id": "42",
-      "snippet": "full message content",
+      "snippet": "FTS snippet around the match",
       "role": "user",
       "conversationId": 1,
       "rank": -0.8
     }
   ],
+  "totalSummaries": 1,
+  "totalMessages": 0,
   "hint": "No matches. Try: %keyword% for fuzzy search, or all_conversations: true"
 }
 ```
 
 Notes:
 
-- `totalSummaries` and `totalMessages` are computed internally but not included
-  in the tool output.
+- `totalSummaries` and `totalMessages` are included in the tool output.
 - Results do not include timestamps, model names, or session keys.
-- `snippet` for messages is the full stored content, not an excerpt.
-- `content` for summaries is the full summary.
-- There is no per-result or total token cap. A limit of 20 full messages can be
-  very large.
+- `snippet` for messages is an FTS5 snippet with a 32-token window, not the full
+  stored content.
+- `content` for summaries is truncated to 1024 runes. Summary IDs cannot be
+  passed to `short_expand`, so the full summary text is not recoverable from the
+  tool response.
+- The pattern is limited to 4096 bytes; `scope` and `role` are validated; a
+  negative `limit` is rejected and values above 100 are clamped to 100. There is
+  still no overall token cap.
 - The hint suggests `all_conversations`, which has no effect.
 
 #### Conversation scoping defect
@@ -1299,9 +1438,15 @@ Deleting rows does not shrink the SQLite file. The pruner:
 
 - Runs `VACUUM` when vacuuming is enabled and either the database-size guard
   forced it or the reclaimable space is at least 1 MiB and at least one tenth of
-  the file.
+  the file. Before running it, checks that free disk space covers the database
+  size plus 10 percent plus 16 MiB of headroom.
+- If `VACUUM` fails, logs the error and falls back to a WAL checkpoint instead
+  of leaving the database unmaintained.
+- After a successful `VACUUM`, runs `PRAGMA optimize` and returns.
 - Otherwise runs `PRAGMA wal_checkpoint(TRUNCATE)` to fold and truncate the WAL,
-  which is cheap and does not block writers for long.
+  which is cheap and does not block writers for long. The checkpoint result is
+  inspected: a non-zero busy count is reported as an error instead of being
+  treated as success.
 
 `VACUUM` rewrites the whole database, needs free disk space roughly equal to the
 database size, and blocks writers. On slow storage it can exceed the 5 second
@@ -1402,9 +1547,9 @@ migration otherwise falls back to legacy and leaves the file in place.
 | --- | --- | --- |
 | `context_manager: seahorse` but memory behaves like legacy | Factory failed and fell back | Check the gateway log for "Failed to create context manager" |
 | Gateway takes minutes to become ready | Synchronous bootstrap of many large sessions | Enable pruning, reduce session count or history size |
-| `short_grep` returns nothing for a short query | Trigram FTS needs at least 3 characters; summaries have no LIKE fallback | Use a longer pattern or `%..%` |
+| `short_grep` returns nothing for a short query | Trigram FTS needs at least 3 characters; short queries use the slower unranked LIKE path | Use a longer pattern or `%..%` |
 | `short_grep` returns content from other chats | Conversation scoping is not implemented | Treat the database as process-wide; restrict access |
-| `/compact` says "Nothing to compact yet" during automatic compaction | Async condensed loop holds the dedup slot | Retry after the loop finishes |
+| `/compact` says "A compaction is already running" | Async condensed loop holds the dedup slot | Retry after the loop finishes |
 | No new summaries despite a long chat | Fewer than 8 contiguous messages outside the 32-item fresh tail, or one huge message blocking the scan | Continue the conversation; compaction will catch up |
 | Database grows despite compaction | Compaction never deletes raw rows | Enable pruning or accept the disk cost |
 | Ingest errors during a long VACUUM | Busy timeout exceeded | Increase the interval, vacuum less often, or avoid the size guard on slow storage |
@@ -1421,8 +1566,10 @@ the work when it has something to delete.
 
 ### Per turn
 
-- Ingest inserts one message and its parts in one transaction per message, then
-  appends context items in a second transaction.
+- Ingest writes one message and its parts and appends the context item in a
+  single transaction per chunk (one message for the adapter path, up to
+  `IngestBatchChunkSize` for bootstrap), so the hot path costs one commit per
+  message instead of two.
 - Assembly loads all context items and resolves each one with a separate query.
   Messages also load their parts with a per-message query. This is an N+1 query
   pattern, so prompt assembly cost grows with context size.
@@ -1506,7 +1653,7 @@ manager keeps:
   (`Clear` resolves the owning agent dynamically and may use a newer store);
 - the original provider object and model captured by `providerToCompleteFn`;
 - the original pruning configuration and loop;
-- the original session shard mutexes and dedup state.
+- the original conversation lock manager and dedup state.
 
 The new registry does not get `short_grep` and `short_expand`, because they were
 registered directly on the previous registry's agents and are not part of
@@ -1540,9 +1687,8 @@ can decide whether they matter for a deployment.
    plus unbounded output and no way to drill into a summary.
 3. **Tool descriptions overstate capabilities.**
    `short_grep` documents `AND`/`OR`/`NOT` and current-conversation defaults that
-   the implementation does not provide. It also documents `totalSummaries` and
-   `totalMessages`, which are omitted from the output. The heavy-compression
-   warning references a `describe` tool that does not exist.
+   the implementation does not provide. The heavy-compression warning references
+   a `describe` tool that does not exist.
 4. **Search time filters use summary creation time.**
    `since` and `before` filter `summaries.created_at`, not the time range the
    summary covers. A summary of last week's messages created today is treated as
@@ -1550,12 +1696,12 @@ can decide whether they matter for a deployment.
 5. **Non-UTC time filters are off.**
    The filter formats the input in its own location but compares it with UTC
    database strings. Use `Z` timestamps.
-6. **Short queries miss summaries.**
-   The trigram tokenizer needs at least 3 characters. Messages fall back to
-   LIKE; summaries do not, so a 2-character pattern can return messages but no
-   summaries.
-7. **Negative limits are unbounded.**
-   `limit: -1` skips the SQL `LIMIT` clause and returns every match.
+6. **Short queries use the LIKE path.**
+   The trigram tokenizer needs at least 3 characters. Short patterns, and
+   summary queries that return no FTS rows, fall back to unranked LIKE scans.
+7. **Limits above 100 are silently clamped.**
+   `limit` values above 100 are reduced to 100; negative values are rejected.
+   There is still no overall token cap.
 
 ### Message fidelity
 
@@ -1579,9 +1725,10 @@ can decide whether they matter for a deployment.
 
 ### Ingestion and durability
 
-13. **Multi-message ingestion is not atomic.**
-    A failure mid-loop can leave messages without context items. Bootstrap does
-    not repair missing context membership.
+13. **Multi-chunk ingestion is not atomic across chunks.**
+    Chunks are atomic individually, but a failure in a later chunk leaves the
+    earlier chunks committed. The lost chunk stays in JSONL and is re-ingested
+    by the next bootstrap.
 14. **Ingest failures are only logged.**
     The message remains in JSONL but is absent from SQLite and therefore from
     the next assembled prompt until a restart bootstrap succeeds.
@@ -1589,91 +1736,68 @@ can decide whether they matter for a deployment.
     Ingest has no idempotency key. Calling it twice with the same messages
     creates duplicates. The agent calls it once per persisted message, but a
     retry or a manual import would duplicate.
-16. **Bootstrap cannot see extra database rows.**
-    `GetMessages` is limited to the JSONL length, so a longer database tail is
-    invisible and survives reconciliation.
-17. **Empty JSONL leaves stale rows.**
-    Bootstrap returns immediately for an empty history, so a session whose JSONL
-    was cleared or deleted keeps its old messages and summaries in SQLite.
-18. **Rebuilds leave orphan summaries.**
-    Message deletion removes `summary_messages` links and message context items,
-    but not summary rows or summary context items. Stale summaries can remain in
-    the context and in search results after the source messages changed or were
-    deleted.
-
 ### Compaction
 
-19. **Young sessions do not compact.**
+16. **Young sessions do not compact.**
     The fresh tail is 32 context items. Until a session has more than 32 items,
     the evictable region is empty and leaf compaction does nothing.
-20. **Contiguity requirements can block leaf compaction.**
+17. **Contiguity requirements can block leaf compaction.**
     A single huge message, an interleaved summary, or fewer than 8 messages in
     the evictable region makes the pass return `nil`.
-21. **Leaf and condensed selection are asymmetric.**
+18. **Leaf and condensed selection are asymmetric.**
     Leaf requires a contiguous message run. Condensed first requires the context
     to start with a contiguous same-depth summary run, then falls back to
     non-contiguous depth grouping.
-22. **Condensed fallback never uses the hard fanout.**
-    `CondensedMinFanoutHard = 2` is dead code. The fallback always requires 4.
-23. **`runCondensedLoop` has no budget stop.**
-    The comment says it stops when under threshold, but it only stops on no
-    candidate or no progress.
-24. **`TokensSaved` is incomplete.**
+19. **`TokensSaved` is incomplete.**
     `Engine.Compact` measures the baseline after the leaf pass, so leaf savings
     are not counted. `CompactUntilUnder` never sets it.
-25. **Manual compaction can be silently skipped.**
+20. **Manual compaction can be silently skipped.**
     If an async condensed loop is running, `CompactNow` skips its condensed
-    phase and may report "Nothing to compact yet."
-26. **Resequencing breaks chronology.**
-    When a non-contiguous condensed replacement hits an occupied midpoint, the
-    context is resequenced and the new summary is appended at the end, after
-    newer messages.
-27. **`ContextThreshold` is mostly dead.**
-    The agent always passes a budget, so the 75 percent branch is only used by
-    direct engine callers. `NeedsCompaction` is unused.
-28. **Async condensed results are not announced.**
+    phase and reports "A compaction is already running. Try again shortly."
+21. **`ContextThreshold` is mostly dead.**
+    The agent always passes a budget, and `CompactInput` no longer exposes a
+    context window, so `NeedsCompaction` has no internal caller.
+22. **Async condensed results are not announced.**
     `agent.session.summarize` and the channel notice are emitted before the
     background loop finishes, so background condensed summaries are omitted
     from both.
-29. **`MaxExpandTokens` is unused.**
+23. **`MaxExpandTokens` is unused.**
     Expansion has no token cap.
 
 ### Startup, multi-agent, and lifecycle
 
-30. **Only the default agent's sessions are bootstrapped.**
+24. **Only the default agent's sessions are bootstrapped.**
     Pre-existing history of routed agents is never imported.
-31. **The database lives in the default agent's workspace.**
+25. **The database lives in the default agent's workspace.**
     Changing the default agent or its workspace changes the database location.
-32. **`context_manager_config` is ignored.**
+26. **`context_manager_config` is ignored.**
     Database path, ignore patterns, and stateless patterns cannot be configured.
-33. **A factory failure falls back to legacy with only a warning.**
+27. **A factory failure falls back to legacy with only a warning.**
     Corrupt or unreadable databases do not stop the gateway.
-34. **Hot reload does not rebuild the manager.**
+28. **Hot reload does not rebuild the manager.**
     Provider, model, config, and session-store references stay stale, and the
     retrieval tools disappear from the new registry.
-35. **Async compaction outlives the turn.**
+29. **Async compaction outlives the turn.**
     It uses `shutdownCtx`. `Close` cancels but does not wait, so a database close
     can race with a running condensed loop.
-36. **`conversations.updated_at` is never maintained.**
-    It always equals the insert time.
-37. **`summaries.model` is never populated.**
+30. **`summaries.model` is never populated.**
     There is no record of which model produced a summary.
-38. **The compaction event miscounts.**
+31. **The compaction event miscounts.**
     `agent.session.summarize` sets `SummarizedMessages` to the number of
     summaries, not messages.
 
 ### Storage and maintenance
 
-39. **Compaction does not reclaim disk.**
+32. **Compaction does not reclaim disk.**
     Raw messages and all summaries are retained. Only pruning deletes data.
-40. **Trigram availability is effectively required.**
+33. **Trigram availability is effectively required.**
     A missing trigram tokenizer logs a warning, then schema creation fails and
     the runtime falls back to legacy.
-41. **No encryption and no restrictive file mode.**
+34. **No encryption and no restrictive file mode.**
     The database is readable by anyone who can read the workspace.
-42. **`DBFileSize` ignores `-shm`.**
+35. **`DBFileSize` ignores `-shm`.**
     Size reports can undercount transient shared-memory files.
-43. **Empty conversation rows are never pruned.**
+36. **Empty conversation rows are never pruned.**
     `Assemble` and `Compact` create a `conversations` row before any message
     exists. The row has no timestamp for pruning to use, so it is treated as
     undated, is never selected, and still counts toward `max_sessions`.
@@ -1713,5 +1837,5 @@ can decide whether they matter for a deployment.
   sessions, routing.
 - [Custom Builds](../guides/custom-builds.md): `no_seahorse`, SQLite
   dependencies, binary sizes.
-- [Security](../security/README.md): sensitive-data filtering and deployment
+- [Security](../security/): sensitive-data filtering and deployment
   hardening.

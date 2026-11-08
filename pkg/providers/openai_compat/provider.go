@@ -434,6 +434,16 @@ func (p *Provider) SupportsThinking() bool {
 	return strings.EqualFold(strings.TrimSpace(p.providerName), "deepseek") || isDeepSeekHost(p.apiBase)
 }
 
+// ReplaysReasoningContent reports whether assistant reasoning_content is sent
+// back in later requests. DeepSeek and MiMo keep it for tool rounds; every
+// other OpenAI-compatible provider gets it stripped by prepareMessagesForRequest.
+func (p *Provider) ReplaysReasoningContent() bool {
+	if p == nil {
+		return true
+	}
+	return p.requiresToolRoundReasoningReplay()
+}
+
 func (p *Provider) prepareMessagesForRequest(messages []Message) []Message {
 	if len(messages) == 0 {
 		return nil

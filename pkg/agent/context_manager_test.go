@@ -1302,7 +1302,7 @@ func TestProcessMessage_CompactCommand(t *testing.T) {
 		t.Fatalf("SetHistory: %v", err)
 	}
 	resp, err := al.processMessage(context.Background(), msg)
-	if err != nil || resp != "Nothing to compact yet." {
+	if err != nil || resp != "No compactable history was found." {
 		t.Fatalf("short history: resp=%q err=%v", resp, err)
 	}
 	if len(provider.prompts) != 0 {
@@ -1322,7 +1322,7 @@ func TestProcessMessage_CompactCommand(t *testing.T) {
 		t.Fatalf("SetHistory: %v", err)
 	}
 	resp, err = al.processMessage(context.Background(), msg)
-	if err != nil || resp != "Context compacted." {
+	if err != nil || !strings.HasPrefix(resp, "Context compacted") {
 		t.Fatalf("long history: resp=%q err=%v", resp, err)
 	}
 	if len(provider.prompts) == 0 || !strings.Contains(provider.prompts[0], "focus on database migration") {

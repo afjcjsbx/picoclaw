@@ -1,6 +1,9 @@
+---
+description: "How PicoClaw routing works end to end: the pipeline that picks a model, the individual signals it combines, and where each stage is configured."
+---
 # Routing System
 
-> Back to [README](../README.md)
+> Back to [Architecture](./)
 
 In PicoClaw, the runtime "routing system" is not just one decision.
 It is the combined pipeline that decides:

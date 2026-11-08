@@ -1,3 +1,7 @@
+---
+lang: zh
+description: "所有 hook 使用 JSON-RPC 2.0 格式，每行一个 JSON 消息，通过 stdio 传输。成功：错误：启动时必须完成握手，否则 hook 进程会被终止。"
+---
 # Hook JSON-RPC 协议详解
 
 所有 hook 使用 `JSON-RPC 2.0` 格式，每行一个 JSON 消息，通过 stdio 传输。

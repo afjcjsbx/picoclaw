@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -75,7 +76,17 @@ func (m *legacyContextManager) Compact(ctx context.Context, req *CompactRequest)
 		// Same agent as Assemble, so the rebuilt prompt reads what was compacted.
 		return m.compactSession(ctx, m.al.agentForSession(req.SessionKey), req)
 	case ContextCompressReasonManual:
-		return m.compactSession(ctx, m.al.agentForSession(req.SessionKey), req)
+		err := m.compactSession(ctx, m.al.agentForSession(req.SessionKey), req)
+		if req.Outcome != nil {
+			switch {
+			case err == nil:
+				req.Outcome.Compacted = true
+				req.Outcome.Reason = CompactReasonCompacted
+			case errors.Is(err, ErrNothingToCompact):
+				req.Outcome.Reason = CompactReasonNoCandidates
+			}
+		}
+		return err
 	}
 	return nil
 }

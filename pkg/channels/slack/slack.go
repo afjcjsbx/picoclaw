@@ -3,6 +3,7 @@ package slack
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 
@@ -210,10 +211,20 @@ func (c *SlackChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessa
 			title = filename
 		}
 
+		info, err := os.Stat(localPath)
+		if err != nil {
+			logger.ErrorCF("slack", "Failed to stat media file", map[string]any{
+				"path":  localPath,
+				"error": err.Error(),
+			})
+			continue
+		}
+
 		err = c.uploadFileFn(ctx, slack.UploadFileParameters{
 			Channel:         channelID,
 			ThreadTimestamp: threadTS,
 			File:            localPath,
+			FileSize:        int(info.Size()),
 			Filename:        filename,
 			Title:           title,
 		})

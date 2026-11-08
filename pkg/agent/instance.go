@@ -20,6 +20,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/session"
 	"github.com/sipeed/picoclaw/pkg/tools"
 	fstools "github.com/sipeed/picoclaw/pkg/tools/fs"
+	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
 // AgentInstance represents a fully configured agent with its own workspace,
@@ -100,6 +101,7 @@ func NewAgentInstance(
 		// Keep the subprocess isolation runtime aligned with the latest loaded config
 		// before any tools or providers start spawning child processes.
 		isolation.Configure(cfg)
+		toolshared.SetArtifactRetention(cfg.Tools.GetArtifactMaxAge(), cfg.Tools.GetArtifactMaxFiles())
 	}
 
 	workspace := resolveAgentWorkspace(agentCfg, defaults)

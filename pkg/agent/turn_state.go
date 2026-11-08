@@ -370,6 +370,19 @@ func (al *AgentLoop) getActiveTurnState(sessionKey string) *turnState {
 	return nil
 }
 
+// activeTurnMessageCountForSession returns the active turn's protected message
+// count for a session, or zero when no turn is running.
+func (al *AgentLoop) activeTurnMessageCountForSession(sessionKey string) int {
+	if al == nil {
+		return 0
+	}
+	ts := al.getActiveTurnState(sessionKey)
+	if ts == nil {
+		return 0
+	}
+	return activeTurnMessageCount(ts, nil)
+}
+
 // getAnyActiveTurnState returns any active turn state (for backward compatibility)
 func (al *AgentLoop) getAnyActiveTurnState() *turnState {
 	var firstTS *turnState
@@ -1072,6 +1085,11 @@ func (ts *turnState) AddUsage(usage *providers.UsageInfo) {
 	ts.turnUsage.CacheReadTokens += usage.CacheReadTokens
 	ts.turnUsage.CacheCreationTokens += usage.CacheCreationTokens
 	ts.turnUsage.CostUSD += usage.CostUSD
+	// Requests and ContextTokens describe the turn rather than a single
+	// provider response: count every call, but keep the last prompt size so
+	// callers can distinguish billed input from the live context window.
+	ts.turnUsage.Requests++
+	ts.turnUsage.ContextTokens = usage.PromptTokens
 }
 
 // GetTurnUsage returns a copy of the aggregated usage for this turn.

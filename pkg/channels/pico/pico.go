@@ -599,8 +599,7 @@ type picoStreamer struct {
 	channel          *PicoChannel
 	chatID           string
 	modelName        string
-	turnInputTokens  int
-	turnOutputTokens int
+	turnUsage        *bus.TokenUsage
 	messageID        string
 	reasoningID      string
 	throttleInterval time.Duration
@@ -624,14 +623,14 @@ func (s *picoStreamer) SetModelName(modelName string) {
 }
 
 // SetTurnUsage records the real per-turn LLM token usage to emit on finalize.
-func (s *picoStreamer) SetTurnUsage(inputTokens, outputTokens int) {
+func (s *picoStreamer) SetTurnUsage(usage bus.TokenUsage) {
 	if s == nil {
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.turnInputTokens = inputTokens
-	s.turnOutputTokens = outputTokens
+	u := usage
+	s.turnUsage = &u
 }
 
 func (s *picoStreamer) Update(ctx context.Context, content string) error {
@@ -751,7 +750,7 @@ func (s *picoStreamer) sendLocked(
 			payload[PayloadKeyFinal] = true
 		}
 		setContextUsagePayload(payload, contextUsage)
-		setTurnUsagePayload(payload, s.turnInputTokens, s.turnOutputTokens)
+		setTokenUsagePayload(payload, s.turnUsage)
 		outMsg := newMessage(TypeMessageCreate, payload)
 		if err := s.channel.broadcast(s.chatID, outMsg); err != nil {
 			return err
@@ -767,7 +766,7 @@ func (s *picoStreamer) sendLocked(
 		if final {
 			payload[PayloadKeyFinal] = true
 		}
-		setTurnUsagePayload(payload, s.turnInputTokens, s.turnOutputTokens)
+		setTokenUsagePayload(payload, s.turnUsage)
 		if err := s.channel.editMessagePayload(ctx, s.chatID, s.messageID, payload, contextUsage); err != nil {
 			return err
 		}
@@ -1909,17 +1908,6 @@ func setContextUsagePayload(payload map[string]any, u *bus.ContextUsage) {
 	}
 }
 
-// setTurnUsagePayload attaches real per-turn LLM token usage to the payload.
-// Input and output are kept separate (billed at different rates); total is a
-// convenience sum. Omitted entirely when both counts are zero.
-func setTurnUsagePayload(payload map[string]any, inputTokens, outputTokens int) {
-	setTokenUsagePayload(payload, &bus.TokenUsage{
-		InputTokens:  inputTokens,
-		OutputTokens: outputTokens,
-		TotalTokens:  inputTokens + outputTokens,
-	})
-}
-
 // setTokenUsagePayload attaches provider-reported usage carried on an outbound
 // message, so non-streaming replies get the same badge as streamed ones.
 func setTokenUsagePayload(payload map[string]any, usage *bus.TokenUsage) {
@@ -1946,6 +1934,12 @@ func setTokenUsagePayload(payload map[string]any, usage *bus.TokenUsage) {
 	}
 	if usage.CostUSD > 0 {
 		block["cost_usd"] = usage.CostUSD
+	}
+	if usage.Requests > 0 {
+		block["requests"] = usage.Requests
+	}
+	if usage.ContextTokens > 0 {
+		block["context_tokens"] = usage.ContextTokens
 	}
 	payload[PayloadKeyUsage] = block
 }
