@@ -2,6 +2,7 @@ package seahorse
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -29,16 +30,32 @@ type CompactResult struct {
 	TokensSaved        int      `json:"tokensSaved"`
 	LeafSummaries      int      `json:"leafSummaries"`
 	CondensedSummaries int      `json:"condensedSummaries"`
+	// CondensedInProgress is true when the manual condensed pass was skipped
+	// because another condensed loop already holds the conversation slot.
+	CondensedInProgress bool `json:"condensedInProgress,omitempty"`
 }
 
 // NeedsCompaction returns true if context tokens >= ContextThreshold × contextWindow.
-func (e *CompactionEngine) NeedsCompaction(ctx context.Context, convID int64, contextWindow int) (bool, error) {
+func (e *CompactionEngine) NeedsCompaction(
+	ctx context.Context,
+	convID int64,
+	contextWindow int,
+) (bool, error) {
 	tokens, err := e.store.GetContextTokenCount(ctx, convID)
 	if err != nil {
 		return false, fmt.Errorf("get token count: %w", err)
 	}
 	threshold := int(float64(contextWindow) * ContextThreshold)
 	return tokens >= threshold, nil
+}
+
+// condensedMinFanout returns the minimum number of summaries required for a
+// condensed pass. Forced passes may condense smaller runs.
+func condensedMinFanout(forced bool) int {
+	if forced {
+		return CondensedMinFanoutHard
+	}
+	return CondensedMinFanout
 }
 
 // Close cancels the shutdown context, stopping async goroutines.
@@ -49,7 +66,11 @@ func (e *CompactionEngine) Close() {
 }
 
 // Compact runs leaf compaction (sync) and optionally condensed compaction.
-func (e *CompactionEngine) Compact(ctx context.Context, convID int64, input CompactInput) (*CompactResult, error) {
+func (e *CompactionEngine) Compact(
+	ctx context.Context,
+	convID int64,
+	input CompactInput,
+) (*CompactResult, error) {
 	result := &CompactResult{}
 
 	// Phase 1: leaf compaction (synchronous, every turn)
@@ -72,20 +93,32 @@ func (e *CompactionEngine) Compact(ctx context.Context, convID int64, input Comp
 	if input.Budget != nil {
 		budget = *input.Budget
 		if budget == 0 {
-			logger.ErrorCF("seahorse", "Compact: budget is 0, this should not happen", map[string]any{
-				"conv_id": convID,
-			})
+			logger.ErrorCF(
+				"seahorse",
+				"Compact: budget is 0, this should not happen",
+				map[string]any{
+					"conv_id": convID,
+				},
+			)
 		}
 	} else {
-		budget = int(float64(tokensBefore) * ContextThreshold)
+		// No target means no automatic condensed pass.
+		budget = tokensBefore
 	}
 
 	if input.Force || (tokensBefore > budget && budget > 0) {
-		// Launch async condensed compaction with dedup
+		// Launch async condensed compaction with dedup. The goroutine gets the
+		// same target budget so it stops as soon as the stored context fits.
+		// A forced pass deliberately ignores the target and condenses all
+		// eligible candidates.
+		loopBudget := budget
+		if input.Force {
+			loopBudget = 0
+		}
 		if _, loaded := e.condensing.LoadOrStore(convID, struct{}{}); !loaded {
 			go func() {
 				defer e.condensing.Delete(convID)
-				e.runCondensedLoop(e.shutdownCtx, convID, "")
+				e.runCondensedLoop(e.shutdownCtx, convID, "", loopBudget)
 			}()
 		}
 	}
@@ -109,6 +142,19 @@ func (e *CompactionEngine) CompactNow(
 	instructions string,
 	protectTailMessages ...int,
 ) (*CompactResult, error) {
+	return e.CompactNowWithBudget(ctx, convID, instructions, 0, protectTailMessages...)
+}
+
+// CompactNowWithBudget is CompactNow with a target budget. A positive budget
+// stops the condensed loop as soon as the stored context fits; zero keeps the
+// historical "condense until no progress" behavior.
+func (e *CompactionEngine) CompactNowWithBudget(
+	ctx context.Context,
+	convID int64,
+	instructions string,
+	budget int,
+	protectTailMessages ...int,
+) (*CompactResult, error) {
 	protect := 0
 	if len(protectTailMessages) > 0 {
 		protect = protectTailMessages[0]
@@ -128,7 +174,9 @@ func (e *CompactionEngine) CompactNow(
 	// Share the dedup map with the async path so two condensed loops never overlap.
 	if _, loaded := e.condensing.LoadOrStore(convID, struct{}{}); !loaded {
 		defer e.condensing.Delete(convID)
-		result.CondensedSummaries = e.runCondensedLoop(ctx, convID, instructions)
+		result.CondensedSummaries = e.runCondensedLoop(ctx, convID, instructions, budget)
+	} else {
+		result.CondensedInProgress = true
 	}
 
 	if tokensAfter, _ := e.store.GetContextTokenCount(ctx, convID); tokensAfter < tokensBefore {
@@ -150,7 +198,11 @@ func (e *CompactionEngine) CompactUntilUnder(
 	}
 	result := &CompactResult{}
 	prevTokens := 0
-	logger.InfoCF("seahorse", "compact_until_under: start", map[string]any{"conv_id": convID, "budget": budget})
+	logger.InfoCF(
+		"seahorse",
+		"compact_until_under: start",
+		map[string]any{"conv_id": convID, "budget": budget},
+	)
 
 	for iter := 0; iter < MaxCompactIterations; iter++ {
 		tokens, err := e.store.GetContextTokenCount(ctx, convID)
@@ -185,7 +237,7 @@ func (e *CompactionEngine) CompactUntilUnder(
 		}
 
 		// Try condensed with forced fanout
-		condensedID, err := e.compactCondensed(ctx, convID, "")
+		condensedID, err := e.compactCondensed(ctx, convID, "", true)
 		if err != nil {
 			return result, err
 		}
@@ -330,7 +382,10 @@ func (e *CompactionEngine) compactLeafProtected(
 		return nil, err
 	}
 
-	// Create summary in store
+	// Create the summary and rewrite the context atomically. The LLM call above
+	// is intentionally outside the transaction; ApplyLeafSummary verifies that
+	// the candidate set is still current and returns ErrStaleCandidates rather
+	// than creating an orphan.
 	tokenCount := tokenizer.EstimateMessageTokens(providers.Message{Content: content})
 
 	var earliestAt, latestAt *time.Time
@@ -338,34 +393,42 @@ func (e *CompactionEngine) compactLeafProtected(
 		earliestAt = &messages[0].CreatedAt
 		latestAt = &messages[len(messages)-1].CreatedAt
 	}
-
-	summary, err := e.store.CreateSummary(ctx, CreateSummaryInput{
-		ConversationID:      convID,
-		Kind:                SummaryKindLeaf,
-		Depth:               0,
-		Content:             content,
-		TokenCount:          tokenCount,
-		EarliestAt:          earliestAt,
-		LatestAt:            latestAt,
-		SourceMessageTokens: sumMessageTokens(messages),
-	})
+	version, err := e.store.GetConversationVersion(ctx, convID)
 	if err != nil {
 		return nil, err
 	}
 
-	// Link to source messages
 	msgIDs := make([]int64, len(messages))
 	for i, m := range messages {
 		msgIDs[i] = m.ID
 	}
-	if err := e.store.LinkSummaryToMessages(ctx, summary.SummaryID, msgIDs); err != nil {
-		return nil, err
-	}
 
-	// Replace context range with summary
-	if err := e.store.ReplaceContextRangeWithSummary(
-		ctx, convID, chunk[0].Ordinal, chunk[len(chunk)-1].Ordinal, summary.SummaryID,
-	); err != nil {
+	unlock := e.lockConversation(convID)
+	defer unlock()
+	summary, err := e.store.ApplyLeafSummary(ctx, ApplyLeafInput{
+		ConversationID:  convID,
+		ExpectedVersion: version,
+		StartOrdinal:    chunk[0].Ordinal,
+		EndOrdinal:      chunk[len(chunk)-1].Ordinal,
+		MessageIDs:      msgIDs,
+		Summary: CreateSummaryInput{
+			ConversationID:      convID,
+			Kind:                SummaryKindLeaf,
+			Depth:               0,
+			Content:             content,
+			TokenCount:          tokenCount,
+			EarliestAt:          earliestAt,
+			LatestAt:            latestAt,
+			SourceMessageTokens: sumMessageTokens(messages),
+		},
+	})
+	if err != nil {
+		if errors.Is(err, ErrStaleCandidates) {
+			logger.InfoCF("seahorse", "compact: leaf candidates changed, skipping", map[string]any{
+				"conv_id": convID,
+			})
+			return nil, nil
+		}
 		return nil, err
 	}
 
@@ -406,7 +469,14 @@ func compactionTailStart(items []ContextItem, protectTailMessages int, force boo
 }
 
 // compactCondensed compresses multiple summaries into one higher-level summary.
-func (e *CompactionEngine) compactCondensed(ctx context.Context, convID int64, instructions string) (*string, error) {
+func (e *CompactionEngine) compactCondensed(
+	ctx context.Context,
+	convID int64,
+	instructions string,
+	forced bool,
+) (*string, error) {
+	minFanout := condensedMinFanout(forced)
+
 	// Try ordinal-aware selection first (respects consecutive ordering)
 	var candidates []Summary
 
@@ -417,7 +487,7 @@ func (e *CompactionEngine) compactCondensed(ctx context.Context, convID int64, i
 	for _, depth := range depths {
 		var chunkAtDepth []Summary
 		var err2 error
-		chunkAtDepth, err2 = e.selectOldestChunkAtDepth(ctx, convID, depth)
+		chunkAtDepth, err2 = e.selectOldestChunkAtDepth(ctx, convID, depth, forced)
 		if err2 != nil {
 			continue
 		}
@@ -429,13 +499,18 @@ func (e *CompactionEngine) compactCondensed(ctx context.Context, convID int64, i
 
 	// Fallback to depth-grouping selection
 	if len(candidates) == 0 {
-		candidates, err = e.selectShallowestCondensationCandidate(ctx, convID, false)
+		candidates, err = e.selectShallowestCondensationCandidate(ctx, convID, forced)
 		if err != nil {
 			return nil, err
 		}
 	}
-	if len(candidates) == 0 {
+	if len(candidates) == 0 || len(candidates) < minFanout {
 		return nil, nil
+	}
+
+	version, err := e.store.GetConversationVersion(ctx, convID)
+	if err != nil {
+		return nil, err
 	}
 
 	// Generate condensed summary
@@ -452,8 +527,10 @@ func (e *CompactionEngine) compactCondensed(ctx context.Context, convID int64, i
 	var earliestAt, latestAt *time.Time
 
 	parentIDs := make([]string, len(candidates))
+	inputTokens := 0
 	for i, c := range candidates {
 		parentIDs[i] = c.SummaryID
+		inputTokens += c.TokenCount
 		if c.Depth > maxDepth {
 			maxDepth = c.Depth
 		}
@@ -473,85 +550,80 @@ func (e *CompactionEngine) compactCondensed(ctx context.Context, convID int64, i
 	}
 
 	tokenCount := tokenizer.EstimateMessageTokens(providers.Message{Content: content})
-
-	summary, err := e.store.CreateSummary(ctx, CreateSummaryInput{
-		ConversationID:       convID,
-		Kind:                 SummaryKindCondensed,
-		Depth:                maxDepth + 1,
-		Content:              content,
-		TokenCount:           tokenCount,
-		EarliestAt:           earliestAt,
-		LatestAt:             latestAt,
-		DescendantCount:      descendantCount,
-		DescendantTokenCount: descendantTokenCount,
-		SourceMessageTokens:  sourceMessageTokens,
-		ParentIDs:            parentIDs,
-	})
-	if err != nil {
-		return nil, err
+	// Condensation must reduce the context. A model that returns a response as
+	// large as its input would only add a summary level and waste an LLM call.
+	if inputTokens > 0 && tokenCount >= inputTokens {
+		logger.InfoCF(
+			"seahorse",
+			"condensed: response is not smaller than input, skipping",
+			map[string]any{
+				"conv_id":       convID,
+				"input_tokens":  inputTokens,
+				"output_tokens": tokenCount,
+			},
+		)
+		return nil, nil
 	}
 
-	// Find the ordinal range for the candidate summaries in context
+	// Find the ordinal at which the condensed summary belongs. Use the last
+	// candidate ordinal: the selector may have skipped an oversized summary
+	// between candidates, and inserting at the first ordinal would place the
+	// new summary ahead of that skipped item. ApplyCondensedSummary re-verifies
+	// every candidate before creating any row, so this read is only a hint.
 	items, err := e.store.GetContextItems(ctx, convID)
 	if err != nil {
 		return nil, err
 	}
-
-	candidateSet := make(map[string]bool)
+	candidateSet := make(map[string]bool, len(candidates))
 	for _, c := range candidates {
 		candidateSet[c.SummaryID] = true
 	}
-
-	startOrd := -1
-	endOrd := -1
-	hasNonCandidate := false
+	insertOrdinal := -1
 	for _, item := range items {
 		if item.ItemType == "summary" && candidateSet[item.SummaryID] {
-			if startOrd == -1 {
-				startOrd, endOrd = item.Ordinal, item.Ordinal
-			} else {
-				// Check for non-candidate items between endOrd and current ordinal
-				for _, it := range items {
-					if it.Ordinal > endOrd && it.Ordinal <= item.Ordinal {
-						if it.ItemType != "summary" || !candidateSet[it.SummaryID] {
-							hasNonCandidate = true
-							break
-						}
-					}
-				}
-				if hasNonCandidate {
-					break
-				}
-				if item.Ordinal < startOrd {
-					startOrd = item.Ordinal
-				}
-				if item.Ordinal > endOrd {
-					endOrd = item.Ordinal
-				}
+			if item.Ordinal > insertOrdinal {
+				insertOrdinal = item.Ordinal
 			}
 		}
 	}
-
-	if startOrd == -1 || endOrd == -1 {
+	if insertOrdinal == -1 {
 		return nil, nil
 	}
 
-	// Collect candidate summary IDs
 	candidateIDs := make([]string, 0, len(candidates))
 	for _, c := range candidates {
 		candidateIDs = append(candidateIDs, c.SummaryID)
 	}
 
-	if hasNonCandidate {
-		// Use safe per-item deletion to avoid deleting non-candidate items
-		if err := e.store.ReplaceContextItemsWithSummary(ctx, convID, candidateIDs, summary.SummaryID); err != nil {
-			return nil, err
+	unlock := e.lockConversation(convID)
+	defer unlock()
+	summary, err := e.store.ApplyCondensedSummary(ctx, ApplyCondensedInput{
+		ConversationID:      convID,
+		ExpectedVersion:     version,
+		CandidateSummaryIDs: candidateIDs,
+		InsertBeforeOrdinal: insertOrdinal,
+		Summary: CreateSummaryInput{
+			ConversationID:       convID,
+			Kind:                 SummaryKindCondensed,
+			Depth:                maxDepth + 1,
+			Content:              content,
+			TokenCount:           tokenCount,
+			EarliestAt:           earliestAt,
+			LatestAt:             latestAt,
+			DescendantCount:      descendantCount,
+			DescendantTokenCount: descendantTokenCount,
+			SourceMessageTokens:  sourceMessageTokens,
+			ParentIDs:            parentIDs,
+		},
+	})
+	if err != nil {
+		if errors.Is(err, ErrStaleCandidates) {
+			logger.InfoCF("seahorse", "condensed: candidates changed, skipping", map[string]any{
+				"conv_id": convID,
+			})
+			return nil, nil
 		}
-	} else {
-		// Candidates are consecutive, use efficient range deletion
-		if err := e.store.ReplaceContextRangeWithSummary(ctx, convID, startOrd, endOrd, summary.SummaryID); err != nil {
-			return nil, err
-		}
+		return nil, err
 	}
 
 	return &summary.SummaryID, nil
@@ -572,10 +644,7 @@ func (e *CompactionEngine) selectShallowestCondensationCandidate(
 		tailStartIdx = 0
 	}
 
-	minFanout := CondensedMinFanout
-	if forced {
-		minFanout = CondensedMinFanoutHard
-	}
+	minFanout := condensedMinFanout(forced)
 
 	// Track depth groups
 	depthGroups := make(map[int][]ContextItem)
@@ -586,6 +655,9 @@ func (e *CompactionEngine) selectShallowestCondensationCandidate(
 		}
 		sum, err := e.store.GetSummary(ctx, item.SummaryID)
 		if err != nil {
+			continue
+		}
+		if sum.TokenCount > LeafChunkTokens {
 			continue
 		}
 		depthGroups[sum.Depth] = append(depthGroups[sum.Depth], item)
@@ -622,8 +694,10 @@ func (e *CompactionEngine) selectShallowestCondensationCandidate(
 // summaries at the given depth. Stops at non-summary items, different depth, fresh tail, or
 // token overflow. Returns contiguous chunk of summaries.
 func (e *CompactionEngine) selectOldestChunkAtDepth(
-	ctx context.Context, convID int64, targetDepth int,
+	ctx context.Context, convID int64, targetDepth int, forced bool,
 ) ([]Summary, error) {
+	minFanout := condensedMinFanout(forced)
+
 	items, err := e.store.GetContextItems(ctx, convID)
 	if err != nil {
 		return nil, err
@@ -651,6 +725,11 @@ func (e *CompactionEngine) selectOldestChunkAtDepth(
 			// Different depth breaks the chunk
 			break
 		}
+		if sum.TokenCount > LeafChunkTokens {
+			// Skip an oversized summary instead of letting it block every
+			// older candidate.
+			continue
+		}
 		if accumTokens+sum.TokenCount > LeafChunkTokens {
 			// Token overflow stops collection
 			break
@@ -662,7 +741,7 @@ func (e *CompactionEngine) selectOldestChunkAtDepth(
 	// Min tokens check: spec line 808
 	// chunk tokens must be >= max(CondensedTargetTokens, LeafChunkTokens × 0.1) = 2000
 	minTokens := CondensedTargetTokens // 2000
-	if accumTokens < minTokens {
+	if len(chunk) < minFanout || accumTokens < minTokens {
 		return nil, nil
 	}
 
@@ -686,7 +765,10 @@ func (e *CompactionEngine) generateLeafSummary(
 	targetTokens := min(LeafTargetTokens, int(float64(inputTokens)*0.35))
 
 	// Level 1: normal prompt
-	prompt := withFocus(buildLeafSummaryPrompt(sourceText, previousSummary, targetTokens), instructions)
+	prompt := withFocus(
+		buildLeafSummaryPrompt(sourceText, previousSummary, targetTokens),
+		instructions,
+	)
 	content, err := e.complete(ctx, prompt, CompleteOptions{
 		MaxTokens:   LeafTargetTokens * 2,
 		Temperature: 0.3,
@@ -706,7 +788,8 @@ func (e *CompactionEngine) generateLeafSummary(
 	}
 
 	// Level 1 only succeeds if it actually reaches the requested target size.
-	if content != "" && tokenizer.EstimateMessageTokens(providers.Message{Content: content}) <= targetTokens {
+	if content != "" &&
+		tokenizer.EstimateMessageTokens(providers.Message{Content: content}) <= targetTokens {
 		return content, nil
 	}
 
@@ -733,7 +816,8 @@ func (e *CompactionEngine) generateLeafSummary(
 			return "", err
 		}
 	}
-	if content != "" && tokenizer.EstimateMessageTokens(providers.Message{Content: content}) <= aggressiveTarget {
+	if content != "" &&
+		tokenizer.EstimateMessageTokens(providers.Message{Content: content}) <= aggressiveTarget {
 		return content, nil
 	}
 
@@ -779,7 +863,10 @@ func (e *CompactionEngine) generateCondensedSummary(
 
 	// Level 2: aggressive prompt
 	aggressiveTarget := min(640, int(float64(inputTokens)*0.20))
-	aggressivePrompt := withFocus(buildCondensedSummaryPrompt(sourceText, aggressiveTarget), instructions)
+	aggressivePrompt := withFocus(
+		buildCondensedSummaryPrompt(sourceText, aggressiveTarget),
+		instructions,
+	)
 	content, err = e.complete(ctx, aggressivePrompt, CompleteOptions{
 		MaxTokens:   aggressiveTarget * 2,
 		Temperature: 0.3,
@@ -802,7 +889,12 @@ func (e *CompactionEngine) generateCondensedSummary(
 // d) tokensAfter >= previousTokens (no improvement over last iteration)
 //
 // It returns how many condensed summaries were created.
-func (e *CompactionEngine) runCondensedLoop(ctx context.Context, convID int64, instructions string) (created int) {
+func (e *CompactionEngine) runCondensedLoop(
+	ctx context.Context,
+	convID int64,
+	instructions string,
+	budget int,
+) (created int) {
 	var prevTokens int
 	for {
 		select {
@@ -813,11 +905,18 @@ func (e *CompactionEngine) runCondensedLoop(ctx context.Context, convID int64, i
 
 		tokensBefore, err := e.store.GetContextTokenCount(ctx, convID)
 		if err != nil {
-			logger.ErrorCF("seahorse", "condensed: get tokens", map[string]any{"error": err.Error()})
+			logger.ErrorCF(
+				"seahorse",
+				"condensed: get tokens",
+				map[string]any{"error": err.Error()},
+			)
+			return created
+		}
+		if budget > 0 && tokensBefore <= budget {
 			return created
 		}
 
-		condensedID, err := e.compactCondensed(ctx, convID, instructions)
+		condensedID, err := e.compactCondensed(ctx, convID, instructions, false)
 		if err != nil {
 			logger.ErrorCF("seahorse", "condensed: compact", map[string]any{"error": err.Error()})
 			return created
@@ -836,7 +935,11 @@ func (e *CompactionEngine) runCondensedLoop(ctx context.Context, convID int64, i
 			logger.DebugCF(
 				"seahorse",
 				"condensed: no progress",
-				map[string]any{"conv_id": convID, "tokens_before": tokensBefore, "tokens_after": tokensAfter},
+				map[string]any{
+					"conv_id":       convID,
+					"tokens_before": tokensBefore,
+					"tokens_after":  tokensAfter,
+				},
 			)
 			return created
 		}

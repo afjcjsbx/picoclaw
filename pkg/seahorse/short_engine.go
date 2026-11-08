@@ -2,6 +2,7 @@ package seahorse
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"fmt"
 	"os"
@@ -50,9 +51,13 @@ type AssembleInput struct {
 type AssembleResult struct {
 	Messages []Message `json:"messages"`
 	Summary  string    `json:"summary"` // formatted XML summaries + system prompt addition
+	// Token accounting for diagnostics and compaction decisions.
+	FreshTailTokens int `json:"freshTailTokens"`
+	SummaryTokens   int `json:"summaryTokens"`
+	TokensUsed      int `json:"tokensUsed"`
+	TokensEvicted   int `json:"tokensEvicted"`
+	GapCount        int `json:"gapCount"`
 }
-
-const numSessionShards = 256
 
 // Engine is the main short-term memory engine.
 type Engine struct {
@@ -66,9 +71,10 @@ type Engine struct {
 	complete          CompleteFn
 	ignorePatterns    []*regexp.Regexp
 	statelessPatterns []*regexp.Regexp
-	sessionShards     [numSessionShards]struct {
-		mu sync.Mutex
-	}
+
+	locksOnce         sync.Once
+	conversationLocks *conversationLocks
+	releaseProcess    func() error
 }
 
 // CompactionEngine handles LLM-based summarization (defined in short_compaction.go).
@@ -77,6 +83,7 @@ type CompactionEngine struct {
 	config         Config
 	complete       CompleteFn
 	condensing     sync.Map // map[int64]struct{} — dedup for async condensed goroutines
+	locks          *conversationLocks
 	shutdownCtx    context.Context
 	shutdownCancel context.CancelFunc
 }
@@ -132,7 +139,8 @@ func sqliteDSN(path string) string {
 		sep = "&"
 	}
 	return fmt.Sprintf(
-		"%s%s_busy_timeout=%d&_pragma=synchronous(NORMAL)&_pragma=temp_store(%d)",
+		"%s%s_busy_timeout=%d&_txlock=immediate&_pragma=synchronous(NORMAL)&_pragma=temp_store(%d)"+
+			"&_pragma=foreign_keys(1)&_pragma=journal_size_limit(67108864)&_pragma=wal_autocheckpoint(1000)",
 		path, sep, sqliteBusyTimeoutMS, sqliteTempStoreFile,
 	)
 }
@@ -146,8 +154,14 @@ func NewEngine(config Config, completeFn CompleteFn) (*Engine, error) {
 		}
 	}
 
+	releaseProcess, err := acquireProcessLock(config.DBPath)
+	if err != nil {
+		return nil, err
+	}
+
 	db, err := sql.Open("sqlite", sqliteDSN(config.DBPath))
 	if err != nil {
+		_ = releaseProcess()
 		return nil, fmt.Errorf("open db: %w", err)
 	}
 
@@ -159,20 +173,33 @@ func NewEngine(config Config, completeFn CompleteFn) (*Engine, error) {
 	db.SetMaxOpenConns(sqliteMaxOpenConns)
 	db.SetMaxIdleConns(sqliteMaxOpenConns)
 
+	if err := backupBeforeMigration(db, config.DBPath); err != nil {
+		_ = db.Close()
+		_ = releaseProcess()
+		return nil, fmt.Errorf("backup before migration: %w", err)
+	}
+
 	// journal_mode is stored in the database file, so setting it once is
 	// enough. busy_timeout and synchronous are per-connection settings and
 	// are applied to every pooled connection through the DSN (see sqliteDSN).
 	if _, err := db.Exec("PRAGMA journal_mode = WAL;"); err != nil {
 		_ = db.Close()
+		_ = releaseProcess()
 		return nil, fmt.Errorf("enable WAL: %w", err)
 	}
 
 	if err := runSchema(db); err != nil {
 		_ = db.Close()
+		_ = releaseProcess()
 		return nil, fmt.Errorf("migrations: %w", err)
 	}
 
 	store := &Store{db: db}
+	if err := store.GCOrphans(context.Background()); err != nil {
+		_ = db.Close()
+		_ = releaseProcess()
+		return nil, fmt.Errorf("orphan cleanup: %w", err)
+	}
 
 	// Prepend hardcoded ignore patterns (spec lines 1326-1328)
 	ignorePatterns := make([]string, 0, 1+len(config.IgnoreSessionPatterns))
@@ -190,6 +217,7 @@ func NewEngine(config Config, completeFn CompleteFn) (*Engine, error) {
 		complete:          completeFn,
 		ignorePatterns:    compileSessionPatterns(ignorePatterns),
 		statelessPatterns: compileSessionPatterns(config.StatelessSessionPatterns),
+		releaseProcess:    releaseProcess,
 	}, nil
 }
 
@@ -255,25 +283,12 @@ func (e *Engine) isStatelessSession(sessionKey string) bool {
 	return false
 }
 
-// fnv32 computes FNV-1a 32-bit hash for session key sharding.
-func fnv32(key string) uint32 {
-	h := uint32(2166136261)
-	for _, c := range key {
-		h ^= uint32(c)
-		h *= 16777619
-	}
-	return h
-}
-
-// getSessionMutex returns the sharded mutex for a session key.
-func (e *Engine) getSessionMutex(sessionKey string) *sync.Mutex {
-	h := fnv32(sessionKey)
-	shard := h % numSessionShards
-	return &e.sessionShards[shard].mu
-}
-
 // Ingest adds messages to a conversation identified by sessionKey.
-func (e *Engine) Ingest(ctx context.Context, sessionKey string, messages []Message) (*IngestResult, error) {
+func (e *Engine) Ingest(
+	ctx context.Context,
+	sessionKey string,
+	messages []Message,
+) (*IngestResult, error) {
 	if e.shouldIgnoreSession(sessionKey) {
 		return nil, nil
 	}
@@ -281,25 +296,34 @@ func (e *Engine) Ingest(ctx context.Context, sessionKey string, messages []Messa
 		return nil, nil
 	}
 
-	mu := e.getSessionMutex(sessionKey)
-	mu.Lock()
-	defer mu.Unlock()
-
 	conv, err := e.store.GetOrCreateConversation(ctx, sessionKey)
 	if err != nil {
 		return nil, fmt.Errorf("get conversation: %w", err)
 	}
 
+	unlock := e.lockConversation(conv.ConversationID)
+	defer unlock()
+	return e.ingestConversation(ctx, conv, messages)
+}
+
+// ingestConversation performs the write while the caller holds the
+// conversation lock. Bootstrap uses it to append a delta without recursively
+// taking the non-reentrant lock.
+func (e *Engine) ingestConversation(
+	ctx context.Context,
+	conv *Conversation,
+	messages []Message,
+) (*IngestResult, error) {
+	var totalTokens int
+	for _, msg := range messages {
+		totalTokens += msg.TokenCount
+	}
 	// Insert the batch and append it to the context in the same transaction per
 	// chunk (see AddMessagesBatch): a commit per message, plus one for the
 	// context append, is the dominant cost with the pure-Go sqlite driver on
 	// low-end hardware. The adapter ingests one message at a time, so the hot
 	// path goes from two commits to one; bootstrap passes the remaining history
 	// and gets one commit per IngestBatchChunkSize messages instead of N+1.
-	var totalTokens int
-	for _, msg := range messages {
-		totalTokens += msg.TokenCount
-	}
 	if _, err := e.store.AddMessagesBatch(ctx, conv.ConversationID, messages); err != nil {
 		return nil, fmt.Errorf("add messages: %w", err)
 	}
@@ -322,7 +346,19 @@ func (e *Engine) Close() error {
 		e.compaction.Close()
 	}
 	if e.store != nil && e.store.db != nil {
-		return e.store.db.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = e.store.Optimize(ctx)
+		cancel()
+		err := e.store.db.Close()
+		if e.releaseProcess != nil {
+			if releaseErr := e.releaseProcess(); err == nil {
+				err = releaseErr
+			}
+		}
+		return err
+	}
+	if e.releaseProcess != nil {
+		return e.releaseProcess()
 	}
 	return nil
 }
@@ -333,7 +369,11 @@ func (e *Engine) GetRetrieval() *RetrievalEngine {
 }
 
 // Assemble builds budget-constrained context for a session.
-func (e *Engine) Assemble(ctx context.Context, sessionKey string, input AssembleInput) (*AssembleResult, error) {
+func (e *Engine) Assemble(
+	ctx context.Context,
+	sessionKey string,
+	input AssembleInput,
+) (*AssembleResult, error) {
 	if e.shouldIgnoreSession(sessionKey) {
 		return nil, nil
 	}
@@ -348,7 +388,11 @@ func (e *Engine) Assemble(ctx context.Context, sessionKey string, input Assemble
 }
 
 // Compact compresses conversation history for a session.
-func (e *Engine) Compact(ctx context.Context, sessionKey string, input CompactInput) (*CompactResult, error) {
+func (e *Engine) Compact(
+	ctx context.Context,
+	sessionKey string,
+	input CompactInput,
+) (*CompactResult, error) {
 	if e.shouldIgnoreSession(sessionKey) || e.isStatelessSession(sessionKey) {
 		return &CompactResult{}, nil
 	}
@@ -383,6 +427,28 @@ func (e *Engine) CompactNow(
 	return e.compaction.CompactNow(ctx, conv.ConversationID, instructions, protectTailMessages...)
 }
 
+// CompactNowWithBudget runs a synchronous compaction with a target budget.
+func (e *Engine) CompactNowWithBudget(
+	ctx context.Context,
+	sessionKey string,
+	instructions string,
+	budget int,
+	protectTailMessages ...int,
+) (*CompactResult, error) {
+	conv, err := e.store.GetOrCreateConversation(ctx, sessionKey)
+	if err != nil {
+		return nil, fmt.Errorf("get conversation: %w", err)
+	}
+	e.initCompactionOnce()
+	return e.compaction.CompactNowWithBudget(
+		ctx,
+		conv.ConversationID,
+		instructions,
+		budget,
+		protectTailMessages...,
+	)
+}
+
 // CompactUntilUnder aggressively compacts until context is under budget.
 // Used for emergency compaction after LLM overflow (retry reason).
 func (e *Engine) CompactUntilUnder(
@@ -415,6 +481,7 @@ func (e *Engine) initCompactionOnce() {
 				store:          e.store,
 				config:         e.config,
 				complete:       e.complete,
+				locks:          e.conversationLockManager(),
 				shutdownCtx:    shutdownCtx,
 				shutdownCancel: shutdownCancel,
 			}
@@ -434,7 +501,11 @@ func (e *Engine) initAssemblerOnce() {
 }
 
 // IngestMessages is an alias for Ingest.
-func (e *Engine) IngestMessages(ctx context.Context, sessionKey string, messages []Message) (*IngestResult, error) {
+func (e *Engine) IngestMessages(
+	ctx context.Context,
+	sessionKey string,
+	messages []Message,
+) (*IngestResult, error) {
 	return e.Ingest(ctx, sessionKey, messages)
 }
 
@@ -448,6 +519,8 @@ func (e *Engine) ClearSession(ctx context.Context, sessionKey string) error {
 	if conv == nil {
 		return nil // session never ingested, nothing to clear
 	}
+	unlock := e.lockConversation(conv.ConversationID)
+	defer unlock()
 	return e.store.ClearConversation(ctx, conv.ConversationID)
 }
 
@@ -461,12 +534,27 @@ func (e *Engine) DeleteSession(ctx context.Context, sessionKey string) error {
 	if conv == nil {
 		return nil // session never ingested, nothing to delete
 	}
+	unlock := e.lockConversation(conv.ConversationID)
+	defer unlock()
 	return e.store.DeleteConversation(ctx, conv.ConversationID)
 }
 
 // SessionStatuses returns status for every conversation in the database.
 func (e *Engine) SessionStatuses(ctx context.Context) ([]SessionStatus, error) {
 	return e.store.GetAllSessionStatuses(ctx)
+}
+
+// ContextTokens returns the number of tokens represented by the stored context
+// of a session, without creating a conversation for an unknown key.
+func (e *Engine) ContextTokens(ctx context.Context, sessionKey string) (int, error) {
+	conv, err := e.store.GetConversationBySessionKey(ctx, sessionKey)
+	if err != nil {
+		return 0, err
+	}
+	if conv == nil {
+		return 0, nil
+	}
+	return e.store.GetContextTokenCount(ctx, conv.ConversationID)
 }
 
 // ConversationCount returns the number of conversations in the database.
@@ -497,7 +585,28 @@ func (e *Engine) DBFileSize() (int64, error) {
 
 // Vacuum reclaims unused disk space in the underlying SQLite database.
 func (e *Engine) Vacuum(ctx context.Context) error {
+	if e.config.DBPath != "" {
+		if info, err := os.Stat(e.config.DBPath); err == nil {
+			if free, ok := diskFreeBytes(e.config.DBPath); ok {
+				// VACUUM rewrites the file; leave headroom for the new copy and
+				// SQLite's temporary files.
+				needed := info.Size() + info.Size()/10 + 16<<20
+				if free < needed {
+					return fmt.Errorf(
+						"insufficient disk space for VACUUM: free=%d needed=%d",
+						free,
+						needed,
+					)
+				}
+			}
+		}
+	}
 	return e.store.Vacuum(ctx)
+}
+
+// Optimize runs SQLite planner maintenance after pruning or before shutdown.
+func (e *Engine) Optimize(ctx context.Context) error {
+	return e.store.Optimize(ctx)
 }
 
 // ReclaimableBytes reports how much of the database file is free space that a
@@ -525,16 +634,38 @@ func (e *Engine) Bootstrap(ctx context.Context, sessionKey string, messages []Me
 		return nil
 	}
 	if len(messages) == 0 {
-		return nil
+		// The JSONL is canonical. An empty canonical history means the session
+		// was cleared or truncated; stale SQLite rows must not survive it.
+		conv, err := e.store.GetConversationBySessionKey(ctx, sessionKey)
+		if err != nil {
+			return fmt.Errorf("bootstrap: get conversation: %w", err)
+		}
+		if conv == nil {
+			return nil
+		}
+		unlock := e.lockConversation(conv.ConversationID)
+		defer unlock()
+		return e.store.InvalidateConversation(ctx, conv.ConversationID)
 	}
 
 	conv, err := e.store.GetOrCreateConversation(ctx, sessionKey)
 	if err != nil {
 		return fmt.Errorf("bootstrap: get conversation: %w", err)
 	}
+	unlock := e.lockConversation(conv.ConversationID)
+	defer unlock()
 
-	// Get messages already in DB
-	dbMsgs, err := e.store.GetMessages(ctx, conv.ConversationID, len(messages), 0)
+	// Source-identified messages make a retried bootstrap idempotent even when
+	// a previous attempt committed only some chunks.
+	for i := range messages {
+		if messages[i].ExternalID == "" {
+			messages[i].ExternalID = bootstrapExternalID(i, messages[i])
+		}
+	}
+
+	// Read one extra row so a database tail longer than the canonical JSONL is
+	// detectable instead of being hidden by the SQL LIMIT.
+	dbMsgs, err := e.store.GetMessages(ctx, conv.ConversationID, len(messages)+1, 0)
 	if err != nil {
 		return fmt.Errorf("bootstrap: get messages: %w", err)
 	}
@@ -543,32 +674,18 @@ func (e *Engine) Bootstrap(ctx context.Context, sessionKey string, messages []Me
 	// even though the canonical JSONL history already has it. Backfill those
 	// rows in place so we do not treat this as edited history and leave stale
 	// summaries/context behind after a partial raw-message rebuild.
-	repairedReasoning, err := e.repairBootstrapReasoningContent(ctx, dbMsgs, messages)
-	if err != nil {
+	if _, err := e.repairBootstrapReasoningContent(ctx, dbMsgs, messages); err != nil {
 		return fmt.Errorf("bootstrap: repair reasoning_content: %w", err)
 	}
-	repairedModelName, err := e.repairBootstrapModelName(ctx, dbMsgs, messages)
-	if err != nil {
+	if _, err := e.repairBootstrapModelName(ctx, dbMsgs, messages); err != nil {
 		return fmt.Errorf("bootstrap: repair model_name: %w", err)
 	}
-	repairedCreatedAt, err := e.repairBootstrapCreatedAt(ctx, dbMsgs, messages)
-	if err != nil {
+	if _, err := e.repairBootstrapCreatedAt(ctx, dbMsgs, messages); err != nil {
 		return fmt.Errorf("bootstrap: repair created_at: %w", err)
 	}
-	if (repairedReasoning || repairedModelName || repairedCreatedAt) && len(dbMsgs) == len(messages) {
-		matched := true
-		for i := range messages {
-			if !messagesMatch(dbMsgs[i], messages[i], messageMatchOptions{}) {
-				matched = false
-				break
-			}
-		}
-		if matched {
-			return nil
-		}
-	}
-
-	// Fast path: DB has same count and exact match → no-op
+	// Fast path: after in-place repairs, a same-count exact match is a no-op.
+	// The repair flags are not needed here: the comparison already reads the
+	// repaired rows from dbMsgs, which repairBootstrapField updates in place.
 	if len(dbMsgs) == len(messages) {
 		matched := true
 		for i := range messages {
@@ -607,9 +724,11 @@ func (e *Engine) Bootstrap(ctx context.Context, sessionKey string, messages []Me
 		}
 	}
 
-	// If we hit a mismatch before reaching the end of DB messages, delete delta and re-ingest
-	// Note: anchor can be -1 if first message didn't match (history completely changed)
-	if anchor >= 0 && anchor < len(dbMsgs)-1 && len(dbMsgs) > 0 {
+	extraDB := len(dbMsgs) > len(messages)
+
+	// If we hit a mismatch before reaching the end of DB messages, delete delta and re-ingest.
+	// Note: anchor can be -1 if first message didn't match (history completely changed).
+	if anchor >= 0 && (anchor < len(dbMsgs)-1 || extraDB) && len(dbMsgs) > 0 {
 		anchorID := dbMsgs[anchor].ID
 		logger.InfoCF("seahorse", "bootstrap: history edit detected", map[string]any{
 			"conv_id":     conv.ConversationID,
@@ -618,20 +737,21 @@ func (e *Engine) Bootstrap(ctx context.Context, sessionKey string, messages []Me
 			"anchor_id":   anchorID,
 			"msg_count":   len(messages),
 			"delta_start": anchor + 1,
+			"extra_db":    extraDB,
 		})
 
-		// Delete messages after anchor (also clears context_items)
-		if err := e.store.DeleteMessagesAfterID(ctx, conv.ConversationID, anchorID); err != nil {
+		if err := e.store.InvalidateDerivedState(ctx, conv.ConversationID); err != nil {
+			return fmt.Errorf("bootstrap: invalidate derived state: %w", err)
+		}
+		if err := e.store.DeleteMessagesAfterID(ctx, conv.ConversationID, 0); err != nil {
 			return fmt.Errorf("bootstrap: delete messages: %w", err)
 		}
 
-		// Re-ingest from anchor+1 to end
-		delta := messages[anchor+1:]
-		if len(delta) > 0 {
-			_, err := e.Ingest(ctx, sessionKey, delta)
-			if err != nil {
-				return fmt.Errorf("bootstrap: re-ingest: %w", err)
-			}
+		// A derived-state invalidation also removes the context items of the
+		// retained prefix. Rebuild the whole history so every message is
+		// represented exactly once.
+		if _, err := e.ingestConversation(ctx, conv, messages); err != nil {
+			return fmt.Errorf("bootstrap: re-ingest: %w", err)
 		}
 		return nil
 	}
@@ -640,8 +760,7 @@ func (e *Engine) Bootstrap(ctx context.Context, sessionKey string, messages []Me
 	if anchor >= 0 && anchor < len(messages)-1 {
 		delta := messages[anchor+1:]
 		if len(delta) > 0 {
-			_, err := e.Ingest(ctx, sessionKey, delta)
-			if err != nil {
+			if _, err := e.ingestConversation(ctx, conv, delta); err != nil {
 				return fmt.Errorf("bootstrap: ingest delta: %w", err)
 			}
 		}
@@ -652,26 +771,54 @@ func (e *Engine) Bootstrap(ctx context.Context, sessionKey string, messages []Me
 			"db_count":  len(dbMsgs),
 			"msg_count": len(messages),
 		})
-		// Delete all existing messages
+		if err := e.store.InvalidateDerivedState(ctx, conv.ConversationID); err != nil {
+			return fmt.Errorf("bootstrap: invalidate derived state: %w", err)
+		}
 		if err := e.store.DeleteMessagesAfterID(ctx, conv.ConversationID, 0); err != nil {
 			return fmt.Errorf("bootstrap: delete all messages: %w", err)
 		}
-		// Re-ingest everything
 		if len(messages) > 0 {
-			_, err := e.Ingest(ctx, sessionKey, messages)
-			if err != nil {
+			if _, err := e.ingestConversation(ctx, conv, messages); err != nil {
 				return fmt.Errorf("bootstrap: re-ingest all: %w", err)
 			}
 		}
 	} else if anchor == -1 && len(dbMsgs) == 0 {
 		// DB is empty, ingest everything
-		_, err := e.Ingest(ctx, sessionKey, messages)
-		if err != nil {
+		if _, err := e.ingestConversation(ctx, conv, messages); err != nil {
 			return fmt.Errorf("bootstrap: ingest all: %w", err)
 		}
 	}
 
 	return nil
+}
+
+// bootstrapExternalID derives a stable identity from the canonical history
+// position and message payload. Re-running bootstrap with the same JSONL
+// produces the same IDs; editing history changes them and triggers a rebuild.
+func bootstrapExternalID(index int, msg Message) string {
+	h := sha256.New()
+	fmt.Fprintf(
+		h,
+		"%d\x00%s\x00%s\x00%s\x00%s\x00",
+		index,
+		msg.Role,
+		msg.Content,
+		msg.ModelName,
+		msg.ReasoningContent,
+	)
+	for _, p := range msg.Parts {
+		fmt.Fprintf(
+			h,
+			"%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00",
+			p.Type,
+			p.Text,
+			p.Name,
+			p.Arguments,
+			p.ToolCallID,
+			p.MediaURI,
+		)
+	}
+	return fmt.Sprintf("jsonl:%d:%x", index, h.Sum(nil))
 }
 
 type bootstrapFieldRepair[T comparable] struct {
@@ -745,7 +892,10 @@ func repairBootstrapField[T comparable](
 	return true, nil
 }
 
-func (e *Engine) repairBootstrapReasoningContent(ctx context.Context, dbMsgs, messages []Message) (bool, error) {
+func (e *Engine) repairBootstrapReasoningContent(
+	ctx context.Context,
+	dbMsgs, messages []Message,
+) (bool, error) {
 	return repairBootstrapField(ctx, dbMsgs, messages, bootstrapFieldRepair[string]{
 		want:          func(m Message) string { return m.ReasoningContent },
 		have:          func(m Message) string { return m.ReasoningContent },
@@ -756,7 +906,10 @@ func (e *Engine) repairBootstrapReasoningContent(ctx context.Context, dbMsgs, me
 	})
 }
 
-func (e *Engine) repairBootstrapModelName(ctx context.Context, dbMsgs, messages []Message) (bool, error) {
+func (e *Engine) repairBootstrapModelName(
+	ctx context.Context,
+	dbMsgs, messages []Message,
+) (bool, error) {
 	return repairBootstrapField(ctx, dbMsgs, messages, bootstrapFieldRepair[string]{
 		want:    func(m Message) string { return m.ModelName },
 		have:    func(m Message) string { return m.ModelName },
@@ -766,7 +919,10 @@ func (e *Engine) repairBootstrapModelName(ctx context.Context, dbMsgs, messages 
 	})
 }
 
-func (e *Engine) repairBootstrapCreatedAt(ctx context.Context, dbMsgs, messages []Message) (bool, error) {
+func (e *Engine) repairBootstrapCreatedAt(
+	ctx context.Context,
+	dbMsgs, messages []Message,
+) (bool, error) {
 	return repairBootstrapField(ctx, dbMsgs, messages, bootstrapFieldRepair[time.Time]{
 		want:                  func(m Message) time.Time { return normalizeMessageCreatedAt(m.CreatedAt) },
 		have:                  func(m Message) time.Time { return m.CreatedAt },
@@ -835,7 +991,8 @@ func partsMatch(a, b []MessagePart) bool {
 				return false
 			}
 		case "tool_use":
-			if a[i].Name != b[i].Name || a[i].Arguments != b[i].Arguments || a[i].ToolCallID != b[i].ToolCallID {
+			if a[i].Name != b[i].Name || a[i].Arguments != b[i].Arguments ||
+				a[i].ToolCallID != b[i].ToolCallID {
 				return false
 			}
 		case "tool_result":
