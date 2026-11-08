@@ -1,3 +1,6 @@
+---
+description: "When the agent is running (executing a chain of tool calls), the user has no way to redirect it."
+---
 # Steering — Implementation Specification
 
 ## Problem

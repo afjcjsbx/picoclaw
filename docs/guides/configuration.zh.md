@@ -1,3 +1,8 @@
+---
+lang: zh
+title: "配置指南"
+description: "配置文件路径: ~/.picoclaw/config.json 你可以使用环境变量覆盖默认路径。这对于便携安装、容器化部署或将 picoclaw 作为系统服务运行非常有用。这些变量是独立的，控制不同的路径。"
+---
 # ⚙️ 配置指南
 
 > 返回 [README](../project/README.zh.md)

@@ -1,3 +1,6 @@
+---
+description: "Subagent tools let an agent hand work to isolated sub-turns or to other named agents."
+---
 # Subagent tools
 
 Subagent tools let an agent hand work to isolated sub-turns or to other named agents. Sub-turns run with their own ephemeral session history, so their intermediate steps never pollute the parent conversation, and they share the same workspace sandbox and path policies as the parent.

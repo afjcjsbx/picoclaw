@@ -1,3 +1,6 @@
+---
+description: "Web tools: web_search and web_fetch, the separate config switches for each, and how the results are shaped for the model."
+---
 # Web tools
 
 Web tools are used for web search and fetching. They are two tools with separate switches:

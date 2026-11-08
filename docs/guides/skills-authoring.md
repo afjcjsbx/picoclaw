@@ -1,3 +1,6 @@
+---
+description: "Skills are modular capabilities you add to your agent by dropping a SKILL.md folder into a skills directory."
+---
 # Skills Authoring Guide
 
 Skills are modular capabilities you add to your agent by dropping a `SKILL.md` folder into a skills directory. This guide covers writing a skill from scratch. To install existing skills or Agent Plugin packages, see [Plugin Installation](plugins.md) and the [`picoclaw skills` commands](../reference/cli.md#skills).
