@@ -269,10 +269,10 @@ single write lock long enough to starve other writers on slow storage.
 | `messages_fts` | External-content FTS5 index over message content |
 
 `context_items` has primary key `(conversation_id, ordinal)` and stores either a
-`message_id` or a `summary_id`. It is the only table compaction rewrites. The
-table also enforces the item-type/payload invariant with a `CHECK`, but it has no
-foreign keys: dangling items are removed by startup orphan cleanup and by the
-compaction/delete paths.
+`message_id` or a `summary_id`. It is the only table compaction rewrites. It has
+foreign keys to `conversations`, `messages`, and `summaries`, all with
+`ON DELETE CASCADE`, plus the item-type/payload `CHECK`. Startup orphan cleanup
+remains a fallback for databases that predate the constraints.
 
 `messages_fts` uses `message_id` as the FTS5 `rowid` and keeps `message_id` as an
 `UNINDEXED` column, so the delete trigger is a rowid lookup instead of a full
@@ -299,7 +299,7 @@ indexes for context-item deletion and summary lookups.
 ### Migrations
 
 `runSchema` is idempotent. It creates missing tables, advances
-`PRAGMA user_version` to the current schema version (`2`), and runs these
+`PRAGMA user_version` to the current schema version (`3`), and runs these
 migrations:
 
 1. Add `messages.reasoning_content` if missing.
@@ -311,6 +311,11 @@ migrations:
    `message_id` as `rowid`.
 7. Rebuild a legacy `summaries_fts` table to the external-content form with
    `summaries.rowid` as `rowid`.
+8. Rebuild any table whose definition lacks the current foreign keys, cascade
+   rules, or `CHECK` constraints. SQLite cannot add these with `ALTER TABLE`, so
+   the migration runs a transactional table rebuild with foreign keys disabled,
+   copies the data, cleans orphan rows, and verifies `PRAGMA foreign_key_check`
+   before committing.
 
 Before a version upgrade, `NewEngine` writes a consistent snapshot to
 `<db>.bak` with `VACUUM INTO`. The snapshot includes committed WAL pages and is

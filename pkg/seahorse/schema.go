@@ -12,7 +12,7 @@ import (
 
 // SQL statements for FTS5 tables with trigram tokenizer.
 const (
-	schemaVersion = 2
+	schemaVersion = 3
 
 	sqlCreateSummariesFTS = `CREATE VIRTUAL TABLE IF NOT EXISTS summaries_fts USING fts5(
 		summary_id UNINDEXED,
@@ -34,26 +34,28 @@ const (
 	sqlDropTrigramCheck      = `DROP TABLE IF EXISTS _trigram_check`
 )
 
-// runSchema creates or upgrades the database schema.
-// All schemas are idempotent (safe to run multiple times).
-func runSchema(db *sql.DB) error {
-	// Check FTS5 support before creating tables
-	if err := checkFTS5Support(db); err != nil {
-		return fmt.Errorf("FTS5 check: %w", err)
-	}
+type schemaTable struct {
+	name    string
+	ddl     string
+	columns []string
+}
 
-	stmts := []string{
-		`CREATE TABLE IF NOT EXISTS conversations (
+var schemaTables = []schemaTable{
+	{
+		name: "conversations",
+		ddl: `CREATE TABLE IF NOT EXISTS conversations (
 			conversation_id INTEGER PRIMARY KEY AUTOINCREMENT,
 			session_key     TEXT NOT NULL UNIQUE,
 			created_at      TEXT NOT NULL DEFAULT (datetime('now')),
 			updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
 			version         INTEGER NOT NULL DEFAULT 0
 		)`,
-
-		`CREATE TABLE IF NOT EXISTS messages (
+	},
+	{
+		name: "messages",
+		ddl: `CREATE TABLE IF NOT EXISTS messages (
 			message_id      INTEGER PRIMARY KEY AUTOINCREMENT,
-			conversation_id INTEGER NOT NULL REFERENCES conversations(conversation_id),
+			conversation_id INTEGER NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
 			role            TEXT NOT NULL,
 			content         TEXT NOT NULL DEFAULT '',
 			model_name      TEXT NOT NULL DEFAULT '',
@@ -62,8 +64,14 @@ func runSchema(db *sql.DB) error {
 			token_count     INTEGER NOT NULL DEFAULT 0 CHECK (token_count >= 0),
 			created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 		)`,
-
-		`CREATE TABLE IF NOT EXISTS message_parts (
+		columns: []string{
+			"message_id", "conversation_id", "role", "content", "model_name",
+			"reasoning_content", "external_id", "token_count", "created_at",
+		},
+	},
+	{
+		name: "message_parts",
+		ddl: `CREATE TABLE IF NOT EXISTS message_parts (
 			part_id     INTEGER PRIMARY KEY AUTOINCREMENT,
 			message_id  INTEGER NOT NULL REFERENCES messages(message_id) ON DELETE CASCADE,
 			type        TEXT NOT NULL,
@@ -75,10 +83,16 @@ func runSchema(db *sql.DB) error {
 			mime_type   TEXT,
 			ordinal     INTEGER NOT NULL DEFAULT 0
 		)`,
-
-		`CREATE TABLE IF NOT EXISTS summaries (
+		columns: []string{
+			"part_id", "message_id", "type", "text", "name", "arguments",
+			"tool_call_id", "media_uri", "mime_type", "ordinal",
+		},
+	},
+	{
+		name: "summaries",
+		ddl: `CREATE TABLE IF NOT EXISTS summaries (
 			summary_id                TEXT PRIMARY KEY,
-			conversation_id           INTEGER NOT NULL REFERENCES conversations(conversation_id),
+			conversation_id           INTEGER NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
 			kind                      TEXT NOT NULL CHECK (kind IN ('leaf','condensed')),
 			depth                     INTEGER NOT NULL DEFAULT 0 CHECK (depth >= 0),
 			content                   TEXT NOT NULL,
@@ -92,26 +106,40 @@ func runSchema(db *sql.DB) error {
 			invalidated_at            TEXT,
 			created_at                TEXT NOT NULL DEFAULT (datetime('now'))
 		)`,
-
-		`CREATE TABLE IF NOT EXISTS summary_parents (
+		columns: []string{
+			"summary_id", "conversation_id", "kind", "depth", "content",
+			"token_count", "earliest_at", "latest_at", "descendant_count",
+			"descendant_token_count", "source_message_token_count", "model",
+			"invalidated_at", "created_at",
+		},
+	},
+	{
+		name: "summary_parents",
+		ddl: `CREATE TABLE IF NOT EXISTS summary_parents (
 			summary_id        TEXT NOT NULL REFERENCES summaries(summary_id) ON DELETE CASCADE,
 			parent_summary_id TEXT NOT NULL REFERENCES summaries(summary_id) ON DELETE CASCADE,
 			PRIMARY KEY (summary_id, parent_summary_id)
 		)`,
-
-		`CREATE TABLE IF NOT EXISTS summary_messages (
+		columns: []string{"summary_id", "parent_summary_id"},
+	},
+	{
+		name: "summary_messages",
+		ddl: `CREATE TABLE IF NOT EXISTS summary_messages (
 			summary_id TEXT NOT NULL REFERENCES summaries(summary_id) ON DELETE CASCADE,
 			message_id INTEGER NOT NULL REFERENCES messages(message_id) ON DELETE CASCADE,
 			ordinal    INTEGER NOT NULL DEFAULT 0,
 			PRIMARY KEY (summary_id, message_id)
 		)`,
-
-		`CREATE TABLE IF NOT EXISTS context_items (
-			conversation_id INTEGER NOT NULL,
+		columns: []string{"summary_id", "message_id", "ordinal"},
+	},
+	{
+		name: "context_items",
+		ddl: `CREATE TABLE IF NOT EXISTS context_items (
+			conversation_id INTEGER NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
 			ordinal         INTEGER NOT NULL,
 			item_type       TEXT NOT NULL CHECK (item_type IN ('message','summary')),
-			summary_id      TEXT,
-			message_id      INTEGER,
+			summary_id      TEXT REFERENCES summaries(summary_id) ON DELETE CASCADE,
+			message_id      INTEGER REFERENCES messages(message_id) ON DELETE CASCADE,
 			token_count     INTEGER NOT NULL DEFAULT 0 CHECK (token_count >= 0),
 			created_at      TEXT NOT NULL DEFAULT (datetime('now')),
 			PRIMARY KEY (conversation_id, ordinal),
@@ -120,88 +148,93 @@ func runSchema(db *sql.DB) error {
 				(item_type = 'summary' AND summary_id IS NOT NULL AND message_id IS NULL)
 			)
 		)`,
+		columns: []string{
+			"conversation_id", "ordinal", "item_type", "summary_id",
+			"message_id", "token_count", "created_at",
+		},
+	},
+}
 
-		// FTS5 virtual table with trigram tokenizer for CJK support
-		sqlCreateSummariesFTS,
+var schemaIndexStmts = []string{
+	`CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id)`,
+	`CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON messages(conversation_id, message_id)`,
+	`CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(conversation_id, created_at)`,
+	`CREATE INDEX IF NOT EXISTS idx_message_parts_message ON message_parts(message_id, ordinal)`,
+	`CREATE INDEX IF NOT EXISTS idx_summaries_conversation ON summaries(conversation_id)`,
+	`CREATE INDEX IF NOT EXISTS idx_summaries_created ON summaries(conversation_id, created_at)`,
+	`CREATE INDEX IF NOT EXISTS idx_summaries_kind_depth ON summaries(conversation_id, kind, depth)`,
+	`CREATE INDEX IF NOT EXISTS idx_summary_parents_parent ON summary_parents(parent_summary_id)`,
+	`CREATE INDEX IF NOT EXISTS idx_summary_messages_message ON summary_messages(message_id)`,
+	`CREATE INDEX IF NOT EXISTS idx_context_items_conv ON context_items(conversation_id, ordinal)`,
+	`CREATE INDEX IF NOT EXISTS idx_context_items_message ON context_items(message_id)`,
+	`CREATE INDEX IF NOT EXISTS idx_context_items_summary ON context_items(conversation_id, summary_id)`,
+}
 
-		// FTS5 virtual table for message search with trigram tokenizer
-		sqlCreateMessagesFTS,
+var schemaTriggerStmts = []string{
+	// Drop old triggers before creating new ones so existing DBs get updated bodies.
+	// (CREATE TRIGGER IF NOT EXISTS does NOT replace an existing trigger body.)
+	`DROP TRIGGER IF EXISTS summaries_ai`,
+	`DROP TRIGGER IF EXISTS summaries_ad`,
+	`DROP TRIGGER IF EXISTS summaries_au`,
+	`DROP TRIGGER IF EXISTS messages_ai`,
+	`DROP TRIGGER IF EXISTS messages_ad`,
+	`DROP TRIGGER IF EXISTS messages_au`,
+	`DROP TRIGGER IF EXISTS messages_touch`,
 
-		// Indexes for common query patterns
-		`CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON messages(conversation_id, message_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(conversation_id, created_at)`,
-		`CREATE INDEX IF NOT EXISTS idx_message_parts_message ON message_parts(message_id, ordinal)`,
-		`CREATE INDEX IF NOT EXISTS idx_summaries_conversation ON summaries(conversation_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_summaries_created ON summaries(conversation_id, created_at)`,
-		`CREATE INDEX IF NOT EXISTS idx_summaries_kind_depth ON summaries(conversation_id, kind, depth)`,
-		`CREATE INDEX IF NOT EXISTS idx_summary_parents_parent ON summary_parents(parent_summary_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_summary_messages_message ON summary_messages(message_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_context_items_conv ON context_items(conversation_id, ordinal)`,
-		`CREATE INDEX IF NOT EXISTS idx_context_items_message ON context_items(message_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_context_items_summary ON context_items(conversation_id, summary_id)`,
+	// FTS5 triggers to keep summaries_fts in sync with summaries table.
+	`CREATE TRIGGER summaries_ai AFTER INSERT ON summaries BEGIN
+		INSERT INTO summaries_fts (rowid, summary_id, content)
+		VALUES (new.rowid, new.summary_id, substr(new.content, 1, 65536));
+	END`,
+	`CREATE TRIGGER summaries_ad AFTER DELETE ON summaries BEGIN
+		INSERT INTO summaries_fts (summaries_fts, rowid, summary_id, content)
+		VALUES ('delete', old.rowid, old.summary_id, substr(old.content, 1, 65536));
+	END`,
+	`CREATE TRIGGER summaries_au AFTER UPDATE ON summaries BEGIN
+		INSERT INTO summaries_fts (summaries_fts, rowid, summary_id, content)
+		VALUES ('delete', old.rowid, old.summary_id, substr(old.content, 1, 65536));
+		INSERT INTO summaries_fts (rowid, summary_id, content)
+		VALUES (new.rowid, new.summary_id, substr(new.content, 1, 65536));
+	END`,
 
-		// Drop old triggers before creating new ones so existing DBs get updated bodies.
-		// (CREATE TRIGGER IF NOT EXISTS does NOT replace an existing trigger body.)
-		`DROP TRIGGER IF EXISTS summaries_ai`,
-		`DROP TRIGGER IF EXISTS summaries_ad`,
-		`DROP TRIGGER IF EXISTS summaries_au`,
-		`DROP TRIGGER IF EXISTS messages_ai`,
-		`DROP TRIGGER IF EXISTS messages_ad`,
-		`DROP TRIGGER IF EXISTS messages_au`,
-		`DROP TRIGGER IF EXISTS messages_touch`,
+	// FTS5 triggers to keep messages_fts in sync with messages table.
+	// messages_fts uses the message_id as its FTS5 rowid so DELETE/UPDATE
+	// target a row in O(log n) instead of scanning the whole FTS table.
+	`CREATE TRIGGER messages_ai AFTER INSERT ON messages BEGIN
+		INSERT INTO messages_fts (rowid, message_id, content)
+		VALUES (new.message_id, new.message_id, substr(new.content, 1, 65536));
+	END`,
+	`CREATE TRIGGER messages_ad AFTER DELETE ON messages BEGIN
+		INSERT INTO messages_fts (messages_fts, rowid, message_id, content)
+		VALUES ('delete', old.message_id, old.message_id, substr(old.content, 1, 65536));
+	END`,
+	`CREATE TRIGGER messages_au AFTER UPDATE ON messages BEGIN
+		INSERT INTO messages_fts (messages_fts, rowid, message_id, content)
+		VALUES ('delete', old.message_id, old.message_id, substr(old.content, 1, 65536));
+		INSERT INTO messages_fts (rowid, message_id, content)
+		VALUES (new.message_id, new.message_id, substr(new.content, 1, 65536));
+	END`,
 
-		// FTS5 triggers to keep summaries_fts in sync with summaries table.
-		`CREATE TRIGGER summaries_ai AFTER INSERT ON summaries BEGIN
-			INSERT INTO summaries_fts (rowid, summary_id, content)
-			VALUES (new.rowid, new.summary_id, substr(new.content, 1, 65536));
-		END`,
-		`CREATE TRIGGER summaries_ad AFTER DELETE ON summaries BEGIN
-			INSERT INTO summaries_fts (summaries_fts, rowid, summary_id, content)
-			VALUES ('delete', old.rowid, old.summary_id, substr(old.content, 1, 65536));
-		END`,
-		`CREATE TRIGGER summaries_au AFTER UPDATE ON summaries BEGIN
-			INSERT INTO summaries_fts (summaries_fts, rowid, summary_id, content)
-			VALUES ('delete', old.rowid, old.summary_id, substr(old.content, 1, 65536));
-			INSERT INTO summaries_fts (rowid, summary_id, content)
-			VALUES (new.rowid, new.summary_id, substr(new.content, 1, 65536));
-		END`,
+	`CREATE TRIGGER messages_touch AFTER INSERT ON messages BEGIN
+		UPDATE conversations SET updated_at = datetime('now')
+		WHERE conversation_id = new.conversation_id;
+	END`,
+}
 
-		// FTS5 triggers to keep messages_fts in sync with messages table.
-		// messages_fts uses the message_id as its FTS5 rowid so DELETE/UPDATE
-		// target a row in O(log n) instead of scanning the whole FTS table.
-		`CREATE TRIGGER messages_ai AFTER INSERT ON messages BEGIN
-			INSERT INTO messages_fts (rowid, message_id, content)
-			VALUES (new.message_id, new.message_id, substr(new.content, 1, 65536));
-		END`,
-		`CREATE TRIGGER messages_ad AFTER DELETE ON messages BEGIN
-			INSERT INTO messages_fts (messages_fts, rowid, message_id, content)
-			VALUES ('delete', old.message_id, old.message_id, substr(old.content, 1, 65536));
-		END`,
-		`CREATE TRIGGER messages_au AFTER UPDATE ON messages BEGIN
-			INSERT INTO messages_fts (messages_fts, rowid, message_id, content)
-			VALUES ('delete', old.message_id, old.message_id, substr(old.content, 1, 65536));
-			INSERT INTO messages_fts (rowid, message_id, content)
-			VALUES (new.message_id, new.message_id, substr(new.content, 1, 65536));
-		END`,
-
-		`CREATE TRIGGER messages_touch AFTER INSERT ON messages BEGIN
-			UPDATE conversations SET updated_at = datetime('now')
-			WHERE conversation_id = new.conversation_id;
-		END`,
+// runSchema creates or upgrades the database schema.
+// All schemas are idempotent (safe to run multiple times).
+func runSchema(db *sql.DB) error {
+	// Check FTS5 support before creating tables
+	if err := checkFTS5Support(db); err != nil {
+		return fmt.Errorf("FTS5 check: %w", err)
 	}
 
-	tx, err := db.Begin()
-	if err != nil {
-		return err
+	createStmts := make([]string, 0, len(schemaTables)+2)
+	for _, table := range schemaTables {
+		createStmts = append(createStmts, table.ddl)
 	}
-	defer tx.Rollback()
-	for _, s := range stmts {
-		if _, err := tx.Exec(s); err != nil {
-			return err
-		}
-	}
-	if err := tx.Commit(); err != nil {
+	createStmts = append(createStmts, sqlCreateSummariesFTS, sqlCreateMessagesFTS)
+	if err := execSchemaStatements(db, createStmts); err != nil {
 		return err
 	}
 
@@ -220,14 +253,203 @@ func runSchema(db *sql.DB) error {
 	if err := ensureSummariesInvalidatedAtColumn(db); err != nil {
 		return err
 	}
-	if err := ensureMessagesFTSRowid(db); err != nil {
+	rebuilt, err := ensureConstrainedTables(db)
+	if err != nil {
 		return err
 	}
-	if err := ensureSummariesFTSExternalContent(db); err != nil {
+	if rebuilt {
+		// The FTS external-content tables still point at the replaced base
+		// tables. Rebuild them from the new tables before triggers return.
+		if err := rebuildMessagesFTS(db); err != nil {
+			return err
+		}
+		if err := rebuildSummariesFTS(db); err != nil {
+			return err
+		}
+	} else {
+		if err := ensureMessagesFTSRowid(db); err != nil {
+			return err
+		}
+		if err := ensureSummariesFTSExternalContent(db); err != nil {
+			return err
+		}
+	}
+	indexStmts := append([]string{}, schemaIndexStmts...)
+	indexStmts = append(indexStmts, schemaTriggerStmts...)
+	if err := execSchemaStatements(db, indexStmts); err != nil {
 		return err
 	}
 	if _, err := db.Exec(fmt.Sprintf("PRAGMA user_version = %d", schemaVersion)); err != nil {
 		return fmt.Errorf("set schema version: %w", err)
+	}
+	return nil
+}
+
+func execSchemaStatements(db *sql.DB, stmts []string) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, s := range stmts {
+		if _, err := tx.Exec(s); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+type constraintRequirement struct {
+	name    string
+	markers []string
+}
+
+var constraintRequirements = []constraintRequirement{
+	{
+		name: "messages",
+		markers: []string{
+			"REFERENCES conversations(conversation_id) ON DELETE CASCADE",
+			"CHECK (token_count >= 0)",
+		},
+	},
+	{
+		name: "message_parts",
+		markers: []string{
+			"REFERENCES messages(message_id) ON DELETE CASCADE",
+		},
+	},
+	{
+		name: "summaries",
+		markers: []string{
+			"REFERENCES conversations(conversation_id) ON DELETE CASCADE",
+			"CHECK (kind IN ('leaf','condensed'))",
+			"CHECK (depth >= 0)",
+		},
+	},
+	{
+		name:    "summary_parents",
+		markers: []string{"REFERENCES summaries(summary_id) ON DELETE CASCADE"},
+	},
+	{
+		name: "summary_messages",
+		markers: []string{
+			"REFERENCES summaries(summary_id) ON DELETE CASCADE",
+			"REFERENCES messages(message_id) ON DELETE CASCADE",
+		},
+	},
+	{
+		name: "context_items",
+		markers: []string{
+			"REFERENCES conversations(conversation_id) ON DELETE CASCADE",
+			"REFERENCES messages(message_id) ON DELETE CASCADE",
+			"REFERENCES summaries(summary_id) ON DELETE CASCADE",
+			"CHECK (item_type IN ('message','summary'))",
+		},
+	},
+}
+
+// ensureConstrainedTables rebuilds legacy tables that were created without the
+// foreign keys, cascades, and CHECK constraints. SQLite cannot add these with
+// ALTER TABLE, so the only safe upgrade is a transactional table rebuild.
+func ensureConstrainedTables(db *sql.DB) (bool, error) {
+	needsRebuild := false
+	for _, req := range constraintRequirements {
+		var ddl string
+		err := db.QueryRow(
+			`SELECT COALESCE(sql, '') FROM sqlite_master WHERE type = 'table' AND name = ?`,
+			req.name,
+		).Scan(&ddl)
+		if err == sql.ErrNoRows {
+			continue
+		}
+		if err != nil {
+			return false, fmt.Errorf("read %s schema: %w", req.name, err)
+		}
+		for _, marker := range req.markers {
+			if !strings.Contains(ddl, marker) {
+				needsRebuild = true
+				break
+			}
+		}
+	}
+	if !needsRebuild {
+		return false, nil
+	}
+	if err := rebuildConstrainedTables(db); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func rebuildConstrainedTables(db *sql.DB) error {
+	conn, err := db.Conn(context.Background())
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if _, err = conn.ExecContext(context.Background(), "PRAGMA foreign_keys = OFF"); err != nil {
+		return fmt.Errorf("disable foreign keys: %w", err)
+	}
+	defer func() { _, _ = conn.ExecContext(context.Background(), "PRAGMA foreign_keys = ON") }()
+
+	tx, err := conn.BeginTx(context.Background(), nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	for _, table := range schemaTables {
+		if table.name == "conversations" {
+			continue
+		}
+		legacy := table.name + "_legacy"
+		if _, err = tx.Exec("DROP TABLE IF EXISTS " + legacy); err != nil {
+			return fmt.Errorf("drop %s: %w", legacy, err)
+		}
+		if _, err = tx.Exec("ALTER TABLE " + table.name + " RENAME TO " + legacy); err != nil {
+			return fmt.Errorf("rename %s: %w", table.name, err)
+		}
+		createSQL := strings.Replace(table.ddl, "IF NOT EXISTS ", "", 1)
+		if _, err = tx.Exec(createSQL); err != nil {
+			return fmt.Errorf("recreate %s: %w", table.name, err)
+		}
+		cols := strings.Join(table.columns, ", ")
+		copySQL := fmt.Sprintf(
+			"INSERT INTO %s (%s) SELECT %s FROM %s",
+			table.name, cols, cols, legacy,
+		)
+		if _, err = tx.Exec(copySQL); err != nil {
+			return fmt.Errorf("copy %s: %w", table.name, err)
+		}
+		if _, err = tx.Exec("DROP TABLE " + legacy); err != nil {
+			return fmt.Errorf("drop old %s: %w", table.name, err)
+		}
+	}
+	if err = gcOrphansTx(context.Background(), tx); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+
+	rows, err := conn.QueryContext(context.Background(), "PRAGMA foreign_key_check")
+	if err != nil {
+		return fmt.Errorf("foreign key check: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var tableName, parent string
+		var rowID, fkID int64
+		if err := rows.Scan(&tableName, &rowID, &parent, &fkID); err != nil {
+			return fmt.Errorf("foreign key check scan: %w", err)
+		}
+		return fmt.Errorf(
+			"foreign key violation after rebuild: table=%s rowid=%d parent=%s",
+			tableName, rowID, parent,
+		)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("foreign key check: %w", err)
 	}
 	return nil
 }

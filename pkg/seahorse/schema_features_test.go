@@ -2,7 +2,9 @@ package seahorse
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -32,6 +34,156 @@ func TestSchemaVersionAndIndexes(t *testing.T) {
 		if err != nil {
 			t.Errorf("missing index %s: %v", idx, err)
 		}
+	}
+}
+
+func TestRunSchemaRebuildsLegacyTablesWithConstraints(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.db")
+	db, err := sql.Open("sqlite", sqliteDSN(path))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	legacy := []string{
+		`CREATE TABLE conversations (
+			conversation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_key TEXT NOT NULL UNIQUE,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE TABLE messages (
+			message_id INTEGER PRIMARY KEY AUTOINCREMENT,
+			conversation_id INTEGER NOT NULL,
+			role TEXT NOT NULL,
+			content TEXT NOT NULL,
+			model_name TEXT NOT NULL DEFAULT '',
+			token_count INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL
+		)`,
+		`CREATE TABLE message_parts (
+			part_id INTEGER PRIMARY KEY AUTOINCREMENT,
+			message_id INTEGER NOT NULL,
+			type TEXT NOT NULL,
+			text TEXT,
+			name TEXT,
+			arguments TEXT,
+			tool_call_id TEXT,
+			media_uri TEXT,
+			mime_type TEXT,
+			ordinal INTEGER NOT NULL DEFAULT 0
+		)`,
+		`CREATE TABLE summaries (
+			summary_id TEXT PRIMARY KEY,
+			conversation_id INTEGER NOT NULL,
+			kind TEXT NOT NULL,
+			depth INTEGER NOT NULL DEFAULT 0,
+			content TEXT NOT NULL,
+			token_count INTEGER NOT NULL DEFAULT 0,
+			earliest_at TEXT,
+			latest_at TEXT,
+			descendant_count INTEGER NOT NULL DEFAULT 0,
+			descendant_token_count INTEGER NOT NULL DEFAULT 0,
+			source_message_token_count INTEGER NOT NULL DEFAULT 0,
+			model TEXT,
+			created_at TEXT NOT NULL
+		)`,
+		`CREATE TABLE summary_parents (
+			summary_id TEXT NOT NULL,
+			parent_summary_id TEXT NOT NULL,
+			PRIMARY KEY (summary_id, parent_summary_id)
+		)`,
+		`CREATE TABLE summary_messages (
+			summary_id TEXT NOT NULL,
+			message_id INTEGER NOT NULL,
+			ordinal INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (summary_id, message_id)
+		)`,
+		`CREATE TABLE context_items (
+			conversation_id INTEGER NOT NULL,
+			ordinal INTEGER NOT NULL,
+			item_type TEXT NOT NULL,
+			summary_id TEXT,
+			message_id INTEGER,
+			token_count INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			PRIMARY KEY (conversation_id, ordinal)
+		)`,
+	}
+	for _, stmt := range legacy {
+		if _, err = db.Exec(stmt); err != nil {
+			t.Fatalf("legacy schema: %v", err)
+		}
+	}
+	if _, err = db.Exec(
+		`INSERT INTO conversations (session_key, created_at, updated_at)
+		 VALUES ('legacy:session', datetime('now'), datetime('now'))`,
+	); err != nil {
+		t.Fatalf("insert conversation: %v", err)
+	}
+	if _, err = db.Exec(
+		`INSERT INTO messages (conversation_id, role, content, token_count, created_at)
+		 VALUES (1, 'user', 'legacy message', 3, datetime('now'))`,
+	); err != nil {
+		t.Fatalf("insert message: %v", err)
+	}
+	if _, err = db.Exec(
+		`INSERT INTO context_items (conversation_id, ordinal, item_type, message_id, token_count)
+		 VALUES (1, 100, 'message', 1, 3)`,
+	); err != nil {
+		t.Fatalf("insert context item: %v", err)
+	}
+
+	if err = runSchema(db); err != nil {
+		t.Fatalf("runSchema: %v", err)
+	}
+
+	var count int
+	if err = db.QueryRow(`SELECT COUNT(*) FROM messages`).Scan(&count); err != nil {
+		t.Fatalf("count messages: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("messages after migration = %d, want 1", count)
+	}
+
+	rows, err := db.Query(`PRAGMA foreign_key_list(context_items)`)
+	if err != nil {
+		t.Fatalf("foreign_key_list: %v", err)
+	}
+	defer rows.Close()
+	foreignTables := map[string]string{}
+	for rows.Next() {
+		var id, seq int
+		var tableName, from, to, onUpdate, onDelete, match string
+		if err = rows.Scan(&id, &seq, &tableName, &from, &to, &onUpdate, &onDelete, &match); err != nil {
+			t.Fatalf("scan foreign_key_list: %v", err)
+		}
+		foreignTables[tableName] = onDelete
+	}
+	if err = rows.Err(); err != nil {
+		t.Fatalf("foreign_key_list: %v", err)
+	}
+	for _, parent := range []string{"conversations", "messages", "summaries"} {
+		if foreignTables[parent] != "CASCADE" {
+			t.Fatalf("context_items FK to %s on_delete = %q, want CASCADE", parent, foreignTables[parent])
+		}
+	}
+
+	if _, err = db.Exec(
+		`INSERT INTO context_items (conversation_id, ordinal, item_type, message_id, token_count)
+		 VALUES (1, 200, 'bogus', 1, 1)`,
+	); err == nil {
+		t.Fatal("invalid item_type was accepted after migration")
+	}
+
+	if _, err = db.Exec(`DELETE FROM messages WHERE message_id = 1`); err != nil {
+		t.Fatalf("delete message: %v", err)
+	}
+	if err = db.QueryRow(`SELECT COUNT(*) FROM context_items`).Scan(&count); err != nil {
+		t.Fatalf("count context items: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("context items after message delete = %d, want 0 (cascade)", count)
 	}
 }
 

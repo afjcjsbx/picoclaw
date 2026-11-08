@@ -43,27 +43,27 @@ func TestBackupBeforeMigrationIncludesWAL(t *testing.T) {
 		t.Fatalf("open db: %v", err)
 	}
 	defer db.Close()
-	if _, err := db.Exec("PRAGMA journal_mode = WAL"); err != nil {
+	if _, err = db.Exec("PRAGMA journal_mode = WAL"); err != nil {
 		t.Fatalf("enable WAL: %v", err)
 	}
-	if _, err := db.Exec("PRAGMA wal_autocheckpoint = 0"); err != nil {
+	if _, err = db.Exec("PRAGMA wal_autocheckpoint = 0"); err != nil {
 		t.Fatalf("disable autocheckpoint: %v", err)
 	}
-	if _, err := db.Exec("CREATE TABLE marker (value TEXT)"); err != nil {
+	if _, err = db.Exec("CREATE TABLE marker (value TEXT)"); err != nil {
 		t.Fatalf("create table: %v", err)
 	}
-	if _, err := db.Exec("INSERT INTO marker (value) VALUES ('committed in WAL')"); err != nil {
+	if _, err = db.Exec("INSERT INTO marker (value) VALUES ('committed in WAL')"); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
 
 	_ = os.Remove(path + ".bak")
 
-	if err := backupBeforeMigration(db, path); err != nil {
+	if err = backupBeforeMigration(db, path); err != nil {
 		t.Fatalf("backupBeforeMigration: %v", err)
 	}
-	backup, err := sql.Open("sqlite", path+".bak")
-	if err != nil {
-		t.Fatalf("open backup: %v", err)
+	backup, openErr := sql.Open("sqlite", path+".bak")
+	if openErr != nil {
+		t.Fatalf("open backup: %v", openErr)
 	}
 	defer backup.Close()
 	var value string
