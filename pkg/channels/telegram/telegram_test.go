@@ -1620,6 +1620,51 @@ func TestQuotedTelegramMediaRefs_ReportsFailedDownloads(t *testing.T) {
 	assert.Equal(t, []string{"voice"}, failed)
 }
 
+func TestQuotedTelegramMediaRefs_ResolvesQuotedDocument(t *testing.T) {
+	msg := &telego.Message{
+		Document: &telego.Document{
+			FileID:   "doc-file",
+			FileName: "log.txt",
+		},
+	}
+
+	var calls []string
+	refs, failed := quotedTelegramMediaRefs(msg, func(fileID, ext, filename string) string {
+		calls = append(calls, fileID+"|"+ext+"|"+filename)
+		return "ref://" + filename
+	})
+
+	assert.Equal(t, []string{"doc-file||log.txt"}, calls)
+	assert.Equal(t, []string{"ref://log.txt"}, refs)
+	assert.Empty(t, failed)
+}
+
+func TestQuotedTelegramMediaRefs_QuotedDocumentWithoutFilename(t *testing.T) {
+	msg := &telego.Message{
+		Document: &telego.Document{FileID: "doc-file"},
+	}
+
+	refs, failed := quotedTelegramMediaRefs(msg, func(fileID, ext, filename string) string {
+		return "ref://" + filename
+	})
+
+	assert.Equal(t, []string{"ref://document"}, refs)
+	assert.Empty(t, failed)
+}
+
+func TestQuotedTelegramMediaRefs_QuotedDocumentDownloadFailureReported(t *testing.T) {
+	msg := &telego.Message{
+		Document: &telego.Document{FileID: "doc-file", FileName: "log.txt"},
+	}
+
+	refs, failed := quotedTelegramMediaRefs(msg, func(fileID, ext, filename string) string {
+		return ""
+	})
+
+	assert.Empty(t, refs)
+	assert.Equal(t, []string{"file"}, failed)
+}
+
 func TestHandleMessage_GroupMentionOnly_ReplyToOwnBotMessageTriggers(t *testing.T) {
 	ch, messageBus := newGroupMentionOnlyChannel(t, "testbot")
 
