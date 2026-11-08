@@ -58,10 +58,15 @@ func (a *Assembler) Assemble(
 		resolved[i] = r
 	}
 
-	// Split into evictable prefix and protected fresh tail
+	// Split into evictable prefix and protected fresh tail. The latest user
+	// instruction is never evictable, even when more than FreshTailCount items
+	// follow it: losing it mid-turn is worse than losing older context.
 	tailStart := len(resolved) - FreshTailCount
 	if tailStart < 0 {
 		tailStart = 0
+	}
+	if idx := lastUserMessageIndex(resolved); idx >= 0 && idx < tailStart {
+		tailStart = idx
 	}
 	evictable := resolved[:tailStart]
 	freshTail := resolved[tailStart:]
@@ -79,6 +84,13 @@ func (a *Assembler) Assemble(
 		freshTailTokens += r.tokenCount
 	}
 
+	// Generated summaries carry decisions that are not recoverable from the
+	// raw tail, so reserve their budget before sizing the tail. If the tail
+	// alone cannot shrink enough, the fallback below gives the reservation back.
+	summaryItems, otherEvictable := splitEvictable(evictable)
+	summaryBudget := summaryReserveBudget(input.Budget, freshTail, summaryItems)
+	selectedSummaries, reservedSummaryTokens := selectNewestFirst(summaryItems, summaryBudget)
+
 	hardCap := input.Budget
 	if hardCap < 1 {
 		hardCap = 1
@@ -93,16 +105,9 @@ func (a *Assembler) Assemble(
 		}
 	}
 
-	tailBudget := input.Budget
+	tailBudget := input.Budget - reservedSummaryTokens
 	if tailBudget < 1 {
 		tailBudget = 1
-	}
-	if idx := lastUserMessageIndex(freshTail); idx >= 0 {
-		if latestTurnTokens := resolvedItemsTokenCount(freshTail[idx:]); latestTurnTokens > tailBudget {
-			// Do not cut the active instruction merely to satisfy the tail
-			// share; the hard overall budget still applies below.
-			tailBudget = input.Budget
-		}
 	}
 
 	if freshTailTokens > tailBudget {
@@ -128,13 +133,13 @@ func (a *Assembler) Assemble(
 			logger.InfoCF("seahorse", "assemble: trimmed fresh tail to safe boundary", logFields)
 		}
 	}
-	if freshTailTokens > input.Budget {
+	if freshTailTokens > tailBudget {
 		// The active turn cannot be dropped. Shrink its largest non-user
 		// items first, then fall back to an explicit error if even the
 		// instruction itself cannot fit.
 		freshTail, freshTailTokens = shrinkActiveTurnToBudget(
 			freshTail,
-			input.Budget,
+			tailBudget,
 			freshTailTokens,
 		)
 	}
@@ -147,39 +152,31 @@ func (a *Assembler) Assemble(
 			"budget": input.Budget,
 		})
 	}
-	remainingBudget := input.Budget - freshTailTokens
+	// If the tail could not shrink to its share, return the shortfall by
+	// dropping summaries rather than overshooting the total budget.
+	availableForSummaries := max(0, input.Budget-freshTailTokens)
+	if reservedSummaryTokens > availableForSummaries {
+		selectedSummaries, reservedSummaryTokens = selectNewestFirst(summaryItems, availableForSummaries)
+	}
+	remainingBudget := input.Budget - freshTailTokens - reservedSummaryTokens
 	if remainingBudget < 0 {
 		remainingBudget = 0
 	}
 
-	var selected []resolvedItem
-	evictableTokens := 0
-	for _, r := range evictable {
-		evictableTokens += r.tokenCount
-	}
-
-	gapCount := 0
-	if evictableTokens <= remainingBudget {
-		// All evictable fit
-		selected = append(selected, evictable...)
-	} else {
-		// Walk from newest to oldest. A single oversized summary or tool result
-		// must not hide every older item; skip it, record the gap, and continue.
-		var kept []resolvedItem
-		accum := 0
-		for i := len(evictable) - 1; i >= 0; i-- {
-			if accum+evictable[i].tokenCount <= remainingBudget {
-				kept = append(kept, evictable[i])
-				accum += evictable[i].tokenCount
-			} else {
-				gapCount++
-			}
-		}
-		// Reverse to restore chronological order
-		for i, j := 0, len(kept)-1; i < j; i, j = i+1, j-1 {
-			kept[i], kept[j] = kept[j], kept[i]
-		}
-		selected = append(selected, kept...)
+	// Older raw messages can use what is left after the summaries and the
+	// fresh tail. Summaries are selected first so recent tool output cannot
+	// evict generated decisions.
+	selectedOther, _ := selectNewestFirst(otherEvictable, remainingBudget)
+	selected := mergeInOriginalOrder(evictable, selectedSummaries, selectedOther)
+	gapCount := len(evictable) - len(selected)
+	if len(selectedSummaries) < len(summaryItems) {
+		logger.WarnCF("seahorse", "assemble: summaries evicted by budget", map[string]any{
+			"budget":             input.Budget,
+			"summary_budget":     summaryBudget,
+			"summary_tokens":     reservedSummaryTokens,
+			"selected_summaries": len(selectedSummaries),
+			"summary_items":      len(summaryItems),
+		})
 	}
 
 	// Combine: selected evictable + fresh tail
@@ -294,6 +291,77 @@ func resolvedItemsTokenCount(items []resolvedItem) int {
 		total += item.tokenCount
 	}
 	return total
+}
+
+// splitEvictable separates generated summaries from raw messages so summaries
+// can be selected before recent tool output consumes the budget.
+func splitEvictable(items []resolvedItem) (summaries, messages []resolvedItem) {
+	for _, item := range items {
+		if item.itemType == "summary" {
+			summaries = append(summaries, item)
+		} else {
+			messages = append(messages, item)
+		}
+	}
+	return summaries, messages
+}
+
+// summaryReserveBudget caps the budget given to generated summaries. The fresh
+// tail keeps at least half the budget, or the full latest user message when it
+// is larger, so a large summary cannot starve the active instruction or its
+// newest tool results.
+func summaryReserveBudget(budget int, tail, summaries []resolvedItem) int {
+	if budget < 1 || len(summaries) == 0 {
+		return 0
+	}
+	minTail := max(1, budget/2)
+	if idx := lastUserMessageIndex(tail); idx >= 0 {
+		minTail = max(minTail, tail[idx].tokenCount)
+	}
+	if minTail > budget {
+		minTail = budget
+	}
+	return min(resolvedItemsTokenCount(summaries), budget-minTail)
+}
+
+// selectNewestFirst keeps the newest items that fit, skipping an oversized
+// item instead of letting it hide every older one. The result is returned in
+// chronological order.
+func selectNewestFirst(items []resolvedItem, budget int) ([]resolvedItem, int) {
+	if budget <= 0 {
+		return nil, 0
+	}
+	kept := make([]resolvedItem, 0, len(items))
+	used := 0
+	for i := len(items) - 1; i >= 0; i-- {
+		if items[i].tokenCount > budget-used {
+			continue
+		}
+		kept = append(kept, items[i])
+		used += items[i].tokenCount
+	}
+	for i, j := 0, len(kept)-1; i < j; i, j = i+1, j-1 {
+		kept[i], kept[j] = kept[j], kept[i]
+	}
+	return kept, used
+}
+
+// mergeInOriginalOrder restores the context's chronological order after
+// summaries and raw messages have been selected independently.
+func mergeInOriginalOrder(items []resolvedItem, groups ...[]resolvedItem) []resolvedItem {
+	selected := make(map[int]struct{}, len(items))
+	for _, group := range groups {
+		for _, item := range group {
+			selected[item.ordinal] = struct{}{}
+		}
+	}
+	out := make([]resolvedItem, 0, len(selected))
+	for _, item := range items {
+		if _, ok := selected[item.ordinal]; ok {
+			out = append(out, item)
+		}
+	}
+	return out
 }
 
 // shrinkActiveTurnToBudget truncates the largest non-user items in the active

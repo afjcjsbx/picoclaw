@@ -648,29 +648,40 @@ history only.
    are none, return an empty result.
 2. Resolve every item to a message or summary and a token count.
 3. Split into an evictable prefix and a protected fresh tail:
-   `tailStart = len(items) - 32`.
+   `tailStart = len(items) - 32`. If the latest user message is older than that
+   boundary, move `tailStart` back to it so the active instruction can never be
+   evicted, even when more than 32 items follow it.
 4. Sum the fresh-tail tokens.
-5. If the fresh tail alone exceeds the budget, truncate oversized items, trim
-   the oldest items, shrink an oversized active turn, and return
-   `ErrContextBudgetExceeded` if it still does not fit (see below).
-6. Compute `remainingBudget = budget - freshTailTokens`, clamped to zero.
-7. If all evictable items fit in the remaining budget, include all of them.
-8. Otherwise walk the evictable prefix from newest to oldest, keep each item
-   that fits, and **skip items that do not fit while continuing with older
-   items**. Each skipped item is counted as a context gap.
-9. Combine the kept evictable prefix with the fresh tail, preserving
+5. Separate the evictable prefix into generated summaries and raw messages.
+   Summaries are considered first, so recent tool output cannot evict them.
+6. Compute the summary reservation: `min(totalSummaryTokens,
+   budget - max(budget/2, latestUserTokens))`. The fresh tail keeps at least
+   half the budget, or the full latest user message when it is larger. A large
+   summary therefore cannot starve the active instruction or its newest tool
+   results. Select summaries newest first within the reservation.
+7. Set the tail budget to `budget - reservedSummaryTokens`. If the fresh tail
+   alone exceeds it, truncate oversized items, trim the oldest items, and shrink
+   an oversized active turn (see below). If the tail still cannot reach its
+   share, reduce the summary reservation to `budget - freshTailTokens` and
+   reselect summaries before giving up.
+8. Give the remaining budget to the rest of the evictable prefix, newest first,
+   skipping items that do not fit while continuing with older items. Each
+   skipped item is counted as a context gap.
+9. Combine the selected evictable items with the fresh tail, preserving
    chronological order.
 10. Return messages in `AssembleResult.Messages` and the XML for summaries in
     `AssembleResult.Summary`.
 
 The fresh tail is measured in **context items**, not messages. A summary counts
 as one item, so compacted sessions can protect a longer span of raw history than
-an uncompacted one. It is also token-aware: any item larger than the budget is
-truncated before the tail is trimmed.
+an uncompacted one. The latest user message extends the tail regardless of the
+item count. It is also token-aware: any item larger than the budget is truncated
+before the tail is trimmed.
 
 ### Fresh-tail trimming
 
-If the fresh tail exceeds the budget:
+The fresh tail is trimmed against `budget - reservedSummaryTokens`, not the
+whole budget. If it exceeds that share:
 
 1. Truncate any single item larger than the hard budget: content, reasoning,
    text/tool-result parts, and summary text are shortened with an explicit
@@ -687,12 +698,15 @@ If the fresh tail exceeds the budget:
 4. Then advance the start until the remaining history begins at a
    provider-safe boundary: not a `tool` message and not an assistant message
    with tool calls.
-5. If the active turn still exceeds the budget, shrink its largest non-user
-   items. If it still cannot fit, return `ErrContextBudgetExceeded`.
+5. If the active turn still exceeds its share, shrink its largest non-user
+   items. If it still cannot fit, reduce the summary reservation and reselect
+   summaries. If the tail alone still exceeds the whole budget, return
+   `ErrContextBudgetExceeded`.
 
 The assembler logs `assemble: preserving active turn over budget`,
 `assemble: trimmed fresh tail to safe boundary`, or
-`assemble: truncated oversized tail item`.
+`assemble: truncated oversized tail item`. When a summary does not fit even
+after the fallback, it logs `assemble: summaries evicted by budget`.
 
 The provider layer also sanitizes history in `sanitizeHistoryForProvider`:
 leading tool messages, leading assistant tool-call messages, orphaned tool
