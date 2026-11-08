@@ -943,10 +943,11 @@ oversized responses.
    transaction, then creates a `condensed` summary and parent edges in
    `summary_parents`.
 8. Deletes the candidate context items by summary ID and inserts the new summary
-   at the first candidate ordinal. If that ordinal is occupied, the context is
-   resequenced and the summary is inserted at the same chronological position.
-   A stale candidate set returns `ErrStaleCandidates` without writing a
-   summary.
+   at the last candidate ordinal. Using the last ordinal keeps a skipped
+   oversized summary that sits between candidates before the new summary. If
+   that ordinal is occupied, the context is resequenced and the summary is
+   inserted at the same position. A stale candidate set returns
+   `ErrStaleCandidates` without writing a summary.
 
 #### `selectOldestChunkAtDepth`
 

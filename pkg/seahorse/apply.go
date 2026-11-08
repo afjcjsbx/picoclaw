@@ -27,6 +27,9 @@ type ApplyCondensedInput struct {
 	ConversationID      int64
 	ExpectedVersion     int64
 	CandidateSummaryIDs []string
+	// InsertBeforeOrdinal is the last candidate ordinal. The new summary is
+	// placed there after candidates are deleted so it stays after any skipped
+	// oversized item that sits between candidates.
 	InsertBeforeOrdinal int
 	Summary             CreateSummaryInput
 }

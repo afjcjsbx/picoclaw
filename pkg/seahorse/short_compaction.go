@@ -560,9 +560,11 @@ func (e *CompactionEngine) compactCondensed(
 		return nil, nil
 	}
 
-	// Find the ordinal at which the condensed summary belongs. ApplyCondensed
-	// Summary re-verifies that every candidate is still present before it
-	// creates any row, so this read is only a hint, not a lock.
+	// Find the ordinal at which the condensed summary belongs. Use the last
+	// candidate ordinal: the selector may have skipped an oversized summary
+	// between candidates, and inserting at the first ordinal would place the
+	// new summary ahead of that skipped item. ApplyCondensedSummary re-verifies
+	// every candidate before creating any row, so this read is only a hint.
 	items, err := e.store.GetContextItems(ctx, convID)
 	if err != nil {
 		return nil, err
@@ -571,15 +573,15 @@ func (e *CompactionEngine) compactCondensed(
 	for _, c := range candidates {
 		candidateSet[c.SummaryID] = true
 	}
-	startOrd := -1
+	insertOrdinal := -1
 	for _, item := range items {
 		if item.ItemType == "summary" && candidateSet[item.SummaryID] {
-			if startOrd == -1 || item.Ordinal < startOrd {
-				startOrd = item.Ordinal
+			if item.Ordinal > insertOrdinal {
+				insertOrdinal = item.Ordinal
 			}
 		}
 	}
-	if startOrd == -1 {
+	if insertOrdinal == -1 {
 		return nil, nil
 	}
 
@@ -594,7 +596,7 @@ func (e *CompactionEngine) compactCondensed(
 		ConversationID:      convID,
 		ExpectedVersion:     version,
 		CandidateSummaryIDs: candidateIDs,
-		InsertBeforeOrdinal: startOrd,
+		InsertBeforeOrdinal: insertOrdinal,
 		Summary: CreateSummaryInput{
 			ConversationID:       convID,
 			Kind:                 SummaryKindCondensed,

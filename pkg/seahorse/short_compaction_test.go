@@ -679,6 +679,71 @@ func TestSelectOldestChunkAtDepthSkipsOversizedSummary(t *testing.T) {
 	}
 }
 
+func TestCompactCondensedKeepsSkippedOversizedSummaryBeforeNewSummary(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	conv, _ := s.GetOrCreateConversation(ctx, "test:condensed-order")
+	convID := conv.ConversationID
+
+	first, _ := s.CreateSummary(ctx, CreateSummaryInput{
+		ConversationID: convID, Kind: SummaryKindLeaf, Content: "first", TokenCount: 500,
+	})
+	if err := s.AppendContextSummary(ctx, convID, first.SummaryID); err != nil {
+		t.Fatal(err)
+	}
+	oversized, _ := s.CreateSummary(ctx, CreateSummaryInput{
+		ConversationID: convID, Kind: SummaryKindLeaf, Content: "oversized", TokenCount: LeafChunkTokens + 1,
+	})
+	if err := s.AppendContextSummary(ctx, convID, oversized.SummaryID); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < CondensedMinFanout-1; i++ {
+		sum, _ := s.CreateSummary(ctx, CreateSummaryInput{
+			ConversationID: convID, Kind: SummaryKindLeaf, Content: "leaf", TokenCount: 500,
+		})
+		if err := s.AppendContextSummary(ctx, convID, sum.SummaryID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < FreshTailCount; i++ {
+		m, _ := s.AddMessage(ctx, convID, "user", "fresh", 1)
+		if err := s.AppendContextMessage(ctx, convID, m.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ce, cancel := newTestCompactionEngineWithStore(s, mockCompleteFn)
+	defer cancel()
+	summaryID, err := ce.compactCondensed(ctx, convID, "", false)
+	if err != nil {
+		t.Fatalf("compactCondensed: %v", err)
+	}
+	if summaryID == nil {
+		t.Fatal("expected a condensed summary")
+	}
+
+	items, err := s.GetContextItems(ctx, convID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var newOrdinal, oversizedOrdinal int
+	for _, item := range items {
+		switch item.SummaryID {
+		case *summaryID:
+			newOrdinal = item.Ordinal
+		case oversized.SummaryID:
+			oversizedOrdinal = item.Ordinal
+		}
+	}
+	if newOrdinal <= oversizedOrdinal {
+		t.Fatalf(
+			"condensed ordinal = %d, want after skipped oversized summary ordinal %d",
+			newOrdinal,
+			oversizedOrdinal,
+		)
+	}
+}
+
 func TestCompactCondensedDiscardsNonShrinkingSummary(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
