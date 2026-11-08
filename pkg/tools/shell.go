@@ -1625,9 +1625,13 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 					}
 				}
 
-				// Check symlinks and junctions
-				resolved, err := filepath.EvalSymlinks(p)
-				if err == nil {
+				// Check symlinks and junctions. EvalSymlinks fails when the
+				// final component does not exist, so fall back to the nearest
+				// existing ancestor. Without the fallback, a new file created
+				// through a symlinked directory keeps its lexical workspace
+				// path and passes the containment check even though the write
+				// lands outside the workspace.
+				if resolved, resolveErr := fstools.ResolvePathAgainstExistingAncestor(p); resolveErr == nil {
 					p = resolved
 				}
 

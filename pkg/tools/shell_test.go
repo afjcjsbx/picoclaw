@@ -885,6 +885,78 @@ func TestShellTool_OptionValueRelativeSymlinkEscapeBlocked(t *testing.T) {
 	}
 }
 
+// TestShellTool_NewFileThroughSymlinkedDirBlocked verifies that a redirection
+// target that does not exist yet cannot escape the workspace through a
+// symlinked directory. EvalSymlinks fails on a missing final component, so the
+// candidate must be resolved against its nearest existing ancestor.
+func TestShellTool_NewFileThroughSymlinkedDirBlocked(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	outsideDir := filepath.Join(root, "outside")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("failed to create workspace: %v", err)
+	}
+	if err := os.MkdirAll(outsideDir, 0o755); err != nil {
+		t.Fatalf("failed to create outside dir: %v", err)
+	}
+	if err := os.Symlink(outsideDir, filepath.Join(workspace, "link")); err != nil {
+		t.Skipf("symlinks not supported in this environment: %v", err)
+	}
+
+	tool, err := NewExecTool(workspace, true)
+	if err != nil {
+		t.Fatalf("unable to configure exec tool: %s", err)
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"action":  "run",
+		"command": "echo pwn > link/newfile",
+	})
+
+	if !result.IsError || !strings.Contains(result.ForLLM, "path outside working dir") {
+		t.Fatalf("new file through symlinked directory should be blocked, got: %s", result.ForLLM)
+	}
+	if _, statErr := os.Stat(filepath.Join(outsideDir, "newfile")); !os.IsNotExist(statErr) {
+		t.Fatalf("blocked command created a file outside the workspace")
+	}
+}
+
+// TestShellTool_NewFileThroughWorkspaceSymlinkedDirAllowed verifies that the
+// ancestor fallback does not reject a new file created through a symlink that
+// still points inside the workspace.
+func TestShellTool_NewFileThroughWorkspaceSymlinkedDirAllowed(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	realDir := filepath.Join(workspace, "real")
+	if err := os.MkdirAll(realDir, 0o755); err != nil {
+		t.Fatalf("failed to create workspace dir: %v", err)
+	}
+	if err := os.Symlink(realDir, filepath.Join(workspace, "alias")); err != nil {
+		t.Skipf("symlinks not supported in this environment: %v", err)
+	}
+
+	tool, err := NewExecTool(workspace, true)
+	if err != nil {
+		t.Fatalf("unable to configure exec tool: %s", err)
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"action":  "run",
+		"command": "echo hello > alias/newfile",
+	})
+
+	if result.IsError {
+		t.Fatalf("new file through workspace symlink should be allowed, got: %s", result.ForLLM)
+	}
+	data, err := os.ReadFile(filepath.Join(realDir, "newfile"))
+	if err != nil {
+		t.Fatalf("expected file to be created through symlink: %v", err)
+	}
+	if string(data) != "hello\n" {
+		t.Fatalf("unexpected file content: %q", string(data))
+	}
+}
+
 // TestShellTool_DevNullAllowed verifies that /dev/null redirections are not blocked (issue #964).
 func TestShellTool_DevNullAllowed(t *testing.T) {
 	tmpDir := t.TempDir()
