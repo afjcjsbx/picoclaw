@@ -185,7 +185,7 @@ the sessions known to the default agent.
 | Method | Seahorse implementation |
 | --- | --- |
 | `Assemble` | Computes the effective budget, calls `Engine.Assemble`, converts messages back to provider messages, and returns summary XML separately |
-| `Compact` | Dispatches on `Reason`: manual uses `CompactNow`, retry uses `CompactUntilUnder`, everything else uses `Engine.Compact` |
+| `Compact` | Dispatches on `Reason`: manual uses `CompactNowWithBudget`, retry uses `CompactUntilUnder`, everything else uses `Engine.Compact` |
 | `Ingest` | Converts one provider message and calls `Engine.Ingest` |
 | `Clear` | Calls `Engine.ClearSession`, then clears the owning agent's JSONL history and summary |
 | `Close` | Optional method detected by the agent loop; stops the prune loop and closes the engine |
@@ -773,7 +773,7 @@ sources. It never deletes raw messages or summary rows.
 | Pre-LLM threshold | `threshold` | `pipeline_compact.go` via `CompactBeforeLLM` | `Engine.Compact`, blocking; returns `ErrNothingToCompact` if no summary |
 | Proactive budget | `proactive_budget` | `pipeline_setup.go` | `Engine.Compact` before the first LLM call if the hard budget is exceeded |
 | Overflow retry | `llm_retry` | `pipeline_llm.go` | `CompactUntilUnder(usableContextTokens)`, up to 20 iterations |
-| Manual | `manual` | `/compact` command | `CompactNow`, leaf and condensed synchronously |
+| Manual | `manual` | `/compact` command | `CompactNowWithBudget`, leaf and condensed synchronously |
 
 The agent passes `Budget = ContextWindow - MaxTokens` (the usable prompt
 budget) on every automatic path. Therefore the internal 75 percent threshold is
@@ -1019,12 +1019,15 @@ Only condensed loops share this map. Leaf passes are not deduplicated.
 
 ### `CompactNow` (manual `/compact`)
 
-`CompactNow`:
+`CompactNow` / `CompactNowWithBudget`:
 
 1. Reads the token count before any work.
 2. Runs one leaf pass synchronously.
 3. If the condensed dedup slot is free, runs the condensed loop synchronously
-   with no target budget and holds the slot.
+   and holds the slot. With a positive budget the loop stops as soon as the
+   stored context fits; zero keeps the older "condense until no progress"
+   behavior. The agent adapter passes the assembly budget minus the static
+   system/tool prompt reserve.
 4. Computes `TokensSaved` across both phases.
 5. Returns counts of created leaf and condensed summaries.
 
@@ -1048,11 +1051,10 @@ It loops up to 20 times:
 3. If no leaf summary, try condensed compaction.
 4. If neither made progress, stop.
 
-It never sets `TokensSaved`. The budget passed by the adapter is
-`ContextWindow - MaxTokens`, but it does not subtract the static system/tool
-prompt reserve, so assembly can still evict history after compaction. The agent
-then trims history with `trimHistoryToFitContextWindow` around the compacted
-context.
+It never sets `TokensSaved`. The adapter passes `ContextWindow - MaxTokens`
+minus the static system/tool prompt reserve, matching the assembly budget. The
+agent then trims history with `trimHistoryToFitContextWindow` around the
+compacted context if needed.
 
 ### What compaction preserves and removes
 

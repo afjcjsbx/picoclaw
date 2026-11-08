@@ -139,6 +139,19 @@ func (e *CompactionEngine) CompactNow(
 	instructions string,
 	protectTailMessages ...int,
 ) (*CompactResult, error) {
+	return e.CompactNowWithBudget(ctx, convID, instructions, 0, protectTailMessages...)
+}
+
+// CompactNowWithBudget is CompactNow with a target budget. A positive budget
+// stops the condensed loop as soon as the stored context fits; zero keeps the
+// historical "condense until no progress" behavior.
+func (e *CompactionEngine) CompactNowWithBudget(
+	ctx context.Context,
+	convID int64,
+	instructions string,
+	budget int,
+	protectTailMessages ...int,
+) (*CompactResult, error) {
 	protect := 0
 	if len(protectTailMessages) > 0 {
 		protect = protectTailMessages[0]
@@ -158,7 +171,7 @@ func (e *CompactionEngine) CompactNow(
 	// Share the dedup map with the async path so two condensed loops never overlap.
 	if _, loaded := e.condensing.LoadOrStore(convID, struct{}{}); !loaded {
 		defer e.condensing.Delete(convID)
-		result.CondensedSummaries = e.runCondensedLoop(ctx, convID, instructions, 0)
+		result.CondensedSummaries = e.runCondensedLoop(ctx, convID, instructions, budget)
 	}
 
 	if tokensAfter, _ := e.store.GetContextTokenCount(ctx, convID); tokensAfter < tokensBefore {

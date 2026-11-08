@@ -318,14 +318,38 @@ func (m *seahorseContextManager) Assemble(ctx context.Context, req *AssembleRequ
 	}, nil
 }
 
+// compactBudget returns the target available to compaction. Assembly reserves
+// the static system/tool prompt on top of the output reserve, so compaction
+// must use the same history-only budget or it will settle above what assembly
+// can actually keep.
+func (m *seahorseContextManager) compactBudget(sessionKey string, budget int) int {
+	if budget <= 0 {
+		return budget
+	}
+	if reserve := m.staticPromptReserve(sessionKey); reserve > 0 && reserve < budget {
+		budget -= reserve
+		if budget < 1 {
+			budget = 1
+		}
+	}
+	return budget
+}
+
 // Compact compresses conversation history via seahorse summarization.
 func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactRequest) error {
 	if req == nil {
 		return nil
 	}
+	budget := m.compactBudget(req.SessionKey, req.Budget)
 
 	if req.Reason == ContextCompressReasonManual {
-		result, err := m.engine.CompactNow(ctx, req.SessionKey, req.Instructions, req.ActiveTurnMessages)
+		result, err := m.engine.CompactNowWithBudget(
+			ctx,
+			req.SessionKey,
+			req.Instructions,
+			budget,
+			req.ActiveTurnMessages,
+		)
 		if err != nil {
 			return err
 		}
@@ -342,12 +366,12 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 		result *seahorse.CompactResult
 		err    error
 	)
-	if req.Reason == ContextCompressReasonRetry && req.Budget > 0 {
-		result, err = m.engine.CompactUntilUnder(ctx, req.SessionKey, req.Budget, req.ActiveTurnMessages)
+	if req.Reason == ContextCompressReasonRetry && budget > 0 {
+		result, err = m.engine.CompactUntilUnder(ctx, req.SessionKey, budget, req.ActiveTurnMessages)
 	} else {
 		result, err = m.engine.Compact(ctx, req.SessionKey, seahorse.CompactInput{
 			Force:               req.Reason == ContextCompressReasonRetry,
-			Budget:              &req.Budget,
+			Budget:              &budget,
 			ProtectTailMessages: req.ActiveTurnMessages,
 		})
 	}

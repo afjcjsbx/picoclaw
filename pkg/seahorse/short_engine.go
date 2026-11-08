@@ -427,6 +427,28 @@ func (e *Engine) CompactNow(
 	return e.compaction.CompactNow(ctx, conv.ConversationID, instructions, protectTailMessages...)
 }
 
+// CompactNowWithBudget runs a synchronous compaction with a target budget.
+func (e *Engine) CompactNowWithBudget(
+	ctx context.Context,
+	sessionKey string,
+	instructions string,
+	budget int,
+	protectTailMessages ...int,
+) (*CompactResult, error) {
+	conv, err := e.store.GetOrCreateConversation(ctx, sessionKey)
+	if err != nil {
+		return nil, fmt.Errorf("get conversation: %w", err)
+	}
+	e.initCompactionOnce()
+	return e.compaction.CompactNowWithBudget(
+		ctx,
+		conv.ConversationID,
+		instructions,
+		budget,
+		protectTailMessages...,
+	)
+}
+
 // CompactUntilUnder aggressively compacts until context is under budget.
 // Used for emergency compaction after LLM overflow (retry reason).
 func (e *Engine) CompactUntilUnder(
