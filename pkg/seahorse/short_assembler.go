@@ -335,6 +335,11 @@ func shrinkActiveTurnToBudget(tail []resolvedItem, budget, current int) ([]resol
 		}
 		before := tail[largest].tokenCount
 		tail[largest] = truncateResolvedItem(tail[largest], target)
+		if tail[largest].tokenCount >= before {
+			// Fixed overhead (role framing, media) can dominate the estimate;
+			// further truncation would not reduce it.
+			break
+		}
 		current += tail[largest].tokenCount - before
 	}
 	return tail, current
@@ -380,26 +385,59 @@ func messageHasToolUse(msg *Message) bool {
 	return false
 }
 
+// truncatedContentMarker tells the model that an item was shortened.
+const truncatedContentMarker = "\n[truncated]"
+
+// truncatedToolArguments is a valid JSON object used when a tool call's
+// arguments cannot fit the per-item budget. Raw truncation would leave invalid
+// JSON, which providers reject when replaying history.
+const truncatedToolArguments = `{"_truncated":true}`
+
+// truncateTextToTokens bounds text using the shared estimator's conservative
+// 2-characters-per-token rate. It leaves room for the marker and message
+// overhead so the estimate stays near the target instead of only being clamped
+// afterwards.
+func truncateTextToTokens(s string, maxTokens int) string {
+	if maxTokens < 1 {
+		maxTokens = 1
+	}
+	// Reserve a small amount for JSON/role overhead and the marker.
+	usableTokens := maxTokens - 16
+	if usableTokens < 1 {
+		usableTokens = 1
+	}
+	limit := usableTokens * 2
+	if len(s) <= limit {
+		return s
+	}
+	return truncateUTF8Bytes(s, limit) + truncatedContentMarker
+}
+
 // truncateResolvedItem enforces the per-item hard cap. It keeps the structure
-// (tool calls, tool-result IDs) but truncates user-visible text and tool-result
-// payloads, and appends an explicit marker so the model knows the content is
-// incomplete. The canonical rows in SQLite are not modified.
+// (tool calls, tool-result IDs) but shortens every field that carries token
+// weight: content, reasoning, text/tool-result parts, summary text, and tool
+// arguments. The reported token count is the actual estimate of the shortened
+// item, not a clamped value, so the assembler cannot silently overshoot the
+// budget. The canonical rows in SQLite are not modified.
 func truncateResolvedItem(item resolvedItem, maxTokens int) resolvedItem {
 	if maxTokens < 1 {
 		maxTokens = 1
 	}
-	// The estimator is roughly 2.5 characters per token; use a generous byte
-	// limit and then clamp the accounting token count to the hard cap.
-	byteLimit := maxTokens * 4
+	limit := maxTokens * 2
 	if item.message != nil {
 		msg := *item.message
-		msg.Content = truncateUTF8Bytes(msg.Content, byteLimit)
+		msg.Content = truncateTextToTokens(msg.Content, maxTokens)
+		msg.ReasoningContent = truncateTextToTokens(msg.ReasoningContent, maxTokens)
 		parts := make([]MessagePart, len(msg.Parts))
 		copy(parts, msg.Parts)
 		for i := range parts {
 			switch parts[i].Type {
 			case "text", "tool_result":
-				parts[i].Text = truncateUTF8Bytes(parts[i].Text, byteLimit)
+				parts[i].Text = truncateTextToTokens(parts[i].Text, maxTokens)
+			case "tool_use":
+				if len(parts[i].Arguments) > limit {
+					parts[i].Arguments = truncatedToolArguments
+				}
 			}
 		}
 		msg.Parts = parts
@@ -409,14 +447,10 @@ func truncateResolvedItem(item resolvedItem, maxTokens int) resolvedItem {
 	}
 	if item.summary != nil {
 		sum := *item.summary
-		sum.Content = truncateUTF8Bytes(sum.Content, byteLimit)
+		sum.Content = truncateTextToTokens(sum.Content, maxTokens)
 		sum.TokenCount = EstimateMessageTokens(Message{Content: sum.Content})
 		item.summary = &sum
 		item.tokenCount = sum.TokenCount
-	}
-	if item.tokenCount > maxTokens {
-		// The estimator is not exact; the hard cap is a safety boundary.
-		item.tokenCount = maxTokens
 	}
 	return item
 }

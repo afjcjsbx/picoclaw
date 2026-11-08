@@ -664,8 +664,11 @@ truncated before the tail is trimmed.
 
 If the fresh tail exceeds the budget:
 
-1. Truncate any single item larger than the hard budget, appending an explicit
-   truncation marker. Canonical rows are not modified.
+1. Truncate any single item larger than the hard budget: content, reasoning,
+   text/tool-result parts, and summary text are shortened with an explicit
+   marker; oversized tool arguments are replaced with a valid
+   `{"_truncated":true}` JSON object. The reported token count is re-estimated
+   from the shortened item, not clamped. Canonical rows are not modified.
 2. If there is a user message in the tail, and the slice from the latest user
    message to the end of the tail is itself over budget, try to preserve that
    active turn rather than dropping it.

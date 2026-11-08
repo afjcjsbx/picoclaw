@@ -2,6 +2,7 @@ package seahorse
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -187,6 +188,33 @@ func TestAssemblerTruncatesOversizedTailItem(t *testing.T) {
 	}
 	if result.TokensUsed > 100 {
 		t.Fatalf("TokensUsed = %d, want <= 100", result.TokensUsed)
+	}
+}
+
+func TestTruncateResolvedItemShrinksAllTokenBearingFields(t *testing.T) {
+	original := Message{
+		Role:             "assistant",
+		Content:          strings.Repeat("content ", 500),
+		ReasoningContent: strings.Repeat("reasoning ", 500),
+		Parts: []MessagePart{
+			{Type: "text", Text: strings.Repeat("text ", 500)},
+			{Type: "tool_use", Name: "search", Arguments: `{"query":"` + strings.Repeat("q", 2000) + `"}`},
+			{Type: "media", MediaURI: "file:///image.png"},
+		},
+	}
+	item := truncateResolvedItem(resolvedItem{message: &original}, 20)
+
+	if got := len(item.message.ReasoningContent); got >= len(original.ReasoningContent) {
+		t.Fatalf("reasoning content was not truncated: %d bytes", got)
+	}
+	if item.message.Parts[1].Arguments != truncatedToolArguments {
+		t.Fatalf("tool arguments = %q, want %q", item.message.Parts[1].Arguments, truncatedToolArguments)
+	}
+	if !json.Valid([]byte(item.message.Parts[1].Arguments)) {
+		t.Fatal("truncated tool arguments are not valid JSON")
+	}
+	if want := EstimateMessageTokens(*item.message); item.tokenCount != want {
+		t.Fatalf("tokenCount = %d, want the unsuppressed estimate %d", item.tokenCount, want)
 	}
 }
 
