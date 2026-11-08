@@ -407,7 +407,7 @@ func TestCompactCondensedDoesNotOrphanSummaryWhenCandidatesRemovedConcurrently(t
 	}
 	resultCh := make(chan compactResult, 1)
 	go func() {
-		sid, err := ce.compactCondensed(context.Background(), convID, "")
+		sid, err := ce.compactCondensed(context.Background(), convID, "", false)
 		resultCh <- compactResult{summaryID: sid, err: err}
 	}()
 
@@ -576,7 +576,7 @@ func TestCompactCondensedUsesSelectOldestChunk(t *testing.T) {
 	s.AppendContextMessage(ctx, convID, msg.ID)
 
 	// Run compactCondensed
-	result, err := ce.compactCondensed(ctx, convID, "")
+	result, err := ce.compactCondensed(ctx, convID, "", false)
 	if err != nil {
 		t.Fatalf("compactCondensed: %v", err)
 	}
@@ -623,7 +623,7 @@ func TestCompactCondensedUsesOrdinalAwareSelection(t *testing.T) {
 		s.AppendContextMessage(ctx, convID, m.ID)
 	}
 
-	chunk, err := ce.selectOldestChunkAtDepth(ctx, convID, 0)
+	chunk, err := ce.selectOldestChunkAtDepth(ctx, convID, 0, false)
 	if err != nil {
 		t.Fatalf("selectOldestChunkAtDepth: %v", err)
 	}
@@ -666,7 +666,7 @@ func TestSelectOldestChunkAtDepthSkipsOversizedSummary(t *testing.T) {
 
 	ce, cancel := newTestCompactionEngineWithStore(s, mockCompleteFn)
 	defer cancel()
-	chunk, err := ce.selectOldestChunkAtDepth(ctx, convID, 0)
+	chunk, err := ce.selectOldestChunkAtDepth(ctx, convID, 0, false)
 	if err != nil {
 		t.Fatalf("selectOldestChunkAtDepth: %v", err)
 	}
@@ -705,7 +705,7 @@ func TestCompactCondensedDiscardsNonShrinkingSummary(t *testing.T) {
 	ce, cancel := newTestCompactionEngineWithStore(s, largeComplete)
 	defer cancel()
 	before, _ := s.GetSummariesByConversation(ctx, convID)
-	id, err := ce.compactCondensed(ctx, convID, "")
+	id, err := ce.compactCondensed(ctx, convID, "", false)
 	if err != nil {
 		t.Fatalf("compactCondensed: %v", err)
 	}
@@ -750,7 +750,7 @@ func TestSelectOldestChunkAtDepthBreaksOnMessage(t *testing.T) {
 		s.AppendContextMessage(ctx, convID, m.ID)
 	}
 
-	chunk, _ := ce.selectOldestChunkAtDepth(ctx, convID, 0)
+	chunk, _ := ce.selectOldestChunkAtDepth(ctx, convID, 0, false)
 	if len(chunk) > 3 {
 		t.Errorf("chunk length = %d, want <= 3 (message breaks chain)", len(chunk))
 	}
@@ -779,7 +779,7 @@ func TestSelectOldestChunkAtDepthMinTokens(t *testing.T) {
 	}
 
 	// Should return nil because total tokens (250) < 2000 minimum
-	chunk, err := ce.selectOldestChunkAtDepth(ctx, convID, 0)
+	chunk, err := ce.selectOldestChunkAtDepth(ctx, convID, 0, false)
 	if err != nil {
 		t.Fatalf("selectOldestChunkAtDepth: %v", err)
 	}
@@ -814,7 +814,7 @@ func TestSelectOldestChunkAtDepthPassesMinTokens(t *testing.T) {
 	}
 
 	// Should return chunk because total tokens (2500) >= 2000
-	chunk, err := ce.selectOldestChunkAtDepth(ctx, convID, 0)
+	chunk, err := ce.selectOldestChunkAtDepth(ctx, convID, 0, false)
 	if err != nil {
 		t.Fatalf("selectOldestChunkAtDepth: %v", err)
 	}

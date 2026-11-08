@@ -46,6 +46,15 @@ func (e *CompactionEngine) NeedsCompaction(
 	return tokens >= threshold, nil
 }
 
+// condensedMinFanout returns the minimum number of summaries required for a
+// condensed pass. Forced passes may condense smaller runs.
+func condensedMinFanout(forced bool) int {
+	if forced {
+		return CondensedMinFanoutHard
+	}
+	return CondensedMinFanout
+}
+
 // Close cancels the shutdown context, stopping async goroutines.
 func (e *CompactionEngine) Close() {
 	if e.shutdownCancel != nil {
@@ -446,13 +455,9 @@ func (e *CompactionEngine) compactCondensed(
 	ctx context.Context,
 	convID int64,
 	instructions string,
-	forced ...bool,
+	forced bool,
 ) (*string, error) {
-	useForce := len(forced) > 0 && forced[0]
-	minFanout := CondensedMinFanout
-	if useForce {
-		minFanout = CondensedMinFanoutHard
-	}
+	minFanout := condensedMinFanout(forced)
 
 	// Try ordinal-aware selection first (respects consecutive ordering)
 	var candidates []Summary
@@ -464,7 +469,7 @@ func (e *CompactionEngine) compactCondensed(
 	for _, depth := range depths {
 		var chunkAtDepth []Summary
 		var err2 error
-		chunkAtDepth, err2 = e.selectOldestChunkAtDepth(ctx, convID, depth, useForce)
+		chunkAtDepth, err2 = e.selectOldestChunkAtDepth(ctx, convID, depth, forced)
 		if err2 != nil {
 			continue
 		}
@@ -476,7 +481,7 @@ func (e *CompactionEngine) compactCondensed(
 
 	// Fallback to depth-grouping selection
 	if len(candidates) == 0 {
-		candidates, err = e.selectShallowestCondensationCandidate(ctx, convID, useForce)
+		candidates, err = e.selectShallowestCondensationCandidate(ctx, convID, forced)
 		if err != nil {
 			return nil, err
 		}
@@ -619,10 +624,7 @@ func (e *CompactionEngine) selectShallowestCondensationCandidate(
 		tailStartIdx = 0
 	}
 
-	minFanout := CondensedMinFanout
-	if forced {
-		minFanout = CondensedMinFanoutHard
-	}
+	minFanout := condensedMinFanout(forced)
 
 	// Track depth groups
 	depthGroups := make(map[int][]ContextItem)
@@ -672,13 +674,9 @@ func (e *CompactionEngine) selectShallowestCondensationCandidate(
 // summaries at the given depth. Stops at non-summary items, different depth, fresh tail, or
 // token overflow. Returns contiguous chunk of summaries.
 func (e *CompactionEngine) selectOldestChunkAtDepth(
-	ctx context.Context, convID int64, targetDepth int, forced ...bool,
+	ctx context.Context, convID int64, targetDepth int, forced bool,
 ) ([]Summary, error) {
-	useForce := len(forced) > 0 && forced[0]
-	minFanout := CondensedMinFanout
-	if useForce {
-		minFanout = CondensedMinFanoutHard
-	}
+	minFanout := condensedMinFanout(forced)
 
 	items, err := e.store.GetContextItems(ctx, convID)
 	if err != nil {
@@ -898,7 +896,7 @@ func (e *CompactionEngine) runCondensedLoop(
 			return created
 		}
 
-		condensedID, err := e.compactCondensed(ctx, convID, instructions)
+		condensedID, err := e.compactCondensed(ctx, convID, instructions, false)
 		if err != nil {
 			logger.ErrorCF("seahorse", "condensed: compact", map[string]any{"error": err.Error()})
 			return created
