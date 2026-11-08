@@ -276,6 +276,14 @@ func resolveExistingAncestor(path string) (string, error) {
 	}
 }
 
+// ResolvePathAgainstExistingAncestor resolves symlinks in path, falling back to
+// the nearest existing ancestor when the final component does not exist. This
+// keeps checks meaningful for paths that are about to be created, where a plain
+// filepath.EvalSymlinks would fail and leave the lexical path unchecked.
+func ResolvePathAgainstExistingAncestor(path string) (string, error) {
+	return resolvePathAgainstExistingAncestor(path)
+}
+
 func resolvePathAgainstExistingAncestor(path string) (string, error) {
 	cleaned := filepath.Clean(path)
 	for current := cleaned; ; current = filepath.Dir(current) {

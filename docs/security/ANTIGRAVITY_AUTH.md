@@ -1,3 +1,6 @@
+---
+description: "Antigravity uses OAuth 2.0 with PKCE (Proof Key for Code Exchange) for secure authentication."
+---
 # Antigravity Authentication & Integration Guide
 
 ## Overview

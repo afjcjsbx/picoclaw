@@ -39,7 +39,18 @@ _Small on purpose. Small is not lesser. Small is enough._
 
 **PicoClaw** is an ultra-lightweight personal AI assistant written entirely in **Go** — not a fork of OpenClaw, NanoBot, or any other agent framework. Inspired by [NanoBot](https://github.com/HKUDS/nanobot), it was rebuilt from the ground up through a "self-bootstrapping" process: the agent itself drove the architecture migration and code optimization.
 
-This repository is the actively maintained, community-driven continuation of the project, with ongoing fixes, dependency updates, and new features.
+This repository is the actively maintained, community-driven continuation of [`sipeed/picoclaw`](https://github.com/sipeed/picoclaw), with ongoing fixes, dependency updates, and new features.
+
+### Maintenance status
+
+| | Upstream `sipeed/picoclaw` | This fork |
+| --- | --- | --- |
+| Latest release | [![upstream release](https://img.shields.io/github/v/release/sipeed/picoclaw?label=release&color=blue)](https://github.com/sipeed/picoclaw/releases) | [![fork release](https://img.shields.io/github/v/release/afjcjsbx/picoclaw?label=release&color=green)](https://github.com/afjcjsbx/picoclaw/releases) |
+| Last commit on `main` | [![upstream last commit](https://img.shields.io/github/last-commit/sipeed/picoclaw/main?label=last%20commit)](https://github.com/sipeed/picoclaw/commits/main) | [![fork last commit](https://img.shields.io/github/last-commit/afjcjsbx/picoclaw/main?label=last%20commit)](https://github.com/afjcjsbx/picoclaw/commits/main) |
+
+The badges are rendered by shields.io from GitHub, so the table updates automatically. Upstream still receives issue and pull-request activity; the badges describe release and `main`-branch activity, not whether the upstream project is archived.
+
+See [maintenance status](docs/project/maintenance-status.md) for the current comparison and [migration notes](docs/migration/from-sipeed-picoclaw.md) if you are switching from upstream.
 
 **Runs on $10 hardware. Uses 10–20 MB of RAM. Boots in under a second.**
 
@@ -520,6 +531,7 @@ For detailed guides beyond this README:
 | Topic | Description |
 |-------|-------------|
 | [Docker & Quick Start](docs/guides/docker.md) | Docker Compose setup, launcher/agent modes |
+| [Web UI & Launcher](docs/guides/webui.md) | Browser-based configuration, chat, remote access, tray, and logs |
 | [Chat Apps](docs/guides/chat-apps.md) | All 19+ channel setup guides |
 | [Configuration](docs/guides/configuration.md) | Environment variables, workspace layout, security sandbox |
 | [Plugin Installation](docs/guides/plugins.md) | Install and activate Agent Plugin packages |
@@ -529,12 +541,14 @@ For detailed guides beyond this README:
 | [Scheduled Tasks and Cron Jobs](docs/reference/cron.md) | Cron schedule types, deliver modes, command gates, job storage |
 | [Providers & Models](docs/guides/providers.md) | 30+ LLM providers, model routing, `model_list` configuration |
 | [Spawn & Async Tasks](docs/guides/spawn-tasks.md) | Quick tasks, long tasks with spawn, async sub-agent orchestration |
-| [Hooks](docs/architecture/hooks/README.md) | Event-driven hook system: observers, interceptors, approval hooks |
+| [Hooks](docs/architecture/hooks/) | Event-driven hook system: observers, interceptors, approval hooks |
 | [Steering](docs/architecture/steering.md) | Inject messages into a running agent loop between tool calls |
 | [SubTurn](docs/architecture/subturn.md) | Subagent coordination, concurrency control, lifecycle |
 | [Troubleshooting](docs/operations/troubleshooting.md) | Common issues and solutions |
 | [Tools Configuration](docs/reference/tools_configuration.md) | Tool switches, exec policies, path policies, MCP, skills |
 | [Hardware Compatibility](docs/guides/hardware-compatibility.md) | Tested boards, minimum requirements |
+| [Maintenance Status](docs/project/maintenance-status.md) | Upstream vs fork release dates and migration path |
+| [Migrating from sipeed/picoclaw](docs/migration/from-sipeed-picoclaw.md) | Back up, install, and verify the fork |
 
 ## Contributing
 

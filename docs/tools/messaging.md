@@ -1,3 +1,6 @@
+---
+description: "Messaging tools: send text, files and audio to a chat channel, react to messages, and how they behave inside subagents."
+---
 # Messaging tools
 
 Messaging tools let the agent talk to chat channels directly. They are most useful in the gateway (where a channel manager delivers messages) and in subagents, which report results to the user through the `message` tool instead of the parent conversation.

@@ -1,3 +1,6 @@
+---
+description: "Steering allows injecting messages into an already-running agent loop, interrupting it between tool calls without waiting for the entire cycle to complete."
+---
 # Steering
 
 Steering allows injecting messages into an already-running agent loop, interrupting it between tool calls without waiting for the entire cycle to complete.

@@ -1535,6 +1535,14 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 		if err != nil {
 			return ""
 		}
+		// Resolve symlinks in the workspace root too. Candidate paths below are
+		// resolved with EvalSymlinks before the containment check, so comparing
+		// them against an unresolved root reports every relative path as an
+		// escape whenever the workspace path contains a symlink (for example
+		// /var -> /private/var on macOS, or a symlinked project directory).
+		if resolved, err := filepath.EvalSymlinks(cwdPath); err == nil {
+			cwdPath = resolved
+		}
 
 		// Web URL schemes whose path components (starting with //) should be exempt
 		// from workspace sandbox checks. file: is intentionally excluded so that
@@ -1617,9 +1625,13 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 					}
 				}
 
-				// Check symlinks and junctions
-				resolved, err := filepath.EvalSymlinks(p)
-				if err == nil {
+				// Check symlinks and junctions. EvalSymlinks fails when the
+				// final component does not exist, so fall back to the nearest
+				// existing ancestor. Without the fallback, a new file created
+				// through a symlinked directory keeps its lexical workspace
+				// path and passes the containment check even though the write
+				// lands outside the workspace.
+				if resolved, resolveErr := fstools.ResolvePathAgainstExistingAncestor(p); resolveErr == nil {
 					p = resolved
 				}
 

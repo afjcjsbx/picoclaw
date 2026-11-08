@@ -1,3 +1,7 @@
+---
+description: "Verified PicoClaw hardware: chips, development boards and SBCs confirmed to run the binary, with notes and known limits."
+title: "PicoClaw Hardware Compatibility List"
+---
 # 🖥️ PicoClaw Hardware Compatibility List
 
 PicoClaw runs on virtually any Linux device. This page tracks verified chips, products, and development boards.

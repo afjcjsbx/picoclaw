@@ -1,3 +1,6 @@
+---
+description: "This document makes explicit the boundaries of context management in the agent loop."
+---
 # Context
 
 ## What this document covers

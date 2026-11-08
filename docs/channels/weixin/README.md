@@ -1,3 +1,7 @@
+---
+title: "Weixin (WeChat Personal) Channel"
+description: "PicoClaw supports connecting to your personal WeChat account using the official Tencent iLink API."
+---
 # 💬 Weixin (WeChat Personal) Channel
 
 PicoClaw supports connecting to your personal WeChat account using the official Tencent iLink API.

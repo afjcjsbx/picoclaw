@@ -1,4 +1,7 @@
-> Back to [README](../../../README.md)
+---
+description: "DingTalk is Alibaba's enterprise communication platform, widely used in Chinese workplaces. It uses a streaming SDK to maintain persistent connections."
+---
+> Back to [README](https://github.com/afjcjsbx/picoclaw/blob/main/README.md)
 
 # DingTalk
 

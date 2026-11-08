@@ -1,3 +1,6 @@
+---
+description: "PicoClaw CLI reference: chat, Gateway, model and credential management, channels, skills, MCP servers, and scheduled tasks."
+---
 # CLI Reference
 
 `picoclaw` is the main binary: chat with the agent, start the Gateway, and manage models, credentials, channels, skills, MCP servers, and scheduled tasks from the command line. The browser-based Web UI is served by a separate binary — see the [Web UI & Launcher Guide](../guides/webui.md).

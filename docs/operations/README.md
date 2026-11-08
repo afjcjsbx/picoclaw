@@ -1,3 +1,6 @@
+---
+description: "PicoClaw operations: troubleshooting common failures, reading logs, and debugging a running Gateway or agent turn."
+---
 # Operations
 
 Operational docs for debugging, diagnosis, and production troubleshooting.

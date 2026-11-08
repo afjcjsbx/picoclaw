@@ -1,3 +1,6 @@
+---
+description: "The exec tool: run shell commands with a timeout, working directory and environment, plus the PICOCLAW_TOOLS_EXEC_ environment variables that configure it."
+---
 # Exec tool
 
 The exec tool is used to execute shell commands.

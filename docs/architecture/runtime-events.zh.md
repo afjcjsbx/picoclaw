@@ -1,3 +1,7 @@
+---
+lang: zh
+description: "PicoClaw 的 runtime event 是运行时观察面，用来描述 agent、channel、gateway、message bus、MCP 等组件发生了什么。事件发布和日志打印是两件事：."
+---
 # Runtime Events 与事件日志
 
 PicoClaw 的 runtime event 是运行时观察面，用来描述 agent、channel、gateway、message bus、MCP 等组件发生了什么。事件发布和日志打印是两件事：
@@ -216,4 +220,4 @@ agent 事件还会追加 payload 摘要字段：
 - `gateway.*`：start、ready、shutdown、reload started/completed/failed。
 - `mcp.*`：server connecting/connected/failed、tool discovered、tool call start/end。
 
-默认事件日志示例见 [`../../config/config.example.json`](../../config/config.example.json)。
+默认事件日志示例见 [`../../config/config.example.json`](https://github.com/afjcjsbx/picoclaw/blob/main/config/config.example.json)。
