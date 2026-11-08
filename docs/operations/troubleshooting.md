@@ -51,3 +51,28 @@ Example snippet:
 ```
 
 Get your key at [OpenRouter Keys](https://openrouter.ai/keys).
+
+## OpenCode Go returns 400 "Model is unavailable"
+
+**Symptom:** A model entry sets `provider` explicitly and repeats the provider
+name in `model`:
+
+```json
+{"provider": "opencode-go", "model": "opencode-go/glm-5.3-flash"}
+```
+
+OpenCode Go answers `400 Upstream request failed: Model is unavailable`.
+
+**Cause:** OpenCode Go model IDs are flat. Repeating the provider name breaks
+both PicoClaw's endpoint routing (the vendor prefix is used to pick the wire
+protocol) and the upstream model lookup.
+
+**Fix:** Use the bare model ID:
+
+```json
+{"provider": "opencode-go", "model": "glm-5.3-flash"}
+```
+
+Current builds drop a redundant `opencode-go/` prefix before routing, so the
+prefixed form also works. The misleading upstream error remains possible for a
+genuinely unknown model ID.

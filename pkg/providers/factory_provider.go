@@ -67,6 +67,8 @@ func createCodexAuthProvider() (LLMProvider, error) {
 //   - Model "nvidia/z-ai/glm-5.1" -> ("nvidia", "z-ai/glm-5.1")
 //   - Provider "nvidia", Model "z-ai/glm-5.1" -> ("nvidia", "z-ai/glm-5.1")
 //   - Provider "openai", Model "openai/gpt-4o" -> ("openai", "openai/gpt-4o")
+//   - Provider "opencode-go", Model "opencode-go/glm-5.3-flash" ->
+//     ("opencode-go", "glm-5.3-flash")
 //   - Model "gpt-4o" -> ("openai", "gpt-4o")
 func ExtractProtocol(cfg *config.ModelConfig) (protocol, modelID string) {
 	if cfg == nil {
@@ -75,9 +77,21 @@ func ExtractProtocol(cfg *config.ModelConfig) (protocol, modelID string) {
 
 	model := strings.TrimSpace(cfg.Model)
 	if provider := strings.TrimSpace(cfg.Provider); provider != "" {
-		return NormalizeProvider(provider), model
+		protocol = NormalizeProvider(provider)
+		return protocol, normalizeExplicitModelID(protocol, model)
 	}
 	return SplitModelProviderAndID(model, "openai")
+}
+
+// normalizeExplicitModelID keeps the documented "model is sent verbatim with
+// an explicit provider" behavior for every provider except OpenCode Go. Its
+// model IDs are flat and routing depends on the vendor prefix, so a repeated
+// "opencode-go/" segment breaks both endpoint routing and upstream lookup.
+func normalizeExplicitModelID(protocol, model string) string {
+	if protocol != "opencode-go" {
+		return model
+	}
+	return normalizeOpenCodeGoModelID(model)
 }
 
 // ResolveAPIBase returns the configured API base, or the protocol default when
