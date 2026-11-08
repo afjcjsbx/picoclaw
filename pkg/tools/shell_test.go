@@ -794,6 +794,44 @@ func TestShellTool_RelativePathWithSlashAllowed(t *testing.T) {
 	}
 }
 
+// TestShellTool_SymlinkedWorkspaceRelativePathAllowed verifies that a
+// workspace reached through a symlink does not make ordinary workspace-relative
+// paths look like escapes. Candidate paths are resolved with EvalSymlinks, so
+// the workspace root must be resolved before the containment check.
+func TestShellTool_SymlinkedWorkspaceRelativePathAllowed(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	target := filepath.Join(workspace, "pkg", "textutil", "parse.go")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatalf("failed to create workspace dir: %v", err)
+	}
+	if err := os.WriteFile(target, []byte("package textutil\n"), 0o644); err != nil {
+		t.Fatalf("failed to create file: %v", err)
+	}
+
+	linkedWorkspace := filepath.Join(root, "linked-workspace")
+	if err := os.Symlink(workspace, linkedWorkspace); err != nil {
+		t.Skipf("symlinks not supported in this environment: %v", err)
+	}
+
+	tool, err := NewExecTool(linkedWorkspace, true)
+	if err != nil {
+		t.Fatalf("unable to configure exec tool: %s", err)
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"action":  "run",
+		"command": "cat pkg/textutil/parse.go",
+	})
+
+	if result.IsError {
+		t.Fatalf("relative path under a symlinked workspace should be allowed, got: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "package textutil") {
+		t.Fatalf("expected file output, got: %s", result.ForLLM)
+	}
+}
+
 func TestShellTool_AttachedAbsolutePathsStillBlocked(t *testing.T) {
 	tmpDir := t.TempDir()
 	tool, err := NewExecTool(tmpDir, true)
