@@ -423,17 +423,25 @@ func truncateResolvedItem(item resolvedItem, maxTokens int) resolvedItem {
 	if maxTokens < 1 {
 		maxTokens = 1
 	}
-	limit := maxTokens * 2
 	if item.message != nil {
 		msg := *item.message
-		msg.Content = truncateTextToTokens(msg.Content, maxTokens)
-		msg.ReasoningContent = truncateTextToTokens(msg.ReasoningContent, maxTokens)
+		// Split the cap across every token-bearing field. Using the full cap
+		// for content and again for reasoning can leave the item at twice the
+		// requested size even after truncation.
+		fields := messageTokenFieldCount(msg)
+		fieldBudget := maxTokens
+		if fields > 1 {
+			fieldBudget = max(1, (maxTokens-16)/fields)
+		}
+		limit := fieldBudget * 2
+		msg.Content = truncateTextToTokens(msg.Content, fieldBudget)
+		msg.ReasoningContent = truncateTextToTokens(msg.ReasoningContent, fieldBudget)
 		parts := make([]MessagePart, len(msg.Parts))
 		copy(parts, msg.Parts)
 		for i := range parts {
 			switch parts[i].Type {
 			case "text", "tool_result":
-				parts[i].Text = truncateTextToTokens(parts[i].Text, maxTokens)
+				parts[i].Text = truncateTextToTokens(parts[i].Text, fieldBudget)
 			case "tool_use":
 				if len(parts[i].Arguments) > limit {
 					parts[i].Arguments = truncatedToolArguments
@@ -453,6 +461,32 @@ func truncateResolvedItem(item resolvedItem, maxTokens int) resolvedItem {
 		item.tokenCount = sum.TokenCount
 	}
 	return item
+}
+
+func messageTokenFieldCount(msg Message) int {
+	fields := 0
+	if msg.Content != "" {
+		fields++
+	}
+	if msg.ReasoningContent != "" {
+		fields++
+	}
+	for _, part := range msg.Parts {
+		switch part.Type {
+		case "text", "tool_result":
+			if part.Text != "" {
+				fields++
+			}
+		case "tool_use":
+			if part.Arguments != "" {
+				fields++
+			}
+		}
+	}
+	if fields == 0 {
+		fields = 1
+	}
+	return fields
 }
 
 // resolveItem loads the full message or summary for a context item.

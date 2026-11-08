@@ -218,6 +218,25 @@ func TestTruncateResolvedItemShrinksAllTokenBearingFields(t *testing.T) {
 	}
 }
 
+func TestTruncateResolvedItemSplitsBudgetAcrossFields(t *testing.T) {
+	original := Message{
+		Role:             "assistant",
+		Content:          strings.Repeat("content ", 1000),
+		ReasoningContent: strings.Repeat("reasoning ", 1000),
+		Parts: []MessagePart{
+			{Type: "text", Text: strings.Repeat("text ", 1000)},
+			{Type: "tool_use", Name: "search", Arguments: `{"query":"` + strings.Repeat("q", 2000) + `"}`},
+		},
+	}
+	item := truncateResolvedItem(resolvedItem{message: &original}, 100)
+	if item.tokenCount > 100 {
+		t.Fatalf("truncated token count = %d, want <= 100", item.tokenCount)
+	}
+	if want := EstimateMessageTokens(*item.message); item.tokenCount != want {
+		t.Fatalf("tokenCount = %d, want estimate %d", item.tokenCount, want)
+	}
+}
+
 func TestAssemblerReportsEvictionMetrics(t *testing.T) {
 	s, convID := setupAssemblerStore(t)
 	ctx := context.Background()
