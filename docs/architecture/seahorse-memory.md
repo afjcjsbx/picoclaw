@@ -541,9 +541,8 @@ SQLite:
 
 1. Ignore and stateless sessions return immediately.
 2. Empty JSONL invalidates the stored conversation: summaries and context are
-   removed, and the conversation row is kept. The agent adapter currently
-   returns before calling `Bootstrap` for an empty history, so this path runs
-   only for direct callers (see Known gaps).
+   removed, and the conversation row is kept. A failed history read is not
+   treated as empty, so transient JSONL errors do not delete SQLite state.
 3. Get or create the conversation.
 4. Read up to `len(jsonlMessages) + 1` database messages, oldest first. The
    extra row detects a database tail that is longer than the canonical JSONL.
@@ -1690,73 +1689,68 @@ can decide whether they matter for a deployment.
     Ingest has no idempotency key. Calling it twice with the same messages
     creates duplicates. The agent calls it once per persisted message, but a
     retry or a manual import would duplicate.
-16. **Empty JSONL still leaves stale rows through the adapter.**
-    `Engine.Bootstrap` invalidates stored state for an empty history, but
-    `bootstrapSession` returns before calling it, so a session whose JSONL was
-    cleared or deleted keeps its old messages and summaries in SQLite.
-
 ### Compaction
 
-17. **Young sessions do not compact.**
+16. **Young sessions do not compact.**
     The fresh tail is 32 context items. Until a session has more than 32 items,
     the evictable region is empty and leaf compaction does nothing.
-18. **Contiguity requirements can block leaf compaction.**
+17. **Contiguity requirements can block leaf compaction.**
     A single huge message, an interleaved summary, or fewer than 8 messages in
     the evictable region makes the pass return `nil`.
-19. **Leaf and condensed selection are asymmetric.**
+18. **Leaf and condensed selection are asymmetric.**
     Leaf requires a contiguous message run. Condensed first requires the context
     to start with a contiguous same-depth summary run, then falls back to
     non-contiguous depth grouping.
-20. **`TokensSaved` is incomplete.**
+19. **`TokensSaved` is incomplete.**
     `Engine.Compact` measures the baseline after the leaf pass, so leaf savings
     are not counted. `CompactUntilUnder` never sets it.
-21. **Manual compaction can be silently skipped.**
+20. **Manual compaction can be silently skipped.**
     If an async condensed loop is running, `CompactNow` skips its condensed
     phase and may report "Nothing to compact yet."
-22. **`ContextThreshold` is mostly dead.**
+21. **`ContextThreshold` is mostly dead.**
     The agent always passes a budget, and `CompactInput` no longer exposes a
     context window, so `NeedsCompaction` has no internal caller.
-23. **Async condensed results are not announced.**
+22. **Async condensed results are not announced.**
     `agent.session.summarize` and the channel notice are emitted before the
     background loop finishes, so background condensed summaries are omitted
     from both.
-24. **`MaxExpandTokens` is unused.**
+23. **`MaxExpandTokens` is unused.**
     Expansion has no token cap.
 
 ### Startup, multi-agent, and lifecycle
 
-25. **Only the default agent's sessions are bootstrapped.**
+24. **Only the default agent's sessions are bootstrapped.**
     Pre-existing history of routed agents is never imported.
-26. **The database lives in the default agent's workspace.**
+25. **The database lives in the default agent's workspace.**
     Changing the default agent or its workspace changes the database location.
-27. **`context_manager_config` is ignored.**
+26. **`context_manager_config` is ignored.**
     Database path, ignore patterns, and stateless patterns cannot be configured.
-28. **A factory failure falls back to legacy with only a warning.**
+27. **A factory failure falls back to legacy with only a warning.**
     Corrupt or unreadable databases do not stop the gateway.
-29. **Hot reload does not rebuild the manager.**
+28. **Hot reload does not rebuild the manager.**
     Provider, model, config, and session-store references stay stale, and the
     retrieval tools disappear from the new registry.
-30. **Async compaction outlives the turn.**
+29. **Async compaction outlives the turn.**
     It uses `shutdownCtx`. `Close` cancels but does not wait, so a database close
     can race with a running condensed loop.
-31. **`summaries.model` is never populated.**
+30. **`summaries.model` is never populated.**
     There is no record of which model produced a summary.
-32. **The compaction event miscounts.**
+31. **The compaction event miscounts.**
     `agent.session.summarize` sets `SummarizedMessages` to the number of
     summaries, not messages.
 
 ### Storage and maintenance
 
-33. **Compaction does not reclaim disk.**
+32. **Compaction does not reclaim disk.**
     Raw messages and all summaries are retained. Only pruning deletes data.
-34. **Trigram availability is effectively required.**
+33. **Trigram availability is effectively required.**
     A missing trigram tokenizer logs a warning, then schema creation fails and
     the runtime falls back to legacy.
-35. **No encryption and no restrictive file mode.**
+34. **No encryption and no restrictive file mode.**
     The database is readable by anyone who can read the workspace.
-36. **`DBFileSize` ignores `-shm`.**
+35. **`DBFileSize` ignores `-shm`.**
     Size reports can undercount transient shared-memory files.
-37. **Empty conversation rows are never pruned.**
+36. **Empty conversation rows are never pruned.**
     `Assemble` and `Compact` create a `conversations` row before any message
     exists. The row has no timestamp for pruning to use, so it is treated as
     undated, is never selected, and still counts toward `max_sessions`.

@@ -1324,6 +1324,42 @@ func newPruneTestManager(t *testing.T) (*seahorseContextManager, *session.JSONLB
 	return mgr, backend
 }
 
+func TestSeahorseBootstrapSessionInvalidatesEmptyHistory(t *testing.T) {
+	mgr, backend := newPruneTestManager(t)
+	ctx := context.Background()
+	const sessionKey = "agent:main:empty-history"
+
+	if err := backend.AddMessage(ctx, sessionKey, "user", "stale message"); err != nil {
+		t.Fatalf("AddMessage: %v", err)
+	}
+	if err := mgr.Ingest(ctx, &IngestRequest{
+		SessionKey: sessionKey,
+		Message:    providers.Message{Role: "user", Content: "stale message"},
+	}); err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	before, err := mgr.ContextTokens(ctx, sessionKey)
+	if err != nil {
+		t.Fatalf("ContextTokens before: %v", err)
+	}
+	if before == 0 {
+		t.Fatal("expected stored context before clearing history")
+	}
+
+	if err = backend.SetHistory(ctx, sessionKey, []providers.Message{}); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
+	mgr.bootstrapSession(ctx, sessionKey)
+
+	after, err := mgr.ContextTokens(ctx, sessionKey)
+	if err != nil {
+		t.Fatalf("ContextTokens after: %v", err)
+	}
+	if after != 0 {
+		t.Fatalf("context tokens after empty bootstrap = %d, want 0", after)
+	}
+}
+
 func waitForSessionCount(t *testing.T, backend *session.JSONLBackend, want int) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)

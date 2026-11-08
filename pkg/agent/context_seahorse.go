@@ -443,14 +443,15 @@ func (m *seahorseContextManager) bootstrapSession(ctx context.Context, sessionKe
 
 	history, err := m.sessions.GetHistory(ctx, sessionKey)
 	if err != nil {
+		// Do not treat a read failure as an empty history: that would delete
+		// SQLite state while the canonical JSONL may still exist.
 		warnSessionStoreError(sessionKey, "get history", err)
-		history = nil
-	}
-	if len(history) == 0 {
 		return
 	}
 
-	// Convert provider messages to seahorse messages
+	// Convert provider messages to seahorse messages. An empty history is
+	// passed through on purpose: Bootstrap treats it as a cleared session and
+	// invalidates stale SQLite rows.
 	provider := m.providerForSession(sessionKey)
 	msgs := make([]seahorse.Message, len(history))
 	for i, h := range history {
