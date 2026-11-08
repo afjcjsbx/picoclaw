@@ -59,8 +59,6 @@ type AssembleResult struct {
 	GapCount        int `json:"gapCount"`
 }
 
-const numSessionShards = 256
-
 // Engine is the main short-term memory engine.
 type Engine struct {
 	store             *Store
@@ -73,9 +71,6 @@ type Engine struct {
 	complete          CompleteFn
 	ignorePatterns    []*regexp.Regexp
 	statelessPatterns []*regexp.Regexp
-	sessionShards     [numSessionShards]struct {
-		mu sync.Mutex
-	}
 
 	locksOnce         sync.Once
 	conversationLocks *conversationLocks
@@ -286,23 +281,6 @@ func (e *Engine) isStatelessSession(sessionKey string) bool {
 		}
 	}
 	return false
-}
-
-// fnv32 computes FNV-1a 32-bit hash for session key sharding.
-func fnv32(key string) uint32 {
-	h := uint32(2166136261)
-	for _, c := range key {
-		h ^= uint32(c)
-		h *= 16777619
-	}
-	return h
-}
-
-// getSessionMutex returns the sharded mutex for a session key.
-func (e *Engine) getSessionMutex(sessionKey string) *sync.Mutex {
-	h := fnv32(sessionKey)
-	shard := h % numSessionShards
-	return &e.sessionShards[shard].mu
 }
 
 // Ingest adds messages to a conversation identified by sessionKey.

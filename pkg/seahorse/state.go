@@ -14,8 +14,8 @@ var ErrStaleCandidates = errors.New("seahorse: compaction candidates are stale")
 // the configured prompt budget.
 var ErrContextBudgetExceeded = errors.New("seahorse: context budget exceeded")
 
-// conversationLocks is a keyed mutex manager. Unlike the fixed sharded mutexes
-// used by the ingestion hot path, this manager is keyed by conversation ID and
+// conversationLocks is a keyed mutex manager. Unlike a single global mutex,
+// this manager is keyed by conversation ID and
 // can therefore be shared by all write paths (ingest, bootstrap, clear, delete,
 // compaction). Entries are reference counted and removed when unused, so long
 // lived processes do not accumulate one mutex per ever-seen conversation.

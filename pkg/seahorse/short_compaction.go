@@ -17,10 +17,7 @@ import (
 // CompactInput controls compaction behavior.
 type CompactInput struct {
 	Budget *int // Token budget override
-	// ContextWindow is only used when Budget is nil; it applies
-	// ContextThreshold to derive a target.
-	ContextWindow int
-	Force         bool // Force compaction even if below threshold
+	Force  bool // Force compaction even if below threshold
 	// ProtectTailMessages is the number of newest messages that must stay
 	// verbatim. The agent sets it to the active turn's persisted message count
 	// so compaction can never fold the instructions being worked on.
@@ -92,21 +89,8 @@ func (e *CompactionEngine) Compact(
 				},
 			)
 		}
-	} else if input.ContextWindow > 0 {
-		// Direct engine callers that do not have a precomputed budget can still
-		// use the documented threshold semantics.
-		needed, err := e.NeedsCompaction(ctx, convID, input.ContextWindow)
-		if err != nil {
-			return nil, err
-		}
-		if needed {
-			budget = int(float64(input.ContextWindow) * ContextThreshold)
-		} else {
-			budget = tokensBefore
-		}
 	} else {
-		// No target means no automatic condensed pass. The previous fallback
-		// compared tokens with 75% of themselves, which was always true.
+		// No target means no automatic condensed pass.
 		budget = tokensBefore
 	}
 
