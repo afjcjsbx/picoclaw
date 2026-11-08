@@ -1663,6 +1663,8 @@ func TestQuotedTelegramMediaRefs_QuotedDocumentDownloadFailureReported(t *testin
 
 	assert.Empty(t, refs)
 	assert.Equal(t, []string{"file"}, failed)
+}
+
 func TestHandleMessage_GroupMentionOnly_ReplyToOwnBotMessageTriggers(t *testing.T) {
 	ch, messageBus := newGroupMentionOnlyChannel(t, "testbot")
 
