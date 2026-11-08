@@ -1,9 +1,9 @@
 package seahorse
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
-	"io"
 	"os"
 	"strings"
 
@@ -232,9 +232,10 @@ func runSchema(db *sql.DB) error {
 	return nil
 }
 
-// backupBeforeMigration copies an existing database to <path>.bak once, before
-// a schema upgrade. A failed copy aborts startup rather than migrating without
-// a recoverable snapshot.
+// backupBeforeMigration writes a consistent snapshot to <path>.bak before a
+// schema upgrade. VACUUM INTO includes committed WAL pages, unlike a raw copy
+// of the main database file. A failed snapshot aborts startup rather than
+// migrating without a recoverable backup.
 func backupBeforeMigration(db *sql.DB, path string) error {
 	if path == "" || path == ":memory:" || strings.HasPrefix(path, "file::memory:") {
 		return nil
@@ -256,20 +257,29 @@ func backupBeforeMigration(db *sql.DB, path string) error {
 	if info.Size() == 0 {
 		return nil
 	}
-	src, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer src.Close()
-	dst, err := os.Create(path + ".bak")
-	if err != nil {
-		return err
-	}
-	defer dst.Close()
-	if _, err := io.Copy(dst, src); err != nil {
+
+	backupPath := path + ".bak"
+	tmpPath := backupPath + ".tmp"
+	_ = os.Remove(tmpPath)
+	if _, err := db.ExecContext(context.Background(), "VACUUM INTO ?", tmpPath); err != nil {
+		_ = os.Remove(tmpPath)
 		return fmt.Errorf("backup database: %w", err)
 	}
-	return dst.Sync()
+	if err := os.Chmod(tmpPath, 0o600); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("secure backup database: %w", err)
+	}
+	// Windows cannot rename over an existing file, so remove the previous
+	// snapshot only after the new one has been written successfully.
+	if err := os.Remove(backupPath); err != nil && !os.IsNotExist(err) {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("replace backup database: %w", err)
+	}
+	if err := os.Rename(tmpPath, backupPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("commit backup database: %w", err)
+	}
+	return nil
 }
 
 func ensureConversationsVersionColumn(db *sql.DB) error {

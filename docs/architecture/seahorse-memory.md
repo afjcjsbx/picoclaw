@@ -312,10 +312,10 @@ migrations:
 7. Rebuild a legacy `summaries_fts` table to the external-content form with
    `summaries.rowid` as `rowid`.
 
-Before a version upgrade, `NewEngine` copies the database to `<db>.bak`. The
-copy is a raw copy of the main database file: it does not checkpoint or include
-the `-wal` file, so use the manual backup procedure below for a consistent
-snapshot.
+Before a version upgrade, `NewEngine` writes a consistent snapshot to
+`<db>.bak` with `VACUUM INTO`. The snapshot includes committed WAL pages and is
+created with mode `0600`; the previous backup is replaced only after the new
+one succeeds.
 
 The two FTS rebuilds are full index rebuilds and can be expensive on a large
 database. They run synchronously at startup.

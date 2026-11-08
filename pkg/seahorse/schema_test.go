@@ -3,6 +3,8 @@ package seahorse
 import (
 	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -31,6 +33,46 @@ func openTestDB(t *testing.T) *sql.DB {
 	}
 	t.Cleanup(func() { db.Close() })
 	return db
+}
+
+func TestBackupBeforeMigrationIncludesWAL(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "seahorse.db")
+	db, err := sql.Open("sqlite", sqliteDSN(path))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	if _, err := db.Exec("PRAGMA journal_mode = WAL"); err != nil {
+		t.Fatalf("enable WAL: %v", err)
+	}
+	if _, err := db.Exec("PRAGMA wal_autocheckpoint = 0"); err != nil {
+		t.Fatalf("disable autocheckpoint: %v", err)
+	}
+	if _, err := db.Exec("CREATE TABLE marker (value TEXT)"); err != nil {
+		t.Fatalf("create table: %v", err)
+	}
+	if _, err := db.Exec("INSERT INTO marker (value) VALUES ('committed in WAL')"); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	_ = os.Remove(path + ".bak")
+
+	if err := backupBeforeMigration(db, path); err != nil {
+		t.Fatalf("backupBeforeMigration: %v", err)
+	}
+	backup, err := sql.Open("sqlite", path+".bak")
+	if err != nil {
+		t.Fatalf("open backup: %v", err)
+	}
+	defer backup.Close()
+	var value string
+	if err := backup.QueryRow("SELECT value FROM marker").Scan(&value); err != nil {
+		t.Fatalf("read backup: %v", err)
+	}
+	if value != "committed in WAL" {
+		t.Fatalf("backup value = %q, want %q", value, "committed in WAL")
+	}
 }
 
 func TestRunMigrations(t *testing.T) {
