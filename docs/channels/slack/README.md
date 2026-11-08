@@ -1,4 +1,7 @@
-> Back to [README](../../../README.md)
+---
+description: "Slack is a leading enterprise instant messaging platform. PicoClaw uses Slack's Socket Mode for real-time bidirectional communication."
+---
+> Back to [README](https://github.com/afjcjsbx/picoclaw/blob/main/README.md)
 
 # Slack
 

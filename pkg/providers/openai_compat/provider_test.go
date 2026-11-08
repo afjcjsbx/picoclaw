@@ -20,6 +20,36 @@ import (
 	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
 )
 
+func TestReplaysReasoningContent(t *testing.T) {
+	tests := []struct {
+		name         string
+		providerName string
+		apiBase      string
+		want         bool
+	}{
+		{
+			name:         "opencode-go strips",
+			providerName: "opencode-go",
+			apiBase:      "https://opencode.ai/inference/go/openai/v1",
+			want:         false,
+		},
+		{name: "openai strips", providerName: "openai", apiBase: "https://api.openai.com/v1", want: false},
+		{name: "deepseek replays", providerName: "deepseek", apiBase: "https://api.deepseek.com", want: true},
+		{name: "deepseek host replays", providerName: "", apiBase: "https://api.deepseek.com/v1", want: true},
+		{name: "mimo replays", providerName: "mimo", apiBase: "https://api.xiaomimimo.com", want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewProvider("key", tt.apiBase, "")
+			p.SetProviderName(tt.providerName)
+			if got := p.ReplaysReasoningContent(); got != tt.want {
+				t.Fatalf("ReplaysReasoningContent() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestOpenAIProviderUsesResponsesAPI(t *testing.T) {
 	var requestBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -18,15 +18,19 @@ const (
 
 // Message represents a single chat message with role and content.
 type Message struct {
-	ID               int64         `json:"id"`
-	ConversationID   int64         `json:"conversationId"`
-	Role             string        `json:"role"`
-	Content          string        `json:"content"`
-	ModelName        string        `json:"modelName,omitempty"`
-	ReasoningContent string        `json:"reasoningContent,omitempty"`
-	TokenCount       int           `json:"tokenCount"`
-	CreatedAt        time.Time     `json:"createdAt"`
-	Parts            []MessagePart `json:"parts,omitempty"`
+	ID               int64     `json:"id"`
+	ConversationID   int64     `json:"conversationId"`
+	Role             string    `json:"role"`
+	Content          string    `json:"content"`
+	ModelName        string    `json:"modelName,omitempty"`
+	ReasoningContent string    `json:"reasoningContent,omitempty"`
+	TokenCount       int       `json:"tokenCount"`
+	CreatedAt        time.Time `json:"createdAt"`
+	// ExternalID is an optional stable identifier supplied by the canonical
+	// source (for example a JSONL position plus content hash). It makes a
+	// rebuild idempotent when the same history is ingested more than once.
+	ExternalID string        `json:"externalId,omitempty"`
+	Parts      []MessagePart `json:"parts,omitempty"`
 }
 
 // MessagePart holds structured content (tool calls, media, etc.)
@@ -72,6 +76,11 @@ type Conversation struct {
 	SessionKey     string    `json:"sessionKey"`
 	CreatedAt      time.Time `json:"createdAt"`
 	UpdatedAt      time.Time `json:"updatedAt"`
+	// Version is the context generation. It is incremented only by structural
+	// context mutations (compaction, rebuild, clear) and is used by compaction
+	// apply operations to detect stale candidate sets without holding a lock
+	// across the LLM call.
+	Version int64 `json:"version"`
 }
 
 // SessionStatus contains status information for a session.

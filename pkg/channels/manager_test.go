@@ -3583,15 +3583,13 @@ func TestManager_SendPlaceholder(t *testing.T) {
 // SetTurnUsage is not part of the bus.Streamer interface).
 type turnUsageTrackingStreamer struct {
 	mockStreamer
-	inputTokens  int
-	outputTokens int
-	usageCalls   int
+	usage      bus.TokenUsage
+	usageCalls int
 }
 
-func (m *turnUsageTrackingStreamer) SetTurnUsage(inputTokens, outputTokens int) {
+func (m *turnUsageTrackingStreamer) SetTurnUsage(usage bus.TokenUsage) {
 	m.usageCalls++
-	m.inputTokens = inputTokens
-	m.outputTokens = outputTokens
+	m.usage = usage
 }
 
 func TestFinalizeHookStreamerForwardsTurnUsage(t *testing.T) {
@@ -3602,13 +3600,20 @@ func TestFinalizeHookStreamerForwardsTurnUsage(t *testing.T) {
 	if !ok {
 		t.Fatal("finalizeHookStreamer does not satisfy turnUsageStreamer")
 	}
-	setter.SetTurnUsage(1234, 567)
+	setter.SetTurnUsage(bus.TokenUsage{
+		InputTokens:   1234,
+		OutputTokens:  567,
+		TotalTokens:   1801,
+		Requests:      3,
+		ContextTokens: 1200,
+	})
 
 	if inner.usageCalls != 1 {
 		t.Fatalf("inner SetTurnUsage calls = %d, want 1", inner.usageCalls)
 	}
-	if inner.inputTokens != 1234 || inner.outputTokens != 567 {
-		t.Errorf("inner usage = (%d, %d), want (1234, 567)", inner.inputTokens, inner.outputTokens)
+	if inner.usage.InputTokens != 1234 || inner.usage.OutputTokens != 567 ||
+		inner.usage.Requests != 3 || inner.usage.ContextTokens != 1200 {
+		t.Errorf("inner usage = %+v, want input=1234 output=567 requests=3 context=1200", inner.usage)
 	}
 }
 
@@ -3620,13 +3625,20 @@ func TestSplitMarkerStreamerForwardsTurnUsage(t *testing.T) {
 	if !ok {
 		t.Fatal("splitMarkerStreamer does not satisfy turnUsageStreamer")
 	}
-	setter.SetTurnUsage(1234, 567)
+	setter.SetTurnUsage(bus.TokenUsage{
+		InputTokens:   1234,
+		OutputTokens:  567,
+		TotalTokens:   1801,
+		Requests:      3,
+		ContextTokens: 1200,
+	})
 
 	if inner.usageCalls != 1 {
 		t.Fatalf("inner SetTurnUsage calls = %d, want 1", inner.usageCalls)
 	}
-	if inner.inputTokens != 1234 || inner.outputTokens != 567 {
-		t.Errorf("inner usage = (%d, %d), want (1234, 567)", inner.inputTokens, inner.outputTokens)
+	if inner.usage.InputTokens != 1234 || inner.usage.OutputTokens != 567 ||
+		inner.usage.Requests != 3 || inner.usage.ContextTokens != 1200 {
+		t.Errorf("inner usage = %+v, want input=1234 output=567 requests=3 context=1200", inner.usage)
 	}
 }
 

@@ -1,3 +1,6 @@
+---
+description: "Task-oriented PicoClaw guides: Docker and quick start, Web UI, Android Termux, configuration, providers, chat apps, hardware compatibility, background tasks."
+---
 # Guides
 
 Task-oriented guides for setup, configuration, and common PicoClaw workflows.

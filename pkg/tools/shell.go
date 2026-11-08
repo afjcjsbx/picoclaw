@@ -63,6 +63,7 @@ type ExecTool struct {
 	workingDir           string
 	timeout              time.Duration
 	denyPatterns         []*regexp.Regexp
+	customDenyPatterns   []*regexp.Regexp
 	allowPatterns        []*regexp.Regexp
 	customAllowPatterns  []*regexp.Regexp
 	allowedPathPatterns  []*regexp.Regexp
@@ -174,6 +175,7 @@ func NewExecToolWithConfig(
 	allowPaths ...[]*regexp.Regexp,
 ) (*ExecTool, error) {
 	denyPatterns := make([]*regexp.Regexp, 0)
+	customDenyPatterns := make([]*regexp.Regexp, 0)
 	customAllowPatterns := make([]*regexp.Regexp, 0)
 	var allowedPathPatterns []*regexp.Regexp
 	allowRemote := true
@@ -199,7 +201,7 @@ func NewExecToolWithConfig(
 					if err != nil {
 						return nil, fmt.Errorf("invalid custom deny pattern %q: %w", pattern, err)
 					}
-					denyPatterns = append(denyPatterns, re)
+					customDenyPatterns = append(customDenyPatterns, re)
 				}
 			}
 		} else {
@@ -236,6 +238,7 @@ func NewExecToolWithConfig(
 		workingDir:           workingDir,
 		timeout:              timeout,
 		denyPatterns:         denyPatterns,
+		customDenyPatterns:   customDenyPatterns,
 		allowPatterns:        nil,
 		customAllowPatterns:  customAllowPatterns,
 		allowedPathPatterns:  allowedPathPatterns,
@@ -1506,16 +1509,34 @@ func (t *ExecTool) commandMatchesAllowPattern(lower string) bool {
 	return false
 }
 
+func (t *ExecTool) commandMatchesCustomAllowPattern(lower string) bool {
+	for _, pattern := range t.customAllowPatterns {
+		if pattern.MatchString(lower) {
+			return true
+		}
+	}
+	return false
+}
+
 func (t *ExecTool) guardCommand(command, cwd string) string {
 	cmd := strings.TrimSpace(command)
 	lower := strings.ToLower(cmd)
 
-	// Deny patterns always apply, even when a command matches a custom allow rule.
-	// Custom allow rules can permit a command, but must not disable secret-safety
-	// deny rules such as jq env access checks (#3079).
-	for _, pattern := range t.denyPatterns {
+	// Custom deny patterns always apply: they are user-specified security rules
+	// that must not be bypassed by custom allow patterns (#3079).
+	for _, pattern := range t.customDenyPatterns {
 		if pattern.MatchString(lower) {
 			return "Command blocked by safety guard (dangerous pattern detected)"
+		}
+	}
+
+	// Default deny patterns can be exempted by custom allow patterns, so
+	// operators can selectively permit normally-blocked commands.
+	if !t.commandMatchesCustomAllowPattern(lower) {
+		for _, pattern := range t.denyPatterns {
+			if pattern.MatchString(lower) {
+				return "Command blocked by safety guard (dangerous pattern detected)"
+			}
 		}
 	}
 
@@ -1534,6 +1555,14 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 		cwdPath, err := filepath.Abs(cwd)
 		if err != nil {
 			return ""
+		}
+		// Resolve symlinks in the workspace root too. Candidate paths below are
+		// resolved with EvalSymlinks before the containment check, so comparing
+		// them against an unresolved root reports every relative path as an
+		// escape whenever the workspace path contains a symlink (for example
+		// /var -> /private/var on macOS, or a symlinked project directory).
+		if resolved, err := filepath.EvalSymlinks(cwdPath); err == nil {
+			cwdPath = resolved
 		}
 
 		// Web URL schemes whose path components (starting with //) should be exempt
@@ -1617,9 +1646,13 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 					}
 				}
 
-				// Check symlinks and junctions
-				resolved, err := filepath.EvalSymlinks(p)
-				if err == nil {
+				// Check symlinks and junctions. EvalSymlinks fails when the
+				// final component does not exist, so fall back to the nearest
+				// existing ancestor. Without the fallback, a new file created
+				// through a symlinked directory keeps its lexical workspace
+				// path and passes the containment check even though the write
+				// lands outside the workspace.
+				if resolved, resolveErr := fstools.ResolvePathAgainstExistingAncestor(p); resolveErr == nil {
 					p = resolved
 				}
 

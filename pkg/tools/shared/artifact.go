@@ -12,11 +12,12 @@ import (
 // <workspace>/.artifacts/mcp and <workspace>/.artifacts/tool) are pruned on
 // write so a long-lived process cannot grow them without bound.
 const (
-	// DefaultArtifactMaxAge is the maximum age of an artifact file before it is
-	// pruned.
+	// DefaultArtifactMaxAge is the default maximum age of an artifact file
+	// before it is pruned. SetArtifactRetention overrides it.
 	DefaultArtifactMaxAge = 24 * time.Hour
-	// DefaultArtifactMaxFiles is the maximum number of files kept per artifact
-	// directory once age-based pruning has run.
+	// DefaultArtifactMaxFiles is the default maximum number of files kept per
+	// artifact directory once age-based pruning has run. SetArtifactRetention
+	// overrides it.
 	DefaultArtifactMaxFiles = 128
 )
 
@@ -25,7 +26,8 @@ const (
 	// can happen several times per turn, and each scan reads every entry.
 	artifactPruneMinInterval = time.Minute
 	// artifactPruneMaxWrites forces a scan after this many unpruned writes, so
-	// a burst cannot grow the directory far past DefaultArtifactMaxFiles.
+	// a burst cannot grow the directory far past the configured max-files
+	// bound.
 	artifactPruneMaxWrites = 8
 )
 
@@ -36,6 +38,30 @@ type artifactPruneState struct {
 }
 
 var artifactPruneStates sync.Map // dir -> *artifactPruneState
+
+var (
+	artifactRetentionMu sync.RWMutex
+	artifactMaxAge      = DefaultArtifactMaxAge
+	artifactMaxFiles    = DefaultArtifactMaxFiles
+)
+
+// SetArtifactRetention configures how long artifact files are kept and how
+// many are kept per directory. A non-positive maxAge disables age-based
+// pruning; a non-positive maxFiles disables the count bound. The defaults are
+// DefaultArtifactMaxAge and DefaultArtifactMaxFiles.
+func SetArtifactRetention(maxAge time.Duration, maxFiles int) {
+	artifactRetentionMu.Lock()
+	defer artifactRetentionMu.Unlock()
+	artifactMaxAge = maxAge
+	artifactMaxFiles = maxFiles
+}
+
+// ArtifactRetention returns the active artifact retention policy.
+func ArtifactRetention() (maxAge time.Duration, maxFiles int) {
+	artifactRetentionMu.RLock()
+	defer artifactRetentionMu.RUnlock()
+	return artifactMaxAge, artifactMaxFiles
+}
 
 // pruneArtifactsAfterWrite prunes dir at most once per interval, or after a
 // burst of writes, instead of rescanning it on every single spill.
@@ -55,7 +81,8 @@ func pruneArtifactsAfterWrite(dir string) {
 	state.writes = 0
 	state.mu.Unlock()
 
-	PruneArtifacts(dir, DefaultArtifactMaxAge, DefaultArtifactMaxFiles)
+	maxAge, maxFiles := ArtifactRetention()
+	PruneArtifacts(dir, maxAge, maxFiles)
 }
 
 // PersistTextArtifact writes text to a new file in dir using the given

@@ -1,6 +1,10 @@
+---
+lang: zh
+description: "PicoClaw 运行时的 Session 系统如何完成以下事情：Pkg/session、pkg/memory 和 pkg/agent 中的核心运行时链路。 它不讨论 web/backend/middleware 中 launcher 登录 Cookie 或 dashboard 鉴权 session。"
+---
 # Session 系统
 
-> 返回 [README](../README.md)
+> 返回 [README](../)
 
 本文说明 PicoClaw 运行时的 Session 系统如何完成以下事情：
 

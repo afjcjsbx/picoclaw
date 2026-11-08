@@ -49,7 +49,7 @@ func (al *AgentLoop) ProcessDirectWithChannel(
 		return "", err
 	}
 	if err := al.ensureMCPInitialized(ctx); err != nil {
-		return "", err
+		al.warnMCPInitFailure(err)
 	}
 
 	senderID := "direct"
@@ -80,7 +80,7 @@ func (al *AgentLoop) ProcessHeartbeat(
 		return "", err
 	}
 	if err := al.ensureMCPInitialized(ctx); err != nil {
-		return "", err
+		al.warnMCPInitFailure(err)
 	}
 
 	agent := al.GetRegistry().GetDefaultAgent()

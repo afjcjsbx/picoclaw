@@ -448,8 +448,10 @@ func (p *streamingChunkPublisher) Finalize(ctx context.Context, content string, 
 		setter.SetModelName(p.modelName)
 	}
 	if usage := p.ts.GetTurnUsage(); usage != nil {
-		if setter, ok := p.streamer.(interface{ SetTurnUsage(in, out int) }); ok {
-			setter.SetTurnUsage(usage.PromptTokens, usage.CompletionTokens)
+		if tokenUsage := tokenUsageFromProviders(usage); tokenUsage != nil {
+			if setter, ok := p.streamer.(interface{ SetTurnUsage(usage bus.TokenUsage) }); ok {
+				setter.SetTurnUsage(*tokenUsage)
+			}
 		}
 	}
 	var err error

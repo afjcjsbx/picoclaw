@@ -35,7 +35,11 @@ type resolvedItem struct {
 //  2. Split into evictable prefix + protected fresh tail
 //  3. If evictable fits in remaining budget → include all
 //  4. Else walk evictable from newest to oldest, keep while fits
-func (a *Assembler) Assemble(ctx context.Context, convID int64, input AssembleInput) (*AssembleResult, error) {
+func (a *Assembler) Assemble(
+	ctx context.Context,
+	convID int64,
+	input AssembleInput,
+) (*AssembleResult, error) {
 	items, err := a.store.GetContextItems(ctx, convID)
 	if err != nil {
 		return nil, fmt.Errorf("get context items: %w", err)
@@ -54,31 +58,69 @@ func (a *Assembler) Assemble(ctx context.Context, convID int64, input AssembleIn
 		resolved[i] = r
 	}
 
-	// Split into evictable prefix and protected fresh tail
+	// Split into evictable prefix and protected fresh tail. The latest user
+	// instruction is never evictable, even when more than FreshTailCount items
+	// follow it: losing it mid-turn is worse than losing older context.
 	tailStart := len(resolved) - FreshTailCount
 	if tailStart < 0 {
 		tailStart = 0
 	}
+	if idx := lastUserMessageIndex(resolved); idx >= 0 && idx < tailStart {
+		tailStart = idx
+	}
 	evictable := resolved[:tailStart]
 	freshTail := resolved[tailStart:]
+	allTokens := 0
+	for _, r := range resolved {
+		allTokens += r.tokenCount
+	}
 
-	// Calculate fresh tail tokens
+	// Calculate fresh tail tokens. The tail has both an item-count limit and a
+	// token limit: 32 small tool results are safe, 32 giant tool results are
+	// not. Reserve most of the budget for the tail but keep the latest user turn
+	// whole when it alone is larger than the normal tail share.
 	freshTailTokens := 0
 	for _, r := range freshTail {
 		freshTailTokens += r.tokenCount
 	}
 
-	// If the protected tail alone exceeds budget, trim from the oldest end at
-	// provider-safe boundaries. The rebuild path later sanitizes leading
-	// assistant(tool_calls)/tool messages, so splitting the active turn here can
-	// silently discard the very context we are trying to protect.
-	if freshTailTokens > input.Budget {
+	// Generated summaries carry decisions that are not recoverable from the
+	// raw tail, so reserve their budget before sizing the tail. If the tail
+	// alone cannot shrink enough, the fallback below gives the reservation back.
+	summaryItems, otherEvictable := splitEvictable(evictable)
+	summaryBudget := summaryReserveBudget(input.Budget, freshTail, summaryItems)
+	selectedSummaries, reservedSummaryTokens := selectNewestFirst(summaryItems, summaryBudget)
+
+	hardCap := input.Budget
+	if hardCap < 1 {
+		hardCap = 1
+	}
+	truncatedTail := false
+	for i := range freshTail {
+		if freshTail[i].tokenCount > hardCap {
+			freshTailTokens -= freshTail[i].tokenCount
+			freshTail[i] = truncateResolvedItem(freshTail[i], hardCap)
+			freshTailTokens += freshTail[i].tokenCount
+			truncatedTail = true
+		}
+	}
+
+	tailBudget := input.Budget - reservedSummaryTokens
+	if tailBudget < 1 {
+		tailBudget = 1
+	}
+
+	if freshTailTokens > tailBudget {
 		originalTailCount := len(freshTail)
 		originalFreshTailTokens := freshTailTokens
 		var preservedActiveTurn bool
-		freshTail, freshTailTokens, preservedActiveTurn = trimFreshTailToSafeBudget(freshTail, input.Budget)
+		freshTail, freshTailTokens, preservedActiveTurn = trimFreshTailToSafeBudget(
+			freshTail,
+			tailBudget,
+		)
 		logFields := map[string]any{
 			"budget":                input.Budget,
+			"tail_budget":           tailBudget,
 			"fresh_tail_tokens":     freshTailTokens,
 			"fresh_tail_count":      len(freshTail),
 			"trimmed_fresh_items":   originalTailCount - len(freshTail),
@@ -91,37 +133,50 @@ func (a *Assembler) Assemble(ctx context.Context, convID int64, input AssembleIn
 			logger.InfoCF("seahorse", "assemble: trimmed fresh tail to safe boundary", logFields)
 		}
 	}
-	remainingBudget := input.Budget - freshTailTokens
+	if freshTailTokens > tailBudget {
+		// The active turn cannot be dropped. Shrink its largest non-user
+		// items first, then fall back to an explicit error if even the
+		// instruction itself cannot fit.
+		freshTail, freshTailTokens = shrinkActiveTurnToBudget(
+			freshTail,
+			tailBudget,
+			freshTailTokens,
+		)
+	}
+	if freshTailTokens > input.Budget {
+		return nil, fmt.Errorf("%w: fresh tail uses %d tokens, budget %d",
+			ErrContextBudgetExceeded, freshTailTokens, input.Budget)
+	}
+	if truncatedTail {
+		logger.InfoCF("seahorse", "assemble: truncated oversized tail item", map[string]any{
+			"budget": input.Budget,
+		})
+	}
+	// If the tail could not shrink to its share, return the shortfall by
+	// dropping summaries rather than overshooting the total budget.
+	availableForSummaries := max(0, input.Budget-freshTailTokens)
+	if reservedSummaryTokens > availableForSummaries {
+		selectedSummaries, reservedSummaryTokens = selectNewestFirst(summaryItems, availableForSummaries)
+	}
+	remainingBudget := input.Budget - freshTailTokens - reservedSummaryTokens
 	if remainingBudget < 0 {
 		remainingBudget = 0
 	}
 
-	var selected []resolvedItem
-	evictableTokens := 0
-	for _, r := range evictable {
-		evictableTokens += r.tokenCount
-	}
-
-	if evictableTokens <= remainingBudget {
-		// All evictable fit
-		selected = append(selected, evictable...)
-	} else {
-		// Walk from newest to oldest, keep while fits
-		var kept []resolvedItem
-		accum := 0
-		for i := len(evictable) - 1; i >= 0; i-- {
-			if accum+evictable[i].tokenCount <= remainingBudget {
-				kept = append(kept, evictable[i])
-				accum += evictable[i].tokenCount
-			} else {
-				break
-			}
-		}
-		// Reverse to restore chronological order
-		for i, j := 0, len(kept)-1; i < j; i, j = i+1, j-1 {
-			kept[i], kept[j] = kept[j], kept[i]
-		}
-		selected = append(selected, kept...)
+	// Older raw messages can use what is left after the summaries and the
+	// fresh tail. Summaries are selected first so recent tool output cannot
+	// evict generated decisions.
+	selectedOther, _ := selectNewestFirst(otherEvictable, remainingBudget)
+	selected := mergeInOriginalOrder(evictable, selectedSummaries, selectedOther)
+	gapCount := len(evictable) - len(selected)
+	if len(selectedSummaries) < len(summaryItems) {
+		logger.WarnCF("seahorse", "assemble: summaries evicted by budget", map[string]any{
+			"budget":             input.Budget,
+			"summary_budget":     summaryBudget,
+			"summary_tokens":     reservedSummaryTokens,
+			"selected_summaries": len(selectedSummaries),
+			"summary_items":      len(summaryItems),
+		})
 	}
 
 	// Combine: selected evictable + fresh tail
@@ -134,7 +189,6 @@ func (a *Assembler) Assemble(ctx context.Context, convID int64, input AssembleIn
 	totalTokens := 0
 	maxDepth := 0
 	condensedCount := 0
-
 	for _, r := range final {
 		totalTokens += r.tokenCount
 		if r.itemType == "message" && r.message != nil {
@@ -191,10 +245,16 @@ func (a *Assembler) Assemble(ctx context.Context, convID int64, input AssembleIn
 		}
 		summary += systemPromptAddition
 	}
+	summaryTokens := EstimateMessageTokens(Message{Content: summary})
 
 	return &AssembleResult{
-		Messages: messages,
-		Summary:  summary,
+		Messages:        messages,
+		Summary:         summary,
+		FreshTailTokens: freshTailTokens,
+		SummaryTokens:   summaryTokens,
+		TokensUsed:      totalTokens,
+		TokensEvicted:   allTokens - totalTokens,
+		GapCount:        gapCount,
 	}, nil
 }
 
@@ -231,6 +291,126 @@ func resolvedItemsTokenCount(items []resolvedItem) int {
 		total += item.tokenCount
 	}
 	return total
+}
+
+// splitEvictable separates generated summaries from raw messages so summaries
+// can be selected before recent tool output consumes the budget.
+func splitEvictable(items []resolvedItem) (summaries, messages []resolvedItem) {
+	for _, item := range items {
+		if item.itemType == "summary" {
+			summaries = append(summaries, item)
+		} else {
+			messages = append(messages, item)
+		}
+	}
+	return summaries, messages
+}
+
+// summaryReserveBudget caps the budget given to generated summaries. The fresh
+// tail keeps at least half the budget, or the full latest user message when it
+// is larger, so a large summary cannot starve the active instruction or its
+// newest tool results.
+func summaryReserveBudget(budget int, tail, summaries []resolvedItem) int {
+	if budget < 1 || len(summaries) == 0 {
+		return 0
+	}
+	minTail := max(1, budget/2)
+	if idx := lastUserMessageIndex(tail); idx >= 0 {
+		minTail = max(minTail, tail[idx].tokenCount)
+	}
+	if minTail > budget {
+		minTail = budget
+	}
+	return min(resolvedItemsTokenCount(summaries), budget-minTail)
+}
+
+// selectNewestFirst keeps the newest items that fit, skipping an oversized
+// item instead of letting it hide every older one. The result is returned in
+// chronological order.
+func selectNewestFirst(items []resolvedItem, budget int) ([]resolvedItem, int) {
+	if budget <= 0 {
+		return nil, 0
+	}
+	kept := make([]resolvedItem, 0, len(items))
+	used := 0
+	for i := len(items) - 1; i >= 0; i-- {
+		if items[i].tokenCount > budget-used {
+			continue
+		}
+		kept = append(kept, items[i])
+		used += items[i].tokenCount
+	}
+	for i, j := 0, len(kept)-1; i < j; i, j = i+1, j-1 {
+		kept[i], kept[j] = kept[j], kept[i]
+	}
+	return kept, used
+}
+
+// mergeInOriginalOrder restores the context's chronological order after
+// summaries and raw messages have been selected independently.
+func mergeInOriginalOrder(items []resolvedItem, groups ...[]resolvedItem) []resolvedItem {
+	selected := make(map[int]struct{}, len(items))
+	for _, group := range groups {
+		for _, item := range group {
+			selected[item.ordinal] = struct{}{}
+		}
+	}
+	out := make([]resolvedItem, 0, len(selected))
+	for _, item := range items {
+		if _, ok := selected[item.ordinal]; ok {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+// shrinkActiveTurnToBudget truncates the largest non-user items in the active
+// turn until the turn fits. The user instruction is preserved whenever
+// possible; if it alone exceeds the budget it is truncated last.
+func shrinkActiveTurnToBudget(tail []resolvedItem, budget, current int) ([]resolvedItem, int) {
+	if current <= budget {
+		return tail, current
+	}
+	start := lastUserMessageIndex(tail)
+	if start < 0 {
+		start = 0
+	}
+	for current > budget {
+		largest := -1
+		for i := start; i < len(tail); i++ {
+			if tail[i].message != nil && tail[i].message.Role == "user" {
+				continue
+			}
+			if largest == -1 || tail[i].tokenCount > tail[largest].tokenCount {
+				largest = i
+			}
+		}
+		if largest == -1 {
+			// Only user messages remain.
+			for i := start; i < len(tail); i++ {
+				if largest == -1 || tail[i].tokenCount > tail[largest].tokenCount {
+					largest = i
+				}
+			}
+		}
+		if largest == -1 || tail[largest].tokenCount <= 1 {
+			break
+		}
+		excess := current - budget
+		target := tail[largest].tokenCount - excess
+		if target < 1 {
+			target = 1
+		}
+		before := tail[largest].tokenCount
+		tail[largest] = truncateResolvedItem(tail[largest], target)
+		if tail[largest].tokenCount >= before {
+			// Fixed overhead (role framing, media) can dominate the estimate;
+			// further truncation would not reduce it.
+			break
+		}
+		current += tail[largest].tokenCount - before
+	}
+	return tail, current
 }
 
 func lastUserMessageIndex(items []resolvedItem) int {
@@ -271,6 +451,110 @@ func messageHasToolUse(msg *Message) bool {
 		}
 	}
 	return false
+}
+
+// truncatedContentMarker tells the model that an item was shortened.
+const truncatedContentMarker = "\n[truncated]"
+
+// truncatedToolArguments is a valid JSON object used when a tool call's
+// arguments cannot fit the per-item budget. Raw truncation would leave invalid
+// JSON, which providers reject when replaying history.
+const truncatedToolArguments = `{"_truncated":true}`
+
+// truncateTextToTokens bounds text using the shared estimator's conservative
+// 2-characters-per-token rate. It leaves room for the marker and message
+// overhead so the estimate stays near the target instead of only being clamped
+// afterwards.
+func truncateTextToTokens(s string, maxTokens int) string {
+	if maxTokens < 1 {
+		maxTokens = 1
+	}
+	// Reserve a small amount for JSON/role overhead and the marker.
+	usableTokens := maxTokens - 16
+	if usableTokens < 1 {
+		usableTokens = 1
+	}
+	limit := usableTokens * 2
+	if len(s) <= limit {
+		return s
+	}
+	return truncateUTF8Bytes(s, limit) + truncatedContentMarker
+}
+
+// truncateResolvedItem enforces the per-item hard cap. It keeps the structure
+// (tool calls, tool-result IDs) but shortens every field that carries token
+// weight: content, reasoning, text/tool-result parts, summary text, and tool
+// arguments. The reported token count is the actual estimate of the shortened
+// item, not a clamped value, so the assembler cannot silently overshoot the
+// budget. The canonical rows in SQLite are not modified.
+func truncateResolvedItem(item resolvedItem, maxTokens int) resolvedItem {
+	if maxTokens < 1 {
+		maxTokens = 1
+	}
+	if item.message != nil {
+		msg := *item.message
+		// Split the cap across every token-bearing field. Using the full cap
+		// for content and again for reasoning can leave the item at twice the
+		// requested size even after truncation.
+		fields := messageTokenFieldCount(msg)
+		fieldBudget := maxTokens
+		if fields > 1 {
+			fieldBudget = max(1, (maxTokens-16)/fields)
+		}
+		limit := fieldBudget * 2
+		msg.Content = truncateTextToTokens(msg.Content, fieldBudget)
+		msg.ReasoningContent = truncateTextToTokens(msg.ReasoningContent, fieldBudget)
+		parts := make([]MessagePart, len(msg.Parts))
+		copy(parts, msg.Parts)
+		for i := range parts {
+			switch parts[i].Type {
+			case "text", "tool_result":
+				parts[i].Text = truncateTextToTokens(parts[i].Text, fieldBudget)
+			case "tool_use":
+				if len(parts[i].Arguments) > limit {
+					parts[i].Arguments = truncatedToolArguments
+				}
+			}
+		}
+		msg.Parts = parts
+		msg.TokenCount = EstimateMessageTokens(msg)
+		item.message = &msg
+		item.tokenCount = msg.TokenCount
+	}
+	if item.summary != nil {
+		sum := *item.summary
+		sum.Content = truncateTextToTokens(sum.Content, maxTokens)
+		sum.TokenCount = EstimateMessageTokens(Message{Content: sum.Content})
+		item.summary = &sum
+		item.tokenCount = sum.TokenCount
+	}
+	return item
+}
+
+func messageTokenFieldCount(msg Message) int {
+	fields := 0
+	if msg.Content != "" {
+		fields++
+	}
+	if msg.ReasoningContent != "" {
+		fields++
+	}
+	for _, part := range msg.Parts {
+		switch part.Type {
+		case "text", "tool_result":
+			if part.Text != "" {
+				fields++
+			}
+		case "tool_use":
+			if part.Arguments != "" {
+				fields++
+			}
+		}
+	}
+	if fields == 0 {
+		fields = 1
+	}
+	return fields
 }
 
 // resolveItem loads the full message or summary for a context item.

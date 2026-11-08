@@ -1,4 +1,7 @@
-> Back to [README](../../../README.md)
+---
+description: "Connect PicoClaw to Matrix: homeserver and access token setup, room invites, encryption database, and the full channel field reference."
+---
+> Back to [README](https://github.com/afjcjsbx/picoclaw/blob/main/README.md)
 
 # Matrix Channel Configuration Guide
 

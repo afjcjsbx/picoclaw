@@ -76,6 +76,8 @@ type sessionUsage struct {
 	CacheReadTokens     int     `json:"cache_read_tokens,omitempty"`
 	CacheCreationTokens int     `json:"cache_creation_tokens,omitempty"`
 	CostUSD             float64 `json:"cost_usd,omitempty"`
+	Requests            int     `json:"requests,omitempty"`
+	ContextTokens       int     `json:"context_tokens,omitempty"`
 }
 
 func sessionMessageUsage(usage *providers.UsageInfo) *sessionUsage {
@@ -92,6 +94,8 @@ func sessionMessageUsage(usage *providers.UsageInfo) *sessionUsage {
 		CacheReadTokens:     usage.CacheReadTokens,
 		CacheCreationTokens: usage.CacheCreationTokens,
 		CostUSD:             usage.CostUSD,
+		Requests:            usage.Requests,
+		ContextTokens:       usage.ContextTokens,
 	}
 }
 

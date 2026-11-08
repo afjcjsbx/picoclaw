@@ -1,4 +1,7 @@
-> Back to [README](../../../README.md)
+---
+description: "MaixCam is a dedicated channel for connecting to Sipeed MaixCAM and MaixCAM2 AI camera devices."
+---
+> Back to [README](https://github.com/afjcjsbx/picoclaw/blob/main/README.md)
 
 # MaixCam
 

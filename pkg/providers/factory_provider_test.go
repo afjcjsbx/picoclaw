@@ -98,6 +98,24 @@ func TestExtractProtocol(t *testing.T) {
 			wantModelID:  "qwen/qwen-plus",
 		},
 		{
+			name:         "other providers preserve self-prefixed model",
+			config:       &config.ModelConfig{Provider: "openrouter", Model: "openrouter/auto"},
+			wantProtocol: "openrouter",
+			wantModelID:  "openrouter/auto",
+		},
+		{
+			name:         "opencode-go explicit provider strips redundant prefix",
+			config:       &config.ModelConfig{Provider: "opencode-go", Model: "opencode-go/glm-5.3-flash"},
+			wantProtocol: "opencode-go",
+			wantModelID:  "glm-5.3-flash",
+		},
+		{
+			name:         "opencode-go explicit provider keeps flat model",
+			config:       &config.ModelConfig{Provider: "opencode-go", Model: "glm-5.3-flash"},
+			wantProtocol: "opencode-go",
+			wantModelID:  "glm-5.3-flash",
+		},
+		{
 			name:         "empty provider segment",
 			config:       &config.ModelConfig{Model: "/gpt-4o"},
 			wantProtocol: "openai",

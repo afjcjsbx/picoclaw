@@ -1,3 +1,6 @@
+---
+description: "The cron tool lets the agent schedule jobs. A job fires as a reminder, as a full agent turn, or, when it carries a command, as a shell command."
+---
 # Cron tool
 
 The `cron` tool lets the agent schedule jobs. A job fires as a reminder, as a full agent turn, or — when it carries a `command` — as a shell command. Jobs are stored in the current workspace; see [Scheduled tasks and cron jobs](../reference/cron.md) for schedule types, time zone handling, execution modes, and storage.
