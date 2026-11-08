@@ -442,9 +442,9 @@ func (al *AgentLoop) buildCommandsRuntime(
 			return nil
 		}
 
-		rt.CompactContext = func(focus string) (bool, error) {
+		rt.CompactContext = func(focus string, force bool) (commands.CompactOutcome, error) {
 			if opts == nil {
-				return false, fmt.Errorf("process options not available")
+				return commands.CompactOutcome{}, fmt.Errorf("process options not available")
 			}
 			// Same as /clear: the owning agent must be resolvable from the session.
 			ensureSessionMetadata(
@@ -453,17 +453,37 @@ func (al *AgentLoop) buildCommandsRuntime(
 				opts.Dispatch.SessionScope,
 				opts.Dispatch.SessionAliases,
 			)
+			before, _ := al.currentContextUsage(agent, opts.SessionKey)
+			outcome := &CompactOutcome{}
+			if before != nil {
+				outcome.TokensBefore = before.HistoryTokens
+			}
 			err := al.contextManager.Compact(ctx, &CompactRequest{
 				SessionKey:         opts.SessionKey,
 				Reason:             ContextCompressReasonManual,
 				Budget:             usableContextTokens(agent),
 				ActiveTurnMessages: al.activeTurnMessageCountForSession(opts.SessionKey),
 				Instructions:       focus,
+				Force:              force,
+				Outcome:            outcome,
 			})
-			if errors.Is(err, ErrNothingToCompact) {
-				return false, nil
+			after, _ := al.currentContextUsage(agent, opts.SessionKey)
+			if after != nil {
+				outcome.TokensAfter = after.HistoryTokens
 			}
-			return err == nil, err
+			if errors.Is(err, ErrNothingToCompact) {
+				if outcome.Reason == "" {
+					outcome.Reason = CompactReasonNoCandidates
+				}
+				return commandCompactOutcome(outcome), nil
+			}
+			if err != nil {
+				return commands.CompactOutcome{}, err
+			}
+			if outcome.Reason == "" {
+				outcome.Reason = CompactReasonCompacted
+			}
+			return commandCompactOutcome(outcome), nil
 		}
 
 		rt.GetContextStats = func() *commands.ContextStats {
@@ -523,6 +543,21 @@ func (al *AgentLoop) setPendingSkills(sessionKey string, skillNames []string) {
 	}
 
 	al.pendingSkills.Store(sessionKey, filtered)
+}
+
+func commandCompactOutcome(outcome *CompactOutcome) commands.CompactOutcome {
+	if outcome == nil {
+		return commands.CompactOutcome{}
+	}
+	return commands.CompactOutcome{
+		Compacted:          outcome.Compacted,
+		Reason:             commands.CompactReason(outcome.Reason),
+		TokensBefore:       outcome.TokensBefore,
+		TokensAfter:        outcome.TokensAfter,
+		Target:             outcome.Target,
+		LeafSummaries:      outcome.LeafSummaries,
+		CondensedSummaries: outcome.CondensedSummaries,
+	}
 }
 
 func (al *AgentLoop) takePendingSkills(sessionKey string) []string {

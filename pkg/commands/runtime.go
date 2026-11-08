@@ -47,6 +47,29 @@ type ContextStats struct {
 	MessageCount      int
 }
 
+// CompactReason explains the outcome of a manual compaction request.
+type CompactReason string
+
+const (
+	CompactReasonCompacted    CompactReason = "compacted"
+	CompactReasonBelowTarget  CompactReason = "below_target"
+	CompactReasonTooShort     CompactReason = "too_short"
+	CompactReasonNoCandidates CompactReason = "no_candidates"
+	CompactReasonInProgress   CompactReason = "in_progress"
+)
+
+// CompactOutcome reports what a manual compaction did, including why it did
+// nothing. TokensBefore and TokensAfter are assembled history token counts.
+type CompactOutcome struct {
+	Compacted          bool
+	Reason             CompactReason
+	TokensBefore       int
+	TokensAfter        int
+	Target             int
+	LeafSummaries      int
+	CondensedSummaries int
+}
+
 // StopResult describes the outcome of a stop request for the current session.
 type StopResult struct {
 	Stopped  bool
@@ -73,7 +96,7 @@ type Runtime struct {
 	SwitchModel        func(value string) (oldModel string, err error)
 	SwitchChannel      func(value string) error
 	ClearHistory       func() error
-	CompactContext     func(focus string) (compacted bool, err error) // false when nothing to summarize
+	CompactContext     func(focus string, force bool) (CompactOutcome, error)
 	ReloadConfig       func() error
 	StopActiveTurn     func() (StopResult, error)
 }

@@ -1369,3 +1369,20 @@ func TestCompactNow_NothingToCompact(t *testing.T) {
 		t.Fatalf("expected no summaries, got %+v", res)
 	}
 }
+
+func TestCompactNowReportsCondensedInProgress(t *testing.T) {
+	ce, _, convID := newTestCompactionEngine(t)
+	ctx := context.Background()
+
+	// Hold the condensed slot as an automatic loop would.
+	ce.condensing.Store(convID, struct{}{})
+	defer ce.condensing.Delete(convID)
+
+	result, err := ce.CompactNowWithBudget(ctx, convID, "", 0)
+	if err != nil {
+		t.Fatalf("CompactNowWithBudget: %v", err)
+	}
+	if !result.CondensedInProgress {
+		t.Fatalf("CondensedInProgress = false, want true: %+v", result)
+	}
+}

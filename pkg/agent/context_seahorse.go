@@ -335,25 +335,77 @@ func (m *seahorseContextManager) compactBudget(sessionKey string, budget int) in
 	return budget
 }
 
+// manualCompactNoopReason classifies a manual compaction that created no
+// summary. It reads the stored context after the leaf pass so a request that
+// was brought under the target is reported as such, not as a generic failure.
+func (m *seahorseContextManager) manualCompactNoopReason(
+	ctx context.Context,
+	req *CompactRequest,
+	result *seahorse.CompactResult,
+	budget int,
+) CompactReason {
+	if result != nil && result.CondensedInProgress {
+		return CompactReasonInProgress
+	}
+	tokens, err := m.engine.ContextTokens(ctx, req.SessionKey)
+	if err != nil {
+		return CompactReasonNoCandidates
+	}
+	if tokens == 0 {
+		return CompactReasonTooShort
+	}
+	if budget > 0 && tokens <= budget {
+		return CompactReasonBelowTarget
+	}
+	return CompactReasonNoCandidates
+}
+
 // Compact compresses conversation history via seahorse summarization.
 func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactRequest) error {
 	if req == nil {
 		return nil
 	}
 	budget := m.compactBudget(req.SessionKey, req.Budget)
+	if req.Outcome != nil {
+		req.Outcome.Target = budget
+	}
 
 	if req.Reason == ContextCompressReasonManual {
-		result, err := m.engine.CompactNowWithBudget(
-			ctx,
-			req.SessionKey,
-			req.Instructions,
-			budget,
-			req.ActiveTurnMessages,
+		var (
+			result *seahorse.CompactResult
+			err    error
 		)
+		if req.Force {
+			result, err = m.engine.CompactNow(
+				ctx,
+				req.SessionKey,
+				req.Instructions,
+				req.ActiveTurnMessages,
+			)
+		} else {
+			result, err = m.engine.CompactNowWithBudget(
+				ctx,
+				req.SessionKey,
+				req.Instructions,
+				budget,
+				req.ActiveTurnMessages,
+			)
+		}
 		if err != nil {
 			return err
 		}
-		if result.LeafSummaries+result.CondensedSummaries == 0 {
+		created := result.LeafSummaries + result.CondensedSummaries
+		if req.Outcome != nil {
+			req.Outcome.LeafSummaries = result.LeafSummaries
+			req.Outcome.CondensedSummaries = result.CondensedSummaries
+			if created > 0 {
+				req.Outcome.Compacted = true
+				req.Outcome.Reason = CompactReasonCompacted
+			} else {
+				req.Outcome.Reason = m.manualCompactNoopReason(ctx, req, result, budget)
+			}
+		}
+		if created == 0 {
 			return ErrNothingToCompact
 		}
 		m.notifyCompaction(ctx, req, result)

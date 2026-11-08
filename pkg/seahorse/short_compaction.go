@@ -30,6 +30,9 @@ type CompactResult struct {
 	TokensSaved        int      `json:"tokensSaved"`
 	LeafSummaries      int      `json:"leafSummaries"`
 	CondensedSummaries int      `json:"condensedSummaries"`
+	// CondensedInProgress is true when the manual condensed pass was skipped
+	// because another condensed loop already holds the conversation slot.
+	CondensedInProgress bool `json:"condensedInProgress,omitempty"`
 }
 
 // NeedsCompaction returns true if context tokens >= ContextThreshold × contextWindow.
@@ -172,6 +175,8 @@ func (e *CompactionEngine) CompactNowWithBudget(
 	if _, loaded := e.condensing.LoadOrStore(convID, struct{}{}); !loaded {
 		defer e.condensing.Delete(convID)
 		result.CondensedSummaries = e.runCondensedLoop(ctx, convID, instructions, budget)
+	} else {
+		result.CondensedInProgress = true
 	}
 
 	if tokensAfter, _ := e.store.GetContextTokenCount(ctx, convID); tokensAfter < tokensBefore {

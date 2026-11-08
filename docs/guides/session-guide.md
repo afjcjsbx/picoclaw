@@ -145,7 +145,9 @@ Summarization normally starts by itself, but you can trigger it from any chat ch
 
 ```text
 /compact
+/compact --force
 /compact focus on database migration
+/compact --force focus on database migration
 ```
 
 `/compact` summarizes the older part of the current session right away and keeps the most recent messages.
@@ -153,9 +155,11 @@ Any text after the command is passed to the summarizer as a hint about which det
 The command works with both the `legacy` and `seahorse` context managers and only affects the session it is sent in.
 With Seahorse, `/compact` runs one leaf pass and the condensed loop synchronously; see [Seahorse Memory](../architecture/seahorse-memory.md#compactnow-manual-compact) for the exact sequence and its edge cases.
 
-PicoClaw replies `Context compacted.` when it summarized something, or `Nothing to compact yet.` when the history is still too short.
+By default the manual command is budget-aware: if the session is already within the compaction target, PicoClaw replies with the measured history tokens and target, for example `Context already within the compaction target (3300/3327 history tokens). No new summary was needed. Use /compact --force to compact anyway.` Replies are specific for a conversation that is too short, no compactable history, or a compaction already running.
+Use `/compact --force` to ignore the target and run leaf plus condensed compaction anyway.
+On success the reply reports the created summaries and the history-token change when available.
 With the `legacy` manager, if an automatic summarization of the same session is already running, `/compact` reports that instead of starting a second one.
-With Seahorse, a running background condensed loop is skipped and the command can report `Nothing to compact yet.` even though the session is still being compacted.
+With Seahorse, a running background condensed loop is reported as `A compaction is already running. Try again shortly.`
 
 ## Common Recipes
 

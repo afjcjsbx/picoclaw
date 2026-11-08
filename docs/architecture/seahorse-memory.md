@@ -188,7 +188,7 @@ the sessions known to the default agent.
 | Method | Seahorse implementation |
 | --- | --- |
 | `Assemble` | Computes the effective budget, calls `Engine.Assemble`, converts messages back to provider messages, and returns summary XML separately |
-| `Compact` | Dispatches on `Reason`: manual uses `CompactNowWithBudget`, retry uses `CompactUntilUnder`, everything else uses `Engine.Compact` |
+| `Compact` | Dispatches on `Reason`: manual uses `CompactNowWithBudget` or `CompactNow` with `--force`; retry uses `CompactUntilUnder`; everything else uses `Engine.Compact` |
 | `Ingest` | Converts one provider message and calls `Engine.Ingest` |
 | `Clear` | Calls `Engine.ClearSession`, then clears the owning agent's JSONL history and summary |
 | `Close` | Optional method detected by the agent loop; stops the prune loop and closes the engine |
@@ -798,7 +798,7 @@ sources. It never deletes raw messages or summary rows.
 | Pre-LLM threshold | `threshold` | `pipeline_compact.go` via `CompactBeforeLLM` | `Engine.Compact`, blocking; returns `ErrNothingToCompact` if no summary |
 | Proactive budget | `proactive_budget` | `pipeline_setup.go` | `Engine.Compact` before the first LLM call if the hard budget is exceeded |
 | Overflow retry | `llm_retry` | `pipeline_llm.go` | `CompactUntilUnder(usableContextTokens)`, up to 20 iterations |
-| Manual | `manual` | `/compact` command | `CompactNowWithBudget`, leaf and condensed synchronously |
+| Manual | `manual` | `/compact [--force]` command | `CompactNowWithBudget`, leaf and condensed synchronously; `--force` ignores the target |
 
 The agent passes `Budget = ContextWindow - MaxTokens` (the usable prompt
 budget) on every automatic path. Therefore the internal 75 percent threshold is
@@ -1057,15 +1057,31 @@ Only condensed loops share this map. Leaf passes are not deduplicated.
 4. Computes `TokensSaved` across both phases.
 5. Returns counts of created leaf and condensed summaries.
 
-If an asynchronous condensed loop already holds the slot, the manual condensed
-phase is skipped. The command can then report "Nothing to compact yet" when the
-leaf pass also created nothing, even though a condensed loop is running.
+The manual command is budget-aware by default. If the stored context already
+fits the target, it reports a reason and the measured tokens instead of a
+generic failure:
 
-The agent adapter treats zero created summaries as `ErrNothingToCompact`, which
-the `/compact` command renders as "Nothing to compact yet." A successful manual
-compaction replies "Context compacted." and sends a channel notice such as
-"Compacted context: summarized 2 blocks of older messages and merged 3
-summaries into a higher-level summary to free up space."
+```text
+Context already within the compaction target (3300/3327 history tokens).
+No new summary was needed. Use /compact --force to compact anyway.
+```
+
+`/compact --force` uses `CompactNow` with a zero budget, ignoring the target and
+running the condensed loop until no further progress is possible. The command
+also distinguishes `too_short`, `no_candidates`, and `in_progress` outcomes and
+returns token/summary details on success.
+
+If an asynchronous condensed loop already holds the slot, the manual condensed
+phase is skipped and `CompactResult.CondensedInProgress` is set. The command
+then reports `A compaction is already running. Try again shortly.` instead of
+claiming there is nothing to compact.
+
+The agent adapter treats zero created summaries as `ErrNothingToCompact` and
+fills `CompactOutcome` with the reason and token counts. A successful manual
+compaction reports the created summaries and the before/after history tokens,
+and sends a channel notice such as "Compacted context: summarized 2 blocks of
+older messages and merged 3 summaries into a higher-level summary to free up
+space."
 
 ### `CompactUntilUnder` (overflow retry)
 
@@ -1533,7 +1549,7 @@ migration otherwise falls back to legacy and leaves the file in place.
 | Gateway takes minutes to become ready | Synchronous bootstrap of many large sessions | Enable pruning, reduce session count or history size |
 | `short_grep` returns nothing for a short query | Trigram FTS needs at least 3 characters; short queries use the slower unranked LIKE path | Use a longer pattern or `%..%` |
 | `short_grep` returns content from other chats | Conversation scoping is not implemented | Treat the database as process-wide; restrict access |
-| `/compact` says "Nothing to compact yet" during automatic compaction | Async condensed loop holds the dedup slot | Retry after the loop finishes |
+| `/compact` says "A compaction is already running" | Async condensed loop holds the dedup slot | Retry after the loop finishes |
 | No new summaries despite a long chat | Fewer than 8 contiguous messages outside the 32-item fresh tail, or one huge message blocking the scan | Continue the conversation; compaction will catch up |
 | Database grows despite compaction | Compaction never deletes raw rows | Enable pruning or accept the disk cost |
 | Ingest errors during a long VACUUM | Busy timeout exceeded | Increase the interval, vacuum less often, or avoid the size guard on slow storage |
@@ -1737,7 +1753,7 @@ can decide whether they matter for a deployment.
     are not counted. `CompactUntilUnder` never sets it.
 20. **Manual compaction can be silently skipped.**
     If an async condensed loop is running, `CompactNow` skips its condensed
-    phase and may report "Nothing to compact yet."
+    phase and reports "A compaction is already running. Try again shortly."
 21. **`ContextThreshold` is mostly dead.**
     The agent always passes a budget, and `CompactInput` no longer exposes a
     context window, so `NeedsCompaction` has no internal caller.

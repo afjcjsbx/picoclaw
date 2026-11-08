@@ -44,6 +44,31 @@ type AssembleResponse struct {
 	Summary string              // conversation summary embedded into system prompt by BuildMessages
 }
 
+// CompactReason explains the outcome of a manual compaction request.
+type CompactReason string
+
+const (
+	CompactReasonCompacted    CompactReason = "compacted"
+	CompactReasonBelowTarget  CompactReason = "below_target"
+	CompactReasonTooShort     CompactReason = "too_short"
+	CompactReasonNoCandidates CompactReason = "no_candidates"
+	CompactReasonInProgress   CompactReason = "in_progress"
+)
+
+// CompactOutcome reports what a manual compaction did, including why it did
+// nothing. TokensBefore and TokensAfter are the assembled history token counts,
+// so they use the same scale as /context. Target is the history-only compaction
+// budget; zero means the request forced compaction and ignored the target.
+type CompactOutcome struct {
+	Compacted          bool
+	Reason             CompactReason
+	TokensBefore       int
+	TokensAfter        int
+	Target             int
+	LeafSummaries      int
+	CondensedSummaries int
+}
+
 // CompactRequest is the input to Compact.
 type CompactRequest struct {
 	SessionKey string                // session identifier
@@ -56,6 +81,13 @@ type CompactRequest struct {
 	ActiveTurnMessages int
 	// Instructions optionally steers what the summary should focus on (manual only).
 	Instructions string
+	// Force makes a manual request ignore the budget target and compact until
+	// no further progress is possible (manual only).
+	Force bool
+	// Outcome is optionally filled by Compact for manual requests with the
+	// no-op reason, target, and created-summary counts. The command adapter
+	// fills TokensBefore and TokensAfter from the assembled context.
+	Outcome *CompactOutcome
 }
 
 // ContextTokenReporter is an optional extension implemented by context managers
