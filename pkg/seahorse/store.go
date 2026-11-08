@@ -827,71 +827,20 @@ func (s *Store) CreateSummary(ctx context.Context, input CreateSummaryInput) (*S
 }
 
 func (s *Store) createSummaryOnce(ctx context.Context, input CreateSummaryInput) (*Summary, error) {
-	// Generate summary ID
-	now := time.Now().UTC()
-	summaryID := generateSummaryID(input.Content, now)
-
-	var earliestAt, latestAt sql.NullString
-	if input.EarliestAt != nil {
-		earliestAt = sql.NullString{String: input.EarliestAt.Format(time.RFC3339), Valid: true}
-	}
-	if input.LatestAt != nil {
-		latestAt = sql.NullString{String: input.LatestAt.Format(time.RFC3339), Valid: true}
-	}
-
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback()
 
-	_, err = tx.ExecContext(ctx,
-		`INSERT INTO summaries (summary_id, conversation_id, kind, depth, content, token_count,
-			earliest_at, latest_at, descendant_count, descendant_token_count,
-			source_message_token_count, model)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		summaryID, input.ConversationID, string(input.Kind), input.Depth,
-		input.Content, input.TokenCount,
-		earliestAt, latestAt,
-		input.DescendantCount, input.DescendantTokenCount,
-		input.SourceMessageTokens, input.Model,
-	)
+	summary, err := createSummaryTx(ctx, tx, input)
 	if err != nil {
-		return nil, fmt.Errorf("insert summary: %w", err)
+		return nil, err
 	}
-
-	// FTS trigger will fire automatically for summaries table insert
-
-	// Link parent summaries (DAG edges) for condensed summaries
-	for _, parentID := range input.ParentIDs {
-		_, err = tx.ExecContext(ctx,
-			"INSERT INTO summary_parents (summary_id, parent_summary_id) VALUES (?, ?)",
-			summaryID, parentID,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("link parent %s: %w", parentID, err)
-		}
-	}
-
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit: %w", err)
 	}
-
-	return &Summary{
-		SummaryID:               summaryID,
-		ConversationID:          input.ConversationID,
-		Kind:                    input.Kind,
-		Depth:                   input.Depth,
-		Content:                 input.Content,
-		TokenCount:              input.TokenCount,
-		EarliestAt:              input.EarliestAt,
-		LatestAt:                input.LatestAt,
-		DescendantCount:         input.DescendantCount,
-		DescendantTokenCount:    input.DescendantTokenCount,
-		SourceMessageTokenCount: input.SourceMessageTokens,
-		Model:                   input.Model,
-		CreatedAt:               now,
-	}, nil
+	return summary, nil
 }
 
 // GetSummary retrieves a summary by ID.
@@ -980,17 +929,8 @@ func (s *Store) linkSummaryToMessagesOnce(
 	}
 	defer tx.Rollback()
 
-	for i, msgID := range messageIDs {
-		_, err = tx.ExecContext(
-			ctx,
-			"INSERT OR IGNORE INTO summary_messages (summary_id, message_id, ordinal) VALUES (?, ?, ?)",
-			summaryID,
-			msgID,
-			i,
-		)
-		if err != nil {
-			return err
-		}
+	if err := linkSummaryToMessagesTx(ctx, tx, summaryID, messageIDs); err != nil {
+		return err
 	}
 	return tx.Commit()
 }

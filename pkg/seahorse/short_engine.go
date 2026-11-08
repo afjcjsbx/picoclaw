@@ -652,33 +652,18 @@ func (e *Engine) Bootstrap(ctx context.Context, sessionKey string, messages []Me
 	// even though the canonical JSONL history already has it. Backfill those
 	// rows in place so we do not treat this as edited history and leave stale
 	// summaries/context behind after a partial raw-message rebuild.
-	repairedReasoning, err := e.repairBootstrapReasoningContent(ctx, dbMsgs, messages)
-	if err != nil {
+	if _, err := e.repairBootstrapReasoningContent(ctx, dbMsgs, messages); err != nil {
 		return fmt.Errorf("bootstrap: repair reasoning_content: %w", err)
 	}
-	repairedModelName, err := e.repairBootstrapModelName(ctx, dbMsgs, messages)
-	if err != nil {
+	if _, err := e.repairBootstrapModelName(ctx, dbMsgs, messages); err != nil {
 		return fmt.Errorf("bootstrap: repair model_name: %w", err)
 	}
-	repairedCreatedAt, err := e.repairBootstrapCreatedAt(ctx, dbMsgs, messages)
-	if err != nil {
+	if _, err := e.repairBootstrapCreatedAt(ctx, dbMsgs, messages); err != nil {
 		return fmt.Errorf("bootstrap: repair created_at: %w", err)
 	}
-	if (repairedReasoning || repairedModelName || repairedCreatedAt) &&
-		len(dbMsgs) == len(messages) {
-		matched := true
-		for i := range messages {
-			if !messagesMatch(dbMsgs[i], messages[i], messageMatchOptions{}) {
-				matched = false
-				break
-			}
-		}
-		if matched {
-			return nil
-		}
-	}
-
-	// Fast path: DB has same count and exact match → no-op
+	// Fast path: after in-place repairs, a same-count exact match is a no-op.
+	// The repair flags are not needed here: the comparison already reads the
+	// repaired rows from dbMsgs, which repairBootstrapField updates in place.
 	if len(dbMsgs) == len(messages) {
 		matched := true
 		for i := range messages {
