@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 const sqliteTimeLayout = "2006-01-02 15:04:05"
@@ -2266,7 +2268,7 @@ func isUniqueViolation(err error) bool {
 	if err == nil {
 		return false
 	}
-	if isSQLiteCode(err, 2067, 1555) { // SQLITE_CONSTRAINT_UNIQUE, SQLITE_CONSTRAINT_PRIMARYKEY
+	if isSQLiteCode(err, sqlite3.SQLITE_CONSTRAINT_UNIQUE, sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY) {
 		return true
 	}
 	// Fallback for older drivers/wrappers that do not expose modernc's Error.
