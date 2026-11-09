@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
@@ -30,6 +31,7 @@ type SlackChannel struct {
 	ctx          context.Context
 	cancel       context.CancelFunc
 	pendingAcks  sync.Map
+	seenMessages sync.Map // "channel_id:timestamp" -> true (message/app_mention dedup)
 	uploadFileFn func(context.Context, slack.UploadFileParameters) error
 	postTextFn   func(context.Context, string, string, string) error
 }
@@ -321,6 +323,22 @@ func (c *SlackChannel) handleEventsAPI(event socketmode.Event) {
 	}
 }
 
+// claimEvent deduplicates the message and app_mention events Slack sends for
+// the same chat message. The first handler to claim the channel/timestamp pair
+// processes it; the duplicate returns immediately. A short TTL keeps the map
+// bounded while covering Slack's delivery race.
+func (c *SlackChannel) claimEvent(channelID, messageTS string) bool {
+	if channelID == "" || messageTS == "" {
+		return true
+	}
+	key := channelID + ":" + messageTS
+	if _, loaded := c.seenMessages.LoadOrStore(key, true); loaded {
+		return false
+	}
+	time.AfterFunc(time.Minute, func() { c.seenMessages.Delete(key) })
+	return true
+}
+
 func (c *SlackChannel) handleMessageEvent(ev *slackevents.MessageEvent) {
 	if ev.User == c.botUserID || ev.User == "" {
 		return
@@ -360,16 +378,23 @@ func (c *SlackChannel) handleMessageEvent(ev *slackevents.MessageEvent) {
 		Timestamp: messageTS,
 	})
 
-	content := ev.Text
-	content = c.stripBotMention(content)
+	rawContent := ev.Text
+	content := c.stripBotMention(rawContent)
+	isMentioned := rawContent != content
 
 	// In non-DM channels, apply group trigger filtering
 	if !strings.HasPrefix(channelID, "D") {
-		respond, cleaned := c.ShouldRespondInGroup(false, content)
+		respond, cleaned := c.ShouldRespondInGroup(isMentioned, content)
 		if !respond {
 			return
 		}
 		content = cleaned
+	}
+
+	// Claim only after the message passed the group trigger. If the message
+	// event is ignored, the app_mention event must still be able to handle it.
+	if !c.claimEvent(ev.Channel, ev.TimeStamp) {
+		return
 	}
 
 	var mediaPaths []string
@@ -470,11 +495,9 @@ func (c *SlackChannel) handleAppMention(ev *slackevents.AppMentionEvent) {
 	threadTS := ev.ThreadTimeStamp
 	messageTS := ev.TimeStamp
 
-	var chatID string
+	chatID := channelID
 	if threadTS != "" {
 		chatID = channelID + "/" + threadTS
-	} else {
-		chatID = channelID + "/" + messageTS
 	}
 
 	c.pendingAcks.Store(chatID, slackMessageRef{
@@ -485,6 +508,9 @@ func (c *SlackChannel) handleAppMention(ev *slackevents.AppMentionEvent) {
 	content := c.stripBotMention(ev.Text)
 
 	if strings.TrimSpace(content) == "" {
+		return
+	}
+	if !c.claimEvent(ev.Channel, ev.TimeStamp) {
 		return
 	}
 
