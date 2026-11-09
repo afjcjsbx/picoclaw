@@ -87,7 +87,7 @@ func Validate(id, path string, entry config.PluginEntryConfig) (Report, error) {
 	schedules, found := discoverSchedules(manifest, lintContext)
 	add(found...)
 	for _, schedule := range schedules {
-		r.Schedules = append(r.Schedules, schedule.PluginID+":"+schedule.Name)
+		r.Schedules = append(r.Schedules, schedule.DeclarationKey())
 	}
 
 	servers := map[string]ServerSpec{}

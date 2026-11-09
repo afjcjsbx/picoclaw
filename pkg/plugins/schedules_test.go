@@ -37,7 +37,7 @@ func TestValidateReportsSchedules(t *testing.T) {
 	if err != nil || len(report.Diagnostics) != 0 {
 		t.Fatalf("err=%v diagnostics=%v", err, report.Diagnostics)
 	}
-	if got := strings.Join(report.Schedules, ","); got != "alias:nightly,alias:interval" {
+	if got := strings.Join(report.Schedules, ","); got != "plugin:alias:nightly,plugin:alias:interval" {
 		t.Fatalf("schedules=%q", got)
 	}
 }
