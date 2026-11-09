@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"maps"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/sipeed/picoclaw/pkg/config"
@@ -50,10 +51,29 @@ func (m *Manager) Wait(ctx context.Context) error {
 	m.Start()
 	select {
 	case <-m.done:
-		return nil
+		return m.failedError()
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// failedError reports plugins that did not finish in a usable state. Callers
+// that use Wait to decide whether pruning is safe must treat this as an
+// incomplete discovery pass even though the manager's goroutine has finished.
+func (m *Manager) failedError() error {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var failed []string
+	for _, id := range sortedKeys(m.statuses) {
+		state := m.statuses[id].State
+		if state != Ready && state != Degraded {
+			failed = append(failed, id)
+		}
+	}
+	if len(failed) == 0 {
+		return nil
+	}
+	return fmt.Errorf("plugin load failed: %s", strings.Join(failed, ", "))
 }
 
 func (m *Manager) Statuses() []Status {

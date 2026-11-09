@@ -978,7 +978,7 @@ func reconcilePluginSchedules(
 ) (cron.ReconcileReport, error) {
 	waitErr := agentLoop.WaitPlugins(ctx)
 	if waitErr != nil {
-		logger.WarnCF("cron", "Plugin discovery did not finish; keeping existing plugin schedules",
+		logger.WarnCF("cron", "Plugin discovery was incomplete; keeping existing plugin schedules",
 			map[string]any{"error": waitErr.Error()})
 	}
 	report, err := cronService.ReconcileDeclarations(

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -194,5 +195,27 @@ func TestDisabledSkillsHideResources(t *testing.T) {
 	}
 	if hasResources {
 		t.Fatal("disabled skills still advertised resources")
+	}
+}
+
+func TestManagerWaitReportsFailedPlugins(t *testing.T) {
+	workspace := t.TempDir()
+	writeTestFile(
+		t,
+		workspace,
+		filepath.Join("bad", "plugin.json"),
+		[]byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"Bad Name"}`),
+	)
+	cfg := config.PluginsConfig{
+		Enabled:     true,
+		Directories: []string{"."},
+		DataDir:     t.TempDir(),
+		Entries:     map[string]config.PluginEntryConfig{"bad": {Enabled: true, Path: filepath.Join(workspace, "bad")}},
+	}
+	m := NewManager(cfg, workspace, nil)
+	defer m.Close()
+	err := m.Wait(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "bad") {
+		t.Fatalf("Wait() error = %v, want failed plugin id", err)
 	}
 }
