@@ -171,6 +171,16 @@ func (al *AgentLoop) WaitPlugins(ctx context.Context) error {
 	return manager.Wait(waitCtx)
 }
 
+// WaitPluginsReady waits for the current plugin discovery pass without
+// applying the startup wait. Callers control the deadline through ctx.
+func (al *AgentLoop) WaitPluginsReady(ctx context.Context) error {
+	manager := al.startPlugins()
+	if manager == nil {
+		return nil
+	}
+	return manager.Wait(ctx)
+}
+
 // PluginScheduleDeclarations returns the schedules published by loaded
 // plugins, converted to host-owned cron declarations.
 func (al *AgentLoop) PluginScheduleDeclarations() []cron.CronJobDeclaration {

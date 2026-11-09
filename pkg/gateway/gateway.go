@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -40,6 +41,9 @@ const (
 	serviceShutdownTimeout  = 30 * time.Second
 	providerReloadTimeout   = 30 * time.Second
 	gracefulShutdownTimeout = 15 * time.Second
+	// pluginReconcileRetryTimeout bounds the background wait that finishes
+	// schedule reconciliation after a slow plugin discovery pass.
+	pluginReconcileRetryTimeout = 5 * time.Minute
 
 	logPath   = "logs"
 	panicFile = "gateway_panic.log"
@@ -445,7 +449,7 @@ func setupAndStartServices(
 
 	execTimeout := time.Duration(cfg.Tools.Cron.ExecTimeoutMinutes) * time.Minute
 	var err error
-	cronService, err := setupCronTool(
+	cronService, retryCron, err := setupCronTool(
 		context.Background(),
 		"startup",
 		agentLoop,
@@ -461,6 +465,9 @@ func setupAndStartServices(
 	runningServices.setCronService(cronService)
 	if err = cronService.Start(); err != nil {
 		return nil, fmt.Errorf("error starting cron service: %w", err)
+	}
+	if retryCron != nil {
+		go retryCron()
 	}
 	fmt.Println("✓ Cron service started")
 
@@ -701,7 +708,7 @@ func restartServices(
 
 	execTimeout := time.Duration(cfg.Tools.Cron.ExecTimeoutMinutes) * time.Minute
 	var err error
-	cronService, err := setupCronTool(
+	cronService, retryCron, err := setupCronTool(
 		ctx,
 		"reload",
 		al,
@@ -717,6 +724,9 @@ func restartServices(
 	runningServices.setCronService(cronService)
 	if err = cronService.Start(); err != nil {
 		return fmt.Errorf("error restarting cron service: %w", err)
+	}
+	if retryCron != nil {
+		go retryCron()
 	}
 	fmt.Println("  ✓ Cron service restarted")
 
@@ -910,7 +920,7 @@ func setupCronTool(
 	restrict bool,
 	execTimeout time.Duration,
 	cfg *config.Config,
-) (*cron.CronService, error) {
+) (*cron.CronService, func(), error) {
 	cronStorePath := filepath.Join(workspace, "cron", "jobs.json")
 
 	cronService := cron.NewCronService(cronStorePath, nil)
@@ -924,7 +934,7 @@ func setupCronTool(
 		trigger, _ = cron.NewTrigger("inprocess")
 	}
 	if err := cronService.SetTrigger(trigger); err != nil {
-		return nil, fmt.Errorf("configure cron trigger: %w", err)
+		return nil, nil, fmt.Errorf("configure cron trigger: %w", err)
 	}
 
 	var cronTool *tools.CronTool
@@ -932,7 +942,7 @@ func setupCronTool(
 		var err error
 		cronTool, err = tools.NewCronTool(cronService, agentLoop, msgBus, workspace, restrict, execTimeout, cfg)
 		if err != nil {
-			return nil, fmt.Errorf("critical error during CronTool initialization: %w", err)
+			return nil, nil, fmt.Errorf("critical error during CronTool initialization: %w", err)
 		}
 
 		agentLoop.RegisterTool(cronTool)
@@ -941,14 +951,22 @@ func setupCronTool(
 	var (
 		report cron.ReconcileReport
 		recErr error
+		retry  func()
 	)
+	enabled := cronTool != nil
 	if cronTool != nil {
 		cronService.SetOnJobWithContext(func(jobCtx context.Context, job *cron.CronJob) (string, error) {
 			// Propagate the failure so the job state records lastStatus=error
 			// instead of reporting a broken run as "ok".
 			return cronTool.ExecuteJob(jobCtx, job)
 		})
-		report, recErr = reconcilePluginSchedules(ctx, agentLoop, cronService)
+		var delay bool
+		report, delay, recErr = reconcilePluginSchedules(ctx, agentLoop, cronService)
+		if recErr == nil && delay {
+			retry = func() {
+				retryPluginScheduleReconcile(agentLoop, cronService, reason, enabled)
+			}
+		}
 	} else {
 		// A disabled cron tool cannot execute plugin schedules. Remove only
 		// host-managed jobs so they cannot silently accumulate in the store.
@@ -959,22 +977,10 @@ func setupCronTool(
 			map[string]any{"error": recErr.Error()})
 	} else {
 		logCronReconcile(report)
-		payload := cronEventPayload{
-			Reason:      reason,
-			Enabled:     cronTool != nil,
-			Created:     report.Created,
-			Updated:     report.Updated,
-			Unchanged:   report.Unchanged,
-			Removed:     report.Removed,
-			RemovedKeys: report.RemovedKeys,
-		}
-		publishCronEvent(agentLoop, runtimeevents.KindCronReconciled, payload)
-		if report.Created+report.Updated+report.Removed > 0 {
-			publishCronEvent(agentLoop, runtimeevents.KindCronChanged, payload)
-		}
+		publishCronReconcile(agentLoop, reason, enabled, report)
 	}
 
-	return cronService, nil
+	return cronService, retry, nil
 }
 
 // reconcilePluginSchedules converges plugin-owned schedules with the cron
@@ -984,7 +990,7 @@ func reconcilePluginSchedules(
 	ctx context.Context,
 	agentLoop *agent.AgentLoop,
 	cronService *cron.CronService,
-) (cron.ReconcileReport, error) {
+) (cron.ReconcileReport, bool, error) {
 	waitErr := agentLoop.WaitPlugins(ctx)
 	if waitErr != nil {
 		logger.WarnCF("cron", "Plugin discovery was incomplete; keeping existing plugin schedules",
@@ -995,10 +1001,63 @@ func reconcilePluginSchedules(
 		agentLoop.PluginScheduleDeclarations(),
 		waitErr == nil,
 	)
-	if err != nil {
-		return report, err
+	return report, errors.Is(waitErr, context.DeadlineExceeded), err
+}
+
+// retryPluginScheduleReconcile finishes reconciliation after a startup timeout.
+// It waits for the plugin manager on its own deadline and abandons the pass if
+// the cron service has been stopped (for example by a config reload).
+func retryPluginScheduleReconcile(
+	agentLoop *agent.AgentLoop,
+	cronService *cron.CronService,
+	reason string,
+	enabled bool,
+) {
+	ctx, cancel := context.WithTimeout(context.Background(), pluginReconcileRetryTimeout)
+	defer cancel()
+	if err := agentLoop.WaitPluginsReady(ctx); err != nil {
+		logger.WarnCF("cron", "Delayed plugin discovery did not finish; keeping existing plugin schedules",
+			map[string]any{"error": err.Error()})
+		return
 	}
-	return report, nil
+	select {
+	case <-cronService.Done():
+		return
+	default:
+	}
+	report, err := cronService.ReconcileDeclarations(
+		"plugin:",
+		agentLoop.PluginScheduleDeclarations(),
+		true,
+	)
+	if err != nil {
+		logger.WarnCF("cron", "Delayed plugin schedule reconciliation failed",
+			map[string]any{"error": err.Error()})
+		return
+	}
+	logCronReconcile(report)
+	publishCronReconcile(agentLoop, reason, enabled, report)
+}
+
+func publishCronReconcile(
+	agentLoop *agent.AgentLoop,
+	reason string,
+	enabled bool,
+	report cron.ReconcileReport,
+) {
+	payload := cronEventPayload{
+		Reason:      reason,
+		Enabled:     enabled,
+		Created:     report.Created,
+		Updated:     report.Updated,
+		Unchanged:   report.Unchanged,
+		Removed:     report.Removed,
+		RemovedKeys: report.RemovedKeys,
+	}
+	publishCronEvent(agentLoop, runtimeevents.KindCronReconciled, payload)
+	if report.Created+report.Updated+report.Removed > 0 {
+		publishCronEvent(agentLoop, runtimeevents.KindCronChanged, payload)
+	}
 }
 
 func logCronReconcile(report cron.ReconcileReport) {

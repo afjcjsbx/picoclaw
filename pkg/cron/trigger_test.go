@@ -87,3 +87,22 @@ func TestSetTriggerRejectedWhileRunning(t *testing.T) {
 		t.Fatal("SetTrigger accepted a change while running")
 	}
 }
+
+func TestCronServiceDoneClosesOnStop(t *testing.T) {
+	cs := NewCronService(filepath.Join(t.TempDir(), "jobs.json"), nil)
+	if err := cs.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	done := cs.Done()
+	select {
+	case <-done:
+		t.Fatal("Done closed before Stop")
+	default:
+	}
+	cs.Stop()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Done did not close on Stop")
+	}
+}

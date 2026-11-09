@@ -98,6 +98,7 @@ type CronService struct {
 	running   bool
 	trigger   Trigger
 	cancel    context.CancelFunc
+	done      chan struct{}
 	wakeChan  chan struct{}
 	gronx     *gronx.Gronx
 	// reloadEvery is the polling interval used to detect external edits of the
@@ -113,11 +114,14 @@ type CronService struct {
 }
 
 func NewCronService(storePath string, onJob JobHandler) *CronService {
+	done := make(chan struct{})
+	close(done)
 	cs := &CronService{
 		storePath: storePath,
 		onJob:     onJob,
 		trigger:   InProcessTrigger{},
 		gronx:     gronx.New(),
+		done:      done,
 		wakeChan:  make(chan struct{}, 1),
 		inFlight:  make(map[string]struct{}),
 	}
@@ -153,6 +157,7 @@ func (cs *CronService) Start() error {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cs.cancel = cancel
+	cs.done = make(chan struct{})
 	cs.running = true
 	go cs.trigger.Run(ctx, cs)
 
@@ -172,6 +177,17 @@ func (cs *CronService) Stop() {
 		cs.cancel()
 		cs.cancel = nil
 	}
+	if cs.done != nil {
+		close(cs.done)
+	}
+}
+
+// Done is closed when the current run is stopped. A service that was never
+// started returns an already-closed channel.
+func (cs *CronService) Done() <-chan struct{} {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	return cs.done
 }
 
 // SetTrigger selects the trigger provider. Call before Start. Passing nil
