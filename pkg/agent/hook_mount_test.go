@@ -10,6 +10,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
+	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 )
 
 type builtinAutoHookConfig struct {
@@ -382,4 +383,36 @@ func TestReloadProviderAndConfigKeepsHookTimeoutsWhenReplacementFails(t *testing
 	if got := al.hooks.approvalTimeout; got != sentinel {
 		t.Fatalf("approval timeout = %v, want %v", got, sentinel)
 	}
+}
+
+func TestInitHooksMountsConfiguredObserversBeforeRun(t *testing.T) {
+	eventLog := filepath.Join(t.TempDir(), "cron-events.log")
+	al := newConfiguredHookLoop(t, &llmHookTestProvider{}, config.HooksConfig{
+		Enabled: true,
+		Processes: map[string]config.ProcessHookConfig{
+			"cron-observer": {
+				Enabled: true,
+				Command: processHookHelperCommand(),
+				Env: map[string]string{
+					"PICOCLAW_HOOK_HELPER":    "1",
+					"PICOCLAW_HOOK_MODE":      "rewrite",
+					"PICOCLAW_HOOK_EVENT_LOG": eventLog,
+				},
+				Observe: []string{"cron_reconciled"},
+			},
+		},
+	})
+	defer al.Close()
+
+	if err := al.InitHooks(context.Background()); err != nil {
+		t.Fatalf("InitHooks failed: %v", err)
+	}
+	if err := al.InitHooks(context.Background()); err != nil {
+		t.Fatalf("second InitHooks failed: %v", err)
+	}
+	agentID := al.GetRegistry().GetDefaultAgent().ID
+	al.emitEvent(runtimeevents.KindCronReconciled, HookMeta{AgentID: agentID}, map[string]any{
+		"reason": "startup",
+	})
+	waitForFileContains(t, eventLog, "cron.reconciled")
 }

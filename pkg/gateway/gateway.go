@@ -435,6 +435,14 @@ func setupAndStartServices(
 ) (*services, error) {
 	runningServices := &services{}
 
+	// Mount configured hooks before cron reconciliation publishes its startup
+	// lifecycle events. AgentLoop.Run calls this again, but the first call is
+	// what lets configured observers see the startup reconciliation.
+	if err := agentLoop.InitHooks(context.Background()); err != nil {
+		logger.WarnCF("hooks", "Failed to initialize configured hooks before startup events",
+			map[string]any{"error": err.Error()})
+	}
+
 	execTimeout := time.Duration(cfg.Tools.Cron.ExecTimeoutMinutes) * time.Minute
 	var err error
 	cronService, err := setupCronTool(
