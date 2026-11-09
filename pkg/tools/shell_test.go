@@ -2995,3 +2995,37 @@ func TestShellTool_CustomDenyCannotBeOverriddenByCustomAllow(t *testing.T) {
 		t.Fatalf("custom deny pattern must win over custom allow, got: %s", result.ForLLM)
 	}
 }
+
+func TestShellTool_BackticksInsideQuotedHeredocAreAllowed(t *testing.T) {
+	tool, err := NewExecTool("", false)
+	require.NoError(t, err)
+
+	command := "gh pr comment 2763 --body-file - <<'TXT'\n" +
+		"Fixed `pkg/tools/integration/web_test.go` and `brave` is now expected.\n" +
+		"TXT"
+	if got := tool.guardCommand(command, ""); got != "" {
+		t.Fatalf("quoted heredoc body should not be blocked, got: %s", got)
+	}
+}
+
+func TestShellTool_QuotedHeredocDoesNotHideDangerousHeader(t *testing.T) {
+	tool, err := NewExecTool("", false)
+	require.NoError(t, err)
+
+	command := "rm -rf /tmp/x <<'TXT'\n" + "markdown `body`\n" + "TXT"
+	if got := tool.guardCommand(command, ""); got == "" {
+		t.Fatal("dangerous command before a quoted heredoc should stay blocked")
+	}
+}
+
+func TestShellTool_BackticksOutsideQuotedHeredocRemainBlocked(t *testing.T) {
+	tool, err := NewExecTool("", false)
+	require.NoError(t, err)
+
+	if got := tool.guardCommand("echo `whoami`", ""); got == "" {
+		t.Fatal("raw backtick command substitution should be blocked")
+	}
+	if got := tool.guardCommand("echo hi <<TXT\n`whoami`\nTXT", ""); got == "" {
+		t.Fatal("unquoted heredoc body can still substitute commands and should be blocked")
+	}
+}
