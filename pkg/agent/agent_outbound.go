@@ -73,7 +73,7 @@ func (al *AgentLoop) publishResponseOrError(
 		}
 		response = ""
 	}
-	al.PublishResponseForInbound(ctx, inbound, channel, chatID, sessionKey, response)
+	al.publishFinalResponseForInbound(ctx, inbound, channel, chatID, sessionKey, response)
 }
 
 // publishResponseOptions controls how a response is delivered.
@@ -86,14 +86,28 @@ type publishResponseOptions struct {
 	surviveCanceledContext bool
 }
 
-// PublishResponseIfNeeded publishes the response for turns that have no
-// inbound message context (cron, CLI). The reply target is lost for those.
+// PublishResponseIfNeeded publishes a response unless the message tool already
+// delivered to the same chat during this round. It is the default path for
+// non-interactive turns (cron, CLI) where a synchronous tool result may be the
+// only delivery.
 func (al *AgentLoop) PublishResponseIfNeeded(ctx context.Context, channel, chatID, sessionKey, response string) {
-	al.PublishResponseForInbound(ctx, nil, channel, chatID, sessionKey, response)
+	al.publishResponseIfNeeded(
+		ctx,
+		nil,
+		channel,
+		chatID,
+		sessionKey,
+		response,
+		al.latestAssistantUsage(ctx, sessionKey, response),
+		publishResponseOptions{},
+	)
 }
 
-// PublishResponseForInbound publishes the turn response, threading it to the
-// originating message when the inbound context provides one.
+// PublishResponseForInbound publishes the terminal reply of an interactive
+// turn, threading it to the originating message when the inbound context
+// provides one. A progress update sent through the message tool earlier in the
+// turn must not suppress the actual answer, so this path bypasses message-tool
+// suppression.
 func (al *AgentLoop) PublishResponseForInbound(
 	ctx context.Context,
 	inbound *bus.InboundContext,
@@ -115,7 +129,7 @@ func (al *AgentLoop) publishFinalResponseForInbound(
 		sessionKey,
 		response,
 		al.latestAssistantUsage(ctx, sessionKey, response),
-		publishResponseOptions{},
+		publishResponseOptions{skipMessageToolSuppression: true},
 	)
 }
 
