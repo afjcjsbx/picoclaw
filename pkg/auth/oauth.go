@@ -18,6 +18,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 type OAuthProviderConfig struct {
@@ -37,6 +39,10 @@ type LoginBrowserOptions struct {
 var (
 	openBrowserFunc             = OpenBrowser
 	browserLoginInput io.Reader = os.Stdin
+
+	// oauthRefreshGroup collapses concurrent refreshes of the same rotating
+	// refresh token into one token-endpoint request.
+	oauthRefreshGroup singleflight.Group
 )
 
 func OpenAIOAuthConfig() OAuthProviderConfig {
@@ -473,6 +479,25 @@ func pollDeviceCode(cfg OAuthProviderConfig, deviceAuthID, userCode string) (*Au
 }
 
 func RefreshAccessToken(cred *AuthCredential, cfg OAuthProviderConfig) (*AuthCredential, error) {
+	key := strings.Join(
+		[]string{cfg.Issuer, cfg.TokenURL, cfg.ClientID, cred.Provider, cred.RefreshToken},
+		"\x00",
+	)
+	value, err, _ := oauthRefreshGroup.Do(key, func() (any, error) {
+		return refreshAccessToken(cred, cfg)
+	})
+	if err != nil {
+		return nil, err
+	}
+	refreshed, ok := value.(*AuthCredential)
+	if !ok {
+		return nil, fmt.Errorf("unexpected token refresh result")
+	}
+	clone := *refreshed
+	return &clone, nil
+}
+
+func refreshAccessToken(cred *AuthCredential, cfg OAuthProviderConfig) (*AuthCredential, error) {
 	if cred.RefreshToken == "" {
 		return nil, fmt.Errorf("no refresh token available")
 	}
@@ -481,7 +506,6 @@ func RefreshAccessToken(cred *AuthCredential, cfg OAuthProviderConfig) (*AuthCre
 		"client_id":     {cfg.ClientID},
 		"grant_type":    {"refresh_token"},
 		"refresh_token": {cred.RefreshToken},
-		"scope":         {cfg.Scopes},
 	}
 	if cfg.ClientSecret != "" {
 		data.Set("client_secret", cfg.ClientSecret)
@@ -492,7 +516,31 @@ func RefreshAccessToken(cred *AuthCredential, cfg OAuthProviderConfig) (*AuthCre
 		tokenURL = cfg.TokenURL
 	}
 
-	resp, err := http.PostForm(tokenURL, data)
+	var resp *http.Response
+	var err error
+	if strings.Contains(strings.ToLower(cfg.Issuer), "auth.openai.com") {
+		body, marshalErr := json.Marshal(map[string]string{
+			"client_id":     cfg.ClientID,
+			"grant_type":    "refresh_token",
+			"refresh_token": cred.RefreshToken,
+		})
+		if marshalErr != nil {
+			return nil, fmt.Errorf("encoding token refresh request: %w", marshalErr)
+		}
+		req, requestErr := http.NewRequest(
+			http.MethodPost,
+			tokenURL,
+			strings.NewReader(string(body)),
+		)
+		if requestErr != nil {
+			return nil, fmt.Errorf("creating token refresh request: %w", requestErr)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json")
+		resp, err = http.DefaultClient.Do(req)
+	} else {
+		resp, err = http.PostForm(tokenURL, data)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("refreshing token: %w", err)
 	}
