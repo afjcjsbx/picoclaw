@@ -292,7 +292,7 @@ func TestConvertToPicoClaw(t *testing.T) {
 	}
 }
 
-func TestToStandardConfig_ExecAllowRemoteDefaultsTrue(t *testing.T) {
+func TestToStandardConfig_ExecAllowRemoteDefaultsFalse(t *testing.T) {
 	cfg := (&PicoClawConfig{
 		Tools: ToolsConfig{
 			Exec: ExecConfig{
@@ -301,8 +301,8 @@ func TestToStandardConfig_ExecAllowRemoteDefaultsTrue(t *testing.T) {
 		},
 	}).ToStandardConfig()
 
-	if !cfg.Tools.Exec.AllowRemote {
-		t.Fatal("ToStandardConfig() should preserve the default tools.exec.allow_remote=true")
+	if cfg.Tools.Exec.AllowRemote {
+		t.Fatal("ToStandardConfig() should preserve the default tools.exec.allow_remote=false")
 	}
 }
 
