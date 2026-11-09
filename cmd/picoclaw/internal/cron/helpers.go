@@ -52,8 +52,21 @@ func cronListCmd(storePath string) {
 	}
 }
 
-func cronRemoveCmd(storePath, jobID string) {
+func cronRemoveCmd(storePath, jobID string, force bool) {
 	cs := cron.NewCronService(storePath, nil)
+	job, ok := cs.GetJob(jobID)
+	if !ok {
+		fmt.Printf("✗ Job %s not found\n", jobID)
+		return
+	}
+	if job.DeclarationKey != "" {
+		if !force {
+			fmt.Printf("✗ Job '%s' is managed by %s\n", job.Name, job.DeclarationKey)
+			fmt.Println("  Disable the plugin or remove its declaration; use --force to remove the stored job anyway.")
+			return
+		}
+		fmt.Printf("⚠ Removing managed job '%s' (%s); reconciliation may recreate it.\n", job.Name, job.DeclarationKey)
+	}
 	if cs.RemoveJob(jobID) {
 		fmt.Printf("✓ Removed job %s\n", jobID)
 	} else {
