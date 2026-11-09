@@ -8,7 +8,10 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func makeJWTForClaims(t *testing.T, claims map[string]any) string {
@@ -244,8 +247,8 @@ func TestRefreshAccessToken(t *testing.T) {
 			http.Error(w, "invalid grant_type", http.StatusBadRequest)
 			return
 		}
-		if gotScope := r.FormValue("scope"); gotScope != expectedScope {
-			t.Errorf("Server received scope = %q, want %q", gotScope, expectedScope)
+		if gotScope := r.FormValue("scope"); gotScope != "" {
+			t.Errorf("Server received scope = %q, want refresh requests to omit it", gotScope)
 		}
 
 		resp := map[string]any{
@@ -494,4 +497,104 @@ func newMockOAuthTokenServer() *httptest.Server {
 		}
 		_ = json.NewEncoder(w).Encode(resp)
 	}))
+}
+
+func TestRefreshAccessTokenUsesJSONForOpenAI(t *testing.T) {
+	var gotScope string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Content-Type"); got != "application/json" {
+			t.Errorf("Content-Type = %q, want application/json", got)
+		}
+		var body map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode JSON body: %v", err)
+		}
+		if body["grant_type"] != "refresh_token" {
+			t.Errorf("grant_type = %q, want refresh_token", body["grant_type"])
+		}
+		gotScope = body["scope"]
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"access_token": "openai-access-token",
+			"expires_in":   3600,
+		})
+	}))
+	defer server.Close()
+
+	cfg := OAuthProviderConfig{
+		Issuer:   "https://auth.openai.com",
+		TokenURL: server.URL,
+		ClientID: "openai-client",
+		Scopes:   "openid profile email offline_access",
+	}
+	cred := &AuthCredential{
+		AccessToken:  "expired-access-token",
+		RefreshToken: "openai-refresh-token",
+		Provider:     "openai",
+		AuthMethod:   "oauth",
+	}
+
+	refreshed, err := RefreshAccessToken(cred, cfg)
+	if err != nil {
+		t.Fatalf("RefreshAccessToken() error: %v", err)
+	}
+	if refreshed.AccessToken != "openai-access-token" {
+		t.Fatalf("AccessToken = %q, want openai-access-token", refreshed.AccessToken)
+	}
+	if gotScope != "" {
+		t.Fatalf("scope = %q, want refresh requests to omit it", gotScope)
+	}
+}
+
+func TestRefreshAccessTokenCollapsesConcurrentRefreshes(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		time.Sleep(50 * time.Millisecond)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"access_token":  "rotated-access-token",
+			"refresh_token": "rotated-refresh-token",
+			"expires_in":    3600,
+		})
+	}))
+	defer server.Close()
+
+	cfg := OAuthProviderConfig{
+		Issuer:   server.URL,
+		TokenURL: server.URL,
+		ClientID: "test-client",
+	}
+	cred := &AuthCredential{
+		AccessToken:  "old-access-token",
+		RefreshToken: "rotating-refresh-token",
+		Provider:     "openai",
+		AuthMethod:   "oauth",
+	}
+
+	const callers = 8
+	var wg sync.WaitGroup
+	results := make([]*AuthCredential, callers)
+	errs := make([]error, callers)
+	for i := range callers {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			results[i], errs[i] = RefreshAccessToken(cred, cfg)
+		}(i)
+	}
+	wg.Wait()
+
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("token endpoint requests = %d, want 1", got)
+	}
+	for i := range callers {
+		if errs[i] != nil {
+			t.Fatalf("caller %d error = %v", i, errs[i])
+		}
+		if results[i].AccessToken != "rotated-access-token" {
+			t.Fatalf("caller %d access token = %q", i, results[i].AccessToken)
+		}
+	}
+	if results[0] == results[1] {
+		t.Fatal("callers share one credential pointer; want independent copies")
+	}
 }
