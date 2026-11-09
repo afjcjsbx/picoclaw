@@ -20,7 +20,7 @@ func newTestCommand() *cobra.Command {
 		Use:   "test <id>",
 		Short: "Dry-run load a plugin and report what it publishes",
 		Long: `Load one plugin exactly as the gateway would and print its final state, the
-skills, MCP tools and hooks it publishes, and its diagnostics. The entry does not
+skills, MCP tools, hooks and schedules it publishes, and its diagnostics. The entry does not
 need to be enabled. Nothing is registered with an agent, but the plugin's MCP
 servers are started, so only test packages you trust.
 

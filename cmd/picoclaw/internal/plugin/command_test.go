@@ -462,3 +462,10 @@ func TestPrintFieldAlignsLongLabels(t *testing.T) {
 		t.Fatalf("field = %q", got)
 	}
 }
+
+func TestTestCommandHelpMentionsSchedules(t *testing.T) {
+	cmd := newTestCommand()
+	if !strings.Contains(cmd.Long, "schedules") {
+		t.Fatalf("long help = %q", cmd.Long)
+	}
+}
