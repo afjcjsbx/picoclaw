@@ -1713,8 +1713,16 @@ func (c *TelegramChannel) downloadFileWithInfo(file *telego.File, ext string) st
 	// applies the shared HTTP retry policy (utils.DoRequestWithRetry) internally.
 	filename := file.FilePath + ext
 	return utils.DownloadFile(url, filename, utils.DownloadOptions{
-		LoggerPrefix: "telegram",
+		LoggerPrefix:        "telegram",
+		BlockPrivateTargets: c.blockPrivateMediaDownloads(),
 	})
+}
+
+// blockPrivateMediaDownloads keeps SSRF protection on for the public Bot API
+// while allowing explicitly configured Bot API servers (typically self-hosted
+// on a private network) to serve media.
+func (c *TelegramChannel) blockPrivateMediaDownloads() bool {
+	return c == nil || c.tgCfg == nil || strings.TrimSpace(c.tgCfg.BaseURL) == ""
 }
 
 func (c *TelegramChannel) downloadFile(ctx context.Context, fileID, ext string) string {
