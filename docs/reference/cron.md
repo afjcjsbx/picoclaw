@@ -244,7 +244,7 @@ Notes:
 - recurring jobs stay in the store until removed
 - disabled jobs stay in the store and still appear in `picoclaw cron list`
 - plugin-managed jobs show `Managed: plugin:<id>:<name>` in `picoclaw cron list`; `cron remove` requires `--force` for them because reconciliation may recreate the job
-- each run records its outcome in the job state: `state.lastStatus` is `"ok"` on success, `"error"` with the reason in `state.lastError` when the agent turn failed or a scheduled command was disabled or failed, and `"skipped"` when no execution callback is installed (see `tools.cron`)
+- each run records its outcome in the job state: `state.lastStatus` is `"ok"` on success, `"error"` with the reason in `state.lastError` when the agent turn failed or a scheduled command was disabled or failed, and `"skipped"` when no execution callback is installed or a schedule precheck decided that there was no work (`state.lastError` then holds the precheck reason)
 
 ### Plugin-managed jobs
 
@@ -267,3 +267,9 @@ job handlers receive it through the context, and agent hooks receive it as
 name, declaration key, source (`scheduled` or `manual`) and the scheduled
 instant, so scheduled work can be distinguished from interactive turns without
 parsing the session key.
+
+A plugin schedule may also declare a `precheck` wake gate. The host runs the
+gate before the agent turn and skips the run without a model call when the gate
+prints `{"wake_agent": false, "reason": "..."}`. A gate that wakes the agent can
+append bounded context to the prompt. See
+[Wake gates](../guides/plugins.md#wake-gates).

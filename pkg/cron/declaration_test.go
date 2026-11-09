@@ -3,6 +3,7 @@ package cron
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -95,6 +96,119 @@ func TestReconcileDeclarationsConvergesAndPreservesOperatorPause(t *testing.T) {
 	if job.State.LastRunAtMS == nil || *job.State.LastRunAtMS != lastRun ||
 		job.State.LastStatus != "ok" || len(job.State.RunHistory) != 1 {
 		t.Fatalf("run state was not preserved: %+v", job.State)
+	}
+}
+
+func TestReconcileDeclarationsConvergesPrecheck(t *testing.T) {
+	cs := NewCronService(filepath.Join(t.TempDir(), "jobs.json"), nil)
+	everyMS := int64(60_000)
+	decl := CronJobDeclaration{
+		DeclarationKey: "plugin:dreaming:nightly",
+		Name:           "nightly",
+		Schedule:       CronSchedule{Kind: "every", EveryMS: &everyMS},
+		Message:        "dream",
+		Precheck: &JobPrecheck{
+			Command:   []string{"/usr/bin/python3", "/plugin/dream.py", "--gate"},
+			Dir:       "/plugin-data/dreaming",
+			Env:       map[string]string{"MODE": "nightly"},
+			TimeoutMS: 60_000,
+		},
+	}
+
+	report, err := cs.ReconcileDeclarations("plugin:", []CronJobDeclaration{decl}, true)
+	if err != nil {
+		t.Fatalf("initial reconcile: %v", err)
+	}
+	if report.Created != 1 {
+		t.Fatalf("created = %d, want 1", report.Created)
+	}
+	job, ok := cs.GetJobByDeclarationKey(decl.DeclarationKey)
+	if !ok || job.Payload.Precheck == nil {
+		t.Fatalf("precheck missing from job: %+v", job)
+	}
+	originalID := job.ID
+
+	// A changed timeout is a payload change: the stored job is updated in place.
+	decl.Precheck.TimeoutMS = 120_000
+	report, err = cs.ReconcileDeclarations("plugin:", []CronJobDeclaration{decl}, true)
+	if err != nil {
+		t.Fatalf("update reconcile: %v", err)
+	}
+	if report.Updated != 1 {
+		t.Fatalf("updated = %d, want 1 (%+v)", report.Updated, report)
+	}
+	job, _ = cs.GetJobByDeclarationKey(decl.DeclarationKey)
+	if job.ID != originalID {
+		t.Fatalf("job ID changed: %s -> %s", originalID, job.ID)
+	}
+	if job.Payload.Precheck.TimeoutMS != 120_000 {
+		t.Fatalf("timeoutMs = %d", job.Payload.Precheck.TimeoutMS)
+	}
+
+	// Removing the declaration's precheck clears it from the stored payload.
+	decl.Precheck = nil
+	report, err = cs.ReconcileDeclarations("plugin:", []CronJobDeclaration{decl}, true)
+	if err != nil {
+		t.Fatalf("remove reconcile: %v", err)
+	}
+	if report.Updated != 1 {
+		t.Fatalf("updated = %d, want 1", report.Updated)
+	}
+	job, _ = cs.GetJobByDeclarationKey(decl.DeclarationKey)
+	if job.Payload.Precheck != nil {
+		t.Fatalf("precheck not cleared: %+v", job.Payload.Precheck)
+	}
+}
+
+func TestReconcileDeclarationsRejectsInvalidPrecheck(t *testing.T) {
+	cs := NewCronService(filepath.Join(t.TempDir(), "jobs.json"), nil)
+	everyMS := int64(60_000)
+	decl := CronJobDeclaration{
+		DeclarationKey: "plugin:dreaming:nightly",
+		Name:           "nightly",
+		Schedule:       CronSchedule{Kind: "every", EveryMS: &everyMS},
+		Message:        "dream",
+		Precheck:       &JobPrecheck{},
+	}
+	if _, err := cs.ReconcileDeclarations("plugin:", []CronJobDeclaration{decl}, true); err == nil ||
+		!strings.Contains(err.Error(), "command is required") {
+		t.Fatalf("err = %v", err)
+	}
+
+	decl.Precheck = &JobPrecheck{
+		Command:   []string{"python3"},
+		TimeoutMS: MaxPrecheckTimeout.Milliseconds() + 1,
+	}
+	if _, err := cs.ReconcileDeclarations("plugin:", []CronJobDeclaration{decl}, true); err == nil ||
+		!strings.Contains(err.Error(), "timeoutMs exceeds") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestGetJobByDeclarationKeyDeepCopiesPrecheck(t *testing.T) {
+	cs := NewCronService(filepath.Join(t.TempDir(), "jobs.json"), nil)
+	everyMS := int64(60_000)
+	decl := CronJobDeclaration{
+		DeclarationKey: "plugin:dreaming:nightly",
+		Name:           "nightly",
+		Schedule:       CronSchedule{Kind: "every", EveryMS: &everyMS},
+		Message:        "dream",
+		Precheck: &JobPrecheck{
+			Command: []string{"python3", "dream.py"},
+			Env:     map[string]string{"MODE": "nightly"},
+		},
+	}
+	if _, err := cs.ReconcileDeclarations("plugin:", []CronJobDeclaration{decl}, true); err != nil {
+		t.Fatal(err)
+	}
+	job, _ := cs.GetJobByDeclarationKey(decl.DeclarationKey)
+	job.Payload.Precheck.Command[0] = "mutated"
+	job.Payload.Precheck.Env["MODE"] = "mutated"
+
+	again, _ := cs.GetJobByDeclarationKey(decl.DeclarationKey)
+	if again.Payload.Precheck.Command[0] != "python3" ||
+		again.Payload.Precheck.Env["MODE"] != "nightly" {
+		t.Fatalf("stored precheck was mutated: %+v", again.Payload.Precheck)
 	}
 }
 

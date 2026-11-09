@@ -53,6 +53,7 @@ type CronTool struct {
 	executor              JobExecutor
 	msgBus                *bus.MessageBus
 	execTool              *ExecTool
+	workspace             string
 	allowCommand          bool
 	execEnabled           bool
 	commandAllowedRemotes []string
@@ -95,6 +96,7 @@ func NewCronTool(
 		executor:              executor,
 		msgBus:                msgBus,
 		execTool:              execTool,
+		workspace:             workspace,
 		allowCommand:          allowCommand,
 		execEnabled:           execEnabled,
 		commandAllowedRemotes: commandAllowedRemotes,
@@ -792,6 +794,35 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) (string, e
 		chatID = "direct"
 	}
 
+	message := job.Payload.Message
+	if job.Payload.Precheck != nil {
+		decision, err := t.runPrecheck(ctx, job)
+		if err != nil {
+			// A broken gate must not silently consume a nightly model turn.
+			// Report it to an explicit delivery target when the job has one;
+			// otherwise the cron state and logs carry the error.
+			if job.Payload.Channel != "" {
+				t.publishJobOutput(channel, chatID, "⚠️ Scheduled precheck failed: "+err.Error())
+			}
+			return "", fmt.Errorf("scheduled precheck failed: %w", err)
+		}
+		if !decision.wakeAgent() {
+			reason := decision.Reason
+			if reason == "" {
+				reason = "precheck reported no work"
+			}
+			logger.InfoCF("cron", "Job precheck found no work; agent turn skipped", map[string]any{
+				"job_id": job.ID,
+				"name":   job.Name,
+				"reason": reason,
+			})
+			return "skipped", cron.SkipJob(reason)
+		}
+		if decision.Context != "" {
+			message = message + "\n\n" + decision.Context
+		}
+	}
+
 	// Execute command if present
 	if job.Payload.Command != "" {
 		if !t.execEnabled || t.execTool == nil {
@@ -827,8 +858,8 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) (string, e
 
 	sessionKey := fmt.Sprintf("agent:cron-%s-%s", job.ID, uuid.New().String())
 
-	// Call agent with the job message
-	response, err := t.runAgentJob(ctx, job, sessionKey, channel, chatID)
+	// Call agent with the job message, plus any precheck context.
+	response, err := t.runAgentJob(ctx, job, message, sessionKey, channel, chatID)
 	if err != nil {
 		return "", fmt.Errorf("cron job %s: %w", job.ID, err)
 	}
@@ -858,12 +889,12 @@ func (t *CronTool) publishAgentJobResponse(
 func (t *CronTool) runAgentJob(
 	ctx context.Context,
 	job *cron.CronJob,
-	sessionKey, channel, chatID string,
+	message, sessionKey, channel, chatID string,
 ) (string, error) {
 	if job.AgentID == "" {
 		return t.executor.ProcessDirectWithChannel(
 			ctx,
-			job.Payload.Message,
+			message,
 			sessionKey,
 			channel,
 			chatID,
@@ -879,7 +910,7 @@ func (t *CronTool) runAgentJob(
 	}
 	return executor.ProcessDirectWithAgent(
 		ctx,
-		job.Payload.Message,
+		message,
 		sessionKey,
 		channel,
 		chatID,

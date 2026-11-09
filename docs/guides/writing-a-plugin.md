@@ -167,6 +167,29 @@ declaration disappears. The entry must set `allow_schedules: true` and `tools.cr
 enabled. See [Host-managed schedules](plugins.md#host-managed-schedules) for the full field
 list and reconciliation rules.
 
+Add a `precheck` when the run should be skipped unless there is real work. It runs a
+package executable before the agent and wakes the model only on `{"wake_agent": true}`:
+
+```json
+{
+  "name": "nightly",
+  "cron": "0 3 * * *",
+  "message": "Process the digest appended by the precheck.",
+  "precheck": {
+    "command": "python3",
+    "args": ["${PLUGIN_ROOT}/scripts/precheck.py"],
+    "cwd": "${PLUGIN_DATA}",
+    "timeout_seconds": 120
+  }
+}
+```
+
+A precheck must print one JSON object. `{"wake_agent": false, "reason": "..."}` skips the
+agent turn; `{"wake_agent": true, "context": "..."}` appends `context` to the prompt. It does
+not receive host credentials; see [Wake gates](plugins.md#wake-gates) for the environment,
+limits and failure behavior. The [dreaming example](../../examples/plugins/dreaming) is a
+complete package that uses one.
+
 ## 6. Validate
 
 ```bash

@@ -156,7 +156,7 @@ func TestParseScheduleRejectsInvalidEntries(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err = parseScheduleEntry("alias", raw)
+			_, err = parseScheduleEntry(PluginContext{ID: "alias"}, raw)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("err=%v, want %q", err, test.want)
 			}
@@ -170,7 +170,7 @@ func TestParseScheduleObjectAndAt(t *testing.T) {
 		"schedule": {"kind": "cron", "expr": "0 3 * * *", "tz": "Europe/Rome"},
 		"message": "m"
 	}`)
-	schedule, err := parseScheduleEntry("alias", raw)
+	schedule, err := parseScheduleEntry(PluginContext{ID: "alias"}, raw)
 	if err != nil {
 		t.Fatalf("schedule object: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestParseScheduleObjectAndAt(t *testing.T) {
 	raw = json.RawMessage(
 		`{"name":"one","at":"2030-01-02T03:04:05Z","message":"m","enabled":false}`,
 	)
-	schedule, err = parseScheduleEntry("alias", raw)
+	schedule, err = parseScheduleEntry(PluginContext{ID: "alias"}, raw)
 	if err != nil {
 		t.Fatalf("at schedule: %v", err)
 	}

@@ -870,6 +870,49 @@ func TestCronService_RunJobRecordsErrorHistory(t *testing.T) {
 	}
 }
 
+func TestCronService_RunJobRecordsSkippedPrecheckHistory(t *testing.T) {
+	cs, _ := setupService(t, func(job *CronJob) (string, error) {
+		return "skipped", SkipJob("no new human messages")
+	})
+	if err := cs.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer cs.Stop()
+
+	everyMS := time.Hour.Milliseconds()
+	job, err := cs.AddJob(
+		"Dream",
+		CronSchedule{Kind: "every", EveryMS: &everyMS},
+		"msg",
+		"cli",
+		"direct",
+	)
+	if err != nil {
+		t.Fatalf("AddJob failed: %v", err)
+	}
+
+	if err := cs.RunJob(job.ID); err != nil {
+		t.Fatalf("RunJob failed: %v", err)
+	}
+	waitIdle(t, cs, job.ID)
+
+	got, ok := cs.GetJob(job.ID)
+	if !ok {
+		t.Fatal("job not found")
+	}
+	if got.State.LastStatus != "skipped" || got.State.LastError != "no new human messages" {
+		t.Fatalf("state = %q/%q, want skipped/no new human messages",
+			got.State.LastStatus, got.State.LastError)
+	}
+	if len(got.State.RunHistory) != 1 {
+		t.Fatalf("history length = %d, want 1", len(got.State.RunHistory))
+	}
+	if record := got.State.RunHistory[0]; record.Status != "skipped" ||
+		record.Error != "no new human messages" {
+		t.Fatalf("history record = %+v", record)
+	}
+}
+
 func TestCronService_RunJobExecutesWithoutTouchingSchedule(t *testing.T) {
 	ran := make(chan string, 1)
 	cs, _ := setupService(t, func(job *CronJob) (string, error) {

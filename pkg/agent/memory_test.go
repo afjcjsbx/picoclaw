@@ -120,7 +120,7 @@ func TestOversizedMemoryIsBoundedInPrompt(t *testing.T) {
 	}
 }
 
-// Hermes-style snapshot: a running session keeps the memory it started with.
+// Memory snapshot: a running session keeps the memory it started with.
 func TestMemorySnapshotIsFrozenPerSession(t *testing.T) {
 	ws := setupWorkspace(t, map[string]string{"memory/MEMORY.md": "fact v1"})
 	defer os.RemoveAll(ws)

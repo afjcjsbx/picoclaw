@@ -98,6 +98,16 @@ type Capabilities struct {
 	HasResources bool
 }
 
+// Precheck is a resolved wake gate declared by a plugin schedule. The plugin
+// loader resolves the command and environment once; the stored job keeps the
+// result.
+type Precheck struct {
+	Command []string
+	Dir     string
+	Env     map[string]string
+	Timeout time.Duration
+}
+
 // Schedule is a host-managed cron job declared by a plugin. The host owns the
 // stored job; the plugin owns only this declaration.
 type Schedule struct {
@@ -107,6 +117,7 @@ type Schedule struct {
 	Message  string
 	Channel  string
 	To       string
+	Precheck *Precheck
 	AgentID  string
 	Enabled  *bool
 }
@@ -118,6 +129,15 @@ func (s Schedule) DeclarationKey() string {
 
 // Declaration converts the package schedule into a host cron declaration.
 func (s Schedule) Declaration() cron.CronJobDeclaration {
+	var precheck *cron.JobPrecheck
+	if s.Precheck != nil {
+		precheck = &cron.JobPrecheck{
+			Command:   append([]string(nil), s.Precheck.Command...),
+			Dir:       s.Precheck.Dir,
+			Env:       cloneStringMap(s.Precheck.Env),
+			TimeoutMS: s.Precheck.Timeout.Milliseconds(),
+		}
+	}
 	return cron.CronJobDeclaration{
 		DeclarationKey: s.DeclarationKey(),
 		Name:           s.Name,
@@ -125,9 +145,21 @@ func (s Schedule) Declaration() cron.CronJobDeclaration {
 		Message:        s.Message,
 		Channel:        s.Channel,
 		To:             s.To,
+		Precheck:       precheck,
 		AgentID:        s.AgentID,
 		Enabled:        s.Enabled,
 	}
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	if values == nil {
+		return nil
+	}
+	cloned := make(map[string]string, len(values))
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 type Hook struct {
