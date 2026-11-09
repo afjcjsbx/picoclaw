@@ -1593,3 +1593,74 @@ func TestLastActivity(t *testing.T) {
 		t.Fatalf("LastActivity after Chtimes = %v, want meta UpdatedAt >= %v", got, before)
 	}
 }
+
+func TestNewJSONLStore_RepairsMetaCountAfterCrash(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewJSONLStore(dir)
+	if err != nil {
+		t.Fatalf("NewJSONLStore: %v", err)
+	}
+	ctx := context.Background()
+	const key = "agent:main:repair"
+	if addErr := store.AddMessage(ctx, key, "user", "first"); addErr != nil {
+		t.Fatalf("AddMessage: %v", addErr)
+	}
+	if addErr := store.AddMessage(ctx, key, "assistant", "second"); addErr != nil {
+		t.Fatalf("AddMessage: %v", addErr)
+	}
+
+	// Simulate a crash between the JSONL append and the metadata update.
+	meta, err := store.readMeta(key)
+	if err != nil {
+		t.Fatalf("readMeta: %v", err)
+	}
+	meta.Count = 0
+	meta.Skip = 99
+	if writeErr := store.writeMeta(key, meta); writeErr != nil {
+		t.Fatalf("writeMeta: %v", writeErr)
+	}
+
+	repaired, err := NewJSONLStore(dir)
+	if err != nil {
+		t.Fatalf("NewJSONLStore(repair): %v", err)
+	}
+	got, err := repaired.GetSessionMeta(ctx, key)
+	if err != nil {
+		t.Fatalf("GetSessionMeta: %v", err)
+	}
+	if got.Count != 2 {
+		t.Fatalf("Count = %d, want 2", got.Count)
+	}
+	if got.Skip != 2 {
+		t.Fatalf("Skip = %d, want 2 (clamped to raw line count)", got.Skip)
+	}
+}
+
+func TestGetSessionMeta_RepairsStaleMetadataOnAccess(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	const key = "agent:main:repair-on-access"
+	if err := store.AddMessage(ctx, key, "user", "hello"); err != nil {
+		t.Fatalf("AddMessage: %v", err)
+	}
+
+	meta, err := store.readMeta(key)
+	if err != nil {
+		t.Fatalf("readMeta: %v", err)
+	}
+	meta.Count = 0
+	if writeErr := store.writeMeta(key, meta); writeErr != nil {
+		t.Fatalf("writeMeta: %v", writeErr)
+	}
+
+	got, err := store.GetSessionMeta(ctx, key)
+	if err != nil {
+		t.Fatalf("GetSessionMeta: %v", err)
+	}
+	if got.Count != 1 {
+		t.Fatalf("Count = %d, want 1", got.Count)
+	}
+	if got.CreatedAt.IsZero() {
+		t.Fatal("CreatedAt should be filled from the JSONL file")
+	}
+}

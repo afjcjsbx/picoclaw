@@ -224,7 +224,90 @@ func NewJSONLStore(dir string, opts ...StoreOption) (*JSONLStore, error) {
 	for _, opt := range opts {
 		opt(s)
 	}
+	if err := s.repairSessionMetadata(); err != nil {
+		return nil, err
+	}
 	return s, nil
+}
+
+// repairSessionMetadata reconciles .meta.json files with the JSONL files they
+// describe. addMsg appends to the JSONL and updates metadata afterwards; a
+// crash between those writes leaves Count behind the real line count. Repairing
+// at startup keeps that drift from surviving the restart.
+func (s *JSONLStore) repairSessionMetadata() error {
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return fmt.Errorf("memory: read session directory: %w", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".meta.json") {
+			continue
+		}
+		data, readErr := os.ReadFile(filepath.Join(s.dir, entry.Name()))
+		if readErr != nil {
+			log.Printf("memory: skipping unreadable meta %s during repair: %v", entry.Name(), readErr)
+			continue
+		}
+		var meta SessionMeta
+		if err := json.Unmarshal(data, &meta); err != nil {
+			log.Printf("memory: skipping corrupt meta %s during repair: %v", entry.Name(), err)
+			continue
+		}
+		if meta.Key == "" {
+			continue
+		}
+		if _, err := s.repairSessionMeta(meta.Key, meta); err != nil {
+			log.Printf("memory: repairing session %q failed: %v", meta.Key, err)
+		}
+	}
+	return nil
+}
+
+// repairSessionMeta rewrites metadata when its Count or Skip no longer match
+// the JSONL file. Callers must hold the session lock (or own the store before
+// it is shared). It returns the repaired metadata.
+func (s *JSONLStore) repairSessionMeta(key string, meta SessionMeta) (SessionMeta, error) {
+	rawCount, _, err := scanRetainedMessageLines(s.jsonlPath(key))
+	if err != nil {
+		return meta, err
+	}
+
+	changed := false
+	if meta.Key == "" {
+		meta.Key = key
+		changed = true
+	}
+	if meta.Count != rawCount {
+		meta.Count = rawCount
+		changed = true
+	}
+	if meta.Skip > meta.Count {
+		meta.Skip = meta.Count
+		changed = true
+	}
+	if meta.Skip < 0 {
+		meta.Skip = 0
+		changed = true
+	}
+	if rawCount > 0 && meta.CreatedAt.IsZero() {
+		if info, statErr := os.Stat(s.jsonlPath(key)); statErr == nil {
+			meta.CreatedAt = info.ModTime()
+			changed = true
+		}
+	}
+	if rawCount > 0 && meta.UpdatedAt.IsZero() {
+		if info, statErr := os.Stat(s.jsonlPath(key)); statErr == nil {
+			meta.UpdatedAt = info.ModTime()
+			changed = true
+		}
+	}
+	if !changed {
+		return meta, nil
+	}
+	if err := s.writeMeta(key, meta); err != nil {
+		return meta, err
+	}
+	return meta, nil
 }
 
 // sessionLock returns a mutex for the given session key.
@@ -395,6 +478,9 @@ func (s *JSONLStore) GetSessionMeta(_ context.Context, sessionKey string) (Sessi
 
 	meta, err := s.readMeta(sessionKey)
 	if err != nil {
+		return SessionMeta{}, err
+	}
+	if meta, err = s.repairSessionMeta(sessionKey, meta); err != nil {
 		return SessionMeta{}, err
 	}
 	meta.Scope = cloneRawJSON(meta.Scope)
