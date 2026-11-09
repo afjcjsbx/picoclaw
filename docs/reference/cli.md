@@ -189,7 +189,7 @@ Manages scheduled tasks that deliver agent-generated messages to a channel. Job 
 | `cron add` | Add a new scheduled job |
 | `cron list` | List all scheduled jobs |
 | `cron enable <id>` / `cron disable <id>` | Enable or disable a job |
-| `cron remove <id>` | Remove a job by ID |
+| `cron remove <id> [--force]` | Remove a job by ID; plugin-managed jobs require `--force` |
 
 `cron add` flags:
 

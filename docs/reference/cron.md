@@ -104,8 +104,9 @@ waiting for it to finish; output is delivered to the job's own channel, exactly
 like a scheduled run.
 
 - The schedule is not changed: an `every`/`cron` job keeps its next run time.
-  A one-time `at` job is consumed like after any run (deleted, or disabled when
-  `deleteAfterRun` is false).
+  A successful one-time `at` job is deleted (or disabled when `deleteAfterRun`
+  is false). A failed one-time job is disabled and retained with its error
+  history so it can be inspected or retried with another `run`.
 - Disabled jobs can be run; they stay disabled.
 - A job never runs concurrently with itself. If a manual `run` finds the job
   already executing, it fails with `job is already running`. If the scheduler
@@ -238,10 +239,11 @@ The running gateway watches this file (a `stat` every 2 seconds, scaled up in lo
 
 Notes:
 
-- one-time `at_seconds` jobs are deleted after they run
+- successful one-time `at_seconds` jobs are deleted after they run; failed ones stay disabled with `state.lastStatus: "error"` and their run history
 - one-time jobs whose scheduled time elapsed while the gateway was down are dropped on the next startup (or disabled when they are not marked for deletion), instead of lingering as enabled jobs that never fire
 - recurring jobs stay in the store until removed
 - disabled jobs stay in the store and still appear in `picoclaw cron list`
+- plugin-managed jobs show `Managed: plugin:<id>:<name>` in `picoclaw cron list`; `cron remove` requires `--force` for them because reconciliation may recreate the job
 - each run records its outcome in the job state: `state.lastStatus` is `"ok"` on success, `"error"` with the reason in `state.lastError` when the agent turn failed or a scheduled command was disabled or failed, and `"skipped"` when no execution callback is installed (see `tools.cron`)
 
 ### Plugin-managed jobs
@@ -253,7 +255,10 @@ failure history, and preserves an operator pause unless the declaration sets
 `enabled` explicitly. Only jobs under the `plugin:` prefix are pruned; jobs
 created by the user or by another declaration source are never touched. Do not
 hand-edit a managed job's schedule or payload: the next reconciliation overwrites
-it. Disable the plugin or remove its declaration instead. See
+it. Disable the plugin or remove its declaration instead. `picoclaw cron list`
+shows the declaration key under `Managed:`, and `picoclaw cron remove` refuses
+managed jobs unless `--force` is supplied; even then a later reconciliation may
+recreate the job. See
 [Host-managed schedules](../guides/plugins.md#host-managed-schedules).
 
 Agent turns started by a job carry a `cron.Execution` identity. Context-aware

@@ -27,7 +27,7 @@ Command jobs must also pass the exec guards: they are rejected when `tools.exec.
 | `message` | string | `add` | Reminder/task message shown when the job fires; with `command`, it describes what the command does |
 | `job_id` | string | `get`, `update`, `remove`, `enable`, `disable` | Identifier of the target job |
 | `name` | string | — | Optional job display name (used by `add` and `update`) |
-| `at_seconds` | int | one-time | Fire once, this many seconds from now (`600` = 10 minutes); the job is removed after it runs |
+| `at_seconds` | int | one-time | Fire once, this many seconds from now (`600` = 10 minutes); the job is removed after a successful run, while a failed one-shot stays disabled with its error history |
 | `every_seconds` | int | recurring | Recurring interval in seconds (`7200` = every 2 hours) |
 | `cron_expr` | string | recurring | Cron expression for complex schedules (`0 9 * * *`, evaluated in the process time zone) |
 | `command` | string | — | Shell command to execute instead of just showing the message (for example `df -h`) |

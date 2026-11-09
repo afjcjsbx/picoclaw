@@ -125,7 +125,8 @@ from the entry), hooks and schedules, followed by diagnostics. A package with a 
 manifest is an error; use `validate` to see why.
 
 If the plugin declares hooks while `allow_hooks` is `false`, or schedules while
-`allow_schedules` is `false`, they are listed as inactive.
+`allow_schedules` is `false`, they are listed as inactive. Schedules are printed
+with their stable declaration key, `plugin:<id>:<name>`.
 
 `--connect` loads the plugin instead and prints what it actually published, including MCP
 tools as `server/tool`. It starts the plugin's MCP servers.
