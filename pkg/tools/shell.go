@@ -162,7 +162,75 @@ var (
 		"/dev/stdout":  true,
 		"/dev/stderr":  true,
 	}
+
+	// quotedHeredocStartPattern matches a quoted heredoc delimiter, whose body
+	// is literal text and must not be scanned for shell substitution patterns.
+	quotedHeredocStartPattern = regexp.MustCompile(`<<-?\s*(?:'([^'\s]+)'|"([^"\s]+)")`)
 )
+
+// stripQuotedHeredocBodies replaces the body of every quoted heredoc with a
+// placeholder before deny-pattern matching. A quoted delimiter disables shell
+// expansion for the body, so Markdown backticks inside it are literal text,
+// not command substitution.
+func stripQuotedHeredocBodies(command string) string {
+	sanitized := command
+	searchFrom := 0
+
+	for {
+		loc := quotedHeredocStartPattern.FindStringSubmatchIndex(sanitized[searchFrom:])
+		if loc == nil {
+			return sanitized
+		}
+
+		matchStart := searchFrom + loc[0]
+		matchEnd := searchFrom + loc[1]
+		delimStart := searchFrom + loc[2]
+		delimEnd := searchFrom + loc[3]
+		if delimStart == searchFrom-1 || delimEnd == searchFrom-1 {
+			delimStart = searchFrom + loc[4]
+			delimEnd = searchFrom + loc[5]
+		}
+		delim := sanitized[delimStart:delimEnd]
+		allowTabs := strings.Contains(sanitized[matchStart:matchEnd], "<<-")
+
+		newlineRel := strings.IndexByte(sanitized[matchEnd:], '\n')
+		if newlineRel == -1 {
+			return sanitized
+		}
+		bodyStart := matchEnd + newlineRel + 1
+		lineStart := bodyStart
+		foundEnd := false
+
+		for lineStart <= len(sanitized) {
+			lineEnd := len(sanitized)
+			if nextNewline := strings.IndexByte(sanitized[lineStart:], '\n'); nextNewline >= 0 {
+				lineEnd = lineStart + nextNewline
+			}
+
+			line := sanitized[lineStart:lineEnd]
+			compare := strings.TrimSuffix(line, "\r")
+			if allowTabs {
+				compare = strings.TrimLeft(compare, "\t")
+			}
+			if compare == delim {
+				sanitized = sanitized[:bodyStart] + "[quoted heredoc omitted]\n" + sanitized[lineStart:]
+				searchFrom = bodyStart + len("[quoted heredoc omitted]\n")
+				foundEnd = true
+				break
+			}
+
+			if lineEnd == len(sanitized) {
+				lineStart = len(sanitized) + 1
+			} else {
+				lineStart = lineEnd + 1
+			}
+		}
+
+		if !foundEnd {
+			return sanitized
+		}
+	}
+}
 
 func NewExecTool(workingDir string, restrict bool, allowPaths ...[]*regexp.Regexp) (*ExecTool, error) {
 	return NewExecToolWithConfig(workingDir, restrict, nil, allowPaths...)
@@ -1521,11 +1589,14 @@ func (t *ExecTool) commandMatchesCustomAllowPattern(lower string) bool {
 func (t *ExecTool) guardCommand(command, cwd string) string {
 	cmd := strings.TrimSpace(command)
 	lower := strings.ToLower(cmd)
+	// Quoted heredoc bodies are literal text: a backtick there cannot run a
+	// command, so deny patterns must not inspect it.
+	lowerForDeny := strings.ToLower(stripQuotedHeredocBodies(cmd))
 
 	// Custom deny patterns always apply: they are user-specified security rules
 	// that must not be bypassed by custom allow patterns (#3079).
 	for _, pattern := range t.customDenyPatterns {
-		if pattern.MatchString(lower) {
+		if pattern.MatchString(lowerForDeny) {
 			return "Command blocked by safety guard (dangerous pattern detected)"
 		}
 	}
@@ -1534,7 +1605,7 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 	// operators can selectively permit normally-blocked commands.
 	if !t.commandMatchesCustomAllowPattern(lower) {
 		for _, pattern := range t.denyPatterns {
-			if pattern.MatchString(lower) {
+			if pattern.MatchString(lowerForDeny) {
 				return "Command blocked by safety guard (dangerous pattern detected)"
 			}
 		}
