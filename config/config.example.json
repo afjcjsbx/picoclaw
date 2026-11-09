@@ -524,6 +524,7 @@
     "exec": {
       "enabled": true,
       "enable_deny_patterns": true,
+      "allow_remote": false,
       "custom_deny_patterns": null,
       "custom_allow_patterns": null
     },

@@ -11,7 +11,7 @@ The exec tool is used to execute shell commands.
 | `enable_deny_patterns` | bool | `true` | Enable the default dangerous-command blocking |
 | `custom_deny_patterns` | string[] | `[]` | Additional deny patterns (regular expressions); they take priority over allow rules |
 | `custom_allow_patterns` | string[] | `[]` | Allow patterns (regular expressions) that explicitly permit matching commands. Deny patterns still win, so this cannot unlock a denied command |
-| `allow_remote` | bool | `true` | When `false`, exec only accepts commands that originate from internal channels (`cli`, `system`, `subagent`). Remote channels are then blocked (fail-closed): an empty channel is also rejected |
+| `allow_remote` | bool | `false` | When `false`, exec only accepts commands that originate from internal channels (`cli`, `system`, `subagent`). Remote channels are then blocked (fail-closed): an empty channel is also rejected. Set it to `true` only when remote command execution is explicitly intended |
 | `timeout_seconds` | int | `60` | Command timeout in seconds. `0` means the default (60s) |
 | `max_output_chars` | int | `50000` | Foreground output cap. Longer output keeps the first 40% and the last 60% around a `[OUTPUT TRUNCATED - N chars omitted out of T total]` notice, while the full stream is spilled to a workspace artifact (up to 5,000,000 bytes). The inline view is also bounded by `tools.max_inline_result_chars`; the artifact preserves the full stream. `0` means the default (50000) |
 
