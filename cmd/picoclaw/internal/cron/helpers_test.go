@@ -60,3 +60,38 @@ func TestCronSetJobEnabledReportsActualState(t *testing.T) {
 		t.Fatalf("enable output = %q, want it to mention enabled", enabled)
 	}
 }
+
+func TestCronListShowsDisabledAndManagedJobs(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "cron", "jobs.json")
+	cs := cronpkg.NewCronService(storePath, nil)
+	everyMS := int64(60_000)
+	userJob, err := cs.AddJob("user-job", cronpkg.CronSchedule{Kind: "every", EveryMS: &everyMS}, "msg", "", "")
+	if err != nil {
+		t.Fatalf("AddJob() error = %v", err)
+	}
+	if cs.EnableJob(userJob.ID, false) == nil {
+		t.Fatal("EnableJob() returned nil")
+	}
+	decl := cronpkg.CronJobDeclaration{
+		DeclarationKey: "plugin:demo:nightly",
+		Name:           "nightly",
+		Schedule:       cronpkg.CronSchedule{Kind: "every", EveryMS: &everyMS},
+		Message:        "Run",
+	}
+	if _, err := cs.ReconcileDeclarations("plugin:", []cronpkg.CronJobDeclaration{decl}, true); err != nil {
+		t.Fatalf("ReconcileDeclarations() error = %v", err)
+	}
+
+	out := captureStdout(t, func() {
+		cronListCmd(storePath)
+	})
+	if !strings.Contains(out, "Next run: disabled") {
+		t.Fatalf("list output = %q, want disabled next run", out)
+	}
+	if !strings.Contains(out, "Managed: plugin:demo:nightly") {
+		t.Fatalf("list output = %q, want managed declaration", out)
+	}
+	if strings.Contains(out, "Next run: scheduled") {
+		t.Fatalf("list output = %q, contains stale scheduled fallback", out)
+	}
+}

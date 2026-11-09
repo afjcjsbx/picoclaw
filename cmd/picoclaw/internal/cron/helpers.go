@@ -28,8 +28,11 @@ func cronListCmd(storePath string) {
 			schedule = "one-time"
 		}
 
-		nextRun := "scheduled"
-		if job.State.NextRunAtMS != nil {
+		nextRun := "not scheduled"
+		switch {
+		case !job.Enabled:
+			nextRun = "disabled"
+		case job.State.NextRunAtMS != nil:
 			nextTime := time.UnixMilli(*job.State.NextRunAtMS)
 			nextRun = nextTime.Format("2006-01-02 15:04")
 		}
@@ -43,6 +46,9 @@ func cronListCmd(storePath string) {
 		fmt.Printf("    Schedule: %s\n", schedule)
 		fmt.Printf("    Status: %s\n", status)
 		fmt.Printf("    Next run: %s\n", nextRun)
+		if job.DeclarationKey != "" {
+			fmt.Printf("    Managed: %s\n", job.DeclarationKey)
+		}
 	}
 }
 
