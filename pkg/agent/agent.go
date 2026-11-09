@@ -127,6 +127,7 @@ type continuationTarget struct {
 
 const (
 	defaultResponse            = "The model returned an empty response. This may indicate a provider error or token limit."
+	panicNoticeMessage         = "I hit an internal error while processing your message and could not finish. Please send it again."
 	truncatedResponse          = "The model hit the token limit (`max_tokens`) and the response was truncated before any final text. Increase `max_tokens` in config.json or shorten the request, then try again."
 	toolLimitResponse          = "I've reached `max_tool_iterations` without a final response. Increase `max_tool_iterations` in config.json if this task needs more tool steps."
 	loopDetectionResponse      = "I stopped because the same tool call was repeated too many times without making progress. Try refining the request or adjusting `loop_detection` in config.json."
@@ -299,6 +300,9 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 								"chat_id":     m.ChatID,
 								"panic":       fmt.Sprintf("%v", r),
 							})
+						// The turn died without producing a reply. Tell the user
+						// instead of leaving the chat waiting on a silent failure.
+						al.publishTurnFailureNotice(ctx, m.Channel, m.ChatID, sessionKey, panicNoticeMessage)
 					}
 				}()
 				defer func() { <-al.workerSem }() // Release slot
