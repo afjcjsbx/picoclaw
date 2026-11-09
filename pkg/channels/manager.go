@@ -2063,7 +2063,16 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config) error {
 		return err
 	}
 	for _, name := range added {
-		channel := m.channels[name]
+		// An enabled channel can have a config hash without an instance when it
+		// failed its readiness check or its factory: initChannels skips it. A
+		// config-changing reload must not dereference that missing instance.
+		channel, ok := m.channels[name]
+		if !ok || channel == nil {
+			logger.WarnCF("channels", "Channel not initialized, skipping start", map[string]any{
+				"channel": name,
+			})
+			continue
+		}
 		logger.InfoCF("channels", "Starting channel", map[string]any{
 			"channel": name,
 		})
