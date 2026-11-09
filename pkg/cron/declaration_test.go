@@ -266,3 +266,31 @@ func TestExecutionContextOnScheduledRun(t *testing.T) {
 		t.Fatal("scheduled job did not run")
 	}
 }
+
+func TestReconcileDeclarationsRoutesToAgent(t *testing.T) {
+	cs := NewCronService(filepath.Join(t.TempDir(), "jobs.json"), nil)
+	everyMS := int64(60_000)
+	decl := CronJobDeclaration{
+		DeclarationKey: "plugin:demo:scoped",
+		Name:           "scoped",
+		Schedule:       CronSchedule{Kind: "every", EveryMS: &everyMS},
+		Message:        "run as sales",
+		AgentID:        "sales",
+	}
+	if _, err := cs.ReconcileDeclarations("plugin:", []CronJobDeclaration{decl}, true); err != nil {
+		t.Fatalf("reconcile create: %v", err)
+	}
+	job, ok := cs.GetJobByDeclarationKey(decl.DeclarationKey)
+	if !ok || job.AgentID != "sales" {
+		t.Fatalf("created job = %+v, want agent sales", job)
+	}
+
+	decl.AgentID = "main"
+	if _, err := cs.ReconcileDeclarations("plugin:", []CronJobDeclaration{decl}, true); err != nil {
+		t.Fatalf("reconcile update: %v", err)
+	}
+	job, _ = cs.GetJobByDeclarationKey(decl.DeclarationKey)
+	if job.AgentID != "main" {
+		t.Fatalf("agent not updated: %+v", job)
+	}
+}

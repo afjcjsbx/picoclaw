@@ -24,6 +24,8 @@ type stubJobExecutor struct {
 	lastKey         string
 	lastChan        string
 	lastChatID      string
+	lastAgentID     string
+	publishedAgent  string
 	publishedResp   string
 	publishedChan   string
 	publishedChatID string
@@ -41,10 +43,34 @@ func (s *stubJobExecutor) ProcessDirectWithChannel(
 	return s.response, s.err
 }
 
+func (s *stubJobExecutor) ProcessDirectWithAgent(
+	_ context.Context,
+	content, sessionKey, channel, chatID, agentID string,
+) (string, error) {
+	s.lastPrompt = content
+	s.lastKey = sessionKey
+	s.lastChan = channel
+	s.lastChatID = chatID
+	s.lastAgentID = agentID
+	return s.response, s.err
+}
+
 func (s *stubJobExecutor) PublishResponseIfNeeded(
 	_ context.Context,
 	channel, chatID, sessionKey, response string,
 ) {
+	s.publishResponse(channel, chatID, sessionKey, response)
+}
+
+func (s *stubJobExecutor) PublishResponseIfNeededForAgent(
+	_ context.Context,
+	channel, chatID, sessionKey, response, agentID string,
+) {
+	s.publishedAgent = agentID
+	s.publishResponse(channel, chatID, sessionKey, response)
+}
+
+func (s *stubJobExecutor) publishResponse(channel, chatID, sessionKey, response string) {
 	if s.alreadySent {
 		return
 	}
@@ -54,7 +80,11 @@ func (s *stubJobExecutor) PublishResponseIfNeeded(
 	s.publishedKey = sessionKey
 }
 
-func newTestCronToolWithExecutorAndConfig(t *testing.T, executor JobExecutor, cfg *config.Config) *CronTool {
+func newTestCronToolWithExecutorAndConfig(
+	t *testing.T,
+	executor JobExecutor,
+	cfg *config.Config,
+) *CronTool {
 	t.Helper()
 	storePath := filepath.Join(t.TempDir(), "cron.json")
 	cronService := cron.NewCronService(storePath, nil)
@@ -102,7 +132,11 @@ func parseCronJobResult(t *testing.T, result *ToolResult) cron.CronJob {
 	return job
 }
 
-func addTestCronJob(t *testing.T, tool *CronTool, name, channel, chatID, command string) *cron.CronJob {
+func addTestCronJob(
+	t *testing.T,
+	tool *CronTool,
+	name, channel, chatID, command string,
+) *cron.CronJob {
 	t.Helper()
 	everyMS := int64(60_000)
 	job, err := tool.cronService.AddJob(
@@ -139,7 +173,10 @@ func TestCronTool_CommandBlockedFromRemoteChannel(t *testing.T) {
 	if !result.IsError {
 		t.Fatal("expected command scheduling to be blocked from remote channel")
 	}
-	if !strings.Contains(result.ForLLM, "restricted to internal channels or configured remote channels") {
+	if !strings.Contains(
+		result.ForLLM,
+		"restricted to internal channels or configured remote channels",
+	) {
 		t.Errorf("expected remote restriction message, got: %s", result.ForLLM)
 	}
 }
@@ -158,7 +195,10 @@ func TestCronTool_CommandAllowedFromRemoteChannelAllowlist(t *testing.T) {
 	})
 
 	if result.IsError {
-		t.Fatalf("expected command scheduling from allowed remote channel to succeed, got: %s", result.ForLLM)
+		t.Fatalf(
+			"expected command scheduling from allowed remote channel to succeed, got: %s",
+			result.ForLLM,
+		)
 	}
 }
 
@@ -176,7 +216,10 @@ func TestCronTool_CommandAllowedFromRemoteChatIDAllowlist(t *testing.T) {
 	})
 
 	if result.IsError {
-		t.Fatalf("expected command scheduling from allowed remote chat to succeed, got: %s", result.ForLLM)
+		t.Fatalf(
+			"expected command scheduling from allowed remote chat to succeed, got: %s",
+			result.ForLLM,
+		)
 	}
 }
 
@@ -194,7 +237,10 @@ func TestCronTool_CommandAllowedFromRemoteWildcardAllowlist(t *testing.T) {
 	})
 
 	if result.IsError {
-		t.Fatalf("expected wildcard allowlist to allow remote command scheduling, got: %s", result.ForLLM)
+		t.Fatalf(
+			"expected wildcard allowlist to allow remote command scheduling, got: %s",
+			result.ForLLM,
+		)
 	}
 }
 
@@ -236,7 +282,10 @@ func TestCronTool_CommandBlockedFromDifferentRemoteChatID(t *testing.T) {
 	if !result.IsError {
 		t.Fatal("expected command scheduling from non-allowlisted remote chat to fail")
 	}
-	if !strings.Contains(result.ForLLM, "restricted to internal channels or configured remote channels") {
+	if !strings.Contains(
+		result.ForLLM,
+		"restricted to internal channels or configured remote channels",
+	) {
 		t.Errorf("expected remote restriction message, got: %s", result.ForLLM)
 	}
 }
@@ -256,7 +305,9 @@ func TestCronTool_CommandAllowedRemoteRequiresConfirmWhenAllowCommandDisabled(t 
 	})
 
 	if !result.IsError {
-		t.Fatal("expected allowlisted remote command scheduling to require confirm when allow_command is disabled")
+		t.Fatal(
+			"expected allowlisted remote command scheduling to require confirm when allow_command is disabled",
+		)
 	}
 	if !strings.Contains(result.ForLLM, "command_confirm=true") {
 		t.Errorf("expected command_confirm requirement message, got: %s", result.ForLLM)
@@ -279,7 +330,10 @@ func TestCronTool_AllowCommandDoesNotBypassRemoteAllowlist(t *testing.T) {
 	if !result.IsError {
 		t.Fatal("expected allow_command=true not to bypass remote allowlist")
 	}
-	if !strings.Contains(result.ForLLM, "restricted to internal channels or configured remote channels") {
+	if !strings.Contains(
+		result.ForLLM,
+		"restricted to internal channels or configured remote channels",
+	) {
 		t.Errorf("expected remote restriction message, got: %s", result.ForLLM)
 	}
 }
@@ -295,7 +349,10 @@ func TestCronTool_CommandDoesNotRequireConfirmByDefault(t *testing.T) {
 	})
 
 	if result.IsError {
-		t.Fatalf("expected command scheduling without confirm to succeed by default, got: %s", result.ForLLM)
+		t.Fatalf(
+			"expected command scheduling without confirm to succeed by default, got: %s",
+			result.ForLLM,
+		)
 	}
 	if !strings.Contains(result.ForLLM, "Cron job added") {
 		t.Errorf("expected 'Cron job added', got: %s", result.ForLLM)
@@ -383,7 +440,10 @@ func TestCronTool_CommandAllowedFromInternalChannel(t *testing.T) {
 	})
 
 	if result.IsError {
-		t.Fatalf("expected command scheduling to succeed from internal channel, got: %s", result.ForLLM)
+		t.Fatalf(
+			"expected command scheduling to succeed from internal channel, got: %s",
+			result.ForLLM,
+		)
 	}
 	if !strings.Contains(result.ForLLM, "Cron job added") {
 		t.Errorf("expected 'Cron job added', got: %s", result.ForLLM)
@@ -418,7 +478,10 @@ func TestCronTool_NonCommandJobAllowedFromRemoteChannel(t *testing.T) {
 	})
 
 	if result.IsError {
-		t.Fatalf("expected non-command reminder to succeed from remote channel, got: %s", result.ForLLM)
+		t.Fatalf(
+			"expected non-command reminder to succeed from remote channel, got: %s",
+			result.ForLLM,
+		)
 	}
 }
 
@@ -451,7 +514,8 @@ func TestCronTool_GetReturnsFullJobPayload(t *testing.T) {
 		got.Payload.To != "chat-1" {
 		t.Fatalf("get returned wrong payload: %+v", got)
 	}
-	if got.Schedule.Kind != "every" || got.Schedule.EveryMS == nil || *got.Schedule.EveryMS != everyMS {
+	if got.Schedule.Kind != "every" || got.Schedule.EveryMS == nil ||
+		*got.Schedule.EveryMS != everyMS {
 		t.Fatalf("get returned wrong schedule: %+v", got.Schedule)
 	}
 	if got.State.NextRunAtMS == nil {
@@ -489,7 +553,8 @@ func TestCronTool_UpdateSchedulePreservesPayload(t *testing.T) {
 	if updated.ID != original.ID || updated.CreatedAtMS != original.CreatedAtMS {
 		t.Fatalf("identity changed after update: before=%+v after=%+v", original, updated)
 	}
-	if updated.Payload.Message != original.Payload.Message || updated.Payload.Channel != original.Payload.Channel ||
+	if updated.Payload.Message != original.Payload.Message ||
+		updated.Payload.Channel != original.Payload.Channel ||
 		updated.Payload.To != original.Payload.To {
 		t.Fatalf("payload was not preserved: %+v", updated.Payload)
 	}
@@ -536,11 +601,16 @@ func TestCronTool_UpdateMessagePreservesScheduleAndNextRun(t *testing.T) {
 	if updated.Name != "reminder" {
 		t.Fatalf("name should be preserved, got %q", updated.Name)
 	}
-	if updated.Schedule.Kind != "every" || updated.Schedule.EveryMS == nil || *updated.Schedule.EveryMS != everyMS {
+	if updated.Schedule.Kind != "every" || updated.Schedule.EveryMS == nil ||
+		*updated.Schedule.EveryMS != everyMS {
 		t.Fatalf("schedule should be preserved: %+v", updated.Schedule)
 	}
 	if updated.State.NextRunAtMS == nil || *updated.State.NextRunAtMS != nextRunBefore {
-		t.Fatalf("next run should be preserved: before=%d after=%v", nextRunBefore, updated.State.NextRunAtMS)
+		t.Fatalf(
+			"next run should be preserved: before=%d after=%v",
+			nextRunBefore,
+			updated.State.NextRunAtMS,
+		)
 	}
 }
 
@@ -682,7 +752,10 @@ func TestCronTool_RemoteCannotAccessOtherChatJob(t *testing.T) {
 		t.Fatalf("expected inaccessible get, got: %+v", getResult)
 	}
 
-	updateResult := tool.Execute(ctx, map[string]any{"action": "update", "job_id": job.ID, "message": "changed"})
+	updateResult := tool.Execute(
+		ctx,
+		map[string]any{"action": "update", "job_id": job.ID, "message": "changed"},
+	)
 	if !updateResult.IsError || !strings.Contains(updateResult.ForLLM, "not accessible") {
 		t.Fatalf("expected inaccessible update, got: %+v", updateResult)
 	}
@@ -718,7 +791,10 @@ func TestCronTool_RemoteCannotAccessCommandJob(t *testing.T) {
 		t.Fatalf("expected inaccessible get, got: %+v", getResult)
 	}
 
-	updateResult := tool.Execute(ctx, map[string]any{"action": "update", "job_id": job.ID, "message": "changed"})
+	updateResult := tool.Execute(
+		ctx,
+		map[string]any{"action": "update", "job_id": job.ID, "message": "changed"},
+	)
 	if !updateResult.IsError || !strings.Contains(updateResult.ForLLM, "not accessible") {
 		t.Fatalf("expected inaccessible update, got: %+v", updateResult)
 	}
@@ -761,7 +837,8 @@ func TestCronTool_AllowlistedRemoteCanAccessOwnCommandJob(t *testing.T) {
 		t.Fatalf("expected update to access own command job, got: %s", updateResult.ForLLM)
 	}
 	updated, _ := tool.cronService.GetJob(job.ID)
-	if updated.Payload.Message != "updated command description" || updated.Payload.Command != "df -h" {
+	if updated.Payload.Message != "updated command description" ||
+		updated.Payload.Command != "df -h" {
 		t.Fatalf("update returned wrong command payload: %+v", updated.Payload)
 	}
 }
@@ -816,7 +893,10 @@ func TestCronTool_PicoJobsAreVisibleAcrossChats(t *testing.T) {
 		t.Fatalf("get from another pico chat failed: %s", getResult.ForLLM)
 	}
 
-	updateResult := tool.Execute(ctx, map[string]any{"action": "update", "job_id": picoJob.ID, "message": "updated"})
+	updateResult := tool.Execute(
+		ctx,
+		map[string]any{"action": "update", "job_id": picoJob.ID, "message": "updated"},
+	)
 	if updateResult.IsError {
 		t.Fatalf("update from another pico chat failed: %s", updateResult.ForLLM)
 	}
@@ -852,7 +932,11 @@ func TestCronTool_PicoCommandJobsStillRequireAllowlist(t *testing.T) {
 		}
 		result := tool.Execute(ctx, args)
 		if !result.IsError || !strings.Contains(result.ForLLM, "not accessible") {
-			t.Fatalf("expected %s to reject non-allowlisted pico command job, got: %+v", action, result)
+			t.Fatalf(
+				"expected %s to reject non-allowlisted pico command job, got: %+v",
+				action,
+				result,
+			)
 		}
 	}
 	unchanged, ok := tool.cronService.GetJob(job.ID)
@@ -870,7 +954,10 @@ func TestCronTool_PicoCommandJobsStillRequireAllowlist(t *testing.T) {
 
 	getResult := allowedTool.Execute(ctx, map[string]any{"action": "get", "job_id": allowedJob.ID})
 	if getResult.IsError {
-		t.Fatalf("allowlisted pico command job should be visible from another chat, got: %s", getResult.ForLLM)
+		t.Fatalf(
+			"allowlisted pico command job should be visible from another chat, got: %s",
+			getResult.ForLLM,
+		)
 	}
 }
 
@@ -1035,7 +1122,11 @@ func TestCronTool_RemoteCannotManageCommandJobUnlessAllowlisted(t *testing.T) {
 
 			result := tool.Execute(ctx, map[string]any{"action": action, "job_id": job.ID})
 			if !result.IsError || !strings.Contains(result.ForLLM, "not accessible") {
-				t.Fatalf("expected %s to reject non-allowlisted command job, got: %+v", action, result)
+				t.Fatalf(
+					"expected %s to reject non-allowlisted command job, got: %+v",
+					action,
+					result,
+				)
 			}
 
 			saved, ok := tool.cronService.GetJob(job.ID)
@@ -1061,7 +1152,11 @@ func TestCronTool_InternalChannelCanManageAllJobs(t *testing.T) {
 
 			result := tool.Execute(ctx, map[string]any{"action": action, "job_id": job.ID})
 			if result.IsError {
-				t.Fatalf("expected internal %s to access command job, got: %s", action, result.ForLLM)
+				t.Fatalf(
+					"expected internal %s to access command job, got: %s",
+					action,
+					result.ForLLM,
+				)
 			}
 
 			saved, ok := tool.cronService.GetJob(job.ID)
@@ -1095,7 +1190,11 @@ func TestCronTool_RemoteCanManageOwnNonCommandJob(t *testing.T) {
 
 			result := tool.Execute(ctx, map[string]any{"action": action, "job_id": job.ID})
 			if result.IsError {
-				t.Fatalf("expected %s to access own non-command job, got: %s", action, result.ForLLM)
+				t.Fatalf(
+					"expected %s to access own non-command job, got: %s",
+					action,
+					result.ForLLM,
+				)
 			}
 		})
 	}
@@ -1116,12 +1215,20 @@ func TestCronTool_WildcardRemoteCanManageOwnCommandJob(t *testing.T) {
 
 			result := tool.Execute(ctx, map[string]any{"action": action, "job_id": job.ID})
 			if result.IsError {
-				t.Fatalf("expected wildcard %s to access own command job, got: %s", action, result.ForLLM)
+				t.Fatalf(
+					"expected wildcard %s to access own command job, got: %s",
+					action,
+					result.ForLLM,
+				)
 			}
 
 			otherResult := tool.Execute(ctx, map[string]any{"action": action, "job_id": other.ID})
 			if !otherResult.IsError || !strings.Contains(otherResult.ForLLM, "not accessible") {
-				t.Fatalf("wildcard %s should still reject other chat job, got: %+v", action, otherResult)
+				t.Fatalf(
+					"wildcard %s should still reject other chat job, got: %+v",
+					action,
+					otherResult,
+				)
 			}
 		})
 	}
@@ -1270,7 +1377,8 @@ func TestCronTool_InternalCanAccessCommandJobFromAnyChannel(t *testing.T) {
 		t.Fatalf("get failed: %s", getResult.ForLLM)
 	}
 	got := parseCronJobResult(t, getResult)
-	if got.Payload.Command != "df -h" || got.Payload.Channel != "telegram" || got.Payload.To != "chat-1" {
+	if got.Payload.Command != "df -h" || got.Payload.Channel != "telegram" ||
+		got.Payload.To != "chat-1" {
 		t.Fatalf("get returned wrong command job: %+v", got.Payload)
 	}
 
@@ -1303,7 +1411,10 @@ func TestCronTool_ExecuteJobPublishesErrorWhenExecDisabled(t *testing.T) {
 
 	got, err := tool.ExecuteJob(context.Background(), job)
 	if err == nil {
-		t.Fatalf("ExecuteJob() error = nil, want error when command execution is disabled (result %q)", got)
+		t.Fatalf(
+			"ExecuteJob() error = nil, want error when command execution is disabled (result %q)",
+			got,
+		)
 	}
 	if !strings.Contains(err.Error(), "command execution is disabled") {
 		t.Fatalf("ExecuteJob() error = %v, want mention of disabled command execution", err)
@@ -1339,7 +1450,11 @@ func TestCronTool_ExecuteJobPublishesAgentResponse(t *testing.T) {
 		t.Fatalf("sessionKey = %q, want agent:cron-job-1-{uuid}", executor.lastKey)
 	}
 	if executor.lastChan != "telegram" || executor.lastChatID != "chat-1" {
-		t.Fatalf("executor target = %s/%s, want telegram/chat-1", executor.lastChan, executor.lastChatID)
+		t.Fatalf(
+			"executor target = %s/%s, want telegram/chat-1",
+			executor.lastChan,
+			executor.lastChatID,
+		)
 	}
 	if executor.lastPrompt != "send me a poem" {
 		t.Fatalf("prompt = %q, want original message", executor.lastPrompt)
@@ -1351,7 +1466,11 @@ func TestCronTool_ExecuteJobPublishesAgentResponse(t *testing.T) {
 		t.Fatalf("published sessionKey = %q, want %q", executor.publishedKey, executor.lastKey)
 	}
 	if executor.publishedChan != "telegram" || executor.publishedChatID != "chat-1" {
-		t.Fatalf("published target = %s/%s, want telegram/chat-1", executor.publishedChan, executor.publishedChatID)
+		t.Fatalf(
+			"published target = %s/%s, want telegram/chat-1",
+			executor.publishedChan,
+			executor.publishedChatID,
+		)
 	}
 }
 
@@ -1383,7 +1502,10 @@ func TestCronTool_ExecuteJobSkipsWhenMessageToolAlreadySent(t *testing.T) {
 	mustExecuteJobOK(t, tool, job)
 
 	if executor.publishedResp != "" {
-		t.Fatalf("expected no published response when message tool already sent, got: %q", executor.publishedResp)
+		t.Fatalf(
+			"expected no published response when message tool already sent, got: %q",
+			executor.publishedResp,
+		)
 	}
 }
 
@@ -1481,7 +1603,11 @@ func TestCronTool_ExecuteJobFailureRecordedInJobState(t *testing.T) {
 
 	everyMS := time.Hour.Milliseconds()
 	job, err := tool.cronService.AddJob(
-		"failing", cron.CronSchedule{Kind: "every", EveryMS: &everyMS}, "do it", "telegram", "chat-1",
+		"failing",
+		cron.CronSchedule{Kind: "every", EveryMS: &everyMS},
+		"do it",
+		"telegram",
+		"chat-1",
 	)
 	if err != nil {
 		t.Fatalf("AddJob() error: %v", err)
@@ -1898,5 +2024,24 @@ func TestFormatTimeMSInLocation_TruncatesMilliseconds(t *testing.T) {
 	}
 	if want := int64(1792393200000); parsed.UnixMilli() != want {
 		t.Fatalf("rendered time %q resolves to %d ms, want %d ms", got, parsed.UnixMilli(), want)
+	}
+}
+
+func TestCronTool_ExecuteJobRoutesToAgent(t *testing.T) {
+	executor := &stubJobExecutor{response: "ok"}
+	tool := newTestCronToolWithExecutorAndConfig(t, executor, config.DefaultConfig())
+	job := &cron.CronJob{ID: "job-agent", AgentID: "sales"}
+	job.Payload.Message = "do work"
+	job.Payload.Channel = "cli"
+	job.Payload.To = "direct"
+
+	if _, err := tool.ExecuteJob(context.Background(), job); err != nil {
+		t.Fatalf("ExecuteJob() error = %v", err)
+	}
+	if executor.lastAgentID != "sales" {
+		t.Fatalf("agent = %q, want sales", executor.lastAgentID)
+	}
+	if executor.publishedAgent != "sales" {
+		t.Fatalf("published agent = %q, want sales", executor.publishedAgent)
 	}
 }

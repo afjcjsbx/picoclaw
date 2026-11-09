@@ -17,6 +17,8 @@ type CronJobDeclaration struct {
 	Message        string
 	Channel        string
 	To             string
+	// AgentID routes runs to a specific agent. Empty uses the default route.
+	AgentID string
 	// Enabled is applied only when non-nil. Routine reconciliation omits it,
 	// which preserves an operator's pause/disable decision.
 	Enabled *bool
@@ -108,6 +110,7 @@ func (cs *CronService) ReconcileDeclarations(
 					Channel: decl.Channel,
 					To:      decl.To,
 				},
+				AgentID:        decl.AgentID,
 				DeclarationKey: decl.DeclarationKey,
 				CreatedAtMS:    now,
 				UpdatedAtMS:    now,
@@ -129,8 +132,9 @@ func (cs *CronService) ReconcileDeclarations(
 			job.Payload.Channel != decl.Channel ||
 			job.Payload.To != decl.To
 		enabledChanged := decl.Enabled != nil && job.Enabled != *decl.Enabled
+		agentChanged := job.AgentID != decl.AgentID
 		nameChanged := job.Name != decl.Name
-		if !scheduleChanged && !payloadChanged && !enabledChanged && !nameChanged {
+		if !scheduleChanged && !payloadChanged && !enabledChanged && !agentChanged && !nameChanged {
 			report.Unchanged++
 			continue
 		}
@@ -138,6 +142,7 @@ func (cs *CronService) ReconcileDeclarations(
 		job.Name = decl.Name
 		job.Schedule = cloneSchedule(decl.Schedule)
 		job.Payload = CronPayload{Message: decl.Message, Channel: decl.Channel, To: decl.To}
+		job.AgentID = decl.AgentID
 		job.DeleteAfterRun = decl.Schedule.Kind == "at"
 		if enabledChanged {
 			job.Enabled = *decl.Enabled

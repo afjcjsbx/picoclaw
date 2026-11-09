@@ -60,6 +60,9 @@ type CronJob struct {
 	CreatedAtMS    int64        `json:"createdAtMs"`
 	UpdatedAtMS    int64        `json:"updatedAtMs"`
 	DeleteAfterRun bool         `json:"deleteAfterRun"`
+	// AgentID routes a job run to a specific agent. Empty means the default
+	// channel route.
+	AgentID string `json:"agentId,omitempty"`
 	// DeclarationKey marks a host-managed job owned by a plugin or another
 	// declaration source. Jobs without a key are user-owned and are never
 	// touched by reconciliation.
@@ -258,7 +261,11 @@ func (cs *CronService) checkJobs() {
 			// job, the other side backs off. The skipped occurrence is covered by
 			// the run already in flight and the schedule is advanced below.
 			if !cs.claimJobUnsafe(job.ID) {
-				log.Printf("[cron] job '%s' (id: %s) is still running, skipping scheduled run", job.Name, job.ID)
+				log.Printf(
+					"[cron] job '%s' (id: %s) is still running, skipping scheduled run",
+					job.Name,
+					job.ID,
+				)
 				continue
 			}
 			dueRuns = append(dueRuns, dueRun{jobID: job.ID, scheduledAt: *job.State.NextRunAtMS})
@@ -485,7 +492,12 @@ func (cs *CronService) executeJobWithOrigin(jobID string, origin Execution) {
 			job.Name, execDuration, nextRunStr,
 		)
 	default:
-		log.Printf("[cron] ✓ job '%s' completed in %dms, next run: %s", job.Name, execDuration, nextRunStr)
+		log.Printf(
+			"[cron] ✓ job '%s' completed in %dms, next run: %s",
+			job.Name,
+			execDuration,
+			nextRunStr,
+		)
 	}
 
 	if err := cs.saveStoreUnsafe(); err != nil {
@@ -588,7 +600,8 @@ func (cs *CronService) recomputeNextRuns() {
 			if job.DeleteAfterRun {
 				log.Printf(
 					"[cron] dropping one-time job '%s' (id: %s) whose scheduled time elapsed before startup",
-					job.Name, job.ID,
+					job.Name,
+					job.ID,
 				)
 				continue
 			}
@@ -879,12 +892,15 @@ func (cs *CronService) UpdateJob(job *CronJob) error {
 				updated.DeclarationKey = previous.DeclarationKey
 			}
 			if len(updated.State.RunHistory) == 0 && len(previous.State.RunHistory) > 0 {
-				updated.State.RunHistory = append([]CronRunRecord(nil), previous.State.RunHistory...)
+				updated.State.RunHistory = append(
+					[]CronRunRecord(nil),
+					previous.State.RunHistory...)
 			}
 			now := time.Now().UnixMilli()
 			updated.UpdatedAtMS = now
 			if updated.Enabled {
-				if previous.Enabled != updated.Enabled || !sameSchedule(previous.Schedule, updated.Schedule) {
+				if previous.Enabled != updated.Enabled ||
+					!sameSchedule(previous.Schedule, updated.Schedule) {
 					updated.State.NextRunAtMS = cs.computeNextRun(&updated.Schedule, now)
 				}
 			} else {

@@ -7729,3 +7729,53 @@ func TestAgentLoop_Run_ReleasesMediaScopeAfterTurn(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+func TestPublishResponseIfNeededForAgentUsesRoutedAgentMessageTool(t *testing.T) {
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{Workspace: t.TempDir(), ModelName: "test-model"},
+			List: []config.AgentConfig{
+				{ID: "main", Default: true},
+				{ID: "sales"},
+			},
+		},
+	}
+	msgBus := bus.NewMessageBus()
+	al := NewAgentLoop(cfg, msgBus, &mockProvider{})
+	defer al.Close()
+	cm := &recordingChannelManager{}
+	al.channelManager = cm
+
+	sales, ok := al.GetRegistry().GetAgent("sales")
+	if !ok {
+		t.Fatal("sales agent missing")
+	}
+	mt := integrationtools.NewMessageTool()
+	mt.SetSendCallback(func(
+		ctx context.Context,
+		channel, chatID, content, replyToMessageID string,
+		mediaParts []bus.MediaPart,
+	) error {
+		return nil
+	})
+	sales.Tools.Register(mt)
+	sessionKey := "session-sales"
+	if result := mt.Execute(
+		tools.WithToolSessionContext(context.Background(), "sales", sessionKey, nil),
+		map[string]any{"content": "ack", "channel": "telegram", "chat_id": "-100123"},
+	); result == nil || result.IsError {
+		t.Fatalf("message tool execute failed: %+v", result)
+	}
+
+	al.PublishResponseIfNeededForAgent(
+		context.Background(), "telegram", "-100123", sessionKey, "final reply", "sales",
+	)
+	if got := cm.dismissed; len(got) != 1 || got[0] != "telegram:-100123" {
+		t.Fatalf("dismissed = %v, want [telegram:-100123]", got)
+	}
+	select {
+	case outbound := <-msgBus.OutboundChan():
+		t.Fatalf("duplicate outbound after routed message tool send: %+v", outbound)
+	default:
+	}
+}

@@ -44,13 +44,55 @@ func pluginAllowsAgent(entry config.PluginEntryConfig, id string) bool {
 	return entry.Agents == nil || slices.Contains(entry.Agents, id)
 }
 
+// pluginScheduleAgent chooses the agent that runs a plugin's schedules.
+//
+// A nil Agents list leaves routing to the default channel route. An explicit
+// list is a permission boundary: schedules run only when one of the listed
+// agents can be selected unambiguously. With multiple allowed agents the
+// default agent is used when it is in the list; otherwise the host cannot pick
+// a safe target and the declarations are not installed.
+func pluginScheduleAgent(entry config.PluginEntryConfig, registry *AgentRegistry) (string, bool) {
+	if registry == nil {
+		return "", false
+	}
+	if entry.Agents == nil {
+		return "", true
+	}
+	allowed := make([]string, 0, len(entry.Agents))
+	seen := make(map[string]struct{}, len(entry.Agents))
+	for _, id := range entry.Agents {
+		agent, ok := registry.GetAgent(id)
+		if !ok {
+			continue
+		}
+		if _, duplicate := seen[agent.ID]; duplicate {
+			continue
+		}
+		seen[agent.ID] = struct{}{}
+		allowed = append(allowed, agent.ID)
+	}
+	switch len(allowed) {
+	case 0:
+		return "", false
+	case 1:
+		return allowed[0], true
+	}
+	if fallback := registry.GetDefaultAgent(); fallback != nil {
+		if _, ok := seen[fallback.ID]; ok {
+			return fallback.ID, true
+		}
+	}
+	return "", false
+}
+
 // pluginRelativePath rewrites an absolute skill path to a plugin-root-relative,
 // slash-separated path. It returns "" when the path is empty, is not under the
 // root, or does not yield a clean relative path, so a host path is never
 // exposed to the catalog.
 func pluginRelativePath(root, path string) string {
 	rel, err := filepath.Rel(root, path)
-	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	if err != nil || rel == "." || rel == ".." ||
+		strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return ""
 	}
 	return filepath.ToSlash(rel)
@@ -105,7 +147,11 @@ func (al *AgentLoop) waitPlugins(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	if err := manager.Wait(ctx); err != nil {
-		logger.DebugCF("plugins", "Plugin loading continues in background", map[string]any{"reason": err.Error()})
+		logger.DebugCF(
+			"plugins",
+			"Plugin loading continues in background",
+			map[string]any{"reason": err.Error()},
+		)
 	}
 }
 
@@ -171,7 +217,23 @@ func (al *AgentLoop) publishPlugin(
 	binding.mu.Lock()
 	defer binding.mu.Unlock()
 	if capabilities.Schedules != nil {
-		binding.schedules[capabilities.ID] = append([]plugins.Schedule(nil), capabilities.Schedules...)
+		schedules := append([]plugins.Schedule(nil), capabilities.Schedules...)
+		if len(schedules) > 0 {
+			agentID, ok := pluginScheduleAgent(capabilities.Entry, registry)
+			if !ok {
+				report("schedules", fmt.Errorf("no allowed agent can run the plugin's schedules"))
+				schedules = nil
+			} else {
+				for i := range schedules {
+					schedules[i].AgentID = agentID
+				}
+			}
+		}
+		if schedules == nil {
+			delete(binding.schedules, capabilities.ID)
+		} else {
+			binding.schedules[capabilities.ID] = schedules
+		}
 	}
 	mcpToolsByAgent := make(map[string]map[string]*plugins.PluginTool)
 	for _, id := range registry.ListAgentIDs() {
@@ -193,13 +255,20 @@ func (al *AgentLoop) publishPlugin(
 			return added
 		}
 		if capabilities.HasResources {
-			resource := &plugins.ResourceTool{ID: capabilities.ID, Root: capabilities.Root, Lifetime: ctx}
+			resource := &plugins.ResourceTool{
+				ID:       capabilities.ID,
+				Root:     capabilities.Root,
+				Lifetime: ctx,
+			}
 			register(resource, false)
 			if len(capabilities.Skills) > 0 {
 				entries := append([]skills.PluginSkill(nil), capabilities.Skills...)
 				for i := range entries {
 					entries[i].Info.ResourceTool = resource.Name()
-					entries[i].Info.Path = pluginRelativePath(capabilities.Root, entries[i].Info.Path)
+					entries[i].Info.Path = pluginRelativePath(
+						capabilities.Root,
+						entries[i].Info.Path,
+					)
 					entries[i].Body = fmt.Sprintf(
 						"Read bundled plugin references with the `%s` tool using a path relative to the plugin root (for example `skills/greet/references/help.md`). Do not use filesystem tools on plugin files; they live outside the workspace.\n\n%s",
 						resource.Name(),
@@ -208,7 +277,10 @@ func (al *AgentLoop) publishPlugin(
 				}
 				agent.ContextBuilder.skillsLoader.SetPluginSkills(capabilities.ID, entries)
 				agent.ContextBuilder.InvalidateCache()
-				binding.skills = append(binding.skills, pluginSkillRegistration{agent.ContextBuilder, capabilities.ID})
+				binding.skills = append(
+					binding.skills,
+					pluginSkillRegistration{agent.ContextBuilder, capabilities.ID},
+				)
 			}
 		}
 		registeredMCP := false
@@ -219,7 +291,11 @@ func (al *AgentLoop) publishPlugin(
 				continue
 			}
 			hidden := pluginToolDeferred(cfg.Tools.MCP.Discovery, tool.Deferred)
-			agentTool := tool.ForAgent(agent.Workspace, cfg.Tools.MCP.GetMaxInlineTextChars(), al.runtimeEvents)
+			agentTool := tool.ForAgent(
+				agent.Workspace,
+				cfg.Tools.MCP.GetMaxInlineTextChars(),
+				al.runtimeEvents,
+			)
 			if register(agentTool, hidden) {
 				registeredMCP = true
 				mcpTools[tool.Server+"\x00"+tool.RemoteName()] = agentTool
@@ -227,7 +303,10 @@ func (al *AgentLoop) publishPlugin(
 		}
 		mcpToolsByAgent[id] = mcpTools
 		if registeredMCP && cfg.Tools.MCP.Discovery.Enabled {
-			agent.ContextBuilder.WithToolDiscovery(cfg.Tools.MCP.Discovery.UseBM25, cfg.Tools.MCP.Discovery.UseRegex)
+			agent.ContextBuilder.WithToolDiscovery(
+				cfg.Tools.MCP.Discovery.UseBM25,
+				cfg.Tools.MCP.Discovery.UseRegex,
+			)
 			d := cfg.Tools.MCP.Discovery
 			ttl, limit := d.TTL, d.MaxSearchResults
 			if ttl <= 0 {
@@ -238,10 +317,16 @@ func (al *AgentLoop) publishPlugin(
 			}
 			// Search tools are shared agent infrastructure; existing ones win.
 			if d.UseRegex {
-				_, _ = agent.Tools.RegisterUnique(tools.NewRegexSearchTool(agent.Tools, ttl, limit), false)
+				_, _ = agent.Tools.RegisterUnique(
+					tools.NewRegexSearchTool(agent.Tools, ttl, limit),
+					false,
+				)
 			}
 			if d.UseBM25 {
-				_, _ = agent.Tools.RegisterUnique(tools.NewBM25SearchTool(agent.Tools, ttl, limit), false)
+				_, _ = agent.Tools.RegisterUnique(
+					tools.NewBM25SearchTool(agent.Tools, ttl, limit),
+					false,
+				)
 			}
 		}
 	}
@@ -325,7 +410,11 @@ func (al *AgentLoop) publishPlugin(
 			report("hook:"+hook.Name, err)
 			continue
 		}
-		scoped := &pluginHook{ProcessHook: process, agents: capabilities.Entry.Agents, stages: hook.Intercept}
+		scoped := &pluginHook{
+			ProcessHook: process,
+			agents:      capabilities.Entry.Agents,
+			stages:      hook.Intercept,
+		}
 		name := "plugin:" + hook.Name
 		if err := al.MountHook(HookRegistration{Name: name, Source: HookSourceProcess, Hook: scoped}); err != nil {
 			_ = process.Close()

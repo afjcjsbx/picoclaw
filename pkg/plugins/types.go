@@ -107,6 +107,7 @@ type Schedule struct {
 	Message  string
 	Channel  string
 	To       string
+	AgentID  string
 	Enabled  *bool
 }
 
@@ -124,6 +125,7 @@ func (s Schedule) Declaration() cron.CronJobDeclaration {
 		Message:        s.Message,
 		Channel:        s.Channel,
 		To:             s.To,
+		AgentID:        s.AgentID,
 		Enabled:        s.Enabled,
 	}
 }
