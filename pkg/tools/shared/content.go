@@ -50,6 +50,11 @@ func RawBase64DataURLs(text string) []InlineDataURL {
 }
 
 func SanitizeToolLLMContent(text string) string {
+	// Tool output is untrusted, model-facing text. A tool (or an MCP server
+	// behind it) can append TAG characters or bidi controls that render as
+	// nothing to the user while the model still reads them, so remove them
+	// before the media/base64 checks below.
+	text = StripInvisibleUnicode(text)
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
 		return text
