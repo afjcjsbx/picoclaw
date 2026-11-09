@@ -486,13 +486,20 @@ func (cs *CronService) executeJobWithOrigin(jobID string, origin Execution) {
 	// jobs need their lifecycle finalized here.
 	var nextRunStr string
 	if job.Schedule.Kind == "at" {
-		if job.DeleteAfterRun {
+		if job.DeleteAfterRun && err == nil {
 			cs.removeJobUnsafe(job.ID)
 			nextRunStr = "(deleted)"
 		} else {
+			// Keep failed one-shot jobs for diagnosis. They stay disabled so
+			// the scheduler does not retry them, but RunJob can retry them
+			// manually and the error history remains visible.
 			job.Enabled = false
 			job.State.NextRunAtMS = nil
-			nextRunStr = "(disabled)"
+			if err != nil {
+				nextRunStr = "(disabled after failure)"
+			} else {
+				nextRunStr = "(disabled)"
+			}
 		}
 	} else if job.State.NextRunAtMS != nil {
 		nextRunStr = time.UnixMilli(*job.State.NextRunAtMS).Format("2006-01-02 15:04:05")
