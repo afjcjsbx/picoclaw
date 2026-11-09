@@ -236,12 +236,13 @@ func (cs *CronService) Wake() <-chan struct{} {
 	return cs.wakeChan
 }
 
-// Reload applies an external edit of the job store, if hot-reload is enabled.
+// Reload applies an external edit of the job store. Unlike the periodic
+// polling path, it forces a read even when the reload interval is zero.
 func (cs *CronService) Reload() {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 	if cs.running {
-		cs.syncFromDiskUnsafe()
+		cs.syncFromDiskUnsafeForced()
 	}
 }
 
@@ -749,7 +750,15 @@ func (cs *CronService) storeChanged() (os.FileInfo, bool) {
 // the store so an external edit is never overwritten by a stale in-memory copy;
 // the poll tick in runLoop calls it to pick edits up while idle.
 func (cs *CronService) syncFromDiskUnsafe() {
-	if cs.reloadEvery <= 0 {
+	cs.syncFromDiskUnsafeWithForce(false)
+}
+
+func (cs *CronService) syncFromDiskUnsafeForced() {
+	cs.syncFromDiskUnsafeWithForce(true)
+}
+
+func (cs *CronService) syncFromDiskUnsafeWithForce(force bool) {
+	if !force && cs.reloadEvery <= 0 {
 		return
 	}
 	info, changed := cs.storeChanged()
