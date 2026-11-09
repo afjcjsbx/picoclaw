@@ -169,15 +169,16 @@ func (m *Manager) load(item installation) {
 		m.diagnostic(Diagnostic{Plugin: item.id, Component: "data", Message: err.Error()})
 	}
 	pc := PluginContext{
-		Context:     m.ctx,
-		ID:          item.id,
-		Root:        item.root,
-		DataDir:     dataDir,
-		Logger:      slog.Default().With("plugin", item.id),
-		Config:      maps.Clone(item.entry.Config),
-		AllowHooks:  item.entry.AllowHooks,
-		InitTimeout: m.cfg.InitTimeout(),
-		CallTimeout: m.cfg.CallTimeout(),
+		Context:        m.ctx,
+		ID:             item.id,
+		Root:           item.root,
+		DataDir:        dataDir,
+		Logger:         slog.Default().With("plugin", item.id),
+		Config:         maps.Clone(item.entry.Config),
+		AllowHooks:     item.entry.AllowHooks,
+		AllowSchedules: item.entry.AllowSchedules,
+		InitTimeout:    m.cfg.InitTimeout(),
+		CallTimeout:    m.cfg.CallTimeout(),
 	}
 	p := &packagePlugin{manifest: manifest, manager: mcp.NewManager(), host: m, entry: item.entry}
 	m.mu.Lock()
@@ -258,6 +259,10 @@ func (p *packagePlugin) Initialize(pc PluginContext) error {
 	for _, d := range diagnostics {
 		p.host.diagnostic(d)
 	}
+	schedules, diagnostics := discoverSchedules(p.manifest, pc)
+	for _, d := range diagnostics {
+		p.host.diagnostic(d)
+	}
 	var mcpHooks, processHooks []Hook
 	for _, hook := range hooks {
 		if hook.MCP != nil {
@@ -266,7 +271,12 @@ func (p *packagePlugin) Initialize(pc PluginContext) error {
 			processHooks = append(processHooks, hook)
 		}
 	}
-	publish(Capabilities{Skills: skillEntries, Hooks: processHooks, HasResources: hasResources})
+	publish(Capabilities{
+		Skills:       skillEntries,
+		Hooks:        processHooks,
+		Schedules:    schedules,
+		HasResources: hasResources,
+	})
 	servers := map[string]ServerSpec{}
 	if componentExists(pc.Root, "mcp.json") {
 		data, err := ReadPackageFile(pc.Root, "mcp.json")

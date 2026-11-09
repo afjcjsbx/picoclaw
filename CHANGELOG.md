@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Plugin-managed cron schedules: the `com.sipeed.picoclaw` extension accepts `schedules`/`schedules.json`, gated by `allow_schedules`; the host reconciles jobs by stable `plugin:<id>:<name>` declaration key, preserves operator pauses and run state, and removes only its own declared jobs.
+- Pluggable cron trigger providers via `tools.cron.trigger`, with `inprocess` as the default and a safe fallback for unknown providers. Trigger selection is separate from the shared execution/delivery path.
+- Cron execution context (`cron.Execution`) is attached to context-aware job handlers and agent hooks as `meta.Cron` / `cron_execution`, with `scheduled` and `manual` sources for trigger-aware plugins.
+
 ## [0.5.1] - 2026-10-18
 
 ### Added

@@ -54,7 +54,8 @@ my-plugin/
 │       └── references/example.md
 ├── bin/server                       # optional bundled executable
 └── com.sipeed.picoclaw/              # optional PicoClaw extension
-    └── hooks.json
+    ├── hooks.json
+    └── schedules.json                # optional host-managed cron jobs
 ```
 
 Minimal `plugin.json`:
@@ -299,6 +300,7 @@ with `picoclaw plugin edit`. A fuller entry:
 | `skill_names` | Load only these skills, written **without** the `<id>:` prefix. `null` (what `plugin add` writes) loads all; `[]` loads none |
 | `agents` | Agents that may use the plugin. `null` means all; `[]` means none |
 | `allow_hooks` | Grant for the plugin's PicoClaw hooks. Off by default; `plugin show` lists hooks as inactive until it is set |
+| `allow_schedules` | Grant for host-managed cron schedules. Off by default; `plugin show` lists schedules as inactive until it is set |
 | `config` | String values handed to the plugin's process hooks |
 | `mcp_overrides` | Replace or add MCP servers from the host, without editing the package. This is where headers that read host environment variables belong |
 | `mcp_bearer_token_files` | Bearer tokens kept in a file under `plugin-data/<id>/`, never in the package |
@@ -331,6 +333,7 @@ plugin's data directory `plugin-data/<id>` are keyed by it.
         "enabled": true,
         "agents": ["main"],
         "allow_hooks": false,
+        "allow_schedules": false,
         "config": {"format": "short"}
       }
     }
@@ -698,6 +701,102 @@ existing hook manager's timeout and error policies. In particular, approval
 errors can deny a tool call; they do not crash the runtime. Trusted interception
 hooks can alter or short-circuit execution, so `allow_hooks` is a separate grant.
 Portable MCP tools always use the normal registry/approval execution path.
+
+## Host-managed schedules
+
+A plugin can declare recurring or one-shot agent work without running its own
+scheduler. The host owns the job in `workspace/cron/jobs.json`; the package owns
+only the declaration. This is the PicoClaw equivalent of an OpenClaw managed
+job with a stable declaration key.
+
+Schedules are opt-in and require both the cron tool and a per-entry grant:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "my-plugin": {
+        "enabled": true,
+        "allow_schedules": true
+      }
+    }
+  },
+  "tools": {
+    "cron": {
+      "enabled": true
+    }
+  }
+}
+```
+
+Put the declarations inline under the extension namespace or in
+`com.sipeed.picoclaw/schedules.json`; using both is an error limited to the
+schedule component.
+
+```json
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "my-plugin",
+  "extensions": {
+    "com.sipeed.picoclaw": {
+      "schedules": [{
+        "name": "nightly",
+        "cron": "0 3 * * *",
+        "tz": "Europe/Rome",
+        "message": "Run the nightly memory consolidation cycle."
+      }]
+    }
+  }
+}
+```
+
+Accepted fields:
+
+| Field | Meaning |
+| --- | --- |
+| `name` | Stable schedule name; creates declaration key `plugin:<id>:<name>` |
+| `schedule` | Full schedule object: `kind` plus `atMs`, `everyMs`, `expr`, `tz` |
+| `cron` / `cron_expr` | Shortcut for a 5-field cron expression |
+| `every_seconds` | Shortcut for an interval schedule |
+| `at` / `at_ms` | Shortcut for an absolute one-shot (`RFC3339` or Unix milliseconds) |
+| `tz` | Time zone for a cron expression |
+| `message` | Required agent prompt; bounded to 16 KiB |
+| `channel` / `to` | Optional delivery pair; set both or neither |
+| `enabled` | Optional explicit enable/disable |
+
+At most 32 schedules are accepted per plugin.
+
+Reconciliation runs after plugin discovery on gateway startup and reload. It
+creates or updates jobs by declaration key and preserves the stored job ID,
+creation time, run history and failure history. A job paused or disabled by the
+operator stays paused unless the declaration explicitly sets `enabled`. Only
+jobs under the `plugin:` prefix are candidates for pruning, so user-created cron
+jobs and jobs owned by another declaration source are never touched. Disabling
+the plugin, removing `allow_schedules`, or removing the declaration removes its
+host-managed jobs after the next successful discovery pass. When plugin discovery
+times out, the host applies the declarations it saw but does not prune jobs from
+slow or failed plugins.
+
+Hooks can observe `cron.reconciled` after each reconciliation pass and
+`cron.changed` when a pass created, updated or removed a job. The payload
+contains the reason (`startup` or `reload`), effective cron-enabled state and
+the created/updated/unchanged/removed counts; aliases `cron_reconciled` and
+`cron_changed` are accepted by `observe`. Events are published per agent binding
+because MCP hook actions are scoped to an agent.
+
+Cron-triggered agent turns carry a `cron.Execution` identity with the execution
+ID, job ID/name, declaration key, source (`scheduled` or `manual`) and scheduled
+instant. Process hooks receive it as `meta.Cron` on hook requests and as
+`cron_*` attributes on runtime events. MCP hooks can use `${cron_execution}`
+(for example `${cron_execution.job_id}`). Interactive turns have no execution
+identity, so a hook can distinguish a scheduled run without trusting the model
+or the session-key prefix.
+
+The trigger provider is separate from execution. `tools.cron.trigger` selects a
+registered provider; empty or `inprocess` uses the built-in timer. A provider
+only decides when `CronService.Tick()` runs. Job storage, due detection,
+execution, delivery and state persistence always use the shared path. An
+unknown provider logs a warning and falls back to `inprocess`.
 
 ## Runtime, failures and isolation
 

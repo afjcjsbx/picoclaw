@@ -419,5 +419,7 @@ func validHookEventKinds() map[string]string {
 	kinds["subturn_result_delivered"] = runtimeevents.KindAgentSubTurnResultDelivered.String()
 	kinds["subturn_orphan"] = runtimeevents.KindAgentSubTurnOrphan.String()
 	kinds["error"] = runtimeevents.KindAgentError.String()
+	kinds["cron_reconciled"] = runtimeevents.KindCronReconciled.String()
+	kinds["cron_changed"] = runtimeevents.KindCronChanged.String()
 	return kinds
 }

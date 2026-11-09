@@ -1404,6 +1404,8 @@ type CronToolsConfig struct {
 	ExecTimeoutMinutes    int      `json:"exec_timeout_minutes"    env:"PICOCLAW_TOOLS_CRON_EXEC_TIMEOUT_MINUTES"`
 	AllowCommand          bool     `json:"allow_command"           env:"PICOCLAW_TOOLS_CRON_ALLOW_COMMAND"`
 	CommandAllowedRemotes []string `json:"command_allowed_remotes" env:"PICOCLAW_TOOLS_CRON_COMMAND_ALLOWED_REMOTES"`
+	// Trigger selects a registered trigger provider. Empty means "inprocess".
+	Trigger string `json:"trigger,omitempty" env:"PICOCLAW_TOOLS_CRON_TRIGGER"`
 }
 
 type ExecConfig struct {

@@ -438,6 +438,8 @@ func setupAndStartServices(
 	execTimeout := time.Duration(cfg.Tools.Cron.ExecTimeoutMinutes) * time.Minute
 	var err error
 	cronService, err := setupCronTool(
+		context.Background(),
+		"startup",
 		agentLoop,
 		msgBus,
 		cfg.WorkspacePath(),
@@ -635,7 +637,7 @@ func handleConfigReload(
 	if err != nil {
 		logger.Errorf("  ⚠ Error creating new provider: %v", err)
 		logger.Warn("  Attempting to restart services with old provider and config...")
-		if restartErr := restartServices(al, runningServices, msgBus); restartErr != nil {
+		if restartErr := restartServices(ctx, al, runningServices, msgBus); restartErr != nil {
 			logger.Errorf("  ⚠ Failed to restart services: %v", restartErr)
 		}
 		return fmt.Errorf("error creating new provider: %w", err)
@@ -654,7 +656,7 @@ func handleConfigReload(
 			cp.Close()
 		}
 		logger.Warn("  Attempting to restart services with old provider and config...")
-		if restartErr := restartServices(al, runningServices, msgBus); restartErr != nil {
+		if restartErr := restartServices(ctx, al, runningServices, msgBus); restartErr != nil {
 			logger.Errorf("  ⚠ Failed to restart services: %v", restartErr)
 		}
 		return fmt.Errorf("error reloading agent loop: %w", err)
@@ -663,7 +665,7 @@ func handleConfigReload(
 	*providerRef = newProvider
 
 	logger.Info("  Restarting all services with new configuration...")
-	if err := restartServices(al, runningServices, msgBus); err != nil {
+	if err := restartServices(ctx, al, runningServices, msgBus); err != nil {
 		logger.Errorf("  ⚠ Error restarting services: %v", err)
 		return fmt.Errorf("error restarting services: %w", err)
 	}
@@ -682,6 +684,7 @@ func handleConfigReload(
 }
 
 func restartServices(
+	ctx context.Context,
 	al *agent.AgentLoop,
 	runningServices *services,
 	msgBus *bus.MessageBus,
@@ -691,6 +694,8 @@ func restartServices(
 	execTimeout := time.Duration(cfg.Tools.Cron.ExecTimeoutMinutes) * time.Minute
 	var err error
 	cronService, err := setupCronTool(
+		ctx,
+		"reload",
 		al,
 		msgBus,
 		cfg.WorkspacePath(),
@@ -889,6 +894,8 @@ func getFileSize(path string) int64 {
 }
 
 func setupCronTool(
+	ctx context.Context,
+	reason string,
 	agentLoop *agent.AgentLoop,
 	msgBus *bus.MessageBus,
 	workspace string,
@@ -902,6 +909,16 @@ func setupCronTool(
 	// Pick up hand edits and `picoclaw cron` CLI changes to jobs.json without a restart.
 	cronService.SetReloadInterval(cfg.Power.ScalePollInterval(2 * time.Second))
 
+	trigger, triggerErr := cron.NewTrigger(cfg.Tools.Cron.Trigger)
+	if triggerErr != nil {
+		logger.WarnCF("cron", "Configured trigger provider is unavailable; using inprocess",
+			map[string]any{"configured": cfg.Tools.Cron.Trigger, "error": triggerErr.Error()})
+		trigger, _ = cron.NewTrigger("inprocess")
+	}
+	if err := cronService.SetTrigger(trigger); err != nil {
+		return nil, fmt.Errorf("configure cron trigger: %w", err)
+	}
+
 	var cronTool *tools.CronTool
 	if cfg.Tools.IsToolEnabled("cron") {
 		var err error
@@ -913,15 +930,74 @@ func setupCronTool(
 		agentLoop.RegisterTool(cronTool)
 	}
 
+	var (
+		report cron.ReconcileReport
+		recErr error
+	)
 	if cronTool != nil {
-		cronService.SetOnJob(func(job *cron.CronJob) (string, error) {
+		cronService.SetOnJobWithContext(func(jobCtx context.Context, job *cron.CronJob) (string, error) {
 			// Propagate the failure so the job state records lastStatus=error
 			// instead of reporting a broken run as "ok".
-			return cronTool.ExecuteJob(context.Background(), job)
+			return cronTool.ExecuteJob(jobCtx, job)
 		})
+		report, recErr = reconcilePluginSchedules(ctx, agentLoop, cronService)
+	} else {
+		// A disabled cron tool cannot execute plugin schedules. Remove only
+		// host-managed jobs so they cannot silently accumulate in the store.
+		report, recErr = cronService.ReconcileDeclarations("plugin:", nil, true)
+	}
+	if recErr != nil {
+		logger.WarnCF("cron", "Plugin schedule reconciliation failed",
+			map[string]any{"error": recErr.Error()})
+	} else {
+		payload := cronEventPayload{
+			Reason:      reason,
+			Enabled:     cronTool != nil,
+			Created:     report.Created,
+			Updated:     report.Updated,
+			Unchanged:   report.Unchanged,
+			Removed:     report.Removed,
+			RemovedKeys: report.RemovedKeys,
+		}
+		publishCronEvent(agentLoop, runtimeevents.KindCronReconciled, payload)
+		if report.Created+report.Updated+report.Removed > 0 {
+			publishCronEvent(agentLoop, runtimeevents.KindCronChanged, payload)
+		}
 	}
 
 	return cronService, nil
+}
+
+// reconcilePluginSchedules converges plugin-owned schedules with the cron
+// store after plugin discovery. When discovery did not finish, it applies the
+// declarations it observed but does not prune jobs from slow/failed plugins.
+func reconcilePluginSchedules(
+	ctx context.Context,
+	agentLoop *agent.AgentLoop,
+	cronService *cron.CronService,
+) (cron.ReconcileReport, error) {
+	waitErr := agentLoop.WaitPlugins(ctx)
+	if waitErr != nil {
+		logger.WarnCF("cron", "Plugin discovery did not finish; keeping existing plugin schedules",
+			map[string]any{"error": waitErr.Error()})
+	}
+	report, err := cronService.ReconcileDeclarations(
+		"plugin:",
+		agentLoop.PluginScheduleDeclarations(),
+		waitErr == nil,
+	)
+	if err != nil {
+		return report, err
+	}
+	if report.Created+report.Updated+report.Removed > 0 {
+		logger.InfoCF("cron", "Reconciled plugin schedules", map[string]any{
+			"created":   report.Created,
+			"updated":   report.Updated,
+			"unchanged": report.Unchanged,
+			"removed":   report.Removed,
+		})
+	}
+	return report, nil
 }
 
 func createHeartbeatHandler(agentLoop *agent.AgentLoop) func(prompt, channel, chatID string) *tools.ToolResult {

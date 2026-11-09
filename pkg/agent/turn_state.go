@@ -14,6 +14,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/cron"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/session"
@@ -216,6 +217,7 @@ type turnState struct {
 	toolKinds         []string
 	toolExecutions    []ToolExecutionRecord
 	turnCtx           *TurnContext
+	cronExecution     *cron.Execution
 
 	channel     string
 	chatID      string
@@ -308,6 +310,7 @@ func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScop
 		sessionKey:          opts.Dispatch.SessionKey,
 		activeSkills:        activeSkillNames(agent, opts),
 		turnCtx:             cloneTurnContext(scope.context),
+		cronExecution:       cron.CloneExecution(opts.CronExecution),
 		channel:             opts.Dispatch.Channel(),
 		chatID:              opts.Dispatch.ChatID(),
 		workspace:           agent.Workspace,
@@ -778,6 +781,7 @@ func (ts *turnState) eventMeta(source, tracePath string) HookMeta {
 		Iteration:            snap.Iteration,
 		Source:               source,
 		TracePath:            tracePath,
+		Cron:                 cron.CloneExecution(ts.cronExecution),
 		turnContext:          cloneTurnContext(ts.turnCtx),
 		suppressToolFeedback: ts.opts.SuppressToolFeedback,
 	}

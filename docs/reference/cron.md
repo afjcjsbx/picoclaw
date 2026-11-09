@@ -144,6 +144,13 @@ If you disable `tools.cron`, users can no longer create or manage jobs through t
 
 `tools.cron.exec_timeout_minutes` sets the timeout used for scheduled command execution. Default: `5`. Set `0` for no timeout.
 
+`tools.cron.trigger` selects the registered trigger provider. The default
+`inprocess` provider arms a timer for the next due job. A provider controls only
+when `CronService.Tick()` is called; job storage, due detection, execution and
+delivery remain in the cron service. An unknown provider logs a warning and
+falls back to `inprocess`. Plugin-managed schedules also require
+`tools.cron.enabled`; disabling the tool removes those host-managed jobs.
+
 ### `tools.exec`
 
 Scheduled command jobs depend on `tools.exec.enabled`. Default: `true`.
@@ -236,3 +243,22 @@ Notes:
 - recurring jobs stay in the store until removed
 - disabled jobs stay in the store and still appear in `picoclaw cron list`
 - each run records its outcome in the job state: `state.lastStatus` is `"ok"` on success, `"error"` with the reason in `state.lastError` when the agent turn failed or a scheduled command was disabled or failed, and `"skipped"` when no execution callback is installed (see `tools.cron`)
+
+### Plugin-managed jobs
+
+Jobs declared by an Agent Plugin carry a `declarationKey` such as
+`plugin:my-plugin:nightly`. The gateway reconciles them after plugin discovery:
+it updates the stored job in place, keeps its ID, creation time, run history and
+failure history, and preserves an operator pause unless the declaration sets
+`enabled` explicitly. Only jobs under the `plugin:` prefix are pruned; jobs
+created by the user or by another declaration source are never touched. Do not
+hand-edit a managed job's schedule or payload: the next reconciliation overwrites
+it. Disable the plugin or remove its declaration instead. See
+[Host-managed schedules](../guides/plugins.md#host-managed-schedules).
+
+Agent turns started by a job carry a `cron.Execution` identity. Context-aware
+job handlers receive it through the context, and agent hooks receive it as
+`meta.Cron` or `${cron_execution}`. It includes the execution ID, job ID and
+name, declaration key, source (`scheduled` or `manual`) and the scheduled
+instant, so scheduled work can be distinguished from interactive turns without
+parsing the session key.

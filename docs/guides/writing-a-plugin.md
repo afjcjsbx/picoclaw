@@ -141,7 +141,33 @@ Rules the host enforces, and `validate` checks:
 - Hooks run only after the user sets `allow_hooks: true` on the entry. Treat that as a
   separate trust grant and say in your README why you need it.
 
-## 5. Validate
+## 5. Add host-managed schedules (optional)
+
+A plugin can ask the host to run a prompt on a cron schedule. The host stores and reconciles
+the job; your package only declares it. Put the declarations in
+`com.sipeed.picoclaw/schedules.json`, or inline under
+`extensions["com.sipeed.picoclaw"]` in `plugin.json` (never both):
+
+```json
+{
+  "schedules": [
+    {
+      "name": "nightly",
+      "cron": "0 3 * * *",
+      "tz": "Europe/Rome",
+      "message": "Run the nightly memory consolidation cycle."
+    }
+  ]
+}
+```
+
+The declaration key is `plugin:<id>:<name>`. The host preserves the stored job ID and run
+state across reloads, preserves an operator's pause, and removes the job when the plugin or
+declaration disappears. The entry must set `allow_schedules: true` and `tools.cron` must be
+enabled. See [Host-managed schedules](plugins.md#host-managed-schedules) for the full field
+list and reconciliation rules.
+
+## 6. Validate
 
 ```bash
 picoclaw plugin validate ./plugins/weather
@@ -163,7 +189,7 @@ of a plugin with a broken skill or hook. In CI, fail on any finding:
 picoclaw plugin validate . --strict
 ```
 
-## 6. Enable and test
+## 7. Enable and test
 
 ```bash
 picoclaw plugin add weather --path ./plugins/weather --enable
@@ -179,7 +205,7 @@ Then restart the gateway and ask the agent something the skill covers. If hooks 
 to run, check `picoclaw plugin show weather`; it lists hooks as inactive until
 `allow_hooks` is set. Use `picoclaw plugin edit` to set it in `config.json`.
 
-## 7. Share it
+## 8. Share it
 
 There is no central registry. A plugin is a directory, so distribute it as a Git repository or an
 archive, with any executables prebuilt for the platforms you support (the host never runs

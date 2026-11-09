@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
+	"github.com/sipeed/picoclaw/pkg/cron"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/logger"
 )
@@ -130,8 +131,39 @@ func hookMetaFromRuntimeEvent(evt runtimeevents.Event) HookMeta {
 		if iteration, ok := evt.Attrs["iteration"].(int); ok {
 			meta.Iteration = iteration
 		}
+		meta.Cron = cronExecutionFromAttrs(evt.Attrs)
 	}
 	return meta
+}
+
+func cronExecutionFromAttrs(attrs map[string]any) *cron.Execution {
+	jobID, _ := attrs["cron_job_id"].(string)
+	if jobID == "" {
+		return nil
+	}
+	execution := &cron.Execution{
+		ExecutionID:    stringAttr(attrs, "cron_execution_id"),
+		JobID:          jobID,
+		JobName:        stringAttr(attrs, "cron_job_name"),
+		DeclarationKey: stringAttr(attrs, "cron_declaration_key"),
+		Source:         stringAttr(attrs, "cron_source"),
+	}
+	switch value := attrs["cron_scheduled_at_ms"].(type) {
+	case int64:
+		execution.ScheduledAtMS = &value
+	case int:
+		converted := int64(value)
+		execution.ScheduledAtMS = &converted
+	case float64:
+		converted := int64(value)
+		execution.ScheduledAtMS = &converted
+	}
+	return execution
+}
+
+func stringAttr(attrs map[string]any, key string) string {
+	value, _ := attrs[key].(string)
+	return value
 }
 
 func turnContextFromRuntimeScope(scope runtimeevents.Scope) *TurnContext {

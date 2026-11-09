@@ -316,6 +316,9 @@ func (h *pluginMCPHook) OnRuntimeEvent(ctx context.Context, event runtimeevents.
 		return nil
 	}
 	variables := hookVariables(nil, nil, nil, nil, nil)
+	if execution := cronExecutionFromAttrs(event.Attrs); execution != nil {
+		variables["cron_execution"] = hookJSONValue(execution)
+	}
 	eventValue := hookJSONValue(event)
 	variables["event"] = eventValue
 	payload := hookMapValue(eventValue, "payload")
@@ -345,6 +348,22 @@ func hookVariables(
 	approval *ToolApprovalRequest,
 ) map[string]any {
 	values := map[string]any{}
+	var meta HookMeta
+	switch {
+	case request != nil:
+		meta = request.Meta
+	case response != nil:
+		meta = response.Meta
+	case toolCall != nil:
+		meta = toolCall.Meta
+	case toolResult != nil:
+		meta = toolResult.Meta
+	case approval != nil:
+		meta = approval.Meta
+	}
+	if meta.Cron != nil {
+		values["cron_execution"] = hookJSONValue(meta.Cron)
+	}
 	if request != nil {
 		values["request"] = hookJSONValue(request)
 		if i := lastUserMessageIndex(request.Messages); i >= 0 {

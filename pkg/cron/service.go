@@ -1,6 +1,7 @@
 package cron
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -59,6 +60,10 @@ type CronJob struct {
 	CreatedAtMS    int64        `json:"createdAtMs"`
 	UpdatedAtMS    int64        `json:"updatedAtMs"`
 	DeleteAfterRun bool         `json:"deleteAfterRun"`
+	// DeclarationKey marks a host-managed job owned by a plugin or another
+	// declaration source. Jobs without a key are user-owned and are never
+	// touched by reconciliation.
+	DeclarationKey string `json:"declarationKey,omitempty"`
 }
 
 type CronStore struct {
@@ -67,6 +72,10 @@ type CronStore struct {
 }
 
 type JobHandler func(job *CronJob) (string, error)
+
+// ContextJobHandler receives the execution context, including the cron
+// Execution identity. New hosts should prefer this form over JobHandler.
+type ContextJobHandler func(ctx context.Context, job *CronJob) (string, error)
 
 // cronRunHistoryLimit caps how many past runs are retained per job.
 const cronRunHistoryLimit = 10
@@ -81,9 +90,11 @@ type CronService struct {
 	storePath string
 	store     *CronStore
 	onJob     JobHandler
+	onJobCtx  ContextJobHandler
 	mu        sync.RWMutex
 	running   bool
-	stopChan  chan struct{}
+	trigger   Trigger
+	cancel    context.CancelFunc
 	wakeChan  chan struct{}
 	gronx     *gronx.Gronx
 	// reloadEvery is the polling interval used to detect external edits of the
@@ -94,7 +105,7 @@ type CronService struct {
 	storeStat os.FileInfo
 	// inFlight holds the IDs of jobs whose handler is executing, guarded by mu.
 	// A job is claimed under mu before its goroutine starts and released when
-	// executeJobByID returns, so a job never runs concurrently with itself.
+	// executeJobWithOrigin returns, so a job never runs concurrently with itself.
 	inFlight map[string]struct{}
 }
 
@@ -102,6 +113,7 @@ func NewCronService(storePath string, onJob JobHandler) *CronService {
 	cs := &CronService{
 		storePath: storePath,
 		onJob:     onJob,
+		trigger:   InProcessTrigger{},
 		gronx:     gronx.New(),
 		wakeChan:  make(chan struct{}, 1),
 		inFlight:  make(map[string]struct{}),
@@ -128,14 +140,18 @@ func (cs *CronService) Start() error {
 		return fmt.Errorf("failed to save store: %w", err)
 	}
 
-	cs.stopChan = make(chan struct{})
 	if cs.wakeChan == nil {
-		// Buffered so a notify() that races with the loop recomputing its
+		// Buffered so a notify() that races with the trigger recomputing its
 		// wake time is not lost.
 		cs.wakeChan = make(chan struct{}, 1)
 	}
+	if cs.trigger == nil {
+		cs.trigger = InProcessTrigger{}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cs.cancel = cancel
 	cs.running = true
-	go cs.runLoop(cs.stopChan)
+	go cs.trigger.Run(ctx, cs)
 
 	return nil
 }
@@ -149,74 +165,72 @@ func (cs *CronService) Stop() {
 	}
 
 	cs.running = false
-	if cs.stopChan != nil {
-		close(cs.stopChan)
-		cs.stopChan = nil
+	if cs.cancel != nil {
+		cs.cancel()
+		cs.cancel = nil
 	}
 }
 
-func (cs *CronService) runLoop(stopChan chan struct{}) {
-	timer := time.NewTimer(time.Hour)
-	if !timer.Stop() {
-		<-timer.C
+// SetTrigger selects the trigger provider. Call before Start. Passing nil
+// restores the in-process trigger.
+func (cs *CronService) SetTrigger(trigger Trigger) error {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	if cs.running {
+		return errors.New("cannot change trigger while the cron service is running")
 	}
-	defer timer.Stop()
+	if trigger == nil {
+		trigger = InProcessTrigger{}
+	}
+	cs.trigger = trigger
+	return nil
+}
 
-	var reloadC <-chan time.Time
+// TriggerName reports the configured trigger provider.
+func (cs *CronService) TriggerName() string {
 	cs.mu.RLock()
-	reloadEvery := cs.reloadEvery
-	cs.mu.RUnlock()
-	if reloadEvery > 0 {
-		reloadTicker := time.NewTicker(reloadEvery)
-		defer reloadTicker.Stop()
-		reloadC = reloadTicker.C
+	defer cs.mu.RUnlock()
+	switch cs.trigger.(type) {
+	case InProcessTrigger:
+		return "inprocess"
+	default:
+		return fmt.Sprintf("%T", cs.trigger)
 	}
+}
 
-	for {
-		// every loop, recalculate the next wake time
-		cs.mu.RLock()
-		nextWake := cs.getNextWakeMS()
-		cs.mu.RUnlock()
+// Tick evaluates due jobs and dispatches them through the shared executor.
+// Trigger providers call it; it is also useful for manual externally-driven
+// schedulers and tests.
+func (cs *CronService) Tick() {
+	cs.checkJobs()
+}
 
-		var delay time.Duration
-		now := time.Now().UnixMilli()
+// NextWakeMS returns the next scheduled instant, or nil when no job is armed.
+func (cs *CronService) NextWakeMS() *int64 {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	return cs.getNextWakeMS()
+}
 
-		if nextWake == nil {
-			// no jobs, sleep for a long time (or until a new job is added)
-			delay = time.Hour
-		} else {
-			diff := *nextWake - now
-			if diff <= 0 {
-				delay = 0
-			} else {
-				delay = time.Duration(diff) * time.Millisecond
-			}
-		}
+// Wake is signaled when jobs are added, updated or removed.
+func (cs *CronService) Wake() <-chan struct{} {
+	return cs.wakeChan
+}
 
-		timer.Reset(delay)
-
-		select {
-		case <-stopChan:
-			return
-		case <-cs.wakeChan: // wake on new job or update
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
-			continue
-		case <-reloadC:
-			// The loop recomputes its wake time on the next iteration, so no notify is needed.
-			cs.mu.Lock()
-			if cs.running {
-				cs.syncFromDiskUnsafe()
-			}
-			cs.mu.Unlock()
-		case <-timer.C:
-			cs.checkJobs()
-		}
+// Reload applies an external edit of the job store, if hot-reload is enabled.
+func (cs *CronService) Reload() {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	if cs.running {
+		cs.syncFromDiskUnsafe()
 	}
+}
+
+// ReloadInterval is the configured store polling interval.
+func (cs *CronService) ReloadInterval() time.Duration {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	return cs.reloadEvery
 }
 
 func (cs *CronService) checkJobs() {
@@ -230,7 +244,11 @@ func (cs *CronService) checkJobs() {
 	cs.syncFromDiskUnsafe()
 
 	now := time.Now().UnixMilli()
-	var dueJobIDs []string
+	type dueRun struct {
+		jobID       string
+		scheduledAt int64
+	}
+	var dueRuns []dueRun
 
 	// Collect jobs that are due (we need to copy them to execute outside lock)
 	for i := range cs.store.Jobs {
@@ -243,7 +261,7 @@ func (cs *CronService) checkJobs() {
 				log.Printf("[cron] job '%s' (id: %s) is still running, skipping scheduled run", job.Name, job.ID)
 				continue
 			}
-			dueJobIDs = append(dueJobIDs, job.ID)
+			dueRuns = append(dueRuns, dueRun{jobID: job.ID, scheduledAt: *job.State.NextRunAtMS})
 		}
 	}
 
@@ -266,8 +284,12 @@ func (cs *CronService) checkJobs() {
 
 	// Execute jobs outside the lock, each in its own goroutine so a slow
 	// handler does not block the scheduler loop or other due jobs.
-	for _, jobID := range dueJobIDs {
-		go cs.executeClaimedJob(jobID)
+	for _, run := range dueRuns {
+		scheduledAt := run.scheduledAt
+		go cs.executeClaimedJob(run.jobID, Execution{
+			Source:        ExecutionSourceScheduled,
+			ScheduledAtMS: &scheduledAt,
+		})
 	}
 }
 
@@ -290,13 +312,13 @@ func (cs *CronService) releaseJob(jobID string) {
 
 // executeClaimedJob runs a job already claimed via claimJobUnsafe, containing
 // any panic so it cannot take down the process.
-func (cs *CronService) executeClaimedJob(jobID string) {
+func (cs *CronService) executeClaimedJob(jobID string, origin Execution) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("[cron] recovered panic while executing job %s: %v", jobID, r)
 		}
 	}()
-	cs.executeJobByID(jobID)
+	cs.executeJobWithOrigin(jobID, origin)
 }
 
 // RunJob starts a job immediately, regardless of its schedule or enabled state,
@@ -324,11 +346,17 @@ func (cs *CronService) RunJob(jobID string) error {
 		return ErrJobRunning
 	}
 
-	go cs.executeClaimedJob(jobID)
+	go cs.executeClaimedJob(jobID, Execution{Source: ExecutionSourceManual})
 	return nil
 }
 
+// executeJobByID runs a claimed job as a manual execution. It is kept for
+// existing callers; new code should use RunJob or the trigger path.
 func (cs *CronService) executeJobByID(jobID string) {
+	cs.executeJobWithOrigin(jobID, Execution{Source: ExecutionSourceManual})
+}
+
+func (cs *CronService) executeJobWithOrigin(jobID string, origin Execution) {
 	defer cs.releaseJob(jobID)
 
 	startTime := time.Now().UnixMilli()
@@ -336,10 +364,11 @@ func (cs *CronService) executeJobByID(jobID string) {
 	cs.mu.RLock()
 	var callbackJob *CronJob
 	onJob := cs.onJob
+	onJobCtx := cs.onJobCtx
 	for i := range cs.store.Jobs {
 		job := &cs.store.Jobs[i]
 		if job.ID == jobID {
-			jobCopy := *job
+			jobCopy := cloneCronJob(*job)
 			callbackJob = &jobCopy
 			break
 		}
@@ -359,7 +388,15 @@ func (cs *CronService) executeJobByID(jobID string) {
 		err     error
 		skipped bool
 	)
-	if onJob != nil {
+	if onJobCtx != nil || onJob != nil {
+		execution := origin
+		execution.ExecutionID = generateID()
+		execution.JobID = callbackJob.ID
+		execution.JobName = callbackJob.Name
+		execution.DeclarationKey = callbackJob.DeclarationKey
+		execution.StartedAt = time.UnixMilli(startTime)
+		execCtx := WithExecution(context.Background(), execution)
+
 		// Isolate handler panics so the job state is still updated and the
 		// schedule remains alive instead of being left with a nil next run.
 		func() {
@@ -368,6 +405,10 @@ func (cs *CronService) executeJobByID(jobID string) {
 					err = fmt.Errorf("job handler panicked: %v", r)
 				}
 			}()
+			if onJobCtx != nil {
+				_, err = onJobCtx(execCtx, callbackJob)
+				return
+			}
 			_, err = onJob(callbackJob)
 		}()
 	} else {
@@ -570,7 +611,8 @@ func (cs *CronService) getNextWakeMS() *int64 {
 	for _, job := range cs.store.Jobs {
 		if job.Enabled && job.State.NextRunAtMS != nil {
 			if nextWake == nil || *job.State.NextRunAtMS < *nextWake {
-				nextWake = job.State.NextRunAtMS
+				value := *job.State.NextRunAtMS
+				nextWake = &value
 			}
 		}
 	}
@@ -587,6 +629,15 @@ func (cs *CronService) SetOnJob(handler JobHandler) {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 	cs.onJob = handler
+	cs.onJobCtx = nil
+}
+
+// SetOnJobWithContext sets a context-aware handler. It supersedes SetOnJob.
+func (cs *CronService) SetOnJobWithContext(handler ContextJobHandler) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	cs.onJobCtx = handler
+	cs.onJob = nil
 }
 
 func newEmptyStore() *CronStore {
@@ -718,6 +769,11 @@ func (cs *CronService) replaceStoreUnsafe(next *CronStore) {
 	}
 }
 
+// ValidateSchedule rejects schedules that cannot produce a next run.
+func ValidateSchedule(schedule CronSchedule) error {
+	return validateCronSchedule(schedule)
+}
+
 // validateCronSchedule rejects schedules that cannot produce a next run.
 func validateCronSchedule(schedule CronSchedule) error {
 	switch schedule.Kind {
@@ -819,6 +875,9 @@ func (cs *CronService) UpdateJob(job *CronJob) error {
 		if cs.store.Jobs[i].ID == job.ID {
 			previous := cs.store.Jobs[i]
 			updated := cloneCronJob(*job)
+			if updated.DeclarationKey == "" {
+				updated.DeclarationKey = previous.DeclarationKey
+			}
 			if len(updated.State.RunHistory) == 0 && len(previous.State.RunHistory) > 0 {
 				updated.State.RunHistory = append([]CronRunRecord(nil), previous.State.RunHistory...)
 			}

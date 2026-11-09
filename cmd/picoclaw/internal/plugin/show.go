@@ -57,6 +57,7 @@ func newShowCommand() *cobra.Command {
 			printField(w, "State", item.State)
 			if configured {
 				printField(w, "Allow hooks", boolWord(entry.AllowHooks))
+				printField(w, "Allow schedules", boolWord(entry.AllowSchedules))
 			}
 			fmt.Fprintln(w)
 
@@ -66,6 +67,10 @@ func newShowCommand() *cobra.Command {
 				printList(w, "Hooks", report.Hooks)
 				if len(report.Hooks) > 0 && !entry.AllowHooks {
 					fmt.Fprintln(w, "  (inactive: set plugins.entries."+id+".allow_hooks to true)")
+				}
+				printList(w, "Schedules", report.Schedules)
+				if len(report.Schedules) > 0 && !entry.AllowSchedules {
+					fmt.Fprintln(w, "  (inactive: set plugins.entries."+id+".allow_schedules to true)")
 				}
 				printDiagnosticSection(w, report.Diagnostics)
 				return nil
@@ -102,6 +107,7 @@ func printProbe(w io.Writer, r probeResult, timeout time.Duration) {
 	printList(w, "Skills", r.Skills)
 	printList(w, "Tools", r.Tools)
 	printList(w, "Hooks", r.Hooks)
+	printList(w, "Schedules", r.Schedules)
 	printDiagnosticSection(w, r.Status.Diagnostics)
 }
 

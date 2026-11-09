@@ -53,7 +53,7 @@ func discoverHooks(manifest PluginManifest, pc PluginContext) ([]Hook, []Diagnos
 		return nil, diagnostics
 	}
 	for key := range obj {
-		if key != "hooks" {
+		if key != "hooks" && key != "schedules" {
 			report(fmt.Errorf("unknown extension field %q", key))
 		}
 	}

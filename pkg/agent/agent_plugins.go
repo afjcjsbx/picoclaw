@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/cron"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/plugins"
 	"github.com/sipeed/picoclaw/pkg/skills"
@@ -30,11 +32,12 @@ type pluginSkillRegistration struct {
 	id      string
 }
 type pluginBinding struct {
-	manager *plugins.Manager
-	mu      sync.Mutex
-	tools   []pluginRegistration
-	skills  []pluginSkillRegistration
-	hooks   []string
+	manager   *plugins.Manager
+	mu        sync.Mutex
+	tools     []pluginRegistration
+	skills    []pluginSkillRegistration
+	hooks     []string
+	schedules map[string][]plugins.Schedule
 }
 
 func pluginAllowsAgent(entry config.PluginEntryConfig, id string) bool {
@@ -78,7 +81,7 @@ func (al *AgentLoop) startPlugins() *plugins.Manager {
 	if !cfg.Plugins.Enabled {
 		return nil
 	}
-	binding := &pluginBinding{}
+	binding := &pluginBinding{schedules: map[string][]plugins.Schedule{}}
 	binding.manager = plugins.NewManager(
 		cfg.Plugins,
 		cfg.WorkspacePath(),
@@ -106,6 +109,48 @@ func (al *AgentLoop) waitPlugins(ctx context.Context) {
 	}
 }
 
+// WaitPlugins waits for the current plugin discovery pass. The returned error
+// is nil only when every configured plugin finished loading, so callers can
+// decide whether it is safe to prune declarations that were not observed.
+func (al *AgentLoop) WaitPlugins(ctx context.Context) error {
+	manager := al.startPlugins()
+	if manager == nil {
+		return nil
+	}
+	al.mu.RLock()
+	timeout := al.cfg.Plugins.StartupWait()
+	al.mu.RUnlock()
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return manager.Wait(waitCtx)
+}
+
+// PluginScheduleDeclarations returns the schedules published by loaded
+// plugins, converted to host-owned cron declarations.
+func (al *AgentLoop) PluginScheduleDeclarations() []cron.CronJobDeclaration {
+	if al == nil {
+		return nil
+	}
+	al.plugins.mu.Lock()
+	defer al.plugins.mu.Unlock()
+	binding := al.plugins.binding
+	if binding == nil {
+		return nil
+	}
+	binding.mu.Lock()
+	defer binding.mu.Unlock()
+	var declarations []cron.CronJobDeclaration
+	for _, schedules := range binding.schedules {
+		for _, schedule := range schedules {
+			declarations = append(declarations, schedule.Declaration())
+		}
+	}
+	sort.Slice(declarations, func(i, j int) bool {
+		return declarations[i].DeclarationKey < declarations[j].DeclarationKey
+	})
+	return declarations
+}
+
 func (al *AgentLoop) publishPlugin(
 	ctx context.Context,
 	binding *pluginBinding,
@@ -125,6 +170,9 @@ func (al *AgentLoop) publishPlugin(
 	}
 	binding.mu.Lock()
 	defer binding.mu.Unlock()
+	if capabilities.Schedules != nil {
+		binding.schedules[capabilities.ID] = append([]plugins.Schedule(nil), capabilities.Schedules...)
+	}
 	mcpToolsByAgent := make(map[string]map[string]*plugins.PluginTool)
 	for _, id := range registry.ListAgentIDs() {
 		if !pluginAllowsAgent(capabilities.Entry, id) {

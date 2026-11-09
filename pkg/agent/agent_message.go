@@ -9,6 +9,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/constants"
+	"github.com/sipeed/picoclaw/pkg/cron"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/routing"
 	"github.com/sipeed/picoclaw/pkg/session"
@@ -195,7 +196,13 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 			"route_main_session": allocation.MainSessionKey,
 		})
 
+	var cronExecution *cron.Execution
+	if execution, ok := cron.ExecutionFromContext(ctx); ok {
+		cronExecution = cron.CloneExecution(&execution)
+	}
+
 	opts := processOptions{
+		CronExecution: cronExecution,
 		Dispatch: DispatchRequest{
 			SessionKey:     sessionKey,
 			SessionAliases: buildSessionAliases(sessionKey, append(allocation.SessionAliases, msg.SessionKey)...),

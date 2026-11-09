@@ -72,10 +72,11 @@ func runManager(
 
 // probeResult is what one plugin published during a dry-run load.
 type probeResult struct {
-	Status plugins.Status
-	Skills []string
-	Tools  []string
-	Hooks  []string
+	Status    plugins.Status
+	Skills    []string
+	Tools     []string
+	Hooks     []string
+	Schedules []string
 }
 
 // probe loads a single plugin, enabled or not, exactly as the gateway would.
@@ -100,6 +101,9 @@ func probe(ctx context.Context, cfg *config.Config, id string, entry config.Plug
 			}
 			for _, hook := range c.Hooks {
 				result.Hooks = append(result.Hooks, hook.Name)
+			}
+			for _, schedule := range c.Schedules {
+				result.Schedules = append(result.Schedules, schedule.DeclarationKey())
 			}
 			return nil
 		},

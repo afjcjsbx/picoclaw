@@ -20,9 +20,10 @@ type PluginsConfig struct {
 }
 
 type PluginEntryConfig struct {
-	Enabled    bool   `json:"enabled"`
-	Path       string `json:"path,omitempty"`
-	AllowHooks bool   `json:"allow_hooks,omitempty"`
+	Enabled        bool   `json:"enabled"`
+	Path           string `json:"path,omitempty"`
+	AllowHooks     bool   `json:"allow_hooks,omitempty"`
+	AllowSchedules bool   `json:"allow_schedules,omitempty"`
 	// MCPOverrides replaces or adds servers without changing the plugin package.
 	MCPOverrides map[string]json.RawMessage `json:"mcp_overrides,omitempty"`
 	// MCPOAuth enables saved browser OAuth credentials for named HTTP servers.
