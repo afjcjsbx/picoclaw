@@ -193,3 +193,122 @@ func TestDiscoverSchedulesRejectsDuplicateNames(t *testing.T) {
 		t.Fatalf("schedules=%v diagnostics=%v", schedules, diagnostics)
 	}
 }
+
+func TestMixedInlineHooksAndScheduleFile(t *testing.T) {
+	root, _ := canonicalRoot(t.TempDir())
+	writeTestFile(t, root, "plugin.json", manifestJSON(map[string]any{
+		"extensions": map[string]any{
+			ExtensionNamespace: map[string]any{
+				"hooks": []map[string]any{{
+					"name":    "observer",
+					"command": "python3",
+					"observe": []string{"turn_completed"},
+				}},
+			},
+		},
+	}))
+	writeTestFile(t, root, filepath.Join(ExtensionNamespace, "schedules.json"), []byte(`{
+		"schedules": [{"name": "nightly", "cron": "0 3 * * *", "message": "Run"}]
+	}`))
+	data, err := ReadPackageFile(root, "plugin.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, _, err := ParseManifest(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pc := PluginContext{
+		ID:             "alias",
+		Root:           root,
+		DataDir:        t.TempDir(),
+		AllowHooks:     true,
+		AllowSchedules: true,
+	}
+	hooks, diagnostics := discoverHooks(manifest, pc)
+	if len(hooks) != 1 || len(diagnostics) != 0 {
+		t.Fatalf("hooks=%v diagnostics=%v", hooks, diagnostics)
+	}
+	schedules, diagnostics := discoverSchedules(manifest, pc)
+	if len(schedules) != 1 || len(diagnostics) != 0 {
+		t.Fatalf("schedules=%v diagnostics=%v", schedules, diagnostics)
+	}
+}
+
+func TestMixedInlineSchedulesAndHookFile(t *testing.T) {
+	root, _ := canonicalRoot(t.TempDir())
+	writeTestFile(t, root, "plugin.json", manifestJSON(scheduleExtension(map[string]any{
+		"name": "nightly", "cron": "0 3 * * *", "message": "Run",
+	})))
+	writeTestFile(t, root, filepath.Join(ExtensionNamespace, "hooks.json"), []byte(`{
+		"hooks": [{"name": "observer", "command": "python3", "observe": ["turn_completed"]}]
+	}`))
+	data, err := ReadPackageFile(root, "plugin.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, _, err := ParseManifest(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pc := PluginContext{
+		ID:             "alias",
+		Root:           root,
+		DataDir:        t.TempDir(),
+		AllowHooks:     true,
+		AllowSchedules: true,
+	}
+	hooks, diagnostics := discoverHooks(manifest, pc)
+	if len(hooks) != 1 || len(diagnostics) != 0 {
+		t.Fatalf("hooks=%v diagnostics=%v", hooks, diagnostics)
+	}
+	schedules, diagnostics := discoverSchedules(manifest, pc)
+	if len(schedules) != 1 || len(diagnostics) != 0 {
+		t.Fatalf("schedules=%v diagnostics=%v", schedules, diagnostics)
+	}
+}
+
+func TestSameComponentInlineAndFileStillRejected(t *testing.T) {
+	root, _ := canonicalRoot(t.TempDir())
+	writeTestFile(t, root, "plugin.json", manifestJSON(map[string]any{
+		"extensions": map[string]any{
+			ExtensionNamespace: map[string]any{
+				"hooks": []map[string]any{{
+					"name":    "observer",
+					"command": "python3",
+					"observe": []string{"turn_completed"},
+				}},
+				"schedules": []map[string]any{{
+					"name": "nightly", "cron": "0 3 * * *", "message": "Run",
+				}},
+			},
+		},
+	}))
+	writeTestFile(t, root, filepath.Join(ExtensionNamespace, "hooks.json"), []byte(`{
+		"hooks": [{"name": "observer", "command": "python3", "observe": ["turn_completed"]}]
+	}`))
+	writeTestFile(t, root, filepath.Join(ExtensionNamespace, "schedules.json"), []byte(`{
+		"schedules": [{"name": "nightly", "cron": "0 3 * * *", "message": "Run"}]
+	}`))
+	data, err := ReadPackageFile(root, "plugin.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, _, err := ParseManifest(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pc := PluginContext{
+		ID:             "alias",
+		Root:           root,
+		DataDir:        t.TempDir(),
+		AllowHooks:     true,
+		AllowSchedules: true,
+	}
+	if _, diagnostics := discoverHooks(manifest, pc); len(diagnostics) == 0 {
+		t.Fatal("inline and file hooks were both accepted")
+	}
+	if _, diagnostics := discoverSchedules(manifest, pc); len(diagnostics) == 0 {
+		t.Fatal("inline and file schedules were both accepted")
+	}
+}

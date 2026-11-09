@@ -32,19 +32,31 @@ func discoverSchedules(manifest PluginManifest, pc PluginContext) ([]Schedule, [
 	raw, inline := manifest.Extensions[ExtensionNamespace]
 	file := filepath.Join(ExtensionNamespace, "schedules.json")
 	hasFile := componentExists(pc.Root, file)
-	if inline && hasFile {
-		report(fmt.Errorf("schedules must be configured inline or in %s, not both", file))
-		return nil, diagnostics
-	}
-	if hasFile {
+	if inline {
+		inlineObj, err := object(raw)
+		if err != nil {
+			report(err)
+			return nil, diagnostics
+		}
+		if hasFile {
+			if _, ok := inlineObj["schedules"]; ok {
+				report(fmt.Errorf("schedules must be configured inline or in %s, not both", file))
+				return nil, diagnostics
+			}
+			raw, err = ReadPackageFile(pc.Root, file)
+			if err != nil {
+				report(err)
+				return nil, diagnostics
+			}
+		}
+	} else if hasFile {
 		var err error
 		raw, err = ReadPackageFile(pc.Root, file)
 		if err != nil {
 			report(err)
 			return nil, diagnostics
 		}
-	}
-	if !inline && !hasFile {
+	} else {
 		return nil, nil
 	}
 
