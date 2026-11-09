@@ -345,7 +345,7 @@ func (b *toolBatch) asyncCallback(toolName string) tools.AsyncCallback {
 		)
 		pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer pubCancel()
-		_ = al.bus.PublishInbound(pubCtx, bus.InboundMessage{
+		msg := bus.InboundMessage{
 			Context: bus.InboundContext{
 				Channel:  "system",
 				ChatID:   fmt.Sprintf("%s:%s", ts.channel, ts.chatID),
@@ -355,7 +355,8 @@ func (b *toolBatch) asyncCallback(toolName string) tools.AsyncCallback {
 			SessionKey: ts.sessionKey,
 			AgentID:    ts.agent.ID,
 			Content:    content,
-		})
+		}
+		_ = al.bus.PublishInbound(pubCtx, ts.inheritCronExecution(msg))
 	}
 }
 

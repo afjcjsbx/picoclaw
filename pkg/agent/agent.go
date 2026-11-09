@@ -652,6 +652,7 @@ func (al *AgentLoop) runAgentLoop(
 	}
 
 	for _, followUp := range result.followUps {
+		followUp = ts.inheritCronExecution(followUp)
 		if pubErr := al.bus.PublishInbound(ctx, followUp); pubErr != nil {
 			logger.WarnCF("agent", "Failed to publish follow-up after turn",
 				map[string]any{

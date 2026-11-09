@@ -781,10 +781,31 @@ func (ts *turnState) eventMeta(source, tracePath string) HookMeta {
 		Iteration:            snap.Iteration,
 		Source:               source,
 		TracePath:            tracePath,
-		Cron:                 cron.CloneExecution(ts.cronExecution),
+		Cron:                 ts.cronExecutionClone(),
 		turnContext:          cloneTurnContext(ts.turnCtx),
 		suppressToolFeedback: ts.opts.SuppressToolFeedback,
 	}
+}
+
+func (ts *turnState) cronExecutionClone() *cron.Execution {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return cron.CloneExecution(ts.cronExecution)
+}
+
+// inheritCronExecution keeps follow-up work attached to the scheduled run that
+// produced it. The originating agent is preserved as well when the producer
+// did not set one.
+func (ts *turnState) inheritCronExecution(msg bus.InboundMessage) bus.InboundMessage {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	if msg.CronExecution == nil {
+		msg.CronExecution = cron.CloneExecution(ts.cronExecution)
+	}
+	if msg.AgentID == "" {
+		msg.AgentID = ts.agentID
+	}
+	return msg
 }
 
 func (ts *turnState) captureRestorePoint(history []providers.Message, summary string) {

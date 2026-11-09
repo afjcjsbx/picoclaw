@@ -283,6 +283,28 @@ func SpawnSubTurn(ctx context.Context, cfg SubTurnConfig) (*tools.ToolResult, er
 	return spawnSubTurn(ctx, al, parentTS, cfg)
 }
 
+func subTurnProcessOptions(
+	parentTS *turnState,
+	dispatch DispatchRequest,
+	cfg SubTurnConfig,
+) processOptions {
+	return processOptions{
+		Dispatch:                dispatch,
+		CronExecution:           parentTS.cronExecutionClone(),
+		SenderID:                parentTS.opts.Dispatch.SenderID(),
+		SenderDisplayName:       parentTS.opts.SenderDisplayName,
+		TurnProfile:             parentTS.profile,
+		SystemPromptOverride:    cfg.ActualSystemPrompt,
+		InitialSteeringMessages: cfg.InitialMessages,
+		DefaultResponse:         "",
+		EnableSummary:           false,
+		SendResponse:            false,
+		SuppressToolFeedback:    true, // child inherits the parent's chat context; don't leak its tool calls there
+		NoHistory:               true, // SubTurns don't use session history
+		SkipInitialSteeringPoll: true,
+	}
+}
+
 func spawnSubTurn(
 	ctx context.Context,
 	al *AgentLoop,
@@ -410,20 +432,7 @@ func spawnSubTurn(
 		Media:          nil,
 		InboundContext: cloneInboundContext(parentTS.opts.Dispatch.InboundContext),
 	}
-	opts := processOptions{
-		Dispatch:                dispatch,
-		SenderID:                parentTS.opts.Dispatch.SenderID(),
-		SenderDisplayName:       parentTS.opts.SenderDisplayName,
-		TurnProfile:             parentTS.profile,
-		SystemPromptOverride:    cfg.ActualSystemPrompt,
-		InitialSteeringMessages: cfg.InitialMessages,
-		DefaultResponse:         "",
-		EnableSummary:           false,
-		SendResponse:            false,
-		SuppressToolFeedback:    true, // child inherits the parent's chat context; don't leak its tool calls there
-		NoHistory:               true, // SubTurns don't use session history
-		SkipInitialSteeringPoll: true,
-	}
+	opts := subTurnProcessOptions(parentTS, dispatch, cfg)
 	if !opts.TurnProfile.Enabled {
 		opts.TurnProfile = parentTS.opts.TurnProfile
 	}

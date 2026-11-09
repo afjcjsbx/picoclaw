@@ -85,6 +85,9 @@ func (al *AgentLoop) processDirect(
 		SessionKey: sessionKey,
 		AgentID:    agentID,
 	}
+	if execution, ok := cron.ExecutionFromContext(ctx); ok {
+		msg.CronExecution = cron.CloneExecution(&execution)
+	}
 
 	return al.processMessage(ctx, msg)
 }
@@ -213,9 +216,11 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 			"route_main_session": allocation.MainSessionKey,
 		})
 
-	var cronExecution *cron.Execution
-	if execution, ok := cron.ExecutionFromContext(ctx); ok {
-		cronExecution = cron.CloneExecution(&execution)
+	cronExecution := cron.CloneExecution(msg.CronExecution)
+	if cronExecution == nil {
+		if execution, ok := cron.ExecutionFromContext(ctx); ok {
+			cronExecution = cron.CloneExecution(&execution)
+		}
 	}
 
 	opts := processOptions{
@@ -384,8 +389,15 @@ func (al *AgentLoop) processSystemMessage(
 			SenderID: msg.SenderID,
 		}
 	}
+	cronExecution := cron.CloneExecution(msg.CronExecution)
+	if cronExecution == nil {
+		if execution, ok := cron.ExecutionFromContext(ctx); ok {
+			cronExecution = cron.CloneExecution(&execution)
+		}
+	}
 
 	return al.runAgentLoop(ctx, agent, processOptions{
+		CronExecution:   cronExecution,
 		Dispatch:        dispatch,
 		DefaultResponse: "Background task completed.",
 		EnableSummary:   false,
