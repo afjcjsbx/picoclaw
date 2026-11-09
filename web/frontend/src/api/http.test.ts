@@ -13,9 +13,12 @@ describe("launcherFetch", () => {
     vi.stubGlobal("fetch", fetchMock)
 
     await expect(launcherFetch("/api/models")).resolves.toBe(response)
-    expect(fetchMock).toHaveBeenCalledWith("/api/models", {
-      credentials: "same-origin",
-    })
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe("/api/models")
+    expect(init.credentials).toBe("same-origin")
+    expect(new Headers(init.headers).get("X-Requested-With")).toBe(
+      "XMLHttpRequest",
+    )
   })
 
   it("keeps the caller request options", async () => {
@@ -29,12 +32,27 @@ describe("launcherFetch", () => {
       credentials: "include",
     })
 
-    expect(fetchMock).toHaveBeenCalledWith("/api/models", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: "{}",
-      credentials: "include",
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(init.method).toBe("POST")
+    expect(init.body).toBe("{}")
+    expect(init.credentials).toBe("include")
+    const headers = new Headers(init.headers)
+    expect(headers.get("content-type")).toBe("application/json")
+    expect(headers.get("X-Requested-With")).toBe("XMLHttpRequest")
+  })
+
+  it("does not overwrite an explicit X-Requested-With value", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response("ok"))
+    vi.stubGlobal("fetch", fetchMock)
+
+    await launcherFetch("/api/models", {
+      headers: { "X-Requested-With": "CustomValue" },
     })
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(new Headers(init.headers).get("X-Requested-With")).toBe(
+      "CustomValue",
+    )
   })
 
   it("returns non-JSON 401 responses untouched", async () => {
