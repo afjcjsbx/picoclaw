@@ -133,6 +133,22 @@ func TestParseScheduleRejectsInvalidEntries(t *testing.T) {
 			"only valid with cron",
 		},
 		{"bad at", map[string]any{"name": "a", "at": "tomorrow", "message": "m"}, "RFC3339"},
+		{
+			"every with timezone",
+			map[string]any{
+				"name": "a", "message": "m",
+				"schedule": map[string]any{"kind": "every", "everyMs": 1000, "tz": "Not/AZone"},
+			},
+			"not valid for kind",
+		},
+		{
+			"at with expression",
+			map[string]any{
+				"name": "a", "message": "m",
+				"schedule": map[string]any{"kind": "at", "atMs": 4102444800000, "expr": "not a cron"},
+			},
+			"not valid for kind",
+		},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {

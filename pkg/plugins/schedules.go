@@ -280,5 +280,29 @@ func parseScheduleObject(raw json.RawMessage) (cron.CronSchedule, error) {
 	if err := json.Unmarshal(raw, &schedule); err != nil {
 		return schedule, fmt.Errorf("schedule: %w", err)
 	}
+	if err := validateScheduleObjectFields(schedule, fields); err != nil {
+		return schedule, err
+	}
 	return schedule, cron.ValidateSchedule(schedule)
+}
+
+func validateScheduleObjectFields(schedule cron.CronSchedule, fields map[string]json.RawMessage) error {
+	allowed := map[string]bool{"kind": true}
+	switch schedule.Kind {
+	case "at":
+		allowed["atMs"] = true
+	case "every":
+		allowed["everyMs"] = true
+	case "cron":
+		allowed["expr"] = true
+		allowed["tz"] = true
+	default:
+		return nil
+	}
+	for key := range fields {
+		if !allowed[key] {
+			return fmt.Errorf("schedule field %q is not valid for kind %q", key, schedule.Kind)
+		}
+	}
+	return nil
 }
