@@ -133,7 +133,7 @@ func printDiagnosticSection(w io.Writer, diagnostics []plugins.Diagnostic) {
 
 func printField(w io.Writer, label, value string) {
 	if value != "" {
-		fmt.Fprintf(w, "%-13s%s\n", label+":", value)
+		fmt.Fprintf(w, "%-17s%s\n", label+":", value)
 	}
 }
 

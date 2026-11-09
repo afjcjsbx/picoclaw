@@ -3,6 +3,7 @@ package plugin
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -365,7 +366,13 @@ func TestShow(t *testing.T) {
 
 	out, err := execute([]string{"show", "demo"}, "")
 	require.NoError(t, err)
-	for _, want := range []string{"Version:     1.2.3", "Description: Demo plugin", "Author:      Ada", "demo:greet", "disabled"} {
+	for _, want := range []string{
+		fmt.Sprintf("%-17s%s", "Version:", "1.2.3"),
+		fmt.Sprintf("%-17s%s", "Description:", "Demo plugin"),
+		fmt.Sprintf("%-17s%s", "Author:", "Ada"),
+		"demo:greet",
+		"disabled",
+	} {
 		assert.Contains(t, out, want)
 	}
 
@@ -388,7 +395,7 @@ func TestTestCommand(t *testing.T) {
 	// The entry is disabled and the host switch is off; test loads it anyway.
 	out, err := execute([]string{"test", "good"}, "")
 	require.NoError(t, err)
-	assert.Contains(t, out, "Live state:  ready")
+	assert.Contains(t, out, fmt.Sprintf("%-17s%s", "Live state:", "ready"))
 	assert.Contains(t, out, "good:greet")
 	assert.False(t, e.load(t).Plugins.Entries["good"].Enabled, "test must not change the config")
 
@@ -446,4 +453,12 @@ func TestShowMarksSchedulesInactiveWhenCronDisabled(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, out, "Schedules (1)")
 	assert.Contains(t, out, "inactive: set tools.cron.enabled to true")
+}
+
+func TestPrintFieldAlignsLongLabels(t *testing.T) {
+	var b strings.Builder
+	printField(&b, "Allow schedules", "yes")
+	if got := b.String(); got != "Allow schedules: yes\n" {
+		t.Fatalf("field = %q", got)
+	}
 }
