@@ -41,8 +41,10 @@ func agentPluginFixture(t *testing.T, cfg *config.Config, url string) string {
 		write(
 			"mcp.json",
 			map[string]any{
-				"$schema":    plugins.MCPSchema,
-				"mcpServers": map[string]any{"server": map[string]string{"type": "streamable-http", "url": url}},
+				"$schema": plugins.MCPSchema,
+				"mcpServers": map[string]any{
+					"server": map[string]string{"type": "streamable-http", "url": url},
+				},
 			},
 		)
 	}
@@ -62,7 +64,9 @@ func agentPluginFixture(t *testing.T, cfg *config.Config, url string) string {
 		DataDir:       t.TempDir(),
 		InitTimeoutMS: 2000,
 		StartupWaitMS: 3000,
-		Entries:       map[string]config.PluginEntryConfig{"test-plugin": {Enabled: true, Path: root}},
+		Entries: map[string]config.PluginEntryConfig{
+			"test-plugin": {Enabled: true, Path: root},
+		},
 	}
 	return root
 }
@@ -124,7 +128,9 @@ func TestAgentPluginsLoadExecuteAndReload(t *testing.T) {
 		server,
 		&sdk.Tool{Name: "hello", Description: "Say hello"},
 		func(context.Context, *sdk.CallToolRequest, map[string]any) (*sdk.CallToolResult, any, error) {
-			return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: "plugin says hello"}}}, nil, nil
+			return &sdk.CallToolResult{
+				Content: []sdk.Content{&sdk.TextContent{Text: "plugin says hello"}},
+			}, nil, nil
 		},
 	)
 	httpServer := httptest.NewServer(
@@ -166,7 +172,11 @@ func TestAgentPluginsLoadExecuteAndReload(t *testing.T) {
 	// at the plugin resource tool with a plugin-relative path instead.
 	locations := catalogLocations(summary)
 	if len(locations) != 1 || locations[0] != "skills/greet/SKILL.md" {
-		t.Fatalf("plugin catalog locations = %q, want [skills/greet/SKILL.md]:\n%s", locations, summary)
+		t.Fatalf(
+			"plugin catalog locations = %q, want [skills/greet/SKILL.md]:\n%s",
+			locations,
+			summary,
+		)
 	}
 	for _, loc := range locations {
 		if filepath.IsAbs(loc) || strings.Contains(loc, pluginRoot) {
@@ -305,7 +315,9 @@ func TestOfficialMem0PluginRemoteMCPAndNativeHooks(t *testing.T) {
 			}
 			mu.Unlock()
 			data, _ := json.Marshal(memories)
-			return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: string(data)}}}, nil, nil
+			return &sdk.CallToolResult{
+				Content: []sdk.Content{&sdk.TextContent{Text: string(data)}},
+			}, nil, nil
 		},
 	)
 	sdk.AddTool(
@@ -315,7 +327,9 @@ func TestOfficialMem0PluginRemoteMCPAndNativeHooks(t *testing.T) {
 			mu.Lock()
 			adds = append(adds, in)
 			mu.Unlock()
-			return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: `{"event_id":"saved"}`}}}, nil, nil
+			return &sdk.CallToolResult{
+				Content: []sdk.Content{&sdk.TextContent{Text: `{"event_id":"saved"}`}},
+			}, nil, nil
 		},
 	)
 	handler := sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, nil)
@@ -354,8 +368,14 @@ func TestOfficialMem0PluginRemoteMCPAndNativeHooks(t *testing.T) {
 		{"name":"recall","intercept":["before_llm"],"mcp":{"server":"mem0","tool":"search_memories","arguments":{"query":"${user_message}","filters":{"AND":[{"user_id":"alice"},{"app_id":"project-a"}]},"top_k":5},"result":"append_to_user_message"}},
 		{"name":"capture","observe":["turn_completed"],"mcp":{"server":"mem0","tool":"add_memory","arguments":{"text":"User: ${user_message}\nAssistant: ${assistant_message}","user_id":"alice","app_id":"project-a","metadata":{"source":"picoclaw"}}}}
 	]}`)
-	write("skills/remember/SKILL.md", "---\nname: remember\ndescription: Remember a fact\n---\nRemember it.\n")
-	write("skills/status/SKILL.md", "---\nname: status\ndescription: Local status\n---\nRun local Python.\n")
+	write(
+		"skills/remember/SKILL.md",
+		"---\nname: remember\ndescription: Remember a fact\n---\nRemember it.\n",
+	)
+	write(
+		"skills/status/SKILL.md",
+		"---\nname: status\ndescription: Local status\n---\nRun local Python.\n",
+	)
 	cfg.Plugins = config.PluginsConfig{
 		Enabled: true, DataDir: t.TempDir(), StartupWaitMS: 3000,
 		Entries: map[string]config.PluginEntryConfig{"mem0": {
@@ -387,7 +407,9 @@ func TestOfficialMem0PluginRemoteMCPAndNativeHooks(t *testing.T) {
 		}
 	}
 	if !mem0ToolVisible {
-		t.Fatal("Mem0 tool with deferred=false was not directly exposed while discovery was enabled")
+		t.Fatal(
+			"Mem0 tool with deferred=false was not directly exposed while discovery was enabled",
+		)
 	}
 	if _, ok := al.registry.GetDefaultAgent().ContextBuilder.ResolveSkillName("mem0:remember"); ok {
 		t.Fatal("disabled package skill was loaded")
@@ -408,7 +430,8 @@ func TestOfficialMem0PluginRemoteMCPAndNativeHooks(t *testing.T) {
 	if recallHook == nil || captureHook == nil {
 		t.Fatalf("MCP hooks missing: %+v", al.PluginStatuses())
 	}
-	if captureHook.observeAll || !captureHook.observeKinds[runtimeevents.KindAgentTurnEnd.String()] {
+	if captureHook.observeAll ||
+		!captureHook.observeKinds[runtimeevents.KindAgentTurnEnd.String()] {
 		t.Fatalf(
 			"capture hook has incorrect event filter: all=%v kinds=%v",
 			captureHook.observeAll,
@@ -433,8 +456,10 @@ func TestOfficialMem0PluginRemoteMCPAndNativeHooks(t *testing.T) {
 	feedbackCtx := WithAgentLoop(withTurnState(ctx, feedbackTurnState), al)
 	turnID := "mem0-turn-1"
 	before, _, err := recallHook.BeforeLLM(feedbackCtx, &LLMHookRequest{
-		Meta:     HookMeta{AgentID: agentID, TurnID: turnID, Iteration: 1},
-		Messages: []providers.Message{{Role: "user", Content: "What did we decide? token test-mem0-token"}},
+		Meta: HookMeta{AgentID: agentID, TurnID: turnID, Iteration: 1},
+		Messages: []providers.Message{
+			{Role: "user", Content: "What did we decide? token test-mem0-token"},
+		},
 	})
 	if err != nil || !strings.Contains(before.Messages[0].Content, "Prefers concise explanations") {
 		t.Fatalf("memory was not injected: %+v %v", before, err)
@@ -537,10 +562,12 @@ drainFeedback:
 		!strings.Contains(fmt.Sprint(searches[0].Filters), "project-a") || searches[0].TopK != 5 {
 		t.Fatalf("unscoped recall: %+v", searches[0])
 	}
-	if adds[0].UserID != "alice" || adds[0].AppID != "project-a" || !strings.Contains(adds[0].Text, "saved response") {
+	if adds[0].UserID != "alice" || adds[0].AppID != "project-a" ||
+		!strings.Contains(adds[0].Text, "saved response") {
 		t.Fatalf("unexpected capture: %+v", adds[0])
 	}
-	if strings.Contains(searches[0].Query, "test-mem0-token") || strings.Contains(adds[0].Text, "test-mem0-token") {
+	if strings.Contains(searches[0].Query, "test-mem0-token") ||
+		strings.Contains(adds[0].Text, "test-mem0-token") {
 		t.Fatal("MCP credential was sent in memory content")
 	}
 }
@@ -573,10 +600,14 @@ func TestPluginMCPHooksWithDifferentProviderSchema(t *testing.T) {
 		&sdk.Tool{Name: "add_memory"},
 		func(_ context.Context, _ *sdk.CallToolRequest, in addInput) (*sdk.CallToolResult, any, error) {
 			adds = append(adds, in)
-			return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: "saved"}}}, nil, nil
+			return &sdk.CallToolResult{
+				Content: []sdk.Content{&sdk.TextContent{Text: "saved"}},
+			}, nil, nil
 		},
 	)
-	remote := httptest.NewServer(sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, nil))
+	remote := httptest.NewServer(
+		sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, nil),
+	)
 	defer remote.Close()
 	al, cfg, _, _, cleanup := newTestAgentLoop(t)
 	defer cleanup()
@@ -596,7 +627,9 @@ func TestPluginMCPHooksWithDifferentProviderSchema(t *testing.T) {
 	entry.AllowHooks = true
 	entry.SkillNames = []string{}
 	entry.MCPOverrides = map[string]json.RawMessage{
-		"supermemory": json.RawMessage(fmt.Sprintf(`{"type":"streamable-http","url":%q}`, remote.URL)),
+		"supermemory": json.RawMessage(
+			fmt.Sprintf(`{"type":"streamable-http","url":%q}`, remote.URL),
+		),
 	}
 	entry.Path = root
 	cfg.Plugins.Entries["test-plugin"] = entry
@@ -655,7 +688,11 @@ func TestAgentPluginsHookLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer source.Close()
-	destination, err := os.OpenFile(filepath.Join(root, "hook-helper.exe"), os.O_CREATE|os.O_WRONLY, 0o700)
+	destination, err := os.OpenFile(
+		filepath.Join(root, "hook-helper.exe"),
+		os.O_CREATE|os.O_WRONLY,
+		0o700,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -670,10 +707,13 @@ func TestAgentPluginsHookLifecycle(t *testing.T) {
 	extension := map[string]any{
 		"hooks": []any{
 			map[string]any{
-				"name":      "rewrite",
-				"command":   "./hook-helper.exe",
-				"args":      []string{"-test.run=^TestProcessHook_HelperProcess$"},
-				"env":       map[string]string{"PICOCLAW_HOOK_HELPER": "1", "PICOCLAW_HOOK_MODE": "rewrite"},
+				"name":    "rewrite",
+				"command": "./hook-helper.exe",
+				"args":    []string{"-test.run=^TestProcessHook_HelperProcess$"},
+				"env": map[string]string{
+					"PICOCLAW_HOOK_HELPER": "1",
+					"PICOCLAW_HOOK_MODE":   "rewrite",
+				},
 				"intercept": []string{"after_llm"},
 			},
 		},
@@ -695,14 +735,20 @@ func TestAgentPluginsHookLifecycle(t *testing.T) {
 	al.waitPlugins(context.Background())
 	request, _ := al.hooks.BeforeLLM(
 		context.Background(),
-		&LLMHookRequest{Meta: HookMeta{AgentID: al.registry.GetDefaultAgent().ID}, Model: "original"},
+		&LLMHookRequest{
+			Meta:  HookMeta{AgentID: al.registry.GetDefaultAgent().ID},
+			Model: "original",
+		},
 	)
 	if request.Model != "original" {
 		t.Fatal("undeclared hook stage was invoked")
 	}
 	denied, _ := al.hooks.AfterLLM(
 		context.Background(),
-		&LLMHookResponse{Meta: HookMeta{AgentID: "other-agent"}, Response: &providers.LLMResponse{Content: "hello"}},
+		&LLMHookResponse{
+			Meta:     HookMeta{AgentID: "other-agent"},
+			Response: &providers.LLMResponse{Content: "hello"},
+		},
 	)
 	if denied.Response.Content != "hello" {
 		t.Fatal("hook agent scope was ignored")
@@ -724,5 +770,121 @@ func TestAgentPluginsHookLifecycle(t *testing.T) {
 	)
 	if response.Response.Content != "hello" {
 		t.Fatal("hook survived unload")
+	}
+}
+
+func TestPluginScheduleAgent(t *testing.T) {
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{Workspace: t.TempDir(), ModelName: "test-model"},
+			List: []config.AgentConfig{
+				{ID: "main", Default: true},
+				{ID: "sales"},
+			},
+		},
+	}
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{})
+	defer al.Close()
+	registry := al.GetRegistry()
+
+	cases := []struct {
+		name   string
+		agents []string
+		want   string
+		ok     bool
+	}{
+		{"all agents", nil, "", true},
+		{"none", []string{}, "", false},
+		{"default", []string{"main"}, "main", true},
+		{"single non-default", []string{"sales"}, "sales", true},
+		{"multiple with default", []string{"main", "sales"}, "main", true},
+		{"multiple without default", []string{"sales", "missing"}, "sales", true},
+		{"unknown", []string{"missing"}, "", false},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := pluginScheduleAgent(config.PluginEntryConfig{Agents: test.agents}, registry)
+			if got != test.want || ok != test.ok {
+				t.Fatalf("got (%q, %v), want (%q, %v)", got, ok, test.want, test.ok)
+			}
+		})
+	}
+}
+
+func TestResolveMessageRouteUsesExplicitAgent(t *testing.T) {
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{Workspace: t.TempDir(), ModelName: "test-model"},
+			List: []config.AgentConfig{
+				{ID: "main", Default: true},
+				{ID: "sales"},
+			},
+		},
+	}
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{})
+	defer al.Close()
+
+	msg := bus.InboundMessage{
+		Context: bus.InboundContext{Channel: "cli", ChatID: "direct", SenderID: "cron"},
+		AgentID: "sales",
+	}
+	route, agent, err := al.resolveMessageRoute(msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agent == nil || agent.ID != "sales" || route.AgentID != "sales" ||
+		route.MatchedBy != "explicit_agent" {
+		t.Fatalf("route=%+v agent=%+v", route, agent)
+	}
+
+	msg.AgentID = "missing"
+	if _, _, err := al.resolveMessageRoute(msg); err == nil {
+		t.Fatal("unknown explicit agent was accepted")
+	}
+}
+
+func TestPluginSchedulesRespectAgentAllowlist(t *testing.T) {
+	al, cfg, _, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+	defer al.Close()
+	root := agentPluginFixture(t, cfg, "")
+	writeScheduleManifest := func() {
+		t.Helper()
+		data, err := json.Marshal(map[string]any{
+			"$schema": plugins.ManifestSchema,
+			"name":    "test-plugin",
+			"extensions": map[string]any{
+				plugins.ExtensionNamespace: map[string]any{
+					"schedules": []map[string]any{{
+						"name": "nightly", "cron": "0 3 * * *", "message": "Run",
+					}},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "plugin.json"), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeScheduleManifest()
+	entry := cfg.Plugins.Entries["test-plugin"]
+	entry.AllowSchedules = true
+	entry.Agents = []string{}
+	cfg.Plugins.Entries["test-plugin"] = entry
+	al.waitPlugins(context.Background())
+	if got := al.PluginScheduleDeclarations(); len(got) != 0 {
+		t.Fatalf("deny-all agent allowlist published schedules: %+v", got)
+	}
+
+	entry.Agents = []string{"main"}
+	entry.AllowSchedules = true
+	cfg.Plugins.Entries["test-plugin"] = entry
+	al.closePlugins(false)
+	al.waitPlugins(context.Background())
+	got := al.PluginScheduleDeclarations()
+	if len(got) != 1 || got[0].AgentID != "main" {
+		t.Fatalf("schedules = %+v, want one routed to main", got)
 	}
 }

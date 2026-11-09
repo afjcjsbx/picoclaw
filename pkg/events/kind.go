@@ -103,6 +103,12 @@ const (
 	KindMCPToolCallStart Kind = "mcp.tool.call.start"
 	// KindMCPToolCallEnd is emitted when an MCP tool call ends.
 	KindMCPToolCallEnd Kind = "mcp.tool.call.end"
+
+	// KindCronReconciled is emitted after the gateway cron scheduler and its
+	// host-managed declarations have been reconciled.
+	KindCronReconciled Kind = "cron.reconciled"
+	// KindCronChanged is emitted after a reconciliation changed the job store.
+	KindCronChanged Kind = "cron.changed"
 )
 
 var knownKinds = []Kind{
@@ -152,6 +158,8 @@ var knownKinds = []Kind{
 	KindMCPToolDiscovered,
 	KindMCPToolCallStart,
 	KindMCPToolCallEnd,
+	KindCronReconciled,
+	KindCronChanged,
 }
 
 // KnownKinds returns the runtime event kinds declared by this package.

@@ -33,6 +33,7 @@ func newShowCommand() *cobra.Command {
 				return err
 			}
 			entry, configured := cfg.Plugins.Entries[id]
+			cronEnabled := cfg.Tools.IsToolEnabled("cron")
 
 			report, err := plugins.Validate(id, item.Root, entry)
 			if err != nil {
@@ -57,6 +58,7 @@ func newShowCommand() *cobra.Command {
 			printField(w, "State", item.State)
 			if configured {
 				printField(w, "Allow hooks", boolWord(entry.AllowHooks))
+				printField(w, "Allow schedules", boolWord(entry.AllowSchedules))
 			}
 			fmt.Fprintln(w)
 
@@ -67,13 +69,31 @@ func newShowCommand() *cobra.Command {
 				if len(report.Hooks) > 0 && !entry.AllowHooks {
 					fmt.Fprintln(w, "  (inactive: set plugins.entries."+id+".allow_hooks to true)")
 				}
+				printList(w, "Schedules", report.Schedules)
+				if len(report.Schedules) > 0 {
+					switch {
+					case !entry.AllowSchedules:
+						fmt.Fprintln(w, "  (inactive: set plugins.entries."+id+".allow_schedules to true)")
+					case !cronEnabled:
+						fmt.Fprintln(w, "  (inactive: set tools.cron.enabled to true)")
+					}
+				}
 				printDiagnosticSection(w, report.Diagnostics)
 				return nil
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), timeout)
 			defer cancel()
-			printProbe(w, probe(ctx, cfg, id, entry), timeout)
+			result := probe(ctx, cfg, id, entry)
+			printProbe(w, result, timeout)
+			if len(result.Schedules) > 0 {
+				switch {
+				case !entry.AllowSchedules:
+					fmt.Fprintln(w, "  (inactive: set plugins.entries."+id+".allow_schedules to true)")
+				case !cronEnabled:
+					fmt.Fprintln(w, "  (inactive: set tools.cron.enabled to true)")
+				}
+			}
 			return nil
 		},
 	}
@@ -102,6 +122,7 @@ func printProbe(w io.Writer, r probeResult, timeout time.Duration) {
 	printList(w, "Skills", r.Skills)
 	printList(w, "Tools", r.Tools)
 	printList(w, "Hooks", r.Hooks)
+	printList(w, "Schedules", r.Schedules)
 	printDiagnosticSection(w, r.Status.Diagnostics)
 }
 

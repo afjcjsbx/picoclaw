@@ -3,6 +3,7 @@ package agent
 import (
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/cron"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 )
 
@@ -16,6 +17,7 @@ type HookMeta struct {
 	Iteration            int
 	TracePath            string
 	Source               string
+	Cron                 *cron.Execution `json:"cron,omitempty"`
 	turnContext          *TurnContext
 	suppressToolFeedback bool
 }

@@ -290,3 +290,19 @@ func TestCronService_JobRemovedFromFileWhileRunning(t *testing.T) {
 		t.Fatalf("file should stay without the job: err=%v jobs=%d", err, len(onDisk.Jobs))
 	}
 }
+
+func TestCronService_ReloadForcesReadWithoutPolling(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cron", "jobs.json")
+	cs := NewCronService(path, nil)
+	cs.SetReloadInterval(0)
+	if err := cs.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Stop()
+
+	writeExternal(t, path, everyJob("forced", 60_000))
+	cs.Reload()
+	if !hasJob(cs, "forced") {
+		t.Fatal("Reload did not read the store when polling was disabled")
+	}
+}

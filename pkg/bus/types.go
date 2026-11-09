@@ -1,5 +1,7 @@
 package bus
 
+import "github.com/sipeed/picoclaw/pkg/cron"
+
 // SenderInfo provides structured sender identity information.
 type SenderInfo struct {
 	Platform    string `json:"platform,omitempty"`     // "telegram", "discord", "slack", ...
@@ -43,6 +45,9 @@ type InboundMessage struct {
 	MediaScope string         `json:"media_scope,omitempty"` // media lifecycle scope
 	SessionKey string         `json:"session_key"`
 	AgentID    string         `json:"agent_id,omitempty"`
+	// CronExecution carries the scheduled run identity across follow-up
+	// messages. It is nil for interactive messages.
+	CronExecution *cron.Execution `json:"cron_execution,omitempty"`
 
 	// Convenience mirrors derived from Context for runtime consumers.
 	Channel   string `json:"channel"`

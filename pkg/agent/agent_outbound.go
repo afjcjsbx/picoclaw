@@ -54,7 +54,7 @@ func (al *AgentLoop) publishTurnFailureNotice(
 		return
 	}
 
-	al.publishResponseIfNeeded(ctx, channel, chatID, sessionKey, notice, nil, publishResponseOptions{
+	al.publishResponseIfNeeded(ctx, channel, chatID, sessionKey, notice, "", nil, publishResponseOptions{
 		skipMessageToolSuppression: true,
 		surviveCanceledContext:     true,
 	})
@@ -89,9 +89,26 @@ func (al *AgentLoop) PublishResponseIfNeeded(ctx context.Context, channel, chatI
 	al.publishFinalResponse(ctx, channel, chatID, sessionKey, response)
 }
 
+// PublishResponseIfNeededForAgent is the routed variant used by cron jobs that
+// target a non-default agent. It checks that agent's message-tool state before
+// suppressing the final response.
+func (al *AgentLoop) PublishResponseIfNeededForAgent(
+	ctx context.Context,
+	channel, chatID, sessionKey, response, agentID string,
+) {
+	al.publishFinalResponseForAgent(ctx, channel, chatID, sessionKey, response, agentID)
+}
+
 func (al *AgentLoop) publishFinalResponse(
 	ctx context.Context,
 	channel, chatID, sessionKey, response string,
+) bool {
+	return al.publishFinalResponseForAgent(ctx, channel, chatID, sessionKey, response, "")
+}
+
+func (al *AgentLoop) publishFinalResponseForAgent(
+	ctx context.Context,
+	channel, chatID, sessionKey, response, agentID string,
 ) bool {
 	return al.publishResponseIfNeeded(
 		ctx,
@@ -99,6 +116,7 @@ func (al *AgentLoop) publishFinalResponse(
 		chatID,
 		sessionKey,
 		response,
+		agentID,
 		al.latestAssistantUsage(ctx, sessionKey, response),
 		publishResponseOptions{},
 	)
@@ -106,7 +124,7 @@ func (al *AgentLoop) publishFinalResponse(
 
 func (al *AgentLoop) publishResponseIfNeeded(
 	ctx context.Context,
-	channel, chatID, sessionKey, response string,
+	channel, chatID, sessionKey, response, agentID string,
 	usage *bus.TokenUsage,
 	opts publishResponseOptions,
 ) bool {
@@ -116,9 +134,14 @@ func (al *AgentLoop) publishResponseIfNeeded(
 
 	alreadySentToSameChat := false
 	if !opts.skipMessageToolSuppression {
-		defaultAgent := al.GetRegistry().GetDefaultAgent()
-		if defaultAgent != nil {
-			if tool, ok := defaultAgent.Tools.Get("message"); ok {
+		sourceAgent := al.GetRegistry().GetDefaultAgent()
+		if agentID != "" {
+			if scopedAgent, ok := al.GetRegistry().GetAgent(agentID); ok {
+				sourceAgent = scopedAgent
+			}
+		}
+		if sourceAgent != nil {
+			if tool, ok := sourceAgent.Tools.Get("message"); ok {
 				if mt, ok := tool.(*integrationtools.MessageTool); ok {
 					alreadySentToSameChat = mt.HasSentTo(sessionKey, channel, chatID)
 				}

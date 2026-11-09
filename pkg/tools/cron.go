@@ -19,10 +19,32 @@ import (
 
 // JobExecutor is the interface for executing cron jobs through the agent
 type JobExecutor interface {
-	ProcessDirectWithChannel(ctx context.Context, content, sessionKey, channel, chatID string) (string, error)
+	ProcessDirectWithChannel(
+		ctx context.Context,
+		content, sessionKey, channel, chatID string,
+	) (string, error)
 	// PublishResponseIfNeeded sends response to the outbound bus only when the
 	// agent did not already deliver content through the message tool in this round.
 	PublishResponseIfNeeded(ctx context.Context, channel, chatID, sessionKey, response string)
+}
+
+// agentJobExecutor is implemented by executors that can route a cron turn to a
+// named agent. It is optional so existing JobExecutor implementations keep
+// working for jobs without an AgentID.
+type agentJobExecutor interface {
+	ProcessDirectWithAgent(
+		ctx context.Context,
+		content, sessionKey, channel, chatID, agentID string,
+	) (string, error)
+}
+
+// agentResponsePublisher is the optional routed counterpart of
+// JobExecutor.PublishResponseIfNeeded.
+type agentResponsePublisher interface {
+	PublishResponseIfNeededForAgent(
+		ctx context.Context,
+		channel, chatID, sessionKey, response, agentID string,
+	)
 }
 
 // CronTool provides scheduling capabilities for the agent
@@ -39,8 +61,13 @@ type CronTool struct {
 // NewCronTool creates a new CronTool
 // execTimeout: 0 means no timeout, >0 sets the timeout duration
 func NewCronTool(
-	cronService *cron.CronService, executor JobExecutor, msgBus *bus.MessageBus, workspace string, restrict bool,
-	execTimeout time.Duration, config *config.Config,
+	cronService *cron.CronService,
+	executor JobExecutor,
+	msgBus *bus.MessageBus,
+	workspace string,
+	restrict bool,
+	execTimeout time.Duration,
+	config *config.Config,
 ) (*CronTool, error) {
 	allowCommand := true
 	execEnabled := true
@@ -95,8 +122,17 @@ func (t *CronTool) Parameters() map[string]any {
 		"type": "object",
 		"properties": map[string]any{
 			"action": map[string]any{
-				"type":        "string",
-				"enum":        []string{"add", "list", "get", "update", "remove", "enable", "disable", "run"},
+				"type": "string",
+				"enum": []string{
+					"add",
+					"list",
+					"get",
+					"update",
+					"remove",
+					"enable",
+					"disable",
+					"run",
+				},
 				"description": "Action to perform. Use 'get' before editing and 'update' to change existing jobs without losing their payload. Use 'run' to execute an existing job right now, on demand, without changing its schedule. Remote channels can only list/get/update/run jobs for the current channel/chat_id; on single-owner channels such as the Pico WebUI, jobs are scoped to the whole channel.",
 			},
 			"name": map[string]any{
@@ -170,7 +206,9 @@ func (t *CronTool) addJob(ctx context.Context, args map[string]any) *ToolResult 
 	chatID := ToolChatID(ctx)
 
 	if channel == "" || chatID == "" {
-		return ErrorResult("no session context (channel/chat_id not set). Use this tool in an active conversation.")
+		return ErrorResult(
+			"no session context (channel/chat_id not set). Use this tool in an active conversation.",
+		)
 	}
 
 	message, ok := args["message"].(string)
@@ -222,7 +260,8 @@ func (t *CronTool) addJob(ctx context.Context, args map[string]any) *ToolResult 
 		if !t.execEnabled {
 			return ErrorResult("command execution is disabled")
 		}
-		if !constants.IsInternalChannel(channel) && !isCommandAllowedRemote(channel, chatID, t.commandAllowedRemotes) {
+		if !constants.IsInternalChannel(channel) &&
+			!isCommandAllowedRemote(channel, chatID, t.commandAllowedRemotes) {
 			return ErrorResult(
 				"scheduling command execution is restricted to internal channels or configured remote channels",
 			)
@@ -254,7 +293,13 @@ func (t *CronTool) addJob(ctx context.Context, args map[string]any) *ToolResult 
 	}
 	if needsUpdate {
 		if err := t.cronService.UpdateJob(job); err != nil {
-			return ErrorResult(fmt.Sprintf("Cron job %s was created but saving its payload failed: %v", job.ID, err))
+			return ErrorResult(
+				fmt.Sprintf(
+					"Cron job %s was created but saving its payload failed: %v",
+					job.ID,
+					err,
+				),
+			)
 		}
 	}
 
@@ -487,7 +532,9 @@ func schedulePatch(args map[string]any) (cron.CronSchedule, bool, *ToolResult) {
 	}
 
 	if patches > 1 {
-		return cron.CronSchedule{}, false, ErrorResult("only one of at_seconds, every_seconds, or cron_expr can be set")
+		return cron.CronSchedule{}, false, ErrorResult(
+			"only one of at_seconds, every_seconds, or cron_expr can be set",
+		)
 	}
 	return schedule, patches == 1, nil
 }
@@ -520,7 +567,8 @@ func (t *CronTool) validateCommandMutation(ctx context.Context, args map[string]
 	if !t.execEnabled {
 		return ErrorResult("command execution is disabled")
 	}
-	if !constants.IsInternalChannel(channel) && !isCommandAllowedRemote(channel, chatID, t.commandAllowedRemotes) {
+	if !constants.IsInternalChannel(channel) &&
+		!isCommandAllowedRemote(channel, chatID, t.commandAllowedRemotes) {
 		return ErrorResult(
 			"updating command execution is restricted to internal channels or configured remote channels",
 		)
@@ -720,7 +768,10 @@ func (t *CronTool) runJob(ctx context.Context, args map[string]any) *ToolResult 
 		return ErrorResult(fmt.Sprintf("Error running job %s: %v", jobID, err))
 	}
 	return SilentResult(
-		fmt.Sprintf("Cron job '%s' triggered; its output will be delivered to the job's channel", job.Name),
+		fmt.Sprintf(
+			"Cron job '%s' triggered; its output will be delivered to the job's channel",
+			job.Name,
+		),
 	)
 }
 
@@ -746,7 +797,9 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) (string, e
 		if !t.execEnabled || t.execTool == nil {
 			output := "Error executing scheduled command: command execution is disabled"
 			t.publishJobOutput(channel, chatID, output)
-			return output, fmt.Errorf("scheduled command not executed: command execution is disabled")
+			return output, fmt.Errorf(
+				"scheduled command not executed: command execution is disabled",
+			)
 		}
 
 		args := map[string]any{
@@ -763,7 +816,11 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) (string, e
 			return output, fmt.Errorf("scheduled command failed: %s", result.ForLLM)
 		}
 
-		output := fmt.Sprintf("Scheduled command '%s' executed:\n%s", job.Payload.Command, result.ForLLM)
+		output := fmt.Sprintf(
+			"Scheduled command '%s' executed:\n%s",
+			job.Payload.Command,
+			result.ForLLM,
+		)
 		t.publishJobOutput(channel, chatID, output)
 		return "ok", nil
 	}
@@ -771,21 +828,63 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) (string, e
 	sessionKey := fmt.Sprintf("agent:cron-%s-%s", job.ID, uuid.New().String())
 
 	// Call agent with the job message
-	response, err := t.executor.ProcessDirectWithChannel(
-		ctx,
-		job.Payload.Message,
-		sessionKey,
-		channel,
-		chatID,
-	)
+	response, err := t.runAgentJob(ctx, job, sessionKey, channel, chatID)
 	if err != nil {
 		return "", fmt.Errorf("cron job %s: %w", job.ID, err)
 	}
 
 	if response != "" {
-		t.executor.PublishResponseIfNeeded(ctx, channel, chatID, sessionKey, response)
+		t.publishAgentJobResponse(ctx, job, sessionKey, channel, chatID, response)
 	}
 	return "ok", nil
+}
+
+func (t *CronTool) publishAgentJobResponse(
+	ctx context.Context,
+	job *cron.CronJob,
+	sessionKey, channel, chatID, response string,
+) {
+	if job.AgentID != "" {
+		if publisher, ok := t.executor.(agentResponsePublisher); ok {
+			publisher.PublishResponseIfNeededForAgent(
+				ctx, channel, chatID, sessionKey, response, job.AgentID,
+			)
+			return
+		}
+	}
+	t.executor.PublishResponseIfNeeded(ctx, channel, chatID, sessionKey, response)
+}
+
+func (t *CronTool) runAgentJob(
+	ctx context.Context,
+	job *cron.CronJob,
+	sessionKey, channel, chatID string,
+) (string, error) {
+	if job.AgentID == "" {
+		return t.executor.ProcessDirectWithChannel(
+			ctx,
+			job.Payload.Message,
+			sessionKey,
+			channel,
+			chatID,
+		)
+	}
+	executor, ok := t.executor.(agentJobExecutor)
+	if !ok {
+		return "", fmt.Errorf(
+			"cron job %s targets agent %q but the executor does not support agent routing",
+			job.ID,
+			job.AgentID,
+		)
+	}
+	return executor.ProcessDirectWithAgent(
+		ctx,
+		job.Payload.Message,
+		sessionKey,
+		channel,
+		chatID,
+		job.AgentID,
+	)
 }
 
 // cronOutputPublishTimeout bounds a single job-output publish.

@@ -16,12 +16,14 @@ func newValidateCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "validate <path|id>",
 		Short: "Lint a plugin package without starting anything",
-		Long: `Check a plugin the way the host would load it: manifest, skills, mcp.json and
-hooks. No process is started and no server is contacted; use ` + "`plugin test`" + ` for that.
+		Long: `Check a plugin the way the host would load it: manifest, skills, mcp.json,
+hooks and schedules. No process is started and no server is contacted; use
+` + "`plugin test`" + ` for that.
 
 The argument is a package directory, or the id of a configured or discovered
 plugin. An id takes precedence over a directory of the same name; write ./name
-to force the directory. Hooks are checked even when allow_hooks is off.
+to force the directory. Hooks and schedules are checked even when their grants
+are off.
 
 Exit status is 1 when the manifest is rejected. Component problems (a bad
 skill, hook or MCP server) and ignored manifest fields are warnings, because
@@ -53,9 +55,10 @@ the host loads the rest of the plugin anyway; --strict makes them fail too.`,
 				return fmt.Errorf("invalid plugin: %w", err)
 			}
 
-			fmt.Fprintf(w, "✓ %s: %d skills, %d MCP servers, %d hooks, %d warnings\n",
+			fmt.Fprintf(w, "✓ %s: %d skills, %d MCP servers, %d hooks, %d schedules, %d warnings\n",
 				strings.TrimSpace(report.Manifest.Name+" "+report.Manifest.Version),
-				len(report.Skills), len(report.Servers), len(report.Hooks), len(report.Diagnostics))
+				len(report.Skills), len(report.Servers), len(report.Hooks),
+				len(report.Schedules), len(report.Diagnostics))
 			if strict && len(report.Diagnostics) > 0 {
 				return fmt.Errorf("%d warning(s) treated as errors by --strict", len(report.Diagnostics))
 			}

@@ -119,12 +119,14 @@ On a wide terminal the output is a bordered panel; otherwise it is an ASCII tabl
 picoclaw plugin show <id> [--connect] [--timeout 30s]
 ```
 
-Prints the manifest metadata, root, state and `allow_hooks`, then the capabilities found by
-reading the package: skills, MCP servers (including `mcp_overrides` from the entry) and
-hooks, followed by diagnostics. A package with a rejected manifest is an error; use
-`validate` to see why.
+Prints the manifest metadata, root, state, `allow_hooks` and `allow_schedules`, then the
+capabilities found by reading the package: skills, MCP servers (including `mcp_overrides`
+from the entry), hooks and schedules, followed by diagnostics. A package with a rejected
+manifest is an error; use `validate` to see why.
 
-If the plugin declares hooks while `allow_hooks` is `false`, they are listed as inactive.
+If the plugin declares hooks while `allow_hooks` is `false`, or schedules while
+`allow_schedules` is `false`, they are listed as inactive. Schedules are printed
+with their stable declaration key, `plugin:<id>:<name>`.
 
 `--connect` loads the plugin instead and prints what it actually published, including MCP
 tools as `server/tool`. It starts the plugin's MCP servers.
@@ -147,8 +149,8 @@ no single package is an error and leaves the config untouched. Warnings (for exa
 ignored manifest field) are printed and do not block the save.
 
 When the entry already exists, you are asked to confirm. Only the fields you pass change:
-`allow_hooks`, `agents`, `skill_names`, `config`, `mcp_overrides` and the rest are kept, and
-omitting `--enable` does not disable an enabled entry.
+`allow_hooks`, `allow_schedules`, `agents`, `skill_names`, `config`, `mcp_overrides` and the
+rest are kept, and omitting `--enable` does not disable an enabled entry.
 
 Note that `entries.<id>.path` written by hand is relative to the **workspace**, not to the
 shell. `add` avoids the difference by always saving an absolute path.
@@ -178,9 +180,12 @@ contacting any server:
 - `mcp.json` and the entry's `mcp_overrides`: schema, transports, commands, URLs, headers
 - hooks, inline or in `com.sipeed.picoclaw/hooks.json`: fields, intercept stages, result modes,
   and that an MCP action names a server that exists
+- schedules, inline or in `com.sipeed.picoclaw/schedules.json`: names, schedule shapes,
+  messages and delivery pairs
 
-Hooks are checked even when `allow_hooks` is `false`, so you can lint them before granting
-the permission. A hook command that is not on `PATH` is reported, as the host would.
+Hooks and schedules are checked even when their grants are `false`, so you can lint them
+before granting permission. A hook command that is not on `PATH` is reported, as the host
+would.
 
 The argument is a directory, or an id. An id takes precedence over a directory with the same
 name; write `./name` to force the directory.
@@ -225,12 +230,13 @@ picoclaw plugin test <id> [--timeout 30s] [--strict]
 ```
 
 Loads one plugin exactly as the gateway would, even if its entry is disabled or does not
-exist yet, and prints the final state, the skills, MCP tools and hooks it publishes, and its
-diagnostics. Nothing is registered with an agent and the config is not changed.
+exist yet, and prints the final state, the skills, MCP tools, hooks and schedules it
+publishes, and its diagnostics. Nothing is registered with an agent and the config is not
+changed.
 
 This **starts the plugin's MCP servers** and creates its `plugin-data/<id>` directory, as the
-gateway does. Only test packages you trust. Hooks are published only when the entry has
-`allow_hooks` set.
+gateway does. Only test packages you trust. Hooks and schedules are published only when
+their grants are set.
 
 | Status | Cause |
 |--------|-------|
@@ -247,6 +253,6 @@ Opens `config.json` in `$EDITOR`. It fails if `$EDITOR` is not set.
 
 ## Related
 
-- [Plugin Installation](../guides/plugins.md): package format, host configuration, hooks, isolation
+- [Plugin Installation](../guides/plugins.md): package format, host configuration, hooks, schedules, isolation
 - [Writing a Plugin](../guides/writing-a-plugin.md): step-by-step authoring tutorial
 - [MCP Server CLI](mcp-cli.md): the plugin CLI manages packages, not individual MCP servers

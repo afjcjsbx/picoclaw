@@ -11,8 +11,11 @@ The `cron` tool lets the agent schedule jobs. A job fires as a reminder, as a fu
 | `tools.cron.allow_command` | bool | `true` | Allow command jobs; when `false`, scheduling one still works if the call passes `command_confirm=true` |
 | `tools.cron.command_allowed_remotes` | string[] | `[]` | Remote channels (or `channel:chat_id` values) allowed to schedule command jobs; `*` allows every remote channel |
 | `tools.cron.exec_timeout_minutes` | int | `5` | Execution timeout in minutes for command jobs; `0` means no timeout |
+| `tools.cron.trigger` | string | `inprocess` | Registered trigger provider. A provider decides when `Tick()` runs; execution, delivery and state stay in the cron service. Unknown names fall back to `inprocess` with a warning |
 
 Environment overrides use the `PICOCLAW_TOOLS_CRON_` prefix, for example `PICOCLAW_TOOLS_CRON_EXEC_TIMEOUT_MINUTES=10`.
+
+Agent turns started by a cron job carry an execution identity (`job_id`, `execution_id`, `source`, `scheduled_at_ms`) in hook metadata and runtime events. Plugins can use `meta.Cron` or `${cron_execution}` to distinguish scheduled work from interactive chat.
 
 Command jobs must also pass the exec guards: they are rejected when `tools.exec.enabled` is `false`, and scheduling them is restricted to internal channels (`cli`, `system`, `subagent`) or channels listed in `command_allowed_remotes`. Non-command reminders remain available on every channel.
 
@@ -24,7 +27,7 @@ Command jobs must also pass the exec guards: they are rejected when `tools.exec.
 | `message` | string | `add` | Reminder/task message shown when the job fires; with `command`, it describes what the command does |
 | `job_id` | string | `get`, `update`, `remove`, `enable`, `disable` | Identifier of the target job |
 | `name` | string | — | Optional job display name (used by `add` and `update`) |
-| `at_seconds` | int | one-time | Fire once, this many seconds from now (`600` = 10 minutes); the job is removed after it runs |
+| `at_seconds` | int | one-time | Fire once, this many seconds from now (`600` = 10 minutes); the job is removed after a successful run, while a failed one-shot stays disabled with its error history |
 | `every_seconds` | int | recurring | Recurring interval in seconds (`7200` = every 2 hours) |
 | `cron_expr` | string | recurring | Cron expression for complex schedules (`0 9 * * *`, evaluated in the process time zone) |
 | `command` | string | — | Shell command to execute instead of just showing the message (for example `df -h`) |

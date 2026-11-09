@@ -177,6 +177,13 @@ func hookTimeoutFromMS(ms int) time.Duration {
 	return time.Duration(ms) * time.Millisecond
 }
 
+// InitHooks mounts the configured hooks before runtime services publish
+// lifecycle events. Run calls it again defensively; the underlying
+// initialization is idempotent.
+func (al *AgentLoop) InitHooks(ctx context.Context) error {
+	return al.ensureHooksInitialized(ctx)
+}
+
 func (al *AgentLoop) ensureHooksInitialized(ctx context.Context) error {
 	if al == nil || al.cfg == nil || al.hooks == nil {
 		return nil
@@ -419,5 +426,7 @@ func validHookEventKinds() map[string]string {
 	kinds["subturn_result_delivered"] = runtimeevents.KindAgentSubTurnResultDelivered.String()
 	kinds["subturn_orphan"] = runtimeevents.KindAgentSubTurnOrphan.String()
 	kinds["error"] = runtimeevents.KindAgentError.String()
+	kinds["cron_reconciled"] = runtimeevents.KindCronReconciled.String()
+	kinds["cron_changed"] = runtimeevents.KindCronChanged.String()
 	return kinds
 }

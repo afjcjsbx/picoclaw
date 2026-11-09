@@ -84,6 +84,18 @@ func runtimeAttrsFromHookMeta(meta HookMeta) map[string]any {
 	if meta.suppressToolFeedback {
 		attrs["suppress_tool_feedback"] = true
 	}
+	if meta.Cron != nil {
+		attrs["cron_execution_id"] = meta.Cron.ExecutionID
+		attrs["cron_job_id"] = meta.Cron.JobID
+		attrs["cron_job_name"] = meta.Cron.JobName
+		attrs["cron_source"] = meta.Cron.Source
+		if meta.Cron.DeclarationKey != "" {
+			attrs["cron_declaration_key"] = meta.Cron.DeclarationKey
+		}
+		if meta.Cron.ScheduledAtMS != nil {
+			attrs["cron_scheduled_at_ms"] = *meta.Cron.ScheduledAtMS
+		}
+	}
 	if len(attrs) == 0 {
 		return nil
 	}

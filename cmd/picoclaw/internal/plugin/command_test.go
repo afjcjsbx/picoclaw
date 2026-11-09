@@ -3,6 +3,7 @@ package plugin
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -365,7 +366,13 @@ func TestShow(t *testing.T) {
 
 	out, err := execute([]string{"show", "demo"}, "")
 	require.NoError(t, err)
-	for _, want := range []string{"Version:     1.2.3", "Description: Demo plugin", "Author:      Ada", "demo:greet", "disabled"} {
+	for _, want := range []string{
+		fmt.Sprintf("%-17s%s", "Version:", "1.2.3"),
+		fmt.Sprintf("%-17s%s", "Description:", "Demo plugin"),
+		fmt.Sprintf("%-17s%s", "Author:", "Ada"),
+		"demo:greet",
+		"disabled",
+	} {
 		assert.Contains(t, out, want)
 	}
 
@@ -388,7 +395,7 @@ func TestTestCommand(t *testing.T) {
 	// The entry is disabled and the host switch is off; test loads it anyway.
 	out, err := execute([]string{"test", "good"}, "")
 	require.NoError(t, err)
-	assert.Contains(t, out, "Live state:  ready")
+	assert.Contains(t, out, fmt.Sprintf("%-17s%s", "Live state:", "ready"))
 	assert.Contains(t, out, "good:greet")
 	assert.False(t, e.load(t).Plugins.Entries["good"].Enabled, "test must not change the config")
 
@@ -420,4 +427,45 @@ func TestEditUsesEditor(t *testing.T) {
 	t.Setenv("EDITOR", "")
 	_, err = execute([]string{"edit"}, "")
 	assert.ErrorContains(t, err, "$EDITOR is not set")
+}
+
+func TestShowMarksSchedulesInactiveWhenCronDisabled(t *testing.T) {
+	e := setup(t)
+	root := writePackage(t, filepath.Join(e.workspace, "plugins"), "scheduled", map[string]any{
+		"extensions": map[string]any{
+			plugins.ExtensionNamespace: map[string]any{
+				"schedules": []map[string]any{{
+					"name": "nightly", "cron": "0 3 * * *", "message": "Run",
+				}},
+			},
+		},
+	})
+	cfg := e.load(t)
+	cfg.Plugins.Enabled = true
+	cfg.Plugins.DataDir = t.TempDir()
+	cfg.Plugins.Entries = map[string]config.PluginEntryConfig{
+		"scheduled": {Enabled: true, Path: root, AllowSchedules: true},
+	}
+	cfg.Tools.Cron.Enabled = false
+	require.NoError(t, config.SaveConfig(e.configPath, cfg))
+
+	out, err := execute([]string{"show", "scheduled"}, "")
+	require.NoError(t, err)
+	assert.Contains(t, out, "Schedules (1)")
+	assert.Contains(t, out, "inactive: set tools.cron.enabled to true")
+}
+
+func TestPrintFieldAlignsLongLabels(t *testing.T) {
+	var b strings.Builder
+	printField(&b, "Allow schedules", "yes")
+	if got := b.String(); got != "Allow schedules: yes\n" {
+		t.Fatalf("field = %q", got)
+	}
+}
+
+func TestTestCommandHelpMentionsSchedules(t *testing.T) {
+	cmd := newTestCommand()
+	if !strings.Contains(cmd.Long, "schedules") {
+		t.Fatalf("long help = %q", cmd.Long)
+	}
 }

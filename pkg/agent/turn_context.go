@@ -2,6 +2,7 @@ package agent
 
 import (
 	"github.com/sipeed/picoclaw/pkg/bus"
+	"github.com/sipeed/picoclaw/pkg/cron"
 	"github.com/sipeed/picoclaw/pkg/routing"
 	"github.com/sipeed/picoclaw/pkg/session"
 )
@@ -63,6 +64,7 @@ func cloneStringMap(src map[string]string) map[string]string {
 
 func cloneHookMeta(meta HookMeta) HookMeta {
 	meta.turnContext = cloneTurnContext(meta.turnContext)
+	meta.Cron = cron.CloneExecution(meta.Cron)
 	return meta
 }
 

@@ -161,6 +161,17 @@ Token counts on `agent.llm.response` come from the provider usage report. They s
 The connection payload also carries `url` and `command`, but they are not flattened into log
 attributes: URLs may embed credentials (for example API keys in query strings).
 
+### Cron
+
+| Event | Trigger | Details |
+| ----- | ------- | ------- |
+| `cron.reconciled` | The gateway finishes reconciling host-managed plugin schedules. | `reason`, `enabled`, `created`, `updated`, `removed`; delivered once per agent binding |
+| `cron.changed` | A reconciliation pass created, updated or removed at least one job. | Same payload as `cron.reconciled` |
+
+Agent turns started by a cron job also carry `cron_execution_id`, `cron_job_id`,
+`cron_job_name`, `cron_source`, `cron_declaration_key` and
+`cron_scheduled_at_ms` attributes on their runtime events.
+
 ## Log Fields
 
 Runtime event logs include stable envelope fields when available:
@@ -221,5 +232,6 @@ Runtime event kinds are defined in `pkg/events/kind.go`. Event logging can selec
 - `bus.*`: publish failures, backpressure message drops, and close lifecycle.
 - `gateway.*`: start, ready, shutdown, and reload lifecycle.
 - `mcp.*`: MCP server connection, tool discovery, and tool call events.
+- `cron.*`: host-managed schedule reconciliation and change events.
 
 See [`../../config/config.example.json`](https://github.com/afjcjsbx/picoclaw/blob/main/config/config.example.json) for the default event logging example.

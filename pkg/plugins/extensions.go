@@ -27,24 +27,39 @@ func discoverHooks(manifest PluginManifest, pc PluginContext) ([]Hook, []Diagnos
 	var result []Hook
 	var diagnostics []Diagnostic
 	report := func(err error) {
-		diagnostics = append(diagnostics, Diagnostic{Plugin: pc.ID, Component: "hooks", Message: err.Error()})
+		diagnostics = append(
+			diagnostics,
+			Diagnostic{Plugin: pc.ID, Component: "hooks", Message: err.Error()},
+		)
 	}
 	raw, inline := manifest.Extensions[ExtensionNamespace]
 	file := filepath.Join(ExtensionNamespace, "hooks.json")
 	hasFile := componentExists(pc.Root, file)
-	if inline && hasFile {
-		report(fmt.Errorf("hooks must be configured inline or in %s, not both", file))
-		return nil, diagnostics
-	}
-	if hasFile {
+	if inline {
+		inlineObj, err := object(raw)
+		if err != nil {
+			report(err)
+			return nil, diagnostics
+		}
+		if hasFile {
+			if _, ok := inlineObj["hooks"]; ok {
+				report(fmt.Errorf("hooks must be configured inline or in %s, not both", file))
+				return nil, diagnostics
+			}
+			raw, err = ReadPackageFile(pc.Root, file)
+			if err != nil {
+				report(err)
+				return nil, diagnostics
+			}
+		}
+	} else if hasFile {
 		var err error
 		raw, err = ReadPackageFile(pc.Root, file)
 		if err != nil {
 			report(err)
 			return nil, diagnostics
 		}
-	}
-	if !inline && !hasFile {
+	} else {
 		return nil, nil
 	}
 	obj, err := object(raw)
@@ -53,7 +68,7 @@ func discoverHooks(manifest PluginManifest, pc PluginContext) ([]Hook, []Diagnos
 		return nil, diagnostics
 	}
 	for key := range obj {
-		if key != "hooks" {
+		if key != "hooks" && key != "schedules" {
 			report(fmt.Errorf("unknown extension field %q", key))
 		}
 	}
@@ -107,11 +122,18 @@ func discoverHooks(manifest PluginManifest, pc PluginContext) ([]Hook, []Diagnos
 		}
 		if spec.MCP != nil {
 			if spec.Command != "" || len(spec.Args) > 0 || len(spec.Env) > 0 || spec.Cwd != "" {
-				report(fmt.Errorf("hook %q cannot combine an MCP action with process launch fields", spec.Name))
+				report(
+					fmt.Errorf(
+						"hook %q cannot combine an MCP action with process launch fields",
+						spec.Name,
+					),
+				)
 				continue
 			}
 			if len(spec.Observe)+len(spec.Intercept) == 0 {
-				report(fmt.Errorf("MCP hook %q must declare observe or intercept events", spec.Name))
+				report(
+					fmt.Errorf("MCP hook %q must declare observe or intercept events", spec.Name),
+				)
 				continue
 			}
 			if strings.TrimSpace(spec.MCP.Server) == "" || strings.TrimSpace(spec.MCP.Tool) == "" {
@@ -137,17 +159,32 @@ func discoverHooks(manifest PluginManifest, pc PluginContext) ([]Hook, []Diagnos
 			switch spec.MCP.Result {
 			case "", "ignore":
 			case "append_to_user_message":
-				if len(spec.Intercept) != 1 || spec.Intercept[0] != "before_llm" || len(spec.Observe) != 0 {
-					report(fmt.Errorf("MCP hook %q can append results only on before_llm", spec.Name))
+				if len(spec.Intercept) != 1 || spec.Intercept[0] != "before_llm" ||
+					len(spec.Observe) != 0 {
+					report(
+						fmt.Errorf("MCP hook %q can append results only on before_llm", spec.Name),
+					)
 					continue
 				}
 			case "approval":
-				if len(spec.Intercept) != 1 || spec.Intercept[0] != "approve_tool" || len(spec.Observe) != 0 {
-					report(fmt.Errorf("MCP hook %q can return approval only on approve_tool", spec.Name))
+				if len(spec.Intercept) != 1 || spec.Intercept[0] != "approve_tool" ||
+					len(spec.Observe) != 0 {
+					report(
+						fmt.Errorf(
+							"MCP hook %q can return approval only on approve_tool",
+							spec.Name,
+						),
+					)
 					continue
 				}
 			default:
-				report(fmt.Errorf("MCP hook %q has unsupported result mode %q", spec.Name, spec.MCP.Result))
+				report(
+					fmt.Errorf(
+						"MCP hook %q has unsupported result mode %q",
+						spec.Name,
+						spec.MCP.Result,
+					),
+				)
 				continue
 			}
 			result = append(result, Hook{

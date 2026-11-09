@@ -12,11 +12,12 @@ import (
 // Report is the static view of one package: what the host would discover,
 // without starting any process or connecting to any MCP server.
 type Report struct {
-	Root     string // canonical package root
-	Manifest PluginManifest
-	Skills   []string // names the entry publishes, <id>:<skill>
-	Servers  []string // MCP server names, after entry overrides
-	Hooks    []string // published names, <id>:<hook>
+	Root      string // canonical package root
+	Manifest  PluginManifest
+	Skills    []string // names the entry publishes, <id>:<skill>
+	Servers   []string // MCP server names, after entry overrides
+	Hooks     []string // published names, <id>:<hook>
+	Schedules []string // host-managed cron declaration names, <id>:<schedule>
 	// Diagnostics are the same non-fatal findings the host reports at load time.
 	Diagnostics []Diagnostic
 }
@@ -25,8 +26,9 @@ type Report struct {
 // every side effect. The error is fatal only: an unreadable root or a manifest
 // the host would reject. Component problems land in Report.Diagnostics.
 //
-// Hooks are always checked, regardless of entry.AllowHooks, so authors can lint
-// them before granting the permission. id defaults to the manifest name.
+// Hooks and schedules are always checked, regardless of entry.AllowHooks and
+// entry.AllowSchedules, so authors can lint them before granting permission.
+// id defaults to the manifest name.
 //
 // The component walk mirrors packagePlugin.Initialize; keep the two in step.
 func Validate(id, path string, entry config.PluginEntryConfig) (Report, error) {
@@ -76,10 +78,17 @@ func Validate(id, path string, entry config.PluginEntryConfig) (Report, error) {
 	if scratch, err = canonicalRoot(scratch); err != nil {
 		return r, err
 	}
-	hooks, found := discoverHooks(manifest, PluginContext{
-		ID: id, Root: root, DataDir: scratch, Config: entry.Config, AllowHooks: true,
-	})
+	lintContext := PluginContext{
+		ID: id, Root: root, DataDir: scratch, Config: entry.Config,
+		AllowHooks: true, AllowSchedules: true,
+	}
+	hooks, found := discoverHooks(manifest, lintContext)
 	add(found...)
+	schedules, found := discoverSchedules(manifest, lintContext)
+	add(found...)
+	for _, schedule := range schedules {
+		r.Schedules = append(r.Schedules, schedule.DeclarationKey())
+	}
 
 	servers := map[string]ServerSpec{}
 	if componentExists(root, "mcp.json") {

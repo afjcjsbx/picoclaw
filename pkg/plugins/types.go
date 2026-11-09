@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/cron"
 	"github.com/sipeed/picoclaw/pkg/skills"
 )
 
@@ -64,15 +65,16 @@ type Status struct {
 
 // PluginContext is host-owned. No global configuration or message bus is exposed.
 type PluginContext struct {
-	Context     context.Context
-	ID          string
-	Root        string
-	DataDir     string
-	Logger      *slog.Logger
-	Config      map[string]string
-	AllowHooks  bool
-	InitTimeout time.Duration
-	CallTimeout time.Duration
+	Context        context.Context
+	ID             string
+	Root           string
+	DataDir        string
+	Logger         *slog.Logger
+	Config         map[string]string
+	AllowHooks     bool
+	AllowSchedules bool
+	InitTimeout    time.Duration
+	CallTimeout    time.Duration
 }
 
 type Plugin interface {
@@ -83,16 +85,49 @@ type Plugin interface {
 
 // Capabilities is an immutable snapshot passed to the host after discovery.
 type Capabilities struct {
-	ID     string
-	Root   string
-	Entry  config.PluginEntryConfig
-	Tools  []*PluginTool
-	Skills []skills.PluginSkill
-	Hooks  []Hook
+	ID        string
+	Root      string
+	Entry     config.PluginEntryConfig
+	Tools     []*PluginTool
+	Skills    []skills.PluginSkill
+	Hooks     []Hook
+	Schedules []Schedule
 	// HasResources reports bundled, readable resources (valid skills or a
 	// references directory) so the host can expose the resource tool even when
 	// no skill is loaded.
 	HasResources bool
+}
+
+// Schedule is a host-managed cron job declared by a plugin. The host owns the
+// stored job; the plugin owns only this declaration.
+type Schedule struct {
+	PluginID string
+	Name     string
+	Schedule cron.CronSchedule
+	Message  string
+	Channel  string
+	To       string
+	AgentID  string
+	Enabled  *bool
+}
+
+// DeclarationKey is stable across plugin reloads and restarts.
+func (s Schedule) DeclarationKey() string {
+	return "plugin:" + s.PluginID + ":" + s.Name
+}
+
+// Declaration converts the package schedule into a host cron declaration.
+func (s Schedule) Declaration() cron.CronJobDeclaration {
+	return cron.CronJobDeclaration{
+		DeclarationKey: s.DeclarationKey(),
+		Name:           s.Name,
+		Schedule:       s.Schedule,
+		Message:        s.Message,
+		Channel:        s.Channel,
+		To:             s.To,
+		AgentID:        s.AgentID,
+		Enabled:        s.Enabled,
+	}
 }
 
 type Hook struct {

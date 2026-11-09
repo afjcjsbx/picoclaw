@@ -322,7 +322,9 @@ func TestPluginFailureBoundariesAndPersistence(t *testing.T) {
 		return nil
 	})
 	defer m.Close()
-	_ = m.Wait(context.Background())
+	if err := m.Wait(context.Background()); err == nil {
+		t.Fatal("Wait() accepted a failed plugin")
+	}
 	if m.Statuses()[0].State != Failed {
 		t.Fatal(m.Statuses())
 	}

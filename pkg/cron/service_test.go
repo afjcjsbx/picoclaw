@@ -1083,3 +1083,37 @@ func TestCronService_ManualAndScheduledRunsNeverOverlap(t *testing.T) {
 		t.Fatal("handler never ran")
 	}
 }
+
+func TestCronService_FailedOneShotIsKeptForDiagnostics(t *testing.T) {
+	cs, _ := setupService(t, func(job *CronJob) (string, error) {
+		return "", errors.New("network down")
+	})
+	if err := cs.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer cs.Stop()
+
+	at := time.Now().Add(time.Hour).UnixMilli()
+	job, err := cs.AddJob("once", CronSchedule{Kind: "at", AtMS: &at}, "msg", "cli", "direct")
+	if err != nil {
+		t.Fatalf("AddJob failed: %v", err)
+	}
+	if err := cs.RunJob(job.ID); err != nil {
+		t.Fatalf("RunJob failed: %v", err)
+	}
+	waitIdle(t, cs, job.ID)
+
+	got, ok := cs.GetJob(job.ID)
+	if !ok {
+		t.Fatal("failed one-shot was deleted")
+	}
+	if got.Enabled || got.State.NextRunAtMS != nil {
+		t.Fatalf("failed one-shot is still armed: %+v", got)
+	}
+	if got.State.LastStatus != "error" || got.State.LastError != "network down" {
+		t.Fatalf("failure not recorded: %+v", got.State)
+	}
+	if len(got.State.RunHistory) != 1 || got.State.RunHistory[0].Status != "error" {
+		t.Fatalf("history not preserved: %+v", got.State.RunHistory)
+	}
+}
