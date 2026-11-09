@@ -950,6 +950,7 @@ func setupCronTool(
 		logger.WarnCF("cron", "Plugin schedule reconciliation failed",
 			map[string]any{"error": recErr.Error()})
 	} else {
+		logCronReconcile(report)
 		payload := cronEventPayload{
 			Reason:      reason,
 			Enabled:     cronTool != nil,
@@ -989,15 +990,19 @@ func reconcilePluginSchedules(
 	if err != nil {
 		return report, err
 	}
-	if report.Created+report.Updated+report.Removed > 0 {
-		logger.InfoCF("cron", "Reconciled plugin schedules", map[string]any{
-			"created":   report.Created,
-			"updated":   report.Updated,
-			"unchanged": report.Unchanged,
-			"removed":   report.Removed,
-		})
-	}
 	return report, nil
+}
+
+func logCronReconcile(report cron.ReconcileReport) {
+	if report.Created+report.Updated+report.Removed == 0 {
+		return
+	}
+	logger.InfoCF("cron", "Reconciled plugin schedules", map[string]any{
+		"created":   report.Created,
+		"updated":   report.Updated,
+		"unchanged": report.Unchanged,
+		"removed":   report.Removed,
+	})
 }
 
 func createHeartbeatHandler(agentLoop *agent.AgentLoop) func(prompt, channel, chatID string) *tools.ToolResult {

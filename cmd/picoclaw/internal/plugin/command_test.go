@@ -421,3 +421,29 @@ func TestEditUsesEditor(t *testing.T) {
 	_, err = execute([]string{"edit"}, "")
 	assert.ErrorContains(t, err, "$EDITOR is not set")
 }
+
+func TestShowMarksSchedulesInactiveWhenCronDisabled(t *testing.T) {
+	e := setup(t)
+	root := writePackage(t, filepath.Join(e.workspace, "plugins"), "scheduled", map[string]any{
+		"extensions": map[string]any{
+			plugins.ExtensionNamespace: map[string]any{
+				"schedules": []map[string]any{{
+					"name": "nightly", "cron": "0 3 * * *", "message": "Run",
+				}},
+			},
+		},
+	})
+	cfg := e.load(t)
+	cfg.Plugins.Enabled = true
+	cfg.Plugins.DataDir = t.TempDir()
+	cfg.Plugins.Entries = map[string]config.PluginEntryConfig{
+		"scheduled": {Enabled: true, Path: root, AllowSchedules: true},
+	}
+	cfg.Tools.Cron.Enabled = false
+	require.NoError(t, config.SaveConfig(e.configPath, cfg))
+
+	out, err := execute([]string{"show", "scheduled"}, "")
+	require.NoError(t, err)
+	assert.Contains(t, out, "Schedules (1)")
+	assert.Contains(t, out, "inactive: set tools.cron.enabled to true")
+}
