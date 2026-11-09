@@ -1861,3 +1861,30 @@ func buildSkillZip(t *testing.T, files map[string]string) []byte {
 	}
 	return buf.Bytes()
 }
+
+func TestIsWithinDir(t *testing.T) {
+	tmp := t.TempDir()
+	parent := filepath.Join(tmp, "workspace")
+	child := filepath.Join(parent, "skills", "my-skill")
+	if err := os.MkdirAll(child, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	if !isWithinDir(child, parent) {
+		t.Fatalf("isWithinDir(%q, %q) = false, want true", child, parent)
+	}
+	if !isWithinDir(parent, parent) {
+		t.Fatalf("isWithinDir(parent) = false, want true for exact match")
+	}
+	outside := filepath.Join(tmp, "other")
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatalf("MkdirAll(outside): %v", err)
+	}
+	if isWithinDir(outside, parent) {
+		t.Fatalf("isWithinDir(%q, %q) = true, want false", outside, parent)
+	}
+	sibling := parent + "-other"
+	if isWithinDir(sibling, parent) {
+		t.Fatalf("isWithinDir(%q, %q) = true, want false for sibling prefix", sibling, parent)
+	}
+}

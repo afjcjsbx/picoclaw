@@ -24,9 +24,14 @@ export async function launcherFetch(
   input: RequestInfo | URL,
   init?: RequestInit,
 ): Promise<Response> {
+  const headers = new Headers(init?.headers)
+  if (!headers.has("X-Requested-With")) {
+    headers.set("X-Requested-With", "XMLHttpRequest")
+  }
   const res = await fetch(input, {
     credentials: "same-origin",
     ...init,
+    headers,
   })
   if (res.status === 401) {
     const ct = res.headers.get("content-type") || ""

@@ -65,6 +65,32 @@ func Logger(next http.Handler) http.Handler {
 	})
 }
 
+// SecurityHeaders sets browser-hardening response headers on every response.
+func SecurityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		next.ServeHTTP(w, r)
+	})
+}
+
+// CSRF requires a custom header on mutating requests. Browsers cannot attach
+// arbitrary headers to cross-origin requests without a CORS preflight, which
+// this server does not allow. SameSite=Lax already blocks most cross-site
+// POSTs; this is the second layer for clients and browsers where it does not.
+func CSRF(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+			if r.Header.Get("X-Requested-With") == "" {
+				http.Error(w, "CSRF check failed: missing X-Requested-With header", http.StatusForbidden)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // Recoverer recovers from panics in downstream handlers and returns a 500
 // Internal Server Error response.
 func Recoverer(next http.Handler) http.Handler {
