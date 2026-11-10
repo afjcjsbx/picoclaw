@@ -134,6 +134,24 @@ func TestQuickSyntaxCheck(t *testing.T) {
 			checked: true,
 		},
 		{
+			name:    "TOML multiline string closes with four quotes",
+			path:    "config.toml",
+			content: "a = \"\"\"x\"\"\"\"\n",
+			checked: true,
+		},
+		{
+			name:    "TOML multiline string closes with five quotes",
+			path:    "config.toml",
+			content: "a = \"\"\"x\"\"\"\"\"\n",
+			checked: true,
+		},
+		{
+			name:    "Python triple string with five closing quotes",
+			path:    "script.py",
+			content: "x = \"\"\"a\"\"\"\"\"\n",
+			checked: true,
+		},
+		{
 			name:    "unknown extension is not checked",
 			path:    "notes.txt",
 			content: "unbalanced {",

@@ -245,7 +245,16 @@ func skipQuoted(content []byte, i, line int, flavor syntaxFlavor) (int, int, str
 		if c == quote {
 			if triple {
 				if i+2 < len(content) && content[i+1] == quote && content[i+2] == quote {
-					return i + 3, line, ""
+					end := i + 3
+					if flavor == syntaxTOML {
+						// A multiline TOML string may end with one or two quotes
+						// that belong to the content; the last three are the
+						// delimiter.
+						for extra := 0; extra < 2 && end < len(content) && content[end] == quote; extra++ {
+							end++
+						}
+					}
+					return end, line, ""
 				}
 				i++
 				continue
