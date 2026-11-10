@@ -49,7 +49,8 @@ Review $ARGUMENTS for bugs and missing tests. Report bugs first.
 ```
 
 If the file has no frontmatter, the whole file is the template. Empty templates
-and invalid command names are skipped.
+are skipped. Files whose name is not a valid command name are skipped and
+reported with a warning in the gateway log.
 
 Run the command from any chat channel or the CLI:
 

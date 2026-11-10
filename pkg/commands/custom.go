@@ -13,6 +13,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
 const (
@@ -280,6 +281,10 @@ func collectCustomCommands(root string, into map[string]CustomCommand) {
 		name := strings.TrimSuffix(filepath.ToSlash(rel), filepath.Ext(rel))
 		name = strings.ToLower(strings.TrimSpace(name))
 		if !customCommandNamePattern.MatchString(name) {
+			logger.WarnCF("commands", "Skipping custom command file with invalid name", map[string]any{
+				"path": path,
+				"name": name,
+			})
 			return nil
 		}
 

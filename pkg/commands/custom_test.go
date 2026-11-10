@@ -4,7 +4,10 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
+
+	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
 func writeCustomCommand(t *testing.T, path, content string) {
@@ -61,6 +64,38 @@ func TestLoadCustomCommandsFromDirs_DiscoveryAndPrecedence(t *testing.T) {
 	}
 	if commands[1].Template != "Team review $1." {
 		t.Fatalf("template = %q, want nested template", commands[1].Template)
+	}
+}
+
+func TestLoadCustomCommandsFromDirs_LogsInvalidName(t *testing.T) {
+	logFile := filepath.Join(t.TempDir(), "commands.log")
+	previousLevel := logger.GetLevel()
+	logger.SetLevel(logger.WARN)
+	if err := logger.EnableFileLogging(logFile); err != nil {
+		t.Fatalf("EnableFileLogging() error = %v", err)
+	}
+	t.Cleanup(func() {
+		logger.DisableFileLogging()
+		logger.SetLevel(previousLevel)
+	})
+
+	projectDir := t.TempDir()
+	writeCustomCommand(t, filepath.Join(projectDir, "bad name.md"), "bad")
+
+	if commands := LoadCustomCommandsFromDirs(projectDir, ""); len(commands) != 0 {
+		t.Fatalf("len(commands) = %d, want 0", len(commands))
+	}
+
+	data, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", logFile, err)
+	}
+	logOutput := string(data)
+	if !strings.Contains(logOutput, "Skipping custom command file with invalid name") {
+		t.Fatalf("invalid-name warning missing from log:\n%s", logOutput)
+	}
+	if !strings.Contains(logOutput, "bad name.md") {
+		t.Fatalf("log does not identify the invalid file:\n%s", logOutput)
 	}
 }
 
