@@ -2,6 +2,7 @@ package fstools
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -391,6 +392,126 @@ func TestFilesystemTool_WriteFile_OverwriteFalseExplicitBlocked(t *testing.T) {
 	data, err := os.ReadFile(testFile)
 	assert.NoError(t, err)
 	assert.Equal(t, "original", string(data))
+}
+
+// TestFilesystemTool_WriteFile_IdenticalContentIsNoOp verifies that writing
+// bytes identical to the existing file succeeds without rewriting it, whether
+// or not overwrite is set.
+func TestFilesystemTool_WriteFile_IdenticalContentIsNoOp(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "state.json")
+	original := `{"items":[1,2]}`
+	assert.NoError(t, os.WriteFile(testFile, []byte(original), 0o644))
+	before, err := os.Stat(testFile)
+	assert.NoError(t, err)
+
+	tool := NewWriteFileTool("", false)
+	for _, overwrite := range []bool{false, true} {
+		result := tool.Execute(context.Background(), map[string]any{
+			"path":      testFile,
+			"content":   original,
+			"overwrite": overwrite,
+		})
+		assert.False(t, result.IsError, "overwrite=%v: %s", overwrite, result.ForLLM)
+		assert.Contains(t, result.ForLLM, "identical")
+	}
+
+	data, err := os.ReadFile(testFile)
+	assert.NoError(t, err)
+	assert.Equal(t, original, string(data))
+
+	after, err := os.Stat(testFile)
+	assert.NoError(t, err)
+	assert.True(t, os.SameFile(before, after), "identical writes must not replace the file")
+	assert.Equal(t, before.ModTime(), after.ModTime(), "identical writes must not rewrite the file")
+}
+
+// TestFilesystemTool_WriteFile_AppendShapedContentAccepted verifies that a
+// write whose content is the existing file plus a suffix is applied as an
+// append instead of consuming a retry with overwrite=true.
+func TestFilesystemTool_WriteFile_AppendShapedContentAccepted(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "todos.json")
+	original := "line one\n"
+	appended := "line two\n"
+	assert.NoError(t, os.WriteFile(testFile, []byte(original), 0o644))
+
+	tool := NewWriteFileTool("", false)
+	result := tool.Execute(context.Background(), map[string]any{
+		"path":    testFile,
+		"content": original + appended,
+	})
+
+	assert.False(t, result.IsError, "append-shaped write must not need overwrite: %s", result.ForLLM)
+	assert.Contains(t, result.ForLLM, "appended")
+
+	data, err := os.ReadFile(testFile)
+	assert.NoError(t, err)
+	assert.Equal(t, original+appended, string(data))
+}
+
+// TestFilesystemTool_WriteFile_ConflictReturnsStructuredAction verifies that a
+// destructive replacement returns a machine-readable action and path next to
+// the human-readable error.
+func TestFilesystemTool_WriteFile_ConflictReturnsStructuredAction(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "todos.json")
+	existing := "alpha\n"
+	newContent := "beta\nalpha\n"
+	assert.NoError(t, os.WriteFile(testFile, []byte(existing), 0o644))
+
+	execute := func(t *testing.T, tool *WriteFileTool) writeFileConflict {
+		t.Helper()
+		result := tool.Execute(context.Background(), map[string]any{
+			"path":    testFile,
+			"content": newContent,
+		})
+		assert.True(t, result.IsError, "non-append replacement must be refused")
+		assert.Contains(t, result.ForLLM, "already exists")
+		return writeFileConflictPayload(t, result.ForLLM)
+	}
+
+	t.Run("edit_file preferred when available", func(t *testing.T) {
+		tool := NewWriteFileTool("", false)
+		payload := execute(t, tool)
+		assert.Equal(t, "file_exists", payload.Error)
+		assert.Equal(t, testFile, payload.Path)
+		assert.Equal(t, "edit_file", payload.RecommendedAction)
+		assert.Equal(t, []string{"append_file", "edit_file", "overwrite"}, payload.AvailableActions)
+		assert.Equal(t, int64(len(existing)), payload.ExistingBytes)
+		assert.Equal(t, len(newContent), payload.NewBytes)
+		assert.True(t, payload.OverwriteRequired)
+	})
+
+	t.Run("append_file is the only alternative", func(t *testing.T) {
+		tool := NewWriteFileTool("", false)
+		tool.SetAlternativeTools([]string{"append_file"})
+		payload := execute(t, tool)
+		assert.Equal(t, "append_file", payload.RecommendedAction)
+		assert.Equal(t, []string{"append_file", "overwrite"}, payload.AvailableActions)
+	})
+
+	t.Run("overwrite when no alternatives are registered", func(t *testing.T) {
+		tool := NewWriteFileTool("", false)
+		tool.SetAlternativeTools(nil)
+		payload := execute(t, tool)
+		assert.Equal(t, "overwrite", payload.RecommendedAction)
+		assert.Equal(t, []string{"overwrite"}, payload.AvailableActions)
+	})
+}
+
+func writeFileConflictPayload(t *testing.T, forLLM string) writeFileConflict {
+	t.Helper()
+	const marker = "\nstructured: "
+	index := strings.LastIndex(forLLM, marker)
+	if index < 0 {
+		t.Fatalf("missing structured payload in %q", forLLM)
+	}
+	var payload writeFileConflict
+	if err := json.Unmarshal([]byte(forLLM[index+len(marker):]), &payload); err != nil {
+		t.Fatalf("invalid structured payload: %v (%q)", err, forLLM)
+	}
+	return payload
 }
 
 // TestFilesystemTool_WriteFile_OverwriteSandboxed verifies the overwrite guard

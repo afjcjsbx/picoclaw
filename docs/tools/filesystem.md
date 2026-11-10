@@ -8,7 +8,7 @@ PicoClaw ships a filesystem tool family for reading, writing, and searching file
 | Tool | What it does | Switch (default) |
 |------|--------------|------------------|
 | `read_file` | Read file contents, in byte-offset or line-numbered mode | `tools.read_file.enabled` (`true`) |
-| `write_file` | Create a file; replacing an existing file requires `overwrite=true` | `tools.write_file.enabled` (`true`) |
+| `write_file` | Create a file; identical and append-shaped rewrites are safe, other replacements require `overwrite=true` | `tools.write_file.enabled` (`true`) |
 | `edit_file` | Replace one exact text occurrence in a file | `tools.edit_file.enabled` (`true`) |
 | `append_file` | Append content to a file (creates it if missing) | `tools.append_file.enabled` (`true`) |
 | `list_dir` | List directory entries | `tools.list_dir.enabled` (`true`) |
@@ -65,15 +65,21 @@ Results larger than `tools.max_inline_result_chars` are spilled to a workspace a
 
 ## `write_file`
 
-Creates a file with the full content in one call. If the file already exists, the call fails unless `overwrite=true` is passed, which replaces the entire file and discards its current contents.
+Creates a file with the full content in one call. Writing a new path needs no flags. When the file already exists:
+
+- identical content is a successful no-op and the file is not rewritten;
+- content that begins with the entire existing file is treated as an append: only the new suffix is written, so no data is lost and `overwrite` is not needed;
+- any other replacement fails unless `overwrite=true` is passed, which replaces the entire file and discards its current contents.
+
+The failure result keeps the human-readable "file already exists" line and adds a `structured:` JSON object with `error` (`file_exists`), `path`, `recommended_action`, `available_actions`, `existing_bytes`, `new_bytes`, and `overwrite_required`. The model can therefore pick the next call from the path and recommended action without probing the filesystem.
 
 | Argument | Type | Required | Description |
 |----------|------|----------|-------------|
 | `path` | string | yes | Path to write |
 | `content` | string | yes | Full file content. Standard JSON escaping applies: `\n` for newline, `\\n` for a literal backslash-n |
-| `overwrite` | boolean | no | Set to `true` to replace an existing file in full. Default: `false` |
+| `overwrite` | boolean | no | Set to `true` to replace an existing file in full, discarding its current contents. Not needed for new files, identical content, or an append-shaped write. Default: `false` |
 
-For targeted changes, prefer `edit_file` or `append_file`: PicoClaw advertises those alternatives in the tool description and in the "file already exists" error only when they are enabled. Writes to protected credential paths (and to `write_file`-specific denies such as `/etc/shadow` or the workspace `sessions` directory) are refused; write allow paths do not override the policy.
+For targeted changes, prefer `edit_file` or `append_file`: PicoClaw advertises those alternatives, and makes them the structured `recommended_action`, only when they are enabled. Writes to protected credential paths (and to `write_file`-specific denies such as `/etc/shadow` or the workspace `sessions` directory) are refused; write allow paths do not override the policy.
 
 ## `edit_file`
 
