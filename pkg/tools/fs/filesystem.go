@@ -1248,8 +1248,7 @@ func (t *WriteFileTool) successResult(
 		Verified:     true,
 	}
 	applySyntaxCheck(&result, path, content)
-	payload, _ := json.Marshal(result)
-	return SilentResult(string(payload))
+	return jsonToolResult(result, false)
 }
 
 // unchangedResult reports the no-op path. The byte comparison that detected it
@@ -1263,8 +1262,7 @@ func (t *WriteFileTool) unchangedResult(path string, content []byte) *ToolResult
 		Verified:     true,
 	}
 	applySyntaxCheck(&result, path, content)
-	payload, _ := json.Marshal(result)
-	return SilentResult(string(payload))
+	return jsonToolResult(result, false)
 }
 
 // applySyntaxCheck fills the advisory syntax fields for known extensions. A
@@ -1293,8 +1291,21 @@ func writeFileFailure(action, resolved string, bytesWritten int, code, message, 
 		Message:      message,
 		Detail:       detail,
 	}
-	payload, _ := json.Marshal(result)
-	return ErrorResult(string(payload))
+	return jsonToolResult(result, true)
+}
+
+// jsonToolResult encodes a structured tool payload. The payload types contain
+// only strings, bools, and ints, so encoding cannot fail today; the error path
+// keeps the tool contract explicit if a future field changes that.
+func jsonToolResult(payload any, isError bool) *ToolResult {
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("failed to encode tool result: %v", err))
+	}
+	if isError {
+		return ErrorResult(string(encoded))
+	}
+	return SilentResult(string(encoded))
 }
 
 // resolveWritePath returns the absolute path the filesystem backend actually
