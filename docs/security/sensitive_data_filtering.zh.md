@@ -62,7 +62,7 @@ PicoClaw 可以从工具调用结果中过滤敏感值（API 密钥、令牌、�
 
 ## 大型工具结果产物
 
-超过 `tools.max_inline_result_chars`（默认 `16384`）的大型工具结果会保存到 agent 工作区的 `<workspace>/.artifacts/tool/` 下，同时在模型上下文中保留有界的头尾预览与指针。完整行为参见[大型工具结果](../reference/tools_configuration.zh.md#大型工具结果)。
+超过 `tools.max_inline_result_chars`（默认 `16384`）的大型工具结果会保存到 agent 工作区的 `<workspace>/.artifacts/tool/` 下，同时在模型上下文中保留有界的头尾预览与指针。`web_fetch` 将 `maxChars` 默认设为同一阈值，且按调用只能调低；较小的预览**即使页面未超过该阈值**也会写入产物（上限为 `2,000,000` 个字符），因此完整页面仍可恢复。完整行为参见[大型工具结果](../reference/tools_configuration.zh.md#大型工具结果)。
 
 转存发生在工具结果规范化阶段，**早于** `filter_sensitive_data` 的应用。过滤器稍后才运行，且只作用于注入模型上下文的内容，因此两者并不一致：
 

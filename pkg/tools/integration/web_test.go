@@ -275,6 +275,14 @@ func TestWebTool_WebFetch_Truncation(t *testing.T) {
 			len(longContent),
 		)
 	}
+	// ...and it forces persistence even when the full page would fit under
+	// max_inline_result_chars, because the preview was explicitly cut.
+	if !result.ForceArtifact {
+		t.Fatal("expected ForceArtifact for a truncated preview")
+	}
+	if result.ArtifactMaxRunes != maxArtifactChars {
+		t.Fatalf("ArtifactMaxRunes = %d, want %d", result.ArtifactMaxRunes, maxArtifactChars)
+	}
 }
 
 // TestWebTool_WebFetch_DefaultKeepsLargeContentIntact verifies the default cap
@@ -318,6 +326,45 @@ func TestWebTool_WebFetch_DefaultKeepsLargeContentIntact(t *testing.T) {
 	}
 	if result.FullText != "" {
 		t.Fatalf("expected no FullText for untruncated content, got %d chars", len(result.FullText))
+	}
+	if result.ForceArtifact {
+		t.Fatal("expected ForceArtifact=false for untruncated content")
+	}
+	if result.ArtifactMaxRunes != maxArtifactChars {
+		t.Fatalf("ArtifactMaxRunes = %d, want %d", result.ArtifactMaxRunes, maxArtifactChars)
+	}
+}
+
+// TestWebFetchTool_PromptStaysConcise verifies the tool schema stays minimal:
+// maxChars keeps only a functional description, while preview-size and
+// source-selection advice live in the docs and recovery is driven by the
+// runtime result warning.
+func TestWebFetchTool_PromptStaysConcise(t *testing.T) {
+	tool, err := NewWebFetchTool(0, format, testFetchLimit)
+	if err != nil {
+		t.Fatalf("NewWebFetchTool() error: %v", err)
+	}
+
+	const wantDescription = "Fetch a URL and extract readable content (HTML to text). " +
+		"Use this to get weather info, news, articles, or any web content."
+	if got := tool.Description(); got != wantDescription {
+		t.Fatalf("Description() = %q, want %q", got, wantDescription)
+	}
+
+	properties, ok := tool.Parameters()["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("Parameters() has no properties map")
+	}
+	maxChars, ok := properties["maxChars"].(map[string]any)
+	if !ok {
+		t.Fatal("Parameters() has no maxChars property")
+	}
+	const wantParamDescription = "Maximum characters to extract"
+	if got, _ := maxChars["description"].(string); got != wantParamDescription {
+		t.Fatalf("maxChars description = %q, want %q", got, wantParamDescription)
+	}
+	if got, ok := maxChars["minimum"].(float64); !ok || got != float64(minMaxChars) {
+		t.Fatalf("maxChars minimum = %v, want %d", maxChars["minimum"], minMaxChars)
 	}
 }
 
@@ -2964,13 +3011,73 @@ func TestWebTool_WebFetch_PerCallMaxCharsCannotDisableFloodGuard(t *testing.T) {
 		t.Error("expected truncated=true in result")
 	}
 
-	// A smaller per-call value is still honored.
+	// A per-call value is still capped by the configured budget.
 	smaller := tool.Execute(context.Background(), map[string]any{
 		"url":      server.URL,
 		"maxChars": float64(200),
 	})
 	if smaller.IsError {
 		t.Fatalf("unexpected error: %s", smaller.ForLLM)
+	}
+}
+
+// TestWebTool_WebFetch_PerCallMaxCharsFloor verifies the 1500-character floor:
+// a smaller request is raised to the floor, while the configured budget still
+// wins when it is below the floor.
+func TestWebTool_WebFetch_PerCallMaxCharsFloor(t *testing.T) {
+	withPrivateWebFetchHostsAllowed(t)
+
+	body := strings.Repeat("a", 3000)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(body))
+	}))
+	defer server.Close()
+
+	fetch := func(t *testing.T, configured int, requested float64) string {
+		t.Helper()
+		tool, err := NewWebFetchTool(configured, "plaintext", testFetchLimit)
+		if err != nil {
+			t.Fatalf("NewWebFetchTool() error: %v", err)
+		}
+		result := tool.Execute(context.Background(), map[string]any{
+			"url":      server.URL,
+			"maxChars": requested,
+		})
+		if result.IsError {
+			t.Fatalf("unexpected error: %s", result.ForLLM)
+		}
+		var resultMap map[string]any
+		if err := json.Unmarshal([]byte(result.ForLLM), &resultMap); err != nil {
+			t.Fatalf("failed to unmarshal result JSON: %v", err)
+		}
+		text, _ := resultMap["text"].(string)
+		return text
+	}
+
+	// A request below the floor is raised to the floor.
+	text := fetch(t, 5000, 100)
+	if !strings.Contains(text, "[CONTENT TRUNCATED - ") {
+		t.Fatalf("expected the floor to truncate the page, got %q", text)
+	}
+	if len(text) > minMaxChars+100 {
+		t.Fatalf("expected ~%d chars plus the notice, got %d", minMaxChars, len(text))
+	}
+
+	// The floor itself is accepted.
+	if text = fetch(t, 5000, float64(minMaxChars)); len(text) > minMaxChars+100 {
+		t.Fatalf("expected ~%d chars plus the notice, got %d", minMaxChars, len(text))
+	}
+
+	// A value above the floor is honored.
+	if text = fetch(t, 5000, 2000); len(text) < 2000 {
+		t.Fatalf("expected the requested 2000 chars, got %d", len(text))
+	}
+
+	// A configured budget below the floor still wins: maxChars may only lower it.
+	if text = fetch(t, 1000, 100); len(text) > 1100 {
+		t.Fatalf("expected the configured 1000-char cap, got %d", len(text))
 	}
 }
 

@@ -79,7 +79,7 @@ Tool call logs (registry, tool loop and agent execution pipeline) record only th
 
 ## Large tool-result artifacts
 
-Large tool results (over `tools.max_inline_result_chars`, default `16384`) are saved to the agent workspace under `<workspace>/.artifacts/tool/`, while a bounded head+tail preview and a pointer stay inline in the model context. See [Large tool results](../reference/tools_configuration.md#large-tool-results) for the full behavior.
+Large tool results (over `tools.max_inline_result_chars`, default `16384`) are saved to the agent workspace under `<workspace>/.artifacts/tool/`, while a bounded head+tail preview and a pointer stay inline in the model context. `web_fetch` defaults `maxChars` to that same threshold and may only lower it per call; a smaller preview still writes an artifact even when the page is under the threshold (capped at `2,000,000` characters), so the full page remains recoverable. See [Large tool results](../reference/tools_configuration.md#large-tool-results) for the full behavior.
 
 The spill happens inside tool-result normalization, **before** `filter_sensitive_data` is applied. The filter runs later and only on the content that is injected into the model context, so the two surfaces diverge:
 
