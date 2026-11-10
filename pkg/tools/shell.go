@@ -345,7 +345,9 @@ All commands run in the configured working directory by default. Use the cwd par
 
 IMPORTANT: Use this tool for terminal operations such as git, go, npm, and docker. For listing, searching, reading, or editing files, use PicoClaw's filesystem tools (list_dir, search_files, read_file, edit_file, append_file, and write_file) when available.
 
-Before a command explicitly creates files or directories, use list_dir when available to verify that the parent exists and is the intended location. Always quote paths containing spaces. Command output is returned by the tool.
+Before a command explicitly creates files or directories, use list_dir when available to verify that the parent exists and is the intended location. Always quote paths containing spaces.
+
+Foreground run results for executed commands start with a one-line [exec] {...} metadata header (exitCode, timedOut, truncated, durationMs, and error when the command timed out or was killed), followed by the raw stdout/stderr body. Interpret exitCode in context: non-zero codes are normal for commands such as grep (no match) and diff (differences). Background session results are JSON objects.
 
 Usage notes:
 - action is required; command is required for action=run.
@@ -607,6 +609,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 }
 
 func (t *ExecTool) runSync(ctx context.Context, command, cwd string, timeout time.Duration) *ToolResult {
+	start := time.Now()
 	// timeout == 0 means no timeout
 	var cmdCtx context.Context
 	var cancel context.CancelFunc
@@ -719,58 +722,106 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string, timeout tim
 	spillCapped := collector.SpillCapped()
 	_ = collector.Close()
 
-	if err != nil {
-		if errors.Is(cmdCtx.Err(), context.DeadlineExceeded) {
-			msg := fmt.Sprintf("Command timed out after %v", timeout)
-			if output != "" {
-				msg += "\n\nPartial output before timeout:\n" + output
-			}
-			return newExecResult(
-				msg, true, fmt.Errorf("command timeout: %w", err), truncated, artifactPath, spillCapped,
-			)
-		}
+	// Keep the raw stdout/stderr intact for the model and put the structured
+	// status in a one-line header instead. Wrapping the output in JSON would
+	// escape every newline, tab and quote, which makes diffs, logs and source
+	// snippets harder to read and costs context.
+	exitCode := (*int)(nil)
+	timedOut := false
+	errorMessage := ""
+	forUser := output
+	resultErr := err
 
-		// Extract detailed exit information
+	switch {
+	case err == nil:
+		code := 0
+		exitCode = &code
+	case errors.Is(cmdCtx.Err(), context.DeadlineExceeded):
+		timedOut = true
+		errorMessage = fmt.Sprintf("command timed out after %v", timeout)
+		forUser = fmt.Sprintf("Command timed out after %v", timeout)
+		if output != "" {
+			forUser += "\n\nPartial output before timeout:\n" + output
+		}
+		resultErr = fmt.Errorf("command timeout: %w", err)
+	default:
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
-			exitCode := exitErr.ExitCode()
-			output += fmt.Sprintf("\n\n[Command exited with code %d]", exitCode)
-
-			// Add signal information if killed by signal (Unix)
-			if exitCode == -1 {
-				output += " (killed by signal)"
+			code := exitErr.ExitCode()
+			if code >= 0 {
+				exitCode = &code
+				forUser = output + fmt.Sprintf("\n\n[Command exited with code %d]", code)
+			} else {
+				// A process killed by a signal has no meaningful exit status.
+				// Surface the wait error instead of a synthetic -1.
+				errorMessage = exitErr.Error()
+				forUser = output + "\n\n[Command exited with code -1] (killed by signal)"
 			}
 		} else {
-			output += fmt.Sprintf("\n\n[Command failed: %v]", err)
+			errorMessage = err.Error()
+			forUser = output + fmt.Sprintf("\n\n[Command failed: %v]", err)
 		}
 	}
 
 	if output == "" {
 		output = "(no output)"
 	}
+	if forUser == "" {
+		forUser = "(no output)"
+	}
 
-	return newExecResult(output, err != nil, nil, truncated, artifactPath, spillCapped)
+	meta := execRunMeta{
+		ExitCode:   exitCode,
+		TimedOut:   timedOut,
+		Truncated:  truncated,
+		DurationMs: time.Since(start).Milliseconds(),
+		Error:      errorMessage,
+	}
+	forLLM := formatExecRunMeta(meta) + "\n" + output
+
+	return newExecResult(forLLM, forUser, resultErr != nil, resultErr, artifactPath, spillCapped)
+}
+
+// execRunMeta is the model-facing status header for a foreground exec run.
+// The header stays outside the output body so shell output is not JSON-escaped.
+type execRunMeta struct {
+	ExitCode   *int   `json:"exitCode"`
+	TimedOut   bool   `json:"timedOut"`
+	Truncated  bool   `json:"truncated"`
+	DurationMs int64  `json:"durationMs"`
+	Error      string `json:"error,omitempty"`
+}
+
+const execRunMetaPrefix = "[exec] "
+
+func formatExecRunMeta(meta execRunMeta) string {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(meta); err != nil {
+		return execRunMetaPrefix + "{}"
+	}
+	return execRunMetaPrefix + strings.TrimSuffix(buf.String(), "\n")
 }
 
 func newExecResult(
 	forLLM string,
+	forUser string,
 	isError bool,
 	err error,
-	truncated bool,
 	artifactPath string,
 	spillCapped bool,
 ) *ToolResult {
 	result := &ToolResult{
 		ForLLM:  forLLM,
-		ForUser: forLLM,
+		ForUser: forUser,
 		IsError: isError,
 		Err:     err,
-	}
-	if truncated {
-		// The tool already reduced the output to a bounded view. Prevent the
-		// generic large-result spill from persisting that view as if it were
-		// the full payload.
-		result.LargeResultSpilled = true
+		// Foreground output is always bounded by boundedOutput, and the metadata
+		// header adds a small fixed overhead. Mark the result as already reduced
+		// so the generic spill does not persist header+preview as a new oversized
+		// result when the body lands just under the inline cap.
+		LargeResultSpilled: true,
 	}
 	if artifactPath != "" {
 		result.ArtifactTags = append(result.ArtifactTags, "[file:"+artifactPath+"]")
@@ -784,6 +835,16 @@ func newExecResult(
 		result.ForUser += note
 	}
 	return result
+}
+
+// sessionExitCode returns the process exit status only once the session has
+// finished, so a running session is not reported as a successful exit.
+func sessionExitCode(session *ProcessSession) *int {
+	if session == nil || !session.IsDone() {
+		return nil
+	}
+	code := session.GetExitCode()
+	return &code
 }
 
 func (t *ExecTool) outputSpillDir() string {
@@ -1034,7 +1095,7 @@ func (t *ExecTool) executePoll(args map[string]any) *ToolResult {
 	resp := ExecResponse{
 		SessionID:    sessionID,
 		Status:       session.GetStatus(),
-		ExitCode:     session.GetExitCode(),
+		ExitCode:     sessionExitCode(session),
 		Output:       session.Tail(pollOutputChars),
 		TotalBytes:   session.TotalBytes(),
 		DroppedBytes: session.DroppedBytes(),
@@ -1133,7 +1194,7 @@ func (t *ExecTool) executeWait(ctx context.Context, args map[string]any) *ToolRe
 	resp := ExecResponse{
 		SessionID:    sessionID,
 		Status:       session.GetStatus(),
-		ExitCode:     session.GetExitCode(),
+		ExitCode:     sessionExitCode(session),
 		TotalBytes:   session.TotalBytes(),
 		DroppedBytes: session.DroppedBytes(),
 	}
@@ -1205,6 +1266,7 @@ func (t *ExecTool) executeRead(args map[string]any) *ToolResult {
 		SessionID:    sessionID,
 		Output:       page.Text,
 		Status:       session.GetStatus(),
+		ExitCode:     sessionExitCode(session),
 		TotalBytes:   page.TotalBytes,
 		Offset:       page.Offset,
 		NextOffset:   page.NextOffset,
@@ -1297,7 +1359,7 @@ func (t *ExecTool) executeKill(args map[string]any) *ToolResult {
 	resp := ExecResponse{
 		SessionID:    sessionID,
 		Status:       session.GetStatus(),
-		ExitCode:     session.GetExitCode(),
+		ExitCode:     sessionExitCode(session),
 		Output:       session.Tail(killOutputChars),
 		TotalBytes:   session.TotalBytes(),
 		DroppedBytes: session.DroppedBytes(),

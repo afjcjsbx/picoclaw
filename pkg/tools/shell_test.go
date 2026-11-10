@@ -16,6 +16,16 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 )
 
+func parseExecRunMeta(t *testing.T, forLLM string) map[string]any {
+	t.Helper()
+	line, _, ok := strings.Cut(forLLM, "\n")
+	require.True(t, ok, "expected a metadata header and an output body")
+	require.True(t, strings.HasPrefix(line, execRunMetaPrefix), "unexpected exec header: %q", line)
+	var meta map[string]any
+	require.NoError(t, json.Unmarshal([]byte(strings.TrimPrefix(line, execRunMetaPrefix)), &meta))
+	return meta
+}
+
 // TestShellTool_Success verifies successful command execution
 func TestFindShellExecutableReturnsAbsoluteExecutable(t *testing.T) {
 	if runtime.GOOS == "windows" {
@@ -67,6 +77,58 @@ func TestShellTool_Success(t *testing.T) {
 	}
 }
 
+func TestShellTool_ForegroundResultHeader(t *testing.T) {
+	tool, err := NewExecTool("", false)
+	require.NoError(t, err)
+
+	t.Run("success", func(t *testing.T) {
+		result := tool.Execute(context.Background(), map[string]any{
+			"action":  "run",
+			"command": "echo 'hello world'",
+		})
+		require.False(t, result.IsError, result.ForLLM)
+
+		meta := parseExecRunMeta(t, result.ForLLM)
+		require.Equal(t, float64(0), meta["exitCode"])
+		require.Equal(t, false, meta["timedOut"])
+		require.Equal(t, false, meta["truncated"])
+		require.Contains(t, meta, "durationMs")
+
+		// The body stays raw: no JSON escaping of newlines.
+		_, body, ok := strings.Cut(result.ForLLM, "\n")
+		require.True(t, ok)
+		require.Contains(t, body, "hello world")
+		require.NotContains(t, body, `\n`)
+		require.Contains(t, result.ForUser, "hello world")
+	})
+
+	t.Run("non-zero exit", func(t *testing.T) {
+		result := tool.Execute(context.Background(), map[string]any{
+			"action":  "run",
+			"command": "sh -c 'exit 7'",
+		})
+		require.True(t, result.IsError)
+
+		meta := parseExecRunMeta(t, result.ForLLM)
+		require.Equal(t, float64(7), meta["exitCode"])
+		require.NotContains(t, meta, "error")
+		require.Contains(t, result.ForUser, "[Command exited with code 7]")
+	})
+
+	t.Run("empty output", func(t *testing.T) {
+		result := tool.Execute(context.Background(), map[string]any{
+			"action":  "run",
+			"command": "true",
+		})
+		require.False(t, result.IsError, result.ForLLM)
+
+		meta := parseExecRunMeta(t, result.ForLLM)
+		require.Equal(t, float64(0), meta["exitCode"])
+		require.Contains(t, result.ForLLM, "(no output)")
+		require.Equal(t, "(no output)", result.ForUser)
+	})
+}
+
 // TestShellTool_Failure verifies failed command execution
 func TestShellTool_Failure(t *testing.T) {
 	tool, err := NewExecTool("", false)
@@ -92,9 +154,10 @@ func TestShellTool_Failure(t *testing.T) {
 		t.Errorf("Expected ForUser to contain error info, got empty string")
 	}
 
-	// ForLLM should contain exit code or error
-	if !strings.Contains(result.ForLLM, "Exit code") && result.ForUser == "" {
-		t.Errorf("Expected ForLLM to contain exit code or error, got: %s", result.ForLLM)
+	// ForLLM carries the exit status in the metadata header.
+	meta := parseExecRunMeta(t, result.ForLLM)
+	if code, ok := meta["exitCode"].(float64); !ok || code == 0 {
+		t.Errorf("Expected a non-zero exitCode in metadata, got: %v", meta["exitCode"])
 	}
 }
 
@@ -120,9 +183,14 @@ func TestShellTool_Timeout(t *testing.T) {
 		t.Errorf("Expected error for timeout, got IsError=false")
 	}
 
+	meta := parseExecRunMeta(t, result.ForLLM)
+	require.Equal(t, true, meta["timedOut"])
+	require.Nil(t, meta["exitCode"])
+	require.Contains(t, meta["error"], "timed out")
+
 	// Should mention timeout
-	if !strings.Contains(result.ForLLM, "timed out") && !strings.Contains(result.ForUser, "timed out") {
-		t.Errorf("Expected timeout message, got ForLLM: %s, ForUser: %s", result.ForLLM, result.ForUser)
+	if !strings.Contains(result.ForUser, "timed out") {
+		t.Errorf("Expected timeout message, got ForUser: %s", result.ForUser)
 	}
 }
 
@@ -389,7 +457,9 @@ func TestShellTool_ForegroundMergesStdoutStderrInOrder(t *testing.T) {
 		"command": "sh -c 'echo one; echo two >&2; echo three'",
 	})
 	require.False(t, result.IsError, result.ForLLM)
-	require.Equal(t, []string{"one", "two", "three"}, strings.Split(strings.TrimSpace(result.ForLLM), "\n"))
+	require.Equal(t, []string{"one", "two", "three"}, strings.Split(strings.TrimSpace(result.ForUser), "\n"))
+	meta := parseExecRunMeta(t, result.ForLLM)
+	require.Equal(t, float64(0), meta["exitCode"])
 }
 
 // TestShellTool_BackgroundMergesStderrWithoutBlocking reproduces the old
@@ -429,6 +499,8 @@ func TestShellTool_BackgroundMergesStderrWithoutBlocking(t *testing.T) {
 		var pollResp ExecResponse
 		require.NoError(t, json.Unmarshal([]byte(pollResult.ForLLM), &pollResp))
 		if pollResp.Status == "done" {
+			require.NotNil(t, pollResp.ExitCode)
+			require.Equal(t, 0, *pollResp.ExitCode)
 			break
 		}
 		if time.Now().After(deadline) {
@@ -447,6 +519,8 @@ func TestShellTool_BackgroundMergesStderrWithoutBlocking(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(readResult.ForLLM), &readResp))
 	require.Contains(t, readResp.Output, "errline")
 	require.Contains(t, readResp.Output, "done")
+	require.NotNil(t, readResp.ExitCode)
+	require.Equal(t, 0, *readResp.ExitCode)
 }
 
 // TestShellTool_OutputTruncation verifies foreground output is bounded by the
@@ -488,12 +562,14 @@ func TestShellTool_OutputTruncation(t *testing.T) {
 	if !strings.Contains(capped.ForLLM, "[OUTPUT TRUNCATED") {
 		t.Fatalf("expected truncation notice, got length: %d", len(capped.ForLLM))
 	}
-	if !strings.HasPrefix(capped.ForLLM, strings.Repeat("x", 400)) {
+	if !strings.HasPrefix(capped.ForUser, strings.Repeat("x", 400)) {
 		t.Fatal("expected the first 40% of the output to be kept")
 	}
-	if !strings.HasSuffix(capped.ForLLM, strings.Repeat("x", 599)+"\n") {
+	if !strings.HasSuffix(capped.ForUser, strings.Repeat("x", 599)+"\n") {
 		t.Fatal("expected the last 60% of the output to be kept")
 	}
+	meta := parseExecRunMeta(t, capped.ForLLM)
+	require.Equal(t, true, meta["truncated"])
 }
 
 // TestShellTool_TruncatedOutputSpillsFullText verifies that foreground output
@@ -548,6 +624,39 @@ func TestShellTool_TruncatedOutputSpillsFullText(t *testing.T) {
 	if !strings.Contains(result.ForLLM, strings.Repeat("Z", 100)) {
 		t.Fatal("expected the real output tail in the preview")
 	}
+}
+
+func TestShellTool_HeaderDoesNotTriggerGenericSpill(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses POSIX yes/head")
+	}
+
+	workspace := t.TempDir()
+	cfg := &config.Config{}
+	cfg.Tools.Exec.AllowRemote = true
+	cfg.Tools.Exec.MaxOutputChars = 4096
+	cfg.Tools.MaxInlineResultChars = 1024
+
+	tool, err := NewExecToolWithConfig(workspace, false, cfg)
+	require.NoError(t, err)
+
+	reg := NewToolRegistry()
+	reg.SetWorkspace(workspace)
+	reg.SetMaxInlineResultRunes(1024)
+	reg.Register(tool)
+
+	// The body fits the inline cap, but the metadata header pushes the total
+	// over it. The result is already bounded, so the generic spill must not
+	// replace the header with a large-result preview.
+	result := reg.Execute(context.Background(), "exec", map[string]any{
+		"action":  "run",
+		"command": "yes x | head -c 1000",
+	})
+	require.False(t, result.IsError, result.ForLLM)
+	require.True(t, strings.HasPrefix(result.ForLLM, execRunMetaPrefix), result.ForLLM)
+	require.True(t, result.LargeResultSpilled)
+	require.Empty(t, result.ArtifactTags)
+	require.Contains(t, result.ForLLM, "x\nx")
 }
 
 // TestShellTool_ForegroundSpillUsesWorkspaceArtifact verifies that an oversized
@@ -1162,14 +1271,14 @@ func TestShellTool_ExitCodeDetails(t *testing.T) {
 		t.Error("expected error for non-zero exit code")
 	}
 
-	// Should contain the exit code in the message (new format: "exited with code 42")
-	if !strings.Contains(result.ForLLM, "42") {
-		t.Errorf("expected exit code 42 in error message, got: %s", result.ForLLM)
+	meta := parseExecRunMeta(t, result.ForLLM)
+	if got := meta["exitCode"]; got != float64(42) {
+		t.Errorf("expected exitCode 42 in metadata, got: %v", got)
 	}
 
-	// Verify the new detailed message format
-	if !strings.Contains(result.ForLLM, "exited with code") {
-		t.Errorf("expected 'exited with code' in message, got: %s", result.ForLLM)
+	// The human-readable result keeps the detailed exit message.
+	if !strings.Contains(result.ForUser, "exited with code 42") {
+		t.Errorf("expected 'exited with code 42' in user message, got: %s", result.ForUser)
 	}
 
 	// Err field is set by the exec system (may or may not be set depending on implementation)

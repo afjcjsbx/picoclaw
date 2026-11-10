@@ -757,13 +757,15 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) (string, e
 		}
 
 		result := t.execTool.Execute(ctx, args)
+		// ForUser is the human-readable view; ForLLM now starts with the
+		// structured [exec] header and must not be published to the chat.
 		if result.IsError {
-			output := fmt.Sprintf("Error executing scheduled command: %s", result.ForLLM)
+			output := fmt.Sprintf("Error executing scheduled command: %s", result.ForUser)
 			t.publishJobOutput(channel, chatID, output)
-			return output, fmt.Errorf("scheduled command failed: %s", result.ForLLM)
+			return output, fmt.Errorf("scheduled command failed: %s", result.ForUser)
 		}
 
-		output := fmt.Sprintf("Scheduled command '%s' executed:\n%s", job.Payload.Command, result.ForLLM)
+		output := fmt.Sprintf("Scheduled command '%s' executed:\n%s", job.Payload.Command, result.ForUser)
 		t.publishJobOutput(channel, chatID, output)
 		return "ok", nil
 	}
