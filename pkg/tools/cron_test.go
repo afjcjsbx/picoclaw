@@ -1408,6 +1408,9 @@ func TestCronTool_ExecuteJobRunsCommand(t *testing.T) {
 	if !strings.Contains(msg.Content, "cron-test-ok") {
 		t.Fatalf("expected command output containing 'cron-test-ok', got: %s", msg.Content)
 	}
+	if strings.Contains(msg.Content, execRunMetaPrefix) {
+		t.Fatalf("cron published the model-facing exec header: %s", msg.Content)
+	}
 }
 
 // TestCronTool_ExecuteJobLogsDroppedOutput pins that a job whose outcome cannot
