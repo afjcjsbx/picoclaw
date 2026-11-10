@@ -1016,12 +1016,15 @@ type writeFileResult struct {
 	Action       string `json:"action"`
 	ResolvedPath string `json:"resolved_path"`
 	BytesWritten int    `json:"bytes_written"`
-	Verified     bool   `json:"verified"`
-	Syntax       string `json:"syntax,omitempty"`
-	SyntaxError  string `json:"syntax_error,omitempty"`
-	Error        string `json:"error,omitempty"`
-	Message      string `json:"message,omitempty"`
-	Detail       string `json:"detail,omitempty"`
+	// Verified is true when the content was confirmed byte-for-byte: by a
+	// read-back after a write, or by the equality comparison for an unchanged
+	// no-op.
+	Verified    bool   `json:"verified"`
+	Syntax      string `json:"syntax,omitempty"`
+	SyntaxError string `json:"syntax_error,omitempty"`
+	Error       string `json:"error,omitempty"`
+	Message     string `json:"message,omitempty"`
+	Detail      string `json:"detail,omitempty"`
 }
 
 // writePolicyChecker exposes the write tool's policy checks without opening or
