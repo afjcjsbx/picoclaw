@@ -58,6 +58,26 @@ func TestSanitizeToolLLMContent(t *testing.T) {
 			in:   strings.Repeat(`{"key":"value"},`, 128),
 			want: strings.Repeat(`{"key":"value"},`, 128),
 		},
+		{
+			name: "TAG characters are stripped from plain text",
+			in:   "look up a record\U000E0073\U000E0065\U000E006E\U000E0064",
+			want: "look up a record",
+		},
+		{
+			name: "bidi controls are stripped from plain text",
+			in:   "look up a record\u202E\u2066",
+			want: "look up a record",
+		},
+		{
+			name: "ZWJ emoji is preserved",
+			in:   "family \U0001F468\u200D\U0001F469\u200D\U0001F467",
+			want: "family \U0001F468\u200D\U0001F469\u200D\U0001F467",
+		},
+		{
+			name: "invisible characters around a data URL are stripped too",
+			in:   "before\u202E ![alt](data:image/png;base64,AAAA)\U000E0073 after",
+			want: "before  after\n" + InlineMediaOmittedMessage,
+		},
 	}
 
 	for _, tt := range tests {
