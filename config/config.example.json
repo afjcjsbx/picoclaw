@@ -593,6 +593,9 @@
     "message": {
       "enabled": true
     },
+    "reaction": {
+      "enabled": true
+    },
     "read_file": {
       "enabled": true,
       "mode": "bytes"
