@@ -103,7 +103,9 @@ Compare api with stable branch.
 ```
 
 Missing positions expand to an empty string. With `/compare api`, `$1` is
-`api` and `$2` is empty.
+`api` and `$2` is empty. If the whole template expands to an empty string (for
+example a body containing only `$1` invoked without arguments), PicoClaw replies
+with an error instead of sending the raw slash text to the model.
 
 ### Fallback append
 

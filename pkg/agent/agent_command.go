@@ -36,8 +36,13 @@ func (al *AgentLoop) handleCommand(
 	}
 
 	// Custom commands expand into a normal user prompt and continue through the
-	// regular agent turn instead of replying directly.
-	if al.expandCustomCommand(msg, agent, opts) {
+	// regular agent turn instead of replying directly. A command that expands to
+	// an empty prompt replies with a clear error instead of falling through to
+	// the model as raw slash text.
+	if found, reply := al.expandCustomCommand(msg, agent, opts); found {
+		if reply != "" {
+			return reply, true
+		}
 		return "", false
 	}
 
@@ -76,18 +81,22 @@ func (al *AgentLoop) handleCommand(
 
 // expandCustomCommand rewrites a user-defined prompt command into its expanded
 // template and stores it in opts so the normal turn continues with that text.
-// Built-in commands always take precedence.
+// Built-in commands always take precedence. It returns matched=true with a
+// user-facing reply when the command expands to an empty prompt.
 func (al *AgentLoop) expandCustomCommand(
 	msg bus.InboundMessage,
 	agent *AgentInstance,
 	opts *processOptions,
-) bool {
+) (matched bool, reply string) {
 	if opts == nil {
-		return false
+		return false, ""
 	}
 	command, expanded, found := al.resolveCustomCommand(msg.Content, agent)
 	if !found {
-		return false
+		return false, ""
+	}
+	if strings.TrimSpace(expanded) == "" {
+		return true, customCommandEmptyPromptReply(command.Name)
 	}
 
 	opts.Dispatch.UserMessage = expanded
@@ -96,29 +105,41 @@ func (al *AgentLoop) expandCustomCommand(
 		"command": command.Name,
 		"source":  command.Source,
 	})
-	return true
+	return true, ""
 }
 
 // expandCustomCommandContent expands a custom command before it is queued as a
 // steering message during an active turn. Built-in slash commands are left
-// untouched so tryHandleActiveTurnCommand can keep its current behavior.
-func (al *AgentLoop) expandCustomCommandContent(content, agentID string) string {
+// untouched so tryHandleActiveTurnCommand can keep its current behavior. When
+// the command expands to an empty prompt it returns a user-facing reply instead
+// of enqueuing raw slash text.
+func (al *AgentLoop) expandCustomCommandContent(content, agentID string) (expanded, reply string) {
 	registry := al.GetRegistry()
 	if registry == nil {
-		return content
+		return content, ""
 	}
 	agent, ok := registry.GetAgent(agentID)
 	if !ok || agent == nil {
 		agent = registry.GetDefaultAgent()
 	}
 	if agent == nil {
-		return content
+		return content, ""
 	}
-	_, expanded, found := al.resolveCustomCommand(content, agent)
+	command, expanded, found := al.resolveCustomCommand(content, agent)
 	if !found {
-		return content
+		return content, ""
 	}
-	return expanded
+	if strings.TrimSpace(expanded) == "" {
+		return "", customCommandEmptyPromptReply(command.Name)
+	}
+	return expanded, ""
+}
+
+func customCommandEmptyPromptReply(name string) string {
+	return fmt.Sprintf(
+		"Command /%s produced an empty prompt. Check that the required arguments are provided and that the template contains prompt text.",
+		name,
+	)
 }
 
 func (al *AgentLoop) resolveCustomCommand(
@@ -151,9 +172,6 @@ func (al *AgentLoop) resolveCustomCommand(
 		command.Template,
 		commands.CommandArguments(content),
 	)
-	if strings.TrimSpace(expanded) == "" {
-		return commands.CustomCommand{}, "", false
-	}
 	return command, expanded, true
 }
 

@@ -96,6 +96,29 @@ func TestHandleCommand_CustomCommandFallsThroughToAgent(t *testing.T) {
 	}
 }
 
+func TestProcessMessage_CustomCommandEmptyExpansionReplies(t *testing.T) {
+	workspace := t.TempDir()
+	writeAgentCustomCommand(t, workspace, "onlyarg.md", "$1")
+
+	al, provider := newCustomCommandTestLoop(t, workspace)
+
+	response, err := al.processMessage(context.Background(), testInboundMessage(bus.InboundMessage{
+		Channel:  "telegram",
+		SenderID: "telegram:123",
+		ChatID:   "chat-1",
+		Content:  "/onlyarg",
+	}))
+	if err != nil {
+		t.Fatalf("processMessage() error = %v", err)
+	}
+	if !strings.Contains(response, "Command /onlyarg produced an empty prompt") {
+		t.Fatalf("response = %q, want empty-prompt error", response)
+	}
+	if len(provider.lastMessages) != 0 {
+		t.Fatalf("empty custom command reached the provider: %+v", provider.lastMessages)
+	}
+}
+
 func TestHandleCommand_BuiltinCommandWinsOverCustomFile(t *testing.T) {
 	workspace := t.TempDir()
 	writeAgentCustomCommand(t, workspace, "help.md", "This must never run.")
@@ -147,19 +170,27 @@ Review $ARGUMENTS.`)
 func TestExpandCustomCommandContent(t *testing.T) {
 	workspace := t.TempDir()
 	writeAgentCustomCommand(t, workspace, "review.md", "Review $ARGUMENTS.")
+	writeAgentCustomCommand(t, workspace, "onlyarg.md", "$1")
 
 	al, _ := newCustomCommandTestLoop(t, workspace)
 	agent := al.GetRegistry().GetDefaultAgent()
 
-	got := al.expandCustomCommandContent("/review src/auth.ts", agent.ID)
-	if got != "Review src/auth.ts." {
-		t.Fatalf("expandCustomCommandContent() = %q, want expanded prompt", got)
+	got, reply := al.expandCustomCommandContent("/review src/auth.ts", agent.ID)
+	if got != "Review src/auth.ts." || reply != "" {
+		t.Fatalf("expandCustomCommandContent() = %q, %q; want expanded prompt and no reply", got, reply)
 	}
 
-	if got := al.expandCustomCommandContent("/help", agent.ID); got != "/help" {
-		t.Fatalf("built-in command was expanded: %q", got)
+	helpContent, helpReply := al.expandCustomCommandContent("/help", agent.ID)
+	if helpContent != "/help" || helpReply != "" {
+		t.Fatalf("built-in command was expanded: %q, %q", helpContent, helpReply)
 	}
-	if got := al.expandCustomCommandContent("/missing", agent.ID); got != "/missing" {
-		t.Fatalf("unknown command was changed: %q", got)
+	missingContent, missingReply := al.expandCustomCommandContent("/missing", agent.ID)
+	if missingContent != "/missing" || missingReply != "" {
+		t.Fatalf("unknown command was changed: %q, %q", missingContent, missingReply)
+	}
+
+	got, reply = al.expandCustomCommandContent("/onlyarg", agent.ID)
+	if got != "" || !strings.Contains(reply, "Command /onlyarg produced an empty prompt") {
+		t.Fatalf("empty command expansion = %q, %q; want empty content and error reply", got, reply)
 	}
 }

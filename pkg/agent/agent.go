@@ -234,7 +234,12 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 
 				// Custom prompt commands become expanded steering text so the
 				// running turn sees the prompt template, not the slash syntax.
-				msg.Content = al.expandCustomCommandContent(msg.Content, agentID)
+				var customReply string
+				msg.Content, customReply = al.expandCustomCommandContent(msg.Content, agentID)
+				if customReply != "" {
+					al.publishActiveTurnCommandReply(ctx, msg, sessionKey, customReply)
+					continue
+				}
 
 				// Another turn is already active (or reserved) for this session — enqueue
 				if err := al.enqueueSteeringMessage(sessionKey, agentID, providers.Message{
