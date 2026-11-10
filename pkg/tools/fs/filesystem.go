@@ -1519,6 +1519,14 @@ func (h *hostFs) WriteFile(path string, data []byte) error {
 	return fileutil.WriteFileAtomic(path, data, 0o600)
 }
 
+// ResolvePath reports the absolute path hostFs targets.
+func (h *hostFs) ResolvePath(path string) string {
+	if abs, err := filepath.Abs(path); err == nil {
+		return abs
+	}
+	return path
+}
+
 // fileAppender is implemented by filesystems that can append without reading
 // and rewriting the whole file. Callers fall back to ReadFile+WriteFile when a
 // filesystem does not implement it.
@@ -1766,6 +1774,21 @@ func (r *sandboxFs) Open(path string) (fs.File, error) {
 	return f, err
 }
 
+// ResolvePath reports the workspace path sandboxFs targets.
+func (r *sandboxFs) ResolvePath(path string) string {
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path)
+	}
+	if r.workspace == "" {
+		return path
+	}
+	abs, err := filepath.Abs(r.workspace)
+	if err != nil {
+		return path
+	}
+	return filepath.Join(abs, path)
+}
+
 // whitelistFs wraps a sandboxFs and allows access to specific paths outside
 // the workspace when they match any of the provided patterns.
 type whitelistFs struct {
@@ -1818,6 +1841,14 @@ func (w *whitelistFs) Open(path string) (fs.File, error) {
 		return w.host.Open(path)
 	}
 	return w.sandbox.Open(path)
+}
+
+// ResolvePath delegates to the backend that serves the path.
+func (w *whitelistFs) ResolvePath(path string) string {
+	if w.matches(path) {
+		return w.host.ResolvePath(path)
+	}
+	return w.sandbox.ResolvePath(path)
 }
 
 // buildFs applies the read policy to every filesystem tool that can inspect files.
