@@ -126,6 +126,36 @@ func TestJSONLBackend_Summary(t *testing.T) {
 	}
 }
 
+func TestJSONLBackend_SessionUsageSurvivesCompaction(t *testing.T) {
+	b := newBackend(t)
+	ctx := context.Background()
+	for range 3 {
+		msg := providers.Message{
+			Role:      "assistant",
+			Content:   "answer",
+			ModelName: "model-a",
+			Usage:     &providers.UsageInfo{PromptTokens: 100, CompletionTokens: 10, TotalTokens: 110, Requests: 1},
+		}
+		if err := b.AddFullMessage(ctx, "s1", msg); err != nil {
+			t.Fatalf("AddFullMessage: %v", err)
+		}
+	}
+	if err := b.TruncateHistory(ctx, "s1", 1); err != nil {
+		t.Fatalf("TruncateHistory: %v", err)
+	}
+	if err := b.Save(ctx, "s1"); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	summary, err := b.SessionUsage(ctx, "s1")
+	if err != nil {
+		t.Fatalf("SessionUsage: %v", err)
+	}
+	if summary.Turns != 3 || summary.InputTokens != 300 || summary.TotalTokens != 330 {
+		t.Fatalf("SessionUsage = %+v, want all three turns after compaction", summary.Totals)
+	}
+}
+
 func TestJSONLBackend_TruncateAndSave(t *testing.T) {
 	b := newBackend(t)
 
