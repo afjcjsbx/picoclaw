@@ -34,7 +34,27 @@ const (
 // change set — including EOF newline transitions and the exact context lines
 // the patch matched — without re-reading the file. Both views are bounded so a
 // single edit cannot flood the model context or the chat UI.
+//
+// Callers that render file content should use DiffResultWithContextRedactor to
+// scrub credentials from the model-facing context lines.
 func DiffResult(path string, before, after []byte) *ToolResult {
+	return DiffResultWithContextRedactor(path, before, after, nil)
+}
+
+// DiffResultWithContextRedactor is DiffResult with a scrubber for the
+// file-derived context lines of the diff. redactContextLine receives the text
+// after the leading space marker and must not add newlines or remove them. It
+// runs before the diff is bounded, so a credential that would straddle the
+// head+tail cut is masked in full instead of leaving a fragment behind.
+//
+// Only the model-facing context lines are redacted. Added and removed lines are
+// left verbatim because the model supplied them, and the user preview keeps the
+// raw diff. A nil redactContextLine behaves exactly like DiffResult.
+func DiffResultWithContextRedactor(
+	path string,
+	before, after []byte,
+	redactContextLine func(string) string,
+) *ToolResult {
 	summary := fmt.Sprintf("File edited: %s", path)
 	if exceedsDiffPreviewLimits(before, after) {
 		return SilentResult(summary + "\n" + diffPreviewSkippedMessage)
@@ -52,12 +72,14 @@ func DiffResult(path string, before, after []byte) *ToolResult {
 		}
 	}
 
+	modelSource := redactDiffContextLines(diff, redactContextLine)
 	userDiff, userTruncated := truncateDiffPreview(diff, maxUserDiffPreviewBytes)
-	modelDiff, modelTruncated := TruncateHeadTail(diff, maxModelDiffRunes, "DIFF")
+	modelDiff, modelTruncated := TruncateHeadTail(modelSource, maxModelDiffRunes, "DIFF")
 
-	// A diff that fits both budgets is rendered once and shared by the model
-	// and the UI: one allocation instead of two identical strings.
-	if !userTruncated && !modelTruncated {
+	// A diff that fits both budgets and needs no redaction is rendered once
+	// and shared by the model and the UI: one allocation instead of two
+	// identical strings.
+	if !userTruncated && !modelTruncated && modelSource == diff {
 		content := fmt.Sprintf("%s\n```diff\n%s\n```", summary, diff)
 		return &ToolResult{ForLLM: content, ForUser: content}
 	}
@@ -104,6 +126,35 @@ func buildUnifiedDiff(path string, before, after []byte) (string, error) {
 	}
 
 	return diff, nil
+}
+
+// redactDiffContextLines applies redact to the file-derived context lines of a
+// unified diff. A context line starts with a single space; the marker is
+// preserved. Added and removed lines, file headers, hunk headers, and the
+// no-newline marker are left untouched. It returns diff unchanged when redact
+// is nil or no line changes, so callers can keep the shared model/user string.
+func redactDiffContextLines(diff string, redact func(string) string) string {
+	if redact == nil {
+		return diff
+	}
+
+	lines := strings.Split(diff, "\n")
+	changed := false
+	for i, line := range lines {
+		if len(line) == 0 || line[0] != ' ' {
+			continue
+		}
+		content := line[1:]
+		redacted := redact(content)
+		if redacted != content {
+			lines[i] = " " + redacted
+			changed = true
+		}
+	}
+	if !changed {
+		return diff
+	}
+	return strings.Join(lines, "\n")
 }
 
 func splitDiffLinesPreservingEOF(content []byte) []string {
