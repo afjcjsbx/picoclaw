@@ -258,7 +258,9 @@ hand-edit a managed job's schedule or payload: the next reconciliation overwrite
 it. Disable the plugin or remove its declaration instead. `picoclaw cron list`
 shows the declaration key under `Managed:`, and `picoclaw cron remove` refuses
 managed jobs unless `--force` is supplied; even then a later reconciliation may
-recreate the job. See
+recreate the job. A declaration with `initial_enabled: false` creates the stored
+job disabled; `picoclaw cron enable <job-id>` turns it on and later
+reconciliations preserve that choice. See
 [Host-managed schedules](../guides/plugins.md#host-managed-schedules).
 
 Agent turns started by a job carry a `cron.Execution` identity. Context-aware

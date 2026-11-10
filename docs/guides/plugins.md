@@ -763,7 +763,8 @@ Accepted fields:
 | `message` | Required agent prompt; bounded to 16 KiB |
 | `channel` / `to` | Optional delivery pair; set both or neither |
 | `precheck` | Optional wake gate; see [Wake gates](#wake-gates) |
-| `enabled` | Optional explicit enable/disable |
+| `initial_enabled` | Initial state when the host creates the job; defaults to `true` and is not reapplied later |
+| `enabled` | Optional explicit enable/disable, applied on every reconciliation |
 
 At most 32 schedules are accepted per plugin.
 
@@ -840,6 +841,13 @@ the plugin, removing `allow_schedules`, or removing the declaration removes its
 host-managed jobs after the next successful discovery pass. When plugin discovery
 times out, the host applies the declarations it saw but does not prune jobs from
 slow or failed plugins.
+
+`initial_enabled` is an opt-in default, not a lock. It applies only when the job
+is created: `"initial_enabled": false` creates the stored job disabled, so a
+package can ship a nightly job that stays off until an operator runs
+`picoclaw cron enable <job-id>`. A later reconciliation preserves that
+operator choice. Use `enabled` only when the declaration must be authoritative
+on every pass, for example to force a job off.
 
 Hooks can observe `cron.reconciled` after each reconciliation pass and
 `cron.changed` when a pass created, updated or removed a job. The payload

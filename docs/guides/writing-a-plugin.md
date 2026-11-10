@@ -190,6 +190,11 @@ not receive host credentials; see [Wake gates](plugins.md#wake-gates) for the en
 limits and failure behavior. The [dreaming example](../../examples/plugins/dreaming) is a
 complete package that uses one.
 
+Ship opt-in schedules with `"initial_enabled": false`. The host still creates the job so
+the operator can inspect it, but it stays paused until `picoclaw cron enable <job-id>`.
+Unlike `enabled`, the initial value is not reapplied on later reconciliations, so an
+explicit operator enable survives plugin reloads.
+
 ## 6. Validate
 
 ```bash

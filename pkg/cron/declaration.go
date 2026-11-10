@@ -22,8 +22,13 @@ type CronJobDeclaration struct {
 	Precheck *JobPrecheck
 	// AgentID routes runs to a specific agent. Empty uses the default route.
 	AgentID string
-	// Enabled is applied only when non-nil. Routine reconciliation omits it,
-	// which preserves an operator's pause/disable decision.
+	// InitialEnabled seeds Enabled only when the job is first created. A
+	// routine reconciliation does not apply it, so an operator can enable a
+	// job that shipped disabled without the declaration turning it off again.
+	InitialEnabled *bool
+	// Enabled is applied only when non-nil on every reconciliation. Routine
+	// reconciliation omits it, which preserves an operator's pause/disable
+	// decision.
 	Enabled *bool
 }
 
@@ -100,6 +105,9 @@ func (cs *CronService) ReconcileDeclarations(
 				continue
 			}
 			enabled := true
+			if decl.InitialEnabled != nil {
+				enabled = *decl.InitialEnabled
+			}
 			if decl.Enabled != nil {
 				enabled = *decl.Enabled
 			}

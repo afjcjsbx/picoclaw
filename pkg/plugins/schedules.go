@@ -111,7 +111,8 @@ func parseScheduleEntry(pc PluginContext, raw json.RawMessage) (Schedule, error)
 	for key := range fields {
 		switch key {
 		case "name", "schedule", "cron", "cron_expr", "every_seconds",
-			"at", "at_ms", "tz", "message", "channel", "to", "precheck", "enabled":
+			"at", "at_ms", "tz", "message", "channel", "to", "precheck",
+			"initial_enabled", "enabled":
 		default:
 			return result, fmt.Errorf("unknown schedule field %q", key)
 		}
@@ -156,6 +157,13 @@ func parseScheduleEntry(pc PluginContext, raw json.RawMessage) (Schedule, error)
 	}
 	if (result.Channel == "") != (result.To == "") {
 		return result, fmt.Errorf("schedule %q must set both channel and to", result.Name)
+	}
+	if value, ok := fields["initial_enabled"]; ok {
+		var enabled bool
+		if decodeErr := decodeField(value, &enabled); decodeErr != nil {
+			return result, fmt.Errorf("schedule %q initial_enabled: %w", result.Name, decodeErr)
+		}
+		result.InitialEnabled = &enabled
 	}
 	if value, ok := fields["enabled"]; ok {
 		var enabled bool

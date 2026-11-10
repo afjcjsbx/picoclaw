@@ -37,11 +37,12 @@ days.
 
 ## Workflow
 
-The gate runs before the model, so an empty night costs no tokens:
+The gate runs before the model, so an empty night costs no tokens. The
+installed job starts paused; the diagram begins after the operator enables it:
 
 ```mermaid
 flowchart TD
-    A["Cron fires plugin:dreaming:nightly-dream"] --> B["Precheck: python3 scripts/dream.py --gate"]
+    A["Operator enables the stored job<br/>Cron fires plugin:dreaming:nightly-dream"] --> B["Precheck: python3 scripts/dream.py --gate"]
     B --> C{"memory/.dream-ack exists?"}
     C -->|"yes, token matches pending"| D["Clear pending.json<br/>record last_ack_at<br/>remove marker"]
     C -->|"no"| E{"pending.json fresh?<br/>less than 72 hours"}
@@ -112,13 +113,20 @@ Requirements: PicoClaw with plugin-managed schedules (the branch that adds
 `allow_schedules`), the cron tool enabled, and Python 3 on the host running the
 gateway.
 
+**Disabled by default.** Adding the package does not enable the plugin and does
+not start the nightly job. The install command below leaves the entry disabled;
+enabling the plugin and granting `allow_schedules` only creates the schedule.
+Because the declaration sets `initial_enabled: false`, that stored job is
+created paused and stays paused until you explicitly enable it.
+
 ```bash
-picoclaw plugin add dreaming --path ./examples/plugins/dreaming --enable
+# Load the package into config without enabling it.
+picoclaw plugin add dreaming --path ./examples/plugins/dreaming
 picoclaw plugin validate dreaming --strict
 picoclaw plugin test dreaming
 ```
 
-Enable the two grants in `config.json`:
+To opt in, enable the plugin and the schedule grant in `config.json`:
 
 ```json
 {
@@ -140,8 +148,17 @@ Enable the two grants in `config.json`:
 ```
 
 Restart or reload the gateway. The host creates the job
-`plugin:dreaming:nightly-dream` in `workspace/cron/jobs.json` and keeps its ID,
-run history and operator pause across restarts.
+`plugin:dreaming:nightly-dream` in `workspace/cron/jobs.json`, disabled. Enable
+it when you are ready:
+
+```bash
+picoclaw cron list                       # find the job id and its Managed: key
+picoclaw cron enable <job-id>            # start the nightly dream
+```
+
+The host keeps the job ID, run history and the operator's enabled/disabled
+choice across restarts and plugin reloads. `initial_enabled` is not reapplied,
+so the job stays on after you enable it.
 
 ## Delivery
 
