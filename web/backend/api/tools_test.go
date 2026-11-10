@@ -670,6 +670,12 @@ func TestToolCatalogIncludesRuntimeTools(t *testing.T) {
 	if items["reaction"].ReadOnly {
 		t.Error("reaction should be toggleable from the web UI")
 	}
+	if items["todo"].Status != "disabled" {
+		t.Errorf("todo status = %q, want disabled by default", items["todo"].Status)
+	}
+	if items["todo"].ReadOnly {
+		t.Error("todo should be toggleable from the web UI")
+	}
 	if items["delegate"].Status != "enabled" {
 		t.Errorf("delegate status = %q, want enabled with multiple agents", items["delegate"].Status)
 	}

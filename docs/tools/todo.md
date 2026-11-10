@@ -3,8 +3,8 @@ description: "The todo tool: how the agent keeps a structured task list per sess
 ---
 # Todo planning tool
 
-`todo` is enabled by default. Disable it with `"tools": {"todo": {"enabled": false}}`
-or `PICOCLAW_TOOLS_TODO_ENABLED=false`. It is also available in the web tool library.
+`todo` is disabled by default. Enable it with `"tools": {"todo": {"enabled": true}}`
+or `PICOCLAW_TOOLS_TODO_ENABLED=true`. It is also available in the web tool library.
 Agents with an explicit `AGENT.md` tool allowlist must include `todo` to use it.
 
 The interface follows the read/replace pattern of

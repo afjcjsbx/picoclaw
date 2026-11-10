@@ -518,7 +518,7 @@ func DefaultConfig() *Config {
 			Spawn: ToolConfig{
 				Enabled: true,
 			},
-			Todo: ToolConfig{Enabled: true},
+			Todo: ToolConfig{Enabled: false},
 			SpawnStatus: ToolConfig{
 				Enabled: false,
 			},

@@ -25,7 +25,7 @@ Every built-in tool is enabled or disabled individually through `tools.<key>.ena
 | `web_fetch` | `tools.web_fetch.enabled` | `true` | Fetch settings under `tools.web`; see [Web tools](../tools/web.md) |
 | `exec` | `tools.exec.enabled` | `true` | See [Exec tool](../tools/exec.md) |
 | `cron` | `tools.cron.enabled` | `true` | See [Cron tool](../tools/cron.md) |
-| `todo` | `tools.todo.enabled` | `true` | See [Todo planning tool](../tools/todo.md) |
+| `todo` | `tools.todo.enabled` | `false` | See [Todo planning tool](../tools/todo.md) |
 | `message` | `tools.message.enabled` | `true` | Media attachments gated by `tools.message.media_enabled` (`false`); see [Messaging tools](../tools/messaging.md) |
 | `reaction` | `tools.reaction.enabled` | `false` | Fails gracefully on channels without reaction support; see [Messaging tools](../tools/messaging.md) |
 | `spawn` | `tools.spawn.enabled` | `true` | Requires `tools.subagent.enabled`; see [Subagent tools](../tools/subagents.md) |
