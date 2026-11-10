@@ -418,11 +418,11 @@ func TestFilesystemTool_WriteFile_IdenticalContentIsNoOp(t *testing.T) {
 		assert.False(t, result.IsError, "overwrite=%v: %s", overwrite, result.ForLLM)
 		payload := writeFileResultPayload(t, result.ForLLM)
 		assert.True(t, payload.Success)
-		assert.Equal(t, "unchanged", payload.Action)
+		assert.Equal(t, writeActionUnchanged, payload.Action)
 		assert.Equal(t, 0, payload.BytesWritten)
 		assert.True(t, payload.Verified)
 		assert.Equal(t, testFile, payload.ResolvedPath)
-		assert.Equal(t, "ok", payload.Syntax)
+		assert.Equal(t, syntaxStatusOK, payload.Syntax)
 	}
 
 	data, err := os.ReadFile(testFile)
@@ -454,7 +454,7 @@ func TestFilesystemTool_WriteFile_AppendShapedContentAccepted(t *testing.T) {
 	assert.False(t, result.IsError, "append-shaped write must not need overwrite: %s", result.ForLLM)
 	payload := writeFileResultPayload(t, result.ForLLM)
 	assert.True(t, payload.Success)
-	assert.Equal(t, "appended", payload.Action)
+	assert.Equal(t, writeActionAppended, payload.Action)
 	assert.Equal(t, len(appended), payload.BytesWritten)
 	assert.True(t, payload.Verified)
 	assert.Equal(t, testFile, payload.ResolvedPath)
@@ -480,11 +480,11 @@ func TestFilesystemTool_WriteFile_ResultReportsVerification(t *testing.T) {
 	assert.False(t, result.IsError, result.ForLLM)
 	payload := writeFileResultPayload(t, result.ForLLM)
 	assert.True(t, payload.Success)
-	assert.Equal(t, "created", payload.Action)
+	assert.Equal(t, writeActionCreated, payload.Action)
 	assert.Equal(t, filepath.Join(workspace, "nested", "main.go"), payload.ResolvedPath)
 	assert.Equal(t, len(content), payload.BytesWritten)
 	assert.True(t, payload.Verified)
-	assert.Equal(t, "ok", payload.Syntax)
+	assert.Equal(t, syntaxStatusOK, payload.Syntax)
 }
 
 // TestFilesystemTool_WriteFile_ResolvedPathIsReadable verifies the returned
@@ -522,7 +522,7 @@ func TestFilesystemTool_WriteFile_ResultReportsOverwritten(t *testing.T) {
 
 	assert.False(t, result.IsError, result.ForLLM)
 	payload := writeFileResultPayload(t, result.ForLLM)
-	assert.Equal(t, "overwritten", payload.Action)
+	assert.Equal(t, writeActionOverwritten, payload.Action)
 	assert.Equal(t, len("new"), payload.BytesWritten)
 	assert.True(t, payload.Verified)
 }
@@ -628,7 +628,7 @@ func TestFilesystemTool_WriteFile_ReadBackMismatchIsError(t *testing.T) {
 	payload := writeFileResultPayload(t, result.ForLLM)
 	assert.False(t, payload.Success)
 	assert.False(t, payload.Verified)
-	assert.Equal(t, "read_back_mismatch", payload.Error)
+	assert.Equal(t, writeErrorReadBackMismatch, payload.Error)
 	assert.Equal(t, len("hello"), payload.BytesWritten)
 
 	// The write itself still landed; the error only reports the failed check.
@@ -654,8 +654,8 @@ func TestFilesystemTool_WriteFile_ReadBackFailureIsError(t *testing.T) {
 
 	assert.True(t, result.IsError)
 	payload := writeFileResultPayload(t, result.ForLLM)
-	assert.Equal(t, "read_back_failed", payload.Error)
-	assert.Equal(t, "created", payload.Action)
+	assert.Equal(t, writeErrorReadBackFailed, payload.Error)
+	assert.Equal(t, writeActionCreated, payload.Action)
 	assert.Equal(t, testFile, payload.ResolvedPath)
 	assert.Equal(t, len("hello"), payload.BytesWritten)
 	assert.NotEmpty(t, payload.Message)
@@ -746,7 +746,7 @@ func TestFilesystemTool_WriteFile_ConflictReturnsStructuredAction(t *testing.T) 
 	t.Run("edit_file preferred when available", func(t *testing.T) {
 		tool := NewWriteFileTool("", false)
 		payload := execute(t, tool)
-		assert.Equal(t, "file_exists", payload.Error)
+		assert.Equal(t, writeErrorFileExists, payload.Error)
 		assert.Equal(t, testFile, payload.Path)
 		assert.Equal(t, testFile, payload.ResolvedPath)
 		assert.Equal(t, "edit_file", payload.RecommendedAction)

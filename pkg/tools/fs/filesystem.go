@@ -990,19 +990,43 @@ const maxWriteFileCompareBytes = 8 << 20
 // a large write costs one fixed allocation rather than twice the content size.
 const writeVerifyChunkSize = 32 * 1024
 
+// writeAction is the action a successful write_file call performed.
+type writeAction string
+
+const (
+	writeActionCreated     writeAction = "created"
+	writeActionOverwritten writeAction = "overwritten"
+	writeActionAppended    writeAction = "appended"
+	writeActionUnchanged   writeAction = "unchanged"
+)
+
+// writeResultError is the machine-readable error code in a write_file result.
+type writeResultError string
+
+const (
+	writeErrorFileExists       writeResultError = "file_exists"
+	writeErrorReadBackFailed   writeResultError = "read_back_failed"
+	writeErrorReadBackMismatch writeResultError = "read_back_mismatch"
+)
+
+// syntaxStatus is the verdict of a completed quick syntax check.
+type syntaxStatus string
+
+const syntaxStatusOK syntaxStatus = "ok"
+
 // writeFileConflict is the machine-readable payload returned when write_file
 // refuses to replace an existing file. The model can read path and
 // recommended_action without parsing the prose error, so it does not have to
 // probe the filesystem to pick its next call.
 type writeFileConflict struct {
-	Error             string   `json:"error"`
-	Path              string   `json:"path"`
-	ResolvedPath      string   `json:"resolved_path"`
-	RecommendedAction string   `json:"recommended_action"`
-	AvailableActions  []string `json:"available_actions"`
-	ExistingBytes     int64    `json:"existing_bytes"`
-	NewBytes          int      `json:"new_bytes"`
-	OverwriteRequired bool     `json:"overwrite_required"`
+	Error             writeResultError `json:"error"`
+	Path              string           `json:"path"`
+	ResolvedPath      string           `json:"resolved_path"`
+	RecommendedAction string           `json:"recommended_action"`
+	AvailableActions  []string         `json:"available_actions"`
+	ExistingBytes     int64            `json:"existing_bytes"`
+	NewBytes          int              `json:"new_bytes"`
+	OverwriteRequired bool             `json:"overwrite_required"`
 }
 
 // writeFileResult is the machine-readable success payload. It tells the model
@@ -1010,19 +1034,19 @@ type writeFileConflict struct {
 // many bytes reached the file (bytes_written), whether a read-back matched
 // (verified), and whether the quick syntax check found a problem.
 type writeFileResult struct {
-	Success      bool   `json:"success"`
-	Action       string `json:"action"`
-	ResolvedPath string `json:"resolved_path"`
-	BytesWritten int    `json:"bytes_written"`
+	Success      bool        `json:"success"`
+	Action       writeAction `json:"action"`
+	ResolvedPath string      `json:"resolved_path"`
+	BytesWritten int         `json:"bytes_written"`
 	// Verified is true when the content was confirmed byte-for-byte: by a
 	// read-back after a write, or by the equality comparison for an unchanged
 	// no-op.
-	Verified    bool   `json:"verified"`
-	Syntax      string `json:"syntax,omitempty"`
-	SyntaxError string `json:"syntax_error,omitempty"`
-	Error       string `json:"error,omitempty"`
-	Message     string `json:"message,omitempty"`
-	Detail      string `json:"detail,omitempty"`
+	Verified    bool             `json:"verified"`
+	Syntax      syntaxStatus     `json:"syntax,omitempty"`
+	SyntaxError string           `json:"syntax_error,omitempty"`
+	Error       writeResultError `json:"error,omitempty"`
+	Message     string           `json:"message,omitempty"`
+	Detail      string           `json:"detail,omitempty"`
 }
 
 // pathResolver is implemented by filesystem backends that know where a tool
@@ -1204,7 +1228,7 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *ToolR
 			}
 			// Verify only the appended suffix: seeking past the old end keeps
 			// the read-back proportional to what this call actually wrote.
-			return t.successResult("appended", path, appended, contentBytes, len(existing))
+			return t.successResult(writeActionAppended, path, appended, contentBytes, len(existing))
 		}
 	}
 
@@ -1216,9 +1240,9 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *ToolR
 		return ErrorResult(err.Error())
 	}
 
-	action := "created"
+	action := writeActionCreated
 	if exists {
-		action = "overwritten"
+		action = writeActionOverwritten
 	}
 	return t.successResult(action, path, len(contentBytes), contentBytes, 0)
 }
@@ -1227,7 +1251,7 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *ToolR
 // is the full post-write file; verifyFrom is the offset where this call started
 // writing, so an append only re-reads its suffix.
 func (t *WriteFileTool) successResult(
-	action, path string,
+	action writeAction, path string,
 	bytesWritten int,
 	content []byte,
 	verifyFrom int,
@@ -1239,7 +1263,7 @@ func (t *WriteFileTool) successResult(
 			action,
 			resolved,
 			bytesWritten,
-			"read_back_failed",
+			writeErrorReadBackFailed,
 			"the file was written but the read-back failed; inspect it before retrying",
 			err.Error(),
 		)
@@ -1249,7 +1273,7 @@ func (t *WriteFileTool) successResult(
 			action,
 			resolved,
 			bytesWritten,
-			"read_back_mismatch",
+			writeErrorReadBackMismatch,
 			"the file was written but the read-back did not match; inspect it before retrying",
 			"",
 		)
@@ -1271,7 +1295,7 @@ func (t *WriteFileTool) successResult(
 func (t *WriteFileTool) unchangedResult(path string, content []byte) *ToolResult {
 	result := writeFileResult{
 		Success:      true,
-		Action:       "unchanged",
+		Action:       writeActionUnchanged,
 		ResolvedPath: resolveToolPath(t.fs, path),
 		BytesWritten: 0,
 		Verified:     true,
@@ -1289,13 +1313,19 @@ func applySyntaxCheck(result *writeFileResult, path string, content []byte) {
 		return
 	}
 	if check.Problem == "" {
-		result.Syntax = "ok"
+		result.Syntax = syntaxStatusOK
 	} else {
 		result.SyntaxError = check.Problem
 	}
 }
 
-func writeFileFailure(action, resolved string, bytesWritten int, code, message, detail string) *ToolResult {
+func writeFileFailure(
+	action writeAction,
+	resolved string,
+	bytesWritten int,
+	code writeResultError,
+	message, detail string,
+) *ToolResult {
 	result := writeFileResult{
 		Success:      false,
 		Action:       action,
@@ -1402,7 +1432,7 @@ func (t *WriteFileTool) conflictResult(path string, existingBytes int64, newByte
 	}
 
 	payload, err := json.Marshal(writeFileConflict{
-		Error:             "file_exists",
+		Error:             writeErrorFileExists,
 		Path:              path,
 		ResolvedPath:      resolveToolPath(t.fs, path),
 		RecommendedAction: recommended,
