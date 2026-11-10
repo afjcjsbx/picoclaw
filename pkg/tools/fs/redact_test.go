@@ -198,6 +198,38 @@ func TestReadFileToolRedactsSecretsInBytesMode(t *testing.T) {
 	}
 }
 
+func TestEditFileRedactsSecretsInModelDiff(t *testing.T) {
+	token := fakeToken("8fJd92kL", "mQ73xPqR", "5tNvBw6Y", "cAeZ1sUo")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.txt")
+	content := "token = \"" + token + "\"\nvalue = 1\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewEditFileTool(dir, true)
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"path":     path,
+		"old_text": "value = 1",
+		"new_text": "value = 2",
+	})
+	if result.IsError {
+		t.Fatalf("edit failed: %s", result.ForLLM)
+	}
+	if strings.Contains(result.ForLLM, token) {
+		t.Fatalf("secret token must be redacted from the model diff:\n%s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, redactedMarker) {
+		t.Fatalf("expected %s in the model diff:\n%s", redactedMarker, result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "+value = 2") {
+		t.Fatalf("changed line must stay visible:\n%s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForUser, token) {
+		t.Fatalf("user preview must keep the raw diff:\n%s", result.ForUser)
+	}
+}
+
 func TestReadFileLinesToolRedactsSecrets(t *testing.T) {
 	dir := t.TempDir()
 	token := fakeToken("kZ8x3PqR7", "tYv2wBc5n", "Mf9jLh4gD", "1sA6eUoQp", "XmWz")

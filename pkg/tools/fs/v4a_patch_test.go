@@ -46,6 +46,8 @@ func TestEditFileTool_V4APatch_SingleHunk(t *testing.T) {
 
 	assert.False(t, result.IsError, result.ForLLM)
 	assert.Equal(t, "func main() {\n\tnew()\n}\n", got)
+	assert.Contains(t, result.ForLLM, "+	new()")
+	assert.Contains(t, result.ForLLM, "-\told()")
 	assert.Contains(t, result.ForUser, "+	new()")
 	assert.Contains(t, result.ForUser, "-\told()")
 }

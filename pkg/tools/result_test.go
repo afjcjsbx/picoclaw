@@ -53,11 +53,9 @@ func TestDiffResult(t *testing.T) {
 	if result.Async {
 		t.Error("Expected Async to be false")
 	}
-	if result.ForLLM == result.ForUser {
-		t.Fatalf("Expected ForLLM to omit the full diff, got %q", result.ForLLM)
-	}
-	if len(result.ForLLM) >= len(result.ForUser) {
-		t.Fatalf("Expected ForLLM to stay smaller than ForUser, got %d vs %d", len(result.ForLLM), len(result.ForUser))
+	if result.ForLLM != result.ForUser {
+		t.Fatalf("Expected a shared unified diff for small edits, got\nForLLM: %q\nForUser: %q",
+			result.ForLLM, result.ForUser)
 	}
 
 	for _, want := range []string{
@@ -68,8 +66,11 @@ func TestDiffResult(t *testing.T) {
 		"-hello world",
 		"+hello universe",
 	} {
+		if !strings.Contains(result.ForLLM, want) {
+			t.Fatalf("DiffResult model output missing %q:\n%s", want, result.ForLLM)
+		}
 		if !strings.Contains(result.ForUser, want) {
-			t.Fatalf("DiffResult output missing %q:\n%s", want, result.ForUser)
+			t.Fatalf("DiffResult user output missing %q:\n%s", want, result.ForUser)
 		}
 	}
 }
