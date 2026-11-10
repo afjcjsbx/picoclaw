@@ -74,6 +74,7 @@ func (al *AgentLoop) runActiveTurnCommand(
 	}
 
 	opts := processOptions{
+		SessionKey: sessionKey,
 		Dispatch: DispatchRequest{
 			SessionKey:     sessionKey,
 			InboundContext: cloneInboundContext(&msg.Context),

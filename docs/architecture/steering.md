@@ -189,7 +189,7 @@ This design enables **parallel processing of messages from different sessions** 
 
 ## Slash commands during an active turn
 
-Registered commands marked `ReadOnly` (`/start`, `/help`, `/show`, `/list`, `/check`, `/context`, `/subagents`) execute immediately and publish their normal reply. They are not added to the steering queue.
+Registered commands marked `ReadOnly` (`/start`, `/help`, `/show`, `/list`, `/check`, `/context`, `/usage`, `/subagents`) execute immediately and publish their normal reply. They are not added to the steering queue.
 
 `/stop` remains a special hard-abort path. Commands that change session or runtime state (`/clear`, `/compact`, `/switch`, `/use`, `/voice`, `/reload`) are rejected with a message asking the user to run `/stop` first. Unknown slash-prefixed text is still treated as a normal message, so it follows the steering or idle passthrough path.
 

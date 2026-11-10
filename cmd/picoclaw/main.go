@@ -29,6 +29,7 @@ import (
 	"github.com/sipeed/picoclaw/cmd/picoclaw/internal/plugin"
 	"github.com/sipeed/picoclaw/cmd/picoclaw/internal/skills"
 	"github.com/sipeed/picoclaw/cmd/picoclaw/internal/status"
+	"github.com/sipeed/picoclaw/cmd/picoclaw/internal/usage"
 	"github.com/sipeed/picoclaw/cmd/picoclaw/internal/version"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/memlimit"
@@ -136,6 +137,7 @@ picoclaw --no-color status`,
 		auth.NewAuthCommand(),
 		gateway.NewGatewayCommand(),
 		status.NewStatusCommand(),
+		usage.NewUsageCommand(),
 		cron.NewCronCommand(),
 		mcp.NewMCPCommand(),
 		plugin.NewPluginCommand(),
@@ -170,6 +172,18 @@ const (
 		"\r\n"
 )
 
+// machineOutputRequested reports whether the invocation asks for
+// machine-readable output, in which case the ASCII banner is suppressed so
+// stdout stays parseable.
+func machineOutputRequested(args []string) bool {
+	for _, arg := range args {
+		if arg == "--json" || arg == "--json=true" {
+			return true
+		}
+	}
+	return false
+}
+
 func main() {
 	// Initialize Termux SSL certificate detection before anything else
 	initTermuxSSL()
@@ -179,22 +193,31 @@ func main() {
 
 	cliui.Init(earlyColorDisabled())
 
-	if earlyColorDisabled() {
-		fmt.Print(plainBanner)
-	} else {
-		fmt.Printf("%s", banner)
+	machineOutput := machineOutputRequested(os.Args[1:])
+	if !machineOutput {
+		if earlyColorDisabled() {
+			fmt.Print(plainBanner)
+		} else {
+			fmt.Printf("%s", banner)
+		}
 	}
 
 	tzEnv := os.Getenv("TZ")
 	if tzEnv != "" {
-		fmt.Println("TZ environment:", tzEnv)
 		zoneinfoEnv := os.Getenv("ZONEINFO")
-		fmt.Println("ZONEINFO environment:", zoneinfoEnv)
 		loc, err := time.LoadLocation(tzEnv)
 		if err != nil {
-			fmt.Println("Error loading time zone:", err)
+			if !machineOutput {
+				fmt.Println("TZ environment:", tzEnv)
+				fmt.Println("ZONEINFO environment:", zoneinfoEnv)
+				fmt.Println("Error loading time zone:", err)
+			}
 		} else {
-			fmt.Println("Time zone loaded successfully:", loc)
+			if !machineOutput {
+				fmt.Println("TZ environment:", tzEnv)
+				fmt.Println("ZONEINFO environment:", zoneinfoEnv)
+				fmt.Println("Time zone loaded successfully:", loc)
+			}
 			time.Local = loc //nolint:gosmopolitan // We intentionally set local timezone from TZ env
 		}
 	}

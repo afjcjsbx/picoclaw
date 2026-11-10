@@ -36,6 +36,11 @@ func TestNewPicoclawCommand(t *testing.T) {
 	assert.NotNil(t, cmd.PersistentPreRun)
 	assert.Nil(t, cmd.PersistentPostRun)
 
+	assert.True(t, machineOutputRequested([]string{"usage", "--json"}))
+	assert.True(t, machineOutputRequested([]string{"usage", "--json=true"}))
+	assert.False(t, machineOutputRequested([]string{"usage", "--json=false"}))
+	assert.False(t, machineOutputRequested([]string{"usage"}))
+
 	allowedCommands := []string{
 		"agent",
 		"auth",
@@ -50,6 +55,7 @@ func TestNewPicoclawCommand(t *testing.T) {
 		"skills",
 		"status",
 		"update",
+		"usage",
 		"version",
 	}
 

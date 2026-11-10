@@ -17,6 +17,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/tools"
 	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
+	"github.com/sipeed/picoclaw/pkg/usage"
 )
 
 func (al *AgentLoop) handleCommand(
@@ -615,19 +616,26 @@ func (al *AgentLoop) buildCommandsRuntime(
 			if opts == nil || agent.Sessions == nil {
 				return nil
 			}
-			usage, messageCount := al.currentContextUsage(agent, opts.SessionKey)
-			if usage == nil {
+			contextUsage, messageCount := al.currentContextUsage(agent, opts.SessionKey)
+			if contextUsage == nil {
 				return nil
 			}
 			return &commands.ContextStats{
-				UsedTokens:        usage.UsedTokens,
-				TotalTokens:       usage.TotalTokens,
-				HistoryTokens:     usage.HistoryTokens,
-				CompressAtTokens:  usage.CompressAtTokens,
-				SummarizeAtTokens: usage.SummarizeAtTokens,
-				UsedPercent:       usage.UsedPercent,
+				UsedTokens:        contextUsage.UsedTokens,
+				TotalTokens:       contextUsage.TotalTokens,
+				HistoryTokens:     contextUsage.HistoryTokens,
+				CompressAtTokens:  contextUsage.CompressAtTokens,
+				SummarizeAtTokens: contextUsage.SummarizeAtTokens,
+				UsedPercent:       contextUsage.UsedPercent,
 				MessageCount:      messageCount,
 			}
+		}
+
+		rt.GetUsageStats = func() (*usage.Summary, error) {
+			if opts == nil {
+				return nil, nil
+			}
+			return sessionUsageSummary(ctx, agent, opts.SessionKey)
 		}
 	}
 	return rt
