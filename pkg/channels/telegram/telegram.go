@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/mymmrac/telego"
@@ -49,6 +50,12 @@ var (
 const (
 	defaultMediaGroupDelay = 500 * time.Millisecond
 	telegramCaptionLimit   = 1024
+
+	// telegramAckReaction is the emoji used to acknowledge inbound messages and
+	// by the reaction tool. Telegram only accepts a fixed set of standard
+	// reactions; 👀 is on that list and matches the acknowledgment reaction
+	// used by other channels such as Slack.
+	telegramAckReaction = "👀"
 
 	// telegramLongPollTimeoutSeconds is the getUpdates long-poll timeout sent
 	// to Telegram: the server holds the request until an update arrives or the
@@ -621,6 +628,53 @@ func (c *TelegramChannel) DeleteMessage(ctx context.Context, chatID string, mess
 		ChatID:    tu.ID(cid),
 		MessageID: mid,
 	})
+}
+
+// ReactToMessage implements channels.ReactionCapable.
+// It adds the acknowledgment reaction (👀) to a message and returns an undo
+// function that removes all reactions previously set by the bot. Telegram
+// clears the bot's reactions when the reaction list is empty, so the undo
+// call needs no extra API method. The undo function is idempotent.
+func (c *TelegramChannel) ReactToMessage(ctx context.Context, chatID, messageID string) (func(), error) {
+	cid, _, err := parseTelegramChatID(chatID)
+	if err != nil {
+		return func() {}, fmt.Errorf("invalid chat ID %s: %w", chatID, err)
+	}
+	mid, err := strconv.Atoi(messageID)
+	if err != nil {
+		return func() {}, fmt.Errorf("invalid message ID %s: %w", messageID, err)
+	}
+
+	err = c.bot.SetMessageReaction(ctx, &telego.SetMessageReactionParams{
+		ChatID:    tu.ID(cid),
+		MessageID: mid,
+		Reaction: []telego.ReactionType{
+			&telego.ReactionTypeEmoji{Type: telego.ReactionEmoji, Emoji: telegramAckReaction},
+		},
+	})
+	if err != nil {
+		return func() {}, fmt.Errorf("telegram react: %w", classifyTelegramError(err))
+	}
+
+	var undone atomic.Bool
+	undo := func() {
+		if !undone.CompareAndSwap(false, true) {
+			return
+		}
+		undoCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := c.bot.SetMessageReaction(undoCtx, &telego.SetMessageReactionParams{
+			ChatID:    tu.ID(cid),
+			MessageID: mid,
+		}); err != nil {
+			logger.DebugCF("telegram", "Failed to remove reaction", map[string]any{
+				"chat_id":    chatID,
+				"message_id": messageID,
+				"error":      err.Error(),
+			})
+		}
+	}
+	return undo, nil
 }
 
 func outboundMessageIsToolFeedback(msg bus.OutboundMessage) bool {
