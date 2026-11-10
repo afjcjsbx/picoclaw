@@ -119,9 +119,6 @@ type Schedule struct {
 	To       string
 	Precheck *Precheck
 	AgentID  string
-	// InitialEnabled seeds Enabled only when the host creates the job. It is
-	// the opt-in default; an operator's later enable/disable choice wins.
-	InitialEnabled *bool
 	// Enabled is authoritative on every reconciliation when non-nil.
 	Enabled *bool
 }
@@ -151,7 +148,6 @@ func (s Schedule) Declaration() cron.CronJobDeclaration {
 		To:             s.To,
 		Precheck:       precheck,
 		AgentID:        s.AgentID,
-		InitialEnabled: s.InitialEnabled,
 		Enabled:        s.Enabled,
 	}
 }

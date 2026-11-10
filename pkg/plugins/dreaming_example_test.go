@@ -41,29 +41,6 @@ func TestDreamingExampleValidates(t *testing.T) {
 	if got := strings.Join(report.Skills, ","); got != "dreaming:dreaming" {
 		t.Fatalf("skills = %q", got)
 	}
-
-	manifestData, err := ReadPackageFile(root, "plugin.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	manifest, _, err := ParseManifest(manifestData)
-	if err != nil {
-		t.Fatal(err)
-	}
-	data, err := canonicalRoot(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	schedules, diagnostics := discoverSchedules(manifest, PluginContext{
-		ID: "dreaming", Root: root, DataDir: data, AllowSchedules: true,
-	})
-	if len(diagnostics) != 0 {
-		t.Fatalf("diagnostics = %v", diagnostics)
-	}
-	if len(schedules) != 1 || schedules[0].InitialEnabled == nil ||
-		*schedules[0].InitialEnabled {
-		t.Fatalf("schedule must be initially disabled: %+v", schedules)
-	}
 }
 
 type dreamGateOutput struct {

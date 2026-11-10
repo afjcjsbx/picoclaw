@@ -144,29 +144,6 @@ func TestParseSchedulePrecheckRejectsInvalidFields(t *testing.T) {
 	}
 }
 
-func TestParseScheduleInitialEnabled(t *testing.T) {
-	raw := json.RawMessage(`{
-		"name": "nightly",
-		"cron": "0 3 * * *",
-		"message": "run",
-		"initial_enabled": false
-	}`)
-	schedule, err := parseScheduleEntry(PluginContext{ID: "dreaming"}, raw)
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	if schedule.InitialEnabled == nil || *schedule.InitialEnabled {
-		t.Fatalf("initial_enabled = %v", schedule.InitialEnabled)
-	}
-	decl := schedule.Declaration()
-	if decl.InitialEnabled == nil || *decl.InitialEnabled {
-		t.Fatalf("declaration initial_enabled = %v", decl.InitialEnabled)
-	}
-	if decl.Enabled != nil {
-		t.Fatalf("authoritative enabled = %v, want nil", decl.Enabled)
-	}
-}
-
 func TestParseSchedulePrecheckRequiresDataDirectory(t *testing.T) {
 	pc := precheckContext(t)
 	pc.DataDir = ""

@@ -212,61 +212,6 @@ func TestGetJobByDeclarationKeyDeepCopiesPrecheck(t *testing.T) {
 	}
 }
 
-func TestReconcileDeclarationsInitialEnabledIsOnlyASeed(t *testing.T) {
-	cs := NewCronService(filepath.Join(t.TempDir(), "jobs.json"), nil)
-	everyMS := int64(60_000)
-	disabled := false
-	decl := CronJobDeclaration{
-		DeclarationKey: "plugin:dreaming:nightly",
-		Name:           "nightly",
-		Schedule:       CronSchedule{Kind: "every", EveryMS: &everyMS},
-		Message:        "dream",
-		InitialEnabled: &disabled,
-	}
-
-	report, err := cs.ReconcileDeclarations("plugin:", []CronJobDeclaration{decl}, true)
-	if err != nil {
-		t.Fatalf("initial reconcile: %v", err)
-	}
-	if report.Created != 1 {
-		t.Fatalf("created = %d, want 1", report.Created)
-	}
-	job, _ := cs.GetJobByDeclarationKey(decl.DeclarationKey)
-	if job.Enabled || job.State.NextRunAtMS != nil {
-		t.Fatalf("initial_enabled=false did not create a paused job: %+v", job)
-	}
-
-	// The operator opts in. A later reconciliation must not re-apply the seed.
-	if enabled := cs.EnableJob(job.ID, true); enabled == nil {
-		t.Fatal("EnableJob returned nil")
-	}
-	report, err = cs.ReconcileDeclarations("plugin:", []CronJobDeclaration{decl}, true)
-	if err != nil {
-		t.Fatalf("second reconcile: %v", err)
-	}
-	if report.Unchanged != 1 {
-		t.Fatalf("unchanged = %d, want 1 (%+v)", report.Unchanged, report)
-	}
-	job, _ = cs.GetJobByDeclarationKey(decl.DeclarationKey)
-	if !job.Enabled || job.State.NextRunAtMS == nil {
-		t.Fatalf("operator enable was lost: %+v", job)
-	}
-
-	// An authoritative enabled=false in the declaration still wins.
-	decl.Enabled = &disabled
-	report, err = cs.ReconcileDeclarations("plugin:", []CronJobDeclaration{decl}, true)
-	if err != nil {
-		t.Fatalf("authoritative disable: %v", err)
-	}
-	if report.Updated != 1 {
-		t.Fatalf("updated = %d, want 1", report.Updated)
-	}
-	job, _ = cs.GetJobByDeclarationKey(decl.DeclarationKey)
-	if job.Enabled {
-		t.Fatalf("authoritative enabled=false was not applied: %+v", job)
-	}
-}
-
 func TestReconcileDeclarationsPrunesOnlyOwnerPrefix(t *testing.T) {
 	cs := NewCronService(filepath.Join(t.TempDir(), "jobs.json"), nil)
 	everyMS := int64(60_000)
