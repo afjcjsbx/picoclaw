@@ -155,15 +155,34 @@ func normalizeToolResult(
 // that pre-truncation text is spilled and previewed instead of the truncated
 // view, so the omitted middle stays readable from the artifact.
 //
+// A tool that was explicitly asked for a smaller preview (web_fetch's maxChars)
+// sets ForceArtifact: the full text is persisted even when it fits under the
+// inline budget, while the tool's bounded preview stays inline. An
+// ArtifactMaxRunes cap bounds the stored text; when the cap applies, the model
+// is told the artifact itself was truncated and how to recover.
+//
 // Security note: this runs before the sensitive-data filter is applied, so the
 // artifact file on disk keeps the unredacted tool output — verbatim, or the
 // normalized pageable text for a recognized JSON envelope. Only the content
 // injected into the model context is filtered. Treat workspace artifacts as
 // sensitive data. See docs/security/sensitive_data_filtering.md.
 func persistLargeResultArtifact(result *ToolResult, toolName, workspace string, maxRunes int) {
-	if result == nil || maxRunes <= 0 || workspace == "" {
+	if result == nil {
 		return
 	}
+
+	// Consume the one-shot request fields first: even when persistence is
+	// unavailable or skipped, they must not leak into a later spill.
+	forceArtifact := result.ForceArtifact
+	artifactMaxRunes := result.ArtifactMaxRunes
+	result.ForceArtifact = false
+	result.ArtifactMaxRunes = 0
+
+	// Capture the side channel and release its backing memory before any early
+	// return, so a skipped spill cannot pin a multi-megabyte page.
+	fullText := strings.TrimSpace(result.FullText)
+	result.FullText = ""
+
 	if result.ResponseHandled {
 		// The tool already delivered its payload to the user; the model only
 		// needs the short confirmation.
@@ -175,16 +194,55 @@ func persistLargeResultArtifact(result *ToolResult, toolName, workspace string, 
 	}
 
 	text := strings.TrimSpace(result.ForLLM)
-	if fullText := strings.TrimSpace(result.FullText); fullText != "" {
+	if fullText != "" {
 		// The tool truncated its own output before returning it (exec,
 		// web_fetch). Spill and preview the pre-truncation text so the omitted
 		// middle is not lost together with the tool's notice.
 		text = fullText
 	}
-	result.FullText = ""
 
+	if text == "" {
+		return
+	}
+	if maxRunes <= 0 || workspace == "" {
+		if forceArtifact && fullText != "" {
+			result.ForLLM = artifactSpillWarning(
+				toolName, utf8.RuneCountInString(text), artifactMaxRunes, false, true, false,
+			) + "\n\n" + result.ForLLM
+		}
+		return
+	}
 	size := utf8.RuneCountInString(text)
-	if text == "" || size <= maxRunes {
+	if size <= maxRunes && !forceArtifact {
+		return
+	}
+
+	// A forced artifact whose full text still fits the inline budget: keep the
+	// tool's own (explicitly capped) preview and persist the rest separately.
+	// web_fetch sets this when a per-call maxChars cut an otherwise small page,
+	// which previously left no artifact at all and made the omitted part
+	// unreachable.
+	if forceArtifact && size <= maxRunes {
+		path, artifactTruncated, err := persistSpillArtifact(
+			toolName, workspace, text, artifactMaxRunes,
+		)
+		if err != nil {
+			logger.WarnCF("tool", "Failed to persist forced tool result artifact", map[string]any{
+				"tool":  toolName,
+				"chars": size,
+				"error": err.Error(),
+			})
+			result.ForLLM = artifactSpillWarning(
+				toolName, size, artifactMaxRunes, false, true, false,
+			) + "\n\n" + result.ForLLM
+			return
+		}
+
+		result.ArtifactTags = append(result.ArtifactTags, "[file:"+path+"]")
+		result.ForLLM = artifactSpillWarning(
+			toolName, size, artifactMaxRunes, artifactTruncated, true, true,
+		) + "\n\n" + result.ForLLM
+		result.LargeResultSpilled = true
 		return
 	}
 
@@ -205,9 +263,9 @@ func persistLargeResultArtifact(result *ToolResult, toolName, workspace string, 
 
 	preview, omitted, headRunes, tailRunes := buildLargeResultPreview(text, size, maxRunes)
 
-	dir := filepath.Join(workspace, ".artifacts", "tool")
-	pattern := toolshared.SanitizeIdentifierComponent(toolName) + "_*.txt"
-	path, err := toolshared.PersistTextArtifact(dir, pattern, text)
+	path, artifactTruncated, err := persistSpillArtifact(
+		toolName, workspace, text, artifactMaxRunes,
+	)
 	if err != nil {
 		logger.WarnCF("tool", "Failed to persist large tool result artifact", map[string]any{
 			"tool":  toolName,
@@ -222,6 +280,11 @@ func persistLargeResultArtifact(result *ToolResult, toolName, workspace string, 
 				"showing a bounded preview because artifact persistence failed.]\n\n%s",
 			largeResultSpillSentinel, size, omitted, preview,
 		)
+		if forceArtifact {
+			result.ForLLM = artifactSpillWarning(
+				toolName, size, artifactMaxRunes, false, true, false,
+			) + "\n\n" + result.ForLLM
+		}
 		result.LargeResultSpilled = true
 		return
 	}
@@ -233,8 +296,76 @@ func persistLargeResultArtifact(result *ToolResult, toolName, workspace string, 
 			"use read_file (offset/length) to read more.]",
 		largeResultSpillSentinel, size, omitted, headRunes, tailRunes, preview,
 	)
+	if forceArtifact {
+		result.ForLLM = artifactSpillWarning(
+			toolName, size, artifactMaxRunes, artifactTruncated, true, true,
+		) + "\n\n" + result.ForLLM
+	} else if artifactTruncated {
+		result.ForLLM = artifactSpillWarning(
+			toolName, size, artifactMaxRunes, true, false, true,
+		) + "\n\n" + result.ForLLM
+	}
 	result.ArtifactTags = append(result.ArtifactTags, "[file:"+path+"]")
 	result.LargeResultSpilled = true
+}
+
+// persistSpillArtifact writes the full spill text, applying the tool's artifact
+// cap when set. It returns whether the artifact itself was truncated.
+func persistSpillArtifact(toolName, workspace, text string, artifactMaxRunes int) (string, bool, error) {
+	dir := filepath.Join(workspace, ".artifacts", "tool")
+	pattern := toolshared.SanitizeIdentifierComponent(toolName) + "_*.txt"
+	return toolshared.PersistTextArtifactWindow(dir, pattern, text, artifactMaxRunes, "ARTIFACT")
+}
+
+// artifactSpillWarning is a front-loaded, plain-text warning prepended to a
+// spilled preview. Benchmark runs showed the model answering from a truncated
+// web_fetch preview even when the complete page was already in the artifact,
+// so the recovery step is stated before the content instead of only in a JSON
+// field. previewTruncated distinguishes a tool-cut preview from an artifact
+// that hit its server-side cap.
+func artifactSpillWarning(
+	toolName string,
+	fullRunes int,
+	artifactMaxRunes int,
+	artifactTruncated bool,
+	previewTruncated bool,
+	saved bool,
+) string {
+	switch {
+	case previewTruncated && !saved:
+		return fmt.Sprintf(
+			"WARNING: %s preview truncated; the full result is %d chars and could not be "+
+				"saved as an artifact. Re-fetch to retry, or use a structured endpoint for "+
+				"the rest.",
+			toolName, fullRunes,
+		)
+	case previewTruncated && !artifactTruncated:
+		return fmt.Sprintf(
+			"WARNING: %s preview truncated; the full result is %d chars and was saved as a "+
+				"local artifact (path listed below). Read it with read_file (offset/length) "+
+				"before answering from the preview.",
+			toolName, fullRunes,
+		)
+	case previewTruncated:
+		return fmt.Sprintf(
+			"WARNING: %s preview truncated; the full result is %d chars and the artifact was "+
+				"truncated at %d chars. Use a structured endpoint or a narrower source to read "+
+				"the rest.",
+			toolName, fullRunes, artifactMaxRunes,
+		)
+	case artifactTruncated:
+		return fmt.Sprintf(
+			"WARNING: %s artifact truncated at %d chars; the full result is %d chars. "+
+				"Use a structured endpoint or a narrower source to read the rest.",
+			toolName, artifactMaxRunes, fullRunes,
+		)
+	default:
+		return fmt.Sprintf(
+			"WARNING: %s result is larger than the inline budget; the full result is %d chars "+
+				"and was saved as a local artifact (path listed below).",
+			toolName, fullRunes,
+		)
+	}
 }
 
 // buildLargeResultPreview returns a head+tail preview of text, the number of

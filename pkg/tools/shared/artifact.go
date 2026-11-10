@@ -1,11 +1,13 @@
 package toolshared
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // Artifact retention bounds. Artifact directories (for example
@@ -90,6 +92,50 @@ func pruneArtifactsAfterWrite(dir string) {
 // consecutive writes). It returns the created file path. The caller is
 // responsible for choosing dir and pattern.
 func PersistTextArtifact(dir, pattern, text string) (string, error) {
+	return writeArtifactParts(dir, pattern, text)
+}
+
+// PersistTextArtifactWindow is PersistTextArtifact with an optional rune cap.
+// When text is longer than maxRunes, it stores the first 40% and the last 60%
+// of the budget around an "[LABEL TRUNCATED - N chars omitted out of T total]"
+// notice and reports truncated=true. A non-positive maxRunes stores the whole
+// text.
+//
+// The head and tail are written straight from the source string, so capping a
+// multi-megabyte page does not allocate a second copy of the kept window.
+func PersistTextArtifactWindow(dir, pattern, text string, maxRunes int, label string) (string, bool, error) {
+	if maxRunes <= 0 {
+		path, err := writeArtifactParts(dir, pattern, text)
+		return path, false, err
+	}
+
+	total := utf8.RuneCountInString(text)
+	if total <= maxRunes {
+		path, err := writeArtifactParts(dir, pattern, text)
+		return path, false, err
+	}
+
+	headBudget := int(float64(maxRunes) * HeadTailHeadRatio)
+	tailBudget := maxRunes - headBudget
+	notice := fmt.Sprintf(
+		"\n\n... [%s TRUNCATED - %s chars omitted out of %s total] ...\n\n",
+		label, formatCount(total-headBudget-tailBudget), formatCount(total),
+	)
+
+	path, err := writeArtifactParts(
+		dir,
+		pattern,
+		text[:runePrefixBytes(text, headBudget)],
+		notice,
+		text[runeSuffixStart(text, tailBudget):],
+	)
+	return path, true, err
+}
+
+// writeArtifactParts creates one artifact file and writes the parts in order.
+// Writing a bounded window as separate parts keeps the kept content as views
+// into the original string instead of a concatenated copy.
+func writeArtifactParts(dir, pattern string, parts ...string) (string, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
@@ -99,10 +145,12 @@ func PersistTextArtifact(dir, pattern, text string) (string, error) {
 		return "", err
 	}
 	path := tmpFile.Name()
-	if _, err = tmpFile.WriteString(text); err != nil {
-		_ = tmpFile.Close()
-		_ = os.Remove(path)
-		return "", err
+	for _, part := range parts {
+		if _, err = tmpFile.WriteString(part); err != nil {
+			_ = tmpFile.Close()
+			_ = os.Remove(path)
+			return "", err
+		}
 	}
 	if err = tmpFile.Close(); err != nil {
 		_ = os.Remove(path)

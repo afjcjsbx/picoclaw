@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestPersistTextArtifact_WritesAndReadsBack(t *testing.T) {
@@ -24,6 +26,82 @@ func TestPersistTextArtifact_WritesAndReadsBack(t *testing.T) {
 	}
 	if string(data) != "hello artifact" {
 		t.Fatalf("artifact contents = %q", string(data))
+	}
+}
+
+// TestPersistTextArtifactWindow_CapsWithHeadAndTail verifies the server-side
+// artifact cap keeps the first and last parts of an oversized page around an
+// explicit notice, so a capped artifact still reports what it lost.
+func TestPersistTextArtifactWindow_CapsWithHeadAndTail(t *testing.T) {
+	dir := t.TempDir()
+	text := "HEAD " + strings.Repeat("m", 4000) + " TAIL"
+
+	path, truncated, err := PersistTextArtifactWindow(dir, "window_*.txt", text, 100, "ARTIFACT")
+	if err != nil {
+		t.Fatalf("PersistTextArtifactWindow: %v", err)
+	}
+	if !truncated {
+		t.Fatal("expected truncated=true for oversized text")
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read artifact: %v", err)
+	}
+	stored := string(data)
+	if !strings.HasPrefix(stored, "HEAD ") {
+		t.Fatalf("expected head preserved, got %q", stored[:40])
+	}
+	if !strings.HasSuffix(stored, " TAIL") {
+		t.Fatalf("expected tail preserved, got %q", stored[len(stored)-40:])
+	}
+	if !strings.Contains(stored, "[ARTIFACT TRUNCATED - ") {
+		t.Fatalf("expected artifact truncation notice, got %q", stored)
+	}
+	if !strings.Contains(stored, "[ARTIFACT TRUNCATED - 3,910 chars omitted out of 4,010 total]") {
+		t.Fatalf("expected honest counts in notice, got %q", stored)
+	}
+}
+
+func TestPersistTextArtifactWindow_KeepsShortTextWhole(t *testing.T) {
+	dir := t.TempDir()
+	text := "short page"
+
+	path, truncated, err := PersistTextArtifactWindow(dir, "window_*.txt", text, 100, "ARTIFACT")
+	if err != nil {
+		t.Fatalf("PersistTextArtifactWindow: %v", err)
+	}
+	if truncated {
+		t.Fatal("expected truncated=false for text under the cap")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read artifact: %v", err)
+	}
+	if string(data) != text {
+		t.Fatalf("artifact contents = %q, want %q", string(data), text)
+	}
+}
+
+// TestPersistTextArtifactWindow_RuneSafe verifies the cap counts characters,
+// not bytes, so multibyte content is never cut mid-rune.
+func TestPersistTextArtifactWindow_RuneSafe(t *testing.T) {
+	dir := t.TempDir()
+	text := strings.Repeat("日本語", 100)
+
+	path, truncated, err := PersistTextArtifactWindow(dir, "window_*.txt", text, 20, "ARTIFACT")
+	if err != nil {
+		t.Fatalf("PersistTextArtifactWindow: %v", err)
+	}
+	if !truncated {
+		t.Fatal("expected truncated=true")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read artifact: %v", err)
+	}
+	if !utf8.Valid(data) {
+		t.Fatal("expected valid UTF-8 artifact")
 	}
 }
 

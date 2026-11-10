@@ -275,6 +275,14 @@ func TestWebTool_WebFetch_Truncation(t *testing.T) {
 			len(longContent),
 		)
 	}
+	// ...and it forces persistence even when the full page would fit under
+	// max_inline_result_chars, because the preview was explicitly cut.
+	if !result.ForceArtifact {
+		t.Fatal("expected ForceArtifact for a truncated preview")
+	}
+	if result.ArtifactMaxRunes != maxArtifactChars {
+		t.Fatalf("ArtifactMaxRunes = %d, want %d", result.ArtifactMaxRunes, maxArtifactChars)
+	}
 }
 
 // TestWebTool_WebFetch_DefaultKeepsLargeContentIntact verifies the default cap
@@ -318,6 +326,42 @@ func TestWebTool_WebFetch_DefaultKeepsLargeContentIntact(t *testing.T) {
 	}
 	if result.FullText != "" {
 		t.Fatalf("expected no FullText for untruncated content, got %d chars", len(result.FullText))
+	}
+	if result.ForceArtifact {
+		t.Fatal("expected ForceArtifact=false for untruncated content")
+	}
+	if result.ArtifactMaxRunes != maxArtifactChars {
+		t.Fatalf("ArtifactMaxRunes = %d, want %d", result.ArtifactMaxRunes, maxArtifactChars)
+	}
+}
+
+// TestWebFetchTool_PromptStaysConcise verifies the tool schema stays minimal:
+// maxChars keeps only a functional description, while preview-size and
+// source-selection advice live in the docs and recovery is driven by the
+// runtime result warning.
+func TestWebFetchTool_PromptStaysConcise(t *testing.T) {
+	tool, err := NewWebFetchTool(0, format, testFetchLimit)
+	if err != nil {
+		t.Fatalf("NewWebFetchTool() error: %v", err)
+	}
+
+	const wantDescription = "Fetch a URL and extract readable content (HTML to text). " +
+		"Use this to get weather info, news, articles, or any web content."
+	if got := tool.Description(); got != wantDescription {
+		t.Fatalf("Description() = %q, want %q", got, wantDescription)
+	}
+
+	properties, ok := tool.Parameters()["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("Parameters() has no properties map")
+	}
+	maxChars, ok := properties["maxChars"].(map[string]any)
+	if !ok {
+		t.Fatal("Parameters() has no maxChars property")
+	}
+	const wantParamDescription = "Maximum characters to extract"
+	if got, _ := maxChars["description"].(string); got != wantParamDescription {
+		t.Fatalf("maxChars description = %q, want %q", got, wantParamDescription)
 	}
 }
 

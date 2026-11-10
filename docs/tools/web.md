@@ -251,11 +251,24 @@ Search results are normalized before they are returned: runs of blank lines in p
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `url` | string | yes | URL to fetch |
-| `maxChars` | integer | no | Maximum characters to extract (minimum `100`). Content beyond the cap keeps the first 40% and the last 60% around a `[CONTENT TRUNCATED - N chars omitted out of T total]` notice. Default: `2000000` |
+| `maxChars` | integer | no | Maximum characters to extract (minimum `100`). Defaults to `tools.max_inline_result_chars`; a smaller value returns a shorter inline preview while the full page is still saved as an artifact. |
 
-The default cap is a flood guard, not a context budget: pages fetched without `maxChars` (or under it) keep their full text, which the generic [large tool result handling](../reference/tools_configuration.md#large-tool-results) turns into a head+tail preview plus a pageable workspace artifact instead of a lossy cut. When the cap does apply, the spillover saves the full pre-truncation page (when the result is oversized), so the omitted middle stays readable.
+`maxChars` defaults to the same `tools.max_inline_result_chars` budget used by the spill layer, so pages that fit stay inline. A per-call value may only lower that budget, which is useful when the model needs less context; the tool still saves the full pre-truncation page as an artifact, even when it is smaller than `max_inline_result_chars`.
 
-When an intact `web_fetch` envelope is spilled to a workspace artifact (`<workspace>/.artifacts/tool/`), it is stored as its pageable text: the extracted content with real newlines, followed by a `<web-fetch-metadata>` block holding the other result fields (URL, status, extractor, truncation flag, length). This keeps the artifact usable with `read_file` (`offset`/`length`) and `search_files`. A payload is recognized only when it carries the full envelope shape (only known keys, a non-empty `url`, a numeric `status`, and a non-empty `text`); unrecognized JSON from other tools is stored verbatim. When `maxChars` did truncate the page, the artifact stores the full pre-truncation page text instead (see above).
+A truncated preview is never the only copy. When `maxChars` cuts the page, the full pre-truncation text is saved as a workspace artifact and the result is front-loaded with a warning telling the model to read the artifact before answering. The artifact is capped server-side at `2,000,000` characters regardless of the requested preview size. If the page exceeds that cap, the artifact keeps a head+tail window with an `[ARTIFACT TRUNCATED - N chars omitted out of T total]` notice and the warning says the stored copy was truncated and points to a structured endpoint or a narrower source. This makes the benchmark failure mode — answering from a 1,500-character preview while the missing fact sat in the omitted page — explicit and recoverable.
+
+When an intact `web_fetch` envelope is spilled to a workspace artifact (`<workspace>/.artifacts/tool/`), it is stored as its pageable text: the extracted content with real newlines, followed by a `<web-fetch-metadata>` block holding the other result fields (URL, status, extractor, truncation flag, length). This keeps the artifact usable with `read_file` (`offset`/`length`) and `search_files`. A payload is recognized only when it carries the full envelope shape (only known keys, a non-empty `url`, a numeric `status`, and a non-empty `text`); unrecognized JSON from other tools is stored verbatim. When `maxChars` did truncate the page, the artifact stores the full pre-truncation page text instead (up to the `2,000,000`-character cap, see above).
+
+### Example `web_fetch` Call
+
+```json
+{
+  "url": "https://go.dev/doc/devel/release",
+  "maxChars": 12000
+}
+```
+
+For "latest version" questions, prefer a structured endpoint when the source offers one instead of scraping a long release page. For example, `https://go.dev/VERSION?m=text` returns the current Go version in one line. This is cheaper, avoids truncation entirely, and removes the risk of anchoring on the first version listed in a page.
 
 ### Payment-required resources (HTTP 402)
 
