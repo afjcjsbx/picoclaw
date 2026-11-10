@@ -53,7 +53,7 @@ func NewMCPTool(manager MCPManager, serverName string, tool *mcp.Tool) *MCPTool 
 	return &MCPTool{
 		manager:            manager,
 		serverName:         serverName,
-		tool:               tool,
+		tool:               sanitizeMCPToolMetadata(serverName, tool),
 		maxInlineTextRunes: maxMCPInlineTextRunes,
 	}
 }
