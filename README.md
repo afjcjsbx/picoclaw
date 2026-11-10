@@ -563,7 +563,7 @@ Invoke it like any other command:
 | No placeholder | Appends non-empty arguments after a blank line. |
 | `description` frontmatter | Shown in `/help` and the Web UI command palette. |
 
-Workspace commands override global commands with the same name, while built-in commands always win. Custom commands appear in `/help` and the Web UI suggestions; Telegram lists the names that fit its bot-command format. See [Custom Prompt Commands](docs/guides/custom-commands.md) for precedence, examples, and limitations.
+Workspace commands override global commands with the same name, while built-in commands always win. Custom commands appear in `/help` on every channel; the Web UI, Telegram, and Discord also list compatible names in their command menus. See [Custom Prompt Commands](docs/guides/custom-commands.md) for precedence, examples, and limitations.
 
 ### Scheduled tasks and reminders
 

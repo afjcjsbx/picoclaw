@@ -146,6 +146,16 @@ with Telegram: lowercase letters, digits, and underscores, up to 32 characters.
 Nested or punctuated names still work as slash commands but are not shown in the
 Telegram menu. Telegram refreshes its menu when the channel starts.
 
+Discord registers built-in and custom commands as global slash commands. Discord
+names allow lowercase letters, digits, hyphens, and underscores, up to 32
+characters; nested or dotted names are skipped. Global Discord commands can take
+a few minutes to propagate, and the menu is refreshed when the channel starts.
+
+Channels without a native command menu (Slack, Matrix, WhatsApp, WeChat, and
+others) still list custom commands through `/help`. Slack slash commands are
+configured in the Slack app itself and cannot be registered by PicoClaw at
+runtime.
+
 ## Limitations
 
 This is deliberately a small prompt-template feature. Command files cannot:
