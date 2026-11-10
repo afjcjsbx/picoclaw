@@ -662,7 +662,7 @@ func (c *MatrixChannel) StartTyping(ctx context.Context, chatID string) (stop fu
 #### ReactionCapable — Message Reaction Indicator
 
 ```go
-// If the platform supports adding emoji reactions to inbound messages (e.g., Slack's 👀, OneBot's emoji 289)
+// If the platform supports adding emoji reactions to inbound messages (e.g., Slack's 👀, Telegram's setMessageReaction, OneBot's emoji 289)
 func (c *MatrixChannel) ReactToMessage(ctx context.Context, chatID, messageID string) (undo func(), err error) {
     // Call Matrix API to add reaction to message
     // The returned undo function removes the reaction, must be idempotent

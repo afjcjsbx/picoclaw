@@ -55,4 +55,4 @@ Environment variable: `PICOCLAW_TOOLS_REACTION_ENABLED`.
 | `channel` | string | no | Target channel. Defaults to the current conversation's channel |
 | `chat_id` | string | no | Target chat/user ID. Defaults to the current conversation |
 
-Reaction support is checked at call time against the channel implementation (Slack, Feishu, and OneBot implement it); on unsupported channels the tool returns an error and the agent continues normally. The gateway also uses the same capability to acknowledge inbound messages with a working reaction and remove it when the reply is sent.
+Reaction support is checked at call time against the channel implementation (Slack, Telegram, Feishu, and OneBot implement it); on unsupported channels the tool returns an error and the agent continues normally. The gateway also uses the same capability to acknowledge inbound messages with a working reaction and remove it when the reply is sent.

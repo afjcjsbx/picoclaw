@@ -74,6 +74,17 @@ Model switching:
 - `/switch model <name>` still accepts the exact model name, an unambiguous prefix, and the legacy `/switch model to <name>` form.
 - `/switch model` on its own prints the numbered list instead of an error.
 
+## Reaction Acknowledgements
+
+While the agent works on a message, the bot adds a 👀 reaction to it and removes the reaction once the reply is delivered. This gives an at-a-glance "seen, working on it" signal without an extra chat message.
+
+Two Telegram-specific details matter:
+
+- Removal uses `setMessageReaction` with no reactions rather than `deleteMessageReaction`. The latter needs the `can_delete_messages` administrator right in groups, while `setMessageReaction` only needs read access.
+- A bot can only keep one reaction per message (no paid reactions, no custom emoji unless allowed by the chat admins), so the acknowledgement overwrites any reaction the bot previously set itself. Reactions added by users are untouched.
+
+Service messages (member joins, pins and a few forwarded types) cannot be reacted to; the failure is logged at debug level and the turn continues normally.
+
 ## Advanced Formatting
 
 You can set `use_markdown_v2: true` to enable enhanced formatting options. This allows the bot to utilize the full range of Telegram MarkdownV2 features, including nested styles, spoilers, and custom fixed-width blocks.

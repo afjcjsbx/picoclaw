@@ -133,6 +133,16 @@ func newTelegramHTTPClient(proxy func(*http.Request) (*url.URL, error)) *http.Cl
 // TelegramChannelOption customizes a Telegram channel during construction.
 type TelegramChannelOption func(*TelegramChannel)
 
+// Capability assertions: the Manager discovers these by runtime type assertion,
+// so a signature drift would silently disable the feature instead of failing to
+// build. Keep them next to the type they guard.
+var (
+	_ channels.ReactionCapable = (*TelegramChannel)(nil)
+	_ channels.TypingCapable   = (*TelegramChannel)(nil)
+	_ channels.MessageEditor   = (*TelegramChannel)(nil)
+	_ channels.MessageDeleter  = (*TelegramChannel)(nil)
+)
+
 // WithCommandDefinitionsProvider supplies the definitions used to register
 // Telegram's bot command menu. The provider runs when the channel starts so it
 // can include workspace custom commands discovered at startup.
@@ -510,6 +520,16 @@ func (c *TelegramChannel) sendChunk(
 // Matches channels.Manager's typingStopTTL (5 min) so behavior is consistent.
 const maxTypingDuration = 5 * time.Minute
 
+// telegramAckReaction is the acknowledgement reaction placed on inbound
+// messages while the turn runs. Telegram only accepts a fixed emoji set for
+// non-premium bots; 👀 is in that set and reads as "seen, working on it".
+const telegramAckReaction = "👀"
+
+// telegramReactionUndoTimeout bounds the reaction removal request. The undo runs
+// when the reply is delivered and may be detached from the inbound context, so it
+// must carry its own deadline instead of relying on the caller's.
+const telegramReactionUndoTimeout = 10 * time.Second
+
 // StartTyping implements channels.TypingCapable.
 // It sends ChatAction(typing) immediately and then repeats every 4 seconds
 // (Telegram's typing indicator expires after ~5s) in a background goroutine.
@@ -621,6 +641,71 @@ func (c *TelegramChannel) DeleteMessage(ctx context.Context, chatID string, mess
 		ChatID:    tu.ID(cid),
 		MessageID: mid,
 	})
+}
+
+// ReactToMessage implements channels.ReactionCapable.
+// It places the acknowledgement reaction on the inbound message and returns an
+// idempotent undo function that removes it again.
+//
+// Removal goes through setMessageReaction with no reactions instead of
+// deleteMessageReaction: the latter requires the 'can_delete_messages'
+// administrator right in groups, while setMessageReaction only needs read
+// access. telego tags the Reaction field with omitempty, so passing an empty
+// slice drops the field, and a missing "reaction" means "set no reactions" to
+// the Bot API, which clears the reaction the bot added.
+func (c *TelegramChannel) ReactToMessage(ctx context.Context, chatID, messageID string) (func(), error) {
+	cid, _, err := parseTelegramChatID(chatID)
+	if err != nil {
+		return func() {}, err
+	}
+	mid, err := strconv.Atoi(messageID)
+	if err != nil {
+		return func() {}, fmt.Errorf("invalid telegram message ID %q: %w", messageID, err)
+	}
+
+	reaction := &telego.SetMessageReactionParams{
+		ChatID:    tu.ID(cid),
+		MessageID: mid,
+		Reaction: []telego.ReactionType{
+			&telego.ReactionTypeEmoji{Type: telego.ReactionEmoji, Emoji: telegramAckReaction},
+		},
+	}
+	if err := c.bot.SetMessageReaction(ctx, reaction); err != nil {
+		// Service messages (joins, pins, some forwarded content) cannot be
+		// reacted to at all, so this is expected and must stay at debug level.
+		logger.DebugCF("telegram", "Failed to add acknowledgement reaction", map[string]any{
+			"chat_id":    cid,
+			"message_id": mid,
+			"error":      err.Error(),
+		})
+		return func() {}, fmt.Errorf("telegram react: %w", classifyTelegramError(err))
+	}
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			// The undo normally runs when the reply is delivered, by which time
+			// the inbound context may already be canceled (turn finished,
+			// server shutting down). Give the removal its own deadline instead
+			// of inheriting a dead context, otherwise the reaction would stay
+			// on the message forever.
+			undoCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), telegramReactionUndoTimeout)
+			defer cancel()
+
+			if err := c.bot.SetMessageReaction(undoCtx, &telego.SetMessageReactionParams{
+				ChatID:    tu.ID(cid),
+				MessageID: mid,
+				// Empty on purpose: see the doc comment above.
+				Reaction: nil,
+			}); err != nil {
+				logger.DebugCF("telegram", "Failed to remove acknowledgement reaction", map[string]any{
+					"chat_id":    cid,
+					"message_id": mid,
+					"error":      err.Error(),
+				})
+			}
+		})
+	}, nil
 }
 
 func outboundMessageIsToolFeedback(msg bus.OutboundMessage) bool {

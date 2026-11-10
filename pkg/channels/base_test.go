@@ -319,3 +319,110 @@ func TestHandleInboundContext_PublishesNormalizedContext(t *testing.T) {
 		})
 	}
 }
+
+// fakePlaceholderRecorder captures the capability callbacks registered by
+// BaseChannel.HandleMessageWithContext so tests can assert the inbound
+// orchestration without a real Manager.
+type fakePlaceholderRecorder struct {
+	typingStops   int
+	reactionUndos int
+	placeholders  int
+}
+
+func (f *fakePlaceholderRecorder) RecordPlaceholder(string, string, string) { f.placeholders++ }
+func (f *fakePlaceholderRecorder) RecordTypingStop(string, string, func())  { f.typingStops++ }
+func (f *fakePlaceholderRecorder) RecordReactionUndo(string, string, func()) {
+	f.reactionUndos++
+}
+
+// reactionCapableChannel is a minimal channel that only advertises
+// ReactionCapable, used to prove BaseChannel auto-registers the undo.
+type reactionCapableChannel struct {
+	*BaseChannel
+	reactions int
+	undos     int
+	lastMsgID string
+}
+
+func (c *reactionCapableChannel) ReactToMessage(_ context.Context, _, messageID string) (func(), error) {
+	c.reactions++
+	c.lastMsgID = messageID
+	return func() { c.undos++ }, nil
+}
+
+func (c *reactionCapableChannel) Send(context.Context, bus.OutboundMessage) ([]string, error) {
+	return nil, nil
+}
+
+func (c *reactionCapableChannel) Start(context.Context) error { return nil }
+
+func (c *reactionCapableChannel) Stop(context.Context) error { return nil }
+
+// TestBaseChannelAutoRegistersReactionUndo pins the inbound orchestration that
+// turns ReactionCapable support into an automatic acknowledgement: the undo must
+// be handed to the recorder so the Manager can remove the reaction on delivery.
+func TestBaseChannelAutoRegistersReactionUndo(t *testing.T) {
+	msgBus := bus.NewMessageBus()
+	defer msgBus.Close()
+
+	inner := NewBaseChannel("test", nil, msgBus, nil)
+	ch := &reactionCapableChannel{BaseChannel: inner}
+	inner.SetOwner(ch)
+
+	recorder := &fakePlaceholderRecorder{}
+	inner.SetPlaceholderRecorder(recorder)
+
+	err := inner.HandleMessageWithContext(
+		context.Background(),
+		"42",
+		"hello",
+		nil,
+		bus.InboundContext{ChatID: "42", MessageID: "99", SenderID: "1"},
+	)
+	if err != nil {
+		t.Fatalf("HandleMessageWithContext: %v", err)
+	}
+
+	if ch.reactions != 1 {
+		t.Fatalf("ReactToMessage calls = %d, want 1", ch.reactions)
+	}
+	if ch.lastMsgID != "99" {
+		t.Fatalf("reacted to message %q, want 99 (the inbound message, not the reply)", ch.lastMsgID)
+	}
+	if recorder.reactionUndos != 1 {
+		t.Fatalf("RecordReactionUndo calls = %d, want 1", recorder.reactionUndos)
+	}
+}
+
+// TestBaseChannelSkipsReactionWithoutMessageID guards channels that report no
+// message ID: reacting is impossible and would otherwise produce an API error
+// on every inbound message.
+func TestBaseChannelSkipsReactionWithoutMessageID(t *testing.T) {
+	msgBus := bus.NewMessageBus()
+	defer msgBus.Close()
+
+	inner := NewBaseChannel("test", nil, msgBus, nil)
+	ch := &reactionCapableChannel{BaseChannel: inner}
+	inner.SetOwner(ch)
+
+	recorder := &fakePlaceholderRecorder{}
+	inner.SetPlaceholderRecorder(recorder)
+
+	err := inner.HandleMessageWithContext(
+		context.Background(),
+		"42",
+		"hello",
+		nil,
+		bus.InboundContext{ChatID: "42", SenderID: "1"},
+	)
+	if err != nil {
+		t.Fatalf("HandleMessageWithContext: %v", err)
+	}
+
+	if ch.reactions != 0 {
+		t.Fatalf("ReactToMessage calls = %d, want 0 without a message ID", ch.reactions)
+	}
+	if recorder.reactionUndos != 0 {
+		t.Fatalf("RecordReactionUndo calls = %d, want 0", recorder.reactionUndos)
+	}
+}
