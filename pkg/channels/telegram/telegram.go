@@ -82,6 +82,7 @@ type TelegramChannel struct {
 	progress  *channels.ToolFeedbackAnimator
 
 	registerFunc      func(context.Context, []commands.Definition) error
+	commandDefs       func() []commands.Definition
 	commandRegDelayFn func(int) time.Duration
 	commandRegCancel  context.CancelFunc
 
@@ -129,10 +130,23 @@ func newTelegramHTTPClient(proxy func(*http.Request) (*url.URL, error)) *http.Cl
 	}
 }
 
+// TelegramChannelOption customizes a Telegram channel during construction.
+type TelegramChannelOption func(*TelegramChannel)
+
+// WithCommandDefinitionsProvider supplies the definitions used to register
+// Telegram's bot command menu. The provider runs when the channel starts so it
+// can include workspace custom commands discovered at startup.
+func WithCommandDefinitionsProvider(provider func() []commands.Definition) TelegramChannelOption {
+	return func(ch *TelegramChannel) {
+		ch.commandDefs = provider
+	}
+}
+
 func NewTelegramChannel(
 	bc *config.Channel,
 	telegramCfg *config.TelegramSettings,
 	bus *bus.MessageBus,
+	channelOpts ...TelegramChannelOption,
 ) (*TelegramChannel, error) {
 	channelName := bc.Name()
 	var opts []telego.BotOption
@@ -186,6 +200,11 @@ func NewTelegramChannel(
 		mediaGroupDelay: telegramMediaGroupDelay(telegramCfg),
 	}
 	ch.progress = channels.NewToolFeedbackAnimator(ch.EditMessage)
+	for _, opt := range channelOpts {
+		if opt != nil {
+			opt(ch)
+		}
+	}
 	return ch, nil
 }
 
@@ -194,6 +213,15 @@ func telegramMediaGroupDelay(telegramCfg *config.TelegramSettings) time.Duration
 		return time.Duration(telegramCfg.MediaGroupDelayMS) * time.Millisecond
 	}
 	return defaultMediaGroupDelay
+}
+
+func (c *TelegramChannel) commandDefinitions() []commands.Definition {
+	if c.commandDefs != nil {
+		if defs := c.commandDefs(); len(defs) > 0 {
+			return defs
+		}
+	}
+	return commands.BuiltinDefinitions()
 }
 
 func (c *TelegramChannel) Start(ctx context.Context) error {
@@ -225,7 +253,7 @@ func (c *TelegramChannel) Start(ctx context.Context) error {
 		"username": c.bot.Username(),
 	})
 
-	c.startCommandRegistration(c.ctx, commands.BuiltinDefinitions())
+	c.startCommandRegistration(c.ctx, c.commandDefinitions())
 
 	go func() {
 		if err = bh.Start(); err != nil {

@@ -4,12 +4,19 @@ import (
 	"context"
 	"math/rand"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/mymmrac/telego"
 
 	"github.com/sipeed/picoclaw/pkg/commands"
 	"github.com/sipeed/picoclaw/pkg/logger"
+)
+
+const (
+	telegramMaxBotCommands             = 100
+	telegramMaxCommandNameLength       = 32
+	telegramMaxCommandDescriptionRunes = 256
 )
 
 var commandRegistrationBackoff = []time.Duration{
@@ -31,16 +38,7 @@ func commandRegistrationDelay(attempt int) time.Duration {
 
 // RegisterCommands registers bot commands on Telegram platform.
 func (c *TelegramChannel) RegisterCommands(ctx context.Context, defs []commands.Definition) error {
-	botCommands := make([]telego.BotCommand, 0, len(defs))
-	for _, def := range defs {
-		if def.Name == "" || def.Description == "" {
-			continue
-		}
-		botCommands = append(botCommands, telego.BotCommand{
-			Command:     def.Name,
-			Description: def.Description,
-		})
-	}
+	botCommands := telegramBotCommands(defs)
 
 	current, err := c.bot.GetMyCommands(ctx, &telego.GetMyCommandsParams{})
 	if err != nil {
@@ -55,6 +53,65 @@ func (c *TelegramChannel) RegisterCommands(ctx context.Context, defs []commands.
 	return c.bot.SetMyCommands(ctx, &telego.SetMyCommandsParams{
 		Commands: botCommands,
 	})
+}
+
+func telegramBotCommands(defs []commands.Definition) []telego.BotCommand {
+	botCommands := make([]telego.BotCommand, 0, len(defs))
+	seen := make(map[string]struct{}, len(defs))
+
+	for _, def := range defs {
+		name, ok := telegramCommandName(def.Name)
+		if !ok {
+			if strings.TrimSpace(def.Name) != "" {
+				logger.DebugCF("telegram", "Skipping command that Telegram cannot represent", map[string]any{
+					"command": def.Name,
+				})
+			}
+			continue
+		}
+		if _, exists := seen[name]; exists {
+			continue
+		}
+		seen[name] = struct{}{}
+
+		description := strings.TrimSpace(def.Description)
+		if description == "" {
+			description = "Custom command"
+		}
+		botCommands = append(botCommands, telego.BotCommand{
+			Command:     name,
+			Description: truncateTelegramCommandDescription(description),
+		})
+		if len(botCommands) == telegramMaxBotCommands {
+			logger.WarnCF("telegram", "Telegram command menu reached its limit", map[string]any{
+				"limit": telegramMaxBotCommands,
+			})
+			break
+		}
+	}
+	return botCommands
+}
+
+func telegramCommandName(name string) (string, bool) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" || len(name) > telegramMaxCommandNameLength {
+		return "", false
+	}
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' {
+			continue
+		}
+		return "", false
+	}
+	return name, true
+}
+
+func truncateTelegramCommandDescription(description string) string {
+	runes := []rune(description)
+	if len(runes) <= telegramMaxCommandDescriptionRunes {
+		return description
+	}
+	return string(runes[:telegramMaxCommandDescriptionRunes-3]) + "..."
 }
 
 func (c *TelegramChannel) startCommandRegistration(ctx context.Context, defs []commands.Definition) {

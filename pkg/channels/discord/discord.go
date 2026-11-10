@@ -20,6 +20,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/audio/tts"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/channels"
+	"github.com/sipeed/picoclaw/pkg/commands"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/identity"
 	"github.com/sipeed/picoclaw/pkg/logger"
@@ -55,16 +56,31 @@ type DiscordChannel struct {
 	voiceMu    sync.RWMutex
 	voiceSSRC  map[string]map[uint32]string // guildID -> ssrc -> userID
 
+	commandDefs func() []commands.Definition
+
 	// TTS interruption: cancel active playback when user speaks
 	ttsMu     sync.Mutex
 	cancelTTS context.CancelFunc
 	ttsPlayID uint64
 }
 
+// DiscordChannelOption customizes a Discord channel during construction.
+type DiscordChannelOption func(*DiscordChannel)
+
+// WithCommandDefinitionsProvider supplies the definitions used to register
+// Discord's global slash command menu. The provider runs when the channel
+// starts so it can include workspace custom commands discovered at startup.
+func WithCommandDefinitionsProvider(provider func() []commands.Definition) DiscordChannelOption {
+	return func(ch *DiscordChannel) {
+		ch.commandDefs = provider
+	}
+}
+
 func NewDiscordChannel(
 	bc *config.Channel,
 	cfg *config.DiscordSettings,
 	bus *bus.MessageBus,
+	channelOpts ...DiscordChannelOption,
 ) (*DiscordChannel, error) {
 	discordgo.Logger = logger.NewLogger("discord").
 		WithLevels(map[int]logger.LogLevel{
@@ -101,6 +117,11 @@ func NewDiscordChannel(
 	ch.playTTSFn = ch.playTTS
 	ch.ttsVoiceFn = ch.voiceConnectionForTTS
 	ch.progress = channels.NewToolFeedbackAnimator(ch.EditMessage)
+	for _, opt := range channelOpts {
+		if opt != nil {
+			opt(ch)
+		}
+	}
 	return ch, nil
 }
 
@@ -117,6 +138,7 @@ func (c *DiscordChannel) Start(ctx context.Context) error {
 	c.botUserID = botUser.ID
 
 	c.session.AddHandler(c.handleMessage)
+	c.session.AddHandler(c.handleInteractionCreate)
 
 	go c.listenVoiceControl(c.ctx)
 
@@ -125,6 +147,7 @@ func (c *DiscordChannel) Start(ctx context.Context) error {
 	}
 
 	c.SetRunning(true)
+	go c.registerCommands(c.commandDefinitions())
 
 	logger.InfoCF("discord", "Discord bot connected", map[string]any{
 		"username": botUser.Username,

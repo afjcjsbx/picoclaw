@@ -1,6 +1,5 @@
 export const SLASH_RECENTS_STORAGE_KEY = "picoclaw.webui.slashCommandRecents"
 export const SLASH_RECENTS_LIMIT = 5
-export const SLASH_MENU_LIMIT = 8
 
 export interface SlashPaletteEntry {
   command: string
@@ -97,7 +96,7 @@ export function filterSlashPaletteItems(
     })
   }
 
-  return matches.slice(0, SLASH_MENU_LIMIT).map((entry) => ({
+  return matches.map((entry) => ({
     ...entry,
     recent: recents.includes(entry.command),
   }))

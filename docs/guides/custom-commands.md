@@ -138,7 +138,23 @@ command metadata:
 /help review
 ```
 
-The Web UI command palette also lists workspace custom commands.
+The Web UI slash suggestions and command palette also list workspace custom
+commands. Reload the page if the Web UI was already open when you added a file.
+
+Telegram's bot command menu includes custom commands whose names are compatible
+with Telegram: lowercase letters, digits, and underscores, up to 32 characters.
+Nested or punctuated names still work as slash commands but are not shown in the
+Telegram menu. Telegram refreshes its menu when the channel starts.
+
+Discord registers built-in and custom commands as global slash commands. Discord
+names allow lowercase letters, digits, hyphens, and underscores, up to 32
+characters; nested or dotted names are skipped. Global Discord commands can take
+a few minutes to propagate, and the menu is refreshed when the channel starts.
+
+Channels without a native command menu (Slack, Matrix, WhatsApp, WeChat, and
+others) still list custom commands through `/help`. Slack slash commands are
+configured in the Slack app itself and cannot be registered by PicoClaw at
+runtime.
 
 ## Limitations
 
