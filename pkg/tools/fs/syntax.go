@@ -16,31 +16,14 @@ const maxSyntaxDepth = 256
 type syntaxFlavor uint8
 
 const (
-	syntaxNone syntaxFlavor = iota
-	syntaxJSON
-	syntaxCLike
+	syntaxCLike syntaxFlavor = iota
 	syntaxPython
 	syntaxTOML
 )
 
-// syntaxFlavorForPath maps a file extension to the cheapest useful check.
-// The list is intentionally conservative: extensions whose syntax needs a real
-// parser (JavaScript regex literals, Rust lifetimes, Java text blocks, YAML
-// indentation) are left unchecked so the tool never reports a false problem.
-func syntaxFlavorForPath(path string) syntaxFlavor {
-	switch strings.ToLower(filepath.Ext(path)) {
-	case ".json":
-		return syntaxJSON
-	case ".go", ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh":
-		return syntaxCLike
-	case ".py", ".pyi":
-		return syntaxPython
-	case ".toml":
-		return syntaxTOML
-	default:
-		return syntaxNone
-	}
-}
+// syntaxChecker is the cheap checker for one family of extensions. skipped is
+// true when the checker bailed out before reaching a verdict.
+type syntaxChecker func(content []byte) (problem string, skipped bool)
 
 // syntaxCheck is the outcome of the best-effort check. Checked is false when
 // the extension has no cheap checker. Skipped is true when the checker bailed
@@ -56,19 +39,45 @@ type syntaxCheck struct {
 
 // quickSyntaxCheck runs a best-effort syntax check over content.
 func quickSyntaxCheck(path string, content []byte) syntaxCheck {
-	flavor := syntaxFlavorForPath(path)
-	if flavor == syntaxNone {
+	check := syntaxCheckerForPath(path)
+	if check == nil {
 		return syntaxCheck{}
 	}
-	if flavor == syntaxJSON {
-		if json.Valid(content) {
-			return syntaxCheck{Checked: true}
-		}
-		return syntaxCheck{Checked: true, Problem: "invalid JSON"}
-	}
-	problem, skipped := checkDelimiters(content, flavor)
+	problem, skipped := check(content)
 	return syntaxCheck{Checked: true, Skipped: skipped, Problem: problem}
 }
+
+// syntaxCheckerForPath maps a file extension to the cheapest useful check.
+// The list is intentionally conservative: extensions whose syntax needs a real
+// parser (JavaScript regex literals, Rust lifetimes, Java text blocks, YAML
+// indentation) are left unchecked so the tool never reports a false problem.
+func syntaxCheckerForPath(path string) syntaxChecker {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".json":
+		return checkJSON
+	case ".go", ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh":
+		return checkCLike
+	case ".py", ".pyi":
+		return checkPython
+	case ".toml":
+		return checkTOML
+	default:
+		return nil
+	}
+}
+
+func checkJSON(content []byte) (string, bool) {
+	if json.Valid(content) {
+		return "", false
+	}
+	return "invalid JSON", false
+}
+
+func checkCLike(content []byte) (string, bool) { return checkDelimiters(content, syntaxCLike) }
+
+func checkPython(content []byte) (string, bool) { return checkDelimiters(content, syntaxPython) }
+
+func checkTOML(content []byte) (string, bool) { return checkDelimiters(content, syntaxTOML) }
 
 // checkDelimiters scans for unbalanced brackets, unterminated strings, and
 // unterminated comments. It is O(n) time and O(1) memory: the bracket stack is
