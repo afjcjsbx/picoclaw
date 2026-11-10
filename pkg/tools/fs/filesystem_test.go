@@ -655,7 +655,13 @@ func TestFilesystemTool_WriteFile_ReadBackFailureIsError(t *testing.T) {
 	assert.True(t, result.IsError)
 	payload := writeFileResultPayload(t, result.ForLLM)
 	assert.Equal(t, "read_back_failed", payload.Error)
+	assert.Equal(t, "created", payload.Action)
+	assert.Equal(t, testFile, payload.ResolvedPath)
+	assert.Equal(t, len("hello"), payload.BytesWritten)
+	assert.NotEmpty(t, payload.Message)
 	assert.Contains(t, payload.Detail, "open boom")
+	assert.Empty(t, payload.Syntax)
+	assert.Empty(t, payload.SyntaxError)
 }
 
 // writeVerifyFs replaces the read-back with a fixed file or error so the
