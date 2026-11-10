@@ -26,8 +26,9 @@ dream diary. The agent applies the actual memory edits through the regular
   plus the last few daily notes for context.
 - Wakes when there is at least one new human message, when memory pressure is
   at or above 85%, or when a previous dream is still waiting for its ack.
-- Keeps a pending digest until the agent runs the ack command, so a failed or
-  interrupted turn does not lose the material.
+- Keeps a pending digest until the agent writes the ack marker, so a failed or
+  interrupted turn does not lose the material. The marker lives inside the
+  workspace, so the turn does not need shell access to the plugin directories.
 - Appends one line per pass to `memory/DREAMS.md`.
 
 PicoClaw session JSONL records have no per-message timestamps. The skill
@@ -158,6 +159,7 @@ python3 scripts/dream.py --ack --workspace ~/.picoclaw/workspace \
 | --- | --- | --- |
 | `plugin-data/dreaming/state.json` | gate | Cursors, recent hashes, timestamps |
 | `plugin-data/dreaming/pending.json` | gate | Digest waiting for the agent's ack |
+| `workspace/memory/.dream-ack` | agent | Temporary ack marker, written with `write_file` and removed by the next gate |
 | `workspace/memory/DREAMS.md` | gate | Append-only dream diary |
 | `workspace/memory/MEMORY.md` | `memory` tool | Durable facts; never written by the gate |
 | `workspace/USER.md` | `memory` tool | User profile; never written by the gate |

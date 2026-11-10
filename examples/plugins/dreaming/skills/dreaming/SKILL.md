@@ -19,7 +19,7 @@ days.
 ## When to Use
 
 - A scheduled job handed you a dream digest (`schema`, `stats`, `memory`,
-  `user`, `messages`, `ack_command`).
+  `user`, `messages`, `ack`).
 - The user asks what tonight's dream would keep, why an entry is still there,
   or how full memory is.
 - A `memory` write was refused because `MEMORY.md` or `USER.md` reached its
@@ -28,9 +28,10 @@ days.
 ## Prerequisites
 
 - The `memory` tool enabled (`agents.defaults.memory_enabled`).
-- The shell tool for the closing `ack_command`. If shell is unavailable, do
-  every write and report that the pass could not be acked; the next gate will
-  hand the same digest back.
+- The `write_file` tool for the closing ack marker. No shell access is needed,
+  so the pass also works when exec is restricted to the workspace. If the
+  marker cannot be written, report it; the next gate will hand the same digest
+  back.
 - The plugin must be granted to the agent running the schedule
   (`plugins.entries.dreaming.agents`) and `allow_schedules` must be on.
 
@@ -52,7 +53,7 @@ Useful fields:
 | `memory` / `user` | Current entries, used chars, limit and pressure |
 | `messages` | Bounded human messages with a hashed `session` label and `channel` |
 | `daily_notes` | Recent assistant-written daily notes, context only |
-| `ack_command` | Exact command to run when the pass is finished |
+| `ack.file` / `ack.token` | Workspace-relative marker file and the token to write into it when the pass is finished |
 
 ## Procedure
 
@@ -61,7 +62,7 @@ Useful fields:
 If the digest is missing, not valid JSON, or has no `memory` block, reply with
 one line `Dream failed: <short reason>` and stop. If `stats.new_user_messages`
 is zero and both pressure values are below 0.85, the gate should not have
-woken you: reply `Nothing to dream tonight.` and run the ack command.
+woken you: reply `Nothing to dream tonight.` and write the ack marker.
 
 ### 2. Set the budget
 
@@ -108,8 +109,11 @@ One entry per short, verifiable statement.
 - `remove`: delete an entry only when it is proven stale, or when the user
   explicitly asked to forget it. This removes the whole line.
 
-Target `memory` for project/environment facts and `user` for who the user is,
-their preferences and communication style.
+The block an entry came from decides its target: an entry listed under
+`memory.entries` lives in `memory/MEMORY.md` and must be changed with
+`target=memory`; only an entry listed under `user.entries` uses `target=user`.
+A preference already stored in `MEMORY.md` stays a `memory` entry even though
+new preferences about the user generally go to `user`.
 
 Never edit `memory/MEMORY.md` or `USER.md` with file tools: the `memory` tool is
 the only writer that enforces the character limits and keeps writes atomic.
@@ -138,10 +142,12 @@ name the entry by its content, not by an internal id.
 
 ### 8. Close the pass
 
-Run the digest's `ack_command` with the shell tool. It clears the pending
-digest and records `last_ack_at` in the plugin state. If the command fails,
-report it in one line; the next gate will return the same digest instead of
-losing the material.
+Write the value of `ack.token` into `ack.file` (a path relative to the
+workspace, normally `memory/.dream-ack`) with the `write_file` tool. Do not run
+the Python script from the turn: the marker is the ack, it works inside the
+workspace even when exec is restricted, and the next gate clears the pending
+digest and records `last_ack_at`. If the marker cannot be written, report it in
+one line; the next gate will return the same digest instead of losing material.
 
 ### 9. Report
 

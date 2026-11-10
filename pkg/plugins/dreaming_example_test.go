@@ -115,8 +115,12 @@ func TestDreamingGateWakesResumesAndAcks(t *testing.T) {
 	if len(messages) != 2 {
 		t.Fatalf("messages = %d", len(messages))
 	}
-	if _, ok := digest["ack_command"].(string); !ok {
-		t.Fatalf("ack_command missing: %v", digest["ack_command"])
+	ackSpec, ok := digest["ack"].(map[string]any)
+	if !ok {
+		t.Fatalf("ack missing: %v", digest["ack"])
+	}
+	if ackSpec["file"] != "memory/.dream-ack" || ackSpec["token"] == "" {
+		t.Fatalf("ack = %v", ackSpec)
 	}
 
 	// An unacked digest is handed back instead of being lost.
@@ -146,6 +150,54 @@ func TestDreamingGateWakesResumesAndAcks(t *testing.T) {
 	}
 	if third.Reason == "" {
 		t.Fatal("skip reason is empty")
+	}
+}
+
+func TestDreamingGateAckMarkerClearsPending(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 is not installed")
+	}
+	root := dreamExampleRoot(t)
+	workspace := t.TempDir()
+	data := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspace, "memory"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(workspace, "sessions"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	session := `{"role":"user","content":"I prefer short answers"}` + "\n"
+	if err := os.WriteFile(
+		filepath.Join(workspace, "sessions", "agent_main_ack.jsonl"),
+		[]byte(session),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	first := runDreamGate(t, root, workspace, data)
+	if first.WakeAgent == nil || !*first.WakeAgent {
+		t.Fatalf("first gate = %+v, want wake", first)
+	}
+	var digest map[string]any
+	if err := json.Unmarshal([]byte(first.Context), &digest); err != nil {
+		t.Fatal(err)
+	}
+	ack := digest["ack"].(map[string]any)
+	marker := filepath.Join(workspace, ack["file"].(string))
+	if err := os.WriteFile(marker, []byte(ack["token"].(string)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	second := runDreamGate(t, root, workspace, data)
+	if second.WakeAgent == nil || *second.WakeAgent {
+		t.Fatalf("second gate = %+v, want no wake after ack marker", second)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("ack marker was not removed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(data, "pending.json")); !os.IsNotExist(err) {
+		t.Fatalf("pending digest was not cleared: %v", err)
 	}
 }
 
