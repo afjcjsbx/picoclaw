@@ -27,7 +27,7 @@ Every built-in tool is enabled or disabled individually through `tools.<key>.ena
 | `cron` | `tools.cron.enabled` | `true` | See [Cron tool](../tools/cron.md) |
 | `todo` | `tools.todo.enabled` | `true` | See [Todo planning tool](../tools/todo.md) |
 | `message` | `tools.message.enabled` | `true` | Media attachments gated by `tools.message.media_enabled` (`false`); see [Messaging tools](../tools/messaging.md) |
-| `reaction` | — | always on | No switch; fails gracefully on channels without reaction support |
+| `reaction` | `tools.reaction.enabled` | `true` | Fails gracefully on channels without reaction support; see [Messaging tools](../tools/messaging.md) |
 | `spawn` | `tools.spawn.enabled` | `true` | Requires `tools.subagent.enabled`; see [Subagent tools](../tools/subagents.md) |
 | `subagent` | `tools.subagent.enabled` | `true` | The sync `subagent` tool also requires `spawn` or `spawn_status` to be enabled |
 | `spawn_status` | `tools.spawn_status.enabled` | `false` | Requires `tools.subagent.enabled` |

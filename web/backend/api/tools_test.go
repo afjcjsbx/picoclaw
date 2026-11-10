@@ -654,7 +654,7 @@ func TestToolCatalogIncludesRuntimeTools(t *testing.T) {
 		}
 	}
 
-	for _, name := range []string{"reaction", "delegate", "short_grep", "short_expand"} {
+	for _, name := range []string{"delegate", "short_grep", "short_expand"} {
 		item, ok := items[name]
 		if !ok {
 			continue
@@ -666,6 +666,9 @@ func TestToolCatalogIncludesRuntimeTools(t *testing.T) {
 
 	if items["reaction"].Status != "enabled" {
 		t.Errorf("reaction status = %q, want enabled", items["reaction"].Status)
+	}
+	if items["reaction"].ReadOnly {
+		t.Error("reaction should be toggleable from the web UI")
 	}
 	if items["delegate"].Status != "enabled" {
 		t.Errorf("delegate status = %q, want enabled with multiple agents", items["delegate"].Status)
@@ -715,6 +718,7 @@ func TestToolCatalogNewToggles(t *testing.T) {
 		{name: "search_files", enabled: func(c *config.Config) bool { return c.Tools.SearchFiles.Enabled }},
 		{name: "load_image", enabled: func(c *config.Config) bool { return c.Tools.LoadImage.Enabled }},
 		{name: "send_tts", enabled: func(c *config.Config) bool { return c.Tools.SendTTS.Enabled }},
+		{name: "reaction", enabled: func(c *config.Config) bool { return c.Tools.Reaction.Enabled }},
 		{name: "image_generate", enabled: func(c *config.Config) bool { return c.Tools.ImageGenerate.Enabled }},
 		{name: "memory", enabled: func(c *config.Config) bool { return c.Agents.Defaults.Memory.Enabled }},
 	}
