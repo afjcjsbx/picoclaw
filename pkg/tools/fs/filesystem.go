@@ -978,6 +978,7 @@ func readerHasMoreContent(reader *bufio.Reader) (bool, error) {
 type WriteFileTool struct {
 	fs        fileSystem
 	workspace string
+	restrict  bool
 	altTools  []string
 }
 
@@ -986,6 +987,11 @@ type WriteFileTool struct {
 // the overwrite guard instead of paying an extra full read.
 const maxWriteFileCompareBytes = 8 << 20
 
+// writeVerifyChunkSize bounds the read-back buffer. The verification streams
+// the file through this buffer instead of reading it into a second []byte, so
+// a large write costs one fixed allocation rather than twice the content size.
+const writeVerifyChunkSize = 32 * 1024
+
 // writeFileConflict is the machine-readable payload returned when write_file
 // refuses to replace an existing file. The model can read path and
 // recommended_action without parsing the prose error, so it does not have to
@@ -993,11 +999,29 @@ const maxWriteFileCompareBytes = 8 << 20
 type writeFileConflict struct {
 	Error             string   `json:"error"`
 	Path              string   `json:"path"`
+	ResolvedPath      string   `json:"resolved_path"`
 	RecommendedAction string   `json:"recommended_action"`
 	AvailableActions  []string `json:"available_actions"`
 	ExistingBytes     int64    `json:"existing_bytes"`
 	NewBytes          int      `json:"new_bytes"`
 	OverwriteRequired bool     `json:"overwrite_required"`
+}
+
+// writeFileResult is the machine-readable success payload. It tells the model
+// what actually happened (action), where the write landed (resolved_path), how
+// many bytes reached the file (bytes_written), whether a read-back matched
+// (verified), and whether the quick syntax check found a problem.
+type writeFileResult struct {
+	Success      bool   `json:"success"`
+	Action       string `json:"action"`
+	ResolvedPath string `json:"resolved_path"`
+	BytesWritten int    `json:"bytes_written"`
+	Verified     bool   `json:"verified"`
+	Syntax       string `json:"syntax,omitempty"`
+	SyntaxError  string `json:"syntax_error,omitempty"`
+	Error        string `json:"error,omitempty"`
+	Message      string `json:"message,omitempty"`
+	Detail       string `json:"detail,omitempty"`
 }
 
 // writePolicyChecker exposes the write tool's policy checks without opening or
@@ -1025,6 +1049,7 @@ func NewWriteFileTool(
 			restrict:   restrict,
 		},
 		workspace: workspace,
+		restrict:  restrict,
 		altTools:  []string{"append_file", "edit_file"},
 	}
 }
@@ -1055,7 +1080,8 @@ func (t *WriteFileTool) Name() string {
 
 func (t *WriteFileTool) Description() string {
 	desc := "Write content to a file, replacing any existing content. Content is written byte-for-byte after argument decoding. Standard JSON escaping applies: \\n for newline and \\\\n for a literal backslash-n sequence. " +
-		"If the file already exists, identical content is a no-op and content that only extends the existing file is accepted; any other replacement requires overwrite=true, which replaces the ENTIRE file."
+		"If the file already exists, identical content is a no-op and content that only extends the existing file is accepted; any other replacement requires overwrite=true, which replaces the ENTIRE file. " +
+		"Returns JSON with the resolved absolute path, bytes_written, verified (a byte-for-byte read-back), and a quick syntax check for known extensions."
 	if phrase := t.altToolsPhrase(); phrase != "" {
 		desc += fmt.Sprintf(
 			" To add to or change part of an existing file without losing its current contents, use %s instead.",
@@ -1147,23 +1173,20 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *ToolR
 	if exists && canCompare {
 		if bytes.Equal(existing, contentBytes) {
 			// Writing identical bytes would only churn the mtime and wake file
-			// watchers, so treat it as a successful no-op.
-			return SilentResult(fmt.Sprintf(
-				"File unchanged: %s (content is identical to the existing file)",
-				path,
-			))
+			// watchers, so treat it as a successful no-op. The comparison above
+			// already proves the file matches, so no read-back is needed.
+			return t.unchangedResult(path, contentBytes)
 		}
 		if bytes.HasPrefix(contentBytes, existing) {
 			// The caller sent the old file plus a suffix: this is an append in
 			// disguise, and applying only the suffix cannot lose existing data.
-			if err := appendFile(t.fs, path, string(contentBytes[len(existing):])); err != nil {
+			appended := len(contentBytes) - len(existing)
+			if err := appendFile(t.fs, path, contentBytes[len(existing):]); err != nil {
 				return ErrorResult(err.Error())
 			}
-			return SilentResult(fmt.Sprintf(
-				"File written: %s (existing content preserved; appended %d bytes)",
-				path,
-				len(contentBytes)-len(existing),
-			))
+			// Verify only the appended suffix: seeking past the old end keeps
+			// the read-back proportional to what this call actually wrote.
+			return t.successResult("appended", path, appended, contentBytes, len(existing))
 		}
 	}
 
@@ -1175,7 +1198,166 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *ToolR
 		return ErrorResult(err.Error())
 	}
 
-	return SilentResult(fmt.Sprintf("File written: %s", path))
+	action := "created"
+	if exists {
+		action = "overwritten"
+	}
+	return t.successResult(action, path, len(contentBytes), contentBytes, 0)
+}
+
+// successResult verifies the write and returns the structured payload. content
+// is the full post-write file; verifyFrom is the offset where this call started
+// writing, so an append only re-reads its suffix.
+func (t *WriteFileTool) successResult(
+	action, path string,
+	bytesWritten int,
+	content []byte,
+	verifyFrom int,
+) *ToolResult {
+	resolved := resolveWritePath(path, t.workspace, t.restrict)
+	verified, err := verifyWrittenFile(t.fs, path, content[verifyFrom:], int64(verifyFrom))
+	if err != nil {
+		return writeFileFailure(
+			action,
+			resolved,
+			bytesWritten,
+			"read_back_failed",
+			"the file was written but the read-back failed; inspect it before retrying",
+			err.Error(),
+		)
+	}
+	if !verified {
+		return writeFileFailure(
+			action,
+			resolved,
+			bytesWritten,
+			"read_back_mismatch",
+			"the file was written but the read-back did not match; inspect it before retrying",
+			"",
+		)
+	}
+
+	result := writeFileResult{
+		Success:      true,
+		Action:       action,
+		ResolvedPath: resolved,
+		BytesWritten: bytesWritten,
+		Verified:     true,
+	}
+	applySyntaxCheck(&result, path, content)
+	payload, _ := json.Marshal(result)
+	return SilentResult(string(payload))
+}
+
+// unchangedResult reports the no-op path. The byte comparison that detected it
+// already proves the file matches, so no extra read-back is needed.
+func (t *WriteFileTool) unchangedResult(path string, content []byte) *ToolResult {
+	result := writeFileResult{
+		Success:      true,
+		Action:       "unchanged",
+		ResolvedPath: resolveWritePath(path, t.workspace, t.restrict),
+		BytesWritten: 0,
+		Verified:     true,
+	}
+	applySyntaxCheck(&result, path, content)
+	payload, _ := json.Marshal(result)
+	return SilentResult(string(payload))
+}
+
+// applySyntaxCheck fills the advisory syntax fields for known extensions.
+func applySyntaxCheck(result *writeFileResult, path string, content []byte) {
+	checked, problem := quickSyntaxCheck(path, content)
+	if !checked {
+		return
+	}
+	if problem == "" {
+		result.Syntax = "ok"
+	} else {
+		result.SyntaxError = problem
+	}
+}
+
+func writeFileFailure(action, resolved string, bytesWritten int, code, message, detail string) *ToolResult {
+	result := writeFileResult{
+		Success:      false,
+		Action:       action,
+		ResolvedPath: resolved,
+		BytesWritten: bytesWritten,
+		Verified:     false,
+		Error:        code,
+		Message:      message,
+		Detail:       detail,
+	}
+	payload, _ := json.Marshal(result)
+	return ErrorResult(string(payload))
+}
+
+// resolveWritePath returns the absolute path the filesystem backend actually
+// targets. Relative paths resolve from the workspace in restricted mode and
+// from the process working directory otherwise, matching hostFs and sandboxFs.
+func resolveWritePath(path, workspace string, restrict bool) string {
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path)
+	}
+	if restrict && workspace != "" {
+		if abs, err := filepath.Abs(workspace); err == nil {
+			return filepath.Join(abs, path)
+		}
+	}
+	if abs, err := filepath.Abs(path); err == nil {
+		return abs
+	}
+	return path
+}
+
+// verifyWrittenFile streams the file back from offset and compares it with
+// expected. The fixed buffer keeps the check's memory flat regardless of file
+// size; io.CopyN is only used when the backend cannot seek (rare).
+func verifyWrittenFile(sysFs fileSystem, path string, expected []byte, offset int64) (bool, error) {
+	f, err := sysFs.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+
+	if offset > 0 {
+		if seeker, ok := f.(io.Seeker); ok {
+			if _, err := seeker.Seek(offset, io.SeekStart); err != nil {
+				return false, err
+			}
+		} else if _, err := io.CopyN(io.Discard, f, offset); err != nil {
+			if errors.Is(err, io.EOF) {
+				return false, nil
+			}
+			return false, err
+		}
+	}
+
+	bufSize := len(expected)
+	if bufSize == 0 {
+		bufSize = 1 // one spare byte detects content past an empty expected value
+	}
+	if bufSize > writeVerifyChunkSize {
+		bufSize = writeVerifyChunkSize
+	}
+	buf := make([]byte, bufSize)
+	matched := 0
+	for {
+		n, readErr := f.Read(buf)
+		if n > 0 {
+			if matched+n > len(expected) || !bytes.Equal(buf[:n], expected[matched:matched+n]) {
+				return false, nil
+			}
+			matched += n
+		}
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				break
+			}
+			return false, readErr
+		}
+	}
+	return matched == len(expected), nil
 }
 
 // conflictResult builds the "file already exists" error. The first line stays
@@ -1211,6 +1393,7 @@ func (t *WriteFileTool) conflictResult(path string, existingBytes int64, newByte
 	payload, err := json.Marshal(writeFileConflict{
 		Error:             "file_exists",
 		Path:              path,
+		ResolvedPath:      resolveWritePath(path, t.workspace, t.restrict),
 		RecommendedAction: recommended,
 		AvailableActions:  available,
 		ExistingBytes:     existingBytes,

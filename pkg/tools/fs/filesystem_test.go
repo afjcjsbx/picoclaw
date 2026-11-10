@@ -3,13 +3,16 @@ package fstools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -413,7 +416,13 @@ func TestFilesystemTool_WriteFile_IdenticalContentIsNoOp(t *testing.T) {
 			"overwrite": overwrite,
 		})
 		assert.False(t, result.IsError, "overwrite=%v: %s", overwrite, result.ForLLM)
-		assert.Contains(t, result.ForLLM, "identical")
+		payload := writeFileResultPayload(t, result.ForLLM)
+		assert.True(t, payload.Success)
+		assert.Equal(t, "unchanged", payload.Action)
+		assert.Equal(t, 0, payload.BytesWritten)
+		assert.True(t, payload.Verified)
+		assert.Equal(t, testFile, payload.ResolvedPath)
+		assert.Equal(t, "ok", payload.Syntax)
 	}
 
 	data, err := os.ReadFile(testFile)
@@ -443,11 +452,212 @@ func TestFilesystemTool_WriteFile_AppendShapedContentAccepted(t *testing.T) {
 	})
 
 	assert.False(t, result.IsError, "append-shaped write must not need overwrite: %s", result.ForLLM)
-	assert.Contains(t, result.ForLLM, "appended")
+	payload := writeFileResultPayload(t, result.ForLLM)
+	assert.True(t, payload.Success)
+	assert.Equal(t, "appended", payload.Action)
+	assert.Equal(t, len(appended), payload.BytesWritten)
+	assert.True(t, payload.Verified)
+	assert.Equal(t, testFile, payload.ResolvedPath)
 
 	data, err := os.ReadFile(testFile)
 	assert.NoError(t, err)
 	assert.Equal(t, original+appended, string(data))
+}
+
+// TestFilesystemTool_WriteFile_ResultReportsVerification verifies the success
+// payload carries the resolved path, byte count, read-back verdict, and the
+// quick syntax check for a known extension.
+func TestFilesystemTool_WriteFile_ResultReportsVerification(t *testing.T) {
+	workspace := t.TempDir()
+	tool := NewWriteFileTool(workspace, true)
+	content := "package main\n\nfunc main() {\n\tprintln(\"hi\")\n}\n"
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"path":    "nested/main.go",
+		"content": content,
+	})
+
+	assert.False(t, result.IsError, result.ForLLM)
+	payload := writeFileResultPayload(t, result.ForLLM)
+	assert.True(t, payload.Success)
+	assert.Equal(t, "created", payload.Action)
+	assert.Equal(t, filepath.Join(workspace, "nested", "main.go"), payload.ResolvedPath)
+	assert.Equal(t, len(content), payload.BytesWritten)
+	assert.True(t, payload.Verified)
+	assert.Equal(t, "ok", payload.Syntax)
+}
+
+// TestFilesystemTool_WriteFile_ResolvedPathIsReadable verifies the returned
+// absolute path can be fed straight back into read_file in sandbox mode.
+func TestFilesystemTool_WriteFile_ResolvedPathIsReadable(t *testing.T) {
+	workspace := t.TempDir()
+	write := NewWriteFileTool(workspace, true)
+
+	result := write.Execute(context.Background(), map[string]any{
+		"path":    "nested/note.txt",
+		"content": "hello",
+	})
+	assert.False(t, result.IsError, result.ForLLM)
+	payload := writeFileResultPayload(t, result.ForLLM)
+
+	read := NewReadFileTool(workspace, true, MaxReadFileSize)
+	readResult := read.Execute(context.Background(), map[string]any{"path": payload.ResolvedPath})
+	assert.False(t, readResult.IsError, readResult.ForLLM)
+	assert.Contains(t, readResult.ForLLM, "hello")
+}
+
+// TestFilesystemTool_WriteFile_ResultReportsOverwritten verifies the action
+// distinguishes a replacement from a new file.
+func TestFilesystemTool_WriteFile_ResultReportsOverwritten(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "note.txt")
+	assert.NoError(t, os.WriteFile(testFile, []byte("old"), 0o644))
+
+	tool := NewWriteFileTool("", false)
+	result := tool.Execute(context.Background(), map[string]any{
+		"path":      testFile,
+		"content":   "new",
+		"overwrite": true,
+	})
+
+	assert.False(t, result.IsError, result.ForLLM)
+	payload := writeFileResultPayload(t, result.ForLLM)
+	assert.Equal(t, "overwritten", payload.Action)
+	assert.Equal(t, len("new"), payload.BytesWritten)
+	assert.True(t, payload.Verified)
+}
+
+// TestFilesystemTool_WriteFile_BytesWrittenCountsBytes verifies the reported
+// count is bytes, not runes.
+func TestFilesystemTool_WriteFile_BytesWrittenCountsBytes(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "utf8.txt")
+	content := "héllo\n"
+
+	tool := NewWriteFileTool("", false)
+	result := tool.Execute(context.Background(), map[string]any{
+		"path":    testFile,
+		"content": content,
+	})
+
+	assert.False(t, result.IsError, result.ForLLM)
+	payload := writeFileResultPayload(t, result.ForLLM)
+	assert.Equal(t, len(content), payload.BytesWritten)
+	assert.True(t, payload.Verified)
+}
+
+// TestFilesystemTool_WriteFile_EmptyContent verifies the zero-length read-back
+// path succeeds without inventing extra bytes.
+func TestFilesystemTool_WriteFile_EmptyContent(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "empty.txt")
+
+	tool := NewWriteFileTool("", false)
+	result := tool.Execute(context.Background(), map[string]any{
+		"path":    testFile,
+		"content": "",
+	})
+
+	assert.False(t, result.IsError, result.ForLLM)
+	payload := writeFileResultPayload(t, result.ForLLM)
+	assert.Equal(t, 0, payload.BytesWritten)
+	assert.True(t, payload.Verified)
+}
+
+// TestFilesystemTool_WriteFile_SyntaxErrorIsAdvisory verifies a syntax problem
+// is reported without failing a write that landed and verified correctly.
+func TestFilesystemTool_WriteFile_SyntaxErrorIsAdvisory(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "broken.json")
+
+	tool := NewWriteFileTool("", false)
+	result := tool.Execute(context.Background(), map[string]any{
+		"path":    testFile,
+		"content": `{"a":}`,
+	})
+
+	assert.False(t, result.IsError, "syntax problems must not fail the write: %s", result.ForLLM)
+	payload := writeFileResultPayload(t, result.ForLLM)
+	assert.True(t, payload.Success)
+	assert.True(t, payload.Verified)
+	assert.Empty(t, payload.Syntax)
+	assert.Equal(t, "invalid JSON", payload.SyntaxError)
+
+	data, err := os.ReadFile(testFile)
+	assert.NoError(t, err)
+	assert.Equal(t, `{"a":}`, string(data))
+}
+
+// TestFilesystemTool_WriteFile_ReadBackMismatchIsError verifies that a write
+// whose read-back differs is reported as an error instead of a silent success.
+func TestFilesystemTool_WriteFile_ReadBackMismatchIsError(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "note.txt")
+	other, err := fstest.MapFS{"other": &fstest.MapFile{Data: []byte("different")}}.Open("other")
+	assert.NoError(t, err)
+
+	tool := &WriteFileTool{
+		fs: writeVerifyFs{fileSystem: &hostFs{}, file: other},
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"path":    testFile,
+		"content": "hello",
+	})
+
+	assert.True(t, result.IsError, "a read-back mismatch must be an error")
+	payload := writeFileResultPayload(t, result.ForLLM)
+	assert.False(t, payload.Success)
+	assert.False(t, payload.Verified)
+	assert.Equal(t, "read_back_mismatch", payload.Error)
+	assert.Equal(t, len("hello"), payload.BytesWritten)
+
+	// The write itself still landed; the error only reports the failed check.
+	data, err := os.ReadFile(testFile)
+	assert.NoError(t, err)
+	assert.Equal(t, "hello", string(data))
+}
+
+// TestFilesystemTool_WriteFile_ReadBackFailureIsError verifies that a read-back
+// that cannot open the file is surfaced with its detail.
+func TestFilesystemTool_WriteFile_ReadBackFailureIsError(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "note.txt")
+
+	tool := &WriteFileTool{
+		fs: writeVerifyFs{fileSystem: &hostFs{}, err: errors.New("open boom")},
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"path":    testFile,
+		"content": "hello",
+	})
+
+	assert.True(t, result.IsError)
+	payload := writeFileResultPayload(t, result.ForLLM)
+	assert.Equal(t, "read_back_failed", payload.Error)
+	assert.Contains(t, payload.Detail, "open boom")
+}
+
+// writeVerifyFs replaces the read-back with a fixed file or error so the
+// verification failure paths can be exercised deterministically.
+type writeVerifyFs struct {
+	fileSystem
+	file fs.File
+	err  error
+}
+
+func (f writeVerifyFs) Open(string) (fs.File, error) {
+	return f.file, f.err
+}
+
+func writeFileResultPayload(t *testing.T, forLLM string) writeFileResult {
+	t.Helper()
+	var payload writeFileResult
+	if err := json.Unmarshal([]byte(forLLM), &payload); err != nil {
+		t.Fatalf("invalid write_file result: %v (%q)", err, forLLM)
+	}
+	return payload
 }
 
 // TestFilesystemTool_WriteFile_ConflictReturnsStructuredAction verifies that a
@@ -476,6 +686,7 @@ func TestFilesystemTool_WriteFile_ConflictReturnsStructuredAction(t *testing.T) 
 		payload := execute(t, tool)
 		assert.Equal(t, "file_exists", payload.Error)
 		assert.Equal(t, testFile, payload.Path)
+		assert.Equal(t, testFile, payload.ResolvedPath)
 		assert.Equal(t, "edit_file", payload.RecommendedAction)
 		assert.Equal(t, []string{"append_file", "edit_file", "overwrite"}, payload.AvailableActions)
 		assert.Equal(t, int64(len(existing)), payload.ExistingBytes)
@@ -530,6 +741,8 @@ func TestFilesystemTool_WriteFile_OverwriteSandboxed(t *testing.T) {
 	})
 	assert.True(t, result.IsError, "expected error in sandbox mode without overwrite=true")
 	assert.Contains(t, result.ForLLM, "already exists")
+	conflict := writeFileConflictPayload(t, result.ForLLM)
+	assert.Equal(t, filepath.Join(workspace, testFile), conflict.ResolvedPath)
 
 	// With overwrite=true → allowed
 	result = tool.Execute(context.Background(), map[string]any{
