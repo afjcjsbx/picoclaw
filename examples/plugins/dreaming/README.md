@@ -35,6 +35,77 @@ PicoClaw session JSONL records have no per-message timestamps. The skill
 therefore corroborates a fact across **distinct sessions** rather than distinct
 days.
 
+## Workflow
+
+The gate runs before the model, so an empty night costs no tokens:
+
+```mermaid
+flowchart TD
+    A["Cron fires plugin:dreaming:nightly-dream"] --> B["Precheck: python3 scripts/dream.py --gate"]
+    B --> C{"memory/.dream-ack exists?"}
+    C -->|"yes, token matches pending"| D["Clear pending.json<br/>record last_ack_at<br/>remove marker"]
+    C -->|"no"| E{"pending.json fresh?<br/>less than 72 hours"}
+    D --> E
+    E -->|"yes"| F["Return the same digest<br/>resumed = true"]
+    E -->|"no, or no pending"| G["Read MEMORY.md, USER.md<br/>and configured limits"]
+    G --> H["Scan sessions modified in the last 7 days<br/>only role=user, line cursors, dedupe"]
+    H --> I["Redact secrets<br/>flag instruction-like text<br/>bound count, chars and JSON size"]
+    I --> J{"New messages,<br/>memory pressure >= 0.85,<br/>or --force?"}
+    J -->|"no"| K["Save cursors<br/>diary: no work<br/>wake_agent = false"]
+    J -->|"yes"| L["Build bounded JSON digest<br/>memory, user, daily notes, messages, ack token"]
+    L --> M["Write pending.json with an id<br/>and the digest"]
+    M --> N["Diary: woke<br/>wake_agent = true + context"]
+    F --> O["Agent turn starts"]
+    N --> O
+    O --> P["Agent loads the dreaming skill<br/>and treats the digest as data"]
+    P --> Q["Agent applies memory changes<br/>with the memory tool only"]
+    Q --> R["Agent writes ack.token<br/>to memory/.dream-ack"]
+    R --> S["Agent replies with at most<br/>6 short report lines"]
+    S -.->|"next nightly gate"| B
+```
+
+The turn itself only edits memory through the regular tool; the gate owns
+state, bounds and the acknowledgement lifecycle:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Cron as Cron schedule
+    participant Gate as dream.py --gate
+    participant Agent as Agent turn
+    participant Mem as memory tool
+    participant WS as Workspace
+
+    Cron->>Gate: run precheck
+    Gate->>WS: read MEMORY.md, USER.md, sessions, state
+    Gate->>Gate: decide wake or skip
+
+    alt no new material and low pressure
+        Gate-->>Cron: wake_agent = false
+        Cron->>Cron: job status skipped, no model call
+    else new material, memory pressure, or --force
+        Gate->>WS: write pending.json (id + digest)
+        Gate-->>Cron: wake_agent = true + context
+        Cron->>Agent: schedule message + digest
+        Agent->>Agent: load dreaming skill
+        Agent->>Mem: add / replace / remove entries
+        Mem->>WS: update MEMORY.md and USER.md
+        Agent->>WS: write memory/.dream-ack with ack.token
+        Agent-->>Cron: short report to channel/to
+        Note over Gate,WS: on the next gate, the marker is consumed,<br/>pending.json is cleared, last_ack_at is recorded
+    end
+```
+
+State transitions:
+
+| State | Meaning |
+| --- | --- |
+| `no work` | No new human messages and low memory pressure; no model call |
+| `woke` | A digest was written to `pending.json` and handed to the agent |
+| `resumed` | The previous digest is still unacked and is handed back |
+| `completed` | The ack marker matched; pending was cleared and `last_ack_at` recorded |
+| `expired` | A pending older than 72 hours is carried into the next digest instead of being dropped |
+
 ## Install
 
 Requirements: PicoClaw with plugin-managed schedules (the branch that adds
