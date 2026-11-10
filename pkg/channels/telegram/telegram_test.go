@@ -1078,6 +1078,83 @@ func TestSend_InvalidChatID(t *testing.T) {
 	assert.Empty(t, caller.calls)
 }
 
+func TestReactToMessage_AddsReactionAndUndoIsIdempotent(t *testing.T) {
+	caller := &stubCaller{
+		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
+			return &ta.Response{Ok: true, Result: []byte("true")}, nil
+		},
+	}
+	ch := newTestChannel(t, caller)
+
+	undo, err := ch.ReactToMessage(context.Background(), "-1001234567890/42", "678")
+	require.NoError(t, err)
+	require.NotNil(t, undo)
+
+	require.Len(t, caller.calls, 1)
+	assert.Contains(t, caller.calls[0].URL, "setMessageReaction")
+
+	var setParams struct {
+		ChatID    int64 `json:"chat_id"`
+		MessageID int   `json:"message_id"`
+		Reaction  []struct {
+			Type  string `json:"type"`
+			Emoji string `json:"emoji"`
+		} `json:"reaction"`
+	}
+	require.NoError(t, json.Unmarshal(caller.calls[0].Data.BodyRaw, &setParams))
+	assert.Equal(t, int64(-1001234567890), setParams.ChatID)
+	assert.Equal(t, 678, setParams.MessageID)
+	require.Len(t, setParams.Reaction, 1)
+	assert.Equal(t, "emoji", setParams.Reaction[0].Type)
+	assert.Equal(t, "👀", setParams.Reaction[0].Emoji)
+
+	undo()
+	require.Len(t, caller.calls, 2)
+	assert.Contains(t, caller.calls[1].URL, "setMessageReaction")
+
+	var clearParams map[string]any
+	require.NoError(t, json.Unmarshal(caller.calls[1].Data.BodyRaw, &clearParams))
+	assert.NotContains(t, clearParams, "reaction", "undo must clear reactions with an empty list")
+
+	undo()
+	assert.Len(t, caller.calls, 2, "undo must be idempotent")
+}
+
+func TestReactToMessage_APIErrorKeepsUndoNoop(t *testing.T) {
+	caller := &stubCaller{
+		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
+			return nil, errors.New(`api: 400 "Bad Request: REACTION_INVALID"`)
+		},
+	}
+	ch := newTestChannel(t, caller)
+
+	undo, err := ch.ReactToMessage(context.Background(), "12345", "678")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "REACTION_INVALID")
+	require.NotNil(t, undo)
+
+	undo()
+	assert.Len(t, caller.calls, 1, "failed reaction setup must not issue an undo request")
+}
+
+func TestReactToMessage_InvalidTargets(t *testing.T) {
+	caller := &stubCaller{
+		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
+			t.Fatal("should not be called")
+			return nil, nil
+		},
+	}
+	ch := newTestChannel(t, caller)
+
+	_, err := ch.ReactToMessage(context.Background(), "not-a-number", "678")
+	assert.Error(t, err)
+
+	_, err = ch.ReactToMessage(context.Background(), "12345", "not-a-number")
+	assert.Error(t, err)
+
+	assert.Empty(t, caller.calls)
+}
+
 func TestParseTelegramChatID_Plain(t *testing.T) {
 	cid, tid, err := parseTelegramChatID("12345")
 	assert.NoError(t, err)

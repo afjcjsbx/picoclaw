@@ -42,6 +42,10 @@ The Telegram channel uses long polling via the Telegram Bot API for bot-based co
 4. Fill in the Token in the configuration file
 5. (Optional) Configure `allow_from` to restrict which user IDs can interact (you can get IDs via `@userinfobot`)
 
+## Reactions
+
+The Telegram channel supports message reactions. The gateway acknowledges each inbound message with a 👀 reaction and removes it when the reply is sent, and the `reaction` tool can add the same reaction on demand.
+
 ## Built-in Commands
 
 Telegram auto-registers PicoClaw's top-level bot commands at startup, including `/start`, `/help`, `/show`, `/list`, and `/use`.

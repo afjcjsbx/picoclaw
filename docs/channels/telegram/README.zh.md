@@ -41,6 +41,10 @@ Telegram Channel 通过 Telegram 机器人 API 使用长轮询实现基于机器
 4. 将 Token 填入配置文件中
 5. (可选) 配置 `allow_from` 以限制允许互动的用户 ID (可通过 `@userinfobot` 获取 ID)
 
+## 消息表情回应
+
+Telegram 频道支持消息表情回应（reaction）。收到消息时，网关会自动添加 👀 表情，并在回复发送后移除；`reaction` 工具也可以按需添加该表情。
+
 ## 内置命令
 
 Telegram 会在启动时自动注册 PicoClaw 的顶级 Bot 命令，包括 `/start`、`/help`、`/show`、`/list` 和 `/use`。
