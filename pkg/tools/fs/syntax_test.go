@@ -103,6 +103,18 @@ func TestQuickSyntaxCheck(t *testing.T) {
 			checked: true,
 		},
 		{
+			name:    "valid C++ digit separators",
+			path:    "main.cpp",
+			content: "int a = 1'000;\nint b = 0xDEAD'BEEF;\n",
+			checked: true,
+		},
+		{
+			name:    "C++ char literal after a digit still parses",
+			path:    "main.cpp",
+			content: "int x = 1 + 'a';\n",
+			checked: true,
+		},
+		{
 			name:    "TOML literal string keeps backslash",
 			path:    "config.toml",
 			content: "path = 'C:\\'\n",

@@ -138,7 +138,17 @@ func checkDelimiters(content []byte, flavor syntaxFlavor) (problem string, skipp
 			for i < len(content) && content[i] != '\n' {
 				i++
 			}
-		case '"', '\'':
+		case '"':
+			var problem string
+			i, line, problem = skipQuoted(content, i, line, flavor)
+			if problem != "" {
+				return problem, false
+			}
+		case '\'':
+			if flavor == syntaxCLike && isCDigitSeparator(content, i) {
+				i++
+				continue
+			}
 			var problem string
 			i, line, problem = skipQuoted(content, i, line, flavor)
 			if problem != "" {
@@ -246,6 +256,18 @@ func skipQuoted(content []byte, i, line int, flavor syntaxFlavor) (int, int, str
 	}
 
 	return i, line, fmt.Sprintf("unterminated string starting at line %d", startLine)
+}
+
+// isCDigitSeparator reports whether the quote at i is a C/C++ digit separator
+// such as the one in 1'000 or 0xDEAD'BEEF, rather than a character literal.
+// C++14 and C23 require the separator to sit between digits.
+func isCDigitSeparator(content []byte, i int) bool {
+	return i > 0 && i+1 < len(content) &&
+		isHexDigit(content[i-1]) && isHexDigit(content[i+1])
+}
+
+func isHexDigit(c byte) bool {
+	return '0' <= c && c <= '9' || 'a' <= c && c <= 'f' || 'A' <= c && c <= 'F'
 }
 
 func closesDelimiter(open, closer byte) bool {
