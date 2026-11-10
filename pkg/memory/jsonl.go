@@ -21,6 +21,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/fileutil"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/providers/messageutil"
+	"github.com/sipeed/picoclaw/pkg/usage"
 )
 
 const (
@@ -54,6 +55,14 @@ type SessionMeta struct {
 	UpdatedAt  time.Time       `json:"updated_at"`
 	Scope      json.RawMessage `json:"scope,omitempty"`
 	Aliases    []string        `json:"aliases,omitempty"`
+
+	// Usage is the cumulative provider-reported usage of the session. Truncation,
+	// compaction, and clearing do not reduce it. See usage.go.
+	Usage *usage.Summary `json:"usage,omitempty"`
+	// UsageTracked reports whether Usage is authoritative. Metadata written
+	// before usage was tracked stays false until its counters are initialized
+	// from the session file.
+	UsageTracked bool `json:"usage_tracked,omitempty"`
 }
 
 // sessionIndex caches canonical session keys and their aliases. The index is
@@ -239,6 +248,7 @@ func (s *JSONLStore) repairSessionMetadata() error {
 	if err != nil {
 		return fmt.Errorf("memory: read session directory: %w", err)
 	}
+	var files []sessionFile
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".meta.json") {
 			continue
@@ -256,10 +266,13 @@ func (s *JSONLStore) repairSessionMetadata() error {
 		if meta.Key == "" {
 			continue
 		}
-		if _, err := s.repairSessionMeta(meta.Key, meta); err != nil {
+		repaired, err := s.repairSessionMeta(meta.Key, meta)
+		if err != nil {
 			log.Printf("memory: repairing session %q failed: %v", meta.Key, err)
 		}
+		files = append(files, sessionFile{key: meta.Key, meta: repaired, jsonlPath: s.jsonlPath(meta.Key)})
 	}
+	s.backfillUsage(files)
 	return nil
 }
 
@@ -709,6 +722,12 @@ func (s *JSONLStore) promoteAliasHistoryLocked(
 	if aliasSummary != "" {
 		canonicalMeta.Summary = aliasSummary
 	}
+	// The copied messages keep their usage fields, so the spend moves with the
+	// counters instead of being summed again from the copy. The alias stops
+	// reporting it once the canonical session holds it.
+	moved := usageOf(s.jsonlPath(alias), aliasMeta)
+	canonicalMeta.Usage = nonEmptyUsage(mergeUsage(usageOf(s.jsonlPath(sessionKey), canonicalMeta), moved))
+	canonicalMeta.UsageTracked = true
 
 	if err := s.rewriteJSONL(sessionKey, aliasHistory); err != nil {
 		return false, err
@@ -718,6 +737,12 @@ func (s *JSONLStore) promoteAliasHistoryLocked(
 			return false, fmt.Errorf("memory: write promoted meta: %w (rollback jsonl: %v)", err, rollbackErr)
 		}
 		return false, err
+	}
+
+	aliasMeta.Usage = nil
+	aliasMeta.UsageTracked = true
+	if err := s.writeMeta(alias, aliasMeta); err != nil {
+		return true, fmt.Errorf("memory: clear promoted alias usage: %w", err)
 	}
 	return true, nil
 }
@@ -947,6 +972,7 @@ func (s *JSONLStore) addMsg(sessionKey string, msg providers.Message) error {
 	}
 	meta.Count++
 	meta.UpdatedAt = now
+	s.recordUsage(sessionKey, &meta, msg)
 
 	return s.writeMeta(sessionKey, meta)
 }
@@ -1065,6 +1091,10 @@ func (s *JSONLStore) SetHistory(
 	if meta.CreatedAt.IsZero() {
 		meta.CreatedAt = now
 	}
+	// The counters are left alone: they already cover every message appended
+	// before this call. Initializing them first keeps the spend of the messages
+	// this call drops.
+	s.ensureUsageTracked(sessionKey, &meta)
 	meta.Skip = 0
 	meta.Count = len(history)
 	meta.UpdatedAt = now
@@ -1120,6 +1150,7 @@ func (s *JSONLStore) Compact(
 	// (uncompacted) file is still intact, so GetHistory reads from
 	// line 1 — returning previously-truncated messages rather than
 	// losing data. The next Compact or TruncateHistory corrects this.
+	s.ensureUsageTracked(sessionKey, &meta)
 	meta.Skip = 0
 	meta.Count = len(active)
 	meta.UpdatedAt = time.Now()
