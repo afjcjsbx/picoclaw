@@ -588,6 +588,25 @@ func TestFilesystemTool_WriteFile_SyntaxErrorIsAdvisory(t *testing.T) {
 	assert.Equal(t, `{"a":}`, string(data))
 }
 
+// TestFilesystemTool_WriteFile_SkippedSyntaxCheckOmitsField verifies a check
+// that bails out at the nesting cap is not reported as a passing check.
+func TestFilesystemTool_WriteFile_SkippedSyntaxCheckOmitsField(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "deep.go")
+
+	tool := NewWriteFileTool("", false)
+	result := tool.Execute(context.Background(), map[string]any{
+		"path":    testFile,
+		"content": strings.Repeat("(", maxSyntaxDepth+1),
+	})
+
+	assert.False(t, result.IsError, result.ForLLM)
+	payload := writeFileResultPayload(t, result.ForLLM)
+	assert.True(t, payload.Success)
+	assert.Empty(t, payload.Syntax)
+	assert.Empty(t, payload.SyntaxError)
+}
+
 // TestFilesystemTool_WriteFile_ReadBackMismatchIsError verifies that a write
 // whose read-back differs is reported as an error instead of a silent success.
 func TestFilesystemTool_WriteFile_ReadBackMismatchIsError(t *testing.T) {

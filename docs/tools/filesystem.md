@@ -82,12 +82,12 @@ On success the tool returns a compact JSON object instead of a prose line (the r
 | `resolved_path` | Absolute path the write targeted. Relative paths resolve from the workspace in restricted mode and from the process working directory otherwise |
 | `bytes_written` | Bytes this call wrote: the full content for create/overwrite, only the new suffix for an append-shaped write, `0` for unchanged |
 | `verified` | `true` when a byte-for-byte read-back matched |
-| `syntax` | `ok` when the quick syntax check ran and passed; omitted for unknown extensions |
+| `syntax` | `ok` when the quick syntax check ran and passed; omitted for unknown extensions and when the check is skipped |
 | `syntax_error` | Advisory problem found by the quick check; the write still succeeded |
 
 The read-back streams the file through a fixed 32 KiB buffer, so verification does not allocate a second copy of the content; an append-shaped write seeks past the old end and compares only the suffix. If the read-back fails or does not match, the tool returns an error JSON with `success: false`, `verified: false`, `error` (`read_back_failed` or `read_back_mismatch`), and a `message`; the file may still be on disk, so inspect it before retrying. The check verifies the bytes the filesystem returns; `WriteFileAtomic` already fsyncs the file and its directory, so `verified` is an integrity check rather than a durability guarantee.
 
-The syntax check is advisory and best-effort: `.json` uses the standard JSON validator, `.go`, `.c`, `.h`, `.cc`, `.cpp`, `.cxx`, `.hpp`, and `.hh` use a delimiter/quote/comment scanner, and `.py`, `.pyi`, and `.toml` additionally understand triple-quoted strings and `#` comments. It runs in O(n) time with a fixed 256-entry stack and no allocations, but it is not a compiler: extensions whose syntax needs a real parser (JavaScript, Rust, Java, YAML) are left unchecked. It is skipped when nesting exceeds the stack cap. For an append-shaped write, the check covers the full resulting content, not only the appended suffix.
+The syntax check is advisory and best-effort: `.json` uses the standard JSON validator, `.go`, `.c`, `.h`, `.cc`, `.cpp`, `.cxx`, `.hpp`, and `.hh` use a delimiter/quote/comment scanner, and `.py`, `.pyi`, and `.toml` additionally understand triple-quoted strings and `#` comments. It runs in O(n) time with a fixed 256-entry stack and no allocations, but it is not a compiler: extensions whose syntax needs a real parser (JavaScript, Rust, Java, YAML) are left unchecked. It is skipped when nesting exceeds the stack cap, and a skipped check omits `syntax` instead of claiming `ok`. For an append-shaped write, the check covers the full resulting content, not only the appended suffix.
 
 | Argument | Type | Required | Description |
 |----------|------|----------|-------------|

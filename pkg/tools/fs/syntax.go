@@ -42,33 +42,40 @@ func syntaxFlavorForPath(path string) syntaxFlavor {
 	}
 }
 
-// quickSyntaxCheck runs a best-effort syntax check over content. checked is
-// false when the extension has no cheap checker. problem is empty when the
-// check passed; otherwise it is a short, line-oriented description suitable
-// for the model. The write itself is never rejected because of this check.
-func quickSyntaxCheck(path string, content []byte) (checked bool, problem string) {
-	switch syntaxFlavorForPath(path) {
-	case syntaxJSON:
-		if json.Valid(content) {
-			return true, ""
-		}
-		return true, "invalid JSON"
-	case syntaxCLike:
-		return true, checkDelimiters(content, syntaxCLike)
-	case syntaxPython:
-		return true, checkDelimiters(content, syntaxPython)
-	case syntaxTOML:
-		return true, checkDelimiters(content, syntaxTOML)
-	default:
-		return false, ""
+// syntaxCheck is the outcome of the best-effort check. Checked is false when
+// the extension has no cheap checker. Skipped is true when the checker bailed
+// out before reaching a verdict, for example because nesting passed the fixed
+// stack. Problem is empty when the check passed; otherwise it is a short,
+// line-oriented description suitable for the model. The write itself is never
+// rejected because of this check.
+type syntaxCheck struct {
+	Checked bool
+	Skipped bool
+	Problem string
+}
+
+// quickSyntaxCheck runs a best-effort syntax check over content.
+func quickSyntaxCheck(path string, content []byte) syntaxCheck {
+	flavor := syntaxFlavorForPath(path)
+	if flavor == syntaxNone {
+		return syntaxCheck{}
 	}
+	if flavor == syntaxJSON {
+		if json.Valid(content) {
+			return syntaxCheck{Checked: true}
+		}
+		return syntaxCheck{Checked: true, Problem: "invalid JSON"}
+	}
+	problem, skipped := checkDelimiters(content, flavor)
+	return syntaxCheck{Checked: true, Skipped: skipped, Problem: problem}
 }
 
 // checkDelimiters scans for unbalanced brackets, unterminated strings, and
 // unterminated comments. It is O(n) time and O(1) memory: the bracket stack is
 // a fixed array and nothing is allocated while scanning. The Python and TOML
-// flavors understand # comments and triple-quoted strings.
-func checkDelimiters(content []byte, flavor syntaxFlavor) string {
+// flavors understand # comments and triple-quoted strings. skipped is true
+// when nesting exceeds the stack cap and the scan stopped without a verdict.
+func checkDelimiters(content []byte, flavor syntaxFlavor) (problem string, skipped bool) {
 	var stack [maxSyntaxDepth]byte
 	var stackLines [maxSyntaxDepth]int32
 	depth := 0
@@ -109,7 +116,7 @@ func checkDelimiters(content []byte, flavor syntaxFlavor) string {
 					i++
 				}
 				if !closed {
-					return fmt.Sprintf("unterminated block comment starting at line %d", startLine)
+					return fmt.Sprintf("unterminated block comment starting at line %d", startLine), false
 				}
 			default:
 				i++
@@ -132,7 +139,7 @@ func checkDelimiters(content []byte, flavor syntaxFlavor) string {
 			var problem string
 			i, line, problem = skipQuoted(content, i, line, tripleQuotes, literal)
 			if problem != "" {
-				return problem
+				return problem, false
 			}
 		case '`':
 			if hashComments {
@@ -154,13 +161,13 @@ func checkDelimiters(content []byte, flavor syntaxFlavor) string {
 				i++
 			}
 			if !closed {
-				return fmt.Sprintf("unterminated raw string starting at line %d", startLine)
+				return fmt.Sprintf("unterminated raw string starting at line %d", startLine), false
 			}
 		case '{', '[', '(':
 			if depth >= maxSyntaxDepth {
 				// Too deeply nested for the fixed stack: skip rather than
 				// report a problem that may not exist.
-				return ""
+				return "", true
 			}
 			stack[depth] = c
 			stackLines[depth] = int32(line)
@@ -168,11 +175,11 @@ func checkDelimiters(content []byte, flavor syntaxFlavor) string {
 			i++
 		case '}', ']', ')':
 			if depth == 0 {
-				return fmt.Sprintf("unexpected %q at line %d", c, line)
+				return fmt.Sprintf("unexpected %q at line %d", c, line), false
 			}
 			open := stack[depth-1]
 			if !closesDelimiter(open, c) {
-				return fmt.Sprintf("mismatched %q at line %d (opened %q)", c, line, open)
+				return fmt.Sprintf("mismatched %q at line %d (opened %q)", c, line, open), false
 			}
 			depth--
 			i++
@@ -182,9 +189,9 @@ func checkDelimiters(content []byte, flavor syntaxFlavor) string {
 	}
 
 	if depth > 0 {
-		return fmt.Sprintf("unclosed %q opened at line %d", stack[depth-1], stackLines[depth-1])
+		return fmt.Sprintf("unclosed %q opened at line %d", stack[depth-1], stackLines[depth-1]), false
 	}
-	return ""
+	return "", false
 }
 
 // skipQuoted advances past a quoted literal. Triple-quoted literals are only

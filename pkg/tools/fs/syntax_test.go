@@ -13,6 +13,7 @@ func TestQuickSyntaxCheck(t *testing.T) {
 		path    string
 		content string
 		checked bool
+		skipped bool
 		problem string
 	}{
 		{
@@ -124,14 +125,16 @@ func TestQuickSyntaxCheck(t *testing.T) {
 			path:    "main.go",
 			content: strings.Repeat("(", maxSyntaxDepth+1),
 			checked: true,
+			skipped: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			checked, problem := quickSyntaxCheck(tt.path, []byte(tt.content))
-			assert.Equal(t, tt.checked, checked)
-			assert.Equal(t, tt.problem, problem)
+			check := quickSyntaxCheck(tt.path, []byte(tt.content))
+			assert.Equal(t, tt.checked, check.Checked)
+			assert.Equal(t, tt.skipped, check.Skipped)
+			assert.Equal(t, tt.problem, check.Problem)
 		})
 	}
 }

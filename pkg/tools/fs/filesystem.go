@@ -1264,16 +1264,18 @@ func (t *WriteFileTool) unchangedResult(path string, content []byte) *ToolResult
 	return SilentResult(string(payload))
 }
 
-// applySyntaxCheck fills the advisory syntax fields for known extensions.
+// applySyntaxCheck fills the advisory syntax fields for known extensions. A
+// skipped check is reported as absent rather than as a pass, so the model never
+// sees "ok" for a check that did not run.
 func applySyntaxCheck(result *writeFileResult, path string, content []byte) {
-	checked, problem := quickSyntaxCheck(path, content)
-	if !checked {
+	check := quickSyntaxCheck(path, content)
+	if !check.Checked || check.Skipped {
 		return
 	}
-	if problem == "" {
+	if check.Problem == "" {
 		result.Syntax = "ok"
 	} else {
-		result.SyntaxError = problem
+		result.SyntaxError = check.Problem
 	}
 }
 
