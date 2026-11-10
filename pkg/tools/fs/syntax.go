@@ -90,7 +90,6 @@ func checkDelimiters(content []byte, flavor syntaxFlavor) (problem string, skipp
 	depth := 0
 	line := 1
 	hashComments := flavor == syntaxPython || flavor == syntaxTOML
-	tripleQuotes := hashComments
 
 	for i := 0; i < len(content); {
 		c := content[i]
@@ -140,13 +139,8 @@ func checkDelimiters(content []byte, flavor syntaxFlavor) (problem string, skipp
 				i++
 			}
 		case '"', '\'':
-			// TOML single-quoted strings are literal; Python raw strings keep
-			// backslashes as data. Both must not treat a backslash as an escape
-			// or a valid string can look unterminated.
-			literal := (flavor == syntaxTOML && c == '\'') ||
-				(flavor == syntaxPython && pythonRawPrefix(content, i))
 			var problem string
-			i, line, problem = skipQuoted(content, i, line, tripleQuotes, literal)
+			i, line, problem = skipQuoted(content, i, line, flavor)
 			if problem != "" {
 				return problem, false
 			}
@@ -205,11 +199,15 @@ func checkDelimiters(content []byte, flavor syntaxFlavor) (problem string, skipp
 
 // skipQuoted advances past a quoted literal. Triple-quoted literals are only
 // recognized in Python and TOML; C-like languages use single-line strings and
-// Go raw strings are handled by the backtick branch. literal disables escape
-// processing for TOML literal strings and Python raw strings.
-func skipQuoted(content []byte, i, line int, tripleQuotes, literal bool) (int, int, string) {
+// Go raw strings are handled by the backtick branch. TOML single-quoted
+// literals do not process escapes. Python raw strings keep the backslash in the
+// data, but it still prevents the following quote from closing the literal, so
+// raw strings are scanned like normal strings here.
+func skipQuoted(content []byte, i, line int, flavor syntaxFlavor) (int, int, string) {
 	quote := content[i]
 	startLine := line
+	tripleQuotes := flavor == syntaxPython || flavor == syntaxTOML
+	literal := flavor == syntaxTOML && quote == '\''
 	triple := tripleQuotes && i+2 < len(content) && content[i+1] == quote && content[i+2] == quote
 	if triple {
 		i += 3
@@ -248,22 +246,6 @@ func skipQuoted(content []byte, i, line int, tripleQuotes, literal bool) (int, i
 	}
 
 	return i, line, fmt.Sprintf("unterminated string starting at line %d", startLine)
-}
-
-// pythonRawPrefix reports whether the string starting at quoteAt has an r/R
-// prefix (r"", rb"", fr"", ...), which makes backslashes literal.
-func pythonRawPrefix(content []byte, quoteAt int) bool {
-	for i := quoteAt - 1; i >= 0; i-- {
-		switch content[i] {
-		case 'r', 'R':
-			return true
-		case 'b', 'B', 'u', 'U', 'f', 'F':
-			continue
-		default:
-			return false
-		}
-	}
-	return false
 }
 
 func closesDelimiter(open, closer byte) bool {

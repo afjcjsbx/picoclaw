@@ -84,10 +84,17 @@ func TestQuickSyntaxCheck(t *testing.T) {
 			checked: true,
 		},
 		{
-			name:    "Python raw string keeps trailing backslash",
+			name:    "Python raw string keeps escaped quote",
+			path:    "script.py",
+			content: "s = r\"\\\"\"\n",
+			checked: true,
+		},
+		{
+			name:    "Python raw string with trailing backslash is unterminated",
 			path:    "script.py",
 			content: "path = r\"C:\\\"\n",
 			checked: true,
+			problem: "unterminated string starting at line 1",
 		},
 		{
 			name:    "Python escaped quote",
