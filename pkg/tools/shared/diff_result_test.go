@@ -4,9 +4,10 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
-func TestDiffResult_UserVisibleUnifiedDiff(t *testing.T) {
+func TestDiffResult_UnifiedDiffForModelAndUser(t *testing.T) {
 	result := DiffResult("/tmp/example.txt", []byte("alpha\nbeta\ngamma\n"), []byte("alpha\nbeta 2\ngamma\n"))
 
 	if result == nil {
@@ -18,14 +19,12 @@ func TestDiffResult_UserVisibleUnifiedDiff(t *testing.T) {
 	if result.IsError {
 		t.Fatal("expected DiffResult to be successful")
 	}
-	if result.ForLLM == result.ForUser {
-		t.Fatal("expected compact model context instead of duplicating the full diff")
-	}
-	if len(result.ForLLM) >= len(result.ForUser) {
-		t.Fatalf("expected ForLLM to stay smaller than ForUser, got %d vs %d", len(result.ForLLM), len(result.ForUser))
-	}
-	if result.ForLLM != "File edited: /tmp/example.txt" {
-		t.Fatalf("expected compact summary in ForLLM, got %q", result.ForLLM)
+
+	// A small diff fits both budgets, so the model and the UI share the
+	// exact same string (and backing memory).
+	if result.ForLLM != result.ForUser {
+		t.Fatalf("expected shared model/user diff, got\nForLLM: %q\nForUser: %q",
+			result.ForLLM, result.ForUser)
 	}
 
 	for _, want := range []string{
@@ -39,8 +38,11 @@ func TestDiffResult_UserVisibleUnifiedDiff(t *testing.T) {
 		"+beta 2",
 		" gamma",
 	} {
+		if !strings.Contains(result.ForLLM, want) {
+			t.Fatalf("model-facing diff missing %q:\n%s", want, result.ForLLM)
+		}
 		if !strings.Contains(result.ForUser, want) {
-			t.Fatalf("DiffResult output missing %q:\n%s", want, result.ForUser)
+			t.Fatalf("user-facing diff missing %q:\n%s", want, result.ForUser)
 		}
 	}
 }
@@ -124,23 +126,43 @@ func TestDiffResult_SkipsPreviewForLargeFiles(t *testing.T) {
 	}
 }
 
-func TestDiffResult_TruncatesLargeUserPreview(t *testing.T) {
+func TestDiffResult_TruncatesModelAndUserPreviews(t *testing.T) {
 	after := []byte(strings.Repeat("abcd", maxUserDiffPreviewBytes/4) + "\n")
 
 	result := DiffResult("preview.txt", []byte("before\n"), after)
 
 	if result.Silent {
-		t.Fatal("expected preview to remain user-visible below the input caps")
+		t.Fatal("expected preview to remain visible below the input caps")
 	}
 	if !strings.Contains(result.ForUser, diffPreviewTruncatedNote) {
-		t.Fatalf("expected truncated preview note, got %q", result.ForUser)
+		t.Fatalf("expected truncated user preview note, got %q", result.ForUser)
 	}
-	if !strings.Contains(result.ForLLM, diffPreviewTruncatedNote) {
-		t.Fatalf("expected model summary to mention truncation, got %q", result.ForLLM)
+	for _, want := range []string{modelDiffTruncatedNote, "[DIFF TRUNCATED"} {
+		if !strings.Contains(result.ForLLM, want) {
+			t.Fatalf("expected model diff to contain %q, got %q", want, result.ForLLM)
+		}
 	}
-	if len(result.ForLLM) >= len(result.ForUser) {
-		t.Fatalf("expected ForLLM to remain smaller than ForUser, "+
-			"got %d vs %d", len(result.ForLLM), len(result.ForUser))
+	if got := utf8.RuneCountInString(result.ForLLM); got > maxModelDiffRunes+512 {
+		t.Fatalf("model diff is not bounded: %d runes", got)
+	}
+	if got := len(result.ForUser); got > maxUserDiffPreviewBytes+512 {
+		t.Fatalf("user diff is not bounded: %d bytes", got)
+	}
+}
+
+func TestDiffResult_KeepsFullUserPreviewBelowUserBudget(t *testing.T) {
+	after := []byte("before\n" + strings.Repeat("x", maxModelDiffRunes+100) + "\n")
+
+	result := DiffResult("model-only.txt", []byte("before\n"), after)
+
+	if strings.Contains(result.ForUser, diffPreviewTruncatedNote) {
+		t.Fatalf("expected user preview to fit its larger budget, got %q", result.ForUser)
+	}
+	if !strings.Contains(result.ForLLM, modelDiffTruncatedNote) {
+		t.Fatalf("expected model diff to be cut at maxModelDiffRunes, got %q", result.ForLLM)
+	}
+	if result.ForLLM == result.ForUser {
+		t.Fatal("expected different bounded views when only the model budget is exceeded")
 	}
 }
 

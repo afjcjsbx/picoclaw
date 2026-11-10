@@ -83,7 +83,7 @@ For targeted changes, prefer `edit_file` or `append_file`: PicoClaw advertises t
 
 ## `edit_file`
 
-Edits an existing file by replacing a single, exact occurrence of `old_text` with `new_text`, or by applying a V4A patch, and returns a diff of the change. Provide either `old_text` + `new_text` or `patch`, never both.
+Edits an existing file by replacing a single, exact occurrence of `old_text` with `new_text`, or by applying a V4A patch, and returns a unified diff of the change. Provide either `old_text` + `new_text` or `patch`, never both.
 
 | Argument | Type | Required | Description |
 |----------|------|----------|-------------|
@@ -93,6 +93,8 @@ Edits an existing file by replacing a single, exact occurrence of `old_text` wit
 | `patch` | string | when `old_text`/`new_text` are absent | V4A patch body for this file (see below) |
 
 With `old_text`/`new_text`, the call fails when `old_text` is not found, or when it appears more than once (add more context to make the match unique).
+
+The result carries the unified diff (three context lines, `a/` and `b/` paths) to both the model and the chat UI, so a follow-up turn can inspect the exact context lines the edit matched, including EOF newline transitions, without re-reading the file. The diff is only built for files under 64 KiB and 2,000 lines; larger files return the one-line summary plus a note to call `read_file`. To keep a single edit from flooding the model context, the model-facing diff is bounded to 12,288 characters with a head-and-tail window and an explicit omission notice, which stays under the default `tools.max_inline_result_chars` (16 KiB) so the result is not spilled to an artifact; the user-facing preview is bounded to 16 KiB. A cut diff is reported as truncated, and `read_file` returns the full contents.
 
 With `patch`, `edit_file` applies one or more hunks to the file. The patch may be wrapped in `*** Begin Patch` / `*** End Patch` and may include a `*** Update File: <path>` header; the header path must match `path`. Each hunk starts with `@@` (its text is informational) and uses lines prefixed with a space (context), `-` (removed), or `+` (added). `*** End of File` anchors the preceding hunk to the end of the file. Context matching starts after the previous hunk, falls back to the whole file when hunks are not in file order, and must be unique; trailing whitespace differences are tolerated, and matched context lines keep the bytes already in the file. A line containing only a single space is an empty context line; blank lines immediately before a closing directive are treated as formatting. A hunk with no context or removed lines must end with `*** End of File`, which appends its added lines at the end of the file; otherwise the call is rejected because the insertion point is ambiguous. Add, delete, move, and multi-file sections are rejected because `edit_file` edits exactly one existing file. Each matched line keeps its original LF or CRLF ending; inserted lines follow the replaced or adjacent line, so files with mixed line endings are preserved.
 

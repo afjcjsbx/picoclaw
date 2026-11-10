@@ -35,6 +35,7 @@ func (t *EditFileTool) Description() string {
 		"The old_text must exist exactly in the file. Prefer patch for multi-hunk edits: it accepts " +
 		"'*** Begin Patch' / '*** End Patch' with an optional '*** Update File: <path>' header, and hunk lines " +
 		"starting with ' ' (context), '-' (remove), or '+' (add). Hunks may be given in any order and each needs at least one context or removed line; a hunk with no context appends at end of file when it ends with '*** End of File'. Provide either patch or old_text/new_text, not both. " +
+		"The result includes a unified diff of the applied change, so no follow-up read is needed to verify the edit. " +
 		"Standard JSON escaping applies: \\n for newline and \\\\n for literal backslash-n."
 }
 
