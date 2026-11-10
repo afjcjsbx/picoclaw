@@ -247,6 +247,45 @@ func TestDreamingGateRedactsSecretsAndFlagsInstructions(t *testing.T) {
 	t.Fatal("instruction-like message was not flagged")
 }
 
+func TestDreamingGateReadsNestedMemoryLimits(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 is not installed")
+	}
+	root := dreamExampleRoot(t)
+	workspace := t.TempDir()
+	data := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspace, "memory"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	entries := strings.Repeat("durable fact line\n", 30)
+	if err := os.WriteFile(filepath.Join(workspace, "memory", "MEMORY.md"), []byte(entries), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(data, "home"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	config := `{"agents":{"defaults":{"memory":{"memory_char_limit":200,"user_char_limit":100}}}}`
+	if err := os.WriteFile(filepath.Join(data, "home", "config.json"), []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	result := runDreamGate(t, root, workspace, data)
+	if result.WakeAgent == nil || !*result.WakeAgent {
+		t.Fatalf("gate = %+v, want pressure wake from nested config", result)
+	}
+	var digest map[string]any
+	if err := json.Unmarshal([]byte(result.Context), &digest); err != nil {
+		t.Fatal(err)
+	}
+	memory := digest["memory"].(map[string]any)
+	if memory["limit"].(float64) != 200 {
+		t.Fatalf("limit = %v, want 200", memory["limit"])
+	}
+	if memory["pressure"].(float64) < 0.85 {
+		t.Fatalf("pressure = %v", memory["pressure"])
+	}
+}
+
 func TestDreamingGateWakesOnMemoryPressure(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 is not installed")

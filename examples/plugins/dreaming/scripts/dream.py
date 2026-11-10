@@ -154,6 +154,13 @@ def resolve_data_dir(value, workspace):
     return path
 
 
+def first_positive(*values):
+    for value in values:
+        if isinstance(value, int) and value > 0:
+            return value
+    return None
+
+
 def load_limits(workspace):
     limits = {
         "memory_limit": DEFAULT_MEMORY_LIMIT,
@@ -173,14 +180,29 @@ def load_limits(workspace):
         if not isinstance(config, dict):
             continue
         defaults = (config.get("agents") or {}).get("defaults") or {}
+        memory = defaults.get("memory")
+        if not isinstance(memory, dict):
+            memory = {}
         mapping = {
-            "memory_limit": defaults.get("memory_char_limit"),
-            "user_limit": defaults.get("user_char_limit"),
-            "daily_notes": defaults.get("recent_daily_notes_count"),
-            "daily_note_chars": defaults.get("daily_notes_char_limit"),
+            # Current config nests these under agents.defaults.memory; accept
+            # the flat form too so hand-written or legacy configs still work.
+            "memory_limit": first_positive(
+                memory.get("memory_char_limit"), defaults.get("memory_char_limit")
+            ),
+            "user_limit": first_positive(
+                memory.get("user_char_limit"), defaults.get("user_char_limit")
+            ),
+            "daily_notes": first_positive(
+                memory.get("recent_daily_notes_count"),
+                defaults.get("recent_daily_notes_count"),
+            ),
+            "daily_note_chars": first_positive(
+                memory.get("daily_notes_char_limit"),
+                defaults.get("daily_notes_char_limit"),
+            ),
         }
         for key, value in mapping.items():
-            if isinstance(value, int) and value > 0:
+            if value is not None:
                 limits[key] = value
         break
     return limits
