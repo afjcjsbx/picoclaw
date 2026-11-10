@@ -343,11 +343,11 @@ Every foreground call starts a fresh shell in the configured working directory; 
 
 Foreground results start with a one-line [exec] {...} header (exitCode, timedOut, truncated, durationMs, error), then raw stdout/stderr. Non-zero exit codes can be normal: grep returns 1 for no match and diff returns 1 for differences.
 
-Oversized output is truncated automatically and the full stream is saved as an artifact, so do not pipe through head/tail just to shorten it.
+Oversized output is truncated automatically and the full stream is saved as an artifact; use the artifact path in the result with read_file when you need the omitted middle, instead of piping through head/tail or re-running the command.
 
 action=run requires command. timeout is in seconds; 0 disables it; it is not supported with background=true.
 
-Use background=true only when the command must outlive the call. It returns a sessionId. Use list to inspect sessions, poll for a non-blocking preview, wait to block until exit, read for offset/limit byte ranges, write for stdin, send-keys for PTY keys, and kill to terminate. Prefer wait over polling; notify=true sends a completion message. Use pty=true for interactive programs (not supported on Windows).
+Use background=true only when the command must outlive the call. It returns a sessionId. Use list to inspect sessions, poll for a non-blocking preview, wait to block until exit, read for non-destructive offset/limit byte ranges (defaults to the most recent bytes), write for stdin, send-keys for PTY keys, and kill to terminate. Prefer wait over polling; notify=true sends a completion message. Use pty=true for interactive programs (not supported on Windows).
 
 Run independent commands in separate calls; %s Do not separate commands with newlines.`, runtime.GOOS, shell, chainGuidance)
 }
