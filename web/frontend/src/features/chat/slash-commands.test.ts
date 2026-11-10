@@ -97,8 +97,8 @@ describe("filterSlashPaletteItems", () => {
     ).toEqual(["/help", "/btw", "/clear", "/voice"])
   })
 
-  it("caps the menu to eight visible entries", () => {
-    expect(filterSlashPaletteItems(MANY, "", [])).toHaveLength(8)
+  it("keeps every matching entry so custom commands stay visible", () => {
+    expect(filterSlashPaletteItems(MANY, "", [])).toHaveLength(MANY.length)
   })
 })
 
