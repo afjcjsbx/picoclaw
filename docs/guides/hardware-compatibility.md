@@ -151,4 +151,4 @@ Available builds: `linux-amd64`, `linux-arm64`, `linux-arm`, `linux-riscv64`, `l
 3. Include: name, arch, SoC, RAM, year, and a link if available
 4. Submit a PR
 
-Hardware vendors: want to add official support or co-promote? Open an issue or reach out via [Discord](https://discord.gg/V4sAZ9XWpN).
+Hardware vendors: want to add official support or co-promote? Open an issue or reach out via [Discord](https://discord.gg/XTt5Y6cJfY).

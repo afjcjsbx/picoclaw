@@ -92,4 +92,4 @@ The model alias you referenced is not defined in `model_list`, or the alias/prov
 The launcher only auto-starts the Gateway when a usable default model is configured. Add credentials/models first, or use **Start Gateway** manually — see [Web UI & Launcher Guide](webui.md).
 
 **Where do I report bugs or ask questions?**
-Join the [Discord community](https://discord.gg/bEuEDnKpf) or open an issue on [GitHub](https://github.com/afjcjsbx/picoclaw/issues).
+Join the [Discord community](https://discord.gg/XTt5Y6cJfY) or open an issue on [GitHub](https://github.com/afjcjsbx/picoclaw/issues).

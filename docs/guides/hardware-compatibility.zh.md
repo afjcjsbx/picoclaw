@@ -154,4 +154,4 @@ tar xzf picoclaw_Linux_arm64.tar.gz
 3. 包含：名称、架构、SoC、内存、年份，以及可用的链接
 4. 提交 PR
 
-硬件厂商：想要添加官方支持或联合推广？请提交 issue 或通过 [Discord](https://discord.gg/V4sAZ9XWpN) 联系我们。
+硬件厂商：想要添加官方支持或联合推广？请提交 issue 或通过 [Discord](https://discord.gg/XTt5Y6cJfY) 联系我们。

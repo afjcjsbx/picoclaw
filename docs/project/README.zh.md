@@ -20,7 +20,7 @@ _刻意保持小巧。小巧不等于简陋。小巧，已然足够。_
   <img src="https://img.shields.io/github/stars/afjcjsbx/picoclaw?style=flat&label=stars" alt="GitHub Stars">
   <br>
   <a href="https://afjcjsbx.github.io/picoclaw/"><img src="https://img.shields.io/badge/Docs-Read-007acc?style=flat&logo=read-the-docs&logoColor=white" alt="文档"></a>
-  <a href="https://discord.gg/bEuEDnKpf"><img src="https://img.shields.io/badge/Discord-Join%20the%20community-5865F2?style=flat&logo=discord&logoColor=white" alt="Discord"></a>
+  <a href="https://discord.gg/XTt5Y6cJfY"><img src="https://img.shields.io/badge/Discord-Join%20the%20community-5865F2?style=flat&logo=discord&logoColor=white" alt="Discord"></a>
   <a href="https://deepwiki.com/afjcjsbx/picoclaw"><img src="https://img.shields.io/badge/Wiki-DeepWiki-FFA500?style=flat&logo=wikipedia&logoColor=white" alt="DeepWiki"></a>
 </p>
 
@@ -34,7 +34,7 @@ _刻意保持小巧。小巧不等于简陋。小巧，已然足够。_
 ---
 
 <p align="center">
-  <a href="https://discord.gg/bEuEDnKpf">
+  <a href="https://discord.gg/XTt5Y6cJfY">
     <img src="https://raw.githubusercontent.com/afjcjsbx/picoclaw/main/assets/discord-banner.png" alt="PicoClaw Discord —— 结识开发者、分享想法、获取帮助" width="80%">
   </a>
 </p>
@@ -548,4 +548,4 @@ PicoClaw 通过 `cron` 工具支持定时提醒和重复任务：
 
 **PicoClaw 在开放中构建。来和我们一起构建它吧。**
 
-[⭐ 给 PicoClaw 点星](https://github.com/afjcjsbx/picoclaw) · [💬 加入 Discord](https://discord.gg/bEuEDnKpf) · [🐛 报告问题](https://github.com/afjcjsbx/picoclaw/issues)
+[⭐ 给 PicoClaw 点星](https://github.com/afjcjsbx/picoclaw) · [💬 加入 Discord](https://discord.gg/XTt5Y6cJfY) · [🐛 报告问题](https://github.com/afjcjsbx/picoclaw/issues)

@@ -16,7 +16,7 @@ _Small on purpose. Small is not lesser. Small is enough._
   <img src="https://img.shields.io/github/stars/afjcjsbx/picoclaw?style=flat&label=stars" alt="GitHub stars">
   <br>
   <a href="https://afjcjsbx.github.io/picoclaw/"><img src="https://img.shields.io/badge/Docs-Read-007acc?style=flat&logo=read-the-docs&logoColor=white" alt="Documentation"></a>
-  <a href="https://discord.gg/bEuEDnKpf"><img src="https://img.shields.io/badge/Discord-Join%20the%20community-5865F2?style=flat&logo=discord&logoColor=white" alt="Discord"></a>
+  <a href="https://discord.gg/XTt5Y6cJfY"><img src="https://img.shields.io/badge/Discord-Join%20the%20community-5865F2?style=flat&logo=discord&logoColor=white" alt="Discord"></a>
   <a href="https://deepwiki.com/afjcjsbx/picoclaw"><img src="https://img.shields.io/badge/Wiki-DeepWiki-FFA500?style=flat&logo=wikipedia&logoColor=white" alt="DeepWiki"></a>
 </p>
 
@@ -30,7 +30,7 @@ _Small on purpose. Small is not lesser. Small is enough._
 ---
 
 <p align="center">
-  <a href="https://discord.gg/bEuEDnKpf">
+  <a href="https://discord.gg/XTt5Y6cJfY">
     <img src="assets/discord-banner.png" alt="PicoClaw on Discord — meet builders, share ideas, get help" width="80%">
   </a>
 </p>
@@ -609,4 +609,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 **PicoClaw is built in the open. Come build it with us.**
 
-[⭐ Star PicoClaw](https://github.com/afjcjsbx/picoclaw) · [💬 Join Discord](https://discord.gg/bEuEDnKpf) · [🐛 Report an issue](https://github.com/afjcjsbx/picoclaw/issues)
+[⭐ Star PicoClaw](https://github.com/afjcjsbx/picoclaw) · [💬 Join Discord](https://discord.gg/XTt5Y6cJfY) · [🐛 Report an issue](https://github.com/afjcjsbx/picoclaw/issues)
