@@ -163,7 +163,7 @@ func (t *AppendFileTool) Execute(ctx context.Context, args map[string]any) *Tool
 		return ErrorResult("content is required")
 	}
 
-	if err := appendFile(t.fs, path, content); err != nil {
+	if err := appendFile(t.fs, path, []byte(content)); err != nil {
 		return ErrorResult(err.Error())
 	}
 	return SilentResult(fmt.Sprintf("Appended to %s", path))
@@ -213,10 +213,11 @@ func editFile(sysFs fileSystem, path, oldText, newText string) ([]byte, []byte, 
 
 // appendFile appends content through the filesystem's append implementation
 // when available, falling back to read+write for filesystems that cannot
-// append in place.
-func appendFile(sysFs fileSystem, path, appendContent string) error {
+// append in place. It takes []byte so callers that already hold the content
+// can pass a slice without copying it.
+func appendFile(sysFs fileSystem, path string, appendContent []byte) error {
 	if appender, ok := sysFs.(fileAppender); ok {
-		return appender.AppendFile(path, []byte(appendContent))
+		return appender.AppendFile(path, appendContent)
 	}
 
 	content, err := sysFs.ReadFile(path)
@@ -224,7 +225,7 @@ func appendFile(sysFs fileSystem, path, appendContent string) error {
 		return err
 	}
 
-	return sysFs.WriteFile(path, append(content, []byte(appendContent)...))
+	return sysFs.WriteFile(path, append(content, appendContent...))
 }
 
 // replaceEditContent handles the core logic of finding and replacing a single occurrence of oldText.

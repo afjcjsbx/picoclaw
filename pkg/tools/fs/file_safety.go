@@ -119,6 +119,12 @@ func (p *protectedWriteFs) checkRead(path string) error {
 	return checkSensitiveReadPath(path, p.workspace, p.restrict)
 }
 
+// ResolvePath delegates to the backend so the host, sandbox, and whitelist
+// path rules live next to the operations that use them.
+func (p *protectedWriteFs) ResolvePath(path string) string {
+	return resolveToolPath(p.fileSystem, path)
+}
+
 func (p *protectedWriteFs) Open(path string) (fs.File, error) {
 	if err := p.checkWrite(path); err != nil {
 		return nil, err

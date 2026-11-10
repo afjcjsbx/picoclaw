@@ -976,9 +976,8 @@ func readerHasMoreContent(reader *bufio.Reader) (bool, error) {
 }
 
 type WriteFileTool struct {
-	fs        fileSystem
-	workspace string
-	altTools  []string
+	fs       fileSystem
+	altTools []string
 }
 
 // maxWriteFileCompareBytes bounds how much write_file reads from an existing
@@ -986,18 +985,87 @@ type WriteFileTool struct {
 // the overwrite guard instead of paying an extra full read.
 const maxWriteFileCompareBytes = 8 << 20
 
+// writeVerifyChunkSize bounds the read-back buffer. The verification streams
+// the file through this buffer instead of reading it into a second []byte, so
+// a large write costs one fixed allocation rather than twice the content size.
+const writeVerifyChunkSize = 32 * 1024
+
+// writeAction is the action a successful write_file call performed.
+type writeAction string
+
+const (
+	writeActionCreated     writeAction = "created"
+	writeActionOverwritten writeAction = "overwritten"
+	writeActionAppended    writeAction = "appended"
+	writeActionUnchanged   writeAction = "unchanged"
+)
+
+// writeResultError is the machine-readable error code in a write_file result.
+type writeResultError string
+
+const (
+	writeErrorFileExists       writeResultError = "file_exists"
+	writeErrorReadBackFailed   writeResultError = "read_back_failed"
+	writeErrorReadBackMismatch writeResultError = "read_back_mismatch"
+)
+
+// syntaxStatus is the verdict of a completed quick syntax check.
+type syntaxStatus string
+
+const syntaxStatusOK syntaxStatus = "ok"
+
 // writeFileConflict is the machine-readable payload returned when write_file
 // refuses to replace an existing file. The model can read path and
 // recommended_action without parsing the prose error, so it does not have to
 // probe the filesystem to pick its next call.
 type writeFileConflict struct {
-	Error             string   `json:"error"`
-	Path              string   `json:"path"`
-	RecommendedAction string   `json:"recommended_action"`
-	AvailableActions  []string `json:"available_actions"`
-	ExistingBytes     int64    `json:"existing_bytes"`
-	NewBytes          int      `json:"new_bytes"`
-	OverwriteRequired bool     `json:"overwrite_required"`
+	Error             writeResultError `json:"error"`
+	Path              string           `json:"path"`
+	ResolvedPath      string           `json:"resolved_path"`
+	RecommendedAction string           `json:"recommended_action"`
+	AvailableActions  []string         `json:"available_actions"`
+	ExistingBytes     int64            `json:"existing_bytes"`
+	NewBytes          int              `json:"new_bytes"`
+	OverwriteRequired bool             `json:"overwrite_required"`
+}
+
+// writeFileResult is the machine-readable success payload. It tells the model
+// what actually happened (action), where the write landed (resolved_path), how
+// many bytes reached the file (bytes_written), whether a read-back matched
+// (verified), and whether the quick syntax check found a problem.
+type writeFileResult struct {
+	Success      bool        `json:"success"`
+	Action       writeAction `json:"action"`
+	ResolvedPath string      `json:"resolved_path"`
+	BytesWritten int         `json:"bytes_written"`
+	// Verified is true when the content was confirmed byte-for-byte: by a
+	// read-back after a write, or by the equality comparison for an unchanged
+	// no-op.
+	Verified    bool             `json:"verified"`
+	Syntax      syntaxStatus     `json:"syntax,omitempty"`
+	SyntaxError string           `json:"syntax_error,omitempty"`
+	Error       writeResultError `json:"error,omitempty"`
+	Message     string           `json:"message,omitempty"`
+	Detail      string           `json:"detail,omitempty"`
+}
+
+// pathResolver is implemented by filesystem backends that know where a tool
+// path lands on the host. write_file uses it to report resolved_path without
+// carrying a second copy of the backend's relative-path rules.
+type pathResolver interface {
+	ResolvePath(path string) string
+}
+
+// resolveToolPath asks the backend where path lands, falling back to the
+// process working directory for custom backends and test doubles.
+func resolveToolPath(sysFs fileSystem, path string) string {
+	if resolver, ok := sysFs.(pathResolver); ok {
+		return resolver.ResolvePath(path)
+	}
+	if abs, err := filepath.Abs(path); err == nil {
+		return abs
+	}
+	return path
 }
 
 // writePolicyChecker exposes the write tool's policy checks without opening or
@@ -1024,8 +1092,7 @@ func NewWriteFileTool(
 			workspace:  workspace,
 			restrict:   restrict,
 		},
-		workspace: workspace,
-		altTools:  []string{"append_file", "edit_file"},
+		altTools: []string{"append_file", "edit_file"},
 	}
 }
 
@@ -1055,7 +1122,8 @@ func (t *WriteFileTool) Name() string {
 
 func (t *WriteFileTool) Description() string {
 	desc := "Write content to a file, replacing any existing content. Content is written byte-for-byte after argument decoding. Standard JSON escaping applies: \\n for newline and \\\\n for a literal backslash-n sequence. " +
-		"If the file already exists, identical content is a no-op and content that only extends the existing file is accepted; any other replacement requires overwrite=true, which replaces the ENTIRE file."
+		"If the file already exists, identical content is a no-op and content that only extends the existing file is accepted; any other replacement requires overwrite=true, which replaces the ENTIRE file. " +
+		"Returns JSON with the resolved absolute path, bytes_written, verified (a byte-for-byte read-back), and a quick syntax check for known extensions."
 	if phrase := t.altToolsPhrase(); phrase != "" {
 		desc += fmt.Sprintf(
 			" To add to or change part of an existing file without losing its current contents, use %s instead.",
@@ -1147,23 +1215,20 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *ToolR
 	if exists && canCompare {
 		if bytes.Equal(existing, contentBytes) {
 			// Writing identical bytes would only churn the mtime and wake file
-			// watchers, so treat it as a successful no-op.
-			return SilentResult(fmt.Sprintf(
-				"File unchanged: %s (content is identical to the existing file)",
-				path,
-			))
+			// watchers, so treat it as a successful no-op. The comparison above
+			// already proves the file matches, so no read-back is needed.
+			return t.unchangedResult(path, contentBytes)
 		}
 		if bytes.HasPrefix(contentBytes, existing) {
 			// The caller sent the old file plus a suffix: this is an append in
 			// disguise, and applying only the suffix cannot lose existing data.
-			if err := appendFile(t.fs, path, string(contentBytes[len(existing):])); err != nil {
+			appended := len(contentBytes) - len(existing)
+			if err := appendFile(t.fs, path, contentBytes[len(existing):]); err != nil {
 				return ErrorResult(err.Error())
 			}
-			return SilentResult(fmt.Sprintf(
-				"File written: %s (existing content preserved; appended %d bytes)",
-				path,
-				len(contentBytes)-len(existing),
-			))
+			// Verify only the appended suffix: seeking past the old end keeps
+			// the read-back proportional to what this call actually wrote.
+			return t.successResult(writeActionAppended, path, appended, contentBytes, len(existing))
 		}
 	}
 
@@ -1175,7 +1240,165 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *ToolR
 		return ErrorResult(err.Error())
 	}
 
-	return SilentResult(fmt.Sprintf("File written: %s", path))
+	action := writeActionCreated
+	if exists {
+		action = writeActionOverwritten
+	}
+	return t.successResult(action, path, len(contentBytes), contentBytes, 0)
+}
+
+// successResult verifies the write and returns the structured payload. content
+// is the full post-write file; verifyFrom is the offset where this call started
+// writing, so an append only re-reads its suffix.
+func (t *WriteFileTool) successResult(
+	action writeAction, path string,
+	bytesWritten int,
+	content []byte,
+	verifyFrom int,
+) *ToolResult {
+	resolved := resolveToolPath(t.fs, path)
+	verified, err := verifyWrittenFile(t.fs, path, content[verifyFrom:], int64(verifyFrom))
+	if err != nil {
+		return writeFileFailure(
+			action,
+			resolved,
+			bytesWritten,
+			writeErrorReadBackFailed,
+			"the file was written but the read-back failed; inspect it before retrying",
+			err.Error(),
+		)
+	}
+	if !verified {
+		return writeFileFailure(
+			action,
+			resolved,
+			bytesWritten,
+			writeErrorReadBackMismatch,
+			"the file was written but the read-back did not match; inspect it before retrying",
+			"",
+		)
+	}
+
+	result := writeFileResult{
+		Success:      true,
+		Action:       action,
+		ResolvedPath: resolved,
+		BytesWritten: bytesWritten,
+		Verified:     true,
+	}
+	applySyntaxCheck(&result, path, content)
+	return jsonToolResult(result, false)
+}
+
+// unchangedResult reports the no-op path. The byte comparison that detected it
+// already proves the file matches, so no extra read-back is needed.
+func (t *WriteFileTool) unchangedResult(path string, content []byte) *ToolResult {
+	result := writeFileResult{
+		Success:      true,
+		Action:       writeActionUnchanged,
+		ResolvedPath: resolveToolPath(t.fs, path),
+		BytesWritten: 0,
+		Verified:     true,
+	}
+	applySyntaxCheck(&result, path, content)
+	return jsonToolResult(result, false)
+}
+
+// applySyntaxCheck fills the advisory syntax fields for known extensions. A
+// skipped check is reported as absent rather than as a pass, so the model never
+// sees "ok" for a check that did not run.
+func applySyntaxCheck(result *writeFileResult, path string, content []byte) {
+	check := quickSyntaxCheck(path, content)
+	if !check.Checked || check.Skipped {
+		return
+	}
+	if check.Problem == "" {
+		result.Syntax = syntaxStatusOK
+	} else {
+		result.SyntaxError = check.Problem
+	}
+}
+
+func writeFileFailure(
+	action writeAction,
+	resolved string,
+	bytesWritten int,
+	code writeResultError,
+	message, detail string,
+) *ToolResult {
+	result := writeFileResult{
+		Success:      false,
+		Action:       action,
+		ResolvedPath: resolved,
+		BytesWritten: bytesWritten,
+		Verified:     false,
+		Error:        code,
+		Message:      message,
+		Detail:       detail,
+	}
+	return jsonToolResult(result, true)
+}
+
+// jsonToolResult encodes a structured tool payload. The payload types contain
+// only strings, bools, and ints, so encoding cannot fail today; the error path
+// keeps the tool contract explicit if a future field changes that.
+func jsonToolResult(payload any, isError bool) *ToolResult {
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("failed to encode tool result: %v", err))
+	}
+	if isError {
+		return ErrorResult(string(encoded))
+	}
+	return SilentResult(string(encoded))
+}
+
+// verifyWrittenFile streams the file back from offset and compares it with
+// expected. The fixed buffer keeps the check's memory flat regardless of file
+// size. Appends need a seekable file; every production backend opens a regular
+// file through *os.File, so a non-seeker is a backend contract violation.
+func verifyWrittenFile(sysFs fileSystem, path string, expected []byte, offset int64) (bool, error) {
+	f, err := sysFs.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+
+	if offset > 0 {
+		seeker, ok := f.(io.Seeker)
+		if !ok {
+			return false, fmt.Errorf("read-back of appended content requires a seekable file")
+		}
+		if _, err := seeker.Seek(offset, io.SeekStart); err != nil {
+			return false, err
+		}
+	}
+
+	bufSize := len(expected)
+	if bufSize == 0 {
+		bufSize = 1 // one spare byte detects content past an empty expected value
+	}
+	if bufSize > writeVerifyChunkSize {
+		bufSize = writeVerifyChunkSize
+	}
+	buf := make([]byte, bufSize)
+	matched := 0
+	for {
+		n, readErr := f.Read(buf)
+		if n > 0 {
+			if matched+n > len(expected) || !bytes.Equal(buf[:n], expected[matched:matched+n]) {
+				return false, nil
+			}
+			matched += n
+		}
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				break
+			}
+			return false, readErr
+		}
+	}
+	return matched == len(expected), nil
 }
 
 // conflictResult builds the "file already exists" error. The first line stays
@@ -1209,8 +1432,9 @@ func (t *WriteFileTool) conflictResult(path string, existingBytes int64, newByte
 	}
 
 	payload, err := json.Marshal(writeFileConflict{
-		Error:             "file_exists",
+		Error:             writeErrorFileExists,
 		Path:              path,
+		ResolvedPath:      resolveToolPath(t.fs, path),
 		RecommendedAction: recommended,
 		AvailableActions:  available,
 		ExistingBytes:     existingBytes,
@@ -1321,6 +1545,14 @@ func (h *hostFs) WriteFile(path string, data []byte) error {
 	// Use unified atomic write utility with explicit sync for flash storage reliability.
 	// Using 0o600 (owner read/write only) for secure default permissions.
 	return fileutil.WriteFileAtomic(path, data, 0o600)
+}
+
+// ResolvePath reports the absolute path hostFs targets.
+func (h *hostFs) ResolvePath(path string) string {
+	if abs, err := filepath.Abs(path); err == nil {
+		return abs
+	}
+	return path
 }
 
 // fileAppender is implemented by filesystems that can append without reading
@@ -1570,6 +1802,21 @@ func (r *sandboxFs) Open(path string) (fs.File, error) {
 	return f, err
 }
 
+// ResolvePath reports the workspace path sandboxFs targets.
+func (r *sandboxFs) ResolvePath(path string) string {
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path)
+	}
+	if r.workspace == "" {
+		return path
+	}
+	abs, err := filepath.Abs(r.workspace)
+	if err != nil {
+		return path
+	}
+	return filepath.Join(abs, path)
+}
+
 // whitelistFs wraps a sandboxFs and allows access to specific paths outside
 // the workspace when they match any of the provided patterns.
 type whitelistFs struct {
@@ -1622,6 +1869,14 @@ func (w *whitelistFs) Open(path string) (fs.File, error) {
 		return w.host.Open(path)
 	}
 	return w.sandbox.Open(path)
+}
+
+// ResolvePath delegates to the backend that serves the path.
+func (w *whitelistFs) ResolvePath(path string) string {
+	if w.matches(path) {
+		return w.host.ResolvePath(path)
+	}
+	return w.sandbox.ResolvePath(path)
 }
 
 // buildFs applies the read policy to every filesystem tool that can inspect files.

@@ -71,7 +71,23 @@ Creates a file with the full content in one call. Writing a new path needs no fl
 - content that begins with the entire existing file is treated as an append: only the new suffix is written, so no data is lost and `overwrite` is not needed;
 - any other replacement fails unless `overwrite=true` is passed, which replaces the entire file and discards its current contents.
 
-The failure result keeps the human-readable "file already exists" line and adds a `structured:` JSON object with `error` (`file_exists`), `path`, `recommended_action`, `available_actions`, `existing_bytes`, `new_bytes`, and `overwrite_required`. The model can therefore pick the next call from the path and recommended action without probing the filesystem.
+The failure result keeps the human-readable "file already exists" line and adds a `structured:` JSON object with `error` (`file_exists`), `path`, `resolved_path`, `recommended_action`, `available_actions`, `existing_bytes`, `new_bytes`, and `overwrite_required`. The model can therefore pick the next call from the path and recommended action without probing the filesystem.
+
+On success the tool returns a compact JSON object instead of a prose line (the result is silent, so only the model sees it):
+
+| Field | Description |
+|-------|-------------|
+| `success` | `true` for a completed write |
+| `action` | `created`, `overwritten`, `appended` (append-shaped content), or `unchanged` (identical content) |
+| `resolved_path` | Absolute path the write targeted. Relative paths resolve from the workspace in restricted mode and from the process working directory otherwise |
+| `bytes_written` | Bytes this call wrote: the full content for create/overwrite, only the new suffix for an append-shaped write, `0` for unchanged |
+| `verified` | `true` when the file content was confirmed byte-for-byte: by a read-back after a write, or by the equality comparison that recognizes `unchanged` (no read-back is needed because nothing is written) |
+| `syntax` | `ok` when the quick syntax check ran and passed; omitted for unknown extensions, known JSONC files, and skipped checks |
+| `syntax_error` | Advisory problem found by the quick check; the write still succeeded |
+
+The read-back streams the file through a fixed 32 KiB buffer, so verification does not allocate a second copy of the content; an append-shaped write seeks past the old end and compares only the suffix. For `unchanged`, the equality check that detected the no-op is the verification, so no read-back is performed. If the read-back fails or does not match, the tool returns an error JSON with `success: false`, `action`, `resolved_path`, `bytes_written`, `verified: false`, `error` (`read_back_failed` or `read_back_mismatch`), `message`, and, when the backend provides one, `detail`. `syntax` and `syntax_error` are only present on successful writes; they are not attached to errors. The `file_exists` conflict keeps its own payload documented above. The file may still be on disk, so inspect it before retrying. The check verifies the bytes the filesystem returns; `WriteFileAtomic` already fsyncs the file and its directory, so `verified` is an integrity check rather than a durability guarantee.
+
+The syntax check is advisory and best-effort: `.json` uses the standard JSON validator, except for known JSONC files (`tsconfig*.json`, `jsconfig.json`, `devcontainer.json`, and `.vscode/*.json`) which are left unchecked, while `.go`, `.c`, `.h`, `.cc`, `.cpp`, `.cxx`, `.hpp`, and `.hh` use a delimiter/quote/comment scanner where C-family digit separators such as `1'000` are not treated as character literals, and `.py`, `.pyi`, and `.toml` additionally understand triple-quoted strings and `#` comments. It runs in O(n) time with a fixed 256-entry stack and no allocations, but it is not a compiler: extensions whose syntax needs a real parser (JavaScript, Rust, Java, YAML) are left unchecked. It is skipped when nesting exceeds the stack cap, when a C-family file uses conditional compilation (`#if`/`#else`) and its braces do not balance, or when a check bails out for another reason; a skipped check omits `syntax` instead of claiming `ok`. For an append-shaped write, the check covers the full resulting content, not only the appended suffix.
 
 | Argument | Type | Required | Description |
 |----------|------|----------|-------------|
