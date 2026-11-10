@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/usage"
 )
 
 type MCPServerInfo struct {
@@ -93,6 +94,7 @@ type Runtime struct {
 	GetEnabledChannels func() []string
 	GetActiveTurnTree  func() []TurnInfo // Active root turn of the session followed by its subagents
 	GetContextStats    func() *ContextStats
+	GetUsageStats      func() (*usage.Summary, error)
 	SwitchModel        func(value string) (oldModel string, err error)
 	SwitchChannel      func(value string) error
 	ClearHistory       func() error
