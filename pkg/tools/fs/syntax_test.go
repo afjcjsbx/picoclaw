@@ -27,7 +27,32 @@ func TestQuickSyntaxCheck(t *testing.T) {
 			path:    "config.json",
 			content: `{"a":}`,
 			checked: true,
-			problem: "invalid JSON",
+			problem: "not strict JSON",
+		},
+		{
+			name:    "tsconfig with comments is not checked",
+			path:    "tsconfig.json",
+			content: "{\n  // comment\n  \"compilerOptions\": {}\n}\n",
+			checked: false,
+		},
+		{
+			name:    "named tsconfig with comments is not checked",
+			path:    "web/tsconfig.app.json",
+			content: "{\n  // comment\n  \"compilerOptions\": {}\n}\n",
+			checked: false,
+		},
+		{
+			name:    "vscode settings with comments is not checked",
+			path:    ".vscode/settings.json",
+			content: "{\n  // comment\n  \"editor.tabSize\": 2\n}\n",
+			checked: false,
+		},
+		{
+			name:    "ordinary JSON with comments is still flagged",
+			path:    "data.json",
+			content: "{\n  // comment\n  \"a\": 1\n}\n",
+			checked: true,
+			problem: "not strict JSON",
 		},
 		{
 			name:    "valid Go with strings comments and raw strings",

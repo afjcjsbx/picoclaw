@@ -54,6 +54,9 @@ func quickSyntaxCheck(path string, content []byte) syntaxCheck {
 func syntaxCheckerForPath(path string) syntaxChecker {
 	switch strings.ToLower(filepath.Ext(path)) {
 	case ".json":
+		if isKnownJSONCPath(path) {
+			return nil
+		}
 		return checkJSON
 	case ".go", ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh":
 		return checkCLike
@@ -70,7 +73,22 @@ func checkJSON(content []byte) (string, bool) {
 	if json.Valid(content) {
 		return "", false
 	}
-	return "invalid JSON", false
+	return "not strict JSON", false
+}
+
+// isKnownJSONCPath reports whether path is a configuration file that commonly
+// uses JSON with comments or trailing commas. The strict validator would reject
+// those files, so they are left unchecked instead of producing a false problem.
+func isKnownJSONCPath(path string) bool {
+	slash := filepath.ToSlash(strings.ToLower(path))
+	base := filepath.Base(slash)
+	if base == "tsconfig.json" || base == "jsconfig.json" || base == "devcontainer.json" {
+		return true
+	}
+	if strings.HasPrefix(base, "tsconfig.") && strings.HasSuffix(base, ".json") {
+		return true
+	}
+	return strings.Contains(slash, "/.vscode/") || strings.HasPrefix(slash, ".vscode/")
 }
 
 func checkCLike(content []byte) (string, bool) { return checkDelimiters(content, syntaxCLike) }

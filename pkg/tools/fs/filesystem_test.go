@@ -581,7 +581,7 @@ func TestFilesystemTool_WriteFile_SyntaxErrorIsAdvisory(t *testing.T) {
 	assert.True(t, payload.Success)
 	assert.True(t, payload.Verified)
 	assert.Empty(t, payload.Syntax)
-	assert.Equal(t, "invalid JSON", payload.SyntaxError)
+	assert.Equal(t, "not strict JSON", payload.SyntaxError)
 
 	data, err := os.ReadFile(testFile)
 	assert.NoError(t, err)
