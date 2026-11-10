@@ -138,7 +138,13 @@ command metadata:
 /help review
 ```
 
-The Web UI command palette also lists workspace custom commands.
+The Web UI slash suggestions and command palette also list workspace custom
+commands. Reload the page if the Web UI was already open when you added a file.
+
+Telegram's bot command menu includes custom commands whose names are compatible
+with Telegram: lowercase letters, digits, and underscores, up to 32 characters.
+Nested or punctuated names still work as slash commands but are not shown in the
+Telegram menu. Telegram refreshes its menu when the channel starts.
 
 ## Limitations
 
