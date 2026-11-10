@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"os"
+	"reflect"
 	"slices"
 	"testing"
 	"time"
@@ -330,7 +331,7 @@ func TestAgentLoop_EmitsMinimalTurnEvents(t *testing.T) {
 		CostUSD:          0.001 + 0.002,
 		Requests:         2,
 		ContextTokens:    200,
-	}); got != want {
+	}); !reflect.DeepEqual(got, want) {
 		t.Fatalf("final message usage = %+v, want %+v", got, want)
 	}
 

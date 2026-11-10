@@ -653,7 +653,7 @@ func (p *Pipeline) CallLLM(
 	// what the streaming publisher reads via GetTurnUsage at finalize.
 	if ts != nil {
 		ts.SetLastFinishReason(exec.response.FinishReason)
-		ts.AddUsage(exec.response.Usage)
+		ts.AddUsage(exec.llmModelName, exec.response.Usage)
 	}
 
 	// Mid-turn routing guard: a light-model turn that grows too large or keeps
