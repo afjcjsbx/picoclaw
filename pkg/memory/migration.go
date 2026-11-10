@@ -91,6 +91,13 @@ func MigrateFromJSON(
 				name, setErr,
 			)
 		}
+		// The migrated messages can carry usage the counters have not seen, so
+		// the counters are rebuilt from the file.
+		if resetter, ok := store.(usageCounterResetter); ok {
+			if resetErr := resetter.resetUsageCounters(key); resetErr != nil {
+				return migrated, fmt.Errorf("memory: migrate %s: reset usage: %w", name, resetErr)
+			}
+		}
 
 		if sess.Summary != "" {
 			if sumErr := store.SetSummary(ctx, key, sess.Summary); sumErr != nil {
