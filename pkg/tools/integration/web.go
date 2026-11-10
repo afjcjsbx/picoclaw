@@ -54,6 +54,11 @@ const (
 	// value in bytes.
 	maxArtifactChars = 2_000_000
 
+	// minMaxChars is the floor for a per-call maxChars. A smaller request is
+	// raised to the floor so the model cannot ask for a preview too small to
+	// be useful; the configured budget still wins when it is below the floor.
+	minMaxChars = 1500
+
 	// maxSearchResponseBytes caps how much of a search provider's HTTP response
 	// is buffered in memory. Search providers return compact JSON; anything
 	// larger is either an error page or a misbehaving upstream, and reading it
@@ -2348,7 +2353,7 @@ func (t *WebFetchTool) Parameters() map[string]any {
 			"maxChars": map[string]any{
 				"type":        "integer",
 				"description": "Maximum characters to extract",
-				"minimum":     100.0,
+				"minimum":     float64(minMaxChars),
 			},
 		},
 		"required": []string{"url"},
@@ -2385,9 +2390,13 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 
 	// A per-call maxChars may only lower the configured flood guard: the value
 	// comes from the model, so an out-of-range number must not be able to
-	// disable truncation entirely.
+	// disable truncation entirely. Requests below the advertised floor are
+	// raised to it, but never above the configured budget.
 	maxChars := t.maxChars
-	if mc, ok := args["maxChars"].(float64); ok && mc > 100 {
+	if mc, ok := args["maxChars"].(float64); ok {
+		if mc < minMaxChars {
+			mc = minMaxChars
+		}
 		if mc > float64(maxChars) {
 			mc = float64(maxChars)
 		}

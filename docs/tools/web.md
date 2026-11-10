@@ -251,9 +251,9 @@ Search results are normalized before they are returned: runs of blank lines in p
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `url` | string | yes | URL to fetch |
-| `maxChars` | integer | no | Maximum characters to extract (minimum `100`). Defaults to `tools.max_inline_result_chars`; a smaller value returns a shorter inline preview while the full page is still saved as an artifact. |
+| `maxChars` | integer | no | Maximum characters to extract (minimum `1500`). Defaults to `tools.max_inline_result_chars`; a smaller value returns a shorter inline preview while the full page is still saved as an artifact. |
 
-`maxChars` defaults to the same `tools.max_inline_result_chars` budget used by the spill layer, so pages that fit stay inline. A per-call value may only lower that budget, which is useful when the model needs less context; the tool's requested preview stays inline as long as it fits the inline budget, and the full pre-truncation page is still saved as an artifact, even when the page is smaller than `max_inline_result_chars`.
+`maxChars` defaults to the same `tools.max_inline_result_chars` budget used by the spill layer, so pages that fit stay inline. A per-call value may only lower that budget, which is useful when the model needs less context; values below the `1500` minimum are raised to it, unless the configured budget is already lower. The tool's requested preview stays inline as long as it fits the inline budget, and the full pre-truncation page is still saved as an artifact, even when the page is smaller than `max_inline_result_chars`.
 
 A truncated preview is never the only copy. When `maxChars` cuts the page, the full pre-truncation text is saved as a workspace artifact and the result is front-loaded with a warning telling the model to read the artifact before answering. The artifact is capped server-side at `2,000,000` characters regardless of the requested preview size. If the page exceeds that cap, the artifact keeps a head+tail window with an `[ARTIFACT TRUNCATED - N chars omitted out of T total]` notice and the warning says the stored copy was truncated and points to a structured endpoint or a narrower source. This makes the benchmark failure mode — answering from a 1,500-character preview while the missing fact sat in the omitted page — explicit and recoverable.
 
