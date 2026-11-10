@@ -1325,7 +1325,8 @@ func jsonToolResult(payload any, isError bool) *ToolResult {
 
 // verifyWrittenFile streams the file back from offset and compares it with
 // expected. The fixed buffer keeps the check's memory flat regardless of file
-// size; io.CopyN is only used when the backend cannot seek (rare).
+// size. Appends need a seekable file; every production backend opens a regular
+// file through *os.File, so a non-seeker is a backend contract violation.
 func verifyWrittenFile(sysFs fileSystem, path string, expected []byte, offset int64) (bool, error) {
 	f, err := sysFs.Open(path)
 	if err != nil {
@@ -1334,14 +1335,11 @@ func verifyWrittenFile(sysFs fileSystem, path string, expected []byte, offset in
 	defer f.Close()
 
 	if offset > 0 {
-		if seeker, ok := f.(io.Seeker); ok {
-			if _, err := seeker.Seek(offset, io.SeekStart); err != nil {
-				return false, err
-			}
-		} else if _, err := io.CopyN(io.Discard, f, offset); err != nil {
-			if errors.Is(err, io.EOF) {
-				return false, nil
-			}
+		seeker, ok := f.(io.Seeker)
+		if !ok {
+			return false, fmt.Errorf("read-back of appended content requires a seekable file")
+		}
+		if _, err := seeker.Seek(offset, io.SeekStart); err != nil {
 			return false, err
 		}
 	}

@@ -664,6 +664,43 @@ func TestFilesystemTool_WriteFile_ReadBackFailureIsError(t *testing.T) {
 	assert.Empty(t, payload.SyntaxError)
 }
 
+// TestVerifyWrittenFile verifies suffix comparison at an offset and the
+// contract that append read-backs require a seekable backend.
+func TestVerifyWrittenFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "data.txt")
+	assert.NoError(t, os.WriteFile(path, []byte("0123456789"), 0o600))
+
+	verified, err := verifyWrittenFile(&hostFs{}, path, []byte("789"), 7)
+	assert.NoError(t, err)
+	assert.True(t, verified)
+
+	verified, err = verifyWrittenFile(&hostFs{}, path, []byte("788"), 7)
+	assert.NoError(t, err)
+	assert.False(t, verified)
+
+	nonSeeker, err := fstest.MapFS{
+		"data": &fstest.MapFile{Data: []byte("0123456789")},
+	}.Open("data")
+	assert.NoError(t, err)
+	t.Cleanup(func() { _ = nonSeeker.Close() })
+
+	verified, err = verifyWrittenFile(
+		writeVerifyFs{fileSystem: &hostFs{}, file: nonSeekerOnly{File: nonSeeker}},
+		path,
+		[]byte("789"),
+		7,
+	)
+	assert.Error(t, err)
+	assert.False(t, verified)
+}
+
+// nonSeekerOnly hides the Seek method of an fs.File to exercise the backend
+// contract check.
+type nonSeekerOnly struct {
+	fs.File
+}
+
 // writeVerifyFs replaces the read-back with a fixed file or error so the
 // verification failure paths can be exercised deterministically.
 type writeVerifyFs struct {
