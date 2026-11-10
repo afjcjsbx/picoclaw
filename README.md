@@ -536,7 +536,34 @@ Slash commands work in interactive CLI mode and in connected chat channels:
 | `/reload` | Reload the configuration file. |
 | `/<name> [arguments]` | Run a [custom prompt command](docs/guides/custom-commands.md) from the workspace or global `commands/` directory. |
 
-Use `/help <command>` for usage details. Availability depends on the channel; unsupported commands return an explicit error. Custom commands support `$ARGUMENTS` and positional `$1`, `$2`, ... placeholders.
+Use `/help <command>` for usage details. Availability depends on the channel; unsupported commands return an explicit error.
+
+### Custom prompt commands
+
+You can build your own slash commands as Markdown files. Workspace commands live in `<workspace>/commands/`; global commands live in `~/.picoclaw/commands/`. Nested directories become nested command names, so `commands/team/review.md` becomes `/team/review`.
+
+```md
+---
+description: Review code for correctness
+---
+
+Review $ARGUMENTS for bugs and missing tests.
+```
+
+Invoke it like any other command:
+
+```text
+/review src/auth.ts
+```
+
+| Template feature | Behavior |
+| --- | --- |
+| `$ARGUMENTS` | Inserts the complete argument string as entered, including quotes. |
+| `$1`, `$2`, ... | Inserts positional arguments; quotes group words, and the highest placeholder consumes the rest. |
+| No placeholder | Appends non-empty arguments after a blank line. |
+| `description` frontmatter | Shown in `/help` and the Web UI command palette. |
+
+Workspace commands override global commands with the same name, while built-in commands always win. See [Custom Prompt Commands](docs/guides/custom-commands.md) for precedence, examples, and limitations.
 
 ### Scheduled tasks and reminders
 
