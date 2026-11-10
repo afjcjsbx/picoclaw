@@ -2578,8 +2578,9 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	if truncated {
 		// Hand the large-result spill the full page so a capped fetch stays
 		// pageable from the artifact instead of losing the omitted middle. The
-		// preview stays at the caller's maxChars; ForceArtifact persists the
-		// full text even when it would otherwise fit under the inline budget.
+		// preview stays at the caller's maxChars when it fits the inline
+		// budget; ForceArtifact persists the full text even when it would
+		// otherwise fit under that budget.
 		toolResult.FullText = fullText
 		toolResult.ForceArtifact = true
 	}

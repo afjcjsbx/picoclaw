@@ -148,8 +148,9 @@ func normalizeToolResult(
 // ContentForLLM renders for the model. Keeping useful content inline means the
 // model can usually answer from the preview instead of re-reading the artifact
 // — which for content tools such as read_file would spill again and loop. It is
-// a no-op when the result is small, already spilled, the workspace is unknown,
-// or persistence is disabled.
+// a no-op when the result is small, already spilled, or there is no text to
+// spill; a forced truncated preview still gets a warning when the workspace is
+// unknown or persistence is disabled.
 //
 // When a tool cut its own output before returning (result.FullText is set),
 // that pre-truncation text is spilled and previewed instead of the truncated
@@ -157,9 +158,12 @@ func normalizeToolResult(
 //
 // A tool that was explicitly asked for a smaller preview (web_fetch's maxChars)
 // sets ForceArtifact: the full text is persisted even when it fits under the
-// inline budget, while the tool's bounded preview stays inline. An
-// ArtifactMaxRunes cap bounds the stored text; when the cap applies, the model
-// is told the artifact itself was truncated and how to recover.
+// inline budget, and the tool's own preview stays inline as long as it fits the
+// budget itself. When the forced preview is already as large as the budget, the
+// generic bounded head+tail preview is used instead, so the spill still bounds
+// model context. An ArtifactMaxRunes cap bounds the stored text; when the cap
+// applies, the model is told the artifact itself was truncated and how to
+// recover.
 //
 // Security note: this runs before the sensitive-data filter is applied, so the
 // artifact file on disk keeps the unredacted tool output — verbatim, or the
@@ -217,12 +221,17 @@ func persistLargeResultArtifact(result *ToolResult, toolName, workspace string, 
 		return
 	}
 
-	// A forced artifact whose full text still fits the inline budget: keep the
-	// tool's own (explicitly capped) preview and persist the rest separately.
-	// web_fetch sets this when a per-call maxChars cut an otherwise small page,
-	// which previously left no artifact at all and made the omitted part
-	// unreachable.
-	if forceArtifact && size <= maxRunes {
+	// A forced artifact keeps the tool's own preview — the view the caller
+	// explicitly asked for — and persists the full text separately. This runs
+	// both when the page fits the inline budget (where the omitted part was
+	// previously unreachable) and when it does not: a small per-call maxChars
+	// must not be replaced by the generic head+tail preview.
+	//
+	// Keep the tool preview only while it fits the inline budget. A forced
+	// result truncated at the default budget has an envelope roughly as large
+	// as that budget; keeping it would undo the spill's job of keeping model
+	// context small, so those fall through to the generic preview below.
+	if forceArtifact && utf8.RuneCountInString(result.ForLLM) <= maxRunes {
 		path, artifactTruncated, err := persistSpillArtifact(
 			toolName, workspace, text, artifactMaxRunes,
 		)

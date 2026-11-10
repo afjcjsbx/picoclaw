@@ -322,17 +322,61 @@ func TestExecuteWithContext_ForceArtifactReportsArtifactCap(t *testing.T) {
 	}
 }
 
-// TestExecuteWithContext_ForceArtifactLargeTextKeepsHeadTailPreview verifies
-// the oversized path: the generic head+tail preview is used, the full page is
-// persisted, and the maxChars warning is still front-loaded.
-func TestExecuteWithContext_ForceArtifactLargeTextKeepsHeadTailPreview(t *testing.T) {
+// TestExecuteWithContext_ForceArtifactLargeTextKeepsToolPreview verifies the
+// oversized path: when the forced preview is small enough, the tool's requested
+// view stays inline instead of being replaced by the generic head+tail preview,
+// while the full page is still persisted.
+func TestExecuteWithContext_ForceArtifactLargeTextKeepsToolPreview(t *testing.T) {
 	workspace := t.TempDir()
 	reg := NewToolRegistry()
 	reg.SetWorkspace(workspace)
 	reg.SetMaxInlineResultRunes(4096)
 
 	full := "HEAD_MARKER_ALPHA " + strings.Repeat("body line\n", 3000) + "TAIL_MARKER_OMEGA"
-	result := SilentResult("short cut view")
+	preview := "short cut view"
+	result := SilentResult(preview)
+	result.FullText = full
+	result.ForceArtifact = true
+
+	reg.Register(newSpillTool("web_fetch", result))
+
+	got := reg.Execute(context.Background(), "web_fetch", nil)
+
+	if !strings.HasPrefix(got.ForLLM, "WARNING: web_fetch preview truncated;") {
+		t.Fatalf("expected a front-loaded warning, got %q", got.ForLLM)
+	}
+	if !strings.HasSuffix(got.ForLLM, preview) {
+		t.Fatalf("expected the tool's requested preview kept inline, got %q", got.ForLLM)
+	}
+	if strings.Contains(got.ForLLM, largeResultSpillSentinel) {
+		t.Fatalf("expected no generic spill preview, got %q", got.ForLLM)
+	}
+	if len(got.ArtifactTags) != 1 {
+		t.Fatalf("expected one artifact tag, got %+v", got.ArtifactTags)
+	}
+
+	path := strings.TrimSuffix(strings.TrimPrefix(got.ArtifactTags[0], "[file:"), "]")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("expected artifact readable: %v", err)
+	}
+	if string(data) != strings.TrimSpace(full) {
+		t.Fatalf("expected the artifact to hold the full pre-truncation text")
+	}
+}
+
+// TestExecuteWithContext_ForceArtifactLargePreviewFallsBackToHeadTail verifies
+// the guard: when the forced preview is itself as large as the inline budget,
+// the spill keeps the generic bounded preview instead of inlining the whole
+// tool envelope.
+func TestExecuteWithContext_ForceArtifactLargePreviewFallsBackToHeadTail(t *testing.T) {
+	workspace := t.TempDir()
+	reg := NewToolRegistry()
+	reg.SetWorkspace(workspace)
+	reg.SetMaxInlineResultRunes(4096)
+
+	full := "HEAD_MARKER_ALPHA " + strings.Repeat("body line\n", 3000) + "TAIL_MARKER_OMEGA"
+	result := SilentResult(strings.Repeat("preview line\n", 400))
 	result.FullText = full
 	result.ForceArtifact = true
 
@@ -346,12 +390,11 @@ func TestExecuteWithContext_ForceArtifactLargeTextKeepsHeadTailPreview(t *testin
 	if !strings.Contains(got.ForLLM, largeResultSpillSentinel) {
 		t.Fatalf("expected the generic spill preview, got %q", got.ForLLM)
 	}
-	if !strings.Contains(got.ForLLM, "HEAD_MARKER_ALPHA") ||
-		!strings.Contains(got.ForLLM, "TAIL_MARKER_OMEGA") {
-		t.Fatalf("expected head and tail of the full page, got %q", got.ForLLM)
-	}
-	if utf8.RuneCountInString(got.ForLLM) >= utf8.RuneCountInString(full) {
+	if utf8.RuneCountInString(got.ForLLM) >= 5000 {
 		t.Fatalf("expected a bounded preview, got %d runes", utf8.RuneCountInString(got.ForLLM))
+	}
+	if len(got.ArtifactTags) != 1 {
+		t.Fatalf("expected one artifact tag, got %+v", got.ArtifactTags)
 	}
 }
 
