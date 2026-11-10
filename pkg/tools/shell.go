@@ -337,24 +337,19 @@ func buildExecDescription() string {
 		chainGuidance = "PowerShell does not support &&; use cmd1; if ($?) { cmd2 } when cmd2 depends on cmd1 succeeding."
 	}
 
-	return fmt.Sprintf(`Executes shell commands with PicoClaw's configured safety guards.
+	return fmt.Sprintf(`Executes shell commands with PicoClaw's safety guards. OS: %s. Shell: %s.
 
-Be aware: OS: %s, Shell: %s
+Every foreground call starts a fresh shell in the configured working directory; pass cwd instead of using cd. For file operations, prefer list_dir, search_files, read_file, edit_file and write_file over cat, grep, find, ls, sed and echo/heredoc.
 
-All commands run in the configured working directory by default. Use the cwd parameter to select another directory; do not use cd to change directories inside a command.
+Foreground results start with a one-line [exec] {...} header (exitCode, timedOut, truncated, durationMs, error), then raw stdout/stderr. Non-zero exit codes can be normal: grep returns 1 for no match and diff returns 1 for differences.
 
-IMPORTANT: Use this tool for terminal operations such as git, go, npm, and docker. For listing, searching, reading, or editing files, use PicoClaw's filesystem tools (list_dir, search_files, read_file, edit_file, append_file, and write_file) when available.
+Oversized output is truncated automatically and the full stream is saved as an artifact, so do not pipe through head/tail just to shorten it.
 
-Before a command explicitly creates files or directories, use list_dir when available to verify that the parent exists and is the intended location. Always quote paths containing spaces.
+action=run requires command. timeout is in seconds; 0 disables it; it is not supported with background=true.
 
-Foreground run results for executed commands start with a one-line [exec] {...} metadata header (exitCode, timedOut, truncated, durationMs, and error when the command timed out or was killed), followed by the raw stdout/stderr body. Interpret exitCode in context: non-zero codes are normal for commands such as grep (no match) and diff (differences). Background session results are JSON objects.
+Use background=true only when the command must outlive the call. It returns a sessionId. Use list to inspect sessions, poll for a non-blocking preview, wait to block until exit, read for offset/limit byte ranges, write for stdin, send-keys for PTY keys, and kill to terminate. Prefer wait over polling; notify=true sends a completion message. Use pty=true for interactive programs (not supported on Windows).
 
-Usage notes:
-- action is required; command is required for action=run.
-- The optional timeout parameter is in seconds and overrides the configured timeout for foreground commands; 0 disables the timeout. It cannot be combined with background=true. Foreground output longer than the configured limit (default 50,000 chars) is truncated to the first 40%% and last 60%% around an omission notice; background session output is limited to 1 MB.
-- Use background=true for long-running commands. The result includes a sessionId. Use action=list to list sessions; use poll, wait, read, write, send-keys, or kill with sessionId to manage one. poll returns immediately with a short output preview. read is non-destructive and accepts offset/limit byte ranges; by default it returns the most recent output. wait returns a partial output tail when its window expires. kill returns the final tail and keeps the session readable for 30 minutes. To wait for a session to finish use wait instead of polling in a loop. write sends stdin; send-keys sends keys to a PTY. Set notify=true for a job that ends so its completion arrives as a follow-up message; after two silent poll/wait calls the tool enables that notification automatically.
-- Combine background=true with pty=true for interactive sessions when supported. PTY is not supported on Windows.
-- Run independent commands in separate tool calls. %s Use semicolons only when later commands may run even if an earlier one fails. Do not use newlines to separate commands; newlines inside quoted strings are fine.`, runtime.GOOS, shell, chainGuidance)
+Run independent commands in separate calls; %s Do not separate commands with newlines.`, runtime.GOOS, shell, chainGuidance)
 }
 
 var execActions = []string{"run", "list", "poll", "wait", "read", "write", "kill", "send-keys"}
