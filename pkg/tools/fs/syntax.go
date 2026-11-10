@@ -1,6 +1,7 @@
 package fstools
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
@@ -108,6 +109,7 @@ func checkDelimiters(content []byte, flavor syntaxFlavor) (problem string, skipp
 	depth := 0
 	line := 1
 	hashComments := flavor == syntaxPython || flavor == syntaxTOML
+	conditional := flavor == syntaxCLike && hasConditionalDirectives(content)
 
 	for i := 0; i < len(content); {
 		c := content[i]
@@ -206,11 +208,11 @@ func checkDelimiters(content []byte, flavor syntaxFlavor) (problem string, skipp
 			i++
 		case '}', ']', ')':
 			if depth == 0 {
-				return fmt.Sprintf("unexpected %q at line %d", c, line), false
+				return delimiterProblem(fmt.Sprintf("unexpected %q at line %d", c, line), conditional)
 			}
 			open := stack[depth-1]
 			if !closesDelimiter(open, c) {
-				return fmt.Sprintf("mismatched %q at line %d (opened %q)", c, line, open), false
+				return delimiterProblem(fmt.Sprintf("mismatched %q at line %d (opened %q)", c, line, open), conditional)
 			}
 			depth--
 			i++
@@ -220,9 +222,45 @@ func checkDelimiters(content []byte, flavor syntaxFlavor) (problem string, skipp
 	}
 
 	if depth > 0 {
-		return fmt.Sprintf("unclosed %q opened at line %d", stack[depth-1], stackLines[depth-1]), false
+		return delimiterProblem(
+			fmt.Sprintf("unclosed %q opened at line %d", stack[depth-1], stackLines[depth-1]),
+			conditional,
+		)
 	}
 	return "", false
+}
+
+// delimiterProblem turns a bracket problem into a skipped verdict when the file
+// uses conditional compilation: #if and #else branches may each be balanced
+// only after preprocessing, so the raw text is not conclusive.
+func delimiterProblem(problem string, conditional bool) (string, bool) {
+	if conditional {
+		return "", true
+	}
+	return problem, false
+}
+
+// hasConditionalDirectives reports whether content contains a preprocessor
+// conditional. The check is line-based and deliberately cheap; it only gates
+// bracket diagnostics, so a false match merely skips an advisory check.
+func hasConditionalDirectives(content []byte) bool {
+	lineStart := 0
+	for i := 0; i <= len(content); i++ {
+		if i < len(content) && content[i] != '\n' {
+			continue
+		}
+		line := bytes.TrimSpace(content[lineStart:i])
+		if len(line) > 1 && line[0] == '#' {
+			directive := bytes.TrimSpace(line[1:])
+			if bytes.HasPrefix(directive, []byte("if")) ||
+				bytes.HasPrefix(directive, []byte("elif")) ||
+				bytes.HasPrefix(directive, []byte("else")) {
+				return true
+			}
+		}
+		lineStart = i + 1
+	}
+	return false
 }
 
 // skipQuoted advances past a quoted literal. Triple-quoted literals are only

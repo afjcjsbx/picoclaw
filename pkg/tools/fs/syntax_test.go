@@ -177,6 +177,19 @@ func TestQuickSyntaxCheck(t *testing.T) {
 			checked: true,
 		},
 		{
+			name:    "C-family conditional branches skip bracket check",
+			path:    "main.cpp",
+			content: "#if A\nif (x) {\n#else\nif (y) {\n#endif\n    return;\n}\n",
+			checked: true,
+			skipped: true,
+		},
+		{
+			name:    "C-family balanced conditional still passes",
+			path:    "main.cpp",
+			content: "#if A\nif (x) { return 1; }\n#else\nif (y) { return 2; }\n#endif\n",
+			checked: true,
+		},
+		{
 			name:    "unknown extension is not checked",
 			path:    "notes.txt",
 			content: "unbalanced {",
