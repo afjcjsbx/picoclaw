@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/sipeed/picoclaw/pkg/commands"
+	"github.com/sipeed/picoclaw/pkg/config"
 )
 
 // slashCommandsResponse is the payload for the chat composer slash palette.
@@ -26,6 +27,12 @@ func (h *Handler) registerCommandRoutes(mux *http.ServeMux) {
 // handleListCommands exposes the same built-in command definitions the agent dispatches on.
 func (h *Handler) handleListCommands(w http.ResponseWriter, r *http.Request) {
 	defs := commands.BuiltinDefinitions()
+	if cfg, err := config.LoadConfig(h.configPath); err == nil {
+		defs = commands.MergeCustomCommandDefinitions(
+			defs,
+			commands.LoadCustomCommands(cfg.WorkspacePath()),
+		)
+	}
 	items := make([]slashCommandItem, 0, len(defs))
 	for _, def := range defs {
 		items = append(items, slashCommandItemFromDefinition(def))

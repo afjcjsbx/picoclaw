@@ -62,6 +62,7 @@ PicoClaw 将数据存储在您配置的工作区中（默认：`~/.picoclaw/work
 ├── memory/           # 长期记忆 (MEMORY.md)
 ├── state/            # 持久化状态 (最后一次频道等)
 ├── cron/             # 定时任务数据库
+├── commands/         # 自定义提示词命令 (*.md)
 ├── skills/           # 自定义技能
 ├── AGENT.md          # Agent 行为指南
 ├── HEARTBEAT.md      # 周期性任务提示词 (每 30 分钟检查一次)
@@ -195,6 +196,7 @@ dammi le ultime news
 
 - 通用斜杠命令通过 `pkg/agent/loop.go` 中的 `commands.Executor` 统一执行。
 - Channel 适配器不再在本地消费通用命令；它们只负责把入站文本转发到 bus/agent 路径。Telegram 仍会在启动时自动注册其支持的命令菜单，例如 `/start`、`/help`、`/show`、`/list`、`/use`。
+- 来自 `<workspace>/commands/` 和 `<PICOCLAW_HOME>/commands/` 的自定义提示词命令会展开为用户提示词，并继续走正常的 Agent 回合。详见 [Custom Prompt Commands](custom-commands.md)。
 - 未注册的斜杠命令（例如 `/foo`）会透传给 LLM 按普通输入处理。
 - 已注册但当前 channel 不支持的命令（例如 WhatsApp 上的 `/show`）会返回明确的用户可见错误，并停止后续处理。
 

@@ -35,6 +35,12 @@ func (al *AgentLoop) handleCommand(
 		return reply, handled
 	}
 
+	// Custom commands expand into a normal user prompt and continue through the
+	// regular agent turn instead of replying directly.
+	if al.expandCustomCommand(msg, agent, opts) {
+		return "", false
+	}
+
 	if al.cmdRegistry == nil {
 		return "", false
 	}
@@ -66,6 +72,105 @@ func (al *AgentLoop) handleCommand(
 	default: // OutcomePassthrough — let the message fall through to LLM
 		return "", false
 	}
+}
+
+// expandCustomCommand rewrites a user-defined prompt command into its expanded
+// template and stores it in opts so the normal turn continues with that text.
+// Built-in commands always take precedence.
+func (al *AgentLoop) expandCustomCommand(
+	msg bus.InboundMessage,
+	agent *AgentInstance,
+	opts *processOptions,
+) bool {
+	if opts == nil {
+		return false
+	}
+	command, expanded, found := al.resolveCustomCommand(msg.Content, agent)
+	if !found {
+		return false
+	}
+
+	opts.Dispatch.UserMessage = expanded
+	opts.UserMessage = expanded
+	logger.InfoCF("agent", "Expanded custom command", map[string]any{
+		"command": command.Name,
+		"source":  command.Source,
+	})
+	return true
+}
+
+// expandCustomCommandContent expands a custom command before it is queued as a
+// steering message during an active turn. Built-in slash commands are left
+// untouched so tryHandleActiveTurnCommand can keep its current behavior.
+func (al *AgentLoop) expandCustomCommandContent(content, agentID string) string {
+	registry := al.GetRegistry()
+	if registry == nil {
+		return content
+	}
+	agent, ok := registry.GetAgent(agentID)
+	if !ok || agent == nil {
+		agent = registry.GetDefaultAgent()
+	}
+	if agent == nil {
+		return content
+	}
+	_, expanded, found := al.resolveCustomCommand(content, agent)
+	if !found {
+		return content
+	}
+	return expanded
+}
+
+func (al *AgentLoop) resolveCustomCommand(
+	content string,
+	agent *AgentInstance,
+) (commands.CustomCommand, string, bool) {
+	if agent == nil || strings.TrimSpace(agent.Workspace) == "" {
+		return commands.CustomCommand{}, "", false
+	}
+
+	cmdName, ok := commands.CommandName(content)
+	if !ok {
+		return commands.CustomCommand{}, "", false
+	}
+	if al.cmdRegistry != nil {
+		if _, builtin := al.cmdRegistry.Lookup(cmdName); builtin {
+			return commands.CustomCommand{}, "", false
+		}
+	}
+
+	command, found := commands.LookupCustomCommand(
+		commands.LoadCustomCommands(agent.Workspace),
+		cmdName,
+	)
+	if !found {
+		return commands.CustomCommand{}, "", false
+	}
+
+	expanded := commands.ExpandCustomCommandTemplate(
+		command.Template,
+		commands.CommandArguments(content),
+	)
+	if strings.TrimSpace(expanded) == "" {
+		return commands.CustomCommand{}, "", false
+	}
+	return command, expanded, true
+}
+
+// commandDefinitions returns built-in commands plus custom command metadata for
+// help output and command palettes.
+func (al *AgentLoop) commandDefinitions(agent *AgentInstance) []commands.Definition {
+	defs := commands.BuiltinDefinitions()
+	if al.cmdRegistry != nil {
+		defs = al.cmdRegistry.Definitions()
+	}
+	if agent == nil || strings.TrimSpace(agent.Workspace) == "" {
+		return defs
+	}
+	return commands.MergeCustomCommandDefinitions(
+		defs,
+		commands.LoadCustomCommands(agent.Workspace),
+	)
 }
 
 func (al *AgentLoop) applyExplicitSkillCommand(
@@ -137,10 +242,12 @@ func (al *AgentLoop) buildCommandsRuntime(
 	registry := al.GetRegistry()
 	cfg := al.GetConfig()
 	rt := &commands.Runtime{
-		Config:          cfg,
-		VoiceMode:       al.voiceMode(opts.Dispatch.SessionKey),
-		ListAgentIDs:    registry.ListAgentIDs,
-		ListDefinitions: al.cmdRegistry.Definitions,
+		Config:       cfg,
+		VoiceMode:    al.voiceMode(opts.Dispatch.SessionKey),
+		ListAgentIDs: registry.ListAgentIDs,
+		ListDefinitions: func() []commands.Definition {
+			return al.commandDefinitions(agent)
+		},
 		ListMCPServers: func(ctx context.Context) []commands.MCPServerInfo {
 			if cfg == nil {
 				return nil

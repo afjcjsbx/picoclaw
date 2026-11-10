@@ -93,6 +93,7 @@ PicoClaw stores data in your configured workspace (default: `~/.picoclaw/workspa
 ├── memory/           # Long-term memory (MEMORY.md)
 ├── state/            # Persistent state (last channel, etc.)
 ├── cron/             # Scheduled jobs database
+├── commands/         # Custom prompt commands (*.md)
 ├── skills/           # Custom skills
 ├── AGENT.md          # Agent behavior guide
 ├── HEARTBEAT.md      # Periodic task prompts (checked every 30 min)
@@ -231,6 +232,7 @@ dammi le ultime news
 
 - Generic slash commands are executed through a single path in `pkg/agent/loop.go` via `commands.Executor`.
 - Channel adapters no longer consume generic commands locally; they forward inbound text to the bus/agent path. Telegram still auto-registers supported commands such as `/start`, `/help`, `/show`, `/list`, `/use` at startup.
+- Custom prompt commands from `<workspace>/commands/` and `<PICOCLAW_HOME>/commands/` are expanded into a user prompt and continue through the normal agent turn. See [Custom Prompt Commands](custom-commands.md).
 - Unknown slash command (for example `/foo`) passes through to normal LLM processing.
 - Registered but unsupported command on the current channel (for example `/show` on WhatsApp) returns an explicit user-facing error and stops further processing.
 
