@@ -1977,20 +1977,20 @@ func TestDefaultConfig_FilterMinLength(t *testing.T) {
 	}
 }
 
-func TestDefaultConfig_ReactionEnabled(t *testing.T) {
+func TestDefaultConfig_ReactionDisabled(t *testing.T) {
 	cfg := DefaultConfig()
-	if !cfg.Tools.Reaction.Enabled {
-		t.Fatal("DefaultConfig().Tools.Reaction.Enabled should be true")
+	if cfg.Tools.Reaction.Enabled {
+		t.Fatal("DefaultConfig().Tools.Reaction.Enabled should be false")
 	}
-	if !cfg.Tools.IsToolEnabled("reaction") {
-		t.Fatal("DefaultConfig().Tools.IsToolEnabled(reaction) should be true")
+	if cfg.Tools.IsToolEnabled("reaction") {
+		t.Fatal("DefaultConfig().Tools.IsToolEnabled(reaction) should be false")
 	}
 }
 
-func TestLoadConfig_ReactionCanBeDisabled(t *testing.T) {
+func TestLoadConfig_ReactionCanBeEnabled(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.json")
-	raw := "{\n  \"version\": 2,\n  \"tools\": {\n    \"reaction\": {\n      \"enabled\": false\n    }\n  }\n}\n"
+	raw := "{\n  \"version\": 2,\n  \"tools\": {\n    \"reaction\": {\n      \"enabled\": true\n    }\n  }\n}\n"
 	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
 		t.Fatalf("WriteFile() error: %v", err)
 	}
@@ -1999,11 +1999,11 @@ func TestLoadConfig_ReactionCanBeDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig() error: %v", err)
 	}
-	if cfg.Tools.Reaction.Enabled {
-		t.Fatal("LoadConfig().Tools.Reaction.Enabled should be false")
+	if !cfg.Tools.Reaction.Enabled {
+		t.Fatal("LoadConfig().Tools.Reaction.Enabled should be true")
 	}
-	if cfg.Tools.IsToolEnabled("reaction") {
-		t.Fatal("LoadConfig().Tools.IsToolEnabled(reaction) should be false")
+	if !cfg.Tools.IsToolEnabled("reaction") {
+		t.Fatal("LoadConfig().Tools.IsToolEnabled(reaction) should be true")
 	}
 }
 

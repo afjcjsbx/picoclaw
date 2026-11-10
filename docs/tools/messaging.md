@@ -8,7 +8,7 @@ Messaging tools let the agent talk to chat channels directly. They are most usef
 | Tool | What it does | Switch (default) |
 |------|--------------|------------------|
 | `message` | Send text and/or local media to a chat channel | `tools.message.enabled` (`true`) |
-| `reaction` | Add a reaction to a message | `tools.reaction.enabled` (`true`) |
+| `reaction` | Add a reaction to a message | `tools.reaction.enabled` (`false`) |
 
 ## `message`
 
@@ -41,11 +41,11 @@ Media files go through the same read policy as other filesystem reads: protected
 
 ## `reaction`
 
-Adds a lightweight reaction (for example a thumb-up) to a message, defaulting to the current inbound message. It is registered when `tools.reaction.enabled` is `true` (the default) and fails gracefully on channels that do not implement reactions.
+Adds a lightweight reaction (for example a thumb-up) to a message, defaulting to the current inbound message. It is disabled by default; set `tools.reaction.enabled` to `true` to register it. It fails gracefully on channels that do not implement reactions.
 
 | Config | Type | Default | Description |
 |--------|------|---------|-------------|
-| `tools.reaction.enabled` | bool | `true` | Register the `reaction` tool |
+| `tools.reaction.enabled` | bool | `false` | Register the `reaction` tool |
 
 Environment variable: `PICOCLAW_TOOLS_REACTION_ENABLED`.
 
