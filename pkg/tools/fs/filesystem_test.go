@@ -1186,6 +1186,9 @@ func TestWhitelistFs_WriteAllowsNewFileUnderAllowedDir(t *testing.T) {
 	if string(data) != "outside write" {
 		t.Fatalf("target file content = %q, want %q", string(data), "outside write")
 	}
+
+	payload := writeFileResultPayload(t, result.ForLLM)
+	assert.Equal(t, targetFile, payload.ResolvedPath)
 }
 
 func TestWhitelistFs_AllowsResolvedAllowedRootAlias(t *testing.T) {

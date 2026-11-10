@@ -119,6 +119,24 @@ func (p *protectedWriteFs) checkRead(path string) error {
 	return checkSensitiveReadPath(path, p.workspace, p.restrict)
 }
 
+// ResolvePath reports where a write target lands. protectedWriteFs owns the
+// workspace and restriction settings that decide this, so the tool does not
+// need a second copy of them.
+func (p *protectedWriteFs) ResolvePath(path string) string {
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path)
+	}
+	if p.restrict && p.workspace != "" {
+		if abs, err := filepath.Abs(p.workspace); err == nil {
+			return filepath.Join(abs, path)
+		}
+	}
+	if abs, err := filepath.Abs(path); err == nil {
+		return abs
+	}
+	return path
+}
+
 func (p *protectedWriteFs) Open(path string) (fs.File, error) {
 	if err := p.checkWrite(path); err != nil {
 		return nil, err

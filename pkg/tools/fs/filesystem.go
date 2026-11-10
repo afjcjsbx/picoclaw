@@ -976,10 +976,8 @@ func readerHasMoreContent(reader *bufio.Reader) (bool, error) {
 }
 
 type WriteFileTool struct {
-	fs        fileSystem
-	workspace string
-	restrict  bool
-	altTools  []string
+	fs       fileSystem
+	altTools []string
 }
 
 // maxWriteFileCompareBytes bounds how much write_file reads from an existing
@@ -1027,6 +1025,25 @@ type writeFileResult struct {
 	Detail      string `json:"detail,omitempty"`
 }
 
+// pathResolver is implemented by filesystem backends that know where a tool
+// path lands on the host. write_file uses it to report resolved_path without
+// carrying a second copy of the backend's relative-path rules.
+type pathResolver interface {
+	ResolvePath(path string) string
+}
+
+// resolveToolPath asks the backend where path lands, falling back to the
+// process working directory for custom backends and test doubles.
+func resolveToolPath(sysFs fileSystem, path string) string {
+	if resolver, ok := sysFs.(pathResolver); ok {
+		return resolver.ResolvePath(path)
+	}
+	if abs, err := filepath.Abs(path); err == nil {
+		return abs
+	}
+	return path
+}
+
 // writePolicyChecker exposes the write tool's policy checks without opening or
 // modifying the target file.
 type writePolicyChecker interface {
@@ -1051,9 +1068,7 @@ func NewWriteFileTool(
 			workspace:  workspace,
 			restrict:   restrict,
 		},
-		workspace: workspace,
-		restrict:  restrict,
-		altTools:  []string{"append_file", "edit_file"},
+		altTools: []string{"append_file", "edit_file"},
 	}
 }
 
@@ -1217,7 +1232,7 @@ func (t *WriteFileTool) successResult(
 	content []byte,
 	verifyFrom int,
 ) *ToolResult {
-	resolved := resolveWritePath(path, t.workspace, t.restrict)
+	resolved := resolveToolPath(t.fs, path)
 	verified, err := verifyWrittenFile(t.fs, path, content[verifyFrom:], int64(verifyFrom))
 	if err != nil {
 		return writeFileFailure(
@@ -1257,7 +1272,7 @@ func (t *WriteFileTool) unchangedResult(path string, content []byte) *ToolResult
 	result := writeFileResult{
 		Success:      true,
 		Action:       "unchanged",
-		ResolvedPath: resolveWritePath(path, t.workspace, t.restrict),
+		ResolvedPath: resolveToolPath(t.fs, path),
 		BytesWritten: 0,
 		Verified:     true,
 	}
@@ -1306,24 +1321,6 @@ func jsonToolResult(payload any, isError bool) *ToolResult {
 		return ErrorResult(string(encoded))
 	}
 	return SilentResult(string(encoded))
-}
-
-// resolveWritePath returns the absolute path the filesystem backend actually
-// targets. Relative paths resolve from the workspace in restricted mode and
-// from the process working directory otherwise, matching hostFs and sandboxFs.
-func resolveWritePath(path, workspace string, restrict bool) string {
-	if filepath.IsAbs(path) {
-		return filepath.Clean(path)
-	}
-	if restrict && workspace != "" {
-		if abs, err := filepath.Abs(workspace); err == nil {
-			return filepath.Join(abs, path)
-		}
-	}
-	if abs, err := filepath.Abs(path); err == nil {
-		return abs
-	}
-	return path
 }
 
 // verifyWrittenFile streams the file back from offset and compares it with
@@ -1409,7 +1406,7 @@ func (t *WriteFileTool) conflictResult(path string, existingBytes int64, newByte
 	payload, err := json.Marshal(writeFileConflict{
 		Error:             "file_exists",
 		Path:              path,
-		ResolvedPath:      resolveWritePath(path, t.workspace, t.restrict),
+		ResolvedPath:      resolveToolPath(t.fs, path),
 		RecommendedAction: recommended,
 		AvailableActions:  available,
 		ExistingBytes:     existingBytes,
