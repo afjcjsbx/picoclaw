@@ -594,7 +594,7 @@
       "enabled": true
     },
     "reaction": {
-      "enabled": true
+      "enabled": false
     },
     "read_file": {
       "enabled": true,

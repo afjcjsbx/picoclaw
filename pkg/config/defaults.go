@@ -502,7 +502,7 @@ func DefaultConfig() *Config {
 				MediaEnabled: false,
 			},
 			Reaction: ToolConfig{
-				Enabled: true,
+				Enabled: false,
 			},
 			ReadFile: ReadFileToolConfig{
 				Enabled:         true,

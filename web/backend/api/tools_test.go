@@ -664,8 +664,8 @@ func TestToolCatalogIncludesRuntimeTools(t *testing.T) {
 		}
 	}
 
-	if items["reaction"].Status != "enabled" {
-		t.Errorf("reaction status = %q, want enabled", items["reaction"].Status)
+	if items["reaction"].Status != "disabled" {
+		t.Errorf("reaction status = %q, want disabled by default", items["reaction"].Status)
 	}
 	if items["reaction"].ReadOnly {
 		t.Error("reaction should be toggleable from the web UI")
