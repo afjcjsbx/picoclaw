@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -980,6 +981,32 @@ type WriteFileTool struct {
 	altTools  []string
 }
 
+// maxWriteFileCompareBytes bounds how much write_file reads from an existing
+// file to detect identical or append-shaped content. Bigger files fall back to
+// the overwrite guard instead of paying an extra full read.
+const maxWriteFileCompareBytes = 8 << 20
+
+// writeFileConflict is the machine-readable payload returned when write_file
+// refuses to replace an existing file. The model can read path and
+// recommended_action without parsing the prose error, so it does not have to
+// probe the filesystem to pick its next call.
+type writeFileConflict struct {
+	Error             string   `json:"error"`
+	Path              string   `json:"path"`
+	RecommendedAction string   `json:"recommended_action"`
+	AvailableActions  []string `json:"available_actions"`
+	ExistingBytes     int64    `json:"existing_bytes"`
+	NewBytes          int      `json:"new_bytes"`
+	OverwriteRequired bool     `json:"overwrite_required"`
+}
+
+// writePolicyChecker exposes the write tool's policy checks without opening or
+// modifying the target file.
+type writePolicyChecker interface {
+	checkWrite(path string) error
+	checkRead(path string) error
+}
+
 func NewWriteFileTool(
 	workspace string,
 	restrict bool,
@@ -1027,7 +1054,8 @@ func (t *WriteFileTool) Name() string {
 }
 
 func (t *WriteFileTool) Description() string {
-	desc := "Write content to a file, replacing any existing content. Content is written byte-for-byte after argument decoding. Standard JSON escaping applies: \\n for newline and \\\\n for a literal backslash-n sequence. If the file already exists you must set overwrite=true, which replaces the ENTIRE file."
+	desc := "Write content to a file, replacing any existing content. Content is written byte-for-byte after argument decoding. Standard JSON escaping applies: \\n for newline and \\\\n for a literal backslash-n sequence. " +
+		"If the file already exists, identical content is a no-op and content that only extends the existing file is accepted; any other replacement requires overwrite=true, which replaces the ENTIRE file."
 	if phrase := t.altToolsPhrase(); phrase != "" {
 		desc += fmt.Sprintf(
 			" To add to or change part of an existing file without losing its current contents, use %s instead.",
@@ -1038,10 +1066,10 @@ func (t *WriteFileTool) Description() string {
 }
 
 func (t *WriteFileTool) Parameters() map[string]any {
-	overwriteDesc := "Set to true to replace an existing file in full. This discards the file's current contents."
+	overwriteDesc := "Set to true to replace an existing file in full, discarding its current contents. Omit it for new files, unchanged content, or content that only extends the existing file."
 	if phrase := t.altToolsPhrase(); phrase != "" {
 		overwriteDesc = fmt.Sprintf(
-			"Set to true to replace an existing file in full. This discards the file's current contents — to preserve them, use %s instead of write_file.",
+			"Set to true to replace an existing file in full, discarding its current contents. Omit it for new files, unchanged content, or content that only extends the existing file; to preserve the current contents, use %s instead.",
 			phrase,
 		)
 	}
@@ -1078,32 +1106,121 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *ToolR
 	}
 
 	overwrite, _ := args["overwrite"].(bool)
+	contentBytes := []byte(content)
 
-	if !overwrite {
-		if _, err := t.fs.Open(path); err == nil {
-			if phrase := t.altToolsPhrase(); phrase != "" {
-				return ErrorResult(
-					fmt.Sprintf(
-						"file: %s already exists. To add to it or change part of it without losing the current contents, use %s. Only set overwrite=true if you intend to replace the entire file.",
-						path,
-						phrase,
-					),
-				)
-			}
-			return ErrorResult(
-				fmt.Sprintf(
-					"file: %s already exists. Set overwrite=true only if you intend to replace the entire file, which discards its current contents.",
-					path,
-				),
-			)
+	// Apply the write policy before stat/read so a refused path reports the
+	// policy error instead of a misleading "file already exists" conflict.
+	checker, hasPolicy := t.fs.(writePolicyChecker)
+	if hasPolicy {
+		if err := checker.checkWrite(path); err != nil {
+			return ErrorResult(err.Error())
 		}
 	}
 
-	if err := t.fs.WriteFile(path, []byte(content)); err != nil {
+	info, statErr := t.fs.Stat(path)
+	exists := statErr == nil
+	if statErr != nil && !errors.Is(statErr, fs.ErrNotExist) {
+		return ErrorResult(fmt.Sprintf("failed to stat file: %v", statErr))
+	}
+	if exists && info.IsDir() {
+		return ErrorResult(fmt.Sprintf("path is a directory, expected a file: %s", path))
+	}
+	regular := exists && info.Mode().IsRegular()
+
+	// Only read when the existing file can possibly be identical to, or a
+	// prefix of, the incoming content. A bigger file cannot be either, and the
+	// cap keeps a large existing file from doubling the write's memory cost.
+	// The read policy can forbid inspecting a path that the write policy allows
+	// (for example .env.example), in which case the content is not compared.
+	readAllowed := !hasPolicy || checker.checkRead(path) == nil
+	var existing []byte
+	canCompare := readAllowed && regular && info.Size() <= int64(len(contentBytes)) &&
+		info.Size() <= maxWriteFileCompareBytes
+	if canCompare {
+		var readErr error
+		existing, readErr = t.fs.ReadFile(path)
+		if readErr != nil {
+			return ErrorResult(readErr.Error())
+		}
+	}
+
+	if exists && canCompare {
+		if bytes.Equal(existing, contentBytes) {
+			// Writing identical bytes would only churn the mtime and wake file
+			// watchers, so treat it as a successful no-op.
+			return SilentResult(fmt.Sprintf(
+				"File unchanged: %s (content is identical to the existing file)",
+				path,
+			))
+		}
+		if bytes.HasPrefix(contentBytes, existing) {
+			// The caller sent the old file plus a suffix: this is an append in
+			// disguise, and applying only the suffix cannot lose existing data.
+			if err := appendFile(t.fs, path, string(contentBytes[len(existing):])); err != nil {
+				return ErrorResult(err.Error())
+			}
+			return SilentResult(fmt.Sprintf(
+				"File written: %s (existing content preserved; appended %d bytes)",
+				path,
+				len(contentBytes)-len(existing),
+			))
+		}
+	}
+
+	if exists && !overwrite {
+		return t.conflictResult(path, info.Size(), len(contentBytes))
+	}
+
+	if err := t.fs.WriteFile(path, contentBytes); err != nil {
 		return ErrorResult(err.Error())
 	}
 
 	return SilentResult(fmt.Sprintf("File written: %s", path))
+}
+
+// conflictResult builds the "file already exists" error. The first line stays
+// human-readable and backward compatible; the second is a structured payload
+// that names the path and the safest next action.
+func (t *WriteFileTool) conflictResult(path string, existingBytes int64, newBytes int) *ToolResult {
+	available := make([]string, 0, len(t.altTools)+1)
+	recommended := "overwrite"
+	if len(t.altTools) > 0 {
+		recommended = t.altTools[0]
+		for _, name := range t.altTools {
+			if name == "edit_file" {
+				recommended = name
+				break
+			}
+		}
+		available = append(available, t.altTools...)
+	}
+	available = append(available, "overwrite")
+
+	message := fmt.Sprintf(
+		"file: %s already exists. Set overwrite=true only if you intend to replace the entire file, which discards its current contents.",
+		path,
+	)
+	if phrase := t.altToolsPhrase(); phrase != "" {
+		message = fmt.Sprintf(
+			"file: %s already exists. To add to it or change part of it without losing the current contents, use %s. Only set overwrite=true if you intend to replace the entire file.",
+			path,
+			phrase,
+		)
+	}
+
+	payload, err := json.Marshal(writeFileConflict{
+		Error:             "file_exists",
+		Path:              path,
+		RecommendedAction: recommended,
+		AvailableActions:  available,
+		ExistingBytes:     existingBytes,
+		NewBytes:          newBytes,
+		OverwriteRequired: true,
+	})
+	if err != nil {
+		return ErrorResult(message)
+	}
+	return ErrorResult(fmt.Sprintf("%s\nstructured: %s", message, payload))
 }
 
 type ListDirTool struct {
