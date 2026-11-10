@@ -255,7 +255,7 @@ func TestAddFullMessage_PreservesUsage(t *testing.T) {
 	if usage == nil {
 		t.Fatal("Usage = nil, want persisted usage")
 	}
-	if *usage != *msg.Usage {
+	if !reflect.DeepEqual(*usage, *msg.Usage) {
 		t.Fatalf("Usage = %+v, want %+v", *usage, *msg.Usage)
 	}
 }

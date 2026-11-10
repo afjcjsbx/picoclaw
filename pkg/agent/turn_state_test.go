@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -78,13 +79,13 @@ func TestSplitHistoryForActiveTurn_ProtectsPersistedTail(t *testing.T) {
 
 func TestTurnStateAddUsageAggregatesCalls(t *testing.T) {
 	ts := &turnState{}
-	ts.AddUsage(nil)
-	ts.AddUsage(&providers.UsageInfo{})
+	ts.AddUsage("model-a", nil)
+	ts.AddUsage("model-a", &providers.UsageInfo{})
 	if got := ts.GetTurnUsage(); got != nil {
 		t.Fatalf("GetTurnUsage() = %+v, want nil for empty usage", got)
 	}
 
-	ts.AddUsage(&providers.UsageInfo{
+	ts.AddUsage("model-a", &providers.UsageInfo{
 		PromptTokens:        120,
 		CompletionTokens:    30,
 		TotalTokens:         150,
@@ -92,7 +93,7 @@ func TestTurnStateAddUsageAggregatesCalls(t *testing.T) {
 		CacheCreationTokens: 5,
 		CostUSD:             0.001,
 	})
-	ts.AddUsage(&providers.UsageInfo{
+	ts.AddUsage("model-a", &providers.UsageInfo{
 		PromptTokens:     200,
 		CompletionTokens: 50,
 		TotalTokens:      250,
@@ -110,8 +111,44 @@ func TestTurnStateAddUsageAggregatesCalls(t *testing.T) {
 		Requests:            2,
 		ContextTokens:       200,
 	}
-	if got := ts.GetTurnUsage(); got == nil || *got != want {
+	if got := ts.GetTurnUsage(); got == nil || !reflect.DeepEqual(*got, want) {
 		t.Fatalf("GetTurnUsage() = %+v, want %+v", got, want)
+	}
+}
+
+func TestTurnStateAddUsageSplitsMultiModelTurns(t *testing.T) {
+	ts := &turnState{}
+	ts.AddUsage("light", &providers.UsageInfo{PromptTokens: 100, CompletionTokens: 10, TotalTokens: 110})
+	ts.AddUsage("light", &providers.UsageInfo{PromptTokens: 120, CompletionTokens: 10, TotalTokens: 130})
+	ts.AddUsage("primary", &providers.UsageInfo{PromptTokens: 300, CompletionTokens: 40, TotalTokens: 340, CostUSD: 0.01})
+
+	got := ts.GetTurnUsage()
+	if got == nil {
+		t.Fatal("GetTurnUsage() = nil, want aggregate")
+	}
+	if got.Requests != 3 || got.PromptTokens != 520 || got.ContextTokens != 300 {
+		t.Fatalf("aggregate = %+v", got)
+	}
+	want := []providers.ModelUsage{
+		{Model: "light", Usage: providers.UsageInfo{PromptTokens: 220, CompletionTokens: 20, TotalTokens: 240, Requests: 2}},
+		{Model: "primary", Usage: providers.UsageInfo{PromptTokens: 300, CompletionTokens: 40, TotalTokens: 340, CostUSD: 0.01, Requests: 1}},
+	}
+	if !reflect.DeepEqual(got.ByModel, want) {
+		t.Fatalf("ByModel = %+v, want %+v", got.ByModel, want)
+	}
+
+	got.ByModel[0].Usage.Requests = 99
+	if again := ts.GetTurnUsage(); again.ByModel[0].Usage.Requests != 2 {
+		t.Fatal("GetTurnUsage() must return a copy of the per-model split")
+	}
+}
+
+func TestTurnStateAddUsageSingleModelOmitsSplit(t *testing.T) {
+	ts := &turnState{}
+	ts.AddUsage("only", &providers.UsageInfo{PromptTokens: 5, CompletionTokens: 1, TotalTokens: 6})
+	ts.AddUsage("only", &providers.UsageInfo{PromptTokens: 5, CompletionTokens: 1, TotalTokens: 6})
+	if got := ts.GetTurnUsage(); got == nil || got.ByModel != nil {
+		t.Fatalf("GetTurnUsage().ByModel = %+v, want nil for a single-model turn", got)
 	}
 }
 
