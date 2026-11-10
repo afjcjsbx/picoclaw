@@ -762,9 +762,73 @@ Accepted fields:
 | `tz` | Time zone for a cron expression |
 | `message` | Required agent prompt; bounded to 16 KiB |
 | `channel` / `to` | Optional delivery pair; set both or neither |
-| `enabled` | Optional explicit enable/disable |
+| `precheck` | Optional wake gate; see [Wake gates](#wake-gates) |
+| `enabled` | Optional explicit enable/disable, applied on every reconciliation |
 
 At most 32 schedules are accepted per plugin.
+
+### Wake gates
+
+A schedule can run a deterministic precheck before the agent turn. The precheck
+decides whether the turn is worth a model call. This is how a plugin runs
+nightly consolidation without waking the model on empty nights:
+
+```json
+{
+  "name": "nightly-dream",
+  "cron": "0 3 * * *",
+  "message": "Process the dream digest appended by the precheck.",
+  "precheck": {
+    "command": "python3",
+    "args": ["${PLUGIN_ROOT}/scripts/dream.py", "--gate"],
+    "cwd": "${PLUGIN_DATA}",
+    "env": { "DREAM_MODE": "nightly" },
+    "timeout_seconds": 120
+  }
+}
+```
+
+`command`, `args`, `env` and `cwd` follow the same rules as a portable stdio
+MCP server: `command` is bare or begins with `./`, `${PLUGIN_ROOT}` and
+`${PLUGIN_DATA}` expand in arguments and environment values, and paths cannot
+escape the package or the plugin data directory. `timeout_seconds` defaults to
+60 and may not exceed 600. The grant is tied to `allow_schedules`: a plugin with
+inactive schedules never runs its precheck.
+
+The process must print one JSON object on stdout:
+
+```json
+{"wake_agent": false, "reason": "no new human messages"}
+```
+
+```json
+{"wake_agent": true, "context": "bounded digest for the model"}
+```
+
+- `wake_agent` is required.
+- `false` skips the run without a model call. The job state records
+  `lastStatus: "skipped"` and the `reason`.
+- `true` runs the job. A non-empty `context` is appended to `message` after a
+  blank line, so the model receives the digest without the declaration having
+  to embed it.
+- A non-zero exit, invalid JSON, a missing `wake_agent` field, output over
+  128 KiB or a timeout marks the run as `error` and does not wake the model.
+  When the schedule has an explicit `channel`/`to`, the error is also delivered
+  there.
+
+The precheck receives `PLUGIN_ROOT`, `PLUGIN_DATA`, `PICOCLAW_WORKSPACE`,
+`PICOCLAW_CRON_JOB_ID`, `PICOCLAW_CRON_JOB_NAME`,
+`PICOCLAW_CRON_DECLARATION_KEY`, `PICOCLAW_AGENT_ID` (when targeted) and, when
+available, `PICOCLAW_CRON_EXECUTION_ID` and `PICOCLAW_CRON_SOURCE`.
+`PICOCLAW_WORKSPACE` is the gateway workspace, not the workspace of a routed
+non-default agent. The gate does not receive provider credentials or arbitrary
+ambient variables; explicit `env` values are visible in the stored job under
+`cron/jobs.json`, so do not put secrets there.
+
+Prechecks run with the gateway user's permissions, before any model or tool
+approval. Treat `allow_schedules` as permission to execute package code, and
+install only trusted packages. The [dreaming example](../../examples/plugins/dreaming)
+uses this mechanism for a nightly memory pass.
 
 Reconciliation runs after plugin discovery on gateway startup and reload. It
 creates or updates jobs by declaration key and preserves the stored job ID,

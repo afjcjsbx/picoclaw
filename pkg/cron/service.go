@@ -26,11 +26,32 @@ type CronSchedule struct {
 	TZ      string `json:"tz,omitempty"`
 }
 
+// JobPrecheck is an optional wake gate that runs before a scheduled agent
+// turn. Its stdout decides whether the agent runs at all; see
+// tools.CronTool.ExecuteJob for the protocol. The command is resolved by the
+// plugin loader and stored with the job, so the gate does not depend on the
+// plugin still being installed when the run fires.
+type JobPrecheck struct {
+	Command   []string          `json:"command"`
+	Dir       string            `json:"dir,omitempty"`
+	Env       map[string]string `json:"env,omitempty"`
+	TimeoutMS int64             `json:"timeoutMs,omitempty"`
+}
+
+const (
+	// DefaultPrecheckTimeout bounds a wake gate when the declaration sets no
+	// timeout. A gate is a quick deterministic check, not a job of its own.
+	DefaultPrecheckTimeout = 60 * time.Second
+	// MaxPrecheckTimeout is the upper bound accepted from a declaration.
+	MaxPrecheckTimeout = 10 * time.Minute
+)
+
 type CronPayload struct {
-	Message string `json:"message"`
-	Command string `json:"command,omitempty"`
-	Channel string `json:"channel,omitempty"`
-	To      string `json:"to,omitempty"`
+	Message  string       `json:"message"`
+	Command  string       `json:"command,omitempty"`
+	Channel  string       `json:"channel,omitempty"`
+	To       string       `json:"to,omitempty"`
+	Precheck *JobPrecheck `json:"precheck,omitempty"`
 }
 
 // CronRunRecord is one past execution of a job. The scheduler keeps a small
@@ -88,6 +109,25 @@ var (
 	ErrJobNotFound       = errors.New("job not found")
 	ErrServiceNotRunning = errors.New("cron service is not running")
 )
+
+// SkipError reports a run that was intentionally not started, for example
+// because a schedule's precheck found no work. It is not a failure: the job
+// keeps its schedule and the state records "skipped" with the reason.
+type SkipError struct {
+	Reason string
+}
+
+func (e *SkipError) Error() string {
+	if e == nil || e.Reason == "" {
+		return "job skipped"
+	}
+	return "job skipped: " + e.Reason
+}
+
+// SkipJob builds a SkipError for a handler that decided not to run.
+func SkipJob(reason string) error {
+	return &SkipError{Reason: reason}
+}
 
 type CronService struct {
 	storePath string
@@ -462,7 +502,14 @@ func (cs *CronService) executeJobWithOrigin(jobID string, origin Execution) {
 	job.State.LastRunAtMS = &startTime
 	job.UpdatedAtMS = time.Now().UnixMilli()
 
+	skipErr := &SkipError{}
+	precheckSkipped := errors.As(err, &skipErr)
 	switch {
+	case precheckSkipped:
+		job.State.LastStatus = "skipped"
+		job.State.LastError = skipErr.Reason
+		log.Printf("[cron] ⏸ job '%s' skipped by precheck after %dms: %s",
+			job.Name, execDuration, skipErr.Reason)
 	case err != nil:
 		job.State.LastStatus = "error"
 		job.State.LastError = err.Error()
@@ -495,7 +542,7 @@ func (cs *CronService) executeJobWithOrigin(jobID string, origin Execution) {
 			// manually and the error history remains visible.
 			job.Enabled = false
 			job.State.NextRunAtMS = nil
-			if err != nil {
+			if err != nil && !precheckSkipped {
 				nextRunStr = "(disabled after failure)"
 			} else {
 				nextRunStr = "(disabled)"
@@ -508,6 +555,8 @@ func (cs *CronService) executeJobWithOrigin(jobID string, origin Execution) {
 	}
 
 	switch {
+	case precheckSkipped:
+		// Skip reason already logged above.
 	case err != nil:
 		// Failure already logged above.
 	case skipped:
@@ -950,6 +999,7 @@ func (cs *CronService) UpdateJob(job *CronJob) error {
 
 func cloneCronJob(job CronJob) CronJob {
 	clone := job
+	clone.Payload.Precheck = cloneJobPrecheck(job.Payload.Precheck)
 	if job.Schedule.AtMS != nil {
 		atMS := *job.Schedule.AtMS
 		clone.Schedule.AtMS = &atMS
@@ -970,6 +1020,23 @@ func cloneCronJob(job CronJob) CronJob {
 		clone.State.RunHistory = append([]CronRunRecord(nil), job.State.RunHistory...)
 	}
 	return clone
+}
+
+// cloneJobPrecheck deep-copies a precheck so callers never share its slices or
+// environment map with the stored job.
+func cloneJobPrecheck(precheck *JobPrecheck) *JobPrecheck {
+	if precheck == nil {
+		return nil
+	}
+	clone := *precheck
+	clone.Command = append([]string(nil), precheck.Command...)
+	if precheck.Env != nil {
+		clone.Env = make(map[string]string, len(precheck.Env))
+		for key, value := range precheck.Env {
+			clone.Env[key] = value
+		}
+	}
+	return &clone
 }
 
 // appendCronRun prepends a run record and keeps the newest entries bounded.

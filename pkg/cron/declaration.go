@@ -3,6 +3,7 @@ package cron
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 )
@@ -17,10 +18,13 @@ type CronJobDeclaration struct {
 	Message        string
 	Channel        string
 	To             string
+	// Precheck is an optional wake gate that runs before the agent turn.
+	Precheck *JobPrecheck
 	// AgentID routes runs to a specific agent. Empty uses the default route.
 	AgentID string
-	// Enabled is applied only when non-nil. Routine reconciliation omits it,
-	// which preserves an operator's pause/disable decision.
+	// Enabled is applied only when non-nil on every reconciliation. Routine
+	// reconciliation omits it, which preserves an operator's pause/disable
+	// decision.
 	Enabled *bool
 }
 
@@ -106,9 +110,10 @@ func (cs *CronService) ReconcileDeclarations(
 				Enabled:  enabled,
 				Schedule: cloneSchedule(decl.Schedule),
 				Payload: CronPayload{
-					Message: decl.Message,
-					Channel: decl.Channel,
-					To:      decl.To,
+					Message:  decl.Message,
+					Channel:  decl.Channel,
+					To:       decl.To,
+					Precheck: cloneJobPrecheck(decl.Precheck),
 				},
 				AgentID:        decl.AgentID,
 				DeclarationKey: decl.DeclarationKey,
@@ -130,7 +135,8 @@ func (cs *CronService) ReconcileDeclarations(
 		scheduleChanged := !sameSchedule(job.Schedule, decl.Schedule)
 		payloadChanged := job.Payload.Message != decl.Message ||
 			job.Payload.Channel != decl.Channel ||
-			job.Payload.To != decl.To
+			job.Payload.To != decl.To ||
+			!reflect.DeepEqual(job.Payload.Precheck, decl.Precheck)
 		enabledChanged := decl.Enabled != nil && job.Enabled != *decl.Enabled
 		agentChanged := job.AgentID != decl.AgentID
 		nameChanged := job.Name != decl.Name
@@ -141,7 +147,10 @@ func (cs *CronService) ReconcileDeclarations(
 
 		job.Name = decl.Name
 		job.Schedule = cloneSchedule(decl.Schedule)
-		job.Payload = CronPayload{Message: decl.Message, Channel: decl.Channel, To: decl.To}
+		job.Payload = CronPayload{
+			Message: decl.Message, Channel: decl.Channel, To: decl.To,
+			Precheck: cloneJobPrecheck(decl.Precheck),
+		}
 		job.AgentID = decl.AgentID
 		job.DeleteAfterRun = decl.Schedule.Kind == "at"
 		if enabledChanged {
@@ -197,7 +206,31 @@ func validateDeclaration(decl CronJobDeclaration) error {
 	if (decl.Channel == "") != (decl.To == "") {
 		return fmt.Errorf("declaration %q must set both channel and to", decl.DeclarationKey)
 	}
+	if err := validateJobPrecheck(decl.Precheck); err != nil {
+		return fmt.Errorf("declaration %q precheck: %w", decl.DeclarationKey, err)
+	}
 	return validateCronSchedule(decl.Schedule)
+}
+
+func validateJobPrecheck(precheck *JobPrecheck) error {
+	if precheck == nil {
+		return nil
+	}
+	if len(precheck.Command) == 0 || strings.TrimSpace(precheck.Command[0]) == "" {
+		return errors.New("command is required")
+	}
+	if precheck.TimeoutMS < 0 {
+		return errors.New("timeoutMs must not be negative")
+	}
+	if precheck.TimeoutMS > MaxPrecheckTimeout.Milliseconds() {
+		return fmt.Errorf("timeoutMs exceeds %s", MaxPrecheckTimeout)
+	}
+	for key := range precheck.Env {
+		if key == "" || strings.ContainsAny(key, "=\x00") {
+			return fmt.Errorf("invalid environment key %q", key)
+		}
+	}
+	return nil
 }
 
 func cloneSchedule(schedule CronSchedule) CronSchedule {

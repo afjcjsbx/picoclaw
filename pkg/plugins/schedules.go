@@ -87,7 +87,7 @@ func discoverSchedules(manifest PluginManifest, pc PluginContext) ([]Schedule, [
 	seen := map[string]bool{}
 	result := make([]Schedule, 0, len(entries))
 	for _, entry := range entries {
-		schedule, err := parseScheduleEntry(pc.ID, entry)
+		schedule, err := parseScheduleEntry(pc, entry)
 		if err != nil {
 			report(err)
 			continue
@@ -102,7 +102,7 @@ func discoverSchedules(manifest PluginManifest, pc PluginContext) ([]Schedule, [
 	return result, diagnostics
 }
 
-func parseScheduleEntry(pluginID string, raw json.RawMessage) (Schedule, error) {
+func parseScheduleEntry(pc PluginContext, raw json.RawMessage) (Schedule, error) {
 	var result Schedule
 	fields, err := object(raw)
 	if err != nil {
@@ -111,7 +111,7 @@ func parseScheduleEntry(pluginID string, raw json.RawMessage) (Schedule, error) 
 	for key := range fields {
 		switch key {
 		case "name", "schedule", "cron", "cron_expr", "every_seconds",
-			"at", "at_ms", "tz", "message", "channel", "to", "enabled":
+			"at", "at_ms", "tz", "message", "channel", "to", "precheck", "enabled":
 		default:
 			return result, fmt.Errorf("unknown schedule field %q", key)
 		}
@@ -164,14 +164,94 @@ func parseScheduleEntry(pluginID string, raw json.RawMessage) (Schedule, error) 
 		}
 		result.Enabled = &enabled
 	}
+	if value, ok := fields["precheck"]; ok {
+		precheck, precheckErr := parseSchedulePrecheck(pc, value)
+		if precheckErr != nil {
+			return result, fmt.Errorf("schedule %q precheck: %w", result.Name, precheckErr)
+		}
+		result.Precheck = precheck
+	}
 
 	schedule, err := parseScheduleSpec(fields)
 	if err != nil {
 		return result, fmt.Errorf("schedule %q: %w", result.Name, err)
 	}
 	result.Schedule = schedule
-	result.PluginID = pluginID
+	result.PluginID = pc.ID
 	return result, nil
+}
+
+// parseSchedulePrecheck accepts the same launch fields as a portable stdio MCP
+// server, so path containment, environment rules and ${PLUGIN_ROOT} expansion
+// stay in one place. A precheck never receives ambient host credentials.
+func parseSchedulePrecheck(pc PluginContext, raw json.RawMessage) (*Precheck, error) {
+	fields, err := object(raw)
+	if err != nil {
+		return nil, err
+	}
+	for key := range fields {
+		switch key {
+		case "command", "args", "env", "cwd", "timeout_seconds":
+		default:
+			return nil, fmt.Errorf("unknown precheck field %q", key)
+		}
+	}
+	if pc.DataDir == "" {
+		return nil, fmt.Errorf("plugin data directory is unavailable")
+	}
+
+	timeout := cron.DefaultPrecheckTimeout
+	if value, ok := fields["timeout_seconds"]; ok {
+		var seconds int64
+		if decodeErr := decodeField(value, &seconds); decodeErr != nil {
+			return nil, fmt.Errorf("timeout_seconds: %w", decodeErr)
+		}
+		if seconds <= 0 || seconds > int64(cron.MaxPrecheckTimeout/time.Second) {
+			return nil, fmt.Errorf(
+				"timeout_seconds must be between 1 and %d",
+				int64(cron.MaxPrecheckTimeout/time.Second),
+			)
+		}
+		timeout = time.Duration(seconds) * time.Second
+	}
+
+	launch := map[string]any{"type": "stdio"}
+	for _, key := range []string{"command", "args", "env", "cwd"} {
+		if value, ok := fields[key]; ok {
+			launch[key] = value
+		}
+	}
+	encoded, err := json.Marshal(launch)
+	if err != nil {
+		return nil, err
+	}
+	server, err := parseServer(encoded)
+	if err != nil {
+		return nil, err
+	}
+	cfg, dir, env, err := server.RuntimeConfig(pc.Root, pc.DataDir)
+	if err != nil {
+		return nil, err
+	}
+	return &Precheck{
+		Command: append([]string{cfg.Command}, cfg.Args...),
+		Dir:     dir,
+		Env:     environmentMap(env),
+		Timeout: timeout,
+	}, nil
+}
+
+// environmentMap converts the host-owned environment slice produced by
+// Environment into the map stored on the job.
+func environmentMap(env []string) map[string]string {
+	result := make(map[string]string, len(env))
+	for _, item := range env {
+		key, value, ok := strings.Cut(item, "=")
+		if ok && key != "" {
+			result[key] = value
+		}
+	}
+	return result
 }
 
 func parseScheduleSpec(fields map[string]json.RawMessage) (cron.CronSchedule, error) {
