@@ -171,7 +171,7 @@ dispatch 匹配和 session 分配都会使用这套映射，因此同一个人�
 各自保存：
 
 - `.jsonl`：一行一个 `providers.Message`，append-only
-- `.meta.json`：摘要、时间戳、行数、逻辑截断偏移、scope、aliases
+- `.meta.json`：摘要、时间戳、行数、逻辑截断偏移、scope、aliases、累计 usage 计数
 
 `SessionMeta` 当前包含：
 
@@ -183,6 +183,8 @@ dispatch 匹配和 session 分配都会使用这套映射，因此同一个人�
 - `UpdatedAt`
 - `Scope`
 - `Aliases`
+- `Usage`
+- `UsageTracked`
 
 ## 写入与崩溃语义
 
@@ -193,6 +195,7 @@ JSONL store 的设计核心是“追加优先、宁可暂时读到旧数据也�
 - `Compact` 才会真正重写 JSONL 文件，把被跳过的旧行物理移除。
 - `SetHistory` 和 `Compact` 都会先写 metadata 再改写 JSONL；如果中途崩溃，最多短时间暴露旧数据，不应丢数据。
 - 读取 JSONL 时如果碰到损坏行，会跳过该行，而不是让整个 session 读取失败。
+- 累计 usage 计数只在追加带 usage 的消息时增长；截断、压缩和整体替换历史都不会让它减少，alias 提升时计数会迁移到规范 session。
 
 `JSONLBackend.Save` 对应到底层的 `store.Compact(...)`。
 也就是说，`Save` 在新实现里不再是“把内存脏数据刷盘”，而是“在逻辑截断后回收无效行占用的磁盘空间”。
