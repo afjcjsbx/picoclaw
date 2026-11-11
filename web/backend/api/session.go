@@ -42,6 +42,12 @@ type sessionFile struct {
 	ForkDepth  int                 `json:"fork_depth,omitempty"`
 	Created    time.Time           `json:"created"`
 	Updated    time.Time           `json:"updated"`
+
+	// hasMetadata reports whether the session has persisted metadata on disk.
+	// A session cleared with /clear keeps its metadata while its message
+	// history is empty; unlike an orphaned empty file, it is still a real
+	// conversation the user can return to.
+	hasMetadata bool
 }
 
 // sessionListItem is a lightweight summary returned by GET /api/sessions.
@@ -157,6 +163,7 @@ func (h *Handler) readLegacySession(path string) (sessionFile, error) {
 	if err := json.Unmarshal(data, &sess); err != nil {
 		return sessionFile{}, err
 	}
+	sess.hasMetadata = true
 	return sess, nil
 }
 
@@ -222,6 +229,9 @@ func (h *Handler) readJSONLSession(dir, sessionKey string) (sessionFile, error) 
 	jsonlPath := base + ".jsonl"
 	metaPath := base + ".meta.json"
 
+	_, metaErr := os.Stat(metaPath)
+	hasMetadata := metaErr == nil
+
 	meta, err := h.readSessionMeta(metaPath, sessionKey)
 	if err != nil {
 		return sessionFile{}, err
@@ -268,6 +278,8 @@ func (h *Handler) readJSONLSession(dir, sessionKey string) (sessionFile, error) 
 		ForkDepth:  meta.ForkDepth,
 		Created:    created,
 		Updated:    updated,
+
+		hasMetadata: hasMetadata,
 	}, nil
 }
 
@@ -431,7 +443,7 @@ func (h *Handler) findLegacyPicoSessions(dir string) ([]picoLegacySessionRef, er
 
 		path := filepath.Join(dir, entry.Name())
 		sess, err := h.readLegacySession(path)
-		if err != nil || isEmptySession(sess) {
+		if err != nil {
 			continue
 		}
 
@@ -544,7 +556,12 @@ func buildSessionListItem(sessionID string, sess sessionFile, toolFeedbackMaxArg
 	preview = truncateRunes(preview, maxSessionTitleRunes)
 
 	if preview == "" {
-		preview = "(empty)"
+		// A cleared session keeps its metadata but has no messages. Leave the
+		// title empty so the UI can label it as a new conversation instead of
+		// showing a stale "(empty)" transcript marker.
+		if !isEmptySession(sess) {
+			preview = "(empty)"
+		}
 	}
 	title := preview
 	if sess.ForkedFrom != "" {
@@ -963,7 +980,7 @@ func (h *Handler) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	if refs, findErr := h.findPicoJSONLSessions(dir); findErr == nil {
 		for _, ref := range refs {
 			sess, loadErr := h.readJSONLSession(dir, ref.Key)
-			if loadErr != nil || isEmptySession(sess) {
+			if loadErr != nil || (isEmptySession(sess) && !sess.hasMetadata) {
 				continue
 			}
 			h.hydrateForkDisplay(dir, &sess, toolFeedbackMaxArgsLength)
@@ -982,7 +999,7 @@ func (h *Handler) handleListSessions(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			sess, loadErr := h.readLegacySession(ref.Path)
-			if loadErr != nil || isEmptySession(sess) {
+			if loadErr != nil || (isEmptySession(sess) && !sess.hasMetadata) {
 				continue
 			}
 			h.hydrateForkDisplay(dir, &sess, toolFeedbackMaxArgsLength)
@@ -1067,7 +1084,7 @@ func (h *Handler) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	if refErr == nil {
 		sess, err = h.readJSONLSession(dir, ref.Key)
 	}
-	if err == nil && isEmptySession(sess) {
+	if err == nil && isEmptySession(sess) && !sess.hasMetadata {
 		err = os.ErrNotExist
 	}
 	if err != nil {
@@ -1075,7 +1092,7 @@ func (h *Handler) handleGetSession(w http.ResponseWriter, r *http.Request) {
 			if legacyRef, legacyErr := h.findLegacyPicoSession(dir, sessionID); legacyErr == nil {
 				sess, err = h.readLegacySession(legacyRef.Path)
 			}
-			if err == nil && isEmptySession(sess) {
+			if err == nil && isEmptySession(sess) && !sess.hasMetadata {
 				err = os.ErrNotExist
 			}
 		}

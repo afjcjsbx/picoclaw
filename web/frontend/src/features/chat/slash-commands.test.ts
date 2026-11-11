@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import {
   type SlashPaletteEntry,
+  clearsConversationHistory,
   filterSlashPaletteItems,
   nextSlashRecents,
   slashCommandInsertion,
@@ -126,5 +127,27 @@ describe("slashCommandInsertion", () => {
   it("adds a trailing space only when the command takes arguments", () => {
     expect(slashCommandInsertion(ENTRIES[0])).toBe("/help")
     expect(slashCommandInsertion(ENTRIES[1])).toBe("/btw ")
+  })
+})
+
+describe("clearsConversationHistory", () => {
+  it("matches /clear and the /new alias", () => {
+    expect(clearsConversationHistory("/clear")).toBe(true)
+    expect(clearsConversationHistory("/new")).toBe(true)
+    expect(clearsConversationHistory("  /clear  ")).toBe(true)
+    expect(clearsConversationHistory("/CLEAR")).toBe(true)
+    expect(clearsConversationHistory("!new")).toBe(true)
+  })
+
+  it("ignores arguments and Telegram bot suffixes", () => {
+    expect(clearsConversationHistory("/clear now")).toBe(true)
+    expect(clearsConversationHistory("/clear@picoclaw_bot")).toBe(true)
+  })
+
+  it("does not match unrelated commands or plain text", () => {
+    expect(clearsConversationHistory("/compact")).toBe(false)
+    expect(clearsConversationHistory("/clearish")).toBe(false)
+    expect(clearsConversationHistory("please clear")).toBe(false)
+    expect(clearsConversationHistory("")).toBe(false)
   })
 })
