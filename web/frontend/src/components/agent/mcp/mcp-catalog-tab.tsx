@@ -46,6 +46,7 @@ import {
   MCP_CATALOG,
   buildMCPCatalogServer,
 } from "./catalog"
+import { MCPCatalogIcon } from "./mcp-catalog-icon"
 
 type CategoryFilter = MCPCatalogCategory | "all"
 
@@ -271,9 +272,12 @@ function CatalogCard({
       <CardContent className="flex h-full flex-col gap-4 px-5 py-5">
         <div className="flex items-start justify-between gap-3">
           <div className="flex min-w-0 items-center gap-3">
-            <div className="bg-muted/60 flex size-10 shrink-0 items-center justify-center rounded-xl">
-              <CategoryIcon className="text-muted-foreground size-5" />
-            </div>
+            <MCPCatalogIcon
+              icon={entry.icon}
+              label={entry.displayName}
+              fallback={CategoryIcon}
+              className="size-11"
+            />
             <div className="min-w-0">
               <h3 className="text-foreground/90 truncate font-semibold tracking-tight">
                 {entry.displayName}
