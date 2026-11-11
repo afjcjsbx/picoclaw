@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/sipeed/picoclaw/pkg/usage"
 )
 
 func TestMatchingTurnMessageTail_IgnoresInternalRuntimeFields(t *testing.T) {
@@ -155,6 +156,21 @@ func TestTurnStateAddUsageSplitsMultiModelTurns(t *testing.T) {
 	got.ByModel[0].Usage.Requests = 99
 	if again := ts.GetTurnUsage(); again.ByModel[0].Usage.Requests != 2 {
 		t.Fatal("GetTurnUsage() must return a copy of the per-model split")
+	}
+}
+
+func TestTurnStateAddUsageLabelsMissingModelUnknown(t *testing.T) {
+	ts := &turnState{}
+	ts.AddUsage("", &providers.UsageInfo{PromptTokens: 5, CompletionTokens: 1, TotalTokens: 6})
+	ts.AddUsage("  ", &providers.UsageInfo{PromptTokens: 5, CompletionTokens: 1, TotalTokens: 6})
+	ts.AddUsage("primary", &providers.UsageInfo{PromptTokens: 7, CompletionTokens: 1, TotalTokens: 8})
+
+	got := ts.GetTurnUsage()
+	if got == nil || len(got.ByModel) != 2 {
+		t.Fatalf("GetTurnUsage().ByModel = %+v, want unknown and primary", got)
+	}
+	if split := got.ByModel[0]; split.Model != usage.UnknownModel || split.Usage.Requests != 2 {
+		t.Fatalf("ByModel[0] = %+v, want both unnamed calls under %q", split, usage.UnknownModel)
 	}
 }
 

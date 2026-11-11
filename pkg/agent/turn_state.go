@@ -18,6 +18,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/session"
 	"github.com/sipeed/picoclaw/pkg/tools"
+	"github.com/sipeed/picoclaw/pkg/usage"
 )
 
 // =============================================================================
@@ -1098,9 +1099,13 @@ func addCallUsage(dst, call *providers.UsageInfo) {
 }
 
 // addModelCall adds one call to the per-model split of a turn, creating the
-// model's entry on first use.
+// model's entry on first use. A call without a model name is recorded under
+// usage.UnknownModel, as the usage reports label it.
 func addModelCall(split []providers.ModelUsage, model string, call *providers.UsageInfo) []providers.ModelUsage {
 	model = strings.TrimSpace(model)
+	if model == "" {
+		model = usage.UnknownModel
+	}
 	for i := range split {
 		if split[i].Model == model {
 			addCallUsage(&split[i].Usage, call)
