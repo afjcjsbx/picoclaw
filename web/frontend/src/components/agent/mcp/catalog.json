@@ -493,6 +493,32 @@
       ]
     },
     {
+      "name": "composio",
+      "displayName": "Composio",
+      "description": "Reach 1000+ apps such as Gmail, Slack, Notion and GitHub through a single hosted MCP server with 7 meta-tools.",
+      "category": "productivity",
+      "docsUrl": "https://docs.composio.dev/docs/composio-connect",
+      "icon": {
+        "domain": "composio.dev"
+      },
+      "requires": "Composio consumer API key",
+      "transport": "http",
+      "url": "https://connect.composio.dev/mcp",
+      "fields": [
+        {
+          "key": "apiKey",
+          "label": "Composio consumer API key",
+          "placeholder": "Paste your Composio API key",
+          "required": true,
+          "secret": true,
+          "target": {
+            "kind": "header",
+            "name": "x-consumer-api-key"
+          }
+        }
+      ]
+    },
+    {
       "name": "figma",
       "displayName": "Figma",
       "description": "Read designs and generate code from the local Figma desktop app.",
