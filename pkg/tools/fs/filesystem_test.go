@@ -1373,6 +1373,46 @@ func TestReadFileTool_OffsetBeyondEOF(t *testing.T) {
 	}
 }
 
+func TestReadFileLinesTool_HeaderReportsFirstLineByteOffset(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "offset_header.txt")
+	content := "line one\nline two\nline three\n"
+	if err := os.WriteFile(testFile, []byte(content), 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	tool := NewReadFileLinesTool(
+		tmpDir, false, MaxReadFileSize,
+		DefaultReadFileMaxLines, DefaultReadFileMaxLineLength,
+	)
+
+	fromStart := tool.Execute(context.Background(), map[string]any{
+		"path":       testFile,
+		"start_line": 1,
+	})
+	if fromStart.IsError {
+		t.Fatalf("Execute(start_line=1) error = %s", fromStart.ForLLM)
+	}
+	if !strings.Contains(fromStart.ForLLM, "first_line_byte_offset: 0") {
+		t.Fatalf("expected offset 0 for start_line=1, got: %s", fromStart.ForLLM)
+	}
+
+	fromSecond := tool.Execute(context.Background(), map[string]any{
+		"path":       testFile,
+		"start_line": 2,
+	})
+	if fromSecond.IsError {
+		t.Fatalf("Execute(start_line=2) error = %s", fromSecond.ForLLM)
+	}
+	wantOffset := len("line one\n")
+	if !strings.Contains(fromSecond.ForLLM, "first_line_byte_offset: "+strconv.Itoa(wantOffset)) {
+		t.Fatalf(
+			"expected first_line_byte_offset=%d for start_line=2, got: %s",
+			wantOffset, fromSecond.ForLLM,
+		)
+	}
+}
+
 func TestReadFileLinesTool_ChunkedReading(t *testing.T) {
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "pagination_lines.txt")

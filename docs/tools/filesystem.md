@@ -69,6 +69,8 @@ Passing both line and byte pagination arguments in the same call is rejected. Pa
 
 Using `offset`/`length` in line mode (or `limit`) is rejected with an error, and byte mode rejects line arguments: each fixed mode only accepts its own pagination arguments. Line mode rejects binary-looking files with guidance to switch to `bytes`. Auto mode does not: it falls back to raw bytes automatically.
 
+The line-mode header includes `first_line_byte_offset`, the 0-based byte offset where the first returned line starts. When a single long line is truncated, the model can use that offset with `offset`/`length` to continue reading the same line in raw byte mode instead of guessing where the line begins.
+
 Lines longer than `tools.read_file.max_line_length` characters are cut after that many characters with a ` ... [truncated]` marker and the read continues with the next line, so a single long line cannot consume the whole byte budget. If the byte budget itself runs out mid-line, the header reports the mid-line cut instead.
 
 Both modes scrub credential-looking values from the rendered content before it reaches the model: well-known token formats and long machine-generated high-entropy strings are replaced with `[FILTERED]`, while ordinary identifiers, prose, and hex hashes stay visible. Headers and line numbers still refer to the raw file, so reads continue normally after a masked value. See [Built-in redaction in search results, file reads, and edit diffs](../security/sensitive_data_filtering.md#built-in-redaction-in-search-results-file-reads-and-edit-diffs).

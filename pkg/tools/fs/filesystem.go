@@ -727,9 +727,10 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 	var byteBudgetTruncated bool
 	var lineTruncated bool
 	var linesTruncated int64
+	var firstLineByteOffset int64
 
 	for lineIndex < startLine {
-		hasLine, _, consumeErr := consumeNextLine(reader)
+		hasLine, consumedBytes, consumeErr := consumeNextLine(reader)
 		if consumeErr != nil {
 			return ErrorResult(fmt.Sprintf("failed to read file content: %v", consumeErr))
 		}
@@ -737,6 +738,7 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 			reachedEOF = true
 			break
 		}
+		firstLineByteOffset += consumedBytes
 		lineIndex++
 	}
 
@@ -856,8 +858,8 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 	endLine := startLine + linesRead - 1
 	displayPath := filepath.Base(path)
 	header := fmt.Sprintf(
-		"[file: %s | read: lines %d-%d (1-indexed) | file_bytes: %d | output_bytes: %d]",
-		displayPath, start, endLine, fileBytesRead, outputBytesRead,
+		"[file: %s | read: lines %d-%d (1-indexed) | file_bytes: %d | output_bytes: %d | first_line_byte_offset: %d]",
+		displayPath, start, endLine, fileBytesRead, outputBytesRead, firstLineByteOffset,
 	)
 
 	switch {
@@ -892,13 +894,14 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 
 	logger.DebugCF("tool", "ReadFileTool execution completed successfully",
 		map[string]any{
-			"path":              path,
-			"lines_read":        linesRead,
-			"file_bytes_read":   fileBytesRead,
-			"output_bytes_read": outputBytesRead,
-			"truncated":         byteBudgetTruncated,
-			"lines_truncated":   linesTruncated,
-			"tool":              t.Name(),
+			"path":                   path,
+			"lines_read":             linesRead,
+			"file_bytes_read":        fileBytesRead,
+			"output_bytes_read":      outputBytesRead,
+			"first_line_byte_offset": firstLineByteOffset,
+			"truncated":              byteBudgetTruncated,
+			"lines_truncated":        linesTruncated,
+			"tool":                   t.Name(),
 		})
 
 	return NewToolResult(header + "\n\n" + content.String())
