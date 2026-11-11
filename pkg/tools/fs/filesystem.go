@@ -605,6 +605,9 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	data := probe[:min(int64(n), length)]
 
 	if len(data) == 0 {
+		if totalSize == 0 || (totalSize < 0 && offset == 0) {
+			return NewToolResult("[file is empty (0 bytes); do not retry]")
+		}
 		return NewToolResult("[END OF FILE - no content at this offset]")
 	}
 
@@ -851,6 +854,9 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 	}
 
 	if linesRead == 0 && content.Len() == 0 {
+		if totalSize == 0 || (totalSize < 0 && startLine == 1) {
+			return NewToolResult("[file is empty (0 bytes); do not retry]")
+		}
 		return NewToolResult(fmt.Sprintf("[END OF FILE - no content at or after start_line=%d]", startLine))
 	}
 

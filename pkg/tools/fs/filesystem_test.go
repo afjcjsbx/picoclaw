@@ -1865,6 +1865,37 @@ func TestReadFileLinesTool_ExactByteBudgetBoundaryIncludesPrefix(t *testing.T) {
 	}
 }
 
+func TestReadFileEmptyFileMessageIsExplicit(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "empty.txt")
+	if err := os.WriteFile(testFile, nil, 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	const want = "[file is empty (0 bytes); do not retry]"
+
+	bytesTool := NewReadFileTool(tmpDir, false, MaxReadFileSize)
+	if got := bytesTool.Execute(context.Background(), map[string]any{"path": testFile}).ForLLM; got != want {
+		t.Fatalf("byte mode empty result = %q, want %q", got, want)
+	}
+
+	linesTool := NewReadFileLinesTool(
+		tmpDir, false, MaxReadFileSize,
+		DefaultReadFileMaxLines, DefaultReadFileMaxLineLength,
+	)
+	if got := linesTool.Execute(context.Background(), map[string]any{"path": testFile}).ForLLM; got != want {
+		t.Fatalf("line mode empty result = %q, want %q", got, want)
+	}
+
+	autoTool := NewReadFileAutoTool(
+		tmpDir, false, MaxReadFileSize,
+		DefaultReadFileMaxLines, DefaultReadFileMaxLineLength,
+	)
+	if got := autoTool.Execute(context.Background(), map[string]any{"path": testFile}).ForLLM; got != want {
+		t.Fatalf("auto mode empty result = %q, want %q", got, want)
+	}
+}
+
 func TestReadFileAutoTool_TextDefaultsToLineMode(t *testing.T) {
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "text.txt")
