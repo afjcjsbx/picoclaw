@@ -92,6 +92,7 @@ interface ChatComposerProps {
   contextUsage?: ContextUsage
   slashCommands?: SlashCommand[]
   focusSignal?: number
+  onFocusHandled?: () => void
 }
 
 const AUDIO_RECORDING_ERROR_KEYS = {
@@ -127,6 +128,7 @@ export function ChatComposer({
   contextUsage,
   slashCommands = [],
   focusSignal = 0,
+  onFocusHandled,
 }: ChatComposerProps) {
   const { t } = useTranslation()
   const canInput = inputDisabledReason === null
@@ -218,8 +220,34 @@ export function ChatComposer({
 
   useEffect(() => {
     if (!focusSignal) return
-    textareaRef.current?.focus()
-  }, [focusSignal])
+    const textarea = textareaRef.current
+    // Keep the request pending until the input is editable (e.g. while the
+    // socket reconnects after a new conversation is created).
+    if (!textarea || textarea.disabled) return
+    textarea.focus()
+
+    // The mobile sidebar and the command palette restore focus to their
+    // trigger while closing, so re-assert focus once that transition ends.
+    let cancelled = false
+    const retry = window.setTimeout(() => {
+      if (cancelled) return
+      const current = textareaRef.current
+      if (current && !surfaceRef.current?.contains(document.activeElement)) {
+        current.focus()
+      }
+      onFocusHandled?.()
+    }, 300)
+    const cancelRetry = () => {
+      cancelled = true
+      onFocusHandled?.()
+    }
+    document.addEventListener("pointerdown", cancelRetry, true)
+    return () => {
+      cancelled = true
+      window.clearTimeout(retry)
+      document.removeEventListener("pointerdown", cancelRetry, true)
+    }
+  }, [canInput, focusSignal, onFocusHandled])
 
   const handleInputChange = (value: string) => {
     setPaletteDismissed(false)

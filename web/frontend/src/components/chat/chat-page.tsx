@@ -86,6 +86,7 @@ import type {
   SplitSessionState,
 } from "@/store/chat"
 import {
+  composerFocusSignalAtom,
   composerInsertionAtom,
   initializeSplitSessionState,
   pendingScrollTargetAtom,
@@ -824,7 +825,12 @@ export function ChatPage() {
   const [composerInsertion, setComposerInsertion] = useAtom(
     composerInsertionAtom,
   )
-  const [composerFocusSignal, setComposerFocusSignal] = useState(0)
+  const [composerFocusSignal, setComposerFocusSignal] = useAtom(
+    composerFocusSignalAtom,
+  )
+  const handleComposerFocusHandled = useCallback(() => {
+    setComposerFocusSignal(0)
+  }, [setComposerFocusSignal])
   const sessionTitles = useAtomValue(sessionTitlesAtom)
   const splitSessionStates = useAtomValue(splitSessionStatesAtom)
   const sessionRunning = useAtomValue(sessionRunningAtom)
@@ -895,7 +901,7 @@ export function ChatPage() {
     setInput(composerInsertion.text)
     setComposerFocusSignal((signal) => signal + 1)
     setComposerInsertion(null)
-  }, [composerInsertion, setComposerInsertion])
+  }, [composerInsertion, setComposerInsertion, setComposerFocusSignal])
 
   // Follow-ups composed while the agent was running are sent as a regular
   // next turn once the current one finishes, unless the user steered them.
@@ -1661,6 +1667,7 @@ export function ChatPage() {
             contextUsage={contextUsage}
             slashCommands={slashCommands}
             focusSignal={composerFocusSignal}
+            onFocusHandled={handleComposerFocusHandled}
           />
         </section>
 
