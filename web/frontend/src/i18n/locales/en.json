@@ -1182,7 +1182,7 @@
       "custom_deny_patterns": "Command Blacklist",
       "custom_deny_patterns_hint": "Add extra command-blocking rules, one regular expression per line. A command matching any rule here will be blocked.",
       "custom_allow_patterns": "Command Whitelist",
-      "custom_allow_patterns_hint": "Add extra command-allow rules, one regular expression per line. A command matching any rule here skips blacklist matching, but other safety limits still apply.",
+      "custom_allow_patterns_hint": "Add extra command-allow rules, one regular expression per line. A command matching any rule here is exempt from the built-in deny patterns, but custom deny patterns and other safety limits still apply.",
       "custom_patterns_placeholder": "^rm\\s+-rf\\b\n^git\\s+push\\b",
       "pattern_detector_title": "Pattern Detection Tool",
       "pattern_detector_hint": "Enter a command to test if it matches any blacklist or whitelist patterns.",
