@@ -130,6 +130,10 @@ export interface ComposerInsertion {
 // chat page consumes the request and clears it once the input is updated.
 export const composerInsertionAtom = atom<ComposerInsertion | null>(null)
 
+// Bumped whenever the chat composer should take focus, e.g. after starting a
+// new conversation.
+export const composerFocusSignalAtom = atom(0)
+
 export interface PendingScrollTarget {
   sessionId: string
   messageIndex: number

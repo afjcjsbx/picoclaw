@@ -23,6 +23,7 @@ import {
   type ChatStoreState,
   chatAtom,
   clearSessionRunning,
+  composerFocusSignalAtom,
   getChatState,
   initializeSplitSessionState,
   markSessionRead,
@@ -1081,6 +1082,7 @@ export async function switchChatSession(sessionId: string) {
 }
 
 export async function newChatSession(force = false) {
+  store.set(composerFocusSignalAtom, (signal) => signal + 1)
   if (!force && getChatState().messages.length === 0) {
     return undefined
   }
