@@ -123,7 +123,11 @@ func normalizeToolResult(
 		notes = append(notes, extractedNotes...)
 	}
 
-	result.ForLLM = toolshared.SanitizeToolLLMContent(result.ForLLM)
+	if result.AllowLargeBase64Like {
+		result.ForLLM = toolshared.SanitizeToolLLMContentAllowLargeBase64Like(result.ForLLM)
+	} else {
+		result.ForLLM = toolshared.SanitizeToolLLMContent(result.ForLLM)
+	}
 
 	if len(result.Media) > 0 && len(notes) > 0 {
 		if strings.TrimSpace(result.ForLLM) == "" {

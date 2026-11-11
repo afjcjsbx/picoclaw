@@ -837,7 +837,11 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 			"tool":              t.Name(),
 		})
 
-	return NewToolResult(header + "\n\n" + content.String())
+	result := NewToolResult(header + "\n\n" + content.String())
+	// Line-mode output is bounded, line-numbered text; a long run of base64
+	// characters in a source file is content, not an inline media payload.
+	result.AllowLargeBase64Like = true
+	return result
 }
 
 func isBinaryReadFileData(data []byte) bool {

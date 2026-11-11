@@ -50,6 +50,18 @@ func RawBase64DataURLs(text string) []InlineDataURL {
 }
 
 func SanitizeToolLLMContent(text string) string {
+	return sanitizeToolLLMContent(text, false)
+}
+
+// SanitizeToolLLMContentAllowLargeBase64Like is SanitizeToolLLMContent for
+// tools whose result is bounded, line-numbered text. It still strips data URLs
+// and invisible Unicode, but keeps large base64-like runs because they are
+// ordinary file content rather than an inline media payload.
+func SanitizeToolLLMContentAllowLargeBase64Like(text string) string {
+	return sanitizeToolLLMContent(text, true)
+}
+
+func sanitizeToolLLMContent(text string, allowLargeBase64Like bool) string {
 	// Tool output is untrusted, model-facing text. A tool (or an MCP server
 	// behind it) can append TAG characters or bidi controls that render as
 	// nothing to the user while the model still reads them, so remove them
@@ -68,7 +80,7 @@ func SanitizeToolLLMContent(text string) string {
 		}
 		return cleaned + "\n" + InlineMediaOmittedMessage
 	}
-	if looksLikeLargeBase64Payload(trimmed) {
+	if !allowLargeBase64Like && looksLikeLargeBase64Payload(trimmed) {
 		return LargeBase64OmittedMessage
 	}
 	return text
