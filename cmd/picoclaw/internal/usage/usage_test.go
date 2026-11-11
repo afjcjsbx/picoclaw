@@ -193,7 +193,8 @@ func TestRunUsageSessionByAliasOfCanonicalSession(t *testing.T) {
 	if err := runUsage(&out, dir, options{Session: "cli:default", Limit: 20}); err != nil {
 		t.Fatalf("runUsage: %v", err)
 	}
-	if !strings.Contains(out.String(), "Usage for session cli:default") || !strings.Contains(out.String(), "Input:  100 tokens") {
+	if !strings.Contains(out.String(), "Usage for session cli:default") ||
+		!strings.Contains(out.String(), "Input:  100 tokens") {
 		t.Fatalf("alias output = %q", out.String())
 	}
 }

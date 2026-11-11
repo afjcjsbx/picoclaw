@@ -53,15 +53,19 @@ func TestSessionUsageSummaryKeepsCountersAfterCompaction(t *testing.T) {
 	ctx := context.Background()
 	const sessionKey = "agent:main:test"
 	for range 2 {
-		if err := agent.Sessions.AddFullMessage(ctx, sessionKey, usageAssistantMessage("m", 100, 10)); err != nil {
-			t.Fatalf("AddFullMessage: %v", err)
+		if addErr := agent.Sessions.AddFullMessage(
+			ctx,
+			sessionKey,
+			usageAssistantMessage("m", 100, 10),
+		); addErr != nil {
+			t.Fatalf("AddFullMessage: %v", addErr)
 		}
 	}
-	if err := agent.Sessions.TruncateHistory(ctx, sessionKey, 1); err != nil {
-		t.Fatalf("TruncateHistory: %v", err)
+	if truncateErr := agent.Sessions.TruncateHistory(ctx, sessionKey, 1); truncateErr != nil {
+		t.Fatalf("TruncateHistory: %v", truncateErr)
 	}
-	if err := agent.Sessions.Save(ctx, sessionKey); err != nil {
-		t.Fatalf("Save: %v", err)
+	if saveErr := agent.Sessions.Save(ctx, sessionKey); saveErr != nil {
+		t.Fatalf("Save: %v", saveErr)
 	}
 
 	summary, err := sessionUsageSummary(ctx, agent, sessionKey)

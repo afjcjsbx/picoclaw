@@ -37,19 +37,19 @@ type Totals struct {
 }
 
 // Empty reports whether no usage has been recorded.
-func (t Totals) Empty() bool {
-	return t == (Totals{})
+func (t *Totals) Empty() bool {
+	return *t == (Totals{})
 }
 
 // FreshInputTokens returns the prompt tokens that were neither read from nor
 // written to the provider cache.
-func (t Totals) FreshInputTokens() int {
+func (t *Totals) FreshInputTokens() int {
 	return max(t.InputTokens-t.CacheReadTokens-t.CacheCreationTokens, 0)
 }
 
 // InputBreakdown renders the input token count and, when the provider reported
 // cache activity, the fresh/cache-read/cache-write split.
-func (t Totals) InputBreakdown() string {
+func (t *Totals) InputBreakdown() string {
 	line := FormatTokens(t.InputTokens) + " tokens"
 	if t.CacheReadTokens == 0 && t.CacheCreationTokens == 0 {
 		return line

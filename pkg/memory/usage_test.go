@@ -107,7 +107,8 @@ func TestSessionUsageAccumulatesAppendedMessages(t *testing.T) {
 	}
 
 	got := mustSessionUsage(t, store, "s")
-	if got.Turns != 2 || got.Requests != 2 || got.InputTokens != 300 || got.OutputTokens != 30 || got.TotalTokens != 330 {
+	if got.Turns != 2 || got.Requests != 2 || got.InputTokens != 300 || got.OutputTokens != 30 ||
+		got.TotalTokens != 330 {
 		t.Fatalf("usage = %+v", got.Totals)
 	}
 	if len(got.Models) != 2 {
@@ -378,8 +379,8 @@ func TestSumUsageFileReadsRecordsLargerThanTheOldLineLimit(t *testing.T) {
 	}
 	path := filepath.Join(t.TempDir(), "s.jsonl")
 	body := append(append(bigLine, '\n'), append(small, '\n')...)
-	if err := os.WriteFile(path, body, 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
+	if writeErr := os.WriteFile(path, body, 0o644); writeErr != nil {
+		t.Fatalf("WriteFile: %v", writeErr)
 	}
 
 	sum, err := sumUsageFile(path)

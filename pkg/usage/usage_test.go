@@ -51,8 +51,20 @@ func TestSummaryAddMessageSplitsMultiModelTurns(t *testing.T) {
 	var s Summary
 	s.AddMessage("fallback-name", providers.UsageInfo{
 		ByModel: []providers.ModelUsage{
-			{Model: "light", Usage: providers.UsageInfo{PromptTokens: 220, CompletionTokens: 20, TotalTokens: 240, Requests: 2}},
-			{Model: "primary", Usage: providers.UsageInfo{PromptTokens: 300, CompletionTokens: 40, TotalTokens: 340, CostUSD: 0.01, Requests: 1}},
+			{
+				Model: "light",
+				Usage: providers.UsageInfo{PromptTokens: 220, CompletionTokens: 20, TotalTokens: 240, Requests: 2},
+			},
+			{
+				Model: "primary",
+				Usage: providers.UsageInfo{
+					PromptTokens:     300,
+					CompletionTokens: 40,
+					TotalTokens:      340,
+					CostUSD:          0.01,
+					Requests:         1,
+				},
+			},
 		},
 	})
 
@@ -107,7 +119,12 @@ func TestSummaryMergeCombinesModelRows(t *testing.T) {
 func TestFromMessagesIgnoresMessagesWithoutUsage(t *testing.T) {
 	summary := FromMessages([]providers.Message{
 		{Role: "user", Content: "hi"},
-		{Role: "assistant", Content: "hello", ModelName: "m", Usage: &providers.UsageInfo{PromptTokens: 7, CompletionTokens: 3, TotalTokens: 10}},
+		{
+			Role:      "assistant",
+			Content:   "hello",
+			ModelName: "m",
+			Usage:     &providers.UsageInfo{PromptTokens: 7, CompletionTokens: 3, TotalTokens: 10},
+		},
 	})
 	if summary.Turns != 1 || summary.TotalTokens != 10 {
 		t.Fatalf("FromMessages() = %+v", summary.Totals)
@@ -115,7 +132,8 @@ func TestFromMessagesIgnoresMessagesWithoutUsage(t *testing.T) {
 }
 
 func TestTotalsFreshInputTokensNeverNegative(t *testing.T) {
-	if got := (Totals{InputTokens: 10, CacheReadTokens: 20}).FreshInputTokens(); got != 0 {
+	totals := Totals{InputTokens: 10, CacheReadTokens: 20}
+	if got := totals.FreshInputTokens(); got != 0 {
 		t.Fatalf("FreshInputTokens() = %d, want 0", got)
 	}
 }

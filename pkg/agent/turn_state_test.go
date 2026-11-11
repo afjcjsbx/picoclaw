@@ -120,7 +120,10 @@ func TestTurnStateAddUsageSplitsMultiModelTurns(t *testing.T) {
 	ts := &turnState{}
 	ts.AddUsage("light", &providers.UsageInfo{PromptTokens: 100, CompletionTokens: 10, TotalTokens: 110})
 	ts.AddUsage("light", &providers.UsageInfo{PromptTokens: 120, CompletionTokens: 10, TotalTokens: 130})
-	ts.AddUsage("primary", &providers.UsageInfo{PromptTokens: 300, CompletionTokens: 40, TotalTokens: 340, CostUSD: 0.01})
+	ts.AddUsage(
+		"primary",
+		&providers.UsageInfo{PromptTokens: 300, CompletionTokens: 40, TotalTokens: 340, CostUSD: 0.01},
+	)
 
 	got := ts.GetTurnUsage()
 	if got == nil {
@@ -130,8 +133,20 @@ func TestTurnStateAddUsageSplitsMultiModelTurns(t *testing.T) {
 		t.Fatalf("aggregate = %+v", got)
 	}
 	want := []providers.ModelUsage{
-		{Model: "light", Usage: providers.UsageInfo{PromptTokens: 220, CompletionTokens: 20, TotalTokens: 240, Requests: 2}},
-		{Model: "primary", Usage: providers.UsageInfo{PromptTokens: 300, CompletionTokens: 40, TotalTokens: 340, CostUSD: 0.01, Requests: 1}},
+		{
+			Model: "light",
+			Usage: providers.UsageInfo{PromptTokens: 220, CompletionTokens: 20, TotalTokens: 240, Requests: 2},
+		},
+		{
+			Model: "primary",
+			Usage: providers.UsageInfo{
+				PromptTokens:     300,
+				CompletionTokens: 40,
+				TotalTokens:      340,
+				CostUSD:          0.01,
+				Requests:         1,
+			},
+		},
 	}
 	if !reflect.DeepEqual(got.ByModel, want) {
 		t.Fatalf("ByModel = %+v, want %+v", got.ByModel, want)

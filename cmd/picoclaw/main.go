@@ -186,7 +186,7 @@ func machineOutputRequested(args []string) bool {
 	if err != nil || cmd.Flags().Lookup(machineOutputFlag) == nil {
 		return false
 	}
-	if err := cmd.ParseFlags(rest); err != nil {
+	if parseErr := cmd.ParseFlags(rest); parseErr != nil {
 		return false
 	}
 	enabled, err := cmd.Flags().GetBool(machineOutputFlag)

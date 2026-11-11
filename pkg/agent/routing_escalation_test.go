@@ -139,7 +139,10 @@ func TestRunTurn_EscalationKeepsUsagePerModel(t *testing.T) {
 	}
 	want := []providers.ModelUsage{
 		{Model: "light-model", Usage: providers.UsageInfo{Requests: 3, PromptTokens: 300}},
-		{Model: "primary-model", Usage: providers.UsageInfo{Requests: 1, PromptTokens: 500, CompletionTokens: 20, TotalTokens: 520}},
+		{
+			Model: "primary-model",
+			Usage: providers.UsageInfo{Requests: 1, PromptTokens: 500, CompletionTokens: 20, TotalTokens: 520},
+		},
 	}
 	if !reflect.DeepEqual(turnUsage.ByModel, want) {
 		t.Fatalf("ByModel = %+v, want %+v", turnUsage.ByModel, want)

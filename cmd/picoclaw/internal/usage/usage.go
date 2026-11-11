@@ -136,7 +136,11 @@ func runSessionUsage(
 // canonical session that lists it: legacy sessions can list an alias they never
 // owned, so only canonical sessions claim aliases. A legacy session key matches
 // last.
-func matchSession(sessionsDir string, entries []memory.SessionUsageEntry, query string) (memory.SessionUsageEntry, error) {
+func matchSession(
+	sessionsDir string,
+	entries []memory.SessionUsageEntry,
+	query string,
+) (memory.SessionUsageEntry, error) {
 	for _, entry := range entries {
 		if entry.Key == query && session.IsOpaqueSessionKey(entry.Key) {
 			return entry, nil
