@@ -1896,6 +1896,26 @@ func TestReadFileEmptyFileMessageIsExplicit(t *testing.T) {
 	}
 }
 
+func TestReadFileAutoTool_DescriptionMentionsBinaryDefaultRange(t *testing.T) {
+	tool := NewReadFileAutoTool(
+		t.TempDir(), false, MaxReadFileSize,
+		DefaultReadFileMaxLines, DefaultReadFileMaxLineLength,
+	)
+
+	desc := strings.ToLower(tool.Description())
+	if !strings.Contains(desc, "omit `offset` and `length`") ||
+		!strings.Contains(desc, "default byte range") {
+		t.Fatalf("auto description must explain the binary default range, got: %s", tool.Description())
+	}
+
+	props, _ := tool.Parameters()["properties"].(map[string]any)
+	length, _ := props["length"].(map[string]any)
+	lengthDesc, _ := length["description"].(string)
+	if !strings.Contains(strings.ToLower(lengthDesc), "omit to use the default") {
+		t.Fatalf("length description must explain the default range, got: %s", lengthDesc)
+	}
+}
+
 func TestReadFileAutoTool_TextDefaultsToLineMode(t *testing.T) {
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "text.txt")

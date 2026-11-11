@@ -486,6 +486,7 @@ Inspects the first 512 bytes. Text files use the line-numbered behavior below, w
 
 * `start_line` / `max_lines` select line mode for text files
 * `offset` / `length` select byte mode; supplying either one forces byte mode even for text files (useful for minified files with very long lines)
+* For binary files, omitting both `offset` and `length` reads the default `max_read_file_size` range
 * Mixing the two parameter sets in one call is rejected
 * An empty file returns `[file is empty (0 bytes); do not retry]` in every mode
 

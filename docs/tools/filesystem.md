@@ -39,7 +39,7 @@ The tool selects one of three modes with `tools.read_file.mode`:
 | `tools.read_file.max_lines` | int | `2000` | Upper bound on a single line-mode read; `max_lines` requests above it are clamped |
 | `tools.read_file.max_line_length` | int | `2000` | Maximum characters per line in the line-numbered view; the remainder is replaced by a ` ... [truncated]` marker |
 
-**Auto mode** (`mode: "auto"`, default) inspects the first 512 bytes of the file. Text files are read in line mode, while binary-looking files fall back to byte mode instead of being rejected. The tool exposes both pagination styles, and passing `offset` or `length` explicitly forces byte mode, which is useful for minified text files with very long lines:
+**Auto mode** (`mode: "auto"`, default) inspects the first 512 bytes of the file. Text files are read in line mode, while binary-looking files fall back to byte mode instead of being rejected. The tool exposes both pagination styles, and passing `offset` or `length` explicitly forces byte mode, which is useful for minified text files with very long lines. For binary files, omitting both reads the default `max_read_file_size` range; passing either one selects raw byte pagination:
 
 | Argument | Type | Required | Description |
 |----------|------|----------|-------------|

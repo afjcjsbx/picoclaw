@@ -428,7 +428,7 @@ func (t *ReadFileLinesTool) Description() string {
 }
 
 func (t *ReadFileAutoTool) Description() string {
-	return "Read a file. Text files return line-numbered output in the format `LINE_NUMBER|LINE_CONTENT` (1-indexed) and support `start_line`/`max_lines`. Binary files fall back to raw bytes and support `offset`/`length`; passing `offset` or `length` forces raw byte mode."
+	return "Read a file. Text files return line-numbered output in the format `LINE_NUMBER|LINE_CONTENT` (1-indexed) and support `start_line`/`max_lines`. Binary files automatically fall back to raw bytes: omit `offset` and `length` to read the default byte range, or pass them to paginate raw output. Passing `offset` or `length` forces raw byte mode for text files too."
 }
 
 func (t *ReadFileTool) Parameters() map[string]any {
@@ -495,12 +495,12 @@ func (t *ReadFileAutoTool) Parameters() map[string]any {
 			},
 			"offset": map[string]any{
 				"type":        "integer",
-				"description": "Binary files or raw reads: byte offset to start reading from. Providing offset or length forces byte mode.",
+				"description": "Binary files or raw reads: byte offset to start reading from. Providing offset or length forces byte mode. Omit both to read the default byte range.",
 				"default":     0,
 			},
 			"length": map[string]any{
 				"type":        "integer",
-				"description": "Binary files or raw reads: maximum number of bytes to read.",
+				"description": "Binary files or raw reads: maximum number of bytes to read. Omit to use the default read size.",
 				"default":     t.bytes.maxSize,
 			},
 		},
