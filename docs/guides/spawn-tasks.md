@@ -68,6 +68,10 @@ The per-call switch can only tighten the global setting: `allow_outbound: false`
 always disables outbound for that task, while `true` (or omitting it) follows the
 configured default and never lifts a global `direct_message: false`.
 
+The restriction is inherited: a subagent started with outbound disabled cannot
+re-enable it for the subagents it spawns, including ones that target another
+agent with `agent_id`.
+
 When outbound is disabled, the subagent runs without the whole outbound group;
 the remaining tools (files, web, exec, ...) stay available, and the final result
 is returned to the parent turn, which decides whether to forward it. The channel

@@ -246,6 +246,7 @@ type turnState struct {
 
 	// SubTurn support (from HEAD)
 	depth                int                    // SubTurn depth (0 for root turn)
+	denyOutbound         bool                   // Outbound tools stripped; inherited by every descendant SubTurn
 	parentTurnID         string                 // Parent turn ID (empty for root turn)
 	childTurnIDs         []string               // Child turn IDs
 	pendingResults       chan *tools.ToolResult // Channel for SubTurn results
