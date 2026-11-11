@@ -444,7 +444,7 @@ type ProviderAuthResult = {
 
 ### 1. 所需环境/依赖
 
-- Go ≥ 1.27.1
+- Go ≥ 1.27.4
 - PicoClaw 代码库（`pkg/providers/` 和 `pkg/auth/`）
 - `crypto` 和 `net/http` 标准库包
 
