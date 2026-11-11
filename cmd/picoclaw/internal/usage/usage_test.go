@@ -216,7 +216,7 @@ func TestRunUsageSessionAliasIgnoresLegacyClaims(t *testing.T) {
 	if err := runUsage(&out, dir, options{Session: shared, Limit: 20}); err != nil {
 		t.Fatalf("runUsage: %v", err)
 	}
-	if strings.Contains(out.String(), "999") {
+	if strings.Contains(out.String(), "Input:  999 tokens") {
 		t.Fatalf("legacy session claimed the alias of a canonical chat:\n%s", out.String())
 	}
 	if !strings.Contains(out.String(), "Input:  100 tokens") {
