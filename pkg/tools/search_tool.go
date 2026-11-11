@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"unicode"
 
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/utils"
@@ -145,7 +146,7 @@ func (t *BM25SearchTool) Execute(ctx context.Context, args map[string]any) *Tool
 		return SilentResult("No tools found matching the query.")
 	}
 
-	ranked := cached.engine.Search(query, t.maxSearchResults)
+	ranked := cached.engine.Search(expandSearchIdentifier(query), t.maxSearchResults)
 	if len(ranked) == 0 {
 		logger.DebugCF("discovery", "BM25 search: no matches", map[string]any{"query": query})
 		return SilentResult("No tools found matching the query.")
@@ -260,9 +261,25 @@ func buildBM25Engine(docs []searchDoc) *utils.BM25Engine[searchDoc] {
 	return utils.NewBM25Engine(
 		docs,
 		func(doc searchDoc) string {
-			return doc.Name + " " + doc.Description
+			// Expand identifiers in the tool name so callers can search by the
+			// tool name they were given. Descriptions stay untouched: they are
+			// natural language and splitting the identifiers they mention would
+			// make cross-references match unrelated tools.
+			return expandSearchIdentifier(doc.Name) + " " + doc.Description
 		},
 	)
+}
+
+// expandSearchIdentifier turns an identifier such as
+// "mcp_acme_search_tools_1a2b3c4d" into the space-separated words that make it
+// searchable, without changing how natural-language descriptions are
+// tokenized. The same expansion is applied to search queries so that
+// "ACME_SEARCH_TOOLS" matches "acme search tools".
+func expandSearchIdentifier(s string) string {
+	fields := strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+	return strings.Join(fields, " ")
 }
 
 // getOrBuildEngine returns a cached BM25 engine, rebuilding it only when

@@ -89,6 +89,22 @@ func TestSanitizeToolLLMContent(t *testing.T) {
 	}
 }
 
+func TestSanitizeToolLLMContentAllowLargeBase64Like(t *testing.T) {
+	payload := strings.Repeat("A", 2048)
+	if got := SanitizeToolLLMContent(payload); got != LargeBase64OmittedMessage {
+		t.Fatalf("default sanitizer = %q, want %q", got, LargeBase64OmittedMessage)
+	}
+	if got := SanitizeToolLLMContentAllowLargeBase64Like(payload); got != payload {
+		t.Fatalf("text sanitizer dropped the payload")
+	}
+
+	in := "before data:image/png;base64,AAAA after"
+	want := "before  after\n" + InlineMediaOmittedMessage
+	if got := SanitizeToolLLMContentAllowLargeBase64Like(in); got != want {
+		t.Fatalf("data URL was not stripped: got %q, want %q", got, want)
+	}
+}
+
 func BenchmarkSanitizeToolLLMContent_Plain1MB(b *testing.B) {
 	payload := strings.Repeat("tool output line with some words\n", 32768)
 	b.SetBytes(int64(len(payload)))

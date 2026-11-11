@@ -123,7 +123,16 @@ func normalizeToolResult(
 		notes = append(notes, extractedNotes...)
 	}
 
-	result.ForLLM = toolshared.SanitizeToolLLMContent(result.ForLLM)
+	// read_file echoes file content: a long base64-like run in it (hex, DNA,
+	// low-entropy blobs; random base64 is already masked by the tool) is text
+	// the model asked for, not an inline media payload. Its size is bounded by
+	// the read limits and the large-result spill below. MCP tools are prefixed
+	// (mcp_<server>_<tool>), so only the built-in tool matches this name.
+	if toolName == "read_file" {
+		result.ForLLM = toolshared.SanitizeToolLLMContentAllowLargeBase64Like(result.ForLLM)
+	} else {
+		result.ForLLM = toolshared.SanitizeToolLLMContent(result.ForLLM)
+	}
 
 	if len(result.Media) > 0 && len(notes) > 0 {
 		if strings.TrimSpace(result.ForLLM) == "" {
