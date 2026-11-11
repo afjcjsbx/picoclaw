@@ -43,6 +43,11 @@ var (
 	// oauthRefreshGroup collapses concurrent refreshes of the same rotating
 	// refresh token into one token-endpoint request.
 	oauthRefreshGroup singleflight.Group
+
+	// oauthHTTPClient bounds all OAuth token requests; the default client
+	// has no timeout and can hang device-code polling and token refresh
+	// indefinitely.
+	oauthHTTPClient = &http.Client{Timeout: 30 * time.Second}
 )
 
 func OpenAIOAuthConfig() OAuthProviderConfig {
@@ -296,7 +301,7 @@ func RequestDeviceCode(cfg OAuthProviderConfig) (*DeviceCodeInfo, error) {
 		"client_id": cfg.ClientID,
 	})
 
-	resp, err := http.Post(
+	resp, err := oauthHTTPClient.Post(
 		cfg.Issuer+"/api/accounts/deviceauth/usercode",
 		"application/json",
 		strings.NewReader(string(reqBody)),
@@ -387,7 +392,7 @@ func LoginDeviceCode(cfg OAuthProviderConfig) (*AuthCredential, error) {
 		"client_id": cfg.ClientID,
 	})
 
-	resp, err := http.Post(
+	resp, err := oauthHTTPClient.Post(
 		cfg.Issuer+"/api/accounts/deviceauth/usercode",
 		"application/json",
 		strings.NewReader(string(reqBody)),
@@ -446,7 +451,7 @@ func pollDeviceCode(cfg OAuthProviderConfig, deviceAuthID, userCode string) (*Au
 		"user_code":      userCode,
 	})
 
-	resp, err := http.Post(
+	resp, err := oauthHTTPClient.Post(
 		cfg.Issuer+"/api/accounts/deviceauth/token",
 		"application/json",
 		strings.NewReader(string(reqBody)),
@@ -537,9 +542,9 @@ func refreshAccessToken(cred *AuthCredential, cfg OAuthProviderConfig) (*AuthCre
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Accept", "application/json")
-		resp, err = http.DefaultClient.Do(req)
+		resp, err = oauthHTTPClient.Do(req)
 	} else {
-		resp, err = http.PostForm(tokenURL, data)
+		resp, err = oauthHTTPClient.PostForm(tokenURL, data)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("refreshing token: %w", err)
@@ -636,7 +641,7 @@ func ExchangeCodeForTokens(cfg OAuthProviderConfig, code, codeVerifier, redirect
 		provider = "google-antigravity"
 	}
 
-	resp, err := http.PostForm(tokenURL, data)
+	resp, err := oauthHTTPClient.PostForm(tokenURL, data)
 	if err != nil {
 		return nil, fmt.Errorf("exchanging code for tokens: %w", err)
 	}
