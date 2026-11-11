@@ -1117,7 +1117,7 @@
       "custom_deny_patterns": "命令黑名单",
       "custom_deny_patterns_hint": "用于补充额外的命令拦截规则，每行一个正则表达式。命中任意一条规则的命令都会被阻止",
       "custom_allow_patterns": "命令白名单",
-      "custom_allow_patterns_hint": "用于补充额外的命令放行规则，每行一个正则表达式。命中任意一条规则的命令会跳过黑名单检查，但仍受其他安全限制约束",
+      "custom_allow_patterns_hint": "用于补充额外的命令放行规则，每行一个正则表达式。命中任意一条规则的命令会跳过内置黑名单检查，但自定义拦截规则和其他安全限制仍然生效",
       "custom_patterns_placeholder": "^rm\\s+-rf\\b\n^git\\s+push\\b",
       "pattern_detector_title": "规则检测工具",
       "pattern_detector_hint": "输入命令以检测其是否匹配黑名单或白名单规则",
