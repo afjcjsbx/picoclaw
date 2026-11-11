@@ -73,7 +73,7 @@ The line-mode header includes `first_line_byte_offset`, the 0-based byte offset 
 
 An empty file returns `[file is empty (0 bytes); do not retry]` in every mode, so the model does not keep re-reading a file that has no content.
 
-Lines longer than `tools.read_file.max_line_length` characters are cut after that many characters with a ` ... [truncated]` marker and the read continues with the next line, so a single long line cannot consume the whole byte budget. If the byte budget itself runs out mid-line, the header reports the mid-line cut instead.
+Lines longer than `tools.read_file.max_line_length` characters are cut after that many characters with a ` ... [truncated]` marker and the read continues with the next line, so a single long line cannot consume the whole byte budget. If the byte budget itself runs out mid-line, the header reports the mid-line cut instead. In both cases the header adds a `[LINE TRUNCATED - ...]` hint: for a per-line cut it gives the line's raw byte offset plus a suggested `offset`/`length` read, while for a byte-budget cut it points at the continuation offset so the rest of the line can be read without re-reading the prefix.
 
 Both modes scrub credential-looking values from the rendered content before it reaches the model: well-known token formats and long machine-generated high-entropy strings are replaced with `[FILTERED]`, while ordinary identifiers, prose, and hex hashes stay visible. Headers and line numbers still refer to the raw file, so reads continue normally after a masked value. See [Built-in redaction in search results, file reads, and edit diffs](../security/sensitive_data_filtering.md#built-in-redaction-in-search-results-file-reads-and-edit-diffs).
 

@@ -1413,6 +1413,74 @@ func TestReadFileLinesTool_HeaderReportsFirstLineByteOffset(t *testing.T) {
 	}
 }
 
+func TestReadFileLinesTool_TruncationHintReportsRawOffset(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "long_line.txt")
+	content := "short\n" + strings.Repeat("x", 100) + "\n"
+	if err := os.WriteFile(testFile, []byte(content), 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	tool := NewReadFileLinesTool(tmpDir, false, 4096, DefaultReadFileMaxLines, 20)
+	result := tool.Execute(context.Background(), map[string]any{"path": testFile})
+	if result.IsError {
+		t.Fatalf("Execute() error = %s", result.ForLLM)
+	}
+	want := "[LINE TRUNCATED - line 2 was cut after 20 characters; its raw bytes start at offset 6. Call read_file with offset=6 and length=4096 to inspect the full line.]"
+	if !strings.Contains(result.ForLLM, want) {
+		t.Fatalf("expected truncation hint %q, got: %s", want, result.ForLLM)
+	}
+
+	fromSecond := tool.Execute(context.Background(), map[string]any{
+		"path":       testFile,
+		"start_line": 2,
+	})
+	if fromSecond.IsError {
+		t.Fatalf("Execute(start_line=2) error = %s", fromSecond.ForLLM)
+	}
+	if !strings.Contains(fromSecond.ForLLM, "line 2 was cut after 20 characters; its raw bytes start at offset 6") {
+		t.Fatalf("expected truncation hint with the first line offset, got: %s", fromSecond.ForLLM)
+	}
+}
+
+func TestReadFileLinesTool_ByteBudgetHintPointsAtContinuation(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "budget_line.txt")
+	if err := os.WriteFile(testFile, []byte(strings.Repeat("y", 200)+"\n"), 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	tool := NewReadFileLinesTool(tmpDir, false, 50, DefaultReadFileMaxLines, 2000)
+	result := tool.Execute(context.Background(), map[string]any{"path": testFile})
+	if result.IsError {
+		t.Fatalf("Execute() error = %s", result.ForLLM)
+	}
+	want := "[LINE TRUNCATED - line 1 was cut at the 50-byte budget; its raw bytes start at offset 0 and the returned prefix ends at offset 48. Call read_file with offset=48 to continue reading the full line.]"
+	if !strings.Contains(result.ForLLM, want) {
+		t.Fatalf("expected continuation hint %q, got: %s", want, result.ForLLM)
+	}
+}
+
+func TestReadFileLinesTool_NoTruncationHintOnNormalFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "normal.txt")
+	if err := os.WriteFile(testFile, []byte("line one\nline two\n"), 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	tool := NewReadFileLinesTool(
+		tmpDir, false, MaxReadFileSize,
+		DefaultReadFileMaxLines, DefaultReadFileMaxLineLength,
+	)
+	result := tool.Execute(context.Background(), map[string]any{"path": testFile})
+	if result.IsError {
+		t.Fatalf("Execute() error = %s", result.ForLLM)
+	}
+	if strings.Contains(result.ForLLM, "[LINE TRUNCATED") {
+		t.Fatalf("normal file must not include a truncation hint, got: %s", result.ForLLM)
+	}
+}
+
 func TestReadFileLinesTool_ChunkedReading(t *testing.T) {
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "pagination_lines.txt")

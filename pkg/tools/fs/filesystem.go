@@ -731,6 +731,10 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 	var lineTruncated bool
 	var linesTruncated int64
 	var firstLineByteOffset int64
+	var truncatedLineNumber int64
+	var truncatedLineByteOffset int64
+	var truncatedLinePrefixLen int64
+	var truncatedLineAtByteBudget bool
 
 	for lineIndex < startLine {
 		hasLine, consumedBytes, consumeErr := consumeNextLine(reader)
@@ -750,6 +754,8 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 	lineBuf := make([]byte, 0, 4096)
 	var prefixBuf [24]byte
 	for !reachedEOF && (limit < 0 || linesRead < limit) {
+		currentLine := lineIndex
+		lineStartOffset := firstLineByteOffset + fileBytesRead
 		prefix := strconv.AppendInt(prefixBuf[:0], lineIndex, 10)
 		prefix = append(prefix, '|')
 		remaining := t.maxSize - outputBytesRead - int64(len(prefix))
@@ -804,6 +810,10 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 				displayLine = append(displayLine, '\n')
 			}
 			linesTruncated++
+			if truncatedLineNumber == 0 {
+				truncatedLineNumber = currentLine
+				truncatedLineByteOffset = lineStartOffset
+			}
 		}
 
 		if cutAtLineAllowance && (len(displayLine) == 0 || displayLine[len(displayLine)-1] != '\n') {
@@ -838,6 +848,12 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 		if cutAtByteBudget {
 			byteBudgetTruncated = true
 			lineTruncated = true
+			if truncatedLineNumber == 0 {
+				truncatedLineNumber = currentLine
+				truncatedLineByteOffset = lineStartOffset
+				truncatedLinePrefixLen = int64(len(line))
+				truncatedLineAtByteBudget = true
+			}
 			break
 		}
 	}
@@ -898,16 +914,41 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 		header += "\n[END OF FILE - no further content.]"
 	}
 
+	if truncatedLineNumber > 0 && (linesTruncated > 0 || lineTruncated) {
+		if truncatedLineAtByteBudget {
+			continueOffset := truncatedLineByteOffset + truncatedLinePrefixLen
+			header += fmt.Sprintf(
+				"\n[LINE TRUNCATED - line %d was cut at the %d-byte budget; its raw bytes start at offset %d and the returned prefix ends at offset %d. Call read_file with offset=%d to continue reading the full line.]",
+				truncatedLineNumber,
+				t.maxSize,
+				truncatedLineByteOffset,
+				continueOffset,
+				continueOffset,
+			)
+		} else {
+			header += fmt.Sprintf(
+				"\n[LINE TRUNCATED - line %d was cut after %d characters; its raw bytes start at offset %d. Call read_file with offset=%d and length=%d to inspect the full line.]",
+				truncatedLineNumber,
+				t.maxLineLength,
+				truncatedLineByteOffset,
+				truncatedLineByteOffset,
+				t.maxSize,
+			)
+		}
+	}
+
 	logger.DebugCF("tool", "ReadFileTool execution completed successfully",
 		map[string]any{
-			"path":                   path,
-			"lines_read":             linesRead,
-			"file_bytes_read":        fileBytesRead,
-			"output_bytes_read":      outputBytesRead,
-			"first_line_byte_offset": firstLineByteOffset,
-			"truncated":              byteBudgetTruncated,
-			"lines_truncated":        linesTruncated,
-			"tool":                   t.Name(),
+			"path":                       path,
+			"lines_read":                 linesRead,
+			"file_bytes_read":            fileBytesRead,
+			"output_bytes_read":          outputBytesRead,
+			"first_line_byte_offset":     firstLineByteOffset,
+			"truncated":                  byteBudgetTruncated,
+			"lines_truncated":            linesTruncated,
+			"truncated_line":             truncatedLineNumber,
+			"truncated_line_byte_offset": truncatedLineByteOffset,
+			"tool":                       t.Name(),
 		})
 
 	return NewToolResult(header + "\n\n" + content.String())
