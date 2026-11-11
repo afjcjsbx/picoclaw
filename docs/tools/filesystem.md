@@ -61,7 +61,7 @@ Lines longer than `tools.read_file.max_line_length` characters are cut after tha
 
 Both modes scrub credential-looking values from the rendered content before it reaches the model: well-known token formats and long machine-generated high-entropy strings are replaced with `[FILTERED]`, while ordinary identifiers, prose, and hex hashes stay visible. Headers and line numbers still refer to the raw file, so reads continue normally after a masked value. See [Built-in redaction in search results, file reads, and edit diffs](../security/sensitive_data_filtering.md#built-in-redaction-in-search-results-file-reads-and-edit-diffs).
 
-Line-mode output is bounded, line-numbered text, so it is exempt from the generic large-base64 omission: a long base64-like run in a source file stays visible instead of being replaced by an omission notice. Byte-mode output and other tools keep the guard. Data URLs and invisible Unicode are still stripped in both modes.
+Line-mode output and byte-mode reads of files detected as text are exempt from the generic large-base64 omission: a long base64-like run in a source file stays visible instead of being replaced by an omission notice. Binary-looking byte reads and other tools keep the guard. Data URLs and invisible Unicode are still stripped from exempt results.
 
 Results larger than `tools.max_inline_result_chars` are spilled to a workspace artifact with a head+tail preview, exactly like every other tool result; see [Large tool results](../reference/tools_configuration.md#large-tool-results).
 

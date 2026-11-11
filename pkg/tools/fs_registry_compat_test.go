@@ -78,10 +78,35 @@ func TestReadFileLinesTool_KeepsLargeBase64LikeLineText(t *testing.T) {
 	}
 }
 
-func TestReadFileTool_StillOmitsLargeBase64LikeBytes(t *testing.T) {
+func TestReadFileTool_KeepsLargeBase64LikeTextBytes(t *testing.T) {
 	tmpDir := t.TempDir()
-	testFile := filepath.Join(tmpDir, "large_binary_like.txt")
-	if err := os.WriteFile(testFile, []byte(strings.Repeat("A", 3000)), 0o644); err != nil {
+	testFile := filepath.Join(tmpDir, "large_text.txt")
+	payload := strings.Repeat("A", 3000)
+	if err := os.WriteFile(testFile, []byte(payload), 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	reg := NewToolRegistry()
+	reg.SetMaxInlineResultRunes(1 << 20)
+	reg.Register(fstools.NewReadFileTool(tmpDir, false, fstools.MaxReadFileSize))
+
+	result := reg.Execute(context.Background(), "read_file", map[string]any{"path": testFile})
+	if result.IsError {
+		t.Fatalf("read_file error = %s", result.ForLLM)
+	}
+	if result.ForLLM == toolshared.LargeBase64OmittedMessage {
+		t.Fatal("byte mode on a text file must not be replaced by the base64 omission notice")
+	}
+	if !strings.Contains(result.ForLLM, strings.Repeat("A", 128)) {
+		t.Fatalf("expected the text-file bytes to stay inline, got: %s", result.ForLLM)
+	}
+}
+
+func TestReadFileTool_StillOmitsLargeBase64LikeBinaryBytes(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "large_binary.bin")
+	payload := append([]byte{0x00}, []byte(strings.Repeat("A", 3000))...)
+	if err := os.WriteFile(testFile, payload, 0o644); err != nil {
 		t.Fatalf("Failed to write test file: %v", err)
 	}
 
@@ -94,7 +119,7 @@ func TestReadFileTool_StillOmitsLargeBase64LikeBytes(t *testing.T) {
 		t.Fatalf("read_file error = %s", result.ForLLM)
 	}
 	if !strings.Contains(result.ForLLM, toolshared.LargeBase64OmittedMessage) {
-		t.Fatalf("byte mode must keep the base64 guard, got: %s", result.ForLLM)
+		t.Fatalf("binary byte mode must keep the base64 guard, got: %s", result.ForLLM)
 	}
 }
 
