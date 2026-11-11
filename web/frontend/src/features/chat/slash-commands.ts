@@ -23,6 +23,23 @@ export function slashCommandFallbackTitle(command: string): string {
   return name.charAt(0).toUpperCase() + name.slice(1)
 }
 
+// Commands that wipe the current conversation on the server. Mirrors the
+// backend aliases for /clear so the web UI can reset its local transcript
+// instead of showing messages the session no longer has.
+const CLEAR_HISTORY_COMMANDS = new Set(["clear", "new"])
+
+export function clearsConversationHistory(input: string): boolean {
+  const token = input.trim().split(/\s+/, 1)[0]
+  if (!token) return false
+  const prefix = token[0]
+  if (prefix !== "/" && prefix !== "!") return false
+
+  let name = token.slice(1)
+  const at = name.indexOf("@")
+  if (at >= 0) name = name.slice(0, at)
+  return CLEAR_HISTORY_COMMANDS.has(name.trim().toLowerCase())
+}
+
 // Returns the text typed after a leading "/" while the input is still one token.
 // Returns null once the user has typed whitespace (the command is complete).
 export function slashQueryFromInput(input: string): string | null {
