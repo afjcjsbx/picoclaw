@@ -491,6 +491,7 @@ picoclaw mcp test browserbase
 | `picoclaw agent`          | 交互式对话模式                       |
 | `picoclaw gateway`        | 启动网关                             |
 | `picoclaw status`         | 查看状态                             |
+| `picoclaw usage`          | 查看各会话的 token 用量与费用        |
 | `picoclaw version`        | 查看版本信息                         |
 | `picoclaw model`          | 查看或切换默认模型                   |
 | `picoclaw mcp list`       | 列出已配置的 MCP 服务器              |

@@ -66,6 +66,32 @@ picoclaw update    # Check and apply updates from GitHub releases
 | `--arch` | Target architecture (default: current `GOARCH`) |
 | `-u, --url` | Direct URL to a release asset or release page |
 
+## Usage
+
+Summarizes provider-reported token usage and cost for the sessions stored under
+`<workspace>/sessions`. The report is read-only, so it can run while the gateway
+is active. Input tokens are split into fresh prompt tokens, cache reads, and
+cache writes.
+
+Each JSONL file is decoded as a stream and reduced to per-session totals, so
+memory use stays bounded even for sessions with large tool results.
+
+```bash
+picoclaw usage                 # Top 20 sessions by total tokens
+picoclaw usage --limit 0       # All sessions
+picoclaw usage -s cli:default  # One session, with the per-model breakdown
+picoclaw usage --json          # Machine-readable output
+```
+
+| Flag | Description |
+| --- | --- |
+| `-s, --session` | Session key or alias to inspect |
+| `-n, --limit` | Maximum sessions to list (default 20, `0` shows all) |
+| `--json` | Emit JSON instead of a table |
+
+Costs come from the provider usage report. When a provider does not report a
+cost, the report shows `-` instead of an estimated list price.
+
 ## Agent
 
 Interact with the agent directly. Without `-m`, it starts an interactive terminal session.

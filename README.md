@@ -498,6 +498,7 @@ Connect PicoClaw to the Agent Social Network by sending a single message via the
 | `picoclaw agent`          | Interactive chat mode                |
 | `picoclaw gateway`        | Start the gateway                    |
 | `picoclaw status`         | Show status                          |
+| `picoclaw usage`          | Show token usage and cost            |
 | `picoclaw version`        | Show version info                    |
 | `picoclaw model`          | View or switch the default model     |
 | `picoclaw mcp list`       | List configured MCP servers          |
@@ -528,6 +529,7 @@ Slash commands work in interactive CLI mode and in connected chat channels:
 | `/switch model <index\|name>` | Switch the active model. |
 | `/check channel <name>` | Check whether a channel is available. |
 | `/context` | Show session context and token usage. |
+| `/usage` (alias `/cost`) | Show token usage and cost for this session, split by model and cache category. |
 | `/compact [--force] [focus]` | Compact conversation context, optionally focusing the summary. |
 | `/clear` (alias `/new`) | Clear the chat history. |
 | `/subagents` | Show running tasks and subagents in this chat. |
