@@ -1028,6 +1028,45 @@ func TestNewAgentInstance_ReadFileAutoModeIsDefault(t *testing.T) {
 	}
 }
 
+func TestNewAgentInstance_PassesInlineBudgetToReadFileHint(t *testing.T) {
+	workspace := t.TempDir()
+	testFile := filepath.Join(workspace, "long.txt")
+	if err := os.WriteFile(testFile, []byte(strings.Repeat("x", 100)+"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: workspace,
+				ModelName: "test-model",
+			},
+		},
+		Tools: config.ToolsConfig{
+			MaxInlineResultChars: 4096,
+			ReadFile: config.ReadFileToolConfig{
+				Enabled:         true,
+				MaxReadFileSize: 4096,
+				MaxLineLength:   20,
+			},
+		},
+	}
+
+	agent := NewAgentInstance(nil, &cfg.Agents.Defaults, cfg, &mockProvider{})
+	readTool, ok := agent.Tools.Get("read_file")
+	if !ok {
+		t.Fatal("read_file tool not registered")
+	}
+
+	result := readTool.Execute(context.Background(), map[string]any{"path": testFile})
+	if result.IsError {
+		t.Fatalf("read_file error = %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "length=3072") {
+		t.Fatalf("expected hint page size 3072 from max_inline_result_chars, got: %s", result.ForLLM)
+	}
+}
+
 // write_file copy names append_file/edit_file only when they are registered.
 func TestNewAgentInstance_WriteFileCopyReflectsAvailableAltTools(t *testing.T) {
 	newCfg := func(editEnabled, appendEnabled bool) *config.Config {

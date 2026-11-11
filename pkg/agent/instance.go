@@ -134,21 +134,25 @@ func NewAgentInstance(
 		maxReadFileSize := cfg.Tools.ReadFile.MaxReadFileSize
 		switch cfg.Tools.ReadFile.EffectiveMode() {
 		case config.ReadFileModeLines:
-			toolsRegistry.Register(fstools.NewReadFileLinesTool(
+			readTool := fstools.NewReadFileLinesTool(
 				workspace, readRestrict, maxReadFileSize,
 				cfg.Tools.ReadFile.GetMaxLines(), cfg.Tools.ReadFile.GetMaxLineLength(),
 				allowReadPaths,
-			))
+			)
+			readTool.SetMaxInlineResultChars(cfg.Tools.GetMaxInlineResultChars())
+			toolsRegistry.Register(readTool)
 		case config.ReadFileModeBytes:
 			toolsRegistry.Register(fstools.NewReadFileTool(
 				workspace, readRestrict, maxReadFileSize, allowReadPaths,
 			))
 		default:
-			toolsRegistry.Register(fstools.NewReadFileAutoTool(
+			readTool := fstools.NewReadFileAutoTool(
 				workspace, readRestrict, maxReadFileSize,
 				cfg.Tools.ReadFile.GetMaxLines(), cfg.Tools.ReadFile.GetMaxLineLength(),
 				allowReadPaths,
-			))
+			)
+			readTool.SetMaxInlineResultChars(cfg.Tools.GetMaxInlineResultChars())
+			toolsRegistry.Register(readTool)
 		}
 	}
 	// MEMORY.md and USER.md belong to the memory tool, which enforces their

@@ -39,6 +39,16 @@ const (
 	// even when the caller asks for a handful of lines, so the hint is capped
 	// at this many bytes.
 	lineOutputPreallocLimit = 8 * 1024
+
+	// truncationHintPageSize is the default raw-read page size suggested for
+	// a line that was cut by max_line_length. It stays below the default
+	// max_inline_result_chars budget, so the follow-up read does not spill to
+	// an artifact and hide the rest of the line in the omitted middle.
+	truncationHintPageSize = 8 * 1024
+	// truncationHintReserve leaves room for the result header and the
+	// LINE TRUNCATED hint when calculating a page size from the configured
+	// inline budget.
+	truncationHintReserve = 1024
 )
 
 func ValidatePathWithAllowPaths(
@@ -320,11 +330,12 @@ type ReadFileTool struct {
 }
 
 type ReadFileLinesTool struct {
-	fs            fileSystem
-	workspace     string
-	maxSize       int64
-	maxLines      int
-	maxLineLength int
+	fs                   fileSystem
+	workspace            string
+	maxSize              int64
+	maxLines             int
+	maxLineLength        int
+	maxInlineResultChars int
 }
 
 // ReadFileAutoTool is the default read_file implementation: it returns
@@ -405,6 +416,34 @@ func NewReadFileAutoTool(
 		lines:     NewReadFileLinesTool(workspace, restrict, maxReadFileSize, maxLines, maxLineLength, allowPaths...),
 		workspace: workspace,
 	}
+}
+
+// SetMaxInlineResultChars caps the page size suggested for a truncated line so
+// the follow-up raw read stays inside the large-result inline budget.
+func (t *ReadFileLinesTool) SetMaxInlineResultChars(maxChars int) {
+	t.maxInlineResultChars = maxChars
+}
+
+func (t *ReadFileAutoTool) SetMaxInlineResultChars(maxChars int) {
+	t.lines.SetMaxInlineResultChars(maxChars)
+}
+
+func (t *ReadFileLinesTool) truncationPageSize() int64 {
+	page := int64(truncationHintPageSize)
+	if t.maxInlineResultChars > 0 {
+		budget := int64(t.maxInlineResultChars) - truncationHintReserve
+		if budget < 512 {
+			budget = 512
+		}
+		page = budget
+	}
+	if page > t.maxSize {
+		page = t.maxSize
+	}
+	if page <= 0 {
+		page = t.maxSize
+	}
+	return page
 }
 
 func (t *ReadFileTool) Name() string {
@@ -915,24 +954,26 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 	}
 
 	if truncatedLineNumber > 0 && (linesTruncated > 0 || lineTruncated) {
+		pageSize := t.truncationPageSize()
 		if truncatedLineAtByteBudget {
 			continueOffset := truncatedLineByteOffset + truncatedLinePrefixLen
 			header += fmt.Sprintf(
-				"\n[LINE TRUNCATED - line %d was cut at the %d-byte budget; its raw bytes start at offset %d and the returned prefix ends at offset %d. Call read_file with offset=%d to continue reading the full line.]",
+				"\n[LINE TRUNCATED - line %d was cut at the %d-byte budget; its raw bytes start at offset %d and the returned prefix ends at offset %d. Call read_file with offset=%d and length=%d to continue; repeat with the next offset until EOF.]",
 				truncatedLineNumber,
 				t.maxSize,
 				truncatedLineByteOffset,
 				continueOffset,
 				continueOffset,
+				pageSize,
 			)
 		} else {
 			header += fmt.Sprintf(
-				"\n[LINE TRUNCATED - line %d was cut after %d characters; its raw bytes start at offset %d. Call read_file with offset=%d and length=%d to inspect the full line.]",
+				"\n[LINE TRUNCATED - line %d was cut after %d characters; its raw bytes start at offset %d. Call read_file with offset=%d and length=%d to page the full line; repeat with the offset from the next header until EOF.]",
 				truncatedLineNumber,
 				t.maxLineLength,
 				truncatedLineByteOffset,
 				truncatedLineByteOffset,
-				t.maxSize,
+				pageSize,
 			)
 		}
 	}

@@ -1426,7 +1426,7 @@ func TestReadFileLinesTool_TruncationHintReportsRawOffset(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("Execute() error = %s", result.ForLLM)
 	}
-	want := "[LINE TRUNCATED - line 2 was cut after 20 characters; its raw bytes start at offset 6. Call read_file with offset=6 and length=4096 to inspect the full line.]"
+	want := "[LINE TRUNCATED - line 2 was cut after 20 characters; its raw bytes start at offset 6. Call read_file with offset=6 and length=4096 to page the full line; repeat with the offset from the next header until EOF.]"
 	if !strings.Contains(result.ForLLM, want) {
 		t.Fatalf("expected truncation hint %q, got: %s", want, result.ForLLM)
 	}
@@ -1443,6 +1443,30 @@ func TestReadFileLinesTool_TruncationHintReportsRawOffset(t *testing.T) {
 	}
 }
 
+func TestReadFileLinesTool_TruncationHintUsesInlineBudget(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "long_line.txt")
+	if err := os.WriteFile(testFile, []byte(strings.Repeat("z", 100)+"\n"), 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	tool := NewReadFileLinesTool(
+		tmpDir, false, MaxReadFileSize,
+		DefaultReadFileMaxLines, 20,
+	)
+	tool.SetMaxInlineResultChars(16384)
+	result := tool.Execute(context.Background(), map[string]any{"path": testFile})
+	if result.IsError {
+		t.Fatalf("Execute() error = %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "offset=0 and length=15360") {
+		t.Fatalf(
+			"expected page size 15360 from the inline budget, got: %s",
+			result.ForLLM,
+		)
+	}
+}
+
 func TestReadFileLinesTool_ByteBudgetHintPointsAtContinuation(t *testing.T) {
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "budget_line.txt")
@@ -1455,7 +1479,7 @@ func TestReadFileLinesTool_ByteBudgetHintPointsAtContinuation(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("Execute() error = %s", result.ForLLM)
 	}
-	want := "[LINE TRUNCATED - line 1 was cut at the 50-byte budget; its raw bytes start at offset 0 and the returned prefix ends at offset 48. Call read_file with offset=48 to continue reading the full line.]"
+	want := "[LINE TRUNCATED - line 1 was cut at the 50-byte budget; its raw bytes start at offset 0 and the returned prefix ends at offset 48. Call read_file with offset=48 and length=50 to continue; repeat with the next offset until EOF.]"
 	if !strings.Contains(result.ForLLM, want) {
 		t.Fatalf("expected continuation hint %q, got: %s", want, result.ForLLM)
 	}
