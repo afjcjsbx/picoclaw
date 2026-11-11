@@ -34,6 +34,12 @@ type SubTurnConfig struct {
 	InitialMessages    []providers.Message
 	InitialTokenBudget *atomic.Int64 // Shared token budget for team members; nil if no budget
 	TargetAgentID      string        // If set, run as this agent (its workspace, model, tools)
+	// AllowOutbound can further restrict agents.defaults.subturn.direct_message
+	// for this sub-turn. When false, the child runs without the tools that can
+	// contact the user's channel directly (message, send_file, send_tts,
+	// image_generate, reaction) and reports only to its parent. Nil or true
+	// defers to the configured default; true never lifts a global deny.
+	AllowOutbound *bool
 }
 
 type SubagentTask struct {

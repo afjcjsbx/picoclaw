@@ -539,6 +539,21 @@ type SubTurnConfig struct {
 	DefaultTimeoutMinutes int `json:"default_timeout_minutes" env:"PICOCLAW_AGENTS_DEFAULTS_SUBTURN_DEFAULT_TIMEOUT_MINUTES"`
 	DefaultTokenBudget    int `json:"default_token_budget"    env:"PICOCLAW_AGENTS_DEFAULTS_SUBTURN_DEFAULT_TOKEN_BUDGET"`
 	ConcurrencyTimeoutSec int `json:"concurrency_timeout_sec" env:"PICOCLAW_AGENTS_DEFAULTS_SUBTURN_CONCURRENCY_TIMEOUT_SEC"`
+	// DirectMessage controls whether a sub-turn may contact the user's channel
+	// directly through the outbound tools (message, send_file, send_tts,
+	// image_generate, reaction). Nil means enabled, preserving the historical
+	// behavior; set it to false to make sub-turns report only to their parent.
+	DirectMessage *bool `json:"direct_message,omitempty" env:"PICOCLAW_AGENTS_DEFAULTS_SUBTURN_DIRECT_MESSAGE"`
+}
+
+// EffectiveDirectMessage reports whether sub-turns may send to the user's
+// channel directly. The default is true so existing configurations keep
+// working unchanged.
+func (c SubTurnConfig) EffectiveDirectMessage() bool {
+	if c.DirectMessage == nil {
+		return true
+	}
+	return *c.DirectMessage
 }
 
 // MemoryConfig bounds the persistent memory injected into the system prompt.
@@ -659,7 +674,7 @@ type AgentDefaults struct {
 	SteeringMode              string              `json:"steering_mode,omitempty"              env:"PICOCLAW_AGENTS_DEFAULTS_STEERING_MODE"`           // "one-at-a-time" (default) or "all"
 	MaxParallelTurns          int                 `json:"max_parallel_turns,omitempty"         env:"PICOCLAW_AGENTS_DEFAULTS_MAX_PARALLEL_TURNS"`      // Max concurrent turns (0 or 1 = sequential)
 	MaxParallelToolCalls      int                 `json:"max_parallel_tool_calls,omitempty"    env:"PICOCLAW_AGENTS_DEFAULTS_MAX_PARALLEL_TOOL_CALLS"` // Max concurrent tool calls of one LLM response (0 or 1 = sequential)
-	SubTurn                   SubTurnConfig       `json:"subturn"                                                                                          envPrefix:"PICOCLAW_AGENTS_DEFAULTS_SUBTURN_"`
+	SubTurn                   SubTurnConfig       `json:"subturn"`
 	ToolFeedback              ToolFeedbackConfig  `json:"tool_feedback,omitempty"`
 	LoopDetection             LoopDetectionConfig `json:"loop_detection,omitempty"`
 	SplitOnMarker             bool                `json:"split_on_marker"                      env:"PICOCLAW_AGENTS_DEFAULTS_SPLIT_ON_MARKER"` // split messages on <|[SPLIT]|> marker

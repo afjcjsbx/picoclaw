@@ -28,7 +28,7 @@ When spawning a SubTurn, you must provide a `SubTurnConfig`:
 | Field | Type | Description |
 | :--- | :--- | :--- |
 | `Model` | `string` | The LLM model to use for the sub-turn (e.g., `gpt-4o-mini`). **Required.** |
-| `Tools` | `[]tools.Tool` | Tools granted to the sub-turn. If empty, it inherits the parent's tools. |
+| `Tools` | `[]tools.Tool` | Tools granted to the sub-turn. If empty, it inherits the parent's tools; a non-empty list replaces them for this sub-turn. |
 | `SystemPrompt` | `string` | The task description for the sub-turn. Sent as the first user message to the LLM (not as a system prompt override). |
 | `ActualSystemPrompt` | `string` | Optional explicit system prompt to replace the agent's default. Leave empty to inherit the parent agent's system prompt. |
 | `MaxTokens` | `int` | Maximum tokens for the generated response. |
@@ -36,6 +36,7 @@ When spawning a SubTurn, you must provide a `SubTurnConfig`:
 | `Critical` | `bool` | If `true`, the sub-turn continues running even if the parent finishes gracefully. |
 | `Timeout` | `time.Duration` | Maximum execution time (default: 5 minutes). |
 | `MaxContextRunes`| `int` | Soft context limit. `0` = auto-calculate (75% of model's context window, recommended), `-1` = no limit (disable soft truncation, rely only on hard context error recovery), `>0` = use specified rune limit. |
+| `AllowOutbound` | `*bool` | Can tighten `agents.defaults.subturn.direct_message`. When `false`, the child registry omits `message`, `send_file`, `send_tts`, `image_generate` and `reaction`, so results only reach the parent turn. `nil` or `true` follows the configured default (`true`); a per-call `true` never lifts a global deny. |
 
 > **Note:** The `Async` flag does **not** make the call non-blocking. It only controls whether the result is also delivered to the parent's `pendingResults` channel. Both modes block the caller until the sub-turn completes. For true non-blocking execution, the caller must spawn the sub-turn in a separate goroutine.
 

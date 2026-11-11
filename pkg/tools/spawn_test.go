@@ -260,3 +260,46 @@ func TestSpawnTool_ExecuteAsync_NilSpawnerResult(t *testing.T) {
 		t.Fatal("callback was not invoked for nil spawner result")
 	}
 }
+
+func TestSpawnTool_AllowOutbound(t *testing.T) {
+	boolPtr := func(v bool) *bool { return &v }
+
+	tests := []struct {
+		name string
+		args map[string]any
+		want *bool
+	}{
+		{name: "absent keeps nil", args: map[string]any{"task": "work"}, want: nil},
+		{name: "bool false", args: map[string]any{"task": "work", "allow_outbound": false}, want: boolPtr(false)},
+		{name: "bool true", args: map[string]any{"task": "work", "allow_outbound": true}, want: boolPtr(true)},
+		{name: "string false", args: map[string]any{"task": "work", "allow_outbound": "false"}, want: boolPtr(false)},
+		{name: "invalid value keeps nil", args: map[string]any{"task": "work", "allow_outbound": "maybe"}, want: nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			spawner := &mockSpawner{done: make(chan struct{})}
+			tool := NewSpawnTool(nil)
+			tool.SetSpawner(spawner)
+
+			if result := tool.Execute(context.Background(), tt.args); result == nil || result.IsError {
+				t.Fatalf("spawn failed: %v", result)
+			}
+			select {
+			case <-spawner.done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("the spawned subagent never ran")
+			}
+
+			got := spawner.lastConfig.AllowOutbound
+			switch {
+			case tt.want == nil && got != nil:
+				t.Fatalf("AllowOutbound = %v, want nil", *got)
+			case tt.want != nil && got == nil:
+				t.Fatalf("AllowOutbound = nil, want %v", *tt.want)
+			case tt.want != nil && *got != *tt.want:
+				t.Fatalf("AllowOutbound = %v, want %v", *got, *tt.want)
+			}
+		})
+	}
+}

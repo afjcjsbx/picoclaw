@@ -618,11 +618,56 @@ func (r *ToolRegistry) Clone() *ToolRegistry {
 	return clone
 }
 
-// CloneWithout creates a turn-local registry that omits one tool.
-func (r *ToolRegistry) CloneWithout(name string) *ToolRegistry {
+// CloneWithout creates a turn-local registry that omits the named tools.
+func (r *ToolRegistry) CloneWithout(names ...string) *ToolRegistry {
 	clone := r.Clone()
-	delete(clone.tools, name)
+	clone.mu.Lock()
+	defer clone.mu.Unlock()
+	for _, name := range names {
+		delete(clone.tools, name)
+	}
 	return clone
+}
+
+// CloneWithTools creates an independent registry with the same runtime settings
+// as r (media store, workspace, allowlist, inline spill limit) but containing
+// exactly the supplied tools. A nil receiver yields a registry that only holds
+// the supplied tools. This lets a sub-turn run with a curated tool set instead
+// of the parent's full registry.
+func (r *ToolRegistry) CloneWithTools(list []Tool) *ToolRegistry {
+	var clone *ToolRegistry
+	if r == nil {
+		clone = NewToolRegistry()
+	} else {
+		clone = r.Clone()
+	}
+
+	clone.mu.Lock()
+	defer clone.mu.Unlock()
+	clone.tools = make(map[string]*ToolEntry, len(list))
+	for _, tool := range list {
+		if tool == nil {
+			continue
+		}
+		name := tool.Name()
+		if !clone.toolAllowedLocked(name) {
+			continue
+		}
+		clone.storeEntryLocked(name, tool, true)
+	}
+	return clone
+}
+
+// OutboundToolNames returns the tools that can deliver content to the user's
+// channel without going through the parent turn.
+func OutboundToolNames() []string {
+	return []string{"message", "send_file", "send_tts", "image_generate", "reaction"}
+}
+
+// CloneWithoutOutbound creates an independent registry without the tools in
+// OutboundToolNames, so a sub-turn cannot contact the user directly.
+func (r *ToolRegistry) CloneWithoutOutbound() *ToolRegistry {
+	return r.CloneWithout(OutboundToolNames()...)
 }
 
 // Count returns the number of registered tools.

@@ -1079,3 +1079,59 @@ func TestToolRegistry_ExecuteWithContext_DoesNotMutateToolResult(t *testing.T) {
 		t.Fatal("normalized result must not be the tool-owned pointer")
 	}
 }
+
+func TestToolRegistry_CloneWithToolsReplacesSet(t *testing.T) {
+	r := NewToolRegistry()
+	r.Register(newMockTool("message", "sends to the user"))
+	r.Register(newMockTool("read_file", "reads files"))
+	r.SetWorkspace("/tmp/workspace")
+
+	clone := r.CloneWithTools([]Tool{
+		newMockTool("read_file", "reads files"),
+		newMockTool("web_search", "searches the web"),
+	})
+
+	if clone.Count() != 2 {
+		t.Fatalf("count = %d, want 2", clone.Count())
+	}
+	if _, ok := clone.Get("message"); ok {
+		t.Error("explicit tool list must not inherit tools outside the list")
+	}
+	for _, name := range []string{"read_file", "web_search"} {
+		if _, ok := clone.Get(name); !ok {
+			t.Errorf("expected tool %q in the clone", name)
+		}
+	}
+	if _, ok := r.Get("web_search"); ok {
+		t.Error("explicit tools must not leak into the source registry")
+	}
+
+	// A nil source still builds a usable registry for the supplied tools.
+	nilClone := (*ToolRegistry)(nil).CloneWithTools([]Tool{newMockTool("read_file", "reads files")})
+	if nilClone.Count() != 1 {
+		t.Fatalf("nil receiver count = %d, want 1", nilClone.Count())
+	}
+}
+
+func TestToolRegistry_CloneWithoutOutbound(t *testing.T) {
+	r := NewToolRegistry()
+	for _, name := range append(OutboundToolNames(), "read_file", "exec") {
+		r.Register(newMockTool(name, name))
+	}
+
+	clone := r.CloneWithoutOutbound()
+
+	for _, name := range OutboundToolNames() {
+		if _, ok := clone.Get(name); ok {
+			t.Errorf("outbound tool %q must be removed", name)
+		}
+		if _, ok := r.Get(name); !ok {
+			t.Errorf("outbound tool %q must remain in the source registry", name)
+		}
+	}
+	for _, name := range []string{"read_file", "exec"} {
+		if _, ok := clone.Get(name); !ok {
+			t.Errorf("non-outbound tool %q must be preserved", name)
+		}
+	}
+}

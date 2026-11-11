@@ -4084,3 +4084,46 @@ func TestMemoryConfigDefaultsAndOverrides(t *testing.T) {
 		t.Errorf("unexpected overrides: %+v", m)
 	}
 }
+
+func TestSubTurnDirectMessage(t *testing.T) {
+	load := func(t *testing.T, body string) SubTurnConfig {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "config.json")
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := LoadConfig(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cfg.Agents.Defaults.SubTurn
+	}
+
+	// Existing configs without the block keep direct messaging enabled.
+	cfg := load(t, `{"version": 3, "agents": {"defaults": {"model_name": "x"}}}`)
+	if !cfg.EffectiveDirectMessage() {
+		t.Fatal("direct_message must default to true")
+	}
+
+	cfg = load(t, `{"version": 3, "agents": {"defaults": {"model_name": "x",
+		"subturn": {"direct_message": false}}}}`)
+	if cfg.EffectiveDirectMessage() {
+		t.Fatal("direct_message=false must survive config loading")
+	}
+
+	cfg = load(t, `{"version": 3, "agents": {"defaults": {"model_name": "x",
+		"subturn": {"direct_message": true}}}}`)
+	if !cfg.EffectiveDirectMessage() {
+		t.Fatal("direct_message=true must survive config loading")
+	}
+
+	t.Setenv("PICOCLAW_AGENTS_DEFAULTS_SUBTURN_DIRECT_MESSAGE", "false")
+	t.Setenv("PICOCLAW_AGENTS_DEFAULTS_SUBTURN_MAX_DEPTH", "7")
+	cfg = load(t, `{"version": 3, "agents": {"defaults": {"model_name": "x"}}}`)
+	if cfg.EffectiveDirectMessage() {
+		t.Fatal("environment must be able to disable direct messaging")
+	}
+	if cfg.MaxDepth != 7 {
+		t.Fatalf("MaxDepth = %d, want 7 from the subturn environment prefix", cfg.MaxDepth)
+	}
+}
