@@ -40,6 +40,7 @@ type BM25Engine[T any] struct {
 	textFunc func(T) string
 	k1       float64
 	b        float64
+	stemming bool
 	index    *bm25Index
 }
 
@@ -47,8 +48,9 @@ type BM25Engine[T any] struct {
 type BM25Option func(*bm25Config)
 
 type bm25Config struct {
-	k1 float64
-	b  float64
+	k1       float64
+	b        float64
+	stemming bool
 }
 
 type bm25Index struct {
@@ -72,6 +74,13 @@ func WithB(b float64) BM25Option {
 	return func(c *bm25Config) { c.b = b }
 }
 
+// WithStemming enables lightweight English inflection stemming for both the
+// corpus and the query. It is off by default so the engine stays language
+// agnostic unless the caller opts in.
+func WithStemming() BM25Option {
+	return func(c *bm25Config) { c.stemming = true }
+}
+
 // NewBM25Engine creates a BM25Engine for the given corpus.
 //
 //   - corpus   : slice of documents of any type T.
@@ -90,8 +99,9 @@ func NewBM25Engine[T any](corpus []T, textFunc func(T) string, opts ...BM25Optio
 		textFunc: textFunc,
 		k1:       cfg.k1,
 		b:        cfg.b,
+		stemming: cfg.stemming,
 	}
-	engine.index = buildBM25Index(corpus, textFunc, cfg.k1, cfg.b)
+	engine.index = buildBM25Index(corpus, textFunc, cfg.k1, cfg.b, cfg.stemming)
 	return engine
 }
 
@@ -111,7 +121,7 @@ func (e *BM25Engine[T]) Search(query string, topK int) []BM25Result[T] {
 		return []BM25Result[T]{}
 	}
 
-	queryTerms := bm25Tokenize(query)
+	queryTerms := bm25TokenizeStem(query, e.stemming)
 	if len(queryTerms) == 0 {
 		return []BM25Result[T]{}
 	}
@@ -170,7 +180,7 @@ func (e *BM25Engine[T]) Search(query string, topK int) []BM25Result[T] {
 	return out
 }
 
-func buildBM25Index[T any](corpus []T, textFunc func(T) string, k1, b float64) *bm25Index {
+func buildBM25Index[T any](corpus []T, textFunc func(T) string, k1, b float64, stemming bool) *bm25Index {
 	N := len(corpus)
 	if N == 0 {
 		return nil
@@ -182,7 +192,7 @@ func buildBM25Index[T any](corpus []T, textFunc func(T) string, k1, b float64) *
 	totalLen := 0
 
 	for i, doc := range corpus {
-		tokens := bm25Tokenize(textFunc(doc))
+		tokens := bm25TokenizeStem(textFunc(doc), stemming)
 		totalLen += len(tokens)
 		rawLens[i] = len(tokens)
 
@@ -231,13 +241,22 @@ func buildBM25Index[T any](corpus []T, textFunc func(T) string, k1, b float64) *
 
 // bm25Tokenize splits s into lowercase tokens, stripping edge punctuation.
 func bm25Tokenize(s string) []string {
+	return bm25TokenizeStem(s, false)
+}
+
+// bm25TokenizeStem is bm25Tokenize with optional English inflection stemming.
+func bm25TokenizeStem(s string, stemming bool) []string {
 	raw := strings.Fields(strings.ToLower(s))
 	out := raw[:0] // reuse backing array to avoid extra allocation
 	for _, t := range raw {
 		t = strings.Trim(t, ".,;:!?\"'()/\\-_")
-		if t != "" {
-			out = append(out, t)
+		if t == "" {
+			continue
 		}
+		if stemming {
+			t = stemEnglish(t)
+		}
+		out = append(out, t)
 	}
 	return out
 }

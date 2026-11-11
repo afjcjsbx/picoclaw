@@ -191,6 +191,21 @@ func BenchmarkBM25Search_ReusedIndex(b *testing.B) {
 	}
 }
 
+func BenchmarkBM25Search_WithStemming(b *testing.B) {
+	corpus := benchmarkBM25Corpus(2000)
+	engine := NewBM25Engine(corpus, extractText, WithStemming())
+	query := "hardware gpio i2c sensor controller latency"
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		results := engine.Search(query, 10)
+		if len(results) == 0 {
+			b.Fatal("expected non-empty results")
+		}
+	}
+}
+
 func BenchmarkBM25Search_RebuildEachTime(b *testing.B) {
 	corpus := benchmarkBM25Corpus(2000)
 	query := "hardware gpio i2c sensor controller latency"

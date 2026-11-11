@@ -161,6 +161,40 @@ func TestBM25SearchTool_Execute(t *testing.T) {
 	})
 }
 
+func TestBM25SearchTool_StemmedQuery(t *testing.T) {
+	reg := NewToolRegistry()
+	reg.RegisterHidden(&mockSearchableTool{
+		name: "mcp_search_repositories",
+		desc: "Search repositories by name and description",
+	})
+	reg.RegisterHidden(&mockSearchableTool{
+		name: "mcp_create_issue",
+		desc: "Create a new issue in a repository",
+	})
+
+	tool := NewBM25SearchTool(reg, 3, 5)
+	ctx := context.Background()
+
+	tests := []struct{ query, want string }{
+		{"searching repositories", "mcp_search_repositories"},
+		{"created issues", "mcp_create_issue"},
+		{"creating an issue", "mcp_create_issue"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.query, func(t *testing.T) {
+			res := tool.Execute(ctx, map[string]any{"query": tt.query})
+			results := discoveryResults(t, res)
+			if len(results) == 0 {
+				t.Fatalf("query %q returned no tools", tt.query)
+			}
+			if results[0].Name != tt.want {
+				t.Fatalf("query %q top result = %q, want %q", tt.query, results[0].Name, tt.want)
+			}
+		})
+	}
+}
+
 func TestBM25SearchTool_ConcurrentExecute(t *testing.T) {
 	reg := setupPopulatedRegistry()
 	tool := NewBM25SearchTool(reg, 3, 10)
