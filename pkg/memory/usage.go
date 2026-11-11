@@ -27,7 +27,9 @@ import (
 //
 // Metadata written before counters existed is initialized from the session file
 // when the store opens. That initialization counts each message once, even when
-// an earlier alias promotion copied it into a second file.
+// an earlier alias promotion copied it into a second file. A session that still
+// lacks counters when its usage is read, such as one whose counters were reset,
+// is initialized from its own file.
 
 // opaqueKeyPrefix marks canonical session keys. pkg/session defines the same
 // prefix but imports this package, so the value is repeated here.
@@ -113,8 +115,9 @@ func ReadSessionUsage(dir string) ([]SessionUsageEntry, error) {
 	return entries, nil
 }
 
-// SessionUsage returns the cumulative usage recorded for sessionKey. It reads
-// the metadata only and never rewrites the session.
+// SessionUsage returns the cumulative usage recorded for sessionKey. A stored
+// session without counters is summed from its file once and the counters are
+// saved, so the next call reads the metadata only. It never rewrites messages.
 func (s *JSONLStore) SessionUsage(_ context.Context, sessionKey string) (usage.Summary, error) {
 	l := s.sessionLock(sessionKey)
 	l.Lock()
@@ -123,6 +126,17 @@ func (s *JSONLStore) SessionUsage(_ context.Context, sessionKey string) (usage.S
 	meta, err := s.readMeta(sessionKey)
 	if err != nil {
 		return usage.Summary{}, err
+	}
+	if !meta.UsageTracked {
+		// A session with no metadata file is not stored yet: nothing to save.
+		if _, statErr := os.Stat(s.metaPath(sessionKey)); statErr == nil {
+			s.ensureUsageTracked(sessionKey, &meta)
+			if meta.UsageTracked {
+				if err := s.writeMeta(sessionKey, meta); err != nil {
+					log.Printf("memory: save usage counters of %q: %v", sessionKey, err)
+				}
+			}
+		}
 	}
 	return usageOf(s.jsonlPath(sessionKey), meta), nil
 }

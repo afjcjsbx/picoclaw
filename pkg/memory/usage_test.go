@@ -458,3 +458,55 @@ func TestResetUsageCountersRebuildsFromFile(t *testing.T) {
 		t.Fatalf("usage after reset = %+v, want the migrated messages", got.Totals)
 	}
 }
+
+func TestSessionUsageSavesCountersOfUntrackedSession(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	if err := store.SetHistory(ctx, "s", []providers.Message{usageMessage("m", 10, 1)}); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
+	if err := store.resetUsageCounters("s"); err != nil {
+		t.Fatalf("resetUsageCounters: %v", err)
+	}
+
+	if got := mustSessionUsage(t, store, "s"); got.Turns != 1 || got.InputTokens != 10 {
+		t.Fatalf("usage = %+v, want the message in the file", got.Totals)
+	}
+	meta, err := store.readMeta("s")
+	if err != nil {
+		t.Fatalf("readMeta: %v", err)
+	}
+	if !meta.UsageTracked {
+		t.Fatal("UsageTracked = false after SessionUsage, want the sum saved")
+	}
+
+	// A record added behind the store's back is not seen: the saved counters
+	// answer, the file is not summed again.
+	line, err := json.Marshal(usageMessage("m", 500, 5))
+	if err != nil {
+		t.Fatalf("Marshal message: %v", err)
+	}
+	f, err := os.OpenFile(store.jsonlPath("s"), os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	if _, err := f.Write(append(line, '\n')); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if got := mustSessionUsage(t, store, "s"); got.Turns != 1 || got.InputTokens != 10 {
+		t.Fatalf("usage = %+v, want the saved counters", got.Totals)
+	}
+}
+
+func TestSessionUsageOfUnknownSessionWritesNothing(t *testing.T) {
+	store := newTestStore(t)
+	if got := mustSessionUsage(t, store, "missing"); !got.Empty() {
+		t.Fatalf("usage = %+v, want none", got.Totals)
+	}
+	if _, err := os.Stat(store.metaPath("missing")); !os.IsNotExist(err) {
+		t.Fatalf("meta file of an unknown session: stat err = %v, want not exist", err)
+	}
+}
