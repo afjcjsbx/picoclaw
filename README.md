@@ -9,7 +9,7 @@
 _Small on purpose. Small is not lesser. Small is enough._
 
 <p>
-  <img src="https://img.shields.io/badge/Go-1.27.3+-00ADD8?style=flat&logo=go&logoColor=white" alt="Go 1.27.3+">
+  <img src="https://img.shields.io/badge/Go-1.27.4+-00ADD8?style=flat&logo=go&logoColor=white" alt="Go 1.27.4+">
   <img src="https://img.shields.io/badge/Platforms-x86__64%20%7C%20ARM64%20%7C%20MIPS%20%7C%20RISC--V%20%7C%20LoongArch-blue" alt="Supported platforms">
   <img src="https://img.shields.io/badge/License-MIT-green" alt="MIT License">
   <img src="https://img.shields.io/github/v/release/afjcjsbx/picoclaw?style=flat&label=release" alt="Latest release">
@@ -130,7 +130,7 @@ Download the binary for your platform from [GitHub Releases](https://github.com/
 
 Prerequisites:
 
-- Go 1.27.3+
+- Go 1.27.4+
 - Node.js 22+ and pnpm 10.33.0+ for Web UI and launcher builds
 
 ```bash
