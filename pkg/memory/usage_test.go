@@ -236,6 +236,37 @@ func TestLegacyPromotionCopyIsCountedOnce(t *testing.T) {
 	}
 }
 
+func TestLegacyPromotionCopyWithoutTimestampsIsCountedOnce(t *testing.T) {
+	dir := t.TempDir()
+	first := usageMessage("m", 100, 10)
+	repeat := usageMessage("m", 200, 20)
+	fresh := usageMessage("m", 300, 30)
+	const alias = "agent:main:telegram:direct:42"
+	const canonical = "sk_v1_chat"
+	// repeat appears twice in one file: both calls were billed, so both count.
+	writeLegacySession(t, dir, alias, 0, first, repeat, repeat)
+	writeLegacySession(t, dir, canonical, 0, first, repeat, repeat, fresh)
+
+	entries, err := ReadSessionUsage(dir)
+	if err != nil {
+		t.Fatalf("ReadSessionUsage: %v", err)
+	}
+	if got := totalUsage(entries); got.Turns != 4 || got.InputTokens != 800 {
+		t.Fatalf("total = %+v, want the four distinct messages", got)
+	}
+
+	store, err := NewJSONLStore(dir)
+	if err != nil {
+		t.Fatalf("NewJSONLStore: %v", err)
+	}
+	if got := mustSessionUsage(t, store, canonical); got.Turns != 4 || got.InputTokens != 800 {
+		t.Fatalf("canonical usage = %+v, want all four messages", got.Totals)
+	}
+	if got := mustSessionUsage(t, store, alias); !got.Empty() {
+		t.Fatalf("alias usage = %+v, want none: its messages now live in the canonical session", got.Totals)
+	}
+}
+
 func TestLegacyAliasKeepsSpendOfTruncatedMessages(t *testing.T) {
 	dir := t.TempDir()
 	at := time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC)

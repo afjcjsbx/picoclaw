@@ -55,6 +55,21 @@ type usageRecord struct {
 	Usage     *providers.UsageInfo `json:"usage"`
 }
 
+// messageID identifies a record across session files. Records written before
+// timestamps existed fall back to their model and usage, numbered by how often
+// that pair already occurred in the file: equal records in one file stay
+// distinct, and a copy in another file matches them one for one. occurrences
+// holds the counts for the file being read.
+func (r usageRecord) messageID(occurrences map[string]int) string {
+	if r.CreatedAt != "" {
+		return r.CreatedAt
+	}
+	fingerprint, _ := json.Marshal(r.Usage)
+	key := r.ModelName + "|" + string(fingerprint)
+	occurrences[key]++
+	return fmt.Sprintf("untimed|%s|%d", key, occurrences[key])
+}
+
 // sessionFile is one session of a sessions directory.
 type sessionFile struct {
 	key       string
@@ -192,16 +207,16 @@ func legacyUsage(files []sessionFile) map[string]usage.Summary {
 	for _, f := range files {
 		var sum usage.Summary
 		var claimed []string
+		occurrences := make(map[string]int)
 		err := eachUsageRecord(f.jsonlPath, func(rec usageRecord) {
-			if rec.CreatedAt != "" {
-				owner, seen := countedBy[rec.CreatedAt]
-				if seen && owner != f.key {
-					return
-				}
-				if !seen {
-					countedBy[rec.CreatedAt] = f.key
-					claimed = append(claimed, rec.CreatedAt)
-				}
+			id := rec.messageID(occurrences)
+			owner, seen := countedBy[id]
+			if seen && owner != f.key {
+				return
+			}
+			if !seen {
+				countedBy[id] = f.key
+				claimed = append(claimed, id)
 			}
 			sum.AddMessage(rec.ModelName, *rec.Usage)
 		})
