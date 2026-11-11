@@ -42,7 +42,7 @@ require (
 	github.com/rs/zerolog v1.35.1
 	github.com/slack-go/slack v0.35.0
 	github.com/spf13/cobra v1.10.2
-	github.com/spf13/pflag v1.0.10
+	github.com/spf13/pflag v1.1.0
 	github.com/stretchr/testify v1.12.1
 	github.com/tencent-connect/botgo v0.2.1
 	go.mau.fi/util v0.11.0
