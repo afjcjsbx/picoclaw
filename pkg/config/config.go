@@ -1480,6 +1480,9 @@ type ImageGenerateToolConfig struct {
 }
 
 const (
+	// ReadFileModeAuto returns line-numbered output for text files and falls
+	// back to raw byte output for binary files.
+	ReadFileModeAuto  = "auto"
 	ReadFileModeBytes = "bytes"
 	ReadFileModeLines = "lines"
 )
@@ -1488,10 +1491,12 @@ func (c ReadFileToolConfig) EffectiveMode() string {
 	switch strings.ToLower(strings.TrimSpace(c.Mode)) {
 	case ReadFileModeLines:
 		return ReadFileModeLines
-	case "", ReadFileModeBytes:
+	case ReadFileModeBytes:
 		return ReadFileModeBytes
+	case "", ReadFileModeAuto:
+		return ReadFileModeAuto
 	default:
-		return ReadFileModeBytes
+		return ReadFileModeAuto
 	}
 }
 

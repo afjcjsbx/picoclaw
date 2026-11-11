@@ -327,6 +327,15 @@ type ReadFileLinesTool struct {
 	maxLineLength int
 }
 
+// ReadFileAutoTool is the default read_file implementation: it returns
+// line-numbered output for text files and falls back to raw byte output for
+// binary files. The caller can force byte mode by passing offset or length.
+type ReadFileAutoTool struct {
+	bytes     *ReadFileTool
+	lines     *ReadFileLinesTool
+	workspace string
+}
+
 func NewReadFileTool(
 	workspace string,
 	restrict bool,
@@ -383,11 +392,30 @@ func NewReadFileLinesTool(
 	}
 }
 
+func NewReadFileAutoTool(
+	workspace string,
+	restrict bool,
+	maxReadFileSize int,
+	maxLines int,
+	maxLineLength int,
+	allowPaths ...[]*regexp.Regexp,
+) *ReadFileAutoTool {
+	return &ReadFileAutoTool{
+		bytes:     NewReadFileTool(workspace, restrict, maxReadFileSize, allowPaths...),
+		lines:     NewReadFileLinesTool(workspace, restrict, maxReadFileSize, maxLines, maxLineLength, allowPaths...),
+		workspace: workspace,
+	}
+}
+
 func (t *ReadFileTool) Name() string {
 	return "read_file"
 }
 
 func (t *ReadFileLinesTool) Name() string {
+	return "read_file"
+}
+
+func (t *ReadFileAutoTool) Name() string {
 	return "read_file"
 }
 
@@ -397,6 +425,10 @@ func (t *ReadFileTool) Description() string {
 
 func (t *ReadFileLinesTool) Description() string {
 	return "Read a UTF-8 text file from the filesystem. Output always includes line numbers in the format `LINE_NUMBER|LINE_CONTENT` (1-indexed). Supports partial reads via `start_line` and `max_lines` for large text files."
+}
+
+func (t *ReadFileAutoTool) Description() string {
+	return "Read a file. Text files return line-numbered output in the format `LINE_NUMBER|LINE_CONTENT` (1-indexed) and support `start_line`/`max_lines`. Binary files fall back to raw bytes and support `offset`/`length`; passing `offset` or `length` forces raw byte mode."
 }
 
 func (t *ReadFileTool) Parameters() map[string]any {
@@ -438,6 +470,38 @@ func (t *ReadFileLinesTool) Parameters() map[string]any {
 			"max_lines": map[string]any{
 				"type":        "integer",
 				"description": "Maximum number of lines to read.",
+			},
+		},
+		"required": []string{"path"},
+	}
+}
+
+func (t *ReadFileAutoTool) Parameters() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"path": map[string]any{
+				"type":        "string",
+				"description": "Path to the file to read.",
+			},
+			"start_line": map[string]any{
+				"type":        "integer",
+				"description": "Text files: line number to start reading from (1-indexed, inclusive).",
+				"default":     1,
+			},
+			"max_lines": map[string]any{
+				"type":        "integer",
+				"description": "Text files: maximum number of lines to read.",
+			},
+			"offset": map[string]any{
+				"type":        "integer",
+				"description": "Binary files or raw reads: byte offset to start reading from. Providing offset or length forces byte mode.",
+				"default":     0,
+			},
+			"length": map[string]any{
+				"type":        "integer",
+				"description": "Binary files or raw reads: maximum number of bytes to read.",
+				"default":     t.bytes.maxSize,
 			},
 		},
 		"required": []string{"path"},
@@ -838,6 +902,68 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 		})
 
 	return NewToolResult(header + "\n\n" + content.String())
+}
+
+func (t *ReadFileAutoTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	path, ok := args["path"].(string)
+	if !ok {
+		return ErrorResult("path is required")
+	}
+
+	lineArgs := hasReadFileArg(args, "start_line", "max_lines")
+	byteArgs := hasReadFileArg(args, "offset", "length")
+	if lineArgs && byteArgs {
+		return ErrorResult(
+			"use either start_line/max_lines (text files) or offset/length (binary or raw reads), not both",
+		)
+	}
+
+	// An explicit byte range keeps the pre-auto behavior and lets the model
+	// page through text files that are better read raw (for example minified
+	// files with very long lines).
+	if byteArgs {
+		return t.bytes.Execute(ctx, args)
+	}
+
+	binary, errResult := t.isBinary(path)
+	if errResult != nil {
+		return errResult
+	}
+	if !binary {
+		return t.lines.Execute(ctx, args)
+	}
+	if lineArgs {
+		return ErrorResult("file appears to be binary; use offset/length to read raw bytes")
+	}
+	return t.bytes.Execute(ctx, args)
+}
+
+func (t *ReadFileAutoTool) isBinary(path string) (bool, *ToolResult) {
+	file, err := t.bytes.fs.Open(path)
+	if err != nil {
+		return false, ErrorResult(err.Error())
+	}
+	defer file.Close()
+
+	if info, statErr := file.Stat(); statErr == nil && info.IsDir() {
+		return false, ErrorResult(fmt.Sprintf("failed to open file: path is a directory: %s", path))
+	}
+
+	sample := make([]byte, 512)
+	n, readErr := file.Read(sample)
+	if readErr != nil && readErr != io.EOF {
+		return false, ErrorResult(fmt.Sprintf("failed to read file: %v", readErr))
+	}
+	return isBinaryReadFileData(sample[:n]), nil
+}
+
+func hasReadFileArg(args map[string]any, names ...string) bool {
+	for _, name := range names {
+		if value, ok := args[name]; ok && value != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func isBinaryReadFileData(data []byte) bool {

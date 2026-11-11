@@ -995,6 +995,39 @@ func TestNewAgentInstance_ReadFileModeSelectsSchema(t *testing.T) {
 	}
 }
 
+func TestNewAgentInstance_ReadFileAutoModeIsDefault(t *testing.T) {
+	workspace := t.TempDir()
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: workspace,
+				ModelName: "test-model",
+			},
+		},
+		Tools: config.ToolsConfig{
+			ReadFile: config.ReadFileToolConfig{
+				Enabled:         true,
+				MaxReadFileSize: 4096,
+			},
+		},
+	}
+
+	agent := NewAgentInstance(nil, &cfg.Agents.Defaults, cfg, &mockProvider{})
+	readTool, ok := agent.Tools.Get("read_file")
+	if !ok {
+		t.Fatal("read_file tool not registered")
+	}
+
+	params := readTool.Parameters()
+	props, _ := params["properties"].(map[string]any)
+	for _, key := range []string{"start_line", "max_lines", "offset", "length"} {
+		if _, ok := props[key]; !ok {
+			t.Fatalf("expected auto-mode schema to expose %s, got %#v", key, props)
+		}
+	}
+}
+
 // write_file copy names append_file/edit_file only when they are registered.
 func TestNewAgentInstance_WriteFileCopyReflectsAvailableAltTools(t *testing.T) {
 	newCfg := func(editEnabled, appendEnabled bool) *config.Config {

@@ -139,9 +139,15 @@ func NewAgentInstance(
 				cfg.Tools.ReadFile.GetMaxLines(), cfg.Tools.ReadFile.GetMaxLineLength(),
 				allowReadPaths,
 			))
-		default:
+		case config.ReadFileModeBytes:
 			toolsRegistry.Register(fstools.NewReadFileTool(
 				workspace, readRestrict, maxReadFileSize, allowReadPaths,
+			))
+		default:
+			toolsRegistry.Register(fstools.NewReadFileAutoTool(
+				workspace, readRestrict, maxReadFileSize,
+				cfg.Tools.ReadFile.GetMaxLines(), cfg.Tools.ReadFile.GetMaxLineLength(),
+				allowReadPaths,
 			))
 		}
 	}

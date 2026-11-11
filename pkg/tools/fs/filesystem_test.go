@@ -1824,3 +1824,144 @@ func TestReadFileLinesTool_ExactByteBudgetBoundaryIncludesPrefix(t *testing.T) {
 		t.Fatalf("expected continuation at line 2, got: %s", result.ForLLM)
 	}
 }
+
+func TestReadFileAutoTool_TextDefaultsToLineMode(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "text.txt")
+	if err := os.WriteFile(testFile, []byte("alpha\nbeta\ngamma\n"), 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	tool := NewReadFileAutoTool(
+		tmpDir, false, MaxReadFileSize,
+		DefaultReadFileMaxLines, DefaultReadFileMaxLineLength,
+	)
+	result := tool.Execute(context.Background(), map[string]any{
+		"path":       testFile,
+		"start_line": 2,
+		"max_lines":  1,
+	})
+	if result.IsError {
+		t.Fatalf("Execute() error = %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "2|beta\n") {
+		t.Fatalf("expected line-numbered output, got: %s", result.ForLLM)
+	}
+	if strings.Contains(result.ForLLM, "1|alpha") {
+		t.Fatalf("expected start_line to be honored, got: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "read: lines 2-2") {
+		t.Fatalf("expected line range header, got: %s", result.ForLLM)
+	}
+}
+
+func TestReadFileAutoTool_BinaryFallsBackToByteMode(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "binary.dat")
+	data := []byte{0x00, 0x01, 'A', 'B', 'C', 'D'}
+	if err := os.WriteFile(testFile, data, 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	tool := NewReadFileAutoTool(
+		tmpDir, false, MaxReadFileSize,
+		DefaultReadFileMaxLines, DefaultReadFileMaxLineLength,
+	)
+
+	result := tool.Execute(context.Background(), map[string]any{"path": testFile})
+	if result.IsError {
+		t.Fatalf("expected binary fallback to succeed, got: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "bytes 0-5") {
+		t.Fatalf("expected raw byte range header, got: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, string(data)) {
+		t.Fatalf("expected raw bytes in the result, got: %q", result.ForLLM)
+	}
+
+	result = tool.Execute(context.Background(), map[string]any{
+		"path":   testFile,
+		"offset": 2,
+		"length": 2,
+	})
+	if result.IsError {
+		t.Fatalf("expected binary byte pagination to succeed, got: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "bytes 2-3") || !strings.Contains(result.ForLLM, "AB") {
+		t.Fatalf("expected the requested byte range, got: %q", result.ForLLM)
+	}
+}
+
+func TestReadFileAutoTool_ByteArgsForceRawModeOnText(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "text.txt")
+	if err := os.WriteFile(testFile, []byte("abcdef\n"), 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	tool := NewReadFileAutoTool(
+		tmpDir, false, MaxReadFileSize,
+		DefaultReadFileMaxLines, DefaultReadFileMaxLineLength,
+	)
+	result := tool.Execute(context.Background(), map[string]any{
+		"path":   testFile,
+		"offset": 0,
+		"length": 3,
+	})
+	if result.IsError {
+		t.Fatalf("Execute() error = %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "bytes 0-2") || !strings.Contains(result.ForLLM, "abc") {
+		t.Fatalf("expected raw byte output, got: %q", result.ForLLM)
+	}
+	if strings.Contains(result.ForLLM, "1|") {
+		t.Fatalf("expected byte mode to omit line numbers, got: %s", result.ForLLM)
+	}
+}
+
+func TestReadFileAutoTool_RejectsLineArgsForBinary(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "binary.dat")
+	if err := os.WriteFile(testFile, []byte{0x00, 0x01, 0x02}, 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	tool := NewReadFileAutoTool(
+		tmpDir, false, MaxReadFileSize,
+		DefaultReadFileMaxLines, DefaultReadFileMaxLineLength,
+	)
+	result := tool.Execute(context.Background(), map[string]any{
+		"path":       testFile,
+		"start_line": 1,
+	})
+	if !result.IsError {
+		t.Fatalf("expected line args on a binary file to fail, got: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "use offset/length") {
+		t.Fatalf("expected byte pagination guidance, got: %s", result.ForLLM)
+	}
+}
+
+func TestReadFileAutoTool_RejectsMixedPaginationArgs(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "text.txt")
+	if err := os.WriteFile(testFile, []byte("alpha\nbeta\n"), 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	tool := NewReadFileAutoTool(
+		tmpDir, false, MaxReadFileSize,
+		DefaultReadFileMaxLines, DefaultReadFileMaxLineLength,
+	)
+	result := tool.Execute(context.Background(), map[string]any{
+		"path":       testFile,
+		"start_line": 1,
+		"offset":     0,
+	})
+	if !result.IsError {
+		t.Fatalf("expected mixed pagination args to fail, got: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "not both") {
+		t.Fatalf("expected mixed-args guidance, got: %s", result.ForLLM)
+	}
+}
