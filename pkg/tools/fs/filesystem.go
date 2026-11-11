@@ -487,7 +487,6 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	// it into the LLM context. Seeking back to 0 afterwards restores state.
 	sniff := make([]byte, 512)
 	sniffN, _ := file.Read(sniff)
-	textual := !isBinaryReadFileData(sniff[:sniffN])
 
 	// Reset read position to beginning before applying the caller's offset.
 	if seeker, ok := file.(io.Seeker); ok {
@@ -586,12 +585,7 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	// Scrub credential-looking values found in the file before the content
 	// reaches the model. The header above is built from the raw byte counts,
 	// so the reported range and the pagination offsets stay valid.
-	result := NewToolResult(header + "\n\n" + redactSecrets(string(data)))
-	// A byte read of a text file is still textual content: keep long
-	// base64-like runs instead of replacing the whole page with the generic
-	// omission notice. Binary-looking files keep the guard.
-	result.AllowLargeBase64Like = textual
-	return result
+	return NewToolResult(header + "\n\n" + redactSecrets(string(data)))
 }
 
 func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
@@ -843,11 +837,7 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 			"tool":              t.Name(),
 		})
 
-	result := NewToolResult(header + "\n\n" + content.String())
-	// Line-mode output is bounded, line-numbered text; a long run of base64
-	// characters in a source file is content, not an inline media payload.
-	result.AllowLargeBase64Like = true
-	return result
+	return NewToolResult(header + "\n\n" + content.String())
 }
 
 func isBinaryReadFileData(data []byte) bool {

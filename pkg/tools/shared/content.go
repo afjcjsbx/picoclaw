@@ -54,9 +54,9 @@ func SanitizeToolLLMContent(text string) string {
 }
 
 // SanitizeToolLLMContentAllowLargeBase64Like is SanitizeToolLLMContent for
-// tools whose result is bounded, line-numbered text. It still strips data URLs
-// and invisible Unicode, but keeps large base64-like runs because they are
-// ordinary file content rather than an inline media payload.
+// tools that echo file content. It still strips data URLs and invisible
+// Unicode, but keeps large base64-like runs because they are ordinary file
+// content rather than an inline media payload.
 func SanitizeToolLLMContentAllowLargeBase64Like(text string) string {
 	return sanitizeToolLLMContent(text, true)
 }

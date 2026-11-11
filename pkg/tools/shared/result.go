@@ -66,13 +66,6 @@ type ToolResult struct {
 	// forge the marker and bypass the spill.
 	LargeResultSpilled bool `json:"-"`
 
-	// AllowLargeBase64Like keeps a large base64-like run in ForLLM instead of
-	// replacing the whole result with the generic omission notice. It is only
-	// for tools whose output is bounded, line-numbered text (read_file's line
-	// mode), where the run is ordinary file content rather than an inline
-	// media payload. Data URLs and invisible Unicode are still stripped.
-	AllowLargeBase64Like bool `json:"-"`
-
 	// FullText is the pre-truncation payload when a tool cut its own output
 	// before returning it (for example exec's max_output_chars or web_fetch's
 	// maxChars). The large-result spill persists this text instead of the

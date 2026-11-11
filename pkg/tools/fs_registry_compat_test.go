@@ -61,9 +61,11 @@ func TestReadFileLinesTool_KeepsLargeBase64LikeLineText(t *testing.T) {
 
 	reg := NewToolRegistry()
 	reg.SetMaxInlineResultRunes(1 << 20)
+	// The default max_line_length (2000) would cut the run below the guard
+	// threshold, so raise it to exercise the exemption.
 	reg.Register(fstools.NewReadFileLinesTool(
 		tmpDir, false, fstools.MaxReadFileSize,
-		fstools.DefaultReadFileMaxLines, fstools.DefaultReadFileMaxLineLength,
+		fstools.DefaultReadFileMaxLines, 100000,
 	))
 
 	result := reg.Execute(context.Background(), "read_file", map[string]any{"path": testFile})
@@ -78,7 +80,7 @@ func TestReadFileLinesTool_KeepsLargeBase64LikeLineText(t *testing.T) {
 	}
 }
 
-func TestReadFileTool_KeepsLargeBase64LikeTextBytes(t *testing.T) {
+func TestReadFileTool_KeepsLargeBase64LikeBytes(t *testing.T) {
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "large_text.txt")
 	payload := strings.Repeat("A", 3000)
@@ -95,31 +97,10 @@ func TestReadFileTool_KeepsLargeBase64LikeTextBytes(t *testing.T) {
 		t.Fatalf("read_file error = %s", result.ForLLM)
 	}
 	if result.ForLLM == toolshared.LargeBase64OmittedMessage {
-		t.Fatal("byte mode on a text file must not be replaced by the base64 omission notice")
+		t.Fatal("byte mode must not be replaced by the base64 omission notice")
 	}
 	if !strings.Contains(result.ForLLM, strings.Repeat("A", 128)) {
 		t.Fatalf("expected the text-file bytes to stay inline, got: %s", result.ForLLM)
-	}
-}
-
-func TestReadFileTool_StillOmitsLargeBase64LikeBinaryBytes(t *testing.T) {
-	tmpDir := t.TempDir()
-	testFile := filepath.Join(tmpDir, "large_binary.bin")
-	payload := append([]byte{0x00}, []byte(strings.Repeat("A", 3000))...)
-	if err := os.WriteFile(testFile, payload, 0o644); err != nil {
-		t.Fatalf("Failed to write test file: %v", err)
-	}
-
-	reg := NewToolRegistry()
-	reg.SetMaxInlineResultRunes(1 << 20)
-	reg.Register(fstools.NewReadFileTool(tmpDir, false, fstools.MaxReadFileSize))
-
-	result := reg.Execute(context.Background(), "read_file", map[string]any{"path": testFile})
-	if result.IsError {
-		t.Fatalf("read_file error = %s", result.ForLLM)
-	}
-	if !strings.Contains(result.ForLLM, toolshared.LargeBase64OmittedMessage) {
-		t.Fatalf("binary byte mode must keep the base64 guard, got: %s", result.ForLLM)
 	}
 }
 
