@@ -13,7 +13,7 @@ description: "PicoClaw 中文项目说明：超轻量 Go 个人 AI 助手，可�
 _刻意保持小巧。小巧不等于简陋。小巧，已然足够。_
 
 <p>
-  <img src="https://img.shields.io/badge/Go-1.27.3+-00ADD8?style=flat&logo=go&logoColor=white" alt="Go 1.27.3+">
+  <img src="https://img.shields.io/badge/Go-1.27.4+-00ADD8?style=flat&logo=go&logoColor=white" alt="Go 1.27.4+">
   <img src="https://img.shields.io/badge/Platforms-x86__64%20%7C%20ARM64%20%7C%20MIPS%20%7C%20RISC--V%20%7C%20LoongArch-blue" alt="支持的平台">
   <img src="https://img.shields.io/badge/License-MIT-green" alt="MIT 许可证">
   <img src="https://img.shields.io/github/v/release/afjcjsbx/picoclaw?style=flat&label=release" alt="最新版本">
@@ -123,7 +123,7 @@ irm https://raw.githubusercontent.com/afjcjsbx/picoclaw/main/scripts/install.ps1
 
 前置要求：
 
-- Go 1.27.3+
+- Go 1.27.4+
 - Node.js 22+ 和 pnpm 10.33.0+（用于构建 Web UI 和启动器）
 
 ```bash
