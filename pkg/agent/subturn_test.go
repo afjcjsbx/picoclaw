@@ -2579,3 +2579,314 @@ func TestSpawnSubTurn_SuppressesToolFeedback(t *testing.T) {
 		t.Error("shouldPublishToolFeedback() = true for child turn")
 	}
 }
+
+func TestBuildSubTurnTools(t *testing.T) {
+	base := tools.NewToolRegistry()
+	for _, name := range append(tools.OutboundToolNames(), "read_file", "exec") {
+		base.Register(&allowlistTestTool{name: name})
+	}
+
+	inherited := buildSubTurnTools(base, SubTurnConfig{}, true)
+	if _, ok := inherited.Get("message"); !ok {
+		t.Error("outbound tools must be inherited when outbound is allowed")
+	}
+
+	denied := buildSubTurnTools(base, SubTurnConfig{}, false)
+	for _, name := range tools.OutboundToolNames() {
+		if _, ok := denied.Get(name); ok {
+			t.Errorf("outbound tool %q must be stripped", name)
+		}
+	}
+	if _, ok := denied.Get("read_file"); !ok {
+		t.Error("non-outbound tools must be kept when outbound is denied")
+	}
+	if _, ok := base.Get("message"); !ok {
+		t.Error("stripping outbound tools must not modify the parent registry")
+	}
+
+	explicit := buildSubTurnTools(base, SubTurnConfig{Tools: []tools.Tool{
+		&allowlistTestTool{name: "read_file"},
+		&allowlistTestTool{name: "message"},
+	}}, false)
+	if explicit.Count() != 1 {
+		t.Fatalf("count = %d, want 1 after outbound strip", explicit.Count())
+	}
+	if _, ok := explicit.Get("read_file"); !ok {
+		t.Error("explicit non-outbound tools must be kept")
+	}
+	if _, ok := explicit.Get("message"); ok {
+		t.Error("outbound tools must be stripped even from an explicit list")
+	}
+	if _, ok := explicit.Get("exec"); ok {
+		t.Error("explicit tool list must replace the inherited set")
+	}
+
+	nilBase := buildSubTurnTools(nil, SubTurnConfig{Tools: []tools.Tool{
+		&allowlistTestTool{name: "read_file"},
+	}}, true)
+	if nilBase == nil || nilBase.Count() != 1 {
+		t.Fatalf("nil base with explicit tools = %#v, want one tool", nilBase)
+	}
+
+	if buildSubTurnTools(nil, SubTurnConfig{}, true) != nil {
+		t.Error("nil base without explicit tools must keep inheritance")
+	}
+}
+
+func TestSubTurnAllowsOutbound(t *testing.T) {
+	al, cfg, _, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+
+	if !al.subTurnAllowsOutbound(nil, SubTurnConfig{}) {
+		t.Fatal("direct messaging must default to enabled")
+	}
+
+	disabled := false
+	if al.subTurnAllowsOutbound(nil, SubTurnConfig{AllowOutbound: &disabled}) {
+		t.Fatal("per-spawn override must deny outbound")
+	}
+
+	enabled := true
+	if al.subTurnAllowsOutbound(&turnState{denyOutbound: true}, SubTurnConfig{AllowOutbound: &enabled}) {
+		t.Fatal("a denied parent must deny every descendant, even with per-spawn true")
+	}
+	if !al.subTurnAllowsOutbound(&turnState{}, SubTurnConfig{}) {
+		t.Fatal("an allowed parent must not restrict the child")
+	}
+
+	cfg.Agents.Defaults.SubTurn.DirectMessage = &disabled
+	if al.subTurnAllowsOutbound(nil, SubTurnConfig{}) {
+		t.Fatal("configured deny-floor must disable outbound")
+	}
+
+	if al.subTurnAllowsOutbound(nil, SubTurnConfig{AllowOutbound: &enabled}) {
+		t.Fatal("per-spawn true must not lift the configured deny-floor")
+	}
+}
+
+// recordingToolProvider captures the tool definitions of the first LLM call.
+type recordingToolProvider struct {
+	mu        sync.Mutex
+	recorded  bool
+	toolNames []string
+}
+
+func (p *recordingToolProvider) Chat(
+	_ context.Context,
+	_ []providers.Message,
+	defs []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.recorded {
+		p.recorded = true
+		for _, def := range defs {
+			p.toolNames = append(p.toolNames, def.Function.Name)
+		}
+	}
+	return &providers.LLMResponse{Content: "done", ToolCalls: []providers.ToolCall{}}, nil
+}
+
+func (p *recordingToolProvider) GetDefaultModel() string { return "mock-model" }
+
+func (p *recordingToolProvider) names() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.toolNames...)
+}
+
+func TestSpawnSubTurn_AppliesOutboundDenyFloorToChildTools(t *testing.T) {
+	tests := []struct {
+		name          string
+		directMessage *bool
+		allowOutbound *bool
+		wantMessage   bool
+	}{
+		{name: "inherits outbound by default", wantMessage: true},
+		{name: "explicit true keeps the default", allowOutbound: boolPtr(true), wantMessage: true},
+		{name: "denies outbound", allowOutbound: boolPtr(false), wantMessage: false},
+		{name: "global deny", directMessage: boolPtr(false), wantMessage: false},
+		{
+			name:          "per-spawn true cannot lift a global deny",
+			directMessage: boolPtr(false),
+			allowOutbound: boolPtr(true),
+			wantMessage:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{
+				Agents: config.AgentsConfig{
+					Defaults: config.AgentDefaults{
+						Workspace:         t.TempDir(),
+						ModelName:         "test-model",
+						MaxTokens:         4096,
+						MaxToolIterations: 10,
+						SubTurn: config.SubTurnConfig{
+							DirectMessage: tt.directMessage,
+						},
+					},
+				},
+			}
+			provider := &recordingToolProvider{}
+			al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+			parentAgent := al.registry.GetDefaultAgent()
+			parentAgent.Tools.Register(&allowlistTestTool{name: "message"})
+			parentAgent.Tools.Register(&allowlistTestTool{name: "read_file"})
+
+			parent := &turnState{
+				ctx:            context.Background(),
+				turnID:         "parent-outbound",
+				pendingResults: make(chan *tools.ToolResult, 10),
+				session:        &ephemeralSessionStore{},
+				agent:          parentAgent,
+			}
+
+			if _, err := spawnSubTurn(context.Background(), al, parent, SubTurnConfig{
+				Model:         "test-model",
+				AllowOutbound: tt.allowOutbound,
+			}); err != nil {
+				t.Fatalf("spawnSubTurn: %v", err)
+			}
+
+			names := provider.names()
+			if len(names) == 0 {
+				t.Fatal("child turn never called the provider")
+			}
+			hasMessage, hasReadFile := false, false
+			for _, name := range names {
+				switch name {
+				case "message":
+					hasMessage = true
+				case "read_file":
+					hasReadFile = true
+				}
+			}
+			if hasMessage != tt.wantMessage {
+				t.Errorf("message tool present = %v, want %v (tools: %v)", hasMessage, tt.wantMessage, names)
+			}
+			if !hasReadFile {
+				t.Errorf("read_file tool missing from child tools: %v", names)
+			}
+		})
+	}
+}
+
+// grandchildSpawningProvider makes the first (child) LLM call spawn a
+// grandchild on a fresh target agent, and records the tools that grandchild saw.
+type grandchildSpawningProvider struct {
+	al       *AgentLoop
+	parentID string
+	target   string
+
+	mu              sync.Mutex
+	spawned         bool
+	spawnErr        error
+	grandchildTools []string
+}
+
+func (p *grandchildSpawningProvider) Chat(
+	_ context.Context,
+	_ []providers.Message,
+	defs []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	p.mu.Lock()
+	first := !p.spawned
+	p.spawned = true
+	if !first {
+		for _, def := range defs {
+			p.grandchildTools = append(p.grandchildTools, def.Function.Name)
+		}
+	}
+	p.mu.Unlock()
+
+	if first {
+		var childTS *turnState
+		p.al.activeTurnStates.Range(func(_, v any) bool {
+			if ts, ok := v.(*turnState); ok && ts.parentTurnID == p.parentID {
+				childTS = ts
+				return false
+			}
+			return true
+		})
+		var err error
+		if childTS == nil {
+			err = errors.New("child turn state not found")
+		} else {
+			_, err = spawnSubTurn(context.Background(), p.al, childTS, SubTurnConfig{TargetAgentID: p.target})
+		}
+		p.mu.Lock()
+		p.spawnErr = err
+		p.mu.Unlock()
+	}
+	return &providers.LLMResponse{Content: "done"}, nil
+}
+
+func (p *grandchildSpawningProvider) GetDefaultModel() string { return "mock-model" }
+
+// A denied child must not regain outbound tools by delegating to a target
+// agent, whose registry is built fresh from the agent registry.
+func TestSpawnSubTurn_OutboundDenyIsInheritedByTargetAgentGrandchild(t *testing.T) {
+	tests := []struct {
+		name        string
+		allow       *bool
+		wantMessage bool
+	}{
+		{name: "denied child denies grandchild", allow: boolPtr(false), wantMessage: false},
+		{name: "allowed child keeps outbound", wantMessage: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provider := &grandchildSpawningProvider{parentID: "parent-chain", target: "beta"}
+			al, cleanup := newMultiAgentLoop(t, provider)
+			defer cleanup()
+			provider.al = al
+
+			alpha, _ := al.registry.GetAgent("alpha")
+			beta, _ := al.registry.GetAgent("beta")
+			beta.Tools.Register(&allowlistTestTool{name: "message"})
+
+			parent := &turnState{
+				ctx:            context.Background(),
+				turnID:         "parent-chain",
+				pendingResults: make(chan *tools.ToolResult, 4),
+				concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
+				session:        &ephemeralSessionStore{},
+				agent:          alpha,
+			}
+			if _, err := spawnSubTurn(context.Background(), al, parent, SubTurnConfig{
+				Model:         "test-model",
+				AllowOutbound: tt.allow,
+			}); err != nil {
+				t.Fatalf("spawnSubTurn: %v", err)
+			}
+
+			provider.mu.Lock()
+			defer provider.mu.Unlock()
+			if provider.spawnErr != nil {
+				t.Fatalf("grandchild spawn: %v", provider.spawnErr)
+			}
+			if len(provider.grandchildTools) == 0 {
+				t.Fatal("grandchild never called the provider")
+			}
+			hasMessage := false
+			for _, name := range provider.grandchildTools {
+				if name == "message" {
+					hasMessage = true
+				}
+			}
+			if hasMessage != tt.wantMessage {
+				t.Errorf("grandchild message tool present = %v, want %v (tools: %v)",
+					hasMessage, tt.wantMessage, provider.grandchildTools)
+			}
+		})
+	}
+}
+
+func boolPtr(v bool) *bool { return &v }

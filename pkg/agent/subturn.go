@@ -92,6 +92,43 @@ type subTurnRuntimeConfig struct {
 	defaultTokenBudget int
 }
 
+// subTurnAllowsOutbound resolves the outbound deny-floor. A global deny in
+// agents.defaults.subturn.direct_message can be tightened per spawn but never
+// lifted: allow_outbound=false always wins, while true or absent defers to the
+// configured default. A parent that is already denied passes the deny on to
+// every descendant, so a child cannot regain outbound tools by spawning a
+// grandchild (for example through a TargetAgentID with a fresh registry).
+func (al *AgentLoop) subTurnAllowsOutbound(parentTS *turnState, cfg SubTurnConfig) bool {
+	if parentTS != nil && parentTS.denyOutbound {
+		return false
+	}
+	if cfg.AllowOutbound != nil && !*cfg.AllowOutbound {
+		return false
+	}
+	return al.cfg.Agents.Defaults.SubTurn.EffectiveDirectMessage()
+}
+
+// buildSubTurnTools derives the child tool registry. A non-empty cfg.Tools
+// replaces the inherited set; disabling outbound then removes the
+// direct-to-user tools while keeping the registry's runtime settings.
+func buildSubTurnTools(
+	base *tools.ToolRegistry,
+	cfg SubTurnConfig,
+	allowOutbound bool,
+) *tools.ToolRegistry {
+	var child *tools.ToolRegistry
+	switch {
+	case len(cfg.Tools) > 0:
+		child = base.CloneWithTools(cfg.Tools)
+	case base != nil:
+		child = base.Clone()
+	}
+	if child != nil && !allowOutbound {
+		child = child.CloneWithoutOutbound()
+	}
+	return child
+}
+
 // ====================== SubTurn Config ======================
 
 // SubTurnConfig configures the execution of a child sub-turn.
@@ -120,10 +157,20 @@ type subTurnRuntimeConfig struct {
 //	// Result also available in parent's pendingResults channel
 //	// Parent turn will poll and process it in a later iteration
 type SubTurnConfig struct {
-	Model        string
+	Model string
+	// Tools, when non-empty, replaces the inherited tool set with exactly the
+	// supplied tools. When empty, the child inherits the parent's (or target
+	// agent's) registry unchanged.
 	Tools        []tools.Tool
 	SystemPrompt string
 	MaxTokens    int
+
+	// AllowOutbound can further restrict agents.defaults.subturn.direct_message
+	// for this sub-turn. When false, the child registry omits the tools that can
+	// contact the user's channel directly: message, send_file, send_tts,
+	// image_generate and reaction. Nil or true defers to the configured default
+	// (true); a per-call true never lifts a global deny.
+	AllowOutbound *bool
 
 	// Async controls the result delivery mechanism:
 	//
@@ -253,6 +300,7 @@ func (s *AgentLoopSpawner) SpawnSubTurn(
 		Timeout:            cfg.Timeout,
 		MaxContextRunes:    cfg.MaxContextRunes,
 		TargetAgentID:      cfg.TargetAgentID,
+		AllowOutbound:      cfg.AllowOutbound,
 	}
 
 	return spawnSubTurn(ctx, s.al, parentTS, agentCfg)
@@ -392,10 +440,13 @@ func spawnSubTurn(
 	ephemeralStore := newEphemeralSession(nil)
 	agent := *baseAgent // shallow copy
 	agent.Sessions = ephemeralStore
-	// Clone the tool registry so child turn's tool registrations
-	// don't pollute the parent's registry.
-	if baseAgent.Tools != nil {
-		agent.Tools = baseAgent.Tools.Clone()
+	// Clone the tool registry so child turn's tool registrations don't pollute
+	// the parent's registry. An explicit tool list wins over inheritance, and an
+	// outbound deny-floor strips the tools that talk to the user directly.
+	allowOutbound := al.subTurnAllowsOutbound(parentTS, cfg)
+	childTools := buildSubTurnTools(baseAgent.Tools, cfg, allowOutbound)
+	if childTools != nil {
+		agent.Tools = childTools
 		if tool, ok := agent.Tools.Get("todo"); ok {
 			if todo, ok := tool.(*tools.TodoTool); ok {
 				defer todo.ClearSession(agent.ID, childID)
@@ -442,6 +493,7 @@ func spawnSubTurn(
 	childTS.cancelFunc = cancel
 	childTS.critical = cfg.Critical
 	childTS.depth = parentTS.depth + 1
+	childTS.denyOutbound = !allowOutbound
 	childTS.parentTurnID = parentTS.turnID
 	childTS.parentTurnState = parentTS
 	childTS.pendingResults = make(chan *tools.ToolResult, subTurnPendingResultsBuffer)

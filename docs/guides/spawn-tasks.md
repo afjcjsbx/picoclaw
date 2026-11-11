@@ -29,12 +29,13 @@ Tasks are read from everything after the `Add your heartbeat tasks below this li
 
 **Key behaviors:**
 
-| Feature                 | Description                                               |
-| ----------------------- | --------------------------------------------------------- |
-| **spawn**               | Creates async subagent, doesn't block heartbeat           |
-| **Independent context** | Subagent has its own context, no session history          |
-| **message tool**        | Subagent communicates with user directly via message tool |
-| **Non-blocking**        | After spawning, heartbeat continues to next task          |
+| Feature                 | Description                                                    |
+| ----------------------- | -------------------------------------------------------------- |
+| **spawn**               | Creates async subagent, doesn't block heartbeat                |
+| **Independent context** | Subagent has its own context, no session history               |
+| **Outbound tools**      | By default the subagent can message the user directly          |
+| **Non-blocking**        | After spawning, heartbeat continues to next task               |
+| **Result delivery**     | The result always comes back to the parent turn when it finishes |
 
 #### How Subagent Communication Works
 
@@ -47,12 +48,58 @@ For long task: spawn subagent
     ↓                           ↓
 Continue to next task      Subagent works independently
     ↓                           ↓
-All tasks done            Subagent uses "message" tool
+All tasks done            Result returns to the parent turn
     ↓                           ↓
-Respond HEARTBEAT_OK      User receives result directly
+Respond HEARTBEAT_OK      Parent forwards it, or the subagent
+                          sends it directly (outbound enabled)
 ```
 
-The subagent has access to tools (message, web_search, etc.) and can communicate with the user independently without going through the main agent.
+By default a spawned subagent inherits the parent's full tool set, including the
+outbound tools (`message`, `send_file`, `send_tts`, `image_generate` and
+`reaction`), so it can contact the user without going through the main agent.
+
+Two switches control that:
+
+- `allow_outbound` on a `spawn` call applies to that task only.
+- `agents.defaults.subturn.direct_message` sets the default for every sub-turn
+  (`true` unless configured otherwise).
+
+The per-call switch can only tighten the global setting: `allow_outbound: false`
+always disables outbound for that task, while `true` (or omitting it) follows the
+configured default and never lifts a global `direct_message: false`.
+
+The restriction is inherited: a subagent started with outbound disabled cannot
+re-enable it for the subagents it spawns, including ones that target another
+agent with `agent_id`.
+
+When outbound is disabled, the subagent runs without the whole outbound group;
+the remaining tools (files, web, exec, ...) stay available, and the final result
+is returned to the parent turn, which decides whether to forward it. The channel
+and chat context are still available for tools that only use them for scoping,
+such as `spawn_status`.
+
+```json
+{
+  "agent_id": "researcher",
+  "task": "Summarize the latest reports",
+  "allow_outbound": false
+}
+```
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "subturn": {
+        "direct_message": false
+      }
+    }
+  }
+}
+```
+
+Set `PICOCLAW_AGENTS_DEFAULTS_SUBTURN_DIRECT_MESSAGE=false` to change the global
+default through the environment.
 
 **Configuration:**
 

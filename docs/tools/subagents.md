@@ -35,6 +35,7 @@ When `spawn` is called from a sub-turn (for example a peer agent that was itself
 | `task` | string | yes | The task for the subagent to complete |
 | `label` | string | no | Short label for display in status output |
 | `agent_id` | string | no | Target a specific peer agent instead of a generic child turn |
+| `allow_outbound` | boolean | no | Set to `false` to forbid direct contact with the user (`message`, `send_file`, `send_tts`, `image_generate`, `reaction`) for this task; `true` or absent follows `agents.defaults.subturn.direct_message` (`true`) |
 
 ## `subagent`
 
@@ -86,8 +87,15 @@ Sub-turn execution is bounded by the global SubTurn settings under `agents.defau
 | `concurrency_timeout_sec` | int | `30` | How long a sub-turn waits for a concurrency slot before failing |
 | `default_timeout_minutes` | int | `5` | Default per-sub-turn timeout |
 | `default_token_budget` | int | `0` (none) | Token budget applied to a sub-turn when greater than zero |
+| `direct_message` | bool | `true` | Allow sub-turns to contact the user directly through the outbound tools |
 
 Environment variables use the `PICOCLAW_AGENTS_DEFAULTS_SUBTURN_` prefix (for example `PICOCLAW_AGENTS_DEFAULTS_SUBTURN_MAX_CONCURRENT`).
+
+## Outbound tools
+
+A sub-turn normally inherits the parent's registry, including the tools that can reach the user's channel: `message`, `send_file`, `send_tts`, `image_generate` and `reaction`. Set `agents.defaults.subturn.direct_message` to `false` to remove that whole group from every sub-turn, or pass `allow_outbound: false` to a `spawn` call to do it for one task. The per-call switch only tightens the global setting: `allow_outbound: true` cannot lift a global deny. The remaining tools still run, and the sub-turn's result is delivered to the parent turn as usual; the channel and chat context stay in place because non-outbound tools such as `spawn_status` use them for scoping.
+
+Internally, a non-empty `SubTurnConfig.Tools` replaces the inherited registry for that sub-turn; an empty list keeps inheritance.
 
 Operational behavior that matters:
 

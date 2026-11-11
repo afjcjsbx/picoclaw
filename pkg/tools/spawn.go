@@ -85,6 +85,12 @@ func (t *SpawnTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Optional target agent ID to delegate the task to",
 			},
+			"allow_outbound": map[string]any{
+				"type": "boolean",
+				"description": "Set to false to forbid direct contact with the user through the outbound tools " +
+					"(message, send_file, send_tts, image_generate, reaction) for this task. " +
+					"True or absent uses agents.defaults.subturn.direct_message (default true).",
+			},
 		},
 		"required": []string{"task"},
 	}
@@ -120,6 +126,7 @@ func (t *SpawnTool) execute(
 
 	label := stringArg(args, "label")
 	targetAgentID := strings.TrimSpace(stringArg(args, "agent_id"))
+	allowOutbound := optionalBoolArg(args, "allow_outbound")
 
 	// Check allowlist if targeting a specific agent
 	if targetAgentID != "" && t.allowlistCheck != nil {
@@ -171,6 +178,7 @@ func (t *SpawnTool) execute(
 					Async:         track == nil, // tracker delivers the result itself
 					Critical:      true,         // Background spawn should survive parent turn completion
 					TargetAgentID: targetAgentID,
+					AllowOutbound: allowOutbound,
 				})
 				if err != nil {
 					return ErrorResult(fmt.Sprintf("Spawn failed: %v", err)).WithError(err)
@@ -220,6 +228,32 @@ func (t *SpawnTool) execute(
 
 	// Fallback: spawner not configured
 	return ErrorResult("Subagent manager not configured")
+}
+
+// optionalBoolArg returns a tri-state boolean: nil when the key is absent or
+// not parseable, otherwise the parsed value.
+func optionalBoolArg(args map[string]any, key string) *bool {
+	value, ok := args[key]
+	if !ok || value == nil {
+		return nil
+	}
+	var parsed bool
+	switch v := value.(type) {
+	case bool:
+		parsed = v
+	case string:
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "true":
+			parsed = true
+		case "false":
+			parsed = false
+		default:
+			return nil
+		}
+	default:
+		return nil
+	}
+	return &parsed
 }
 
 // spawnSource names a spawned subagent for result attribution.

@@ -319,6 +319,9 @@ func applySubagentDashboard(cfg *config.Config, req subagentDashboardRequest) er
 		ConcurrencyTimeoutSec: req.Limits.ConcurrencyTimeoutSec,
 		DefaultTimeoutMinutes: req.Limits.DefaultTimeoutMinutes,
 		DefaultTokenBudget:    req.Limits.DefaultTokenBudget,
+		// The dashboard does not edit this setting yet; keep whatever the user
+		// configured instead of silently resetting it.
+		DirectMessage: cfg.Agents.Defaults.SubTurn.DirectMessage,
 	}
 
 	if len(cfg.Agents.List) == 0 {
