@@ -661,6 +661,7 @@ func TestHandleSearchSkills(t *testing.T) {
 	defer server.Close()
 
 	setClawHubBaseURL(cfg, server.URL)
+	setGithubBaseURL(cfg, server.URL)
 	if err := config.SaveConfig(configPath, cfg); err != nil {
 		t.Fatalf("SaveConfig() error = %v", err)
 	}
@@ -876,6 +877,7 @@ func TestHandleSearchSkillsPagination(t *testing.T) {
 	defer server.Close()
 
 	setClawHubBaseURL(cfg, server.URL)
+	setGithubBaseURL(cfg, server.URL)
 	if err := config.SaveConfig(configPath, cfg); err != nil {
 		t.Fatalf("SaveConfig() error = %v", err)
 	}
@@ -951,6 +953,7 @@ func TestHandleSearchSkillsClampsRegistryFanout(t *testing.T) {
 	defer server.Close()
 
 	setClawHubBaseURL(cfg, server.URL)
+	setGithubBaseURL(cfg, server.URL)
 	if err := config.SaveConfig(configPath, cfg); err != nil {
 		t.Fatalf("SaveConfig() error = %v", err)
 	}
@@ -1034,6 +1037,7 @@ func TestHandleInstallSkill(t *testing.T) {
 	defer server.Close()
 
 	setClawHubBaseURL(cfg, server.URL)
+	setGithubBaseURL(cfg, server.URL)
 	if saveErr := config.SaveConfig(configPath, cfg); saveErr != nil {
 		t.Fatalf("SaveConfig() error = %v", saveErr)
 	}
