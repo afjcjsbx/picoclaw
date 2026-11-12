@@ -191,18 +191,27 @@ func BenchmarkBM25Search_ReusedIndex(b *testing.B) {
 	}
 }
 
-func BenchmarkBM25Search_WithStemming(b *testing.B) {
+// Stemming runs per token while indexing, so measure index construction
+// rather than Search, which only stems the short query.
+func BenchmarkBM25Build(b *testing.B) {
 	corpus := benchmarkBM25Corpus(2000)
-	engine := NewBM25Engine(corpus, extractText, WithStemming())
-	query := "hardware gpio i2c sensor controller latency"
 
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		results := engine.Search(query, 10)
-		if len(results) == 0 {
-			b.Fatal("expected non-empty results")
-		}
+	for _, tc := range []struct {
+		name string
+		opts []BM25Option
+	}{
+		{"Plain", nil},
+		{"WithStemming", []BM25Option{WithStemming()}},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if engine := NewBM25Engine(corpus, extractText, tc.opts...); engine.index == nil {
+					b.Fatal("expected non-nil index")
+				}
+			}
+		})
 	}
 }
 
