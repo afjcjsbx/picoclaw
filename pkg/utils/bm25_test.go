@@ -113,12 +113,12 @@ func TestBM25Tokenize(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			got := bm25TokenizeStem(tt.input, false)
+			got := bm25Analyzer{}.tokenize(tt.input)
 			if len(got) == 0 && len(tt.expected) == 0 {
 				return // Both empty
 			}
 			if !reflect.DeepEqual(got, tt.expected) {
-				t.Errorf("bm25TokenizeStem(%q, false) = %v, want %v", tt.input, got, tt.expected)
+				t.Errorf("tokenize(%q) = %v, want %v", tt.input, got, tt.expected)
 			}
 		})
 	}
@@ -202,6 +202,7 @@ func BenchmarkBM25Build(b *testing.B) {
 	}{
 		{"Plain", nil},
 		{"WithStemming", []BM25Option{WithStemming()}},
+		{"WithStemmingAndStopwords", []BM25Option{WithStemming(), WithEnglishStopwords()}},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
 			b.ReportAllocs()

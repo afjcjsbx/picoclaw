@@ -29,6 +29,8 @@ and injected into the context for a configured number of turns (`ttl`).
 
 BM25 matching normalizes common English inflections (plurals, `-ing`, `-ed`) so a query such as
 `searching repositories` matches `search repositories`. Tokens containing digits or non-ASCII characters are left unchanged.
+Common English function words (`a`, `the`, `of`, `to`, `is`, ...) are ignored in both the tool index and the query, so a
+sentence such as `how can I create an issue` is matched on `create` and `issue` only.
 
 ## Global Config
 

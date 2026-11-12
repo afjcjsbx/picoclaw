@@ -40,7 +40,7 @@ type BM25Engine[T any] struct {
 	textFunc func(T) string
 	k1       float64
 	b        float64
-	stemming bool
+	analyzer bm25Analyzer
 	index    *bm25Index
 }
 
@@ -50,7 +50,14 @@ type BM25Option func(*bm25Config)
 type bm25Config struct {
 	k1       float64
 	b        float64
-	stemming bool
+	analyzer bm25Analyzer
+}
+
+// bm25Analyzer turns text into index terms. Its zero value is plain
+// lowercase whitespace tokenization.
+type bm25Analyzer struct {
+	stemming  bool
+	stopwords bool
 }
 
 type bm25Index struct {
@@ -78,7 +85,16 @@ func WithB(b float64) BM25Option {
 // corpus and the query. It is off by default so the engine stays language
 // agnostic unless the caller opts in.
 func WithStemming() BM25Option {
-	return func(c *bm25Config) { c.stemming = true }
+	return func(c *bm25Config) { c.analyzer.stemming = true }
+}
+
+// WithEnglishStopwords drops common English function words (articles,
+// pronouns, auxiliaries, conjunctions, prepositions) from both the corpus and
+// the query, so a filler word that happens to be rare in the corpus cannot
+// outweigh the words that name the intent. It is off by default so the engine
+// stays language agnostic unless the caller opts in.
+func WithEnglishStopwords() BM25Option {
+	return func(c *bm25Config) { c.analyzer.stopwords = true }
 }
 
 // NewBM25Engine creates a BM25Engine for the given corpus.
@@ -99,9 +115,9 @@ func NewBM25Engine[T any](corpus []T, textFunc func(T) string, opts ...BM25Optio
 		textFunc: textFunc,
 		k1:       cfg.k1,
 		b:        cfg.b,
-		stemming: cfg.stemming,
+		analyzer: cfg.analyzer,
 	}
-	engine.index = buildBM25Index(corpus, textFunc, cfg.k1, cfg.b, cfg.stemming)
+	engine.index = buildBM25Index(corpus, textFunc, cfg.k1, cfg.b, cfg.analyzer)
 	return engine
 }
 
@@ -121,7 +137,7 @@ func (e *BM25Engine[T]) Search(query string, topK int) []BM25Result[T] {
 		return []BM25Result[T]{}
 	}
 
-	queryTerms := bm25TokenizeStem(query, e.stemming)
+	queryTerms := e.analyzer.tokenize(query)
 	if len(queryTerms) == 0 {
 		return []BM25Result[T]{}
 	}
@@ -180,7 +196,7 @@ func (e *BM25Engine[T]) Search(query string, topK int) []BM25Result[T] {
 	return out
 }
 
-func buildBM25Index[T any](corpus []T, textFunc func(T) string, k1, b float64, stemming bool) *bm25Index {
+func buildBM25Index[T any](corpus []T, textFunc func(T) string, k1, b float64, an bm25Analyzer) *bm25Index {
 	N := len(corpus)
 	if N == 0 {
 		return nil
@@ -192,7 +208,7 @@ func buildBM25Index[T any](corpus []T, textFunc func(T) string, k1, b float64, s
 	totalLen := 0
 
 	for i, doc := range corpus {
-		tokens := bm25TokenizeStem(textFunc(doc), stemming)
+		tokens := an.tokenize(textFunc(doc))
 		totalLen += len(tokens)
 		rawLens[i] = len(tokens)
 
@@ -239,9 +255,9 @@ func buildBM25Index[T any](corpus []T, textFunc func(T) string, k1, b float64, s
 	}
 }
 
-// bm25TokenizeStem splits s into lowercase tokens, stripping edge punctuation,
-// and optionally reduces English inflections with stemEnglish.
-func bm25TokenizeStem(s string, stemming bool) []string {
+// tokenize splits s into lowercase tokens, stripping edge punctuation, then
+// optionally drops English stopwords and reduces inflections with stemEnglish.
+func (a bm25Analyzer) tokenize(s string) []string {
 	raw := strings.Fields(strings.ToLower(s))
 	out := raw[:0] // reuse backing array to avoid extra allocation
 	for _, t := range raw {
@@ -249,7 +265,12 @@ func bm25TokenizeStem(s string, stemming bool) []string {
 		if t == "" {
 			continue
 		}
-		if stemming {
+		if a.stopwords {
+			if _, stop := englishStopwords[t]; stop {
+				continue
+			}
+		}
+		if a.stemming {
 			t = stemEnglish(t)
 		}
 		out = append(out, t)
