@@ -287,6 +287,11 @@ func (p *Pipeline) CallLLM(
 			applyThinkingOption(callOpts, candidateProvider, candidateThinking, true, ts.agent.ID)
 			exec.suppressReasoning = shouldSuppressReasoningFor(candidateThinking)
 
+			if d := ts.implicitCallTimeout(candidateCfg); d > 0 {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, d)
+				defer cancel()
+			}
 			resp, err := candidateProvider.Chat(
 				ctx, messagesForCall, candidateTools, candidate.Model, callOpts,
 			)

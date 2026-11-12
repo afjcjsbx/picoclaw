@@ -158,13 +158,16 @@ const (
 	minToolResultChars = 200
 )
 
-// resultLen is len(content) without a trailing iteration-budget notice, so the
-// notice alone never makes a short result bulky enough to be pruned.
+// resultLen is len(content) without trailing budget notices, so a notice alone
+// never makes a short result bulky enough to be pruned.
 func resultLen(content string) int {
-	if i := strings.LastIndex(content, "\n\n"+budgetNoticePrefix); i >= 0 {
-		return i
+	n := len(content)
+	for _, notice := range [...]string{budgetNoticePrefix, runBudgetNotice} {
+		if i := strings.LastIndex(content, "\n\n"+notice); i >= 0 {
+			n = min(n, i)
+		}
 	}
-	return len(content)
+	return n
 }
 
 // pruneOldToolResults clears tool outputs longer than minToolResultChars that

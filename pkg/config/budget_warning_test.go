@@ -50,3 +50,37 @@ func TestValidateBudgetWarningRatio(t *testing.T) {
 		}
 	}
 }
+
+func TestRunBudgetConfig(t *testing.T) {
+	d := DefaultConfig().Agents.Defaults
+	if d.RunBudgetSeconds != 0 || d.RunBudgetWarningThreshold != 0.8 {
+		t.Fatalf("defaults = %d / %v, want off / 0.8", d.RunBudgetSeconds, d.RunBudgetWarningThreshold)
+	}
+
+	path := filepath.Join(t.TempDir(), "config.json")
+	body := `{"version":3,"agents":{"defaults":{"run_budget_seconds":1800,"run_budget_warning_threshold":0.5}}}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if got := cfg.Agents.Defaults; got.RunBudgetSeconds != 1800 || got.RunBudgetWarningThreshold != 0.5 {
+		t.Fatalf("loaded = %d / %v, want 1800 / 0.5", got.RunBudgetSeconds, got.RunBudgetWarningThreshold)
+	}
+
+	// null disables, like 0.
+	nullBody := `{"version":3,"agents":{"defaults":{"run_budget_seconds":null}}}`
+	if err = os.WriteFile(path, []byte(nullBody), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if cfg, err = LoadConfig(path); err != nil || cfg.Agents.Defaults.RunBudgetSeconds != 0 {
+		t.Fatalf("null budget = %v, err %v, want 0", cfg.Agents.Defaults.RunBudgetSeconds, err)
+	}
+
+	t.Setenv("PICOCLAW_AGENTS_DEFAULTS_RUN_BUDGET_WARNING_THRESHOLD", "1")
+	if _, err = LoadConfig(path); err == nil {
+		t.Fatal("LoadConfig accepted threshold 1, want an error")
+	}
+}

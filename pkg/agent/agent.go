@@ -160,6 +160,13 @@ const budgetNoticePrefix = "[SYSTEM NOTICE — iteration budget checkpoint]"
 // max_tool_budget_warning_ratio threshold. Args: iterations used, maximum.
 const iterationBudgetWarningTemplate = budgetNoticePrefix + " You have used %d of %d iterations. Checkpoint durable progress now, then continue the task; do not stop solely because of this warning."
 
+// runBudgetNotice is appended (as plain text, not a system message) to the last
+// tool result of the first batch that finishes after run_budget_warning_threshold
+// of the wall-clock run budget has elapsed. Nothing is interrupted.
+const runBudgetNotice = "SYSTEM NOTICE — Run time budget nearly exhausted.\n\n" +
+	"Stop new discovery/verification work now.\n\n" +
+	"Produce the required final answer from the state you already have, completing only mandatory writes."
+
 // maxIterationsSummaryRequest is the user message sent on the one tool-less
 // grace call granted when the iteration budget runs out.
 const maxIterationsSummaryRequest = "You've reached the maximum number of tool-calling iterations allowed. Please provide a final response summarizing what you've found and accomplished so far, without calling any more tools."

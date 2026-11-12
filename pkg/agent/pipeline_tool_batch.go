@@ -133,7 +133,7 @@ func (b *toolBatch) skipRemainingForLoop(start int) {
 func (b *toolBatch) appendToolMessage(msg providers.Message, ingest bool) {
 	b.toolMessages++
 	if b.toolMessages == len(b.calls) {
-		msg.Content += b.budgetNotice()
+		msg.Content += b.budgetNotice() + b.runBudgetNotice()
 	}
 	b.messages = append(b.messages, msg)
 	if b.ts.opts.NoHistory {
@@ -161,6 +161,21 @@ func (b *toolBatch) budgetNotice() string {
 	}
 	b.exec.budgetWarned = true
 	return "\n\n" + fmt.Sprintf(iterationBudgetWarningTemplate, b.iteration, b.ts.agent.MaxIterations)
+}
+
+// runBudgetNotice returns the wall-clock wrap-up once the turn has used the
+// warning share of its run budget, "" before that. Like budgetNotice it rides on
+// the last tool result and the latch closes only when it is attached, so
+// elapsed time with no tool result to carry it retries at the next batch. Only
+// root turns count; a sub-turn has no budget of its own.
+func (b *toolBatch) runBudgetNotice() string {
+	a := b.ts.agent
+	if a.RunBudget <= 0 || b.ts.parentTurnState != nil || b.exec.runBudgetWarned ||
+		time.Since(b.ts.startedAt) < a.RunBudgetWarnAfter {
+		return ""
+	}
+	b.exec.runBudgetWarned = true
+	return "\n\n" + runBudgetNotice
 }
 
 // denyByProfile marks pc denied when the active turn profile forbids the tool.
