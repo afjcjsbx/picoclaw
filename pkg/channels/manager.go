@@ -115,6 +115,7 @@ type Manager struct {
 	reactionUndos             sync.Map          // "channel:chatID" → reactionEntry
 	streamActive              sync.Map          // streamSuppressionKey → true (set when streamer.Finalize sent the message)
 	streamAuxiliaryTombstones sync.Map          // streamSuppressionKey → time.Time (drops late auxiliary messages after stream final)
+	janitorStarted            bool              // TTL janitor goroutine launched for the current lifecycle
 	channelHashes             map[string]string // channel name → config hash
 }
 
@@ -1357,8 +1358,10 @@ func (m *Manager) StartAll(ctx context.Context) error {
 	go m.dispatchOutbound(dispatchCtx)
 	go m.dispatchOutboundMedia(dispatchCtx)
 
-	// Start the TTL janitor that cleans up stale typing/placeholder entries
-	go m.runTTLJanitor(dispatchCtx)
+	// Start the TTL janitor only once a channel worker exists. With no running
+	// channels nothing can register entries, so the janitor would be pure
+	// overhead (a parked goroutine for the whole process lifetime).
+	m.ensureTTLJanitorLocked(dispatchCtx)
 
 	// Start shared HTTP server if configured
 	if m.httpServer != nil {
@@ -1444,6 +1447,7 @@ func (m *Manager) StopAll(ctx context.Context) error {
 		m.dispatchTask = nil
 	}
 	m.dispatchCtx = nil
+	m.janitorStarted = false
 
 	// Signal all workers to stop and wait for them to drain
 	for _, w := range m.workers {
@@ -1904,6 +1908,17 @@ func (m *Manager) sendMediaWithRetry(
 	return nil, lastErr
 }
 
+// ensureTTLJanitorLocked launches the TTL janitor once at least one channel
+// worker is running. With no workers nothing can register entries, so the
+// janitor would only pin a goroutine for nothing. Callers must hold m.mu.
+func (m *Manager) ensureTTLJanitorLocked(ctx context.Context) {
+	if m.janitorStarted || len(m.workers) == 0 {
+		return
+	}
+	m.janitorStarted = true
+	go m.runTTLJanitor(ctx)
+}
+
 // runTTLJanitor periodically scans the typingStops, placeholders, and stream
 // tombstone maps and evicts entries that have exceeded their TTL. This prevents
 // memory accumulation when outbound paths fail to trigger preSend (e.g. LLM errors).
@@ -2112,6 +2127,10 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config) error {
 			m.RegisterChannel(name, channel)
 		})
 	}
+
+	// A channel added by a reload may be the first one ever started (the
+	// gateway can boot with no channels); bring the janitor up with it.
+	m.ensureTTLJanitorLocked(dispatchCtx)
 
 	// Commit hashes only on full success.
 	m.channelHashes = list
