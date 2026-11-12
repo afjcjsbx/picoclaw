@@ -128,8 +128,9 @@ type turnExecution struct {
 	finalContent string
 
 	// Iteration tracking
-	iteration    int
-	budgetWarned bool // the iteration-budget checkpoint was already sent this turn
+	iteration       int
+	budgetWarned    bool // the iteration-budget checkpoint was already sent this turn
+	runBudgetWarned bool // the run-budget wrap-up notice was already sent this turn
 
 	// Per-iteration state set by Pipeline.PreLLM
 	activeCandidates  []providers.FallbackCandidate
@@ -1192,4 +1193,19 @@ func (ts *turnState) repeatsToolFeedbackExplanation(explanation string) bool {
 	repeated := explanation == ts.lastToolFeedbackExplanation
 	ts.lastToolFeedbackExplanation = explanation
 	return repeated
+}
+
+// runBudgetMinCall is the shortest implicit model-call timeout under a run
+// budget, so a nearly spent budget never starves the final answer.
+const runBudgetMinCall = 60 * time.Second
+
+// implicitCallTimeout caps a non-streaming model call at the run budget still
+// left (at least runBudgetMinCall) so a hung call cannot eat the rest of it. It
+// returns 0 (no cap) without a budget, in sub-turns, or when the model sets its
+// own request_timeout: explicit admin timeouts are never touched.
+func (ts *turnState) implicitCallTimeout(mc *config.ModelConfig) time.Duration {
+	if ts.agent.RunBudget <= 0 || ts.parentTurnState != nil || (mc != nil && mc.RequestTimeout > 0) {
+		return 0
+	}
+	return max(ts.agent.RunBudget-time.Since(ts.startedAt), runBudgetMinCall)
 }

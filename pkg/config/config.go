@@ -608,6 +608,10 @@ const (
 	// DefaultMaxToolBudgetWarningRatio is the share of max_tool_iterations after
 	// which the model gets a one-time checkpoint notice.
 	DefaultMaxToolBudgetWarningRatio = 0.75
+
+	// DefaultRunBudgetWarningThreshold is the share of run_budget_seconds after
+	// which the model gets a one-time wrap-up notice.
+	DefaultRunBudgetWarningThreshold = 0.8
 )
 
 // LoopDetectionConfig controls detection of consecutive identical tool calls.
@@ -619,16 +623,25 @@ type LoopDetectionConfig struct {
 	WindowSize        int  `json:"window_size"        env:"PICOCLAW_AGENTS_DEFAULTS_LOOP_DETECTION_WINDOW_SIZE"`
 }
 
-// ValidateBudgetWarningRatio checks agents.defaults.max_tool_budget_warning_ratio.
-// Zero means unset (DefaultMaxToolBudgetWarningRatio applies); anything else
-// must lie strictly between 0 and 1.
+// ValidateBudgetWarningRatio checks the budget warning ratios
+// (agents.defaults.max_tool_budget_warning_ratio and
+// agents.defaults.run_budget_warning_threshold). Zero means unset (the default
+// applies); anything else must lie strictly between 0 and 1.
 func (c *Config) ValidateBudgetWarningRatio() error {
 	if c == nil {
 		return nil
 	}
-	r := c.Agents.Defaults.MaxToolBudgetWarningRatio
-	if r != 0 && !(r > 0 && r < 1) { // also rejects NaN
-		return fmt.Errorf("agents.defaults.max_tool_budget_warning_ratio %v must be strictly between 0 and 1", r)
+	d := &c.Agents.Defaults
+	for _, f := range []struct {
+		name string
+		r    float64
+	}{
+		{"max_tool_budget_warning_ratio", d.MaxToolBudgetWarningRatio},
+		{"run_budget_warning_threshold", d.RunBudgetWarningThreshold},
+	} {
+		if f.r != 0 && !(f.r > 0 && f.r < 1) { // also rejects NaN
+			return fmt.Errorf("agents.defaults.%s %v must be strictly between 0 and 1", f.name, f.r)
+		}
 	}
 	return nil
 }
@@ -669,6 +682,8 @@ type AgentDefaults struct {
 	Temperature               *float64            `json:"temperature,omitempty"                env:"PICOCLAW_AGENTS_DEFAULTS_TEMPERATURE"`
 	MaxToolIterations         int                 `json:"max_tool_iterations"                  env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOOL_ITERATIONS"`
 	MaxToolBudgetWarningRatio float64             `json:"max_tool_budget_warning_ratio"        env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOOL_BUDGET_WARNING_RATIO"`
+	RunBudgetSeconds          int                 `json:"run_budget_seconds"                   env:"PICOCLAW_AGENTS_DEFAULTS_RUN_BUDGET_SECONDS"`
+	RunBudgetWarningThreshold float64             `json:"run_budget_warning_threshold"         env:"PICOCLAW_AGENTS_DEFAULTS_RUN_BUDGET_WARNING_THRESHOLD"`
 	SummarizeMessageThreshold int                 `json:"summarize_message_threshold"          env:"PICOCLAW_AGENTS_DEFAULTS_SUMMARIZE_MESSAGE_THRESHOLD"` // Deprecated: ignored; summarization is driven by SummarizeTokenPercent
 	SummarizeTokenPercent     int                 `json:"summarize_token_percent"              env:"PICOCLAW_AGENTS_DEFAULTS_SUMMARIZE_TOKEN_PERCENT"`
 	MaxMediaSize              int                 `json:"max_media_size,omitempty"             env:"PICOCLAW_AGENTS_DEFAULTS_MAX_MEDIA_SIZE"`

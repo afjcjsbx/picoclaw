@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/fileutil"
@@ -34,7 +35,9 @@ type AgentInstance struct {
 	Fallbacks               []string
 	Workspace               string
 	MaxIterations           int
-	BudgetWarnAt            int // iteration that triggers the budget checkpoint notice; 0 = never
+	BudgetWarnAt            int           // iteration that triggers the budget checkpoint notice; 0 = never
+	RunBudget               time.Duration // wall-clock budget of one turn; 0 = off
+	RunBudgetWarnAfter      time.Duration // elapsed time that triggers the run-budget wrap-up notice
 	MaxTokens               int
 	Temperature             float64
 	ThinkingLevel           ThinkingLevel
@@ -238,6 +241,7 @@ func NewAgentInstance(
 	}
 
 	budgetWarnAt := budgetWarnIteration(maxIter, defaults.MaxToolBudgetWarningRatio)
+	runBudget, runBudgetWarnAfter := runBudgetDurations(defaults.RunBudgetSeconds, defaults.RunBudgetWarningThreshold)
 
 	maxTokens := defaults.MaxTokens
 	if maxTokens == 0 {
@@ -371,6 +375,8 @@ func NewAgentInstance(
 		Workspace:               workspace,
 		MaxIterations:           maxIter,
 		BudgetWarnAt:            budgetWarnAt,
+		RunBudget:               runBudget,
+		RunBudgetWarnAfter:      runBudgetWarnAfter,
 		MaxTokens:               maxTokens,
 		Temperature:             temperature,
 		ThinkingLevel:           thinkingLevel,
@@ -841,4 +847,19 @@ func budgetWarnIteration(maxIter int, ratio float64) int {
 		return 0
 	}
 	return at
+}
+
+// runBudgetDurations converts agents.defaults.run_budget_seconds and
+// run_budget_warning_threshold into the budget and the elapsed time at which the
+// wrap-up notice fires. Seconds <= 0 turn the budget off; an unset or
+// out-of-range threshold (config loading rejects those) uses the default.
+func runBudgetDurations(seconds int, threshold float64) (budget, warnAfter time.Duration) {
+	if seconds <= 0 {
+		return 0, 0
+	}
+	if !(threshold > 0 && threshold < 1) {
+		threshold = config.DefaultRunBudgetWarningThreshold
+	}
+	budget = time.Duration(seconds) * time.Second
+	return budget, time.Duration(float64(budget) * threshold)
 }
