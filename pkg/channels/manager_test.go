@@ -212,9 +212,10 @@ func (m *mockStreamingChannel) ToolFeedbackMessageChatID(
 // newTestManager creates a minimal Manager suitable for unit tests.
 func newTestManager() *Manager {
 	return &Manager{
-		channels: make(map[string]Channel),
-		workers:  make(map[string]*channelWorker),
-		bus:      bus.NewMessageBus(),
+		channels:    make(map[string]Channel),
+		workers:     make(map[string]*channelWorker),
+		bus:         bus.NewMessageBus(),
+		janitorWake: make(chan struct{}, 1),
 	}
 }
 
@@ -2987,73 +2988,156 @@ func TestDispatcherMediaExitsOnCancel(t *testing.T) {
 	}
 }
 
-// --- TTL Janitor tests (Step 2) ---
+// --- TTL Janitor tests ---
 
-func TestTypingStopJanitorEviction(t *testing.T) {
+func TestSweepTTLEvictsExpiredAndKeepsFreshEntries(t *testing.T) {
 	m := newTestManager()
+	now := time.Now()
 
-	var stopCalled atomic.Bool
-	// Store a typing entry with a creation time far in the past
-	m.typingStops.Store("test:123", typingEntry{
+	var stopCalled, undoCalled atomic.Bool
+	m.typingStops.Store("test:old-typing", typingEntry{
 		stop:      func() { stopCalled.Store(true) },
-		createdAt: time.Now().Add(-10 * time.Minute), // well past typingStopTTL
+		createdAt: now.Add(-typingStopTTL - time.Second),
 	})
+	m.typingStops.Store("test:fresh-typing", typingEntry{
+		stop:      func() { t.Error("fresh typing stop must not be called") },
+		createdAt: now,
+	})
+	m.reactionUndos.Store("test:old-reaction", reactionEntry{
+		undo:      func() { undoCalled.Store(true) },
+		createdAt: now.Add(-typingStopTTL - time.Second),
+	})
+	m.placeholders.Store("test:old-placeholder", placeholderEntry{
+		id:        "msg_old",
+		createdAt: now.Add(-placeholderTTL - time.Second),
+	})
+	m.placeholders.Store("test:fresh-placeholder", placeholderEntry{
+		id:        "msg_new",
+		createdAt: now,
+	})
+	m.streamAuxiliaryTombstones.Store("test:old-tombstone", now.Add(-streamAuxiliaryTombstoneTTL-time.Second))
+	m.streamAuxiliaryTombstones.Store("test:fresh-tombstone", now)
 
-	// Run janitor with a short-lived context
-	ctx, cancel := context.WithCancel(context.Background())
-
-	// Manually trigger the janitor logic once by simulating a tick
-	go func() {
-		// Override janitor to run immediately
-		now := time.Now()
-		m.typingStops.Range(func(key, value any) bool {
-			if entry, ok := value.(typingEntry); ok {
-				if now.Sub(entry.createdAt) > typingStopTTL {
-					if _, loaded := m.typingStops.LoadAndDelete(key); loaded {
-						entry.stop()
-					}
-				}
-			}
-			return true
-		})
-		cancel()
-	}()
-
-	<-ctx.Done()
-
-	if !stopCalled.Load() {
-		t.Fatal("expected typing stop function to be called by janitor eviction")
+	if !m.sweepTTL(now) {
+		t.Fatal("sweep must report the fresh entries as still live")
 	}
-
-	// Verify entry was deleted
-	if _, loaded := m.typingStops.Load("test:123"); loaded {
-		t.Fatal("expected typing entry to be deleted after eviction")
+	if !stopCalled.Load() {
+		t.Fatal("expired typing stop was not invoked")
+	}
+	if !undoCalled.Load() {
+		t.Fatal("expired reaction undo was not invoked")
+	}
+	if _, ok := m.typingStops.Load("test:old-typing"); ok {
+		t.Fatal("expired typing entry was not evicted")
+	}
+	if _, ok := m.reactionUndos.Load("test:old-reaction"); ok {
+		t.Fatal("expired reaction entry was not evicted")
+	}
+	if _, ok := m.placeholders.Load("test:old-placeholder"); ok {
+		t.Fatal("expired placeholder was not evicted")
+	}
+	if _, ok := m.streamAuxiliaryTombstones.Load("test:old-tombstone"); ok {
+		t.Fatal("expired tombstone was not evicted")
+	}
+	if _, ok := m.typingStops.Load("test:fresh-typing"); !ok {
+		t.Fatal("fresh typing entry was evicted")
+	}
+	if _, ok := m.placeholders.Load("test:fresh-placeholder"); !ok {
+		t.Fatal("fresh placeholder was evicted")
+	}
+	if _, ok := m.streamAuxiliaryTombstones.Load("test:fresh-tombstone"); !ok {
+		t.Fatal("fresh tombstone was evicted")
 	}
 }
 
-func TestPlaceholderJanitorEviction(t *testing.T) {
+func TestSweepTTLReportsIdleWhenMapsEmpty(t *testing.T) {
 	m := newTestManager()
+	if m.sweepTTL(time.Now()) {
+		t.Fatal("empty maps must report no remaining entries")
+	}
+}
 
-	// Store a placeholder entry with a creation time far in the past
-	m.placeholders.Store("test:456", placeholderEntry{
-		id:        "msg_old",
-		createdAt: time.Now().Add(-20 * time.Minute), // well past placeholderTTL
+// TestTTLJanitorSleepsUntilWoken verifies the resource contract: with empty
+// maps the janitor does not poll at all, a wake signal triggers a sweep, and
+// the janitor parks again once the maps drain.
+func TestTTLJanitorSleepsUntilWoken(t *testing.T) {
+	oldInterval := janitorInterval
+	janitorInterval = 5 * time.Millisecond
+	defer func() { janitorInterval = oldInterval }()
+
+	m := newTestManager()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		m.runTTLJanitor(ctx)
+		close(done)
+	}()
+
+	// An expired entry stored without a wake signal must survive: the idle
+	// janitor holds no ticker, so there is nothing to evict it.
+	m.typingStops.Store("test:idle-probe", typingEntry{
+		stop:      func() {},
+		createdAt: time.Now().Add(-typingStopTTL - time.Second),
 	})
+	time.Sleep(40 * time.Millisecond)
+	if _, ok := m.typingStops.Load("test:idle-probe"); !ok {
+		t.Fatal("janitor evicted an entry while idle; it is still polling")
+	}
 
-	// Simulate janitor logic
-	now := time.Now()
-	m.placeholders.Range(func(key, value any) bool {
-		if entry, ok := value.(placeholderEntry); ok {
-			if now.Sub(entry.createdAt) > placeholderTTL {
-				m.placeholders.Delete(key)
-			}
-		}
-		return true
+	// Waking it must run exactly one sweep and drain the expired entry.
+	var stopCalled atomic.Bool
+	m.typingStops.Store("test:woken", typingEntry{
+		stop:      func() { stopCalled.Store(true) },
+		createdAt: time.Now().Add(-typingStopTTL - time.Second),
 	})
+	m.wakeTTLJanitor()
 
-	// Verify entry was deleted
-	if _, loaded := m.placeholders.Load("test:456"); loaded {
-		t.Fatal("expected placeholder entry to be deleted after eviction")
+	deadline := time.Now().Add(2 * time.Second)
+	for !stopCalled.Load() && time.Now().Before(deadline) {
+		time.Sleep(2 * time.Millisecond)
+	}
+	if !stopCalled.Load() {
+		t.Fatal("janitor did not sweep after wakeTTLJanitor")
+	}
+	if _, ok := m.typingStops.Load("test:woken"); ok {
+		t.Fatal("expired entry was not evicted after wake")
+	}
+
+	// Once the maps drain the janitor must park again: a raw store that
+	// bypasses wakeTTLJanitor stays untouched.
+	time.Sleep(150 * time.Millisecond)
+	m.typingStops.Store("test:idle-probe-2", typingEntry{
+		stop:      func() {},
+		createdAt: time.Now().Add(-typingStopTTL - time.Second),
+	})
+	time.Sleep(40 * time.Millisecond)
+	if _, ok := m.typingStops.Load("test:idle-probe-2"); !ok {
+		t.Fatal("janitor kept polling after the maps drained")
+	}
+
+	// A new recording must wake it again.
+	var secondStopCalled atomic.Bool
+	m.typingStops.Store("test:woken-2", typingEntry{
+		stop:      func() { secondStopCalled.Store(true) },
+		createdAt: time.Now().Add(-typingStopTTL - time.Second),
+	})
+	m.wakeTTLJanitor()
+
+	deadline = time.Now().Add(2 * time.Second)
+	for !secondStopCalled.Load() && time.Now().Before(deadline) {
+		time.Sleep(2 * time.Millisecond)
+	}
+	if !secondStopCalled.Load() {
+		t.Fatal("janitor did not re-arm after a new wake signal")
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("janitor did not stop on context cancellation")
 	}
 }
 

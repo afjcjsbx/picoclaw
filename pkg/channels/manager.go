@@ -47,12 +47,15 @@ const (
 	// rate limiter allows it.
 	chunkSpacing = 250 * time.Millisecond
 
-	janitorInterval = 10 * time.Second
-	typingStopTTL   = 5 * time.Minute
-	placeholderTTL  = 10 * time.Minute
+	typingStopTTL  = 5 * time.Minute
+	placeholderTTL = 10 * time.Minute
 
 	streamAuxiliaryTombstoneTTL = 30 * time.Second
 )
+
+// janitorInterval is the sweep period used while at least one TTL entry is
+// alive. It is a variable so tests can shorten it without waiting 10s.
+var janitorInterval = 10 * time.Second
 
 // typingEntry wraps a typing stop function with a creation timestamp for TTL eviction.
 type typingEntry struct {
@@ -110,11 +113,12 @@ type Manager struct {
 	httpServer                *http.Server
 	httpListeners             []net.Listener
 	mu                        sync.RWMutex
-	placeholders              sync.Map          // "channel:chatID" → placeholderID (string)
-	typingStops               sync.Map          // "channel:chatID" → func()
+	placeholders              sync.Map          // "channel:chatID" → placeholderEntry
+	typingStops               sync.Map          // "channel:chatID" → typingEntry
 	reactionUndos             sync.Map          // "channel:chatID" → reactionEntry
 	streamActive              sync.Map          // streamSuppressionKey → true (set when streamer.Finalize sent the message)
 	streamAuxiliaryTombstones sync.Map          // streamSuppressionKey → time.Time (drops late auxiliary messages after stream final)
+	janitorWake               chan struct{}     // coalesced wake-up for the TTL janitor; buffered (size 1)
 	channelHashes             map[string]string // channel name → config hash
 }
 
@@ -343,11 +347,23 @@ func (m *Manager) toolFeedbackSeparateMessagesEnabled() bool {
 	return cfg.Agents.Defaults.IsToolFeedbackSeparateMessagesEnabled()
 }
 
+// wakeTTLJanitor signals the TTL janitor that at least one trackable entry now
+// exists. The single buffered slot coalesces bursts (typing updates can arrive
+// much faster than the sweep period), so callers never block and the idle
+// janitor is woken at most once per activation.
+func (m *Manager) wakeTTLJanitor() {
+	select {
+	case m.janitorWake <- struct{}{}:
+	default:
+	}
+}
+
 // RecordPlaceholder registers a placeholder message for later editing.
 // Implements PlaceholderRecorder.
 func (m *Manager) RecordPlaceholder(channel, chatID, placeholderID string) {
 	key := channel + ":" + chatID
 	m.placeholders.Store(key, placeholderEntry{id: placeholderID, createdAt: time.Now()})
+	m.wakeTTLJanitor()
 }
 
 // SendPlaceholder sends a "Thinking…" placeholder for the given channel/chatID
@@ -381,6 +397,7 @@ func (m *Manager) RecordTypingStop(channel, chatID string, stop func()) {
 			oldEntry.stop()
 		}
 	}
+	m.wakeTTLJanitor()
 }
 
 // InvokeTypingStop invokes the registered typing stop function for the given channel and chatID.
@@ -401,6 +418,7 @@ func (m *Manager) InvokeTypingStop(channel, chatID string) {
 func (m *Manager) RecordReactionUndo(channel, chatID string, undo func()) {
 	key := channel + ":" + chatID
 	m.reactionUndos.Store(key, reactionEntry{undo: undo, createdAt: time.Now()})
+	m.wakeTTLJanitor()
 }
 
 // preSend handles typing stop, reaction undo, and placeholder editing before sending a message.
@@ -613,6 +631,7 @@ func NewManager(
 		bus:           messageBus,
 		mediaStore:    store,
 		channelHashes: make(map[string]string),
+		janitorWake:   make(chan struct{}, 1),
 	}
 	m.config.Store(cfg)
 	for _, opt := range opts {
@@ -714,6 +733,7 @@ func (m *Manager) GetStreamer(ctx context.Context, channelName, chatID, sessionK
 		}
 		m.streamActive.Store(streamKey, true)
 		m.streamAuxiliaryTombstones.Store(streamKey, time.Now())
+		m.wakeTTLJanitor()
 	}
 
 	if cfg := m.config.Load(); cfg != nil && cfg.Agents.Defaults.SplitOnMarker {
@@ -1904,58 +1924,109 @@ func (m *Manager) sendMediaWithRetry(
 	return nil, lastErr
 }
 
-// runTTLJanitor periodically scans the typingStops, placeholders, and stream
-// tombstone maps and evicts entries that have exceeded their TTL. This prevents
-// memory accumulation when outbound paths fail to trigger preSend (e.g. LLM errors).
+// runTTLJanitor evicts entries that have exceeded their TTL from the typing,
+// reaction, placeholder, and stream-tombstone maps. This prevents memory
+// accumulation when outbound paths fail to trigger preSend (e.g. LLM errors).
+//
+// The janitor is event-driven: it parks on janitorWake without any timer while
+// all four maps are empty, so an idle agent performs zero periodic wakeups.
+// While entries are alive it keeps a single ticker (one sweep per interval for
+// every map) and returns to the parked state as soon as the maps drain.
 func (m *Manager) runTTLJanitor(ctx context.Context) {
 	interval := janitorInterval
 	if cfg := m.config.Load(); cfg != nil {
 		interval = cfg.Power.ScalePollInterval(interval)
 	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
 
+	var ticker *time.Ticker
 	for {
+		// Idle: no timer and no map scans until an entry is registered.
 		select {
 		case <-ctx.Done():
 			return
-		case now := <-ticker.C:
-			m.typingStops.Range(func(key, value any) bool {
-				if entry, ok := value.(typingEntry); ok {
-					if now.Sub(entry.createdAt) > typingStopTTL {
-						if _, loaded := m.typingStops.LoadAndDelete(key); loaded {
-							entry.stop() // idempotent, safe
-						}
-					}
+		case <-m.janitorWake:
+		}
+
+		if ticker == nil {
+			ticker = time.NewTicker(interval)
+		} else {
+			ticker.Reset(interval)
+		}
+
+	active:
+		for {
+			select {
+			case <-ctx.Done():
+				ticker.Stop()
+				return
+			case now := <-ticker.C:
+				if !m.sweepTTL(now) {
+					ticker.Stop()
+					break active
 				}
-				return true
-			})
-			m.reactionUndos.Range(func(key, value any) bool {
-				if entry, ok := value.(reactionEntry); ok {
-					if now.Sub(entry.createdAt) > typingStopTTL {
-						if _, loaded := m.reactionUndos.LoadAndDelete(key); loaded {
-							entry.undo() // idempotent, safe
-						}
-					}
-				}
-				return true
-			})
-			m.placeholders.Range(func(key, value any) bool {
-				if entry, ok := value.(placeholderEntry); ok {
-					if now.Sub(entry.createdAt) > placeholderTTL {
-						m.placeholders.Delete(key)
-					}
-				}
-				return true
-			})
-			m.streamAuxiliaryTombstones.Range(func(key, value any) bool {
-				if createdAt, ok := value.(time.Time); !ok || now.Sub(createdAt) > streamAuxiliaryTombstoneTTL {
-					m.streamAuxiliaryTombstones.Delete(key)
-				}
-				return true
-			})
+			}
 		}
 	}
+}
+
+// sweepTTL removes expired entries from all TTL maps and reports whether any
+// live entries remain. Deletion is re-checked with LoadAndDelete so a
+// concurrent consumer (preSend, InvokeTypingStop, ...) never runs a cleanup
+// callback twice.
+func (m *Manager) sweepTTL(now time.Time) bool {
+	remaining := false
+
+	m.typingStops.Range(func(key, value any) bool {
+		entry, ok := value.(typingEntry)
+		if !ok {
+			return true
+		}
+		if now.Sub(entry.createdAt) > typingStopTTL {
+			if _, loaded := m.typingStops.LoadAndDelete(key); loaded {
+				entry.stop() // idempotent, safe
+			}
+			return true
+		}
+		remaining = true
+		return true
+	})
+	m.reactionUndos.Range(func(key, value any) bool {
+		entry, ok := value.(reactionEntry)
+		if !ok {
+			return true
+		}
+		if now.Sub(entry.createdAt) > typingStopTTL {
+			if _, loaded := m.reactionUndos.LoadAndDelete(key); loaded {
+				entry.undo() // idempotent, safe
+			}
+			return true
+		}
+		remaining = true
+		return true
+	})
+	m.placeholders.Range(func(key, value any) bool {
+		entry, ok := value.(placeholderEntry)
+		if !ok {
+			return true
+		}
+		if now.Sub(entry.createdAt) > placeholderTTL {
+			m.placeholders.Delete(key)
+			return true
+		}
+		remaining = true
+		return true
+	})
+	m.streamAuxiliaryTombstones.Range(func(key, value any) bool {
+		createdAt, ok := value.(time.Time)
+		if !ok || now.Sub(createdAt) > streamAuxiliaryTombstoneTTL {
+			m.streamAuxiliaryTombstones.Delete(key)
+			return true
+		}
+		remaining = true
+		return true
+	})
+
+	return remaining
 }
 
 func (m *Manager) GetChannel(name string) (Channel, bool) {
