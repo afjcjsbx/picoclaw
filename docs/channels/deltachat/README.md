@@ -114,6 +114,11 @@ Omit the field or set it to `false` to suppress the startup printout.
   double-check seen state; dispatch failures leave the message unseen.
 - Accepted contact-request chats are accepted before the seen mark, because
   Delta Chat does not send read receipts while a chat is still a contact request.
+- Incoming messages are dispatched only after Delta Chat finishes downloading
+  them. The gateway consumes `IncomingMsg` events and skips incomplete
+  previews during startup replay. It sets `download_limit=0` on the bot account
+  so an inherited manual-download limit cannot prevent new attachments from
+  arriving.
 - Incoming attachments (images, audio, video, documents) are registered with
   the media store and handed to the agent, so it can view images or operate on
   the files directly. If no media store is available, the path is appended
@@ -132,6 +137,42 @@ Omit the field or set it to `false` to suppress the startup printout.
   delivered as a native Delta Chat voice message (`send_tts`). This requires an
   ASR and/or TTS provider under `voice` — it is not Delta Chat-specific config.
 
+## Image understanding
+
+Delta Chat supports incoming images. PicoClaw copies each attachment into its
+media directory and gives the agent a real `[image:/path/to/file]` tag. The
+agent calls `load_image` to attach the image bytes to its next model request.
+Spaces and Unicode in filenames are supported; do not rename a photo merely
+because its name contains spaces.
+
+Describing the image also requires a model that accepts image input, and the
+`load_image` tool must be enabled. If your regular model is text-only, set
+`agents.defaults.image_model` to the **model_name alias** of a vision-capable
+entry already configured in `model_list`, for example:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "image_model": "my-vision-model"
+    }
+  }
+}
+```
+
+Merge this setting into your existing configuration and define
+`my-vision-model` in `model_list` with the provider, model, endpoint and
+credentials for a multimodal model you can access. This setting does not
+install a model or add vision capability to a text-only model. With no
+`image_model`, PicoClaw uses the regular model; a provider rejection of image
+input produces guidance to configure a multimodal model.
+
+After rebuilding and restarting the gateway, send a fresh image with a caption
+such as “Describe this image.” An older preview already marked seen by a
+previous gateway version is not automatically replayed. A label such as
+`Image – 304.82 KiB` is a download preview, not a local filename, and should
+never be passed to `load_image`.
+
 ## Troubleshooting
 
 | Symptom | Fix |
@@ -143,6 +184,10 @@ Omit the field or set it to `false` to suppress the startup printout.
 | Bot does not answer in a group | Check `group_trigger`; mention `display_name` or use a configured prefix |
 | Bot ignores a sender | Add the sender email to `allow_from`, or use `["*"]` for open access |
 | Sender cannot message the bot | Re-add the bot with the startup QR/invite so Delta Chat can establish encryption |
+| `load_image` tries to open `Image – … KiB` | Rebuild and restart with completed-message handling, then resend the image; the old receiver could dispatch a preview before the attachment arrived |
+| `active model … does not support image input` | Configure `agents.defaults.image_model` with a vision-capable `model_list` alias |
+| `selected vision model … does not support image input` | Correct the model behind `agents.defaults.image_model`; the alias must resolve to a model and endpoint that accept images |
+| `the chat is a device chat` | Device chats contain local notices and cannot receive messages. Remove that target from scheduled/manual sends and use the real conversation ID. The gateway ignores inbound device notices and does not retry this permanent send error |
 | Agent cannot send to an email/name/other chat ID | Enable `settings.allow_crosspost` and allow the controlling sender in `allow_from`; this capability is disabled by default for privacy |
 
 ## Transition From Legacy Options
