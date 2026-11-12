@@ -699,7 +699,7 @@ For constrained devices, enable the static low-power profile:
 }
 ```
 
-With `low_power` enabled, the heartbeat interval defaults to 120 minutes (or the larger configured normal interval), and the agent loop blocks on inbound events instead of waking every 100 ms. `poll_interval_multiplier` scales maintenance intervals: `5` turns a 30-minute media cleanup interval into 150 minutes, a 10-second channel-maintenance interval into 50 seconds, and a 2-second config-file check into 10 seconds when hot reload is enabled. Set `low_power_heartbeat_interval` and `poll_interval_multiplier` to tune the profile. Channel protocol keepalives remain unchanged so connected integrations stay available.
+With `low_power` enabled, the heartbeat interval defaults to 120 minutes (or the larger configured normal interval), and the agent loop blocks on inbound events instead of waking every 100 ms. `poll_interval_multiplier` scales maintenance intervals: `5` turns a 30-minute media cleanup interval into 150 minutes, a 10-second channel-maintenance interval into 50 seconds, and a 2-second config-file check into 10 seconds when hot reload is enabled. The cron job store is watched with filesystem events, so it is unaffected by the multiplier. Set `low_power_heartbeat_interval` and `poll_interval_multiplier` to tune the profile. Channel protocol keepalives remain unchanged so connected integrations stay available.
 
 ### Providers
 

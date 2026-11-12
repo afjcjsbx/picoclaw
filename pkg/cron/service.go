@@ -8,14 +8,20 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/adhocore/gronx"
+	"github.com/fsnotify/fsnotify"
 
 	"github.com/sipeed/picoclaw/pkg/fileutil"
 )
+
+// cronReloadFallbackInterval is used only when the platform file watcher
+// cannot be created. The normal hot-reload path is event-driven.
+const cronReloadFallbackInterval = time.Minute
 
 type CronSchedule struct {
 	Kind    string `json:"kind"`
@@ -86,9 +92,10 @@ type CronService struct {
 	stopChan  chan struct{}
 	wakeChan  chan struct{}
 	gronx     *gronx.Gronx
-	// reloadEvery is the polling interval used to detect external edits of the
-	// store file (hand edits, CLI). Zero disables hot-reload.
-	reloadEvery time.Duration
+	// hotReload enables watching the store file for external edits (hand
+	// edits, CLI). The watch is event-driven via fsnotify; polling is only a
+	// fallback for platforms where a watcher cannot be created.
+	hotReload bool
 	// storeStat is the state of the store file as last read or written by this
 	// service; any difference means someone else changed it.
 	storeStat os.FileInfo
@@ -100,7 +107,7 @@ type CronService struct {
 
 func NewCronService(storePath string, onJob JobHandler) *CronService {
 	cs := &CronService{
-		storePath: storePath,
+		storePath: filepath.Clean(storePath),
 		onJob:     onJob,
 		gronx:     gronx.New(),
 		wakeChan:  make(chan struct{}, 1),
@@ -135,7 +142,26 @@ func (cs *CronService) Start() error {
 		cs.wakeChan = make(chan struct{}, 1)
 	}
 	cs.running = true
-	go cs.runLoop(cs.stopChan)
+
+	var (
+		watcher  *fsnotify.Watcher
+		fallback *time.Ticker
+	)
+	if cs.hotReload {
+		w, err := newStoreWatcher(cs.storePath)
+		if err != nil {
+			// Keep the feature working on filesystems or platforms without a
+			// usable watcher, but at a much lower wake rate than the old 2s poll.
+			log.Printf(
+				"[cron] file watcher unavailable (%v); polling the store every %s",
+				err, cronReloadFallbackInterval,
+			)
+			fallback = time.NewTicker(cronReloadFallbackInterval)
+		} else {
+			watcher = w
+		}
+	}
+	go cs.runLoop(cs.stopChan, watcher, fallback)
 
 	return nil
 }
@@ -155,21 +181,30 @@ func (cs *CronService) Stop() {
 	}
 }
 
-func (cs *CronService) runLoop(stopChan chan struct{}) {
+func (cs *CronService) runLoop(
+	stopChan chan struct{},
+	watcher *fsnotify.Watcher,
+	fallback *time.Ticker,
+) {
 	timer := time.NewTimer(time.Hour)
 	if !timer.Stop() {
 		<-timer.C
 	}
 	defer timer.Stop()
 
-	var reloadC <-chan time.Time
-	cs.mu.RLock()
-	reloadEvery := cs.reloadEvery
-	cs.mu.RUnlock()
-	if reloadEvery > 0 {
-		reloadTicker := time.NewTicker(reloadEvery)
-		defer reloadTicker.Stop()
-		reloadC = reloadTicker.C
+	var (
+		watchC    <-chan fsnotify.Event
+		watchErrC <-chan error
+		fallbackC <-chan time.Time
+	)
+	if watcher != nil {
+		defer watcher.Close()
+		watchC = watcher.Events
+		watchErrC = watcher.Errors
+	}
+	if fallback != nil {
+		defer fallback.Stop()
+		fallbackC = fallback.C
 	}
 
 	for {
@@ -206,17 +241,65 @@ func (cs *CronService) runLoop(stopChan chan struct{}) {
 				}
 			}
 			continue
-		case <-reloadC:
-			// The loop recomputes its wake time on the next iteration, so no notify is needed.
-			cs.mu.Lock()
-			if cs.running {
-				cs.syncFromDiskUnsafe()
+		case event, ok := <-watchC:
+			if !ok {
+				watchC = nil
+				continue
 			}
-			cs.mu.Unlock()
+			if !cs.storeEvent(event) {
+				continue
+			}
+			// The loop recomputes its wake time on the next iteration, so no notify is needed.
+			cs.syncFromDisk()
+		case err, ok := <-watchErrC:
+			if !ok {
+				watchErrC = nil
+				continue
+			}
+			log.Printf("[cron] file watcher error: %v", err)
+		case <-fallbackC:
+			// Only used when the platform file watcher could not be created.
+			cs.syncFromDisk()
 		case <-timer.C:
 			cs.checkJobs()
 		}
 	}
+}
+
+// syncFromDisk applies an external store edit while the scheduler is running.
+func (cs *CronService) syncFromDisk() {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	if cs.running {
+		cs.syncFromDiskUnsafe()
+	}
+}
+
+// storeEvent reports whether ev concerns the store file itself. The watch is on
+// the parent directory so atomic replacements (temp file + rename) are seen too;
+// events for temp files and unrelated files are ignored.
+func (cs *CronService) storeEvent(ev fsnotify.Event) bool {
+	return filepath.Clean(ev.Name) == cs.storePath &&
+		ev.Op&(fsnotify.Create|fsnotify.Write|fsnotify.Rename|fsnotify.Remove) != 0
+}
+
+// newStoreWatcher watches the directory holding the store file. Watching the
+// directory (instead of the file) survives the rename performed by atomic
+// writes, and also catches the file being created, removed, or replaced.
+func newStoreWatcher(storePath string) (*fsnotify.Watcher, error) {
+	dir := filepath.Dir(storePath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		return nil, err
+	}
+	if err := watcher.Add(dir); err != nil {
+		_ = watcher.Close()
+		return nil, err
+	}
+	return watcher, nil
 }
 
 func (cs *CronService) checkJobs() {
@@ -642,12 +725,14 @@ func (cs *CronService) saveStoreUnsafe() error {
 	return nil
 }
 
-// SetReloadInterval sets how often the store file is polled for external edits
-// (hand edits, CLI). A non-positive value disables hot-reload. Call before Start.
-func (cs *CronService) SetReloadInterval(d time.Duration) {
+// SetHotReload enables watching the store file for external edits (hand edits,
+// CLI). Changes are applied as soon as the filesystem reports them; if the
+// platform watcher cannot be created, a one-minute poll is used instead.
+// Call before Start.
+func (cs *CronService) SetHotReload(enabled bool) {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
-	cs.reloadEvery = d
+	cs.hotReload = enabled
 }
 
 // storeChanged reports whether the store file differs from what this service
@@ -667,9 +752,9 @@ func (cs *CronService) storeChanged() (os.FileInfo, bool) {
 // syncFromDiskUnsafe replaces the in-memory store when the store file was
 // changed by someone else. Callers hold cs.mu. Mutators call it before touching
 // the store so an external edit is never overwritten by a stale in-memory copy;
-// the poll tick in runLoop calls it to pick edits up while idle.
+// the watcher and the fallback poll call it to pick edits up while idle.
 func (cs *CronService) syncFromDiskUnsafe() {
-	if cs.reloadEvery <= 0 {
+	if !cs.hotReload {
 		return
 	}
 	info, changed := cs.storeChanged()
