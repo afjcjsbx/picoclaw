@@ -60,16 +60,18 @@ type dcContact struct {
 
 // dcMessage is the subset of Delta Chat's MessageObject we consume.
 type dcMessage struct {
-	ID        int64      `json:"id"`
-	ChatID    int64      `json:"chatId"`
-	FromID    int64      `json:"fromId"`
-	Text      string     `json:"text"`
-	File      string     `json:"file"`
-	FileName  string     `json:"fileName"`
-	FileMime  string     `json:"fileMime"`
-	Timestamp int64      `json:"timestamp"`
-	IsInfo    bool       `json:"isInfo"`
-	Sender    *dcContact `json:"sender"`
+	DownloadState string     `json:"downloadState"`
+	State         int        `json:"state"`
+	ID            int64      `json:"id"`
+	ChatID        int64      `json:"chatId"`
+	FromID        int64      `json:"fromId"`
+	Text          string     `json:"text"`
+	File          string     `json:"file"`
+	FileName      string     `json:"fileName"`
+	FileMime      string     `json:"fileMime"`
+	Timestamp     int64      `json:"timestamp"`
+	IsInfo        bool       `json:"isInfo"`
+	Sender        *dcContact `json:"sender"`
 }
 
 // dcChat is the subset of Delta Chat's FullChat we consume.
@@ -928,10 +930,12 @@ func (c *DeltaChatChannel) ensureAccount(ctx context.Context) error {
 	}
 	// Mark this account as a bot so the core delivers all messages to us.
 	// mdns_enabled lets markseen_msgs send read receipts for the visible
-	// double-check state in peer clients.
+	// double-check state in peer clients. Disable any inherited download limit
+	// so complete attachment messages can generate IncomingMsg events.
 	if _, err := c.rpc.call(ctx, "batch_set_config", accountID, map[string]string{
-		"bot":          "1",
-		"mdns_enabled": "1",
+		"bot":            "1",
+		"mdns_enabled":   "1",
+		"download_limit": "0",
 	}); err != nil {
 		return fmt.Errorf("deltachat set bot config: %w", err)
 	}

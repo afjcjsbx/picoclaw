@@ -377,8 +377,8 @@ func TestEnsureAccountUsesConfiguredAccount(t *testing.T) {
 		case "batch_set_config":
 			cfg, _ := req.Params[1].(map[string]any)
 			if _, ok := cfg["bot"]; ok {
-				if cfg["bot"] != "1" || cfg["mdns_enabled"] != "1" {
-					t.Fatalf("bot config = %#v, want bot and mdns_enabled set to 1", cfg)
+				if cfg["bot"] != "1" || cfg["mdns_enabled"] != "1" || cfg["download_limit"] != "0" {
+					t.Fatalf("bot config = %#v, want bot=1, mdns_enabled=1, download_limit=0", cfg)
 				}
 				mdnsConfigured = true
 				return rpcResult(req, nil)
