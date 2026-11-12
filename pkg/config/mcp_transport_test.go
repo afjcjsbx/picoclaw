@@ -68,11 +68,12 @@ func TestMCPServerConfigEffectiveDeferred(t *testing.T) {
 func boolPointer(b bool) *bool { return &b }
 
 func TestMCPServerConfigSupportsParallelToolCallsDefaultsFalse(t *testing.T) {
-	var cfg struct{ A, B MCPServerConfig }
-	if err := json.Unmarshal([]byte(`{"A":{},"B":{"supports_parallel_tool_calls":true}}`), &cfg); err != nil {
+	var servers map[string]MCPServerConfig
+	if err := json.Unmarshal([]byte(`{"a":{},"b":{"supports_parallel_tool_calls":true}}`), &servers); err != nil {
 		t.Fatal(err)
 	}
-	if cfg.A.SupportsParallelToolCalls || !cfg.B.SupportsParallelToolCalls {
-		t.Fatalf("got A=%v B=%v, want false/true", cfg.A.SupportsParallelToolCalls, cfg.B.SupportsParallelToolCalls)
+	if servers["a"].SupportsParallelToolCalls || !servers["b"].SupportsParallelToolCalls {
+		t.Fatalf("got a=%v b=%v, want false/true",
+			servers["a"].SupportsParallelToolCalls, servers["b"].SupportsParallelToolCalls)
 	}
 }
