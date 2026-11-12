@@ -20,7 +20,6 @@ import {
   AgentDefaultsSection,
   CronSection,
   DevicesSection,
-  EvolutionSection,
   ExecSection,
   LauncherSection,
   RuntimeSection,
@@ -33,7 +32,6 @@ import {
   type TurnProfileForm,
   buildFormFromConfig,
   parseCIDRText,
-  parseFloatField,
   parseIntField,
   parseMultilineList,
 } from "@/components/config/form-model"
@@ -301,16 +299,6 @@ export function ConfigPage() {
           "Cron exec timeout",
           { min: 0 },
         )
-        const evolutionMinTaskCount = parseIntField(
-          form.evolutionMinTaskCount,
-          "Evolution minimum task count",
-          { min: 1 },
-        )
-        const evolutionMinSuccessRatio = parseFloatField(
-          form.evolutionMinSuccessRatio,
-          "Evolution minimum success ratio",
-          { min: 0.01, max: 1 },
-        )
         const execConfigPatch: Record<string, unknown> = {
           enabled: form.execEnabled,
         }
@@ -355,20 +343,6 @@ export function ConfigPage() {
           },
           session: {
             dm_scope: dmScope,
-          },
-          evolution: {
-            enabled: form.evolutionEnabled,
-            mode: form.evolutionMode,
-            state_dir:
-              form.evolutionStateDir.trim() === ""
-                ? null
-                : form.evolutionStateDir.trim(),
-            min_task_count: evolutionMinTaskCount,
-            min_success_ratio: evolutionMinSuccessRatio,
-            cold_path_trigger: form.evolutionColdPathTrigger,
-            cold_path_times: parseMultilineList(
-              form.evolutionColdPathTimesText,
-            ),
           },
           tools: {
             cron: {
@@ -572,8 +546,6 @@ export function ConfigPage() {
               />
 
               <RuntimeSection form={form} onFieldChange={updateField} />
-
-              <EvolutionSection form={form} onFieldChange={updateField} />
 
               <ExecSection form={form} onFieldChange={updateField} />
 
