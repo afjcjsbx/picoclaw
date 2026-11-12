@@ -76,17 +76,17 @@ func TestStemEnglish_LeavesForeignTokensAlone(t *testing.T) {
 	}
 }
 
-func TestBM25TokenizeStem(t *testing.T) {
-	got := bm25TokenizeStem("Searching repositories, created issues!", true)
+func TestBM25Analyzer_Stemming(t *testing.T) {
+	got := bm25Analyzer{stemming: true}.tokenize("Searching repositories, created issues!")
 	want := []string{"search", "repositori", "creat", "issu"}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("bm25TokenizeStem() = %v, want %v", got, want)
+		t.Fatalf("tokenize() with stemming = %v, want %v", got, want)
 	}
 
-	got = bm25TokenizeStem("Searching repositories", false)
+	got = bm25Analyzer{}.tokenize("Searching repositories")
 	want = []string{"searching", "repositories"}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("bm25TokenizeStem(false) = %v, want %v", got, want)
+		t.Fatalf("tokenize() without stemming = %v, want %v", got, want)
 	}
 }
 
