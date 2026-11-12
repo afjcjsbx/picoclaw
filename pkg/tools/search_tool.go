@@ -267,6 +267,15 @@ func buildBM25Engine(docs []searchDoc) *utils.BM25Engine[searchDoc] {
 			// make cross-references match unrelated tools.
 			return expandSearchIdentifier(doc.Name) + " " + doc.Description
 		},
+		// Tool discovery queries are natural-language descriptions of an
+		// action ("searching repositories", "created issues"), while tool
+		// names often use the base form. Inflection stemming keeps those
+		// queries searchable without expanding the index.
+		utils.WithStemming(),
+		// Queries are written as sentences ("how can I create an issue"); a
+		// filler word that is rare among the tool descriptions would otherwise
+		// outrank the words that name the action.
+		utils.WithEnglishStopwords(),
 	)
 }
 

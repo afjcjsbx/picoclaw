@@ -113,12 +113,12 @@ func TestBM25Tokenize(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			got := bm25Tokenize(tt.input)
+			got := bm25Analyzer{}.tokenize(tt.input)
 			if len(got) == 0 && len(tt.expected) == 0 {
 				return // Both empty
 			}
 			if !reflect.DeepEqual(got, tt.expected) {
-				t.Errorf("bm25Tokenize(%q) = %v, want %v", tt.input, got, tt.expected)
+				t.Errorf("tokenize(%q) = %v, want %v", tt.input, got, tt.expected)
 			}
 		})
 	}
@@ -188,6 +188,31 @@ func BenchmarkBM25Search_ReusedIndex(b *testing.B) {
 		if len(results) == 0 {
 			b.Fatal("expected non-empty results")
 		}
+	}
+}
+
+// Stemming runs per token while indexing, so measure index construction
+// rather than Search, which only stems the short query.
+func BenchmarkBM25Build(b *testing.B) {
+	corpus := benchmarkBM25Corpus(2000)
+
+	for _, tc := range []struct {
+		name string
+		opts []BM25Option
+	}{
+		{"Plain", nil},
+		{"WithStemming", []BM25Option{WithStemming()}},
+		{"WithStemmingAndStopwords", []BM25Option{WithStemming(), WithEnglishStopwords()}},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if engine := NewBM25Engine(corpus, extractText, tc.opts...); engine.index == nil {
+					b.Fatal("expected non-nil index")
+				}
+			}
+		})
 	}
 }
 
