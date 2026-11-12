@@ -38,6 +38,11 @@ func isASCIILower(s string) bool {
 
 // stemStep1a handles plurals: caresses -> caress, ponies -> poni,
 // cats -> cat.
+//
+// Unlike Porter, words ending in "us" or "is" keep their s (status, analysis,
+// this) so they are not cut to non-words (statu, analysi). Everything else
+// ending in s loses it, including short words such as "gas" -> "ga"; that is
+// harmless because corpus and query are stemmed the same way.
 func stemStep1a(s string) string {
 	switch {
 	case strings.HasSuffix(s, "sses"):
