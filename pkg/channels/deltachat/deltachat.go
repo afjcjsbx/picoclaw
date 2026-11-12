@@ -10,6 +10,7 @@ package deltachat
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/mail"
 	"os"
@@ -299,7 +300,7 @@ func (c *DeltaChatChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([
 	// misc_send_msg(account_id, chat_id, text, file, name, location, quoted_message_id)
 	raw, err := c.rpc.call(ctx, "misc_send_msg", c.accountID, chatID, msg.Content, nil, nil, nil, nil)
 	if err != nil {
-		return nil, fmt.Errorf("deltachat send: %w", err)
+		return nil, deltaChatSendError("send", err)
 	}
 
 	// Result is [message_id, message_object]; we only need the id.
@@ -360,7 +361,7 @@ func (c *DeltaChatChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaM
 				"ref":   part.Ref,
 				"error": err.Error(),
 			})
-			return messageIDs, fmt.Errorf("deltachat send media: %w", channels.ErrTemporary)
+			return messageIDs, deltaChatSendError("send media", err)
 		}
 
 		// send_msg returns the new message id as a bare integer.
@@ -371,6 +372,18 @@ func (c *DeltaChatChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaM
 	}
 
 	return messageIDs, nil
+}
+
+// Device chats contain local core notices and can never receive replies. A
+// stale numeric target may still reach Send/SendMedia, even though inbound and
+// alias lookup filter these chats. Preserve the RPC error and prevent retries.
+func deltaChatSendError(action string, err error) error {
+	kind := channels.ErrTemporary
+	var rpcErr *rpcError
+	if errors.As(err, &rpcErr) && strings.Contains(strings.ToLower(rpcErr.Message), "the chat is a device chat") {
+		kind = channels.ErrSendFailed
+	}
+	return fmt.Errorf("deltachat %s: %w: %w", action, kind, err)
 }
 
 func (c *DeltaChatChannel) resolveOutboundChatID(
