@@ -310,3 +310,30 @@ func TestReload_ReusesLifecycleContext(t *testing.T) {
 		t.Fatal("reload replaced the lifecycle dispatch task")
 	}
 }
+
+// A gateway can boot with no channels and gain its first one on config reload.
+// The TTL janitor must start with that first worker; otherwise entries that
+// fail to clean themselves up would linger for the whole process lifetime.
+func TestReload_StartsTTLJanitorWithFirstChannel(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Channels = config.ChannelsConfig{}
+	m := newUnstartedReloadTestManager(t, cfg)
+	t.Cleanup(func() { _ = m.StopAll(context.Background()) })
+
+	if err := m.StartAll(context.Background()); err != nil {
+		t.Fatalf("StartAll() error = %v", err)
+	}
+	if m.janitorStarted {
+		t.Fatal("TTL janitor started with no channels")
+	}
+
+	if err := m.Reload(context.Background(), newReloadTestConfig(t, `{"v":1}`, true)); err != nil {
+		t.Fatalf("Reload() error = %v", err)
+	}
+	if workerFor(t, m, reloadTestChannel) == nil {
+		t.Fatal("expected a worker after reload added the first channel")
+	}
+	if !m.janitorStarted {
+		t.Fatal("TTL janitor did not start with the first channel added by reload")
+	}
+}

@@ -270,6 +270,27 @@ func TestStartAll_AllChannelsFail_ReturnsJoinedError(t *testing.T) {
 	if m.dispatchTask != nil {
 		t.Fatal("expected dispatch task to be cleared on full startup failure")
 	}
+	if m.janitorStarted {
+		t.Fatal("expected no TTL janitor when every channel failed to start")
+	}
+}
+
+func TestStartAll_NoChannelsDoesNotStartTTLJanitor(t *testing.T) {
+	m := newTestManager()
+	t.Cleanup(func() {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer stopCancel()
+		if err := m.StopAll(stopCtx); err != nil {
+			t.Errorf("StopAll() error = %v", err)
+		}
+	})
+
+	if err := m.StartAll(t.Context()); err != nil {
+		t.Fatalf("StartAll() error = %v", err)
+	}
+	if m.janitorStarted {
+		t.Fatal("TTL janitor started without any running channel")
+	}
 }
 
 func TestStartAll_PartialFailure_StartsSuccessfulWorkers(t *testing.T) {
@@ -307,6 +328,9 @@ func TestStartAll_PartialFailure_StartsSuccessfulWorkers(t *testing.T) {
 	}
 	if m.dispatchTask == nil {
 		t.Fatal("expected dispatch task to run when at least one channel starts")
+	}
+	if !m.janitorStarted {
+		t.Fatal("expected TTL janitor once the first channel started")
 	}
 
 	pubCtx, pubCancel := context.WithTimeout(context.Background(), 2*time.Second)
