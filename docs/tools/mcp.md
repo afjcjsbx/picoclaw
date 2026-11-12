@@ -63,6 +63,7 @@ Oversized MCP text results are bounded, not dropped: the model keeps the first 4
 | `env`      | object  | no       | Environment variables for stdio process                                                                                                                         |
 | `env_file` | string  | no       | Path to environment file for stdio process                                                                                                                      |
 | `inherit_env` | bool | no | Pass the full PicoClaw process environment to this stdio server. Defaults to `false`. |
+| `supports_parallel_tool_calls` | bool | no | Allow this server's tool calls to run concurrently when the model emits several in one response (up to `agents.defaults.max_parallel_tool_calls`). Defaults to `false`: calls run one by one. Per server, not global. |
 | `url`      | string  | sse/http | Endpoint URL for `sse`/`http` transport                                                                                                                         |
 | `headers`  | object  | no       | HTTP headers for `sse`/`http` transport                                                                                                                         |
 | `oauth`    | object  | no       | Browser OAuth for remote servers; run `picoclaw mcp login <name>` before connecting. Cannot be combined with an `Authorization` header.                         |

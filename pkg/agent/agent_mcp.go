@@ -209,6 +209,7 @@ func (al *AgentLoop) ensureMCPInitialized(ctx context.Context) error {
 					mcpTool.SetWorkspace(agent.Workspace)
 					mcpTool.SetMaxInlineTextRunes(al.cfg.Tools.MCP.GetMaxInlineTextChars())
 					mcpTool.SetEventPublisher(al.runtimeEvents)
+					mcpTool.SetParallelSafe(serverCfg.SupportsParallelToolCalls)
 
 					if registerAsHidden {
 						agent.Tools.RegisterHidden(mcpTool)
