@@ -5316,6 +5316,70 @@ func TestAgentLoop_ToolLimitUsesDedicatedFallback(t *testing.T) {
 	}
 }
 
+// graceSummaryProvider keeps requesting tools until it is called without tool
+// definitions, then answers with a summary. It records that final request.
+type graceSummaryProvider struct {
+	calls    int
+	lastMsgs []providers.Message
+}
+
+func (p *graceSummaryProvider) Chat(
+	_ context.Context,
+	messages []providers.Message,
+	tools []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	p.calls++
+	if len(tools) == 0 {
+		p.lastMsgs = messages
+		return &providers.LLMResponse{Content: "did 1 of 2 steps"}, nil
+	}
+	return &providers.LLMResponse{ToolCalls: []providers.ToolCall{{
+		ID:        fmt.Sprintf("call_%d", p.calls),
+		Type:      "function",
+		Name:      "tool_limit_test_tool",
+		Arguments: map[string]any{"value": "x"},
+	}}}, nil
+}
+
+func (p *graceSummaryProvider) GetDefaultModel() string { return "grace-summary-model" }
+
+func TestAgentLoop_IterationBudgetGetsSummaryCall(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				ModelName:         "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 2,
+			},
+		},
+	}
+	provider := &graceSummaryProvider{}
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+	al.RegisterTool(&toolLimitTestTool{})
+
+	response, err := al.ProcessDirectWithChannel(context.Background(), "hello", "grace", "test", "chat1")
+	if err != nil {
+		t.Fatalf("ProcessDirectWithChannel failed: %v", err)
+	}
+	if response != "did 1 of 2 steps" {
+		t.Fatalf("response = %q, want the wrap-up summary", response)
+	}
+	if provider.calls != 3 { // 2 budgeted iterations + 1 grace call
+		t.Fatalf("LLM calls = %d, want 3", provider.calls)
+	}
+	last := provider.lastMsgs[len(provider.lastMsgs)-1]
+	if last.Role != "user" || last.Content != maxIterationsSummaryRequest {
+		t.Fatalf("last grace message = %s %q, want user summary request", last.Role, last.Content)
+	}
+	if got := provider.lastMsgs[len(provider.lastMsgs)-2].Role; got != "tool" {
+		t.Fatalf("history not passed to grace call: msg before request has role %q, want tool", got)
+	}
+}
+
 // TestProcessDirectWithChannel_TriggersMCPInitialization verifies that
 // ProcessDirectWithChannel triggers MCP initialization when MCP is enabled.
 // Note: Manager is only initialized when at least one MCP server is configured

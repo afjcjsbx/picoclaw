@@ -83,12 +83,13 @@ func TestRunTurn_SteeringCannotExceedHardCap(t *testing.T) {
 		t.Fatalf("runTurn failed: %v", err)
 	}
 
-	wantCalls := steeringIterationHardCap(agent.MaxIterations)
+	// The hard cap plus the single tool-less wrap-up call.
+	wantCalls := steeringIterationHardCap(agent.MaxIterations) + 1
 	if got := provider.callCount(); got != wantCalls {
-		t.Fatalf("LLM calls = %d, want hard cap %d", got, wantCalls)
+		t.Fatalf("LLM calls = %d, want hard cap + wrap-up %d", got, wantCalls)
 	}
 	if got := ts.currentIteration(); got != wantCalls {
-		t.Fatalf("iterations = %d, want hard cap %d", got, wantCalls)
+		t.Fatalf("iterations = %d, want hard cap + wrap-up %d", got, wantCalls)
 	}
 	if got := result.finalContent; got != toolLimitResponse {
 		t.Fatalf("final content = %q, want tool-limit response", got)
@@ -112,10 +113,11 @@ func TestRunTurn_HardCapKeepsConsumedSteeringQueued(t *testing.T) {
 
 	// Every LLM call queued one steering message and every iteration consumed
 	// one, so the message pulled off the queue by the last iteration is the one
-	// the cap left behind. It must be queued again, not dropped.
+	// the cap left behind. The wrap-up call pulls one more. Both must be queued
+	// again, not dropped, oldest first.
 	wantCalls := steeringIterationHardCap(agent.MaxIterations)
-	if got := al.pendingSteeringCountForScope(ts.sessionKey); got != 1 {
-		t.Fatalf("queued steering after hard cap = %d, want 1 (calls=%d)", got, wantCalls)
+	if got := al.pendingSteeringCountForScope(ts.sessionKey); got != 2 {
+		t.Fatalf("queued steering after hard cap = %d, want 2 (calls=%d)", got, wantCalls)
 	}
 	queued := al.dequeueSteeringMessagesForScope(ts.sessionKey)
 	if want := fmt.Sprintf("keep going %d", wantCalls); len(queued) != 1 || queued[0].Content != want {

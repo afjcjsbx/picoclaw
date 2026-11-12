@@ -319,6 +319,30 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 		}
 	}
 
+	// Budget spent while the model still wanted tools: grant one tool-less call
+	// so it can summarize instead of the turn ending on a canned message. It is
+	// not a guarantee of completion, only a way to close the turn. History is
+	// passed as-is; the request is transient (not persisted) like other
+	// graceful-terminal hints. A failed call falls through to toolLimitResponse.
+	if finalContent == "" && ts.agent.MaxIterations > 0 && ts.currentIteration() >= ts.agent.MaxIterations &&
+		ts.requestIterationLimitSummary() {
+		logger.InfoCF("agent", "Iteration budget exhausted; requesting wrap-up summary", map[string]any{
+			"agent_id":  ts.agent.ID,
+			"iteration": ts.currentIteration(),
+			"max":       ts.agent.MaxIterations,
+		})
+		iteration := ts.currentIteration() + 1
+		ts.setIteration(iteration)
+		if _, graceErr := pipeline.CallLLM(ctx, turnCtx, ts, exec, iteration); graceErr != nil {
+			logger.WarnCF("agent", "Wrap-up summary call failed", map[string]any{
+				"agent_id": ts.agent.ID,
+				"error":    graceErr.Error(),
+			})
+		} else if !exec.abortedByHook && !exec.abortedByHardAbort {
+			finalContent = exec.finalContent
+		}
+	}
+
 	// The hard cap can end the turn with steering already pulled off the
 	// queue. Hand it back so the post-turn continuation still delivers it.
 	if ts.parentTurnState == nil {

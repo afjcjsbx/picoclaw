@@ -151,6 +151,10 @@ const (
 	metadataKeyInputAudio      = "voice_input_audio"
 )
 
+// maxIterationsSummaryRequest is the user message sent on the one tool-less
+// grace call granted when the iteration budget runs out.
+const maxIterationsSummaryRequest = "You've reached the maximum number of tool-calling iterations allowed. Please provide a final response summarizing what you've found and accomplished so far, without calling any more tools."
+
 // emptyResponseFallback selects the user-facing content used when a turn ends
 // without any assistant text or tool calls. When the model was cut off by the
 // output token limit, a dedicated message is returned so the user knows to raise

@@ -233,6 +233,7 @@ type turnState struct {
 	gracefulInterrupt     bool
 	gracefulInterruptHint string
 	gracefulTerminalUsed  bool
+	gracefulPrompt        string // overrides the default interrupt hint text
 	hardAbort             bool
 	providerCancel        context.CancelFunc
 	turnCancel            context.CancelFunc
@@ -731,6 +732,19 @@ func (ts *turnState) requestGracefulInterrupt(hint string) bool {
 	return true
 }
 
+// requestIterationLimitSummary arms the one tool-less terminal call used to
+// wrap up a turn whose iteration budget is spent.
+func (ts *turnState) requestIterationLimitSummary() bool {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if ts.hardAbort {
+		return false
+	}
+	ts.gracefulInterrupt = true
+	ts.gracefulPrompt = maxIterationsSummaryRequest
+	return true
+}
+
 func (ts *turnState) gracefulInterruptRequested() (bool, string) {
 	ts.mu.RLock()
 	defer ts.mu.RUnlock()
@@ -977,6 +991,12 @@ func normalizeMessageForComparison(msg providers.Message) providers.Message {
 
 func (ts *turnState) interruptHintMessage() providers.Message {
 	_, hint := ts.gracefulInterruptRequested()
+	ts.mu.RLock()
+	prompt := ts.gracefulPrompt
+	ts.mu.RUnlock()
+	if prompt != "" {
+		return interruptPromptMessage(prompt)
+	}
 	content := "Interrupt requested. Stop scheduling tools and provide a short final summary."
 	if hint != "" {
 		content += "\n\nInterrupt hint: " + hint
