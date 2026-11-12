@@ -394,7 +394,14 @@ func spawnSubTurn(
 	agent.Sessions = ephemeralStore
 	// Clone the tool registry so child turn's tool registrations
 	// don't pollute the parent's registry.
-	if baseAgent.Tools != nil {
+	// If cfg.Tools is explicitly provided (per-spawn tool filtering), use it
+	// instead of inheriting the parent's full tool set.
+	if len(cfg.Tools) > 0 {
+		agent.Tools = tools.NewToolRegistry()
+		for _, t := range cfg.Tools {
+			agent.Tools.Register(t)
+		}
+	} else if baseAgent.Tools != nil {
 		agent.Tools = baseAgent.Tools.Clone()
 		if tool, ok := agent.Tools.Get("todo"); ok {
 			if todo, ok := tool.(*tools.TodoTool); ok {

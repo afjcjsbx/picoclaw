@@ -19,6 +19,18 @@ type ChildTracker interface {
 
 type childTrackerKey struct{}
 
+// outboundTools are tools that let an agent contact the user's channel
+// directly. When allow_outbound is false, these are stripped from the
+// spawned subagent's tool set. Generation-only tools (e.g. image_generate)
+// are intentionally NOT included: they produce media refs returned to the
+// parent agent, which decides whether to forward them to the user.
+var outboundTools = []string{
+	"message",
+	"send_file",
+	"send_tts",
+	"reaction",
+}
+
 // WithChildTracker returns a context whose async spawns are tracked by t.
 func WithChildTracker(ctx context.Context, t ChildTracker) context.Context {
 	return context.WithValue(ctx, childTrackerKey{}, t)
@@ -39,6 +51,7 @@ type SpawnTool struct {
 	temperature    float64
 	allowlistCheck func(targetAgentID string) bool
 	tools          *ToolRegistry
+	directMessage  bool // config default; per-call allow_outbound overrides
 }
 
 // Compile-time check: SpawnTool implements AsyncExecutor.
@@ -49,10 +62,11 @@ func NewSpawnTool(manager *SubagentManager) *SpawnTool {
 		return &SpawnTool{}
 	}
 	return &SpawnTool{
-		defaultModel: manager.defaultModel,
-		maxTokens:    manager.maxTokens,
-		temperature:  manager.temperature,
-		tools:        manager.tools,
+		defaultModel:  manager.defaultModel,
+		maxTokens:     manager.maxTokens,
+		temperature:   manager.temperature,
+		tools:         manager.tools,
+		directMessage: manager.directMessage,
 	}
 }
 
@@ -87,9 +101,9 @@ func (t *SpawnTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Optional target agent ID to delegate the task to",
 			},
-			"allow_direct_message": map[string]any{
+			"allow_outbound": map[string]any{
 				"type":        "boolean",
-				"description": "Optional. Whether the subagent is allowed to message the user directly (default true). When false, the message tool is filtered out and results must be returned to the parent agent.",
+				"description": "Optional. Whether the subagent may contact the user directly (default true). When false, outbound tools {message, send_file, send_tts, reaction} are stripped; generation-only tools like image_generate are preserved and their results are returned to the parent agent.",
 			},
 		},
 		"required": []string{"task"},
@@ -133,9 +147,9 @@ func (t *SpawnTool) execute(
 
 	label := stringArg(args, "label")
 	targetAgentID := strings.TrimSpace(stringArg(args, "agent_id"))
-	allowDirectMessage := true
-	if v, ok := args["allow_direct_message"].(bool); ok {
-		allowDirectMessage = v
+	allowOutbound := t.directMessage // config default: true (no behavior change)
+	if v, ok := args["allow_outbound"].(bool); ok {
+		allowOutbound = v
 	}
 
 	// Check allowlist if targeting a specific agent
@@ -179,12 +193,19 @@ func (t *SpawnTool) execute(
 					}
 				}()
 
-				// Build child tool set: inherit parent tools, but filter out
-				// the message tool when direct messaging is disabled so the
-				// subagent cannot message the user directly.
+				// Build child tool set: inherit parent tools, but when direct
+				// outbound messaging is disabled, strip the outbound tool group
+				// {message, send_file, send_tts, reaction} so the subagent
+				// cannot contact the user directly. Generation-only tools like
+				// image_generate are preserved: they produce media refs that
+				// are returned to the parent agent, which decides whether to
+				// forward them to the user.
 				var childTools []Tool
-				if t.tools != nil && !allowDirectMessage {
-					parentRegistry := t.tools.CloneWithout("message")
+				if t.tools != nil && !allowOutbound {
+					parentRegistry := t.tools
+					for _, name := range outboundTools {
+						parentRegistry = parentRegistry.CloneWithout(name)
+					}
 					for _, name := range parentRegistry.List() {
 						if tool, ok := parentRegistry.Get(name); ok {
 							childTools = append(childTools, tool)

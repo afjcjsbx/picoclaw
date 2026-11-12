@@ -396,6 +396,7 @@ func registerSharedTools(
 			// spawn_status which are added below — preventing recursive
 			// subagent spawning.
 			subagentManager.SetTools(agent.Tools.Clone())
+			subagentManager.SetDirectMessage(cfg.SubTurn.DirectMessage)
 			if spawnEnabled {
 				spawnTool := tools.NewSpawnTool(subagentManager)
 				spawnTool.SetSpawner(NewSubTurnSpawner(al))
