@@ -163,9 +163,7 @@ const iterationBudgetWarningTemplate = budgetNoticePrefix + " You have used %d o
 // runBudgetNotice is appended (as plain text, not a system message) to the last
 // tool result of the first batch that finishes after run_budget_warning_threshold
 // of the wall-clock run budget has elapsed. Nothing is interrupted.
-const runBudgetNotice = "SYSTEM NOTICE — Run time budget nearly exhausted.\n\n" +
-	"Stop new discovery/verification work now.\n\n" +
-	"Produce the required final answer from the state you already have, completing only mandatory writes."
+const runBudgetNotice = "SYSTEM NOTICE — Run time budget nearly exhausted. Stop new discovery/verification work now. Produce the required final answer from the state you already have, completing only mandatory writes."
 
 // maxIterationsSummaryRequest is the user message sent on the one tool-less
 // grace call granted when the iteration budget runs out.
