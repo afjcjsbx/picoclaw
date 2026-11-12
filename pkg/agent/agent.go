@@ -151,6 +151,19 @@ const (
 	metadataKeyInputAudio      = "voice_input_audio"
 )
 
+// budgetNoticePrefix opens the iteration-budget checkpoint notice. The pruner
+// recognizes it to keep the notice from inflating a result's size.
+const budgetNoticePrefix = "[SYSTEM NOTICE — iteration budget checkpoint]"
+
+// iterationBudgetWarningTemplate is appended (as plain text, not a system
+// message) to the last tool result of the iteration that crosses the
+// max_tool_budget_warning_ratio threshold. Args: iterations used, maximum.
+const iterationBudgetWarningTemplate = budgetNoticePrefix + " You have used %d of %d iterations. Checkpoint durable progress now, then continue the task; do not stop solely because of this warning."
+
+// maxIterationsSummaryRequest is the user message sent on the one tool-less
+// grace call granted when the iteration budget runs out.
+const maxIterationsSummaryRequest = "You've reached the maximum number of tool-calling iterations allowed. Please provide a final response summarizing what you've found and accomplished so far, without calling any more tools."
+
 // emptyResponseFallback selects the user-facing content used when a turn ends
 // without any assistant text or tool calls. When the model was cut off by the
 // output token limit, a dedicated message is returned so the user knows to raise

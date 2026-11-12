@@ -604,6 +604,10 @@ const (
 	DefaultLoopDetectionRepeatThreshold   = 3
 	DefaultLoopDetectionCriticalThreshold = 6
 	DefaultLoopDetectionWindowSize        = 20
+
+	// DefaultMaxToolBudgetWarningRatio is the share of max_tool_iterations after
+	// which the model gets a one-time checkpoint notice.
+	DefaultMaxToolBudgetWarningRatio = 0.75
 )
 
 // LoopDetectionConfig controls detection of consecutive identical tool calls.
@@ -613,6 +617,20 @@ type LoopDetectionConfig struct {
 	RepeatThreshold   int  `json:"repeat_threshold"   env:"PICOCLAW_AGENTS_DEFAULTS_LOOP_DETECTION_REPEAT_THRESHOLD"`
 	CriticalThreshold int  `json:"critical_threshold" env:"PICOCLAW_AGENTS_DEFAULTS_LOOP_DETECTION_CRITICAL_THRESHOLD"`
 	WindowSize        int  `json:"window_size"        env:"PICOCLAW_AGENTS_DEFAULTS_LOOP_DETECTION_WINDOW_SIZE"`
+}
+
+// ValidateBudgetWarningRatio checks agents.defaults.max_tool_budget_warning_ratio.
+// Zero means unset (DefaultMaxToolBudgetWarningRatio applies); anything else
+// must lie strictly between 0 and 1.
+func (c *Config) ValidateBudgetWarningRatio() error {
+	if c == nil {
+		return nil
+	}
+	r := c.Agents.Defaults.MaxToolBudgetWarningRatio
+	if r != 0 && !(r > 0 && r < 1) { // also rejects NaN
+		return fmt.Errorf("agents.defaults.max_tool_budget_warning_ratio %v must be strictly between 0 and 1", r)
+	}
+	return nil
 }
 
 // Normalized returns a safe, internally consistent loop-detection config.
@@ -650,6 +668,7 @@ type AgentDefaults struct {
 	ContextWindow             int                 `json:"context_window,omitempty"             env:"PICOCLAW_AGENTS_DEFAULTS_CONTEXT_WINDOW"`
 	Temperature               *float64            `json:"temperature,omitempty"                env:"PICOCLAW_AGENTS_DEFAULTS_TEMPERATURE"`
 	MaxToolIterations         int                 `json:"max_tool_iterations"                  env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOOL_ITERATIONS"`
+	MaxToolBudgetWarningRatio float64             `json:"max_tool_budget_warning_ratio"        env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOOL_BUDGET_WARNING_RATIO"`
 	SummarizeMessageThreshold int                 `json:"summarize_message_threshold"          env:"PICOCLAW_AGENTS_DEFAULTS_SUMMARIZE_MESSAGE_THRESHOLD"` // Deprecated: ignored; summarization is driven by SummarizeTokenPercent
 	SummarizeTokenPercent     int                 `json:"summarize_token_percent"              env:"PICOCLAW_AGENTS_DEFAULTS_SUMMARIZE_TOKEN_PERCENT"`
 	MaxMediaSize              int                 `json:"max_media_size,omitempty"             env:"PICOCLAW_AGENTS_DEFAULTS_MAX_MEDIA_SIZE"`
@@ -659,7 +678,7 @@ type AgentDefaults struct {
 	SteeringMode              string              `json:"steering_mode,omitempty"              env:"PICOCLAW_AGENTS_DEFAULTS_STEERING_MODE"`           // "one-at-a-time" (default) or "all"
 	MaxParallelTurns          int                 `json:"max_parallel_turns,omitempty"         env:"PICOCLAW_AGENTS_DEFAULTS_MAX_PARALLEL_TURNS"`      // Max concurrent turns (0 or 1 = sequential)
 	MaxParallelToolCalls      int                 `json:"max_parallel_tool_calls,omitempty"    env:"PICOCLAW_AGENTS_DEFAULTS_MAX_PARALLEL_TOOL_CALLS"` // Max concurrent tool calls of one LLM response (0 or 1 = sequential)
-	SubTurn                   SubTurnConfig       `json:"subturn"                                                                                          envPrefix:"PICOCLAW_AGENTS_DEFAULTS_SUBTURN_"`
+	SubTurn                   SubTurnConfig       `json:"subturn"                                                                                           envPrefix:"PICOCLAW_AGENTS_DEFAULTS_SUBTURN_"`
 	ToolFeedback              ToolFeedbackConfig  `json:"tool_feedback,omitempty"`
 	LoopDetection             LoopDetectionConfig `json:"loop_detection,omitempty"`
 	SplitOnMarker             bool                `json:"split_on_marker"                      env:"PICOCLAW_AGENTS_DEFAULTS_SPLIT_ON_MARKER"` // split messages on <|[SPLIT]|> marker
@@ -1983,6 +2002,9 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, err
 	}
 	if err = cfg.ValidateTurnProfile(); err != nil {
+		return nil, err
+	}
+	if err = cfg.ValidateBudgetWarningRatio(); err != nil {
 		return nil, err
 	}
 	cfg.Gateway.Host, err = resolveGatewayHostFromEnv(gatewayHostBeforeEnv)

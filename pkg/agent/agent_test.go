@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -5313,6 +5314,203 @@ func TestAgentLoop_ToolLimitUsesDedicatedFallback(t *testing.T) {
 	assertRoles(t, history, "user", "assistant", "tool", "assistant")
 	if history[3].Content != toolLimitResponse {
 		t.Fatalf("final assistant content = %q, want %q", history[3].Content, toolLimitResponse)
+	}
+}
+
+// graceSummaryProvider keeps requesting tools until it is called without tool
+// definitions, then answers with a summary. It records that final request.
+type graceSummaryProvider struct {
+	calls    int
+	lastMsgs []providers.Message
+}
+
+func (p *graceSummaryProvider) Chat(
+	_ context.Context,
+	messages []providers.Message,
+	tools []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	p.calls++
+	if len(tools) == 0 {
+		p.lastMsgs = messages
+		return &providers.LLMResponse{Content: "did 1 of 2 steps"}, nil
+	}
+	return &providers.LLMResponse{ToolCalls: []providers.ToolCall{{
+		ID:        fmt.Sprintf("call_%d", p.calls),
+		Type:      "function",
+		Name:      "tool_limit_test_tool",
+		Arguments: map[string]any{"value": "x"},
+	}}}, nil
+}
+
+func (p *graceSummaryProvider) GetDefaultModel() string { return "grace-summary-model" }
+
+func TestAgentLoop_IterationBudgetGetsSummaryCall(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				ModelName:         "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 2,
+			},
+		},
+	}
+	provider := &graceSummaryProvider{}
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+	al.RegisterTool(&toolLimitTestTool{})
+
+	response, err := al.ProcessDirectWithChannel(context.Background(), "hello", "grace", "test", "chat1")
+	if err != nil {
+		t.Fatalf("ProcessDirectWithChannel failed: %v", err)
+	}
+	if response != "did 1 of 2 steps" {
+		t.Fatalf("response = %q, want the wrap-up summary", response)
+	}
+	if provider.calls != 3 { // 2 budgeted iterations + 1 grace call
+		t.Fatalf("LLM calls = %d, want 3", provider.calls)
+	}
+	last := provider.lastMsgs[len(provider.lastMsgs)-1]
+	if last.Role != "user" || last.Content != maxIterationsSummaryRequest {
+		t.Fatalf("last grace message = %s %q, want user summary request", last.Role, last.Content)
+	}
+	if got := provider.lastMsgs[len(provider.lastMsgs)-2].Role; got != "tool" {
+		t.Fatalf("history not passed to grace call: msg before request has role %q, want tool", got)
+	}
+}
+
+// budgetNoticeProvider asks for a tool on every call until it has been called
+// toolCalls times, then answers. It records the messages and tool count of each call.
+type budgetNoticeProvider struct {
+	toolCalls int
+	msgs      [][]providers.Message
+	toolDefs  []int
+}
+
+func (p *budgetNoticeProvider) Chat(
+	_ context.Context,
+	messages []providers.Message,
+	tools []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	p.msgs = append(p.msgs, append([]providers.Message(nil), messages...))
+	p.toolDefs = append(p.toolDefs, len(tools))
+	n := len(p.msgs)
+	if n > p.toolCalls {
+		return &providers.LLMResponse{Content: "summary"}, nil
+	}
+	return &providers.LLMResponse{ToolCalls: []providers.ToolCall{{
+		ID:        fmt.Sprintf("call_%d", n),
+		Type:      "function",
+		Name:      "tool_limit_test_tool",
+		Arguments: map[string]any{"value": "x"},
+	}}}, nil
+}
+
+func (p *budgetNoticeProvider) GetDefaultModel() string { return "budget-notice-model" }
+
+func TestAgentLoop_BudgetCheckpointRidesOnLastToolResult(t *testing.T) {
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:                 t.TempDir(),
+				ModelName:                 "test-model",
+				MaxTokens:                 4096,
+				MaxToolIterations:         4,
+				MaxToolBudgetWarningRatio: 0.75, // 3 of 4
+			},
+		},
+	}
+	provider := &budgetNoticeProvider{toolCalls: 4}
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+	al.RegisterTool(&toolLimitTestTool{})
+
+	if _, err := al.ProcessDirectWithChannel(context.Background(), "hello", "budget", "test", "chat1"); err != nil {
+		t.Fatalf("ProcessDirectWithChannel failed: %v", err)
+	}
+	if len(provider.msgs) != 5 { // 4 budgeted iterations + grace call
+		t.Fatalf("LLM calls = %d, want 5", len(provider.msgs))
+	}
+
+	const notice = "[SYSTEM NOTICE — iteration budget checkpoint] You have used 3 of 4 iterations."
+	count := func(msgs []providers.Message) (n int) {
+		for _, m := range msgs {
+			if strings.Contains(m.Content, "iteration budget checkpoint") {
+				if m.Role != "tool" {
+					t.Fatalf("notice in a %q message, want it only on a tool result", m.Role)
+				}
+				if strings.Contains(m.Content, notice) {
+					n++
+				}
+			}
+		}
+		return n
+	}
+	// Calls 1-3 run before iteration 3's tool result exists; call 4 is the first to see it.
+	for i := 0; i < 3; i++ {
+		if got := count(provider.msgs[i]); got != 0 {
+			t.Fatalf("call %d saw the notice %d times, want 0", i+1, got)
+		}
+	}
+	for i := 3; i < 5; i++ {
+		if got := count(provider.msgs[i]); got != 1 {
+			t.Fatalf("call %d saw the notice %d times, want exactly 1", i+1, got)
+		}
+	}
+	if provider.toolDefs[3] == 0 {
+		t.Fatal("tools must stay available after the checkpoint")
+	}
+}
+
+func TestPruneIgnoresBudgetNoticeLength(t *testing.T) {
+	notice := "\n\n" + fmt.Sprintf(iterationBudgetWarningTemplate, 3, 6)
+	short := strings.Repeat("v", 60)
+	if len(short) > minToolResultChars || len(short+notice) <= minToolResultChars {
+		t.Fatal("short result must fit the prune limit only without the notice for this test to mean anything")
+	}
+	long := strings.Repeat("x", minToolResultChars+1)
+	history := []providers.Message{
+		{Role: "tool", Content: short + notice}, // short result: the notice must not make it prunable
+		{Role: "tool", Content: long + notice},  // genuinely bulky: still pruned
+		{Role: "tool", Content: long},
+	}
+	if !pruneToolResultsBefore(history, len(history)) {
+		t.Fatal("expected the bulky results to be pruned")
+	}
+	if history[0].Content != short+notice {
+		t.Fatalf("short result with notice was pruned: %q", history[0].Content)
+	}
+	for _, i := range []int{1, 2} {
+		if history[i].Content != prunedToolResult {
+			t.Fatalf("history[%d] = %q, want pruned", i, history[i].Content)
+		}
+	}
+}
+
+func TestBudgetWarnIteration(t *testing.T) {
+	tests := []struct {
+		maxIter int
+		ratio   float64
+		want    int
+	}{
+		{100, 0.75, 75},
+		{50, 0.75, 38},
+		{20, 0.5, 10},
+		{3, 0.75, 2},
+		{2, 0.75, 0},  // rounds to the last iteration: no room left to warn
+		{1, 0.75, 0},  // no room
+		{10, 0.99, 0}, // rounds up to the budget itself
+		{100, 0, 75},  // unset -> default
+		{100, 1.5, 75},
+		{100, math.NaN(), 75},
+	}
+	for _, tt := range tests {
+		if got := budgetWarnIteration(tt.maxIter, tt.ratio); got != tt.want {
+			t.Errorf("budgetWarnIteration(%d, %v) = %d, want %d", tt.maxIter, tt.ratio, got, tt.want)
+		}
 	}
 }
 

@@ -80,6 +80,7 @@ type toolBatch struct {
 	messages           []providers.Message
 	handledAttachments []providers.Attachment
 	feedback           *toolFeedbackBatch
+	toolMessages       int // tool messages appended so far; the last one carries the budget notice
 
 	loopStatus loopStatus
 	loopCount  int
@@ -130,6 +131,10 @@ func (b *toolBatch) skipRemainingForLoop(start int) {
 // appendToolMessage adds msg to the turn and, unless the turn is history-less,
 // to the session store. ingest also hands it to the context manager.
 func (b *toolBatch) appendToolMessage(msg providers.Message, ingest bool) {
+	b.toolMessages++
+	if b.toolMessages == len(b.calls) {
+		msg.Content += b.budgetNotice()
+	}
 	b.messages = append(b.messages, msg)
 	if b.ts.opts.NoHistory {
 		return
@@ -143,6 +148,19 @@ func (b *toolBatch) appendToolMessage(msg providers.Message, ingest bool) {
 	if ingest {
 		b.ts.ingestMessage(b.turnCtx, b.al, msg)
 	}
+}
+
+// budgetNotice returns the iteration-budget checkpoint the first time the turn
+// reaches the agent's warning iteration, "" otherwise. It rides on the last
+// tool result of the batch so it is persisted with it and survives compaction
+// rebuilds, and it adds no message of its own.
+func (b *toolBatch) budgetNotice() string {
+	at := b.ts.agent.BudgetWarnAt
+	if at == 0 || b.iteration < at || b.exec.budgetWarned {
+		return ""
+	}
+	b.exec.budgetWarned = true
+	return "\n\n" + fmt.Sprintf(iterationBudgetWarningTemplate, b.iteration, b.ts.agent.MaxIterations)
 }
 
 // denyByProfile marks pc denied when the active turn profile forbids the tool.
