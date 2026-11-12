@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -33,6 +34,7 @@ type AgentInstance struct {
 	Fallbacks               []string
 	Workspace               string
 	MaxIterations           int
+	BudgetWarnAt            int // iteration that triggers the budget checkpoint notice; 0 = never
 	MaxTokens               int
 	Temperature             float64
 	ThinkingLevel           ThinkingLevel
@@ -235,6 +237,8 @@ func NewAgentInstance(
 		maxIter = 20
 	}
 
+	budgetWarnAt := budgetWarnIteration(maxIter, defaults.MaxToolBudgetWarningRatio)
+
 	maxTokens := defaults.MaxTokens
 	if maxTokens == 0 {
 		maxTokens = 8192
@@ -366,6 +370,7 @@ func NewAgentInstance(
 		Fallbacks:               fallbacks,
 		Workspace:               workspace,
 		MaxIterations:           maxIter,
+		BudgetWarnAt:            budgetWarnAt,
 		MaxTokens:               maxTokens,
 		Temperature:             temperature,
 		ThinkingLevel:           thinkingLevel,
@@ -821,4 +826,19 @@ func initSessionStore(dir string, durableWrites bool) session.SessionStore {
 	}
 
 	return session.NewJSONLBackend(store)
+}
+
+// budgetWarnIteration returns the iteration at which the budget checkpoint
+// fires: ratio of maxIter, rounded, at least 1. An unset or out-of-range ratio
+// (config loading rejects those) uses the default. It returns 0 when the
+// threshold would not leave an iteration before the budget runs out.
+func budgetWarnIteration(maxIter int, ratio float64) int {
+	if !(ratio > 0 && ratio < 1) {
+		ratio = config.DefaultMaxToolBudgetWarningRatio
+	}
+	at := max(1, int(math.Round(ratio*float64(maxIter))))
+	if at >= maxIter {
+		return 0
+	}
+	return at
 }

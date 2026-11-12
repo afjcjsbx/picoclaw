@@ -127,7 +127,8 @@ type turnExecution struct {
 	finalContent string
 
 	// Iteration tracking
-	iteration int
+	iteration    int
+	budgetWarned bool // the iteration-budget checkpoint was already sent this turn
 
 	// Per-iteration state set by Pipeline.PreLLM
 	activeCandidates  []providers.FallbackCandidate

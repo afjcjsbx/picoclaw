@@ -151,6 +151,11 @@ const (
 	metadataKeyInputAudio      = "voice_input_audio"
 )
 
+// iterationBudgetWarningTemplate is appended (as plain text, not a system
+// message) to the last tool result of the iteration that crosses the
+// max_tool_budget_warning_ratio threshold. Args: iterations used, maximum.
+const iterationBudgetWarningTemplate = "[SYSTEM NOTICE — iteration budget checkpoint] You have used %d of %d iterations. Checkpoint durable progress now, then continue the task; do not stop solely because of this warning."
+
 // maxIterationsSummaryRequest is the user message sent on the one tool-less
 // grace call granted when the iteration budget runs out.
 const maxIterationsSummaryRequest = "You've reached the maximum number of tool-calling iterations allowed. Please provide a final response summarizing what you've found and accomplished so far, without calling any more tools."
