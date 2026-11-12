@@ -1019,18 +1019,9 @@ func TestWebFetch_BlocksISATAPWithPrivateEmbed(t *testing.T) {
 
 // TestWebFetch_Allows6to4WithPublicEmbed verifies 6to4 with public embedded IPv4 is NOT blocked
 func TestWebFetch_Allows6to4WithPublicEmbed(t *testing.T) {
-	tool, err := NewWebFetchTool(50000, format, testFetchLimit)
-	if err != nil {
-		t.Fatalf("Failed to create web fetch tool: %v", err)
-	}
-	// 2002:0801:0101::1 embeds 8.1.1.1 (public) — pre-flight should pass,
-	// connection will fail (no listener) but that's after the SSRF check.
-	result := tool.Execute(context.Background(), map[string]any{
-		"url": "http://[2002:0801:0101::1]:0",
-	})
-
-	// Should NOT be blocked by SSRF check — error should be connection failure, not "private"
-	if result.IsError && strings.Contains(result.ForLLM, "private") {
+	// 2002:0801:0101::1 embeds 8.1.1.1 (public). Assert the pre-flight guard
+	// accepts it without opening a real connection to the 6to4 address.
+	if utils.IsObviousPrivateHost("2002:0801:0101::1", nil, nil) {
 		t.Error("6to4 with public embedded IPv4 should not be blocked as private")
 	}
 }
