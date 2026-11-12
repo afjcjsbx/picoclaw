@@ -18,6 +18,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/session"
 	"github.com/sipeed/picoclaw/pkg/tools"
+	"github.com/sipeed/picoclaw/pkg/usage"
 )
 
 // =============================================================================
@@ -1087,12 +1088,10 @@ func (ts *turnState) SetLastFinishReason(reason string) {
 }
 
 // AddUsage accumulates provider-reported usage across the LLM calls that make
-// up this turn, including tool-call iterations.
-func (ts *turnState) AddUsage(usage *providers.UsageInfo) {
-	if ts == nil || usage == nil {
-		return
-	}
-	if usage.PromptTokens <= 0 && usage.CompletionTokens <= 0 && usage.TotalTokens <= 0 && usage.CostUSD <= 0 {
+// up this turn, including tool-call iterations. model is the model that served
+// the call and keys the per-model split kept for multi-model turns.
+func (ts *turnState) AddUsage(model string, call *providers.UsageInfo) {
+	if ts == nil || call == nil || !call.HasUsage() {
 		return
 	}
 	ts.mu.Lock()
@@ -1100,20 +1099,47 @@ func (ts *turnState) AddUsage(usage *providers.UsageInfo) {
 	if ts.turnUsage == nil {
 		ts.turnUsage = &providers.UsageInfo{}
 	}
-	ts.turnUsage.PromptTokens += usage.PromptTokens
-	ts.turnUsage.CompletionTokens += usage.CompletionTokens
-	ts.turnUsage.TotalTokens += usage.TotalTokens
-	ts.turnUsage.CacheReadTokens += usage.CacheReadTokens
-	ts.turnUsage.CacheCreationTokens += usage.CacheCreationTokens
-	ts.turnUsage.CostUSD += usage.CostUSD
-	// Requests and ContextTokens describe the turn rather than a single
-	// provider response: count every call, but keep the last prompt size so
-	// callers can distinguish billed input from the live context window.
-	ts.turnUsage.Requests++
-	ts.turnUsage.ContextTokens = usage.PromptTokens
+	addCallUsage(ts.turnUsage, call)
+	// ContextTokens describes the turn rather than a single provider response:
+	// keep the last prompt size so callers can distinguish billed input from
+	// the live context window.
+	ts.turnUsage.ContextTokens = call.PromptTokens
+	ts.turnUsage.ByModel = addModelCall(ts.turnUsage.ByModel, model, call)
 }
 
-// GetTurnUsage returns a copy of the aggregated usage for this turn.
+// addCallUsage sums one provider call into an aggregate. Requests counts LLM
+// calls, so every call adds one.
+func addCallUsage(dst, call *providers.UsageInfo) {
+	dst.PromptTokens += call.PromptTokens
+	dst.CompletionTokens += call.CompletionTokens
+	dst.TotalTokens += call.TotalTokens
+	dst.CacheReadTokens += call.CacheReadTokens
+	dst.CacheCreationTokens += call.CacheCreationTokens
+	dst.CostUSD += call.CostUSD
+	dst.Requests++
+}
+
+// addModelCall adds one call to the per-model split of a turn, creating the
+// model's entry on first use. A call without a model name is recorded under
+// usage.UnknownModel, as the usage reports label it.
+func addModelCall(split []providers.ModelUsage, model string, call *providers.UsageInfo) []providers.ModelUsage {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		model = usage.UnknownModel
+	}
+	for i := range split {
+		if split[i].Model == model {
+			addCallUsage(&split[i].Usage, call)
+			return split
+		}
+	}
+	entry := providers.ModelUsage{Model: model}
+	addCallUsage(&entry.Usage, call)
+	return append(split, entry)
+}
+
+// GetTurnUsage returns a copy of the aggregated usage for this turn. The
+// per-model split is included only when the turn used more than one model.
 func (ts *turnState) GetTurnUsage() *providers.UsageInfo {
 	if ts == nil {
 		return nil
@@ -1124,6 +1150,10 @@ func (ts *turnState) GetTurnUsage() *providers.UsageInfo {
 		return nil
 	}
 	usage := *ts.turnUsage
+	usage.ByModel = nil
+	if len(ts.turnUsage.ByModel) > 1 {
+		usage.ByModel = append([]providers.ModelUsage(nil), ts.turnUsage.ByModel...)
+	}
 	return &usage
 }
 

@@ -16,6 +16,7 @@ Every command accepts the global `--no-color` flag, which disables ANSI colors i
 | [`onboard`](#onboard) | Initialize configuration and workspace |
 | [`config reset`](#config-reset) | Reset configuration to factory defaults |
 | [`status`](#status--version--update) / [`version`](#status--version--update) / [`update`](#status--version--update) | Inspect and update the installation |
+| [`usage`](#usage) | Show token usage and cost per session |
 | [`agent`](#agent) | Interact with the agent directly |
 | [`gateway`](#gateway) | Start the Gateway service |
 | [`model`](#model) / [`model add`](#model-add) | Show, set, and add models |
@@ -65,6 +66,27 @@ picoclaw update    # Check and apply updates from GitHub releases
 | `--platform` | Target platform (default: current `GOOS`) |
 | `--arch` | Target architecture (default: current `GOARCH`) |
 | `-u, --url` | Direct URL to a release asset or release page |
+
+## Usage
+
+Reports the provider-reported token usage and cost recorded for each session under `<workspace>/sessions`.
+
+```bash
+picoclaw usage                 # Top 20 sessions by total tokens
+picoclaw usage --limit 0       # All sessions
+picoclaw usage -s cli:default  # One session, with the per-model breakdown
+picoclaw usage --json          # Machine-readable output
+```
+
+| Flag | Description |
+| --- | --- |
+| `-s, --session` | Session key or alias to inspect. An alias must name one session; pass the key when several sessions share it. |
+| `-n, --limit` | Maximum sessions to list (default 20, `0` shows all). Also applies to `--json`. |
+| `--json` | Emit JSON instead of a table. Log lines go to stderr, so stdout stays parseable. |
+
+Each session keeps running totals in its metadata, updated as messages are written. Truncating, compacting, or clearing a session's history does not reduce its totals. The command only reads metadata, so it can run while the gateway is active. Pruning a session also deletes its totals. Sessions written before this version have no totals yet: the gateway counts them from their files when it starts, and `picoclaw usage` counts them on the fly until then.
+
+Input tokens are split into fresh prompt tokens, cache reads, and cache writes. Costs are the amounts providers report; a session whose provider reports no cost shows `-` in tables.
 
 ## Agent
 

@@ -25,6 +25,7 @@ func TestBuiltinDefinitions_ReadOnlyClassification(t *testing.T) {
 		"list":      true,
 		"check":     true,
 		"context":   true,
+		"usage":     true,
 		"subagents": true,
 		"stop":      false,
 		"clear":     false,

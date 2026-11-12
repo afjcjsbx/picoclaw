@@ -175,7 +175,7 @@ Each session uses two files:
 The files store:
 
 - `.jsonl`: one `providers.Message` per line, append-only
-- `.meta.json`: summary, timestamps, line counts, logical truncation offset, scope, aliases
+- `.meta.json`: summary, timestamps, line counts, logical truncation offset, scope, aliases, cumulative usage counters
 
 `SessionMeta` currently includes:
 
@@ -187,6 +187,8 @@ The files store:
 - `UpdatedAt`
 - `Scope`
 - `Aliases`
+- `Usage`
+- `UsageTracked`
 
 ## Write And Crash Semantics
 
@@ -201,6 +203,7 @@ The JSONL store is designed around append-first durability and stale-over-loss r
 - `Compact` physically rewrites the JSONL file to remove skipped lines.
 - `SetHistory` and `Compact` write metadata before rewriting JSONL so a crash may temporarily expose old data, but should not lose data.
 - Corrupt JSONL lines are skipped during reads instead of failing the entire session.
+- Cumulative usage counters only grow when a usage-bearing message is appended. Truncation, compaction, and history replacement leave them unchanged, and an alias promotion moves them to the canonical session.
 
 `JSONLBackend.Save` maps onto `store.Compact(...)`.
 In other words, `Save` is no longer "flush dirty memory to disk"; it is now "reclaim dead lines after logical truncation".

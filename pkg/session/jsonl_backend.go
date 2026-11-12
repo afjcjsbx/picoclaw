@@ -10,6 +10,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/memory"
 	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/sipeed/picoclaw/pkg/usage"
 )
 
 // JSONLBackend adapts a memory.Store into the SessionStore interface.
@@ -27,6 +28,10 @@ type metaAwareStore interface {
 
 type aliasPromotingStore interface {
 	PromoteAliasHistory(ctx context.Context, sessionKey string, scope json.RawMessage, aliases []string) (bool, error)
+}
+
+type sessionUsageStore interface {
+	SessionUsage(ctx context.Context, sessionKey string) (usage.Summary, error)
 }
 
 // MetadataAwareSessionStore exposes structured session metadata operations.
@@ -209,6 +214,20 @@ func (b *JSONLBackend) TruncateHistory(ctx context.Context, key string, keepLast
 		return fmt.Errorf("session: truncate history: %w", err)
 	}
 	return nil
+}
+
+// SessionUsage returns the cumulative usage recorded for sessionKey, resolving
+// aliases first. The counters survive truncation, compaction, and clearing.
+func (b *JSONLBackend) SessionUsage(ctx context.Context, sessionKey string) (usage.Summary, error) {
+	counters, ok := b.store.(sessionUsageStore)
+	if !ok {
+		return usage.Summary{}, fmt.Errorf("session: store does not keep usage counters")
+	}
+	key, err := b.resolveSessionKey(ctx, sessionKey)
+	if err != nil {
+		return usage.Summary{}, err
+	}
+	return counters.SessionUsage(ctx, key)
 }
 
 // Save persists session state. Since the JSONL store fsyncs every write
