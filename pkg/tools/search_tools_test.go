@@ -190,6 +190,9 @@ func TestBM25SearchTool_StemmedQuery(t *testing.T) {
 		{"searching repositories", "mcp_github_search_repositories"},
 		{"created issues", "mcp_github_create_issue"},
 		{"creating issues", "mcp_github_create_issue"},
+		// "an" occurs only in add_issue_comment's description; without stopword
+		// removal its idf outweighs "creating" and "issue".
+		{"creating an issue", "mcp_github_create_issue"},
 		{"creating pull requests", "mcp_github_create_pull_request"},
 		{"merging pull requests", "mcp_github_merge_pull_request"},
 		{"commenting on issues", "mcp_github_add_issue_comment"},
