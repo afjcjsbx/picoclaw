@@ -113,12 +113,12 @@ func TestBM25Tokenize(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			got := bm25Tokenize(tt.input)
+			got := bm25TokenizeStem(tt.input, false)
 			if len(got) == 0 && len(tt.expected) == 0 {
 				return // Both empty
 			}
 			if !reflect.DeepEqual(got, tt.expected) {
-				t.Errorf("bm25Tokenize(%q) = %v, want %v", tt.input, got, tt.expected)
+				t.Errorf("bm25TokenizeStem(%q, false) = %v, want %v", tt.input, got, tt.expected)
 			}
 		})
 	}

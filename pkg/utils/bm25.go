@@ -239,12 +239,8 @@ func buildBM25Index[T any](corpus []T, textFunc func(T) string, k1, b float64, s
 	}
 }
 
-// bm25Tokenize splits s into lowercase tokens, stripping edge punctuation.
-func bm25Tokenize(s string) []string {
-	return bm25TokenizeStem(s, false)
-}
-
-// bm25TokenizeStem is bm25Tokenize with optional English inflection stemming.
+// bm25TokenizeStem splits s into lowercase tokens, stripping edge punctuation,
+// and optionally reduces English inflections with stemEnglish.
 func bm25TokenizeStem(s string, stemming bool) []string {
 	raw := strings.Fields(strings.ToLower(s))
 	out := raw[:0] // reuse backing array to avoid extra allocation

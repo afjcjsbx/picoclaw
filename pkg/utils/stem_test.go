@@ -83,10 +83,10 @@ func TestBM25TokenizeStem(t *testing.T) {
 		t.Fatalf("bm25TokenizeStem() = %v, want %v", got, want)
 	}
 
-	got = bm25Tokenize("Searching repositories")
+	got = bm25TokenizeStem("Searching repositories", false)
 	want = []string{"searching", "repositories"}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("bm25Tokenize() = %v, want %v", got, want)
+		t.Fatalf("bm25TokenizeStem(false) = %v, want %v", got, want)
 	}
 }
 
