@@ -8,7 +8,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/cron"
 )
 
-func newAddCommand(storePath func() string) *cobra.Command {
+func newAddCommand(store func() jobStore) *cobra.Command {
 	var (
 		name    string
 		message string
@@ -35,15 +35,7 @@ func newAddCommand(storePath func() string) *cobra.Command {
 				schedule = cron.CronSchedule{Kind: "cron", Expr: cronExp}
 			}
 
-			cs := cron.NewCronService(storePath(), nil)
-			job, err := cs.AddJob(name, schedule, message, channel, to)
-			if err != nil {
-				return fmt.Errorf("error adding job: %w", err)
-			}
-
-			fmt.Printf("✓ Added job '%s' (%s)\n", job.Name, job.ID)
-
-			return nil
+			return cronAddCmd(cmd.Context(), store(), name, schedule, message, channel, to)
 		},
 	}
 

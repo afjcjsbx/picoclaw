@@ -2,6 +2,7 @@ package cron
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"os"
 	"path/filepath"
@@ -44,7 +45,9 @@ func TestCronSetJobEnabledReportsActualState(t *testing.T) {
 	}
 
 	disabled := captureStdout(t, func() {
-		cronSetJobEnabled(storePath, job.ID, false)
+		if err := cronSetJobEnabled(context.Background(), fileStore{path: storePath}, job.ID, false); err != nil {
+			t.Fatalf("disable error = %v", err)
+		}
 	})
 	if !strings.Contains(disabled, "disabled") {
 		t.Fatalf("disable output = %q, want it to mention disabled", disabled)
@@ -54,7 +57,9 @@ func TestCronSetJobEnabledReportsActualState(t *testing.T) {
 	}
 
 	enabled := captureStdout(t, func() {
-		cronSetJobEnabled(storePath, job.ID, true)
+		if err := cronSetJobEnabled(context.Background(), fileStore{path: storePath}, job.ID, true); err != nil {
+			t.Fatalf("enable error = %v", err)
+		}
 	})
 	if !strings.Contains(enabled, "enabled") {
 		t.Fatalf("enable output = %q, want it to mention enabled", enabled)

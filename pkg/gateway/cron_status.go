@@ -24,6 +24,14 @@ type cronJobEnabledRequest struct {
 	Enabled *bool `json:"enabled"`
 }
 
+type cronAddRequest struct {
+	Name     string            `json:"name"`
+	Message  string            `json:"message"`
+	Schedule cron.CronSchedule `json:"schedule"`
+	Channel  string            `json:"channel,omitempty"`
+	To       string            `json:"to,omitempty"`
+}
+
 func registerCronHandlers(server *health.Server, getCron func() *cron.CronService) {
 	if server == nil {
 		return
@@ -39,7 +47,14 @@ func registerCronHandlers(server *health.Server, getCron func() *cron.CronServic
 func cronHandler(getCron func() *cron.CronService) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == cronJobsPath {
-			handleCronList(w, r, getCron)
+			switch r.Method {
+			case http.MethodGet:
+				handleCronList(w, getCron)
+			case http.MethodPost:
+				handleCronAdd(w, r, getCron)
+			default:
+				writeCronMethodNotAllowed(w, http.MethodGet, http.MethodPost)
+			}
 			return
 		}
 
@@ -64,11 +79,7 @@ func cronHandler(getCron func() *cron.CronService) http.Handler {
 	})
 }
 
-func handleCronList(w http.ResponseWriter, r *http.Request, getCron func() *cron.CronService) {
-	if r.Method != http.MethodGet {
-		writeCronMethodNotAllowed(w, http.MethodGet)
-		return
-	}
+func handleCronList(w http.ResponseWriter, getCron func() *cron.CronService) {
 	cs := getCron()
 	if cs == nil {
 		writeCronError(w, http.StatusServiceUnavailable, "cron service unavailable")
@@ -82,6 +93,41 @@ func handleCronList(w http.ResponseWriter, r *http.Request, getCron func() *cron
 		Jobs:             jobs,
 		RuntimeAvailable: true,
 	})
+}
+
+func handleCronAdd(w http.ResponseWriter, r *http.Request, getCron func() *cron.CronService) {
+	cs := getCron()
+	if cs == nil {
+		writeCronError(w, http.StatusServiceUnavailable, "cron service unavailable")
+		return
+	}
+
+	var request cronAddRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&request); err != nil {
+		writeCronError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if strings.TrimSpace(request.Name) == "" {
+		writeCronError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	if strings.TrimSpace(request.Message) == "" {
+		writeCronError(w, http.StatusBadRequest, "message is required")
+		return
+	}
+
+	job, err := cs.AddJob(
+		request.Name,
+		request.Schedule,
+		request.Message,
+		request.Channel,
+		request.To,
+	)
+	if err != nil {
+		writeCronError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeCronJSON(w, http.StatusCreated, job)
 }
 
 func handleCronRun(

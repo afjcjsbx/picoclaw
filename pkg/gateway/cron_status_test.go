@@ -185,3 +185,65 @@ func TestCronStatusHandlersUnknownJob(t *testing.T) {
 		}
 	}
 }
+
+func TestCronStatusHandlersAddJob(t *testing.T) {
+	cs := newCronTestService(t)
+	mux := newCronTestMux(cs)
+
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(
+		recorder,
+		httptest.NewRequest(
+			http.MethodPost,
+			cronJobsPath,
+			strings.NewReader(
+				`{"name":"Nightly","message":"msg","schedule":{"kind":"every","everyMs":60000},"channel":"cli","to":"direct"}`,
+			),
+		),
+	)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("POST status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	var job cron.CronJob
+	if err := json.Unmarshal(recorder.Body.Bytes(), &job); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if job.Name != "Nightly" || job.Schedule.Kind != "every" || !job.Enabled {
+		t.Fatalf("job = %+v", job)
+	}
+	if _, ok := cs.GetJob(job.ID); !ok {
+		t.Fatal("job was not added to the running service")
+	}
+
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "invalid json", body: `{"name":`},
+		{name: "missing name", body: `{"message":"msg","schedule":{"kind":"every","everyMs":60000}}`},
+		{name: "missing message", body: `{"name":"job","schedule":{"kind":"every","everyMs":60000}}`},
+		{name: "invalid schedule", body: `{"name":"job","message":"msg","schedule":{"kind":"cron","expr":"nope"}}`},
+	}
+	for _, tt := range tests {
+		badRecorder := httptest.NewRecorder()
+		mux.ServeHTTP(
+			badRecorder,
+			httptest.NewRequest(http.MethodPost, cronJobsPath, strings.NewReader(tt.body)),
+		)
+		if badRecorder.Code != http.StatusBadRequest {
+			t.Fatalf("%s: status = %d, body = %s", tt.name, badRecorder.Code, badRecorder.Body.String())
+		}
+	}
+
+	recorder = httptest.NewRecorder()
+	mux.ServeHTTP(
+		recorder,
+		httptest.NewRequest(http.MethodPut, cronJobsPath, nil),
+	)
+	if recorder.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("PUT status = %d, want 405", recorder.Code)
+	}
+	if allow := recorder.Header().Get("Allow"); allow != "GET, POST" {
+		t.Fatalf("Allow = %q, want GET, POST", allow)
+	}
+}

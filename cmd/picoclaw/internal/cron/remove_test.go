@@ -8,7 +8,7 @@ import (
 )
 
 func TestNewRemoveSubcommand(t *testing.T) {
-	fn := func() string { return "" }
+	fn := func() jobStore { return nil }
 	cmd := newRemoveCommand(fn)
 
 	require.NotNil(t, cmd)

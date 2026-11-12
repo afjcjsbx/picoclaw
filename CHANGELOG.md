@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `/usage` (alias `/cost`) chat command and `picoclaw usage` CLI command that report provider-reported token usage and cost per session, with per-model and input cache breakdowns.
 
+### Changed
+
+- Cron jobs are now managed through the running gateway's authenticated internal API. The gateway is the single writer of `cron/jobs.json`, `picoclaw cron` no longer edits the file directly while the gateway is running, and the 2-second hot-reload poll was removed. The scheduler also stops waking once an hour when no jobs are scheduled.
+
 ## [0.5.1] - 2026-10-18
 
 ### Added

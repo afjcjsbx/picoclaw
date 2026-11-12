@@ -9,7 +9,7 @@ import (
 )
 
 func TestNewAddSubcommand(t *testing.T) {
-	fn := func() string { return "" }
+	fn := func() jobStore { return nil }
 	cmd := newAddCommand(fn)
 
 	require.NotNil(t, cmd)
@@ -42,7 +42,7 @@ func TestNewAddSubcommand(t *testing.T) {
 }
 
 func TestNewAddCommandEveryAndCronMutuallyExclusive(t *testing.T) {
-	cmd := newAddCommand(func() string { return "testing" })
+	cmd := newAddCommand(func() jobStore { return nil })
 
 	cmd.SetArgs([]string{
 		"--name", "job",
