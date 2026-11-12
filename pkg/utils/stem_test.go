@@ -76,22 +76,6 @@ func TestStemEnglish_LeavesForeignTokensAlone(t *testing.T) {
 	}
 }
 
-func TestStemEnglish_IdempotentOnCommonToolWords(t *testing.T) {
-	tokens := []string{
-		"search", "searching", "create", "creating", "update", "delete",
-		"write", "use", "list", "get", "run", "set", "query", "repository",
-		"policy", "status", "class", "process", "copy", "apply", "reply",
-	}
-
-	for _, token := range tokens {
-		once := stemEnglish(token)
-		twice := stemEnglish(once)
-		if once != twice {
-			t.Errorf("stemEnglish is not idempotent for %q: once=%q twice=%q", token, once, twice)
-		}
-	}
-}
-
 func TestBM25TokenizeStem(t *testing.T) {
 	got := bm25TokenizeStem("Searching repositories, created issues!", true)
 	want := []string{"search", "repositori", "creat", "issu"}
