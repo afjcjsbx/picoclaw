@@ -90,6 +90,7 @@ type CronService struct {
 	mu        sync.RWMutex
 	running   bool
 	stopChan  chan struct{}
+	loopDone  chan struct{} // closed when runLoop returns (watcher released)
 	wakeChan  chan struct{}
 	gronx     *gronx.Gronx
 	// hotReload enables watching the store file for external edits (hand
@@ -136,6 +137,7 @@ func (cs *CronService) Start() error {
 	}
 
 	cs.stopChan = make(chan struct{})
+	cs.loopDone = make(chan struct{})
 	if cs.wakeChan == nil {
 		// Buffered so a notify() that races with the loop recomputing its
 		// wake time is not lost.
@@ -161,23 +163,38 @@ func (cs *CronService) Start() error {
 			watcher = w
 		}
 	}
-	go cs.runLoop(cs.stopChan, watcher, fallback)
+	stopChan := cs.stopChan
+	loopDone := cs.loopDone
+	go func() {
+		defer close(loopDone)
+		cs.runLoop(stopChan, watcher, fallback)
+	}()
 
 	return nil
 }
 
 func (cs *CronService) Stop() {
 	cs.mu.Lock()
-	defer cs.mu.Unlock()
-
 	if !cs.running {
+		cs.mu.Unlock()
 		return
 	}
 
 	cs.running = false
-	if cs.stopChan != nil {
-		close(cs.stopChan)
-		cs.stopChan = nil
+	stopChan := cs.stopChan
+	cs.stopChan = nil
+	loopDone := cs.loopDone
+	cs.loopDone = nil
+	cs.mu.Unlock()
+
+	if stopChan != nil {
+		close(stopChan)
+	}
+	// Wait for runLoop to release the store watcher before returning, so a
+	// caller that removes the watched directory does not race the kqueue/inotify
+	// descriptor still being open.
+	if loopDone != nil {
+		<-loopDone
 	}
 }
 
@@ -773,9 +790,11 @@ func (cs *CronService) syncFromDiskUnsafe() {
 	}
 
 	cs.replaceStoreUnsafe(next)
-	if err := cs.saveStoreUnsafe(); err != nil {
-		log.Printf("[cron] hot-reload: failed to persist reloaded store: %v", err)
-	}
+	// Do not write the recomputed next-run state back here: an external writer
+	// may have replaced the file between our stat and this point, and saving
+	// would clobber that newer edit (the write would also look like our own, so
+	// no event would repair it). The in-memory recomputation is enough; the next
+	// internal mutation persists it together with its own change.
 	log.Printf("[cron] store reloaded from disk (%d jobs)", len(cs.store.Jobs))
 }
 
