@@ -158,6 +158,15 @@ const (
 	minToolResultChars = 200
 )
 
+// resultLen is len(content) without a trailing iteration-budget notice, so the
+// notice alone never makes a short result bulky enough to be pruned.
+func resultLen(content string) int {
+	if i := strings.LastIndex(content, "\n\n"+budgetNoticePrefix); i >= 0 {
+		return i
+	}
+	return len(content)
+}
+
 // pruneOldToolResults clears tool outputs longer than minToolResultChars that
 // sit before the last protectedTail messages, in place. Media-carrying results
 // are kept. It reports whether anything changed.
@@ -169,7 +178,7 @@ func pruneOldToolResults(history []providers.Message) bool {
 func pruneToolResultsBefore(history []providers.Message, end int) bool {
 	pruned := false
 	for i := 0; i < end; i++ {
-		if history[i].Role == "tool" && len(history[i].Content) > minToolResultChars &&
+		if history[i].Role == "tool" && resultLen(history[i].Content) > minToolResultChars &&
 			len(history[i].Media) == 0 && len(history[i].Attachments) == 0 {
 			history[i].Content = prunedToolResult
 			pruned = true

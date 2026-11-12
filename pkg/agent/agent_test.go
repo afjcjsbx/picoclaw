@@ -5465,6 +5465,31 @@ func TestAgentLoop_BudgetCheckpointRidesOnLastToolResult(t *testing.T) {
 	}
 }
 
+func TestPruneIgnoresBudgetNoticeLength(t *testing.T) {
+	notice := "\n\n" + fmt.Sprintf(iterationBudgetWarningTemplate, 3, 6)
+	short := strings.Repeat("v", 60)
+	if len(short) > minToolResultChars || len(short+notice) <= minToolResultChars {
+		t.Fatal("short result must fit the prune limit only without the notice for this test to mean anything")
+	}
+	long := strings.Repeat("x", minToolResultChars+1)
+	history := []providers.Message{
+		{Role: "tool", Content: short + notice}, // short result: the notice must not make it prunable
+		{Role: "tool", Content: long + notice},  // genuinely bulky: still pruned
+		{Role: "tool", Content: long},
+	}
+	if !pruneToolResultsBefore(history, len(history)) {
+		t.Fatal("expected the bulky results to be pruned")
+	}
+	if history[0].Content != short+notice {
+		t.Fatalf("short result with notice was pruned: %q", history[0].Content)
+	}
+	for _, i := range []int{1, 2} {
+		if history[i].Content != prunedToolResult {
+			t.Fatalf("history[%d] = %q, want pruned", i, history[i].Content)
+		}
+	}
+}
+
 func TestBudgetWarnIteration(t *testing.T) {
 	tests := []struct {
 		maxIter int
