@@ -37,6 +37,7 @@ type MCPTool struct {
 	workspace          string
 	maxInlineTextRunes int
 	runtimeEvents      runtimeevents.Bus
+	parallelSafe       bool
 }
 
 // MCPToolCallPayload describes MCP tool execution runtime events.
@@ -75,6 +76,19 @@ func (t *MCPTool) SetMaxInlineTextRunes(limit int) {
 // SetEventPublisher injects the runtime event bus used for MCP tool observations.
 func (t *MCPTool) SetEventPublisher(eventBus runtimeevents.Bus) {
 	t.runtimeEvents = eventBus
+}
+
+// SetParallelSafe opts this tool in to concurrent execution with the other
+// safe calls of one LLM response. It mirrors the server's
+// supports_parallel_tool_calls setting.
+func (t *MCPTool) SetParallelSafe(safe bool) {
+	t.parallelSafe = safe
+}
+
+// ParallelSafety reports the server-level opt-in. The footprint is unknown, so
+// no paths are declared: the operator vouches for the server.
+func (t *MCPTool) ParallelSafety(map[string]any) toolshared.ParallelSafety {
+	return toolshared.ParallelSafety{Safe: t.parallelSafe}
 }
 
 const maxMCPInlineTextRunes = 16 * 1024

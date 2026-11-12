@@ -19,7 +19,7 @@ Parallel execution is on by default. To turn it off:
 
 The batch is split into ordered segments by `tools.PlanBatch`. Calls are never reordered: only **consecutive** calls that are compatible share a parallel segment, and a segment finishes before the next one starts.
 
-A call is parallel-eligible only when its tool implements `tools.ParallelAware` and reports `Safe: true` for those arguments. Everything else is a sequential barrier: tools without the interface, unknown tools, and every MCP tool.
+A call is parallel-eligible only when its tool implements `tools.ParallelAware` and reports `Safe: true` for those arguments. Everything else is a sequential barrier: tools without the interface, unknown tools, and MCP tools whose server does not set `supports_parallel_tool_calls: true` (default `false`, per server).
 
 | Eligible | Footprint |
 | --- | --- |

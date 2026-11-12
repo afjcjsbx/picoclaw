@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/media"
+	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/tools"
 	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
@@ -1340,5 +1342,31 @@ func TestMCPTool_Execute_PrunesStaleArtifacts(t *testing.T) {
 	}
 	if _, err := os.Stat(stale); !os.IsNotExist(err) {
 		t.Fatalf("expected stale artifact pruned on write, err=%v", err)
+	}
+}
+
+// Parallelism is a per-server opt-in: opted-in servers share a parallel segment,
+// everything else stays a sequential barrier.
+func TestMCPToolParallelSafetyPerServer(t *testing.T) {
+	mk := func(server string, parallel bool) *MCPTool {
+		tool := NewMCPTool(&MockMCPManager{}, server, &mcp.Tool{Name: "t"})
+		tool.SetParallelSafe(parallel)
+		return tool
+	}
+	if NewMCPTool(&MockMCPManager{}, "s", &mcp.Tool{Name: "t"}).ParallelSafety(nil).Safe {
+		t.Fatal("MCP tool must be a barrier by default")
+	}
+
+	reg := tools.NewToolRegistry()
+	gh, slack, fs := mk("github", true), mk("slack", true), mk("filesystem", false)
+	reg.Register(gh)
+	reg.Register(slack)
+	reg.Register(fs)
+
+	calls := []providers.ToolCall{{Name: gh.Name()}, {Name: slack.Name()}, {Name: fs.Name()}, {Name: gh.Name()}}
+	got := tools.PlanBatch(reg, calls)
+	want := []tools.Segment{{Parallel: true, Calls: []int{0, 1}}, {Calls: []int{2, 3}}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("PlanBatch = %+v, want %+v", got, want)
 	}
 }

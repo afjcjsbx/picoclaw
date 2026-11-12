@@ -1743,6 +1743,10 @@ type MCPServerConfig struct {
 	Headers map[string]string `json:"headers,omitempty"`
 	// OAuth opts into browser login and persisted credentials.
 	OAuth *MCPOAuthConfig `json:"oauth,omitempty"`
+	// SupportsParallelToolCalls lets calls to this server's tools run
+	// concurrently when the model emits several in one response. Off by default:
+	// the server must tolerate overlapping requests.
+	SupportsParallelToolCalls bool `json:"supports_parallel_tool_calls,omitempty"`
 }
 
 // MCPConfig defines configuration for all MCP servers
