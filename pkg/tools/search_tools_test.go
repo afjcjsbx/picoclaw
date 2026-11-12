@@ -162,23 +162,39 @@ func TestBM25SearchTool_Execute(t *testing.T) {
 }
 
 func TestBM25SearchTool_StemmedQuery(t *testing.T) {
+	// GitHub-style tools that deliberately share words (create/list/merge,
+	// issue/pull request/repository), so an inflected query only ranks the
+	// right tool first when its verb is reduced to the base form.
+	hidden := []mockSearchableTool{
+		{"mcp_github_search_repositories", "Search for GitHub repositories by name, topic or description"},
+		{"mcp_github_create_repository", "Create a new GitHub repository in your account"},
+		{"mcp_github_create_issue", "Create a new issue in a GitHub repository"},
+		{"mcp_github_list_issues", "List issues in a GitHub repository with optional filters"},
+		{"mcp_github_add_issue_comment", "Add a comment to an existing issue"},
+		{"mcp_github_create_pull_request", "Create a new pull request in a repository"},
+		{"mcp_github_list_pull_requests", "List pull requests in a repository"},
+		{"mcp_github_merge_pull_request", "Merge a pull request into the base branch"},
+		{"mcp_github_get_file_contents", "Get the contents of a file or directory from a repository"},
+		{"mcp_github_list_commits", "Get the list of commits of a branch in a repository"},
+	}
+
 	reg := NewToolRegistry()
-	reg.RegisterHidden(&mockSearchableTool{
-		name: "mcp_search_repositories",
-		desc: "Search repositories by name and description",
-	})
-	reg.RegisterHidden(&mockSearchableTool{
-		name: "mcp_create_issue",
-		desc: "Create a new issue in a repository",
-	})
+	for i := range hidden {
+		reg.RegisterHidden(&hidden[i])
+	}
 
 	tool := NewBM25SearchTool(reg, 3, 5)
 	ctx := context.Background()
 
 	tests := []struct{ query, want string }{
-		{"searching repositories", "mcp_search_repositories"},
-		{"created issues", "mcp_create_issue"},
-		{"creating an issue", "mcp_create_issue"},
+		{"searching repositories", "mcp_github_search_repositories"},
+		{"created issues", "mcp_github_create_issue"},
+		{"creating issues", "mcp_github_create_issue"},
+		{"creating pull requests", "mcp_github_create_pull_request"},
+		{"merging pull requests", "mcp_github_merge_pull_request"},
+		{"commenting on issues", "mcp_github_add_issue_comment"},
+		{"listing commits", "mcp_github_list_commits"},
+		{"listed pull requests", "mcp_github_list_pull_requests"},
 	}
 
 	for _, tt := range tests {
@@ -189,7 +205,7 @@ func TestBM25SearchTool_StemmedQuery(t *testing.T) {
 				t.Fatalf("query %q returned no tools", tt.query)
 			}
 			if results[0].Name != tt.want {
-				t.Fatalf("query %q top result = %q, want %q", tt.query, results[0].Name, tt.want)
+				t.Fatalf("query %q top result = %q, want %q (all: %v)", tt.query, results[0].Name, tt.want, results)
 			}
 		})
 	}
