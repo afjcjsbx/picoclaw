@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `/usage` (alias `/cost`) chat command and `picoclaw usage` CLI command that report provider-reported token usage and cost per session, with per-model and input cache breakdowns.
 
+### Changed
+
+- The opt-in gateway config watcher now polls every 60 seconds instead of every 2 seconds (still scaled by `power.poll_interval_multiplier`), reducing its idle wake-ups from 43,200 to 1,440 per day when hot reload is enabled.
+
 ## [0.5.1] - 2026-10-18
 
 ### Added

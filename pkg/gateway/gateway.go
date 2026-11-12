@@ -41,6 +41,11 @@ const (
 	providerReloadTimeout   = 30 * time.Second
 	gracefulShutdownTimeout = 15 * time.Second
 
+	// configWatcherPollInterval is deliberately coarse: hot reload is opt-in
+	// and a one-minute check keeps an idle low-power gateway from waking every
+	// two seconds just to stat the config file.
+	configWatcherPollInterval = time.Minute
+
 	logPath   = "logs"
 	panicFile = "gateway_panic.log"
 	logFile   = "gateway.log"
@@ -265,7 +270,7 @@ func Run(debug bool, homePath, configPath string, allowEmptyStartup bool) (runEr
 	stopWatch := func() {}
 	if cfg.Gateway.HotReload {
 		configReloadChan, stopWatch = setupConfigWatcherPolling(
-			configPath, debug, cfg.Power.ScalePollInterval(2*time.Second),
+			configPath, debug, cfg.Power.ScalePollInterval(configWatcherPollInterval),
 		)
 		logger.Info("Config hot reload enabled")
 	}
@@ -808,7 +813,7 @@ func setupConfigWatcherPolling(configPath string, debug bool, interval time.Dura
 		}
 
 		if interval <= 0 {
-			interval = 2 * time.Second
+			interval = configWatcherPollInterval
 		}
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
