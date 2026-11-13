@@ -17,7 +17,6 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/providers/common"
 	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
-	"github.com/sipeed/picoclaw/pkg/redact"
 )
 
 type (
@@ -164,10 +163,9 @@ func (p *Provider) Chat(
 		return nil, fmt.Errorf("reading response body: %w", err)
 	}
 
-	// Check for HTTP errors with detailed messages. Provider bodies are
-	// untrusted: redact credentials (some gateways echo the API key) and bound
-	// the preview before it can reach logs or the chat error notice.
-	bodyPreview := common.ResponsePreview([]byte(redact.Text(string(body))), 2048)
+	// Check for HTTP errors with detailed messages. ResponsePreview masks
+	// credentials (some gateways echo the API key) before bounding the body.
+	bodyPreview := common.ResponsePreview(body, 2048)
 	switch resp.StatusCode {
 	case http.StatusUnauthorized:
 		return nil, fmt.Errorf("authentication failed (401): check your API key")

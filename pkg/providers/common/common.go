@@ -474,22 +474,20 @@ func (e *HTTPError) Error() string {
 	if e == nil {
 		return "API request failed"
 	}
-	// Provider bodies are untrusted and sometimes echo request credentials.
-	// Redact before the message can reach a log line or a chat notice.
 	if e.IsHTML {
-		return redact.Text(fmt.Sprintf(
+		return fmt.Sprintf(
 			"API request failed: %s returned HTML instead of JSON (content-type: %s); check api_base or proxy configuration.\n  Status: %d\n  Body:   %s",
 			e.APIBase,
 			e.ContentType,
 			e.StatusCode,
 			e.BodyPreview,
-		))
+		)
 	}
-	return redact.Text(fmt.Sprintf(
+	return fmt.Sprintf(
 		"API request failed:\n  Status: %d\n  Body:   %s",
 		e.StatusCode,
 		e.BodyPreview,
-	))
+	)
 }
 
 const (
@@ -512,7 +510,7 @@ func HandleErrorResponse(resp *http.Response, apiBase string) error {
 	}
 	return &HTTPError{
 		StatusCode:  resp.StatusCode,
-		BodyPreview: ResponsePreview([]byte(redact.Text(string(body))), errorBodyPreviewLen),
+		BodyPreview: ResponsePreview(body, errorBodyPreviewLen),
 		ContentType: contentType,
 		APIBase:     apiBase,
 	}
@@ -554,23 +552,26 @@ func LooksLikeHTML(body []byte, contentType string) bool {
 func WrapHTMLResponseError(statusCode int, body []byte, contentType, apiBase string) error {
 	return &HTTPError{
 		StatusCode:  statusCode,
-		BodyPreview: ResponsePreview([]byte(redact.Text(string(body))), 128),
+		BodyPreview: ResponsePreview(body, 128),
 		ContentType: contentType,
 		APIBase:     apiBase,
 		IsHTML:      true,
 	}
 }
 
-// ResponsePreview returns a truncated preview of response body for error messages.
+// ResponsePreview returns a truncated preview of a response body for error
+// messages. Provider bodies are untrusted and sometimes echo request
+// credentials, so they are masked before truncation: previewing first would
+// leave a partial secret at the cut.
 func ResponsePreview(body []byte, maxLen int) string {
-	trimmed := bytes.TrimSpace(body)
-	if len(trimmed) == 0 {
+	trimmed := redact.Text(string(bytes.TrimSpace(body)))
+	if trimmed == "" {
 		return "<empty>"
 	}
 	if len(trimmed) <= maxLen {
-		return string(trimmed)
+		return trimmed
 	}
-	return string(trimmed[:maxLen]) + "..."
+	return trimmed[:maxLen] + "..."
 }
 
 func leadingTrimmedPrefix(body []byte, maxLen int) []byte {

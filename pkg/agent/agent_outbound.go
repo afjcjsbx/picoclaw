@@ -13,7 +13,6 @@ import (
 	"github.com/sipeed/picoclaw/pkg/constants"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
-	"github.com/sipeed/picoclaw/pkg/redact"
 	integrationtools "github.com/sipeed/picoclaw/pkg/tools/integration"
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
@@ -45,7 +44,6 @@ func (al *AgentLoop) publishTurnFailureNotice(
 	ctx context.Context,
 	channel, chatID, sessionKey, notice string,
 ) {
-	notice = redact.Text(notice)
 	if strings.TrimSpace(notice) == "" {
 		return
 	}
