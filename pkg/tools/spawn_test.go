@@ -260,14 +260,15 @@ func TestSpawnTool_ExecuteAsync_NilSpawnerResult(t *testing.T) {
 		t.Fatal("callback was not invoked for nil spawner result")
 	}
 }
+
 // mockTool implements tools.Tool for testing tool filtering.
 type mockTool struct {
 	name string
 }
 
-func (m *mockTool) Name() string                          { return m.name }
-func (m *mockTool) Description() string                   { return "mock tool " + m.name }
-func (m *mockTool) Parameters() map[string]any            { return map[string]any{} }
+func (m *mockTool) Name() string               { return m.name }
+func (m *mockTool) Description() string        { return "mock tool " + m.name }
+func (m *mockTool) Parameters() map[string]any { return map[string]any{} }
 func (m *mockTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
 	return &ToolResult{ForLLM: "mock: " + m.name}
 }
@@ -285,21 +286,21 @@ func TestSpawnTool_AllowOutbound(t *testing.T) {
 		expectedChildTool []string
 	}{
 		{
-			name:           "allow_outbound true keeps all tools",
-			allowOutbound:  true,
-			parentToolNames: []string{"message", "send_file", "image_generate", "web"},
+			name:              "allow_outbound true keeps all tools",
+			allowOutbound:     true,
+			parentToolNames:   []string{"message", "send_file", "image_generate", "web"},
 			expectedChildTool: []string{"message", "send_file", "image_generate", "web"},
 		},
 		{
-			name:           "allow_outbound false strips outbound group",
-			allowOutbound:  false,
-			parentToolNames: []string{"message", "send_file", "send_tts", "reaction", "image_generate", "web"},
+			name:              "allow_outbound false strips outbound group",
+			allowOutbound:     false,
+			parentToolNames:   []string{"message", "send_file", "send_tts", "reaction", "image_generate", "web"},
 			expectedChildTool: []string{"image_generate", "web"},
 		},
 		{
-			name:           "allow_outbound false with no outbound tools",
-			allowOutbound:  false,
-			parentToolNames: []string{"image_generate", "web"},
+			name:              "allow_outbound false with no outbound tools",
+			allowOutbound:     false,
+			parentToolNames:   []string{"image_generate", "web"},
 			expectedChildTool: []string{"image_generate", "web"},
 		},
 	}
@@ -395,7 +396,7 @@ func TestSpawnTool_DefaultDirectMessage(t *testing.T) {
 	<-spawner.done
 
 	// With direct_message=true (default), all tools should be preserved
-	var childToolNames []string
+	childToolNames := make([]string, 0, len(spawner.lastConfig.Tools))
 	for _, t := range spawner.lastConfig.Tools {
 		childToolNames = append(childToolNames, t.Name())
 	}
