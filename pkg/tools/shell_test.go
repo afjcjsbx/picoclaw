@@ -192,6 +192,11 @@ func TestShellTool_Timeout(t *testing.T) {
 	if !strings.Contains(result.ForUser, "timed out") {
 		t.Errorf("Expected timeout message, got ForUser: %s", result.ForUser)
 	}
+
+	// A timeout is the point where the tool knows the command outlived a
+	// foreground call; point the model at tracked background sessions.
+	require.Contains(t, result.ForLLM, timeoutBackgroundGuidance)
+	require.Contains(t, result.ForLLM, "background=true")
 }
 
 // TestShellTool_TimeoutArg_Invalid verifies malformed per-run timeouts are rejected before running
