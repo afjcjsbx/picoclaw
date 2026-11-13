@@ -370,7 +370,7 @@ func buildExecDescription() string {
 
 Every foreground call starts a fresh shell in the configured working directory; pass cwd instead of using cd. For file operations, prefer list_dir, search_files, read_file, edit_file and write_file over cat, grep, find, ls, sed and echo/heredoc.
 
-Foreground results start with a one-line [exec] {...} header (exitCode, timedOut, truncated, durationMs, error), then raw stdout/stderr. Non-zero exit codes can be normal: grep returns 1 for no match and diff returns 1 for differences.
+Foreground results start with a one-line [exec] {...} header (exitCode, timedOut, truncated, durationMs, error), then stdout/stderr with ANSI escape sequences removed. Non-zero exit codes can be normal: grep returns 1 for no match and diff returns 1 for differences.
 
 Oversized output is truncated automatically and the full stream is saved as an artifact; use the artifact path in the result with read_file when you need the omitted middle, instead of piping through head/tail or re-running the command.
 
@@ -697,7 +697,9 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string, timeout tim
 	readDone := make(chan struct{})
 	go func() {
 		defer close(readDone)
-		_, _ = io.Copy(collector, outputReader)
+		// Strip ANSI sequences while draining so the in-memory window, the
+		// spilled artifact and the truncation budget all see visible text.
+		_, _ = io.Copy(collector, &ansiReader{src: outputReader})
 		_ = outputReader.Close()
 	}()
 
@@ -746,7 +748,7 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string, timeout tim
 	spillCapped := collector.SpillCapped()
 	_ = collector.Close()
 
-	// Keep the raw stdout/stderr intact for the model and put the structured
+	// Keep the visible stdout/stderr intact for the model and put the structured
 	// status in a one-line header instead. Wrapping the output in JSON would
 	// escape every newline, tab and quote, which makes diffs, logs and source
 	// snippets harder to read and costs context.
@@ -1014,15 +1016,20 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 				}
 			}()
 			buf := make([]byte, 4096)
+			var strip ansiStripper
 			for {
 				n, err := session.ptyMaster.Read(buf)
 				if n > 0 {
+					// Key-mode detection needs the raw smkx/rmkx sequences;
+					// strip ANSI only after that decision.
 					raw := string(buf[:n])
 					if mode := detectPtyKeyMode(raw); mode != PtyKeyModeNotFound && mode != session.GetPtyKeyMode() {
 						session.SetPtyKeyMode(mode)
 					}
 
-					session.appendOutput(buf[:n])
+					if clean := strip.Strip(buf[:n]); len(clean) > 0 {
+						session.appendOutput(clean)
+					}
 				}
 				if err != nil {
 					break
@@ -1046,11 +1053,14 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 				}
 			}()
 			buf := make([]byte, 4096)
+			var strip ansiStripper
 
 			for {
 				n, err := outputReader.Read(buf)
 				if n > 0 {
-					session.appendOutput(buf[:n])
+					if clean := strip.Strip(buf[:n]); len(clean) > 0 {
+						session.appendOutput(clean)
+					}
 				}
 				if err != nil {
 					break
