@@ -311,6 +311,28 @@ func TestPublishOutboundRedactsCredentials(t *testing.T) {
 	}
 }
 
+// TestPublishOutboundLeavesCodeBlocksAlone covers model-written replies: the
+// assignment rules of redact.Text would turn the code below into
+// `password = [FILTERED]`, so chat only gets exact values and known formats.
+func TestPublishOutboundLeavesCodeBlocksAlone(t *testing.T) {
+	mb := NewMessageBus()
+	defer mb.Close()
+
+	const code = "```go\npassword = getPassword()\ntoken = loadToken()\n```"
+	msg := OutboundMessage{
+		Context: InboundContext{Channel: "telegram", ChatID: "123"},
+		Content: code + "\nkey: ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+	}
+	if err := mb.PublishOutbound(context.Background(), msg); err != nil {
+		t.Fatalf("PublishOutbound failed: %v", err)
+	}
+
+	want := code + "\nkey: " + redact.Marker
+	if got := (<-mb.OutboundChan()).Content; got != want {
+		t.Fatalf("outbound content = %q, want %q", got, want)
+	}
+}
+
 func TestPublishOutbound_MirrorsContextToLegacyFields(t *testing.T) {
 	mb := NewMessageBus()
 	defer mb.Close()

@@ -90,7 +90,7 @@ func TestSecretsReplacesOnlyRegisteredValues(t *testing.T) {
 	SetSecrets([]string{key})
 	t.Cleanup(func() { SetSecrets(nil) })
 
-	got := Secrets("registered " + key + " but not sk-abcdefghijklmnopqrstuvwx")
+	got := secrets("registered " + key + " but not sk-abcdefghijklmnopqrstuvwx")
 	if strings.Contains(got, key) {
 		t.Fatalf("registered secret leaked: %q", got)
 	}
@@ -297,22 +297,23 @@ func TestOpaqueRunPrefilterMatchesUnfilteredRule(t *testing.T) {
 	}
 }
 
-// TestSecretsDoesNotAllocateWithoutAHit pins the streaming cost. Every streamed
-// update passes the whole accumulated answer through Secrets, and
-// strings.Replacer copies its input even when nothing matches, so text with no
-// registered value must go through without a single allocation.
-func TestSecretsDoesNotAllocateWithoutAHit(t *testing.T) {
+// TestContentDoesNotAllocateWithoutAHit pins the streaming cost. Every streamed
+// update passes the whole accumulated answer through Content, and
+// strings.Replacer or a split-and-join copies its input even when nothing
+// matches, so text with nothing to mask must go through without a single
+// allocation, multi-line text included.
+func TestContentDoesNotAllocateWithoutAHit(t *testing.T) {
 	SetSecrets([]string{"sk-or-v1-FAKEFAKEFAKEFAKEFAKE", "voice-key-plain-123456", `pa&ss<word>1234`})
 	t.Cleanup(func() { SetSecrets(nil) })
 
-	answer := strings.Repeat("Sure, here is how the gateway reloads its configuration. ", 70)
+	answer := strings.Repeat("Sure, here is how the gateway reloads its configuration.\n", 70)
 	for _, n := range []int{20, 400, len(answer)} {
 		prefix := answer[:n]
-		if got := Secrets(prefix); got != prefix {
+		if got := Content(prefix); got != prefix {
 			t.Fatalf("text without a secret changed: %q", got)
 		}
-		if allocs := testing.AllocsPerRun(50, func() { _ = Secrets(prefix) }); allocs != 0 {
-			t.Errorf("Secrets on %d clean bytes allocates %v times, want 0", n, allocs)
+		if allocs := testing.AllocsPerRun(50, func() { _ = Content(prefix) }); allocs != 0 {
+			t.Errorf("Content on %d clean bytes allocates %v times, want 0", n, allocs)
 		}
 	}
 }
@@ -322,14 +323,14 @@ func TestSecretsDoesNotAllocateWithoutAHit(t *testing.T) {
 // near misses and filler must come out exactly as the replacer alone renders
 // them.
 func TestSecretsMatchesReplacerOnRandomText(t *testing.T) {
-	secrets := []string{"sk-or-v1-FAKEFAKEFAKEFAKEFAKE", "voice-key-plain-123456", `pa&ss<word>1234`}
-	SetSecrets(secrets)
+	values := []string{"sk-or-v1-FAKEFAKEFAKEFAKEFAKE", "voice-key-plain-123456", `pa&ss<word>1234`}
+	SetSecrets(values)
 	t.Cleanup(func() { SetSecrets(nil) })
 
 	pieces := []string{
 		" ", "\n", "abc", "token=", "{\"k\":\"",
-		secrets[0], secrets[1], secrets[2], jsonEscaped(secrets[2]),
-		secrets[0][:12], secrets[1][:10], secrets[2][:5], // near misses
+		values[0], values[1], values[2], jsonEscaped(values[2]),
+		values[0][:12], values[1][:10], values[2][:5], // near misses
 	}
 	rng := rand.New(rand.NewSource(2))
 	hits := 0
@@ -340,7 +341,7 @@ func TestSecretsMatchesReplacerOnRandomText(t *testing.T) {
 		}
 		in := b.String()
 		want := registered.Load().replacer.Replace(in)
-		if got := Secrets(in); got != want {
+		if got := secrets(in); got != want {
 			t.Fatalf("prefilter changed the result for %q:\n got: %q\nwant: %q", in, got, want)
 		}
 		if want != in {
@@ -443,5 +444,24 @@ func TestTextSkipsTokenCountsAndMaxTokens(t *testing.T) {
 		if p.mayMatch(line) {
 			t.Errorf("prefilter should skip %q for %v", line, p.re)
 		}
+	}
+}
+
+func TestContentKeepsCodeAndMasksSecretsAndFormats(t *testing.T) {
+	const key = "registered-key-abcdef123456"
+	SetSecrets([]string{key})
+	t.Cleanup(func() { SetSecrets(nil) })
+
+	code := "```go\npassword = getPassword()\ntoken = loadToken()\n```"
+	if got := Content(code); got != code {
+		t.Fatalf("Content changed a code block: %q", got)
+	}
+	got := Content("first " + key + "\nsecond ghp_abcdefghijklmnopqrstuvwxyz0123456789\nthird")
+	want := "first [FILTERED]\nsecond [FILTERED]\nthird"
+	if got != want {
+		t.Fatalf("Content = %q, want %q", got, want)
+	}
+	if got := Text(code); got == code {
+		t.Fatalf("Text is expected to apply the assignment rules to %q", code)
 	}
 }

@@ -265,7 +265,7 @@ func (mb *MessageBus) PublishOutbound(ctx context.Context, msg OutboundMessage) 
 	// Every outbound chat message passes through here (agent replies, failure
 	// notices, and message-tool sends). Mask credentials so no log redaction
 	// gap can turn into a chat leak.
-	msg.Content = redact.Text(msg.Content)
+	msg.Content = redact.Content(msg.Content)
 	msg = NormalizeOutboundMessage(msg)
 	if msg.Context.isZero() {
 		mb.publishFailure(StreamOutbound, runtimeScopeFromInboundContext(msg.Context), ErrMissingOutboundContext)
@@ -293,7 +293,7 @@ func (mb *MessageBus) PublishOutboundMedia(ctx context.Context, msg OutboundMedi
 	// a private copy, made only when a caption actually changes.
 	cloned := false
 	for i := range msg.Parts {
-		masked := redact.Text(msg.Parts[i].Caption)
+		masked := redact.Content(msg.Parts[i].Caption)
 		if masked == msg.Parts[i].Caption {
 			continue
 		}

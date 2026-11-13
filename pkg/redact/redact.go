@@ -116,11 +116,9 @@ func normalizeSecrets(values []string) []string {
 	return cleaned
 }
 
-// Secrets replaces only the exact credential values registered with
-// SetSecrets, leaving heuristic detection off. Streaming paths call it on every
-// incremental update, where running the pattern scan on the whole accumulated
-// answer would be needlessly expensive.
-func Secrets(s string) string {
+// secrets replaces only the exact credential values registered with
+// SetSecrets, leaving heuristic detection off.
+func secrets(s string) string {
 	if s == "" {
 		return s
 	}
@@ -141,13 +139,24 @@ func Secrets(s string) string {
 
 // Text masks registered credentials and credential-looking values in s,
 // including key=value assignments, credential headers and URL credentials.
-// Those looser rules also match ordinary prose and code, so use Formats for
-// text that must stay readable as written.
+// Those looser rules also match ordinary prose and code, so use it only on
+// machine-written text such as logs, errors and event payloads; use Content
+// for text that must stay readable as written.
 func Text(s string) string {
 	if s == "" {
 		return s
 	}
-	return maskLines(Secrets(s), true)
+	return maskLines(secrets(s), true)
+}
+
+// Content masks registered credentials and well-known credential formats in
+// text the model wrote or a person reads, such as chat replies and streamed
+// updates. It skips the assignment, header and URL rules of Text, which would
+// turn `password = getPassword()` in a code block into `password = [FILTERED]`.
+// It allocates nothing when there is nothing to mask, so streaming paths can
+// call it on every update.
+func Content(s string) string {
+	return Formats(secrets(s))
 }
 
 // Formats masks only well-known credential formats and high-entropy tokens.
@@ -158,15 +167,29 @@ func Formats(s string) string {
 	return maskLines(s, false)
 }
 
+// maskLines masks s one line at a time, because the rules assume a single
+// line. It copies only when a line changes, so text with nothing to mask costs
+// no allocation.
 func maskLines(s string, loose bool) string {
-	if !strings.Contains(s, "\n") {
-		return line(s, loose)
+	var out strings.Builder
+	copied := 0 // s[:copied] is already in out
+	for start := 0; start <= len(s); {
+		end := len(s)
+		if i := strings.IndexByte(s[start:], '\n'); i >= 0 {
+			end = start + i
+		}
+		if masked := line(s[start:end], loose); masked != s[start:end] {
+			out.WriteString(s[copied:start])
+			out.WriteString(masked)
+			copied = end
+		}
+		start = end + 1
 	}
-	lines := strings.Split(s, "\n")
-	for i, lineText := range lines {
-		lines[i] = line(lineText, loose)
+	if copied == 0 && out.Len() == 0 {
+		return s
 	}
-	return strings.Join(lines, "\n")
+	out.WriteString(s[copied:])
+	return out.String()
 }
 
 // secretPattern is a well-known credential format. Every match contains one
