@@ -149,6 +149,44 @@ func TestTextKeepsOrdinaryText(t *testing.T) {
 	}
 }
 
+func TestFormatsSkipsLooseRulesAndRegisteredValues(t *testing.T) {
+	const key = "oc_sk_test_key_1234567890"
+	SetSecrets([]string{"registered-value-1234"})
+	t.Cleanup(func() { SetSecrets(nil) })
+
+	unchanged := []string{
+		`password = getPassword()`,
+		`token = os.Getenv("TOKEN")`,
+		`secret: db-credentials`,
+		`the basic responsibilities of the module`,
+		`https://example.test/cb?code=abc&key=main`,
+		`proxy https://user:super-secret@example.test/path`,
+		`X-Api-Key: shortkey123`,
+		`registered-value-1234`,
+	}
+	for _, in := range unchanged {
+		if got := Formats(in); got != in {
+			t.Errorf("Formats must leave %q unchanged, got %q", in, got)
+		}
+	}
+
+	masked := []string{
+		"Authorization: Bearer 8fJd92kLmQ73xPqR5tNvBw6YcAeZ1sUo",
+		"github ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789",
+		"opencode " + key,
+		"value 8fJd92kLmQ73xPqR5tNvBw6YcAeZ1sUo2dF5gH7jK9lM",
+	}
+	for _, in := range masked {
+		if got := Formats(in); !strings.Contains(got, Marker) {
+			t.Errorf("Formats must mask %q, got %q", in, got)
+		}
+	}
+	got := Formats("first\nOPENAI_API_KEY=sk-proj-4eC39HqLyjWDarjtT1zdp7dc\nlast")
+	if !strings.Contains(got, Marker) || !strings.HasPrefix(got, "first\n") || !strings.HasSuffix(got, "\nlast") {
+		t.Errorf("Formats must mask per line and keep the others: %q", got)
+	}
+}
+
 func TestTextMasksMultilineSecrets(t *testing.T) {
 	const key = "oc_sk_test_key_1234567890"
 	SetSecrets([]string{key})

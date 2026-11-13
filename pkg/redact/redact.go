@@ -112,18 +112,32 @@ func Secrets(s string) string {
 	return set.replacer.Replace(s)
 }
 
-// Text masks registered credentials and credential-looking values in s.
+// Text masks registered credentials and credential-looking values in s,
+// including key=value assignments, credential headers and URL credentials.
+// Those looser rules also match ordinary prose and code, so use Formats for
+// text that must stay readable as written.
 func Text(s string) string {
 	if s == "" {
 		return s
 	}
-	s = Secrets(s)
+	return maskLines(Secrets(s), true)
+}
+
+// Formats masks only well-known credential formats and high-entropy tokens.
+// It skips registered values and the assignment, header and URL rules of Text,
+// which would turn `password = getPassword()` into `password = [FILTERED]`. It
+// suits content the model reads and may edit, such as file contents.
+func Formats(s string) string {
+	return maskLines(s, false)
+}
+
+func maskLines(s string, loose bool) string {
 	if !strings.Contains(s, "\n") {
-		return line(s)
+		return line(s, loose)
 	}
 	lines := strings.Split(s, "\n")
 	for i, lineText := range lines {
-		lines[i] = line(lineText)
+		lines[i] = line(lineText, loose)
 	}
 	return strings.Join(lines, "\n")
 }
@@ -207,6 +221,12 @@ var secretPatterns = []secretPattern{
 		re:   regexp.MustCompile(`\b[a-z]{2,8}_sk_[A-Za-z0-9_-]{16,}`),
 		lits: []string{"_sk_"},
 	},
+}
+
+// loosePatterns match credential-looking assignments and headers. They are
+// useful on logs and error text but also hit ordinary prose and source code, so
+// Formats leaves them out.
+var loosePatterns = []secretPattern{
 	// Basic and Token authorization schemes, which the Bearer rule misses.
 	{
 		re:          regexp.MustCompile(`(?i)(\b(?:basic|token)\s+)[A-Za-z0-9+/=_-]{16,}`),
@@ -277,9 +297,20 @@ const (
 	opaqueMinLength      = 32
 )
 
-// line masks credential-looking values in a single line.
-func line(text string) string {
-	for _, p := range secretPatterns {
+// line masks credential-looking values in a single line. The loose rules
+// (assignments, headers, URL credentials) only run when loose is set.
+func line(text string, loose bool) string {
+	text = applyPatterns(text, secretPatterns)
+	if loose {
+		text = applyPatterns(text, loosePatterns)
+		text = sensitiveQueryParamPattern.ReplaceAllString(text, "${1}"+Marker)
+		text = basicAuthURLPattern.ReplaceAllString(text, "${1}"+Marker+"${3}")
+	}
+	return redactHighEntropyRuns(text)
+}
+
+func applyPatterns(text string, patterns []secretPattern) string {
+	for _, p := range patterns {
 		if p.mayMatch(text) {
 			replacement := p.replacement
 			if replacement == "" {
@@ -288,9 +319,7 @@ func line(text string) string {
 			text = p.re.ReplaceAllString(text, replacement)
 		}
 	}
-	text = sensitiveQueryParamPattern.ReplaceAllString(text, "${1}"+Marker)
-	text = basicAuthURLPattern.ReplaceAllString(text, "${1}"+Marker+"${3}")
-	return redactHighEntropyRuns(text)
+	return text
 }
 
 func redactHighEntropyRuns(line string) string {
