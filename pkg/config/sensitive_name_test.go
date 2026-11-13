@@ -15,7 +15,7 @@ import (
 func TestSensitiveNameMatchesTokenOnlyAsWholeWord(t *testing.T) {
 	sensitive := []string{
 		"Token", "BotToken", "APIToken", "access_token", "BOT_TOKEN", "x-auth-token", "refreshToken",
-		"ApiKey", "ClientSecret", "PASSWORD",
+		"ApiKey", "ClientSecret", "PASSWORD", "Authorization", "Set-Cookie", "X-Amz-Signature",
 	}
 	for _, name := range sensitive {
 		if !sensitiveName(name) {
@@ -30,23 +30,6 @@ func TestSensitiveNameMatchesTokenOnlyAsWholeWord(t *testing.T) {
 	for _, name := range ordinary {
 		if sensitiveName(name) {
 			t.Errorf("sensitiveName(%q) = true, want false", name)
-		}
-	}
-}
-
-func TestNameWords(t *testing.T) {
-	cases := map[string][]string{
-		"APIToken":       {"api", "token"},
-		"MaxTokensField": {"max", "tokens", "field"},
-		"BOT_TOKEN":      {"bot", "token"},
-		"x-auth-token":   {"x", "auth", "token"},
-		"oauth2Token":    {"oauth2", "token"},
-		"Token":          {"token"},
-		"":               nil,
-	}
-	for name, want := range cases {
-		if got := nameWords(name); !slices.Equal(got, want) {
-			t.Errorf("nameWords(%q) = %v, want %v", name, got, want)
 		}
 	}
 }

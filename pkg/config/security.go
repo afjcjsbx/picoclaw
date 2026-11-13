@@ -11,10 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"slices"
 	"strings"
 	"sync"
-	"unicode"
 
 	"gopkg.in/yaml.v3"
 
@@ -262,56 +260,27 @@ func (sec *Config) collectSensitiveValues() []string {
 	return values
 }
 
-// sensitiveName reports whether a struct field or map key names a credential.
-// It intentionally ignores generic words such as "key", "auth" or "session":
+// sensitiveMarkers are the name fragments of credential fields and map keys. It
+// intentionally leaves out generic words such as "key", "auth" or "session":
 // they also name ordinary settings (auth_method=oauth, SESSION_DIR=/tmp) and
 // registering those values would mask unrelated text.
+var sensitiveMarkers = []string{
+	"apikey", "api_key", "api-key", "accesskey", "access_key", "privatekey", "private_key",
+	"secret", "password", "passwd", "credential", "authorization", "cookie", "signature",
+}
+
+// sensitiveName reports whether a struct field or map key names a credential.
 func sensitiveName(name string) bool {
 	lower := strings.ToLower(name)
-	for _, marker := range []string{
-		"apikey", "api_key", "api-key",
-		"accesskey", "access_key", "privatekey", "private_key",
-		"secret", "password", "passwd", "credential",
-	} {
+	for _, marker := range sensitiveMarkers {
 		if strings.Contains(lower, marker) {
 			return true
 		}
 	}
-	// "token" must be a whole word: MaxTokensField and max_tokens_field name a
-	// setting, not a credential, while BotToken, access_token and BOT_TOKEN do.
-	return slices.Contains(nameWords(name), "token")
-}
-
-// nameWords splits a field or map key into lowercase words on separators and
-// camelCase boundaries: "APIToken" -> [api token], "MaxTokensField" ->
-// [max tokens field], "BOT_TOKEN" -> [bot token].
-func nameWords(name string) []string {
-	var words []string
-	runes := []rune(name)
-	start := 0
-	flush := func(end int) {
-		if end > start {
-			words = append(words, strings.ToLower(string(runes[start:end])))
-		}
-	}
-	for i, r := range runes {
-		if !unicode.IsLetter(r) && !unicode.IsDigit(r) {
-			flush(i)
-			start = i + 1
-			continue
-		}
-		if i == start || !unicode.IsUpper(r) {
-			continue
-		}
-		prev := runes[i-1]
-		acronymEnd := unicode.IsUpper(prev) && i+1 < len(runes) && unicode.IsLower(runes[i+1])
-		if unicode.IsLower(prev) || unicode.IsDigit(prev) || acronymEnd {
-			flush(i)
-			start = i
-		}
-	}
-	flush(len(runes))
-	return words
+	// "token" names a credential, but MaxTokensField, MAX_TOKENS and tokenizer
+	// name settings, while BotToken, access_token and BOT_TOKEN do.
+	return strings.Contains(lower, "token") && !strings.Contains(lower, "tokens") &&
+		!strings.Contains(lower, "tokeniz")
 }
 
 // collectSensitive recursively traverses the value and collects SecureString/SecureStrings values.
@@ -383,7 +352,7 @@ func collectSensitive(v reflect.Value, values *[]string) {
 				continue
 			}
 			fieldValue := v.Field(i)
-			if isSensitiveStringValue(field.Name, fieldValue, false) {
+			if isSensitiveStringValue(field.Name, fieldValue) {
 				*values = append(*values, fieldValue.String())
 			}
 			collectSensitive(fieldValue, values)
@@ -395,7 +364,7 @@ func collectSensitive(v reflect.Value, values *[]string) {
 	case reflect.Map:
 		for _, key := range v.MapKeys() {
 			mapValue := v.MapIndex(key)
-			if key.Kind() == reflect.String && isSensitiveStringValue(key.String(), mapValue, true) {
+			if key.Kind() == reflect.String && isSensitiveStringValue(key.String(), mapValue) {
 				*values = append(*values, mapValue.String())
 			}
 			collectSensitive(mapValue, values)
@@ -403,25 +372,10 @@ func collectSensitive(v reflect.Value, values *[]string) {
 	}
 }
 
-// sensitiveMapKey extends sensitiveName to keys that hold credentials in maps,
-// such as HTTP header names and OAuth session values.
-func sensitiveMapKey(name string) bool {
-	if sensitiveName(name) {
-		return true
-	}
-	lower := strings.ToLower(name)
-	for _, marker := range []string{"authorization", "cookie", "signature"} {
-		if strings.Contains(lower, marker) {
-			return true
-		}
-	}
-	return false
-}
-
 // isSensitiveStringValue reports whether value is a string named like a
 // credential. Maps, custom headers and process env vars store secrets as plain
 // strings, outside the SecureString wrapper.
-func isSensitiveStringValue(name string, value reflect.Value, mapKey bool) bool {
+func isSensitiveStringValue(name string, value reflect.Value) bool {
 	for value.Kind() == reflect.Interface || value.Kind() == reflect.Pointer {
 		if value.IsNil() {
 			return false
@@ -437,9 +391,6 @@ func isSensitiveStringValue(name string, value reflect.Value, mapKey bool) bool 
 	switch strings.ToLower(strings.TrimSpace(value.String())) {
 	case "true", "false", "yes", "no", "null", "none", "nil", "auto", "default", "oauth", "bearer":
 		return false
-	}
-	if mapKey {
-		return sensitiveMapKey(name)
 	}
 	return sensitiveName(name)
 }
