@@ -484,6 +484,26 @@ func TestAppendFieldsKeepsLineValidJSONWhenRedactionBreaksComposite(t *testing.T
 	}
 }
 
+// TestAppendFieldsKeepsSessionKey checks the field the compaction warnings
+// log: a session key must stay readable so a line can be tied to its session.
+func TestAppendFieldsKeepsSessionKey(t *testing.T) {
+	const key = "sk_v1_cb10fea2cfe7f7373a42cc19db45c88fb87caebad9d6295e89a00577b35d7cc1"
+
+	var buf bytes.Buffer
+	l := zerolog.New(&buf)
+	event := l.Info()
+	appendFields(event, map[string]any{"session_key": key})
+	event.Msg("Proactive compression: context budget exceeded")
+
+	var line map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &line); err != nil {
+		t.Fatalf("log line must be valid JSON: %v\n%s", err, buf.String())
+	}
+	if line["session_key"] != key {
+		t.Fatalf("session_key = %v, want %q", line["session_key"], key)
+	}
+}
+
 func TestLogMessageRedactsSecrets(t *testing.T) {
 	const key = "oc_sk_test_key_1234567890"
 	redact.SetSecrets([]string{key})

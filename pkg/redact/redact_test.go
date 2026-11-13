@@ -6,7 +6,10 @@
 package redact
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"math/rand"
 	"strings"
 	"testing"
@@ -358,5 +361,67 @@ func TestSecretsMatchesReplacerOnRandomText(t *testing.T) {
 	}
 	if hits < 1000 {
 		t.Fatalf("only %d of 5000 random texts held a secret; the test no longer exercises the replacer", hits)
+	}
+}
+
+// TestTextKeepsSessionKeys covers the false positive that blanked the
+// session_key field of log lines: session keys are "sk_v1_" plus a SHA-256 in
+// hex, which the "sk_" API-key rule used to mask.
+func TestTextKeepsSessionKeys(t *testing.T) {
+	SetSecrets(nil)
+	for i := 0; i < 200; i++ {
+		hash := sha256.Sum256([]byte(fmt.Sprintf("agent:main:chat:%d", i)))
+		key := "sk_v1_" + hex.EncodeToString(hash[:])
+		for _, in := range []string{
+			"session_key=" + key,
+			"Proactive compression: context budget exceeded session_key=" + key + " context_window=1024",
+			"agent loaded session " + key + ".jsonl",
+			key,
+		} {
+			if got := Text(in); got != in {
+				t.Fatalf("Text masked a session key:\n in: %q\nout: %q", in, got)
+			}
+			if got := Formats(in); got != in {
+				t.Fatalf("Formats masked a session key:\n in: %q\nout: %q", in, got)
+			}
+		}
+	}
+}
+
+// TestTextStillMasksKeysThatOnlyLookLikeSessionKeys keeps the exemption exact:
+// anything that is not precisely "sk_v1_" plus 64 hex digits is still an
+// API-key candidate.
+func TestTextStillMasksKeysThatOnlyLookLikeSessionKeys(t *testing.T) {
+	SetSecrets(nil)
+	hash := sha256.Sum256([]byte("agent:main:main"))
+	hexKey := hex.EncodeToString(hash[:])
+	for name, in := range map[string]string{
+		"one digit short":  "key sk_v1_" + hexKey[:63],
+		"not hex":          "key sk_v1_" + strings.Repeat("z", 64),
+		"extra suffix":     "key sk_v1_" + hexKey + "_extra",
+		"other prefix":     "key sk_v2_" + hexKey,
+		"openai style key": "OPENAI_API_KEY=sk-proj-4eC39HqLyjWDarjtT1zdp7dc",
+	} {
+		if got := Text(in); !strings.Contains(got, Marker) {
+			t.Errorf("%s: %q was not masked: %q", name, in, got)
+		}
+	}
+}
+
+// TestTextMasksOpaqueTokenInFrontOfSessionKey makes sure the session-key
+// exemption only covers the key itself: a credential glued to it in the same
+// run is still masked and the key is kept.
+func TestTextMasksOpaqueTokenInFrontOfSessionKey(t *testing.T) {
+	SetSecrets(nil)
+	hash := sha256.Sum256([]byte("agent:main:main"))
+	sessionKey := "sk_v1_" + hex.EncodeToString(hash[:])
+	secret := "kZ8x3PqR7tYv2wBc5nMf9jLh4gD1sA6eUoQpXmWz"
+
+	got := Text("value " + secret + "=" + sessionKey)
+	if strings.Contains(got, secret) {
+		t.Fatalf("credential in front of a session key leaked: %q", got)
+	}
+	if !strings.HasSuffix(got, sessionKey) {
+		t.Fatalf("session key must be kept: %q", got)
 	}
 }

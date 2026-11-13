@@ -18,6 +18,7 @@
 package redact
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"math"
 	"regexp"
@@ -189,6 +190,10 @@ type secretPattern struct {
 	// keep the key name and mask only the value; the default masks the whole
 	// match.
 	replacement string
+	// keep, when set, is asked about every whole match and leaves it unmasked
+	// if it returns true. It carves known non-secrets out of a format that the
+	// regexp alone cannot exclude (RE2 has no lookahead).
+	keep func(match string) bool
 }
 
 func (p secretPattern) mayMatch(line string) bool {
@@ -228,6 +233,7 @@ var secretPatterns = []secretPattern{
 	{
 		re:   regexp.MustCompile(`\b(?:sk|rk)[-_][A-Za-z0-9_-]{16,}`),
 		lits: []string{"sk-", "sk_", "rk-", "rk_"},
+		keep: isSessionKey,
 	},
 	// GitHub tokens: ghp_..., gho_..., ghu_..., ghs_..., ghr_..., github_pat_...
 	{
@@ -350,15 +356,40 @@ func line(text string, loose bool) string {
 
 func applyPatterns(text string, patterns []secretPattern) string {
 	for _, p := range patterns {
-		if p.mayMatch(text) {
-			replacement := p.replacement
-			if replacement == "" {
-				replacement = Marker
-			}
-			text = p.re.ReplaceAllString(text, replacement)
+		if !p.mayMatch(text) {
+			continue
 		}
+		if p.keep != nil {
+			text = p.re.ReplaceAllStringFunc(text, func(match string) string {
+				if p.keep(match) {
+					return match
+				}
+				return Marker
+			})
+			continue
+		}
+		replacement := p.replacement
+		if replacement == "" {
+			replacement = Marker
+		}
+		text = p.re.ReplaceAllString(text, replacement)
 	}
 	return text
+}
+
+// sessionKeyPrefix starts every canonical session key: "sk_v1_" followed by the
+// 64 hex digits of a SHA-256 (see pkg/session).
+const sessionKeyPrefix = "sk_v1_"
+
+// isSessionKey reports whether s is exactly a canonical session key. Session
+// keys are opaque identifiers derived from public routing data, not
+// credentials, but their "sk_" prefix matches the API-key format. Masking them
+// blanks the session_key field of log lines and makes sessions impossible to
+// follow.
+func isSessionKey(s string) bool {
+	return len(s) == len(sessionKeyPrefix)+sha256.Size*2 &&
+		strings.HasPrefix(s, sessionKeyPrefix) &&
+		isHexToken(s[len(sessionKeyPrefix):])
 }
 
 // mayHaveOpaqueRun is a prefilter for highEntropyRunPattern. It reports
@@ -414,25 +445,32 @@ func maskOpaqueRuns(line string) string {
 		if hinted {
 			minEntropy, minLength = secretHintMinEntropy, secretHintMinLength
 		}
-		if len(token) < minLength {
+		// A session key at the end of the run is an identifier, not a
+		// credential. Judge only what precedes it, so "session_key=sk_v1_<hex>"
+		// does not get masked as one opaque 80-character token.
+		candidate, sessionKey := token, ""
+		if i := strings.Index(token, sessionKeyPrefix); i >= 0 && isSessionKey(token[i:]) {
+			candidate, sessionKey = token[:i], token[i:]
+		}
+		if len(candidate) < minLength {
 			return token
 		}
-		if isHexToken(token) || !hasLetterAndDigit(token) {
+		if isHexToken(candidate) || !hasLetterAndDigit(candidate) {
 			// Hex hashes and pure letter or digit runs are far more likely
 			// to be commit ids, checksums or identifiers than credentials,
 			// even on a line that mentions a secret-like word.
 			return token
 		}
-		if strings.ContainsAny(token, `/\`) {
+		if strings.ContainsAny(candidate, `/\`) {
 			// Slashes make the run a filesystem path or a URL far more often
 			// than a credential. Masking paths would corrupt ordinary log
 			// lines and chat messages without protecting a secret.
 			return token
 		}
-		if shannonEntropy(token) < minEntropy {
+		if shannonEntropy(candidate) < minEntropy {
 			return token
 		}
-		return Marker
+		return Marker + sessionKey
 	})
 }
 
