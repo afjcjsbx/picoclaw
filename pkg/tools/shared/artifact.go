@@ -2,12 +2,15 @@ package toolshared
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/sipeed/picoclaw/pkg/redact"
 )
 
 // Artifact retention bounds. Artifact directories (for example
@@ -117,18 +120,27 @@ func PersistTextArtifactWindow(dir, pattern, text string, maxRunes int, label st
 
 	headBudget := int(float64(maxRunes) * HeadTailHeadRatio)
 	tailBudget := maxRunes - headBudget
+	headEnd := runePrefixBytes(text, headBudget)
+	tailStart := runeSuffixStart(text, tailBudget)
+	// Never leave an unmatchable fragment of a registered credential at a
+	// truncation boundary: pull the head cut back to the start of a crossing
+	// secret and push the tail cut past its end.
+	headEnd = redact.SafeCut(text, headEnd)
+	tailStart = redact.SafeStart(text, tailStart)
+	if tailStart < headEnd {
+		tailStart = headEnd
+	}
+	head, tail := text[:headEnd], text[tailStart:]
+	omitted := total - utf8.RuneCountInString(head) - utf8.RuneCountInString(tail)
+	if omitted < 0 {
+		omitted = 0
+	}
 	notice := fmt.Sprintf(
 		"\n\n... [%s TRUNCATED - %s chars omitted out of %s total] ...\n\n",
-		label, formatCount(total-headBudget-tailBudget), formatCount(total),
+		label, formatCount(omitted), formatCount(total),
 	)
 
-	path, err := writeArtifactParts(
-		dir,
-		pattern,
-		text[:runePrefixBytes(text, headBudget)],
-		notice,
-		text[runeSuffixStart(text, tailBudget):],
-	)
+	path, err := writeArtifactParts(dir, pattern, head, notice, tail)
 	return path, true, err
 }
 
@@ -145,12 +157,31 @@ func writeArtifactParts(dir, pattern string, parts ...string) (string, error) {
 		return "", err
 	}
 	path := tmpFile.Name()
+	// Stream through the redaction writer so configured credentials never reach
+	// disk. Only the longest-registered-secret tail is buffered, never the
+	// payload; SafeCut/SafeStart keep truncation cuts from splitting a secret.
+	out := redact.Writer(tmpFile)
 	for _, part := range parts {
-		if _, err = tmpFile.WriteString(part); err != nil {
+		if _, err = io.WriteString(out, part); err != nil {
 			_ = tmpFile.Close()
 			_ = os.Remove(path)
 			return "", err
 		}
+		// Parts are not contiguous source text (the notice separates head and
+		// tail), so flush the carry buffer between them instead of letting a
+		// partial credential from one part join the next.
+		if flusher, ok := out.(interface{ Flush() error }); ok {
+			if err = flusher.Flush(); err != nil {
+				_ = tmpFile.Close()
+				_ = os.Remove(path)
+				return "", err
+			}
+		}
+	}
+	if err = out.Close(); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(path)
+		return "", err
 	}
 	if err = tmpFile.Close(); err != nil {
 		_ = os.Remove(path)

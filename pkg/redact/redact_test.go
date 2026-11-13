@@ -6,6 +6,7 @@
 package redact
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -457,5 +458,82 @@ func TestContentKeepsCodeAndMasksSecretsAndFormats(t *testing.T) {
 	}
 	if got := Text(code); got == code {
 		t.Fatalf("Text is expected to apply the assignment rules to %q", code)
+	}
+}
+
+func TestWriterRedactsSecretSplitAcrossWrites(t *testing.T) {
+	const key = "sk-live-0123456789abcdef"
+	SetSecrets([]string{key})
+	t.Cleanup(func() { SetSecrets(nil) })
+
+	var buf bytes.Buffer
+	w := Writer(&buf)
+	for _, chunk := range []string{"before ", key[:7], key[7:15], key[15:], " after"} {
+		if _, err := w.Write([]byte(chunk)); err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	got := buf.String()
+	if strings.Contains(got, key) {
+		t.Fatalf("credential leaked: %q", got)
+	}
+	if want := "before " + Marker + " after"; got != want {
+		t.Fatalf("redacted stream = %q, want %q", got, want)
+	}
+}
+
+func TestWriterMasksTrailingPartialSecret(t *testing.T) {
+	const key = "ghp_0123456789abcdefghij"
+	SetSecrets([]string{key})
+	t.Cleanup(func() { SetSecrets(nil) })
+
+	var buf bytes.Buffer
+	w := Writer(&buf)
+	if _, err := w.Write([]byte("token=" + key[:8])); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	got := buf.String()
+	if strings.Contains(got, key[:8]) || !strings.Contains(got, Marker) {
+		t.Fatalf("partial credential not masked: %q", got)
+	}
+}
+
+func TestWriterPassesThroughWithoutSecrets(t *testing.T) {
+	SetSecrets(nil)
+	var buf bytes.Buffer
+	w := Writer(&buf)
+	for _, chunk := range []string{"plain ", "text"} {
+		if _, err := w.Write([]byte(chunk)); err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if got, want := buf.String(), "plain text"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestSafeCutAndStartKeepSecretsWhole(t *testing.T) {
+	const key = "sk-live-0123456789abcdef"
+	SetSecrets([]string{key})
+	t.Cleanup(func() { SetSecrets(nil) })
+
+	text := "head " + key + " tail"
+	cut := strings.Index(text, key) + 5
+	if got := SafeCut(text, cut); got > strings.Index(text, key) {
+		t.Fatalf("SafeCut(%d) = %d, want <= %d", cut, got, strings.Index(text, key))
+	}
+	if got := SafeStart(text, cut); got < strings.Index(text, key)+len(key) {
+		t.Fatalf("SafeStart(%d) = %d, want >= %d", cut, got, strings.Index(text, key)+len(key))
 	}
 }

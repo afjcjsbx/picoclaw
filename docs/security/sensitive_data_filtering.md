@@ -9,7 +9,7 @@ PicoClaw can filter sensitive values (API keys, tokens, secrets, passwords) from
 
 ## Overview
 
-When the LLM uses a tool that returns its own credentials (e.g., a tool that echoes the API key being used), those values are automatically replaced with `[FILTERED]` in the message sent to the LLM.
+When the LLM uses a tool that returns its own credentials (e.g., a tool that echoes the API key being used), those values are automatically replaced with `[FILTERED]` in the message sent to the LLM and in large tool-result artifacts written to disk.
 
 Sensitive values are collected from [`.security.yml`](./credential_encryption.md) — the centralized storage for all sensitive configuration (API keys, tokens, secrets stored alongside `config.json`). This includes:
 
@@ -83,15 +83,14 @@ Tool call logs (registry, tool loop and agent execution pipeline) record only th
 
 Large tool results (over `tools.max_inline_result_chars`, default `16384`) are saved to the agent workspace under `<workspace>/.artifacts/tool/`, while a bounded head+tail preview and a pointer stay inline in the model context. `web_fetch` defaults `maxChars` to that same threshold and may only lower it per call; a smaller preview still writes an artifact even when the page is under the threshold (capped at `2,000,000` characters), so the full page remains recoverable. See [Large tool results](../reference/tools_configuration.md#large-tool-results) for the full behavior.
 
-The spill happens inside tool-result normalization, **before** `filter_sensitive_data` is applied. The filter runs later and only on the content that is injected into the model context, so the two surfaces diverge:
+Artifacts are redacted **while they are written**. Every artifact path — the generic tool-result spill, exec's streamed `exec_*.log`, and MCP's `.artifacts/mcp` files — goes through the same exact-value redaction layer used for logs and outbound messages. Configured credentials from `.security.yml` are replaced with `[FILTERED]` as bytes are streamed to the file, before they reach disk. A credential split across write chunks or across a head+tail truncation boundary is detected too: the stream writer holds back at most one byte less than the longest configured value, and truncation cuts are moved so a secret is never split into two fragments.
 
 - **Model context**: still filtered — the preview embedded in the result passes through `filter_sensitive_data` like any other tool content.
-- **Artifact on disk**: **not filtered** — it contains the full tool output (verbatim, or the normalized pageable text for a recognized JSON envelope), including any secret that the filter would otherwise have replaced with `[FILTERED]`.
-- **Model access**: the artifact path is exposed to the model (a structured `[file:...]` tag plus an inline pointer). The model can read it with `read_file` or forward it with `send_file`; `send_file` delivers the raw file without filtering.
+- **Artifact on disk**: configured credentials are already masked with `[FILTERED]`, both in the full-payload artifact and in the exec stream. Redaction is independent of `filter_sensitive_data`: disabling the model-facing filter does not cause credentials to be written in clear.
+- **Memory**: the artifact is never materialized as a redacted copy. Redaction streams through a small carry buffer (one byte less than the longest registered credential, typically a few dozen bytes), so peak memory stays bounded by the I/O chunk and the existing head/tail window.
+- **Residual risk**: values that are **not** registered in `.security.yml` are not detectable by exact-value redaction. Treat `<workspace>/.artifacts/` as sensitive data when commands can emit credentials that PicoClaw does not know about, and do not forward artifacts with `send_file` to untrusted destinations.
 
-This applies to every tool. It was already true for MCP large-text artifacts, but the behavior is now generalized to all tools (for example, a large `exec` result can persist raw credentials to the workspace even when filtering is enabled). The artifact directory is created with `0700` and files with `0600`, but permissions do not redact content.
-
-If your threat model requires that secrets never reach disk unfiltered, disable the spill (`max_inline_result_chars: 0`), avoid running commands that echo credentials, and treat `<workspace>/.artifacts/` as sensitive data. A future improvement would be to apply the filter (or an equivalent redaction) to the artifact text before it is written.
+The artifact directory is created with `0700` and files with `0600`. Permissions still complement, but do not replace, content redaction.
 
 ---
 
@@ -129,6 +128,7 @@ The model is using API key [FILTERED] and Telegram bot [FILTERED]
 - **Fast path**: Content shorter than `filter_min_length` (default 8) is returned unchanged without any string scanning
 - **Efficient replacement**: Uses `strings.Replacer` with O(n+m) complexity instead of regex
 - **Lazy initialization**: The replacement map is built once on first access via `sync.Once`
+- **Streaming artifacts**: Artifact redaction is O(n) and holds back only a carry buffer no larger than the longest registered credential, so persisting a multi-megabyte spill does not create a second in-memory copy
 
 ---
 
@@ -137,7 +137,7 @@ The model is using API key [FILTERED] and Telegram bot [FILTERED]
 - **Credential exposure prevention**: Without filtering, tools that echo credentials could cause the LLM to see its own API keys, potentially leading to confusion or credential leakage in logs
 - **Defense in depth**: Filtering complements (but does not replace) credential encryption — both features should be used together
 - **No false positives**: Only values explicitly stored in `.security.yml` are filtered; the LLM's general knowledge is unaffected
-- **Artifacts bypass filtering on disk**: large tool-result artifacts are written before filtering and are not redacted — treat `<workspace>/.artifacts/` as sensitive (see [Large tool-result artifacts](#large-tool-result-artifacts))
+- **Artifacts are redacted on disk**: large tool-result artifacts and exec spill files stream through the same exact-value redaction, independent of `filter_sensitive_data` (see [Large tool-result artifacts](#large-tool-result-artifacts)). Credentials not present in `.security.yml` still require treating `<workspace>/.artifacts/` as sensitive
 
 ---
 
