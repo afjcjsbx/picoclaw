@@ -336,7 +336,7 @@ func TestSpawnTool_AllowOutbound(t *testing.T) {
 			<-spawner.done
 
 			// Collect child tool names
-			var childToolNames []string
+			childToolNames := make([]string, 0, len(spawner.lastConfig.Tools))
 			for _, t := range spawner.lastConfig.Tools {
 				childToolNames = append(childToolNames, t.Name())
 			}
