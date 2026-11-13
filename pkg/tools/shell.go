@@ -79,6 +79,7 @@ type ExecTool struct {
 	maxOutputChars       int
 	maxInlineResultChars int
 	baseEnv              map[string]string
+	state                *execStateStore
 	sessionManager       *SessionManager
 }
 
@@ -358,6 +359,7 @@ func NewExecToolWithConfig(
 		maxOutputChars:       maxOutputChars,
 		maxInlineResultChars: maxInlineResultChars,
 		baseEnv:              newExecEnv(workingDir, execEnvSet, execEnvAllowlist),
+		state:                newExecStateStore(),
 		sessionManager:       getSessionManager(),
 	}, nil
 }
@@ -388,6 +390,8 @@ func buildExecDescription() string {
 Every foreground call starts a fresh shell in the configured working directory; pass cwd instead of using cd. For file operations, prefer list_dir, search_files, read_file, edit_file and write_file over cat, grep, find, ls, sed and echo/heredoc.
 
 The child environment is sanitized: only safe variables and the operator's allowlist are inherited. Use the env argument for additional non-sensitive variables instead of relying on the parent environment.
+
+Within a conversation, the last explicit cwd and env values are remembered and reused when omitted. They do not capture cd or export executed inside a command. Pass env: {} to clear remembered variables.
 
 Foreground results start with a one-line [exec] {...} header (exitCode, timedOut, truncated, durationMs, error), then raw stdout/stderr. Non-zero exit codes can be normal: grep returns 1 for no match and diff returns 1 for differences.
 
@@ -437,11 +441,12 @@ func (t *ExecTool) Parameters() map[string]any {
 			},
 			"cwd": map[string]any{
 				"type":        "string",
-				"description": "Working directory for the command",
+				"description": "Working directory for the command. The last explicit value is remembered for later calls in the same conversation; omit cwd to reuse it. Defaults to the agent workspace when no value is remembered.",
 			},
 			"env": map[string]any{
 				"type": "object",
 				"description": "Additional environment variables for this command; keys are variable names and values must be strings. " +
+					"The map is remembered for later calls in the same conversation and merged with new entries; pass an empty object to clear remembered variables. " +
 					"The inherited environment is sanitized: only safe variables (PATH, HOME, USER, LANG, SHELL, TERM, PWD, TZ, " +
 					"proxy and locale variables) plus tools.exec.env_set and tools.exec.env_allowlist are passed through. " +
 					"Cannot override PATH, HOME, USER, LOGNAME, SHELL, LD_PRELOAD, LD_LIBRARY_PATH, LD_AUDIT, LD_DEBUG, " +
@@ -655,17 +660,30 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 		return ErrorResult("notify is only supported with background=true or when the run is promoted to background")
 	}
 
+	state := t.state.load(ctx)
+	effectiveEnv, stateEnv, envProvided := mergeExecStateEnv(state.env, extraEnv)
+
+	requestedCwd, cwdProvided := args["cwd"].(string)
+	cwdProvided = cwdProvided && requestedCwd != ""
+	rememberedCwd := false
+
 	cwd := t.workingDir
-	if wd, ok := args["cwd"].(string); ok && wd != "" {
-		if t.restrictToWorkspace && t.workingDir != "" {
-			resolvedWD, err := fstools.ValidatePathWithAllowPaths(wd, t.workingDir, true, t.allowedPathPatterns)
-			if err != nil {
-				return ErrorResult("Command blocked by safety guard (" + err.Error() + ")")
-			}
-			cwd = resolvedWD
-		} else {
-			cwd = wd
+	switch {
+	case cwdProvided:
+		cwd = requestedCwd
+	case state.cwd != "":
+		if resolved, ok := t.rememberedCwd(ctx, state.cwd); ok {
+			cwd = resolved
+			rememberedCwd = true
 		}
+	}
+
+	if cwdProvided && t.restrictToWorkspace && t.workingDir != "" {
+		resolvedWD, err := fstools.ValidatePathWithAllowPaths(cwd, t.workingDir, true, t.allowedPathPatterns)
+		if err != nil {
+			return ErrorResult("Command blocked by safety guard (" + err.Error() + ")")
+		}
+		cwd = resolvedWD
 	}
 
 	if cwd == "" {
@@ -674,6 +692,12 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 			cwd = wd
 		}
 	}
+
+	// Remember the path that passed workspace validation, not the post-symlink
+	// resolved path: on platforms where the workspace itself lives behind a
+	// symlink (for example /var -> /private/var on macOS), storing the resolved
+	// path would fail validation on the next call.
+	stateCwd := cwd
 
 	if guardError := t.guardCommand(guardedCommand, cwd); guardError != "" {
 		return ErrorResult(guardError)
@@ -684,6 +708,9 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 	if t.restrictToWorkspace && t.workingDir != "" && cwd != t.workingDir {
 		resolved, err := filepath.EvalSymlinks(cwd)
 		if err != nil {
+			if rememberedCwd {
+				t.forgetRememberedCwd(ctx, cwd, err)
+			}
 			return ErrorResult(fmt.Sprintf("Command blocked by safety guard (path resolution failed: %v)", err))
 		}
 		if fstools.IsAllowedPath(resolved, t.allowedPathPatterns) {
@@ -696,20 +723,89 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 			}
 			rel, err := filepath.Rel(wsResolved, resolved)
 			if err != nil || !filepath.IsLocal(rel) {
+				if rememberedCwd {
+					t.forgetRememberedCwd(ctx, cwd, fmt.Errorf("working directory escaped workspace"))
+				}
 				return ErrorResult("Command blocked by safety guard (working directory escaped workspace)")
 			}
 			cwd = resolved
 		}
 	}
 
-	if isBackground {
-		return t.runBackground(ctx, command, cwd, isPty, backgroundNote, extraEnv)
+	// Persist only arguments that passed validation and the command guard.
+	if cwdProvided && stateCwd != "" {
+		t.rememberCwd(ctx, stateCwd)
 	}
-	if promoteToBackground {
-		return t.runBackground(ctx, command, cwd, isPty, t.foregroundPromotionNote(timeoutDisabled, timeout), extraEnv)
+	if envProvided && t.state != nil {
+		t.state.storeEnv(ctx, stateEnv)
 	}
 
-	return t.runSync(ctx, command, cwd, timeout, extraEnv)
+	if isBackground {
+		return t.runBackground(ctx, command, cwd, isPty, backgroundNote, effectiveEnv)
+	}
+	if promoteToBackground {
+		return t.runBackground(
+			ctx,
+			command,
+			cwd,
+			isPty,
+			t.foregroundPromotionNote(timeoutDisabled, timeout),
+			effectiveEnv,
+		)
+	}
+
+	return t.runSync(ctx, command, cwd, timeout, effectiveEnv)
+}
+
+// rememberedCwd revalidates a cwd stored for the conversation. It returns
+// ok=false and forgets the value when the directory disappeared or no longer
+// satisfies the workspace policy, so the caller can fall back to the default.
+func (t *ExecTool) rememberedCwd(ctx context.Context, cwd string) (string, bool) {
+	if cwd == "" {
+		return "", false
+	}
+	resolved := cwd
+	if t.restrictToWorkspace && t.workingDir != "" {
+		validated, err := fstools.ValidatePathWithAllowPaths(cwd, t.workingDir, true, t.allowedPathPatterns)
+		if err != nil {
+			t.forgetRememberedCwd(ctx, cwd, err)
+			return "", false
+		}
+		resolved = validated
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		t.forgetRememberedCwd(ctx, cwd, err)
+		return "", false
+	}
+	if !info.IsDir() {
+		t.forgetRememberedCwd(ctx, cwd, fmt.Errorf("not a directory"))
+		return "", false
+	}
+	if abs, err := filepath.Abs(resolved); err == nil {
+		resolved = abs
+	}
+	return resolved, true
+}
+
+func (t *ExecTool) forgetRememberedCwd(ctx context.Context, cwd string, cause error) {
+	if t.state != nil {
+		t.state.clearCwd(ctx)
+	}
+	logger.WarnCF("shell", "forgetting unusable remembered cwd", map[string]any{
+		"cwd":   cwd,
+		"error": cause.Error(),
+	})
+}
+
+func (t *ExecTool) rememberCwd(ctx context.Context, cwd string) {
+	if t.state == nil {
+		return
+	}
+	if abs, err := filepath.Abs(cwd); err == nil {
+		cwd = abs
+	}
+	t.state.rememberCwd(ctx, cwd)
 }
 
 // foregroundPromotionNote explains why a requested foreground timeout was
