@@ -123,6 +123,13 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 	}
 	defer exec.closeOwnedProviders()
 
+	// SetupTurn has persisted the user message: from here a crash leaves a
+	// history that RecoverInterruptedTurns can pick up.
+	if al.resumable(ts) {
+		markTurnInFlight(ts)
+		defer clearTurnInFlight(ctx, ts)
+	}
+
 	// Convenience references to exec fields used throughout the turn loop.
 	messages := exec.messages
 	pendingMessages := exec.pendingMessages

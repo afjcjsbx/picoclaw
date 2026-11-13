@@ -260,6 +260,7 @@ func Run(debug bool, homePath, configPath string, allowEmptyStartup bool) (runEr
 	defer cancel()
 
 	go agentLoop.Run(ctx)
+	go agentLoop.RecoverInterruptedTurns(ctx)
 
 	var configReloadChan <-chan *config.Config
 	stopWatch := func() {}

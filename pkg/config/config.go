@@ -690,9 +690,10 @@ type AgentDefaults struct {
 	VisionMaxImageDimension   int                 `json:"vision_max_image_dimension,omitempty" env:"PICOCLAW_AGENTS_DEFAULTS_VISION_MAX_IMAGE_DIMENSION"`
 	VisionJPEGQuality         int                 `json:"vision_jpeg_quality,omitempty"        env:"PICOCLAW_AGENTS_DEFAULTS_VISION_JPEG_QUALITY"`
 	Routing                   *RoutingConfig      `json:"routing,omitempty"`
-	SteeringMode              string              `json:"steering_mode,omitempty"              env:"PICOCLAW_AGENTS_DEFAULTS_STEERING_MODE"`           // "one-at-a-time" (default) or "all"
-	MaxParallelTurns          int                 `json:"max_parallel_turns,omitempty"         env:"PICOCLAW_AGENTS_DEFAULTS_MAX_PARALLEL_TURNS"`      // Max concurrent turns (0 or 1 = sequential)
-	MaxParallelToolCalls      int                 `json:"max_parallel_tool_calls,omitempty"    env:"PICOCLAW_AGENTS_DEFAULTS_MAX_PARALLEL_TOOL_CALLS"` // Max concurrent tool calls of one LLM response (0 or 1 = sequential)
+	SteeringMode              string              `json:"steering_mode,omitempty"              env:"PICOCLAW_AGENTS_DEFAULTS_STEERING_MODE"`            // "one-at-a-time" (default) or "all"
+	MaxParallelTurns          int                 `json:"max_parallel_turns,omitempty"         env:"PICOCLAW_AGENTS_DEFAULTS_MAX_PARALLEL_TURNS"`       // Max concurrent turns (0 or 1 = sequential)
+	MaxParallelToolCalls      int                 `json:"max_parallel_tool_calls,omitempty"    env:"PICOCLAW_AGENTS_DEFAULTS_MAX_PARALLEL_TOOL_CALLS"`  // Max concurrent tool calls of one LLM response (0 or 1 = sequential)
+	ResumeInterruptedTurns    bool                `json:"resume_interrupted_turns"             env:"PICOCLAW_AGENTS_DEFAULTS_RESUME_INTERRUPTED_TURNS"` // Resume turns cut short by a crash or restart on next start
 	SubTurn                   SubTurnConfig       `json:"subturn"                                                                                           envPrefix:"PICOCLAW_AGENTS_DEFAULTS_SUBTURN_"`
 	ToolFeedback              ToolFeedbackConfig  `json:"tool_feedback,omitempty"`
 	LoopDetection             LoopDetectionConfig `json:"loop_detection,omitempty"`
