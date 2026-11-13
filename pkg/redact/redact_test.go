@@ -305,3 +305,58 @@ func TestOpaqueRunPrefilterMatchesUnfilteredRule(t *testing.T) {
 		t.Fatalf("only %d of 20000 random lines were masked; the test no longer exercises the rule", masked)
 	}
 }
+
+// TestSecretsDoesNotAllocateWithoutAHit pins the streaming cost. Every streamed
+// update passes the whole accumulated answer through Secrets, and
+// strings.Replacer copies its input even when nothing matches, so text with no
+// registered value must go through without a single allocation.
+func TestSecretsDoesNotAllocateWithoutAHit(t *testing.T) {
+	SetSecrets([]string{"sk-or-v1-FAKEFAKEFAKEFAKEFAKE", "voice-key-plain-123456", `pa&ss<word>1234`})
+	t.Cleanup(func() { SetSecrets(nil) })
+
+	answer := strings.Repeat("Sure, here is how the gateway reloads its configuration. ", 70)
+	for _, n := range []int{20, 400, len(answer)} {
+		prefix := answer[:n]
+		if got := Secrets(prefix); got != prefix {
+			t.Fatalf("text without a secret changed: %q", got)
+		}
+		if allocs := testing.AllocsPerRun(50, func() { _ = Secrets(prefix) }); allocs != 0 {
+			t.Errorf("Secrets on %d clean bytes allocates %v times, want 0", n, allocs)
+		}
+	}
+}
+
+// TestSecretsMatchesReplacerOnRandomText checks the substring prefilter against
+// the replacer it guards: texts built from secrets, their JSON-escaped forms,
+// near misses and filler must come out exactly as the replacer alone renders
+// them.
+func TestSecretsMatchesReplacerOnRandomText(t *testing.T) {
+	secrets := []string{"sk-or-v1-FAKEFAKEFAKEFAKEFAKE", "voice-key-plain-123456", `pa&ss<word>1234`}
+	SetSecrets(secrets)
+	t.Cleanup(func() { SetSecrets(nil) })
+
+	pieces := []string{
+		" ", "\n", "abc", "token=", "{\"k\":\"",
+		secrets[0], secrets[1], secrets[2], jsonEscaped(secrets[2]),
+		secrets[0][:12], secrets[1][:10], secrets[2][:5], // near misses
+	}
+	rng := rand.New(rand.NewSource(2))
+	hits := 0
+	for n := 0; n < 5000; n++ {
+		var b strings.Builder
+		for i, size := 0, rng.Intn(12); i < size; i++ {
+			b.WriteString(pieces[rng.Intn(len(pieces))])
+		}
+		in := b.String()
+		want := registered.Load().replacer.Replace(in)
+		if got := Secrets(in); got != want {
+			t.Fatalf("prefilter changed the result for %q:\n got: %q\nwant: %q", in, got, want)
+		}
+		if want != in {
+			hits++
+		}
+	}
+	if hits < 1000 {
+		t.Fatalf("only %d of 5000 random texts held a secret; the test no longer exercises the replacer", hits)
+	}
+}
