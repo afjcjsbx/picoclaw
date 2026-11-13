@@ -33,6 +33,9 @@ onboard
 coverage.txt
 coverage.html
 
+# Python
+__pycache__/
+
 # OS
 .DS_Store
 
