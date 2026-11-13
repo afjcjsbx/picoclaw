@@ -324,8 +324,14 @@ func line(text string, loose bool) string {
 	text = applyPatterns(text, secretPatterns)
 	if loose {
 		text = applyPatterns(text, loosePatterns)
-		text = sensitiveQueryParamPattern.ReplaceAllString(text, "${1}"+Marker)
-		text = basicAuthURLPattern.ReplaceAllString(text, "${1}"+Marker+"${3}")
+		// regexp.ReplaceAllString copies its input even without a match, so
+		// these rules need the same cheap prefilter as the pattern lists.
+		if strings.ContainsAny(text, "?&") && strings.Contains(text, "=") {
+			text = sensitiveQueryParamPattern.ReplaceAllString(text, "${1}"+Marker)
+		}
+		if strings.Contains(text, "://") && strings.Contains(text, "@") {
+			text = basicAuthURLPattern.ReplaceAllString(text, "${1}"+Marker+"${3}")
+		}
 	}
 	return redactHighEntropyRuns(text)
 }
@@ -343,7 +349,48 @@ func applyPatterns(text string, patterns []secretPattern) string {
 	return text
 }
 
+// mayHaveOpaqueRun is a prefilter for highEntropyRunPattern. It reports
+// whether line holds a run of token characters that redactHighEntropyRuns could
+// still mask: long enough, mixing letters and digits, and without a slash.
+// Most log lines and chat text have none, and skipping the regexp for them
+// avoids both its scan and the copy ReplaceAllStringFunc makes of its input.
+func mayHaveOpaqueRun(line string) bool {
+	const minRun = min(secretHintMinLength, opaqueMinLength)
+	run := 0
+	var letter, digit, slash bool
+	for i := 0; i <= len(line); i++ {
+		var c byte // 0 past the end: not a token character, closes the last run
+		if i < len(line) {
+			c = line[i]
+		}
+		switch {
+		case c >= '0' && c <= '9':
+			digit = true
+		case (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'):
+			letter = true
+		case c == '/':
+			slash = true
+		case c == '+' || c == '=' || c == '_' || c == '-':
+		default:
+			if run >= minRun && letter && digit && !slash {
+				return true
+			}
+			run, letter, digit, slash = 0, false, false, false
+			continue
+		}
+		run++
+	}
+	return false
+}
+
 func redactHighEntropyRuns(line string) string {
+	if !mayHaveOpaqueRun(line) {
+		return line
+	}
+	return maskOpaqueRuns(line)
+}
+
+func maskOpaqueRuns(line string) string {
 	// The hint regexp is costly and most lines hold no candidate run, so it
 	// runs lazily, once, on the first candidate.
 	var hinted, hintChecked bool

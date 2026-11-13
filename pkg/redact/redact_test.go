@@ -7,6 +7,7 @@ package redact
 
 import (
 	"encoding/json"
+	"math/rand"
 	"strings"
 	"testing"
 )
@@ -225,5 +226,82 @@ func TestTextMasksMultilineSecrets(t *testing.T) {
 	got := Text("first line clean\nsecond line " + key + "\nthird line clean")
 	if strings.Contains(got, key) {
 		t.Fatalf("multiline secret leaked: %q", got)
+	}
+}
+
+// TestTextCleanLinesDoNotAllocate pins the cheap-path guarantee: log lines and
+// chat text with nothing credential-shaped must cost no allocation, because
+// every log call and outbound message goes through Text. regexp.ReplaceAllString
+// copies its input even without a match, so each rule needs a prefilter.
+func TestTextCleanLinesDoNotAllocate(t *testing.T) {
+	SetSecrets(nil)
+	lines := []string{
+		"starting gateway on port 18790",
+		"loaded 12 tools for agent main",
+		"https://github.com/sipeed/picoclaw/blob/main/README.md",
+		"is this a question? maybe & maybe not",
+		"see /usr/local/share/picoclaw/some/very/long/path/that/is/not/a/real/file/at/all.txt",
+		"retry_policy: exponential-backoff-with-jitter-enabled-by-default",
+	}
+	for _, in := range lines {
+		if got := Text(in); got != in {
+			t.Fatalf("clean line changed: %q -> %q", in, got)
+		}
+		if allocs := testing.AllocsPerRun(50, func() { _ = Text(in) }); allocs != 0 {
+			t.Errorf("Text(%q) allocates %v times, want 0", in, allocs)
+		}
+	}
+}
+
+// TestTextPrefiltersStillReachTheirRules makes sure the guards in front of the
+// URL and entropy rules never skip a line those rules should mask.
+func TestTextPrefiltersStillReachTheirRules(t *testing.T) {
+	SetSecrets(nil)
+	longRun := "kZ8x3PqR7tYv2wBc5nMf9jLh4gD1sA6eUoQpXmWz"
+	cases := map[string]string{
+		"query after question mark": "GET /v1/models?key=short",
+		"query after ampersand":     "GET /v1/models?page=2&token=abcd",
+		"basic auth url":            "proxy https://user:super-secret@example.test/path failed",
+		"entropy run at end":        "value " + longRun,
+		"entropy run at start":      longRun + " trailing",
+	}
+	for name, in := range cases {
+		if got := Text(in); !strings.Contains(got, Marker) {
+			t.Errorf("%s: %q was not masked: %q", name, in, got)
+		}
+	}
+}
+
+// TestOpaqueRunPrefilterMatchesUnfilteredRule checks the prefilter against the
+// rule it guards on random lines: skipping the regexp must never change the
+// result. Lines mix every token character with occasional separators and an
+// optional secret-like word, so a good share of them really get masked.
+func TestOpaqueRunPrefilterMatchesUnfilteredRule(t *testing.T) {
+	const tokenChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+=_-/"
+	rng := rand.New(rand.NewSource(1))
+	masked := 0
+	for n := 0; n < 20000; n++ {
+		var b strings.Builder
+		if rng.Intn(2) == 0 {
+			b.WriteString("token ")
+		}
+		for i, size := 0, rng.Intn(120); i < size; i++ {
+			if rng.Intn(40) == 0 {
+				b.WriteByte(" .:"[rng.Intn(3)])
+				continue
+			}
+			b.WriteByte(tokenChars[rng.Intn(len(tokenChars))])
+		}
+		in := b.String()
+		want := maskOpaqueRuns(in)
+		if got := redactHighEntropyRuns(in); got != want {
+			t.Fatalf("prefilter changed the result for %q:\n got: %q\nwant: %q", in, got, want)
+		}
+		if want != in {
+			masked++
+		}
+	}
+	if masked < 500 {
+		t.Fatalf("only %d of 20000 random lines were masked; the test no longer exercises the rule", masked)
 	}
 }
