@@ -5664,7 +5664,9 @@ func TestHandleReasoning(t *testing.T) {
 		al, msgBus := newLoop(t)
 		al.handleReasoning(context.Background(), "reasoning", "telegram", "")
 
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		// A wrongly published message would show up immediately; a short grace
+		// period is enough to keep this negative assertion fast.
+		ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 		defer cancel()
 		for {
 			select {
@@ -6381,6 +6383,9 @@ func TestProcessMessage_MessageToolPublishesOutboundWithTurnMetadata(t *testing.
 	cfg.Agents.Defaults.ModelName = "test-model"
 	cfg.Agents.Defaults.MaxTokens = 4096
 	cfg.Agents.Defaults.MaxToolIterations = 10
+	// The tool-only first response triggers semantic retries; do not spend the
+	// default 2s+4s backoff on them.
+	cfg.Agents.Defaults.LLMRetryBackoffSecs = 0
 	cfg.Session.Dimensions = []string{"chat"}
 
 	msgBus := bus.NewMessageBus()

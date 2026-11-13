@@ -1,6 +1,7 @@
 package logger
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -12,6 +13,8 @@ import (
 
 	"github.com/rs/zerolog"
 	"golang.org/x/term"
+
+	"github.com/sipeed/picoclaw/pkg/redact"
 )
 
 type LogLevel = zerolog.Level
@@ -334,28 +337,43 @@ func logMessage(level LogLevel, component string, message string, fields map[str
 
 	appendFields(event, fields)
 
-	event.CallerSkipFrame(skip).Msg(message)
+	event.CallerSkipFrame(skip).Msg(redact.Text(message))
 }
 
 func appendFields(event *zerolog.Event, fields map[string]any) {
 	for k, v := range fields {
-		// Type switch to avoid double JSON serialization of strings
-		switch val := v.(type) {
-		case error:
-			event.Str(k, val.Error())
-		case string:
-			event.Str(k, val)
-		case int:
-			event.Int(k, val)
-		case int64:
-			event.Int64(k, val)
-		case float64:
-			event.Float64(k, val)
-		case bool:
-			event.Bool(k, val)
-		default:
-			event.Interface(k, v) // Fallback for struct, slice and maps
+		appendRedactedField(event, k, v)
+	}
+}
+
+// appendRedactedField writes one structured log field after masking
+// credentials. Errors, strings and byte slices are redacted textually;
+// composite values are marshaled first so secrets nested in structs and maps
+// are masked too. Logging must never be a credential leak path.
+func appendRedactedField(event *zerolog.Event, key string, value any) {
+	// Type switch to avoid double JSON serialization of strings
+	switch val := value.(type) {
+	case error:
+		event.Str(key, redact.Text(val.Error()))
+	case string:
+		event.Str(key, redact.Text(val))
+	case []byte:
+		event.Str(key, redact.Text(string(val)))
+	case int:
+		event.Int(key, val)
+	case int64:
+		event.Int64(key, val)
+	case float64:
+		event.Float64(key, val)
+	case bool:
+		event.Bool(key, val)
+	default:
+		data, err := json.Marshal(val)
+		if err != nil {
+			event.Str(key, redact.Text(fmt.Sprintf("%v", val)))
+			return
 		}
+		event.RawJSON(key, []byte(redact.Text(string(data))))
 	}
 }
 

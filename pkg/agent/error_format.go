@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/sipeed/picoclaw/pkg/redact"
 )
 
 func formatProcessingError(err error) string {
@@ -12,14 +13,14 @@ func formatProcessingError(err error) string {
 	}
 
 	if kind, ok := providers.ClassifyAuthError(err); ok {
-		return fmt.Sprintf(
+		return redact.Text(fmt.Sprintf(
 			"Error processing message: %s\n\nOriginal error:\n%s",
 			authErrorFriendlyMessage(kind),
 			err.Error(),
-		)
+		))
 	}
 
-	return fmt.Sprintf("Error processing message: %v", err)
+	return redact.Text(fmt.Sprintf("Error processing message: %v", err))
 }
 
 func authErrorFriendlyMessage(kind providers.AuthErrorKind) string {

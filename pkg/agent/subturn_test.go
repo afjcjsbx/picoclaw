@@ -1991,7 +1991,7 @@ func TestAsyncSubTurn_ParentFinishesEarly(t *testing.T) {
 		},
 	}
 	msgBus := bus.NewMessageBus()
-	provider := &slowMockProvider{delay: 5 * time.Second} // SubTurn takes 5 seconds
+	provider := &slowMockProvider{delay: time.Second} // SubTurn outlives the 100ms parent
 	al := NewAgentLoop(cfg, msgBus, provider)
 
 	var mu sync.Mutex

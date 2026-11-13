@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/sipeed/picoclaw/pkg/redact"
 )
 
 func TestTruncateHeadTail_NoCutWhenItFits(t *testing.T) {
@@ -56,6 +58,29 @@ func TestTruncateHeadTail_RuneSafe(t *testing.T) {
 	}
 	if !strings.HasSuffix(got, strings.Repeat("è", 6)) { // 60% of 10 = 6 runes
 		t.Fatalf("missing tail in %q", got)
+	}
+}
+
+// TestTruncateHeadTail_DoesNotSplitSecrets verifies that a credential crossing
+// either cut is dropped whole instead of leaving a prefix or suffix fragment.
+func TestTruncateHeadTail_DoesNotSplitSecrets(t *testing.T) {
+	const secret = "sk-live-0123456789abcdef"
+	redact.SetSecrets([]string{secret})
+	t.Cleanup(func() { redact.SetSecrets(nil) })
+
+	headText := strings.Repeat("a", 35) + secret + strings.Repeat("b", 200)
+	tailText := strings.Repeat("a", 200) + secret + strings.Repeat("b", 45)
+
+	for _, text := range []string{headText, tailText} {
+		got, cut := TruncateHeadTail(text, 100, "OUTPUT")
+		if !cut {
+			t.Fatal("expected truncation")
+		}
+		for i := 0; i+4 <= len(secret); i++ {
+			if strings.Contains(got, secret[i:i+4]) {
+				t.Fatalf("credential fragment %q leaked: %q", secret[i:i+4], got)
+			}
+		}
 	}
 }
 

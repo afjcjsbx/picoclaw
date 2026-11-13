@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/sipeed/picoclaw/pkg/redact"
 )
 
 // HeadTailHeadRatio is the share of the truncation budget kept from the start
@@ -12,10 +14,11 @@ import (
 const HeadTailHeadRatio = 0.4
 
 // TruncateHeadTail bounds text to maxRunes when it is longer: the first 40% and
-// the last 60% of the budget are kept around a single omission notice, so the
-// kept text is exactly maxRunes long and the notice rides on top. It returns
-// the text unchanged, with false, when it already fits or when maxRunes is not
-// positive. Both cuts are rune-safe.
+// the last 60% of the budget are kept around a single omission notice. The
+// notice rides on top, so the kept text is at most maxRunes runes; a credential
+// that crosses a cut can reduce it slightly so no unmatchable fragment leaks.
+// It returns the text unchanged, with false, when it already fits or when
+// maxRunes is not positive. Both cuts are rune-safe.
 //
 // The notice wording is the shared "<LABEL> TRUNCATED - N chars omitted out of
 // T total" shape, so downstream code that recognizes the marker sees one form
@@ -28,12 +31,24 @@ func TruncateHeadTail(text string, maxRunes int, label string) (string, bool) {
 
 	headBudget := int(float64(maxRunes) * HeadTailHeadRatio)
 	tailBudget := maxRunes - headBudget
+	headEnd := runePrefixBytes(text, headBudget)
+	tailStart := runeSuffixStart(text, tailBudget)
+	headEnd = redact.SafeCut(text, headEnd)
+	tailStart = redact.SafeStart(text, tailStart)
+	if tailStart < headEnd {
+		tailStart = headEnd
+	}
+	head, tail := text[:headEnd], text[tailStart:]
+	omitted := total - utf8.RuneCountInString(head) - utf8.RuneCountInString(tail)
+	if omitted < 0 {
+		omitted = 0
+	}
 	notice := fmt.Sprintf(
 		"\n\n... [%s TRUNCATED - %s chars omitted out of %s total] ...\n\n",
-		label, formatCount(total-headBudget-tailBudget), formatCount(total),
+		label, formatCount(omitted), formatCount(total),
 	)
 
-	return RunePrefix(text, headBudget) + notice + RuneSuffix(text, tailBudget), true
+	return head + notice + tail, true
 }
 
 // RunePrefix returns the first n runes of s, cut on a rune boundary.

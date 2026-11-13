@@ -3,11 +3,13 @@ package bus
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
+	"github.com/sipeed/picoclaw/pkg/redact"
 )
 
 func TestPublishConsume(t *testing.T) {
@@ -281,6 +283,31 @@ func TestPublishOutboundSubscribe(t *testing.T) {
 	}
 	if got.Context.Channel != "telegram" || got.Context.ChatID != "123" {
 		t.Fatalf("expected normalized outbound context, got %+v", got.Context)
+	}
+}
+
+func TestPublishOutboundRedactsCredentials(t *testing.T) {
+	const key = "oc_sk_test_key_1234567890"
+	redact.SetSecrets([]string{key})
+	t.Cleanup(func() { redact.SetSecrets(nil) })
+
+	mb := NewMessageBus()
+	defer mb.Close()
+
+	msg := OutboundMessage{
+		Context: InboundContext{Channel: "telegram", ChatID: "123"},
+		Content: "provider error: Incorrect API key provided: " + key,
+	}
+	if err := mb.PublishOutbound(context.Background(), msg); err != nil {
+		t.Fatalf("PublishOutbound failed: %v", err)
+	}
+
+	got := <-mb.OutboundChan()
+	if strings.Contains(got.Content, key) {
+		t.Fatalf("credential was published to the chat: %q", got.Content)
+	}
+	if !strings.Contains(got.Content, redact.Marker) {
+		t.Fatalf("expected %s in outbound content: %q", redact.Marker, got.Content)
 	}
 }
 

@@ -17,6 +17,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/providers/common"
 	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
+	"github.com/sipeed/picoclaw/pkg/redact"
 )
 
 type (
@@ -163,23 +164,26 @@ func (p *Provider) Chat(
 		return nil, fmt.Errorf("reading response body: %w", err)
 	}
 
-	// Check for HTTP errors with detailed messages
+	// Check for HTTP errors with detailed messages. Provider bodies are
+	// untrusted: redact credentials (some gateways echo the API key) and bound
+	// the preview before it can reach logs or the chat error notice.
+	bodyPreview := common.ResponsePreview([]byte(redact.Text(string(body))), 2048)
 	switch resp.StatusCode {
 	case http.StatusUnauthorized:
 		return nil, fmt.Errorf("authentication failed (401): check your API key")
 	case http.StatusTooManyRequests:
-		return nil, fmt.Errorf("rate limited (429): %s", string(body))
+		return nil, fmt.Errorf("rate limited (429): %s", bodyPreview)
 	case http.StatusBadRequest:
-		return nil, fmt.Errorf("bad request (400): %s", string(body))
+		return nil, fmt.Errorf("bad request (400): %s", bodyPreview)
 	case http.StatusNotFound:
-		return nil, fmt.Errorf("endpoint not found (404): %s", string(body))
+		return nil, fmt.Errorf("endpoint not found (404): %s", bodyPreview)
 	case http.StatusInternalServerError:
-		return nil, fmt.Errorf("internal server error (500): %s", string(body))
+		return nil, fmt.Errorf("internal server error (500): %s", bodyPreview)
 	case http.StatusServiceUnavailable:
-		return nil, fmt.Errorf("service unavailable (503): %s", string(body))
+		return nil, fmt.Errorf("service unavailable (503): %s", bodyPreview)
 	default:
 		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, string(body))
+			return nil, fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, bodyPreview)
 		}
 	}
 

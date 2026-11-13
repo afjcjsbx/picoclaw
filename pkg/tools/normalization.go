@@ -12,6 +12,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/media"
+	"github.com/sipeed/picoclaw/pkg/redact"
 	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
@@ -174,11 +175,12 @@ func normalizeToolResult(
 // applies, the model is told the artifact itself was truncated and how to
 // recover.
 //
-// Security note: this runs before the sensitive-data filter is applied, so the
-// artifact file on disk keeps the unredacted tool output — verbatim, or the
-// normalized pageable text for a recognized JSON envelope. Only the content
-// injected into the model context is filtered. Treat workspace artifacts as
-// sensitive data. See docs/security/sensitive_data_filtering.md.
+// Security note: the pipeline's sensitive-data filter runs later, on the
+// content injected into the model context. The artifact itself is written
+// through the redaction layer (see persistSpillArtifact and
+// toolshared.PersistTextArtifact*), so configured credentials are masked on
+// disk as the bytes are streamed out. See
+// docs/security/sensitive_data_filtering.md.
 func persistLargeResultArtifact(result *ToolResult, toolName, workspace string, maxRunes int) {
 	if result == nil {
 		return
@@ -404,10 +406,6 @@ func buildLargeResultPreview(text string, total, maxRunes int) (preview string, 
 		tailBudget = maxRunes - headBudget
 	}
 
-	headRunes = headBudget
-	tailRunes = tailBudget
-	omitted = total - headBudget - tailBudget
-
 	// Walk only the head and tail windows instead of converting the whole text
 	// to []rune: tool output can be tens of MB while the preview is ~3KB.
 	headEnd := 0
@@ -420,8 +418,21 @@ func buildLargeResultPreview(text string, total, maxRunes int) (preview string, 
 		_, w := utf8.DecodeLastRuneInString(text[:tailStart])
 		tailStart -= w
 	}
+	// Do not leave a credential fragment on either side of the omission: the
+	// pipeline filter can only replace a complete value.
+	headEnd = redact.SafeCut(text, headEnd)
+	tailStart = redact.SafeStart(text, tailStart)
+	if tailStart < headEnd {
+		tailStart = headEnd
+	}
 
 	head, tail := text[:headEnd], text[tailStart:]
+	headRunes = utf8.RuneCountInString(head)
+	tailRunes = utf8.RuneCountInString(tail)
+	omitted = total - headRunes - tailRunes
+	if omitted < 0 {
+		omitted = 0
+	}
 	return fmt.Sprintf("%s\n\n[... %d characters truncated ...]\n\n%s", head, omitted, tail),
 		omitted, headRunes, tailRunes
 }

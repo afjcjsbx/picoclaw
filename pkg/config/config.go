@@ -20,6 +20,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/fileutil"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	providercommon "github.com/sipeed/picoclaw/pkg/providers/common"
+	"github.com/sipeed/picoclaw/pkg/redact"
 )
 
 // rrCounter is a global counter for round-robin load balancing across models.
@@ -1449,7 +1450,9 @@ type CronToolsConfig struct {
 // EnableDenyPatterns only disables the optional built-in default deny set;
 // hardline patterns and CustomDenyPatterns still apply when it is false.
 type ExecConfig struct {
-	ToolConfig          `         envPrefix:"PICOCLAW_TOOLS_EXEC_"`
+	ToolConfig `         envPrefix:"PICOCLAW_TOOLS_EXEC_"`
+	// EnableDenyPatterns controls the optional built-in default deny set.
+	// Hardline patterns and CustomDenyPatterns still apply when it is false.
 	EnableDenyPatterns  bool     `                                 json:"enable_deny_patterns"  env:"PICOCLAW_TOOLS_EXEC_ENABLE_DENY_PATTERNS"`
 	AllowRemote         bool     `                                 json:"allow_remote"          env:"PICOCLAW_TOOLS_EXEC_ALLOW_REMOTE"`
 	CustomDenyPatterns  []string `                                 json:"custom_deny_patterns"  env:"PICOCLAW_TOOLS_EXEC_CUSTOM_DENY_PATTERNS"`
@@ -2063,6 +2066,12 @@ func LoadConfig(path string) (*Config, error) {
 
 	cfg.Session.ApplyDmScope()
 	cfg.Session.DeriveDmScope()
+
+	// Register every configured credential with the redaction layer. This is
+	// the single point where a config becomes live, so all runtime logging and
+	// outbound chat paths can mask these exact values without knowing where
+	// they came from.
+	redact.SetSecrets(cfg.SensitiveValues())
 
 	return cfg, nil
 }

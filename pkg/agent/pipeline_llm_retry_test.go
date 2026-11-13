@@ -195,7 +195,7 @@ func newSemanticRetryLoop(
 				MaxTokens:               4096,
 				MaxToolIterations:       10,
 				MaxLLMRetries:           retries,
-				LLMRetryBackoffSecs:     1,
+				LLMRetryBackoffSecs:     0, // these tests cover retry decisions, not timing
 				LLMRetryOnEmptyContent:  true,
 				LLMRetryOnFinishReasons: []string{"length"},
 			},

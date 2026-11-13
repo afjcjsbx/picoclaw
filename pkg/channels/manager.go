@@ -29,6 +29,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/health"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/media"
+	"github.com/sipeed/picoclaw/pkg/redact"
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
@@ -804,7 +805,7 @@ type splitMarkerStreamer struct {
 func (s *splitMarkerStreamer) Update(ctx context.Context, content string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.updateLocked(ctx, content)
+	return s.updateLocked(ctx, redact.Secrets(content))
 }
 
 func (s *splitMarkerStreamer) Finalize(ctx context.Context, content string) error {
@@ -814,6 +815,7 @@ func (s *splitMarkerStreamer) Finalize(ctx context.Context, content string) erro
 func (s *splitMarkerStreamer) FinalizeWithContext(ctx context.Context, content string, usage *bus.ContextUsage) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	content = redact.Text(content)
 	if err := s.finalizeLocked(ctx, content, usage); err != nil {
 		return err
 	}
@@ -828,7 +830,7 @@ func (s *splitMarkerStreamer) UpdateReasoning(ctx context.Context, content strin
 		return nil
 	}
 	setStreamerModelName(s.reasoning, s.modelName)
-	return s.reasoning.UpdateReasoning(ctx, content)
+	return s.reasoning.UpdateReasoning(ctx, redact.Secrets(content))
 }
 
 func (s *splitMarkerStreamer) FinalizeReasoning(ctx context.Context, content string) error {
@@ -838,7 +840,7 @@ func (s *splitMarkerStreamer) FinalizeReasoning(ctx context.Context, content str
 		return nil
 	}
 	setStreamerModelName(s.reasoning, s.modelName)
-	return s.reasoning.FinalizeReasoning(ctx, content)
+	return s.reasoning.FinalizeReasoning(ctx, redact.Text(content))
 }
 
 func (s *splitMarkerStreamer) SetModelName(modelName string) {
@@ -986,7 +988,12 @@ type finalizeHookStreamer struct {
 	clearMarker func()
 }
 
+func (s *finalizeHookStreamer) Update(ctx context.Context, content string) error {
+	return s.Streamer.Update(ctx, redact.Secrets(content))
+}
+
 func (s *finalizeHookStreamer) Finalize(ctx context.Context, content string) error {
+	content = redact.Text(content)
 	if err := s.Streamer.Finalize(ctx, content); err != nil {
 		return err
 	}
@@ -995,6 +1002,7 @@ func (s *finalizeHookStreamer) Finalize(ctx context.Context, content string) err
 }
 
 func (s *finalizeHookStreamer) FinalizeWithContext(ctx context.Context, content string, usage *bus.ContextUsage) error {
+	content = redact.Text(content)
 	if streamer, ok := s.Streamer.(bus.ContextUsageStreamer); ok {
 		if err := streamer.FinalizeWithContext(ctx, content, usage); err != nil {
 			return err
@@ -1008,14 +1016,14 @@ func (s *finalizeHookStreamer) FinalizeWithContext(ctx context.Context, content 
 
 func (s *finalizeHookStreamer) UpdateReasoning(ctx context.Context, content string) error {
 	if streamer, ok := s.Streamer.(bus.ReasoningStreamer); ok {
-		return streamer.UpdateReasoning(ctx, content)
+		return streamer.UpdateReasoning(ctx, redact.Secrets(content))
 	}
 	return nil
 }
 
 func (s *finalizeHookStreamer) FinalizeReasoning(ctx context.Context, content string) error {
 	if streamer, ok := s.Streamer.(bus.ReasoningStreamer); ok {
-		return streamer.FinalizeReasoning(ctx, content)
+		return streamer.FinalizeReasoning(ctx, redact.Text(content))
 	}
 	return nil
 }

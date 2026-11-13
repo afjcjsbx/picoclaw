@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
+	"github.com/sipeed/picoclaw/pkg/redact"
 )
 
 // Re-export protocol types used across providers.
@@ -473,20 +474,22 @@ func (e *HTTPError) Error() string {
 	if e == nil {
 		return "API request failed"
 	}
+	// Provider bodies are untrusted and sometimes echo request credentials.
+	// Redact before the message can reach a log line or a chat notice.
 	if e.IsHTML {
-		return fmt.Sprintf(
+		return redact.Text(fmt.Sprintf(
 			"API request failed: %s returned HTML instead of JSON (content-type: %s); check api_base or proxy configuration.\n  Status: %d\n  Body:   %s",
 			e.APIBase,
 			e.ContentType,
 			e.StatusCode,
 			e.BodyPreview,
-		)
+		))
 	}
-	return fmt.Sprintf(
+	return redact.Text(fmt.Sprintf(
 		"API request failed:\n  Status: %d\n  Body:   %s",
 		e.StatusCode,
 		e.BodyPreview,
-	)
+	))
 }
 
 const (
@@ -509,7 +512,7 @@ func HandleErrorResponse(resp *http.Response, apiBase string) error {
 	}
 	return &HTTPError{
 		StatusCode:  resp.StatusCode,
-		BodyPreview: ResponsePreview(body, errorBodyPreviewLen),
+		BodyPreview: ResponsePreview([]byte(redact.Text(string(body))), errorBodyPreviewLen),
 		ContentType: contentType,
 		APIBase:     apiBase,
 	}
@@ -551,7 +554,7 @@ func LooksLikeHTML(body []byte, contentType string) bool {
 func WrapHTMLResponseError(statusCode int, body []byte, contentType, apiBase string) error {
 	return &HTTPError{
 		StatusCode:  statusCode,
-		BodyPreview: ResponsePreview(body, 128),
+		BodyPreview: ResponsePreview([]byte(redact.Text(string(body))), 128),
 		ContentType: contentType,
 		APIBase:     apiBase,
 		IsHTML:      true,
