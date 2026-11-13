@@ -373,7 +373,15 @@ func appendRedactedField(event *zerolog.Event, key string, value any) {
 			event.Str(key, redact.Text(fmt.Sprintf("%v", val)))
 			return
 		}
-		event.RawJSON(key, []byte(redact.Text(string(data))))
+		// The heuristic rules work on text, not on JSON: one can swallow a
+		// closing brace or replace a number with a bare marker. Never write
+		// invalid JSON into the log line; keep the redacted text as a string.
+		raw := []byte(redact.Text(string(data)))
+		if !json.Valid(raw) {
+			event.Str(key, string(raw))
+			return
+		}
+		event.RawJSON(key, raw)
 	}
 }
 

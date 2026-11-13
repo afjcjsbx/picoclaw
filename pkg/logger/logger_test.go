@@ -416,6 +416,37 @@ func TestAppendFieldsRedactsSecrets(t *testing.T) {
 	}
 }
 
+// TestAppendFieldsKeepsLineValidJSONWhenRedactionBreaksComposite guards the
+// composite-field path: the assignment rule swallows the closing brace after a
+// numeric value and a trailing escaped quote, which used to put invalid JSON in
+// the log line.
+func TestAppendFieldsKeepsLineValidJSONWhenRedactionBreaksComposite(t *testing.T) {
+	cases := map[string]any{
+		"numeric value": map[string]any{"prompt_token": 12345678901},
+		"escaped quote": map[string]string{"msg": `say "token=abcdefghijk\"`},
+		"nested struct": struct {
+			Usage map[string]int `json:"usage"`
+		}{Usage: map[string]int{"prompt_token": 12345678901}},
+	}
+	for name, value := range cases {
+		t.Run(name, func(t *testing.T) {
+			var buf bytes.Buffer
+			l := zerolog.New(&buf)
+			event := l.Info()
+			appendFields(event, map[string]any{"detail": value})
+			event.Msg("test")
+
+			var line map[string]any
+			if err := json.Unmarshal(buf.Bytes(), &line); err != nil {
+				t.Fatalf("log line must stay valid JSON: %v\n%s", err, buf.String())
+			}
+			if _, ok := line["detail"]; !ok {
+				t.Fatalf("detail field missing from log line: %s", buf.String())
+			}
+		})
+	}
+}
+
 func TestLogMessageRedactsSecrets(t *testing.T) {
 	const key = "oc_sk_test_key_1234567890"
 	redact.SetSecrets([]string{key})
