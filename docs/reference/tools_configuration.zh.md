@@ -170,8 +170,8 @@ Exec 工具用于执行 shell 命令。
 | 配置项                 | 类型  | 默认值 | 描述                           |
 |------------------------|-------|--------|--------------------------------|
 | `enabled`              | bool  | true   | 启用 exec 工具                 |
-| `enable_deny_patterns` | bool  | true   | 启用默认的危险命令拦截         |
-| `custom_deny_patterns` | array | []     | 自定义拒绝模式（正则表达式）   |
+| `enable_deny_patterns` | bool  | true   | 启用内置危险命令拦截         |
+| `custom_deny_patterns` | array | []     | 自定义拒绝模式（正则表达式），始终生效 |
 
 ### 禁用 Exec 工具
 
@@ -197,12 +197,22 @@ PICOCLAW_TOOLS_EXEC_ENABLED=false
 
 ### 功能说明
 
-- **`enable_deny_patterns`**：设为 `false` 可完全禁用默认的危险命令拦截模式
-- **`custom_deny_patterns`**：添加自定义拒绝正则模式；匹配的命令将被拦截
+- **`enable_deny_patterns`**：设为 `false` 可禁用内置的默认危险命令拦截模式；硬性底线规则和 `custom_deny_patterns` 仍然生效
+- **`custom_deny_patterns`**：添加自定义拒绝正则模式；即使关闭内置拦截也始终生效，且不会被自定义允许规则豁免
+
+### 始终生效的硬性底线规则
+
+以下灾难性命令属于不可关闭的底线规则：即使 `enable_deny_patterns` 设为 `false`，它们仍会被拦截，且自定义允许规则无法豁免：
+
+- Fork 炸弹：`:(){ :|:& };:`
+- 磁盘格式化/分区：`mkfs`、`mkfs.*`、`diskpart`、`format C:`
+- 原始磁盘访问：`dd if=`、写入 `/dev/sd*` 等块设备
+- 递归删除根目录：`rm -rf /`、`rm -rf /*`
+- 电源状态变更：`shutdown`、`reboot`、`poweroff`
 
 ### 默认拦截的命令模式
 
-默认情况下，PicoClaw 会拦截以下危险命令：
+这些模式默认启用，可通过 `enable_deny_patterns: false` 关闭：
 
 - 删除命令：`rm -rf`、`del /f/q`、`rmdir /s`
 - 磁盘操作：`format`、`mkfs`、`diskpart`、`dd if=`、写入 `/dev/sd*`

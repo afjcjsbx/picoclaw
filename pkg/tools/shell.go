@@ -63,6 +63,7 @@ type ExecTool struct {
 	workingDir           string
 	timeout              time.Duration
 	denyPatterns         []*regexp.Regexp
+	hardlineDenyPatterns []*regexp.Regexp
 	customDenyPatterns   []*regexp.Regexp
 	allowPatterns        []*regexp.Regexp
 	customAllowPatterns  []*regexp.Regexp
@@ -125,6 +126,28 @@ var (
 		regexp.MustCompile(`\bssh\b.*@`),
 		regexp.MustCompile(`\beval\b`),
 		regexp.MustCompile(`\bsource\s+.*\.sh\b`),
+	}
+
+	// hardlineDenyPatterns are catastrophic commands that stay blocked even when
+	// enable_deny_patterns is false. Unlike the optional built-in default set,
+	// they cannot be disabled through configuration or exempted by custom allow
+	// patterns.
+	hardlineDenyPatterns = []*regexp.Regexp{
+		// Shell fork bomb.
+		regexp.MustCompile(`:\(\)\s*\{.*\};\s*:`),
+		// Filesystem creation and disk partitioning tools.
+		regexp.MustCompile(`\bmkfs(?:\.\w+)?\b`),
+		regexp.MustCompile(`\bdiskpart\b`),
+		regexp.MustCompile(`(^|[^-\w])\bformat\s+(?:/[^\s]+\s+)*[a-z]:`),
+		// Raw disk access.
+		regexp.MustCompile(`\bdd\s+if=`),
+		regexp.MustCompile(
+			`>\s*/dev/(?:sd[a-z]|hd[a-z]|vd[a-z]|xvd[a-z]|nvme\d|mmcblk\d|loop\d|dm-\d|md\d|sr\d|nbd\d)`,
+		),
+		// Recursive deletion of the filesystem root.
+		regexp.MustCompile(`\brm\s+(?:-{1,2}[a-z-]*\s+)*/(?:[\s*/.]|$)`),
+		// Host power state changes.
+		regexp.MustCompile(`\b(?:shutdown|reboot|poweroff)\b`),
 	}
 
 	// windowsDenyPatterns contains PowerShell-specific deny patterns that only
@@ -260,21 +283,26 @@ func NewExecToolWithConfig(
 			if runtime.GOOS == "windows" {
 				denyPatterns = append(denyPatterns, windowsDenyPatterns...)
 			}
-			if len(execConfig.CustomDenyPatterns) > 0 {
-				logger.InfoCF("tools", "using custom deny patterns", map[string]any{
-					"patterns": execConfig.CustomDenyPatterns,
-				})
-				for _, pattern := range execConfig.CustomDenyPatterns {
-					re, err := regexp.Compile(pattern)
-					if err != nil {
-						return nil, fmt.Errorf("invalid custom deny pattern %q: %w", pattern, err)
-					}
-					customDenyPatterns = append(customDenyPatterns, re)
-				}
-			}
 		} else {
-			// If deny patterns are disabled, we won't add any patterns, allowing all commands.
-			logger.WarnCF("tools", "deny patterns are disabled, all commands will be allowed", nil)
+			// Only the optional built-in default set is disabled here. The
+			// hardline floor and operator-defined custom deny rules still apply.
+			logger.WarnCF(
+				"tools",
+				"default deny patterns are disabled; hardline and custom deny patterns still apply",
+				nil,
+			)
+		}
+		if len(execConfig.CustomDenyPatterns) > 0 {
+			logger.InfoCF("tools", "using custom deny patterns", map[string]any{
+				"patterns": execConfig.CustomDenyPatterns,
+			})
+			for _, pattern := range execConfig.CustomDenyPatterns {
+				re, err := regexp.Compile(pattern)
+				if err != nil {
+					return nil, fmt.Errorf("invalid custom deny pattern %q: %w", pattern, err)
+				}
+				customDenyPatterns = append(customDenyPatterns, re)
+			}
 		}
 		for _, pattern := range execConfig.CustomAllowPatterns {
 			re, err := regexp.Compile(pattern)
@@ -306,6 +334,7 @@ func NewExecToolWithConfig(
 		workingDir:           workingDir,
 		timeout:              timeout,
 		denyPatterns:         denyPatterns,
+		hardlineDenyPatterns: hardlineDenyPatterns,
 		customDenyPatterns:   customDenyPatterns,
 		allowPatterns:        nil,
 		customAllowPatterns:  customAllowPatterns,
@@ -1649,6 +1678,14 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 	// Quoted heredoc bodies are literal text: a backtick there cannot run a
 	// command, so deny patterns must not inspect it.
 	lowerForDeny := strings.ToLower(stripQuotedHeredocBodies(cmd))
+
+	// Hardline patterns are an immutable floor: they apply even when the
+	// default deny set is disabled and no custom allow rule can exempt them.
+	for _, pattern := range t.hardlineDenyPatterns {
+		if pattern.MatchString(lowerForDeny) {
+			return "Command blocked by safety guard (dangerous pattern detected)"
+		}
+	}
 
 	// Custom deny patterns always apply: they are user-specified security rules
 	// that must not be bypassed by custom allow patterns (#3079).

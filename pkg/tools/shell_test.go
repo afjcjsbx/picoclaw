@@ -3105,6 +3105,89 @@ func TestShellTool_CustomDenyCannotBeOverriddenByCustomAllow(t *testing.T) {
 	}
 }
 
+func TestShellTool_CustomDenyPatternsApplyWhenDefaultsDisabled(t *testing.T) {
+	cfg := &config.Config{
+		Tools: config.ToolsConfig{
+			Exec: config.ExecConfig{
+				EnableDenyPatterns: false,
+				CustomDenyPatterns: []string{`\bgit\s+push\b`},
+			},
+		},
+	}
+
+	tool, err := NewExecToolWithConfig("", false, cfg)
+	require.NoError(t, err)
+
+	if got := tool.guardCommand("git push origin main", ""); !strings.Contains(got, "dangerous pattern") {
+		t.Fatalf("custom deny pattern must apply when default patterns are disabled, got: %q", got)
+	}
+	if got := tool.guardCommand("echo safely", ""); got != "" {
+		t.Fatalf("unrelated command should pass the guard, got: %q", got)
+	}
+}
+
+func TestShellTool_InvalidCustomDenyPatternRejectedWhenDefaultsDisabled(t *testing.T) {
+	cfg := &config.Config{
+		Tools: config.ToolsConfig{
+			Exec: config.ExecConfig{
+				EnableDenyPatterns: false,
+				CustomDenyPatterns: []string{"[invalid-regex"},
+			},
+		},
+	}
+
+	_, err := NewExecToolWithConfig("", false, cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid custom deny pattern")
+}
+
+func TestShellTool_DefaultDenyPatternsCanBeDisabled(t *testing.T) {
+	cfg := &config.Config{
+		Tools: config.ToolsConfig{
+			Exec: config.ExecConfig{EnableDenyPatterns: false},
+		},
+	}
+
+	tool, err := NewExecToolWithConfig(t.TempDir(), false, cfg)
+	require.NoError(t, err)
+
+	if got := tool.guardCommand("rm -rf ./build", t.TempDir()); got != "" {
+		t.Fatalf("default deny patterns should remain optional, got: %q", got)
+	}
+}
+
+func TestShellTool_HardlinePatternsAlwaysApply(t *testing.T) {
+	cfg := &config.Config{
+		Tools: config.ToolsConfig{
+			Exec: config.ExecConfig{
+				EnableDenyPatterns:  false,
+				CustomAllowPatterns: []string{`.*`},
+			},
+		},
+	}
+
+	tool, err := NewExecToolWithConfig(t.TempDir(), false, cfg)
+	require.NoError(t, err)
+
+	blocked := []string{
+		"rm -rf /",
+		"rm -rf /*",
+		"rm -r -f /",
+		"rm -rf -- /",
+		"mkfs.ext4 /dev/sda1",
+		"format /q c:",
+		"dd if=/dev/zero of=/dev/sda",
+		"echo x > /dev/sda",
+		"shutdown -h now",
+		":(){ :|:& };:",
+	}
+	for _, command := range blocked {
+		if got := tool.guardCommand(command, t.TempDir()); !strings.Contains(got, "dangerous pattern") {
+			t.Errorf("hardline command %q should be blocked, got: %q", command, got)
+		}
+	}
+}
+
 func TestShellTool_BackticksInsideQuotedHeredocAreAllowed(t *testing.T) {
 	tool, err := NewExecTool("", false)
 	require.NoError(t, err)
