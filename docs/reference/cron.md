@@ -221,7 +221,7 @@ $PICOCLAW_HOME/workspace
 
 Both the gateway and `picoclaw cron` CLI subcommands use the same `cron/jobs.json` file.
 
-The running gateway watches this file (a `stat` every 2 seconds, scaled up in low-power mode). Hand edits and `picoclaw cron add/remove/enable/disable` take effect without a restart:
+The running gateway watches this file with the operating system's file watcher, so the store is not polled while idle; if the platform watcher cannot be created, it falls back to checking the file once a minute. Hand edits and `picoclaw cron add/remove/enable/disable` take effect without a restart:
 
 - the file replaces the in-memory job list; jobs whose schedule and enabled flag are unchanged keep their next run time, all others are rescheduled
 - an invalid JSON file is logged once and ignored; the gateway keeps its current jobs until the next valid edit

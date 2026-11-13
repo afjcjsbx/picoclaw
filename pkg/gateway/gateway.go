@@ -899,8 +899,9 @@ func setupCronTool(
 	cronStorePath := filepath.Join(workspace, "cron", "jobs.json")
 
 	cronService := cron.NewCronService(cronStorePath, nil)
-	// Pick up hand edits and `picoclaw cron` CLI changes to jobs.json without a restart.
-	cronService.SetReloadInterval(cfg.Power.ScalePollInterval(2 * time.Second))
+	// Pick up hand edits and `picoclaw cron` CLI changes to jobs.json without a
+	// restart. This is event-driven, so the store is not polled while idle.
+	cronService.SetHotReload(true)
 
 	var cronTool *tools.CronTool
 	if cfg.Tools.IsToolEnabled("cron") {

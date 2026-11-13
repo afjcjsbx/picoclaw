@@ -6,15 +6,15 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
-)
 
-const testReloadInterval = 20 * time.Millisecond
+	"github.com/sipeed/picoclaw/pkg/fileutil"
+)
 
 func newReloadService(t *testing.T, handler JobHandler) (*CronService, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "cron", "jobs.json")
 	cs := NewCronService(path, handler)
-	cs.SetReloadInterval(testReloadInterval)
+	cs.SetHotReload(true)
 	// Stop the scheduler and drain in-flight handlers before t.TempDir removes
 	// the directory, so a late store write cannot fail the cleanup.
 	t.Cleanup(func() {
@@ -92,6 +92,26 @@ func TestCronService_HotReloadPicksUpAndRemovesJobs(t *testing.T) {
 
 	writeExternal(t, path)
 	waitFor(t, "removed job", func() bool { return !hasJob(cs, "a") })
+}
+
+// The CLI and the service itself replace the store with a temp file + rename;
+// watching the file directly would lose the watch on the first such write.
+func TestCronService_HotReloadPicksUpAtomicReplace(t *testing.T) {
+	cs, path := newReloadService(t, nil)
+	if err := cs.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Stop()
+
+	data, err := json.Marshal(&CronStore{Version: 1, Jobs: []CronJob{everyJob("atomic", 60_000)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fileutil.WriteFileAtomic(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	waitFor(t, "atomic replacement", func() bool { return hasJob(cs, "atomic") })
 }
 
 func TestCronService_HotReloadIgnoresOwnWrites(t *testing.T) {
@@ -173,7 +193,7 @@ func TestCronService_HotReloadMissingFileKeepsStore(t *testing.T) {
 
 func TestCronService_HotReloadDisabled(t *testing.T) {
 	cs, path := newReloadService(t, nil)
-	cs.SetReloadInterval(0)
+	cs.SetHotReload(false)
 	if _, err := cs.AddJob(
 		"mem",
 		CronSchedule{Kind: "every", EveryMS: int64Ptr(60_000)},
