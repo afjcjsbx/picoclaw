@@ -7,10 +7,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/rs/zerolog"
+
+	"github.com/sipeed/picoclaw/pkg/redact"
 )
 
 func TestLogLevelFiltering(t *testing.T) {
@@ -382,6 +385,62 @@ func TestAppendFields_ErrorUsesErrorString(t *testing.T) {
 
 	if got["error"] != "transcription request failed" {
 		t.Fatalf("error field = %#v, want %q", got["error"], "transcription request failed")
+	}
+}
+
+func TestAppendFieldsRedactsSecrets(t *testing.T) {
+	const key = "oc_sk_test_key_1234567890"
+	redact.SetSecrets([]string{key})
+	t.Cleanup(func() { redact.SetSecrets(nil) })
+
+	var buf bytes.Buffer
+	l := zerolog.New(&buf)
+	event := l.Info()
+	appendFields(event, map[string]any{
+		"error":  fmt.Errorf("provider echoed %s", key),
+		"token":  key,
+		"header": map[string]string{"Authorization": "Bearer " + key},
+	})
+	event.Msg("test")
+
+	out := buf.String()
+	if strings.Contains(out, key) {
+		t.Fatalf("registered secret leaked into log fields: %s", out)
+	}
+	if !strings.Contains(out, redact.Marker) {
+		t.Fatalf("expected %s in log fields: %s", redact.Marker, out)
+	}
+	var line map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &line); err != nil {
+		t.Fatalf("redacted log line must stay valid JSON: %v\n%s", err, out)
+	}
+}
+
+func TestLogMessageRedactsSecrets(t *testing.T) {
+	const key = "oc_sk_test_key_1234567890"
+	redact.SetSecrets([]string{key})
+	t.Cleanup(func() { redact.SetSecrets(nil) })
+
+	initialLevel := GetLevel()
+	defer SetLevel(initialLevel)
+	SetLevel(INFO)
+
+	var buf bytes.Buffer
+	EnableConsole()
+	RedirectConsole(&buf)
+	defer func() {
+		consoleWriter.Out = os.Stdout
+		EnableConsole()
+	}()
+
+	ErrorF("provider failed with "+key, map[string]any{"detail": key})
+
+	out := buf.String()
+	if strings.Contains(out, key) {
+		t.Fatalf("registered secret leaked into log message: %s", out)
+	}
+	if !strings.Contains(out, redact.Marker) {
+		t.Fatalf("expected %s in log message: %s", redact.Marker, out)
 	}
 }
 

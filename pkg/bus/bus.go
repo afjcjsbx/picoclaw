@@ -10,6 +10,7 @@ import (
 
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/redact"
 )
 
 // ErrBusClosed is returned when publishing to a closed MessageBus.
@@ -260,6 +261,10 @@ func (mb *MessageBus) InboundChan() <-chan InboundMessage {
 }
 
 func (mb *MessageBus) PublishOutbound(ctx context.Context, msg OutboundMessage) error {
+	// Every outbound chat message passes through here (agent replies, failure
+	// notices, and message-tool sends). Mask credentials so no log redaction
+	// gap can turn into a chat leak.
+	msg.Content = redact.Text(msg.Content)
 	msg = NormalizeOutboundMessage(msg)
 	if msg.Context.isZero() {
 		mb.publishFailure(StreamOutbound, runtimeScopeFromInboundContext(msg.Context), ErrMissingOutboundContext)
@@ -283,6 +288,9 @@ func (mb *MessageBus) OutboundChan() <-chan OutboundMessage {
 }
 
 func (mb *MessageBus) PublishOutboundMedia(ctx context.Context, msg OutboundMediaMessage) error {
+	for i := range msg.Parts {
+		msg.Parts[i].Caption = redact.Text(msg.Parts[i].Caption)
+	}
 	msg = NormalizeOutboundMediaMessage(msg)
 	if msg.Context.isZero() {
 		mb.publishFailure(
