@@ -5,9 +5,18 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
-const toolFeedbackAnimationInterval = 3 * time.Second
+const (
+	toolFeedbackAnimationInterval = 3 * time.Second
+	// toolFeedbackAnimationMaxDuration is a safety cap for a progress card whose
+	// lifecycle cleanup was missed (aborted turn, failed delivery). Without it
+	// the animator keeps editing the channel message forever.
+	toolFeedbackAnimationMaxDuration = 5 * time.Minute
+	toolFeedbackEditTimeout          = 5 * time.Second
+)
 
 // maxTrackedToolFeedbackAge bounds how long a progress card may stay tracked
 // and be reused. A tracked card is normally consumed by the final reply of the
@@ -40,17 +49,23 @@ type toolFeedbackAnimationState struct {
 }
 
 type ToolFeedbackAnimator struct {
-	mu      sync.Mutex
-	editFn  func(ctx context.Context, chatID, messageID, content string) error
-	entries map[string]*toolFeedbackAnimationState
+	mu                sync.Mutex
+	editFn            func(ctx context.Context, chatID, messageID, content string) error
+	entries           map[string]*toolFeedbackAnimationState
+	animationInterval time.Duration
+	maxDuration       time.Duration
+	editTimeout       time.Duration
 }
 
 func NewToolFeedbackAnimator(
 	editFn func(ctx context.Context, chatID, messageID, content string) error,
 ) *ToolFeedbackAnimator {
 	return &ToolFeedbackAnimator{
-		editFn:  editFn,
-		entries: make(map[string]*toolFeedbackAnimationState),
+		editFn:            editFn,
+		entries:           make(map[string]*toolFeedbackAnimationState),
+		animationInterval: toolFeedbackAnimationInterval,
+		maxDuration:       toolFeedbackAnimationMaxDuration,
+		editTimeout:       toolFeedbackEditTimeout,
 	}
 }
 
@@ -176,8 +191,23 @@ func (a *ToolFeedbackAnimator) detach(chatID string) *toolFeedbackAnimationState
 func (a *ToolFeedbackAnimator) run(chatID string, entry *toolFeedbackAnimationState) {
 	defer close(entry.done)
 
-	ticker := time.NewTicker(toolFeedbackAnimationInterval)
+	interval := a.animationInterval
+	if interval <= 0 {
+		interval = toolFeedbackAnimationInterval
+	}
+	maxDuration := a.maxDuration
+	if maxDuration <= 0 {
+		maxDuration = toolFeedbackAnimationMaxDuration
+	}
+	editTimeout := a.editTimeout
+	if editTimeout <= 0 {
+		editTimeout = toolFeedbackEditTimeout
+	}
+
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	lifetime := time.NewTimer(maxDuration)
+	defer lifetime.Stop()
 
 	frameIdx := 1
 
@@ -185,15 +215,26 @@ func (a *ToolFeedbackAnimator) run(chatID string, entry *toolFeedbackAnimationSt
 		select {
 		case <-entry.stop:
 			return
+		case <-lifetime.C:
+			logger.WarnCF("channels", "Tool feedback animation reached its maximum duration", map[string]any{
+				"max_duration": maxDuration.String(),
+			})
+			return
 		case <-ticker.C:
 			if a.editFn == nil {
 				continue
 			}
 			frame := toolFeedbackAnimationFrames[frameIdx%len(toolFeedbackAnimationFrames)]
 			content := formatAnimatedToolFeedbackContent(entry.baseContent, frame)
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			_ = a.editFn(ctx, chatID, entry.messageID, content)
+			ctx, cancel := context.WithTimeout(context.Background(), editTimeout)
+			err := a.editFn(ctx, chatID, entry.messageID, content)
 			cancel()
+			if err != nil {
+				logger.WarnCF("channels", "Tool feedback animation stopped after edit failure", map[string]any{
+					"error": err.Error(),
+				})
+				return
+			}
 			frameIdx++
 		}
 	}
