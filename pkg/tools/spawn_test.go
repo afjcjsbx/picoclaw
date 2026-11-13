@@ -369,6 +369,12 @@ func TestSpawnTool_AllowOutbound(t *testing.T) {
 func TestSpawnTool_DefaultDirectMessage(t *testing.T) {
 	provider := &MockLLMProvider{}
 	manager := NewSubagentManager(provider, "test-model", "/tmp/test")
+
+	registry := NewToolRegistry()
+	registry.Register(&mockTool{name: "message"})
+	registry.Register(&mockTool{name: "image_generate"})
+	manager.SetTools(registry)
+
 	tool := NewSpawnTool(manager)
 
 	// DirectMessage defaults to true
@@ -378,11 +384,6 @@ func TestSpawnTool_DefaultDirectMessage(t *testing.T) {
 
 	spawner := &mockSpawner{done: make(chan struct{})}
 	tool.SetSpawner(spawner)
-
-	registry := NewToolRegistry()
-	registry.Register(&mockTool{name: "message"})
-	registry.Register(&mockTool{name: "image_generate"})
-	manager.SetTools(registry)
 
 	args := map[string]any{"task": "test task"} // no allow_outbound specified
 	result := tool.Execute(context.Background(), args)
