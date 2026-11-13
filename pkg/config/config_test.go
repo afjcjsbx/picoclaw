@@ -363,6 +363,30 @@ func TestConfig_TruncationLimits(t *testing.T) {
 	}
 }
 
+func TestReadFileToolConfig_EffectiveMode(t *testing.T) {
+	tests := []struct {
+		mode string
+		want string
+	}{
+		{mode: "", want: ReadFileModeAuto},
+		{mode: "auto", want: ReadFileModeAuto},
+		{mode: "AUTO", want: ReadFileModeAuto},
+		{mode: "lines", want: ReadFileModeLines},
+		{mode: " Lines ", want: ReadFileModeLines},
+		{mode: "bytes", want: ReadFileModeBytes},
+		{mode: "unknown", want: ReadFileModeAuto},
+	}
+	for _, tt := range tests {
+		if got := (ReadFileToolConfig{Mode: tt.mode}).EffectiveMode(); got != tt.want {
+			t.Errorf("EffectiveMode(%q) = %q, want %q", tt.mode, got, tt.want)
+		}
+	}
+
+	if got := DefaultConfig().Tools.ReadFile.EffectiveMode(); got != ReadFileModeAuto {
+		t.Fatalf("default read_file mode = %q, want %q", got, ReadFileModeAuto)
+	}
+}
+
 func TestDefaultConfig_EvolutionDefaults(t *testing.T) {
 	cfg := DefaultConfig()
 

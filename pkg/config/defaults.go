@@ -508,7 +508,7 @@ func DefaultConfig() *Config {
 			},
 			ReadFile: ReadFileToolConfig{
 				Enabled:         true,
-				Mode:            ReadFileModeBytes,
+				Mode:            ReadFileModeAuto,
 				MaxReadFileSize: 64 * 1024, // 64KB
 				MaxLines:        DefaultReadFileMaxLines,
 				MaxLineLength:   DefaultReadFileMaxLineLength,

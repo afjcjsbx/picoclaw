@@ -1373,6 +1373,138 @@ func TestReadFileTool_OffsetBeyondEOF(t *testing.T) {
 	}
 }
 
+func TestReadFileLinesTool_HeaderReportsFirstLineByteOffset(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "offset_header.txt")
+	content := "line one\nline two\nline three\n"
+	if err := os.WriteFile(testFile, []byte(content), 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	tool := NewReadFileLinesTool(
+		tmpDir, false, MaxReadFileSize,
+		DefaultReadFileMaxLines, DefaultReadFileMaxLineLength,
+	)
+
+	fromStart := tool.Execute(context.Background(), map[string]any{
+		"path":       testFile,
+		"start_line": 1,
+	})
+	if fromStart.IsError {
+		t.Fatalf("Execute(start_line=1) error = %s", fromStart.ForLLM)
+	}
+	if !strings.Contains(fromStart.ForLLM, "first_line_byte_offset: 0") {
+		t.Fatalf("expected offset 0 for start_line=1, got: %s", fromStart.ForLLM)
+	}
+
+	fromSecond := tool.Execute(context.Background(), map[string]any{
+		"path":       testFile,
+		"start_line": 2,
+	})
+	if fromSecond.IsError {
+		t.Fatalf("Execute(start_line=2) error = %s", fromSecond.ForLLM)
+	}
+	wantOffset := len("line one\n")
+	if !strings.Contains(fromSecond.ForLLM, "first_line_byte_offset: "+strconv.Itoa(wantOffset)) {
+		t.Fatalf(
+			"expected first_line_byte_offset=%d for start_line=2, got: %s",
+			wantOffset, fromSecond.ForLLM,
+		)
+	}
+}
+
+func TestReadFileLinesTool_TruncationHintReportsRawOffset(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "long_line.txt")
+	content := "short\n" + strings.Repeat("x", 100) + "\n"
+	if err := os.WriteFile(testFile, []byte(content), 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	tool := NewReadFileLinesTool(tmpDir, false, 4096, DefaultReadFileMaxLines, 20)
+	result := tool.Execute(context.Background(), map[string]any{"path": testFile})
+	if result.IsError {
+		t.Fatalf("Execute() error = %s", result.ForLLM)
+	}
+	want := "[LINE TRUNCATED - line 2 was cut after 20 characters; its raw bytes start at offset 6. Call read_file with offset=6 and length=4096 to page the full line; repeat with the offset from the next header until EOF.]"
+	if !strings.Contains(result.ForLLM, want) {
+		t.Fatalf("expected truncation hint %q, got: %s", want, result.ForLLM)
+	}
+
+	fromSecond := tool.Execute(context.Background(), map[string]any{
+		"path":       testFile,
+		"start_line": 2,
+	})
+	if fromSecond.IsError {
+		t.Fatalf("Execute(start_line=2) error = %s", fromSecond.ForLLM)
+	}
+	if !strings.Contains(fromSecond.ForLLM, "line 2 was cut after 20 characters; its raw bytes start at offset 6") {
+		t.Fatalf("expected truncation hint with the first line offset, got: %s", fromSecond.ForLLM)
+	}
+}
+
+func TestReadFileLinesTool_TruncationHintUsesInlineBudget(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "long_line.txt")
+	if err := os.WriteFile(testFile, []byte(strings.Repeat("z", 100)+"\n"), 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	tool := NewReadFileLinesTool(
+		tmpDir, false, MaxReadFileSize,
+		DefaultReadFileMaxLines, 20,
+	)
+	tool.SetMaxInlineResultChars(16384)
+	result := tool.Execute(context.Background(), map[string]any{"path": testFile})
+	if result.IsError {
+		t.Fatalf("Execute() error = %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "offset=0 and length=15360") {
+		t.Fatalf(
+			"expected page size 15360 from the inline budget, got: %s",
+			result.ForLLM,
+		)
+	}
+}
+
+func TestReadFileLinesTool_ByteBudgetHintPointsAtContinuation(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "budget_line.txt")
+	if err := os.WriteFile(testFile, []byte(strings.Repeat("y", 200)+"\n"), 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	tool := NewReadFileLinesTool(tmpDir, false, 50, DefaultReadFileMaxLines, 2000)
+	result := tool.Execute(context.Background(), map[string]any{"path": testFile})
+	if result.IsError {
+		t.Fatalf("Execute() error = %s", result.ForLLM)
+	}
+	want := "[LINE TRUNCATED - line 1 was cut at the 50-byte budget; its raw bytes start at offset 0 and the returned prefix ends at offset 48. Call read_file with offset=48 and length=50 to continue; repeat with the next offset until EOF.]"
+	if !strings.Contains(result.ForLLM, want) {
+		t.Fatalf("expected continuation hint %q, got: %s", want, result.ForLLM)
+	}
+}
+
+func TestReadFileLinesTool_NoTruncationHintOnNormalFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "normal.txt")
+	if err := os.WriteFile(testFile, []byte("line one\nline two\n"), 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	tool := NewReadFileLinesTool(
+		tmpDir, false, MaxReadFileSize,
+		DefaultReadFileMaxLines, DefaultReadFileMaxLineLength,
+	)
+	result := tool.Execute(context.Background(), map[string]any{"path": testFile})
+	if result.IsError {
+		t.Fatalf("Execute() error = %s", result.ForLLM)
+	}
+	if strings.Contains(result.ForLLM, "[LINE TRUNCATED") {
+		t.Fatalf("normal file must not include a truncation hint, got: %s", result.ForLLM)
+	}
+}
+
 func TestReadFileLinesTool_ChunkedReading(t *testing.T) {
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "pagination_lines.txt")
@@ -1822,5 +1954,197 @@ func TestReadFileLinesTool_ExactByteBudgetBoundaryIncludesPrefix(t *testing.T) {
 	}
 	if !strings.Contains(result.ForLLM, "start_line=2") {
 		t.Fatalf("expected continuation at line 2, got: %s", result.ForLLM)
+	}
+}
+
+func TestReadFileEmptyFileMessageIsExplicit(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "empty.txt")
+	if err := os.WriteFile(testFile, nil, 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	const want = "[file is empty (0 bytes); do not retry]"
+
+	bytesTool := NewReadFileTool(tmpDir, false, MaxReadFileSize)
+	if got := bytesTool.Execute(context.Background(), map[string]any{"path": testFile}).ForLLM; got != want {
+		t.Fatalf("byte mode empty result = %q, want %q", got, want)
+	}
+
+	linesTool := NewReadFileLinesTool(
+		tmpDir, false, MaxReadFileSize,
+		DefaultReadFileMaxLines, DefaultReadFileMaxLineLength,
+	)
+	if got := linesTool.Execute(context.Background(), map[string]any{"path": testFile}).ForLLM; got != want {
+		t.Fatalf("line mode empty result = %q, want %q", got, want)
+	}
+
+	autoTool := NewReadFileAutoTool(
+		tmpDir, false, MaxReadFileSize,
+		DefaultReadFileMaxLines, DefaultReadFileMaxLineLength,
+	)
+	if got := autoTool.Execute(context.Background(), map[string]any{"path": testFile}).ForLLM; got != want {
+		t.Fatalf("auto mode empty result = %q, want %q", got, want)
+	}
+}
+
+func TestReadFileAutoTool_DescriptionMentionsBinaryDefaultRange(t *testing.T) {
+	tool := NewReadFileAutoTool(
+		t.TempDir(), false, MaxReadFileSize,
+		DefaultReadFileMaxLines, DefaultReadFileMaxLineLength,
+	)
+
+	desc := strings.ToLower(tool.Description())
+	if !strings.Contains(desc, "omit `offset` and `length`") ||
+		!strings.Contains(desc, "default byte range") {
+		t.Fatalf("auto description must explain the binary default range, got: %s", tool.Description())
+	}
+
+	props, _ := tool.Parameters()["properties"].(map[string]any)
+	length, _ := props["length"].(map[string]any)
+	lengthDesc, _ := length["description"].(string)
+	if !strings.Contains(strings.ToLower(lengthDesc), "omit to use the default") {
+		t.Fatalf("length description must explain the default range, got: %s", lengthDesc)
+	}
+}
+
+func TestReadFileAutoTool_TextDefaultsToLineMode(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "text.txt")
+	if err := os.WriteFile(testFile, []byte("alpha\nbeta\ngamma\n"), 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	tool := NewReadFileAutoTool(
+		tmpDir, false, MaxReadFileSize,
+		DefaultReadFileMaxLines, DefaultReadFileMaxLineLength,
+	)
+	result := tool.Execute(context.Background(), map[string]any{
+		"path":       testFile,
+		"start_line": 2,
+		"max_lines":  1,
+	})
+	if result.IsError {
+		t.Fatalf("Execute() error = %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "2|beta\n") {
+		t.Fatalf("expected line-numbered output, got: %s", result.ForLLM)
+	}
+	if strings.Contains(result.ForLLM, "1|alpha") {
+		t.Fatalf("expected start_line to be honored, got: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "read: lines 2-2") {
+		t.Fatalf("expected line range header, got: %s", result.ForLLM)
+	}
+}
+
+func TestReadFileAutoTool_BinaryFallsBackToByteMode(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "binary.dat")
+	data := []byte{0x00, 0x01, 'A', 'B', 'C', 'D'}
+	if err := os.WriteFile(testFile, data, 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	tool := NewReadFileAutoTool(
+		tmpDir, false, MaxReadFileSize,
+		DefaultReadFileMaxLines, DefaultReadFileMaxLineLength,
+	)
+
+	result := tool.Execute(context.Background(), map[string]any{"path": testFile})
+	if result.IsError {
+		t.Fatalf("expected binary fallback to succeed, got: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "bytes 0-5") {
+		t.Fatalf("expected raw byte range header, got: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, string(data)) {
+		t.Fatalf("expected raw bytes in the result, got: %q", result.ForLLM)
+	}
+
+	result = tool.Execute(context.Background(), map[string]any{
+		"path":   testFile,
+		"offset": 2,
+		"length": 2,
+	})
+	if result.IsError {
+		t.Fatalf("expected binary byte pagination to succeed, got: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "bytes 2-3") || !strings.Contains(result.ForLLM, "AB") {
+		t.Fatalf("expected the requested byte range, got: %q", result.ForLLM)
+	}
+}
+
+func TestReadFileAutoTool_ByteArgsForceRawModeOnText(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "text.txt")
+	if err := os.WriteFile(testFile, []byte("abcdef\n"), 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	tool := NewReadFileAutoTool(
+		tmpDir, false, MaxReadFileSize,
+		DefaultReadFileMaxLines, DefaultReadFileMaxLineLength,
+	)
+	result := tool.Execute(context.Background(), map[string]any{
+		"path":   testFile,
+		"offset": 0,
+		"length": 3,
+	})
+	if result.IsError {
+		t.Fatalf("Execute() error = %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "bytes 0-2") || !strings.Contains(result.ForLLM, "abc") {
+		t.Fatalf("expected raw byte output, got: %q", result.ForLLM)
+	}
+	if strings.Contains(result.ForLLM, "1|") {
+		t.Fatalf("expected byte mode to omit line numbers, got: %s", result.ForLLM)
+	}
+}
+
+func TestReadFileAutoTool_RejectsLineArgsForBinary(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "binary.dat")
+	if err := os.WriteFile(testFile, []byte{0x00, 0x01, 0x02}, 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	tool := NewReadFileAutoTool(
+		tmpDir, false, MaxReadFileSize,
+		DefaultReadFileMaxLines, DefaultReadFileMaxLineLength,
+	)
+	result := tool.Execute(context.Background(), map[string]any{
+		"path":       testFile,
+		"start_line": 1,
+	})
+	if !result.IsError {
+		t.Fatalf("expected line args on a binary file to fail, got: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "use offset/length") {
+		t.Fatalf("expected byte pagination guidance, got: %s", result.ForLLM)
+	}
+}
+
+func TestReadFileAutoTool_RejectsMixedPaginationArgs(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "text.txt")
+	if err := os.WriteFile(testFile, []byte("alpha\nbeta\n"), 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	tool := NewReadFileAutoTool(
+		tmpDir, false, MaxReadFileSize,
+		DefaultReadFileMaxLines, DefaultReadFileMaxLineLength,
+	)
+	result := tool.Execute(context.Background(), map[string]any{
+		"path":       testFile,
+		"start_line": 1,
+		"offset":     0,
+	})
+	if !result.IsError {
+		t.Fatalf("expected mixed pagination args to fail, got: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "not both") {
+		t.Fatalf("expected mixed-args guidance, got: %s", result.ForLLM)
 	}
 }

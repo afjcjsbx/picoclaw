@@ -39,6 +39,16 @@ const (
 	// even when the caller asks for a handful of lines, so the hint is capped
 	// at this many bytes.
 	lineOutputPreallocLimit = 8 * 1024
+
+	// truncationHintPageSize is the default raw-read page size suggested for
+	// a line that was cut by max_line_length. It stays below the default
+	// max_inline_result_chars budget, so the follow-up read does not spill to
+	// an artifact and hide the rest of the line in the omitted middle.
+	truncationHintPageSize = 8 * 1024
+	// truncationHintReserve leaves room for the result header and the
+	// LINE TRUNCATED hint when calculating a page size from the configured
+	// inline budget.
+	truncationHintReserve = 1024
 )
 
 func ValidatePathWithAllowPaths(
@@ -320,11 +330,21 @@ type ReadFileTool struct {
 }
 
 type ReadFileLinesTool struct {
-	fs            fileSystem
-	workspace     string
-	maxSize       int64
-	maxLines      int
-	maxLineLength int
+	fs                   fileSystem
+	workspace            string
+	maxSize              int64
+	maxLines             int
+	maxLineLength        int
+	maxInlineResultChars int
+}
+
+// ReadFileAutoTool is the default read_file implementation: it returns
+// line-numbered output for text files and falls back to raw byte output for
+// binary files. The caller can force byte mode by passing offset or length.
+type ReadFileAutoTool struct {
+	bytes     *ReadFileTool
+	lines     *ReadFileLinesTool
+	workspace string
 }
 
 func NewReadFileTool(
@@ -383,11 +403,58 @@ func NewReadFileLinesTool(
 	}
 }
 
+func NewReadFileAutoTool(
+	workspace string,
+	restrict bool,
+	maxReadFileSize int,
+	maxLines int,
+	maxLineLength int,
+	allowPaths ...[]*regexp.Regexp,
+) *ReadFileAutoTool {
+	return &ReadFileAutoTool{
+		bytes:     NewReadFileTool(workspace, restrict, maxReadFileSize, allowPaths...),
+		lines:     NewReadFileLinesTool(workspace, restrict, maxReadFileSize, maxLines, maxLineLength, allowPaths...),
+		workspace: workspace,
+	}
+}
+
+// SetMaxInlineResultChars caps the page size suggested for a truncated line so
+// the follow-up raw read stays inside the large-result inline budget.
+func (t *ReadFileLinesTool) SetMaxInlineResultChars(maxChars int) {
+	t.maxInlineResultChars = maxChars
+}
+
+func (t *ReadFileAutoTool) SetMaxInlineResultChars(maxChars int) {
+	t.lines.SetMaxInlineResultChars(maxChars)
+}
+
+func (t *ReadFileLinesTool) truncationPageSize() int64 {
+	page := int64(truncationHintPageSize)
+	if t.maxInlineResultChars > 0 {
+		budget := int64(t.maxInlineResultChars) - truncationHintReserve
+		if budget < 512 {
+			budget = 512
+		}
+		page = budget
+	}
+	if page > t.maxSize {
+		page = t.maxSize
+	}
+	if page <= 0 {
+		page = t.maxSize
+	}
+	return page
+}
+
 func (t *ReadFileTool) Name() string {
 	return "read_file"
 }
 
 func (t *ReadFileLinesTool) Name() string {
+	return "read_file"
+}
+
+func (t *ReadFileAutoTool) Name() string {
 	return "read_file"
 }
 
@@ -397,6 +464,10 @@ func (t *ReadFileTool) Description() string {
 
 func (t *ReadFileLinesTool) Description() string {
 	return "Read a UTF-8 text file from the filesystem. Output always includes line numbers in the format `LINE_NUMBER|LINE_CONTENT` (1-indexed). Supports partial reads via `start_line` and `max_lines` for large text files."
+}
+
+func (t *ReadFileAutoTool) Description() string {
+	return "Read a file. Text files return line-numbered output in the format `LINE_NUMBER|LINE_CONTENT` (1-indexed) and support `start_line`/`max_lines`. Binary files automatically fall back to raw bytes: omit `offset` and `length` to read the default byte range, or pass them to paginate raw output. Passing `offset` or `length` forces raw byte mode for text files too."
 }
 
 func (t *ReadFileTool) Parameters() map[string]any {
@@ -438,6 +509,38 @@ func (t *ReadFileLinesTool) Parameters() map[string]any {
 			"max_lines": map[string]any{
 				"type":        "integer",
 				"description": "Maximum number of lines to read.",
+			},
+		},
+		"required": []string{"path"},
+	}
+}
+
+func (t *ReadFileAutoTool) Parameters() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"path": map[string]any{
+				"type":        "string",
+				"description": "Path to the file to read.",
+			},
+			"start_line": map[string]any{
+				"type":        "integer",
+				"description": "Text files: line number to start reading from (1-indexed, inclusive).",
+				"default":     1,
+			},
+			"max_lines": map[string]any{
+				"type":        "integer",
+				"description": "Text files: maximum number of lines to read.",
+			},
+			"offset": map[string]any{
+				"type":        "integer",
+				"description": "Binary files or raw reads: byte offset to start reading from. Providing offset or length forces byte mode. Omit both to read the default byte range.",
+				"default":     0,
+			},
+			"length": map[string]any{
+				"type":        "integer",
+				"description": "Binary files or raw reads: maximum number of bytes to read. Omit to use the default read size.",
+				"default":     t.bytes.maxSize,
 			},
 		},
 		"required": []string{"path"},
@@ -541,6 +644,9 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	data := probe[:min(int64(n), length)]
 
 	if len(data) == 0 {
+		if totalSize == 0 || (totalSize < 0 && offset == 0) {
+			return NewToolResult("[file is empty (0 bytes); do not retry]")
+		}
 		return NewToolResult("[END OF FILE - no content at this offset]")
 	}
 
@@ -663,9 +769,14 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 	var byteBudgetTruncated bool
 	var lineTruncated bool
 	var linesTruncated int64
+	var firstLineByteOffset int64
+	var truncatedLineNumber int64
+	var truncatedLineByteOffset int64
+	var truncatedLinePrefixLen int64
+	var truncatedLineAtByteBudget bool
 
 	for lineIndex < startLine {
-		hasLine, _, consumeErr := consumeNextLine(reader)
+		hasLine, consumedBytes, consumeErr := consumeNextLine(reader)
 		if consumeErr != nil {
 			return ErrorResult(fmt.Sprintf("failed to read file content: %v", consumeErr))
 		}
@@ -673,6 +784,7 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 			reachedEOF = true
 			break
 		}
+		firstLineByteOffset += consumedBytes
 		lineIndex++
 	}
 
@@ -681,6 +793,8 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 	lineBuf := make([]byte, 0, 4096)
 	var prefixBuf [24]byte
 	for !reachedEOF && (limit < 0 || linesRead < limit) {
+		currentLine := lineIndex
+		lineStartOffset := firstLineByteOffset + fileBytesRead
 		prefix := strconv.AppendInt(prefixBuf[:0], lineIndex, 10)
 		prefix = append(prefix, '|')
 		remaining := t.maxSize - outputBytesRead - int64(len(prefix))
@@ -735,6 +849,10 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 				displayLine = append(displayLine, '\n')
 			}
 			linesTruncated++
+			if truncatedLineNumber == 0 {
+				truncatedLineNumber = currentLine
+				truncatedLineByteOffset = lineStartOffset
+			}
 		}
 
 		if cutAtLineAllowance && (len(displayLine) == 0 || displayLine[len(displayLine)-1] != '\n') {
@@ -769,6 +887,12 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 		if cutAtByteBudget {
 			byteBudgetTruncated = true
 			lineTruncated = true
+			if truncatedLineNumber == 0 {
+				truncatedLineNumber = currentLine
+				truncatedLineByteOffset = lineStartOffset
+				truncatedLinePrefixLen = int64(len(line))
+				truncatedLineAtByteBudget = true
+			}
 			break
 		}
 	}
@@ -785,6 +909,9 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 	}
 
 	if linesRead == 0 && content.Len() == 0 {
+		if totalSize == 0 || (totalSize < 0 && startLine == 1) {
+			return NewToolResult("[file is empty (0 bytes); do not retry]")
+		}
 		return NewToolResult(fmt.Sprintf("[END OF FILE - no content at or after start_line=%d]", startLine))
 	}
 
@@ -792,8 +919,8 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 	endLine := startLine + linesRead - 1
 	displayPath := filepath.Base(path)
 	header := fmt.Sprintf(
-		"[file: %s | read: lines %d-%d (1-indexed) | file_bytes: %d | output_bytes: %d]",
-		displayPath, start, endLine, fileBytesRead, outputBytesRead,
+		"[file: %s | read: lines %d-%d (1-indexed) | file_bytes: %d | output_bytes: %d | first_line_byte_offset: %d]",
+		displayPath, start, endLine, fileBytesRead, outputBytesRead, firstLineByteOffset,
 	)
 
 	switch {
@@ -826,18 +953,108 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 		header += "\n[END OF FILE - no further content.]"
 	}
 
+	if truncatedLineNumber > 0 && (linesTruncated > 0 || lineTruncated) {
+		pageSize := t.truncationPageSize()
+		if truncatedLineAtByteBudget {
+			continueOffset := truncatedLineByteOffset + truncatedLinePrefixLen
+			header += fmt.Sprintf(
+				"\n[LINE TRUNCATED - line %d was cut at the %d-byte budget; its raw bytes start at offset %d and the returned prefix ends at offset %d. Call read_file with offset=%d and length=%d to continue; repeat with the next offset until EOF.]",
+				truncatedLineNumber,
+				t.maxSize,
+				truncatedLineByteOffset,
+				continueOffset,
+				continueOffset,
+				pageSize,
+			)
+		} else {
+			header += fmt.Sprintf(
+				"\n[LINE TRUNCATED - line %d was cut after %d characters; its raw bytes start at offset %d. Call read_file with offset=%d and length=%d to page the full line; repeat with the offset from the next header until EOF.]",
+				truncatedLineNumber,
+				t.maxLineLength,
+				truncatedLineByteOffset,
+				truncatedLineByteOffset,
+				pageSize,
+			)
+		}
+	}
+
 	logger.DebugCF("tool", "ReadFileTool execution completed successfully",
 		map[string]any{
-			"path":              path,
-			"lines_read":        linesRead,
-			"file_bytes_read":   fileBytesRead,
-			"output_bytes_read": outputBytesRead,
-			"truncated":         byteBudgetTruncated,
-			"lines_truncated":   linesTruncated,
-			"tool":              t.Name(),
+			"path":                       path,
+			"lines_read":                 linesRead,
+			"file_bytes_read":            fileBytesRead,
+			"output_bytes_read":          outputBytesRead,
+			"first_line_byte_offset":     firstLineByteOffset,
+			"truncated":                  byteBudgetTruncated,
+			"lines_truncated":            linesTruncated,
+			"truncated_line":             truncatedLineNumber,
+			"truncated_line_byte_offset": truncatedLineByteOffset,
+			"tool":                       t.Name(),
 		})
 
 	return NewToolResult(header + "\n\n" + content.String())
+}
+
+func (t *ReadFileAutoTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	path, ok := args["path"].(string)
+	if !ok {
+		return ErrorResult("path is required")
+	}
+
+	lineArgs := hasReadFileArg(args, "start_line", "max_lines")
+	byteArgs := hasReadFileArg(args, "offset", "length")
+	if lineArgs && byteArgs {
+		return ErrorResult(
+			"use either start_line/max_lines (text files) or offset/length (binary or raw reads), not both",
+		)
+	}
+
+	// An explicit byte range keeps the pre-auto behavior and lets the model
+	// page through text files that are better read raw (for example minified
+	// files with very long lines).
+	if byteArgs {
+		return t.bytes.Execute(ctx, args)
+	}
+
+	binary, errResult := t.isBinary(path)
+	if errResult != nil {
+		return errResult
+	}
+	if !binary {
+		return t.lines.Execute(ctx, args)
+	}
+	if lineArgs {
+		return ErrorResult("file appears to be binary; use offset/length to read raw bytes")
+	}
+	return t.bytes.Execute(ctx, args)
+}
+
+func (t *ReadFileAutoTool) isBinary(path string) (bool, *ToolResult) {
+	file, err := t.bytes.fs.Open(path)
+	if err != nil {
+		return false, ErrorResult(err.Error())
+	}
+	defer file.Close()
+
+	if info, statErr := file.Stat(); statErr == nil && info.IsDir() {
+		return false, ErrorResult(fmt.Sprintf("failed to open file: path is a directory: %s", path))
+	}
+
+	sample := make([]byte, 512)
+	n, readErr := file.Read(sample)
+	if readErr != nil && readErr != io.EOF {
+		return false, ErrorResult(fmt.Sprintf("failed to read file: %v", readErr))
+	}
+	return isBinaryReadFileData(sample[:n]), nil
+}
+
+func hasReadFileArg(args map[string]any, names ...string) bool {
+	for _, name := range names {
+		if value, ok := args[name]; ok && value != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func isBinaryReadFileData(data []byte) bool {

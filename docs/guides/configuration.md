@@ -470,15 +470,25 @@ Even with `restrict_to_workspace: false`, the `exec` tool blocks these dangerous
 
 ### Read File Mode
 
-`read_file` has two mutually exclusive implementations selected by config. PicoClaw registers exactly one of them at startup:
+`read_file` has three modes selected by config. PicoClaw registers exactly one implementation at startup:
 
 | Config Key | Type | Default | Description |
 |------------|------|---------|-------------|
 | `tools.read_file.enabled` | bool | `true` | Enables the `read_file` tool |
-| `tools.read_file.mode` | string | `bytes` | Selects the `read_file` implementation: `bytes` or `lines` |
+| `tools.read_file.mode` | string | `auto` | Selects the `read_file` implementation: `auto`, `bytes`, or `lines` |
 | `tools.read_file.max_read_file_size` | int | `65536` | Maximum bytes returned by `read_file` |
 | `tools.read_file.max_lines` | int | `2000` | Upper bound on lines returned by a single line-mode read; larger `max_lines` requests are clamped |
 | `tools.read_file.max_line_length` | int | `2000` | Maximum characters per line in the line-numbered view; the remainder is replaced by a ` ... [truncated]` marker |
+
+#### Mode: `auto` (default)
+
+Inspects the first 512 bytes. Text files use the line-numbered behavior below, while binary-looking files fall back to raw byte output instead of being rejected. The tool exposes both parameter sets:
+
+* `start_line` / `max_lines` select line mode for text files
+* `offset` / `length` select byte mode; supplying either one forces byte mode even for text files (useful for minified files with very long lines)
+* For binary files, omitting both `offset` and `length` reads the default `max_read_file_size` range
+* Mixing the two parameter sets in one call is rejected
+* An empty file returns `[file is empty (0 bytes); do not retry]` in every mode
 
 #### Mode: `bytes`
 
@@ -507,7 +517,7 @@ Parameters:
 
 Behavior notes:
 
-* Binary-looking files are rejected with guidance to switch `read_file` to `mode = bytes`
+* Binary-looking files are rejected with guidance to switch `read_file` to `mode = bytes` or `mode = auto`
 * Extremely long single lines are cut after `tools.read_file.max_line_length` characters with a ` ... [truncated]` marker, and the read continues with the next line; if the byte budget runs out mid-line, the header reports that cut instead
 
 Use `mode = lines` when:
@@ -523,7 +533,7 @@ Use `mode = lines` when:
   "tools": {
     "read_file": {
       "enabled": true,
-      "mode": "lines",
+      "mode": "auto",
       "max_read_file_size": 65536,
       "max_lines": 2000,
       "max_line_length": 2000
