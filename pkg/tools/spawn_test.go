@@ -260,3 +260,147 @@ func TestSpawnTool_ExecuteAsync_NilSpawnerResult(t *testing.T) {
 		t.Fatal("callback was not invoked for nil spawner result")
 	}
 }
+// mockTool implements tools.Tool for testing tool filtering.
+type mockTool struct {
+	name string
+}
+
+func (m *mockTool) Name() string                          { return m.name }
+func (m *mockTool) Description() string                   { return "mock tool " + m.name }
+func (m *mockTool) Parameters() map[string]any            { return map[string]any{} }
+func (m *mockTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	return &ToolResult{ForLLM: "mock: " + m.name}
+}
+
+// TestSpawnTool_AllowOutbound verifies that allow_outbound=false strips the
+// outbound tool group {message, send_file, send_tts, reaction} while
+// preserving generation-only tools like image_generate.
+func TestSpawnTool_AllowOutbound(t *testing.T) {
+	provider := &MockLLMProvider{}
+
+	tests := []struct {
+		name              string
+		allowOutbound     bool
+		parentToolNames   []string
+		expectedChildTool []string
+	}{
+		{
+			name:           "allow_outbound true keeps all tools",
+			allowOutbound:  true,
+			parentToolNames: []string{"message", "send_file", "image_generate", "web"},
+			expectedChildTool: []string{"message", "send_file", "image_generate", "web"},
+		},
+		{
+			name:           "allow_outbound false strips outbound group",
+			allowOutbound:  false,
+			parentToolNames: []string{"message", "send_file", "send_tts", "reaction", "image_generate", "web"},
+			expectedChildTool: []string{"image_generate", "web"},
+		},
+		{
+			name:           "allow_outbound false with no outbound tools",
+			allowOutbound:  false,
+			parentToolNames: []string{"image_generate", "web"},
+			expectedChildTool: []string{"image_generate", "web"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := NewSubagentManager(provider, "test-model", "/tmp/test")
+			manager.SetDirectMessage(tt.allowOutbound)
+
+			registry := NewToolRegistry()
+			for _, name := range tt.parentToolNames {
+				registry.Register(&mockTool{name: name})
+			}
+			manager.SetTools(registry)
+
+			tool := NewSpawnTool(manager)
+			spawner := &mockSpawner{done: make(chan struct{})}
+			tool.SetSpawner(spawner)
+
+			args := map[string]any{"task": "test task"}
+			if !tt.allowOutbound {
+				args["allow_outbound"] = false
+			}
+
+			result := tool.Execute(context.Background(), args)
+			if result == nil {
+				t.Fatal("Result should not be nil")
+			}
+			if result.IsError {
+				t.Fatalf("Expected success, got error: %s", result.ForLLM)
+			}
+
+			<-spawner.done
+
+			// Collect child tool names
+			var childToolNames []string
+			for _, t := range spawner.lastConfig.Tools {
+				childToolNames = append(childToolNames, t.Name())
+			}
+
+			expected := map[string]bool{}
+			for _, name := range tt.expectedChildTool {
+				expected[name] = true
+			}
+			got := map[string]bool{}
+			for _, name := range childToolNames {
+				got[name] = true
+			}
+
+			for name := range expected {
+				if !got[name] {
+					t.Errorf("Expected child tool %q to be present, got %v", name, childToolNames)
+				}
+			}
+			for name := range got {
+				if !expected[name] {
+					t.Errorf("Unexpected child tool %q present, expected %v", name, tt.expectedChildTool)
+				}
+			}
+		})
+	}
+}
+
+// TestSpawnTool_DefaultDirectMessage verifies that direct_message defaults to
+// true (zero behavior change) when not explicitly configured.
+func TestSpawnTool_DefaultDirectMessage(t *testing.T) {
+	provider := &MockLLMProvider{}
+	manager := NewSubagentManager(provider, "test-model", "/tmp/test")
+	tool := NewSpawnTool(manager)
+
+	// DirectMessage defaults to true
+	if !manager.directMessage {
+		t.Error("directMessage should default to true")
+	}
+
+	spawner := &mockSpawner{done: make(chan struct{})}
+	tool.SetSpawner(spawner)
+
+	registry := NewToolRegistry()
+	registry.Register(&mockTool{name: "message"})
+	registry.Register(&mockTool{name: "image_generate"})
+	manager.SetTools(registry)
+
+	args := map[string]any{"task": "test task"} // no allow_outbound specified
+	result := tool.Execute(context.Background(), args)
+	if result == nil {
+		t.Fatal("Result should not be nil")
+	}
+	if result.IsError {
+		t.Fatalf("Expected success, got error: %s", result.ForLLM)
+	}
+
+	<-spawner.done
+
+	// With direct_message=true (default), all tools should be preserved
+	var childToolNames []string
+	for _, t := range spawner.lastConfig.Tools {
+		childToolNames = append(childToolNames, t.Name())
+	}
+
+	if len(childToolNames) != 2 {
+		t.Errorf("Expected 2 child tools (default true), got %d: %v", len(childToolNames), childToolNames)
+	}
+}
