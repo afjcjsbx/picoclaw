@@ -20,7 +20,6 @@ import (
 	"github.com/sipeed/picoclaw/pkg/fileutil"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	providercommon "github.com/sipeed/picoclaw/pkg/providers/common"
-	"github.com/sipeed/picoclaw/pkg/redact"
 )
 
 // rrCounter is a global counter for round-robin load balancing across models.
@@ -2056,12 +2055,6 @@ func LoadConfig(path string) (*Config, error) {
 
 	cfg.Session.ApplyDmScope()
 	cfg.Session.DeriveDmScope()
-
-	// Register every configured credential with the redaction layer. This is
-	// the single point where a config becomes live, so all runtime logging and
-	// outbound chat paths can mask these exact values without knowing where
-	// they came from.
-	redact.SetSecrets(cfg.SensitiveValues())
 
 	return cfg, nil
 }

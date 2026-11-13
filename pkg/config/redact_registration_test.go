@@ -14,10 +14,8 @@ import (
 	"github.com/sipeed/picoclaw/pkg/redact"
 )
 
-func TestLoadConfigRegistersSensitiveValuesForRedaction(t *testing.T) {
-	t.Cleanup(func() { redact.SetSecrets(nil) })
-
-	const modelKey = "oc_sk_test_key_1234567890"
+func TestSensitiveValuesCollectsConfiguredCredentials(t *testing.T) {
+	const modelKey = "plain-model-key-abc123"
 	const headerSecret = "Bearer custom-header-secret"
 	path := filepath.Join(t.TempDir(), "config.json")
 	body := `{
@@ -49,14 +47,37 @@ func TestLoadConfigRegistersSensitiveValuesForRedaction(t *testing.T) {
 	if strings.Contains(values, "oauth") {
 		t.Fatalf("ordinary auth_method value must not be registered as a secret")
 	}
+}
 
-	for _, secret := range []string{modelKey, headerSecret} {
-		got := redact.Text("provider echoed " + secret)
-		if strings.Contains(got, secret) {
-			t.Fatalf("configured secret was not registered for redaction: %q", got)
-		}
-		if !strings.Contains(got, redact.Marker) {
-			t.Fatalf("expected %s for registered secret: %q", redact.Marker, got)
-		}
+// TestLoadConfigLeavesRedactionSecretsAlone guards the process-wide redaction
+// set: web handlers, CLI subcommands and reload attempts that end up rejected
+// all call LoadConfig, and none of them may replace the credentials of the
+// config that is actually running.
+func TestLoadConfigLeavesRedactionSecretsAlone(t *testing.T) {
+	const liveSecret = "live-config-secret-9876"
+	const loadedKey = "plain-model-key-abc123"
+	redact.SetSecrets([]string{liveSecret})
+	t.Cleanup(func() { redact.SetSecrets(nil) })
+
+	path := filepath.Join(t.TempDir(), "config.json")
+	body := `{
+		"version": 3,
+		"model_list": [{"model_name": "test", "model": "openai/gpt-4", "api_keys": ["` + loadedKey + `"]}]
+	}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if _, err := LoadConfig(path); err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	if got := redact.Text("echoed " + liveSecret); strings.Contains(got, liveSecret) {
+		t.Fatalf("LoadConfig dropped the live secret: %q", got)
+	}
+	if got := redact.Text("echoed " + loadedKey); !strings.Contains(got, loadedKey) {
+		t.Fatalf("LoadConfig must not register the loaded config's keys, got %q", got)
+	}
+	if redact.Registered() != 1 {
+		t.Fatalf("Registered() = %d, want 1", redact.Registered())
 	}
 }
