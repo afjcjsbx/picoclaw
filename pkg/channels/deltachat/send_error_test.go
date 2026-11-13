@@ -38,15 +38,17 @@ func TestSendErrorsPreserveCauseAndRetryPolicy(t *testing.T) {
 					if req.Method != want {
 						t.Errorf("RPC method = %s, want %s", req.Method, want)
 					}
-					return `{"jsonrpc":"2.0","id":` + itoa(req.ID) + `,"error":{"code":-1,"message":"` + tc.message + `"}}`
+					return `{"jsonrpc":"2.0","id":` + itoa(
+						req.ID,
+					) + `,"error":{"code":-1,"message":"` + tc.message + `"}}`
 				})
 				defer cleanup()
 				ch.rpc = rpc
 				var err error
 				if useMedia {
 					path := filepath.Join(t.TempDir(), "photo.png")
-					if err := os.WriteFile(path, []byte("image"), 0o600); err != nil {
-						t.Fatal(err)
+					if writeErr := os.WriteFile(path, []byte("image"), 0o600); writeErr != nil {
+						t.Fatal(writeErr)
 					}
 					store := media.NewFileMediaStore()
 					ch.SetMediaStore(store)
@@ -54,7 +56,10 @@ func TestSendErrorsPreserveCauseAndRetryPolicy(t *testing.T) {
 					if storeErr != nil {
 						t.Fatal(storeErr)
 					}
-					_, err = ch.SendMedia(context.Background(), bus.OutboundMediaMessage{ChatID: "11", Parts: []bus.MediaPart{{Ref: ref, Type: "image"}}})
+					_, err = ch.SendMedia(
+						context.Background(),
+						bus.OutboundMediaMessage{ChatID: "11", Parts: []bus.MediaPart{{Ref: ref, Type: "image"}}},
+					)
 				} else {
 					_, err = ch.Send(context.Background(), bus.OutboundMessage{ChatID: "11", Content: "hello"})
 				}
@@ -78,9 +83,15 @@ func TestHandleMessageIgnoresDeviceChat(t *testing.T) {
 	rpc, cleanup := newMockRPC(t, func(req rpcRequest) string {
 		switch req.Method {
 		case "get_message":
-			return rpcResult(req, map[string]any{"id": 42, "chatId": 11, "text": "Welcome to Delta Chat", "downloadState": "Done"})
+			return rpcResult(
+				req,
+				map[string]any{"id": 42, "chatId": 11, "text": "Welcome to Delta Chat", "downloadState": "Done"},
+			)
 		case "get_full_chat_by_id":
-			return rpcResult(req, map[string]any{"id": 11, "chatType": "Single", "isDeviceChat": true, "canSend": false})
+			return rpcResult(
+				req,
+				map[string]any{"id": 11, "chatType": "Single", "isDeviceChat": true, "canSend": false},
+			)
 		default:
 			t.Errorf("unexpected RPC %s", req.Method)
 			return rpcUnexpectedMethod(req)

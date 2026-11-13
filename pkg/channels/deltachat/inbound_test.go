@@ -39,7 +39,15 @@ func TestListenWaitsForCompleteImage(t *testing.T) {
 			return rpcResult(req, []int64{42, 43})
 		case "get_message":
 			id := int64(req.Params[1].(float64))
-			msg := map[string]any{"id": id, "chatId": 12, "fromId": 10, "text": "hello", "downloadState": "Done", "state": 10, "sender": map[string]any{"address": "alice@example.org"}}
+			msg := map[string]any{
+				"id":            id,
+				"chatId":        12,
+				"fromId":        10,
+				"text":          "hello",
+				"downloadState": "Done",
+				"state":         10,
+				"sender":        map[string]any{"address": "alice@example.org"},
+			}
 			if id == 42 {
 				msg["text"] = "Image – 304.82 KiB"
 				msg["downloadState"] = "Available"
@@ -80,7 +88,10 @@ func TestListenWaitsForCompleteImage(t *testing.T) {
 			default:
 				ch.cancel()
 			}
-			return rpcResult(req, map[string]any{"contextId": accountID, "event": map[string]any{"kind": kind, "msgId": id}})
+			return rpcResult(
+				req,
+				map[string]any{"contextId": accountID, "event": map[string]any{"kind": kind, "msgId": id}},
+			)
 		default:
 			t.Errorf("unexpected RPC method %s", req.Method)
 			return rpcUnexpectedMethod(req)
@@ -139,7 +150,10 @@ func TestHandleMessageSkipsIncompleteDownloads(t *testing.T) {
 					t.Errorf("unexpected RPC %s", req.Method)
 					return rpcUnexpectedMethod(req)
 				}
-				return rpcResult(req, map[string]any{"id": 42, "chatId": 12, "text": "Image – 304.82 KiB", "downloadState": state})
+				return rpcResult(
+					req,
+					map[string]any{"id": 42, "chatId": 12, "text": "Image – 304.82 KiB", "downloadState": state},
+				)
 			})
 			defer cleanup()
 			ch.rpc = rpc
