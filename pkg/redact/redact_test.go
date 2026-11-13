@@ -6,9 +6,39 @@
 package redact
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
+
+func TestTextMasksSecretsWithJSONSpecialCharacters(t *testing.T) {
+	secrets := []string{`pa&ss<word>1234`, `quo"te\back-slash-99`}
+	SetSecrets(secrets)
+	t.Cleanup(func() { SetSecrets(nil) })
+
+	if Registered() != len(secrets) {
+		t.Fatalf("Registered() = %d, want %d: escaped forms must not count", Registered(), len(secrets))
+	}
+	for _, secret := range secrets {
+		raw, err := json.Marshal(map[string]string{"detail": "echoed " + secret})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(raw), secret) {
+			t.Fatalf("test needs a secret that JSON escapes, got %s", raw)
+		}
+		got := Text(string(raw))
+		if !strings.Contains(got, Marker) {
+			t.Errorf("escaped secret %q was not masked in %s: %s", secret, raw, got)
+		}
+		if !json.Valid([]byte(got)) {
+			t.Errorf("masking must keep marshaled JSON valid: %s", got)
+		}
+		if plain := Text("echoed " + secret); strings.Contains(plain, secret) {
+			t.Errorf("raw form of %q must still be masked: %s", secret, plain)
+		}
+	}
+}
 
 func TestTextMasksRegisteredSecretRegardlessOfFormat(t *testing.T) {
 	const key = "oc_sk_test_key_1234567890"

@@ -416,6 +416,43 @@ func TestAppendFieldsRedactsSecrets(t *testing.T) {
 	}
 }
 
+// TestAppendFieldsRedactsSecretsEscapedByJSON covers composite fields: they are
+// marshaled before redaction, and json.Marshal rewrites & < > " and \ so the
+// raw secret no longer appears in the text.
+func TestAppendFieldsRedactsSecretsEscapedByJSON(t *testing.T) {
+	secrets := []string{`pa&ss<word>1234`, `quo"te\back-slash-99`}
+	redact.SetSecrets(secrets)
+	t.Cleanup(func() { redact.SetSecrets(nil) })
+
+	var buf bytes.Buffer
+	l := zerolog.New(&buf)
+	event := l.Info()
+	appendFields(event, map[string]any{
+		"request": map[string]string{"first": "x " + secrets[0], "second": secrets[1]},
+	})
+	event.Msg("test")
+
+	out := buf.String()
+	for _, secret := range secrets {
+		escaped, err := json.Marshal(secret)
+		if err != nil {
+			t.Fatal(err)
+		}
+		inner := string(escaped[1 : len(escaped)-1])
+		if strings.Contains(out, secret) || strings.Contains(out, inner) {
+			t.Fatalf("secret %q leaked into composite log field: %s", secret, out)
+		}
+	}
+	var line map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &line); err != nil {
+		t.Fatalf("redacted log line must stay valid JSON: %v\n%s", err, out)
+	}
+	request, ok := line["request"].(map[string]any)
+	if !ok || request["first"] != "x "+redact.Marker || request["second"] != redact.Marker {
+		t.Fatalf("expected both values masked in place, got %#v", line["request"])
+	}
+}
+
 // TestAppendFieldsKeepsLineValidJSONWhenRedactionBreaksComposite guards the
 // composite-field path: the assignment rule swallows the closing brace after a
 // numeric value and a trailing escaped quote, which used to put invalid JSON in

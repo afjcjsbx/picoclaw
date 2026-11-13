@@ -18,6 +18,7 @@
 package redact
 
 import (
+	"encoding/json"
 	"math"
 	"regexp"
 	"sort"
@@ -45,16 +46,44 @@ func init() {
 // SetSecrets replaces the registered exact credential values. Empty and very
 // short values are ignored: they would mask ordinary text without protecting
 // anything meaningful.
+//
+// Each value is also registered in its JSON-escaped form, so a credential that
+// contains `&`, `<`, `>`, `"` or `\` is still masked in text that was marshaled
+// to JSON, such as composite log fields.
 func SetSecrets(values []string) {
 	cleaned := normalizeSecrets(values)
-	pairs := make([]string, 0, len(cleaned)*2)
+	forms := make([]string, 0, len(cleaned)*2)
+	forms = append(forms, cleaned...)
 	for _, value := range cleaned {
-		pairs = append(pairs, value, Marker)
+		if escaped := jsonEscaped(value); escaped != value {
+			forms = append(forms, escaped)
+		}
+	}
+	// Replacer picks the first matching pattern. Sorting longest first keeps
+	// a registered key that contains another registered value intact.
+	sort.Slice(forms, func(i, j int) bool {
+		if len(forms[i]) != len(forms[j]) {
+			return len(forms[i]) > len(forms[j])
+		}
+		return forms[i] < forms[j]
+	})
+	pairs := make([]string, 0, len(forms)*2)
+	for _, form := range forms {
+		pairs = append(pairs, form, Marker)
 	}
 	registered.Store(&secretSet{
 		replacer: strings.NewReplacer(pairs...),
 		count:    len(cleaned),
 	})
+}
+
+// jsonEscaped returns s as it appears inside a JSON string literal.
+func jsonEscaped(s string) string {
+	b, err := json.Marshal(s)
+	if err != nil || len(b) < 2 {
+		return s
+	}
+	return string(b[1 : len(b)-1])
 }
 
 // Registered returns the number of exact credential values currently
@@ -86,14 +115,6 @@ func normalizeSecrets(values []string) []string {
 		seen[value] = struct{}{}
 		cleaned = append(cleaned, value)
 	}
-	// Replacer picks the first matching pattern. Sorting longest first keeps
-	// a registered key that contains another registered value intact.
-	sort.Slice(cleaned, func(i, j int) bool {
-		if len(cleaned[i]) != len(cleaned[j]) {
-			return len(cleaned[i]) > len(cleaned[j])
-		}
-		return cleaned[i] < cleaned[j]
-	})
 	return cleaned
 }
 
