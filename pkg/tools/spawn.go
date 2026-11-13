@@ -204,7 +204,11 @@ func (t *SpawnTool) execute(
 				if t.tools != nil {
 					if allowOutbound {
 						// direct_message=true (default): preserve all parent tools
+						// except spawn itself to prevent infinite recursion.
 						for _, name := range t.tools.List() {
+							if name == "spawn" {
+								continue
+							}
 							if tool, ok := t.tools.Get(name); ok {
 								childTools = append(childTools, tool)
 							}
@@ -216,6 +220,9 @@ func (t *SpawnTool) execute(
 							parentRegistry = parentRegistry.CloneWithout(name)
 						}
 						for _, name := range parentRegistry.List() {
+							if name == "spawn" {
+								continue
+							}
 							if tool, ok := parentRegistry.Get(name); ok {
 								childTools = append(childTools, tool)
 							}
