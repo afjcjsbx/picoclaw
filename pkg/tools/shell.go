@@ -78,6 +78,7 @@ type ExecTool struct {
 	allowRemote          bool
 	maxOutputChars       int
 	maxInlineResultChars int
+	baseEnv              map[string]string
 	sessionManager       *SessionManager
 }
 
@@ -333,9 +334,13 @@ func NewExecToolWithConfig(
 
 	maxOutputChars := config.DefaultExecMaxOutputChars
 	maxInlineResultChars := 0
+	var execEnvSet map[string]string
+	var execEnvAllowlist []string
 	if cfg != nil {
 		maxOutputChars = cfg.Tools.Exec.GetMaxOutputChars()
 		maxInlineResultChars = cfg.Tools.GetMaxInlineResultChars()
+		execEnvSet = cfg.Tools.Exec.EnvSet
+		execEnvAllowlist = cfg.Tools.Exec.EnvAllowlist
 	}
 
 	return &ExecTool{
@@ -352,6 +357,7 @@ func NewExecToolWithConfig(
 		allowRemote:          allowRemote,
 		maxOutputChars:       maxOutputChars,
 		maxInlineResultChars: maxInlineResultChars,
+		baseEnv:              newExecEnv(workingDir, execEnvSet, execEnvAllowlist),
 		sessionManager:       getSessionManager(),
 	}, nil
 }
@@ -380,6 +386,8 @@ func buildExecDescription() string {
 	return fmt.Sprintf(`Executes shell commands with PicoClaw's safety guards. OS: %s. Shell: %s.
 
 Every foreground call starts a fresh shell in the configured working directory; pass cwd instead of using cd. For file operations, prefer list_dir, search_files, read_file, edit_file and write_file over cat, grep, find, ls, sed and echo/heredoc.
+
+The child environment is sanitized: only safe variables and the operator's allowlist are inherited. Use the env argument for additional non-sensitive variables instead of relying on the parent environment.
 
 Foreground results start with a one-line [exec] {...} header (exitCode, timedOut, truncated, durationMs, error), then raw stdout/stderr. Non-zero exit codes can be normal: grep returns 1 for no match and diff returns 1 for differences.
 
@@ -430,6 +438,16 @@ func (t *ExecTool) Parameters() map[string]any {
 			"cwd": map[string]any{
 				"type":        "string",
 				"description": "Working directory for the command",
+			},
+			"env": map[string]any{
+				"type": "object",
+				"description": "Additional environment variables for this command; keys are variable names and values must be strings. " +
+					"The inherited environment is sanitized: only safe variables (PATH, HOME, USER, LANG, SHELL, TERM, PWD, TZ, " +
+					"proxy and locale variables) plus tools.exec.env_set and tools.exec.env_allowlist are passed through. " +
+					"Cannot override PATH, HOME, USER, LOGNAME, SHELL, LD_PRELOAD, LD_LIBRARY_PATH, LD_AUDIT, LD_DEBUG, " +
+					"or any PICOCLAW_* variable. Read-only PICOCLAW_* variables: PICOCLAW_HOME, PICOCLAW_CONFIG, " +
+					"PICOCLAW_AGENT_WORKSPACE, PICOCLAW_EXE, PICOCLAW_SERVICE_NAME, PICOCLAW_EXEC_TIME (RFC3339), " +
+					"PICOCLAW_EXEC_TIMEOUT.",
 			},
 			"timeout": map[string]any{
 				"type":        "integer",
@@ -550,6 +568,11 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 	command, ok := args["command"].(string)
 	if !ok {
 		return ErrorResult("command is required")
+	}
+
+	extraEnv, envErr := execEnvFromArgs(args)
+	if envErr != nil {
+		return ErrorResult(envErr.Error())
 	}
 
 	// GHSA-pv8c-p6jf-3fpp: block exec from remote channels (e.g. Telegram webhooks)
@@ -680,13 +703,13 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 	}
 
 	if isBackground {
-		return t.runBackground(ctx, command, cwd, isPty, backgroundNote)
+		return t.runBackground(ctx, command, cwd, isPty, backgroundNote, extraEnv)
 	}
 	if promoteToBackground {
-		return t.runBackground(ctx, command, cwd, isPty, t.foregroundPromotionNote(timeoutDisabled, timeout))
+		return t.runBackground(ctx, command, cwd, isPty, t.foregroundPromotionNote(timeoutDisabled, timeout), extraEnv)
 	}
 
-	return t.runSync(ctx, command, cwd, timeout)
+	return t.runSync(ctx, command, cwd, timeout, extraEnv)
 }
 
 // foregroundPromotionNote explains why a requested foreground timeout was
@@ -706,7 +729,12 @@ func (t *ExecTool) foregroundPromotionNote(timeoutDisabled bool, timeout time.Du
 	return reason + "; started as a tracked background session. Use action=wait, poll, read, or kill with this sessionId."
 }
 
-func (t *ExecTool) runSync(ctx context.Context, command, cwd string, timeout time.Duration) *ToolResult {
+func (t *ExecTool) runSync(
+	ctx context.Context,
+	command, cwd string,
+	timeout time.Duration,
+	extraEnv map[string]string,
+) *ToolResult {
 	start := time.Now()
 	// timeout == 0 means no timeout
 	var cmdCtx context.Context
@@ -731,6 +759,7 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string, timeout tim
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
+	cmd.Env = t.runEnv(extraEnv, timeout)
 
 	prepareCommandForTermination(cmd)
 
@@ -958,7 +987,13 @@ func (t *ExecTool) outputSpillDir() string {
 	return filepath.Join(t.workingDir, ".artifacts", "tool")
 }
 
-func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEnabled bool, note string) *ToolResult {
+func (t *ExecTool) runBackground(
+	ctx context.Context,
+	command, cwd string,
+	ptyEnabled bool,
+	note string,
+	extraEnv map[string]string,
+) *ToolResult {
 	sessionID := generateSessionID()
 	session := &ProcessSession{
 		ID:         sessionID,
@@ -987,6 +1022,7 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
+	cmd.Env = t.runEnv(extraEnv, 0)
 
 	prepareCommandForTermination(cmd)
 

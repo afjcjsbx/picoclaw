@@ -14,8 +14,10 @@ The exec tool is used to execute shell commands.
 | `allow_remote` | bool | `false` | When `false`, exec only accepts commands that originate from internal channels (`cli`, `system`, `subagent`). Remote channels are then blocked (fail-closed): an empty channel is also rejected. Set it to `true` only when remote command execution is explicitly intended |
 | `timeout_seconds` | int | `180` | Command timeout in seconds. `0` means the default (180s). Foreground runs are capped at `600`s; a larger configured timeout promotes commands to a tracked background session |
 | `max_output_chars` | int | `50000` | Foreground output cap. Longer output keeps the first 40% and the last 60% around a `[OUTPUT TRUNCATED - N chars omitted out of T total]` notice, while the full stream is spilled to a workspace artifact (up to 5,000,000 bytes). The inline view is also bounded by `tools.max_inline_result_chars`; the artifact preserves the full stream. `0` means the default (50000) |
+| `env_set` | object | `{}` | Variables always injected into every exec child process. Values are trusted configuration: they override inherited variables, including `PATH`, and are not subject to the LLM blocklist. Every listed value reaches every command, so only add secrets here when the commands genuinely need them |
+| `env_allowlist` | string[] | `[]` | Additional parent variable names inherited on top of the built-in allowlist. Use explicit names, never wildcards: allowlisting a secret passes it to every command |
 
-Environment variables use the `PICOCLAW_TOOLS_EXEC_` prefix: `PICOCLAW_TOOLS_EXEC_ENABLED`, `PICOCLAW_TOOLS_EXEC_ENABLE_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_ALLOW_REMOTE`, `PICOCLAW_TOOLS_EXEC_CUSTOM_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_CUSTOM_ALLOW_PATTERNS`, `PICOCLAW_TOOLS_EXEC_TIMEOUT_SECONDS`, `PICOCLAW_TOOLS_EXEC_MAX_OUTPUT_CHARS`.
+Environment variables use the `PICOCLAW_TOOLS_EXEC_` prefix: `PICOCLAW_TOOLS_EXEC_ENABLED`, `PICOCLAW_TOOLS_EXEC_ENABLE_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_ALLOW_REMOTE`, `PICOCLAW_TOOLS_EXEC_CUSTOM_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_CUSTOM_ALLOW_PATTERNS`, `PICOCLAW_TOOLS_EXEC_TIMEOUT_SECONDS`, `PICOCLAW_TOOLS_EXEC_MAX_OUTPUT_CHARS`, `PICOCLAW_TOOLS_EXEC_ENV_ALLOWLIST` (comma-separated). `env_set` is JSON-only because values may contain characters used as env separators.
 
 ## Tool arguments
 
@@ -56,6 +58,7 @@ Background session actions return a JSON `ExecResponse` instead. Once the sessio
 | `background` | bool | — | With `run`, start the command in the background immediately; the result includes a `sessionId`. On Unix, a trailing `&` in the command is normalized to this mode automatically |
 | `pty` | bool | — | Allocate a pseudo-terminal for interactive programs; not supported on Windows |
 | `cwd` | string | — | Working directory for the command; defaults to the agent workspace |
+| `env` | object | `run` | Additional environment variables for this run. Values must be strings. Cannot override `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT`, `LD_DEBUG`, or any `PICOCLAW_*` variable; those entries are ignored |
 | `timeout` | int | — | Timeout in seconds for foreground commands; overrides `tools.exec.timeout_seconds`. Foreground runs are capped at `600`s: `0` (no timeout) and values above the cap start a tracked background session instead of blocking the call. Cannot be combined with `background=true` (except `0`); ignored with a note when a trailing `&` normalizes the run to background. With `wait`: maximum seconds to block (a positive integer), defaulting to and capped by `tools.exec.timeout_seconds` |
 | `notify` | bool | — | With `background=true` or a run promoted to background, send a completion message when the process exits (default `false`). Manually killed sessions do not notify. Use it for jobs with a defined end; do not poll or wait in a loop |
 | `offset` | int | — | With `read`: absolute byte offset into the retained session log. By default the response starts at the most recent `limit` bytes; use `0` for the oldest retained byte |
@@ -72,6 +75,38 @@ Behavior notes:
 - `poll` never blocks and returns a short output preview. `read` is non-destructive and pageable with `offset`/`limit`; the response includes `totalBytes`, `offset`, `nextOffset`, `hasMore`, `droppedBytes` (bytes evicted from the rolling window since the session started) and `skippedBytes` (bytes skipped because the requested offset predates the retained window). `wait` returns the exit status and output when the process exits, and a partial output tail when its window expires. `kill` returns the final output tail and keeps the session readable for the retention window.
 - To wait for a background session, call `wait` once instead of polling in a loop. If the window elapses first, the result has status `running` and a note saying this is not an error; call `wait` again if the job is expected to take longer. After two consecutive `poll`/`wait` calls with no new output the tool enables a completion notification and tells the model to stop checking (use `wait`, read the output, or kill the session).
 - Sessions are cleaned up 30 minutes after the process exits. `write` sends stdin, `send-keys` sends keys to a PTY session; combine `background=true` with `pty=true` for interactive sessions such as a REPL.
+
+## Environment sanitization
+
+Exec does not hand the full PicoClaw process environment to child processes. Unrelated variables — provider API keys, channel tokens, and other credentials — are stripped unless explicitly allowed.
+
+Inherited by default:
+
+- Core: `PATH`, `HOME`, `USER`, `LANG`, `SHELL`, `TERM`, `PWD`, `OLDPWD`, `HOSTNAME`, `LOGNAME`, `TZ`, `DISPLAY`, `TMPDIR`, `EDITOR`, `PAGER`
+- Proxies: `HTTP_PROXY`, `http_proxy`, `HTTPS_PROXY`, `https_proxy`, `NO_PROXY`, `no_proxy`
+- Locale: all `LC_*` variables (`LC_ALL`, `LC_CTYPE`, `LC_MESSAGES`, `LC_MONETARY`, `LC_NUMERIC`, `LC_TIME`, `LC_PAPER`, `LC_NAME`, `LC_ADDRESS`, `LC_TELEPHONE`, `LC_MEASUREMENT`, `LC_IDENTIFICATION`, `LC_COLLATE`)
+- Windows only, additionally: `PATHEXT`, `SYSTEMROOT`, `SYSTEMDRIVE`, `WINDIR`, `COMSPEC`, `APPDATA`, `LOCALAPPDATA`, `PROGRAMDATA`, `USERPROFILE`, `HOMEDRIVE`, `HOMEPATH`, `TEMP`, `TMP`
+
+Sources are merged in this order:
+
+1. `tools.exec.env_set` — trusted values from config; they override inherited variables, including `PATH`.
+2. The built-in allowlist above, plus names from `tools.exec.env_allowlist`.
+3. The per-call `env` argument — merged last, except for blocked names.
+4. Trusted `PICOCLAW_EXEC_TIME` and `PICOCLAW_EXEC_TIMEOUT` values for the current run.
+
+The per-call `env` argument cannot override `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT`, `LD_DEBUG`, or any `PICOCLAW_*` variable; blocked entries are ignored. The managed `PICOCLAW_*` names above are agent-controlled, so `env_set` cannot override them either. Commands can read these variables:
+
+| Variable | Value |
+|----------|-------|
+| `PICOCLAW_HOME` | PicoClaw home (`PICOCLAW_HOME` or `~/.picoclaw`) |
+| `PICOCLAW_CONFIG` | Config path (`PICOCLAW_CONFIG` or `$PICOCLAW_HOME/config.json`) |
+| `PICOCLAW_AGENT_WORKSPACE` | The agent workspace passed to the exec tool |
+| `PICOCLAW_EXE` | Path to the running PicoClaw executable |
+| `PICOCLAW_SERVICE_NAME` | `PICOCLAW_SERVICE_NAME`, or `picoclaw` |
+| `PICOCLAW_EXEC_TIME` | RFC 3339 timestamp when the command started |
+| `PICOCLAW_EXEC_TIMEOUT` | Effective foreground timeout as a Go duration (for example `3m0s` for the 180s default); `0s` when no timeout applies, including background sessions |
+
+The same environment is used for foreground runs, background and PTY sessions, and cron shell commands. If an existing workflow relies on an inherited variable, add its name to `env_allowlist` (inherits the parent value) or add a fixed value to `env_set`. Allowlisting a secret passes it to every exec command, so prefer `env_set` for values that only one workflow needs. A command that prints its environment exposes those values in the tool result.
 
 ## Disabling the Exec Tool
 
@@ -153,6 +188,13 @@ as containers, VMs, or an approval flow around build-and-run commands.
       "custom_deny_patterns": [
         "\\brm\\s+-r\\b",
         "\\bkillall\\s+python"
+      ],
+      "env_set": {
+        "APP_ENV": "production"
+      },
+      "env_allowlist": [
+        "GOPATH",
+        "GOROOT"
       ]
     }
   }

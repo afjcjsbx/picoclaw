@@ -341,6 +341,8 @@ PicoClaw 默认在沙箱环境中运行。Agent 只能访问配置的工作区�
 | `tools.exec.enable_deny_patterns` | bool | `true` | 启用内置危险命令拦截（关闭后硬性底线规则和自定义拒绝规则仍然生效） |
 | `tools.exec.custom_deny_patterns` | string[] | `[]` | 自定义阻止的正则表达式模式；始终生效 |
 | `tools.exec.custom_allow_patterns` | string[] | `[]` | 自定义允许的正则表达式模式 |
+| `tools.exec.env_set` | object | `{}` | 始终注入 exec 子进程的变量；属于受信任配置，会覆盖继承的同名变量 |
+| `tools.exec.env_allowlist` | string[] | `[]` | 除默认允许列表外，额外从父进程继承的变量名；仅支持显式名称 |
 
 > **安全提示：** Symlink 保护默认启用——所有文件路径在允许列表匹配前都会通过 `filepath.EvalSymlinks` 解析，防止符号链接逃逸攻击。
 

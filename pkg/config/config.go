@@ -1456,6 +1456,14 @@ type ExecConfig struct {
 	CustomAllowPatterns []string `                                 json:"custom_allow_patterns" env:"PICOCLAW_TOOLS_EXEC_CUSTOM_ALLOW_PATTERNS"`
 	TimeoutSeconds      int      `                                 json:"timeout_seconds"       env:"PICOCLAW_TOOLS_EXEC_TIMEOUT_SECONDS"`  // 0 means use default (180s)
 	MaxOutputChars      int      `                                 json:"max_output_chars"      env:"PICOCLAW_TOOLS_EXEC_MAX_OUTPUT_CHARS"` // 0 means use default (50000 chars)
+	// EnvSet lists variables always injected into exec child processes. Values
+	// are trusted configuration and override inherited variables, including
+	// PATH. It is not exposed as a tool argument; JSON only.
+	EnvSet map[string]string `json:"env_set,omitempty" yaml:"-" env:"-"`
+	// EnvAllowlist extends the built-in allowlist with additional parent
+	// variable names inherited by exec child processes. Use explicit names,
+	// never wildcards: allowlisting a secret exposes it to every command.
+	EnvAllowlist []string `json:"env_allowlist,omitempty" yaml:"-" env:"PICOCLAW_TOOLS_EXEC_ENV_ALLOWLIST"`
 }
 
 // DefaultExecTimeoutSeconds is the foreground command timeout used when
