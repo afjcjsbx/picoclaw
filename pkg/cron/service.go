@@ -627,6 +627,10 @@ func (cs *CronService) loadStore() error {
 	return nil
 }
 
+// writeStoreFile persists the cron store. Tests replace it with the no-sync
+// variant so concurrency tests are not dominated by fsync latency.
+var writeStoreFile = fileutil.WriteFileAtomic
+
 func (cs *CronService) saveStoreUnsafe() error {
 	data, err := json.MarshalIndent(cs.store, "", "  ")
 	if err != nil {
@@ -634,7 +638,7 @@ func (cs *CronService) saveStoreUnsafe() error {
 	}
 
 	// Use unified atomic write utility with explicit sync for flash storage reliability.
-	if err := fileutil.WriteFileAtomic(cs.storePath, data, 0o600); err != nil {
+	if err := writeStoreFile(cs.storePath, data, 0o600); err != nil {
 		return err
 	}
 	// Our own write must not look like an external edit.

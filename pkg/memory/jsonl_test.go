@@ -16,7 +16,10 @@ import (
 
 func newTestStore(t *testing.T) *JSONLStore {
 	t.Helper()
-	store, err := NewJSONLStore(t.TempDir())
+	// Tests exercise store semantics, not power-loss durability, so skip the
+	// fsync on every write. The durable default is covered by
+	// TestNewJSONLStore_DurableWritesOption.
+	store, err := NewJSONLStore(t.TempDir(), WithDurableWrites(false))
 	if err != nil {
 		t.Fatalf("NewJSONLStore: %v", err)
 	}

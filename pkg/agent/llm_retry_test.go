@@ -138,6 +138,14 @@ func TestLLMRetryFromConfig(t *testing.T) {
 	if got := llmRetryFromConfig(cfg); got.max != 5 || got.backoff != 3*time.Second {
 		t.Fatalf("configured = %+v, want 5 retries and a 3s backoff", got)
 	}
+	// An explicit zero disables the wait instead of falling back to the 2s
+	// default; LoadConfig applies that default before this point.
+	zero := &config.Config{Agents: config.AgentsConfig{Defaults: config.AgentDefaults{
+		LLMRetryBackoffSecs: 0,
+	}}}
+	if got := llmRetryFromConfig(zero); got.backoff != 0 {
+		t.Fatalf("zero backoff = %v, want no wait", got.backoff)
+	}
 }
 
 // A 502 on the first summarization request is retried, so the real summary is
@@ -150,7 +158,7 @@ func TestLegacySummarizer_RetriesOverloadedUpstream(t *testing.T) {
 				ModelName:           "test-model",
 				MaxTokens:           1000,
 				MaxToolIterations:   10,
-				LLMRetryBackoffSecs: 1,
+				LLMRetryBackoffSecs: 0, // retry path only; keep the test fast
 			},
 		},
 	}
