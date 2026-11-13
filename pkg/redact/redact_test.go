@@ -20,9 +20,6 @@ func TestTextMasksSecretsWithJSONSpecialCharacters(t *testing.T) {
 	SetSecrets(secrets)
 	t.Cleanup(func() { SetSecrets(nil) })
 
-	if Registered() != len(secrets) {
-		t.Fatalf("Registered() = %d, want %d: escaped forms must not count", Registered(), len(secrets))
-	}
 	for _, secret := range secrets {
 		raw, err := json.Marshal(map[string]string{"detail": "echoed " + secret})
 		if err != nil {
@@ -77,9 +74,6 @@ func TestSetSecretsIgnoresShortValues(t *testing.T) {
 	SetSecrets([]string{"abc"})
 	t.Cleanup(func() { SetSecrets(nil) })
 
-	if Registered() != 0 {
-		t.Fatalf("Registered() = %d, want 0", Registered())
-	}
 	if got := Text("abc is ordinary text"); got != "abc is ordinary text" {
 		t.Fatalf("short value must not be registered: %q", got)
 	}

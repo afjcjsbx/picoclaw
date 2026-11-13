@@ -98,7 +98,4 @@ func TestLoadConfigLeavesRedactionSecretsAlone(t *testing.T) {
 	if got := redact.Text("echoed " + loadedKey); !strings.Contains(got, loadedKey) {
 		t.Fatalf("LoadConfig must not register the loaded config's keys, got %q", got)
 	}
-	if redact.Registered() != 1 {
-		t.Fatalf("Registered() = %d, want 1", redact.Registered())
-	}
 }

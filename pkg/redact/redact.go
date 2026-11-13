@@ -35,10 +35,9 @@ const Marker = "[FILTERED]"
 // pay for an atomic load plus, when configured, one linear replacement pass.
 type secretSet struct {
 	replacer *strings.Replacer
-	// forms are the strings the replacer looks for, kept so Secrets can tell
+	// forms are the strings the replacer looks for, kept so secrets can tell
 	// with allocation-free substring scans whether the replacer has any work.
 	forms []string
-	count int
 }
 
 var registered atomic.Pointer[secretSet]
@@ -78,7 +77,6 @@ func SetSecrets(values []string) {
 	registered.Store(&secretSet{
 		replacer: strings.NewReplacer(pairs...),
 		forms:    forms,
-		count:    len(cleaned),
 	})
 }
 
@@ -89,12 +87,6 @@ func jsonEscaped(s string) string {
 		return s
 	}
 	return string(b[1 : len(b)-1])
-}
-
-// Registered returns the number of exact credential values currently
-// registered.
-func Registered() int {
-	return registered.Load().count
 }
 
 func normalizeSecrets(values []string) []string {
@@ -123,9 +115,6 @@ func secrets(s string) string {
 		return s
 	}
 	set := registered.Load()
-	if set.count == 0 {
-		return s
-	}
 	// strings.Replacer copies its input even when nothing matches, which costs
 	// about two bytes of garbage per byte of text on every streamed update.
 	// Substring scans allocate nothing, so only hand over text that has a hit.
