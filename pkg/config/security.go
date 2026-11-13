@@ -11,8 +11,10 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
+	"unicode"
 
 	"gopkg.in/yaml.v3"
 
@@ -269,13 +271,47 @@ func sensitiveName(name string) bool {
 	for _, marker := range []string{
 		"apikey", "api_key", "api-key",
 		"accesskey", "access_key", "privatekey", "private_key",
-		"secret", "password", "passwd", "credential", "token",
+		"secret", "password", "passwd", "credential",
 	} {
 		if strings.Contains(lower, marker) {
 			return true
 		}
 	}
-	return false
+	// "token" must be a whole word: MaxTokensField and max_tokens_field name a
+	// setting, not a credential, while BotToken, access_token and BOT_TOKEN do.
+	return slices.Contains(nameWords(name), "token")
+}
+
+// nameWords splits a field or map key into lowercase words on separators and
+// camelCase boundaries: "APIToken" -> [api token], "MaxTokensField" ->
+// [max tokens field], "BOT_TOKEN" -> [bot token].
+func nameWords(name string) []string {
+	var words []string
+	runes := []rune(name)
+	start := 0
+	flush := func(end int) {
+		if end > start {
+			words = append(words, strings.ToLower(string(runes[start:end])))
+		}
+	}
+	for i, r := range runes {
+		if !unicode.IsLetter(r) && !unicode.IsDigit(r) {
+			flush(i)
+			start = i + 1
+			continue
+		}
+		if i == start || !unicode.IsUpper(r) {
+			continue
+		}
+		prev := runes[i-1]
+		acronymEnd := unicode.IsUpper(prev) && i+1 < len(runes) && unicode.IsLower(runes[i+1])
+		if unicode.IsLower(prev) || unicode.IsDigit(prev) || acronymEnd {
+			flush(i)
+			start = i
+		}
+	}
+	flush(len(runes))
+	return words
 }
 
 // collectSensitive recursively traverses the value and collects SecureString/SecureStrings values.
