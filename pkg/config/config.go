@@ -1454,13 +1454,28 @@ type ExecConfig struct {
 	AllowRemote         bool     `                                 json:"allow_remote"          env:"PICOCLAW_TOOLS_EXEC_ALLOW_REMOTE"`
 	CustomDenyPatterns  []string `                                 json:"custom_deny_patterns"  env:"PICOCLAW_TOOLS_EXEC_CUSTOM_DENY_PATTERNS"`
 	CustomAllowPatterns []string `                                 json:"custom_allow_patterns" env:"PICOCLAW_TOOLS_EXEC_CUSTOM_ALLOW_PATTERNS"`
-	TimeoutSeconds      int      `                                 json:"timeout_seconds"       env:"PICOCLAW_TOOLS_EXEC_TIMEOUT_SECONDS"`  // 0 means use default (60s)
+	TimeoutSeconds      int      `                                 json:"timeout_seconds"       env:"PICOCLAW_TOOLS_EXEC_TIMEOUT_SECONDS"`  // 0 means use default (180s)
 	MaxOutputChars      int      `                                 json:"max_output_chars"      env:"PICOCLAW_TOOLS_EXEC_MAX_OUTPUT_CHARS"` // 0 means use default (50000 chars)
 }
+
+// DefaultExecTimeoutSeconds is the foreground command timeout used when
+// tools.exec.timeout_seconds is unset or zero.
+const DefaultExecTimeoutSeconds = 180
+
+// MaxExecForegroundTimeoutSeconds caps a single foreground exec invocation.
+// Requests above the cap are promoted to a tracked background session.
+const MaxExecForegroundTimeoutSeconds = 600
 
 // DefaultExecMaxOutputChars bounds foreground exec output before it is
 // truncated to a head+tail window with an omission notice.
 const DefaultExecMaxOutputChars = 50000
+
+func (c ExecConfig) GetTimeoutSeconds() int {
+	if c.TimeoutSeconds > 0 {
+		return c.TimeoutSeconds
+	}
+	return DefaultExecTimeoutSeconds
+}
 
 func (c ExecConfig) GetMaxOutputChars() int {
 	if c.MaxOutputChars > 0 {

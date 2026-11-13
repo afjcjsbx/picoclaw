@@ -30,6 +30,11 @@ import (
 // maxOutputBufferSize caps the rolling output retained per session.
 const maxOutputBufferSize = 1 * 1024 * 1024 // 1MB
 
+// maxForegroundTimeout caps how long a single foreground exec call may block.
+// Requests above it are promoted to a tracked background session instead of
+// being clamped or rejected.
+const maxForegroundTimeout = config.MaxExecForegroundTimeoutSeconds * time.Second
+
 var (
 	globalSessionManager = NewSessionManager()
 	sessionManagerMu     sync.RWMutex
@@ -62,6 +67,7 @@ func getSessionManager() *SessionManager {
 type ExecTool struct {
 	workingDir           string
 	timeout              time.Duration
+	foregroundCap        time.Duration
 	denyPatterns         []*regexp.Regexp
 	hardlineDenyPatterns []*regexp.Regexp
 	customDenyPatterns   []*regexp.Regexp
@@ -319,8 +325,10 @@ func NewExecToolWithConfig(
 	}
 
 	var timeout time.Duration
-	if cfg != nil && cfg.Tools.Exec.TimeoutSeconds > 0 {
-		timeout = time.Duration(cfg.Tools.Exec.TimeoutSeconds) * time.Second
+	if cfg != nil {
+		timeout = time.Duration(cfg.Tools.Exec.GetTimeoutSeconds()) * time.Second
+	} else {
+		timeout = config.DefaultExecTimeoutSeconds * time.Second
 	}
 
 	maxOutputChars := config.DefaultExecMaxOutputChars
@@ -333,6 +341,7 @@ func NewExecToolWithConfig(
 	return &ExecTool{
 		workingDir:           workingDir,
 		timeout:              timeout,
+		foregroundCap:        maxForegroundTimeout,
 		denyPatterns:         denyPatterns,
 		hardlineDenyPatterns: hardlineDenyPatterns,
 		customDenyPatterns:   customDenyPatterns,
@@ -374,7 +383,7 @@ Foreground results start with a one-line [exec] {...} header (exitCode, timedOut
 
 Oversized output is truncated automatically and the full stream is saved as an artifact; use the artifact path in the result with read_file when you need the omitted middle, instead of piping through head/tail or re-running the command.
 
-action=run requires command. timeout is in seconds; 0 disables it; it is not supported with background=true.
+action=run requires command. timeout is in seconds. Foreground runs are capped at 600s: timeout=0 or any value above the cap starts a tracked background session instead and returns its sessionId. timeout is not supported with background=true.
 
 Use background=true only when the command must outlive the call. It returns a sessionId. Use list to inspect sessions, poll for a non-blocking preview, wait to block until exit, read for non-destructive offset/limit byte ranges (defaults to the most recent bytes), write for stdin, send-keys for PTY keys, and kill to terminate. Prefer wait over polling; notify=true sends a completion message. Use pty=true for interactive programs (not supported on Windows).
 
@@ -422,11 +431,11 @@ func (t *ExecTool) Parameters() map[string]any {
 			},
 			"timeout": map[string]any{
 				"type":        "integer",
-				"description": "Optional timeout in seconds for foreground commands; overrides the configured timeout, and 0 disables the timeout. Not supported with background=true. For wait: maximum seconds to block (default and cap: the configured timeout).",
+				"description": "Optional timeout in seconds for foreground commands; overrides the configured timeout. Foreground runs are capped at 600s: 0 (no timeout) and values above the cap start a tracked background session instead. Not supported with background=true. For wait: maximum seconds to block (default and cap: the configured timeout).",
 			},
 			"notify": map[string]any{
 				"type":        "boolean",
-				"description": "With background=true, send a completion message when the process exits. Use it for jobs with a defined end; do not poll or wait in a loop.",
+				"description": "With background=true or a run promoted to background, send a completion message when the process exits. Use it for jobs with a defined end; do not poll or wait in a loop.",
 			},
 			"offset": map[string]any{
 				"type":        "integer",
@@ -479,9 +488,10 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 	}
 }
 
-// ExecuteAsync installs the completion callback for background runs. The
-// callback is stored even when notify is false so repeated silent poll/wait
-// calls can promote the session to notify-on-complete later.
+// ExecuteAsync installs the completion callback for runs that return a
+// session, including foreground calls promoted to background. The callback is
+// stored even when notify is false so repeated silent poll/wait calls can
+// promote the session to notify-on-complete later.
 func (t *ExecTool) ExecuteAsync(
 	ctx context.Context,
 	args map[string]any,
@@ -491,7 +501,7 @@ func (t *ExecTool) ExecuteAsync(
 	if result == nil || result.IsError || cb == nil {
 		return result
 	}
-	if action, _ := args["action"].(string); action != "run" || !boolArg(args, "background") {
+	if action, _ := args["action"].(string); action != "run" {
 		return result
 	}
 
@@ -509,7 +519,11 @@ func (t *ExecTool) ExecuteAsync(
 	if boolArg(args, "notify") && session.StartNotify() {
 		// Only advertise the notification after the watcher is armed. Direct
 		// Execute calls have no callback, so they must not promise one.
-		resp.Note = notifyEnabledNote
+		if resp.Note == "" {
+			resp.Note = notifyEnabledNote
+		} else {
+			resp.Note += " " + notifyEnabledNote
+		}
 		if data, err := json.Marshal(resp); err == nil {
 			result.ForLLM = string(data)
 		}
@@ -553,6 +567,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 	isBackground := boolArg(args, "background")
 	notify := boolArg(args, "notify")
 	timeout := t.timeout
+	timeoutDisabled := false
 	if raw, ok := args["timeout"]; ok {
 		const maxTimeoutSeconds = (1<<63 - 1) / int64(time.Second)
 		// JSON tool arguments always decode numbers as float64.
@@ -565,8 +580,16 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 		if isBackground && seconds != 0 {
 			return ErrorResult("timeout is only supported for foreground commands")
 		}
+		timeoutDisabled = seconds == 0
 		timeout = time.Duration(seconds) * time.Second
 	}
+
+	// The exec tool caps a foreground call at t.foregroundCap. Requests that
+	// would exceed it (including timeout=0, which disables the limit) are
+	// promoted to a tracked background session instead of being clamped or
+	// rejected.
+	promoteToBackground := !isBackground && t.foregroundCap > 0 &&
+		(timeoutDisabled || timeout > t.foregroundCap)
 
 	if isPty {
 		if runtime.GOOS == "windows" {
@@ -574,8 +597,8 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 		}
 	}
 
-	if notify && !isBackground {
-		return ErrorResult("notify is only supported with background=true")
+	if notify && !isBackground && !promoteToBackground {
+		return ErrorResult("notify is only supported with background=true or when the run is promoted to background")
 	}
 
 	cwd := t.workingDir
@@ -626,10 +649,30 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 	}
 
 	if isBackground {
-		return t.runBackground(ctx, command, cwd, isPty)
+		return t.runBackground(ctx, command, cwd, isPty, "")
+	}
+	if promoteToBackground {
+		return t.runBackground(ctx, command, cwd, isPty, t.foregroundPromotionNote(timeoutDisabled, timeout))
 	}
 
 	return t.runSync(ctx, command, cwd, timeout)
+}
+
+// foregroundPromotionNote explains why a requested foreground timeout was
+// turned into a tracked background session.
+func (t *ExecTool) foregroundPromotionNote(timeoutDisabled bool, timeout time.Duration) string {
+	capSeconds := int64(t.foregroundCap / time.Second)
+	reason := fmt.Sprintf(
+		"Requested timeout of %ds exceeds the %ds foreground cap",
+		int64(timeout/time.Second), capSeconds,
+	)
+	if timeoutDisabled {
+		reason = fmt.Sprintf(
+			"timeout=0 disables the timeout, which exceeds the %ds foreground cap",
+			capSeconds,
+		)
+	}
+	return reason + "; started as a tracked background session. Use action=wait, poll, read, or kill with this sessionId."
 }
 
 func (t *ExecTool) runSync(ctx context.Context, command, cwd string, timeout time.Duration) *ToolResult {
@@ -878,7 +921,7 @@ func (t *ExecTool) outputSpillDir() string {
 	return filepath.Join(t.workingDir, ".artifacts", "tool")
 }
 
-func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEnabled bool) *ToolResult {
+func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEnabled bool, note string) *ToolResult {
 	sessionID := generateSessionID()
 	session := &ProcessSession{
 		ID:         sessionID,
@@ -1074,6 +1117,7 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 	resp := ExecResponse{
 		SessionID: sessionID,
 		Status:    "running",
+		Note:      note,
 	}
 	data, err := json.Marshal(resp)
 	if err != nil {

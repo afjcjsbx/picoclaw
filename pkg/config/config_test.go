@@ -363,6 +363,28 @@ func TestConfig_TruncationLimits(t *testing.T) {
 	}
 }
 
+func TestDefaultConfig_ExecTimeout(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.Tools.Exec.TimeoutSeconds != DefaultExecTimeoutSeconds {
+		t.Fatalf(
+			"DefaultConfig().Tools.Exec.TimeoutSeconds = %d, want %d",
+			cfg.Tools.Exec.TimeoutSeconds,
+			DefaultExecTimeoutSeconds,
+		)
+	}
+	if got := cfg.Tools.Exec.GetTimeoutSeconds(); got != DefaultExecTimeoutSeconds {
+		t.Fatalf("GetTimeoutSeconds() = %d, want %d", got, DefaultExecTimeoutSeconds)
+	}
+
+	// Zero values fall back to the default instead of disabling the timeout.
+	if got := (ExecConfig{}).GetTimeoutSeconds(); got != DefaultExecTimeoutSeconds {
+		t.Fatalf("zero ExecConfig.GetTimeoutSeconds() = %d, want %d", got, DefaultExecTimeoutSeconds)
+	}
+	if got := (ExecConfig{TimeoutSeconds: 42}).GetTimeoutSeconds(); got != 42 {
+		t.Fatalf("ExecConfig.GetTimeoutSeconds() = %d, want 42", got)
+	}
+}
+
 func TestDefaultConfig_EvolutionDefaults(t *testing.T) {
 	cfg := DefaultConfig()
 
