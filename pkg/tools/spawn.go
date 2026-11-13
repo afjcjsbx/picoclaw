@@ -201,14 +201,24 @@ func (t *SpawnTool) execute(
 				// are returned to the parent agent, which decides whether to
 				// forward them to the user.
 				var childTools []Tool
-				if t.tools != nil && !allowOutbound {
-					parentRegistry := t.tools
-					for _, name := range outboundTools {
-						parentRegistry = parentRegistry.CloneWithout(name)
-					}
-					for _, name := range parentRegistry.List() {
-						if tool, ok := parentRegistry.Get(name); ok {
-							childTools = append(childTools, tool)
+				if t.tools != nil {
+					if allowOutbound {
+						// direct_message=true (default): preserve all parent tools
+						for _, name := range t.tools.List() {
+							if tool, ok := t.tools.Get(name); ok {
+								childTools = append(childTools, tool)
+							}
+						}
+					} else {
+						// direct_message=false: strip outbound tool group
+						parentRegistry := t.tools
+						for _, name := range outboundTools {
+							parentRegistry = parentRegistry.CloneWithout(name)
+						}
+						for _, name := range parentRegistry.List() {
+							if tool, ok := parentRegistry.Get(name); ok {
+								childTools = append(childTools, tool)
+							}
 						}
 					}
 				}
