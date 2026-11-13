@@ -20,6 +20,7 @@ package redact
 import (
 	"crypto/sha256"
 	"encoding/json"
+	"io"
 	"math"
 	"regexp"
 	"sort"
@@ -38,6 +39,9 @@ type secretSet struct {
 	// forms are the strings the replacer looks for, kept so secrets can tell
 	// with allocation-free substring scans whether the replacer has any work.
 	forms []string
+	// maxLen is the longest form, used to size the streaming writer's carry
+	// buffer. It is zero when no credentials are registered.
+	maxLen int
 }
 
 var registered atomic.Pointer[secretSet]
@@ -71,12 +75,17 @@ func SetSecrets(values []string) {
 		return forms[i] < forms[j]
 	})
 	pairs := make([]string, 0, len(forms)*2)
+	maxLen := 0
 	for _, form := range forms {
 		pairs = append(pairs, form, Marker)
+		if len(form) > maxLen {
+			maxLen = len(form)
+		}
 	}
 	registered.Store(&secretSet{
 		replacer: strings.NewReplacer(pairs...),
 		forms:    forms,
+		maxLen:   maxLen,
 	})
 }
 
@@ -124,6 +133,271 @@ func secrets(s string) string {
 		}
 	}
 	return s
+}
+
+// minPartialSecret is the shortest trailing fragment masked by a writer flush.
+// Shorter fragments cannot meaningfully identify a credential and masking them
+// would corrupt ordinary text that happens to share a one- or two-byte prefix.
+const minPartialSecret = 4
+
+// Writer returns an io.WriteCloser that replaces exact registered credentials
+// in a byte stream as it is written. It is meant for data that is persisted
+// incrementally (exec spill files, artifact windows) where materializing the
+// whole payload to run the filter would defeat the memory bound.
+//
+// At most one byte less than the longest registered credential is held back, so
+// a credential split across Write calls is still detected. Flush/Close write
+// that tail and mask a trailing partial credential; Close does not close the
+// underlying writer. Values are read from the atomically swapped registry on
+// every write, so a config reload applies to an in-flight stream.
+func Writer(w io.Writer) io.WriteCloser {
+	return &secretWriter{dst: w}
+}
+
+type secretWriter struct {
+	dst     io.Writer
+	pending []byte
+	err     error
+}
+
+// Write converts the chunk to a string and reuses the string path. io.Copy
+// feeds this writer in small chunks, so the transient copy is chunk-sized, not
+// artifact-sized.
+func (w *secretWriter) Write(p []byte) (int, error) {
+	return w.WriteString(string(p))
+}
+
+// WriteString implements io.StringWriter so large artifact parts can be
+// redacted straight from the source string without a []byte copy.
+func (w *secretWriter) WriteString(p string) (int, error) {
+	if w.err != nil {
+		return 0, w.err
+	}
+	if p == "" {
+		return 0, nil
+	}
+
+	set := registered.Load()
+	if len(set.forms) == 0 {
+		if err := w.flushPending(); err != nil {
+			return 0, err
+		}
+		n, err := io.WriteString(w.dst, p)
+		if err == nil && n != len(p) {
+			err = io.ErrShortWrite
+		}
+		if err != nil {
+			w.err = err
+			return n, err
+		}
+		return n, nil
+	}
+
+	hold := set.maxLen - 1
+	if hold < 0 {
+		hold = 0
+	}
+	if len(w.pending) == 0 {
+		if len(p) <= hold {
+			w.pending = append(w.pending[:0], p...)
+			return len(p), nil
+		}
+		cut := set.safeCutString(p, len(p)-hold)
+		if cut > 0 {
+			if _, err := set.replacer.WriteString(w.dst, p[:cut]); err != nil {
+				w.err = err
+				return 0, err
+			}
+		}
+		w.pending = append(w.pending[:0], p[cut:]...)
+		return len(p), nil
+	}
+
+	buf := string(w.pending) + p
+	if len(buf) <= hold {
+		w.pending = append(w.pending[:0], buf...)
+		return len(p), nil
+	}
+	cut := set.safeCutString(buf, len(buf)-hold)
+	if cut > 0 {
+		if _, err := set.replacer.WriteString(w.dst, buf[:cut]); err != nil {
+			w.err = err
+			return 0, err
+		}
+	}
+	w.pending = append(w.pending[:0], buf[cut:]...)
+	return len(p), nil
+}
+
+// Flush writes the held-back tail, masking a trailing partial credential.
+// Artifact writers call it between non-contiguous head/notice/tail parts;
+// Close calls it at the end of the stream.
+func (w *secretWriter) Flush() error {
+	if w.err != nil {
+		return w.err
+	}
+	if len(w.pending) == 0 {
+		return nil
+	}
+	set := registered.Load()
+	if len(set.forms) == 0 {
+		return w.flushPending()
+	}
+	_, err := io.WriteString(w.dst, set.replaceFinal(string(w.pending)))
+	w.pending = w.pending[:0]
+	w.err = err
+	return err
+}
+
+func (w *secretWriter) Close() error {
+	return w.Flush()
+}
+
+func (w *secretWriter) flushPending() error {
+	if len(w.pending) == 0 {
+		return nil
+	}
+	n, err := w.dst.Write(w.pending)
+	if err == nil && n != len(w.pending) {
+		err = io.ErrShortWrite
+	}
+	w.pending = w.pending[:0]
+	if err != nil {
+		w.err = err
+		return err
+	}
+	return nil
+}
+
+// SafeCut returns the largest byte offset at or before cut that does not split
+// a registered credential. Callers that truncate text can use it to avoid
+// leaving an unmatchable fragment of a secret at the kept boundary.
+func SafeCut(s string, cut int) int {
+	set := registered.Load()
+	if len(set.forms) == 0 || cut <= 0 || cut >= len(s) {
+		return cut
+	}
+	return set.safeCutString(s, cut)
+}
+
+// SafeStart returns the smallest byte offset at or after start that does not
+// split a registered credential. It is the counterpart of SafeCut for the tail
+// of a head+tail truncation.
+func SafeStart(s string, start int) int {
+	set := registered.Load()
+	if len(set.forms) == 0 || start <= 0 || start >= len(s) {
+		return start
+	}
+	return set.safeStartString(s, start)
+}
+
+func (s *secretSet) safeCutString(text string, cut int) int {
+	for cut > 0 {
+		moved := false
+		for _, secret := range s.forms {
+			lo := cut - len(secret) + 1
+			if lo < 0 {
+				lo = 0
+			}
+			hi := cut + len(secret) - 1
+			if hi > len(text) {
+				hi = len(text)
+			}
+			search := lo
+			for search < hi {
+				idx := strings.Index(text[search:hi], secret)
+				if idx < 0 {
+					break
+				}
+				idx += search
+				if idx >= cut {
+					break
+				}
+				if idx+len(secret) > cut {
+					cut = idx
+					moved = true
+					break
+				}
+				search = idx + 1
+			}
+			if moved {
+				break
+			}
+		}
+		if !moved {
+			return cut
+		}
+	}
+	return cut
+}
+
+func (s *secretSet) safeStartString(text string, start int) int {
+	for start < len(text) {
+		moved := false
+		for _, secret := range s.forms {
+			lo := start - len(secret) + 1
+			if lo < 0 {
+				lo = 0
+			}
+			hi := start + len(secret)
+			if hi > len(text) {
+				hi = len(text)
+			}
+			search := lo
+			for search < hi {
+				idx := strings.Index(text[search:hi], secret)
+				if idx < 0 {
+					break
+				}
+				idx += search
+				if idx >= start {
+					break
+				}
+				if idx+len(secret) > start {
+					start = idx + len(secret)
+					moved = true
+					break
+				}
+				search = idx + 1
+			}
+			if moved {
+				break
+			}
+		}
+		if !moved {
+			return start
+		}
+	}
+	return start
+}
+
+// replaceFinal replaces credentials in a final fragment and masks a trailing
+// proper prefix of a registered credential, which would otherwise leak an
+// unmatchable fragment when the stream ends mid-secret.
+func (s *secretSet) replaceFinal(p string) string {
+	if n := s.partialPrefixLen(p); n > 0 {
+		return s.replacer.Replace(p[:len(p)-n]) + Marker
+	}
+	return s.replacer.Replace(p)
+}
+
+func (s *secretSet) partialPrefixLen(p string) int {
+	best := 0
+	for _, secret := range s.forms {
+		limit := len(secret) - 1
+		if len(p) < limit {
+			limit = len(p)
+		}
+		for n := limit; n >= minPartialSecret; n-- {
+			if strings.HasSuffix(p, secret[:n]) {
+				if n > best {
+					best = n
+				}
+				break
+			}
+		}
+	}
+	return best
 }
 
 // Text masks registered credentials and credential-looking values in s,

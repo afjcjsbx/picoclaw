@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `/usage` (alias `/cost`) chat command and `picoclaw usage` CLI command that report provider-reported token usage and cost per session, with per-model and input cache breakdowns.
 
+### Fixed
+
+- Large tool-result artifacts and exec spill files are redacted while they are written: credentials registered from `.security.yml` are replaced with `[FILTERED]` before reaching disk, including values split across write chunks or head+tail truncation boundaries. Redaction streams through a small carry buffer, so it adds no full-payload copy.
+
 ## [0.5.1] - 2026-10-18
 
 ### Added

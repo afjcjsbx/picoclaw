@@ -2,12 +2,14 @@ package tools
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"sync"
 	"unicode/utf8"
 
+	"github.com/sipeed/picoclaw/pkg/redact"
 	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
@@ -43,6 +45,7 @@ type boundedOutput struct {
 
 	spillDir  string
 	spill     *os.File
+	spillOut  io.WriteCloser
 	spillPath string
 	spillSize int64
 	spillCap  int64
@@ -101,6 +104,10 @@ func (b *boundedOutput) openSpillLocked() {
 		return
 	}
 	b.spill = file
+	// Redact registered credentials as they are written. The streaming writer
+	// only holds back enough bytes to catch a secret split across Write calls,
+	// so the spill stays bounded by chunk size instead of the artifact size.
+	b.spillOut = redact.Writer(file)
 	b.spillDir = dir
 	b.spillPath = file.Name()
 	b.spillSize = 0
@@ -157,18 +164,18 @@ func (b *boundedOutput) writeSpillLocked(p []byte) error {
 		return nil
 	}
 	if int64(len(p)) >= budget {
-		if _, err := b.spill.Write(p[:budget]); err != nil {
+		if _, err := b.spillOut.Write(p[:budget]); err != nil {
 			return err
 		}
 		b.spillSize += budget
 		marker := fmt.Sprintf("\n... [spill capped at %s bytes] ...\n", formatCount64(b.spillCap))
-		if _, err := b.spill.WriteString(marker); err != nil {
+		if _, err := io.WriteString(b.spillOut, marker); err != nil {
 			return err
 		}
 		b.capped = true
 		return nil
 	}
-	n, err := b.spill.Write(p)
+	n, err := b.spillOut.Write(p)
 	if err != nil {
 		return err
 	}
@@ -273,13 +280,20 @@ func (b *boundedOutput) Close() error {
 	if b.spill == nil {
 		return nil
 	}
-	err := b.spill.Close()
+	// Flush the redactor's tail before closing the file so a credential split
+	// across the final Write is still masked.
+	flushErr := b.spillOut.Close()
+	b.spillOut = nil
+	closeErr := b.spill.Close()
 	b.spill = nil
 	if b.spillDir != "" {
 		maxAge, maxFiles := toolshared.ArtifactRetention()
 		toolshared.PruneArtifacts(b.spillDir, maxAge, maxFiles)
 	}
-	return err
+	if flushErr != nil {
+		return flushErr
+	}
+	return closeErr
 }
 
 func (b *boundedOutput) abortSpillLocked() {
@@ -287,6 +301,7 @@ func (b *boundedOutput) abortSpillLocked() {
 		_ = b.spill.Close()
 		b.spill = nil
 	}
+	b.spillOut = nil
 	if b.spillPath != "" {
 		_ = os.Remove(b.spillPath)
 		b.spillPath = ""
