@@ -49,6 +49,27 @@ func TestSensitiveValuesCollectsConfiguredCredentials(t *testing.T) {
 	}
 }
 
+// TestSensitiveValuesSkipsFlagValues guards every consumer of SensitiveValues,
+// the tool-result pipeline filter included: a flag such as SECRET_ENABLED=true
+// is named like a credential but must not turn "true" into a secret.
+func TestSensitiveValuesSkipsFlagValues(t *testing.T) {
+	cfg := &Config{}
+	cfg.Tools.MCP.Servers = map[string]MCPServerConfig{
+		"s": {Env: map[string]string{
+			"SECRET_ENABLED": "true", "AUTH_PASSWORD_MODE": "False", "DB_PASSWORD": "hunter2hunter2",
+		}},
+	}
+
+	if got := cfg.SensitiveValues(); len(got) != 1 || got[0] != "hunter2hunter2" {
+		t.Fatalf("SensitiveValues() = %q, want only the password", got)
+	}
+	const text = "build is true, cache False, pw hunter2hunter2"
+	want := "build is true, cache False, pw [FILTERED]"
+	if got := cfg.SensitiveDataReplacer().Replace(text); got != want {
+		t.Fatalf("pipeline filter = %q, want %q", got, want)
+	}
+}
+
 // TestLoadConfigLeavesRedactionSecretsAlone guards the process-wide redaction
 // set: web handlers, CLI subcommands and reload attempts that end up rejected
 // all call LoadConfig, and none of them may replace the credentials of the

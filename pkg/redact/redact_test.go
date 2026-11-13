@@ -85,18 +85,6 @@ func TestSetSecretsIgnoresShortValues(t *testing.T) {
 	}
 }
 
-func TestSetSecretsIgnoresBooleanLikeValues(t *testing.T) {
-	SetSecrets([]string{"true", "false", "oauth"})
-	t.Cleanup(func() { SetSecrets(nil) })
-
-	if Registered() != 0 {
-		t.Fatalf("Registered() = %d, want 0", Registered())
-	}
-	if got := Text("enabled=true auth=oauth"); got != "enabled=true auth=oauth" {
-		t.Fatalf("boolean-like values must not be registered: %q", got)
-	}
-}
-
 func TestSecretsReplacesOnlyRegisteredValues(t *testing.T) {
 	const key = "oc_sk_test_key_1234567890"
 	SetSecrets([]string{key})

@@ -107,13 +107,6 @@ func normalizeSecrets(values []string) []string {
 		if len(value) <= 3 {
 			continue
 		}
-		// Sensitive-looking names also cover boolean flags and enum settings
-		// (SECRET_ENABLED=true). Registering those words would mask ordinary
-		// log and chat text without protecting a credential.
-		switch strings.ToLower(value) {
-		case "true", "false", "yes", "no", "null", "none", "nil", "auto", "default", "oauth", "bearer":
-			continue
-		}
 		if _, ok := seen[value]; ok {
 			continue
 		}

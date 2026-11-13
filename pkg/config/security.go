@@ -431,6 +431,13 @@ func isSensitiveStringValue(name string, value reflect.Value, mapKey bool) bool 
 	if value.Kind() != reflect.String || value.String() == "" {
 		return false
 	}
+	// Sensitive-looking names also cover boolean flags and enum settings
+	// (SECRET_ENABLED=true). Collecting those words would mask ordinary text
+	// in every consumer of SensitiveValues, tool results included.
+	switch strings.ToLower(strings.TrimSpace(value.String())) {
+	case "true", "false", "yes", "no", "null", "none", "nil", "auto", "default", "oauth", "bearer":
+		return false
+	}
 	if mapKey {
 		return sensitiveMapKey(name)
 	}
