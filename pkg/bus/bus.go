@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -288,8 +289,19 @@ func (mb *MessageBus) OutboundChan() <-chan OutboundMessage {
 }
 
 func (mb *MessageBus) PublishOutboundMedia(ctx context.Context, msg OutboundMediaMessage) error {
+	// msg.Parts shares its backing array with the caller, so mask captions in
+	// a private copy, made only when a caption actually changes.
+	cloned := false
 	for i := range msg.Parts {
-		msg.Parts[i].Caption = redact.Text(msg.Parts[i].Caption)
+		masked := redact.Text(msg.Parts[i].Caption)
+		if masked == msg.Parts[i].Caption {
+			continue
+		}
+		if !cloned {
+			msg.Parts = slices.Clone(msg.Parts)
+			cloned = true
+		}
+		msg.Parts[i].Caption = masked
 	}
 	msg = NormalizeOutboundMediaMessage(msg)
 	if msg.Context.isZero() {

@@ -415,6 +415,42 @@ func TestPublishOutbound_PreservesExplicitReplyToMessageIDWhenContextReplyIsBlan
 	}
 }
 
+// TestPublishOutboundMediaRedactsCaptionWithoutMutatingCaller checks both sides
+// of the contract: the published parts carry masked captions, and the slice the
+// caller still holds is left untouched (no shared-array writes, no data race
+// with other readers of the same parts).
+func TestPublishOutboundMediaRedactsCaptionWithoutMutatingCaller(t *testing.T) {
+	const key = "oc_sk_test_key_1234567890"
+	redact.SetSecrets([]string{key})
+	t.Cleanup(func() { redact.SetSecrets(nil) })
+
+	mb := NewMessageBus()
+	defer mb.Close()
+
+	parts := []MediaPart{
+		{Type: "image", Ref: "media://a", Caption: "leaked " + key},
+		{Type: "image", Ref: "media://b", Caption: "plain caption"},
+	}
+	msg := OutboundMediaMessage{
+		Context: InboundContext{Channel: "telegram", ChatID: "123"},
+		Parts:   parts,
+	}
+	if err := mb.PublishOutboundMedia(context.Background(), msg); err != nil {
+		t.Fatalf("PublishOutboundMedia failed: %v", err)
+	}
+
+	got := <-mb.OutboundMediaChan()
+	if strings.Contains(got.Parts[0].Caption, key) || !strings.Contains(got.Parts[0].Caption, redact.Marker) {
+		t.Fatalf("published caption must be masked: %q", got.Parts[0].Caption)
+	}
+	if got.Parts[1].Caption != "plain caption" {
+		t.Fatalf("untouched caption changed: %q", got.Parts[1].Caption)
+	}
+	if want := "leaked " + key; parts[0].Caption != want {
+		t.Fatalf("caller's parts were mutated: got %q, want %q", parts[0].Caption, want)
+	}
+}
+
 func TestPublishOutboundMedia_MirrorsContextToLegacyFields(t *testing.T) {
 	mb := NewMessageBus()
 	defer mb.Close()
