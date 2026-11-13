@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Exec (Unix): a trailing `&` now starts a tracked background session instead of leaving an untracked process whose output pipe is closed. A foreground command that times out now points the model at `background=true` for servers, daemons, and watch processes.
 
+### Security
+
+- Exec child processes now receive a sanitized environment instead of inheriting every PicoClaw process variable. Only safe variables (PATH, HOME, locale, proxies, and similar) are inherited; `tools.exec.env_allowlist` extends that set, `tools.exec.env_set` injects fixed values, and the new per-call `env` argument cannot override PATH, HOME, LD_*, or `PICOCLAW_*` variables. Workflows that relied on inherited credentials must allowlist the variable name or set the value explicitly.
+
 ## [0.5.1] - 2026-10-18
 
 ### Added
