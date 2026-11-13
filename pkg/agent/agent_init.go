@@ -17,6 +17,7 @@ import (
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/sipeed/picoclaw/pkg/redact"
 	"github.com/sipeed/picoclaw/pkg/skills"
 	"github.com/sipeed/picoclaw/pkg/state"
 	"github.com/sipeed/picoclaw/pkg/tools"
@@ -46,6 +47,11 @@ func NewAgentLoop(
 	provider providers.LLMProvider,
 	opts ...AgentLoopOption,
 ) *AgentLoop {
+	// This config is live from here on. Register its credentials for exact
+	// masking in logs, events and chat. LoadConfig must not do this: web
+	// handlers, CLI subcommands and rejected reloads load configs too.
+	redact.SetSecrets(cfg.SensitiveValues())
+
 	registry := NewAgentRegistry(cfg, provider)
 
 	// getSubTurnConfig clamps silently because it runs on every spawn; warn once here.

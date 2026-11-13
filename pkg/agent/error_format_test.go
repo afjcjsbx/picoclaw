@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/sipeed/picoclaw/pkg/providers/common"
+	"github.com/sipeed/picoclaw/pkg/redact"
 )
 
 func TestFormatProcessingError_InvalidAPIKey(t *testing.T) {
@@ -48,5 +49,23 @@ func TestFormatProcessingError_NonAuth(t *testing.T) {
 	want := "Error processing message: connection reset by peer"
 	if got != want {
 		t.Fatalf("formatted error = %q, want %q", got, want)
+	}
+}
+
+func TestFormatProcessingError_RedactsCredentials(t *testing.T) {
+	const key = "oc_sk_test_key_1234567890"
+	redact.SetSecrets([]string{key})
+	t.Cleanup(func() { redact.SetSecrets(nil) })
+
+	err := errors.New(
+		`LLM call failed after retries: API request failed: Status: 401 Body: ` +
+			`{"error":{"message":"Incorrect API key provided: ` + key + `"}}`,
+	)
+	got := formatProcessingError(err)
+	if strings.Contains(got, key) {
+		t.Fatalf("API key leaked into the chat error notice: %q", got)
+	}
+	if !strings.Contains(got, redact.Marker) {
+		t.Fatalf("expected %s in the chat error notice: %q", redact.Marker, got)
 	}
 }

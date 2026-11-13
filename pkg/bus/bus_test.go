@@ -3,11 +3,13 @@ package bus
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
+	"github.com/sipeed/picoclaw/pkg/redact"
 )
 
 func TestPublishConsume(t *testing.T) {
@@ -284,6 +286,53 @@ func TestPublishOutboundSubscribe(t *testing.T) {
 	}
 }
 
+func TestPublishOutboundRedactsCredentials(t *testing.T) {
+	const key = "oc_sk_test_key_1234567890"
+	redact.SetSecrets([]string{key})
+	t.Cleanup(func() { redact.SetSecrets(nil) })
+
+	mb := NewMessageBus()
+	defer mb.Close()
+
+	msg := OutboundMessage{
+		Context: InboundContext{Channel: "telegram", ChatID: "123"},
+		Content: "provider error: Incorrect API key provided: " + key,
+	}
+	if err := mb.PublishOutbound(context.Background(), msg); err != nil {
+		t.Fatalf("PublishOutbound failed: %v", err)
+	}
+
+	got := <-mb.OutboundChan()
+	if strings.Contains(got.Content, key) {
+		t.Fatalf("credential was published to the chat: %q", got.Content)
+	}
+	if !strings.Contains(got.Content, redact.Marker) {
+		t.Fatalf("expected %s in outbound content: %q", redact.Marker, got.Content)
+	}
+}
+
+// TestPublishOutboundLeavesCodeBlocksAlone covers model-written replies: the
+// assignment rules of redact.Text would turn the code below into
+// `password = [FILTERED]`, so chat only gets exact values and known formats.
+func TestPublishOutboundLeavesCodeBlocksAlone(t *testing.T) {
+	mb := NewMessageBus()
+	defer mb.Close()
+
+	const code = "```go\npassword = getPassword()\ntoken = loadToken()\n```"
+	msg := OutboundMessage{
+		Context: InboundContext{Channel: "telegram", ChatID: "123"},
+		Content: code + "\nkey: ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+	}
+	if err := mb.PublishOutbound(context.Background(), msg); err != nil {
+		t.Fatalf("PublishOutbound failed: %v", err)
+	}
+
+	want := code + "\nkey: " + redact.Marker
+	if got := (<-mb.OutboundChan()).Content; got != want {
+		t.Fatalf("outbound content = %q, want %q", got, want)
+	}
+}
+
 func TestPublishOutbound_MirrorsContextToLegacyFields(t *testing.T) {
 	mb := NewMessageBus()
 	defer mb.Close()
@@ -385,6 +434,42 @@ func TestPublishOutbound_PreservesExplicitReplyToMessageIDWhenContextReplyIsBlan
 	}
 	if got.Context.ReplyToMessageID != "msg-9" {
 		t.Fatalf("expected context reply_to_message_id msg-9, got %q", got.Context.ReplyToMessageID)
+	}
+}
+
+// TestPublishOutboundMediaRedactsCaptionWithoutMutatingCaller checks both sides
+// of the contract: the published parts carry masked captions, and the slice the
+// caller still holds is left untouched (no shared-array writes, no data race
+// with other readers of the same parts).
+func TestPublishOutboundMediaRedactsCaptionWithoutMutatingCaller(t *testing.T) {
+	const key = "oc_sk_test_key_1234567890"
+	redact.SetSecrets([]string{key})
+	t.Cleanup(func() { redact.SetSecrets(nil) })
+
+	mb := NewMessageBus()
+	defer mb.Close()
+
+	parts := []MediaPart{
+		{Type: "image", Ref: "media://a", Caption: "leaked " + key},
+		{Type: "image", Ref: "media://b", Caption: "plain caption"},
+	}
+	msg := OutboundMediaMessage{
+		Context: InboundContext{Channel: "telegram", ChatID: "123"},
+		Parts:   parts,
+	}
+	if err := mb.PublishOutboundMedia(context.Background(), msg); err != nil {
+		t.Fatalf("PublishOutboundMedia failed: %v", err)
+	}
+
+	got := <-mb.OutboundMediaChan()
+	if strings.Contains(got.Parts[0].Caption, key) || !strings.Contains(got.Parts[0].Caption, redact.Marker) {
+		t.Fatalf("published caption must be masked: %q", got.Parts[0].Caption)
+	}
+	if got.Parts[1].Caption != "plain caption" {
+		t.Fatalf("untouched caption changed: %q", got.Parts[1].Caption)
+	}
+	if want := "leaked " + key; parts[0].Caption != want {
+		t.Fatalf("caller's parts were mutated: got %q, want %q", parts[0].Caption, want)
 	}
 }
 

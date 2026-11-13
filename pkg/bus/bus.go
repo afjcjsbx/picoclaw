@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/redact"
 )
 
 // ErrBusClosed is returned when publishing to a closed MessageBus.
@@ -260,6 +262,10 @@ func (mb *MessageBus) InboundChan() <-chan InboundMessage {
 }
 
 func (mb *MessageBus) PublishOutbound(ctx context.Context, msg OutboundMessage) error {
+	// Every outbound chat message passes through here (agent replies, failure
+	// notices, and message-tool sends). Mask credentials so no log redaction
+	// gap can turn into a chat leak.
+	msg.Content = redact.Content(msg.Content)
 	msg = NormalizeOutboundMessage(msg)
 	if msg.Context.isZero() {
 		mb.publishFailure(StreamOutbound, runtimeScopeFromInboundContext(msg.Context), ErrMissingOutboundContext)
@@ -283,6 +289,20 @@ func (mb *MessageBus) OutboundChan() <-chan OutboundMessage {
 }
 
 func (mb *MessageBus) PublishOutboundMedia(ctx context.Context, msg OutboundMediaMessage) error {
+	// msg.Parts shares its backing array with the caller, so mask captions in
+	// a private copy, made only when a caption actually changes.
+	cloned := false
+	for i := range msg.Parts {
+		masked := redact.Content(msg.Parts[i].Caption)
+		if masked == msg.Parts[i].Caption {
+			continue
+		}
+		if !cloned {
+			msg.Parts = slices.Clone(msg.Parts)
+			cloned = true
+		}
+		msg.Parts[i].Caption = masked
+	}
 	msg = NormalizeOutboundMediaMessage(msg)
 	if msg.Context.isZero() {
 		mb.publishFailure(

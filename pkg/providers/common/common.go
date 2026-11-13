@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
+	"github.com/sipeed/picoclaw/pkg/redact"
 )
 
 // Re-export protocol types used across providers.
@@ -558,16 +559,19 @@ func WrapHTMLResponseError(statusCode int, body []byte, contentType, apiBase str
 	}
 }
 
-// ResponsePreview returns a truncated preview of response body for error messages.
+// ResponsePreview returns a truncated preview of a response body for error
+// messages. Provider bodies are untrusted and sometimes echo request
+// credentials, so they are masked before truncation: previewing first would
+// leave a partial secret at the cut.
 func ResponsePreview(body []byte, maxLen int) string {
-	trimmed := bytes.TrimSpace(body)
-	if len(trimmed) == 0 {
+	trimmed := redact.Text(string(bytes.TrimSpace(body)))
+	if trimmed == "" {
 		return "<empty>"
 	}
 	if len(trimmed) <= maxLen {
-		return string(trimmed)
+		return trimmed
 	}
-	return string(trimmed[:maxLen]) + "..."
+	return trimmed[:maxLen] + "..."
 }
 
 func leadingTrimmedPrefix(body []byte, maxLen int) []byte {

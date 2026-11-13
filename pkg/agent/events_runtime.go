@@ -1,10 +1,29 @@
 package agent
 
-import runtimeevents "github.com/sipeed/picoclaw/pkg/events"
+import (
+	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
+	"github.com/sipeed/picoclaw/pkg/redact"
+)
 
 func (al *AgentLoop) publishRuntimeEvent(evt runtimeevents.Event) {
 	if al == nil || al.runtimeEvents == nil {
 		return
+	}
+
+	// Error payloads can carry provider response bodies, which sometimes echo
+	// request credentials. Redact at the event source so every subscriber
+	// (loggers, hooks, plugins, UIs) receives a safe payload.
+	switch payload := evt.Payload.(type) {
+	case ErrorPayload:
+		payload.Message = redact.Text(payload.Message)
+		evt.Payload = payload
+	case LLMRetryPayload:
+		payload.Reason = redact.Text(payload.Reason)
+		payload.Error = redact.Text(payload.Error)
+		evt.Payload = payload
+	case ToolExecSkippedPayload:
+		payload.Reason = redact.Text(payload.Reason)
+		evt.Payload = payload
 	}
 
 	al.runtimeEvents.PublishNonBlocking(evt)

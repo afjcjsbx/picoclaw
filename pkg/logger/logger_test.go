@@ -7,10 +7,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/rs/zerolog"
+
+	"github.com/sipeed/picoclaw/pkg/redact"
 )
 
 func TestLogLevelFiltering(t *testing.T) {
@@ -382,6 +385,150 @@ func TestAppendFields_ErrorUsesErrorString(t *testing.T) {
 
 	if got["error"] != "transcription request failed" {
 		t.Fatalf("error field = %#v, want %q", got["error"], "transcription request failed")
+	}
+}
+
+func TestAppendFieldsRedactsSecrets(t *testing.T) {
+	const key = "oc_sk_test_key_1234567890"
+	redact.SetSecrets([]string{key})
+	t.Cleanup(func() { redact.SetSecrets(nil) })
+
+	var buf bytes.Buffer
+	l := zerolog.New(&buf)
+	event := l.Info()
+	appendFields(event, map[string]any{
+		"error":  fmt.Errorf("provider echoed %s", key),
+		"token":  key,
+		"header": map[string]string{"Authorization": "Bearer " + key},
+	})
+	event.Msg("test")
+
+	out := buf.String()
+	if strings.Contains(out, key) {
+		t.Fatalf("registered secret leaked into log fields: %s", out)
+	}
+	if !strings.Contains(out, redact.Marker) {
+		t.Fatalf("expected %s in log fields: %s", redact.Marker, out)
+	}
+	var line map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &line); err != nil {
+		t.Fatalf("redacted log line must stay valid JSON: %v\n%s", err, out)
+	}
+}
+
+// TestAppendFieldsRedactsSecretsEscapedByJSON covers composite fields: they are
+// marshaled before redaction, and json.Marshal rewrites & < > " and \ so the
+// raw secret no longer appears in the text.
+func TestAppendFieldsRedactsSecretsEscapedByJSON(t *testing.T) {
+	secrets := []string{`pa&ss<word>1234`, `quo"te\back-slash-99`}
+	redact.SetSecrets(secrets)
+	t.Cleanup(func() { redact.SetSecrets(nil) })
+
+	var buf bytes.Buffer
+	l := zerolog.New(&buf)
+	event := l.Info()
+	appendFields(event, map[string]any{
+		"request": map[string]string{"first": "x " + secrets[0], "second": secrets[1]},
+	})
+	event.Msg("test")
+
+	out := buf.String()
+	for _, secret := range secrets {
+		escaped, err := json.Marshal(secret)
+		if err != nil {
+			t.Fatal(err)
+		}
+		inner := string(escaped[1 : len(escaped)-1])
+		if strings.Contains(out, secret) || strings.Contains(out, inner) {
+			t.Fatalf("secret %q leaked into composite log field: %s", secret, out)
+		}
+	}
+	var line map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &line); err != nil {
+		t.Fatalf("redacted log line must stay valid JSON: %v\n%s", err, out)
+	}
+	request, ok := line["request"].(map[string]any)
+	if !ok || request["first"] != "x "+redact.Marker || request["second"] != redact.Marker {
+		t.Fatalf("expected both values masked in place, got %#v", line["request"])
+	}
+}
+
+// TestAppendFieldsKeepsLineValidJSONWhenRedactionBreaksComposite guards the
+// composite-field path: the assignment rule swallows the closing brace after a
+// numeric value and a trailing escaped quote, which used to put invalid JSON in
+// the log line.
+func TestAppendFieldsKeepsLineValidJSONWhenRedactionBreaksComposite(t *testing.T) {
+	cases := map[string]any{
+		"numeric value": map[string]any{"prompt_token": 12345678901},
+		"escaped quote": map[string]string{"msg": `say "token=abcdefghijk\"`},
+		"nested struct": struct {
+			Usage map[string]int `json:"usage"`
+		}{Usage: map[string]int{"prompt_token": 12345678901}},
+	}
+	for name, value := range cases {
+		t.Run(name, func(t *testing.T) {
+			var buf bytes.Buffer
+			l := zerolog.New(&buf)
+			event := l.Info()
+			appendFields(event, map[string]any{"detail": value})
+			event.Msg("test")
+
+			var line map[string]any
+			if err := json.Unmarshal(buf.Bytes(), &line); err != nil {
+				t.Fatalf("log line must stay valid JSON: %v\n%s", err, buf.String())
+			}
+			if _, ok := line["detail"]; !ok {
+				t.Fatalf("detail field missing from log line: %s", buf.String())
+			}
+		})
+	}
+}
+
+// TestAppendFieldsKeepsSessionKey checks the field the compaction warnings
+// log: a session key must stay readable so a line can be tied to its session.
+func TestAppendFieldsKeepsSessionKey(t *testing.T) {
+	const key = "sk_v1_cb10fea2cfe7f7373a42cc19db45c88fb87caebad9d6295e89a00577b35d7cc1"
+
+	var buf bytes.Buffer
+	l := zerolog.New(&buf)
+	event := l.Info()
+	appendFields(event, map[string]any{"session_key": key})
+	event.Msg("Proactive compression: context budget exceeded")
+
+	var line map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &line); err != nil {
+		t.Fatalf("log line must be valid JSON: %v\n%s", err, buf.String())
+	}
+	if line["session_key"] != key {
+		t.Fatalf("session_key = %v, want %q", line["session_key"], key)
+	}
+}
+
+func TestLogMessageRedactsSecrets(t *testing.T) {
+	const key = "oc_sk_test_key_1234567890"
+	redact.SetSecrets([]string{key})
+	t.Cleanup(func() { redact.SetSecrets(nil) })
+
+	initialLevel := GetLevel()
+	defer SetLevel(initialLevel)
+	SetLevel(INFO)
+
+	var buf bytes.Buffer
+	EnableConsole()
+	RedirectConsole(&buf)
+	defer func() {
+		consoleWriter.Out = os.Stdout
+		EnableConsole()
+	}()
+
+	ErrorF("provider failed with "+key, map[string]any{"detail": key})
+
+	out := buf.String()
+	if strings.Contains(out, key) {
+		t.Fatalf("registered secret leaked into log message: %s", out)
+	}
+	if !strings.Contains(out, redact.Marker) {
+		t.Fatalf("expected %s in log message: %s", redact.Marker, out)
 	}
 }
 

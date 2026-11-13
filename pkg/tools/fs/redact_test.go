@@ -104,6 +104,43 @@ func TestRedactSearchSecretsKeepsHintedIdentifiers(t *testing.T) {
 	}
 }
 
+// TestFileToolsKeepSourceCodeAssignmentsReadable guards against the shared
+// redactor's looser rules leaking into file reads: the model must see code as
+// written, or it may write the marker back into the file.
+func TestFileToolsKeepSourceCodeAssignmentsReadable(t *testing.T) {
+	content := "password = getPassword()\n" +
+		"token = os.Getenv(\"TOKEN\")\n" +
+		"secret: db-credentials\n" +
+		"// the basic responsibilities of the module\n" +
+		"see https://example.test/cb?code=abc&key=main\n"
+	dir := t.TempDir()
+	path := filepath.Join(dir, "main.go")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	result := NewReadFileTool(dir, true, MaxReadFileSize).Execute(
+		context.Background(), map[string]any{"path": path},
+	)
+	if result.IsError {
+		t.Fatalf("read failed: %s", result.ForLLM)
+	}
+	if strings.Contains(result.ForLLM, redactedMarker) {
+		t.Fatalf("source code must not be masked:\n%s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, `token = os.Getenv("TOKEN")`) {
+		t.Fatalf("assignment must stay verbatim:\n%s", result.ForLLM)
+	}
+
+	result = NewSearchFilesTool(dir, true).Execute(context.Background(), map[string]any{"pattern": "password|secret"})
+	if result.IsError {
+		t.Fatalf("search failed: %s", result.ForLLM)
+	}
+	if strings.Contains(result.ForLLM, redactedMarker) {
+		t.Fatalf("search results must not mask source code:\n%s", result.ForLLM)
+	}
+}
+
 func TestSearchFilesRedactsSecretsInResults(t *testing.T) {
 	token := fakeToken("8fJd92kL", "mQ73xPqR", "5tNvBw6Y", "cAeZ1sUo")
 	root := t.TempDir()
