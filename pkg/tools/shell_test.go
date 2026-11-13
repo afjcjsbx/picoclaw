@@ -129,6 +129,68 @@ func TestShellTool_ForegroundResultHeader(t *testing.T) {
 	})
 }
 
+func TestShellTool_StripsANSIFromForegroundOutput(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses POSIX printf")
+	}
+	tool, err := NewExecTool("", false)
+	require.NoError(t, err)
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"action":  "run",
+		"command": `printf '\033[31mred\033[0m plain\n'`,
+	})
+
+	require.False(t, result.IsError, result.ForLLM)
+	require.NotContains(t, result.ForLLM, "\x1b")
+	require.NotContains(t, result.ForUser, "\x1b")
+	require.Contains(t, result.ForLLM, "red plain")
+}
+
+func TestShellTool_StripsANSIFromBackgroundOutput(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses POSIX printf")
+	}
+	tool, ctx, id := startBackgroundSession(t, `printf '\033[32mgreen\033[0m\n'; sleep 5`)
+	time.Sleep(200 * time.Millisecond)
+
+	resp := execResp(t, tool.Execute(ctx, map[string]any{"action": "poll", "sessionId": id}))
+
+	require.NotContains(t, resp.Output, "\x1b")
+	require.Contains(t, resp.Output, "green")
+}
+
+func TestShellTool_StripsANSIFromSpilledOutput(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses POSIX cat")
+	}
+
+	workspace := t.TempDir()
+	content := strings.Repeat("\x1b[31mred\x1b[0m\n", 2000)
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, "ansi.txt"), []byte(content), 0o600))
+
+	cfg := &config.Config{}
+	cfg.Tools.Exec.AllowRemote = true
+	cfg.Tools.Exec.MaxOutputChars = 100
+	tool, err := NewExecToolWithConfig(workspace, false, cfg)
+	require.NoError(t, err)
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"action":  "run",
+		"command": "cat ansi.txt",
+	})
+
+	require.False(t, result.IsError, result.ForLLM)
+	require.NotContains(t, result.ForLLM, "\x1b")
+	require.Len(t, result.ArtifactTags, 1)
+
+	artifact := strings.TrimSuffix(strings.TrimPrefix(result.ArtifactTags[0], "[file:"), "]")
+	data, err := os.ReadFile(artifact)
+	require.NoError(t, err)
+	require.NotContains(t, string(data), "\x1b")
+	require.Contains(t, string(data), "red")
+}
+
 // TestShellTool_Failure verifies failed command execution
 func TestShellTool_Failure(t *testing.T) {
 	tool, err := NewExecTool("", false)
