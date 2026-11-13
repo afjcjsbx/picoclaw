@@ -1,0 +1,309 @@
+name: PR labels
+
+# Keeps three status labels in sync with the state of every open PR:
+#
+#   ready for review → CI is green, there are no merge conflicts and the PR is
+#                      not a draft
+#   merge conflicts  → GitHub reports the PR as non-mergeable
+#   needs rework     → the "PR" workflow finished with a failure
+#
+# Triggers:
+#   * workflow_run of "PR" — label as soon as CI finishes
+#   * pull_request_target  — draft/ready transitions and new pushes
+#   * scheduled sweep      — mergeability can change when the base branch moves
+#                            without any event on the pull request
+#
+# pull_request_target is deliberate: this must run for fork PRs too, and the
+# workflow never checks out or executes the PR's code.
+
+on:
+  workflow_run:
+    # Must match the `name:` field in .github/workflows/pr.yml.
+    workflows: ["PR"]
+    types: [completed]
+
+  pull_request_target:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+      - converted_to_draft
+      - edited
+
+  schedule:
+    # Reconcile conflicts introduced by base-branch updates (no PR event fires).
+    - cron: "0 */6 * * *"
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read        # list workflow runs for a commit
+  issues: write        # create the labels if they do not exist
+  pull-requests: write # add/remove labels on pull requests
+
+# One run per PR/source branch. Queued runs are not cancelled, so an event for
+# one PR cannot drop the update for another. Every run re-reads the live state,
+# so an older run that lost a race is harmless.
+concurrency:
+  group: pr-labels-${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.head_repository.id || github.run_id }}-${{ github.event.workflow_run.head_branch || '' }}
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync PR status labels
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Sync labels
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+
+            const LABELS = {
+              ready: "ready for review",
+              conflicts: "merge conflicts",
+              rework: "needs rework",
+            };
+
+            const LABEL_SPECS = [
+              {
+                name: LABELS.ready,
+                color: "0e8a16",
+                description: "CI is green, there are no merge conflicts and the PR is not a draft",
+              },
+              {
+                name: LABELS.conflicts,
+                color: "d93f0b",
+                description: "The PR has merge conflicts with its base branch",
+              },
+              {
+                name: LABELS.rework,
+                color: "b60205",
+                description: "CI failed and the PR needs changes before it can be reviewed",
+              },
+            ];
+
+            const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+            async function ensureLabels() {
+              for (const spec of LABEL_SPECS) {
+                try {
+                  await github.rest.issues.getLabel({ owner, repo, name: spec.name });
+                  continue;
+                } catch (error) {
+                  if (error.status !== 404) throw error;
+                }
+
+                try {
+                  await github.rest.issues.createLabel({ owner, repo, ...spec });
+                  core.info(`Created label "${spec.name}"`);
+                } catch (error) {
+                  // 422: another run created it in the meantime.
+                  if (error.status !== 422) throw error;
+                }
+              }
+            }
+
+            // GitHub computes mergeability lazily, so the first read can return
+            // mergeable: null. Poll briefly instead of acting on unknown state.
+            async function getPull(number) {
+              let pull;
+              for (let attempt = 0; attempt < 4; attempt++) {
+                const { data } = await github.rest.pulls.get({ owner, repo, pull_number: number });
+                pull = data;
+                if (pull.mergeable !== null || pull.state !== "open") return pull;
+                if (attempt < 3) await sleep(2000);
+              }
+              return pull;
+            }
+
+            async function resolvePullNumber() {
+              if (context.payload.pull_request) {
+                return context.payload.pull_request.number;
+              }
+
+              const run = context.payload.workflow_run;
+              if (!run) return null;
+
+              if (run.pull_requests && run.pull_requests.length > 0) {
+                return run.pull_requests[0].number;
+              }
+
+              // workflow_run payloads for fork PRs usually have an empty
+              // pull_requests array; find the open PR by its head branch.
+              if (run.head_repository && run.head_branch) {
+                const headOwner = run.head_repository.full_name.split("/")[0];
+                const { data } = await github.rest.pulls.list({
+                  owner,
+                  repo,
+                  state: "open",
+                  head: `${headOwner}:${run.head_branch}`,
+                  per_page: 10,
+                });
+                const bySha = data.find((pull) => pull.head.sha === run.head_sha);
+                if (bySha) return bySha.number;
+                if (data.length === 1) return data[0].number;
+              }
+
+              return null;
+            }
+
+            async function getCIState(sha) {
+              const { data } = await github.rest.actions.listWorkflowRuns({
+                owner,
+                repo,
+                workflow_id: "pr.yml",
+                head_sha: sha,
+                per_page: 20,
+              });
+
+              const runs = data.workflow_runs
+                .filter((run) => run.event === "pull_request")
+                .sort((a, b) => b.id - a.id);
+
+              if (runs.length === 0) return "pending";
+
+              const latest = runs[0];
+              if (latest.status !== "completed") return "pending";
+
+              switch (latest.conclusion) {
+                case "success":
+                  return "success";
+                case "failure":
+                case "timed_out":
+                case "startup_failure":
+                case "action_required":
+                  return "failure";
+                default:
+                  // cancelled/skipped/neutral/stale: usually superseded by a
+                  // newer run; wait for it instead of reporting a failure.
+                  return "pending";
+              }
+            }
+
+            async function syncPull(number) {
+              const pull = await getPull(number);
+              if (pull.state !== "open") return;
+
+              const sha = pull.head.sha;
+              const ci = await getCIState(sha);
+
+              // Labels we are certain about. Missing entries are left untouched.
+              const desired = new Map();
+
+              // mergeable is null while GitHub is still computing it.
+              if (pull.mergeable !== null) {
+                desired.set(
+                  LABELS.conflicts,
+                  pull.mergeable === false || pull.mergeable_state === "dirty",
+                );
+              }
+
+              if (ci === "success") {
+                desired.set(LABELS.rework, false);
+                desired.set(LABELS.ready, !pull.draft && pull.mergeable === true);
+              } else if (ci === "failure") {
+                desired.set(LABELS.rework, true);
+                desired.set(LABELS.ready, false);
+              } else {
+                // CI is queued/running (or was cancelled): not ready yet. Keep
+                // needs rework as-is until the new run reports a result.
+                desired.set(LABELS.ready, false);
+              }
+
+              const current = new Set(pull.labels.map((label) => label.name));
+              const toAdd = [];
+              const toRemove = [];
+              for (const [label, want] of desired) {
+                if (want && !current.has(label)) toAdd.push(label);
+                if (!want && current.has(label)) toRemove.push(label);
+              }
+
+              if (toAdd.length === 0 && toRemove.length === 0) {
+                core.info(`#${number}: labels already in sync`);
+                return;
+              }
+
+              // Never apply a verdict computed for a commit that is no longer
+              // the PR head (the PR moved while we were evaluating it).
+              const { data: latest } = await github.rest.pulls.get({
+                owner,
+                repo,
+                pull_number: number,
+              });
+              if (latest.state !== "open" || latest.head.sha !== sha) {
+                core.info(`#${number}: PR changed while evaluating, skipping`);
+                return;
+              }
+
+              if (toAdd.length > 0) {
+                await github.rest.issues.addLabels({
+                  owner,
+                  repo,
+                  issue_number: number,
+                  labels: toAdd,
+                });
+              }
+              for (const label of toRemove) {
+                try {
+                  await github.rest.issues.removeLabel({
+                    owner,
+                    repo,
+                    issue_number: number,
+                    name: label,
+                  });
+                } catch (error) {
+                  if (error.status !== 404) throw error;
+                }
+              }
+
+              const added = toAdd.join(", ") || "-";
+              const removed = toRemove.join(", ") || "-";
+              core.info(`#${number}: added [${added}], removed [${removed}]`);
+            }
+
+            async function sweep() {
+              const pulls = await github.paginate(github.rest.pulls.list, {
+                owner,
+                repo,
+                state: "open",
+                per_page: 100,
+              });
+              core.info(`Sweeping ${pulls.length} open pull request(s)`);
+
+              for (const pull of pulls) {
+                try {
+                  await syncPull(pull.number);
+                } catch (error) {
+                  core.warning(`#${pull.number}: ${error.message}`);
+                }
+              }
+            }
+
+            async function main() {
+              const trigger = context.eventName === "workflow_run" ? context.payload.workflow_run : null;
+              if (trigger && trigger.event !== "pull_request") {
+                core.info(`Ignoring workflow_run triggered by "${trigger.event}"`);
+                return;
+              }
+
+              await ensureLabels();
+
+              if (context.eventName === "schedule" || context.eventName === "workflow_dispatch") {
+                await sweep();
+                return;
+              }
+
+              const number = await resolvePullNumber();
+              if (number === null) {
+                core.warning("Unable to resolve the pull request for this event");
+                return;
+              }
+
+              await syncPull(number);
+            }
+
+            await main();
