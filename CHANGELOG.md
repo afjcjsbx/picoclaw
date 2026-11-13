@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `/usage` (alias `/cost`) chat command and `picoclaw usage` CLI command that report provider-reported token usage and cost per session, with per-model and input cache breakdowns.
+- Exec remembers the last explicit `cwd` and `env` values per agent conversation, reusing them when omitted; `env` entries accumulate and `env: {}` clears them. Only tool arguments persist: `cd` and `export` inside a command still die with its fresh shell.
 
 ### Changed
 

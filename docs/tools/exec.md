@@ -57,8 +57,8 @@ Background session actions return a JSON `ExecResponse` instead. Once the sessio
 | `keys` | string | `send-keys` | Key names: `up`, `down`, `left`, `right`, `enter`, `tab`, `escape`, `backspace`, `ctrl-c`, `ctrl-d`, `home`, `end`, `pageup`, `pagedown`, `f1`–`f12` |
 | `background` | bool | — | With `run`, start the command in the background immediately; the result includes a `sessionId`. On Unix, a trailing `&` in the command is normalized to this mode automatically |
 | `pty` | bool | — | Allocate a pseudo-terminal for interactive programs; not supported on Windows |
-| `cwd` | string | — | Working directory for the command; defaults to the agent workspace |
-| `env` | object | `run` | Additional environment variables for this run. Values must be strings. Cannot override `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT`, `LD_DEBUG`, or any `PICOCLAW_*` variable; those entries are ignored |
+| `cwd` | string | — | Working directory for the command. The last explicit value is remembered for later calls in the same conversation; omit `cwd` to reuse it. Defaults to the agent workspace when no value is remembered |
+| `env` | object | `run` | Additional environment variables for this run. Values must be strings. The map is remembered for later calls in the same conversation and merged with new entries; pass an empty object (`{}`) to clear remembered variables. Cannot override `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT`, `LD_DEBUG`, or any `PICOCLAW_*` variable; those entries are ignored |
 | `timeout` | int | — | Timeout in seconds for foreground commands; overrides `tools.exec.timeout_seconds`. Foreground runs are capped at `600`s: `0` (no timeout) and values above the cap start a tracked background session instead of blocking the call. Cannot be combined with `background=true` (except `0`); ignored with a note when a trailing `&` normalizes the run to background. With `wait`: maximum seconds to block (a positive integer), defaulting to and capped by `tools.exec.timeout_seconds` |
 | `notify` | bool | — | With `background=true` or a run promoted to background, send a completion message when the process exits (default `false`). Manually killed sessions do not notify. Use it for jobs with a defined end; do not poll or wait in a loop |
 | `offset` | int | — | With `read`: absolute byte offset into the retained session log. By default the response starts at the most recent `limit` bytes; use `0` for the oldest retained byte |
@@ -107,6 +107,17 @@ The per-call `env` argument cannot override `PATH`, `HOME`, `USER`, `LOGNAME`, `
 | `PICOCLAW_EXEC_TIMEOUT` | Effective foreground timeout as a Go duration (for example `3m0s` for the 180s default); `0s` when no timeout applies, including background sessions |
 
 The same environment is used for foreground runs, background and PTY sessions, and cron shell commands. If an existing workflow relies on an inherited variable, add its name to `env_allowlist` (inherits the parent value) or add a fixed value to `env_set`. Allowlisting a secret passes it to every exec command, so prefer `env_set` for values that only one workflow needs. A command that prints its environment exposes those values in the tool result.
+
+## Per-conversation state
+
+Within one agent conversation, the exec tool remembers the last explicit `cwd` and `env` arguments:
+
+- `cwd`: passing a directory stores it for later calls; omit `cwd` to reuse it. A new `cwd` replaces the remembered one. The path is revalidated against the workspace and must still exist; if it was deleted or became invalid, it is forgotten and the agent workspace is used.
+- `env`: entries are merged into the remembered overlay, so a later call only needs to pass new variables. When `env` is omitted, the overlay is reused. An explicit empty object (`{}`) clears the overlay. Remembered variables are still filtered by the LLM blocklist and merged with `tools.exec.env_set` and the inherited allowlist on every run.
+
+This state is **argument state**, not shell state: `cd` or `export` executed inside a command still disappears when that command's fresh shell exits. Use the `cwd` and `env` arguments (or a background PTY session) when state must survive across calls.
+
+State is memory-only, scoped to the agent and session, and lost when PicoClaw restarts or the conversation is cleared with `/clear` or `/reset`. At most 64 conversations are retained; the least recently used conversation is evicted first. Calls without a session context (for example some cron paths) remain stateless.
 
 ## Disabling the Exec Tool
 
