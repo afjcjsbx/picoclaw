@@ -2749,3 +2749,90 @@ func TestProviderChatStream_ParsesCacheUsage(t *testing.T) {
 		t.Fatalf("Usage = %+v, want PromptTokens=5400 CacheReadTokens=5398 CacheCreationTokens=2", u)
 	}
 }
+
+// Gemini 3 streams the thought_signature inside extra_content.google on the
+// tool_call delta. It must be captured so it can be echoed back on the next
+// request, otherwise Gemini returns HTTP 400.
+func TestProviderChatStream_CapturesGeminiThoughtSignature(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(
+			"data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"tool_calls\":[{\"extra_content\":{\"google\":{\"thought_signature\":\"sig-stream\"}},\"function\":{\"arguments\":\"{\\\"city\\\":\\\"Caracas\\\"}\",\"name\":\"get_weather\"},\"id\":\"call_1\",\"type\":\"function\"}]},\"index\":0}]}\n\n",
+		))
+		_, _ = w.Write([]byte(
+			"data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":\"stop\",\"index\":0}]}\n\n",
+		))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	p := NewProvider("key", server.URL, "")
+	out, err := p.ChatStream(
+		t.Context(),
+		[]Message{{Role: "user", Content: "weather?"}},
+		nil,
+		"gemini-3.8-flash",
+		nil,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("ChatStream() error = %v", err)
+	}
+	if len(out.ToolCalls) != 1 {
+		t.Fatalf("len(ToolCalls) = %d, want 1", len(out.ToolCalls))
+	}
+	if out.ToolCalls[0].ThoughtSignature != "sig-stream" {
+		t.Fatalf("ToolCalls[0].ThoughtSignature = %q, want %q", out.ToolCalls[0].ThoughtSignature, "sig-stream")
+	}
+	if out.ToolCalls[0].ExtraContent == nil || out.ToolCalls[0].ExtraContent.Google == nil {
+		t.Fatal("ToolCalls[0].ExtraContent.Google is nil")
+	}
+	if out.ToolCalls[0].ExtraContent.Google.ThoughtSignature != "sig-stream" {
+		t.Fatalf(
+			"ToolCalls[0].ExtraContent.Google.ThoughtSignature = %q, want %q",
+			out.ToolCalls[0].ExtraContent.Google.ThoughtSignature,
+			"sig-stream",
+		)
+	}
+}
+
+// Gemini endpoints must serialize unsigned tool calls with the documented
+// sentinel so Gemini 3 does not reject the request with HTTP 400. Non-Gemini
+// endpoints must keep omitting extra_content for signature-less tool calls.
+func TestBuildRequestBody_GeminiInjectsThoughtSignatureSentinel(t *testing.T) {
+	messages := []Message{
+		{
+			Role: "assistant",
+			ToolCalls: []ToolCall{
+				{
+					ID:        "call_1",
+					Type:      "function",
+					Name:      "get_weather",
+					Arguments: map[string]any{"city": "Caracas"},
+				},
+			},
+		},
+	}
+
+	gemini := NewProvider("key", "https://generativelanguage.googleapis.com/v1beta/openai/", "")
+	gemini.SetProviderName("openai")
+	body := gemini.buildRequestBody(messages, nil, "gemini-3.8-flash", nil)
+	raw, err := json.Marshal(body["messages"])
+	if err != nil {
+		t.Fatalf("marshal messages: %v", err)
+	}
+	if !strings.Contains(string(raw), "skip_thought_signature_validator") {
+		t.Fatalf("expected sentinel thought_signature for Gemini endpoint, got %s", string(raw))
+	}
+
+	other := NewProvider("key", "https://api.cheaperinference.com/v1", "")
+	other.SetProviderName("openai")
+	body = other.buildRequestBody(messages, nil, "deepseek-v4.1-flash", nil)
+	raw, err = json.Marshal(body["messages"])
+	if err != nil {
+		t.Fatalf("marshal messages: %v", err)
+	}
+	if strings.Contains(string(raw), "extra_content") {
+		t.Fatalf("did not expect extra_content for non-Gemini endpoint, got %s", string(raw))
+	}
+}
