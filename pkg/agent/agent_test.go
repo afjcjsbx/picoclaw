@@ -414,6 +414,89 @@ func TestPublishResponseIfNeeded_DismissesToolFeedbackWhenMessageToolAlreadySent
 	}
 }
 
+func TestPublishFinalResponse_AlwaysPublishesAfterMessageTool(t *testing.T) {
+	al, _, msgBus, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+
+	defaultAgent := al.registry.GetDefaultAgent()
+	if defaultAgent == nil {
+		t.Fatal("expected default agent")
+	}
+	mt := integrationtools.NewMessageTool()
+	mt.SetSendCallback(func(
+		ctx context.Context,
+		channel, chatID, content, replyToMessageID string,
+		mediaParts []bus.MediaPart,
+	) error {
+		return nil
+	})
+	defaultAgent.Tools.Register(mt)
+
+	result := mt.Execute(
+		tools.WithToolSessionContext(context.Background(), "main", "session-1", nil),
+		map[string]any{
+			"content": "working on it",
+			"channel": "telegram",
+			"chat_id": "-100123",
+		},
+	)
+	if result == nil || result.IsError {
+		t.Fatalf("message tool execute failed: %+v", result)
+	}
+
+	if !al.publishFinalResponse(context.Background(), "telegram", "-100123", "session-1", "final reply") {
+		t.Fatal("publishFinalResponse returned false")
+	}
+
+	select {
+	case outbound := <-msgBus.OutboundChan():
+		if outbound.Content != "final reply" {
+			t.Fatalf("outbound content = %q, want final reply", outbound.Content)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected final response to be published")
+	}
+}
+
+func TestPublishResponseIfNeeded_StillSuppressesDuplicateFinal(t *testing.T) {
+	al, _, msgBus, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+
+	defaultAgent := al.registry.GetDefaultAgent()
+	if defaultAgent == nil {
+		t.Fatal("expected default agent")
+	}
+	mt := integrationtools.NewMessageTool()
+	mt.SetSendCallback(func(
+		ctx context.Context,
+		channel, chatID, content, replyToMessageID string,
+		mediaParts []bus.MediaPart,
+	) error {
+		return nil
+	})
+	defaultAgent.Tools.Register(mt)
+
+	result := mt.Execute(
+		tools.WithToolSessionContext(context.Background(), "main", "session-1", nil),
+		map[string]any{
+			"content": "already delivered",
+			"channel": "telegram",
+			"chat_id": "-100123",
+		},
+	)
+	if result == nil || result.IsError {
+		t.Fatalf("message tool execute failed: %+v", result)
+	}
+
+	al.PublishResponseIfNeeded(context.Background(), "telegram", "-100123", "session-1", "duplicate reply")
+
+	select {
+	case outbound := <-msgBus.OutboundChan():
+		t.Fatalf("unexpected outbound after message tool delivery: %q", outbound.Content)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
 func TestPublishResponseIfNeeded_MarksFinalOutbound(t *testing.T) {
 	al, _, msgBus, provider, cleanup := newTestAgentLoop(t)
 	defer cleanup()

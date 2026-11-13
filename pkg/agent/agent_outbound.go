@@ -72,7 +72,7 @@ func (al *AgentLoop) publishResponseOrError(
 		}
 		response = ""
 	}
-	al.PublishResponseIfNeeded(ctx, channel, chatID, sessionKey, response)
+	al.publishFinalResponse(ctx, channel, chatID, sessionKey, response)
 }
 
 // publishResponseOptions controls how a response is delivered.
@@ -85,10 +85,23 @@ type publishResponseOptions struct {
 	surviveCanceledContext bool
 }
 
+// PublishResponseIfNeeded publishes a response unless the message tool already
+// delivered to the same chat during this round.
 func (al *AgentLoop) PublishResponseIfNeeded(ctx context.Context, channel, chatID, sessionKey, response string) {
-	al.publishFinalResponse(ctx, channel, chatID, sessionKey, response)
+	al.publishResponseIfNeeded(
+		ctx,
+		channel,
+		chatID,
+		sessionKey,
+		response,
+		al.latestAssistantUsage(ctx, sessionKey, response),
+		publishResponseOptions{},
+	)
 }
 
+// publishFinalResponse publishes the terminal reply of an interactive turn.
+// A progress update sent through the message tool earlier in the turn must not
+// suppress the actual answer, so this path bypasses message-tool suppression.
 func (al *AgentLoop) publishFinalResponse(
 	ctx context.Context,
 	channel, chatID, sessionKey, response string,
@@ -100,7 +113,7 @@ func (al *AgentLoop) publishFinalResponse(
 		sessionKey,
 		response,
 		al.latestAssistantUsage(ctx, sessionKey, response),
-		publishResponseOptions{},
+		publishResponseOptions{skipMessageToolSuppression: true},
 	)
 }
 

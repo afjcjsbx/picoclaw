@@ -45,7 +45,7 @@ func (al *AgentLoop) tryHandleStopCommand(
 		al.channelManager.InvokeTypingStop(msg.Channel, msg.ChatID)
 	}
 	al.resetMessageToolRound(sessionKey)
-	al.PublishResponseIfNeeded(ctx, msg.Channel, msg.ChatID, sessionKey, reply)
+	al.publishFinalResponse(ctx, msg.Channel, msg.ChatID, sessionKey, reply)
 	return true
 }
 
