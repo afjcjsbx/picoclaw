@@ -108,10 +108,17 @@ python3 scripts/bench-agent-tui.py --cmd opencode --runs 3 --keys '\x03'
 
 ## Install
 
-### One-line install (Linux & macOS)
+### One-line install (Linux, macOS, FreeBSD & NetBSD)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/afjcjsbx/picoclaw/main/scripts/install.sh | bash
+```
+
+On FreeBSD or NetBSD, install `bash` and `curl` first (and `python3` if you want the guided configuration):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/afjcjsbx/picoclaw/main/scripts/install.sh | sh
+pkg install bash curl python3   # FreeBSD
+pkgin install bash curl python3 # NetBSD
 ```
 
 ### Windows PowerShell
@@ -120,7 +127,9 @@ curl -fsSL https://raw.githubusercontent.com/afjcjsbx/picoclaw/main/scripts/inst
 irm https://raw.githubusercontent.com/afjcjsbx/picoclaw/main/scripts/install.ps1 | iex
 ```
 
-The installer detects the CPU architecture, verifies the release checksum, installs both binaries, and starts the launcher. The Web UI opens at `http://localhost:18800`; on first run, create the dashboard password in the browser.
+The Linux/macOS/FreeBSD/NetBSD installer detects the CPU architecture, verifies the release checksum, installs both binaries, and walks through first-time configuration for any of the 43 built-in chat providers, optional tool groups, optional web search, and optional messaging bot. It shows the provider API key while you paste it, queries the provider's model endpoint, and lets you pick from the returned model list. The generated config is adapted from the repository's `config/config.example.json`, so new settings stay in sync with each release. It then prints the commands to start the CLI or Web UI. The Windows PowerShell installer installs both binaries and starts the launcher.
+
+The Web UI runs at `http://localhost:18800`; on first run, create its dashboard password in the browser.
 
 ### Precompiled binaries
 
