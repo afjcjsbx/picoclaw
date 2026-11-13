@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/sipeed/picoclaw/pkg/fileutil"
 )
 
 func TestSaveStore_FilePermissions(t *testing.T) {
@@ -677,6 +679,12 @@ func TestCronService_NotifyNotLostWithoutReceiver(t *testing.T) {
 }
 
 func TestCronService_ConcurrentAccess(t *testing.T) {
+	// The test is about locking, not durability: skip the per-mutation fsync,
+	// which otherwise accounts for almost all of its runtime on CI runners.
+	prevWriteStoreFile := writeStoreFile
+	writeStoreFile = fileutil.WriteFileAtomicNoSync
+	t.Cleanup(func() { writeStoreFile = prevWriteStoreFile })
+
 	cs, _ := setupService(t, nil)
 
 	cs.Start()

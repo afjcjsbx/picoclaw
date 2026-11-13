@@ -1,0 +1,65 @@
+name: Lint cache
+
+# Seed the golangci-lint binary and analysis caches from the default branch.
+# Pull requests can restore caches created on main, so this keeps their first
+# run from rebuilding the linter and re-analysing the whole repo.
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".golangci.yaml"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/lint-cache.yml"
+  workflow_dispatch: { }
+
+permissions:
+  contents: read
+
+jobs:
+  warm:
+    name: Warm golangci-lint caches
+    runs-on: ubuntu-latest
+    env:
+      GOLANGCI_LINT_VERSION: v2.14.0
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Run go generate
+        run: go generate ./...
+
+      - name: Restore golangci-lint binary
+        id: golangci-bin
+        uses: actions/cache@v6
+        with:
+          path: ~/go/bin/golangci-lint
+          key: golangci-lint-${{ runner.os }}-${{ runner.arch }}-${{ env.GOLANGCI_LINT_VERSION }}
+
+      - name: Install golangci-lint
+        if: steps.golangci-bin.outputs.cache-hit != 'true'
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${{ env.GOLANGCI_LINT_VERSION }}
+
+      - name: Add Go bin to PATH
+        run: echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Restore golangci-lint analysis cache
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/golangci-lint
+          key: golangci-analysis-${{ runner.os }}-main-${{ env.GOLANGCI_LINT_VERSION }}-${{ hashFiles('.golangci.yaml', 'go.mod', 'go.sum') }}
+          restore-keys: |
+            golangci-analysis-${{ runner.os }}-main-${{ env.GOLANGCI_LINT_VERSION }}-
+            golangci-analysis-${{ runner.os }}-
+
+      - name: Golangci Lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          install-mode: none
+          skip-cache: true
+          args: --build-tags=goolm,stdjson

@@ -3,10 +3,18 @@ name: PR
 on:
   pull_request: { }
 
+# A new push to the same PR makes the in-flight run obsolete: cancel it so it
+# stops competing for runners (and the disk/CPU the new run needs).
+concurrency:
+  group: pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   lint:
     name: Linter
     runs-on: ubuntu-latest
+    env:
+      GOLANGCI_LINT_VERSION: v2.14.0
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -19,14 +27,40 @@ jobs:
       - name: Run go generate
         run: go generate ./...
 
+      # goinstall rebuilds golangci-lint from source on every run (40-60s on a
+      # hosted runner). Cache the binary; lint-cache.yml seeds it from main.
+      - name: Restore golangci-lint binary
+        id: golangci-bin
+        uses: actions/cache@v6
+        with:
+          path: ~/go/bin/golangci-lint
+          key: golangci-lint-${{ runner.os }}-${{ runner.arch }}-${{ env.GOLANGCI_LINT_VERSION }}
+
+      - name: Install golangci-lint
+        if: steps.golangci-bin.outputs.cache-hit != 'true'
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${{ env.GOLANGCI_LINT_VERSION }}
+
+      - name: Add Go bin to PATH
+        run: echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      # The action's own cache is disabled below; this step keeps the analysis
+      # cache across pushes and falls back to the one seeded from main.
+      - name: Restore golangci-lint analysis cache
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/golangci-lint
+          key: golangci-analysis-${{ runner.os }}-pr-${{ env.GOLANGCI_LINT_VERSION }}-${{ hashFiles('.golangci.yaml', 'go.mod', 'go.sum') }}
+          restore-keys: |
+            golangci-analysis-${{ runner.os }}-pr-${{ env.GOLANGCI_LINT_VERSION }}-
+            golangci-analysis-${{ runner.os }}-
+
       - name: Golangci Lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.14.0
-          # Install from the Go module proxy instead of downloading the release
-          # tarball from GitHub, which intermittently returns 504 and fails the
-          # linter job before it runs.
-          install-mode: goinstall
+          # goinstall is only used on a binary-cache miss above; the action
+          # must not reinstall what is already on PATH.
+          install-mode: none
+          skip-cache: true
           args: --build-tags=goolm,stdjson
 
   vuln_check:
@@ -52,8 +86,17 @@ jobs:
         run: govulncheck -C . -format text ./...
 
   test:
-    name: Tests
+    name: Tests (${{ matrix.shard }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # pkg/agent is one huge package and cannot be split by the package
+        # scheduler, so give it its own runner and run everything else on
+        # another one. Keeping the default -p (one binary per vCPU) avoids
+        # oversubscribing timing-sensitive suites, which flake when more
+        # binaries than cores compete for CPU.
+        shard: [agent, rest]
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -66,8 +109,28 @@ jobs:
       - name: Run go generate
         run: go generate ./...
 
+      - name: Select test packages
+        id: shard
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          if [[ "$SHARD" == "agent" ]]; then
+            echo "args=./pkg/agent/..." >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          selected=()
+          for pkg in $(go list ./... \
+            | sed 's|^github.com/sipeed/picoclaw$|.|; s|^github.com/sipeed/picoclaw/|./|' \
+            | sort); do
+            case "$pkg" in
+              ./pkg/agent|./pkg/agent/*) continue ;;
+            esac
+            selected+=("$pkg")
+          done
+          echo "args=${selected[*]}" >> "$GITHUB_OUTPUT"
+
       - name: Run go test
-        run: go test -tags goolm,stdjson ./...
+        run: go test -tags goolm,stdjson ${{ steps.shard.outputs.args }}
 
   cross_build:
     name: Cross-Platform Build (${{ matrix.target }})

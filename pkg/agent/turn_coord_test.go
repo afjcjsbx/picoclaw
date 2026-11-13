@@ -713,7 +713,7 @@ func TestPipeline_CallLLM_HTTP5xxRetry(t *testing.T) {
 				MaxTokens:           4096,
 				MaxToolIterations:   10,
 				MaxLLMRetries:       1,
-				LLMRetryBackoffSecs: 1,
+				LLMRetryBackoffSecs: 0, // zero waits are enough to test the retry path
 			},
 		},
 	}
@@ -821,14 +821,14 @@ func TestPipeline_CallLLM_RetryConfigRespected(t *testing.T) {
 				ModelName:           "test-model",
 				MaxTokens:           4096,
 				MaxToolIterations:   10,
-				MaxLLMRetries:       3,
+				MaxLLMRetries:       1,
 				LLMRetryBackoffSecs: 1,
 			},
 		},
 	}
 
 	msgBus := bus.NewMessageBus()
-	provider := &errorProvider{errType: "connection_reset"}
+	provider := &countingErrorProvider{errType: "connection_reset", targetCalls: 5}
 	al := NewAgentLoop(cfg, msgBus, provider)
 	defer al.Close()
 	agent := al.registry.GetDefaultAgent()
@@ -855,9 +855,14 @@ func TestPipeline_CallLLM_RetryConfigRespected(t *testing.T) {
 		t.Error("expected error after retries")
 	}
 
-	expectedMinTime := 3 * time.Second
+	// One retry with a 1s backoff: the configured wait must be observed, but
+	// there is no need to pay for the default 2s+4s schedule here.
+	expectedMinTime := time.Second
 	if elapsed < expectedMinTime {
 		t.Errorf("expected at least %v of backoff, got %v", expectedMinTime, elapsed)
+	}
+	if provider.callCount != 2 {
+		t.Errorf("expected 2 calls (1 initial + 1 retry), got %d", provider.callCount)
 	}
 }
 

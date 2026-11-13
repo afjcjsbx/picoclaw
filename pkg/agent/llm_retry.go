@@ -27,9 +27,10 @@ func llmRetryFromConfig(cfg *config.Config) llmRetry {
 	if n := cfg.Agents.Defaults.MaxLLMRetries; n > 0 {
 		retry.max = n
 	}
-	if secs := cfg.Agents.Defaults.LLMRetryBackoffSecs; secs > 0 {
-		retry.backoff = time.Duration(secs) * time.Second
-	}
+	// Zero is a valid setting and means "retry immediately": LoadConfig merges
+	// file values over DefaultConfig, which sets 2s, so only an explicit 0 (or
+	// a programmatically built config that leaves it unset) lands here.
+	retry.backoff = time.Duration(max(cfg.Agents.Defaults.LLMRetryBackoffSecs, 0)) * time.Second
 	return retry
 }
 
