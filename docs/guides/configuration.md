@@ -450,14 +450,14 @@ When `restrict_to_workspace: true`, the following tools are sandboxed:
 
 #### Additional Exec Protection
 
-Even with `restrict_to_workspace: false`, the `exec` tool blocks these dangerous commands:
+By default, the `exec` tool blocks these dangerous commands (the hardline subset stays blocked even when `enable_deny_patterns` is `false`):
 
 * `rm -rf`, `del /f`, `rmdir /s` — Bulk deletion
-* `format`, `mkfs`, `diskpart` — Disk formatting
-* `dd if=` — Disk imaging
-* Writing to `/dev/sd[a-z]` — Direct disk writes
-* `shutdown`, `reboot`, `poweroff` — System shutdown
-* Fork bomb `:(){ :|:& };:`
+* `format`, `mkfs`, `diskpart` — Disk formatting (always-on for disk formats)
+* `dd if=` — Disk imaging (always-on)
+* Writing to `/dev/sd[a-z]` — Direct disk writes (always-on)
+* `shutdown`, `reboot`, `poweroff` — System shutdown (always-on)
+* Fork bomb `:(){ :|:& };:` — Always-on
 
 ### File Access Control
 
@@ -537,8 +537,8 @@ Use `mode = lines` when:
 | Config Key | Type | Default | Description |
 |------------|------|---------|-------------|
 | `tools.exec.allow_remote` | bool | `false` | Allow exec tool from remote channels (Telegram/Discord etc.) |
-| `tools.exec.enable_deny_patterns` | bool | `true` | Enable dangerous command interception |
-| `tools.exec.custom_deny_patterns` | string[] | `[]` | Custom regex patterns to block |
+| `tools.exec.enable_deny_patterns` | bool | `true` | Enable built-in dangerous command interception (hardline and custom deny rules still apply when off) |
+| `tools.exec.custom_deny_patterns` | string[] | `[]` | Custom regex patterns to block; always enforced |
 | `tools.exec.custom_allow_patterns` | string[] | `[]` | Custom regex patterns to allow |
 
 > **Security Note:** Symlink protection is enabled by default — all file paths are resolved through `filepath.EvalSymlinks` before whitelist matching, preventing symlink escape attacks.

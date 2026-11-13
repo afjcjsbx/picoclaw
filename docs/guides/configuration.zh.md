@@ -317,14 +317,14 @@ PicoClaw 默认在沙箱环境中运行。Agent 只能访问配置的工作区�
 
 #### 额外的 Exec 保护
 
-即使 `restrict_to_workspace: false`，`exec` 工具也会阻止以下危险命令：
+默认情况下，`exec` 工具会阻止以下危险命令（其中硬性底线规则在 `enable_deny_patterns` 为 `false` 时仍会生效）：
 
 * `rm -rf`、`del /f`、`rmdir /s` — 批量删除
-* `format`、`mkfs`、`diskpart` — 磁盘格式化
-* `dd if=` — 磁盘镜像
-* 写入 `/dev/sd[a-z]` — 直接磁盘写入
-* `shutdown`、`reboot`、`poweroff` — 系统关机
-* Fork bomb `:(){ :|:& };:`
+* `format`、`mkfs`、`diskpart` — 磁盘格式化（磁盘格式化始终生效）
+* `dd if=` — 磁盘镜像（始终生效）
+* 写入 `/dev/sd[a-z]` — 直接磁盘写入（始终生效）
+* `shutdown`、`reboot`、`poweroff` — 系统关机（始终生效）
+* Fork bomb `:(){ :|:& };:` — 始终生效
 
 ### 文件访问控制
 
@@ -338,8 +338,8 @@ PicoClaw 默认在沙箱环境中运行。Agent 只能访问配置的工作区�
 | 配置键 | 类型 | 默认值 | 描述 |
 |--------|------|--------|------|
 | `tools.exec.allow_remote` | bool | `false` | 允许从远程渠道（Telegram/Discord 等）执行 exec 工具 |
-| `tools.exec.enable_deny_patterns` | bool | `true` | 启用危险命令拦截 |
-| `tools.exec.custom_deny_patterns` | string[] | `[]` | 自定义阻止的正则表达式模式 |
+| `tools.exec.enable_deny_patterns` | bool | `true` | 启用内置危险命令拦截（关闭后硬性底线规则和自定义拒绝规则仍然生效） |
+| `tools.exec.custom_deny_patterns` | string[] | `[]` | 自定义阻止的正则表达式模式；始终生效 |
 | `tools.exec.custom_allow_patterns` | string[] | `[]` | 自定义允许的正则表达式模式 |
 
 > **安全提示：** Symlink 保护默认启用——所有文件路径在允许列表匹配前都会通过 `filepath.EvalSymlinks` 解析，防止符号链接逃逸攻击。

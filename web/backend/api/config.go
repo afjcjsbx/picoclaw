@@ -416,11 +416,9 @@ func validateConfig(cfg *config.Config) []string {
 	}
 
 	if cfg.Tools.Exec.Enabled {
-		if cfg.Tools.Exec.EnableDenyPatterns {
-			errs = append(
-				errs,
-				validateRegexPatterns("tools.exec.custom_deny_patterns", cfg.Tools.Exec.CustomDenyPatterns)...)
-		}
+		errs = append(
+			errs,
+			validateRegexPatterns("tools.exec.custom_deny_patterns", cfg.Tools.Exec.CustomDenyPatterns)...)
 		errs = append(
 			errs,
 			validateRegexPatterns("tools.exec.custom_allow_patterns", cfg.Tools.Exec.CustomAllowPatterns)...)

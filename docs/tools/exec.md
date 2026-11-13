@@ -8,9 +8,9 @@ The exec tool is used to execute shell commands.
 | Config | Type | Default | Description |
 |--------|------|---------|-------------|
 | `enabled` | bool | `true` | Enable the exec tool |
-| `enable_deny_patterns` | bool | `true` | Enable the default dangerous-command blocking |
-| `custom_deny_patterns` | string[] | `[]` | Additional deny patterns (regular expressions); they take priority over allow rules |
-| `custom_allow_patterns` | string[] | `[]` | Allow patterns (regular expressions) that explicitly permit matching commands. Deny patterns still win, so this cannot unlock a denied command |
+| `enable_deny_patterns` | bool | `true` | Enable the built-in dangerous-command blocking patterns |
+| `custom_deny_patterns` | string[] | `[]` | Additional deny patterns (regular expressions); always enforced and they take priority over allow rules |
+| `custom_allow_patterns` | string[] | `[]` | Allow patterns (regular expressions) that explicitly permit matching commands. They exempt the built-in default deny set, but custom deny patterns, the hardline floor, and other safety limits still win |
 | `allow_remote` | bool | `false` | When `false`, exec only accepts commands that originate from internal channels (`cli`, `system`, `subagent`). Remote channels are then blocked (fail-closed): an empty channel is also rejected. Set it to `true` only when remote command execution is explicitly intended |
 | `timeout_seconds` | int | `60` | Command timeout in seconds. `0` means the default (60s) |
 | `max_output_chars` | int | `50000` | Foreground output cap. Longer output keeps the first 40% and the last 60% around a `[OUTPUT TRUNCATED - N chars omitted out of T total]` notice, while the full stream is spilled to a workspace artifact (up to 5,000,000 bytes). The inline view is also bounded by `tools.max_inline_result_chars`; the artifact preserves the full stream. `0` means the default (50000) |
@@ -94,16 +94,26 @@ PICOCLAW_TOOLS_EXEC_ENABLED=false
 
 ## Functionality
 
-- **`enable_deny_patterns`**: Set to `false` to completely disable the default dangerous command blocking patterns
-- **`custom_deny_patterns`**: Add custom deny regex patterns; commands matching these will be blocked
+- **`enable_deny_patterns`**: Set to `false` to disable the built-in default dangerous-command patterns. The hardline floor and `custom_deny_patterns` still apply.
+- **`custom_deny_patterns`**: Add custom deny regex patterns. These are always enforced, even when `enable_deny_patterns` is `false`, and custom allow patterns cannot exempt them.
+
+## Hardline Always-On Patterns
+
+Some catastrophic commands are an immutable floor: they stay blocked even when `enable_deny_patterns` is `false`, and no custom allow pattern can exempt them.
+
+- Fork bombs: `:(){ :|:& };:`
+- Disk formatting/partitioning: `mkfs`, `mkfs.*`, `diskpart`, `format C:`
+- Raw disk access: `dd if=`, writing to `/dev/sd*` and other block devices
+- Recursive deletion of `/` such as `rm -rf /` or `rm -rf /*`
+- Power state changes: `shutdown`, `reboot`, `poweroff`
 
 ## Default Blocked Command Patterns
 
-By default, PicoClaw blocks the following dangerous commands:
+These patterns are enabled by default and can be disabled with `enable_deny_patterns: false`:
 
 - Delete commands: `rm -rf`, `del /f/q`, `rmdir /s`
-- Disk operations: `format`, `mkfs`, `diskpart`, `dd if=`, writing to `/dev/sd*`
-- System operations: `shutdown`, `reboot`, `poweroff`
+- Disk operations: broad `format`/`mkfs`/`diskpart`/`dd if=` detection (the hardline subset above stays blocked)
+- System operations: broad `shutdown`/`reboot`/`poweroff` detection (the hardline subset above stays blocked)
 - Command substitution: `$()`, `${}`, backticks
 - Pipe to shell: `| sh`, `| bash`
 - Privilege escalation: `sudo`, `chmod`, `chown`
