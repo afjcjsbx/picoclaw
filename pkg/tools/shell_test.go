@@ -248,7 +248,7 @@ func TestShellTool_TimeoutArg_OverridesConfigured(t *testing.T) {
 		require.Contains(t, result.ForLLM, "done")
 	})
 
-	t.Run("zero disables the timeout", func(t *testing.T) {
+	t.Run("zero promotes to background", func(t *testing.T) {
 		result := tool.Execute(context.Background(), map[string]any{
 			"action":  "run",
 			"command": "sleep 0.3; echo done",
@@ -256,7 +256,10 @@ func TestShellTool_TimeoutArg_OverridesConfigured(t *testing.T) {
 		})
 
 		require.False(t, result.IsError, result.ForLLM)
-		require.Contains(t, result.ForLLM, "done")
+		var resp ExecResponse
+		require.NoError(t, json.Unmarshal([]byte(result.ForLLM), &resp))
+		require.NotEmpty(t, resp.SessionID)
+		require.Contains(t, resp.Note, "foreground cap")
 	})
 
 	t.Run("shorter timeout kills command", func(t *testing.T) {
@@ -274,6 +277,118 @@ func TestShellTool_TimeoutArg_OverridesConfigured(t *testing.T) {
 		require.Contains(t, result.ForLLM, "timed out after 1s")
 		require.Less(t, time.Since(start), 5*time.Second)
 	})
+}
+
+// TestShellTool_DefaultTimeout verifies the configured default and the
+// fallback used when no config is available.
+func TestShellTool_DefaultTimeout(t *testing.T) {
+	want := time.Duration(config.DefaultExecTimeoutSeconds) * time.Second
+
+	tool, err := NewExecTool("", false)
+	require.NoError(t, err)
+	require.Equal(t, want, tool.timeout)
+
+	cfg := &config.Config{}
+	tool, err = NewExecToolWithConfig("", false, cfg)
+	require.NoError(t, err)
+	require.Equal(t, want, tool.timeout)
+
+	cfg.Tools.Exec.TimeoutSeconds = 42
+	tool, err = NewExecToolWithConfig("", false, cfg)
+	require.NoError(t, err)
+	require.Equal(t, 42*time.Second, tool.timeout)
+}
+
+// TestShellTool_TimeoutAboveForegroundCapPromotes verifies that a timeout
+// beyond the foreground cap starts a tracked background session instead of
+// blocking or failing the call.
+func TestShellTool_TimeoutAboveForegroundCapPromotes(t *testing.T) {
+	tool, err := NewExecTool("", false)
+	require.NoError(t, err)
+
+	sm := NewSessionManager()
+	t.Cleanup(sm.Stop)
+	tool.sessionManager = sm
+
+	ctx := WithToolContext(context.Background(), "cli", "test")
+	result := tool.Execute(ctx, map[string]any{
+		"action":  "run",
+		"command": "echo promoted",
+		"timeout": float64(config.MaxExecForegroundTimeoutSeconds + 1),
+	})
+	require.False(t, result.IsError, result.ForLLM)
+
+	var started ExecResponse
+	require.NoError(t, json.Unmarshal([]byte(result.ForLLM), &started))
+	require.NotEmpty(t, started.SessionID)
+	require.Contains(t, started.Note, "foreground cap")
+
+	waited := execResp(t, tool.Execute(ctx, map[string]any{
+		"action":    "wait",
+		"sessionId": started.SessionID,
+		"timeout":   float64(5),
+	}))
+	require.Equal(t, "done", waited.Status)
+	require.Contains(t, waited.Output, "promoted")
+}
+
+// TestShellTool_TimeoutAtForegroundCapStaysForeground verifies the cap is
+// inclusive: a request equal to the cap is still a foreground run.
+func TestShellTool_TimeoutAtForegroundCapStaysForeground(t *testing.T) {
+	tool, err := NewExecTool("", false)
+	require.NoError(t, err)
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"action":  "run",
+		"command": "echo foreground",
+		"timeout": float64(config.MaxExecForegroundTimeoutSeconds),
+	})
+	require.False(t, result.IsError, result.ForLLM)
+	require.True(t, strings.HasPrefix(result.ForLLM, execRunMetaPrefix), result.ForLLM)
+	require.Contains(t, result.ForLLM, "foreground")
+}
+
+// TestShellTool_DisabledForegroundCapKeepsRunForeground verifies the internal
+// escape hatch used by cron, which consumes command output synchronously.
+func TestShellTool_DisabledForegroundCapKeepsRunForeground(t *testing.T) {
+	tool, err := NewExecTool("", false)
+	require.NoError(t, err)
+	tool.foregroundCap = 0
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"action":  "run",
+		"command": "echo synchronous",
+		"timeout": float64(config.MaxExecForegroundTimeoutSeconds + 1),
+	})
+	require.False(t, result.IsError, result.ForLLM)
+	require.True(t, strings.HasPrefix(result.ForLLM, execRunMetaPrefix), result.ForLLM)
+	require.Contains(t, result.ForLLM, "synchronous")
+}
+
+// TestShellTool_ConfiguredTimeoutAboveCapPromotes verifies that a configured
+// timeout beyond the cap also yields a tracked background session.
+func TestShellTool_ConfiguredTimeoutAboveCapPromotes(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Tools.Exec.TimeoutSeconds = config.MaxExecForegroundTimeoutSeconds + 1
+
+	tool, err := NewExecToolWithConfig("", false, cfg)
+	require.NoError(t, err)
+
+	sm := NewSessionManager()
+	t.Cleanup(sm.Stop)
+	tool.sessionManager = sm
+
+	ctx := WithToolContext(context.Background(), "cli", "test")
+	result := tool.Execute(ctx, map[string]any{
+		"action":  "run",
+		"command": "echo promoted",
+	})
+	require.False(t, result.IsError, result.ForLLM)
+
+	var started ExecResponse
+	require.NoError(t, json.Unmarshal([]byte(result.ForLLM), &started))
+	require.NotEmpty(t, started.SessionID)
+	require.Contains(t, started.Note, "foreground cap")
 }
 
 // TestShellTool_TimeoutArg_Background verifies timeout only conflicts with background when non-zero
@@ -2905,6 +3020,40 @@ func TestShellTool_ExecuteAsync_NotifiesOnCompletion(t *testing.T) {
 	select {
 	case result := <-done:
 		require.Contains(t, result.ForLLM, "background-done")
+		require.Contains(t, result.ForLLM, "exitCode: 0")
+	case <-time.After(3 * time.Second):
+		t.Fatal("completion notification did not arrive")
+	}
+}
+
+func TestShellTool_ExecuteAsync_PromotedRunNotifies(t *testing.T) {
+	tool, err := NewExecTool("", false)
+	require.NoError(t, err)
+
+	sm := NewSessionManager()
+	t.Cleanup(sm.Stop)
+	tool.sessionManager = sm
+
+	ctx := WithToolContext(context.Background(), "cli", "test")
+	done := make(chan *ToolResult, 1)
+	runResult := tool.ExecuteAsync(ctx, map[string]any{
+		"action":  "run",
+		"command": "sh -c 'sleep 0.1; echo promoted-done'",
+		"timeout": float64(config.MaxExecForegroundTimeoutSeconds + 1),
+		"notify":  true,
+	}, func(_ context.Context, result *ToolResult) {
+		done <- result
+	})
+	require.False(t, runResult.IsError, runResult.ForLLM)
+
+	var started ExecResponse
+	require.NoError(t, json.Unmarshal([]byte(runResult.ForLLM), &started))
+	require.Contains(t, started.Note, "foreground cap")
+	require.Contains(t, started.Note, notifyEnabledNote)
+
+	select {
+	case result := <-done:
+		require.Contains(t, result.ForLLM, "promoted-done")
 		require.Contains(t, result.ForLLM, "exitCode: 0")
 	case <-time.After(3 * time.Second):
 		t.Fatal("completion notification did not arrive")
