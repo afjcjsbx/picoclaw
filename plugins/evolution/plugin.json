@@ -1,0 +1,8 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "evolution",
+  "version": "0.1.0",
+  "description": "Opt-in self-evolution: records completed turns and prepares reviewable skill drafts.",
+  "license": "MIT",
+  "keywords": ["evolution", "skills", "learning", "off-by-default"]
+}
