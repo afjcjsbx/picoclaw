@@ -3,8 +3,8 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,7 +13,6 @@ import (
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/cron"
-	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
 type stubJobExecutor struct {
@@ -28,6 +27,7 @@ type stubJobExecutor struct {
 	publishedChan   string
 	publishedChatID string
 	publishedKey    string
+	deliverErr      error
 }
 
 func (s *stubJobExecutor) ProcessDirectWithChannel(
@@ -41,17 +41,18 @@ func (s *stubJobExecutor) ProcessDirectWithChannel(
 	return s.response, s.err
 }
 
-func (s *stubJobExecutor) PublishResponseIfNeeded(
+func (s *stubJobExecutor) DeliverResponse(
 	_ context.Context,
 	channel, chatID, sessionKey, response string,
-) {
-	if s.alreadySent {
-		return
+) error {
+	if s.alreadySent || response == "" {
+		return nil
 	}
 	s.publishedResp = response
 	s.publishedChan = channel
 	s.publishedChatID = chatID
 	s.publishedKey = sessionKey
+	return s.deliverErr
 }
 
 func newTestCronToolWithExecutorAndConfig(t *testing.T, executor JobExecutor, cfg *config.Config) *CronTool {
@@ -1413,16 +1414,9 @@ func TestCronTool_ExecuteJobRunsCommand(t *testing.T) {
 	}
 }
 
-// TestCronTool_ExecuteJobLogsDroppedOutput pins that a job whose outcome cannot
-// be published still completes, and that the dropped publish is reported
-// instead of vanishing.
-func TestCronTool_ExecuteJobLogsDroppedOutput(t *testing.T) {
-	logPath := filepath.Join(t.TempDir(), "cron.log")
-	if err := logger.EnableFileLogging(logPath); err != nil {
-		t.Fatalf("EnableFileLogging() error: %v", err)
-	}
-	t.Cleanup(logger.DisableFileLogging)
-
+// TestCronTool_ExecuteJobReportsDroppedOutput pins that a command job whose
+// result cannot be published fails with the bus error instead of "ok".
+func TestCronTool_ExecuteJobReportsDroppedOutput(t *testing.T) {
 	tool := newTestCronToolWithConfig(t, config.DefaultConfig())
 	job := &cron.CronJob{}
 	job.Payload.Channel = "cli"
@@ -1432,14 +1426,24 @@ func TestCronTool_ExecuteJobLogsDroppedOutput(t *testing.T) {
 	// A closed bus rejects the publish; the command itself already ran.
 	tool.msgBus.Close()
 
-	mustExecuteJobOK(t, tool, job)
-
-	data, err := os.ReadFile(logPath)
-	if err != nil {
-		t.Fatalf("read log file: %v", err)
+	got, err := tool.ExecuteJob(context.Background(), job)
+	if err == nil || !strings.Contains(err.Error(), "deliver job output to cli:direct") {
+		t.Fatalf("ExecuteJob() = %q, %v; want delivery error", got, err)
 	}
-	if !strings.Contains(string(data), "Failed to publish job output") {
-		t.Fatalf("log does not mention the dropped publish: %s", data)
+}
+
+// TestCronTool_ExecuteJobReportsAgentDeliveryFailure pins the same for agent
+// jobs: the real delivery error reaches the run state, not "ok".
+func TestCronTool_ExecuteJobReportsAgentDeliveryFailure(t *testing.T) {
+	cause := errors.New("message bus backpressure")
+	executor := &stubJobExecutor{response: "hello", deliverErr: cause}
+	tool := newTestCronToolWithExecutorAndConfig(t, executor, config.DefaultConfig())
+	job := &cron.CronJob{ID: "j1"}
+	job.Payload.Message = "say hello"
+
+	got, err := tool.ExecuteJob(context.Background(), job)
+	if !errors.Is(err, cause) {
+		t.Fatalf("ExecuteJob() = %q, %v; want wrapped %v", got, err, cause)
 	}
 }
 
