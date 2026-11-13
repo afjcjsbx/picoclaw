@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `/usage` (alias `/cost`) chat command and `picoclaw usage` CLI command that report provider-reported token usage and cost per session, with per-model and input cache breakdowns.
 
+### Changed
+
+- Cron hot-reload now watches `cron/jobs.json` with the OS file watcher (fsnotify) instead of polling every 2 seconds, removing 43,200 daily wake-ups on an idle gateway. A one-minute poll is used only if the platform watcher cannot be created.
+- The channel TTL janitor is now event-driven: it parks with no timer while the typing, reaction, placeholder, and stream-tombstone maps are empty, eliminating 8,640 idle wake-ups per day. A single ticker sweeps all maps only while entries are alive.
+- The exec tool strips ANSI escape sequences (colors, cursor movement, OSC/DCS/APC strings) from foreground and background output as it is read. Stripping happens in place before truncation, redaction and spilling, so escape bytes neither consume the output budget nor reach the model or an artifact.
+
+### Fixed
+
+- Large tool-result artifacts and exec spill files are redacted while they are written: credentials registered from `.security.yml` are replaced with `[FILTERED]` before reaching disk, including values split across write chunks or head+tail truncation boundaries. Redaction streams through a small carry buffer, so it adds no full-payload copy.
+
 ## [0.5.1] - 2026-10-18
 
 ### Added
