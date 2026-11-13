@@ -179,6 +179,10 @@ type secretPattern struct {
 	// fold compares lits case-insensitively; lits must then be lowercase
 	// ASCII words.
 	fold bool
+	// after, when set, is asked about the text following each literal hit and
+	// must accept it for the regexp to run. Words like token also name
+	// prompt_tokens and max_tokens; this rejects them without a regexp scan.
+	after func(rest string) bool
 	// replacement is used with ReplaceAllString. Patterns with capture groups
 	// keep the key name and mask only the value; the default masks the whole
 	// match.
@@ -191,22 +195,51 @@ type secretPattern struct {
 
 func (p secretPattern) mayMatch(line string) bool {
 	for _, lit := range p.lits {
-		if p.fold && containsFold(line, lit) || !p.fold && strings.Contains(line, lit) {
-			return true
+		for from := 0; ; {
+			i := indexLit(line[from:], lit, p.fold)
+			if i < 0 {
+				break
+			}
+			end := from + i + len(lit)
+			if p.after == nil || p.after(line[end:]) {
+				return true
+			}
+			from += i + 1
 		}
 	}
 	return false
 }
 
-// containsFold reports whether s contains lit, a lowercase ASCII word,
-// ignoring case. It only compares at positions whose byte can start lit.
-func containsFold(s, lit string) bool {
+// indexLit returns the index of lit in s, or -1. With fold, lit must be a
+// lowercase ASCII word and case is ignored; only positions whose byte can
+// start lit are compared.
+func indexLit(s, lit string, fold bool) int {
+	if !fold {
+		return strings.Index(s, lit)
+	}
 	for i := 0; i+len(lit) <= len(s); i++ {
 		if s[i]|0x20 == lit[0] && strings.EqualFold(s[i:i+len(lit)], lit) {
-			return true
+			return i
 		}
 	}
-	return false
+	return -1
+}
+
+// spaceAfter accepts text that starts with whitespace: a scheme word such as
+// "token" followed by its credential.
+func spaceAfter(rest string) bool {
+	return rest != "" && strings.ContainsRune(" \t\n\f\r", rune(rest[0]))
+}
+
+// assignAfter accepts text that continues like an assignment: optional
+// whitespace and quote, then = or :.
+func assignAfter(rest string) bool {
+	const space = " \t\n\f\r"
+	rest = strings.TrimLeft(rest, space)
+	if rest != "" && (rest[0] == '"' || rest[0] == '\'') {
+		rest = strings.TrimLeft(rest[1:], space)
+	}
+	return rest != "" && (rest[0] == '=' || rest[0] == ':')
 }
 
 // secretPatterns match well-known credential formats with high
@@ -264,6 +297,7 @@ var loosePatterns = []secretPattern{
 		re:          regexp.MustCompile(`(?i)(\b(?:basic|token)\s+)[A-Za-z0-9+/=_-]{16,}`),
 		lits:        []string{"basic", "token"},
 		fold:        true,
+		after:       spaceAfter,
 		replacement: "${1}" + Marker,
 	},
 	// Explicit credential headers with values too short for the entropy rule.
@@ -286,6 +320,7 @@ var loosePatterns = []secretPattern{
 			"client_secret", "password", "passwd", "secret",
 		},
 		fold:        true,
+		after:       assignAfter,
 		replacement: "${1}" + Marker,
 	},
 }

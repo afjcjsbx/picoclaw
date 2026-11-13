@@ -413,3 +413,35 @@ func TestTextMasksOpaqueTokenInFrontOfSessionKey(t *testing.T) {
 		t.Fatalf("session key must be kept: %q", got)
 	}
 }
+
+// TestPrefilterNeverSkipsAMatch checks that the cheap prefilter is a superset
+// of the regexp: whenever a loose rule would match, mayMatch must say so.
+func TestPrefilterNeverSkipsAMatch(t *testing.T) {
+	keys := []string{
+		"token", "Token", "access_token", "ACCESS-TOKEN", "auth_token", "api_key", "API-KEY", "apikey",
+		"client_secret", "secret", "password", "passwd", "x-api-key", "Basic",
+	}
+	seps := []string{"=", ": ", " = ", `":"`, `": "`, `'='`, " ", "  ", "\t", ""}
+	for _, key := range keys {
+		for _, sep := range seps {
+			line := "prefix " + key + sep + "abcdefgh12345678 suffix"
+			for _, p := range loosePatterns {
+				if p.re.MatchString(line) && !p.mayMatch(line) {
+					t.Errorf("prefilter skipped %q for %v", line, p.re)
+				}
+			}
+		}
+	}
+}
+
+func TestTextSkipsTokenCountsAndMaxTokens(t *testing.T) {
+	const line = "usage prompt_tokens=123456789 max_tokens: 4096 tokens usage stays low"
+	if got := Text(line); got != line {
+		t.Fatalf("Text(%q) = %q", line, got)
+	}
+	for _, p := range loosePatterns {
+		if p.mayMatch(line) {
+			t.Errorf("prefilter should skip %q for %v", line, p.re)
+		}
+	}
+}
