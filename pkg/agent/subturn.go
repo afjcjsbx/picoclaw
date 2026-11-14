@@ -394,7 +394,14 @@ func spawnSubTurn(
 	agent.Sessions = ephemeralStore
 	// Clone the tool registry so child turn's tool registrations
 	// don't pollute the parent's registry.
-	if baseAgent.Tools != nil {
+	// If cfg.Tools is explicitly provided (per-spawn tool filtering), use it
+	// instead of inheriting the parent's full tool set.
+	if len(cfg.Tools) > 0 {
+		agent.Tools = tools.NewToolRegistry()
+		for _, t := range cfg.Tools {
+			agent.Tools.Register(t)
+		}
+	} else if baseAgent.Tools != nil {
 		agent.Tools = baseAgent.Tools.Clone()
 		if tool, ok := agent.Tools.Get("todo"); ok {
 			if todo, ok := tool.(*tools.TodoTool); ok {
@@ -466,6 +473,10 @@ func spawnSubTurn(
 	// IMPORTANT: Put childTS into childCtx so that code inside runTurn can retrieve it
 	childCtx = withTurnState(childCtx, childTS)
 	childCtx = WithAgentLoop(childCtx, al) // Propagate AgentLoop to child turn
+	// Propagate ChildTracker so the child's own spawn calls are tracked and
+	// joined before this SubTurn finishes (prevents async children from being
+	// orphaned).
+	childCtx = tools.WithChildTracker(childCtx, childTS)
 
 	childTS.ctx = childCtx
 

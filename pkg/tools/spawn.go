@@ -19,6 +19,18 @@ type ChildTracker interface {
 
 type childTrackerKey struct{}
 
+// outboundTools are tools that let an agent contact the user's channel
+// directly. When allow_outbound is false, these are stripped from the
+// spawned subagent's tool set. Generation-only tools (e.g. image_generate)
+// are intentionally NOT included: they produce media refs returned to the
+// parent agent, which decides whether to forward them to the user.
+var outboundTools = []string{
+	"message",
+	"send_file",
+	"send_tts",
+	"reaction",
+}
+
 // WithChildTracker returns a context whose async spawns are tracked by t.
 func WithChildTracker(ctx context.Context, t ChildTracker) context.Context {
 	return context.WithValue(ctx, childTrackerKey{}, t)
@@ -38,6 +50,8 @@ type SpawnTool struct {
 	maxTokens      int
 	temperature    float64
 	allowlistCheck func(targetAgentID string) bool
+	tools          *ToolRegistry
+	directMessage  bool // config default; per-call allow_outbound overrides
 }
 
 // Compile-time check: SpawnTool implements AsyncExecutor.
@@ -48,9 +62,11 @@ func NewSpawnTool(manager *SubagentManager) *SpawnTool {
 		return &SpawnTool{}
 	}
 	return &SpawnTool{
-		defaultModel: manager.defaultModel,
-		maxTokens:    manager.maxTokens,
-		temperature:  manager.temperature,
+		defaultModel:  manager.defaultModel,
+		maxTokens:     manager.maxTokens,
+		temperature:   manager.temperature,
+		tools:         manager.tools,
+		directMessage: manager.directMessage,
 	}
 }
 
@@ -85,6 +101,10 @@ func (t *SpawnTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Optional target agent ID to delegate the task to",
 			},
+			"allow_outbound": map[string]any{
+				"type":        "boolean",
+				"description": "Optional. Whether the subagent may contact the user directly (default true). When false, outbound tools {message, send_file, send_tts, reaction} are stripped; generation-only tools like image_generate are preserved and their results are returned to the parent agent.",
+			},
 		},
 		"required": []string{"task"},
 	}
@@ -92,6 +112,13 @@ func (t *SpawnTool) Parameters() map[string]any {
 
 func (t *SpawnTool) SetAllowlistChecker(check func(targetAgentID string) bool) {
 	t.allowlistCheck = check
+}
+
+// SetTools sets the parent's tool registry so spawned subagents can inherit a
+// filtered tool set (e.g. without the message tool when direct messaging is
+// disabled).
+func (t *SpawnTool) SetTools(tools *ToolRegistry) {
+	t.tools = tools
 }
 
 func (t *SpawnTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
@@ -120,6 +147,10 @@ func (t *SpawnTool) execute(
 
 	label := stringArg(args, "label")
 	targetAgentID := strings.TrimSpace(stringArg(args, "agent_id"))
+	allowOutbound := t.directMessage // config default: true (no behavior change)
+	if v, ok := args["allow_outbound"].(bool); ok {
+		allowOutbound = v
+	}
 
 	// Check allowlist if targeting a specific agent
 	if targetAgentID != "" && t.allowlistCheck != nil {
@@ -162,9 +193,39 @@ func (t *SpawnTool) execute(
 					}
 				}()
 
+				// Build child tool set: when direct outbound messaging is
+				// disabled, strip the outbound tool group
+				// {message, send_file, send_tts, reaction} so the subagent
+				// cannot contact the user directly. Generation-only tools like
+				// image_generate are preserved: they produce media refs that
+				// are returned to the parent agent, which decides whether to
+				// forward them to the user.
+				//
+				// When allowOutbound=true (default), pass nil so spawnSubTurn
+				// inherits the child agent's own tool registry (including its
+				// own spawn tool and per-agent allowlist) — preserving
+				// per-agent spawning rules instead of cloning the parent's.
+				var childTools []Tool
+				if t.tools != nil && !allowOutbound {
+					parentRegistry := t.tools
+					for _, name := range outboundTools {
+						parentRegistry = parentRegistry.CloneWithout(name)
+					}
+					for _, name := range parentRegistry.List() {
+						if name == "spawn" {
+							continue
+						}
+						if tool, ok := parentRegistry.Get(name); ok {
+							childTools = append(childTools, tool)
+						}
+					}
+					// Re-add the spawn tool so the child can spawn grandchildren.
+					childTools = append(childTools, t)
+				}
+
 				res, err := t.spawner.SpawnSubTurn(ctx, SubTurnConfig{
 					Model:         t.defaultModel,
-					Tools:         nil, // Will inherit from parent via context
+					Tools:         childTools,
 					SystemPrompt:  systemPrompt,
 					MaxTokens:     t.maxTokens,
 					Temperature:   t.temperature,
