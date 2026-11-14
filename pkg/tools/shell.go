@@ -89,7 +89,6 @@ var _ AsyncExecutor = (*ExecTool)(nil)
 
 var (
 	defaultDenyPatterns = []*regexp.Regexp{
-		regexp.MustCompile(`\brm\s+-[rf]{1,2}\b`),
 		regexp.MustCompile(`\bdel\s+/[fq]\b`),
 		regexp.MustCompile(`\brmdir\s+/s\b`),
 		// Match disk wiping commands (must be followed by space/args)
@@ -108,9 +107,6 @@ var (
 		regexp.MustCompile("`[^`]+`"),
 		regexp.MustCompile(`\|\s*sh\b`),
 		regexp.MustCompile(`\|\s*bash\b`),
-		regexp.MustCompile(`;\s*rm\s+-[rf]`),
-		regexp.MustCompile(`&&\s*rm\s+-[rf]`),
-		regexp.MustCompile(`\|\|\s*rm\s+-[rf]`),
 		regexp.MustCompile(`<<\s*EOF`),
 		regexp.MustCompile(`\$\(\s*cat\s+`),
 		regexp.MustCompile(`\$\(\s*curl\s+`),
@@ -163,6 +159,9 @@ var (
 	// windowsDenyPatterns contains PowerShell-specific deny patterns that only
 	// apply on Windows, where commands are executed via powershell -Command.
 	windowsDenyPatterns = []*regexp.Regexp{
+		// The AST risk classifier is POSIX-only and skipped on Windows, so keep
+		// a regex floor for recursive/forced rm there.
+		regexp.MustCompile(`\brm\s+-[rf]{1,2}\b`),
 		// [Text.Encoding] used to construct command strings at runtime.
 		// Matches [Text.Encoding] and [System.Text.Encoding] variants.
 		regexp.MustCompile(`\[(?:\w+\.)?text\.encoding\]`),

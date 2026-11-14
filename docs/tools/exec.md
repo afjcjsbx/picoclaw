@@ -30,7 +30,7 @@ When the built-in guard is enabled (`enable_deny_patterns: true`, the default), 
 |-------|---------|----------|
 | `low` | Read-only / informational | `ls`, `cat`, `grep`, `find`, `echo` |
 | `medium` | Writes files or reads the network | `cp`, `mv`, `tar`, `curl`, `git status` |
-| `high` | Destructive or system-wide side effects | `rm`, `chmod`, `git push`, `docker`, `ssh` |
+| `high` | Destructive or system-wide side effects | `rm -r`, `chmod`, `git push`, `docker`, `ssh` |
 | `critical` | Privilege escalation or always dangerous | `sudo`, `dd`, `mkfs`, `shutdown`, `rm -rf` |
 
 Commands above `risk_threshold` are rejected before any process starts, with a structured message:
@@ -49,7 +49,23 @@ The classifier also:
 - inspects common wrappers (`env`, `command`, `nohup`, `time`, `nice`, `timeout`, `xargs`, `watch`) and classifies the command they launch;
 - treats `env -S` as critical, because it splits a string into a command.
 
-Argument modifiers are applied after flag normalization (`rm -rf`, `rm -fr` and `rm -r -f` are equivalent; `-XPOST` and `--request=POST` match their spaced flag+value forms). Built-in examples include `rm -rf` → `critical`, `git push` → `high`, `git push --force` → `critical`, `curl -X POST` → `high`, and `find -delete` → `high`.
+Argument modifiers are applied after flag normalization (`rm -rf`, `rm -fr` and `rm -r -f` are equivalent; `-XPOST` and `--request=POST` match their spaced flag+value forms). Built-in examples include `rm -r` → `high`, `rm -rf` → `critical`, `git push` → `high`, `git push --force` → `critical`, `curl -X POST` → `high`, and `find -delete` → `high`.
+
+#### Subcommand calibration
+
+Tools that expose both read-only and destructive operations are classified by verb. A missing verb falls back to the command's conservative base level.
+
+| Tool | Read-only (`low`/`medium`) | Destructive (`high`/`critical`) |
+|------|----------------------------|---------------------------------|
+| `docker` | `ps`, `logs`, `inspect`, `images`, `version`, `info`, `stats`, `pull` | `run`, `exec`, `rm`, `rmi`, `stop`, `start`, `build`, `push`; `run --privileged` is `critical` |
+| `systemctl` | `status`, `show`, `cat`, `list-*`, `is-*` | state-changing verbs; `poweroff`, `reboot`, `halt`, `isolate` are `critical` |
+| `kubectl` | `get`, `describe`, `logs`, `explain`, `api-*`, `version`, `cluster-info`, `top` | other verbs keep the `high` base (for example `delete`, `apply`, `exec`) |
+| `git` | `status`, `log`, `diff`, `show`, `branch`, `remote`, `tag`, `rev-parse`, `blame` | `branch -D`/`-d`, `tag -d`, `push --force-with-lease` are `high`; `push --force`/`-f` are `critical` |
+| `rm` | plain `rm` is `medium`; `rm -f` is `medium` | `rm -r`/`-R` is `high`; `rm -r -f`/`-rf` is `critical` |
+
+Block-device, volume and cloud operations are explicitly classified: `wipefs`, `blkdiscard`, `lvremove`, `cryptsetup luksFormat`/`erase`, `zpool destroy`, `zfs destroy`, `mdadm --zero-superblock` and `terraform destroy` are `critical`; `cryptsetup`, `zpool`, `zfs`, `mdadm`, `terraform apply` and `helm uninstall` are `high`; `aws s3 rm`/`rb`, `aws ec2 terminate-instances` and similar delete verbs are `high`.
+
+`rm` is no longer in the default regex deny list: the risk levels above are the source of truth. The hardline rule for recursive deletion of `/` still applies.
 
 Custom thresholds and modifiers:
 
@@ -216,7 +232,7 @@ Some catastrophic commands are an immutable floor: they stay blocked even when `
 
 These patterns are enabled by default and can be disabled with `enable_deny_patterns: false`:
 
-- Delete commands: `rm -rf`, `del /f/q`, `rmdir /s`
+- Delete commands: `del /f/q`, `rmdir /s` (Unix `rm` is classified by the risk guard: plain `rm` is `medium`, `rm -r` is `high`, `rm -rf` is `critical`)
 - Disk operations: broad `format`/`mkfs`/`diskpart`/`dd if=` detection (the hardline subset above stays blocked)
 - System operations: broad `shutdown`/`reboot`/`poweroff` detection (the hardline subset above stays blocked)
 - Command substitution: `$()`, `${}`, backticks

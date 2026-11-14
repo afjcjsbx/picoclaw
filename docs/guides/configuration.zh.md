@@ -319,7 +319,7 @@ PicoClaw 默认在沙箱环境中运行。Agent 只能访问配置的工作区�
 
 默认情况下，`exec` 工具会阻止以下危险命令（其中硬性底线规则在 `enable_deny_patterns` 为 `false` 时仍会生效）：
 
-* `rm -rf`、`del /f`、`rmdir /s` — 批量删除
+* `del /f`、`rmdir /s` — 批量删除（Unix `rm` 由风险分类器处理：基础 `medium`，`rm -r` 为 `high`，`rm -rf` 为 `critical`）
 * `format`、`mkfs`、`diskpart` — 磁盘格式化（磁盘格式化始终生效）
 * `dd if=` — 磁盘镜像（始终生效）
 * 写入 `/dev/sd[a-z]` — 直接磁盘写入（始终生效）

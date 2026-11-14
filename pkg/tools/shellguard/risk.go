@@ -114,10 +114,11 @@ var commandRiskTable = map[string]RiskLevel{
 	"java": RiskMedium, "ruby": RiskMedium, "perl": RiskMedium, "php": RiskMedium,
 	"patch": RiskMedium, "nano": RiskMedium, "vi": RiskMedium, "vim": RiskMedium,
 	"openssl": RiskMedium, "crontab": RiskMedium, "gpg": RiskMedium,
-	"sftp": RiskMedium, "ftp": RiskMedium,
+	"sftp": RiskMedium, "ftp": RiskMedium, "terraform": RiskMedium,
+	"helm": RiskMedium, "aws": RiskMedium, "rm": RiskMedium,
 
 	// High: destructive, system-modifying.
-	"rm": RiskHigh, "rmdir": RiskHigh, "chmod": RiskHigh, "chown": RiskHigh,
+	"rmdir": RiskHigh, "chmod": RiskHigh, "chown": RiskHigh,
 	"chgrp": RiskHigh, "kill": RiskHigh, "pkill": RiskHigh, "killall": RiskHigh,
 	"ssh": RiskHigh, "scp": RiskHigh, "rsync": RiskHigh, "docker": RiskHigh,
 	"kubectl": RiskHigh, "systemctl": RiskHigh, "service": RiskHigh, "nc": RiskHigh,
@@ -128,6 +129,7 @@ var commandRiskTable = map[string]RiskLevel{
 	"systemd-run": RiskHigh, "at": RiskHigh, "batch": RiskHigh, "tmux": RiskHigh,
 	"screen": RiskHigh, "start-stop-daemon": RiskHigh, "nsenter": RiskHigh,
 	"unshare": RiskHigh, "bwrap": RiskHigh, "firejail": RiskHigh, "proot": RiskHigh,
+	"cryptsetup": RiskHigh, "zpool": RiskHigh, "zfs": RiskHigh, "mdadm": RiskHigh,
 
 	// Critical: privilege escalation, always dangerous.
 	"sudo": RiskCritical, "su": RiskCritical, "doas": RiskCritical,
@@ -142,6 +144,7 @@ var commandRiskTable = map[string]RiskLevel{
 	"ip6tables": RiskCritical, "nft": RiskCritical, "chattr": RiskCritical,
 	"visudo": RiskCritical, "eval": RiskCritical, "exec": RiskCritical,
 	"source": RiskCritical, "runc": RiskCritical, "crun": RiskCritical, ".": RiskCritical,
+	"wipefs": RiskCritical, "blkdiscard": RiskCritical, "lvremove": RiskCritical,
 
 	// Critical: shells execute arbitrary nested commands. The guard parses a
 	// literal -c script recursively; an opaque shell (stdin or a script file)
@@ -158,10 +161,51 @@ var argumentModifiers = map[string][]ArgModifier{
 	"git": {
 		{Args: []string{"push", "--force"}, Level: RiskCritical},
 		{Args: []string{"push", "-f"}, Level: RiskCritical},
+		{Args: []string{"push", "--force-with-lease"}, Level: RiskHigh},
+		{Args: []string{"push", "--force-if-includes"}, Level: RiskHigh},
 		{Args: []string{"push"}, Level: RiskHigh},
 		{Args: []string{"reset", "--hard"}, Level: RiskHigh},
 		{Args: []string{"clean", "-f", "-d"}, Level: RiskHigh},
 		{Args: []string{"clean", "-f"}, Level: RiskHigh},
+		{Args: []string{"branch", "-D"}, Level: RiskHigh},
+		{Args: []string{"branch", "-d"}, Level: RiskHigh},
+		{Args: []string{"branch", "--delete"}, Level: RiskHigh},
+		{Args: []string{"tag", "-d"}, Level: RiskHigh},
+		{Args: []string{"tag", "--delete"}, Level: RiskHigh},
+		{Args: []string{"tag", "-f"}, Level: RiskHigh},
+		{Args: []string{"tag", "--force"}, Level: RiskHigh},
+	},
+	"terraform": {
+		{Args: []string{"state", "rm"}, Level: RiskHigh},
+		{Args: []string{"state", "mv"}, Level: RiskHigh},
+		{Args: []string{"state", "push"}, Level: RiskHigh},
+		{Args: []string{"state", "replace-provider"}, Level: RiskHigh},
+		{Args: []string{"workspace", "delete"}, Level: RiskHigh},
+		{Args: []string{"force-unlock"}, Level: RiskHigh},
+	},
+	"aws": {
+		{Args: []string{"s3", "rm"}, Level: RiskHigh},
+		{Args: []string{"s3", "rb"}, Level: RiskHigh},
+		{Args: []string{"s3", "mv"}, Level: RiskHigh},
+		{Args: []string{"s3", "sync", "--delete"}, Level: RiskHigh},
+		{Args: []string{"s3api", "delete-object"}, Level: RiskHigh},
+		{Args: []string{"s3api", "delete-bucket"}, Level: RiskHigh},
+		{Args: []string{"s3api", "delete-objects"}, Level: RiskHigh},
+		{Args: []string{"ec2", "terminate-instances"}, Level: RiskHigh},
+		{Args: []string{"ec2", "stop-instances"}, Level: RiskHigh},
+		{Args: []string{"ec2", "reboot-instances"}, Level: RiskHigh},
+		{Args: []string{"ec2", "delete-volume"}, Level: RiskHigh},
+		{Args: []string{"ec2", "delete-snapshot"}, Level: RiskHigh},
+		{Args: []string{"ec2", "delete-security-group"}, Level: RiskHigh},
+		{Args: []string{"rds", "delete-db-instance"}, Level: RiskHigh},
+		{Args: []string{"rds", "delete-db-cluster"}, Level: RiskHigh},
+		{Args: []string{"dynamodb", "delete-table"}, Level: RiskHigh},
+		{Args: []string{"dynamodb", "delete-item"}, Level: RiskHigh},
+		{Args: []string{"lambda", "delete-function"}, Level: RiskHigh},
+		{Args: []string{"cloudformation", "delete-stack"}, Level: RiskHigh},
+		{Args: []string{"iam", "delete-user"}, Level: RiskHigh},
+		{Args: []string{"iam", "delete-role"}, Level: RiskHigh},
+		{Args: []string{"iam", "delete-policy"}, Level: RiskHigh},
 	},
 	"curl": {
 		{Args: []string{"-X", "POST"}, Level: RiskHigh},
@@ -240,6 +284,263 @@ var argumentModifiers = map[string][]ArgModifier{
 	"tar": {{Args: []string{"--to-command"}, Level: RiskCritical}},
 }
 
+// subcommandSpec refines a command's base level from its verb. valueFlags are
+// global options that consume the next token, so their values are not mistaken
+// for the verb (for example kubectl -n prod get pods).
+type subcommandSpec struct {
+	levels     map[string]RiskLevel
+	valueFlags map[string]bool
+}
+
+// subcommandRisks distinguishes read-only and destructive verbs for tools that
+// expose several very different operations behind one binary. A missing verb
+// falls back to the command's table level, which stays conservative.
+var subcommandRisks = map[string]subcommandSpec{
+	"docker": {
+		levels: map[string]RiskLevel{
+			"ps": RiskLow, "logs": RiskLow, "inspect": RiskLow, "images": RiskLow,
+			"version": RiskLow, "info": RiskLow, "stats": RiskLow, "top": RiskLow,
+			"port": RiskLow, "diff": RiskLow, "history": RiskLow, "events": RiskLow,
+			"search": RiskLow, "help": RiskLow, "--help": RiskLow, "-h": RiskLow,
+			"--version": RiskLow,
+			"pull":      RiskMedium, "login": RiskMedium, "logout": RiskMedium,
+			"tag": RiskMedium, "save": RiskMedium, "load": RiskMedium,
+			"export": RiskMedium, "import": RiskMedium, "cp": RiskMedium,
+			"run": RiskHigh, "exec": RiskHigh, "rm": RiskHigh, "rmi": RiskHigh,
+			"kill": RiskHigh, "stop": RiskHigh, "start": RiskHigh, "restart": RiskHigh,
+			"pause": RiskHigh, "unpause": RiskHigh, "update": RiskHigh,
+			"push": RiskHigh, "build": RiskHigh, "commit": RiskHigh,
+		},
+		valueFlags: map[string]bool{
+			"-H": true, "--host": true, "--context": true, "--config": true,
+			"-l": true, "--log-level": true, "--tlscacert": true, "--tlscert": true,
+			"--tlskey": true,
+		},
+	},
+	"systemctl": {
+		levels: map[string]RiskLevel{
+			"status": RiskLow, "show": RiskLow, "cat": RiskLow, "help": RiskLow,
+			"list-units": RiskLow, "list-unit-files": RiskLow, "list-timers": RiskLow,
+			"list-sockets": RiskLow, "list-paths": RiskLow, "list-dependencies": RiskLow,
+			"is-active": RiskLow, "is-enabled": RiskLow, "is-failed": RiskLow,
+			"is-system-running": RiskLow, "--version": RiskLow, "--help": RiskLow,
+			"-h":       RiskLow,
+			"poweroff": RiskCritical, "reboot": RiskCritical, "halt": RiskCritical,
+			"kexec": RiskCritical, "suspend": RiskCritical, "hibernate": RiskCritical,
+			"hybrid-sleep": RiskCritical, "suspend-then-hibernate": RiskCritical,
+			"isolate": RiskCritical,
+		},
+		valueFlags: map[string]bool{
+			"-t": true, "--type": true, "--state": true, "-p": true,
+			"--property": true, "-H": true, "--host": true, "-M": true,
+			"--machine": true, "--root": true, "-n": true, "--lines": true,
+			"-o": true, "--output": true, "--signal": true, "--kill-whom": true,
+		},
+	},
+	"kubectl": {
+		levels: map[string]RiskLevel{
+			"get": RiskLow, "describe": RiskLow, "logs": RiskLow, "explain": RiskLow,
+			"api-resources": RiskLow, "api-versions": RiskLow, "version": RiskLow,
+			"cluster-info": RiskLow, "top": RiskLow, "help": RiskLow,
+			"--help": RiskLow, "-h": RiskLow, "--version": RiskLow,
+		},
+		valueFlags: map[string]bool{
+			"-n": true, "--namespace": true, "--context": true, "--kubeconfig": true,
+			"--cluster": true, "--user": true, "-s": true, "--server": true,
+			"--token": true, "--certificate-authority": true,
+			"--client-certificate": true, "--client-key": true, "--as": true,
+			"--as-group": true, "--request-timeout": true, "--cache-dir": true,
+			"-v": true, "--v": true, "--vmodule": true,
+		},
+	},
+	"git": {
+		levels: map[string]RiskLevel{
+			"status": RiskLow, "log": RiskLow, "diff": RiskLow, "show": RiskLow,
+			"branch": RiskLow, "remote": RiskLow, "tag": RiskLow, "rev-parse": RiskLow,
+			"describe": RiskLow, "blame": RiskLow, "shortlog": RiskLow,
+			"reflog": RiskLow, "whatchanged": RiskLow, "cherry": RiskLow,
+			"grep": RiskLow, "ls-files": RiskLow, "ls-tree": RiskLow,
+			"cat-file": RiskLow, "name-rev": RiskLow, "merge-base": RiskLow,
+			"rev-list": RiskLow, "count-objects": RiskLow, "version": RiskLow,
+			"help": RiskLow, "--version": RiskLow, "--help": RiskLow, "-h": RiskLow,
+		},
+		valueFlags: map[string]bool{
+			"-C": true, "-c": true, "--git-dir": true, "--work-tree": true,
+			"--namespace": true, "--exec-path": true, "--config-env": true,
+		},
+	},
+	"terraform": {
+		levels: map[string]RiskLevel{
+			"plan": RiskLow, "show": RiskLow, "output": RiskLow, "validate": RiskLow,
+			"fmt": RiskLow, "version": RiskLow, "providers": RiskLow, "graph": RiskLow,
+			"help": RiskLow, "--help": RiskLow, "-h": RiskLow,
+			"apply": RiskHigh, "import": RiskHigh, "taint": RiskHigh,
+			"untaint": RiskHigh, "refresh": RiskHigh,
+			"destroy": RiskCritical,
+		},
+		valueFlags: map[string]bool{
+			"-chdir": true, "-var": true, "-var-file": true, "-target": true,
+			"-state": true, "-state-out": true, "-backup": true,
+			"-lock-timeout": true, "-parallelism": true, "-refresh": true,
+			"-replace": true,
+		},
+	},
+	"helm": {
+		levels: map[string]RiskLevel{
+			"list": RiskLow, "ls": RiskLow, "status": RiskLow, "show": RiskLow,
+			"get": RiskLow, "history": RiskLow, "template": RiskLow, "lint": RiskLow,
+			"version": RiskLow, "search": RiskLow, "env": RiskLow, "verify": RiskLow,
+			"help": RiskLow, "--help": RiskLow, "-h": RiskLow,
+			"install": RiskHigh, "upgrade": RiskHigh, "uninstall": RiskHigh,
+			"delete": RiskHigh, "rollback": RiskHigh, "test": RiskHigh,
+		},
+		valueFlags: map[string]bool{
+			"-n": true, "--namespace": true, "--kube-context": true,
+			"--kubeconfig": true, "--registry-config": true,
+			"--repository-cache": true, "--repository-config": true,
+		},
+	},
+	"zpool": {
+		levels: map[string]RiskLevel{
+			"status": RiskLow, "list": RiskLow, "ls": RiskLow, "get": RiskLow,
+			"iostat": RiskLow, "history": RiskLow, "events": RiskLow,
+			"version": RiskLow, "help": RiskLow, "--help": RiskLow, "-h": RiskLow,
+			"destroy": RiskCritical, "labelclear": RiskCritical,
+		},
+		valueFlags: map[string]bool{"-o": true, "-T": true, "-d": true},
+	},
+	"zfs": {
+		levels: map[string]RiskLevel{
+			"list": RiskLow, "get": RiskLow, "holds": RiskLow, "diff": RiskLow,
+			"version": RiskLow, "help": RiskLow, "--help": RiskLow, "-h": RiskLow,
+			"destroy": RiskCritical,
+		},
+		valueFlags: map[string]bool{"-o": true, "-t": true, "-s": true, "-d": true},
+	},
+	"cryptsetup": {
+		levels: map[string]RiskLevel{
+			"status": RiskLow, "luksDump": RiskLow, "isLuks": RiskLow,
+			"benchmark": RiskLow, "help": RiskLow, "--help": RiskLow, "-h": RiskLow,
+			"--version":  RiskLow,
+			"luksFormat": RiskCritical, "erase": RiskCritical,
+			"luksErase": RiskCritical, "reencrypt": RiskCritical,
+		},
+		valueFlags: map[string]bool{
+			"--key-file": true, "--keyfile-size": true, "--keyfile-offset": true,
+			"--header": true, "--type": true, "--cipher": true, "--key-size": true,
+			"--hash": true, "--iter-time": true, "--pbkdf": true,
+			"--pbkdf-force-iterations": true, "--sector-size": true, "--label": true,
+			"--subsystem": true, "--uuid": true,
+		},
+	},
+	"mdadm": {
+		levels: map[string]RiskLevel{
+			"--detail": RiskLow, "-D": RiskLow, "--examine": RiskLow, "-E": RiskLow,
+			"--query": RiskLow, "-Q": RiskLow, "--help": RiskLow, "-h": RiskLow,
+			"--version": RiskLow, "-V": RiskLow,
+			"--zero-superblock": RiskCritical,
+		},
+		valueFlags: map[string]bool{
+			"--level": true, "-l": true, "--raid-devices": true, "-n": true,
+			"--spare-devices": true, "-x": true, "--chunk": true, "-c": true,
+			"--layout": true, "-p": true, "--bitmap": true, "-b": true,
+			"--name": true, "-N": true, "--uuid": true, "-u": true,
+			"--homehost": true, "-H": true, "--metadata": true, "-e": true,
+		},
+	},
+}
+
+// subcommandLevel finds the verb that controls risk for a multi-command tool.
+// It skips global options and their values, then falls back to scanning long
+// action flags (mdadm --detail /dev/md0) before giving up.
+func subcommandLevel(cmdName string, args []string) (RiskLevel, bool) {
+	spec, ok := subcommandRisks[cmdName]
+	if !ok {
+		return RiskLow, false
+	}
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			if i+1 < len(args) {
+				if level, ok := spec.levels[args[i+1]]; ok {
+					return level, true
+				}
+			}
+			break
+		}
+		if strings.HasPrefix(arg, "-") && arg != "-" {
+			name, _, hasValue := strings.Cut(arg, "=")
+			if level, ok := spec.levels[name]; ok {
+				return level, true
+			}
+			if spec.valueFlags[name] {
+				if !hasValue {
+					i++
+				}
+				continue
+			}
+			if len(arg) > 2 && arg[1] != '-' && spec.valueFlags[arg[:2]] {
+				continue
+			}
+			continue
+		}
+		if level, ok := spec.levels[arg]; ok {
+			return level, true
+		}
+		break
+	}
+
+	for _, arg := range args {
+		name, _, _ := strings.Cut(arg, "=")
+		if strings.HasPrefix(name, "--") {
+			if level, ok := spec.levels[name]; ok {
+				return level, true
+			}
+		}
+	}
+	return RiskLow, false
+}
+
+// rmRiskLevel detects recursive and forced deletion even when flags are grouped
+// in longer clusters such as -rfvv, which normalizeFlags intentionally leaves
+// intact. The result is a floor: callers take the maximum with the base level.
+func rmRiskLevel(args []string) RiskLevel {
+	recursive, force := false, false
+	for _, arg := range args {
+		if arg == "--" {
+			break
+		}
+		if strings.HasPrefix(arg, "--") {
+			switch arg {
+			case "--recursive":
+				recursive = true
+			case "--force":
+				force = true
+			}
+			continue
+		}
+		if len(arg) > 1 && arg[0] == '-' {
+			for _, ch := range arg[1:] {
+				switch ch {
+				case 'r', 'R':
+					recursive = true
+				case 'f':
+					force = true
+				}
+			}
+		}
+	}
+	switch {
+	case recursive && force:
+		return RiskCritical
+	case recursive:
+		return RiskHigh
+	default:
+		return RiskLow
+	}
+}
+
 // ClassifyCommand returns the risk level of a resolved command. args[0] is the
 // command name and args[1:] are its arguments.
 //
@@ -259,9 +560,21 @@ func ClassifyCommand(
 	if !known {
 		level = RiskMedium
 	}
+	overrideApplied := false
 	if levelStr, ok := overrides[cmdName]; ok {
 		if parsed, err := ParseRiskLevel(levelStr); err == nil {
 			level = parsed
+			overrideApplied = true
+		}
+	}
+
+	// A calibrated subcommand refines the command default. Without an explicit
+	// override it can lower or raise the level; with one, it can only raise the
+	// operator's floor so a broad override cannot silently unlock destructive
+	// verbs such as docker run or systemctl start.
+	if subLevel, ok := subcommandLevel(cmdName, args[1:]); ok {
+		if !overrideApplied || subLevel > level {
+			level = subLevel
 		}
 	}
 
@@ -269,6 +582,14 @@ func ClassifyCommand(
 	level = applyModifiers(normalizedArgs, cmdName, level, argumentModifiers)
 	for _, extra := range extraModifiers {
 		level = applyModifiers(normalizedArgs, cmdName, level, extra)
+	}
+
+	// Grouped flags such as rm -rfvv are deliberately not expanded by
+	// normalizeFlags, so rm gets an explicit floor.
+	if cmdName == "rm" {
+		if risk := rmRiskLevel(args[1:]); risk > level {
+			level = risk
+		}
 	}
 	return level
 }

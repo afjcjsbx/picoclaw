@@ -452,7 +452,7 @@ When `restrict_to_workspace: true`, the following tools are sandboxed:
 
 By default, the `exec` tool blocks these dangerous commands (the hardline subset stays blocked even when `enable_deny_patterns` is `false`):
 
-* `rm -rf`, `del /f`, `rmdir /s` — Bulk deletion
+* `del /f`, `rmdir /s` — Bulk deletion (Unix `rm` is risk-classified: plain `rm` is `medium`, `rm -r` is `high`, `rm -rf` is `critical`)
 * `format`, `mkfs`, `diskpart` — Disk formatting (always-on for disk formats)
 * `dd if=` — Disk imaging (always-on)
 * Writing to `/dev/sd[a-z]` — Direct disk writes (always-on)

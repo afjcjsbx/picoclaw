@@ -76,6 +76,84 @@ func TestShellTool_RiskClassifierExecute(t *testing.T) {
 	}
 }
 
+func TestShellTool_RiskCalibration(t *testing.T) {
+	t.Parallel()
+
+	tool := riskTestTool(t, config.ExecConfig{})
+	cwd := t.TempDir()
+
+	allowed := []string{
+		"docker ps",
+		"docker logs app",
+		"docker inspect app",
+		"systemctl status nginx",
+		"kubectl get pods",
+		"kubectl describe pod x",
+		"git status",
+		"git log --oneline",
+		"git diff",
+		"rm file",
+		"terraform plan",
+		"helm list",
+		"aws s3 ls",
+		"cryptsetup status /dev/sda",
+		"zpool status",
+		"mdadm --detail /dev/md0",
+	}
+	for _, command := range allowed {
+		if got := tool.guardCommand(command, cwd); got != "" {
+			t.Errorf("command should pass the guard: %s\n  got: %s", command, got)
+		}
+	}
+
+	blocked := []string{
+		"docker run image",
+		"systemctl start nginx",
+		"kubectl delete pod x",
+		"git branch -D feature",
+		"rm -r build",
+		"rm -rf build",
+		"wipefs /dev/sda",
+		"blkdiscard /dev/sda",
+		"lvremove vg/lv",
+		"cryptsetup luksFormat /dev/sda",
+		"zpool destroy tank",
+		"mdadm --zero-superblock /dev/sda",
+		"terraform destroy",
+		"helm uninstall release",
+		"aws s3 rm s3://bucket/key",
+	}
+	for _, command := range blocked {
+		if got := tool.guardCommand(command, cwd); got == "" {
+			t.Errorf("command should be blocked: %s", command)
+		}
+	}
+}
+
+func TestShellTool_RiskRmCalibration(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	medium := riskTestTool(t, config.ExecConfig{})
+	if got := medium.guardCommand("rm file", dir); got != "" {
+		t.Fatalf("plain rm should be allowed at medium, got %q", got)
+	}
+	if got := medium.guardCommand("rm -r build", dir); !strings.Contains(got, "risk classifier") {
+		t.Fatalf("rm -r should be blocked by the risk classifier at medium, got %q", got)
+	}
+	if got := medium.guardCommand("rm -rf build", dir); !strings.Contains(got, "risk classifier") {
+		t.Fatalf("rm -rf should be blocked by the risk classifier at medium, got %q", got)
+	}
+
+	high := riskTestTool(t, config.ExecConfig{RiskThreshold: "high"})
+	if got := high.guardCommand("rm -r build", dir); got != "" {
+		t.Fatalf("rm -r should be allowed at high, got %q", got)
+	}
+	if got := high.guardCommand("rm -rf build", dir); !strings.Contains(got, "risk classifier") {
+		t.Fatalf("rm -rf should stay blocked at high, got %q", got)
+	}
+}
+
 func TestShellTool_RiskThresholdCanBeRaised(t *testing.T) {
 	t.Parallel()
 
