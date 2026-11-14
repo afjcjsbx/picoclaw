@@ -142,7 +142,10 @@ func TestSendFileTool_CustomFilename(t *testing.T) {
 
 func TestSendFileTool_AllowsWhitelistedMediaTempPath(t *testing.T) {
 	workspace := t.TempDir()
-	mediaDir := media.TempDir()
+	mediaDir, mediaDirErr := media.TempDir()
+	if mediaDirErr != nil {
+		t.Fatal(mediaDirErr)
+	}
 	if err := os.MkdirAll(mediaDir, 0o700); err != nil {
 		t.Fatalf("MkdirAll(mediaDir) error = %v", err)
 	}

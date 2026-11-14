@@ -344,20 +344,21 @@ func sanitizeFilename(name string) string {
 }
 
 func writeManagedTempFile(prefix, filename string, data []byte) (string, error) {
-	if err := os.MkdirAll(media.TempDir(), 0o700); err != nil {
-		return "", err
-	}
 	pattern := prefix + "-*"
 	if ext := filepath.Ext(filename); ext != "" {
 		pattern += ext
 	}
-	f, err := os.CreateTemp(media.TempDir(), pattern)
+	f, err := media.CreateTemp(pattern)
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
 	if _, err := f.Write(data); err != nil {
-		os.Remove(f.Name())
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+		return "", err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(f.Name())
 		return "", err
 	}
 	return f.Name(), nil
@@ -478,7 +479,7 @@ func tryTranscodeSilkToWAV(ctx context.Context, silk []byte) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		tmpOut := filepath.Join(media.TempDir(), "weixin-voice-"+uuid.New().String()+".wav")
+		tmpOut := filepath.Join(filepath.Dir(tmpIn), "weixin-voice-"+uuid.New().String()+".wav")
 		wav, ok := func() ([]byte, bool) {
 			defer os.Remove(tmpIn)
 			defer os.Remove(tmpOut)

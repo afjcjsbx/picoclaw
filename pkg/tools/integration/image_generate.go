@@ -138,7 +138,7 @@ func (t *ImageGenerateTool) Execute(ctx context.Context, args map[string]any) *t
 
 	// Write the decoded image straight to disk through a size-bounded sink, so
 	// the decoded bytes are never held in memory alongside the base64 payload.
-	file, err := os.CreateTemp("", "picoclaw-generated-*")
+	file, err := media.CreateTemp("picoclaw-generated-*")
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("failed to create generated image file: %v", err))
 	}

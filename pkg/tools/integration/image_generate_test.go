@@ -222,14 +222,14 @@ func TestGenerateOpenRouterImage_RejectsOversized(t *testing.T) {
 	}
 }
 
-// isolateTempDir points os.TempDir at a fresh directory so a test can assert
-// which picoclaw-generated-* files exist after the tool runs.
+// isolateTempDir gives generated media a private instance home.
 func isolateTempDir(t *testing.T) string {
 	t.Helper()
-	dir := t.TempDir()
-	t.Setenv("TMPDIR", dir)
-	t.Setenv("TMP", dir)
-	t.Setenv("TEMP", dir)
+	t.Setenv("PICOCLAW_HOME", t.TempDir())
+	dir, err := media.TempDir()
+	if err != nil {
+		t.Fatal(err)
+	}
 	return dir
 }
 

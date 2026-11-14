@@ -1389,11 +1389,7 @@ func (c *MatrixChannel) stripSelfMention(text string) string {
 }
 
 func matrixMediaTempDir() (string, error) {
-	mediaDir := media.TempDir()
-	if err := os.MkdirAll(mediaDir, 0o700); err != nil {
-		return "", err
-	}
-	return mediaDir, nil
+	return media.TempDir()
 }
 
 func matrixLocalpart(userID id.UserID) string {

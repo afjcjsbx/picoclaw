@@ -49,6 +49,8 @@ released or expires.
 
 ## Temp directory
 
-`TempDir()` returns `os.TempDir()/picoclaw_media`, the shared location where
-channels and tools are expected to place downloaded or generated media before
-registering it.
+`TempDir()` returns a private directory beneath `<PICOCLAW_HOME>/tmp/media`
+(default home: `~/.picoclaw`) and an error if storage cannot be prepared.
+Channels and tools use `CreateTemp` or `WriteTemp` to create media exclusively
+with owner-only permissions before registering it. System `TMPDIR` and the
+working directory do not control this location.

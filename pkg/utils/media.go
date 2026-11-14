@@ -10,8 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/media"
 )
@@ -84,18 +82,6 @@ func DownloadFile(urlStr, filename string, opts DownloadOptions) string {
 	if opts.LoggerPrefix == "" {
 		opts.LoggerPrefix = "utils"
 	}
-
-	mediaDir := media.TempDir()
-	if err := os.MkdirAll(mediaDir, 0o700); err != nil {
-		logger.ErrorCF(opts.LoggerPrefix, "Failed to create media directory", map[string]any{
-			"error": err.Error(),
-		})
-		return ""
-	}
-
-	// Generate unique filename with UUID prefix to prevent conflicts
-	safeName := SanitizeFilename(filename)
-	localPath := filepath.Join(mediaDir, uuid.New().String()[:8]+"_"+safeName)
 
 	var client *http.Client
 	var err error
@@ -171,13 +157,15 @@ func DownloadFile(urlStr, filename string, opts DownloadOptions) string {
 		return ""
 	}
 
-	out, err := os.Create(localPath)
+	out, err := media.CreateTemp("download-*" + filepath.Ext(SanitizeFilename(filename)))
 	if err != nil {
 		logger.ErrorCF(opts.LoggerPrefix, "Failed to create local file", map[string]any{
 			"error": err.Error(),
 		})
 		return ""
 	}
+
+	localPath := out.Name()
 
 	if _, err := io.Copy(out, resp.Body); err != nil {
 		_ = out.Close()

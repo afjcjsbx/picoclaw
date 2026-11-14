@@ -195,7 +195,11 @@ func TestMatrixMediaTempDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("matrixMediaTempDir failed: %v", err)
 	}
-	if filepath.Base(dir) != media.TempDirName {
+	wantDir, err := media.TempDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dir != wantDir {
 		t.Fatalf("unexpected media dir base: %q", filepath.Base(dir))
 	}
 

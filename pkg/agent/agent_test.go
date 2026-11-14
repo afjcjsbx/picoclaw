@@ -1738,7 +1738,10 @@ func TestProcessMessage_MediaArtifactCanBeForwardedBySendFile(t *testing.T) {
 	telegramChannel := &fakeMediaChannel{fakeChannel: fakeChannel{id: "rid-telegram"}}
 	al.SetChannelManager(newStartedTestChannelManager(t, msgBus, store, "telegram", telegramChannel))
 
-	mediaDir := media.TempDir()
+	mediaDir, mediaDirErr := media.TempDir()
+	if mediaDirErr != nil {
+		t.Fatal(mediaDirErr)
+	}
 	if err := os.MkdirAll(mediaDir, 0o700); err != nil {
 		t.Fatalf("MkdirAll(mediaDir) error = %v", err)
 	}

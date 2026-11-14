@@ -713,7 +713,12 @@ func buildAllowReadPatterns(cfg *config.Config) []*regexp.Regexp {
 	}
 
 	compiled := compilePatterns(configured)
-	mediaDirPattern := regexp.MustCompile(mediaTempDirPattern())
+	dir, err := media.TempDir()
+	if err != nil {
+		logger.ErrorCF("agent", "Media storage unavailable", map[string]any{"error": err.Error()})
+		return compiled
+	}
+	mediaDirPattern := regexp.MustCompile(mediaTempDirPattern(dir))
 	for _, pattern := range compiled {
 		if pattern.String() == mediaDirPattern.String() {
 			return compiled
@@ -723,9 +728,9 @@ func buildAllowReadPatterns(cfg *config.Config) []*regexp.Regexp {
 	return append(compiled, mediaDirPattern)
 }
 
-func mediaTempDirPattern() string {
+func mediaTempDirPattern(dir string) string {
 	sep := regexp.QuoteMeta(string(os.PathSeparator))
-	return "^" + regexp.QuoteMeta(filepath.Clean(media.TempDir())) + "(?:" + sep + "|$)"
+	return "^" + regexp.QuoteMeta(filepath.Clean(dir)) + "(?:" + sep + "|$)"
 }
 
 // Close releases resources held by the agent's providers and session store.
