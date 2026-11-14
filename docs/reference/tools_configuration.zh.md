@@ -209,6 +209,7 @@ PICOCLAW_TOOLS_EXEC_ENABLED=false
 - 原始磁盘访问：`dd if=`、写入 `/dev/sd*` 等块设备
 - 递归删除根目录：`rm -rf /`、`rm -rf /*`
 - 电源状态变更：`shutdown`、`reboot`、`poweroff`
+- 自我保护：终止 PicoClaw 进程或服务、删除状态目录（`~/.picoclaw`、`$HOME/.picoclaw`、`$PICOCLAW_HOME` 或 `PICOCLAW_HOME`），或删除正在运行的可执行文件
 
 ### 默认拦截的命令模式
 

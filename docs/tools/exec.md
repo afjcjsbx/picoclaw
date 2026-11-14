@@ -227,6 +227,7 @@ Some catastrophic commands are an immutable floor: they stay blocked even when `
 - Raw disk access: `dd if=`, writing to `/dev/sd*` and other block devices
 - Recursive deletion of `/` such as `rm -rf /` or `rm -rf /*`
 - Power state changes: `shutdown`, `reboot`, `poweroff`
+- Self-protection: killing the PicoClaw process (`pkill`/`killall` with `picoclaw`, `PICOCLAW_SERVICE_NAME` or `$PICOCLAW_EXE`), stopping its systemd service, deleting the state directory (`~/.picoclaw`, `$HOME/.picoclaw`, `$PICOCLAW_HOME` or the resolved `PICOCLAW_HOME`), or deleting the running executable (including through `$PICOCLAW_EXE`, `which` or `command -v`). The executable, state directory and service name are resolved when the tool is created, so the floor follows the running instance.
 
 ## Default Blocked Command Patterns
 

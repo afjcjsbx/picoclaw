@@ -285,6 +285,120 @@ func stripQuotedHeredocBodies(command string) string {
 	}
 }
 
+// selfProtectionDeleteVerbs matches commands that remove files or directories,
+// including the PowerShell aliases of Remove-Item.
+const selfProtectionDeleteVerbs = `\b(?:rm|unlink|shred|truncate|del|erase|remove-item|ri|rd|rmdir)\b`
+
+// selfProtectionHardlinePatterns returns hardline patterns that keep the
+// running PicoClaw instance from terminating or deleting itself. The patterns
+// are built per tool so they reflect the current executable, state directory
+// and service name. They are always enforced, including when default deny
+// patterns are disabled or a broad custom allow rule is configured.
+func selfProtectionHardlinePatterns() []*regexp.Regexp {
+	patterns := []*regexp.Regexp{
+		// Killing the agent by process name.
+		regexp.MustCompile(`\b(?:pkill|killall)\b[^;|&\n]*\bpicoclaw(?:\.exe)?\b`),
+		// Killing the agent after resolving its PID.
+		regexp.MustCompile(`\bkill\b[^;|&\n]*(?:pgrep|pidof)\b[^;|&\n]*\bpicoclaw(?:\.exe)?\b`),
+		// Killing the agent by process name on Windows.
+		regexp.MustCompile(`\b(?:stop-process|spps)\b[^;|&\n]*(?:-name\s+)?picoclaw(?:\.exe)?\b`),
+		regexp.MustCompile(`\btaskkill(?:\.exe)?\b[^;|&\n]*\bpicoclaw(?:\.exe)?\b`),
+		// Stopping the agent service.
+		regexp.MustCompile(`\bsystemctl\b[^;|&\n]*\b(?:stop|kill)\b[^;|&\n]*\bpicoclaw(?:\.service)?\b`),
+		// Removing the default state directory through shell expansion.
+		regexp.MustCompile(
+			selfProtectionDeleteVerbs +
+				`[^;|&\n]*(?:~|\$home|\$\{home\})["']?/\.picoclaw\b`,
+		),
+		// Removing the executable through command lookup.
+		regexp.MustCompile(
+			selfProtectionDeleteVerbs +
+				`[^;|&\n]*(?:which|command\s+-v|type\s+-p)\s+picoclaw(?:\.exe)?\b`,
+		),
+		// Removing the state directory or executable through the variables
+		// exported to every command.
+		regexp.MustCompile(
+			selfProtectionDeleteVerbs +
+				`[^;|&\n]*\$(?:picoclaw_home|picoclaw_exe|\{picoclaw_home\}|\{picoclaw_exe\})` +
+				`(?:[^a-z0-9_]|$)`,
+		),
+		// Killing the agent through the exported executable variable.
+		regexp.MustCompile(
+			`\b(?:pkill|killall)\b[^;|&\n]*\$(?:picoclaw_exe|\{picoclaw_exe\})(?:[^a-z0-9_]|$)`,
+		),
+		// Stopping the agent through the exported service name.
+		regexp.MustCompile(
+			`\bsystemctl\b[^;|&\n]*\b(?:stop|kill)\b` +
+				`[^;|&\n]*\$(?:picoclaw_service_name|\{picoclaw_service_name\})(?:[^a-z0-9_]|$)`,
+		),
+	}
+
+	serviceName := strings.ToLower(strings.TrimSpace(os.Getenv(config.EnvServiceName)))
+	if serviceName == "" {
+		serviceName = "picoclaw"
+	}
+	if serviceName != "picoclaw" {
+		quoted := regexp.QuoteMeta(serviceName)
+		patterns = append(patterns,
+			regexp.MustCompile(`\b(?:pkill|killall)\b[^;|&\n]*\b`+quoted+`\b`),
+			regexp.MustCompile(
+				`\bsystemctl\b[^;|&\n]*\b(?:stop|kill)\b[^;|&\n]*\b`+quoted+`(?:\.service)?\b`,
+			),
+		)
+	}
+
+	var protectedPaths []string
+	if home := config.GetHome(); home != "" && home != "." {
+		protectedPaths = append(protectedPaths, home)
+		if resolved, err := filepath.EvalSymlinks(home); err == nil && resolved != "" {
+			protectedPaths = append(protectedPaths, resolved)
+		}
+	}
+	if executable, err := os.Executable(); err == nil && executable != "" {
+		protectedPaths = append(protectedPaths, executable)
+		if resolved, err := filepath.EvalSymlinks(executable); err == nil && resolved != "" {
+			protectedPaths = append(protectedPaths, resolved)
+		}
+	}
+
+	seen := make(map[string]struct{}, len(protectedPaths))
+	for _, path := range protectedPaths {
+		path = strings.TrimSpace(path)
+		if path == "" || path == "." {
+			continue
+		}
+		if absolute, err := filepath.Abs(path); err == nil {
+			path = absolute
+		}
+		if path == string(filepath.Separator) || filepath.Dir(path) == path {
+			continue
+		}
+		path = strings.TrimRight(path, string(filepath.Separator))
+		if runtime.GOOS == "windows" {
+			path = strings.TrimRight(path, "/")
+		}
+		if path == "" {
+			continue
+		}
+		variants := []string{path}
+		if runtime.GOOS == "windows" {
+			variants = append(variants, filepath.ToSlash(path))
+		}
+		for _, variant := range variants {
+			key := strings.ToLower(variant)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			quoted := regexp.QuoteMeta(key)
+			patterns = append(patterns, regexp.MustCompile(
+				selfProtectionDeleteVerbs+`[^;|&\n]*`+quoted+`(?:[^a-z0-9_]|$)`,
+			))
+		}
+	}
+	return patterns
+}
+
 func NewExecTool(workingDir string, restrict bool, allowPaths ...[]*regexp.Regexp) (*ExecTool, error) {
 	return NewExecToolWithConfig(workingDir, restrict, nil, allowPaths...)
 }
@@ -372,12 +486,16 @@ func NewExecToolWithConfig(
 		return nil, err
 	}
 
+	hardlinePatterns := make([]*regexp.Regexp, 0, len(hardlineDenyPatterns)+8)
+	hardlinePatterns = append(hardlinePatterns, hardlineDenyPatterns...)
+	hardlinePatterns = append(hardlinePatterns, selfProtectionHardlinePatterns()...)
+
 	return &ExecTool{
 		workingDir:           workingDir,
 		timeout:              timeout,
 		foregroundCap:        maxForegroundTimeout,
 		denyPatterns:         denyPatterns,
-		hardlineDenyPatterns: hardlineDenyPatterns,
+		hardlineDenyPatterns: hardlinePatterns,
 		customDenyPatterns:   customDenyPatterns,
 		allowPatterns:        nil,
 		customAllowPatterns:  customAllowPatterns,

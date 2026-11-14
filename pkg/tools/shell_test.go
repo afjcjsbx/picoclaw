@@ -3406,6 +3406,79 @@ func TestShellTool_HardlinePatternsAlwaysApply(t *testing.T) {
 	}
 }
 
+// TestShellTool_SelfProtectionHardline verifies that the agent cannot kill or
+// delete its own process, service, state directory or executable, even with
+// default deny patterns disabled and a broad allow rule configured.
+func TestShellTool_SelfProtectionHardline(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv(config.EnvHome, stateDir)
+	t.Setenv(config.EnvServiceName, "pico-agent")
+
+	cfg := &config.Config{
+		Tools: config.ToolsConfig{
+			Exec: config.ExecConfig{
+				EnableDenyPatterns:  false,
+				CustomAllowPatterns: []string{`.*`},
+			},
+		},
+	}
+	tool, err := NewExecToolWithConfig(t.TempDir(), false, cfg)
+	require.NoError(t, err)
+
+	executable, err := os.Executable()
+	require.NoError(t, err)
+
+	blocked := []string{
+		"pkill -f picoclaw",
+		"killall picoclaw",
+		"kill -9 $(pgrep -f picoclaw)",
+		"kill $(pidof picoclaw)",
+		"pkill -f pico-agent",
+		"Stop-Process -Name picoclaw -Force",
+		"taskkill /F /IM picoclaw.exe",
+		"systemctl stop picoclaw",
+		"systemctl kill picoclaw.service",
+		"systemctl --user stop pico-agent",
+		"rm -rf ~/.picoclaw",
+		`rm -rf "$HOME"/.picoclaw`,
+		"rm -rf ${HOME}/.picoclaw",
+		"rm -rf " + stateDir,
+		"rm -f " + executable,
+		`rm -rf "$PICOCLAW_HOME"`,
+		`rm -rf "${PICOCLAW_HOME}"`,
+		`rm -f "$PICOCLAW_EXE"`,
+		`rm -f "${PICOCLAW_EXE}"`,
+		`ri "$PICOCLAW_EXE"`,
+		`Remove-Item "$PICOCLAW_HOME"`,
+		`pkill -f "$PICOCLAW_EXE"`,
+		`systemctl stop "$PICOCLAW_SERVICE_NAME"`,
+		`systemctl stop "${PICOCLAW_SERVICE_NAME}"`,
+		`rm -f "$(which picoclaw)"`,
+		`rm -f "$(command -v picoclaw)"`,
+	}
+	for _, command := range blocked {
+		if got := tool.guardCommand(command, t.TempDir()); !strings.Contains(got, "dangerous pattern") {
+			t.Errorf("self-protection command %q should be blocked, got: %q", command, got)
+		}
+	}
+
+	allowed := []string{
+		"systemctl status picoclaw",
+		"systemctl stop other",
+		"pkill -f other",
+		"killall other",
+		"cat ~/.picoclaw/config.json",
+		"ls -l " + executable,
+		"rm -rf ./build",
+		"rm -rf /tmp/picoclaw-copy",
+	}
+	for _, command := range allowed {
+		if got := tool.guardCommand(command, t.TempDir()); got != "" {
+			t.Errorf("self-protection command %q should be allowed, got: %q", command, got)
+		}
+	}
+}
+
 func TestShellTool_BackticksInsideQuotedHeredocAreAllowed(t *testing.T) {
 	tool, err := NewExecTool("", false)
 	require.NoError(t, err)
