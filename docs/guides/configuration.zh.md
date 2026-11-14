@@ -343,8 +343,10 @@ PicoClaw 默认在沙箱环境中运行。Agent 只能访问配置的工作区�
 | `tools.exec.allow_remote` | bool | `false` | 允许从远程渠道（Telegram/Discord 等）执行 exec 工具 |
 | `tools.exec.enable_deny_patterns` | bool | `true` | 启用内置危险命令拦截（关闭后硬性底线规则和自定义拒绝规则仍然生效） |
 | `tools.exec.custom_deny_patterns` | string[] | `[]` | 自定义阻止的正则表达式模式；始终生效 |
-| `tools.exec.custom_allow_patterns` | string[] | `[]` | 自定义允许的正则表达式模式 |
+| `tools.exec.custom_allow_patterns` | string[] | `[]` | 整条命令匹配的正则表达式，仅豁免默认拒绝规则；会自动添加首尾锚点 |
+| `tools.exec.custom_risk_allow_patterns` | string[] | `[]` | 整条命令匹配的正则表达式，用于豁免风险分类器，受 `risk_allow_threshold` 限制 |
 | `tools.exec.risk_threshold` | string | `"medium"` | AST 风险分类器允许的最高风险级别（`low`、`medium`、`high`、`critical`）；`enable_deny_patterns` 为 `false` 时不生效 |
+| `tools.exec.risk_allow_threshold` | string | `"medium"` | `custom_risk_allow_patterns` 可豁免的最高风险级别；需显式设为 `high` 或 `critical` |
 | `tools.exec.risk_overrides` | object | `{}` | 按命令覆盖基础风险级别；参数修饰符仍可继续提升 |
 | `tools.exec.arg_modifiers` | object | `{}` | 按命令追加基于参数的风险提升规则 |
 | `tools.exec.env_set` | object | `{}` | 始终注入 exec 子进程的变量；属于受信任配置，会覆盖继承的同名变量 |

@@ -429,6 +429,7 @@ func DefaultConfig() *Config {
 				},
 				EnableDenyPatterns: true,
 				RiskThreshold:      "medium",
+				RiskAllowThreshold: "medium",
 				AllowRemote:        false,
 				TimeoutSeconds:     DefaultExecTimeoutSeconds,
 				MaxOutputChars:     DefaultExecMaxOutputChars,

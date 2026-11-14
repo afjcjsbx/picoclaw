@@ -66,23 +66,25 @@ func getSessionManager() *SessionManager {
 }
 
 type ExecTool struct {
-	workingDir           string
-	timeout              time.Duration
-	foregroundCap        time.Duration
-	denyPatterns         []*regexp.Regexp
-	hardlineDenyPatterns []*regexp.Regexp
-	customDenyPatterns   []*regexp.Regexp
-	allowPatterns        []*regexp.Regexp
-	customAllowPatterns  []*regexp.Regexp
-	allowedPathPatterns  []*regexp.Regexp
-	restrictToWorkspace  bool
-	allowRemote          bool
-	maxOutputChars       int
-	maxInlineResultChars int
-	baseEnv              map[string]string
-	state                *execStateStore
-	sessionManager       *SessionManager
-	riskGuard            *shellguard.Guard
+	workingDir              string
+	timeout                 time.Duration
+	foregroundCap           time.Duration
+	denyPatterns            []*regexp.Regexp
+	hardlineDenyPatterns    []*regexp.Regexp
+	customDenyPatterns      []*regexp.Regexp
+	allowPatterns           []*regexp.Regexp
+	customAllowPatterns     []*regexp.Regexp
+	customRiskAllowPatterns []*regexp.Regexp
+	riskAllowThreshold      shellguard.RiskLevel
+	allowedPathPatterns     []*regexp.Regexp
+	restrictToWorkspace     bool
+	allowRemote             bool
+	maxOutputChars          int
+	maxInlineResultChars    int
+	baseEnv                 map[string]string
+	state                   *execStateStore
+	sessionManager          *SessionManager
+	riskGuard               *shellguard.Guard
 }
 
 var _ AsyncExecutor = (*ExecTool)(nil)
@@ -399,6 +401,13 @@ func selfProtectionHardlinePatterns() []*regexp.Regexp {
 	return patterns
 }
 
+// compileFullMatchPattern anchors an operator-provided allow pattern so it must
+// match the whole command. A bare "git" pattern no longer exempts
+// "git push --force".
+func compileFullMatchPattern(pattern string) (*regexp.Regexp, error) {
+	return regexp.Compile(`^(?:` + pattern + `)$`)
+}
+
 func NewExecTool(workingDir string, restrict bool, allowPaths ...[]*regexp.Regexp) (*ExecTool, error) {
 	return NewExecToolWithConfig(workingDir, restrict, nil, allowPaths...)
 }
@@ -412,6 +421,8 @@ func NewExecToolWithConfig(
 	denyPatterns := make([]*regexp.Regexp, 0)
 	customDenyPatterns := make([]*regexp.Regexp, 0)
 	customAllowPatterns := make([]*regexp.Regexp, 0)
+	customRiskAllowPatterns := make([]*regexp.Regexp, 0)
+	riskAllowThreshold := shellguard.RiskMedium
 	var allowedPathPatterns []*regexp.Regexp
 	allowRemote := true
 	enableDefaultGuard := true
@@ -450,11 +461,25 @@ func NewExecToolWithConfig(
 			}
 		}
 		for _, pattern := range execConfig.CustomAllowPatterns {
-			re, err := regexp.Compile(pattern)
+			re, err := compileFullMatchPattern(pattern)
 			if err != nil {
 				return nil, fmt.Errorf("invalid custom allow pattern %q: %w", pattern, err)
 			}
 			customAllowPatterns = append(customAllowPatterns, re)
+		}
+		for _, pattern := range execConfig.RiskAllowPatterns {
+			re, err := compileFullMatchPattern(pattern)
+			if err != nil {
+				return nil, fmt.Errorf("invalid custom risk allow pattern %q: %w", pattern, err)
+			}
+			customRiskAllowPatterns = append(customRiskAllowPatterns, re)
+		}
+		if execConfig.RiskAllowThreshold != "" {
+			parsed, err := shellguard.ParseRiskLevel(execConfig.RiskAllowThreshold)
+			if err != nil {
+				return nil, fmt.Errorf("invalid risk_allow_threshold: %w", err)
+			}
+			riskAllowThreshold = parsed
 		}
 	} else {
 		denyPatterns = append(denyPatterns, defaultDenyPatterns...)
@@ -491,23 +516,25 @@ func NewExecToolWithConfig(
 	hardlinePatterns = append(hardlinePatterns, selfProtectionHardlinePatterns()...)
 
 	return &ExecTool{
-		workingDir:           workingDir,
-		timeout:              timeout,
-		foregroundCap:        maxForegroundTimeout,
-		denyPatterns:         denyPatterns,
-		hardlineDenyPatterns: hardlinePatterns,
-		customDenyPatterns:   customDenyPatterns,
-		allowPatterns:        nil,
-		customAllowPatterns:  customAllowPatterns,
-		allowedPathPatterns:  allowedPathPatterns,
-		restrictToWorkspace:  restrict,
-		allowRemote:          allowRemote,
-		maxOutputChars:       maxOutputChars,
-		maxInlineResultChars: maxInlineResultChars,
-		baseEnv:              newExecEnv(workingDir, execEnvSet, execEnvAllowlist),
-		state:                newExecStateStore(),
-		sessionManager:       getSessionManager(),
-		riskGuard:            riskGuard,
+		workingDir:              workingDir,
+		timeout:                 timeout,
+		foregroundCap:           maxForegroundTimeout,
+		denyPatterns:            denyPatterns,
+		hardlineDenyPatterns:    hardlinePatterns,
+		customDenyPatterns:      customDenyPatterns,
+		allowPatterns:           nil,
+		customAllowPatterns:     customAllowPatterns,
+		customRiskAllowPatterns: customRiskAllowPatterns,
+		riskAllowThreshold:      riskAllowThreshold,
+		allowedPathPatterns:     allowedPathPatterns,
+		restrictToWorkspace:     restrict,
+		allowRemote:             allowRemote,
+		maxOutputChars:          maxOutputChars,
+		maxInlineResultChars:    maxInlineResultChars,
+		baseEnv:                 newExecEnv(workingDir, execEnvSet, execEnvAllowlist),
+		state:                   newExecStateStore(),
+		sessionManager:          getSessionManager(),
+		riskGuard:               riskGuard,
 	}, nil
 }
 
@@ -2029,6 +2056,9 @@ func (t *ExecTool) commandMatchesAllowPattern(lower string) bool {
 	return false
 }
 
+// commandMatchesCustomAllowPattern reports whether a custom allow pattern
+// matches the whole command. These patterns exempt only the default deny set;
+// they do not affect the risk classifier.
 func (t *ExecTool) commandMatchesCustomAllowPattern(lower string) bool {
 	for _, pattern := range t.customAllowPatterns {
 		if pattern.MatchString(lower) {
@@ -2036,6 +2066,27 @@ func (t *ExecTool) commandMatchesCustomAllowPattern(lower string) bool {
 		}
 	}
 	return false
+}
+
+func (t *ExecTool) commandMatchesCustomRiskAllowPattern(lower string) bool {
+	for _, pattern := range t.customRiskAllowPatterns {
+		if pattern.MatchString(lower) {
+			return true
+		}
+	}
+	return false
+}
+
+// riskAllowExempts reports whether a matching custom risk allow pattern covers
+// the whole command and the command stays within riskAllowThreshold. It uses a
+// second guard with that threshold so a later critical command cannot hide
+// behind an earlier high-risk match.
+func (t *ExecTool) riskAllowExempts(command, lower string) bool {
+	if t.riskGuard == nil || !t.commandMatchesCustomRiskAllowPattern(lower) {
+		return false
+	}
+	allowGuard := t.riskGuard.WithThreshold(t.riskAllowThreshold)
+	return allowGuard != nil && allowGuard.Check(command) == nil
 }
 
 func patternsMatchAny(patterns []*regexp.Regexp, forms []string) bool {
@@ -2238,11 +2289,14 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 	}
 
 	// The AST classifier is the last built-in layer: it sees commands that the
-	// byte-level patterns cannot resolve, such as `x=rm; $x -rf /`. Custom allow
-	// patterns keep their existing meaning and exempt this default layer too.
-	if t.riskGuard != nil && !t.commandMatchesCustomAllowPattern(lower) {
+	// byte-level patterns cannot resolve, such as `x=rm; $x -rf /`. Only an
+	// explicit custom risk allow pattern can exempt it, and only up to
+	// riskAllowThreshold; custom_allow_patterns no longer bypasses this layer.
+	if t.riskGuard != nil {
 		if blocked := t.riskGuard.Check(cmd); blocked != nil {
-			return blocked.Error()
+			if !t.riskAllowExempts(cmd, lower) {
+				return blocked.Error()
+			}
 		}
 	}
 

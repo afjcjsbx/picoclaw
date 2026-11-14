@@ -1481,6 +1481,16 @@ type ExecConfig struct {
 	// variable names inherited by exec child processes. Use explicit names,
 	// never wildcards: allowlisting a secret exposes it to every command.
 	EnvAllowlist []string `json:"env_allowlist,omitempty" yaml:"-" env:"PICOCLAW_TOOLS_EXEC_ENV_ALLOWLIST"`
+
+	// RiskAllowPatterns exempts matching commands from the AST risk
+	// classifier. Patterns are anchored full-command matches. Exemptions are
+	// capped by RiskAllowThreshold, so high and critical commands require an
+	// explicit threshold raise.
+	RiskAllowPatterns []string `json:"custom_risk_allow_patterns" env:"PICOCLAW_TOOLS_EXEC_CUSTOM_RISK_ALLOW_PATTERNS"`
+	// RiskAllowThreshold is the highest risk level a RiskAllowPatterns match
+	// may exempt. Empty means medium; set high or critical explicitly to allow
+	// those levels.
+	RiskAllowThreshold string `json:"risk_allow_threshold,omitempty" env:"PICOCLAW_TOOLS_EXEC_RISK_ALLOW_THRESHOLD"`
 }
 
 // DefaultExecTimeoutSeconds is the foreground command timeout used when

@@ -180,6 +180,29 @@ func TestGuardRejectsInvalidConfig(t *testing.T) {
 	}
 }
 
+func TestGuardWithThreshold(t *testing.T) {
+	t.Parallel()
+
+	guard := mustGuard(t, "medium")
+	high := guard.WithThreshold(RiskHigh)
+	if high == nil {
+		t.Fatal("WithThreshold returned nil for a non-nil guard")
+	}
+
+	if blocked := guard.Check("chmod +x script.sh"); blocked == nil {
+		t.Fatal("medium guard should block high risk")
+	}
+	if blocked := high.Check("chmod +x script.sh"); blocked != nil {
+		t.Fatalf("high guard should allow high risk: %v", blocked)
+	}
+	if blocked := high.Check("rm -rf build"); blocked == nil {
+		t.Fatal("high guard should still block critical risk")
+	}
+	if blocked := guard.Check("chmod +x script.sh"); blocked == nil {
+		t.Fatal("WithThreshold must not mutate the original guard")
+	}
+}
+
 func TestGuardNestingLimit(t *testing.T) {
 	t.Parallel()
 

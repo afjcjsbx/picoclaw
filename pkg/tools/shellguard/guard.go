@@ -69,6 +69,18 @@ func (g *Guard) Check(command string) *BlockedError {
 	return g.checkScript(command, 0)
 }
 
+// WithThreshold returns a shallow copy of the guard using a different maximum
+// allowed level. It is used to measure a command against an operator's
+// risk-allow threshold without mutating the shared guard.
+func (g *Guard) WithThreshold(threshold RiskLevel) *Guard {
+	if g == nil {
+		return nil
+	}
+	clone := *g
+	clone.threshold = threshold
+	return &clone
+}
+
 func (g *Guard) checkScript(command string, depth int) *BlockedError {
 	if depth > maxShellNesting {
 		return NewBlockedError(

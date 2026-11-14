@@ -1444,7 +1444,8 @@ func TestShellTool_CustomAllowPatterns(t *testing.T) {
 		Tools: config.ToolsConfig{
 			Exec: config.ExecConfig{
 				EnableDenyPatterns:  true,
-				CustomAllowPatterns: []string{`\bgit\s+push\s+origin\b`},
+				RiskThreshold:       "high",
+				CustomAllowPatterns: []string{`git\s+push\s+origin\b.*`},
 			},
 		},
 	}
@@ -1480,6 +1481,7 @@ func TestShellTool_CustomAllowPatterns(t *testing.T) {
 		Tools: config.ToolsConfig{
 			Exec: config.ExecConfig{
 				EnableDenyPatterns: true,
+				RiskThreshold:      "high",
 			},
 		},
 	}
@@ -2850,7 +2852,7 @@ func TestShellTool_SchemelessURLDetection(t *testing.T) {
 func TestShellTool_CustomAllowDoesNotBypassDenyPatterns(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Tools.Exec.EnableDenyPatterns = true
-	cfg.Tools.Exec.CustomAllowPatterns = []string{`^jq\b`}
+	cfg.Tools.Exec.CustomAllowPatterns = []string{`jq\b.*`}
 	cfg.Tools.Exec.CustomDenyPatterns = []string{`\$env\b`, `(^|[^.$a-z0-9_])env([^a-z0-9_]|$)`}
 
 	tool, err := NewExecToolWithConfig(t.TempDir(), false, cfg)
@@ -2867,7 +2869,7 @@ func TestShellTool_CustomAllowDoesNotBypassDenyPatterns(t *testing.T) {
 func TestShellTool_CustomAllowStillPermitsSafeMatch(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Tools.Exec.EnableDenyPatterns = true
-	cfg.Tools.Exec.CustomAllowPatterns = []string{`^jq\b`}
+	cfg.Tools.Exec.CustomAllowPatterns = []string{`jq\b.*`}
 	cfg.Tools.Exec.CustomDenyPatterns = []string{`\$env\b`, `(^|[^.$a-z0-9_])env([^a-z0-9_]|$)`}
 
 	tool, err := NewExecToolWithConfig(t.TempDir(), false, cfg)
@@ -2884,7 +2886,7 @@ func TestShellTool_CustomAllowStillPermitsSafeMatch(t *testing.T) {
 func TestShellTool_CustomAllowDoesNotBecomeStrictAllowlist(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Tools.Exec.EnableDenyPatterns = true
-	cfg.Tools.Exec.CustomAllowPatterns = []string{`^jq\b`}
+	cfg.Tools.Exec.CustomAllowPatterns = []string{`jq\b.*`}
 	cfg.Tools.Exec.CustomDenyPatterns = []string{`\$env\b`, `(^|[^.$a-z0-9_])env([^a-z0-9_]|$)`}
 
 	tool, err := NewExecToolWithConfig(t.TempDir(), false, cfg)
@@ -3302,7 +3304,7 @@ func TestShellTool_CustomDenyCannotBeOverriddenByCustomAllow(t *testing.T) {
 		Tools: config.ToolsConfig{
 			Exec: config.ExecConfig{
 				EnableDenyPatterns:  true,
-				CustomAllowPatterns: []string{`\bgit\s+push\b`},
+				CustomAllowPatterns: []string{`git\s+push\b.*`},
 				CustomDenyPatterns:  []string{`\bgit\s+push\b`},
 			},
 		},
