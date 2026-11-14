@@ -2038,36 +2038,67 @@ func (t *ExecTool) commandMatchesCustomAllowPattern(lower string) bool {
 	return false
 }
 
+func patternsMatchAny(patterns []*regexp.Regexp, forms []string) bool {
+	for _, pattern := range patterns {
+		for _, form := range forms {
+			if pattern.MatchString(form) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// needsCanonicalDenyForms reports whether a command contains shell syntax whose
+// written form differs from its argv form. Simple commands without quoting,
+// escapes, expansions or substitutions are already covered by the raw text, so
+// they avoid a second AST parse.
+func needsCanonicalDenyForms(command string) bool {
+	return strings.ContainsAny(command, "'\"\\$`")
+}
+
 func (t *ExecTool) guardCommand(command, cwd string) string {
 	cmd := strings.TrimSpace(command)
 	lower := strings.ToLower(cmd)
 	// Quoted heredoc bodies are literal text: a backtick there cannot run a
 	// command, so deny patterns must not inspect it.
-	lowerForDeny := strings.ToLower(stripQuotedHeredocBodies(cmd))
+	stripped := stripQuotedHeredocBodies(cmd)
+	lowerForDeny := strings.ToLower(stripped)
+	denyForms := []string{lowerForDeny}
 
-	// Hardline patterns are an immutable floor: they apply even when the
-	// default deny set is disabled and no custom allow rule can exempt them.
-	for _, pattern := range t.hardlineDenyPatterns {
-		if pattern.MatchString(lowerForDeny) {
-			return "Command blocked by safety guard (dangerous pattern detected)"
+	// POSIX shells can hide a command behind fixed obfuscation such as
+	// $IFS, ANSI-C quoting or a backslash-newline. Resolve those forms and
+	// let the AST expose quote-spliced argv words. This runs even when the
+	// optional risk classifier is nil, so the hardline floor remains
+	// independent of enable_deny_patterns.
+	if runtime.GOOS != "windows" {
+		lowerForDeny = strings.ToLower(shellguard.NormalizeForDeny(stripped))
+		denyForms = []string{lowerForDeny}
+		if needsCanonicalDenyForms(cmd) {
+			for _, form := range shellguard.CanonicalCommands(cmd) {
+				denyForms = append(denyForms, strings.ToLower(form))
+			}
 		}
 	}
 
+	// Hardline patterns are an immutable floor: they apply even when the
+	// default deny set is disabled and no custom allow rule can exempt them.
+	if patternsMatchAny(t.hardlineDenyPatterns, denyForms) {
+		return "Command blocked by safety guard (dangerous pattern detected)"
+	}
+
 	// Custom deny patterns always apply: they are user-specified security rules
-	// that must not be bypassed by custom allow patterns (#3079).
-	for _, pattern := range t.customDenyPatterns {
-		if pattern.MatchString(lowerForDeny) {
-			return "Command blocked by safety guard (dangerous pattern detected)"
-		}
+	// that must not be bypassed by custom allow patterns (#3079). Matching the
+	// canonical AST words also catches quote-spliced forms such as r''m.
+	if patternsMatchAny(t.customDenyPatterns, denyForms) {
+		return "Command blocked by safety guard (dangerous pattern detected)"
 	}
 
 	// Default deny patterns can be exempted by custom allow patterns, so
 	// operators can selectively permit normally-blocked commands.
 	if !t.commandMatchesCustomAllowPattern(lower) {
-		for _, pattern := range t.denyPatterns {
-			if pattern.MatchString(lowerForDeny) {
-				return "Command blocked by safety guard (dangerous pattern detected)"
-			}
+		if patternsMatchAny(t.denyPatterns, []string{lowerForDeny}) {
+			return "Command blocked by safety guard (dangerous pattern detected)"
 		}
 	}
 

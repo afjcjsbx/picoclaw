@@ -229,6 +229,8 @@ Some catastrophic commands are an immutable floor: they stay blocked even when `
 - Power state changes: `shutdown`, `reboot`, `poweroff`
 - Self-protection: killing the PicoClaw process (`pkill`/`killall` with `picoclaw`, `PICOCLAW_SERVICE_NAME` or `$PICOCLAW_EXE`), stopping its systemd service, deleting the state directory (`~/.picoclaw`, `$HOME/.picoclaw`, `$PICOCLAW_HOME` or the resolved `PICOCLAW_HOME`), or deleting the running executable (including through `$PICOCLAW_EXE`, `which` or `command -v`). The executable, state directory and service name are resolved when the tool is created, so the floor follows the running instance.
 
+Hardline and custom deny patterns are matched against a normalized command. Fixed shell obfuscation is resolved first: `$IFS`/`${IFS}` become spaces, ANSI-C `$'...'` strings are decoded, backslash-newline continuations are joined, and the AST exposes quote-spliced argv words. As a result, `r''m -rf /`, `rm${IFS}-rf${IFS}/` and `$'\x72\x6d' -rf /` are evaluated as `rm -rf /`. This normalization runs independently of `enable_deny_patterns`, so disabling the risk classifier does not disable the hardline floor.
+
 ## Default Blocked Command Patterns
 
 These patterns are enabled by default and can be disabled with `enable_deny_patterns: false`:

@@ -458,6 +458,7 @@ By default, the `exec` tool blocks these dangerous commands (the hardline subset
 * Writing to `/dev/sd[a-z]` — Direct disk writes (always-on)
 * `shutdown`, `reboot`, `poweroff` — System shutdown (always-on)
 * Self-protection: killing the PicoClaw process or service, deleting its state directory (`~/.picoclaw`, `$HOME/.picoclaw`, `$PICOCLAW_HOME` or `PICOCLAW_HOME`), or deleting the running executable — Always-on
+* Hardline and custom deny matching resolves `$IFS`, ANSI-C `$'...'` strings, backslash-newline continuations and AST quote splicing before applying the patterns — Always-on
 * Windows PowerShell: recursive `Remove-Item`, `Clear-Disk`, `Format-Volume`, `vssadmin delete shadows`, `bcdedit /set`, `reg delete`, `icacls /grant Everyone`, `iwr ... | iex`, `taskkill /F`, `Stop-Process -Force`
 * Fork bomb `:(){ :|:& };:` — Always-on
 

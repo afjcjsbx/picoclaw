@@ -3406,6 +3406,96 @@ func TestShellTool_HardlinePatternsAlwaysApply(t *testing.T) {
 	}
 }
 
+// TestShellTool_HardlineASTBypass verifies that the always-on hardline floor
+// sees through quote splicing, $IFS, ANSI-C quoting and line continuations even
+// when the optional risk classifier and default deny patterns are disabled.
+func TestShellTool_HardlineASTBypass(t *testing.T) {
+	cfg := &config.Config{
+		Tools: config.ToolsConfig{
+			Exec: config.ExecConfig{
+				EnableDenyPatterns:  false,
+				CustomAllowPatterns: []string{`.*`},
+			},
+		},
+	}
+	tool, err := NewExecToolWithConfig(t.TempDir(), false, cfg)
+	require.NoError(t, err)
+
+	blocked := []string{
+		`rm -rf /`,
+		`rm${IFS}-rf${IFS}/`,
+		`rm$IFS-rf$IFS/`,
+		`rm${IFS}-rf${IFS}/*`,
+		`r''m -rf /`,
+		`r""m -rf /`,
+		`r$'\x6d' -rf /`,
+		`$'\x72\x6d' -rf /`,
+		"r\\\nm -rf /",
+		`sh -c 'r''m -rf /'`,
+		`sh -c "r''m -rf /"`,
+		`sh -c "$'\x72\x6d' -rf /"`,
+		`env sh -c "r''m -rf /"`,
+		`eval "r''m -rf /"`,
+		`trap "r''m -rf /" EXIT`,
+		`pkill -f pico''claw`,
+		`rm -rf ~/.pico''claw`,
+	}
+	for _, command := range blocked {
+		if got := tool.guardCommand(command, t.TempDir()); !strings.Contains(got, "dangerous pattern") {
+			t.Errorf("obfuscated hardline command %q should be blocked, got: %q", command, got)
+		}
+	}
+
+	allowed := []string{
+		`rm -rf ./build`,
+		`rm -f ./build/file`,
+		`echo hi`,
+		`pkill -f other`,
+	}
+	for _, command := range allowed {
+		if got := tool.guardCommand(command, t.TempDir()); got != "" {
+			t.Errorf("non-hardline command %q should be allowed, got: %q", command, got)
+		}
+	}
+}
+
+// TestShellTool_CustomDenyUsesASTWords verifies that custom deny regexes also
+// match the canonical AST words, so quote splicing cannot bypass them.
+func TestShellTool_CustomDenyUsesASTWords(t *testing.T) {
+	cfg := &config.Config{
+		Tools: config.ToolsConfig{
+			Exec: config.ExecConfig{
+				EnableDenyPatterns:  false,
+				CustomAllowPatterns: []string{`.*`},
+				CustomDenyPatterns:  []string{`\bgit\s+push\b`},
+			},
+		},
+	}
+	tool, err := NewExecToolWithConfig(t.TempDir(), false, cfg)
+	require.NoError(t, err)
+
+	blocked := []string{
+		`g''it push origin main`,
+		`g""it push origin main`,
+		`g$'\x69t' push origin main`,
+	}
+	for _, command := range blocked {
+		if got := tool.guardCommand(command, t.TempDir()); !strings.Contains(got, "dangerous pattern") {
+			t.Errorf("custom deny should match AST words for %q, got: %q", command, got)
+		}
+	}
+
+	allowed := []string{
+		`git status`,
+		`g''it status`,
+	}
+	for _, command := range allowed {
+		if got := tool.guardCommand(command, t.TempDir()); got != "" {
+			t.Errorf("non-matching command %q should be allowed, got: %q", command, got)
+		}
+	}
+}
+
 // TestShellTool_SelfProtectionHardline verifies that the agent cannot kill or
 // delete its own process, service, state directory or executable, even with
 // default deny patterns disabled and a broad allow rule configured.

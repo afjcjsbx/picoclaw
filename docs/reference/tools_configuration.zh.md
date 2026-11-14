@@ -210,6 +210,7 @@ PICOCLAW_TOOLS_EXEC_ENABLED=false
 - 递归删除根目录：`rm -rf /`、`rm -rf /*`
 - 电源状态变更：`shutdown`、`reboot`、`poweroff`
 - 自我保护：终止 PicoClaw 进程或服务、删除状态目录（`~/.picoclaw`、`$HOME/.picoclaw`、`$PICOCLAW_HOME` 或 `PICOCLAW_HOME`），或删除正在运行的可执行文件
+- 硬性底线和自定义拒绝规则匹配前会解析 `$IFS`、ANSI-C `$'...'` 字符串、反斜杠换行续行和 AST 引号拼接
 
 ### 默认拦截的命令模式
 

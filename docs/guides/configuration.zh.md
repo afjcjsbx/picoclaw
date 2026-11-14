@@ -325,6 +325,7 @@ PicoClaw 默认在沙箱环境中运行。Agent 只能访问配置的工作区�
 * 写入 `/dev/sd[a-z]` — 直接磁盘写入（始终生效）
 * `shutdown`、`reboot`、`poweroff` — 系统关机（始终生效）
 * 自我保护：终止 PicoClaw 进程或服务、删除状态目录（`~/.picoclaw`、`$HOME/.picoclaw`、`$PICOCLAW_HOME` 或 `PICOCLAW_HOME`），或删除正在运行的可执行文件 — 始终生效
+* 硬性底线和自定义拒绝规则匹配前会解析 `$IFS`、ANSI-C `$'...'` 字符串、反斜杠换行续行和 AST 引号拼接 — 始终生效
 * Windows PowerShell：递归 `Remove-Item`、`Clear-Disk`、`Format-Volume`、`vssadmin delete shadows`、`bcdedit /set`、`reg delete`、`icacls /grant Everyone`、`iwr ... | iex`、`taskkill /F`、`Stop-Process -Force`
 * Fork bomb `:(){ :|:& };:` — 始终生效
 

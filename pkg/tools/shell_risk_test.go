@@ -166,6 +166,13 @@ func TestShellTool_RiskThresholdCanBeRaised(t *testing.T) {
 	if got := critical.guardCommand("chmod +x script.sh", t.TempDir()); got != "" {
 		t.Fatalf("critical threshold should allow chmod, got %q", got)
 	}
+	dir := t.TempDir()
+	if got := critical.guardCommand("rm -rf /", dir); !strings.Contains(got, "dangerous pattern") {
+		t.Fatalf("critical threshold must not allow root deletion, got %q", got)
+	}
+	if got := critical.guardCommand("rm -rf build", dir); got != "" {
+		t.Fatalf("critical threshold should keep non-root rm -rf allowed, got %q", got)
+	}
 }
 
 func TestShellTool_RiskOverrides(t *testing.T) {
