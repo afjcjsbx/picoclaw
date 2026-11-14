@@ -28,7 +28,11 @@ func TestUnisolatedChildUsesPrivateScratch(t *testing.T) {
 		k, v, _ := strings.Cut(item, "=")
 		values[k] = v
 	}
-	rel, err := filepath.Rel(home, values["TMPDIR"])
+	canonicalHome, err := filepath.EvalSymlinks(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rel, err := filepath.Rel(canonicalHome, values["TMPDIR"])
 	if err != nil || !filepath.IsLocal(rel) {
 		t.Fatalf("scratch escaped home: %v", values)
 	}

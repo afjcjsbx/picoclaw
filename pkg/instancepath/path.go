@@ -40,6 +40,12 @@ func PrivateDir(parts ...string) (string, error) {
 	if err := secureDir(home); err != nil {
 		return "", err
 	}
+	// A user home may have symlinked ancestors (for example /var on macOS).
+	// Return canonical paths so tool allowlists and their symlink checks agree.
+	home, err = filepath.EvalSymlinks(home)
+	if err != nil {
+		return "", fmt.Errorf("resolve private directory: %w", err)
+	}
 	for _, part := range parts {
 		if !filepath.IsLocal(part) || part == "." || strings.ContainsAny(part, `/\`) {
 			return "", fmt.Errorf("invalid instance directory component %q", part)

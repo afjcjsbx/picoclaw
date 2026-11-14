@@ -19,7 +19,11 @@ func TestStorageFollowsInstanceHome(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer f.Close()
-		rel, err := filepath.Rel(home, f.Name())
+		canonicalHome, err := filepath.EvalSymlinks(home)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rel, err := filepath.Rel(canonicalHome, f.Name())
 		if err != nil || !filepath.IsLocal(rel) {
 			t.Fatalf("file escaped instance: %s", f.Name())
 		}
@@ -53,6 +57,23 @@ func TestPrivateDirRejectsSymlinks(t *testing.T) {
 	entries, err := os.ReadDir(outside)
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("wrote outside home: %v %v", entries, err)
+	}
+}
+
+func TestPrivateDirCanonicalizesHomeAncestors(t *testing.T) {
+	realParent := t.TempDir()
+	alias := filepath.Join(t.TempDir(), "home-link")
+	if err := os.Symlink(realParent, alias); err != nil {
+		t.Skip(err)
+	}
+	t.Setenv(EnvHome, filepath.Join(alias, ".picoclaw"))
+	dir, err := TempDir("media")
+	if err != nil {
+		t.Fatal(err)
+	}
+	realDir, err := filepath.EvalSymlinks(dir)
+	if err != nil || dir != realDir {
+		t.Fatalf("noncanonical storage path: %q, %q, %v", dir, realDir, err)
 	}
 }
 

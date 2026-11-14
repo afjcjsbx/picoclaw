@@ -13,7 +13,11 @@ func TestHistoryUsesInstanceHome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if path != filepath.Join(home, "history") {
+	canonicalHome, err := filepath.EvalSymlinks(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != filepath.Join(canonicalHome, "history") {
 		t.Fatalf("history = %q", path)
 	}
 	if err := os.WriteFile(path, []byte("keep history"), 0o600); err != nil {
