@@ -11,6 +11,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg"
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/instancepath"
 )
 
 // MountRule describes a source-to-target mount exposed inside the Linux
@@ -81,11 +82,7 @@ func CurrentConfig() config.IsolationConfig {
 // ResolveInstanceRoot resolves the instance root used to build the isolated
 // filesystem and redirected user environment.
 func ResolveInstanceRoot() (string, error) {
-	root := filepath.Clean(config.GetHome())
-	if root == "." {
-		return "", fmt.Errorf("instance root resolved to current directory")
-	}
-	return root, nil
+	return instancepath.Home()
 }
 
 // PrepareInstanceRoot creates the directories required by the isolation runtime.
@@ -537,10 +534,35 @@ func PrepareCommand(cmd *exec.Cmd) error {
 		if err != nil {
 			return err
 		}
+		if _, err := instancepath.PrivateDir("runtime-user-env", "tmp"); err != nil {
+			return err
+		}
 		ApplyUserEnv(cmd, root)
 		if err := applyPlatformIsolation(cmd, isolation, root); err != nil {
 			return err
 		}
+	} else {
+		dir, err := instancepath.TempDir("work")
+		if err != nil {
+			return err
+		}
+		setTempEnvironment(cmd, dir)
 	}
 	return nil
+}
+
+// Only the child receives these values; the host's global environment stays intact.
+func setTempEnvironment(cmd *exec.Cmd, dir string) {
+	env := cmd.Environ()
+	filtered := env[:0]
+	for _, item := range env {
+		key, _, _ := strings.Cut(item, "=")
+		if runtime.GOOS == "windows" {
+			key = strings.ToUpper(key)
+		}
+		if key != "TMPDIR" && key != "TMP" && key != "TEMP" {
+			filtered = append(filtered, item)
+		}
+	}
+	cmd.Env = append(filtered, "TMPDIR="+dir, "TMP="+dir, "TEMP="+dir)
 }

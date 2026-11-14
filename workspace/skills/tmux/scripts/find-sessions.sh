@@ -20,7 +20,7 @@ socket_name=""
 socket_path=""
 query=""
 scan_all=false
-socket_dir="${NANOBOT_TMUX_SOCKET_DIR:-${TMPDIR:-/tmp}/nanobot-tmux-sockets}"
+socket_dir="${NANOBOT_TMUX_SOCKET_DIR:-${PICOCLAW_HOME:-${HOME:?HOME or PICOCLAW_HOME must be set}/.picoclaw}/runtime-user-env/tmux}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in

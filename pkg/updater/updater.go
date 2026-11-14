@@ -24,6 +24,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/instancepath"
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
@@ -74,12 +75,15 @@ func DownloadAndExtractRelease(releaseURL, platform, arch string) (string, error
 		tmpPattern += ".archive"
 	}
 
-	tmpFile, err := os.CreateTemp("", tmpPattern)
+	tmpFile, err := instancepath.CreateTemp(tmpPattern)
 	if err != nil {
 		return "", err
 	}
 	tmpPath := tmpFile.Name()
-	defer tmpFile.Close()
+	defer func() {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
+	}()
 
 	resp, err := getWithRetry(assetURL)
 	if err != nil {
@@ -113,8 +117,12 @@ func DownloadAndExtractRelease(releaseURL, platform, arch string) (string, error
 		}
 	}
 
+	if err := tmpFile.Close(); err != nil {
+		return "", err
+	}
+
 	// Extract
-	destDir, err := os.MkdirTemp("", "picoclaw-extract-*")
+	destDir, err := instancepath.MkdirTemp("picoclaw-extract-*")
 	if err != nil {
 		os.Remove(tmpPath)
 		return "", err

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -13,6 +12,7 @@ import (
 	"github.com/pion/webrtc/v3/pkg/media/oggwriter"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
+	"github.com/sipeed/picoclaw/pkg/instancepath"
 	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
@@ -123,9 +123,17 @@ func (a *Agent) handleChunk(chunk bus.AudioChunk) {
 	a.mu.Lock()
 	acc, exists := a.sessions[key]
 	if !exists {
-		filename := filepath.Join(os.TempDir(), fmt.Sprintf("voice_%s_%d.ogg", key, time.Now().UnixNano()))
-		writer, err := oggwriter.New(filename, uint32(chunk.SampleRate), uint16(chunk.Channels))
+		file, err := instancepath.CreateTemp("voice-*.ogg")
 		if err != nil {
+			a.mu.Unlock()
+			logger.ErrorCF("voice-agent", "Failed to create recording", map[string]any{"error": err})
+			return
+		}
+		filename := file.Name()
+		writer, err := oggwriter.NewWith(file, uint32(chunk.SampleRate), uint16(chunk.Channels))
+		if err != nil {
+			_ = file.Close()
+			_ = os.Remove(filename)
 			a.mu.Unlock()
 			logger.ErrorCF("voice-agent", "Failed to create OggWriter", map[string]any{"error": err})
 			return

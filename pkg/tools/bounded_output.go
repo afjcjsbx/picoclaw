@@ -3,11 +3,11 @@ package tools
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"strconv"
 	"sync"
 	"unicode/utf8"
 
+	"github.com/sipeed/picoclaw/pkg/instancepath"
 	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
@@ -127,8 +127,8 @@ func (b *boundedOutput) createSpillFile() (*os.File, string, error) {
 }
 
 func (b *boundedOutput) createTempSpillFile() (*os.File, string, error) {
-	dir := tempArtifactDir()
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	dir, err := tempArtifactDir()
+	if err != nil {
 		return nil, "", err
 	}
 	file, err := os.CreateTemp(dir, "exec_*.log")
@@ -142,8 +142,8 @@ func (b *boundedOutput) createTempSpillFile() (*os.File, string, error) {
 // Keeping spills in a dedicated directory lets Close prune them with the same
 // retention policy as workspace artifacts instead of leaking files in the
 // system temp directory.
-func tempArtifactDir() string {
-	return filepath.Join(os.TempDir(), "picoclaw-artifacts", "tool")
+func tempArtifactDir() (string, error) {
+	return instancepath.PrivateDir("artifacts", "tool")
 }
 
 func (b *boundedOutput) writeSpillLocked(p []byte) error {

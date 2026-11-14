@@ -14,6 +14,7 @@ import (
 	"github.com/sipeed/picoclaw/cmd/picoclaw/internal"
 	"github.com/sipeed/picoclaw/pkg/agent"
 	"github.com/sipeed/picoclaw/pkg/bus"
+	"github.com/sipeed/picoclaw/pkg/instancepath"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
 )
@@ -93,9 +94,15 @@ func agentCmd(message, sessionKey, model string, debug bool) error {
 func interactiveMode(agentLoop *agent.AgentLoop, sessionKey string) {
 	prompt := fmt.Sprintf("%s You: ", internal.Logo)
 
+	history, err := prepareHistoryFile()
+	if err != nil {
+		fmt.Printf("History unavailable: %v\n", err)
+		simpleInteractiveMode(agentLoop, sessionKey)
+		return
+	}
 	rl, err := readline.NewEx(&readline.Config{
 		Prompt:          prompt,
-		HistoryFile:     filepath.Join(os.TempDir(), ".picoclaw_history"),
+		HistoryFile:     history,
 		HistoryLimit:    100,
 		InterruptPrompt: "^C",
 		EOFPrompt:       "exit",
@@ -173,4 +180,28 @@ func simpleInteractiveMode(agentLoop *agent.AgentLoop, sessionKey string) {
 
 		fmt.Printf("\n%s %s\n\n", internal.Logo, response)
 	}
+}
+
+func prepareHistoryFile() (string, error) {
+	home, err := instancepath.PrivateDir()
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(home, "history")
+	if info, err := os.Lstat(path); err == nil {
+		if !info.Mode().IsRegular() {
+			return "", fmt.Errorf("history must be a regular file: %s", path)
+		}
+	} else if !os.IsNotExist(err) {
+		return "", err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return "", err
+	}
+	if err := f.Chmod(0o600); err != nil {
+		_ = f.Close()
+		return "", err
+	}
+	return path, f.Close()
 }

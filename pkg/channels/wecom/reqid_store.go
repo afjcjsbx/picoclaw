@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/sipeed/picoclaw/pkg/fileutil"
+	"github.com/sipeed/picoclaw/pkg/instancepath"
 )
 
 type wecomRoute struct {
@@ -22,23 +25,30 @@ type reqIDStore struct {
 	routes map[string]wecomRoute
 }
 
-func newReqIDStore(path string) *reqIDStore {
+func newReqIDStore(path string) (*reqIDStore, error) {
 	if path == "" {
-		path = defaultReqIDStorePath()
+		var err error
+		path, err = defaultReqIDStorePath()
+		if err != nil {
+			return nil, err
+		}
 	}
 	s := &reqIDStore{
 		path:   path,
 		routes: make(map[string]wecomRoute),
 	}
-	_ = s.load()
-	return s
+	if err := s.load(); err != nil {
+		return nil, err
+	}
+	return s, nil
 }
 
-func defaultReqIDStorePath() string {
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		return filepath.Join(home, ".picoclaw", "wecom", "reqid-store.json")
+func defaultReqIDStorePath() (string, error) {
+	dir, err := instancepath.PrivateDir("wecom")
+	if err != nil {
+		return "", err
 	}
-	return filepath.Join(os.TempDir(), "picoclaw-wecom-reqid-store.json")
+	return filepath.Join(dir, "reqid-store.json"), nil
 }
 
 func (s *reqIDStore) Put(chatID, reqID string, chatType uint32, ttl time.Duration) error {
@@ -109,5 +119,5 @@ func (s *reqIDStore) saveLocked() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.path, data, 0o600)
+	return fileutil.WriteFileAtomic(s.path, data, 0o600)
 }

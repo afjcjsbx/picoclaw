@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/sipeed/picoclaw/pkg/instancepath"
 	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
@@ -46,7 +47,7 @@ func DownloadToFile(ctx context.Context, client *http.Client, req *http.Request,
 	}
 
 	// Create temp file.
-	tmpFile, err := os.CreateTemp("", "picoclaw-dl-*")
+	tmpFile, err := instancepath.CreateTemp("picoclaw-dl-*")
 	if err != nil {
 		return "", fmt.Errorf("failed to create temp file: %w", err)
 	}

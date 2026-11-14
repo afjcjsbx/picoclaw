@@ -26,6 +26,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	basechannels "github.com/sipeed/picoclaw/pkg/channels"
+	"github.com/sipeed/picoclaw/pkg/instancepath"
 	"github.com/sipeed/picoclaw/pkg/isolation"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/media"
@@ -475,14 +476,16 @@ func tryTranscodeSilkToWAV(ctx context.Context, silk []byte) ([]byte, error) {
 			continue
 		}
 
-		tmpIn, err := writeManagedTempFile("weixin-voice", "voice.silk", silk)
+		dir, err := instancepath.MkdirTemp("weixin-voice-*")
 		if err != nil {
 			return nil, err
 		}
-		tmpOut := filepath.Join(filepath.Dir(tmpIn), "weixin-voice-"+uuid.New().String()+".wav")
+		tmpIn, tmpOut := filepath.Join(dir, "input.silk"), filepath.Join(dir, "output.wav")
 		wav, ok := func() ([]byte, bool) {
-			defer os.Remove(tmpIn)
-			defer os.Remove(tmpOut)
+			defer os.RemoveAll(dir)
+			if err := os.WriteFile(tmpIn, silk, 0o600); err != nil {
+				return nil, false
+			}
 
 			runCtx, cancel := context.WithTimeout(ctx, weixinVoiceTranscodeTimeout)
 			cmd := exec.CommandContext(runCtx, bin, decoder.args(tmpIn, tmpOut)...)
