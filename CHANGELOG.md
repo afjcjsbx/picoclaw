@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Exec (Unix) now parses commands with an AST-based risk classifier before execution and blocks commands above `tools.exec.risk_threshold` (default `medium`). It catches variable indirection and quoting that the regex deny list cannot resolve, parses literal `sh -c` scripts recursively, and inspects common wrapper commands. Read-only verbs are distinguished for `docker`, `systemctl`, `kubectl` and `git`; `rm` is `medium`, `rm -r` is `high` and `rm -rf` is `critical`; block-device, LVM, ZFS, mdadm, Terraform, Helm and AWS delete operations are `high`/`critical`. Tune it with `risk_overrides` and `arg_modifiers`; it is part of the built-in guard set and is disabled with `enable_deny_patterns: false`.
 - Exec child processes now receive a sanitized environment instead of inheriting every PicoClaw process variable. Only safe variables (PATH, HOME, locale, proxies, and similar) are inherited; `tools.exec.env_allowlist` extends that set, `tools.exec.env_set` injects fixed values, and the new per-call `env` argument cannot override PATH, HOME, LD_*, or `PICOCLAW_*` variables. Workflows that relied on inherited credentials must allowlist the variable name or set the value explicitly.
 
 ## [0.5.1] - 2026-10-18

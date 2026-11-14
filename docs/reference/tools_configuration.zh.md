@@ -214,7 +214,7 @@ PICOCLAW_TOOLS_EXEC_ENABLED=false
 
 这些模式默认启用，可通过 `enable_deny_patterns: false` 关闭：
 
-- 删除命令：`rm -rf`、`del /f/q`、`rmdir /s`
+- 删除命令：`del /f/q`、`rmdir /s`（Unix `rm` 由风险分类器处理：基础 `medium`，`rm -r` 为 `high`，`rm -rf` 为 `critical`）
 - 磁盘操作：`format`、`mkfs`、`diskpart`、`dd if=`、写入 `/dev/sd*`
 - 系统操作：`shutdown`、`reboot`、`poweroff`
 - 命令替换：`$()`、`${}`、反引号

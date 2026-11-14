@@ -25,6 +25,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/isolation"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	fstools "github.com/sipeed/picoclaw/pkg/tools/fs"
+	"github.com/sipeed/picoclaw/pkg/tools/shellguard"
 )
 
 // maxOutputBufferSize caps the rolling output retained per session.
@@ -81,13 +82,13 @@ type ExecTool struct {
 	baseEnv              map[string]string
 	state                *execStateStore
 	sessionManager       *SessionManager
+	riskGuard            *shellguard.Guard
 }
 
 var _ AsyncExecutor = (*ExecTool)(nil)
 
 var (
 	defaultDenyPatterns = []*regexp.Regexp{
-		regexp.MustCompile(`\brm\s+-[rf]{1,2}\b`),
 		regexp.MustCompile(`\bdel\s+/[fq]\b`),
 		regexp.MustCompile(`\brmdir\s+/s\b`),
 		// Match disk wiping commands (must be followed by space/args)
@@ -106,9 +107,6 @@ var (
 		regexp.MustCompile("`[^`]+`"),
 		regexp.MustCompile(`\|\s*sh\b`),
 		regexp.MustCompile(`\|\s*bash\b`),
-		regexp.MustCompile(`;\s*rm\s+-[rf]`),
-		regexp.MustCompile(`&&\s*rm\s+-[rf]`),
-		regexp.MustCompile(`\|\|\s*rm\s+-[rf]`),
 		regexp.MustCompile(`<<\s*EOF`),
 		regexp.MustCompile(`\$\(\s*cat\s+`),
 		regexp.MustCompile(`\$\(\s*curl\s+`),
@@ -161,6 +159,9 @@ var (
 	// windowsDenyPatterns contains PowerShell-specific deny patterns that only
 	// apply on Windows, where commands are executed via powershell -Command.
 	windowsDenyPatterns = []*regexp.Regexp{
+		// The AST risk classifier is POSIX-only and skipped on Windows, so keep
+		// a regex floor for recursive/forced rm there.
+		regexp.MustCompile(`\brm\s+-[rf]{1,2}\b`),
 		// [Text.Encoding] used to construct command strings at runtime.
 		// Matches [Text.Encoding] and [System.Text.Encoding] variants.
 		regexp.MustCompile(`\[(?:\w+\.)?text\.encoding\]`),
@@ -278,15 +279,16 @@ func NewExecToolWithConfig(
 	customAllowPatterns := make([]*regexp.Regexp, 0)
 	var allowedPathPatterns []*regexp.Regexp
 	allowRemote := true
+	enableDefaultGuard := true
 	if len(allowPaths) > 0 {
 		allowedPathPatterns = allowPaths[0]
 	}
 
 	if cfg != nil {
 		execConfig := cfg.Tools.Exec
-		enableDenyPatterns := execConfig.EnableDenyPatterns
+		enableDefaultGuard = execConfig.EnableDenyPatterns
 		allowRemote = execConfig.AllowRemote
-		if enableDenyPatterns {
+		if enableDefaultGuard {
 			denyPatterns = append(denyPatterns, defaultDenyPatterns...)
 			if runtime.GOOS == "windows" {
 				denyPatterns = append(denyPatterns, windowsDenyPatterns...)
@@ -344,6 +346,11 @@ func NewExecToolWithConfig(
 		execEnvAllowlist = cfg.Tools.Exec.EnvAllowlist
 	}
 
+	riskGuard, err := newRiskGuard(cfg, enableDefaultGuard)
+	if err != nil {
+		return nil, err
+	}
+
 	return &ExecTool{
 		workingDir:           workingDir,
 		timeout:              timeout,
@@ -361,6 +368,7 @@ func NewExecToolWithConfig(
 		baseEnv:              newExecEnv(workingDir, execEnvSet, execEnvAllowlist),
 		state:                newExecStateStore(),
 		sessionManager:       getSessionManager(),
+		riskGuard:            riskGuard,
 	}, nil
 }
 
@@ -2056,6 +2064,15 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 					return "Command blocked by safety guard (path outside working dir)"
 				}
 			}
+		}
+	}
+
+	// The AST classifier is the last built-in layer: it sees commands that the
+	// byte-level patterns cannot resolve, such as `x=rm; $x -rf /`. Custom allow
+	// patterns keep their existing meaning and exempt this default layer too.
+	if t.riskGuard != nil && !t.commandMatchesCustomAllowPattern(lower) {
+		if blocked := t.riskGuard.Check(cmd); blocked != nil {
+			return blocked.Error()
 		}
 	}
 
