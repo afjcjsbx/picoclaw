@@ -3,11 +3,13 @@
 // It parses a command with mvdan.cc/sh/v3/syntax and walks the AST to find every
 // simple command, including commands nested in pipelines, conditionals and
 // command substitutions. Each command is mapped to a four-level risk score and
-// compared against a configurable threshold. This catches indirection that
-// regex deny lists miss (for example `x=rm; $x -rf /`) without spawning a
-// process, and it does not replace the actual shell: the exec tool still runs
-// the command through sh -c, so background sessions, PTY mode and process-tree
-// termination keep working.
+// compared against a configurable threshold. A script file named on the command
+// line (bash script.sh) is read from the workspace with a bounded allocation and
+// parsed the same way, so scripts are inspected instead of rejected. This
+// catches indirection that regex deny lists miss (for example `x=rm; $x -rf /`)
+// without spawning a process, and it does not replace the actual shell: the exec
+// tool still runs the command through sh -c, so background sessions, PTY mode
+// and process-tree termination keep working.
 package shellguard
 
 import (
@@ -101,6 +103,9 @@ var commandRiskTable = map[string]RiskLevel{
 	"nproc": RiskLow, "arch": RiskLow, "getent": RiskLow, "command": RiskLow,
 	"builtin": RiskLow, "nohup": RiskMedium, "nice": RiskLow, "ionice": RiskLow,
 	"stdbuf": RiskLow, "timeout": RiskMedium, "watch": RiskMedium, "trap": RiskLow,
+	// Wrappers whose risk comes from the command they launch. They are low on
+	// their own so the nested command, not the wrapper, decides.
+	"busybox": RiskLow, "flock": RiskLow, "chrt": RiskLow, "taskset": RiskLow,
 
 	// Medium: file modification, network reads, build tools.
 	"cp": RiskMedium, "mv": RiskMedium, "mkdir": RiskMedium, "touch": RiskMedium,
@@ -130,11 +135,13 @@ var commandRiskTable = map[string]RiskLevel{
 	"screen": RiskHigh, "start-stop-daemon": RiskHigh, "nsenter": RiskHigh,
 	"unshare": RiskHigh, "bwrap": RiskHigh, "firejail": RiskHigh, "proot": RiskHigh,
 	"cryptsetup": RiskHigh, "zpool": RiskHigh, "zfs": RiskHigh, "mdadm": RiskHigh,
+	"setpriv": RiskHigh, "capsh": RiskHigh, "machinectl": RiskHigh,
+	"lxc": RiskHigh, "incus": RiskHigh, "virsh": RiskHigh,
 
 	// Critical: privilege escalation, always dangerous.
 	"sudo": RiskCritical, "su": RiskCritical, "doas": RiskCritical,
-	"pkexec": RiskCritical, "dd": RiskCritical, "mkfs": RiskCritical,
-	"mkfs.ext2": RiskCritical, "mkfs.ext3": RiskCritical, "mkfs.ext4": RiskCritical,
+	"pkexec": RiskCritical, "runuser": RiskCritical, "dd": RiskCritical,
+	"mkfs": RiskCritical, "mkfs.ext2": RiskCritical, "mkfs.ext3": RiskCritical, "mkfs.ext4": RiskCritical,
 	"mkfs.xfs": RiskCritical, "mkfs.btrfs": RiskCritical, "mkfs.fat": RiskCritical,
 	"mkfs.vfat": RiskCritical, "mkfs.ntfs": RiskCritical, "fdisk": RiskCritical,
 	"parted": RiskCritical, "mount": RiskCritical, "umount": RiskCritical,
@@ -147,8 +154,8 @@ var commandRiskTable = map[string]RiskLevel{
 	"wipefs": RiskCritical, "blkdiscard": RiskCritical, "lvremove": RiskCritical,
 
 	// Critical: shells execute arbitrary nested commands. The guard parses a
-	// literal -c script recursively; an opaque shell (stdin or a script file)
-	// stays critical because its commands cannot be inspected.
+	// literal -c script and an in-workspace script file recursively; a shell
+	// that reads stdin stays critical because its commands cannot be inspected.
 	"sh": RiskCritical, "bash": RiskCritical, "zsh": RiskCritical,
 	"dash": RiskCritical, "fish": RiskCritical, "csh": RiskCritical,
 	"tcsh": RiskCritical, "ksh": RiskCritical, "pwsh": RiskCritical,
@@ -282,6 +289,12 @@ var argumentModifiers = map[string][]ArgModifier{
 		{Args: []string{"-L"}, Level: RiskHigh},
 	},
 	"tar": {{Args: []string{"--to-command"}, Level: RiskCritical}},
+	"busybox": {
+		{Args: []string{"--install"}, Level: RiskHigh},
+	},
+	"virsh": {
+		{Args: []string{"qemu-monitor-command"}, Level: RiskCritical},
+	},
 }
 
 // subcommandSpec refines a command's base level from its verb. valueFlags are
@@ -446,6 +459,65 @@ var subcommandRisks = map[string]subcommandSpec{
 			"--layout": true, "-p": true, "--bitmap": true, "-b": true,
 			"--name": true, "-N": true, "--uuid": true, "-u": true,
 			"--homehost": true, "-H": true, "--metadata": true, "-e": true,
+		},
+	},
+	"virsh": {
+		levels: map[string]RiskLevel{
+			"list": RiskLow, "domstate": RiskLow, "dominfo": RiskLow,
+			"domid": RiskLow, "domuuid": RiskLow, "domname": RiskLow,
+			"domifaddr": RiskLow, "domblklist": RiskLow, "domblkstat": RiskLow,
+			"domiflist": RiskLow, "domifstat": RiskLow, "domstats": RiskLow,
+			"dommemstat": RiskLow, "domcontrol": RiskLow, "vcpucount": RiskLow,
+			"vcpuinfo": RiskLow, "version": RiskLow, "nodeinfo": RiskLow,
+			"nodecpustats": RiskLow, "nodememstats": RiskLow, "sysinfo": RiskLow,
+			"capabilities": RiskLow, "hostname": RiskLow, "uri": RiskLow,
+			"net-list": RiskLow, "net-info": RiskLow, "net-dhcp-leases": RiskLow,
+			"pool-list": RiskLow, "pool-info": RiskLow, "vol-list": RiskLow,
+			"vol-info": RiskLow, "vol-path": RiskLow, "vol-key": RiskLow,
+			"snapshot-list": RiskLow, "snapshot-info": RiskLow,
+			"iface-list": RiskLow, "iface-info": RiskLow,
+			"nodedev-list": RiskLow, "nodedev-info": RiskLow,
+			"dumpxml": RiskLow, "help": RiskLow,
+			"--help": RiskLow, "-h": RiskLow, "--version": RiskLow, "-v": RiskLow,
+		},
+		valueFlags: map[string]bool{
+			"-c": true, "--connect": true, "-d": true, "--debug": true,
+			"-l": true, "--log": true, "-k": true, "--keepalive-interval": true,
+			"-K": true, "--keepalive-count": true, "--eol": true,
+			"--escape": true, "--serial": true,
+		},
+	},
+	"machinectl": {
+		levels: map[string]RiskLevel{
+			"list": RiskLow, "list-images": RiskLow, "list-machines": RiskLow,
+			"list-transfers": RiskLow, "status": RiskLow, "show": RiskLow,
+			"machine-status": RiskLow, "show-machine": RiskLow,
+			"image-status": RiskLow, "show-image": RiskLow,
+			"help": RiskLow, "--help": RiskLow, "-h": RiskLow,
+			"poweroff": RiskCritical, "reboot": RiskCritical, "halt": RiskCritical,
+			"kexec": RiskCritical,
+			"shell": RiskHigh, "login": RiskHigh, "open": RiskHigh,
+			"start": RiskHigh, "stop": RiskHigh, "terminate": RiskHigh,
+			"kill": RiskHigh, "enable": RiskHigh, "disable": RiskHigh,
+			"remove": RiskHigh, "clean": RiskHigh, "clone": RiskHigh,
+			"rename": RiskHigh, "set-image": RiskHigh, "set-property": RiskHigh,
+			"bind": RiskHigh, "mount": RiskHigh, "copy-from": RiskHigh,
+			"copy-to": RiskHigh, "import-tar": RiskHigh, "import-raw": RiskHigh,
+			"pull-tar": RiskHigh, "pull-raw": RiskHigh,
+		},
+	},
+	"lxc": {
+		levels: map[string]RiskLevel{
+			"list": RiskLow, "info": RiskLow, "show": RiskLow, "version": RiskLow,
+			"query": RiskLow, "alias": RiskLow, "help": RiskLow,
+			"--help": RiskLow, "-h": RiskLow, "--version": RiskLow,
+		},
+	},
+	"incus": {
+		levels: map[string]RiskLevel{
+			"list": RiskLow, "info": RiskLow, "show": RiskLow, "version": RiskLow,
+			"query": RiskLow, "alias": RiskLow, "help": RiskLow,
+			"--help": RiskLow, "-h": RiskLow, "--version": RiskLow,
 		},
 	},
 }

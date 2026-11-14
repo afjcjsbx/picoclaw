@@ -70,6 +70,13 @@ func TestClassifyCommand(t *testing.T) {
 		{name: "find exec", args: []string{"find", ".", "-exec", "rm", "{}", ";"}, want: RiskHigh},
 		{name: "kill term", args: []string{"kill", "1234"}, want: RiskHigh},
 		{name: "kill sigkill", args: []string{"kill", "-9", "1234"}, want: RiskCritical},
+		{name: "runuser escalates", args: []string{"runuser", "-u", "root", "ls"}, want: RiskCritical},
+		{name: "setpriv mutates privileges", args: []string{"setpriv", "--reuid", "0", "ls"}, want: RiskHigh},
+		{name: "capsh mutates capabilities", args: []string{"capsh", "--print"}, want: RiskHigh},
+		{name: "busybox install", args: []string{"busybox", "--install", "-s"}, want: RiskHigh},
+		{name: "flock wrapper base", args: []string{"flock", "/tmp/lock", "echo", "ok"}, want: RiskLow},
+		{name: "taskset wrapper base", args: []string{"taskset", "-c", "0-3", "echo", "ok"}, want: RiskLow},
+		{name: "chrt wrapper base", args: []string{"chrt", "-f", "50", "echo", "ok"}, want: RiskLow},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -151,6 +158,22 @@ func TestClassifySubcommands(t *testing.T) {
 		{name: "aws s3 ls", args: []string{"aws", "s3", "ls"}, want: RiskMedium},
 		{name: "aws s3 rm", args: []string{"aws", "s3", "rm", "s3://bucket/key"}, want: RiskHigh},
 		{name: "aws s3 rb", args: []string{"aws", "s3", "rb", "s3://bucket"}, want: RiskHigh},
+		{name: "virsh list", args: []string{"virsh", "list"}, want: RiskLow},
+		{name: "virsh connect then list", args: []string{"virsh", "-c", "qemu:///system", "list"}, want: RiskLow},
+		{name: "virsh domstate", args: []string{"virsh", "domstate", "vm"}, want: RiskLow},
+		{name: "virsh destroy", args: []string{"virsh", "destroy", "vm"}, want: RiskHigh},
+		{
+			name: "virsh monitor command",
+			args: []string{"virsh", "qemu-monitor-command", "vm", "info"},
+			want: RiskCritical,
+		},
+		{name: "machinectl list", args: []string{"machinectl", "list"}, want: RiskLow},
+		{name: "machinectl poweroff", args: []string{"machinectl", "poweroff"}, want: RiskCritical},
+		{name: "machinectl shell", args: []string{"machinectl", "shell", "user@m", "ls"}, want: RiskHigh},
+		{name: "lxc list", args: []string{"lxc", "list"}, want: RiskLow},
+		{name: "lxc delete", args: []string{"lxc", "delete", "c1"}, want: RiskHigh},
+		{name: "incus list", args: []string{"incus", "list"}, want: RiskLow},
+		{name: "incus delete", args: []string{"incus", "delete", "c1"}, want: RiskHigh},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

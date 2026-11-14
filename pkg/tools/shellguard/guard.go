@@ -1,16 +1,53 @@
 package shellguard
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"mvdan.cc/sh/v3/syntax"
 )
 
-// maxShellNesting bounds recursive analysis of sh -c scripts and wrapper
-// commands. Real commands nest one or two levels; the limit prevents hostile
-// input from turning the guard into an unbounded parser recursion.
-const maxShellNesting = 8
+const (
+	// maxShellNesting bounds recursive analysis of sh -c scripts and wrapper
+	// commands. Real commands nest one or two levels; the limit prevents hostile
+	// input from turning the guard into an unbounded parser recursion.
+	maxShellNesting = 8
+
+	// maxScriptFileBytes bounds a single inspected script file. The file is read
+	// once into memory for the parser, so a hard cap keeps the guard from turning
+	// a large script into an unbounded allocation on low-memory hardware.
+	maxScriptFileBytes = 1 << 20 // 1 MiB
+
+	// maxScriptInspectBytes bounds the total bytes read for nested script files
+	// during one Check call. Scripts stay live on the stack while their nested
+	// scripts are checked, so this caps peak memory independently of nesting.
+	maxScriptInspectBytes = 2 << 20 // 2 MiB
+)
+
+// CheckOptions supplies the execution context needed to inspect shell script
+// files. Without a Root, a script file stays opaque and is rejected, which is
+// the historical fail-closed behavior.
+type CheckOptions struct {
+	// Dir resolves relative script paths. It is the directory the command runs
+	// in, not necessarily the workspace root.
+	Dir string
+	// Root is the workspace root. A script whose resolved path is outside it is
+	// rejected instead of read, so the guard never reads arbitrary paths.
+	Root string
+}
+
+// checkEnv is the per-Check mutable inspection context. Dir and Root are
+// immutable; remaining tracks the script-byte budget shared by nested calls.
+type checkEnv struct {
+	dir       string
+	root      string
+	remaining int
+}
 
 // Guard classifies commands against a configured risk threshold.
 type Guard struct {
@@ -62,14 +99,35 @@ func NewGuard(
 
 // Check parses command and returns a BlockedError when any simple command in it
 // exceeds the configured threshold. A nil result means the command may run.
+// It is CheckWithOptions without a script inspection context, so `bash file.sh`
+// stays opaque and is rejected.
 func (g *Guard) Check(command string) *BlockedError {
+	return g.CheckWithOptions(command, CheckOptions{})
+}
+
+// CheckWithOptions is Check with the directory and workspace root used to
+// resolve and inspect script files named on the command line.
+func (g *Guard) CheckWithOptions(command string, opts CheckOptions) *BlockedError {
 	if g == nil {
 		return nil
 	}
-	return g.checkScript(command, 0)
+	env := &checkEnv{dir: opts.Dir, root: opts.Root, remaining: maxScriptInspectBytes}
+	return g.checkScript(command, env, 0)
 }
 
-func (g *Guard) checkScript(command string, depth int) *BlockedError {
+func (g *Guard) checkScript(command string, env *checkEnv, depth int) *BlockedError {
+	return g.checkScriptReader(strings.NewReader(command), summarize(command), env, depth)
+}
+
+// checkScriptReader parses and walks a script from reader. summary names the
+// source in a parse error; for a file it is the path, so file contents are not
+// copied just to build an error message.
+func (g *Guard) checkScriptReader(
+	reader io.Reader,
+	summary string,
+	env *checkEnv,
+	depth int,
+) *BlockedError {
 	if depth > maxShellNesting {
 		return NewBlockedError(
 			[]string{"<nested shell>"}, RiskCritical, g.threshold, "shell nesting limit exceeded",
@@ -77,10 +135,10 @@ func (g *Guard) checkScript(command string, depth int) *BlockedError {
 	}
 
 	parser := syntax.NewParser(syntax.Variant(syntax.LangBash))
-	file, err := parser.Parse(strings.NewReader(command), "")
+	file, err := parser.Parse(reader, "")
 	if err != nil {
 		return NewBlockedError(
-			[]string{summarize(command)},
+			[]string{summary},
 			RiskCritical,
 			g.threshold,
 			"command could not be parsed for risk classification",
@@ -99,13 +157,13 @@ func (g *Guard) checkScript(command string, depth int) *BlockedError {
 		if !ok {
 			return true
 		}
-		blocked = g.checkCall(call, depth)
+		blocked = g.checkCall(call, env, depth)
 		return blocked == nil
 	})
 	return blocked
 }
 
-func (g *Guard) checkCall(call *syntax.CallExpr, depth int) *BlockedError {
+func (g *Guard) checkCall(call *syntax.CallExpr, env *checkEnv, depth int) *BlockedError {
 	if len(call.Args) == 0 {
 		return nil
 	}
@@ -125,13 +183,13 @@ func (g *Guard) checkCall(call *syntax.CallExpr, depth int) *BlockedError {
 
 	name := baseCommand(first.text)
 	if isShellCommand(name) {
-		return g.checkShell(name, words, depth)
+		return g.checkShell(name, words, env, depth)
 	}
 	if name == "trap" {
-		return g.checkTrap(words, depth)
+		return g.checkTrap(words, env, depth)
 	}
 	if spec, ok := wrapperSpecs[name]; ok {
-		return g.checkWrapper(name, words, spec, depth)
+		return g.checkWrapper(name, words, spec, env, depth)
 	}
 	return g.classify(words)
 }
@@ -145,29 +203,38 @@ func (g *Guard) classify(words []word) *BlockedError {
 	return NewBlockedError(args, level, g.threshold, "command risk exceeds configured threshold")
 }
 
-func (g *Guard) checkShell(name string, words []word, depth int) *BlockedError {
+func (g *Guard) checkShell(name string, words []word, env *checkEnv, depth int) *BlockedError {
 	if depth >= maxShellNesting {
 		return NewBlockedError(
 			wordTexts(words), RiskCritical, g.threshold, "shell nesting limit exceeded",
 		)
 	}
 
-	script, ok := shellScriptArg(words[1:])
-	if !ok {
+	script, input := shellScriptArg(words[1:])
+	switch input {
+	case shellInputCommand:
+		if !script.literal {
+			return NewBlockedError(
+				wordTexts(words), RiskCritical, g.threshold, "shell script argument is dynamic",
+			)
+		}
+		return g.checkScript(script.text, env, depth+1)
+	case shellInputFile:
+		if !script.literal {
+			return NewBlockedError(
+				wordTexts(words), RiskCritical, g.threshold, "shell script path is dynamic",
+			)
+		}
+		return g.checkScriptFile(script.text, words, env, depth+1)
+	default:
 		return NewBlockedError(
 			wordTexts(words), RiskCritical, g.threshold,
 			"shell reads commands from stdin or a script file that cannot be inspected",
 		)
 	}
-	if !script.literal {
-		return NewBlockedError(
-			wordTexts(words), RiskCritical, g.threshold, "shell script argument is dynamic",
-		)
-	}
-	return g.checkScript(script.text, depth+1)
 }
 
-func (g *Guard) checkTrap(words []word, depth int) *BlockedError {
+func (g *Guard) checkTrap(words []word, env *checkEnv, depth int) *BlockedError {
 	if depth >= maxShellNesting {
 		return NewBlockedError(
 			wordTexts(words), RiskCritical, g.threshold, "command nesting limit exceeded",
@@ -192,12 +259,18 @@ func (g *Guard) checkTrap(words []word, depth int) *BlockedError {
 		if strings.HasPrefix(w.text, "-") {
 			continue
 		}
-		return g.checkScript(w.text, depth+1)
+		return g.checkScript(w.text, env, depth+1)
 	}
 	return nil
 }
 
-func (g *Guard) checkWrapper(name string, words []word, spec wrapperSpec, depth int) *BlockedError {
+func (g *Guard) checkWrapper(
+	name string,
+	words []word,
+	spec wrapperSpec,
+	env *checkEnv,
+	depth int,
+) *BlockedError {
 	if depth >= maxShellNesting {
 		return NewBlockedError(
 			wordTexts(words), RiskCritical, g.threshold, "command nesting limit exceeded",
@@ -214,6 +287,32 @@ func (g *Guard) checkWrapper(name string, words []word, spec wrapperSpec, depth 
 	}
 	if blocked := g.classify(words); blocked != nil {
 		return blocked
+	}
+
+	// capsh runs /bin/bash for everything after `--`, so its arguments are a
+	// shell invocation rather than an executable name.
+	if spec.shellAfterDoubleDash {
+		if rest, ok := argsAfterDoubleDash(words[1:]); ok {
+			bash := make([]word, 0, len(rest)+1)
+			bash = append(bash, word{text: "bash", literal: true})
+			bash = append(bash, rest...)
+			return g.checkShell("bash", bash, env, depth+1)
+		}
+	}
+
+	// Wrappers such as runuser -c and flock -c take a shell command string.
+	// Inspect it as a script instead of treating its first token as argv[0].
+	if script, found, dynamic := commandFlagValue(words[1:], spec.commandFlags); dynamic {
+		return NewBlockedError(
+			wordTexts(words), RiskCritical, g.threshold, "dynamic command string in "+name,
+		)
+	} else if found {
+		if !script.literal {
+			return NewBlockedError(
+				wordTexts(words), RiskCritical, g.threshold, "dynamic command string in "+name,
+			)
+		}
+		return g.checkScript(script.text, env, depth+1)
 	}
 
 	nested, found, dynamic := wrapperNested(words[1:], spec)
@@ -242,13 +341,13 @@ func (g *Guard) checkWrapper(name string, words []word, spec wrapperSpec, depth 
 				"xargs launching a shell cannot be inspected",
 			)
 		}
-		return g.checkShell(nestedName, nested, depth+1)
+		return g.checkShell(nestedName, nested, env, depth+1)
 	}
 	if nestedName == "trap" {
-		return g.checkTrap(nested, depth+1)
+		return g.checkTrap(nested, env, depth+1)
 	}
 	if next, ok := wrapperSpecs[nestedName]; ok {
-		return g.checkWrapper(nestedName, nested, next, depth+1)
+		return g.checkWrapper(nestedName, nested, next, env, depth+1)
 	}
 	return g.classify(nested)
 }
@@ -322,54 +421,221 @@ var shellValueFlags = map[string]bool{
 	"-o": true, "-O": true, "--rcfile": true, "--init-file": true,
 }
 
-// shellScriptArg extracts the literal -c script from a shell invocation. It
-// returns ok=false when the shell would read commands from stdin or a script
-// file, because those commands cannot be inspected statically.
-func shellScriptArg(words []word) (word, bool) {
+// shellInput describes how a shell invocation supplies its commands.
+type shellInput int
+
+const (
+	// shellInputOpaque is stdin or a form the guard cannot inspect.
+	shellInputOpaque shellInput = iota
+	// shellInputCommand is a literal -c / --command script string.
+	shellInputCommand
+	// shellInputFile is a script path passed as a positional argument.
+	shellInputFile
+)
+
+// shellScriptArg extracts the literal -c script or the script file path from a
+// shell invocation. It returns shellInputOpaque when the shell would read
+// commands from stdin, because those commands cannot be inspected statically.
+func shellScriptArg(words []word) (word, shellInput) {
 	for i := 0; i < len(words); i++ {
 		w := words[i]
 		if !w.literal {
-			return word{}, false
+			return word{}, shellInputOpaque
 		}
 		text := w.text
 		switch {
 		case text == "--":
-			return word{}, false
+			if i+1 < len(words) {
+				return words[i+1], shellInputFile
+			}
+			return word{}, shellInputOpaque
 		case text == "--command":
 			if i+1 < len(words) {
-				return words[i+1], true
+				return words[i+1], shellInputCommand
 			}
-			return word{}, false
+			return word{}, shellInputOpaque
 		case strings.HasPrefix(text, "--command="):
-			return word{text: strings.TrimPrefix(text, "--command="), literal: w.literal}, true
+			return word{text: strings.TrimPrefix(text, "--command="), literal: w.literal}, shellInputCommand
 		case shellValueFlags[text]:
 			i++
 		case text == "-c":
 			if i+1 < len(words) {
-				return words[i+1], true
+				return words[i+1], shellInputCommand
 			}
-			return word{}, false
+			return word{}, shellInputOpaque
 		case strings.HasPrefix(text, "-") && !strings.HasPrefix(text, "--"):
 			if strings.Contains(text[1:], "c") {
 				if i+1 < len(words) {
-					return words[i+1], true
+					return words[i+1], shellInputCommand
 				}
-				return word{}, false
+				return word{}, shellInputOpaque
 			}
 			if strings.ContainsAny(text[1:], "si") {
-				return word{}, false
+				return word{}, shellInputOpaque
 			}
 		case !strings.HasPrefix(text, "-"):
-			return word{}, false
+			return w, shellInputFile
 		}
 	}
-	return word{}, false
+	return word{}, shellInputOpaque
+}
+
+var errScriptOutsideWorkspace = errors.New("script file is outside the workspace")
+
+// checkScriptFile reads a script named on the command line and classifies it.
+// The file must resolve inside the workspace root; anything else stays opaque
+// and is rejected, so a command cannot point the guard at /etc or a symlink
+// that escapes the workspace.
+func (g *Guard) checkScriptFile(
+	path string,
+	words []word,
+	env *checkEnv,
+	depth int,
+) *BlockedError {
+	script, err := readWorkspaceScript(path, env)
+	if err != nil {
+		return NewBlockedError(
+			wordTexts(words), RiskCritical, g.threshold,
+			"shell script cannot be inspected: "+err.Error(),
+		)
+	}
+	return g.checkScriptReader(bytes.NewReader(script), summarize(path), env, depth)
+}
+
+// readWorkspaceScript resolves path against Dir, verifies it stays inside Root
+// and reads it with a bounded allocation. The returned bytes are the only copy;
+// the parser reads them in place, so no string copy is made.
+func readWorkspaceScript(path string, env *checkEnv) ([]byte, error) {
+	if path == "" {
+		return nil, errors.New("empty script path")
+	}
+	if env.root == "" {
+		return nil, errors.New("workspace root is not configured")
+	}
+
+	root, err := filepath.Abs(env.root)
+	if err != nil {
+		return nil, err
+	}
+	if resolved, resolveErr := filepath.EvalSymlinks(root); resolveErr == nil {
+		root = resolved
+	}
+
+	dir := env.dir
+	if dir == "" {
+		dir = root
+	}
+	candidate := path
+	if !filepath.IsAbs(candidate) {
+		candidate = filepath.Join(dir, candidate)
+	}
+	candidate, err = filepath.Abs(candidate)
+	if err != nil {
+		return nil, err
+	}
+
+	resolved, err := filepath.EvalSymlinks(candidate)
+	if err != nil {
+		return nil, fmt.Errorf("resolve %s: %w", path, err)
+	}
+	rel, err := filepath.Rel(root, resolved)
+	if err != nil || !filepath.IsLocal(rel) {
+		return nil, errScriptOutsideWorkspace
+	}
+
+	return readScriptFile(root, rel, env)
+}
+
+// readScriptFile reads a regular file up to maxScriptFileBytes. The stat size
+// seeds the buffer capacity so a typical script needs one allocation; the
+// shared remaining budget bounds peak memory across nested scripts.
+//
+// The file is opened through os.Root, so a symlink swapped in after the
+// EvalSymlinks check above cannot redirect the read outside the workspace.
+func readScriptFile(root, rel string, env *checkEnv) ([]byte, error) {
+	if env.remaining <= 0 {
+		return nil, errors.New("script inspection budget exhausted")
+	}
+
+	rootFS, err := os.OpenRoot(root)
+	if err != nil {
+		return nil, err
+	}
+	defer rootFS.Close()
+
+	// Stat before opening so a FIFO or device node named like a script is
+	// rejected without an open that could block waiting for a writer.
+	info, err := rootFS.Stat(rel)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, errors.New("not a regular file")
+	}
+	if info.Size() > maxScriptFileBytes {
+		return nil, fmt.Errorf("script exceeds %d bytes", maxScriptFileBytes)
+	}
+
+	f, err := rootFS.Open(rel)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	// Re-check the opened descriptor: the path could be swapped between Stat
+	// and Open, and os.Root permits device files inside the tree.
+	info, err = f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, errors.New("not a regular file")
+	}
+	if info.Size() > maxScriptFileBytes {
+		return nil, fmt.Errorf("script exceeds %d bytes", maxScriptFileBytes)
+	}
+
+	// Read at most one byte past the per-file and per-check limits so an
+	// oversized file is detected without ever loading it in full.
+	limit := int64(maxScriptFileBytes) + 1
+	if budget := int64(env.remaining) + 1; budget < limit {
+		limit = budget
+	}
+	buf := bytes.NewBuffer(make([]byte, 0, int(info.Size())))
+	if _, err := buf.ReadFrom(io.LimitReader(f, limit)); err != nil {
+		return nil, err
+	}
+	if buf.Len() > maxScriptFileBytes {
+		return nil, fmt.Errorf("script exceeds %d bytes", maxScriptFileBytes)
+	}
+	if buf.Len() > env.remaining {
+		return nil, errors.New("script inspection budget exhausted")
+	}
+	env.remaining -= buf.Len()
+
+	return buf.Bytes(), nil
 }
 
 type wrapperSpec struct {
 	valueFlags     map[string]bool
+	commandFlags   map[string]bool
 	skipPositional int
 	envAssignments bool
+	// shellAfterDoubleDash marks wrappers that execute /bin/bash with the
+	// arguments after `--` (capsh). Those arguments are parsed as a script.
+	shellAfterDoubleDash bool
+}
+
+// containerCLISpec is shared by lxc and incus: both take a subcommand, a
+// container name and then the command to run inside the container.
+var containerCLISpec = wrapperSpec{
+	valueFlags: map[string]bool{
+		"--project": true, "-P": true, "--remote": true,
+		"--env": true, "--cwd": true, "--user": true,
+		"--group": true, "--mode": true, "--width": true,
+		"--height": true,
+	},
+	skipPositional: 2,
 }
 
 var wrapperSpecs = map[string]wrapperSpec{
@@ -428,6 +694,64 @@ var wrapperSpecs = map[string]wrapperSpec{
 			"--replace": true,
 		},
 	},
+	"runuser": {
+		valueFlags: map[string]bool{
+			"-u": true, "--user": true, "-g": true, "--group": true,
+			"-G": true, "--supp-group": true, "-s": true, "--shell": true,
+			"-w": true, "--whitelist-environment": true,
+		},
+		commandFlags: map[string]bool{
+			"-c": true, "--command": true, "--session-command": true,
+		},
+	},
+	"setpriv": {
+		valueFlags: map[string]bool{
+			"--reuid": true, "--regid": true, "--groups": true,
+			"--inh-caps": true, "--ambient-caps": true,
+			"--bounding-set": true, "--securebits": true,
+			"--selinux-label": true, "--apparmor-profile": true,
+			"--landlock-access": true, "--landlock-rule": true,
+		},
+	},
+	"capsh": {
+		valueFlags: map[string]bool{
+			"--user": true, "--group": true, "--uid": true, "--gid": true,
+			"--shell": true, "--keep": true, "--caps": true, "--inh": true,
+			"--addamb": true, "--delamb": true, "--drop": true,
+			"--chroot": true, "--securebits": true,
+		},
+		shellAfterDoubleDash: true,
+	},
+	"machinectl": {
+		valueFlags: map[string]bool{
+			"-M": true, "--machine": true, "--uid": true, "--host": true,
+			"-H": true, "-i": true, "--identity": true, "-p": true,
+			"--property": true, "-n": true, "--lines": true, "-o": true,
+			"--output": true, "-s": true, "--signal": true,
+			"--kill-whom": true,
+		},
+		skipPositional: 2,
+	},
+	"lxc":     containerCLISpec,
+	"incus":   containerCLISpec,
+	"busybox": {},
+	"flock": {
+		valueFlags: map[string]bool{
+			"-w": true, "--wait": true, "--timeout": true,
+			"-E": true, "--conflict-exit-code": true,
+		},
+		commandFlags:   map[string]bool{"-c": true, "--command": true},
+		skipPositional: 1,
+	},
+	"chrt": {
+		valueFlags: map[string]bool{
+			"-T": true, "--sched-runtime": true,
+			"-P": true, "--sched-period": true,
+			"-D": true, "--sched-deadline": true,
+		},
+		skipPositional: 1,
+	},
+	"taskset": {skipPositional: 1},
 }
 
 func wrapperNested(words []word, spec wrapperSpec) ([]word, bool, bool) {
@@ -444,6 +768,13 @@ func wrapperNested(words []word, spec wrapperSpec) ([]word, bool, bool) {
 
 		text := w.text
 		if text == "--" {
+			// For wrappers that consume positional arguments (timeout, flock,
+			// lxc exec), "--" only ends option parsing: the command still comes
+			// after those positionals. Returning here would treat the next
+			// positional (a duration, lock file or container) as the command.
+			if positional > 0 {
+				continue
+			}
 			if i+1 < len(words) {
 				return words[i+1:], true, false
 			}
@@ -488,6 +819,53 @@ func isAssignment(s string) bool {
 		}
 	}
 	return true
+}
+
+// argsAfterDoubleDash returns the arguments after the first literal "--".
+func argsAfterDoubleDash(words []word) ([]word, bool) {
+	for i, w := range words {
+		if w.literal && w.text == "--" {
+			return words[i+1:], true
+		}
+	}
+	return nil, false
+}
+
+// commandFlagValue finds a flag whose value is a shell command string (-c for
+// runuser, flock and similar wrappers). The third result reports a dynamic word
+// before the flag: the effective flag cannot be resolved, so the caller must
+// stay fail-closed. After "--" the value is a positional argument, not a flag.
+func commandFlagValue(words []word, flags map[string]bool) (word, bool, bool) {
+	if len(flags) == 0 {
+		return word{}, false, false
+	}
+	for i := 0; i < len(words); i++ {
+		w := words[i]
+		if w.text == "--" {
+			return word{}, false, false
+		}
+		if !w.literal {
+			return word{}, false, true
+		}
+		text := w.text
+		if flags[text] {
+			if i+1 < len(words) {
+				return words[i+1], true, false
+			}
+			return word{}, false, false
+		}
+		if name, value, ok := strings.Cut(text, "="); ok && flags[name] {
+			return word{text: value, literal: true}, true, false
+		}
+		if strings.HasPrefix(text, "-") && !strings.HasPrefix(text, "--") && len(text) > 2 {
+			for flag := range flags {
+				if len(flag) == 2 && strings.HasPrefix(text, flag) {
+					return word{text: text[2:], literal: true}, true, false
+				}
+			}
+		}
+	}
+	return word{}, false, false
 }
 
 // hasCommandLookupFlag reports whether command(1) was invoked with -v/-V,

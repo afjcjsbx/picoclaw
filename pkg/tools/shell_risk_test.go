@@ -154,6 +154,61 @@ func TestShellTool_RiskRmCalibration(t *testing.T) {
 	}
 }
 
+func TestShellTool_RiskInspectsWorkspaceScripts(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	cfg := &config.Config{}
+	cfg.Tools.Exec.EnableDenyPatterns = true
+	tool, err := NewExecToolWithConfig(workspace, false, cfg)
+	if err != nil {
+		t.Fatalf("NewExecToolWithConfig: %v", err)
+	}
+
+	if err := os.WriteFile(
+		filepath.Join(workspace, "safe.sh"),
+		[]byte("#!/bin/sh\nls -la\n"),
+		0o644,
+	); err != nil {
+		t.Fatalf("write safe script: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(workspace, "risky.sh"),
+		[]byte("#!/bin/sh\nrm -rf /\n"),
+		0o644,
+	); err != nil {
+		t.Fatalf("write risky script: %v", err)
+	}
+	sub := filepath.Join(workspace, "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatalf("mkdir sub: %v", err)
+	}
+
+	if got := tool.guardCommand("bash safe.sh", workspace); got != "" {
+		t.Fatalf("safe workspace script should pass, got %q", got)
+	}
+	if got := tool.guardCommand("sh -e safe.sh arg", workspace); got != "" {
+		t.Fatalf("safe script with options should pass, got %q", got)
+	}
+	if got := tool.guardCommand("bash ../safe.sh", sub); got != "" {
+		t.Fatalf("script resolved from the execution cwd should pass, got %q", got)
+	}
+	if got := tool.guardCommand("bash risky.sh", workspace); !strings.Contains(got, "risk classifier") {
+		t.Fatalf("risky workspace script should be blocked, got %q", got)
+	}
+	if got := tool.guardCommand("bash missing.sh", workspace); !strings.Contains(got, "cannot be inspected") {
+		t.Fatalf("missing script should be blocked, got %q", got)
+	}
+
+	outside := filepath.Join(t.TempDir(), "outside.sh")
+	if err := os.WriteFile(outside, []byte("#!/bin/sh\nls\n"), 0o644); err != nil {
+		t.Fatalf("write outside script: %v", err)
+	}
+	if got := tool.guardCommand("bash "+outside, workspace); !strings.Contains(got, "outside the workspace") {
+		t.Fatalf("script outside the workspace should be blocked, got %q", got)
+	}
+}
+
 func TestShellTool_RiskThresholdCanBeRaised(t *testing.T) {
 	t.Parallel()
 

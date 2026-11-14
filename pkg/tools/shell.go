@@ -2070,8 +2070,17 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 	// The AST classifier is the last built-in layer: it sees commands that the
 	// byte-level patterns cannot resolve, such as `x=rm; $x -rf /`. Custom allow
 	// patterns keep their existing meaning and exempt this default layer too.
+	// Script files are inspected only inside the workspace: Dir resolves relative
+	// paths and Root bounds what the guard is willing to read.
 	if t.riskGuard != nil && !t.commandMatchesCustomAllowPattern(lower) {
-		if blocked := t.riskGuard.Check(cmd); blocked != nil {
+		root := t.workingDir
+		if root == "" {
+			root = cwd
+		}
+		if blocked := t.riskGuard.CheckWithOptions(cmd, shellguard.CheckOptions{
+			Dir:  cwd,
+			Root: root,
+		}); blocked != nil {
 			return blocked.Error()
 		}
 	}
