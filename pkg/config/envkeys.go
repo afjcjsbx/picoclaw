@@ -25,6 +25,9 @@ const (
 	// Default: ~/.picoclaw
 	EnvHome = instancepath.EnvHome
 
+	// EnvTempMaxBytes bounds host-managed temporary writes per process/instance.
+	EnvTempMaxBytes = instancepath.EnvTempMaxBytes
+
 	// EnvConfig overrides the full path to the JSON config file.
 	// Default: $PICOCLAW_HOME/config.json
 	EnvConfig = "PICOCLAW_CONFIG"

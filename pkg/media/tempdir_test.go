@@ -8,7 +8,26 @@ import (
 	"strings"
 	"testing"
 	"testing/iotest"
+
+	"github.com/sipeed/picoclaw/pkg/instancepath"
 )
+
+func TestStorageLimitRemovesPartialMedia(t *testing.T) {
+	t.Setenv("PICOCLAW_HOME", t.TempDir())
+	t.Setenv(instancepath.EnvTempMaxBytes, "8")
+	_, err := WriteTemp("quota-*", io.MultiReader(strings.NewReader("first"), strings.NewReader("second")))
+	if !errors.Is(err, instancepath.ErrStorageLimit) {
+		t.Fatalf("error = %v", err)
+	}
+	dir, err := TempDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := filepath.Glob(filepath.Join(dir, "quota-*"))
+	if err != nil || len(files) != 0 {
+		t.Fatalf("partial files remain: %v %v", files, err)
+	}
+}
 
 func TestWriteTempRemovesPartialFile(t *testing.T) {
 	t.Setenv("PICOCLAW_HOME", t.TempDir())

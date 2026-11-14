@@ -191,7 +191,7 @@ func TestRoomKindCache_EvictsOldestWhenFull(t *testing.T) {
 }
 
 func TestMatrixMediaTempDir(t *testing.T) {
-	dir, err := matrixMediaTempDir()
+	dir, err := media.TempDir()
 	if err != nil {
 		t.Fatalf("matrixMediaTempDir failed: %v", err)
 	}

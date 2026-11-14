@@ -32,3 +32,14 @@ installation and benchmark scripts may still use their own system scratch.
 Changing the working directory or `TMPDIR` does not select PicoClaw storage.
 Use a separate `PICOCLAW_HOME` for each independent profile. Existing global
 temporary directories are not adopted, chmodded, or removed automatically.
+
+## Storage budget
+
+Host-managed temporary files share a 512 MiB write budget per process and
+instance home across `tmp/media/run-*` and `tmp/work/run-*`. Set
+`PICOCLAW_TMP_MAX_BYTES` to a positive byte count to change it. Streaming writes
+are bounded; when space is unavailable the operation fails and removes partial
+output rather than deleting active files. Deleted files free space for later
+writes. The limit excludes retained artifacts and persistent state, which have
+their own lifetimes. It is not an OS filesystem quota: external subprocesses
+and archive extractors writing directly to paths need their own size limits.

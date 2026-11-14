@@ -82,12 +82,12 @@ func TempDir(kind string) (string, error) {
 }
 
 // CreateTemp creates a private working file. The caller must close and remove it.
-func CreateTemp(pattern string) (*os.File, error) {
+func CreateTemp(pattern string) (*File, error) {
 	dir, err := TempDir("work")
 	if err != nil {
 		return nil, err
 	}
-	return os.CreateTemp(dir, pattern)
+	return CreateTempIn(dir, pattern)
 }
 
 // MkdirTemp creates an operation directory. The caller must remove it when done.
