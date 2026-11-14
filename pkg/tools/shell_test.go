@@ -1231,7 +1231,7 @@ func TestShellTool_DevNullAllowedWithSeparator(t *testing.T) {
 		"echo a 2>/dev/null&echo b",
 		"echo a >/dev/null;echo b",
 		"echo a 2>/dev/null,",
-		"echo a 2>/dev/null)",
+		"(echo a 2>/dev/null)",
 		"echo a 2>/dev/null]",
 		"echo a 2>/dev/null}",
 		"echo a 2>/dev/null:",

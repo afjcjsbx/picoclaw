@@ -11,13 +11,69 @@ The exec tool is used to execute shell commands.
 | `enable_deny_patterns` | bool | `true` | Enable the built-in dangerous-command blocking patterns |
 | `custom_deny_patterns` | string[] | `[]` | Additional deny patterns (regular expressions); always enforced and they take priority over allow rules |
 | `custom_allow_patterns` | string[] | `[]` | Allow patterns (regular expressions) that explicitly permit matching commands. They exempt the built-in default deny set, but custom deny patterns, the hardline floor, and other safety limits still win |
+| `risk_threshold` | string | `"medium"` | Highest risk level the AST classifier allows: `low`, `medium`, `high` or `critical`. Part of the built-in guard set, so it is inactive when `enable_deny_patterns` is `false`. Empty means `medium` |
+| `risk_overrides` | object | `{}` | Base risk level per command (command name to level), replacing the built-in table. Argument modifiers can still elevate it |
+| `arg_modifiers` | object | `{}` | Extra argument-aware risk elevations per command. Every listed token must be present; the highest matching level wins |
 | `allow_remote` | bool | `false` | When `false`, exec only accepts commands that originate from internal channels (`cli`, `system`, `subagent`). Remote channels are then blocked (fail-closed): an empty channel is also rejected. Set it to `true` only when remote command execution is explicitly intended |
 | `timeout_seconds` | int | `180` | Command timeout in seconds. `0` means the default (180s). Foreground runs are capped at `600`s; a larger configured timeout promotes commands to a tracked background session |
 | `max_output_chars` | int | `50000` | Foreground output cap. Longer output keeps the first 40% and the last 60% around a `[OUTPUT TRUNCATED - N chars omitted out of T total]` notice, while the full stream is spilled to a workspace artifact (up to 5,000,000 bytes). The inline view is also bounded by `tools.max_inline_result_chars`; the artifact preserves the full stream. `0` means the default (50000) |
 | `env_set` | object | `{}` | Variables always injected into every exec child process. Values are trusted configuration: they override inherited variables, including `PATH`, and are not subject to the LLM blocklist. Every listed value reaches every command, so only add secrets here when the commands genuinely need them |
 | `env_allowlist` | string[] | `[]` | Additional parent variable names inherited on top of the built-in allowlist. Use explicit names, never wildcards: allowlisting a secret passes it to every command |
 
-Environment variables use the `PICOCLAW_TOOLS_EXEC_` prefix: `PICOCLAW_TOOLS_EXEC_ENABLED`, `PICOCLAW_TOOLS_EXEC_ENABLE_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_ALLOW_REMOTE`, `PICOCLAW_TOOLS_EXEC_CUSTOM_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_CUSTOM_ALLOW_PATTERNS`, `PICOCLAW_TOOLS_EXEC_TIMEOUT_SECONDS`, `PICOCLAW_TOOLS_EXEC_MAX_OUTPUT_CHARS`, `PICOCLAW_TOOLS_EXEC_ENV_ALLOWLIST` (comma-separated). `env_set` is JSON-only because values may contain characters used as env separators.
+Environment variables use the `PICOCLAW_TOOLS_EXEC_` prefix: `PICOCLAW_TOOLS_EXEC_ENABLED`, `PICOCLAW_TOOLS_EXEC_ENABLE_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_RISK_THRESHOLD`, `PICOCLAW_TOOLS_EXEC_ALLOW_REMOTE`, `PICOCLAW_TOOLS_EXEC_CUSTOM_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_CUSTOM_ALLOW_PATTERNS`, `PICOCLAW_TOOLS_EXEC_TIMEOUT_SECONDS`, `PICOCLAW_TOOLS_EXEC_MAX_OUTPUT_CHARS`, `PICOCLAW_TOOLS_EXEC_ENV_ALLOWLIST` (comma-separated). `env_set`, `risk_overrides` and `arg_modifiers` are JSON-only because their values are structured.
+
+### Risk classification
+
+When the built-in guard is enabled (`enable_deny_patterns: true`, the default), PicoClaw parses every Unix command with `mvdan.cc/sh/v3/syntax` before execution and classifies each simple command in the AST. Pipelines, `&&`/`||`/`;` lists, loops, functions and command substitutions are all walked. This catches indirection that regex deny lists cannot resolve, for example `x=rm; $x -rf /` or `"r"'m' -rf /`.
+
+| Level | Meaning | Examples |
+|-------|---------|----------|
+| `low` | Read-only / informational | `ls`, `cat`, `grep`, `find`, `echo` |
+| `medium` | Writes files or reads the network | `cp`, `mv`, `tar`, `curl`, `git status` |
+| `high` | Destructive or system-wide side effects | `rm`, `chmod`, `git push`, `docker`, `ssh` |
+| `critical` | Privilege escalation or always dangerous | `sudo`, `dd`, `mkfs`, `shutdown`, `rm -rf` |
+
+Commands above `risk_threshold` are rejected before any process starts, with a structured message:
+
+```text
+Command blocked by risk classifier: command="chmod +x script.sh" risk_level=high threshold=medium reason=command risk exceeds configured threshold
+```
+
+A dynamic command name, an opaque shell and an unparseable command are rejected regardless of `risk_threshold`; set `enable_deny_patterns: false` to disable the built-in guard set entirely.
+
+The classifier also:
+
+- rejects a command whose command word is dynamic (`"$cmd" -rf /`) because it cannot be resolved statically;
+- parses a literal `sh -c '...'` / `bash -c '...'` script recursively, and rejects an opaque shell that reads commands from stdin or a script file;
+- parses a literal `trap '...'` action recursively, and rejects an `xargs` invocation that launches a shell;
+- inspects common wrappers (`env`, `command`, `nohup`, `time`, `nice`, `timeout`, `xargs`, `watch`) and classifies the command they launch;
+- treats `env -S` as critical, because it splits a string into a command.
+
+Argument modifiers are applied after flag normalization (`rm -rf`, `rm -fr` and `rm -r -f` are equivalent; `-XPOST` and `--request=POST` match their spaced flag+value forms). Built-in examples include `rm -rf` → `critical`, `git push` → `high`, `git push --force` → `critical`, `curl -X POST` → `high`, and `find -delete` → `high`.
+
+Custom thresholds and modifiers:
+
+```json
+{
+  "tools": {
+    "exec": {
+      "risk_threshold": "medium",
+      "risk_overrides": { "chmod": "low" },
+      "arg_modifiers": {
+        "echo": [{ "args": ["--danger"], "level": "high" }]
+      }
+    }
+  }
+}
+```
+
+`risk_overrides` changes the base level but cannot suppress an argument modifier: with `rm` overridden to `medium`, plain `rm file` is allowed while `rm -rf build` is still `critical`. `custom_allow_patterns` keep their existing meaning and exempt the risk layer, exactly as they exempt the default regex set; hardline and custom deny patterns still win.
+
+Limits worth knowing:
+
+- The classifier is static. A dynamic argument that hides a flag (for example `curl "$FLAGS"`) cannot be inspected; a dynamic command word is rejected instead.
+- External programs still run with the OS user's file permissions. Shell redirections are checked by the path guard, but a dynamically built redirection target and file access performed by an external binary are not sandboxed by this layer.
+- Windows is skipped because exec runs PowerShell there; the built-in regex/PowerShell deny patterns still apply.
 
 ## Tool arguments
 

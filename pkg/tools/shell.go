@@ -25,6 +25,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/isolation"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	fstools "github.com/sipeed/picoclaw/pkg/tools/fs"
+	"github.com/sipeed/picoclaw/pkg/tools/shellguard"
 )
 
 // maxOutputBufferSize caps the rolling output retained per session.
@@ -81,6 +82,7 @@ type ExecTool struct {
 	baseEnv              map[string]string
 	state                *execStateStore
 	sessionManager       *SessionManager
+	riskGuard            *shellguard.Guard
 }
 
 var _ AsyncExecutor = (*ExecTool)(nil)
@@ -278,15 +280,16 @@ func NewExecToolWithConfig(
 	customAllowPatterns := make([]*regexp.Regexp, 0)
 	var allowedPathPatterns []*regexp.Regexp
 	allowRemote := true
+	enableDefaultGuard := true
 	if len(allowPaths) > 0 {
 		allowedPathPatterns = allowPaths[0]
 	}
 
 	if cfg != nil {
 		execConfig := cfg.Tools.Exec
-		enableDenyPatterns := execConfig.EnableDenyPatterns
+		enableDefaultGuard = execConfig.EnableDenyPatterns
 		allowRemote = execConfig.AllowRemote
-		if enableDenyPatterns {
+		if enableDefaultGuard {
 			denyPatterns = append(denyPatterns, defaultDenyPatterns...)
 			if runtime.GOOS == "windows" {
 				denyPatterns = append(denyPatterns, windowsDenyPatterns...)
@@ -344,6 +347,11 @@ func NewExecToolWithConfig(
 		execEnvAllowlist = cfg.Tools.Exec.EnvAllowlist
 	}
 
+	riskGuard, err := newRiskGuard(cfg, enableDefaultGuard)
+	if err != nil {
+		return nil, err
+	}
+
 	return &ExecTool{
 		workingDir:           workingDir,
 		timeout:              timeout,
@@ -361,6 +369,7 @@ func NewExecToolWithConfig(
 		baseEnv:              newExecEnv(workingDir, execEnvSet, execEnvAllowlist),
 		state:                newExecStateStore(),
 		sessionManager:       getSessionManager(),
+		riskGuard:            riskGuard,
 	}, nil
 }
 
@@ -2056,6 +2065,15 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 					return "Command blocked by safety guard (path outside working dir)"
 				}
 			}
+		}
+	}
+
+	// The AST classifier is the last built-in layer: it sees commands that the
+	// byte-level patterns cannot resolve, such as `x=rm; $x -rf /`. Custom allow
+	// patterns keep their existing meaning and exempt this default layer too.
+	if t.riskGuard != nil && !t.commandMatchesCustomAllowPattern(lower) {
+		if blocked := t.riskGuard.Check(cmd); blocked != nil {
+			return blocked.Error()
 		}
 	}
 

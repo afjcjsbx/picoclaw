@@ -58,6 +58,7 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 	maunium.net/go/mautrix v0.32.0
 	modernc.org/sqlite v1.61.1
+	mvdan.cc/sh/v3 v3.14.1
 	rsc.io/qr v0.2.0
 )
 

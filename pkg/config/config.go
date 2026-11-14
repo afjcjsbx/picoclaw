@@ -1444,6 +1444,13 @@ type CronToolsConfig struct {
 	CommandAllowedRemotes []string `json:"command_allowed_remotes" env:"PICOCLAW_TOOLS_CRON_COMMAND_ALLOWED_REMOTES"`
 }
 
+// ArgModifierConfig elevates a command's risk level when all Args tokens are
+// present in the command. Levels use the same names as RiskThreshold.
+type ArgModifierConfig struct {
+	Args  []string `json:"args"`
+	Level string   `json:"level"`
+}
+
 // ExecConfig configures shell command execution.
 //
 // EnableDenyPatterns only disables the optional built-in default deny set;
@@ -1456,6 +1463,16 @@ type ExecConfig struct {
 	CustomAllowPatterns []string `                                 json:"custom_allow_patterns" env:"PICOCLAW_TOOLS_EXEC_CUSTOM_ALLOW_PATTERNS"`
 	TimeoutSeconds      int      `                                 json:"timeout_seconds"       env:"PICOCLAW_TOOLS_EXEC_TIMEOUT_SECONDS"`  // 0 means use default (180s)
 	MaxOutputChars      int      `                                 json:"max_output_chars"      env:"PICOCLAW_TOOLS_EXEC_MAX_OUTPUT_CHARS"` // 0 means use default (50000 chars)
+	// RiskThreshold is the highest risk level allowed when the built-in
+	// dangerous-command guard is enabled: low, medium, high or critical.
+	// Empty means medium.
+	RiskThreshold string `json:"risk_threshold,omitempty" env:"PICOCLAW_TOOLS_EXEC_RISK_THRESHOLD"`
+	// RiskOverrides sets the base risk level per command, replacing the
+	// built-in table entry. Argument modifiers can still elevate it.
+	RiskOverrides map[string]string `json:"risk_overrides,omitempty" yaml:"-" env:"-"`
+	// ArgModifiers adds argument-aware risk elevations per command on top of
+	// the built-in table. All listed args must be present; highest level wins.
+	ArgModifiers map[string][]ArgModifierConfig `json:"arg_modifiers,omitempty" yaml:"-" env:"-"`
 	// EnvSet lists variables always injected into exec child processes. Values
 	// are trusted configuration and override inherited variables, including
 	// PATH. It is not exposed as a tool argument; JSON only.

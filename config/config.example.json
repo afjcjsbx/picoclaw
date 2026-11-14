@@ -525,6 +525,7 @@
     "exec": {
       "enabled": true,
       "enable_deny_patterns": true,
+      "risk_threshold": "medium",
       "allow_remote": false,
       "custom_deny_patterns": null,
       "custom_allow_patterns": null

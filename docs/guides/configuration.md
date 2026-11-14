@@ -540,8 +540,13 @@ Use `mode = lines` when:
 | `tools.exec.enable_deny_patterns` | bool | `true` | Enable built-in dangerous command interception (hardline and custom deny rules still apply when off) |
 | `tools.exec.custom_deny_patterns` | string[] | `[]` | Custom regex patterns to block; always enforced |
 | `tools.exec.custom_allow_patterns` | string[] | `[]` | Custom regex patterns to allow |
+| `tools.exec.risk_threshold` | string | `"medium"` | Highest risk level allowed by the AST classifier (`low`, `medium`, `high`, `critical`); inactive when `enable_deny_patterns` is `false` |
+| `tools.exec.risk_overrides` | object | `{}` | Per-command base risk levels; argument modifiers can still elevate them |
+| `tools.exec.arg_modifiers` | object | `{}` | Extra argument-aware risk elevations per command |
 | `tools.exec.env_set` | object | `{}` | Variables always injected into exec child processes; trusted config that overrides inherited values |
 | `tools.exec.env_allowlist` | string[] | `[]` | Additional parent variable names inherited by exec child processes; explicit names only |
+
+When `enable_deny_patterns` is `true`, Unix commands are also parsed into an AST and classified from `low` to `critical` before execution. `risk_threshold` (default `medium`) blocks levels above the configured maximum, catching variable indirection such as `x=rm; $x -rf /` that regex patterns cannot resolve. `risk_overrides` changes a command's base level and `arg_modifiers` adds argument-aware elevations; custom allow patterns exempt this layer. See the [exec tool](../tools/exec.md#risk-classification) for the table and limitations.
 
 > **Security Note:** Symlink protection is enabled by default — all file paths are resolved through `filepath.EvalSymlinks` before whitelist matching, preventing symlink escape attacks.
 
