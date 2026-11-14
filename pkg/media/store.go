@@ -127,12 +127,20 @@ func NewFileMediaStoreWithCleanup(cfg MediaCleanerConfig) *FileMediaStore {
 
 // Store registers a local file under the given scope. The file must exist.
 func (s *FileMediaStore) Store(localPath string, meta MediaMeta, scope string) (string, error) {
-	if info, err := os.Stat(localPath); err != nil {
-		return "", fmt.Errorf("media store: %s: %w", localPath, err)
-	} else if !info.Mode().IsRegular() {
-		return "", fmt.Errorf("media store: %s is not a regular file", localPath)
-	}
+	return s.store(localPath, meta, scope, false)
+}
 
+// StoreReadRef borrows external files but preserves ownership of existing
+// managed copies, so loading an attachment does not disable its cleanup.
+func StoreReadRef(store MediaStore, localPath string, meta MediaMeta, scope string) (string, error) {
+	meta.CleanupPolicy = CleanupPolicyForgetOnly
+	if s, ok := store.(*FileMediaStore); ok {
+		return s.store(localPath, meta, scope, true)
+	}
+	return store.Store(localPath, meta, scope)
+}
+
+func (s *FileMediaStore) store(localPath string, meta MediaMeta, scope string, preserveOwnership bool) (string, error) {
 	ref := "media://" + uuid.New().String()
 	normalized, err := normalizeCleanupPolicy(meta.CleanupPolicy)
 	if err != nil {
@@ -143,9 +151,16 @@ func (s *FileMediaStore) Store(localPath string, meta MediaMeta, scope string) (
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Recheck under the lock: cleanup may have removed it since the first stat.
-	if _, err := os.Stat(localPath); err != nil {
-		return "", err
+	// Check while holding the lifecycle lock so registration cannot race deletion.
+	info, err := os.Stat(localPath)
+	if err != nil {
+		return "", fmt.Errorf("media store: %s: %w", localPath, err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("media store: %s is not a regular file", localPath)
+	}
+	if preserveOwnership && s.pathStates[localPath].deleteEligible {
+		meta.CleanupPolicy = CleanupPolicyDeleteOnCleanup
 	}
 	delete(s.pendingDeletes, localPath)
 	now := s.nowFunc()

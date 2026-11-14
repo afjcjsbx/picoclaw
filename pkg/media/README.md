@@ -14,7 +14,9 @@ Each entry carries a `CleanupPolicy`:
 - `delete_on_cleanup` (default when the field is empty): the store owns the
   file and may delete it once the final ref for that path is gone.
 - `forget_only`: the store only drops the mapping and never deletes the file
-  (used for externally-owned files).
+  (used for externally-owned files). Filesystem tools use `StoreReadRef`: an existing
+  store-owned attachment keeps its ownership when loaded or sent, while a
+  previously unregistered workspace file remains borrowed.
 
 Any other value is rejected by `Store` with an error. Unknown policies are
 **not** silently coerced to deletion, so a caller typo cannot delete a file the

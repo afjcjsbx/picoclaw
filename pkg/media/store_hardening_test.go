@@ -85,6 +85,37 @@ func TestStoreRejectsInvalidCleanupPolicy(t *testing.T) {
 	}
 }
 
+func TestReadRefPreservesManagedOwnership(t *testing.T) {
+	for _, managed := range []bool{false, true} {
+		store := NewFileMediaStore()
+		path := createTempFile(t, t.TempDir(), "image.png")
+		if managed {
+			if _, err := store.Store(path, MediaMeta{}, "inbound"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := StoreReadRef(store, path, MediaMeta{}, "tool"); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.ReleaseAll("inbound"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("file removed while tool still uses it: %v", err)
+		}
+		if err := store.ReleaseAll("tool"); err != nil {
+			t.Fatal(err)
+		}
+		_, err := os.Stat(path)
+		if managed && !os.IsNotExist(err) {
+			t.Fatalf("managed copy was leaked: %v", err)
+		}
+		if !managed && err != nil {
+			t.Fatalf("external original removed: %v", err)
+		}
+	}
+}
+
 func TestResolveRefreshesIdleTTL(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Now()
