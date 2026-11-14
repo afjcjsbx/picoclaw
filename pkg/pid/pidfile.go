@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/fileutil"
 	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
@@ -100,14 +101,10 @@ func WritePidFile(homePath, host string, port int) (*PidFileData, error) {
 		return nil, fmt.Errorf("failed to create pid directory: %w", err)
 	}
 
-	// Write atomically via temp file + rename.
-	tmp := pidPath + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
-		return nil, fmt.Errorf("failed to write pid file: %w", err)
-	}
-	if err := os.Rename(tmp, pidPath); err != nil {
-		os.Remove(tmp)
-		return nil, fmt.Errorf("failed to rename pid file: %w", err)
+	// Stage beside the destination using an exclusive name, so another
+	// process cannot overwrite this write's temporary file.
+	if err := fileutil.WriteFileAtomic(pidPath, raw, 0o600); err != nil {
+		return nil, fmt.Errorf("write pid file: %w", err)
 	}
 	logger.Debugf("wrote pid file: %s success", pidPath)
 
