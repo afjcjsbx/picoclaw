@@ -473,6 +473,10 @@ func spawnSubTurn(
 	// IMPORTANT: Put childTS into childCtx so that code inside runTurn can retrieve it
 	childCtx = withTurnState(childCtx, childTS)
 	childCtx = WithAgentLoop(childCtx, al) // Propagate AgentLoop to child turn
+	// Propagate ChildTracker so the child's own spawn calls are tracked and
+	// joined before this SubTurn finishes (prevents async children from being
+	// orphaned).
+	childCtx = tools.WithChildTracker(childCtx, childTS)
 
 	childTS.ctx = childCtx
 

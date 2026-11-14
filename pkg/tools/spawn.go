@@ -193,41 +193,34 @@ func (t *SpawnTool) execute(
 					}
 				}()
 
-				// Build child tool set: inherit parent tools, but when direct
-				// outbound messaging is disabled, strip the outbound tool group
+				// Build child tool set: when direct outbound messaging is
+				// disabled, strip the outbound tool group
 				// {message, send_file, send_tts, reaction} so the subagent
 				// cannot contact the user directly. Generation-only tools like
 				// image_generate are preserved: they produce media refs that
 				// are returned to the parent agent, which decides whether to
 				// forward them to the user.
+				//
+				// When allowOutbound=true (default), pass nil so spawnSubTurn
+				// inherits the child agent's own tool registry (including its
+				// own spawn tool and per-agent allowlist) — preserving
+				// per-agent spawning rules instead of cloning the parent's.
 				var childTools []Tool
-				if t.tools != nil {
-					if allowOutbound {
-						// direct_message=true (default): preserve all parent tools
-						// except spawn itself to prevent infinite recursion.
-						for _, name := range t.tools.List() {
-							if name == "spawn" {
-								continue
-							}
-							if tool, ok := t.tools.Get(name); ok {
-								childTools = append(childTools, tool)
-							}
+				if t.tools != nil && !allowOutbound {
+					parentRegistry := t.tools
+					for _, name := range outboundTools {
+						parentRegistry = parentRegistry.CloneWithout(name)
+					}
+					for _, name := range parentRegistry.List() {
+						if name == "spawn" {
+							continue
 						}
-					} else {
-						// direct_message=false: strip outbound tool group
-						parentRegistry := t.tools
-						for _, name := range outboundTools {
-							parentRegistry = parentRegistry.CloneWithout(name)
-						}
-						for _, name := range parentRegistry.List() {
-							if name == "spawn" {
-								continue
-							}
-							if tool, ok := parentRegistry.Get(name); ok {
-								childTools = append(childTools, tool)
-							}
+						if tool, ok := parentRegistry.Get(name); ok {
+							childTools = append(childTools, tool)
 						}
 					}
+					// Re-add the spawn tool so the child can spawn grandchildren.
+					childTools = append(childTools, t)
 				}
 
 				res, err := t.spawner.SpawnSubTurn(ctx, SubTurnConfig{
