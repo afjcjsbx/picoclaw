@@ -1827,6 +1827,14 @@ func (m *Manager) sendMediaWithRetry(
 	w *channelWorker,
 	msg bus.OutboundMediaMessage,
 ) ([]string, error) {
+	m.mu.RLock()
+	store := m.mediaStore
+	m.mu.RUnlock()
+	refs := make([]string, 0, len(msg.Parts))
+	for _, part := range msg.Parts {
+		refs = append(refs, part.Ref)
+	}
+	defer media.PinRefs(store, refs...)()
 	ms, ok := w.ch.(MediaSender)
 	if !ok {
 		err := fmt.Errorf("channel %q does not support media sending", name)

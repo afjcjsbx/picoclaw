@@ -74,7 +74,11 @@ func secureDir(path string) error {
 
 // TempDir returns storage for one class of disposable runtime files.
 func TempDir(kind string) (string, error) {
-	return PrivateDir("tmp", kind)
+	base, err := PrivateDir("tmp", kind)
+	if err != nil {
+		return "", err
+	}
+	return processDir(base)
 }
 
 // CreateTemp creates a private working file. The caller must close and remove it.
