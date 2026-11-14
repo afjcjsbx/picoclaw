@@ -225,6 +225,7 @@ PICOCLAW_TOOLS_EXEC_ENABLED=false
 - 包管理：`apt`、`yum`、`dnf`、`npm install -g`、`pip install --user`
 - 容器：`docker run`、`docker exec`
 - Git：`git push`、`git force`
+- Windows PowerShell：递归 `Remove-Item`（含 `rm`/`ri`/`del` 别名）、`Clear-Disk`、`Format-Volume`、`vssadmin delete shadows`、`bcdedit /set`、`reg delete`、`icacls /grant Everyone`、`iwr ... | iex` 等下载后执行管道、`taskkill /F`、`Stop-Process -Force`
 - 其他：`eval`、`source *.sh`
 
 ### 已知架构限制

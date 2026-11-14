@@ -457,6 +457,7 @@ By default, the `exec` tool blocks these dangerous commands (the hardline subset
 * `dd if=` — Disk imaging (always-on)
 * Writing to `/dev/sd[a-z]` — Direct disk writes (always-on)
 * `shutdown`, `reboot`, `poweroff` — System shutdown (always-on)
+* Windows PowerShell: recursive `Remove-Item`, `Clear-Disk`, `Format-Volume`, `vssadmin delete shadows`, `bcdedit /set`, `reg delete`, `icacls /grant Everyone`, `iwr ... | iex`, `taskkill /F`, `Stop-Process -Force`
 * Fork bomb `:(){ :|:& };:` — Always-on
 
 ### File Access Control

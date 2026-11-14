@@ -324,6 +324,7 @@ PicoClaw 默认在沙箱环境中运行。Agent 只能访问配置的工作区�
 * `dd if=` — 磁盘镜像（始终生效）
 * 写入 `/dev/sd[a-z]` — 直接磁盘写入（始终生效）
 * `shutdown`、`reboot`、`poweroff` — 系统关机（始终生效）
+* Windows PowerShell：递归 `Remove-Item`、`Clear-Disk`、`Format-Volume`、`vssadmin delete shadows`、`bcdedit /set`、`reg delete`、`icacls /grant Everyone`、`iwr ... | iex`、`taskkill /F`、`Stop-Process -Force`
 * Fork bomb `:(){ :|:& };:` — 始终生效
 
 ### 文件访问控制

@@ -177,6 +177,27 @@ var (
 		// Unicode escape sequences that could be used to construct commands.
 		// Matches \uXXXX format used to represent characters like i = "i"
 		regexp.MustCompile(`\\u[0-9a-fA-F]{4}`),
+		// Recursive deletion through Remove-Item or its PowerShell aliases.
+		// The flag pattern accepts unambiguous abbreviations such as -Rec.
+		regexp.MustCompile(`\b(?:remove-item|rm|ri|del|erase|rd|rmdir)\b[^|;&\r\n]*\s-r(?:ec(?:ur(?:se)?)?)?\b`),
+		// Disk management cmdlets that clear or reformat a volume.
+		regexp.MustCompile(`\b(?:clear-disk|format-volume)\b`),
+		// Deleting shadow copies destroys local backup and recovery points.
+		regexp.MustCompile(`\bvssadmin(?:\.exe)?\b[^|;&\r\n]*\sdelete\s+shadows\b`),
+		// Boot configuration changes can disable recovery or boot integrity.
+		regexp.MustCompile(`\bbcdedit(?:\.exe)?\b[^|;&\r\n]*\s/set\b`),
+		// Registry key deletion.
+		regexp.MustCompile(`\breg(?:\.exe)?\s+delete\b`),
+		// Granting Everyone access weakens ACLs on the target path.
+		regexp.MustCompile(`\bicacls(?:\.exe)?\b[^|;&\r\n]*\s/grant\b[^|;&\r\n]*(?:\beveryone\b|\*s-1-1-0)`),
+		// Download-and-execute pipelines through PowerShell web cmdlets.
+		regexp.MustCompile(
+			`\b(?:iwr|irm|invoke-webrequest|invoke-restmethod|curl|wget)\b` +
+				`[^;&\r\n]*\|\s*(?:iex|invoke-expression)\b`,
+		),
+		// Forced process termination.
+		regexp.MustCompile(`\btaskkill(?:\.exe)?\b[^|;&\r\n]*\s/f\b`),
+		regexp.MustCompile(`\b(?:stop-process|spps)\b[^|;&\r\n]*\s-f(?:o(?:r(?:ce)?)?)?\b`),
 	}
 
 	// absolutePathPattern matches absolute file paths in commands (Unix and Windows).

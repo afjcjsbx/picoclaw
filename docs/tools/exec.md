@@ -243,6 +243,7 @@ These patterns are enabled by default and can be disabled with `enable_deny_patt
 - Package management: `apt`, `yum`, `dnf`, `npm install -g`, `pip install --user`
 - Containers: `docker run`, `docker exec`
 - Git: `git push`, `git force`
+- Windows PowerShell: recursive `Remove-Item` (including `rm`/`ri`/`del` aliases), `Clear-Disk`, `Format-Volume`, `vssadmin delete shadows`, `bcdedit /set`, `reg delete`, `icacls /grant Everyone`, download-and-execute pipelines such as `iwr ... | iex`, `taskkill /F`, and `Stop-Process -Force`
 - Other: `eval`, `source *.sh`
 
 ## Known Architectural Limitation
