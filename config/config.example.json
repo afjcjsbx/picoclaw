@@ -654,6 +654,13 @@
       "approval_timeout_ms": 60000
     }
   },
+  "approvals": {
+    "_comment": "Optional smart approvals: set mode to 'smart' to review flagged exec commands with an auxiliary Guardian model from model_list.",
+    "mode": "off",
+    "model": "",
+    "smart_threshold": "high",
+    "smart_timeout_seconds": 20
+  },
   "events": {
     "logging": {
       "enabled": true,
