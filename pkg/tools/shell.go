@@ -2286,6 +2286,24 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 				}
 			}
 		}
+
+		// The absolute-path regex above cannot see tilde, $HOME or relative
+		// directory changes such as `cd ..`. The AST pass validates those
+		// constructs against the same boundary. It is a static best-effort
+		// layer; OS-level isolation remains the only hard boundary.
+		if runtime.GOOS != "windows" {
+			policy := shellguard.WorkspacePolicy{
+				Cwd:    cwdPath,
+				Home:   t.execHomeDir(),
+				CDPath: t.baseEnv["CDPATH"] != "",
+				AllowPath: func(p string) bool {
+					return t.workspacePathAllowed(p, cwdPath)
+				},
+			}
+			if err := shellguard.CheckWorkspace(cmd, policy); err != nil {
+				return "Command blocked by safety guard (" + err.Error() + ")"
+			}
+		}
 	}
 
 	// The AST classifier is the last built-in layer: it sees commands that the
@@ -2308,6 +2326,43 @@ func commandPathAbs(pathText, cwdPath string) (string, error) {
 		return filepath.Abs(pathText)
 	}
 	return filepath.Abs(filepath.Join(cwdPath, pathText))
+}
+
+// workspacePathAllowed reports whether p stays inside cwdPath or is covered by
+// the operator allowlist. Symlinks are resolved against the nearest existing
+// ancestor so a new file behind a symlinked directory is still checked.
+func (t *ExecTool) workspacePathAllowed(p, cwdPath string) bool {
+	if resolved, err := fstools.ResolvePathAgainstExistingAncestor(p); err == nil {
+		p = resolved
+	}
+	if safePaths[p] {
+		return true
+	}
+	if fstools.IsAllowedPath(p, t.allowedPathPatterns) {
+		return true
+	}
+	rel, err := filepath.Rel(cwdPath, p)
+	if err != nil {
+		return false
+	}
+	return !strings.HasPrefix(rel, "..")
+}
+
+// execHomeDir returns the home directory the child shell will see. A HOME
+// present in the cached base environment (config env_set or inherited) wins,
+// even when it is not absolute; tilde expansion is then unresolvable and
+// blocked. os.UserHomeDir is only a fallback when the key is absent.
+func (t *ExecTool) execHomeDir() string {
+	if home, ok := t.baseEnv["HOME"]; ok {
+		if filepath.IsAbs(home) {
+			return home
+		}
+		return ""
+	}
+	if home, err := os.UserHomeDir(); err == nil && filepath.IsAbs(home) {
+		return home
+	}
+	return ""
 }
 
 func commandPathTextsFromMatch(cmd string, start, end int) []string {
