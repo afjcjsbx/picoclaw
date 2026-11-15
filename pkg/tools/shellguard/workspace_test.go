@@ -287,6 +287,90 @@ func TestCheckWorkspaceCDPath(t *testing.T) {
 	}
 }
 
+func TestCheckWorkspaceEffectiveCwd(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	cwd := filepath.Join(root, "workspace")
+	sub := filepath.Join(cwd, "sub")
+	outside := filepath.Join(root, "outside")
+	if err := os.MkdirAll(filepath.Join(sub, "nested"), 0o755); err != nil {
+		t.Fatalf("create subdirs: %v", err)
+	}
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatalf("create outside: %v", err)
+	}
+	// The production guard resolves the workspace root before calling
+	// CheckWorkspace; resolve it here for the same comparison semantics.
+	resolvedCwd, err := filepath.EvalSymlinks(cwd)
+	if err != nil {
+		t.Fatalf("resolve workspace: %v", err)
+	}
+	cwd = resolvedCwd
+	if err := os.WriteFile(filepath.Join(sub, "inside.txt"), []byte("inside\n"), 0o600); err != nil {
+		t.Fatalf("write inside file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("secret\n"), 0o600); err != nil {
+		t.Fatalf("write outside file: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(sub, "outside-link")); err != nil {
+		t.Skipf("symlinks not supported: %v", err)
+	}
+	if err := os.Symlink(filepath.Join(outside, "secret.txt"), filepath.Join(sub, "secret")); err != nil {
+		t.Fatalf("create secret symlink: %v", err)
+	}
+
+	policy := WorkspacePolicy{
+		Cwd: cwd,
+		AllowPath: func(path string) bool {
+			resolved := path
+			for {
+				if evaluated, err := filepath.EvalSymlinks(resolved); err == nil {
+					resolved = evaluated
+					break
+				}
+				parent := filepath.Dir(resolved)
+				if parent == resolved {
+					break
+				}
+				resolved = parent
+			}
+			rel, err := filepath.Rel(cwd, resolved)
+			return err == nil && !strings.HasPrefix(rel, "..")
+		},
+	}
+
+	for _, command := range []string{
+		"cd sub; cat outside-link/secret.txt",
+		"cd sub; echo pwn > outside-link/pwn.txt",
+		"cd sub; cd outside-link; cat secret.txt",
+		"env -C sub cat outside-link/secret.txt",
+		"sh -c 'cd sub; cat outside-link/secret.txt'",
+		"cd sub; sh -c 'cat secret'",
+	} {
+		t.Run(command, func(t *testing.T) {
+			t.Parallel()
+			if err := CheckWorkspace(command, policy); err == nil {
+				t.Fatalf("CheckWorkspace(%q) = nil, want a workspace escape", command)
+			}
+		})
+	}
+
+	for _, command := range []string{
+		"cd sub; cat inside.txt",
+		"cd sub; cd nested; cat inside.txt",
+		"env -C sub cat inside.txt",
+		"sh -c 'cd sub; cat inside.txt'",
+	} {
+		t.Run(command, func(t *testing.T) {
+			t.Parallel()
+			if err := CheckWorkspace(command, policy); err != nil {
+				t.Fatalf("CheckWorkspace(%q) = %v, want nil", command, err)
+			}
+		})
+	}
+}
+
 func TestCheckWorkspaceAllowsHomeInsideWorkspace(t *testing.T) {
 	t.Parallel()
 

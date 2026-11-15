@@ -256,12 +256,13 @@ When `agents.defaults.restrict_to_workspace` is `true` (the default), exec on Un
 - Tilde and `$HOME` expansion, standalone or as a path prefix, including `${HOME:-...}`: `cat ~/.ssh/id_rsa`, `cat $HOME/.ssh/id_rsa`, `echo pwn > ~/pwn`, `echo pwn > $HOME/pwn`.
 - Parent traversal in directory positions, written without a slash: `cd ..`, `pushd ..`, `tar -C ..`, `git -C ..`, not only `../path`.
 - Directory changes through `cd`, `pushd`, `popd` stack rotations and `env -C`/`--chdir` are validated, including paths that escape through symlinks. `cd -`, bare `cd` (home) and dynamic targets such as `cd "$DIR"` are rejected when they cannot be validated statically. `popd` only restores entries that were validated when they were pushed.
+- Relative operands are resolved against every directory the command entered, not only the workspace root. A second `cd` or a symlink under a subdirectory cannot be used to reach outside: `cd sub; cd link; cat secret.txt` and `cd sub; cat link/secret.txt` are rejected when `sub/link` points outside the workspace.
 - Dynamic redirection targets (`> "$OUT"`) and dynamic nested scripts or `eval` strings.
 - Commands nested in `sh -c`/`bash -c`, shell heredoc scripts, `eval`, `exec`, `trap`, `find -exec`, and common wrappers (`command`, `builtin`, `env`, `timeout`, `xargs`, and similar).
 
 Expansion uses the child shell's `HOME`. Quoted literals such as `echo '$HOME'` and `echo '~'` are not treated as paths, and web URLs are exempt from local path checks.
 
-This is a static best-effort layer, not an OS sandbox: child processes, scripts loaded after startup, and file contents are outside its reach. Symlinks are resolved against the filesystem at validation time, so a symlink created or retargeted later in the same command is not visible to the static pass. Use containers, VMs, or a dedicated user for untrusted workloads. The AST pass runs only when workspace restriction is enabled, only for the command being executed, and keeps no persistent state, goroutines or polling timers.
+This is a static best-effort layer, not an OS sandbox: child processes, scripts loaded after startup, file contents, dynamic operands and globs that expand to outside-pointing symlinks are outside its reach. Symlinks are resolved against the filesystem at validation time, so a symlink created or retargeted later in the same command is not visible to the static pass. Use containers, VMs, or a dedicated user for untrusted workloads. The AST pass runs only when workspace restriction is enabled, only for the command being executed, and keeps no persistent state, goroutines or polling timers.
 
 ## Default Blocked Command Patterns
 

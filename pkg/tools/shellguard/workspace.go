@@ -21,6 +21,10 @@ type WorkspacePolicy struct {
 	CDPath bool
 	// PWDUnset reports that $PWD is no longer trusted to equal Cwd.
 	PWDUnset bool
+	// CwdChanged reports that the shell has already changed directory before
+	// the script is inspected, so bare relative operands can be symlinks under
+	// a directory other than Cwd.
+	CwdChanged bool
 	// AllowPath reports whether an absolute path is inside the workspace or
 	// covered by an operator allowlist. It is responsible for resolving
 	// symlinks; CheckWorkspace only joins and cleans paths.
@@ -84,6 +88,10 @@ func checkWorkspaceScript(command string, policy WorkspacePolicy, depth int) err
 		policy:        policy,
 		cdpathSet:     policy.CDPath,
 		pwdOverridden: policy.PWDUnset,
+		cwdChanged:    policy.CwdChanged,
+	}
+	if policy.Cwd != "" {
+		state.cwds = []string{policy.Cwd}
 	}
 	var violation error
 	syntax.Walk(file, func(node syntax.Node) bool {
@@ -102,6 +110,16 @@ func checkWorkspaceScript(command string, policy WorkspacePolicy, depth int) err
 
 type workspaceState struct {
 	policy WorkspacePolicy
+	// cwds lists every working directory the command may have entered, in
+	// source order. Every cd/pushd target is validated before it is added, so
+	// the list only contains directories inside the workspace boundary.
+	// Relative path operands are checked against all of them: the shell's
+	// effective cwd is one of these, and a path that escapes from any of them
+	// cannot be trusted.
+	cwds []string
+	// cwdChanged is set when the shell has changed directory, including a
+	// change carried in from an enclosing script.
+	cwdChanged bool
 	// homeChanged marks HOME as assigned or unset. Tilde/$HOME then follows a
 	// value this pass cannot trust across subshells, functions and branches,
 	// so expansion is rejected instead of risking a scope leak.
@@ -121,8 +139,9 @@ func (s *workspaceState) effectiveHome() (string, bool) {
 	return s.policy.Home, s.policy.Home != ""
 }
 
-// nestedPolicy carries HOME/PWD/CDPATH invalidation into scripts that run in
-// the same environment (eval, sh -c, heredocs and exec wrappers).
+// nestedPolicy carries HOME/PWD/CDPATH invalidation and the effective working
+// directory into scripts that run in the same environment (eval, sh -c,
+// heredocs and exec wrappers).
 func (s *workspaceState) nestedPolicy() WorkspacePolicy {
 	policy := s.policy
 	home, ok := s.effectiveHome()
@@ -131,9 +150,53 @@ func (s *workspaceState) nestedPolicy() WorkspacePolicy {
 	} else {
 		policy.Home = home
 	}
+	policy.Cwd = s.currentCwd()
+	policy.CwdChanged = s.hasCwdCandidates()
 	policy.CDPath = s.cdpathSet
 	policy.PWDUnset = s.pwdOverridden
 	return policy
+}
+
+func (s *workspaceState) hasCwdCandidates() bool {
+	return s.cwdChanged || len(s.cwds) > 1
+}
+
+func (s *workspaceState) currentCwd() string {
+	if len(s.cwds) == 0 {
+		return s.policy.Cwd
+	}
+	return s.cwds[len(s.cwds)-1]
+}
+
+// addCwd records a directory the shell may have changed into. Deduplication
+// keeps the candidate list small for commands that cd into the same place
+// repeatedly.
+func (s *workspaceState) addCwd(cwd string) {
+	if cwd == "" {
+		return
+	}
+	s.cwdChanged = true
+	for _, existing := range s.cwds {
+		if existing == cwd {
+			return
+		}
+	}
+	s.cwds = append(s.cwds, cwd)
+}
+
+// resolveCwd applies a validated, literal directory target to the current
+// effective cwd. Symlinks are not resolved here: the target already passed the
+// AllowPath check, and keeping the lexical path preserves relative access
+// through a workspace-internal symlink.
+func (s *workspaceState) resolveCwd(target string) string {
+	if filepath.IsAbs(target) {
+		return filepath.Clean(target)
+	}
+	base := s.currentCwd()
+	if base == "" {
+		return filepath.Clean(target)
+	}
+	return filepath.Clean(filepath.Join(base, target))
 }
 
 func (s *workspaceState) checkStmt(stmt *syntax.Stmt, depth int) error {
@@ -195,7 +258,25 @@ func (s *workspaceState) checkCall(
 	args := make([]expandedWord, len(call.Args))
 	for i, arg := range call.Args {
 		args[i] = s.expandWord(arg, false)
-		if err := s.checkWord(args[i], false); err != nil {
+	}
+
+	// env -C changes the cwd only for the command it launches. Add the target
+	// as a temporary candidate before checking the rest of the argv, so its
+	// relative operands are not mistakenly resolved against the outer cwd.
+	if len(args) > 0 && baseCommand(args[0].text) == "env" {
+		if target, ok := envChdirTarget(args[1:]); ok &&
+			!target.dynamic && target.text != "" && target.text != "-" {
+			if err := s.checkDirTarget(target, false); err != nil {
+				return err
+			}
+			saved := append([]string(nil), s.cwds...)
+			s.addCwd(s.resolveCwd(target.text))
+			defer func() { s.cwds = saved }()
+		}
+	}
+
+	for _, arg := range args {
+		if err := s.checkWord(arg, false); err != nil {
 			return err
 		}
 	}
@@ -207,7 +288,7 @@ func (s *workspaceState) checkCall(
 	if err := s.checkSymlinkSource(args); err != nil {
 		return err
 	}
-	if err := s.checkDirChange(args); err != nil {
+	if err := s.checkDirChange(args, true); err != nil {
 		return err
 	}
 	return s.checkNested(args, redirs, depth)
@@ -363,9 +444,56 @@ func (s *workspaceState) checkWord(w expandedWord, pathPosition bool) error {
 	if filepath.IsAbs(w.text) {
 		return s.checkPath(w.text)
 	}
+	// Relative operands are only visible to the byte-level guard when they
+	// contain a slash. After a cd they must also be resolved against the new
+	// directory, not only against the workspace root.
+	if value, ok := relativePathCandidate(w.text); ok {
+		return s.checkPath(value)
+	}
+	// A bare operand can still be a symlink under the new directory, for
+	// example `cd sub; cat secret` with sub/secret pointing outside. Once the
+	// shell has changed directory, treat plain non-flag operands as candidate
+	// paths. Nonexistent names resolve to their existing inside ancestor and
+	// remain harmless.
+	if s.hasCwdCandidates() && plainPathOperand(w.text) {
+		return s.checkPath(w.text)
+	}
 	return nil
 }
 
+func plainPathOperand(text string) bool {
+	if text == "" || strings.HasPrefix(text, "-") || isAssignment(text) {
+		return false
+	}
+	return !strings.ContainsAny(text, "*?[")
+}
+
+// relativePathCandidate extracts the path-shaped value of an operand. It
+// ignores bare words, flags and assignments, which keeps grep patterns and
+// option values from being treated as filesystem paths.
+func relativePathCandidate(text string) (string, bool) {
+	if text == "" || isWorkspaceURL(text) {
+		return "", false
+	}
+	value := text
+	if strings.HasPrefix(value, "-") {
+		eq := strings.IndexByte(value, '=')
+		if eq < 0 {
+			return "", false
+		}
+		value = value[eq+1:]
+		if value == "" || isWorkspaceURL(value) {
+			return "", false
+		}
+	}
+	if strings.ContainsAny(value, `/\`) {
+		return value, true
+	}
+	return "", false
+}
+
+// checkPath validates a path against every directory the command may have
+// changed into. A path that escapes from any candidate cwd is rejected.
 func (s *workspaceState) checkPath(path string) error {
 	if isWorkspaceURL(path) {
 		return nil
@@ -378,8 +506,30 @@ func (s *workspaceState) checkPath(path string) error {
 	if path == "" {
 		return newWorkspaceError("path outside working dir")
 	}
+	if filepath.IsAbs(path) {
+		return s.checkPathFrom(path, "")
+	}
+	if len(s.cwds) == 0 {
+		return s.checkPathFrom(path, s.policy.Cwd)
+	}
+	for _, cwd := range s.cwds {
+		if err := s.checkPathFrom(path, cwd); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *workspaceState) checkPathFrom(path, cwd string) error {
+	if isWorkspaceURL(path) {
+		return nil
+	}
+	path = strings.TrimRight(path, ",)]}:")
+	if path == "" {
+		return newWorkspaceError("path outside working dir")
+	}
 	if !filepath.IsAbs(path) {
-		path = filepath.Join(s.policy.Cwd, path)
+		path = filepath.Join(cwd, path)
 	}
 	absolute, err := filepath.Abs(path)
 	if err != nil {
@@ -467,11 +617,12 @@ func (s *workspaceState) addParts(out *expandedWord, parts []syntax.WordPart) {
 				if atPathStart(out.text) {
 					out.homePath = true
 				}
-				if s.policy.Cwd == "" || s.pwdOverridden {
+				cwd := s.currentCwd()
+				if cwd == "" || s.pwdOverridden {
 					out.dynamic = true
 					continue
 				}
-				out.text += s.policy.Cwd
+				out.text += cwd
 			case "OLDPWD":
 				if atPathStart(out.text) {
 					out.homePath = true
@@ -613,16 +764,19 @@ func (s *workspaceState) checkSymlinkSource(args []expandedWord) error {
 	return nil
 }
 
-func (s *workspaceState) checkDirChange(args []expandedWord) error {
+// checkDirChange validates a directory-changing command. track is true only
+// for the shell's own builtins in the current script; wrapper recursion and
+// child processes pass false so their cd cannot move the outer shell.
+func (s *workspaceState) checkDirChange(args []expandedWord, track bool) error {
 	args = unwrapExecPrefix(args)
 	if len(args) == 0 {
 		return nil
 	}
 	switch baseCommand(args[0].text) {
 	case "cd":
-		return s.checkCD(args[1:])
+		return s.checkCD(args[1:], track)
 	case "pushd":
-		return s.checkPushd(args[1:])
+		return s.checkPushd(args[1:], track)
 	case "env":
 		return s.checkEnvChdir(args[1:])
 	}
@@ -650,16 +804,22 @@ func unwrapExecPrefix(args []expandedWord) []expandedWord {
 	return args
 }
 
-func (s *workspaceState) checkCD(args []expandedWord) error {
+func (s *workspaceState) checkCD(args []expandedWord, track bool) error {
 	target, ok := cdTarget(args)
 	if !ok {
 		home, resolved := s.effectiveHome()
 		if !resolved {
 			return newWorkspaceError("directory change cannot be validated under workspace restriction")
 		}
-		return s.checkPath(home)
+		if err := s.checkPath(home); err != nil {
+			return err
+		}
+		if track {
+			s.addCwd(home)
+		}
+		return nil
 	}
-	return s.checkDirTarget(target)
+	return s.checkDirTarget(target, track)
 }
 
 func cdTarget(args []expandedWord) (expandedWord, bool) {
@@ -685,7 +845,7 @@ func cdTarget(args []expandedWord) (expandedWord, bool) {
 	return args[i], true
 }
 
-func (s *workspaceState) checkPushd(args []expandedWord) error {
+func (s *workspaceState) checkPushd(args []expandedWord, track bool) error {
 	i := 0
 	for i < len(args) {
 		text := args[i].text
@@ -711,7 +871,7 @@ func (s *workspaceState) checkPushd(args []expandedWord) error {
 	if i >= len(args) {
 		return nil
 	}
-	return s.checkDirTarget(args[i])
+	return s.checkDirTarget(args[i], track)
 }
 
 func (s *workspaceState) checkEnvChdir(args []expandedWord) error {
@@ -756,23 +916,23 @@ func (s *workspaceState) checkEnvChdir(args []expandedWord) error {
 			if i+1 >= len(args) {
 				return newWorkspaceError("directory change cannot be validated under workspace restriction")
 			}
-			return s.checkDirTarget(args[i+1])
+			return s.checkDirTarget(args[i+1], false)
 		case strings.HasPrefix(text, "--chdir="):
 			return s.checkDirTarget(expandedWord{
 				text:    strings.TrimPrefix(text, "--chdir="),
 				dynamic: args[i].dynamic,
-			})
+			}, false)
 		case strings.HasPrefix(text, "-C") && len(text) > 2:
 			return s.checkDirTarget(expandedWord{
 				text:    text[2:],
 				dynamic: args[i].dynamic,
-			})
+			}, false)
 		}
 	}
 	return nil
 }
 
-func (s *workspaceState) checkDirTarget(target expandedWord) error {
+func (s *workspaceState) checkDirTarget(target expandedWord, track bool) error {
 	if target.dynamic || target.text == "" || target.text == "-" {
 		return newWorkspaceError("directory change cannot be validated under workspace restriction")
 	}
@@ -784,7 +944,13 @@ func (s *workspaceState) checkDirTarget(target expandedWord) error {
 		!strings.HasPrefix(target.text, "../") && target.text != "." {
 		return newWorkspaceError("directory change cannot be validated under workspace restriction")
 	}
-	return s.checkPath(target.text)
+	if err := s.checkPath(target.text); err != nil {
+		return err
+	}
+	if track {
+		s.addCwd(s.resolveCwd(target.text))
+	}
+	return nil
 }
 
 func isStackRotation(text string) bool {
@@ -838,7 +1004,7 @@ func (s *workspaceState) checkNested(
 		return nil
 	}
 	name := baseCommand(args[0].text)
-	if err := s.checkDirChange(args); err != nil {
+	if err := s.checkDirChange(args, false); err != nil {
 		return err
 	}
 	if err := s.checkPathFlags(args); err != nil {
@@ -921,10 +1087,49 @@ func (s *workspaceState) checkNested(
 			return newWorkspaceError("dynamic command cannot be validated under workspace restriction")
 		}
 		if found && len(nested) > 0 {
+			// env -C changes the cwd only for the command it launches, so the
+			// target is a temporary candidate while that command is checked.
+			if name == "env" {
+				if target, ok := envChdirTarget(args[1:]); ok &&
+					!target.dynamic && target.text != "" && target.text != "-" {
+					saved := append([]string(nil), s.cwds...)
+					s.addCwd(s.resolveCwd(target.text))
+					err := s.checkNested(expandedFromWords(nested), nil, depth+1)
+					s.cwds = saved
+					return err
+				}
+			}
 			return s.checkNested(expandedFromWords(nested), nil, depth+1)
 		}
 	}
 	return nil
+}
+
+// envChdirTarget returns the literal directory passed to env -C/--chdir.
+func envChdirTarget(args []expandedWord) (expandedWord, bool) {
+	for i := 0; i < len(args); i++ {
+		text := args[i].text
+		switch {
+		case text == "--":
+			return expandedWord{}, false
+		case text == "-C" || text == "--chdir":
+			if i+1 < len(args) {
+				return args[i+1], true
+			}
+			return expandedWord{}, false
+		case strings.HasPrefix(text, "--chdir="):
+			return expandedWord{
+				text:    strings.TrimPrefix(text, "--chdir="),
+				dynamic: args[i].dynamic,
+			}, true
+		case strings.HasPrefix(text, "-C") && len(text) > 2:
+			return expandedWord{
+				text:    text[2:],
+				dynamic: args[i].dynamic,
+			}, true
+		}
+	}
+	return expandedWord{}, false
 }
 
 // checkBusybox treats the first non-flag argument as the applet, so

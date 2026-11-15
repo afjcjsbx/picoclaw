@@ -192,6 +192,8 @@ func TestShellTool_WorkspaceCDSymlinkEscapeBlocked(t *testing.T) {
 	outside := filepath.Join(root, "outside")
 	require.NoError(t, os.MkdirAll(workspace, 0o755))
 	require.NoError(t, os.MkdirAll(outside, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("CANARY_SECRET_12345\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(outside, "delete-me.txt"), []byte("delete me\n"), 0o600))
 	if err := os.Symlink(outside, filepath.Join(workspace, "link")); err != nil {
 		t.Skipf("symlinks not supported: %v", err)
 	}
@@ -199,6 +201,9 @@ func TestShellTool_WorkspaceCDSymlinkEscapeBlocked(t *testing.T) {
 
 	blocked := []string{
 		"cd link && touch pwn",
+		"cd link; cat secret.txt",
+		"cd link; echo PWNED > pwn2.txt",
+		"cd link; rm -f delete-me.txt",
 		"pushd link",
 		"env -C link touch pwn",
 		"cd link/../outside",
@@ -212,8 +217,15 @@ func TestShellTool_WorkspaceCDSymlinkEscapeBlocked(t *testing.T) {
 		})
 	}
 
-	_, err := os.Stat(filepath.Join(outside, "pwn"))
-	require.True(t, os.IsNotExist(err), "blocked command created a file outside the workspace")
+	for _, path := range []string{"pwn", "pwn2.txt"} {
+		_, err := os.Stat(filepath.Join(outside, path))
+		require.True(t, os.IsNotExist(err), "blocked command created %s outside the workspace", path)
+	}
+	_, err := os.Stat(filepath.Join(outside, "delete-me.txt"))
+	require.NoError(t, err, "blocked command deleted the outside canary")
+	data, err := os.ReadFile(filepath.Join(outside, "secret.txt"))
+	require.NoError(t, err)
+	require.Equal(t, "CANARY_SECRET_12345\n", string(data), "blocked command modified the outside canary")
 }
 
 func TestShellTool_WorkspaceHomeInsideWorkspaceAllowed(t *testing.T) {
@@ -248,4 +260,80 @@ func TestShellTool_WorkspaceDynamicRedirectBlocked(t *testing.T) {
 	require.True(t, result.IsError)
 	require.Contains(t, result.ForLLM, "dynamic path cannot be validated")
 	require.NotContains(t, strings.ToLower(result.ForLLM), "not a directory")
+}
+
+// TestShellTool_WorkspaceEffectiveCwdEscapeBlocked covers the second step of
+// the cd escape: the first cd stays inside the workspace, but a later cd or a
+// relative operand inside that directory reaches a symlink pointing outside.
+// Validating the first cd alone is not enough; every relative operand must be
+// resolved against the directory the shell actually changed into.
+func TestShellTool_WorkspaceEffectiveCwdEscapeBlocked(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX symlink semantics")
+	}
+
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	sub := filepath.Join(workspace, "sub")
+	outside := filepath.Join(root, "outside")
+	require.NoError(t, os.MkdirAll(sub, 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(sub, "nested"), 0o755))
+	require.NoError(t, os.MkdirAll(outside, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("CANARY_SECRET_12345\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(outside, "delete-me.txt"), []byte("delete me\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(sub, "inside.txt"), []byte("inside-ok\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(sub, "nested", "inside.txt"), []byte("nested-ok\n"), 0o600))
+	if err := os.Symlink(outside, filepath.Join(sub, "outside-link")); err != nil {
+		t.Skipf("symlinks not supported: %v", err)
+	}
+	if err := os.Symlink(filepath.Join(outside, "secret.txt"), filepath.Join(sub, "secret")); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := newWorkspaceGuardTestTool(t, workspace)
+
+	blocked := []string{
+		"cd sub; cat outside-link/secret.txt",
+		"cd sub; echo PWNED > outside-link/pwn.txt",
+		"cd sub; rm -f outside-link/delete-me.txt",
+		"cd sub; cat secret",
+		"cd sub; cd outside-link; cat secret.txt",
+		"cd sub; cd outside-link; echo PWNED > pwn.txt",
+		"env -C sub cat outside-link/secret.txt",
+		"sh -c 'cd sub; cat outside-link/secret.txt'",
+		"cd sub; sh -c 'cat secret'",
+	}
+	for _, command := range blocked {
+		t.Run(command, func(t *testing.T) {
+			result := runWorkspaceGuardCommand(t, tool, command)
+			require.True(t, result.IsError, "expected %q to be blocked: %s", command, result.ForLLM)
+			require.Contains(t, result.ForLLM, "blocked by safety guard",
+				"expected workspace guard to block %q: %s", command, result.ForLLM)
+		})
+	}
+
+	allowed := []struct {
+		command string
+		content string
+	}{
+		{"cd sub; cat inside.txt", "inside-ok"},
+		{"cd sub; cd nested; cat inside.txt", "nested-ok"},
+		{"env -C sub cat inside.txt", "inside-ok"},
+	}
+	for _, tc := range allowed {
+		t.Run(tc.command, func(t *testing.T) {
+			result := runWorkspaceGuardCommand(t, tool, tc.command)
+			require.False(t, result.IsError, "expected %q to be allowed: %s", tc.command, result.ForLLM)
+			require.Contains(t, result.ForLLM, tc.content,
+				"expected %q to read inside the workspace: %s", tc.command, result.ForLLM)
+		})
+	}
+
+	data, err := os.ReadFile(filepath.Join(outside, "secret.txt"))
+	require.NoError(t, err)
+	require.Equal(t, "CANARY_SECRET_12345\n", string(data), "outside secret was modified")
+	_, err = os.Stat(filepath.Join(outside, "delete-me.txt"))
+	require.NoError(t, err, "outside canary was deleted")
+	_, err = os.Stat(filepath.Join(outside, "pwn.txt"))
+	require.True(t, os.IsNotExist(err), "a blocked command created a file outside the workspace")
 }
