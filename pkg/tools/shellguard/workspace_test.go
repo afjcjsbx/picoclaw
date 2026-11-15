@@ -342,6 +342,7 @@ func TestCheckWorkspaceEffectiveCwd(t *testing.T) {
 
 	for _, command := range []string{
 		"cd sub; cat outside-link/secret.txt",
+		"cd sub; cat secret",
 		"cd sub; echo pwn > outside-link/pwn.txt",
 		"cd sub; cd outside-link; cat secret.txt",
 		"env -C sub cat outside-link/secret.txt",
