@@ -85,6 +85,9 @@ type ExecTool struct {
 	state                   *execStateStore
 	sessionManager          *SessionManager
 	riskGuard               *shellguard.Guard
+	approvalEnabled         bool
+	approvalThreshold       shellguard.RiskLevel
+	approvalReviewer        approvalReviewer
 }
 
 var _ AsyncExecutor = (*ExecTool)(nil)
@@ -154,6 +157,18 @@ var (
 		),
 		// Recursive deletion of the filesystem root.
 		regexp.MustCompile(`\brm\s+(?:-{1,2}[a-z-]*\s+)*/(?:[\s*/.]|$)`),
+		// Recursive deletion of the directories that hold the OS, system
+		// binaries, user homes and the root account. Subdirectories remain
+		// governed by the risk classifier, so rm -rf /home/alice/build is not
+		// caught here.
+		regexp.MustCompile(
+			`\brm\s+(?:-{1,2}[a-z-]*\s+)*/+` +
+				`(?:etc|usr|home|root|bin|sbin|lib|lib64|boot|var|opt|srv|sys|proc|dev)` +
+				`(?:/\*)?/?` + `(?:[\s;&|<>()]|$)`,
+		),
+		// Sending SIGHUP to every process, or SIGKILL to PID 1.
+		regexp.MustCompile(`\bkill\s+(?:--\s+)?-1(?:[\s;&|<>()]|$)`),
+		regexp.MustCompile(`\bkill\s+(?:-9|-KILL|-SIGKILL)\s+1(?:[\s;&|<>()]|$)`),
 		// Host power state changes.
 		regexp.MustCompile(`\b(?:shutdown|reboot|poweroff)\b`),
 	}
@@ -426,6 +441,7 @@ func NewExecToolWithConfig(
 	var allowedPathPatterns []*regexp.Regexp
 	allowRemote := true
 	enableDefaultGuard := true
+	approvalConfig := config.ApprovalsConfig{}
 	if len(allowPaths) > 0 {
 		allowedPathPatterns = allowPaths[0]
 	}
@@ -434,6 +450,10 @@ func NewExecToolWithConfig(
 		execConfig := cfg.Tools.Exec
 		enableDefaultGuard = execConfig.EnableDenyPatterns
 		allowRemote = execConfig.AllowRemote
+		var err error
+		if approvalConfig, err = cfg.Approvals.Normalized(); err != nil {
+			return nil, fmt.Errorf("approvals: %w", err)
+		}
 		if enableDefaultGuard {
 			denyPatterns = append(denyPatterns, defaultDenyPatterns...)
 			if runtime.GOOS == "windows" {
@@ -506,9 +526,29 @@ func NewExecToolWithConfig(
 		execEnvAllowlist = cfg.Tools.Exec.EnvAllowlist
 	}
 
-	riskGuard, err := newRiskGuard(cfg, enableDefaultGuard)
+	smartApprovals := approvalConfig.Mode == config.ApprovalModeSmart
+
+	// Smart approvals need the AST classifier even when the optional default
+	// guard set is disabled; otherwise there is no risk signal to review.
+	riskGuard, err := newRiskGuard(cfg, enableDefaultGuard || smartApprovals)
 	if err != nil {
 		return nil, err
+	}
+
+	var reviewer approvalReviewer
+	if smartApprovals {
+		guardian, guardianErr := newApprovalGuardian(cfg, approvalConfig)
+		if guardianErr != nil {
+			// Keep safe commands working, but fail closed for every command
+			// that needs a second opinion.
+			logger.WarnCF(
+				"tools.approval",
+				"smart approvals enabled but the Guardian is unavailable; risky commands will be rejected",
+				map[string]any{"error": guardianErr.Error()},
+			)
+		} else if guardian != nil {
+			reviewer = guardian
+		}
 	}
 
 	hardlinePatterns := make([]*regexp.Regexp, 0, len(hardlineDenyPatterns)+8)
@@ -535,6 +575,9 @@ func NewExecToolWithConfig(
 		state:                   newExecStateStore(),
 		sessionManager:          getSessionManager(),
 		riskGuard:               riskGuard,
+		approvalEnabled:         smartApprovals,
+		approvalThreshold:       approvalThreshold(approvalConfig.SmartThreshold),
+		approvalReviewer:        reviewer,
 	}, nil
 }
 
@@ -873,7 +916,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 	// path would fail validation on the next call.
 	stateCwd := cwd
 
-	if guardError := t.guardCommand(guardedCommand, cwd); guardError != "" {
+	if guardError := t.guardCommandContext(ctx, guardedCommand, cwd); guardError != "" {
 		return ErrorResult(guardError)
 	}
 
@@ -2109,6 +2152,10 @@ func needsCanonicalDenyForms(command string) bool {
 }
 
 func (t *ExecTool) guardCommand(command, cwd string) string {
+	return t.guardCommandContext(context.Background(), command, cwd)
+}
+
+func (t *ExecTool) guardCommandContext(ctx context.Context, command, cwd string) string {
 	cmd := strings.TrimSpace(command)
 	lower := strings.ToLower(cmd)
 	// Quoted heredoc bodies are literal text: a backtick there cannot run a
@@ -2134,6 +2181,7 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 
 	// Hardline patterns are an immutable floor: they apply even when the
 	// default deny set is disabled and no custom allow rule can exempt them.
+	// They are never sent to the Guardian model.
 	if patternsMatchAny(t.hardlineDenyPatterns, denyForms) {
 		return "Command blocked by safety guard (dangerous pattern detected)"
 	}
@@ -2145,11 +2193,19 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 		return "Command blocked by safety guard (dangerous pattern detected)"
 	}
 
+	needsApproval := false
+	approvalDescription := ""
+
 	// Default deny patterns can be exempted by custom allow patterns, so
-	// operators can selectively permit normally-blocked commands.
+	// operators can selectively permit normally-blocked commands. In smart
+	// mode they can also be reviewed instead of being rejected outright.
 	if !t.commandMatchesCustomAllowPattern(lower) {
 		if patternsMatchAny(t.denyPatterns, []string{lowerForDeny}) {
-			return "Command blocked by safety guard (dangerous pattern detected)"
+			if !t.approvalEnabled {
+				return "Command blocked by safety guard (dangerous pattern detected)"
+			}
+			needsApproval = true
+			approvalDescription = "matched a built-in dangerous-command pattern"
 		}
 	}
 
@@ -2292,15 +2348,66 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 	// byte-level patterns cannot resolve, such as `x=rm; $x -rf /`. Only an
 	// explicit custom risk allow pattern can exempt it, and only up to
 	// riskAllowThreshold; custom_allow_patterns no longer bypasses this layer.
+	// In smart mode, commands at or above approvalThreshold, plus unknown
+	// commands, go to the Guardian instead of being rejected outright.
 	if t.riskGuard != nil {
-		if blocked := t.riskGuard.Check(cmd); blocked != nil {
+		if t.approvalEnabled {
+			assessment := t.riskGuard.Assess(cmd)
+			riskExempt := t.riskAllowExempts(cmd, lower)
+			riskBlocked := !riskExempt &&
+				(assessment.Unknown ||
+					!shellguard.IsAllowed(assessment.Level, t.riskGuard.Threshold()))
+			smartTriggered := !riskExempt &&
+				(assessment.Unknown || assessment.Level >= t.approvalThreshold)
+			if smartTriggered {
+				needsApproval = true
+				riskDescription := assessment.Reason
+				if !assessment.Unknown || riskDescription == "" {
+					riskDescription = "risk level " + assessment.Level.String()
+				}
+				if approvalDescription == "" {
+					approvalDescription = riskDescription
+				} else {
+					approvalDescription += "; " + riskDescription
+				}
+			} else if riskBlocked {
+				return assessment.BlockedError(t.riskGuard.Threshold()).Error()
+			}
+		} else if blocked := t.riskGuard.Check(cmd); blocked != nil {
 			if !t.riskAllowExempts(cmd, lower) {
 				return blocked.Error()
 			}
 		}
 	}
 
+	if needsApproval {
+		if blocked := t.reviewCommand(ctx, cmd, approvalDescription); blocked != "" {
+			return blocked
+		}
+	}
+
 	return ""
+}
+
+// reviewCommand asks the Guardian model for a verdict on a command that the
+// static layers flagged. Approve returns an empty string; deny, escalate, an
+// unavailable reviewer and provider errors all return a block message.
+func (t *ExecTool) reviewCommand(ctx context.Context, command, description string) string {
+	if t.approvalReviewer == nil {
+		return "Command blocked: approval guardian is unavailable; manual approval is not configured"
+	}
+	verdict, err := t.approvalReviewer.Review(ctx, command, description)
+	if err != nil {
+		return "Command blocked: approval guardian could not review the command; manual approval is not configured"
+	}
+	switch verdict {
+	case approvalApprove:
+		return ""
+	case approvalDeny:
+		return "Command blocked by approval guardian (DENY)"
+	default:
+		return "Command blocked by approval guardian (ESCALATE); manual approval is not configured"
+	}
 }
 
 func commandPathAbs(pathText, cwdPath string) (string, error) {

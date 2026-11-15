@@ -345,12 +345,34 @@ PicoClaw 默认在沙箱环境中运行。Agent 只能访问配置的工作区�
 | `tools.exec.custom_deny_patterns` | string[] | `[]` | 自定义阻止的正则表达式模式；始终生效 |
 | `tools.exec.custom_allow_patterns` | string[] | `[]` | 整条命令匹配的正则表达式，仅豁免默认拒绝规则；会自动添加首尾锚点 |
 | `tools.exec.custom_risk_allow_patterns` | string[] | `[]` | 整条命令匹配的正则表达式，用于豁免风险分类器，受 `risk_allow_threshold` 限制 |
-| `tools.exec.risk_threshold` | string | `"medium"` | AST 风险分类器允许的最高风险级别（`low`、`medium`、`high`、`critical`）；`enable_deny_patterns` 为 `false` 时不生效 |
+| `tools.exec.risk_threshold` | string | `"medium"` | AST 风险分类器允许的最高风险级别（`low`、`medium`、`high`、`critical`）；`enable_deny_patterns` 为 `false` 时不生效，但 `approvals.mode` 为 `smart` 时仍会启用 |
 | `tools.exec.risk_allow_threshold` | string | `"medium"` | `custom_risk_allow_patterns` 可豁免的最高风险级别；需显式设为 `high` 或 `critical` |
 | `tools.exec.risk_overrides` | object | `{}` | 按命令覆盖基础风险级别；参数修饰符仍可继续提升 |
 | `tools.exec.arg_modifiers` | object | `{}` | 按命令追加基于参数的风险提升规则 |
 | `tools.exec.env_set` | object | `{}` | 始终注入 exec 子进程的变量；属于受信任配置，会覆盖继承的同名变量 |
 | `tools.exec.env_allowlist` | string[] | `[]` | 除默认允许列表外，额外从父进程继承的变量名；仅支持显式名称 |
+
+#### 智能审批
+
+顶层 `approvals` 配置可启用 Guardian 模型，对静态守卫标记的命令进行二次审查。它不会审查所有命令：硬性底线和自定义拒绝规则仍直接拦截，安全命令不会调用模型，拒绝或升级（`ESCALATE`）都会按失败关闭处理。
+
+```json
+{
+  "approvals": {
+    "mode": "smart",
+    "model": "glm-4.7",
+    "smart_threshold": "high",
+    "smart_timeout_seconds": 20
+  }
+}
+```
+
+| 配置键 | 类型 | 默认值 | 描述 |
+|--------|------|--------|------|
+| `approvals.mode` | string | `"off"` | `off` 或 `smart` |
+| `approvals.model` | string | `""` | Guardian 模型别名或 `provider/model`；为空时使用 `agents.defaults.model_name` |
+| `approvals.smart_threshold` | string | `"high"` | `high` 审查 high、critical 和未知命令；`critical` 仅审查 critical 和未知命令 |
+| `approvals.smart_timeout_seconds` | int | `20` | 单次审查超时，最大 `600` 秒 |
 
 > **安全提示：** Symlink 保护默认启用——所有文件路径在允许列表匹配前都会通过 `filepath.EvalSymlinks` 解析，防止符号链接逃逸攻击。
 
