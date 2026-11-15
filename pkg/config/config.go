@@ -254,9 +254,10 @@ const (
 
 // ApprovalsConfig configures how potentially dangerous tool calls are approved.
 type ApprovalsConfig struct {
-	// Mode is "off" (default) or "smart". Smart mode asks a Guardian model to
+	// Mode is "smart" (default) or "off". Smart mode asks a Guardian model to
 	// review commands at or above SmartThreshold, plus commands whose risk
-	// cannot be classified.
+	// cannot be classified. Set "off" to keep the static guards as the final
+	// decision.
 	Mode string `json:"mode,omitempty" env:"PICOCLAW_APPROVALS_MODE"`
 	// Model selects the Guardian model by model_list alias or provider/model
 	// reference. Empty uses the agent's default model.
@@ -274,9 +275,9 @@ type ApprovalsConfig struct {
 func (c ApprovalsConfig) Normalized() (ApprovalsConfig, error) {
 	mode := strings.ToLower(strings.TrimSpace(c.Mode))
 	switch mode {
-	case "", ApprovalModeOff:
-		mode = ApprovalModeOff
-	case ApprovalModeSmart:
+	case "", ApprovalModeSmart:
+		mode = ApprovalModeSmart
+	case ApprovalModeOff:
 	default:
 		return c, fmt.Errorf("mode %q must be %q or %q", c.Mode, ApprovalModeOff, ApprovalModeSmart)
 	}

@@ -26,7 +26,7 @@ Smart approvals are configured in a top-level `approvals` block, not under `tool
 
 | Config | Type | Default | Description |
 |--------|------|---------|-------------|
-| `approvals.mode` | string | `"off"` | `"off"` keeps the static guards as the final decision. `"smart"` asks an auxiliary Guardian model to review flagged commands |
+| `approvals.mode` | string | `"smart"` | `"smart"` (default) asks an auxiliary Guardian model to review flagged commands. `"off"` keeps the static guards as the final decision |
 | `approvals.model` | string | `""` | Guardian model by `model_list` alias or `provider/model` reference. Empty uses `agents.defaults.model_name` |
 | `approvals.smart_threshold` | string | `"high"` | `"high"` reviews `high`, `critical` and unknown commands. `"critical"` reviews only `critical` and unknown commands |
 | `approvals.smart_timeout_seconds` | int | `20` | Per-review timeout, maximum `600`. A timed-out review escalates and the command is rejected |
@@ -122,7 +122,7 @@ Limits worth knowing:
 
 ### Smart approvals
 
-`approvals.mode: "smart"` adds a second opinion for commands that the static guards flag, without asking a model about every command:
+`approvals.mode: "smart"` is the default and adds a second opinion for commands that the static guards flag, without asking a model about every command. Set `approvals.mode` to `"off"` to disable the Guardian and keep the static guards as the final decision:
 
 1. **Hardline and custom deny rules stay final.** Catastrophic operations such as `rm -rf /`, recursive deletion of `/etc`, `/usr`, `/home` or `/root`, `mkfs`, `dd if=`, `shutdown`, `reboot`, `poweroff`, fork bombs and `kill -1` are rejected directly. The Guardian is never consulted for them.
 2. **Default deny pattern hits can be reviewed.** A command caught by the built-in regex set can be approved when the Guardian considers it a false positive.

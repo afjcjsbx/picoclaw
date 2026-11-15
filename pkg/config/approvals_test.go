@@ -26,6 +26,15 @@ func TestApprovalsConfigEnv(t *testing.T) {
 	}
 }
 
+func TestDefaultApprovalsModeIsSmart(t *testing.T) {
+	t.Parallel()
+
+	cfg := DefaultConfig()
+	if cfg.Approvals.Mode != ApprovalModeSmart {
+		t.Fatalf("DefaultConfig().Approvals.Mode = %q, want %q", cfg.Approvals.Mode, ApprovalModeSmart)
+	}
+}
+
 func TestApprovalsConfigNormalized(t *testing.T) {
 	t.Parallel()
 
@@ -38,7 +47,14 @@ func TestApprovalsConfigNormalized(t *testing.T) {
 		wantErr   string
 	}{
 		{
-			name:      "empty defaults to off",
+			name:      "empty defaults to smart",
+			wantMode:  ApprovalModeSmart,
+			wantLevel: ApprovalSmartThresholdHigh,
+			wantSecs:  DefaultApprovalSmartTimeoutSeconds,
+		},
+		{
+			name:      "explicit off",
+			in:        ApprovalsConfig{Mode: ApprovalModeOff},
 			wantMode:  ApprovalModeOff,
 			wantLevel: ApprovalSmartThresholdHigh,
 			wantSecs:  DefaultApprovalSmartTimeoutSeconds,

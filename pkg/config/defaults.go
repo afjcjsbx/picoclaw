@@ -90,7 +90,7 @@ func DefaultConfig() *Config {
 			},
 		},
 		Approvals: ApprovalsConfig{
-			Mode:                ApprovalModeOff,
+			Mode:                ApprovalModeSmart,
 			SmartThreshold:      ApprovalSmartThresholdHigh,
 			SmartTimeoutSeconds: DefaultApprovalSmartTimeoutSeconds,
 		},

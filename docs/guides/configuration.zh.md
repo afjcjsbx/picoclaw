@@ -354,7 +354,7 @@ PicoClaw 默认在沙箱环境中运行。Agent 只能访问配置的工作区�
 
 #### 智能审批
 
-顶层 `approvals` 配置可启用 Guardian 模型，对静态守卫标记的命令进行二次审查。它不会审查所有命令：硬性底线和自定义拒绝规则仍直接拦截，安全命令不会调用模型，拒绝或升级（`ESCALATE`）都会按失败关闭处理。
+顶层 `approvals` 配置默认启用 Guardian 模型，对静态守卫标记的命令进行二次审查。将 `approvals.mode` 设为 `"off"` 可禁用该审查。它不会审查所有命令：硬性底线和自定义拒绝规则仍直接拦截，安全命令不会调用模型，拒绝或升级（`ESCALATE`）都会按失败关闭处理。
 
 ```json
 {
@@ -369,7 +369,7 @@ PicoClaw 默认在沙箱环境中运行。Agent 只能访问配置的工作区�
 
 | 配置键 | 类型 | 默认值 | 描述 |
 |--------|------|--------|------|
-| `approvals.mode` | string | `"off"` | `off` 或 `smart` |
+| `approvals.mode` | string | `"smart"` | `smart`（默认）或 `off` |
 | `approvals.model` | string | `""` | Guardian 模型别名或 `provider/model`；为空时使用 `agents.defaults.model_name` |
 | `approvals.smart_threshold` | string | `"high"` | `high` 审查 high、critical 和未知命令；`critical` 仅审查 critical 和未知命令 |
 | `approvals.smart_timeout_seconds` | int | `20` | 单次审查超时，最大 `600` 秒 |

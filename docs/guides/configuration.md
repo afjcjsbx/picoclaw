@@ -555,7 +555,7 @@ When `enable_deny_patterns` is `true`, Unix commands are also parsed into an AST
 
 #### Smart approvals
 
-The top-level `approvals` block adds an optional Guardian model that reviews commands the static guards flag. It is not a general-purpose model call: hardline operations and custom deny rules are still rejected directly, safe commands never reach the model, and denied or escalated verdicts fail closed.
+The top-level `approvals` block enables a Guardian model that reviews commands the static guards flag; `smart` mode is the default. Set `approvals.mode` to `"off"` to disable it. It is not a general-purpose model call: hardline operations and custom deny rules are still rejected directly, safe commands never reach the model, and denied or escalated verdicts fail closed.
 
 ```json
 {
@@ -570,7 +570,7 @@ The top-level `approvals` block adds an optional Guardian model that reviews com
 
 | Config Key | Type | Default | Description |
 |------------|------|---------|-------------|
-| `approvals.mode` | string | `"off"` | `off` or `smart` |
+| `approvals.mode` | string | `"smart"` | `smart` (default) or `off` |
 | `approvals.model` | string | `""` | Guardian model alias or `provider/model`; empty uses `agents.defaults.model_name` |
 | `approvals.smart_threshold` | string | `"high"` | `high` reviews high, critical and unknown commands; `critical` reviews critical and unknown commands |
 | `approvals.smart_timeout_seconds` | int | `20` | Per-review timeout, maximum `600` |
