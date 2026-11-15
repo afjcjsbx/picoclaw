@@ -66,7 +66,32 @@ func (g *Guard) Check(command string) *BlockedError {
 	if g == nil {
 		return nil
 	}
-	return g.checkScript(command, 0)
+	file, err := Parse(command)
+	if err != nil {
+		return g.parseError(command)
+	}
+	return g.CheckFile(command, file)
+}
+
+// CheckFile classifies an already parsed command. It is the shared-parse entry
+// point used by the exec guard; a nil file is treated as a parse failure.
+func (g *Guard) CheckFile(command string, file *syntax.File) *BlockedError {
+	if g == nil {
+		return nil
+	}
+	if file == nil {
+		return g.parseError(command)
+	}
+	return g.checkFile(file, 0)
+}
+
+func (g *Guard) parseError(command string) *BlockedError {
+	return NewBlockedError(
+		[]string{summarize(command)},
+		RiskCritical,
+		g.threshold,
+		"command could not be parsed for risk classification",
+	)
 }
 
 // WithThreshold returns a shallow copy of the guard using a different maximum
@@ -88,17 +113,14 @@ func (g *Guard) checkScript(command string, depth int) *BlockedError {
 		)
 	}
 
-	parser := syntax.NewParser(syntax.Variant(syntax.LangBash))
-	file, err := parser.Parse(strings.NewReader(command), "")
+	file, err := Parse(command)
 	if err != nil {
-		return NewBlockedError(
-			[]string{summarize(command)},
-			RiskCritical,
-			g.threshold,
-			"command could not be parsed for risk classification",
-		)
+		return g.parseError(command)
 	}
+	return g.checkFile(file, depth)
+}
 
+func (g *Guard) checkFile(file *syntax.File, depth int) *BlockedError {
 	var blocked *BlockedError
 	syntax.Walk(file, func(node syntax.Node) bool {
 		if blocked != nil {
@@ -317,6 +339,20 @@ type word struct {
 }
 
 func literalWord(w *syntax.Word) word {
+	// A single plain or single-quoted part is already the final argv word.
+	// expand.Literal would produce the same text through a full expansion
+	// config, so the direct path avoids those allocations for the common case.
+	if len(w.Parts) == 1 {
+		switch p := w.Parts[0].(type) {
+		case *syntax.Lit:
+			return word{text: p.Value, literal: true}
+		case *syntax.SglQuoted:
+			if !p.Dollar {
+				return word{text: p.Value, literal: true}
+			}
+		}
+	}
+
 	var b strings.Builder
 	literal := true
 

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/creack/pty"
+	"mvdan.cc/sh/v3/syntax"
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/constants"
@@ -2086,6 +2087,12 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 		}
 	}
 
+	// The workspace and risk passes both need an AST. Parse the written command
+	// once here and share it when the workspace pass does not need a normalized
+	// re-parse. The parse is attempted at most once per guard call.
+	var parsed *syntax.File
+	parsedAttempted := false
+
 	if t.restrictToWorkspace {
 		// Block path traversal patterns including .../.../ variants
 		if regexp.MustCompile(`\.\.(?:[\\/]\.\.)*[\\/]`).MatchString(cmd) {
@@ -2219,6 +2226,8 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 		// constructs against the same boundary. It is a static best-effort
 		// layer; OS-level isolation remains the only hard boundary.
 		if runtime.GOOS != "windows" {
+			parsed, _ = shellguard.Parse(cmd)
+			parsedAttempted = true
 			policy := shellguard.WorkspacePolicy{
 				Cwd:    cwdPath,
 				Home:   t.execHomeDir(),
@@ -2227,7 +2236,7 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 					return t.workspacePathAllowed(p, cwdPath)
 				},
 			}
-			if err := shellguard.CheckWorkspace(cmd, policy); err != nil {
+			if err := shellguard.CheckWorkspaceFile(cmd, parsed, policy); err != nil {
 				return "Command blocked by safety guard (" + err.Error() + ")"
 			}
 		}
@@ -2238,7 +2247,10 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 	// explicit custom risk allow pattern can exempt it, and only up to
 	// riskAllowThreshold; custom_allow_patterns no longer bypasses this layer.
 	if t.riskGuard != nil {
-		if blocked := t.riskGuard.Check(cmd); blocked != nil {
+		if !parsedAttempted {
+			parsed, _ = shellguard.Parse(cmd)
+		}
+		if blocked := t.riskGuard.CheckFile(cmd, parsed); blocked != nil {
 			if !t.riskAllowExempts(cmd, lower) {
 				return blocked.Error()
 			}

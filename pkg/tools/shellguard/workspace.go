@@ -66,24 +66,42 @@ func CheckWorkspace(command string, policy WorkspacePolicy) error {
 	return checkWorkspaceScript(command, policy, 0)
 }
 
+// CheckWorkspaceFile validates an already parsed command. The exec guard uses
+// it to share one parse with the risk classifier. Commands that contain fixed
+// shell rewrites are re-parsed after normalizeWorkspace, because those rewrites
+// can change word boundaries and the shared file reflects the written form.
+func CheckWorkspaceFile(command string, file *syntax.File, policy WorkspacePolicy) error {
+	if file == nil {
+		return newWorkspaceError("command could not be parsed for workspace validation")
+	}
+	if normalized := normalizeWorkspace(command); normalized != command {
+		return checkWorkspaceText(normalized, policy, 0)
+	}
+	return checkWorkspaceFile(file, policy, 0)
+}
+
 func checkWorkspaceScript(command string, policy WorkspacePolicy, depth int) error {
+	// Apply the fixed shell rewrites before parsing. This also applies to
+	// scripts reached through sh -c, eval and heredocs.
+	return checkWorkspaceText(normalizeWorkspace(command), policy, depth)
+}
+
+func checkWorkspaceText(command string, policy WorkspacePolicy, depth int) error {
 	if depth > maxShellNesting {
 		return newWorkspaceError("shell nesting limit exceeded")
 	}
 
-	// Apply the fixed shell rewrites before parsing. This also applies to
-	// scripts reached through sh -c, eval and heredocs.
-	command = normalizeWorkspace(command)
-
-	parser := syntax.NewParser(syntax.Variant(syntax.LangBash))
-	file, err := parser.Parse(strings.NewReader(command), "")
+	file, err := Parse(command)
 	if err != nil {
 		// Block scripts this parser cannot inspect rather than leaving a
 		// parser-differential gap. The exec shell does not run syntax it
 		// rejects either, so legitimate commands are unaffected.
 		return newWorkspaceError("command could not be parsed for workspace validation")
 	}
+	return checkWorkspaceFile(file, policy, depth)
+}
 
+func checkWorkspaceFile(file *syntax.File, policy WorkspacePolicy, depth int) error {
 	state := workspaceState{
 		policy:        policy,
 		cdpathSet:     policy.CDPath,
@@ -281,14 +299,33 @@ func (s *workspaceState) checkCall(
 		}
 	}
 	s.noteUnset(args)
+	return s.checkSimple(args, redirs, depth, true)
+}
 
+// checkSimple validates the surface of one simple command exactly once and then
+// inspects the scripts or commands it launches. Keeping the surface checks here
+// avoids running them twice when checkNested recurses through wrappers.
+func (s *workspaceState) checkSimple(
+	args []expandedWord,
+	redirs []*syntax.Redirect,
+	depth int,
+	track bool,
+) error {
+	if depth > maxShellNesting {
+		return newWorkspaceError("shell nesting limit exceeded")
+	}
+	if len(args) == 0 {
+		return nil
+	}
+	// Surface flags are checked even when the command name is dynamic: a
+	// command such as `$CMD -C ..` must still not point outside the workspace.
 	if err := s.checkPathFlags(args); err != nil {
 		return err
 	}
 	if err := s.checkSymlinkSource(args); err != nil {
 		return err
 	}
-	if err := s.checkDirChange(args, true); err != nil {
+	if err := s.checkDirChange(args, track); err != nil {
 		return err
 	}
 	return s.checkNested(args, redirs, depth)
@@ -1004,15 +1041,6 @@ func (s *workspaceState) checkNested(
 		return nil
 	}
 	name := baseCommand(args[0].text)
-	if err := s.checkDirChange(args, false); err != nil {
-		return err
-	}
-	if err := s.checkPathFlags(args); err != nil {
-		return err
-	}
-	if err := s.checkSymlinkSource(args); err != nil {
-		return err
-	}
 
 	if isShellCommand(name) {
 		words := wordsFromExpanded(args[1:])
@@ -1094,12 +1122,12 @@ func (s *workspaceState) checkNested(
 					!target.dynamic && target.text != "" && target.text != "-" {
 					saved := append([]string(nil), s.cwds...)
 					s.addCwd(s.resolveCwd(target.text))
-					err := s.checkNested(expandedFromWords(nested), nil, depth+1)
+					err := s.checkSimple(expandedFromWords(nested), nil, depth+1, false)
 					s.cwds = saved
 					return err
 				}
 			}
-			return s.checkNested(expandedFromWords(nested), nil, depth+1)
+			return s.checkSimple(expandedFromWords(nested), nil, depth+1, false)
 		}
 	}
 	return nil
@@ -1152,7 +1180,7 @@ func (s *workspaceState) checkBusybox(args []expandedWord, depth int) error {
 	if i >= len(args) {
 		return nil
 	}
-	return s.checkNested(args[i:], nil, depth+1)
+	return s.checkSimple(args[i:], nil, depth+1, false)
 }
 
 func (s *workspaceState) checkTrap(args []expandedWord, depth int) error {
@@ -1204,7 +1232,7 @@ func (s *workspaceState) checkExec(args []expandedWord, depth int) error {
 	if i >= len(args) {
 		return nil
 	}
-	return s.checkNested(args[i:], nil, depth+1)
+	return s.checkSimple(args[i:], nil, depth+1, false)
 }
 
 // checkFindExec inspects commands launched by find -exec/-execdir/-ok/-okdir.
@@ -1219,7 +1247,7 @@ func (s *workspaceState) checkFindExec(args []expandedWord, depth int) error {
 				end++
 			}
 			if end > i+1 {
-				if err := s.checkNested(args[i+1:end], nil, depth+1); err != nil {
+				if err := s.checkSimple(args[i+1:end], nil, depth+1, false); err != nil {
 					return err
 				}
 			}

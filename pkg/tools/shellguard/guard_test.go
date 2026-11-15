@@ -159,6 +159,38 @@ func TestGuardFindExecNestedCommands(t *testing.T) {
 	}
 }
 
+func TestGuardCheckFileMatchesCheck(t *testing.T) {
+	t.Parallel()
+
+	guard := mustGuard(t, "medium")
+	for _, command := range []string{
+		"ls -la",
+		"cat file | grep needle",
+		"rm -rf /",
+		`"r"'m' -rf /`,
+		"x=rm; $x -rf /",
+		"sh -c 'exit 7'",
+		"sh -c 'rm -rf /'",
+		"echo )",
+	} {
+		file, parseErr := Parse(command)
+		var fromFile *BlockedError
+		if parseErr == nil {
+			fromFile = guard.CheckFile(command, file)
+		} else {
+			fromFile = guard.CheckFile(command, nil)
+		}
+		fromText := guard.Check(command)
+
+		if (fromFile == nil) != (fromText == nil) {
+			t.Fatalf("%q: CheckFile=%v Check=%v", command, fromFile, fromText)
+		}
+		if fromFile != nil && fromFile.Error() != fromText.Error() {
+			t.Fatalf("%q: CheckFile=%q Check=%q", command, fromFile, fromText)
+		}
+	}
+}
+
 func TestGuardThreshold(t *testing.T) {
 	t.Parallel()
 
