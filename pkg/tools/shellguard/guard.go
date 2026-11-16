@@ -10,6 +10,14 @@ import (
 // maxShellNesting bounds recursive analysis of sh -c scripts and wrapper
 // commands. Real commands nest one or two levels; the limit prevents hostile
 // input from turning the guard into an unbounded parser recursion.
+//
+// Depth N is the deepest level analyzed, and two comparisons enforce that on
+// purpose. A function entered at some depth (checkScript, checkWorkspaceText,
+// checkSimple, canonicalCommands) rejects depth > maxShellNesting. A helper
+// about to recurse at depth+1 (checkShell, checkWrapper, checkTrap,
+// checkFindExec, appendCanonicalCall) stops at depth >= maxShellNesting. Both
+// refuse the same hop from N to N+1, so switching either side to the other
+// operator moves the limit by one level on that path only.
 const maxShellNesting = 8
 
 // Guard classifies commands against a configured risk threshold.
