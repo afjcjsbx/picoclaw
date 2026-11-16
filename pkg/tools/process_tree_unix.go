@@ -26,12 +26,17 @@ func killProcessTree(pid int) error {
 		return nil
 	}
 
+	// Keep the full snapshot, not just the last scan: a descendant forked during
+	// the scan loop can be reparented when the shell dies, so sweep it again
+	// after the group signal.
+	seen := make(map[int]struct{})
 	for attempt := 0; attempt < descendantScanAttempts; attempt++ {
 		descendants := descendantPIDs(pid)
 		if len(descendants) == 0 {
 			break
 		}
 		for _, descendant := range descendants {
+			seen[descendant] = struct{}{}
 			_ = syscall.Kill(descendant, syscall.SIGKILL)
 		}
 		time.Sleep(descendantScanDelay)
@@ -39,6 +44,9 @@ func killProcessTree(pid int) error {
 
 	groupErr := syscall.Kill(-pid, syscall.SIGKILL)
 	procErr := syscall.Kill(pid, syscall.SIGKILL)
+	for descendant := range seen {
+		_ = syscall.Kill(descendant, syscall.SIGKILL)
+	}
 	if groupErr == nil || procErr == nil {
 		return nil
 	}
