@@ -84,7 +84,9 @@ These allowlists extend the workspace boundary defined by `agents.defaults.restr
 
 ## Sensitive Data Filtering
 
-Before tool results are sent to the LLM, PicoClaw can filter sensitive values (API keys, tokens, secrets) from the output. This prevents the LLM from seeing its own credentials.
+Before tool results are sent to the LLM, PicoClaw can redact exact sensitive values (API keys, tokens, secrets) from the output. This is a defense-in-depth control, not a data-loss-prevention (DLP) boundary.
+
+> **Defense in depth, not DLP.** Only exact configured values are replaced. Base64, hex, character-spaced, reversed, compressed, chunked, or model-reconstructed forms bypass the filter. It also does not cover artifacts on disk, logs, channel messages, or the final model response. Do not rely on it to prevent credential exfiltration.
 
 See [Sensitive Data Filtering](../security/sensitive_data_filtering.md) for full documentation.
 
