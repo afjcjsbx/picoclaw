@@ -14,5 +14,12 @@ import (
 // normalized parse when the command contains fixed shell rewrites.
 func Parse(command string) (*syntax.File, error) {
 	parser := syntax.NewParser(syntax.Variant(syntax.LangBash))
-	return parser.Parse(strings.NewReader(command), "")
+	file, err := parser.Parse(strings.NewReader(command), "")
+	if err != nil {
+		// The parser can return a partially populated tree together with an
+		// error. A nil file is the contract that makes CheckFile and
+		// CheckWorkspaceFile reject unparseable input.
+		return nil, err
+	}
+	return file, nil
 }

@@ -191,6 +191,25 @@ func TestGuardCheckFileMatchesCheck(t *testing.T) {
 	}
 }
 
+func TestGuardCheckFileRejectsParseFailure(t *testing.T) {
+	t.Parallel()
+
+	guard := mustGuard(t, "medium")
+	file, err := Parse("echo )")
+	if err == nil {
+		t.Fatal("Parse accepted an unparseable command")
+	}
+	if file != nil {
+		t.Fatalf("Parse returned a partial tree with the error: %#v", file)
+	}
+	if blocked := guard.CheckFile("echo )", file); blocked == nil {
+		t.Fatal("CheckFile allowed a parse failure")
+	}
+	if blocked := guard.Check("echo )"); blocked == nil {
+		t.Fatal("Check allowed a parse failure")
+	}
+}
+
 func TestGuardThreshold(t *testing.T) {
 	t.Parallel()
 
