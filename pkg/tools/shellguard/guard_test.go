@@ -138,7 +138,7 @@ func TestParseEnvArgs(t *testing.T) {
 	words := func(texts ...string) []word {
 		result := make([]word, len(texts))
 		for i, text := range texts {
-			result[i] = word{text: text, literal: true}
+			result[i] = word{text: text}
 		}
 		return result
 	}

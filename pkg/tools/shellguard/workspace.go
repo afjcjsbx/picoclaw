@@ -273,7 +273,7 @@ func (s *workspaceState) checkCall(
 		}
 	}
 
-	args := make([]expandedWord, len(call.Args))
+	args := make([]word, len(call.Args))
 	for i, arg := range call.Args {
 		args[i] = s.expandWord(arg, false)
 	}
@@ -306,7 +306,7 @@ func (s *workspaceState) checkCall(
 // inspects the scripts or commands it launches. Keeping the surface checks here
 // avoids running them twice when checkNested recurses through wrappers.
 func (s *workspaceState) checkSimple(
-	args []expandedWord,
+	args []word,
 	redirs []*syntax.Redirect,
 	depth int,
 	track bool,
@@ -331,7 +331,7 @@ func (s *workspaceState) checkSimple(
 	return s.checkNested(args, redirs, depth)
 }
 
-func (s *workspaceState) noteUnset(args []expandedWord) {
+func (s *workspaceState) noteUnset(args []word) {
 	if len(args) == 0 || baseCommand(args[0].text) != "unset" {
 		return
 	}
@@ -456,7 +456,7 @@ func (s *workspaceState) checkRedirects(redirs []*syntax.Redirect) error {
 	return nil
 }
 
-func (s *workspaceState) checkWord(w expandedWord, pathPosition bool) error {
+func (s *workspaceState) checkWord(w word, pathPosition bool) error {
 	if w.homePath {
 		if w.dynamic || w.text == "" {
 			return newWorkspaceError("path outside working dir")
@@ -588,17 +588,8 @@ func (s *workspaceState) checkPathFrom(path, cwd string) error {
 	return nil
 }
 
-// expandedWord is a shell word with the statically known expansions applied.
-// dynamic reports that part of the word could not be resolved without running
-// the shell.
-type expandedWord struct {
-	text     string
-	dynamic  bool
-	homePath bool
-}
-
-func (s *workspaceState) expandWord(w *syntax.Word, assignment bool) expandedWord {
-	var out expandedWord
+func (s *workspaceState) expandWord(w *syntax.Word, assignment bool) word {
+	var out word
 	if w == nil || len(w.Parts) == 0 {
 		return out
 	}
@@ -625,7 +616,7 @@ func (s *workspaceState) expandWord(w *syntax.Word, assignment bool) expandedWor
 	return out
 }
 
-func (s *workspaceState) addParts(out *expandedWord, parts []syntax.WordPart) {
+func (s *workspaceState) addParts(out *word, parts []syntax.WordPart) {
 	for _, part := range parts {
 		switch p := part.(type) {
 		case *syntax.Lit:
@@ -684,7 +675,7 @@ func (s *workspaceState) addParts(out *expandedWord, parts []syntax.WordPart) {
 	}
 }
 
-func (s *workspaceState) appendTilde(out *expandedWord, rest string) {
+func (s *workspaceState) appendTilde(out *word, rest string) {
 	home, ok := s.effectiveHome()
 	if !ok {
 		out.dynamic = true
@@ -734,7 +725,7 @@ func simpleParamName(p *syntax.ParamExp) (string, bool) {
 // checkPathFlags validates directory-valued options such as tar -C, git -C,
 // make -C and env --chdir. A bare `..` there reaches the parent without a
 // slash, so the byte-level traversal regex misses it.
-func (s *workspaceState) checkPathFlags(args []expandedWord) error {
+func (s *workspaceState) checkPathFlags(args []word) error {
 	for i := 0; i < len(args); i++ {
 		text := args[i].text
 		switch {
@@ -746,21 +737,21 @@ func (s *workspaceState) checkPathFlags(args []expandedWord) error {
 				i++
 			}
 		case strings.HasPrefix(text, "-C") && len(text) > 2:
-			if err := s.checkPathFlagValue(expandedWord{
+			if err := s.checkPathFlagValue(word{
 				text:    text[2:],
 				dynamic: args[i].dynamic,
 			}); err != nil {
 				return err
 			}
 		case strings.HasPrefix(text, "--directory="):
-			if err := s.checkPathFlagValue(expandedWord{
+			if err := s.checkPathFlagValue(word{
 				text:    strings.TrimPrefix(text, "--directory="),
 				dynamic: args[i].dynamic,
 			}); err != nil {
 				return err
 			}
 		case strings.HasPrefix(text, "--chdir="):
-			if err := s.checkPathFlagValue(expandedWord{
+			if err := s.checkPathFlagValue(word{
 				text:    strings.TrimPrefix(text, "--chdir="),
 				dynamic: args[i].dynamic,
 			}); err != nil {
@@ -771,7 +762,7 @@ func (s *workspaceState) checkPathFlags(args []expandedWord) error {
 	return nil
 }
 
-func (s *workspaceState) checkPathFlagValue(value expandedWord) error {
+func (s *workspaceState) checkPathFlagValue(value word) error {
 	if value.dynamic || value.homePath {
 		return nil
 	}
@@ -786,7 +777,7 @@ func (s *workspaceState) checkPathFlagValue(value expandedWord) error {
 // is checked because ln accepts multiple sources plus a link name or target
 // directory. A later cd or file operation through such a link would otherwise
 // leave the workspace.
-func (s *workspaceState) checkSymlinkSource(args []expandedWord) error {
+func (s *workspaceState) checkSymlinkSource(args []word) error {
 	if len(args) == 0 || baseCommand(args[0].text) != "ln" {
 		return nil
 	}
@@ -814,7 +805,7 @@ func (s *workspaceState) checkSymlinkSource(args []expandedWord) error {
 // checkDirChange validates a directory-changing command. track is true only
 // for the shell's own builtins in the current script; wrapper recursion and
 // child processes pass false so their cd cannot move the outer shell.
-func (s *workspaceState) checkDirChange(args []expandedWord, track bool) error {
+func (s *workspaceState) checkDirChange(args []word, track bool) error {
 	args = unwrapExecPrefix(args)
 	if len(args) == 0 {
 		return nil
@@ -833,13 +824,13 @@ func (s *workspaceState) checkDirChange(args []expandedWord, track bool) error {
 // unwrapExecPrefix strips command(1) and builtin(1) wrappers so `command cd`
 // and `builtin cd` are validated like a direct cd. A command lookup (-v/-V)
 // does not execute the argument and yields no executable command.
-func unwrapExecPrefix(args []expandedWord) []expandedWord {
+func unwrapExecPrefix(args []word) []word {
 	for len(args) > 0 {
 		name := baseCommand(args[0].text)
 		if name != "command" && name != "builtin" {
 			return args
 		}
-		if name == "command" && hasCommandLookupFlag(wordsFromExpanded(args[1:])) {
+		if name == "command" && hasCommandLookupFlag(args[1:]) {
 			return nil
 		}
 		i := 1
@@ -851,7 +842,7 @@ func unwrapExecPrefix(args []expandedWord) []expandedWord {
 	return args
 }
 
-func (s *workspaceState) checkCD(args []expandedWord, track bool) error {
+func (s *workspaceState) checkCD(args []word, track bool) error {
 	target, ok := cdTarget(args)
 	if !ok {
 		home, resolved := s.effectiveHome()
@@ -869,7 +860,7 @@ func (s *workspaceState) checkCD(args []expandedWord, track bool) error {
 	return s.checkDirTarget(target, track)
 }
 
-func cdTarget(args []expandedWord) (expandedWord, bool) {
+func cdTarget(args []word) (word, bool) {
 	i := 0
 	for i < len(args) {
 		text := args[i].text
@@ -887,12 +878,12 @@ func cdTarget(args []expandedWord) (expandedWord, bool) {
 		break
 	}
 	if i >= len(args) {
-		return expandedWord{}, false
+		return word{}, false
 	}
 	return args[i], true
 }
 
-func (s *workspaceState) checkPushd(args []expandedWord, track bool) error {
+func (s *workspaceState) checkPushd(args []word, track bool) error {
 	i := 0
 	for i < len(args) {
 		text := args[i].text
@@ -921,8 +912,8 @@ func (s *workspaceState) checkPushd(args []expandedWord, track bool) error {
 	return s.checkDirTarget(args[i], track)
 }
 
-func (s *workspaceState) checkEnvChdir(args []expandedWord) error {
-	opts := parseEnvArgs(wordsFromExpanded(args))
+func (s *workspaceState) checkEnvChdir(args []word) error {
+	opts := parseEnvArgs(args)
 	if opts.splitString {
 		return newWorkspaceError("env -S cannot be validated under workspace restriction")
 	}
@@ -951,15 +942,15 @@ func (s *workspaceState) checkEnvChdir(args []expandedWord) error {
 		s.pwdOverridden = true
 	}
 	if opts.hasChdir {
-		return s.checkDirTarget(expandedWord{
+		return s.checkDirTarget(word{
 			text:    opts.chdir.text,
-			dynamic: !opts.chdir.literal,
+			dynamic: opts.chdir.dynamic,
 		}, false)
 	}
 	return nil
 }
 
-func (s *workspaceState) checkDirTarget(target expandedWord, track bool) error {
+func (s *workspaceState) checkDirTarget(target word, track bool) error {
 	if target.dynamic || target.text == "" || target.text == "-" {
 		return newWorkspaceError("directory change cannot be validated under workspace restriction")
 	}
@@ -993,7 +984,7 @@ func isStackRotation(text string) bool {
 }
 
 func (s *workspaceState) checkNested(
-	args []expandedWord,
+	args []word,
 	redirs []*syntax.Redirect,
 	depth int,
 ) error {
@@ -1003,9 +994,9 @@ func (s *workspaceState) checkNested(
 	name := baseCommand(args[0].text)
 
 	if isShellCommand(name) {
-		invocation := parseShellInvocation(wordsFromExpanded(args[1:]))
+		invocation := parseShellInvocation(args[1:])
 		if invocation.hasScript {
-			if !invocation.script.literal {
+			if invocation.script.dynamic {
 				return newWorkspaceError("dynamic shell script cannot be validated under workspace restriction")
 			}
 			return checkWorkspaceScript(invocation.script.text, s.nestedPolicy(), depth+1)
@@ -1045,7 +1036,7 @@ func (s *workspaceState) checkNested(
 	}
 
 	if name == "env" {
-		opts := parseEnvArgs(wordsFromExpanded(args[1:]))
+		opts := parseEnvArgs(args[1:])
 		if opts.splitString {
 			return newWorkspaceError("env -S cannot be validated under workspace restriction")
 		}
@@ -1055,14 +1046,14 @@ func (s *workspaceState) checkNested(
 		if len(opts.command) == 0 {
 			return nil
 		}
-		if opts.hasChdir && opts.chdir.literal && opts.chdir.text != "" && opts.chdir.text != "-" {
+		if opts.hasChdir && !opts.chdir.dynamic && opts.chdir.text != "" && opts.chdir.text != "-" {
 			saved := append([]string(nil), s.cwds...)
 			s.addCwd(s.resolveCwd(opts.chdir.text))
-			err := s.checkSimple(expandedFromWords(opts.command), nil, depth+1, false)
+			err := s.checkSimple(opts.command, nil, depth+1, false)
 			s.cwds = saved
 			return err
 		}
-		return s.checkSimple(expandedFromWords(opts.command), nil, depth+1, false)
+		return s.checkSimple(opts.command, nil, depth+1, false)
 	}
 
 	switch name {
@@ -1081,7 +1072,7 @@ func (s *workspaceState) checkNested(
 	}
 
 	if spec, ok := wrapperSpecs[name]; ok {
-		words := wordsFromExpanded(args[1:])
+		words := args[1:]
 		if name == "command" && hasCommandLookupFlag(words) {
 			return nil
 		}
@@ -1097,28 +1088,28 @@ func (s *workspaceState) checkNested(
 					!target.dynamic && target.text != "" && target.text != "-" {
 					saved := append([]string(nil), s.cwds...)
 					s.addCwd(s.resolveCwd(target.text))
-					err := s.checkSimple(expandedFromWords(nested), nil, depth+1, false)
+					err := s.checkSimple(nested, nil, depth+1, false)
 					s.cwds = saved
 					return err
 				}
 			}
-			return s.checkSimple(expandedFromWords(nested), nil, depth+1, false)
+			return s.checkSimple(nested, nil, depth+1, false)
 		}
 	}
 	return nil
 }
 
 // envChdirTarget returns the directory passed to env -C/--chdir.
-func envChdirTarget(args []expandedWord) (expandedWord, bool) {
-	opts := parseEnvArgs(wordsFromExpanded(args))
+func envChdirTarget(args []word) (word, bool) {
+	opts := parseEnvArgs(args)
 	if !opts.hasChdir {
-		return expandedWord{}, false
+		return word{}, false
 	}
-	return expandedWord{text: opts.chdir.text, dynamic: !opts.chdir.literal}, true
+	return word{text: opts.chdir.text, dynamic: opts.chdir.dynamic}, true
 }
 
-func (s *workspaceState) checkTrap(args []expandedWord, depth int) error {
-	action, found, dynamic := trapAction(wordsFromExpanded(args))
+func (s *workspaceState) checkTrap(args []word, depth int) error {
+	action, found, dynamic := trapAction(args)
 	if dynamic {
 		return newWorkspaceError("dynamic trap action cannot be validated under workspace restriction")
 	}
@@ -1131,27 +1122,27 @@ func (s *workspaceState) checkTrap(args []expandedWord, depth int) error {
 // checkExec inspects the command that exec replaces the shell with. exec is
 // both a shell builtin and an execve wrapper, so a nested shell script would
 // otherwise escape the AST pass.
-func (s *workspaceState) checkExec(args []expandedWord, depth int) error {
-	nested, ok := execCommand(wordsFromExpanded(args))
+func (s *workspaceState) checkExec(args []word, depth int) error {
+	nested, ok := execCommand(args)
 	if !ok {
 		return nil
 	}
-	return s.checkSimple(expandedFromWords(nested), nil, depth+1, false)
+	return s.checkSimple(nested, nil, depth+1, false)
 }
 
 // checkFindExec inspects commands launched by find -exec/-execdir/-ok/-okdir.
 // find runs them directly, so a nested sh -c script is just as reachable as it
 // is from a top-level command.
-func (s *workspaceState) checkFindExec(args []expandedWord, depth int) error {
-	for _, nested := range findExecCommands(wordsFromExpanded(args)) {
-		if err := s.checkSimple(expandedFromWords(nested), nil, depth+1, false); err != nil {
+func (s *workspaceState) checkFindExec(args []word, depth int) error {
+	for _, nested := range findExecCommands(args) {
+		if err := s.checkSimple(nested, nil, depth+1, false); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func joinExpanded(args []expandedWord) (string, bool) {
+func joinExpanded(args []word) (string, bool) {
 	var b strings.Builder
 	for i, arg := range args {
 		if arg.dynamic {
@@ -1163,22 +1154,6 @@ func joinExpanded(args []expandedWord) (string, bool) {
 		b.WriteString(arg.text)
 	}
 	return b.String(), true
-}
-
-func wordsFromExpanded(args []expandedWord) []word {
-	words := make([]word, len(args))
-	for i, arg := range args {
-		words[i] = word{text: arg.text, literal: !arg.dynamic}
-	}
-	return words
-}
-
-func expandedFromWords(words []word) []expandedWord {
-	args := make([]expandedWord, len(words))
-	for i, w := range words {
-		args[i] = expandedWord{text: w.text, dynamic: !w.literal}
-	}
-	return args
 }
 
 func hasParentComponent(path string) bool {

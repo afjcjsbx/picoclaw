@@ -160,7 +160,7 @@ func (g *Guard) checkArgv(words []word, depth int) *BlockedError {
 	}
 
 	first := words[0]
-	if !first.literal || first.text == "" {
+	if first.dynamic || first.text == "" {
 		return NewBlockedError(
 			[]string{"<dynamic>"}, RiskCritical, g.threshold,
 			"dynamic command name cannot be classified",
@@ -237,7 +237,7 @@ func findExecCommands(words []word) [][]word {
 // option could not be resolved.
 func trapAction(args []word) (action word, found, dynamic bool) {
 	for _, w := range args {
-		if !w.literal {
+		if w.dynamic {
 			return word{}, false, true
 		}
 		switch w.text {
@@ -309,7 +309,7 @@ func (g *Guard) checkShell(name string, words []word, depth int) *BlockedError {
 			"shell reads commands from stdin or a script file that cannot be inspected",
 		)
 	}
-	if !invocation.script.literal {
+	if invocation.script.dynamic {
 		return NewBlockedError(
 			wordTexts(words), RiskCritical, g.threshold, "shell script argument is dynamic",
 		)
@@ -366,7 +366,7 @@ func (g *Guard) checkWrapper(name string, words []word, spec wrapperSpec, depth 
 	}
 
 	nestedName := ""
-	if nested[0].literal {
+	if !nested[0].dynamic {
 		nestedName = baseCommand(nested[0].text)
 	}
 	if nestedName == "" {
@@ -392,12 +392,13 @@ func (g *Guard) checkWrapper(name string, words []word, spec wrapperSpec, depth 
 	return g.classify(nested)
 }
 
-// word is a shell word reduced to its literal parts. literal is false when the
+// word is a shell word reduced to its literal parts. dynamic reports that the
 // word contains an expansion, substitution or glob, which the static guard
-// cannot resolve.
+// cannot resolve. homePath marks a word that starts with a tilde or $HOME.
 type word struct {
-	text    string
-	literal bool
+	text     string
+	dynamic  bool
+	homePath bool
 }
 
 func literalWord(w *syntax.Word) word {
@@ -407,16 +408,16 @@ func literalWord(w *syntax.Word) word {
 	if len(w.Parts) == 1 {
 		switch p := w.Parts[0].(type) {
 		case *syntax.Lit:
-			return word{text: p.Value, literal: true}
+			return word{text: p.Value}
 		case *syntax.SglQuoted:
 			if !p.Dollar {
-				return word{text: p.Value, literal: true}
+				return word{text: p.Value}
 			}
 		}
 	}
 
 	var b strings.Builder
-	literal := true
+	dynamic := false
 
 	var addParts func([]syntax.WordPart)
 	addParts = func(parts []syntax.WordPart) {
@@ -430,17 +431,17 @@ func literalWord(w *syntax.Word) word {
 				// such as \x72 undecoded, so treating it as literal would let
 				// $'\x72m' -rf / masquerade as an unknown command.
 				if p.Dollar {
-					literal = false
+					dynamic = true
 				}
 			case *syntax.DblQuoted:
 				addParts(p.Parts)
 			default:
-				literal = false
+				dynamic = true
 			}
 		}
 	}
 	addParts(w.Parts)
-	return word{text: b.String(), literal: literal}
+	return word{text: b.String(), dynamic: dynamic}
 }
 
 func wordTexts(words []word) []string {
@@ -494,7 +495,7 @@ func parseShellInvocation(words []word) shellInvocation {
 	invocation := shellInvocation{readsStdin: true}
 	for i := 0; i < len(words); i++ {
 		w := words[i]
-		if !w.literal {
+		if w.dynamic {
 			return shellInvocation{opaque: true}
 		}
 		text := w.text
@@ -513,7 +514,7 @@ func parseShellInvocation(words []word) shellInvocation {
 			return shellInvocation{opaque: true}
 		case strings.HasPrefix(text, "--command="):
 			return shellInvocation{
-				script:    word{text: strings.TrimPrefix(text, "--command="), literal: w.literal},
+				script:    word{text: strings.TrimPrefix(text, "--command="), dynamic: w.dynamic},
 				hasScript: true,
 			}
 		case shellValueFlags[text]:
@@ -611,7 +612,7 @@ func wrapperNested(words []word, spec wrapperSpec) ([]word, bool, bool) {
 	positional := spec.skipPositional
 	for i := 0; i < len(words); i++ {
 		w := words[i]
-		if !w.literal {
+		if w.dynamic {
 			return nil, false, true
 		}
 
@@ -672,7 +673,7 @@ func isAssignment(s string) bool {
 // command(1).
 func hasCommandLookupFlag(words []word) bool {
 	for _, w := range words {
-		if !w.literal {
+		if w.dynamic {
 			return false
 		}
 		text := w.text
@@ -713,7 +714,7 @@ func parseEnvArgs(args []word) envArgs {
 			i++
 			continue
 		}
-		if !w.literal {
+		if w.dynamic {
 			out.dynamic = true
 			return out
 		}
@@ -739,7 +740,7 @@ func parseEnvArgs(args []word) envArgs {
 					return out
 				}
 				i++
-				if !args[i].literal {
+				if args[i].dynamic {
 					out.unsetDynamic = true
 				} else {
 					out.unset = append(out.unset, args[i].text)
@@ -755,7 +756,7 @@ func parseEnvArgs(args []word) envArgs {
 				out.chdir = args[i]
 				out.hasChdir = true
 			case strings.HasPrefix(text, "--chdir="):
-				out.chdir = word{text: strings.TrimPrefix(text, "--chdir="), literal: true}
+				out.chdir = word{text: strings.TrimPrefix(text, "--chdir=")}
 				out.hasChdir = true
 			case text == "--split-string":
 				out.splitString = true
@@ -766,8 +767,7 @@ func parseEnvArgs(args []word) envArgs {
 			case strings.HasPrefix(text, "--split-string="):
 				out.splitString = true
 				out.splitValue = word{
-					text:    strings.TrimPrefix(text, "--split-string="),
-					literal: true,
+					text: strings.TrimPrefix(text, "--split-string="),
 				}
 				return out
 			}
@@ -787,7 +787,7 @@ func parseEnvArgs(args []word) envArgs {
 					out.dynamic = true
 					return out
 				}
-				if value.word.literal {
+				if !value.word.dynamic {
 					out.unset = append(out.unset, value.word.text)
 				} else {
 					out.unsetDynamic = true
@@ -821,7 +821,7 @@ func parseEnvArgs(args []word) envArgs {
 	}
 
 command:
-	for i < len(args) && args[i].literal && isAssignment(args[i].text) {
+	for i < len(args) && !args[i].dynamic && isAssignment(args[i].text) {
 		out.assignments = append(out.assignments, args[i])
 		i++
 	}
@@ -840,7 +840,7 @@ type envOptionValue struct {
 // word is an attached value; otherwise the next word is the value.
 func optionValue(text string, rest int, args []word, index int) (envOptionValue, bool) {
 	if rest < len(text) {
-		return envOptionValue{word: word{text: text[rest:], literal: true}}, true
+		return envOptionValue{word: word{text: text[rest:]}}, true
 	}
 	if index+1 >= len(args) {
 		return envOptionValue{}, false

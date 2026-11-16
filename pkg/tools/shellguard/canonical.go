@@ -54,7 +54,7 @@ func canonicalCommands(command string, depth int) []string {
 }
 
 func appendCanonicalCall(forms []string, words []word, redirs []*syntax.Redirect, depth int) []string {
-	if len(words) == 0 || !words[0].literal || words[0].text == "" {
+	if len(words) == 0 || words[0].dynamic || words[0].text == "" {
 		// The command name is dynamic; its argv cannot be matched reliably.
 		return forms
 	}
@@ -77,7 +77,7 @@ func appendCanonicalCall(forms []string, words []word, redirs []*syntax.Redirect
 	name := baseCommand(words[0].text)
 	if isShellCommand(name) {
 		invocation := parseShellInvocation(words[1:])
-		if invocation.hasScript && invocation.script.literal {
+		if invocation.hasScript && !invocation.script.dynamic {
 			forms = append(forms, canonicalCommands(NormalizeForDeny(invocation.script.text), depth+1)...)
 		}
 		return forms
@@ -108,7 +108,7 @@ func appendCanonicalCall(forms []string, words []word, redirs []*syntax.Redirect
 	if name == "env" {
 		opts := parseEnvArgs(words[1:])
 		if opts.splitString {
-			if opts.splitValue.literal {
+			if !opts.splitValue.dynamic {
 				forms = append(forms, canonicalCommands(NormalizeForDeny(opts.splitValue.text), depth+1)...)
 			}
 			return forms
@@ -126,7 +126,7 @@ func appendCanonicalCall(forms []string, words []word, redirs []*syntax.Redirect
 func joinLiteralWords(words []word) (string, bool) {
 	texts := make([]string, 0, len(words))
 	for _, w := range words {
-		if !w.literal {
+		if w.dynamic {
 			return "", false
 		}
 		texts = append(texts, w.text)
