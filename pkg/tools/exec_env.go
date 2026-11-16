@@ -194,34 +194,27 @@ func isBlockedExecEnv(key string) bool {
 	return false
 }
 
-// execEnvFromArgs parses the optional per-call env argument. Both map forms are
-// accepted so direct Go calls and decoded JSON arguments behave the same.
+// execEnvFromArgs parses the optional per-call env argument, a decoded JSON
+// object of string values.
 func execEnvFromArgs(args map[string]any) (map[string]string, error) {
 	raw, ok := args["env"]
 	if !ok || raw == nil {
 		return nil, nil
 	}
 
-	env := make(map[string]string)
-	switch values := raw.(type) {
-	case map[string]any:
-		for key, value := range values {
-			str, ok := value.(string)
-			if !ok {
-				return nil, fmt.Errorf("env value for %q must be a string", key)
-			}
-			if err := addExecEnv(env, key, str); err != nil {
-				return nil, err
-			}
-		}
-	case map[string]string:
-		for key, value := range values {
-			if err := addExecEnv(env, key, value); err != nil {
-				return nil, err
-			}
-		}
-	default:
+	values, ok := raw.(map[string]any)
+	if !ok {
 		return nil, fmt.Errorf("env must be an object of string values")
+	}
+	env := make(map[string]string, len(values))
+	for key, value := range values {
+		str, ok := value.(string)
+		if !ok {
+			return nil, fmt.Errorf("env value for %q must be a string", key)
+		}
+		if err := addExecEnv(env, key, str); err != nil {
+			return nil, err
+		}
 	}
 	return env, nil
 }
