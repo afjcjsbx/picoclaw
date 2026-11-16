@@ -370,7 +370,7 @@ func buildExecDescription() string {
 
 Every foreground call starts a fresh shell in the configured working directory; pass cwd instead of using cd. For file operations, prefer list_dir, search_files, read_file, edit_file and write_file over cat, grep, find, ls, sed and echo/heredoc.
 
-Foreground results start with a one-line [exec] {...} header (exitCode, timedOut, truncated, durationMs, error), then raw stdout/stderr. Non-zero exit codes can be normal: grep returns 1 for no match and diff returns 1 for differences.
+Foreground results start with a one-line [exec] {...} header (exitCode, timedOut, truncated, durationMs, error), then raw stdout/stderr. On Unix, a null exitCode means the direct child was killed by a signal; shells may also report 128+N (137 = SIGKILL, often the OOM killer; 143 = SIGTERM). Treat signal deaths as failed runs, not normal non-zero exits. Non-zero exit codes can be normal: grep returns 1 for no match and diff returns 1 for differences.
 
 Oversized output is truncated automatically and the full stream is saved as an artifact; use the artifact path in the result with read_file when you need the omitted middle, instead of piping through head/tail or re-running the command.
 
