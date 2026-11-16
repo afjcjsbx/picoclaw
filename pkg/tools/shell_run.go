@@ -430,6 +430,7 @@ func (t *ExecTool) runBackground(
 	command, cwd string,
 	ptyEnabled bool,
 	note string,
+	notify bool,
 ) *ToolResult {
 	sessionID := generateSessionID()
 	session := &ProcessSession{
@@ -583,6 +584,16 @@ func (t *ExecTool) runBackground(
 
 			session.finish(processExitCode(cmd.ProcessState))
 		}()
+	}
+
+	if !notify {
+		const silentHint = "No completion notification is enabled for this background session; " +
+			"use action=wait, poll, read, or kill, or start bounded jobs with notify=true."
+		if note == "" {
+			note = silentHint
+		} else {
+			note += " " + silentHint
+		}
 	}
 
 	resp := ExecResponse{

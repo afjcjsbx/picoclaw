@@ -931,7 +931,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 	}
 
 	if isBackground {
-		return t.runBackground(ctx, command, cwd, isPty, backgroundNote)
+		return t.runBackground(ctx, command, cwd, isPty, backgroundNote, notify)
 	}
 	if promoteToBackground {
 		return t.runBackground(
@@ -940,6 +940,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 			cwd,
 			isPty,
 			t.foregroundPromotionNote(timeoutDisabled, timeout),
+			notify,
 		)
 	}
 

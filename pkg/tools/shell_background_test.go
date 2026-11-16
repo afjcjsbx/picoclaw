@@ -390,3 +390,25 @@ func TestExecToolRejectsUntrackedDetach(t *testing.T) {
 	require.True(t, blocked.IsError)
 	require.Contains(t, blocked.ForLLM, "nohup")
 }
+
+func TestBackgroundWithoutNotifyGetsSilentHint(t *testing.T) {
+	tool, err := newTestExecTool(t.TempDir(), false)
+	require.NoError(t, err)
+	sm := NewSessionManager()
+	t.Cleanup(sm.Stop)
+	tool.sessionManager = sm
+
+	ctx := WithToolContext(context.Background(), "cli", "test")
+	result := tool.Execute(ctx, map[string]any{
+		"action": "run", "command": "sleep 1", "background": "true",
+	})
+	require.False(t, result.IsError, result.ForLLM)
+
+	var started ExecResponse
+	require.NoError(t, json.Unmarshal([]byte(result.ForLLM), &started))
+	require.Contains(t, started.Note, "notify=true")
+
+	_ = tool.Execute(ctx, map[string]any{
+		"action": "kill", "sessionId": started.SessionID,
+	})
+}
