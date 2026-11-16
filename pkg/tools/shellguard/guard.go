@@ -544,17 +544,11 @@ func parseShellInvocation(words []word) shellInvocation {
 type wrapperSpec struct {
 	valueFlags     map[string]bool
 	skipPositional int
-	envAssignments bool
+	envArgs        bool
 }
 
 var wrapperSpecs = map[string]wrapperSpec{
-	"env": {
-		valueFlags: map[string]bool{
-			"-u": true, "-C": true, "-S": true,
-			"--unset": true, "--chdir": true, "--split-string": true,
-		},
-		envAssignments: true,
-	},
+	"env":     {envArgs: true},
 	"command": {},
 	"builtin": {},
 	"nohup":   {},
@@ -609,13 +603,14 @@ var wrapperSpecs = map[string]wrapperSpec{
 }
 
 func wrapperNested(words []word, spec wrapperSpec) ([]word, bool, bool) {
-	positional := spec.skipPositional
+	if spec.envArgs {
+		opts := parseEnvArgs(words)
+		return opts.command, len(opts.command) > 0, opts.dynamic
+	}
 
+	positional := spec.skipPositional
 	for i := 0; i < len(words); i++ {
 		w := words[i]
-		if spec.envAssignments && isAssignment(w.text) {
-			continue
-		}
 		if !w.literal {
 			return nil, false, true
 		}
@@ -691,52 +686,168 @@ func hasCommandLookupFlag(words []word) bool {
 	return false
 }
 
-// hasEnvSplitString reports whether an env invocation uses -S/--split-string.
-// The attached form (-S"cmd") does not match the exact -S argument modifier,
-// so it is checked here before the argv reaches the classifier.
-//
-// Options are scanned in order because -u and -C consume the following word.
-// Without that, env -u NAME -S "cmd" hid the split string behind NAME.
-func hasEnvSplitString(words []word) bool {
-	for i := 0; i < len(words); i++ {
-		w := words[i]
-		if !w.literal {
-			return false
-		}
+// envArgs is the statically parsed surface of an env invocation.
+type envArgs struct {
+	command      []word
+	assignments  []word
+	chdir        word
+	hasChdir     bool
+	unset        []string
+	unsetDynamic bool
+	ignoreEnv    bool
+	splitString  bool
+	splitValue   word
+	dynamic      bool
+}
+
+// parseEnvArgs parses env options once. It knows which options consume a value,
+// so -u NAME -S "cmd" and -C DIR -S "cmd" still expose the split string.
+func parseEnvArgs(args []word) envArgs {
+	var out envArgs
+	i := 0
+	for i < len(args) {
+		w := args[i]
 		text := w.text
-		if isAssignment(text) || text == "-" {
-			// "-" is env's short form of -i; both may be followed by options.
+		if isAssignment(text) {
+			out.assignments = append(out.assignments, w)
+			i++
 			continue
 		}
-		if text == "--" {
-			return false
+		if !w.literal {
+			out.dynamic = true
+			return out
 		}
-		if !strings.HasPrefix(text, "-") {
-			return false
-		}
-		if text == "--split-string" || strings.HasPrefix(text, "--split-string=") {
-			return true
-		}
-		if strings.HasPrefix(text, "--unset") || strings.HasPrefix(text, "--chdir") {
-			if !strings.Contains(text, "=") {
-				i++ // the value is the next word
+		switch {
+		case text == "--":
+			i++
+			goto command
+		case text == "-":
+			out.ignoreEnv = true
+			i++
+			continue
+		case !strings.HasPrefix(text, "-"):
+			goto command
+		case strings.HasPrefix(text, "--"):
+			switch {
+			case text == "--ignore-environment":
+				out.ignoreEnv = true
+			case text == "--null":
+				// no value
+			case text == "--unset":
+				if i+1 >= len(args) {
+					out.dynamic = true
+					return out
+				}
+				i++
+				if !args[i].literal {
+					out.unsetDynamic = true
+				} else {
+					out.unset = append(out.unset, args[i].text)
+				}
+			case strings.HasPrefix(text, "--unset="):
+				out.unset = append(out.unset, strings.TrimPrefix(text, "--unset="))
+			case text == "--chdir":
+				if i+1 >= len(args) {
+					out.dynamic = true
+					return out
+				}
+				i++
+				out.chdir = args[i]
+				out.hasChdir = true
+			case strings.HasPrefix(text, "--chdir="):
+				out.chdir = word{text: strings.TrimPrefix(text, "--chdir="), literal: true}
+				out.hasChdir = true
+			case text == "--split-string":
+				out.splitString = true
+				if i+1 < len(args) {
+					out.splitValue = args[i+1]
+				}
+				return out
+			case strings.HasPrefix(text, "--split-string="):
+				out.splitString = true
+				out.splitValue = word{
+					text:    strings.TrimPrefix(text, "--split-string="),
+					literal: true,
+				}
+				return out
 			}
+			i++
 			continue
 		}
-		if strings.HasPrefix(text, "--") {
-			continue
-		}
+
 		for j := 1; j < len(text); j++ {
 			switch text[j] {
-			case 'u', 'C':
-				if j == len(text)-1 {
-					i++ // the value is the next word
+			case 'i':
+				out.ignoreEnv = true
+			case '0':
+				// no value
+			case 'u':
+				value, hasValue := optionValue(text, j+1, args, i)
+				if !hasValue {
+					out.dynamic = true
+					return out
 				}
-				j = len(text) - 1 // an attached value consumes the rest
+				if value.word.literal {
+					out.unset = append(out.unset, value.word.text)
+				} else {
+					out.unsetDynamic = true
+				}
+				if value.next {
+					i++
+				}
+				j = len(text) - 1
+			case 'C':
+				value, hasValue := optionValue(text, j+1, args, i)
+				if !hasValue {
+					out.dynamic = true
+					return out
+				}
+				out.chdir = value.word
+				out.hasChdir = true
+				if value.next {
+					i++
+				}
+				j = len(text) - 1
 			case 'S':
-				return true
+				out.splitString = true
+				value, hasValue := optionValue(text, j+1, args, i)
+				if hasValue {
+					out.splitValue = value.word
+				}
+				return out
 			}
 		}
+		i++
 	}
-	return false
+
+command:
+	for i < len(args) && args[i].literal && isAssignment(args[i].text) {
+		out.assignments = append(out.assignments, args[i])
+		i++
+	}
+	if i < len(args) {
+		out.command = args[i:]
+	}
+	return out
+}
+
+type envOptionValue struct {
+	word word
+	next bool
+}
+
+// optionValue returns the value of a short env option. The rest of the option
+// word is an attached value; otherwise the next word is the value.
+func optionValue(text string, rest int, args []word, index int) (envOptionValue, bool) {
+	if rest < len(text) {
+		return envOptionValue{word: word{text: text[rest:], literal: true}}, true
+	}
+	if index+1 >= len(args) {
+		return envOptionValue{}, false
+	}
+	return envOptionValue{word: args[index+1], next: true}, true
+}
+
+func hasEnvSplitString(words []word) bool {
+	return parseEnvArgs(words).splitString
 }

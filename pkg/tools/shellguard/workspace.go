@@ -922,14 +922,15 @@ func (s *workspaceState) checkPushd(args []expandedWord, track bool) error {
 }
 
 func (s *workspaceState) checkEnvChdir(args []expandedWord) error {
-	if hasEnvSplitString(wordsFromExpanded(args)) {
+	opts := parseEnvArgs(wordsFromExpanded(args))
+	if opts.splitString {
 		return newWorkspaceError("env -S cannot be validated under workspace restriction")
 	}
-	for _, arg := range args {
-		if arg.dynamic || !isAssignment(arg.text) {
-			continue
-		}
-		name, _, _ := strings.Cut(arg.text, "=")
+	if opts.dynamic {
+		return newWorkspaceError("directory change cannot be validated under workspace restriction")
+	}
+	for _, assignment := range opts.assignments {
+		name, _, _ := strings.Cut(assignment.text, "=")
 		switch name {
 		case "HOME", "PWD", "OLDPWD", "CDPATH":
 			return newWorkspaceError(
@@ -937,44 +938,23 @@ func (s *workspaceState) checkEnvChdir(args []expandedWord) error {
 			)
 		}
 	}
-	for i := 0; i < len(args); i++ {
-		text := args[i].text
-		switch {
-		case text == "-i" || text == "--ignore-environment":
-			s.homeChanged = true
-		case text == "-u" || text == "--unset":
-			if i+1 < len(args) && args[i+1].text == "HOME" {
-				s.homeChanged = true
-			}
-			i++
-		case strings.HasPrefix(text, "--unset=") &&
-			strings.TrimPrefix(text, "--unset=") == "HOME":
-			s.homeChanged = true
-		case strings.HasPrefix(text, "-u") && strings.TrimPrefix(text, "-u") == "HOME":
+	if opts.ignoreEnv {
+		s.homeChanged = true
+	}
+	for _, name := range opts.unset {
+		if name == "HOME" {
 			s.homeChanged = true
 		}
 	}
-	for i := 0; i < len(args); i++ {
-		text := args[i].text
-		switch {
-		case text == "--":
-			return nil
-		case text == "-C" || text == "--chdir":
-			if i+1 >= len(args) {
-				return newWorkspaceError("directory change cannot be validated under workspace restriction")
-			}
-			return s.checkDirTarget(args[i+1], false)
-		case strings.HasPrefix(text, "--chdir="):
-			return s.checkDirTarget(expandedWord{
-				text:    strings.TrimPrefix(text, "--chdir="),
-				dynamic: args[i].dynamic,
-			}, false)
-		case strings.HasPrefix(text, "-C") && len(text) > 2:
-			return s.checkDirTarget(expandedWord{
-				text:    text[2:],
-				dynamic: args[i].dynamic,
-			}, false)
-		}
+	if opts.unsetDynamic {
+		s.homeChanged = true
+		s.pwdOverridden = true
+	}
+	if opts.hasChdir {
+		return s.checkDirTarget(expandedWord{
+			text:    opts.chdir.text,
+			dynamic: !opts.chdir.literal,
+		}, false)
 	}
 	return nil
 }
@@ -1064,8 +1044,25 @@ func (s *workspaceState) checkNested(
 		return nil
 	}
 
-	if name == "env" && hasEnvSplitString(wordsFromExpanded(args[1:])) {
-		return newWorkspaceError("env -S cannot be validated under workspace restriction")
+	if name == "env" {
+		opts := parseEnvArgs(wordsFromExpanded(args[1:]))
+		if opts.splitString {
+			return newWorkspaceError("env -S cannot be validated under workspace restriction")
+		}
+		if opts.dynamic {
+			return newWorkspaceError("dynamic command cannot be validated under workspace restriction")
+		}
+		if len(opts.command) == 0 {
+			return nil
+		}
+		if opts.hasChdir && opts.chdir.literal && opts.chdir.text != "" && opts.chdir.text != "-" {
+			saved := append([]string(nil), s.cwds...)
+			s.addCwd(s.resolveCwd(opts.chdir.text))
+			err := s.checkSimple(expandedFromWords(opts.command), nil, depth+1, false)
+			s.cwds = saved
+			return err
+		}
+		return s.checkSimple(expandedFromWords(opts.command), nil, depth+1, false)
 	}
 
 	switch name {
@@ -1111,31 +1108,13 @@ func (s *workspaceState) checkNested(
 	return nil
 }
 
-// envChdirTarget returns the literal directory passed to env -C/--chdir.
+// envChdirTarget returns the directory passed to env -C/--chdir.
 func envChdirTarget(args []expandedWord) (expandedWord, bool) {
-	for i := 0; i < len(args); i++ {
-		text := args[i].text
-		switch {
-		case text == "--":
-			return expandedWord{}, false
-		case text == "-C" || text == "--chdir":
-			if i+1 < len(args) {
-				return args[i+1], true
-			}
-			return expandedWord{}, false
-		case strings.HasPrefix(text, "--chdir="):
-			return expandedWord{
-				text:    strings.TrimPrefix(text, "--chdir="),
-				dynamic: args[i].dynamic,
-			}, true
-		case strings.HasPrefix(text, "-C") && len(text) > 2:
-			return expandedWord{
-				text:    text[2:],
-				dynamic: args[i].dynamic,
-			}, true
-		}
+	opts := parseEnvArgs(wordsFromExpanded(args))
+	if !opts.hasChdir {
+		return expandedWord{}, false
 	}
-	return expandedWord{}, false
+	return expandedWord{text: opts.chdir.text, dynamic: !opts.chdir.literal}, true
 }
 
 func (s *workspaceState) checkTrap(args []expandedWord, depth int) error {

@@ -105,6 +105,15 @@ func appendCanonicalCall(forms []string, words []word, redirs []*syntax.Redirect
 		}
 		return forms
 	}
+	if name == "env" {
+		opts := parseEnvArgs(words[1:])
+		if opts.splitString {
+			if opts.splitValue.literal {
+				forms = append(forms, canonicalCommands(NormalizeForDeny(opts.splitValue.text), depth+1)...)
+			}
+			return forms
+		}
+	}
 	if spec, ok := wrapperSpecs[name]; ok {
 		nested, found, dynamic := wrapperNested(words[1:], spec)
 		if found && !dynamic && len(nested) > 0 {
