@@ -17,7 +17,7 @@ import (
 // mistaken for a heredoc. On a parse error the command is returned unchanged;
 // the exec guard rejects unparseable commands separately.
 func StripQuotedHeredocBodies(command string) string {
-	file, err := parseRaw(command)
+	file, err := Parse(command)
 	if err != nil {
 		return command
 	}
@@ -89,9 +89,4 @@ func quotedHeredocDelimiter(word *syntax.Word) bool {
 		}
 	}
 	return true
-}
-
-func parseRaw(command string) (*syntax.File, error) {
-	parser := syntax.NewParser(syntax.Variant(syntax.LangBash))
-	return parser.Parse(strings.NewReader(command), "")
 }

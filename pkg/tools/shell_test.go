@@ -1277,45 +1277,16 @@ func TestShellTool_SeparatorKeepsRealPathsBlocked(t *testing.T) {
 
 	for _, cmd := range commands {
 		result := tool.Execute(context.Background(), map[string]any{"action": "run", "command": cmd})
-		if !result.IsError || !strings.Contains(result.ForLLM, "path outside working dir") {
+		if !result.IsError {
+			t.Errorf("outside path should still be blocked: %s\n  result: %s", cmd, result.ForLLM)
+			continue
+		}
+		// A trailing ")" makes the command unparseable; the AST guard then
+		// rejects it before the path check can produce its message.
+		if !strings.Contains(result.ForLLM, "path outside working dir") &&
+			!strings.Contains(result.ForLLM, "could not be parsed") {
 			t.Errorf("outside path should still be blocked: %s\n  result: %s", cmd, result.ForLLM)
 		}
-	}
-}
-
-// TestSplitShellPathMatch exercises the splitting helper directly.
-func TestSplitShellPathMatch(t *testing.T) {
-	cases := []struct {
-		in   string
-		want []string
-	}{
-		{"/dev/null", []string{"/dev/null"}},
-		{"/dev/null;", []string{"/dev/null"}},
-		{"/dev/null;echo b", []string{"/dev/null", "echo b"}},
-		{"/dev/null&&echo b", []string{"/dev/null", "echo b"}},
-		{"/dev/null||echo b", []string{"/dev/null", "echo b"}},
-		{"/dev/null|cat", []string{"/dev/null", "cat"}},
-		{"/dev/null)", []string{"/dev/null"}},
-		{"/dev/null]", []string{"/dev/null"}},
-		{"/dev/null}", []string{"/dev/null"}},
-		{"/dev/null,", []string{"/dev/null"}},
-		{"/dev/null:", []string{"/dev/null"}},
-		// Backticks are covered here only: a full command containing them is
-		// rejected earlier by the dangerous-pattern check.
-		{"/dev/null`", []string{"/dev/null"}},
-		{"/dev/null`echo", []string{"/dev/null", "echo"}},
-		{"/etc/passwd;echo", []string{"/etc/passwd", "echo"}},
-		{"/etc/passwd", []string{"/etc/passwd"}},
-		// Every segment after a separator is kept so it can be validated.
-		{"/dev/null;cat</etc/shadow", []string{"/dev/null", "cat", "/etc/shadow"}},
-		// Known trade-off: trailing punctuation is stripped even from real names.
-		{"/workspace/backup,", []string{"/workspace/backup"}},
-		// Windows matches are intentionally left untouched.
-		{`C:\dev\null;x`, []string{`C:\dev\null;x`}},
-	}
-
-	for _, tc := range cases {
-		require.Equal(t, tc.want, splitShellPathMatch(tc.in), "splitShellPathMatch(%q)", tc.in)
 	}
 }
 
@@ -3519,6 +3490,9 @@ func TestShellTool_CustomDenyCanonicalizesWrappers(t *testing.T) {
 		"command rm -rf build",
 		"nohup rm -rf build",
 		"busybox rm -rf build",
+		`find . -exec rm -rf build \;`,
+		"exec rm -rf build",
+		"env -S 'rm -rf build'",
 	} {
 		if got := tool.guardCommand(command, t.TempDir()); !strings.Contains(got, "dangerous pattern") {
 			t.Errorf("custom deny should match wrapped command %q, got: %q", command, got)

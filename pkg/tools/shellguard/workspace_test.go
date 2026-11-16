@@ -58,6 +58,11 @@ func TestCheckWorkspaceBlocksEscapes(t *testing.T) {
 		},
 		{name: "ansi-c cd parent", command: `c$'\x64' ..`, want: "path traversal detected"},
 		{name: "ansi-c cd home", command: `c$'\x64' ~`, want: "path outside working dir"},
+		{name: "attached include path", command: "cc -I/etc main.c", want: "path outside working dir"},
+		{name: "attached system include path", command: "echo -isystem/usr/include", want: "path outside working dir"},
+		{name: "file url", command: "cat file:///etc/passwd", want: "path outside working dir"},
+		{name: "file url single slash", command: "cat file:/etc/passwd", want: "path outside working dir"},
+		{name: "file url host", command: "cat file://localhost/etc/passwd", want: "path outside working dir"},
 		{name: "nested ansi-c cd", command: `sh -c "c$'\x64' .."`, want: "path traversal detected"},
 		{name: "pushd home", command: "pushd ~", want: "path outside working dir"},
 		{name: "cd oldpwd", command: "cd -", want: "directory change cannot be validated"},
@@ -164,6 +169,11 @@ func TestCheckWorkspaceBlocksEscapes(t *testing.T) {
 			want:    "path traversal detected",
 		},
 		{
+			name:    "dynamic command path flag parent",
+			command: "$CMD -C .. true",
+			want:    "path traversal detected",
+		},
+		{
 			name:    "git path flag parent",
 			command: "git -C .. status",
 			want:    "path traversal detected",
@@ -214,6 +224,9 @@ func TestCheckWorkspaceAllowsInsideCommands(t *testing.T) {
 		"arr=(./file)",
 		"ln -s ./sub escape",
 		"echo https://example.com/a/../b",
+		"cc -I" + cwd,
+		"echo -isystem" + cwd,
+		"cat file://" + filepath.Join(cwd, "file"),
 	}
 
 	for _, command := range commands {
@@ -369,6 +382,49 @@ func TestCheckWorkspaceEffectiveCwd(t *testing.T) {
 				t.Fatalf("CheckWorkspace(%q) = %v, want nil", command, err)
 			}
 		})
+	}
+}
+
+func TestCheckWorkspaceFileMatchesCheckWorkspace(t *testing.T) {
+	t.Parallel()
+
+	policy, cwd, _ := testWorkspacePolicy(t)
+	for _, command := range []string{
+		"cat ./file",
+		"cd sub",
+		"cd ..",
+		"cat ~/.ssh/id_rsa",
+		`c$'\x64' ..`,
+		"echo )",
+		"cd " + filepath.Join(cwd, "sub") + "; cat file",
+		"sh -c 'cd .. && touch sibling'",
+	} {
+		file, parseErr := Parse(command)
+		var fromFile error
+		if parseErr == nil {
+			fromFile = CheckWorkspaceFile(command, file, policy)
+		} else {
+			fromFile = CheckWorkspaceFile(command, nil, policy)
+		}
+		fromText := CheckWorkspace(command, policy)
+
+		if (fromFile == nil) != (fromText == nil) {
+			t.Fatalf("%q: CheckWorkspaceFile=%v CheckWorkspace=%v", command, fromFile, fromText)
+		}
+		if fromFile != nil && fromFile.Error() != fromText.Error() {
+			t.Fatalf("%q: CheckWorkspaceFile=%q CheckWorkspace=%q", command, fromFile, fromText)
+		}
+	}
+}
+
+func TestCheckWorkspaceWrapperNestingLimit(t *testing.T) {
+	t.Parallel()
+
+	policy, _, _ := testWorkspacePolicy(t)
+	command := strings.Repeat("command ", maxShellNesting+2) + "true"
+	err := CheckWorkspace(command, policy)
+	if err == nil || !strings.Contains(err.Error(), "shell nesting limit") {
+		t.Fatalf("CheckWorkspace(%q) = %v, want shell nesting limit", command, err)
 	}
 }
 
