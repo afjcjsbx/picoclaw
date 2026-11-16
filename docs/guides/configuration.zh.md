@@ -333,8 +333,8 @@ PicoClaw 默认在沙箱环境中运行。Agent 只能访问配置的工作区�
 
 | 配置键 | 类型 | 默认值 | 描述 |
 |--------|------|--------|------|
-| `tools.allow_read_paths` | string[] | `[]` | 允许在工作区外读取的额外路径 |
-| `tools.allow_write_paths` | string[] | `[]` | 允许在工作区外写入的额外路径 |
+| `tools.allow_read_paths` | string[] | `[]` | 仅允许只读文件系统工具在工作区外读取的额外路径；`exec` 不会继承 |
+| `tools.allow_write_paths` | string[] | `[]` | 允许在工作区外写入的额外路径，包括 `exec` |
 
 ### Exec 安全配置
 
