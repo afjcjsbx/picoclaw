@@ -56,6 +56,30 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 	return t.guardCommandContext(context.Background(), command, cwd)
 }
 
+// guardCommandContext decides whether a command may run. It returns "" to
+// allow it, or the block message. Layers run from the least to the most
+// configurable, and the first one that rejects wins:
+//
+//  1. Matching forms: quoted heredoc bodies are stripped, and on Unix $IFS,
+//     ANSI-C quoting and line continuations are resolved and every command is
+//     canonicalized from the AST (wrappers such as env, quote-spliced words).
+//  2. Hardline patterns: an immutable floor (catastrophic operations and
+//     self-protection). They apply even with enable_deny_patterns=false, no
+//     allow rule exempts them and the Guardian is never consulted.
+//  3. Custom deny patterns: always enforced and stronger than any allow rule.
+//  4. Default deny patterns: exempted only by custom_allow_patterns. In smart
+//     mode a hit is sent to the Guardian instead of being rejected.
+//  5. Allowlist: when allow patterns are set, the command must match one.
+//  6. Workspace boundary (restrict_to_workspace): a byte-level path-traversal
+//     check, then the AST path guard on Unix or the path scanner on Windows.
+//  7. Risk level: the AST classifier rates the command low to critical and
+//     rejects anything above risk_threshold, unless custom_risk_allow_patterns
+//     exempts it up to risk_allow_threshold. Unparseable commands and dynamic
+//     command names count as unknown and are rejected whatever the threshold
+//     (in smart mode they go to layer 8 instead).
+//  8. Smart approvals: commands flagged by layer 4 or at or above
+//     approvals.smart_threshold (and unknown ones) are reviewed by the Guardian
+//     model. APPROVE runs the command; DENY, ESCALATE and any error block it.
 func (t *ExecTool) guardCommandContext(ctx context.Context, command, cwd string) string {
 	cmd := strings.TrimSpace(command)
 	lower := strings.ToLower(cmd)
