@@ -62,7 +62,8 @@ The classifier also:
 - parses a literal `trap '...'` action recursively, and rejects an `xargs` invocation that launches a shell;
 - inspects common wrappers (`env`, `command`, `nohup`, `time`, `nice`, `timeout`, `xargs`, `watch`, `flock`, `chrt`, `taskset`, `busybox`, `runuser`, `setpriv`, `capsh`, `machinectl`, `lxc`, `incus`) and classifies the command they launch; `runuser -c` and `flock -c` command strings are parsed as shell scripts;
 - inspects `virsh` verbs, lowering read-only ones such as `list`, `domstate` and `dumpxml` and keeping destructive verbs at `high`;
-- treats `env -S` as critical, because it splits a string into a command.
+- treats `env -S` as critical, because it splits a string into a command;
+- classifies process-detaching and namespace commands (`setsid`, `daemon`, `daemonize`, `disown`, `unshare`, `nsenter`, `bwrap`) as `high`. This is an approval signal, not a containment boundary: the exec tool's process scope is responsible for killing detached descendants.
 
 Script inspection is bounded: one file is read up to 1 MiB and all script files in a single command share a 2 MiB budget, so nested scripts cannot turn the guard into an unbounded allocation. Relative script paths resolve against the command's working directory, exactly like the shell resolves them; the guard does not track `cd` inside a script, so a nested script invoked after a `cd` is rejected rather than misresolved. The file is read before execution, which leaves a small time-of-check/time-of-use window if the file is replaced concurrently.
 
