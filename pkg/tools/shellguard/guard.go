@@ -505,14 +505,20 @@ func isAssignment(s string) bool {
 // hasCommandLookupFlag reports whether command(1) was invoked with -v/-V,
 // including combined forms such as -pv. Lookup mode does not execute the
 // argument, so it is not a guard concern.
+//
+// Only the options that precede command's own argument count: a -v after the
+// command name belongs to the nested command (`command rm -v`), not to
+// command(1).
 func hasCommandLookupFlag(words []word) bool {
 	for _, w := range words {
 		if !w.literal {
-			continue
+			return false
 		}
 		text := w.text
-		if strings.HasPrefix(text, "-") && !strings.HasPrefix(text, "--") &&
-			strings.ContainsAny(text[1:], "vV") {
+		if text == "--" || text == "-" || !strings.HasPrefix(text, "-") {
+			return false
+		}
+		if !strings.HasPrefix(text, "--") && strings.ContainsAny(text[1:], "vV") {
 			return true
 		}
 	}
