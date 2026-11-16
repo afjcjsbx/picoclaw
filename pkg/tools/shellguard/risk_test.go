@@ -77,6 +77,11 @@ func TestClassifyCommand(t *testing.T) {
 		{name: "flock wrapper base", args: []string{"flock", "/tmp/lock", "echo", "ok"}, want: RiskLow},
 		{name: "taskset wrapper base", args: []string{"taskset", "-c", "0-3", "echo", "ok"}, want: RiskLow},
 		{name: "chrt wrapper base", args: []string{"chrt", "-f", "50", "echo", "ok"}, want: RiskLow},
+		{name: "setsid detaches", args: []string{"setsid", "sleep", "300"}, want: RiskHigh},
+		{name: "daemon detaches", args: []string{"daemon", "--", "sleep", "300"}, want: RiskHigh},
+		{name: "unshare namespace", args: []string{"unshare", "-p", "sleep", "300"}, want: RiskHigh},
+		{name: "nsenter namespace", args: []string{"nsenter", "-t", "1", "sh"}, want: RiskHigh},
+		{name: "bwrap namespace", args: []string{"bwrap", "--unshare-pid", "--", "sh"}, want: RiskHigh},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
