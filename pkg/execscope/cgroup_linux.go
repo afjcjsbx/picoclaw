@@ -52,8 +52,8 @@ func newCgroupScope(cfg Config) (Scope, error) {
 	}
 	name := fmt.Sprintf("exec-%d-%d-%s", os.Getpid(), cgroupScopeSeq.Add(1), randomToken())
 	dir := filepath.Join(parent, name)
-	if err := os.Mkdir(dir, 0o755); err != nil {
-		return nil, err
+	if mkdirErr := os.Mkdir(dir, 0o755); mkdirErr != nil {
+		return nil, mkdirErr
 	}
 	fd, err := unix.Open(dir, unix.O_DIRECTORY|unix.O_RDONLY|unix.O_CLOEXEC, 0)
 	if err != nil {
@@ -431,7 +431,13 @@ func forceKillCgroup(dir string, timeout time.Duration) error {
 func waitCgroupEmpty(dir string, deadline time.Time) error {
 	for {
 		populated, err := cgroupPopulated(dir)
-		if err != nil || !populated {
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
+			return err
+		}
+		if !populated {
 			return nil
 		}
 		if time.Now().After(deadline) {

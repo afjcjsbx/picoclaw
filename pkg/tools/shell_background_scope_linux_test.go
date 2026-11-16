@@ -46,9 +46,9 @@ func TestShellTool_BackgroundNoWaitKeepsScopeAlive(t *testing.T) {
 		t.Fatalf("decode background response: %v", err)
 	}
 
-	session, err := sm.Get(response.SessionID)
-	if err != nil {
-		t.Fatalf("get session: %v", err)
+	session, getErr := sm.Get(response.SessionID)
+	if getErr != nil {
+		t.Fatalf("get session: %v", getErr)
 	}
 	pid := waitForSetsidPID(t, pidFile)
 	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })

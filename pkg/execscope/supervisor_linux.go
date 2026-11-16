@@ -119,7 +119,7 @@ func (s *supervisorScope) Kill() error {
 		s.mu.Unlock()
 
 		if control != nil {
-			_, writeErr := control.Write([]byte("k"))
+			_, writeErr := control.WriteString("k")
 			_ = control.Close()
 			if writeErr == nil {
 				return
