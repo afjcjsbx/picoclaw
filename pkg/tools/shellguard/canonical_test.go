@@ -29,6 +29,66 @@ func TestCanonicalCommands(t *testing.T) {
 			want:    []string{"echo hi", "git push origin main"},
 		},
 		{
+			name:    "backslash escaped command name",
+			command: `r\m -rf /`,
+			want:    []string{"rm -rf /"},
+		},
+		{
+			name:    "backslash escaped letters",
+			command: `\r\m -rf /`,
+			want:    []string{"rm -rf /"},
+		},
+		{
+			name:    "double backslash is unescaped once",
+			command: `r\\m -rf /`,
+			want:    []string{`r\m -rf /`},
+		},
+		{
+			name:    "triple backslash is unescaped once",
+			command: `r\\\m -rf /`,
+			want:    []string{`r\m -rf /`},
+		},
+		{
+			name:    "double quoted backslash is literal",
+			command: `"r\m" -rf /`,
+			want:    []string{`r\m -rf /`},
+		},
+		{
+			name:    "single quoted backslash is literal",
+			command: `'r\m' -rf /`,
+			want:    []string{`r\m -rf /`},
+		},
+		{
+			name:    "ansi unknown escape keeps backslash",
+			command: `$'r\m' -rf /`,
+			want:    []string{`r\m -rf /`},
+		},
+		{
+			name:    "ansi hex escape decodes once",
+			command: `$'r\x6d' -rf /`,
+			want:    []string{"rm -rf /"},
+		},
+		{
+			name:    "nested single quoted backslash script",
+			command: `sh -c 'r\m -rf /'`,
+			want:    []string{`sh -c r\m -rf /`, "rm -rf /"},
+		},
+		{
+			name:    "nested double quoted backslash script",
+			command: `sh -c "r\m -rf /"`,
+			want:    []string{`sh -c r\m -rf /`, "rm -rf /"},
+		},
+		{
+			name:    "eval backslash script",
+			command: `eval 'r\m -rf /'`,
+			want:    []string{`eval r\m -rf /`, "rm -rf /"},
+		},
+		{
+			name:    "trap backslash action",
+			command: `trap 'r\m -rf /' EXIT`,
+			want:    []string{`trap r\m -rf / EXIT`, "rm -rf /"},
+		},
+		{
 			name:    "nested command substitution",
 			command: `echo $(r''m -rf /)`,
 			want:    []string{"echo", "rm -rf /"},

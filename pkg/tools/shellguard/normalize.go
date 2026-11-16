@@ -15,6 +15,17 @@ func NormalizeForDeny(command string) string {
 	return command
 }
 
+// normalizeForParse applies only the fixed rewrites needed before parsing a
+// command for canonical/risk analysis. Unlike NormalizeForDeny it leaves
+// ANSI-C quoting in place: literalWord decodes every shell word exactly once,
+// so pre-decoding here would make r\\m and $'r\m' look like rm.
+func normalizeForParse(command string) string {
+	command = stripShellLineContinuations(command)
+	command = strings.ReplaceAll(command, "${IFS}", " ")
+	command = strings.ReplaceAll(command, "$IFS", " ")
+	return command
+}
+
 // stripShellLineContinuations removes backslash-newline pairs, which the shell
 // joins before parsing. Both LF and CRLF are handled.
 func stripShellLineContinuations(command string) string {

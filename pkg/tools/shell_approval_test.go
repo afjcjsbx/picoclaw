@@ -222,6 +222,30 @@ func TestSmartApprovalDoesNotReviewHardline(t *testing.T) {
 	}
 }
 
+func TestSmartApprovalDoesNotReviewDynamicDestructiveOperand(t *testing.T) {
+	t.Parallel()
+
+	commands := []string{
+		`rm -f "$P"`,
+		`r\m -f "$P"`,
+		`env rm -f "$P"`,
+		`sh -c 'rm -f "$P"'`,
+	}
+	for _, command := range commands {
+		t.Run(command, func(t *testing.T) {
+			t.Parallel()
+			tool, reviewer := newSmartTestTool(t, nil, shellguard.RiskHigh, approvalApprove)
+			got := tool.guardCommand(command, t.TempDir())
+			if !strings.Contains(got, "dynamic operand for destructive command") {
+				t.Fatalf("guardCommand(%q) = %q, want dynamic-operand rejection", command, got)
+			}
+			if reviewer.calls != 0 {
+				t.Fatalf("reviewer calls = %d, want 0", reviewer.calls)
+			}
+		})
+	}
+}
+
 func TestSmartApprovalDoesNotReviewCustomDeny(t *testing.T) {
 	t.Parallel()
 

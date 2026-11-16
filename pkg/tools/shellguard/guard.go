@@ -118,6 +118,11 @@ type Assessment struct {
 	Command string
 	Reason  string
 	Unknown bool
+	// Reject marks a command that must be blocked even in smart-approval mode.
+	// It is used for constructs the static guards cannot validate, such as a
+	// dynamic operand to a destructive command. Unlike Unknown, Reject never
+	// goes to the Guardian model.
+	Reject bool
 }
 
 // BlockedError converts an assessment into the structured error returned by
@@ -200,6 +205,9 @@ func (g *Guard) CheckFileWithOptions(
 }
 
 func (g *Guard) checkAssessment(assessment Assessment) *BlockedError {
+	if assessment.Reject {
+		return assessment.BlockedError(g.threshold)
+	}
 	if !assessment.Unknown && IsAllowed(assessment.Level, g.threshold) {
 		return nil
 	}
@@ -304,6 +312,15 @@ func (g *Guard) assessArgv(words []word, env *checkEnv, depth int) Assessment {
 	}
 	if name == "trap" {
 		return g.assessTrap(words, env, depth)
+	}
+	if name == "eval" {
+		// eval concatenates its literal arguments and runs them as shell
+		// input. Inspect that script so a destructive command with a dynamic
+		// operand is rejected instead of merely inheriting eval's critical
+		// base level.
+		if script, ok := joinLiteralWords(words[1:]); ok && script != "" {
+			return preferAssessment(g.classify(words), g.assessScript(script, env, depth+1))
+		}
 	}
 	if spec, ok := wrapperSpecs[name]; ok {
 		return g.assessWrapper(name, words, spec, env, depth)
@@ -412,11 +429,68 @@ func execCommand(args []word) ([]word, bool) {
 }
 
 func (g *Guard) classify(words []word) Assessment {
+	if assessment, rejected := dynamicDestructiveOperand(words); rejected {
+		return assessment
+	}
 	args := wordTexts(words)
 	return Assessment{
 		Level:   ClassifyCommand(args, g.overrides, g.modifiers),
 		Command: FormatCommand(args),
 	}
+}
+
+// destructiveOperandCommands can delete, overwrite or change the permissions
+// of a path named by an operand. A dynamic operand for one of these commands
+// cannot be resolved statically: the shell may expand it to any path outside
+// the workspace, so the command is rejected instead of being sent to the
+// Guardian.
+var destructiveOperandCommands = map[string]bool{
+	"rm":         true,
+	"rmdir":      true,
+	"mv":         true,
+	"cp":         true,
+	"truncate":   true,
+	"shred":      true,
+	"dd":         true,
+	"chmod":      true,
+	"chown":      true,
+	"chgrp":      true,
+	"ln":         true,
+	"install":    true,
+	"tee":        true,
+	"touch":      true,
+	"wipefs":     true,
+	"blkdiscard": true,
+	"fdisk":      true,
+	"parted":     true,
+	"mkswap":     true,
+}
+
+func isDestructiveOperandCommand(name string) bool {
+	if destructiveOperandCommands[name] {
+		return true
+	}
+	return name == "mkfs" || strings.HasPrefix(name, "mkfs.")
+}
+
+func dynamicDestructiveOperand(words []word) (Assessment, bool) {
+	if len(words) == 0 || words[0].dynamic {
+		return Assessment{}, false
+	}
+	if !isDestructiveOperandCommand(baseCommand(words[0].text)) {
+		return Assessment{}, false
+	}
+	for _, arg := range words[1:] {
+		if arg.dynamic {
+			return Assessment{
+				Level:   RiskCritical,
+				Command: FormatCommand(wordTexts(words)),
+				Reason:  "dynamic operand for destructive command cannot be validated",
+				Reject:  true,
+			}, true
+		}
+	}
+	return Assessment{}, false
 }
 
 func (g *Guard) assessShell(name string, words []word, env *checkEnv, depth int) Assessment {
@@ -569,6 +643,10 @@ func unknownAssessment(args []string, reason string) Assessment {
 // command win: it needs the Guardian regardless of the numeric level.
 func preferAssessment(current, candidate Assessment) Assessment {
 	switch {
+	case candidate.Reject && !current.Reject:
+		return candidate
+	case current.Reject && !candidate.Reject:
+		return current
 	case candidate.Unknown && !current.Unknown:
 		return candidate
 	case current.Unknown && !candidate.Unknown:
@@ -598,10 +676,13 @@ func literalWord(w *syntax.Word) word {
 	if len(w.Parts) == 1 {
 		switch p := w.Parts[0].(type) {
 		case *syntax.Lit:
-			return word{text: p.Value}
+			return word{text: unescapeUnquotedLit(p.Value)}
 		case *syntax.SglQuoted:
 			if !p.Dollar {
 				return word{text: p.Value}
+			}
+			if decoded, ok := decodeANSIValue(p.Value); ok {
+				return word{text: decoded}
 			}
 		}
 	}
@@ -609,28 +690,38 @@ func literalWord(w *syntax.Word) word {
 	var b strings.Builder
 	dynamic := false
 
-	var addParts func([]syntax.WordPart)
-	addParts = func(parts []syntax.WordPart) {
+	var addParts func([]syntax.WordPart, bool)
+	addParts = func(parts []syntax.WordPart, inDouble bool) {
 		for _, part := range parts {
 			switch p := part.(type) {
 			case *syntax.Lit:
-				b.WriteString(p.Value)
+				if inDouble {
+					b.WriteString(unescapeDoubleQuotedLit(p.Value))
+				} else {
+					b.WriteString(unescapeUnquotedLit(p.Value))
+				}
 			case *syntax.SglQuoted:
-				b.WriteString(p.Value)
-				// $'...' is an ANSI-C quoted string: the parser keeps escapes
-				// such as \x72 undecoded, so treating it as literal would let
-				// $'\x72m' -rf / masquerade as an unknown command.
+				// Single quotes preserve backslashes. $'...' is an ANSI-C
+				// quoted string, so decode its escapes to the bytes the shell
+				// would pass; an unknown escape keeps its backslash.
 				if p.Dollar {
-					dynamic = true
+					if decoded, ok := decodeANSIValue(p.Value); ok {
+						b.WriteString(decoded)
+					} else {
+						b.WriteString(p.Value)
+						dynamic = true
+					}
+				} else {
+					b.WriteString(p.Value)
 				}
 			case *syntax.DblQuoted:
-				addParts(p.Parts)
+				addParts(p.Parts, true)
 			default:
 				dynamic = true
 			}
 		}
 	}
-	addParts(w.Parts)
+	addParts(w.Parts, false)
 	return word{text: b.String(), dynamic: dynamic}
 }
 

@@ -128,7 +128,10 @@ func (t *ExecTool) guardCommandContext(ctx context.Context, command, cwd string)
 	// operators can selectively permit normally-blocked commands. In smart
 	// mode they can also be reviewed instead of being rejected outright.
 	if !t.commandMatchesCustomAllowPattern(lower) {
-		if patternsMatchAny(t.denyPatterns, []string{lowerForDeny}) {
+		// Use the same canonical forms as the hardline/custom layers. This
+		// catches shell-equivalent spellings such as g\it, which the raw
+		// lowerForDeny form does not expose.
+		if patternsMatchAny(t.denyPatterns, denyForms) {
 			if !t.approvalEnabled {
 				return "Command blocked by safety guard (dangerous pattern detected)"
 			}
@@ -213,6 +216,9 @@ func (t *ExecTool) guardCommandContext(ctx context.Context, command, cwd string)
 		scriptOpts := shellguard.CheckOptions{Dir: cwd, Root: root}
 		if t.approvalEnabled {
 			assessment := t.riskGuard.AssessFileWithOptions(cmd, parsed, scriptOpts)
+			if assessment.Reject {
+				return assessment.BlockedError(t.riskGuard.Threshold()).Error()
+			}
 			riskExempt := t.riskAllowExempts(cmd, lower)
 			riskBlocked := !riskExempt &&
 				(assessment.Unknown ||
