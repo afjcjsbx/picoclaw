@@ -115,9 +115,20 @@ func (s *execStateStore) rememberCwd(ctx context.Context, cwd string) {
 // clearCwd forgets a stored cwd that is no longer usable. It does not create
 // an entry when the conversation has none.
 func (s *execStateStore) clearCwd(ctx context.Context) {
-	s.mutateExisting(ctx, func(entry *execStateEntry) {
+	if s == nil {
+		return
+	}
+	key, ok := execStateKeyFromContext(ctx)
+	if !ok {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if entry, ok := s.entries[key]; ok {
 		entry.cwd = ""
-	})
+		entry.lastUsed = time.Now()
+	}
 }
 
 // storeEnv replaces the conversation's remembered env overlay. A nil map
@@ -144,25 +155,6 @@ func (s *execStateStore) mutate(ctx context.Context, update func(*execStateEntry
 		s.pruneLocked()
 		entry = &execStateEntry{}
 		s.entries[key] = entry
-	}
-	update(entry)
-	entry.lastUsed = time.Now()
-}
-
-func (s *execStateStore) mutateExisting(ctx context.Context, update func(*execStateEntry)) {
-	if s == nil {
-		return
-	}
-	key, ok := execStateKeyFromContext(ctx)
-	if !ok {
-		return
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	entry, ok := s.entries[key]
-	if !ok {
-		return
 	}
 	update(entry)
 	entry.lastUsed = time.Now()
