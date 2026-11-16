@@ -1281,7 +1281,7 @@ PicoClaw supports cron-style scheduled tasks via the `cron` tool. The agent can 
 
 Scheduled tasks persist across restarts and are stored in `~/.picoclaw/workspace/cron/`.
 
-Command cron jobs can execute shell commands. By default, remote channels cannot schedule command jobs. To allow specific remote channels, set `command_allowed_remotes` to entries such as `"telegram"` or `"telegram:1234567890"`; use `"*"` only if every non-empty channel should be allowed. The `"*"` wildcard is potentially dangerous because any remote channel that can talk to PicoClaw can schedule shell commands. This does not bypass `allow_command`, `command_confirm`, or exec safety checks.
+Command cron jobs can execute shell commands. By default, remote channels cannot schedule command jobs. To allow specific remote channels, set `command_allowed_remotes` to entries such as `"telegram"` or `"telegram:1234567890"`; use `"*"` only if every non-empty channel should be allowed. The `"*"` wildcard is potentially dangerous because any remote channel that can talk to PicoClaw can schedule shell commands. This does not bypass `allow_command`, `command_confirm`, or exec safety checks. `command_allowed_remotes` is independent of `tools.exec.allow_remote`, which controls direct exec calls: remote cron command jobs do not require `allow_remote`, and PicoClaw re-checks the cron allowlist when a job fires.
 
 ### Advanced Topics
 

@@ -454,6 +454,19 @@ func boolArg(args map[string]any, key string) bool {
 }
 
 func (t *ExecTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	return t.execute(ctx, args, false)
+}
+
+// executeScheduled runs a command for an already-authorized cron job. CronTool
+// has already checked tools.cron.command_allowed_remotes; this bypasses only
+// the interactive remote-channel gate for a run action. Every command guard
+// (deny patterns, hardline rules, risk checks, and allow patterns) still
+// applies.
+func (t *ExecTool) executeScheduled(ctx context.Context, args map[string]any) *ToolResult {
+	return t.execute(ctx, args, true)
+}
+
+func (t *ExecTool) execute(ctx context.Context, args map[string]any, scheduled bool) *ToolResult {
 	action, _ := args["action"].(string)
 	if action == "" {
 		return ErrorResult("action is required")
@@ -464,8 +477,11 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 	// applies to every action, not only run: list/read/poll/wait can leak
 	// session output and write/kill/send-keys can mutate internal sessions.
 	// Fail-closed: empty channel = blocked. The channel must come from the
-	// trusted tool context, never from model-controlled arguments.
-	if !t.allowRemote && !constants.IsInternalChannel(strings.TrimSpace(ToolChannel(ctx))) {
+	// trusted tool context, never from model-controlled arguments. Scheduled
+	// cron command jobs are authorized by their own allowlist and reach this
+	// tool through executeScheduled; only their run action skips this gate.
+	scheduledRun := scheduled && action == "run"
+	if !t.allowRemote && !scheduledRun && !constants.IsInternalChannel(strings.TrimSpace(ToolChannel(ctx))) {
 		return ErrorResult("exec is restricted to internal channels")
 	}
 
