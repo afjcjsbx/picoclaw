@@ -109,8 +109,8 @@ func TestSmartApprovalReviewsUnknownRisk(t *testing.T) {
 	if reviewer.calls != 1 {
 		t.Fatalf("reviewer calls = %d, want 1", reviewer.calls)
 	}
-	if !strings.Contains(reviewer.description, "shell reads commands") {
-		t.Errorf("description = %q, want opaque shell reason", reviewer.description)
+	if !strings.Contains(reviewer.description, "cannot be inspected") {
+		t.Errorf("description = %q, want uninspectable script reason", reviewer.description)
 	}
 }
 

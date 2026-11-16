@@ -1,6 +1,8 @@
 package shellguard
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -367,6 +369,204 @@ func TestGuardRejectsInvalidConfig(t *testing.T) {
 	}
 }
 
+func TestGuardScriptFileInspection(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	dir := filepath.Join(root, "work")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir work: %v", err)
+	}
+
+	write := func(name, content string) string {
+		t.Helper()
+		path := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+		return path
+	}
+
+	write("safe.sh", "#!/bin/sh\nls -la\n")
+	write("risky.sh", "#!/bin/sh\nrm -rf /\n")
+	write("broken.sh", "if then\n")
+	write("work/inner.sh", "#!/bin/sh\ncat ok\n")
+	write("work/chain.sh", "#!/bin/sh\nbash work/inner.sh\n")
+	write("work/chain-risky.sh", "#!/bin/sh\nbash risky.sh\n")
+
+	outside := filepath.Join(t.TempDir(), "outside.sh")
+	if err := os.WriteFile(outside, []byte("#!/bin/sh\nls\n"), 0o644); err != nil {
+		t.Fatalf("write outside script: %v", err)
+	}
+	link := filepath.Join(root, "link.sh")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	oversize := filepath.Join(root, "large.sh")
+	large := make([]byte, maxScriptFileBytes+1)
+	for i := range large {
+		large[i] = '#'
+	}
+	if err := os.WriteFile(oversize, large, 0o644); err != nil {
+		t.Fatalf("write oversized script: %v", err)
+	}
+
+	guard := mustGuard(t, "medium")
+	check := func(command string) *BlockedError {
+		return guard.CheckWithOptions(command, CheckOptions{Dir: root, Root: root})
+	}
+
+	allowed := []string{
+		"sh safe.sh",
+		"bash safe.sh",
+		"bash -e safe.sh arg1",
+		"bash -o pipefail safe.sh",
+		"bash -- safe.sh",
+		"bash work/inner.sh",
+		"bash work/chain.sh",
+		"bash " + filepath.Join(root, "safe.sh"),
+		"bash -c 'echo ok'",
+		"busybox sh safe.sh",
+		"flock /tmp/lock sh safe.sh",
+	}
+	for _, command := range allowed {
+		if blocked := check(command); blocked != nil {
+			t.Errorf("Check(%q) blocked: %v", command, blocked)
+		}
+	}
+
+	blockedCommands := map[string]string{
+		"bash risky.sh":               "risk",
+		"bash work/chain-risky.sh":    "risk",
+		"bash broken.sh":              "could not be parsed",
+		"bash missing.sh":             "cannot be inspected",
+		"bash " + outside:             "outside the workspace",
+		"bash link.sh":                "outside the workspace",
+		"bash large.sh":               "exceeds",
+		"bash -c 'rm -rf /'":          "risk",
+		"bash > safe.sh":              "stdin",
+		"bash $SCRIPT":                "stdin",
+		"busybox sh risky.sh":         "risk",
+		"flock /tmp/lock sh risky.sh": "risk",
+	}
+	for command, want := range blockedCommands {
+		blocked := check(command)
+		if blocked == nil {
+			t.Errorf("Check(%q) allowed, want blocked", command)
+			continue
+		}
+		if !strings.Contains(blocked.Error(), want) {
+			t.Errorf("Check(%q) reason = %v, want %q", command, blocked, want)
+		}
+	}
+
+	// Check without a workspace context keeps the historical fail-closed
+	// behavior: the script cannot be verified, so the shell stays opaque.
+	if blocked := guard.Check("bash safe.sh"); blocked == nil {
+		t.Fatal("script file without CheckOptions should stay blocked")
+	}
+}
+
+func TestReadScriptFileBudget(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(
+		filepath.Join(dir, "script.sh"),
+		[]byte("#!/bin/sh\necho ok\n"),
+		0o644,
+	); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+
+	env := &checkEnv{remaining: 8}
+	if _, err := readScriptFile(dir, "script.sh", env); err == nil ||
+		!strings.Contains(err.Error(), "budget") {
+		t.Fatalf("budget exhaustion error = %v, want budget error", err)
+	}
+}
+
+func TestGuardWrapperInspection(t *testing.T) {
+	t.Parallel()
+
+	medium := mustGuard(t, "medium")
+	high := mustGuard(t, "high")
+	critical := mustGuard(t, "critical")
+
+	allowed := []struct {
+		guard   *Guard
+		command string
+	}{
+		{medium, "flock /tmp/lock echo ok"},
+		{medium, "flock /tmp/lock -c 'echo ok'"},
+		{medium, "taskset -c 0-3 echo ok"},
+		{medium, "chrt -f 50 echo ok"},
+		{medium, "busybox echo ok"},
+		{medium, "busybox ls -la"},
+		{medium, "lxc list"},
+		{medium, "incus list"},
+		{medium, "machinectl list"},
+		{medium, "virsh list"},
+		{medium, "virsh domstate vm"},
+		{high, "setpriv --reuid 1000 echo ok"},
+		{high, "capsh --print"},
+		{high, "capsh -- -c 'echo ok'"},
+		{high, "lxc exec c1 echo ok"},
+		{high, "lxc exec c1 -- echo ok"},
+		{high, "lxc exec -- c1 echo ok"},
+		{high, "lxc exec --env FOO=bar c1 echo ok"},
+		{high, "lxc exec c1 --env FOO=bar echo ok"},
+		{high, "machinectl shell user@m echo ok"},
+		{high, "machinectl -- shell user@m echo ok"},
+		{medium, "timeout -- 5 echo ok"},
+		{medium, "flock -- /tmp/lock echo ok"},
+		{critical, "runuser -c 'echo ok'"},
+	}
+	for _, tt := range allowed {
+		if blocked := tt.guard.Check(tt.command); blocked != nil {
+			t.Errorf("Check(%q) blocked: %v", tt.command, blocked)
+		}
+	}
+
+	blockedCommands := []struct {
+		guard   *Guard
+		command string
+	}{
+		{medium, "flock /tmp/lock rm -rf /"},
+		{medium, "flock /tmp/lock -c 'rm -rf /'"},
+		{medium, "taskset -c 0-3 rm -rf /"},
+		{medium, "chrt -f 50 rm -rf /"},
+		{medium, "busybox rm -rf /"},
+		{medium, "busybox sh -c 'rm -rf /'"},
+		{medium, "busybox --install -s"},
+		{medium, "lxc delete c1"},
+		{medium, "incus delete c1"},
+		{medium, "machinectl poweroff"},
+		{medium, "virsh destroy vm"},
+		{medium, "virsh qemu-monitor-command vm cmd"},
+		{high, "setpriv --reuid 1000 rm -rf /"},
+		{high, "capsh -- -c 'rm -rf /'"},
+		{high, "lxc exec c1 sh -c 'rm -rf /'"},
+		{high, "lxc exec --env FOO=bar c1 rm -rf /"},
+		{high, "lxc exec c1 --env FOO=bar rm -rf /"},
+		{high, "lxc exec -- c1 rm -rf /"},
+		{high, "machinectl shell user@m sh -c 'rm -rf /'"},
+		{high, "machinectl -- shell user@m rm -rf /"},
+		{medium, "timeout -- 5 rm -rf /"},
+		{medium, "flock -- /tmp/lock rm -rf /"},
+		{critical, "runuser -c 'x=rm; $x -rf /'"},
+	}
+	for _, tt := range blockedCommands {
+		if blocked := tt.guard.Check(tt.command); blocked == nil {
+			t.Errorf("Check(%q) allowed, want blocked", tt.command)
+		}
+	}
+}
+
 func TestGuardWithThreshold(t *testing.T) {
 	t.Parallel()
 
@@ -394,10 +594,11 @@ func TestGuardNestingLimit(t *testing.T) {
 	t.Parallel()
 
 	guard := mustGuard(t, "medium")
-	if assessment := guard.assessScript("echo ok", maxShellNesting+1); !assessment.Unknown {
+	env := &checkEnv{remaining: maxScriptInspectBytes}
+	if assessment := guard.assessScript("echo ok", env, maxShellNesting+1); !assessment.Unknown {
 		t.Fatal("depth beyond the nesting limit should be unknown")
 	}
-	if assessment := guard.assessScript("echo ok", maxShellNesting); assessment.Unknown {
+	if assessment := guard.assessScript("echo ok", env, maxShellNesting); assessment.Unknown {
 		t.Fatalf("depth at the nesting limit should pass: %+v", assessment)
 	}
 }
@@ -441,5 +642,25 @@ func BenchmarkGuardCheck(b *testing.B) {
 				_ = guard.Check(command)
 			}
 		})
+	}
+}
+
+func BenchmarkGuardScriptFile(b *testing.B) {
+	root := b.TempDir()
+	script := "#!/bin/sh\nset -eu\nfor f in *.go; do echo \"$f\"; done\n"
+	if err := os.WriteFile(filepath.Join(root, "script.sh"), []byte(script), 0o644); err != nil {
+		b.Fatalf("write script: %v", err)
+	}
+	guard, err := NewGuard("medium", nil, nil)
+	if err != nil {
+		b.Fatalf("NewGuard: %v", err)
+	}
+	opts := CheckOptions{Dir: root, Root: root}
+
+	b.ReportAllocs()
+	for b.Loop() {
+		if blocked := guard.CheckWithOptions("bash script.sh", opts); blocked != nil {
+			b.Fatalf("CheckWithOptions: %v", blocked)
+		}
 	}
 }

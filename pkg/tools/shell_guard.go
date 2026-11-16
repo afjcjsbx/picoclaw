@@ -191,12 +191,19 @@ func (t *ExecTool) guardCommandContext(ctx context.Context, command, cwd string)
 	// riskAllowThreshold; custom_allow_patterns no longer bypasses this layer.
 	// In smart mode, commands at or above approvalThreshold, plus unknown
 	// commands, go to the Guardian instead of being rejected outright.
+	// Script files are inspected only inside the workspace: Dir resolves relative
+	// paths and Root bounds what the guard is willing to read.
 	if t.riskGuard != nil {
 		if !parsedAttempted {
 			parsed, _ = shellguard.Parse(cmd)
 		}
+		root := t.workingDir
+		if root == "" {
+			root = cwd
+		}
+		scriptOpts := shellguard.CheckOptions{Dir: cwd, Root: root}
 		if t.approvalEnabled {
-			assessment := t.riskGuard.AssessFile(cmd, parsed)
+			assessment := t.riskGuard.AssessFileWithOptions(cmd, parsed, scriptOpts)
 			riskExempt := t.riskAllowExempts(cmd, lower)
 			riskBlocked := !riskExempt &&
 				(assessment.Unknown ||
@@ -217,7 +224,7 @@ func (t *ExecTool) guardCommandContext(ctx context.Context, command, cwd string)
 			} else if riskBlocked {
 				return assessment.BlockedError(t.riskGuard.Threshold()).Error()
 			}
-		} else if blocked := t.riskGuard.CheckFile(cmd, parsed); blocked != nil {
+		} else if blocked := t.riskGuard.CheckFileWithOptions(cmd, parsed, scriptOpts); blocked != nil {
 			if !t.riskAllowExempts(cmd, lower) {
 				return blocked.Error()
 			}
