@@ -26,8 +26,7 @@ func canonicalCommands(command string, depth int) []string {
 		return nil
 	}
 
-	parser := syntax.NewParser(syntax.Variant(syntax.LangBash))
-	file, err := parser.Parse(strings.NewReader(command), "")
+	file, err := Parse(command)
 	if err != nil {
 		return nil
 	}
