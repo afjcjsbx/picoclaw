@@ -461,16 +461,10 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 	// (e.g. Telegram webhooks) unless explicitly opted-in via config. This
 	// applies to every action, not only run: list/read/poll/wait can leak
 	// session output and write/kill/send-keys can mutate internal sessions.
-	// Fail-closed: empty channel = blocked.
-	if !t.allowRemote {
-		channel := ToolChannel(ctx)
-		if channel == "" {
-			channel, _ = args["__channel"].(string)
-		}
-		channel = strings.TrimSpace(channel)
-		if channel == "" || !constants.IsInternalChannel(channel) {
-			return ErrorResult("exec is restricted to internal channels")
-		}
+	// Fail-closed: empty channel = blocked. The channel must come from the
+	// trusted tool context, never from model-controlled arguments.
+	if !t.allowRemote && !constants.IsInternalChannel(strings.TrimSpace(ToolChannel(ctx))) {
+		return ErrorResult("exec is restricted to internal channels")
 	}
 
 	switch action {
