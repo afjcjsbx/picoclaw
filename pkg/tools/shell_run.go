@@ -20,6 +20,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/isolation"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/tools/shellguard"
 )
 
 // foregroundPromotionNote explains why a requested foreground timeout was
@@ -307,6 +308,10 @@ func (t *ExecTool) runSync(
 		t.rememberCwd(ctx, observedCwd)
 	}
 
+	exitNote := ""
+	if exitCode != nil {
+		exitNote = informativeExitNote(command, *exitCode)
+	}
 	meta := execRunMeta{
 		ExitCode:   exitCode,
 		TimedOut:   timedOut,
@@ -314,6 +319,7 @@ func (t *ExecTool) runSync(
 		DurationMs: time.Since(start).Milliseconds(),
 		Error:      errorMessage,
 		Cwd:        observedCwd,
+		ExitNote:   exitNote,
 	}
 	forLLM := formatExecRunMeta(meta) + "\n" + output
 	if timedOut {
@@ -335,9 +341,50 @@ type execRunMeta struct {
 	DurationMs int64  `json:"durationMs"`
 	Error      string `json:"error,omitempty"`
 	Cwd        string `json:"cwd,omitempty"`
+	ExitNote   string `json:"exitNote,omitempty"`
 }
 
 const execRunMetaPrefix = "[exec] "
+
+// exitCodeNotes explains non-zero statuses that are commonly normal. The map
+// is deliberately small: an unknown exit code must stay a real error hint.
+var exitCodeNotes = map[string]map[int]string{
+	"grep":  {1: "grep exit 1 means no matches (not an error)"},
+	"egrep": {1: "grep exit 1 means no matches (not an error)"},
+	"fgrep": {1: "grep exit 1 means no matches (not an error)"},
+	"rg":    {1: "ripgrep exit 1 means no matches (not an error)"},
+	"ag":    {1: "exit 1 means no matches (not an error)"},
+	"ack":   {1: "exit 1 means no matches (not an error)"},
+	"diff":  {1: "diff exit 1 means files differ (not an error)"},
+	"colordiff": {
+		1: "diff exit 1 means files differ (not an error)",
+	},
+	"test": {1: "test exit 1 means the condition is false (not an error)"},
+	"[":    {1: "test exit 1 means the condition is false (not an error)"},
+	"git":  {1: "git exit 1 is often normal, for example git diff with changes"},
+}
+
+// informativeExitNote returns a model-facing note for a non-zero status that
+// has a well-known non-error meaning. The last canonical simple command is the
+// one that supplies the shell's exit status.
+func informativeExitNote(command string, code int) string {
+	if code <= 0 {
+		return ""
+	}
+	forms := shellguard.CanonicalCommands(command)
+	if len(forms) == 0 {
+		return ""
+	}
+	fields := strings.Fields(forms[len(forms)-1])
+	if len(fields) == 0 {
+		return ""
+	}
+	name := fields[0]
+	if slash := strings.LastIndexByte(name, '/'); slash >= 0 {
+		name = name[slash+1:]
+	}
+	return exitCodeNotes[name][code]
+}
 
 func formatExecRunMeta(meta execRunMeta) string {
 	var buf bytes.Buffer
