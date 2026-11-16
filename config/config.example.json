@@ -525,9 +525,12 @@
     "exec": {
       "enabled": true,
       "enable_deny_patterns": true,
+      "risk_threshold": "medium",
+      "risk_allow_threshold": "medium",
       "allow_remote": false,
       "custom_deny_patterns": null,
-      "custom_allow_patterns": null
+      "custom_allow_patterns": null,
+      "custom_risk_allow_patterns": null
     },
     "skills": {
       "enabled": true,
@@ -650,6 +653,13 @@
       "interceptor_timeout_ms": 5000,
       "approval_timeout_ms": 60000
     }
+  },
+  "approvals": {
+    "_comment": "Smart approvals review flagged exec commands with an auxiliary Guardian model from model_list. Set mode to 'off' to disable the Guardian and keep the static guards as the final decision.",
+    "mode": "smart",
+    "model": "",
+    "smart_threshold": "high",
+    "smart_timeout_seconds": 20
   },
   "events": {
     "logging": {

@@ -12,7 +12,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 )
 
-func TestStripTrailingBackgroundAmpersand(t *testing.T) {
+func TestNormalizeTrailingBackgroundAmpersand(t *testing.T) {
 	tests := []struct {
 		name    string
 		command string
@@ -92,6 +92,12 @@ func TestStripTrailingBackgroundAmpersand(t *testing.T) {
 			strip:   false,
 		},
 		{
+			name:    "operator before comment",
+			command: "echo hi & # done",
+			want:    "echo hi & # done",
+			strip:   false,
+		},
+		{
 			name:    "comment before real operator",
 			command: "echo hi # comment\nsleep 1 &",
 			want:    "echo hi # comment\nsleep 1",
@@ -143,7 +149,7 @@ func TestStripTrailingBackgroundAmpersand(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, stripped := stripTrailingBackgroundAmpersand(tt.command)
+			got, stripped := normalizeTrailingBackgroundAmpersand(tt.command, "linux")
 			require.Equal(t, tt.strip, stripped)
 			require.Equal(t, tt.want, got)
 		})

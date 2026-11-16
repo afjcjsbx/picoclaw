@@ -1,30 +1,23 @@
 package tools
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"math"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
-	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/creack/pty"
-
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/constants"
-	"github.com/sipeed/picoclaw/pkg/isolation"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	fstools "github.com/sipeed/picoclaw/pkg/tools/fs"
+	"github.com/sipeed/picoclaw/pkg/tools/shellguard"
 )
 
 // maxOutputBufferSize caps the rolling output retained per session.
@@ -65,27 +58,34 @@ func getSessionManager() *SessionManager {
 }
 
 type ExecTool struct {
-	workingDir           string
-	timeout              time.Duration
-	foregroundCap        time.Duration
-	denyPatterns         []*regexp.Regexp
-	hardlineDenyPatterns []*regexp.Regexp
-	customDenyPatterns   []*regexp.Regexp
-	allowPatterns        []*regexp.Regexp
-	customAllowPatterns  []*regexp.Regexp
-	allowedPathPatterns  []*regexp.Regexp
-	restrictToWorkspace  bool
-	allowRemote          bool
-	maxOutputChars       int
-	maxInlineResultChars int
-	sessionManager       *SessionManager
+	workingDir              string
+	timeout                 time.Duration
+	foregroundCap           time.Duration
+	denyPatterns            []*regexp.Regexp
+	hardlineDenyPatterns    []*regexp.Regexp
+	customDenyPatterns      []*regexp.Regexp
+	allowPatterns           []*regexp.Regexp
+	customAllowPatterns     []*regexp.Regexp
+	customRiskAllowPatterns []*regexp.Regexp
+	riskAllowThreshold      shellguard.RiskLevel
+	allowedPathPatterns     []*regexp.Regexp
+	restrictToWorkspace     bool
+	allowRemote             bool
+	maxOutputChars          int
+	maxInlineResultChars    int
+	baseEnv                 map[string]string
+	state                   *execStateStore
+	sessionManager          *SessionManager
+	riskGuard               *shellguard.Guard
+	approvalEnabled         bool
+	approvalThreshold       shellguard.RiskLevel
+	approvalReviewer        approvalReviewer
 }
 
 var _ AsyncExecutor = (*ExecTool)(nil)
 
 var (
 	defaultDenyPatterns = []*regexp.Regexp{
-		regexp.MustCompile(`\brm\s+-[rf]{1,2}\b`),
 		regexp.MustCompile(`\bdel\s+/[fq]\b`),
 		regexp.MustCompile(`\brmdir\s+/s\b`),
 		// Match disk wiping commands (must be followed by space/args)
@@ -104,9 +104,6 @@ var (
 		regexp.MustCompile("`[^`]+`"),
 		regexp.MustCompile(`\|\s*sh\b`),
 		regexp.MustCompile(`\|\s*bash\b`),
-		regexp.MustCompile(`;\s*rm\s+-[rf]`),
-		regexp.MustCompile(`&&\s*rm\s+-[rf]`),
-		regexp.MustCompile(`\|\|\s*rm\s+-[rf]`),
 		regexp.MustCompile(`<<\s*EOF`),
 		regexp.MustCompile(`\$\(\s*cat\s+`),
 		regexp.MustCompile(`\$\(\s*curl\s+`),
@@ -152,6 +149,18 @@ var (
 		),
 		// Recursive deletion of the filesystem root.
 		regexp.MustCompile(`\brm\s+(?:-{1,2}[a-z-]*\s+)*/(?:[\s*/.]|$)`),
+		// Recursive deletion of the directories that hold the OS, system
+		// binaries, user homes and the root account. Subdirectories remain
+		// governed by the risk classifier, so rm -rf /home/alice/build is not
+		// caught here.
+		regexp.MustCompile(
+			`\brm\s+(?:-{1,2}[a-z-]*\s+)*/+` +
+				`(?:etc|usr|home|root|bin|sbin|lib|lib64|boot|var|opt|srv|sys|proc|dev)` +
+				`(?:/\*)?/?` + `(?:[\s;&|<>()]|$)`,
+		),
+		// Sending SIGHUP to every process, or SIGKILL to PID 1.
+		regexp.MustCompile(`\bkill\s+(?:--\s+)?-1(?:[\s;&|<>()]|$)`),
+		regexp.MustCompile(`\bkill\s+(?:-9|-KILL|-SIGKILL)\s+1(?:[\s;&|<>()]|$)`),
 		// Host power state changes.
 		regexp.MustCompile(`\b(?:shutdown|reboot|poweroff)\b`),
 	}
@@ -159,6 +168,9 @@ var (
 	// windowsDenyPatterns contains PowerShell-specific deny patterns that only
 	// apply on Windows, where commands are executed via powershell -Command.
 	windowsDenyPatterns = []*regexp.Regexp{
+		// The AST risk classifier is POSIX-only and skipped on Windows, so keep
+		// a regex floor for recursive/forced rm there.
+		regexp.MustCompile(`\brm\s+-[rf]{1,2}\b`),
 		// [Text.Encoding] used to construct command strings at runtime.
 		// Matches [Text.Encoding] and [System.Text.Encoding] variants.
 		regexp.MustCompile(`\[(?:\w+\.)?text\.encoding\]`),
@@ -174,10 +186,33 @@ var (
 		// Unicode escape sequences that could be used to construct commands.
 		// Matches \uXXXX format used to represent characters like i = "i"
 		regexp.MustCompile(`\\u[0-9a-fA-F]{4}`),
+		// Recursive deletion through Remove-Item or its PowerShell aliases.
+		// The flag pattern accepts unambiguous abbreviations such as -Rec.
+		regexp.MustCompile(`\b(?:remove-item|rm|ri|del|erase|rd|rmdir)\b[^|;&\r\n]*\s-r(?:ec(?:ur(?:se)?)?)?\b`),
+		// Disk management cmdlets that clear or reformat a volume.
+		regexp.MustCompile(`\b(?:clear-disk|format-volume)\b`),
+		// Deleting shadow copies destroys local backup and recovery points.
+		regexp.MustCompile(`\bvssadmin(?:\.exe)?\b[^|;&\r\n]*\sdelete\s+shadows\b`),
+		// Boot configuration changes can disable recovery or boot integrity.
+		regexp.MustCompile(`\bbcdedit(?:\.exe)?\b[^|;&\r\n]*\s/set\b`),
+		// Registry key deletion.
+		regexp.MustCompile(`\breg(?:\.exe)?\s+delete\b`),
+		// Granting Everyone access weakens ACLs on the target path.
+		regexp.MustCompile(`\bicacls(?:\.exe)?\b[^|;&\r\n]*\s/grant\b[^|;&\r\n]*(?:\beveryone\b|\*s-1-1-0)`),
+		// Download-and-execute pipelines through PowerShell web cmdlets.
+		regexp.MustCompile(
+			`\b(?:iwr|irm|invoke-webrequest|invoke-restmethod|curl|wget)\b` +
+				`[^;&\r\n]*\|\s*(?:iex|invoke-expression)\b`,
+		),
+		// Forced process termination.
+		regexp.MustCompile(`\btaskkill(?:\.exe)?\b[^|;&\r\n]*\s/f\b`),
+		regexp.MustCompile(`\b(?:stop-process|spps)\b[^|;&\r\n]*\s-f(?:o(?:r(?:ce)?)?)?\b`),
 	}
 
-	// absolutePathPattern matches absolute file paths in commands (Unix and Windows).
-	absolutePathPattern = regexp.MustCompile(`[A-Za-z]:\\[^\\\"']+|/[^\s\"']+`)
+	// pathTraversalPattern catches parent-directory syntax that the Windows
+	// path scanner and dotted forms such as .../ still need byte-level
+	// matching for.
+	pathTraversalPattern = regexp.MustCompile(`\.\.(?:[\\/]\.\.)*[\\/]`)
 
 	// safePaths are kernel pseudo-devices that are always safe to reference in
 	// commands, regardless of workspace restriction. They contain no user data
@@ -191,74 +226,144 @@ var (
 		"/dev/stdout":  true,
 		"/dev/stderr":  true,
 	}
-
-	// quotedHeredocStartPattern matches a quoted heredoc delimiter, whose body
-	// is literal text and must not be scanned for shell substitution patterns.
-	quotedHeredocStartPattern = regexp.MustCompile(`<<-?\s*(?:'([^'\s]+)'|"([^"\s]+)")`)
 )
 
-// stripQuotedHeredocBodies replaces the body of every quoted heredoc with a
-// placeholder before deny-pattern matching. A quoted delimiter disables shell
-// expansion for the body, so Markdown backticks inside it are literal text,
-// not command substitution.
-func stripQuotedHeredocBodies(command string) string {
-	sanitized := command
-	searchFrom := 0
+// selfProtectionDeleteVerbs matches commands that remove files or directories,
+// including the PowerShell aliases of Remove-Item.
+const selfProtectionDeleteVerbs = `\b(?:rm|unlink|shred|truncate|del|erase|remove-item|ri|rd|rmdir)\b`
 
-	for {
-		loc := quotedHeredocStartPattern.FindStringSubmatchIndex(sanitized[searchFrom:])
-		if loc == nil {
-			return sanitized
-		}
+// selfProtectionHardlinePatterns returns hardline patterns that keep the
+// running PicoClaw instance from terminating or deleting itself. The patterns
+// are built per tool so they reflect the current executable, state directory
+// and service name. They are always enforced, including when default deny
+// patterns are disabled or a broad custom allow rule is configured.
+func selfProtectionHardlinePatterns() []*regexp.Regexp {
+	patterns := []*regexp.Regexp{
+		// Killing the agent by process name.
+		regexp.MustCompile(`\b(?:pkill|killall)\b[^;|&\n]*\bpicoclaw(?:\.exe)?\b`),
+		// Killing the agent after resolving its PID.
+		regexp.MustCompile(`\bkill\b[^;|&\n]*(?:pgrep|pidof)\b[^;|&\n]*\bpicoclaw(?:\.exe)?\b`),
+		// Killing the agent by process name on Windows.
+		regexp.MustCompile(`\b(?:stop-process|spps)\b[^;|&\n]*(?:-name\s+)?picoclaw(?:\.exe)?\b`),
+		regexp.MustCompile(`\btaskkill(?:\.exe)?\b[^;|&\n]*\bpicoclaw(?:\.exe)?\b`),
+		// Stopping the agent service.
+		regexp.MustCompile(`\bsystemctl\b[^;|&\n]*\b(?:stop|kill)\b[^;|&\n]*\bpicoclaw(?:\.service)?\b`),
+		// Removing the default state directory through shell expansion.
+		regexp.MustCompile(
+			selfProtectionDeleteVerbs +
+				`[^;|&\n]*(?:~|\$home|\$\{home\})["']?/\.picoclaw\b`,
+		),
+		// Removing the executable through command lookup.
+		regexp.MustCompile(
+			selfProtectionDeleteVerbs +
+				`[^;|&\n]*(?:which|command\s+-v|type\s+-p)\s+picoclaw(?:\.exe)?\b`,
+		),
+		// Removing the state directory or executable through the variables
+		// exported to every command.
+		regexp.MustCompile(
+			selfProtectionDeleteVerbs +
+				`[^;|&\n]*\$(?:picoclaw_home|picoclaw_exe|\{picoclaw_home\}|\{picoclaw_exe\})` +
+				`(?:[^a-z0-9_]|$)`,
+		),
+		// Killing the agent through the exported executable variable.
+		regexp.MustCompile(
+			`\b(?:pkill|killall)\b[^;|&\n]*\$(?:picoclaw_exe|\{picoclaw_exe\})(?:[^a-z0-9_]|$)`,
+		),
+		// Stopping the agent through the exported service name.
+		regexp.MustCompile(
+			`\bsystemctl\b[^;|&\n]*\b(?:stop|kill)\b` +
+				`[^;|&\n]*\$(?:picoclaw_service_name|\{picoclaw_service_name\})(?:[^a-z0-9_]|$)`,
+		),
+	}
 
-		matchStart := searchFrom + loc[0]
-		matchEnd := searchFrom + loc[1]
-		delimStart := searchFrom + loc[2]
-		delimEnd := searchFrom + loc[3]
-		if delimStart == searchFrom-1 || delimEnd == searchFrom-1 {
-			delimStart = searchFrom + loc[4]
-			delimEnd = searchFrom + loc[5]
-		}
-		delim := sanitized[delimStart:delimEnd]
-		allowTabs := strings.Contains(sanitized[matchStart:matchEnd], "<<-")
+	serviceName := strings.ToLower(strings.TrimSpace(os.Getenv(config.EnvServiceName)))
+	if serviceName == "" {
+		serviceName = "picoclaw"
+	}
+	if serviceName != "picoclaw" {
+		quoted := regexp.QuoteMeta(serviceName)
+		patterns = append(patterns,
+			regexp.MustCompile(`\b(?:pkill|killall)\b[^;|&\n]*\b`+quoted+`\b`),
+			regexp.MustCompile(
+				`\bsystemctl\b[^;|&\n]*\b(?:stop|kill)\b[^;|&\n]*\b`+quoted+`(?:\.service)?\b`,
+			),
+		)
+	}
 
-		newlineRel := strings.IndexByte(sanitized[matchEnd:], '\n')
-		if newlineRel == -1 {
-			return sanitized
-		}
-		bodyStart := matchEnd + newlineRel + 1
-		lineStart := bodyStart
-		foundEnd := false
-
-		for lineStart <= len(sanitized) {
-			lineEnd := len(sanitized)
-			if nextNewline := strings.IndexByte(sanitized[lineStart:], '\n'); nextNewline >= 0 {
-				lineEnd = lineStart + nextNewline
-			}
-
-			line := sanitized[lineStart:lineEnd]
-			compare := strings.TrimSuffix(line, "\r")
-			if allowTabs {
-				compare = strings.TrimLeft(compare, "\t")
-			}
-			if compare == delim {
-				sanitized = sanitized[:bodyStart] + "[quoted heredoc omitted]\n" + sanitized[lineStart:]
-				searchFrom = bodyStart + len("[quoted heredoc omitted]\n")
-				foundEnd = true
-				break
-			}
-
-			if lineEnd == len(sanitized) {
-				lineStart = len(sanitized) + 1
-			} else {
-				lineStart = lineEnd + 1
-			}
-		}
-
-		if !foundEnd {
-			return sanitized
+	var protectedPaths []string
+	if home := config.GetHome(); home != "" && home != "." {
+		protectedPaths = append(protectedPaths, home)
+		if resolved, err := filepath.EvalSymlinks(home); err == nil && resolved != "" {
+			protectedPaths = append(protectedPaths, resolved)
 		}
 	}
+	if executable, err := os.Executable(); err == nil && executable != "" {
+		protectedPaths = append(protectedPaths, executable)
+		if resolved, err := filepath.EvalSymlinks(executable); err == nil && resolved != "" {
+			protectedPaths = append(protectedPaths, resolved)
+		}
+	}
+
+	seen := make(map[string]struct{}, len(protectedPaths))
+	for _, path := range protectedPaths {
+		path = strings.TrimSpace(path)
+		if path == "" || path == "." {
+			continue
+		}
+		if absolute, err := filepath.Abs(path); err == nil {
+			path = absolute
+		}
+		if path == string(filepath.Separator) || filepath.Dir(path) == path {
+			continue
+		}
+		path = strings.TrimRight(path, string(filepath.Separator))
+		if runtime.GOOS == "windows" {
+			path = strings.TrimRight(path, "/")
+		}
+		if path == "" {
+			continue
+		}
+		variants := []string{path}
+		if runtime.GOOS == "windows" {
+			variants = append(variants, filepath.ToSlash(path))
+		}
+		for _, variant := range variants {
+			key := strings.ToLower(variant)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			quoted := regexp.QuoteMeta(key)
+			patterns = append(patterns, regexp.MustCompile(
+				selfProtectionDeleteVerbs+`[^;|&\n]*`+quoted+`(?:[^a-z0-9_]|$)`,
+			))
+		}
+	}
+	return patterns
+}
+
+// compilePatterns compiles each pattern, naming the failing one in the error.
+func compilePatterns(
+	patterns []string,
+	compile func(string) (*regexp.Regexp, error),
+	label string,
+) ([]*regexp.Regexp, error) {
+	compiled := make([]*regexp.Regexp, 0, len(patterns))
+	for _, pattern := range patterns {
+		re, err := compile(pattern)
+		if err != nil {
+			return nil, fmt.Errorf("invalid %s pattern %q: %w", label, pattern, err)
+		}
+		compiled = append(compiled, re)
+	}
+	return compiled, nil
+}
+
+// compileFullMatchPattern anchors an operator-provided allow pattern so it must
+// match the whole command. A bare "git" pattern no longer exempts
+// "git push --force".
+func compileFullMatchPattern(pattern string) (*regexp.Regexp, error) {
+	return regexp.Compile(`^(?:` + pattern + `)$`)
 }
 
 func NewExecTool(workingDir string, restrict bool, allowPaths ...[]*regexp.Regexp) (*ExecTool, error) {
@@ -274,17 +379,26 @@ func NewExecToolWithConfig(
 	denyPatterns := make([]*regexp.Regexp, 0)
 	customDenyPatterns := make([]*regexp.Regexp, 0)
 	customAllowPatterns := make([]*regexp.Regexp, 0)
+	customRiskAllowPatterns := make([]*regexp.Regexp, 0)
+	riskAllowThreshold := shellguard.RiskMedium
 	var allowedPathPatterns []*regexp.Regexp
 	allowRemote := true
+	enableDefaultGuard := true
+	approvalConfig := config.ApprovalsConfig{}
 	if len(allowPaths) > 0 {
 		allowedPathPatterns = allowPaths[0]
 	}
 
 	if cfg != nil {
 		execConfig := cfg.Tools.Exec
-		enableDenyPatterns := execConfig.EnableDenyPatterns
+		enableDefaultGuard = execConfig.EnableDenyPatterns
 		allowRemote = execConfig.AllowRemote
-		if enableDenyPatterns {
+		normalized, err := cfg.Approvals.Normalized()
+		if err != nil {
+			return nil, fmt.Errorf("approvals: %w", err)
+		}
+		approvalConfig = normalized
+		if enableDefaultGuard {
 			denyPatterns = append(denyPatterns, defaultDenyPatterns...)
 			if runtime.GOOS == "windows" {
 				denyPatterns = append(denyPatterns, windowsDenyPatterns...)
@@ -302,20 +416,29 @@ func NewExecToolWithConfig(
 			logger.InfoCF("tools", "using custom deny patterns", map[string]any{
 				"patterns": execConfig.CustomDenyPatterns,
 			})
-			for _, pattern := range execConfig.CustomDenyPatterns {
-				re, err := regexp.Compile(pattern)
-				if err != nil {
-					return nil, fmt.Errorf("invalid custom deny pattern %q: %w", pattern, err)
-				}
-				customDenyPatterns = append(customDenyPatterns, re)
+			customDenyPatterns, err = compilePatterns(execConfig.CustomDenyPatterns, regexp.Compile, "custom deny")
+			if err != nil {
+				return nil, err
 			}
 		}
-		for _, pattern := range execConfig.CustomAllowPatterns {
-			re, err := regexp.Compile(pattern)
+		customAllowPatterns, err = compilePatterns(
+			execConfig.CustomAllowPatterns, compileFullMatchPattern, "custom allow",
+		)
+		if err != nil {
+			return nil, err
+		}
+		customRiskAllowPatterns, err = compilePatterns(
+			execConfig.RiskAllowPatterns, compileFullMatchPattern, "custom risk allow",
+		)
+		if err != nil {
+			return nil, err
+		}
+		if execConfig.RiskAllowThreshold != "" {
+			parsed, err := shellguard.ParseRiskLevel(execConfig.RiskAllowThreshold)
 			if err != nil {
-				return nil, fmt.Errorf("invalid custom allow pattern %q: %w", pattern, err)
+				return nil, fmt.Errorf("invalid risk_allow_threshold: %w", err)
 			}
-			customAllowPatterns = append(customAllowPatterns, re)
+			riskAllowThreshold = parsed
 		}
 	} else {
 		denyPatterns = append(denyPatterns, defaultDenyPatterns...)
@@ -333,26 +456,67 @@ func NewExecToolWithConfig(
 
 	maxOutputChars := config.DefaultExecMaxOutputChars
 	maxInlineResultChars := 0
+	var execEnvSet map[string]string
+	var execEnvAllowlist []string
 	if cfg != nil {
 		maxOutputChars = cfg.Tools.Exec.GetMaxOutputChars()
 		maxInlineResultChars = cfg.Tools.GetMaxInlineResultChars()
+		execEnvSet = cfg.Tools.Exec.EnvSet
+		execEnvAllowlist = cfg.Tools.Exec.EnvAllowlist
 	}
 
+	smartApprovals := approvalConfig.Mode == config.ApprovalModeSmart
+
+	// Smart approvals need the AST classifier even when the optional default
+	// guard set is disabled; otherwise there is no risk signal to review.
+	riskGuard, err := newRiskGuard(cfg, enableDefaultGuard || smartApprovals)
+	if err != nil {
+		return nil, err
+	}
+
+	var reviewer approvalReviewer
+	if smartApprovals {
+		guardian, guardianErr := newApprovalGuardian(cfg, approvalConfig)
+		if guardianErr != nil {
+			// Keep safe commands working, but fail closed for every command
+			// that needs a second opinion.
+			logger.WarnCF(
+				"tools.approval",
+				"smart approvals enabled but the Guardian is unavailable; risky commands will be rejected",
+				map[string]any{"error": guardianErr.Error()},
+			)
+		} else if guardian != nil {
+			reviewer = guardian
+		}
+	}
+
+	hardlinePatterns := make([]*regexp.Regexp, 0, len(hardlineDenyPatterns)+8)
+	hardlinePatterns = append(hardlinePatterns, hardlineDenyPatterns...)
+	hardlinePatterns = append(hardlinePatterns, selfProtectionHardlinePatterns()...)
+
 	return &ExecTool{
-		workingDir:           workingDir,
-		timeout:              timeout,
-		foregroundCap:        maxForegroundTimeout,
-		denyPatterns:         denyPatterns,
-		hardlineDenyPatterns: hardlineDenyPatterns,
-		customDenyPatterns:   customDenyPatterns,
-		allowPatterns:        nil,
-		customAllowPatterns:  customAllowPatterns,
-		allowedPathPatterns:  allowedPathPatterns,
-		restrictToWorkspace:  restrict,
-		allowRemote:          allowRemote,
-		maxOutputChars:       maxOutputChars,
-		maxInlineResultChars: maxInlineResultChars,
-		sessionManager:       getSessionManager(),
+		workingDir:              workingDir,
+		timeout:                 timeout,
+		foregroundCap:           maxForegroundTimeout,
+		denyPatterns:            denyPatterns,
+		hardlineDenyPatterns:    hardlinePatterns,
+		customDenyPatterns:      customDenyPatterns,
+		allowPatterns:           nil,
+		customAllowPatterns:     customAllowPatterns,
+		customRiskAllowPatterns: customRiskAllowPatterns,
+		riskAllowThreshold:      riskAllowThreshold,
+		allowedPathPatterns:     allowedPathPatterns,
+		restrictToWorkspace:     restrict,
+		allowRemote:             allowRemote,
+		maxOutputChars:          maxOutputChars,
+		maxInlineResultChars:    maxInlineResultChars,
+		baseEnv:                 newExecEnv(workingDir, execEnvSet, execEnvAllowlist),
+		state:                   newExecStateStore(),
+		sessionManager:          getSessionManager(),
+		riskGuard:               riskGuard,
+		approvalEnabled:         smartApprovals,
+		approvalThreshold:       approvalThreshold(approvalConfig.SmartThreshold),
+		approvalReviewer:        reviewer,
 	}, nil
 }
 
@@ -377,19 +541,24 @@ func buildExecDescription() string {
 		ampersandGuidance = ""
 	}
 
+	capSeconds := int64(maxForegroundTimeout / time.Second)
 	return fmt.Sprintf(`Executes shell commands with PicoClaw's safety guards. OS: %s. Shell: %s.
 
 Every foreground call starts a fresh shell in the configured working directory; pass cwd instead of using cd. For file operations, prefer list_dir, search_files, read_file, edit_file and write_file over cat, grep, find, ls, sed and echo/heredoc.
+
+The child environment is sanitized: only safe variables and the operator's allowlist are inherited. Use the env argument for additional non-sensitive variables instead of relying on the parent environment.
+
+Within a conversation, the last explicit cwd and env values are remembered and reused when omitted. They do not capture cd or export executed inside a command. Pass env: {} to clear remembered variables.
 
 Foreground results start with a one-line [exec] {...} header (exitCode, timedOut, truncated, durationMs, error), then raw stdout/stderr. Non-zero exit codes can be normal: grep returns 1 for no match and diff returns 1 for differences.
 
 Oversized output is truncated automatically and the full stream is saved as an artifact; use the artifact path in the result with read_file when you need the omitted middle, instead of piping through head/tail or re-running the command.
 
-action=run requires command. timeout is in seconds. Foreground runs are capped at 600s: timeout=0 or any value above the cap starts a tracked background session instead and returns its sessionId. timeout is not supported with background=true.
+action=run requires command. timeout is in seconds. Foreground runs are capped at %ds: timeout=0 or any value above the cap starts a tracked background session instead and returns its sessionId. timeout is not supported with background=true.
 
 Use background=true only when the command must outlive the call. It returns a sessionId.%s Use list to inspect sessions, poll for a non-blocking preview, wait to block until exit, read for non-destructive offset/limit byte ranges (defaults to the most recent bytes), write for stdin, send-keys for PTY keys, and kill to terminate. Prefer wait over polling; notify=true sends a completion message. Use pty=true for interactive programs (not supported on Windows).
 
-Run independent commands in separate calls; %s Do not separate commands with newlines.`, runtime.GOOS, shell, ampersandGuidance, chainGuidance)
+Run independent commands in separate calls; %s Do not separate commands with newlines.`, runtime.GOOS, shell, capSeconds, ampersandGuidance, chainGuidance)
 }
 
 var execActions = []string{"run", "list", "poll", "wait", "read", "write", "kill", "send-keys"}
@@ -429,11 +598,25 @@ func (t *ExecTool) Parameters() map[string]any {
 			},
 			"cwd": map[string]any{
 				"type":        "string",
-				"description": "Working directory for the command",
+				"description": "Working directory for the command. The last explicit value is remembered for later calls in the same conversation; omit cwd to reuse it. Defaults to the agent workspace when no value is remembered.",
+			},
+			"env": map[string]any{
+				"type": "object",
+				"description": "Additional environment variables for this command; keys are variable names and values must be strings. " +
+					"The map is remembered for later calls in the same conversation and merged with new entries; pass an empty object to clear remembered variables. " +
+					"The inherited environment is sanitized: only safe variables (PATH, HOME, USER, LANG, SHELL, TERM, PWD, TZ, " +
+					"proxy and locale variables) plus tools.exec.env_set and tools.exec.env_allowlist are passed through. " +
+					"Cannot override PATH, HOME, USER, LOGNAME, SHELL, LD_PRELOAD, LD_LIBRARY_PATH, LD_AUDIT, LD_DEBUG, " +
+					"or any PICOCLAW_* variable. Read-only PICOCLAW_* variables: PICOCLAW_HOME, PICOCLAW_CONFIG, " +
+					"PICOCLAW_AGENT_WORKSPACE, PICOCLAW_EXE, PICOCLAW_SERVICE_NAME, PICOCLAW_EXEC_TIME (RFC3339), " +
+					"PICOCLAW_EXEC_TIMEOUT.",
 			},
 			"timeout": map[string]any{
-				"type":        "integer",
-				"description": "Optional timeout in seconds for foreground commands; overrides the configured timeout. Foreground runs are capped at 600s: 0 (no timeout) and values above the cap start a tracked background session instead. Not supported with background=true. For wait: maximum seconds to block (default and cap: the configured timeout).",
+				"type": "integer",
+				"description": fmt.Sprintf(
+					"Optional timeout in seconds for foreground commands; overrides the configured timeout. Foreground runs are capped at %ds: 0 (no timeout) and values above the cap start a tracked background session instead. Not supported with background=true. For wait: maximum seconds to block (default and cap: the configured timeout).",
+					int64(maxForegroundTimeout/time.Second),
+				),
 			},
 			"notify": map[string]any{
 				"type":        "boolean",
@@ -552,6 +735,11 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 		return ErrorResult("command is required")
 	}
 
+	extraEnv, envErr := execEnvFromArgs(args)
+	if envErr != nil {
+		return ErrorResult(envErr.Error())
+	}
+
 	// GHSA-pv8c-p6jf-3fpp: block exec from remote channels (e.g. Telegram webhooks)
 	// unless explicitly opted-in via config. Fail-closed: empty channel = blocked.
 	if !t.allowRemote {
@@ -632,17 +820,30 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 		return ErrorResult("notify is only supported with background=true or when the run is promoted to background")
 	}
 
+	state := t.state.load(ctx)
+	effectiveEnv, stateEnv, envProvided := mergeExecStateEnv(state.env, extraEnv)
+
+	requestedCwd, cwdProvided := args["cwd"].(string)
+	cwdProvided = cwdProvided && requestedCwd != ""
+	rememberedCwd := false
+
 	cwd := t.workingDir
-	if wd, ok := args["cwd"].(string); ok && wd != "" {
-		if t.restrictToWorkspace && t.workingDir != "" {
-			resolvedWD, err := fstools.ValidatePathWithAllowPaths(wd, t.workingDir, true, t.allowedPathPatterns)
-			if err != nil {
-				return ErrorResult("Command blocked by safety guard (" + err.Error() + ")")
-			}
-			cwd = resolvedWD
-		} else {
-			cwd = wd
+	switch {
+	case cwdProvided:
+		cwd = requestedCwd
+	case state.cwd != "":
+		if resolved, ok := t.rememberedCwd(ctx, state.cwd); ok {
+			cwd = resolved
+			rememberedCwd = true
 		}
+	}
+
+	if cwdProvided && t.restrictToWorkspace && t.workingDir != "" {
+		resolvedWD, err := fstools.ValidatePathWithAllowPaths(cwd, t.workingDir, true, t.allowedPathPatterns)
+		if err != nil {
+			return ErrorResult("Command blocked by safety guard (" + err.Error() + ")")
+		}
+		cwd = resolvedWD
 	}
 
 	if cwd == "" {
@@ -652,7 +853,13 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 		}
 	}
 
-	if guardError := t.guardCommand(guardedCommand, cwd); guardError != "" {
+	// Remember the path that passed workspace validation, not the post-symlink
+	// resolved path: on platforms where the workspace itself lives behind a
+	// symlink (for example /var -> /private/var on macOS), storing the resolved
+	// path would fail validation on the next call.
+	stateCwd := cwd
+
+	if guardError := t.guardCommandContext(ctx, guardedCommand, cwd); guardError != "" {
 		return ErrorResult(guardError)
 	}
 
@@ -661,6 +868,9 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 	if t.restrictToWorkspace && t.workingDir != "" && cwd != t.workingDir {
 		resolved, err := filepath.EvalSymlinks(cwd)
 		if err != nil {
+			if rememberedCwd {
+				t.forgetRememberedCwd(ctx, cwd, err)
+			}
 			return ErrorResult(fmt.Sprintf("Command blocked by safety guard (path resolution failed: %v)", err))
 		}
 		if fstools.IsAllowedPath(resolved, t.allowedPathPatterns) {
@@ -671,1427 +881,90 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 			if wsResolved == "" {
 				wsResolved = absWorkspace
 			}
-			rel, err := filepath.Rel(wsResolved, resolved)
-			if err != nil || !filepath.IsLocal(rel) {
+			if !fstools.IsWithinWorkspace(resolved, wsResolved) {
+				if rememberedCwd {
+					t.forgetRememberedCwd(ctx, cwd, fmt.Errorf("working directory escaped workspace"))
+				}
 				return ErrorResult("Command blocked by safety guard (working directory escaped workspace)")
 			}
 			cwd = resolved
 		}
 	}
 
+	// Persist only arguments that passed validation and the command guard.
+	if cwdProvided && stateCwd != "" {
+		t.rememberCwd(ctx, stateCwd)
+	}
+	if envProvided && t.state != nil {
+		t.state.storeEnv(ctx, stateEnv)
+	}
+
 	if isBackground {
-		return t.runBackground(ctx, command, cwd, isPty, backgroundNote)
+		return t.runBackground(ctx, command, cwd, isPty, backgroundNote, effectiveEnv)
 	}
 	if promoteToBackground {
-		return t.runBackground(ctx, command, cwd, isPty, t.foregroundPromotionNote(timeoutDisabled, timeout))
-	}
-
-	return t.runSync(ctx, command, cwd, timeout)
-}
-
-// foregroundPromotionNote explains why a requested foreground timeout was
-// turned into a tracked background session.
-func (t *ExecTool) foregroundPromotionNote(timeoutDisabled bool, timeout time.Duration) string {
-	capSeconds := int64(t.foregroundCap / time.Second)
-	reason := fmt.Sprintf(
-		"Requested timeout of %ds exceeds the %ds foreground cap",
-		int64(timeout/time.Second), capSeconds,
-	)
-	if timeoutDisabled {
-		reason = fmt.Sprintf(
-			"timeout=0 disables the timeout, which exceeds the %ds foreground cap",
-			capSeconds,
+		return t.runBackground(
+			ctx,
+			command,
+			cwd,
+			isPty,
+			t.foregroundPromotionNote(timeoutDisabled, timeout),
+			effectiveEnv,
 		)
 	}
-	return reason + "; started as a tracked background session. Use action=wait, poll, read, or kill with this sessionId."
+
+	return t.runSync(ctx, command, cwd, timeout, effectiveEnv)
 }
 
-func (t *ExecTool) runSync(ctx context.Context, command, cwd string, timeout time.Duration) *ToolResult {
-	start := time.Now()
-	// timeout == 0 means no timeout
-	var cmdCtx context.Context
-	var cancel context.CancelFunc
-	if timeout > 0 {
-		cmdCtx, cancel = context.WithTimeout(ctx, timeout)
-	} else {
-		cmdCtx, cancel = context.WithCancel(ctx)
+// rememberedCwd revalidates a cwd stored for the conversation. It returns
+// ok=false and forgets the value when the directory disappeared or no longer
+// satisfies the workspace policy, so the caller can fall back to the default.
+func (t *ExecTool) rememberedCwd(ctx context.Context, cwd string) (string, bool) {
+	if cwd == "" {
+		return "", false
 	}
-	defer cancel()
-
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		cmd = exec.CommandContext(cmdCtx, "powershell", "-NoProfile", "-NonInteractive", "-Command", command)
-	} else {
-		shellPath, err := findShellExecutable()
+	resolved := cwd
+	if t.restrictToWorkspace && t.workingDir != "" {
+		validated, err := fstools.ValidatePathWithAllowPaths(cwd, t.workingDir, true, t.allowedPathPatterns)
 		if err != nil {
-			return ErrorResult(fmt.Sprintf("failed to locate shell: %v", err))
+			t.forgetRememberedCwd(ctx, cwd, err)
+			return "", false
 		}
-		cmd = exec.CommandContext(cmdCtx, shellPath, "-c", command)
+		resolved = validated
 	}
-	if cwd != "" {
-		cmd.Dir = cwd
-	}
-
-	prepareCommandForTermination(cmd)
-
-	maxOutputChars := t.maxOutputChars
-	if maxOutputChars <= 0 {
-		maxOutputChars = config.DefaultExecMaxOutputChars
-	}
-	// The inline view also respects the global tool-result cap. The artifact
-	// keeps the full stream, so a smaller in-memory window does not lose the
-	// omitted middle.
-	if t.maxInlineResultChars > 0 && t.maxInlineResultChars < maxOutputChars {
-		maxOutputChars = t.maxInlineResultChars
-	}
-	collector := newBoundedOutput(maxOutputChars, t.outputSpillDir())
-
-	// stdout and stderr share one pipe so the result preserves the order in
-	// which the child wrote them and a large stderr stream cannot block a
-	// separate pipe reader.
-	outputReader, outputWriter, pipeErr := os.Pipe()
-	if pipeErr != nil {
-		return ErrorResult(fmt.Sprintf("failed to create output pipe: %v", pipeErr))
-	}
-	cmd.Stdout = outputWriter
-	cmd.Stderr = outputWriter
-
-	// Route shell execution through the shared isolation entry point so exec tool
-	// subprocesses receive the same isolation policy as other integrations.
-	if err := isolation.Start(cmd); err != nil {
-		_ = outputWriter.Close()
-		_ = outputReader.Close()
-		return ErrorResult(fmt.Sprintf("failed to start command: %v", err))
-	}
-
-	// The child inherited its own copy of the write end. Release the parent's
-	// copy so the reader observes EOF when the child exits.
-	_ = outputWriter.Close()
-
-	readDone := make(chan struct{})
-	go func() {
-		defer close(readDone)
-		_, _ = io.Copy(collector, outputReader)
-		_ = outputReader.Close()
-	}()
-
-	done := make(chan error, 1)
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				logger.ErrorCF("shell", "cmd.Wait goroutine panic recovered",
-					map[string]any{
-						"panic": fmt.Sprintf("%v", r),
-						"stack": string(debug.Stack()),
-					})
-				done <- fmt.Errorf("panic in cmd.Wait: %v", r)
-			}
-		}()
-		done <- cmd.Wait()
-	}()
-
-	var err error
-	select {
-	case err = <-done:
-	case <-cmdCtx.Done():
-		_ = terminateProcessTree(cmd)
-		select {
-		case err = <-done:
-		case <-time.After(2 * time.Second):
-			if cmd.Process != nil {
-				_ = cmd.Process.Kill()
-			}
-			err = <-done
-		}
-	}
-
-	// Drain the merged stream. A surviving grandchild can keep the write end
-	// open after the direct child exits, so bound the wait instead of hanging
-	// the tool call.
-	select {
-	case <-readDone:
-	case <-time.After(2 * time.Second):
-		_ = outputReader.Close()
-		<-readDone
-	}
-
-	output, truncated := collector.Render()
-	artifactPath := collector.SpillPath()
-	spillCapped := collector.SpillCapped()
-	_ = collector.Close()
-
-	// Keep the raw stdout/stderr intact for the model and put the structured
-	// status in a one-line header instead. Wrapping the output in JSON would
-	// escape every newline, tab and quote, which makes diffs, logs and source
-	// snippets harder to read and costs context.
-	exitCode := (*int)(nil)
-	timedOut := false
-	errorMessage := ""
-	forUser := output
-	resultErr := err
-
-	switch {
-	case err == nil:
-		code := 0
-		exitCode = &code
-	case errors.Is(cmdCtx.Err(), context.DeadlineExceeded):
-		timedOut = true
-		errorMessage = fmt.Sprintf("command timed out after %v", timeout)
-		forUser = fmt.Sprintf("Command timed out after %v", timeout)
-		if output != "" {
-			forUser += "\n\nPartial output before timeout:\n" + output
-		}
-		resultErr = fmt.Errorf("command timeout: %w", err)
-	default:
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			code := exitErr.ExitCode()
-			if code >= 0 {
-				exitCode = &code
-				forUser = output + fmt.Sprintf("\n\n[Command exited with code %d]", code)
-			} else {
-				// A process killed by a signal has no meaningful exit status.
-				// Surface the wait error instead of a synthetic -1.
-				errorMessage = exitErr.Error()
-				forUser = output + "\n\n[Command exited with code -1] (killed by signal)"
-			}
-		} else {
-			errorMessage = err.Error()
-			forUser = output + fmt.Sprintf("\n\n[Command failed: %v]", err)
-		}
-	}
-
-	if output == "" {
-		output = "(no output)"
-	}
-	if forUser == "" {
-		forUser = "(no output)"
-	}
-
-	meta := execRunMeta{
-		ExitCode:   exitCode,
-		TimedOut:   timedOut,
-		Truncated:  truncated,
-		DurationMs: time.Since(start).Milliseconds(),
-		Error:      errorMessage,
-	}
-	forLLM := formatExecRunMeta(meta) + "\n" + output
-	if timedOut {
-		// A timeout is the moment we know the command outlived a foreground
-		// call, so point the model at tracked sessions instead of letting it
-		// guess from the exit status alone.
-		forLLM += "\n\n" + timeoutBackgroundGuidance
-	}
-
-	return newExecResult(forLLM, forUser, resultErr != nil, resultErr, artifactPath, spillCapped)
-}
-
-// execRunMeta is the model-facing status header for a foreground exec run.
-// The header stays outside the output body so shell output is not JSON-escaped.
-type execRunMeta struct {
-	ExitCode   *int   `json:"exitCode"`
-	TimedOut   bool   `json:"timedOut"`
-	Truncated  bool   `json:"truncated"`
-	DurationMs int64  `json:"durationMs"`
-	Error      string `json:"error,omitempty"`
-}
-
-const execRunMetaPrefix = "[exec] "
-
-func formatExecRunMeta(meta execRunMeta) string {
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(meta); err != nil {
-		return execRunMetaPrefix + "{}"
-	}
-	return execRunMetaPrefix + strings.TrimSuffix(buf.String(), "\n")
-}
-
-func newExecResult(
-	forLLM string,
-	forUser string,
-	isError bool,
-	err error,
-	artifactPath string,
-	spillCapped bool,
-) *ToolResult {
-	result := &ToolResult{
-		ForLLM:  forLLM,
-		ForUser: forUser,
-		IsError: isError,
-		Err:     err,
-		// Foreground output is always bounded by boundedOutput, and the metadata
-		// header adds a small fixed overhead. Mark the result as already reduced
-		// so the generic spill does not persist header+preview as a new oversized
-		// result when the body lands just under the inline cap.
-		LargeResultSpilled: true,
-	}
-	if artifactPath != "" {
-		result.ArtifactTags = append(result.ArtifactTags, "[file:"+artifactPath+"]")
-	}
-	if spillCapped {
-		note := fmt.Sprintf(
-			"\n\n[Full output artifact capped at %s bytes]",
-			formatCount64(maxOutputSpillBytes),
-		)
-		result.ForLLM += note
-		result.ForUser += note
-	}
-	return result
-}
-
-// sessionExitCode returns the process exit status only once the session has
-// finished, so a running session is not reported as a successful exit.
-func sessionExitCode(session *ProcessSession) *int {
-	if session == nil || !session.IsDone() {
-		return nil
-	}
-	code := session.GetExitCode()
-	return &code
-}
-
-func (t *ExecTool) outputSpillDir() string {
-	if t.workingDir == "" {
-		return ""
-	}
-	return filepath.Join(t.workingDir, ".artifacts", "tool")
-}
-
-func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEnabled bool, note string) *ToolResult {
-	sessionID := generateSessionID()
-	session := &ProcessSession{
-		ID:         sessionID,
-		Command:    command,
-		PTY:        ptyEnabled,
-		Background: true,
-		StartTime:  time.Now().Unix(),
-		Status:     "running",
-		ptyKeyMode: PtyKeyModeCSI,
-		// Initialize the output buffer before the session is published to the
-		// manager: readers (session_read/list_sessions) must never observe a
-		// session whose buffer is still nil.
-		outputBuffer: &bytes.Buffer{},
-	}
-
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		cmd = exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", command)
-	} else {
-		shellPath, err := findShellExecutable()
-		if err != nil {
-			return ErrorResult(fmt.Sprintf("failed to locate shell: %v", err))
-		}
-		cmd = exec.Command(shellPath, "-c", command)
-	}
-	if cwd != "" {
-		cmd.Dir = cwd
-	}
-
-	prepareCommandForTermination(cmd)
-
-	var outputReader io.ReadCloser
-	var outputWriter *os.File
-	var stdinWriter io.WriteCloser
-	var ptySlave *os.File
-
-	if ptyEnabled {
-		ptmx, tty, err := pty.Open()
-		if err != nil {
-			return ErrorResult(fmt.Sprintf("failed to create PTY: %v", err))
-		}
-
-		cmd.Stdin = tty
-		cmd.Stdout = tty
-		cmd.Stderr = tty
-
-		// For PTY, we need Setsid to create a new session.
-		// Note: Setsid and Setpgid conflict, so we must replace SysProcAttr entirely.
-		setSysProcAttrForPty(cmd)
-
-		session.ptyMaster = ptmx
-		ptySlave = tty
-	} else {
-		var err error
-		outputReader, outputWriter, err = os.Pipe()
-		if err != nil {
-			return ErrorResult(fmt.Sprintf("failed to create output pipe: %v", err))
-		}
-		cmd.Stdout = outputWriter
-		cmd.Stderr = outputWriter
-		stdinWriter, err = cmd.StdinPipe()
-		if err != nil {
-			_ = outputReader.Close()
-			_ = outputWriter.Close()
-			return ErrorResult(fmt.Sprintf("failed to create stdin pipe: %v", err))
-		}
-		session.stdoutPipe = outputReader
-		session.stdinWriter = stdinWriter
-	}
-
-	// Background sessions use the same startup path so isolation stays consistent
-	// with synchronous exec runs.
-	if err := isolation.Start(cmd); err != nil {
-		if outputReader != nil {
-			_ = outputReader.Close()
-		}
-		if outputWriter != nil {
-			_ = outputWriter.Close()
-		}
-		if ptySlave != nil {
-			_ = ptySlave.Close()
-		}
-		if session.ptyMaster != nil {
-			_ = session.ptyMaster.Close()
-		}
-		return ErrorResult(fmt.Sprintf("failed to start command: %v", err))
-	}
-
-	// The child inherited its own copies of the pipe/PTY write ends. The parent
-	// must release its copy now, otherwise the readers never observe EOF/EIO
-	// when the child exits and the goroutines would block forever.
-	if outputWriter != nil {
-		_ = outputWriter.Close()
-	}
-	if ptySlave != nil {
-		_ = ptySlave.Close()
-	}
-
-	session.PID = cmd.Process.Pid
-	t.sessionManager.Add(session)
-
-	// PTY mode: read from ptyMaster and wait for process
-	// Note: On Linux, closing ptyMaster doesn't interrupt blocking Read() calls,
-	// so we need cmd.Wait() in a separate goroutine to detect process exit.
-	if session.PTY && session.ptyMaster != nil {
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					logger.ErrorCF("shell", "PTY cmd.Wait goroutine panic recovered",
-						map[string]any{
-							"panic": fmt.Sprintf("%v", r),
-							"stack": string(debug.Stack()),
-						})
-					session.finish(-1)
-				}
-			}()
-			cmd.Wait() // Wait for process to exit
-			exitCode := -1
-			if cmd.ProcessState != nil {
-				exitCode = cmd.ProcessState.ExitCode()
-			}
-			session.finish(exitCode)
-		}()
-
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					logger.ErrorCF("shell", "PTY read goroutine panic recovered",
-						map[string]any{
-							"panic": fmt.Sprintf("%v", r),
-							"stack": string(debug.Stack()),
-						})
-				}
-			}()
-			buf := make([]byte, 4096)
-			for {
-				n, err := session.ptyMaster.Read(buf)
-				if n > 0 {
-					raw := string(buf[:n])
-					if mode := detectPtyKeyMode(raw); mode != PtyKeyModeNotFound && mode != session.GetPtyKeyMode() {
-						session.SetPtyKeyMode(mode)
-					}
-
-					session.appendOutput(buf[:n])
-				}
-				if err != nil {
-					break
-				}
-			}
-			// The child side is gone (EOF/EIO) or the session was killed:
-			// release the master descriptor so no fd survives the session.
-			_ = session.ptyMaster.Close()
-		}()
-	} else {
-		// Non-PTY mode: one goroutine reads the merged stdout/stderr pipe.
-		// When process exits, OS closes the pipe write end → Read() returns EOF.
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					logger.ErrorCF("shell", "pipe read goroutine panic recovered",
-						map[string]any{
-							"panic": fmt.Sprintf("%v", r),
-							"stack": string(debug.Stack()),
-						})
-				}
-			}()
-			buf := make([]byte, 4096)
-
-			for {
-				n, err := outputReader.Read(buf)
-				if n > 0 {
-					session.appendOutput(buf[:n])
-				}
-				if err != nil {
-					break
-				}
-			}
-
-			_ = outputReader.Close()
-			if stdinWriter != nil {
-				_ = stdinWriter.Close()
-			}
-			cmd.Wait()
-
-			exitCode := -1
-			if cmd.ProcessState != nil {
-				exitCode = cmd.ProcessState.ExitCode()
-			}
-			session.finish(exitCode)
-		}()
-	}
-
-	resp := ExecResponse{
-		SessionID: sessionID,
-		Status:    "running",
-		Note:      note,
-	}
-	data, err := json.Marshal(resp)
+	info, err := os.Stat(resolved)
 	if err != nil {
-		return ErrorResult(err.Error())
+		t.forgetRememberedCwd(ctx, cwd, err)
+		return "", false
 	}
-	return &ToolResult{
-		ForLLM:  string(data),
-		ForUser: fmt.Sprintf("Session %s started", sessionID),
-		IsError: false,
+	if !info.IsDir() {
+		t.forgetRememberedCwd(ctx, cwd, fmt.Errorf("not a directory"))
+		return "", false
 	}
+	if abs, err := filepath.Abs(resolved); err == nil {
+		resolved = abs
+	}
+	return resolved, true
 }
 
-func (t *ExecTool) executeList() *ToolResult {
-	sessions := t.sessionManager.List()
-	resp := ExecResponse{
-		Sessions: sessions,
-	}
-	data, err := json.Marshal(resp)
-	if err != nil {
-		return ErrorResult(err.Error())
-	}
-	return &ToolResult{
-		ForLLM:  string(data),
-		ForUser: fmt.Sprintf("%d active sessions", len(sessions)),
-		IsError: false,
-	}
-}
-
-func (t *ExecTool) executePoll(args map[string]any) *ToolResult {
-	sessionID, ok := args["sessionId"].(string)
-	if !ok {
-		return ErrorResult("sessionId is required")
-	}
-
-	session, err := t.sessionManager.Get(sessionID)
-	if err != nil {
-		if errors.Is(err, ErrSessionNotFound) {
-			return ErrorResult(fmt.Sprintf("session not found: %s", sessionID))
-		}
-		return ErrorResult(err.Error())
-	}
-
-	resp := ExecResponse{
-		SessionID:    sessionID,
-		Status:       session.GetStatus(),
-		ExitCode:     sessionExitCode(session),
-		Output:       session.Tail(pollOutputChars),
-		TotalBytes:   session.TotalBytes(),
-		DroppedBytes: session.DroppedBytes(),
-	}
-	if !session.IsDone() && session.noteCheck() >= idleCheckLimit {
-		resp.Note = pollIdleNote
-		if session.StartNotify() || session.NotifyEnabled() {
-			resp.Note += " " + autoNotifyNote
-		}
-	}
-	data, err := json.Marshal(resp)
-	if err != nil {
-		return ErrorResult(err.Error())
-	}
-	return &ToolResult{
-		ForLLM:  string(data),
-		IsError: false,
-	}
-}
-
-const (
-	// idleCheckLimit is how many consecutive poll/wait calls on a silent running
-	// session it takes to tell the model to stop checking.
-	idleCheckLimit = 2
-	pollIdleNote   = "Still running with no new output since your last checks. poll returns " +
-		"immediately, so repeating it will not help: use action=wait (with timeout) to block " +
-		"until it exits, or do other work."
-	waitIdleNote = "No new output after repeated waits. If that is not expected, read the " +
-		"output or kill the session instead of waiting again."
-	// defaultWaitMax caps one wait when no exec timeout is configured.
-	defaultWaitMax = 60 * time.Second
-	// completionOutputChars bounds the output tail in a completion notice.
-	completionOutputChars = 1000
-	pollOutputChars       = 1000
-	waitOutputChars       = 1000
-	killOutputChars       = 1000
-
-	notifyEnabledNote = "You will be notified when this session exits; do not poll or wait in a loop."
-	autoNotifyNote    = "A completion notification is enabled; the result will arrive as a follow-up message."
-
-	// timeoutBackgroundGuidance is appended to a timed-out foreground result.
-	// A server, daemon, or watch process should be a tracked background session
-	// instead of a foreground call that blocks until the timeout kills it.
-	timeoutBackgroundGuidance = "If this is a server, daemon, or watch process, re-run it with background=true " +
-		"and use the returned sessionId with wait, poll, read, or kill instead of blocking a foreground call."
-)
-
-// executeWait blocks until the session exits, the timeout elapses, or ctx is
-// canceled. A wait that times out is not a failure: the response says so, since
-// models otherwise misread it and re-issue the same call.
-func (t *ExecTool) executeWait(ctx context.Context, args map[string]any) *ToolResult {
-	sessionID, ok := args["sessionId"].(string)
-	if !ok {
-		return ErrorResult("sessionId is required")
-	}
-
-	maxWait := t.timeout
-	if maxWait <= 0 {
-		maxWait = defaultWaitMax
-	}
-	window, clampNote := maxWait, ""
-	if raw, ok := args["timeout"]; ok {
-		// JSON tool arguments always decode numbers as float64.
-		value, isNumber := raw.(float64)
-		if !isNumber || value != math.Trunc(value) || value < 1 {
-			return ErrorResult("timeout must be a positive integer number of seconds")
-		}
-		if requested := time.Duration(value) * time.Second; requested <= maxWait {
-			window = requested
-		} else {
-			clampNote = fmt.Sprintf("Requested wait of %ds was clamped to the configured limit of %ds. ",
-				int64(value), int64(maxWait/time.Second))
-		}
-	}
-
-	session, err := t.sessionManager.Get(sessionID)
-	if err != nil {
-		if errors.Is(err, ErrSessionNotFound) {
-			return ErrorResult(fmt.Sprintf("session not found: %s", sessionID))
-		}
-		return ErrorResult(err.Error())
-	}
-
-	// ponytail: polls IsDone every 100ms instead of a done channel; a queued
-	// steering message does not release the wait, only ctx cancellation does.
-	deadline := time.NewTimer(window)
-	defer deadline.Stop()
-	tick := time.NewTicker(100 * time.Millisecond)
-	defer tick.Stop()
-
-	timedOut := false
-	for !timedOut && !session.IsDone() {
-		select {
-		case <-ctx.Done():
-			return ErrorResult(fmt.Sprintf("wait interrupted: %v", ctx.Err()))
-		case <-deadline.C:
-			timedOut = true
-		case <-tick.C:
-		}
-	}
-
-	resp := ExecResponse{
-		SessionID:    sessionID,
-		Status:       session.GetStatus(),
-		ExitCode:     sessionExitCode(session),
-		TotalBytes:   session.TotalBytes(),
-		DroppedBytes: session.DroppedBytes(),
-	}
-	if session.IsDone() {
-		resp.Output = session.Read()
-	} else {
-		resp.Output = session.Tail(waitOutputChars)
-		resp.Note = clampNote + fmt.Sprintf(
-			"Wait window of %ds elapsed. The process is still running; this is not an error.",
-			int64(window/time.Second))
-		if session.noteCheck() >= idleCheckLimit {
-			resp.Note += " " + waitIdleNote
-			if session.StartNotify() || session.NotifyEnabled() {
-				resp.Note += " " + autoNotifyNote
-			}
-		}
-	}
-	data, err := json.Marshal(resp)
-	if err != nil {
-		return ErrorResult(err.Error())
-	}
-	return &ToolResult{ForLLM: string(data)}
-}
-
-func (t *ExecTool) executeRead(args map[string]any) *ToolResult {
-	sessionID, ok := args["sessionId"].(string)
-	if !ok {
-		return ErrorResult("sessionId is required")
-	}
-
-	session, err := t.sessionManager.Get(sessionID)
-	if err != nil {
-		if errors.Is(err, ErrSessionNotFound) {
-			return ErrorResult(fmt.Sprintf("session not found: %s", sessionID))
-		}
-		return ErrorResult(err.Error())
-	}
-
-	offset := int64(0)
-	offsetProvided := false
-	if raw, ok := args["offset"]; ok {
-		value, isNumber := raw.(float64)
-		if !isNumber || value != math.Trunc(value) || value < 0 {
-			return ErrorResult("offset must be a non-negative integer number of bytes")
-		}
-		offset = int64(value)
-		offsetProvided = true
-	}
-
-	limit := int64(t.maxOutputChars)
-	if limit <= 0 {
-		limit = config.DefaultExecMaxOutputChars
-	}
-	if raw, ok := args["limit"]; ok {
-		value, isNumber := raw.(float64)
-		if !isNumber || value != math.Trunc(value) || value < 1 {
-			return ErrorResult("limit must be a positive integer number of bytes")
-		}
-		limit = int64(value)
-	}
-	if !offsetProvided {
-		if total := session.TotalBytes(); total > limit {
-			offset = total - limit
-		}
-	}
-
-	page := session.ReadRange(offset, limit)
-	resp := ExecResponse{
-		SessionID:    sessionID,
-		Output:       page.Text,
-		Status:       session.GetStatus(),
-		ExitCode:     sessionExitCode(session),
-		TotalBytes:   page.TotalBytes,
-		Offset:       page.Offset,
-		NextOffset:   page.NextOffset,
-		HasMore:      page.HasMore,
-		DroppedBytes: page.DroppedBytes,
-		SkippedBytes: page.SkippedBytes,
-	}
-	if page.SkippedBytes > 0 {
-		resp.Note = fmt.Sprintf(
-			"Requested offset %d predates the retained output window; skipped %d bytes, starting at byte %d.",
-			offset, page.SkippedBytes, page.Offset,
-		)
-	}
-	data, err := json.Marshal(resp)
-	if err != nil {
-		return ErrorResult(err.Error())
-	}
-	return &ToolResult{
-		ForLLM:  string(data),
-		IsError: false,
-	}
-}
-
-func (t *ExecTool) executeWrite(args map[string]any) *ToolResult {
-	sessionID, ok := args["sessionId"].(string)
-	if !ok {
-		return ErrorResult("sessionId is required")
-	}
-
-	data, ok := args["data"].(string)
-	if !ok {
-		return ErrorResult("data is required")
-	}
-
-	session, err := t.sessionManager.Get(sessionID)
-	if err != nil {
-		if errors.Is(err, ErrSessionNotFound) {
-			return ErrorResult(fmt.Sprintf("session not found: %s", sessionID))
-		}
-		return ErrorResult(err.Error())
-	}
-
-	if session.IsDone() {
-		return ErrorResult(fmt.Sprintf("process already exited with code %d", session.GetExitCode()))
-	}
-
-	if err = session.Write(data); err != nil {
-		if errors.Is(err, ErrSessionDone) {
-			return ErrorResult(fmt.Sprintf("process already exited with code %d", session.GetExitCode()))
-		}
-		return ErrorResult(fmt.Sprintf("failed to write to session: %v", err))
-	}
-
-	resp := ExecResponse{
-		SessionID: sessionID,
-		Status:    session.GetStatus(),
-	}
-	respData, err := json.Marshal(resp)
-	if err != nil {
-		return ErrorResult(err.Error())
-	}
-	return &ToolResult{
-		ForLLM:  string(respData),
-		IsError: false,
-	}
-}
-
-func (t *ExecTool) executeKill(args map[string]any) *ToolResult {
-	sessionID, ok := args["sessionId"].(string)
-	if !ok {
-		return ErrorResult("sessionId is required")
-	}
-
-	session, err := t.sessionManager.Get(sessionID)
-	if err != nil {
-		if errors.Is(err, ErrSessionNotFound) {
-			return ErrorResult(fmt.Sprintf("session not found: %s", sessionID))
-		}
-		return ErrorResult(err.Error())
-	}
-
-	if session.IsDone() {
-		return ErrorResult(fmt.Sprintf("process already exited with code %d", session.GetExitCode()))
-	}
-
-	if err = session.Kill(); err != nil {
-		return ErrorResult(fmt.Sprintf("failed to kill session: %v", err))
-	}
-
-	resp := ExecResponse{
-		SessionID:    sessionID,
-		Status:       session.GetStatus(),
-		ExitCode:     sessionExitCode(session),
-		Output:       session.Tail(killOutputChars),
-		TotalBytes:   session.TotalBytes(),
-		DroppedBytes: session.DroppedBytes(),
-	}
-	data, err := json.Marshal(resp)
-	if err != nil {
-		return ErrorResult(err.Error())
-	}
-	return &ToolResult{
-		ForLLM:  string(data),
-		ForUser: fmt.Sprintf("Session %s killed; output retained for 30 minutes", sessionID),
-		IsError: false,
-	}
-}
-
-// keyMap maps key names to their escape sequences.
-var keyMap = map[string]string{
-	"enter":     "\r",
-	"return":    "\r",
-	"tab":       "\t",
-	"escape":    "\x1b",
-	"esc":       "\x1b",
-	"space":     " ",
-	"backspace": "\x7f",
-	"bspace":    "\x7f",
-	"up":        "\x1b[A",
-	"down":      "\x1b[B",
-	"right":     "\x1b[C",
-	"left":      "\x1b[D",
-	"home":      "\x1b[1~",
-	"end":       "\x1b[4~",
-	"pageup":    "\x1b[5~",
-	"pagedown":  "\x1b[6~",
-	"pgup":      "\x1b[5~",
-	"pgdn":      "\x1b[6~",
-	"insert":    "\x1b[2~",
-	"ic":        "\x1b[2~",
-	"delete":    "\x1b[3~",
-	"del":       "\x1b[3~",
-	"dc":        "\x1b[3~",
-	"btab":      "\x1b[Z",
-	"f1":        "\x1bOP",
-	"f2":        "\x1bOQ",
-	"f3":        "\x1bOR",
-	"f4":        "\x1bOS",
-	"f5":        "\x1b[15~",
-	"f6":        "\x1b[17~",
-	"f7":        "\x1b[18~",
-	"f8":        "\x1b[19~",
-	"f9":        "\x1b[20~",
-	"f10":       "\x1b[21~",
-	"f11":       "\x1b[23~",
-	"f12":       "\x1b[24~",
-}
-
-// ss3KeysMap maps key names to SS3 escape sequences
-var ss3KeysMap = map[string]string{
-	"up":    "\x1bOA",
-	"down":  "\x1bOB",
-	"right": "\x1bOC",
-	"left":  "\x1bOD",
-	"home":  "\x1bOH",
-	"end":   "\x1bOF",
-}
-
-func detectPtyKeyMode(raw string) PtyKeyMode {
-	const SMKX = "\x1b[?1h"
-	const RMKX = "\x1b[?1l"
-
-	lastSmkx := strings.LastIndex(raw, SMKX)
-	lastRmkx := strings.LastIndex(raw, RMKX)
-
-	if lastSmkx == -1 && lastRmkx == -1 {
-		return PtyKeyModeNotFound
-	}
-
-	if lastSmkx > lastRmkx {
-		return PtyKeyModeSS3
-	}
-	return PtyKeyModeCSI
-}
-
-// encodeKeyToken encodes a single key token into its escape sequence.
-// Supports:
-//   - Named keys: "enter", "tab", "up", "ctrl-c", "alt-x", etc.
-//   - Ctrl modifier: "ctrl-c" or "c-c" (sends Ctrl+char)
-//   - Alt modifier: "alt-x" or "m-x" (sends ESC+char)
-func encodeKeyToken(token string, ptyKeyMode PtyKeyMode) (string, error) {
-	token = strings.ToLower(strings.TrimSpace(token))
-	if token == "" {
-		return "", nil
-	}
-
-	// Handle ctrl-X format (c-x)
-	if strings.HasPrefix(token, "c-") {
-		char := token[2]
-		if char >= 'a' && char <= 'z' {
-			return string(rune(char) & 0x1f), nil // ctrl-a through ctrl-z
-		}
-		return "", fmt.Errorf("invalid ctrl key: %s", token)
-	}
-
-	// Handle ctrl-X format (ctrl-x)
-	if strings.HasPrefix(token, "ctrl-") {
-		char := token[5]
-		if char >= 'a' && char <= 'z' {
-			return string(rune(char) & 0x1f), nil
-		}
-		return "", fmt.Errorf("invalid ctrl key: %s", token)
-	}
-
-	// Handle alt-X format (m-x or alt-x)
-	if strings.HasPrefix(token, "m-") || strings.HasPrefix(token, "alt-") {
-		var char string
-		if strings.HasPrefix(token, "m-") {
-			char = token[2:]
-		} else {
-			char = token[4:]
-		}
-		if len(char) == 1 {
-			return "\x1b" + char, nil
-		}
-		return "", fmt.Errorf("invalid alt key: %s", token)
-	}
-
-	// Handle shift modifier for special keys (shift-up, shift-down, etc.)
-	if strings.HasPrefix(token, "s-") || strings.HasPrefix(token, "shift-") {
-		var key string
-		if strings.HasPrefix(token, "s-") {
-			key = token[2:]
-		} else {
-			key = token[6:]
-		}
-		// Apply shift modifier: for single-char keys, return uppercase
-		if seq, ok := keyMap[key]; ok {
-			// For escape sequences, we can't easily add shift
-			// For single-char keys (letters), return uppercase
-			if len(seq) == 1 {
-				return strings.ToUpper(seq), nil
-			}
-			return seq, nil
-		}
-		return "", fmt.Errorf("unknown key with shift: %s", key)
-	}
-
-	if ptyKeyMode == PtyKeyModeSS3 {
-		if seq, ok := ss3KeysMap[token]; ok {
-			return seq, nil
-		}
-	}
-
-	if seq, ok := keyMap[token]; ok {
-		return seq, nil
-	}
-
-	return "", fmt.Errorf("unknown key: %s (use write action for text input)", token)
-}
-
-// encodeKeySequence encodes a slice of key tokens into a single string.
-func encodeKeySequence(tokens []string, ptyKeyMode PtyKeyMode) (string, error) {
-	var result string
-	for _, token := range tokens {
-		seq, err := encodeKeyToken(token, ptyKeyMode)
-		if err != nil {
-			return "", err
-		}
-		result += seq
-	}
-	return result, nil
-}
-
-func (t *ExecTool) executeSendKeys(args map[string]any) *ToolResult {
-	sessionID, ok := args["sessionId"].(string)
-	if !ok {
-		return ErrorResult("sessionId is required")
-	}
-
-	keysStr, ok := args["keys"].(string)
-	if !ok {
-		return ErrorResult("keys must be a string")
-	}
-
-	if keysStr == "" {
-		return ErrorResult("keys cannot be empty")
-	}
-
-	// Parse comma-separated key names
-	keyNames := strings.Split(keysStr, ",")
-	var keys []string
-	for _, k := range keyNames {
-		k = strings.TrimSpace(k)
-		if k != "" {
-			keys = append(keys, k)
-		}
-	}
-
-	if len(keys) == 0 {
-		return ErrorResult("keys cannot be empty")
-	}
-
-	session, err := t.sessionManager.Get(sessionID)
-	if err != nil {
-		if errors.Is(err, ErrSessionNotFound) {
-			return ErrorResult(fmt.Sprintf("session not found: %s", sessionID))
-		}
-		return ErrorResult(err.Error())
-	}
-
-	ptyKeyMode := session.GetPtyKeyMode()
-
-	data, err := encodeKeySequence(keys, ptyKeyMode)
-	if err != nil {
-		return ErrorResult(fmt.Sprintf("invalid key: %v", err))
-	}
-
-	if session.IsDone() {
-		return ErrorResult(fmt.Sprintf("process already exited with code %d", session.GetExitCode()))
-	}
-
-	if err = session.Write(data); err != nil {
-		if errors.Is(err, ErrSessionDone) {
-			return ErrorResult(fmt.Sprintf("process already exited with code %d", session.GetExitCode()))
-		}
-		return ErrorResult(fmt.Sprintf("failed to send keys: %v", err))
-	}
-
-	resp := ExecResponse{
-		SessionID: sessionID,
-		Status:    "running",
-		Output:    fmt.Sprintf("Sent keys: %v", keys),
-	}
-	respData, err := json.Marshal(resp)
-	if err != nil {
-		return ErrorResult(err.Error())
-	}
-	return &ToolResult{
-		ForLLM:  string(respData),
-		IsError: false,
-	}
-}
-
-// expandPowerShellEnvVars expands environment variable syntax used by both
-// PowerShell ($env:VAR) and CMD (%VAR%) to their actual values.
-func expandPowerShellEnvVars(cmd string) string {
-	// Handle PowerShell style: $env:VAR and ${env:VAR}
-	rePs := regexp.MustCompile(`\$\{?env:(\w+)\}?`)
-	cmd = rePs.ReplaceAllStringFunc(cmd, func(match string) string {
-		varName := rePs.FindStringSubmatch(match)[1]
-		if val := os.Getenv(varName); val != "" {
-			return val
-		}
-		return match
-	})
-
-	// Handle CMD style: %VAR%
-	reCmd := regexp.MustCompile(`%([^%]+)%`)
-	return reCmd.ReplaceAllStringFunc(cmd, func(match string) string {
-		varName := reCmd.FindStringSubmatch(match)[1]
-		if val := os.Getenv(varName); val != "" {
-			return val
-		}
-		return match
+func (t *ExecTool) forgetRememberedCwd(ctx context.Context, cwd string, cause error) {
+	if t.state != nil {
+		t.state.clearCwd(ctx)
+	}
+	logger.WarnCF("shell", "forgetting unusable remembered cwd", map[string]any{
+		"cwd":   cwd,
+		"error": cause.Error(),
 	})
 }
 
-func (t *ExecTool) commandMatchesAllowPattern(lower string) bool {
-	for _, pattern := range t.allowPatterns {
-		if pattern.MatchString(lower) {
-			return true
-		}
+func (t *ExecTool) rememberCwd(ctx context.Context, cwd string) {
+	if t.state == nil {
+		return
 	}
-	for _, pattern := range t.customAllowPatterns {
-		if pattern.MatchString(lower) {
-			return true
-		}
+	if abs, err := filepath.Abs(cwd); err == nil {
+		cwd = abs
 	}
-	return false
-}
-
-func (t *ExecTool) commandMatchesCustomAllowPattern(lower string) bool {
-	for _, pattern := range t.customAllowPatterns {
-		if pattern.MatchString(lower) {
-			return true
-		}
-	}
-	return false
-}
-
-func (t *ExecTool) guardCommand(command, cwd string) string {
-	cmd := strings.TrimSpace(command)
-	lower := strings.ToLower(cmd)
-	// Quoted heredoc bodies are literal text: a backtick there cannot run a
-	// command, so deny patterns must not inspect it.
-	lowerForDeny := strings.ToLower(stripQuotedHeredocBodies(cmd))
-
-	// Hardline patterns are an immutable floor: they apply even when the
-	// default deny set is disabled and no custom allow rule can exempt them.
-	for _, pattern := range t.hardlineDenyPatterns {
-		if pattern.MatchString(lowerForDeny) {
-			return "Command blocked by safety guard (dangerous pattern detected)"
-		}
-	}
-
-	// Custom deny patterns always apply: they are user-specified security rules
-	// that must not be bypassed by custom allow patterns (#3079).
-	for _, pattern := range t.customDenyPatterns {
-		if pattern.MatchString(lowerForDeny) {
-			return "Command blocked by safety guard (dangerous pattern detected)"
-		}
-	}
-
-	// Default deny patterns can be exempted by custom allow patterns, so
-	// operators can selectively permit normally-blocked commands.
-	if !t.commandMatchesCustomAllowPattern(lower) {
-		for _, pattern := range t.denyPatterns {
-			if pattern.MatchString(lowerForDeny) {
-				return "Command blocked by safety guard (dangerous pattern detected)"
-			}
-		}
-	}
-
-	if len(t.allowPatterns) > 0 {
-		if !t.commandMatchesAllowPattern(lower) {
-			return "Command blocked by safety guard (not in allowlist)"
-		}
-	}
-
-	if t.restrictToWorkspace {
-		// Block path traversal patterns including .../.../ variants
-		if regexp.MustCompile(`\.\.(?:[\\/]\.\.)*[\\/]`).MatchString(cmd) {
-			return "Command blocked by safety guard (path traversal detected)"
-		}
-
-		cwdPath, err := filepath.Abs(cwd)
-		if err != nil {
-			return ""
-		}
-		// Resolve symlinks in the workspace root too. Candidate paths below are
-		// resolved with EvalSymlinks before the containment check, so comparing
-		// them against an unresolved root reports every relative path as an
-		// escape whenever the workspace path contains a symlink (for example
-		// /var -> /private/var on macOS, or a symlinked project directory).
-		if resolved, err := filepath.EvalSymlinks(cwdPath); err == nil {
-			cwdPath = resolved
-		}
-
-		// Web URL schemes whose path components (starting with //) should be exempt
-		// from workspace sandbox checks. file: is intentionally excluded so that
-		// file:// URIs are still validated against the workspace boundary.
-		webSchemes := []string{"http:", "https:", "ftp:", "ftps:", "sftp:", "ssh:", "git:"}
-
-		// On Windows, expand ~ and PowerShell environment variables ($env:VAR) before path checking
-		if runtime.GOOS == "windows" {
-			// Expand PowerShell environment variables ($env:VAR and ${env:VAR})
-			cmd = expandPowerShellEnvVars(cmd)
-			// Also expand ~ for completeness
-			if home, err := os.UserHomeDir(); err == nil {
-				cmd = strings.ReplaceAll(cmd, "~", filepath.FromSlash(home))
-			}
-		}
-
-		matchIndices := absolutePathPattern.FindAllStringIndex(cmd, -1)
-
-		for _, loc := range matchIndices {
-			raw := cmd[loc[0]:loc[1]]
-
-			// Skip URL path components that look like they're from web URLs.
-			// When a URL like "https://github.com" is parsed, the regex captures
-			// "//github.com" as a match (the path portion after "https:").
-			// Use the exact match position (loc[0]) so that duplicate //path substrings
-			// in the same command are each evaluated at their own position.
-			if strings.HasPrefix(raw, "//") && loc[0] > 0 {
-				before := cmd[:loc[0]]
-				isWebURL := false
-
-				for _, scheme := range webSchemes {
-					if strings.HasSuffix(before, scheme) {
-						isWebURL = true
-						break
-					}
-				}
-
-				if isWebURL {
-					continue
-				}
-			}
-
-			// Skip scheme-less URL paths like "wttr.in/Beijing".
-			// When a /path is immediately preceded by a token that looks
-			// like a domain name and that token does NOT exist as a local
-			// filesystem entry, treat the path as part of a URL and skip
-			// workspace sandbox validation.
-			//
-			// The local-path-exists guard prevents symlink bypass: if
-			// "foo.bar" exists as a local symlink or directory, the path
-			// still undergoes full workspace validation (see #2965).
-			if loc[0] > 0 && raw[0] == '/' {
-				// Find the token immediately before the "/".
-				j := loc[0] - 1
-				for j >= 0 && !isShellTokenBoundary(cmd[j]) {
-					j--
-				}
-				token := cmd[j+1 : loc[0]]
-				if looksLikeDomain(token) && !localPathExists(cwd, token) {
-					continue
-				}
-			}
-
-			// A single regex match can contain several path tokens when shell
-			// separators are not surrounded by whitespace ("2>/dev/null;echo b"),
-			// so every token is checked instead of only the leading one.
-			for _, pathText := range commandPathTextsFromMatch(cmd, loc[0], loc[1]) {
-				p, err := commandPathAbs(pathText, cwdPath)
-				if err != nil {
-					continue
-				}
-
-				// Windows-specific: normalize paths to block ADS and extended-length paths
-				if runtime.GOOS == "windows" {
-					// Strip \\?\ prefix (extended-length path)
-					p = strings.TrimPrefix(p, `\\?\`)
-					// Strip NTFS alternate data streams (only if colon is not at position 1 = drive letter)
-					if idx := strings.Index(p, ":"); idx > 1 {
-						p = p[:idx]
-					}
-				}
-
-				// Check symlinks and junctions. EvalSymlinks fails when the
-				// final component does not exist, so fall back to the nearest
-				// existing ancestor. Without the fallback, a new file created
-				// through a symlinked directory keeps its lexical workspace
-				// path and passes the containment check even though the write
-				// lands outside the workspace.
-				if resolved, resolveErr := fstools.ResolvePathAgainstExistingAncestor(p); resolveErr == nil {
-					p = resolved
-				}
-
-				if safePaths[p] {
-					continue
-				}
-				if fstools.IsAllowedPath(p, t.allowedPathPatterns) {
-					continue
-				}
-
-				rel, err := filepath.Rel(cwdPath, p)
-				if err != nil {
-					continue
-				}
-
-				if strings.HasPrefix(rel, "..") {
-					return "Command blocked by safety guard (path outside working dir)"
-				}
-			}
-		}
-	}
-
-	return ""
-}
-
-func commandPathAbs(pathText, cwdPath string) (string, error) {
-	if filepath.IsAbs(pathText) {
-		return filepath.Abs(pathText)
-	}
-	return filepath.Abs(filepath.Join(cwdPath, pathText))
-}
-
-func commandPathTextsFromMatch(cmd string, start, end int) []string {
-	return splitShellPathMatch(commandPathTextFromMatchRaw(cmd, start, end))
-}
-
-// shellPathSeparators are bytes that end a path token in shell syntax.
-const shellPathSeparators = ";|&<>`"
-
-// splitShellPathMatch splits text that absolutePathPattern swallows because the
-// regex only stops at whitespace or quotes. For "2>/dev/null;echo b" the match is
-// "/dev/null;echo", which is not in safePaths and is therefore reported as a path
-// outside the working directory (issue #435). Splitting on shell separators turns
-// it into "/dev/null" and "echo", so the safe pseudo-device is recognized while
-// the rest of the token is still validated: "/dev/null;cat</etc/shadow" also
-// yields "/etc/shadow", which keeps the containment check effective.
-//
-// Trailing ",)]}:" is stripped from every segment, so a real file whose name ends
-// in one of those characters (for example "/workspace/backup,") is checked as the
-// name without it. Rare, and accepted in exchange for not blocking "(... /dev/null)".
-//
-// Windows-style matches (drive letter, backslashes) are left untouched because
-// the same bytes can legitimately appear inside a Windows path.
-func splitShellPathMatch(pathText string) []string {
-	if !strings.HasPrefix(pathText, "/") {
-		return []string{pathText}
-	}
-
-	segments := strings.FieldsFunc(pathText, func(r rune) bool {
-		return strings.ContainsRune(shellPathSeparators, r)
-	})
-	paths := make([]string, 0, len(segments))
-	for _, segment := range segments {
-		if segment = strings.TrimRight(segment, ",)]}:"); segment != "" {
-			paths = append(paths, segment)
-		}
-	}
-	if len(paths) == 0 {
-		return []string{pathText}
-	}
-	return paths
-}
-
-func commandPathTextFromMatchRaw(cmd string, start, end int) string {
-	raw := cmd[start:end]
-	if !strings.HasPrefix(raw, "/") || isUnixAbsolutePathMatchStart(cmd, start) {
-		return raw
-	}
-
-	tokenStart, tokenEnd := shellTokenBounds(cmd, start)
-	prefix := cmd[tokenStart:start]
-	// For --flag=rel/path, validate the value. For ambiguous attached option
-	// forms like -isystem/path, keep the slash-starting path conservative.
-	if eq := strings.IndexByte(prefix, '='); eq >= 0 {
-		return cmd[tokenStart+eq+1 : tokenEnd]
-	}
-	if strings.HasPrefix(prefix, "-") {
-		return raw
-	}
-	return cmd[tokenStart:tokenEnd]
-}
-
-func shellTokenBounds(cmd string, idx int) (int, int) {
-	start := idx
-	for start > 0 && !isShellTokenBoundary(cmd[start-1]) {
-		start--
-	}
-	end := idx
-	for end < len(cmd) && !isShellTokenBoundary(cmd[end]) {
-		end++
-	}
-	return start, end
-}
-
-// isUnixAbsolutePathMatchStart returns true when a regex match beginning with
-// "/" is actually an absolute path token, not the separator inside a relative
-// path such as "skills/foo.py".
-func isUnixAbsolutePathMatchStart(cmd string, idx int) bool {
-	if idx <= 0 {
-		return true
-	}
-
-	prev := cmd[idx-1]
-	if isShellTokenBoundary(prev) || prev == '=' || prev == ',' || prev == '(' || prev == '[' || prev == '{' {
-		return true
-	}
-
-	j := idx - 1
-	for j >= 0 && !isShellTokenBoundary(cmd[j]) {
-		j--
-	}
-	prefix := cmd[j+1 : idx]
-
-	return strings.HasPrefix(prefix, "-") && !strings.Contains(prefix, "=")
-}
-
-// isShellTokenBoundary returns true when b is a byte that separates
-// tokens in a shell command (space, tab, colon, semicolon, pipe, etc.).
-func isShellTokenBoundary(b byte) bool {
-	switch b {
-	case ' ', '\t', ':', ';', '|', '&', '<', '>', '\'', '"', '`', '\n', '\r':
-		return true
-	}
-	return false
-}
-
-// looksLikeDomain returns true when s looks like a DNS domain name:
-// it contains at least one dot, starts with an alphanumeric character,
-// and does not end with a common file extension.
-func looksLikeDomain(s string) bool {
-	if len(s) < 3 || !strings.ContainsRune(s, '.') {
-		return false
-	}
-	first := s[0]
-	if !((first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z') || (first >= '0' && first <= '9')) {
-		return false
-	}
-	// Exclude tokens ending with common file/programming extensions,
-	// e.g. "script.py", "main.go", "app.exe".
-	if idx := strings.LastIndexByte(s, '.'); idx >= 0 {
-		ext := strings.ToLower(s[idx+1:])
-		if commonFileExtension(ext) {
-			return false
-		}
-	}
-	return true
-}
-
-// commonFileExtension returns true when ext is a file extension that
-// strongly indicates a local file rather than a domain TLD.
-func commonFileExtension(ext string) bool {
-	switch ext {
-	case "py", "js", "ts", "tsx", "jsx", "go", "rs", "rb", "php",
-		"java", "c", "cpp", "h", "hpp", "cs", "swift", "kt", "scala",
-		"sh", "bash", "zsh", "fish", "ps1", "bat", "cmd",
-		"txt", "md", "rst", "log", "json", "yaml", "yml", "toml",
-		"xml", "html", "css", "scss", "ini", "cfg", "conf", "env",
-		"exe", "dll", "so", "dylib", "lib", "a", "o", "obj",
-		"zip", "tar", "gz", "bz2", "xz", "7z", "rar",
-		"png", "jpg", "jpeg", "gif", "svg", "ico", "bmp", "webp",
-		"mp3", "mp4", "wav", "avi", "mov", "mkv", "flac",
-		"pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
-		"pub", "pem", "key", "crt", "cer", "p12", "pfx",
-		"bak", "tmp", "swp", "lock",
-		"ttf", "otf", "woff", "woff2", "eot",
-		"deb", "rpm", "apk", "msi", "dmg",
-		"sql", "sqlite", "db":
-		return true
-	}
-	return false
-}
-
-// localPathExists returns true when the given token resolves to an
-// existing filesystem entry relative to cwd.
-func localPathExists(cwd, token string) bool {
-	info, err := os.Lstat(filepath.Join(cwd, token))
-	return err == nil && info != nil
+	t.state.rememberCwd(ctx, cwd)
 }
 
 func (t *ExecTool) SetTimeout(timeout time.Duration) {

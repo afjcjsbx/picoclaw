@@ -45,6 +45,7 @@ type Config struct {
 	Gateway   GatewayConfig   `json:"gateway"             yaml:"-"`
 	Events    EventsConfig    `json:"events,omitempty"    yaml:"-"`
 	Hooks     HooksConfig     `json:"hooks,omitempty"     yaml:"-"`
+	Approvals ApprovalsConfig `json:"approvals,omitempty" yaml:"-"`
 	Plugins   PluginsConfig   `json:"plugins,omitempty"   yaml:"-"`
 	Tools     ToolsConfig     `json:"tools"               yaml:",inline"`
 	Heartbeat HeartbeatConfig `json:"heartbeat"           yaml:"-"`
@@ -226,6 +227,91 @@ type HookDefaultsConfig struct {
 	ObserverTimeoutMS    int `json:"observer_timeout_ms,omitempty"`
 	InterceptorTimeoutMS int `json:"interceptor_timeout_ms,omitempty"`
 	ApprovalTimeoutMS    int `json:"approval_timeout_ms,omitempty"`
+}
+
+// Approval modes for tools.exec. "off" keeps the static guards as the final
+// decision. "smart" sends commands that the static guards consider high,
+// critical or unknown to an auxiliary Guardian model before they can run.
+const (
+	ApprovalModeOff   = "off"
+	ApprovalModeSmart = "smart"
+)
+
+// Smart approval thresholds. Unknown commands are always reviewed in smart
+// mode, regardless of the configured threshold.
+const (
+	ApprovalSmartThresholdHigh     = "high"
+	ApprovalSmartThresholdCritical = "critical"
+)
+
+// Defaults for the auxiliary Guardian call. The timeout is short so a slow or
+// unreachable model cannot stall an interactive turn; the call is only made for
+// commands that need a second opinion.
+const (
+	DefaultApprovalSmartTimeoutSeconds = 20
+	MaxApprovalSmartTimeoutSeconds     = 600
+)
+
+// ApprovalsConfig configures how potentially dangerous tool calls are approved.
+type ApprovalsConfig struct {
+	// Mode is "smart" (default) or "off". Smart mode asks a Guardian model to
+	// review commands at or above SmartThreshold, plus commands whose risk
+	// cannot be classified. Set "off" to keep the static guards as the final
+	// decision.
+	Mode string `json:"mode,omitempty" env:"PICOCLAW_APPROVALS_MODE"`
+	// Model selects the Guardian model by model_list alias or provider/model
+	// reference. Empty uses the agent's default model.
+	Model string `json:"model,omitempty" env:"PICOCLAW_APPROVALS_MODEL"`
+	// SmartThreshold is "high" (default) to review high, critical and unknown
+	// commands, or "critical" to review only critical and unknown commands.
+	SmartThreshold string `json:"smart_threshold,omitempty" env:"PICOCLAW_APPROVALS_SMART_THRESHOLD"`
+	// SmartTimeoutSeconds bounds each Guardian call. Zero uses the default 20s.
+	SmartTimeoutSeconds int `json:"smart_timeout_seconds,omitempty" env:"PICOCLAW_APPROVALS_SMART_TIMEOUT_SECONDS"`
+}
+
+// Normalized validates the approval configuration and fills its defaults.
+// Unknown values are rejected instead of silently falling back, because a typo
+// in a security setting must be visible.
+func (c ApprovalsConfig) Normalized() (ApprovalsConfig, error) {
+	mode := strings.ToLower(strings.TrimSpace(c.Mode))
+	switch mode {
+	case "", ApprovalModeSmart:
+		mode = ApprovalModeSmart
+	case ApprovalModeOff:
+	default:
+		return c, fmt.Errorf("mode %q must be %q or %q", c.Mode, ApprovalModeOff, ApprovalModeSmart)
+	}
+
+	threshold := strings.ToLower(strings.TrimSpace(c.SmartThreshold))
+	switch threshold {
+	case "", ApprovalSmartThresholdHigh:
+		threshold = ApprovalSmartThresholdHigh
+	case ApprovalSmartThresholdCritical:
+	default:
+		return c, fmt.Errorf(
+			"smart_threshold %q must be %q or %q",
+			c.SmartThreshold, ApprovalSmartThresholdHigh, ApprovalSmartThresholdCritical,
+		)
+	}
+
+	timeout := c.SmartTimeoutSeconds
+	if timeout < 0 {
+		return c, fmt.Errorf("smart_timeout_seconds %d must not be negative", timeout)
+	}
+	if timeout == 0 {
+		timeout = DefaultApprovalSmartTimeoutSeconds
+	}
+	if timeout > MaxApprovalSmartTimeoutSeconds {
+		return c, fmt.Errorf(
+			"smart_timeout_seconds %d exceeds the maximum of %d",
+			timeout, MaxApprovalSmartTimeoutSeconds,
+		)
+	}
+
+	c.Mode = mode
+	c.SmartThreshold = threshold
+	c.SmartTimeoutSeconds = timeout
+	return c, nil
 }
 
 type BuiltinHookConfig struct {
@@ -1444,6 +1530,13 @@ type CronToolsConfig struct {
 	CommandAllowedRemotes []string `json:"command_allowed_remotes" env:"PICOCLAW_TOOLS_CRON_COMMAND_ALLOWED_REMOTES"`
 }
 
+// ArgModifierConfig elevates a command's risk level when all Args tokens are
+// present in the command. Levels use the same names as RiskThreshold.
+type ArgModifierConfig struct {
+	Args  []string `json:"args"`
+	Level string   `json:"level"`
+}
+
 // ExecConfig configures shell command execution.
 //
 // EnableDenyPatterns only disables the optional built-in default deny set;
@@ -1456,6 +1549,34 @@ type ExecConfig struct {
 	CustomAllowPatterns []string `                                 json:"custom_allow_patterns" env:"PICOCLAW_TOOLS_EXEC_CUSTOM_ALLOW_PATTERNS"`
 	TimeoutSeconds      int      `                                 json:"timeout_seconds"       env:"PICOCLAW_TOOLS_EXEC_TIMEOUT_SECONDS"`  // 0 means use default (180s)
 	MaxOutputChars      int      `                                 json:"max_output_chars"      env:"PICOCLAW_TOOLS_EXEC_MAX_OUTPUT_CHARS"` // 0 means use default (50000 chars)
+	// RiskThreshold is the highest risk level allowed when the built-in
+	// dangerous-command guard is enabled: low, medium, high or critical.
+	// Empty means medium.
+	RiskThreshold string `json:"risk_threshold,omitempty" env:"PICOCLAW_TOOLS_EXEC_RISK_THRESHOLD"`
+	// RiskOverrides sets the base risk level per command, replacing the
+	// built-in table entry. Argument modifiers can still elevate it.
+	RiskOverrides map[string]string `json:"risk_overrides,omitempty" yaml:"-" env:"-"`
+	// ArgModifiers adds argument-aware risk elevations per command on top of
+	// the built-in table. All listed args must be present; highest level wins.
+	ArgModifiers map[string][]ArgModifierConfig `json:"arg_modifiers,omitempty" yaml:"-" env:"-"`
+	// EnvSet lists variables always injected into exec child processes. Values
+	// are trusted configuration and override inherited variables, including
+	// PATH. It is not exposed as a tool argument; JSON only.
+	EnvSet map[string]string `json:"env_set,omitempty" yaml:"-" env:"-"`
+	// EnvAllowlist extends the built-in allowlist with additional parent
+	// variable names inherited by exec child processes. Use explicit names,
+	// never wildcards: allowlisting a secret exposes it to every command.
+	EnvAllowlist []string `json:"env_allowlist,omitempty" yaml:"-" env:"PICOCLAW_TOOLS_EXEC_ENV_ALLOWLIST"`
+
+	// RiskAllowPatterns exempts matching commands from the AST risk
+	// classifier. Patterns are anchored full-command matches. Exemptions are
+	// capped by RiskAllowThreshold, so high and critical commands require an
+	// explicit threshold raise.
+	RiskAllowPatterns []string `json:"custom_risk_allow_patterns" env:"PICOCLAW_TOOLS_EXEC_CUSTOM_RISK_ALLOW_PATTERNS"`
+	// RiskAllowThreshold is the highest risk level a RiskAllowPatterns match
+	// may exempt. Empty means medium; set high or critical explicitly to allow
+	// those levels.
+	RiskAllowThreshold string `json:"risk_allow_threshold,omitempty" env:"PICOCLAW_TOOLS_EXEC_RISK_ALLOW_THRESHOLD"`
 }
 
 // DefaultExecTimeoutSeconds is the foreground command timeout used when
@@ -2039,6 +2160,10 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, err
 	}
 	applySkillsRegistryEnvCompat(cfg)
+
+	if cfg.Approvals, err = cfg.Approvals.Normalized(); err != nil {
+		return nil, fmt.Errorf("approvals: %w", err)
+	}
 
 	if err = InitChannelList(cfg.Channels); err != nil {
 		return nil, err
