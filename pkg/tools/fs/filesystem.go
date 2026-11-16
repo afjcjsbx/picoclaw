@@ -308,6 +308,14 @@ func resolvePathAgainstExistingAncestor(path string) (string, error) {
 	}
 }
 
+// IsWithinWorkspace reports whether candidate is the workspace directory or a
+// path inside it. It is the single containment rule shared by the filesystem
+// and exec tools; unlike a ".." string prefix it accepts in-workspace names
+// such as "..foo".
+func IsWithinWorkspace(candidate, workspace string) bool {
+	return isWithinWorkspace(candidate, workspace)
+}
+
 func isWithinWorkspace(candidate, workspace string) bool {
 	rel, err := filepath.Rel(filepath.Clean(workspace), filepath.Clean(candidate))
 	return err == nil && (rel == "." || filepath.IsLocal(rel))
