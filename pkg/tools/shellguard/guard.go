@@ -12,22 +12,31 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
+// Script inspection bounds. A script file is read once into memory for the
+// parser, so hard caps keep the guard from turning a large script into an
+// unbounded allocation on low-memory hardware.
 const (
-	// maxShellNesting bounds recursive analysis of sh -c scripts and wrapper
-	// commands. Real commands nest one or two levels; the limit prevents hostile
-	// input from turning the guard into an unbounded parser recursion.
-	maxShellNesting = 8
-
-	// maxScriptFileBytes bounds a single inspected script file. The file is read
-	// once into memory for the parser, so a hard cap keeps the guard from turning
-	// a large script into an unbounded allocation on low-memory hardware.
+	// maxScriptFileBytes bounds a single inspected script file.
 	maxScriptFileBytes = 1 << 20 // 1 MiB
 
 	// maxScriptInspectBytes bounds the total bytes read for nested script files
-	// during one Check call. Scripts stay live on the stack while their nested
+	// during one check. Scripts stay live on the stack while their nested
 	// scripts are checked, so this caps peak memory independently of nesting.
 	maxScriptInspectBytes = 2 << 20 // 2 MiB
 )
+
+// maxShellNesting bounds recursive analysis of sh -c scripts and wrapper
+// commands. Real commands nest one or two levels; the limit prevents hostile
+// input from turning the guard into an unbounded parser recursion.
+//
+// Depth N is the deepest level analyzed, and two comparisons enforce that on
+// purpose. A function entered at some depth (checkScript, checkWorkspaceText,
+// checkSimple, canonicalCommands) rejects depth > maxShellNesting. A helper
+// about to recurse at depth+1 (checkShell, checkWrapper, checkTrap,
+// checkFindExec, appendCanonicalCall) stops at depth >= maxShellNesting. Both
+// refuse the same hop from N to N+1, so switching either side to the other
+// operator moves the limit by one level on that path only.
+const maxShellNesting = 8
 
 // CheckOptions supplies the execution context needed to inspect shell script
 // files. Without a Root, a script file stays opaque and is rejected, which is
@@ -41,7 +50,7 @@ type CheckOptions struct {
 	Root string
 }
 
-// checkEnv is the per-Check mutable inspection context. Dir and Root are
+// checkEnv is the per-check mutable inspection context. dir and root are
 // immutable; remaining tracks the script-byte budget shared by nested calls.
 type checkEnv struct {
 	dir       string
@@ -111,8 +120,54 @@ func (g *Guard) CheckWithOptions(command string, opts CheckOptions) *BlockedErro
 	if g == nil {
 		return nil
 	}
+	file, err := Parse(command)
+	if err != nil {
+		return g.parseError(command)
+	}
+	return g.CheckFileWithOptions(command, file, opts)
+}
+
+// CheckFile classifies an already parsed command. It is the shared-parse entry
+// point used by the exec guard; a nil file is treated as a parse failure.
+func (g *Guard) CheckFile(command string, file *syntax.File) *BlockedError {
+	return g.CheckFileWithOptions(command, file, CheckOptions{})
+}
+
+// CheckFileWithOptions is CheckFile with a script inspection context.
+func (g *Guard) CheckFileWithOptions(
+	command string,
+	file *syntax.File,
+	opts CheckOptions,
+) *BlockedError {
+	if g == nil {
+		return nil
+	}
+	if file == nil {
+		return g.parseError(command)
+	}
 	env := &checkEnv{dir: opts.Dir, root: opts.Root, remaining: maxScriptInspectBytes}
-	return g.checkScript(command, env, 0)
+	return g.checkFile(file, env, 0)
+}
+
+func (g *Guard) parseError(command string) *BlockedError {
+	return NewBlockedError(
+		[]string{summarize(command)},
+		RiskCritical,
+		g.threshold,
+		"command could not be parsed for risk classification",
+	)
+}
+
+// WithThreshold returns a shallow copy of the guard using a different maximum
+// allowed level. It is used to measure a command against an operator's
+// risk-allow threshold without mutating the shared guard.
+func (g *Guard) WithThreshold(threshold RiskLevel) *Guard {
+	if g == nil {
+		return nil
+	}
+	clone := *g
+	clone.threshold = threshold
+	return &clone
 }
 
 func (g *Guard) checkScript(command string, env *checkEnv, depth int) *BlockedError {
@@ -144,7 +199,10 @@ func (g *Guard) checkScriptReader(
 			"command could not be parsed for risk classification",
 		)
 	}
+	return g.checkFile(file, env, depth)
+}
 
+func (g *Guard) checkFile(file *syntax.File, env *checkEnv, depth int) *BlockedError {
 	var blocked *BlockedError
 	syntax.Walk(file, func(node syntax.Node) bool {
 		if blocked != nil {
@@ -172,9 +230,19 @@ func (g *Guard) checkCall(call *syntax.CallExpr, env *checkEnv, depth int) *Bloc
 	for i, arg := range call.Args {
 		words[i] = literalWord(arg)
 	}
+	return g.checkArgv(words, env, depth)
+}
+
+// checkArgv classifies one argument vector. It is shared by AST calls and by
+// commands launched from find -exec/-ok, which are argv slices rather than
+// CallExpr nodes.
+func (g *Guard) checkArgv(words []word, env *checkEnv, depth int) *BlockedError {
+	if len(words) == 0 {
+		return nil
+	}
 
 	first := words[0]
-	if !first.literal || first.text == "" {
+	if first.dynamic || first.text == "" {
 		return NewBlockedError(
 			[]string{"<dynamic>"}, RiskCritical, g.threshold,
 			"dynamic command name cannot be classified",
@@ -191,7 +259,113 @@ func (g *Guard) checkCall(call *syntax.CallExpr, env *checkEnv, depth int) *Bloc
 	if spec, ok := wrapperSpecs[name]; ok {
 		return g.checkWrapper(name, words, spec, env, depth)
 	}
+	if name == "find" {
+		if blocked := g.classify(words); blocked != nil {
+			return blocked
+		}
+		return g.checkFindExec(words[1:], env, depth)
+	}
+	if name == "exec" {
+		if blocked := g.classify(words); blocked != nil {
+			return blocked
+		}
+		if nested, ok := execCommand(words[1:]); ok {
+			return g.checkArgv(nested, env, depth+1)
+		}
+		return nil
+	}
 	return g.classify(words)
+}
+
+// checkFindExec classifies commands launched by find -exec/-execdir/-ok/-okdir.
+// find runs them directly, so a nested critical command must not hide behind
+// find's own high-risk base level.
+func (g *Guard) checkFindExec(words []word, env *checkEnv, depth int) *BlockedError {
+	if depth >= maxShellNesting {
+		return NewBlockedError(
+			wordTexts(words), RiskCritical, g.threshold, "command nesting limit exceeded",
+		)
+	}
+	for _, nested := range findExecCommands(words) {
+		if blocked := g.checkArgv(nested, env, depth+1); blocked != nil {
+			return blocked
+		}
+	}
+	return nil
+}
+
+// findExecCommands returns the argument vectors launched by find -exec,
+// -execdir, -ok and -okdir.
+func findExecCommands(words []word) [][]word {
+	var commands [][]word
+	for i := 0; i < len(words); i++ {
+		switch words[i].text {
+		case "-exec", "-execdir", "-ok", "-okdir":
+			end := i + 1
+			for end < len(words) && words[end].text != ";" && words[end].text != "+" {
+				end++
+			}
+			if end > i+1 {
+				commands = append(commands, words[i+1:end])
+			}
+			i = end
+		}
+	}
+	return commands
+}
+
+// trapAction extracts the literal action from a trap argument vector. found is
+// false for listing and reset forms; dynamic reports that the action or an
+// option could not be resolved.
+func trapAction(args []word) (action word, found, dynamic bool) {
+	for _, w := range args {
+		if w.dynamic {
+			return word{}, false, true
+		}
+		switch w.text {
+		case "-l", "-p":
+			return word{}, false, false
+		case "--":
+			continue
+		case "", "-":
+			return word{}, false, false
+		}
+		if strings.HasPrefix(w.text, "-") {
+			continue
+		}
+		return w, true, false
+	}
+	return word{}, false, false
+}
+
+// execCommand returns the argv that exec replaces the shell with, skipping its
+// own options.
+func execCommand(args []word) ([]word, bool) {
+	i := 0
+	for i < len(args) {
+		text := args[i].text
+		switch {
+		case text == "--":
+			i++
+		case text == "-a":
+			i += 2
+			continue
+		case strings.HasPrefix(text, "-a") && len(text) > 2:
+			i++
+			continue
+		case text == "-c" || text == "-l":
+			i++
+			continue
+		case strings.HasPrefix(text, "-") && text != "-":
+			i++
+			continue
+		}
+		break
+	}
+	if i >= len(args) {
+		return nil, false
+	}
+	return args[i:], true
 }
 
 func (g *Guard) classify(words []word) *BlockedError {
@@ -210,22 +384,22 @@ func (g *Guard) checkShell(name string, words []word, env *checkEnv, depth int) 
 		)
 	}
 
-	script, input := shellScriptArg(words[1:])
-	switch input {
-	case shellInputCommand:
-		if !script.literal {
+	invocation := parseShellInvocation(words[1:])
+	switch {
+	case invocation.hasScript:
+		if invocation.script.dynamic {
 			return NewBlockedError(
 				wordTexts(words), RiskCritical, g.threshold, "shell script argument is dynamic",
 			)
 		}
-		return g.checkScript(script.text, env, depth+1)
-	case shellInputFile:
-		if !script.literal {
+		return g.checkScript(invocation.script.text, env, depth+1)
+	case invocation.hasFile:
+		if invocation.file.dynamic {
 			return NewBlockedError(
 				wordTexts(words), RiskCritical, g.threshold, "shell script path is dynamic",
 			)
 		}
-		return g.checkScriptFile(script.text, words, env, depth+1)
+		return g.checkScriptFile(invocation.file.text, words, env, depth+1)
 	default:
 		return NewBlockedError(
 			wordTexts(words), RiskCritical, g.threshold,
@@ -241,27 +415,16 @@ func (g *Guard) checkTrap(words []word, env *checkEnv, depth int) *BlockedError 
 		)
 	}
 
-	for i := 1; i < len(words); i++ {
-		w := words[i]
-		if !w.literal {
-			return NewBlockedError(
-				wordTexts(words), RiskCritical, g.threshold, "trap action is dynamic",
-			)
-		}
-		switch w.text {
-		case "-l", "-p":
-			return nil
-		case "--":
-			continue
-		case "", "-":
-			return nil
-		}
-		if strings.HasPrefix(w.text, "-") {
-			continue
-		}
-		return g.checkScript(w.text, env, depth+1)
+	action, found, dynamic := trapAction(words[1:])
+	if dynamic {
+		return NewBlockedError(
+			wordTexts(words), RiskCritical, g.threshold, "trap action is dynamic",
+		)
 	}
-	return nil
+	if !found {
+		return nil
+	}
+	return g.checkScript(action.text, env, depth+1)
 }
 
 func (g *Guard) checkWrapper(
@@ -294,7 +457,7 @@ func (g *Guard) checkWrapper(
 	if spec.shellAfterDoubleDash {
 		if rest, ok := argsAfterDoubleDash(words[1:]); ok {
 			bash := make([]word, 0, len(rest)+1)
-			bash = append(bash, word{text: "bash", literal: true})
+			bash = append(bash, word{text: "bash"})
 			bash = append(bash, rest...)
 			return g.checkShell("bash", bash, env, depth+1)
 		}
@@ -307,7 +470,7 @@ func (g *Guard) checkWrapper(
 			wordTexts(words), RiskCritical, g.threshold, "dynamic command string in "+name,
 		)
 	} else if found {
-		if !script.literal {
+		if script.dynamic {
 			return NewBlockedError(
 				wordTexts(words), RiskCritical, g.threshold, "dynamic command string in "+name,
 			)
@@ -326,7 +489,7 @@ func (g *Guard) checkWrapper(
 	}
 
 	nestedName := ""
-	if nested[0].literal {
+	if !nested[0].dynamic {
 		nestedName = baseCommand(nested[0].text)
 	}
 	if nestedName == "" {
@@ -352,17 +515,32 @@ func (g *Guard) checkWrapper(
 	return g.classify(nested)
 }
 
-// word is a shell word reduced to its literal parts. literal is false when the
+// word is a shell word reduced to its literal parts. dynamic reports that the
 // word contains an expansion, substitution or glob, which the static guard
-// cannot resolve.
+// cannot resolve. homePath marks a word that starts with a tilde or $HOME.
 type word struct {
-	text    string
-	literal bool
+	text     string
+	dynamic  bool
+	homePath bool
 }
 
 func literalWord(w *syntax.Word) word {
+	// A single plain or single-quoted part is already the final argv word.
+	// expand.Literal would produce the same text through a full expansion
+	// config, so the direct path avoids those allocations for the common case.
+	if len(w.Parts) == 1 {
+		switch p := w.Parts[0].(type) {
+		case *syntax.Lit:
+			return word{text: p.Value}
+		case *syntax.SglQuoted:
+			if !p.Dollar {
+				return word{text: p.Value}
+			}
+		}
+	}
+
 	var b strings.Builder
-	literal := true
+	dynamic := false
 
 	var addParts func([]syntax.WordPart)
 	addParts = func(parts []syntax.WordPart) {
@@ -376,17 +554,17 @@ func literalWord(w *syntax.Word) word {
 				// such as \x72 undecoded, so treating it as literal would let
 				// $'\x72m' -rf / masquerade as an unknown command.
 				if p.Dollar {
-					literal = false
+					dynamic = true
 				}
 			case *syntax.DblQuoted:
 				addParts(p.Parts)
 			default:
-				literal = false
+				dynamic = true
 			}
 		}
 	}
 	addParts(w.Parts)
-	return word{text: b.String(), literal: literal}
+	return word{text: b.String(), dynamic: dynamic}
 }
 
 func wordTexts(words []word) []string {
@@ -421,63 +599,322 @@ var shellValueFlags = map[string]bool{
 	"-o": true, "-O": true, "--rcfile": true, "--init-file": true,
 }
 
-// shellInput describes how a shell invocation supplies its commands.
-type shellInput int
+// shellInvocation is the statically known script source of a shell invocation.
+// hasScript reports a literal -c/--command argument. readsStdin reports that
+// the shell would execute stdin, so a heredoc on the command is a script.
+// opaque reports a script file or an unresolved argument that cannot be
+// inspected statically; hasFile additionally names that script file so the
+// guard can read it when it sits inside the workspace.
+type shellInvocation struct {
+	script     word
+	hasScript  bool
+	file       word
+	hasFile    bool
+	readsStdin bool
+	opaque     bool
+}
 
-const (
-	// shellInputOpaque is stdin or a form the guard cannot inspect.
-	shellInputOpaque shellInput = iota
-	// shellInputCommand is a literal -c / --command script string.
-	shellInputCommand
-	// shellInputFile is a script path passed as a positional argument.
-	shellInputFile
-)
-
-// shellScriptArg extracts the literal -c script or the script file path from a
-// shell invocation. It returns shellInputOpaque when the shell would read
-// commands from stdin, because those commands cannot be inspected statically.
-func shellScriptArg(words []word) (word, shellInput) {
+// parseShellInvocation extracts the -c script or stdin mode from a shell
+// argument vector. The guards share it so risk classification, workspace
+// validation and canonical deny forms agree on shell flags.
+func parseShellInvocation(words []word) shellInvocation {
+	invocation := shellInvocation{readsStdin: true}
 	for i := 0; i < len(words); i++ {
 		w := words[i]
-		if !w.literal {
-			return word{}, shellInputOpaque
+		if w.dynamic {
+			return shellInvocation{opaque: true}
 		}
 		text := w.text
 		switch {
 		case text == "--":
 			if i+1 < len(words) {
-				return words[i+1], shellInputFile
+				return shellInvocation{opaque: true, file: words[i+1], hasFile: true}
 			}
-			return word{}, shellInputOpaque
+			return invocation
+		case text == "-":
+			return invocation
 		case text == "--command":
 			if i+1 < len(words) {
-				return words[i+1], shellInputCommand
+				return shellInvocation{script: words[i+1], hasScript: true}
 			}
-			return word{}, shellInputOpaque
+			return shellInvocation{opaque: true}
 		case strings.HasPrefix(text, "--command="):
-			return word{text: strings.TrimPrefix(text, "--command="), literal: w.literal}, shellInputCommand
+			return shellInvocation{
+				script:    word{text: strings.TrimPrefix(text, "--command="), dynamic: w.dynamic},
+				hasScript: true,
+			}
 		case shellValueFlags[text]:
 			i++
 		case text == "-c":
 			if i+1 < len(words) {
-				return words[i+1], shellInputCommand
+				return shellInvocation{script: words[i+1], hasScript: true}
 			}
-			return word{}, shellInputOpaque
+			return shellInvocation{opaque: true}
 		case strings.HasPrefix(text, "-") && !strings.HasPrefix(text, "--"):
-			if strings.Contains(text[1:], "c") {
+			flags := text[1:]
+			if strings.Contains(flags, "c") {
 				if i+1 < len(words) {
-					return words[i+1], shellInputCommand
+					return shellInvocation{script: words[i+1], hasScript: true}
 				}
-				return word{}, shellInputOpaque
+				return shellInvocation{opaque: true}
 			}
-			if strings.ContainsAny(text[1:], "si") {
-				return word{}, shellInputOpaque
+			if strings.Contains(flags, "s") {
+				return invocation
 			}
 		case !strings.HasPrefix(text, "-"):
-			return w, shellInputFile
+			return shellInvocation{opaque: true, file: w, hasFile: true}
 		}
 	}
-	return word{}, shellInputOpaque
+	return invocation
+}
+
+type wrapperSpec struct {
+	valueFlags     map[string]bool
+	commandFlags   map[string]bool
+	skipPositional int
+	envArgs        bool
+	// shellAfterDoubleDash marks wrappers that execute /bin/bash with the
+	// arguments after `--` (capsh). Those arguments are parsed as a script.
+	shellAfterDoubleDash bool
+}
+
+// containerCLISpec is shared by lxc and incus: both take a subcommand, a
+// container name and then the command to run inside the container.
+var containerCLISpec = wrapperSpec{
+	valueFlags: map[string]bool{
+		"--project": true, "-P": true, "--remote": true,
+		"--env": true, "--cwd": true, "--user": true,
+		"--group": true, "--mode": true, "--width": true,
+		"--height": true,
+	},
+	skipPositional: 2,
+}
+
+var wrapperSpecs = map[string]wrapperSpec{
+	"env":     {envArgs: true},
+	"command": {},
+	"builtin": {},
+	"nohup":   {},
+	"time": {
+		valueFlags: map[string]bool{
+			"-o": true, "--output": true, "-f": true, "--format": true,
+		},
+	},
+	"nice": {
+		valueFlags: map[string]bool{"-n": true, "--adjustment": true},
+	},
+	"ionice": {
+		valueFlags: map[string]bool{
+			"-c": true, "-n": true, "-p": true,
+			"--class": true, "--classdata": true, "--pid": true,
+		},
+	},
+	"stdbuf": {
+		valueFlags: map[string]bool{
+			"-i": true, "-o": true, "-e": true,
+			"--input": true, "--output": true, "--error": true,
+		},
+	},
+	"timeout": {
+		valueFlags: map[string]bool{
+			"-s": true, "-k": true, "--signal": true, "--kill-after": true,
+		},
+		skipPositional: 1,
+	},
+	"watch": {
+		valueFlags: map[string]bool{"-n": true, "--interval": true},
+	},
+	"setsid": {},
+	// The first positional is the applet itself, so it is the nested command
+	// name rather than an argument to skip.
+	"busybox": {},
+	"xvfb-run": {
+		valueFlags: map[string]bool{
+			"-e": true, "-n": true, "-s": true,
+			"--error-file": true, "--server-num": true, "--server-args": true,
+		},
+	},
+	"xargs": {
+		valueFlags: map[string]bool{
+			"-a": true, "-d": true, "-E": true, "-e": true, "-I": true,
+			"-i": true, "-L": true, "-l": true, "-n": true, "-P": true,
+			"-s": true, "--arg-file": true, "--delimiter": true,
+			"--max-args": true, "--max-procs": true, "--max-chars": true,
+			"--replace": true,
+		},
+	},
+	"runuser": {
+		valueFlags: map[string]bool{
+			"-u": true, "--user": true, "-g": true, "--group": true,
+			"-G": true, "--supp-group": true, "-s": true, "--shell": true,
+			"-w": true, "--whitelist-environment": true,
+		},
+		commandFlags: map[string]bool{
+			"-c": true, "--command": true, "--session-command": true,
+		},
+	},
+	"setpriv": {
+		valueFlags: map[string]bool{
+			"--reuid": true, "--regid": true, "--groups": true,
+			"--inh-caps": true, "--ambient-caps": true,
+			"--bounding-set": true, "--securebits": true,
+			"--selinux-label": true, "--apparmor-profile": true,
+			"--landlock-access": true, "--landlock-rule": true,
+		},
+	},
+	"capsh": {
+		valueFlags: map[string]bool{
+			"--user": true, "--group": true, "--uid": true, "--gid": true,
+			"--shell": true, "--keep": true, "--caps": true, "--inh": true,
+			"--addamb": true, "--delamb": true, "--drop": true,
+			"--chroot": true, "--securebits": true,
+		},
+		shellAfterDoubleDash: true,
+	},
+	"machinectl": {
+		valueFlags: map[string]bool{
+			"-M": true, "--machine": true, "--uid": true, "--host": true,
+			"-H": true, "-i": true, "--identity": true, "-p": true,
+			"--property": true, "-n": true, "--lines": true, "-o": true,
+			"--output": true, "-s": true, "--signal": true,
+			"--kill-whom": true,
+		},
+		skipPositional: 2,
+	},
+	"lxc":   containerCLISpec,
+	"incus": containerCLISpec,
+	"flock": {
+		valueFlags: map[string]bool{
+			"-w": true, "--wait": true, "--timeout": true,
+			"-E": true, "--conflict-exit-code": true,
+		},
+		commandFlags:   map[string]bool{"-c": true, "--command": true},
+		skipPositional: 1,
+	},
+	"chrt": {
+		valueFlags: map[string]bool{
+			"-T": true, "--sched-runtime": true,
+			"-P": true, "--sched-period": true,
+			"-D": true, "--sched-deadline": true,
+		},
+		skipPositional: 1,
+	},
+	"taskset": {skipPositional: 1},
+}
+
+func wrapperNested(words []word, spec wrapperSpec) ([]word, bool, bool) {
+	if spec.envArgs {
+		opts := parseEnvArgs(words)
+		return opts.command, len(opts.command) > 0, opts.dynamic
+	}
+
+	positional := spec.skipPositional
+	for i := 0; i < len(words); i++ {
+		w := words[i]
+		if w.dynamic {
+			return nil, false, true
+		}
+
+		text := w.text
+		if text == "--" {
+			// For wrappers that consume positional arguments (timeout, flock,
+			// lxc exec), "--" only ends option parsing: the command still comes
+			// after those positionals. Returning here would treat the next
+			// positional (a duration, lock file or container) as the command.
+			if positional > 0 {
+				continue
+			}
+			if i+1 < len(words) {
+				return words[i+1:], true, false
+			}
+			return nil, false, false
+		}
+		if strings.HasPrefix(text, "-") && text != "-" {
+			if spec.valueFlags[text] {
+				i++
+				continue
+			}
+			if name, _, ok := strings.Cut(text, "="); ok && spec.valueFlags[name] {
+				continue
+			}
+			if len(text) > 2 && text[1] != '-' && spec.valueFlags[text[:2]] {
+				continue
+			}
+			continue
+		}
+		if positional > 0 {
+			positional--
+			continue
+		}
+		return words[i:], true, false
+	}
+	return nil, false, false
+}
+
+func isAssignment(s string) bool {
+	eq := strings.IndexByte(s, '=')
+	if eq <= 0 {
+		return false
+	}
+	for i := 0; i < eq; i++ {
+		c := s[i]
+		switch {
+		case c == '_':
+		case c >= 'a' && c <= 'z':
+		case c >= 'A' && c <= 'Z':
+		case i > 0 && c >= '0' && c <= '9':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// argsAfterDoubleDash returns the arguments after the first literal "--".
+func argsAfterDoubleDash(words []word) ([]word, bool) {
+	for i, w := range words {
+		if !w.dynamic && w.text == "--" {
+			return words[i+1:], true
+		}
+	}
+	return nil, false
+}
+
+// commandFlagValue finds a flag whose value is a shell command string (-c for
+// runuser, flock and similar wrappers). The third result reports a dynamic word
+// before the flag: the effective flag cannot be resolved, so the caller must
+// stay fail-closed. After "--" the value is a positional argument, not a flag.
+func commandFlagValue(words []word, flags map[string]bool) (word, bool, bool) {
+	if len(flags) == 0 {
+		return word{}, false, false
+	}
+	for i := 0; i < len(words); i++ {
+		w := words[i]
+		if w.text == "--" {
+			return word{}, false, false
+		}
+		if w.dynamic {
+			return word{}, false, true
+		}
+		text := w.text
+		if flags[text] {
+			if i+1 < len(words) {
+				return words[i+1], true, false
+			}
+			return word{}, false, false
+		}
+		if name, value, ok := strings.Cut(text, "="); ok && flags[name] {
+			return word{text: value}, true, false
+		}
+		if strings.HasPrefix(text, "-") && !strings.HasPrefix(text, "--") && len(text) > 2 {
+			for flag := range flags {
+				if len(flag) == 2 && strings.HasPrefix(text, flag) {
+					return word{text: text[2:]}, true, false
+				}
+			}
+		}
+	}
+	return word{}, false, false
 }
 
 var errScriptOutsideWorkspace = errors.New("script file is outside the workspace")
@@ -616,313 +1053,190 @@ func readScriptFile(root, rel string, env *checkEnv) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-type wrapperSpec struct {
-	valueFlags     map[string]bool
-	commandFlags   map[string]bool
-	skipPositional int
-	envAssignments bool
-	// shellAfterDoubleDash marks wrappers that execute /bin/bash with the
-	// arguments after `--` (capsh). Those arguments are parsed as a script.
-	shellAfterDoubleDash bool
-}
-
-// containerCLISpec is shared by lxc and incus: both take a subcommand, a
-// container name and then the command to run inside the container.
-var containerCLISpec = wrapperSpec{
-	valueFlags: map[string]bool{
-		"--project": true, "-P": true, "--remote": true,
-		"--env": true, "--cwd": true, "--user": true,
-		"--group": true, "--mode": true, "--width": true,
-		"--height": true,
-	},
-	skipPositional: 2,
-}
-
-var wrapperSpecs = map[string]wrapperSpec{
-	"env": {
-		valueFlags: map[string]bool{
-			"-u": true, "-C": true, "-S": true,
-			"--unset": true, "--chdir": true, "--split-string": true,
-		},
-		envAssignments: true,
-	},
-	"command": {},
-	"builtin": {},
-	"nohup":   {},
-	"time": {
-		valueFlags: map[string]bool{
-			"-o": true, "--output": true, "-f": true, "--format": true,
-		},
-	},
-	"nice": {
-		valueFlags: map[string]bool{"-n": true, "--adjustment": true},
-	},
-	"ionice": {
-		valueFlags: map[string]bool{
-			"-c": true, "-n": true, "-p": true,
-			"--class": true, "--classdata": true, "--pid": true,
-		},
-	},
-	"stdbuf": {
-		valueFlags: map[string]bool{
-			"-i": true, "-o": true, "-e": true,
-			"--input": true, "--output": true, "--error": true,
-		},
-	},
-	"timeout": {
-		valueFlags: map[string]bool{
-			"-s": true, "-k": true, "--signal": true, "--kill-after": true,
-		},
-		skipPositional: 1,
-	},
-	"watch": {
-		valueFlags: map[string]bool{"-n": true, "--interval": true},
-	},
-	"setsid": {},
-	"xvfb-run": {
-		valueFlags: map[string]bool{
-			"-e": true, "-n": true, "-s": true,
-			"--error-file": true, "--server-num": true, "--server-args": true,
-		},
-	},
-	"xargs": {
-		valueFlags: map[string]bool{
-			"-a": true, "-d": true, "-E": true, "-e": true, "-I": true,
-			"-i": true, "-L": true, "-l": true, "-n": true, "-P": true,
-			"-s": true, "--arg-file": true, "--delimiter": true,
-			"--max-args": true, "--max-procs": true, "--max-chars": true,
-			"--replace": true,
-		},
-	},
-	"runuser": {
-		valueFlags: map[string]bool{
-			"-u": true, "--user": true, "-g": true, "--group": true,
-			"-G": true, "--supp-group": true, "-s": true, "--shell": true,
-			"-w": true, "--whitelist-environment": true,
-		},
-		commandFlags: map[string]bool{
-			"-c": true, "--command": true, "--session-command": true,
-		},
-	},
-	"setpriv": {
-		valueFlags: map[string]bool{
-			"--reuid": true, "--regid": true, "--groups": true,
-			"--inh-caps": true, "--ambient-caps": true,
-			"--bounding-set": true, "--securebits": true,
-			"--selinux-label": true, "--apparmor-profile": true,
-			"--landlock-access": true, "--landlock-rule": true,
-		},
-	},
-	"capsh": {
-		valueFlags: map[string]bool{
-			"--user": true, "--group": true, "--uid": true, "--gid": true,
-			"--shell": true, "--keep": true, "--caps": true, "--inh": true,
-			"--addamb": true, "--delamb": true, "--drop": true,
-			"--chroot": true, "--securebits": true,
-		},
-		shellAfterDoubleDash: true,
-	},
-	"machinectl": {
-		valueFlags: map[string]bool{
-			"-M": true, "--machine": true, "--uid": true, "--host": true,
-			"-H": true, "-i": true, "--identity": true, "-p": true,
-			"--property": true, "-n": true, "--lines": true, "-o": true,
-			"--output": true, "-s": true, "--signal": true,
-			"--kill-whom": true,
-		},
-		skipPositional: 2,
-	},
-	"lxc":     containerCLISpec,
-	"incus":   containerCLISpec,
-	"busybox": {},
-	"flock": {
-		valueFlags: map[string]bool{
-			"-w": true, "--wait": true, "--timeout": true,
-			"-E": true, "--conflict-exit-code": true,
-		},
-		commandFlags:   map[string]bool{"-c": true, "--command": true},
-		skipPositional: 1,
-	},
-	"chrt": {
-		valueFlags: map[string]bool{
-			"-T": true, "--sched-runtime": true,
-			"-P": true, "--sched-period": true,
-			"-D": true, "--sched-deadline": true,
-		},
-		skipPositional: 1,
-	},
-	"taskset": {skipPositional: 1},
-}
-
-func wrapperNested(words []word, spec wrapperSpec) ([]word, bool, bool) {
-	positional := spec.skipPositional
-
-	for i := 0; i < len(words); i++ {
-		w := words[i]
-		if spec.envAssignments && isAssignment(w.text) {
-			continue
-		}
-		if !w.literal {
-			return nil, false, true
-		}
-
-		text := w.text
-		if text == "--" {
-			// For wrappers that consume positional arguments (timeout, flock,
-			// lxc exec), "--" only ends option parsing: the command still comes
-			// after those positionals. Returning here would treat the next
-			// positional (a duration, lock file or container) as the command.
-			if positional > 0 {
-				continue
-			}
-			if i+1 < len(words) {
-				return words[i+1:], true, false
-			}
-			return nil, false, false
-		}
-		if strings.HasPrefix(text, "-") && text != "-" {
-			if spec.valueFlags[text] {
-				i++
-				continue
-			}
-			if name, _, ok := strings.Cut(text, "="); ok && spec.valueFlags[name] {
-				continue
-			}
-			if len(text) > 2 && text[1] != '-' && spec.valueFlags[text[:2]] {
-				continue
-			}
-			continue
-		}
-		if positional > 0 {
-			positional--
-			continue
-		}
-		return words[i:], true, false
-	}
-	return nil, false, false
-}
-
-func isAssignment(s string) bool {
-	eq := strings.IndexByte(s, '=')
-	if eq <= 0 {
-		return false
-	}
-	for i := 0; i < eq; i++ {
-		c := s[i]
-		switch {
-		case c == '_':
-		case c >= 'a' && c <= 'z':
-		case c >= 'A' && c <= 'Z':
-		case i > 0 && c >= '0' && c <= '9':
-		default:
-			return false
-		}
-	}
-	return true
-}
-
-// argsAfterDoubleDash returns the arguments after the first literal "--".
-func argsAfterDoubleDash(words []word) ([]word, bool) {
-	for i, w := range words {
-		if w.literal && w.text == "--" {
-			return words[i+1:], true
-		}
-	}
-	return nil, false
-}
-
-// commandFlagValue finds a flag whose value is a shell command string (-c for
-// runuser, flock and similar wrappers). The third result reports a dynamic word
-// before the flag: the effective flag cannot be resolved, so the caller must
-// stay fail-closed. After "--" the value is a positional argument, not a flag.
-func commandFlagValue(words []word, flags map[string]bool) (word, bool, bool) {
-	if len(flags) == 0 {
-		return word{}, false, false
-	}
-	for i := 0; i < len(words); i++ {
-		w := words[i]
-		if w.text == "--" {
-			return word{}, false, false
-		}
-		if !w.literal {
-			return word{}, false, true
-		}
-		text := w.text
-		if flags[text] {
-			if i+1 < len(words) {
-				return words[i+1], true, false
-			}
-			return word{}, false, false
-		}
-		if name, value, ok := strings.Cut(text, "="); ok && flags[name] {
-			return word{text: value, literal: true}, true, false
-		}
-		if strings.HasPrefix(text, "-") && !strings.HasPrefix(text, "--") && len(text) > 2 {
-			for flag := range flags {
-				if len(flag) == 2 && strings.HasPrefix(text, flag) {
-					return word{text: text[2:], literal: true}, true, false
-				}
-			}
-		}
-	}
-	return word{}, false, false
-}
-
 // hasCommandLookupFlag reports whether command(1) was invoked with -v/-V,
 // including combined forms such as -pv. Lookup mode does not execute the
 // argument, so it is not a guard concern.
+//
+// Only the options that precede command's own argument count: a -v after the
+// command name belongs to the nested command (`command rm -v`), not to
+// command(1).
 func hasCommandLookupFlag(words []word) bool {
 	for _, w := range words {
-		if !w.literal {
-			continue
+		if w.dynamic {
+			return false
 		}
 		text := w.text
-		if strings.HasPrefix(text, "-") && !strings.HasPrefix(text, "--") &&
-			strings.ContainsAny(text[1:], "vV") {
+		if text == "--" || text == "-" || !strings.HasPrefix(text, "-") {
+			return false
+		}
+		if !strings.HasPrefix(text, "--") && strings.ContainsAny(text[1:], "vV") {
 			return true
 		}
 	}
 	return false
 }
 
-// hasEnvSplitString reports whether an env invocation uses -S/--split-string.
-// The attached form (-S"cmd") does not match the exact -S argument modifier,
-// so it is checked here before the argv reaches the classifier.
+// envArgs is the statically parsed surface of an env invocation.
+type envArgs struct {
+	command      []word
+	assignments  []word
+	chdir        word
+	hasChdir     bool
+	unset        []string
+	unsetDynamic bool
+	ignoreEnv    bool
+	splitString  bool
+	splitValue   word
+	dynamic      bool
+}
+
+// parseEnvArgs parses env options once. It knows which options consume a value,
+// so -u NAME -S "cmd" and -C DIR -S "cmd" still expose the split string.
+func parseEnvArgs(args []word) envArgs {
+	var out envArgs
+	i := 0
+	for i < len(args) {
+		w := args[i]
+		text := w.text
+		if isAssignment(text) {
+			out.assignments = append(out.assignments, w)
+			i++
+			continue
+		}
+		if w.dynamic {
+			out.dynamic = true
+			return out
+		}
+		switch {
+		case text == "--":
+			i++
+			goto command
+		case text == "-":
+			out.ignoreEnv = true
+			i++
+			continue
+		case !strings.HasPrefix(text, "-"):
+			goto command
+		case strings.HasPrefix(text, "--"):
+			switch {
+			case text == "--ignore-environment":
+				out.ignoreEnv = true
+			case text == "--null":
+				// no value
+			case text == "--unset":
+				if i+1 >= len(args) {
+					out.dynamic = true
+					return out
+				}
+				i++
+				if args[i].dynamic {
+					out.unsetDynamic = true
+				} else {
+					out.unset = append(out.unset, args[i].text)
+				}
+			case strings.HasPrefix(text, "--unset="):
+				out.unset = append(out.unset, strings.TrimPrefix(text, "--unset="))
+			case text == "--chdir":
+				if i+1 >= len(args) {
+					out.dynamic = true
+					return out
+				}
+				i++
+				out.chdir = args[i]
+				out.hasChdir = true
+			case strings.HasPrefix(text, "--chdir="):
+				out.chdir = word{text: strings.TrimPrefix(text, "--chdir=")}
+				out.hasChdir = true
+			case text == "--split-string":
+				out.splitString = true
+				if i+1 < len(args) {
+					out.splitValue = args[i+1]
+				}
+				return out
+			case strings.HasPrefix(text, "--split-string="):
+				out.splitString = true
+				out.splitValue = word{
+					text: strings.TrimPrefix(text, "--split-string="),
+				}
+				return out
+			}
+			i++
+			continue
+		}
+
+		for j := 1; j < len(text); j++ {
+			switch text[j] {
+			case 'i':
+				out.ignoreEnv = true
+			case '0':
+				// no value
+			case 'u':
+				value, hasValue := optionValue(text, j+1, args, i)
+				if !hasValue {
+					out.dynamic = true
+					return out
+				}
+				if !value.word.dynamic {
+					out.unset = append(out.unset, value.word.text)
+				} else {
+					out.unsetDynamic = true
+				}
+				if value.next {
+					i++
+				}
+				j = len(text) - 1
+			case 'C':
+				value, hasValue := optionValue(text, j+1, args, i)
+				if !hasValue {
+					out.dynamic = true
+					return out
+				}
+				out.chdir = value.word
+				out.hasChdir = true
+				if value.next {
+					i++
+				}
+				j = len(text) - 1
+			case 'S':
+				out.splitString = true
+				value, hasValue := optionValue(text, j+1, args, i)
+				if hasValue {
+					out.splitValue = value.word
+				}
+				return out
+			}
+		}
+		i++
+	}
+
+command:
+	for i < len(args) && !args[i].dynamic && isAssignment(args[i].text) {
+		out.assignments = append(out.assignments, args[i])
+		i++
+	}
+	if i < len(args) {
+		out.command = args[i:]
+	}
+	return out
+}
+
+type envOptionValue struct {
+	word word
+	next bool
+}
+
+// optionValue returns the value of a short env option. The rest of the option
+// word is an attached value; otherwise the next word is the value.
+func optionValue(text string, rest int, args []word, index int) (envOptionValue, bool) {
+	if rest < len(text) {
+		return envOptionValue{word: word{text: text[rest:]}}, true
+	}
+	if index+1 >= len(args) {
+		return envOptionValue{}, false
+	}
+	return envOptionValue{word: args[index+1], next: true}, true
+}
+
 func hasEnvSplitString(words []word) bool {
-	for _, w := range words {
-		if isAssignment(w.text) {
-			continue
-		}
-		if !w.literal {
-			return false
-		}
-		text := w.text
-		if text == "--" || text == "-" {
-			return false
-		}
-		if !strings.HasPrefix(text, "-") {
-			return false
-		}
-		if text == "--split-string" || strings.HasPrefix(text, "--split-string=") {
-			return true
-		}
-		if !strings.HasPrefix(text, "--") && shortEnvSplitFlag(text) {
-			return true
-		}
-	}
-	return false
-}
-
-// shortEnvSplitFlag scans an env short-option cluster. -u and -C consume the
-// rest of the word as their value, so -uS unsets S rather than enabling -S.
-func shortEnvSplitFlag(text string) bool {
-	for i := 1; i < len(text); i++ {
-		switch text[i] {
-		case 'u', 'C':
-			return false
-		case 'S':
-			return true
-		}
-	}
-	return false
+	return parseEnvArgs(words).splitString
 }

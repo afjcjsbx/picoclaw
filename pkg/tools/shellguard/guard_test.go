@@ -62,10 +62,19 @@ func TestGuardCheck(t *testing.T) {
 		{name: "env attached unset allowed", command: "env -uFOO echo ok"},
 		{name: "env attached unset S allowed", command: "env -uS echo ok"},
 		{name: "env option-like argument allowed", command: "env FOO=bar echo -S"},
+		{name: "env split after unset blocked", command: "env -u NAME -S 'rm -rf /'", blocked: true},
+		{name: "env split after chdir blocked", command: "env -C /tmp -S 'rm -rf /'", blocked: true},
+		{name: "env split after unset long blocked", command: "env -u NAME --split-string='rm -rf /'", blocked: true},
+		{name: "env split after attached unset blocked", command: "env -uNAME -S 'rm -rf /'", blocked: true},
+		{name: "env split after ignore blocked", command: "env -i -S 'rm -rf /'", blocked: true},
+		{name: "env unset value is not split", command: "env -u NAME -C /tmp echo ok"},
 		{name: "xargs safe command allowed", command: "xargs echo"},
 		{name: "xargs rm base allowed", command: "xargs rm"},
 		{name: "xargs risky command blocked", command: "xargs rm -rf /", blocked: true},
 		{name: "xargs shell blocked", command: "xargs sh -c 'echo ok'", blocked: true},
+		{name: "busybox safe applet allowed", command: "busybox ls -la"},
+		{name: "busybox risky applet blocked", command: "busybox rm -rf /", blocked: true},
+		{name: "busybox shell script blocked", command: "busybox sh -c 'rm -rf /'", blocked: true},
 		{name: "timeout safe command allowed", command: "timeout 5 echo ok"},
 		{name: "timeout risky command blocked", command: "timeout 5 rm -rf /", blocked: true},
 		{name: "time output flag keeps command", command: "/usr/bin/time -o /tmp/timing rm -rf /", blocked: true},
@@ -74,6 +83,9 @@ func TestGuardCheck(t *testing.T) {
 		{name: "command lookup allowed", command: "command -v rm"},
 		{name: "command combined lookup allowed", command: "command -pv rm"},
 		{name: "command execution blocked", command: "command rm -rf /", blocked: true},
+		{name: "command nested verbose flag blocked", command: "command rm -rf -v build", blocked: true},
+		{name: "command trailing verbose flag blocked", command: "command chmod -v 777 script.sh", blocked: true},
+		{name: "command verbose ssh blocked", command: "command ssh -v host", blocked: true},
 		{name: "docker ps allowed", command: "docker ps"},
 		{name: "docker logs allowed", command: "docker logs app"},
 		{name: "docker inspect allowed", command: "docker inspect app"},
@@ -119,6 +131,181 @@ func TestGuardCheck(t *testing.T) {
 				t.Fatalf("blocked error lacks structured fields: %v", blocked)
 			}
 		})
+	}
+}
+
+func TestParseEnvArgs(t *testing.T) {
+	t.Parallel()
+
+	words := func(texts ...string) []word {
+		result := make([]word, len(texts))
+		for i, text := range texts {
+			result[i] = word{text: text}
+		}
+		return result
+	}
+
+	tests := []struct {
+		name       string
+		args       []word
+		command    []string
+		chdir      string
+		hasChdir   bool
+		unset      []string
+		split      bool
+		splitValue string
+	}{
+		{
+			name:    "assignments and command",
+			args:    words("FOO=bar", "echo", "ok"),
+			command: []string{"echo", "ok"},
+		},
+		{
+			name:    "unset value is consumed",
+			args:    words("-u", "NAME", "echo", "ok"),
+			command: []string{"echo", "ok"},
+			unset:   []string{"NAME"},
+		},
+		{
+			name:     "chdir value is consumed",
+			args:     words("-C", "/tmp", "echo", "ok"),
+			command:  []string{"echo", "ok"},
+			chdir:    "/tmp",
+			hasChdir: true,
+		},
+		{
+			name:       "split after value option",
+			args:       words("-u", "NAME", "-S", "rm -rf /"),
+			unset:      []string{"NAME"},
+			split:      true,
+			splitValue: "rm -rf /",
+		},
+		{
+			name:       "short cluster split",
+			args:       words("-iS", "rm -rf /"),
+			split:      true,
+			splitValue: "rm -rf /",
+		},
+		{
+			name:    "double dash stops options",
+			args:    words("--", "echo", "-S"),
+			command: []string{"echo", "-S"},
+		},
+		{
+			name:    "assignment after double dash",
+			args:    words("--", "FOO=bar", "echo"),
+			command: []string{"echo"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := parseEnvArgs(tt.args)
+			var command []string
+			for _, w := range got.command {
+				command = append(command, w.text)
+			}
+			if len(command) != len(tt.command) {
+				t.Fatalf("command = %v, want %v", command, tt.command)
+			}
+			for i := range command {
+				if command[i] != tt.command[i] {
+					t.Fatalf("command = %v, want %v", command, tt.command)
+				}
+			}
+			if got.chdir.text != tt.chdir || got.hasChdir != tt.hasChdir {
+				t.Fatalf("chdir = %q/%v, want %q/%v", got.chdir.text, got.hasChdir, tt.chdir, tt.hasChdir)
+			}
+			if len(got.unset) != len(tt.unset) {
+				t.Fatalf("unset = %v, want %v", got.unset, tt.unset)
+			}
+			for i := range got.unset {
+				if got.unset[i] != tt.unset[i] {
+					t.Fatalf("unset = %v, want %v", got.unset, tt.unset)
+				}
+			}
+			if got.splitString != tt.split || got.splitValue.text != tt.splitValue {
+				t.Fatalf("split = %v/%q, want %v/%q", got.splitString, got.splitValue.text, tt.split, tt.splitValue)
+			}
+		})
+	}
+}
+
+func TestGuardFindExecNestedCommands(t *testing.T) {
+	t.Parallel()
+
+	guard := mustGuard(t, "high")
+	blocked := []string{
+		`find . -exec rm -rf build \;`,
+		`find . -execdir rm -rf build +`,
+		`find . -ok rm -rf build \;`,
+		`find . -exec sh -c 'rm -rf build' \;`,
+	}
+	for _, command := range blocked {
+		if got := guard.Check(command); got == nil {
+			t.Errorf("Check(%q) allowed, want nested command blocked", command)
+		}
+	}
+
+	allowed := []string{
+		`find . -exec echo ok \;`,
+		`find . -exec chmod +x script.sh \;`,
+	}
+	for _, command := range allowed {
+		if got := guard.Check(command); got != nil {
+			t.Errorf("Check(%q) blocked: %v", command, got)
+		}
+	}
+}
+
+func TestGuardCheckFileMatchesCheck(t *testing.T) {
+	t.Parallel()
+
+	guard := mustGuard(t, "medium")
+	for _, command := range []string{
+		"ls -la",
+		"cat file | grep needle",
+		"rm -rf /",
+		`"r"'m' -rf /`,
+		"x=rm; $x -rf /",
+		"sh -c 'exit 7'",
+		"sh -c 'rm -rf /'",
+		"echo )",
+	} {
+		file, parseErr := Parse(command)
+		var fromFile *BlockedError
+		if parseErr == nil {
+			fromFile = guard.CheckFile(command, file)
+		} else {
+			fromFile = guard.CheckFile(command, nil)
+		}
+		fromText := guard.Check(command)
+
+		if (fromFile == nil) != (fromText == nil) {
+			t.Fatalf("%q: CheckFile=%v Check=%v", command, fromFile, fromText)
+		}
+		if fromFile != nil && fromFile.Error() != fromText.Error() {
+			t.Fatalf("%q: CheckFile=%q Check=%q", command, fromFile, fromText)
+		}
+	}
+}
+
+func TestGuardCheckFileRejectsParseFailure(t *testing.T) {
+	t.Parallel()
+
+	guard := mustGuard(t, "medium")
+	file, err := Parse("echo )")
+	if err == nil {
+		t.Fatal("Parse accepted an unparseable command")
+	}
+	if file != nil {
+		t.Fatalf("Parse returned a partial tree with the error: %#v", file)
+	}
+	if blocked := guard.CheckFile("echo )", file); blocked == nil {
+		t.Fatal("CheckFile allowed a parse failure")
+	}
+	if blocked := guard.Check("echo )"); blocked == nil {
+		t.Fatal("Check allowed a parse failure")
 	}
 }
 
@@ -377,6 +564,29 @@ func TestGuardWrapperInspection(t *testing.T) {
 		if blocked := tt.guard.Check(tt.command); blocked == nil {
 			t.Errorf("Check(%q) allowed, want blocked", tt.command)
 		}
+	}
+}
+
+func TestGuardWithThreshold(t *testing.T) {
+	t.Parallel()
+
+	guard := mustGuard(t, "medium")
+	high := guard.WithThreshold(RiskHigh)
+	if high == nil {
+		t.Fatal("WithThreshold returned nil for a non-nil guard")
+	}
+
+	if blocked := guard.Check("chmod +x script.sh"); blocked == nil {
+		t.Fatal("medium guard should block high risk")
+	}
+	if blocked := high.Check("chmod +x script.sh"); blocked != nil {
+		t.Fatalf("high guard should allow high risk: %v", blocked)
+	}
+	if blocked := high.Check("rm -rf build"); blocked == nil {
+		t.Fatal("high guard should still block critical risk")
+	}
+	if blocked := guard.Check("chmod +x script.sh"); blocked == nil {
+		t.Fatal("WithThreshold must not mutate the original guard")
 	}
 }
 

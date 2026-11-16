@@ -526,9 +526,11 @@
       "enabled": true,
       "enable_deny_patterns": true,
       "risk_threshold": "medium",
+      "risk_allow_threshold": "medium",
       "allow_remote": false,
       "custom_deny_patterns": null,
-      "custom_allow_patterns": null
+      "custom_allow_patterns": null,
+      "custom_risk_allow_patterns": null
     },
     "skills": {
       "enabled": true,

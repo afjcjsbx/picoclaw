@@ -324,6 +324,9 @@ PicoClaw 默认在沙箱环境中运行。Agent 只能访问配置的工作区�
 * `dd if=` — 磁盘镜像（始终生效）
 * 写入 `/dev/sd[a-z]` — 直接磁盘写入（始终生效）
 * `shutdown`、`reboot`、`poweroff` — 系统关机（始终生效）
+* 自我保护：终止 PicoClaw 进程或服务、删除状态目录（`~/.picoclaw`、`$HOME/.picoclaw`、`$PICOCLAW_HOME` 或 `PICOCLAW_HOME`），或删除正在运行的可执行文件 — 始终生效
+* 硬性底线和自定义拒绝规则匹配前会解析 `$IFS`、ANSI-C `$'...'` 字符串、反斜杠换行续行和 AST 引号拼接 — 始终生效
+* Windows PowerShell：递归 `Remove-Item`、`Clear-Disk`、`Format-Volume`、`vssadmin delete shadows`、`bcdedit /set`、`reg delete`、`icacls /grant Everyone`、`iwr ... | iex`、`taskkill /F`、`Stop-Process -Force`
 * Fork bomb `:(){ :|:& };:` — 始终生效
 
 ### 文件访问控制
@@ -340,8 +343,10 @@ PicoClaw 默认在沙箱环境中运行。Agent 只能访问配置的工作区�
 | `tools.exec.allow_remote` | bool | `false` | 允许从远程渠道（Telegram/Discord 等）执行 exec 工具 |
 | `tools.exec.enable_deny_patterns` | bool | `true` | 启用内置危险命令拦截（关闭后硬性底线规则和自定义拒绝规则仍然生效） |
 | `tools.exec.custom_deny_patterns` | string[] | `[]` | 自定义阻止的正则表达式模式；始终生效 |
-| `tools.exec.custom_allow_patterns` | string[] | `[]` | 自定义允许的正则表达式模式 |
+| `tools.exec.custom_allow_patterns` | string[] | `[]` | 整条命令匹配的正则表达式，仅豁免默认拒绝规则；会自动添加首尾锚点 |
+| `tools.exec.custom_risk_allow_patterns` | string[] | `[]` | 整条命令匹配的正则表达式，用于豁免风险分类器，受 `risk_allow_threshold` 限制 |
 | `tools.exec.risk_threshold` | string | `"medium"` | AST 风险分类器允许的最高风险级别（`low`、`medium`、`high`、`critical`）；`enable_deny_patterns` 为 `false` 时不生效 |
+| `tools.exec.risk_allow_threshold` | string | `"medium"` | `custom_risk_allow_patterns` 可豁免的最高风险级别；需显式设为 `high` 或 `critical` |
 | `tools.exec.risk_overrides` | object | `{}` | 按命令覆盖基础风险级别；参数修饰符仍可继续提升 |
 | `tools.exec.arg_modifiers` | object | `{}` | 按命令追加基于参数的风险提升规则 |
 | `tools.exec.env_set` | object | `{}` | 始终注入 exec 子进程的变量；属于受信任配置，会覆盖继承的同名变量 |

@@ -90,14 +90,8 @@ var execEnvBlocklist = map[string]bool{
 	"LD_AUDIT":        true,
 	"LD_DEBUG":        true,
 
-	// PICOCLAW_* vars are controlled by the agent, not the LLM.
-	"PICOCLAW_HOME":            true,
-	"PICOCLAW_CONFIG":          true,
-	"PICOCLAW_AGENT_WORKSPACE": true,
-	"PICOCLAW_EXE":             true,
-	"PICOCLAW_SERVICE_NAME":    true,
-	"PICOCLAW_EXEC_TIME":       true,
-	"PICOCLAW_EXEC_TIMEOUT":    true,
+	// PICOCLAW_* vars are controlled by the agent, not the LLM. The prefix
+	// list below covers the managed names; keep them out of this map.
 }
 
 // execEnvBlocklistPrefixes are prefixes the LLM cannot set.
@@ -252,16 +246,9 @@ func addExecEnv(env map[string]string, key, value string) error {
 // for exec.Cmd.Env. timeout is the effective foreground timeout; background
 // sessions pass 0 because they are not time-limited.
 func (t *ExecTool) runEnv(extraEnv map[string]string, timeout time.Duration) []string {
-	env := make(map[string]string, len(t.baseEnv)+len(extraEnv)+2)
-	for key, value := range t.baseEnv {
-		env[execEnvKey(key)] = value
-	}
-	for key, value := range extraEnv {
-		key = execEnvKey(key)
-		if isBlockedExecEnv(key) {
-			continue
-		}
-		env[key] = value
+	env := mergeExecEnv(t.baseEnv, extraEnv)
+	if env == nil {
+		env = make(map[string]string, 2)
 	}
 
 	// Set after the LLM merge so these values always describe this run.

@@ -448,6 +448,8 @@ When `restrict_to_workspace: true`, the following tools are sandboxed:
 | `append_file` | Append to files  | Only files within workspace            |
 | `exec`        | Execute commands | Command paths must be within workspace |
 
+> The workspace restriction is a static path policy, not an OS sandbox. It validates command paths, home expansion and directory changes, but child processes and script contents remain outside its reach. Use containers, VMs, or a dedicated user for untrusted workloads.
+
 #### Additional Exec Protection
 
 By default, the `exec` tool blocks these dangerous commands (the hardline subset stays blocked even when `enable_deny_patterns` is `false`):
@@ -457,6 +459,10 @@ By default, the `exec` tool blocks these dangerous commands (the hardline subset
 * `dd if=` — Disk imaging (always-on)
 * Writing to `/dev/sd[a-z]` — Direct disk writes (always-on)
 * `shutdown`, `reboot`, `poweroff` — System shutdown (always-on)
+* Self-protection: killing the PicoClaw process or service, deleting its state directory (`~/.picoclaw`, `$HOME/.picoclaw`, `$PICOCLAW_HOME` or `PICOCLAW_HOME`), or deleting the running executable — Always-on
+* Hardline and custom deny matching resolves `$IFS`, ANSI-C `$'...'` strings, backslash-newline continuations and AST quote splicing before applying the patterns — Always-on
+* Exec (Unix) workspace boundary: when `restrict_to_workspace` is enabled, `~`/`$HOME` path expansion, bare `..` in `cd`/`pushd`/`-C` targets, `cd`/`pushd`/`env -C` changes, dynamic redirection targets and nested `sh -c`/`eval` scripts are validated against the workspace, including symlink escapes — Static best effort; use OS isolation for untrusted workloads
+* Windows PowerShell: recursive `Remove-Item`, `Clear-Disk`, `Format-Volume`, `vssadmin delete shadows`, `bcdedit /set`, `reg delete`, `icacls /grant Everyone`, `iwr ... | iex`, `taskkill /F`, `Stop-Process -Force`
 * Fork bomb `:(){ :|:& };:` — Always-on
 
 ### File Access Control
@@ -539,14 +545,16 @@ Use `mode = lines` when:
 | `tools.exec.allow_remote` | bool | `false` | Allow exec tool from remote channels (Telegram/Discord etc.) |
 | `tools.exec.enable_deny_patterns` | bool | `true` | Enable built-in dangerous command interception (hardline and custom deny rules still apply when off) |
 | `tools.exec.custom_deny_patterns` | string[] | `[]` | Custom regex patterns to block; always enforced |
-| `tools.exec.custom_allow_patterns` | string[] | `[]` | Custom regex patterns to allow |
+| `tools.exec.custom_allow_patterns` | string[] | `[]` | Full-command regex patterns that exempt only the default deny set; anchored automatically |
+| `tools.exec.custom_risk_allow_patterns` | string[] | `[]` | Full-command regex patterns that exempt the risk classifier, capped by `risk_allow_threshold` |
 | `tools.exec.risk_threshold` | string | `"medium"` | Highest risk level allowed by the AST classifier (`low`, `medium`, `high`, `critical`); inactive when `enable_deny_patterns` is `false` |
+| `tools.exec.risk_allow_threshold` | string | `"medium"` | Highest risk level a `custom_risk_allow_patterns` match may exempt; set `high` or `critical` explicitly |
 | `tools.exec.risk_overrides` | object | `{}` | Per-command base risk levels; argument modifiers can still elevate them |
 | `tools.exec.arg_modifiers` | object | `{}` | Extra argument-aware risk elevations per command |
 | `tools.exec.env_set` | object | `{}` | Variables always injected into exec child processes; trusted config that overrides inherited values |
 | `tools.exec.env_allowlist` | string[] | `[]` | Additional parent variable names inherited by exec child processes; explicit names only |
 
-When `enable_deny_patterns` is `true`, Unix commands are also parsed into an AST and classified from `low` to `critical` before execution. `risk_threshold` (default `medium`) blocks levels above the configured maximum, catching variable indirection such as `x=rm; $x -rf /` that regex patterns cannot resolve. `risk_overrides` changes a command's base level and `arg_modifiers` adds argument-aware elevations; custom allow patterns exempt this layer. See the [exec tool](../tools/exec.md#risk-classification) for the table and limitations.
+When `enable_deny_patterns` is `true`, Unix commands are also parsed into an AST and classified from `low` to `critical` before execution. `risk_threshold` (default `medium`) blocks levels above the configured maximum, catching variable indirection such as `x=rm; $x -rf /` that regex patterns cannot resolve. `risk_overrides` changes a command's base level and `arg_modifiers` adds argument-aware elevations. `custom_allow_patterns` exempts only the default regex deny set; to exempt the risk classifier, use `custom_risk_allow_patterns`, which is capped by `risk_allow_threshold` (default `medium`). See the [exec tool](../tools/exec.md#risk-classification) for the table and limitations.
 
 > **Security Note:** Symlink protection is enabled by default — all file paths are resolved through `filepath.EvalSymlinks` before whitelist matching, preventing symlink escape attacks.
 
