@@ -1,11 +1,45 @@
 package agent
 
 import (
+	"strings"
 	"testing"
 	"time"
 
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
+	"github.com/sipeed/picoclaw/pkg/redact"
 )
+
+func TestPublishRuntimeEventRedactsErrorPayload(t *testing.T) {
+	const key = "oc_sk_test_key_1234567890"
+	redact.SetSecrets([]string{key})
+	t.Cleanup(func() { redact.SetSecrets(nil) })
+
+	al := &AgentLoop{runtimeEvents: runtimeevents.NewBus()}
+	t.Cleanup(func() { _ = al.runtimeEvents.Close() })
+
+	ch, stop := subscribeRuntimeEventsForTest(t, al, 4, runtimeevents.KindAgentError)
+	defer stop()
+
+	al.publishRuntimeEvent(runtimeevents.Event{
+		Kind: runtimeevents.KindAgentError,
+		Payload: ErrorPayload{
+			Stage:   "llm",
+			Message: "API request failed: Incorrect API key provided: " + key,
+		},
+	})
+
+	evt := waitForRuntimeEvent(t, ch, time.Second, func(runtimeevents.Event) bool { return true })
+	payload, ok := evt.Payload.(ErrorPayload)
+	if !ok {
+		t.Fatalf("payload type = %T, want ErrorPayload", evt.Payload)
+	}
+	if strings.Contains(payload.Message, key) {
+		t.Fatalf("credential leaked through the runtime event bus: %q", payload.Message)
+	}
+	if !strings.Contains(payload.Message, redact.Marker) {
+		t.Fatalf("expected %s in payload: %q", redact.Marker, payload.Message)
+	}
+}
 
 func subscribeRuntimeEventsForTest(
 	t *testing.T,

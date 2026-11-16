@@ -15,6 +15,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/auth"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers/common"
+	"github.com/sipeed/picoclaw/pkg/redact"
 	"github.com/sipeed/picoclaw/pkg/textutil"
 )
 
@@ -125,7 +126,7 @@ func (p *AntigravityProvider) Chat(
 	if resp.StatusCode != http.StatusOK {
 		logger.ErrorCF("provider.antigravity", "API call failed", map[string]any{
 			"status_code": resp.StatusCode,
-			"response":    string(respBody),
+			"response":    redact.Text(string(respBody)),
 			"model":       model,
 		})
 
@@ -534,7 +535,7 @@ func FetchAntigravityProjectID(accessToken string) (string, error) {
 		return "", fmt.Errorf("reading loadCodeAssist response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("loadCodeAssist failed: %s", string(body))
+		return "", fmt.Errorf("loadCodeAssist failed: %s", redact.Text(string(body)))
 	}
 
 	var result struct {
@@ -581,7 +582,7 @@ func FetchAntigravityModels(accessToken, projectID string) ([]AntigravityModelIn
 		return nil, fmt.Errorf(
 			"fetchAvailableModels failed (HTTP %d): %s",
 			resp.StatusCode,
-			textutil.TruncateRunes(string(body), 200),
+			textutil.TruncateRunes(redact.Text(string(body)), 200),
 		)
 	}
 
@@ -663,10 +664,11 @@ func (p *AntigravityProvider) parseAntigravityError(statusCode int, body []byte)
 	}
 
 	if err := json.Unmarshal(body, &errResp); err != nil {
-		return fmt.Errorf("antigravity API error (HTTP %d): %s", statusCode, textutil.TruncateRunes(string(body), 500))
+		return fmt.Errorf("antigravity API error (HTTP %d): %s", statusCode,
+			textutil.TruncateRunes(redact.Text(string(body)), 500))
 	}
 
-	msg := errResp.Error.Message
+	msg := redact.Text(errResp.Error.Message)
 	if statusCode == 429 {
 		// Try to extract quota reset info
 		for _, detail := range errResp.Error.Details {

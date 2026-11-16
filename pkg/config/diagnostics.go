@@ -10,6 +10,8 @@ import (
 	"unicode/utf8"
 
 	"golang.org/x/term"
+
+	"github.com/sipeed/picoclaw/pkg/redact"
 )
 
 func decodeJSONWithDiagnostics(data []byte, target any, label string) error {
@@ -39,7 +41,7 @@ func DiagnosticSummary(err error) string {
 		return ""
 	}
 	summary, _ := splitDiagnosticError(err.Error())
-	return stripANSISequences(summary)
+	return redact.Text(stripANSISequences(summary))
 }
 
 func formatDiagnosticLogMessage(prefix string, err error) string {
@@ -49,6 +51,7 @@ func formatDiagnosticLogMessage(prefix string, err error) string {
 
 	summary, preview := splitDiagnosticError(err.Error())
 	summary = stripANSISequences(summary)
+	preview = redact.Text(preview)
 	if preview == "" {
 		if summary == "" {
 			return prefix
@@ -65,7 +68,7 @@ func wrapJSONError(data []byte, err error, label string) error {
 	switch e := err.(type) {
 	case *json.SyntaxError:
 		line, column := lineAndColumnForOffset(data, e.Offset)
-		preview := diagnosticPreviewForOffset(data, e.Offset)
+		preview := redact.Text(diagnosticPreviewForOffset(data, e.Offset))
 		if preview != "" {
 			return fmt.Errorf(
 				"%s syntax error at line %d, column %d: %w\n%s",
@@ -79,7 +82,7 @@ func wrapJSONError(data []byte, err error, label string) error {
 		return fmt.Errorf("%s syntax error at line %d, column %d: %w", label, line, column, err)
 	case *json.UnmarshalTypeError:
 		line, column := lineAndColumnForOffset(data, e.Offset)
-		preview := diagnosticPreviewForOffset(data, e.Offset)
+		preview := redact.Text(diagnosticPreviewForOffset(data, e.Offset))
 		field := strings.TrimSpace(e.Field)
 		if field != "" {
 			if preview != "" {

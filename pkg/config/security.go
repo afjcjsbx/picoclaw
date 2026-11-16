@@ -243,11 +243,44 @@ func (sec *Config) initSensitiveCache() {
 	})
 }
 
+// SensitiveValues returns the credential values configured in this Config.
+// Callers register them with the redaction layer so they can never appear in
+// logs, runtime events, or outbound chat messages, regardless of their format.
+func (sec *Config) SensitiveValues() []string {
+	if sec == nil {
+		return nil
+	}
+	return sec.collectSensitiveValues()
+}
+
 // collectSensitiveValues collects all sensitive strings from SecurityConfig using reflection.
 func (sec *Config) collectSensitiveValues() []string {
 	var values []string
 	collectSensitive(reflect.ValueOf(sec), &values)
 	return values
+}
+
+// sensitiveMarkers are the name fragments of credential fields and map keys. It
+// intentionally leaves out generic words such as "key", "auth" or "session":
+// they also name ordinary settings (auth_method=oauth, SESSION_DIR=/tmp) and
+// registering those values would mask unrelated text.
+var sensitiveMarkers = []string{
+	"apikey", "api_key", "api-key", "accesskey", "access_key", "privatekey", "private_key",
+	"secret", "password", "passwd", "credential", "authorization", "cookie", "signature",
+}
+
+// sensitiveName reports whether a struct field or map key names a credential.
+func sensitiveName(name string) bool {
+	lower := strings.ToLower(name)
+	for _, marker := range sensitiveMarkers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	// "token" names a credential, but MaxTokensField, MAX_TOKENS and tokenizer
+	// name settings, while BotToken, access_token and BOT_TOKEN do.
+	return strings.Contains(lower, "token") && !strings.Contains(lower, "tokens") &&
+		!strings.Contains(lower, "tokeniz")
 }
 
 // collectSensitive recursively traverses the value and collects SecureString/SecureStrings values.
@@ -314,10 +347,15 @@ func collectSensitive(v reflect.Value, values *[]string) {
 	switch v.Kind() {
 	case reflect.Struct:
 		for i := 0; i < v.NumField(); i++ {
-			if !t.Field(i).IsExported() {
+			field := t.Field(i)
+			if !field.IsExported() {
 				continue
 			}
-			collectSensitive(v.Field(i), values)
+			fieldValue := v.Field(i)
+			if isSensitiveStringValue(field.Name, fieldValue) {
+				*values = append(*values, fieldValue.String())
+			}
+			collectSensitive(fieldValue, values)
 		}
 	case reflect.Slice:
 		for i := 0; i < v.Len(); i++ {
@@ -325,7 +363,34 @@ func collectSensitive(v reflect.Value, values *[]string) {
 		}
 	case reflect.Map:
 		for _, key := range v.MapKeys() {
-			collectSensitive(v.MapIndex(key), values)
+			mapValue := v.MapIndex(key)
+			if key.Kind() == reflect.String && isSensitiveStringValue(key.String(), mapValue) {
+				*values = append(*values, mapValue.String())
+			}
+			collectSensitive(mapValue, values)
 		}
 	}
+}
+
+// isSensitiveStringValue reports whether value is a string named like a
+// credential. Maps, custom headers and process env vars store secrets as plain
+// strings, outside the SecureString wrapper.
+func isSensitiveStringValue(name string, value reflect.Value) bool {
+	for value.Kind() == reflect.Interface || value.Kind() == reflect.Pointer {
+		if value.IsNil() {
+			return false
+		}
+		value = value.Elem()
+	}
+	if value.Kind() != reflect.String || value.String() == "" {
+		return false
+	}
+	// Sensitive-looking names also cover boolean flags and enum settings
+	// (SECRET_ENABLED=true). Collecting those words would mask ordinary text
+	// in every consumer of SensitiveValues, tool results included.
+	switch strings.ToLower(strings.TrimSpace(value.String())) {
+	case "true", "false", "yes", "no", "null", "none", "nil", "auto", "default", "oauth", "bearer":
+		return false
+	}
+	return sensitiveName(name)
 }

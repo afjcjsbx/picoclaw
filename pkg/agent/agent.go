@@ -26,6 +26,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/media"
 	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/sipeed/picoclaw/pkg/redact"
 	"github.com/sipeed/picoclaw/pkg/routing"
 	"github.com/sipeed/picoclaw/pkg/session"
 	"github.com/sipeed/picoclaw/pkg/state"
@@ -545,6 +546,9 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	al.fallback = providers.NewFallbackChain(providers.NewCooldownTracker(), newRateLimiterRegistry(registry))
 
 	al.mu.Unlock()
+	// The reloaded config is live: swap the exact-masking set with it, so a
+	// rotated key is masked and a retired one is dropped.
+	redact.SetSecrets(cfg.SensitiveValues())
 	al.refreshRuntimeEventLogger(cfg)
 
 	oldMCPManager := al.mcp.reset()
