@@ -18,7 +18,7 @@ import (
 // targets) for operator regex deny rules. They are not executed and do not
 // replace the shell's own parsing.
 func CanonicalCommands(command string) []string {
-	return canonicalCommands(NormalizeForDeny(command), 0)
+	return canonicalCommands(normalizeForParse(command), 0)
 }
 
 func canonicalCommands(command string, depth int) []string {
@@ -77,20 +77,20 @@ func appendCanonicalCall(forms []string, words []word, redirs []*syntax.Redirect
 	if isShellCommand(name) {
 		invocation := parseShellInvocation(words[1:])
 		if invocation.hasScript && !invocation.script.dynamic {
-			forms = append(forms, canonicalCommands(NormalizeForDeny(invocation.script.text), depth+1)...)
+			forms = append(forms, canonicalCommands(normalizeForParse(invocation.script.text), depth+1)...)
 		}
 		return forms
 	}
 	switch name {
 	case "eval":
 		if script, ok := joinLiteralWords(words[1:]); ok && script != "" {
-			forms = append(forms, canonicalCommands(NormalizeForDeny(script), depth+1)...)
+			forms = append(forms, canonicalCommands(normalizeForParse(script), depth+1)...)
 		}
 		return forms
 	case "trap":
 		action, found, dynamic := trapAction(words[1:])
 		if found && !dynamic {
-			forms = append(forms, canonicalCommands(NormalizeForDeny(action.text), depth+1)...)
+			forms = append(forms, canonicalCommands(normalizeForParse(action.text), depth+1)...)
 		}
 		return forms
 	case "find":
@@ -108,7 +108,7 @@ func appendCanonicalCall(forms []string, words []word, redirs []*syntax.Redirect
 		opts := parseEnvArgs(words[1:])
 		if opts.splitString {
 			if !opts.splitValue.dynamic {
-				forms = append(forms, canonicalCommands(NormalizeForDeny(opts.splitValue.text), depth+1)...)
+				forms = append(forms, canonicalCommands(normalizeForParse(opts.splitValue.text), depth+1)...)
 			}
 			return forms
 		}

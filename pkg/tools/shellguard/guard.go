@@ -598,10 +598,13 @@ func literalWord(w *syntax.Word) word {
 	if len(w.Parts) == 1 {
 		switch p := w.Parts[0].(type) {
 		case *syntax.Lit:
-			return word{text: p.Value}
+			return word{text: unescapeUnquotedLit(p.Value)}
 		case *syntax.SglQuoted:
 			if !p.Dollar {
 				return word{text: p.Value}
+			}
+			if decoded, ok := decodeANSIValue(p.Value); ok {
+				return word{text: decoded}
 			}
 		}
 	}
@@ -609,28 +612,38 @@ func literalWord(w *syntax.Word) word {
 	var b strings.Builder
 	dynamic := false
 
-	var addParts func([]syntax.WordPart)
-	addParts = func(parts []syntax.WordPart) {
+	var addParts func([]syntax.WordPart, bool)
+	addParts = func(parts []syntax.WordPart, inDouble bool) {
 		for _, part := range parts {
 			switch p := part.(type) {
 			case *syntax.Lit:
-				b.WriteString(p.Value)
+				if inDouble {
+					b.WriteString(unescapeDoubleQuotedLit(p.Value))
+				} else {
+					b.WriteString(unescapeUnquotedLit(p.Value))
+				}
 			case *syntax.SglQuoted:
-				b.WriteString(p.Value)
-				// $'...' is an ANSI-C quoted string: the parser keeps escapes
-				// such as \x72 undecoded, so treating it as literal would let
-				// $'\x72m' -rf / masquerade as an unknown command.
+				// Single quotes preserve backslashes. $'...' is an ANSI-C
+				// quoted string, so decode its escapes to the bytes the shell
+				// would pass; an unknown escape keeps its backslash.
 				if p.Dollar {
-					dynamic = true
+					if decoded, ok := decodeANSIValue(p.Value); ok {
+						b.WriteString(decoded)
+					} else {
+						b.WriteString(p.Value)
+						dynamic = true
+					}
+				} else {
+					b.WriteString(p.Value)
 				}
 			case *syntax.DblQuoted:
-				addParts(p.Parts)
+				addParts(p.Parts, true)
 			default:
 				dynamic = true
 			}
 		}
 	}
-	addParts(w.Parts)
+	addParts(w.Parts, false)
 	return word{text: b.String(), dynamic: dynamic}
 }
 

@@ -3405,15 +3405,21 @@ func TestShellTool_HardlineASTBypass(t *testing.T) {
 		`rm${IFS}-rf${IFS}/*`,
 		`r''m -rf /`,
 		`r""m -rf /`,
+		`r\m -rf /`,
+		`\r\m -rf /`,
 		`r$'\x6d' -rf /`,
 		`$'\x72\x6d' -rf /`,
 		"r\\\nm -rf /",
 		`sh -c 'r''m -rf /'`,
 		`sh -c "r''m -rf /"`,
+		`sh -c 'r\m -rf /'`,
+		`sh -c "r\m -rf /"`,
 		`sh -c "$'\x72\x6d' -rf /"`,
 		`env sh -c "r''m -rf /"`,
 		`eval "r''m -rf /"`,
+		`eval 'r\m -rf /'`,
 		`trap "r''m -rf /" EXIT`,
+		`trap 'r\m -rf /' EXIT`,
 		`pkill -f pico''claw`,
 		`rm -rf ~/.pico''claw`,
 	}
@@ -3428,10 +3434,56 @@ func TestShellTool_HardlineASTBypass(t *testing.T) {
 		`rm -f ./build/file`,
 		`echo hi`,
 		`pkill -f other`,
+		`r\\m -rf /`,
+		`r\\\m -rf /`,
+		`"r\m" -rf /`,
+		`'r\m' -rf /`,
+		`$'r\m' -rf /`,
 	}
 	for _, command := range allowed {
 		if got := tool.guardCommand(command, t.TempDir()); got != "" {
 			t.Errorf("non-hardline command %q should be allowed, got: %q", command, got)
+		}
+	}
+}
+
+// TestShellTool_DefaultDenyUsesASTWords verifies that the optional default
+// deny set also sees shell-equivalent spellings. A raw backslash escape such
+// as g\it is not a default deny match byte-for-byte, but the canonical form is
+// git push.
+func TestShellTool_DefaultDenyUsesASTWords(t *testing.T) {
+	cfg := &config.Config{
+		Approvals: config.ApprovalsConfig{Mode: config.ApprovalModeOff},
+		Tools: config.ToolsConfig{
+			Exec: config.ExecConfig{
+				EnableDenyPatterns: true,
+				// Let the risk layer allow the underlying commands so this test
+				// isolates the default deny patterns.
+				RiskThreshold: "critical",
+			},
+		},
+	}
+	tool, err := NewExecToolWithConfig(t.TempDir(), false, cfg)
+	require.NoError(t, err)
+
+	blocked := []string{
+		`g\it push origin main`,
+		`s\udo id`,
+		`d\ocker run alpine true`,
+	}
+	for _, command := range blocked {
+		if got := tool.guardCommand(command, t.TempDir()); !strings.Contains(got, "dangerous pattern") {
+			t.Errorf("default deny should match AST words for %q, got: %q", command, got)
+		}
+	}
+
+	allowed := []string{
+		`git status`,
+		`g\it status`,
+	}
+	for _, command := range allowed {
+		if got := tool.guardCommand(command, t.TempDir()); got != "" {
+			t.Errorf("non-matching command %q should be allowed, got: %q", command, got)
 		}
 	}
 }
