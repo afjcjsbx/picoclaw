@@ -566,7 +566,7 @@ Oversized output is truncated automatically and the full stream is saved as an a
 
 action=run requires command. timeout is in seconds. Foreground runs are capped at %ds: timeout=0 or any value above the cap starts a tracked background session instead and returns its sessionId. timeout is not supported with background=true.
 
-Use background=true only when the command must outlive the call. It returns a sessionId.%s Use list to inspect sessions, poll for a non-blocking preview, wait to block until exit, read for non-destructive offset/limit byte ranges (defaults to the most recent bytes), write for stdin, send-keys for PTY keys, and kill to terminate. Prefer wait over polling; notify=true sends a completion message. Use pty=true for interactive programs (not supported on Windows).
+Use background=true only when the command must outlive the call. It returns a sessionId.%s Use list to inspect sessions, poll for a non-blocking preview, wait to block until exit, read for non-destructive offset/limit byte ranges (defaults to the most recent bytes), write for stdin, send-keys for PTY keys, and kill to terminate. Prefer wait over polling; notify=true sends a completion message. Use pty=true for interactive programs (not supported on Windows). Do not background only part of a command or use nohup/setsid/disown in the foreground: untracked detaching is rejected.
 
 Run independent commands in separate calls; %s Do not separate commands with newlines.`, runtime.GOOS, shell, capSeconds, ampersandGuidance, chainGuidance)
 }
@@ -837,6 +837,13 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 	// rejected.
 	promoteToBackground := !isBackground && t.foregroundCap > 0 &&
 		(timeoutDisabled || timeout > t.foregroundCap)
+
+	// A foreground nohup/setsid/disown or an inner '&' leaves a process the
+	// session manager cannot track. The trailing '&' converter above already
+	// turned the unambiguous single-operator form into a tracked run.
+	if reason := untrackedDetachReason(command, isBackground || promoteToBackground); reason != "" {
+		return ErrorResult(reason)
+	}
 
 	if isPty {
 		if runtime.GOOS == "windows" {

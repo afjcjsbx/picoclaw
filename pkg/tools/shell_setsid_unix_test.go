@@ -57,7 +57,7 @@ func setsidHelperCommand(t *testing.T) (command, pidFile string) {
 	// exec starts children from a sanitized environment, so the helper
 	// configuration travels as an inline assignment on the command.
 	command = fmt.Sprintf(
-		"%s=%q %s=%q %q -test.run=^%s$ & wait",
+		"%s=%q %s=%q %q -test.run=^%s$; :",
 		execSetsidHelperEnv, "1",
 		execSetsidPIDFileEnv, pidFile,
 		executable, execSetsidHelperTestName,
@@ -150,7 +150,6 @@ func TestShellTool_BackgroundKillKillsSetsidChild(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("background run failed: %s", result.ForLLM)
 	}
-
 	var response ExecResponse
 	if err := json.Unmarshal([]byte(result.ForLLM), &response); err != nil {
 		t.Fatalf("decode background response: %v", err)

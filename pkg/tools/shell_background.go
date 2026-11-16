@@ -3,6 +3,8 @@ package tools
 import (
 	"strings"
 
+	"mvdan.cc/sh/v3/syntax"
+
 	"github.com/sipeed/picoclaw/pkg/tools/shellguard"
 )
 
@@ -45,4 +47,56 @@ func normalizeTrailingBackgroundAmpersand(command, goos string) (string, bool) {
 		return command, false
 	}
 	return trimmed, true
+}
+
+// detachCommands start a process outside the shell's foreground wait. A
+// foreground exec call would return while the process keeps running with no
+// sessionId to poll, wait or kill.
+var detachCommands = map[string]bool{
+	"nohup":  true,
+	"setsid": true,
+	"disown": true,
+}
+
+// untrackedDetachReason returns a model-facing block message when a command
+// starts background work the exec session cannot track. tracked is true for an
+// explicit background=true run; nohup/setsid/disown are then allowed (the shell
+// itself is tracked), while an inner '&' operator is always rejected because it
+// detaches a job from the tracked shell.
+func untrackedDetachReason(command string, tracked bool) string {
+	for _, form := range shellguard.CanonicalCommands(command) {
+		fields := strings.Fields(form)
+		if len(fields) == 0 {
+			continue
+		}
+		name := fields[0]
+		if slash := strings.LastIndexByte(name, '/'); slash >= 0 {
+			name = name[slash+1:]
+		}
+		if detachCommands[name] && !tracked {
+			return "Command blocked: '" + name + "' detaches the process from the exec session. " +
+				"Use background=true so PicoClaw can track it."
+		}
+	}
+
+	file, err := shellguard.Parse(command)
+	if err != nil || file == nil {
+		return ""
+	}
+	found := false
+	syntax.Walk(file, func(node syntax.Node) bool {
+		if found {
+			return false
+		}
+		if stmt, ok := node.(*syntax.Stmt); ok && stmt.Background {
+			found = true
+			return false
+		}
+		return true
+	})
+	if found {
+		return "Command blocked: '&' inside a command creates an untracked background process. " +
+			"Run the whole command with background=true instead."
+	}
+	return ""
 }
