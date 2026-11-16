@@ -32,7 +32,7 @@ func TestShellTool_ForegroundExitKillsDetachedSetsidChild(t *testing.T) {
 		"%q -test.run=^%s$ & while [ ! -s %q ]; do sleep 0.01; done; exit 0",
 		executable, execSetsidHelperTestName, pidFile,
 	)
-	result := tool.Execute(context.Background(), map[string]any{
+	result := tool.Execute(WithToolContext(context.Background(), "cli", "test"), map[string]any{
 		"action":  "run",
 		"command": command,
 	})
