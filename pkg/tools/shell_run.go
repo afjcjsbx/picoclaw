@@ -309,6 +309,15 @@ func recoverGoroutine(label string, onPanic ...func()) {
 	}
 }
 
+// processExitCode returns the exit status of a waited process, or -1 when the
+// process never produced one (Wait failed before the state was recorded).
+func processExitCode(state *os.ProcessState) int {
+	if state == nil {
+		return -1
+	}
+	return state.ExitCode()
+}
+
 // sessionExitCode returns the process exit status only once the session has
 // finished, so a running session is not reported as a successful exit.
 func sessionExitCode(session *ProcessSession) *int {
@@ -432,11 +441,7 @@ func (t *ExecTool) runBackground(
 		go func() {
 			defer recoverGoroutine("PTY cmd.Wait", func() { session.finish(-1) })
 			cmd.Wait() // Wait for process to exit
-			exitCode := -1
-			if cmd.ProcessState != nil {
-				exitCode = cmd.ProcessState.ExitCode()
-			}
-			session.finish(exitCode)
+			session.finish(processExitCode(cmd.ProcessState))
 		}()
 
 		go func() {
@@ -483,11 +488,7 @@ func (t *ExecTool) runBackground(
 			}
 			cmd.Wait()
 
-			exitCode := -1
-			if cmd.ProcessState != nil {
-				exitCode = cmd.ProcessState.ExitCode()
-			}
-			session.finish(exitCode)
+			session.finish(processExitCode(cmd.ProcessState))
 		}()
 	}
 
