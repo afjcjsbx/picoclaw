@@ -49,7 +49,8 @@ The classifier also:
 - parses a literal `sh -c '...'` / `bash -c '...'` script recursively, and rejects an opaque shell that reads commands from stdin or a script file;
 - parses a literal `trap '...'` action recursively, and rejects an `xargs` invocation that launches a shell;
 - inspects common wrappers (`env`, `command`, `nohup`, `time`, `nice`, `timeout`, `xargs`, `watch`) and classifies the command they launch;
-- treats `env -S` as critical, because it splits a string into a command.
+- treats `env -S` as critical, because it splits a string into a command;
+- classifies process-detaching and namespace commands (`setsid`, `daemon`, `daemonize`, `disown`, `unshare`, `nsenter`, `bwrap`) as `high`. This is an approval signal, not a containment boundary: the exec tool's process scope is responsible for killing detached descendants.
 
 Argument modifiers are applied after flag normalization (`rm -rf`, `rm -fr` and `rm -r -f` are equivalent; `-XPOST` and `--request=POST` match their spaced flag+value forms). Built-in examples include `rm -r` → `high`, `rm -rf` → `critical`, `git push` → `high`, `git push --force` → `critical`, `curl -X POST` → `high`, and `find -delete` → `high`.
 

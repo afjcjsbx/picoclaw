@@ -129,6 +129,7 @@ var commandRiskTable = map[string]RiskLevel{
 	"systemd-run": RiskHigh, "at": RiskHigh, "batch": RiskHigh, "tmux": RiskHigh,
 	"screen": RiskHigh, "start-stop-daemon": RiskHigh, "nsenter": RiskHigh,
 	"unshare": RiskHigh, "bwrap": RiskHigh, "firejail": RiskHigh, "proot": RiskHigh,
+	"setsid": RiskHigh, "daemon": RiskHigh, "daemonize": RiskHigh, "disown": RiskHigh,
 	"cryptsetup": RiskHigh, "zpool": RiskHigh, "zfs": RiskHigh, "mdadm": RiskHigh,
 
 	// Critical: privilege escalation, always dangerous.

@@ -68,7 +68,7 @@ func TestGuardCheck(t *testing.T) {
 		{name: "timeout risky command blocked", command: "timeout 5 rm -rf /", blocked: true},
 		{name: "time output flag keeps command", command: "/usr/bin/time -o /tmp/timing rm -rf /", blocked: true},
 		{name: "setsid risky command blocked", command: "setsid rm -rf /", blocked: true},
-		{name: "setsid safe command allowed", command: "setsid echo ok"},
+		{name: "setsid detached command blocked", command: "setsid echo ok", blocked: true},
 		{name: "command lookup allowed", command: "command -v rm"},
 		{name: "command combined lookup allowed", command: "command -pv rm"},
 		{name: "command execution blocked", command: "command rm -rf /", blocked: true},

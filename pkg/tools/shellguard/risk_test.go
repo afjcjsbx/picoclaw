@@ -70,6 +70,11 @@ func TestClassifyCommand(t *testing.T) {
 		{name: "find exec", args: []string{"find", ".", "-exec", "rm", "{}", ";"}, want: RiskHigh},
 		{name: "kill term", args: []string{"kill", "1234"}, want: RiskHigh},
 		{name: "kill sigkill", args: []string{"kill", "-9", "1234"}, want: RiskCritical},
+		{name: "setsid detaches", args: []string{"setsid", "sleep", "300"}, want: RiskHigh},
+		{name: "daemon detaches", args: []string{"daemon", "--", "sleep", "300"}, want: RiskHigh},
+		{name: "unshare namespace", args: []string{"unshare", "-p", "sleep", "300"}, want: RiskHigh},
+		{name: "nsenter namespace", args: []string{"nsenter", "-t", "1", "sh"}, want: RiskHigh},
+		{name: "bwrap namespace", args: []string{"bwrap", "--unshare-pid", "--", "sh"}, want: RiskHigh},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
