@@ -104,14 +104,46 @@ func (al *AgentLoop) publishFinalResponse(
 	)
 }
 
+// DeliverResponse is PublishResponseIfNeeded for callers that must know the
+// reply never reached the bus (a cron run must not report "ok" then).
+func (al *AgentLoop) DeliverResponse(ctx context.Context, channel, chatID, sessionKey, response string) error {
+	_, err := al.deliverResponse(
+		ctx, channel, chatID, sessionKey, response,
+		al.latestAssistantUsage(ctx, sessionKey, response), publishResponseOptions{},
+	)
+	return err
+}
+
 func (al *AgentLoop) publishResponseIfNeeded(
 	ctx context.Context,
 	channel, chatID, sessionKey, response string,
 	usage *bus.TokenUsage,
 	opts publishResponseOptions,
 ) bool {
+	published, err := al.deliverResponse(ctx, channel, chatID, sessionKey, response, usage, opts)
+	if err != nil {
+		// A reply that never reached the bus used to vanish without a trace.
+		// Log it so silent turns stay diagnosable.
+		logger.WarnCF("agent", "Failed to publish outbound response", map[string]any{
+			"channel":     channel,
+			"chat_id":     chatID,
+			"content_len": len(response),
+			"error":       err.Error(),
+		})
+	}
+	return published
+}
+
+// deliverResponse reports whether response was handed to the bus; a nil error
+// with false means it was intentionally suppressed.
+func (al *AgentLoop) deliverResponse(
+	ctx context.Context,
+	channel, chatID, sessionKey, response string,
+	usage *bus.TokenUsage,
+	opts publishResponseOptions,
+) (bool, error) {
 	if response == "" {
-		return false
+		return false, nil
 	}
 
 	alreadySentToSameChat := false
@@ -142,7 +174,7 @@ func (al *AgentLoop) publishResponseIfNeeded(
 			"Skipped outbound (message tool already sent to same chat)",
 			map[string]any{"channel": channel, "chat_id": chatID},
 		)
-		return false
+		return false, nil
 	}
 
 	msg := bus.OutboundMessage{
@@ -168,15 +200,7 @@ func (al *AgentLoop) publishResponseIfNeeded(
 	defer pubCancel()
 
 	if err := al.bus.PublishOutbound(pubCtx, msg); err != nil {
-		// A reply that never reached the bus used to vanish without a trace.
-		// Log it so silent turns stay diagnosable.
-		logger.WarnCF("agent", "Failed to publish outbound response", map[string]any{
-			"channel":     channel,
-			"chat_id":     chatID,
-			"content_len": len(response),
-			"error":       err.Error(),
-		})
-		return false
+		return false, err
 	}
 	logger.InfoCF("agent", "Published outbound response",
 		map[string]any{
@@ -184,7 +208,7 @@ func (al *AgentLoop) publishResponseIfNeeded(
 			"chat_id":     chatID,
 			"content_len": len(response),
 		})
-	return true
+	return true, nil
 }
 
 // latestAssistantUsage returns the usage attached to the persisted assistant

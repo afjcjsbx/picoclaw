@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -13,16 +14,16 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/constants"
 	"github.com/sipeed/picoclaw/pkg/cron"
-	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
 // JobExecutor is the interface for executing cron jobs through the agent
 type JobExecutor interface {
 	ProcessDirectWithChannel(ctx context.Context, content, sessionKey, channel, chatID string) (string, error)
-	// PublishResponseIfNeeded sends response to the outbound bus only when the
-	// agent did not already deliver content through the message tool in this round.
-	PublishResponseIfNeeded(ctx context.Context, channel, chatID, sessionKey, response string)
+	// DeliverResponse sends response to the outbound bus only when the agent
+	// did not already deliver content through the message tool in this round.
+	// It returns the bus error when the reply could not be handed off.
+	DeliverResponse(ctx context.Context, channel, chatID, sessionKey, response string) error
 }
 
 // CronTool provides scheduling capabilities for the agent
@@ -745,8 +746,10 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) (string, e
 	if job.Payload.Command != "" {
 		if !t.execEnabled || t.execTool == nil {
 			output := "Error executing scheduled command: command execution is disabled"
-			t.publishJobOutput(channel, chatID, output)
-			return output, fmt.Errorf("scheduled command not executed: command execution is disabled")
+			return output, errors.Join(
+				fmt.Errorf("scheduled command not executed: command execution is disabled"),
+				t.publishJobOutput(channel, chatID, output),
+			)
 		}
 
 		args := map[string]any{
@@ -761,12 +764,16 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) (string, e
 		// structured [exec] header and must not be published to the chat.
 		if result.IsError {
 			output := fmt.Sprintf("Error executing scheduled command: %s", result.ForUser)
-			t.publishJobOutput(channel, chatID, output)
-			return output, fmt.Errorf("scheduled command failed: %s", result.ForUser)
+			return output, errors.Join(
+				fmt.Errorf("scheduled command failed: %s", result.ForUser),
+				t.publishJobOutput(channel, chatID, output),
+			)
 		}
 
 		output := fmt.Sprintf("Scheduled command '%s' executed:\n%s", job.Payload.Command, result.ForUser)
-		t.publishJobOutput(channel, chatID, output)
+		if err := t.publishJobOutput(channel, chatID, output); err != nil {
+			return "", fmt.Errorf("cron job %s: %w", job.ID, err)
+		}
 		return "ok", nil
 	}
 
@@ -784,8 +791,8 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) (string, e
 		return "", fmt.Errorf("cron job %s: %w", job.ID, err)
 	}
 
-	if response != "" {
-		t.executor.PublishResponseIfNeeded(ctx, channel, chatID, sessionKey, response)
+	if err := t.executor.DeliverResponse(ctx, channel, chatID, sessionKey, response); err != nil {
+		return "", fmt.Errorf("cron job %s: deliver response to %s:%s: %w", job.ID, channel, chatID, err)
 	}
 	return "ok", nil
 }
@@ -793,22 +800,20 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) (string, e
 // cronOutputPublishTimeout bounds a single job-output publish.
 const cronOutputPublishTimeout = 5 * time.Second
 
-// publishJobOutput reports a command job result to the job's channel.
+// publishJobOutput reports a command job result to the job's channel and
+// returns the bus error, so a result nobody received is not recorded as "ok".
 //
 // The publish deliberately does not inherit the run's context: a job that
 // failed or was canceled still has to report its outcome, so it gets its own
 // budget instead of a context that may already be done.
-func (t *CronTool) publishJobOutput(channel, chatID, content string) {
+func (t *CronTool) publishJobOutput(channel, chatID, content string) error {
 	pubCtx, pubCancel := context.WithTimeout(context.Background(), cronOutputPublishTimeout)
 	defer pubCancel()
 	if err := t.msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
 		Context: bus.NewOutboundContext(channel, chatID, ""),
 		Content: content,
 	}); err != nil {
-		logger.WarnCF("cron", "Failed to publish job output", map[string]any{
-			"channel": channel,
-			"chat_id": chatID,
-			"error":   err.Error(),
-		})
+		return fmt.Errorf("deliver job output to %s:%s: %w", channel, chatID, err)
 	}
+	return nil
 }

@@ -7927,3 +7927,18 @@ func TestAgentLoop_Run_ReleasesMediaScopeAfterTurn(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+func TestDeliverResponse_ReportsClosedBus(t *testing.T) {
+	al, _, msgBus, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+
+	msgBus.Close()
+
+	ctx := context.Background()
+	if err := al.DeliverResponse(ctx, "pico", "pico:session-1", "session-1", "final reply"); err == nil {
+		t.Fatal("DeliverResponse() error = nil, want bus error")
+	}
+	if err := al.DeliverResponse(ctx, "pico", "pico:session-1", "session-1", ""); err != nil {
+		t.Fatalf("DeliverResponse(empty) error = %v, want nil", err)
+	}
+}
