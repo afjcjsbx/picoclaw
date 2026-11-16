@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -23,4 +24,23 @@ func TestRecoverGoroutine(t *testing.T) {
 		defer recoverGoroutine("test", func() { ran = true })
 	}()
 	require.False(t, ran)
+}
+
+func TestReadObservedCwd(t *testing.T) {
+	path, err := newCwdProbeFile()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.Remove(path) })
+
+	require.NoError(t, os.WriteFile(path, []byte("/workspace/sub\n"), 0o600))
+	require.Equal(t, "/workspace/sub", readObservedCwd(path))
+
+	require.NoError(t, os.Remove(path))
+	require.Empty(t, readObservedCwd(path))
+}
+
+func TestWrapCommandForCwdSkipsLineContinuation(t *testing.T) {
+	command := "echo hi \\"
+	wrapped, ok := wrapCommandForCwd(command, "/tmp/probe")
+	require.False(t, ok)
+	require.Equal(t, command, wrapped)
 }

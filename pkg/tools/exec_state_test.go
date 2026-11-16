@@ -89,27 +89,28 @@ func TestExecTool_StateFallsBackWhenRememberedCwdDisappears(t *testing.T) {
 	require.Contains(t, result.ForLLM, filepath.Base(workspace))
 }
 
-func TestExecTool_StateDoesNotCaptureCwdInsideCommand(t *testing.T) {
-	workspace := t.TempDir()
-	target := filepath.Join(workspace, "state-cwd-inside")
-	require.NoError(t, os.MkdirAll(target, 0o755))
+func TestExecTool_StateCapturesCwdInsideCommand(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("cwd observation is implemented by the POSIX shell wrapper")
+	}
 
-	tool, err := newTestExecTool(workspace, false)
+	workspace := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, "state-cwd-inside"), 0o755))
+
+	tool, err := newTestExecTool(workspace, true)
 	require.NoError(t, err)
 	ctx := execStateContext("agent-a", "session-1")
 
-	changeDir := "cd state-cwd-inside"
-	if runtime.GOOS == "windows" {
-		changeDir = "Set-Location state-cwd-inside"
-	}
-	require.False(t, tool.Execute(ctx, map[string]any{
-		"action": "run", "command": changeDir,
-	}).IsError)
+	first := tool.Execute(ctx, map[string]any{
+		"action": "run", "command": "cd state-cwd-inside",
+	})
+	require.False(t, first.IsError, first.ForLLM)
+	require.Contains(t, first.ForLLM, "state-cwd-inside")
 
 	result := tool.Execute(ctx, map[string]any{"action": "run", "command": "pwd"})
 	require.False(t, result.IsError, result.ForLLM)
-	require.NotContains(t, result.ForLLM, "state-cwd-inside")
-	require.Contains(t, result.ForLLM, filepath.Base(workspace))
+	require.Contains(t, result.ForLLM, "state-cwd-inside")
+	require.Contains(t, result.ForLLM, `"cwd":`)
 }
 
 func TestExecTool_StateRequiresSessionContext(t *testing.T) {

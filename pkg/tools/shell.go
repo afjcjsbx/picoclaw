@@ -866,7 +866,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 	}
 
 	if cwdProvided && t.restrictToWorkspace && t.workingDir != "" {
-		resolvedWD, err := fstools.ValidatePathWithAllowPaths(cwd, t.workingDir, true, t.allowedPathPatterns)
+		resolvedWD, err := t.validateCwd(cwd)
 		if err != nil {
 			return ErrorResult("Command blocked by safety guard (" + err.Error() + ")")
 		}
@@ -939,6 +939,56 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 	return t.runSync(ctx, command, cwd, timeout)
 }
 
+// resolvedWorkspace returns the workspace with symlinks resolved, so paths
+// produced by `pwd -P` compare correctly on systems where the workspace itself
+// lives behind a symlink (for example /var -> /private/var on macOS).
+func (t *ExecTool) resolvedWorkspace() string {
+	workspace := t.workingDir
+	if abs, err := filepath.Abs(workspace); err == nil {
+		workspace = abs
+	}
+	if resolved, err := filepath.EvalSymlinks(workspace); err == nil {
+		workspace = resolved
+	}
+	return workspace
+}
+
+// validateCwd applies the workspace and allow-path policy to a cwd. It tries
+// the symlink-resolved form first so a workspace behind /var -> /private/var
+// and a path reported by `pwd -P` compare correctly; the original pair is the
+// fallback for operator allow patterns that name the unresolved path.
+func (t *ExecTool) validateCwd(cwd string) (string, error) {
+	if !t.restrictToWorkspace || t.workingDir == "" {
+		return cwd, nil
+	}
+	candidate := cwd
+	if resolved, err := filepath.EvalSymlinks(candidate); err == nil {
+		candidate = resolved
+	}
+	if validated, err := fstools.ValidatePathWithAllowPaths(
+		candidate, t.resolvedWorkspace(), true, t.allowedPathPatterns,
+	); err == nil {
+		return validated, nil
+	}
+	return fstools.ValidatePathWithAllowPaths(cwd, t.workingDir, true, t.allowedPathPatterns)
+}
+
+// acceptObservedCwd reports whether the cwd observed after a command is a real
+// directory that the workspace policy allows. The observed path is used for
+// the result header even when it is rejected, but only accepted paths are
+// remembered for the next call.
+func (t *ExecTool) acceptObservedCwd(cwd string) bool {
+	if cwd == "" || !filepath.IsAbs(cwd) {
+		return false
+	}
+	info, err := os.Stat(cwd)
+	if err != nil || !info.IsDir() {
+		return false
+	}
+	_, err = t.validateCwd(cwd)
+	return err == nil
+}
+
 // rememberedCwd revalidates a cwd stored for the conversation. It returns
 // ok=false and forgets the value when the directory disappeared or no longer
 // satisfies the workspace policy, so the caller can fall back to the default.
@@ -948,7 +998,7 @@ func (t *ExecTool) rememberedCwd(ctx context.Context, cwd string) (string, bool)
 	}
 	resolved := cwd
 	if t.restrictToWorkspace && t.workingDir != "" {
-		validated, err := fstools.ValidatePathWithAllowPaths(cwd, t.workingDir, true, t.allowedPathPatterns)
+		validated, err := t.validateCwd(cwd)
 		if err != nil {
 			t.forgetRememberedCwd(ctx, cwd, err)
 			return "", false

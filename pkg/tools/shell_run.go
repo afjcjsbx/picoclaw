@@ -51,6 +51,62 @@ func shellCommand(command string) (string, []string, error) {
 	return shellPath, []string{"-c", command}, nil
 }
 
+// cwdProbeFile receives the final working directory from a wrapped foreground
+// command. A temp file keeps the probe out of stdout, so output truncation,
+// exit-status parsing and artifact tests see exactly the command's output.
+func newCwdProbeFile() (string, error) {
+	file, err := os.CreateTemp("", "picoclaw-cwd-*.txt")
+	if err != nil {
+		return "", err
+	}
+	path := file.Name()
+	if err := file.Close(); err != nil {
+		_ = os.Remove(path)
+		return "", err
+	}
+	return path, nil
+}
+
+// shellQuote single-quotes a path for the POSIX shell.
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
+}
+
+// wrapCommandForCwd appends a probe that writes `pwd -P` after the command and
+// preserves its exit status. The wrapper runs in the same shell, so `cd` inside
+// the command is observed. Commands that cannot safely take a suffix (Windows
+// PowerShell and a trailing backslash continuation) are left unchanged.
+func wrapCommandForCwd(command, probePath string) (string, bool) {
+	if runtime.GOOS == "windows" || probePath == "" {
+		return command, false
+	}
+	if strings.HasSuffix(strings.TrimRight(command, " \t\r\n"), "\\") {
+		return command, false
+	}
+	wrapped := command + "\n__picoclaw_exec_status=$?\n" +
+		"command pwd -P > " + shellQuote(probePath) + " 2>/dev/null\n" +
+		"exit $__picoclaw_exec_status"
+	return wrapped, true
+}
+
+// readObservedCwd reads the probe file written by the wrapper. A missing or
+// empty file means the command exited through exec/exit or was killed before
+// the probe ran; the previous remembered cwd then stays in place.
+func readObservedCwd(probePath string) string {
+	if probePath == "" {
+		return ""
+	}
+	data, err := os.ReadFile(probePath)
+	if err != nil {
+		return ""
+	}
+	cwd := strings.TrimSpace(string(data))
+	if cwd == "" || len(cwd) > 4096 {
+		return ""
+	}
+	return cwd
+}
+
 // prepareExecCommand applies the settings shared by foreground, background and
 // PTY executions.
 func (t *ExecTool) prepareExecCommand(cmd *exec.Cmd, cwd string, env []string) {
@@ -77,7 +133,13 @@ func (t *ExecTool) runSync(
 	}
 	defer cancel()
 
-	shellPath, shellArgs, shellErr := shellCommand(command)
+	probePath, probeErr := newCwdProbeFile()
+	if probeErr != nil {
+		probePath = ""
+	}
+	defer func() { _ = os.Remove(probePath) }()
+	shellCommandText, observeCwd := wrapCommandForCwd(command, probePath)
+	shellPath, shellArgs, shellErr := shellCommand(shellCommandText)
 	if shellErr != nil {
 		return ErrorResult(shellErr.Error())
 	}
@@ -176,6 +238,11 @@ func (t *ExecTool) runSync(
 	spillCapped := collector.SpillCapped()
 	_ = collector.Close()
 
+	observedCwd := ""
+	if observeCwd {
+		observedCwd = readObservedCwd(probePath)
+	}
+
 	// Keep the raw stdout/stderr intact for the model and put the structured
 	// status in a one-line header instead. Wrapping the output in JSON would
 	// escape every newline, tab and quote, which makes diffs, logs and source
@@ -236,12 +303,17 @@ func (t *ExecTool) runSync(
 		forUser = "(no output)"
 	}
 
+	if observedCwd != "" && t.acceptObservedCwd(observedCwd) {
+		t.rememberCwd(ctx, observedCwd)
+	}
+
 	meta := execRunMeta{
 		ExitCode:   exitCode,
 		TimedOut:   timedOut,
 		Truncated:  truncated,
 		DurationMs: time.Since(start).Milliseconds(),
 		Error:      errorMessage,
+		Cwd:        observedCwd,
 	}
 	forLLM := formatExecRunMeta(meta) + "\n" + output
 	if timedOut {
@@ -262,6 +334,7 @@ type execRunMeta struct {
 	Truncated  bool   `json:"truncated"`
 	DurationMs int64  `json:"durationMs"`
 	Error      string `json:"error,omitempty"`
+	Cwd        string `json:"cwd,omitempty"`
 }
 
 const execRunMetaPrefix = "[exec] "
