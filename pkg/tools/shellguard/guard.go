@@ -10,6 +10,14 @@ import (
 // maxShellNesting bounds recursive analysis of sh -c scripts and wrapper
 // commands. Real commands nest one or two levels; the limit prevents hostile
 // input from turning the guard into an unbounded parser recursion.
+//
+// Depth N is the deepest level analyzed, and two comparisons enforce that on
+// purpose. A function entered at some depth (assessScript, checkWorkspaceText,
+// checkSimple, canonicalCommands) rejects depth > maxShellNesting. A helper
+// about to recurse at depth+1 (assessShell, assessWrapper, assessTrap,
+// assessFindExec, appendCanonicalCall) stops at depth >= maxShellNesting. Both
+// refuse the same hop from N to N+1, so switching either side to the other
+// operator moves the limit by one level on that path only.
 const maxShellNesting = 8
 
 // Guard classifies commands against a configured risk threshold.
@@ -101,7 +109,23 @@ func (g *Guard) Assess(command string) Assessment {
 	if g == nil {
 		return Assessment{}
 	}
-	return g.assessScript(command, 0)
+	file, err := Parse(command)
+	if err != nil {
+		return parseAssessment(command)
+	}
+	return g.AssessFile(command, file)
+}
+
+// AssessFile is Assess for an already parsed command; a nil file is treated as
+// a parse failure.
+func (g *Guard) AssessFile(command string, file *syntax.File) Assessment {
+	if g == nil {
+		return Assessment{}
+	}
+	if file == nil {
+		return parseAssessment(command)
+	}
+	return g.assessFile(file, 0)
 }
 
 // Check parses command and returns a BlockedError when any simple command in it
@@ -113,11 +137,27 @@ func (g *Guard) Check(command string) *BlockedError {
 	return g.checkAssessment(g.Assess(command))
 }
 
+// CheckFile classifies an already parsed command. It is the shared-parse entry
+// point used by the exec guard; a nil file is treated as a parse failure.
+func (g *Guard) CheckFile(command string, file *syntax.File) *BlockedError {
+	if g == nil {
+		return nil
+	}
+	return g.checkAssessment(g.AssessFile(command, file))
+}
+
 func (g *Guard) checkAssessment(assessment Assessment) *BlockedError {
 	if !assessment.Unknown && IsAllowed(assessment.Level, g.threshold) {
 		return nil
 	}
 	return assessment.BlockedError(g.threshold)
+}
+
+func parseAssessment(command string) Assessment {
+	return unknownAssessment(
+		[]string{summarize(command)},
+		"command could not be parsed for risk classification",
+	)
 }
 
 // WithThreshold returns a shallow copy of the guard using a different maximum
@@ -139,15 +179,14 @@ func (g *Guard) assessScript(command string, depth int) Assessment {
 		)
 	}
 
-	parser := syntax.NewParser(syntax.Variant(syntax.LangBash))
-	file, err := parser.Parse(strings.NewReader(command), "")
+	file, err := Parse(command)
 	if err != nil {
-		return unknownAssessment(
-			[]string{summarize(command)},
-			"command could not be parsed for risk classification",
-		)
+		return parseAssessment(command)
 	}
+	return g.assessFile(file, depth)
+}
 
+func (g *Guard) assessFile(file *syntax.File, depth int) Assessment {
 	var result Assessment
 	syntax.Walk(file, func(node syntax.Node) bool {
 		if node == nil {
@@ -184,7 +223,7 @@ func (g *Guard) assessArgv(words []word, depth int) Assessment {
 	}
 
 	first := words[0]
-	if !first.literal || first.text == "" {
+	if first.dynamic || first.text == "" {
 		return unknownAssessment(
 			[]string{"<dynamic>"}, "dynamic command name cannot be classified",
 		)
@@ -203,6 +242,13 @@ func (g *Guard) assessArgv(words []word, depth int) Assessment {
 	if name == "find" {
 		return preferAssessment(g.classify(words), g.assessFindExec(words[1:], depth))
 	}
+	if name == "exec" {
+		result := g.classify(words)
+		if nested, ok := execCommand(words[1:]); ok {
+			result = preferAssessment(result, g.assessArgv(nested, depth+1))
+		}
+		return result
+	}
 	return g.classify(words)
 }
 
@@ -216,6 +262,16 @@ func (g *Guard) assessFindExec(words []word, depth int) Assessment {
 		)
 	}
 	var result Assessment
+	for _, nested := range findExecCommands(words) {
+		result = preferAssessment(result, g.assessArgv(nested, depth+1))
+	}
+	return result
+}
+
+// findExecCommands returns the argument vectors launched by find -exec,
+// -execdir, -ok and -okdir.
+func findExecCommands(words []word) [][]word {
+	var commands [][]word
 	for i := 0; i < len(words); i++ {
 		switch words[i].text {
 		case "-exec", "-execdir", "-ok", "-okdir":
@@ -224,12 +280,66 @@ func (g *Guard) assessFindExec(words []word, depth int) Assessment {
 				end++
 			}
 			if end > i+1 {
-				result = preferAssessment(result, g.assessArgv(words[i+1:end], depth+1))
+				commands = append(commands, words[i+1:end])
 			}
 			i = end
 		}
 	}
-	return result
+	return commands
+}
+
+// trapAction extracts the literal action from a trap argument vector. found is
+// false for listing and reset forms; dynamic reports that the action or an
+// option could not be resolved.
+func trapAction(args []word) (action word, found, dynamic bool) {
+	for _, w := range args {
+		if w.dynamic {
+			return word{}, false, true
+		}
+		switch w.text {
+		case "-l", "-p":
+			return word{}, false, false
+		case "--":
+			continue
+		case "", "-":
+			return word{}, false, false
+		}
+		if strings.HasPrefix(w.text, "-") {
+			continue
+		}
+		return w, true, false
+	}
+	return word{}, false, false
+}
+
+// execCommand returns the argv that exec replaces the shell with, skipping its
+// own options.
+func execCommand(args []word) ([]word, bool) {
+	i := 0
+	for i < len(args) {
+		text := args[i].text
+		switch {
+		case text == "--":
+			i++
+		case text == "-a":
+			i += 2
+			continue
+		case strings.HasPrefix(text, "-a") && len(text) > 2:
+			i++
+			continue
+		case text == "-c" || text == "-l":
+			i++
+			continue
+		case strings.HasPrefix(text, "-") && text != "-":
+			i++
+			continue
+		}
+		break
+	}
+	if i >= len(args) {
+		return nil, false
+	}
+	return args[i:], true
 }
 
 func (g *Guard) classify(words []word) Assessment {
@@ -247,19 +357,19 @@ func (g *Guard) assessShell(name string, words []word, depth int) Assessment {
 		)
 	}
 
-	script, ok := shellScriptArg(words[1:])
-	if !ok {
+	invocation := parseShellInvocation(words[1:])
+	if !invocation.hasScript {
 		return unknownAssessment(
 			wordTexts(words),
 			"shell reads commands from stdin or a script file that cannot be inspected",
 		)
 	}
-	if !script.literal {
+	if invocation.script.dynamic {
 		return unknownAssessment(
 			wordTexts(words), "shell script argument is dynamic",
 		)
 	}
-	return g.assessScript(script.text, depth+1)
+	return g.assessScript(invocation.script.text, depth+1)
 }
 
 func (g *Guard) assessTrap(words []word, depth int) Assessment {
@@ -269,28 +379,16 @@ func (g *Guard) assessTrap(words []word, depth int) Assessment {
 		)
 	}
 
-	var result Assessment
-	for i := 1; i < len(words); i++ {
-		w := words[i]
-		if !w.literal {
-			return unknownAssessment(
-				wordTexts(words), "trap action is dynamic",
-			)
-		}
-		switch w.text {
-		case "-l", "-p":
-			return result
-		case "--":
-			continue
-		case "", "-":
-			return result
-		}
-		if strings.HasPrefix(w.text, "-") {
-			continue
-		}
-		return g.assessScript(w.text, depth+1)
+	action, found, dynamic := trapAction(words[1:])
+	if dynamic {
+		return unknownAssessment(
+			wordTexts(words), "trap action is dynamic",
+		)
 	}
-	return result
+	if !found {
+		return Assessment{}
+	}
+	return g.assessScript(action.text, depth+1)
 }
 
 func (g *Guard) assessWrapper(name string, words []word, spec wrapperSpec, depth int) Assessment {
@@ -322,7 +420,7 @@ func (g *Guard) assessWrapper(name string, words []word, spec wrapperSpec, depth
 	}
 
 	nestedName := ""
-	if nested[0].literal {
+	if !nested[0].dynamic {
 		nestedName = baseCommand(nested[0].text)
 	}
 	if nestedName == "" {
@@ -374,17 +472,32 @@ func preferAssessment(current, candidate Assessment) Assessment {
 	}
 }
 
-// word is a shell word reduced to its literal parts. literal is false when the
+// word is a shell word reduced to its literal parts. dynamic reports that the
 // word contains an expansion, substitution or glob, which the static guard
-// cannot resolve.
+// cannot resolve. homePath marks a word that starts with a tilde or $HOME.
 type word struct {
-	text    string
-	literal bool
+	text     string
+	dynamic  bool
+	homePath bool
 }
 
 func literalWord(w *syntax.Word) word {
+	// A single plain or single-quoted part is already the final argv word.
+	// expand.Literal would produce the same text through a full expansion
+	// config, so the direct path avoids those allocations for the common case.
+	if len(w.Parts) == 1 {
+		switch p := w.Parts[0].(type) {
+		case *syntax.Lit:
+			return word{text: p.Value}
+		case *syntax.SglQuoted:
+			if !p.Dollar {
+				return word{text: p.Value}
+			}
+		}
+	}
+
 	var b strings.Builder
-	literal := true
+	dynamic := false
 
 	var addParts func([]syntax.WordPart)
 	addParts = func(parts []syntax.WordPart) {
@@ -398,17 +511,17 @@ func literalWord(w *syntax.Word) word {
 				// such as \x72 undecoded, so treating it as literal would let
 				// $'\x72m' -rf / masquerade as an unknown command.
 				if p.Dollar {
-					literal = false
+					dynamic = true
 				}
 			case *syntax.DblQuoted:
 				addParts(p.Parts)
 			default:
-				literal = false
+				dynamic = true
 			}
 		}
 	}
 	addParts(w.Parts)
-	return word{text: b.String(), literal: literal}
+	return word{text: b.String(), dynamic: dynamic}
 }
 
 func wordTexts(words []word) []string {
@@ -443,64 +556,80 @@ var shellValueFlags = map[string]bool{
 	"-o": true, "-O": true, "--rcfile": true, "--init-file": true,
 }
 
-// shellScriptArg extracts the literal -c script from a shell invocation. It
-// returns ok=false when the shell would read commands from stdin or a script
-// file, because those commands cannot be inspected statically.
-func shellScriptArg(words []word) (word, bool) {
+// shellInvocation is the statically known script source of a shell invocation.
+// hasScript reports a literal -c/--command argument. readsStdin reports that
+// the shell would execute stdin, so a heredoc on the command is a script.
+// opaque reports a script file or an unresolved argument that cannot be
+// inspected statically.
+type shellInvocation struct {
+	script     word
+	hasScript  bool
+	readsStdin bool
+	opaque     bool
+}
+
+// parseShellInvocation extracts the -c script or stdin mode from a shell
+// argument vector. The guards share it so risk classification, workspace
+// validation and canonical deny forms agree on shell flags.
+func parseShellInvocation(words []word) shellInvocation {
+	invocation := shellInvocation{readsStdin: true}
 	for i := 0; i < len(words); i++ {
 		w := words[i]
-		if !w.literal {
-			return word{}, false
+		if w.dynamic {
+			return shellInvocation{opaque: true}
 		}
 		text := w.text
 		switch {
 		case text == "--":
-			return word{}, false
+			if i+1 < len(words) {
+				return shellInvocation{opaque: true}
+			}
+			return invocation
+		case text == "-":
+			return invocation
 		case text == "--command":
 			if i+1 < len(words) {
-				return words[i+1], true
+				return shellInvocation{script: words[i+1], hasScript: true}
 			}
-			return word{}, false
+			return shellInvocation{opaque: true}
 		case strings.HasPrefix(text, "--command="):
-			return word{text: strings.TrimPrefix(text, "--command="), literal: w.literal}, true
+			return shellInvocation{
+				script:    word{text: strings.TrimPrefix(text, "--command="), dynamic: w.dynamic},
+				hasScript: true,
+			}
 		case shellValueFlags[text]:
 			i++
 		case text == "-c":
 			if i+1 < len(words) {
-				return words[i+1], true
+				return shellInvocation{script: words[i+1], hasScript: true}
 			}
-			return word{}, false
+			return shellInvocation{opaque: true}
 		case strings.HasPrefix(text, "-") && !strings.HasPrefix(text, "--"):
-			if strings.Contains(text[1:], "c") {
+			flags := text[1:]
+			if strings.Contains(flags, "c") {
 				if i+1 < len(words) {
-					return words[i+1], true
+					return shellInvocation{script: words[i+1], hasScript: true}
 				}
-				return word{}, false
+				return shellInvocation{opaque: true}
 			}
-			if strings.ContainsAny(text[1:], "si") {
-				return word{}, false
+			if strings.Contains(flags, "s") {
+				return invocation
 			}
 		case !strings.HasPrefix(text, "-"):
-			return word{}, false
+			return shellInvocation{opaque: true}
 		}
 	}
-	return word{}, false
+	return invocation
 }
 
 type wrapperSpec struct {
 	valueFlags     map[string]bool
 	skipPositional int
-	envAssignments bool
+	envArgs        bool
 }
 
 var wrapperSpecs = map[string]wrapperSpec{
-	"env": {
-		valueFlags: map[string]bool{
-			"-u": true, "-C": true, "-S": true,
-			"--unset": true, "--chdir": true, "--split-string": true,
-		},
-		envAssignments: true,
-	},
+	"env":     {envArgs: true},
 	"command": {},
 	"builtin": {},
 	"nohup":   {},
@@ -555,14 +684,15 @@ var wrapperSpecs = map[string]wrapperSpec{
 }
 
 func wrapperNested(words []word, spec wrapperSpec) ([]word, bool, bool) {
-	positional := spec.skipPositional
+	if spec.envArgs {
+		opts := parseEnvArgs(words)
+		return opts.command, len(opts.command) > 0, opts.dynamic
+	}
 
+	positional := spec.skipPositional
 	for i := 0; i < len(words); i++ {
 		w := words[i]
-		if spec.envAssignments && isAssignment(w.text) {
-			continue
-		}
-		if !w.literal {
+		if w.dynamic {
 			return nil, false, true
 		}
 
@@ -623,7 +753,7 @@ func isAssignment(s string) bool {
 // command(1).
 func hasCommandLookupFlag(words []word) bool {
 	for _, w := range words {
-		if !w.literal {
+		if w.dynamic {
 			return false
 		}
 		text := w.text
@@ -637,52 +767,167 @@ func hasCommandLookupFlag(words []word) bool {
 	return false
 }
 
-// hasEnvSplitString reports whether an env invocation uses -S/--split-string.
-// The attached form (-S"cmd") does not match the exact -S argument modifier,
-// so it is checked here before the argv reaches the classifier.
-//
-// Options are scanned in order because -u and -C consume the following word.
-// Without that, env -u NAME -S "cmd" hid the split string behind NAME.
-func hasEnvSplitString(words []word) bool {
-	for i := 0; i < len(words); i++ {
-		w := words[i]
-		if !w.literal {
-			return false
-		}
+// envArgs is the statically parsed surface of an env invocation.
+type envArgs struct {
+	command      []word
+	assignments  []word
+	chdir        word
+	hasChdir     bool
+	unset        []string
+	unsetDynamic bool
+	ignoreEnv    bool
+	splitString  bool
+	splitValue   word
+	dynamic      bool
+}
+
+// parseEnvArgs parses env options once. It knows which options consume a value,
+// so -u NAME -S "cmd" and -C DIR -S "cmd" still expose the split string.
+func parseEnvArgs(args []word) envArgs {
+	var out envArgs
+	i := 0
+	for i < len(args) {
+		w := args[i]
 		text := w.text
-		if isAssignment(text) || text == "-" {
-			// "-" is env's short form of -i; both may be followed by options.
+		if isAssignment(text) {
+			out.assignments = append(out.assignments, w)
+			i++
 			continue
 		}
-		if text == "--" {
-			return false
+		if w.dynamic {
+			out.dynamic = true
+			return out
 		}
-		if !strings.HasPrefix(text, "-") {
-			return false
-		}
-		if text == "--split-string" || strings.HasPrefix(text, "--split-string=") {
-			return true
-		}
-		if strings.HasPrefix(text, "--unset") || strings.HasPrefix(text, "--chdir") {
-			if !strings.Contains(text, "=") {
-				i++ // the value is the next word
+		switch {
+		case text == "--":
+			i++
+			goto command
+		case text == "-":
+			out.ignoreEnv = true
+			i++
+			continue
+		case !strings.HasPrefix(text, "-"):
+			goto command
+		case strings.HasPrefix(text, "--"):
+			switch {
+			case text == "--ignore-environment":
+				out.ignoreEnv = true
+			case text == "--null":
+				// no value
+			case text == "--unset":
+				if i+1 >= len(args) {
+					out.dynamic = true
+					return out
+				}
+				i++
+				if args[i].dynamic {
+					out.unsetDynamic = true
+				} else {
+					out.unset = append(out.unset, args[i].text)
+				}
+			case strings.HasPrefix(text, "--unset="):
+				out.unset = append(out.unset, strings.TrimPrefix(text, "--unset="))
+			case text == "--chdir":
+				if i+1 >= len(args) {
+					out.dynamic = true
+					return out
+				}
+				i++
+				out.chdir = args[i]
+				out.hasChdir = true
+			case strings.HasPrefix(text, "--chdir="):
+				out.chdir = word{text: strings.TrimPrefix(text, "--chdir=")}
+				out.hasChdir = true
+			case text == "--split-string":
+				out.splitString = true
+				if i+1 < len(args) {
+					out.splitValue = args[i+1]
+				}
+				return out
+			case strings.HasPrefix(text, "--split-string="):
+				out.splitString = true
+				out.splitValue = word{
+					text: strings.TrimPrefix(text, "--split-string="),
+				}
+				return out
 			}
+			i++
 			continue
 		}
-		if strings.HasPrefix(text, "--") {
-			continue
-		}
+
 		for j := 1; j < len(text); j++ {
 			switch text[j] {
-			case 'u', 'C':
-				if j == len(text)-1 {
-					i++ // the value is the next word
+			case 'i':
+				out.ignoreEnv = true
+			case '0':
+				// no value
+			case 'u':
+				value, hasValue := optionValue(text, j+1, args, i)
+				if !hasValue {
+					out.dynamic = true
+					return out
 				}
-				j = len(text) - 1 // an attached value consumes the rest
+				if !value.word.dynamic {
+					out.unset = append(out.unset, value.word.text)
+				} else {
+					out.unsetDynamic = true
+				}
+				if value.next {
+					i++
+				}
+				j = len(text) - 1
+			case 'C':
+				value, hasValue := optionValue(text, j+1, args, i)
+				if !hasValue {
+					out.dynamic = true
+					return out
+				}
+				out.chdir = value.word
+				out.hasChdir = true
+				if value.next {
+					i++
+				}
+				j = len(text) - 1
 			case 'S':
-				return true
+				out.splitString = true
+				value, hasValue := optionValue(text, j+1, args, i)
+				if hasValue {
+					out.splitValue = value.word
+				}
+				return out
 			}
 		}
+		i++
 	}
-	return false
+
+command:
+	for i < len(args) && !args[i].dynamic && isAssignment(args[i].text) {
+		out.assignments = append(out.assignments, args[i])
+		i++
+	}
+	if i < len(args) {
+		out.command = args[i:]
+	}
+	return out
+}
+
+type envOptionValue struct {
+	word word
+	next bool
+}
+
+// optionValue returns the value of a short env option. The rest of the option
+// word is an attached value; otherwise the next word is the value.
+func optionValue(text string, rest int, args []word, index int) (envOptionValue, bool) {
+	if rest < len(text) {
+		return envOptionValue{word: word{text: text[rest:]}}, true
+	}
+	if index+1 >= len(args) {
+		return envOptionValue{}, false
+	}
+	return envOptionValue{word: args[index+1], next: true}, true
+}
+
+func hasEnvSplitString(words []word) bool {
+	return parseEnvArgs(words).splitString
 }

@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"maps"
 	"sync"
 	"time"
 )
@@ -55,11 +56,28 @@ func cloneExecStateEnv(env map[string]string) map[string]string {
 	if len(env) == 0 {
 		return nil
 	}
-	cloned := make(map[string]string, len(env))
-	for key, value := range env {
-		cloned[key] = value
+	return maps.Clone(env)
+}
+
+// mergeExecEnv applies LLM-provided variables on top of a base map, dropping
+// blocked names and normalizing keys. It is the single merge rule used by the
+// per-conversation overlay and by runEnv.
+func mergeExecEnv(base, update map[string]string) map[string]string {
+	merged := cloneExecStateEnv(base)
+	if merged == nil && len(update) > 0 {
+		merged = make(map[string]string, len(update))
 	}
-	return cloned
+	for key, value := range update {
+		key = execEnvKey(key)
+		if isBlockedExecEnv(key) {
+			continue
+		}
+		merged[key] = value
+	}
+	if len(merged) == 0 {
+		return nil
+	}
+	return merged
 }
 
 // load returns a snapshot of the conversation state and marks it as recently
@@ -204,19 +222,6 @@ func mergeExecStateEnv(base, update map[string]string) (effective, next map[stri
 		return nil, nil, true
 	}
 
-	merged := cloneExecStateEnv(base)
-	if merged == nil {
-		merged = make(map[string]string, len(update))
-	}
-	for key, value := range update {
-		key = execEnvKey(key)
-		if isBlockedExecEnv(key) {
-			continue
-		}
-		merged[key] = value
-	}
-	if len(merged) == 0 {
-		merged = nil
-	}
+	merged := mergeExecEnv(base, update)
 	return cloneExecStateEnv(merged), merged, true
 }

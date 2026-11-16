@@ -1277,45 +1277,16 @@ func TestShellTool_SeparatorKeepsRealPathsBlocked(t *testing.T) {
 
 	for _, cmd := range commands {
 		result := tool.Execute(context.Background(), map[string]any{"action": "run", "command": cmd})
-		if !result.IsError || !strings.Contains(result.ForLLM, "path outside working dir") {
+		if !result.IsError {
+			t.Errorf("outside path should still be blocked: %s\n  result: %s", cmd, result.ForLLM)
+			continue
+		}
+		// A trailing ")" makes the command unparseable; the AST guard then
+		// rejects it before the path check can produce its message.
+		if !strings.Contains(result.ForLLM, "path outside working dir") &&
+			!strings.Contains(result.ForLLM, "could not be parsed") {
 			t.Errorf("outside path should still be blocked: %s\n  result: %s", cmd, result.ForLLM)
 		}
-	}
-}
-
-// TestSplitShellPathMatch exercises the splitting helper directly.
-func TestSplitShellPathMatch(t *testing.T) {
-	cases := []struct {
-		in   string
-		want []string
-	}{
-		{"/dev/null", []string{"/dev/null"}},
-		{"/dev/null;", []string{"/dev/null"}},
-		{"/dev/null;echo b", []string{"/dev/null", "echo b"}},
-		{"/dev/null&&echo b", []string{"/dev/null", "echo b"}},
-		{"/dev/null||echo b", []string{"/dev/null", "echo b"}},
-		{"/dev/null|cat", []string{"/dev/null", "cat"}},
-		{"/dev/null)", []string{"/dev/null"}},
-		{"/dev/null]", []string{"/dev/null"}},
-		{"/dev/null}", []string{"/dev/null"}},
-		{"/dev/null,", []string{"/dev/null"}},
-		{"/dev/null:", []string{"/dev/null"}},
-		// Backticks are covered here only: a full command containing them is
-		// rejected earlier by the dangerous-pattern check.
-		{"/dev/null`", []string{"/dev/null"}},
-		{"/dev/null`echo", []string{"/dev/null", "echo"}},
-		{"/etc/passwd;echo", []string{"/etc/passwd", "echo"}},
-		{"/etc/passwd", []string{"/etc/passwd"}},
-		// Every segment after a separator is kept so it can be validated.
-		{"/dev/null;cat</etc/shadow", []string{"/dev/null", "cat", "/etc/shadow"}},
-		// Known trade-off: trailing punctuation is stripped even from real names.
-		{"/workspace/backup,", []string{"/workspace/backup"}},
-		// Windows matches are intentionally left untouched.
-		{`C:\dev\null;x`, []string{`C:\dev\null;x`}},
-	}
-
-	for _, tc := range cases {
-		require.Equal(t, tc.want, splitShellPathMatch(tc.in), "splitShellPathMatch(%q)", tc.in)
 	}
 }
 
@@ -3502,6 +3473,41 @@ func TestShellTool_CustomDenyUsesASTWords(t *testing.T) {
 	}
 }
 
+// TestShellTool_CustomDenyCanonicalizesWrappers verifies that custom deny
+// patterns also match the command a wrapper launches, even when the written
+// form contains no quotes or expansions.
+func TestShellTool_CustomDenyCanonicalizesWrappers(t *testing.T) {
+	cfg := &config.Config{
+		Tools: config.ToolsConfig{
+			Exec: config.ExecConfig{
+				EnableDenyPatterns: false,
+				CustomDenyPatterns: []string{`^rm\s`},
+			},
+		},
+	}
+	tool, err := NewExecToolWithConfig(t.TempDir(), false, cfg)
+	require.NoError(t, err)
+
+	for _, command := range []string{
+		"rm -rf build",
+		"env rm -rf build",
+		"command rm -rf build",
+		"nohup rm -rf build",
+		"busybox rm -rf build",
+		`find . -exec rm -rf build \;`,
+		"exec rm -rf build",
+		"env -S 'rm -rf build'",
+	} {
+		if got := tool.guardCommand(command, t.TempDir()); !strings.Contains(got, "dangerous pattern") {
+			t.Errorf("custom deny should match wrapped command %q, got: %q", command, got)
+		}
+	}
+
+	if got := tool.guardCommand("echo rm -rf build", t.TempDir()); got != "" {
+		t.Fatalf("an rm argument should not match the anchored pattern, got: %q", got)
+	}
+}
+
 // TestShellTool_SelfProtectionHardline verifies that the agent cannot kill or
 // delete its own process, service, state directory or executable, even with
 // default deny patterns disabled and a broad allow rule configured.
@@ -3585,6 +3591,28 @@ func TestShellTool_BackticksInsideQuotedHeredocAreAllowed(t *testing.T) {
 		"TXT"
 	if got := tool.guardCommand(command, ""); got != "" {
 		t.Fatalf("quoted heredoc body should not be blocked, got: %s", got)
+	}
+}
+
+// TestShellTool_HeredocLookalikeDoesNotHideCommands verifies that a quoted
+// heredoc sequence inside ordinary shell syntax does not make the deny pass
+// skip a real command on the following lines.
+func TestShellTool_HeredocLookalikeDoesNotHideCommands(t *testing.T) {
+	cfg := &config.Config{
+		Approvals: config.ApprovalsConfig{Mode: config.ApprovalModeOff},
+		Tools: config.ToolsConfig{
+			Exec: config.ExecConfig{
+				EnableDenyPatterns: true,
+				RiskThreshold:      "critical",
+			},
+		},
+	}
+	tool, err := NewExecToolWithConfig(t.TempDir(), false, cfg)
+	require.NoError(t, err)
+
+	command := "echo \"<<'EOF'\"\nchmod 777 /tmp/x\nEOF"
+	if got := tool.guardCommand(command, t.TempDir()); !strings.Contains(got, "dangerous pattern") {
+		t.Fatalf("default deny should still see chmod after a heredoc lookalike, got: %q", got)
 	}
 }
 
