@@ -74,6 +74,23 @@ func TestShellTool_RiskNestedLaunchers(t *testing.T) {
 	}
 }
 
+func TestShellTool_ParseFailureBlocked(t *testing.T) {
+	t.Parallel()
+
+	unrestricted := riskTestTool(t, config.ExecConfig{})
+	if got := unrestricted.guardCommand("echo )", t.TempDir()); !strings.Contains(got, "could not be parsed") {
+		t.Fatalf("risk guard should reject a parse failure, got %q", got)
+	}
+
+	restricted, err := NewExecTool(t.TempDir(), true)
+	if err != nil {
+		t.Fatalf("NewExecTool: %v", err)
+	}
+	if got := restricted.guardCommand("echo foo)", t.TempDir()); !strings.Contains(got, "could not be parsed") {
+		t.Fatalf("workspace guard should reject a parse failure, got %q", got)
+	}
+}
+
 func TestShellTool_RiskClassifierExecute(t *testing.T) {
 	t.Parallel()
 
