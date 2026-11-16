@@ -131,6 +131,34 @@ func TestShellTool_RiskClassifierExecute(t *testing.T) {
 	}
 }
 
+// TestShellTool_DynamicDestructiveOperandNotExecuted verifies that a dynamic
+// path cannot hide an outside-workspace target from the static guards.
+func TestShellTool_DynamicDestructiveOperandNotExecuted(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	canary := filepath.Join(dir, "canary.txt")
+	if err := os.WriteFile(canary, []byte("must survive\n"), 0o600); err != nil {
+		t.Fatalf("write canary: %v", err)
+	}
+
+	tool := riskTestTool(t, config.ExecConfig{})
+	ctx := WithToolContext(context.Background(), "cli", "test")
+	for _, command := range []string{
+		`P=` + canary + `; rm -f "$P"`,
+		`P=` + canary + `; r\m -rf "$P"`,
+		`P=` + canary + `; r\m -f "$P"`,
+	} {
+		result := tool.Execute(ctx, map[string]any{"action": "run", "command": command})
+		if !result.IsError || !strings.Contains(result.ForLLM, "dynamic operand for destructive command") {
+			t.Fatalf("execute should reject %q, got: %s", command, result.ForLLM)
+		}
+		if _, err := os.Stat(canary); err != nil {
+			t.Fatalf("blocked command %q removed the canary: %v", command, err)
+		}
+	}
+}
+
 func TestShellTool_RiskCalibration(t *testing.T) {
 	t.Parallel()
 

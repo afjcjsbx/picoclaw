@@ -134,6 +134,52 @@ func TestGuardCheck(t *testing.T) {
 	}
 }
 
+func TestGuardRejectsDynamicDestructiveOperands(t *testing.T) {
+	t.Parallel()
+
+	for _, threshold := range []string{"medium", "critical"} {
+		guard := mustGuard(t, threshold)
+		blocked := []string{
+			`rm -f "$P"`,
+			`rm -f $P`,
+			`rm -rf "$P"`,
+			`r\m -rf "$P"`,
+			`r\m -f "$P"`,
+			`env rm -f "$P"`,
+			`command rm -f "$P"`,
+			`sh -c 'rm -f "$P"'`,
+			`eval 'rm -f "$P"'`,
+			`trap 'rm -f "$P"' EXIT`,
+			`find . -exec rm -f "$P" \;`,
+			`xargs rm -f "$P"`,
+			`cp "$SRC" dest`,
+			`chmod 600 "$P"`,
+		}
+		for _, command := range blocked {
+			err := guard.Check(command)
+			if err == nil {
+				t.Errorf("threshold %s: Check(%q) allowed, want rejected", threshold, command)
+				continue
+			}
+			if !strings.Contains(err.Error(), "dynamic operand for destructive command") {
+				t.Errorf("threshold %s: Check(%q) = %v, want dynamic-operand rejection", threshold, command, err)
+			}
+		}
+
+		allowed := []string{
+			`rm -f build`,
+			`cat "$P"`,
+			`echo "$X"`,
+			`git status`,
+		}
+		for _, command := range allowed {
+			if err := guard.Check(command); err != nil {
+				t.Errorf("threshold %s: Check(%q) blocked: %v", threshold, command, err)
+			}
+		}
+	}
+}
+
 func TestParseEnvArgs(t *testing.T) {
 	t.Parallel()
 
