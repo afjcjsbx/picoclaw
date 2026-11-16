@@ -315,6 +315,37 @@ PicoClaw 默认在沙箱环境中运行。Agent 只能访问配置的工作区�
 | `append_file` | 追加文件     | 仅限工作区内的文件             |
 | `exec`        | 执行命令     | 命令路径必须在工作区内         |
 
+#### 子进程隔离（可选）
+
+`restrict_to_workspace` 是路径策略。如果需要在操作系统层面隔离子进程，可以启用 `isolation` 并选择后端：
+
+```json
+{
+  "isolation": {
+    "enabled": true,
+    "backend": "docker",
+    "docker": {
+      "image": "afjcjsbx/picoclaw-isolation:latest",
+      "pull": "missing"
+    },
+    "expose_paths": [
+      { "source": "/opt/toolchains/go", "target": "/opt/toolchains/go", "mode": "ro" }
+    ]
+  }
+}
+```
+
+| 后端 | 支持平台 | 说明 |
+|------|----------|------|
+| `auto`（默认） | Linux、macOS、Windows | 使用本地后端：`bubblewrap`、Seatbelt 或 Windows 受限 token |
+| `bubblewrap` | Linux | 需要 `PATH` 中有 `bwrap`，不会自动回退 |
+| `seatbelt` | macOS | 使用已弃用的 `sandbox-exec` 命令 |
+| `windows` | Windows | 受限 token、低完整性级别和 Job Object |
+| `docker` | 任何有 Docker 的平台 | 每个子进程通过 `docker run --rm` 运行；镜像必须提供命令，`exec` 工具还需要 `/bin/sh` |
+
+Docker 后端会把实例根和工作目录以相同绝对路径 bind mount，默认使用宿主 UID/GID 运行，并在正常退出或命令被终止时删除容器。容器网络默认启用：将 `isolation.docker.network` 留空即使用 Docker 默认网络，只有需要禁用网络时才设为 `none`。`isolation.docker.extra_args` 是受信任配置，可能削弱隔离。隔离镜像会随 PicoClaw 版本一起发布为 `afjcjsbx/picoclaw-isolation`（Python 3.13、Go 1.27.4、`jq`、`ripgrep`、`fd`、`tmux`、`rsync`）；定义位于 `docker/Dockerfile.isolation`，也可使用 `make docker-isolation` 本地构建。完整说明和限制见
+[`pkg/isolation`](https://github.com/afjcjsbx/picoclaw/blob/main/pkg/isolation/README.zh.md)。
+
 #### 额外的 Exec 保护
 
 默认情况下，`exec` 工具会阻止以下危险命令（其中硬性底线规则在 `enable_deny_patterns` 为 `false` 时仍会生效）：

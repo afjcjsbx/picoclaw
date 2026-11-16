@@ -33,7 +33,8 @@ type Boundary struct {
 // executable, working directory, and absolute path arguments when it starts a
 // child process.
 func DescribeBoundary(workspace string, cfg config.IsolationConfig) (Boundary, bool) {
-	if !cfg.Enabled || !IsSupported() {
+	backend := resolvedBackend(cfg)
+	if !cfg.Enabled || !isBackendSupportedOn(runtime.GOOS, backend) {
 		return Boundary{}, false
 	}
 
@@ -49,8 +50,36 @@ func DescribeBoundary(workspace string, cfg config.IsolationConfig) (Boundary, b
 		Network:   true,
 	}
 
-	switch runtime.GOOS {
-	case "linux":
+	if backend == config.IsolationBackendDocker {
+		boundary.Backend = "Docker"
+		boundary.PathBoundary = true
+		boundary.Scratch = filepath.Join(boundary.Root, "runtime-user-env", "tmp")
+		boundary.Network = cfg.Docker.NetworkEnabled()
+
+		customTargets := customExposeTargets(cfg.ExposePaths)
+		merged := MergeExposePaths(defaultDockerExposePaths(boundary.Root), cfg.ExposePaths)
+		for _, rule := range merged {
+			target := filepath.Clean(rule.Target)
+			if target == boundary.Root || target == boundary.Scratch {
+				continue
+			}
+			if _, custom := customTargets[target]; !custom {
+				continue
+			}
+			switch rule.Mode {
+			case "rw":
+				boundary.Writable = append(boundary.Writable, target)
+			case "ro":
+				boundary.ReadOnly = append(boundary.ReadOnly, target)
+			}
+		}
+		boundary.RootWritable = effectiveBoundaryMode(merged, boundary.Root) == "rw"
+		boundary.ScratchWritable = effectiveBoundaryMode(merged, boundary.Scratch) == "rw"
+		return boundary, true
+	}
+
+	switch backend {
+	case config.IsolationBackendBubblewrap:
 		boundary.PathBoundary = true
 		boundary.Scratch = filepath.Join(boundary.Root, "runtime-user-env", "tmp")
 
@@ -79,7 +108,7 @@ func DescribeBoundary(workspace string, cfg config.IsolationConfig) (Boundary, b
 
 		boundary.RootWritable = effectiveBoundaryMode(merged, boundary.Root) == "rw"
 		boundary.ScratchWritable = effectiveBoundaryMode(merged, boundary.Scratch) == "rw"
-	case "darwin":
+	case config.IsolationBackendSeatbelt:
 		boundary.PathBoundary = true
 		boundary.Scratch = filepath.Join(boundary.Root, "runtime-user-env", "tmp")
 		// The Seatbelt profile always allows writes under the instance root.
@@ -108,7 +137,7 @@ func DescribeBoundary(workspace string, cfg config.IsolationConfig) (Boundary, b
 				boundary.ReadOnly = append(boundary.ReadOnly, target)
 			}
 		}
-	case "windows":
+	case config.IsolationBackendWindows:
 		// The Windows backend applies restricted tokens, low integrity, and a
 		// job object, but does not implement path-level filesystem remapping.
 		boundary.PathBoundary = false

@@ -175,8 +175,11 @@ func (c *rpcClient) close() {
 		_ = c.stdin.Close()
 	}
 	if c.cmd != nil && c.cmd.Process != nil {
+		pid := c.cmd.Process.Pid
 		_ = c.cmd.Process.Kill()
 		_ = c.cmd.Wait()
+		isolation.CleanupPID(pid)
+		isolation.Release(c.cmd)
 	}
 }
 

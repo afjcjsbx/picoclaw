@@ -381,9 +381,10 @@ func validateDarwinExposePaths(items []config.ExposePath, root string) error {
 }
 
 // IsSupported reports whether the current platform has an implemented isolation
-// backend.
+// backend for the active configuration. Docker is available on every platform
+// where the Docker CLI and daemon are reachable; preflight validates them.
 func IsSupported() bool {
-	return isSupportedOn(runtime.GOOS)
+	return isBackendSupportedOn(runtime.GOOS, resolvedBackend(CurrentConfig()))
 }
 
 func isSupportedOn(goos string) bool {
@@ -424,8 +425,9 @@ func preflight(isolation config.IsolationConfig) error {
 	if !isolation.Enabled {
 		return nil
 	}
-	if !IsSupported() {
-		return fmt.Errorf("subprocess isolation is not supported on %s", runtime.GOOS)
+	backend := resolvedBackend(isolation)
+	if err := validateBackend(isolation); err != nil {
+		return err
 	}
 	root, err := ResolveInstanceRoot()
 	if err != nil {
@@ -437,14 +439,16 @@ func preflight(isolation config.IsolationConfig) error {
 	if err := ValidateExposePaths(isolation.ExposePaths); err != nil {
 		return err
 	}
-	if runtime.GOOS == "linux" {
+	switch backend {
+	case config.IsolationBackendDocker:
+		return preflightDocker(isolation.Docker, root, isolation.ExposePaths)
+	case config.IsolationBackendBubblewrap:
 		for _, rule := range BuildLinuxMountPlan(root, isolation.ExposePaths) {
 			if rule.Source == "" || rule.Target == "" {
 				return fmt.Errorf("invalid linux mount rule")
 			}
 		}
-	}
-	if runtime.GOOS == "windows" {
+	case config.IsolationBackendWindows:
 		if err := validateWindowsExposePaths(isolation.ExposePaths); err != nil {
 			return err
 		}
@@ -453,8 +457,7 @@ func preflight(isolation config.IsolationConfig) error {
 				return fmt.Errorf("invalid windows access rule")
 			}
 		}
-	}
-	if runtime.GOOS == "darwin" {
+	case config.IsolationBackendSeatbelt:
 		if err := validateDarwinExposePaths(isolation.ExposePaths, root); err != nil {
 			return err
 		}
@@ -463,7 +466,8 @@ func preflight(isolation config.IsolationConfig) error {
 }
 
 // Start prepares isolation for the command, starts it, and applies any
-// post-start platform hooks required by the active backend.
+// post-start platform hooks required by the active backend. Callers must call
+// Release(cmd) after the process exits to discard per-command bookkeeping.
 func Start(cmd *exec.Cmd) error {
 	if err := PrepareCommand(cmd); err != nil {
 		return err
@@ -490,7 +494,8 @@ func Start(cmd *exec.Cmd) error {
 }
 
 // Run is the Start-and-Wait helper that keeps the same isolation behavior as
-// Start while returning the command's final exit status.
+// Start while returning the command's final exit status. It releases the
+// per-command bookkeeping automatically.
 func Run(cmd *exec.Cmd) error {
 	if err := PrepareCommand(cmd); err != nil {
 		return err
@@ -513,7 +518,14 @@ func Run(cmd *exec.Cmd) error {
 		terminateStartedCommand(cmd)
 		return err
 	}
-	return cmd.Wait()
+	defer Release(cmd)
+	err := cmd.Wait()
+	if err != nil && cmd.Process != nil && cmd.ProcessState != nil &&
+		cmd.ProcessState.ExitCode() < 0 {
+		// A killed or interrupted docker CLI does not stop its container.
+		CleanupPID(cmd.Process.Pid)
+	}
+	return err
 }
 
 func terminateStartedCommand(cmd *exec.Cmd) {

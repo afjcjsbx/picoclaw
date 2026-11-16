@@ -46,6 +46,34 @@ func TestBuildIsolationPromptPathBoundary(t *testing.T) {
 	}
 }
 
+func TestBuildIsolationPromptDocker(t *testing.T) {
+	cb := NewContextBuilder("/tmp/workspace")
+	cb.isolationBoundary = &isolation.Boundary{
+		Backend:         "Docker",
+		Root:            "/tmp/picoclaw",
+		RootWritable:    true,
+		Workspace:       "/tmp/workspace",
+		Scratch:         "/tmp/picoclaw/runtime-user-env/tmp",
+		ScratchWritable: true,
+		Network:         false,
+		PathBoundary:    true,
+	}
+
+	prompt := cb.buildIsolationPrompt()
+	for _, want := range []string{
+		"Docker",
+		"container image provides its own system userland",
+		"Network access is unavailable",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("docker isolation prompt missing %q:\n%s", want, prompt)
+		}
+	}
+	if strings.Contains(prompt, "Standard system runtime paths") {
+		t.Fatalf("docker isolation prompt must not describe host system paths:\n%s", prompt)
+	}
+}
+
 func TestBuildIsolationPromptGenericBackend(t *testing.T) {
 	cb := NewContextBuilder("/tmp/workspace")
 	cb.isolationBoundary = &isolation.Boundary{

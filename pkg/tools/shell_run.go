@@ -114,6 +114,7 @@ func (t *ExecTool) runSync(
 		_ = outputReader.Close()
 		return ErrorResult(fmt.Sprintf("failed to start command: %v", err))
 	}
+	defer isolation.Release(cmd)
 
 	// The child inherited its own copy of the write end. Release the parent's
 	// copy so the reader observes EOF when the child exits.
@@ -441,6 +442,7 @@ func (t *ExecTool) runBackground(
 		go func() {
 			defer recoverGoroutine("PTY cmd.Wait", func() { session.finish(-1) })
 			cmd.Wait() // Wait for process to exit
+			isolation.Release(cmd)
 			session.finish(processExitCode(cmd.ProcessState))
 		}()
 
@@ -487,6 +489,7 @@ func (t *ExecTool) runBackground(
 				_ = stdinWriter.Close()
 			}
 			cmd.Wait()
+			isolation.Release(cmd)
 
 			session.finish(processExitCode(cmd.ProcessState))
 		}()

@@ -68,6 +68,12 @@ func (s *isolatedPipeRWC) Write(p []byte) (n int, err error) {
 }
 
 func (s *isolatedPipeRWC) Close() error {
+	defer isolation.Release(s.cmd)
+	defer func() {
+		if s.cmd.Process != nil {
+			isolation.CleanupPID(s.cmd.Process.Pid)
+		}
+	}()
 	if err := s.stdin.Close(); err != nil {
 		return fmt.Errorf("closing stdin: %w", err)
 	}

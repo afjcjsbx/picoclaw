@@ -1,0 +1,56 @@
+# PicoClaw Docker isolation runtime image.
+#
+# Build with:
+#   make docker-isolation
+#
+# The Docker isolation backend overrides the entrypoint for every child
+# process, so this image only needs to provide the command runtime and a POSIX
+# shell. It intentionally keeps the host PATH out of the container; the PATH
+# below is the one used by commands running under isolation.
+
+FROM python:3.13-slim
+
+ARG GO_VERSION=1.27.4
+ARG TARGETARCH
+
+LABEL org.opencontainers.image.title="PicoClaw isolation runtime"
+LABEL org.opencontainers.image.description="Docker isolation image with Python 3.13, Go 1.27.4, jq, ripgrep, fd, tmux and rsync"
+LABEL org.opencontainers.image.source="https://github.com/sipeed/picoclaw"
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        fd-find \
+        git \
+        jq \
+        make \
+        ripgrep \
+        rsync \
+        tmux \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -sf /usr/bin/fdfind /usr/local/bin/fd
+
+RUN set -eux; \
+    goarch="${TARGETARCH:-$(dpkg --print-architecture)}"; \
+    case "${goarch}" in \
+        amd64|arm64|riscv64) ;; \
+        *) echo "unsupported Go architecture: ${goarch}" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${goarch}.tar.gz" -o /tmp/go.tar.gz; \
+    tar -C /usr/local -xzf /tmp/go.tar.gz; \
+    rm -f /tmp/go.tar.gz
+
+ENV GOROOT=/usr/local/go \
+    GOTOOLCHAIN=local \
+    PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+RUN python3 --version \
+    && go version \
+    && jq --version \
+    && rg --version \
+    && fd --version \
+    && tmux -V \
+    && rsync --version
+
+WORKDIR /workspace

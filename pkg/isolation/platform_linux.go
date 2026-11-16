@@ -16,12 +16,12 @@ import (
 	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
-func applyPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, root string) error {
+func applyNativePlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, root string) error {
 	if !isolation.Enabled {
 		return nil
 	}
-	// Bubblewrap is the only supported Linux backend right now. Fail closed when
-	// it is unavailable instead of silently running the child process unisolated.
+	// Bubblewrap is the native Linux backend. Fail closed when it is
+	// unavailable instead of silently running the child process unisolated.
 	bwrapPath, err := exec.LookPath("bwrap")
 	if err != nil {
 		hint := bwrapInstallHint()
@@ -106,11 +106,11 @@ func formatLinuxMountPlan(plan []MountRule) []map[string]string {
 	return formatted
 }
 
-func postStartPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, root string) error {
+func postStartNativePlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, root string) error {
 	return nil
 }
 
-func cleanupPendingPlatformResources(cmd *exec.Cmd) {
+func cleanupPendingNativePlatformResources(cmd *exec.Cmd) {
 }
 
 // Unsupported optional namespaces are omitted so mount and filesystem isolation

@@ -304,8 +304,13 @@ func (cb *ContextBuilder) buildIsolationPrompt() string {
 	if len(boundary.ReadOnly) > 0 {
 		fmt.Fprintf(&sb, "- Additional read-only paths (expose_paths): %s\n", formatBoundaryPathList(boundary.ReadOnly))
 	}
-	sb.WriteString("- Standard system runtime paths are read-only unless listed above. " +
-		"Other host paths outside the roots above are not visible.\n")
+	if boundary.Backend == "Docker" {
+		sb.WriteString("- The container image provides its own system userland. " +
+			"Host paths outside the roots above are not mounted into the container.\n")
+	} else {
+		sb.WriteString("- Standard system runtime paths are read-only unless listed above. " +
+			"Other host paths outside the roots above are not visible.\n")
+	}
 	if boundary.Network {
 		sb.WriteString("- Network access remains available.\n")
 	} else {

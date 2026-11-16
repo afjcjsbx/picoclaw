@@ -182,11 +182,79 @@ func (c EvolutionConfig) AutoAppliesDrafts() bool {
 	return c.EffectiveMode() == "apply"
 }
 
+// Isolation backend names. "auto" selects the native backend for the current
+// platform; the other values are explicit choices.
+const (
+	IsolationBackendAuto       = "auto"
+	IsolationBackendBubblewrap = "bubblewrap"
+	IsolationBackendSeatbelt   = "seatbelt"
+	IsolationBackendWindows    = "windows"
+	IsolationBackendDocker     = "docker"
+)
+
 // IsolationConfig controls subprocess isolation for commands started by PicoClaw.
 // It is applied by the isolation package rather than by sandboxing the main process.
 type IsolationConfig struct {
-	Enabled     bool         `json:"enabled,omitempty"`
-	ExposePaths []ExposePath `json:"expose_paths,omitempty"`
+	Enabled     bool                  `json:"enabled,omitempty"`
+	Backend     string                `json:"backend,omitempty"`
+	ExposePaths []ExposePath          `json:"expose_paths,omitempty"`
+	Docker      DockerIsolationConfig `json:"docker,omitempty"`
+}
+
+// DockerIsolationConfig controls the Docker isolation backend. Every child
+// process is started with docker run inside Image; Image must provide the
+// command, its runtime dependencies and, for the exec tool, a POSIX shell.
+type DockerIsolationConfig struct {
+	Image     string   `json:"image,omitempty"`
+	Network   string   `json:"network,omitempty"`
+	User      string   `json:"user,omitempty"`
+	Pull      string   `json:"pull,omitempty"`
+	ExtraArgs []string `json:"extra_args,omitempty"`
+}
+
+// EffectiveBackend normalizes the configured backend name. Unknown values are
+// returned lowercased so preflight can report them instead of silently falling
+// back to the platform default.
+func (c IsolationConfig) EffectiveBackend() string {
+	switch strings.ToLower(strings.TrimSpace(c.Backend)) {
+	case "", IsolationBackendAuto, "native":
+		return IsolationBackendAuto
+	case IsolationBackendBubblewrap, "bwrap":
+		return IsolationBackendBubblewrap
+	case IsolationBackendSeatbelt, "sandbox-exec", "sandbox_exec":
+		return IsolationBackendSeatbelt
+	case IsolationBackendWindows, "restricted-token", "restricted_token":
+		return IsolationBackendWindows
+	case IsolationBackendDocker:
+		return IsolationBackendDocker
+	default:
+		return strings.ToLower(strings.TrimSpace(c.Backend))
+	}
+}
+
+// EffectiveNetwork returns the docker --network value to use. An empty value
+// keeps Docker's default network; "none" disables container networking.
+func (c DockerIsolationConfig) EffectiveNetwork() string {
+	value := strings.TrimSpace(c.Network)
+	if strings.EqualFold(value, "none") {
+		return "none"
+	}
+	return value
+}
+
+// NetworkEnabled reports whether container networking is available. An empty
+// network keeps Docker's default network, so networking is enabled by default.
+func (c DockerIsolationConfig) NetworkEnabled() bool {
+	return !strings.EqualFold(c.EffectiveNetwork(), "none")
+}
+
+// EffectivePull returns the docker --pull policy. Empty defaults to "missing".
+func (c DockerIsolationConfig) EffectivePull() string {
+	value := strings.ToLower(strings.TrimSpace(c.Pull))
+	if value == "" {
+		return "missing"
+	}
+	return value
 }
 
 // ExposePath describes a host path that should remain visible inside the isolated

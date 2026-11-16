@@ -5,6 +5,8 @@ package tools
 import (
 	"os/exec"
 	"strconv"
+
+	"github.com/sipeed/picoclaw/pkg/isolation"
 )
 
 func prepareCommandForTermination(cmd *exec.Cmd) {
@@ -23,5 +25,7 @@ func terminateProcessTree(cmd *exec.Cmd) error {
 
 	_ = exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(pid)).Run()
 	_ = cmd.Process.Kill()
+	// A docker-backed command needs its container removed explicitly.
+	isolation.CleanupPID(pid)
 	return nil
 }

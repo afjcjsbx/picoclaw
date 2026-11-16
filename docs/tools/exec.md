@@ -310,7 +310,37 @@ When `agents.defaults.restrict_to_workspace` is `true` (the default), exec on Un
 
 Expansion uses the child shell's `HOME`. Quoted literals such as `echo '$HOME'` and `echo '~'` are not treated as paths, and web URLs are exempt from local path checks.
 
-This is a static best-effort layer, not an OS sandbox: child processes, scripts loaded after startup, file contents, dynamic operands and globs that expand to outside-pointing symlinks are outside its reach. Symlinks are resolved against the filesystem at validation time, so a symlink created or retargeted later in the same command is not visible to the static pass. Use containers, VMs, or a dedicated user for untrusted workloads. The AST pass runs only when workspace restriction is enabled, only for the command being executed, and keeps no persistent state, goroutines or polling timers. When the risk classifier is also enabled, both passes share one parse of the command; commands containing ANSI-C quoting or line continuations are re-parsed after normalization because those rewrites can change word boundaries.
+This is a static best-effort layer, not an OS sandbox: child processes, scripts loaded after startup, file contents, dynamic operands and globs that expand to outside-pointing symlinks are outside its reach. Symlinks are resolved against the filesystem at validation time, so a symlink created or retargeted later in the same command is not visible to the static pass. The AST pass runs only when workspace restriction is enabled, only for the command being executed, and keeps no persistent state, goroutines or polling timers. When the risk classifier is also enabled, both passes share one parse of the command; commands containing ANSI-C quoting or line continuations are re-parsed after normalization because those rewrites can change word boundaries.
+
+### OS-level isolation
+
+For a real process boundary, enable the opt-in `isolation` block. `auto`
+selects the native backend (`bubblewrap` on Linux, Seatbelt on macOS, a
+restricted token on Windows). Set `backend` to `docker` to run each exec command
+in a container instead:
+
+```json
+{
+  "isolation": {
+    "enabled": true,
+    "backend": "docker",
+    "docker": {
+      "image": "afjcjsbx/picoclaw-isolation:latest"
+    }
+  }
+}
+```
+
+Exec always runs commands through `sh -c` on Unix (PowerShell on Windows), so a
+Docker image must contain `/bin/sh` and the tools the command needs. The
+published `afjcjsbx/picoclaw-isolation` image includes Python 3.13, Go 1.27.4,
+`jq`, `ripgrep`, `fd`, `tmux` and `rsync`; its definition is
+`docker/Dockerfile.isolation`, and `make docker-isolation` builds it locally.
+The workspace and instance root are bind-mounted at their host paths, containers
+use the image PATH, container networking is enabled by default, and containers
+are removed on exit or when a command is killed. See
+[`pkg/isolation`](https://github.com/afjcjsbx/picoclaw/blob/main/pkg/isolation/README.md)
+for all backends and their limitations.
 
 ## Default Blocked Command Patterns
 

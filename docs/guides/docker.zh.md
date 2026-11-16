@@ -69,6 +69,29 @@ docker compose -f docker/docker-compose.yml pull
 docker compose -f docker/docker-compose.yml --profile gateway up -d
 ```
 
+### 沙箱运行时镜像
+
+PicoClaw 发布时也会发布 Docker 隔离运行时镜像，使用相同的版本标签和 `latest`：
+
+- `afjcjsbx/picoclaw-isolation:<tag>`（Docker Hub）
+- `ghcr.io/afjcjsbx/picoclaw-isolation:<tag>`（GHCR）
+
+镜像包含 Python 3.13、Go 1.27.4、`jq`、`ripgrep`、`fd`、`tmux` 和 `rsync`。启用 Docker 隔离后端即可使用：
+
+```json
+{
+  "isolation": {
+    "enabled": true,
+    "backend": "docker",
+    "docker": {
+      "image": "afjcjsbx/picoclaw-isolation:latest"
+    }
+  }
+}
+```
+
+挂载规则、网络默认值和限制见 [进程隔离](../../pkg/isolation/README.zh.md)。
+
 ---
 
 ## 🚀 快速开始
