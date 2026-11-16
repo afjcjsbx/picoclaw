@@ -31,7 +31,7 @@ Yes: `picoclaw migrate` imports config and workspace files (`--dry-run` first). 
 In `~/.picoclaw/.security.yml` (set `chmod 600`), referenced from `config.json`, so the main config stays shareable — see the Security Configuration section in the [Configuration Guide](configuration.md) and [Credential Encryption](../security/credential_encryption.md).
 
 **How do I keep secrets out of what the model sees?**
-Sensitive data filtering strips secrets from tool output before it reaches the model — see [Sensitive Data Filtering](../security/sensitive_data_filtering.md).
+Sensitive data filtering redacts exact configured secret values from tool output before it reaches the model, but it is defense in depth and not a DLP boundary: encoded or transformed output can bypass it. See [Sensitive Data Filtering](../security/sensitive_data_filtering.md).
 
 **How do I change the default model?**
 ```bash

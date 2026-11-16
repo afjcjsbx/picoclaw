@@ -388,7 +388,9 @@ func NewExecToolWithConfig(
 	customRiskAllowPatterns := make([]*regexp.Regexp, 0)
 	riskAllowThreshold := shellguard.RiskMedium
 	var allowedPathPatterns []*regexp.Regexp
-	allowRemote := true
+	// Fail closed when no config is supplied. Callers that need remote exec
+	// must opt in explicitly through cfg.Tools.Exec.AllowRemote.
+	allowRemote := false
 	enableDefaultGuard := true
 	approvalConfig := config.ApprovalsConfig{}
 	if len(allowPaths) > 0 {
@@ -556,7 +558,7 @@ The child environment is sanitized: only safe variables and the operator's allow
 
 Within a conversation, the last explicit cwd and env values are remembered and reused when omitted. They do not capture cd or export executed inside a command. Pass env: {} to clear remembered variables.
 
-Foreground results start with a one-line [exec] {...} header (exitCode, timedOut, truncated, durationMs, error), then raw stdout/stderr. Non-zero exit codes can be normal: grep returns 1 for no match and diff returns 1 for differences.
+Foreground results start with a one-line [exec] {...} header (exitCode, timedOut, truncated, durationMs, error), then raw stdout/stderr. On Unix, a null exitCode means the direct child was killed by a signal; shells may also report 128+N (137 = SIGKILL, often the OOM killer; 143 = SIGTERM). Treat signal deaths as failed runs, not normal non-zero exits. Non-zero exit codes can be normal: grep returns 1 for no match and diff returns 1 for differences.
 
 Oversized output is truncated automatically and the full stream is saved as an artifact; use the artifact path in the result with read_file when you need the omitted middle, instead of piping through head/tail or re-running the command.
 
@@ -657,23 +659,33 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 		return ErrorResult("action is required")
 	}
 
+	// GHSA-pv8c-p6jf-3fpp: block the whole exec tool from remote channels
+	// (e.g. Telegram webhooks) unless explicitly opted-in via config. This
+	// applies to every action, not only run: list/read/poll/wait can leak
+	// session output and write/kill/send-keys can mutate internal sessions.
+	// Fail-closed: empty channel = blocked. The channel must come from the
+	// trusted tool context, never from model-controlled arguments.
+	if !t.allowRemote && !constants.IsInternalChannel(strings.TrimSpace(ToolChannel(ctx))) {
+		return ErrorResult("exec is restricted to internal channels")
+	}
+
 	switch action {
 	case "run":
 		return t.executeRun(ctx, args)
 	case "list":
-		return t.executeList()
+		return t.executeList(ctx)
 	case "poll":
-		return t.executePoll(args)
+		return t.executePoll(ctx, args)
 	case "wait":
 		return t.executeWait(ctx, args)
 	case "read":
-		return t.executeRead(args)
+		return t.executeRead(ctx, args)
 	case "write":
-		return t.executeWrite(args)
+		return t.executeWrite(ctx, args)
 	case "kill":
-		return t.executeKill(args)
+		return t.executeKill(ctx, args)
 	case "send-keys":
-		return t.executeSendKeys(args)
+		return t.executeSendKeys(ctx, args)
 	default:
 		return ErrorResult(fmt.Sprintf("unknown action: %s", action))
 	}
@@ -740,8 +752,9 @@ func (t *ExecTool) completionResult(session *ProcessSession) *ToolResult {
 //
 //  1. Arguments: command is required and the optional env object is parsed
 //     (string values only; no empty names, "=" or NUL bytes).
-//  2. Remote gate: unless allow_remote is set, only internal channels may run
-//     exec. It fails closed, so an empty channel is rejected too.
+//  2. Remote gate: Execute rejects every action from a non-internal channel
+//     unless allow_remote is set, so a run never reaches this function from
+//     an untrusted caller.
 //  3. Normalization: a trailing unquoted '&' becomes background=true so the
 //     process is tracked. The guard still inspects the original command.
 //  4. Timeout: must be a non-negative integer. A foreground request above the
@@ -780,19 +793,6 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 	extraEnv, envErr := execEnvFromArgs(args)
 	if envErr != nil {
 		return ErrorResult(envErr.Error())
-	}
-
-	// GHSA-pv8c-p6jf-3fpp: block exec from remote channels (e.g. Telegram webhooks)
-	// unless explicitly opted-in via config. Fail-closed: empty channel = blocked.
-	if !t.allowRemote {
-		channel := ToolChannel(ctx)
-		if channel == "" {
-			channel, _ = args["__channel"].(string)
-		}
-		channel = strings.TrimSpace(channel)
-		if channel == "" || !constants.IsInternalChannel(channel) {
-			return ErrorResult("exec is restricted to internal channels")
-		}
 	}
 
 	isPty := boolArg(args, "pty")

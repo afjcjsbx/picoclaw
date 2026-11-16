@@ -82,7 +82,11 @@ func (t *ExecTool) runSync(
 	if shellErr != nil {
 		return ErrorResult(shellErr.Error())
 	}
-	cmd := exec.CommandContext(cmdCtx, shellPath, shellArgs...)
+	// Do not use exec.CommandContext here: its automatic Process.Kill can reap
+	// the shell before terminateProcessTree enumerates descendants, losing the
+	// ancestry link to children that changed session (setsid). The timeout is
+	// handled explicitly below so the process tree is still observable.
+	cmd := exec.Command(shellPath, shellArgs...)
 	t.prepareExecCommand(cmd, cwd, t.runEnv(extraEnv, timeout))
 
 	maxOutputChars := t.maxOutputChars
@@ -142,9 +146,11 @@ func (t *ExecTool) runSync(
 	}()
 
 	var err error
+	terminatedByContext := false
 	select {
 	case err = <-done:
 	case <-cmdCtx.Done():
+		terminatedByContext = true
 		_ = terminateProcessTree(cmd)
 		select {
 		case err = <-done:
@@ -182,17 +188,29 @@ func (t *ExecTool) runSync(
 	resultErr := err
 
 	switch {
-	case err == nil:
-		code := 0
-		exitCode = &code
-	case errors.Is(cmdCtx.Err(), context.DeadlineExceeded):
+	case terminatedByContext && errors.Is(cmdCtx.Err(), context.DeadlineExceeded):
 		timedOut = true
 		errorMessage = fmt.Sprintf("command timed out after %v", timeout)
 		forUser = fmt.Sprintf("Command timed out after %v", timeout)
 		if output != "" {
 			forUser += "\n\nPartial output before timeout:\n" + output
 		}
-		resultErr = fmt.Errorf("command timeout: %w", err)
+		if err != nil {
+			resultErr = fmt.Errorf("command timeout: %w", err)
+		} else {
+			resultErr = fmt.Errorf("command timed out after %v", timeout)
+		}
+	case terminatedByContext && errors.Is(cmdCtx.Err(), context.Canceled):
+		errorMessage = "command canceled"
+		forUser = output + "\n\n[Command canceled]"
+		if err != nil {
+			resultErr = fmt.Errorf("command canceled: %w", err)
+		} else {
+			resultErr = errors.New("command canceled")
+		}
+	case err == nil:
+		code := 0
+		exitCode = &code
 	default:
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
@@ -344,13 +362,16 @@ func (t *ExecTool) runBackground(
 ) *ToolResult {
 	sessionID := generateSessionID()
 	session := &ProcessSession{
-		ID:         sessionID,
-		Command:    command,
-		PTY:        ptyEnabled,
-		Background: true,
-		StartTime:  time.Now().Unix(),
-		Status:     "running",
-		ptyKeyMode: PtyKeyModeCSI,
+		ID:           sessionID,
+		Command:      command,
+		PTY:          ptyEnabled,
+		Background:   true,
+		StartTime:    time.Now().Unix(),
+		Status:       "running",
+		ownerAgentID: ToolAgentID(ctx),
+		ownerChannel: strings.TrimSpace(ToolChannel(ctx)),
+		ownerChatID:  ToolChatID(ctx),
+		ptyKeyMode:   PtyKeyModeCSI,
 		// Initialize the output buffer before the session is published to the
 		// manager: readers (session_read/list_sessions) must never observe a
 		// session whose buffer is still nil.

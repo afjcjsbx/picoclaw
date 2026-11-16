@@ -754,12 +754,12 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) (string, e
 		}
 
 		args := map[string]any{
-			"action":    "run",
-			"command":   job.Payload.Command,
-			"__channel": channel,
-			"__chat_id": chatID,
+			"action":  "run",
+			"command": job.Payload.Command,
 		}
 
+		// The exec tool trusts the channel from ctx, not from tool arguments.
+		ctx = WithToolContext(ctx, channel, chatID)
 		result := t.execTool.Execute(ctx, args)
 		// ForUser is the human-readable view; ForLLM now starts with the
 		// structured [exec] header and must not be published to the chat.

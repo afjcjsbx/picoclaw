@@ -5,10 +5,13 @@ import (
 	"errors"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/sipeed/picoclaw/pkg/constants"
 )
 
 // PtyKeyMode represents arrow key encoding mode for PTY sessions.
@@ -40,6 +43,9 @@ type ProcessSession struct {
 	ExitTime     int64
 	ExitCode     int
 	Status       string
+	ownerAgentID string
+	ownerChannel string
+	ownerChatID  string
 	stdinWriter  io.Writer
 	stdoutPipe   io.Reader
 	outputBuffer *bytes.Buffer
@@ -398,6 +404,16 @@ func (s *ProcessSession) ToSessionInfo() SessionInfo {
 	}
 }
 
+// isOwnedBy reports whether the session belongs to the caller identified by
+// agentID, channel and chatID. Ownership is recorded when the session starts.
+func (s *ProcessSession) isOwnedBy(agentID, channel, chatID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ownerAgentID == agentID &&
+		s.ownerChannel == strings.TrimSpace(channel) &&
+		s.ownerChatID == chatID
+}
+
 // retentionTime returns the session's terminal state and the timestamp the
 // retention window should start from: exit time for completed sessions,
 // start time as a fallback for manually constructed or legacy records.
@@ -485,6 +501,26 @@ func (sm *SessionManager) Get(sessionID string) (*ProcessSession, error) {
 	return session, nil
 }
 
+// GetForCaller returns a session only when the caller may access it. Internal
+// channels can see every session; remote callers can only access sessions
+// created by the same agent, channel and chat. Unauthorized lookups return
+// ErrSessionNotFound so callers cannot probe for session existence.
+func (sm *SessionManager) GetForCaller(
+	sessionID, agentID, channel, chatID string,
+) (*ProcessSession, error) {
+	session, err := sm.Get(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if constants.IsInternalChannel(strings.TrimSpace(channel)) {
+		return session, nil
+	}
+	if !session.isOwnedBy(agentID, channel, chatID) {
+		return nil, ErrSessionNotFound
+	}
+	return session, nil
+}
+
 func (sm *SessionManager) Remove(sessionID string) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -497,6 +533,24 @@ func (sm *SessionManager) List() []SessionInfo {
 
 	result := make([]SessionInfo, 0, len(sm.sessions))
 	for _, session := range sm.sessions {
+		result = append(result, session.ToSessionInfo())
+	}
+
+	return result
+}
+
+// ListForCaller returns the sessions visible to the caller. Internal channels
+// see everything; remote callers only see sessions they own.
+func (sm *SessionManager) ListForCaller(agentID, channel, chatID string) []SessionInfo {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	showAll := constants.IsInternalChannel(strings.TrimSpace(channel))
+	result := make([]SessionInfo, 0, len(sm.sessions))
+	for _, session := range sm.sessions {
+		if !showAll && !session.isOwnedBy(agentID, channel, chatID) {
+			continue
+		}
 		result = append(result, session.ToSessionInfo())
 	}
 

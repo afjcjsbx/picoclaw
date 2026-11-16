@@ -12,8 +12,12 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 )
 
-func (t *ExecTool) executeList() *ToolResult {
-	sessions := t.sessionManager.List()
+func (t *ExecTool) executeList(ctx context.Context) *ToolResult {
+	sessions := t.sessionManager.ListForCaller(
+		ToolAgentID(ctx),
+		ToolChannel(ctx),
+		ToolChatID(ctx),
+	)
 	resp := ExecResponse{
 		Sessions: sessions,
 	}
@@ -37,8 +41,16 @@ func sessionIDArg(args map[string]any) (string, *ToolResult) {
 	return sessionID, nil
 }
 
-func (t *ExecTool) lookupSession(sessionID string) (*ProcessSession, *ToolResult) {
-	session, err := t.sessionManager.Get(sessionID)
+// lookupSession resolves a session while enforcing the caller's ownership.
+// Internal channels can access every session; remote callers only sessions
+// created by the same agent/channel/chat.
+func (t *ExecTool) lookupSession(ctx context.Context, sessionID string) (*ProcessSession, *ToolResult) {
+	session, err := t.sessionManager.GetForCaller(
+		sessionID,
+		ToolAgentID(ctx),
+		ToolChannel(ctx),
+		ToolChatID(ctx),
+	)
 	if err != nil {
 		if errors.Is(err, ErrSessionNotFound) {
 			return nil, ErrorResult(fmt.Sprintf("session not found: %s", sessionID))
@@ -51,17 +63,20 @@ func (t *ExecTool) lookupSession(sessionID string) (*ProcessSession, *ToolResult
 // getSession resolves the sessionId argument to a live session. Actions that
 // validate other arguments before the lookup call sessionIDArg and
 // lookupSession separately to keep their error order.
-func (t *ExecTool) getSession(args map[string]any) (string, *ProcessSession, *ToolResult) {
+func (t *ExecTool) getSession(
+	ctx context.Context,
+	args map[string]any,
+) (string, *ProcessSession, *ToolResult) {
 	sessionID, errResult := sessionIDArg(args)
 	if errResult != nil {
 		return "", nil, errResult
 	}
-	session, errResult := t.lookupSession(sessionID)
+	session, errResult := t.lookupSession(ctx, sessionID)
 	return sessionID, session, errResult
 }
 
-func (t *ExecTool) executePoll(args map[string]any) *ToolResult {
-	sessionID, session, errResult := t.getSession(args)
+func (t *ExecTool) executePoll(ctx context.Context, args map[string]any) *ToolResult {
+	sessionID, session, errResult := t.getSession(ctx, args)
 	if errResult != nil {
 		return errResult
 	}
@@ -145,7 +160,7 @@ func (t *ExecTool) executeWait(ctx context.Context, args map[string]any) *ToolRe
 		}
 	}
 
-	session, errResult := t.lookupSession(sessionID)
+	session, errResult := t.lookupSession(ctx, sessionID)
 	if errResult != nil {
 		return errResult
 	}
@@ -196,8 +211,8 @@ func (t *ExecTool) executeWait(ctx context.Context, args map[string]any) *ToolRe
 	return &ToolResult{ForLLM: string(data)}
 }
 
-func (t *ExecTool) executeRead(args map[string]any) *ToolResult {
-	sessionID, session, errResult := t.getSession(args)
+func (t *ExecTool) executeRead(ctx context.Context, args map[string]any) *ToolResult {
+	sessionID, session, errResult := t.getSession(ctx, args)
 	if errResult != nil {
 		return errResult
 	}
@@ -259,7 +274,7 @@ func (t *ExecTool) executeRead(args map[string]any) *ToolResult {
 	}
 }
 
-func (t *ExecTool) executeWrite(args map[string]any) *ToolResult {
+func (t *ExecTool) executeWrite(ctx context.Context, args map[string]any) *ToolResult {
 	sessionID, errResult := sessionIDArg(args)
 	if errResult != nil {
 		return errResult
@@ -270,7 +285,7 @@ func (t *ExecTool) executeWrite(args map[string]any) *ToolResult {
 		return ErrorResult("data is required")
 	}
 
-	session, errResult := t.lookupSession(sessionID)
+	session, errResult := t.lookupSession(ctx, sessionID)
 	if errResult != nil {
 		return errResult
 	}
@@ -300,8 +315,8 @@ func (t *ExecTool) executeWrite(args map[string]any) *ToolResult {
 	}
 }
 
-func (t *ExecTool) executeKill(args map[string]any) *ToolResult {
-	sessionID, session, errResult := t.getSession(args)
+func (t *ExecTool) executeKill(ctx context.Context, args map[string]any) *ToolResult {
+	sessionID, session, errResult := t.getSession(ctx, args)
 	if errResult != nil {
 		return errResult
 	}
@@ -489,7 +504,7 @@ func encodeKeySequence(tokens []string, ptyKeyMode PtyKeyMode) (string, error) {
 	return result, nil
 }
 
-func (t *ExecTool) executeSendKeys(args map[string]any) *ToolResult {
+func (t *ExecTool) executeSendKeys(ctx context.Context, args map[string]any) *ToolResult {
 	sessionID, errResult := sessionIDArg(args)
 	if errResult != nil {
 		return errResult
@@ -518,7 +533,7 @@ func (t *ExecTool) executeSendKeys(args map[string]any) *ToolResult {
 		return ErrorResult("keys cannot be empty")
 	}
 
-	session, errResult := t.lookupSession(sessionID)
+	session, errResult := t.lookupSession(ctx, sessionID)
 	if errResult != nil {
 		return errResult
 	}

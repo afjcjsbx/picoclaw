@@ -36,7 +36,7 @@ func TestExecTool_StateRemembersCwd(t *testing.T) {
 	target := filepath.Join(workspace, "state-cwd-target")
 	require.NoError(t, os.MkdirAll(target, 0o755))
 
-	tool, err := NewExecTool(workspace, true)
+	tool, err := newTestExecTool(workspace, true)
 	require.NoError(t, err)
 	ctx := execStateContext("agent-a", "session-1")
 
@@ -67,7 +67,7 @@ func TestExecTool_StateExplicitCwdReplacesRemembered(t *testing.T) {
 	require.NoError(t, os.MkdirAll(firstDir, 0o755))
 	require.NoError(t, os.MkdirAll(secondDir, 0o755))
 
-	tool, err := NewExecTool(workspace, true)
+	tool, err := newTestExecTool(workspace, true)
 	require.NoError(t, err)
 	ctx := execStateContext("agent-a", "session-1")
 
@@ -89,7 +89,7 @@ func TestExecTool_StateFallsBackWhenRememberedCwdDisappears(t *testing.T) {
 	target := filepath.Join(workspace, "state-cwd-gone")
 	require.NoError(t, os.MkdirAll(target, 0o755))
 
-	tool, err := NewExecTool(workspace, true)
+	tool, err := newTestExecTool(workspace, true)
 	require.NoError(t, err)
 	ctx := execStateContext("agent-a", "session-1")
 
@@ -105,7 +105,7 @@ func TestExecTool_StateFallsBackWhenRememberedCwdDisappears(t *testing.T) {
 }
 
 func TestExecTool_StateRemembersEnv(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 	ctx := execStateContext("agent-a", "session-env")
 
@@ -133,7 +133,7 @@ func TestExecTool_StateRemembersEnv(t *testing.T) {
 }
 
 func TestExecTool_StateMergesAndClearsEnv(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 	ctx := execStateContext("agent-a", "session-env")
 
@@ -174,7 +174,7 @@ func TestExecTool_StateDoesNotCaptureCwdInsideCommand(t *testing.T) {
 	target := filepath.Join(workspace, "state-cwd-inside")
 	require.NoError(t, os.MkdirAll(target, 0o755))
 
-	tool, err := NewExecTool(workspace, false)
+	tool, err := newTestExecTool(workspace, false)
 	require.NoError(t, err)
 	ctx := execStateContext("agent-a", "session-1")
 
@@ -197,7 +197,7 @@ func TestExecTool_StateRequiresSessionContext(t *testing.T) {
 	target := filepath.Join(workspace, "state-cwd-no-session")
 	require.NoError(t, os.MkdirAll(target, 0o755))
 
-	tool, err := NewExecTool(workspace, false)
+	tool, err := newTestExecTool(workspace, false)
 	require.NoError(t, err)
 	ctx := context.Background()
 
@@ -221,7 +221,7 @@ func TestExecTool_StateNotUpdatedWhenCommandBlocked(t *testing.T) {
 	target := filepath.Join(workspace, "state-cwd-blocked")
 	require.NoError(t, os.MkdirAll(target, 0o755))
 
-	tool, err := NewExecTool(workspace, true)
+	tool, err := newTestExecTool(workspace, true)
 	require.NoError(t, err)
 	ctx := execStateContext("agent-a", "session-blocked")
 
@@ -248,7 +248,7 @@ func TestExecTool_ClearSessionResetsState(t *testing.T) {
 	target := filepath.Join(workspace, "state-cwd-clear")
 	require.NoError(t, os.MkdirAll(target, 0o755))
 
-	tool, err := NewExecTool(workspace, false)
+	tool, err := newTestExecTool(workspace, false)
 	require.NoError(t, err)
 	ctx := execStateContext("agent-a", "session-clear")
 

@@ -16,6 +16,16 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 )
 
+// newTestExecTool builds an exec tool with remote access enabled so tests that
+// exercise command execution can keep using a bare context. The default
+// fail-closed behavior is pinned separately.
+func newTestExecTool(workingDir string, restrict bool) (*ExecTool, error) {
+	cfg := &config.Config{}
+	cfg.Tools.Exec.EnableDenyPatterns = true
+	cfg.Tools.Exec.AllowRemote = true
+	return NewExecToolWithConfig(workingDir, restrict, cfg)
+}
+
 func parseExecRunMeta(t *testing.T, forLLM string) map[string]any {
 	t.Helper()
 	line, _, ok := strings.Cut(forLLM, "\n")
@@ -48,7 +58,7 @@ func TestFindShellExecutableReturnsAbsoluteExecutable(t *testing.T) {
 }
 
 func TestShellTool_Success(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	if err != nil {
 		t.Errorf("unable to configure exec tool: %s", err)
 	}
@@ -78,7 +88,7 @@ func TestShellTool_Success(t *testing.T) {
 }
 
 func TestShellTool_ForegroundResultHeader(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	t.Run("success", func(t *testing.T) {
@@ -131,7 +141,7 @@ func TestShellTool_ForegroundResultHeader(t *testing.T) {
 
 // TestShellTool_Failure verifies failed command execution
 func TestShellTool_Failure(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	if err != nil {
 		t.Errorf("unable to configure exec tool: %s", err)
 	}
@@ -163,7 +173,7 @@ func TestShellTool_Failure(t *testing.T) {
 
 // TestShellTool_Timeout verifies command timeout handling
 func TestShellTool_Timeout(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	if err != nil {
 		t.Errorf("unable to configure exec tool: %s", err)
 	}
@@ -214,7 +224,7 @@ func TestShellTool_TimeoutArg_Invalid(t *testing.T) {
 		{"bool", true},
 	}
 
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	for _, tt := range tests {
@@ -238,7 +248,7 @@ func TestShellTool_TimeoutArg_OverridesConfigured(t *testing.T) {
 		t.Skip("sleep with fractional seconds is not portable to PowerShell")
 	}
 
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 	tool.SetTimeout(100 * time.Millisecond)
 
@@ -268,7 +278,7 @@ func TestShellTool_TimeoutArg_OverridesConfigured(t *testing.T) {
 	})
 
 	t.Run("shorter timeout kills command", func(t *testing.T) {
-		tool, err := NewExecTool("", false)
+		tool, err := newTestExecTool("", false)
 		require.NoError(t, err)
 
 		start := time.Now()
@@ -340,7 +350,7 @@ func TestShellTool_TimeoutAboveForegroundCapPromotes(t *testing.T) {
 // TestShellTool_TimeoutAtForegroundCapStaysForeground verifies the cap is
 // inclusive: a request equal to the cap is still a foreground run.
 func TestShellTool_TimeoutAtForegroundCapStaysForeground(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	result := tool.Execute(context.Background(), map[string]any{
@@ -356,7 +366,7 @@ func TestShellTool_TimeoutAtForegroundCapStaysForeground(t *testing.T) {
 // TestShellTool_DisabledForegroundCapKeepsRunForeground verifies the internal
 // escape hatch used by cron, which consumes command output synchronously.
 func TestShellTool_DisabledForegroundCapKeepsRunForeground(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 	tool.foregroundCap = 0
 
@@ -398,7 +408,7 @@ func TestShellTool_ConfiguredTimeoutAboveCapPromotes(t *testing.T) {
 
 // TestShellTool_TimeoutArg_Background verifies timeout only conflicts with background when non-zero
 func TestShellTool_TimeoutArg_Background(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	sm := NewSessionManager()
@@ -455,7 +465,7 @@ func TestShellTool_WorkingDir(t *testing.T) {
 	testFile := filepath.Join(tmpDir, "test.txt")
 	os.WriteFile(testFile, []byte("test content"), 0o644)
 
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	if err != nil {
 		t.Errorf("unable to configure exec tool: %s", err)
 	}
@@ -480,7 +490,7 @@ func TestShellTool_WorkingDir(t *testing.T) {
 
 // TestShellTool_DangerousCommand verifies safety guard blocks dangerous commands
 func TestShellTool_DangerousCommand(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	if err != nil {
 		t.Errorf("unable to configure exec tool: %s", err)
 	}
@@ -504,7 +514,7 @@ func TestShellTool_DangerousCommand(t *testing.T) {
 }
 
 func TestShellTool_DangerousCommand_KillBlocked(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	if err != nil {
 		t.Errorf("unable to configure exec tool: %s", err)
 	}
@@ -526,7 +536,7 @@ func TestShellTool_DangerousCommand_KillBlocked(t *testing.T) {
 
 // TestShellTool_MissingCommand verifies error handling for missing command
 func TestShellTool_MissingCommand(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	if err != nil {
 		t.Errorf("unable to configure exec tool: %s", err)
 	}
@@ -544,7 +554,7 @@ func TestShellTool_MissingCommand(t *testing.T) {
 
 // TestShellTool_StderrCapture verifies stderr is captured and included
 func TestShellTool_StderrCapture(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	if err != nil {
 		t.Errorf("unable to configure exec tool: %s", err)
 	}
@@ -569,7 +579,7 @@ func TestShellTool_StderrCapture(t *testing.T) {
 // TestShellTool_ForegroundMergesStdoutStderrInOrder verifies stdout and stderr
 // share one stream, so their relative write order is preserved.
 func TestShellTool_ForegroundMergesStdoutStderrInOrder(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	result := tool.Execute(context.Background(), map[string]any{
@@ -590,7 +600,7 @@ func TestShellTool_BackgroundMergesStderrWithoutBlocking(t *testing.T) {
 		t.Skip("uses POSIX yes/head")
 	}
 
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	sm := NewSessionManager()
@@ -646,7 +656,7 @@ func TestShellTool_BackgroundMergesStderrWithoutBlocking(t *testing.T) {
 // TestShellTool_OutputTruncation verifies foreground output is bounded by the
 // configured cap and keeps a head+tail window around the omission notice.
 func TestShellTool_OutputTruncation(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	if err != nil {
 		t.Fatalf("unable to configure exec tool: %s", err)
 	}
@@ -823,7 +833,7 @@ func TestShellTool_WorkingDir_OutsideWorkspace(t *testing.T) {
 		t.Fatalf("failed to create outside dir: %v", err)
 	}
 
-	tool, err := NewExecTool(workspace, true)
+	tool, err := newTestExecTool(workspace, true)
 	if err != nil {
 		t.Errorf("unable to configure exec tool: %s", err)
 	}
@@ -862,7 +872,7 @@ func TestShellTool_WorkingDir_SymlinkEscape(t *testing.T) {
 		t.Skipf("symlinks not supported in this environment: %v", err)
 	}
 
-	tool, err := NewExecTool(workspace, true)
+	tool, err := newTestExecTool(workspace, true)
 	if err != nil {
 		t.Errorf("unable to configure exec tool: %s", err)
 	}
@@ -879,6 +889,21 @@ func TestShellTool_WorkingDir_SymlinkEscape(t *testing.T) {
 	if !strings.Contains(result.ForLLM, "blocked") {
 		t.Errorf("expected 'blocked' in error, got: %s", result.ForLLM)
 	}
+}
+
+// TestNewExecToolDefaultsToRemoteBlocked pins the fail-closed constructor
+// default for callers that build the tool without a config.
+func TestNewExecToolDefaultsToRemoteBlocked(t *testing.T) {
+	tool, err := NewExecTool(t.TempDir(), false)
+	require.NoError(t, err)
+	require.False(t, tool.allowRemote)
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"action":  "run",
+		"command": "echo should-not-run",
+	})
+	require.True(t, result.IsError)
+	require.Contains(t, result.ForLLM, "restricted to internal channels")
 }
 
 // TestShellTool_RemoteChannelBlockedByDefault verifies exec is blocked for remote channels
@@ -963,7 +988,7 @@ func TestShellTool_AllowRemoteBypassesChannelCheck(t *testing.T) {
 // TestShellTool_RestrictToWorkspace verifies workspace restriction
 func TestShellTool_RestrictToWorkspace(t *testing.T) {
 	tmpDir := t.TempDir()
-	tool, err := NewExecTool(tmpDir, false)
+	tool, err := newTestExecTool(tmpDir, false)
 	if err != nil {
 		t.Errorf("unable to configure exec tool: %s", err)
 	}
@@ -1005,7 +1030,7 @@ func TestShellTool_RelativePathWithSlashAllowed(t *testing.T) {
 		t.Fatalf("failed to create script: %v", err)
 	}
 
-	tool, err := NewExecTool(tmpDir, true)
+	tool, err := newTestExecTool(tmpDir, true)
 	if err != nil {
 		t.Fatalf("unable to configure exec tool: %s", err)
 	}
@@ -1043,7 +1068,7 @@ func TestShellTool_SymlinkedWorkspaceRelativePathAllowed(t *testing.T) {
 		t.Skipf("symlinks not supported in this environment: %v", err)
 	}
 
-	tool, err := NewExecTool(linkedWorkspace, true)
+	tool, err := newTestExecTool(linkedWorkspace, true)
 	if err != nil {
 		t.Fatalf("unable to configure exec tool: %s", err)
 	}
@@ -1063,7 +1088,7 @@ func TestShellTool_SymlinkedWorkspaceRelativePathAllowed(t *testing.T) {
 
 func TestShellTool_AttachedAbsolutePathsStillBlocked(t *testing.T) {
 	tmpDir := t.TempDir()
-	tool, err := NewExecTool(tmpDir, true)
+	tool, err := newTestExecTool(tmpDir, true)
 	if err != nil {
 		t.Fatalf("unable to configure exec tool: %s", err)
 	}
@@ -1099,7 +1124,7 @@ func TestShellTool_OptionValueRelativeSymlinkEscapeBlocked(t *testing.T) {
 		t.Skipf("symlinks not supported in this environment: %v", err)
 	}
 
-	tool, err := NewExecTool(workspace, true)
+	tool, err := newTestExecTool(workspace, true)
 	if err != nil {
 		t.Fatalf("unable to configure exec tool: %s", err)
 	}
@@ -1132,7 +1157,7 @@ func TestShellTool_NewFileThroughSymlinkedDirBlocked(t *testing.T) {
 		t.Skipf("symlinks not supported in this environment: %v", err)
 	}
 
-	tool, err := NewExecTool(workspace, true)
+	tool, err := newTestExecTool(workspace, true)
 	if err != nil {
 		t.Fatalf("unable to configure exec tool: %s", err)
 	}
@@ -1164,7 +1189,7 @@ func TestShellTool_NewFileThroughWorkspaceSymlinkedDirAllowed(t *testing.T) {
 		t.Skipf("symlinks not supported in this environment: %v", err)
 	}
 
-	tool, err := NewExecTool(workspace, true)
+	tool, err := newTestExecTool(workspace, true)
 	if err != nil {
 		t.Fatalf("unable to configure exec tool: %s", err)
 	}
@@ -1189,7 +1214,7 @@ func TestShellTool_NewFileThroughWorkspaceSymlinkedDirAllowed(t *testing.T) {
 // TestShellTool_DevNullAllowed verifies that /dev/null redirections are not blocked (issue #964).
 func TestShellTool_DevNullAllowed(t *testing.T) {
 	tmpDir := t.TempDir()
-	tool, err := NewExecTool(tmpDir, true)
+	tool, err := newTestExecTool(tmpDir, true)
 	if err != nil {
 		t.Fatalf("unable to configure exec tool: %s", err)
 	}
@@ -1217,7 +1242,7 @@ func TestShellTool_DevNullAllowed(t *testing.T) {
 // swallow the separator and produce a bogus path such as "/dev/null;".
 func TestShellTool_DevNullAllowedWithSeparator(t *testing.T) {
 	tmpDir := t.TempDir()
-	tool, err := NewExecTool(tmpDir, true)
+	tool, err := newTestExecTool(tmpDir, true)
 	if err != nil {
 		t.Fatalf("unable to configure exec tool: %s", err)
 	}
@@ -1251,7 +1276,7 @@ func TestShellTool_DevNullAllowedWithSeparator(t *testing.T) {
 // containment check, whether the real path comes before or after the separator.
 func TestShellTool_SeparatorKeepsRealPathsBlocked(t *testing.T) {
 	tmpDir := t.TempDir()
-	tool, err := NewExecTool(tmpDir, true)
+	tool, err := newTestExecTool(tmpDir, true)
 	if err != nil {
 		t.Fatalf("unable to configure exec tool: %s", err)
 	}
@@ -1292,7 +1317,7 @@ func TestShellTool_SeparatorKeepsRealPathsBlocked(t *testing.T) {
 
 // TestShellTool_BlockDevices verifies that writes to block devices are blocked (issue #965).
 func TestShellTool_BlockDevices(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	if err != nil {
 		t.Fatalf("unable to configure exec tool: %s", err)
 	}
@@ -1323,7 +1348,7 @@ func TestShellTool_BlockDevices(t *testing.T) {
 // are allowed even when workspace restriction is active.
 func TestShellTool_SafePathsInWorkspaceRestriction(t *testing.T) {
 	tmpDir := t.TempDir()
-	tool, err := NewExecTool(tmpDir, true)
+	tool, err := newTestExecTool(tmpDir, true)
 	if err != nil {
 		t.Fatalf("unable to configure exec tool: %s", err)
 	}
@@ -1345,7 +1370,7 @@ func TestShellTool_SafePathsInWorkspaceRestriction(t *testing.T) {
 
 // TestShellTool_ExitCodeDetails verifies that exit codes are captured with details
 func TestShellTool_ExitCodeDetails(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	if err != nil {
 		t.Fatalf("unable to configure exec tool: %s", err)
 	}
@@ -1379,7 +1404,7 @@ func TestShellTool_ExitCodeDetails(t *testing.T) {
 
 // TestShellTool_TimeoutWithPartialOutput verifies timeout includes partial output
 func TestShellTool_TimeoutWithPartialOutput(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	if err != nil {
 		t.Fatalf("unable to configure exec tool: %s", err)
 	}
@@ -1475,7 +1500,7 @@ func TestShellTool_CustomAllowPatterns(t *testing.T) {
 // incorrectly blocked by the workspace restriction safety guard (issue #1203).
 func TestShellTool_URLsNotBlocked(t *testing.T) {
 	tmpDir := t.TempDir()
-	tool, err := NewExecTool(tmpDir, true)
+	tool, err := newTestExecTool(tmpDir, true)
 	if err != nil {
 		t.Fatalf("unable to configure exec tool: %s", err)
 	}
@@ -1506,7 +1531,7 @@ func TestShellTool_URLsNotBlocked(t *testing.T) {
 // workspace are still blocked, even though other URLs are allowed (issue #1254).
 func TestShellTool_FileURISandboxing(t *testing.T) {
 	tmpDir := t.TempDir()
-	tool, err := NewExecTool(tmpDir, true)
+	tool, err := newTestExecTool(tmpDir, true)
 	if err != nil {
 		t.Fatalf("unable to configure exec tool: %s", err)
 	}
@@ -1550,7 +1575,7 @@ func TestShellTool_FileURISandboxing(t *testing.T) {
 // e.g. "echo https://etc/passwd && cat //etc/passwd" must still be blocked.
 func TestShellTool_URLBypassPrevented(t *testing.T) {
 	tmpDir := t.TempDir()
-	tool, err := NewExecTool(tmpDir, true)
+	tool, err := newTestExecTool(tmpDir, true)
 	if err != nil {
 		t.Fatalf("unable to configure exec tool: %s", err)
 	}
@@ -1579,7 +1604,7 @@ func TestWindows_TildeBypassPrevented(t *testing.T) {
 	}
 
 	tmpDir := t.TempDir()
-	tool, err := NewExecTool(tmpDir, true)
+	tool, err := newTestExecTool(tmpDir, true)
 	if err != nil {
 		t.Fatalf("unable to configure exec tool: %s", err)
 	}
@@ -1613,7 +1638,7 @@ func TestWindows_TildeBypassPrevented(t *testing.T) {
 // path traversal variants are blocked.
 func TestShellTool_PathTraversalVariants(t *testing.T) {
 	tmpDir := t.TempDir()
-	tool, err := NewExecTool(tmpDir, true)
+	tool, err := newTestExecTool(tmpDir, true)
 	if err != nil {
 		t.Fatalf("unable to configure exec tool: %s", err)
 	}
@@ -1658,7 +1683,7 @@ func TestWindows_SymlinkBypassPrevented(t *testing.T) {
 	}
 
 	tmpDir := t.TempDir()
-	tool, err := NewExecTool(tmpDir, true)
+	tool, err := newTestExecTool(tmpDir, true)
 	if err != nil {
 		t.Fatalf("unable to configure exec tool: %s", err)
 	}
@@ -1679,7 +1704,7 @@ func TestWindows_PowerShellEncodingBypass(t *testing.T) {
 		t.Skip("Windows-only test")
 	}
 
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -1815,7 +1840,7 @@ func TestWindowsDenyPatterns(t *testing.T) {
 }
 
 func TestShellTool_Background_ReturnsImmediately(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -1839,7 +1864,7 @@ func TestShellTool_Background_ReturnsImmediately(t *testing.T) {
 // output buffer must be initialized before the session is published, otherwise
 // ProcessSession.Read would dereference a nil buffer.
 func TestShellTool_BackgroundSessionReadableImmediately(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	sm := NewSessionManager()
@@ -1866,7 +1891,7 @@ func TestShellTool_BackgroundSessionReadableImmediately(t *testing.T) {
 }
 
 func TestShellTool_List_Empty(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	sm := NewSessionManager()
@@ -1882,7 +1907,7 @@ func TestShellTool_List_Empty(t *testing.T) {
 }
 
 func TestShellTool_RunBackground_List(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	sm := NewSessionManager()
@@ -1922,7 +1947,7 @@ func TestShellTool_RunBackground_List(t *testing.T) {
 }
 
 func TestShellTool_Read_Output(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	sm := NewSessionManager()
@@ -1957,7 +1982,7 @@ func TestShellTool_Read_Output(t *testing.T) {
 }
 
 func TestShellTool_Kill(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	sm := NewSessionManager()
@@ -1998,7 +2023,7 @@ func TestShellTool_PTY_AllowedCommands(t *testing.T) {
 		t.Skip("PTY not supported on Windows")
 	}
 
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	sm := NewSessionManager()
@@ -2034,7 +2059,7 @@ func TestShellTool_PTY_WriteRead(t *testing.T) {
 		t.Skip("PTY not supported on Windows")
 	}
 
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	sm := NewSessionManager()
@@ -2094,7 +2119,7 @@ func TestShellTool_PTY_Poll(t *testing.T) {
 		t.Skip("PTY not supported on Windows")
 	}
 
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	sm := NewSessionManager()
@@ -2148,7 +2173,7 @@ func TestShellTool_PTY_Kill(t *testing.T) {
 		t.Skip("PTY not supported on Windows")
 	}
 
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	sm := NewSessionManager()
@@ -2195,7 +2220,7 @@ func TestShellTool_PTY_Kill(t *testing.T) {
 }
 
 func TestShellTool_Write_Read_NonPTY(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	sm := NewSessionManager()
@@ -2249,7 +2274,7 @@ func TestShellTool_Write_Read_NonPTY(t *testing.T) {
 }
 
 func TestShellTool_Read_NonPTY_Running(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	sm := NewSessionManager()
@@ -2318,7 +2343,7 @@ func TestShellTool_ProcessGroupKill(t *testing.T) {
 	// must be run through an interpreter (sh, bash) which is blocked for PTY.
 	// Instead, we test with non-PTY mode which also uses Setsid for background processes.
 
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	sm := NewSessionManager()
@@ -2381,7 +2406,7 @@ func TestShellTool_PTY_ProcessGroupKill(t *testing.T) {
 		t.Skip("Test binary /tmp/test_pgroup not found - run: gcc -o /tmp/test_pgroup /tmp/test_pgroup.c")
 	}
 
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	sm := NewSessionManager()
@@ -2436,7 +2461,7 @@ func TestShellTool_PTY_Background_Read(t *testing.T) {
 		t.Skip("PTY not supported on Windows")
 	}
 
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	sm := NewSessionManager()
@@ -2477,7 +2502,7 @@ func TestShellTool_PTY_Background_ReadNoBlock(t *testing.T) {
 		t.Skip("PTY not supported on Windows")
 	}
 
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	sm := NewSessionManager()
@@ -2522,7 +2547,7 @@ func TestShellTool_PTY_Background_ReadNoBlock(t *testing.T) {
 }
 
 func TestShellTool_Poll_Status(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	sm := NewSessionManager()
@@ -2567,7 +2592,7 @@ func TestShellTool_Poll_Status(t *testing.T) {
 }
 
 func TestShellTool_Action_Run_Sync(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -2584,7 +2609,7 @@ func TestShellTool_Action_Run_Sync(t *testing.T) {
 // TestShellTool_Background_ReadAfterExit verifies that we can read
 // buffered output even after the background process has exited.
 func TestShellTool_Background_ReadAfterExit(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -2784,7 +2809,7 @@ func TestEncodeKeyTokenWithPtyKeyMode(t *testing.T) {
 // recognized web scheme are still blocked.
 func TestShellTool_SchemelessURLDetection(t *testing.T) {
 	tmpDir := t.TempDir()
-	tool, err := NewExecTool(tmpDir, true)
+	tool, err := newTestExecTool(tmpDir, true)
 	if err != nil {
 		t.Fatalf("unable to configure exec tool: %s", err)
 	}
@@ -2881,7 +2906,7 @@ func TestShellTool_PTY_ReaderStopsAfterExit(t *testing.T) {
 		t.Skip("PTY not supported on Windows")
 	}
 
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	sm := NewSessionManager()
@@ -2927,7 +2952,7 @@ func TestShellTool_PTY_ReaderStopsAfterExit(t *testing.T) {
 
 func startBackgroundSession(t *testing.T, command string) (*ExecTool, context.Context, string) {
 	t.Helper()
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	sm := NewSessionManager()
@@ -3038,7 +3063,7 @@ func TestShellTool_Poll_NewOutputResetsIdleCount(t *testing.T) {
 }
 
 func TestShellTool_ExecuteAsync_NotifiesOnCompletion(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	sm := NewSessionManager()
@@ -3105,7 +3130,7 @@ func TestShellTool_ExecuteAsync_PromotedRunNotifies(t *testing.T) {
 }
 
 func TestShellTool_AutoNotifyAfterSilentPolls(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	sm := NewSessionManager()
@@ -3142,7 +3167,7 @@ func TestShellTool_AutoNotifyAfterSilentPolls(t *testing.T) {
 }
 
 func TestShellTool_NotifyRequiresBackground(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	result := tool.Execute(context.Background(), map[string]any{
@@ -3155,7 +3180,7 @@ func TestShellTool_NotifyRequiresBackground(t *testing.T) {
 }
 
 func TestShellTool_NotifyNoteRequiresAsyncCallback(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	sm := NewSessionManager()
@@ -3207,7 +3232,7 @@ func TestShellTool_ReadIsPagedAndNonDestructive(t *testing.T) {
 }
 
 func TestShellTool_ReadReportsCumulativeDroppedBytes(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	sm := NewSessionManager()
@@ -3635,7 +3660,7 @@ func TestShellTool_SelfProtectionHardline(t *testing.T) {
 }
 
 func TestShellTool_BackticksInsideQuotedHeredocAreAllowed(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	command := "gh pr comment 2763 --body-file - <<'TXT'\n" +
@@ -3669,7 +3694,7 @@ func TestShellTool_HeredocLookalikeDoesNotHideCommands(t *testing.T) {
 }
 
 func TestShellTool_QuotedHeredocDoesNotHideDangerousHeader(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	command := "rm -rf /tmp/x <<'TXT'\n" + "markdown `body`\n" + "TXT"
@@ -3679,7 +3704,7 @@ func TestShellTool_QuotedHeredocDoesNotHideDangerousHeader(t *testing.T) {
 }
 
 func TestShellTool_BackticksOutsideQuotedHeredocRemainBlocked(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	if got := tool.guardCommand("echo `whoami`", ""); got == "" {
