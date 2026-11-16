@@ -183,6 +183,15 @@ func (g *Guard) checkArgv(words []word, depth int) *BlockedError {
 		}
 		return g.checkFindExec(words[1:], depth)
 	}
+	if name == "exec" {
+		if blocked := g.classify(words); blocked != nil {
+			return blocked
+		}
+		if nested, ok := execCommand(words[1:]); ok {
+			return g.checkArgv(nested, depth+1)
+		}
+		return nil
+	}
 	return g.classify(words)
 }
 
@@ -195,6 +204,18 @@ func (g *Guard) checkFindExec(words []word, depth int) *BlockedError {
 			wordTexts(words), RiskCritical, g.threshold, "command nesting limit exceeded",
 		)
 	}
+	for _, nested := range findExecCommands(words) {
+		if blocked := g.checkArgv(nested, depth+1); blocked != nil {
+			return blocked
+		}
+	}
+	return nil
+}
+
+// findExecCommands returns the argument vectors launched by find -exec,
+// -execdir, -ok and -okdir.
+func findExecCommands(words []word) [][]word {
+	var commands [][]word
 	for i := 0; i < len(words); i++ {
 		switch words[i].text {
 		case "-exec", "-execdir", "-ok", "-okdir":
@@ -203,14 +224,66 @@ func (g *Guard) checkFindExec(words []word, depth int) *BlockedError {
 				end++
 			}
 			if end > i+1 {
-				if blocked := g.checkArgv(words[i+1:end], depth+1); blocked != nil {
-					return blocked
-				}
+				commands = append(commands, words[i+1:end])
 			}
 			i = end
 		}
 	}
-	return nil
+	return commands
+}
+
+// trapAction extracts the literal action from a trap argument vector. found is
+// false for listing and reset forms; dynamic reports that the action or an
+// option could not be resolved.
+func trapAction(args []word) (action word, found, dynamic bool) {
+	for _, w := range args {
+		if !w.literal {
+			return word{}, false, true
+		}
+		switch w.text {
+		case "-l", "-p":
+			return word{}, false, false
+		case "--":
+			continue
+		case "", "-":
+			return word{}, false, false
+		}
+		if strings.HasPrefix(w.text, "-") {
+			continue
+		}
+		return w, true, false
+	}
+	return word{}, false, false
+}
+
+// execCommand returns the argv that exec replaces the shell with, skipping its
+// own options.
+func execCommand(args []word) ([]word, bool) {
+	i := 0
+	for i < len(args) {
+		text := args[i].text
+		switch {
+		case text == "--":
+			i++
+		case text == "-a":
+			i += 2
+			continue
+		case strings.HasPrefix(text, "-a") && len(text) > 2:
+			i++
+			continue
+		case text == "-c" || text == "-l":
+			i++
+			continue
+		case strings.HasPrefix(text, "-") && text != "-":
+			i++
+			continue
+		}
+		break
+	}
+	if i >= len(args) {
+		return nil, false
+	}
+	return args[i:], true
 }
 
 func (g *Guard) classify(words []word) *BlockedError {
@@ -229,19 +302,19 @@ func (g *Guard) checkShell(name string, words []word, depth int) *BlockedError {
 		)
 	}
 
-	script, ok := shellScriptArg(words[1:])
-	if !ok {
+	invocation := parseShellInvocation(words[1:])
+	if !invocation.hasScript {
 		return NewBlockedError(
 			wordTexts(words), RiskCritical, g.threshold,
 			"shell reads commands from stdin or a script file that cannot be inspected",
 		)
 	}
-	if !script.literal {
+	if !invocation.script.literal {
 		return NewBlockedError(
 			wordTexts(words), RiskCritical, g.threshold, "shell script argument is dynamic",
 		)
 	}
-	return g.checkScript(script.text, depth+1)
+	return g.checkScript(invocation.script.text, depth+1)
 }
 
 func (g *Guard) checkTrap(words []word, depth int) *BlockedError {
@@ -251,27 +324,16 @@ func (g *Guard) checkTrap(words []word, depth int) *BlockedError {
 		)
 	}
 
-	for i := 1; i < len(words); i++ {
-		w := words[i]
-		if !w.literal {
-			return NewBlockedError(
-				wordTexts(words), RiskCritical, g.threshold, "trap action is dynamic",
-			)
-		}
-		switch w.text {
-		case "-l", "-p":
-			return nil
-		case "--":
-			continue
-		case "", "-":
-			return nil
-		}
-		if strings.HasPrefix(w.text, "-") {
-			continue
-		}
-		return g.checkScript(w.text, depth+1)
+	action, found, dynamic := trapAction(words[1:])
+	if dynamic {
+		return NewBlockedError(
+			wordTexts(words), RiskCritical, g.threshold, "trap action is dynamic",
+		)
 	}
-	return nil
+	if !found {
+		return nil
+	}
+	return g.checkScript(action.text, depth+1)
 }
 
 func (g *Guard) checkWrapper(name string, words []word, spec wrapperSpec, depth int) *BlockedError {
@@ -413,48 +475,70 @@ var shellValueFlags = map[string]bool{
 	"-o": true, "-O": true, "--rcfile": true, "--init-file": true,
 }
 
-// shellScriptArg extracts the literal -c script from a shell invocation. It
-// returns ok=false when the shell would read commands from stdin or a script
-// file, because those commands cannot be inspected statically.
-func shellScriptArg(words []word) (word, bool) {
+// shellInvocation is the statically known script source of a shell invocation.
+// hasScript reports a literal -c/--command argument. readsStdin reports that
+// the shell would execute stdin, so a heredoc on the command is a script.
+// opaque reports a script file or an unresolved argument that cannot be
+// inspected statically.
+type shellInvocation struct {
+	script     word
+	hasScript  bool
+	readsStdin bool
+	opaque     bool
+}
+
+// parseShellInvocation extracts the -c script or stdin mode from a shell
+// argument vector. The guards share it so risk classification, workspace
+// validation and canonical deny forms agree on shell flags.
+func parseShellInvocation(words []word) shellInvocation {
+	invocation := shellInvocation{readsStdin: true}
 	for i := 0; i < len(words); i++ {
 		w := words[i]
 		if !w.literal {
-			return word{}, false
+			return shellInvocation{opaque: true}
 		}
 		text := w.text
 		switch {
 		case text == "--":
-			return word{}, false
+			if i+1 < len(words) {
+				return shellInvocation{opaque: true}
+			}
+			return invocation
+		case text == "-":
+			return invocation
 		case text == "--command":
 			if i+1 < len(words) {
-				return words[i+1], true
+				return shellInvocation{script: words[i+1], hasScript: true}
 			}
-			return word{}, false
+			return shellInvocation{opaque: true}
 		case strings.HasPrefix(text, "--command="):
-			return word{text: strings.TrimPrefix(text, "--command="), literal: w.literal}, true
+			return shellInvocation{
+				script:    word{text: strings.TrimPrefix(text, "--command="), literal: w.literal},
+				hasScript: true,
+			}
 		case shellValueFlags[text]:
 			i++
 		case text == "-c":
 			if i+1 < len(words) {
-				return words[i+1], true
+				return shellInvocation{script: words[i+1], hasScript: true}
 			}
-			return word{}, false
+			return shellInvocation{opaque: true}
 		case strings.HasPrefix(text, "-") && !strings.HasPrefix(text, "--"):
-			if strings.Contains(text[1:], "c") {
+			flags := text[1:]
+			if strings.Contains(flags, "c") {
 				if i+1 < len(words) {
-					return words[i+1], true
+					return shellInvocation{script: words[i+1], hasScript: true}
 				}
-				return word{}, false
+				return shellInvocation{opaque: true}
 			}
-			if strings.ContainsAny(text[1:], "si") {
-				return word{}, false
+			if strings.Contains(flags, "s") {
+				return invocation
 			}
 		case !strings.HasPrefix(text, "-"):
-			return word{}, false
+			return shellInvocation{opaque: true}
 		}
 	}
-	return word{}, false
+	return invocation
 }
 
 type wrapperSpec struct {

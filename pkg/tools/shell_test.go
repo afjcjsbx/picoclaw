@@ -3490,6 +3490,8 @@ func TestShellTool_CustomDenyCanonicalizesWrappers(t *testing.T) {
 		"command rm -rf build",
 		"nohup rm -rf build",
 		"busybox rm -rf build",
+		`find . -exec rm -rf build \;`,
+		"exec rm -rf build",
 	} {
 		if got := tool.guardCommand(command, t.TempDir()); !strings.Contains(got, "dangerous pattern") {
 			t.Errorf("custom deny should match wrapped command %q, got: %q", command, got)

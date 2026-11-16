@@ -76,8 +76,9 @@ func appendCanonicalCall(forms []string, words []word, redirs []*syntax.Redirect
 
 	name := baseCommand(words[0].text)
 	if isShellCommand(name) {
-		if script, ok := shellScriptArg(words[1:]); ok && script.literal {
-			forms = append(forms, canonicalCommands(NormalizeForDeny(script.text), depth+1)...)
+		invocation := parseShellInvocation(words[1:])
+		if invocation.hasScript && invocation.script.literal {
+			forms = append(forms, canonicalCommands(NormalizeForDeny(invocation.script.text), depth+1)...)
 		}
 		return forms
 	}
@@ -88,23 +89,19 @@ func appendCanonicalCall(forms []string, words []word, redirs []*syntax.Redirect
 		}
 		return forms
 	case "trap":
-		for _, w := range words[1:] {
-			if !w.literal {
-				return forms
-			}
-			switch w.text {
-			case "-l", "-p":
-				return forms
-			case "--":
-				continue
-			case "", "-":
-				return forms
-			}
-			if strings.HasPrefix(w.text, "-") {
-				continue
-			}
-			forms = append(forms, canonicalCommands(NormalizeForDeny(w.text), depth+1)...)
-			return forms
+		action, found, dynamic := trapAction(words[1:])
+		if found && !dynamic {
+			forms = append(forms, canonicalCommands(NormalizeForDeny(action.text), depth+1)...)
+		}
+		return forms
+	case "find":
+		for _, nested := range findExecCommands(words[1:]) {
+			forms = appendCanonicalCall(forms, nested, nil, depth+1)
+		}
+		return forms
+	case "exec":
+		if nested, ok := execCommand(words[1:]); ok {
+			forms = appendCanonicalCall(forms, nested, nil, depth+1)
 		}
 		return forms
 	}

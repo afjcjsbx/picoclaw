@@ -1012,36 +1012,6 @@ func isStackRotation(text string) bool {
 	return true
 }
 
-// shellReadsStdin reports whether the shell would read its script from stdin.
-// A script file positional or -c/--command means stdin is data instead.
-func shellReadsStdin(args []expandedWord) bool {
-	for i := 0; i < len(args); i++ {
-		text := args[i].text
-		switch {
-		case text == "--":
-			return i+1 >= len(args)
-		case text == "-" || text == "-s":
-			return true
-		case text == "-c" || text == "--command":
-			return false
-		case strings.HasPrefix(text, "--command="):
-			return false
-		case shellValueFlags[text]:
-			i++
-		case strings.HasPrefix(text, "-") && !strings.HasPrefix(text, "--"):
-			if strings.Contains(text[1:], "c") {
-				return false
-			}
-			if strings.Contains(text[1:], "s") {
-				return true
-			}
-		case !strings.HasPrefix(text, "-"):
-			return false
-		}
-	}
-	return true
-}
-
 func (s *workspaceState) checkNested(
 	args []expandedWord,
 	redirs []*syntax.Redirect,
@@ -1053,19 +1023,19 @@ func (s *workspaceState) checkNested(
 	name := baseCommand(args[0].text)
 
 	if isShellCommand(name) {
-		words := wordsFromExpanded(args[1:])
-		if script, ok := shellScriptArg(words); ok {
-			if !script.literal {
+		invocation := parseShellInvocation(wordsFromExpanded(args[1:]))
+		if invocation.hasScript {
+			if !invocation.script.literal {
 				return newWorkspaceError("dynamic shell script cannot be validated under workspace restriction")
 			}
-			return checkWorkspaceScript(script.text, s.nestedPolicy(), depth+1)
+			return checkWorkspaceScript(invocation.script.text, s.nestedPolicy(), depth+1)
 		}
 		// `bash <<EOF` executes the heredoc body as a script. Quoted and
 		// unquoted bodies are both inspected; expansion is applied first when
 		// the outer shell would have expanded it. A heredoc on a shell that
 		// already has a script file or -c argument is stdin data, not a
 		// script, and is left alone.
-		if shellReadsStdin(args[1:]) {
+		if invocation.readsStdin {
 			for _, redir := range redirs {
 				if redir == nil {
 					continue
@@ -1111,8 +1081,6 @@ func (s *workspaceState) checkNested(
 		return s.checkExec(args[1:], depth)
 	case "find":
 		return s.checkFindExec(args[1:], depth)
-	case "busybox":
-		return s.checkBusybox(args[1:], depth)
 	}
 
 	if spec, ok := wrapperSpecs[name]; ok {
@@ -1170,98 +1138,35 @@ func envChdirTarget(args []expandedWord) (expandedWord, bool) {
 	return expandedWord{}, false
 }
 
-// checkBusybox treats the first non-flag argument as the applet, so
-// `busybox sh -c ...` is inspected like `sh -c ...`. BusyBox is common on the
-// low-resource targets PicoClaw runs on.
-func (s *workspaceState) checkBusybox(args []expandedWord, depth int) error {
-	i := 0
-	for i < len(args) {
-		text := args[i].text
-		if text == "--" {
-			i++
-			break
-		}
-		if strings.HasPrefix(text, "-") && text != "-" {
-			i++
-			continue
-		}
-		break
+func (s *workspaceState) checkTrap(args []expandedWord, depth int) error {
+	action, found, dynamic := trapAction(wordsFromExpanded(args))
+	if dynamic {
+		return newWorkspaceError("dynamic trap action cannot be validated under workspace restriction")
 	}
-	if i >= len(args) {
+	if !found {
 		return nil
 	}
-	return s.checkSimple(args[i:], nil, depth+1, false)
-}
-
-func (s *workspaceState) checkTrap(args []expandedWord, depth int) error {
-	for _, arg := range args {
-		if arg.dynamic {
-			return newWorkspaceError("dynamic trap action cannot be validated under workspace restriction")
-		}
-		switch arg.text {
-		case "-l", "-p":
-			return nil
-		case "--":
-			continue
-		case "", "-":
-			return nil
-		}
-		if strings.HasPrefix(arg.text, "-") {
-			continue
-		}
-		return checkWorkspaceScript(arg.text, s.nestedPolicy(), depth+1)
-	}
-	return nil
+	return checkWorkspaceScript(action.text, s.nestedPolicy(), depth+1)
 }
 
 // checkExec inspects the command that exec replaces the shell with. exec is
 // both a shell builtin and an execve wrapper, so a nested shell script would
 // otherwise escape the AST pass.
 func (s *workspaceState) checkExec(args []expandedWord, depth int) error {
-	i := 0
-	for i < len(args) {
-		text := args[i].text
-		switch {
-		case text == "--":
-			i++
-		case text == "-a":
-			i += 2
-			continue
-		case strings.HasPrefix(text, "-a") && len(text) > 2:
-			i++
-			continue
-		case text == "-c" || text == "-l":
-			i++
-			continue
-		case strings.HasPrefix(text, "-") && text != "-":
-			i++
-			continue
-		}
-		break
-	}
-	if i >= len(args) {
+	nested, ok := execCommand(wordsFromExpanded(args))
+	if !ok {
 		return nil
 	}
-	return s.checkSimple(args[i:], nil, depth+1, false)
+	return s.checkSimple(expandedFromWords(nested), nil, depth+1, false)
 }
 
 // checkFindExec inspects commands launched by find -exec/-execdir/-ok/-okdir.
 // find runs them directly, so a nested sh -c script is just as reachable as it
 // is from a top-level command.
 func (s *workspaceState) checkFindExec(args []expandedWord, depth int) error {
-	for i := 0; i < len(args); i++ {
-		switch args[i].text {
-		case "-exec", "-execdir", "-ok", "-okdir":
-			end := i + 1
-			for end < len(args) && args[end].text != ";" && args[end].text != "+" {
-				end++
-			}
-			if end > i+1 {
-				if err := s.checkSimple(args[i+1:end], nil, depth+1, false); err != nil {
-					return err
-				}
-			}
-			i = end
+	for _, nested := range findExecCommands(wordsFromExpanded(args)) {
+		if err := s.checkSimple(expandedFromWords(nested), nil, depth+1, false); err != nil {
+			return err
 		}
 	}
 	return nil
