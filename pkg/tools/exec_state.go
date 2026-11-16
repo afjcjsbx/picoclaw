@@ -46,18 +46,11 @@ func execStateKeyFromContext(ctx context.Context) (execStateKey, bool) {
 	return key, true
 }
 
-func cloneExecStateEnv(env map[string]string) map[string]string {
-	if len(env) == 0 {
-		return nil
-	}
-	return maps.Clone(env)
-}
-
 // mergeExecEnv applies LLM-provided variables on top of a base map, dropping
 // blocked names and normalizing keys. It is the single merge rule used by the
 // per-conversation overlay and by runEnv.
 func mergeExecEnv(base, update map[string]string) map[string]string {
-	merged := cloneExecStateEnv(base)
+	merged := maps.Clone(base)
 	if merged == nil && len(update) > 0 {
 		merged = make(map[string]string, len(update))
 	}
@@ -93,7 +86,7 @@ func (s *execStateStore) load(ctx context.Context) (cwd string, env map[string]s
 		return "", nil
 	}
 	entry.lastUsed = time.Now()
-	return entry.cwd, cloneExecStateEnv(entry.env)
+	return entry.cwd, maps.Clone(entry.env)
 }
 
 // rememberCwd stores the resolved cwd for subsequent calls in the conversation.
@@ -126,7 +119,7 @@ func (s *execStateStore) clearCwd(ctx context.Context) {
 // clears it.
 func (s *execStateStore) storeEnv(ctx context.Context, env map[string]string) {
 	s.mutate(ctx, func(entry *execStateEntry) {
-		entry.env = cloneExecStateEnv(env)
+		entry.env = maps.Clone(env)
 	})
 }
 
@@ -199,12 +192,12 @@ func (t *ExecTool) ClearSession(agentID, sessionKey string) {
 // Blocked LLM-provided keys are dropped before they can be stored.
 func mergeExecStateEnv(base, update map[string]string) (effective, next map[string]string, provided bool) {
 	if update == nil {
-		return cloneExecStateEnv(base), nil, false
+		return maps.Clone(base), nil, false
 	}
 	if len(update) == 0 {
 		return nil, nil, true
 	}
 
 	merged := mergeExecEnv(base, update)
-	return cloneExecStateEnv(merged), merged, true
+	return maps.Clone(merged), merged, true
 }
