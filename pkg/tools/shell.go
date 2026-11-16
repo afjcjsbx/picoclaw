@@ -2100,14 +2100,6 @@ func patternsMatchAny(patterns []*regexp.Regexp, forms []string) bool {
 	return false
 }
 
-// needsCanonicalDenyForms reports whether a command contains shell syntax whose
-// written form differs from its argv form. Simple commands without quoting,
-// escapes, expansions or substitutions are already covered by the raw text, so
-// they avoid a second AST parse.
-func needsCanonicalDenyForms(command string) bool {
-	return strings.ContainsAny(command, "'\"\\$`")
-}
-
 func (t *ExecTool) guardCommand(command, cwd string) string {
 	cmd := strings.TrimSpace(command)
 	lower := strings.ToLower(cmd)
@@ -2124,11 +2116,14 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 	// independent of enable_deny_patterns.
 	if runtime.GOOS != "windows" {
 		lowerForDeny = strings.ToLower(shellguard.NormalizeForDeny(stripped))
-		denyForms = []string{lowerForDeny}
-		if needsCanonicalDenyForms(cmd) {
-			for _, form := range shellguard.CanonicalCommands(cmd) {
-				denyForms = append(denyForms, strings.ToLower(form))
-			}
+		canonicalForms := shellguard.CanonicalCommands(cmd)
+		denyForms = make([]string, 0, 1+len(canonicalForms))
+		denyForms = append(denyForms, lowerForDeny)
+		// Canonicalize every command, not just ones with quoting: wrappers
+		// such as env and command expose the nested argv without any special
+		// shell syntax, and custom deny patterns must see it.
+		for _, form := range canonicalForms {
+			denyForms = append(denyForms, strings.ToLower(form))
 		}
 	}
 

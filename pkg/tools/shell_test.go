@@ -3498,6 +3498,38 @@ func TestShellTool_CustomDenyUsesASTWords(t *testing.T) {
 	}
 }
 
+// TestShellTool_CustomDenyCanonicalizesWrappers verifies that custom deny
+// patterns also match the command a wrapper launches, even when the written
+// form contains no quotes or expansions.
+func TestShellTool_CustomDenyCanonicalizesWrappers(t *testing.T) {
+	cfg := &config.Config{
+		Tools: config.ToolsConfig{
+			Exec: config.ExecConfig{
+				EnableDenyPatterns: false,
+				CustomDenyPatterns: []string{`^rm\s`},
+			},
+		},
+	}
+	tool, err := NewExecToolWithConfig(t.TempDir(), false, cfg)
+	require.NoError(t, err)
+
+	for _, command := range []string{
+		"rm -rf build",
+		"env rm -rf build",
+		"command rm -rf build",
+		"nohup rm -rf build",
+		"busybox rm -rf build",
+	} {
+		if got := tool.guardCommand(command, t.TempDir()); !strings.Contains(got, "dangerous pattern") {
+			t.Errorf("custom deny should match wrapped command %q, got: %q", command, got)
+		}
+	}
+
+	if got := tool.guardCommand("echo rm -rf build", t.TempDir()); got != "" {
+		t.Fatalf("an rm argument should not match the anchored pattern, got: %q", got)
+	}
+}
+
 // TestShellTool_SelfProtectionHardline verifies that the agent cannot kill or
 // delete its own process, service, state directory or executable, even with
 // default deny patterns disabled and a broad allow rule configured.
