@@ -172,6 +172,16 @@ func (g *Guard) assessCall(call *syntax.CallExpr, depth int) Assessment {
 	for i, arg := range call.Args {
 		words[i] = literalWord(arg)
 	}
+	return g.assessArgv(words, depth)
+}
+
+// assessArgv classifies one argument vector. It is shared by AST calls and by
+// commands launched from find -exec/-ok, which are argv slices rather than
+// CallExpr nodes.
+func (g *Guard) assessArgv(words []word, depth int) Assessment {
+	if len(words) == 0 {
+		return Assessment{}
+	}
 
 	first := words[0]
 	if !first.literal || first.text == "" {
@@ -190,7 +200,36 @@ func (g *Guard) assessCall(call *syntax.CallExpr, depth int) Assessment {
 	if spec, ok := wrapperSpecs[name]; ok {
 		return g.assessWrapper(name, words, spec, depth)
 	}
+	if name == "find" {
+		return preferAssessment(g.classify(words), g.assessFindExec(words[1:], depth))
+	}
 	return g.classify(words)
+}
+
+// assessFindExec classifies commands launched by find -exec/-execdir/-ok/-okdir.
+// find runs them directly, so a nested critical command must not hide behind
+// find's own high-risk base level.
+func (g *Guard) assessFindExec(words []word, depth int) Assessment {
+	if depth >= maxShellNesting {
+		return unknownAssessment(
+			wordTexts(words), "command nesting limit exceeded",
+		)
+	}
+	var result Assessment
+	for i := 0; i < len(words); i++ {
+		switch words[i].text {
+		case "-exec", "-execdir", "-ok", "-okdir":
+			end := i + 1
+			for end < len(words) && words[end].text != ";" && words[end].text != "+" {
+				end++
+			}
+			if end > i+1 {
+				result = preferAssessment(result, g.assessArgv(words[i+1:end], depth+1))
+			}
+			i = end
+		}
+	}
+	return result
 }
 
 func (g *Guard) classify(words []word) Assessment {
@@ -495,6 +534,9 @@ var wrapperSpecs = map[string]wrapperSpec{
 		valueFlags: map[string]bool{"-n": true, "--interval": true},
 	},
 	"setsid": {},
+	// The first positional is the applet itself, so it is the nested command
+	// name rather than an argument to skip.
+	"busybox": {},
 	"xvfb-run": {
 		valueFlags: map[string]bool{
 			"-e": true, "-n": true, "-s": true,
@@ -575,14 +617,20 @@ func isAssignment(s string) bool {
 // hasCommandLookupFlag reports whether command(1) was invoked with -v/-V,
 // including combined forms such as -pv. Lookup mode does not execute the
 // argument, so it is not a guard concern.
+//
+// Only the options that precede command's own argument count: a -v after the
+// command name belongs to the nested command (`command rm -v`), not to
+// command(1).
 func hasCommandLookupFlag(words []word) bool {
 	for _, w := range words {
 		if !w.literal {
-			continue
+			return false
 		}
 		text := w.text
-		if strings.HasPrefix(text, "-") && !strings.HasPrefix(text, "--") &&
-			strings.ContainsAny(text[1:], "vV") {
+		if text == "--" || text == "-" || !strings.HasPrefix(text, "-") {
+			return false
+		}
+		if !strings.HasPrefix(text, "--") && strings.ContainsAny(text[1:], "vV") {
 			return true
 		}
 	}
@@ -592,16 +640,21 @@ func hasCommandLookupFlag(words []word) bool {
 // hasEnvSplitString reports whether an env invocation uses -S/--split-string.
 // The attached form (-S"cmd") does not match the exact -S argument modifier,
 // so it is checked here before the argv reaches the classifier.
+//
+// Options are scanned in order because -u and -C consume the following word.
+// Without that, env -u NAME -S "cmd" hid the split string behind NAME.
 func hasEnvSplitString(words []word) bool {
-	for _, w := range words {
-		if isAssignment(w.text) {
-			continue
-		}
+	for i := 0; i < len(words); i++ {
+		w := words[i]
 		if !w.literal {
 			return false
 		}
 		text := w.text
-		if text == "--" || text == "-" {
+		if isAssignment(text) || text == "-" {
+			// "-" is env's short form of -i; both may be followed by options.
+			continue
+		}
+		if text == "--" {
 			return false
 		}
 		if !strings.HasPrefix(text, "-") {
@@ -610,22 +663,25 @@ func hasEnvSplitString(words []word) bool {
 		if text == "--split-string" || strings.HasPrefix(text, "--split-string=") {
 			return true
 		}
-		if !strings.HasPrefix(text, "--") && shortEnvSplitFlag(text) {
-			return true
+		if strings.HasPrefix(text, "--unset") || strings.HasPrefix(text, "--chdir") {
+			if !strings.Contains(text, "=") {
+				i++ // the value is the next word
+			}
+			continue
 		}
-	}
-	return false
-}
-
-// shortEnvSplitFlag scans an env short-option cluster. -u and -C consume the
-// rest of the word as their value, so -uS unsets S rather than enabling -S.
-func shortEnvSplitFlag(text string) bool {
-	for i := 1; i < len(text); i++ {
-		switch text[i] {
-		case 'u', 'C':
-			return false
-		case 'S':
-			return true
+		if strings.HasPrefix(text, "--") {
+			continue
+		}
+		for j := 1; j < len(text); j++ {
+			switch text[j] {
+			case 'u', 'C':
+				if j == len(text)-1 {
+					i++ // the value is the next word
+				}
+				j = len(text) - 1 // an attached value consumes the rest
+			case 'S':
+				return true
+			}
 		}
 	}
 	return false

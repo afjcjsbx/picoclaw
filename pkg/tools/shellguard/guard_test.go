@@ -60,10 +60,19 @@ func TestGuardCheck(t *testing.T) {
 		{name: "env attached unset allowed", command: "env -uFOO echo ok"},
 		{name: "env attached unset S allowed", command: "env -uS echo ok"},
 		{name: "env option-like argument allowed", command: "env FOO=bar echo -S"},
+		{name: "env split after unset blocked", command: "env -u NAME -S 'rm -rf /'", blocked: true},
+		{name: "env split after chdir blocked", command: "env -C /tmp -S 'rm -rf /'", blocked: true},
+		{name: "env split after unset long blocked", command: "env -u NAME --split-string='rm -rf /'", blocked: true},
+		{name: "env split after attached unset blocked", command: "env -uNAME -S 'rm -rf /'", blocked: true},
+		{name: "env split after ignore blocked", command: "env -i -S 'rm -rf /'", blocked: true},
+		{name: "env unset value is not split", command: "env -u NAME -C /tmp echo ok"},
 		{name: "xargs safe command allowed", command: "xargs echo"},
 		{name: "xargs rm base allowed", command: "xargs rm"},
 		{name: "xargs risky command blocked", command: "xargs rm -rf /", blocked: true},
 		{name: "xargs shell blocked", command: "xargs sh -c 'echo ok'", blocked: true},
+		{name: "busybox safe applet allowed", command: "busybox ls -la"},
+		{name: "busybox risky applet blocked", command: "busybox rm -rf /", blocked: true},
+		{name: "busybox shell script blocked", command: "busybox sh -c 'rm -rf /'", blocked: true},
 		{name: "timeout safe command allowed", command: "timeout 5 echo ok"},
 		{name: "timeout risky command blocked", command: "timeout 5 rm -rf /", blocked: true},
 		{name: "time output flag keeps command", command: "/usr/bin/time -o /tmp/timing rm -rf /", blocked: true},
@@ -72,6 +81,9 @@ func TestGuardCheck(t *testing.T) {
 		{name: "command lookup allowed", command: "command -v rm"},
 		{name: "command combined lookup allowed", command: "command -pv rm"},
 		{name: "command execution blocked", command: "command rm -rf /", blocked: true},
+		{name: "command nested verbose flag blocked", command: "command rm -rf -v build", blocked: true},
+		{name: "command trailing verbose flag blocked", command: "command chmod -v 777 script.sh", blocked: true},
+		{name: "command verbose ssh blocked", command: "command ssh -v host", blocked: true},
 		{name: "docker ps allowed", command: "docker ps"},
 		{name: "docker logs allowed", command: "docker logs app"},
 		{name: "docker inspect allowed", command: "docker inspect app"},
@@ -117,6 +129,33 @@ func TestGuardCheck(t *testing.T) {
 				t.Fatalf("blocked error lacks structured fields: %v", blocked)
 			}
 		})
+	}
+}
+
+func TestGuardFindExecNestedCommands(t *testing.T) {
+	t.Parallel()
+
+	guard := mustGuard(t, "high")
+	blocked := []string{
+		`find . -exec rm -rf build \;`,
+		`find . -execdir rm -rf build +`,
+		`find . -ok rm -rf build \;`,
+		`find . -exec sh -c 'rm -rf build' \;`,
+	}
+	for _, command := range blocked {
+		if got := guard.Check(command); got == nil {
+			t.Errorf("Check(%q) allowed, want nested command blocked", command)
+		}
+	}
+
+	allowed := []string{
+		`find . -exec echo ok \;`,
+		`find . -exec chmod +x script.sh \;`,
+	}
+	for _, command := range allowed {
+		if got := guard.Check(command); got != nil {
+			t.Errorf("Check(%q) blocked: %v", command, got)
+		}
 	}
 }
 
