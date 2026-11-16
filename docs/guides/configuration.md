@@ -1288,7 +1288,7 @@ Command cron jobs can execute shell commands. By default, remote channels cannot
 | Topic | Description |
 | ----- | ----------- |
 | [Security Configuration](../security/security_configuration.md) | Store API keys and secrets in separate `.security.yml` file |
-| [Sensitive Data Filtering](../security/sensitive_data_filtering.md) | Filter API keys and tokens from tool results before sending to LLM |
+| [Sensitive Data Filtering](../security/sensitive_data_filtering.md) | Defense-in-depth redaction of exact configured secrets from tool results; not a DLP boundary |
 | [Hook System](../architecture/hooks/) | Event-driven hooks: observers, interceptors, approval hooks |
 | [Steering](../architecture/steering.md) | Inject messages into a running agent loop between tool calls |
 | [SubTurn](../architecture/subturn.md) | Subagent coordination, concurrency control, lifecycle |
