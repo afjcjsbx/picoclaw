@@ -255,6 +255,7 @@ type turnState struct {
 	pendingResults       chan *tools.ToolResult // Channel for SubTurn results
 	concurrencySem       chan struct{}          // Semaphore for limiting concurrent SubTurns
 	children             sync.WaitGroup         // Async children a SubTurn must join before finishing
+	joinSubTurns         bool                   // Root turns in CLI mode join spawned children
 	isFinished           atomic.Bool            // Whether this turn has finished
 	session              session.SessionStore   // Session store reference
 	initialHistoryLength int                    // Snapshot of history length at turn start

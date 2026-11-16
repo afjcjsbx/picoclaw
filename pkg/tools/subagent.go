@@ -19,6 +19,12 @@ type SubTurnSpawner interface {
 	SpawnSubTurn(ctx context.Context, cfg SubTurnConfig) (*ToolResult, error)
 }
 
+// SubTurnSlotWaiter lets the spawn tool reserve a concurrency slot before it
+// acknowledges a background spawn. The returned release function is idempotent.
+type SubTurnSlotWaiter interface {
+	WaitForSubTurnSlot(ctx context.Context) (release func(), err error)
+}
+
 // SubTurnConfig holds configuration for spawning a sub-turn.
 type SubTurnConfig struct {
 	Model              string
@@ -34,6 +40,11 @@ type SubTurnConfig struct {
 	InitialMessages    []providers.Message
 	InitialTokenBudget *atomic.Int64 // Shared token budget for team members; nil if no budget
 	TargetAgentID      string        // If set, run as this agent (its workspace, model, tools)
+
+	// SlotHeld means the caller already reserved a concurrency slot through
+	// SubTurnSlotWaiter. SlotRelease releases it exactly once.
+	SlotHeld    bool
+	SlotRelease func()
 }
 
 type SubagentTask struct {

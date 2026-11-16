@@ -194,7 +194,9 @@ func TestSubTurnOutlivesChildrenOnIterationCap(t *testing.T) {
 	defer al.Close()
 	defer release()
 
-	if _, err := al.ProcessDirect(context.Background(), "go", "cap-test"); err != nil {
+	// Use a non-CLI channel: the root turn stays fire-and-forget, so the test
+	// can observe the SubTurn outliving its parent (CLI roots now join).
+	if _, err := al.ProcessDirectWithChannel(context.Background(), "go", "cap-test", "test", "direct"); err != nil {
 		t.Fatal(err)
 	}
 	select {
