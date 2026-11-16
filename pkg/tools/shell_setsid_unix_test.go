@@ -104,7 +104,7 @@ func TestShellTool_TimeoutKillsSetsidChild(t *testing.T) {
 	tool.SetTimeout(2 * time.Second)
 
 	command, pidFile := setsidHelperCommand(t)
-	result := tool.Execute(context.Background(), map[string]any{
+	result := tool.Execute(WithToolContext(context.Background(), "cli", "test"), map[string]any{
 		"action":  "run",
 		"command": command,
 	})
