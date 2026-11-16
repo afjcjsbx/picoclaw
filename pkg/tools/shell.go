@@ -457,6 +457,22 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 		return ErrorResult("action is required")
 	}
 
+	// GHSA-pv8c-p6jf-3fpp: block the whole exec tool from remote channels
+	// (e.g. Telegram webhooks) unless explicitly opted-in via config. This
+	// applies to every action, not only run: list/read/poll/wait can leak
+	// session output and write/kill/send-keys can mutate internal sessions.
+	// Fail-closed: empty channel = blocked.
+	if !t.allowRemote {
+		channel := ToolChannel(ctx)
+		if channel == "" {
+			channel, _ = args["__channel"].(string)
+		}
+		channel = strings.TrimSpace(channel)
+		if channel == "" || !constants.IsInternalChannel(channel) {
+			return ErrorResult("exec is restricted to internal channels")
+		}
+	}
+
 	switch action {
 	case "run":
 		return t.executeRun(ctx, args)
@@ -534,19 +550,6 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 	command, ok := args["command"].(string)
 	if !ok {
 		return ErrorResult("command is required")
-	}
-
-	// GHSA-pv8c-p6jf-3fpp: block exec from remote channels (e.g. Telegram webhooks)
-	// unless explicitly opted-in via config. Fail-closed: empty channel = blocked.
-	if !t.allowRemote {
-		channel := ToolChannel(ctx)
-		if channel == "" {
-			channel, _ = args["__channel"].(string)
-		}
-		channel = strings.TrimSpace(channel)
-		if channel == "" || !constants.IsInternalChannel(channel) {
-			return ErrorResult("exec is restricted to internal channels")
-		}
 	}
 
 	isPty := boolArg(args, "pty")
