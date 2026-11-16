@@ -516,11 +516,18 @@ func relativePathCandidate(text string) (string, bool) {
 	if strings.HasPrefix(value, "-") {
 		eq := strings.IndexByte(value, '=')
 		if eq < 0 {
-			return "", false
-		}
-		value = value[eq+1:]
-		if value == "" || isWorkspaceURL(value) {
-			return "", false
+			// A single-dash option can carry an attached path, as in
+			// cc -I/etc or echo -isystem/usr/include.
+			slash := strings.IndexAny(value, `/\`)
+			if slash <= 0 {
+				return "", false
+			}
+			value = value[slash:]
+		} else {
+			value = value[eq+1:]
+			if value == "" || isWorkspaceURL(value) {
+				return "", false
+			}
 		}
 	}
 	if strings.ContainsAny(value, `/\`) {
@@ -532,6 +539,9 @@ func relativePathCandidate(text string) (string, bool) {
 // checkPath validates a path against every directory the command may have
 // changed into. A path that escapes from any candidate cwd is rejected.
 func (s *workspaceState) checkPath(path string) error {
+	if filePath, ok := fileURLPath(path); ok {
+		path = filePath
+	}
 	if isWorkspaceURL(path) {
 		return nil
 	}
@@ -1308,4 +1318,23 @@ func isWorkspaceURL(text string) bool {
 		}
 	}
 	return false
+}
+
+// fileURLPath extracts the local path from a file: URI so it is checked like a
+// plain absolute path. Web schemes are exempt from workspace checks, but file:
+// URIs point at the local filesystem and must stay inside the boundary.
+func fileURLPath(text string) (string, bool) {
+	if !strings.HasPrefix(strings.ToLower(text), "file:") {
+		return "", false
+	}
+	rest := text[len("file:"):]
+	rest = strings.TrimPrefix(rest, "//")
+	if !strings.HasPrefix(rest, "/") {
+		slash := strings.IndexByte(rest, '/')
+		if slash < 0 {
+			return "", false
+		}
+		rest = rest[slash:]
+	}
+	return rest, true
 }
