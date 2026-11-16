@@ -126,6 +126,16 @@ func (g *Guard) checkCall(call *syntax.CallExpr, depth int) *BlockedError {
 	for i, arg := range call.Args {
 		words[i] = literalWord(arg)
 	}
+	return g.checkArgv(words, depth)
+}
+
+// checkArgv classifies one argument vector. It is shared by AST calls and by
+// commands launched from find -exec/-ok, which are argv slices rather than
+// CallExpr nodes.
+func (g *Guard) checkArgv(words []word, depth int) *BlockedError {
+	if len(words) == 0 {
+		return nil
+	}
 
 	first := words[0]
 	if !first.literal || first.text == "" {
@@ -145,7 +155,40 @@ func (g *Guard) checkCall(call *syntax.CallExpr, depth int) *BlockedError {
 	if spec, ok := wrapperSpecs[name]; ok {
 		return g.checkWrapper(name, words, spec, depth)
 	}
+	if name == "find" {
+		if blocked := g.classify(words); blocked != nil {
+			return blocked
+		}
+		return g.checkFindExec(words[1:], depth)
+	}
 	return g.classify(words)
+}
+
+// checkFindExec classifies commands launched by find -exec/-execdir/-ok/-okdir.
+// find runs them directly, so a nested critical command must not hide behind
+// find's own high-risk base level.
+func (g *Guard) checkFindExec(words []word, depth int) *BlockedError {
+	if depth >= maxShellNesting {
+		return NewBlockedError(
+			wordTexts(words), RiskCritical, g.threshold, "command nesting limit exceeded",
+		)
+	}
+	for i := 0; i < len(words); i++ {
+		switch words[i].text {
+		case "-exec", "-execdir", "-ok", "-okdir":
+			end := i + 1
+			for end < len(words) && words[end].text != ";" && words[end].text != "+" {
+				end++
+			}
+			if end > i+1 {
+				if blocked := g.checkArgv(words[i+1:end], depth+1); blocked != nil {
+					return blocked
+				}
+			}
+			i = end
+		}
+	}
+	return nil
 }
 
 func (g *Guard) classify(words []word) *BlockedError {
@@ -425,6 +468,9 @@ var wrapperSpecs = map[string]wrapperSpec{
 		valueFlags: map[string]bool{"-n": true, "--interval": true},
 	},
 	"setsid": {},
+	// The first positional is the applet itself, so it is the nested command
+	// name rather than an argument to skip.
+	"busybox": {},
 	"xvfb-run": {
 		valueFlags: map[string]bool{
 			"-e": true, "-n": true, "-s": true,

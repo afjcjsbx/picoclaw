@@ -39,6 +39,41 @@ func TestShellTool_RiskClassifierBlocksDefault(t *testing.T) {
 	}
 }
 
+func TestShellTool_RiskNestedLaunchers(t *testing.T) {
+	t.Parallel()
+
+	tool := riskTestTool(t, config.ExecConfig{})
+	blocked := []string{
+		"command rm -rf -v build",
+		"command chmod -v 777 script.sh",
+		"command ssh -v host",
+		"env -u NAME -S 'rm -rf build'",
+		"env -C /tmp -S 'rm -rf build'",
+		"busybox sh -c 'rm -rf build'",
+		"busybox rm -rf build",
+	}
+	for _, command := range blocked {
+		if got := tool.guardCommand(command, t.TempDir()); !strings.Contains(got, "risk classifier") {
+			t.Errorf("command %q should be blocked by the risk classifier, got %q", command, got)
+		}
+	}
+	for _, command := range []string{"command -v rm", "command -pv rm", "busybox ls -la"} {
+		if got := tool.guardCommand(command, t.TempDir()); got != "" {
+			t.Errorf("command %q should be allowed, got %q", command, got)
+		}
+	}
+
+	high := riskTestTool(t, config.ExecConfig{RiskThreshold: "high"})
+	for _, command := range []string{
+		`find . -exec rm -rf build \;`,
+		`find . -execdir rm -rf build +`,
+	} {
+		if got := high.guardCommand(command, t.TempDir()); !strings.Contains(got, "risk classifier") {
+			t.Errorf("command %q should block its nested command, got %q", command, got)
+		}
+	}
+}
+
 func TestShellTool_RiskClassifierExecute(t *testing.T) {
 	t.Parallel()
 

@@ -70,6 +70,9 @@ func TestGuardCheck(t *testing.T) {
 		{name: "xargs rm base allowed", command: "xargs rm"},
 		{name: "xargs risky command blocked", command: "xargs rm -rf /", blocked: true},
 		{name: "xargs shell blocked", command: "xargs sh -c 'echo ok'", blocked: true},
+		{name: "busybox safe applet allowed", command: "busybox ls -la"},
+		{name: "busybox risky applet blocked", command: "busybox rm -rf /", blocked: true},
+		{name: "busybox shell script blocked", command: "busybox sh -c 'rm -rf /'", blocked: true},
 		{name: "timeout safe command allowed", command: "timeout 5 echo ok"},
 		{name: "timeout risky command blocked", command: "timeout 5 rm -rf /", blocked: true},
 		{name: "time output flag keeps command", command: "/usr/bin/time -o /tmp/timing rm -rf /", blocked: true},
@@ -126,6 +129,33 @@ func TestGuardCheck(t *testing.T) {
 				t.Fatalf("blocked error lacks structured fields: %v", blocked)
 			}
 		})
+	}
+}
+
+func TestGuardFindExecNestedCommands(t *testing.T) {
+	t.Parallel()
+
+	guard := mustGuard(t, "high")
+	blocked := []string{
+		`find . -exec rm -rf build \;`,
+		`find . -execdir rm -rf build +`,
+		`find . -ok rm -rf build \;`,
+		`find . -exec sh -c 'rm -rf build' \;`,
+	}
+	for _, command := range blocked {
+		if got := guard.Check(command); got == nil {
+			t.Errorf("Check(%q) allowed, want nested command blocked", command)
+		}
+	}
+
+	allowed := []string{
+		`find . -exec echo ok \;`,
+		`find . -exec chmod +x script.sh \;`,
+	}
+	for _, command := range allowed {
+		if got := guard.Check(command); got != nil {
+			t.Errorf("Check(%q) blocked: %v", command, got)
+		}
 	}
 }
 
