@@ -11,7 +11,9 @@ import (
 
 // newRiskGuard builds the AST-based command classifier. It is part of the
 // optional built-in guard set, so enable_deny_patterns=false disables it just
-// like the regex deny list; hardline and custom deny patterns still apply.
+// like the regex deny list; smart approvals enable it again because the
+// Guardian needs a risk signal. Hardline and custom deny patterns still apply
+// independently.
 //
 // Windows is skipped because the exec tool runs PowerShell there and the
 // classifier's command table describes POSIX tools.

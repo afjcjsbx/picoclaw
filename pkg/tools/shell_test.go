@@ -1412,6 +1412,7 @@ func TestShellTool_TimeoutWithPartialOutput(t *testing.T) {
 // commands from default deny pattern checks.
 func TestShellTool_CustomAllowPatterns(t *testing.T) {
 	cfg := &config.Config{
+		Approvals: config.ApprovalsConfig{Mode: config.ApprovalModeOff},
 		Tools: config.ToolsConfig{
 			Exec: config.ExecConfig{
 				EnableDenyPatterns:  true,
@@ -1449,6 +1450,7 @@ func TestShellTool_CustomAllowPatterns(t *testing.T) {
 
 	// Without any custom allow pattern, "git push origin main" should be blocked.
 	cfgNoAllow := &config.Config{
+		Approvals: config.ApprovalsConfig{Mode: config.ApprovalModeOff},
 		Tools: config.ToolsConfig{
 			Exec: config.ExecConfig{
 				EnableDenyPatterns: true,
@@ -3334,6 +3336,7 @@ func TestShellTool_InvalidCustomDenyPatternRejectedWhenDefaultsDisabled(t *testi
 
 func TestShellTool_DefaultDenyPatternsCanBeDisabled(t *testing.T) {
 	cfg := &config.Config{
+		Approvals: config.ApprovalsConfig{Mode: config.ApprovalModeOff},
 		Tools: config.ToolsConfig{
 			Exec: config.ExecConfig{EnableDenyPatterns: false},
 		},
@@ -3384,6 +3387,7 @@ func TestShellTool_HardlinePatternsAlwaysApply(t *testing.T) {
 // when the optional risk classifier and default deny patterns are disabled.
 func TestShellTool_HardlineASTBypass(t *testing.T) {
 	cfg := &config.Config{
+		Approvals: config.ApprovalsConfig{Mode: config.ApprovalModeOff},
 		Tools: config.ToolsConfig{
 			Exec: config.ExecConfig{
 				EnableDenyPatterns:  false,
@@ -3513,6 +3517,7 @@ func TestShellTool_SelfProtectionHardline(t *testing.T) {
 	t.Setenv(config.EnvServiceName, "pico-agent")
 
 	cfg := &config.Config{
+		Approvals: config.ApprovalsConfig{Mode: config.ApprovalModeOff},
 		Tools: config.ToolsConfig{
 			Exec: config.ExecConfig{
 				EnableDenyPatterns:  false,
@@ -3594,6 +3599,7 @@ func TestShellTool_BackticksInsideQuotedHeredocAreAllowed(t *testing.T) {
 // skip a real command on the following lines.
 func TestShellTool_HeredocLookalikeDoesNotHideCommands(t *testing.T) {
 	cfg := &config.Config{
+		Approvals: config.ApprovalsConfig{Mode: config.ApprovalModeOff},
 		Tools: config.ToolsConfig{
 			Exec: config.ExecConfig{
 				EnableDenyPatterns: true,

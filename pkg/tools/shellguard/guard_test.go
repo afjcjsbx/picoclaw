@@ -394,11 +394,11 @@ func TestGuardNestingLimit(t *testing.T) {
 	t.Parallel()
 
 	guard := mustGuard(t, "medium")
-	if blocked := guard.checkScript("echo ok", maxShellNesting+1); blocked == nil {
-		t.Fatal("depth beyond the nesting limit should be blocked")
+	if assessment := guard.assessScript("echo ok", maxShellNesting+1); !assessment.Unknown {
+		t.Fatal("depth beyond the nesting limit should be unknown")
 	}
-	if blocked := guard.checkScript("echo ok", maxShellNesting); blocked != nil {
-		t.Fatalf("depth at the nesting limit should pass: %v", blocked)
+	if assessment := guard.assessScript("echo ok", maxShellNesting); assessment.Unknown {
+		t.Fatalf("depth at the nesting limit should pass: %+v", assessment)
 	}
 }
 
