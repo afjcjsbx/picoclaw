@@ -77,6 +77,9 @@ type ExecTool struct {
 	state                   *execStateStore
 	sessionManager          *SessionManager
 	riskGuard               *shellguard.Guard
+	approvalEnabled         bool
+	approvalThreshold       shellguard.RiskLevel
+	approvalReviewer        approvalReviewer
 }
 
 var _ AsyncExecutor = (*ExecTool)(nil)
@@ -146,6 +149,18 @@ var (
 		),
 		// Recursive deletion of the filesystem root.
 		regexp.MustCompile(`\brm\s+(?:-{1,2}[a-z-]*\s+)*/(?:[\s*/.]|$)`),
+		// Recursive deletion of the directories that hold the OS, system
+		// binaries, user homes and the root account. Subdirectories remain
+		// governed by the risk classifier, so rm -rf /home/alice/build is not
+		// caught here.
+		regexp.MustCompile(
+			`\brm\s+(?:-{1,2}[a-z-]*\s+)*/+` +
+				`(?:etc|usr|home|root|bin|sbin|lib|lib64|boot|var|opt|srv|sys|proc|dev)` +
+				`(?:/\*)?/?` + `(?:[\s;&|<>()]|$)`,
+		),
+		// Sending SIGHUP to every process, or SIGKILL to PID 1.
+		regexp.MustCompile(`\bkill\s+(?:--\s+)?-1(?:[\s;&|<>()]|$)`),
+		regexp.MustCompile(`\bkill\s+(?:-9|-KILL|-SIGKILL)\s+1(?:[\s;&|<>()]|$)`),
 		// Host power state changes.
 		regexp.MustCompile(`\b(?:shutdown|reboot|poweroff)\b`),
 	}
@@ -369,6 +384,7 @@ func NewExecToolWithConfig(
 	var allowedPathPatterns []*regexp.Regexp
 	allowRemote := true
 	enableDefaultGuard := true
+	approvalConfig := config.ApprovalsConfig{}
 	if len(allowPaths) > 0 {
 		allowedPathPatterns = allowPaths[0]
 	}
@@ -377,6 +393,11 @@ func NewExecToolWithConfig(
 		execConfig := cfg.Tools.Exec
 		enableDefaultGuard = execConfig.EnableDenyPatterns
 		allowRemote = execConfig.AllowRemote
+		normalized, err := cfg.Approvals.Normalized()
+		if err != nil {
+			return nil, fmt.Errorf("approvals: %w", err)
+		}
+		approvalConfig = normalized
 		if enableDefaultGuard {
 			denyPatterns = append(denyPatterns, defaultDenyPatterns...)
 			if runtime.GOOS == "windows" {
@@ -391,7 +412,6 @@ func NewExecToolWithConfig(
 				nil,
 			)
 		}
-		var err error
 		if len(execConfig.CustomDenyPatterns) > 0 {
 			logger.InfoCF("tools", "using custom deny patterns", map[string]any{
 				"patterns": execConfig.CustomDenyPatterns,
@@ -445,9 +465,29 @@ func NewExecToolWithConfig(
 		execEnvAllowlist = cfg.Tools.Exec.EnvAllowlist
 	}
 
-	riskGuard, err := newRiskGuard(cfg, enableDefaultGuard)
+	smartApprovals := approvalConfig.Mode == config.ApprovalModeSmart
+
+	// Smart approvals need the AST classifier even when the optional default
+	// guard set is disabled; otherwise there is no risk signal to review.
+	riskGuard, err := newRiskGuard(cfg, enableDefaultGuard || smartApprovals)
 	if err != nil {
 		return nil, err
+	}
+
+	var reviewer approvalReviewer
+	if smartApprovals {
+		guardian, guardianErr := newApprovalGuardian(cfg, approvalConfig)
+		if guardianErr != nil {
+			// Keep safe commands working, but fail closed for every command
+			// that needs a second opinion.
+			logger.WarnCF(
+				"tools.approval",
+				"smart approvals enabled but the Guardian is unavailable; risky commands will be rejected",
+				map[string]any{"error": guardianErr.Error()},
+			)
+		} else if guardian != nil {
+			reviewer = guardian
+		}
 	}
 
 	hardlinePatterns := make([]*regexp.Regexp, 0, len(hardlineDenyPatterns)+8)
@@ -474,6 +514,9 @@ func NewExecToolWithConfig(
 		state:                   newExecStateStore(),
 		sessionManager:          getSessionManager(),
 		riskGuard:               riskGuard,
+		approvalEnabled:         smartApprovals,
+		approvalThreshold:       approvalThreshold(approvalConfig.SmartThreshold),
+		approvalReviewer:        reviewer,
 	}, nil
 }
 
@@ -816,7 +859,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 	// path would fail validation on the next call.
 	stateCwd := cwd
 
-	if guardError := t.guardCommand(guardedCommand, cwd); guardError != "" {
+	if guardError := t.guardCommandContext(ctx, guardedCommand, cwd); guardError != "" {
 		return ErrorResult(guardError)
 	}
 

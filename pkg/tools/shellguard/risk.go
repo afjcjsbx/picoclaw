@@ -696,6 +696,9 @@ type BlockedError struct {
 	Level     RiskLevel
 	Threshold RiskLevel
 	Reason    string
+	// Unknown is true when the classifier could not resolve the command, for
+	// example a dynamic command name or an unparseable script.
+	Unknown bool
 }
 
 // Error implements the error interface.

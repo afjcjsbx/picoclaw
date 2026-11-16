@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -67,6 +68,10 @@ func patternsMatchAny(patterns []*regexp.Regexp, forms []string) bool {
 }
 
 func (t *ExecTool) guardCommand(command, cwd string) string {
+	return t.guardCommandContext(context.Background(), command, cwd)
+}
+
+func (t *ExecTool) guardCommandContext(ctx context.Context, command, cwd string) string {
 	cmd := strings.TrimSpace(command)
 	lower := strings.ToLower(cmd)
 	// Quoted heredoc bodies are literal text: a backtick there cannot run a
@@ -95,6 +100,7 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 
 	// Hardline patterns are an immutable floor: they apply even when the
 	// default deny set is disabled and no custom allow rule can exempt them.
+	// They are never sent to the Guardian model.
 	if patternsMatchAny(t.hardlineDenyPatterns, denyForms) {
 		return "Command blocked by safety guard (dangerous pattern detected)"
 	}
@@ -106,11 +112,19 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 		return "Command blocked by safety guard (dangerous pattern detected)"
 	}
 
+	needsApproval := false
+	approvalDescription := ""
+
 	// Default deny patterns can be exempted by custom allow patterns, so
-	// operators can selectively permit normally-blocked commands.
+	// operators can selectively permit normally-blocked commands. In smart
+	// mode they can also be reviewed instead of being rejected outright.
 	if !t.commandMatchesCustomAllowPattern(lower) {
 		if patternsMatchAny(t.denyPatterns, []string{lowerForDeny}) {
-			return "Command blocked by safety guard (dangerous pattern detected)"
+			if !t.approvalEnabled {
+				return "Command blocked by safety guard (dangerous pattern detected)"
+			}
+			needsApproval = true
+			approvalDescription = "matched a built-in dangerous-command pattern"
 		}
 	}
 
@@ -175,6 +189,8 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 	// byte-level patterns cannot resolve, such as `x=rm; $x -rf /`. Only an
 	// explicit custom risk allow pattern can exempt it, and only up to
 	// riskAllowThreshold; custom_allow_patterns no longer bypasses this layer.
+	// In smart mode, commands at or above approvalThreshold, plus unknown
+	// commands, go to the Guardian instead of being rejected outright.
 	// Script files are inspected only inside the workspace: Dir resolves relative
 	// paths and Root bounds what the guard is willing to read.
 	if t.riskGuard != nil {
@@ -185,17 +201,64 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 		if root == "" {
 			root = cwd
 		}
-		if blocked := t.riskGuard.CheckFileWithOptions(cmd, parsed, shellguard.CheckOptions{
-			Dir:  cwd,
-			Root: root,
-		}); blocked != nil {
+		scriptOpts := shellguard.CheckOptions{Dir: cwd, Root: root}
+		if t.approvalEnabled {
+			assessment := t.riskGuard.AssessFileWithOptions(cmd, parsed, scriptOpts)
+			riskExempt := t.riskAllowExempts(cmd, lower)
+			riskBlocked := !riskExempt &&
+				(assessment.Unknown ||
+					!shellguard.IsAllowed(assessment.Level, t.riskGuard.Threshold()))
+			smartTriggered := !riskExempt &&
+				(assessment.Unknown || assessment.Level >= t.approvalThreshold)
+			if smartTriggered {
+				needsApproval = true
+				riskDescription := assessment.Reason
+				if !assessment.Unknown || riskDescription == "" {
+					riskDescription = "risk level " + assessment.Level.String()
+				}
+				if approvalDescription == "" {
+					approvalDescription = riskDescription
+				} else {
+					approvalDescription += "; " + riskDescription
+				}
+			} else if riskBlocked {
+				return assessment.BlockedError(t.riskGuard.Threshold()).Error()
+			}
+		} else if blocked := t.riskGuard.CheckFileWithOptions(cmd, parsed, scriptOpts); blocked != nil {
 			if !t.riskAllowExempts(cmd, lower) {
 				return blocked.Error()
 			}
 		}
 	}
 
+	if needsApproval {
+		if blocked := t.reviewCommand(ctx, cmd, approvalDescription); blocked != "" {
+			return blocked
+		}
+	}
+
 	return ""
+}
+
+// reviewCommand asks the Guardian model for a verdict on a command that the
+// static layers flagged. Approve returns an empty string; deny, escalate, an
+// unavailable reviewer and provider errors all return a block message.
+func (t *ExecTool) reviewCommand(ctx context.Context, command, description string) string {
+	if t.approvalReviewer == nil {
+		return "Command blocked: approval guardian is unavailable; manual approval is not configured"
+	}
+	verdict, err := t.approvalReviewer.Review(ctx, command, description)
+	if err != nil {
+		return "Command blocked: approval guardian could not review the command; manual approval is not configured"
+	}
+	switch verdict {
+	case approvalApprove:
+		return ""
+	case approvalDeny:
+		return "Command blocked by approval guardian (DENY)"
+	default:
+		return "Command blocked by approval guardian (ESCALATE); manual approval is not configured"
+	}
 }
 
 // workspacePathAllowed reports whether p stays inside cwdPath or is covered by

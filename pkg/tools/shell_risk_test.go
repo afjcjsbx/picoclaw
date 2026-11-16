@@ -12,7 +12,10 @@ import (
 
 func riskTestTool(t *testing.T, exec config.ExecConfig) *ExecTool {
 	t.Helper()
-	cfg := &config.Config{Tools: config.ToolsConfig{Exec: exec}}
+	cfg := &config.Config{
+		Approvals: config.ApprovalsConfig{Mode: config.ApprovalModeOff},
+		Tools:     config.ToolsConfig{Exec: exec},
+	}
 	cfg.Tools.Exec.EnableDenyPatterns = true
 	tool, err := NewExecToolWithConfig(t.TempDir(), false, cfg)
 	if err != nil {
@@ -210,7 +213,7 @@ func TestShellTool_RiskInspectsWorkspaceScripts(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	cfg := &config.Config{}
+	cfg := &config.Config{Approvals: config.ApprovalsConfig{Mode: config.ApprovalModeOff}}
 	cfg.Tools.Exec.EnableDenyPatterns = true
 	tool, err := NewExecToolWithConfig(workspace, false, cfg)
 	if err != nil {
@@ -432,6 +435,7 @@ func TestShellTool_RiskDisabledWithDefaultDenyPatterns(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Config{
+		Approvals: config.ApprovalsConfig{Mode: config.ApprovalModeOff},
 		Tools: config.ToolsConfig{
 			Exec: config.ExecConfig{EnableDenyPatterns: false},
 		},

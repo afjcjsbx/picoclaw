@@ -45,6 +45,7 @@ type Config struct {
 	Gateway   GatewayConfig   `json:"gateway"             yaml:"-"`
 	Events    EventsConfig    `json:"events,omitempty"    yaml:"-"`
 	Hooks     HooksConfig     `json:"hooks,omitempty"     yaml:"-"`
+	Approvals ApprovalsConfig `json:"approvals,omitempty" yaml:"-"`
 	Plugins   PluginsConfig   `json:"plugins,omitempty"   yaml:"-"`
 	Tools     ToolsConfig     `json:"tools"               yaml:",inline"`
 	Heartbeat HeartbeatConfig `json:"heartbeat"           yaml:"-"`
@@ -226,6 +227,91 @@ type HookDefaultsConfig struct {
 	ObserverTimeoutMS    int `json:"observer_timeout_ms,omitempty"`
 	InterceptorTimeoutMS int `json:"interceptor_timeout_ms,omitempty"`
 	ApprovalTimeoutMS    int `json:"approval_timeout_ms,omitempty"`
+}
+
+// Approval modes for tools.exec. "off" keeps the static guards as the final
+// decision. "smart" sends commands that the static guards consider high,
+// critical or unknown to an auxiliary Guardian model before they can run.
+const (
+	ApprovalModeOff   = "off"
+	ApprovalModeSmart = "smart"
+)
+
+// Smart approval thresholds. Unknown commands are always reviewed in smart
+// mode, regardless of the configured threshold.
+const (
+	ApprovalSmartThresholdHigh     = "high"
+	ApprovalSmartThresholdCritical = "critical"
+)
+
+// Defaults for the auxiliary Guardian call. The timeout is short so a slow or
+// unreachable model cannot stall an interactive turn; the call is only made for
+// commands that need a second opinion.
+const (
+	DefaultApprovalSmartTimeoutSeconds = 20
+	MaxApprovalSmartTimeoutSeconds     = 600
+)
+
+// ApprovalsConfig configures how potentially dangerous tool calls are approved.
+type ApprovalsConfig struct {
+	// Mode is "smart" (default) or "off". Smart mode asks a Guardian model to
+	// review commands at or above SmartThreshold, plus commands whose risk
+	// cannot be classified. Set "off" to keep the static guards as the final
+	// decision.
+	Mode string `json:"mode,omitempty" env:"PICOCLAW_APPROVALS_MODE"`
+	// Model selects the Guardian model by model_list alias or provider/model
+	// reference. Empty uses the agent's default model.
+	Model string `json:"model,omitempty" env:"PICOCLAW_APPROVALS_MODEL"`
+	// SmartThreshold is "high" (default) to review high, critical and unknown
+	// commands, or "critical" to review only critical and unknown commands.
+	SmartThreshold string `json:"smart_threshold,omitempty" env:"PICOCLAW_APPROVALS_SMART_THRESHOLD"`
+	// SmartTimeoutSeconds bounds each Guardian call. Zero uses the default 20s.
+	SmartTimeoutSeconds int `json:"smart_timeout_seconds,omitempty" env:"PICOCLAW_APPROVALS_SMART_TIMEOUT_SECONDS"`
+}
+
+// Normalized validates the approval configuration and fills its defaults.
+// Unknown values are rejected instead of silently falling back, because a typo
+// in a security setting must be visible.
+func (c ApprovalsConfig) Normalized() (ApprovalsConfig, error) {
+	mode := strings.ToLower(strings.TrimSpace(c.Mode))
+	switch mode {
+	case "", ApprovalModeSmart:
+		mode = ApprovalModeSmart
+	case ApprovalModeOff:
+	default:
+		return c, fmt.Errorf("mode %q must be %q or %q", c.Mode, ApprovalModeOff, ApprovalModeSmart)
+	}
+
+	threshold := strings.ToLower(strings.TrimSpace(c.SmartThreshold))
+	switch threshold {
+	case "", ApprovalSmartThresholdHigh:
+		threshold = ApprovalSmartThresholdHigh
+	case ApprovalSmartThresholdCritical:
+	default:
+		return c, fmt.Errorf(
+			"smart_threshold %q must be %q or %q",
+			c.SmartThreshold, ApprovalSmartThresholdHigh, ApprovalSmartThresholdCritical,
+		)
+	}
+
+	timeout := c.SmartTimeoutSeconds
+	if timeout < 0 {
+		return c, fmt.Errorf("smart_timeout_seconds %d must not be negative", timeout)
+	}
+	if timeout == 0 {
+		timeout = DefaultApprovalSmartTimeoutSeconds
+	}
+	if timeout > MaxApprovalSmartTimeoutSeconds {
+		return c, fmt.Errorf(
+			"smart_timeout_seconds %d exceeds the maximum of %d",
+			timeout, MaxApprovalSmartTimeoutSeconds,
+		)
+	}
+
+	c.Mode = mode
+	c.SmartThreshold = threshold
+	c.SmartTimeoutSeconds = timeout
+	return c, nil
 }
 
 type BuiltinHookConfig struct {
@@ -2074,6 +2160,10 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, err
 	}
 	applySkillsRegistryEnvCompat(cfg)
+
+	if cfg.Approvals, err = cfg.Approvals.Normalized(); err != nil {
+		return nil, fmt.Errorf("approvals: %w", err)
+	}
 
 	if err = InitChannelList(cfg.Channels); err != nil {
 		return nil, err

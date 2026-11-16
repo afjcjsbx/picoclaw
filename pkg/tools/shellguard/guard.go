@@ -30,10 +30,10 @@ const (
 // input from turning the guard into an unbounded parser recursion.
 //
 // Depth N is the deepest level analyzed, and two comparisons enforce that on
-// purpose. A function entered at some depth (checkScript, checkWorkspaceText,
+// purpose. A function entered at some depth (assessScript, checkWorkspaceText,
 // checkSimple, canonicalCommands) rejects depth > maxShellNesting. A helper
-// about to recurse at depth+1 (checkShell, checkWrapper, checkTrap,
-// checkFindExec, appendCanonicalCall) stops at depth >= maxShellNesting. Both
+// about to recurse at depth+1 (assessShell, assessWrapper, assessTrap,
+// assessFindExec, appendCanonicalCall) stops at depth >= maxShellNesting. Both
 // refuse the same hop from N to N+1, so switching either side to the other
 // operator moves the limit by one level on that path only.
 const maxShellNesting = 8
@@ -56,6 +56,10 @@ type checkEnv struct {
 	dir       string
 	root      string
 	remaining int
+}
+
+func newCheckEnv(opts CheckOptions) *checkEnv {
+	return &checkEnv{dir: opts.Dir, root: opts.Root, remaining: maxScriptInspectBytes}
 }
 
 // Guard classifies commands against a configured risk threshold.
@@ -106,6 +110,76 @@ func NewGuard(
 	}, nil
 }
 
+// Assessment is the static risk evaluation of a command. Unknown marks a
+// command that cannot be classified statically (dynamic command names, opaque
+// shells, or parse errors); smart approval routes those to the Guardian model.
+type Assessment struct {
+	Level   RiskLevel
+	Command string
+	Reason  string
+	Unknown bool
+}
+
+// BlockedError converts an assessment into the structured error returned by
+// Check, using the given threshold for the message.
+func (a Assessment) BlockedError(threshold RiskLevel) *BlockedError {
+	reason := a.Reason
+	if reason == "" {
+		reason = "command risk exceeds configured threshold"
+	}
+	return &BlockedError{
+		Command:   a.Command,
+		Level:     a.Level,
+		Threshold: threshold,
+		Reason:    reason,
+		Unknown:   a.Unknown,
+	}
+}
+
+// Threshold returns the highest risk level the guard allows.
+func (g *Guard) Threshold() RiskLevel {
+	if g == nil {
+		return RiskLow
+	}
+	return g.threshold
+}
+
+// Assess classifies every simple command in command and returns the highest
+// risk it finds. Unlike Check, it returns a result even when the command is
+// allowed, so callers can apply an additional approval threshold.
+func (g *Guard) Assess(command string) Assessment {
+	if g == nil {
+		return Assessment{}
+	}
+	file, err := Parse(command)
+	if err != nil {
+		return parseAssessment(command)
+	}
+	return g.AssessFile(command, file)
+}
+
+// AssessFile is Assess for an already parsed command; a nil file is treated as
+// a parse failure.
+func (g *Guard) AssessFile(command string, file *syntax.File) Assessment {
+	return g.AssessFileWithOptions(command, file, CheckOptions{})
+}
+
+// AssessFileWithOptions is AssessFile with the directory and workspace root
+// used to resolve and inspect script files named on the command line.
+func (g *Guard) AssessFileWithOptions(
+	command string,
+	file *syntax.File,
+	opts CheckOptions,
+) Assessment {
+	if g == nil {
+		return Assessment{}
+	}
+	if file == nil {
+		return parseAssessment(command)
+	}
+	return g.assessFile(file, newCheckEnv(opts), 0)
+}
+
 // Check parses command and returns a BlockedError when any simple command in it
 // exceeds the configured threshold. A nil result means the command may run.
 // It is CheckWithOptions without a script inspection context, so `bash file.sh`
@@ -122,7 +196,7 @@ func (g *Guard) CheckWithOptions(command string, opts CheckOptions) *BlockedErro
 	}
 	file, err := Parse(command)
 	if err != nil {
-		return g.parseError(command)
+		return g.checkAssessment(parseAssessment(command))
 	}
 	return g.CheckFileWithOptions(command, file, opts)
 }
@@ -142,18 +216,19 @@ func (g *Guard) CheckFileWithOptions(
 	if g == nil {
 		return nil
 	}
-	if file == nil {
-		return g.parseError(command)
-	}
-	env := &checkEnv{dir: opts.Dir, root: opts.Root, remaining: maxScriptInspectBytes}
-	return g.checkFile(file, env, 0)
+	return g.checkAssessment(g.AssessFileWithOptions(command, file, opts))
 }
 
-func (g *Guard) parseError(command string) *BlockedError {
-	return NewBlockedError(
+func (g *Guard) checkAssessment(assessment Assessment) *BlockedError {
+	if !assessment.Unknown && IsAllowed(assessment.Level, g.threshold) {
+		return nil
+	}
+	return assessment.BlockedError(g.threshold)
+}
+
+func parseAssessment(command string) Assessment {
+	return unknownAssessment(
 		[]string{summarize(command)},
-		RiskCritical,
-		g.threshold,
 		"command could not be parsed for risk classification",
 	)
 }
@@ -170,44 +245,39 @@ func (g *Guard) WithThreshold(threshold RiskLevel) *Guard {
 	return &clone
 }
 
-func (g *Guard) checkScript(command string, env *checkEnv, depth int) *BlockedError {
-	return g.checkScriptReader(strings.NewReader(command), summarize(command), env, depth)
+func (g *Guard) assessScript(command string, env *checkEnv, depth int) Assessment {
+	return g.assessScriptReader(strings.NewReader(command), summarize(command), env, depth)
 }
 
-// checkScriptReader parses and walks a script from reader. summary names the
+// assessScriptReader parses and walks a script from reader. summary names the
 // source in a parse error; for a file it is the path, so file contents are not
 // copied just to build an error message.
-func (g *Guard) checkScriptReader(
+func (g *Guard) assessScriptReader(
 	reader io.Reader,
 	summary string,
 	env *checkEnv,
 	depth int,
-) *BlockedError {
+) Assessment {
 	if depth > maxShellNesting {
-		return NewBlockedError(
-			[]string{"<nested shell>"}, RiskCritical, g.threshold, "shell nesting limit exceeded",
+		return unknownAssessment(
+			[]string{"<nested shell>"}, "shell nesting limit exceeded",
 		)
 	}
 
 	parser := syntax.NewParser(syntax.Variant(syntax.LangBash))
 	file, err := parser.Parse(reader, "")
 	if err != nil {
-		return NewBlockedError(
+		return unknownAssessment(
 			[]string{summary},
-			RiskCritical,
-			g.threshold,
 			"command could not be parsed for risk classification",
 		)
 	}
-	return g.checkFile(file, env, depth)
+	return g.assessFile(file, env, depth)
 }
 
-func (g *Guard) checkFile(file *syntax.File, env *checkEnv, depth int) *BlockedError {
-	var blocked *BlockedError
+func (g *Guard) assessFile(file *syntax.File, env *checkEnv, depth int) Assessment {
+	var result Assessment
 	syntax.Walk(file, func(node syntax.Node) bool {
-		if blocked != nil {
-			return false
-		}
 		if node == nil {
 			return true
 		}
@@ -215,83 +285,76 @@ func (g *Guard) checkFile(file *syntax.File, env *checkEnv, depth int) *BlockedE
 		if !ok {
 			return true
 		}
-		blocked = g.checkCall(call, env, depth)
-		return blocked == nil
+		result = preferAssessment(result, g.assessCall(call, env, depth))
+		return true
 	})
-	return blocked
+	return result
 }
 
-func (g *Guard) checkCall(call *syntax.CallExpr, env *checkEnv, depth int) *BlockedError {
+func (g *Guard) assessCall(call *syntax.CallExpr, env *checkEnv, depth int) Assessment {
 	if len(call.Args) == 0 {
-		return nil
+		return Assessment{}
 	}
 
 	words := make([]word, len(call.Args))
 	for i, arg := range call.Args {
 		words[i] = literalWord(arg)
 	}
-	return g.checkArgv(words, env, depth)
+	return g.assessArgv(words, env, depth)
 }
 
-// checkArgv classifies one argument vector. It is shared by AST calls and by
+// assessArgv classifies one argument vector. It is shared by AST calls and by
 // commands launched from find -exec/-ok, which are argv slices rather than
 // CallExpr nodes.
-func (g *Guard) checkArgv(words []word, env *checkEnv, depth int) *BlockedError {
+func (g *Guard) assessArgv(words []word, env *checkEnv, depth int) Assessment {
 	if len(words) == 0 {
-		return nil
+		return Assessment{}
 	}
 
 	first := words[0]
 	if first.dynamic || first.text == "" {
-		return NewBlockedError(
-			[]string{"<dynamic>"}, RiskCritical, g.threshold,
-			"dynamic command name cannot be classified",
+		return unknownAssessment(
+			[]string{"<dynamic>"}, "dynamic command name cannot be classified",
 		)
 	}
 
 	name := baseCommand(first.text)
 	if isShellCommand(name) {
-		return g.checkShell(name, words, env, depth)
+		return g.assessShell(name, words, env, depth)
 	}
 	if name == "trap" {
-		return g.checkTrap(words, env, depth)
+		return g.assessTrap(words, env, depth)
 	}
 	if spec, ok := wrapperSpecs[name]; ok {
-		return g.checkWrapper(name, words, spec, env, depth)
+		return g.assessWrapper(name, words, spec, env, depth)
 	}
 	if name == "find" {
-		if blocked := g.classify(words); blocked != nil {
-			return blocked
-		}
-		return g.checkFindExec(words[1:], env, depth)
+		return preferAssessment(g.classify(words), g.assessFindExec(words[1:], env, depth))
 	}
 	if name == "exec" {
-		if blocked := g.classify(words); blocked != nil {
-			return blocked
-		}
+		result := g.classify(words)
 		if nested, ok := execCommand(words[1:]); ok {
-			return g.checkArgv(nested, env, depth+1)
+			result = preferAssessment(result, g.assessArgv(nested, env, depth+1))
 		}
-		return nil
+		return result
 	}
 	return g.classify(words)
 }
 
-// checkFindExec classifies commands launched by find -exec/-execdir/-ok/-okdir.
+// assessFindExec classifies commands launched by find -exec/-execdir/-ok/-okdir.
 // find runs them directly, so a nested critical command must not hide behind
 // find's own high-risk base level.
-func (g *Guard) checkFindExec(words []word, env *checkEnv, depth int) *BlockedError {
+func (g *Guard) assessFindExec(words []word, env *checkEnv, depth int) Assessment {
 	if depth >= maxShellNesting {
-		return NewBlockedError(
-			wordTexts(words), RiskCritical, g.threshold, "command nesting limit exceeded",
+		return unknownAssessment(
+			wordTexts(words), "command nesting limit exceeded",
 		)
 	}
+	var result Assessment
 	for _, nested := range findExecCommands(words) {
-		if blocked := g.checkArgv(nested, env, depth+1); blocked != nil {
-			return blocked
-		}
+		result = preferAssessment(result, g.assessArgv(nested, env, depth+1))
 	}
-	return nil
+	return result
 }
 
 // findExecCommands returns the argument vectors launched by find -exec,
@@ -368,19 +431,18 @@ func execCommand(args []word) ([]word, bool) {
 	return args[i:], true
 }
 
-func (g *Guard) classify(words []word) *BlockedError {
+func (g *Guard) classify(words []word) Assessment {
 	args := wordTexts(words)
-	level := ClassifyCommand(args, g.overrides, g.modifiers)
-	if IsAllowed(level, g.threshold) {
-		return nil
+	return Assessment{
+		Level:   ClassifyCommand(args, g.overrides, g.modifiers),
+		Command: FormatCommand(args),
 	}
-	return NewBlockedError(args, level, g.threshold, "command risk exceeds configured threshold")
 }
 
-func (g *Guard) checkShell(name string, words []word, env *checkEnv, depth int) *BlockedError {
+func (g *Guard) assessShell(name string, words []word, env *checkEnv, depth int) Assessment {
 	if depth >= maxShellNesting {
-		return NewBlockedError(
-			wordTexts(words), RiskCritical, g.threshold, "shell nesting limit exceeded",
+		return unknownAssessment(
+			wordTexts(words), "shell nesting limit exceeded",
 		)
 	}
 
@@ -388,69 +450,68 @@ func (g *Guard) checkShell(name string, words []word, env *checkEnv, depth int) 
 	switch {
 	case invocation.hasScript:
 		if invocation.script.dynamic {
-			return NewBlockedError(
-				wordTexts(words), RiskCritical, g.threshold, "shell script argument is dynamic",
+			return unknownAssessment(
+				wordTexts(words), "shell script argument is dynamic",
 			)
 		}
-		return g.checkScript(invocation.script.text, env, depth+1)
+		return g.assessScript(invocation.script.text, env, depth+1)
 	case invocation.hasFile:
 		if invocation.file.dynamic {
-			return NewBlockedError(
-				wordTexts(words), RiskCritical, g.threshold, "shell script path is dynamic",
+			return unknownAssessment(
+				wordTexts(words), "shell script path is dynamic",
 			)
 		}
-		return g.checkScriptFile(invocation.file.text, words, env, depth+1)
+		return g.assessScriptFile(invocation.file.text, words, env, depth+1)
 	default:
-		return NewBlockedError(
-			wordTexts(words), RiskCritical, g.threshold,
+		return unknownAssessment(
+			wordTexts(words),
 			"shell reads commands from stdin or a script file that cannot be inspected",
 		)
 	}
 }
 
-func (g *Guard) checkTrap(words []word, env *checkEnv, depth int) *BlockedError {
+func (g *Guard) assessTrap(words []word, env *checkEnv, depth int) Assessment {
 	if depth >= maxShellNesting {
-		return NewBlockedError(
-			wordTexts(words), RiskCritical, g.threshold, "command nesting limit exceeded",
+		return unknownAssessment(
+			wordTexts(words), "command nesting limit exceeded",
 		)
 	}
 
 	action, found, dynamic := trapAction(words[1:])
 	if dynamic {
-		return NewBlockedError(
-			wordTexts(words), RiskCritical, g.threshold, "trap action is dynamic",
+		return unknownAssessment(
+			wordTexts(words), "trap action is dynamic",
 		)
 	}
 	if !found {
-		return nil
+		return Assessment{}
 	}
-	return g.checkScript(action.text, env, depth+1)
+	return g.assessScript(action.text, env, depth+1)
 }
 
-func (g *Guard) checkWrapper(
+func (g *Guard) assessWrapper(
 	name string,
 	words []word,
 	spec wrapperSpec,
 	env *checkEnv,
 	depth int,
-) *BlockedError {
+) Assessment {
 	if depth >= maxShellNesting {
-		return NewBlockedError(
-			wordTexts(words), RiskCritical, g.threshold, "command nesting limit exceeded",
+		return unknownAssessment(
+			wordTexts(words), "command nesting limit exceeded",
 		)
 	}
 	if name == "command" && hasCommandLookupFlag(words[1:]) {
-		return nil
+		return Assessment{}
 	}
 	if name == "env" && hasEnvSplitString(words[1:]) {
-		return NewBlockedError(
-			wordTexts(words), RiskCritical, g.threshold,
+		return unknownAssessment(
+			wordTexts(words),
 			"env -S executes a command string that cannot be inspected",
 		)
 	}
-	if blocked := g.classify(words); blocked != nil {
-		return blocked
-	}
+
+	result := g.classify(words)
 
 	// capsh runs /bin/bash for everything after `--`, so its arguments are a
 	// shell invocation rather than an executable name.
@@ -459,33 +520,33 @@ func (g *Guard) checkWrapper(
 			bash := make([]word, 0, len(rest)+1)
 			bash = append(bash, word{text: "bash"})
 			bash = append(bash, rest...)
-			return g.checkShell("bash", bash, env, depth+1)
+			return preferAssessment(result, g.assessShell("bash", bash, env, depth+1))
 		}
 	}
 
 	// Wrappers such as runuser -c and flock -c take a shell command string.
 	// Inspect it as a script instead of treating its first token as argv[0].
 	if script, found, dynamic := commandFlagValue(words[1:], spec.commandFlags); dynamic {
-		return NewBlockedError(
-			wordTexts(words), RiskCritical, g.threshold, "dynamic command string in "+name,
+		return unknownAssessment(
+			wordTexts(words), "dynamic command string in "+name,
 		)
 	} else if found {
 		if script.dynamic {
-			return NewBlockedError(
-				wordTexts(words), RiskCritical, g.threshold, "dynamic command string in "+name,
+			return unknownAssessment(
+				wordTexts(words), "dynamic command string in "+name,
 			)
 		}
-		return g.checkScript(script.text, env, depth+1)
+		return preferAssessment(result, g.assessScript(script.text, env, depth+1))
 	}
 
 	nested, found, dynamic := wrapperNested(words[1:], spec)
 	if dynamic {
-		return NewBlockedError(
-			wordTexts(words), RiskCritical, g.threshold, "dynamic command name in "+name,
+		return unknownAssessment(
+			wordTexts(words), "dynamic command name in "+name,
 		)
 	}
 	if !found || len(nested) == 0 {
-		return nil
+		return result
 	}
 
 	nestedName := ""
@@ -493,26 +554,52 @@ func (g *Guard) checkWrapper(
 		nestedName = baseCommand(nested[0].text)
 	}
 	if nestedName == "" {
-		return NewBlockedError(
-			wordTexts(words), RiskCritical, g.threshold, "dynamic command name in "+name,
+		return unknownAssessment(
+			wordTexts(words), "dynamic command name in "+name,
 		)
 	}
 	if isShellCommand(nestedName) {
 		if name == "xargs" {
-			return NewBlockedError(
-				wordTexts(words), RiskCritical, g.threshold,
+			return unknownAssessment(
+				wordTexts(words),
 				"xargs launching a shell cannot be inspected",
 			)
 		}
-		return g.checkShell(nestedName, nested, env, depth+1)
+		return preferAssessment(result, g.assessShell(nestedName, nested, env, depth+1))
 	}
 	if nestedName == "trap" {
-		return g.checkTrap(nested, env, depth+1)
+		return preferAssessment(result, g.assessTrap(nested, env, depth+1))
 	}
 	if next, ok := wrapperSpecs[nestedName]; ok {
-		return g.checkWrapper(nestedName, nested, next, env, depth+1)
+		return preferAssessment(result, g.assessWrapper(nestedName, nested, next, env, depth+1))
 	}
-	return g.classify(nested)
+	return preferAssessment(result, g.classify(nested))
+}
+
+func unknownAssessment(args []string, reason string) Assessment {
+	return Assessment{
+		Level:   RiskCritical,
+		Command: FormatCommand(args),
+		Reason:  reason,
+		Unknown: true,
+	}
+}
+
+// preferAssessment keeps the highest known risk, but always lets an unknown
+// command win: it needs the Guardian regardless of the numeric level.
+func preferAssessment(current, candidate Assessment) Assessment {
+	switch {
+	case candidate.Unknown && !current.Unknown:
+		return candidate
+	case current.Unknown && !candidate.Unknown:
+		return current
+	case candidate.Level > current.Level:
+		return candidate
+	case current.Command == "" && candidate.Command != "":
+		return candidate
+	default:
+		return current
+	}
 }
 
 // word is a shell word reduced to its literal parts. dynamic reports that the
@@ -919,24 +1006,24 @@ func commandFlagValue(words []word, flags map[string]bool) (word, bool, bool) {
 
 var errScriptOutsideWorkspace = errors.New("script file is outside the workspace")
 
-// checkScriptFile reads a script named on the command line and classifies it.
+// assessScriptFile reads a script named on the command line and classifies it.
 // The file must resolve inside the workspace root; anything else stays opaque
 // and is rejected, so a command cannot point the guard at /etc or a symlink
 // that escapes the workspace.
-func (g *Guard) checkScriptFile(
+func (g *Guard) assessScriptFile(
 	path string,
 	words []word,
 	env *checkEnv,
 	depth int,
-) *BlockedError {
+) Assessment {
 	script, err := readWorkspaceScript(path, env)
 	if err != nil {
-		return NewBlockedError(
-			wordTexts(words), RiskCritical, g.threshold,
+		return unknownAssessment(
+			wordTexts(words),
 			"shell script cannot be inspected: "+err.Error(),
 		)
 	}
-	return g.checkScriptReader(bytes.NewReader(script), summarize(path), env, depth)
+	return g.assessScriptReader(bytes.NewReader(script), summarize(path), env, depth)
 }
 
 // readWorkspaceScript resolves path against Dir, verifies it stays inside Root

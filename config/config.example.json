@@ -654,6 +654,13 @@
       "approval_timeout_ms": 60000
     }
   },
+  "approvals": {
+    "_comment": "Smart approvals review flagged exec commands with an auxiliary Guardian model from model_list. Set mode to 'off' to disable the Guardian and keep the static guards as the final decision.",
+    "mode": "smart",
+    "model": "",
+    "smart_threshold": "high",
+    "smart_timeout_seconds": 20
+  },
   "events": {
     "logging": {
       "enabled": true,
