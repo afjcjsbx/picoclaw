@@ -401,7 +401,9 @@ func NewExecToolWithConfig(
 				return nil, err
 			}
 		}
-		customAllowPatterns, err = compilePatterns(execConfig.CustomAllowPatterns, compileFullMatchPattern, "custom allow")
+		customAllowPatterns, err = compilePatterns(
+			execConfig.CustomAllowPatterns, compileFullMatchPattern, "custom allow",
+		)
 		if err != nil {
 			return nil, err
 		}
