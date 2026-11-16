@@ -709,16 +709,6 @@ func (e *BlockedError) Error() string {
 	)
 }
 
-// NewBlockedError builds a BlockedError from argv.
-func NewBlockedError(args []string, level, threshold RiskLevel, reason string) *BlockedError {
-	return &BlockedError{
-		Command:   FormatCommand(args),
-		Level:     level,
-		Threshold: threshold,
-		Reason:    reason,
-	}
-}
-
 // FormatCommand renders at most the first five argv tokens for an error.
 func FormatCommand(args []string) string {
 	if len(args) == 0 {
