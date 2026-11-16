@@ -9,12 +9,12 @@ The `cron` tool lets the agent schedule jobs. A job fires as a reminder, as a fu
 |--------|------|---------|-------------|
 | `tools.cron.enabled` | bool | `true` | Enable the agent-facing `cron` tool |
 | `tools.cron.allow_command` | bool | `true` | Allow command jobs; when `false`, scheduling one still works if the call passes `command_confirm=true` |
-| `tools.cron.command_allowed_remotes` | string[] | `[]` | Remote channels (or `channel:chat_id` values) allowed to schedule command jobs; `*` allows every remote channel |
+| `tools.cron.command_allowed_remotes` | string[] | `[]` | Remote channels (or `channel:chat_id` values) allowed to schedule and run command jobs, independent of `tools.exec.allow_remote`; `*` allows every remote channel |
 | `tools.cron.exec_timeout_minutes` | int | `5` | Execution timeout in minutes for command jobs; `0` means no timeout |
 
 Environment overrides use the `PICOCLAW_TOOLS_CRON_` prefix, for example `PICOCLAW_TOOLS_CRON_EXEC_TIMEOUT_MINUTES=10`.
 
-Command jobs must also pass the exec guards: they are rejected when `tools.exec.enabled` is `false`, and scheduling them is restricted to internal channels (`cli`, `system`, `subagent`) or channels listed in `command_allowed_remotes`. Non-command reminders remain available on every channel.
+Command jobs must also pass the exec guards: they are rejected when `tools.exec.enabled` is `false`, and scheduling them is restricted to internal channels (`cli`, `system`, `subagent`) or channels listed in `command_allowed_remotes`. The cron allowlist is independent of `tools.exec.allow_remote`, which only controls direct exec calls; PicoClaw re-checks the allowlist when the job fires. Non-command reminders remain available on every channel.
 
 ## Tool arguments
 
