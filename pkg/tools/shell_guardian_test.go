@@ -128,11 +128,7 @@ func TestApprovalGuardianReview(t *testing.T) {
 	t.Parallel()
 
 	provider := &fakeGuardianProvider{response: "APPROVE"}
-	guardian := &approvalGuardian{
-		provider: provider,
-		model:    "guardian-model",
-		timeout:  time.Second,
-	}
+	guardian := guardianWithProvider(provider, "guardian-model")
 
 	verdict, err := guardian.Review(
 		context.Background(),
@@ -188,25 +184,21 @@ func TestApprovalGuardianReviewErrorsEscalate(t *testing.T) {
 		wantCalls int
 	}{
 		{
-			name: "provider error",
-			guardian: &approvalGuardian{
-				provider: &fakeGuardianProvider{err: errors.New("network down")},
-				model:    "guardian-model",
-				timeout:  time.Second,
-			},
+			name:      "provider error",
+			guardian:  guardianWithProvider(&fakeGuardianProvider{err: errors.New("network down")}, "guardian-model"),
 			wantCalls: 1,
 		},
 		{
-			name:     "missing provider",
-			guardian: &approvalGuardian{model: "guardian-model", timeout: time.Second},
+			name: "missing provider",
+			guardian: &approvalGuardian{
+				modelName:   "guardian-model",
+				timeout:     time.Second,
+				initialized: true,
+			},
 		},
 		{
-			name: "command too long",
-			guardian: &approvalGuardian{
-				provider: &fakeGuardianProvider{response: "APPROVE"},
-				model:    "guardian-model",
-				timeout:  time.Second,
-			},
+			name:     "command too long",
+			guardian: guardianWithProvider(&fakeGuardianProvider{response: "APPROVE"}, "guardian-model"),
 		},
 	}
 
@@ -266,13 +258,64 @@ func TestNewApprovalGuardian(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newApprovalGuardian() error = %v", err)
 	}
-	if guardian == nil || guardian.provider == nil {
-		t.Fatal("newApprovalGuardian() returned no provider")
+	if guardian == nil {
+		t.Fatal("newApprovalGuardian() returned nil")
 	}
-	if guardian.model != "gpt-5.4" {
-		t.Errorf("model = %q, want gpt-5.4", guardian.model)
+	if guardian.provider != nil {
+		t.Fatal("newApprovalGuardian() created a provider eagerly")
+	}
+	if guardian.modelName != "guardian" || !guardian.useMain {
+		t.Errorf("guardian = %+v, want the default model as the main-provider fallback", guardian)
 	}
 	if guardian.timeout != 7*time.Second {
 		t.Errorf("timeout = %s, want 7s", guardian.timeout)
+	}
+	provider, model, err := guardian.resolveProvider()
+	if err != nil {
+		t.Fatalf("resolveProvider() error = %v", err)
+	}
+	if provider == nil || model != "gpt-5.4" {
+		t.Fatalf("resolveProvider() = %v, %q, want a provider and gpt-5.4", provider, model)
+	}
+}
+
+func guardianWithProvider(provider providers.LLMProvider, model string) *approvalGuardian {
+	return &approvalGuardian{
+		provider:    provider,
+		model:       model,
+		modelName:   model,
+		timeout:     time.Second,
+		initialized: true,
+	}
+}
+
+func TestApprovalGuardianReusesPrimaryProvider(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.ModelName = "primary"
+	guardian, err := newApprovalGuardian(cfg, config.ApprovalsConfig{
+		Mode:                config.ApprovalModeSmart,
+		SmartTimeoutSeconds: 5,
+	})
+	if err != nil {
+		t.Fatalf("newApprovalGuardian() error = %v", err)
+	}
+
+	primary := &fakeGuardianProvider{response: "APPROVE", model: "primary-model"}
+	guardian.SetPrimaryProvider(primary)
+
+	verdict, err := guardian.Review(context.Background(), "echo hi", "risk level high")
+	if err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+	if verdict != approvalApprove {
+		t.Fatalf("Review() verdict = %s, want APPROVE", verdict)
+	}
+	if primary.calls != 1 {
+		t.Fatalf("primary provider calls = %d, want 1", primary.calls)
+	}
+	if primary.model != "primary-model" {
+		t.Errorf("primary provider model = %q, want primary-model", primary.model)
 	}
 }

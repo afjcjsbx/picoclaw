@@ -26,7 +26,7 @@ Smart approvals are configured in a top-level `approvals` block, not under `tool
 
 | Config | Type | Default | Description |
 |--------|------|---------|-------------|
-| `approvals.mode` | string | `"smart"` | `"smart"` (default) asks an auxiliary Guardian model to review flagged commands. `"off"` keeps the static guards as the final decision |
+| `approvals.mode` | string | `"off"` | `"off"` (default) keeps the static guards as the final decision. `"smart"` asks an auxiliary Guardian model to review flagged commands |
 | `approvals.model` | string | `""` | Guardian model by `model_list` alias or `provider/model` reference. Empty uses `agents.defaults.model_name` |
 | `approvals.smart_threshold` | string | `"high"` | `"high"` reviews `high`, `critical` and unknown commands. `"critical"` reviews only `critical` and unknown commands |
 | `approvals.smart_timeout_seconds` | int | `20` | Per-review timeout, maximum `600`. A timed-out review escalates and the command is rejected |
@@ -133,7 +133,7 @@ Limits worth knowing:
 
 ### Smart approvals
 
-`approvals.mode: "smart"` is the default and adds a second opinion for commands that the static guards flag, without asking a model about every command. Set `approvals.mode` to `"off"` to disable the Guardian and keep the static guards as the final decision:
+`approvals.mode` defaults to `"off"`: the static guards are the final decision and exec makes no extra model call. Set it to `"smart"` to add a second opinion for commands that the static guards flag, without asking a model about every command:
 
 1. **Hardline and custom deny rules stay final.** Catastrophic operations such as `rm -rf /`, recursive deletion of `/etc`, `/usr`, `/home` or `/root`, `mkfs`, `dd if=`, `shutdown`, `reboot`, `poweroff`, fork bombs and `kill -1` are rejected directly. The Guardian is never consulted for them.
 2. **Default deny pattern hits can be reviewed.** A command caught by the built-in regex set can be approved when the Guardian considers it a false positive.
@@ -156,7 +156,7 @@ If the Guardian cannot be initialized or the review fails, the command is reject
 }
 ```
 
-The Guardian is a separate, short, non-streaming chat call: `temperature=0`, `max_tokens=16`, reasoning disabled where the provider supports it. Smart mode creates one provider instance for the selected model and makes a call only for flagged commands. Enabling it with `enable_deny_patterns: false` still keeps the Unix AST classifier active for the smart gate; Windows uses only the regex/PowerShell patterns because the AST classifier is POSIX-only.
+The Guardian is a separate, short, non-streaming chat call: `temperature=0`, `max_tokens=16`, reasoning disabled where the provider supports it. When `approvals.model` is empty, smart mode reuses the agent's primary provider instead of creating a second client; a dedicated provider is created lazily only when a different model is configured, and only on the first flagged command. Enabling it with `enable_deny_patterns: false` still keeps the Unix AST classifier active for the smart gate; Windows uses only the regex/PowerShell patterns because the AST classifier is POSIX-only.
 
 ## Tool arguments
 

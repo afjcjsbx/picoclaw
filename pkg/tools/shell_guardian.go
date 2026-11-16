@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"mvdan.cc/sh/v3/syntax"
@@ -74,12 +75,22 @@ type approvalReviewer interface {
 }
 
 // approvalGuardian is the auxiliary LLM reviewer used by approvals.mode=smart.
-// It holds one dedicated provider for the configured model and makes a single
-// bounded chat call per flagged command.
+// The provider is resolved lazily on the first flagged command: when no
+// approvals.model is configured it reuses the agent's primary provider, so the
+// default configuration does not allocate a second client at startup.
 type approvalGuardian struct {
-	provider providers.LLMProvider
-	model    string
-	timeout  time.Duration
+	cfg       *config.Config
+	modelName string
+	useMain   bool
+	timeout   time.Duration
+
+	mu           sync.Mutex
+	provider     providers.LLMProvider
+	model        string
+	primary      providers.LLMProvider
+	primaryModel string
+	initialized  bool
+	initErr      error
 }
 
 // newApprovalGuardian builds the reviewer for smart mode. Returned errors mean
@@ -101,30 +112,81 @@ func newApprovalGuardian(
 	}
 
 	modelName := strings.TrimSpace(normalized.Model)
-	if modelName == "" {
+	useMain := modelName == ""
+	if useMain {
 		modelName = strings.TrimSpace(cfg.Agents.Defaults.GetModelName())
 	}
 	if modelName == "" {
 		return nil, errors.New("approvals.model or agents.defaults.model_name must select a model")
 	}
 
-	modelConfig, err := providers.ResolveModelConfig(cfg, modelName)
+	return &approvalGuardian{
+		cfg:       cfg,
+		modelName: modelName,
+		useMain:   useMain,
+		timeout:   time.Duration(normalized.SmartTimeoutSeconds) * time.Second,
+	}, nil
+}
+
+// SetPrimaryProvider makes the agent's already-created provider available to
+// the Guardian. It is used when approvals.model is empty, so the Guardian does
+// not build a second provider for the same model.
+func (g *approvalGuardian) SetPrimaryProvider(provider providers.LLMProvider) {
+	if g == nil || provider == nil {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.primary = provider
+	g.primaryModel = strings.TrimSpace(provider.GetDefaultModel())
+}
+
+// resolveProvider returns the provider and model for the first review. A
+// dedicated provider is created lazily only when a separate model is
+// configured or no primary provider was injected.
+func (g *approvalGuardian) resolveProvider() (providers.LLMProvider, string, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.initialized {
+		return g.provider, g.model, g.initErr
+	}
+	g.initialized = true
+
+	if g.useMain && g.primary != nil {
+		g.provider = g.primary
+		g.model = g.primaryModel
+		if g.model == "" {
+			g.model = g.modelName
+		}
+		return g.provider, g.model, nil
+	}
+
+	modelConfig, err := providers.ResolveModelConfig(g.cfg, g.modelName)
 	if err != nil {
-		return nil, fmt.Errorf("resolve Guardian model %q: %w", modelName, err)
+		g.initErr = fmt.Errorf("resolve Guardian model %q: %w", g.modelName, err)
+		return nil, "", g.initErr
 	}
 	provider, modelID, err := providers.CreateProviderFromConfig(modelConfig)
 	if err != nil {
-		return nil, fmt.Errorf("initialize Guardian model %q: %w", modelName, err)
+		g.initErr = fmt.Errorf("initialize Guardian model %q: %w", g.modelName, err)
+		return nil, "", g.initErr
 	}
 	if provider == nil || modelID == "" {
-		return nil, fmt.Errorf("Guardian model %q did not initialize", modelName)
+		g.initErr = fmt.Errorf("Guardian model %q did not initialize", g.modelName)
+		return nil, "", g.initErr
 	}
+	g.provider, g.model = provider, modelID
+	return g.provider, g.model, nil
+}
 
-	return &approvalGuardian{
-		provider: provider,
-		model:    modelID,
-		timeout:  time.Duration(normalized.SmartTimeoutSeconds) * time.Second,
-	}, nil
+// SetApprovalProvider lets the agent pass its primary provider to the Guardian.
+func (t *ExecTool) SetApprovalProvider(provider providers.LLMProvider) {
+	if t == nil || provider == nil {
+		return
+	}
+	if guardian, ok := t.approvalReviewer.(*approvalGuardian); ok {
+		guardian.SetPrimaryProvider(provider)
+	}
 }
 
 // approvalThreshold maps the validated configuration value to a risk level.
@@ -144,7 +206,14 @@ func (g *approvalGuardian) Review(
 	command string,
 	description string,
 ) (approvalVerdict, error) {
-	if g == nil || g.provider == nil {
+	if g == nil {
+		return approvalEscalate, errors.New("approval guardian is not configured")
+	}
+	provider, model, err := g.resolveProvider()
+	if err != nil {
+		return approvalEscalate, err
+	}
+	if provider == nil {
 		return approvalEscalate, errors.New("approval guardian is not configured")
 	}
 	if len(command) > maxGuardianCommandBytes {
@@ -169,14 +238,14 @@ func (g *approvalGuardian) Review(
 	defer cancel()
 
 	start := time.Now()
-	response, err := g.provider.Chat(
+	response, err := provider.Chat(
 		callCtx,
 		[]providers.Message{
 			{Role: "system", Content: approvalGuardianSystemPrompt},
 			{Role: "user", Content: userPrompt},
 		},
 		nil,
-		g.model,
+		model,
 		map[string]any{
 			"temperature":    guardianTemperature,
 			"max_tokens":     guardianMaxTokens,
@@ -185,7 +254,7 @@ func (g *approvalGuardian) Review(
 	)
 	if err != nil {
 		logger.WarnCF("tools.approval", "Guardian review failed; escalating", map[string]any{
-			"model":       g.model,
+			"model":       model,
 			"duration_ms": time.Since(start).Milliseconds(),
 			"error":       err.Error(),
 		})
@@ -197,7 +266,7 @@ func (g *approvalGuardian) Review(
 
 	verdict := parseApprovalVerdict(response.Content)
 	fields := map[string]any{
-		"model":       g.model,
+		"model":       model,
 		"verdict":     verdict.String(),
 		"description": description,
 		"duration_ms": time.Since(start).Milliseconds(),
