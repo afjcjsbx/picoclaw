@@ -749,6 +749,17 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) (string, e
 			return output, fmt.Errorf("scheduled command not executed: command execution is disabled")
 		}
 
+		// Re-check the cron channel gate at execution time. Scheduling checked it
+		// when the job was created, but the allowlist may have changed since then;
+		// a revoked channel must not keep running already-scheduled commands.
+		if !constants.IsInternalChannel(channel) &&
+			!isCommandAllowedRemote(channel, chatID, t.commandAllowedRemotes) {
+			detail := fmt.Sprintf("channel %q is not allowed to run scheduled commands", channel)
+			output := "Error executing scheduled command: " + detail
+			t.publishJobOutput(channel, chatID, output)
+			return output, fmt.Errorf("scheduled command blocked: %s", detail)
+		}
+
 		args := map[string]any{
 			"action":  "run",
 			"command": job.Payload.Command,
