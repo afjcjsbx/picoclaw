@@ -546,37 +546,8 @@ Use `mode = lines` when:
 | `tools.exec.enable_deny_patterns` | bool | `true` | Enable built-in dangerous command interception (hardline and custom deny rules still apply when off) |
 | `tools.exec.custom_deny_patterns` | string[] | `[]` | Custom regex patterns to block; always enforced |
 | `tools.exec.custom_allow_patterns` | string[] | `[]` | Full-command regex patterns that exempt only the default deny set; anchored automatically |
-| `tools.exec.custom_risk_allow_patterns` | string[] | `[]` | Full-command regex patterns that exempt the risk classifier, capped by `risk_allow_threshold` |
-| `tools.exec.risk_threshold` | string | `"medium"` | Highest risk level allowed by the AST classifier (`low`, `medium`, `high`, `critical`); inactive when `enable_deny_patterns` is `false`, unless `approvals.mode` is `smart` |
-| `tools.exec.risk_allow_threshold` | string | `"medium"` | Highest risk level a `custom_risk_allow_patterns` match may exempt; set `high` or `critical` explicitly |
-| `tools.exec.risk_overrides` | object | `{}` | Per-command base risk levels; argument modifiers can still elevate them |
-| `tools.exec.arg_modifiers` | object | `{}` | Extra argument-aware risk elevations per command |
-| `tools.exec.env_set` | object | `{}` | Variables always injected into exec child processes; trusted config that overrides inherited values |
-| `tools.exec.env_allowlist` | string[] | `[]` | Additional parent variable names inherited by exec child processes; explicit names only |
 
-When `enable_deny_patterns` is `true`, Unix commands are also parsed into an AST and classified from `low` to `critical` before execution. `risk_threshold` (default `medium`) blocks levels above the configured maximum, catching variable indirection such as `x=rm; $x -rf /` that regex patterns cannot resolve. `risk_overrides` changes a command's base level and `arg_modifiers` adds argument-aware elevations. `custom_allow_patterns` exempts only the default regex deny set; to exempt the risk classifier, use `custom_risk_allow_patterns`, which is capped by `risk_allow_threshold` (default `medium`). See the [exec tool](../tools/exec.md#risk-classification) for the table and limitations.
-
-#### Smart approvals
-
-The top-level `approvals` block enables a Guardian model that reviews commands the static guards flag; `smart` mode is the default. Set `approvals.mode` to `"off"` to disable it. It is not a general-purpose model call: hardline operations and custom deny rules are still rejected directly, safe commands never reach the model, and denied or escalated verdicts fail closed.
-
-```json
-{
-  "approvals": {
-    "mode": "smart",
-    "model": "glm-4.7",
-    "smart_threshold": "high",
-    "smart_timeout_seconds": 20
-  }
-}
-```
-
-| Config Key | Type | Default | Description |
-|------------|------|---------|-------------|
-| `approvals.mode` | string | `"smart"` | `smart` (default) or `off` |
-| `approvals.model` | string | `""` | Guardian model alias or `provider/model`; empty uses `agents.defaults.model_name` |
-| `approvals.smart_threshold` | string | `"high"` | `high` reviews high, critical and unknown commands; `critical` reviews critical and unknown commands |
-| `approvals.smart_timeout_seconds` | int | `20` | Per-review timeout, maximum `600` |
+The AST risk classifier (`risk_threshold`, `risk_allow_threshold`, `custom_risk_allow_patterns`, `risk_overrides`, `arg_modifiers`), the child-process environment (`env_set`, `env_allowlist`) and smart approvals (the top-level `approvals` block) are documented in the [exec tool](../tools/exec.md) reference; see [risk classification](../tools/exec.md#risk-classification) and [smart approvals](../tools/exec.md#smart-approvals).
 
 > **Security Note:** Symlink protection is enabled by default — all file paths are resolved through `filepath.EvalSymlinks` before whitelist matching, preventing symlink escape attacks.
 

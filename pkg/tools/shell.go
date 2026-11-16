@@ -820,8 +820,8 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 		return ErrorResult("notify is only supported with background=true or when the run is promoted to background")
 	}
 
-	state := t.state.load(ctx)
-	effectiveEnv, stateEnv, envProvided := mergeExecStateEnv(state.env, extraEnv)
+	savedCwd, savedEnv := t.state.load(ctx)
+	effectiveEnv, stateEnv, envProvided := mergeExecStateEnv(savedEnv, extraEnv)
 
 	requestedCwd, cwdProvided := args["cwd"].(string)
 	cwdProvided = cwdProvided && requestedCwd != ""
@@ -831,8 +831,8 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 	switch {
 	case cwdProvided:
 		cwd = requestedCwd
-	case state.cwd != "":
-		if resolved, ok := t.rememberedCwd(ctx, state.cwd); ok {
+	case savedCwd != "":
+		if resolved, ok := t.rememberedCwd(ctx, savedCwd); ok {
 			cwd = resolved
 			rememberedCwd = true
 		}

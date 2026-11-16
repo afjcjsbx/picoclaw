@@ -144,28 +144,12 @@ func (g *Guard) Threshold() RiskLevel {
 	return g.threshold
 }
 
-// Assess classifies every simple command in command and returns the highest
-// risk it finds. Unlike Check, it returns a result even when the command is
-// allowed, so callers can apply an additional approval threshold.
-func (g *Guard) Assess(command string) Assessment {
-	if g == nil {
-		return Assessment{}
-	}
-	file, err := Parse(command)
-	if err != nil {
-		return parseAssessment(command)
-	}
-	return g.AssessFile(command, file)
-}
-
-// AssessFile is Assess for an already parsed command; a nil file is treated as
-// a parse failure.
-func (g *Guard) AssessFile(command string, file *syntax.File) Assessment {
-	return g.AssessFileWithOptions(command, file, CheckOptions{})
-}
-
-// AssessFileWithOptions is AssessFile with the directory and workspace root
-// used to resolve and inspect script files named on the command line.
+// AssessFileWithOptions classifies every simple command in an already parsed
+// command and returns the highest risk it finds. Unlike CheckFileWithOptions,
+// it returns a result even when the command is allowed, so callers can apply an
+// additional approval threshold. A nil file is treated as a parse failure; opts
+// carries the directory and workspace root used to resolve and inspect script
+// files named on the command line.
 func (g *Guard) AssessFileWithOptions(
 	command string,
 	file *syntax.File,
@@ -201,13 +185,9 @@ func (g *Guard) CheckWithOptions(command string, opts CheckOptions) *BlockedErro
 	return g.CheckFileWithOptions(command, file, opts)
 }
 
-// CheckFile classifies an already parsed command. It is the shared-parse entry
-// point used by the exec guard; a nil file is treated as a parse failure.
-func (g *Guard) CheckFile(command string, file *syntax.File) *BlockedError {
-	return g.CheckFileWithOptions(command, file, CheckOptions{})
-}
-
-// CheckFileWithOptions is CheckFile with a script inspection context.
+// CheckFileWithOptions classifies an already parsed command. It is the
+// shared-parse entry point used by the exec guard; a nil file is treated as a
+// parse failure, and opts supplies the script inspection context.
 func (g *Guard) CheckFileWithOptions(
 	command string,
 	file *syntax.File,

@@ -15,33 +15,18 @@ import (
 )
 
 func (t *ExecTool) commandMatchesAllowPattern(lower string) bool {
-	for _, pattern := range t.allowPatterns {
-		if pattern.MatchString(lower) {
-			return true
-		}
-	}
-	return t.commandMatchesCustomAllowPattern(lower)
+	return patternsMatchAny(t.allowPatterns, []string{lower}) || t.commandMatchesCustomAllowPattern(lower)
 }
 
 // commandMatchesCustomAllowPattern reports whether a custom allow pattern
 // matches the whole command. These patterns exempt only the default deny set;
 // they do not affect the risk classifier.
 func (t *ExecTool) commandMatchesCustomAllowPattern(lower string) bool {
-	for _, pattern := range t.customAllowPatterns {
-		if pattern.MatchString(lower) {
-			return true
-		}
-	}
-	return false
+	return patternsMatchAny(t.customAllowPatterns, []string{lower})
 }
 
 func (t *ExecTool) commandMatchesCustomRiskAllowPattern(lower string) bool {
-	for _, pattern := range t.customRiskAllowPatterns {
-		if pattern.MatchString(lower) {
-			return true
-		}
-	}
-	return false
+	return patternsMatchAny(t.customRiskAllowPatterns, []string{lower})
 }
 
 // riskAllowExempts reports whether a matching custom risk allow pattern covers

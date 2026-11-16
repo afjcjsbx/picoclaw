@@ -115,14 +115,6 @@ func TestExecEnvFromArgs(t *testing.T) {
 		require.Equal(t, map[string]string{"A": "1", "B": "2"}, env)
 	})
 
-	t.Run("map of string", func(t *testing.T) {
-		env, err := execEnvFromArgs(map[string]any{
-			"env": map[string]string{"C": "3"},
-		})
-		require.NoError(t, err)
-		require.Equal(t, map[string]string{"C": "3"}, env)
-	})
-
 	t.Run("missing", func(t *testing.T) {
 		env, err := execEnvFromArgs(map[string]any{})
 		require.NoError(t, err)

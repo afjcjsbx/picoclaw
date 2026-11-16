@@ -272,13 +272,8 @@ func TestGuardCheckFileMatchesCheck(t *testing.T) {
 		"sh -c 'rm -rf /'",
 		"echo )",
 	} {
-		file, parseErr := Parse(command)
-		var fromFile *BlockedError
-		if parseErr == nil {
-			fromFile = guard.CheckFile(command, file)
-		} else {
-			fromFile = guard.CheckFile(command, nil)
-		}
+		file, _ := Parse(command)
+		fromFile := guard.CheckFileWithOptions(command, file, CheckOptions{})
 		fromText := guard.Check(command)
 
 		if (fromFile == nil) != (fromText == nil) {
@@ -301,8 +296,8 @@ func TestGuardCheckFileRejectsParseFailure(t *testing.T) {
 	if file != nil {
 		t.Fatalf("Parse returned a partial tree with the error: %#v", file)
 	}
-	if blocked := guard.CheckFile("echo )", file); blocked == nil {
-		t.Fatal("CheckFile allowed a parse failure")
+	if blocked := guard.CheckFileWithOptions("echo )", file, CheckOptions{}); blocked == nil {
+		t.Fatal("CheckFileWithOptions allowed a parse failure")
 	}
 	if blocked := guard.Check("echo )"); blocked == nil {
 		t.Fatal("Check allowed a parse failure")

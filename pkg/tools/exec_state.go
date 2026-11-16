@@ -26,12 +26,6 @@ type execStateEntry struct {
 	lastUsed time.Time
 }
 
-// execSessionState is a copy of the persisted state for one conversation.
-type execSessionState struct {
-	cwd string
-	env map[string]string
-}
-
 type execStateStore struct {
 	mu      sync.Mutex
 	entries map[execStateKey]*execStateEntry
@@ -52,18 +46,11 @@ func execStateKeyFromContext(ctx context.Context) (execStateKey, bool) {
 	return key, true
 }
 
-func cloneExecStateEnv(env map[string]string) map[string]string {
-	if len(env) == 0 {
-		return nil
-	}
-	return maps.Clone(env)
-}
-
 // mergeExecEnv applies LLM-provided variables on top of a base map, dropping
 // blocked names and normalizing keys. It is the single merge rule used by the
 // per-conversation overlay and by runEnv.
 func mergeExecEnv(base, update map[string]string) map[string]string {
-	merged := cloneExecStateEnv(base)
+	merged := maps.Clone(base)
 	if merged == nil && len(update) > 0 {
 		merged = make(map[string]string, len(update))
 	}
@@ -80,29 +67,26 @@ func mergeExecEnv(base, update map[string]string) map[string]string {
 	return merged
 }
 
-// load returns a snapshot of the conversation state and marks it as recently
-// used. A missing session context yields zero state, keeping exec stateless
-// instead of sharing a global entry.
-func (s *execStateStore) load(ctx context.Context) execSessionState {
+// load returns a snapshot of the conversation's cwd and env overlay and marks
+// it as recently used. A missing session context yields zero state, keeping
+// exec stateless instead of sharing a global entry.
+func (s *execStateStore) load(ctx context.Context) (cwd string, env map[string]string) {
 	if s == nil {
-		return execSessionState{}
+		return "", nil
 	}
 	key, ok := execStateKeyFromContext(ctx)
 	if !ok {
-		return execSessionState{}
+		return "", nil
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	entry, ok := s.entries[key]
 	if !ok {
-		return execSessionState{}
+		return "", nil
 	}
 	entry.lastUsed = time.Now()
-	return execSessionState{
-		cwd: entry.cwd,
-		env: cloneExecStateEnv(entry.env),
-	}
+	return entry.cwd, maps.Clone(entry.env)
 }
 
 // rememberCwd stores the resolved cwd for subsequent calls in the conversation.
@@ -115,16 +99,27 @@ func (s *execStateStore) rememberCwd(ctx context.Context, cwd string) {
 // clearCwd forgets a stored cwd that is no longer usable. It does not create
 // an entry when the conversation has none.
 func (s *execStateStore) clearCwd(ctx context.Context) {
-	s.mutateExisting(ctx, func(entry *execStateEntry) {
+	if s == nil {
+		return
+	}
+	key, ok := execStateKeyFromContext(ctx)
+	if !ok {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if entry, ok := s.entries[key]; ok {
 		entry.cwd = ""
-	})
+		entry.lastUsed = time.Now()
+	}
 }
 
 // storeEnv replaces the conversation's remembered env overlay. A nil map
 // clears it.
 func (s *execStateStore) storeEnv(ctx context.Context, env map[string]string) {
 	s.mutate(ctx, func(entry *execStateEntry) {
-		entry.env = cloneExecStateEnv(env)
+		entry.env = maps.Clone(env)
 	})
 }
 
@@ -144,25 +139,6 @@ func (s *execStateStore) mutate(ctx context.Context, update func(*execStateEntry
 		s.pruneLocked()
 		entry = &execStateEntry{}
 		s.entries[key] = entry
-	}
-	update(entry)
-	entry.lastUsed = time.Now()
-}
-
-func (s *execStateStore) mutateExisting(ctx context.Context, update func(*execStateEntry)) {
-	if s == nil {
-		return
-	}
-	key, ok := execStateKeyFromContext(ctx)
-	if !ok {
-		return
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	entry, ok := s.entries[key]
-	if !ok {
-		return
 	}
 	update(entry)
 	entry.lastUsed = time.Now()
@@ -216,12 +192,12 @@ func (t *ExecTool) ClearSession(agentID, sessionKey string) {
 // Blocked LLM-provided keys are dropped before they can be stored.
 func mergeExecStateEnv(base, update map[string]string) (effective, next map[string]string, provided bool) {
 	if update == nil {
-		return cloneExecStateEnv(base), nil, false
+		return maps.Clone(base), nil, false
 	}
 	if len(update) == 0 {
 		return nil, nil, true
 	}
 
 	merged := mergeExecEnv(base, update)
-	return cloneExecStateEnv(merged), merged, true
+	return maps.Clone(merged), merged, true
 }
