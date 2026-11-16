@@ -172,6 +172,9 @@ Exec 工具用于执行 shell 命令。
 | `enabled`              | bool  | true   | 启用 exec 工具                 |
 | `enable_deny_patterns` | bool  | true   | 启用内置危险命令拦截         |
 | `custom_deny_patterns` | array | []     | 自定义拒绝模式（正则表达式），始终生效 |
+| `custom_allow_patterns` | array | []     | 整条命令匹配，仅豁免默认拒绝规则；自动锚定 |
+| `custom_risk_allow_patterns` | array | [] | 整条命令匹配，用于豁免风险分类器；受 `risk_allow_threshold` 限制 |
+| `risk_allow_threshold` | string | `"medium"` | 风险豁免允许的最高级别；`high`/`critical` 需显式设置 |
 
 ### 禁用 Exec 工具
 
@@ -199,6 +202,8 @@ PICOCLAW_TOOLS_EXEC_ENABLED=false
 
 - **`enable_deny_patterns`**：设为 `false` 可禁用内置的默认危险命令拦截模式；硬性底线规则和 `custom_deny_patterns` 仍然生效
 - **`custom_deny_patterns`**：添加自定义拒绝正则模式；即使关闭内置拦截也始终生效，且不会被自定义允许规则豁免
+- **`custom_allow_patterns`**：整条命令匹配，仅豁免默认拒绝规则；不会豁免风险分类器
+- **`custom_risk_allow_patterns`**：整条命令匹配，用于豁免风险分类器；最高只能豁免到 `risk_allow_threshold`（默认 `medium`）
 
 ### 始终生效的硬性底线规则
 
@@ -209,12 +214,14 @@ PICOCLAW_TOOLS_EXEC_ENABLED=false
 - 原始磁盘访问：`dd if=`、写入 `/dev/sd*` 等块设备
 - 递归删除根目录：`rm -rf /`、`rm -rf /*`
 - 电源状态变更：`shutdown`、`reboot`、`poweroff`
+- 自我保护：终止 PicoClaw 进程或服务、删除状态目录（`~/.picoclaw`、`$HOME/.picoclaw`、`$PICOCLAW_HOME` 或 `PICOCLAW_HOME`），或删除正在运行的可执行文件
+- 硬性底线和自定义拒绝规则匹配前会解析 `$IFS`、ANSI-C `$'...'` 字符串、反斜杠换行续行和 AST 引号拼接
 
 ### 默认拦截的命令模式
 
 这些模式默认启用，可通过 `enable_deny_patterns: false` 关闭：
 
-- 删除命令：`rm -rf`、`del /f/q`、`rmdir /s`
+- 删除命令：`del /f/q`、`rmdir /s`（Unix `rm` 由风险分类器处理：基础 `medium`，`rm -r` 为 `high`，`rm -rf` 为 `critical`）
 - 磁盘操作：`format`、`mkfs`、`diskpart`、`dd if=`、写入 `/dev/sd*`
 - 系统操作：`shutdown`、`reboot`、`poweroff`
 - 命令替换：`$()`、`${}`、反引号
@@ -225,6 +232,7 @@ PICOCLAW_TOOLS_EXEC_ENABLED=false
 - 包管理：`apt`、`yum`、`dnf`、`npm install -g`、`pip install --user`
 - 容器：`docker run`、`docker exec`
 - Git：`git push`、`git force`
+- Windows PowerShell：递归 `Remove-Item`（含 `rm`/`ri`/`del` 别名）、`Clear-Disk`、`Format-Volume`、`vssadmin delete shadows`、`bcdedit /set`、`reg delete`、`icacls /grant Everyone`、`iwr ... | iex` 等下载后执行管道、`taskkill /F`、`Stop-Process -Force`
 - 其他：`eval`、`source *.sh`
 
 ### 已知架构限制

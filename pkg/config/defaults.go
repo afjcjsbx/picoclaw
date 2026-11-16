@@ -89,6 +89,11 @@ func DefaultConfig() *Config {
 				ApprovalTimeoutMS:    60000,
 			},
 		},
+		Approvals: ApprovalsConfig{
+			Mode:                ApprovalModeSmart,
+			SmartThreshold:      ApprovalSmartThresholdHigh,
+			SmartTimeoutSeconds: DefaultApprovalSmartTimeoutSeconds,
+		},
 		ModelList: []*ModelConfig{
 			// ============================================
 			// Add your API key to the model you want to use
@@ -428,6 +433,8 @@ func DefaultConfig() *Config {
 					Enabled: true,
 				},
 				EnableDenyPatterns: true,
+				RiskThreshold:      "medium",
+				RiskAllowThreshold: "medium",
 				AllowRemote:        false,
 				TimeoutSeconds:     DefaultExecTimeoutSeconds,
 				MaxOutputChars:     DefaultExecMaxOutputChars,
