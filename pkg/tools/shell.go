@@ -370,9 +370,11 @@ func (t *ExecTool) Description() string {
 func buildExecDescription() string {
 	shell := "sh"
 	chainGuidance := "If commands depend on each other, chain them with && so a failure stops the sequence."
+	ampersandGuidance := " A trailing '&' is normalized to background=true."
 	if runtime.GOOS == "windows" {
 		shell = "PowerShell"
 		chainGuidance = "PowerShell does not support &&; use cmd1; if ($?) { cmd2 } when cmd2 depends on cmd1 succeeding."
+		ampersandGuidance = ""
 	}
 
 	return fmt.Sprintf(`Executes shell commands with PicoClaw's safety guards. OS: %s. Shell: %s.
@@ -385,9 +387,9 @@ Oversized output is truncated automatically and the full stream is saved as an a
 
 action=run requires command. timeout is in seconds. Foreground runs are capped at 600s: timeout=0 or any value above the cap starts a tracked background session instead and returns its sessionId. timeout is not supported with background=true.
 
-Use background=true only when the command must outlive the call. It returns a sessionId. Use list to inspect sessions, poll for a non-blocking preview, wait to block until exit, read for non-destructive offset/limit byte ranges (defaults to the most recent bytes), write for stdin, send-keys for PTY keys, and kill to terminate. Prefer wait over polling; notify=true sends a completion message. Use pty=true for interactive programs (not supported on Windows).
+Use background=true only when the command must outlive the call. It returns a sessionId.%s Use list to inspect sessions, poll for a non-blocking preview, wait to block until exit, read for non-destructive offset/limit byte ranges (defaults to the most recent bytes), write for stdin, send-keys for PTY keys, and kill to terminate. Prefer wait over polling; notify=true sends a completion message. Use pty=true for interactive programs (not supported on Windows).
 
-Run independent commands in separate calls; %s Do not separate commands with newlines.`, runtime.GOOS, shell, chainGuidance)
+Run independent commands in separate calls; %s Do not separate commands with newlines.`, runtime.GOOS, shell, ampersandGuidance, chainGuidance)
 }
 
 var execActions = []string{"run", "list", "poll", "wait", "read", "write", "kill", "send-keys"}
@@ -564,8 +566,30 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 	}
 
 	isPty := boolArg(args, "pty")
-	isBackground := boolArg(args, "background")
+	explicitBackground := boolArg(args, "background")
+	isBackground := explicitBackground
 	notify := boolArg(args, "notify")
+	backgroundNote := ""
+
+	// Keep the exact command for the safety guard. Normalization must not
+	// change which deny or allow rules apply, for example a custom pattern that
+	// matches a trailing '&'.
+	guardedCommand := command
+
+	// On Unix, `sh -c "server &"` returns as soon as the job starts: a
+	// foreground call would report success while the process keeps running
+	// untracked and its output pipe is closed. Normalize the trailing operator
+	// into a tracked background session instead. Windows shells do not use '&'
+	// as a background operator, so the helper is a no-op there.
+	if normalized, converted := normalizeTrailingBackgroundAmpersand(command, runtime.GOOS); converted {
+		command = normalized
+		if !isBackground {
+			isBackground = true
+			backgroundNote = "Trailing '&' was converted to background=true so the process is tracked. " +
+				"Use action=wait, poll, read, or kill with this sessionId."
+		}
+	}
+
 	timeout := t.timeout
 	timeoutDisabled := false
 	if raw, ok := args["timeout"]; ok {
@@ -578,10 +602,17 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 		seconds := int64(value)
 		// timeout=0 means "no timeout", which is already how background sessions behave.
 		if isBackground && seconds != 0 {
-			return ErrorResult("timeout is only supported for foreground commands")
+			if explicitBackground {
+				return ErrorResult("timeout is only supported for foreground commands")
+			}
+			// The caller asked for a foreground timeout, but the trailing '&'
+			// already moved the command to the background, where timeouts do
+			// not apply. Keep the command and explain the ignored argument.
+			backgroundNote += " The requested timeout was ignored because background sessions are not time-limited."
+		} else {
+			timeoutDisabled = seconds == 0
+			timeout = time.Duration(seconds) * time.Second
 		}
-		timeoutDisabled = seconds == 0
-		timeout = time.Duration(seconds) * time.Second
 	}
 
 	// The exec tool caps a foreground call at t.foregroundCap. Requests that
@@ -621,7 +652,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 		}
 	}
 
-	if guardError := t.guardCommand(command, cwd); guardError != "" {
+	if guardError := t.guardCommand(guardedCommand, cwd); guardError != "" {
 		return ErrorResult(guardError)
 	}
 
@@ -649,7 +680,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 	}
 
 	if isBackground {
-		return t.runBackground(ctx, command, cwd, isPty, "")
+		return t.runBackground(ctx, command, cwd, isPty, backgroundNote)
 	}
 	if promoteToBackground {
 		return t.runBackground(ctx, command, cwd, isPty, t.foregroundPromotionNote(timeoutDisabled, timeout))
@@ -845,6 +876,12 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string, timeout tim
 		Error:      errorMessage,
 	}
 	forLLM := formatExecRunMeta(meta) + "\n" + output
+	if timedOut {
+		// A timeout is the moment we know the command outlived a foreground
+		// call, so point the model at tracked sessions instead of letting it
+		// guess from the exit status alone.
+		forLLM += "\n\n" + timeoutBackgroundGuidance
+	}
 
 	return newExecResult(forLLM, forUser, resultErr != nil, resultErr, artifactPath, spillCapped)
 }
@@ -1203,6 +1240,12 @@ const (
 
 	notifyEnabledNote = "You will be notified when this session exits; do not poll or wait in a loop."
 	autoNotifyNote    = "A completion notification is enabled; the result will arrive as a follow-up message."
+
+	// timeoutBackgroundGuidance is appended to a timed-out foreground result.
+	// A server, daemon, or watch process should be a tracked background session
+	// instead of a foreground call that blocks until the timeout kills it.
+	timeoutBackgroundGuidance = "If this is a server, daemon, or watch process, re-run it with background=true " +
+		"and use the returned sessionId with wait, poll, read, or kill instead of blocking a foreground call."
 )
 
 // executeWait blocks until the session exits, the timeout elapses, or ctx is

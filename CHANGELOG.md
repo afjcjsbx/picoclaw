@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `/usage` (alias `/cost`) chat command and `picoclaw usage` CLI command that report provider-reported token usage and cost per session, with per-model and input cache breakdowns.
 
+### Changed
+
+- Exec (Unix): a trailing `&` now starts a tracked background session instead of leaving an untracked process whose output pipe is closed. A foreground command that times out now points the model at `background=true` for servers, daemons, and watch processes.
+
 ## [0.5.1] - 2026-10-18
 
 ### Added
