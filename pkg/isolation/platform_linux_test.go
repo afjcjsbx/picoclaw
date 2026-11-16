@@ -148,8 +148,9 @@ func TestBuildLinuxBwrapArgs_UsesNamespaceProbeResult(t *testing.T) {
 				if path != "/usr/bin/bwrap" {
 					t.Fatalf("probe path = %q, want resolved bwrap path", path)
 				}
-				if !contains(args, "--unshare-ipc") || !contains(args, "--") || args[len(args)-1] != "true" {
-					t.Fatalf("probe args = %v, want independent IPC namespace probe", args)
+				if (!contains(args, "--unshare-ipc") && !contains(args, "--unshare-pid")) ||
+					!contains(args, "--") || args[len(args)-1] != "true" {
+					t.Fatalf("probe args = %v, want independent namespace probe", args)
 				}
 				return []byte(tc.output), tc.runErr
 			})
@@ -185,6 +186,30 @@ func TestProbeLinuxNamespaceFlags_OtherFailureIsHardError(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "unsupported") {
 		t.Fatalf("non-EINVAL probe failure was classified unsupported: %v", err)
+	}
+}
+
+func TestBuildLinuxBwrapArgs_AsPID1RequiresPIDNamespace(t *testing.T) {
+	args, err := buildLinuxBwrapArgs(
+		"/bin/true", "/bin/true", []string{"/bin/true"}, "",
+		nil, map[string]bool{"--unshare-pid": true}, StartOptions{AsPID1: true},
+	)
+	if err != nil {
+		t.Fatalf("buildLinuxBwrapArgs() error = %v", err)
+	}
+	if !contains(args, "--unshare-pid") || !contains(args, "--as-pid-1") {
+		t.Fatalf("bwrap args missing PID namespace or as-pid-1: %v", args)
+	}
+
+	args, err = buildLinuxBwrapArgs(
+		"/bin/true", "/bin/true", []string{"/bin/true"}, "",
+		nil, map[string]bool{}, StartOptions{AsPID1: true},
+	)
+	if err != nil {
+		t.Fatalf("buildLinuxBwrapArgs() error = %v", err)
+	}
+	if contains(args, "--as-pid-1") {
+		t.Fatalf("as-pid-1 added without a PID namespace: %v", args)
 	}
 }
 

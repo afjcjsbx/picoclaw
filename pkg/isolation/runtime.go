@@ -462,10 +462,23 @@ func preflight(isolation config.IsolationConfig) error {
 	return nil
 }
 
+// StartOptions controls optional per-start isolation behavior.
+type StartOptions struct {
+	// AsPID1 makes the sandboxed command PID 1 in its new PID namespace.
+	// When the command exits the kernel kills every remaining process in the
+	// namespace, which gives foreground runs kill-on-close semantics.
+	AsPID1 bool
+}
+
 // Start prepares isolation for the command, starts it, and applies any
 // post-start platform hooks required by the active backend.
 func Start(cmd *exec.Cmd) error {
-	if err := PrepareCommand(cmd); err != nil {
+	return StartWithOptions(cmd, StartOptions{})
+}
+
+// StartWithOptions is Start with per-invocation options.
+func StartWithOptions(cmd *exec.Cmd, opts StartOptions) error {
+	if err := PrepareCommandWithOptions(cmd, opts); err != nil {
 		return err
 	}
 	if err := cmd.Start(); err != nil {
@@ -528,6 +541,11 @@ func terminateStartedCommand(cmd *exec.Cmd) {
 // PrepareCommand mutates the command in-place so it inherits the configured
 // isolated environment before being started by the caller.
 func PrepareCommand(cmd *exec.Cmd) error {
+	return PrepareCommandWithOptions(cmd, StartOptions{})
+}
+
+// PrepareCommandWithOptions is PrepareCommand with per-invocation options.
+func PrepareCommandWithOptions(cmd *exec.Cmd, opts StartOptions) error {
 	isolation := CurrentConfig()
 	if err := preflightCached(); err != nil {
 		return err
@@ -538,7 +556,7 @@ func PrepareCommand(cmd *exec.Cmd) error {
 			return err
 		}
 		ApplyUserEnv(cmd, root)
-		if err := applyPlatformIsolation(cmd, isolation, root); err != nil {
+		if err := applyPlatformIsolation(cmd, isolation, root, opts); err != nil {
 			return err
 		}
 	}

@@ -79,7 +79,10 @@ func setsidProcessAlive(pid int) bool {
 		return false
 	}
 	err := syscall.Kill(pid, 0)
-	return err == nil || err == syscall.EPERM
+	if err != nil && err != syscall.EPERM {
+		return false
+	}
+	return !processIsZombie(pid)
 }
 
 func waitForSetsidProcessExit(t *testing.T, pid int) {

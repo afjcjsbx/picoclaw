@@ -8,5 +8,14 @@ import (
 )
 
 func setSysProcAttrForPty(cmd *exec.Cmd) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if cmd == nil {
+		return
+	}
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	// Setsid and Setpgid conflict. Mutate the existing struct so fields added
+	// by the process scope (for example UseCgroupFD) survive.
+	cmd.SysProcAttr.Setpgid = false
+	cmd.SysProcAttr.Setsid = true
 }

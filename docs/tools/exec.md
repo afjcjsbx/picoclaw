@@ -44,6 +44,22 @@ Non-zero exit codes are not automatically tool failures: `grep` returns `1` when
 
 Signal terminations are different from ordinary non-zero exits. `137` usually means SIGKILL, including the OOM killer, and an out-of-memory kill may leave no stderr of its own: check the system log (for example `dmesg -T | tail`) before retrying. `143` means SIGTERM. On Unix, when the direct child is killed by a signal the header reports `exitCode: null` and the human-readable suffix says `killed by signal`; the `kill` action reports `-1` for a session it terminated.
 
+### Process containment
+
+A timeout or `kill` terminates the whole process scope, not just the shell that `exec` started directly. This also covers children that call `setsid` or `setpgid` and leave the shell's process group.
+
+On Linux the tool selects, in order:
+
+1. a cgroup v2 scope with `clone3(CLONE_INTO_CGROUP)` and `cgroup.kill` (falling back to `cgroup.freeze` plus a `cgroup.procs` kill loop on kernels before 5.14);
+2. a bubblewrap PID namespace when subprocess isolation is enabled;
+3. a dedicated subreaper supervisor process, which adopts and reaps detached descendants;
+4. process-group kill plus descendant enumeration as a last resort.
+
+A foreground command that leaves a detached child behind is cleaned up before the tool returns. A background session keeps its scope alive until the child exits, `kill` is called, or the session retention window expires. When PicoClaw is PID 1 (for example in a container), the supervisor backend is preferred so detached children do not remain as zombies.
+
+macOS has no cgroup or subreaper equivalent: the tool enumerates descendants before signaling the process group, which covers `setsid` while the shell is still alive but cannot follow a double-fork after the intermediate process has been reparented to launchd. Windows keeps the `taskkill /T` tree kill.
+
+
 When output is truncated, the artifact path appears after the body as a `[file:...]` local artifact path, with the full stream stored up to `5,000,000` bytes. The message as a whole is therefore not one JSON document: only the first line is JSON metadata.
 
 Background session actions return a JSON `ExecResponse` instead. Once the session has finished, `exitCode` is present and includes `0`; while it is still running, the field is omitted.

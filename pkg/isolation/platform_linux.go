@@ -16,7 +16,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
-func applyPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, root string) error {
+func applyPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, root string, opts StartOptions) error {
 	if !isolation.Enabled {
 		return nil
 	}
@@ -78,7 +78,7 @@ func applyPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, roo
 			"working_dir": execDir,
 			"mounts":      formatLinuxMountPlan(plan),
 		})
-	bwrapArgs, err := buildLinuxBwrapArgs(originalPath, resolvedPath, originalArgs, execDir, plan, namespaceFlags)
+	bwrapArgs, err := buildLinuxBwrapArgs(originalPath, resolvedPath, originalArgs, execDir, plan, namespaceFlags, opts)
 	if err != nil {
 		return err
 	}
@@ -115,7 +115,7 @@ func cleanupPendingPlatformResources(cmd *exec.Cmd) {
 
 // Unsupported optional namespaces are omitted so mount and filesystem isolation
 // can still run; the dropped namespace is an explicit security tradeoff.
-var linuxOptionalNamespaceFlags = []string{"--unshare-ipc"}
+var linuxOptionalNamespaceFlags = []string{"--unshare-ipc", "--unshare-pid"}
 
 var linuxNamespaceProbe struct {
 	once  sync.Once
@@ -187,6 +187,24 @@ func probeLinuxNamespaceFlags(
 	return flags, nil
 }
 
+// PIDNamespaceSupported reports whether the active Linux isolation backend can
+// create a PID namespace. It requires isolation to be enabled and a working
+// bubblewrap binary that accepts --unshare-pid.
+func PIDNamespaceSupported() bool {
+	if !CurrentConfig().Enabled {
+		return false
+	}
+	bwrapPath, err := exec.LookPath("bwrap")
+	if err != nil {
+		return false
+	}
+	flags, err := cachedLinuxNamespaceFlags(bwrapPath)
+	if err != nil {
+		return false
+	}
+	return flags["--unshare-pid"]
+}
+
 // buildLinuxBwrapArgs translates the mount plan into the bubblewrap command
 // line that re-executes the original process inside the isolated mount view.
 func buildLinuxBwrapArgs(
@@ -196,7 +214,12 @@ func buildLinuxBwrapArgs(
 	execDir string,
 	plan []MountRule,
 	namespaceFlags map[string]bool,
+	opts ...StartOptions,
 ) ([]string, error) {
+	var startOpts StartOptions
+	if len(opts) > 0 {
+		startOpts = opts[0]
+	}
 	bwrapArgs := []string{
 		"bwrap",
 		"--die-with-parent",
@@ -205,6 +228,9 @@ func buildLinuxBwrapArgs(
 		if namespaceFlags[flag] {
 			bwrapArgs = append(bwrapArgs, flag)
 		}
+	}
+	if startOpts.AsPID1 && namespaceFlags["--unshare-pid"] {
+		bwrapArgs = append(bwrapArgs, "--as-pid-1")
 	}
 	bwrapArgs = append(bwrapArgs, "--proc", "/proc", "--dev", "/dev")
 	for _, rule := range plan {

@@ -1,6 +1,6 @@
 //go:build darwin
 
-package tools
+package execscope
 
 import "golang.org/x/sys/unix"
 

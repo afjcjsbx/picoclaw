@@ -22,7 +22,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/constants"
-	"github.com/sipeed/picoclaw/pkg/isolation"
+	"github.com/sipeed/picoclaw/pkg/execscope"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	fstools "github.com/sipeed/picoclaw/pkg/tools/fs"
 )
@@ -686,13 +686,29 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string, timeout tim
 	cmd.Stdout = outputWriter
 	cmd.Stderr = outputWriter
 
-	// Route shell execution through the shared isolation entry point so exec tool
-	// subprocesses receive the same isolation policy as other integrations.
-	if err := isolation.Start(cmd); err != nil {
+	scope, scopeErr := execscope.New(execscope.Config{
+		Command:    command,
+		Foreground: true,
+	})
+	if scopeErr != nil {
 		_ = outputWriter.Close()
 		_ = outputReader.Close()
+		return ErrorResult(fmt.Sprintf("failed to create process scope: %v", scopeErr))
+	}
+	if prepErr := scope.Prepare(cmd); prepErr != nil {
+		_ = outputWriter.Close()
+		_ = outputReader.Close()
+		return ErrorResult(fmt.Sprintf("failed to prepare command scope: %v", prepErr))
+	}
+	// Route shell execution through the scope, which applies the shared
+	// isolation policy and selects the containment backend.
+	if err := scope.Start(cmd); err != nil {
+		_ = outputWriter.Close()
+		_ = outputReader.Close()
+		_ = scope.Close()
 		return ErrorResult(fmt.Sprintf("failed to start command: %v", err))
 	}
+	defer scope.Close()
 
 	// The child inherited its own copy of the write end. Release the parent's
 	// copy so the reader observes EOF when the child exits.
@@ -726,7 +742,9 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string, timeout tim
 	case err = <-done:
 	case <-cmdCtx.Done():
 		terminatedByContext = true
-		_ = terminateProcessTree(cmd)
+		if killErr := scope.Kill(); killErr != nil {
+			_ = terminateProcessTree(cmd)
+		}
 		select {
 		case err = <-done:
 		case <-time.After(2 * time.Second):
@@ -736,6 +754,8 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string, timeout tim
 			err = <-done
 		}
 	}
+
+	scope.MarkExited()
 
 	// Drain the merged stream. A surviving grandchild can keep the write end
 	// open after the direct child exits, so bound the wait instead of hanging
@@ -967,9 +987,14 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 		session.stdinWriter = stdinWriter
 	}
 
-	// Background sessions use the same startup path so isolation stays consistent
-	// with synchronous exec runs.
-	if err := isolation.Start(cmd); err != nil {
+	// Background sessions use the same process scope as synchronous runs, but
+	// the scope lives for the session (and can be killed by session ID).
+	scope, scopeErr := execscope.New(execscope.Config{
+		Command:    command,
+		PTY:        ptyEnabled,
+		Foreground: false,
+	})
+	if scopeErr != nil {
 		if outputReader != nil {
 			_ = outputReader.Close()
 		}
@@ -982,8 +1007,41 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 		if session.ptyMaster != nil {
 			_ = session.ptyMaster.Close()
 		}
+		return ErrorResult(fmt.Sprintf("failed to create process scope: %v", scopeErr))
+	}
+	if err := scope.Prepare(cmd); err != nil {
+		if outputReader != nil {
+			_ = outputReader.Close()
+		}
+		if outputWriter != nil {
+			_ = outputWriter.Close()
+		}
+		if ptySlave != nil {
+			_ = ptySlave.Close()
+		}
+		if session.ptyMaster != nil {
+			_ = session.ptyMaster.Close()
+		}
+		_ = scope.Close()
+		return ErrorResult(fmt.Sprintf("failed to prepare command scope: %v", err))
+	}
+	if err := scope.Start(cmd); err != nil {
+		if outputReader != nil {
+			_ = outputReader.Close()
+		}
+		if outputWriter != nil {
+			_ = outputWriter.Close()
+		}
+		if ptySlave != nil {
+			_ = ptySlave.Close()
+		}
+		if session.ptyMaster != nil {
+			_ = session.ptyMaster.Close()
+		}
+		_ = scope.Close()
 		return ErrorResult(fmt.Sprintf("failed to start command: %v", err))
 	}
+	session.scope = scope
 
 	// The child inherited its own copies of the pipe/PTY write ends. The parent
 	// must release its copy now, otherwise the readers never observe EOF/EIO
@@ -1010,15 +1068,17 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 							"panic": fmt.Sprintf("%v", r),
 							"stack": string(debug.Stack()),
 						})
-					session.finish(-1)
+					session.markScopeExited()
+					session.finishIfScopeEmpty(-1)
 				}
 			}()
 			cmd.Wait() // Wait for process to exit
+			session.markScopeExited()
 			exitCode := -1
 			if cmd.ProcessState != nil {
 				exitCode = cmd.ProcessState.ExitCode()
 			}
-			session.finish(exitCode)
+			session.finishIfScopeEmpty(exitCode)
 		}()
 
 		go func() {
@@ -1080,12 +1140,13 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 				_ = stdinWriter.Close()
 			}
 			cmd.Wait()
+			session.markScopeExited()
 
 			exitCode := -1
 			if cmd.ProcessState != nil {
 				exitCode = cmd.ProcessState.ExitCode()
 			}
-			session.finish(exitCode)
+			session.finishIfScopeEmpty(exitCode)
 		}()
 	}
 

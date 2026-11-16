@@ -18,7 +18,27 @@ func processExists(pid int) bool {
 		return false
 	}
 	err := syscall.Kill(pid, 0)
-	return err == nil || err == syscall.EPERM
+	if err != nil && err != syscall.EPERM {
+		return false
+	}
+	return !processIsZombie(pid)
+}
+
+// processIsZombie treats a reaped-pending child as gone. This matters when the
+// test binary itself is PID 1 in a container: orphaned descendants reparent to
+// it and stay zombies until the test process reaps them.
+func processIsZombie(pid int) bool {
+	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	if err != nil {
+		return false
+	}
+	text := string(data)
+	closeParen := strings.LastIndexByte(text, ')')
+	if closeParen < 0 || closeParen+1 >= len(text) {
+		return false
+	}
+	fields := strings.Fields(text[closeParen+1:])
+	return len(fields) > 0 && fields[0] == "Z"
 }
 
 func TestShellTool_TimeoutKillsChildProcess(t *testing.T) {

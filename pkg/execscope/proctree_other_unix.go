@@ -1,6 +1,6 @@
 //go:build !linux && !darwin && !windows
 
-package tools
+package execscope
 
 // descendantPIDs is unavailable on this platform; the process-group kill is
 // still used as the final fallback.

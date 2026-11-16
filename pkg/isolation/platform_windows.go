@@ -31,7 +31,7 @@ var (
 	procCreateRestrictedToken    = advapi32.NewProc("CreateRestrictedToken")
 )
 
-func applyPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, root string) error {
+func applyPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, root string, opts StartOptions) error {
 	if !isolation.Enabled || cmd == nil {
 		return nil
 	}

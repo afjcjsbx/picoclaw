@@ -14,7 +14,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
-func applyPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, root string) error {
+func applyPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, root string, opts StartOptions) error {
 	if !isolation.Enabled || cmd == nil || cmd.Path == "" || len(cmd.Args) == 0 {
 		return nil
 	}

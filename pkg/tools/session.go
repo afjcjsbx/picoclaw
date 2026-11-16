@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/sipeed/picoclaw/pkg/execscope"
 )
 
 // PtyKeyMode represents arrow key encoding mode for PTY sessions.
@@ -47,6 +49,10 @@ type ProcessSession struct {
 	totalOutput  int64
 	ptyMaster    *os.File
 
+	// scope owns process containment for background sessions. It is nil for
+	// sessions built directly in tests that do not start a process.
+	scope execscope.Scope
+
 	// ptyKeyMode tracks arrow key encoding mode (CSI vs SS3)
 	ptyKeyMode PtyKeyMode
 
@@ -83,8 +89,17 @@ func (s *ProcessSession) noteCheck() int {
 
 func (s *ProcessSession) IsDone() bool {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.Status == "done" || s.Status == "exited"
+	status := s.Status
+	scope := s.scope
+	s.mu.Unlock()
+
+	if status != "done" && status != "exited" {
+		return false
+	}
+	if scope != nil && !scope.Empty() {
+		return false
+	}
+	return true
 }
 
 func (s *ProcessSession) GetPtyKeyMode() PtyKeyMode {
@@ -101,8 +116,18 @@ func (s *ProcessSession) SetPtyKeyMode(mode PtyKeyMode) {
 
 func (s *ProcessSession) GetStatus() string {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.Status
+	status := s.Status
+	killed := s.killed
+	scope := s.scope
+	s.mu.Unlock()
+
+	if (status == "done" || status == "exited") && scope != nil && !scope.Empty() {
+		return "running"
+	}
+	if status == "running" && killed {
+		return "killing"
+	}
+	return status
 }
 
 func (s *ProcessSession) SetStatus(status string) {
@@ -125,20 +150,20 @@ func (s *ProcessSession) SetExitCode(code int) {
 
 func (s *ProcessSession) killProcess() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if s.Status != "running" {
-		return ErrSessionDone
+		if s.scope == nil || s.scope.Empty() {
+			s.mu.Unlock()
+			return ErrSessionDone
+		}
 	}
-
 	pid := s.PID
-	if pid <= 0 {
+	scope := s.scope
+	if pid <= 0 && scope == nil {
+		s.mu.Unlock()
 		return ErrSessionNotFound
 	}
-
-	if err := killProcessGroup(pid); err != nil {
-		return err
-	}
+	s.killed = true
+	s.mu.Unlock()
 
 	// Release the session's own descriptors: the reader goroutine can then
 	// observe the closure and stop, and a dead session keeps no fd open.
@@ -149,13 +174,46 @@ func (s *ProcessSession) killProcess() error {
 		_ = closer.Close()
 	}
 
-	s.killed = true
-	s.finishLocked(-1)
+	if scope != nil {
+		if err := scope.Kill(); err != nil && pid > 0 {
+			_ = killProcessGroup(pid)
+		}
+		// cgroup.kill and the supervisor are asynchronous: give them a short
+		// window to drain before reporting done. If the process is still
+		// draining, finishIfScopeEmpty will close the session later.
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			if scope.Empty() {
+				s.finish(-1)
+				_ = scope.Close()
+				return nil
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		return nil
+	}
+
+	if err := killProcessGroup(pid); err != nil {
+		return err
+	}
+	s.finish(-1)
 	return nil
 }
 
 func (s *ProcessSession) Kill() error {
 	return s.killProcess()
+}
+
+// closeScope releases the process scope, if any. The scope is nil after this
+// call so a late IsDone check does not touch a removed cgroup.
+func (s *ProcessSession) closeScope() {
+	s.mu.Lock()
+	scope := s.scope
+	s.scope = nil
+	s.mu.Unlock()
+	if scope != nil {
+		_ = scope.Close()
+	}
 }
 
 // finish records a terminal state and closes Done exactly once. A killed
@@ -165,6 +223,42 @@ func (s *ProcessSession) finish(exitCode int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.finishLocked(exitCode)
+}
+
+func (s *ProcessSession) markScopeExited() {
+	s.mu.Lock()
+	scope := s.scope
+	s.mu.Unlock()
+	if scope != nil {
+		scope.MarkExited()
+	}
+}
+
+// finishIfScopeEmpty records the shell exit only when no member of the process
+// scope is still alive. Background sessions stay observable until the whole
+// scope drains; the scope is released afterwards.
+func (s *ProcessSession) finishIfScopeEmpty(exitCode int) {
+	s.mu.Lock()
+	if s.killed {
+		exitCode = -1
+	}
+	scope := s.scope
+	s.mu.Unlock()
+
+	if scope != nil && !scope.Empty() {
+		go func() {
+			for !scope.Empty() {
+				time.Sleep(100 * time.Millisecond)
+			}
+			s.finish(exitCode)
+			_ = scope.Close()
+		}()
+		return
+	}
+	s.finish(exitCode)
+	if scope != nil {
+		_ = scope.Close()
+	}
 }
 
 func (s *ProcessSession) finishLocked(exitCode int) {
@@ -385,9 +479,7 @@ func (s *ProcessSession) DroppedBytes() int64 {
 
 func (s *ProcessSession) ToSessionInfo() SessionInfo {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	return SessionInfo{
+	info := SessionInfo{
 		ID:        s.ID,
 		Command:   s.Command,
 		Status:    s.Status,
@@ -396,6 +488,16 @@ func (s *ProcessSession) ToSessionInfo() SessionInfo {
 		ExitCode:  s.ExitCode,
 		ExitedAt:  s.ExitTime,
 	}
+	killed := s.killed
+	scope := s.scope
+	s.mu.Unlock()
+
+	if (info.Status == "done" || info.Status == "exited") && scope != nil && !scope.Empty() {
+		info.Status = "running"
+	} else if info.Status == "running" && killed {
+		info.Status = "killing"
+	}
+	return info
 }
 
 // retentionTime returns the session's terminal state and the timestamp the
@@ -461,7 +563,8 @@ func (sm *SessionManager) cleanupOldSessions() {
 	cutoff := time.Now().Add(-30 * time.Minute)
 	for id, session := range sm.sessions {
 		done, ts := session.retentionTime()
-		if done && ts < cutoff.Unix() {
+		if done && session.IsDone() && ts < cutoff.Unix() {
+			session.closeScope()
 			delete(sm.sessions, id)
 		}
 	}
