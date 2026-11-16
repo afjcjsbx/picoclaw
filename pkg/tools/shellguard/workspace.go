@@ -567,14 +567,8 @@ func (s *workspaceState) checkPath(path string) error {
 	return nil
 }
 
+// checkPathFrom resolves an already cleaned, non-empty path against cwd.
 func (s *workspaceState) checkPathFrom(path, cwd string) error {
-	if isWorkspaceURL(path) {
-		return nil
-	}
-	path = strings.TrimRight(path, ",)]}:")
-	if path == "" {
-		return newWorkspaceError("path outside working dir")
-	}
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(cwd, path)
 	}
