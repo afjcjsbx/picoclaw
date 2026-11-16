@@ -81,13 +81,16 @@ func (t *ExecTool) executePoll(ctx context.Context, args map[string]any) *ToolRe
 		return errResult
 	}
 
+	artifactPath, artifactCapped := session.SpillInfo()
 	resp := ExecResponse{
-		SessionID:    sessionID,
-		Status:       session.GetStatus(),
-		ExitCode:     sessionExitCode(session),
-		Output:       session.Tail(pollOutputChars),
-		TotalBytes:   session.TotalBytes(),
-		DroppedBytes: session.DroppedBytes(),
+		SessionID:      sessionID,
+		Status:         session.GetStatus(),
+		ExitCode:       sessionExitCode(session),
+		Output:         session.Tail(pollOutputChars),
+		TotalBytes:     session.TotalBytes(),
+		DroppedBytes:   session.DroppedBytes(),
+		ArtifactPath:   artifactPath,
+		ArtifactCapped: artifactCapped,
 	}
 	if !session.IsDone() && session.noteCheck() >= idleCheckLimit {
 		resp.Note = pollIdleNote
@@ -183,12 +186,15 @@ func (t *ExecTool) executeWait(ctx context.Context, args map[string]any) *ToolRe
 		}
 	}
 
+	artifactPath, artifactCapped := session.SpillInfo()
 	resp := ExecResponse{
-		SessionID:    sessionID,
-		Status:       session.GetStatus(),
-		ExitCode:     sessionExitCode(session),
-		TotalBytes:   session.TotalBytes(),
-		DroppedBytes: session.DroppedBytes(),
+		SessionID:      sessionID,
+		Status:         session.GetStatus(),
+		ExitCode:       sessionExitCode(session),
+		TotalBytes:     session.TotalBytes(),
+		DroppedBytes:   session.DroppedBytes(),
+		ArtifactPath:   artifactPath,
+		ArtifactCapped: artifactCapped,
 	}
 	if session.IsDone() {
 		resp.Output = session.Read()
@@ -246,23 +252,29 @@ func (t *ExecTool) executeRead(ctx context.Context, args map[string]any) *ToolRe
 	}
 
 	page := session.ReadRange(offset, limit)
+	artifactPath, artifactCapped := session.SpillInfo()
 	resp := ExecResponse{
-		SessionID:    sessionID,
-		Output:       page.Text,
-		Status:       session.GetStatus(),
-		ExitCode:     sessionExitCode(session),
-		TotalBytes:   page.TotalBytes,
-		Offset:       page.Offset,
-		NextOffset:   page.NextOffset,
-		HasMore:      page.HasMore,
-		DroppedBytes: page.DroppedBytes,
-		SkippedBytes: page.SkippedBytes,
+		SessionID:      sessionID,
+		Output:         page.Text,
+		Status:         session.GetStatus(),
+		ExitCode:       sessionExitCode(session),
+		TotalBytes:     page.TotalBytes,
+		Offset:         page.Offset,
+		NextOffset:     page.NextOffset,
+		HasMore:        page.HasMore,
+		DroppedBytes:   page.DroppedBytes,
+		SkippedBytes:   page.SkippedBytes,
+		ArtifactPath:   artifactPath,
+		ArtifactCapped: artifactCapped,
 	}
 	if page.SkippedBytes > 0 {
 		resp.Note = fmt.Sprintf(
 			"Requested offset %d predates the retained output window; skipped %d bytes, starting at byte %d.",
 			offset, page.SkippedBytes, page.Offset,
 		)
+		if artifactPath != "" {
+			resp.Note += " The full output is saved at " + artifactPath + "."
+		}
 	}
 	data, err := json.Marshal(resp)
 	if err != nil {
@@ -329,13 +341,16 @@ func (t *ExecTool) executeKill(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult(fmt.Sprintf("failed to kill session: %v", err))
 	}
 
+	artifactPath, artifactCapped := session.SpillInfo()
 	resp := ExecResponse{
-		SessionID:    sessionID,
-		Status:       session.GetStatus(),
-		ExitCode:     sessionExitCode(session),
-		Output:       session.Tail(killOutputChars),
-		TotalBytes:   session.TotalBytes(),
-		DroppedBytes: session.DroppedBytes(),
+		SessionID:      sessionID,
+		Status:         session.GetStatus(),
+		ExitCode:       sessionExitCode(session),
+		Output:         session.Tail(killOutputChars),
+		TotalBytes:     session.TotalBytes(),
+		DroppedBytes:   session.DroppedBytes(),
+		ArtifactPath:   artifactPath,
+		ArtifactCapped: artifactCapped,
 	}
 	data, err := json.Marshal(resp)
 	if err != nil {

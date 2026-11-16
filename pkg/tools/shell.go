@@ -20,8 +20,10 @@ import (
 	"github.com/sipeed/picoclaw/pkg/tools/shellguard"
 )
 
-// maxOutputBufferSize caps the rolling output retained per session.
-const maxOutputBufferSize = 1 * 1024 * 1024 // 1MB
+// maxOutputBufferSize caps the rolling output retained in memory per session.
+// The full stream spills to an artifact once it overflows, so a low-resource
+// host keeps only a small tail per background process.
+const maxOutputBufferSize = 100 * 1024 // 100KB
 
 // maxForegroundTimeout caps how long a single foreground exec call may block.
 // Requests above it are promoted to a tracked background session instead of

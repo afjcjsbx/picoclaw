@@ -374,6 +374,7 @@ func (t *ExecTool) runBackground(
 		// manager: readers (session_read/list_sessions) must never observe a
 		// session whose buffer is still nil.
 		outputBuffer: &bytes.Buffer{},
+		spillDir:     t.outputSpillDir(),
 	}
 
 	shellPath, shellArgs, shellErr := shellCommand(command)
