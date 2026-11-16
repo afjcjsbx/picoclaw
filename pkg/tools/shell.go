@@ -729,6 +729,42 @@ func (t *ExecTool) completionResult(session *ProcessSession) *ToolResult {
 	return NewToolResult(msg)
 }
 
+// executeRun handles action=run. A call passes through these stages in order;
+// the first one that fails returns an error result and nothing is executed.
+//
+//  1. Arguments: command is required and the optional env object is parsed
+//     (string values only; no empty names, "=" or NUL bytes).
+//  2. Remote gate: unless allow_remote is set, only internal channels may run
+//     exec. It fails closed, so an empty channel is rejected too.
+//  3. Normalization: a trailing unquoted '&' becomes background=true so the
+//     process is tracked. The guard still inspects the original command.
+//  4. Timeout: must be a non-negative integer. A foreground request above the
+//     foreground cap, or timeout=0, is promoted to a tracked background
+//     session instead of being clamped or rejected.
+//  5. Conversation state: the remembered cwd and env overlay for this
+//     agent/session are loaded and the call's env is merged on top, dropping
+//     names the LLM may not set (PATH, HOME, LD_*, PICOCLAW_*).
+//  6. Working directory: explicit cwd, else the remembered cwd (revalidated),
+//     else the workspace. With restrict_to_workspace an explicit cwd must
+//     resolve inside the workspace.
+//  7. Command guard: guardCommandContext runs the hardline, deny, allowlist,
+//     workspace, risk-level and smart-approval layers (see its comment).
+//  8. Symlinks in cwd are resolved again right before execution to narrow the
+//     TOCTOU window between validation and cmd.Dir.
+//  9. State persistence: cwd and env are remembered only after the guard
+//     passed.
+//  10. Launch: background and promoted runs go to runBackground, which returns
+//     a sessionId; everything else goes to runSync. Both build the child env
+//     from the sanitized base (allowlisted parent variables plus env_set), the
+//     validated per-call env and PICOCLAW_EXEC_*, and start the process through
+//     the isolation layer. runSync bounds the output (head and tail, with the
+//     full stream spilled to an artifact), kills the process tree on timeout
+//     and prefixes the result with an "[exec] {...}" status header.
+//
+// Secret redaction is not done here. After the tool returns, the registry
+// spills oversized results to an artifact that keeps the raw output on disk,
+// and the agent loop then replaces known secrets in the model-facing content
+// with [FILTERED] (tools.filter_sensitive_data).
 func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolResult {
 	command, ok := args["command"].(string)
 	if !ok {
