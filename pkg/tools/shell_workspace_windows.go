@@ -91,11 +91,7 @@ func (t *ExecTool) guardWindowsWorkspacePaths(command, cwdPath string) string {
 				continue
 			}
 
-			rel, err := filepath.Rel(cwdPath, p)
-			if err != nil {
-				continue
-			}
-			if strings.HasPrefix(rel, "..") {
+			if !fstools.IsWithinWorkspace(p, cwdPath) {
 				return "Command blocked by safety guard (path outside working dir)"
 			}
 		}

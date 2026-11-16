@@ -830,8 +830,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 			if wsResolved == "" {
 				wsResolved = absWorkspace
 			}
-			rel, err := filepath.Rel(wsResolved, resolved)
-			if err != nil || !filepath.IsLocal(rel) {
+			if !fstools.IsWithinWorkspace(resolved, wsResolved) {
 				if rememberedCwd {
 					t.forgetRememberedCwd(ctx, cwd, fmt.Errorf("working directory escaped workspace"))
 				}
@@ -2147,11 +2146,7 @@ func (t *ExecTool) workspacePathAllowed(p, cwdPath string) bool {
 	if fstools.IsAllowedPath(p, t.allowedPathPatterns) {
 		return true
 	}
-	rel, err := filepath.Rel(cwdPath, p)
-	if err != nil {
-		return false
-	}
-	return !strings.HasPrefix(rel, "..")
+	return fstools.IsWithinWorkspace(p, cwdPath)
 }
 
 // execHomeDir returns the home directory the child shell will see. A HOME
