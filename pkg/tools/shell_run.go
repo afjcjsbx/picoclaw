@@ -292,6 +292,32 @@ func newExecResult(
 	return result
 }
 
+// recoverGoroutine is deferred at the top of a session goroutine so a panic is
+// logged instead of crashing the process. onPanic runs after the log line.
+func recoverGoroutine(label string, onPanic ...func()) {
+	r := recover()
+	if r == nil {
+		return
+	}
+	logger.ErrorCF("shell", label+" goroutine panic recovered",
+		map[string]any{
+			"panic": fmt.Sprintf("%v", r),
+			"stack": string(debug.Stack()),
+		})
+	for _, f := range onPanic {
+		f()
+	}
+}
+
+// processExitCode returns the exit status of a waited process, or -1 when the
+// process never produced one (Wait failed before the state was recorded).
+func processExitCode(state *os.ProcessState) int {
+	if state == nil {
+		return -1
+	}
+	return state.ExitCode()
+}
+
 // sessionExitCode returns the process exit status only once the session has
 // finished, so a running session is not reported as a successful exit.
 func sessionExitCode(session *ProcessSession) *int {
@@ -413,34 +439,13 @@ func (t *ExecTool) runBackground(
 	// so we need cmd.Wait() in a separate goroutine to detect process exit.
 	if session.PTY && session.ptyMaster != nil {
 		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					logger.ErrorCF("shell", "PTY cmd.Wait goroutine panic recovered",
-						map[string]any{
-							"panic": fmt.Sprintf("%v", r),
-							"stack": string(debug.Stack()),
-						})
-					session.finish(-1)
-				}
-			}()
+			defer recoverGoroutine("PTY cmd.Wait", func() { session.finish(-1) })
 			cmd.Wait() // Wait for process to exit
-			exitCode := -1
-			if cmd.ProcessState != nil {
-				exitCode = cmd.ProcessState.ExitCode()
-			}
-			session.finish(exitCode)
+			session.finish(processExitCode(cmd.ProcessState))
 		}()
 
 		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					logger.ErrorCF("shell", "PTY read goroutine panic recovered",
-						map[string]any{
-							"panic": fmt.Sprintf("%v", r),
-							"stack": string(debug.Stack()),
-						})
-				}
-			}()
+			defer recoverGoroutine("PTY read")
 			buf := make([]byte, 4096)
 			for {
 				n, err := session.ptyMaster.Read(buf)
@@ -464,15 +469,7 @@ func (t *ExecTool) runBackground(
 		// Non-PTY mode: one goroutine reads the merged stdout/stderr pipe.
 		// When process exits, OS closes the pipe write end → Read() returns EOF.
 		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					logger.ErrorCF("shell", "pipe read goroutine panic recovered",
-						map[string]any{
-							"panic": fmt.Sprintf("%v", r),
-							"stack": string(debug.Stack()),
-						})
-				}
-			}()
+			defer recoverGoroutine("pipe read")
 			buf := make([]byte, 4096)
 
 			for {
@@ -491,11 +488,7 @@ func (t *ExecTool) runBackground(
 			}
 			cmd.Wait()
 
-			exitCode := -1
-			if cmd.ProcessState != nil {
-				exitCode = cmd.ProcessState.ExitCode()
-			}
-			session.finish(exitCode)
+			session.finish(processExitCode(cmd.ProcessState))
 		}()
 	}
 

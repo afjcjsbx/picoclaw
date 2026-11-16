@@ -327,6 +327,23 @@ func selfProtectionHardlinePatterns() []*regexp.Regexp {
 	return patterns
 }
 
+// compilePatterns compiles each pattern, naming the failing one in the error.
+func compilePatterns(
+	patterns []string,
+	compile func(string) (*regexp.Regexp, error),
+	label string,
+) ([]*regexp.Regexp, error) {
+	compiled := make([]*regexp.Regexp, 0, len(patterns))
+	for _, pattern := range patterns {
+		re, err := compile(pattern)
+		if err != nil {
+			return nil, fmt.Errorf("invalid %s pattern %q: %w", label, pattern, err)
+		}
+		compiled = append(compiled, re)
+	}
+	return compiled, nil
+}
+
 // compileFullMatchPattern anchors an operator-provided allow pattern so it must
 // match the whole command. A bare "git" pattern no longer exempts
 // "git push --force".
@@ -374,31 +391,27 @@ func NewExecToolWithConfig(
 				nil,
 			)
 		}
+		var err error
 		if len(execConfig.CustomDenyPatterns) > 0 {
 			logger.InfoCF("tools", "using custom deny patterns", map[string]any{
 				"patterns": execConfig.CustomDenyPatterns,
 			})
-			for _, pattern := range execConfig.CustomDenyPatterns {
-				re, err := regexp.Compile(pattern)
-				if err != nil {
-					return nil, fmt.Errorf("invalid custom deny pattern %q: %w", pattern, err)
-				}
-				customDenyPatterns = append(customDenyPatterns, re)
+			customDenyPatterns, err = compilePatterns(execConfig.CustomDenyPatterns, regexp.Compile, "custom deny")
+			if err != nil {
+				return nil, err
 			}
 		}
-		for _, pattern := range execConfig.CustomAllowPatterns {
-			re, err := compileFullMatchPattern(pattern)
-			if err != nil {
-				return nil, fmt.Errorf("invalid custom allow pattern %q: %w", pattern, err)
-			}
-			customAllowPatterns = append(customAllowPatterns, re)
+		customAllowPatterns, err = compilePatterns(
+			execConfig.CustomAllowPatterns, compileFullMatchPattern, "custom allow",
+		)
+		if err != nil {
+			return nil, err
 		}
-		for _, pattern := range execConfig.RiskAllowPatterns {
-			re, err := compileFullMatchPattern(pattern)
-			if err != nil {
-				return nil, fmt.Errorf("invalid custom risk allow pattern %q: %w", pattern, err)
-			}
-			customRiskAllowPatterns = append(customRiskAllowPatterns, re)
+		customRiskAllowPatterns, err = compilePatterns(
+			execConfig.RiskAllowPatterns, compileFullMatchPattern, "custom risk allow",
+		)
+		if err != nil {
+			return nil, err
 		}
 		if execConfig.RiskAllowThreshold != "" {
 			parsed, err := shellguard.ParseRiskLevel(execConfig.RiskAllowThreshold)

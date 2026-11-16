@@ -1,10 +1,6 @@
 package shellguard
 
-import (
-	"strings"
-
-	"mvdan.cc/sh/v3/syntax"
-)
+import "mvdan.cc/sh/v3/syntax"
 
 func (s *workspaceState) checkNested(
 	args []word,
@@ -81,7 +77,7 @@ func (s *workspaceState) checkNested(
 
 	switch name {
 	case "eval":
-		script, ok := joinExpanded(args[1:])
+		script, ok := joinLiteralWords(args[1:])
 		if !ok {
 			return newWorkspaceError("dynamic eval cannot be validated under workspace restriction")
 		}
@@ -104,18 +100,6 @@ func (s *workspaceState) checkNested(
 			return newWorkspaceError("dynamic command cannot be validated under workspace restriction")
 		}
 		if found && len(nested) > 0 {
-			// env -C changes the cwd only for the command it launches, so the
-			// target is a temporary candidate while that command is checked.
-			if name == "env" {
-				if target, ok := envChdirTarget(args[1:]); ok &&
-					!target.dynamic && target.text != "" && target.text != "-" {
-					saved := append([]string(nil), s.cwds...)
-					s.addCwd(s.resolveCwd(target.text))
-					err := s.checkSimple(nested, nil, depth+1, false)
-					s.cwds = saved
-					return err
-				}
-			}
 			return s.checkSimple(nested, nil, depth+1, false)
 		}
 	}
@@ -163,18 +147,4 @@ func (s *workspaceState) checkFindExec(args []word, depth int) error {
 		}
 	}
 	return nil
-}
-
-func joinExpanded(args []word) (string, bool) {
-	var b strings.Builder
-	for i, arg := range args {
-		if arg.dynamic {
-			return "", false
-		}
-		if i > 0 {
-			b.WriteByte(' ')
-		}
-		b.WriteString(arg.text)
-	}
-	return b.String(), true
 }

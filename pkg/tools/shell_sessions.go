@@ -28,18 +28,42 @@ func (t *ExecTool) executeList() *ToolResult {
 	}
 }
 
-func (t *ExecTool) executePoll(args map[string]any) *ToolResult {
+// sessionIDArg extracts the required sessionId argument.
+func sessionIDArg(args map[string]any) (string, *ToolResult) {
 	sessionID, ok := args["sessionId"].(string)
 	if !ok {
-		return ErrorResult("sessionId is required")
+		return "", ErrorResult("sessionId is required")
 	}
+	return sessionID, nil
+}
 
+func (t *ExecTool) lookupSession(sessionID string) (*ProcessSession, *ToolResult) {
 	session, err := t.sessionManager.Get(sessionID)
 	if err != nil {
 		if errors.Is(err, ErrSessionNotFound) {
-			return ErrorResult(fmt.Sprintf("session not found: %s", sessionID))
+			return nil, ErrorResult(fmt.Sprintf("session not found: %s", sessionID))
 		}
-		return ErrorResult(err.Error())
+		return nil, ErrorResult(err.Error())
+	}
+	return session, nil
+}
+
+// getSession resolves the sessionId argument to a live session. Actions that
+// validate other arguments before the lookup call sessionIDArg and
+// lookupSession separately to keep their error order.
+func (t *ExecTool) getSession(args map[string]any) (string, *ProcessSession, *ToolResult) {
+	sessionID, errResult := sessionIDArg(args)
+	if errResult != nil {
+		return "", nil, errResult
+	}
+	session, errResult := t.lookupSession(sessionID)
+	return sessionID, session, errResult
+}
+
+func (t *ExecTool) executePoll(args map[string]any) *ToolResult {
+	sessionID, session, errResult := t.getSession(args)
+	if errResult != nil {
+		return errResult
 	}
 
 	resp := ExecResponse{
@@ -97,9 +121,9 @@ const (
 // canceled. A wait that times out is not a failure: the response says so, since
 // models otherwise misread it and re-issue the same call.
 func (t *ExecTool) executeWait(ctx context.Context, args map[string]any) *ToolResult {
-	sessionID, ok := args["sessionId"].(string)
-	if !ok {
-		return ErrorResult("sessionId is required")
+	sessionID, errResult := sessionIDArg(args)
+	if errResult != nil {
+		return errResult
 	}
 
 	maxWait := t.timeout
@@ -121,12 +145,9 @@ func (t *ExecTool) executeWait(ctx context.Context, args map[string]any) *ToolRe
 		}
 	}
 
-	session, err := t.sessionManager.Get(sessionID)
-	if err != nil {
-		if errors.Is(err, ErrSessionNotFound) {
-			return ErrorResult(fmt.Sprintf("session not found: %s", sessionID))
-		}
-		return ErrorResult(err.Error())
+	session, errResult := t.lookupSession(sessionID)
+	if errResult != nil {
+		return errResult
 	}
 
 	// ponytail: polls IsDone every 100ms instead of a done channel; a queued
@@ -176,17 +197,9 @@ func (t *ExecTool) executeWait(ctx context.Context, args map[string]any) *ToolRe
 }
 
 func (t *ExecTool) executeRead(args map[string]any) *ToolResult {
-	sessionID, ok := args["sessionId"].(string)
-	if !ok {
-		return ErrorResult("sessionId is required")
-	}
-
-	session, err := t.sessionManager.Get(sessionID)
-	if err != nil {
-		if errors.Is(err, ErrSessionNotFound) {
-			return ErrorResult(fmt.Sprintf("session not found: %s", sessionID))
-		}
-		return ErrorResult(err.Error())
+	sessionID, session, errResult := t.getSession(args)
+	if errResult != nil {
+		return errResult
 	}
 
 	offset := int64(0)
@@ -247,9 +260,9 @@ func (t *ExecTool) executeRead(args map[string]any) *ToolResult {
 }
 
 func (t *ExecTool) executeWrite(args map[string]any) *ToolResult {
-	sessionID, ok := args["sessionId"].(string)
-	if !ok {
-		return ErrorResult("sessionId is required")
+	sessionID, errResult := sessionIDArg(args)
+	if errResult != nil {
+		return errResult
 	}
 
 	data, ok := args["data"].(string)
@@ -257,19 +270,16 @@ func (t *ExecTool) executeWrite(args map[string]any) *ToolResult {
 		return ErrorResult("data is required")
 	}
 
-	session, err := t.sessionManager.Get(sessionID)
-	if err != nil {
-		if errors.Is(err, ErrSessionNotFound) {
-			return ErrorResult(fmt.Sprintf("session not found: %s", sessionID))
-		}
-		return ErrorResult(err.Error())
+	session, errResult := t.lookupSession(sessionID)
+	if errResult != nil {
+		return errResult
 	}
 
 	if session.IsDone() {
 		return ErrorResult(fmt.Sprintf("process already exited with code %d", session.GetExitCode()))
 	}
 
-	if err = session.Write(data); err != nil {
+	if err := session.Write(data); err != nil {
 		if errors.Is(err, ErrSessionDone) {
 			return ErrorResult(fmt.Sprintf("process already exited with code %d", session.GetExitCode()))
 		}
@@ -291,24 +301,16 @@ func (t *ExecTool) executeWrite(args map[string]any) *ToolResult {
 }
 
 func (t *ExecTool) executeKill(args map[string]any) *ToolResult {
-	sessionID, ok := args["sessionId"].(string)
-	if !ok {
-		return ErrorResult("sessionId is required")
-	}
-
-	session, err := t.sessionManager.Get(sessionID)
-	if err != nil {
-		if errors.Is(err, ErrSessionNotFound) {
-			return ErrorResult(fmt.Sprintf("session not found: %s", sessionID))
-		}
-		return ErrorResult(err.Error())
+	sessionID, session, errResult := t.getSession(args)
+	if errResult != nil {
+		return errResult
 	}
 
 	if session.IsDone() {
 		return ErrorResult(fmt.Sprintf("process already exited with code %d", session.GetExitCode()))
 	}
 
-	if err = session.Kill(); err != nil {
+	if err := session.Kill(); err != nil {
 		return ErrorResult(fmt.Sprintf("failed to kill session: %v", err))
 	}
 
@@ -488,9 +490,9 @@ func encodeKeySequence(tokens []string, ptyKeyMode PtyKeyMode) (string, error) {
 }
 
 func (t *ExecTool) executeSendKeys(args map[string]any) *ToolResult {
-	sessionID, ok := args["sessionId"].(string)
-	if !ok {
-		return ErrorResult("sessionId is required")
+	sessionID, errResult := sessionIDArg(args)
+	if errResult != nil {
+		return errResult
 	}
 
 	keysStr, ok := args["keys"].(string)
@@ -516,12 +518,9 @@ func (t *ExecTool) executeSendKeys(args map[string]any) *ToolResult {
 		return ErrorResult("keys cannot be empty")
 	}
 
-	session, err := t.sessionManager.Get(sessionID)
-	if err != nil {
-		if errors.Is(err, ErrSessionNotFound) {
-			return ErrorResult(fmt.Sprintf("session not found: %s", sessionID))
-		}
-		return ErrorResult(err.Error())
+	session, errResult := t.lookupSession(sessionID)
+	if errResult != nil {
+		return errResult
 	}
 
 	ptyKeyMode := session.GetPtyKeyMode()
