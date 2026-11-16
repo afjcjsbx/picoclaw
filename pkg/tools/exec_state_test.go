@@ -305,7 +305,7 @@ func TestExecStateStore_ConcurrentAccessAndBound(t *testing.T) {
 			ctx := execStateContext("agent-a", fmt.Sprintf("session-%d", i))
 			store.rememberCwd(ctx, fmt.Sprintf("/tmp/state-%d", i))
 			store.storeEnv(ctx, map[string]string{"IDX": fmt.Sprintf("%d", i)})
-			_ = store.load(ctx)
+			_, _ = store.load(ctx)
 		}(i)
 	}
 	wg.Wait()

@@ -26,12 +26,6 @@ type execStateEntry struct {
 	lastUsed time.Time
 }
 
-// execSessionState is a copy of the persisted state for one conversation.
-type execSessionState struct {
-	cwd string
-	env map[string]string
-}
-
 type execStateStore struct {
 	mu      sync.Mutex
 	entries map[execStateKey]*execStateEntry
@@ -80,29 +74,26 @@ func mergeExecEnv(base, update map[string]string) map[string]string {
 	return merged
 }
 
-// load returns a snapshot of the conversation state and marks it as recently
-// used. A missing session context yields zero state, keeping exec stateless
-// instead of sharing a global entry.
-func (s *execStateStore) load(ctx context.Context) execSessionState {
+// load returns a snapshot of the conversation's cwd and env overlay and marks
+// it as recently used. A missing session context yields zero state, keeping
+// exec stateless instead of sharing a global entry.
+func (s *execStateStore) load(ctx context.Context) (cwd string, env map[string]string) {
 	if s == nil {
-		return execSessionState{}
+		return "", nil
 	}
 	key, ok := execStateKeyFromContext(ctx)
 	if !ok {
-		return execSessionState{}
+		return "", nil
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	entry, ok := s.entries[key]
 	if !ok {
-		return execSessionState{}
+		return "", nil
 	}
 	entry.lastUsed = time.Now()
-	return execSessionState{
-		cwd: entry.cwd,
-		env: cloneExecStateEnv(entry.env),
-	}
+	return entry.cwd, cloneExecStateEnv(entry.env)
 }
 
 // rememberCwd stores the resolved cwd for subsequent calls in the conversation.
