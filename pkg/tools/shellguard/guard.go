@@ -528,16 +528,21 @@ func hasCommandLookupFlag(words []word) bool {
 // hasEnvSplitString reports whether an env invocation uses -S/--split-string.
 // The attached form (-S"cmd") does not match the exact -S argument modifier,
 // so it is checked here before the argv reaches the classifier.
+//
+// Options are scanned in order because -u and -C consume the following word.
+// Without that, env -u NAME -S "cmd" hid the split string behind NAME.
 func hasEnvSplitString(words []word) bool {
-	for _, w := range words {
-		if isAssignment(w.text) {
-			continue
-		}
+	for i := 0; i < len(words); i++ {
+		w := words[i]
 		if !w.literal {
 			return false
 		}
 		text := w.text
-		if text == "--" || text == "-" {
+		if isAssignment(text) || text == "-" {
+			// "-" is env's short form of -i; both may be followed by options.
+			continue
+		}
+		if text == "--" {
 			return false
 		}
 		if !strings.HasPrefix(text, "-") {
@@ -546,22 +551,25 @@ func hasEnvSplitString(words []word) bool {
 		if text == "--split-string" || strings.HasPrefix(text, "--split-string=") {
 			return true
 		}
-		if !strings.HasPrefix(text, "--") && shortEnvSplitFlag(text) {
-			return true
+		if strings.HasPrefix(text, "--unset") || strings.HasPrefix(text, "--chdir") {
+			if !strings.Contains(text, "=") {
+				i++ // the value is the next word
+			}
+			continue
 		}
-	}
-	return false
-}
-
-// shortEnvSplitFlag scans an env short-option cluster. -u and -C consume the
-// rest of the word as their value, so -uS unsets S rather than enabling -S.
-func shortEnvSplitFlag(text string) bool {
-	for i := 1; i < len(text); i++ {
-		switch text[i] {
-		case 'u', 'C':
-			return false
-		case 'S':
-			return true
+		if strings.HasPrefix(text, "--") {
+			continue
+		}
+		for j := 1; j < len(text); j++ {
+			switch text[j] {
+			case 'u', 'C':
+				if j == len(text)-1 {
+					i++ // the value is the next word
+				}
+				j = len(text) - 1 // an attached value consumes the rest
+			case 'S':
+				return true
+			}
 		}
 	}
 	return false
