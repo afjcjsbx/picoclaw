@@ -269,7 +269,9 @@ func NewExecToolWithConfig(
 	customDenyPatterns := make([]*regexp.Regexp, 0)
 	customAllowPatterns := make([]*regexp.Regexp, 0)
 	var allowedPathPatterns []*regexp.Regexp
-	allowRemote := true
+	// Fail closed when no config is supplied. Callers that need remote exec
+	// must opt in explicitly through cfg.Tools.Exec.AllowRemote.
+	allowRemote := false
 	if len(allowPaths) > 0 {
 		allowedPathPatterns = allowPaths[0]
 	}
