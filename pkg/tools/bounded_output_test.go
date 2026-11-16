@@ -8,6 +8,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/sipeed/picoclaw/pkg/redact"
 )
 
 func TestBoundedOutputSpillsFullStream(t *testing.T) {
@@ -170,6 +172,32 @@ func TestBoundedOutputTruncatesOnRuneBoundary(t *testing.T) {
 	require.True(t, strings.HasSuffix(text, strings.Repeat("è", 6)))
 	require.Contains(t, text, "chars omitted")
 	require.NoError(t, out.Close())
+}
+
+// TestBoundedOutputSpillRedactsRegisteredSecrets covers the disk side of the
+// pipeline filter: the stream that is mirrored to .artifacts/tool must not keep
+// a configured credential, even when the credential is split across writes.
+func TestBoundedOutputSpillRedactsRegisteredSecrets(t *testing.T) {
+	const secret = "sk-live-0123456789abcdef"
+	redact.SetSecrets([]string{secret})
+	t.Cleanup(func() { redact.SetSecrets(nil) })
+
+	out := newBoundedOutput(5, t.TempDir())
+	for _, chunk := range []string{"head ", secret[:6], secret[6:14], secret[14:], " tail"} {
+		_, err := out.Write([]byte(chunk))
+		require.NoError(t, err)
+	}
+
+	path := out.SpillPath()
+	require.NotEmpty(t, path)
+	require.NoError(t, out.Close())
+
+	got, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.NotContains(t, string(got), secret)
+	require.Contains(t, string(got), redact.Marker)
+	require.Contains(t, string(got), "head ")
+	require.Contains(t, string(got), " tail")
 }
 
 func TestBoundedOutputCapsSpillFile(t *testing.T) {

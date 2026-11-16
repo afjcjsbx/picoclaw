@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	"github.com/sipeed/picoclaw/pkg/redact"
 )
 
 func TestPersistTextArtifact_WritesAndReadsBack(t *testing.T) {
@@ -60,6 +62,64 @@ func TestPersistTextArtifactWindow_CapsWithHeadAndTail(t *testing.T) {
 	}
 	if !strings.Contains(stored, "[ARTIFACT TRUNCATED - 3,910 chars omitted out of 4,010 total]") {
 		t.Fatalf("expected honest counts in notice, got %q", stored)
+	}
+}
+
+// TestPersistTextArtifact_RedactsRegisteredSecrets verifies that the artifact
+// writer applies the same exact redaction as the model-facing filter, without
+// materializing a second copy of the text.
+func TestPersistTextArtifact_RedactsRegisteredSecrets(t *testing.T) {
+	const secret = "sk-live-0123456789abcdef"
+	redact.SetSecrets([]string{secret})
+	t.Cleanup(func() { redact.SetSecrets(nil) })
+
+	dir := t.TempDir()
+	path, err := PersistTextArtifact(dir, "redacted_*.txt", "before "+secret+" after")
+	if err != nil {
+		t.Fatalf("PersistTextArtifact: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read artifact: %v", err)
+	}
+	if strings.Contains(string(data), secret) {
+		t.Fatalf("credential leaked to artifact: %q", string(data))
+	}
+	if !strings.Contains(string(data), redact.Marker) {
+		t.Fatalf("expected %s in artifact: %q", redact.Marker, string(data))
+	}
+}
+
+// TestPersistTextArtifactWindow_DoesNotSplitSecrets keeps a truncation cut from
+// leaving a credential fragment in either the head or the tail of a capped
+// artifact.
+func TestPersistTextArtifactWindow_DoesNotSplitSecrets(t *testing.T) {
+	const secret = "sk-live-0123456789abcdef"
+	redact.SetSecrets([]string{secret})
+	t.Cleanup(func() { redact.SetSecrets(nil) })
+
+	// The secret straddles the 40/60 head/tail cuts in both directions.
+	headText := strings.Repeat("a", 35) + secret + strings.Repeat("b", 200) + "TAIL"
+	tailText := strings.Repeat("a", 200) + secret + strings.Repeat("b", 45)
+
+	for _, text := range []string{headText, tailText} {
+		path, truncated, err := PersistTextArtifactWindow(t.TempDir(), "window_*.txt", text, 100, "ARTIFACT")
+		if err != nil {
+			t.Fatalf("PersistTextArtifactWindow: %v", err)
+		}
+		if !truncated {
+			t.Fatal("expected truncated=true")
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read artifact: %v", err)
+		}
+		stored := string(data)
+		for i := 0; i+4 <= len(secret); i++ {
+			if strings.Contains(stored, secret[i:i+4]) {
+				t.Fatalf("credential fragment %q leaked to artifact: %q", secret[i:i+4], stored)
+			}
+		}
 	}
 }
 

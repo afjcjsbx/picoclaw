@@ -174,11 +174,12 @@ func normalizeToolResult(
 // applies, the model is told the artifact itself was truncated and how to
 // recover.
 //
-// Security note: this runs before the sensitive-data filter is applied, so the
-// artifact file on disk keeps the unredacted tool output — verbatim, or the
-// normalized pageable text for a recognized JSON envelope. Only the content
-// injected into the model context is filtered. Treat workspace artifacts as
-// sensitive data. See docs/security/sensitive_data_filtering.md.
+// Security note: the pipeline's sensitive-data filter runs later, on the
+// content injected into the model context. The artifact itself is written
+// through the redaction layer (see persistSpillArtifact and
+// toolshared.PersistTextArtifact*), so configured credentials are masked on
+// disk as the bytes are streamed out. See
+// docs/security/sensitive_data_filtering.md.
 func persistLargeResultArtifact(result *ToolResult, toolName, workspace string, maxRunes int) {
 	if result == nil {
 		return

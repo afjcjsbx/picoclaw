@@ -10,6 +10,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"github.com/sipeed/picoclaw/pkg/redact"
 	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
@@ -70,6 +71,37 @@ func TestExecuteWithContext_SpillsLargeResultToArtifact(t *testing.T) {
 	// The path must reach the model exactly once, not in both prose and tag.
 	if n := strings.Count(content, path); n != 1 {
 		t.Fatalf("expected artifact path once in model content, got %d times: %q", n, content)
+	}
+}
+
+func TestExecuteWithContext_SpillRedactsRegisteredSecrets(t *testing.T) {
+	const secret = "sk-live-0123456789abcdef"
+	redact.SetSecrets([]string{secret})
+	t.Cleanup(func() { redact.SetSecrets(nil) })
+
+	workspace := t.TempDir()
+	reg := NewToolRegistry()
+	reg.SetWorkspace(workspace)
+	reg.SetMaxInlineResultRunes(32)
+
+	large := "HEAD " + secret + "\n" + strings.Repeat("body line\n", 100) + "TAIL"
+	reg.Register(newSpillTool("big_tool", SilentResult(large)))
+
+	result := reg.Execute(context.Background(), "big_tool", nil)
+	if len(result.ArtifactTags) != 1 {
+		t.Fatalf("expected 1 artifact tag, got %+v", result.ArtifactTags)
+	}
+	tag := result.ArtifactTags[0]
+	path := strings.TrimSuffix(strings.TrimPrefix(tag, "[file:"), "]")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read artifact: %v", err)
+	}
+	if strings.Contains(string(data), secret) {
+		t.Fatalf("credential leaked to spill artifact: %q", string(data))
+	}
+	if !strings.Contains(string(data), redact.Marker) {
+		t.Fatalf("expected %s in artifact: %q", redact.Marker, string(data))
 	}
 }
 
