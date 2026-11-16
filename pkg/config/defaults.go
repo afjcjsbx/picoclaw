@@ -73,13 +73,6 @@ func DefaultConfig() *Config {
 			// Vacuum and the check interval fall back to their documented
 			// defaults through VacuumEnabled and EffectiveCheckIntervalMinutes.
 		},
-		Evolution: EvolutionConfig{
-			Enabled:         false,
-			Mode:            "observe",
-			MinTaskCount:    2,
-			MinSuccessRatio: 0.7,
-			ColdPathTrigger: "after_turn",
-		},
 		Channels: defaultChannels(),
 		Hooks: HooksConfig{
 			Enabled: true,

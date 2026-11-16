@@ -39,7 +39,10 @@ type Config struct {
 	Isolation IsolationConfig `json:"isolation,omitempty" yaml:"-"`
 	Agents    AgentsConfig    `json:"agents"              yaml:"-"`
 	Session   SessionConfig   `json:"session,omitempty"   yaml:"-"`
-	Evolution EvolutionConfig `json:"evolution,omitempty" yaml:"-"`
+	// Evolution is a deprecated tombstone. The feature moved to the optional
+	// plugins/evolution package; the value is accepted but ignored so existing
+	// config files keep loading.
+	Evolution json.RawMessage `json:"evolution,omitempty" yaml:"-"`
 	Channels  ChannelsConfig  `json:"channel_list"        yaml:"channel_list"`
 	ModelList SecureModelList `json:"model_list"          yaml:"model_list"` // New model-centric provider configuration
 	Gateway   GatewayConfig   `json:"gateway"             yaml:"-"`
@@ -56,129 +59,6 @@ type Config struct {
 
 	// cache for sensitive values and compiled regex (computed once)
 	sensitiveCache *SensitiveDataCache
-}
-
-type EvolutionConfig struct {
-	Enabled         bool     `json:"enabled,omitempty"`
-	Mode            string   `json:"mode,omitempty"`
-	StateDir        string   `json:"state_dir,omitempty"`
-	MinTaskCount    int      `json:"min_task_count,omitempty"`
-	MinSuccessRatio float64  `json:"min_success_ratio,omitempty"`
-	ColdPathTrigger string   `json:"cold_path_trigger,omitempty"`
-	ColdPathTimes   []string `json:"cold_path_times,omitempty"`
-	// Deprecated: use MinTaskCount.
-	MinCaseCount int `json:"min_case_count,omitempty"`
-	// Deprecated: use MinSuccessRatio.
-	MinSuccessRate float64 `json:"min_success_rate,omitempty"`
-}
-
-func (c EvolutionConfig) MarshalJSON() ([]byte, error) {
-	out := struct {
-		Enabled         bool     `json:"enabled,omitempty"`
-		Mode            string   `json:"mode,omitempty"`
-		StateDir        string   `json:"state_dir,omitempty"`
-		MinTaskCount    int      `json:"min_task_count,omitempty"`
-		MinSuccessRatio float64  `json:"min_success_ratio,omitempty"`
-		ColdPathTrigger string   `json:"cold_path_trigger,omitempty"`
-		ColdPathTimes   []string `json:"cold_path_times,omitempty"`
-	}{
-		Enabled:         c.Enabled,
-		Mode:            c.Mode,
-		StateDir:        c.StateDir,
-		MinTaskCount:    c.EffectiveMinTaskCount(),
-		MinSuccessRatio: c.EffectiveMinSuccessRatio(),
-		ColdPathTrigger: strings.TrimSpace(c.ColdPathTrigger),
-		ColdPathTimes:   c.EffectiveColdPathTimes(),
-	}
-	if !out.Enabled {
-		out.Mode = ""
-		out.ColdPathTrigger = ""
-		out.ColdPathTimes = nil
-	}
-	return json.Marshal(out)
-}
-
-func (c EvolutionConfig) EffectiveMode() string {
-	if !c.Enabled {
-		return ""
-	}
-	switch strings.ToLower(strings.TrimSpace(c.Mode)) {
-	case "draft":
-		return "draft"
-	case "apply":
-		return "apply"
-	case "", "observe":
-		return "observe"
-	default:
-		return "observe"
-	}
-}
-
-func (c EvolutionConfig) RunsColdPathAutomatically() bool {
-	return c.RunsColdPathAfterTurn() || c.RunsColdPathScheduled()
-}
-
-func (c EvolutionConfig) ColdPathTriggerMode() string {
-	if c.EffectiveMode() != "draft" && c.EffectiveMode() != "apply" {
-		return ""
-	}
-	switch strings.ToLower(strings.TrimSpace(c.ColdPathTrigger)) {
-	case "", "after_turn":
-		return "after_turn"
-	case "scheduled":
-		return "scheduled"
-	case "manual", "none", "off":
-		return "manual"
-	default:
-		return "after_turn"
-	}
-}
-
-func (c EvolutionConfig) RunsColdPathAfterTurn() bool {
-	return c.ColdPathTriggerMode() == "after_turn"
-}
-
-func (c EvolutionConfig) RunsColdPathScheduled() bool {
-	return c.ColdPathTriggerMode() == "scheduled"
-}
-
-func (c EvolutionConfig) EffectiveMinTaskCount() int {
-	if c.MinTaskCount > 0 {
-		return c.MinTaskCount
-	}
-	if c.MinCaseCount > 0 {
-		return c.MinCaseCount
-	}
-	return 2
-}
-
-func (c EvolutionConfig) EffectiveMinSuccessRatio() float64 {
-	ratio := c.MinSuccessRatio
-	if ratio <= 0 {
-		ratio = c.MinSuccessRate
-	}
-	// The documented range is (0, 1]; anything else (including NaN) falls back
-	// to the default instead of silently disabling pattern generation.
-	if ratio > 0 && ratio <= 1 {
-		return ratio
-	}
-	return 0.7
-}
-
-func (c EvolutionConfig) EffectiveColdPathTimes() []string {
-	out := make([]string, 0, len(c.ColdPathTimes))
-	for _, value := range c.ColdPathTimes {
-		value = strings.TrimSpace(value)
-		if value == "" {
-			continue
-		}
-		out = append(out, value)
-	}
-	return out
-}
-
-func (c EvolutionConfig) AutoAppliesDrafts() bool {
-	return c.EffectiveMode() == "apply"
 }
 
 // IsolationConfig controls subprocess isolation for commands started by PicoClaw.

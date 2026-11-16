@@ -67,13 +67,6 @@ func NewAgentLoop(
 		stateManager = state.NewManager(defaultAgent.Workspace)
 	}
 
-	bridge, err := newEvolutionBridge(registry, cfg, provider)
-	if err != nil {
-		logger.WarnCF("agent", "Failed to initialize evolution bridge", map[string]any{
-			"error": err.Error(),
-		})
-	}
-
 	// A zero value in programmatically built configs keeps turns sequential.
 	workerPoolSize := cfg.Agents.Defaults.MaxParallelTurns
 	if workerPoolSize <= 0 {
@@ -88,7 +81,6 @@ func NewAgentLoop(
 		state:             stateManager,
 		fallback:          fallbackChain,
 		cmdRegistry:       commands.NewRegistry(commands.BuiltinDefinitions()),
-		evolution:         bridge,
 		steering:          newSteeringQueue(parseSteeringMode(cfg.Agents.Defaults.SteeringMode)),
 		workerSem:         make(chan struct{}, workerPoolSize),
 		ownsRuntimeEvents: true,
@@ -101,14 +93,6 @@ func NewAgentLoop(
 	if al.runtimeEvents == nil {
 		al.runtimeEvents = runtimeevents.NewBus()
 		al.ownsRuntimeEvents = true
-	}
-	if bridge != nil {
-		bridge.setCurrentCheck(al.isCurrentEvolutionBridge)
-		if err := bridge.subscribeRuntimeEvents(al.runtimeEvents.Channel()); err != nil {
-			logger.WarnCF("agent", "Failed to subscribe evolution bridge to runtime events", map[string]any{
-				"error": err.Error(),
-			})
-		}
 	}
 	al.activeReqCond = sync.NewCond(&al.activeReqMu)
 	al.refreshRuntimeEventLogger(cfg)

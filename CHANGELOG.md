@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `/usage` (alias `/cost`) chat command and `picoclaw usage` CLI command that report provider-reported token usage and cost per session, with per-model and input cache breakdowns.
 
+### Changed
+
+- Self-evolution is now an optional out-of-process plugin under `plugins/evolution`. The core binary no longer includes the evolution runtime, its background bridge, or the top-level `evolution` config block; existing blocks are accepted but ignored. Enable the plugin explicitly with `plugins.entries.evolution` and `allow_hooks: true`.
+
 ## [0.5.1] - 2026-10-18
 
 ### Added

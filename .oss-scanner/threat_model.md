@@ -46,8 +46,10 @@ Most important:
 - `web/backend`: dashboard authentication and the endpoints that persist configuration or install
   code.
 - `pkg/channels/*`: `allow_from` enforcement, webhook signature checks, attachment limits.
-- `pkg/mcp`, `pkg/plugins`, `pkg/skills`, `pkg/cron`, `pkg/heartbeat`, `pkg/evolution`: code and
+- `pkg/mcp`, `pkg/plugins`, `pkg/skills`, `pkg/cron`, `pkg/heartbeat`: code and
   instructions that run with the assistant's privileges.
+- `plugins/evolution` (opt-in): records turn data outside the workspace and can
+  modify workspace skills in `apply` mode.
 
 Less important: the hardware tools (`i2c`, `spi`, `serial`) and the per-architecture build helpers;
 they matter only when enabled on real devices.

@@ -12,7 +12,7 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [Seahorse Memory](seahorse-memory.md): SQLite-backed context manager, bootstrap, compaction, retrieval tools, configuration, pruning, and known gaps.
 - [Routing System](routing-system.md): agent dispatch, session policy selection, and light/heavy model routing. ([ZH](routing-system.zh.md))
 - [Runtime Events](runtime-events.md): runtime event envelope, centralized event logging, filters, and examples. ([ZH](runtime-events.zh.md))
-- [Agent Self-Evolution](agent-self-evolution.md): learning records, draft generation, application modes, and state layout.
+- [Agent Self-Evolution](agent-self-evolution.md): the optional out-of-process evolution plugin, draft generation, and state layout.
 - [Hook System Guide](hooks/): current hook architecture and protocol details.
 - [Agent Refactor](agent-refactor/): notes and checkpoints for the agent refactor work.
 

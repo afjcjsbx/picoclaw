@@ -225,6 +225,19 @@ else
 endif
 	@echo "Build complete: $(BUILD_DIR)/$(BINARY_NAME)$(EXT)"
 
+## build-evolution-plugin: Build the optional evolution hook plugin (not part of the default binary)
+build-evolution-plugin:
+	@echo "Building evolution-hook plugin..."
+	@mkdir -p plugins/evolution/bin
+ifeq ($(OS),Windows_NT)
+	$(GO) build $(GOFLAGS) -trimpath -ldflags "-s -w" -o plugins/evolution/bin/evolution-hook.exe ./plugins/evolution/cmd/evolution-hook
+	@cp plugins/evolution/bin/evolution-hook.exe plugins/evolution/bin/evolution-hook
+	@echo "Build complete: plugins/evolution/bin/evolution-hook.exe"
+else
+	$(GO) build $(GOFLAGS) -trimpath -ldflags "-s -w" -o plugins/evolution/bin/evolution-hook ./plugins/evolution/cmd/evolution-hook
+	@echo "Build complete: plugins/evolution/bin/evolution-hook"
+endif
+
 ## build-launcher: Build the picoclaw-launcher (web console) binary
 build-launcher:
 	@echo "Building picoclaw-launcher for $(PLATFORM)/$(ARCH)..."

@@ -26,13 +26,6 @@ export interface CoreConfigForm {
   heartbeatInterval: string
   devicesEnabled: boolean
   monitorUSB: boolean
-  evolutionEnabled: boolean
-  evolutionMode: string
-  evolutionStateDir: string
-  evolutionMinTaskCount: string
-  evolutionMinSuccessRatio: string
-  evolutionColdPathTrigger: string
-  evolutionColdPathTimesText: string
 }
 
 export type TurnProfileMode = "default" | "off" | "custom"
@@ -122,13 +115,6 @@ export const EMPTY_FORM: CoreConfigForm = {
   heartbeatInterval: "30",
   devicesEnabled: false,
   monitorUSB: true,
-  evolutionEnabled: false,
-  evolutionMode: "observe",
-  evolutionStateDir: "",
-  evolutionMinTaskCount: "2",
-  evolutionMinSuccessRatio: "0.7",
-  evolutionColdPathTrigger: "after_turn",
-  evolutionColdPathTimesText: "",
 }
 
 export const EMPTY_LAUNCHER_FORM: LauncherForm = {
@@ -213,7 +199,6 @@ export function buildFormFromConfig(config: unknown): CoreConfigForm {
   const session = asRecord(root.session)
   const heartbeat = asRecord(root.heartbeat)
   const devices = asRecord(root.devices)
-  const evolution = asRecord(root.evolution)
   const tools = asRecord(root.tools)
   const cron = asRecord(tools.cron)
   const exec = asRecord(tools.exec)
@@ -310,29 +295,6 @@ export function buildFormFromConfig(config: unknown): CoreConfigForm {
       devices.monitor_usb === undefined
         ? EMPTY_FORM.monitorUSB
         : asBool(devices.monitor_usb),
-    evolutionEnabled:
-      evolution.enabled === undefined
-        ? EMPTY_FORM.evolutionEnabled
-        : asBool(evolution.enabled),
-    evolutionMode: asString(evolution.mode) || EMPTY_FORM.evolutionMode,
-    evolutionStateDir:
-      asString(evolution.state_dir) || EMPTY_FORM.evolutionStateDir,
-    evolutionMinTaskCount: asNumberString(
-      evolution.min_task_count,
-      EMPTY_FORM.evolutionMinTaskCount,
-    ),
-    evolutionMinSuccessRatio: asNumberString(
-      evolution.min_success_ratio,
-      EMPTY_FORM.evolutionMinSuccessRatio,
-    ),
-    evolutionColdPathTrigger:
-      asString(evolution.cold_path_trigger) ||
-      EMPTY_FORM.evolutionColdPathTrigger,
-    evolutionColdPathTimesText: Array.isArray(evolution.cold_path_times)
-      ? evolution.cold_path_times
-          .filter((value): value is string => typeof value === "string")
-          .join("\n")
-      : EMPTY_FORM.evolutionColdPathTimesText,
   }
 }
 

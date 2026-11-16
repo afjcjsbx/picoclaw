@@ -1,0 +1,9 @@
+{
+  "hooks": [
+    {
+      "name": "record-turn",
+      "command": "./bin/evolution-hook",
+      "observe": ["agent.turn.end"]
+    }
+  ]
+}

@@ -61,7 +61,6 @@ type AgentLoop struct {
 	cmdRegistry    *commands.Registry
 	mcp            mcpRuntime
 	plugins        pluginRuntime
-	evolution      *evolutionBridge
 	hookRuntime    hookRuntime
 	steering       *steeringQueue
 	pendingSkills  sync.Map
@@ -408,16 +407,6 @@ func (al *AgentLoop) Close() {
 				})
 		}
 	}
-	evolution := al.currentEvolutionBridge()
-	if evolution != nil {
-		if err := evolution.Close(); err != nil {
-			logger.ErrorCF("agent", "Failed to close evolution bridge",
-				map[string]any{
-					"error": err.Error(),
-				})
-		}
-	}
-
 	al.GetRegistry().Close()
 	if al.hooks != nil {
 		al.hooks.Close()
@@ -504,26 +493,7 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	// Ensure shared tools are re-registered on the new registry
 	registerSharedTools(al, cfg, al.bus, registry, provider)
 
-	newEvolution, evolutionErr := newEvolutionBridge(registry, cfg, provider)
-	if evolutionErr != nil {
-		logger.WarnCF("agent", "Failed to reinitialize evolution bridge during reload",
-			map[string]any{"error": evolutionErr.Error()})
-	}
-	if newEvolution != nil {
-		newEvolution.setCurrentCheck(al.isCurrentEvolutionBridge)
-		if err := newEvolution.subscribeRuntimeEvents(al.runtimeEvents.Channel()); err != nil {
-			logger.WarnCF("agent", "Failed to subscribe reloaded evolution bridge to runtime events",
-				map[string]any{"error": err.Error()})
-		}
-	}
-
 	if err := al.hookRuntime.replace(al, newHooks); err != nil {
-		if newEvolution != nil {
-			if closeErr := newEvolution.Close(); closeErr != nil {
-				logger.WarnCF("agent", "Failed to close reinitialized evolution bridge after hook replacement failure",
-					map[string]any{"error": closeErr.Error()})
-			}
-		}
 		registry.Close()
 		return fmt.Errorf("reinitialize hooks: %w", err)
 	}
@@ -534,12 +504,10 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	// This ensures readers see a consistent pair
 	al.mu.Lock()
 	oldRegistry := al.registry
-	oldEvolution := al.evolution
 
 	// Store new values
 	al.cfg = cfg
 	al.registry = registry
-	al.evolution = newEvolution
 
 	// Also update fallback chain with new config; rebuild rate limiter registry.
 	al.fallback = providers.NewFallbackChain(providers.NewCooldownTracker(), newRateLimiterRegistry(registry))
@@ -552,12 +520,6 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	if oldMCPManager != nil {
 		if err := oldMCPManager.Close(); err != nil {
 			logger.WarnCF("agent", "Failed to close previous MCP manager during reload",
-				map[string]any{"error": err.Error()})
-		}
-	}
-	if oldEvolution != nil {
-		if err := oldEvolution.Close(); err != nil {
-			logger.WarnCF("agent", "Failed to close previous evolution bridge during reload",
 				map[string]any{"error": err.Error()})
 		}
 	}
