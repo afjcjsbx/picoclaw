@@ -58,6 +58,11 @@ func TestCheckWorkspaceBlocksEscapes(t *testing.T) {
 		},
 		{name: "ansi-c cd parent", command: `c$'\x64' ..`, want: "path traversal detected"},
 		{name: "ansi-c cd home", command: `c$'\x64' ~`, want: "path outside working dir"},
+		{name: "attached include path", command: "cc -I/etc main.c", want: "path outside working dir"},
+		{name: "attached system include path", command: "echo -isystem/usr/include", want: "path outside working dir"},
+		{name: "file url", command: "cat file:///etc/passwd", want: "path outside working dir"},
+		{name: "file url single slash", command: "cat file:/etc/passwd", want: "path outside working dir"},
+		{name: "file url host", command: "cat file://localhost/etc/passwd", want: "path outside working dir"},
 		{name: "nested ansi-c cd", command: `sh -c "c$'\x64' .."`, want: "path traversal detected"},
 		{name: "pushd home", command: "pushd ~", want: "path outside working dir"},
 		{name: "cd oldpwd", command: "cd -", want: "directory change cannot be validated"},
@@ -219,6 +224,9 @@ func TestCheckWorkspaceAllowsInsideCommands(t *testing.T) {
 		"arr=(./file)",
 		"ln -s ./sub escape",
 		"echo https://example.com/a/../b",
+		"cc -I" + cwd,
+		"echo -isystem" + cwd,
+		"cat file://" + filepath.Join(cwd, "file"),
 	}
 
 	for _, command := range commands {

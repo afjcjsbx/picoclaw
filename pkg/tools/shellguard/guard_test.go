@@ -132,6 +132,103 @@ func TestGuardCheck(t *testing.T) {
 	}
 }
 
+func TestParseEnvArgs(t *testing.T) {
+	t.Parallel()
+
+	words := func(texts ...string) []word {
+		result := make([]word, len(texts))
+		for i, text := range texts {
+			result[i] = word{text: text}
+		}
+		return result
+	}
+
+	tests := []struct {
+		name       string
+		args       []word
+		command    []string
+		chdir      string
+		hasChdir   bool
+		unset      []string
+		split      bool
+		splitValue string
+	}{
+		{
+			name:    "assignments and command",
+			args:    words("FOO=bar", "echo", "ok"),
+			command: []string{"echo", "ok"},
+		},
+		{
+			name:    "unset value is consumed",
+			args:    words("-u", "NAME", "echo", "ok"),
+			command: []string{"echo", "ok"},
+			unset:   []string{"NAME"},
+		},
+		{
+			name:     "chdir value is consumed",
+			args:     words("-C", "/tmp", "echo", "ok"),
+			command:  []string{"echo", "ok"},
+			chdir:    "/tmp",
+			hasChdir: true,
+		},
+		{
+			name:       "split after value option",
+			args:       words("-u", "NAME", "-S", "rm -rf /"),
+			unset:      []string{"NAME"},
+			split:      true,
+			splitValue: "rm -rf /",
+		},
+		{
+			name:       "short cluster split",
+			args:       words("-iS", "rm -rf /"),
+			split:      true,
+			splitValue: "rm -rf /",
+		},
+		{
+			name:    "double dash stops options",
+			args:    words("--", "echo", "-S"),
+			command: []string{"echo", "-S"},
+		},
+		{
+			name:    "assignment after double dash",
+			args:    words("--", "FOO=bar", "echo"),
+			command: []string{"echo"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := parseEnvArgs(tt.args)
+			var command []string
+			for _, w := range got.command {
+				command = append(command, w.text)
+			}
+			if len(command) != len(tt.command) {
+				t.Fatalf("command = %v, want %v", command, tt.command)
+			}
+			for i := range command {
+				if command[i] != tt.command[i] {
+					t.Fatalf("command = %v, want %v", command, tt.command)
+				}
+			}
+			if got.chdir.text != tt.chdir || got.hasChdir != tt.hasChdir {
+				t.Fatalf("chdir = %q/%v, want %q/%v", got.chdir.text, got.hasChdir, tt.chdir, tt.hasChdir)
+			}
+			if len(got.unset) != len(tt.unset) {
+				t.Fatalf("unset = %v, want %v", got.unset, tt.unset)
+			}
+			for i := range got.unset {
+				if got.unset[i] != tt.unset[i] {
+					t.Fatalf("unset = %v, want %v", got.unset, tt.unset)
+				}
+			}
+			if got.splitString != tt.split || got.splitValue.text != tt.splitValue {
+				t.Fatalf("split = %v/%q, want %v/%q", got.splitString, got.splitValue.text, tt.split, tt.splitValue)
+			}
+		})
+	}
+}
+
 func TestGuardFindExecNestedCommands(t *testing.T) {
 	t.Parallel()
 
