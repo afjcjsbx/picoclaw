@@ -766,8 +766,11 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) (string, e
 		}
 
 		// The exec tool trusts the channel from ctx, not from tool arguments.
+		// Scheduled jobs were authorized by command_allowed_remotes above, so
+		// they use the internal scheduled path instead of the interactive
+		// remote-channel gate.
 		ctx = WithToolContext(ctx, channel, chatID)
-		result := t.execTool.Execute(ctx, args)
+		result := t.execTool.executeScheduled(ctx, args)
 		// ForUser is the human-readable view; ForLLM now starts with the
 		// structured [exec] header and must not be published to the chat.
 		if result.IsError {
