@@ -3615,6 +3615,27 @@ func TestShellTool_BackticksInsideQuotedHeredocAreAllowed(t *testing.T) {
 	}
 }
 
+// TestShellTool_HeredocLookalikeDoesNotHideCommands verifies that a quoted
+// heredoc sequence inside ordinary shell syntax does not make the deny pass
+// skip a real command on the following lines.
+func TestShellTool_HeredocLookalikeDoesNotHideCommands(t *testing.T) {
+	cfg := &config.Config{
+		Tools: config.ToolsConfig{
+			Exec: config.ExecConfig{
+				EnableDenyPatterns: true,
+				RiskThreshold:      "critical",
+			},
+		},
+	}
+	tool, err := NewExecToolWithConfig(t.TempDir(), false, cfg)
+	require.NoError(t, err)
+
+	command := "echo \"<<'EOF'\"\nchmod 777 /tmp/x\nEOF"
+	if got := tool.guardCommand(command, t.TempDir()); !strings.Contains(got, "dangerous pattern") {
+		t.Fatalf("default deny should still see chmod after a heredoc lookalike, got: %q", got)
+	}
+}
+
 func TestShellTool_QuotedHeredocDoesNotHideDangerousHeader(t *testing.T) {
 	tool, err := NewExecTool("", false)
 	require.NoError(t, err)
