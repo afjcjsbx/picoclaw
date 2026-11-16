@@ -646,13 +646,17 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string, timeout tim
 
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
-		cmd = exec.CommandContext(cmdCtx, "powershell", "-NoProfile", "-NonInteractive", "-Command", command)
+		// Do not use exec.CommandContext here: its automatic Process.Kill can reap
+		// the shell before terminateProcessTree enumerates descendants, losing the
+		// ancestry link to children that changed session (setsid). The timeout is
+		// handled explicitly below so the process tree is still observable.
+		cmd = exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", command)
 	} else {
 		shellPath, err := findShellExecutable()
 		if err != nil {
 			return ErrorResult(fmt.Sprintf("failed to locate shell: %v", err))
 		}
-		cmd = exec.CommandContext(cmdCtx, shellPath, "-c", command)
+		cmd = exec.Command(shellPath, "-c", command)
 	}
 	if cwd != "" {
 		cmd.Dir = cwd
@@ -717,9 +721,11 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string, timeout tim
 	}()
 
 	var err error
+	terminatedByContext := false
 	select {
 	case err = <-done:
 	case <-cmdCtx.Done():
+		terminatedByContext = true
 		_ = terminateProcessTree(cmd)
 		select {
 		case err = <-done:
@@ -757,17 +763,29 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string, timeout tim
 	resultErr := err
 
 	switch {
-	case err == nil:
-		code := 0
-		exitCode = &code
-	case errors.Is(cmdCtx.Err(), context.DeadlineExceeded):
+	case terminatedByContext && errors.Is(cmdCtx.Err(), context.DeadlineExceeded):
 		timedOut = true
 		errorMessage = fmt.Sprintf("command timed out after %v", timeout)
 		forUser = fmt.Sprintf("Command timed out after %v", timeout)
 		if output != "" {
 			forUser += "\n\nPartial output before timeout:\n" + output
 		}
-		resultErr = fmt.Errorf("command timeout: %w", err)
+		if err != nil {
+			resultErr = fmt.Errorf("command timeout: %w", err)
+		} else {
+			resultErr = fmt.Errorf("command timed out after %v", timeout)
+		}
+	case terminatedByContext && errors.Is(cmdCtx.Err(), context.Canceled):
+		errorMessage = "command canceled"
+		forUser = output + "\n\n[Command canceled]"
+		if err != nil {
+			resultErr = fmt.Errorf("command canceled: %w", err)
+		} else {
+			resultErr = errors.New("command canceled")
+		}
+	case err == nil:
+		code := 0
+		exitCode = &code
 	default:
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
