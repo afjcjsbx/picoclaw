@@ -471,19 +471,19 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 	case "run":
 		return t.executeRun(ctx, args)
 	case "list":
-		return t.executeList()
+		return t.executeList(ctx)
 	case "poll":
-		return t.executePoll(args)
+		return t.executePoll(ctx, args)
 	case "wait":
 		return t.executeWait(ctx, args)
 	case "read":
-		return t.executeRead(args)
+		return t.executeRead(ctx, args)
 	case "write":
-		return t.executeWrite(args)
+		return t.executeWrite(ctx, args)
 	case "kill":
-		return t.executeKill(args)
+		return t.executeKill(ctx, args)
 	case "send-keys":
-		return t.executeSendKeys(args)
+		return t.executeSendKeys(ctx, args)
 	default:
 		return ErrorResult(fmt.Sprintf("unknown action: %s", action))
 	}
@@ -878,13 +878,16 @@ func (t *ExecTool) outputSpillDir() string {
 func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEnabled bool) *ToolResult {
 	sessionID := generateSessionID()
 	session := &ProcessSession{
-		ID:         sessionID,
-		Command:    command,
-		PTY:        ptyEnabled,
-		Background: true,
-		StartTime:  time.Now().Unix(),
-		Status:     "running",
-		ptyKeyMode: PtyKeyModeCSI,
+		ID:           sessionID,
+		Command:      command,
+		PTY:          ptyEnabled,
+		Background:   true,
+		StartTime:    time.Now().Unix(),
+		Status:       "running",
+		ownerAgentID: ToolAgentID(ctx),
+		ownerChannel: strings.TrimSpace(ToolChannel(ctx)),
+		ownerChatID:  ToolChatID(ctx),
+		ptyKeyMode:   PtyKeyModeCSI,
 		// Initialize the output buffer before the session is published to the
 		// manager: readers (session_read/list_sessions) must never observe a
 		// session whose buffer is still nil.
@@ -1083,8 +1086,24 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 	}
 }
 
-func (t *ExecTool) executeList() *ToolResult {
-	sessions := t.sessionManager.List()
+// getSessionForCaller looks up a background session while enforcing the
+// caller's ownership. Internal channels can access every session; remote
+// callers only sessions created by the same agent/channel/chat.
+func (t *ExecTool) getSessionForCaller(ctx context.Context, sessionID string) (*ProcessSession, error) {
+	return t.sessionManager.GetForCaller(
+		sessionID,
+		ToolAgentID(ctx),
+		ToolChannel(ctx),
+		ToolChatID(ctx),
+	)
+}
+
+func (t *ExecTool) executeList(ctx context.Context) *ToolResult {
+	sessions := t.sessionManager.ListForCaller(
+		ToolAgentID(ctx),
+		ToolChannel(ctx),
+		ToolChatID(ctx),
+	)
 	resp := ExecResponse{
 		Sessions: sessions,
 	}
@@ -1099,13 +1118,13 @@ func (t *ExecTool) executeList() *ToolResult {
 	}
 }
 
-func (t *ExecTool) executePoll(args map[string]any) *ToolResult {
+func (t *ExecTool) executePoll(ctx context.Context, args map[string]any) *ToolResult {
 	sessionID, ok := args["sessionId"].(string)
 	if !ok {
 		return ErrorResult("sessionId is required")
 	}
 
-	session, err := t.sessionManager.Get(sessionID)
+	session, err := t.getSessionForCaller(ctx, sessionID)
 	if err != nil {
 		if errors.Is(err, ErrSessionNotFound) {
 			return ErrorResult(fmt.Sprintf("session not found: %s", sessionID))
@@ -1186,7 +1205,7 @@ func (t *ExecTool) executeWait(ctx context.Context, args map[string]any) *ToolRe
 		}
 	}
 
-	session, err := t.sessionManager.Get(sessionID)
+	session, err := t.getSessionForCaller(ctx, sessionID)
 	if err != nil {
 		if errors.Is(err, ErrSessionNotFound) {
 			return ErrorResult(fmt.Sprintf("session not found: %s", sessionID))
@@ -1240,13 +1259,13 @@ func (t *ExecTool) executeWait(ctx context.Context, args map[string]any) *ToolRe
 	return &ToolResult{ForLLM: string(data)}
 }
 
-func (t *ExecTool) executeRead(args map[string]any) *ToolResult {
+func (t *ExecTool) executeRead(ctx context.Context, args map[string]any) *ToolResult {
 	sessionID, ok := args["sessionId"].(string)
 	if !ok {
 		return ErrorResult("sessionId is required")
 	}
 
-	session, err := t.sessionManager.Get(sessionID)
+	session, err := t.getSessionForCaller(ctx, sessionID)
 	if err != nil {
 		if errors.Is(err, ErrSessionNotFound) {
 			return ErrorResult(fmt.Sprintf("session not found: %s", sessionID))
@@ -1311,7 +1330,7 @@ func (t *ExecTool) executeRead(args map[string]any) *ToolResult {
 	}
 }
 
-func (t *ExecTool) executeWrite(args map[string]any) *ToolResult {
+func (t *ExecTool) executeWrite(ctx context.Context, args map[string]any) *ToolResult {
 	sessionID, ok := args["sessionId"].(string)
 	if !ok {
 		return ErrorResult("sessionId is required")
@@ -1322,7 +1341,7 @@ func (t *ExecTool) executeWrite(args map[string]any) *ToolResult {
 		return ErrorResult("data is required")
 	}
 
-	session, err := t.sessionManager.Get(sessionID)
+	session, err := t.getSessionForCaller(ctx, sessionID)
 	if err != nil {
 		if errors.Is(err, ErrSessionNotFound) {
 			return ErrorResult(fmt.Sprintf("session not found: %s", sessionID))
@@ -1355,13 +1374,13 @@ func (t *ExecTool) executeWrite(args map[string]any) *ToolResult {
 	}
 }
 
-func (t *ExecTool) executeKill(args map[string]any) *ToolResult {
+func (t *ExecTool) executeKill(ctx context.Context, args map[string]any) *ToolResult {
 	sessionID, ok := args["sessionId"].(string)
 	if !ok {
 		return ErrorResult("sessionId is required")
 	}
 
-	session, err := t.sessionManager.Get(sessionID)
+	session, err := t.getSessionForCaller(ctx, sessionID)
 	if err != nil {
 		if errors.Is(err, ErrSessionNotFound) {
 			return ErrorResult(fmt.Sprintf("session not found: %s", sessionID))
@@ -1552,7 +1571,7 @@ func encodeKeySequence(tokens []string, ptyKeyMode PtyKeyMode) (string, error) {
 	return result, nil
 }
 
-func (t *ExecTool) executeSendKeys(args map[string]any) *ToolResult {
+func (t *ExecTool) executeSendKeys(ctx context.Context, args map[string]any) *ToolResult {
 	sessionID, ok := args["sessionId"].(string)
 	if !ok {
 		return ErrorResult("sessionId is required")
@@ -1581,7 +1600,7 @@ func (t *ExecTool) executeSendKeys(args map[string]any) *ToolResult {
 		return ErrorResult("keys cannot be empty")
 	}
 
-	session, err := t.sessionManager.Get(sessionID)
+	session, err := t.getSessionForCaller(ctx, sessionID)
 	if err != nil {
 		if errors.Is(err, ErrSessionNotFound) {
 			return ErrorResult(fmt.Sprintf("session not found: %s", sessionID))
