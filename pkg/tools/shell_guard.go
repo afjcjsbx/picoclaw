@@ -19,12 +19,7 @@ func (t *ExecTool) commandMatchesAllowPattern(lower string) bool {
 			return true
 		}
 	}
-	for _, pattern := range t.customAllowPatterns {
-		if pattern.MatchString(lower) {
-			return true
-		}
-	}
-	return false
+	return t.commandMatchesCustomAllowPattern(lower)
 }
 
 // commandMatchesCustomAllowPattern reports whether a custom allow pattern
