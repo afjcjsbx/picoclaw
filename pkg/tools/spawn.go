@@ -141,11 +141,32 @@ func (t *SpawnTool) execute(
 
 	// Use spawner if available (direct SpawnSubTurn call)
 	if t.spawner != nil {
-		// Tracked children (sub-turn parents) are joined before the parent
-		// finishes and get their result through the tracker; untracked ones
-		// (root turns) deliver via the callback/bus as before.
+		// Reserve admission before acknowledging. If all slots are busy the
+		// tool call waits (bounded by concurrency_timeout_sec) instead of
+		// acknowledging a task that the parent turn would drop on exit.
+		slotHeld := false
+		var slotRelease func()
+		if waiter, ok := t.spawner.(SubTurnSlotWaiter); ok {
+			release, err := waiter.WaitForSubTurnSlot(ctx)
+			if err != nil {
+				return ErrorResult(fmt.Sprintf("Spawn failed: %v", err)).WithError(err)
+			}
+			slotHeld = true
+			slotRelease = release
+		}
+
+		// Tracked children (sub-turn parents and CLI root turns) are joined
+		// before the parent finishes; untracked root turns deliver via the
+		// callback/bus.
 		track := beginChild(ctx)
+		deliverInternally := cb == nil && track == nil
+
 		go func() {
+			// Release the slot if this goroutine dies before spawnSubTurn takes
+			// ownership. The release function is idempotent.
+			if slotRelease != nil {
+				defer slotRelease()
+			}
 			// Recover panics in this goroutine: it outlives the registry's
 			// synchronous recover, so an unrecovered panic would crash the
 			// whole process instead of failing the spawned task.
@@ -168,9 +189,11 @@ func (t *SpawnTool) execute(
 					SystemPrompt:  systemPrompt,
 					MaxTokens:     t.maxTokens,
 					Temperature:   t.temperature,
-					Async:         track == nil, // tracker delivers the result itself
-					Critical:      true,         // Background spawn should survive parent turn completion
+					Async:         deliverInternally,
+					Critical:      true, // Background spawn should survive parent turn completion
 					TargetAgentID: targetAgentID,
+					SlotHeld:      slotHeld,
+					SlotRelease:   slotRelease,
 				})
 				if err != nil {
 					return ErrorResult(fmt.Sprintf("Spawn failed: %v", err)).WithError(err)
@@ -183,8 +206,6 @@ func (t *SpawnTool) execute(
 
 			if result != nil && result.ForLLM != "" {
 				// Several children report back to the same parent: say who this is.
-				// Copy: with Async=true the same pointer was already delivered to the
-				// parent's pendingResults, so mutating it would race with the parent.
 				tagged := *result
 				tagged.ForLLM = fmt.Sprintf(
 					"[Result from subagent %s]\n%s",
@@ -196,11 +217,7 @@ func (t *SpawnTool) execute(
 
 			if track != nil {
 				track(result)
-				return
-			}
-
-			// Call callback if provided
-			if cb != nil {
+			} else if cb != nil {
 				cb(ctx, result)
 			}
 		}()

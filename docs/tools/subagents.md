@@ -91,6 +91,8 @@ Environment variables use the `PICOCLAW_AGENTS_DEFAULTS_SUBTURN_` prefix (for ex
 
 Operational behavior that matters:
 
+- `spawn` reserves a concurrency slot before acknowledging. If every slot stays busy for `concurrency_timeout_sec`, the call returns an explicit error instead of acknowledging a task that would be dropped.
+- CLI one-shot turns join their spawned children before answering; gateway and chat channels keep the fire-and-forget follow-up behavior.
 - Subagents share the parent's workspace security boundary; they do not bypass sandbox or path restrictions.
 - `spawn_status` is scoped to the current conversation when channel/chat context exists.
 - Spawned background tasks are marked critical so they survive graceful parent completion; hard aborts (including `/stop` on a root turn) cascade to child and grandchild sub-turns.

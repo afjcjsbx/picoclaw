@@ -107,13 +107,14 @@ SubTurns operate within an independent context but maintain a structural link to
 ### Graceful Parent Finish
 When the parent task finishes naturally, the turn coordinator calls `Finish(false)` during turn teardown:
 - **Non-critical** sub-turns receive a signal to exit gracefully without throwing an error.
-- **Critical** (`Critical: true`) sub-turns continue running in the background. Once finished, their results are emitted as **Orphan Results** so the data is not lost.
+- **Critical** (`Critical: true`) sub-turns continue running in the background. Their results are delivered through the child tracker (joined parents) or the follow-up callback (fire-and-forget root turns).
 
 ### Joining Async Children
-A SubTurn never finishes before the async children it spawned (via `spawn`), so a nested result is never orphaned by a parent that ended too early. Root turns are not joined: they keep the fire-and-forget behavior, and their children report back through a follow-up message.
+A SubTurn never finishes before the async children it spawned (via `spawn`), so a nested result is never orphaned by a parent that ended too early. CLI one-shot root turns join their children before answering; gateway and chat channels keep the fire-and-forget behavior, and their children report back through a follow-up message.
 
-- `spawn` registers each child on the calling turn synchronously (`tools.ChildTracker`, installed in the tool context for SubTurns only), before the child goroutine starts. The child then runs with `Async=false` and its final result, including failures that happen before the child exists (depth limit, concurrency timeout), is delivered exactly once through the tracker.
-- When a SubTurn answers without tool calls while children are outstanding, the turn waits for them, injects their results as `[SubTurn Result]` messages and lets the model answer again. While waiting it drains `pendingResults`, so more than 16 children cannot block on a full channel.
+- `spawn` reserves a concurrency slot before acknowledging. If every slot stays busy for `concurrency_timeout_sec`, the tool call returns an error instead of acknowledging a task that would be dropped.
+- `spawn` registers each child on the calling turn synchronously (`tools.ChildTracker`, installed for SubTurns and CLI root turns), before the child goroutine starts. The child runs with `Async=false` and its final result, including failures that happen before the child exists (depth limit, concurrency timeout), is delivered exactly once through the tracker or the follow-up callback.
+- When a joining turn answers without tool calls while children are outstanding, the turn waits for them, injects their results as `[SubTurn Result]` messages and lets the model answer again. While waiting it drains `pendingResults`, so more than 16 children cannot block on a full channel.
 - Any other exit path (iteration cap, loop guard, hook abort) also waits for the children before the turn ends. Results nobody can read any more are dropped with a warning.
 - A hard abort or context cancellation ends the wait immediately.
 - Each result is prefixed with `[Result from subagent "<label>" (agent <id>)]`, so a parent with several children can tell them apart.
