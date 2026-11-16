@@ -469,8 +469,8 @@ By default, the `exec` tool blocks these dangerous commands (the hardline subset
 
 | Config Key | Type | Default | Description |
 |------------|------|---------|-------------|
-| `tools.allow_read_paths` | string[] | `[]` | Additional paths allowed for reading outside workspace |
-| `tools.allow_write_paths` | string[] | `[]` | Additional paths allowed for writing outside workspace |
+| `tools.allow_read_paths` | string[] | `[]` | Additional paths allowed for read-only filesystem tools outside workspace; `exec` does not inherit them |
+| `tools.allow_write_paths` | string[] | `[]` | Additional paths allowed for writing outside workspace, including `exec` |
 | `tools.search_files.enabled` | bool | `true` | Enables regex content search and glob/substring filename search |
 | `tools.message.media_enabled` | bool | `false` | Allows the `message` tool to attach local media files by path. This is separate from `tools.send_file.enabled`; enable it only when unified text/media/caption delivery is intended. |
 

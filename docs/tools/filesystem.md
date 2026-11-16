@@ -22,7 +22,9 @@ The filesystem tools are always bound to the agent workspace and the readable/wr
 
 - `agents.defaults.restrict_to_workspace` (default `true`) keeps reads and writes inside the workspace.
 - `agents.defaults.allow_read_outside_workspace` (default `false`) lets read-only tools access paths outside the workspace while keeping the restriction for writes and for `exec`.
-- `tools.allow_read_paths` and `tools.allow_write_paths` are regular-expression allowlists evaluated against absolute paths, granting access that the workspace restriction would otherwise deny.
+- `tools.allow_read_paths` applies only to read-only filesystem tools; `exec` does not inherit it.
+- `tools.allow_write_paths` applies to write tools (`write_file`, `edit_file`, `append_file`) and to `exec`, which can read and modify every path it is granted.
+- The agent's media temporary directory remains available to `exec` for attachment processing as an internal exception; it is not part of the user-configured read allowlist.
 - The credential/protected-file policy always wins over allow paths. See [Protected local files](../reference/tools_configuration.md#protected-local-files) for the full deny list and symlink behavior.
 
 These settings are global. There is no per-tool path configuration beyond the switches above.

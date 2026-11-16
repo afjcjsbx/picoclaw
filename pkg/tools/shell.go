@@ -68,18 +68,21 @@ type ExecTool struct {
 	customAllowPatterns     []*regexp.Regexp
 	customRiskAllowPatterns []*regexp.Regexp
 	riskAllowThreshold      shellguard.RiskLevel
-	allowedPathPatterns     []*regexp.Regexp
-	restrictToWorkspace     bool
-	allowRemote             bool
-	maxOutputChars          int
-	maxInlineResultChars    int
-	baseEnv                 map[string]string
-	state                   *execStateStore
-	sessionManager          *SessionManager
-	riskGuard               *shellguard.Guard
-	approvalEnabled         bool
-	approvalThreshold       shellguard.RiskLevel
-	approvalReviewer        approvalReviewer
+	// allowedPathPatterns are paths exec may read or modify. exec can mutate
+	// any path it receives, so callers must pass write grants, not a read-only
+	// allowlist.
+	allowedPathPatterns  []*regexp.Regexp
+	restrictToWorkspace  bool
+	allowRemote          bool
+	maxOutputChars       int
+	maxInlineResultChars int
+	baseEnv              map[string]string
+	state                *execStateStore
+	sessionManager       *SessionManager
+	riskGuard            *shellguard.Guard
+	approvalEnabled      bool
+	approvalThreshold    shellguard.RiskLevel
+	approvalReviewer     approvalReviewer
 }
 
 var _ AsyncExecutor = (*ExecTool)(nil)
@@ -370,6 +373,9 @@ func NewExecTool(workingDir string, restrict bool, allowPaths ...[]*regexp.Regex
 	return NewExecToolWithConfig(workingDir, restrict, nil, allowPaths...)
 }
 
+// NewExecToolWithConfig builds an exec tool. allowPaths optionally grants
+// access to paths outside the workspace; exec can mutate those paths, so
+// callers must pass write grants rather than a read-only allowlist.
 func NewExecToolWithConfig(
 	workingDir string,
 	restrict bool,
