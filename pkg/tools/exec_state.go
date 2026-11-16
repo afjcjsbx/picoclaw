@@ -2,14 +2,13 @@ package tools
 
 import (
 	"context"
-	"maps"
 	"sync"
 	"time"
 )
 
-// maxExecStateEntries bounds how many conversations keep explicit exec
-// cwd/env state. The state is best-effort, memory-only, and evicted
-// least-recently-used so a long-running gateway cannot grow without bound.
+// maxExecStateEntries bounds how many conversations keep a remembered exec
+// cwd. The state is best-effort, memory-only, and evicted least-recently-used
+// so a long-running gateway cannot grow without bound.
 const maxExecStateEntries = 64
 
 // execStateKey scopes state to one agent conversation. Requiring both values
@@ -22,7 +21,6 @@ type execStateKey struct {
 
 type execStateEntry struct {
 	cwd      string
-	env      map[string]string
 	lastUsed time.Time
 }
 
@@ -46,47 +44,26 @@ func execStateKeyFromContext(ctx context.Context) (execStateKey, bool) {
 	return key, true
 }
 
-// mergeExecEnv applies LLM-provided variables on top of a base map, dropping
-// blocked names and normalizing keys. It is the single merge rule used by the
-// per-conversation overlay and by runEnv.
-func mergeExecEnv(base, update map[string]string) map[string]string {
-	merged := maps.Clone(base)
-	if merged == nil && len(update) > 0 {
-		merged = make(map[string]string, len(update))
-	}
-	for key, value := range update {
-		key = execEnvKey(key)
-		if isBlockedExecEnv(key) {
-			continue
-		}
-		merged[key] = value
-	}
-	if len(merged) == 0 {
-		return nil
-	}
-	return merged
-}
-
-// load returns a snapshot of the conversation's cwd and env overlay and marks
-// it as recently used. A missing session context yields zero state, keeping
-// exec stateless instead of sharing a global entry.
-func (s *execStateStore) load(ctx context.Context) (cwd string, env map[string]string) {
+// load returns the conversation's remembered cwd and marks it as recently
+// used. A missing session context yields zero state, keeping exec stateless
+// instead of sharing a global entry.
+func (s *execStateStore) load(ctx context.Context) string {
 	if s == nil {
-		return "", nil
+		return ""
 	}
 	key, ok := execStateKeyFromContext(ctx)
 	if !ok {
-		return "", nil
+		return ""
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	entry, ok := s.entries[key]
 	if !ok {
-		return "", nil
+		return ""
 	}
 	entry.lastUsed = time.Now()
-	return entry.cwd, maps.Clone(entry.env)
+	return entry.cwd
 }
 
 // rememberCwd stores the resolved cwd for subsequent calls in the conversation.
@@ -113,14 +90,6 @@ func (s *execStateStore) clearCwd(ctx context.Context) {
 		entry.cwd = ""
 		entry.lastUsed = time.Now()
 	}
-}
-
-// storeEnv replaces the conversation's remembered env overlay. A nil map
-// clears it.
-func (s *execStateStore) storeEnv(ctx context.Context, env map[string]string) {
-	s.mutate(ctx, func(entry *execStateEntry) {
-		entry.env = maps.Clone(env)
-	})
 }
 
 func (s *execStateStore) mutate(ctx context.Context, update func(*execStateEntry)) {
@@ -177,27 +146,11 @@ func (s *execStateStore) pruneLocked() {
 	}
 }
 
-// ClearSession drops remembered cwd/env state for one agent conversation. It
-// is called when the user clears or resets the conversation.
+// ClearSession drops remembered cwd state for one agent conversation. It is
+// called when the user clears or resets the conversation.
 func (t *ExecTool) ClearSession(agentID, sessionKey string) {
 	if t == nil || t.state == nil {
 		return
 	}
 	t.state.clear(execStateKey{agentID: agentID, sessionKey: sessionKey})
-}
-
-// mergeExecStateEnv applies a per-call env map on top of the remembered
-// overlay. A missing env argument (nil) reuses the overlay; an explicit empty
-// map clears it; any other map is merged so repeated exports accumulate.
-// Blocked LLM-provided keys are dropped before they can be stored.
-func mergeExecStateEnv(base, update map[string]string) (effective, next map[string]string, provided bool) {
-	if update == nil {
-		return maps.Clone(base), nil, false
-	}
-	if len(update) == 0 {
-		return nil, nil, true
-	}
-
-	merged := mergeExecEnv(base, update)
-	return maps.Clone(merged), merged, true
 }

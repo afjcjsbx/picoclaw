@@ -65,7 +65,6 @@ func (t *ExecTool) runSync(
 	ctx context.Context,
 	command, cwd string,
 	timeout time.Duration,
-	extraEnv map[string]string,
 ) *ToolResult {
 	start := time.Now()
 	// timeout == 0 means no timeout
@@ -87,7 +86,7 @@ func (t *ExecTool) runSync(
 	// ancestry link to children that changed session (setsid). The timeout is
 	// handled explicitly below so the process tree is still observable.
 	cmd := exec.Command(shellPath, shellArgs...)
-	t.prepareExecCommand(cmd, cwd, t.runEnv(extraEnv, timeout))
+	t.prepareExecCommand(cmd, cwd, t.runEnv(timeout))
 
 	maxOutputChars := t.maxOutputChars
 	if maxOutputChars <= 0 {
@@ -358,7 +357,6 @@ func (t *ExecTool) runBackground(
 	command, cwd string,
 	ptyEnabled bool,
 	note string,
-	extraEnv map[string]string,
 ) *ToolResult {
 	sessionID := generateSessionID()
 	session := &ProcessSession{
@@ -383,7 +381,7 @@ func (t *ExecTool) runBackground(
 		return ErrorResult(shellErr.Error())
 	}
 	cmd := exec.Command(shellPath, shellArgs...)
-	t.prepareExecCommand(cmd, cwd, t.runEnv(extraEnv, 0))
+	t.prepareExecCommand(cmd, cwd, t.runEnv(0))
 
 	var outputReader io.ReadCloser
 	var outputWriter *os.File

@@ -18,7 +18,7 @@ import (
 const (
 	execSetsidHelperTestName = "TestExecSetsidHelperProcess"
 	// These names must not use the PICOCLAW_ prefix: exec sanitizes child
-	// environments and rejects PICOCLAW_* variables from the per-call env map.
+	// environments and reserves PICOCLAW_* for the agent.
 	execSetsidHelperEnv  = "EXEC_SETSID_HELPER"
 	execSetsidPIDFileEnv = "EXEC_SETSID_PIDFILE"
 )
@@ -46,7 +46,7 @@ func TestExecSetsidHelperProcess(t *testing.T) {
 	os.Exit(0)
 }
 
-func setsidHelperCommand(t *testing.T) (command, pidFile string, env map[string]any) {
+func setsidHelperCommand(t *testing.T) (command, pidFile string) {
 	t.Helper()
 
 	executable, err := os.Executable()
@@ -55,14 +55,14 @@ func setsidHelperCommand(t *testing.T) (command, pidFile string, env map[string]
 	}
 	pidFile = filepath.Join(t.TempDir(), "setsid.pid")
 	// exec starts children from a sanitized environment, so the helper
-	// configuration must travel through the per-call env argument.
-	env = map[string]any{
-		execSetsidHelperEnv:  "1",
-		execSetsidPIDFileEnv: pidFile,
-	}
-
-	command = fmt.Sprintf("%q -test.run=^%s$ & wait", executable, execSetsidHelperTestName)
-	return command, pidFile, env
+	// configuration travels as an inline assignment on the command.
+	command = fmt.Sprintf(
+		"%s=%q %s=%q %q -test.run=^%s$ & wait",
+		execSetsidHelperEnv, "1",
+		execSetsidPIDFileEnv, pidFile,
+		executable, execSetsidHelperTestName,
+	)
+	return command, pidFile
 }
 
 func waitForSetsidPID(t *testing.T, pidFile string) int {
@@ -113,11 +113,10 @@ func TestShellTool_TimeoutKillsSetsidChild(t *testing.T) {
 	}
 	tool.SetTimeout(2 * time.Second)
 
-	command, pidFile, env := setsidHelperCommand(t)
+	command, pidFile := setsidHelperCommand(t)
 	result := tool.Execute(WithToolContext(context.Background(), "cli", "test"), map[string]any{
 		"action":  "run",
 		"command": command,
-		"env":     env,
 	})
 	if !result.IsError {
 		t.Fatalf("expected timeout error, got success: %s", result.ForLLM)
@@ -142,12 +141,11 @@ func TestShellTool_BackgroundKillKillsSetsidChild(t *testing.T) {
 	tool.sessionManager = sm
 	ctx := WithToolContext(context.Background(), "cli", "test")
 
-	command, pidFile, env := setsidHelperCommand(t)
+	command, pidFile := setsidHelperCommand(t)
 	result := tool.Execute(ctx, map[string]any{
 		"action":     "run",
 		"command":    command,
 		"background": "true",
-		"env":        env,
 	})
 	if result.IsError {
 		t.Fatalf("background run failed: %s", result.ForLLM)

@@ -554,9 +554,9 @@ func buildExecDescription() string {
 
 Every foreground call starts a fresh shell in the configured working directory; pass cwd instead of using cd. For file operations, prefer list_dir, search_files, read_file, edit_file and write_file over cat, grep, find, ls, sed and echo/heredoc.
 
-The child environment is sanitized: only safe variables and the operator's allowlist are inherited. Use the env argument for additional non-sensitive variables instead of relying on the parent environment.
+The child environment is sanitized: only safe variables and the operator's allowlist are inherited. Set extra variables in the command itself, for example FOO=bar command.
 
-Within a conversation, the last explicit cwd and env values are remembered and reused when omitted. They do not capture cd or export executed inside a command. Pass env: {} to clear remembered variables.
+Within a conversation, the last cwd observed after a foreground command is remembered and reused when cwd is omitted.
 
 Foreground results start with a one-line [exec] {...} header (exitCode, timedOut, truncated, durationMs, error), then raw stdout/stderr. On Unix, a null exitCode means the direct child was killed by a signal; shells may also report 128+N (137 = SIGKILL, often the OOM killer; 143 = SIGTERM). Treat signal deaths as failed runs, not normal non-zero exits. Non-zero exit codes can be normal: grep returns 1 for no match and diff returns 1 for differences.
 
@@ -607,17 +607,6 @@ func (t *ExecTool) Parameters() map[string]any {
 			"cwd": map[string]any{
 				"type":        "string",
 				"description": "Working directory for the command. The last explicit value is remembered for later calls in the same conversation; omit cwd to reuse it. Defaults to the agent workspace when no value is remembered.",
-			},
-			"env": map[string]any{
-				"type": "object",
-				"description": "Additional environment variables for this command; keys are variable names and values must be strings. " +
-					"The map is remembered for later calls in the same conversation and merged with new entries; pass an empty object to clear remembered variables. " +
-					"The inherited environment is sanitized: only safe variables (PATH, HOME, USER, LANG, SHELL, TERM, PWD, TZ, " +
-					"proxy and locale variables) plus tools.exec.env_set and tools.exec.env_allowlist are passed through. " +
-					"Cannot override PATH, HOME, USER, LOGNAME, SHELL, LD_PRELOAD, LD_LIBRARY_PATH, LD_AUDIT, LD_DEBUG, " +
-					"or any PICOCLAW_* variable. Read-only PICOCLAW_* variables: PICOCLAW_HOME, PICOCLAW_CONFIG, " +
-					"PICOCLAW_AGENT_WORKSPACE, PICOCLAW_EXE, PICOCLAW_SERVICE_NAME, PICOCLAW_EXEC_TIME (RFC3339), " +
-					"PICOCLAW_EXEC_TIMEOUT.",
 			},
 			"timeout": map[string]any{
 				"type": "integer",
@@ -790,11 +779,6 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 		return ErrorResult("command is required")
 	}
 
-	extraEnv, envErr := execEnvFromArgs(args)
-	if envErr != nil {
-		return ErrorResult(envErr.Error())
-	}
-
 	isPty := boolArg(args, "pty")
 	explicitBackground := boolArg(args, "background")
 	isBackground := explicitBackground
@@ -862,8 +846,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 		return ErrorResult("notify is only supported with background=true or when the run is promoted to background")
 	}
 
-	savedCwd, savedEnv := t.state.load(ctx)
-	effectiveEnv, stateEnv, envProvided := mergeExecStateEnv(savedEnv, extraEnv)
+	savedCwd := t.state.load(ctx)
 
 	requestedCwd, cwdProvided := args["cwd"].(string)
 	cwdProvided = cwdProvided && requestedCwd != ""
@@ -933,16 +916,13 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 		}
 	}
 
-	// Persist only arguments that passed validation and the command guard.
+	// Persist only a cwd that passed validation and the command guard.
 	if cwdProvided && stateCwd != "" {
 		t.rememberCwd(ctx, stateCwd)
 	}
-	if envProvided && t.state != nil {
-		t.state.storeEnv(ctx, stateEnv)
-	}
 
 	if isBackground {
-		return t.runBackground(ctx, command, cwd, isPty, backgroundNote, effectiveEnv)
+		return t.runBackground(ctx, command, cwd, isPty, backgroundNote)
 	}
 	if promoteToBackground {
 		return t.runBackground(
@@ -951,11 +931,10 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 			cwd,
 			isPty,
 			t.foregroundPromotionNote(timeoutDisabled, timeout),
-			effectiveEnv,
 		)
 	}
 
-	return t.runSync(ctx, command, cwd, timeout, effectiveEnv)
+	return t.runSync(ctx, command, cwd, timeout)
 }
 
 // rememberedCwd revalidates a cwd stored for the conversation. It returns
