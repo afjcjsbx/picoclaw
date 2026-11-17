@@ -77,7 +77,7 @@ func TestNewExecEnv_EnvSetIsTrustedAndPicoclawVarsWin(t *testing.T) {
 	require.NotEmpty(t, env["PICOCLAW_EXE"])
 }
 
-func TestExecTool_RunEnvBlocksLLMOverrides(t *testing.T) {
+func TestExecTool_RunEnvCopiesBase(t *testing.T) {
 	tool := &ExecTool{baseEnv: map[string]string{
 		"PATH":          "/usr/bin",
 		"HOME":          "/home/test",
@@ -85,62 +85,15 @@ func TestExecTool_RunEnvBlocksLLMOverrides(t *testing.T) {
 		"ALLOWED":       "base",
 	}}
 
-	env := execEnvMap(tool.runEnv(map[string]string{
-		"PATH":            "/hacked",
-		"HOME":            "/hacked",
-		"LD_PRELOAD":      "/tmp/evil.so",
-		"PICOCLAW_HOME":   "/hacked",
-		"PICOCLAW_SECRET": "blocked",
-		"USER_VAR":        "user-value",
-		"ALLOWED":         "override",
-	}, 42*time.Second))
+	env := execEnvMap(tool.runEnv(42 * time.Second))
 
 	require.Equal(t, "/usr/bin", env["PATH"])
 	require.Equal(t, "/home/test", env["HOME"])
 	require.Equal(t, "/original/home", env["PICOCLAW_HOME"])
-	require.NotContains(t, env, "LD_PRELOAD")
-	require.NotContains(t, env, "PICOCLAW_SECRET")
-	require.Equal(t, "user-value", env["USER_VAR"])
-	require.Equal(t, "override", env["ALLOWED"], "non-blocked vars may override the base env")
+	require.Equal(t, "base", env["ALLOWED"])
 	require.NotEmpty(t, env["PICOCLAW_EXEC_TIME"])
 	require.Equal(t, "42s", env["PICOCLAW_EXEC_TIMEOUT"])
-}
-
-func TestExecEnvFromArgs(t *testing.T) {
-	t.Run("map of any", func(t *testing.T) {
-		env, err := execEnvFromArgs(map[string]any{
-			"env": map[string]any{"A": "1", "B": "2"},
-		})
-		require.NoError(t, err)
-		require.Equal(t, map[string]string{"A": "1", "B": "2"}, env)
-	})
-
-	t.Run("missing", func(t *testing.T) {
-		env, err := execEnvFromArgs(map[string]any{})
-		require.NoError(t, err)
-		require.Nil(t, env)
-	})
-
-	for name, args := range map[string]map[string]any{
-		"not an object": {"env": "A=1"},
-		"non-string value": {
-			"env": map[string]any{"A": 1},
-		},
-		"empty key": {
-			"env": map[string]any{"": "1"},
-		},
-		"key with equals": {
-			"env": map[string]any{"A=B": "1"},
-		},
-		"nul byte": {
-			"env": map[string]any{"A": "1\x00"},
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			_, err := execEnvFromArgs(args)
-			require.Error(t, err)
-		})
-	}
+	require.Equal(t, "/original/home", tool.baseEnv["PICOCLAW_HOME"], "runEnv must not mutate the cached base")
 }
 
 func TestExecTool_EnvSanitizationReachesChild(t *testing.T) {
@@ -165,28 +118,18 @@ func TestExecTool_EnvSanitizationReachesChild(t *testing.T) {
 		"action":  "run",
 		"command": "env",
 		"timeout": float64(5),
-		"env": map[string]any{
-			"EXEC_ENV_TEST_CALL":    "call-value",
-			"PICOCLAW_HOME":         "/hijacked",
-			"PICOCLAW_EXEC_TIME":    "hijacked",
-			"PICOCLAW_EXEC_TIMEOUT": "hijacked",
-		},
 	})
 
 	require.False(t, result.IsError, result.ForLLM)
 	require.Contains(t, result.ForLLM, "EXEC_ENV_TEST_SET=config-value")
 	require.Contains(t, result.ForLLM, "EXEC_ENV_TEST_ALLOWED=parent-value")
-	require.Contains(t, result.ForLLM, "EXEC_ENV_TEST_CALL=call-value")
 	require.NotContains(t, result.ForLLM, "EXEC_ENV_TEST_SECRET")
-	require.NotContains(t, result.ForLLM, "PICOCLAW_HOME=/hijacked")
-	require.NotContains(t, result.ForLLM, "PICOCLAW_EXEC_TIME=hijacked")
-	require.NotContains(t, result.ForLLM, "PICOCLAW_EXEC_TIMEOUT=hijacked")
 	require.Contains(t, result.ForLLM, "PICOCLAW_AGENT_WORKSPACE="+workspace)
 	require.Contains(t, result.ForLLM, "PICOCLAW_EXEC_TIME=")
 	require.Contains(t, result.ForLLM, "PICOCLAW_EXEC_TIMEOUT=5s")
 }
 
-func TestExecTool_EnvCannotSetBlockedVars(t *testing.T) {
+func TestExecTool_PerCallEnvIgnored(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("uses the POSIX env command")
 	}
@@ -201,16 +144,14 @@ func TestExecTool_EnvCannotSetBlockedVars(t *testing.T) {
 		"env": map[string]any{
 			"PATH":             "/hacked",
 			"LD_PRELOAD":       "/tmp/evil.so",
-			"PICOCLAW_HOME":    "/hacked",
 			"EXEC_ENV_TEST_OK": "ok",
 		},
 	})
 
 	require.False(t, result.IsError, result.ForLLM)
-	require.Contains(t, result.ForLLM, "EXEC_ENV_TEST_OK=ok")
+	require.NotContains(t, result.ForLLM, "EXEC_ENV_TEST_OK=ok")
 	require.NotContains(t, result.ForLLM, "PATH=/hacked")
 	require.NotContains(t, result.ForLLM, "LD_PRELOAD")
-	require.NotContains(t, result.ForLLM, "PICOCLAW_HOME=/hacked")
 }
 
 func TestExecTool_EnvSanitizationInBackground(t *testing.T) {
@@ -233,7 +174,6 @@ func TestExecTool_EnvSanitizationInBackground(t *testing.T) {
 		"action":     "run",
 		"command":    "env",
 		"background": "true",
-		"env":        map[string]any{"EXEC_ENV_TEST_BG_CALL": "call-value"},
 	})
 	require.False(t, result.IsError, result.ForLLM)
 
@@ -246,6 +186,5 @@ func TestExecTool_EnvSanitizationInBackground(t *testing.T) {
 	}))
 	require.Equal(t, "done", resp.Status)
 	require.Contains(t, resp.Output, "EXEC_ENV_TEST_BG=background-value")
-	require.Contains(t, resp.Output, "EXEC_ENV_TEST_BG_CALL=call-value")
 	require.Contains(t, resp.Output, "PICOCLAW_EXEC_TIMEOUT=0s")
 }

@@ -2,6 +2,7 @@ package tools
 
 import (
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -170,6 +171,35 @@ func TestProcessSession_ReadRangeReportsDroppedPrefix(t *testing.T) {
 	require.Equal(t, dropped, page.DroppedBytes)
 	require.Zero(t, page.SkippedBytes)
 	require.Equal(t, dropped, page.Offset)
+}
+
+func TestProcessSession_SpillsFullOutputToArtifact(t *testing.T) {
+	dir := t.TempDir()
+	session := &ProcessSession{Status: "running", spillDir: dir}
+
+	first := strings.Repeat("a", maxOutputBufferSize/2)
+	second := strings.Repeat("b", maxOutputBufferSize/2+100)
+	third := strings.Repeat("c", 10_000)
+	session.appendOutput([]byte(first))
+	session.appendOutput([]byte(second))
+	session.appendOutput([]byte(third))
+
+	path, capped := session.SpillInfo()
+	require.NotEmpty(t, path)
+	require.False(t, capped)
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Len(t, data, len(first)+len(second)+len(third))
+	require.Equal(t, first, string(data[:len(first)]))
+	require.Equal(t, second, string(data[len(first):len(first)+len(second)]))
+	require.Equal(t, third, string(data[len(first)+len(second):]))
+	require.Len(t, session.Read(), maxOutputBufferSize)
+
+	session.finish(0)
+	data, err = os.ReadFile(path)
+	require.NoError(t, err)
+	require.Len(t, data, len(first)+len(second)+len(third), "finish must not remove the artifact")
 }
 
 func TestSessionManager_CleanupUsesExitTime(t *testing.T) {

@@ -19,14 +19,14 @@ The exec tool is used to execute shell commands.
 | `allow_remote` | bool | `false` | When `false`, exec only accepts commands that originate from internal channels (`cli`, `system`, `subagent`). Remote channels are then blocked (fail-closed): an empty channel is also rejected. Set it to `true` only when remote command execution is explicitly intended |
 | `timeout_seconds` | int | `180` | Command timeout in seconds. `0` means the default (180s). Foreground runs are capped at `600`s; a larger configured timeout promotes commands to a tracked background session |
 | `max_output_chars` | int | `50000` | Foreground output cap. Longer output keeps the first 40% and the last 60% around a `[OUTPUT TRUNCATED - N chars omitted out of T total]` notice, while the full stream is spilled to a workspace artifact (up to 5,000,000 bytes). The inline view is also bounded by `tools.max_inline_result_chars`; the artifact preserves the full stream. `0` means the default (50000) |
-| `env_set` | object | `{}` | Variables always injected into every exec child process. Values are trusted configuration: they override inherited variables, including `PATH`, and are not subject to the LLM blocklist. Every listed value reaches every command, so only add secrets here when the commands genuinely need them |
+| `env_set` | object | `{}` | Variables always injected into every exec child process. Values are trusted configuration: they override inherited variables, including `PATH`. Every listed value reaches every command, so only add secrets here when the commands genuinely need them |
 | `env_allowlist` | string[] | `[]` | Additional parent variable names inherited on top of the built-in allowlist. Use explicit names, never wildcards: allowlisting a secret passes it to every command |
 
 Smart approvals are configured in a top-level `approvals` block, not under `tools.exec`:
 
 | Config | Type | Default | Description |
 |--------|------|---------|-------------|
-| `approvals.mode` | string | `"smart"` | `"smart"` (default) asks an auxiliary Guardian model to review flagged commands. `"off"` keeps the static guards as the final decision |
+| `approvals.mode` | string | `"off"` | `"off"` (default) keeps the static guards as the final decision. `"smart"` asks an auxiliary Guardian model to review flagged commands |
 | `approvals.model` | string | `""` | Guardian model by `model_list` alias or `provider/model` reference. Empty uses `agents.defaults.model_name` |
 | `approvals.smart_threshold` | string | `"high"` | `"high"` reviews `high`, `critical` and unknown commands. `"critical"` reviews only `critical` and unknown commands |
 | `approvals.smart_timeout_seconds` | int | `20` | Per-review timeout, maximum `600`. A timed-out review escalates and the command is rejected |
@@ -133,7 +133,7 @@ Limits worth knowing:
 
 ### Smart approvals
 
-`approvals.mode: "smart"` is the default and adds a second opinion for commands that the static guards flag, without asking a model about every command. Set `approvals.mode` to `"off"` to disable the Guardian and keep the static guards as the final decision:
+`approvals.mode` defaults to `"off"`: the static guards are the final decision and exec makes no extra model call. Set it to `"smart"` to add a second opinion for commands that the static guards flag, without asking a model about every command:
 
 1. **Hardline and custom deny rules stay final.** Catastrophic operations such as `rm -rf /`, recursive deletion of `/etc`, `/usr`, `/home` or `/root`, `mkfs`, `dd if=`, `shutdown`, `reboot`, `poweroff`, fork bombs and `kill -1` are rejected directly. The Guardian is never consulted for them.
 2. **Default deny pattern hits can be reviewed.** A command caught by the built-in regex set can be approved when the Guardian considers it a false positive.
@@ -156,7 +156,7 @@ If the Guardian cannot be initialized or the review fails, the command is reject
 }
 ```
 
-The Guardian is a separate, short, non-streaming chat call: `temperature=0`, `max_tokens=16`, reasoning disabled where the provider supports it. Smart mode creates one provider instance for the selected model and makes a call only for flagged commands. Enabling it with `enable_deny_patterns: false` still keeps the Unix AST classifier active for the smart gate; Windows uses only the regex/PowerShell patterns because the AST classifier is POSIX-only.
+The Guardian is a separate, short, non-streaming chat call: `temperature=0`, `max_tokens=16`, reasoning disabled where the provider supports it. When `approvals.model` is empty, smart mode reuses the agent's primary provider instead of creating a second client; a dedicated provider is created lazily only when a different model is configured, and only on the first flagged command. Enabling it with `enable_deny_patterns: false` still keeps the Unix AST classifier active for the smart gate; Windows uses only the regex/PowerShell patterns because the AST classifier is POSIX-only.
 
 ## Tool arguments
 
@@ -177,11 +177,13 @@ hello
 | `timedOut` | `true` when the configured timeout stopped the command |
 | `truncated` | `true` when the output exceeded the configured cap; the omitted middle stays in the artifact |
 | `durationMs` | Wall-clock duration of the command in milliseconds |
+| `cwd` | Present when a foreground command ran on Unix: the absolute directory where it ended (`pwd -P`). It is remembered for later calls when it stays inside the workspace |
+| `exitNote` | Present for a non-zero status with a well-known non-error meaning, for example `grep`/`rg` exit `1` (no matches), `diff` exit `1` (files differ), `test` exit `1` (false), or `git` exit `1` (often normal) |
 | `error` | Present when the command timed out or was terminated without a numeric exit status. Command stderr is merged into the body and is not repeated here |
 
 The header stays outside the output body, so newlines, tabs and quotes are not JSON-escaped. The user-facing message is the raw output without the header; on failure it keeps the human-readable `[Command exited with code N]` suffix.
 
-Non-zero exit codes are not automatically tool failures: `grep` returns `1` when there is no match and `diff` returns `1` when files differ. Interpret `exitCode` in context. The tool still marks a non-zero exit as an error result internally for UI and logging purposes.
+Non-zero exit codes are not automatically tool failures: `grep` returns `1` when there is no match and `diff` returns `1` when files differ. Interpret `exitCode` in context, or use the `exitNote` field when it is present. The tool still marks a non-zero exit as an error result internally for UI and logging purposes.
 
 Signal terminations are different from ordinary non-zero exits. `137` usually means SIGKILL, including the OOM killer, and an out-of-memory kill may leave no stderr of its own: check the system log (for example `dmesg -T | tail`) before retrying. `143` means SIGTERM. On Unix, when the direct child is killed by a signal the header reports `exitCode: null` and the human-readable suffix says `killed by signal`; the `kill` action reports `-1` for a session it terminated.
 
@@ -198,8 +200,7 @@ Background session actions return a JSON `ExecResponse` instead. Once the sessio
 | `keys` | string | `send-keys` | Key names: `up`, `down`, `left`, `right`, `enter`, `tab`, `escape`, `backspace`, `ctrl-c`, `ctrl-d`, `home`, `end`, `pageup`, `pagedown`, `f1`–`f12` |
 | `background` | bool | — | With `run`, start the command in the background immediately; the result includes a `sessionId`. On Unix, a trailing `&` in the command is normalized to this mode automatically |
 | `pty` | bool | — | Allocate a pseudo-terminal for interactive programs; not supported on Windows |
-| `cwd` | string | — | Working directory for the command. The last explicit value is remembered for later calls in the same conversation; omit `cwd` to reuse it. Defaults to the agent workspace when no value is remembered |
-| `env` | object | `run` | Additional environment variables for this run. Values must be strings. The map is remembered for later calls in the same conversation and merged with new entries; pass an empty object (`{}`) to clear remembered variables. Cannot override `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT`, `LD_DEBUG`, or any `PICOCLAW_*` variable; those entries are ignored |
+| `cwd` | string | — | Working directory for the command. The last cwd observed after a foreground command is remembered for later calls in the same conversation; omit `cwd` to reuse it. Defaults to the agent workspace when no value is remembered |
 | `timeout` | int | — | Timeout in seconds for foreground commands; overrides `tools.exec.timeout_seconds`. Foreground runs are capped at `600`s: `0` (no timeout) and values above the cap start a tracked background session instead of blocking the call. Cannot be combined with `background=true` (except `0`); ignored with a note when a trailing `&` normalizes the run to background. With `wait`: maximum seconds to block (a positive integer), defaulting to and capped by `tools.exec.timeout_seconds` |
 | `notify` | bool | — | With `background=true` or a run promoted to background, send a completion message when the process exits (default `false`). Manually killed sessions do not notify. Use it for jobs with a defined end; do not poll or wait in a loop |
 | `offset` | int | — | With `read`: absolute byte offset into the retained session log. By default the response starts at the most recent `limit` bytes; use `0` for the oldest retained byte |
@@ -211,10 +212,12 @@ Behavior notes:
 - A foreground run is capped at `600`s. If the effective timeout is larger (including `timeout: 0`, which disables the limit), the command is not rejected: it starts as a tracked background session, the result contains its `sessionId` and a `note` explaining the promotion, and `notify: true` is accepted. Use `wait`, `poll`, or `read` with that id.
 - When a foreground run times out, the command is terminated and the model-facing result body ends with a hint to re-run it with `background=true` if it is a server, daemon, or watch process. This is the reliable way to keep a long-lived process: a timeout is evidence that the command outlived the call.
 - Unix only: a trailing `&` in `command` is normalized to a tracked background session. The operator is removed so the tracked process is the command itself instead of a shell that exits immediately; the result contains the `sessionId` and a `note`. A `timeout` supplied with that command is ignored with a note because background sessions are not time-limited. Only a standalone final operator is rewritten: `&&`, `|&`, `2>&1`, quoted or escaped `&`, comments, and heredoc bodies are left untouched.
-- Prefer `cwd` over `cd` inside the command, and the filesystem tools over shell file operations.
-- Foreground output is bounded while the command runs: the first 40% and the last 60% of `max_output_chars` (default 50,000, also capped by `tools.max_inline_result_chars`) stay in memory around a `[OUTPUT TRUNCATED - N chars omitted out of T total]` notice, and the full stream is spilled to a workspace artifact (up to 5,000,000 bytes) as soon as the cap is exceeded. The result includes the artifact path, so the omitted middle stays readable; `truncated` in the metadata header is `true`. Background sessions retain a rolling 1 MB window of output; earlier bytes are dropped and reported via `droppedBytes`.
+- A foreground command that starts untracked background work is rejected with guidance to use `background=true`: an inner `&` (`a & b`, `a & # comment`) and the detaching commands `nohup`, `setsid` and `disown`. The single trailing `&` form is converted, not rejected; `background=true` also accepts `nohup`/`setsid` because the tracked shell remains the session root.
+- The cwd where a foreground command ends is reported as `cwd` in the `[exec]` metadata header and remembered for the next call in the conversation. A `cd` inside the command is therefore visible, but `cwd` remains the clearest way to select the starting directory. Prefer the filesystem tools over shell file operations.
+- Foreground output is bounded while the command runs: the first 40% and the last 60% of `max_output_chars` (default 50,000, also capped by `tools.max_inline_result_chars`) stay in memory around a `[OUTPUT TRUNCATED - N chars omitted out of T total]` notice, and the full stream is spilled to a workspace artifact (up to 5,000,000 bytes) as soon as the cap is exceeded. The result includes the artifact path, so the omitted middle stays readable; `truncated` in the metadata header is `true`. Background sessions retain a rolling 100 KB window in memory; as soon as it overflows, the complete stream is written to an artifact (up to 5,000,000 bytes). `poll`, `wait`, `read` and `kill` responses include `artifactPath` (and `artifactCapped` when the 5,000,000-byte limit is reached), so earlier bytes stay readable without keeping them in RAM. `droppedBytes` still reports the bytes evicted from the in-memory window.
 - `poll` never blocks and returns a short output preview. `read` is non-destructive and pageable with `offset`/`limit`; the response includes `totalBytes`, `offset`, `nextOffset`, `hasMore`, `droppedBytes` (bytes evicted from the rolling window since the session started) and `skippedBytes` (bytes skipped because the requested offset predates the retained window). `wait` returns the exit status and output when the process exits, and a partial output tail when its window expires. `kill` returns the final output tail and keeps the session readable for the retention window.
 - To wait for a background session, call `wait` once instead of polling in a loop. If the window elapses first, the result has status `running` and a note saying this is not an error; call `wait` again if the job is expected to take longer. After two consecutive `poll`/`wait` calls with no new output the tool enables a completion notification and tells the model to stop checking (use `wait`, read the output, or kill the session).
+- Starting a background session without `notify=true` returns a note that no completion message will be sent, so the model does not assume it will be woken when the job ends. Bounded jobs should normally use `notify=true`.
 - Sessions are cleaned up 30 minutes after the process exits. `write` sends stdin, `send-keys` sends keys to a PTY session; combine `background=true` with `pty=true` for interactive sessions such as a REPL.
 
 ## Environment sanitization
@@ -232,10 +235,9 @@ Sources are merged in this order:
 
 1. `tools.exec.env_set` — trusted values from config; they override inherited variables, including `PATH`.
 2. The built-in allowlist above, plus names from `tools.exec.env_allowlist`.
-3. The per-call `env` argument — merged last, except for blocked names.
-4. Trusted `PICOCLAW_EXEC_TIME` and `PICOCLAW_EXEC_TIMEOUT` values for the current run.
+3. Trusted `PICOCLAW_EXEC_TIME` and `PICOCLAW_EXEC_TIMEOUT` values for the current run.
 
-The per-call `env` argument cannot override `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT`, `LD_DEBUG`, or any `PICOCLAW_*` variable; blocked entries are ignored. The managed `PICOCLAW_*` names above are agent-controlled, so `env_set` cannot override them either. Commands can read these variables:
+The model cannot add environment variables to a run. To set a variable for one command, use an inline assignment such as `FOO=bar command`; the guard inspects the whole command. The managed `PICOCLAW_*` names above are agent-controlled, so `env_set` cannot override them either. Commands can read these variables:
 
 | Variable | Value |
 |----------|-------|
@@ -251,12 +253,14 @@ The same environment is used for foreground runs, background and PTY sessions, a
 
 ## Per-conversation state
 
-Within one agent conversation, the exec tool remembers the last explicit `cwd` and `env` arguments:
+Within one agent conversation, the exec tool remembers the last working directory observed after a foreground command:
 
-- `cwd`: passing a directory stores it for later calls; omit `cwd` to reuse it. A new `cwd` replaces the remembered one. The path is revalidated against the workspace and must still exist; if it was deleted or became invalid, it is forgotten and the agent workspace is used.
-- `env`: entries are merged into the remembered overlay, so a later call only needs to pass new variables. When `env` is omitted, the overlay is reused. An explicit empty object (`{}`) clears the overlay. Remembered variables are still filtered by the LLM blocklist and merged with `tools.exec.env_set` and the inherited allowlist on every run.
+- An explicit `cwd` sets the starting directory and is remembered.
+- On Unix, the shell wrapper appends a marker with `pwd -P` after the command, so `cd sub` inside a command updates the remembered directory too. The marker is stripped from the output and the path is reported as `cwd` in the `[exec]` header.
+- The observed path is stored only when it is inside the workspace (when restriction is on) and still exists. A command that `cd`s outside, an interrupted command or a timeout leaves the previous value unchanged.
+- Omit `cwd` to reuse the remembered directory. A path that disappeared or no longer passes the workspace policy is forgotten and the agent workspace is used.
 
-This state is **argument state**, not shell state: `cd` or `export` executed inside a command still disappears when that command's fresh shell exits. Use the `cwd` and `env` arguments (or a background PTY session) when state must survive across calls.
+This state is **cwd state**, not shell state: exported variables and aliases still disappear when that command's fresh shell exits. Use the `cwd` argument (or a background PTY session) when other state must survive across calls.
 
 State is memory-only, scoped to the agent and session, and lost when PicoClaw restarts or the conversation is cleared with `/clear` or `/reset`. At most 64 conversations are retained; the least recently used conversation is evicted first. Calls without a session context (for example some cron paths) remain stateless.
 

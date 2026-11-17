@@ -32,7 +32,7 @@ func TestShellTool_TimeoutKillsChildProcess(t *testing.T) {
 	args := map[string]any{
 		"action": "run",
 		// Spawn a child process that would outlive the shell unless process-group kill is used.
-		"command": "sleep 60 & echo $! > child.pid; wait",
+		"command": "sh -c 'echo $$ > child.pid; sleep 60'",
 	}
 
 	result := tool.Execute(context.Background(), args)

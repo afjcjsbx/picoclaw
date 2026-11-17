@@ -744,8 +744,8 @@ func TestShellTool_TruncatedOutputSpillsFullText(t *testing.T) {
 		t.Fatalf("expected the artifact to hold the full output, got %d chars (want %d)", len(got), len(full))
 	}
 	// Inline stays bounded and keeps the real head and tail of the full output.
-	if got := len([]rune(result.ForLLM)); got > cfg.Tools.MaxInlineResultChars+200 {
-		t.Fatalf("inline output has %d runes, want at most %d plus the truncation notice",
+	if got := len([]rune(result.ForLLM)); got > cfg.Tools.MaxInlineResultChars+500 {
+		t.Fatalf("inline output has %d runes, want at most %d plus the header and truncation notice",
 			got, cfg.Tools.MaxInlineResultChars)
 	}
 	if !strings.Contains(result.ForLLM, strings.Repeat("A", 100)) {
@@ -1253,7 +1253,7 @@ func TestShellTool_DevNullAllowedWithSeparator(t *testing.T) {
 		"echo a 2>/dev/null|cat",
 		"echo a 2>/dev/null&&echo b",
 		"echo a 2>/dev/null||echo b",
-		"echo a 2>/dev/null&echo b",
+		"echo a 2>/dev/null;echo b",
 		"echo a >/dev/null;echo b",
 		"echo a 2>/dev/null,",
 		"(echo a 2>/dev/null)",

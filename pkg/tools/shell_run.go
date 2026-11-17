@@ -20,6 +20,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/isolation"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/tools/shellguard"
 )
 
 // foregroundPromotionNote explains why a requested foreground timeout was
@@ -51,6 +52,62 @@ func shellCommand(command string) (string, []string, error) {
 	return shellPath, []string{"-c", command}, nil
 }
 
+// cwdProbeFile receives the final working directory from a wrapped foreground
+// command. A temp file keeps the probe out of stdout, so output truncation,
+// exit-status parsing and artifact tests see exactly the command's output.
+func newCwdProbeFile() (string, error) {
+	file, err := os.CreateTemp("", "picoclaw-cwd-*.txt")
+	if err != nil {
+		return "", err
+	}
+	path := file.Name()
+	if err := file.Close(); err != nil {
+		_ = os.Remove(path)
+		return "", err
+	}
+	return path, nil
+}
+
+// shellQuote single-quotes a path for the POSIX shell.
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
+}
+
+// wrapCommandForCwd appends a probe that writes `pwd -P` after the command and
+// preserves its exit status. The wrapper runs in the same shell, so `cd` inside
+// the command is observed. Commands that cannot safely take a suffix (Windows
+// PowerShell and a trailing backslash continuation) are left unchanged.
+func wrapCommandForCwd(command, probePath string) (string, bool) {
+	if runtime.GOOS == "windows" || probePath == "" {
+		return command, false
+	}
+	if strings.HasSuffix(strings.TrimRight(command, " \t\r\n"), "\\") {
+		return command, false
+	}
+	wrapped := command + "\n__picoclaw_exec_status=$?\n" +
+		"command pwd -P > " + shellQuote(probePath) + " 2>/dev/null\n" +
+		"exit $__picoclaw_exec_status"
+	return wrapped, true
+}
+
+// readObservedCwd reads the probe file written by the wrapper. A missing or
+// empty file means the command exited through exec/exit or was killed before
+// the probe ran; the previous remembered cwd then stays in place.
+func readObservedCwd(probePath string) string {
+	if probePath == "" {
+		return ""
+	}
+	data, err := os.ReadFile(probePath)
+	if err != nil {
+		return ""
+	}
+	cwd := strings.TrimSpace(string(data))
+	if cwd == "" || len(cwd) > 4096 {
+		return ""
+	}
+	return cwd
+}
+
 // prepareExecCommand applies the settings shared by foreground, background and
 // PTY executions.
 func (t *ExecTool) prepareExecCommand(cmd *exec.Cmd, cwd string, env []string) {
@@ -65,7 +122,6 @@ func (t *ExecTool) runSync(
 	ctx context.Context,
 	command, cwd string,
 	timeout time.Duration,
-	extraEnv map[string]string,
 ) *ToolResult {
 	start := time.Now()
 	// timeout == 0 means no timeout
@@ -78,7 +134,13 @@ func (t *ExecTool) runSync(
 	}
 	defer cancel()
 
-	shellPath, shellArgs, shellErr := shellCommand(command)
+	probePath, probeErr := newCwdProbeFile()
+	if probeErr != nil {
+		probePath = ""
+	}
+	defer func() { _ = os.Remove(probePath) }()
+	shellCommandText, observeCwd := wrapCommandForCwd(command, probePath)
+	shellPath, shellArgs, shellErr := shellCommand(shellCommandText)
 	if shellErr != nil {
 		return ErrorResult(shellErr.Error())
 	}
@@ -87,7 +149,7 @@ func (t *ExecTool) runSync(
 	// ancestry link to children that changed session (setsid). The timeout is
 	// handled explicitly below so the process tree is still observable.
 	cmd := exec.Command(shellPath, shellArgs...)
-	t.prepareExecCommand(cmd, cwd, t.runEnv(extraEnv, timeout))
+	t.prepareExecCommand(cmd, cwd, t.runEnv(timeout))
 
 	maxOutputChars := t.maxOutputChars
 	if maxOutputChars <= 0 {
@@ -177,6 +239,11 @@ func (t *ExecTool) runSync(
 	spillCapped := collector.SpillCapped()
 	_ = collector.Close()
 
+	observedCwd := ""
+	if observeCwd {
+		observedCwd = readObservedCwd(probePath)
+	}
+
 	// Keep the raw stdout/stderr intact for the model and put the structured
 	// status in a one-line header instead. Wrapping the output in JSON would
 	// escape every newline, tab and quote, which makes diffs, logs and source
@@ -237,12 +304,22 @@ func (t *ExecTool) runSync(
 		forUser = "(no output)"
 	}
 
+	if observedCwd != "" && t.acceptObservedCwd(observedCwd) {
+		t.rememberCwd(ctx, observedCwd)
+	}
+
+	exitNote := ""
+	if exitCode != nil {
+		exitNote = informativeExitNote(command, *exitCode)
+	}
 	meta := execRunMeta{
 		ExitCode:   exitCode,
 		TimedOut:   timedOut,
 		Truncated:  truncated,
 		DurationMs: time.Since(start).Milliseconds(),
 		Error:      errorMessage,
+		Cwd:        observedCwd,
+		ExitNote:   exitNote,
 	}
 	forLLM := formatExecRunMeta(meta) + "\n" + output
 	if timedOut {
@@ -263,9 +340,51 @@ type execRunMeta struct {
 	Truncated  bool   `json:"truncated"`
 	DurationMs int64  `json:"durationMs"`
 	Error      string `json:"error,omitempty"`
+	Cwd        string `json:"cwd,omitempty"`
+	ExitNote   string `json:"exitNote,omitempty"`
 }
 
 const execRunMetaPrefix = "[exec] "
+
+// exitCodeNotes explains non-zero statuses that are commonly normal. The map
+// is deliberately small: an unknown exit code must stay a real error hint.
+var exitCodeNotes = map[string]map[int]string{
+	"grep":  {1: "grep exit 1 means no matches (not an error)"},
+	"egrep": {1: "grep exit 1 means no matches (not an error)"},
+	"fgrep": {1: "grep exit 1 means no matches (not an error)"},
+	"rg":    {1: "ripgrep exit 1 means no matches (not an error)"},
+	"ag":    {1: "exit 1 means no matches (not an error)"},
+	"ack":   {1: "exit 1 means no matches (not an error)"},
+	"diff":  {1: "diff exit 1 means files differ (not an error)"},
+	"colordiff": {
+		1: "diff exit 1 means files differ (not an error)",
+	},
+	"test": {1: "test exit 1 means the condition is false (not an error)"},
+	"[":    {1: "test exit 1 means the condition is false (not an error)"},
+	"git":  {1: "git exit 1 is often normal, for example git diff with changes"},
+}
+
+// informativeExitNote returns a model-facing note for a non-zero status that
+// has a well-known non-error meaning. The last canonical simple command is the
+// one that supplies the shell's exit status.
+func informativeExitNote(command string, code int) string {
+	if code <= 0 {
+		return ""
+	}
+	forms := shellguard.CanonicalCommands(command)
+	if len(forms) == 0 {
+		return ""
+	}
+	fields := strings.Fields(forms[len(forms)-1])
+	if len(fields) == 0 {
+		return ""
+	}
+	name := fields[0]
+	if slash := strings.LastIndexByte(name, '/'); slash >= 0 {
+		name = name[slash+1:]
+	}
+	return exitCodeNotes[name][code]
+}
 
 func formatExecRunMeta(meta execRunMeta) string {
 	var buf bytes.Buffer
@@ -358,7 +477,7 @@ func (t *ExecTool) runBackground(
 	command, cwd string,
 	ptyEnabled bool,
 	note string,
-	extraEnv map[string]string,
+	notify bool,
 ) *ToolResult {
 	sessionID := generateSessionID()
 	session := &ProcessSession{
@@ -376,6 +495,7 @@ func (t *ExecTool) runBackground(
 		// manager: readers (session_read/list_sessions) must never observe a
 		// session whose buffer is still nil.
 		outputBuffer: &bytes.Buffer{},
+		spillDir:     t.outputSpillDir(),
 	}
 
 	shellPath, shellArgs, shellErr := shellCommand(command)
@@ -383,7 +503,7 @@ func (t *ExecTool) runBackground(
 		return ErrorResult(shellErr.Error())
 	}
 	cmd := exec.Command(shellPath, shellArgs...)
-	t.prepareExecCommand(cmd, cwd, t.runEnv(extraEnv, 0))
+	t.prepareExecCommand(cmd, cwd, t.runEnv(0))
 
 	var outputReader io.ReadCloser
 	var outputWriter *os.File
@@ -511,6 +631,16 @@ func (t *ExecTool) runBackground(
 
 			session.finish(processExitCode(cmd.ProcessState))
 		}()
+	}
+
+	if !notify {
+		const silentHint = "No completion notification is enabled for this background session; " +
+			"use action=wait, poll, read, or kill, or start bounded jobs with notify=true."
+		if note == "" {
+			note = silentHint
+		} else {
+			note += " " + silentHint
+		}
 	}
 
 	resp := ExecResponse{

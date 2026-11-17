@@ -17,8 +17,20 @@ import (
 // mistaken for a heredoc. On a parse error the command is returned unchanged;
 // the exec guard rejects unparseable commands separately.
 func StripQuotedHeredocBodies(command string) string {
+	if !strings.Contains(command, "<<") {
+		return command
+	}
 	file, err := Parse(command)
 	if err != nil {
+		return command
+	}
+	return stripQuotedHeredocBodiesFile(command, file)
+}
+
+// stripQuotedHeredocBodiesFile is the parsed form used by Analyze so one parse
+// serves heredoc stripping, canonical forms, workspace validation and risk.
+func stripQuotedHeredocBodiesFile(command string, file *syntax.File) string {
+	if file == nil {
 		return command
 	}
 
