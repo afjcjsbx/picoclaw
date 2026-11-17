@@ -16,13 +16,14 @@ import (
 // exits as soon as the job starts, so a foreground call would report success
 // while the process keeps running untracked and its output pipe is closed.
 // Callers convert these commands into tracked background sessions instead,
-// where poll, wait, read and kill can reach the process.
-func normalizeTrailingBackgroundAmpersand(command, goos string) (string, bool) {
+// where poll, wait, read and kill can reach the process. The caller supplies
+// the shared parse of the written command, so this helper does not parse again.
+func normalizeTrailingBackgroundAmpersand(command string, analysis shellguard.Analysis, goos string) (string, bool) {
 	if goos == "windows" {
 		return command, false
 	}
-	file, err := shellguard.Parse(command)
-	if err != nil || file == nil || len(file.Stmts) == 0 {
+	file := analysis.File
+	if file == nil || len(file.Stmts) == 0 {
 		return command, false
 	}
 
@@ -62,9 +63,9 @@ var detachCommands = map[string]bool{
 // starts background work the exec session cannot track. tracked is true for an
 // explicit background=true run; nohup/setsid/disown are then allowed (the shell
 // itself is tracked), while an inner '&' operator is always rejected because it
-// detaches a job from the tracked shell.
-func untrackedDetachReason(command string, tracked bool) string {
-	analysis := shellguard.Analyze(command)
+// detaches a job from the tracked shell. trailingConverted is true when the
+// caller rewrote the command's final '&' into a tracked background run.
+func untrackedDetachReason(command string, analysis shellguard.Analysis, tracked, trailingConverted bool) string {
 	forms := analysis.Canonical
 	if !analysis.CanonicalExact {
 		forms = shellguard.CanonicalCommands(command)
@@ -87,12 +88,19 @@ func untrackedDetachReason(command string, tracked bool) string {
 	if analysis.File == nil {
 		return ""
 	}
+	var converted *syntax.Stmt
+	if trailingConverted && len(analysis.File.Stmts) > 0 {
+		converted = analysis.File.Stmts[len(analysis.File.Stmts)-1]
+	}
 	found := false
 	syntax.Walk(analysis.File, func(node syntax.Node) bool {
 		if found {
 			return false
 		}
 		if stmt, ok := node.(*syntax.Stmt); ok && stmt.Background {
+			if stmt == converted {
+				return true
+			}
 			found = true
 			return false
 		}

@@ -807,12 +807,18 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 	// matches a trailing '&'.
 	guardedCommand := command
 
+	// Parse once. The trailing-'&' converter, detach check, command guard and
+	// exit note all consume the same AST instead of re-parsing the text.
+	analysis := shellguard.Analyze(guardedCommand)
+
 	// On Unix, `sh -c "server &"` returns as soon as the job starts: a
 	// foreground call would report success while the process keeps running
 	// untracked and its output pipe is closed. Normalize the trailing operator
 	// into a tracked background session instead. Windows shells do not use '&'
 	// as a background operator, so the helper is a no-op there.
-	if normalized, converted := normalizeTrailingBackgroundAmpersand(command, runtime.GOOS); converted {
+	trailingConverted := false
+	if normalized, converted := normalizeTrailingBackgroundAmpersand(command, analysis, runtime.GOOS); converted {
+		trailingConverted = true
 		command = normalized
 		if !isBackground {
 			isBackground = true
@@ -856,7 +862,9 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 	// A foreground nohup/setsid/disown or an inner '&' leaves a process the
 	// session manager cannot track. The trailing '&' converter above already
 	// turned the unambiguous single-operator form into a tracked run.
-	if reason := untrackedDetachReason(command, isBackground || promoteToBackground); reason != "" {
+	if reason := untrackedDetachReason(
+		command, analysis, isBackground || promoteToBackground, trailingConverted,
+	); reason != "" {
 		return ErrorResult(reason)
 	}
 
@@ -908,7 +916,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 	// path would fail validation on the next call.
 	stateCwd := cwd
 
-	if guardError := t.guardCommandContext(ctx, guardedCommand, cwd); guardError != "" {
+	if guardError := t.guardCommandWithAnalysis(ctx, guardedCommand, cwd, analysis); guardError != "" {
 		return ErrorResult(guardError)
 	}
 
@@ -959,7 +967,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 		)
 	}
 
-	return t.runSync(ctx, command, cwd, timeout)
+	return t.runSync(ctx, command, cwd, timeout, analysis)
 }
 
 // resolvedWorkspace returns the workspace with symlinks resolved, so paths

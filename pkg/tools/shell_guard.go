@@ -79,14 +79,20 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 //     approvals.smart_threshold (and unknown ones) are reviewed by the Guardian
 //     model. APPROVE runs the command; DENY, ESCALATE and any error block it.
 func (t *ExecTool) guardCommandContext(ctx context.Context, command, cwd string) string {
+	return t.guardCommandWithAnalysis(ctx, command, cwd, shellguard.Analyze(strings.TrimSpace(command)))
+}
+
+// guardCommandWithAnalysis is guardCommandContext with a parse the caller
+// already owns, so a run does not parse the same command twice.
+func (t *ExecTool) guardCommandWithAnalysis(
+	ctx context.Context, command, cwd string, analysis shellguard.Analysis,
+) string {
 	cmd := strings.TrimSpace(command)
 	lower := strings.ToLower(cmd)
-	// One parse serves heredoc stripping, canonical deny forms, workspace
-	// validation and the risk classifier.
-	analysis := shellguard.Analyze(cmd)
 	// Quoted heredoc bodies are literal text: a backtick there cannot run a
-	// command, so deny patterns must not inspect it.
-	stripped := analysis.StrippedHeredoc
+	// command, so deny patterns must not inspect it. The caller parsed the
+	// untrimmed command, so trim the stripped view like before.
+	stripped := strings.TrimSpace(analysis.StrippedHeredoc)
 	lowerForDeny := strings.ToLower(stripped)
 	denyForms := []string{lowerForDeny}
 

@@ -122,6 +122,7 @@ func (t *ExecTool) runSync(
 	ctx context.Context,
 	command, cwd string,
 	timeout time.Duration,
+	analysis shellguard.Analysis,
 ) *ToolResult {
 	start := time.Now()
 	// timeout == 0 means no timeout
@@ -310,7 +311,7 @@ func (t *ExecTool) runSync(
 
 	exitNote := ""
 	if exitCode != nil {
-		exitNote = informativeExitNote(command, *exitCode)
+		exitNote = informativeExitNote(command, analysis, *exitCode)
 	}
 	meta := execRunMeta{
 		ExitCode:   exitCode,
@@ -367,11 +368,14 @@ var exitCodeNotes = map[string]map[int]string{
 // informativeExitNote returns a model-facing note for a non-zero status that
 // has a well-known non-error meaning. The last canonical simple command is the
 // one that supplies the shell's exit status.
-func informativeExitNote(command string, code int) string {
+func informativeExitNote(command string, analysis shellguard.Analysis, code int) string {
 	if code <= 0 {
 		return ""
 	}
-	forms := shellguard.CanonicalCommands(command)
+	forms := analysis.Canonical
+	if !analysis.CanonicalExact {
+		forms = shellguard.CanonicalCommands(command)
+	}
 	if len(forms) == 0 {
 		return ""
 	}

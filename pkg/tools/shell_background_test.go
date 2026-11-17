@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/tools/shellguard"
 )
 
 func TestNormalizeTrailingBackgroundAmpersand(t *testing.T) {
@@ -149,7 +150,9 @@ func TestNormalizeTrailingBackgroundAmpersand(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, stripped := normalizeTrailingBackgroundAmpersand(tt.command, "linux")
+			got, stripped := normalizeTrailingBackgroundAmpersand(
+				tt.command, shellguard.Analyze(tt.command), "linux",
+			)
 			require.Equal(t, tt.strip, stripped)
 			require.Equal(t, tt.want, got)
 		})
@@ -158,13 +161,17 @@ func TestNormalizeTrailingBackgroundAmpersand(t *testing.T) {
 
 func TestNormalizeTrailingBackgroundAmpersandOSGate(t *testing.T) {
 	t.Run("unix", func(t *testing.T) {
-		got, converted := normalizeTrailingBackgroundAmpersand("sleep 1 &", "linux")
+		got, converted := normalizeTrailingBackgroundAmpersand(
+			"sleep 1 &", shellguard.Analyze("sleep 1 &"), "linux",
+		)
 		require.True(t, converted)
 		require.Equal(t, "sleep 1", got)
 	})
 
 	t.Run("windows", func(t *testing.T) {
-		got, converted := normalizeTrailingBackgroundAmpersand("sleep 1 &", "windows")
+		got, converted := normalizeTrailingBackgroundAmpersand(
+			"sleep 1 &", shellguard.Analyze("sleep 1 &"), "windows",
+		)
 		require.False(t, converted)
 		require.Equal(t, "sleep 1 &", got)
 	})
@@ -363,7 +370,9 @@ func TestUntrackedDetachReason(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := untrackedDetachReason(tt.command, tt.tracked)
+			got := untrackedDetachReason(
+				tt.command, shellguard.Analyze(tt.command), tt.tracked, false,
+			)
 			if tt.want == "" {
 				require.Empty(t, got)
 				return

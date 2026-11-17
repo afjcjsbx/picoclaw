@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/sipeed/picoclaw/pkg/tools/shellguard"
 )
 
 func TestRecoverGoroutine(t *testing.T) {
@@ -48,11 +50,14 @@ func TestWrapCommandForCwdSkipsLineContinuation(t *testing.T) {
 }
 
 func TestInformativeExitNote(t *testing.T) {
-	require.Contains(t, informativeExitNote("grep missing file", 1), "no matches")
-	require.Contains(t, informativeExitNote("diff a b", 1), "files differ")
-	require.Contains(t, informativeExitNote("false", 1), "")
-	require.Empty(t, informativeExitNote("grep missing file", 0))
-	require.Empty(t, informativeExitNote("grep missing file", 2))
+	note := func(command string, code int) string {
+		return informativeExitNote(command, shellguard.Analyze(command), code)
+	}
+	require.Contains(t, note("grep missing file", 1), "no matches")
+	require.Contains(t, note("diff a b", 1), "files differ")
+	require.Contains(t, note("false", 1), "")
+	require.Empty(t, note("grep missing file", 0))
+	require.Empty(t, note("grep missing file", 2))
 }
 
 func TestExecToolAddsInformativeExitNote(t *testing.T) {
