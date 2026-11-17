@@ -73,6 +73,7 @@ type ExecTool struct {
 	maxOutputChars       int
 	maxInlineResultChars int
 	sessionManager       *SessionManager
+	blockBreaker         *execBlockBreaker
 }
 
 var _ AsyncExecutor = (*ExecTool)(nil)
@@ -346,6 +347,7 @@ func NewExecToolWithConfig(
 		maxOutputChars:       maxOutputChars,
 		maxInlineResultChars: maxInlineResultChars,
 		sessionManager:       getSessionManager(),
+		blockBreaker:         newExecBlockBreaker(),
 	}, nil
 }
 
@@ -598,7 +600,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 		if t.restrictToWorkspace && t.workingDir != "" {
 			resolvedWD, err := fstools.ValidatePathWithAllowPaths(wd, t.workingDir, true, t.allowedPathPatterns)
 			if err != nil {
-				return ErrorResult("Command blocked by safety guard (" + err.Error() + ")")
+				return t.blockedResult(ctx, command, "Command blocked by safety guard ("+err.Error()+")")
 			}
 			cwd = resolvedWD
 		} else {
@@ -614,7 +616,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 	}
 
 	if guardError := t.guardCommand(command, cwd); guardError != "" {
-		return ErrorResult(guardError)
+		return t.blockedResult(ctx, command, guardError)
 	}
 
 	// Re-resolve symlinks immediately before execution to shrink the TOCTOU window
@@ -622,7 +624,10 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 	if t.restrictToWorkspace && t.workingDir != "" && cwd != t.workingDir {
 		resolved, err := filepath.EvalSymlinks(cwd)
 		if err != nil {
-			return ErrorResult(fmt.Sprintf("Command blocked by safety guard (path resolution failed: %v)", err))
+			return t.blockedResult(
+				ctx, command,
+				fmt.Sprintf("Command blocked by safety guard (path resolution failed: %v)", err),
+			)
 		}
 		if fstools.IsAllowedPath(resolved, t.allowedPathPatterns) {
 			cwd = resolved
@@ -634,11 +639,17 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 			}
 			rel, err := filepath.Rel(wsResolved, resolved)
 			if err != nil || !filepath.IsLocal(rel) {
-				return ErrorResult("Command blocked by safety guard (working directory escaped workspace)")
+				return t.blockedResult(
+					ctx, command,
+					"Command blocked by safety guard (working directory escaped workspace)",
+				)
 			}
 			cwd = resolved
 		}
 	}
+
+	// Any allowed run breaks the blocked-command streak.
+	t.blockBreaker.reset(ctx)
 
 	if isBackground {
 		return t.runBackground(ctx, command, cwd, isPty)

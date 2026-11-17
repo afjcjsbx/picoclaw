@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Exec now breaks out of a retry loop on blocked commands: after three consecutive identical guard rejections in one conversation, the result carries a `HARD STOP` message telling the model to stop retrying, rewording or splitting the command and to report the blocker instead. The breaker is process-local and bounded (64 conversations, one 64-bit hash and a counter each), and resets on a different command, an allowed run or `/clear`.
 - `/usage` (alias `/cost`) chat command and `picoclaw usage` CLI command that report provider-reported token usage and cost per session, with per-model and input cache breakdowns.
 
 ### Fixed
