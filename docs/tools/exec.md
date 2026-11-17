@@ -182,7 +182,7 @@ hello
 | `truncated` | `true` when the output exceeded the configured cap; the omitted middle stays in the artifact |
 | `durationMs` | Wall-clock duration of the command in milliseconds |
 | `cwd` | Present when a foreground command ran on Unix: the absolute directory where it ended (`pwd -P`). It is remembered for later calls when it stays inside the workspace |
-| `exitNote` | Present for a non-zero status with a well-known non-error meaning, for example `grep`/`rg` exit `1` (no matches), `diff` exit `1` (files differ), `test` exit `1` (false), or `git` exit `1` (often normal) |
+| `exitNote` | Present for a non-zero status with a well-known non-error meaning, for example `grep`/`rg` exit `1` (no matches), `diff` exit `1` (files differ), `test` exit `1` (false), `git` exit `1` (often normal), or a signal status such as `137` (SIGKILL, often the OOM killer), `139` (SIGSEGV) or `143` (SIGTERM) |
 | `error` | Present when the command timed out or was terminated without a numeric exit status. Command stderr is merged into the body and is not repeated here |
 
 The header stays outside the output body, so newlines, tabs and quotes are not JSON-escaped. The user-facing message is the raw output without the header; on failure it keeps the human-readable `[Command exited with code N]` suffix.

@@ -58,6 +58,10 @@ func TestInformativeExitNote(t *testing.T) {
 	require.Contains(t, note("false", 1), "")
 	require.Empty(t, note("grep missing file", 0))
 	require.Empty(t, note("grep missing file", 2))
+	require.Contains(t, note("sleep 1", 137), "SIGKILL")
+	require.Contains(t, note("sleep 1", 139), "SIGSEGV")
+	require.Contains(t, note("sleep 1", 143), "SIGTERM")
+	require.Contains(t, note("grep missing file", 137), "SIGKILL")
 }
 
 func TestExecToolAddsInformativeExitNote(t *testing.T) {
