@@ -244,7 +244,8 @@ func (t *ExecTool) runSync(
 		<-readDone
 	}
 
-	output, truncated := collector.Render()
+	view := collector.Render()
+	output := view.Text
 	artifactPath := collector.SpillPath()
 	spillCapped := collector.SpillCapped()
 	_ = collector.Close()
@@ -323,13 +324,16 @@ func (t *ExecTool) runSync(
 		exitNote = informativeExitNote(command, analysis, *exitCode)
 	}
 	meta := execRunMeta{
-		ExitCode:   exitCode,
-		TimedOut:   timedOut,
-		Truncated:  truncated,
-		DurationMs: time.Since(start).Milliseconds(),
-		Error:      errorMessage,
-		Cwd:        observedCwd,
-		ExitNote:   exitNote,
+		ExitCode:     exitCode,
+		TimedOut:     timedOut,
+		Truncated:    view.Truncated,
+		TotalBytes:   view.TotalBytes,
+		OmittedBytes: view.OmittedBytes,
+		ArtifactPath: artifactPath,
+		DurationMs:   time.Since(start).Milliseconds(),
+		Error:        errorMessage,
+		Cwd:          observedCwd,
+		ExitNote:     exitNote,
 	}
 	forLLM := formatExecRunMeta(meta) + "\n" + output
 	if timedOut {
@@ -345,13 +349,16 @@ func (t *ExecTool) runSync(
 // execRunMeta is the model-facing status header for a foreground exec run.
 // The header stays outside the output body so shell output is not JSON-escaped.
 type execRunMeta struct {
-	ExitCode   *int   `json:"exitCode"`
-	TimedOut   bool   `json:"timedOut"`
-	Truncated  bool   `json:"truncated"`
-	DurationMs int64  `json:"durationMs"`
-	Error      string `json:"error,omitempty"`
-	Cwd        string `json:"cwd,omitempty"`
-	ExitNote   string `json:"exitNote,omitempty"`
+	ExitCode     *int   `json:"exitCode"`
+	TimedOut     bool   `json:"timedOut"`
+	Truncated    bool   `json:"truncated"`
+	TotalBytes   int64  `json:"totalBytes,omitempty"`
+	OmittedBytes int64  `json:"omittedBytes,omitempty"`
+	ArtifactPath string `json:"artifactPath,omitempty"`
+	DurationMs   int64  `json:"durationMs"`
+	Error        string `json:"error,omitempty"`
+	Cwd          string `json:"cwd,omitempty"`
+	ExitNote     string `json:"exitNote,omitempty"`
 }
 
 const execRunMetaPrefix = "[exec] "
