@@ -442,6 +442,26 @@ func newExecResult(
 	return result
 }
 
+// pumpOutput drains one session stream into its rolling log until the reader
+// fails (EOF or a closed descriptor). onChunk runs before the bytes are
+// appended, so the PTY path can update its key-mode detection per chunk.
+func pumpOutput(label string, reader io.Reader, session *ProcessSession, onChunk func([]byte)) {
+	defer recoverGoroutine(label)
+	buf := make([]byte, 4096)
+	for {
+		n, err := reader.Read(buf)
+		if n > 0 {
+			if onChunk != nil {
+				onChunk(buf[:n])
+			}
+			session.appendOutput(buf[:n])
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
 // recoverGoroutine is deferred at the top of a session goroutine so a panic is
 // logged instead of crashing the process. onPanic runs after the log line.
 func recoverGoroutine(label string, onPanic ...func()) {
@@ -600,22 +620,12 @@ func (t *ExecTool) runBackground(
 		}()
 
 		go func() {
-			defer recoverGoroutine("PTY read")
-			buf := make([]byte, 4096)
-			for {
-				n, err := session.ptyMaster.Read(buf)
-				if n > 0 {
-					raw := string(buf[:n])
-					if mode := detectPtyKeyMode(raw); mode != PtyKeyModeNotFound && mode != session.GetPtyKeyMode() {
-						session.SetPtyKeyMode(mode)
-					}
-
-					session.appendOutput(buf[:n])
+			pumpOutput("PTY read", session.ptyMaster, session, func(chunk []byte) {
+				raw := string(chunk)
+				if mode := detectPtyKeyMode(raw); mode != PtyKeyModeNotFound && mode != session.GetPtyKeyMode() {
+					session.SetPtyKeyMode(mode)
 				}
-				if err != nil {
-					break
-				}
-			}
+			})
 			// The child side is gone (EOF/EIO) or the session was killed:
 			// release the master descriptor so no fd survives the session.
 			_ = session.ptyMaster.Close()
@@ -624,18 +634,7 @@ func (t *ExecTool) runBackground(
 		// Non-PTY mode: one goroutine reads the merged stdout/stderr pipe.
 		// When process exits, OS closes the pipe write end → Read() returns EOF.
 		go func() {
-			defer recoverGoroutine("pipe read")
-			buf := make([]byte, 4096)
-
-			for {
-				n, err := outputReader.Read(buf)
-				if n > 0 {
-					session.appendOutput(buf[:n])
-				}
-				if err != nil {
-					break
-				}
-			}
+			pumpOutput("pipe read", outputReader, session, nil)
 
 			_ = outputReader.Close()
 			if stdinWriter != nil {
