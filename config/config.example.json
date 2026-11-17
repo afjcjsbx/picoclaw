@@ -599,7 +599,7 @@
     },
     "read_file": {
       "enabled": true,
-      "mode": "bytes"
+      "mode": "auto"
     },
     "serial": {
       "enabled": false
