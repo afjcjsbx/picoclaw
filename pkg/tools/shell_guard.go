@@ -79,11 +79,12 @@ func patternsMatchAny(patterns []*regexp.Regexp, forms []string) bool {
 //     check, then the AST path guard on Unix or the path scanner on Windows.
 //  8. Risk level: the AST classifier rates the command low to critical and
 //     rejects anything above risk_threshold, unless custom_risk_allow_patterns
-//     exempts it up to risk_allow_threshold. Unparseable commands and dynamic
-//     command names count as unknown and are rejected whatever the threshold.
-//  9. Smart approvals: only commands whose risk cannot be classified (layer 8
-//     unknown) are reviewed by the Guardian model. APPROVE runs the command;
-//     DENY, ESCALATE and any error block it.
+//     exempts it up to risk_allow_threshold. Commands the classifier cannot
+//     resolve (dynamic command names, opaque shells, parse errors) are allowed
+//     by default; dynamic operands for destructive commands are still rejected.
+//  9. Smart approvals: only unknown commands (layer 8) are reviewed by the
+//     Guardian model. APPROVE runs the command; DENY, ESCALATE and any error
+//     block it. With approvals off, unknown commands run.
 func (t *ExecTool) guardCommandContext(ctx context.Context, command, cwd string) string {
 	return t.guardCommandWithAnalysis(ctx, command, cwd, shellguard.Analyze(strings.TrimSpace(command)))
 }
@@ -215,24 +216,28 @@ func (t *ExecTool) guardCommandWithAnalysis(
 	// byte-level patterns cannot resolve, such as `x=rm; $x -rf /`. Only an
 	// explicit custom risk allow pattern can exempt it, and only up to
 	// riskAllowThreshold; custom_allow_patterns no longer bypasses this layer.
-	// Risk levels are authoritative in smart mode too: the Guardian only gets
-	// commands the classifier cannot resolve (unknown), never a known risk.
+	// Known commands above the threshold are rejected. Unknown commands are
+	// allowed by default and go to the Guardian only when smart approvals is on.
 	if t.riskGuard != nil && !unlocked {
 		assessment := t.riskGuard.AssessFile(cmd, parsed)
 		if assessment.Reject {
 			return assessment.BlockedError(t.riskGuard.Threshold()).Error()
 		}
 		riskExempt := t.riskAllowExempts(cmd, lower)
-		if assessment.Unknown && !riskExempt && t.approvalEnabled {
-			description := assessment.Reason
-			if description == "" {
-				description = "command risk could not be classified"
-			}
-			if blocked := t.reviewCommand(ctx, cmd, description); blocked != "" {
-				return blocked
+		if assessment.Unknown {
+			// Unknown commands are allowed by default. Smart approvals can
+			// still review them; without a reviewer the command runs.
+			if !riskExempt && t.approvalEnabled {
+				description := assessment.Reason
+				if description == "" {
+					description = "command risk could not be classified"
+				}
+				if blocked := t.reviewCommand(ctx, cmd, description); blocked != "" {
+					return blocked
+				}
 			}
 		} else if !riskExempt &&
-			(assessment.Unknown || !shellguard.IsAllowed(assessment.Level, t.riskGuard.Threshold())) {
+			!shellguard.IsAllowed(assessment.Level, t.riskGuard.Threshold()) {
 			return assessment.BlockedError(t.riskGuard.Threshold()).Error()
 		}
 	}
