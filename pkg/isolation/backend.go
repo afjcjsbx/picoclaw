@@ -31,6 +31,10 @@ func isBackendSupportedOn(goos, backend string) bool {
 	switch backend {
 	case config.IsolationBackendDocker:
 		return true
+	case config.IsolationBackendSSH:
+		// The SSH backend needs a POSIX remote shell. Local Windows is excluded
+		// because the exec tool generates PowerShell commands there.
+		return goos != "windows"
 	case config.IsolationBackendBubblewrap:
 		return goos == "linux"
 	case config.IsolationBackendSeatbelt:
@@ -47,6 +51,8 @@ func applyPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, roo
 	switch resolvedBackend(isolation) {
 	case config.IsolationBackendDocker:
 		return applyDockerIsolation(cmd, isolation, root)
+	case config.IsolationBackendSSH:
+		return applySSHIsolation(cmd, isolation, root)
 	default:
 		return applyNativePlatformIsolation(cmd, isolation, root)
 	}
@@ -56,6 +62,8 @@ func postStartPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig,
 	switch resolvedBackend(isolation) {
 	case config.IsolationBackendDocker:
 		return postStartDockerIsolation(cmd, isolation, root)
+	case config.IsolationBackendSSH:
+		return postStartSSHIsolation(cmd, isolation, root)
 	default:
 		return postStartNativePlatformIsolation(cmd, isolation, root)
 	}
@@ -63,6 +71,7 @@ func postStartPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig,
 
 func cleanupPendingPlatformResources(cmd *exec.Cmd) {
 	cleanupPendingDockerResources(cmd)
+	cleanupPendingSSHResources(cmd)
 	cleanupPendingNativePlatformResources(cmd)
 }
 

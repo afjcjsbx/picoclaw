@@ -342,9 +342,12 @@ PicoClaw 默认在沙箱环境中运行。Agent 只能访问配置的工作区�
 | `seatbelt` | macOS | 使用已弃用的 `sandbox-exec` 命令 |
 | `windows` | Windows | 受限 token、低完整性级别和 Job Object |
 | `docker` | 任何有 Docker 的平台 | 每个子进程通过 `docker run --rm` 运行；镜像必须提供命令，`exec` 工具还需要 `/bin/sh` |
+| `ssh` | Linux、macOS 和其他 Unix 主机 | 每个子进程通过 OpenSSH 客户端在远程 POSIX 主机运行；需要密钥或 agent 认证 |
 
 Docker 后端会把实例根和工作目录以相同绝对路径 bind mount，默认使用宿主 UID/GID 运行，并在正常退出或命令被终止时删除容器。容器网络默认启用：将 `isolation.docker.network` 留空即使用 Docker 默认网络，只有需要禁用网络时才设为 `none`。`isolation.docker.extra_args` 是受信任配置，可能削弱隔离。隔离镜像会随 PicoClaw 版本一起发布为 `afjcjsbx/picoclaw-isolation`（Python 3.13、Go 1.27.4、`jq`、`ripgrep`、`fd`、`tmux`、`rsync`）；定义位于 `docker/Dockerfile.isolation`，也可使用 `make docker-isolation` 本地构建。完整说明和限制见
 [`pkg/isolation`](https://github.com/afjcjsbx/picoclaw/blob/main/pkg/isolation/README.zh.md)。
+
+SSH 后端把本地实例根映射到 `isolation.ssh.remote_root`，并在远程主机上通过 `/bin/sh -c` 执行每个命令。`isolation.ssh.host` 必填，密码提示被禁用，`ssh.forward_env` 列出额外发送的环境变量名（远程 `sshd` 必须通过 `AcceptEnv` 接受）。`isolation.expose_paths` 会被拒绝，因为远程账号本来就能看到自己的文件系统。文件工具仍然操作本地文件；除非两台主机共享存储，远程命令创建的文件在本地不可见。
 
 #### 额外的 Exec 保护
 

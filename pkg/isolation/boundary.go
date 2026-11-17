@@ -22,6 +22,12 @@ type Boundary struct {
 	ReadOnly        []string
 	Network         bool
 	PathBoundary    bool
+	// Remote is the SSH destination when child processes run on another host.
+	// RemoteRoot and RemoteWorkspace are the paths used there; Workspace stays
+	// the local path used by file tools.
+	Remote          string
+	RemoteRoot      string
+	RemoteWorkspace string
 }
 
 // DescribeBoundary returns the effective subprocess boundary for workspace and
@@ -75,6 +81,23 @@ func DescribeBoundary(workspace string, cfg config.IsolationConfig) (Boundary, b
 		}
 		boundary.RootWritable = effectiveBoundaryMode(merged, boundary.Root) == "rw"
 		boundary.ScratchWritable = effectiveBoundaryMode(merged, boundary.Scratch) == "rw"
+		return boundary, true
+	}
+
+	if backend == config.IsolationBackendSSH {
+		boundary.Backend = "SSH"
+		boundary.PathBoundary = false
+		boundary.Remote = cfg.SSH.Target()
+		boundary.RemoteRoot = sshRemoteRoot(boundary.Root, cfg.SSH.RemoteRoot)
+		if boundary.Workspace != "" {
+			boundary.RemoteWorkspace = sshRemotePath(
+				boundary.Workspace,
+				boundary.Root,
+				cfg.SSH.RemoteRoot,
+			)
+		}
+		// The remote account has whatever network access its host provides.
+		boundary.Network = true
 		return boundary, true
 	}
 

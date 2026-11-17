@@ -253,6 +253,44 @@ func (cb *ContextBuilder) buildIsolationPrompt() string {
 		cb.allowReadOutsideWorkspace,
 	)
 
+	if boundary.Remote != "" {
+		var sb strings.Builder
+		sb.WriteString("## Sandbox Boundaries\n\n")
+		fmt.Fprintf(
+			&sb,
+			"Subprocess isolation is enabled: SSH remote host `%s`. Commands started by `exec`, CLI providers, "+
+				"process hooks, and stdio MCP servers run on that remote host through OpenSSH, not on this machine.\n\n",
+			boundary.Remote,
+		)
+		if boundary.Workspace != "" {
+			fmt.Fprintf(&sb, "- Local workspace: `%s` (file tools read and write here)\n", boundary.Workspace)
+		}
+		if boundary.RemoteRoot != "" {
+			fmt.Fprintf(&sb, "- Remote instance root: `%s`\n", boundary.RemoteRoot)
+		}
+		if boundary.RemoteWorkspace != "" {
+			fmt.Fprintf(
+				&sb,
+				"- Remote workspace: `%s` (remote working directory for workspace paths)\n",
+				boundary.RemoteWorkspace,
+			)
+		}
+		sb.WriteString(
+			"- Use workspace-relative paths in exec commands. Absolute local paths are not translated to the remote host.\n",
+		)
+		sb.WriteString("- Network access is available on the remote host.\n")
+		fmt.Fprintf(
+			&sb,
+			"- File tools follow %s and operate on local files. Files created by remote commands are not visible locally unless both hosts share storage.\n",
+			filePolicy,
+		)
+		sb.WriteString(isolationBoundaryError(
+			"the remote workspace",
+			"Report it and ask the user to prepare the remote path or adjust `isolation.ssh.remote_root`;",
+		))
+		return sb.String()
+	}
+
 	if !boundary.PathBoundary {
 		var sb strings.Builder
 		sb.WriteString("## Sandbox Boundaries\n\n")
