@@ -36,6 +36,7 @@ func ParseCanonicalID(canonical string) (platform, id string, ok bool) {
 //
 //   - "123456"              → matches sender.PlatformID
 //   - "@alice"              → matches sender.Username
+//   - "@alice:matrix.org"   → matches PlatformID or Username (Matrix MXID)
 //   - "123456|alice"        → matches PlatformID or Username
 //   - "telegram:123456"     → exact match on sender.CanonicalID
 func MatchAllowed(sender bus.SenderInfo, allowed string) bool {
@@ -44,23 +45,27 @@ func MatchAllowed(sender bus.SenderInfo, allowed string) bool {
 		return false
 	}
 
+	// Keep track of explicit username format. An "@"-prefixed entry is a
+	// username or a Matrix MXID; its colon must not be read as a
+	// canonical "platform:id" separator.
+	isAtUsername := strings.HasPrefix(allowed, "@")
+
 	// Try canonical match first: "platform:id" format
-	if platform, id, ok := ParseCanonicalID(allowed); ok {
-		// Only treat as canonical if the platform portion looks like a known platform name
-		// (not a pure-numeric string, which could be a compound ID)
-		if !isNumeric(platform) {
-			candidate := BuildCanonicalID(platform, id)
-			if candidate != "" && sender.CanonicalID != "" {
-				return strings.EqualFold(sender.CanonicalID, candidate)
+	if !isAtUsername {
+		if platform, id, ok := ParseCanonicalID(allowed); ok {
+			// Only treat as canonical if the platform portion looks like a known platform name
+			// (not a pure-numeric string, which could be a compound ID)
+			if !isNumeric(platform) {
+				candidate := BuildCanonicalID(platform, id)
+				if candidate != "" && sender.CanonicalID != "" {
+					return strings.EqualFold(sender.CanonicalID, candidate)
+				}
+				// If sender has no canonical ID, try matching platform + platformID
+				return strings.EqualFold(platform, sender.Platform) &&
+					sender.PlatformID == id
 			}
-			// If sender has no canonical ID, try matching platform + platformID
-			return strings.EqualFold(platform, sender.Platform) &&
-				sender.PlatformID == id
 		}
 	}
-
-	// Keep track of explicit username format
-	isAtUsername := strings.HasPrefix(allowed, "@")
 
 	// Strip leading "@" for username matching
 	trimmed := strings.TrimPrefix(allowed, "@")
@@ -81,6 +86,17 @@ func MatchAllowed(sender bus.SenderInfo, allowed string) bool {
 	// Match against Username only when explicitly requested via "@username"
 	if isAtUsername && sender.Username != "" && sender.Username == trimmed {
 		return true
+	}
+
+	// Matrix MXIDs keep the "@" in both PlatformID and Username, so compare the
+	// full entry as well as the stripped username.
+	if isAtUsername {
+		if sender.PlatformID != "" && sender.PlatformID == allowed {
+			return true
+		}
+		if sender.Username != "" && sender.Username == allowed {
+			return true
+		}
 	}
 
 	// Match compound sender format against allowed parts
