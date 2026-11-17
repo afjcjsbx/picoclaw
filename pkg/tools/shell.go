@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"math"
 	"os"
@@ -648,7 +647,7 @@ func boolArg(args map[string]any, key string) bool {
 }
 
 func (t *ExecTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
-	return t.execute(ctx, args, false)
+	return t.execute(ctx, args, false, nil)
 }
 
 // executeScheduled runs a command for an already-authorized cron job. CronTool
@@ -657,10 +656,10 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 // (deny patterns, hardline rules, risk checks, and allow patterns) still
 // applies.
 func (t *ExecTool) executeScheduled(ctx context.Context, args map[string]any) *ToolResult {
-	return t.execute(ctx, args, true)
+	return t.execute(ctx, args, true, nil)
 }
 
-func (t *ExecTool) execute(ctx context.Context, args map[string]any, scheduled bool) *ToolResult {
+func (t *ExecTool) execute(ctx context.Context, args map[string]any, scheduled bool, cb AsyncCallback) *ToolResult {
 	action, _ := args["action"].(string)
 	if action == "" {
 		return ErrorResult("action is required")
@@ -681,7 +680,7 @@ func (t *ExecTool) execute(ctx context.Context, args map[string]any, scheduled b
 
 	switch action {
 	case "run":
-		return t.executeRun(ctx, args)
+		return t.executeRun(ctx, args, cb)
 	case "list":
 		return t.executeList(ctx)
 	case "poll":
@@ -703,45 +702,15 @@ func (t *ExecTool) execute(ctx context.Context, args map[string]any, scheduled b
 
 // ExecuteAsync installs the completion callback for runs that return a
 // session, including foreground calls promoted to background. The callback is
-// stored even when notify is false so repeated silent poll/wait calls can
-// promote the session to notify-on-complete later.
+// installed before the run returns, so a process that exits immediately cannot
+// lose its notification. The callback is also stored with notify=false so
+// repeated silent poll/wait calls can promote the session later.
 func (t *ExecTool) ExecuteAsync(
 	ctx context.Context,
 	args map[string]any,
 	cb AsyncCallback,
 ) *ToolResult {
-	result := t.Execute(ctx, args)
-	if result == nil || result.IsError || cb == nil {
-		return result
-	}
-	if action, _ := args["action"].(string); action != "run" {
-		return result
-	}
-
-	var resp ExecResponse
-	if err := json.Unmarshal([]byte(result.ForLLM), &resp); err != nil || resp.SessionID == "" {
-		return result
-	}
-	session, err := t.sessionManager.Get(resp.SessionID)
-	if err != nil {
-		return result
-	}
-	session.SetCompletion(func() {
-		cb(context.Background(), t.completionResult(session))
-	})
-	if boolArg(args, "notify") && session.StartNotify() {
-		// Only advertise the notification after the watcher is armed. Direct
-		// Execute calls have no callback, so they must not promise one.
-		if resp.Note == "" {
-			resp.Note = notifyEnabledNote
-		} else {
-			resp.Note += " " + notifyEnabledNote
-		}
-		if data, err := json.Marshal(resp); err == nil {
-			result.ForLLM = string(data)
-		}
-	}
-	return result
+	return t.execute(ctx, args, false, cb)
 }
 
 func (t *ExecTool) completionResult(session *ProcessSession) *ToolResult {
@@ -793,7 +762,7 @@ func (t *ExecTool) completionResult(session *ProcessSession) *ToolResult {
 // spills oversized results to an artifact that keeps the raw output on disk,
 // and the agent loop then replaces known secrets in the model-facing content
 // with [FILTERED] (tools.filter_sensitive_data).
-func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolResult {
+func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb AsyncCallback) *ToolResult {
 	command, ok := args["command"].(string)
 	if !ok {
 		return ErrorResult("command is required")
@@ -957,7 +926,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 	}
 
 	if isBackground {
-		return t.runBackground(ctx, command, cwd, isPty, backgroundNote, notify)
+		return t.runBackground(ctx, command, cwd, isPty, backgroundNote, notify, cb)
 	}
 	if promoteToBackground {
 		return t.runBackground(
@@ -967,6 +936,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 			isPty,
 			t.foregroundPromotionNote(timeoutDisabled, timeout),
 			notify,
+			cb,
 		)
 	}
 

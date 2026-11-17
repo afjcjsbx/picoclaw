@@ -23,6 +23,15 @@ import (
 	"github.com/sipeed/picoclaw/pkg/tools/shellguard"
 )
 
+// withNote appends one model-facing note to another without leaving a double
+// space when the first one is empty.
+func withNote(base, add string) string {
+	if base == "" {
+		return add
+	}
+	return base + " " + add
+}
+
 // foregroundPromotionNote explains why a requested foreground timeout was
 // turned into a tracked background session.
 func (t *ExecTool) foregroundPromotionNote(timeoutDisabled bool, timeout time.Duration) string {
@@ -482,6 +491,7 @@ func (t *ExecTool) runBackground(
 	ptyEnabled bool,
 	note string,
 	notify bool,
+	cb AsyncCallback,
 ) *ToolResult {
 	sessionID := generateSessionID()
 	session := &ProcessSession{
@@ -637,14 +647,25 @@ func (t *ExecTool) runBackground(
 		}()
 	}
 
-	if !notify {
-		const silentHint = "No completion notification is enabled for this background session; " +
-			"use action=wait, poll, read, or kill, or start bounded jobs with notify=true."
-		if note == "" {
-			note = silentHint
-		} else {
-			note += " " + silentHint
+	// Install the completion callback before returning the session, so a
+	// process that exits immediately cannot lose its notification. The
+	// callback is stored even when notify is false, so a later poll/wait can
+	// promote the session to notify-on-complete.
+	const silentHint = "No completion notification is enabled for this background session; " +
+		"use action=wait, poll, read, or kill, or start bounded jobs with notify=true."
+	notified := false
+	if cb != nil {
+		session.SetCompletion(func() {
+			cb(context.Background(), t.completionResult(session))
+		})
+		if notify {
+			notified = session.StartNotify()
 		}
+	}
+	if notified {
+		note = withNote(note, notifyEnabledNote)
+	} else if !notify {
+		note = withNote(note, silentHint)
 	}
 
 	resp := ExecResponse{
