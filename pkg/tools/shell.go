@@ -545,33 +545,54 @@ func (t *ExecTool) Description() string {
 }
 
 func buildExecDescription() string {
+	return execDescriptionFor(runtime.GOOS)
+}
+
+// execDescriptionFor renders the description for one OS. Windows gets its own
+// wording because PowerShell has no && and no trailing-& backgrounding, so
+// teaching those forms would send the model into rejected commands.
+func execDescriptionFor(goos string) string {
+	osName := goos
 	shell := "sh"
-	chainGuidance := "If commands depend on each other, chain them with && so a failure stops the sequence."
-	ampersandGuidance := " A trailing '&' is normalized to background=true."
-	if runtime.GOOS == "windows" {
+	sessionGuidance := "Use `pty=true` for interactive programs. Trailing `&` implies background. " +
+		"Never detach untracked processes via `nohup`, `setsid` or `disown`."
+	chainGuidance := "chain dependent ones with `&&`."
+	if goos == "windows" {
 		shell = "PowerShell"
-		chainGuidance = "PowerShell does not support &&; use cmd1; if ($?) { cmd2 } when cmd2 depends on cmd1 succeeding."
-		ampersandGuidance = ""
+		sessionGuidance = "PTY mode is not supported on Windows. Do not start untracked background processes."
+		chainGuidance = "PowerShell has no `&&`, so use `cmd1; if ($?) { cmd2 }`."
+	} else if goos == "darwin" {
+		osName = "macOS"
 	}
 
 	capSeconds := int64(maxForegroundTimeout / time.Second)
-	return fmt.Sprintf(`Executes shell commands with PicoClaw's safety guards. OS: %s. Shell: %s.
-
-Every foreground call starts a fresh shell in the configured working directory; pass cwd instead of using cd. For file operations, prefer list_dir, search_files, read_file, edit_file and write_file over cat, grep, find, ls, sed and echo/heredoc.
-
-The child environment is sanitized: only safe variables and the operator's allowlist are inherited. Set extra variables in the command itself, for example FOO=bar command.
-
-Within a conversation, the last cwd observed after a foreground command is remembered and reused when cwd is omitted.
-
-Foreground results start with a one-line [exec] {...} header (exitCode, timedOut, truncated, totalBytes, omittedBytes, artifactPath, durationMs, error, cwd, exitNote), then raw stdout/stderr. When truncated is true, totalBytes and omittedBytes size the full stream against the inline view, and artifactPath points at the full output. On Unix, a null exitCode means the direct child was killed by a signal; shells may also report 128+N (137 = SIGKILL, often the OOM killer; 143 = SIGTERM). Treat signal deaths as failed runs, not normal non-zero exits. Non-zero exit codes can be normal: grep returns 1 for no match and diff returns 1 for differences.
-
-Oversized output is truncated automatically and the full stream is saved as an artifact; use artifactPath from the header with read_file when you need the omitted middle, instead of piping through head/tail or re-running the command.
-
-action=run requires command. timeout is in seconds. Foreground runs are capped at %ds: timeout=0 or any value above the cap starts a tracked background session instead and returns its sessionId. timeout is not supported with background=true.
-
-Use background=true only when the command must outlive the call. It returns a sessionId.%s Use list to inspect sessions, poll for a non-blocking preview, wait to block until exit, read for non-destructive offset/limit byte ranges (defaults to the most recent bytes), write for stdin, send-keys for PTY keys, and kill to terminate. Prefer wait over polling; notify=true sends a completion message. Use pty=true for interactive programs (not supported on Windows). Do not background only part of a command or use nohup/setsid/disown in the foreground: untracked detaching is rejected.
-
-Run independent commands in separate calls; %s Do not separate commands with newlines.`, runtime.GOOS, shell, capSeconds, ampersandGuidance, chainGuidance)
+	return strings.Join([]string{
+		fmt.Sprintf("Executes shell commands with PicoClaw safety guards. OS: %s; shell: %s.", osName, shell),
+		"",
+		"Each foreground call starts a fresh shell in the remembered cwd (use `cwd`, not `cd`). Prefer `list_dir`, `search_files`, `read_file`, `edit_file`, `write_file` over shell equivalents.",
+		"",
+		"Environment is sanitized; only safe and allowlisted variables are inherited. Set extras inline (`FOO=bar cmd`).",
+		"",
+		"Results contain `[exec]` metadata (exitCode, timedOut, truncated, totalBytes, omittedBytes, artifactPath, durationMs, error), then stdout/stderr. When truncated, totalBytes/omittedBytes size the full stream and artifactPath points at it. Null exitCode means signal termination; 128+N may also indicate signals (137=SIGKILL, 143=SIGTERM). Treat these as failures. Some non-zero codes are normal (grep:1=no match; diff:1=differences).",
+		"",
+		"Truncated output is saved as an artifact; use `read_file` on `artifactPath` instead of re-running the command.",
+		"",
+		fmt.Sprintf(
+			"`run` requires `command`. Timeout is in seconds; foreground max is %ds. "+
+				"`timeout=0` or above %ds starts a tracked background session. "+
+				"`timeout` and `background=true` are incompatible.",
+			capSeconds, capSeconds,
+		),
+		"",
+		fmt.Sprintf(
+			"Use background only when needed; it returns `sessionId`. "+
+				"Use `list`, `poll`, `wait` (preferred; `notify=true` alerts on completion), "+
+				"`read` (byte offset/limit), `write` (stdin), `send-keys` or `kill`. %s",
+			sessionGuidance,
+		),
+		"",
+		"Run independent commands separately; " + chainGuidance + " Avoid newline-separated commands.",
+	}, "\n")
 }
 
 var execActions = []string{"run", "list", "poll", "wait", "read", "write", "kill", "send-keys"}
