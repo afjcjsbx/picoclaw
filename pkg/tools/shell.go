@@ -411,11 +411,11 @@ func (t *ExecTool) Parameters() map[string]any {
 				"description": "Data to write to stdin (required for write)",
 			},
 			"background": map[string]any{
-				"type":        "string",
+				"type":        "boolean",
 				"description": "Run in background immediately",
 			},
 			"pty": map[string]any{
-				"type":        "string",
+				"type":        "boolean",
 				"description": "Run in a pseudo-terminal (PTY) when available",
 			},
 			"cwd": map[string]any{
@@ -443,6 +443,9 @@ func (t *ExecTool) Parameters() map[string]any {
 	}
 }
 
+// boolArg reads a boolean flag. The schema declares these fields as booleans,
+// but the string branch keeps calls working for models that still emit the
+// "true"/"false" form the schema used to advertise.
 func boolArg(args map[string]any, key string) bool {
 	switch v := args[key].(type) {
 	case bool:
