@@ -2,7 +2,7 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -20,8 +20,10 @@ import (
 	"github.com/sipeed/picoclaw/pkg/tools/shellguard"
 )
 
-// maxOutputBufferSize caps the rolling output retained per session.
-const maxOutputBufferSize = 1 * 1024 * 1024 // 1MB
+// maxOutputBufferSize caps the rolling output retained in memory per session.
+// The full stream spills to an artifact once it overflows, so a low-resource
+// host keeps only a small tail per background process.
+const maxOutputBufferSize = 100 * 1024 // 100KB
 
 // maxForegroundTimeout caps how long a single foreground exec call may block.
 // Requests above it are promoted to a tracked background session instead of
@@ -77,12 +79,14 @@ type ExecTool struct {
 	maxOutputChars       int
 	maxInlineResultChars int
 	baseEnv              map[string]string
+	baseEnvList          []string
 	state                *execStateStore
 	sessionManager       *SessionManager
 	riskGuard            *shellguard.Guard
 	approvalEnabled      bool
 	approvalThreshold    shellguard.RiskLevel
 	approvalReviewer     approvalReviewer
+	blockBreaker         *execBlockBreaker
 }
 
 var _ AsyncExecutor = (*ExecTool)(nil)
@@ -388,7 +392,9 @@ func NewExecToolWithConfig(
 	customRiskAllowPatterns := make([]*regexp.Regexp, 0)
 	riskAllowThreshold := shellguard.RiskMedium
 	var allowedPathPatterns []*regexp.Regexp
-	allowRemote := true
+	// Fail closed when no config is supplied. Callers that need remote exec
+	// must opt in explicitly through cfg.Tools.Exec.AllowRemote.
+	allowRemote := false
 	enableDefaultGuard := true
 	approvalConfig := config.ApprovalsConfig{}
 	if len(allowPaths) > 0 {
@@ -500,6 +506,7 @@ func NewExecToolWithConfig(
 	hardlinePatterns = append(hardlinePatterns, hardlineDenyPatterns...)
 	hardlinePatterns = append(hardlinePatterns, selfProtectionHardlinePatterns()...)
 
+	baseEnv := newExecEnv(workingDir, execEnvSet, execEnvAllowlist)
 	return &ExecTool{
 		workingDir:              workingDir,
 		timeout:                 timeout,
@@ -516,13 +523,15 @@ func NewExecToolWithConfig(
 		allowRemote:             allowRemote,
 		maxOutputChars:          maxOutputChars,
 		maxInlineResultChars:    maxInlineResultChars,
-		baseEnv:                 newExecEnv(workingDir, execEnvSet, execEnvAllowlist),
+		baseEnv:                 baseEnv,
+		baseEnvList:             buildEnvList(baseEnv),
 		state:                   newExecStateStore(),
 		sessionManager:          getSessionManager(),
 		riskGuard:               riskGuard,
 		approvalEnabled:         smartApprovals,
 		approvalThreshold:       approvalThreshold(approvalConfig.SmartThreshold),
 		approvalReviewer:        reviewer,
+		blockBreaker:            newExecBlockBreaker(),
 	}, nil
 }
 
@@ -538,33 +547,54 @@ func (t *ExecTool) Description() string {
 }
 
 func buildExecDescription() string {
+	return execDescriptionFor(runtime.GOOS)
+}
+
+// execDescriptionFor renders the description for one OS. Windows gets its own
+// wording because PowerShell has no && and no trailing-& backgrounding, so
+// teaching those forms would send the model into rejected commands.
+func execDescriptionFor(goos string) string {
+	osName := goos
 	shell := "sh"
-	chainGuidance := "If commands depend on each other, chain them with && so a failure stops the sequence."
-	ampersandGuidance := " A trailing '&' is normalized to background=true."
-	if runtime.GOOS == "windows" {
+	sessionGuidance := "Use `pty=true` for interactive programs. Trailing `&` implies background. " +
+		"Never detach untracked processes via `nohup`, `setsid` or `disown`."
+	chainGuidance := "chain dependent ones with `&&`."
+	if goos == "windows" {
 		shell = "PowerShell"
-		chainGuidance = "PowerShell does not support &&; use cmd1; if ($?) { cmd2 } when cmd2 depends on cmd1 succeeding."
-		ampersandGuidance = ""
+		sessionGuidance = "PTY mode is not supported on Windows. Do not start untracked background processes."
+		chainGuidance = "PowerShell has no `&&`, so use `cmd1; if ($?) { cmd2 }`."
+	} else if goos == "darwin" {
+		osName = "macOS"
 	}
 
 	capSeconds := int64(maxForegroundTimeout / time.Second)
-	return fmt.Sprintf(`Executes shell commands with PicoClaw's safety guards. OS: %s. Shell: %s.
-
-Every foreground call starts a fresh shell in the configured working directory; pass cwd instead of using cd. For file operations, prefer list_dir, search_files, read_file, edit_file and write_file over cat, grep, find, ls, sed and echo/heredoc.
-
-The child environment is sanitized: only safe variables and the operator's allowlist are inherited. Use the env argument for additional non-sensitive variables instead of relying on the parent environment.
-
-Within a conversation, the last explicit cwd and env values are remembered and reused when omitted. They do not capture cd or export executed inside a command. Pass env: {} to clear remembered variables.
-
-Foreground results start with a one-line [exec] {...} header (exitCode, timedOut, truncated, durationMs, error), then raw stdout/stderr. Non-zero exit codes can be normal: grep returns 1 for no match and diff returns 1 for differences.
-
-Oversized output is truncated automatically and the full stream is saved as an artifact; use the artifact path in the result with read_file when you need the omitted middle, instead of piping through head/tail or re-running the command.
-
-action=run requires command. timeout is in seconds. Foreground runs are capped at %ds: timeout=0 or any value above the cap starts a tracked background session instead and returns its sessionId. timeout is not supported with background=true.
-
-Use background=true only when the command must outlive the call. It returns a sessionId.%s Use list to inspect sessions, poll for a non-blocking preview, wait to block until exit, read for non-destructive offset/limit byte ranges (defaults to the most recent bytes), write for stdin, send-keys for PTY keys, and kill to terminate. Prefer wait over polling; notify=true sends a completion message. Use pty=true for interactive programs (not supported on Windows).
-
-Run independent commands in separate calls; %s Do not separate commands with newlines.`, runtime.GOOS, shell, capSeconds, ampersandGuidance, chainGuidance)
+	return strings.Join([]string{
+		fmt.Sprintf("Executes shell commands with PicoClaw safety guards. OS: %s; shell: %s.", osName, shell),
+		"",
+		"Each foreground call starts a fresh shell in the remembered cwd (use `cwd`, not `cd`). Prefer `list_dir`, `search_files`, `read_file`, `edit_file`, `write_file` over shell equivalents.",
+		"",
+		"Environment is sanitized; only safe and allowlisted variables are inherited. Set extras inline (`FOO=bar cmd`).",
+		"",
+		"Results contain `[exec]` metadata (exitCode, timedOut, truncated, durationMs, error), then stdout/stderr. Null exitCode means signal termination; 128+N may also indicate signals (137=SIGKILL, 143=SIGTERM). Treat these as failures. Some non-zero codes are normal (grep:1=no match; diff:1=differences).",
+		"",
+		"Truncated output is saved as an artifact; use `read_file` on its path.",
+		"",
+		fmt.Sprintf(
+			"`run` requires `command`. Timeout is in seconds; foreground max is %ds. "+
+				"`timeout=0` or above %ds starts a tracked background session. "+
+				"`timeout` and `background=true` are incompatible.",
+			capSeconds, capSeconds,
+		),
+		"",
+		fmt.Sprintf(
+			"Use background only when needed; it returns `sessionId`. "+
+				"Use `list`, `poll`, `wait` (preferred; `notify=true` alerts on completion), "+
+				"`read` (byte offset/limit), `write` (stdin), `send-keys` or `kill`. %s",
+			sessionGuidance,
+		),
+		"",
+		"Run independent commands separately; " + chainGuidance + " Avoid newline-separated commands.",
+	}, "\n")
 }
 
 var execActions = []string{"run", "list", "poll", "wait", "read", "write", "kill", "send-keys"}
@@ -595,27 +625,16 @@ func (t *ExecTool) Parameters() map[string]any {
 				"description": "Data to write to stdin (required for write)",
 			},
 			"background": map[string]any{
-				"type":        "string",
+				"type":        "boolean",
 				"description": "Run in background immediately",
 			},
 			"pty": map[string]any{
-				"type":        "string",
+				"type":        "boolean",
 				"description": "Run in a pseudo-terminal (PTY) when available",
 			},
 			"cwd": map[string]any{
 				"type":        "string",
 				"description": "Working directory for the command. The last explicit value is remembered for later calls in the same conversation; omit cwd to reuse it. Defaults to the agent workspace when no value is remembered.",
-			},
-			"env": map[string]any{
-				"type": "object",
-				"description": "Additional environment variables for this command; keys are variable names and values must be strings. " +
-					"The map is remembered for later calls in the same conversation and merged with new entries; pass an empty object to clear remembered variables. " +
-					"The inherited environment is sanitized: only safe variables (PATH, HOME, USER, LANG, SHELL, TERM, PWD, TZ, " +
-					"proxy and locale variables) plus tools.exec.env_set and tools.exec.env_allowlist are passed through. " +
-					"Cannot override PATH, HOME, USER, LOGNAME, SHELL, LD_PRELOAD, LD_LIBRARY_PATH, LD_AUDIT, LD_DEBUG, " +
-					"or any PICOCLAW_* variable. Read-only PICOCLAW_* variables: PICOCLAW_HOME, PICOCLAW_CONFIG, " +
-					"PICOCLAW_AGENT_WORKSPACE, PICOCLAW_EXE, PICOCLAW_SERVICE_NAME, PICOCLAW_EXEC_TIME (RFC3339), " +
-					"PICOCLAW_EXEC_TIMEOUT.",
 			},
 			"timeout": map[string]any{
 				"type": "integer",
@@ -641,6 +660,9 @@ func (t *ExecTool) Parameters() map[string]any {
 	}
 }
 
+// boolArg reads a boolean flag. The schema declares these fields as booleans,
+// but the string branch keeps calls working for models that still emit the
+// "true"/"false" form the schema used to advertise.
 func boolArg(args map[string]any, key string) bool {
 	switch v := args[key].(type) {
 	case bool:
@@ -651,29 +673,70 @@ func boolArg(args map[string]any, key string) bool {
 	return false
 }
 
+// numberArg reads an optional integer JSON number. JSON tool arguments decode
+// every number as float64, so a fractional value is rejected. valid is false
+// only when the key is present and is not an integer >= min.
+func numberArg(args map[string]any, key string, minimum float64) (value float64, provided, valid bool) {
+	raw, ok := args[key]
+	if !ok {
+		return 0, false, true
+	}
+	value, ok = raw.(float64)
+	if !ok || value != math.Trunc(value) || value < minimum {
+		return 0, true, false
+	}
+	return value, true, true
+}
+
 func (t *ExecTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	return t.execute(ctx, args, false, nil)
+}
+
+// executeScheduled runs a command for an already-authorized cron job. CronTool
+// has already checked tools.cron.command_allowed_remotes; this bypasses only
+// the interactive remote-channel gate for a run action. Every command guard
+// (deny patterns, hardline rules, risk checks, and allow patterns) still
+// applies.
+func (t *ExecTool) executeScheduled(ctx context.Context, args map[string]any) *ToolResult {
+	return t.execute(ctx, args, true, nil)
+}
+
+func (t *ExecTool) execute(ctx context.Context, args map[string]any, scheduled bool, cb AsyncCallback) *ToolResult {
 	action, _ := args["action"].(string)
 	if action == "" {
 		return ErrorResult("action is required")
 	}
 
+	// GHSA-pv8c-p6jf-3fpp: block the whole exec tool from remote channels
+	// (e.g. Telegram webhooks) unless explicitly opted-in via config. This
+	// applies to every action, not only run: list/read/poll/wait can leak
+	// session output and write/kill/send-keys can mutate internal sessions.
+	// Fail-closed: empty channel = blocked. The channel must come from the
+	// trusted tool context, never from model-controlled arguments. Scheduled
+	// cron command jobs are authorized by their own allowlist and reach this
+	// tool through executeScheduled; only their run action skips this gate.
+	scheduledRun := scheduled && action == "run"
+	if !t.allowRemote && !scheduledRun && !constants.IsInternalChannel(strings.TrimSpace(ToolChannel(ctx))) {
+		return ErrorResult("exec is restricted to internal channels")
+	}
+
 	switch action {
 	case "run":
-		return t.executeRun(ctx, args)
+		return t.executeRun(ctx, args, cb)
 	case "list":
-		return t.executeList()
+		return t.executeList(ctx)
 	case "poll":
-		return t.executePoll(args)
+		return t.executePoll(ctx, args)
 	case "wait":
 		return t.executeWait(ctx, args)
 	case "read":
-		return t.executeRead(args)
+		return t.executeRead(ctx, args)
 	case "write":
-		return t.executeWrite(args)
+		return t.executeWrite(ctx, args)
 	case "kill":
-		return t.executeKill(args)
+		return t.executeKill(ctx, args)
 	case "send-keys":
-		return t.executeSendKeys(args)
+		return t.executeSendKeys(ctx, args)
 	default:
 		return ErrorResult(fmt.Sprintf("unknown action: %s", action))
 	}
@@ -681,45 +744,15 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 
 // ExecuteAsync installs the completion callback for runs that return a
 // session, including foreground calls promoted to background. The callback is
-// stored even when notify is false so repeated silent poll/wait calls can
-// promote the session to notify-on-complete later.
+// installed before the run returns, so a process that exits immediately cannot
+// lose its notification. The callback is also stored with notify=false so
+// repeated silent poll/wait calls can promote the session later.
 func (t *ExecTool) ExecuteAsync(
 	ctx context.Context,
 	args map[string]any,
 	cb AsyncCallback,
 ) *ToolResult {
-	result := t.Execute(ctx, args)
-	if result == nil || result.IsError || cb == nil {
-		return result
-	}
-	if action, _ := args["action"].(string); action != "run" {
-		return result
-	}
-
-	var resp ExecResponse
-	if err := json.Unmarshal([]byte(result.ForLLM), &resp); err != nil || resp.SessionID == "" {
-		return result
-	}
-	session, err := t.sessionManager.Get(resp.SessionID)
-	if err != nil {
-		return result
-	}
-	session.SetCompletion(func() {
-		cb(context.Background(), t.completionResult(session))
-	})
-	if boolArg(args, "notify") && session.StartNotify() {
-		// Only advertise the notification after the watcher is armed. Direct
-		// Execute calls have no callback, so they must not promise one.
-		if resp.Note == "" {
-			resp.Note = notifyEnabledNote
-		} else {
-			resp.Note += " " + notifyEnabledNote
-		}
-		if data, err := json.Marshal(resp); err == nil {
-			result.ForLLM = string(data)
-		}
-	}
-	return result
+	return t.execute(ctx, args, false, cb)
 }
 
 func (t *ExecTool) completionResult(session *ProcessSession) *ToolResult {
@@ -740,8 +773,9 @@ func (t *ExecTool) completionResult(session *ProcessSession) *ToolResult {
 //
 //  1. Arguments: command is required and the optional env object is parsed
 //     (string values only; no empty names, "=" or NUL bytes).
-//  2. Remote gate: unless allow_remote is set, only internal channels may run
-//     exec. It fails closed, so an empty channel is rejected too.
+//  2. Remote gate: Execute rejects every action from a non-internal channel
+//     unless allow_remote is set, so a run never reaches this function from
+//     an untrusted caller.
 //  3. Normalization: a trailing unquoted '&' becomes background=true so the
 //     process is tracked. The guard still inspects the original command.
 //  4. Timeout: must be a non-negative integer. A foreground request above the
@@ -757,42 +791,23 @@ func (t *ExecTool) completionResult(session *ProcessSession) *ToolResult {
 //     workspace, risk-level and smart-approval layers (see its comment).
 //  8. Symlinks in cwd are resolved again right before execution to narrow the
 //     TOCTOU window between validation and cmd.Dir.
-//  9. State persistence: cwd and env are remembered only after the guard
-//     passed.
+//  9. State persistence: cwd is remembered only after the guard passed.
 //  10. Launch: background and promoted runs go to runBackground, which returns
 //     a sessionId; everything else goes to runSync. Both build the child env
-//     from the sanitized base (allowlisted parent variables plus env_set), the
-//     validated per-call env and PICOCLAW_EXEC_*, and start the process through
-//     the isolation layer. runSync bounds the output (head and tail, with the
-//     full stream spilled to an artifact), kills the process tree on timeout
-//     and prefixes the result with an "[exec] {...}" status header.
+//     from the sanitized base (allowlisted parent variables plus env_set) and
+//     PICOCLAW_EXEC_*, and start the process through the isolation layer.
+//     runSync bounds the output (head and tail, with the full stream spilled to
+//     an artifact), kills the process tree on timeout and prefixes the result
+//     with an "[exec] {...}" status header.
 //
 // Secret redaction is not done here. After the tool returns, the registry
 // spills oversized results to an artifact that keeps the raw output on disk,
 // and the agent loop then replaces known secrets in the model-facing content
 // with [FILTERED] (tools.filter_sensitive_data).
-func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolResult {
+func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb AsyncCallback) *ToolResult {
 	command, ok := args["command"].(string)
 	if !ok {
 		return ErrorResult("command is required")
-	}
-
-	extraEnv, envErr := execEnvFromArgs(args)
-	if envErr != nil {
-		return ErrorResult(envErr.Error())
-	}
-
-	// GHSA-pv8c-p6jf-3fpp: block exec from remote channels (e.g. Telegram webhooks)
-	// unless explicitly opted-in via config. Fail-closed: empty channel = blocked.
-	if !t.allowRemote {
-		channel := ToolChannel(ctx)
-		if channel == "" {
-			channel, _ = args["__channel"].(string)
-		}
-		channel = strings.TrimSpace(channel)
-		if channel == "" || !constants.IsInternalChannel(channel) {
-			return ErrorResult("exec is restricted to internal channels")
-		}
 	}
 
 	isPty := boolArg(args, "pty")
@@ -806,27 +821,30 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 	// matches a trailing '&'.
 	guardedCommand := command
 
+	// Parse once. The trailing-'&' converter, detach check, command guard and
+	// exit note all consume the same AST instead of re-parsing the text.
+	analysis := shellguard.Analyze(guardedCommand)
+
 	// On Unix, `sh -c "server &"` returns as soon as the job starts: a
 	// foreground call would report success while the process keeps running
 	// untracked and its output pipe is closed. Normalize the trailing operator
 	// into a tracked background session instead. Windows shells do not use '&'
 	// as a background operator, so the helper is a no-op there.
-	if normalized, converted := normalizeTrailingBackgroundAmpersand(command, runtime.GOOS); converted {
+	trailingConverted := false
+	if normalized, converted := normalizeTrailingBackgroundAmpersand(command, analysis, runtime.GOOS); converted {
+		trailingConverted = true
 		command = normalized
 		if !isBackground {
 			isBackground = true
-			backgroundNote = "Trailing '&' was converted to background=true so the process is tracked. " +
-				"Use action=wait, poll, read, or kill with this sessionId."
+			backgroundNote = "Trailing '&' was converted to background=true so the process is tracked."
 		}
 	}
 
 	timeout := t.timeout
 	timeoutDisabled := false
-	if raw, ok := args["timeout"]; ok {
+	if value, provided, valid := numberArg(args, "timeout", 0); provided {
 		const maxTimeoutSeconds = (1<<63 - 1) / int64(time.Second)
-		// JSON tool arguments always decode numbers as float64.
-		value, isNumber := raw.(float64)
-		if !isNumber || value != math.Trunc(value) || value < 0 || value > float64(maxTimeoutSeconds) {
+		if !valid || value > float64(maxTimeoutSeconds) {
 			return ErrorResult("timeout must be a non-negative integer number of seconds")
 		}
 		seconds := int64(value)
@@ -852,6 +870,15 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 	promoteToBackground := !isBackground && t.foregroundCap > 0 &&
 		(timeoutDisabled || timeout > t.foregroundCap)
 
+	// A foreground nohup/setsid/disown or an inner '&' leaves a process the
+	// session manager cannot track. The trailing '&' converter above already
+	// turned the unambiguous single-operator form into a tracked run.
+	if reason := untrackedDetachReason(
+		command, analysis, isBackground || promoteToBackground, trailingConverted,
+	); reason != "" {
+		return ErrorResult(reason)
+	}
+
 	if isPty {
 		if runtime.GOOS == "windows" {
 			return ErrorResult("PTY is not supported on Windows. Use background=true without pty.")
@@ -862,8 +889,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 		return ErrorResult("notify is only supported with background=true or when the run is promoted to background")
 	}
 
-	savedCwd, savedEnv := t.state.load(ctx)
-	effectiveEnv, stateEnv, envProvided := mergeExecStateEnv(savedEnv, extraEnv)
+	savedCwd := t.state.load(ctx)
 
 	requestedCwd, cwdProvided := args["cwd"].(string)
 	cwdProvided = cwdProvided && requestedCwd != ""
@@ -881,9 +907,9 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 	}
 
 	if cwdProvided && t.restrictToWorkspace && t.workingDir != "" {
-		resolvedWD, err := fstools.ValidatePathWithAllowPaths(cwd, t.workingDir, true, t.allowedPathPatterns)
+		resolvedWD, err := t.validateCwd(cwd)
 		if err != nil {
-			return ErrorResult("Command blocked by safety guard (" + err.Error() + ")")
+			return t.blockedResult(ctx, command, "Command blocked by safety guard ("+err.Error()+")")
 		}
 		cwd = resolvedWD
 	}
@@ -901,48 +927,33 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 	// path would fail validation on the next call.
 	stateCwd := cwd
 
-	if guardError := t.guardCommandContext(ctx, guardedCommand, cwd); guardError != "" {
-		return ErrorResult(guardError)
+	if guardError := t.guardCommandWithAnalysis(ctx, guardedCommand, cwd, analysis); guardError != "" {
+		return t.blockedResult(ctx, command, guardError)
 	}
 
 	// Re-resolve symlinks immediately before execution to shrink the TOCTOU window
 	// between validation and cmd.Dir assignment.
 	if t.restrictToWorkspace && t.workingDir != "" && cwd != t.workingDir {
-		resolved, err := filepath.EvalSymlinks(cwd)
+		resolved, err := t.revalidateCwdForExecution(cwd)
 		if err != nil {
 			if rememberedCwd {
 				t.forgetRememberedCwd(ctx, cwd, err)
 			}
-			return ErrorResult(fmt.Sprintf("Command blocked by safety guard (path resolution failed: %v)", err))
+			return t.blockedResult(ctx, command, "Command blocked by safety guard ("+err.Error()+")")
 		}
-		if fstools.IsAllowedPath(resolved, t.allowedPathPatterns) {
-			cwd = resolved
-		} else {
-			absWorkspace, _ := filepath.Abs(t.workingDir)
-			wsResolved, _ := filepath.EvalSymlinks(absWorkspace)
-			if wsResolved == "" {
-				wsResolved = absWorkspace
-			}
-			if !fstools.IsWithinWorkspace(resolved, wsResolved) {
-				if rememberedCwd {
-					t.forgetRememberedCwd(ctx, cwd, fmt.Errorf("working directory escaped workspace"))
-				}
-				return ErrorResult("Command blocked by safety guard (working directory escaped workspace)")
-			}
-			cwd = resolved
-		}
+		cwd = resolved
 	}
 
-	// Persist only arguments that passed validation and the command guard.
+	// Persist only a cwd that passed validation and the command guard.
 	if cwdProvided && stateCwd != "" {
 		t.rememberCwd(ctx, stateCwd)
 	}
-	if envProvided && t.state != nil {
-		t.state.storeEnv(ctx, stateEnv)
-	}
+
+	// Any allowed run breaks the blocked-command streak.
+	t.blockBreaker.reset(ctx)
 
 	if isBackground {
-		return t.runBackground(ctx, command, cwd, isPty, backgroundNote, effectiveEnv)
+		return t.runBackground(ctx, command, cwd, isPty, backgroundNote, notify, cb)
 	}
 	if promoteToBackground {
 		return t.runBackground(
@@ -951,11 +962,84 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 			cwd,
 			isPty,
 			t.foregroundPromotionNote(timeoutDisabled, timeout),
-			effectiveEnv,
+			notify,
+			cb,
 		)
 	}
 
-	return t.runSync(ctx, command, cwd, timeout, effectiveEnv)
+	return t.runSync(ctx, command, cwd, timeout, analysis)
+}
+
+// resolvedWorkspace returns the workspace with symlinks resolved, so paths
+// produced by `pwd -P` compare correctly on systems where the workspace itself
+// lives behind a symlink (for example /var -> /private/var on macOS).
+func (t *ExecTool) resolvedWorkspace() string {
+	workspace := t.workingDir
+	if abs, err := filepath.Abs(workspace); err == nil {
+		workspace = abs
+	}
+	if resolved, err := filepath.EvalSymlinks(workspace); err == nil {
+		workspace = resolved
+	}
+	return workspace
+}
+
+// cwdWithinPolicy reports whether a symlink-resolved directory is inside the
+// resolved workspace or matches an explicit allowed path. Execution re-checks
+// and the initial cwd validation share this predicate so they cannot drift.
+func (t *ExecTool) cwdWithinPolicy(resolved string) bool {
+	return fstools.IsAllowedPath(resolved, t.allowedPathPatterns) ||
+		fstools.IsWithinWorkspace(resolved, t.resolvedWorkspace())
+}
+
+// revalidateCwdForExecution re-resolves symlinks right before the command
+// starts, so a directory validated earlier cannot be swapped for one that
+// escapes the workspace.
+func (t *ExecTool) revalidateCwdForExecution(cwd string) (string, error) {
+	resolved, err := filepath.EvalSymlinks(cwd)
+	if err != nil {
+		return "", fmt.Errorf("path resolution failed: %w", err)
+	}
+	if !t.cwdWithinPolicy(resolved) {
+		return "", errors.New("working directory escaped workspace")
+	}
+	return resolved, nil
+}
+
+// validateCwd applies the workspace and allow-path policy to a cwd. It tries
+// the symlink-resolved form first so a workspace behind /var -> /private/var
+// and a path reported by `pwd -P` compare correctly; the original pair is the
+// fallback for operator allow patterns that name the unresolved path.
+func (t *ExecTool) validateCwd(cwd string) (string, error) {
+	if !t.restrictToWorkspace || t.workingDir == "" {
+		return cwd, nil
+	}
+	candidate := cwd
+	if resolved, err := filepath.EvalSymlinks(candidate); err == nil {
+		candidate = resolved
+	}
+	if validated, err := fstools.ValidatePathWithAllowPaths(
+		candidate, t.resolvedWorkspace(), true, t.allowedPathPatterns,
+	); err == nil {
+		return validated, nil
+	}
+	return fstools.ValidatePathWithAllowPaths(cwd, t.workingDir, true, t.allowedPathPatterns)
+}
+
+// acceptObservedCwd reports whether the cwd observed after a command is a real
+// directory that the workspace policy allows. The observed path is used for
+// the result header even when it is rejected, but only accepted paths are
+// remembered for the next call.
+func (t *ExecTool) acceptObservedCwd(cwd string) bool {
+	if cwd == "" || !filepath.IsAbs(cwd) {
+		return false
+	}
+	info, err := os.Stat(cwd)
+	if err != nil || !info.IsDir() {
+		return false
+	}
+	_, err = t.validateCwd(cwd)
+	return err == nil
 }
 
 // rememberedCwd revalidates a cwd stored for the conversation. It returns
@@ -967,7 +1051,7 @@ func (t *ExecTool) rememberedCwd(ctx context.Context, cwd string) (string, bool)
 	}
 	resolved := cwd
 	if t.restrictToWorkspace && t.workingDir != "" {
-		validated, err := fstools.ValidatePathWithAllowPaths(cwd, t.workingDir, true, t.allowedPathPatterns)
+		validated, err := t.validateCwd(cwd)
 		if err != nil {
 			t.forgetRememberedCwd(ctx, cwd, err)
 			return "", false

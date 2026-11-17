@@ -8,8 +8,6 @@ import (
 	"runtime"
 	"strings"
 
-	"mvdan.cc/sh/v3/syntax"
-
 	fstools "github.com/sipeed/picoclaw/pkg/tools/fs"
 	"github.com/sipeed/picoclaw/pkg/tools/shellguard"
 )
@@ -52,10 +50,6 @@ func patternsMatchAny(patterns []*regexp.Regexp, forms []string) bool {
 	return false
 }
 
-func (t *ExecTool) guardCommand(command, cwd string) string {
-	return t.guardCommandContext(context.Background(), command, cwd)
-}
-
 // guardCommandContext decides whether a command may run. It returns "" to
 // allow it, or the block message. Layers run from the least to the most
 // configurable, and the first one that rejects wins:
@@ -81,11 +75,20 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 //     approvals.smart_threshold (and unknown ones) are reviewed by the Guardian
 //     model. APPROVE runs the command; DENY, ESCALATE and any error block it.
 func (t *ExecTool) guardCommandContext(ctx context.Context, command, cwd string) string {
+	return t.guardCommandWithAnalysis(ctx, command, cwd, shellguard.Analyze(strings.TrimSpace(command)))
+}
+
+// guardCommandWithAnalysis is guardCommandContext with a parse the caller
+// already owns, so a run does not parse the same command twice.
+func (t *ExecTool) guardCommandWithAnalysis(
+	ctx context.Context, command, cwd string, analysis shellguard.Analysis,
+) string {
 	cmd := strings.TrimSpace(command)
 	lower := strings.ToLower(cmd)
 	// Quoted heredoc bodies are literal text: a backtick there cannot run a
-	// command, so deny patterns must not inspect it.
-	stripped := shellguard.StripQuotedHeredocBodies(cmd)
+	// command, so deny patterns must not inspect it. The caller parsed the
+	// untrimmed command, so trim the stripped view like before.
+	stripped := strings.TrimSpace(analysis.StrippedHeredoc)
 	lowerForDeny := strings.ToLower(stripped)
 	denyForms := []string{lowerForDeny}
 
@@ -96,7 +99,13 @@ func (t *ExecTool) guardCommandContext(ctx context.Context, command, cwd string)
 	// independent of enable_deny_patterns.
 	if runtime.GOOS != "windows" {
 		lowerForDeny = strings.ToLower(shellguard.NormalizeForDeny(stripped))
-		canonicalForms := shellguard.CanonicalCommands(cmd)
+		canonicalForms := analysis.Canonical
+		if !analysis.CanonicalExact {
+			// Fixed rewrites such as $IFS change word boundaries, so the
+			// written-form AST is not authoritative; re-parse the normalized
+			// text only for those rare commands.
+			canonicalForms = shellguard.CanonicalCommands(cmd)
+		}
 		denyForms = make([]string, 0, 1+len(canonicalForms))
 		denyForms = append(denyForms, lowerForDeny)
 		// Canonicalize every command, not just ones with quoting: wrappers
@@ -146,11 +155,9 @@ func (t *ExecTool) guardCommandContext(ctx context.Context, command, cwd string)
 		}
 	}
 
-	// The workspace and risk passes both need an AST. Parse the written command
-	// once here and share it when the workspace pass does not need a normalized
-	// re-parse. The parse is attempted at most once per guard call.
-	var parsed *syntax.File
-	parsedAttempted := false
+	// The workspace and risk passes share the same AST. CheckWorkspaceFile
+	// re-parses only when fixed shell rewrites changed the word boundaries.
+	parsed := analysis.File
 
 	if t.restrictToWorkspace {
 		// The AST pass understands ... components, but these dotted variants
@@ -181,8 +188,6 @@ func (t *ExecTool) guardCommandContext(ctx context.Context, command, cwd string)
 				return blocked
 			}
 		} else {
-			parsed, _ = shellguard.Parse(cmd)
-			parsedAttempted = true
 			policy := shellguard.WorkspacePolicy{
 				Cwd:    cwdPath,
 				Home:   t.execHomeDir(),
@@ -206,9 +211,6 @@ func (t *ExecTool) guardCommandContext(ctx context.Context, command, cwd string)
 	// Script files are inspected only inside the workspace: Dir resolves relative
 	// paths and Root bounds what the guard is willing to read.
 	if t.riskGuard != nil {
-		if !parsedAttempted {
-			parsed, _ = shellguard.Parse(cmd)
-		}
 		root := t.workingDir
 		if root == "" {
 			root = cwd

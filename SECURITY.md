@@ -19,7 +19,7 @@ There is no formal support window. Use the latest release, and include the affec
 - Keep API keys, channel tokens, and other credentials in `~/.picoclaw/.security.yml` or environment variables where possible. Restrict the security file to its owner (`chmod 600`) and protect `config.json` as well if it contains credentials. See [Security Configuration](docs/security/security_configuration.md) and [Credential Encryption](docs/security/credential_encryption.md).
 - Never commit credentials, session data, logs, or backups. `.security.yml` is already listed in `.gitignore`.
 - Workspace data can contain conversation history, memory, skills, and tool output. Limit filesystem access to the PicoClaw user and protect backups.
-- Sensitive-data filtering can redact values loaded from `.security.yml` in tool output, but it is a defense in depth and does not guarantee that every secret or personal detail is removed. See [Sensitive Data Filtering](docs/security/sensitive_data_filtering.md).
+- Sensitive-data filtering only redacts exact values loaded from `.security.yml` when they appear verbatim in tool output. It is a defense-in-depth control, not a data-loss-prevention (DLP) boundary: base64, hex, character-spaced, reversed, compressed, chunked, or model-reconstructed forms bypass it, and it does not cover artifacts on disk, logs, channel messages, or the final model response. Do not rely on it to prevent exfiltration. See [Sensitive Data Filtering](docs/security/sensitive_data_filtering.md).
 - Revoke and rotate credentials promptly if they may have been exposed.
 
 ### Restrict who can use the bot

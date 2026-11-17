@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -11,7 +10,6 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg"
 	"github.com/sipeed/picoclaw/pkg/config"
-	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
 // defaultExecEnvAllowlist is the set of parent environment variables inherited
@@ -74,29 +72,6 @@ var windowsExecEnvAllowlist = map[string]bool{
 	"HOMEPATH":     true,
 	"TEMP":         true,
 	"TMP":          true,
-}
-
-// execEnvBlocklist lists variables the LLM cannot set, even through the env
-// argument. They control process behavior (command resolution, user identity,
-// dynamic loader behavior) or belong to PicoClaw itself.
-var execEnvBlocklist = map[string]bool{
-	"PATH":            true,
-	"HOME":            true,
-	"USER":            true,
-	"LOGNAME":         true,
-	"SHELL":           true,
-	"LD_PRELOAD":      true,
-	"LD_LIBRARY_PATH": true,
-	"LD_AUDIT":        true,
-	"LD_DEBUG":        true,
-
-	// PICOCLAW_* vars are controlled by the agent, not the LLM. The prefix
-	// list below covers the managed names; keep them out of this map.
-}
-
-// execEnvBlocklistPrefixes are prefixes the LLM cannot set.
-var execEnvBlocklistPrefixes = []string{
-	"PICOCLAW_",
 }
 
 // newExecEnv builds the cached, sanitized base environment for exec child
@@ -180,84 +155,38 @@ func execEnvKey(key string) string {
 	return key
 }
 
-// isBlockedExecEnv reports whether the LLM may set the given variable.
-func isBlockedExecEnv(key string) bool {
-	key = execEnvKey(key)
-	if execEnvBlocklist[key] {
-		return true
-	}
-	for _, prefix := range execEnvBlocklistPrefixes {
-		if strings.HasPrefix(key, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
-// execEnvFromArgs parses the optional per-call env argument, a decoded JSON
-// object of string values.
-func execEnvFromArgs(args map[string]any) (map[string]string, error) {
-	raw, ok := args["env"]
-	if !ok || raw == nil {
-		return nil, nil
-	}
-
-	values, ok := raw.(map[string]any)
-	if !ok {
-		return nil, fmt.Errorf("env must be an object of string values")
-	}
-	env := make(map[string]string, len(values))
-	for key, value := range values {
-		str, ok := value.(string)
-		if !ok {
-			return nil, fmt.Errorf("env value for %q must be a string", key)
-		}
-		if err := addExecEnv(env, key, str); err != nil {
-			return nil, err
-		}
-	}
-	return env, nil
-}
-
-// addExecEnv validates one variable before it reaches exec.Cmd.Env.
-func addExecEnv(env map[string]string, key, value string) error {
-	if key == "" {
-		return fmt.Errorf("env variable names must not be empty")
-	}
-	if strings.ContainsAny(key, "=\x00") {
-		return fmt.Errorf("invalid env variable name %q", key)
-	}
-	if strings.ContainsRune(value, '\x00') {
-		return fmt.Errorf("env value for %q contains a NUL byte", key)
-	}
-	env[key] = value
-	return nil
-}
-
-// runEnv merges the cached base environment with the per-call LLM variables and
-// the trusted PICOCLAW_EXEC_* values, returning a deterministic []string ready
-// for exec.Cmd.Env. timeout is the effective foreground timeout; background
-// sessions pass 0 because they are not time-limited.
-func (t *ExecTool) runEnv(extraEnv map[string]string, timeout time.Duration) []string {
-	env := mergeExecEnv(t.baseEnv, extraEnv)
-	if env == nil {
-		env = make(map[string]string, 2)
-	}
-
-	// Set after the LLM merge so these values always describe this run.
-	env["PICOCLAW_EXEC_TIME"] = time.Now().Format(time.RFC3339)
-	env["PICOCLAW_EXEC_TIMEOUT"] = timeout.String()
-
+// buildEnvList renders an environment map as sorted KEY=value entries once, so
+// runEnv copies a slice per command instead of rebuilding and sorting the map.
+func buildEnvList(env map[string]string) []string {
 	keys := make([]string, 0, len(env))
 	for key := range env {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	logger.DebugCF("shell", "exec environment keys", map[string]any{"keys": keys})
 
-	result := make([]string, 0, len(keys))
+	list := make([]string, 0, len(keys))
 	for _, key := range keys {
-		result = append(result, key+"="+env[key])
+		list = append(list, key+"="+env[key])
 	}
+	return list
+}
+
+// runEnv returns the cached child environment plus the trusted PICOCLAW_EXEC_*
+// values. timeout is the effective foreground timeout; background sessions pass
+// 0 because they are not time-limited. The model cannot add variables here:
+// per-call env was removed because it could bypass the command and workspace
+// guards.
+func (t *ExecTool) runEnv(timeout time.Duration) []string {
+	base := t.baseEnvList
+	if base == nil {
+		// Tests may build an ExecTool literal without the precomputed list.
+		base = buildEnvList(t.baseEnv)
+	}
+	result := make([]string, 0, len(base)+2)
+	result = append(result, base...)
+	result = append(result,
+		"PICOCLAW_EXEC_TIME="+time.Now().Format(time.RFC3339),
+		"PICOCLAW_EXEC_TIMEOUT="+timeout.String(),
+	)
 	return result
 }

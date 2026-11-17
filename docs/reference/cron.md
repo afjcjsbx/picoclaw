@@ -153,7 +153,13 @@ If `tools.exec.enabled` is `false`:
 - new command jobs are rejected by the cron tool
 - existing command jobs publish a `command execution is disabled` error when they fire
 
-`tools.exec.allow_remote` is still enforced by the exec tool, but cron command scheduling has its own channel gate when the job is created. In practice, reminder jobs can be scheduled from remote channels, while scheduled command jobs are limited to internal channels and configured remote channels.
+`tools.exec.allow_remote` controls direct exec calls from remote channels. It is
+independent from the cron command gate: scheduled command jobs are authorized by
+`tools.cron.command_allowed_remotes` and do not require `allow_remote`. PicoClaw
+re-checks that allowlist when a job fires, so removing a channel from the list
+also stops already-scheduled jobs from that channel. In practice, reminder jobs
+can be scheduled from every channel, while scheduled command jobs are limited to
+internal channels and remote channels listed in `command_allowed_remotes`.
 
 ### `allow_command`
 
@@ -161,7 +167,7 @@ If `tools.exec.enabled` is `false`:
 
 This is not a hard disable switch. If you set `allow_command` to `false`, PicoClaw still allows a command job when the caller explicitly passes `command_confirm: true`.
 
-Command jobs also require either an internal channel or a remote channel allowed by `tools.cron.command_allowed_remotes`. Non-command reminders do not have that restriction.
+Command jobs also require either an internal channel or a remote channel allowed by `tools.cron.command_allowed_remotes`. That gate is independent of `tools.exec.allow_remote`, which controls direct exec calls. Non-command reminders do not have that restriction.
 
 ### `command_allowed_remotes`
 
@@ -177,7 +183,11 @@ Warning: `*` is potentially dangerous because any remote channel that can talk
 to PicoClaw can schedule shell commands. Use it only when every enabled remote
 channel and chat is trusted to request command execution.
 
-This setting only controls the remote-channel gate. It does not bypass `tools.cron.allow_command`, `command_confirm`, `tools.exec.enabled`, or the exec tool's command safety checks.
+This setting only controls the cron command channel gate. It is independent of
+`tools.exec.allow_remote`: remote command jobs do not need `allow_remote`, and
+enabling `allow_remote` does not widen this allowlist. The gate does not bypass
+`tools.cron.allow_command`, `command_confirm`, `tools.exec.enabled`, or the exec
+tool's command safety checks (deny patterns, hardline rules, and risk checks).
 
 Example:
 
@@ -198,6 +208,9 @@ Example:
   }
 }
 ```
+
+`allow_remote` is omitted here: this example allows Telegram command jobs through
+the cron allowlist while direct exec from Telegram remains blocked.
 
 ## Persistence and Location
 

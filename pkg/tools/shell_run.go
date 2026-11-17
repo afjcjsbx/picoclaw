@@ -20,7 +20,17 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/isolation"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/tools/shellguard"
 )
+
+// withNote appends one model-facing note to another without leaving a double
+// space when the first one is empty.
+func withNote(base, add string) string {
+	if base == "" {
+		return add
+	}
+	return base + " " + add
+}
 
 // foregroundPromotionNote explains why a requested foreground timeout was
 // turned into a tracked background session.
@@ -36,7 +46,7 @@ func (t *ExecTool) foregroundPromotionNote(timeoutDisabled bool, timeout time.Du
 			capSeconds,
 		)
 	}
-	return reason + "; started as a tracked background session. Use action=wait, poll, read, or kill with this sessionId."
+	return reason + "; started as a tracked background session."
 }
 
 // shellCommand returns the OS shell and its arguments for one exec run.
@@ -49,6 +59,62 @@ func shellCommand(command string) (string, []string, error) {
 		return "", nil, fmt.Errorf("failed to locate shell: %w", err)
 	}
 	return shellPath, []string{"-c", command}, nil
+}
+
+// cwdProbeFile receives the final working directory from a wrapped foreground
+// command. A temp file keeps the probe out of stdout, so output truncation,
+// exit-status parsing and artifact tests see exactly the command's output.
+func newCwdProbeFile() (string, error) {
+	file, err := os.CreateTemp("", "picoclaw-cwd-*.txt")
+	if err != nil {
+		return "", err
+	}
+	path := file.Name()
+	if err := file.Close(); err != nil {
+		_ = os.Remove(path)
+		return "", err
+	}
+	return path, nil
+}
+
+// shellQuote single-quotes a path for the POSIX shell.
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
+}
+
+// wrapCommandForCwd appends a probe that writes `pwd -P` after the command and
+// preserves its exit status. The wrapper runs in the same shell, so `cd` inside
+// the command is observed. Commands that cannot safely take a suffix (Windows
+// PowerShell and a trailing backslash continuation) are left unchanged.
+func wrapCommandForCwd(command, probePath string) (string, bool) {
+	if runtime.GOOS == "windows" || probePath == "" {
+		return command, false
+	}
+	if strings.HasSuffix(strings.TrimRight(command, " \t\r\n"), "\\") {
+		return command, false
+	}
+	wrapped := command + "\n__picoclaw_exec_status=$?\n" +
+		"command pwd -P > " + shellQuote(probePath) + " 2>/dev/null\n" +
+		"exit $__picoclaw_exec_status"
+	return wrapped, true
+}
+
+// readObservedCwd reads the probe file written by the wrapper. A missing or
+// empty file means the command exited through exec/exit or was killed before
+// the probe ran; the previous remembered cwd then stays in place.
+func readObservedCwd(probePath string) string {
+	if probePath == "" {
+		return ""
+	}
+	data, err := os.ReadFile(probePath)
+	if err != nil {
+		return ""
+	}
+	cwd := strings.TrimSpace(string(data))
+	if cwd == "" || len(cwd) > 4096 {
+		return ""
+	}
+	return cwd
 }
 
 // prepareExecCommand applies the settings shared by foreground, background and
@@ -65,7 +131,7 @@ func (t *ExecTool) runSync(
 	ctx context.Context,
 	command, cwd string,
 	timeout time.Duration,
-	extraEnv map[string]string,
+	analysis shellguard.Analysis,
 ) *ToolResult {
 	start := time.Now()
 	// timeout == 0 means no timeout
@@ -78,12 +144,22 @@ func (t *ExecTool) runSync(
 	}
 	defer cancel()
 
-	shellPath, shellArgs, shellErr := shellCommand(command)
+	probePath, probeErr := newCwdProbeFile()
+	if probeErr != nil {
+		probePath = ""
+	}
+	defer func() { _ = os.Remove(probePath) }()
+	shellCommandText, observeCwd := wrapCommandForCwd(command, probePath)
+	shellPath, shellArgs, shellErr := shellCommand(shellCommandText)
 	if shellErr != nil {
 		return ErrorResult(shellErr.Error())
 	}
-	cmd := exec.CommandContext(cmdCtx, shellPath, shellArgs...)
-	t.prepareExecCommand(cmd, cwd, t.runEnv(extraEnv, timeout))
+	// Do not use exec.CommandContext here: its automatic Process.Kill can reap
+	// the shell before terminateProcessTree enumerates descendants, losing the
+	// ancestry link to children that changed session (setsid). The timeout is
+	// handled explicitly below so the process tree is still observable.
+	cmd := exec.Command(shellPath, shellArgs...)
+	t.prepareExecCommand(cmd, cwd, t.runEnv(timeout))
 
 	maxOutputChars := t.maxOutputChars
 	if maxOutputChars <= 0 {
@@ -143,9 +219,11 @@ func (t *ExecTool) runSync(
 	}()
 
 	var err error
+	terminatedByContext := false
 	select {
 	case err = <-done:
 	case <-cmdCtx.Done():
+		terminatedByContext = true
 		_ = terminateProcessTree(cmd)
 		select {
 		case err = <-done:
@@ -167,10 +245,16 @@ func (t *ExecTool) runSync(
 		<-readDone
 	}
 
-	output, truncated := collector.Render()
+	view := collector.Render()
+	output := view.Text
 	artifactPath := collector.SpillPath()
 	spillCapped := collector.SpillCapped()
 	_ = collector.Close()
+
+	observedCwd := ""
+	if observeCwd {
+		observedCwd = readObservedCwd(probePath)
+	}
 
 	// Keep the raw stdout/stderr intact for the model and put the structured
 	// status in a one-line header instead. Wrapping the output in JSON would
@@ -183,17 +267,29 @@ func (t *ExecTool) runSync(
 	resultErr := err
 
 	switch {
-	case err == nil:
-		code := 0
-		exitCode = &code
-	case errors.Is(cmdCtx.Err(), context.DeadlineExceeded):
+	case terminatedByContext && errors.Is(cmdCtx.Err(), context.DeadlineExceeded):
 		timedOut = true
 		errorMessage = fmt.Sprintf("command timed out after %v", timeout)
 		forUser = fmt.Sprintf("Command timed out after %v", timeout)
 		if output != "" {
 			forUser += "\n\nPartial output before timeout:\n" + output
 		}
-		resultErr = fmt.Errorf("command timeout: %w", err)
+		if err != nil {
+			resultErr = fmt.Errorf("command timeout: %w", err)
+		} else {
+			resultErr = fmt.Errorf("command timed out after %v", timeout)
+		}
+	case terminatedByContext && errors.Is(cmdCtx.Err(), context.Canceled):
+		errorMessage = "command canceled"
+		forUser = output + "\n\n[Command canceled]"
+		if err != nil {
+			resultErr = fmt.Errorf("command canceled: %w", err)
+		} else {
+			resultErr = errors.New("command canceled")
+		}
+	case err == nil:
+		code := 0
+		exitCode = &code
 	default:
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
@@ -220,12 +316,25 @@ func (t *ExecTool) runSync(
 		forUser = "(no output)"
 	}
 
+	if observedCwd != "" && t.acceptObservedCwd(observedCwd) {
+		t.rememberCwd(ctx, observedCwd)
+	}
+
+	exitNote := ""
+	if exitCode != nil {
+		exitNote = informativeExitNote(command, analysis, *exitCode)
+	}
 	meta := execRunMeta{
-		ExitCode:   exitCode,
-		TimedOut:   timedOut,
-		Truncated:  truncated,
-		DurationMs: time.Since(start).Milliseconds(),
-		Error:      errorMessage,
+		ExitCode:     exitCode,
+		TimedOut:     timedOut,
+		Truncated:    view.Truncated,
+		TotalBytes:   view.TotalBytes,
+		OmittedBytes: view.OmittedBytes,
+		ArtifactPath: artifactPath,
+		DurationMs:   time.Since(start).Milliseconds(),
+		Error:        errorMessage,
+		Cwd:          observedCwd,
+		ExitNote:     exitNote,
 	}
 	forLLM := formatExecRunMeta(meta) + "\n" + output
 	if timedOut {
@@ -241,14 +350,83 @@ func (t *ExecTool) runSync(
 // execRunMeta is the model-facing status header for a foreground exec run.
 // The header stays outside the output body so shell output is not JSON-escaped.
 type execRunMeta struct {
-	ExitCode   *int   `json:"exitCode"`
-	TimedOut   bool   `json:"timedOut"`
-	Truncated  bool   `json:"truncated"`
-	DurationMs int64  `json:"durationMs"`
-	Error      string `json:"error,omitempty"`
+	ExitCode     *int   `json:"exitCode"`
+	TimedOut     bool   `json:"timedOut"`
+	Truncated    bool   `json:"truncated"`
+	TotalBytes   int64  `json:"totalBytes,omitempty"`
+	OmittedBytes int64  `json:"omittedBytes,omitempty"`
+	ArtifactPath string `json:"artifactPath,omitempty"`
+	DurationMs   int64  `json:"durationMs"`
+	Error        string `json:"error,omitempty"`
+	Cwd          string `json:"cwd,omitempty"`
+	ExitNote     string `json:"exitNote,omitempty"`
 }
 
 const execRunMetaPrefix = "[exec] "
+
+// exitCodeNotes explains non-zero statuses that are commonly normal. The map
+// is deliberately small: an unknown exit code must stay a real error hint.
+var exitCodeNotes = map[string]map[int]string{
+	"grep":  {1: "grep exit 1 means no matches (not an error)"},
+	"egrep": {1: "grep exit 1 means no matches (not an error)"},
+	"fgrep": {1: "grep exit 1 means no matches (not an error)"},
+	"rg":    {1: "ripgrep exit 1 means no matches (not an error)"},
+	"ag":    {1: "exit 1 means no matches (not an error)"},
+	"ack":   {1: "exit 1 means no matches (not an error)"},
+	"diff":  {1: "diff exit 1 means files differ (not an error)"},
+	"colordiff": {
+		1: "diff exit 1 means files differ (not an error)",
+	},
+	"test": {1: "test exit 1 means the condition is false (not an error)"},
+	"[":    {1: "test exit 1 means the condition is false (not an error)"},
+	"git":  {1: "git exit 1 is often normal, for example git diff with changes"},
+}
+
+// signalExitNotes explains the shell's 128+signal statuses that models most
+// often misread. The table is curated, not exhaustive: an unknown code stays a
+// real error hint. 130 (SIGINT) is omitted because an interactive interrupt is
+// usually expected.
+var signalExitNotes = map[int]string{
+	129: "SIGHUP (terminal closed or hangup)",
+	132: "SIGILL (illegal instruction)",
+	134: "SIGABRT (abort)",
+	135: "SIGBUS (bus error)",
+	136: "SIGFPE (arithmetic error)",
+	137: "SIGKILL (often the OOM killer or kill -9)",
+	139: "SIGSEGV (segmentation fault)",
+	141: "SIGPIPE (wrote to a closed pipe)",
+	143: "SIGTERM (terminated by kill or shutdown)",
+}
+
+// informativeExitNote returns a model-facing note for a non-zero status that
+// has a well-known non-error meaning. The last canonical simple command is the
+// one that supplies the shell's exit status.
+func informativeExitNote(command string, analysis shellguard.Analysis, code int) string {
+	if code <= 0 {
+		return ""
+	}
+	if signal, ok := signalExitNotes[code]; ok {
+		return fmt.Sprintf(
+			"exit code %d usually means the command was terminated by %s", code, signal,
+		)
+	}
+	forms := analysis.Canonical
+	if !analysis.CanonicalExact {
+		forms = shellguard.CanonicalCommands(command)
+	}
+	if len(forms) == 0 {
+		return ""
+	}
+	fields := strings.Fields(forms[len(forms)-1])
+	if len(fields) == 0 {
+		return ""
+	}
+	name := fields[0]
+	if slash := strings.LastIndexByte(name, '/'); slash >= 0 {
+		name = name[slash+1:]
+	}
+	return exitCodeNotes[name][code]
+}
 
 func formatExecRunMeta(meta execRunMeta) string {
 	var buf bytes.Buffer
@@ -291,6 +469,26 @@ func newExecResult(
 		result.ForUser += note
 	}
 	return result
+}
+
+// pumpOutput drains one session stream into its rolling log until the reader
+// fails (EOF or a closed descriptor). onChunk runs before the bytes are
+// appended, so the PTY path can update its key-mode detection per chunk.
+func pumpOutput(label string, reader io.Reader, session *ProcessSession, onChunk func([]byte)) {
+	defer recoverGoroutine(label)
+	buf := make([]byte, 4096)
+	for {
+		n, err := reader.Read(buf)
+		if n > 0 {
+			if onChunk != nil {
+				onChunk(buf[:n])
+			}
+			session.appendOutput(buf[:n])
+		}
+		if err != nil {
+			return
+		}
+	}
 }
 
 // recoverGoroutine is deferred at the top of a session goroutine so a panic is
@@ -341,21 +539,26 @@ func (t *ExecTool) runBackground(
 	command, cwd string,
 	ptyEnabled bool,
 	note string,
-	extraEnv map[string]string,
+	notify bool,
+	cb AsyncCallback,
 ) *ToolResult {
 	sessionID := generateSessionID()
 	session := &ProcessSession{
-		ID:         sessionID,
-		Command:    command,
-		PTY:        ptyEnabled,
-		Background: true,
-		StartTime:  time.Now().Unix(),
-		Status:     "running",
-		ptyKeyMode: PtyKeyModeCSI,
+		ID:           sessionID,
+		Command:      command,
+		PTY:          ptyEnabled,
+		Background:   true,
+		StartTime:    time.Now().Unix(),
+		Status:       "running",
+		ownerAgentID: ToolAgentID(ctx),
+		ownerChannel: strings.TrimSpace(ToolChannel(ctx)),
+		ownerChatID:  ToolChatID(ctx),
+		ptyKeyMode:   PtyKeyModeCSI,
 		// Initialize the output buffer before the session is published to the
 		// manager: readers (session_read/list_sessions) must never observe a
 		// session whose buffer is still nil.
 		outputBuffer: &bytes.Buffer{},
+		spillDir:     t.outputSpillDir(),
 	}
 
 	shellPath, shellArgs, shellErr := shellCommand(command)
@@ -363,7 +566,7 @@ func (t *ExecTool) runBackground(
 		return ErrorResult(shellErr.Error())
 	}
 	cmd := exec.Command(shellPath, shellArgs...)
-	t.prepareExecCommand(cmd, cwd, t.runEnv(extraEnv, 0))
+	t.prepareExecCommand(cmd, cwd, t.runEnv(0))
 
 	var outputReader io.ReadCloser
 	var outputWriter *os.File
@@ -447,22 +650,12 @@ func (t *ExecTool) runBackground(
 		}()
 
 		go func() {
-			defer recoverGoroutine("PTY read")
-			buf := make([]byte, 4096)
-			for {
-				n, err := session.ptyMaster.Read(buf)
-				if n > 0 {
-					raw := string(buf[:n])
-					if mode := detectPtyKeyMode(raw); mode != PtyKeyModeNotFound && mode != session.GetPtyKeyMode() {
-						session.SetPtyKeyMode(mode)
-					}
-
-					session.appendOutput(buf[:n])
+			pumpOutput("PTY read", session.ptyMaster, session, func(chunk []byte) {
+				raw := string(chunk)
+				if mode := detectPtyKeyMode(raw); mode != PtyKeyModeNotFound && mode != session.GetPtyKeyMode() {
+					session.SetPtyKeyMode(mode)
 				}
-				if err != nil {
-					break
-				}
-			}
+			})
 			// The child side is gone (EOF/EIO) or the session was killed:
 			// release the master descriptor so no fd survives the session.
 			_ = session.ptyMaster.Close()
@@ -471,18 +664,7 @@ func (t *ExecTool) runBackground(
 		// Non-PTY mode: one goroutine reads the merged stdout/stderr pipe.
 		// When process exits, OS closes the pipe write end → Read() returns EOF.
 		go func() {
-			defer recoverGoroutine("pipe read")
-			buf := make([]byte, 4096)
-
-			for {
-				n, err := outputReader.Read(buf)
-				if n > 0 {
-					session.appendOutput(buf[:n])
-				}
-				if err != nil {
-					break
-				}
-			}
+			pumpOutput("pipe read", outputReader, session, nil)
 
 			_ = outputReader.Close()
 			if stdinWriter != nil {
@@ -493,6 +675,27 @@ func (t *ExecTool) runBackground(
 
 			session.finish(processExitCode(cmd.ProcessState))
 		}()
+	}
+
+	// Install the completion callback before returning the session, so a
+	// process that exits immediately cannot lose its notification. The
+	// callback is stored even when notify is false, so a later poll/wait can
+	// promote the session to notify-on-complete.
+	const silentHint = "No completion notification is enabled for this background session; " +
+		"use action=wait, poll, read, or kill, or start bounded jobs with notify=true."
+	notified := false
+	if cb != nil {
+		session.SetCompletion(func() {
+			cb(context.Background(), t.completionResult(session))
+		})
+		if notify {
+			notified = session.StartNotify()
+		}
+	}
+	if notified {
+		note = withNote(note, notifyEnabledNote)
+	} else if !notify {
+		note = withNote(note, silentHint)
 	}
 
 	resp := ExecResponse{

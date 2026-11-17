@@ -26,8 +26,9 @@ func terminateProcessTree(cmd *exec.Cmd) error {
 		return nil
 	}
 
-	// Kill the entire process group spawned by the shell command.
-	_ = syscall.Kill(-pid, syscall.SIGKILL)
+	// Kill the process group and every descendant that changed session or
+	// process group (for example with setsid).
+	_ = killProcessTree(pid)
 	// Fallback kill on the shell process itself.
 	_ = cmd.Process.Kill()
 	// A docker-backed command needs its container removed explicitly.
