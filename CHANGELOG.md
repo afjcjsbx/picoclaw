@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Background sessions now keep only a 100 KB rolling window in memory; the complete stream spills to an artifact (up to 5,000,000 bytes) as soon as the window overflows. `poll`, `wait`, `read` and `kill` return `artifactPath`/`artifactCapped`, so earlier output stays readable without 1 MB of RAM per session.
 - A background run without `notify=true` now says that no completion message will be sent and points at `wait`/`poll`/`read`/`kill`, so the model no longer assumes it will be woken when a bounded job ends.
 - Foreground results now include an `exitNote` for well-known non-error statuses: `grep`/`rg` exit 1 (no matches), `diff` exit 1 (files differ), `test`/`[` exit 1 (false) and `git` exit 1 (often normal). This avoids turns spent investigating expected results.
+- The exec guard now parses a command once and shares the AST for quoted-heredoc stripping, canonical deny forms, workspace validation and risk classification. The standalone heredoc helper also skips the parser when the command contains no `<<`.
 
 ### Security
 

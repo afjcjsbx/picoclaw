@@ -64,7 +64,12 @@ var detachCommands = map[string]bool{
 // itself is tracked), while an inner '&' operator is always rejected because it
 // detaches a job from the tracked shell.
 func untrackedDetachReason(command string, tracked bool) string {
-	for _, form := range shellguard.CanonicalCommands(command) {
+	analysis := shellguard.Analyze(command)
+	forms := analysis.Canonical
+	if !analysis.CanonicalExact {
+		forms = shellguard.CanonicalCommands(command)
+	}
+	for _, form := range forms {
 		fields := strings.Fields(form)
 		if len(fields) == 0 {
 			continue
@@ -79,12 +84,11 @@ func untrackedDetachReason(command string, tracked bool) string {
 		}
 	}
 
-	file, err := shellguard.Parse(command)
-	if err != nil || file == nil {
+	if analysis.File == nil {
 		return ""
 	}
 	found := false
-	syntax.Walk(file, func(node syntax.Node) bool {
+	syntax.Walk(analysis.File, func(node syntax.Node) bool {
 		if found {
 			return false
 		}

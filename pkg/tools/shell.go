@@ -761,15 +761,14 @@ func (t *ExecTool) completionResult(session *ProcessSession) *ToolResult {
 //     workspace, risk-level and smart-approval layers (see its comment).
 //  8. Symlinks in cwd are resolved again right before execution to narrow the
 //     TOCTOU window between validation and cmd.Dir.
-//  9. State persistence: cwd and env are remembered only after the guard
-//     passed.
+//  9. State persistence: cwd is remembered only after the guard passed.
 //  10. Launch: background and promoted runs go to runBackground, which returns
 //     a sessionId; everything else goes to runSync. Both build the child env
-//     from the sanitized base (allowlisted parent variables plus env_set), the
-//     validated per-call env and PICOCLAW_EXEC_*, and start the process through
-//     the isolation layer. runSync bounds the output (head and tail, with the
-//     full stream spilled to an artifact), kills the process tree on timeout
-//     and prefixes the result with an "[exec] {...}" status header.
+//     from the sanitized base (allowlisted parent variables plus env_set) and
+//     PICOCLAW_EXEC_*, and start the process through the isolation layer.
+//     runSync bounds the output (head and tail, with the full stream spilled to
+//     an artifact), kills the process tree on timeout and prefixes the result
+//     with an "[exec] {...}" status header.
 //
 // Secret redaction is not done here. After the tool returns, the registry
 // spills oversized results to an artifact that keeps the raw output on disk,
