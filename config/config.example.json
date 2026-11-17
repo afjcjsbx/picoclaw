@@ -655,10 +655,9 @@
     }
   },
   "approvals": {
-    "_comment": "Smart approvals review flagged exec commands with an auxiliary Guardian model from model_list. They are opt-in: set mode to 'smart' to enable the Guardian; the default 'off' keeps the static guards as the final decision without an extra model call.",
+    "_comment": "Smart approvals review exec commands whose risk cannot be classified with an auxiliary Guardian model from model_list. They are opt-in: set mode to 'smart' to enable the Guardian; the default 'off' keeps the static guards as the final decision without an extra model call.",
     "mode": "off",
     "model": "",
-    "smart_threshold": "high",
     "smart_timeout_seconds": 20
   },
   "events": {

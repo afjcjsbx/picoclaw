@@ -91,7 +91,6 @@ func DefaultConfig() *Config {
 		},
 		Approvals: ApprovalsConfig{
 			Mode:                ApprovalModeOff,
-			SmartThreshold:      ApprovalSmartThresholdHigh,
 			SmartTimeoutSeconds: DefaultApprovalSmartTimeoutSeconds,
 		},
 		ModelList: []*ModelConfig{

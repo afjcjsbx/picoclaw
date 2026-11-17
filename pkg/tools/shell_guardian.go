@@ -14,7 +14,6 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
-	"github.com/sipeed/picoclaw/pkg/tools/shellguard"
 )
 
 // maxGuardianCommandBytes bounds the command sent to the Guardian model. A
@@ -40,11 +39,11 @@ Rules:
 
 Respond with exactly one word: APPROVE, DENY, or ESCALATE`
 
-const approvalGuardianUserPromptPrefix = `The following command was flagged as: `
+const approvalGuardianUserPromptPrefix = `The static risk classifier could not resolve this command: `
 
 const approvalGuardianUserPromptSuffix = `
 
-Assess the ACTUAL risk of the shell operations in this command. Many flagged commands are false positives — for example, ` + "`python -c \"print('hello')\"`" + ` is flagged as "script execution via -c flag" but is completely harmless.
+Assess the ACTUAL risk of the shell operations in this command. It may be a harmless construct the static classifier could not inspect, or an attempt to hide a dangerous operation.
 
 Respond with exactly one word: APPROVE, DENY, or ESCALATE`
 
@@ -68,14 +67,14 @@ func (v approvalVerdict) String() string {
 	}
 }
 
-// approvalReviewer reviews a command that the static guards flagged. It is an
-// interface so tests can replace the model call.
+// approvalReviewer reviews a command whose risk the static guards cannot
+// resolve. It is an interface so tests can replace the model call.
 type approvalReviewer interface {
 	Review(ctx context.Context, command, description string) (approvalVerdict, error)
 }
 
 // approvalGuardian is the auxiliary LLM reviewer used by approvals.mode=smart.
-// The provider is resolved lazily on the first flagged command: when no
+// The provider is resolved lazily on the first unknown command: when no
 // approvals.model is configured it reuses the agent's primary provider, so the
 // default configuration does not allocate a second client at startup.
 type approvalGuardian struct {
@@ -187,15 +186,6 @@ func (t *ExecTool) SetApprovalProvider(provider providers.LLMProvider) {
 	if guardian, ok := t.approvalReviewer.(*approvalGuardian); ok {
 		guardian.SetPrimaryProvider(provider)
 	}
-}
-
-// approvalThreshold maps the validated configuration value to a risk level.
-// Unknown commands are always reviewed, independently of this threshold.
-func approvalThreshold(configured string) shellguard.RiskLevel {
-	if strings.EqualFold(strings.TrimSpace(configured), config.ApprovalSmartThresholdCritical) {
-		return shellguard.RiskCritical
-	}
-	return shellguard.RiskHigh
 }
 
 // Review sends the flagged command to the Guardian and parses its one-word

@@ -230,18 +230,12 @@ type HookDefaultsConfig struct {
 }
 
 // Approval modes for tools.exec. "off" (default) keeps the static guards as
-// the final decision. "smart" sends commands that the static guards consider
-// high, critical or unknown to an auxiliary Guardian model before they can run.
+// the final decision. "smart" sends commands whose risk the classifier cannot
+// resolve (unknown) to an auxiliary Guardian model before they can run; known
+// risk levels keep following risk_threshold.
 const (
 	ApprovalModeOff   = "off"
 	ApprovalModeSmart = "smart"
-)
-
-// Smart approval thresholds. Unknown commands are always reviewed in smart
-// mode, regardless of the configured threshold.
-const (
-	ApprovalSmartThresholdHigh     = "high"
-	ApprovalSmartThresholdCritical = "critical"
 )
 
 // Defaults for the auxiliary Guardian call. The timeout is short so a slow or
@@ -255,16 +249,12 @@ const (
 // ApprovalsConfig configures how potentially dangerous tool calls are approved.
 type ApprovalsConfig struct {
 	// Mode is "off" (default) or "smart". Smart mode asks a Guardian model to
-	// review commands at or above SmartThreshold, plus commands whose risk
-	// cannot be classified. "off" keeps the static guards as the final
-	// decision and avoids the extra model call.
+	// review commands whose risk cannot be classified. "off" keeps the static
+	// guards as the final decision and avoids the extra model call.
 	Mode string `json:"mode,omitempty" env:"PICOCLAW_APPROVALS_MODE"`
 	// Model selects the Guardian model by model_list alias or provider/model
 	// reference. Empty uses the agent's default model.
 	Model string `json:"model,omitempty" env:"PICOCLAW_APPROVALS_MODEL"`
-	// SmartThreshold is "high" (default) to review high, critical and unknown
-	// commands, or "critical" to review only critical and unknown commands.
-	SmartThreshold string `json:"smart_threshold,omitempty" env:"PICOCLAW_APPROVALS_SMART_THRESHOLD"`
 	// SmartTimeoutSeconds bounds each Guardian call. Zero uses the default 20s.
 	SmartTimeoutSeconds int `json:"smart_timeout_seconds,omitempty" env:"PICOCLAW_APPROVALS_SMART_TIMEOUT_SECONDS"`
 }
@@ -282,18 +272,6 @@ func (c ApprovalsConfig) Normalized() (ApprovalsConfig, error) {
 		return c, fmt.Errorf("mode %q must be %q or %q", c.Mode, ApprovalModeOff, ApprovalModeSmart)
 	}
 
-	threshold := strings.ToLower(strings.TrimSpace(c.SmartThreshold))
-	switch threshold {
-	case "", ApprovalSmartThresholdHigh:
-		threshold = ApprovalSmartThresholdHigh
-	case ApprovalSmartThresholdCritical:
-	default:
-		return c, fmt.Errorf(
-			"smart_threshold %q must be %q or %q",
-			c.SmartThreshold, ApprovalSmartThresholdHigh, ApprovalSmartThresholdCritical,
-		)
-	}
-
 	timeout := c.SmartTimeoutSeconds
 	if timeout < 0 {
 		return c, fmt.Errorf("smart_timeout_seconds %d must not be negative", timeout)
@@ -309,7 +287,6 @@ func (c ApprovalsConfig) Normalized() (ApprovalsConfig, error) {
 	}
 
 	c.Mode = mode
-	c.SmartThreshold = threshold
 	c.SmartTimeoutSeconds = timeout
 	return c, nil
 }

@@ -11,7 +11,6 @@ import (
 func TestApprovalsConfigEnv(t *testing.T) {
 	t.Setenv("PICOCLAW_APPROVALS_MODE", "smart")
 	t.Setenv("PICOCLAW_APPROVALS_MODEL", "guardian")
-	t.Setenv("PICOCLAW_APPROVALS_SMART_THRESHOLD", "critical")
 	t.Setenv("PICOCLAW_APPROVALS_SMART_TIMEOUT_SECONDS", "9")
 
 	var cfg ApprovalsConfig
@@ -20,7 +19,6 @@ func TestApprovalsConfigEnv(t *testing.T) {
 	}
 	if cfg.Mode != ApprovalModeSmart ||
 		cfg.Model != "guardian" ||
-		cfg.SmartThreshold != ApprovalSmartThresholdCritical ||
 		cfg.SmartTimeoutSeconds != 9 {
 		t.Fatalf("env.Parse produced %+v", cfg)
 	}
@@ -39,53 +37,42 @@ func TestApprovalsConfigNormalized(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name      string
-		in        ApprovalsConfig
-		wantMode  string
-		wantLevel string
-		wantSecs  int
-		wantErr   string
+		name     string
+		in       ApprovalsConfig
+		wantMode string
+		wantSecs int
+		wantErr  string
 	}{
 		{
-			name:      "empty defaults to off",
-			wantMode:  ApprovalModeOff,
-			wantLevel: ApprovalSmartThresholdHigh,
-			wantSecs:  DefaultApprovalSmartTimeoutSeconds,
+			name:     "empty defaults to off",
+			wantMode: ApprovalModeOff,
+			wantSecs: DefaultApprovalSmartTimeoutSeconds,
 		},
 		{
-			name:      "explicit off",
-			in:        ApprovalsConfig{Mode: ApprovalModeOff},
-			wantMode:  ApprovalModeOff,
-			wantLevel: ApprovalSmartThresholdHigh,
-			wantSecs:  DefaultApprovalSmartTimeoutSeconds,
+			name:     "explicit off",
+			in:       ApprovalsConfig{Mode: ApprovalModeOff},
+			wantMode: ApprovalModeOff,
+			wantSecs: DefaultApprovalSmartTimeoutSeconds,
 		},
 		{
 			name: "case and whitespace",
 			in: ApprovalsConfig{
 				Mode:                " SMART ",
-				SmartThreshold:      " Critical ",
 				SmartTimeoutSeconds: 45,
 			},
-			wantMode:  ApprovalModeSmart,
-			wantLevel: ApprovalSmartThresholdCritical,
-			wantSecs:  45,
+			wantMode: ApprovalModeSmart,
+			wantSecs: 45,
 		},
 		{
-			name:      "zero timeout uses default",
-			in:        ApprovalsConfig{Mode: ApprovalModeSmart},
-			wantMode:  ApprovalModeSmart,
-			wantLevel: ApprovalSmartThresholdHigh,
-			wantSecs:  DefaultApprovalSmartTimeoutSeconds,
+			name:     "zero timeout uses default",
+			in:       ApprovalsConfig{Mode: ApprovalModeSmart},
+			wantMode: ApprovalModeSmart,
+			wantSecs: DefaultApprovalSmartTimeoutSeconds,
 		},
 		{
 			name:    "unknown mode",
 			in:      ApprovalsConfig{Mode: "yolo"},
 			wantErr: "mode",
-		},
-		{
-			name:    "unknown threshold",
-			in:      ApprovalsConfig{Mode: ApprovalModeSmart, SmartThreshold: "medium"},
-			wantErr: "smart_threshold",
 		},
 		{
 			name:    "negative timeout",
@@ -118,9 +105,6 @@ func TestApprovalsConfigNormalized(t *testing.T) {
 			if got.Mode != tt.wantMode {
 				t.Errorf("Mode = %q, want %q", got.Mode, tt.wantMode)
 			}
-			if got.SmartThreshold != tt.wantLevel {
-				t.Errorf("SmartThreshold = %q, want %q", got.SmartThreshold, tt.wantLevel)
-			}
 			if got.SmartTimeoutSeconds != tt.wantSecs {
 				t.Errorf("SmartTimeoutSeconds = %d, want %d", got.SmartTimeoutSeconds, tt.wantSecs)
 			}
@@ -136,7 +120,6 @@ func TestApprovalsConfigJSON(t *testing.T) {
 		"approvals": {
 			"mode": "smart",
 			"model": "cheap-guardian",
-			"smart_threshold": "critical",
 			"smart_timeout_seconds": 12
 		}
 	}`), &cfg); err != nil {
@@ -148,9 +131,6 @@ func TestApprovalsConfigJSON(t *testing.T) {
 	}
 	if cfg.Approvals.Model != "cheap-guardian" {
 		t.Errorf("Model = %q, want cheap-guardian", cfg.Approvals.Model)
-	}
-	if cfg.Approvals.SmartThreshold != ApprovalSmartThresholdCritical {
-		t.Errorf("SmartThreshold = %q, want critical", cfg.Approvals.SmartThreshold)
 	}
 	if cfg.Approvals.SmartTimeoutSeconds != 12 {
 		t.Errorf("SmartTimeoutSeconds = %d, want 12", cfg.Approvals.SmartTimeoutSeconds)
