@@ -18,11 +18,14 @@ func TestBoundedOutputSpillsFullStream(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, len(data), n)
 
-	text, truncated := out.Render()
+	view := out.Render()
+	text, truncated := view.Text, view.Truncated
 	require.True(t, truncated)
 	require.Contains(t, text, "[OUTPUT TRUNCATED")
 	require.True(t, strings.HasPrefix(text, strings.Repeat("a", 8)))
 	require.True(t, strings.HasSuffix(text, strings.Repeat("c", 10)))
+	require.Equal(t, int64(len(data)), view.TotalBytes)
+	require.Equal(t, int64(len(data)-20), view.OmittedBytes)
 
 	path := out.SpillPath()
 	require.NotEmpty(t, path)
@@ -46,7 +49,8 @@ func TestBoundedOutputSpillsAcrossWritesInOrder(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	_, truncated := out.Render()
+	view := out.Render()
+	truncated := view.Truncated
 	require.True(t, truncated)
 
 	path := out.SpillPath()
@@ -69,7 +73,8 @@ func TestBoundedOutputSpillReplaysOverlappingWindows(t *testing.T) {
 	_, err = out.Write([]byte("€"))
 	require.NoError(t, err)
 
-	_, truncated := out.Render()
+	view := out.Render()
+	truncated := view.Truncated
 	require.True(t, truncated)
 
 	path := out.SpillPath()
@@ -94,7 +99,8 @@ func TestBoundedOutputSpillPreservesTrailingPartialRune(t *testing.T) {
 	_, err = out.Write(emoji[3:])
 	require.NoError(t, err)
 
-	_, truncated := out.Render()
+	view := out.Render()
+	truncated := view.Truncated
 	require.True(t, truncated)
 
 	path := out.SpillPath()
@@ -113,9 +119,12 @@ func TestBoundedOutputDoesNotSpillWithinLimit(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 5, n)
 
-	text, truncated := out.Render()
+	view := out.Render()
+	text, truncated := view.Text, view.Truncated
 	require.False(t, truncated)
 	require.Equal(t, "hello", text)
+	require.Equal(t, int64(5), view.TotalBytes)
+	require.Zero(t, view.OmittedBytes)
 	require.Empty(t, out.SpillPath())
 	require.NoError(t, out.Close())
 }
@@ -130,9 +139,12 @@ func TestBoundedOutputCountsRunesNotBytes(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, len(data), n)
 
-	text, truncated := out.Render()
+	view := out.Render()
+	text, truncated := view.Text, view.Truncated
 	require.False(t, truncated)
 	require.Equal(t, data, text)
+	require.Equal(t, int64(len(data)), view.TotalBytes)
+	require.Zero(t, view.OmittedBytes)
 	require.Empty(t, out.SpillPath())
 	require.NoError(t, out.Close())
 }
@@ -146,7 +158,8 @@ func TestBoundedOutputKeepsFourByteRunesWithinCap(t *testing.T) {
 	_, err := out.Write([]byte(data))
 	require.NoError(t, err)
 
-	text, truncated := out.Render()
+	view := out.Render()
+	text, truncated := view.Text, view.Truncated
 	require.False(t, truncated)
 	require.Equal(t, data, text)
 	require.NoError(t, out.Close())
@@ -163,12 +176,17 @@ func TestBoundedOutputTruncatesOnRuneBoundary(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	text, truncated := out.Render()
+	view := out.Render()
+	text, truncated := view.Text, view.Truncated
 	require.True(t, truncated)
 	require.True(t, utf8.ValidString(text))
 	require.True(t, strings.HasPrefix(text, strings.Repeat("è", 4)))
 	require.True(t, strings.HasSuffix(text, strings.Repeat("è", 6)))
 	require.Contains(t, text, "chars omitted")
+	require.Equal(t, int64(len(data)), view.TotalBytes)
+	// The 4+6 kept runes are two-byte characters, so the header reports byte
+	// omission even though the inline notice counts characters.
+	require.Equal(t, int64(len(data)-20), view.OmittedBytes)
 	require.NoError(t, out.Close())
 }
 

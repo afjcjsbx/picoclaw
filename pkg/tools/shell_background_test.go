@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/tools/shellguard"
 )
 
 func TestNormalizeTrailingBackgroundAmpersand(t *testing.T) {
@@ -149,7 +150,9 @@ func TestNormalizeTrailingBackgroundAmpersand(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, stripped := normalizeTrailingBackgroundAmpersand(tt.command, "linux")
+			got, stripped := normalizeTrailingBackgroundAmpersand(
+				tt.command, shellguard.Analyze(tt.command), "linux",
+			)
 			require.Equal(t, tt.strip, stripped)
 			require.Equal(t, tt.want, got)
 		})
@@ -158,13 +161,17 @@ func TestNormalizeTrailingBackgroundAmpersand(t *testing.T) {
 
 func TestNormalizeTrailingBackgroundAmpersandOSGate(t *testing.T) {
 	t.Run("unix", func(t *testing.T) {
-		got, converted := normalizeTrailingBackgroundAmpersand("sleep 1 &", "linux")
+		got, converted := normalizeTrailingBackgroundAmpersand(
+			"sleep 1 &", shellguard.Analyze("sleep 1 &"), "linux",
+		)
 		require.True(t, converted)
 		require.Equal(t, "sleep 1", got)
 	})
 
 	t.Run("windows", func(t *testing.T) {
-		got, converted := normalizeTrailingBackgroundAmpersand("sleep 1 &", "windows")
+		got, converted := normalizeTrailingBackgroundAmpersand(
+			"sleep 1 &", shellguard.Analyze("sleep 1 &"), "windows",
+		)
 		require.False(t, converted)
 		require.Equal(t, "sleep 1 &", got)
 	})
@@ -340,4 +347,77 @@ func TestShellTool_NonTrailingAmpersandStaysForeground(t *testing.T) {
 
 	list := execResp(t, tool.Execute(ctx, map[string]any{"action": "list"}))
 	require.Empty(t, list.Sessions)
+}
+
+func TestUntrackedDetachReason(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+		tracked bool
+		want    string
+	}{
+		{name: "inner ampersand", command: "echo a & echo b", want: "&"},
+		{name: "ampersand before comment", command: "echo a & # done", want: "&"},
+		{name: "nohup", command: "nohup sleep 1", want: "nohup"},
+		{name: "setsid", command: "setsid sleep 1", want: "setsid"},
+		{name: "disown", command: "disown", want: "disown"},
+		{name: "and list", command: "echo a && echo b"},
+		{name: "redirect", command: "echo hi 2>&1"},
+		{name: "quoted ampersand", command: "echo 'a & b'"},
+		{name: "heredoc body", command: "cat <<'EOF'\na & b\nEOF"},
+		{name: "tracked nohup", command: "nohup sleep 1", tracked: true},
+		{name: "tracked inner ampersand", command: "echo a & echo b", tracked: true, want: "&"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := untrackedDetachReason(
+				tt.command, shellguard.Analyze(tt.command), tt.tracked, false,
+			)
+			if tt.want == "" {
+				require.Empty(t, got)
+				return
+			}
+			require.Contains(t, got, tt.want)
+		})
+	}
+}
+
+func TestExecToolRejectsUntrackedDetach(t *testing.T) {
+	tool, err := newTestExecTool(t.TempDir(), false)
+	require.NoError(t, err)
+	ctx := WithToolContext(context.Background(), "cli", "test")
+
+	blocked := tool.Execute(ctx, map[string]any{
+		"action": "run", "command": "echo a & echo b",
+	})
+	require.True(t, blocked.IsError)
+	require.Contains(t, blocked.ForLLM, "background=true")
+
+	blocked = tool.Execute(ctx, map[string]any{
+		"action": "run", "command": "nohup sleep 1",
+	})
+	require.True(t, blocked.IsError)
+	require.Contains(t, blocked.ForLLM, "nohup")
+}
+
+func TestBackgroundWithoutNotifyGetsSilentHint(t *testing.T) {
+	tool, err := newTestExecTool(t.TempDir(), false)
+	require.NoError(t, err)
+	sm := NewSessionManager()
+	t.Cleanup(sm.Stop)
+	tool.sessionManager = sm
+
+	ctx := WithToolContext(context.Background(), "cli", "test")
+	result := tool.Execute(ctx, map[string]any{
+		"action": "run", "command": "sleep 1", "background": "true",
+	})
+	require.False(t, result.IsError, result.ForLLM)
+
+	var started ExecResponse
+	require.NoError(t, json.Unmarshal([]byte(result.ForLLM), &started))
+	require.Contains(t, started.Note, "notify=true")
+
+	_ = tool.Execute(ctx, map[string]any{
+		"action": "kill", "sessionId": started.SessionID,
+	})
 }

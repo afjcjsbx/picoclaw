@@ -199,6 +199,9 @@ func NewAgentInstance(
 			logger.ErrorCF("agent", "Failed to initialize exec tool; continuing without exec",
 				map[string]any{"error": err.Error()})
 		} else {
+			// Smart approvals reuse the primary provider when no separate
+			// Guardian model is configured, avoiding a second client.
+			execTool.SetApprovalProvider(provider)
 			toolsRegistry.Register(execTool)
 		}
 	}

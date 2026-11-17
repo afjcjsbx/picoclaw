@@ -30,6 +30,15 @@ func canonicalCommands(command string, depth int) []string {
 	if err != nil {
 		return nil
 	}
+	return canonicalForms(file, depth)
+}
+
+// canonicalForms walks an already parsed file. Analyze reuses this with the
+// same syntax.File that the workspace and risk passes consume.
+func canonicalForms(file *syntax.File, depth int) []string {
+	if file == nil || depth > maxShellNesting {
+		return nil
+	}
 
 	var forms []string
 	syntax.Walk(file, func(node syntax.Node) bool {

@@ -1,9 +1,11 @@
 ---
-description: "PicoClaw can filter sensitive values (API keys, tokens, secrets, passwords) from tool call results before they are sent to the LLM."
+description: "PicoClaw can redact exact configured secret values from tool results as a defense-in-depth control. It is not a DLP boundary."
 ---
 # Sensitive Data Filtering
 
-PicoClaw can filter sensitive values (API keys, tokens, secrets, passwords) from tool call results before they are sent to the LLM. This prevents the LLM from seeing its own credentials, which could otherwise leak through tool output or cause confusing behavior.
+PicoClaw can redact exact sensitive values (API keys, tokens, secrets, passwords) from tool-result text before it is sent to the LLM. This reduces the chance that the model sees its own credentials, but it is a defense-in-depth control, not a data-loss-prevention (DLP) boundary.
+
+> **Defense in depth, not DLP.** The filter replaces only exact values loaded from `.security.yml` when they appear verbatim in tool-result text. It does not decode or normalize transformations. Base64, hex, character-spaced, reversed, compressed, chunked, or model-reconstructed forms bypass it. It also does not cover artifacts on disk, logs, channel messages, the final model response, or content the model has already seen. Do not rely on it to prevent credential exfiltration; use filesystem restrictions, process isolation, and credential minimization.
 
 ---
 
@@ -55,7 +57,7 @@ Sensitive data filtering is configured in the `tools` section of `config.json`:
    - If content length < `filter_min_length`, content is passed through unchanged (fast path)
    - Otherwise, all sensitive values are replaced with `[FILTERED]`
 
-3. **Replacement**: Uses `strings.Replacer` for efficient O(n+m) string substitution, where n = content length and m = total sensitive value length.
+3. **Replacement**: Uses `strings.Replacer` for efficient O(n+m) string substitution, where n = content length and m = total sensitive value length. Matching is literal: the filter does not decode base64/hex, remove spacing, or otherwise normalize the content before replacing exact configured values.
 
 ---
 
@@ -134,10 +136,12 @@ The model is using API key [FILTERED] and Telegram bot [FILTERED]
 
 ## Security Considerations
 
-- **Credential exposure prevention**: Without filtering, tools that echo credentials could cause the LLM to see its own API keys, potentially leading to confusion or credential leakage in logs
-- **Defense in depth**: Filtering complements (but does not replace) credential encryption — both features should be used together
-- **No false positives**: Only values explicitly stored in `.security.yml` are filtered; the LLM's general knowledge is unaffected
-- **Artifacts bypass filtering on disk**: large tool-result artifacts are written before filtering and are not redacted — treat `<workspace>/.artifacts/` as sensitive (see [Large tool-result artifacts](#large-tool-result-artifacts))
+- **Not a DLP boundary**: Filtering complements (but does not replace) credential encryption, workspace restrictions, process isolation, and credential minimization. Do not treat it as a guarantee that secrets cannot leave the model context.
+- **Encoding and transformation bypass**: The filter matches exact configured values. Encodings such as base64, hex, character spacing, reversal, compression, or chunking are not decoded and therefore bypass redaction. A model can also reconstruct a value from multiple outputs.
+- **Coverage limits**: Filtering applies to tool-result content before it is injected into the model context. It does not cover artifacts on disk, logs, channel messages, the final model response, or content the model has already seen.
+- **Credential exposure reduction**: Without filtering, tools that echo credentials could more easily cause the LLM to see its own API keys, leading to confusion or credential leakage in logs.
+- **No false positives**: Only values explicitly stored in `.security.yml` are filtered; the LLM's general knowledge is unaffected.
+- **Artifacts bypass filtering on disk**: large tool-result artifacts are written before filtering and are not redacted — treat `<workspace>/.artifacts/` as sensitive (see [Large tool-result artifacts](#large-tool-result-artifacts)).
 
 ---
 

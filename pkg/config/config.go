@@ -358,9 +358,9 @@ type HookDefaultsConfig struct {
 	ApprovalTimeoutMS    int `json:"approval_timeout_ms,omitempty"`
 }
 
-// Approval modes for tools.exec. "off" keeps the static guards as the final
-// decision. "smart" sends commands that the static guards consider high,
-// critical or unknown to an auxiliary Guardian model before they can run.
+// Approval modes for tools.exec. "off" (default) keeps the static guards as
+// the final decision. "smart" sends commands that the static guards consider
+// high, critical or unknown to an auxiliary Guardian model before they can run.
 const (
 	ApprovalModeOff   = "off"
 	ApprovalModeSmart = "smart"
@@ -383,10 +383,10 @@ const (
 
 // ApprovalsConfig configures how potentially dangerous tool calls are approved.
 type ApprovalsConfig struct {
-	// Mode is "smart" (default) or "off". Smart mode asks a Guardian model to
+	// Mode is "off" (default) or "smart". Smart mode asks a Guardian model to
 	// review commands at or above SmartThreshold, plus commands whose risk
-	// cannot be classified. Set "off" to keep the static guards as the final
-	// decision.
+	// cannot be classified. "off" keeps the static guards as the final
+	// decision and avoids the extra model call.
 	Mode string `json:"mode,omitempty" env:"PICOCLAW_APPROVALS_MODE"`
 	// Model selects the Guardian model by model_list alias or provider/model
 	// reference. Empty uses the agent's default model.
@@ -404,9 +404,9 @@ type ApprovalsConfig struct {
 func (c ApprovalsConfig) Normalized() (ApprovalsConfig, error) {
 	mode := strings.ToLower(strings.TrimSpace(c.Mode))
 	switch mode {
-	case "", ApprovalModeSmart:
-		mode = ApprovalModeSmart
-	case ApprovalModeOff:
+	case "", ApprovalModeOff:
+		mode = ApprovalModeOff
+	case ApprovalModeSmart:
 	default:
 		return c, fmt.Errorf("mode %q must be %q or %q", c.Mode, ApprovalModeOff, ApprovalModeSmart)
 	}

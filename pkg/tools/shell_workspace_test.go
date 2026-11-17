@@ -48,7 +48,7 @@ func TestShellTool_WorkspaceGuardDefaultConfig(t *testing.T) {
 	workspace := t.TempDir()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	tool, err := NewExecTool(workspace, true)
+	tool, err := newTestExecTool(workspace, true)
 	require.NoError(t, err)
 
 	blocked := []string{

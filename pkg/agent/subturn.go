@@ -195,6 +195,11 @@ type SubTurnConfig struct {
 	// The target agent's workspace, model, tools, and system prompt are used
 	// instead of the caller's. If empty, the sub-turn runs as the parent agent.
 	TargetAgentID string
+
+	// SlotHeld means the caller already reserved a concurrency slot through
+	// WaitForSubTurnSlot. SlotRelease releases it exactly once.
+	SlotHeld    bool
+	SlotRelease func()
 }
 
 // ====================== Context Keys ======================
@@ -253,9 +258,48 @@ func (s *AgentLoopSpawner) SpawnSubTurn(
 		Timeout:            cfg.Timeout,
 		MaxContextRunes:    cfg.MaxContextRunes,
 		TargetAgentID:      cfg.TargetAgentID,
+		SlotHeld:           cfg.SlotHeld,
+		SlotRelease:        cfg.SlotRelease,
 	}
 
 	return spawnSubTurn(ctx, s.al, parentTS, agentCfg)
+}
+
+// WaitForSubTurnSlot implements tools.SubTurnSlotWaiter. It reserves one
+// concurrency slot synchronously, bounded by concurrency_timeout_sec, so the
+// spawn tool can acknowledge only after admission is guaranteed.
+func (s *AgentLoopSpawner) WaitForSubTurnSlot(ctx context.Context) (func(), error) {
+	parentTS := turnStateFromContext(ctx)
+	if parentTS == nil {
+		return nil, errors.New(
+			"parent turnState not found in context - cannot spawn sub-turn outside of a turn",
+		)
+	}
+	if parentTS.concurrencySem == nil {
+		return func() {}, nil
+	}
+
+	// A free slot wins over a canceled parent context: the tool call was
+	// already accepted by the model, so an acknowledged spawn still starts.
+	select {
+	case parentTS.concurrencySem <- struct{}{}:
+		return parentTS.releaseSubTurnSlotOnce(), nil
+	default:
+	}
+
+	rtCfg := s.al.getSubTurnConfig()
+	timeoutCtx, cancel := context.WithTimeout(ctx, rtCfg.concurrencyTimeout)
+	defer cancel()
+	select {
+	case parentTS.concurrencySem <- struct{}{}:
+		return parentTS.releaseSubTurnSlotOnce(), nil
+	case <-timeoutCtx.Done():
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, fmt.Errorf("%w: all %d slots occupied for %v",
+			ErrConcurrencyTimeout, rtCfg.maxConcurrent, rtCfg.concurrencyTimeout)
+	}
 }
 
 // NewSubTurnSpawner creates a SubTurnSpawner for the given AgentLoop.
@@ -301,12 +345,17 @@ func spawnSubTurn(
 	// parent's goroutine to be blocked waiting for a semaphore slot while child turns are
 	// blocked delivering results — a deadlock.
 	var semAcquired bool
-	if parentTS.concurrencySem != nil {
-		// An async spawn acknowledges the tool call before its goroutine is
-		// guaranteed to run. The parent turn may end (canceling ctx) in that
-		// window while a slot is still free: taking a free slot must win over
-		// the cancellation, otherwise an already-acknowledged SubTurn is
-		// silently dropped. Only block (and honor ctx) when no slot is free.
+	var releaseSlot func()
+	if cfg.SlotHeld {
+		// The spawn tool reserved the slot synchronously before acknowledging.
+		semAcquired = true
+		releaseSlot = cfg.SlotRelease
+		if releaseSlot == nil {
+			releaseSlot = func() {}
+		}
+	} else if parentTS.concurrencySem != nil {
+		// A free slot wins over cancellation: once a spawn is acknowledged it
+		// must start even if the parent turn ended in the meantime.
 		select {
 		case parentTS.concurrencySem <- struct{}{}:
 			semAcquired = true
@@ -331,10 +380,12 @@ func spawnSubTurn(
 					ErrConcurrencyTimeout, rtCfg.maxConcurrent, rtCfg.concurrencyTimeout)
 			}
 		}
-
+		releaseSlot = parentTS.releaseSubTurnSlotOnce()
+	}
+	if semAcquired && releaseSlot != nil {
 		defer func() {
 			if semAcquired {
-				<-parentTS.concurrencySem
+				releaseSlot()
 			}
 		}()
 	}
@@ -530,7 +581,7 @@ func spawnSubTurn(
 	// - The parent goroutine is blocked waiting for a semaphore slot
 	// - The parent cannot consume pendingResults because it is blocked on the semaphore
 	if semAcquired {
-		<-parentTS.concurrencySem
+		releaseSlot()
 		semAcquired = false // prevent the defer from double-releasing
 	}
 
@@ -552,6 +603,20 @@ func spawnSubTurn(
 }
 
 // ====================== Child Join ======================
+
+// releaseSubTurnSlotOnce returns an idempotent release function for one
+// concurrency slot. Both the spawn tool and spawnSubTurn may call it.
+func (ts *turnState) releaseSubTurnSlotOnce() func() {
+	if ts == nil || ts.concurrencySem == nil {
+		return func() {}
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			<-ts.concurrencySem
+		})
+	}
+}
 
 // Begin implements tools.ChildTracker. The returned func delivers the child's
 // result to this turn and releases the join, so a result is never lost between

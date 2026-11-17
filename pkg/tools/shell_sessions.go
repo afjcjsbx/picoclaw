@@ -5,27 +5,47 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"strings"
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/config"
 )
 
-func (t *ExecTool) executeList() *ToolResult {
-	sessions := t.sessionManager.List()
-	resp := ExecResponse{
-		Sessions: sessions,
+// sessionResponse fills the fields every action reports for a session. Callers
+// add the action-specific output, offsets and notes on top.
+func sessionResponse(sessionID string, session *ProcessSession) ExecResponse {
+	artifactPath, artifactCapped := session.SpillInfo()
+	return ExecResponse{
+		SessionID:      sessionID,
+		Status:         session.GetStatus(),
+		ExitCode:       sessionExitCode(session),
+		TotalBytes:     session.TotalBytes(),
+		DroppedBytes:   session.DroppedBytes(),
+		ArtifactPath:   artifactPath,
+		ArtifactCapped: artifactCapped,
 	}
+}
+
+// jsonResult serializes one tool response, keeping the error mapping in one
+// place. forUser is empty for model-only responses.
+func jsonResult(resp ExecResponse, forUser string) *ToolResult {
 	data, err := json.Marshal(resp)
 	if err != nil {
 		return ErrorResult(err.Error())
 	}
-	return &ToolResult{
-		ForLLM:  string(data),
-		ForUser: fmt.Sprintf("%d active sessions", len(sessions)),
-		IsError: false,
-	}
+	return &ToolResult{ForLLM: string(data), ForUser: forUser, IsError: false}
+}
+
+func (t *ExecTool) executeList(ctx context.Context) *ToolResult {
+	sessions := t.sessionManager.ListForCaller(
+		ToolAgentID(ctx),
+		ToolChannel(ctx),
+		ToolChatID(ctx),
+	)
+	return jsonResult(
+		ExecResponse{Sessions: sessions},
+		fmt.Sprintf("%d active sessions", len(sessions)),
+	)
 }
 
 // sessionIDArg extracts the required sessionId argument.
@@ -37,8 +57,16 @@ func sessionIDArg(args map[string]any) (string, *ToolResult) {
 	return sessionID, nil
 }
 
-func (t *ExecTool) lookupSession(sessionID string) (*ProcessSession, *ToolResult) {
-	session, err := t.sessionManager.Get(sessionID)
+// lookupSession resolves a session while enforcing the caller's ownership.
+// Internal channels can access every session; remote callers only sessions
+// created by the same agent/channel/chat.
+func (t *ExecTool) lookupSession(ctx context.Context, sessionID string) (*ProcessSession, *ToolResult) {
+	session, err := t.sessionManager.GetForCaller(
+		sessionID,
+		ToolAgentID(ctx),
+		ToolChannel(ctx),
+		ToolChatID(ctx),
+	)
 	if err != nil {
 		if errors.Is(err, ErrSessionNotFound) {
 			return nil, ErrorResult(fmt.Sprintf("session not found: %s", sessionID))
@@ -51,43 +79,33 @@ func (t *ExecTool) lookupSession(sessionID string) (*ProcessSession, *ToolResult
 // getSession resolves the sessionId argument to a live session. Actions that
 // validate other arguments before the lookup call sessionIDArg and
 // lookupSession separately to keep their error order.
-func (t *ExecTool) getSession(args map[string]any) (string, *ProcessSession, *ToolResult) {
+func (t *ExecTool) getSession(
+	ctx context.Context,
+	args map[string]any,
+) (string, *ProcessSession, *ToolResult) {
 	sessionID, errResult := sessionIDArg(args)
 	if errResult != nil {
 		return "", nil, errResult
 	}
-	session, errResult := t.lookupSession(sessionID)
+	session, errResult := t.lookupSession(ctx, sessionID)
 	return sessionID, session, errResult
 }
 
-func (t *ExecTool) executePoll(args map[string]any) *ToolResult {
-	sessionID, session, errResult := t.getSession(args)
+func (t *ExecTool) executePoll(ctx context.Context, args map[string]any) *ToolResult {
+	sessionID, session, errResult := t.getSession(ctx, args)
 	if errResult != nil {
 		return errResult
 	}
 
-	resp := ExecResponse{
-		SessionID:    sessionID,
-		Status:       session.GetStatus(),
-		ExitCode:     sessionExitCode(session),
-		Output:       session.Tail(pollOutputChars),
-		TotalBytes:   session.TotalBytes(),
-		DroppedBytes: session.DroppedBytes(),
-	}
+	resp := sessionResponse(sessionID, session)
+	resp.Output = session.Tail(pollOutputChars)
 	if !session.IsDone() && session.noteCheck() >= idleCheckLimit {
 		resp.Note = pollIdleNote
 		if session.StartNotify() || session.NotifyEnabled() {
 			resp.Note += " " + autoNotifyNote
 		}
 	}
-	data, err := json.Marshal(resp)
-	if err != nil {
-		return ErrorResult(err.Error())
-	}
-	return &ToolResult{
-		ForLLM:  string(data),
-		IsError: false,
-	}
+	return jsonResult(resp, "")
 }
 
 const (
@@ -131,10 +149,8 @@ func (t *ExecTool) executeWait(ctx context.Context, args map[string]any) *ToolRe
 		maxWait = defaultWaitMax
 	}
 	window, clampNote := maxWait, ""
-	if raw, ok := args["timeout"]; ok {
-		// JSON tool arguments always decode numbers as float64.
-		value, isNumber := raw.(float64)
-		if !isNumber || value != math.Trunc(value) || value < 1 {
+	if value, provided, valid := numberArg(args, "timeout", 1); provided {
+		if !valid {
 			return ErrorResult("timeout must be a positive integer number of seconds")
 		}
 		if requested := time.Duration(value) * time.Second; requested <= maxWait {
@@ -145,36 +161,25 @@ func (t *ExecTool) executeWait(ctx context.Context, args map[string]any) *ToolRe
 		}
 	}
 
-	session, errResult := t.lookupSession(sessionID)
+	session, errResult := t.lookupSession(ctx, sessionID)
 	if errResult != nil {
 		return errResult
 	}
 
-	// ponytail: polls IsDone every 100ms instead of a done channel; a queued
-	// steering message does not release the wait, only ctx cancellation does.
+	// Block on the session's done channel instead of polling IsDone: a wait
+	// must not wake up every 100ms on a low-power host. Only ctx cancellation
+	// or the wait window releases a running command; a queued steering message
+	// does not.
 	deadline := time.NewTimer(window)
 	defer deadline.Stop()
-	tick := time.NewTicker(100 * time.Millisecond)
-	defer tick.Stop()
-
-	timedOut := false
-	for !timedOut && !session.IsDone() {
-		select {
-		case <-ctx.Done():
-			return ErrorResult(fmt.Sprintf("wait interrupted: %v", ctx.Err()))
-		case <-deadline.C:
-			timedOut = true
-		case <-tick.C:
-		}
+	select {
+	case <-session.Done():
+	case <-ctx.Done():
+		return ErrorResult(fmt.Sprintf("wait interrupted: %v", ctx.Err()))
+	case <-deadline.C:
 	}
 
-	resp := ExecResponse{
-		SessionID:    sessionID,
-		Status:       session.GetStatus(),
-		ExitCode:     sessionExitCode(session),
-		TotalBytes:   session.TotalBytes(),
-		DroppedBytes: session.DroppedBytes(),
-	}
+	resp := sessionResponse(sessionID, session)
 	if session.IsDone() {
 		resp.Output = session.Read()
 	} else {
@@ -189,24 +194,19 @@ func (t *ExecTool) executeWait(ctx context.Context, args map[string]any) *ToolRe
 			}
 		}
 	}
-	data, err := json.Marshal(resp)
-	if err != nil {
-		return ErrorResult(err.Error())
-	}
-	return &ToolResult{ForLLM: string(data)}
+	return jsonResult(resp, "")
 }
 
-func (t *ExecTool) executeRead(args map[string]any) *ToolResult {
-	sessionID, session, errResult := t.getSession(args)
+func (t *ExecTool) executeRead(ctx context.Context, args map[string]any) *ToolResult {
+	sessionID, session, errResult := t.getSession(ctx, args)
 	if errResult != nil {
 		return errResult
 	}
 
 	offset := int64(0)
 	offsetProvided := false
-	if raw, ok := args["offset"]; ok {
-		value, isNumber := raw.(float64)
-		if !isNumber || value != math.Trunc(value) || value < 0 {
+	if value, provided, valid := numberArg(args, "offset", 0); provided {
+		if !valid {
 			return ErrorResult("offset must be a non-negative integer number of bytes")
 		}
 		offset = int64(value)
@@ -217,9 +217,8 @@ func (t *ExecTool) executeRead(args map[string]any) *ToolResult {
 	if limit <= 0 {
 		limit = config.DefaultExecMaxOutputChars
 	}
-	if raw, ok := args["limit"]; ok {
-		value, isNumber := raw.(float64)
-		if !isNumber || value != math.Trunc(value) || value < 1 {
+	if value, provided, valid := numberArg(args, "limit", 1); provided {
+		if !valid {
 			return ErrorResult("limit must be a positive integer number of bytes")
 		}
 		limit = int64(value)
@@ -231,35 +230,27 @@ func (t *ExecTool) executeRead(args map[string]any) *ToolResult {
 	}
 
 	page := session.ReadRange(offset, limit)
-	resp := ExecResponse{
-		SessionID:    sessionID,
-		Output:       page.Text,
-		Status:       session.GetStatus(),
-		ExitCode:     sessionExitCode(session),
-		TotalBytes:   page.TotalBytes,
-		Offset:       page.Offset,
-		NextOffset:   page.NextOffset,
-		HasMore:      page.HasMore,
-		DroppedBytes: page.DroppedBytes,
-		SkippedBytes: page.SkippedBytes,
-	}
+	resp := sessionResponse(sessionID, session)
+	resp.Output = page.Text
+	resp.TotalBytes = page.TotalBytes
+	resp.Offset = page.Offset
+	resp.NextOffset = page.NextOffset
+	resp.HasMore = page.HasMore
+	resp.DroppedBytes = page.DroppedBytes
+	resp.SkippedBytes = page.SkippedBytes
 	if page.SkippedBytes > 0 {
 		resp.Note = fmt.Sprintf(
 			"Requested offset %d predates the retained output window; skipped %d bytes, starting at byte %d.",
 			offset, page.SkippedBytes, page.Offset,
 		)
+		if resp.ArtifactPath != "" {
+			resp.Note += " The full output is saved at " + resp.ArtifactPath + "."
+		}
 	}
-	data, err := json.Marshal(resp)
-	if err != nil {
-		return ErrorResult(err.Error())
-	}
-	return &ToolResult{
-		ForLLM:  string(data),
-		IsError: false,
-	}
+	return jsonResult(resp, "")
 }
 
-func (t *ExecTool) executeWrite(args map[string]any) *ToolResult {
+func (t *ExecTool) executeWrite(ctx context.Context, args map[string]any) *ToolResult {
 	sessionID, errResult := sessionIDArg(args)
 	if errResult != nil {
 		return errResult
@@ -270,7 +261,7 @@ func (t *ExecTool) executeWrite(args map[string]any) *ToolResult {
 		return ErrorResult("data is required")
 	}
 
-	session, errResult := t.lookupSession(sessionID)
+	session, errResult := t.lookupSession(ctx, sessionID)
 	if errResult != nil {
 		return errResult
 	}
@@ -286,22 +277,14 @@ func (t *ExecTool) executeWrite(args map[string]any) *ToolResult {
 		return ErrorResult(fmt.Sprintf("failed to write to session: %v", err))
 	}
 
-	resp := ExecResponse{
+	return jsonResult(ExecResponse{
 		SessionID: sessionID,
 		Status:    session.GetStatus(),
-	}
-	respData, err := json.Marshal(resp)
-	if err != nil {
-		return ErrorResult(err.Error())
-	}
-	return &ToolResult{
-		ForLLM:  string(respData),
-		IsError: false,
-	}
+	}, "")
 }
 
-func (t *ExecTool) executeKill(args map[string]any) *ToolResult {
-	sessionID, session, errResult := t.getSession(args)
+func (t *ExecTool) executeKill(ctx context.Context, args map[string]any) *ToolResult {
+	sessionID, session, errResult := t.getSession(ctx, args)
 	if errResult != nil {
 		return errResult
 	}
@@ -314,23 +297,9 @@ func (t *ExecTool) executeKill(args map[string]any) *ToolResult {
 		return ErrorResult(fmt.Sprintf("failed to kill session: %v", err))
 	}
 
-	resp := ExecResponse{
-		SessionID:    sessionID,
-		Status:       session.GetStatus(),
-		ExitCode:     sessionExitCode(session),
-		Output:       session.Tail(killOutputChars),
-		TotalBytes:   session.TotalBytes(),
-		DroppedBytes: session.DroppedBytes(),
-	}
-	data, err := json.Marshal(resp)
-	if err != nil {
-		return ErrorResult(err.Error())
-	}
-	return &ToolResult{
-		ForLLM:  string(data),
-		ForUser: fmt.Sprintf("Session %s killed; output retained for 30 minutes", sessionID),
-		IsError: false,
-	}
+	resp := sessionResponse(sessionID, session)
+	resp.Output = session.Tail(killOutputChars)
+	return jsonResult(resp, fmt.Sprintf("Session %s killed; output retained for 30 minutes", sessionID))
 }
 
 // keyMap maps key names to their escape sequences.
@@ -489,7 +458,7 @@ func encodeKeySequence(tokens []string, ptyKeyMode PtyKeyMode) (string, error) {
 	return result, nil
 }
 
-func (t *ExecTool) executeSendKeys(args map[string]any) *ToolResult {
+func (t *ExecTool) executeSendKeys(ctx context.Context, args map[string]any) *ToolResult {
 	sessionID, errResult := sessionIDArg(args)
 	if errResult != nil {
 		return errResult
@@ -518,7 +487,7 @@ func (t *ExecTool) executeSendKeys(args map[string]any) *ToolResult {
 		return ErrorResult("keys cannot be empty")
 	}
 
-	session, errResult := t.lookupSession(sessionID)
+	session, errResult := t.lookupSession(ctx, sessionID)
 	if errResult != nil {
 		return errResult
 	}
@@ -546,12 +515,5 @@ func (t *ExecTool) executeSendKeys(args map[string]any) *ToolResult {
 		Status:    "running",
 		Output:    fmt.Sprintf("Sent keys: %v", keys),
 	}
-	respData, err := json.Marshal(resp)
-	if err != nil {
-		return ErrorResult(err.Error())
-	}
-	return &ToolResult{
-		ForLLM:  string(respData),
-		IsError: false,
-	}
+	return jsonResult(resp, "")
 }
