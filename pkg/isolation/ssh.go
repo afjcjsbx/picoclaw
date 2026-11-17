@@ -37,7 +37,7 @@ var (
 // the OpenSSH client. The remote account is the isolation boundary: local host
 // paths are not mounted, and the remote host must provide the command, /bin/sh
 // for the exec tool, and the mapped working directory.
-func applySSHIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, root string) error {
+func applySSHIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, root, workspace string) error {
 	if !isolation.Enabled || cmd == nil || cmd.Path == "" || len(cmd.Args) == 0 {
 		return nil
 	}
@@ -66,6 +66,7 @@ func applySSHIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, root str
 	}
 	remoteRoot := sshRemoteRoot(root, isolation.SSH.RemoteRoot)
 	remoteDir := sshRemotePath(execDir, root, isolation.SSH.RemoteRoot)
+	remoteWorkspace := sshRemotePath(workspace, root, isolation.SSH.RemoteRoot)
 	remoteCommandPath := sshRemoteCommandPath(originalPath, remoteDir, root, isolation.SSH.RemoteRoot)
 	remoteCommand := buildSSHRemoteCommand(remoteDir, remoteCommandPath, originalArgs[1:])
 	forwardEnv := sshForwardEnvNames(isolation.SSH)
@@ -78,14 +79,15 @@ func applySSHIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, root str
 
 	multiplex := sshMultiplexArgs(isolation.SSH)
 	logger.DebugCF("isolation", "ssh isolation remote plan", map[string]any{
-		"target":        isolation.SSH.Target(),
-		"host":          isolation.SSH.Host,
-		"remote_root":   remoteRoot,
-		"working_dir":   remoteDir,
-		"command":       remoteCommandPath,
-		"forward_env":   len(forwardEnv),
-		"multiplex":     len(multiplex) > 0,
-		"path_boundary": false,
+		"target":           isolation.SSH.Target(),
+		"host":             isolation.SSH.Host,
+		"remote_root":      remoteRoot,
+		"remote_workspace": remoteWorkspace,
+		"working_dir":      remoteDir,
+		"command":          remoteCommandPath,
+		"forward_env":      len(forwardEnv),
+		"multiplex":        len(multiplex) > 0,
+		"path_boundary":    false,
 	})
 
 	cmd.Path = sshPath
@@ -532,7 +534,7 @@ func sshLifecycleFlag(arg string) bool {
 	return false
 }
 
-func preflightSSH(cfg config.SSHIsolationConfig, expose []config.ExposePath) error {
+func preflightSSH(cfg config.SSHIsolationConfig, workspace string, expose []config.ExposePath) error {
 	if err := validateSSHIsolation(config.IsolationConfig{
 		Enabled:     true,
 		Backend:     config.IsolationBackendSSH,
@@ -540,6 +542,22 @@ func preflightSSH(cfg config.SSHIsolationConfig, expose []config.ExposePath) err
 		SSH:         cfg,
 	}); err != nil {
 		return err
+	}
+	root, err := ResolveInstanceRoot()
+	if err != nil {
+		return err
+	}
+	remoteRoot := sshRemoteRoot(root, cfg.RemoteRoot)
+	if remoteRoot == string(filepath.Separator) {
+		return fmt.Errorf("isolation.ssh.remote_root must not be the remote filesystem root; use a dedicated directory")
+	}
+	if workspace != "" {
+		remoteWorkspace := sshRemotePath(workspace, root, cfg.RemoteRoot)
+		if remoteWorkspace == remoteRoot {
+			return fmt.Errorf(
+				"isolation.ssh.remote_root must be a parent directory of the workspace, not the workspace itself",
+			)
+		}
 	}
 	sshPath, err := exec.LookPath("ssh")
 	if err != nil {

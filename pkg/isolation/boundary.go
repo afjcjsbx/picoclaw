@@ -63,7 +63,7 @@ func DescribeBoundary(workspace string, cfg config.IsolationConfig) (Boundary, b
 		boundary.Network = cfg.Docker.NetworkEnabled()
 
 		customTargets := customExposeTargets(cfg.ExposePaths)
-		merged := MergeExposePaths(defaultDockerExposePaths(boundary.Root), cfg.ExposePaths)
+		merged := MergeExposePaths(defaultDockerExposePaths(boundary.Root, boundary.Workspace), cfg.ExposePaths)
 		for _, rule := range merged {
 			target := filepath.Clean(rule.Target)
 			if target == boundary.Root || target == boundary.Scratch {
@@ -81,6 +81,9 @@ func DescribeBoundary(workspace string, cfg config.IsolationConfig) (Boundary, b
 		}
 		boundary.RootWritable = effectiveBoundaryMode(merged, boundary.Root) == "rw"
 		boundary.ScratchWritable = effectiveBoundaryMode(merged, boundary.Scratch) == "rw"
+		if boundary.Workspace != "" && effectiveBoundaryMode(merged, boundary.Workspace) == "rw" {
+			boundary.Writable = append(boundary.Writable, boundary.Workspace)
+		}
 		return boundary, true
 	}
 
@@ -107,7 +110,7 @@ func DescribeBoundary(workspace string, cfg config.IsolationConfig) (Boundary, b
 		boundary.Scratch = filepath.Join(boundary.Root, "runtime-user-env", "tmp")
 
 		customTargets := customExposeTargets(cfg.ExposePaths)
-		merged := MergeExposePaths(DefaultExposePaths(boundary.Root), cfg.ExposePaths)
+		merged := MergeExposePaths(DefaultWorkspaceExposePaths(boundary.Root, boundary.Workspace), cfg.ExposePaths)
 
 		for _, rule := range merged {
 			target := filepath.Clean(rule.Target)
@@ -131,17 +134,19 @@ func DescribeBoundary(workspace string, cfg config.IsolationConfig) (Boundary, b
 
 		boundary.RootWritable = effectiveBoundaryMode(merged, boundary.Root) == "rw"
 		boundary.ScratchWritable = effectiveBoundaryMode(merged, boundary.Scratch) == "rw"
+		if boundary.Workspace != "" && effectiveBoundaryMode(merged, boundary.Workspace) == "rw" {
+			boundary.Writable = append(boundary.Writable, boundary.Workspace)
+		}
 	case config.IsolationBackendSeatbelt:
 		boundary.PathBoundary = true
 		boundary.Scratch = filepath.Join(boundary.Root, "runtime-user-env", "tmp")
-		// The Seatbelt profile always allows writes under the instance root.
-		// Seatbelt rules are additive, so a later read-only allow cannot revoke
-		// that write access; report the enforced mode, not the requested one.
-		boundary.RootWritable = true
+		// The Seatbelt profile makes the instance root read-only and grants
+		// writes only to the workspace and runtime-user-env.
+		boundary.RootWritable = false
 		boundary.ScratchWritable = true
 
 		customTargets := customExposeTargets(cfg.ExposePaths)
-		for _, rule := range MergeExposePaths(DefaultExposePaths(boundary.Root), cfg.ExposePaths) {
+		for _, rule := range MergeExposePaths(DefaultWorkspaceExposePaths(boundary.Root, boundary.Workspace), cfg.ExposePaths) {
 			target := filepath.Clean(rule.Target)
 			if target == boundary.Root || target == boundary.Scratch {
 				continue
@@ -153,11 +158,13 @@ func DescribeBoundary(workspace string, cfg config.IsolationConfig) (Boundary, b
 			case "rw":
 				boundary.Writable = append(boundary.Writable, target)
 			case "ro":
-				if boundaryPathWithin(boundary.Root, target) {
-					boundary.Writable = append(boundary.Writable, target)
-					continue
-				}
 				boundary.ReadOnly = append(boundary.ReadOnly, target)
+			}
+		}
+		if boundary.Workspace != "" {
+			merged := MergeExposePaths(DefaultWorkspaceExposePaths(boundary.Root, boundary.Workspace), cfg.ExposePaths)
+			if effectiveBoundaryMode(merged, boundary.Workspace) == "rw" {
+				boundary.Writable = append(boundary.Writable, boundary.Workspace)
 			}
 		}
 	case config.IsolationBackendWindows:

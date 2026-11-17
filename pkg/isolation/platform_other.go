@@ -8,7 +8,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 )
 
-func applyNativePlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, root string) error {
+func applyNativePlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, root, workspace string) error {
 	// Unsupported platforms keep the command unchanged for the native backend.
 	// Docker is handled by the shared dispatcher and works here when selected.
 	return nil

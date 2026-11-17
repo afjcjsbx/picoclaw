@@ -42,6 +42,7 @@ type UserEnv struct {
 var (
 	isolationMu      sync.RWMutex
 	currentIsolation = config.DefaultConfig().Isolation
+	currentWorkspace = config.DefaultConfig().WorkspacePath()
 	isolationGen     uint64
 
 	// preflightCache memoizes the expensive Preflight work (instance dir
@@ -65,8 +66,30 @@ func Configure(cfg *config.Config) {
 	if cfg == nil {
 		defaults := config.DefaultConfig()
 		currentIsolation = defaults.Isolation
+		currentWorkspace = absoluteWorkspace(defaults.WorkspacePath())
 	} else {
 		currentIsolation = cfg.Isolation
+		currentWorkspace = absoluteWorkspace(cfg.WorkspacePath())
+	}
+	isolationGen++
+}
+
+// ConfigureForWorkspace is Configure plus the resolved agent workspace. The
+// exec tool passes its own workspace to StartForWorkspace, so this is only the
+// default for integrations (hooks, MCP, CLI providers) that do not carry one.
+func ConfigureForWorkspace(cfg *config.Config, workspace string) {
+	isolationMu.Lock()
+	defer isolationMu.Unlock()
+	if cfg == nil {
+		defaults := config.DefaultConfig()
+		currentIsolation = defaults.Isolation
+		currentWorkspace = absoluteWorkspace(defaults.WorkspacePath())
+	} else {
+		currentIsolation = cfg.Isolation
+		currentWorkspace = absoluteWorkspace(cfg.WorkspacePath())
+	}
+	if workspace != "" {
+		currentWorkspace = absoluteWorkspace(workspace)
 	}
 	isolationGen++
 }
@@ -76,6 +99,72 @@ func CurrentConfig() config.IsolationConfig {
 	isolationMu.RLock()
 	defer isolationMu.RUnlock()
 	return currentIsolation
+}
+
+// CurrentWorkspace returns the workspace used by isolation callers that do not
+// pass an explicit workspace.
+func CurrentWorkspace() string {
+	isolationMu.RLock()
+	defer isolationMu.RUnlock()
+	return currentWorkspace
+}
+
+func absoluteWorkspace(path string) string {
+	if strings.TrimSpace(path) == "" {
+		return ""
+	}
+	if abs, err := filepath.Abs(path); err == nil {
+		return filepath.Clean(abs)
+	}
+	return filepath.Clean(path)
+}
+
+// ValidateWorkspace rejects a workspace that would turn the isolation root back
+// into a writable view of the whole instance root (or the whole host).
+func ValidateWorkspace(root, workspace string) error {
+	if strings.TrimSpace(workspace) == "" {
+		return nil
+	}
+	absWorkspace, err := filepath.Abs(workspace)
+	if err != nil {
+		return fmt.Errorf("resolve workspace %q: %w", workspace, err)
+	}
+	absWorkspace = filepath.Clean(absWorkspace)
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return fmt.Errorf("resolve instance root %q: %w", root, err)
+	}
+	absRoot = filepath.Clean(absRoot)
+
+	if absWorkspace == string(filepath.Separator) {
+		return fmt.Errorf("workspace must not be the filesystem root")
+	}
+	if home, homeErr := os.UserHomeDir(); homeErr == nil {
+		cleanHome := filepath.Clean(home)
+		if absWorkspace == cleanHome {
+			return fmt.Errorf("workspace must not be the user home directory")
+		}
+	}
+	if absWorkspace == absRoot {
+		return fmt.Errorf("workspace must not be the instance root")
+	}
+	for _, system := range []string{"/etc", "/usr", "/bin", "/sbin", "/lib", "/lib64", "/boot", "/dev", "/proc", "/sys", "/root"} {
+		if absWorkspace == system || boundaryPathWithin(system, absWorkspace) {
+			return fmt.Errorf("workspace %s must not be inside the system directory %s", absWorkspace, system)
+		}
+	}
+	if boundaryPathWithin(absWorkspace, absRoot) {
+		// workspace is an ancestor of the instance root: mounting it RW would
+		// expose config/state/skills again.
+		return fmt.Errorf("workspace %s contains the instance root %s", absWorkspace, absRoot)
+	}
+	for _, protected := range []string{"state", "skills", "logs", "cache", "plugins"} {
+		protectedPath := filepath.Join(absRoot, protected)
+		if boundaryPathWithin(protectedPath, absWorkspace) {
+			return fmt.Errorf("workspace %s is inside protected instance directory %s", absWorkspace, protectedPath)
+		}
+	}
+	return nil
 }
 
 // ResolveInstanceRoot resolves the instance root used to build the isolated
@@ -218,13 +307,45 @@ func NormalizeExposePath(item config.ExposePath) config.ExposePath {
 }
 
 // DefaultExposePaths returns the minimum built-in host paths required for the
-// current platform to run isolated child processes.
+// current platform to run isolated child processes. The instance root is
+// read-only; callers that need workspace/scratch writes use
+// DefaultWorkspaceExposePaths.
 func DefaultExposePaths(root string) []config.ExposePath {
 	items := []config.ExposePath{{
 		Source: root,
 		Target: root,
-		Mode:   "rw",
+		Mode:   "ro",
 	}}
+	if runtime.GOOS == "linux" {
+		items = append(items, defaultLinuxSystemExposePaths()...)
+	}
+	return items
+}
+
+// DefaultWorkspaceExposePaths returns the read-only instance root plus the two
+// writable areas an exec child actually needs: its workspace and the redirected
+// per-instance user environment. Config, state, skills and logs stay RO because
+// they live under the read-only root.
+func DefaultWorkspaceExposePaths(root, workspace string) []config.ExposePath {
+	items := []config.ExposePath{{
+		Source: root,
+		Target: root,
+		Mode:   "ro",
+	}}
+	cleanWorkspace := absoluteWorkspace(workspace)
+	if cleanWorkspace != "" && cleanWorkspace != filepath.Clean(root) {
+		items = append(items, config.ExposePath{
+			Source: cleanWorkspace,
+			Target: cleanWorkspace,
+			Mode:   "rw",
+		})
+	}
+	runtimeEnv := filepath.Join(root, "runtime-user-env")
+	items = append(items, config.ExposePath{
+		Source: runtimeEnv,
+		Target: runtimeEnv,
+		Mode:   "rw",
+	})
 	if runtime.GOOS == "linux" {
 		items = append(items, defaultLinuxSystemExposePaths()...)
 	}
@@ -289,9 +410,10 @@ func MergeExposePaths(defaults []config.ExposePath, overrides []config.ExposePat
 }
 
 // BuildLinuxMountPlan converts the merged expose-path configuration into the
-// mount rules consumed by the Linux bubblewrap backend.
-func BuildLinuxMountPlan(root string, overrides []config.ExposePath) []MountRule {
-	merged := MergeExposePaths(DefaultExposePaths(root), overrides)
+// mount rules consumed by the Linux bubblewrap backend. The instance root is
+// read-only; only the workspace and runtime-user-env are writable by default.
+func BuildLinuxMountPlan(root, workspace string, overrides []config.ExposePath) []MountRule {
+	merged := MergeExposePaths(DefaultWorkspaceExposePaths(root, workspace), overrides)
 	plan := make([]MountRule, 0, len(merged))
 	for _, item := range merged {
 		plan = append(plan, MountRule{Source: item.Source, Target: item.Target, Mode: item.Mode})
@@ -306,10 +428,15 @@ func BuildLinuxMountPlan(root string, overrides []config.ExposePath) []MountRule
 // link is made visible through its parent and the resolved target is mounted
 // instead when it lives outside that parent.
 func appendLinuxCommandMountRules(plan []MountRule, resolvedPath string) []MountRule {
+	if mountPlanAllowsWrite(plan, resolvedPath) {
+		return plan
+	}
 	if !isSymlinkPath(resolvedPath) {
 		plan = ensureLinuxMountRule(plan, resolvedPath, resolvedPath, "ro")
 	}
-	plan = ensureLinuxMountRule(plan, filepath.Dir(resolvedPath), filepath.Dir(resolvedPath), "ro")
+	if dir := filepath.Dir(resolvedPath); !isSandboxTmpPath(dir) {
+		plan = ensureLinuxMountRule(plan, dir, dir, "ro")
+	}
 
 	resolved, err := filepath.EvalSymlinks(resolvedPath)
 	if err != nil || resolved == resolvedPath {
@@ -318,7 +445,10 @@ func appendLinuxCommandMountRules(plan []MountRule, resolvedPath string) []Mount
 	if !isSymlinkPath(resolved) {
 		plan = ensureLinuxMountRule(plan, resolved, resolved, "ro")
 	}
-	return ensureLinuxMountRule(plan, filepath.Dir(resolved), filepath.Dir(resolved), "ro")
+	if dir := filepath.Dir(resolved); !isSandboxTmpPath(dir) {
+		plan = ensureLinuxMountRule(plan, dir, dir, "ro")
+	}
+	return plan
 }
 
 func isSymlinkPath(path string) bool {
@@ -339,13 +469,36 @@ func ensureLinuxMountRule(plan []MountRule, source, target, mode string) []Mount
 	return append(plan, MountRule{Source: cleanSource, Target: cleanTarget, Mode: mode})
 }
 
-// BuildWindowsAccessRules derives the host-path access policy used by the
-// Windows restricted-token backend.
-func BuildWindowsAccessRules(root string, overrides []config.ExposePath) []AccessRule {
-	merged := MergeExposePaths(nil, overrides)
-	rules := make([]AccessRule, 0, len(merged)+1)
-	rules = append(rules, AccessRule{Path: root, Mode: "rw"})
-	for _, item := range merged {
+// mountPlanAllowsWrite reports whether path is already covered by a writable
+// mount rule. Absolute command arguments that point inside a writable area must
+// not be re-mounted read-only: doing so would silently break writes to a file
+// the command received as an argument.
+func mountPlanAllowsWrite(plan []MountRule, path string) bool {
+	clean := filepath.Clean(path)
+	for _, rule := range plan {
+		if rule.Mode == "rw" && boundaryPathWithin(rule.Target, clean) {
+			return true
+		}
+	}
+	return false
+}
+
+// isSandboxTmpPath reports whether path is the sandbox /tmp or below it. The
+// Linux backend mounts an ephemeral tmpfs on /tmp; host /tmp must never be
+// bind-mounted RW.
+func isSandboxTmpPath(path string) bool {
+	return filepath.Clean(path) == "/tmp"
+}
+
+func BuildWindowsAccessRules(root, workspace string, overrides []config.ExposePath) []AccessRule {
+	rules := []AccessRule{{Path: root, Mode: "ro"}}
+	cleanWorkspace := absoluteWorkspace(workspace)
+	if cleanWorkspace != "" && cleanWorkspace != filepath.Clean(root) {
+		rules = append(rules, AccessRule{Path: cleanWorkspace, Mode: "rw"})
+	}
+	runtimeEnv := filepath.Join(root, "runtime-user-env")
+	rules = append(rules, AccessRule{Path: runtimeEnv, Mode: "rw"})
+	for _, item := range overrides {
 		rules = append(rules, AccessRule{Path: item.Source, Mode: item.Mode})
 	}
 	return rules
@@ -368,11 +521,9 @@ func validateDarwinExposePaths(items []config.ExposePath, root string) error {
 				path.Target,
 			)
 		}
-		if path.Mode == "ro" && boundaryPathWithin(root, path.Target) {
+		if path.Mode == "rw" && boundaryPathWithin(path.Target, root) {
 			return fmt.Errorf(
-				"macOS Seatbelt cannot enforce read-only expose_paths under the instance root %s: %s; "+
-					"the instance root is always writable",
-				root,
+				"macOS Seatbelt cannot make %s writable: it is the instance root or an ancestor of it and would expose config/state/skills again",
 				path.Target,
 			)
 		}
@@ -433,6 +584,10 @@ func preflight(isolation config.IsolationConfig) error {
 	if err != nil {
 		return err
 	}
+	workspace := CurrentWorkspace()
+	if err := ValidateWorkspace(root, workspace); err != nil {
+		return err
+	}
 	if err := PrepareInstanceRoot(root); err != nil {
 		return err
 	}
@@ -441,11 +596,11 @@ func preflight(isolation config.IsolationConfig) error {
 	}
 	switch backend {
 	case config.IsolationBackendDocker:
-		return preflightDocker(isolation.Docker, root, isolation.ExposePaths)
+		return preflightDocker(isolation.Docker, root, workspace, isolation.ExposePaths)
 	case config.IsolationBackendSSH:
-		return preflightSSH(isolation.SSH, isolation.ExposePaths)
+		return preflightSSH(isolation.SSH, workspace, isolation.ExposePaths)
 	case config.IsolationBackendBubblewrap:
-		for _, rule := range BuildLinuxMountPlan(root, isolation.ExposePaths) {
+		for _, rule := range BuildLinuxMountPlan(root, workspace, isolation.ExposePaths) {
 			if rule.Source == "" || rule.Target == "" {
 				return fmt.Errorf("invalid linux mount rule")
 			}
@@ -454,7 +609,7 @@ func preflight(isolation config.IsolationConfig) error {
 		if err := validateWindowsExposePaths(isolation.ExposePaths); err != nil {
 			return err
 		}
-		for _, rule := range BuildWindowsAccessRules(root, isolation.ExposePaths) {
+		for _, rule := range BuildWindowsAccessRules(root, workspace, isolation.ExposePaths) {
 			if rule.Path == "" {
 				return fmt.Errorf("invalid windows access rule")
 			}
@@ -471,7 +626,14 @@ func preflight(isolation config.IsolationConfig) error {
 // post-start platform hooks required by the active backend. Callers must call
 // Release(cmd) after the process exits to discard per-command bookkeeping.
 func Start(cmd *exec.Cmd) error {
-	if err := PrepareCommand(cmd); err != nil {
+	return StartForWorkspace(cmd, CurrentWorkspace())
+}
+
+// StartForWorkspace is Start with an explicit workspace. The exec tool uses it
+// so the writable mount follows the agent's workspace instead of a process-wide
+// default.
+func StartForWorkspace(cmd *exec.Cmd, workspace string) error {
+	if err := PrepareCommandForWorkspace(cmd, workspace); err != nil {
 		return err
 	}
 	if err := cmd.Start(); err != nil {
@@ -499,7 +661,12 @@ func Start(cmd *exec.Cmd) error {
 // Start while returning the command's final exit status. It releases the
 // per-command bookkeeping automatically.
 func Run(cmd *exec.Cmd) error {
-	if err := PrepareCommand(cmd); err != nil {
+	return RunForWorkspace(cmd, CurrentWorkspace())
+}
+
+// RunForWorkspace is Run with an explicit workspace.
+func RunForWorkspace(cmd *exec.Cmd, workspace string) error {
+	if err := PrepareCommandForWorkspace(cmd, workspace); err != nil {
 		return err
 	}
 	if err := cmd.Start(); err != nil {
@@ -542,6 +709,11 @@ func terminateStartedCommand(cmd *exec.Cmd) {
 // PrepareCommand mutates the command in-place so it inherits the configured
 // isolated environment before being started by the caller.
 func PrepareCommand(cmd *exec.Cmd) error {
+	return PrepareCommandForWorkspace(cmd, CurrentWorkspace())
+}
+
+// PrepareCommandForWorkspace is PrepareCommand with an explicit workspace.
+func PrepareCommandForWorkspace(cmd *exec.Cmd, workspace string) error {
 	isolation := CurrentConfig()
 	if err := preflightCached(); err != nil {
 		return err
@@ -551,8 +723,14 @@ func PrepareCommand(cmd *exec.Cmd) error {
 		if err != nil {
 			return err
 		}
+		if workspace == "" {
+			workspace = CurrentWorkspace()
+		}
+		if err := ValidateWorkspace(root, workspace); err != nil {
+			return err
+		}
 		ApplyUserEnv(cmd, root)
-		if err := applyPlatformIsolation(cmd, isolation, root); err != nil {
+		if err := applyPlatformIsolation(cmd, isolation, root, workspace); err != nil {
 			return err
 		}
 	}

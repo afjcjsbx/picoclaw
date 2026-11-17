@@ -14,7 +14,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
-func applyNativePlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, root string) error {
+func applyNativePlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, root, workspace string) error {
 	if !isolation.Enabled || cmd == nil || cmd.Path == "" || len(cmd.Args) == 0 {
 		return nil
 	}
@@ -25,9 +25,9 @@ func applyNativePlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfi
 
 	originalPath := cmd.Path
 	originalArgs := append([]string(nil), cmd.Args...)
-	profile := buildDarwinSeatbeltProfile(root, cmd, isolation.ExposePaths)
+	profile := buildDarwinSeatbeltProfile(root, workspace, cmd, isolation.ExposePaths)
 	logger.DebugCF("isolation", "macOS Seatbelt profile prepared", map[string]any{
-		"root": root, "command": originalPath, "expose_paths": len(isolation.ExposePaths),
+		"root": root, "workspace": workspace, "command": originalPath, "expose_paths": len(isolation.ExposePaths),
 	})
 	cmd.Path = sandboxExec
 	cmd.Args = append([]string{"sandbox-exec", "-p", profile, originalPath}, originalArgs[1:]...)
@@ -40,7 +40,7 @@ func postStartNativePlatformIsolation(cmd *exec.Cmd, isolation config.IsolationC
 
 func cleanupPendingNativePlatformResources(cmd *exec.Cmd) {}
 
-func buildDarwinSeatbeltProfile(root string, cmd *exec.Cmd, exposePaths []config.ExposePath) string {
+func buildDarwinSeatbeltProfile(root, workspace string, cmd *exec.Cmd, exposePaths []config.ExposePath) string {
 	var rules strings.Builder
 	addPath := func(path, mode, predicate string, executable bool) {
 		if !filepath.IsAbs(path) {
@@ -62,6 +62,22 @@ func buildDarwinSeatbeltProfile(root string, cmd *exec.Cmd, exposePaths []config
 			addPath(resolved, mode, "subpath", executable)
 		}
 	}
+	writable := func(path string) bool {
+		if workspace != "" && boundaryPathWithin(workspace, path) {
+			return true
+		}
+		runtimeEnv := filepath.Join(root, "runtime-user-env")
+		if boundaryPathWithin(runtimeEnv, path) {
+			return true
+		}
+		for _, item := range exposePaths {
+			normalized := NormalizeExposePath(item)
+			if normalized.Mode == "rw" && boundaryPathWithin(normalized.Source, path) {
+				return true
+			}
+		}
+		return false
+	}
 
 	profile := strings.Builder{}
 	profile.WriteString("(version 1)\n(deny default)\n(import \"system.sb\")\n")
@@ -69,7 +85,14 @@ func buildDarwinSeatbeltProfile(root string, cmd *exec.Cmd, exposePaths []config
 	for _, path := range []string{"/System", "/bin", "/sbin", "/etc", "/usr/bin", "/usr/sbin", "/usr/lib", "/usr/libexec", "/usr/share", "/Library/Apple"} {
 		addTree(path, "ro", path != "/usr/share")
 	}
-	addTree(root, "rw", true)
+	// The instance root is readable so commands keep their original paths, but
+	// config/state/skills/logs stay read-only. Only the workspace and the
+	// redirected user environment are writable.
+	addTree(root, "ro", true)
+	if workspace != "" && filepath.Clean(workspace) != filepath.Clean(root) {
+		addTree(workspace, "rw", true)
+	}
+	addTree(filepath.Join(root, "runtime-user-env"), "rw", true)
 	for _, item := range exposePaths {
 		path := NormalizeExposePath(item)
 		mode := "ro"
@@ -107,7 +130,11 @@ func buildDarwinSeatbeltProfile(root string, cmd *exec.Cmd, exposePaths []config
 			cwd, _ := os.Getwd()
 			workingDir = filepath.Join(cwd, workingDir)
 		}
-		addTree(workingDir, "rw", true)
+		mode := "ro"
+		if writable(workingDir) {
+			mode = "rw"
+		}
+		addTree(workingDir, mode, true)
 	}
 	for _, arg := range cmd.Args[1:] {
 		path := arg
@@ -115,6 +142,9 @@ func buildDarwinSeatbeltProfile(root string, cmd *exec.Cmd, exposePaths []config
 			path = path[i+1:]
 		}
 		if !filepath.IsAbs(path) {
+			continue
+		}
+		if writable(path) {
 			continue
 		}
 		if info, err := os.Stat(path); err == nil {
@@ -125,8 +155,6 @@ func buildDarwinSeatbeltProfile(root string, cmd *exec.Cmd, exposePaths []config
 			} else {
 				addPath(path, "ro", "literal", info.Mode().Perm()&0o111 != 0)
 			}
-		} else {
-			addTree(filepath.Dir(path), "rw", true)
 		}
 	}
 	profile.WriteString(rules.String())

@@ -103,14 +103,14 @@ func NewAgentInstance(
 	provider providers.LLMProvider,
 ) *AgentInstance {
 	if cfg != nil {
-		// Keep the subprocess isolation runtime aligned with the latest loaded config
-		// before any tools or providers start spawning child processes.
-		isolation.Configure(cfg)
 		toolshared.SetArtifactRetention(cfg.Tools.GetArtifactMaxAge(), cfg.Tools.GetArtifactMaxFiles())
 	}
 
 	workspace := resolveAgentWorkspace(agentCfg, defaults)
 	os.MkdirAll(workspace, 0o755)
+	// Keep the subprocess isolation runtime aligned with the resolved agent
+	// workspace before any tools or providers start spawning child processes.
+	isolation.ConfigureForWorkspace(cfg, workspace)
 
 	definition := loadAgentDefinition(workspace)
 

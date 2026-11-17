@@ -22,7 +22,17 @@ func TestBuildLinuxBwrapArgs_IncludesNamespaceFlagsAndExec(t *testing.T) {
 	if err := os.WriteFile(binaryPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	plan := BuildLinuxMountPlan(root, []config.ExposePath{{Source: binaryDir, Target: binaryDir, Mode: "ro"}})
+	if err := os.MkdirAll(filepath.Join(root, "workspace"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "runtime-user-env"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	plan := BuildLinuxMountPlan(
+		root,
+		filepath.Join(root, "workspace"),
+		[]config.ExposePath{{Source: binaryDir, Target: binaryDir, Mode: "ro"}},
+	)
 	args, err := buildLinuxBwrapArgs(
 		binaryPath,
 		binaryPath,
@@ -165,7 +175,7 @@ func TestBuildLinuxBwrapArgs_UsesNamespaceProbeResult(t *testing.T) {
 				t.Fatalf("bwrap args IPC flag = %t, want %t: %v", got, tc.wantIPC, args)
 			}
 			if !tc.wantIPC {
-				for _, required := range []string{"--die-with-parent", "--proc", "/proc", "--dev", "/dev"} {
+				for _, required := range []string{"--die-with-parent", "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp"} {
 					if !contains(args, required) {
 						t.Errorf("bwrap args missing %q after unsupported IPC probe: %v", required, args)
 					}
@@ -209,13 +219,35 @@ func TestAppendLinuxArgumentMounts_AddsAbsoluteArgumentPaths(t *testing.T) {
 	}
 
 	plan := appendLinuxArgumentMounts(nil, []string{input, "--output=" + output})
-	if len(plan) != 2 {
-		t.Fatalf("appendLinuxArgumentMounts() len = %d, want 2", len(plan))
+	if len(plan) != 1 {
+		t.Fatalf("appendLinuxArgumentMounts() = %+v, want only the existing input RO", plan)
 	}
 	if plan[0].Source != input || plan[0].Mode != "ro" {
 		t.Fatalf("appendLinuxArgumentMounts()[0] = %+v, want source=%q mode=ro", plan[0], input)
 	}
-	if plan[1].Source != filepath.Dir(output) || plan[1].Mode != "rw" {
-		t.Fatalf("appendLinuxArgumentMounts()[1] = %+v, want source=%q mode=rw", plan[1], filepath.Dir(output))
+	for _, rule := range plan {
+		if rule.Source == filepath.Dir(output) && rule.Mode == "rw" {
+			t.Fatalf("appendLinuxArgumentMounts() granted RW to output parent: %+v", rule)
+		}
+	}
+}
+
+func TestAppendLinuxArgumentMounts_DoesNotShadowWritableWorkspace(t *testing.T) {
+	workspace := t.TempDir()
+	plan := []MountRule{{Source: workspace, Target: workspace, Mode: "rw"}}
+	output := filepath.Join(workspace, "new.txt")
+	plan = appendLinuxArgumentMounts(plan, []string{output})
+	if len(plan) != 1 {
+		t.Fatalf("appendLinuxArgumentMounts() = %+v, want the workspace rule unchanged", plan)
+	}
+	if plan[0].Mode != "rw" {
+		t.Fatalf("workspace rule = %+v, want rw", plan[0])
+	}
+}
+
+func TestAppendLinuxArgumentMounts_DoesNotExposeHostTmp(t *testing.T) {
+	plan := appendLinuxArgumentMounts(nil, []string{"/tmp/picoclaw-out.txt"})
+	if len(plan) != 0 {
+		t.Fatalf("appendLinuxArgumentMounts() = %+v, want no host /tmp mount", plan)
 	}
 }

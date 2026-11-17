@@ -47,14 +47,14 @@ func isBackendSupportedOn(goos, backend string) bool {
 }
 
 // applyPlatformIsolation dispatches to the configured backend.
-func applyPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, root string) error {
+func applyPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, root, workspace string) error {
 	switch resolvedBackend(isolation) {
 	case config.IsolationBackendDocker:
-		return applyDockerIsolation(cmd, isolation, root)
+		return applyDockerIsolation(cmd, isolation, root, workspace)
 	case config.IsolationBackendSSH:
-		return applySSHIsolation(cmd, isolation, root)
+		return applySSHIsolation(cmd, isolation, root, workspace)
 	default:
-		return applyNativePlatformIsolation(cmd, isolation, root)
+		return applyNativePlatformIsolation(cmd, isolation, root, workspace)
 	}
 }
 

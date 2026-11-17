@@ -56,8 +56,11 @@ func TestDescribeBoundaryActive(t *testing.T) {
 	if !boundary.PathBoundary {
 		t.Fatal("PathBoundary = false, want true")
 	}
-	if !boundary.RootWritable {
-		t.Fatal("RootWritable = false, want true")
+	if boundary.RootWritable {
+		t.Fatal("RootWritable = true, want false")
+	}
+	if !slices.Contains(boundary.Writable, workspace) {
+		t.Fatalf("Writable = %v, want workspace %q", boundary.Writable, workspace)
 	}
 	if boundary.Scratch != filepath.Join(home, "runtime-user-env", "tmp") {
 		t.Fatalf("Scratch = %q", boundary.Scratch)
@@ -117,22 +120,11 @@ func TestDescribeBoundaryRootOverrideReadOnly(t *testing.T) {
 	if !ok {
 		t.Fatal("DescribeBoundary() = false, want true")
 	}
-	if runtime.GOOS == "darwin" {
-		// Seatbelt always allows writes under the instance root, so a
-		// read-only override cannot be enforced.
-		if !boundary.RootWritable {
-			t.Fatal("RootWritable = false, want true on macOS")
-		}
-		if !boundary.ScratchWritable {
-			t.Fatal("ScratchWritable = false, want true on macOS")
-		}
-		return
-	}
 	if boundary.RootWritable {
 		t.Fatal("RootWritable = true, want false")
 	}
-	if boundary.ScratchWritable {
-		t.Fatal("ScratchWritable = true, want false")
+	if !boundary.ScratchWritable {
+		t.Fatal("ScratchWritable = false, want true")
 	}
 }
 
@@ -153,15 +145,15 @@ func TestDescribeBoundaryDarwinReadOnlyUnderRoot(t *testing.T) {
 	if !ok {
 		t.Fatal("DescribeBoundary() = false, want true")
 	}
-	if !boundary.RootWritable || !boundary.ScratchWritable {
-		t.Fatalf("RootWritable=%v ScratchWritable=%v, want true/true",
+	if boundary.RootWritable || !boundary.ScratchWritable {
+		t.Fatalf("RootWritable=%v ScratchWritable=%v, want false/true",
 			boundary.RootWritable, boundary.ScratchWritable)
 	}
-	if !slices.Contains(boundary.Writable, readOnly) {
-		t.Fatalf("Writable = %v, want %q", boundary.Writable, readOnly)
+	if slices.Contains(boundary.Writable, readOnly) {
+		t.Fatalf("Writable = %v, must not contain %q", boundary.Writable, readOnly)
 	}
-	if slices.Contains(boundary.ReadOnly, readOnly) {
-		t.Fatalf("ReadOnly = %v, must not contain %q", boundary.ReadOnly, readOnly)
+	if !slices.Contains(boundary.ReadOnly, readOnly) {
+		t.Fatalf("ReadOnly = %v, want %q", boundary.ReadOnly, readOnly)
 	}
 }
 
@@ -189,13 +181,18 @@ func TestValidateDarwinExposePaths(t *testing.T) {
 	}
 	if err := validateDarwinExposePaths([]config.ExposePath{
 		{Source: inside, Target: inside, Mode: "ro"},
-	}, home); err == nil {
-		t.Fatal("read-only path inside root must be rejected")
+	}, home); err != nil {
+		t.Fatalf("read-only path inside root rejected: %v", err)
 	}
 	if err := validateDarwinExposePaths([]config.ExposePath{
 		{Source: home, Target: home, Mode: "ro"},
+	}, home); err != nil {
+		t.Fatalf("read-only instance root rejected: %v", err)
+	}
+	if err := validateDarwinExposePaths([]config.ExposePath{
+		{Source: home, Target: home, Mode: "rw"},
 	}, home); err == nil {
-		t.Fatal("read-only instance root must be rejected")
+		t.Fatal("read-write instance root must be rejected")
 	}
 	if err := validateDarwinExposePaths([]config.ExposePath{
 		{Source: outside, Target: filepath.Join(outside, "dst"), Mode: "ro"},
@@ -206,7 +203,7 @@ func TestValidateDarwinExposePaths(t *testing.T) {
 
 func TestDescribeBoundaryScratchOverride(t *testing.T) {
 	if runtime.GOOS != "linux" {
-		t.Skip("scratch mount overrides are Linux-specific; macOS keeps the instance root writable")
+		t.Skip("scratch mount overrides are Linux-specific")
 	}
 
 	home := t.TempDir()
@@ -244,8 +241,8 @@ func TestDescribeBoundaryScratchOverride(t *testing.T) {
 	if !ok {
 		t.Fatal("DescribeBoundary() = false, want true")
 	}
-	if !boundary.RootWritable {
-		t.Fatal("RootWritable = false, want true")
+	if boundary.RootWritable {
+		t.Fatal("RootWritable = true, want false")
 	}
 	if boundary.ScratchWritable {
 		t.Fatal("ScratchWritable = true, want false")

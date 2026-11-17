@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Subprocess isolation now keeps the instance root read-only (`config.json`, `state`, `skills`, `logs` and `cache` included) and grants writes only to the resolved workspace, `runtime-user-env` and explicit `expose_paths`. The effective working directory no longer becomes writable by itself, absolute path arguments never make their parent writable, and the Linux backend mounts an ephemeral tmpfs on `/tmp`. An interpreter such as `python3 -c` can no longer rewrite PicoClaw's config or state even when `restrict_to_workspace` is disabled; the workspace remains writable by design.
 - Exec hardline now also blocks recursive deletion of `/etc`, `/usr`, `/home`, `/root` and the other top-level system directories, plus `kill -1` and `kill -9 1`; these commands bypass the smart Guardian and are always rejected.
 - `tools.exec.custom_allow_patterns` is now anchored to the full command and exempts only the default regex deny set. Risk exemptions moved to the new `custom_risk_allow_patterns`, capped by `risk_allow_threshold` (default `medium`), so high and critical commands require an explicit threshold raise.
 - Exec hardline and custom deny matching now normalizes `$IFS`/`${IFS}`, ANSI-C `$'...'` quoting, backslash-newline continuations and AST-resolved quote splicing, so obfuscated critical commands such as `r''m -rf /` or `rm${IFS}-rf${IFS}/` cannot bypass the floor when the risk classifier is disabled.

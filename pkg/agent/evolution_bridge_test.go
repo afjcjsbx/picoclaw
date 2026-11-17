@@ -821,6 +821,7 @@ func TestEvolutionBridge_TurnEndUsesPayloadWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newEvolutionBridge: %v", err)
 	}
+	t.Cleanup(func() { _ = bridge.Close() })
 
 	err = bridge.OnEvent(context.Background(), Event{
 		Kind: EventKindTurnEnd,

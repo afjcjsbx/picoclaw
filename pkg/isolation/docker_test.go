@@ -114,17 +114,31 @@ func TestBuildDockerMountPlan(t *testing.T) {
 	if err := os.MkdirAll(shared, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	plan := BuildDockerMountPlan(root, []config.ExposePath{
+	workspace := filepath.Join(root, "workspace")
+	plan := BuildDockerMountPlan(root, workspace, []config.ExposePath{
 		{Source: shared, Target: shared, Mode: "ro"},
 	})
-	if len(plan) != 2 {
-		t.Fatalf("BuildDockerMountPlan() len = %d, want 2", len(plan))
+	if len(plan) != 4 {
+		t.Fatalf("BuildDockerMountPlan() len = %d, want 4", len(plan))
 	}
-	if plan[0].Source != root || plan[0].Mode != "rw" {
-		t.Fatalf("root rule = %+v, want source=%q mode=rw", plan[0], root)
+	if plan[0].Source != root || plan[0].Mode != "ro" {
+		t.Fatalf("root rule = %+v, want source=%q mode=ro", plan[0], root)
 	}
-	if plan[1].Source != shared || plan[1].Mode != "ro" {
-		t.Fatalf("override rule = %+v, want source=%q mode=ro", plan[1], shared)
+	foundWorkspace := false
+	foundRuntime := false
+	foundOverride := false
+	for _, rule := range plan {
+		switch rule.Target {
+		case workspace:
+			foundWorkspace = rule.Mode == "rw"
+		case filepath.Join(root, "runtime-user-env"):
+			foundRuntime = rule.Mode == "rw"
+		case shared:
+			foundOverride = rule.Mode == "ro"
+		}
+	}
+	if !foundWorkspace || !foundRuntime || !foundOverride {
+		t.Fatalf("plan missing workspace/runtime/override: %+v", plan)
 	}
 }
 
@@ -334,9 +348,15 @@ func TestAppendDockerArgumentMounts(t *testing.T) {
 			foundOutput = true
 		}
 	}
-	if !foundInput || !foundOutput {
-		t.Fatalf("appendDockerArgumentMounts() = %+v, want input=%q ro and output parent=%q rw",
-			plan, input, filepath.Dir(output))
+	if !foundInput {
+		t.Fatalf("appendDockerArgumentMounts() = %+v, want input=%q ro", plan, input)
+	}
+	if foundOutput {
+		t.Fatalf(
+			"appendDockerArgumentMounts() = %+v, must not grant RW parent for output %q",
+			plan,
+			filepath.Dir(output),
+		)
 	}
 	for _, rule := range plan {
 		if dockerSystemPath(rule.Source) || dockerFilesystemRoot(rule.Source) {
@@ -381,6 +401,9 @@ func TestApplyDockerIsolationRewritesCommand(t *testing.T) {
 	if err := os.MkdirAll(workspace, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(filepath.Join(root, "runtime-user-env"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	cmd := exec.Command("/bin/sh", "-c", "echo hello")
 	cmd.Dir = workspace
 	cmd.Env = []string{"HOME=" + filepath.Join(root, "home")}
@@ -389,7 +412,7 @@ func TestApplyDockerIsolationRewritesCommand(t *testing.T) {
 		Backend: config.IsolationBackendDocker,
 		Docker:  config.DockerIsolationConfig{Image: "alpine:3.20", Network: "none"},
 	}
-	if err := applyDockerIsolation(cmd, cfg, root); err != nil {
+	if err := applyDockerIsolation(cmd, cfg, root, workspace); err != nil {
 		t.Fatalf("applyDockerIsolation() error = %v", err)
 	}
 	if cmd.Path != fakeDocker {
@@ -447,7 +470,7 @@ func TestDescribeBoundaryDocker(t *testing.T) {
 	if boundary.Backend != "Docker" {
 		t.Fatalf("Backend = %q, want Docker", boundary.Backend)
 	}
-	if !boundary.PathBoundary || !boundary.RootWritable || !boundary.ScratchWritable {
+	if !boundary.PathBoundary || boundary.RootWritable || !boundary.ScratchWritable {
 		t.Fatalf("unexpected boundary flags: %+v", boundary)
 	}
 	if boundary.Network {

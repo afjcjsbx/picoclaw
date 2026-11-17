@@ -116,15 +116,23 @@ func TestBuildLinuxMountPlan(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("linux-only default mount set")
 	}
-	plan := BuildLinuxMountPlan("/rootdir", []config.ExposePath{{Source: "/src", Target: "/dst", Mode: "ro"}})
+	plan := BuildLinuxMountPlan(
+		"/rootdir",
+		"/rootdir/workspace",
+		[]config.ExposePath{{Source: "/src", Target: "/dst", Mode: "ro"}},
+	)
 	if len(plan) == 0 {
 		t.Fatal("BuildLinuxMountPlan returned empty plan")
 	}
 	foundRoot := false
+	foundWorkspace := false
 	foundOverride := false
 	for _, rule := range plan {
-		if rule.Source == "/rootdir" && rule.Target == "/rootdir" && rule.Mode == "rw" {
+		if rule.Source == "/rootdir" && rule.Target == "/rootdir" && rule.Mode == "ro" {
 			foundRoot = true
+		}
+		if rule.Source == "/rootdir/workspace" && rule.Target == "/rootdir/workspace" && rule.Mode == "rw" {
+			foundWorkspace = true
 		}
 		if rule.Source == "/src" && rule.Target == "/dst" && rule.Mode == "ro" {
 			foundOverride = true
@@ -132,6 +140,9 @@ func TestBuildLinuxMountPlan(t *testing.T) {
 	}
 	if !foundRoot {
 		t.Fatal("BuildLinuxMountPlan missing root mapping")
+	}
+	if !foundWorkspace {
+		t.Fatal("BuildLinuxMountPlan missing workspace mapping")
 	}
 	if !foundOverride {
 		t.Fatal("BuildLinuxMountPlan missing override mapping")
@@ -141,6 +152,7 @@ func TestBuildLinuxMountPlan(t *testing.T) {
 func TestBuildWindowsAccessRules(t *testing.T) {
 	rules := BuildWindowsAccessRules(
 		`C:\picoclaw`,
+		`C:\picoclaw\workspace`,
 		[]config.ExposePath{{Source: `D:\data`, Target: `C:\mapped`, Mode: "ro"}},
 	)
 	if len(rules) == 0 {
@@ -149,7 +161,7 @@ func TestBuildWindowsAccessRules(t *testing.T) {
 	foundRoot := false
 	foundOverride := false
 	for _, rule := range rules {
-		if rule.Path == `C:\picoclaw` && rule.Mode == "rw" {
+		if rule.Path == `C:\picoclaw` && rule.Mode == "ro" {
 			foundRoot = true
 		}
 		if rule.Path == `D:\data` && rule.Mode == "ro" {
@@ -244,5 +256,56 @@ func TestPrepareCommand_AppliesUserEnv(t *testing.T) {
 	}
 	if runtime.GOOS != "windows" && !hasHome {
 		t.Fatal("PrepareCommand() did not inject HOME")
+	}
+}
+
+func TestValidateWorkspace(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	t.Setenv(config.EnvHome, root)
+
+	if err := ValidateWorkspace(root, workspace); err != nil {
+		t.Fatalf("ValidateWorkspace(dedicated workspace) error = %v", err)
+	}
+	for name, value := range map[string]string{
+		"root":            root,
+		"filesystem root": string(filepath.Separator),
+		"state":           filepath.Join(root, "state"),
+		"skills":          filepath.Join(root, "skills"),
+		"ancestor":        filepath.Dir(root),
+	} {
+		if err := ValidateWorkspace(root, value); err == nil {
+			t.Fatalf("ValidateWorkspace(%s=%q) = nil, want error", name, value)
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		if err := ValidateWorkspace(root, home); err == nil {
+			t.Fatal("ValidateWorkspace(user home) = nil, want error")
+		}
+	}
+	if runtime.GOOS != "windows" {
+		if err := ValidateWorkspace(root, "/etc"); err == nil {
+			t.Fatal("ValidateWorkspace(/etc) = nil, want error")
+		}
+	}
+}
+
+func TestDefaultWorkspaceExposePaths(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	paths := DefaultWorkspaceExposePaths(root, workspace)
+
+	seen := map[string]string{}
+	for _, item := range paths {
+		seen[filepath.Clean(item.Target)] = item.Mode
+	}
+	if got := seen[filepath.Clean(root)]; got != "ro" {
+		t.Fatalf("root mode = %q, want ro", got)
+	}
+	if got := seen[filepath.Clean(workspace)]; got != "rw" {
+		t.Fatalf("workspace mode = %q, want rw", got)
+	}
+	if got := seen[filepath.Join(root, "runtime-user-env")]; got != "rw" {
+		t.Fatalf("runtime-user-env mode = %q, want rw", got)
 	}
 }

@@ -32,7 +32,7 @@ var (
 // host instance root, working directory and explicitly exposed paths are bind
 // mounted at the same absolute paths so relative and absolute arguments keep
 // their meaning.
-func applyDockerIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, root string) error {
+func applyDockerIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, root, workspace string) error {
 	if !isolation.Enabled || cmd == nil || cmd.Path == "" || len(cmd.Args) == 0 {
 		return nil
 	}
@@ -60,9 +60,13 @@ func applyDockerIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, root 
 	// kept for the CLI and are not forwarded into the container.
 	cmd.Env = ensureDockerCLIEnv(cmd.Env)
 
-	plan := BuildDockerMountPlan(root, isolation.ExposePaths)
-	if execDir != "" {
-		plan = ensureDockerMountRule(plan, execDir, execDir, "rw")
+	plan := BuildDockerMountPlan(root, workspace, isolation.ExposePaths)
+	if execDir != "" && execDir != string(filepath.Separator) && !isSandboxTmpPath(execDir) {
+		mode := "ro"
+		if mountPlanAllowsWrite(plan, execDir) {
+			mode = "rw"
+		}
+		plan = ensureDockerMountRule(plan, execDir, execDir, mode)
 	}
 	plan = appendDockerCommandMountRules(plan, originalPath, execDir, root)
 	plan = appendDockerArgumentMounts(plan, originalArgs[1:])
@@ -343,11 +347,12 @@ func dockerMountSpec(rule MountRule) string {
 }
 
 // BuildDockerMountPlan converts the merged expose-path configuration into the
-// bind mounts used by the Docker backend. The instance root is always mounted
-// read-write; system paths are not copied from the host because the image
-// provides its own userland.
-func BuildDockerMountPlan(root string, overrides []config.ExposePath) []MountRule {
-	merged := MergeExposePaths(defaultDockerExposePaths(root), overrides)
+// bind mounts used by the Docker backend. The instance root is mounted
+// read-only; only the workspace and runtime-user-env are writable by default.
+// System paths are not copied from the host because the image provides its own
+// userland.
+func BuildDockerMountPlan(root, workspace string, overrides []config.ExposePath) []MountRule {
+	merged := MergeExposePaths(defaultDockerExposePaths(root, workspace), overrides)
 	plan := make([]MountRule, 0, len(merged))
 	for _, item := range merged {
 		plan = append(plan, MountRule{Source: item.Source, Target: item.Target, Mode: item.Mode})
@@ -355,8 +360,23 @@ func BuildDockerMountPlan(root string, overrides []config.ExposePath) []MountRul
 	return plan
 }
 
-func defaultDockerExposePaths(root string) []config.ExposePath {
-	return []config.ExposePath{{Source: root, Target: root, Mode: "rw"}}
+func defaultDockerExposePaths(root, workspace string) []config.ExposePath {
+	items := []config.ExposePath{{Source: root, Target: root, Mode: "ro"}}
+	cleanWorkspace := absoluteWorkspace(workspace)
+	if cleanWorkspace != "" && cleanWorkspace != filepath.Clean(root) {
+		items = append(items, config.ExposePath{
+			Source: cleanWorkspace,
+			Target: cleanWorkspace,
+			Mode:   "rw",
+		})
+	}
+	runtimeEnv := filepath.Join(root, "runtime-user-env")
+	items = append(items, config.ExposePath{
+		Source: runtimeEnv,
+		Target: runtimeEnv,
+		Mode:   "rw",
+	})
+	return items
 }
 
 func ensureDockerMountRule(plan []MountRule, source, target, mode string) []MountRule {
@@ -402,7 +422,7 @@ func appendDockerCommandMountRules(
 	if resolved, err := filepath.EvalSymlinks(path); err == nil && resolved != path {
 		plan = ensureDockerMountRule(plan, resolved, resolved, "ro")
 	}
-	if parent := filepath.Dir(path); parent != path && !dockerFilesystemRoot(parent) {
+	if parent := filepath.Dir(path); parent != path && !dockerFilesystemRoot(parent) && !isSandboxTmpPath(parent) {
 		plan = ensureDockerMountRule(plan, parent, parent, "ro")
 	}
 	return plan
@@ -418,7 +438,10 @@ func appendDockerArgumentMounts(plan []MountRule, args []string) []MountRule {
 		// Host system paths are deliberately left to the image. Mounting the
 		// host root (or /usr) over the container root would replace the image
 		// userland and can break the command before it starts.
-		if dockerFilesystemRoot(clean) || dockerSystemPath(clean) {
+		if dockerFilesystemRoot(clean) || dockerSystemPath(clean) || isSandboxTmpPath(clean) {
+			continue
+		}
+		if mountPlanAllowsWrite(plan, clean) {
 			continue
 		}
 		if _, err := os.Stat(clean); err == nil {
@@ -431,13 +454,8 @@ func appendDockerArgumentMounts(plan []MountRule, args []string) []MountRule {
 		} else if !os.IsNotExist(err) {
 			continue
 		}
-		parent := filepath.Dir(clean)
-		if parent == clean || dockerFilesystemRoot(parent) || dockerSystemPath(parent) {
-			continue
-		}
-		if _, err := os.Stat(parent); err == nil {
-			plan = ensureDockerMountRule(plan, parent, parent, "rw")
-		}
+		// Do not mount the parent RW for an unknown output path. Explicit
+		// expose_paths is the only way to grant writes outside the workspace.
 	}
 	return plan
 }
@@ -595,7 +613,7 @@ func validateDockerMountPlan(plan []MountRule) error {
 
 func preflightDocker(
 	cfg config.DockerIsolationConfig,
-	root string,
+	root, workspace string,
 	expose []config.ExposePath,
 ) error {
 	if err := validateDockerConfig(cfg); err != nil {
@@ -616,7 +634,7 @@ func preflightDocker(
 			strings.TrimSpace(string(output)),
 		)
 	}
-	return validateDockerMountPlan(BuildDockerMountPlan(root, expose))
+	return validateDockerMountPlan(BuildDockerMountPlan(root, workspace, expose))
 }
 
 func formatDockerMountPlan(plan []MountRule) []map[string]string {
