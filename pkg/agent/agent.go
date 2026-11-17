@@ -114,6 +114,7 @@ type processOptions struct {
 	SuppressToolFeedback    bool                   // Whether to suppress inline tool feedback messages
 	NoHistory               bool                   // If true, don't load session history (for heartbeat)
 	SkipInitialSteeringPoll bool                   // If true, skip the steering poll at loop start (used by Continue)
+	JoinSubTurns            bool                   // Root turn waits for spawned children before answering (CLI)
 	InboundContext          *bus.InboundContext    // Normalized inbound facts for events/hooks
 	RouteResult             *routing.ResolvedRoute // Route decision snapshot for events/hooks
 	SessionScope            *session.SessionScope  // Session scope snapshot for events/hooks
@@ -666,6 +667,7 @@ func (al *AgentLoop) runAgentLoop(
 	ts.concurrencySem = make(chan struct{}, rtCfg.maxConcurrent)
 	// Needed by Finish(true) to cascade a hard abort to this turn's SubTurns.
 	ts.al = al
+	ts.joinSubTurns = opts.JoinSubTurns
 
 	pipeline := NewPipeline(al)
 	result, err := al.runTurn(ctx, ts, pipeline)

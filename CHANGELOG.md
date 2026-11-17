@@ -33,6 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Exec on Windows now blocks PowerShell and Windows management commands that recursively delete data, wipe or reformat disks, delete shadow copies, change boot configuration, delete registry keys, grant Everyone access, download and execute code, or force-kill processes, in addition to the existing encoding-obfuscation patterns.
 - Exec child processes now receive a sanitized environment instead of inheriting every PicoClaw process variable. Only safe variables (PATH, HOME, locale, proxies, and similar) are inherited; `tools.exec.env_allowlist` extends that set and `tools.exec.env_set` injects fixed values. Workflows that relied on inherited credentials must allowlist the variable name or set the value explicitly. Per-command values use an inline `FOO=bar command` assignment, which the guard can inspect.
 
+### Fixed
+
+- Background `spawn` no longer drops requests above `agents.defaults.subturn.max_concurrent`: the tool reserves a concurrency slot before acknowledging, and CLI one-shot turns join their spawned children before answering.
+
 ## [0.5.1] - 2026-10-18
 
 ### Added

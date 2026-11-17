@@ -22,6 +22,10 @@ The exec tool is used to execute shell commands.
 | `env_set` | object | `{}` | Variables always injected into every exec child process. Values are trusted configuration: they override inherited variables, including `PATH`. Every listed value reaches every command, so only add secrets here when the commands genuinely need them |
 | `env_allowlist` | string[] | `[]` | Additional parent variable names inherited on top of the built-in allowlist. Use explicit names, never wildcards: allowlisting a secret passes it to every command |
 
+`allow_remote` controls direct exec calls. Scheduled cron command jobs are
+authorized by `tools.cron.command_allowed_remotes` instead and are not blocked by
+`allow_remote`.
+
 Smart approvals are configured in a top-level `approvals` block, not under `tools.exec`:
 
 | Config | Type | Default | Description |

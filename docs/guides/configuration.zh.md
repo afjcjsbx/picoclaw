@@ -340,7 +340,7 @@ PicoClaw 默认在沙箱环境中运行。Agent 只能访问配置的工作区�
 
 | 配置键 | 类型 | 默认值 | 描述 |
 |--------|------|--------|------|
-| `tools.exec.allow_remote` | bool | `false` | 允许从远程渠道（Telegram/Discord 等）执行 exec 工具 |
+| `tools.exec.allow_remote` | bool | `false` | 允许从远程渠道直接执行 exec 工具；定时任务命令由 `tools.cron.command_allowed_remotes` 独立授权 |
 | `tools.exec.enable_deny_patterns` | bool | `true` | 启用内置危险命令拦截（关闭后硬性底线规则和自定义拒绝规则仍然生效） |
 | `tools.exec.custom_deny_patterns` | string[] | `[]` | 自定义阻止的正则表达式模式；始终生效 |
 | `tools.exec.custom_allow_patterns` | string[] | `[]` | 整条命令匹配的正则表达式，仅豁免默认拒绝规则；会自动添加首尾锚点 |

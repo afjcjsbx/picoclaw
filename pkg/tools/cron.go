@@ -753,20 +753,40 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) (string, e
 			return output, fmt.Errorf("scheduled command not executed: command execution is disabled")
 		}
 
+		// Re-check the cron channel gate at execution time. Scheduling checked it
+		// when the job was created, but the allowlist may have changed since then;
+		// a revoked channel must not keep running already-scheduled commands.
+		if !constants.IsInternalChannel(channel) &&
+			!isCommandAllowedRemote(channel, chatID, t.commandAllowedRemotes) {
+			detail := fmt.Sprintf("channel %q is not allowed to run scheduled commands", channel)
+			output := "Error executing scheduled command: " + detail
+			t.publishJobOutput(channel, chatID, output)
+			return output, fmt.Errorf("scheduled command blocked: %s", detail)
+		}
+
 		args := map[string]any{
 			"action":  "run",
 			"command": job.Payload.Command,
 		}
 
 		// The exec tool trusts the channel from ctx, not from tool arguments.
+		// Scheduled jobs were authorized by command_allowed_remotes above, so
+		// they use the internal scheduled path instead of the interactive
+		// remote-channel gate.
 		ctx = WithToolContext(ctx, channel, chatID)
-		result := t.execTool.Execute(ctx, args)
+		result := t.execTool.executeScheduled(ctx, args)
 		// ForUser is the human-readable view; ForLLM now starts with the
 		// structured [exec] header and must not be published to the chat.
 		if result.IsError {
-			output := fmt.Sprintf("Error executing scheduled command: %s", result.ForUser)
+			// ErrorResult sets ForLLM but leaves ForUser empty. Fall back so a
+			// blocked command reports why it failed instead of an empty detail.
+			detail := result.ForUser
+			if detail == "" {
+				detail = result.ForLLM
+			}
+			output := fmt.Sprintf("Error executing scheduled command: %s", detail)
 			t.publishJobOutput(channel, chatID, output)
-			return output, fmt.Errorf("scheduled command failed: %s", result.ForUser)
+			return output, fmt.Errorf("scheduled command failed: %s", detail)
 		}
 
 		output := fmt.Sprintf("Scheduled command '%s' executed:\n%s", job.Payload.Command, result.ForUser)
