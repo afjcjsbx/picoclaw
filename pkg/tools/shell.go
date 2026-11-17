@@ -86,6 +86,7 @@ type ExecTool struct {
 	approvalEnabled      bool
 	approvalThreshold    shellguard.RiskLevel
 	approvalReviewer     approvalReviewer
+	blockBreaker         *execBlockBreaker
 }
 
 var _ AsyncExecutor = (*ExecTool)(nil)
@@ -530,6 +531,7 @@ func NewExecToolWithConfig(
 		approvalEnabled:         smartApprovals,
 		approvalThreshold:       approvalThreshold(approvalConfig.SmartThreshold),
 		approvalReviewer:        reviewer,
+		blockBreaker:            newExecBlockBreaker(),
 	}, nil
 }
 
@@ -623,11 +625,11 @@ func (t *ExecTool) Parameters() map[string]any {
 				"description": "Data to write to stdin (required for write)",
 			},
 			"background": map[string]any{
-				"type":        "string",
+				"type":        "boolean",
 				"description": "Run in background immediately",
 			},
 			"pty": map[string]any{
-				"type":        "string",
+				"type":        "boolean",
 				"description": "Run in a pseudo-terminal (PTY) when available",
 			},
 			"cwd": map[string]any{
@@ -658,6 +660,9 @@ func (t *ExecTool) Parameters() map[string]any {
 	}
 }
 
+// boolArg reads a boolean flag. The schema declares these fields as booleans,
+// but the string branch keeps calls working for models that still emit the
+// "true"/"false" form the schema used to advertise.
 func boolArg(args map[string]any, key string) bool {
 	switch v := args[key].(type) {
 	case bool:
@@ -904,7 +909,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 	if cwdProvided && t.restrictToWorkspace && t.workingDir != "" {
 		resolvedWD, err := t.validateCwd(cwd)
 		if err != nil {
-			return ErrorResult("Command blocked by safety guard (" + err.Error() + ")")
+			return t.blockedResult(ctx, command, "Command blocked by safety guard ("+err.Error()+")")
 		}
 		cwd = resolvedWD
 	}
@@ -923,7 +928,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 	stateCwd := cwd
 
 	if guardError := t.guardCommandWithAnalysis(ctx, guardedCommand, cwd, analysis); guardError != "" {
-		return ErrorResult(guardError)
+		return t.blockedResult(ctx, command, guardError)
 	}
 
 	// Re-resolve symlinks immediately before execution to shrink the TOCTOU window
@@ -934,7 +939,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 			if rememberedCwd {
 				t.forgetRememberedCwd(ctx, cwd, err)
 			}
-			return ErrorResult("Command blocked by safety guard (" + err.Error() + ")")
+			return t.blockedResult(ctx, command, "Command blocked by safety guard ("+err.Error()+")")
 		}
 		cwd = resolved
 	}
@@ -943,6 +948,9 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 	if cwdProvided && stateCwd != "" {
 		t.rememberCwd(ctx, stateCwd)
 	}
+
+	// Any allowed run breaks the blocked-command streak.
+	t.blockBreaker.reset(ctx)
 
 	if isBackground {
 		return t.runBackground(ctx, command, cwd, isPty, backgroundNote, notify, cb)

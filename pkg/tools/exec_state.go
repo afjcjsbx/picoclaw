@@ -146,11 +146,14 @@ func (s *execStateStore) pruneLocked() {
 	}
 }
 
-// ClearSession drops remembered cwd state for one agent conversation. It is
-// called when the user clears or resets the conversation.
+// ClearSession drops remembered cwd and guard-block state for one agent
+// conversation. It is called when the user clears or resets the conversation.
 func (t *ExecTool) ClearSession(agentID, sessionKey string) {
-	if t == nil || t.state == nil {
+	if t == nil {
 		return
 	}
-	t.state.clear(execStateKey{agentID: agentID, sessionKey: sessionKey})
+	if t.state != nil {
+		t.state.clear(execStateKey{agentID: agentID, sessionKey: sessionKey})
+	}
+	t.blockBreaker.clear(agentID, sessionKey)
 }

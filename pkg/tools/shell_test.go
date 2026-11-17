@@ -96,6 +96,24 @@ func TestExecDescriptionPerOS(t *testing.T) {
 	}
 }
 
+func TestExecParametersDeclareBooleanFlags(t *testing.T) {
+	props, ok := (&ExecTool{}).Parameters()["properties"].(map[string]any)
+	require.True(t, ok, "properties must be a map")
+	for _, name := range []string{"background", "pty", "notify"} {
+		prop, ok := props[name].(map[string]any)
+		require.True(t, ok, "%s must be an object", name)
+		require.Equal(t, "boolean", prop["type"], "%s must be declared as boolean", name)
+	}
+}
+
+func TestBoolArgAcceptsLegacyStrings(t *testing.T) {
+	require.True(t, boolArg(map[string]any{"flag": true}, "flag"))
+	require.True(t, boolArg(map[string]any{"flag": "true"}, "flag"))
+	require.False(t, boolArg(map[string]any{"flag": false}, "flag"))
+	require.False(t, boolArg(map[string]any{"flag": "false"}, "flag"))
+	require.False(t, boolArg(map[string]any{}, "flag"))
+}
+
 // TestShellTool_Success verifies successful command execution
 func TestFindShellExecutableReturnsAbsoluteExecutable(t *testing.T) {
 	if runtime.GOOS == "windows" {

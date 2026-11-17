@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Exec now breaks out of a retry loop on blocked commands: after three consecutive identical guard rejections in one conversation, the result carries a `HARD STOP` message telling the model to stop retrying, rewording or splitting the command and to report the blocker instead. The breaker is process-local and bounded (64 conversations, one 64-bit hash and a counter each), and resets on a different command, an allowed run or `/clear`.
 - `/usage` (alias `/cost`) chat command and `picoclaw usage` CLI command that report provider-reported token usage and cost per session, with per-model and input cache breakdowns.
 - Exec remembers the cwd where a foreground command ended and reuses it in later calls of the same conversation. On Unix a shell wrapper appends a `pwd -P` marker, so `cd` inside the command is observed; the path is reported as `cwd` in the `[exec]` header and stored only when it is inside the workspace and still exists. The model-side `env` argument was removed because environment variables are not visible to the command guard; operators still control the child environment with `tools.exec.env_set` and `tools.exec.env_allowlist`, and per-command values use an inline `FOO=bar command` assignment.
 - Top-level `approvals` config, opt-in with `mode: "smart"`: flagged exec commands are reviewed by an auxiliary Guardian model selected from `model_list` (`approvals.model`, or the default agent model). The default is `"off"`, which keeps the static guards as the final decision without an extra model call; this keeps low-resource agents light. High, critical and unknown commands are routed to the Guardian by `approvals.smart_threshold` (`high` or `critical`), default-deny pattern hits can be approved as false positives, and `APPROVE`/`DENY`/`ESCALATE` verdicts fail closed. The Guardian call is bounded by `approvals.smart_timeout_seconds` (default 20s, maximum 600s), uses `temperature=0` and `max_tokens=16`, is created lazily and reuses the agent's primary provider when no separate model is configured, and is never made for safe commands or hardline operations.
@@ -36,6 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The exec tool schema now declares `background` and `pty` as booleans, matching their documentation and the values the tool already accepted; string `"true"`/`"false"` arguments are still tolerated for models that emit the previous form.
 - Background `spawn` no longer drops requests above `agents.defaults.subturn.max_concurrent`: the tool reserves a concurrency slot before acknowledging, and CLI one-shot turns join their spawned children before answering.
 
 ## [0.5.1] - 2026-10-18

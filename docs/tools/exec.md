@@ -344,6 +344,12 @@ These patterns are enabled by default and can be disabled with `enable_deny_patt
 - Windows PowerShell: recursive `Remove-Item` (including `rm`/`ri`/`del` aliases), `Clear-Disk`, `Format-Volume`, `vssadmin delete shadows`, `bcdedit /set`, `reg delete`, `icacls /grant Everyone`, download-and-execute pipelines such as `iwr ... | iex`, `taskkill /F`, and `Stop-Process -Force`
 - Other: `eval`, `source *.sh`
 
+## Repeated Blocked Commands
+
+Exec tracks guard rejections per conversation. The first two consecutive rejections of the same command with the same reason return the normal block message. The third and later rejections add a `HARD STOP` message that tells the model to stop retrying, not to reword or split the command, and to report the blocker to the user instead.
+
+The streak starts over when a different command is blocked, when an allowed run succeeds, or when the conversation is cleared. State is process-local and bounded (64 conversations), and each entry holds only a 64-bit hash of the command and reason plus a counter; it is not persisted across restarts.
+
 ## Known Architectural Limitation
 
 The exec guard only validates the top-level command sent to PicoClaw. It does **not** recursively inspect child
