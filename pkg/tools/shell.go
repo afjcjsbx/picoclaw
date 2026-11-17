@@ -563,9 +563,9 @@ The child environment is sanitized: only safe variables and the operator's allow
 
 Within a conversation, the last cwd observed after a foreground command is remembered and reused when cwd is omitted.
 
-Foreground results start with a one-line [exec] {...} header (exitCode, timedOut, truncated, durationMs, error), then raw stdout/stderr. On Unix, a null exitCode means the direct child was killed by a signal; shells may also report 128+N (137 = SIGKILL, often the OOM killer; 143 = SIGTERM). Treat signal deaths as failed runs, not normal non-zero exits. Non-zero exit codes can be normal: grep returns 1 for no match and diff returns 1 for differences.
+Foreground results start with a one-line [exec] {...} header (exitCode, timedOut, truncated, totalBytes, omittedBytes, artifactPath, durationMs, error, cwd, exitNote), then raw stdout/stderr. When truncated is true, totalBytes and omittedBytes size the full stream against the inline view, and artifactPath points at the full output. On Unix, a null exitCode means the direct child was killed by a signal; shells may also report 128+N (137 = SIGKILL, often the OOM killer; 143 = SIGTERM). Treat signal deaths as failed runs, not normal non-zero exits. Non-zero exit codes can be normal: grep returns 1 for no match and diff returns 1 for differences.
 
-Oversized output is truncated automatically and the full stream is saved as an artifact; use the artifact path in the result with read_file when you need the omitted middle, instead of piping through head/tail or re-running the command.
+Oversized output is truncated automatically and the full stream is saved as an artifact; use artifactPath from the header with read_file when you need the omitted middle, instead of piping through head/tail or re-running the command.
 
 action=run requires command. timeout is in seconds. Foreground runs are capped at %ds: timeout=0 or any value above the cap starts a tracked background session instead and returns its sessionId. timeout is not supported with background=true.
 

@@ -224,14 +224,29 @@ func (b *boundedOutput) snapshotLocked() []byte {
 	return out
 }
 
-// Render returns the bounded view and whether the stream was truncated. The
-// view keeps the same 40/60 head-tail split as other tool truncation sites.
-func (b *boundedOutput) Render() (string, bool) {
+// boundedOutputView is the inline view of a stream plus the byte accounting
+// the model-facing exec header reports.
+type boundedOutputView struct {
+	Text         string
+	Truncated    bool
+	TotalBytes   int64
+	OmittedBytes int64
+}
+
+// Render returns the bounded view. The view keeps the same 40/60 head-tail
+// split as other tool truncation sites. TotalBytes counts every byte the child
+// wrote, while OmittedBytes counts the stream bytes outside the rendered
+// head/tail windows, so the caller can report both before the body without
+// re-reading the collector.
+func (b *boundedOutput) Render() boundedOutputView {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
 	if b.totalRunes <= int64(b.maxRunes) {
-		return string(b.snapshotLocked()), false
+		return boundedOutputView{
+			Text:       string(b.snapshotLocked()),
+			TotalBytes: b.totalBytes,
+		}
 	}
 
 	b.finishRuneCountLocked()
@@ -240,15 +255,24 @@ func (b *boundedOutput) Render() (string, bool) {
 		string(trimPartialRuneSuffix(trimPartialRunePrefix(b.tail))),
 		b.tailRunes,
 	)
-	omitted := b.totalRunes - int64(utf8.RuneCountInString(head)) - int64(utf8.RuneCountInString(tail))
-	if omitted < 0 {
-		omitted = 0
+	omittedRunes := b.totalRunes - int64(utf8.RuneCountInString(head)) - int64(utf8.RuneCountInString(tail))
+	if omittedRunes < 0 {
+		omittedRunes = 0
+	}
+	omittedBytes := b.totalBytes - int64(len(head)) - int64(len(tail))
+	if omittedBytes < 0 {
+		omittedBytes = 0
 	}
 	notice := fmt.Sprintf(
 		"\n\n... [OUTPUT TRUNCATED - %s chars omitted out of %s total] ...\n\n",
-		formatCount64(omitted), formatCount64(b.totalRunes),
+		formatCount64(omittedRunes), formatCount64(b.totalRunes),
 	)
-	return head + notice + tail, true
+	return boundedOutputView{
+		Text:         head + notice + tail,
+		Truncated:    true,
+		TotalBytes:   b.totalBytes,
+		OmittedBytes: omittedBytes,
+	}
 }
 
 // SpillPath returns the artifact path when the full stream overflowed the

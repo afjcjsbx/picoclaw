@@ -116,6 +116,11 @@ func TestShellTool_ForegroundResultHeader(t *testing.T) {
 		require.Contains(t, body, "hello world")
 		require.NotContains(t, body, `\n`)
 		require.Contains(t, result.ForUser, "hello world")
+
+		// The header sizes the stream even when nothing was omitted.
+		require.Equal(t, float64(len(body)), meta["totalBytes"])
+		require.NotContains(t, meta, "omittedBytes")
+		require.NotContains(t, meta, "artifactPath")
 	})
 
 	t.Run("non-zero exit", func(t *testing.T) {
@@ -706,6 +711,15 @@ func TestShellTool_OutputTruncation(t *testing.T) {
 	}
 	meta := parseExecRunMeta(t, capped.ForLLM)
 	require.Equal(t, true, meta["truncated"])
+	require.Equal(t, float64(20001), meta["totalBytes"])
+	require.Equal(t, float64(19001), meta["omittedBytes"])
+	artifactPath, ok := meta["artifactPath"].(string)
+	require.True(t, ok)
+	require.NotEmpty(t, artifactPath)
+	_, statErr := os.Stat(artifactPath)
+	require.NoError(t, statErr)
+	require.Len(t, capped.ArtifactTags, 1)
+	require.Equal(t, "[file:"+artifactPath+"]", capped.ArtifactTags[0])
 }
 
 // TestShellTool_TruncatedOutputSpillsFullText verifies that foreground output
@@ -821,6 +835,12 @@ func TestShellTool_ForegroundSpillUsesWorkspaceArtifact(t *testing.T) {
 
 	path := strings.TrimSuffix(strings.TrimPrefix(result.ArtifactTags[0], "[file:"), "]")
 	require.Contains(t, path, filepath.Join(workspace, ".artifacts", "tool"))
+
+	meta := parseExecRunMeta(t, result.ForLLM)
+	require.Equal(t, true, meta["truncated"])
+	require.Equal(t, float64(2000), meta["totalBytes"])
+	require.Equal(t, float64(1900), meta["omittedBytes"])
+	require.Equal(t, path, meta["artifactPath"])
 
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
