@@ -203,7 +203,9 @@ func TestBoundedOutputFallsBackToTempArtifactDir(t *testing.T) {
 
 	path := out.SpillPath()
 	require.NotEmpty(t, path)
-	require.Contains(t, path, tempArtifactDir())
+	artifactDir, err := tempArtifactDir()
+	require.NoError(t, err)
+	require.Contains(t, path, artifactDir)
 	t.Cleanup(func() { _ = os.Remove(path) })
 
 	require.NoError(t, out.Close())
@@ -223,7 +225,9 @@ func TestBoundedOutputFallbackWhenWorkspaceUnwritable(t *testing.T) {
 
 	path := out.SpillPath()
 	require.NotEmpty(t, path)
-	require.Contains(t, path, tempArtifactDir())
+	artifactDir, err := tempArtifactDir()
+	require.NoError(t, err)
+	require.Contains(t, path, artifactDir)
 	t.Cleanup(func() { _ = os.Remove(path) })
 
 	require.NoError(t, out.Close())

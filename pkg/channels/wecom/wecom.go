@@ -132,13 +132,17 @@ func NewChannel(bc *config.Channel, cfg *config.WeComSettings, messageBus *bus.M
 		return nil, fmt.Errorf("create wecom media http client: %w", err)
 	}
 
+	routes, err := newReqIDStore("")
+	if err != nil {
+		return nil, fmt.Errorf("open WeCom routing state: %w", err)
+	}
 	ch := &WeComChannel{
 		BaseChannel: base,
 		config:      cfg,
 		pending:     make(map[string]chan wecomEnvelope),
 		turns:       make(map[string][]wecomTurn),
 		recent:      newRecentMessageSet(wecomRecentMessageMax),
-		routes:      newReqIDStore(""),
+		routes:      routes,
 		mediaClient: mediaClient,
 	}
 	ch.SetOwner(ch)

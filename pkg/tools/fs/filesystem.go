@@ -1674,11 +1674,10 @@ func (r *sandboxFs) WriteFile(path string, data []byte) error {
 
 		// Use atomic write pattern with explicit sync for flash storage reliability.
 		// Using 0o600 (owner read/write only) for secure default permissions.
-		tmpRelPath := fmt.Sprintf(".tmp-%d-%d", os.Getpid(), time.Now().UnixNano())
+		tmpRelPath := filepath.Join(dir, fmt.Sprintf(".tmp-%d-%d", os.Getpid(), time.Now().UnixNano()))
 
 		tmpFile, err := root.OpenFile(tmpRelPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 		if err != nil {
-			root.Remove(tmpRelPath)
 			return fmt.Errorf("failed to open temp file: %w", err)
 		}
 
@@ -1707,7 +1706,7 @@ func (r *sandboxFs) WriteFile(path string, data []byte) error {
 		}
 
 		// Sync directory to ensure rename is durable
-		if dirFile, err := root.Open("."); err == nil {
+		if dirFile, err := root.Open(dir); err == nil {
 			_ = dirFile.Sync()
 			_ = dirFile.Close()
 		}

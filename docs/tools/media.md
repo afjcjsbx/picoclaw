@@ -60,7 +60,7 @@ Configuration summary: `tools.image_generate.enabled` (default `false`) and `too
 
 ## Media cleanup
 
-Inbound and outbound media files are stored in a shared media directory (`picoclaw_media` under the system temporary directory). A background cleaner deletes stale files so long-running gateways do not accumulate data.
+Inbound and outbound media files are stored privately under `$PICOCLAW_HOME/tmp/media` (default: `~/.picoclaw/tmp/media`). Different instance homes do not share attachments. Files use owner-only permissions, and tools receive read access only to the media directory. The current working directory and system `TMPDIR` do not select media storage. A background cleaner expires registered media.
 
 | Config | Type | Default | Description |
 |--------|------|---------|-------------|

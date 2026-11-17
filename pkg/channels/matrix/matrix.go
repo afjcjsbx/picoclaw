@@ -1032,11 +1032,7 @@ func (c *MatrixChannel) downloadMedia(
 
 	label := matrixMediaLabel(msgEvt, mediaKind)
 	ext := matrixMediaExt(label, matrixContentType(msgEvt), mediaKind)
-	mediaDir, err := matrixMediaTempDir()
-	if err != nil {
-		return "", fmt.Errorf("create matrix media directory: %w", err)
-	}
-	tmp, err := os.CreateTemp(mediaDir, "matrix-media-*"+ext)
+	tmp, err := media.CreateTemp("matrix-media-*" + ext)
 	if err != nil {
 		return "", err
 	}
@@ -1386,14 +1382,6 @@ func (c *MatrixChannel) runRoomKindCacheJanitor(ctx context.Context) {
 
 func (c *MatrixChannel) stripSelfMention(text string) string {
 	return stripUserMentionWithRegexp(text, c.client.UserID, c.localpartMentionR)
-}
-
-func matrixMediaTempDir() (string, error) {
-	mediaDir := media.TempDir()
-	if err := os.MkdirAll(mediaDir, 0o700); err != nil {
-		return "", err
-	}
-	return mediaDir, nil
 }
 
 func matrixLocalpart(userID id.UserID) string {

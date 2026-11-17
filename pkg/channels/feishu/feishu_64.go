@@ -992,23 +992,15 @@ func (c *FeishuChannel) storeResourceFile(
 	store media.MediaStore,
 	scope string,
 ) string {
-	mediaDir := media.TempDir()
-	if mkdirErr := os.MkdirAll(mediaDir, 0o700); mkdirErr != nil {
-		logger.ErrorCF("feishu", "Failed to create media directory", map[string]any{
-			"error": mkdirErr.Error(),
-		})
-		return ""
-	}
-	ext := filepath.Ext(filename)
-	localPath := filepath.Join(mediaDir, utils.SanitizeFilename(messageID+"-"+fileKey+ext))
-
-	out, err := os.Create(localPath)
+	out, err := media.CreateTemp("feishu-*" + filepath.Ext(filename))
 	if err != nil {
 		logger.ErrorCF("feishu", "Failed to create local file for resource", map[string]any{
 			"error": err.Error(),
 		})
 		return ""
 	}
+
+	localPath := out.Name()
 
 	if _, copyErr := io.Copy(out, file); copyErr != nil {
 		out.Close()

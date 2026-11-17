@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 
 	"github.com/sipeed/picoclaw/pkg"
+	"github.com/sipeed/picoclaw/pkg/instancepath"
 )
 
 // Runtime environment variable keys for the picoclaw process.
@@ -22,7 +23,10 @@ const (
 	// EnvHome overrides the base directory for all picoclaw data
 	// (config, workspace, skills, auth store, …).
 	// Default: ~/.picoclaw
-	EnvHome = "PICOCLAW_HOME"
+	EnvHome = instancepath.EnvHome
+
+	// EnvTempMaxBytes bounds host-managed temporary writes per process/instance.
+	EnvTempMaxBytes = instancepath.EnvTempMaxBytes
 
 	// EnvConfig overrides the full path to the JSON config file.
 	// Default: $PICOCLAW_HOME/config.json

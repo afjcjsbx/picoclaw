@@ -284,3 +284,11 @@ If you are new to this code, read it in this order:
 9. `pkg/mcp/manager.go`
 
 That path gives the fastest overview of the configuration model, runtime flow, and platform-specific limits.
+
+### Temporary storage
+
+PicoClaw-owned working files live under the resolved instance home rather than
+system temporary storage. Without subprocess isolation, launched commands get
+`TMPDIR`, `TMP`, and `TEMP` pointing to the current `tmp/work/run-*` directory.
+This changes only the child environment. With isolation enabled, the existing
+`runtime-user-env/tmp` scratch boundary is retained and secured privately.

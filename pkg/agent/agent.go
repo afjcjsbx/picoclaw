@@ -358,6 +358,7 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 				}
 
 				if al.mediaStore != nil && m.MediaScope != "" {
+					defer media.PinScope(al.mediaStore, m.MediaScope)()
 					// Release inbound media only after the turn that consumes it
 					// completes. The previous TODO placed this in the dispatch
 					// loop, where it ran before the worker read the files.

@@ -2,16 +2,12 @@ package deltachat
 
 import (
 	"encoding/json"
-	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 	"unicode"
-
-	"github.com/google/uuid"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/channels"
@@ -131,9 +127,8 @@ func (c *DeltaChatChannel) handleMessage(messageID int64) {
 		if ref := c.registerInboundFile(scope, msg); ref != "" {
 			mediaRefs = append(mediaRefs, ref)
 		} else {
-			// Fallback when no media store is available: surface the path inline
-			// so the attachment is not silently lost.
-			annotation := fmt.Sprintf("[attachment: %s]", msg.File)
+			// Do not ask the agent to open the account blob after staging failed.
+			annotation := "[Attachment unavailable: failed to stage the file for processing. Check PicoClaw storage permissions and resend.]"
 			if content == "" {
 				content = annotation
 			} else {
@@ -258,7 +253,7 @@ func (c *DeltaChatChannel) markProcessedMessageSeen(messageID int64, chat *dcCha
 // registerInboundFile records an inbound attachment with the media store under
 // the given scope and returns its media:// ref. Returns "" when there is no
 // media store or registration fails, letting the caller fall back to an inline
-// path annotation.
+// attachment-unavailable annotation.
 //
 // Delta Chat stores attachments inside the account directory, next to the
 // credential database — a location tools are intentionally NOT allowed to read.
@@ -307,35 +302,12 @@ func (c *DeltaChatChannel) registerInboundFile(scope string, msg *dcMessage) str
 // location the read_file/load_image tools are permitted to read, so copying here
 // makes the attachment readable without exposing Delta Chat's account directory.
 func copyToMediaTemp(srcPath, filename string) (string, error) {
-	if err := os.MkdirAll(media.TempDir(), 0o700); err != nil {
-		return "", err
-	}
-	safe := utils.SanitizeFilename(filename)
-	if safe == "" {
-		safe = filepath.Base(srcPath)
-	}
-	dstPath := filepath.Join(media.TempDir(), uuid.NewString()[:8]+"_"+safe)
-
 	src, err := os.Open(srcPath)
 	if err != nil {
 		return "", err
 	}
 	defer src.Close()
-
-	dst, err := os.Create(dstPath)
-	if err != nil {
-		return "", err
-	}
-	if _, err := io.Copy(dst, src); err != nil {
-		dst.Close()
-		_ = os.Remove(dstPath)
-		return "", err
-	}
-	if err := dst.Close(); err != nil {
-		_ = os.Remove(dstPath)
-		return "", err
-	}
-	return dstPath, nil
+	return media.WriteTemp("deltachat-*"+filepath.Ext(utils.SanitizeFilename(filename)), src)
 }
 
 func (c *DeltaChatChannel) getMessage(messageID int64) (*dcMessage, error) {

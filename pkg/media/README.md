@@ -14,7 +14,9 @@ Each entry carries a `CleanupPolicy`:
 - `delete_on_cleanup` (default when the field is empty): the store owns the
   file and may delete it once the final ref for that path is gone.
 - `forget_only`: the store only drops the mapping and never deletes the file
-  (used for externally-owned files).
+  (used for externally-owned files). Filesystem tools use `StoreReadRef`: an existing
+  store-owned attachment keeps its ownership when loaded or sent, while a
+  previously unregistered workspace file remains borrowed.
 
 Any other value is rejected by `Store` with an error. Unknown policies are
 **not** silently coerced to deletion, so a caller typo cannot delete a file the
@@ -39,16 +41,27 @@ example in the dispatch loop) would delete the files before the LLM reads them.
 (`Start`/`Stop`). Expiry is **idle-based**: `Resolve` and `ResolveWithMeta`
 refresh the entry's last-access time, so a file that is still being read is not
 removed by `CleanExpired` even if it was stored longer ago than `MaxAge`.
+Reader pins protect inbound turns and outbound delivery from expiration, including
+long retries. Failed file removals remain queued for subsequent cleanup.
 
 ## Concurrency
 
-`FileMediaStore` is safe for concurrent use. Deletion is two-phase: mappings are
-removed under the lock, then files are deleted without holding it. Shared paths
-are reference-counted so the file is removed only when the last owning ref is
-released or expires.
+`FileMediaStore` is safe for concurrent use. Registration and deletion share
+the store lock so cleanup cannot delete a path while it is being re-registered.
+Shared paths are reference-counted and pinned during active reads.
 
 ## Temp directory
 
-`TempDir()` returns `os.TempDir()/picoclaw_media`, the shared location where
-channels and tools are expected to place downloaded or generated media before
-registering it.
+`TempDir()` returns a private directory beneath `<PICOCLAW_HOME>/tmp/media`
+(default home: `~/.picoclaw`) and an error if storage cannot be prepared.
+Channels and tools use `CreateTemp` or `WriteTemp` to create media exclusively
+with owner-only permissions before registering it. System `TMPDIR` and the
+working directory do not control this location.
+
+Each process holds an OS lock on its own `tmp/media/run-*` directory. On the
+next start, storage recovery removes abandoned run directories only when their
+lock can be acquired. It skips live processes, unknown files, and symlinks.
+This recovers files left before registration or after crashes without relying
+on PID reuse or file age. `tmp/work/run-*` uses the same recovery mechanism.
+Files intentionally retained for later turns belong in workspace artifacts,
+not these disposable run directories.

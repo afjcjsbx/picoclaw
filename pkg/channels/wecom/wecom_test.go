@@ -632,7 +632,10 @@ func newTestWeComChannel(t *testing.T, messageBus *bus.MessageBus) *WeComChannel
 		t.Fatalf("NewChannel() error = %v", err)
 	}
 	ch.ctx = context.Background()
-	ch.routes = newReqIDStore(filepath.Join(t.TempDir(), "reqids.json"))
+	ch.routes, err = newReqIDStore(filepath.Join(t.TempDir(), "reqids.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	return ch
 }
 

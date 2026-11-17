@@ -1,13 +1,44 @@
 package media
 
 import (
+	"io"
 	"os"
-	"path/filepath"
+
+	"github.com/sipeed/picoclaw/pkg/instancepath"
 )
 
-const TempDirName = "picoclaw_media"
+const TempDirName = "media"
 
-// TempDir returns the shared temporary directory used for downloaded media.
-func TempDir() string {
-	return filepath.Join(os.TempDir(), TempDirName)
+// TempDir returns private media storage for this PicoClaw instance.
+func TempDir() (string, error) {
+	return instancepath.TempDir(TempDirName)
+}
+
+// CreateTemp creates media with an exclusive name and owner-only permissions.
+// The caller owns the file until it successfully registers it with a store.
+func CreateTemp(pattern string) (*instancepath.File, error) {
+	dir, err := TempDir()
+	if err != nil {
+		return nil, err
+	}
+	return instancepath.CreateTempIn(dir, pattern)
+}
+
+// WriteTemp stages a complete media file, removing partial output on any error.
+func WriteTemp(pattern string, src io.Reader) (string, error) {
+	f, err := CreateTemp(pattern)
+	if err != nil {
+		return "", err
+	}
+	path := f.Name()
+	if _, err := io.Copy(f, src); err != nil {
+		_ = f.Close()
+		_ = os.Remove(path)
+		return "", err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(path)
+		return "", err
+	}
+	return path, nil
 }

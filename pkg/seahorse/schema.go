@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/sipeed/picoclaw/pkg/logger"
@@ -481,8 +482,15 @@ func backupBeforeMigration(db *sql.DB, path string) error {
 	}
 
 	backupPath := path + ".bak"
-	tmpPath := backupPath + ".tmp"
-	_ = os.Remove(tmpPath)
+	tmp, err := os.CreateTemp(filepath.Dir(backupPath), ".seahorse-backup-*.tmp")
+	if err != nil {
+		return fmt.Errorf("stage database backup: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if err := tmp.Close(); err != nil {
+		return err
+	}
 	if _, err := db.ExecContext(context.Background(), "VACUUM INTO ?", tmpPath); err != nil {
 		_ = os.Remove(tmpPath)
 		return fmt.Errorf("backup database: %w", err)

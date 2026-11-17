@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/instancepath"
 )
 
 // Report is the static view of one package: what the host would discover,
@@ -68,7 +69,7 @@ func Validate(id, path string, entry config.PluginEntryConfig) (Report, error) {
 
 	// Process hooks need a data directory to resolve ${PLUGIN_DATA}; a throwaway
 	// one keeps validation from creating the real installation's directory.
-	scratch, err := os.MkdirTemp("", "picoclaw-validate-")
+	scratch, err := instancepath.MkdirTemp("picoclaw-validate-")
 	if err != nil {
 		return r, err
 	}

@@ -13,6 +13,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/fileutil"
+	"github.com/sipeed/picoclaw/pkg/instancepath"
 	"github.com/sipeed/picoclaw/pkg/isolation"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/media"
@@ -713,19 +714,33 @@ func buildAllowReadPatterns(cfg *config.Config) []*regexp.Regexp {
 	}
 
 	compiled := compilePatterns(configured)
-	mediaDirPattern := regexp.MustCompile(mediaTempDirPattern())
-	for _, pattern := range compiled {
-		if pattern.String() == mediaDirPattern.String() {
-			return compiled
+	for _, resolve := range []func() (string, error){
+		media.TempDir,
+		func() (string, error) { return instancepath.PrivateDir("artifacts", "tool") },
+	} {
+		dir, err := resolve()
+		if err != nil {
+			logger.ErrorCF("agent", "Runtime storage unavailable", map[string]any{"error": err.Error()})
+			continue
+		}
+		pattern := runtimeReadDirPattern(dir)
+		duplicate := false
+		for _, existing := range compiled {
+			if existing.String() == pattern {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			compiled = append(compiled, regexp.MustCompile(pattern))
 		}
 	}
-
-	return append(compiled, mediaDirPattern)
+	return compiled
 }
 
-func mediaTempDirPattern() string {
+func runtimeReadDirPattern(dir string) string {
 	sep := regexp.QuoteMeta(string(os.PathSeparator))
-	return "^" + regexp.QuoteMeta(filepath.Clean(media.TempDir())) + "(?:" + sep + "|$)"
+	return "^" + regexp.QuoteMeta(filepath.Clean(dir)) + "(?:" + sep + "|$)"
 }
 
 // Close releases resources held by the agent's providers and session store.

@@ -114,11 +114,6 @@ func SynthesizeAndStore(
 	}
 	defer stream.Close()
 
-	err = os.MkdirAll(media.TempDir(), 0o700)
-	if err != nil {
-		return "", fmt.Errorf("failed to create media temp dir: %w", err)
-	}
-
 	fileExt := ".ogg"
 	contentType := "audio/ogg"
 	if provider.Name() == "mimo-tts" {
@@ -132,7 +127,7 @@ func SynthesizeAndStore(
 		}
 	}
 
-	file, err := os.CreateTemp(media.TempDir(), "tts-*"+fileExt)
+	file, err := media.CreateTemp("tts-*" + fileExt)
 	if err != nil {
 		return "", fmt.Errorf("failed to create temp file: %w", err)
 	}

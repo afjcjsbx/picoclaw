@@ -30,12 +30,7 @@ type StoreTempMediaInput struct {
 // and hands the path to Store. Any failure removes the temporary file again; a
 // registration failure wraps ErrMediaStoreRegistration.
 func StoreTempMedia(in StoreTempMediaInput) (string, error) {
-	dir := media.TempDir()
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", err
-	}
-
-	tmpFile, err := os.CreateTemp(dir, in.TempPrefix+"*"+ExtensionForMIMEType(in.MIMEType))
+	tmpFile, err := media.CreateTemp(in.TempPrefix + "*" + ExtensionForMIMEType(in.MIMEType))
 	if err != nil {
 		return "", err
 	}

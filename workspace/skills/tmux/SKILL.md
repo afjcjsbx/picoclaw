@@ -11,8 +11,8 @@ Use tmux only when you need an interactive TTY. Prefer exec background mode for 
 ## Quickstart (isolated socket, exec tool)
 
 ```bash
-SOCKET_DIR="${NANOBOT_TMUX_SOCKET_DIR:-${TMPDIR:-/tmp}/nanobot-tmux-sockets}"
-mkdir -p "$SOCKET_DIR"
+SOCKET_DIR="${NANOBOT_TMUX_SOCKET_DIR:-${PICOCLAW_HOME:-${HOME:?HOME or PICOCLAW_HOME must be set}/.picoclaw}/runtime-user-env/tmux}"
+mkdir -p -m 700 "$SOCKET_DIR"
 SOCKET="$SOCKET_DIR/nanobot.sock"
 SESSION=nanobot-python
 

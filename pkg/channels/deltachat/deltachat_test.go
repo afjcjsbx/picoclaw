@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/fileutil"
 	"github.com/sipeed/picoclaw/pkg/media"
+	fstools "github.com/sipeed/picoclaw/pkg/tools/fs"
 )
 
 func TestNewDeltaChatChannel(t *testing.T) {
@@ -612,6 +614,7 @@ func TestMessageDataJSON(t *testing.T) {
 // registered with delete-on-cleanup, and that the absence of a store yields an
 // empty ref for the annotation fallback.
 func TestRegisterInboundFile(t *testing.T) {
+	t.Setenv("PICOCLAW_HOME", t.TempDir())
 	ch := newTestChannel(t)
 
 	tmp := filepath.Join(t.TempDir(), "doc.pdf")
@@ -641,8 +644,12 @@ func TestRegisterInboundFile(t *testing.T) {
 	if path == tmp {
 		t.Errorf("path = %q, want a copy in the media temp dir, not the blob path", path)
 	}
-	if !strings.HasPrefix(filepath.Clean(path), filepath.Clean(media.TempDir())) {
-		t.Errorf("path = %q, want it under media temp dir %q", path, media.TempDir())
+	mediaDir, err := media.TempDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(filepath.Clean(path), filepath.Clean(mediaDir)) {
+		t.Errorf("path = %q, want it under media temp dir %q", path, mediaDir)
 	}
 	if data, rerr := os.ReadFile(path); rerr != nil || string(data) != "%PDF-1.4" {
 		t.Errorf("copied file contents = %q (err %v), want %q", string(data), rerr, "%PDF-1.4")
@@ -652,6 +659,36 @@ func TestRegisterInboundFile(t *testing.T) {
 	}
 	if meta.CleanupPolicy != media.CleanupPolicyDeleteOnCleanup {
 		t.Errorf("cleanup policy = %q, want delete_on_cleanup", meta.CleanupPolicy)
+	}
+}
+
+func TestAttachmentLoadsFromPrivateMediaDirectory(t *testing.T) {
+	t.Setenv("PICOCLAW_HOME", t.TempDir())
+	ch := newTestChannel(t)
+	store := media.NewFileMediaStore()
+	ch.SetMediaStore(store)
+	blob := filepath.Join(t.TempDir(), "blob.png")
+	if err := os.WriteFile(blob, []byte("\x89PNG\r\n\x1a\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ref := ch.registerInboundFile("inbound", &dcMessage{File: blob, FileName: "photo – 東京.png", FileMime: "image/png"})
+	path, err := store.Resolve(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := media.TempDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	allow := regexp.MustCompile("^" + regexp.QuoteMeta(dir+string(os.PathSeparator)))
+	tool := fstools.NewLoadImageTool(t.TempDir(), true, 0, store, []*regexp.Regexp{allow})
+	ctx := fstools.WithToolContext(context.Background(), "deltachat", "12")
+	result := tool.Execute(ctx, map[string]any{"path": path})
+	if result.IsError || len(result.Media) != 1 {
+		t.Fatalf("load_image: %+v", result)
+	}
+	if result := tool.Execute(ctx, map[string]any{"path": blob}); !result.IsError {
+		t.Fatal("original account path was exposed")
 	}
 }
 

@@ -1,6 +1,7 @@
 package pico
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -1605,20 +1606,15 @@ func (c *PicoChannel) storeInlineAudioAttachments(
 		return refs, nil
 	}
 
-	audioDir := filepath.Join(mediastore.TempDir(), "pico-audio")
-	if err := os.MkdirAll(audioDir, 0o700); err != nil {
-		return nil, fmt.Errorf("create audio directory: %w", err)
-	}
-
 	refs := make([]string, 0, len(attachments))
 	for i, attachment := range attachments {
 		_, data, err := decodeInlineAttachmentDataURL(attachment.DataURL)
 		if err != nil {
 			return nil, fmt.Errorf("attachments[%d]: %w", i, err)
 		}
-		localPath := filepath.Join(audioDir, uuid.NewString()+picoAudioExtension(attachment.ContentType))
-		if writeErr := os.WriteFile(localPath, data, 0o600); writeErr != nil {
-			return nil, fmt.Errorf("save audio attachment: %w", writeErr)
+		localPath, err := mediastore.WriteTemp("pico-audio-*"+picoAudioExtension(attachment.ContentType), bytes.NewReader(data))
+		if err != nil {
+			return nil, fmt.Errorf("save audio attachment: %w", err)
 		}
 		ref, err := store.Store(localPath, mediastore.MediaMeta{
 			Filename:      attachment.Filename,

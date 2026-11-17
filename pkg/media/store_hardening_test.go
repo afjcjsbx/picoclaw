@@ -1,10 +1,79 @@
 package media
 
 import (
+	"errors"
 	"os"
 	"testing"
 	"time"
 )
+
+func TestPinnedMediaSurvivesExpiryAndScopeRelease(t *testing.T) {
+	store := newTestStoreWithCleanup(time.Minute)
+	now := time.Now()
+	store.nowFunc = func() time.Time { return now }
+	path := createTempFile(t, t.TempDir(), "active.png")
+	ref, err := store.Store(path, MediaMeta{}, "turn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	unpin := PinRefs(store, ref)
+	now = now.Add(time.Hour)
+	if n := store.CleanExpired(); n != 0 {
+		t.Fatalf("expired active media: %d", n)
+	}
+	if err := store.ReleaseAll("turn"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("removed pinned file: %v", err)
+	}
+	unpin()
+	unpin() // Release handles must be idempotent.
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("file remains after reader finished: %v", err)
+	}
+}
+
+func TestFailedMediaDeletionIsRetried(t *testing.T) {
+	store := NewFileMediaStore()
+	path := createTempFile(t, t.TempDir(), "retry.png")
+	if _, err := store.Store(path, MediaMeta{}, "turn"); err != nil {
+		t.Fatal(err)
+	}
+	store.removeFile = func(string) error { return os.ErrPermission }
+	if err := store.ReleaseAll("turn"); !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("error = %v", err)
+	}
+	if len(store.pendingDeletes) != 1 {
+		t.Fatal("failed deletion was forgotten")
+	}
+	store.removeFile = os.Remove
+	store.CleanExpired()
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("retry did not remove file: %v", err)
+	}
+}
+
+func TestReregisteredFileCancelsPendingDeletion(t *testing.T) {
+	store := NewFileMediaStore()
+	path := createTempFile(t, t.TempDir(), "retry.png")
+	if _, err := store.Store(path, MediaMeta{}, "old"); err != nil {
+		t.Fatal(err)
+	}
+	store.removeFile = func(string) error { return os.ErrPermission }
+	_ = store.ReleaseAll("old")
+	if _, err := store.Store(path, MediaMeta{CleanupPolicy: CleanupPolicyForgetOnly}, "borrowed"); err != nil {
+		t.Fatal(err)
+	}
+	store.removeFile = os.Remove
+	store.CleanExpired()
+	if err := store.ReleaseAll("borrowed"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("borrowed file removed: %v", err)
+	}
+}
 
 func TestStoreRejectsInvalidCleanupPolicy(t *testing.T) {
 	dir := t.TempDir()
@@ -13,6 +82,37 @@ func TestStoreRejectsInvalidCleanupPolicy(t *testing.T) {
 
 	if _, err := store.Store(path, MediaMeta{CleanupPolicy: "bogus"}, "scope"); err == nil {
 		t.Fatal("expected error for invalid cleanup policy, got nil")
+	}
+}
+
+func TestReadRefPreservesManagedOwnership(t *testing.T) {
+	for _, managed := range []bool{false, true} {
+		store := NewFileMediaStore()
+		path := createTempFile(t, t.TempDir(), "image.png")
+		if managed {
+			if _, err := store.Store(path, MediaMeta{}, "inbound"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := StoreReadRef(store, path, MediaMeta{}, "tool"); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.ReleaseAll("inbound"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("file removed while tool still uses it: %v", err)
+		}
+		if err := store.ReleaseAll("tool"); err != nil {
+			t.Fatal(err)
+		}
+		_, err := os.Stat(path)
+		if managed && !os.IsNotExist(err) {
+			t.Fatalf("managed copy was leaked: %v", err)
+		}
+		if !managed && err != nil {
+			t.Fatalf("external original removed: %v", err)
+		}
 	}
 }
 

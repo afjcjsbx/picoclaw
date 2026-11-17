@@ -78,11 +78,10 @@ func storeMediaRef(
 	store media.MediaStore,
 	resolved, filename, mediaType, source, scope string,
 ) (string, error) {
-	return store.Store(resolved, media.MediaMeta{
-		Filename:      filename,
-		ContentType:   mediaType,
-		Source:        source,
-		CleanupPolicy: media.CleanupPolicyForgetOnly,
+	return media.StoreReadRef(store, resolved, media.MediaMeta{
+		Filename:    filename,
+		ContentType: mediaType,
+		Source:      source,
 	}, scope)
 }
 
