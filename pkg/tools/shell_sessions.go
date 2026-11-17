@@ -12,24 +12,41 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 )
 
+// sessionResponse fills the fields every action reports for a session. Callers
+// add the action-specific output, offsets and notes on top.
+func sessionResponse(sessionID string, session *ProcessSession) ExecResponse {
+	artifactPath, artifactCapped := session.SpillInfo()
+	return ExecResponse{
+		SessionID:      sessionID,
+		Status:         session.GetStatus(),
+		ExitCode:       sessionExitCode(session),
+		TotalBytes:     session.TotalBytes(),
+		DroppedBytes:   session.DroppedBytes(),
+		ArtifactPath:   artifactPath,
+		ArtifactCapped: artifactCapped,
+	}
+}
+
+// jsonResult serializes one tool response, keeping the error mapping in one
+// place. forUser is empty for model-only responses.
+func jsonResult(resp ExecResponse, forUser string) *ToolResult {
+	data, err := json.Marshal(resp)
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
+	return &ToolResult{ForLLM: string(data), ForUser: forUser, IsError: false}
+}
+
 func (t *ExecTool) executeList(ctx context.Context) *ToolResult {
 	sessions := t.sessionManager.ListForCaller(
 		ToolAgentID(ctx),
 		ToolChannel(ctx),
 		ToolChatID(ctx),
 	)
-	resp := ExecResponse{
-		Sessions: sessions,
-	}
-	data, err := json.Marshal(resp)
-	if err != nil {
-		return ErrorResult(err.Error())
-	}
-	return &ToolResult{
-		ForLLM:  string(data),
-		ForUser: fmt.Sprintf("%d active sessions", len(sessions)),
-		IsError: false,
-	}
+	return jsonResult(
+		ExecResponse{Sessions: sessions},
+		fmt.Sprintf("%d active sessions", len(sessions)),
+	)
 }
 
 // sessionIDArg extracts the required sessionId argument.
@@ -81,31 +98,15 @@ func (t *ExecTool) executePoll(ctx context.Context, args map[string]any) *ToolRe
 		return errResult
 	}
 
-	artifactPath, artifactCapped := session.SpillInfo()
-	resp := ExecResponse{
-		SessionID:      sessionID,
-		Status:         session.GetStatus(),
-		ExitCode:       sessionExitCode(session),
-		Output:         session.Tail(pollOutputChars),
-		TotalBytes:     session.TotalBytes(),
-		DroppedBytes:   session.DroppedBytes(),
-		ArtifactPath:   artifactPath,
-		ArtifactCapped: artifactCapped,
-	}
+	resp := sessionResponse(sessionID, session)
+	resp.Output = session.Tail(pollOutputChars)
 	if !session.IsDone() && session.noteCheck() >= idleCheckLimit {
 		resp.Note = pollIdleNote
 		if session.StartNotify() || session.NotifyEnabled() {
 			resp.Note += " " + autoNotifyNote
 		}
 	}
-	data, err := json.Marshal(resp)
-	if err != nil {
-		return ErrorResult(err.Error())
-	}
-	return &ToolResult{
-		ForLLM:  string(data),
-		IsError: false,
-	}
+	return jsonResult(resp, "")
 }
 
 const (
@@ -181,16 +182,7 @@ func (t *ExecTool) executeWait(ctx context.Context, args map[string]any) *ToolRe
 	case <-deadline.C:
 	}
 
-	artifactPath, artifactCapped := session.SpillInfo()
-	resp := ExecResponse{
-		SessionID:      sessionID,
-		Status:         session.GetStatus(),
-		ExitCode:       sessionExitCode(session),
-		TotalBytes:     session.TotalBytes(),
-		DroppedBytes:   session.DroppedBytes(),
-		ArtifactPath:   artifactPath,
-		ArtifactCapped: artifactCapped,
-	}
+	resp := sessionResponse(sessionID, session)
 	if session.IsDone() {
 		resp.Output = session.Read()
 	} else {
@@ -205,11 +197,7 @@ func (t *ExecTool) executeWait(ctx context.Context, args map[string]any) *ToolRe
 			}
 		}
 	}
-	data, err := json.Marshal(resp)
-	if err != nil {
-		return ErrorResult(err.Error())
-	}
-	return &ToolResult{ForLLM: string(data)}
+	return jsonResult(resp, "")
 }
 
 func (t *ExecTool) executeRead(ctx context.Context, args map[string]any) *ToolResult {
@@ -247,38 +235,24 @@ func (t *ExecTool) executeRead(ctx context.Context, args map[string]any) *ToolRe
 	}
 
 	page := session.ReadRange(offset, limit)
-	artifactPath, artifactCapped := session.SpillInfo()
-	resp := ExecResponse{
-		SessionID:      sessionID,
-		Output:         page.Text,
-		Status:         session.GetStatus(),
-		ExitCode:       sessionExitCode(session),
-		TotalBytes:     page.TotalBytes,
-		Offset:         page.Offset,
-		NextOffset:     page.NextOffset,
-		HasMore:        page.HasMore,
-		DroppedBytes:   page.DroppedBytes,
-		SkippedBytes:   page.SkippedBytes,
-		ArtifactPath:   artifactPath,
-		ArtifactCapped: artifactCapped,
-	}
+	resp := sessionResponse(sessionID, session)
+	resp.Output = page.Text
+	resp.TotalBytes = page.TotalBytes
+	resp.Offset = page.Offset
+	resp.NextOffset = page.NextOffset
+	resp.HasMore = page.HasMore
+	resp.DroppedBytes = page.DroppedBytes
+	resp.SkippedBytes = page.SkippedBytes
 	if page.SkippedBytes > 0 {
 		resp.Note = fmt.Sprintf(
 			"Requested offset %d predates the retained output window; skipped %d bytes, starting at byte %d.",
 			offset, page.SkippedBytes, page.Offset,
 		)
-		if artifactPath != "" {
-			resp.Note += " The full output is saved at " + artifactPath + "."
+		if resp.ArtifactPath != "" {
+			resp.Note += " The full output is saved at " + resp.ArtifactPath + "."
 		}
 	}
-	data, err := json.Marshal(resp)
-	if err != nil {
-		return ErrorResult(err.Error())
-	}
-	return &ToolResult{
-		ForLLM:  string(data),
-		IsError: false,
-	}
+	return jsonResult(resp, "")
 }
 
 func (t *ExecTool) executeWrite(ctx context.Context, args map[string]any) *ToolResult {
@@ -308,18 +282,10 @@ func (t *ExecTool) executeWrite(ctx context.Context, args map[string]any) *ToolR
 		return ErrorResult(fmt.Sprintf("failed to write to session: %v", err))
 	}
 
-	resp := ExecResponse{
+	return jsonResult(ExecResponse{
 		SessionID: sessionID,
 		Status:    session.GetStatus(),
-	}
-	respData, err := json.Marshal(resp)
-	if err != nil {
-		return ErrorResult(err.Error())
-	}
-	return &ToolResult{
-		ForLLM:  string(respData),
-		IsError: false,
-	}
+	}, "")
 }
 
 func (t *ExecTool) executeKill(ctx context.Context, args map[string]any) *ToolResult {
@@ -336,26 +302,9 @@ func (t *ExecTool) executeKill(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult(fmt.Sprintf("failed to kill session: %v", err))
 	}
 
-	artifactPath, artifactCapped := session.SpillInfo()
-	resp := ExecResponse{
-		SessionID:      sessionID,
-		Status:         session.GetStatus(),
-		ExitCode:       sessionExitCode(session),
-		Output:         session.Tail(killOutputChars),
-		TotalBytes:     session.TotalBytes(),
-		DroppedBytes:   session.DroppedBytes(),
-		ArtifactPath:   artifactPath,
-		ArtifactCapped: artifactCapped,
-	}
-	data, err := json.Marshal(resp)
-	if err != nil {
-		return ErrorResult(err.Error())
-	}
-	return &ToolResult{
-		ForLLM:  string(data),
-		ForUser: fmt.Sprintf("Session %s killed; output retained for 30 minutes", sessionID),
-		IsError: false,
-	}
+	resp := sessionResponse(sessionID, session)
+	resp.Output = session.Tail(killOutputChars)
+	return jsonResult(resp, fmt.Sprintf("Session %s killed; output retained for 30 minutes", sessionID))
 }
 
 // keyMap maps key names to their escape sequences.
@@ -571,12 +520,5 @@ func (t *ExecTool) executeSendKeys(ctx context.Context, args map[string]any) *To
 		Status:    "running",
 		Output:    fmt.Sprintf("Sent keys: %v", keys),
 	}
-	respData, err := json.Marshal(resp)
-	if err != nil {
-		return ErrorResult(err.Error())
-	}
-	return &ToolResult{
-		ForLLM:  string(respData),
-		IsError: false,
-	}
+	return jsonResult(resp, "")
 }
