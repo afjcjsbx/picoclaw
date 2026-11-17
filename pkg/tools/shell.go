@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -907,29 +908,14 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 	// Re-resolve symlinks immediately before execution to shrink the TOCTOU window
 	// between validation and cmd.Dir assignment.
 	if t.restrictToWorkspace && t.workingDir != "" && cwd != t.workingDir {
-		resolved, err := filepath.EvalSymlinks(cwd)
+		resolved, err := t.revalidateCwdForExecution(cwd)
 		if err != nil {
 			if rememberedCwd {
 				t.forgetRememberedCwd(ctx, cwd, err)
 			}
-			return ErrorResult(fmt.Sprintf("Command blocked by safety guard (path resolution failed: %v)", err))
+			return ErrorResult("Command blocked by safety guard (" + err.Error() + ")")
 		}
-		if fstools.IsAllowedPath(resolved, t.allowedPathPatterns) {
-			cwd = resolved
-		} else {
-			absWorkspace, _ := filepath.Abs(t.workingDir)
-			wsResolved, _ := filepath.EvalSymlinks(absWorkspace)
-			if wsResolved == "" {
-				wsResolved = absWorkspace
-			}
-			if !fstools.IsWithinWorkspace(resolved, wsResolved) {
-				if rememberedCwd {
-					t.forgetRememberedCwd(ctx, cwd, fmt.Errorf("working directory escaped workspace"))
-				}
-				return ErrorResult("Command blocked by safety guard (working directory escaped workspace)")
-			}
-			cwd = resolved
-		}
+		cwd = resolved
 	}
 
 	// Persist only a cwd that passed validation and the command guard.
@@ -967,6 +953,28 @@ func (t *ExecTool) resolvedWorkspace() string {
 		workspace = resolved
 	}
 	return workspace
+}
+
+// cwdWithinPolicy reports whether a symlink-resolved directory is inside the
+// resolved workspace or matches an explicit allowed path. Execution re-checks
+// and the initial cwd validation share this predicate so they cannot drift.
+func (t *ExecTool) cwdWithinPolicy(resolved string) bool {
+	return fstools.IsAllowedPath(resolved, t.allowedPathPatterns) ||
+		fstools.IsWithinWorkspace(resolved, t.resolvedWorkspace())
+}
+
+// revalidateCwdForExecution re-resolves symlinks right before the command
+// starts, so a directory validated earlier cannot be swapped for one that
+// escapes the workspace.
+func (t *ExecTool) revalidateCwdForExecution(cwd string) (string, error) {
+	resolved, err := filepath.EvalSymlinks(cwd)
+	if err != nil {
+		return "", fmt.Errorf("path resolution failed: %w", err)
+	}
+	if !t.cwdWithinPolicy(resolved) {
+		return "", errors.New("working directory escaped workspace")
+	}
+	return resolved, nil
 }
 
 // validateCwd applies the workspace and allow-path policy to a cwd. It tries
