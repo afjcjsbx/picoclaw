@@ -55,20 +55,17 @@ Commands above `risk_threshold` are rejected before any process starts, with a s
 Command blocked by risk classifier: command="chmod +x script.sh" risk_level=high threshold=medium reason=command risk exceeds configured threshold
 ```
 
-A dynamic command name, a shell that reads commands from stdin, and an unparseable command are rejected regardless of `risk_threshold`; set `enable_deny_patterns: false` to disable the built-in guard set, unless smart approvals are enabled (they keep the Unix classifier active for the Guardian gate).
+A dynamic command name, a shell that reads commands from stdin or a script file, and an unparseable command are rejected regardless of `risk_threshold`; set `enable_deny_patterns: false` to disable the built-in guard set, unless smart approvals are enabled (they keep the Unix classifier active for the Guardian gate).
 
 The classifier also:
 
 - rejects a command whose command word is dynamic (`"$cmd" -rf /`) because it cannot be resolved statically;
-- parses a literal `sh -c '...'` / `bash -c '...'` script recursively, and rejects a shell that reads commands from stdin;
-- inspects a script file named on the command line (`bash script.sh`, `sh -e ./run.sh`) when it resolves inside the workspace and is a regular file no larger than 1 MiB; the script is parsed with the same AST walker, and a missing, unreadable, oversized or out-of-workspace script is still rejected;
+- parses a literal `sh -c '...'` / `bash -c '...'` script recursively, and rejects a shell that reads commands from stdin or a script file;
 - parses a literal `trap '...'` action recursively, and rejects an `xargs` invocation that launches a shell;
 - inspects common wrappers (`env`, `command`, `nohup`, `time`, `nice`, `timeout`, `xargs`, `watch`, `flock`, `chrt`, `taskset`, `busybox`, `runuser`, `setpriv`, `capsh`, `machinectl`, `lxc`, `incus`) and classifies the command they launch; `runuser -c` and `flock -c` command strings are parsed as shell scripts;
 - inspects `virsh` verbs, lowering read-only ones such as `list`, `domstate` and `dumpxml` and keeping destructive verbs at `high`;
 - treats `env -S` as critical, because it splits a string into a command;
 - classifies process-detaching and namespace commands (`setsid`, `daemon`, `daemonize`, `disown`, `unshare`, `nsenter`, `bwrap`) as `high`. This is an approval signal, not a containment boundary: the exec tool's process scope is responsible for killing detached descendants.
-
-Script inspection is bounded: one file is read up to 1 MiB and all script files in a single command share a 2 MiB budget, so nested scripts cannot turn the guard into an unbounded allocation. Relative script paths resolve against the command's working directory, exactly like the shell resolves them; the guard does not track `cd` inside a script, so a nested script invoked after a `cd` is rejected rather than misresolved. The file is read before execution, which leaves a small time-of-check/time-of-use window if the file is replaced concurrently.
 
 Argument modifiers are applied after flag normalization (`rm -rf`, `rm -fr` and `rm -r -f` are equivalent; `-XPOST` and `--request=POST` match their spaced flag+value forms). Built-in examples include `rm -r` → `high`, `rm -rf` → `critical`, `git push` → `high`, `git push --force` → `critical`, `curl -X POST` → `high`, and `find -delete` → `high`.
 
@@ -128,9 +125,6 @@ Configurations that used `custom_allow_patterns` to exempt the risk classifier s
 Limits worth knowing:
 
 - The classifier is static. A dynamic argument that hides a flag (for example `curl "$FLAGS"`) cannot be inspected; a dynamic command word is rejected instead.
-- Script inspection is intentionally shallow: only the file named on the command line is read, plus scripts it launches through a shell command. A script that changes directory and then launches another script by relative path is rejected rather than resolved against the wrong directory.
-- Only shell invocations (`sh`, `bash`, `dash`, and the other supported shells) are inspected. Interpreters such as `python`, `node` or `perl` keep their table level and their script files are not parsed.
-- The script file is verified and read before the shell starts, so replacing it between the check and execution is not detected. The same OS user permissions as the shell still apply.
 - External programs still run with the OS user's file permissions. Shell redirections are checked by the path guard, but a dynamically built redirection target and file access performed by an external binary are not sandboxed by this layer.
 - Windows is skipped because exec runs PowerShell there; the built-in regex/PowerShell deny patterns still apply.
 
