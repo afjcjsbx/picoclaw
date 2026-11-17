@@ -79,6 +79,7 @@ type ExecTool struct {
 	maxOutputChars       int
 	maxInlineResultChars int
 	baseEnv              map[string]string
+	baseEnvList          []string
 	state                *execStateStore
 	sessionManager       *SessionManager
 	riskGuard            *shellguard.Guard
@@ -504,6 +505,7 @@ func NewExecToolWithConfig(
 	hardlinePatterns = append(hardlinePatterns, hardlineDenyPatterns...)
 	hardlinePatterns = append(hardlinePatterns, selfProtectionHardlinePatterns()...)
 
+	baseEnv := newExecEnv(workingDir, execEnvSet, execEnvAllowlist)
 	return &ExecTool{
 		workingDir:              workingDir,
 		timeout:                 timeout,
@@ -520,7 +522,8 @@ func NewExecToolWithConfig(
 		allowRemote:             allowRemote,
 		maxOutputChars:          maxOutputChars,
 		maxInlineResultChars:    maxInlineResultChars,
-		baseEnv:                 newExecEnv(workingDir, execEnvSet, execEnvAllowlist),
+		baseEnv:                 baseEnv,
+		baseEnvList:             buildEnvList(baseEnv),
 		state:                   newExecStateStore(),
 		sessionManager:          getSessionManager(),
 		riskGuard:               riskGuard,

@@ -10,7 +10,6 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg"
 	"github.com/sipeed/picoclaw/pkg/config"
-	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
 // defaultExecEnvAllowlist is the set of parent environment variables inherited
@@ -156,31 +155,38 @@ func execEnvKey(key string) string {
 	return key
 }
 
-// runEnv copies the cached base environment (inherited allowlist plus
-// operator env_set values) and adds the trusted PICOCLAW_EXEC_* values,
-// returning a deterministic []string ready for exec.Cmd.Env. timeout is the
-// effective foreground timeout; background sessions pass 0 because they are
-// not time-limited. The model cannot add variables here: per-call env was
-// removed because it could bypass the command and workspace guards.
-func (t *ExecTool) runEnv(timeout time.Duration) []string {
-	env := make(map[string]string, len(t.baseEnv)+2)
-	for key, value := range t.baseEnv {
-		env[key] = value
-	}
-
-	env["PICOCLAW_EXEC_TIME"] = time.Now().Format(time.RFC3339)
-	env["PICOCLAW_EXEC_TIMEOUT"] = timeout.String()
-
+// buildEnvList renders an environment map as sorted KEY=value entries once, so
+// runEnv copies a slice per command instead of rebuilding and sorting the map.
+func buildEnvList(env map[string]string) []string {
 	keys := make([]string, 0, len(env))
 	for key := range env {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	logger.DebugCF("shell", "exec environment keys", map[string]any{"keys": keys})
 
-	result := make([]string, 0, len(keys))
+	list := make([]string, 0, len(keys))
 	for _, key := range keys {
-		result = append(result, key+"="+env[key])
+		list = append(list, key+"="+env[key])
 	}
+	return list
+}
+
+// runEnv returns the cached child environment plus the trusted PICOCLAW_EXEC_*
+// values. timeout is the effective foreground timeout; background sessions pass
+// 0 because they are not time-limited. The model cannot add variables here:
+// per-call env was removed because it could bypass the command and workspace
+// guards.
+func (t *ExecTool) runEnv(timeout time.Duration) []string {
+	base := t.baseEnvList
+	if base == nil {
+		// Tests may build an ExecTool literal without the precomputed list.
+		base = buildEnvList(t.baseEnv)
+	}
+	result := make([]string, 0, len(base)+2)
+	result = append(result, base...)
+	result = append(result,
+		"PICOCLAW_EXEC_TIME="+time.Now().Format(time.RFC3339),
+		"PICOCLAW_EXEC_TIMEOUT="+timeout.String(),
+	)
 	return result
 }
