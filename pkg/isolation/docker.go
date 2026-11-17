@@ -3,7 +3,6 @@ package isolation
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,7 +11,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"golang.org/x/term"
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
@@ -81,7 +79,7 @@ func applyDockerIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, root 
 		name,
 		execDir,
 		plan,
-		dockerIsTerminal(cmd.Stdin),
+		isTerminalInput(cmd.Stdin),
 	)
 	logger.DebugCF("isolation", "docker isolation container plan", map[string]any{
 		"root":          root,
@@ -297,14 +295,6 @@ func dockerEntrypoint(originalPath string) string {
 	default:
 		return originalPath
 	}
-}
-
-func dockerIsTerminal(stdin io.Reader) bool {
-	file, ok := stdin.(*os.File)
-	if !ok {
-		return false
-	}
-	return term.IsTerminal(int(file.Fd()))
 }
 
 // ensureDockerCLIEnv supplies the Docker connection settings that the Docker

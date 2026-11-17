@@ -74,6 +74,35 @@ func TestBuildIsolationPromptDocker(t *testing.T) {
 	}
 }
 
+func TestBuildIsolationPromptSSH(t *testing.T) {
+	cb := NewContextBuilder("/tmp/workspace")
+	cb.isolationBoundary = &isolation.Boundary{
+		Backend:         "SSH",
+		Workspace:       "/tmp/workspace",
+		Remote:          "worker@sandbox.internal",
+		RemoteRoot:      "/srv/picoclaw",
+		RemoteWorkspace: "/srv/picoclaw/workspace",
+		Network:         true,
+		PathBoundary:    false,
+	}
+
+	prompt := cb.buildIsolationPrompt()
+	for _, want := range []string{
+		"## Sandbox Boundaries",
+		"SSH remote host `worker@sandbox.internal`",
+		"Local workspace: `/tmp/workspace`",
+		"Remote instance root: `/srv/picoclaw`",
+		"Remote workspace: `/srv/picoclaw/workspace`",
+		"Absolute local paths are not translated",
+		"operate on local files",
+		"isolation.ssh.remote_root",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("ssh isolation prompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
 func TestBuildIsolationPromptGenericBackend(t *testing.T) {
 	cb := NewContextBuilder("/tmp/workspace")
 	cb.isolationBoundary = &isolation.Boundary{

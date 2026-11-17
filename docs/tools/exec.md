@@ -342,6 +342,30 @@ are removed on exit or when a command is killed. See
 [`pkg/isolation`](https://github.com/afjcjsbx/picoclaw/blob/main/pkg/isolation/README.md)
 for all backends and their limitations.
 
+Set `backend` to `ssh` to run exec commands on a remote POSIX host instead:
+
+```json
+{
+  "isolation": {
+    "enabled": true,
+    "backend": "ssh",
+    "ssh": {
+      "host": "sandbox.internal",
+      "user": "worker",
+      "remote_root": "/srv/picoclaw"
+    }
+  }
+}
+```
+
+The SSH backend maps the local instance root to `ssh.remote_root`, disables
+password prompts, and reuses one connection with OpenSSH multiplexing. File
+tools still operate locally, so files created by remote commands are not
+visible unless both hosts share storage. The exec workspace guard still checks
+local paths, so prefer workspace-relative command paths. See
+[`pkg/isolation`](https://github.com/afjcjsbx/picoclaw/blob/main/pkg/isolation/README.md)
+for authentication, environment forwarding and limitations.
+
 ## Default Blocked Command Patterns
 
 These patterns are enabled by default and can be disabled with `enable_deny_patterns: false`:

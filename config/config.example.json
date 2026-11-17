@@ -1,7 +1,7 @@
 {
   "version": 3,
   "isolation": {
-    "_comment": "Opt-in child-process isolation. backend: auto (native), bubblewrap, seatbelt, windows or docker. Docker requires docker.image and a reachable Docker daemon; the isolation image is published with PicoClaw releases as afjcjsbx/picoclaw-isolation, or build it locally with `make docker-isolation`. An empty docker.network keeps Docker's default network (enabled); set it to none to disable networking.",
+    "_comment": "Opt-in child-process isolation. backend: auto (native), bubblewrap, seatbelt, windows, docker or ssh. Docker requires docker.image and a reachable Docker daemon; the isolation image is published with PicoClaw releases as afjcjsbx/picoclaw-isolation, or build it locally with `make docker-isolation`. An empty docker.network keeps Docker's default network (enabled); set it to none to disable networking. SSH runs child processes on a remote host through the OpenSSH client; ssh.host is required, ssh.remote_root maps the local instance root to the remote path, and key or agent authentication must be available because password prompts are disabled.",
     "enabled": false,
     "backend": "auto",
     "expose_paths": [],
@@ -10,6 +10,15 @@
       "network": "",
       "user": "",
       "pull": "missing",
+      "extra_args": []
+    },
+    "ssh": {
+      "host": "",
+      "user": "",
+      "port": 22,
+      "key_path": "",
+      "remote_root": "",
+      "forward_env": [],
       "extra_args": []
     }
   },

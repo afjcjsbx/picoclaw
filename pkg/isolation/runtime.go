@@ -442,6 +442,8 @@ func preflight(isolation config.IsolationConfig) error {
 	switch backend {
 	case config.IsolationBackendDocker:
 		return preflightDocker(isolation.Docker, root, isolation.ExposePaths)
+	case config.IsolationBackendSSH:
+		return preflightSSH(isolation.SSH, isolation.ExposePaths)
 	case config.IsolationBackendBubblewrap:
 		for _, rule := range BuildLinuxMountPlan(root, isolation.ExposePaths) {
 			if rule.Source == "" || rule.Target == "" {

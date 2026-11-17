@@ -190,6 +190,7 @@ const (
 	IsolationBackendSeatbelt   = "seatbelt"
 	IsolationBackendWindows    = "windows"
 	IsolationBackendDocker     = "docker"
+	IsolationBackendSSH        = "ssh"
 )
 
 // IsolationConfig controls subprocess isolation for commands started by PicoClaw.
@@ -199,6 +200,7 @@ type IsolationConfig struct {
 	Backend     string                `json:"backend,omitempty"`
 	ExposePaths []ExposePath          `json:"expose_paths,omitempty"`
 	Docker      DockerIsolationConfig `json:"docker,omitempty"`
+	SSH         SSHIsolationConfig    `json:"ssh,omitempty"`
 }
 
 // DockerIsolationConfig controls the Docker isolation backend. Every child
@@ -210,6 +212,63 @@ type DockerIsolationConfig struct {
 	User      string   `json:"user,omitempty"`
 	Pull      string   `json:"pull,omitempty"`
 	ExtraArgs []string `json:"extra_args,omitempty"`
+}
+
+// SSHIsolationConfig controls the SSH isolation backend. Every child process is
+// started through the OpenSSH client and runs on a remote host. Host and key
+// authentication use the operator's SSH configuration; password prompts are
+// disabled, so a key or ssh-agent must be available.
+type SSHIsolationConfig struct {
+	Host       string   `json:"host,omitempty"`
+	User       string   `json:"user,omitempty"`
+	Port       int      `json:"port,omitempty"`
+	KeyPath    string   `json:"key_path,omitempty"`
+	RemoteRoot string   `json:"remote_root,omitempty"`
+	ForwardEnv []string `json:"forward_env,omitempty"`
+	ExtraArgs  []string `json:"extra_args,omitempty"`
+}
+
+// EffectivePort returns the SSH port. An empty port defaults to 22.
+func (c SSHIsolationConfig) EffectivePort() int {
+	if c.Port == 0 {
+		return 22
+	}
+	return c.Port
+}
+
+// Target returns the ssh destination in [user@]host form. A host that already
+// contains '@' is used as-is so pasted destinations keep working.
+func (c SSHIsolationConfig) Target() string {
+	host := strings.TrimSpace(c.Host)
+	user := strings.TrimSpace(c.User)
+	if user == "" || strings.Contains(host, "@") {
+		return host
+	}
+	return user + "@" + host
+}
+
+// EffectiveForwardEnv returns the environment names passed to ssh SendEnv. The
+// defaults are non-secret operational variables; operators add more names
+// explicitly. sshd must AcceptEnv a name before the remote process receives it.
+func (c SSHIsolationConfig) EffectiveForwardEnv() []string {
+	out := make([]string, 0, len(defaultSSHForwardEnv)+len(c.ForwardEnv))
+	out = append(out, defaultSSHForwardEnv...)
+	out = append(out, c.ForwardEnv...)
+	return out
+}
+
+// defaultSSHForwardEnv contains variables that describe the terminal or the
+// network path rather than the local machine. HOME, PATH and PICOCLAW_* stay
+// local: the remote login shell provides its own values.
+var defaultSSHForwardEnv = []string{
+	"LANG",
+	"LANGUAGE",
+	"LC_*",
+	"TZ",
+	"TERM",
+	"COLORTERM",
+	"NO_COLOR",
+	"FORCE_COLOR",
 }
 
 // EffectiveBackend normalizes the configured backend name. Unknown values are
@@ -227,6 +286,8 @@ func (c IsolationConfig) EffectiveBackend() string {
 		return IsolationBackendWindows
 	case IsolationBackendDocker:
 		return IsolationBackendDocker
+	case IsolationBackendSSH:
+		return IsolationBackendSSH
 	default:
 		return strings.ToLower(strings.TrimSpace(c.Backend))
 	}

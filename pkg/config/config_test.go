@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -2640,6 +2641,69 @@ func TestDockerIsolationNetworkEnabledByDefault(t *testing.T) {
 	}
 	if (DockerIsolationConfig{Network: "NONE"}).NetworkEnabled() {
 		t.Fatal("NetworkEnabled() = true for network=NONE, want false")
+	}
+}
+
+func TestSSHIsolationConfigDefaults(t *testing.T) {
+	cfg := SSHIsolationConfig{}
+	if got := cfg.EffectivePort(); got != 22 {
+		t.Fatalf("EffectivePort() = %d, want 22", got)
+	}
+	cfg.Host = "sandbox.internal"
+	if got := cfg.Target(); got != "sandbox.internal" {
+		t.Fatalf("Target() = %q, want sandbox.internal", got)
+	}
+	cfg.User = "worker"
+	if got := cfg.Target(); got != "worker@sandbox.internal" {
+		t.Fatalf("Target() = %q, want worker@sandbox.internal", got)
+	}
+	cfg.User = ""
+	cfg.Host = "worker@sandbox.internal"
+	if got := cfg.Target(); got != "worker@sandbox.internal" {
+		t.Fatalf("Target() = %q, want pasted destination preserved", got)
+	}
+
+	forward := (SSHIsolationConfig{ForwardEnv: []string{"GOPATH"}}).EffectiveForwardEnv()
+	if !slices.Contains(forward, "LC_*") || !slices.Contains(forward, "GOPATH") {
+		t.Fatalf("EffectiveForwardEnv() = %v, want LC_* and GOPATH", forward)
+	}
+}
+
+func TestConfig_UnmarshalIsolationSSH(t *testing.T) {
+	cfg := DefaultConfig()
+	raw := []byte(`{
+		"isolation": {
+			"enabled": true,
+			"backend": "ssh",
+			"ssh": {
+				"host": "sandbox.internal",
+				"user": "worker",
+				"port": 2222,
+				"key_path": "~/.ssh/id_ed25519",
+				"remote_root": "/srv/picoclaw",
+				"forward_env": ["GOPATH"],
+				"extra_args": ["-o", "ProxyJump=bastion"]
+			}
+		}
+	}`)
+	if err := json.Unmarshal(raw, cfg); err != nil {
+		t.Fatalf("json.Unmarshal isolation config: %v", err)
+	}
+	if got := cfg.Isolation.EffectiveBackend(); got != IsolationBackendSSH {
+		t.Fatalf("EffectiveBackend() = %q, want %q", got, IsolationBackendSSH)
+	}
+	ssh := cfg.Isolation.SSH
+	if ssh.Host != "sandbox.internal" || ssh.User != "worker" || ssh.EffectivePort() != 2222 {
+		t.Fatalf("SSH target = %+v, want worker@sandbox.internal:2222", ssh)
+	}
+	if ssh.RemoteRoot != "/srv/picoclaw" {
+		t.Fatalf("SSH.RemoteRoot = %q, want /srv/picoclaw", ssh.RemoteRoot)
+	}
+	if len(ssh.ForwardEnv) != 1 || ssh.ForwardEnv[0] != "GOPATH" {
+		t.Fatalf("SSH.ForwardEnv = %v, want [GOPATH]", ssh.ForwardEnv)
+	}
+	if len(ssh.ExtraArgs) != 2 || ssh.ExtraArgs[1] != "ProxyJump=bastion" {
+		t.Fatalf("SSH.ExtraArgs = %v, want [-o ProxyJump=bastion]", ssh.ExtraArgs)
 	}
 }
 

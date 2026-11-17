@@ -25,7 +25,7 @@ The implementation has four layers:
 
 1. Configuration layer: reads `config.Config.Isolation` and injects it through `isolation.Configure(cfg)`.
 2. Instance layout layer: resolves `config.GetHome()`, prepares instance directories, and builds the runtime user environment.
-3. Platform backend layer: Linux uses `bwrap`; macOS uses Seatbelt through `sandbox-exec`; Windows uses a restricted token, low integrity, and a `Job Object`. The opt-in `docker` backend runs each child process in a container on any platform where the Docker CLI and daemon are available.
+3. Platform backend layer: Linux uses `bwrap`; macOS uses Seatbelt through `sandbox-exec`; Windows uses a restricted token, low integrity, and a `Job Object`. The opt-in `docker` backend runs each child process in a container on any platform where the Docker CLI and daemon are available. The opt-in `ssh` backend runs each child process on a remote host through the OpenSSH client.
 4. Unified startup layer: `PrepareCommand(cmd)`, `Start(cmd)`, and `Run(cmd)`.
 
 All integrations that spawn subprocesses should reuse these helpers instead of calling `cmd.Start` or `cmd.Run` directly.
@@ -52,6 +52,15 @@ Isolation lives under:
       "user": "",
       "pull": "missing",
       "extra_args": []
+    },
+    "ssh": {
+      "host": "",
+      "user": "",
+      "port": 22,
+      "key_path": "",
+      "remote_root": "",
+      "forward_env": [],
+      "extra_args": []
     }
   }
 }
@@ -60,11 +69,12 @@ Isolation lives under:
 Field meanings:
 
 - `enabled`: enables or disables subprocess isolation. Default: `false`.
-- `backend`: `auto` (default), `bubblewrap`, `seatbelt`, `windows` or `docker`. `auto` keeps the native backend for the current platform. An explicit backend must be supported by that platform; `docker` is available on every platform with a reachable Docker daemon.
-- `expose_paths`: explicitly exposes host paths inside the isolated environment. It only matters when `enabled=true`. Linux and Docker support path remapping; macOS supports same-path access only.
+- `backend`: `auto` (default), `bubblewrap`, `seatbelt`, `windows`, `docker` or `ssh`. `auto` keeps the native backend for the current platform. An explicit backend must be supported by that platform; `docker` is available on every platform with a reachable Docker daemon. `ssh` requires a POSIX remote host and is not available on a local Windows PicoClaw because the exec tool generates PowerShell there.
+- `expose_paths`: explicitly exposes host paths inside the isolated environment. It only matters when `enabled=true`. Linux and Docker support path remapping; macOS supports same-path access only. SSH rejects `expose_paths` because the remote account already sees its own filesystem.
 - `docker`: Docker backend settings. It only matters when `backend` is `docker`. `docker.network` empty uses Docker's default network (enabled); `none` disables container networking.
+- `ssh`: SSH backend settings. It only matters when `backend` is `ssh`. `ssh.host` is required; `ssh.remote_root` maps the local instance root to a remote directory; `ssh.forward_env` adds environment names to `SendEnv`.
 
-Example:
+Docker example:
 
 ```json
 {
@@ -91,6 +101,26 @@ Example:
 }
 ```
 
+SSH example:
+
+```json
+{
+  "isolation": {
+    "enabled": true,
+    "backend": "ssh",
+    "ssh": {
+      "host": "sandbox.internal",
+      "user": "worker",
+      "port": 22,
+      "key_path": "~/.ssh/id_ed25519",
+      "remote_root": "/srv/picoclaw",
+      "forward_env": ["GOPATH"],
+      "extra_args": ["-o", "ProxyJump=bastion"]
+    }
+  }
+}
+```
+
 Rules for `expose_paths`:
 
 - `source` is a host path.
@@ -110,6 +140,8 @@ Platform note:
 - Windows does not currently support `expose_paths`.
 - Docker binds `source` to `target` with the requested `ro`/`rw` mode. The
   host instance root is always mounted at the same path.
+- SSH rejects `expose_paths`. The remote account is the boundary, so there is
+  no local path to mount or remap.
 
 ## Instance Root And Directories
 
@@ -302,11 +334,68 @@ The local tag is `picoclaw-isolation:1.27.4`; override it with
 `make docker-isolation ISOLATION_IMAGE=my-registry/picoclaw-isolation:tag`.
 Then point `isolation.docker.image` at the published or local tag.
 
+### SSH
+
+The SSH backend starts every child process through the OpenSSH client and runs
+it on a remote POSIX host. It is available on Linux and macOS (and other Unix
+hosts); local Windows is rejected because the exec tool generates PowerShell
+commands there. The remote account is the isolation boundary: local files are
+not mounted, and the remote host must provide `/bin/sh` for the exec tool, the
+command binaries, and the working directory.
+
+Behavior:
+
+- `ssh.host` is required. `ssh.user` is optional; `user@host` works directly in
+  `ssh.host` when `ssh.user` is empty. `ssh.port` defaults to `22`.
+- Key or ssh-agent authentication is required. The client runs with
+  `BatchMode=yes`, so password prompts cannot hang a tool call. `key_path`
+  selects a key; otherwise the operator's `~/.ssh/config` and agent are used.
+- Preflight runs one `true` command per configuration generation. It fails
+  closed when the host is unreachable or authentication fails; reconfigure to
+  retry after fixing the host.
+- `ssh.remote_root` (absolute) maps the local PicoClaw instance root to a remote path.
+  With the default `/home/worker/.picoclaw/workspace` and
+  `remote_root=/srv/picoclaw`, commands run in `/srv/picoclaw/workspace`.
+  Paths outside the instance root keep their absolute path and must exist on
+  the remote host. The remote root must already exist and be writable.
+- Commands are quoted for POSIX `sh` and run with `/bin/sh -c` on the remote
+  host. Use workspace-relative paths in commands; absolute local paths inside a
+  command string are not translated. The exec workspace guard still evaluates
+  local paths, so remote absolute paths outside the local workspace may be
+  rejected before the command reaches the host.
+- The client enables SSH `ControlMaster` multiplexing with
+  `ControlPersist=60` on Unix so repeated commands reuse one connection. This
+  keeps one `ssh` process alive for up to 60 idle seconds; it is the main
+  resource trade-off of the backend. Control sockets live in a private
+  `picoclaw-ssh-<uid>` directory under `/tmp`.
+- `ssh.forward_env` adds environment names to `SendEnv`. The defaults are
+  non-secret locale and terminal variables. Values never appear in the local
+  command line. The remote `sshd` must list each name or pattern in
+  `AcceptEnv`; otherwise the remote process keeps its own value. Add proxy
+  variables explicitly only when the remote host may receive their values.
+  Avoid broad patterns such as `*` unless the remote `AcceptEnv` is equally
+  restrictive.
+- `ssh.extra_args` is trusted configuration. The backend rejects standalone short
+  flags that replace the target or command, change the port/key/user, forward
+  ports or the local agent, or force a tty. `-o` overrides remain trusted, as
+  with any extra argument. The client also forces `ForwardAgent=no`,
+  `ForwardX11=no`, `ClearAllForwardings=yes` and `PermitLocalCommand=no` so a
+  user `ssh_config` cannot hand the remote host the local agent or a tunnel.
+- Killing the local `ssh` client is best effort for the remote process. A
+  remote command that detaches itself can outlive the client; remote background
+  jobs are not tracked by PicoClaw.
+
+File tools (`read_file`, `write_file`, the workspace tools, and skills) still
+operate on the local filesystem. Files created by remote commands are not
+visible locally unless both hosts share storage. The system prompt tells the
+model about this split when the backend is active.
+
 ### Other Platforms
 
 With an explicit `backend: "docker"`, other platforms are supported when Docker
-is available. Native isolation remains unsupported and fails closed when
-selected through `auto`.
+is available. With `backend: "ssh"`, other Unix platforms are supported when
+the OpenSSH client is available. Native isolation remains unsupported and fails
+closed when selected through `auto`.
 
 ## Logging And Debugging
 
@@ -325,6 +414,10 @@ macOS uses the `macOS Seatbelt profile prepared` debug log.
 Docker uses the `docker isolation container plan` and
 `docker isolation container started` debug logs, which include the container
 name, image, network and bind mounts.
+
+SSH uses the `ssh isolation remote plan` debug log, which includes the target,
+remote root, remote working directory, command path and the number of forwarded
+environment names. Values are never logged.
 
 If you suspect isolation is ineffective, check whether unexpected host paths appear in those logs.
 
@@ -351,6 +444,10 @@ permission error at the boundary is not a broken host. The model should report
 it and ask the user to add the path to `isolation.expose_paths` instead of
 retrying with `sudo`, another absolute path, or another tool.
 
+For the SSH backend the notice also states that child processes run on the
+remote host, that file tools still operate locally, and that absolute local
+paths are not translated; the model is asked to use workspace-relative paths.
+
 The notice describes child-process isolation only. File tools follow
 `restrict_to_workspace` and `allow_read_outside_workspace` independently. On
 Windows the notice has no path list because that backend applies process-level
@@ -371,6 +468,15 @@ is reflected in the next system prompt.
 - Docker's default network is preserved unless `isolation.docker.network` sets
   another mode; networking is enabled by default, so set `none` only when a
   workload must not have network access.
+- The SSH backend requires a prepared POSIX remote host with the command
+  binaries and mapped working directory. It does not sync files, so local file
+  tools and remote commands see different filesystems unless storage is
+  shared. Killing the local client does not reliably kill a detached remote
+  process.
+- SSH applies to every child-process spawn site. Integrations that exchange
+  local files or stdio with a child process (for example voice decoding, some
+  hooks and MCP servers) must be disabled or must run correctly on the remote
+  host; the backend does not sync their files.
 - The current design isolates child processes, not the main `picoclaw` process.
 
 ## Suggested Reading Order
@@ -382,11 +488,12 @@ If you are new to this code, read it in this order:
 3. `pkg/isolation/backend.go`
 4. `pkg/isolation/platform_linux.go`
 5. `pkg/isolation/docker.go`
-6. `pkg/isolation/platform_windows.go`
-7. Call sites:
-8. `pkg/tools/shell.go`
-9. `pkg/providers/*.go`
-10. `pkg/agent/hook_process.go`
-11. `pkg/mcp/manager.go`
+6. `pkg/isolation/ssh.go`
+7. `pkg/isolation/platform_windows.go`
+8. Call sites:
+9. `pkg/tools/shell.go`
+10. `pkg/providers/*.go`
+11. `pkg/agent/hook_process.go`
+12. `pkg/mcp/manager.go`
 
 That path gives the fastest overview of the configuration model, runtime flow, and platform-specific limits.

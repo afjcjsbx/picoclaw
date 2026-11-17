@@ -478,6 +478,7 @@ processes, enable `isolation` and choose a backend:
 | `seatbelt` | macOS | Uses the deprecated `sandbox-exec` command |
 | `windows` | Windows | Restricted token, low integrity and Job Object |
 | `docker` | Any platform with Docker | Each child runs in `docker run --rm`; the image must provide the command and `/bin/sh` for the exec tool |
+| `ssh` | Linux, macOS and other Unix hosts | Each child runs on a remote POSIX host through the OpenSSH client; key or agent authentication is required |
 
 The Docker backend bind-mounts the instance root and working directory at the
 same absolute paths, runs as the host UID/GID by default, and removes the
@@ -491,6 +492,14 @@ Go 1.27.4, `jq`, `ripgrep`, `fd`, `tmux`, `rsync`); the definition is
 `docker/Dockerfile.isolation`, and `make docker-isolation` builds it locally. See
 [`pkg/isolation`](https://github.com/afjcjsbx/picoclaw/blob/main/pkg/isolation/README.md)
 for the full reference and limitations.
+
+The SSH backend maps the local instance root to `isolation.ssh.remote_root` and
+runs each command with `/bin/sh -c` on the remote host. `isolation.ssh.host` is
+required, password prompts are disabled, and `ssh.forward_env` lists extra
+environment names to send (the remote `sshd` must accept them with `AcceptEnv`).
+`isolation.expose_paths` is rejected because the remote account already sees its
+own filesystem. File tools still operate locally; files created by remote
+commands are not visible unless both hosts share storage.
 
 #### Additional Exec Protection
 

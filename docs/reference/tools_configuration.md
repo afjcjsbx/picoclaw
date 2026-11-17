@@ -117,7 +117,7 @@ Filesystem read tools deny `.env`, `.env.*`, `.envrc`, `.security.yml` (includin
 
 Filesystem writes are denied for those same credential paths, except that `write_file` may write `.env.example`; `edit_file` and `append_file` still cannot read it. Writes to `/etc/sudoers`, `/etc/passwd`, `/etc/shadow`, `/etc/sudoers.d`, `/etc/systemd`, and the workspace `sessions` directory are also denied. The write check follows symlinks and runs for `write_file`, `edit_file`, and `append_file`; write allow paths do not override it. The default `plugin-data` directory is protected, but a custom `plugins.data_dir` is not discovered by this policy.
 
-This is a guard for PicoClaw's filesystem tools. Shell commands and external MCP tools run outside this policy; use the opt-in `isolation` block (native `bubblewrap`/Seatbelt/restricted token, or `isolation.backend: "docker"`) when they must not access workspace secrets. See [Process Isolation](../../pkg/isolation/README.md).
+This is a guard for PicoClaw's filesystem tools. Shell commands and external MCP tools run outside this policy; use the opt-in `isolation` block (native `bubblewrap`/Seatbelt/restricted token, `isolation.backend: "docker"`, or `isolation.backend: "ssh"`) when they must not access workspace secrets. See [Process Isolation](../../pkg/isolation/README.md).
 
 ## Image Generation
 
