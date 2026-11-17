@@ -50,10 +50,6 @@ func patternsMatchAny(patterns []*regexp.Regexp, forms []string) bool {
 	return false
 }
 
-func (t *ExecTool) guardCommand(command, cwd string) string {
-	return t.guardCommandContext(context.Background(), command, cwd)
-}
-
 // guardCommandContext decides whether a command may run. It returns "" to
 // allow it, or the block message. Layers run from the least to the most
 // configurable, and the first one that rejects wins:

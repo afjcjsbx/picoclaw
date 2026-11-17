@@ -26,6 +26,12 @@ func newTestExecTool(workingDir string, restrict bool) (*ExecTool, error) {
 	return NewExecToolWithConfig(workingDir, restrict, cfg)
 }
 
+// guardCommand runs the command guard with a background context, so tests that
+// only assert the decision do not need to build one.
+func (t *ExecTool) guardCommand(command, cwd string) string {
+	return t.guardCommandContext(context.Background(), command, cwd)
+}
+
 func parseExecRunMeta(t *testing.T, forLLM string) map[string]any {
 	t.Helper()
 	line, _, ok := strings.Cut(forLLM, "\n")
