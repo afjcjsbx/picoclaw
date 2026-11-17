@@ -204,11 +204,11 @@ Capabilities:
 - redirected child-process user environment
 - `source -> target` read-only or read-write mounts
 
-Default mounts include the instance root plus the minimum runtime system paths such as `/usr`, `/bin`, `/lib`, `/lib64`, and `/etc/resolv.conf`.
+Default mounts include the instance root **read-only**, the workspace and `runtime-user-env` read-write, an ephemeral tmpfs on `/tmp`, and the minimum runtime system paths such as `/usr`, `/bin`, `/lib`, `/lib64`, and `/etc/resolv.conf` read-only. Config, state, skills and logs therefore stay read-only even if an interpreter runs inside the sandbox.
 
-At runtime, PicoClaw also adds the executable path, its directory, the effective working directory, and absolute path arguments when needed.
+At runtime, PicoClaw also adds the executable path, its directory, the effective working directory, and absolute path arguments when needed. The working directory never grants write access by itself: it is read-write only when it is already inside the workspace or an explicit `rw` expose path.
 
-Absolute path arguments are exposed **read-only**: a directory passed on the command line does not become a writable hole in the sandbox. Writable locations come from `expose_paths`, the effective working directory, or the parent of a non-existent path argument (so output files can still be created).
+Absolute path arguments are exposed **read-only** when they exist. A non-existent path argument does not grant its parent read-write access; callers that need to create files outside the workspace must add an explicit `rw` `expose_paths` entry.
 
 There is no automatic fallback when `bwrap` is missing.
 
@@ -250,12 +250,11 @@ It does not currently implement true `source -> target` filesystem remapping.
 ### macOS
 
 The macOS backend uses `/usr/bin/sandbox-exec` with a Seatbelt default-deny profile.
-It allows writes under the PicoClaw instance root and explicit `rw` paths, while
-exposing system files, the command, its configured working directory, and
-absolute path arguments as needed. A read-only `expose_paths` rule under the
-instance root is rejected: Seatbelt rules are additive, so a later read-only
-allow cannot revoke the root's write access. Network access remains available,
-matching Linux behavior.
+It exposes the instance root read-only and allows writes only under the resolved
+workspace, `runtime-user-env`, and explicit `rw` paths, while exposing system
+files, the command, its configured working directory (read-write only when it is
+already inside the workspace or an `rw` expose path), and absolute path
+arguments as needed. Network access remains available, matching Linux behavior.
 Because Apple deprecated `sandbox-exec`, macOS may remove it in a future release;
 when it is missing, isolation fails closed.
 
@@ -272,11 +271,13 @@ Behavior:
 - The image must provide the command and its runtime dependencies. The `exec`
   tool always runs a POSIX shell (`sh -c`), so the image must contain `/bin/sh`;
   other integrations must use an image that contains their executable.
-- The instance root is bind mounted read-write at the same absolute path.
+- The instance root is bind mounted **read-only** at the same absolute path.
+  The workspace and `runtime-user-env` are mounted read-write, and
   `expose_paths` rules are added as bind mounts; `ro` maps to a read-only bind.
-  The effective working directory is mounted read-write, and absolute path
-  arguments are exposed read-only (or their parent read-write when the output
-  path does not exist yet).
+  The effective working directory is mounted read-write only when it is inside
+  the workspace or an explicit `rw` expose path; other working directories are
+  read-only. Absolute path arguments are exposed read-only, and a non-existent
+  path does not grant its parent write access.
 - The same absolute host path is used inside the container. This suits Linux,
   macOS and Windows containers; Docker Desktop Linux containers on Windows do
   not translate Windows drive paths automatically.
@@ -357,7 +358,10 @@ Behavior:
   With the default `/home/worker/.picoclaw/workspace` and
   `remote_root=/srv/picoclaw`, commands run in `/srv/picoclaw/workspace`.
   Paths outside the instance root keep their absolute path and must exist on
-  the remote host. The remote root must already exist and be writable.
+  the remote host. `remote_root` must not be the remote filesystem root. The
+  backend cannot change remote POSIX permissions: configure the remote account
+  so `remote_root` and its config/state directories are read-only, and only the
+  mapped workspace and `runtime-user-env` are writable.
 - Commands are quoted for POSIX `sh` and run with `/bin/sh -c` on the remote
   host. Use workspace-relative paths in commands; absolute local paths inside a
   command string are not translated. The exec workspace guard still evaluates
@@ -426,7 +430,13 @@ If you suspect isolation is ineffective, check whether unexpected host paths app
 - `restrict_to_workspace` limits the paths an agent is normally allowed to access.
 - `pkg/isolation` limits what a child process can see and where its user environment points.
 
-They complement each other and do not replace each other.
+They complement each other and do not replace each other. Isolation applies to
+child processes, not to the in-process file tools: with
+`restrict_to_workspace=false`, `write_file`/`edit_file` can still modify files
+the exec child cannot. Keep file-tool protected paths in mind when disabling the
+workspace restriction. Conversely, `restrict_to_workspace=false` does not make
+the exec child see more than the isolation mount plan exposes: the cwd never
+grants write access by itself, and config/state stay read-only.
 
 ## Prompt Boundary Notice
 
@@ -434,7 +444,7 @@ When isolation is enabled and supported, the agent system prompt includes a
 `Sandbox Boundaries` section. It is generated from `DescribeBoundary` when the
 agent is created and lists:
 
-- the workspace and the PicoClaw instance root;
+- the workspace (writable) and the PicoClaw instance root (read-only);
 - the scratch directory (`$TMPDIR`);
 - user-configured `expose_paths`, split into writable and read-only targets;
 - whether subprocess network access remains available.

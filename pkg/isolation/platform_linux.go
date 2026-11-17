@@ -16,7 +16,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
-func applyNativePlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, root string) error {
+func applyNativePlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, root, workspace string) error {
 	if !isolation.Enabled {
 		return nil
 	}
@@ -61,19 +61,31 @@ func applyNativePlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfi
 
 	// Start from the configured mount plan, then add only the executable, its
 	// resolved path, the effective working directory, and any absolute path
-	// arguments needed to preserve the original command semantics.
-	plan := BuildLinuxMountPlan(root, isolation.ExposePaths)
+	// arguments needed to preserve the original command semantics. The cwd never
+	// grants write access by itself: writes come from the workspace or explicit
+	// expose_paths rules.
+	plan := BuildLinuxMountPlan(root, workspace, isolation.ExposePaths)
 	plan = appendLinuxCommandMountRules(plan, resolvedPath)
-	if execDir != "" {
-		plan = ensureLinuxMountRule(plan, execDir, execDir, "rw")
+	if execDir != "" && execDir != string(filepath.Separator) && !isSandboxTmpPath(execDir) {
+		mode := "ro"
+		if mountPlanAllowsWrite(plan, execDir) {
+			mode = "rw"
+		}
+		plan = ensureLinuxMountRule(plan, execDir, execDir, mode)
 		if resolved, resolveErr := filepath.EvalSymlinks(execDir); resolveErr == nil && resolved != execDir {
-			plan = ensureLinuxMountRule(plan, resolved, resolved, "rw")
+			if mountPlanAllowsWrite(plan, resolved) {
+				mode = "rw"
+			} else {
+				mode = "ro"
+			}
+			plan = ensureLinuxMountRule(plan, resolved, resolved, mode)
 		}
 	}
 	plan = appendLinuxArgumentMounts(plan, originalArgs[1:])
 	logger.DebugCF("isolation", "linux isolation mount plan",
 		map[string]any{
 			"root":        root,
+			"workspace":   workspace,
 			"command":     resolvedPath,
 			"working_dir": execDir,
 			"mounts":      formatLinuxMountPlan(plan),
@@ -206,7 +218,7 @@ func buildLinuxBwrapArgs(
 			bwrapArgs = append(bwrapArgs, flag)
 		}
 	}
-	bwrapArgs = append(bwrapArgs, "--proc", "/proc", "--dev", "/dev")
+	bwrapArgs = append(bwrapArgs, "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp")
 	for _, rule := range plan {
 		flag, err := linuxBindFlag(rule)
 		if err != nil {
@@ -268,10 +280,20 @@ func appendLinuxArgumentMounts(plan []MountRule, args []string) []MountRule {
 			continue
 		}
 		clean := filepath.Clean(path)
+		if isSandboxTmpPath(clean) {
+			// The ephemeral /tmp tmpfs is already mounted; never expose host /tmp.
+			continue
+		}
+		if mountPlanAllowsWrite(plan, clean) {
+			// Already writable via workspace or expose_paths. A read-only
+			// re-mount here would break writes to this argument.
+			continue
+		}
 		if _, err := os.Stat(clean); err == nil {
 			// Absolute path arguments are exposed read-only: a directory passed
 			// on the command line must not become a writable hole in the
-			// sandbox. Writable locations come from expose_paths or the cwd.
+			// sandbox. Writable locations come from expose_paths or the
+			// workspace mount.
 			plan = ensureLinuxMountRule(plan, clean, clean, "ro")
 			if resolved, resolveErr := filepath.EvalSymlinks(clean); resolveErr == nil && resolved != clean {
 				plan = ensureLinuxMountRule(plan, resolved, resolved, "ro")
@@ -280,13 +302,9 @@ func appendLinuxArgumentMounts(plan []MountRule, args []string) []MountRule {
 		} else if !errors.Is(err, os.ErrNotExist) {
 			continue
 		}
-		parent := filepath.Dir(clean)
-		if parent == clean {
-			continue
-		}
-		if _, err := os.Stat(parent); err == nil {
-			plan = ensureLinuxMountRule(plan, parent, parent, "rw")
-		}
+		// Do not mount the parent RW for an unknown output path. A caller that
+		// needs to create files outside the workspace must expose the directory
+		// explicitly; otherwise this was the old host-/tmp writable hole.
 	}
 	return plan
 }

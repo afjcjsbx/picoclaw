@@ -350,9 +350,10 @@ Docker image must contain `/bin/sh` and the tools the command needs. The
 published `afjcjsbx/picoclaw-isolation` image includes Python 3.13, Go 1.27.4,
 `jq`, `ripgrep`, `fd`, `tmux` and `rsync`; its definition is
 `docker/Dockerfile.isolation`, and `make docker-isolation` builds it locally.
-The workspace and instance root are bind-mounted at their host paths, containers
-use the image PATH, container networking is enabled by default, and containers
-are removed on exit or when a command is killed. See
+The instance root is bind-mounted read-only; the workspace and
+`runtime-user-env` are read-write. Containers use the image PATH, container
+networking is enabled by default, and containers are removed on exit or when a
+command is killed. See
 [`pkg/isolation`](https://github.com/afjcjsbx/picoclaw/blob/main/pkg/isolation/README.md)
 for all backends and their limitations.
 
@@ -373,9 +374,11 @@ Set `backend` to `ssh` to run exec commands on a remote POSIX host instead:
 ```
 
 The SSH backend maps the local instance root to `ssh.remote_root`, disables
-password prompts, and reuses one connection with OpenSSH multiplexing. File
-tools still operate locally, so files created by remote commands are not
-visible unless both hosts share storage. The exec workspace guard still checks
+password prompts, and reuses one connection with OpenSSH multiplexing. The
+backend cannot change remote POSIX permissions: keep `remote_root` read-only
+and make only the mapped workspace/`runtime-user-env` writable. File tools still
+operate locally, so files created by remote commands are not visible unless both
+hosts share storage. The exec workspace guard still checks
 local paths, so prefer workspace-relative command paths. See
 [`pkg/isolation`](https://github.com/afjcjsbx/picoclaw/blob/main/pkg/isolation/README.md)
 for authentication, environment forwarding and limitations.

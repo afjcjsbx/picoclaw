@@ -185,7 +185,7 @@ func (t *ExecTool) runSync(
 
 	// Route shell execution through the shared isolation entry point so exec tool
 	// subprocesses receive the same isolation policy as other integrations.
-	if err := isolation.Start(cmd); err != nil {
+	if err := isolation.StartForWorkspace(cmd, t.workingDir); err != nil {
 		_ = outputWriter.Close()
 		_ = outputReader.Close()
 		return ErrorResult(fmt.Sprintf("failed to start command: %v", err))
@@ -609,7 +609,7 @@ func (t *ExecTool) runBackground(
 
 	// Background sessions use the same startup path so isolation stays consistent
 	// with synchronous exec runs.
-	if err := isolation.Start(cmd); err != nil {
+	if err := isolation.StartForWorkspace(cmd, t.workingDir); err != nil {
 		if outputReader != nil {
 			_ = outputReader.Close()
 		}

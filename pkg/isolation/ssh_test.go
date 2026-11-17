@@ -432,7 +432,7 @@ func TestApplySSHIsolationRewritesCommand(t *testing.T) {
 			RemoteRoot: "/srv/picoclaw",
 		},
 	}
-	if err := applySSHIsolation(cmd, cfg, root); err != nil {
+	if err := applySSHIsolation(cmd, cfg, root, workspace); err != nil {
 		t.Fatalf("applySSHIsolation() error = %v", err)
 	}
 	if cmd.Path != fakeSSH {
@@ -480,13 +480,13 @@ func TestPreflightSSH(t *testing.T) {
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	cfg := config.SSHIsolationConfig{Host: "sandbox.internal"}
-	if err := preflightSSH(cfg, nil); err != nil {
+	if err := preflightSSH(cfg, "", nil); err != nil {
 		t.Fatalf("preflightSSH() error = %v", err)
 	}
-	if err := preflightSSH(config.SSHIsolationConfig{}, nil); err == nil {
+	if err := preflightSSH(config.SSHIsolationConfig{}, "", nil); err == nil {
 		t.Fatal("preflightSSH() should reject a missing host")
 	}
-	if err := preflightSSH(cfg, []config.ExposePath{{Source: "/tmp", Mode: "ro"}}); err == nil {
+	if err := preflightSSH(cfg, "", []config.ExposePath{{Source: "/tmp", Mode: "ro"}}); err == nil {
 		t.Fatal("preflightSSH() should reject expose_paths")
 	}
 }
