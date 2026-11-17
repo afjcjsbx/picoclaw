@@ -252,7 +252,6 @@ func TestNewApprovalGuardian(t *testing.T) {
 
 	guardian, err := newApprovalGuardian(cfg, config.ApprovalsConfig{
 		Mode:                config.ApprovalModeSmart,
-		SmartThreshold:      config.ApprovalSmartThresholdCritical,
 		SmartTimeoutSeconds: 7,
 	})
 	if err != nil {

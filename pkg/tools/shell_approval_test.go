@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/sipeed/picoclaw/pkg/config"
-	"github.com/sipeed/picoclaw/pkg/tools/shellguard"
 )
 
 type fakeApprovalReviewer struct {
@@ -31,7 +30,6 @@ func (r *fakeApprovalReviewer) Review(
 func newSmartTestTool(
 	t *testing.T,
 	cfg *config.Config,
-	threshold shellguard.RiskLevel,
 	verdict approvalVerdict,
 ) (*ExecTool, *fakeApprovalReviewer) {
 	t.Helper()
@@ -44,65 +42,41 @@ func newSmartTestTool(
 	}
 	reviewer := &fakeApprovalReviewer{verdict: verdict}
 	tool.approvalEnabled = true
-	tool.approvalThreshold = threshold
 	tool.approvalReviewer = reviewer
 	return tool, reviewer
 }
 
-func TestSmartApprovalReviewsHighRisk(t *testing.T) {
+func TestSmartApprovalBlocksHighRiskWithoutReview(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name    string
-		verdict approvalVerdict
-		want    string
-	}{
-		{name: "approve", verdict: approvalApprove, want: ""},
-		{name: "deny", verdict: approvalDeny, want: "DENY"},
-		{name: "escalate", verdict: approvalEscalate, want: "ESCALATE"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			tool, reviewer := newSmartTestTool(t, nil, shellguard.RiskHigh, tt.verdict)
+	tool, reviewer := newSmartTestTool(t, nil, approvalApprove)
 
-			got := tool.guardCommand("chmod +x script.sh", t.TempDir())
-			if tt.want == "" {
-				if got != "" {
-					t.Fatalf("guardCommand() = %q, want allowed", got)
-				}
-			} else if !strings.Contains(got, tt.want) {
-				t.Fatalf("guardCommand() = %q, want substring %q", got, tt.want)
-			}
-			if reviewer.calls != 1 {
-				t.Fatalf("reviewer calls = %d, want 1", reviewer.calls)
-			}
-			if !strings.Contains(reviewer.description, "risk level high") {
-				t.Errorf("description = %q, want risk level high", reviewer.description)
-			}
-		})
+	got := tool.guardCommand("chmod +x script.sh", t.TempDir())
+	if !strings.Contains(got, "risk classifier") {
+		t.Fatalf("guardCommand() = %q, want static risk block", got)
+	}
+	if reviewer.calls != 0 {
+		t.Fatalf("reviewer calls = %d, want 0", reviewer.calls)
 	}
 }
 
-func TestSmartApprovalReviewsDefaultDenyPattern(t *testing.T) {
+func TestSmartApprovalBlocksDefaultDenyPatternWithoutReview(t *testing.T) {
 	t.Parallel()
 
-	tool, reviewer := newSmartTestTool(t, nil, shellguard.RiskHigh, approvalApprove)
-	if got := tool.guardCommand("echo $(whoami)", t.TempDir()); got != "" {
-		t.Fatalf("guardCommand() = %q, want allowed after approval", got)
+	tool, reviewer := newSmartTestTool(t, nil, approvalApprove)
+	got := tool.guardCommand("echo $(whoami)", t.TempDir())
+	if !strings.Contains(got, "dangerous pattern") {
+		t.Fatalf("guardCommand() = %q, want static deny block", got)
 	}
-	if reviewer.calls != 1 {
-		t.Fatalf("reviewer calls = %d, want 1", reviewer.calls)
-	}
-	if !strings.Contains(reviewer.description, "built-in dangerous-command pattern") {
-		t.Errorf("description = %q, want built-in pattern reason", reviewer.description)
+	if reviewer.calls != 0 {
+		t.Fatalf("reviewer calls = %d, want 0", reviewer.calls)
 	}
 }
 
 func TestSmartApprovalReviewsUnknownRisk(t *testing.T) {
 	t.Parallel()
 
-	tool, reviewer := newSmartTestTool(t, nil, shellguard.RiskHigh, approvalApprove)
+	tool, reviewer := newSmartTestTool(t, nil, approvalApprove)
 	if got := tool.guardCommand("sh script.sh", t.TempDir()); got != "" {
 		t.Fatalf("guardCommand() = %q, want allowed after approval", got)
 	}
@@ -114,10 +88,13 @@ func TestSmartApprovalReviewsUnknownRisk(t *testing.T) {
 	}
 }
 
-func TestSmartApprovalUnknownReviewedAtCriticalThreshold(t *testing.T) {
+func TestSmartApprovalReviewsUnknownAtCriticalThreshold(t *testing.T) {
 	t.Parallel()
 
-	tool, reviewer := newSmartTestTool(t, nil, shellguard.RiskCritical, approvalApprove)
+	cfg := config.DefaultConfig()
+	cfg.Tools.Exec.RiskThreshold = "critical"
+
+	tool, reviewer := newSmartTestTool(t, cfg, approvalApprove)
 	if got := tool.guardCommand("sh script.sh", t.TempDir()); got != "" {
 		t.Fatalf("guardCommand() = %q, want allowed after approval", got)
 	}
@@ -126,14 +103,14 @@ func TestSmartApprovalUnknownReviewedAtCriticalThreshold(t *testing.T) {
 	}
 }
 
-func TestSmartApprovalCriticalThresholdSkipsHighRisk(t *testing.T) {
+func TestSmartApprovalAllowsHighRiskBelowThresholdWithoutReview(t *testing.T) {
 	t.Parallel()
 
 	cfg := config.DefaultConfig()
 	cfg.Tools.Exec.RiskThreshold = "critical"
 	cfg.Tools.Exec.RiskAllowThreshold = "critical"
 
-	tool, reviewer := newSmartTestTool(t, cfg, shellguard.RiskCritical, approvalDeny)
+	tool, reviewer := newSmartTestTool(t, cfg, approvalDeny)
 	if got := tool.guardCommand("chmod +x script.sh", t.TempDir()); got != "" {
 		t.Fatalf("guardCommand() = %q, want high risk allowed without review", got)
 	}
@@ -142,13 +119,13 @@ func TestSmartApprovalCriticalThresholdSkipsHighRisk(t *testing.T) {
 	}
 }
 
-func TestSmartApprovalCriticalThresholdStillBlocksAboveRiskThreshold(t *testing.T) {
+func TestSmartApprovalBlocksHighRiskAboveThresholdWithoutReview(t *testing.T) {
 	t.Parallel()
 
 	cfg := config.DefaultConfig()
 	cfg.Tools.Exec.RiskThreshold = "medium"
 
-	tool, reviewer := newSmartTestTool(t, cfg, shellguard.RiskCritical, approvalApprove)
+	tool, reviewer := newSmartTestTool(t, cfg, approvalApprove)
 	got := tool.guardCommand("chmod +x script.sh", t.TempDir())
 	if !strings.Contains(got, "risk classifier") {
 		t.Fatalf("guardCommand() = %q, want static risk block", got)
@@ -161,7 +138,7 @@ func TestSmartApprovalCriticalThresholdStillBlocksAboveRiskThreshold(t *testing.
 func TestSmartApprovalSkipsSafeCommands(t *testing.T) {
 	t.Parallel()
 
-	tool, reviewer := newSmartTestTool(t, nil, shellguard.RiskHigh, approvalApprove)
+	tool, reviewer := newSmartTestTool(t, nil, approvalApprove)
 	if got := tool.guardCommand("ls -la", t.TempDir()); got != "" {
 		t.Fatalf("guardCommand() = %q, want allowed", got)
 	}
@@ -173,10 +150,10 @@ func TestSmartApprovalSkipsSafeCommands(t *testing.T) {
 func TestSmartApprovalUnavailableFailsClosed(t *testing.T) {
 	t.Parallel()
 
-	tool, _ := newSmartTestTool(t, nil, shellguard.RiskHigh, approvalApprove)
+	tool, _ := newSmartTestTool(t, nil, approvalApprove)
 	tool.approvalReviewer = nil
 
-	got := tool.guardCommand("chmod +x script.sh", t.TempDir())
+	got := tool.guardCommand("sh script.sh", t.TempDir())
 	if !strings.Contains(got, "unavailable") {
 		t.Fatalf("guardCommand() = %q, want unavailable block", got)
 	}
@@ -210,7 +187,7 @@ func TestSmartApprovalDoesNotReviewHardline(t *testing.T) {
 	for _, command := range commands {
 		t.Run(command, func(t *testing.T) {
 			t.Parallel()
-			tool, reviewer := newSmartTestTool(t, nil, shellguard.RiskHigh, approvalApprove)
+			tool, reviewer := newSmartTestTool(t, nil, approvalApprove)
 			got := tool.guardCommand(command, t.TempDir())
 			if !strings.Contains(got, "dangerous pattern") {
 				t.Fatalf("guardCommand(%q) = %q, want hardline block", command, got)
@@ -234,7 +211,7 @@ func TestSmartApprovalDoesNotReviewDynamicDestructiveOperand(t *testing.T) {
 	for _, command := range commands {
 		t.Run(command, func(t *testing.T) {
 			t.Parallel()
-			tool, reviewer := newSmartTestTool(t, nil, shellguard.RiskHigh, approvalApprove)
+			tool, reviewer := newSmartTestTool(t, nil, approvalApprove)
 			got := tool.guardCommand(command, t.TempDir())
 			if !strings.Contains(got, "dynamic operand for destructive command") {
 				t.Fatalf("guardCommand(%q) = %q, want dynamic-operand rejection", command, got)
@@ -251,7 +228,7 @@ func TestSmartApprovalDoesNotReviewCustomDeny(t *testing.T) {
 
 	cfg := config.DefaultConfig()
 	cfg.Tools.Exec.CustomDenyPatterns = []string{`\bforbidden\b`}
-	tool, reviewer := newSmartTestTool(t, cfg, shellguard.RiskHigh, approvalApprove)
+	tool, reviewer := newSmartTestTool(t, cfg, approvalApprove)
 
 	got := tool.guardCommand("echo forbidden", t.TempDir())
 	if !strings.Contains(got, "dangerous pattern") {
@@ -262,13 +239,13 @@ func TestSmartApprovalDoesNotReviewCustomDeny(t *testing.T) {
 	}
 }
 
-func TestSmartApprovalCustomRiskAllowSkipsReview(t *testing.T) {
+func TestSmartApprovalCustomRiskAllowStillApplies(t *testing.T) {
 	t.Parallel()
 
 	cfg := config.DefaultConfig()
 	cfg.Tools.Exec.RiskAllowPatterns = []string{`^chmod \+x script\.sh$`}
 	cfg.Tools.Exec.RiskAllowThreshold = "high"
-	tool, reviewer := newSmartTestTool(t, cfg, shellguard.RiskHigh, approvalDeny)
+	tool, reviewer := newSmartTestTool(t, cfg, approvalDeny)
 
 	if got := tool.guardCommand("chmod +x script.sh", t.TempDir()); got != "" {
 		t.Fatalf("guardCommand() = %q, want explicit risk allow", got)
@@ -305,9 +282,6 @@ func TestSmartApprovalConstruction(t *testing.T) {
 	if !tool.approvalEnabled {
 		t.Fatal("approvalEnabled = false, want true")
 	}
-	if tool.approvalThreshold != shellguard.RiskCritical {
-		t.Errorf("approvalThreshold = %s, want critical", tool.approvalThreshold)
-	}
 	if tool.approvalReviewer == nil {
 		t.Fatal("approvalReviewer is nil, want a configured guardian")
 	}
@@ -324,9 +298,8 @@ func TestSmartApprovalWorksWithoutDefaultDenyPatterns(t *testing.T) {
 	}
 	reviewer := &fakeApprovalReviewer{verdict: approvalApprove}
 	tool.approvalReviewer = reviewer
-	tool.approvalThreshold = shellguard.RiskHigh
 
-	if got := tool.guardCommand("chmod +x script.sh", t.TempDir()); got != "" {
+	if got := tool.guardCommand("sh script.sh", t.TempDir()); got != "" {
 		t.Fatalf("guardCommand() = %q, want allowed after approval", got)
 	}
 	if reviewer.calls != 1 {
@@ -348,7 +321,7 @@ func TestSmartApprovalMisconfigurationFailsClosed(t *testing.T) {
 	if tool.approvalReviewer != nil {
 		t.Fatal("approvalReviewer is non-nil despite a missing Guardian model")
 	}
-	got := tool.guardCommand("chmod +x script.sh", t.TempDir())
+	got := tool.guardCommand("sh script.sh", t.TempDir())
 	if !strings.Contains(got, "unavailable") {
 		t.Fatalf("guardCommand() = %q, want fail-closed block", got)
 	}
@@ -368,7 +341,6 @@ func smartApprovalTestConfig() *config.Config {
 	cfg.Approvals = config.ApprovalsConfig{
 		Mode:                config.ApprovalModeSmart,
 		Model:               "guardian",
-		SmartThreshold:      config.ApprovalSmartThresholdCritical,
 		SmartTimeoutSeconds: 5,
 	}
 	return cfg

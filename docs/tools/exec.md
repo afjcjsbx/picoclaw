@@ -30,12 +30,11 @@ Smart approvals are configured in a top-level `approvals` block, not under `tool
 
 | Config | Type | Default | Description |
 |--------|------|---------|-------------|
-| `approvals.mode` | string | `"off"` | `"off"` (default) keeps the static guards as the final decision. `"smart"` asks an auxiliary Guardian model to review flagged commands |
+| `approvals.mode` | string | `"off"` | `"off"` (default) keeps the static guards as the final decision. `"smart"` asks an auxiliary Guardian model to review commands whose risk the classifier cannot resolve |
 | `approvals.model` | string | `""` | Guardian model by `model_list` alias or `provider/model` reference. Empty uses `agents.defaults.model_name` |
-| `approvals.smart_threshold` | string | `"high"` | `"high"` reviews `high`, `critical` and unknown commands. `"critical"` reviews only `critical` and unknown commands |
 | `approvals.smart_timeout_seconds` | int | `20` | Per-review timeout, maximum `600`. A timed-out review escalates and the command is rejected |
 
-Environment variables use the `PICOCLAW_APPROVALS_` prefix: `PICOCLAW_APPROVALS_MODE`, `PICOCLAW_APPROVALS_MODEL`, `PICOCLAW_APPROVALS_SMART_THRESHOLD`, `PICOCLAW_APPROVALS_SMART_TIMEOUT_SECONDS`.
+Environment variables use the `PICOCLAW_APPROVALS_` prefix: `PICOCLAW_APPROVALS_MODE`, `PICOCLAW_APPROVALS_MODEL`, `PICOCLAW_APPROVALS_SMART_TIMEOUT_SECONDS`.
 
 Environment variables use the `PICOCLAW_TOOLS_EXEC_` prefix: `PICOCLAW_TOOLS_EXEC_ENABLED`, `PICOCLAW_TOOLS_EXEC_ENABLE_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_RISK_THRESHOLD`, `PICOCLAW_TOOLS_EXEC_RISK_ALLOW_THRESHOLD`, `PICOCLAW_TOOLS_EXEC_ALLOW_REMOTE`, `PICOCLAW_TOOLS_EXEC_CUSTOM_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_CUSTOM_ALLOW_PATTERNS`, `PICOCLAW_TOOLS_EXEC_CUSTOM_RISK_ALLOW_PATTERNS`, `PICOCLAW_TOOLS_EXEC_TIMEOUT_SECONDS`, `PICOCLAW_TOOLS_EXEC_MAX_OUTPUT_CHARS`, `PICOCLAW_TOOLS_EXEC_ENV_ALLOWLIST` (comma-separated). `env_set`, `risk_overrides` and `arg_modifiers` are JSON-only because their values are structured.
 
@@ -137,13 +136,14 @@ Limits worth knowing:
 
 ### Smart approvals
 
-`approvals.mode` defaults to `"off"`: the static guards are the final decision and exec makes no extra model call. Set it to `"smart"` to add a second opinion for commands that the static guards flag, without asking a model about every command:
+`approvals.mode` defaults to `"off"`: the static guards are the final decision and exec makes no extra model call. Set it to `"smart"` to add a second opinion only for commands that the static guards cannot classify, without asking a model about every command:
 
 1. **Hardline and custom deny rules stay final.** Catastrophic operations such as `rm -rf /`, recursive deletion of `/etc`, `/usr`, `/home` or `/root`, `mkfs`, `dd if=`, `shutdown`, `reboot`, `poweroff`, fork bombs and `kill -1` are rejected directly. The Guardian is never consulted for them.
-2. **Default deny pattern hits can be reviewed.** A command caught by the built-in regex set can be approved when the Guardian considers it a false positive.
-3. **Risk-classifier hits are reviewed.** On Unix, a command at or above `approvals.smart_threshold` (`high` by default) is sent to the Guardian even when `risk_threshold` would allow it. Unknown commands — dynamic command names, opaque shells and unparseable scripts — are always reviewed.
-4. **Allowlist, workspace and path checks still run first.** The Guardian cannot approve a command that fails the allowlist or tries to escape the workspace.
-5. **The Guardian answers with one word.** `APPROVE` runs the command, `DENY` blocks it, and `ESCALATE` blocks it because manual approval is not implemented yet. Any other response is treated as `ESCALATE`.
+2. **Default deny pattern hits stay blocked.** A command caught by the built-in regex set is rejected even in smart mode; the Guardian only reviews commands the risk classifier cannot resolve.
+3. **Risk levels keep following `risk_threshold`.** A command at or above `risk_threshold` is rejected even in smart mode, and one below it is allowed. The Guardian is not consulted for known risk levels.
+4. **Only unknown commands are reviewed.** On Unix, dynamic command names, opaque shells and unparseable scripts are flagged as unknown and sent to the Guardian instead of being rejected outright.
+5. **Allowlist, workspace and path checks still run first.** The Guardian cannot approve a command that fails the allowlist or tries to escape the workspace.
+6. **The Guardian answers with one word.** `APPROVE` runs the command, `DENY` blocks it, and `ESCALATE` blocks it because manual approval is not implemented yet. Any other response is treated as `ESCALATE`.
 
 Before the command reaches the model, unquoted shell comments are removed and a literal `</command>` is neutralized. Comment removal uses the shell AST, so `#` inside quotes or heredoc bodies is preserved; a command that does not parse is reviewed verbatim. Commands above 16 KiB are escalated without a model call, so prompt size, latency and token cost stay bounded.
 
@@ -154,13 +154,12 @@ If the Guardian cannot be initialized or the review fails, the command is reject
   "approvals": {
     "mode": "smart",
     "model": "glm-4.7",
-    "smart_threshold": "high",
     "smart_timeout_seconds": 20
   }
 }
 ```
 
-The Guardian is a separate, short, non-streaming chat call: `temperature=0`, `max_tokens=16`, reasoning disabled where the provider supports it. When `approvals.model` is empty, smart mode reuses the agent's primary provider instead of creating a second client; a dedicated provider is created lazily only when a different model is configured, and only on the first flagged command. Enabling it with `enable_deny_patterns: false` still keeps the Unix AST classifier active for the smart gate; Windows uses only the regex/PowerShell patterns because the AST classifier is POSIX-only.
+The Guardian is a separate, short, non-streaming chat call: `temperature=0`, `max_tokens=16`, reasoning disabled where the provider supports it. When `approvals.model` is empty, smart mode reuses the agent's primary provider instead of creating a second client; a dedicated provider is created lazily only when a different model is configured, and only on the first unknown command. Enabling it with `enable_deny_patterns: false` still keeps the Unix AST classifier active for the smart gate. Windows has no AST classifier, so no command is marked unknown there and smart mode makes no model calls.
 
 ## Tool arguments
 

@@ -84,7 +84,6 @@ type ExecTool struct {
 	sessionManager       *SessionManager
 	riskGuard            *shellguard.Guard
 	approvalEnabled      bool
-	approvalThreshold    shellguard.RiskLevel
 	approvalReviewer     approvalReviewer
 	blockBreaker         *execBlockBreaker
 }
@@ -480,7 +479,7 @@ func NewExecToolWithConfig(
 	smartApprovals := approvalConfig.Mode == config.ApprovalModeSmart
 
 	// Smart approvals need the AST classifier even when the optional default
-	// guard set is disabled; otherwise there is no risk signal to review.
+	// guard set is disabled; otherwise unknown commands cannot be detected.
 	riskGuard, err := newRiskGuard(cfg, enableDefaultGuard || smartApprovals)
 	if err != nil {
 		return nil, err
@@ -529,7 +528,6 @@ func NewExecToolWithConfig(
 		sessionManager:          getSessionManager(),
 		riskGuard:               riskGuard,
 		approvalEnabled:         smartApprovals,
-		approvalThreshold:       approvalThreshold(approvalConfig.SmartThreshold),
 		approvalReviewer:        reviewer,
 		blockBreaker:            newExecBlockBreaker(),
 	}, nil
