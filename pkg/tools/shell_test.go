@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -40,6 +41,59 @@ func parseExecRunMeta(t *testing.T, forLLM string) map[string]any {
 	var meta map[string]any
 	require.NoError(t, json.Unmarshal([]byte(strings.TrimPrefix(line, execRunMetaPrefix)), &meta))
 	return meta
+}
+
+func TestExecDescriptionPerOS(t *testing.T) {
+	tests := []struct {
+		goos     string
+		contains []string
+		excludes []string
+	}{
+		{
+			goos: "linux",
+			contains: []string{
+				"OS: linux; shell: sh.",
+				"chain dependent ones with `&&`.",
+				"Trailing `&` implies background.",
+				"Never detach untracked processes via `nohup`, `setsid` or `disown`.",
+			},
+			excludes: []string{"PowerShell", "macOS"},
+		},
+		{
+			goos: "darwin",
+			contains: []string{
+				"OS: macOS; shell: sh.",
+				"chain dependent ones with `&&`.",
+				"Trailing `&` implies background.",
+			},
+			excludes: []string{"PowerShell"},
+		},
+		{
+			goos: "windows",
+			contains: []string{
+				"OS: windows; shell: PowerShell.",
+				"PowerShell has no `&&`, so use `cmd1; if ($?) { cmd2 }`.",
+				"PTY mode is not supported on Windows.",
+			},
+			excludes: []string{
+				"Trailing `&` implies background.",
+				"nohup",
+			},
+		},
+	}
+	capNote := fmt.Sprintf("foreground max is %ds", int64(maxForegroundTimeout/time.Second))
+	for _, tt := range tests {
+		t.Run(tt.goos, func(t *testing.T) {
+			desc := execDescriptionFor(tt.goos)
+			require.Contains(t, desc, capNote)
+			for _, want := range tt.contains {
+				require.Contains(t, desc, want)
+			}
+			for _, banned := range tt.excludes {
+				require.NotContains(t, desc, banned)
+			}
+		})
+	}
 }
 
 // TestShellTool_Success verifies successful command execution
