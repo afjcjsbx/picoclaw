@@ -809,8 +809,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 		command = normalized
 		if !isBackground {
 			isBackground = true
-			backgroundNote = "Trailing '&' was converted to background=true so the process is tracked. " +
-				"Use action=wait, poll, read, or kill with this sessionId."
+			backgroundNote = "Trailing '&' was converted to background=true so the process is tracked."
 		}
 	}
 

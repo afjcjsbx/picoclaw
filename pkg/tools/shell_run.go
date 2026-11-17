@@ -46,7 +46,7 @@ func (t *ExecTool) foregroundPromotionNote(timeoutDisabled bool, timeout time.Du
 			capSeconds,
 		)
 	}
-	return reason + "; started as a tracked background session. Use action=wait, poll, read, or kill with this sessionId."
+	return reason + "; started as a tracked background session."
 }
 
 // shellCommand returns the OS shell and its arguments for one exec run.
