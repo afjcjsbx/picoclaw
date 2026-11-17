@@ -68,6 +68,7 @@ type ExecTool struct {
 	customDenyPatterns      []*regexp.Regexp
 	allowPatterns           []*regexp.Regexp
 	customAllowPatterns     []*regexp.Regexp
+	customUnlockPatterns    []*regexp.Regexp
 	customRiskAllowPatterns []*regexp.Regexp
 	riskAllowThreshold      shellguard.RiskLevel
 	// allowedPathPatterns are paths exec may read or modify. exec can mutate
@@ -388,6 +389,7 @@ func NewExecToolWithConfig(
 	denyPatterns := make([]*regexp.Regexp, 0)
 	customDenyPatterns := make([]*regexp.Regexp, 0)
 	customAllowPatterns := make([]*regexp.Regexp, 0)
+	customUnlockPatterns := make([]*regexp.Regexp, 0)
 	customRiskAllowPatterns := make([]*regexp.Regexp, 0)
 	riskAllowThreshold := shellguard.RiskMedium
 	var allowedPathPatterns []*regexp.Regexp
@@ -434,6 +436,12 @@ func NewExecToolWithConfig(
 		}
 		customAllowPatterns, err = compilePatterns(
 			execConfig.CustomAllowPatterns, compileFullMatchPattern, "custom allow",
+		)
+		if err != nil {
+			return nil, err
+		}
+		customUnlockPatterns, err = compilePatterns(
+			execConfig.CustomUnlockPatterns, compileFullMatchPattern, "custom unlock",
 		)
 		if err != nil {
 			return nil, err
@@ -515,6 +523,7 @@ func NewExecToolWithConfig(
 		customDenyPatterns:      customDenyPatterns,
 		allowPatterns:           nil,
 		customAllowPatterns:     customAllowPatterns,
+		customUnlockPatterns:    customUnlockPatterns,
 		customRiskAllowPatterns: customRiskAllowPatterns,
 		riskAllowThreshold:      riskAllowThreshold,
 		allowedPathPatterns:     allowedPathPatterns,

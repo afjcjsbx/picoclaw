@@ -11,6 +11,7 @@ The exec tool is used to execute shell commands.
 | `enable_deny_patterns` | bool | `true` | Enable the built-in dangerous-command blocking patterns |
 | `custom_deny_patterns` | string[] | `[]` | Additional deny patterns (regular expressions); always enforced and they take priority over allow rules |
 | `custom_allow_patterns` | string[] | `[]` | Full-command allow patterns (regular expressions, anchored automatically). They exempt only the built-in default deny set. They do not exempt the AST risk classifier; hardline and custom deny patterns still win |
+| `custom_unlock_patterns` | string[] | `[]` | Full-command unlock patterns (regular expressions, anchored automatically). A match skips the default deny set, the allowlist, the AST risk classifier and smart approvals, so an explicitly trusted command runs even when it is critical or unclassifiable. Hardline, custom deny and the workspace boundary still apply |
 | `custom_risk_allow_patterns` | string[] | `[]` | Full-command allow patterns for the AST risk classifier. A match exempts only commands at or below `risk_allow_threshold`; high and critical commands require an explicit threshold raise |
 | `risk_threshold` | string | `"medium"` | Highest risk level the AST classifier allows: `low`, `medium`, `high` or `critical`. Part of the built-in guard set, so it is inactive when `enable_deny_patterns` is `false` unless `approvals.mode` is `smart`. Empty means `medium` |
 | `risk_allow_threshold` | string | `"medium"` | Highest risk level `custom_risk_allow_patterns` may exempt: `low`, `medium`, `high` or `critical`. Set `high` or `critical` explicitly to allow those levels |
@@ -36,7 +37,7 @@ Smart approvals are configured in a top-level `approvals` block, not under `tool
 
 Environment variables use the `PICOCLAW_APPROVALS_` prefix: `PICOCLAW_APPROVALS_MODE`, `PICOCLAW_APPROVALS_MODEL`, `PICOCLAW_APPROVALS_SMART_TIMEOUT_SECONDS`.
 
-Environment variables use the `PICOCLAW_TOOLS_EXEC_` prefix: `PICOCLAW_TOOLS_EXEC_ENABLED`, `PICOCLAW_TOOLS_EXEC_ENABLE_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_RISK_THRESHOLD`, `PICOCLAW_TOOLS_EXEC_RISK_ALLOW_THRESHOLD`, `PICOCLAW_TOOLS_EXEC_ALLOW_REMOTE`, `PICOCLAW_TOOLS_EXEC_CUSTOM_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_CUSTOM_ALLOW_PATTERNS`, `PICOCLAW_TOOLS_EXEC_CUSTOM_RISK_ALLOW_PATTERNS`, `PICOCLAW_TOOLS_EXEC_TIMEOUT_SECONDS`, `PICOCLAW_TOOLS_EXEC_MAX_OUTPUT_CHARS`, `PICOCLAW_TOOLS_EXEC_ENV_ALLOWLIST` (comma-separated). `env_set`, `risk_overrides` and `arg_modifiers` are JSON-only because their values are structured.
+Environment variables use the `PICOCLAW_TOOLS_EXEC_` prefix: `PICOCLAW_TOOLS_EXEC_ENABLED`, `PICOCLAW_TOOLS_EXEC_ENABLE_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_RISK_THRESHOLD`, `PICOCLAW_TOOLS_EXEC_RISK_ALLOW_THRESHOLD`, `PICOCLAW_TOOLS_EXEC_ALLOW_REMOTE`, `PICOCLAW_TOOLS_EXEC_CUSTOM_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_CUSTOM_ALLOW_PATTERNS`, `PICOCLAW_TOOLS_EXEC_CUSTOM_UNLOCK_PATTERNS`, `PICOCLAW_TOOLS_EXEC_CUSTOM_RISK_ALLOW_PATTERNS`, `PICOCLAW_TOOLS_EXEC_TIMEOUT_SECONDS`, `PICOCLAW_TOOLS_EXEC_MAX_OUTPUT_CHARS`, `PICOCLAW_TOOLS_EXEC_ENV_ALLOWLIST` (comma-separated). `env_set`, `risk_overrides` and `arg_modifiers` are JSON-only because their values are structured.
 
 ### Risk classification
 
@@ -106,9 +107,21 @@ Custom thresholds and modifiers:
 
 `risk_overrides` changes the base level but cannot suppress an argument modifier: with `rm` overridden to `medium`, plain `rm file` is allowed while `rm -rf build` is still `critical`.
 
-`custom_allow_patterns` and `custom_risk_allow_patterns` are anchored to the whole command (`^(?:...)$`). A bare `git` pattern matches only the command `git`, not `git push --force`. `custom_allow_patterns` exempts the default regex deny set only. To exempt the AST risk classifier, use `custom_risk_allow_patterns`; a match can exempt only commands at or below `risk_allow_threshold`, which defaults to `medium`. Set it to `high` or `critical` explicitly to exempt those levels. Hardline and custom deny patterns always win.
+`custom_allow_patterns`, `custom_unlock_patterns` and `custom_risk_allow_patterns` are anchored to the whole command (`^(?:...)$`). A bare `git` pattern matches only the command `git`, not `git push --force`. `custom_allow_patterns` exempts the default regex deny set only. To exempt the AST risk classifier, use `custom_risk_allow_patterns`; a match can exempt only commands at or below `risk_allow_threshold`, which defaults to `medium`. Set it to `high` or `critical` explicitly to exempt those levels. Hardline and custom deny patterns always win.
 
-Configurations that used `custom_allow_patterns` to exempt the risk classifier should move those patterns to `custom_risk_allow_patterns`. If the exempted commands are `high` or `critical`, also set `risk_allow_threshold` explicitly.
+`custom_unlock_patterns` is the explicit per-command override. A matching command skips the default deny set, the allowlist, the AST risk classifier and smart approvals, so it runs even when it would be classified as critical or as unknown. It does not bypass hardline patterns, custom deny patterns or the workspace boundary. Use an exact, anchored pattern for the trusted command; a broad pattern such as `.*` unlocks every command that does not hit the hardline or custom deny floor.
+
+```json
+{
+  "tools": {
+    "exec": {
+      "custom_unlock_patterns": ["^sh scripts/deploy\\.sh$"]
+    }
+  }
+}
+```
+
+Configurations that used `custom_allow_patterns` to exempt the risk classifier should move those patterns to `custom_risk_allow_patterns`. If the exempted commands are `high` or `critical`, also set `risk_allow_threshold` explicitly. Use `custom_unlock_patterns` instead when the intent is to allow one exact, explicitly trusted command regardless of its risk level while every other command keeps the default thresholds.
 
 ```json
 {
@@ -289,7 +302,7 @@ PICOCLAW_TOOLS_EXEC_ENABLED=false
 ## Functionality
 
 - **`enable_deny_patterns`**: Set to `false` to disable the built-in default dangerous-command patterns. The hardline floor and `custom_deny_patterns` still apply.
-- **`custom_deny_patterns`**: Add custom deny regex patterns. These are always enforced, even when `enable_deny_patterns` is `false`, and custom allow patterns cannot exempt them.
+- **`custom_deny_patterns`**: Add custom deny regex patterns. These are always enforced, even when `enable_deny_patterns` is `false`, and custom allow or unlock patterns cannot exempt them.
 
 ## Hardline Always-On Patterns
 
