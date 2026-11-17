@@ -168,22 +168,17 @@ func (t *ExecTool) executeWait(ctx context.Context, args map[string]any) *ToolRe
 		return errResult
 	}
 
-	// ponytail: polls IsDone every 100ms instead of a done channel; a queued
-	// steering message does not release the wait, only ctx cancellation does.
+	// Block on the session's done channel instead of polling IsDone: a wait
+	// must not wake up every 100ms on a low-power host. Only ctx cancellation
+	// or the wait window releases a running command; a queued steering message
+	// does not.
 	deadline := time.NewTimer(window)
 	defer deadline.Stop()
-	tick := time.NewTicker(100 * time.Millisecond)
-	defer tick.Stop()
-
-	timedOut := false
-	for !timedOut && !session.IsDone() {
-		select {
-		case <-ctx.Done():
-			return ErrorResult(fmt.Sprintf("wait interrupted: %v", ctx.Err()))
-		case <-deadline.C:
-			timedOut = true
-		case <-tick.C:
-		}
+	select {
+	case <-session.Done():
+	case <-ctx.Done():
+		return ErrorResult(fmt.Sprintf("wait interrupted: %v", ctx.Err()))
+	case <-deadline.C:
 	}
 
 	artifactPath, artifactCapped := session.SpillInfo()
