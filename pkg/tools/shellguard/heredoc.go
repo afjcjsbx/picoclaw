@@ -30,7 +30,9 @@ func StripQuotedHeredocBodies(command string) string {
 // stripQuotedHeredocBodiesFile is the parsed form used by Analyze so one parse
 // serves heredoc stripping, canonical forms, workspace validation and risk.
 func stripQuotedHeredocBodiesFile(command string, file *syntax.File) string {
-	if file == nil {
+	// The public helper already short-circuits on the text. Analyze calls this
+	// variant directly, so skip the AST walk here too when no heredoc exists.
+	if file == nil || !strings.Contains(command, "<<") {
 		return command
 	}
 
