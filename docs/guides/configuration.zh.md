@@ -337,7 +337,7 @@ PicoClaw 默认在沙箱环境中运行。Agent 只能访问配置的工作区�
 
 | 配置键 | 类型 | 默认值 | 描述 |
 |--------|------|--------|------|
-| `tools.exec.allow_remote` | bool | `false` | 允许从远程渠道（Telegram/Discord 等）执行 exec 工具 |
+| `tools.exec.allow_remote` | bool | `false` | 允许从远程渠道直接执行 exec 工具；定时任务命令由 `tools.cron.command_allowed_remotes` 独立授权 |
 | `tools.exec.enable_deny_patterns` | bool | `true` | 启用内置危险命令拦截（关闭后硬性底线规则和自定义拒绝规则仍然生效） |
 | `tools.exec.custom_deny_patterns` | string[] | `[]` | 自定义阻止的正则表达式模式；始终生效 |
 | `tools.exec.custom_allow_patterns` | string[] | `[]` | 自定义允许的正则表达式模式 |
@@ -938,7 +938,7 @@ PicoClaw 通过 `cron` 工具支持 cron 风格的定时任务。Agent 可以设
 
 | 主题 | 说明 |
 | ---- | ---- |
-| [敏感数据过滤](../security/sensitive_data_filtering.zh.md) | 在发送给 LLM 前，从工具结果中过滤 API 密钥和令牌 |
+| [敏感数据过滤](../security/sensitive_data_filtering.zh.md) | 在发送给 LLM 前，从工具结果中脱敏精确匹配的敏感值；这只是纵深防御，不是 DLP 边界 |
 | [Runtime Events 与事件日志](../architecture/runtime-events.zh.md) | 统一运行时事件、日志过滤和调试配置 |
 | [Hook 系统](../architecture/hooks/README.zh.md) | 事件驱动 Hook：观察者、拦截器、审批 Hook |
 | [Steering](../architecture/steering.md) | 在工具调用间向运行中的 Agent 注入消息 |

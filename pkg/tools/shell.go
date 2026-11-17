@@ -73,6 +73,7 @@ type ExecTool struct {
 	maxOutputChars       int
 	maxInlineResultChars int
 	sessionManager       *SessionManager
+	blockBreaker         *execBlockBreaker
 }
 
 var _ AsyncExecutor = (*ExecTool)(nil)
@@ -269,7 +270,9 @@ func NewExecToolWithConfig(
 	customDenyPatterns := make([]*regexp.Regexp, 0)
 	customAllowPatterns := make([]*regexp.Regexp, 0)
 	var allowedPathPatterns []*regexp.Regexp
-	allowRemote := true
+	// Fail closed when no config is supplied. Callers that need remote exec
+	// must opt in explicitly through cfg.Tools.Exec.AllowRemote.
+	allowRemote := false
 	if len(allowPaths) > 0 {
 		allowedPathPatterns = allowPaths[0]
 	}
@@ -344,6 +347,7 @@ func NewExecToolWithConfig(
 		maxOutputChars:       maxOutputChars,
 		maxInlineResultChars: maxInlineResultChars,
 		sessionManager:       getSessionManager(),
+		blockBreaker:         newExecBlockBreaker(),
 	}, nil
 }
 
@@ -370,7 +374,7 @@ func buildExecDescription() string {
 
 Every foreground call starts a fresh shell in the configured working directory; pass cwd instead of using cd. For file operations, prefer list_dir, search_files, read_file, edit_file and write_file over cat, grep, find, ls, sed and echo/heredoc.
 
-Foreground results start with a one-line [exec] {...} header (exitCode, timedOut, truncated, durationMs, error), then stdout/stderr with ANSI escape sequences removed. Non-zero exit codes can be normal: grep returns 1 for no match and diff returns 1 for differences.
+Foreground results start with a one-line [exec] {...} header (exitCode, timedOut, truncated, durationMs, error), then stdout/stderr with ANSI escape sequences removed. On Unix, a null exitCode means the direct child was killed by a signal; shells may also report 128+N (137 = SIGKILL, often the OOM killer; 143 = SIGTERM). Treat signal deaths as failed runs, not normal non-zero exits. Non-zero exit codes can be normal: grep returns 1 for no match and diff returns 1 for differences.
 
 Oversized output is truncated automatically and the full stream is saved as an artifact; use the artifact path in the result with read_file when you need the omitted middle, instead of piping through head/tail or re-running the command.
 
@@ -409,11 +413,11 @@ func (t *ExecTool) Parameters() map[string]any {
 				"description": "Data to write to stdin (required for write)",
 			},
 			"background": map[string]any{
-				"type":        "string",
+				"type":        "boolean",
 				"description": "Run in background immediately",
 			},
 			"pty": map[string]any{
-				"type":        "string",
+				"type":        "boolean",
 				"description": "Run in a pseudo-terminal (PTY) when available",
 			},
 			"cwd": map[string]any{
@@ -441,6 +445,9 @@ func (t *ExecTool) Parameters() map[string]any {
 	}
 }
 
+// boolArg reads a boolean flag. The schema declares these fields as booleans,
+// but the string branch keeps calls working for models that still emit the
+// "true"/"false" form the schema used to advertise.
 func boolArg(args map[string]any, key string) bool {
 	switch v := args[key].(type) {
 	case bool:
@@ -452,28 +459,54 @@ func boolArg(args map[string]any, key string) bool {
 }
 
 func (t *ExecTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	return t.execute(ctx, args, false)
+}
+
+// executeScheduled runs a command for an already-authorized cron job. CronTool
+// has already checked tools.cron.command_allowed_remotes; this bypasses only
+// the interactive remote-channel gate for a run action. Every command guard
+// (deny patterns, hardline rules, risk checks, and allow patterns) still
+// applies.
+func (t *ExecTool) executeScheduled(ctx context.Context, args map[string]any) *ToolResult {
+	return t.execute(ctx, args, true)
+}
+
+func (t *ExecTool) execute(ctx context.Context, args map[string]any, scheduled bool) *ToolResult {
 	action, _ := args["action"].(string)
 	if action == "" {
 		return ErrorResult("action is required")
+	}
+
+	// GHSA-pv8c-p6jf-3fpp: block the whole exec tool from remote channels
+	// (e.g. Telegram webhooks) unless explicitly opted-in via config. This
+	// applies to every action, not only run: list/read/poll/wait can leak
+	// session output and write/kill/send-keys can mutate internal sessions.
+	// Fail-closed: empty channel = blocked. The channel must come from the
+	// trusted tool context, never from model-controlled arguments. Scheduled
+	// cron command jobs are authorized by their own allowlist and reach this
+	// tool through executeScheduled; only their run action skips this gate.
+	scheduledRun := scheduled && action == "run"
+	if !t.allowRemote && !scheduledRun && !constants.IsInternalChannel(strings.TrimSpace(ToolChannel(ctx))) {
+		return ErrorResult("exec is restricted to internal channels")
 	}
 
 	switch action {
 	case "run":
 		return t.executeRun(ctx, args)
 	case "list":
-		return t.executeList()
+		return t.executeList(ctx)
 	case "poll":
-		return t.executePoll(args)
+		return t.executePoll(ctx, args)
 	case "wait":
 		return t.executeWait(ctx, args)
 	case "read":
-		return t.executeRead(args)
+		return t.executeRead(ctx, args)
 	case "write":
-		return t.executeWrite(args)
+		return t.executeWrite(ctx, args)
 	case "kill":
-		return t.executeKill(args)
+		return t.executeKill(ctx, args)
 	case "send-keys":
-		return t.executeSendKeys(args)
+		return t.executeSendKeys(ctx, args)
 	default:
 		return ErrorResult(fmt.Sprintf("unknown action: %s", action))
 	}
@@ -536,19 +569,6 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 		return ErrorResult("command is required")
 	}
 
-	// GHSA-pv8c-p6jf-3fpp: block exec from remote channels (e.g. Telegram webhooks)
-	// unless explicitly opted-in via config. Fail-closed: empty channel = blocked.
-	if !t.allowRemote {
-		channel := ToolChannel(ctx)
-		if channel == "" {
-			channel, _ = args["__channel"].(string)
-		}
-		channel = strings.TrimSpace(channel)
-		if channel == "" || !constants.IsInternalChannel(channel) {
-			return ErrorResult("exec is restricted to internal channels")
-		}
-	}
-
 	isPty := boolArg(args, "pty")
 	isBackground := boolArg(args, "background")
 	notify := boolArg(args, "notify")
@@ -583,7 +603,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 		if t.restrictToWorkspace && t.workingDir != "" {
 			resolvedWD, err := fstools.ValidatePathWithAllowPaths(wd, t.workingDir, true, t.allowedPathPatterns)
 			if err != nil {
-				return ErrorResult("Command blocked by safety guard (" + err.Error() + ")")
+				return t.blockedResult(ctx, command, "Command blocked by safety guard ("+err.Error()+")")
 			}
 			cwd = resolvedWD
 		} else {
@@ -599,7 +619,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 	}
 
 	if guardError := t.guardCommand(command, cwd); guardError != "" {
-		return ErrorResult(guardError)
+		return t.blockedResult(ctx, command, guardError)
 	}
 
 	// Re-resolve symlinks immediately before execution to shrink the TOCTOU window
@@ -607,7 +627,10 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 	if t.restrictToWorkspace && t.workingDir != "" && cwd != t.workingDir {
 		resolved, err := filepath.EvalSymlinks(cwd)
 		if err != nil {
-			return ErrorResult(fmt.Sprintf("Command blocked by safety guard (path resolution failed: %v)", err))
+			return t.blockedResult(
+				ctx, command,
+				fmt.Sprintf("Command blocked by safety guard (path resolution failed: %v)", err),
+			)
 		}
 		if fstools.IsAllowedPath(resolved, t.allowedPathPatterns) {
 			cwd = resolved
@@ -619,11 +642,17 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 			}
 			rel, err := filepath.Rel(wsResolved, resolved)
 			if err != nil || !filepath.IsLocal(rel) {
-				return ErrorResult("Command blocked by safety guard (working directory escaped workspace)")
+				return t.blockedResult(
+					ctx, command,
+					"Command blocked by safety guard (working directory escaped workspace)",
+				)
 			}
 			cwd = resolved
 		}
 	}
+
+	// Any allowed run breaks the blocked-command streak.
+	t.blockBreaker.reset(ctx)
 
 	if isBackground {
 		return t.runBackground(ctx, command, cwd, isPty)
@@ -646,13 +675,17 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string, timeout tim
 
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
-		cmd = exec.CommandContext(cmdCtx, "powershell", "-NoProfile", "-NonInteractive", "-Command", command)
+		// Do not use exec.CommandContext here: its automatic Process.Kill can reap
+		// the shell before terminateProcessTree enumerates descendants, losing the
+		// ancestry link to children that changed session (setsid). The timeout is
+		// handled explicitly below so the process tree is still observable.
+		cmd = exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", command)
 	} else {
 		shellPath, err := findShellExecutable()
 		if err != nil {
 			return ErrorResult(fmt.Sprintf("failed to locate shell: %v", err))
 		}
-		cmd = exec.CommandContext(cmdCtx, shellPath, "-c", command)
+		cmd = exec.Command(shellPath, "-c", command)
 	}
 	if cwd != "" {
 		cmd.Dir = cwd
@@ -719,9 +752,11 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string, timeout tim
 	}()
 
 	var err error
+	terminatedByContext := false
 	select {
 	case err = <-done:
 	case <-cmdCtx.Done():
+		terminatedByContext = true
 		_ = terminateProcessTree(cmd)
 		select {
 		case err = <-done:
@@ -759,17 +794,29 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string, timeout tim
 	resultErr := err
 
 	switch {
-	case err == nil:
-		code := 0
-		exitCode = &code
-	case errors.Is(cmdCtx.Err(), context.DeadlineExceeded):
+	case terminatedByContext && errors.Is(cmdCtx.Err(), context.DeadlineExceeded):
 		timedOut = true
 		errorMessage = fmt.Sprintf("command timed out after %v", timeout)
 		forUser = fmt.Sprintf("Command timed out after %v", timeout)
 		if output != "" {
 			forUser += "\n\nPartial output before timeout:\n" + output
 		}
-		resultErr = fmt.Errorf("command timeout: %w", err)
+		if err != nil {
+			resultErr = fmt.Errorf("command timeout: %w", err)
+		} else {
+			resultErr = fmt.Errorf("command timed out after %v", timeout)
+		}
+	case terminatedByContext && errors.Is(cmdCtx.Err(), context.Canceled):
+		errorMessage = "command canceled"
+		forUser = output + "\n\n[Command canceled]"
+		if err != nil {
+			resultErr = fmt.Errorf("command canceled: %w", err)
+		} else {
+			resultErr = errors.New("command canceled")
+		}
+	case err == nil:
+		code := 0
+		exitCode = &code
 	default:
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
@@ -883,13 +930,16 @@ func (t *ExecTool) outputSpillDir() string {
 func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEnabled bool) *ToolResult {
 	sessionID := generateSessionID()
 	session := &ProcessSession{
-		ID:         sessionID,
-		Command:    command,
-		PTY:        ptyEnabled,
-		Background: true,
-		StartTime:  time.Now().Unix(),
-		Status:     "running",
-		ptyKeyMode: PtyKeyModeCSI,
+		ID:           sessionID,
+		Command:      command,
+		PTY:          ptyEnabled,
+		Background:   true,
+		StartTime:    time.Now().Unix(),
+		Status:       "running",
+		ownerAgentID: ToolAgentID(ctx),
+		ownerChannel: strings.TrimSpace(ToolChannel(ctx)),
+		ownerChatID:  ToolChatID(ctx),
+		ptyKeyMode:   PtyKeyModeCSI,
 		// Initialize the output buffer before the session is published to the
 		// manager: readers (session_read/list_sessions) must never observe a
 		// session whose buffer is still nil.
@@ -1096,8 +1146,24 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 	}
 }
 
-func (t *ExecTool) executeList() *ToolResult {
-	sessions := t.sessionManager.List()
+// getSessionForCaller looks up a background session while enforcing the
+// caller's ownership. Internal channels can access every session; remote
+// callers only sessions created by the same agent/channel/chat.
+func (t *ExecTool) getSessionForCaller(ctx context.Context, sessionID string) (*ProcessSession, error) {
+	return t.sessionManager.GetForCaller(
+		sessionID,
+		ToolAgentID(ctx),
+		ToolChannel(ctx),
+		ToolChatID(ctx),
+	)
+}
+
+func (t *ExecTool) executeList(ctx context.Context) *ToolResult {
+	sessions := t.sessionManager.ListForCaller(
+		ToolAgentID(ctx),
+		ToolChannel(ctx),
+		ToolChatID(ctx),
+	)
 	resp := ExecResponse{
 		Sessions: sessions,
 	}
@@ -1112,13 +1178,13 @@ func (t *ExecTool) executeList() *ToolResult {
 	}
 }
 
-func (t *ExecTool) executePoll(args map[string]any) *ToolResult {
+func (t *ExecTool) executePoll(ctx context.Context, args map[string]any) *ToolResult {
 	sessionID, ok := args["sessionId"].(string)
 	if !ok {
 		return ErrorResult("sessionId is required")
 	}
 
-	session, err := t.sessionManager.Get(sessionID)
+	session, err := t.getSessionForCaller(ctx, sessionID)
 	if err != nil {
 		if errors.Is(err, ErrSessionNotFound) {
 			return ErrorResult(fmt.Sprintf("session not found: %s", sessionID))
@@ -1199,7 +1265,7 @@ func (t *ExecTool) executeWait(ctx context.Context, args map[string]any) *ToolRe
 		}
 	}
 
-	session, err := t.sessionManager.Get(sessionID)
+	session, err := t.getSessionForCaller(ctx, sessionID)
 	if err != nil {
 		if errors.Is(err, ErrSessionNotFound) {
 			return ErrorResult(fmt.Sprintf("session not found: %s", sessionID))
@@ -1253,13 +1319,13 @@ func (t *ExecTool) executeWait(ctx context.Context, args map[string]any) *ToolRe
 	return &ToolResult{ForLLM: string(data)}
 }
 
-func (t *ExecTool) executeRead(args map[string]any) *ToolResult {
+func (t *ExecTool) executeRead(ctx context.Context, args map[string]any) *ToolResult {
 	sessionID, ok := args["sessionId"].(string)
 	if !ok {
 		return ErrorResult("sessionId is required")
 	}
 
-	session, err := t.sessionManager.Get(sessionID)
+	session, err := t.getSessionForCaller(ctx, sessionID)
 	if err != nil {
 		if errors.Is(err, ErrSessionNotFound) {
 			return ErrorResult(fmt.Sprintf("session not found: %s", sessionID))
@@ -1324,7 +1390,7 @@ func (t *ExecTool) executeRead(args map[string]any) *ToolResult {
 	}
 }
 
-func (t *ExecTool) executeWrite(args map[string]any) *ToolResult {
+func (t *ExecTool) executeWrite(ctx context.Context, args map[string]any) *ToolResult {
 	sessionID, ok := args["sessionId"].(string)
 	if !ok {
 		return ErrorResult("sessionId is required")
@@ -1335,7 +1401,7 @@ func (t *ExecTool) executeWrite(args map[string]any) *ToolResult {
 		return ErrorResult("data is required")
 	}
 
-	session, err := t.sessionManager.Get(sessionID)
+	session, err := t.getSessionForCaller(ctx, sessionID)
 	if err != nil {
 		if errors.Is(err, ErrSessionNotFound) {
 			return ErrorResult(fmt.Sprintf("session not found: %s", sessionID))
@@ -1368,13 +1434,13 @@ func (t *ExecTool) executeWrite(args map[string]any) *ToolResult {
 	}
 }
 
-func (t *ExecTool) executeKill(args map[string]any) *ToolResult {
+func (t *ExecTool) executeKill(ctx context.Context, args map[string]any) *ToolResult {
 	sessionID, ok := args["sessionId"].(string)
 	if !ok {
 		return ErrorResult("sessionId is required")
 	}
 
-	session, err := t.sessionManager.Get(sessionID)
+	session, err := t.getSessionForCaller(ctx, sessionID)
 	if err != nil {
 		if errors.Is(err, ErrSessionNotFound) {
 			return ErrorResult(fmt.Sprintf("session not found: %s", sessionID))
@@ -1565,7 +1631,7 @@ func encodeKeySequence(tokens []string, ptyKeyMode PtyKeyMode) (string, error) {
 	return result, nil
 }
 
-func (t *ExecTool) executeSendKeys(args map[string]any) *ToolResult {
+func (t *ExecTool) executeSendKeys(ctx context.Context, args map[string]any) *ToolResult {
 	sessionID, ok := args["sessionId"].(string)
 	if !ok {
 		return ErrorResult("sessionId is required")
@@ -1594,7 +1660,7 @@ func (t *ExecTool) executeSendKeys(args map[string]any) *ToolResult {
 		return ErrorResult("keys cannot be empty")
 	}
 
-	session, err := t.sessionManager.Get(sessionID)
+	session, err := t.getSessionForCaller(ctx, sessionID)
 	if err != nil {
 		if errors.Is(err, ErrSessionNotFound) {
 			return ErrorResult(fmt.Sprintf("session not found: %s", sessionID))

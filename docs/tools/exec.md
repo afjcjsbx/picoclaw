@@ -15,6 +15,10 @@ The exec tool is used to execute shell commands.
 | `timeout_seconds` | int | `60` | Command timeout in seconds. `0` means the default (60s) |
 | `max_output_chars` | int | `50000` | Foreground output cap. Longer output keeps the first 40% and the last 60% around a `[OUTPUT TRUNCATED - N chars omitted out of T total]` notice, while the full stream is spilled to a workspace artifact (up to 5,000,000 bytes). The inline view is also bounded by `tools.max_inline_result_chars`; the artifact preserves the full stream. `0` means the default (50000) |
 
+`allow_remote` controls direct exec calls. Scheduled cron command jobs are
+authorized by `tools.cron.command_allowed_remotes` instead and are not blocked by
+`allow_remote`.
+
 Environment variables use the `PICOCLAW_TOOLS_EXEC_` prefix: `PICOCLAW_TOOLS_EXEC_ENABLED`, `PICOCLAW_TOOLS_EXEC_ENABLE_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_ALLOW_REMOTE`, `PICOCLAW_TOOLS_EXEC_CUSTOM_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_CUSTOM_ALLOW_PATTERNS`, `PICOCLAW_TOOLS_EXEC_TIMEOUT_SECONDS`, `PICOCLAW_TOOLS_EXEC_MAX_OUTPUT_CHARS`.
 
 ## Tool arguments
@@ -32,7 +36,7 @@ hello
 
 | Field | Description |
 |-------|-------------|
-| `exitCode` | Process exit status. `null` when the process did not return a numeric status: timeout, signal termination, or failure to start |
+| `exitCode` | Process exit status. `null` when the direct child did not return a numeric status: timeout, signal termination, or failure to start. A shell wrapper may turn a signal death into `128+N` instead, for example `137` (128+9, SIGKILL — often the OOM killer) or `143` (128+15, SIGTERM). A background session terminated with `kill` reports `-1` |
 | `timedOut` | `true` when the configured timeout stopped the command |
 | `truncated` | `true` when the output exceeded the configured cap; the omitted middle stays in the artifact |
 | `durationMs` | Wall-clock duration of the command in milliseconds |
@@ -41,6 +45,8 @@ hello
 The header stays outside the output body, so newlines, tabs and quotes are not JSON-escaped. The user-facing message is the output body without the header; on failure it keeps the human-readable `[Command exited with code N]` suffix.
 
 Non-zero exit codes are not automatically tool failures: `grep` returns `1` when there is no match and `diff` returns `1` when files differ. Interpret `exitCode` in context. The tool still marks a non-zero exit as an error result internally for UI and logging purposes.
+
+Signal terminations are different from ordinary non-zero exits. `137` usually means SIGKILL, including the OOM killer, and an out-of-memory kill may leave no stderr of its own: check the system log (for example `dmesg -T | tail`) before retrying. `143` means SIGTERM. On Unix, when the direct child is killed by a signal the header reports `exitCode: null` and the human-readable suffix says `killed by signal`; the `kill` action reports `-1` for a session it terminated.
 
 When output is truncated, the artifact path appears after the body as a `[file:...]` local artifact path, with the full stream stored up to `5,000,000` bytes. The message as a whole is therefore not one JSON document: only the first line is JSON metadata.
 
@@ -124,6 +130,12 @@ These patterns are enabled by default and can be disabled with `enable_deny_patt
 - Containers: `docker run`, `docker exec`
 - Git: `git push`, `git force`
 - Other: `eval`, `source *.sh`
+
+## Repeated Blocked Commands
+
+Exec tracks guard rejections per conversation. The first two consecutive rejections of the same command with the same reason return the normal block message. The third and later rejections add a `HARD STOP` message that tells the model to stop retrying, not to reword or split the command, and to report the blocker to the user instead.
+
+The streak starts over when a different command is blocked, when an allowed run succeeds, or when the conversation is cleared. State is process-local and bounded (64 conversations), and each entry holds only a 64-bit hash of the command and reason plus a counter; it is not persisted across restarts.
 
 ## Known Architectural Limitation
 

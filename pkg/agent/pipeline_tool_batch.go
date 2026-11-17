@@ -299,9 +299,9 @@ func (b *toolBatch) prepare(i int) (*preparedCall, toolStep) {
 		ts.sessionKey,
 		ts.opts.Dispatch.SessionScope,
 	)
-	if ts.parentTurnState != nil {
-		// SubTurns join their async children before finishing; root turns
-		// keep the fire-and-forget follow-up via the bus.
+	if ts.parentTurnState != nil || ts.joinSubTurns {
+		// SubTurns and CLI root turns join their async children before
+		// finishing; other root turns keep the fire-and-forget follow-up.
 		pc.execCtx = tools.WithChildTracker(pc.execCtx, ts)
 	}
 	return pc, toolStepContinue
