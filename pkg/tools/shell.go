@@ -646,6 +646,21 @@ func boolArg(args map[string]any, key string) bool {
 	return false
 }
 
+// numberArg reads an optional integer JSON number. JSON tool arguments decode
+// every number as float64, so a fractional value is rejected. valid is false
+// only when the key is present and is not an integer >= min.
+func numberArg(args map[string]any, key string, minimum float64) (value float64, provided, valid bool) {
+	raw, ok := args[key]
+	if !ok {
+		return 0, false, true
+	}
+	value, ok = raw.(float64)
+	if !ok || value != math.Trunc(value) || value < minimum {
+		return 0, true, false
+	}
+	return value, true, true
+}
+
 func (t *ExecTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
 	return t.execute(ctx, args, false, nil)
 }
@@ -801,11 +816,9 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 
 	timeout := t.timeout
 	timeoutDisabled := false
-	if raw, ok := args["timeout"]; ok {
+	if value, provided, valid := numberArg(args, "timeout", 0); provided {
 		const maxTimeoutSeconds = (1<<63 - 1) / int64(time.Second)
-		// JSON tool arguments always decode numbers as float64.
-		value, isNumber := raw.(float64)
-		if !isNumber || value != math.Trunc(value) || value < 0 || value > float64(maxTimeoutSeconds) {
+		if !valid || value > float64(maxTimeoutSeconds) {
 			return ErrorResult("timeout must be a non-negative integer number of seconds")
 		}
 		seconds := int64(value)

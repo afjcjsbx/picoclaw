@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"strings"
 	"time"
 
@@ -150,10 +149,8 @@ func (t *ExecTool) executeWait(ctx context.Context, args map[string]any) *ToolRe
 		maxWait = defaultWaitMax
 	}
 	window, clampNote := maxWait, ""
-	if raw, ok := args["timeout"]; ok {
-		// JSON tool arguments always decode numbers as float64.
-		value, isNumber := raw.(float64)
-		if !isNumber || value != math.Trunc(value) || value < 1 {
+	if value, provided, valid := numberArg(args, "timeout", 1); provided {
+		if !valid {
 			return ErrorResult("timeout must be a positive integer number of seconds")
 		}
 		if requested := time.Duration(value) * time.Second; requested <= maxWait {
@@ -208,9 +205,8 @@ func (t *ExecTool) executeRead(ctx context.Context, args map[string]any) *ToolRe
 
 	offset := int64(0)
 	offsetProvided := false
-	if raw, ok := args["offset"]; ok {
-		value, isNumber := raw.(float64)
-		if !isNumber || value != math.Trunc(value) || value < 0 {
+	if value, provided, valid := numberArg(args, "offset", 0); provided {
+		if !valid {
 			return ErrorResult("offset must be a non-negative integer number of bytes")
 		}
 		offset = int64(value)
@@ -221,9 +217,8 @@ func (t *ExecTool) executeRead(ctx context.Context, args map[string]any) *ToolRe
 	if limit <= 0 {
 		limit = config.DefaultExecMaxOutputChars
 	}
-	if raw, ok := args["limit"]; ok {
-		value, isNumber := raw.(float64)
-		if !isNumber || value != math.Trunc(value) || value < 1 {
+	if value, provided, valid := numberArg(args, "limit", 1); provided {
+		if !valid {
 			return ErrorResult("limit must be a positive integer number of bytes")
 		}
 		limit = int64(value)
