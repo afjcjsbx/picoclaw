@@ -281,6 +281,58 @@ func (t *ExecTool) executeWrite(ctx context.Context, args map[string]any) *ToolR
 	}, "")
 }
 
+// executeKillPID terminates a PID only when it belongs to a running session
+// visible to the caller. This gives the model a safe way to stop a process it
+// started without enabling the generic shell `kill` command.
+func (t *ExecTool) executeKillPID(ctx context.Context, args map[string]any) *ToolResult {
+	value, provided, valid := numberArg(args, "pid", 2)
+	if !provided || !valid {
+		return ErrorResult("pid must be an integer >= 2")
+	}
+	pid := int(value)
+
+	for _, info := range t.sessionManager.ListForCaller(
+		ToolAgentID(ctx),
+		ToolChannel(ctx),
+		ToolChatID(ctx),
+	) {
+		if info.Status != "running" || info.PID <= 0 {
+			continue
+		}
+		if !pidOwnedBySession(pid, info.PID) {
+			continue
+		}
+		if pid == info.PID {
+			session, errResult := t.lookupSession(ctx, info.ID)
+			if errResult != nil {
+				return errResult
+			}
+			if session.IsDone() {
+				return ErrorResult(fmt.Sprintf("process already exited with code %d", session.GetExitCode()))
+			}
+			if err := session.Kill(); err != nil {
+				return ErrorResult(fmt.Sprintf("failed to kill session: %v", err))
+			}
+			resp := sessionResponse(info.ID, session)
+			resp.PID = pid
+			resp.Output = session.Tail(sessionOutputChars)
+			return jsonResult(resp, fmt.Sprintf("Session %s killed", info.ID))
+		}
+		if err := killValidatedPID(pid); err != nil {
+			return ErrorResult(fmt.Sprintf("failed to kill pid %d: %v", pid, err))
+		}
+		return jsonResult(
+			ExecResponse{SessionID: info.ID, Status: "killed", PID: pid},
+			fmt.Sprintf("PID %d killed (owned by session %s)", pid, info.ID),
+		)
+	}
+
+	return ErrorResult(fmt.Sprintf(
+		"pid %d is not owned by a running exec session; use action=kill with a sessionId for a tracked process",
+		pid,
+	))
+}
+
 func (t *ExecTool) executeKill(ctx context.Context, args map[string]any) *ToolResult {
 	sessionID, session, errResult := t.getSession(ctx, args)
 	if errResult != nil {

@@ -198,9 +198,10 @@ Background session actions return a JSON `ExecResponse` instead. Once the sessio
 
 | Argument | Type | Required for | Description |
 |----------|------|--------------|-------------|
-| `action` | string | every call | `run` (execute a command), `list` (show sessions), `poll` (check a session's status; returns immediately), `wait` (block until a session exits or the timeout elapses), `read` (get a session's output), `write` (send input to a session's stdin), `kill` (terminate a session), `send-keys` (send keys to a PTY session) |
+| `action` | string | every call | `run` (execute a command), `list` (show sessions), `poll` (check a session's status; returns immediately), `wait` (block until a session exits or the timeout elapses), `read` (get a session's output), `write` (send input to a session's stdin), `kill` (terminate a session), `kill-pid` (terminate a PID owned by a tracked session), `send-keys` (send keys to a PTY session) |
 | `command` | string | `run` | Shell command to execute |
 | `sessionId` | string | `poll`, `wait`, `read`, `write`, `kill`, `send-keys` | Session ID returned by a background `run` |
+| `pid` | int | `kill-pid` | PID to terminate. It must be a running tracked session root or one of its descendants; an unowned PID is rejected |
 | `data` | string | `write` | Data to write to the session's stdin |
 | `keys` | string | `send-keys` | Key names: `up`, `down`, `left`, `right`, `enter`, `tab`, `escape`, `backspace`, `ctrl-c`, `ctrl-d`, `home`, `end`, `pageup`, `pagedown`, `f1`–`f12` |
 | `background` | bool | — | With `run`, start the command in the background immediately; the result includes a `sessionId`. On Unix, a trailing `&` in the command is normalized to this mode automatically |
@@ -225,6 +226,7 @@ Behavior notes:
 - To wait for a background session, call `wait` once instead of polling in a loop. If the window elapses first, the result has status `running` and a note saying this is not an error; call `wait` again if the job is expected to take longer. After two consecutive `poll`/`wait` calls with no new output the tool enables a completion notification and tells the model to stop checking (use `wait`, read the output, or kill the session).
 - Starting a background session without `notify=true` returns a note that no completion message will be sent, so the model does not assume it will be woken when the job ends. Bounded jobs should normally use `notify=true`.
 - Sessions are cleaned up 30 minutes after the process exits. `write` sends stdin, `send-keys` sends keys to a PTY session; combine `background=true` with `pty=true` for interactive sessions such as a REPL.
+- `kill-pid` is the supported way to stop a PID that is not the session root. It only accepts a PID owned by a running session visible to the caller (the root or a descendant), so the generic shell `kill` pattern can stay blocked while the model still has a safe way to stop its own children. When a shell `kill <pid>` is rejected, the block message points at this action.
 
 ## Environment sanitization
 

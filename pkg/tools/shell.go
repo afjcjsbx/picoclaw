@@ -537,7 +537,8 @@ func execDescriptionFor(goos string) string {
 		fmt.Sprintf(
 			"Use background only when needed; it returns `sessionId`. "+
 				"Use `list`, `poll`, `wait` (preferred; `notify=true` alerts on completion), "+
-				"`read` (byte offset/limit), `write` (stdin), `send-keys` or `kill`. %s",
+				"`read` (byte offset/limit), `write` (stdin), `send-keys`, `kill` (terminate a session) "+
+				"or `kill-pid` (terminate a PID owned by a tracked session). %s",
 			sessionGuidance,
 		),
 		"",
@@ -545,7 +546,7 @@ func execDescriptionFor(goos string) string {
 	}, "\n")
 }
 
-var execActions = []string{"run", "list", "poll", "wait", "read", "write", "kill", "send-keys"}
+var execActions = []string{"run", "list", "poll", "wait", "read", "write", "kill", "kill-pid", "send-keys"}
 
 func (t *ExecTool) Parameters() map[string]any {
 	return map[string]any{
@@ -554,7 +555,7 @@ func (t *ExecTool) Parameters() map[string]any {
 			"action": map[string]any{
 				"type":        "string",
 				"enum":        execActions,
-				"description": "Action: run (execute command), list (show sessions), poll (check status, returns immediately), wait (block until a session exits or timeout), read (get output), write (send input), kill (terminate), send-keys (send keys to PTY)",
+				"description": "Action: run (execute command), list (show sessions), poll (check status, returns immediately), wait (block until a session exits or timeout), read (get output), write (send input), kill (terminate a tracked session), kill-pid (terminate a PID owned by a tracked session), send-keys (send keys to PTY)",
 			},
 			"command": map[string]any{
 				"type":        "string",
@@ -563,6 +564,11 @@ func (t *ExecTool) Parameters() map[string]any {
 			"sessionId": map[string]any{
 				"type":        "string",
 				"description": "Session ID (required for poll/wait/read/write/kill/send-keys)",
+			},
+			"pid": map[string]any{
+				"type":        "integer",
+				"description": "Process ID for kill-pid; it must be a running tracked session root or one of its descendants",
+				"minimum":     2,
 			},
 			"keys": map[string]any{
 				"type":        "string",
@@ -683,6 +689,8 @@ func (t *ExecTool) execute(ctx context.Context, args map[string]any, scheduled b
 		return t.executeWrite(ctx, args)
 	case "kill":
 		return t.executeKill(ctx, args)
+	case "kill-pid":
+		return t.executeKillPID(ctx, args)
 	case "send-keys":
 		return t.executeSendKeys(ctx, args)
 	default:

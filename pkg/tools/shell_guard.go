@@ -29,6 +29,10 @@ func (t *ExecTool) commandMatchesCustomUnlockPattern(lower string) bool {
 	return patternsMatchAny(t.customUnlockPatterns, []string{lower})
 }
 
+// shellKillPIDPattern catches the common `kill <pid>` spelling so the block
+// message can point the model at the validated kill-pid action.
+var shellKillPIDPattern = regexp.MustCompile(`(?:^|[;&|]\s*)kill\s+(?:-\w+\s+)*[0-9]+`)
+
 func patternsMatchAny(patterns []*regexp.Regexp, forms []string) bool {
 	for _, pattern := range patterns {
 		for _, form := range forms {
@@ -147,6 +151,10 @@ func (t *ExecTool) guardCommandWithAnalysis(
 		// catches shell-equivalent spellings such as g\it, which the raw
 		// lowerForDeny form does not expose.
 		if patternsMatchAny(t.denyPatterns, denyForms) {
+			if shellKillPIDPattern.MatchString(lower) {
+				return "Command blocked by safety guard (dangerous pattern detected); " +
+					"use action=kill-pid with a PID owned by a tracked exec session, or action=kill with the sessionId"
+			}
 			return "Command blocked by safety guard (dangerous pattern detected)"
 		}
 	}
@@ -219,7 +227,7 @@ func (t *ExecTool) guardCommandWithAnalysis(
 	if t.riskGuard != nil && !unlocked {
 		assessment := t.riskGuard.AssessFile(cmd, riskFile)
 		if assessment.Reject {
-			return assessment.BlockedError(t.riskGuard.Threshold()).Error()
+			return riskBlockReason(lower, assessment.BlockedError(t.riskGuard.Threshold()).Error())
 		}
 		// Smart approvals are an additional reviewer, never a way to lower the
 		// static floor. In smart mode a critical command stays blocked even
@@ -243,11 +251,20 @@ func (t *ExecTool) guardCommandWithAnalysis(
 				}
 			}
 		} else if !shellguard.IsAllowed(assessment.Level, t.riskGuard.Threshold()) {
-			return assessment.BlockedError(t.riskGuard.Threshold()).Error()
+			return riskBlockReason(lower, assessment.BlockedError(t.riskGuard.Threshold()).Error())
 		}
 	}
 
 	return ""
+}
+
+// riskBlockReason adds the validated kill-pid guidance when a shell kill was
+// rejected by the risk layer rather than by a deny pattern.
+func riskBlockReason(command, reason string) string {
+	if shellKillPIDPattern.MatchString(command) {
+		return reason + "; use action=kill-pid with a PID owned by a tracked exec session, or action=kill with the sessionId"
+	}
+	return reason
 }
 
 // reviewCommand asks the Guardian model for a verdict on a command whose risk

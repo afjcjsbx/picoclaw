@@ -3,6 +3,7 @@ package toolshared
 type ExecResponse struct {
 	SessionID string `json:"sessionId,omitempty"`
 	Status    string `json:"status,omitempty"`
+	PID       int    `json:"pid,omitempty"`
 
 	// ExitCode is nil until the session has finished. A finished session
 	// includes 0 so callers can distinguish a successful exit from no exit.
