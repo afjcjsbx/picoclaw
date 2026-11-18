@@ -10,7 +10,12 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 )
 
-func newSmartFloorTool(t *testing.T, restrict bool, threshold string, verdict approvalVerdict) (*ExecTool, *fakeApprovalReviewer, string) {
+func newSmartFloorTool(
+	t *testing.T,
+	restrict bool,
+	threshold string,
+	verdict approvalVerdict,
+) (*ExecTool, *fakeApprovalReviewer, string) {
 	t.Helper()
 	workspace := t.TempDir()
 	cfg := config.DefaultConfig()
