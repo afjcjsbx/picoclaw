@@ -67,7 +67,10 @@ type ExecTool struct {
 	riskGuard        *shellguard.Guard
 	approvalEnabled  bool
 	approvalReviewer approvalReviewer
-	blockBreaker     *execBlockBreaker
+	// approvalOnEscalate is config.ApprovalEscalateBlock or
+	// config.ApprovalEscalateApprove; an empty value blocks escalations.
+	approvalOnEscalate string
+	blockBreaker       *execBlockBreaker
 }
 
 var _ AsyncExecutor = (*ExecTool)(nil)
@@ -475,6 +478,7 @@ func NewExecToolWithConfig(
 		riskGuard:            riskGuard,
 		approvalEnabled:      smartApprovals,
 		approvalReviewer:     reviewer,
+		approvalOnEscalate:   approvalConfig.OnEscalate,
 		blockBreaker:         newExecBlockBreaker(),
 	}, nil
 }

@@ -12,6 +12,7 @@ func TestApprovalsConfigEnv(t *testing.T) {
 	t.Setenv("PICOCLAW_APPROVALS_MODE", "smart")
 	t.Setenv("PICOCLAW_APPROVALS_MODEL", "guardian")
 	t.Setenv("PICOCLAW_APPROVALS_SMART_TIMEOUT_SECONDS", "9")
+	t.Setenv("PICOCLAW_APPROVALS_ON_ESCALATE", "approve")
 
 	var cfg ApprovalsConfig
 	if err := env.Parse(&cfg); err != nil {
@@ -19,7 +20,8 @@ func TestApprovalsConfigEnv(t *testing.T) {
 	}
 	if cfg.Mode != ApprovalModeSmart ||
 		cfg.Model != "guardian" ||
-		cfg.SmartTimeoutSeconds != 9 {
+		cfg.SmartTimeoutSeconds != 9 ||
+		cfg.OnEscalate != ApprovalEscalateApprove {
 		t.Fatalf("env.Parse produced %+v", cfg)
 	}
 }
@@ -31,43 +33,55 @@ func TestDefaultApprovalsModeIsOff(t *testing.T) {
 	if cfg.Approvals.Mode != ApprovalModeOff {
 		t.Fatalf("DefaultConfig().Approvals.Mode = %q, want %q", cfg.Approvals.Mode, ApprovalModeOff)
 	}
+	if cfg.Approvals.OnEscalate != ApprovalEscalateBlock {
+		t.Fatalf(
+			"DefaultConfig().Approvals.OnEscalate = %q, want %q",
+			cfg.Approvals.OnEscalate, ApprovalEscalateBlock,
+		)
+	}
 }
 
 func TestApprovalsConfigNormalized(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name     string
-		in       ApprovalsConfig
-		wantMode string
-		wantSecs int
-		wantErr  string
+		name           string
+		in             ApprovalsConfig
+		wantMode       string
+		wantSecs       int
+		wantOnEscalate string
+		wantErr        string
 	}{
 		{
-			name:     "empty defaults to off",
-			wantMode: ApprovalModeOff,
-			wantSecs: DefaultApprovalSmartTimeoutSeconds,
+			name:           "empty defaults to off",
+			wantMode:       ApprovalModeOff,
+			wantSecs:       DefaultApprovalSmartTimeoutSeconds,
+			wantOnEscalate: ApprovalEscalateBlock,
 		},
 		{
-			name:     "explicit off",
-			in:       ApprovalsConfig{Mode: ApprovalModeOff},
-			wantMode: ApprovalModeOff,
-			wantSecs: DefaultApprovalSmartTimeoutSeconds,
+			name:           "explicit off",
+			in:             ApprovalsConfig{Mode: ApprovalModeOff},
+			wantMode:       ApprovalModeOff,
+			wantSecs:       DefaultApprovalSmartTimeoutSeconds,
+			wantOnEscalate: ApprovalEscalateBlock,
 		},
 		{
 			name: "case and whitespace",
 			in: ApprovalsConfig{
 				Mode:                " SMART ",
 				SmartTimeoutSeconds: 45,
+				OnEscalate:          " APPROVE ",
 			},
-			wantMode: ApprovalModeSmart,
-			wantSecs: 45,
+			wantMode:       ApprovalModeSmart,
+			wantSecs:       45,
+			wantOnEscalate: ApprovalEscalateApprove,
 		},
 		{
-			name:     "zero timeout uses default",
-			in:       ApprovalsConfig{Mode: ApprovalModeSmart},
-			wantMode: ApprovalModeSmart,
-			wantSecs: DefaultApprovalSmartTimeoutSeconds,
+			name:           "zero timeout uses default",
+			in:             ApprovalsConfig{Mode: ApprovalModeSmart},
+			wantMode:       ApprovalModeSmart,
+			wantSecs:       DefaultApprovalSmartTimeoutSeconds,
+			wantOnEscalate: ApprovalEscalateBlock,
 		},
 		{
 			name:    "unknown mode",
@@ -86,6 +100,11 @@ func TestApprovalsConfigNormalized(t *testing.T) {
 				SmartTimeoutSeconds: MaxApprovalSmartTimeoutSeconds + 1,
 			},
 			wantErr: "exceeds the maximum",
+		},
+		{
+			name:    "unknown escalate action",
+			in:      ApprovalsConfig{Mode: ApprovalModeSmart, OnEscalate: "ask"},
+			wantErr: "on_escalate",
 		},
 	}
 
@@ -108,6 +127,9 @@ func TestApprovalsConfigNormalized(t *testing.T) {
 			if got.SmartTimeoutSeconds != tt.wantSecs {
 				t.Errorf("SmartTimeoutSeconds = %d, want %d", got.SmartTimeoutSeconds, tt.wantSecs)
 			}
+			if got.OnEscalate != tt.wantOnEscalate {
+				t.Errorf("OnEscalate = %q, want %q", got.OnEscalate, tt.wantOnEscalate)
+			}
 		})
 	}
 }
@@ -120,7 +142,8 @@ func TestApprovalsConfigJSON(t *testing.T) {
 		"approvals": {
 			"mode": "smart",
 			"model": "cheap-guardian",
-			"smart_timeout_seconds": 12
+			"smart_timeout_seconds": 12,
+			"on_escalate": "approve"
 		}
 	}`), &cfg); err != nil {
 		t.Fatalf("json.Unmarshal: %v", err)
@@ -134,5 +157,8 @@ func TestApprovalsConfigJSON(t *testing.T) {
 	}
 	if cfg.Approvals.SmartTimeoutSeconds != 12 {
 		t.Errorf("SmartTimeoutSeconds = %d, want 12", cfg.Approvals.SmartTimeoutSeconds)
+	}
+	if cfg.Approvals.OnEscalate != ApprovalEscalateApprove {
+		t.Errorf("OnEscalate = %q, want %q", cfg.Approvals.OnEscalate, ApprovalEscalateApprove)
 	}
 }

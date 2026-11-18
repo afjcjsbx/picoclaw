@@ -8,6 +8,8 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/logger"
 	fstools "github.com/sipeed/picoclaw/pkg/tools/fs"
 	"github.com/sipeed/picoclaw/pkg/tools/shellguard"
 )
@@ -62,8 +64,10 @@ func patternsMatchAny(patterns []*regexp.Regexp, forms []string) bool {
 //     resolve (dynamic command names, opaque shells, parse errors) are allowed
 //     by default; dynamic operands for destructive commands are still rejected.
 //  8. Smart approvals: only unknown commands (layer 7) are reviewed by the
-//     Guardian model. APPROVE runs the command; DENY, ESCALATE and any error
-//     block it. With approvals off, unknown commands run.
+//     Guardian model. APPROVE runs the command and DENY blocks it. ESCALATE
+//     follows approvals.on_escalate ("block" by default, "approve" to run).
+//     Guardian/provider failures still block. With approvals off, unknown
+//     commands run.
 func (t *ExecTool) guardCommandContext(ctx context.Context, command, cwd string) string {
 	return t.guardCommandWithAnalysis(ctx, command, cwd, shellguard.Analyze(strings.TrimSpace(command)))
 }
@@ -218,9 +222,10 @@ func (t *ExecTool) guardCommandWithAnalysis(
 }
 
 // reviewCommand asks the Guardian model for a verdict on a command whose risk
-// the classifier could not resolve. Approve returns an empty string; deny,
-// escalate, an unavailable reviewer and provider errors all return a block
-// message.
+// the classifier could not resolve. Approve returns an empty string and deny
+// always blocks. Escalate blocks unless approvals.on_escalate is "approve".
+// An unavailable reviewer and provider errors always block, so the escalate
+// policy cannot turn a failed review into consent.
 func (t *ExecTool) reviewCommand(ctx context.Context, command, description string) string {
 	if t.approvalReviewer == nil {
 		return "Command blocked: approval guardian is unavailable; manual approval is not configured"
@@ -235,6 +240,17 @@ func (t *ExecTool) reviewCommand(ctx context.Context, command, description strin
 	case approvalDeny:
 		return "Command blocked by approval guardian (DENY)"
 	default:
+		if t.approvalOnEscalate == config.ApprovalEscalateApprove {
+			logger.InfoCF(
+				"tools.approval",
+				"Guardian escalated; allowing command by configuration",
+				map[string]any{
+					"on_escalate": config.ApprovalEscalateApprove,
+					"description": description,
+				},
+			)
+			return ""
+		}
 		return "Command blocked by approval guardian (ESCALATE); manual approval is not configured"
 	}
 }
