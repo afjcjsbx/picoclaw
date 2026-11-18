@@ -220,6 +220,9 @@ func (g *Guard) assessArgv(words []word, depth int) Assessment {
 		}
 		return result
 	}
+	if reason, opaque := opaqueInterpreterReason(words); opaque {
+		return unknownAssessment(wordTexts(words), reason)
+	}
 	return g.classify(words)
 }
 

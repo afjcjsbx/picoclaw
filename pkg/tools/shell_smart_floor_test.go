@@ -22,9 +22,8 @@ func newSmartFloorTool(
 	cfg.Agents.Defaults.Workspace = workspace
 	cfg.Tools.Exec.RiskThreshold = threshold
 	cfg.Approvals = config.ApprovalsConfig{
-		Mode:       config.ApprovalModeSmart,
-		Model:      "go-glm",
-		OnEscalate: config.ApprovalEscalateApprove,
+		Mode:  config.ApprovalModeSmart,
+		Model: "go-glm",
 	}
 	tool, err := NewExecToolWithConfig(workspace, restrict, cfg)
 	require.NoError(t, err)
@@ -44,10 +43,10 @@ func TestSmartApprovalCriticalFloorCannotBeDelegated(t *testing.T) {
 		want    string
 	}{
 		{"critical", "rm -rf ./build", "smart-approval floor"},
-		{"hardline", "rm -rf /", "dangerous pattern"},
+		{"hardline", "rm -rf /", "safety guard"},
 		{"workspace", "cat /etc/passwd", "path outside working dir"},
 		{"interpreter", `python3 -c "import shutil; shutil.rmtree('/tmp/canary')"`, "outside the workspace"},
-		{"brace", `{rm,-rf,/}`, "dangerous pattern"},
+		{"brace", `{rm,-rf,/}`, "safety guard"},
 	}
 	for _, tc := range blocked {
 		reason := tool.guardCommandContext(ctx, tc.command, workspace)

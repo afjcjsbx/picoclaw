@@ -12,7 +12,7 @@ func TestApprovalsConfigEnv(t *testing.T) {
 	t.Setenv("PICOCLAW_APPROVALS_MODE", "smart")
 	t.Setenv("PICOCLAW_APPROVALS_MODEL", "guardian")
 	t.Setenv("PICOCLAW_APPROVALS_SMART_TIMEOUT_SECONDS", "9")
-	t.Setenv("PICOCLAW_APPROVALS_ON_ESCALATE", "approve")
+	t.Setenv("PICOCLAW_APPROVALS_ON_ESCALATE", "block")
 
 	var cfg ApprovalsConfig
 	if err := env.Parse(&cfg); err != nil {
@@ -21,7 +21,7 @@ func TestApprovalsConfigEnv(t *testing.T) {
 	if cfg.Mode != ApprovalModeSmart ||
 		cfg.Model != "guardian" ||
 		cfg.SmartTimeoutSeconds != 9 ||
-		cfg.OnEscalate != ApprovalEscalateApprove {
+		cfg.OnEscalate != ApprovalEscalateBlock {
 		t.Fatalf("env.Parse produced %+v", cfg)
 	}
 }
@@ -70,11 +70,16 @@ func TestApprovalsConfigNormalized(t *testing.T) {
 			in: ApprovalsConfig{
 				Mode:                " SMART ",
 				SmartTimeoutSeconds: 45,
-				OnEscalate:          " APPROVE ",
+				OnEscalate:          " BLOCK ",
 			},
 			wantMode:       ApprovalModeSmart,
 			wantSecs:       45,
-			wantOnEscalate: ApprovalEscalateApprove,
+			wantOnEscalate: ApprovalEscalateBlock,
+		},
+		{
+			name:    "approve was removed",
+			in:      ApprovalsConfig{Mode: ApprovalModeSmart, OnEscalate: "approve"},
+			wantErr: "removed",
 		},
 		{
 			name:           "zero timeout uses default",
@@ -143,7 +148,7 @@ func TestApprovalsConfigJSON(t *testing.T) {
 			"mode": "smart",
 			"model": "cheap-guardian",
 			"smart_timeout_seconds": 12,
-			"on_escalate": "approve"
+			"on_escalate": "block"
 		}
 	}`), &cfg); err != nil {
 		t.Fatalf("json.Unmarshal: %v", err)
@@ -158,7 +163,7 @@ func TestApprovalsConfigJSON(t *testing.T) {
 	if cfg.Approvals.SmartTimeoutSeconds != 12 {
 		t.Errorf("SmartTimeoutSeconds = %d, want 12", cfg.Approvals.SmartTimeoutSeconds)
 	}
-	if cfg.Approvals.OnEscalate != ApprovalEscalateApprove {
-		t.Errorf("OnEscalate = %q, want %q", cfg.Approvals.OnEscalate, ApprovalEscalateApprove)
+	if cfg.Approvals.OnEscalate != ApprovalEscalateBlock {
+		t.Errorf("OnEscalate = %q, want %q", cfg.Approvals.OnEscalate, ApprovalEscalateBlock)
 	}
 }

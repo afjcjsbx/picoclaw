@@ -8,8 +8,6 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/sipeed/picoclaw/pkg/config"
-	"github.com/sipeed/picoclaw/pkg/logger"
 	fstools "github.com/sipeed/picoclaw/pkg/tools/fs"
 	"github.com/sipeed/picoclaw/pkg/tools/shellguard"
 )
@@ -81,6 +79,38 @@ func (t *ExecTool) guardCommandWithAnalysis(
 		return t.guardCommandWithAnalysis(ctx, expanded, cwd, shellguard.Analyze(expanded))
 	}
 	lower := strings.ToLower(cmd)
+	// A command that does not parse cannot be inspected by any AST layer. It is
+	// reviewed or blocked, never allowed, and allow_unknown does not override
+	// this rule: a malformed command is not the same as an opaque command.
+	if runtime.GOOS != "windows" && analysis.File == nil {
+		reason := "command could not be parsed for risk classification"
+		if t.approvalEnabled {
+			if blocked := t.reviewCommand(ctx, cmd, reason); blocked != "" {
+				return blocked
+			}
+			return ""
+		}
+		return unknownBlockedReason(reason)
+	}
+	// The hardline floor is evaluated on the AST first, so quoting, wrappers
+	// and path normalization cannot hide a destructive operation from a regex.
+	// The regex floor below stays as a fallback for forms the parser cannot
+	// represent, including PowerShell on Windows.
+	if runtime.GOOS != "windows" {
+		hardlineCwd := cwd
+		if hardlineCwd == "" {
+			hardlineCwd = t.workingDir
+		}
+		home := t.execHomeDir()
+		if finding, found := shellguard.HardlineFile(analysis.File, hardlineCwd, home); found {
+			return "Command blocked by safety guard (" + finding.Reason + ")"
+		}
+		if analysis.RiskFile != nil && analysis.RiskFile != analysis.File {
+			if finding, found := shellguard.HardlineFile(analysis.RiskFile, hardlineCwd, home); found {
+				return "Command blocked by safety guard (" + finding.Reason + ")"
+			}
+		}
+	}
 	// Quoted heredoc bodies are literal text: a backtick there cannot run a
 	// command, so deny patterns must not inspect it. The caller parsed the
 	// untrimmed command, so trim the stripped view like before.
@@ -234,8 +264,10 @@ func (t *ExecTool) guardCommandWithAnalysis(
 			return "Command blocked by smart-approval floor: known critical risk cannot be delegated to the guardian"
 		}
 		if assessment.Unknown {
-			// Unknown commands are allowed by default. Smart approvals can
-			// still review them; without a reviewer the command runs.
+			// Unknown commands are reviewed, never silently allowed. Smart
+			// approvals provide the reviewer when configured; without one the
+			// command is blocked unless the operator opted into the legacy
+			// allow_unknown behavior.
 			if t.approvalEnabled {
 				description := assessment.Reason
 				if description == "" {
@@ -244,13 +276,29 @@ func (t *ExecTool) guardCommandWithAnalysis(
 				if blocked := t.reviewCommand(ctx, cmd, description); blocked != "" {
 					return blocked
 				}
+				return ""
 			}
+			if t.allowUnknown {
+				return ""
+			}
+			return unknownBlockedReason(assessment.Reason)
 		} else if !shellguard.IsAllowed(assessment.Level, t.riskGuard.Threshold()) {
 			return riskBlockReason(lower, assessment.BlockedError(t.riskGuard.Threshold()).Error())
 		}
 	}
 
 	return ""
+}
+
+// unknownBlockedReason explains why a command that could not be classified is
+// rejected in the strict default policy. Operators can restore the legacy
+// behavior with tools.exec.allow_unknown=true or configure an approver.
+func unknownBlockedReason(reason string) string {
+	if reason == "" {
+		reason = "the command could not be classified"
+	}
+	return "Command blocked by strict unknown policy: " + reason +
+		"; set tools.exec.allow_unknown=true or configure an approver to allow it"
 }
 
 // riskBlockReason adds the validated kill-pid guidance when a shell kill was
@@ -263,10 +311,9 @@ func riskBlockReason(command, reason string) string {
 }
 
 // reviewCommand asks the Guardian model for a verdict on a command whose risk
-// the classifier could not resolve. Approve returns an empty string and deny
-// always blocks. Escalate blocks unless approvals.on_escalate is "approve".
-// An unavailable reviewer and provider errors always block, so the escalate
-// policy cannot turn a failed review into consent.
+// the classifier could not resolve. Approve returns an empty string; DENY,
+// ESCALATE, an unavailable reviewer and provider errors always block. There is
+// deliberately no configuration that turns uncertainty into consent.
 func (t *ExecTool) reviewCommand(ctx context.Context, command, description string) string {
 	if t.approvalReviewer == nil {
 		return "Command blocked: approval guardian is unavailable; manual approval is not configured"
@@ -281,17 +328,6 @@ func (t *ExecTool) reviewCommand(ctx context.Context, command, description strin
 	case approvalDeny:
 		return "Command blocked by approval guardian (DENY)"
 	default:
-		if t.approvalOnEscalate == config.ApprovalEscalateApprove {
-			logger.InfoCF(
-				"tools.approval",
-				"Guardian escalated; allowing command by configuration",
-				map[string]any{
-					"on_escalate": config.ApprovalEscalateApprove,
-					"description": description,
-				},
-			)
-			return ""
-		}
 		return "Command blocked by approval guardian (ESCALATE); manual approval is not configured"
 	}
 }

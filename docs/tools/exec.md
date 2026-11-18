@@ -9,10 +9,11 @@ The exec tool is used to execute shell commands.
 |--------|------|---------|-------------|
 | `enabled` | bool | `true` | Enable the exec tool |
 | `enable_deny_patterns` | bool | `true` | Enable the built-in shell-construct deny set (command substitution, pipe-to-shell, shell heredocs) and the AST risk classifier |
+| `allow_unknown` | bool | `false` | Legacy compatibility switch. When `false`, commands whose risk cannot be classified (opaque script files, stdin interpreters, dynamic command names, parse failures) are reviewed and blocked without an approver. When `true`, opaque commands run without review; parse failures are still blocked |
 | `custom_deny_patterns` | string[] | `[]` | Additional deny patterns (regular expressions); always enforced and they take priority over allow rules |
 | `custom_allow_patterns` | string[] | `[]` | Full-command allow patterns (regular expressions, anchored automatically). They exempt only the built-in shell-construct deny set. They do not exempt the AST risk classifier; hardline and custom deny patterns still win |
 | `custom_unlock_patterns` | string[] | `[]` | Full-command unlock patterns (regular expressions, anchored automatically). A match skips the default deny set, the AST risk classifier and smart approvals, so an explicitly trusted command runs even when it is critical or unclassifiable. Hardline, custom deny and the workspace boundary still apply |
-| `risk_threshold` | string | `"medium"` | Highest risk level the AST classifier allows: `low`, `medium`, `high` or `critical`. Part of the built-in guard set, so it is inactive when `enable_deny_patterns` is `false` unless `approvals.mode` is `smart`. Empty means `medium` |
+| `risk_threshold` | string | `"medium"` | Highest risk level the AST classifier allows: `low`, `medium`, `high` or `critical`. The classifier stays active when `enable_deny_patterns` is `false` if strict unknown blocking (`allow_unknown: false`) or `approvals.mode: "smart"` needs it. Empty means `medium` |
 | `risk_overrides` | object | `{}` | Base risk level per command (command name to level), replacing the built-in table. Argument modifiers can still elevate it |
 | `arg_modifiers` | object | `{}` | Extra argument-aware risk elevations per command. Every listed token must be present; the highest matching level wins |
 | `allow_remote` | bool | `false` | When `false`, exec only accepts commands that originate from internal channels (`cli`, `system`, `subagent`). Remote channels are then blocked (fail-closed): an empty channel is also rejected. Set it to `true` only when remote command execution is explicitly intended |
@@ -32,11 +33,11 @@ Smart approvals are configured in a top-level `approvals` block, not under `tool
 | `approvals.mode` | string | `"off"` | `"off"` (default) keeps the static guards as the final decision. `"smart"` asks an auxiliary Guardian model to review commands whose risk the classifier cannot resolve |
 | `approvals.model` | string | `""` | Guardian model by `model_list` alias or `provider/model` reference. Empty uses `agents.defaults.model_name` |
 | `approvals.smart_timeout_seconds` | int | `20` | Per-review timeout, maximum `600`. A timed-out review is a review failure, so the command is rejected |
-| `approvals.on_escalate` | string | `"block"` | What to do when the Guardian answers `ESCALATE` (or any unrecognized verdict): `"block"` rejects the command, `"approve"` runs it. Guardian initialization/provider failures always reject it |
+| `approvals.on_escalate` | string | `"block"` | Compatibility field. Only `"block"` is accepted; an `ESCALATE` verdict, an unrecognized verdict, a Guardian initialization failure and a provider error always reject the command |
 
 Environment variables use the `PICOCLAW_APPROVALS_` prefix: `PICOCLAW_APPROVALS_MODE`, `PICOCLAW_APPROVALS_MODEL`, `PICOCLAW_APPROVALS_SMART_TIMEOUT_SECONDS`, `PICOCLAW_APPROVALS_ON_ESCALATE`.
 
-Environment variables use the `PICOCLAW_TOOLS_EXEC_` prefix: `PICOCLAW_TOOLS_EXEC_ENABLED`, `PICOCLAW_TOOLS_EXEC_ENABLE_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_RISK_THRESHOLD`, `PICOCLAW_TOOLS_EXEC_ALLOW_REMOTE`, `PICOCLAW_TOOLS_EXEC_CUSTOM_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_CUSTOM_ALLOW_PATTERNS`, `PICOCLAW_TOOLS_EXEC_CUSTOM_UNLOCK_PATTERNS`, `PICOCLAW_TOOLS_EXEC_TIMEOUT_SECONDS`, `PICOCLAW_TOOLS_EXEC_MAX_OUTPUT_CHARS`, `PICOCLAW_TOOLS_EXEC_ENV_ALLOWLIST` (comma-separated). `env_set`, `risk_overrides` and `arg_modifiers` are JSON-only because their values are structured.
+Environment variables use the `PICOCLAW_TOOLS_EXEC_` prefix: `PICOCLAW_TOOLS_EXEC_ENABLED`, `PICOCLAW_TOOLS_EXEC_ENABLE_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_ALLOW_UNKNOWN`, `PICOCLAW_TOOLS_EXEC_RISK_THRESHOLD`, `PICOCLAW_TOOLS_EXEC_ALLOW_REMOTE`, `PICOCLAW_TOOLS_EXEC_CUSTOM_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_CUSTOM_ALLOW_PATTERNS`, `PICOCLAW_TOOLS_EXEC_CUSTOM_UNLOCK_PATTERNS`, `PICOCLAW_TOOLS_EXEC_TIMEOUT_SECONDS`, `PICOCLAW_TOOLS_EXEC_MAX_OUTPUT_CHARS`, `PICOCLAW_TOOLS_EXEC_ENV_ALLOWLIST` (comma-separated). `env_set`, `risk_overrides` and `arg_modifiers` are JSON-only because their values are structured.
 
 ### Risk classification
 
@@ -57,7 +58,7 @@ Commands above `risk_threshold` are rejected before any process starts, with a s
 Command blocked by risk classifier: command="chmod +x script.sh" risk_level=high threshold=medium reason=command risk exceeds configured threshold
 ```
 
-A dynamic command name, a shell that reads commands from stdin or a script file, and an unparseable command are classified as unknown. They are allowed by default; with `approvals.mode: "smart"` they are sent to the Guardian. Set `enable_deny_patterns: false` to disable the built-in guard set, unless smart approvals are enabled (they keep the Unix classifier active for the Guardian gate).
+A dynamic command name, an interpreter that reads commands from stdin or a script file (`bash script.sh`, `python3 script.py`, `python3 -`, `python3 -m module`), and an unparseable command are classified as unknown. The default policy reviews them and blocks them when no approver is configured. Set `allow_unknown: true` only to restore the legacy behavior for opaque commands; parse failures remain blocked. With `approvals.mode: "smart"` the unknown command is sent to the Guardian, whose `APPROVE` verdict allows it, while `DENY`, `ESCALATE` and review failures block it.
 
 The classifier also:
 
@@ -132,15 +133,15 @@ Limits worth knowing:
 
 ### Smart approvals
 
-`approvals.mode` defaults to `"off"`: the static guards are the final decision and exec makes no extra model call. Unknown commands run in this mode. Set it to `"smart"` to add a second opinion only for commands that the static guards cannot classify, without asking a model about every command:
+`approvals.mode` defaults to `"off"`: the static guards are the final decision and exec makes no extra model call. Unknown commands are blocked in this mode unless `allow_unknown` is enabled. Set it to `"smart"` to add a second opinion only for commands that the static guards cannot classify, without asking a model about every command:
 
 1. **Hardline and custom deny rules stay final.** Catastrophic operations such as `rm -rf /`, recursive deletion of `/etc`, `/usr`, `/home` or `/root`, `mkfs`, `dd if=`, `shutdown`, `reboot`, `poweroff`, fork bombs and `kill -1` are rejected directly. The Guardian is never consulted for them.
 2. **Default deny shell-construct hits stay blocked.** A command caught by the built-in regex set is rejected even in smart mode; the Guardian only reviews commands the risk classifier cannot resolve.
 3. **Known risk levels keep following `risk_threshold`.** A command at or above `risk_threshold` is rejected even in smart mode, and one below it is allowed. The Guardian is not consulted for known risk levels.
-4. **Only unknown commands are reviewed.** On Unix, dynamic command names, opaque shells and unparseable scripts are flagged as unknown and sent to the Guardian; with approvals off they are allowed.
+4. **Only unknown commands are reviewed.** On Unix, dynamic command names, opaque interpreters and unparseable commands are flagged as unknown and sent to the Guardian. With approvals off they are blocked unless `allow_unknown: true`; parse failures are always blocked.
 5. **Known critical risk is a deterministic floor.** In smart mode a known critical command stays blocked even when `risk_threshold` is `critical`; the Guardian cannot approve it. Hardline, workspace escapes, brace-expanded commands and interpreter paths are rejected before the review as well.
 6. **Workspace and path checks still run first.** The Guardian cannot approve a command that tries to escape the workspace.
-7. **The Guardian answers with one word.** `APPROVE` runs the command and `DENY` blocks it. `ESCALATE` follows `approvals.on_escalate`: `"block"` (default) rejects the command because manual approval is not implemented yet, while `"approve"` runs it. Any other response is treated as `ESCALATE`. An unavailable Guardian and provider/review errors always reject the command, even with `on_escalate: "approve"`.
+7. **The Guardian answers with one word.** `APPROVE` runs the command and `DENY` blocks it. `ESCALATE`, an unrecognized answer, an unavailable Guardian and provider/review errors always reject the command; there is no auto-approve policy.
 
 Before the command reaches the model, unquoted shell comments are removed and a literal `</command>` is neutralized. Comment removal uses the shell AST, so `#` inside quotes or heredoc bodies is preserved; a command that does not parse is reviewed verbatim. Commands above 16 KiB are rejected as a review failure without a model call, so prompt size, latency and token cost stay bounded.
 
@@ -157,7 +158,7 @@ If the Guardian cannot be initialized or the review fails, the command is reject
 }
 ```
 
-`on_escalate: "approve"` deliberately removes the fail-closed behavior for the Guardian's uncertainty verdict: an uncertain or unparseable answer lets the command run. Use it only when a blocked workflow is worse than running a command the Guardian could not clear. Hardline patterns, custom deny rules, the workspace boundary and the risk threshold still run before the Guardian, and review failures still block.
+An uncertain or unparseable Guardian answer is always a rejection. There is no `on_escalate: "approve"` setting: an uncertain review must never authorize a command.
 
 The Guardian is a separate, short, non-streaming chat call: `temperature=0`, `max_tokens=16`, reasoning disabled where the provider supports it. When `approvals.model` is empty, smart mode reuses the agent's primary provider instead of creating a second client; a dedicated provider is created lazily only when a different model is configured, and only on the first unknown command. Enabling it with `enable_deny_patterns: false` still keeps the Unix AST classifier active for the smart gate. Windows has no AST classifier, so no command is marked unknown there and smart mode makes no model calls.
 
@@ -297,7 +298,7 @@ PICOCLAW_TOOLS_EXEC_ENABLED=false
 
 ## Functionality
 
-- **`enable_deny_patterns`**: Set to `false` to disable the optional built-in guard set (the shell-construct deny patterns and the AST risk classifier). The hardline floor and `custom_deny_patterns` still apply.
+- **`enable_deny_patterns`**: Set to `false` to disable the optional built-in guard set (the shell-construct deny patterns and the AST risk classifier). The hardline floor and `custom_deny_patterns` still apply. Strict unknown blocking needs the classifier, so the classifier remains active when `allow_unknown` is `false`.
 - **`custom_deny_patterns`**: Add custom deny regex patterns. These are always enforced, even when `enable_deny_patterns` is `false`, and custom allow or unlock patterns cannot exempt them.
 
 ## Hardline Always-On Patterns

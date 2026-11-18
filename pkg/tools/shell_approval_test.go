@@ -102,27 +102,24 @@ func TestSmartApprovalEscalateBlocksByDefault(t *testing.T) {
 	}
 }
 
-func TestSmartApprovalEscalateCanBeApprovedByConfig(t *testing.T) {
+func TestSmartApprovalEscalateAlwaysBlocks(t *testing.T) {
 	t.Parallel()
 
-	cfg := smartApprovalTestConfig()
-	cfg.Approvals.OnEscalate = config.ApprovalEscalateApprove
-	tool, reviewer := newSmartTestTool(t, cfg, approvalEscalate)
+	tool, reviewer := newSmartTestTool(t, nil, approvalEscalate)
 
-	if got := tool.guardCommand("sh script.sh", t.TempDir()); got != "" {
-		t.Fatalf("guardCommand() = %q, want allowed after escalated approval", got)
+	got := tool.guardCommand("sh script.sh", t.TempDir())
+	if !strings.Contains(got, "ESCALATE") {
+		t.Fatalf("guardCommand() = %q, want escalate block", got)
 	}
 	if reviewer.calls != 1 {
 		t.Fatalf("reviewer calls = %d, want 1", reviewer.calls)
 	}
 }
 
-func TestSmartApprovalDenyStillBlocksWhenEscalateApproved(t *testing.T) {
+func TestSmartApprovalDenyBlocks(t *testing.T) {
 	t.Parallel()
 
-	cfg := smartApprovalTestConfig()
-	cfg.Approvals.OnEscalate = config.ApprovalEscalateApprove
-	tool, reviewer := newSmartTestTool(t, cfg, approvalDeny)
+	tool, reviewer := newSmartTestTool(t, nil, approvalDeny)
 
 	got := tool.guardCommand("sh script.sh", t.TempDir())
 	if !strings.Contains(got, "(DENY)") {
@@ -133,12 +130,10 @@ func TestSmartApprovalDenyStillBlocksWhenEscalateApproved(t *testing.T) {
 	}
 }
 
-func TestSmartApprovalReviewErrorBlocksEvenWhenEscalateApproved(t *testing.T) {
+func TestSmartApprovalReviewErrorBlocks(t *testing.T) {
 	t.Parallel()
 
-	cfg := smartApprovalTestConfig()
-	cfg.Approvals.OnEscalate = config.ApprovalEscalateApprove
-	tool, reviewer := newSmartTestTool(t, cfg, approvalEscalate)
+	tool, reviewer := newSmartTestTool(t, nil, approvalApprove)
 	reviewer.err = errors.New("provider unavailable")
 
 	got := tool.guardCommand("sh script.sh", t.TempDir())
@@ -261,7 +256,7 @@ func TestSmartApprovalDoesNotReviewHardline(t *testing.T) {
 			t.Parallel()
 			tool, reviewer := newSmartTestTool(t, nil, approvalApprove)
 			got := tool.guardCommand(command, t.TempDir())
-			if !strings.Contains(got, "dangerous pattern") {
+			if !strings.Contains(got, "safety guard") {
 				t.Fatalf("guardCommand(%q) = %q, want hardline block", command, got)
 			}
 			if reviewer.calls != 0 {
@@ -356,11 +351,8 @@ func TestSmartApprovalConstruction(t *testing.T) {
 	if tool.approvalReviewer == nil {
 		t.Fatal("approvalReviewer is nil, want a configured guardian")
 	}
-	if tool.approvalOnEscalate != config.ApprovalEscalateBlock {
-		t.Fatalf(
-			"approvalOnEscalate = %q, want %q",
-			tool.approvalOnEscalate, config.ApprovalEscalateBlock,
-		)
+	if tool.allowUnknown {
+		t.Fatal("allowUnknown = true, want strict default")
 	}
 }
 

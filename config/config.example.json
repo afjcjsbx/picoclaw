@@ -525,6 +525,7 @@
     "exec": {
       "enabled": true,
       "enable_deny_patterns": true,
+      "allow_unknown": false,
       "risk_threshold": "medium",
       "allow_remote": false,
       "custom_deny_patterns": null,
@@ -654,7 +655,7 @@
     }
   },
   "approvals": {
-    "_comment": "Smart approvals review exec commands whose risk cannot be classified with an auxiliary Guardian model from model_list. They are opt-in: set mode to 'smart' to enable the Guardian; the default 'off' keeps the static guards as the final decision without an extra model call. on_escalate controls an uncertain Guardian verdict: 'block' (default) rejects the command, 'approve' runs it. Guardian/provider failures always block.",
+    "_comment": "Smart approvals review exec commands whose risk cannot be classified with an auxiliary Guardian model from model_list. They are opt-in: set mode to 'smart' to enable the Guardian; the default 'off' keeps the static guards as the final decision without an extra model call. An uncertain or failed review always rejects the command; there is no auto-approve setting.",
     "mode": "off",
     "model": "",
     "smart_timeout_seconds": 20,

@@ -238,14 +238,10 @@ const (
 	ApprovalModeSmart = "smart"
 )
 
-// Approval escalate actions. They decide what happens when the Guardian
-// answers ESCALATE (or returns an unrecognized verdict). "block" (default)
-// keeps the fail-closed behavior; "approve" runs the command. Review failures
-// and an unavailable Guardian always block, regardless of this setting.
-const (
-	ApprovalEscalateBlock   = "block"
-	ApprovalEscalateApprove = "approve"
-)
+// ApprovalEscalateBlock keeps the fail-closed behavior when the Guardian
+// answers ESCALATE (or returns an unrecognized verdict). There is deliberately
+// no approve action: an uncertain review must never authorize a command.
+const ApprovalEscalateBlock = "block"
 
 // Defaults for the auxiliary Guardian call. The timeout is short so a slow or
 // unreachable model cannot stall an interactive turn; the call is only made for
@@ -266,9 +262,9 @@ type ApprovalsConfig struct {
 	Model string `json:"model,omitempty" env:"PICOCLAW_APPROVALS_MODEL"`
 	// SmartTimeoutSeconds bounds each Guardian call. Zero uses the default 20s.
 	SmartTimeoutSeconds int `json:"smart_timeout_seconds,omitempty" env:"PICOCLAW_APPROVALS_SMART_TIMEOUT_SECONDS"`
-	// OnEscalate decides what happens when the Guardian answers ESCALATE or
-	// returns an unrecognized verdict: "block" (default) rejects the command,
-	// "approve" runs it. Guardian/provider failures always block.
+	// OnEscalate is retained as a compatibility field. Only "block" is
+	// accepted: an ESCALATE verdict and every Guardian failure reject the
+	// command.
 	OnEscalate string `json:"on_escalate,omitempty" env:"PICOCLAW_APPROVALS_ON_ESCALATE"`
 }
 
@@ -303,11 +299,15 @@ func (c ApprovalsConfig) Normalized() (ApprovalsConfig, error) {
 	switch onEscalate {
 	case "", ApprovalEscalateBlock:
 		onEscalate = ApprovalEscalateBlock
-	case ApprovalEscalateApprove:
+	case "approve":
+		return c, fmt.Errorf(
+			"on_escalate %q was removed; an uncertain review must always reject the command",
+			c.OnEscalate,
+		)
 	default:
 		return c, fmt.Errorf(
-			"on_escalate %q must be %q or %q",
-			c.OnEscalate, ApprovalEscalateBlock, ApprovalEscalateApprove,
+			"on_escalate %q must be %q",
+			c.OnEscalate, ApprovalEscalateBlock,
 		)
 	}
 
@@ -1580,6 +1580,11 @@ type ExecConfig struct {
 	// variable names inherited by exec child processes. Use explicit names,
 	// never wildcards: allowlisting a secret exposes it to every command.
 	EnvAllowlist []string `json:"env_allowlist,omitempty" yaml:"-" env:"PICOCLAW_TOOLS_EXEC_ENV_ALLOWLIST"`
+	// AllowUnknown preserves the legacy behavior of allowing commands whose
+	// risk cannot be classified (opaque scripts, dynamic command names and
+	// parse failures). The default is false: those commands are reviewed and
+	// blocked when no approver is configured.
+	AllowUnknown bool `json:"allow_unknown,omitempty" env:"PICOCLAW_TOOLS_EXEC_ALLOW_UNKNOWN"`
 }
 
 // DefaultExecTimeoutSeconds is the foreground command timeout used when

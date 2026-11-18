@@ -66,12 +66,10 @@ type ExecTool struct {
 	state            *execStateStore
 	sessionManager   *SessionManager
 	riskGuard        *shellguard.Guard
+	allowUnknown     bool
 	approvalEnabled  bool
 	approvalReviewer approvalReviewer
-	// approvalOnEscalate is config.ApprovalEscalateBlock or
-	// config.ApprovalEscalateApprove; an empty value blocks escalations.
-	approvalOnEscalate string
-	blockBreaker       *execBlockBreaker
+	blockBreaker     *execBlockBreaker
 }
 
 var _ AsyncExecutor = (*ExecTool)(nil)
@@ -353,6 +351,7 @@ func NewExecToolWithConfig(
 	// Fail closed when no config is supplied. Callers that need remote exec
 	// must opt in explicitly through cfg.Tools.Exec.AllowRemote.
 	allowRemote := false
+	allowUnknown := false
 	enableDefaultGuard := true
 	approvalConfig := config.ApprovalsConfig{}
 	if len(allowPaths) > 0 {
@@ -363,6 +362,7 @@ func NewExecToolWithConfig(
 		execConfig := cfg.Tools.Exec
 		enableDefaultGuard = execConfig.EnableDenyPatterns
 		allowRemote = execConfig.AllowRemote
+		allowUnknown = execConfig.AllowUnknown
 		normalized, err := cfg.Approvals.Normalized()
 		if err != nil {
 			return nil, fmt.Errorf("approvals: %w", err)
@@ -430,9 +430,10 @@ func NewExecToolWithConfig(
 
 	smartApprovals := approvalConfig.Mode == config.ApprovalModeSmart
 
-	// Smart approvals need the AST classifier even when the optional default
-	// guard set is disabled; otherwise unknown commands cannot be detected.
-	riskGuard, err := newRiskGuard(cfg, enableDefaultGuard || smartApprovals)
+	// Smart approvals and the strict unknown policy need the AST classifier
+	// even when the optional default guard set is disabled; otherwise opaque
+	// commands cannot be detected.
+	riskGuard, err := newRiskGuard(cfg, enableDefaultGuard || smartApprovals || !allowUnknown)
 	if err != nil {
 		return nil, err
 	}
@@ -486,9 +487,9 @@ func NewExecToolWithConfig(
 		state:                newExecStateStore(),
 		sessionManager:       getSessionManager(),
 		riskGuard:            riskGuard,
+		allowUnknown:         allowUnknown,
 		approvalEnabled:      smartApprovals,
 		approvalReviewer:     reviewer,
-		approvalOnEscalate:   approvalConfig.OnEscalate,
 		blockBreaker:         newExecBlockBreaker(),
 	}, nil
 }

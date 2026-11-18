@@ -3518,7 +3518,7 @@ func TestShellTool_DefaultDenyPatternsCanBeDisabled(t *testing.T) {
 	cfg := &config.Config{
 		Approvals: config.ApprovalsConfig{Mode: config.ApprovalModeOff},
 		Tools: config.ToolsConfig{
-			Exec: config.ExecConfig{EnableDenyPatterns: false},
+			Exec: config.ExecConfig{EnableDenyPatterns: false, AllowUnknown: true},
 		},
 	}
 
@@ -3535,6 +3535,7 @@ func TestShellTool_HardlinePatternsAlwaysApply(t *testing.T) {
 		Tools: config.ToolsConfig{
 			Exec: config.ExecConfig{
 				EnableDenyPatterns:  false,
+				AllowUnknown:        true,
 				CustomAllowPatterns: []string{`.*`},
 			},
 		},
@@ -3556,7 +3557,7 @@ func TestShellTool_HardlinePatternsAlwaysApply(t *testing.T) {
 		":(){ :|:& };:",
 	}
 	for _, command := range blocked {
-		if got := tool.guardCommand(command, t.TempDir()); !strings.Contains(got, "dangerous pattern") {
+		if got := tool.guardCommand(command, t.TempDir()); !strings.Contains(got, "safety guard") {
 			t.Errorf("hardline command %q should be blocked, got: %q", command, got)
 		}
 	}
@@ -3571,6 +3572,7 @@ func TestShellTool_HardlineASTBypass(t *testing.T) {
 		Tools: config.ToolsConfig{
 			Exec: config.ExecConfig{
 				EnableDenyPatterns:  false,
+				AllowUnknown:        true,
 				CustomAllowPatterns: []string{`.*`},
 			},
 		},
@@ -3604,7 +3606,7 @@ func TestShellTool_HardlineASTBypass(t *testing.T) {
 		`rm -rf ~/.pico''claw`,
 	}
 	for _, command := range blocked {
-		if got := tool.guardCommand(command, t.TempDir()); !strings.Contains(got, "dangerous pattern") {
+		if got := tool.guardCommand(command, t.TempDir()); !strings.Contains(got, "safety guard") {
 			t.Errorf("obfuscated hardline command %q should be blocked, got: %q", command, got)
 		}
 	}
@@ -3755,6 +3757,7 @@ func TestShellTool_SelfProtectionHardline(t *testing.T) {
 		Tools: config.ToolsConfig{
 			Exec: config.ExecConfig{
 				EnableDenyPatterns:  false,
+				AllowUnknown:        true,
 				CustomAllowPatterns: []string{`.*`},
 			},
 		},
@@ -3794,7 +3797,7 @@ func TestShellTool_SelfProtectionHardline(t *testing.T) {
 		`rm -f "$(command -v picoclaw)"`,
 	}
 	for _, command := range blocked {
-		if got := tool.guardCommand(command, t.TempDir()); !strings.Contains(got, "dangerous pattern") {
+		if got := tool.guardCommand(command, t.TempDir()); !strings.Contains(got, "safety guard") {
 			t.Errorf("self-protection command %q should be blocked, got: %q", command, got)
 		}
 	}
