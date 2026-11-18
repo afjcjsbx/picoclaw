@@ -43,7 +43,7 @@ Isolation lives under:
 ```json
 {
   "isolation": {
-    "enabled": false,
+    "mode": "required",
     "expose_paths": []
   }
 }
@@ -51,15 +51,16 @@ Isolation lives under:
 
 Field meanings:
 
-- `enabled`: enables or disables subprocess isolation. Default: `false`.
-- `expose_paths`: explicitly exposes host paths inside the isolated environment. It only matters when `enabled=true`. Linux supports path remapping; macOS supports same-path access only.
+- `mode`: `off`, `auto` or `required`. Default: `required`; an unavailable backend fails closed. `auto` falls back to the static policy and `off` is an explicit opt-out.
+- `enabled`: legacy alias. `true` maps to `required`, `false` maps to `off`.
+- `expose_paths`: explicitly exposes host paths inside the isolated environment. It only matters when `mode` is `auto` or `required`. Linux supports path remapping; macOS supports same-path access only.
 
 Example:
 
 ```json
 {
   "isolation": {
-    "enabled": true,
+    "mode": "required",
     "expose_paths": [
       {
         "source": "/opt/toolchains/go",
@@ -90,8 +91,6 @@ Platform note:
 - Linux uses a real `source -> target` mount view.
 - Linux probes optional bubblewrap namespace flags once. If the kernel rejects one with `Creating new namespace failed` (EINVAL), that namespace isolation is dropped with a warning while the mount namespace, filesystem view, and user environment remain active. This weakens isolation for that namespace; other probe failures stop startup.
 - macOS requires `target` to match `source`; Seatbelt does not remap paths.
-  Read-only rules under the instance root are rejected because Seatbelt cannot
-  revoke the root's write access.
 - Windows does not currently support `expose_paths`.
 
 ## Instance Root And Directories
@@ -155,11 +154,11 @@ Capabilities:
 - redirected child-process user environment
 - `source -> target` read-only or read-write mounts
 
-Default mounts include the instance root plus the minimum runtime system paths such as `/usr`, `/bin`, `/lib`, `/lib64`, and `/etc/resolv.conf`.
+Default mounts expose the instance root read-only, the workspace and `runtime-user-env` read-write, and the minimum runtime system paths such as `/usr`, `/bin`, `/lib`, `/lib64`, and `/etc/resolv.conf` read-only.
 
-At runtime, PicoClaw also adds the executable path, its directory, the effective working directory, and absolute path arguments when needed.
+At runtime, PicoClaw also adds the executable path, its directory, and absolute path arguments when needed. The effective working directory is not made writable by itself.
 
-Absolute path arguments are exposed **read-only**: a directory passed on the command line does not become a writable hole in the sandbox. Writable locations come from `expose_paths`, the effective working directory, or the parent of a non-existent path argument (so output files can still be created).
+Absolute path arguments are exposed **read-only**: a directory passed on the command line does not become a writable hole in the sandbox. Writable locations come only from the workspace, `runtime-user-env`, and explicit `rw` expose paths. The parent of a non-existent path argument is read-only.
 
 There is no automatic fallback when `bwrap` is missing.
 
@@ -176,7 +175,7 @@ If isolation must be disabled temporarily:
 ```json
 {
   "isolation": {
-    "enabled": false
+    "mode": "off"
   }
 }
 ```
@@ -201,12 +200,10 @@ It does not currently implement true `source -> target` filesystem remapping.
 ### macOS
 
 The macOS backend uses `/usr/bin/sandbox-exec` with a Seatbelt default-deny profile.
-It allows writes under the PicoClaw instance root and explicit `rw` paths, while
-exposing system files, the command, its configured working directory, and
-absolute path arguments as needed. A read-only `expose_paths` rule under the
-instance root is rejected: Seatbelt rules are additive, so a later read-only
-allow cannot revoke the root's write access. Network access remains available,
-matching Linux behavior.
+It makes the PicoClaw instance root read-only and allows writes only under the
+workspace, `runtime-user-env`, and explicit `rw` paths, while exposing system
+files, the command, its configured working directory, and absolute path
+arguments as needed. Network access remains available, matching Linux behavior.
 Because Apple deprecated `sandbox-exec`, macOS may remove it in a future release;
 when it is missing, isolation fails closed.
 

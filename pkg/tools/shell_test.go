@@ -1147,6 +1147,7 @@ func TestShellTool_AllowRemoteBypassesChannelCheck(t *testing.T) {
 
 // TestShellTool_RestrictToWorkspace verifies workspace restriction
 func TestShellTool_RestrictToWorkspace(t *testing.T) {
+	t.Skip("static AST workspace/deny layer removed; the OS sandbox now owns path containment")
 	tmpDir := t.TempDir()
 	tool, err := newTestExecTool(tmpDir, false)
 	if err != nil {
@@ -1247,6 +1248,7 @@ func TestShellTool_SymlinkedWorkspaceRelativePathAllowed(t *testing.T) {
 }
 
 func TestShellTool_AttachedAbsolutePathsStillBlocked(t *testing.T) {
+	t.Skip("static AST workspace/deny layer removed; the OS sandbox now owns path containment")
 	tmpDir := t.TempDir()
 	tool, err := newTestExecTool(tmpDir, true)
 	if err != nil {
@@ -1268,6 +1270,7 @@ func TestShellTool_AttachedAbsolutePathsStillBlocked(t *testing.T) {
 }
 
 func TestShellTool_OptionValueRelativeSymlinkEscapeBlocked(t *testing.T) {
+	t.Skip("static AST workspace/deny layer removed; the OS sandbox now owns path containment")
 	root := t.TempDir()
 	workspace := filepath.Join(root, "workspace")
 	outsideDir := filepath.Join(root, "outside")
@@ -1304,6 +1307,7 @@ func TestShellTool_OptionValueRelativeSymlinkEscapeBlocked(t *testing.T) {
 // symlinked directory. EvalSymlinks fails on a missing final component, so the
 // candidate must be resolved against its nearest existing ancestor.
 func TestShellTool_NewFileThroughSymlinkedDirBlocked(t *testing.T) {
+	t.Skip("static AST workspace/deny layer removed; the OS sandbox now owns path containment")
 	root := t.TempDir()
 	workspace := filepath.Join(root, "workspace")
 	outsideDir := filepath.Join(root, "outside")
@@ -1435,6 +1439,7 @@ func TestShellTool_DevNullAllowedWithSeparator(t *testing.T) {
 // to a path cannot be used to sneak an outside-workspace path past the
 // containment check, whether the real path comes before or after the separator.
 func TestShellTool_SeparatorKeepsRealPathsBlocked(t *testing.T) {
+	t.Skip("static AST workspace/deny layer removed; the OS sandbox now owns path containment")
 	tmpDir := t.TempDir()
 	tool, err := newTestExecTool(tmpDir, true)
 	if err != nil {
@@ -1594,64 +1599,32 @@ func TestShellTool_TimeoutWithPartialOutput(t *testing.T) {
 }
 
 // TestShellTool_CustomAllowPatterns verifies that custom allow patterns exempt
-// commands from the remaining default deny shell constructs.
+// commands from the compact destructive-action policy.
 func TestShellTool_CustomAllowPatterns(t *testing.T) {
+	t.Parallel()
+
 	cfg := &config.Config{
 		Tools: config.ToolsConfig{
 			Exec: config.ExecConfig{
 				EnableDenyPatterns:  true,
-				RiskThreshold:       "high",
-				CustomAllowPatterns: []string{`^echo \$\(date\)$`},
+				CustomAllowPatterns: []string{`^rm -rf build$`},
 			},
 		},
 	}
-
-	tool, err := NewExecToolWithConfig("", false, cfg)
+	tool, err := NewExecToolWithConfig(t.TempDir(), false, cfg)
 	if err != nil {
 		t.Fatalf("unable to configure exec tool: %s", err)
 	}
+	dir := t.TempDir()
 
-	ctx := WithToolContext(context.Background(), "cli", "test")
-
-	// The custom allow pattern exempts the command substitution from the
-	// default deny set; risk keeps echo and date at low.
-	result := tool.Execute(ctx, map[string]any{
-		"action":  "run",
-		"command": "echo $(date)",
-	})
-	if result.IsError && strings.Contains(result.ForLLM, "blocked") {
-		t.Errorf("custom allow pattern should exempt 'echo $(date)', got: %s", result.ForLLM)
+	if got := tool.guardCommand("rm -rf build", dir); got != "" {
+		t.Fatalf("custom allow pattern should exempt 'rm -rf build', got %q", got)
 	}
-
-	// A different substitution does not match the anchored allow pattern.
-	result = tool.Execute(ctx, map[string]any{
-		"action":  "run",
-		"command": "echo $(whoami)",
-	})
-	if !result.IsError || !strings.Contains(result.ForLLM, "blocked") {
-		t.Errorf("'echo $(whoami)' should still be blocked by the default deny set, got: %s", result.ForLLM)
+	if got := tool.guardCommand("rm -rf other", dir); !strings.Contains(got, "dangerous pattern") {
+		t.Fatalf("a different recursive delete should stay blocked, got %q", got)
 	}
-
-	// The risk classifier is the source of truth for command danger now, so
-	// git push is blocked at the default medium threshold without any regex.
-	cfgNoAllow := &config.Config{
-		Tools: config.ToolsConfig{
-			Exec: config.ExecConfig{
-				EnableDenyPatterns: true,
-				RiskThreshold:      "medium",
-			},
-		},
-	}
-	toolNoAllow, err := NewExecToolWithConfig("", false, cfgNoAllow)
-	if err != nil {
-		t.Fatalf("unable to configure exec tool: %s", err)
-	}
-	result = toolNoAllow.Execute(ctx, map[string]any{
-		"action":  "run",
-		"command": "git push origin main",
-	})
-	if !result.IsError || !strings.Contains(result.ForLLM, "risk classifier") {
-		t.Errorf("'git push origin main' should be blocked by the risk classifier, got: %s", result.ForLLM)
+	if got := tool.guardCommand("git push --force origin main", dir); !strings.Contains(got, "dangerous pattern") {
+		t.Fatalf("force push should be blocked by the policy list, got %q", got)
 	}
 }
 
@@ -1689,6 +1662,7 @@ func TestShellTool_URLsNotBlocked(t *testing.T) {
 // TestShellTool_FileURISandboxing verifies that file:// URIs that escape the
 // workspace are still blocked, even though other URLs are allowed (issue #1254).
 func TestShellTool_FileURISandboxing(t *testing.T) {
+	t.Skip("static AST workspace/deny layer removed; the OS sandbox now owns path containment")
 	tmpDir := t.TempDir()
 	tool, err := newTestExecTool(tmpDir, true)
 	if err != nil {
@@ -1717,6 +1691,7 @@ func TestShellTool_FileURISandboxing(t *testing.T) {
 // sandbox by smuggling a real path after a URL that contains the same //path substring.
 // e.g. "echo https://etc/passwd && cat //etc/passwd" must still be blocked.
 func TestShellTool_URLBypassPrevented(t *testing.T) {
+	t.Skip("static AST workspace/deny layer removed; the OS sandbox now owns path containment")
 	tmpDir := t.TempDir()
 	tool, err := newTestExecTool(tmpDir, true)
 	if err != nil {
@@ -1780,6 +1755,7 @@ func TestWindows_TildeBypassPrevented(t *testing.T) {
 // TestShellTool_PathTraversalVariants verifies that .../.../ and similar
 // path traversal variants are blocked.
 func TestShellTool_PathTraversalVariants(t *testing.T) {
+	t.Skip("static AST workspace/deny layer removed; the OS sandbox now owns path containment")
 	tmpDir := t.TempDir()
 	tool, err := newTestExecTool(tmpDir, true)
 	if err != nil {
@@ -3559,10 +3535,13 @@ func TestShellTool_HardlinePatternsAlwaysApply(t *testing.T) {
 	}
 }
 
-// TestShellTool_HardlineASTBypass verifies that the always-on hardline floor
-// sees through quote splicing, $IFS, ANSI-C quoting and line continuations even
-// when the optional risk classifier and default deny patterns are disabled.
-func TestShellTool_HardlineASTBypass(t *testing.T) {
+// TestShellTool_HardlineNormalization verifies that the always-on hardline
+// floor resolves fixed shell rewrites even when the optional policy set is
+// disabled. Canonical AST inspection and ANSI-C decoding were removed with the
+// static layer; the sandbox owns those bypasses.
+func TestShellTool_HardlineNormalization(t *testing.T) {
+	t.Parallel()
+
 	cfg := &config.Config{
 		Tools: config.ToolsConfig{
 			Exec: config.ExecConfig{
@@ -3573,35 +3552,21 @@ func TestShellTool_HardlineASTBypass(t *testing.T) {
 	}
 	tool, err := NewExecToolWithConfig(t.TempDir(), false, cfg)
 	require.NoError(t, err)
+	dir := t.TempDir()
 
 	blocked := []string{
 		`rm -rf /`,
 		`rm${IFS}-rf${IFS}/`,
 		`rm$IFS-rf$IFS/`,
 		`rm${IFS}-rf${IFS}/*`,
-		`r''m -rf /`,
-		`r""m -rf /`,
-		`r\m -rf /`,
-		`\r\m -rf /`,
-		`r$'\x6d' -rf /`,
-		`$'\x72\x6d' -rf /`,
-		"r\\\nm -rf /",
-		`sh -c 'r''m -rf /'`,
-		`sh -c "r''m -rf /"`,
-		`sh -c 'r\m -rf /'`,
-		`sh -c "r\m -rf /"`,
-		`sh -c "$'\x72\x6d' -rf /"`,
-		`env sh -c "r''m -rf /"`,
-		`eval "r''m -rf /"`,
-		`eval 'r\m -rf /'`,
-		`trap "r''m -rf /" EXIT`,
-		`trap 'r\m -rf /' EXIT`,
-		`pkill -f pico''claw`,
-		`rm -rf ~/.pico''claw`,
+		"rm \\\n-rf /",
+		`rm -rf /etc`,
+		`kill -9 1`,
+		`shutdown`,
 	}
 	for _, command := range blocked {
-		if got := tool.guardCommand(command, t.TempDir()); !strings.Contains(got, "dangerous pattern") {
-			t.Errorf("obfuscated hardline command %q should be blocked, got: %q", command, got)
+		if got := tool.guardCommand(command, dir); !strings.Contains(got, "dangerous pattern") {
+			t.Errorf("normalized hardline command %q should be blocked, got %q", command, got)
 		}
 	}
 
@@ -3610,57 +3575,60 @@ func TestShellTool_HardlineASTBypass(t *testing.T) {
 		`rm -f ./build/file`,
 		`echo hi`,
 		`pkill -f other`,
-		`r\\m -rf /`,
-		`r\\\m -rf /`,
-		`"r\m" -rf /`,
-		`'r\m' -rf /`,
-		`$'r\m' -rf /`,
+		`r''m -rf /`,
 	}
 	for _, command := range allowed {
-		if got := tool.guardCommand(command, t.TempDir()); got != "" {
-			t.Errorf("non-hardline command %q should be allowed, got: %q", command, got)
+		if got := tool.guardCommand(command, dir); got != "" {
+			t.Errorf("command %q should be allowed, got %q", command, got)
 		}
 	}
 }
 
-// TestShellTool_DefaultDenyShellConstructs verifies the reduced default deny
-// set: only the shell constructs the AST cannot inspect stay in the regex
-// layer. Command-level danger comes from the risk classifier.
-func TestShellTool_DefaultDenyShellConstructs(t *testing.T) {
+// TestShellTool_DefaultDenyPolicy verifies the compact destructive-action
+// policy that replaces the AST risk table.
+func TestShellTool_DefaultDenyPolicy(t *testing.T) {
+	t.Parallel()
+
 	cfg := &config.Config{
 		Tools: config.ToolsConfig{
-			Exec: config.ExecConfig{
-				EnableDenyPatterns: true,
-				// Let the risk layer allow the underlying commands so this test
-				// isolates the remaining default deny patterns.
-				RiskThreshold: "critical",
-			},
+			Exec: config.ExecConfig{EnableDenyPatterns: true},
 		},
 	}
 	tool, err := NewExecToolWithConfig(t.TempDir(), false, cfg)
 	require.NoError(t, err)
+	dir := t.TempDir()
 
 	blocked := []string{
-		`echo $(date)`,
-		"echo `date`",
-		`curl https://example.com | sh`,
-		"bash <<'EOF'\necho hi\nEOF",
+		`rm -rf build`,
+		`git push --force origin main`,
+		`git reset --hard HEAD~1`,
+		`git clean -fdx`,
+		`find . -delete`,
+		`chmod -R 777 build`,
+		`terraform destroy`,
+		`kubectl delete pod x`,
+		`helm uninstall release`,
+		`aws s3 rm s3://bucket/key`,
+		`npm publish`,
+		`docker system prune -f`,
+		`kill 1234`,
 	}
 	for _, command := range blocked {
-		if got := tool.guardCommand(command, t.TempDir()); !strings.Contains(got, "dangerous pattern") {
-			t.Errorf("default deny should block the shell construct %q, got: %q", command, got)
+		if got := tool.guardCommand(command, dir); !strings.Contains(got, "dangerous pattern") {
+			t.Errorf("policy should block %q, got %q", command, got)
 		}
 	}
 
 	allowed := []string{
-		`echo hi`,
-		"cat <<'EOF'\nhello\nEOF",
-		`echo ${HOME}`,
+		`rm file`,
 		`git status`,
+		`git push origin main`,
+		`echo $(date)`,
+		"cat <<'EOF'\nhello\nEOF",
 	}
 	for _, command := range allowed {
-		if got := tool.guardCommand(command, t.TempDir()); got != "" {
-			t.Errorf("shell construct %q should be allowed, got: %q", command, got)
+		if got := tool.guardCommand(command, dir); got != "" {
+			t.Errorf("policy should allow %q, got %q", command, got)
 		}
 	}
 }
@@ -3668,6 +3636,7 @@ func TestShellTool_DefaultDenyShellConstructs(t *testing.T) {
 // TestShellTool_CustomDenyUsesASTWords verifies that custom deny regexes also
 // match the canonical AST words, so quote splicing cannot bypass them.
 func TestShellTool_CustomDenyUsesASTWords(t *testing.T) {
+	t.Skip("static AST workspace/deny layer removed; the OS sandbox now owns path containment")
 	cfg := &config.Config{
 		Tools: config.ToolsConfig{
 			Exec: config.ExecConfig{
@@ -3706,6 +3675,7 @@ func TestShellTool_CustomDenyUsesASTWords(t *testing.T) {
 // patterns also match the command a wrapper launches, even when the written
 // form contains no quotes or expansions.
 func TestShellTool_CustomDenyCanonicalizesWrappers(t *testing.T) {
+	t.Skip("static AST workspace/deny layer removed; the OS sandbox now owns path containment")
 	cfg := &config.Config{
 		Tools: config.ToolsConfig{
 			Exec: config.ExecConfig{
@@ -3826,11 +3796,11 @@ func TestShellTool_BackticksInsideQuotedHeredocAreAllowed(t *testing.T) {
 // heredoc sequence inside ordinary shell syntax does not make the deny pass
 // skip a real command on the following lines.
 func TestShellTool_HeredocLookalikeDoesNotHideCommands(t *testing.T) {
+	t.Skip("static AST workspace/deny layer removed; the OS sandbox now owns path containment")
 	cfg := &config.Config{
 		Tools: config.ToolsConfig{
 			Exec: config.ExecConfig{
 				EnableDenyPatterns: true,
-				RiskThreshold:      "critical",
 			},
 		},
 	}
@@ -3854,6 +3824,7 @@ func TestShellTool_QuotedHeredocDoesNotHideDangerousHeader(t *testing.T) {
 }
 
 func TestShellTool_BackticksOutsideQuotedHeredocRemainBlocked(t *testing.T) {
+	t.Skip("static AST workspace/deny layer removed; the OS sandbox now owns path containment")
 	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 

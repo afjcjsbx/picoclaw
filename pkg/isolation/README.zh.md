@@ -37,7 +37,7 @@
 ```json
 {
   "isolation": {
-    "enabled": false,
+    "mode": "required",
     "expose_paths": []
   }
 }
@@ -45,15 +45,16 @@
 
 字段说明：
 
-- `enabled`：是否启用子进程隔离。默认值：`false`。
-- `expose_paths`：显式把宿主路径带入隔离环境。仅在 `enabled=true` 时生效。Linux 支持路径重映射；macOS 仅支持源路径和目标路径相同。
+- `mode`：`off`、`auto` 或 `required`，默认 `required`；后端不可用时失败关闭。
+- `enabled`：兼容旧配置，`true` 映射为 `required`，`false` 映射为 `off`。
+- `expose_paths`：显式把宿主路径带入隔离环境。仅在 `mode` 为 `auto` 或 `required` 时生效。Linux 支持路径重映射；macOS 仅支持源路径和目标路径相同。
 
 示例：
 
 ```json
 {
   "isolation": {
-    "enabled": true,
+    "mode": "required",
     "expose_paths": [
       {
         "source": "/opt/toolchains/go",
@@ -165,7 +166,7 @@ Linux 后端当前依赖 `bwrap`（`bubblewrap`）。
 ```json
 {
   "isolation": {
-    "enabled": false
+    "mode": "off"
   }
 }
 ```
@@ -190,7 +191,7 @@ Windows 后端当前使用：
 ### macOS
 
 macOS 后端通过 `/usr/bin/sandbox-exec` 使用默认拒绝的 Seatbelt 配置文件。
-它允许在 PicoClaw 实例根目录和明确配置的 `rw` 路径下写入，并按需开放系统文件、命令、配置的工作目录和绝对路径参数。网络访问保持开启，与 Linux 行为一致。
+实例根目录为只读，只有 workspace、`runtime-user-env` 和明确配置的 `rw` 路径可写；系统文件、命令和绝对路径参数按需只读开放。网络访问保持开启，与 Linux 行为一致。
 Apple 已弃用 `sandbox-exec`，未来 macOS 版本可能移除它；如果该命令不存在，隔离启动会失败。
 
 ### 其他平台

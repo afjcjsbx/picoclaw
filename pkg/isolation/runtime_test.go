@@ -42,7 +42,7 @@ func TestInstanceDirs_UsesInstanceWorkspaceNotGlobalState(t *testing.T) {
 	cfg.Isolation.Enabled = true
 	cfg.Agents.Defaults.Workspace = filepath.Join(t.TempDir(), "external-workspace")
 	Configure(cfg)
-	t.Cleanup(func() { Configure(config.DefaultConfig()) })
+	t.Cleanup(func() { Configure(nil) })
 
 	dirs := InstanceDirs(root)
 	wantWorkspace := filepath.Join(root, pkg.WorkspaceName)
@@ -112,6 +112,27 @@ func TestMergeExposePaths_OverrideByTarget(t *testing.T) {
 	}
 }
 
+func TestDefaultExposePaths_WritableWorkspaceOnly(t *testing.T) {
+	t.Parallel()
+
+	root := filepath.Join(t.TempDir(), "instance")
+	paths := DefaultExposePaths(root)
+	want := map[string]string{
+		root:                                    "ro",
+		filepath.Join(root, pkg.WorkspaceName):  "rw",
+		filepath.Join(root, "runtime-user-env"): "rw",
+	}
+	seen := make(map[string]string, len(paths))
+	for _, item := range paths {
+		seen[item.Target] = item.Mode
+	}
+	for target, mode := range want {
+		if got := seen[target]; got != mode {
+			t.Fatalf("DefaultExposePaths() target %q mode = %q, want %q", target, got, mode)
+		}
+	}
+}
+
 func TestBuildLinuxMountPlan(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("linux-only default mount set")
@@ -121,17 +142,24 @@ func TestBuildLinuxMountPlan(t *testing.T) {
 		t.Fatal("BuildLinuxMountPlan returned empty plan")
 	}
 	foundRoot := false
+	foundWorkspace := false
 	foundOverride := false
 	for _, rule := range plan {
-		if rule.Source == "/rootdir" && rule.Target == "/rootdir" && rule.Mode == "rw" {
+		if rule.Source == "/rootdir" && rule.Target == "/rootdir" && rule.Mode == "ro" {
 			foundRoot = true
+		}
+		if rule.Target == filepath.Join("/rootdir", pkg.WorkspaceName) && rule.Mode == "rw" {
+			foundWorkspace = true
 		}
 		if rule.Source == "/src" && rule.Target == "/dst" && rule.Mode == "ro" {
 			foundOverride = true
 		}
 	}
 	if !foundRoot {
-		t.Fatal("BuildLinuxMountPlan missing root mapping")
+		t.Fatal("BuildLinuxMountPlan missing read-only root mapping")
+	}
+	if !foundWorkspace {
+		t.Fatal("BuildLinuxMountPlan missing writable workspace mapping")
 	}
 	if !foundOverride {
 		t.Fatal("BuildLinuxMountPlan missing override mapping")
@@ -149,7 +177,7 @@ func TestBuildWindowsAccessRules(t *testing.T) {
 	foundRoot := false
 	foundOverride := false
 	for _, rule := range rules {
-		if rule.Path == `C:\picoclaw` && rule.Mode == "rw" {
+		if rule.Path == `C:\picoclaw` && rule.Mode == "ro" {
 			foundRoot = true
 		}
 		if rule.Path == `D:\data` && rule.Mode == "ro" {
@@ -230,7 +258,7 @@ func TestPrepareCommand_AppliesUserEnv(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Isolation.Enabled = true
 	Configure(cfg)
-	t.Cleanup(func() { Configure(config.DefaultConfig()) })
+	t.Cleanup(func() { Configure(nil) })
 	cmd := exec.Command("sh", "-c", "true")
 	if err := PrepareCommand(cmd); err != nil {
 		t.Fatalf("PrepareCommand() error = %v", err)

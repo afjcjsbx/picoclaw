@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sipeed/picoclaw/pkg"
 	"github.com/sipeed/picoclaw/pkg/config"
 )
 
@@ -197,6 +198,23 @@ func contains(values []string, want string) bool {
 	return false
 }
 
+func TestAppendLinuxArgumentMounts_SkipsWritableRoots(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, pkg.WorkspaceName)
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	input := filepath.Join(workspace, "input.txt")
+	if err := os.WriteFile(input, []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	plan := appendLinuxArgumentMounts(nil, []string{input}, root)
+	if len(plan) != 0 {
+		t.Fatalf("appendLinuxArgumentMounts() = %+v, want no rule for a workspace path", plan)
+	}
+}
+
 func TestAppendLinuxArgumentMounts_AddsAbsoluteArgumentPaths(t *testing.T) {
 	root := t.TempDir()
 	input := filepath.Join(root, "input.txt")
@@ -208,14 +226,14 @@ func TestAppendLinuxArgumentMounts_AddsAbsoluteArgumentPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	plan := appendLinuxArgumentMounts(nil, []string{input, "--output=" + output})
+	plan := appendLinuxArgumentMounts(nil, []string{input, "--output=" + output}, root)
 	if len(plan) != 2 {
 		t.Fatalf("appendLinuxArgumentMounts() len = %d, want 2", len(plan))
 	}
 	if plan[0].Source != input || plan[0].Mode != "ro" {
 		t.Fatalf("appendLinuxArgumentMounts()[0] = %+v, want source=%q mode=ro", plan[0], input)
 	}
-	if plan[1].Source != filepath.Dir(output) || plan[1].Mode != "rw" {
-		t.Fatalf("appendLinuxArgumentMounts()[1] = %+v, want source=%q mode=rw", plan[1], filepath.Dir(output))
+	if plan[1].Source != filepath.Dir(output) || plan[1].Mode != "ro" {
+		t.Fatalf("appendLinuxArgumentMounts()[1] = %+v, want source=%q mode=ro", plan[1], filepath.Dir(output))
 	}
 }

@@ -2616,15 +2616,71 @@ func TestDefaultConfig_WorkspacePath_WithPicoclawHome(t *testing.T) {
 	}
 }
 
-func TestDefaultConfig_IsolationEnabled(t *testing.T) {
+func TestDefaultConfig_IsolationRequired(t *testing.T) {
 	cfg := DefaultConfig()
-	if cfg.Isolation.Enabled {
-		t.Fatal("DefaultConfig().Isolation.Enabled should be false")
+	if cfg.Isolation.Mode != IsolationModeRequired {
+		t.Fatalf("DefaultConfig().Isolation.Mode = %q, want %q", cfg.Isolation.Mode, IsolationModeRequired)
+	}
+	if !cfg.Isolation.Enabled {
+		t.Fatal("DefaultConfig().Isolation.Enabled should mirror the active mode")
+	}
+}
+
+func TestIsolationConfigNormalized(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		in      IsolationConfig
+		want    string
+		enabled bool
+		wantErr bool
+	}{
+		{name: "empty disabled", in: IsolationConfig{}, want: IsolationModeOff},
+		{name: "legacy enabled", in: IsolationConfig{Enabled: true}, want: IsolationModeRequired, enabled: true},
+		{name: "auto", in: IsolationConfig{Mode: " Auto "}, want: IsolationModeAuto, enabled: true},
+		{name: "required", in: IsolationConfig{Mode: "required"}, want: IsolationModeRequired, enabled: true},
+		{name: "off", in: IsolationConfig{Mode: "off"}, want: IsolationModeOff},
+		{name: "invalid", in: IsolationConfig{Mode: "sometimes"}, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := tt.in.Normalized()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("Normalized() error = nil, want error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Normalized() error = %v", err)
+			}
+			if got.Mode != tt.want || got.Enabled != tt.enabled {
+				t.Fatalf("Normalized() = %+v, want mode=%q enabled=%v", got, tt.want, tt.enabled)
+			}
+		})
+	}
+}
+
+func TestLoadConfigLegacyIsolationEnabledFalse(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"version":3,"isolation":{"enabled":false}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	if cfg.Isolation.EffectiveMode() != IsolationModeOff {
+		t.Fatalf("EffectiveMode() = %q, want off", cfg.Isolation.EffectiveMode())
 	}
 }
 
 func TestConfig_UnmarshalIsolation(t *testing.T) {
-	cfg := DefaultConfig()
+	var cfg Config
 	raw := []byte(`{
 		"isolation": {
 			"enabled": false,
@@ -2633,7 +2689,7 @@ func TestConfig_UnmarshalIsolation(t *testing.T) {
 			]
 		}
 	}`)
-	if err := json.Unmarshal(raw, cfg); err != nil {
+	if err := json.Unmarshal(raw, &cfg); err != nil {
 		t.Fatalf("json.Unmarshal isolation config: %v", err)
 	}
 	if cfg.Isolation.Enabled {

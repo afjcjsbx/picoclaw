@@ -20,7 +20,6 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/isolation"
 	"github.com/sipeed/picoclaw/pkg/logger"
-	"github.com/sipeed/picoclaw/pkg/tools/shellguard"
 )
 
 // withNote appends one model-facing note to another without leaving a double
@@ -144,7 +143,6 @@ func (t *ExecTool) runSync(
 	ctx context.Context,
 	command, cwd string,
 	timeout time.Duration,
-	analysis shellguard.Analysis,
 ) *ToolResult {
 	start := time.Now()
 	// timeout == 0 means no timeout
@@ -336,7 +334,7 @@ func (t *ExecTool) runSync(
 
 	exitNote := ""
 	if exitCode != nil {
-		exitNote = informativeExitNote(command, analysis, *exitCode)
+		exitNote = informativeExitNote(command, *exitCode)
 	}
 	meta := execRunMeta{
 		ExitCode:     exitCode,
@@ -415,7 +413,7 @@ var signalExitNotes = map[int]string{
 // informativeExitNote returns a model-facing note for a non-zero status that
 // has a well-known non-error meaning. The last canonical simple command is the
 // one that supplies the shell's exit status.
-func informativeExitNote(command string, analysis shellguard.Analysis, code int) string {
+func informativeExitNote(command string, code int) string {
 	if code <= 0 {
 		return ""
 	}
@@ -424,14 +422,13 @@ func informativeExitNote(command string, analysis shellguard.Analysis, code int)
 			"exit code %d usually means the command was terminated by %s", code, signal,
 		)
 	}
-	forms := analysis.Canonical
-	if !analysis.CanonicalExact {
-		forms = shellguard.CanonicalCommands(command)
+	// The shell reports the status of the last simple command. A best-effort
+	// split is enough for the note: the sandbox, not this helper, owns policy.
+	line := command
+	if idx := strings.LastIndexAny(line, "\n;|"); idx >= 0 {
+		line = line[idx+1:]
 	}
-	if len(forms) == 0 {
-		return ""
-	}
-	fields := strings.Fields(forms[len(forms)-1])
+	fields := strings.Fields(strings.TrimSpace(line))
 	if len(fields) == 0 {
 		return ""
 	}

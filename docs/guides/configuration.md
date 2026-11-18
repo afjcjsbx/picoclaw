@@ -446,22 +446,24 @@ When `restrict_to_workspace: true`, the following tools are sandboxed:
 | `search_files` | Search file contents or filenames | Uses the same read-path restrictions; paginated, bounded results |
 | `edit_file`   | Edit files       | Only files within workspace            |
 | `append_file` | Append to files  | Only files within workspace            |
-| `exec`        | Execute commands | Command paths must be within workspace |
+| `exec`        | Execute commands | Runs inside the OS sandbox; `cwd` stays inside the workspace |
 
-> The workspace restriction is a static path policy, not an OS sandbox. It validates command paths, home expansion and directory changes, but child processes and script contents remain outside its reach. Use containers, VMs, or a dedicated user for untrusted workloads.
+#### Sandbox Isolation
+
+`isolation.mode` defaults to `required`: the instance root is mounted read-only, the workspace and `runtime-user-env` are writable, and exec fails closed if the platform backend is unavailable. Set `auto` to allow a fallback to the static policy, or `off` to run on the host explicitly. Windows keeps the static path scanner because its restricted-token backend does not remap paths.
 
 #### Additional Exec Protection
 
 By default, the `exec` tool blocks these dangerous commands (the hardline subset stays blocked even when `enable_deny_patterns` is `false`):
 
-* `del /f`, `rmdir /s` — Bulk deletion (Unix `rm` is risk-classified: plain `rm` is `medium`, `rm -r` is `high`, `rm -rf` is `critical`)
+* `del /f`, `rmdir /s` — Bulk deletion (Unix recursive `rm` is blocked by the compact policy list)
 * `format`, `mkfs`, `diskpart` — Disk formatting (always-on for disk formats)
 * `dd if=` — Disk imaging (always-on)
 * Writing to `/dev/sd[a-z]` — Direct disk writes (always-on)
 * `shutdown`, `reboot`, `poweroff` — System shutdown (always-on)
 * Self-protection: killing the PicoClaw process or service, deleting its state directory (`~/.picoclaw`, `$HOME/.picoclaw`, `$PICOCLAW_HOME` or `PICOCLAW_HOME`), or deleting the running executable — Always-on
-* Hardline and custom deny matching resolves `$IFS`, ANSI-C `$'...'` strings, backslash-newline continuations and AST quote splicing before applying the patterns — Always-on
-* Exec (Unix) workspace boundary: when `restrict_to_workspace` is enabled, `~`/`$HOME` path expansion, bare `..` in `cd`/`pushd`/`-C` targets, `cd`/`pushd` changes, dynamic redirection targets and nested `sh -c`/`exec`/`find -exec` scripts are validated against the workspace, including symlink escapes; `env -C`, `eval`, `trap`, `file:` URIs and `HOME`/`PWD`/`OLDPWD`/`CDPATH` assignments are rejected — Static best effort; use OS isolation for untrusted workloads
+* Hardline and custom deny matching resolves `$IFS` and backslash-newline continuations before applying the patterns — Always-on
+* Exec (Unix) path containment: the sandbox mounts the instance root read-only and the workspace/`runtime-user-env` writable; absolute path arguments are read-only. Windows keeps the static path scanner because its restricted-token backend does not remap paths.
 * Windows PowerShell: recursive `Remove-Item`, `Clear-Disk`, `Format-Volume`, `vssadmin delete shadows`, `bcdedit /set`, `reg delete`, `icacls /grant Everyone`, `iwr ... | iex`, `taskkill /F`, `Stop-Process -Force`
 * Fork bomb `:(){ :|:& };:` — Always-on
 
@@ -557,7 +559,7 @@ Use `mode = lines` when:
 | `tools.exec.custom_deny_patterns` | string[] | `[]` | Custom regex patterns to block; always enforced |
 | `tools.exec.custom_allow_patterns` | string[] | `[]` | Full-command regex patterns that exempt only the default deny set; anchored automatically |
 
-The AST risk classifier (`risk_threshold`) and the child-process environment (`env_set`, `env_allowlist`) are documented in the [exec tool](../tools/exec.md) reference; see [risk classification](../tools/exec.md#risk-classification).
+The sandbox (`isolation.mode`), the compact policy list (`enable_deny_patterns`, `custom_allow_patterns`) and the child-process environment (`env_set`, `env_allowlist`) are documented in the [exec tool](../tools/exec.md) reference; see [sandbox and policy](../tools/exec.md#sandbox-and-policy).
 
 > **Security Note:** Symlink protection is enabled by default — all file paths are resolved through `filepath.EvalSymlinks` before whitelist matching, preventing symlink escape attacks.
 

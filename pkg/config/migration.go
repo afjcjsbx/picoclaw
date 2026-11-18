@@ -84,6 +84,7 @@ func migrateLegacyAgentDefaultsModel(m map[string]any) {
 func loadConfig(data []byte) (*Config, error) {
 	cfg := DefaultConfig()
 	evolutionModeExplicit := configObjectHasField(data, "evolution", "mode")
+	isolationModeExplicit := configObjectHasField(data, "isolation", "mode")
 	evolutionExplicitWithoutMode := configObjectHasTopLevelField(data, "evolution") && !evolutionModeExplicit
 
 	// Pre-scan the JSON to check how many model_list entries the user provided.
@@ -105,6 +106,12 @@ func loadConfig(data []byte) (*Config, error) {
 	}
 	if evolutionExplicitWithoutMode {
 		cfg.Evolution.Mode = ""
+	}
+	// A legacy isolation block without a mode keeps the Enabled switch
+	// authoritative. Normalized then maps enabled:true to required and
+	// enabled:false to off.
+	if configObjectHasTopLevelField(data, "isolation") && !isolationModeExplicit {
+		cfg.Isolation.Mode = ""
 	}
 	return cfg, nil
 }

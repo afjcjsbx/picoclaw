@@ -7,8 +7,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-
-	"github.com/sipeed/picoclaw/pkg/tools/shellguard"
 )
 
 func TestRecoverGoroutine(t *testing.T) {
@@ -51,7 +49,7 @@ func TestWrapCommandForCwdSkipsLineContinuation(t *testing.T) {
 
 func TestInformativeExitNote(t *testing.T) {
 	note := func(command string, code int) string {
-		return informativeExitNote(command, shellguard.Analyze(command), code)
+		return informativeExitNote(command, code)
 	}
 	require.Contains(t, note("grep missing file", 1), "no matches")
 	require.Contains(t, note("diff a b", 1), "files differ")

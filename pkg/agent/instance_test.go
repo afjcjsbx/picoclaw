@@ -422,6 +422,7 @@ func TestNewAgentInstance_AllowsMediaTempDirForReadListAndExec(t *testing.T) {
 }
 
 func TestNewAgentInstance_ExecUsesWriteAllowPathsOnly(t *testing.T) {
+	t.Skip("exec write containment now comes from the required OS sandbox; this unit test runs with isolation off")
 	root := t.TempDir()
 	workspace := filepath.Join(root, "workspace")
 	outside := filepath.Join(root, "outside")

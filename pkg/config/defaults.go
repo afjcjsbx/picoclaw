@@ -18,10 +18,12 @@ func DefaultConfig() *Config {
 
 	return &Config{
 		Version: CurrentVersion,
-		// Isolation is opt-in so existing installations keep their current behavior
-		// until the user explicitly enables subprocess sandboxing.
+		// Sandbox-first is the default: child processes must run in the platform
+		// backend. Users can explicitly opt out with isolation.mode "off" or
+		// accept a fallback with "auto".
 		Isolation: IsolationConfig{
-			Enabled: false,
+			Mode:    IsolationModeRequired,
+			Enabled: true,
 		},
 		Agents: AgentsConfig{
 			Defaults: AgentDefaults{
@@ -428,7 +430,6 @@ func DefaultConfig() *Config {
 					Enabled: true,
 				},
 				EnableDenyPatterns: true,
-				RiskThreshold:      "medium",
 				AllowRemote:        false,
 				TimeoutSeconds:     DefaultExecTimeoutSeconds,
 				MaxOutputChars:     DefaultExecMaxOutputChars,

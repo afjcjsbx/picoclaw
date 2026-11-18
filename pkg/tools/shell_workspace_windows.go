@@ -12,11 +12,23 @@ import (
 )
 
 // absolutePathPattern matches absolute file paths in commands. It is only used
-// on Windows, where the POSIX AST workspace pass is unavailable.
+// on Windows, where the Unix workspace parser does not apply.
 var absolutePathPattern = regexp.MustCompile(`[A-Za-z]:\\[^\\\"']+|/[^\s\"']+`)
 
+// safePaths are kernel pseudo-devices that are always safe to reference in
+// commands, regardless of workspace restriction.
+var safePaths = map[string]bool{
+	"/dev/null":    true,
+	"/dev/zero":    true,
+	"/dev/random":  true,
+	"/dev/urandom": true,
+	"/dev/stdin":   true,
+	"/dev/stdout":  true,
+	"/dev/stderr":  true,
+}
+
 // guardWindowsWorkspacePaths applies the byte-level workspace check used by
-// PowerShell commands. The POSIX AST pass cannot parse this shell, so Windows
+// PowerShell commands. The Unix parser does not apply to this shell, so Windows
 // keeps the regex scanner as its workspace boundary layer.
 func (t *ExecTool) guardWindowsWorkspacePaths(command, cwdPath string) string {
 	cmd := expandPowerShellEnvVars(command)

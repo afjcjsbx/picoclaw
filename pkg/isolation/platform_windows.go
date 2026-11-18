@@ -32,7 +32,7 @@ var (
 )
 
 func applyPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, root string) error {
-	if !isolation.Enabled || cmd == nil {
+	if !isolation.Active() || cmd == nil {
 		return nil
 	}
 	if cmd.SysProcAttr == nil {
@@ -59,7 +59,7 @@ func applyPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, roo
 }
 
 func postStartPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, root string) error {
-	if !isolation.Enabled || cmd == nil || cmd.Process == nil {
+	if !isolation.Active() || cmd == nil || cmd.Process == nil {
 		return nil
 	}
 	resourcesAny, loaded := windowsPendingResources.LoadAndDelete(cmd)

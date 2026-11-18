@@ -8,10 +8,9 @@ The exec tool is used to execute shell commands.
 | Config | Type | Default | Description |
 |--------|------|---------|-------------|
 | `enabled` | bool | `true` | Enable the exec tool |
-| `enable_deny_patterns` | bool | `true` | Enable the built-in shell-construct deny set (command substitution, pipe-to-shell, shell heredocs) and the AST risk classifier |
+| `enable_deny_patterns` | bool | `true` | Enable the compact destructive-action policy list. Hardline and custom deny rules always apply; the sandbox stays active |
 | `custom_deny_patterns` | string[] | `[]` | Additional deny patterns (regular expressions); always enforced and they take priority over allow rules |
-| `custom_allow_patterns` | string[] | `[]` | Full-command allow patterns (regular expressions, anchored automatically). They exempt only the built-in shell-construct deny set. They do not exempt the AST risk classifier; hardline and custom deny patterns still win |
-| `risk_threshold` | string | `"medium"` | Highest risk level the AST classifier allows: `low`, `medium`, `high` or `critical`. Part of the built-in guard set, so it is inactive when `enable_deny_patterns` is `false`. Empty means `medium` |
+| `custom_allow_patterns` | string[] | `[]` | Full-command allow patterns (regular expressions, anchored automatically). They exempt the policy list; hardline and custom deny patterns still win |
 | `allow_remote` | bool | `false` | When `false`, exec only accepts commands that originate from internal channels (`cli`, `system`, `subagent`). Remote channels are then blocked (fail-closed): an empty channel is also rejected. Set it to `true` only when remote command execution is explicitly intended |
 | `timeout_seconds` | int | `180` | Command timeout in seconds. `0` means the default (180s). Foreground runs are capped at `600`s; a larger configured timeout promotes commands to a tracked background session |
 | `max_output_chars` | int | `50000` | Foreground output cap. Longer output keeps the first 40% and the last 60% around a `[OUTPUT TRUNCATED - N chars omitted out of T total]` notice, while the full stream is spilled to a workspace artifact (up to 5,000,000 bytes). The inline view is also bounded by `tools.max_inline_result_chars`; the artifact preserves the full stream. `0` means the default (50000) |
@@ -22,75 +21,23 @@ The exec tool is used to execute shell commands.
 authorized by `tools.cron.command_allowed_remotes` instead and are not blocked by
 `allow_remote`.
 
-Environment variables use the `PICOCLAW_TOOLS_EXEC_` prefix: `PICOCLAW_TOOLS_EXEC_ENABLED`, `PICOCLAW_TOOLS_EXEC_ENABLE_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_RISK_THRESHOLD`, `PICOCLAW_TOOLS_EXEC_ALLOW_REMOTE`, `PICOCLAW_TOOLS_EXEC_CUSTOM_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_CUSTOM_ALLOW_PATTERNS`, `PICOCLAW_TOOLS_EXEC_TIMEOUT_SECONDS`, `PICOCLAW_TOOLS_EXEC_MAX_OUTPUT_CHARS`, `PICOCLAW_TOOLS_EXEC_ENV_ALLOWLIST` (comma-separated). `env_set` is JSON-only because its value is structured.
+Environment variables use the `PICOCLAW_TOOLS_EXEC_` prefix: `PICOCLAW_TOOLS_EXEC_ENABLED`, `PICOCLAW_TOOLS_EXEC_ENABLE_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_ALLOW_REMOTE`, `PICOCLAW_TOOLS_EXEC_CUSTOM_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_CUSTOM_ALLOW_PATTERNS`, `PICOCLAW_TOOLS_EXEC_TIMEOUT_SECONDS`, `PICOCLAW_TOOLS_EXEC_MAX_OUTPUT_CHARS`, `PICOCLAW_TOOLS_EXEC_ENV_ALLOWLIST` (comma-separated). `env_set` is JSON-only because its value is structured.
 
-### Risk classification
+### Sandbox and policy
 
-When the built-in guard is enabled (`enable_deny_patterns: true`, the default), PicoClaw parses every Unix command with `mvdan.cc/sh/v3/syntax` before execution and classifies each simple command in the AST. Pipelines, `&&`/`||`/`;` lists, loops, functions and command substitutions are all walked. This catches indirection that regex deny lists cannot resolve, for example `x=rm; $x -rf /` or `"r"'m' -rf /`.
+Sandbox-first is the default (`isolation.mode: required`). The instance root is mounted read-only; the workspace and `runtime-user-env` are writable. If the platform backend is unavailable, exec fails closed instead of running unconfined. `off` is an explicit opt-out and `auto` allows a fallback to the static policy.
 
-On Unix the AST classifier is the **single source of truth for command danger**. The regex default deny set only covers shell constructs that hide a command from the AST: command substitution, pipe-to-shell and shell heredocs. Command names such as `sudo`, `chmod`, `git push` or `rm -rf` follow `risk_threshold`.
+The sandbox is the containment boundary. The static layer is intentionally small and best-effort:
 
-The built-in table assigns a base level to known commands and a small set of argument modifiers raises destructive verbs. Commands that are not listed are **unknown**: the caller decides whether to allow, review or block them.
+- the always-on hardline floor for catastrophic operations and self-protection;
+- the compact policy list enabled by `enable_deny_patterns` for workspace, repository and remote actions that remain possible inside the sandbox (recursive deletion, force push/reset/clean, destructive cloud and container verbs, process kills and privilege escalation);
+- `custom_deny_patterns` and `custom_allow_patterns` for operator rules.
 
-| Level | Meaning | Examples |
-|-------|---------|----------|
-| `low` | Read-only or informational | `ls`, `cat`, `grep`, `find`, `echo` |
-| `medium` | Writes files or reads the network | `cp`, `mv`, `tar`, `curl`, `git status` |
-| `high` | Destructive or system-wide side effects | `rm -r`, `chmod`, `git push`, `ssh`, `systemctl start` |
-| `critical` | Privilege escalation or always dangerous | `sudo`, `dd`, `mkfs`, `shutdown`, `rm -rf` |
+`custom_allow_patterns` is anchored to the whole command (`^(?:...)$`). A bare `git` pattern matches only the command `git`, not `git push --force`. It exempts the policy list; hardline and custom deny rules always win.
 
-Commands above `risk_threshold` are rejected before any process starts, with a structured message:
+The Unix workspace parser and the AST risk classifier were removed. Path containment is enforced by the mount/profile boundary, not by inspecting the command. Windows keeps the static path scanner because its restricted-token backend does not remap paths.
 
-```text
-Command blocked by risk classifier: command="chmod +x script.sh" risk_level=high threshold=medium reason=command risk exceeds configured threshold
-```
-
-A command that is not in the table, a dynamic command name, a shell that reads commands from stdin or a script file, and an unparseable command are classified as unknown. They are allowed by default. Set `enable_deny_patterns: false` to disable the built-in guard set.
-
-The classifier also:
-
-- classifies a command whose command word is dynamic (`"$cmd" -rf /`) as unknown; the default policy allows it;
-- parses a literal `sh -c '...'` / `bash -c '...'` script recursively, and treats a shell that reads commands from stdin or a script file as unknown;
-- parses a literal `trap '...'` action recursively, and treats an `xargs` invocation that launches a shell as unknown;
-- inspects common wrappers (`env`, `command`, `nohup`, `time`, `nice`, `timeout`, `xargs`, `watch`, `flock`, `chrt`, `taskset`, `busybox`, `runuser`, `setpriv`, `capsh`, `machinectl`, `lxc`, `incus`) and classifies the command they launch; `runuser -c` and `flock -c` command strings are parsed as shell scripts;
-- inspects the destructive verbs of `lxc`, `incus`, `machinectl` and `virsh` (for example `delete`, `shell`, `poweroff`, `destroy` and `qemu-monitor-command`);
-- treats `env -S` as unknown, because it splits a string into a command;
-- classifies process-detaching and namespace commands (`setsid`, `daemon`, `unshare`, `nsenter`, `bwrap`) as `high`. This is an approval signal, not a containment boundary: the exec tool's process scope is responsible for killing detached descendants.
-
-Argument modifiers are applied after flag normalization (`rm -rf`, `rm -fr` and `rm -r -f` are equivalent; `-XPOST` and `--request=POST` match their spaced flag+value forms). The built-in modifiers cover:
-
-- `rm`: `-r` is `high`, `-r -f` is `critical`;
-- `git`: `push` is `high`, `push --force` is `critical`, `reset --hard`, `clean -f` and `branch -D`/`-d` are `high`;
-- `systemctl` and `service`: state-changing verbs are `high`; `poweroff`, `reboot`, `halt`, `kexec` and `isolate` are `critical`;
-- `cryptsetup`, `zpool`, `zfs` and `mdadm`: destructive verbs are `critical`;
-- `lxc`, `incus`, `machinectl` and `virsh`: destructive verbs are `high` or `critical`;
-- `find`: `-delete` and `-exec*` are `high`;
-- `kill`: `-9` is `critical`;
-- `aws`: any `delete-*`, `rm`, `rb`, `mv`, `purge`, `terminate-instances`, `stop-instances` or `--delete` verb is `high`.
-
-`wipefs`, `blkdiscard`, `lvremove`, `dd`, `mkfs`, `fdisk`, `parted`, `mount`, `umount`, `shutdown`, `reboot`, `poweroff` and `halt` are always `critical`.
-
-`rm` is not in the default deny set: the risk levels above are the source of truth. The hardline rule for recursive deletion of `/` still applies.
-
-Custom threshold:
-
-```json
-{
-  "tools": {
-    "exec": {
-      "risk_threshold": "medium"
-    }
-  }
-}
-```
-
-`custom_allow_patterns` is anchored to the whole command (`^(?:...)$`). A bare `git` pattern matches only the command `git`, not `git push --force`. It exempts the default regex deny set only and does not affect the AST risk classifier. To allow a high-risk or unclassifiable command, raise `risk_threshold` globally. Hardline and custom deny patterns always win.
-
-Limits worth knowing:
-
-- The classifier is static. A dynamic argument that hides a flag (for example `curl "$FLAGS"`) cannot be inspected; a dynamic command word is treated as unknown and allowed. A dynamic operand for a destructive command (for example `rm "$TARGET"`) is still rejected.
-- External programs still run with the OS user's file permissions. Shell redirections are checked by the path guard, but a dynamically built redirection target and file access performed by an external binary are not sandboxed by this layer.
-- Windows is skipped because exec runs PowerShell there. The Windows-only regex floor keeps generic command patterns (`npm install -g`, `git push`, `docker run`, process kills, and so on) plus the PowerShell-specific checks described below.
+`restrict_to_workspace` still validates an explicit `cwd` and remembered working directories, so a command does not start in an unexpected directory. It no longer parses command arguments on Unix.
 
 ## Tool arguments
 
@@ -226,8 +173,8 @@ PICOCLAW_TOOLS_EXEC_ENABLED=false
 
 ## Functionality
 
-- **`enable_deny_patterns`**: Set to `false` to disable the optional built-in guard set (the shell-construct deny patterns and the AST risk classifier). The hardline floor and `custom_deny_patterns` still apply.
-- **`custom_deny_patterns`**: Add custom deny regex patterns. These are always enforced, even when `enable_deny_patterns` is `false`, and custom allow or unlock patterns cannot exempt them.
+- **`enable_deny_patterns`**: Set to `false` to disable the compact destructive-action policy list. The hardline floor and `custom_deny_patterns` still apply. The sandbox remains active.
+- **`custom_deny_patterns`**: Add custom deny regex patterns. These are always enforced, even when `enable_deny_patterns` is `false`, and custom allow patterns cannot exempt them.
 
 ## Hardline Always-On Patterns
 
@@ -238,37 +185,35 @@ Some catastrophic commands are an immutable floor: they stay blocked even when `
 - Raw disk access: `dd if=`, writing to `/dev/sd*` and other block devices
 - Recursive deletion of `/` such as `rm -rf /` or `rm -rf /*`
 - Power state changes: `shutdown`, `reboot`, `poweroff`
-- Self-protection: killing the PicoClaw process (`pkill`/`killall` with `picoclaw`, `PICOCLAW_SERVICE_NAME` or `$PICOCLAW_EXE`), stopping its systemd service, deleting the state directory (`~/.picoclaw`, `$HOME/.picoclaw`, `$PICOCLAW_HOME` or the resolved `PICOCLAW_HOME`), or deleting the running executable (including through `$PICOCLAW_EXE`, `which` or `command -v`). The executable, state directory and service name are resolved when the tool is created, so the floor follows the running instance.
+- Self-protection: killing the PicoClaw process (`pkill`/`killall` with `picoclaw`, `PICOCLAW_SERVICE_NAME` or `$PICOCLAW_EXE`), stopping its systemd service, deleting the state directory (`~/.picoclaw`, `$HOME/.picoclaw`, `$PICOCLAW_HOME` or the resolved `PICOCLAW_HOME`), or deleting the running executable (including through `$PICOCLAW_EXE`, `which` or `command -v`).
 
-Hardline and custom deny patterns are matched against a normalized command. Fixed shell obfuscation is resolved first: `$IFS`/`${IFS}` become spaces, ANSI-C `$'...'` strings are decoded, backslash-newline continuations are joined, and the AST exposes quote-spliced argv words. As a result, `r''m -rf /`, `rm${IFS}-rf${IFS}/` and `$'\x72\x6d' -rf /` are evaluated as `rm -rf /`. This normalization runs independently of `enable_deny_patterns`, so disabling the risk classifier does not disable the hardline floor.
+Hardline and custom deny patterns are matched against a normalized command: `$IFS`/`${IFS}` become spaces and backslash-newline continuations are joined. This normalization runs independently of `enable_deny_patterns`, so disabling the policy list does not disable the hardline floor. ANSI-C decoding and AST quote splicing were removed with the static parser; the sandbox contains those forms.
 
-## Workspace Restriction
+## Workspace Boundary
 
-When `agents.defaults.restrict_to_workspace` is `true` (the default), exec on Unix parses the command and validates it against the workspace before running it. Besides the absolute-path and `../` checks, this pass rejects:
+When `agents.defaults.restrict_to_workspace` is `true` (the default), an explicit `cwd` and a remembered working directory must resolve inside the workspace or an operator allow path. The sandbox enforces the filesystem boundary for command arguments:
 
-- Tilde and `$HOME` expansion, standalone or as a path prefix, including `${HOME:-...}`: `cat ~/.ssh/id_rsa`, `cat $HOME/.ssh/id_rsa`, `echo pwn > ~/pwn`, `echo pwn > $HOME/pwn`.
-- Parent traversal in directory positions, written without a slash: `cd ..`, `pushd ..`, `tar -C ..`, `git -C ..`, not only `../path`.
-- Directory changes through `cd` and `pushd` are validated, including paths that escape through symlinks. `cd -`, bare `cd` (home) and dynamic targets such as `cd "$DIR"` are rejected when they cannot be validated statically. `env -C`/`--chdir` is rejected under workspace restriction instead of tracked, and `pushd` is validated like `cd`; the directory stack starts empty in each exec shell, so `popd`/rotation cannot reach an unvalidated directory.
-- Relative operands are resolved against every directory the command entered, not only the workspace root. A second `cd` or a symlink under a subdirectory cannot be used to reach outside: `cd sub; cd link; cat secret.txt` and `cd sub; cat link/secret.txt` are rejected when `sub/link` points outside the workspace.
-- Assignments or unsets of `HOME`, `PWD`, `OLDPWD` and `CDPATH` are rejected under workspace restriction, so `$HOME`/`$PWD` always resolve against the policy values instead of a value the static pass did not see.
-- Dynamic redirection targets (`> "$OUT"`) and dynamic nested scripts.
-- Commands nested in `sh -c`/`bash -c`, shell heredoc scripts, `exec`, `find -exec`, and common wrappers (`command`, `builtin`, `env`, `timeout`, `xargs`, and similar). `eval` and `trap` are rejected because their command string cannot be followed reliably.
+- the instance root is read-only;
+- the workspace and `runtime-user-env` are writable;
+- absolute path arguments are read-only;
+- additional writable paths require `isolation.expose_paths`.
 
-Expansion uses the child shell's `HOME`. Quoted literals such as `echo '$HOME'` and `echo '~'` are not treated as paths, and web URLs are exempt from local path checks. `file:` URIs are rejected fail-closed because they name local files that the static pass cannot validate.
+Windows keeps the static path scanner because the Windows backend does not remap paths.
 
-This is a static best-effort layer, not an OS sandbox: child processes, scripts loaded after startup, file contents, dynamic operands and globs that expand to outside-pointing symlinks are outside its reach. Symlinks are resolved against the filesystem at validation time, so a symlink created or retargeted later in the same command is not visible to the static pass. Use containers, VMs, or a dedicated user for untrusted workloads. The AST pass runs only when workspace restriction is enabled, only for the command being executed, and keeps no persistent state, goroutines or polling timers. When the risk classifier is also enabled, both passes share one parse of the command; commands containing ANSI-C quoting or line continuations are re-parsed after normalization because those rewrites can change word boundaries.
+## Policy List
 
-## Default Blocked Shell Constructs
+With `enable_deny_patterns: true` the compact policy blocks, among others:
 
-On Unix the AST risk classifier is the source of truth for command danger. The regex default deny set only covers constructs it cannot inspect; these patterns are enabled by default and can be disabled with `enable_deny_patterns: false`:
+- recursive `rm`, `find -delete`/`-exec`, recursive `chmod`/`chown`;
+- `git reset --hard`, `git clean -f`, force pushes;
+- `kill`/`pkill`/`killall` and privilege escalation (`sudo`, `su`, `doas`, `pkexec`, `runuser`);
+- `terraform destroy`, `kubectl delete`, `helm uninstall`/`delete`;
+- AWS `delete-*`, `rm`, `rb`, `mv`, `purge`, `terminate-instances`, `stop-instances`;
+- `npm publish`, `docker rm`/`rmi`/`system prune`.
 
-- Command substitution: `$()`, backticks
-- Pipe to shell: `| sh`, `| bash` (and the other POSIX shells)
-- Shell heredoc: `sh <<EOF`, `bash <<'EOF'`
+The list is a policy check, not a sandbox. Commands it cannot recognize still run inside the OS boundary.
 
-Command-level dangers such as `sudo`, `chmod`, `chown`, `kill`, `git push`, `eval` and `source` are classified by the risk table. Use `risk_threshold` to tune them.
-
-Windows has no AST classifier, so its regex floor keeps the equivalent generic command patterns plus the PowerShell-specific checks: recursive `Remove-Item` (including `rm`/`ri`/`del` aliases), `Clear-Disk`, `Format-Volume`, `vssadmin delete shadows`, `bcdedit /set`, `reg delete`, `icacls /grant Everyone`, download-and-execute pipelines such as `iwr ... | iex`, `taskkill /F`, and `Stop-Process -Force`.
+Windows keeps the PowerShell-specific regex floor: recursive `Remove-Item`, `Clear-Disk`, `Format-Volume`, `vssadmin delete shadows`, `bcdedit /set`, `reg delete`, `icacls /grant Everyone`, download-and-execute pipelines such as `iwr ... | iex`, `taskkill /F`, and `Stop-Process -Force`.
 
 ## Repeated Blocked Commands
 
@@ -278,19 +223,11 @@ The streak starts over when a different command is blocked, when an allowed run 
 
 ## Known Architectural Limitation
 
-The exec guard only validates the top-level command sent to PicoClaw. It does **not** recursively inspect child
-processes spawned by build tools or scripts after that command starts running.
+The static policy only sees the top-level command sent to PicoClaw. It does **not** recursively inspect child
+processes spawned by build tools or scripts after that command starts running. The OS sandbox still contains those
+processes, but the workspace is writable by design, so a build script can modify files inside it.
 
-Examples of workflows that can bypass the direct command guard once the initial command is allowed:
-
-- `make run`
-- `go run ./cmd/...`
-- `cargo run`
-- `npm run build`
-
-This means the guard is useful for blocking obviously dangerous direct commands, but it is **not** a full sandbox for
-unreviewed build pipelines. If your threat model includes untrusted code in the workspace, use stronger isolation such
-as containers, VMs, or an approval flow around build-and-run commands.
+For untrusted build pipelines, use a stronger boundary such as a container or VM, or keep the workspace disposable.
 
 ## Configuration Example
 

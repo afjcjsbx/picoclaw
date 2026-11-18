@@ -16,7 +16,6 @@ import (
 	"github.com/sipeed/picoclaw/pkg/constants"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	fstools "github.com/sipeed/picoclaw/pkg/tools/fs"
-	"github.com/sipeed/picoclaw/pkg/tools/shellguard"
 )
 
 // maxOutputBufferSize caps the rolling output retained in memory per session.
@@ -63,23 +62,36 @@ type ExecTool struct {
 	baseEnvList    []string
 	state          *execStateStore
 	sessionManager *SessionManager
-	riskGuard      *shellguard.Guard
 	blockBreaker   *execBlockBreaker
 }
 
 var _ AsyncExecutor = (*ExecTool)(nil)
 
 var (
-	// defaultDenyPatterns is the optional Unix deny set. The AST risk
-	// classifier is the source of truth for command danger; this set only
-	// covers shell constructs that hide a command from the AST: command
-	// substitution, backticks, pipe-to-shell and shell heredocs. Command names
-	// such as sudo, chmod, git push or docker run are classified by risk.go.
-	defaultDenyPatterns = []*regexp.Regexp{
-		regexp.MustCompile(`\$\([^)]+\)`),
-		regexp.MustCompile("`[^`]+`"),
-		regexp.MustCompile(`\|&?\s*(?:sh|bash|zsh|dash|ksh|fish|csh|tcsh)\b`),
-		regexp.MustCompile(`\b(?:sh|bash|zsh|dash|ksh|fish|csh|tcsh)\b[^|;&\n]*<<`),
+	// policyDenyPatterns is the compact destructive-action policy that replaces
+	// the old risk table. It covers repository/workspace and remote operations
+	// that the sandbox cannot prevent because the workspace is writable and the
+	// network remains available. It is enabled with the rest of the default
+	// deny set and can be exempted by custom_allow_patterns.
+	policyDenyPatterns = []*regexp.Regexp{
+		regexp.MustCompile(`\brm\s+[^;|&\n]*(?:-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)\b`),
+		regexp.MustCompile(
+			`\bgit\s+(?:reset\s+--hard|clean\s+-[a-zA-Z]*f[a-zA-Z]*|` +
+				`push\s+(?:--force|-f)|push\s+--force-with-lease)\b`,
+		),
+		regexp.MustCompile(`\bfind\b[^;|&\n]*\s(?:-delete|-exec|-execdir|-ok)\b`),
+		regexp.MustCompile(`\b(?:chmod|chown)\s+[^;|&\n]*(?:-[a-zA-Z]*[rR]|--recursive)\b`),
+		regexp.MustCompile(`\b(?:kill|pkill|killall)\b`),
+		regexp.MustCompile(`\b(?:sudo|su|doas|pkexec|runuser)\b`),
+		regexp.MustCompile(`\bterraform\s+destroy\b`),
+		regexp.MustCompile(`\bkubectl\s+delete\b`),
+		regexp.MustCompile(`\bhelm\s+(?:uninstall|delete)\b`),
+		regexp.MustCompile(
+			`\baws\b[^;|&\n]*\b(?:delete-|rm\b|rb\b|mv\b|purge\b|` +
+				`terminate-instances\b|stop-instances\b)`,
+		),
+		regexp.MustCompile(`\bnpm\s+publish\b`),
+		regexp.MustCompile(`\bdocker\s+(?:rm|rmi|system\s+prune)\b`),
 	}
 
 	// hardlineDenyPatterns are catastrophic commands that stay blocked even when
@@ -102,7 +114,7 @@ var (
 		regexp.MustCompile(`\brm\s+(?:-{1,2}[a-z-]*\s+)*/(?:[\s*/.]|$)`),
 		// Recursive deletion of the directories that hold the OS, system
 		// binaries, user homes and the root account. Subdirectories remain
-		// governed by the risk classifier, so rm -rf /home/alice/build is not
+		// governed by the policy list, so rm -rf /home/alice/build is not
 		// caught here.
 		regexp.MustCompile(
 			`\brm\s+(?:-{1,2}[a-z-]*\s+)*/+` +
@@ -116,12 +128,10 @@ var (
 		regexp.MustCompile(`\b(?:shutdown|reboot|poweroff)\b`),
 	}
 
-	// windowsDenyPatterns contains the Windows-only regex floor. The AST risk
-	// classifier is POSIX-only and skipped on Windows, so the generic command
-	// patterns that risk.go covers on Unix stay here, next to the PowerShell
-	// specific patterns.
+	// windowsDenyPatterns contains the Windows-only regex floor, including the
+	// generic command patterns that the Unix policy list covers.
 	windowsDenyPatterns = []*regexp.Regexp{
-		// Generic command risks that risk.go classifies on Unix.
+		// Generic command risks covered by the Unix policy list.
 		regexp.MustCompile(`\bdel\s+/[fq]\b`),
 		regexp.MustCompile(`\brmdir\s+/s\b`),
 		regexp.MustCompile(`\bnpm\s+install\s+-g\b`),
@@ -131,8 +141,7 @@ var (
 		regexp.MustCompile(`\bgit\s+force\b`),
 		regexp.MustCompile(`\bssh\b.*@`),
 		regexp.MustCompile(`\b(?:kill|pkill|killall)\b`),
-		// The AST risk classifier is POSIX-only and skipped on Windows, so keep
-		// a regex floor for recursive/forced rm there.
+		// Recursive/forced rm floor for the Windows shell.
 		regexp.MustCompile(`\brm\s+-[rf]{1,2}\b`),
 		// [Text.Encoding] used to construct command strings at runtime.
 		// Matches [Text.Encoding] and [System.Text.Encoding] variants.
@@ -170,24 +179,6 @@ var (
 		// Forced process termination.
 		regexp.MustCompile(`\btaskkill(?:\.exe)?\b[^|;&\r\n]*\s/f\b`),
 		regexp.MustCompile(`\b(?:stop-process|spps)\b[^|;&\r\n]*\s-f(?:o(?:r(?:ce)?)?)?\b`),
-	}
-
-	// pathTraversalPattern catches parent-directory syntax that the Windows
-	// path scanner and dotted forms such as .../ still need byte-level
-	// matching for.
-	pathTraversalPattern = regexp.MustCompile(`\.\.(?:[\\/]\.\.)*[\\/]`)
-
-	// safePaths are kernel pseudo-devices that are always safe to reference in
-	// commands, regardless of workspace restriction. They contain no user data
-	// and cannot cause destructive writes.
-	safePaths = map[string]bool{
-		"/dev/null":    true,
-		"/dev/zero":    true,
-		"/dev/random":  true,
-		"/dev/urandom": true,
-		"/dev/stdin":   true,
-		"/dev/stdout":  true,
-		"/dev/stderr":  true,
 	}
 )
 
@@ -345,7 +336,7 @@ func NewExecToolWithConfig(
 	// Fail closed when no config is supplied. Callers that need remote exec
 	// must opt in explicitly through cfg.Tools.Exec.AllowRemote.
 	allowRemote := false
-	enableDefaultGuard := true
+	enableDefaultGuard := cfg == nil
 	var err error
 	if len(allowPaths) > 0 {
 		allowedPathPatterns = allowPaths[0]
@@ -355,20 +346,6 @@ func NewExecToolWithConfig(
 		execConfig := cfg.Tools.Exec
 		enableDefaultGuard = execConfig.EnableDenyPatterns
 		allowRemote = execConfig.AllowRemote
-		if enableDefaultGuard {
-			denyPatterns = append(denyPatterns, defaultDenyPatterns...)
-			if runtime.GOOS == "windows" {
-				denyPatterns = append(denyPatterns, windowsDenyPatterns...)
-			}
-		} else {
-			// Only the optional built-in default set is disabled here. The
-			// hardline floor and operator-defined custom deny rules still apply.
-			logger.WarnCF(
-				"tools",
-				"default deny patterns are disabled; hardline and custom deny patterns still apply",
-				nil,
-			)
-		}
 		if len(execConfig.CustomDenyPatterns) > 0 {
 			logger.InfoCF("tools", "using custom deny patterns", map[string]any{
 				"patterns": execConfig.CustomDenyPatterns,
@@ -384,11 +361,21 @@ func NewExecToolWithConfig(
 		if err != nil {
 			return nil, err
 		}
-	} else {
-		denyPatterns = append(denyPatterns, defaultDenyPatterns...)
+	}
+
+	if enableDefaultGuard {
+		denyPatterns = append(denyPatterns, policyDenyPatterns...)
 		if runtime.GOOS == "windows" {
 			denyPatterns = append(denyPatterns, windowsDenyPatterns...)
 		}
+	} else if cfg != nil {
+		// Only the optional policy list is disabled here. The hardline floor,
+		// operator-defined custom deny rules and the OS sandbox still apply.
+		logger.WarnCF(
+			"tools",
+			"default deny patterns are disabled; hardline and custom deny patterns still apply",
+			nil,
+		)
 	}
 
 	var timeout time.Duration
@@ -407,11 +394,6 @@ func NewExecToolWithConfig(
 		maxInlineResultChars = cfg.Tools.GetMaxInlineResultChars()
 		execEnvSet = cfg.Tools.Exec.EnvSet
 		execEnvAllowlist = cfg.Tools.Exec.EnvAllowlist
-	}
-
-	riskGuard, err := newRiskGuard(cfg, enableDefaultGuard)
-	if err != nil {
-		return nil, err
 	}
 
 	hardlinePatterns := make([]*regexp.Regexp, 0, len(hardlineDenyPatterns)+8)
@@ -436,7 +418,6 @@ func NewExecToolWithConfig(
 		baseEnvList:          buildEnvList(baseEnv),
 		state:                newExecStateStore(),
 		sessionManager:       getSessionManager(),
-		riskGuard:            riskGuard,
 		blockBreaker:         newExecBlockBreaker(),
 	}, nil
 }
@@ -601,7 +582,7 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 // executeScheduled runs a command for an already-authorized cron job. CronTool
 // has already checked tools.cron.command_allowed_remotes; this bypasses only
 // the interactive remote-channel gate for a run action. Every command guard
-// (deny patterns, hardline rules, risk checks, and allow patterns) still
+// (deny patterns, hardline rules, policy checks, and allow patterns) still
 // applies.
 func (t *ExecTool) executeScheduled(ctx context.Context, args map[string]any) *ToolResult {
 	return t.execute(ctx, args, true, nil)
@@ -692,8 +673,8 @@ func (t *ExecTool) completionResult(session *ProcessSession) *ToolResult {
 //  6. Working directory: explicit cwd, else the remembered cwd (revalidated),
 //     else the workspace. With restrict_to_workspace an explicit cwd must
 //     resolve inside the workspace.
-//  7. Command guard: guardCommandWithAnalysis runs the layered guard described
-//     in its comment (hardline, patterns, workspace and risk).
+//  7. Command guard: guardCommandContext runs the layered policy described in
+//     its comment (hardline, custom/default deny and the Windows scanner).
 //  8. Symlinks in cwd are resolved again right before execution to narrow the
 //     TOCTOU window between validation and cmd.Dir.
 //  9. State persistence: cwd is remembered only after the guard passed.
@@ -726,18 +707,12 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 	// matches a trailing '&'.
 	guardedCommand := command
 
-	// Parse once. The trailing-'&' converter, detach check, command guard and
-	// exit note all consume the same AST instead of re-parsing the text.
-	analysis := shellguard.Analyze(guardedCommand)
-
 	// On Unix, `sh -c "server &"` returns as soon as the job starts: a
 	// foreground call would report success while the process keeps running
 	// untracked and its output pipe is closed. Normalize the trailing operator
 	// into a tracked background session instead. Windows shells do not use '&'
 	// as a background operator, so the helper is a no-op there.
-	trailingConverted := false
-	if normalized, converted := normalizeTrailingBackgroundAmpersand(command, analysis, runtime.GOOS); converted {
-		trailingConverted = true
+	if normalized, converted := normalizeTrailingBackgroundAmpersand(command, runtime.GOOS); converted {
 		command = normalized
 		if !isBackground {
 			isBackground = true
@@ -778,9 +753,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 	// A foreground nohup/setsid/disown or an inner '&' leaves a process the
 	// session manager cannot track. The trailing '&' converter above already
 	// turned the unambiguous single-operator form into a tracked run.
-	if reason := untrackedDetachReason(
-		command, analysis, isBackground || promoteToBackground, trailingConverted,
-	); reason != "" {
+	if reason := untrackedDetachReason(command, isBackground || promoteToBackground); reason != "" {
 		return ErrorResult(reason)
 	}
 
@@ -832,7 +805,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 	// path would fail validation on the next call.
 	stateCwd := cwd
 
-	if guardError := t.guardCommandWithAnalysis(guardedCommand, cwd, analysis); guardError != "" {
+	if guardError := t.guardCommandContext(guardedCommand, cwd); guardError != "" {
 		return t.blockedResult(ctx, command, guardError)
 	}
 
@@ -872,7 +845,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 		)
 	}
 
-	return t.runSync(ctx, command, cwd, timeout, analysis)
+	return t.runSync(ctx, command, cwd, timeout)
 }
 
 // resolvedWorkspace returns the workspace with symlinks resolved, so paths

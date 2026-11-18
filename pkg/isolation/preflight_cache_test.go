@@ -9,7 +9,7 @@ import (
 
 func TestPreflightCacheInvalidatedByConfigure(t *testing.T) {
 	t.Setenv(config.EnvHome, filepath.Join(t.TempDir(), "home"))
-	t.Cleanup(func() { Configure(config.DefaultConfig()) })
+	t.Cleanup(func() { Configure(nil) })
 
 	base := config.DefaultConfig()
 

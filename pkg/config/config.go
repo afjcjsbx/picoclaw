@@ -183,9 +183,64 @@ func (c EvolutionConfig) AutoAppliesDrafts() bool {
 
 // IsolationConfig controls subprocess isolation for commands started by PicoClaw.
 // It is applied by the isolation package rather than by sandboxing the main process.
+// Isolation modes. "off" leaves child processes on the host, "auto" uses the
+// platform backend when it is available and otherwise falls back to the reduced
+// static guard, and "required" fails closed when the backend is unavailable.
+const (
+	IsolationModeOff      = "off"
+	IsolationModeAuto     = "auto"
+	IsolationModeRequired = "required"
+)
+
 type IsolationConfig struct {
+	// Mode is "off", "auto" or "required". Empty derives the mode from the
+	// deprecated Enabled field: true means required, false means off.
+	Mode string `json:"mode,omitempty"`
+	// Enabled is kept for backward compatibility. Use Mode for new configs.
+	// Normalized sets it to true for auto and required.
 	Enabled     bool         `json:"enabled,omitempty"`
 	ExposePaths []ExposePath `json:"expose_paths,omitempty"`
+}
+
+// Normalized validates the isolation mode and keeps the legacy Enabled field in
+// sync with it. Unknown values are rejected so a typo cannot silently disable a
+// security boundary.
+func (c IsolationConfig) Normalized() (IsolationConfig, error) {
+	mode := strings.ToLower(strings.TrimSpace(c.Mode))
+	if mode == "" {
+		if c.Enabled {
+			mode = IsolationModeRequired
+		} else {
+			mode = IsolationModeOff
+		}
+	}
+	switch mode {
+	case IsolationModeOff, IsolationModeAuto, IsolationModeRequired:
+	default:
+		return c, fmt.Errorf(
+			"isolation.mode %q must be %q, %q or %q; refusing to start without a valid sandbox mode",
+			c.Mode, IsolationModeOff, IsolationModeAuto, IsolationModeRequired,
+		)
+	}
+	c.Mode = mode
+	c.Enabled = mode != IsolationModeOff
+	return c, nil
+}
+
+// EffectiveMode returns the normalized mode without mutating the config.
+func (c IsolationConfig) EffectiveMode() string {
+	if c.Mode != "" {
+		return strings.ToLower(strings.TrimSpace(c.Mode))
+	}
+	if c.Enabled {
+		return IsolationModeRequired
+	}
+	return IsolationModeOff
+}
+
+// Active reports whether the config asks for an isolation backend.
+func (c IsolationConfig) Active() bool {
+	return c.EffectiveMode() != IsolationModeOff
 }
 
 // ExposePath describes a host path that should remain visible inside the isolated
@@ -1446,9 +1501,9 @@ type CronToolsConfig struct {
 
 // ExecConfig configures shell command execution.
 //
-// EnableDenyPatterns disables the optional built-in guard set: the Unix
-// shell-construct deny patterns and the AST risk classifier. Hardline patterns
-// and CustomDenyPatterns still apply when it is false.
+// EnableDenyPatterns disables the optional built-in policy set: shell-construct
+// patterns and the compact destructive-action list. Hardline patterns and
+// CustomDenyPatterns still apply when it is false.
 type ExecConfig struct {
 	ToolConfig          `         envPrefix:"PICOCLAW_TOOLS_EXEC_"`
 	EnableDenyPatterns  bool     `                                 json:"enable_deny_patterns"  env:"PICOCLAW_TOOLS_EXEC_ENABLE_DENY_PATTERNS"`
@@ -1458,10 +1513,6 @@ type ExecConfig struct {
 	TimeoutSeconds      int      `                                 json:"timeout_seconds"       env:"PICOCLAW_TOOLS_EXEC_TIMEOUT_SECONDS"`  // 0 means use default (180s)
 	MaxOutputChars      int      `                                 json:"max_output_chars"      env:"PICOCLAW_TOOLS_EXEC_MAX_OUTPUT_CHARS"` // 0 means use default (50000 chars)
 
-	// RiskThreshold is the highest risk level allowed when the built-in
-	// dangerous-command guard is enabled: low, medium, high or critical.
-	// Empty means medium.
-	RiskThreshold string `json:"risk_threshold,omitempty" env:"PICOCLAW_TOOLS_EXEC_RISK_THRESHOLD"`
 	// EnvSet lists variables always injected into exec child processes. Values
 	// are trusted configuration and override inherited variables, including
 	// PATH. It is not exposed as a tool argument; JSON only.
@@ -2097,6 +2148,11 @@ func LoadConfig(path string) (*Config, error) {
 
 	cfg.Session.ApplyDmScope()
 	cfg.Session.DeriveDmScope()
+
+	cfg.Isolation, err = cfg.Isolation.Normalized()
+	if err != nil {
+		return nil, err
+	}
 
 	return cfg, nil
 }

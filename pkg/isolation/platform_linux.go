@@ -12,12 +12,13 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/sipeed/picoclaw/pkg"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
 func applyPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, root string) error {
-	if !isolation.Enabled {
+	if !isolation.Active() {
 		return nil
 	}
 	// Bubblewrap is the only supported Linux backend right now. Fail closed when
@@ -64,13 +65,10 @@ func applyPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, roo
 	// arguments needed to preserve the original command semantics.
 	plan := BuildLinuxMountPlan(root, isolation.ExposePaths)
 	plan = appendLinuxCommandMountRules(plan, resolvedPath)
-	if execDir != "" {
-		plan = ensureLinuxMountRule(plan, execDir, execDir, "rw")
-		if resolved, resolveErr := filepath.EvalSymlinks(execDir); resolveErr == nil && resolved != execDir {
-			plan = ensureLinuxMountRule(plan, resolved, resolved, "rw")
-		}
-	}
-	plan = appendLinuxArgumentMounts(plan, originalArgs[1:])
+	// The effective working directory is not writable by itself. It is
+	// already writable when it lives under the workspace or runtime-user-env
+	// mount; otherwise the read-only root mount applies.
+	plan = appendLinuxArgumentMounts(plan, originalArgs[1:], root)
 	logger.DebugCF("isolation", "linux isolation mount plan",
 		map[string]any{
 			"root":        root,
@@ -261,17 +259,32 @@ func resolveLinuxCommandPath(originalPath, execDir string) (string, error) {
 	return filepath.Clean(filepath.Join(base, originalPath)), nil
 }
 
-func appendLinuxArgumentMounts(plan []MountRule, args []string) []MountRule {
+func appendLinuxArgumentMounts(plan []MountRule, args []string, root string) []MountRule {
+	writable := []string{
+		filepath.Join(root, pkg.WorkspaceName),
+		filepath.Join(root, "runtime-user-env"),
+	}
 	for _, arg := range args {
 		path, ok := linuxArgumentPath(arg)
 		if !ok {
 			continue
 		}
 		clean := filepath.Clean(path)
+		insideWritable := false
+		for _, dir := range writable {
+			if boundaryPathWithin(dir, clean) {
+				insideWritable = true
+				break
+			}
+		}
+		if insideWritable {
+			continue
+		}
 		if _, err := os.Stat(clean); err == nil {
 			// Absolute path arguments are exposed read-only: a directory passed
 			// on the command line must not become a writable hole in the
-			// sandbox. Writable locations come from expose_paths or the cwd.
+			// sandbox. Writable locations come only from the workspace,
+			// runtime-user-env and explicit expose_paths.
 			plan = ensureLinuxMountRule(plan, clean, clean, "ro")
 			if resolved, resolveErr := filepath.EvalSymlinks(clean); resolveErr == nil && resolved != clean {
 				plan = ensureLinuxMountRule(plan, resolved, resolved, "ro")
@@ -285,7 +298,7 @@ func appendLinuxArgumentMounts(plan []MountRule, args []string) []MountRule {
 			continue
 		}
 		if _, err := os.Stat(parent); err == nil {
-			plan = ensureLinuxMountRule(plan, parent, parent, "rw")
+			plan = ensureLinuxMountRule(plan, parent, parent, "ro")
 		}
 	}
 	return plan

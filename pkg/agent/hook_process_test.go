@@ -213,7 +213,7 @@ func TestAgentLoop_MountProcessHook_IsolationSupportsRelativeDirAndCommand(t *te
 	cfg := config.DefaultConfig()
 	cfg.Isolation.Enabled = true
 	isolation.Configure(cfg)
-	t.Cleanup(func() { isolation.Configure(config.DefaultConfig()) })
+	t.Cleanup(func() { isolation.Configure(nil) })
 
 	cwd, err := os.Getwd()
 	if err != nil {
