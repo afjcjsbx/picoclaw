@@ -49,14 +49,16 @@ func (al *AgentLoop) newAskUserTool(msgBus interfaces.MessageBus) *askusertools.
 }
 
 // deliverAskUserReply routes the current inbound message into a waiting
-// ask_user interaction for the same conversation. It returns true when the
-// message was consumed and must not start or steer a normal turn.
-func (al *AgentLoop) deliverAskUserReply(sessionKey string, msg bus.InboundMessage) bool {
+// ask_user interaction for the same conversation, agent, requester and
+// session. It returns true when the message was consumed and must not start
+// or steer a normal turn.
+func (al *AgentLoop) deliverAskUserReply(sessionKey, agentID string, msg bus.InboundMessage) bool {
 	al.mu.RLock()
 	broker := al.askUserBroker
 	al.mu.RUnlock()
 	if broker == nil {
 		return false
 	}
-	return broker.Deliver(askusertools.BrokerKey(msg.Channel, msg.ChatID, sessionKey), msg.Content)
+	key := askusertools.BrokerKey(msg.Channel, msg.ChatID, agentID, msg.SenderID, sessionKey)
+	return broker.Deliver(key, msg.Content)
 }

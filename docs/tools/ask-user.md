@@ -73,6 +73,13 @@ Type `skip` to skip this question or `cancel` to cancel.
 - `cancel` (case-insensitive, optional leading `/`) ends the batch with outcome
   `cancelled`. Answers already collected are preserved.
 
+The interaction is bound to the conversation **and to the sender who started
+the turn**. A reply from another participant of a group chat, from another
+agent, or from another session is not consumed by `ask_user`: it follows the
+normal routing rules and the pending question keeps waiting (until it times
+out). This prevents a different user or agent from answering on the requester's
+behalf.
+
 The adapter keeps the answers already confirmed and never sends later questions
 after a timeout. The timeout is configured with
 `tools.ask_user.timeout_seconds` (default `300`) and starts when the first

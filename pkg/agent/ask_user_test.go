@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"sync"
 	"testing"
@@ -134,4 +135,121 @@ func waitForOutboundContent(
 
 func askUserRecommendedSuffix() string {
 	return " (Recommended)"
+}
+
+type requesterBindingProvider struct {
+	mu    sync.Mutex
+	calls int
+	docs  []string
+}
+
+func (p *requesterBindingProvider) Chat(
+	_ context.Context,
+	messages []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.calls++
+	for _, message := range messages {
+		if message.Role == "tool" {
+			p.docs = append(p.docs, message.Content)
+		}
+	}
+	if p.calls == 1 {
+		return &providers.LLMResponse{
+			Content: "asking",
+			ToolCalls: []providers.ToolCall{{
+				ID:   "call-1",
+				Name: "ask_user",
+				Arguments: map[string]any{
+					"questions": []any{map[string]any{
+						"question": "Who answers?",
+						"choices":  []any{"A", "B"},
+					}},
+				},
+			}},
+			FinishReason: "tool_calls",
+		}, nil
+	}
+	return &providers.LLMResponse{Content: "done", FinishReason: "stop"}, nil
+}
+
+func (p *requesterBindingProvider) GetDefaultModel() string { return "requester-binding" }
+
+func (p *requesterBindingProvider) snapshot() (int, []string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.calls, append([]string(nil), p.docs...)
+}
+
+func TestAskUserOnlyAcceptsReplyFromRequester(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Tools.AskUser.TimeoutSeconds = 5
+	cfg.Agents.Defaults.MaxToolIterations = 5
+
+	msgBus := bus.NewMessageBus()
+	provider := &requesterBindingProvider{}
+	loop := NewAgentLoop(cfg, msgBus, provider)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = loop.Run(ctx) }()
+	defer loop.Stop()
+
+	message := func(senderID, content string) bus.InboundMessage {
+		return bus.InboundMessage{
+			Context: bus.InboundContext{
+				Channel:  "test",
+				ChatID:   "chat-requester",
+				ChatType: "group",
+				SenderID: senderID,
+			},
+			Sender:  bus.SenderInfo{Platform: "test", PlatformID: senderID},
+			Content: content,
+		}
+	}
+
+	if err := msgBus.PublishInbound(ctx, message("user-1", "please ask")); err != nil {
+		t.Fatal(err)
+	}
+	waitForOutboundContent(t, msgBus, 5*time.Second, func(content string) bool {
+		return strings.Contains(content, "Who answers?")
+	})
+
+	// Another group participant must not answer the pending question.
+	if err := msgBus.PublishInbound(ctx, message("user-2", "2")); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if calls, _ := provider.snapshot(); calls != 1 {
+		t.Fatalf("provider calls = %d before the requester answered", calls)
+	}
+
+	// Only the requester can complete the interaction.
+	if err := msgBus.PublishInbound(ctx, message("user-1", "1")); err != nil {
+		t.Fatal(err)
+	}
+	waitForOutboundContent(t, msgBus, 5*time.Second, func(content string) bool {
+		return content == "done"
+	})
+
+	_, docs := provider.snapshot()
+	if len(docs) == 0 {
+		t.Fatal("no tool result recorded")
+	}
+	var doc struct {
+		Responses []struct {
+			UserResponse any `json:"user_response"`
+		} `json:"responses"`
+	}
+	if err := json.Unmarshal([]byte(docs[len(docs)-1]), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.Responses) != 1 || doc.Responses[0].UserResponse != "A" {
+		t.Fatalf("responses = %+v, want A", doc.Responses)
+	}
 }

@@ -41,14 +41,22 @@ func NewBroker() *Broker {
 	return &Broker{waiters: make(map[string]*waiter)}
 }
 
-// BrokerKey identifies a conversation. channel+chatID is the routing key used
-// by inbound messages; the session key is only a fallback for callers that do
-// not provide chat context.
-func BrokerKey(channel, chatID, sessionKey string) string {
+// BrokerKey identifies an interaction. The routing key binds it to the
+// conversation, the asking agent, the requester and the session, so a reply
+// from another participant, another agent or another session cannot satisfy
+// the pending question. channel+chatID is the routing identity used by inbound
+// messages; the session key is a fallback for callers without chat context.
+func BrokerKey(channel, chatID, agentID, senderID, sessionKey string) string {
 	channel = strings.TrimSpace(channel)
 	chatID = strings.TrimSpace(chatID)
 	if channel != "" && chatID != "" {
-		return channel + "\x00" + chatID
+		return strings.Join([]string{
+			channel,
+			chatID,
+			strings.TrimSpace(agentID),
+			strings.TrimSpace(senderID),
+			strings.TrimSpace(sessionKey),
+		}, "\x00")
 	}
 	return strings.TrimSpace(sessionKey)
 }
@@ -178,7 +186,13 @@ func (a *ChatAdapter) Collect(ctx context.Context, questions []Question) (Adapte
 		}, nil
 	}
 
-	key := BrokerKey(channel, chatID, toolshared.ToolSessionKey(ctx))
+	key := BrokerKey(
+		channel,
+		chatID,
+		toolshared.ToolAgentID(ctx),
+		toolshared.ToolSenderID(ctx),
+		toolshared.ToolSessionKey(ctx),
+	)
 	waiting, err := a.broker.register(key)
 	if err != nil {
 		return AdapterResult{}, err

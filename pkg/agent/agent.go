@@ -255,7 +255,7 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 
 				// A pending ask_user interaction consumes the next user message
 				// for this conversation instead of starting/steering another turn.
-				if al.deliverAskUserReply(sessionKey, msg) {
+				if al.deliverAskUserReply(sessionKey, agentID, msg) {
 					continue
 				}
 

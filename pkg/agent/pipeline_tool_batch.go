@@ -299,6 +299,7 @@ func (b *toolBatch) prepare(i int) (*preparedCall, toolStep) {
 		ts.sessionKey,
 		ts.opts.Dispatch.SessionScope,
 	)
+	pc.execCtx = tools.WithToolSenderContext(pc.execCtx, ts.opts.SenderID)
 	if ts.parentTurnState != nil || ts.joinSubTurns {
 		// SubTurns and CLI root turns join their async children before
 		// finishing; other root turns keep the fire-and-forget follow-up.

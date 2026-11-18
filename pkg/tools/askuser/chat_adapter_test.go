@@ -13,7 +13,12 @@ import (
 func chatContext() context.Context {
 	ctx := toolshared.WithToolContext(context.Background(), "test", "chat-1")
 	ctx = toolshared.WithToolSessionContext(ctx, "agent", "session-1", nil)
+	ctx = toolshared.WithToolSenderContext(ctx, "sender-1")
 	return WithInteractiveSession(ctx)
+}
+
+func testBrokerKey() string {
+	return BrokerKey("test", "chat-1", "agent", "sender-1", "session-1")
 }
 
 type adapterRun struct {
@@ -79,7 +84,7 @@ func TestChatAdapterSingleChoiceAndRecommendedMarker(t *testing.T) {
 		t.Fatalf("prompt missing second option:\n%s", prompt)
 	}
 
-	if !broker.Deliver(BrokerKey("test", "chat-1", "session-1"), "1") {
+	if !broker.Deliver(testBrokerKey(), "1") {
 		t.Fatal("delivery failed")
 	}
 	run := waitResult(t, done)
@@ -104,11 +109,11 @@ func TestChatAdapterOpenAndMultiAnswers(t *testing.T) {
 
 	done, prompts := runAdapter(t, adapter, questions)
 	waitPrompt(t, prompts)
-	if !broker.Deliver(BrokerKey("test", "chat-1", "session-1"), "hello") {
+	if !broker.Deliver(testBrokerKey(), "hello") {
 		t.Fatal("delivery failed")
 	}
 	waitPrompt(t, prompts)
-	if !broker.Deliver(BrokerKey("test", "chat-1", "session-1"), "1, 3") {
+	if !broker.Deliver(testBrokerKey(), "1, 3") {
 		t.Fatal("delivery failed")
 	}
 
@@ -140,7 +145,7 @@ func TestChatAdapterMultiSelectSingleItemAndJSONArray(t *testing.T) {
 		}}
 		done, prompts := runAdapter(t, adapter, questions)
 		waitPrompt(t, prompts)
-		broker.Deliver(BrokerKey("test", "chat-1", "session-1"), test.reply)
+		broker.Deliver(testBrokerKey(), test.reply)
 		run := waitResult(t, done)
 		if run.err != nil {
 			t.Fatal(run.err)
@@ -160,7 +165,7 @@ func TestChatAdapterMultiSelectFreeTextIsSingleEntry(t *testing.T) {
 	}}
 	done, prompts := runAdapter(t, adapter, questions)
 	waitPrompt(t, prompts)
-	broker.Deliver(BrokerKey("test", "chat-1", "session-1"), "custom answer, with comma")
+	broker.Deliver(testBrokerKey(), "custom answer, with comma")
 	run := waitResult(t, done)
 	if run.err != nil {
 		t.Fatal(run.err)
@@ -186,7 +191,7 @@ func TestChatAdapterSkipAndCancel(t *testing.T) {
 		questions := []Question{{ID: "q0", Text: "Question"}}
 		done, prompts := runAdapter(t, adapter, questions)
 		waitPrompt(t, prompts)
-		broker.Deliver(BrokerKey("test", "chat-1", "session-1"), test.reply)
+		broker.Deliver(testBrokerKey(), test.reply)
 		run := waitResult(t, done)
 		if run.err != nil {
 			t.Fatal(run.err)
@@ -212,7 +217,7 @@ func TestChatAdapterTimeoutPreservesPartialAnswers(t *testing.T) {
 	}
 	done, prompts := runAdapter(t, adapter, questions)
 	waitPrompt(t, prompts)
-	broker.Deliver(BrokerKey("test", "chat-1", "session-1"), "saved")
+	broker.Deliver(testBrokerKey(), "saved")
 
 	run := waitResult(t, done)
 	if run.err != nil {
@@ -296,7 +301,7 @@ func TestChatAdapterRejectsConcurrentRequest(t *testing.T) {
 		t.Fatal("expected concurrent ask_user request to fail")
 	}
 
-	broker.Deliver(BrokerKey("test", "chat-1", "session-1"), "answer")
+	broker.Deliver(testBrokerKey(), "answer")
 	run := waitResult(t, done)
 	if run.err != nil {
 		t.Fatal(run.err)
@@ -339,7 +344,7 @@ func TestChatAdapterOtherAnswer(t *testing.T) {
 	}}
 	done, prompts := runAdapter(t, adapter, questions)
 	waitPrompt(t, prompts)
-	broker.Deliver(BrokerKey("test", "chat-1", "session-1"), "other: custom value")
+	broker.Deliver(testBrokerKey(), "other: custom value")
 	run := waitResult(t, done)
 	if run.err != nil {
 		t.Fatal(run.err)
@@ -358,5 +363,74 @@ func TestTimeoutNoticeFormat(t *testing.T) {
 	}
 	if got := timeoutNotice(90 * time.Second); got != "[user did not respond within 1m30s]" {
 		t.Fatalf("notice = %q", got)
+	}
+}
+
+func TestBrokerKeyScopesRequesterAgentAndSession(t *testing.T) {
+	base := BrokerKey("telegram", "chat-1", "agent-1", "user-1", "session-1")
+	if base != BrokerKey(" telegram ", " chat-1 ", " agent-1 ", " user-1 ", " session-1 ") {
+		t.Fatal("key is not stable under surrounding whitespace")
+	}
+	keys := map[string]bool{base: true}
+	for name, key := range map[string]string{
+		"other sender":  BrokerKey("telegram", "chat-1", "agent-1", "user-2", "session-1"),
+		"other agent":   BrokerKey("telegram", "chat-1", "agent-2", "user-1", "session-1"),
+		"other session": BrokerKey("telegram", "chat-1", "agent-1", "user-1", "session-2"),
+		"other chat":    BrokerKey("telegram", "chat-2", "agent-1", "user-1", "session-1"),
+	} {
+		if keys[key] {
+			t.Fatalf("%s produced a duplicate key", name)
+		}
+		keys[key] = true
+	}
+	if got := BrokerKey("", "", "", "user-1", " session "); got != "session" {
+		t.Fatalf("session fallback = %q", got)
+	}
+}
+
+func TestChatAdapterIgnoresRepliesFromOtherSenders(t *testing.T) {
+	broker := NewBroker()
+	adapter := NewChatAdapter(broker, nil, time.Second)
+	questions := []Question{{ID: "q0", Text: "Who answers?", Choices: []string{"A", "B"}}}
+
+	done, prompts := runAdapter(t, adapter, questions)
+	waitPrompt(t, prompts)
+
+	// A different participant in the same chat must not answer the question.
+	other := BrokerKey("test", "chat-1", "agent", "sender-2", "session-1")
+	if broker.Deliver(other, "2") {
+		t.Fatal("reply from another sender was consumed")
+	}
+	if !broker.Deliver(testBrokerKey(), "1") {
+		t.Fatal("reply from the requester was not delivered")
+	}
+	run := waitResult(t, done)
+	if run.err != nil {
+		t.Fatal(run.err)
+	}
+	if got := run.result.Answers["q0"]; got != "A" {
+		t.Fatalf("answer = %#v, want A", got)
+	}
+}
+
+func TestChatAdapterIgnoresRepliesForOtherAgentOrSession(t *testing.T) {
+	cases := map[string]string{
+		"other agent":   BrokerKey("test", "chat-1", "agent-2", "sender-1", "session-1"),
+		"other session": BrokerKey("test", "chat-1", "agent", "sender-1", "session-2"),
+	}
+	for name, key := range cases {
+		t.Run(name, func(t *testing.T) {
+			broker := NewBroker()
+			adapter := NewChatAdapter(broker, nil, 50*time.Millisecond)
+			done, prompts := runAdapter(t, adapter, []Question{{ID: "q0", Text: "Q"}})
+			waitPrompt(t, prompts)
+			if broker.Deliver(key, "answer") {
+				t.Fatal("reply with a different scope was consumed")
+			}
+			run := waitResult(t, done)
+			if run.result.Outcome != OutcomeTimedOut {
+				t.Fatalf("outcome = %s, want timed_out", run.result.Outcome)
+			}
+		})
 	}
 }

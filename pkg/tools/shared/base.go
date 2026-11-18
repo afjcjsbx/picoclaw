@@ -50,6 +50,7 @@ var (
 	ctxKeyAgentID          = &toolCtxKey{"agentID"}
 	ctxKeySessionKey       = &toolCtxKey{"sessionKey"}
 	ctxKeySessionScope     = &toolCtxKey{"sessionScope"}
+	ctxKeySenderID         = &toolCtxKey{"senderID"}
 )
 
 // WithToolContext returns a child context carrying channel and chatID.
@@ -86,6 +87,12 @@ func WithToolSessionContext(
 	ctx = context.WithValue(ctx, ctxKeySessionKey, sessionKey)
 	ctx = context.WithValue(ctx, ctxKeySessionScope, session.CloneScope(scope))
 	return ctx
+}
+
+// WithToolSenderContext returns a child context carrying the sender of the
+// inbound message that started the turn.
+func WithToolSenderContext(ctx context.Context, senderID string) context.Context {
+	return context.WithValue(ctx, ctxKeySenderID, senderID)
 }
 
 // ToolChannel extracts the channel from ctx, or "" if unset.
@@ -136,6 +143,15 @@ func ToolAgentID(ctx context.Context) string {
 // ToolSessionKey extracts the active turn's session key from ctx, or "" if unset.
 func ToolSessionKey(ctx context.Context) string {
 	v, ok := ctx.Value(ctxKeySessionKey).(string)
+	if !ok {
+		return ""
+	}
+	return v
+}
+
+// ToolSenderID extracts the active turn's sender ID from ctx, or "" if unset.
+func ToolSenderID(ctx context.Context) string {
+	v, ok := ctx.Value(ctxKeySenderID).(string)
 	if !ok {
 		return ""
 	}
