@@ -30,7 +30,7 @@ func newTestExecTool(workingDir string, restrict bool) (*ExecTool, error) {
 // guardCommand runs the command guard with a background context, so tests that
 // only assert the decision do not need to build one.
 func (t *ExecTool) guardCommand(command, cwd string) string {
-	return t.guardCommandContext(context.Background(), command, cwd)
+	return t.guardCommandContext(command, cwd)
 }
 
 func parseExecRunMeta(t *testing.T, forLLM string) map[string]any {
@@ -1597,7 +1597,6 @@ func TestShellTool_TimeoutWithPartialOutput(t *testing.T) {
 // commands from the remaining default deny shell constructs.
 func TestShellTool_CustomAllowPatterns(t *testing.T) {
 	cfg := &config.Config{
-		Approvals: config.ApprovalsConfig{Mode: config.ApprovalModeOff},
 		Tools: config.ToolsConfig{
 			Exec: config.ExecConfig{
 				EnableDenyPatterns:  true,
@@ -1636,7 +1635,6 @@ func TestShellTool_CustomAllowPatterns(t *testing.T) {
 	// The risk classifier is the source of truth for command danger now, so
 	// git push is blocked at the default medium threshold without any regex.
 	cfgNoAllow := &config.Config{
-		Approvals: config.ApprovalsConfig{Mode: config.ApprovalModeOff},
 		Tools: config.ToolsConfig{
 			Exec: config.ExecConfig{
 				EnableDenyPatterns: true,
@@ -3516,7 +3514,6 @@ func TestShellTool_InvalidCustomDenyPatternRejectedWhenDefaultsDisabled(t *testi
 
 func TestShellTool_DefaultDenyPatternsCanBeDisabled(t *testing.T) {
 	cfg := &config.Config{
-		Approvals: config.ApprovalsConfig{Mode: config.ApprovalModeOff},
 		Tools: config.ToolsConfig{
 			Exec: config.ExecConfig{EnableDenyPatterns: false},
 		},
@@ -3567,7 +3564,6 @@ func TestShellTool_HardlinePatternsAlwaysApply(t *testing.T) {
 // when the optional risk classifier and default deny patterns are disabled.
 func TestShellTool_HardlineASTBypass(t *testing.T) {
 	cfg := &config.Config{
-		Approvals: config.ApprovalsConfig{Mode: config.ApprovalModeOff},
 		Tools: config.ToolsConfig{
 			Exec: config.ExecConfig{
 				EnableDenyPatterns:  false,
@@ -3632,7 +3628,6 @@ func TestShellTool_HardlineASTBypass(t *testing.T) {
 // layer. Command-level danger comes from the risk classifier.
 func TestShellTool_DefaultDenyShellConstructs(t *testing.T) {
 	cfg := &config.Config{
-		Approvals: config.ApprovalsConfig{Mode: config.ApprovalModeOff},
 		Tools: config.ToolsConfig{
 			Exec: config.ExecConfig{
 				EnableDenyPatterns: true,
@@ -3751,7 +3746,6 @@ func TestShellTool_SelfProtectionHardline(t *testing.T) {
 	t.Setenv(config.EnvServiceName, "pico-agent")
 
 	cfg := &config.Config{
-		Approvals: config.ApprovalsConfig{Mode: config.ApprovalModeOff},
 		Tools: config.ToolsConfig{
 			Exec: config.ExecConfig{
 				EnableDenyPatterns:  false,
@@ -3833,7 +3827,6 @@ func TestShellTool_BackticksInsideQuotedHeredocAreAllowed(t *testing.T) {
 // skip a real command on the following lines.
 func TestShellTool_HeredocLookalikeDoesNotHideCommands(t *testing.T) {
 	cfg := &config.Config{
-		Approvals: config.ApprovalsConfig{Mode: config.ApprovalModeOff},
 		Tools: config.ToolsConfig{
 			Exec: config.ExecConfig{
 				EnableDenyPatterns: true,

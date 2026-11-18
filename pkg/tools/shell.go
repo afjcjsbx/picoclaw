@@ -60,17 +60,12 @@ type ExecTool struct {
 	// baseEnv is the lookup view for the command guard (HOME, CDPATH).
 	// baseEnvList is the same data pre-rendered and sorted for runEnv, so a
 	// command does not rebuild and sort the environment on every call.
-	baseEnv          map[string]string
-	baseEnvList      []string
-	state            *execStateStore
-	sessionManager   *SessionManager
-	riskGuard        *shellguard.Guard
-	approvalEnabled  bool
-	approvalReviewer approvalReviewer
-	// approvalOnEscalate is config.ApprovalEscalateBlock or
-	// config.ApprovalEscalateApprove; an empty value blocks escalations.
-	approvalOnEscalate string
-	blockBreaker       *execBlockBreaker
+	baseEnv        map[string]string
+	baseEnvList    []string
+	state          *execStateStore
+	sessionManager *SessionManager
+	riskGuard      *shellguard.Guard
+	blockBreaker   *execBlockBreaker
 }
 
 var _ AsyncExecutor = (*ExecTool)(nil)
@@ -353,7 +348,7 @@ func NewExecToolWithConfig(
 	// must opt in explicitly through cfg.Tools.Exec.AllowRemote.
 	allowRemote := false
 	enableDefaultGuard := true
-	approvalConfig := config.ApprovalsConfig{}
+	var err error
 	if len(allowPaths) > 0 {
 		allowedPathPatterns = allowPaths[0]
 	}
@@ -362,11 +357,6 @@ func NewExecToolWithConfig(
 		execConfig := cfg.Tools.Exec
 		enableDefaultGuard = execConfig.EnableDenyPatterns
 		allowRemote = execConfig.AllowRemote
-		normalized, err := cfg.Approvals.Normalized()
-		if err != nil {
-			return nil, fmt.Errorf("approvals: %w", err)
-		}
-		approvalConfig = normalized
 		if enableDefaultGuard {
 			denyPatterns = append(denyPatterns, defaultDenyPatterns...)
 			if runtime.GOOS == "windows" {
@@ -427,29 +417,9 @@ func NewExecToolWithConfig(
 		execEnvAllowlist = cfg.Tools.Exec.EnvAllowlist
 	}
 
-	smartApprovals := approvalConfig.Mode == config.ApprovalModeSmart
-
-	// Smart approvals need the AST classifier even when the optional default
-	// guard set is disabled; otherwise unknown commands cannot be detected.
-	riskGuard, err := newRiskGuard(cfg, enableDefaultGuard || smartApprovals)
+	riskGuard, err := newRiskGuard(cfg, enableDefaultGuard)
 	if err != nil {
 		return nil, err
-	}
-
-	var reviewer approvalReviewer
-	if smartApprovals {
-		guardian, guardianErr := newApprovalGuardian(cfg, approvalConfig)
-		if guardianErr != nil {
-			// Keep safe commands working, but fail closed for every command
-			// that needs a second opinion.
-			logger.WarnCF(
-				"tools.approval",
-				"smart approvals enabled but the Guardian is unavailable; risky commands will be rejected",
-				map[string]any{"error": guardianErr.Error()},
-			)
-		} else if guardian != nil {
-			reviewer = guardian
-		}
 	}
 
 	hardlinePatterns := make([]*regexp.Regexp, 0, len(hardlineDenyPatterns)+8)
@@ -476,9 +446,6 @@ func NewExecToolWithConfig(
 		state:                newExecStateStore(),
 		sessionManager:       getSessionManager(),
 		riskGuard:            riskGuard,
-		approvalEnabled:      smartApprovals,
-		approvalReviewer:     reviewer,
-		approvalOnEscalate:   approvalConfig.OnEscalate,
 		blockBreaker:         newExecBlockBreaker(),
 	}, nil
 }
@@ -734,8 +701,8 @@ func (t *ExecTool) completionResult(session *ProcessSession) *ToolResult {
 //  6. Working directory: explicit cwd, else the remembered cwd (revalidated),
 //     else the workspace. With restrict_to_workspace an explicit cwd must
 //     resolve inside the workspace.
-//  7. Command guard: guardCommandContext runs the layered guard described in
-//     its comment (hardline, patterns, workspace, risk and smart approvals).
+//  7. Command guard: guardCommandWithAnalysis runs the layered guard described
+//     in its comment (hardline, patterns, workspace and risk).
 //  8. Symlinks in cwd are resolved again right before execution to narrow the
 //     TOCTOU window between validation and cmd.Dir.
 //  9. State persistence: cwd is remembered only after the guard passed.
@@ -874,7 +841,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 	// path would fail validation on the next call.
 	stateCwd := cwd
 
-	if guardError := t.guardCommandWithAnalysis(ctx, guardedCommand, cwd, analysis); guardError != "" {
+	if guardError := t.guardCommandWithAnalysis(guardedCommand, cwd, analysis); guardError != "" {
 		return t.blockedResult(ctx, command, guardError)
 	}
 

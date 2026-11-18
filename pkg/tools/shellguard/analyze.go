@@ -30,8 +30,7 @@ type Analysis struct {
 
 // Analyze parses command once and derives the forms the guard layers need.
 // A parse error leaves File and RiskFile nil; the workspace pass rejects
-// unparseable input, while the risk pass marks it unknown (allowed by default,
-// reviewable by smart approvals).
+// unparseable input, while the risk pass marks it unknown (allowed by default).
 func Analyze(command string) Analysis {
 	normalized := normalizeForParse(command)
 	file, err := Parse(command)

@@ -653,13 +653,6 @@
       "approval_timeout_ms": 60000
     }
   },
-  "approvals": {
-    "_comment": "Smart approvals review exec commands whose risk cannot be classified with an auxiliary Guardian model from model_list. They are opt-in: set mode to 'smart' to enable the Guardian; the default 'off' keeps the static guards as the final decision without an extra model call. on_escalate controls an uncertain Guardian verdict: 'block' (default) rejects the command, 'approve' runs it. Guardian/provider failures always block.",
-    "mode": "off",
-    "model": "",
-    "smart_timeout_seconds": 20,
-    "on_escalate": "block"
-  },
   "events": {
     "logging": {
       "enabled": true,

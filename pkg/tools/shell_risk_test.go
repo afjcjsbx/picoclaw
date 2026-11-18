@@ -13,8 +13,7 @@ import (
 func riskTestTool(t *testing.T, exec config.ExecConfig) *ExecTool {
 	t.Helper()
 	cfg := &config.Config{
-		Approvals: config.ApprovalsConfig{Mode: config.ApprovalModeOff},
-		Tools:     config.ToolsConfig{Exec: exec},
+		Tools: config.ToolsConfig{Exec: exec},
 	}
 	cfg.Tools.Exec.EnableDenyPatterns = true
 	tool, err := NewExecToolWithConfig(t.TempDir(), false, cfg)
@@ -311,7 +310,6 @@ func TestShellTool_CustomUnlockPatternsKeepWorkspaceBoundary(t *testing.T) {
 
 	workspace := t.TempDir()
 	cfg := &config.Config{
-		Approvals: config.ApprovalsConfig{Mode: config.ApprovalModeOff},
 		Tools: config.ToolsConfig{Exec: config.ExecConfig{
 			EnableDenyPatterns:   true,
 			CustomUnlockPatterns: []string{`^sh .*$`},
@@ -467,7 +465,6 @@ func TestShellTool_RiskDisabledWithDefaultDenyPatterns(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Config{
-		Approvals: config.ApprovalsConfig{Mode: config.ApprovalModeOff},
 		Tools: config.ToolsConfig{
 			Exec: config.ExecConfig{EnableDenyPatterns: false},
 		},

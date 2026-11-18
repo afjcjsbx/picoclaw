@@ -70,17 +70,16 @@ func NewGuard(
 
 // Assessment is the static risk evaluation of a command. Unknown marks a
 // command that cannot be classified statically (dynamic command names, opaque
-// shells, or parse errors); smart approval routes those to the Guardian model,
-// while the default policy allows them.
+// shells, or parse errors); the default policy allows them.
 type Assessment struct {
 	Level   RiskLevel
 	Command string
 	Reason  string
 	Unknown bool
-	// Reject marks a command that must be blocked even in smart-approval mode.
-	// It is used for constructs the static guards cannot validate, such as a
-	// dynamic operand to a destructive command. Unlike Unknown, Reject never
-	// goes to the Guardian model.
+	// Reject marks a command that must be blocked even when the risk level
+	// would otherwise be allowed. It is used for constructs the static guards
+	// cannot validate, such as a dynamic operand to a destructive command.
+	// Unlike Unknown, Reject is never allowed by the default policy.
 	Reject bool
 }
 
@@ -327,8 +326,7 @@ func (g *Guard) classify(words []word) Assessment {
 // destructiveOperandCommands can delete, overwrite or change the permissions
 // of a path named by an operand. A dynamic operand for one of these commands
 // cannot be resolved statically: the shell may expand it to any path outside
-// the workspace, so the command is rejected instead of being sent to the
-// Guardian.
+// the workspace, so the command is rejected.
 var destructiveOperandCommands = map[string]bool{
 	"rm":         true,
 	"rmdir":      true,
@@ -395,8 +393,7 @@ func (g *Guard) assessShell(name string, words []word, depth int) Assessment {
 		return g.assessScript(invocation.script.text, depth+1)
 	}
 	// A script file named on the command line stays opaque: its contents are
-	// not read or classified, so the command fails closed and smart approvals
-	// can review it when enabled.
+	// not read or classified, so the command is treated as unknown.
 	return unknownAssessment(
 		wordTexts(words),
 		"shell reads commands from stdin or a script file that cannot be inspected",
@@ -518,7 +515,7 @@ func unknownAssessment(args []string, reason string) Assessment {
 }
 
 // preferAssessment keeps the highest known risk, but always lets an unknown
-// command win: it needs the Guardian regardless of the numeric level.
+// command win: its risk is unresolved, so the numeric level must not mask it.
 func preferAssessment(current, candidate Assessment) Assessment {
 	switch {
 	case candidate.Reject && !current.Reject:

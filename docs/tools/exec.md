@@ -11,8 +11,8 @@ The exec tool is used to execute shell commands.
 | `enable_deny_patterns` | bool | `true` | Enable the built-in shell-construct deny set (command substitution, pipe-to-shell, shell heredocs) and the AST risk classifier |
 | `custom_deny_patterns` | string[] | `[]` | Additional deny patterns (regular expressions); always enforced and they take priority over allow rules |
 | `custom_allow_patterns` | string[] | `[]` | Full-command allow patterns (regular expressions, anchored automatically). They exempt only the built-in shell-construct deny set. They do not exempt the AST risk classifier; hardline and custom deny patterns still win |
-| `custom_unlock_patterns` | string[] | `[]` | Full-command unlock patterns (regular expressions, anchored automatically). A match skips the default deny set, the AST risk classifier and smart approvals, so an explicitly trusted command runs even when it is critical or unclassifiable. Hardline, custom deny and the workspace boundary still apply |
-| `risk_threshold` | string | `"medium"` | Highest risk level the AST classifier allows: `low`, `medium`, `high` or `critical`. Part of the built-in guard set, so it is inactive when `enable_deny_patterns` is `false` unless `approvals.mode` is `smart`. Empty means `medium` |
+| `custom_unlock_patterns` | string[] | `[]` | Full-command unlock patterns (regular expressions, anchored automatically). A match skips the default deny set and the AST risk classifier, so an explicitly trusted command runs even when it is critical or unclassifiable. Hardline, custom deny and the workspace boundary still apply |
+| `risk_threshold` | string | `"medium"` | Highest risk level the AST classifier allows: `low`, `medium`, `high` or `critical`. Part of the built-in guard set, so it is inactive when `enable_deny_patterns` is `false`. Empty means `medium` |
 | `risk_overrides` | object | `{}` | Base risk level per command (command name to level), replacing the built-in table. Argument modifiers can still elevate it |
 | `arg_modifiers` | object | `{}` | Extra argument-aware risk elevations per command. Every listed token must be present; the highest matching level wins |
 | `allow_remote` | bool | `false` | When `false`, exec only accepts commands that originate from internal channels (`cli`, `system`, `subagent`). Remote channels are then blocked (fail-closed): an empty channel is also rejected. Set it to `true` only when remote command execution is explicitly intended |
@@ -24,17 +24,6 @@ The exec tool is used to execute shell commands.
 `allow_remote` controls direct exec calls. Scheduled cron command jobs are
 authorized by `tools.cron.command_allowed_remotes` instead and are not blocked by
 `allow_remote`.
-
-Smart approvals are configured in a top-level `approvals` block, not under `tools.exec`:
-
-| Config | Type | Default | Description |
-|--------|------|---------|-------------|
-| `approvals.mode` | string | `"off"` | `"off"` (default) keeps the static guards as the final decision. `"smart"` asks an auxiliary Guardian model to review commands whose risk the classifier cannot resolve |
-| `approvals.model` | string | `""` | Guardian model by `model_list` alias or `provider/model` reference. Empty uses `agents.defaults.model_name` |
-| `approvals.smart_timeout_seconds` | int | `20` | Per-review timeout, maximum `600`. A timed-out review is a review failure, so the command is rejected |
-| `approvals.on_escalate` | string | `"block"` | What to do when the Guardian answers `ESCALATE` (or any unrecognized verdict): `"block"` rejects the command, `"approve"` runs it. Guardian initialization/provider failures always reject it |
-
-Environment variables use the `PICOCLAW_APPROVALS_` prefix: `PICOCLAW_APPROVALS_MODE`, `PICOCLAW_APPROVALS_MODEL`, `PICOCLAW_APPROVALS_SMART_TIMEOUT_SECONDS`, `PICOCLAW_APPROVALS_ON_ESCALATE`.
 
 Environment variables use the `PICOCLAW_TOOLS_EXEC_` prefix: `PICOCLAW_TOOLS_EXEC_ENABLED`, `PICOCLAW_TOOLS_EXEC_ENABLE_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_RISK_THRESHOLD`, `PICOCLAW_TOOLS_EXEC_ALLOW_REMOTE`, `PICOCLAW_TOOLS_EXEC_CUSTOM_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_CUSTOM_ALLOW_PATTERNS`, `PICOCLAW_TOOLS_EXEC_CUSTOM_UNLOCK_PATTERNS`, `PICOCLAW_TOOLS_EXEC_TIMEOUT_SECONDS`, `PICOCLAW_TOOLS_EXEC_MAX_OUTPUT_CHARS`, `PICOCLAW_TOOLS_EXEC_ENV_ALLOWLIST` (comma-separated). `env_set`, `risk_overrides` and `arg_modifiers` are JSON-only because their values are structured.
 
@@ -57,11 +46,11 @@ Commands above `risk_threshold` are rejected before any process starts, with a s
 Command blocked by risk classifier: command="chmod +x script.sh" risk_level=high threshold=medium reason=command risk exceeds configured threshold
 ```
 
-A dynamic command name, a shell that reads commands from stdin or a script file, and an unparseable command are classified as unknown. They are allowed by default; with `approvals.mode: "smart"` they are sent to the Guardian. Set `enable_deny_patterns: false` to disable the built-in guard set, unless smart approvals are enabled (they keep the Unix classifier active for the Guardian gate).
+A dynamic command name, a shell that reads commands from stdin or a script file, and an unparseable command are classified as unknown. They are allowed by default. Set `enable_deny_patterns: false` to disable the built-in guard set.
 
 The classifier also:
 
-- classifies a command whose command word is dynamic (`"$cmd" -rf /`) as unknown; the default policy allows it, while smart approvals can review it;
+- classifies a command whose command word is dynamic (`"$cmd" -rf /`) as unknown; the default policy allows it;
 - parses a literal `sh -c '...'` / `bash -c '...'` script recursively, and treats a shell that reads commands from stdin or a script file as unknown;
 - parses a literal `trap '...'` action recursively, and treats an `xargs` invocation that launches a shell as unknown;
 - inspects common wrappers (`env`, `command`, `nohup`, `time`, `nice`, `timeout`, `xargs`, `watch`, `flock`, `chrt`, `taskset`, `busybox`, `runuser`, `setpriv`, `capsh`, `machinectl`, `lxc`, `incus`) and classifies the command they launch; `runuser -c` and `flock -c` command strings are parsed as shell scripts;
@@ -110,7 +99,7 @@ Custom thresholds and modifiers:
 
 `custom_allow_patterns` and `custom_unlock_patterns` are anchored to the whole command (`^(?:...)$`). A bare `git` pattern matches only the command `git`, not `git push --force`. `custom_allow_patterns` exempts the default regex deny set only and does not affect the AST risk classifier. To allow a high-risk or unclassifiable command, use `custom_unlock_patterns` for that exact command, or tune `risk_threshold`/`risk_overrides` globally. Hardline and custom deny patterns always win.
 
-`custom_unlock_patterns` is the explicit per-command override. A matching command skips the default deny set, the AST risk classifier and smart approvals, so it runs even when it would be classified as critical or as unknown. It does not bypass hardline patterns, custom deny patterns or the workspace boundary. Use an exact, anchored pattern for the trusted command; a broad pattern such as `.*` unlocks every command that does not hit the hardline or custom deny floor.
+`custom_unlock_patterns` is the explicit per-command override. A matching command skips the default deny set and the AST risk classifier, so it runs even when it would be classified as critical or as unknown. It does not bypass hardline patterns, custom deny patterns or the workspace boundary. Use an exact, anchored pattern for the trusted command; a broad pattern such as `.*` unlocks every command that does not hit the hardline or custom deny floor.
 
 ```json
 {
@@ -126,39 +115,9 @@ Configurations that need to allow a command the risk classifier rejects should u
 
 Limits worth knowing:
 
-- The classifier is static. A dynamic argument that hides a flag (for example `curl "$FLAGS"`) cannot be inspected; a dynamic command word is treated as unknown and allowed unless smart approvals reviews it. A dynamic operand for a destructive command (for example `rm "$TARGET"`) is still rejected.
+- The classifier is static. A dynamic argument that hides a flag (for example `curl "$FLAGS"`) cannot be inspected; a dynamic command word is treated as unknown and allowed. A dynamic operand for a destructive command (for example `rm "$TARGET"`) is still rejected.
 - External programs still run with the OS user's file permissions. Shell redirections are checked by the path guard, but a dynamically built redirection target and file access performed by an external binary are not sandboxed by this layer.
 - Windows is skipped because exec runs PowerShell there. The Windows-only regex floor keeps the generic command patterns that the AST covers on Unix (`npm install -g`, `git push`, `docker run`, process kills, and so on) plus the PowerShell-specific checks described below.
-
-### Smart approvals
-
-`approvals.mode` defaults to `"off"`: the static guards are the final decision and exec makes no extra model call. Unknown commands run in this mode. Set it to `"smart"` to add a second opinion only for commands that the static guards cannot classify, without asking a model about every command:
-
-1. **Hardline and custom deny rules stay final.** Catastrophic operations such as `rm -rf /`, recursive deletion of `/etc`, `/usr`, `/home` or `/root`, `mkfs`, `dd if=`, `shutdown`, `reboot`, `poweroff`, fork bombs and `kill -1` are rejected directly. The Guardian is never consulted for them.
-2. **Default deny shell-construct hits stay blocked.** A command caught by the built-in regex set is rejected even in smart mode; the Guardian only reviews commands the risk classifier cannot resolve.
-3. **Known risk levels keep following `risk_threshold`.** A command at or above `risk_threshold` is rejected even in smart mode, and one below it is allowed. The Guardian is not consulted for known risk levels.
-4. **Only unknown commands are reviewed.** On Unix, dynamic command names, opaque shells and unparseable scripts are flagged as unknown and sent to the Guardian; with approvals off they are allowed.
-5. **Workspace and path checks still run first.** The Guardian cannot approve a command that tries to escape the workspace.
-6. **The Guardian answers with one word.** `APPROVE` runs the command and `DENY` blocks it. `ESCALATE` follows `approvals.on_escalate`: `"block"` (default) rejects the command because manual approval is not implemented yet, while `"approve"` runs it. Any other response is treated as `ESCALATE`. An unavailable Guardian and provider/review errors always reject the command, even with `on_escalate: "approve"`.
-
-Before the command reaches the model, unquoted shell comments are removed and a literal `</command>` is neutralized. Comment removal uses the shell AST, so `#` inside quotes or heredoc bodies is preserved; a command that does not parse is reviewed verbatim. Commands above 16 KiB are rejected as a review failure without a model call, so prompt size, latency and token cost stay bounded.
-
-If the Guardian cannot be initialized or the review fails, the command is rejected (fail-closed). Safe commands still run; only commands that need a second opinion are blocked.
-
-```json
-{
-  "approvals": {
-    "mode": "smart",
-    "model": "glm-4.7",
-    "smart_timeout_seconds": 20,
-    "on_escalate": "block"
-  }
-}
-```
-
-`on_escalate: "approve"` deliberately removes the fail-closed behavior for the Guardian's uncertainty verdict: an uncertain or unparseable answer lets the command run. Use it only when a blocked workflow is worse than running a command the Guardian could not clear. Hardline patterns, custom deny rules, the workspace boundary and the risk threshold still run before the Guardian, and review failures still block.
-
-The Guardian is a separate, short, non-streaming chat call: `temperature=0`, `max_tokens=16`, reasoning disabled where the provider supports it. When `approvals.model` is empty, smart mode reuses the agent's primary provider instead of creating a second client; a dedicated provider is created lazily only when a different model is configured, and only on the first unknown command. Enabling it with `enable_deny_patterns: false` still keeps the Unix AST classifier active for the smart gate. Windows has no AST classifier, so no command is marked unknown there and smart mode makes no model calls.
 
 ## Tool arguments
 

@@ -345,10 +345,6 @@ func validateConfig(cfg *config.Config) []string {
 		errs = append(errs, err.Error())
 	}
 
-	if _, err := cfg.Approvals.Normalized(); err != nil {
-		errs = append(errs, "approvals: "+err.Error())
-	}
-
 	// Gateway port range
 	if cfg.Gateway.Port != 0 && (cfg.Gateway.Port < 1 || cfg.Gateway.Port > 65535) {
 		errs = append(errs, fmt.Sprintf("gateway.port %d is out of valid range (1-65535)", cfg.Gateway.Port))

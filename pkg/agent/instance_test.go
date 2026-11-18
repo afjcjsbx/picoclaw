@@ -444,7 +444,6 @@ func TestNewAgentInstance_ExecUsesWriteAllowPathsOnly(t *testing.T) {
 	pattern := `^` + regexp.QuoteMeta(outside) + `(?:/|$)`
 	newAgent := func(allowRead, allowWrite []string) *AgentInstance {
 		cfg := &config.Config{
-			Approvals: config.ApprovalsConfig{Mode: config.ApprovalModeOff},
 			Agents: config.AgentsConfig{
 				Defaults: config.AgentDefaults{
 					Workspace:           workspace,

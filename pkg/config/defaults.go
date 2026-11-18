@@ -89,11 +89,6 @@ func DefaultConfig() *Config {
 				ApprovalTimeoutMS:    60000,
 			},
 		},
-		Approvals: ApprovalsConfig{
-			Mode:                ApprovalModeOff,
-			SmartTimeoutSeconds: DefaultApprovalSmartTimeoutSeconds,
-			OnEscalate:          ApprovalEscalateBlock,
-		},
 		ModelList: []*ModelConfig{
 			// ============================================
 			// Add your API key to the model you want to use

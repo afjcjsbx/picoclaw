@@ -45,7 +45,6 @@ type Config struct {
 	Gateway   GatewayConfig   `json:"gateway"             yaml:"-"`
 	Events    EventsConfig    `json:"events,omitempty"    yaml:"-"`
 	Hooks     HooksConfig     `json:"hooks,omitempty"     yaml:"-"`
-	Approvals ApprovalsConfig `json:"approvals,omitempty" yaml:"-"`
 	Plugins   PluginsConfig   `json:"plugins,omitempty"   yaml:"-"`
 	Tools     ToolsConfig     `json:"tools"               yaml:",inline"`
 	Heartbeat HeartbeatConfig `json:"heartbeat"           yaml:"-"`
@@ -227,94 +226,6 @@ type HookDefaultsConfig struct {
 	ObserverTimeoutMS    int `json:"observer_timeout_ms,omitempty"`
 	InterceptorTimeoutMS int `json:"interceptor_timeout_ms,omitempty"`
 	ApprovalTimeoutMS    int `json:"approval_timeout_ms,omitempty"`
-}
-
-// Approval modes for tools.exec. "off" (default) keeps the static guards as
-// the final decision. "smart" sends commands whose risk the classifier cannot
-// resolve (unknown) to an auxiliary Guardian model before they can run; known
-// risk levels keep following risk_threshold.
-const (
-	ApprovalModeOff   = "off"
-	ApprovalModeSmart = "smart"
-)
-
-// Approval escalate actions. They decide what happens when the Guardian
-// answers ESCALATE (or returns an unrecognized verdict). "block" (default)
-// keeps the fail-closed behavior; "approve" runs the command. Review failures
-// and an unavailable Guardian always block, regardless of this setting.
-const (
-	ApprovalEscalateBlock   = "block"
-	ApprovalEscalateApprove = "approve"
-)
-
-// Defaults for the auxiliary Guardian call. The timeout is short so a slow or
-// unreachable model cannot stall an interactive turn; the call is only made for
-// commands that need a second opinion.
-const (
-	DefaultApprovalSmartTimeoutSeconds = 20
-	MaxApprovalSmartTimeoutSeconds     = 600
-)
-
-// ApprovalsConfig configures how potentially dangerous tool calls are approved.
-type ApprovalsConfig struct {
-	// Mode is "off" (default) or "smart". Smart mode asks a Guardian model to
-	// review commands whose risk cannot be classified. "off" keeps the static
-	// guards as the final decision and avoids the extra model call.
-	Mode string `json:"mode,omitempty" env:"PICOCLAW_APPROVALS_MODE"`
-	// Model selects the Guardian model by model_list alias or provider/model
-	// reference. Empty uses the agent's default model.
-	Model string `json:"model,omitempty" env:"PICOCLAW_APPROVALS_MODEL"`
-	// SmartTimeoutSeconds bounds each Guardian call. Zero uses the default 20s.
-	SmartTimeoutSeconds int `json:"smart_timeout_seconds,omitempty" env:"PICOCLAW_APPROVALS_SMART_TIMEOUT_SECONDS"`
-	// OnEscalate decides what happens when the Guardian answers ESCALATE or
-	// returns an unrecognized verdict: "block" (default) rejects the command,
-	// "approve" runs it. Guardian/provider failures always block.
-	OnEscalate string `json:"on_escalate,omitempty" env:"PICOCLAW_APPROVALS_ON_ESCALATE"`
-}
-
-// Normalized validates the approval configuration and fills its defaults.
-// Unknown values are rejected instead of silently falling back, because a typo
-// in a security setting must be visible.
-func (c ApprovalsConfig) Normalized() (ApprovalsConfig, error) {
-	mode := strings.ToLower(strings.TrimSpace(c.Mode))
-	switch mode {
-	case "", ApprovalModeOff:
-		mode = ApprovalModeOff
-	case ApprovalModeSmart:
-	default:
-		return c, fmt.Errorf("mode %q must be %q or %q", c.Mode, ApprovalModeOff, ApprovalModeSmart)
-	}
-
-	timeout := c.SmartTimeoutSeconds
-	if timeout < 0 {
-		return c, fmt.Errorf("smart_timeout_seconds %d must not be negative", timeout)
-	}
-	if timeout == 0 {
-		timeout = DefaultApprovalSmartTimeoutSeconds
-	}
-	if timeout > MaxApprovalSmartTimeoutSeconds {
-		return c, fmt.Errorf(
-			"smart_timeout_seconds %d exceeds the maximum of %d",
-			timeout, MaxApprovalSmartTimeoutSeconds,
-		)
-	}
-
-	onEscalate := strings.ToLower(strings.TrimSpace(c.OnEscalate))
-	switch onEscalate {
-	case "", ApprovalEscalateBlock:
-		onEscalate = ApprovalEscalateBlock
-	case ApprovalEscalateApprove:
-	default:
-		return c, fmt.Errorf(
-			"on_escalate %q must be %q or %q",
-			c.OnEscalate, ApprovalEscalateBlock, ApprovalEscalateApprove,
-		)
-	}
-
-	c.Mode = mode
-	c.SmartTimeoutSeconds = timeout
-	c.OnEscalate = onEscalate
-	return c, nil
 }
 
 type BuiltinHookConfig struct {
@@ -1544,8 +1455,7 @@ type ArgModifierConfig struct {
 //
 // EnableDenyPatterns disables the optional built-in guard set: the Unix
 // shell-construct deny patterns and the AST risk classifier. Hardline patterns
-// and CustomDenyPatterns still apply when it is false. Smart approvals keep the
-// Unix classifier active for the Guardian gate.
+// and CustomDenyPatterns still apply when it is false.
 type ExecConfig struct {
 	ToolConfig          `         envPrefix:"PICOCLAW_TOOLS_EXEC_"`
 	EnableDenyPatterns  bool     `                                 json:"enable_deny_patterns"  env:"PICOCLAW_TOOLS_EXEC_ENABLE_DENY_PATTERNS"`
@@ -1556,10 +1466,9 @@ type ExecConfig struct {
 	MaxOutputChars      int      `                                 json:"max_output_chars"      env:"PICOCLAW_TOOLS_EXEC_MAX_OUTPUT_CHARS"` // 0 means use default (50000 chars)
 
 	// CustomUnlockPatterns is a full-command operator exception that takes
-	// precedence over the default deny set, the AST risk classifier and smart
-	// approvals. Hardline patterns, custom deny patterns and the workspace
-	// boundary still apply. Use it only for specific commands the operator
-	// explicitly trusts.
+	// precedence over the default deny set and the AST risk classifier.
+	// Hardline patterns, custom deny patterns and the workspace boundary still
+	// apply. Use it only for specific commands the operator explicitly trusts.
 	CustomUnlockPatterns []string `json:"custom_unlock_patterns" env:"PICOCLAW_TOOLS_EXEC_CUSTOM_UNLOCK_PATTERNS"`
 
 	// RiskThreshold is the highest risk level allowed when the built-in
@@ -2168,10 +2077,6 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, err
 	}
 	applySkillsRegistryEnvCompat(cfg)
-
-	if cfg.Approvals, err = cfg.Approvals.Normalized(); err != nil {
-		return nil, fmt.Errorf("approvals: %w", err)
-	}
 
 	if err = InitChannelList(cfg.Channels); err != nil {
 		return nil, err

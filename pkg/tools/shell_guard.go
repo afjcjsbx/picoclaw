@@ -1,15 +1,12 @@
 package tools
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
 
-	"github.com/sipeed/picoclaw/pkg/config"
-	"github.com/sipeed/picoclaw/pkg/logger"
 	fstools "github.com/sipeed/picoclaw/pkg/tools/fs"
 	"github.com/sipeed/picoclaw/pkg/tools/shellguard"
 )
@@ -22,9 +19,8 @@ func (t *ExecTool) commandMatchesCustomAllowPattern(lower string) bool {
 }
 
 // commandMatchesCustomUnlockPattern reports whether an operator unlock rule
-// matches the whole command. A match skips the default deny set, the risk
-// classifier and smart approvals; hardline, custom deny and the workspace
-// boundary still run.
+// matches the whole command. A match skips the default deny set and the risk
+// classifier; hardline, custom deny and the workspace boundary still run.
 func (t *ExecTool) commandMatchesCustomUnlockPattern(lower string) bool {
 	return patternsMatchAny(t.customUnlockPatterns, []string{lower})
 }
@@ -48,34 +44,29 @@ func patternsMatchAny(patterns []*regexp.Regexp, forms []string) bool {
 //     ANSI-C quoting and line continuations are resolved and every command is
 //     canonicalized from the AST (wrappers such as env, quote-spliced words).
 //  2. Hardline patterns: an immutable floor (catastrophic operations and
-//     self-protection). They apply even with enable_deny_patterns=false, no
-//     allow rule exempts them and the Guardian is never consulted.
+//     self-protection). They apply even with enable_deny_patterns=false and no
+//     allow rule exempts them.
 //  3. Custom deny patterns: always enforced and stronger than any allow rule.
 //  4. Custom unlock patterns: full-command operator exceptions. A match skips
-//     the default deny set, the risk classifier and smart approvals; hardline,
-//     custom deny and the workspace boundary still run.
+//     the default deny set and the risk classifier; hardline, custom deny and
+//     the workspace boundary still run.
 //  5. Default deny patterns: the shell constructs the AST cannot inspect
 //     (command substitution, pipe-to-shell, shell heredocs). Exempted only by
-//     custom_allow_patterns; a hit is always rejected, also in smart mode.
+//     custom_allow_patterns; a hit is always rejected.
 //  6. Workspace boundary (restrict_to_workspace): a byte-level path-traversal
 //     check, then the AST path guard on Unix or the path scanner on Windows.
 //  7. Risk level: the AST classifier rates the command low to critical and
 //     rejects anything above risk_threshold. Commands the classifier cannot
 //     resolve (dynamic command names, opaque shells, parse errors) are allowed
 //     by default; dynamic operands for destructive commands are still rejected.
-//  8. Smart approvals: only unknown commands (layer 7) are reviewed by the
-//     Guardian model. APPROVE runs the command and DENY blocks it. ESCALATE
-//     follows approvals.on_escalate ("block" by default, "approve" to run).
-//     Guardian/provider failures still block. With approvals off, unknown
-//     commands run.
-func (t *ExecTool) guardCommandContext(ctx context.Context, command, cwd string) string {
-	return t.guardCommandWithAnalysis(ctx, command, cwd, shellguard.Analyze(strings.TrimSpace(command)))
+func (t *ExecTool) guardCommandContext(command, cwd string) string {
+	return t.guardCommandWithAnalysis(command, cwd, shellguard.Analyze(strings.TrimSpace(command)))
 }
 
 // guardCommandWithAnalysis is guardCommandContext with a parse the caller
 // already owns, so a run does not parse the same command twice.
 func (t *ExecTool) guardCommandWithAnalysis(
-	ctx context.Context, command, cwd string, analysis shellguard.Analysis,
+	command, cwd string, analysis shellguard.Analysis,
 ) string {
 	cmd := strings.TrimSpace(command)
 	lower := strings.ToLower(cmd)
@@ -112,7 +103,6 @@ func (t *ExecTool) guardCommandWithAnalysis(
 
 	// Hardline patterns are an immutable floor: they apply even when the
 	// default deny set is disabled and no custom allow rule can exempt them.
-	// They are never sent to the Guardian model.
 	if patternsMatchAny(t.hardlineDenyPatterns, denyForms) {
 		return "Command blocked by safety guard (dangerous pattern detected)"
 	}
@@ -125,14 +115,13 @@ func (t *ExecTool) guardCommandWithAnalysis(
 	}
 
 	// An operator unlock rule is an explicit per-command exception. It skips
-	// the default deny set, the risk classifier and smart approvals, but never
-	// the hardline floor or the workspace boundary.
+	// the default deny set and the risk classifier, but never the hardline
+	// floor or the workspace boundary.
 	unlocked := t.commandMatchesCustomUnlockPattern(lower)
 
 	// Default deny patterns can be exempted by custom allow patterns, so
 	// operators can selectively permit normally-blocked commands. A hit is
-	// final: smart approvals only review commands that the risk classifier
-	// cannot resolve, never ones a known-dangerous pattern already matched.
+	// final.
 	if !unlocked && !t.commandMatchesCustomAllowPattern(lower) {
 		// Use the same canonical forms as the hardline/custom layers. This
 		// catches shell-equivalent spellings such as g\it, which the raw
@@ -193,66 +182,19 @@ func (t *ExecTool) guardCommandWithAnalysis(
 	// The AST classifier is the last built-in layer: it sees commands that the
 	// byte-level patterns cannot resolve, such as `x=rm; $x -rf /`. Only an
 	// explicit custom unlock pattern can bypass it; custom_allow_patterns no
-	// longer does. Known commands above the threshold are rejected. Unknown
-	// commands are allowed by default and go to the Guardian only when smart
-	// approvals is on.
+	// longer does. Known commands above the threshold are rejected, while
+	// unknown commands are allowed by default.
 	if t.riskGuard != nil && !unlocked {
 		assessment := t.riskGuard.AssessFile(cmd, riskFile)
 		if assessment.Reject {
 			return assessment.BlockedError(t.riskGuard.Threshold()).Error()
 		}
-		if assessment.Unknown {
-			// Unknown commands are allowed by default. Smart approvals can
-			// still review them; without a reviewer the command runs.
-			if t.approvalEnabled {
-				description := assessment.Reason
-				if description == "" {
-					description = "command risk could not be classified"
-				}
-				if blocked := t.reviewCommand(ctx, cmd, description); blocked != "" {
-					return blocked
-				}
-			}
-		} else if !shellguard.IsAllowed(assessment.Level, t.riskGuard.Threshold()) {
+		if !assessment.Unknown && !shellguard.IsAllowed(assessment.Level, t.riskGuard.Threshold()) {
 			return assessment.BlockedError(t.riskGuard.Threshold()).Error()
 		}
 	}
 
 	return ""
-}
-
-// reviewCommand asks the Guardian model for a verdict on a command whose risk
-// the classifier could not resolve. Approve returns an empty string and deny
-// always blocks. Escalate blocks unless approvals.on_escalate is "approve".
-// An unavailable reviewer and provider errors always block, so the escalate
-// policy cannot turn a failed review into consent.
-func (t *ExecTool) reviewCommand(ctx context.Context, command, description string) string {
-	if t.approvalReviewer == nil {
-		return "Command blocked: approval guardian is unavailable; manual approval is not configured"
-	}
-	verdict, err := t.approvalReviewer.Review(ctx, command, description)
-	if err != nil {
-		return "Command blocked: approval guardian could not review the command; manual approval is not configured"
-	}
-	switch verdict {
-	case approvalApprove:
-		return ""
-	case approvalDeny:
-		return "Command blocked by approval guardian (DENY)"
-	default:
-		if t.approvalOnEscalate == config.ApprovalEscalateApprove {
-			logger.InfoCF(
-				"tools.approval",
-				"Guardian escalated; allowing command by configuration",
-				map[string]any{
-					"on_escalate": config.ApprovalEscalateApprove,
-					"description": description,
-				},
-			)
-			return ""
-		}
-		return "Command blocked by approval guardian (ESCALATE); manual approval is not configured"
-	}
 }
 
 // workspacePathAllowed reports whether p stays inside cwdPath or is covered by
