@@ -158,6 +158,46 @@ func TestMatchAllowed(t *testing.T) {
 			allowed: "654321|bob",
 			want:    false,
 		},
+		// Matrix MXIDs contain a colon and an "@" prefix.
+		{
+			name: "matrix MXID with @ prefix matches PlatformID",
+			sender: bus.SenderInfo{
+				Platform:    "matrix",
+				PlatformID:  "@alice:matrix.org",
+				CanonicalID: BuildCanonicalID("matrix", "@alice:matrix.org"),
+				Username:    "@alice:matrix.org",
+			},
+			allowed: "@alice:matrix.org",
+			want:    true,
+		},
+		{
+			name: "matrix MXID without @ prefix matches PlatformID",
+			sender: bus.SenderInfo{
+				Platform:    "matrix",
+				PlatformID:  "@alice:matrix.org",
+				CanonicalID: BuildCanonicalID("matrix", "@alice:matrix.org"),
+				Username:    "@alice:matrix.org",
+			},
+			allowed: "alice:matrix.org",
+			want:    false,
+		},
+		{
+			name: "matrix MXID does not match a different user",
+			sender: bus.SenderInfo{
+				Platform:    "matrix",
+				PlatformID:  "@alice:matrix.org",
+				CanonicalID: BuildCanonicalID("matrix", "@alice:matrix.org"),
+				Username:    "@alice:matrix.org",
+			},
+			allowed: "@bob:matrix.org",
+			want:    false,
+		},
+		{
+			name:    "canonical entry still matches when it has no @ prefix",
+			sender:  telegramSender,
+			allowed: "telegram:123456",
+			want:    true,
+		},
 		// Canonical format "platform:id"
 		{
 			name:    "canonical matches exactly",

@@ -198,7 +198,9 @@ func (t *ExecTool) runSync(
 	readDone := make(chan struct{})
 	go func() {
 		defer close(readDone)
-		_, _ = io.Copy(collector, outputReader)
+		// Strip ANSI sequences while draining so the in-memory window, the
+		// spilled artifact and the truncation budget all see visible text.
+		_, _ = io.Copy(collector, &ansiReader{src: outputReader})
 		_ = outputReader.Close()
 	}()
 
@@ -476,13 +478,19 @@ func newExecResult(
 func pumpOutput(label string, reader io.Reader, session *ProcessSession, onChunk func([]byte)) {
 	defer recoverGoroutine(label)
 	buf := make([]byte, 4096)
+	var strip ansiStripper
 	for {
 		n, err := reader.Read(buf)
 		if n > 0 {
 			if onChunk != nil {
 				onChunk(buf[:n])
 			}
-			session.appendOutput(buf[:n])
+			// Key-mode detection needs the raw smkx/rmkx sequences; strip ANSI
+			// only after that decision. Stripping also removes escape bytes
+			// from the rolling window and the spilled artifact.
+			if clean := strip.Strip(buf[:n]); len(clean) > 0 {
+				session.appendOutput(clean)
+			}
 		}
 		if err != nil {
 			return

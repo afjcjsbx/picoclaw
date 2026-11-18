@@ -582,7 +582,7 @@ func execDescriptionFor(goos string) string {
 		"",
 		"Environment is sanitized; only safe and allowlisted variables are inherited. Set extras inline (`FOO=bar cmd`).",
 		"",
-		"Results contain `[exec]` metadata (exitCode, timedOut, truncated, durationMs, error), then stdout/stderr. Null exitCode means signal termination; 128+N may also indicate signals (137=SIGKILL, 143=SIGTERM). Treat these as failures. Some non-zero codes are normal (grep:1=no match; diff:1=differences).",
+		"Results contain `[exec]` metadata (exitCode, timedOut, truncated, durationMs, error), then stdout/stderr with ANSI escape sequences removed. Null exitCode means signal termination; 128+N may also indicate signals (137=SIGKILL, 143=SIGTERM). Treat these as failures. Some non-zero codes are normal (grep:1=no match; diff:1=differences).",
 		"",
 		"Truncated output is saved as an artifact; use `read_file` on its path.",
 		"",
