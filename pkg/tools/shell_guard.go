@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -10,20 +11,6 @@ import (
 	fstools "github.com/sipeed/picoclaw/pkg/tools/fs"
 	"github.com/sipeed/picoclaw/pkg/tools/shellguard"
 )
-
-// commandMatchesCustomAllowPattern reports whether a custom allow pattern
-// matches the whole command. These patterns exempt only the default deny set;
-// they do not affect the risk classifier.
-func (t *ExecTool) commandMatchesCustomAllowPattern(lower string) bool {
-	return patternsMatchAny(t.customAllowPatterns, []string{lower})
-}
-
-// commandMatchesCustomUnlockPattern reports whether an operator unlock rule
-// matches the whole command. A match skips the default deny set and the risk
-// classifier; hardline, custom deny and the workspace boundary still run.
-func (t *ExecTool) commandMatchesCustomUnlockPattern(lower string) bool {
-	return patternsMatchAny(t.customUnlockPatterns, []string{lower})
-}
 
 func patternsMatchAny(patterns []*regexp.Regexp, forms []string) bool {
 	for _, pattern := range patterns {
@@ -36,30 +23,43 @@ func patternsMatchAny(patterns []*regexp.Regexp, forms []string) bool {
 	return false
 }
 
-// guardCommandContext decides whether a command may run. It returns "" to
-// allow it, or the block message. Layers run from the least to the most
-// configurable, and the first one that rejects wins:
+// shellKillPIDPattern catches the common `kill <pid>` spelling so the block
+// message can point the model at the validated kill-pid action.
+var shellKillPIDPattern = regexp.MustCompile(`(?:^|[;&|]\s*)kill\s+(?:-\w+\s+)*[0-9]+`)
+
+// guardCommandContext evaluates one command and returns a typed decision. The
+// caller must start a process only for shellguard.ActionAllow; ActionReview
+// goes through the configured approver and ActionBlock is final.
+//
+// Layers run from the least to the most configurable, and the first one that
+// rejects wins:
 //
 //  1. Matching forms: quoted heredoc bodies are stripped, and on Unix $IFS,
 //     ANSI-C quoting and line continuations are resolved and every command is
 //     canonicalized from the AST (wrappers such as env, quote-spliced words).
-//  2. Hardline patterns: an immutable floor (catastrophic operations and
-//     self-protection). They apply even with enable_deny_patterns=false and no
-//     allow rule exempts them.
+//  2. Hardline floor: immutable AST rules plus a regex fallback for forms the
+//     parser cannot represent. Hardline is never reviewed and never exempted.
 //  3. Custom deny patterns: always enforced and stronger than any allow rule.
 //  4. Custom unlock patterns: full-command operator exceptions. A match skips
 //     the default deny set and the risk classifier; hardline, custom deny and
 //     the workspace boundary still run.
 //  5. Default deny patterns: the shell constructs the AST cannot inspect
 //     (command substitution, pipe-to-shell, shell heredocs). Exempted only by
-//     custom_allow_patterns; a hit is always rejected.
+//     custom_allow_patterns.
 //  6. Workspace boundary (restrict_to_workspace): a byte-level path-traversal
 //     check, then the AST path guard on Unix or the path scanner on Windows.
 //  7. Risk level: the AST classifier rates the command low to critical and
 //     rejects anything above risk_threshold. Commands the classifier cannot
-//     resolve (dynamic command names, opaque shells, parse errors) are allowed
-//     by default; dynamic operands for destructive commands are still rejected.
-func (t *ExecTool) guardCommandContext(command, cwd string) string {
+//     resolve (dynamic command names, opaque interpreters, parse failures) are
+//     returned as ActionReview, never as ActionAllow.
+//
+// The guard itself does not call a model or an approver. That keeps the policy
+// deterministic and lets the caller apply the human approval flow,
+// including the allow_unknown compatibility switch, in one place.
+func (t *ExecTool) guardCommandContext(
+	ctx context.Context, command, cwd string,
+) shellguard.Decision {
+	_ = ctx
 	return t.guardCommandWithAnalysis(command, cwd, shellguard.Analyze(strings.TrimSpace(command)))
 }
 
@@ -67,9 +67,44 @@ func (t *ExecTool) guardCommandContext(command, cwd string) string {
 // already owns, so a run does not parse the same command twice.
 func (t *ExecTool) guardCommandWithAnalysis(
 	command, cwd string, analysis shellguard.Analysis,
-) string {
+) shellguard.Decision {
 	cmd := strings.TrimSpace(command)
 	lower := strings.ToLower(cmd)
+	// A command that does not parse cannot be inspected by any AST layer. It is
+	// reviewed or blocked, never allowed, and allow_unknown does not override
+	// this rule: a malformed command is not the same as an opaque command.
+	if runtime.GOOS != "windows" && analysis.File == nil {
+		return shellguard.BlockDecision(
+			"parse-error",
+			shellguard.RiskCritical,
+			"Command blocked: command could not be parsed for risk classification",
+		)
+	}
+	// The hardline floor is evaluated on the AST first, so quoting, wrappers
+	// and path normalization cannot hide a destructive operation from a regex.
+	// The regex floor below stays as a fallback for forms the parser cannot
+	// represent, including PowerShell on Windows.
+	if runtime.GOOS != "windows" {
+		hardlineCwd := cwd
+		if hardlineCwd == "" {
+			hardlineCwd = t.workingDir
+		}
+		home := t.execHomeDir()
+		if finding, found := shellguard.HardlineFile(analysis.File, hardlineCwd, home); found {
+			return shellguard.BlockDecision(
+				finding.Rule, shellguard.RiskCritical,
+				"Command blocked by safety guard ("+finding.Reason+")",
+			)
+		}
+		if analysis.RiskFile != nil && analysis.RiskFile != analysis.File {
+			if finding, found := shellguard.HardlineFile(analysis.RiskFile, hardlineCwd, home); found {
+				return shellguard.BlockDecision(
+					finding.Rule, shellguard.RiskCritical,
+					"Command blocked by safety guard ("+finding.Reason+")",
+				)
+			}
+		}
+	}
 	// Quoted heredoc bodies are literal text: a backtick there cannot run a
 	// command, so deny patterns must not inspect it. The caller parsed the
 	// untrimmed command, so trim the stripped view like before.
@@ -103,31 +138,47 @@ func (t *ExecTool) guardCommandWithAnalysis(
 
 	// Hardline patterns are an immutable floor: they apply even when the
 	// default deny set is disabled and no custom allow rule can exempt them.
+	// They are never reviewed.
 	if patternsMatchAny(t.hardlineDenyPatterns, denyForms) {
-		return "Command blocked by safety guard (dangerous pattern detected)"
+		return shellguard.BlockDecision(
+			"hardline.regex", shellguard.RiskCritical,
+			"Command blocked by safety guard (dangerous pattern detected)",
+		)
 	}
 
 	// Custom deny patterns always apply: they are user-specified security rules
 	// that must not be bypassed by custom allow patterns (#3079). Matching the
 	// canonical AST words also catches quote-spliced forms such as r''m.
 	if patternsMatchAny(t.customDenyPatterns, denyForms) {
-		return "Command blocked by safety guard (dangerous pattern detected)"
+		return shellguard.BlockDecision(
+			"operator.deny", shellguard.RiskHigh,
+			"Command blocked by safety guard (dangerous pattern detected)",
+		)
 	}
 
-	// An operator unlock rule is an explicit per-command exception. It skips
-	// the default deny set and the risk classifier, but never the hardline
-	// floor or the workspace boundary.
-	unlocked := t.commandMatchesCustomUnlockPattern(lower)
+	// Operator allow rules are explicit per-command exceptions. Each rule
+	// names the layers it bypasses; the hardline floor, custom deny rules and
+	// the workspace boundary always run.
+	allowRule, hasAllowRule := t.matchAllowRule(lower)
+	bypassShell := hasAllowRule && allowRule.bypassShell
+	bypassRisk := hasAllowRule && allowRule.bypassRisk
+	bypassApproval := hasAllowRule && allowRule.bypassApproval
 
-	// Default deny patterns can be exempted by custom allow patterns, so
+	// Default deny patterns can be exempted by a shell_constructs bypass, so
 	// operators can selectively permit normally-blocked commands. A hit is
-	// final.
-	if !unlocked && !t.commandMatchesCustomAllowPattern(lower) {
+	// final: the risk classifier does not get a second opinion on a construct
+	// it cannot inspect.
+	if !bypassShell {
 		// Use the same canonical forms as the hardline/custom layers. This
 		// catches shell-equivalent spellings such as g\it, which the raw
 		// lowerForDeny form does not expose.
 		if patternsMatchAny(t.denyPatterns, denyForms) {
-			return "Command blocked by safety guard (dangerous pattern detected)"
+			reason := "Command blocked by safety guard (dangerous pattern detected)"
+			if shellKillPIDPattern.MatchString(lower) {
+				reason += "; use action=kill-pid with a PID owned by a tracked exec session, " +
+					"or action=kill with the sessionId"
+			}
+			return shellguard.BlockDecision("shell.construct", shellguard.RiskHigh, reason)
 		}
 	}
 
@@ -136,17 +187,25 @@ func (t *ExecTool) guardCommandWithAnalysis(
 	parsed := analysis.File
 	riskFile := analysis.RiskFile
 
-	if t.restrictToWorkspace {
+	// When the OS sandbox is active the kernel owns path containment. Skip the
+	// static workspace and interpreter passes: they duplicate the mount policy,
+	// produce false positives for valid in-sandbox paths and cannot resolve
+	// dynamic interpreter paths anyway. Hardline, operator rules, risk and
+	// approval still run.
+	if t.restrictToWorkspace && !t.sandboxPaths {
 		// The AST pass understands ... components, but these dotted variants
 		// are still caught byte-wise for the platform-independent cases and
 		// for commands the parser cannot inspect.
 		if pathTraversalPattern.MatchString(cmd) {
-			return "Command blocked by safety guard (path traversal detected)"
+			return shellguard.BlockDecision(
+				"workspace.traversal", shellguard.RiskHigh,
+				"Command blocked by safety guard (path traversal detected)",
+			)
 		}
 
 		cwdPath, err := filepath.Abs(cwd)
 		if err != nil {
-			return ""
+			return shellguard.AllowDecision("workspace.unresolved-cwd")
 		}
 		// Resolve symlinks in the workspace root too. Candidate paths are
 		// resolved with EvalSymlinks before the containment check, so comparing
@@ -162,7 +221,7 @@ func (t *ExecTool) guardCommandWithAnalysis(
 			// unavailable and the Windows path scanner remains the only
 			// workspace layer.
 			if blocked := t.guardWindowsWorkspacePaths(cmd, cwdPath); blocked != "" {
-				return blocked
+				return shellguard.BlockDecision("workspace.windows", shellguard.RiskHigh, blocked)
 			}
 		} else {
 			policy := shellguard.WorkspacePolicy{
@@ -174,7 +233,10 @@ func (t *ExecTool) guardCommandWithAnalysis(
 				},
 			}
 			if err := shellguard.CheckWorkspaceFile(cmd, parsed, policy); err != nil {
-				return "Command blocked by safety guard (" + err.Error() + ")"
+				return shellguard.BlockDecision(
+					"workspace.path", shellguard.RiskHigh,
+					"Command blocked by safety guard ("+err.Error()+")",
+				)
 			}
 		}
 	}
@@ -182,19 +244,58 @@ func (t *ExecTool) guardCommandWithAnalysis(
 	// The AST classifier is the last built-in layer: it sees commands that the
 	// byte-level patterns cannot resolve, such as `x=rm; $x -rf /`. Only an
 	// explicit custom unlock pattern can bypass it; custom_allow_patterns no
-	// longer does. Known commands above the threshold are rejected, while
-	// unknown commands are allowed by default.
-	if t.riskGuard != nil && !unlocked {
+	// longer does. Known commands above the threshold are rejected. Unknown
+	// commands are returned for review, never silently allowed.
+	if t.riskGuard != nil && !bypassRisk {
 		assessment := t.riskGuard.AssessFile(cmd, riskFile)
 		if assessment.Reject {
-			return assessment.BlockedError(t.riskGuard.Threshold()).Error()
+			return shellguard.BlockDecision(
+				"risk.dynamic-operand", assessment.Level,
+				riskBlockReason(lower, assessment.BlockedError(t.riskGuard.Threshold()).Error()),
+			)
 		}
-		if !assessment.Unknown && !shellguard.IsAllowed(assessment.Level, t.riskGuard.Threshold()) {
-			return assessment.BlockedError(t.riskGuard.Threshold()).Error()
+		if assessment.Unknown {
+			reason := assessment.Reason
+			if reason == "" {
+				reason = "command risk could not be classified"
+			}
+			if bypassApproval {
+				return shellguard.AllowDecision(allowRule.id)
+			}
+			return shellguard.ReviewDecision("risk.unknown", assessment.Level, reason)
+		}
+		if !shellguard.IsAllowed(assessment.Level, t.riskGuard.Threshold()) {
+			return shellguard.BlockDecision(
+				"risk.threshold", assessment.Level,
+				riskBlockReason(lower, assessment.BlockedError(t.riskGuard.Threshold()).Error()),
+			)
 		}
 	}
 
-	return ""
+	if hasAllowRule {
+		return shellguard.AllowDecision(allowRule.id)
+	}
+	return shellguard.AllowDecision("allow")
+}
+
+// unknownBlockedReason explains why a command that could not be classified is
+// rejected in the strict default policy. Operators can restore the legacy
+// behavior with tools.exec.allow_unknown=true or configure an approver.
+func unknownBlockedReason(reason string) string {
+	if reason == "" {
+		reason = "the command could not be classified"
+	}
+	return "Command blocked by strict unknown policy: " + reason +
+		"; set tools.exec.allow_unknown=true or configure an approver to allow it"
+}
+
+// riskBlockReason adds the validated kill-pid guidance when a shell kill was
+// rejected by the risk layer rather than by a deny pattern.
+func riskBlockReason(command, reason string) string {
+	if shellKillPIDPattern.MatchString(command) {
+		return reason + "; use action=kill-pid with a PID owned by a tracked exec session, or action=kill with the sessionId"
+	}
+	return reason
 }
 
 // workspacePathAllowed reports whether p stays inside cwdPath or is covered by

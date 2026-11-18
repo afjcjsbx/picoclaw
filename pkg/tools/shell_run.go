@@ -34,19 +34,11 @@ func withNote(base, add string) string {
 
 // foregroundPromotionNote explains why a requested foreground timeout was
 // turned into a tracked background session.
-func (t *ExecTool) foregroundPromotionNote(timeoutDisabled bool, timeout time.Duration) string {
-	capSeconds := int64(t.foregroundCap / time.Second)
-	reason := fmt.Sprintf(
-		"Requested timeout of %ds exceeds the %ds foreground cap",
-		int64(timeout/time.Second), capSeconds,
+func (t *ExecTool) foregroundPromotionNote(timeout time.Duration) string {
+	return fmt.Sprintf(
+		"Requested timeout of %ds exceeds the %ds foreground cap; started as a tracked background session.",
+		int64(timeout/time.Second), int64(t.foregroundCap/time.Second),
 	)
-	if timeoutDisabled {
-		reason = fmt.Sprintf(
-			"timeout=0 disables the timeout, which exceeds the %ds foreground cap",
-			capSeconds,
-		)
-	}
-	return reason + "; started as a tracked background session."
 }
 
 // findShellExecutable resolves sh through PATH the same way the shell would.
@@ -62,6 +54,29 @@ func findShellExecutable() (string, error) {
 	return absolute, nil
 }
 
+// shellResourceLimits caps the resources a command tree can consume. They are
+// defense in depth alongside the OS sandbox: they limit a fork bomb, a file
+// that fills the disk, and file-descriptor exhaustion without parsing command
+// text. Unsupported limits are ignored so the command still runs on minimal
+// shells.
+const shellResourceLimits = "ulimit -n 4096 2>/dev/null || true\n" +
+	"ulimit -f 2097152 2>/dev/null || true\n" +
+	"ulimit -u 4096 2>/dev/null || true\n"
+
+// startCommandError names the isolation failure mode explicitly. Isolation is
+// fail-closed: a sandbox that cannot start must not silently run the command
+// unisolated.
+func startCommandError(err error, isolated bool) string {
+	if isolated {
+		return fmt.Sprintf(
+			"failed to start command under isolation: %v; isolation is fail-closed, "+
+				"set tools.exec.isolation.mode to off or fix the isolation paths",
+			err,
+		)
+	}
+	return fmt.Sprintf("failed to start command: %v", err)
+}
+
 // shellCommand returns the OS shell and its arguments for one exec run.
 func shellCommand(command string) (string, []string, error) {
 	if runtime.GOOS == "windows" {
@@ -71,7 +86,10 @@ func shellCommand(command string) (string, []string, error) {
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to locate shell: %w", err)
 	}
-	return shellPath, []string{"-c", command}, nil
+	// Apply the limits in the shell that will exec the command, so every child
+	// inherits them. The sandbox, when active, runs inside this shell or wraps
+	// it, so the limits still apply to the command tree.
+	return shellPath, []string{"-c", shellResourceLimits + command}, nil
 }
 
 // cwdProbeFile receives the final working directory from a wrapped foreground
@@ -157,9 +175,13 @@ func (t *ExecTool) runSync(
 	}
 	defer cancel()
 
-	probePath, probeErr := newCwdProbeFile()
-	if probeErr != nil {
-		probePath = ""
+	probePath := ""
+	if !t.sandboxActive {
+		var probeErr error
+		probePath, probeErr = newCwdProbeFile()
+		if probeErr != nil {
+			probePath = ""
+		}
 	}
 	defer func() { _ = os.Remove(probePath) }()
 	shellCommandText, observeCwd := wrapCommandForCwd(command, probePath)
@@ -198,10 +220,10 @@ func (t *ExecTool) runSync(
 
 	// Route shell execution through the shared isolation entry point so exec tool
 	// subprocesses receive the same isolation policy as other integrations.
-	if err := isolation.Start(cmd); err != nil {
+	if err := isolation.StartFor(cmd, t.isolationConfig); err != nil {
 		_ = outputWriter.Close()
 		_ = outputReader.Close()
-		return ErrorResult(fmt.Sprintf("failed to start command: %v", err))
+		return ErrorResult(startCommandError(err, t.sandboxActive))
 	}
 
 	// The child inherited its own copy of the write end. Release the parent's
@@ -629,7 +651,7 @@ func (t *ExecTool) runBackground(
 
 	// Background sessions use the same startup path so isolation stays consistent
 	// with synchronous exec runs.
-	if err := isolation.Start(cmd); err != nil {
+	if err := isolation.StartFor(cmd, t.isolationConfig); err != nil {
 		if outputReader != nil {
 			_ = outputReader.Close()
 		}
@@ -642,7 +664,7 @@ func (t *ExecTool) runBackground(
 		if session.ptyMaster != nil {
 			_ = session.ptyMaster.Close()
 		}
-		return ErrorResult(fmt.Sprintf("failed to start command: %v", err))
+		return ErrorResult(startCommandError(err, t.sandboxActive))
 	}
 
 	// The child inherited its own copies of the pipe/PTY write ends. The parent

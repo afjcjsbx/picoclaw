@@ -30,7 +30,9 @@ func newTestExecTool(workingDir string, restrict bool) (*ExecTool, error) {
 // guardCommand runs the command guard with a background context, so tests that
 // only assert the decision do not need to build one.
 func (t *ExecTool) guardCommand(command, cwd string) string {
-	return t.guardCommandContext(command, cwd)
+	return t.resolveGuardDecision(
+		context.Background(), command, t.guardCommandContext(context.Background(), command, cwd),
+	)
 }
 
 func parseExecRunMeta(t *testing.T, forLLM string) map[string]any {
@@ -408,18 +410,16 @@ func TestShellTool_TimeoutArg_OverridesConfigured(t *testing.T) {
 		require.Contains(t, result.ForLLM, "done")
 	})
 
-	t.Run("zero promotes to background", func(t *testing.T) {
+	t.Run("zero uses configured default", func(t *testing.T) {
 		result := tool.Execute(context.Background(), map[string]any{
 			"action":  "run",
-			"command": "sleep 0.3; echo done",
+			"command": "echo done",
 			"timeout": float64(0),
 		})
 
 		require.False(t, result.IsError, result.ForLLM)
-		var resp ExecResponse
-		require.NoError(t, json.Unmarshal([]byte(result.ForLLM), &resp))
-		require.NotEmpty(t, resp.SessionID)
-		require.Contains(t, resp.Note, "foreground cap")
+		require.Contains(t, result.ForLLM, "done")
+		require.True(t, strings.HasPrefix(result.ForLLM, execRunMetaPrefix), result.ForLLM)
 	})
 
 	t.Run("shorter timeout kills command", func(t *testing.T) {
@@ -1963,7 +1963,7 @@ func TestWindowsDenyPatterns(t *testing.T) {
 		`spps -Id 1234 -Force`,
 	}
 	for _, command := range blocked {
-		if got := tool.guardCommand(command, t.TempDir()); !strings.Contains(got, "dangerous pattern") {
+		if got := tool.guardCommand(command, t.TempDir()); !strings.Contains(got, "safety guard") {
 			t.Errorf("Windows command %q should be blocked, got: %q", command, got)
 		}
 	}
@@ -3489,7 +3489,7 @@ func TestShellTool_CustomDenyPatternsApplyWhenDefaultsDisabled(t *testing.T) {
 	tool, err := NewExecToolWithConfig("", false, cfg)
 	require.NoError(t, err)
 
-	if got := tool.guardCommand("git push origin main", ""); !strings.Contains(got, "dangerous pattern") {
+	if got := tool.guardCommand("git push origin main", ""); !strings.Contains(got, "safety guard") {
 		t.Fatalf("custom deny pattern must apply when default patterns are disabled, got: %q", got)
 	}
 	if got := tool.guardCommand("echo safely", ""); got != "" {
@@ -3515,7 +3515,7 @@ func TestShellTool_InvalidCustomDenyPatternRejectedWhenDefaultsDisabled(t *testi
 func TestShellTool_DefaultDenyPatternsCanBeDisabled(t *testing.T) {
 	cfg := &config.Config{
 		Tools: config.ToolsConfig{
-			Exec: config.ExecConfig{EnableDenyPatterns: false},
+			Exec: config.ExecConfig{EnableDenyPatterns: false, AllowUnknown: true},
 		},
 	}
 
@@ -3532,6 +3532,7 @@ func TestShellTool_HardlinePatternsAlwaysApply(t *testing.T) {
 		Tools: config.ToolsConfig{
 			Exec: config.ExecConfig{
 				EnableDenyPatterns:  false,
+				AllowUnknown:        true,
 				CustomAllowPatterns: []string{`.*`},
 			},
 		},
@@ -3553,7 +3554,7 @@ func TestShellTool_HardlinePatternsAlwaysApply(t *testing.T) {
 		":(){ :|:& };:",
 	}
 	for _, command := range blocked {
-		if got := tool.guardCommand(command, t.TempDir()); !strings.Contains(got, "dangerous pattern") {
+		if got := tool.guardCommand(command, t.TempDir()); !strings.Contains(got, "safety guard") {
 			t.Errorf("hardline command %q should be blocked, got: %q", command, got)
 		}
 	}
@@ -3567,6 +3568,7 @@ func TestShellTool_HardlineASTBypass(t *testing.T) {
 		Tools: config.ToolsConfig{
 			Exec: config.ExecConfig{
 				EnableDenyPatterns:  false,
+				AllowUnknown:        true,
 				CustomAllowPatterns: []string{`.*`},
 			},
 		},
@@ -3600,7 +3602,7 @@ func TestShellTool_HardlineASTBypass(t *testing.T) {
 		`rm -rf ~/.pico''claw`,
 	}
 	for _, command := range blocked {
-		if got := tool.guardCommand(command, t.TempDir()); !strings.Contains(got, "dangerous pattern") {
+		if got := tool.guardCommand(command, t.TempDir()); !strings.Contains(got, "safety guard") {
 			t.Errorf("obfuscated hardline command %q should be blocked, got: %q", command, got)
 		}
 	}
@@ -3647,7 +3649,7 @@ func TestShellTool_DefaultDenyShellConstructs(t *testing.T) {
 		"bash <<'EOF'\necho hi\nEOF",
 	}
 	for _, command := range blocked {
-		if got := tool.guardCommand(command, t.TempDir()); !strings.Contains(got, "dangerous pattern") {
+		if got := tool.guardCommand(command, t.TempDir()); !strings.Contains(got, "safety guard") {
 			t.Errorf("default deny should block the shell construct %q, got: %q", command, got)
 		}
 	}
@@ -3686,7 +3688,7 @@ func TestShellTool_CustomDenyUsesASTWords(t *testing.T) {
 		`g$'\x69t' push origin main`,
 	}
 	for _, command := range blocked {
-		if got := tool.guardCommand(command, t.TempDir()); !strings.Contains(got, "dangerous pattern") {
+		if got := tool.guardCommand(command, t.TempDir()); !strings.Contains(got, "safety guard") {
 			t.Errorf("custom deny should match AST words for %q, got: %q", command, got)
 		}
 	}
@@ -3727,7 +3729,7 @@ func TestShellTool_CustomDenyCanonicalizesWrappers(t *testing.T) {
 		"exec rm -rf build",
 		"env -S 'rm -rf build'",
 	} {
-		if got := tool.guardCommand(command, t.TempDir()); !strings.Contains(got, "dangerous pattern") {
+		if got := tool.guardCommand(command, t.TempDir()); !strings.Contains(got, "safety guard") {
 			t.Errorf("custom deny should match wrapped command %q, got: %q", command, got)
 		}
 	}
@@ -3749,6 +3751,7 @@ func TestShellTool_SelfProtectionHardline(t *testing.T) {
 		Tools: config.ToolsConfig{
 			Exec: config.ExecConfig{
 				EnableDenyPatterns:  false,
+				AllowUnknown:        true,
 				CustomAllowPatterns: []string{`.*`},
 			},
 		},
@@ -3788,7 +3791,7 @@ func TestShellTool_SelfProtectionHardline(t *testing.T) {
 		`rm -f "$(command -v picoclaw)"`,
 	}
 	for _, command := range blocked {
-		if got := tool.guardCommand(command, t.TempDir()); !strings.Contains(got, "dangerous pattern") {
+		if got := tool.guardCommand(command, t.TempDir()); !strings.Contains(got, "safety guard") {
 			t.Errorf("self-protection command %q should be blocked, got: %q", command, got)
 		}
 	}
@@ -3838,7 +3841,7 @@ func TestShellTool_HeredocLookalikeDoesNotHideCommands(t *testing.T) {
 	require.NoError(t, err)
 
 	command := "echo \"<<'EOF'\"\necho $(date)\nEOF"
-	if got := tool.guardCommand(command, t.TempDir()); !strings.Contains(got, "dangerous pattern") {
+	if got := tool.guardCommand(command, t.TempDir()); !strings.Contains(got, "safety guard") {
 		t.Fatalf("default deny should still see command substitution after a heredoc lookalike, got: %q", got)
 	}
 }

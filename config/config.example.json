@@ -525,11 +525,18 @@
     "exec": {
       "enabled": true,
       "enable_deny_patterns": true,
+      "shell_constructs": true,
+      "risk_classifier": true,
+      "allow_unknown": false,
       "risk_threshold": "medium",
       "allow_remote": false,
+      "isolation": {
+        "mode": "auto"
+      },
       "custom_deny_patterns": null,
       "custom_allow_patterns": null,
-      "custom_unlock_patterns": null
+      "custom_unlock_patterns": null,
+      "custom_rules": []
     },
     "skills": {
       "enabled": true,
@@ -652,6 +659,11 @@
       "interceptor_timeout_ms": 5000,
       "approval_timeout_ms": 60000
     }
+  },
+  "isolation": {
+    "_comment": "off leaves child processes on the host; auto uses the platform sandbox when available and otherwise falls back to the static exec guard; required fails closed when the backend is missing. tools.exec.isolation overrides this block for the exec tool only.",
+    "mode": "off",
+    "expose_paths": []
   },
   "events": {
     "logging": {

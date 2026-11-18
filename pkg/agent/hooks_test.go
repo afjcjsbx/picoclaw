@@ -1603,3 +1603,18 @@ func TestCloneStringAnyMap_EmptyMapReturnsNonNil(t *testing.T) {
 		}
 	})
 }
+
+func TestHookManagerHasToolApprovers(t *testing.T) {
+	t.Parallel()
+
+	hm := NewHookManager(nil)
+	if hm.HasToolApprovers() {
+		t.Fatal("empty HookManager must not report a tool approver")
+	}
+	if err := hm.Mount(NamedHook("deny", &denyApprovalHook{})); err != nil {
+		t.Fatalf("Mount: %v", err)
+	}
+	if !hm.HasToolApprovers() {
+		t.Fatal("mounted ToolApprover must be reported")
+	}
+}

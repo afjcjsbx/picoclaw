@@ -77,7 +77,7 @@ func TestShellTool_RiskNestedLaunchers(t *testing.T) {
 func TestShellTool_UnknownCommandsAllowedByDefault(t *testing.T) {
 	t.Parallel()
 
-	tool := riskTestTool(t, config.ExecConfig{})
+	tool := riskTestTool(t, config.ExecConfig{AllowUnknown: true})
 	allowed := []string{
 		"sh script.sh",
 		"bash scripts/deploy.sh",
@@ -85,7 +85,6 @@ func TestShellTool_UnknownCommandsAllowedByDefault(t *testing.T) {
 		"xargs sh -c 'echo ok'",
 		`trap "$ACTION" EXIT`,
 		"env -S 'echo ok'",
-		"echo )",
 	}
 	for _, command := range allowed {
 		if got := tool.guardCommand(command, t.TempDir()); got != "" {
@@ -94,12 +93,12 @@ func TestShellTool_UnknownCommandsAllowedByDefault(t *testing.T) {
 	}
 }
 
-func TestShellTool_ParseFailureAllowedByRiskGuard(t *testing.T) {
+func TestShellTool_ParseFailureIsNeverAllowed(t *testing.T) {
 	t.Parallel()
 
-	unrestricted := riskTestTool(t, config.ExecConfig{})
-	if got := unrestricted.guardCommand("echo )", t.TempDir()); got != "" {
-		t.Fatalf("risk guard should allow an unclassifiable command, got %q", got)
+	unrestricted := riskTestTool(t, config.ExecConfig{AllowUnknown: true})
+	if got := unrestricted.guardCommand("echo )", t.TempDir()); !strings.Contains(got, "could not be parsed") {
+		t.Fatalf("parse failure must be blocked even with allow_unknown, got %q", got)
 	}
 
 	restricted, err := NewExecToolWithConfig(t.TempDir(), true, nil)
@@ -126,12 +125,22 @@ func TestShellTool_RiskClassifierExecute(t *testing.T) {
 		t.Fatalf("execute should return the risk error, got: %s", result.ForLLM)
 	}
 
-	result = tool.Execute(ctx, map[string]any{
+	strict := riskTestTool(t, config.ExecConfig{})
+	result = strict.Execute(ctx, map[string]any{
+		"action":  "run",
+		"command": "x=echo; $x ok",
+	})
+	if !result.IsError || !strings.Contains(result.ForLLM, "strict unknown policy") {
+		t.Fatalf("variable indirection should be reviewed and blocked by strict policy, got: %s", result.ForLLM)
+	}
+
+	legacy := riskTestTool(t, config.ExecConfig{AllowUnknown: true})
+	result = legacy.Execute(ctx, map[string]any{
 		"action":  "run",
 		"command": "x=echo; $x ok",
 	})
 	if result.IsError {
-		t.Fatalf("variable indirection should be allowed as unknown, got: %s", result.ForLLM)
+		t.Fatalf("variable indirection should be allowed by allow_unknown, got: %s", result.ForLLM)
 	}
 
 	allowed := riskTestTool(t, config.ExecConfig{RiskThreshold: "high"})
@@ -297,7 +306,7 @@ func TestShellTool_CustomUnlockPatternsKeepSafetyFloors(t *testing.T) {
 		CustomDenyPatterns:   []string{`^sh blocked\.sh$`},
 	})
 
-	if got := tool.guardCommand("rm -rf /", t.TempDir()); !strings.Contains(got, "dangerous pattern") {
+	if got := tool.guardCommand("rm -rf /", t.TempDir()); !strings.Contains(got, "safety guard") {
 		t.Fatalf("unlock patterns must not bypass hardline, got %q", got)
 	}
 	if got := tool.guardCommand("sh blocked.sh", t.TempDir()); !strings.Contains(got, "dangerous pattern") {
@@ -342,7 +351,7 @@ func TestShellTool_RiskThresholdCanBeRaised(t *testing.T) {
 		t.Fatalf("critical threshold should allow chmod, got %q", got)
 	}
 	dir := t.TempDir()
-	if got := critical.guardCommand("rm -rf /", dir); !strings.Contains(got, "dangerous pattern") {
+	if got := critical.guardCommand("rm -rf /", dir); !strings.Contains(got, "safety guard") {
 		t.Fatalf("critical threshold must not allow root deletion, got %q", got)
 	}
 	if got := critical.guardCommand("rm -rf build", dir); got != "" {
@@ -466,7 +475,7 @@ func TestShellTool_RiskDisabledWithDefaultDenyPatterns(t *testing.T) {
 
 	cfg := &config.Config{
 		Tools: config.ToolsConfig{
-			Exec: config.ExecConfig{EnableDenyPatterns: false},
+			Exec: config.ExecConfig{EnableDenyPatterns: false, AllowUnknown: true},
 		},
 	}
 	tool, err := NewExecToolWithConfig(t.TempDir(), false, cfg)

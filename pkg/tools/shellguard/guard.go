@@ -219,6 +219,9 @@ func (g *Guard) assessArgv(words []word, depth int) Assessment {
 		}
 		return result
 	}
+	if reason, opaque := opaqueInterpreterReason(words); opaque {
+		return unknownAssessment(wordTexts(words), reason)
+	}
 	return g.classify(words)
 }
 
@@ -502,7 +505,7 @@ func (g *Guard) assessWrapper(
 	if next, ok := wrapperSpecs[nestedName]; ok {
 		return preferAssessment(result, g.assessWrapper(nestedName, nested, next, depth+1))
 	}
-	return preferAssessment(result, g.classify(nested))
+	return preferAssessment(result, g.assessArgv(nested, depth+1))
 }
 
 func unknownAssessment(args []string, reason string) Assessment {

@@ -148,6 +148,26 @@ func registerSharedTools(
 			continue
 		}
 
+		if al.hooks.HasToolApprovers() {
+			if rawTool, ok := agent.Tools.Get("exec"); ok {
+				if execTool, ok := rawTool.(*tools.ExecTool); ok {
+					execTool.SetApprovalFunc(func(ctx context.Context, req tools.ApprovalRequest) (bool, error) {
+						decision := al.hooks.ApproveTool(ctx, &ToolApprovalRequest{
+							Tool: "exec",
+							Arguments: map[string]any{
+								"action":  "run",
+								"command": req.Command,
+								"rule":    req.Rule,
+								"reason":  req.Reason,
+								"risk":    req.Risk.String(),
+							},
+						})
+						return decision.Approved, nil
+					})
+				}
+			}
+		}
+
 		if cfg.Tools.IsToolEnabled("web") {
 			searchTool, err := integrationtools.NewWebSearchTool(integrationtools.WebSearchToolOptionsFromConfig(cfg))
 			if err != nil {

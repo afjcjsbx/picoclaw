@@ -9,7 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Exec supports `tools.exec.custom_rules`, a unified allow/deny rule list with an explicit `bypass` set (`shell_constructs`, `risk`, `approval`); the legacy `custom_allow_patterns` and `custom_unlock_patterns` remain aliases.
+- Exec supports a per-tool `tools.exec.isolation` override with `off`, `auto` and `required` modes. `auto` uses the local platform backend when available and falls back to the static guard; `required` fails closed. When the sandbox provides a path boundary, the static workspace/interpreter passes are skipped. POSIX children receive `RLIMIT_NOFILE`, `RLIMIT_FSIZE` and `RLIMIT_NPROC` limits.
+- Human approval for reviewed exec commands: a `ToolApprover` hook receives the command, rule, reason and risk and is the final gate before a reviewed command runs.
 - Exec now supports `tools.exec.custom_unlock_patterns`: full-command regular expressions that let an explicitly trusted command skip the default deny set and the risk classifier. Every other command keeps the configured thresholds, and hardline, custom deny and the workspace boundary still apply.
+
+### Changed
+
+- Unknown exec commands are now reviewed and blocked when no approver is configured. Opaque interpreters (`bash script.sh`, `python3 script.py`, `python3 -`, module loads), stdin programs and parse failures are never silently allowed. `tools.exec.allow_unknown: true` restores the legacy opaque-command behavior; parse failures stay blocked.
+- `shell_constructs` and `risk_classifier` can be toggled independently; `enable_deny_patterns` is their legacy shared alias. The classifier remains active when strict unknown blocking needs it.
+- `timeout: 0` now uses the configured default, matching `timeout_seconds`; only a timeout above the 600s foreground cap promotes a run to the background.
+
+### Security
+
+- Exec hardline is evaluated on the parsed AST: recursive deletion of protected roots, `find -delete`/`find -exec` on them, recursive `chmod`/`chown`/`chgrp`, `dd` reads and block-device writes, redirections to block devices, `kill -1`, `kill -9 1` and self-recursive background functions are always rejected.
+- The exec guard reports typed `Allow`, `Review` and `Block` decisions with stable rule identifiers, so approval, audit and tests do not depend on user-facing messages.
+
+### Added
+
 - Exec now breaks out of a retry loop on blocked commands: after three consecutive identical guard rejections in one conversation, the result carries a `HARD STOP` message telling the model to stop retrying, rewording or splitting the command and to report the blocker instead. The breaker is process-local and bounded (64 conversations, one 64-bit hash and a counter each), and resets on a different command, an allowed run or `/clear`.
 - `/usage` (alias `/cost`) chat command and `picoclaw usage` CLI command that report provider-reported token usage and cost per session, with per-model and input cache breakdowns.
 - Exec remembers the cwd where a foreground command ended and reuses it in later calls of the same conversation. On Unix a shell wrapper appends a `pwd -P` marker, so `cd` inside the command is observed; the path is reported as `cwd` in the `[exec]` header and stored only when it is inside the workspace and still exists. The model-side `env` argument was removed because environment variables are not visible to the command guard; operators still control the child environment with `tools.exec.env_set` and `tools.exec.env_allowlist`, and per-command values use an inline `FOO=bar command` assignment.

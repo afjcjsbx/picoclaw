@@ -17,7 +17,7 @@ import (
 )
 
 func applyPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, root string) error {
-	if !isolation.Enabled {
+	if !isolation.Active() {
 		return nil
 	}
 	// Bubblewrap is the only supported Linux backend right now. Fail closed when

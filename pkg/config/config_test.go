@@ -4130,3 +4130,42 @@ func TestMemoryConfigDefaultsAndOverrides(t *testing.T) {
 		t.Errorf("unexpected overrides: %+v", m)
 	}
 }
+
+func TestIsolationConfigNormalized(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		in      IsolationConfig
+		want    string
+		wantErr bool
+	}{
+		{"empty is off", IsolationConfig{}, IsolationModeOff, false},
+		{"enabled is required", IsolationConfig{Enabled: true}, IsolationModeRequired, false},
+		{"auto", IsolationConfig{Mode: " AUTO "}, IsolationModeAuto, false},
+		{"required", IsolationConfig{Mode: IsolationModeRequired}, IsolationModeRequired, false},
+		{"off", IsolationConfig{Mode: IsolationModeOff}, IsolationModeOff, false},
+		{"unknown", IsolationConfig{Mode: "yolo"}, "", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := tt.in.Normalized()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("Normalized() error = nil, want an error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Normalized() error = %v", err)
+			}
+			if got.EffectiveMode() != tt.want {
+				t.Errorf("EffectiveMode() = %q, want %q", got.EffectiveMode(), tt.want)
+			}
+			if got.Enabled != (tt.want != IsolationModeOff) {
+				t.Errorf("Enabled = %v, want %v", got.Enabled, tt.want != IsolationModeOff)
+			}
+		})
+	}
+}

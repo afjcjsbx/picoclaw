@@ -627,6 +627,21 @@ func (hm *HookManager) AfterTool(
 	)
 }
 
+// HasToolApprovers reports whether at least one ToolApprover hook is mounted.
+// Exec uses this to fail closed instead of treating an empty hook manager as
+// an implicit approval.
+func (hm *HookManager) HasToolApprovers() bool {
+	if hm == nil {
+		return false
+	}
+	for _, reg := range hm.snapshotHooks() {
+		if _, ok := reg.Hook.(ToolApprover); ok {
+			return true
+		}
+	}
+	return false
+}
+
 func (hm *HookManager) ApproveTool(ctx context.Context, req *ToolApprovalRequest) ApprovalDecision {
 	if hm == nil || req == nil {
 		return ApprovalDecision{Approved: true}

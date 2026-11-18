@@ -8,11 +8,15 @@ The exec tool is used to execute shell commands.
 | Config | Type | Default | Description |
 |--------|------|---------|-------------|
 | `enabled` | bool | `true` | Enable the exec tool |
-| `enable_deny_patterns` | bool | `true` | Enable the built-in shell-construct deny set (command substitution, pipe-to-shell, shell heredocs) and the AST risk classifier |
+| `enable_deny_patterns` | bool | `true` | Legacy alias for enabling both `shell_constructs` and `risk_classifier` |
+| `shell_constructs` | bool | inherits `enable_deny_patterns` | Enable the built-in shell-construct deny set: command substitution, pipe-to-shell and shell heredocs |
+| `risk_classifier` | bool | inherits `enable_deny_patterns` | Enable the AST risk classifier. It stays active when `allow_unknown` is `false` because strict unknown blocking needs it |
+| `allow_unknown` | bool | `false` | Legacy compatibility switch. When `false`, commands whose risk cannot be classified (opaque script files, stdin interpreters, dynamic command names, parse failures) are reviewed and blocked without an approver. When `true`, opaque commands run without review; parse failures are still blocked |
 | `custom_deny_patterns` | string[] | `[]` | Additional deny patterns (regular expressions); always enforced and they take priority over allow rules |
-| `custom_allow_patterns` | string[] | `[]` | Full-command allow patterns (regular expressions, anchored automatically). They exempt only the built-in shell-construct deny set. They do not exempt the AST risk classifier; hardline and custom deny patterns still win |
-| `custom_unlock_patterns` | string[] | `[]` | Full-command unlock patterns (regular expressions, anchored automatically). A match skips the default deny set and the AST risk classifier, so an explicitly trusted command runs even when it is critical or unclassifiable. Hardline, custom deny and the workspace boundary still apply |
-| `risk_threshold` | string | `"medium"` | Highest risk level the AST classifier allows: `low`, `medium`, `high` or `critical`. Part of the built-in guard set, so it is inactive when `enable_deny_patterns` is `false`. Empty means `medium` |
+| `custom_rules` | object[] | `[]` | Unified operator rules. `{"pattern": "...", "action": "allow", "bypass": ["shell_constructs", "risk", "approval"]}`; deny rules use `{"pattern": "...", "action": "deny"}`. Allow patterns are anchored to the whole command |
+| `custom_allow_patterns` | string[] | `[]` | Legacy allow alias for `bypass: ["shell_constructs"]`; it never exempts the AST risk classifier |
+| `custom_unlock_patterns` | string[] | `[]` | Legacy allow alias for `bypass: ["shell_constructs", "risk", "approval"]`; hardline, custom deny and the workspace boundary still apply |
+| `risk_threshold` | string | `"medium"` | Highest risk level the AST classifier allows: `low`, `medium`, `high` or `critical`. The classifier stays active when `enable_deny_patterns` is `false` if strict unknown blocking (`allow_unknown: false`) needs it. Empty means `medium` |
 | `risk_overrides` | object | `{}` | Base risk level per command (command name to level), replacing the built-in table. Argument modifiers can still elevate it |
 | `arg_modifiers` | object | `{}` | Extra argument-aware risk elevations per command. Every listed token must be present; the highest matching level wins |
 | `allow_remote` | bool | `false` | When `false`, exec only accepts commands that originate from internal channels (`cli`, `system`, `subagent`). Remote channels are then blocked (fail-closed): an empty channel is also rejected. Set it to `true` only when remote command execution is explicitly intended |
@@ -25,7 +29,46 @@ The exec tool is used to execute shell commands.
 authorized by `tools.cron.command_allowed_remotes` instead and are not blocked by
 `allow_remote`.
 
-Environment variables use the `PICOCLAW_TOOLS_EXEC_` prefix: `PICOCLAW_TOOLS_EXEC_ENABLED`, `PICOCLAW_TOOLS_EXEC_ENABLE_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_RISK_THRESHOLD`, `PICOCLAW_TOOLS_EXEC_ALLOW_REMOTE`, `PICOCLAW_TOOLS_EXEC_CUSTOM_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_CUSTOM_ALLOW_PATTERNS`, `PICOCLAW_TOOLS_EXEC_CUSTOM_UNLOCK_PATTERNS`, `PICOCLAW_TOOLS_EXEC_TIMEOUT_SECONDS`, `PICOCLAW_TOOLS_EXEC_MAX_OUTPUT_CHARS`, `PICOCLAW_TOOLS_EXEC_ENV_ALLOWLIST` (comma-separated). `env_set`, `risk_overrides` and `arg_modifiers` are JSON-only because their values are structured.
+### Isolation
+
+The OS sandbox is the hard boundary. The static guard is a policy and approval
+layer, not a replacement for kernel containment. Exec can override the
+top-level isolation block per tool:
+
+```json
+{
+  "tools": {
+    "exec": {
+      "isolation": { "mode": "auto" }
+    }
+  }
+}
+```
+
+| Mode | Behavior |
+|------|----------|
+| `off` | Run on the host. The static workspace and interpreter passes stay active. |
+| `auto` | Use the configured platform backend when it is available; otherwise fall back to the static guard. |
+| `required` | Require the backend. A missing backend or a failed preflight rejects the command. |
+
+When the sandbox provides a path boundary, exec skips the static workspace and
+interpreter passes: the kernel mount policy already owns path containment, and
+the static pass would reject valid in-sandbox paths or miss dynamic interpreter
+programs. Windows keeps the static workspace scanner because its restricted-token
+backend does not remap paths. Hardline, custom deny rules, the risk classifier
+and human approval still apply.
+
+Docker and SSH are never selected implicitly. They are opt-in backends for
+deployments that want a container or a remote host as the boundary; the default
+`auto` only uses the local platform backend.
+
+POSIX children also receive resource limits in the shell that starts them:
+`RLIMIT_NOFILE` 4096, `RLIMIT_FSIZE` 1 GiB and `RLIMIT_NPROC` 4096. They are
+defense in depth against file-descriptor exhaustion, a single file filling the
+disk and an unbounded fork bomb; the OS sandbox remains the primary boundary.
+Unsupported limits are ignored on shells that do not implement `ulimit`.
+
+Environment variables use the `PICOCLAW_TOOLS_EXEC_` prefix: `PICOCLAW_TOOLS_EXEC_ENABLED`, `PICOCLAW_TOOLS_EXEC_ENABLE_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_SHELL_CONSTRUCTS`, `PICOCLAW_TOOLS_EXEC_RISK_CLASSIFIER`, `PICOCLAW_TOOLS_EXEC_ALLOW_UNKNOWN`, `PICOCLAW_TOOLS_EXEC_RISK_THRESHOLD`, `PICOCLAW_TOOLS_EXEC_ALLOW_REMOTE`, `PICOCLAW_TOOLS_EXEC_CUSTOM_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_CUSTOM_ALLOW_PATTERNS`, `PICOCLAW_TOOLS_EXEC_CUSTOM_UNLOCK_PATTERNS`, `PICOCLAW_TOOLS_EXEC_TIMEOUT_SECONDS`, `PICOCLAW_TOOLS_EXEC_MAX_OUTPUT_CHARS`, `PICOCLAW_TOOLS_EXEC_ENV_ALLOWLIST` (comma-separated). `env_set`, `risk_overrides` and `arg_modifiers` are JSON-only because their values are structured.
 
 ### Risk classification
 
@@ -46,7 +89,7 @@ Commands above `risk_threshold` are rejected before any process starts, with a s
 Command blocked by risk classifier: command="chmod +x script.sh" risk_level=high threshold=medium reason=command risk exceeds configured threshold
 ```
 
-A dynamic command name, a shell that reads commands from stdin or a script file, and an unparseable command are classified as unknown. They are allowed by default. Set `enable_deny_patterns: false` to disable the built-in guard set.
+A dynamic command name, an interpreter that reads commands from stdin or a script file (`bash script.sh`, `python3 script.py`, `python3 -`, `python3 -m module`), and an unparseable command are classified as unknown. The default policy reviews them and blocks them when no approver is configured. Set `allow_unknown: true` only to restore the legacy behavior for opaque commands; parse failures remain blocked. A configured human approval hook is the final gate; without one, reviewed commands stay blocked.
 
 The classifier also:
 
@@ -97,7 +140,7 @@ Custom thresholds and modifiers:
 
 `risk_overrides` changes the base level but cannot suppress an argument modifier: with `rm` overridden to `medium`, plain `rm file` is allowed while `rm -rf build` is still `critical`.
 
-`custom_allow_patterns` and `custom_unlock_patterns` are anchored to the whole command (`^(?:...)$`). A bare `git` pattern matches only the command `git`, not `git push --force`. `custom_allow_patterns` exempts the default regex deny set only and does not affect the AST risk classifier. To allow a high-risk or unclassifiable command, use `custom_unlock_patterns` for that exact command, or tune `risk_threshold`/`risk_overrides` globally. Hardline and custom deny patterns always win.
+`custom_rules` allow patterns are anchored to the whole command (`^(?:...)$`), as are the legacy allow aliases. A bare `git` pattern matches only the command `git`, not `git push --force`. An allow rule only skips the layers named in `bypass`; hardline, custom deny rules and the workspace boundary always win. `custom_allow_patterns` is the legacy alias for `bypass: ["shell_constructs"]`; `custom_unlock_patterns` is the legacy alias for `bypass: ["shell_constructs", "risk", "approval"]`.
 
 `custom_unlock_patterns` is the explicit per-command override. A matching command skips the default deny set and the AST risk classifier, so it runs even when it would be classified as critical or as unknown. It does not bypass hardline patterns, custom deny patterns or the workspace boundary. Use an exact, anchored pattern for the trusted command; a broad pattern such as `.*` unlocks every command that does not hit the hardline or custom deny floor.
 
@@ -115,9 +158,21 @@ Configurations that need to allow a command the risk classifier rejects should u
 
 Limits worth knowing:
 
-- The classifier is static. A dynamic argument that hides a flag (for example `curl "$FLAGS"`) cannot be inspected; a dynamic command word is treated as unknown and allowed. A dynamic operand for a destructive command (for example `rm "$TARGET"`) is still rejected.
+- The classifier is static. A dynamic argument that hides a flag (for example `curl "$FLAGS"`) cannot be inspected; a dynamic command word is treated as unknown and reviewed. A dynamic operand for a destructive command (for example `rm "$TARGET"`) is still rejected.
 - External programs still run with the OS user's file permissions. Shell redirections are checked by the path guard, but a dynamically built redirection target and file access performed by an external binary are not sandboxed by this layer.
 - Windows is skipped because exec runs PowerShell there. The Windows-only regex floor keeps the generic command patterns that the AST covers on Unix (`npm install -g`, `git push`, `docker run`, process kills, and so on) plus the PowerShell-specific checks described below.
+
+### Human approval
+
+A `ToolApprover` hook is the final gate for commands the static guard cannot
+allow on its own. It receives the tool name and arguments through
+`ApproveTool`, and exec rejects the command when the hook denies it, times out
+or fails. Without a mounted approver, reviewed commands stay blocked; setting
+`allow_unknown: true` is the explicit way to run opaque commands without one.
+
+Hardline and custom deny rules never reach the approver, and known risk levels
+still follow `risk_threshold`. Approver timeout defaults to 60 seconds and is
+set by `hooks.defaults.approval_timeout_ms`.
 
 ## Tool arguments
 
@@ -165,7 +220,7 @@ Background session actions return a JSON `ExecResponse` instead. Once the sessio
 | `background` | bool | — | With `run`, start the command in the background immediately; the result includes a `sessionId`. On Unix, a trailing `&` in the command is normalized to this mode automatically |
 | `pty` | bool | — | Allocate a pseudo-terminal for interactive programs; not supported on Windows |
 | `cwd` | string | — | Working directory for the command. The last cwd observed after a foreground command is remembered for later calls in the same conversation; omit `cwd` to reuse it. Defaults to the agent workspace when no value is remembered |
-| `timeout` | int | — | Timeout in seconds for foreground commands; overrides `tools.exec.timeout_seconds`. Foreground runs are capped at `600`s: `0` (no timeout) and values above the cap start a tracked background session instead of blocking the call. Cannot be combined with `background=true` (except `0`); ignored with a note when a trailing `&` normalizes the run to background. With `wait`: maximum seconds to block (a positive integer), defaulting to and capped by `tools.exec.timeout_seconds` |
+| `timeout` | int | — | Timeout in seconds for foreground commands; overrides `tools.exec.timeout_seconds`. `0` and an omitted value use the configured default. Values above the `600`s foreground cap start a tracked background session instead of blocking the call. Cannot be combined with `background=true` (except `0`); ignored with a note when a trailing `&` normalizes the run to background. With `wait`: maximum seconds to block (a positive integer), defaulting to and capped by `tools.exec.timeout_seconds` |
 | `notify` | bool | — | With `background=true` or a run promoted to background, send a completion message when the process exits (default `false`). Manually killed sessions do not notify. Use it for jobs with a defined end; do not poll or wait in a loop |
 | `offset` | int | — | With `read`: absolute byte offset into the retained session log. By default the response starts at the most recent `limit` bytes; use `0` for the oldest retained byte |
 | `limit` | int | — | With `read`: maximum bytes to return. Defaults to `tools.exec.max_output_chars` |
@@ -173,7 +228,7 @@ Background session actions return a JSON `ExecResponse` instead. Once the sessio
 Behavior notes:
 
 - Run one independent command per tool call and chain dependent commands with `&&` (`;` when later commands must run regardless of earlier failures). Do not separate commands with newlines.
-- A foreground run is capped at `600`s. If the effective timeout is larger (including `timeout: 0`, which disables the limit), the command is not rejected: it starts as a tracked background session, the result contains its `sessionId` and a `note` explaining the promotion, and `notify: true` is accepted. Use `wait`, `poll`, or `read` with that id.
+- A foreground run is capped at `600`s. If the effective timeout is larger, the command is not rejected: it starts as a tracked background session, the result contains its `sessionId` and a `note` explaining the promotion, and `notify: true` is accepted. Use `wait`, `poll`, or `read` with that id. `timeout: 0` does not trigger promotion; it uses the configured default, exactly like an omitted value.
 - When a foreground run times out, the command is terminated and the model-facing result body ends with a hint to re-run it with `background=true` if it is a server, daemon, or watch process. This is the reliable way to keep a long-lived process: a timeout is evidence that the command outlived the call.
 - Unix only: a trailing `&` in `command` is normalized to a tracked background session. The operator is removed so the tracked process is the command itself instead of a shell that exits immediately; the result contains the `sessionId` and a `note`. A `timeout` supplied with that command is ignored with a note because background sessions are not time-limited. Only a standalone final operator is rewritten: `&&`, `|&`, `2>&1`, quoted or escaped `&`, comments, and heredoc bodies are left untouched.
 - A foreground command that starts untracked background work is rejected with guidance to use `background=true`: an inner `&` (`a & b`, `a & # comment`) and the detaching commands `nohup`, `setsid` and `disown`. The single trailing `&` form is converted, not rejected; `background=true` also accepts `nohup`/`setsid` because the tracked shell remains the session root.

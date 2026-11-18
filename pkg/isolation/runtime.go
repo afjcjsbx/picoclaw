@@ -1,6 +1,7 @@
 package isolation
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg"
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
 // MountRule describes a source-to-target mount exposed inside the Linux
@@ -49,6 +51,11 @@ var (
 	// child process. It is invalidated whenever Configure changes the config.
 	preflightMu    sync.Mutex
 	preflightCache preflightResult
+
+	// perConfigPreflight caches by serialized config because exec can carry a
+	// per-tool IsolationConfig that differs from the process-wide setting.
+	perConfigPreflightMu sync.Mutex
+	perConfigPreflight   = map[string]error{}
 )
 
 type preflightResult struct {
@@ -193,6 +200,9 @@ func ValidateExposePaths(items []config.ExposePath) error {
 
 		if !filepath.IsAbs(source) || !filepath.IsAbs(target) {
 			return fmt.Errorf("source and target must be absolute paths")
+		}
+		if _, err := os.Stat(source); err != nil {
+			return fmt.Errorf("expose_paths source %s is not accessible: %w", source, err)
 		}
 		if _, ok := seen[target]; ok {
 			return fmt.Errorf("duplicate expose_path target: %s", target)
@@ -386,6 +396,56 @@ func IsSupported() bool {
 	return isSupportedOn(runtime.GOOS)
 }
 
+// Available reports whether the configured backend binary/API is present on
+// this host. It is used by auto mode to decide whether to fall back to the
+// static exec guard instead of failing the command.
+func Available(cfg config.IsolationConfig) bool {
+	if !cfg.Active() || !IsSupported() {
+		return false
+	}
+	switch runtime.GOOS {
+	case "linux":
+		_, err := exec.LookPath("bwrap")
+		return err == nil
+	case "darwin":
+		_, err := exec.LookPath("sandbox-exec")
+		return err == nil
+	default:
+		return true
+	}
+}
+
+// WillIsolate reports whether a command launched with cfg will enter an
+// isolation backend. Auto mode returns false when the backend is unavailable,
+// so callers can keep the static guard active; required mode returns true and
+// fails closed at startup instead.
+func WillIsolate(cfg config.IsolationConfig) bool {
+	switch cfg.EffectiveMode() {
+	case config.IsolationModeRequired:
+		return true
+	case config.IsolationModeAuto:
+		return Available(cfg)
+	default:
+		return false
+	}
+}
+
+// HasPathBoundary reports whether the active platform backend provides a
+// kernel-level filesystem view. Windows isolation restricts the token and
+// integrity level but does not remap paths, so the static workspace pass must
+// stay active there even when isolation is required.
+func HasPathBoundary(cfg config.IsolationConfig) bool {
+	if !WillIsolate(cfg) {
+		return false
+	}
+	switch runtime.GOOS {
+	case "linux", "darwin":
+		return true
+	default:
+		return false
+	}
+}
+
 func isSupportedOn(goos string) bool {
 	switch goos {
 	case "linux", "windows", "darwin":
@@ -398,7 +458,7 @@ func isSupportedOn(goos string) bool {
 // Preflight validates the configured isolation state and prepares the instance
 // runtime directories before any child process is launched.
 func Preflight() error {
-	return preflight(CurrentConfig())
+	return preflightFor(CurrentConfig())
 }
 
 // preflightCached runs Preflight at most once per configuration generation.
@@ -420,8 +480,28 @@ func preflightCached() error {
 	return err
 }
 
+func preflightFor(isolation config.IsolationConfig) error {
+	if !isolation.Active() {
+		return nil
+	}
+	keyBytes, err := json.Marshal(isolation)
+	if err != nil {
+		return fmt.Errorf("serialize isolation config: %w", err)
+	}
+	key := string(keyBytes)
+
+	perConfigPreflightMu.Lock()
+	defer perConfigPreflightMu.Unlock()
+	if cached, ok := perConfigPreflight[key]; ok {
+		return cached
+	}
+	err = preflight(isolation)
+	perConfigPreflight[key] = err
+	return err
+}
+
 func preflight(isolation config.IsolationConfig) error {
-	if !isolation.Enabled {
+	if !isolation.Active() {
 		return nil
 	}
 	if !IsSupported() {
@@ -465,16 +545,21 @@ func preflight(isolation config.IsolationConfig) error {
 // Start prepares isolation for the command, starts it, and applies any
 // post-start platform hooks required by the active backend.
 func Start(cmd *exec.Cmd) error {
-	if err := PrepareCommand(cmd); err != nil {
+	return StartFor(cmd, CurrentConfig())
+}
+
+// StartFor is Start with an explicit config. The exec tool uses it so a
+// per-tool isolation override does not mutate or depend on process-wide state.
+func StartFor(cmd *exec.Cmd, isolation config.IsolationConfig) error {
+	if err := PrepareCommandFor(cmd, isolation); err != nil {
 		return err
 	}
 	if err := cmd.Start(); err != nil {
 		cleanupPendingPlatformResources(cmd)
 		return err
 	}
-	isolation := CurrentConfig()
 	root := ""
-	if isolation.Enabled {
+	if isolation.Active() {
 		var err error
 		root, err = ResolveInstanceRoot()
 		if err != nil {
@@ -492,16 +577,20 @@ func Start(cmd *exec.Cmd) error {
 // Run is the Start-and-Wait helper that keeps the same isolation behavior as
 // Start while returning the command's final exit status.
 func Run(cmd *exec.Cmd) error {
-	if err := PrepareCommand(cmd); err != nil {
+	return RunFor(cmd, CurrentConfig())
+}
+
+// RunFor is Run with an explicit config.
+func RunFor(cmd *exec.Cmd, isolation config.IsolationConfig) error {
+	if err := PrepareCommandFor(cmd, isolation); err != nil {
 		return err
 	}
 	if err := cmd.Start(); err != nil {
 		cleanupPendingPlatformResources(cmd)
 		return err
 	}
-	isolation := CurrentConfig()
 	root := ""
-	if isolation.Enabled {
+	if isolation.Active() {
 		var err error
 		root, err = ResolveInstanceRoot()
 		if err != nil {
@@ -528,19 +617,26 @@ func terminateStartedCommand(cmd *exec.Cmd) {
 // PrepareCommand mutates the command in-place so it inherits the configured
 // isolated environment before being started by the caller.
 func PrepareCommand(cmd *exec.Cmd) error {
-	isolation := CurrentConfig()
-	if err := preflightCached(); err != nil {
+	return PrepareCommandFor(cmd, CurrentConfig())
+}
+
+// PrepareCommandFor is PrepareCommand with an explicit config.
+func PrepareCommandFor(cmd *exec.Cmd, isolation config.IsolationConfig) error {
+	if !isolation.Active() {
+		return nil
+	}
+	if isolation.EffectiveMode() == config.IsolationModeAuto && !Available(isolation) {
+		logger.DebugCF("isolation", "auto isolation backend is unavailable; using the static exec guard",
+			map[string]any{"backend": backendLabel(runtime.GOOS)})
+		return nil
+	}
+	if err := preflightFor(isolation); err != nil {
 		return err
 	}
-	if isolation.Enabled {
-		root, err := ResolveInstanceRoot()
-		if err != nil {
-			return err
-		}
-		ApplyUserEnv(cmd, root)
-		if err := applyPlatformIsolation(cmd, isolation, root); err != nil {
-			return err
-		}
+	root, err := ResolveInstanceRoot()
+	if err != nil {
+		return err
 	}
-	return nil
+	ApplyUserEnv(cmd, root)
+	return applyPlatformIsolation(cmd, isolation, root)
 }

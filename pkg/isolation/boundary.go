@@ -33,7 +33,10 @@ type Boundary struct {
 // executable, working directory, and absolute path arguments when it starts a
 // child process.
 func DescribeBoundary(workspace string, cfg config.IsolationConfig) (Boundary, bool) {
-	if !cfg.Enabled || !IsSupported() {
+	if !cfg.Active() || !IsSupported() {
+		return Boundary{}, false
+	}
+	if cfg.EffectiveMode() == config.IsolationModeAuto && !Available(cfg) {
 		return Boundary{}, false
 	}
 

@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/sipeed/picoclaw/pkg"
@@ -78,24 +79,31 @@ func TestIsSupportedOn(t *testing.T) {
 }
 
 func TestValidateExposePaths(t *testing.T) {
-	err := ValidateExposePaths([]config.ExposePath{{Source: "/src", Target: "/dst", Mode: "ro"}})
+	src := t.TempDir()
+	other := t.TempDir()
+	err := ValidateExposePaths([]config.ExposePath{{Source: src, Target: "/dst", Mode: "ro"}})
 	if err != nil {
 		t.Fatalf("ValidateExposePaths() error = %v", err)
 	}
 
-	err = ValidateExposePaths([]config.ExposePath{{Source: "/src", Target: "/dst", Mode: "bad"}})
+	err = ValidateExposePaths([]config.ExposePath{{Source: src, Target: "/dst", Mode: "bad"}})
 	if err == nil {
 		t.Fatal("ValidateExposePaths() expected invalid mode error")
 	}
 
 	err = ValidateExposePaths(
 		[]config.ExposePath{
-			{Source: "/src", Target: "/dst", Mode: "ro"},
-			{Source: "/other", Target: "/dst", Mode: "rw"},
+			{Source: src, Target: "/dst", Mode: "ro"},
+			{Source: other, Target: "/dst", Mode: "rw"},
 		},
 	)
 	if err == nil {
 		t.Fatal("ValidateExposePaths() expected duplicate target error")
+	}
+
+	err = ValidateExposePaths([]config.ExposePath{{Source: filepath.Join(src, "missing"), Target: "/dst", Mode: "ro"}})
+	if err == nil || !strings.Contains(err.Error(), "not accessible") {
+		t.Fatalf("ValidateExposePaths() missing-source error = %v", err)
 	}
 }
 
@@ -244,5 +252,19 @@ func TestPrepareCommand_AppliesUserEnv(t *testing.T) {
 	}
 	if runtime.GOOS != "windows" && !hasHome {
 		t.Fatal("PrepareCommand() did not inject HOME")
+	}
+}
+
+func TestWillIsolateModes(t *testing.T) {
+	t.Parallel()
+
+	if WillIsolate(config.IsolationConfig{Mode: config.IsolationModeOff}) {
+		t.Fatal("off mode must not isolate")
+	}
+	if !WillIsolate(config.IsolationConfig{Mode: config.IsolationModeRequired}) {
+		t.Fatal("required mode must isolate")
+	}
+	if Available(config.IsolationConfig{Mode: config.IsolationModeOff}) {
+		t.Fatal("off mode must not report an available backend")
 	}
 }

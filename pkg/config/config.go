@@ -181,11 +181,66 @@ func (c EvolutionConfig) AutoAppliesDrafts() bool {
 	return c.EffectiveMode() == "apply"
 }
 
+// Isolation modes. "off" leaves child processes on the host, "auto" uses the
+// platform backend when it is available and otherwise falls back to the static
+// exec guard, and "required" fails closed when the backend is unavailable.
+const (
+	IsolationModeOff      = "off"
+	IsolationModeAuto     = "auto"
+	IsolationModeRequired = "required"
+)
+
 // IsolationConfig controls subprocess isolation for commands started by PicoClaw.
 // It is applied by the isolation package rather than by sandboxing the main process.
 type IsolationConfig struct {
+	// Mode is "off", "auto" or "required". Empty derives the mode from the
+	// deprecated Enabled field: true means required, false means off.
+	Mode string `json:"mode,omitempty"`
+	// Enabled is kept for backward compatibility. Use Mode for new configs.
+	// Normalized sets it to true for auto and required.
 	Enabled     bool         `json:"enabled,omitempty"`
 	ExposePaths []ExposePath `json:"expose_paths,omitempty"`
+}
+
+// Normalized validates the isolation mode and keeps the legacy Enabled field in
+// sync with it. Unknown values are rejected so a typo cannot silently disable a
+// security boundary.
+func (c IsolationConfig) Normalized() (IsolationConfig, error) {
+	mode := strings.ToLower(strings.TrimSpace(c.Mode))
+	if mode == "" {
+		if c.Enabled {
+			mode = IsolationModeRequired
+		} else {
+			mode = IsolationModeOff
+		}
+	}
+	switch mode {
+	case IsolationModeOff, IsolationModeAuto, IsolationModeRequired:
+	default:
+		return c, fmt.Errorf(
+			"mode %q must be %q, %q or %q",
+			c.Mode, IsolationModeOff, IsolationModeAuto, IsolationModeRequired,
+		)
+	}
+	c.Mode = mode
+	c.Enabled = mode != IsolationModeOff
+	return c, nil
+}
+
+// EffectiveMode returns the normalized mode without mutating the config.
+func (c IsolationConfig) EffectiveMode() string {
+	if c.Mode != "" {
+		return strings.ToLower(strings.TrimSpace(c.Mode))
+	}
+	if c.Enabled {
+		return IsolationModeRequired
+	}
+	return IsolationModeOff
+}
+
+// Active reports whether the config asks for an isolation backend.
+func (c IsolationConfig) Active() bool {
+	return c.EffectiveMode() != IsolationModeOff
 }
 
 // ExposePath describes a host path that should remain visible inside the isolated
@@ -1451,19 +1506,40 @@ type ArgModifierConfig struct {
 	Level string   `json:"level"`
 }
 
+// ExecRuleConfig is one operator command rule. Pattern is anchored to the
+// whole command. Action is "allow" or "deny"; Bypass lists the layers an allow
+// rule skips: "shell_constructs", "risk" and "approval". Hardline, custom deny
+// rules and the workspace boundary cannot be bypassed.
+type ExecRuleConfig struct {
+	Pattern string   `json:"pattern"`
+	Action  string   `json:"action"`
+	Bypass  []string `json:"bypass,omitempty"`
+}
+
 // ExecConfig configures shell command execution.
 //
 // EnableDenyPatterns disables the optional built-in guard set: the Unix
 // shell-construct deny patterns and the AST risk classifier. Hardline patterns
 // and CustomDenyPatterns still apply when it is false.
 type ExecConfig struct {
-	ToolConfig          `         envPrefix:"PICOCLAW_TOOLS_EXEC_"`
-	EnableDenyPatterns  bool     `                                 json:"enable_deny_patterns"  env:"PICOCLAW_TOOLS_EXEC_ENABLE_DENY_PATTERNS"`
-	AllowRemote         bool     `                                 json:"allow_remote"          env:"PICOCLAW_TOOLS_EXEC_ALLOW_REMOTE"`
-	CustomDenyPatterns  []string `                                 json:"custom_deny_patterns"  env:"PICOCLAW_TOOLS_EXEC_CUSTOM_DENY_PATTERNS"`
-	CustomAllowPatterns []string `                                 json:"custom_allow_patterns" env:"PICOCLAW_TOOLS_EXEC_CUSTOM_ALLOW_PATTERNS"`
-	TimeoutSeconds      int      `                                 json:"timeout_seconds"       env:"PICOCLAW_TOOLS_EXEC_TIMEOUT_SECONDS"`  // 0 means use default (180s)
-	MaxOutputChars      int      `                                 json:"max_output_chars"      env:"PICOCLAW_TOOLS_EXEC_MAX_OUTPUT_CHARS"` // 0 means use default (50000 chars)
+	ToolConfig         `     envPrefix:"PICOCLAW_TOOLS_EXEC_"`
+	EnableDenyPatterns bool `                                 json:"enable_deny_patterns" env:"PICOCLAW_TOOLS_EXEC_ENABLE_DENY_PATTERNS"`
+	AllowRemote        bool `                                 json:"allow_remote"         env:"PICOCLAW_TOOLS_EXEC_ALLOW_REMOTE"`
+	// ShellConstructs enables the default deny set for constructs the AST
+	// cannot inspect. Nil falls back to EnableDenyPatterns.
+	ShellConstructs *bool `json:"shell_constructs,omitempty" env:"PICOCLAW_TOOLS_EXEC_SHELL_CONSTRUCTS"`
+	// RiskClassifier enables the AST risk classifier. Nil falls back to
+	// EnableDenyPatterns. It stays active when allow_unknown is false because
+	// strict unknown blocking needs it.
+	RiskClassifier *bool `json:"risk_classifier,omitempty" env:"PICOCLAW_TOOLS_EXEC_RISK_CLASSIFIER"`
+	// CustomRules is the unified operator rule list. Legacy
+	// custom_allow_patterns and custom_unlock_patterns map onto allow rules
+	// with the corresponding bypass set.
+	CustomRules         []ExecRuleConfig `json:"custom_rules,omitempty" yaml:"-"`
+	CustomDenyPatterns  []string         `json:"custom_deny_patterns"            env:"PICOCLAW_TOOLS_EXEC_CUSTOM_DENY_PATTERNS"`
+	CustomAllowPatterns []string         `json:"custom_allow_patterns"           env:"PICOCLAW_TOOLS_EXEC_CUSTOM_ALLOW_PATTERNS"`
+	TimeoutSeconds      int              `json:"timeout_seconds"                 env:"PICOCLAW_TOOLS_EXEC_TIMEOUT_SECONDS"`  // 0 means use default (180s)
+	MaxOutputChars      int              `json:"max_output_chars"                env:"PICOCLAW_TOOLS_EXEC_MAX_OUTPUT_CHARS"` // 0 means use default (50000 chars)
 
 	// CustomUnlockPatterns is a full-command operator exception that takes
 	// precedence over the default deny set and the AST risk classifier.
@@ -1477,18 +1553,28 @@ type ExecConfig struct {
 	RiskThreshold string `json:"risk_threshold,omitempty" env:"PICOCLAW_TOOLS_EXEC_RISK_THRESHOLD"`
 	// RiskOverrides sets the base risk level per command, replacing the
 	// built-in table entry. Argument modifiers can still elevate it.
-	RiskOverrides map[string]string `json:"risk_overrides,omitempty" yaml:"-" env:"-"`
+	RiskOverrides map[string]string `json:"risk_overrides,omitempty" env:"-" yaml:"-"`
 	// ArgModifiers adds argument-aware risk elevations per command on top of
 	// the built-in table. All listed args must be present; highest level wins.
-	ArgModifiers map[string][]ArgModifierConfig `json:"arg_modifiers,omitempty" yaml:"-" env:"-"`
+	ArgModifiers map[string][]ArgModifierConfig `json:"arg_modifiers,omitempty" env:"-" yaml:"-"`
 	// EnvSet lists variables always injected into exec child processes. Values
 	// are trusted configuration and override inherited variables, including
 	// PATH. It is not exposed as a tool argument; JSON only.
-	EnvSet map[string]string `json:"env_set,omitempty" yaml:"-" env:"-"`
+	EnvSet map[string]string `json:"env_set,omitempty" env:"-" yaml:"-"`
 	// EnvAllowlist extends the built-in allowlist with additional parent
 	// variable names inherited by exec child processes. Use explicit names,
 	// never wildcards: allowlisting a secret exposes it to every command.
-	EnvAllowlist []string `json:"env_allowlist,omitempty" yaml:"-" env:"PICOCLAW_TOOLS_EXEC_ENV_ALLOWLIST"`
+	EnvAllowlist []string `json:"env_allowlist,omitempty" env:"PICOCLAW_TOOLS_EXEC_ENV_ALLOWLIST" yaml:"-"`
+	// Isolation overrides the top-level isolation block for the exec tool.
+	// Nil inherits the top-level settings; a value lets exec run sandboxed while
+	// other child-process users stay on the host, or vice versa. Set
+	// Mode=required to fail closed when the backend is unavailable.
+	Isolation *IsolationConfig `json:"isolation,omitempty" yaml:"-"`
+	// AllowUnknown preserves the legacy behavior of allowing commands whose
+	// risk cannot be classified (opaque scripts, dynamic command names and
+	// parse failures). The default is false: those commands are reviewed and
+	// blocked when no approver is configured.
+	AllowUnknown bool `json:"allow_unknown,omitempty" env:"PICOCLAW_TOOLS_EXEC_ALLOW_UNKNOWN"`
 }
 
 // DefaultExecTimeoutSeconds is the foreground command timeout used when
@@ -2078,6 +2164,16 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	applySkillsRegistryEnvCompat(cfg)
 
+	if cfg.Isolation, err = cfg.Isolation.Normalized(); err != nil {
+		return nil, fmt.Errorf("isolation: %w", err)
+	}
+	if cfg.Tools.Exec.Isolation != nil {
+		normalized, normalizeErr := cfg.Tools.Exec.Isolation.Normalized()
+		if normalizeErr != nil {
+			return nil, fmt.Errorf("tools.exec.isolation: %w", normalizeErr)
+		}
+		cfg.Tools.Exec.Isolation = &normalized
+	}
 	if err = InitChannelList(cfg.Channels); err != nil {
 		return nil, err
 	}

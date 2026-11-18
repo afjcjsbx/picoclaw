@@ -14,6 +14,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/constants"
+	"github.com/sipeed/picoclaw/pkg/isolation"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	fstools "github.com/sipeed/picoclaw/pkg/tools/fs"
 	"github.com/sipeed/picoclaw/pkg/tools/shellguard"
@@ -47,8 +48,7 @@ type ExecTool struct {
 	denyPatterns         []*regexp.Regexp
 	hardlineDenyPatterns []*regexp.Regexp
 	customDenyPatterns   []*regexp.Regexp
-	customAllowPatterns  []*regexp.Regexp
-	customUnlockPatterns []*regexp.Regexp
+	allowRules           []execAllowRule
 	// allowedPathPatterns are paths exec may read or modify. exec can mutate
 	// any path it receives, so callers must pass write grants, not a read-only
 	// allowlist.
@@ -60,12 +60,17 @@ type ExecTool struct {
 	// baseEnv is the lookup view for the command guard (HOME, CDPATH).
 	// baseEnvList is the same data pre-rendered and sorted for runEnv, so a
 	// command does not rebuild and sort the environment on every call.
-	baseEnv        map[string]string
-	baseEnvList    []string
-	state          *execStateStore
-	sessionManager *SessionManager
-	riskGuard      *shellguard.Guard
-	blockBreaker   *execBlockBreaker
+	baseEnv         map[string]string
+	baseEnvList     []string
+	state           *execStateStore
+	sessionManager  *SessionManager
+	riskGuard       *shellguard.Guard
+	allowUnknown    bool
+	approvalFunc    ApprovalFunc
+	isolationConfig config.IsolationConfig
+	sandboxActive   bool
+	sandboxPaths    bool
+	blockBreaker    *execBlockBreaker
 }
 
 var _ AsyncExecutor = (*ExecTool)(nil)
@@ -341,58 +346,71 @@ func NewExecToolWithConfig(
 ) (*ExecTool, error) {
 	denyPatterns := make([]*regexp.Regexp, 0)
 	customDenyPatterns := make([]*regexp.Regexp, 0)
-	customAllowPatterns := make([]*regexp.Regexp, 0)
-	customUnlockPatterns := make([]*regexp.Regexp, 0)
+	var allowRules []execAllowRule
 	var allowedPathPatterns []*regexp.Regexp
 	// Fail closed when no config is supplied. Callers that need remote exec
 	// must opt in explicitly through cfg.Tools.Exec.AllowRemote.
 	allowRemote := false
-	enableDefaultGuard := true
+	allowUnknown := false
+	var enableShellConstructs bool
+	var enableRiskClassifier bool
 	var err error
+	isolationConfig := config.DefaultConfig().Isolation
 	if len(allowPaths) > 0 {
 		allowedPathPatterns = allowPaths[0]
 	}
 
 	if cfg != nil {
 		execConfig := cfg.Tools.Exec
-		enableDefaultGuard = execConfig.EnableDenyPatterns
+		enableShellConstructs = execConfig.EnableDenyPatterns
+		enableRiskClassifier = execConfig.EnableDenyPatterns
+		if execConfig.ShellConstructs != nil {
+			enableShellConstructs = *execConfig.ShellConstructs
+		}
+		if execConfig.RiskClassifier != nil {
+			enableRiskClassifier = *execConfig.RiskClassifier
+		}
 		allowRemote = execConfig.AllowRemote
-		if enableDefaultGuard {
+		allowUnknown = execConfig.AllowUnknown
+		isolationConfig = cfg.Isolation
+		if execConfig.Isolation != nil {
+			isolationConfig = *execConfig.Isolation
+		}
+		isolationConfig, err = isolationConfig.Normalized()
+		if err != nil {
+			return nil, fmt.Errorf("tools.exec.isolation: %w", err)
+		}
+		if enableShellConstructs {
 			denyPatterns = append(denyPatterns, defaultDenyPatterns...)
 			if runtime.GOOS == "windows" {
 				denyPatterns = append(denyPatterns, windowsDenyPatterns...)
 			}
 		} else {
-			// Only the optional built-in default set is disabled here. The
+			// Only the optional shell-construct set is disabled here. The
 			// hardline floor and operator-defined custom deny rules still apply.
 			logger.WarnCF(
 				"tools",
-				"default deny patterns are disabled; hardline and custom deny patterns still apply",
+				"shell construct deny patterns are disabled; hardline and custom deny patterns still apply",
 				nil,
 			)
 		}
-		if len(execConfig.CustomDenyPatterns) > 0 {
+		if len(execConfig.CustomDenyPatterns) > 0 || len(execConfig.CustomRules) > 0 {
 			logger.InfoCF("tools", "using custom deny patterns", map[string]any{
-				"patterns": execConfig.CustomDenyPatterns,
+				"patterns": customDenyPatternsFromRules(execConfig),
 			})
-			customDenyPatterns, err = compilePatterns(execConfig.CustomDenyPatterns, regexp.Compile, "custom deny")
-			if err != nil {
-				return nil, err
-			}
 		}
-		customAllowPatterns, err = compilePatterns(
-			execConfig.CustomAllowPatterns, compileFullMatchPattern, "custom allow",
-		)
+		allowRules, err = compileExecAllowRules(execConfig)
 		if err != nil {
 			return nil, err
 		}
-		customUnlockPatterns, err = compilePatterns(
-			execConfig.CustomUnlockPatterns, compileFullMatchPattern, "custom unlock",
+		customDenyPatterns, err = compilePatterns(
+			customDenyPatternsFromRules(execConfig), regexp.Compile, "custom deny",
 		)
 		if err != nil {
 			return nil, err
 		}
 	} else {
+		enableRiskClassifier = true
 		denyPatterns = append(denyPatterns, defaultDenyPatterns...)
 		if runtime.GOOS == "windows" {
 			denyPatterns = append(denyPatterns, windowsDenyPatterns...)
@@ -417,7 +435,10 @@ func NewExecToolWithConfig(
 		execEnvAllowlist = cfg.Tools.Exec.EnvAllowlist
 	}
 
-	riskGuard, err := newRiskGuard(cfg, enableDefaultGuard)
+	// The strict unknown policy needs the AST classifier even when the optional
+	// shell-construct set is disabled; otherwise opaque commands cannot be
+	// detected.
+	riskGuard, err := newRiskGuard(cfg, enableRiskClassifier || !allowUnknown)
 	if err != nil {
 		return nil, err
 	}
@@ -434,8 +455,7 @@ func NewExecToolWithConfig(
 		denyPatterns:         denyPatterns,
 		hardlineDenyPatterns: hardlinePatterns,
 		customDenyPatterns:   customDenyPatterns,
-		customAllowPatterns:  customAllowPatterns,
-		customUnlockPatterns: customUnlockPatterns,
+		allowRules:           allowRules,
 		allowedPathPatterns:  allowedPathPatterns,
 		restrictToWorkspace:  restrict,
 		allowRemote:          allowRemote,
@@ -446,6 +466,10 @@ func NewExecToolWithConfig(
 		state:                newExecStateStore(),
 		sessionManager:       getSessionManager(),
 		riskGuard:            riskGuard,
+		allowUnknown:         allowUnknown,
+		isolationConfig:      isolationConfig,
+		sandboxActive:        isolation.WillIsolate(isolationConfig),
+		sandboxPaths:         isolation.HasPathBoundary(isolationConfig),
 		blockBreaker:         newExecBlockBreaker(),
 	}, nil
 }
@@ -755,7 +779,6 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 	}
 
 	timeout := t.timeout
-	timeoutDisabled := false
 	if value, provided, valid := numberArg(args, "timeout", 0); provided {
 		const maxTimeoutSeconds = (1<<63 - 1) / int64(time.Second)
 		if !valid || value > float64(maxTimeoutSeconds) {
@@ -771,18 +794,21 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 			// already moved the command to the background, where timeouts do
 			// not apply. Keep the command and explain the ignored argument.
 			backgroundNote += " The requested timeout was ignored because background sessions are not time-limited."
+		} else if seconds == 0 {
+			// Zero means "use the configured default", matching
+			// timeout_seconds. Use background=true for an unbounded command.
+			timeout = t.timeout
 		} else {
-			timeoutDisabled = seconds == 0
 			timeout = time.Duration(seconds) * time.Second
 		}
 	}
 
-	// The exec tool caps a foreground call at t.foregroundCap. Requests that
-	// would exceed it (including timeout=0, which disables the limit) are
-	// promoted to a tracked background session instead of being clamped or
-	// rejected.
+	// The exec tool caps a foreground call at t.foregroundCap. A requested
+	// timeout above the cap is promoted to a tracked background session instead
+	// of being silently clamped. timeout=0 is not a promotion trigger: it uses
+	// the configured default, exactly like an omitted argument.
 	promoteToBackground := !isBackground && t.foregroundCap > 0 &&
-		(timeoutDisabled || timeout > t.foregroundCap)
+		timeout > t.foregroundCap
 
 	// A foreground nohup/setsid/disown or an inner '&' leaves a process the
 	// session manager cannot track. The trailing '&' converter above already
@@ -841,7 +867,8 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 	// path would fail validation on the next call.
 	stateCwd := cwd
 
-	if guardError := t.guardCommandWithAnalysis(guardedCommand, cwd, analysis); guardError != "" {
+	decision := t.guardCommandWithAnalysis(guardedCommand, cwd, analysis)
+	if guardError := t.resolveGuardDecision(ctx, command, decision); guardError != "" {
 		return t.blockedResult(ctx, command, guardError)
 	}
 
@@ -875,7 +902,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 			command,
 			cwd,
 			isPty,
-			t.foregroundPromotionNote(timeoutDisabled, timeout),
+			t.foregroundPromotionNote(timeout),
 			notify,
 			cb,
 		)

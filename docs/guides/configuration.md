@@ -553,11 +553,16 @@ Use `mode = lines` when:
 | Config Key | Type | Default | Description |
 |------------|------|---------|-------------|
 | `tools.exec.allow_remote` | bool | `false` | Allow exec tool from remote channels (Telegram/Discord etc.) |
-| `tools.exec.enable_deny_patterns` | bool | `true` | Enable built-in dangerous command interception (hardline and custom deny rules still apply when off) |
+| `tools.exec.enable_deny_patterns` | bool | `true` | Legacy alias for enabling both `shell_constructs` and `risk_classifier` |
+| `tools.exec.shell_constructs` | bool | inherits | Enable command substitution, pipe-to-shell and shell-heredoc interception |
+| `tools.exec.risk_classifier` | bool | inherits | Enable the AST risk classifier; it stays active when `allow_unknown` is `false` |
+| `tools.exec.allow_unknown` | bool | `false` | Allow opaque commands without review; parse failures stay blocked |
+| `tools.exec.custom_rules` | object[] | `[]` | Unified allow/deny rules with an explicit `bypass` set |
 | `tools.exec.custom_deny_patterns` | string[] | `[]` | Custom regex patterns to block; always enforced |
-| `tools.exec.custom_allow_patterns` | string[] | `[]` | Full-command regex patterns that exempt only the default deny set; anchored automatically |
+| `tools.exec.custom_allow_patterns` | string[] | `[]` | Legacy allow alias for `bypass: ["shell_constructs"]` |
+| `tools.exec.isolation` | object | inherits top-level | Per-tool `off`, `auto` or `required` sandbox mode |
 
-The AST risk classifier (`risk_threshold`, `risk_overrides`, `arg_modifiers`, `custom_unlock_patterns`) and the child-process environment (`env_set`, `env_allowlist`) are documented in the [exec tool](../tools/exec.md) reference; see [risk classification](../tools/exec.md#risk-classification).
+The AST risk classifier (`risk_threshold`, `risk_overrides`, `arg_modifiers`, `custom_rules`), the child-process environment (`env_set`, `env_allowlist`) and per-tool isolation are documented in the [exec tool](../tools/exec.md) reference; see [risk classification](../tools/exec.md#risk-classification) and [isolation](../tools/exec.md#isolation).
 
 > **Security Note:** Symlink protection is enabled by default — all file paths are resolved through `filepath.EvalSymlinks` before whitelist matching, preventing symlink escape attacks.
 

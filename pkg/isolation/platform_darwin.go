@@ -15,7 +15,7 @@ import (
 )
 
 func applyPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, root string) error {
-	if !isolation.Enabled || cmd == nil || cmd.Path == "" || len(cmd.Args) == 0 {
+	if !isolation.Active() || cmd == nil || cmd.Path == "" || len(cmd.Args) == 0 {
 		return nil
 	}
 	sandboxExec, err := exec.LookPath("sandbox-exec")
