@@ -238,6 +238,15 @@ const (
 	ApprovalModeSmart = "smart"
 )
 
+// Approval escalate actions. They decide what happens when the Guardian
+// answers ESCALATE (or returns an unrecognized verdict). "block" (default)
+// keeps the fail-closed behavior; "approve" runs the command. Review failures
+// and an unavailable Guardian always block, regardless of this setting.
+const (
+	ApprovalEscalateBlock   = "block"
+	ApprovalEscalateApprove = "approve"
+)
+
 // Defaults for the auxiliary Guardian call. The timeout is short so a slow or
 // unreachable model cannot stall an interactive turn; the call is only made for
 // commands that need a second opinion.
@@ -257,6 +266,10 @@ type ApprovalsConfig struct {
 	Model string `json:"model,omitempty" env:"PICOCLAW_APPROVALS_MODEL"`
 	// SmartTimeoutSeconds bounds each Guardian call. Zero uses the default 20s.
 	SmartTimeoutSeconds int `json:"smart_timeout_seconds,omitempty" env:"PICOCLAW_APPROVALS_SMART_TIMEOUT_SECONDS"`
+	// OnEscalate decides what happens when the Guardian answers ESCALATE or
+	// returns an unrecognized verdict: "block" (default) rejects the command,
+	// "approve" runs it. Guardian/provider failures always block.
+	OnEscalate string `json:"on_escalate,omitempty" env:"PICOCLAW_APPROVALS_ON_ESCALATE"`
 }
 
 // Normalized validates the approval configuration and fills its defaults.
@@ -286,8 +299,21 @@ func (c ApprovalsConfig) Normalized() (ApprovalsConfig, error) {
 		)
 	}
 
+	onEscalate := strings.ToLower(strings.TrimSpace(c.OnEscalate))
+	switch onEscalate {
+	case "", ApprovalEscalateBlock:
+		onEscalate = ApprovalEscalateBlock
+	case ApprovalEscalateApprove:
+	default:
+		return c, fmt.Errorf(
+			"on_escalate %q must be %q or %q",
+			c.OnEscalate, ApprovalEscalateBlock, ApprovalEscalateApprove,
+		)
+	}
+
 	c.Mode = mode
 	c.SmartTimeoutSeconds = timeout
+	c.OnEscalate = onEscalate
 	return c, nil
 }
 

@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -85,6 +86,64 @@ func TestSmartApprovalReviewsUnknownRisk(t *testing.T) {
 	}
 	if !strings.Contains(reviewer.description, "cannot be inspected") {
 		t.Errorf("description = %q, want uninspectable script reason", reviewer.description)
+	}
+}
+
+func TestSmartApprovalEscalateBlocksByDefault(t *testing.T) {
+	t.Parallel()
+
+	tool, reviewer := newSmartTestTool(t, nil, approvalEscalate)
+	got := tool.guardCommand("sh script.sh", t.TempDir())
+	if !strings.Contains(got, "ESCALATE") {
+		t.Fatalf("guardCommand() = %q, want escalate block", got)
+	}
+	if reviewer.calls != 1 {
+		t.Fatalf("reviewer calls = %d, want 1", reviewer.calls)
+	}
+}
+
+func TestSmartApprovalEscalateCanBeApprovedByConfig(t *testing.T) {
+	t.Parallel()
+
+	cfg := smartApprovalTestConfig()
+	cfg.Approvals.OnEscalate = config.ApprovalEscalateApprove
+	tool, reviewer := newSmartTestTool(t, cfg, approvalEscalate)
+
+	if got := tool.guardCommand("sh script.sh", t.TempDir()); got != "" {
+		t.Fatalf("guardCommand() = %q, want allowed after escalated approval", got)
+	}
+	if reviewer.calls != 1 {
+		t.Fatalf("reviewer calls = %d, want 1", reviewer.calls)
+	}
+}
+
+func TestSmartApprovalDenyStillBlocksWhenEscalateApproved(t *testing.T) {
+	t.Parallel()
+
+	cfg := smartApprovalTestConfig()
+	cfg.Approvals.OnEscalate = config.ApprovalEscalateApprove
+	tool, reviewer := newSmartTestTool(t, cfg, approvalDeny)
+
+	got := tool.guardCommand("sh script.sh", t.TempDir())
+	if !strings.Contains(got, "(DENY)") {
+		t.Fatalf("guardCommand() = %q, want DENY block", got)
+	}
+	if reviewer.calls != 1 {
+		t.Fatalf("reviewer calls = %d, want 1", reviewer.calls)
+	}
+}
+
+func TestSmartApprovalReviewErrorBlocksEvenWhenEscalateApproved(t *testing.T) {
+	t.Parallel()
+
+	cfg := smartApprovalTestConfig()
+	cfg.Approvals.OnEscalate = config.ApprovalEscalateApprove
+	tool, reviewer := newSmartTestTool(t, cfg, approvalEscalate)
+	reviewer.err = errors.New("provider unavailable")
+
+	got := tool.guardCommand("sh script.sh", t.TempDir())
+	if !strings.Contains(got, "could not review") {
+		t.Fatalf("guardCommand() = %q, want fail-closed review error", got)
 	}
 }
 
@@ -296,6 +355,12 @@ func TestSmartApprovalConstruction(t *testing.T) {
 	}
 	if tool.approvalReviewer == nil {
 		t.Fatal("approvalReviewer is nil, want a configured guardian")
+	}
+	if tool.approvalOnEscalate != config.ApprovalEscalateBlock {
+		t.Fatalf(
+			"approvalOnEscalate = %q, want %q",
+			tool.approvalOnEscalate, config.ApprovalEscalateBlock,
+		)
 	}
 }
 

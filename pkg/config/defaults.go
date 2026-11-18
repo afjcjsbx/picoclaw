@@ -92,6 +92,7 @@ func DefaultConfig() *Config {
 		Approvals: ApprovalsConfig{
 			Mode:                ApprovalModeOff,
 			SmartTimeoutSeconds: DefaultApprovalSmartTimeoutSeconds,
+			OnEscalate:          ApprovalEscalateBlock,
 		},
 		ModelList: []*ModelConfig{
 			// ============================================
