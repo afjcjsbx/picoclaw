@@ -154,3 +154,30 @@ func TestExecBlockBreakerKeepsStateBounded(t *testing.T) {
 	tool.blockBreaker.mu.Unlock()
 	require.LessOrEqual(t, size, maxExecBlockSessions)
 }
+
+func TestExecBlockBreakerIgnoresReasonChanges(t *testing.T) {
+	tool := newBlockBreakerTestTool(t)
+	ctx := blockBreakerContext("session-reason")
+
+	// The same command is rejected with two different explanations. The streak
+	// must follow the command, not the message.
+	for i := 0; i < execBlockHardStopThreshold-1; i++ {
+		require.NotContains(t, tool.blockedResult(ctx, "echo blocked", "reason-A").ForLLM, "HARD STOP")
+	}
+	// The third attempt uses a different reason. If the reason were part of the
+	// fingerprint this would reset to one; it must trip instead.
+	result := tool.blockedResult(ctx, "echo blocked", "reason-B")
+	require.Contains(t, result.ForLLM, "HARD STOP")
+}
+
+func TestExecBlockBreakerNormalizesCanonicalCommand(t *testing.T) {
+	tool := newBlockBreakerTestTool(t)
+	ctx := blockBreakerContext("session-canonical")
+
+	// Extra whitespace and quote splicing resolve to the same canonical argv.
+	for i := 0; i < execBlockHardStopThreshold-1; i++ {
+		require.NotContains(t, tool.blockedResult(ctx, `echo   blocked`, "r").ForLLM, "HARD STOP")
+	}
+	result := tool.blockedResult(ctx, `"echo" blocked`, "r")
+	require.Contains(t, result.ForLLM, "HARD STOP")
+}

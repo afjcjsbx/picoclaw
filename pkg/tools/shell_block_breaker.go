@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+
+	"github.com/sipeed/picoclaw/pkg/tools/shellguard"
 )
 
 const (
@@ -43,9 +45,11 @@ func execBlockSession(ctx context.Context) (execBlockKey, bool) {
 }
 
 // record registers one blocked attempt and reports how many identical blocks
-// the conversation has seen in a row. A different command or rejection reason
-// starts a new streak.
-func (b *execBlockBreaker) record(ctx context.Context, command, reason string) (int, bool) {
+// the conversation has seen in a row. The fingerprint is the canonical command
+// only: the same rejected command must keep its streak even when the guard
+// explains the rejection differently (for example "path outside working dir"
+// followed by "access denied: path is outside the workspace").
+func (b *execBlockBreaker) record(ctx context.Context, command string) (int, bool) {
 	if b == nil {
 		return 0, false
 	}
@@ -53,7 +57,7 @@ func (b *execBlockBreaker) record(ctx context.Context, command, reason string) (
 	if !ok {
 		return 0, false
 	}
-	fingerprint := execBlockFingerprint(strings.TrimSpace(command), reason)
+	fingerprint := execBlockFingerprint(command)
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -98,20 +102,24 @@ func (b *execBlockBreaker) clear(agentID, sessionKey string) {
 	b.mu.Unlock()
 }
 
-// execBlockFingerprint hashes the trimmed command and the guard reason with
-// FNV-1a. It allocates nothing, and a hash collision only merges two streaks.
-func execBlockFingerprint(command, reason string) uint64 {
+// execBlockFingerprint hashes the canonical command forms with FNV-1a. A quote
+// splice, extra whitespace or a wrapper that resolves to the same argv keeps the
+// same streak; a different command starts a new one. A hash collision only
+// merges two streaks.
+func execBlockFingerprint(command string) uint64 {
+	forms := shellguard.CanonicalCommands(strings.TrimSpace(command))
+	normalized := strings.Join(forms, "\n")
+	if normalized == "" {
+		normalized = strings.Join(strings.Fields(command), " ")
+	}
+
 	const (
 		offset64 = 14695981039346656037
 		prime64  = 1099511628211
 	)
 	h := uint64(offset64)
-	for i := 0; i < len(command); i++ {
-		h = (h ^ uint64(command[i])) * prime64
-	}
-	h = (h ^ 0) * prime64
-	for i := 0; i < len(reason); i++ {
-		h = (h ^ uint64(reason[i])) * prime64
+	for i := 0; i < len(normalized); i++ {
+		h = (h ^ uint64(normalized[i])) * prime64
 	}
 	return h
 }
@@ -128,7 +136,7 @@ func execBlockHardStopMessage(count int) string {
 // blockedResult returns the guard reason, escalating to a hard stop when the
 // same command and reason have been rejected repeatedly in this conversation.
 func (t *ExecTool) blockedResult(ctx context.Context, command, reason string) *ToolResult {
-	count, tracked := t.blockBreaker.record(ctx, command, reason)
+	count, tracked := t.blockBreaker.record(ctx, command)
 	if !tracked || count < execBlockHardStopThreshold {
 		return ErrorResult(reason)
 	}
