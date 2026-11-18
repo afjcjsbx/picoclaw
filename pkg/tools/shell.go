@@ -57,14 +57,17 @@ type ExecTool struct {
 	allowRemote          bool
 	maxOutputChars       int
 	maxInlineResultChars int
-	baseEnv              map[string]string
-	baseEnvList          []string
-	state                *execStateStore
-	sessionManager       *SessionManager
-	riskGuard            *shellguard.Guard
-	approvalEnabled      bool
-	approvalReviewer     approvalReviewer
-	blockBreaker         *execBlockBreaker
+	// baseEnv is the lookup view for the command guard (HOME, CDPATH).
+	// baseEnvList is the same data pre-rendered and sorted for runEnv, so a
+	// command does not rebuild and sort the environment on every call.
+	baseEnv          map[string]string
+	baseEnvList      []string
+	state            *execStateStore
+	sessionManager   *SessionManager
+	riskGuard        *shellguard.Guard
+	approvalEnabled  bool
+	approvalReviewer approvalReviewer
+	blockBreaker     *execBlockBreaker
 }
 
 var _ AsyncExecutor = (*ExecTool)(nil)
