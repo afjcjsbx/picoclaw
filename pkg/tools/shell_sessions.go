@@ -98,7 +98,7 @@ func (t *ExecTool) executePoll(ctx context.Context, args map[string]any) *ToolRe
 	}
 
 	resp := sessionResponse(sessionID, session)
-	resp.Output = session.Tail(pollOutputChars)
+	resp.Output = session.Tail(sessionOutputChars)
 	if !session.IsDone() && session.noteCheck() >= idleCheckLimit {
 		resp.Note = pollIdleNote
 		if session.StartNotify() || session.NotifyEnabled() {
@@ -119,11 +119,9 @@ const (
 		"output or kill the session instead of waiting again."
 	// defaultWaitMax caps one wait when no exec timeout is configured.
 	defaultWaitMax = 60 * time.Second
-	// completionOutputChars bounds the output tail in a completion notice.
-	completionOutputChars = 1000
-	pollOutputChars       = 1000
-	waitOutputChars       = 1000
-	killOutputChars       = 1000
+	// sessionOutputChars bounds the output tail in completion notices and in
+	// poll, wait and kill responses.
+	sessionOutputChars = 1000
 
 	notifyEnabledNote = "You will be notified when this session exits; do not poll or wait in a loop."
 	autoNotifyNote    = "A completion notification is enabled; the result will arrive as a follow-up message."
@@ -183,7 +181,7 @@ func (t *ExecTool) executeWait(ctx context.Context, args map[string]any) *ToolRe
 	if session.IsDone() {
 		resp.Output = session.Read()
 	} else {
-		resp.Output = session.Tail(waitOutputChars)
+		resp.Output = session.Tail(sessionOutputChars)
 		resp.Note = clampNote + fmt.Sprintf(
 			"Wait window of %ds elapsed. The process is still running; this is not an error.",
 			int64(window/time.Second))
@@ -298,7 +296,7 @@ func (t *ExecTool) executeKill(ctx context.Context, args map[string]any) *ToolRe
 	}
 
 	resp := sessionResponse(sessionID, session)
-	resp.Output = session.Tail(killOutputChars)
+	resp.Output = session.Tail(sessionOutputChars)
 	return jsonResult(resp, fmt.Sprintf("Session %s killed; output retained for 30 minutes", sessionID))
 }
 

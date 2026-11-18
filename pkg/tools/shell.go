@@ -698,7 +698,7 @@ func (t *ExecTool) ExecuteAsync(
 
 func (t *ExecTool) completionResult(session *ProcessSession) *ToolResult {
 	status := session.GetStatus()
-	output := session.Tail(completionOutputChars)
+	output := session.Tail(sessionOutputChars)
 	msg := fmt.Sprintf(
 		"Background command completed.\nsessionId: %s\ncommand: %s\nstatus: %s\nexitCode: %d",
 		session.ID, session.Command, status, session.GetExitCode(),
