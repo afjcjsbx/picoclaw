@@ -117,7 +117,7 @@ func TestSystemPromptDoesNotGrowWithInstalledSkills(t *testing.T) {
 		t.Fatalf("prompt changed with 300 installed skills: %d -> %d bytes", len(empty), len(full))
 	}
 	for _, want := range []string{
-		"## Installed Skills", "`skills_search`", "`skills_read`", "Never claim to have loaded a skill",
+		"## Installed Skills", "`skills_search`", "`skills_read`", "Claim a skill was loaded only after a successful read",
 	} {
 		if !strings.Contains(full, want) {
 			t.Errorf("prompt missing %q", want)

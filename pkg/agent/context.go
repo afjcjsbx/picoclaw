@@ -381,38 +381,19 @@ func formatToolDiscoveryRule(useBM25, useRegex bool) string {
 
 const skillDiscoveryPrompt = `## Installed Skills
 
-You have access to installed skills through two tools:
-
-- ` + "`skills_search`" + `: Search available installed skills using
-  natural language or an exact skill name.
-- ` + "`skills_read`" + `: Read the complete instructions of an
-  installed skill.
+Tools:
+- ` + "`skills_search`" + `: search installed skills by natural language or exact name.
+- ` + "`skills_read`" + `: read a skill's complete instructions.
 
 Rules:
-
-1. When a task may benefit from a specialized skill,
-   search for relevant skills before proceeding.
-
-2. Use natural language to describe the task when
-   searching.
-
-3. Inspect the search results and select the most
-   relevant skills.
-
-4. Read the complete instructions of each selected
-   skill using ` + "`skills_read`" + `.
-
-5. Follow the instructions provided by the selected skills.
-
-6. Do not assume a skill's instructions based only on
-   its name or description.
-
-7. Do not load unrelated skills.
-
-8. If no relevant skill is found, proceed normally.
-
-9. Never claim to have loaded a skill unless the
-   corresponding read operation succeeded.`
+1. Before tasks that may benefit from specialized skills, search using a natural-language description.
+2. Review results and select the most relevant skills.
+3. Read each selected skill completely via ` + "`skills_read`" + `.
+4. Follow the loaded instructions.
+5. Never infer instructions from a skill's name or description.
+6. Never load unrelated skills.
+7. If no relevant skill exists, proceed normally.
+8. Claim a skill was loaded only after a successful read.`
 
 func (cb *ContextBuilder) BuildSystemPrompt() string {
 	return renderPromptPartsLegacy(cb.BuildSystemPromptParts())
