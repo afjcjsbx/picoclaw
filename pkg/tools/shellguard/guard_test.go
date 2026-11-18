@@ -1,8 +1,6 @@
 package shellguard
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -319,7 +317,7 @@ func TestGuardCheckFileMatchesCheck(t *testing.T) {
 		"echo )",
 	} {
 		file, _ := Parse(command)
-		fromFile := guard.CheckFileWithOptions(command, file, CheckOptions{})
+		fromFile := guard.CheckFile(command, file)
 		fromText := guard.Check(command)
 
 		if (fromFile == nil) != (fromText == nil) {
@@ -342,8 +340,8 @@ func TestGuardCheckFileRejectsParseFailure(t *testing.T) {
 	if file != nil {
 		t.Fatalf("Parse returned a partial tree with the error: %#v", file)
 	}
-	if blocked := guard.CheckFileWithOptions("echo )", file, CheckOptions{}); blocked == nil {
-		t.Fatal("CheckFileWithOptions allowed a parse failure")
+	if blocked := guard.CheckFile("echo )", file); blocked == nil {
+		t.Fatal("CheckFile allowed a parse failure")
 	}
 	if blocked := guard.Check("echo )"); blocked == nil {
 		t.Fatal("Check allowed a parse failure")
@@ -407,127 +405,6 @@ func TestGuardRejectsInvalidConfig(t *testing.T) {
 		"echo": {{Level: RiskHigh}},
 	}); err == nil {
 		t.Fatal("empty modifier args should fail")
-	}
-}
-
-func TestGuardScriptFileInspection(t *testing.T) {
-	t.Parallel()
-
-	root := t.TempDir()
-	dir := filepath.Join(root, "work")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("mkdir work: %v", err)
-	}
-
-	write := func(name, content string) string {
-		t.Helper()
-		path := filepath.Join(root, name)
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
-		}
-		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-			t.Fatalf("write %s: %v", name, err)
-		}
-		return path
-	}
-
-	write("safe.sh", "#!/bin/sh\nls -la\n")
-	write("risky.sh", "#!/bin/sh\nrm -rf /\n")
-	write("broken.sh", "if then\n")
-	write("work/inner.sh", "#!/bin/sh\ncat ok\n")
-	write("work/chain.sh", "#!/bin/sh\nbash work/inner.sh\n")
-	write("work/chain-risky.sh", "#!/bin/sh\nbash risky.sh\n")
-
-	outside := filepath.Join(t.TempDir(), "outside.sh")
-	if err := os.WriteFile(outside, []byte("#!/bin/sh\nls\n"), 0o644); err != nil {
-		t.Fatalf("write outside script: %v", err)
-	}
-	link := filepath.Join(root, "link.sh")
-	if err := os.Symlink(outside, link); err != nil {
-		t.Skipf("symlinks unavailable: %v", err)
-	}
-
-	oversize := filepath.Join(root, "large.sh")
-	large := make([]byte, maxScriptFileBytes+1)
-	for i := range large {
-		large[i] = '#'
-	}
-	if err := os.WriteFile(oversize, large, 0o644); err != nil {
-		t.Fatalf("write oversized script: %v", err)
-	}
-
-	guard := mustGuard(t, "medium")
-	check := func(command string) *BlockedError {
-		return guard.CheckWithOptions(command, CheckOptions{Dir: root, Root: root})
-	}
-
-	allowed := []string{
-		"sh safe.sh",
-		"bash safe.sh",
-		"bash -e safe.sh arg1",
-		"bash -o pipefail safe.sh",
-		"bash -- safe.sh",
-		"bash work/inner.sh",
-		"bash work/chain.sh",
-		"bash " + filepath.Join(root, "safe.sh"),
-		"bash -c 'echo ok'",
-		"busybox sh safe.sh",
-		"flock /tmp/lock sh safe.sh",
-	}
-	for _, command := range allowed {
-		if blocked := check(command); blocked != nil {
-			t.Errorf("Check(%q) blocked: %v", command, blocked)
-		}
-	}
-
-	blockedCommands := map[string]string{
-		"bash risky.sh":               "risk",
-		"bash work/chain-risky.sh":    "risk",
-		"bash broken.sh":              "could not be parsed",
-		"bash missing.sh":             "cannot be inspected",
-		"bash " + outside:             "outside the workspace",
-		"bash link.sh":                "outside the workspace",
-		"bash large.sh":               "exceeds",
-		"bash -c 'rm -rf /'":          "risk",
-		"bash > safe.sh":              "stdin",
-		"bash $SCRIPT":                "stdin",
-		"busybox sh risky.sh":         "risk",
-		"flock /tmp/lock sh risky.sh": "risk",
-	}
-	for command, want := range blockedCommands {
-		blocked := check(command)
-		if blocked == nil {
-			t.Errorf("Check(%q) allowed, want blocked", command)
-			continue
-		}
-		if !strings.Contains(blocked.Error(), want) {
-			t.Errorf("Check(%q) reason = %v, want %q", command, blocked, want)
-		}
-	}
-
-	// Check without a workspace context keeps the historical fail-closed
-	// behavior: the script cannot be verified, so the shell stays opaque.
-	if blocked := guard.Check("bash safe.sh"); blocked == nil {
-		t.Fatal("script file without CheckOptions should stay blocked")
-	}
-}
-
-func TestReadScriptFileBudget(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	if err := os.WriteFile(
-		filepath.Join(dir, "script.sh"),
-		[]byte("#!/bin/sh\necho ok\n"),
-		0o644,
-	); err != nil {
-		t.Fatalf("write script: %v", err)
-	}
-
-	env := &checkEnv{remaining: 8}
-	if _, err := readScriptFile(dir, "script.sh", env); err == nil ||
-		!strings.Contains(err.Error(), "budget") {
-		t.Fatalf("budget exhaustion error = %v, want budget error", err)
 	}
 }
 
@@ -635,11 +512,10 @@ func TestGuardNestingLimit(t *testing.T) {
 	t.Parallel()
 
 	guard := mustGuard(t, "medium")
-	env := &checkEnv{remaining: maxScriptInspectBytes}
-	if assessment := guard.assessScript("echo ok", env, maxShellNesting+1); !assessment.Unknown {
+	if assessment := guard.assessScript("echo ok", maxShellNesting+1); !assessment.Unknown {
 		t.Fatal("depth beyond the nesting limit should be unknown")
 	}
-	if assessment := guard.assessScript("echo ok", env, maxShellNesting); assessment.Unknown {
+	if assessment := guard.assessScript("echo ok", maxShellNesting); assessment.Unknown {
 		t.Fatalf("depth at the nesting limit should pass: %+v", assessment)
 	}
 }
@@ -683,25 +559,5 @@ func BenchmarkGuardCheck(b *testing.B) {
 				_ = guard.Check(command)
 			}
 		})
-	}
-}
-
-func BenchmarkGuardScriptFile(b *testing.B) {
-	root := b.TempDir()
-	script := "#!/bin/sh\nset -eu\nfor f in *.go; do echo \"$f\"; done\n"
-	if err := os.WriteFile(filepath.Join(root, "script.sh"), []byte(script), 0o644); err != nil {
-		b.Fatalf("write script: %v", err)
-	}
-	guard, err := NewGuard("medium", nil, nil)
-	if err != nil {
-		b.Fatalf("NewGuard: %v", err)
-	}
-	opts := CheckOptions{Dir: root, Root: root}
-
-	b.ReportAllocs()
-	for b.Loop() {
-		if blocked := guard.CheckWithOptions("bash script.sh", opts); blocked != nil {
-			b.Fatalf("CheckWithOptions: %v", blocked)
-		}
 	}
 }

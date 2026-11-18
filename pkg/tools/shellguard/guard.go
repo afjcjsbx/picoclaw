@@ -1,28 +1,10 @@
 package shellguard
 
 import (
-	"bytes"
-	"errors"
 	"fmt"
-	"io"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"mvdan.cc/sh/v3/syntax"
-)
-
-// Script inspection bounds. A script file is read once into memory for the
-// parser, so hard caps keep the guard from turning a large script into an
-// unbounded allocation on low-memory hardware.
-const (
-	// maxScriptFileBytes bounds a single inspected script file.
-	maxScriptFileBytes = 1 << 20 // 1 MiB
-
-	// maxScriptInspectBytes bounds the total bytes read for nested script files
-	// during one check. Scripts stay live on the stack while their nested
-	// scripts are checked, so this caps peak memory independently of nesting.
-	maxScriptInspectBytes = 2 << 20 // 2 MiB
 )
 
 // maxShellNesting bounds recursive analysis of sh -c scripts and wrapper
@@ -37,30 +19,6 @@ const (
 // refuse the same hop from N to N+1, so switching either side to the other
 // operator moves the limit by one level on that path only.
 const maxShellNesting = 8
-
-// CheckOptions supplies the execution context needed to inspect shell script
-// files. Without a Root, a script file stays opaque and is rejected, which is
-// the historical fail-closed behavior.
-type CheckOptions struct {
-	// Dir resolves relative script paths. It is the directory the command runs
-	// in, not necessarily the workspace root.
-	Dir string
-	// Root is the workspace root. A script whose resolved path is outside it is
-	// rejected instead of read, so the guard never reads arbitrary paths.
-	Root string
-}
-
-// checkEnv is the per-check mutable inspection context. dir and root are
-// immutable; remaining tracks the script-byte budget shared by nested calls.
-type checkEnv struct {
-	dir       string
-	root      string
-	remaining int
-}
-
-func newCheckEnv(opts CheckOptions) *checkEnv {
-	return &checkEnv{dir: opts.Dir, root: opts.Root, remaining: maxScriptInspectBytes}
-}
 
 // Guard classifies commands against a configured risk threshold.
 type Guard struct {
@@ -149,37 +107,24 @@ func (g *Guard) Threshold() RiskLevel {
 	return g.threshold
 }
 
-// AssessFileWithOptions classifies every simple command in an already parsed
-// command and returns the highest risk it finds. Unlike CheckFileWithOptions,
-// it returns a result even when the command is allowed, so callers can apply an
-// additional approval threshold. A nil file is treated as a parse failure; opts
-// carries the directory and workspace root used to resolve and inspect script
-// files named on the command line.
-func (g *Guard) AssessFileWithOptions(
-	command string,
-	file *syntax.File,
-	opts CheckOptions,
-) Assessment {
+// AssessFile classifies every simple command in an already parsed command and
+// returns the highest risk it finds. Unlike CheckFile, it returns a result even
+// when the command is allowed, so callers can apply an additional approval
+// threshold. A nil file is treated as a parse failure.
+func (g *Guard) AssessFile(command string, file *syntax.File) Assessment {
 	if g == nil {
 		return Assessment{}
 	}
 	if file == nil {
 		return parseAssessment(command)
 	}
-	return g.assessFile(file, newCheckEnv(opts), 0)
+	return g.assessFile(file, 0)
 }
 
 // Check parses command and returns a BlockedError when any simple command in it
 // exceeds the configured threshold. A nil result means the command may run.
-// It is CheckWithOptions without a script inspection context, so `bash file.sh`
-// stays opaque and is rejected.
+// A shell that reads commands from stdin or a script file stays opaque.
 func (g *Guard) Check(command string) *BlockedError {
-	return g.CheckWithOptions(command, CheckOptions{})
-}
-
-// CheckWithOptions is Check with the directory and workspace root used to
-// resolve and inspect script files named on the command line.
-func (g *Guard) CheckWithOptions(command string, opts CheckOptions) *BlockedError {
 	if g == nil {
 		return nil
 	}
@@ -187,21 +132,16 @@ func (g *Guard) CheckWithOptions(command string, opts CheckOptions) *BlockedErro
 	if err != nil {
 		return g.checkAssessment(parseAssessment(command))
 	}
-	return g.CheckFileWithOptions(command, file, opts)
+	return g.CheckFile(command, file)
 }
 
-// CheckFileWithOptions classifies an already parsed command. It is the
-// shared-parse entry point used by the exec guard; a nil file is treated as a
-// parse failure, and opts supplies the script inspection context.
-func (g *Guard) CheckFileWithOptions(
-	command string,
-	file *syntax.File,
-	opts CheckOptions,
-) *BlockedError {
+// CheckFile classifies an already parsed command. It is the shared-parse entry
+// point used by the exec guard; a nil file is treated as a parse failure.
+func (g *Guard) CheckFile(command string, file *syntax.File) *BlockedError {
 	if g == nil {
 		return nil
 	}
-	return g.checkAssessment(g.AssessFileWithOptions(command, file, opts))
+	return g.checkAssessment(g.AssessFile(command, file))
 }
 
 func (g *Guard) checkAssessment(assessment Assessment) *BlockedError {
@@ -233,37 +173,26 @@ func (g *Guard) WithThreshold(threshold RiskLevel) *Guard {
 	return &clone
 }
 
-func (g *Guard) assessScript(command string, env *checkEnv, depth int) Assessment {
-	return g.assessScriptReader(strings.NewReader(command), summarize(command), env, depth)
-}
-
-// assessScriptReader parses and walks a script from reader. summary names the
-// source in a parse error; for a file it is the path, so file contents are not
-// copied just to build an error message.
-func (g *Guard) assessScriptReader(
-	reader io.Reader,
-	summary string,
-	env *checkEnv,
-	depth int,
-) Assessment {
+// assessScript parses and walks a literal shell script (sh -c, eval, trap or a
+// wrapper command string).
+func (g *Guard) assessScript(command string, depth int) Assessment {
 	if depth > maxShellNesting {
 		return unknownAssessment(
 			[]string{"<nested shell>"}, "shell nesting limit exceeded",
 		)
 	}
 
-	parser := syntax.NewParser(syntax.Variant(syntax.LangBash))
-	file, err := parser.Parse(reader, "")
+	file, err := Parse(command)
 	if err != nil {
 		return unknownAssessment(
-			[]string{summary},
+			[]string{summarize(command)},
 			"command could not be parsed for risk classification",
 		)
 	}
-	return g.assessFile(file, env, depth)
+	return g.assessFile(file, depth)
 }
 
-func (g *Guard) assessFile(file *syntax.File, env *checkEnv, depth int) Assessment {
+func (g *Guard) assessFile(file *syntax.File, depth int) Assessment {
 	var result Assessment
 	syntax.Walk(file, func(node syntax.Node) bool {
 		if node == nil {
@@ -273,13 +202,13 @@ func (g *Guard) assessFile(file *syntax.File, env *checkEnv, depth int) Assessme
 		if !ok {
 			return true
 		}
-		result = preferAssessment(result, g.assessCall(call, env, depth))
+		result = preferAssessment(result, g.assessCall(call, depth))
 		return true
 	})
 	return result
 }
 
-func (g *Guard) assessCall(call *syntax.CallExpr, env *checkEnv, depth int) Assessment {
+func (g *Guard) assessCall(call *syntax.CallExpr, depth int) Assessment {
 	if len(call.Args) == 0 {
 		return Assessment{}
 	}
@@ -288,13 +217,13 @@ func (g *Guard) assessCall(call *syntax.CallExpr, env *checkEnv, depth int) Asse
 	for i, arg := range call.Args {
 		words[i] = literalWord(arg)
 	}
-	return g.assessArgv(words, env, depth)
+	return g.assessArgv(words, depth)
 }
 
 // assessArgv classifies one argument vector. It is shared by AST calls and by
 // commands launched from find -exec/-ok, which are argv slices rather than
 // CallExpr nodes.
-func (g *Guard) assessArgv(words []word, env *checkEnv, depth int) Assessment {
+func (g *Guard) assessArgv(words []word, depth int) Assessment {
 	if len(words) == 0 {
 		return Assessment{}
 	}
@@ -308,10 +237,10 @@ func (g *Guard) assessArgv(words []word, env *checkEnv, depth int) Assessment {
 
 	name := baseCommand(first.text)
 	if isShellCommand(name) {
-		return g.assessShell(name, words, env, depth)
+		return g.assessShell(name, words, depth)
 	}
 	if name == "trap" {
-		return g.assessTrap(words, env, depth)
+		return g.assessTrap(words, depth)
 	}
 	if name == "eval" {
 		// eval concatenates its literal arguments and runs them as shell
@@ -319,19 +248,19 @@ func (g *Guard) assessArgv(words []word, env *checkEnv, depth int) Assessment {
 		// operand is rejected instead of merely inheriting eval's critical
 		// base level.
 		if script, ok := joinLiteralWords(words[1:]); ok && script != "" {
-			return preferAssessment(g.classify(words), g.assessScript(script, env, depth+1))
+			return preferAssessment(g.classify(words), g.assessScript(script, depth+1))
 		}
 	}
 	if spec, ok := wrapperSpecs[name]; ok {
-		return g.assessWrapper(name, words, spec, env, depth)
+		return g.assessWrapper(name, words, spec, depth)
 	}
 	if name == "find" {
-		return preferAssessment(g.classify(words), g.assessFindExec(words[1:], env, depth))
+		return preferAssessment(g.classify(words), g.assessFindExec(words[1:], depth))
 	}
 	if name == "exec" {
 		result := g.classify(words)
 		if nested, ok := execCommand(words[1:]); ok {
-			result = preferAssessment(result, g.assessArgv(nested, env, depth+1))
+			result = preferAssessment(result, g.assessArgv(nested, depth+1))
 		}
 		return result
 	}
@@ -341,7 +270,7 @@ func (g *Guard) assessArgv(words []word, env *checkEnv, depth int) Assessment {
 // assessFindExec classifies commands launched by find -exec/-execdir/-ok/-okdir.
 // find runs them directly, so a nested critical command must not hide behind
 // find's own high-risk base level.
-func (g *Guard) assessFindExec(words []word, env *checkEnv, depth int) Assessment {
+func (g *Guard) assessFindExec(words []word, depth int) Assessment {
 	if depth >= maxShellNesting {
 		return unknownAssessment(
 			wordTexts(words), "command nesting limit exceeded",
@@ -349,7 +278,7 @@ func (g *Guard) assessFindExec(words []word, env *checkEnv, depth int) Assessmen
 	}
 	var result Assessment
 	for _, nested := range findExecCommands(words) {
-		result = preferAssessment(result, g.assessArgv(nested, env, depth+1))
+		result = preferAssessment(result, g.assessArgv(nested, depth+1))
 	}
 	return result
 }
@@ -493,7 +422,7 @@ func dynamicDestructiveOperand(words []word) (Assessment, bool) {
 	return Assessment{}, false
 }
 
-func (g *Guard) assessShell(name string, words []word, env *checkEnv, depth int) Assessment {
+func (g *Guard) assessShell(name string, words []word, depth int) Assessment {
 	if depth >= maxShellNesting {
 		return unknownAssessment(
 			wordTexts(words), "shell nesting limit exceeded",
@@ -501,30 +430,24 @@ func (g *Guard) assessShell(name string, words []word, env *checkEnv, depth int)
 	}
 
 	invocation := parseShellInvocation(words[1:])
-	switch {
-	case invocation.hasScript:
+	if invocation.hasScript {
 		if invocation.script.dynamic {
 			return unknownAssessment(
 				wordTexts(words), "shell script argument is dynamic",
 			)
 		}
-		return g.assessScript(invocation.script.text, env, depth+1)
-	case invocation.hasFile:
-		if invocation.file.dynamic {
-			return unknownAssessment(
-				wordTexts(words), "shell script path is dynamic",
-			)
-		}
-		return g.assessScriptFile(invocation.file.text, words, env, depth+1)
-	default:
-		return unknownAssessment(
-			wordTexts(words),
-			"shell reads commands from stdin or a script file that cannot be inspected",
-		)
+		return g.assessScript(invocation.script.text, depth+1)
 	}
+	// A script file named on the command line stays opaque: its contents are
+	// not read or classified, so the command fails closed and smart approvals
+	// can review it when enabled.
+	return unknownAssessment(
+		wordTexts(words),
+		"shell reads commands from stdin or a script file that cannot be inspected",
+	)
 }
 
-func (g *Guard) assessTrap(words []word, env *checkEnv, depth int) Assessment {
+func (g *Guard) assessTrap(words []word, depth int) Assessment {
 	if depth >= maxShellNesting {
 		return unknownAssessment(
 			wordTexts(words), "command nesting limit exceeded",
@@ -540,14 +463,13 @@ func (g *Guard) assessTrap(words []word, env *checkEnv, depth int) Assessment {
 	if !found {
 		return Assessment{}
 	}
-	return g.assessScript(action.text, env, depth+1)
+	return g.assessScript(action.text, depth+1)
 }
 
 func (g *Guard) assessWrapper(
 	name string,
 	words []word,
 	spec wrapperSpec,
-	env *checkEnv,
 	depth int,
 ) Assessment {
 	if depth >= maxShellNesting {
@@ -574,7 +496,7 @@ func (g *Guard) assessWrapper(
 			bash := make([]word, 0, len(rest)+1)
 			bash = append(bash, word{text: "bash"})
 			bash = append(bash, rest...)
-			return preferAssessment(result, g.assessShell("bash", bash, env, depth+1))
+			return preferAssessment(result, g.assessShell("bash", bash, depth+1))
 		}
 	}
 
@@ -590,7 +512,7 @@ func (g *Guard) assessWrapper(
 				wordTexts(words), "dynamic command string in "+name,
 			)
 		}
-		return preferAssessment(result, g.assessScript(script.text, env, depth+1))
+		return preferAssessment(result, g.assessScript(script.text, depth+1))
 	}
 
 	nested, found, dynamic := wrapperNested(words[1:], spec)
@@ -619,13 +541,13 @@ func (g *Guard) assessWrapper(
 				"xargs launching a shell cannot be inspected",
 			)
 		}
-		return preferAssessment(result, g.assessShell(nestedName, nested, env, depth+1))
+		return preferAssessment(result, g.assessShell(nestedName, nested, depth+1))
 	}
 	if nestedName == "trap" {
-		return preferAssessment(result, g.assessTrap(nested, env, depth+1))
+		return preferAssessment(result, g.assessTrap(nested, depth+1))
 	}
 	if next, ok := wrapperSpecs[nestedName]; ok {
-		return preferAssessment(result, g.assessWrapper(nestedName, nested, next, env, depth+1))
+		return preferAssessment(result, g.assessWrapper(nestedName, nested, next, depth+1))
 	}
 	return preferAssessment(result, g.classify(nested))
 }
@@ -760,14 +682,9 @@ var shellValueFlags = map[string]bool{
 // shellInvocation is the statically known script source of a shell invocation.
 // hasScript reports a literal -c/--command argument. readsStdin reports that
 // the shell would execute stdin, so a heredoc on the command is a script.
-// opaque reports a script file or an unresolved argument that cannot be
-// inspected statically; hasFile additionally names that script file so the
-// guard can read it when it sits inside the workspace.
 type shellInvocation struct {
 	script     word
 	hasScript  bool
-	file       word
-	hasFile    bool
 	readsStdin bool
 	opaque     bool
 }
@@ -786,7 +703,7 @@ func parseShellInvocation(words []word) shellInvocation {
 		switch {
 		case text == "--":
 			if i+1 < len(words) {
-				return shellInvocation{opaque: true, file: words[i+1], hasFile: true}
+				return shellInvocation{opaque: true}
 			}
 			return invocation
 		case text == "-":
@@ -820,7 +737,7 @@ func parseShellInvocation(words []word) shellInvocation {
 				return invocation
 			}
 		case !strings.HasPrefix(text, "-"):
-			return shellInvocation{opaque: true, file: w, hasFile: true}
+			return shellInvocation{opaque: true}
 		}
 	}
 	return invocation
@@ -1073,142 +990,6 @@ func commandFlagValue(words []word, flags map[string]bool) (word, bool, bool) {
 		}
 	}
 	return word{}, false, false
-}
-
-var errScriptOutsideWorkspace = errors.New("script file is outside the workspace")
-
-// assessScriptFile reads a script named on the command line and classifies it.
-// The file must resolve inside the workspace root; anything else stays opaque
-// and is rejected, so a command cannot point the guard at /etc or a symlink
-// that escapes the workspace.
-func (g *Guard) assessScriptFile(
-	path string,
-	words []word,
-	env *checkEnv,
-	depth int,
-) Assessment {
-	script, err := readWorkspaceScript(path, env)
-	if err != nil {
-		return unknownAssessment(
-			wordTexts(words),
-			"shell script cannot be inspected: "+err.Error(),
-		)
-	}
-	return g.assessScriptReader(bytes.NewReader(script), summarize(path), env, depth)
-}
-
-// readWorkspaceScript resolves path against Dir, verifies it stays inside Root
-// and reads it with a bounded allocation. The returned bytes are the only copy;
-// the parser reads them in place, so no string copy is made.
-func readWorkspaceScript(path string, env *checkEnv) ([]byte, error) {
-	if path == "" {
-		return nil, errors.New("empty script path")
-	}
-	if env.root == "" {
-		return nil, errors.New("workspace root is not configured")
-	}
-
-	root, err := filepath.Abs(env.root)
-	if err != nil {
-		return nil, err
-	}
-	if resolved, resolveErr := filepath.EvalSymlinks(root); resolveErr == nil {
-		root = resolved
-	}
-
-	dir := env.dir
-	if dir == "" {
-		dir = root
-	}
-	candidate := path
-	if !filepath.IsAbs(candidate) {
-		candidate = filepath.Join(dir, candidate)
-	}
-	candidate, err = filepath.Abs(candidate)
-	if err != nil {
-		return nil, err
-	}
-
-	resolved, err := filepath.EvalSymlinks(candidate)
-	if err != nil {
-		return nil, fmt.Errorf("resolve %s: %w", path, err)
-	}
-	rel, err := filepath.Rel(root, resolved)
-	if err != nil || !filepath.IsLocal(rel) {
-		return nil, errScriptOutsideWorkspace
-	}
-
-	return readScriptFile(root, rel, env)
-}
-
-// readScriptFile reads a regular file up to maxScriptFileBytes. The stat size
-// seeds the buffer capacity so a typical script needs one allocation; the
-// shared remaining budget bounds peak memory across nested scripts.
-//
-// The file is opened through os.Root, so a symlink swapped in after the
-// EvalSymlinks check above cannot redirect the read outside the workspace.
-func readScriptFile(root, rel string, env *checkEnv) ([]byte, error) {
-	if env.remaining <= 0 {
-		return nil, errors.New("script inspection budget exhausted")
-	}
-
-	rootFS, err := os.OpenRoot(root)
-	if err != nil {
-		return nil, err
-	}
-	defer rootFS.Close()
-
-	// Stat before opening so a FIFO or device node named like a script is
-	// rejected without an open that could block waiting for a writer.
-	info, err := rootFS.Stat(rel)
-	if err != nil {
-		return nil, err
-	}
-	if !info.Mode().IsRegular() {
-		return nil, errors.New("not a regular file")
-	}
-	if info.Size() > maxScriptFileBytes {
-		return nil, fmt.Errorf("script exceeds %d bytes", maxScriptFileBytes)
-	}
-
-	f, err := rootFS.Open(rel)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-
-	// Re-check the opened descriptor: the path could be swapped between Stat
-	// and Open, and os.Root permits device files inside the tree.
-	info, err = f.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if !info.Mode().IsRegular() {
-		return nil, errors.New("not a regular file")
-	}
-	if info.Size() > maxScriptFileBytes {
-		return nil, fmt.Errorf("script exceeds %d bytes", maxScriptFileBytes)
-	}
-
-	// Read at most one byte past the per-file and per-check limits so an
-	// oversized file is detected without ever loading it in full.
-	limit := int64(maxScriptFileBytes) + 1
-	if budget := int64(env.remaining) + 1; budget < limit {
-		limit = budget
-	}
-	buf := bytes.NewBuffer(make([]byte, 0, int(info.Size())))
-	if _, err := buf.ReadFrom(io.LimitReader(f, limit)); err != nil {
-		return nil, err
-	}
-	if buf.Len() > maxScriptFileBytes {
-		return nil, fmt.Errorf("script exceeds %d bytes", maxScriptFileBytes)
-	}
-	if buf.Len() > env.remaining {
-		return nil, errors.New("script inspection budget exhausted")
-	}
-	env.remaining -= buf.Len()
-
-	return buf.Bytes(), nil
 }
 
 // hasCommandLookupFlag reports whether command(1) was invoked with -v/-V,

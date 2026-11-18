@@ -201,15 +201,8 @@ func (t *ExecTool) guardCommandWithAnalysis(
 	// riskAllowThreshold; custom_allow_patterns no longer bypasses this layer.
 	// Risk levels are authoritative in smart mode too: the Guardian only gets
 	// commands the classifier cannot resolve (unknown), never a known risk.
-	// Script files are inspected only inside the workspace: Dir resolves relative
-	// paths and Root bounds what the guard is willing to read.
 	if t.riskGuard != nil {
-		root := t.workingDir
-		if root == "" {
-			root = cwd
-		}
-		scriptOpts := shellguard.CheckOptions{Dir: cwd, Root: root}
-		assessment := t.riskGuard.AssessFileWithOptions(cmd, parsed, scriptOpts)
+		assessment := t.riskGuard.AssessFile(cmd, parsed)
 		if assessment.Reject {
 			return assessment.BlockedError(t.riskGuard.Threshold()).Error()
 		}

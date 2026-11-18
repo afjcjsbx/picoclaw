@@ -3,13 +3,12 @@
 // It parses a command with mvdan.cc/sh/v3/syntax and walks the AST to find every
 // simple command, including commands nested in pipelines, conditionals and
 // command substitutions. Each command is mapped to a four-level risk score and
-// compared against a configurable threshold. A script file named on the command
-// line (bash script.sh) is read from the workspace with a bounded allocation and
-// parsed the same way, so scripts are inspected instead of rejected. This
-// catches indirection that regex deny lists miss (for example `x=rm; $x -rf /`)
-// without spawning a process, and it does not replace the actual shell: the exec
-// tool still runs the command through sh -c, so background sessions, PTY mode
-// and process-tree termination keep working.
+// compared against a configurable threshold. This catches indirection that
+// regex deny lists miss (for example `x=rm; $x -rf /`) without spawning a
+// process, and it does not replace the actual shell: the exec tool still runs
+// the command through sh -c, so background sessions, PTY mode and process-tree
+// termination keep working. A shell that reads commands from stdin or a script
+// file stays opaque and is rejected.
 package shellguard
 
 import (
@@ -155,8 +154,8 @@ var commandRiskTable = map[string]RiskLevel{
 	"wipefs": RiskCritical, "blkdiscard": RiskCritical, "lvremove": RiskCritical,
 
 	// Critical: shells execute arbitrary nested commands. The guard parses a
-	// literal -c script and an in-workspace script file recursively; a shell
-	// that reads stdin stays critical because its commands cannot be inspected.
+	// literal -c script recursively; a shell that reads stdin or a script file
+	// stays critical because its commands cannot be inspected.
 	"sh": RiskCritical, "bash": RiskCritical, "zsh": RiskCritical,
 	"dash": RiskCritical, "fish": RiskCritical, "csh": RiskCritical,
 	"tcsh": RiskCritical, "ksh": RiskCritical, "pwsh": RiskCritical,
