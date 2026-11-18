@@ -34,13 +34,22 @@ func (t *ExecTool) commandMatchesCustomUnlockPattern(lower string) bool {
 // riskAllowExempts reports whether a matching custom risk allow pattern covers
 // the whole command and the command stays within riskAllowThreshold. It uses a
 // second guard with that threshold so a later critical command cannot hide
-// behind an earlier high-risk match.
-func (t *ExecTool) riskAllowExempts(command, lower string) bool {
+// behind an earlier high-risk match. Unknown commands stay ineligible, matching
+// the strict policy that only smart approvals may review them.
+func (t *ExecTool) riskAllowExempts(
+	command, lower string,
+	analysis shellguard.Analysis,
+) bool {
 	if t.riskGuard == nil || !t.commandMatchesCustomRiskAllowPattern(lower) {
 		return false
 	}
 	allowGuard := t.riskGuard.WithThreshold(t.riskAllowThreshold)
-	return allowGuard != nil && allowGuard.Check(command) == nil
+	if allowGuard == nil {
+		return false
+	}
+	assessment := allowGuard.AssessFile(command, analysis.File)
+	return !assessment.Reject && !assessment.Unknown &&
+		shellguard.IsAllowed(assessment.Level, allowGuard.Threshold())
 }
 
 func patternsMatchAny(patterns []*regexp.Regexp, forms []string) bool {
@@ -212,7 +221,7 @@ func (t *ExecTool) guardCommandWithAnalysis(
 		if assessment.Reject {
 			return assessment.BlockedError(t.riskGuard.Threshold()).Error()
 		}
-		riskExempt := t.riskAllowExempts(cmd, lower)
+		riskExempt := t.riskAllowExempts(cmd, lower, analysis)
 		if assessment.Unknown {
 			// Unknown commands are allowed by default. Smart approvals can
 			// still review them; without a reviewer the command runs.

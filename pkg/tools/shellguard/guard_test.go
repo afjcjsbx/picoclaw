@@ -14,6 +14,21 @@ func mustGuard(t *testing.T, threshold string) *Guard {
 	return guard
 }
 
+// checkGuard applies the strict test policy: unknown commands are rejected.
+// Production callers use AssessFile and choose how to treat unknown commands.
+func checkGuard(g *Guard, command string) *BlockedError {
+	if g == nil {
+		return nil
+	}
+	file, _ := Parse(command)
+	assessment := g.AssessFile(command, file)
+	if assessment.Reject || assessment.Unknown ||
+		!IsAllowed(assessment.Level, g.Threshold()) {
+		return assessment.BlockedError(g.Threshold())
+	}
+	return nil
+}
+
 func TestGuardCheck(t *testing.T) {
 	t.Parallel()
 
@@ -118,7 +133,7 @@ func TestGuardCheck(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			blocked := guard.Check(tt.command)
+			blocked := checkGuard(guard, tt.command)
 			if tt.blocked && blocked == nil {
 				t.Fatalf("Check(%q) allowed, want blocked", tt.command)
 			}
@@ -154,7 +169,7 @@ func TestGuardRejectsDynamicDestructiveOperands(t *testing.T) {
 			`chmod 600 "$P"`,
 		}
 		for _, command := range blocked {
-			err := guard.Check(command)
+			err := checkGuard(guard, command)
 			if err == nil {
 				t.Errorf("threshold %s: Check(%q) allowed, want rejected", threshold, command)
 				continue
@@ -171,7 +186,7 @@ func TestGuardRejectsDynamicDestructiveOperands(t *testing.T) {
 			`git status`,
 		}
 		for _, command := range allowed {
-			if err := guard.Check(command); err != nil {
+			if err := checkGuard(guard, command); err != nil {
 				t.Errorf("threshold %s: Check(%q) blocked: %v", threshold, command, err)
 			}
 		}
@@ -286,7 +301,7 @@ func TestGuardFindExecNestedCommands(t *testing.T) {
 		`find . -exec sh -c 'rm -rf build' \;`,
 	}
 	for _, command := range blocked {
-		if got := guard.Check(command); got == nil {
+		if got := checkGuard(guard, command); got == nil {
 			t.Errorf("Check(%q) allowed, want nested command blocked", command)
 		}
 	}
@@ -296,40 +311,13 @@ func TestGuardFindExecNestedCommands(t *testing.T) {
 		`find . -exec chmod +x script.sh \;`,
 	}
 	for _, command := range allowed {
-		if got := guard.Check(command); got != nil {
+		if got := checkGuard(guard, command); got != nil {
 			t.Errorf("Check(%q) blocked: %v", command, got)
 		}
 	}
 }
 
-func TestGuardCheckFileMatchesCheck(t *testing.T) {
-	t.Parallel()
-
-	guard := mustGuard(t, "medium")
-	for _, command := range []string{
-		"ls -la",
-		"cat file | grep needle",
-		"rm -rf /",
-		`"r"'m' -rf /`,
-		"x=rm; $x -rf /",
-		"sh -c 'exit 7'",
-		"sh -c 'rm -rf /'",
-		"echo )",
-	} {
-		file, _ := Parse(command)
-		fromFile := guard.CheckFile(command, file)
-		fromText := guard.Check(command)
-
-		if (fromFile == nil) != (fromText == nil) {
-			t.Fatalf("%q: CheckFile=%v Check=%v", command, fromFile, fromText)
-		}
-		if fromFile != nil && fromFile.Error() != fromText.Error() {
-			t.Fatalf("%q: CheckFile=%q Check=%q", command, fromFile, fromText)
-		}
-	}
-}
-
-func TestGuardCheckFileRejectsParseFailure(t *testing.T) {
+func TestGuardRejectsParseFailure(t *testing.T) {
 	t.Parallel()
 
 	guard := mustGuard(t, "medium")
@@ -340,11 +328,12 @@ func TestGuardCheckFileRejectsParseFailure(t *testing.T) {
 	if file != nil {
 		t.Fatalf("Parse returned a partial tree with the error: %#v", file)
 	}
-	if blocked := guard.CheckFile("echo )", file); blocked == nil {
-		t.Fatal("CheckFile allowed a parse failure")
+	assessment := guard.AssessFile("echo )", file)
+	if !assessment.Unknown {
+		t.Fatalf("AssessFile did not mark the parse failure unknown: %#v", assessment)
 	}
-	if blocked := guard.Check("echo )"); blocked == nil {
-		t.Fatal("Check allowed a parse failure")
+	if blocked := checkGuard(guard, "echo )"); blocked == nil {
+		t.Fatal("strict policy allowed a parse failure")
 	}
 }
 
@@ -352,15 +341,15 @@ func TestGuardThreshold(t *testing.T) {
 	t.Parallel()
 
 	low := mustGuard(t, "low")
-	if blocked := low.Check("cp a b"); blocked == nil {
+	if blocked := checkGuard(low, "cp a b"); blocked == nil {
 		t.Fatal("medium command should be blocked at low threshold")
 	}
-	if blocked := low.Check("cat a"); blocked != nil {
+	if blocked := checkGuard(low, "cat a"); blocked != nil {
 		t.Fatalf("low command should pass at low threshold: %v", blocked)
 	}
 
 	critical := mustGuard(t, "critical")
-	if blocked := critical.Check("rm -rf /"); blocked != nil {
+	if blocked := checkGuard(critical, "rm -rf /"); blocked != nil {
 		t.Fatalf("critical threshold should allow critical commands: %v", blocked)
 	}
 }
@@ -379,10 +368,10 @@ func TestGuardOverridesAndModifiers(t *testing.T) {
 		t.Fatalf("NewGuard: %v", err)
 	}
 
-	if blocked := guard.Check("chmod +x script.sh"); blocked != nil {
+	if blocked := checkGuard(guard, "chmod +x script.sh"); blocked != nil {
 		t.Fatalf("override should allow chmod: %v", blocked)
 	}
-	if blocked := guard.Check("echo --danger"); blocked == nil {
+	if blocked := checkGuard(guard, "echo --danger"); blocked == nil {
 		t.Fatal("user modifier should block echo --danger")
 	}
 }
@@ -445,7 +434,7 @@ func TestGuardWrapperInspection(t *testing.T) {
 		{critical, "runuser -c 'echo ok'"},
 	}
 	for _, tt := range allowed {
-		if blocked := tt.guard.Check(tt.command); blocked != nil {
+		if blocked := checkGuard(tt.guard, tt.command); blocked != nil {
 			t.Errorf("Check(%q) blocked: %v", tt.command, blocked)
 		}
 	}
@@ -479,7 +468,7 @@ func TestGuardWrapperInspection(t *testing.T) {
 		{critical, "runuser -c 'x=rm; $x -rf /'"},
 	}
 	for _, tt := range blockedCommands {
-		if blocked := tt.guard.Check(tt.command); blocked == nil {
+		if blocked := checkGuard(tt.guard, tt.command); blocked == nil {
 			t.Errorf("Check(%q) allowed, want blocked", tt.command)
 		}
 	}
@@ -494,16 +483,16 @@ func TestGuardWithThreshold(t *testing.T) {
 		t.Fatal("WithThreshold returned nil for a non-nil guard")
 	}
 
-	if blocked := guard.Check("chmod +x script.sh"); blocked == nil {
+	if blocked := checkGuard(guard, "chmod +x script.sh"); blocked == nil {
 		t.Fatal("medium guard should block high risk")
 	}
-	if blocked := high.Check("chmod +x script.sh"); blocked != nil {
+	if blocked := checkGuard(high, "chmod +x script.sh"); blocked != nil {
 		t.Fatalf("high guard should allow high risk: %v", blocked)
 	}
-	if blocked := high.Check("rm -rf build"); blocked == nil {
+	if blocked := checkGuard(high, "rm -rf build"); blocked == nil {
 		t.Fatal("high guard should still block critical risk")
 	}
-	if blocked := guard.Check("chmod +x script.sh"); blocked == nil {
+	if blocked := checkGuard(guard, "chmod +x script.sh"); blocked == nil {
 		t.Fatal("WithThreshold must not mutate the original guard")
 	}
 }
@@ -537,7 +526,7 @@ func FuzzGuardCheck(f *testing.F) {
 	}
 	f.Fuzz(func(t *testing.T, command string) {
 		// The guard must never panic, regardless of input shape.
-		_ = guard.Check(command)
+		_ = checkGuard(guard, command)
 	})
 }
 
@@ -556,7 +545,7 @@ func BenchmarkGuardCheck(b *testing.B) {
 		b.Run(name, func(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {
-				_ = guard.Check(command)
+				_ = checkGuard(guard, command)
 			}
 		})
 	}

@@ -109,9 +109,9 @@ func (g *Guard) Threshold() RiskLevel {
 }
 
 // AssessFile classifies every simple command in an already parsed command and
-// returns the highest risk it finds. Unlike CheckFile, it returns a result even
-// when the command is allowed, so callers can apply an additional approval
-// threshold. A nil file is treated as a parse failure.
+// returns the highest risk it finds. It returns a result even when the command
+// is allowed, so callers can apply their own threshold or approval policy. A
+// nil file is treated as a parse failure.
 func (g *Guard) AssessFile(command string, file *syntax.File) Assessment {
 	if g == nil {
 		return Assessment{}
@@ -120,40 +120,6 @@ func (g *Guard) AssessFile(command string, file *syntax.File) Assessment {
 		return parseAssessment(command)
 	}
 	return g.assessFile(file, 0)
-}
-
-// Check parses command and returns a BlockedError when any simple command in it
-// exceeds the configured threshold. A nil result means the command may run.
-// Check is the strict helper: unknown commands are rejected. The exec tool uses
-// AssessFile and applies its own default-allow policy for unknown commands.
-func (g *Guard) Check(command string) *BlockedError {
-	if g == nil {
-		return nil
-	}
-	file, err := Parse(command)
-	if err != nil {
-		return g.checkAssessment(parseAssessment(command))
-	}
-	return g.CheckFile(command, file)
-}
-
-// CheckFile classifies an already parsed command. It is the shared-parse entry
-// point used by the exec guard; a nil file is treated as a parse failure.
-func (g *Guard) CheckFile(command string, file *syntax.File) *BlockedError {
-	if g == nil {
-		return nil
-	}
-	return g.checkAssessment(g.AssessFile(command, file))
-}
-
-func (g *Guard) checkAssessment(assessment Assessment) *BlockedError {
-	if assessment.Reject {
-		return assessment.BlockedError(g.threshold)
-	}
-	if !assessment.Unknown && IsAllowed(assessment.Level, g.threshold) {
-		return nil
-	}
-	return assessment.BlockedError(g.threshold)
 }
 
 func parseAssessment(command string) Assessment {
