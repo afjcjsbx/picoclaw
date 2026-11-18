@@ -372,10 +372,6 @@ func compileFullMatchPattern(pattern string) (*regexp.Regexp, error) {
 	return regexp.Compile(`^(?:` + pattern + `)$`)
 }
 
-func NewExecTool(workingDir string, restrict bool, allowPaths ...[]*regexp.Regexp) (*ExecTool, error) {
-	return NewExecToolWithConfig(workingDir, restrict, nil, allowPaths...)
-}
-
 // NewExecToolWithConfig builds an exec tool. allowPaths optionally grants
 // access to paths outside the workspace; exec can mutate those paths, so
 // callers must pass write grants rather than a read-only allowlist.

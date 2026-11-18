@@ -444,7 +444,7 @@ func TestShellTool_TimeoutArg_OverridesConfigured(t *testing.T) {
 func TestShellTool_DefaultTimeout(t *testing.T) {
 	want := time.Duration(config.DefaultExecTimeoutSeconds) * time.Second
 
-	tool, err := NewExecTool("", false)
+	tool, err := NewExecToolWithConfig("", false, nil)
 	require.NoError(t, err)
 	require.Equal(t, want, tool.timeout)
 
@@ -463,7 +463,7 @@ func TestShellTool_DefaultTimeout(t *testing.T) {
 // beyond the foreground cap starts a tracked background session instead of
 // blocking or failing the call.
 func TestShellTool_TimeoutAboveForegroundCapPromotes(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := NewExecToolWithConfig("", false, nil)
 	require.NoError(t, err)
 
 	sm := NewSessionManager()
@@ -1051,10 +1051,10 @@ func TestShellTool_WorkingDir_SymlinkEscape(t *testing.T) {
 	}
 }
 
-// TestNewExecToolDefaultsToRemoteBlocked pins the fail-closed constructor
+// TestNewExecToolWithConfigDefaultsToRemoteBlocked pins the fail-closed constructor
 // default for callers that build the tool without a config.
-func TestNewExecToolDefaultsToRemoteBlocked(t *testing.T) {
-	tool, err := NewExecTool(t.TempDir(), false)
+func TestNewExecToolWithConfigDefaultsToRemoteBlocked(t *testing.T) {
+	tool, err := NewExecToolWithConfig(t.TempDir(), false, nil)
 	require.NoError(t, err)
 	require.False(t, tool.allowRemote)
 
@@ -1939,7 +1939,7 @@ func TestWindows_PowerShellEncodingBypass(t *testing.T) {
 // platform. NewExecTool adds it only when runtime.GOOS is windows, so the test
 // appends it explicitly to keep the patterns covered by the regular test suite.
 func TestWindowsDenyPatterns(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := NewExecToolWithConfig("", false, nil)
 	require.NoError(t, err)
 	tool.denyPatterns = append(tool.denyPatterns, windowsDenyPatterns...)
 
@@ -3256,7 +3256,7 @@ func TestShellTool_ExecuteAsync_NotifiesOnCompletion(t *testing.T) {
 }
 
 func TestShellTool_ExecuteAsync_PromotedRunNotifies(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := NewExecToolWithConfig("", false, nil)
 	require.NoError(t, err)
 
 	sm := NewSessionManager()

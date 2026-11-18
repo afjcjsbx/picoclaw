@@ -107,7 +107,7 @@ func waitForSetsidProcessExit(t *testing.T, pid int) {
 }
 
 func TestShellTool_TimeoutKillsSetsidChild(t *testing.T) {
-	tool, err := NewExecTool(t.TempDir(), false)
+	tool, err := NewExecToolWithConfig(t.TempDir(), false, nil)
 	if err != nil {
 		t.Fatalf("unable to configure exec tool: %v", err)
 	}
@@ -131,7 +131,7 @@ func TestShellTool_TimeoutKillsSetsidChild(t *testing.T) {
 }
 
 func TestShellTool_BackgroundKillKillsSetsidChild(t *testing.T) {
-	tool, err := NewExecTool(t.TempDir(), false)
+	tool, err := NewExecToolWithConfig(t.TempDir(), false, nil)
 	if err != nil {
 		t.Fatalf("unable to configure exec tool: %v", err)
 	}

@@ -180,7 +180,7 @@ func TestNormalizeTrailingBackgroundAmpersandOSGate(t *testing.T) {
 func newTrailingAmpersandTool(t *testing.T) (*ExecTool, context.Context) {
 	t.Helper()
 
-	tool, err := NewExecTool("", false)
+	tool, err := NewExecToolWithConfig("", false, nil)
 	require.NoError(t, err)
 
 	sm := NewSessionManager()

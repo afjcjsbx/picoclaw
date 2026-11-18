@@ -103,7 +103,7 @@ func TestShellTool_ParseFailureAllowedByRiskGuard(t *testing.T) {
 		t.Fatalf("risk guard should allow an unclassifiable command, got %q", got)
 	}
 
-	restricted, err := NewExecTool(t.TempDir(), true)
+	restricted, err := NewExecToolWithConfig(t.TempDir(), true, nil)
 	if err != nil {
 		t.Fatalf("NewExecTool: %v", err)
 	}

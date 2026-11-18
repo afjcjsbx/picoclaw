@@ -134,7 +134,7 @@ func TestExecTool_PerCallEnvIgnored(t *testing.T) {
 		t.Skip("uses the POSIX env command")
 	}
 
-	tool, err := NewExecTool("", false)
+	tool, err := NewExecToolWithConfig("", false, nil)
 	require.NoError(t, err)
 
 	ctx := WithToolContext(context.Background(), "cli", "test")
