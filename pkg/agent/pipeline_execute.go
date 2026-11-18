@@ -27,7 +27,19 @@ func toolErrorSummary(result *tools.ToolResult) string {
 }
 
 func inferSkillNamesFromToolCall(ts *turnState, toolName string, toolArgs map[string]any) []string {
-	if ts == nil || toolName != "read_file" {
+	if ts == nil {
+		return nil
+	}
+	if toolName == "skills_read" {
+		name, _ := toolArgs["name"].(string)
+		if ts.agent != nil && ts.agent.ContextBuilder != nil {
+			if canonical, ok := ts.agent.ContextBuilder.ResolveSkillName(name); ok {
+				return []string{canonical}
+			}
+		}
+		return nil
+	}
+	if toolName != "read_file" {
 		return nil
 	}
 

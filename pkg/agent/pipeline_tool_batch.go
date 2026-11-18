@@ -13,6 +13,7 @@ import (
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/sipeed/picoclaw/pkg/skills"
 	"github.com/sipeed/picoclaw/pkg/tools"
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
@@ -299,6 +300,7 @@ func (b *toolBatch) prepare(i int) (*preparedCall, toolStep) {
 		ts.sessionKey,
 		ts.opts.Dispatch.SessionScope,
 	)
+	pc.execCtx = skills.WithAccess(pc.execCtx, turnProfileSkillAccess(ts.profile))
 	if ts.parentTurnState != nil || ts.joinSubTurns {
 		// SubTurns and CLI root turns join their async children before
 		// finishing; other root turns keep the fire-and-forget follow-up.

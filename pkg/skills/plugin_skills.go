@@ -81,6 +81,7 @@ func ParsePluginSkill(pluginID, path string, content []byte) (PluginSkill, error
 func (sl *SkillsLoader) SetPluginSkills(pluginID string, entries []PluginSkill) {
 	sl.pluginMu.Lock()
 	defer sl.pluginMu.Unlock()
+	sl.pluginRev.Add(1)
 	if sl.pluginSkills == nil {
 		sl.pluginSkills = make(map[string][]PluginSkill)
 	}

@@ -5,6 +5,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/sipeed/picoclaw/pkg/skills"
 )
 
 func resolveTurnProfileOptions(cfg *config.Config, opts processOptions) (processOptions, error) {
@@ -36,6 +37,22 @@ func turnProfileSkillsOff(profile config.EffectiveTurnProfile) bool {
 
 func turnProfileCustomSkills(profile config.EffectiveTurnProfile) bool {
 	return profile.Enabled && profile.SkillsMode == config.TurnProfileModeCustom
+}
+
+// turnProfileSkillAccess is the authorization the skills_search and skills_read
+// tools enforce for this turn. nil means every installed skill is allowed.
+func turnProfileSkillAccess(profile config.EffectiveTurnProfile) skills.Access {
+	switch {
+	case turnProfileSkillsOff(profile):
+		return func(string) bool { return false }
+	case turnProfileCustomSkills(profile):
+		allowed := cleanAllowedSet(profile.AllowedSkills)
+		return func(name string) bool {
+			_, ok := allowed[strings.ToLower(strings.TrimSpace(name))]
+			return ok
+		}
+	}
+	return nil
 }
 
 func turnProfileHasCallableTools(

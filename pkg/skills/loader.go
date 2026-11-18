@@ -4,12 +4,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/gomarkdown/markdown"
 	"github.com/gomarkdown/markdown/ast"
@@ -76,6 +79,15 @@ func (s SkillInfo) pluginLocation() string {
 	return s.Path
 }
 
+// Location is the path shown to the agent: the SKILL.md path, or for plugin
+// skills the plugin-relative path (never a host path, and "" when unknown).
+func (s SkillInfo) Location() string {
+	if s.IsPluginSkill() {
+		return s.pluginLocation()
+	}
+	return s.Path
+}
+
 // CatalogLines renders the indented XML lines for this skill's catalog entry
 // (without any surrounding wrapper). The workspace loader summary and the agent
 // skill catalog both use it so the two renderings can never diverge.
@@ -122,9 +134,26 @@ func (info SkillInfo) validate() error {
 	return errs
 }
 
+// metadataHeadBytes bounds how much of a SKILL.md is read to learn its name and
+// description. Frontmatter and the first paragraph live at the top of the file,
+// so listing skills never pulls whole instruction files into memory.
+const metadataHeadBytes = 8 << 10
+
+// metaEntry is a parsed SKILL.md head keyed by the file's (mtime, size), so an
+// unchanged skill is never reopened. The map holding it is immutable once
+// published, which lets concurrent ListSkills calls share it without locks.
+type metaEntry struct {
+	mod  time.Time
+	size int64
+	meta *SkillMetadata
+}
+
 type SkillsLoader struct {
 	pluginMu        sync.RWMutex
 	pluginSkills    map[string][]PluginSkill
+	pluginRev       atomic.Uint64
+	metaMu          sync.RWMutex
+	metaCache       map[string]metaEntry
 	workspace       string
 	workspaceSkills string // workspace skills (project-level)
 	globalSkills    string // global skills (~/.picoclaw/skills)
@@ -167,6 +196,12 @@ func (sl *SkillsLoader) ListSkills() []SkillInfo {
 	skills := make([]SkillInfo, 0)
 	seen := make(map[string]bool)
 
+	sl.metaMu.RLock()
+	prev := sl.metaCache
+	sl.metaMu.RUnlock()
+	next := make(map[string]metaEntry, len(prev))
+	var head []byte // one read buffer shared by every cache miss in this scan
+
 	addSkills := func(dir, source string) {
 		if dir == "" {
 			return
@@ -180,7 +215,8 @@ func (sl *SkillsLoader) ListSkills() []SkillInfo {
 				continue
 			}
 			skillFile := filepath.Join(dir, d.Name(), "SKILL.md")
-			if _, err := os.Stat(skillFile); err != nil {
+			fi, err := os.Stat(skillFile)
+			if err != nil {
 				continue
 			}
 			info := SkillInfo{
@@ -188,10 +224,17 @@ func (sl *SkillsLoader) ListSkills() []SkillInfo {
 				Path:   skillFile,
 				Source: source,
 			}
-			metadata := sl.getSkillMetadata(skillFile)
-			if metadata != nil {
-				info.Description = metadata.Description
-				info.Name = metadata.Name
+			entry, ok := prev[skillFile]
+			if !ok || entry.size != fi.Size() || !entry.mod.Equal(fi.ModTime()) {
+				if head == nil {
+					head = make([]byte, metadataHeadBytes)
+				}
+				entry = metaEntry{mod: fi.ModTime(), size: fi.Size(), meta: sl.readSkillMetadata(skillFile, head)}
+			}
+			if entry.meta != nil {
+				next[skillFile] = entry // failed reads are not cached, so they are retried
+				info.Description = entry.meta.Description
+				info.Name = entry.meta.Name
 			}
 			if err := info.validate(); err != nil {
 				slog.Warn("invalid skill from "+source, "name", info.Name, "error", err)
@@ -213,6 +256,9 @@ func (sl *SkillsLoader) ListSkills() []SkillInfo {
 		skills = append(skills, entry.Info)
 	}
 
+	sl.metaMu.Lock()
+	sl.metaCache = next // also drops entries of removed skills
+	sl.metaMu.Unlock()
 	return skills
 }
 
@@ -286,7 +332,13 @@ func (sl *SkillsLoader) BuildSkillsSummary() string {
 }
 
 func (sl *SkillsLoader) getSkillMetadata(skillPath string) *SkillMetadata {
-	content, err := os.ReadFile(skillPath)
+	return sl.readSkillMetadata(skillPath, make([]byte, metadataHeadBytes))
+}
+
+// readSkillMetadata parses name and description from the first len(buf) bytes
+// of the file.
+func (sl *SkillsLoader) readSkillMetadata(skillPath string, buf []byte) *SkillMetadata {
+	content, err := readHead(skillPath, buf)
 	if err != nil {
 		logger.WarnCF("skills", "Failed to read skill metadata",
 			map[string]any{
@@ -336,6 +388,20 @@ func (sl *SkillsLoader) getSkillMetadata(skillPath string) *SkillMetadata {
 		metadata.Description = description
 	}
 	return metadata
+}
+
+// readHead fills buf from the start of the file and returns the bytes read.
+func readHead(path string, buf []byte) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	n, err := io.ReadFull(f, buf)
+	if err == io.ErrUnexpectedEOF || err == io.EOF {
+		err = nil
+	}
+	return buf[:n], err
 }
 
 func extractMarkdownMetadata(content string) (title, description string) {

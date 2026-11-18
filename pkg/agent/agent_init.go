@@ -299,6 +299,13 @@ func registerSharedTools(
 			agent.Tools.Register(loadImageTool)
 		}
 
+		// Installed-skill discovery: the prompt carries no skill list, the
+		// model searches the catalog and reads what it picks. Local and
+		// read-only, so not gated by the registry-facing "skills" switch.
+		catalog := agent.ContextBuilder.SkillCatalog()
+		agent.Tools.Register(integrationtools.NewSkillsSearchTool(catalog))
+		agent.Tools.Register(integrationtools.NewSkillsReadTool(catalog))
+
 		// Skill discovery and installation tools
 		skills_enabled := cfg.Tools.IsToolEnabled("skills")
 		find_skills_enable := cfg.Tools.IsToolEnabled("find_skills")

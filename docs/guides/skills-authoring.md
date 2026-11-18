@@ -71,16 +71,23 @@ my-skill/
 └── assets/           (optional templates, icons, files used in output)
 ```
 
-`references/` files are read with `read_file` relative to the skill's location (the loader exposes each skill with a `<location>` in the catalog). Plugin-provided skills are surfaced differently: their resources are read through the plugin resource tool instead.
+`references/` files are read with `skills_read` and a `relativePath` such as `references/api.md` (limited to the skill's own directory; symlinks that leave it are refused). Plugin-provided skills are surfaced differently: their resources are read through the plugin resource tool instead.
 
 ## How Skills Reach the Agent
 
-At startup, the agent's system prompt receives a **skill catalog** with each skill's `name`, `description`, `location`, and `source`. Bodies are not inlined: when a skill is relevant, the agent reads its `SKILL.md` (and any referenced files) with `read_file`. Skills that are forced active by configuration or a turn profile are inlined as an **Active Skills** block instead.
+The system prompt does **not** list skills, so it stays the same size with 10 or 10,000 skills installed. It only explains two tools:
+
+- `skills_search` ranks installed skills against a natural-language request (BM25 over `name` and `description`; an exact name always comes first) and returns `name`, `description` and `location`.
+- `skills_read` returns the complete `SKILL.md` (frontmatter removed) or a supporting file. Files over 256 KiB are refused with an error, never truncated.
+
+Skills that are forced active by configuration or a turn profile are still inlined as an **Active Skills** block. A turn profile with `skills.mode` `off` or `custom` also limits what both tools can find and read.
 
 This means two things for authors:
 
-- The catalog entry (name + description) decides whether your skill is ever used.
+- `name` and `description` decide whether your skill is ever found: write the description for the request that should trigger it. Only the first 8 KiB of `SKILL.md` is read to index it, so keep the frontmatter at the top.
 - The body cost is paid only on use — keep it focused on execution, not on justification.
+
+Installing or removing a skill is picked up on the next search; an edit to `name` or `description` within about 10 seconds. `skills_read` always reads the file from disk.
 
 ## Testing a Skill
 
