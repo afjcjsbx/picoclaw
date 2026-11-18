@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Exec adds the `kill-pid` action: the model can stop a PID it started when the PID belongs to a running tracked session (the session root or, on Unix, one of its descendants; Windows accepts the root). Shell `kill <pid>` remains blocked by the risk layer and now points at this action; an unowned PID is rejected.
 - Exec now supports `tools.exec.custom_unlock_patterns`: full-command regular expressions that let an explicitly trusted command skip the default deny set, the risk classifier and smart approvals. Every other command keeps the configured thresholds, and hardline, custom deny and the workspace boundary still apply.
 - Exec now breaks out of a retry loop on blocked commands: after three consecutive identical guard rejections in one conversation, the result carries a `HARD STOP` message telling the model to stop retrying, rewording or splitting the command and to report the blocker instead. The breaker is process-local and bounded (64 conversations, one 64-bit hash and a counter each), and resets on a different command, an allowed run or `/clear`.
 - `/usage` (alias `/cost`) chat command and `picoclaw usage` CLI command that report provider-reported token usage and cost per session, with per-model and input cache breakdowns.
@@ -17,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Smart approvals now have a deterministic floor: a known critical command stays blocked even when `risk_threshold` is `critical`, and the Guardian is never consulted for hardline, workspace escape, brace-expanded or interpreter-inline commands. Unknown commands are still reviewable.
+- Exec normalizes unquoted brace groups before the guard runs: `{rm,-rf,/}` is evaluated as `rm -rf /`. The expansion is bounded and quote-aware.
+- Exec now rejects inline interpreter code that combines a filesystem or process operation with a path outside the workspace (`python3 -c`, `perl -e`, `node -e`, `ruby -e`, `php -r`, `lua -e`, `Rscript -e`, `awk`, `sed` and `osascript`). Pure computation and workspace-local paths remain allowed.
+- Exec hardline and default-deny regex sets are prefixed by literal markers, so a long benign command skips regex work it cannot match; guard latency for a 2 KB command drops from ~2.5 ms to ~0.15 ms. Foreground runs reuse a pooled pipe buffer and resolve the workspace once, reducing the `true` path from 592 to 382 allocs/op and 94.6 to 43.0 KB/op on macOS arm64.
 - Exec no longer rejects commands the risk classifier cannot resolve. Dynamic command names, opaque shells and unparseable commands are allowed by default; `approvals.mode: "smart"` still sends them to the Guardian. Known risk levels above `risk_threshold` and dynamic operands for destructive commands remain blocked.
 - Exec on Unix now treats the AST risk classifier as the single source of truth for command danger. The regex default deny set only covers shell constructs the AST cannot inspect (command substitution, pipe-to-shell, shell heredocs); command patterns such as `sudo`, `chmod`, `git push` and `docker run` now follow `risk_threshold`. Windows keeps the equivalent generic command patterns in its Windows-only regex floor because the classifier is POSIX-only.
 - The exec tool description is about 40% shorter and renders the OS and shell in its first line. Windows gets PowerShell-specific chaining guidance and omits the Unix-only trailing-`&`, `nohup`, `setsid` and `disown` notes, so the model is not taught commands the platform rejects.
@@ -44,6 +49,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The guard block breaker now hashes the canonical command instead of command+reason, so a rejection whose explanation changes (`path outside working dir` versus `access denied`) no longer resets the retry streak.
+- Foreground isolation places the cwd probe inside the command's cwd instead of the host temp directory, and startup failures under isolation are reported fail-closed with an explicit message. `expose_paths` sources are validated before launch.
 - The exec tool schema now declares `background` and `pty` as booleans, matching their documentation and the values the tool already accepted; string `"true"`/`"false"` arguments are still tolerated for models that emit the previous form.
 - Background `spawn` no longer drops requests above `agents.defaults.subturn.max_concurrent`: the tool reserves a concurrency slot before acknowledging, and CLI one-shot turns join their spawned children before answering.
 

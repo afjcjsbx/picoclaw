@@ -138,8 +138,9 @@ Limits worth knowing:
 2. **Default deny shell-construct hits stay blocked.** A command caught by the built-in regex set is rejected even in smart mode; the Guardian only reviews commands the risk classifier cannot resolve.
 3. **Known risk levels keep following `risk_threshold`.** A command at or above `risk_threshold` is rejected even in smart mode, and one below it is allowed. The Guardian is not consulted for known risk levels.
 4. **Only unknown commands are reviewed.** On Unix, dynamic command names, opaque shells and unparseable scripts are flagged as unknown and sent to the Guardian; with approvals off they are allowed.
-5. **Workspace and path checks still run first.** The Guardian cannot approve a command that tries to escape the workspace.
-6. **The Guardian answers with one word.** `APPROVE` runs the command and `DENY` blocks it. `ESCALATE` follows `approvals.on_escalate`: `"block"` (default) rejects the command because manual approval is not implemented yet, while `"approve"` runs it. Any other response is treated as `ESCALATE`. An unavailable Guardian and provider/review errors always reject the command, even with `on_escalate: "approve"`.
+5. **Known critical risk is a deterministic floor.** In smart mode a known critical command stays blocked even when `risk_threshold` is `critical`; the Guardian cannot approve it. Hardline, workspace escapes, brace-expanded commands and interpreter paths are rejected before the review as well.
+6. **Workspace and path checks still run first.** The Guardian cannot approve a command that tries to escape the workspace.
+7. **The Guardian answers with one word.** `APPROVE` runs the command and `DENY` blocks it. `ESCALATE` follows `approvals.on_escalate`: `"block"` (default) rejects the command because manual approval is not implemented yet, while `"approve"` runs it. Any other response is treated as `ESCALATE`. An unavailable Guardian and provider/review errors always reject the command, even with `on_escalate: "approve"`.
 
 Before the command reaches the model, unquoted shell comments are removed and a literal `</command>` is neutralized. Comment removal uses the shell AST, so `#` inside quotes or heredoc bodies is preserved; a command that does not parse is reviewed verbatim. Commands above 16 KiB are rejected as a review failure without a model call, so prompt size, latency and token cost stay bounded.
 
@@ -201,7 +202,7 @@ Background session actions return a JSON `ExecResponse` instead. Once the sessio
 | `action` | string | every call | `run` (execute a command), `list` (show sessions), `poll` (check a session's status; returns immediately), `wait` (block until a session exits or the timeout elapses), `read` (get a session's output), `write` (send input to a session's stdin), `kill` (terminate a session), `kill-pid` (terminate a PID owned by a tracked session), `send-keys` (send keys to a PTY session) |
 | `command` | string | `run` | Shell command to execute |
 | `sessionId` | string | `poll`, `wait`, `read`, `write`, `kill`, `send-keys` | Session ID returned by a background `run` |
-| `pid` | int | `kill-pid` | PID to terminate. It must be a running tracked session root or one of its descendants; an unowned PID is rejected |
+| `pid` | int | `kill-pid` | PID to terminate. It must be a running tracked session root or, on Unix, one of its descendants; an unowned PID is rejected. On Windows only the tracked root is accepted |
 | `data` | string | `write` | Data to write to the session's stdin |
 | `keys` | string | `send-keys` | Key names: `up`, `down`, `left`, `right`, `enter`, `tab`, `escape`, `backspace`, `ctrl-c`, `ctrl-d`, `home`, `end`, `pageup`, `pagedown`, `f1`–`f12` |
 | `background` | bool | — | With `run`, start the command in the background immediately; the result includes a `sessionId`. On Unix, a trailing `&` in the command is normalized to this mode automatically |
@@ -226,7 +227,7 @@ Behavior notes:
 - To wait for a background session, call `wait` once instead of polling in a loop. If the window elapses first, the result has status `running` and a note saying this is not an error; call `wait` again if the job is expected to take longer. After two consecutive `poll`/`wait` calls with no new output the tool enables a completion notification and tells the model to stop checking (use `wait`, read the output, or kill the session).
 - Starting a background session without `notify=true` returns a note that no completion message will be sent, so the model does not assume it will be woken when the job ends. Bounded jobs should normally use `notify=true`.
 - Sessions are cleaned up 30 minutes after the process exits. `write` sends stdin, `send-keys` sends keys to a PTY session; combine `background=true` with `pty=true` for interactive sessions such as a REPL.
-- `kill-pid` is the supported way to stop a PID that is not the session root. It only accepts a PID owned by a running session visible to the caller (the root or a descendant), so the generic shell `kill` pattern can stay blocked while the model still has a safe way to stop its own children. When a shell `kill <pid>` is rejected, the block message points at this action.
+- `kill-pid` is the supported way to stop a PID that is not the session root. It only accepts a PID owned by a running session visible to the caller (the root or, on Unix, a descendant), so the generic shell `kill` pattern can stay blocked while the model still has a safe way to stop its own children. On Windows only the tracked root is accepted because the package has no descendant enumerator there. When a shell `kill <pid>` is rejected, the block message points at this action.
 
 ## Environment sanitization
 
@@ -310,7 +311,7 @@ Some catastrophic commands are an immutable floor: they stay blocked even when `
 - Power state changes: `shutdown`, `reboot`, `poweroff`
 - Self-protection: killing the PicoClaw process (`pkill`/`killall` with `picoclaw`, `PICOCLAW_SERVICE_NAME` or `$PICOCLAW_EXE`), stopping its systemd service, deleting the state directory (`~/.picoclaw`, `$HOME/.picoclaw`, `$PICOCLAW_HOME` or the resolved `PICOCLAW_HOME`), or deleting the running executable (including through `$PICOCLAW_EXE`, `which` or `command -v`). The executable, state directory and service name are resolved when the tool is created, so the floor follows the running instance.
 
-Hardline and custom deny patterns are matched against a normalized command. Fixed shell obfuscation is resolved first: `$IFS`/`${IFS}` become spaces, ANSI-C `$'...'` strings are decoded, backslash-newline continuations are joined, and the AST exposes quote-spliced argv words. As a result, `r''m -rf /`, `rm${IFS}-rf${IFS}/` and `$'\x72\x6d' -rf /` are evaluated as `rm -rf /`. This normalization runs independently of `enable_deny_patterns`, so disabling the risk classifier does not disable the hardline floor.
+Hardline and custom deny patterns are matched against a normalized command. Fixed shell obfuscation is resolved first: `$IFS`/`${IFS}` become spaces, ANSI-C `$'...'` strings are decoded, backslash-newline continuations are joined, brace groups are expanded conservatively, and the AST exposes quote-spliced argv words. As a result, `r''m -rf /`, `rm${IFS}-rf${IFS}/` and `$'\x72\x6d' -rf /` are evaluated as `rm -rf /`. This normalization runs independently of `enable_deny_patterns`, so disabling the risk classifier does not disable the hardline floor.
 
 ## Workspace Restriction
 
@@ -323,6 +324,8 @@ When `agents.defaults.restrict_to_workspace` is `true` (the default), exec on Un
 - Assignments or unsets of `HOME`, `PWD`, `OLDPWD` and `CDPATH` are rejected under workspace restriction, so `$HOME`/`$PWD` always resolve against the policy values instead of a value the static pass did not see.
 - Dynamic redirection targets (`> "$OUT"`) and dynamic nested scripts.
 - Commands nested in `sh -c`/`bash -c`, shell heredoc scripts, `exec`, `find -exec`, and common wrappers (`command`, `builtin`, `env`, `timeout`, `xargs`, and similar). `eval` and `trap` are rejected because their command string cannot be followed reliably.
+- Inline interpreter code that performs a filesystem or process operation on an outside path: `python3 -c`, `perl -e`, `node -e`, `ruby -e`, `php -r`, `lua -e`, `Rscript -e`, `awk 'BEGIN{system(...)}'`, `sed '1e ...'` and `osascript -e 'do shell script ...'`. Pure computation such as `python3 -c "print(1+1)"` and operations on workspace-local paths remain allowed. The check scans every argv word, so a path passed after the program is still covered.
+- Brace groups are expanded before the guard runs. `{rm,-rf,/}` is evaluated as `rm -rf /`, so hardline, workspace and risk checks see the command a POSIX shell would run. The expansion is bounded and quote-aware; literal or oversized groups are left untouched.
 
 Expansion uses the child shell's `HOME`. Quoted literals such as `echo '$HOME'` and `echo '~'` are not treated as paths, and web URLs are exempt from local path checks. `file:` URIs are rejected fail-closed because they name local files that the static pass cannot validate.
 
@@ -342,9 +345,9 @@ Windows has no AST classifier, so its regex floor keeps the equivalent generic c
 
 ## Repeated Blocked Commands
 
-Exec tracks guard rejections per conversation. The first two consecutive rejections of the same command with the same reason return the normal block message. The third and later rejections add a `HARD STOP` message that tells the model to stop retrying, not to reword or split the command, and to report the blocker to the user instead.
+Exec tracks guard rejections per conversation. The first two consecutive rejections of the same canonical command return the normal block message. The third and later rejections add a `HARD STOP` message that tells the model to stop retrying, not to reword or split the command, and to report the blocker to the user instead.
 
-The streak starts over when a different command is blocked, when an allowed run succeeds, or when the conversation is cleared. State is process-local and bounded (64 conversations), and each entry holds only a 64-bit hash of the command and reason plus a counter; it is not persisted across restarts.
+The streak follows the canonical command, not the explanation: the same rejected command keeps its count when the guard returns `path outside working dir` and then `access denied: path is outside the workspace`. Whitespace, quote splicing and wrapper resolution also normalize to the same form. The streak starts over when a genuinely different command is blocked, when an allowed run succeeds, or when the conversation is cleared. State is process-local and bounded (64 conversations), and each entry holds only a 64-bit hash plus a counter; it is not persisted across restarts.
 
 ## Known Architectural Limitation
 
