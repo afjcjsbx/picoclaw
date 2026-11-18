@@ -12,8 +12,6 @@ The exec tool is used to execute shell commands.
 | `custom_deny_patterns` | string[] | `[]` | Additional deny patterns (regular expressions); always enforced and they take priority over allow rules |
 | `custom_allow_patterns` | string[] | `[]` | Full-command allow patterns (regular expressions, anchored automatically). They exempt only the built-in shell-construct deny set. They do not exempt the AST risk classifier; hardline and custom deny patterns still win |
 | `risk_threshold` | string | `"medium"` | Highest risk level the AST classifier allows: `low`, `medium`, `high` or `critical`. Part of the built-in guard set, so it is inactive when `enable_deny_patterns` is `false`. Empty means `medium` |
-| `risk_overrides` | object | `{}` | Base risk level per command (command name to level), replacing the built-in table. Argument modifiers can still elevate it |
-| `arg_modifiers` | object | `{}` | Extra argument-aware risk elevations per command. Every listed token must be present; the highest matching level wins |
 | `allow_remote` | bool | `false` | When `false`, exec only accepts commands that originate from internal channels (`cli`, `system`, `subagent`). Remote channels are then blocked (fail-closed): an empty channel is also rejected. Set it to `true` only when remote command execution is explicitly intended |
 | `timeout_seconds` | int | `180` | Command timeout in seconds. `0` means the default (180s). Foreground runs are capped at `600`s; a larger configured timeout promotes commands to a tracked background session |
 | `max_output_chars` | int | `50000` | Foreground output cap. Longer output keeps the first 40% and the last 60% around a `[OUTPUT TRUNCATED - N chars omitted out of T total]` notice, while the full stream is spilled to a workspace artifact (up to 5,000,000 bytes). The inline view is also bounded by `tools.max_inline_result_chars`; the artifact preserves the full stream. `0` means the default (50000) |
@@ -24,19 +22,21 @@ The exec tool is used to execute shell commands.
 authorized by `tools.cron.command_allowed_remotes` instead and are not blocked by
 `allow_remote`.
 
-Environment variables use the `PICOCLAW_TOOLS_EXEC_` prefix: `PICOCLAW_TOOLS_EXEC_ENABLED`, `PICOCLAW_TOOLS_EXEC_ENABLE_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_RISK_THRESHOLD`, `PICOCLAW_TOOLS_EXEC_ALLOW_REMOTE`, `PICOCLAW_TOOLS_EXEC_CUSTOM_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_CUSTOM_ALLOW_PATTERNS`, `PICOCLAW_TOOLS_EXEC_TIMEOUT_SECONDS`, `PICOCLAW_TOOLS_EXEC_MAX_OUTPUT_CHARS`, `PICOCLAW_TOOLS_EXEC_ENV_ALLOWLIST` (comma-separated). `env_set`, `risk_overrides` and `arg_modifiers` are JSON-only because their values are structured.
+Environment variables use the `PICOCLAW_TOOLS_EXEC_` prefix: `PICOCLAW_TOOLS_EXEC_ENABLED`, `PICOCLAW_TOOLS_EXEC_ENABLE_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_RISK_THRESHOLD`, `PICOCLAW_TOOLS_EXEC_ALLOW_REMOTE`, `PICOCLAW_TOOLS_EXEC_CUSTOM_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_CUSTOM_ALLOW_PATTERNS`, `PICOCLAW_TOOLS_EXEC_TIMEOUT_SECONDS`, `PICOCLAW_TOOLS_EXEC_MAX_OUTPUT_CHARS`, `PICOCLAW_TOOLS_EXEC_ENV_ALLOWLIST` (comma-separated). `env_set` is JSON-only because its value is structured.
 
 ### Risk classification
 
 When the built-in guard is enabled (`enable_deny_patterns: true`, the default), PicoClaw parses every Unix command with `mvdan.cc/sh/v3/syntax` before execution and classifies each simple command in the AST. Pipelines, `&&`/`||`/`;` lists, loops, functions and command substitutions are all walked. This catches indirection that regex deny lists cannot resolve, for example `x=rm; $x -rf /` or `"r"'m' -rf /`.
 
-On Unix the AST classifier is the **single source of truth for command danger**. The regex default deny set only covers shell constructs that hide a command from the AST: command substitution, pipe-to-shell and shell heredocs. Command names such as `sudo`, `chmod`, `git push` or `docker run` follow `risk_threshold`; use `risk_overrides` to tune them.
+On Unix the AST classifier is the **single source of truth for command danger**. The regex default deny set only covers shell constructs that hide a command from the AST: command substitution, pipe-to-shell and shell heredocs. Command names such as `sudo`, `chmod`, `git push` or `rm -rf` follow `risk_threshold`.
+
+The built-in table assigns a base level to known commands and a small set of argument modifiers raises destructive verbs. Commands that are not listed are **unknown**: the caller decides whether to allow, review or block them.
 
 | Level | Meaning | Examples |
 |-------|---------|----------|
-| `low` | Read-only / informational | `ls`, `cat`, `grep`, `find`, `echo` |
+| `low` | Read-only or informational | `ls`, `cat`, `grep`, `find`, `echo` |
 | `medium` | Writes files or reads the network | `cp`, `mv`, `tar`, `curl`, `git status` |
-| `high` | Destructive or system-wide side effects | `rm -r`, `chmod`, `git push`, `docker`, `ssh` |
+| `high` | Destructive or system-wide side effects | `rm -r`, `chmod`, `git push`, `ssh`, `systemctl start` |
 | `critical` | Privilege escalation or always dangerous | `sudo`, `dd`, `mkfs`, `shutdown`, `rm -rf` |
 
 Commands above `risk_threshold` are rejected before any process starts, with a structured message:
@@ -45,7 +45,7 @@ Commands above `risk_threshold` are rejected before any process starts, with a s
 Command blocked by risk classifier: command="chmod +x script.sh" risk_level=high threshold=medium reason=command risk exceeds configured threshold
 ```
 
-A dynamic command name, a shell that reads commands from stdin or a script file, and an unparseable command are classified as unknown. They are allowed by default. Set `enable_deny_patterns: false` to disable the built-in guard set.
+A command that is not in the table, a dynamic command name, a shell that reads commands from stdin or a script file, and an unparseable command are classified as unknown. They are allowed by default. Set `enable_deny_patterns: false` to disable the built-in guard set.
 
 The classifier also:
 
@@ -53,56 +53,44 @@ The classifier also:
 - parses a literal `sh -c '...'` / `bash -c '...'` script recursively, and treats a shell that reads commands from stdin or a script file as unknown;
 - parses a literal `trap '...'` action recursively, and treats an `xargs` invocation that launches a shell as unknown;
 - inspects common wrappers (`env`, `command`, `nohup`, `time`, `nice`, `timeout`, `xargs`, `watch`, `flock`, `chrt`, `taskset`, `busybox`, `runuser`, `setpriv`, `capsh`, `machinectl`, `lxc`, `incus`) and classifies the command they launch; `runuser -c` and `flock -c` command strings are parsed as shell scripts;
-- inspects `virsh` verbs, lowering read-only ones such as `list`, `domstate` and `dumpxml` and keeping destructive verbs at `high`;
+- inspects the destructive verbs of `lxc`, `incus`, `machinectl` and `virsh` (for example `delete`, `shell`, `poweroff`, `destroy` and `qemu-monitor-command`);
 - treats `env -S` as unknown, because it splits a string into a command;
-- classifies process-detaching and namespace commands (`setsid`, `daemon`, `daemonize`, `disown`, `unshare`, `nsenter`, `bwrap`) as `high`. This is an approval signal, not a containment boundary: the exec tool's process scope is responsible for killing detached descendants.
+- classifies process-detaching and namespace commands (`setsid`, `daemon`, `unshare`, `nsenter`, `bwrap`) as `high`. This is an approval signal, not a containment boundary: the exec tool's process scope is responsible for killing detached descendants.
 
-Argument modifiers are applied after flag normalization (`rm -rf`, `rm -fr` and `rm -r -f` are equivalent; `-XPOST` and `--request=POST` match their spaced flag+value forms). Built-in examples include `rm -r` → `high`, `rm -rf` → `critical`, `git push` → `high`, `git push --force` → `critical`, `curl -X POST` → `high`, and `find -delete` → `high`.
+Argument modifiers are applied after flag normalization (`rm -rf`, `rm -fr` and `rm -r -f` are equivalent; `-XPOST` and `--request=POST` match their spaced flag+value forms). The built-in modifiers cover:
 
-#### Subcommand calibration
+- `rm`: `-r` is `high`, `-r -f` is `critical`;
+- `git`: `push` is `high`, `push --force` is `critical`, `reset --hard`, `clean -f` and `branch -D`/`-d` are `high`;
+- `systemctl` and `service`: state-changing verbs are `high`; `poweroff`, `reboot`, `halt`, `kexec` and `isolate` are `critical`;
+- `cryptsetup`, `zpool`, `zfs` and `mdadm`: destructive verbs are `critical`;
+- `lxc`, `incus`, `machinectl` and `virsh`: destructive verbs are `high` or `critical`;
+- `find`: `-delete` and `-exec*` are `high`;
+- `kill`: `-9` is `critical`;
+- `aws`: any `delete-*`, `rm`, `rb`, `mv`, `purge`, `terminate-instances`, `stop-instances` or `--delete` verb is `high`.
 
-Tools that expose both read-only and destructive operations are classified by verb. A missing verb falls back to the command's conservative base level.
-
-| Tool | Read-only (`low`/`medium`) | Destructive (`high`/`critical`) |
-|------|----------------------------|---------------------------------|
-| `docker` | `ps`, `logs`, `inspect`, `images`, `version`, `info`, `stats`, `pull` | `run`, `exec`, `rm`, `rmi`, `stop`, `start`, `build`, `push`; `run --privileged` is `critical` |
-| `systemctl` | `status`, `show`, `cat`, `list-*`, `is-*` | state-changing verbs; `poweroff`, `reboot`, `halt`, `isolate` are `critical` |
-| `kubectl` | `get`, `describe`, `logs`, `explain`, `api-*`, `version`, `cluster-info`, `top` | other verbs keep the `high` base (for example `delete`, `apply`, `exec`) |
-| `git` | `status`, `log`, `diff`, `show`, `branch`, `remote`, `tag`, `rev-parse`, `blame` | `branch -D`/`-d`, `tag -d`, `push --force-with-lease` are `high`; `push --force`/`-f` are `critical` |
-| `virsh` | `list`, `domstate`, `dominfo`, `dumpxml`, `version`, `nodeinfo`, `net-list`, `pool-list`, `vol-list`, `snapshot-list` | other verbs keep the `high` base (`destroy`, `undefine`, `start`, `shutdown`); `qemu-monitor-command` is `critical` |
-| `lxc` / `incus` | `list`, `info`, `show`, `version`, `query` | other verbs keep the `high` base (`delete`, `stop`, `exec`, `launch`) |
-| `machinectl` | `list`, `list-images`, `status`, `show`, `machine-status` | `shell`, `start`, `stop`, `terminate` are `high`; `poweroff`, `reboot`, `halt` are `critical` |
-| `rm` | plain `rm` is `medium`; `rm -f` is `medium` | `rm -r`/`-R` is `high`; `rm -r -f`/`-rf` is `critical` |
-
-Block-device, volume and cloud operations are explicitly classified: `wipefs`, `blkdiscard`, `lvremove`, `cryptsetup luksFormat`/`erase`, `zpool destroy`, `zfs destroy`, `mdadm --zero-superblock` and `terraform destroy` are `critical`; `cryptsetup`, `zpool`, `zfs`, `mdadm`, `terraform apply` and `helm uninstall` are `high`; `aws s3 rm`/`rb`, `aws ec2 terminate-instances` and similar delete verbs are `high`.
+`wipefs`, `blkdiscard`, `lvremove`, `dd`, `mkfs`, `fdisk`, `parted`, `mount`, `umount`, `shutdown`, `reboot`, `poweroff` and `halt` are always `critical`.
 
 `rm` is not in the default deny set: the risk levels above are the source of truth. The hardline rule for recursive deletion of `/` still applies.
 
-Custom thresholds and modifiers:
+Custom threshold:
 
 ```json
 {
   "tools": {
     "exec": {
-      "risk_threshold": "medium",
-      "risk_overrides": { "chmod": "low" },
-      "arg_modifiers": {
-        "echo": [{ "args": ["--danger"], "level": "high" }]
-      }
+      "risk_threshold": "medium"
     }
   }
 }
 ```
 
-`risk_overrides` changes the base level but cannot suppress an argument modifier: with `rm` overridden to `medium`, plain `rm file` is allowed while `rm -rf build` is still `critical`.
-
-`custom_allow_patterns` is anchored to the whole command (`^(?:...)$`). A bare `git` pattern matches only the command `git`, not `git push --force`. It exempts the default regex deny set only and does not affect the AST risk classifier. To allow a high-risk or unclassifiable command, tune `risk_threshold`/`risk_overrides` globally. Hardline and custom deny patterns always win.
+`custom_allow_patterns` is anchored to the whole command (`^(?:...)$`). A bare `git` pattern matches only the command `git`, not `git push --force`. It exempts the default regex deny set only and does not affect the AST risk classifier. To allow a high-risk or unclassifiable command, raise `risk_threshold` globally. Hardline and custom deny patterns always win.
 
 Limits worth knowing:
 
 - The classifier is static. A dynamic argument that hides a flag (for example `curl "$FLAGS"`) cannot be inspected; a dynamic command word is treated as unknown and allowed. A dynamic operand for a destructive command (for example `rm "$TARGET"`) is still rejected.
 - External programs still run with the OS user's file permissions. Shell redirections are checked by the path guard, but a dynamically built redirection target and file access performed by an external binary are not sandboxed by this layer.
-- Windows is skipped because exec runs PowerShell there. The Windows-only regex floor keeps the generic command patterns that the AST covers on Unix (`npm install -g`, `git push`, `docker run`, process kills, and so on) plus the PowerShell-specific checks described below.
+- Windows is skipped because exec runs PowerShell there. The Windows-only regex floor keeps generic command patterns (`npm install -g`, `git push`, `docker run`, process kills, and so on) plus the PowerShell-specific checks described below.
 
 ## Tool arguments
 
@@ -278,7 +266,7 @@ On Unix the AST risk classifier is the source of truth for command danger. The r
 - Pipe to shell: `| sh`, `| bash` (and the other POSIX shells)
 - Shell heredoc: `sh <<EOF`, `bash <<'EOF'`
 
-Command-level dangers such as `sudo`, `chmod`, `chown`, `kill`, `git push`, `docker run`, package installs, `eval` and `source` are classified by the risk table. Use `risk_threshold`, `risk_overrides` or `arg_modifiers` to tune them.
+Command-level dangers such as `sudo`, `chmod`, `chown`, `kill`, `git push`, `eval` and `source` are classified by the risk table. Use `risk_threshold` to tune them.
 
 Windows has no AST classifier, so its regex floor keeps the equivalent generic command patterns plus the PowerShell-specific checks: recursive `Remove-Item` (including `rm`/`ri`/`del` aliases), `Clear-Disk`, `Format-Volume`, `vssadmin delete shadows`, `bcdedit /set`, `reg delete`, `icacls /grant Everyone`, download-and-execute pipelines such as `iwr ... | iex`, `taskkill /F`, and `Stop-Process -Force`.
 

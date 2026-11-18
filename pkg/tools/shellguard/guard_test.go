@@ -7,7 +7,7 @@ import (
 
 func mustGuard(t *testing.T, threshold string) *Guard {
 	t.Helper()
-	guard, err := NewGuard(threshold, nil, nil)
+	guard, err := NewGuard(threshold)
 	if err != nil {
 		t.Fatalf("NewGuard(%q): %v", threshold, err)
 	}
@@ -99,16 +99,9 @@ func TestGuardCheck(t *testing.T) {
 		{name: "command nested verbose flag blocked", command: "command rm -rf -v build", blocked: true},
 		{name: "command trailing verbose flag blocked", command: "command chmod -v 777 script.sh", blocked: true},
 		{name: "command verbose ssh blocked", command: "command ssh -v host", blocked: true},
-		{name: "docker ps allowed", command: "docker ps"},
-		{name: "docker logs allowed", command: "docker logs app"},
-		{name: "docker inspect allowed", command: "docker inspect app"},
-		{name: "docker run blocked", command: "docker run image", blocked: true},
 		{name: "systemctl status allowed", command: "systemctl status nginx"},
 		{name: "systemctl start blocked", command: "systemctl start nginx", blocked: true},
 		{name: "systemctl poweroff blocked", command: "systemctl poweroff", blocked: true},
-		{name: "kubectl get allowed", command: "kubectl get pods"},
-		{name: "kubectl describe allowed", command: "kubectl describe pod x"},
-		{name: "kubectl delete blocked", command: "kubectl delete pod x", blocked: true},
 		{name: "git status allowed", command: "git status"},
 		{name: "git branch delete blocked", command: "git branch -D feature", blocked: true},
 		{name: "git force-with-lease blocked", command: "git push --force-with-lease origin", blocked: true},
@@ -123,10 +116,6 @@ func TestGuardCheck(t *testing.T) {
 		{name: "zpool destroy blocked", command: "zpool destroy tank", blocked: true},
 		{name: "mdadm detail allowed", command: "mdadm --detail /dev/md0"},
 		{name: "mdadm zero superblock blocked", command: "mdadm --zero-superblock /dev/sda", blocked: true},
-		{name: "terraform plan allowed", command: "terraform plan"},
-		{name: "terraform destroy blocked", command: "terraform destroy", blocked: true},
-		{name: "helm list allowed", command: "helm list"},
-		{name: "helm uninstall blocked", command: "helm uninstall release", blocked: true},
 		{name: "aws s3 ls allowed", command: "aws s3 ls"},
 		{name: "aws s3 rm blocked", command: "aws s3 rm s3://bucket/key", blocked: true},
 	}
@@ -354,46 +343,28 @@ func TestGuardThreshold(t *testing.T) {
 	}
 }
 
-func TestGuardOverridesAndModifiers(t *testing.T) {
+func TestGuardBuiltInModifiers(t *testing.T) {
 	t.Parallel()
 
-	guard, err := NewGuard(
-		"medium",
-		map[string]string{"chmod": "low"},
-		map[string][]ArgModifier{
-			"echo": {{Args: []string{"--danger"}, Level: RiskHigh}},
-		},
-	)
-	if err != nil {
-		t.Fatalf("NewGuard: %v", err)
+	guard := mustGuard(t, "medium")
+	blocked := []string{
+		"rm -rf build",
+		"git push origin main",
+		"systemctl start nginx",
+		"aws s3 rm s3://bucket/key",
 	}
-
-	if blocked := checkGuard(guard, "chmod +x script.sh"); blocked != nil {
-		t.Fatalf("override should allow chmod: %v", blocked)
-	}
-	if blocked := checkGuard(guard, "echo --danger"); blocked == nil {
-		t.Fatal("user modifier should block echo --danger")
+	for _, command := range blocked {
+		if blocked := checkGuard(guard, command); blocked == nil {
+			t.Errorf("Check(%q) allowed, want blocked", command)
+		}
 	}
 }
 
 func TestGuardRejectsInvalidConfig(t *testing.T) {
 	t.Parallel()
 
-	if _, err := NewGuard("bogus", nil, nil); err == nil {
+	if _, err := NewGuard("bogus"); err == nil {
 		t.Fatal("invalid threshold should fail")
-	}
-	if _, err := NewGuard("medium", map[string]string{"rm": "bogus"}, nil); err == nil {
-		t.Fatal("invalid override should fail")
-	}
-	if _, err := NewGuard("medium", nil, map[string][]ArgModifier{
-		"echo": {{Args: []string{"x"}, Level: RiskLevel(99)}},
-	}); err == nil {
-		t.Fatal("invalid modifier level should fail")
-	}
-	if _, err := NewGuard("medium", nil, map[string][]ArgModifier{
-		"echo": {{Level: RiskHigh}},
-	}); err == nil {
-		t.Fatal("empty modifier args should fail")
 	}
 }
 
@@ -497,7 +468,7 @@ func FuzzGuardCheck(f *testing.F) {
 	} {
 		f.Add(seed)
 	}
-	guard, err := NewGuard("medium", nil, nil)
+	guard, err := NewGuard("medium")
 	if err != nil {
 		f.Fatalf("NewGuard: %v", err)
 	}
@@ -508,7 +479,7 @@ func FuzzGuardCheck(f *testing.F) {
 }
 
 func BenchmarkGuardCheck(b *testing.B) {
-	guard, err := NewGuard("medium", nil, nil)
+	guard, err := NewGuard("medium")
 	if err != nil {
 		b.Fatalf("NewGuard: %v", err)
 	}
